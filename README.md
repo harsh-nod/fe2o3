@@ -34,6 +34,9 @@ interfaces needed to reach that target:
 The HIP runtime layer and public API are compile-checkable. The rustc MIR
 collector/lowerer is not wired yet; that is the next backend milestone.
 
+See [docs/implementation-plan.md](docs/implementation-plan.md) for the full
+compiler/runtime plan.
+
 Run diagnostics:
 
 ```bash

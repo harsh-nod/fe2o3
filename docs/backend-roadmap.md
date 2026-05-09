@@ -1,5 +1,7 @@
 # fe2o3 Backend Roadmap
 
+For the full milestone plan, see [implementation-plan.md](implementation-plan.md).
+
 ## Implemented In This Scaffold
 
 - Project naming and reserved symbol namespace use `fe2o3`.
