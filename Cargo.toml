@@ -1,0 +1,34 @@
+[workspace]
+members = [
+    "crates/cargo-fe2o3",
+    "crates/dialect-amdgcn",
+    "crates/fe2o3-core",
+    "crates/fe2o3-device",
+    "crates/fe2o3-hip-sys",
+    "crates/fe2o3-host",
+    "crates/fe2o3-macros",
+    "crates/reserved-fe2o3-symbols",
+    "crates/rustc-codegen-fe2o3",
+    "examples/vecadd",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/fe2o3-gpu/fe2o3"
+rust-version = "1.94"
+
+[workspace.dependencies]
+dialect-amdgcn = { path = "crates/dialect-amdgcn" }
+fe2o3-core = { path = "crates/fe2o3-core" }
+fe2o3-device = { path = "crates/fe2o3-device" }
+fe2o3-hip-sys = { path = "crates/fe2o3-hip-sys" }
+fe2o3-host = { path = "crates/fe2o3-host" }
+fe2o3-macros = { path = "crates/fe2o3-macros" }
+reserved-fe2o3-symbols = { path = "crates/reserved-fe2o3-symbols" }
+rustc-codegen-fe2o3 = { path = "crates/rustc-codegen-fe2o3" }
+
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full"] }

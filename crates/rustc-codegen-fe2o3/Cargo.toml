@@ -1,0 +1,15 @@
+[package]
+name = "rustc-codegen-fe2o3"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Compiler backend support code for fe2o3."
+
+[dependencies]
+dialect-amdgcn.workspace = true
+
+[lib]
+name = "rustc_codegen_fe2o3"
+crate-type = ["rlib", "cdylib"]

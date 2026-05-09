@@ -1,0 +1,14 @@
+[package]
+name = "fe2o3-core"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "HIP-backed host runtime for fe2o3."
+
+[dependencies]
+fe2o3-hip-sys.workspace = true
+
+[lib]
+name = "fe2o3_core"

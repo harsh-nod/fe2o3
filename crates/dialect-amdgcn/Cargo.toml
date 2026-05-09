@@ -1,0 +1,11 @@
+[package]
+name = "dialect-amdgcn"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "AMDGPU intrinsic names and lowering seam for fe2o3."
+
+[lib]
+name = "dialect_amdgcn"
