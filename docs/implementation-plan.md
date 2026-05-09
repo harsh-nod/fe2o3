@@ -19,7 +19,7 @@ fn main() {
 }
 ```
 
-The first success criterion is `cargo fe2o3 run --example vecadd` producing a
+The first success criterion is `cargo fe2o3 run -p fe2o3-vecadd` producing a
 host binary, a matching AMDGPU HSACO, launching on an AMD GPU through HIP, and
 passing the result check.
 
@@ -148,7 +148,7 @@ Status: implemented for host delegation and kernel-count diagnostics.
 
 Acceptance:
 
-- `cargo fe2o3 build --example vecadd` compiles host code through the custom
+- `cargo fe2o3 build -p fe2o3-vecadd` compiles host code through the custom
   backend without changing user source.
 
 ### M2: Kernel Discovery And Collection
@@ -166,40 +166,72 @@ Acceptance:
 - A diagnostic dump lists `vecadd`, `thread::index_1d`, and all reachable device
   functions for the vecadd example.
 
-### M3: Minimal MIR To AMDGPU LLVM IR
+### M3: Minimal AMDGPU LLVM IR
+
+Status: MVP implemented for the `vecadd` kernel shape.
+
+- The backend emits an AMDGPU LLVM IR `amdgpu_kernel` for the current `vecadd`
+  example.
+- The emitted IR uses `llvm.amdgcn.workitem.id.x` and
+  `llvm.amdgcn.workgroup.id.x`.
+- It matches the current host launch ABI: slice pointer plus `usize` length for
+  each argument.
+- It assumes the current `LaunchConfig::for_num_elems` block size of 256.
+
+Remaining generalization:
 
 - Import collected MIR into Pliron `dialect-mir`.
 - Run basic verification and mem2reg.
 - Lower arithmetic, branches, loads/stores, pointer math, calls, and returns.
-- Lower the 1D thread-index intrinsics.
-- Export AMDGPU LLVM IR.
+- Lower 1D thread-index intrinsics from device API calls instead of a fixed IR
+  template.
+- Export AMDGPU LLVM IR for kernels beyond `vecadd`.
 
 Acceptance:
 
-- The vecadd kernel emits syntactically valid LLVM IR targeting
-  `amdgcn-amd-amdhsa`.
+- `cargo fe2o3 build -p fe2o3-vecadd` emits syntactically valid LLVM IR
+  targeting `amdgcn-amd-amdhsa`.
 
 ### M4: HSACO Generation
 
-- Compile generated LLVM IR to an object with ROCm clang.
-- Link object to HSACO with `ld.lld -shared`.
-- Validate with `llvm-readobj` when available.
-- Place the HSACO next to the host executable or embed it in the binary.
+Status: MVP implemented for the `vecadd` sidecar artifact.
+
+- Generated LLVM IR is compiled to an object with ROCm clang.
+- The object is linked to HSACO with `ld.lld -shared`.
+- The artifact is written under `FE2O3_HSACO_DIR`, which `cargo-fe2o3` sets to
+  `target/fe2o3`.
+- `llvm-readobj` can validate the generated kernel metadata when available.
+
+Remaining generalization:
+
+- Decide whether release artifacts should live next to the host executable,
+  remain sidecars under `target/fe2o3`, or be embedded.
+- Add first-class metadata validation in `cargo-fe2o3`.
+- Support multiple kernels and monomorphized kernel names.
 
 Acceptance:
 
-- `cargo fe2o3 build --example vecadd` produces `vecadd.hsaco`.
+- `cargo fe2o3 build -p fe2o3-vecadd` produces `vecadd.hsaco`.
 
 ### M5: First End-To-End Launch
 
-- Teach `cargo-fe2o3 run` to find the generated HSACO.
-- Load it with `fe2o3-core`.
-- Launch through HIP with pointer plus length args.
-- Copy output back and validate results.
+Status: partially implemented; local execution still requires a machine with the
+ROCm kernel driver loaded and an AMD GPU visible to HIP.
+
+- `cargo-fe2o3 run` sets `FE2O3_HSACO_DIR`.
+- The `vecadd` example loads `vecadd.hsaco` from that directory.
+- The example uses `fe2o3-core` to load the module, launch through HIP with
+  pointer plus length args, copy output back, and validate results.
+
+Remaining work:
+
+- Validate the path on hardware where HIP can see an AMD GPU.
+- Tighten runtime errors for missing HSACO, driver initialization failure, and
+  kernel metadata mismatches.
 
 Acceptance:
 
-- `cargo fe2o3 run --example vecadd` prints success on an AMD GPU.
+- `cargo fe2o3 run -p fe2o3-vecadd` prints success on an AMD GPU.
 
 ### M6: Usability And Coverage
 
@@ -221,7 +253,7 @@ Acceptance:
 Target command:
 
 ```bash
-FE2O3_TARGET=gfx1100 cargo fe2o3 run --example vecadd
+FE2O3_TARGET=gfx1100 cargo fe2o3 run -p fe2o3-vecadd
 ```
 
 Compiler flags owned by `cargo-fe2o3`:
@@ -248,11 +280,11 @@ calls can break GPU synchronization semantics.
 
 ## Immediate Next Task
 
-Implement M3:
+Replace the `vecadd`-specific artifact path with the first real lowering path:
 
 1. Add the first Pliron dependency and local dialect/import scaffolding.
 2. Import a collected kernel's MIR body into a minimal intermediate form.
 3. Lower enough operations for the vecadd kernel shape: args, basic blocks,
    integer arithmetic, pointer arithmetic, loads/stores, branch, and return.
 4. Lower `thread::index_1d` through AMDGPU workitem/workgroup intrinsics.
-5. Export syntactically valid AMDGPU LLVM IR for the collected vecadd kernel.
+5. Preserve the current generated HSACO smoke test as the regression target.

@@ -9,6 +9,7 @@ extern crate rustc_metadata;
 extern crate rustc_middle;
 extern crate rustc_session;
 
+mod amdgpu_llvm;
 mod collector;
 
 use rustc_codegen_ssa::traits::CodegenBackend;
@@ -103,6 +104,10 @@ impl CodegenBackend for Fe2o3CodegenBackend {
             }
 
             if kernel_count > 0 {
+                let output_dir =
+                    self.config.hsaco_output_dir.clone().unwrap_or_else(|| {
+                        env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+                    });
                 let collection = collector::collect_device_functions(
                     tcx,
                     mono_partitions.codegen_units,
@@ -110,14 +115,28 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                 );
                 collector::dump_device_functions(tcx, &collection.functions);
 
-                let output_dir =
-                    self.config.hsaco_output_dir.clone().unwrap_or_else(|| {
-                        env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-                    });
-                eprintln!(
-                    "[rustc-codegen-fe2o3] device lowering is not implemented yet; future HSACO output directory: {}",
-                    output_dir.display()
-                );
+                match amdgpu_llvm::emit_collection(
+                    tcx,
+                    &collection,
+                    &output_dir,
+                    &self.config.target,
+                ) {
+                    Ok(artifacts) => {
+                        for artifact in artifacts {
+                            eprintln!(
+                                "[rustc-codegen-fe2o3] emitted {}: LLVM IR {}, HSACO {}",
+                                artifact.kernel_name,
+                                artifact.llvm_ir_path.display(),
+                                artifact.hsaco_path.display()
+                            );
+                        }
+                    }
+                    Err(error) => {
+                        tcx.dcx().fatal(format!(
+                            "[rustc-codegen-fe2o3] device codegen failed: {error}"
+                        ));
+                    }
+                }
             }
 
             self.llvm_backend.codegen_crate(tcx, crate_info)
@@ -322,11 +341,11 @@ pub fn compile_llvm_ir_to_hsaco_with_toolchain(
     let hsaco_path = hsaco_path.as_ref();
     let obj_path = hsaco_path.with_extension("o");
 
+    let mcpu = format!("-mcpu={}", target.as_str());
     run(Command::new(&toolchain.clang).args([
         "-target",
         dialect_amdgcn::AMDGPU_TRIPLE,
-        "-mcpu",
-        target.as_str(),
+        mcpu.as_str(),
         "-x",
         "ir",
         "-c",

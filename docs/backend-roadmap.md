@@ -16,12 +16,18 @@ For the full milestone plan, see [implementation-plan.md](implementation-plan.md
 - The backend collects device-reachable MIR functions from `fe2o3_kernel_*`
   roots, skips intrinsic placeholder bodies, rejects actual `std` reachability,
   and dumps a deterministic collection summary.
-- `rustc-codegen-fe2o3` contains the first real backend utility:
-  `.ll -> .o -> .hsaco` using ROCm clang and `ld.lld`.
+- `rustc-codegen-fe2o3` contains the first real backend utilities:
+  - A narrow AMDGPU LLVM IR emitter for the current `vecadd` kernel shape.
+  - `.ll -> .o -> .hsaco` using ROCm clang and `ld.lld`.
+- `cargo-fe2o3 build -p fe2o3-vecadd` writes `target/fe2o3/vecadd.ll` and
+  `target/fe2o3/vecadd.hsaco`.
+- The `vecadd` example loads its HSACO from `FE2O3_HSACO_DIR`, which is set by
+  `cargo-fe2o3 build/run`.
 
 ## Next Compiler Milestones
 
-1. Add the first Pliron import/lowering path:
+1. Replace the temporary `vecadd`-specific LLVM IR emitter with the first Pliron
+   import/lowering path:
    `MIR -> Pliron dialect-mir -> AMDGPU LLVM dialect/export -> LLVM IR`.
 2. Replace device stubs in `fe2o3-device` with lowering rules:
    - `thread::thread_idx_*` -> `llvm.amdgcn.workitem.id.*`
@@ -32,7 +38,9 @@ For the full milestone plan, see [implementation-plan.md](implementation-plan.md
    - Rust slices lower to pointer plus `usize` length.
    - `DisjointSlice<T>` lowers to mutable pointer plus `usize` length.
    - Plain scalars pass by value.
-4. Teach the backend to emit HSACO next to the host binary and run the result.
+4. Generalize artifact naming and placement beyond the single `vecadd` sidecar.
+5. Run the generated host binary plus HSACO on hardware in CI or a dedicated
+   ROCm test machine.
 
 ## Runtime ABI Assumption
 

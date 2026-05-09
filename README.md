@@ -34,8 +34,13 @@ interfaces needed to reach that target:
 The HIP runtime layer and public API are compile-checkable. `cargo-fe2o3 build`
 now builds and loads `librustc_codegen_fe2o3.so`, delegates host codegen through
 `rustc_codegen_llvm`, detects `#[kernel]` functions in rustc codegen units, and
-dumps the currently collected device-reachable MIR functions. AMDGPU lowering is
-not wired yet; that is the next backend milestone.
+dumps the currently collected device-reachable MIR functions.
+
+The backend also has the first AMDGPU artifact path: for the `vecadd` example it
+emits a minimal AMDGPU LLVM IR kernel and compiles it through ROCm clang plus
+`ld.lld` into `target/fe2o3/vecadd.hsaco`. This is intentionally scoped to the
+current `vecadd` kernel shape; general MIR/Pliron lowering is still the next
+compiler milestone.
 
 See [docs/implementation-plan.md](docs/implementation-plan.md) for the full
 compiler/runtime plan.
@@ -56,4 +61,10 @@ Smoke-test the current backend entry point:
 
 ```bash
 cargo run -p cargo-fe2o3 -- build -p fe2o3-vecadd
+```
+
+On a machine with a working AMD GPU and ROCm driver stack:
+
+```bash
+cargo run -p cargo-fe2o3 -- run -p fe2o3-vecadd
 ```

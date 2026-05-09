@@ -1,6 +1,7 @@
 use fe2o3_core::{DeviceBuffer, GpuContext, LaunchConfig};
 use fe2o3_device::{DisjointSlice, kernel, thread};
 use fe2o3_host::launch;
+use std::path::PathBuf;
 
 #[kernel]
 pub fn vecadd(a: &[f32], b: &[f32], mut c: DisjointSlice<f32>) {
@@ -23,7 +24,10 @@ fn main() -> fe2o3_core::Result<()> {
     let b_dev = DeviceBuffer::from_host(&stream, &b_host)?;
     let c_dev = DeviceBuffer::<f32>::zeroed(&stream, N)?;
 
-    let module = context.load_module_from_file("vecadd.hsaco")?;
+    let hsaco_dir = std::env::var_os("FE2O3_HSACO_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let module = context.load_module_from_file(hsaco_dir.join("vecadd.hsaco"))?;
     launch! {
         kernel: vecadd,
         stream: stream,
