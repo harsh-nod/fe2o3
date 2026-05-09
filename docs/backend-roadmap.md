@@ -13,12 +13,15 @@ For the full milestone plan, see [implementation-plan.md](implementation-plan.md
 - `cargo-fe2o3 build` builds and loads `librustc_codegen_fe2o3.so`.
 - `rustc-codegen-fe2o3` wraps `rustc_codegen_llvm` for host codegen and detects
   kernel candidates in rustc codegen units.
+- The backend collects device-reachable MIR functions from `fe2o3_kernel_*`
+  roots, skips intrinsic placeholder bodies, rejects actual `std` reachability,
+  and dumps a deterministic collection summary.
 - `rustc-codegen-fe2o3` contains the first real backend utility:
   `.ll -> .o -> .hsaco` using ROCm clang and `ld.lld`.
 
 ## Next Compiler Milestones
 
-1. Port cuda-oxide's MIR collection shape, but keep the AMD path target-specific:
+1. Add the first Pliron import/lowering path:
    `MIR -> Pliron dialect-mir -> AMDGPU LLVM dialect/export -> LLVM IR`.
 2. Replace device stubs in `fe2o3-device` with lowering rules:
    - `thread::thread_idx_*` -> `llvm.amdgcn.workitem.id.*`

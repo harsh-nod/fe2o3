@@ -9,12 +9,13 @@ extern crate rustc_metadata;
 extern crate rustc_middle;
 extern crate rustc_session;
 
+mod collector;
+
 use rustc_codegen_ssa::traits::CodegenBackend;
 use rustc_codegen_ssa::{CompiledModules, CrateInfo};
 use rustc_data_structures::fx::FxIndexMap;
 use rustc_metadata::EncodedMetadata;
 use rustc_middle::dep_graph::{WorkProduct, WorkProductId};
-use rustc_middle::mir::mono::{CodegenUnit, MonoItem};
 use rustc_middle::ty::TyCtxt;
 use rustc_middle::ty::print::with_no_trimmed_paths;
 use rustc_session::Session;
@@ -90,7 +91,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
     fn codegen_crate(&self, tcx: TyCtxt<'_>, crate_info: &CrateInfo) -> Box<dyn Any> {
         with_no_trimmed_paths!({
             let mono_partitions = tcx.collect_and_partition_mono_items(());
-            let kernel_count = count_kernels_in_cgus(tcx, mono_partitions.codegen_units);
+            let kernel_count = collector::count_kernels_in_cgus(tcx, mono_partitions.codegen_units);
 
             if self.config.verbose || kernel_count > 0 {
                 let crate_name = tcx.crate_name(rustc_hir::def_id::LOCAL_CRATE);
@@ -102,6 +103,13 @@ impl CodegenBackend for Fe2o3CodegenBackend {
             }
 
             if kernel_count > 0 {
+                let collection = collector::collect_device_functions(
+                    tcx,
+                    mono_partitions.codegen_units,
+                    self.config.verbose,
+                );
+                collector::dump_device_functions(tcx, &collection.functions);
+
                 let output_dir =
                     self.config.hsaco_output_dir.clone().unwrap_or_else(|| {
                         env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
@@ -148,21 +156,6 @@ pub fn __rustc_codegen_backend() -> Box<dyn CodegenBackend> {
         config,
         llvm_backend,
     })
-}
-
-fn count_kernels_in_cgus<'tcx>(tcx: TyCtxt<'tcx>, cgus: &[CodegenUnit<'tcx>]) -> usize {
-    let mut count = 0;
-    for cgu in cgus {
-        for (item, _data) in cgu.items() {
-            if let MonoItem::Fn(instance) = item {
-                let name = tcx.def_path_str(instance.def_id());
-                if name.contains(reserved_fe2o3_symbols::KERNEL_PREFIX) {
-                    count += 1;
-                }
-            }
-        }
-    }
-    count
 }
 
 #[derive(Clone, Debug)]

@@ -33,8 +33,9 @@ interfaces needed to reach that target:
 
 The HIP runtime layer and public API are compile-checkable. `cargo-fe2o3 build`
 now builds and loads `librustc_codegen_fe2o3.so`, delegates host codegen through
-`rustc_codegen_llvm`, and detects `#[kernel]` functions in rustc codegen units.
-The MIR collector/lowerer is not wired yet; that is the next backend milestone.
+`rustc_codegen_llvm`, detects `#[kernel]` functions in rustc codegen units, and
+dumps the currently collected device-reachable MIR functions. AMDGPU lowering is
+not wired yet; that is the next backend milestone.
 
 See [docs/implementation-plan.md](docs/implementation-plan.md) for the full
 compiler/runtime plan.
