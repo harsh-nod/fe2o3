@@ -6,10 +6,15 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "Compiler backend support code for fe2o3."
+build = "build.rs"
 
 [dependencies]
 dialect-amdgcn.workspace = true
+reserved-fe2o3-symbols.workspace = true
 
 [lib]
 name = "rustc_codegen_fe2o3"
-crate-type = ["rlib", "cdylib"]
+crate-type = ["rlib", "dylib"]
+
+[package.metadata.rust-analyzer]
+rustc_private = true

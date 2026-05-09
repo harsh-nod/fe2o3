@@ -49,6 +49,7 @@ pub fn kernel(attr: TokenStream, item: TokenStream) -> TokenStream {
     quote! {
         #[doc(hidden)]
         #[allow(non_snake_case)]
+        #[unsafe(no_mangle)]
         #input
 
         #[doc(hidden)]

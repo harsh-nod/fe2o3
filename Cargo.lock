@@ -5,9 +5,6 @@ version = 4
 [[package]]
 name = "cargo-fe2o3"
 version = "0.1.0"
-dependencies = [
- "rustc-codegen-fe2o3",
-]
 
 [[package]]
 name = "dialect-amdgcn"
@@ -84,6 +81,7 @@ name = "rustc-codegen-fe2o3"
 version = "0.1.0"
 dependencies = [
  "dialect-amdgcn",
+ "reserved-fe2o3-symbols",
 ]
 
 [[package]]

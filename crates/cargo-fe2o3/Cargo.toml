@@ -7,9 +7,6 @@ repository.workspace = true
 rust-version.workspace = true
 description = "Cargo subcommand for fe2o3."
 
-[dependencies]
-rustc-codegen-fe2o3.workspace = true
-
 [[bin]]
 name = "cargo-fe2o3"
 path = "src/main.rs"

@@ -1,3 +1,25 @@
+#![feature(rustc_private)]
+
+extern crate rustc_codegen_llvm;
+extern crate rustc_codegen_ssa;
+extern crate rustc_data_structures;
+extern crate rustc_driver;
+extern crate rustc_hir;
+extern crate rustc_metadata;
+extern crate rustc_middle;
+extern crate rustc_session;
+
+use rustc_codegen_ssa::traits::CodegenBackend;
+use rustc_codegen_ssa::{CompiledModules, CrateInfo};
+use rustc_data_structures::fx::FxIndexMap;
+use rustc_metadata::EncodedMetadata;
+use rustc_middle::dep_graph::{WorkProduct, WorkProductId};
+use rustc_middle::mir::mono::{CodegenUnit, MonoItem};
+use rustc_middle::ty::TyCtxt;
+use rustc_middle::ty::print::with_no_trimmed_paths;
+use rustc_session::Session;
+use rustc_session::config::OutputFilenames;
+use std::any::Any;
 use std::env;
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -5,8 +27,143 @@ use std::process::Command;
 
 pub const TARGET_ENV: &str = "FE2O3_TARGET";
 pub const BACKEND_ENV: &str = "FE2O3_BACKEND";
+pub const VERBOSE_ENV: &str = "FE2O3_VERBOSE";
 pub const DUMP_MIR_ENV: &str = "FE2O3_DUMP_MIR";
 pub const DUMP_LLVM_ENV: &str = "FE2O3_DUMP_LLVM";
+pub const HSACO_DIR_ENV: &str = "FE2O3_HSACO_DIR";
+
+pub struct Fe2o3CodegenBackend {
+    config: BackendConfig,
+    llvm_backend: Box<dyn CodegenBackend>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct BackendConfig {
+    pub verbose: bool,
+    pub dump_mir: bool,
+    pub dump_llvm: bool,
+    pub hsaco_output_dir: Option<PathBuf>,
+    pub target: AmdGpuTarget,
+}
+
+impl BackendConfig {
+    pub fn from_env() -> Self {
+        Self {
+            verbose: env_flag(VERBOSE_ENV),
+            dump_mir: env_flag(DUMP_MIR_ENV),
+            dump_llvm: env_flag(DUMP_LLVM_ENV),
+            hsaco_output_dir: env::var(HSACO_DIR_ENV).ok().map(PathBuf::from),
+            target: AmdGpuTarget::from_env_or_default(),
+        }
+    }
+}
+
+impl CodegenBackend for Fe2o3CodegenBackend {
+    fn name(&self) -> &'static str {
+        "fe2o3"
+    }
+
+    fn init(&self, sess: &Session) {
+        self.llvm_backend.init(sess);
+    }
+
+    fn print_version(&self) {
+        println!(
+            "rustc-codegen-fe2o3 {} (wrapping rustc_codegen_llvm)",
+            env!("CARGO_PKG_VERSION")
+        );
+        self.llvm_backend.print_version();
+    }
+
+    fn target_cpu(&self, sess: &Session) -> String {
+        self.llvm_backend.target_cpu(sess)
+    }
+
+    fn target_config(&self, sess: &Session) -> rustc_codegen_ssa::TargetConfig {
+        self.llvm_backend.target_config(sess)
+    }
+
+    fn provide(&self, providers: &mut rustc_middle::util::Providers) {
+        self.llvm_backend.provide(providers);
+    }
+
+    fn codegen_crate(&self, tcx: TyCtxt<'_>, crate_info: &CrateInfo) -> Box<dyn Any> {
+        with_no_trimmed_paths!({
+            let mono_partitions = tcx.collect_and_partition_mono_items(());
+            let kernel_count = count_kernels_in_cgus(tcx, mono_partitions.codegen_units);
+
+            if self.config.verbose || kernel_count > 0 {
+                let crate_name = tcx.crate_name(rustc_hir::def_id::LOCAL_CRATE);
+                eprintln!(
+                    "[rustc-codegen-fe2o3] crate `{crate_name}`: {} CGU(s), {kernel_count} kernel candidate(s), target {}",
+                    mono_partitions.codegen_units.len(),
+                    self.config.target,
+                );
+            }
+
+            if kernel_count > 0 {
+                let output_dir =
+                    self.config.hsaco_output_dir.clone().unwrap_or_else(|| {
+                        env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+                    });
+                eprintln!(
+                    "[rustc-codegen-fe2o3] device lowering is not implemented yet; future HSACO output directory: {}",
+                    output_dir.display()
+                );
+            }
+
+            self.llvm_backend.codegen_crate(tcx, crate_info)
+        })
+    }
+
+    fn join_codegen(
+        &self,
+        ongoing_codegen: Box<dyn Any>,
+        sess: &Session,
+        outputs: &OutputFilenames,
+    ) -> (CompiledModules, FxIndexMap<WorkProductId, WorkProduct>) {
+        self.llvm_backend
+            .join_codegen(ongoing_codegen, sess, outputs)
+    }
+
+    fn link(
+        &self,
+        sess: &Session,
+        compiled_modules: CompiledModules,
+        crate_info: CrateInfo,
+        metadata: EncodedMetadata,
+        outputs: &OutputFilenames,
+    ) {
+        self.llvm_backend
+            .link(sess, compiled_modules, crate_info, metadata, outputs);
+    }
+}
+
+#[unsafe(no_mangle)]
+pub fn __rustc_codegen_backend() -> Box<dyn CodegenBackend> {
+    let config = BackendConfig::from_env();
+    let llvm_backend = rustc_codegen_llvm::LlvmCodegenBackend::new();
+
+    Box::new(Fe2o3CodegenBackend {
+        config,
+        llvm_backend,
+    })
+}
+
+fn count_kernels_in_cgus<'tcx>(tcx: TyCtxt<'tcx>, cgus: &[CodegenUnit<'tcx>]) -> usize {
+    let mut count = 0;
+    for cgu in cgus {
+        for (item, _data) in cgu.items() {
+            if let MonoItem::Fn(instance) = item {
+                let name = tcx.def_path_str(instance.def_id());
+                if name.contains(reserved_fe2o3_symbols::KERNEL_PREFIX) {
+                    count += 1;
+                }
+            }
+        }
+    }
+    count
+}
 
 #[derive(Clone, Debug)]
 pub struct DeviceCodegenConfig {
@@ -51,6 +208,12 @@ impl AmdGpuTarget {
 
     pub fn as_str(&self) -> &str {
         &self.name
+    }
+}
+
+impl Default for AmdGpuTarget {
+    fn default() -> Self {
+        Self::from_env_or_default()
     }
 }
 

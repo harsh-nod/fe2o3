@@ -31,8 +31,10 @@ interfaces needed to reach that target:
 
 ## Current Status
 
-The HIP runtime layer and public API are compile-checkable. The rustc MIR
-collector/lowerer is not wired yet; that is the next backend milestone.
+The HIP runtime layer and public API are compile-checkable. `cargo-fe2o3 build`
+now builds and loads `librustc_codegen_fe2o3.so`, delegates host codegen through
+`rustc_codegen_llvm`, and detects `#[kernel]` functions in rustc codegen units.
+The MIR collector/lowerer is not wired yet; that is the next backend milestone.
 
 See [docs/implementation-plan.md](docs/implementation-plan.md) for the full
 compiler/runtime plan.
@@ -47,4 +49,10 @@ Check the workspace:
 
 ```bash
 cargo check --workspace
+```
+
+Smoke-test the current backend entry point:
+
+```bash
+cargo run -p cargo-fe2o3 -- build -p fe2o3-vecadd
 ```

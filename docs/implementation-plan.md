@@ -139,6 +139,8 @@ Status: implemented.
 
 ### M1: Backend Entry Point
 
+Status: implemented for host delegation and kernel-count diagnostics.
+
 - Build `librustc_codegen_fe2o3.so`.
 - Load the backend through `-Z codegen-backend`.
 - Delegate host codegen to rustc's normal LLVM backend.
@@ -243,10 +245,10 @@ calls can break GPU synchronization semantics.
 
 ## Immediate Next Task
 
-Implement M1:
+Implement M2:
 
-1. Add a rustc codegen backend entry point.
-2. Pin the required nightly toolchain in `rust-toolchain.toml`.
-3. Make `cargo-fe2o3 build` build or locate `librustc_codegen_fe2o3.so`.
-4. Pass `-Z codegen-backend` and delegate host codegen.
-5. Add a smoke test that proves the backend is loaded for the vecadd example.
+1. Add a collector module to detect `fe2o3_kernel_*` roots.
+2. Walk MIR calls from each kernel root.
+3. Reject actual `std` calls in reachable device code.
+4. Emit a deterministic dump of collected device functions.
+5. Keep host codegen delegated to LLVM while device lowering is still stubbed.
