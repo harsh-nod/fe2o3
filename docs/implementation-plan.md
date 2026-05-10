@@ -185,7 +185,7 @@ Status: MVP implemented for `f32` elementwise expression kernel shapes.
 - It assumes the current `LaunchConfig::for_num_elems` block size of 256.
 - `vecadd` covers slice-plus-slice addition; `scale` covers scalar-times-slice
   multiplication; `saxpy` covers a two-op expression with four kernel
-  arguments.
+  arguments; `pipeline` covers two kernels emitted from one crate.
 
 Remaining generalization:
 
@@ -220,13 +220,15 @@ Remaining generalization:
 - Decide whether release artifacts should live next to the host executable,
   remain sidecars under `target/fe2o3`, or be embedded.
 - Add first-class metadata validation in `cargo-fe2o3`.
-- Support multiple kernels in one crate and monomorphized kernel names.
+- Support monomorphized kernel names.
 
 Acceptance:
 
 - `cargo fe2o3 build -p fe2o3-vecadd` produces `vecadd.hsaco`, and
   `cargo fe2o3 build -p fe2o3-scale` produces `scale.hsaco`, and
   `cargo fe2o3 build -p fe2o3-saxpy` produces `saxpy.hsaco`.
+- `cargo fe2o3 build -p fe2o3-pipeline` produces `scale_stage.hsaco` and
+  `bias_stage.hsaco`.
 
 ### M5: First End-To-End Launch
 
@@ -237,8 +239,8 @@ Status: MVP implemented for the current elementwise examples.
   so the backend reruns and refreshes sidecar HSACO files.
 - If `FE2O3_TARGET` is not set, `cargo-fe2o3` tries to infer the target from
   `rocminfo`.
-- The `vecadd`, `scale`, and `saxpy` examples load their HSACO files from that
-  directory.
+- The `vecadd`, `scale`, `saxpy`, and `pipeline` examples load their HSACO files
+  from that directory.
 - The examples use `fe2o3-core` to load modules, launch through HIP with the
   backend ABI, copy output back, and validate results.
 - The path has run successfully on `gfx1201` with TheRock ROCm
@@ -252,9 +254,9 @@ Remaining work:
 
 Acceptance:
 
-- `cargo fe2o3 run -p fe2o3-vecadd` and
-  `cargo fe2o3 run -p fe2o3-scale` and `cargo fe2o3 run -p fe2o3-saxpy` print
-  success on an AMD GPU.
+- `cargo fe2o3 run -p fe2o3-vecadd`, `cargo fe2o3 run -p fe2o3-scale`,
+  `cargo fe2o3 run -p fe2o3-saxpy`, and `cargo fe2o3 run -p fe2o3-pipeline`
+  print success on an AMD GPU.
 
 ### M6: Usability And Coverage
 

@@ -47,9 +47,10 @@ General MIR/Pliron lowering is still the next compiler milestone.
 
 On a `gfx1201` AMD Radeon AI PRO R9700 with TheRock ROCm
 `7.13.0a20260509`, `cargo-fe2o3 run -p fe2o3-vecadd`,
-`cargo-fe2o3 run -p fe2o3-scale`, and `cargo-fe2o3 run -p fe2o3-saxpy` generate
-HSACO artifacts, load them through HIP, launch the kernels, and validate the
-results.
+`cargo-fe2o3 run -p fe2o3-scale`, `cargo-fe2o3 run -p fe2o3-saxpy`, and
+`cargo-fe2o3 run -p fe2o3-pipeline` generate HSACO artifacts, load them through
+HIP, launch the kernels, and validate the results. The pipeline example emits
+and launches two kernels from one Rust crate.
 
 See [docs/implementation-plan.md](docs/implementation-plan.md) for the full
 compiler/runtime plan.
@@ -79,6 +80,7 @@ Smoke-test the current backend entry point:
 cargo run -p cargo-fe2o3 -- build -p fe2o3-vecadd
 cargo run -p cargo-fe2o3 -- build -p fe2o3-scale
 cargo run -p cargo-fe2o3 -- build -p fe2o3-saxpy
+cargo run -p cargo-fe2o3 -- build -p fe2o3-pipeline
 ```
 
 On a machine with a working AMD GPU and ROCm driver stack:
@@ -87,4 +89,5 @@ On a machine with a working AMD GPU and ROCm driver stack:
 cargo run -p cargo-fe2o3 -- run -p fe2o3-vecadd
 cargo run -p cargo-fe2o3 -- run -p fe2o3-scale
 cargo run -p cargo-fe2o3 -- run -p fe2o3-saxpy
+cargo run -p cargo-fe2o3 -- run -p fe2o3-pipeline
 ```
