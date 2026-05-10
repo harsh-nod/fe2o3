@@ -18,7 +18,7 @@ For the full milestone plan, see [implementation-plan.md](implementation-plan.md
   and dumps a deterministic collection summary.
 - `rustc-codegen-fe2o3` contains the first real backend utilities:
   - ABI validation for supported kernel arguments from monomorphized MIR locals.
-  - A narrow AMDGPU LLVM IR emitter for the current `vecadd` kernel shape.
+  - A narrow MIR recognizer and AMDGPU LLVM IR emitter for vector-add kernels.
   - `.ll -> .o -> .hsaco` using ROCm clang and `ld.lld`.
 - `cargo-fe2o3 build -p fe2o3-vecadd` writes `target/fe2o3/vecadd.ll` and
   `target/fe2o3/vecadd.hsaco`.
@@ -31,7 +31,7 @@ For the full milestone plan, see [implementation-plan.md](implementation-plan.md
 
 ## Next Compiler Milestones
 
-1. Replace the temporary `vecadd`-specific LLVM IR emitter with the first Pliron
+1. Replace the temporary vector-add MIR recognizer/emitter with the first Pliron
    import/lowering path:
    `MIR -> Pliron dialect-mir -> AMDGPU LLVM dialect/export -> LLVM IR`.
 2. Replace device stubs in `fe2o3-device` with lowering rules:

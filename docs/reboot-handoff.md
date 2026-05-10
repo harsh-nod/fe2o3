@@ -16,7 +16,7 @@ This file captures the fe2o3 state around bringing up the AMD GPU driver stack.
 - Direct device MIR calls are walked from kernel roots.
 - Reachable `std` functions are rejected.
 - Intrinsic placeholder bodies are skipped.
-- The current `vecadd` kernel shape emits AMDGPU LLVM IR.
+- The current vector-add MIR shape emits AMDGPU LLVM IR.
 - Generated LLVM IR is compiled through ROCm clang and linked with `ld.lld` into
   `target/fe2o3/vecadd.hsaco`.
 - The `vecadd` example loads HSACO from `FE2O3_HSACO_DIR`, which `cargo-fe2o3`
@@ -95,9 +95,10 @@ Result:
 vecadd passed for 1024 elements
 ```
 
-The generated `vecadd` IR derives pointer plus length kernel parameters from the
-Rust kernel ABI and preserves source argument names such as `a_ptr`, `b_ptr`,
-and `c_ptr` when MIR debug info provides them.
+The generated `vecadd` IR is gated by a MIR vector-add shape recognizer, derives
+pointer plus length kernel parameters from the Rust kernel ABI, and preserves
+source argument names such as `a_ptr`, `b_ptr`, and `c_ptr` when MIR debug info
+provides them.
 
 ## After Reboot
 
@@ -135,7 +136,7 @@ reported by ROCm, for example `gfx1201`, `gfx90a`, or `gfx942`.
 
 ## Next Implementation Step
 
-Replace the temporary `vecadd`-specific LLVM IR emitter with real lowering:
+Replace the temporary vector-add MIR recognizer/emitter with real lowering:
 
 1. Add the first Pliron dependency and local dialect/import scaffolding.
 2. Import collected MIR into a minimal intermediate form.

@@ -168,11 +168,13 @@ Acceptance:
 
 ### M3: Minimal AMDGPU LLVM IR
 
-Status: MVP implemented for the `vecadd` kernel shape.
+Status: MVP implemented for the vector-add kernel shape.
 
 - The backend validates supported kernel arguments from monomorphized MIR locals.
-- The backend emits an AMDGPU LLVM IR `amdgpu_kernel` for the current `vecadd`
-  example after validating its ABI.
+- The backend recognizes the MIR body pattern for
+  `output[index] = input_a[index] + input_b[index]`.
+- The backend emits an AMDGPU LLVM IR `amdgpu_kernel` after validating the ABI
+  and body pattern.
 - The emitted IR uses `llvm.amdgcn.workitem.id.x` and
   `llvm.amdgcn.workgroup.id.x`.
 - It matches the current host launch ABI: slice pointer plus `usize` length for
@@ -188,7 +190,7 @@ Remaining generalization:
 - Lower arithmetic, branches, loads/stores, pointer math, calls, and returns.
 - Lower 1D thread-index intrinsics from device API calls instead of a fixed IR
   template.
-- Export AMDGPU LLVM IR for kernels beyond `vecadd`.
+- Export AMDGPU LLVM IR for kernels beyond the current vector-add shape.
 - Preserve more source-level debug metadata beyond kernel argument names.
 
 Acceptance:

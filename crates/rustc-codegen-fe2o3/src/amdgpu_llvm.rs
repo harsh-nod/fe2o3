@@ -1,8 +1,11 @@
 use crate::collector::{CollectedFunction, CollectionResult};
 use crate::{AmdGpuTarget, HsacoError, compile_llvm_ir_to_hsaco};
-use rustc_middle::mir::{Body, VarDebugInfoContents};
+use rustc_middle::mir::{
+    BinOp, Body, Local, Operand, Place, ProjectionElem, Rvalue, StatementKind, TerminatorKind,
+    VarDebugInfoContents,
+};
 use rustc_middle::ty::{EarlyBinder, FloatTy, Mutability, Ty, TyCtxt, TyKind, TypingEnv};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
@@ -84,15 +87,16 @@ fn emit_kernel<'tcx>(
     tcx: TyCtxt<'tcx>,
     kernel: &CollectedFunction<'tcx>,
 ) -> Result<String, EmitError> {
+    let mir = tcx.instance_mir(kernel.instance.def);
     let abi = analyze_kernel_abi(tcx, kernel)?;
+    let vector_add = analyze_vector_add_shape(tcx, mir).map_err(|reason| {
+        unsupported_kernel(
+            &kernel.export_name,
+            format!("unsupported MIR body for vector-add lowering: {reason}"),
+        )
+    })?;
 
-    match abi.name.as_str() {
-        "vecadd" => emit_vecadd_kernel(&abi),
-        other => Err(unsupported_kernel(
-            other,
-            "only the vecadd MIR shape has an LLVM IR template today",
-        )),
-    }
+    emit_vector_add_kernel(&abi, &vector_add)
 }
 
 #[derive(Clone, Debug)]
@@ -105,6 +109,13 @@ struct KernelAbi {
 struct KernelArg {
     name: String,
     kind: KernelArgKind,
+}
+
+#[derive(Clone, Debug)]
+struct VectorAddShape {
+    lhs_arg: usize,
+    rhs_arg: usize,
+    output_arg: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -308,8 +319,170 @@ fn is_disjoint_slice(tcx: TyCtxt<'_>, def_id: rustc_hir::def_id::DefId) -> bool 
         .ends_with("fe2o3_device::DisjointSlice")
 }
 
-fn emit_vecadd_kernel(abi: &KernelAbi) -> Result<String, EmitError> {
-    validate_vecadd_abi(abi)?;
+fn analyze_vector_add_shape<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    mir: &Body<'tcx>,
+) -> Result<VectorAddShape, String> {
+    let arg_locals = mir.args_iter().collect::<Vec<_>>();
+    let mut borrowed_args = HashMap::new();
+
+    for block in mir.basic_blocks.iter() {
+        for statement in &block.statements {
+            let StatementKind::Assign(assign) = &statement.kind else {
+                continue;
+            };
+            let (place, rvalue) = &**assign;
+            if let Rvalue::Ref(_, _, borrowed_place) = rvalue
+                && place.projection.is_empty()
+                && let Some(arg_index) = local_arg_index(borrowed_place.local, &arg_locals)
+            {
+                borrowed_args.insert(place.local, arg_index);
+            }
+        }
+    }
+
+    let mut thread_index_local = None;
+    let mut index_value_locals = HashSet::new();
+    let mut output_arg = None;
+
+    for block in mir.basic_blocks.iter() {
+        let Some(terminator) = &block.terminator else {
+            continue;
+        };
+        let TerminatorKind::Call {
+            func,
+            args,
+            destination,
+            ..
+        } = &terminator.kind
+        else {
+            continue;
+        };
+        let Some((def_id, _)) = func.const_fn_def() else {
+            continue;
+        };
+        let path = tcx.def_path_str(def_id);
+
+        if path.ends_with("fe2o3_device::thread::index_1d") {
+            if destination.projection.is_empty() {
+                thread_index_local = Some(destination.local);
+            }
+            continue;
+        }
+
+        if path.ends_with("fe2o3_device::ThreadIndex::get") {
+            let Some(thread_index_local) = thread_index_local else {
+                continue;
+            };
+            if destination.projection.is_empty()
+                && args
+                    .first()
+                    .and_then(|arg| operand_local(&arg.node))
+                    .is_some_and(|local| local == thread_index_local)
+            {
+                index_value_locals.insert(destination.local);
+            }
+            continue;
+        }
+
+        if path.ends_with("::get_mut") && path.contains("DisjointSlice") {
+            if args
+                .get(1)
+                .and_then(|arg| operand_local(&arg.node))
+                .is_some_and(|local| Some(local) == thread_index_local)
+                && let Some(receiver_local) = args.first().and_then(|arg| operand_local(&arg.node))
+                && let Some(arg_index) = borrowed_args.get(&receiver_local).copied()
+            {
+                output_arg = Some(arg_index);
+            }
+        }
+    }
+
+    thread_index_local.ok_or_else(|| "missing `thread::index_1d` call".to_string())?;
+    if index_value_locals.is_empty() {
+        return Err("missing `ThreadIndex::get` calls for slice indexing".to_string());
+    }
+    let output_arg = output_arg
+        .ok_or_else(|| "missing `DisjointSlice::get_mut(thread_index)` output path".to_string())?;
+
+    let mut loaded_values = HashMap::new();
+    let mut add_store = None;
+
+    for block in mir.basic_blocks.iter() {
+        for statement in &block.statements {
+            let StatementKind::Assign(assign) = &statement.kind else {
+                continue;
+            };
+            let (place, rvalue) = &**assign;
+
+            match rvalue {
+                Rvalue::Use(operand) if place.projection.is_empty() => {
+                    if let Some(source_place) = operand.place()
+                        && let Some(arg_index) =
+                            indexed_arg_place(source_place, &arg_locals, &index_value_locals)
+                    {
+                        loaded_values.insert(place.local, arg_index);
+                    }
+                }
+                Rvalue::BinaryOp(BinOp::Add, operands) if is_deref_store(place) => {
+                    let lhs_arg = operand_local(&operands.0)
+                        .and_then(|local| loaded_values.get(&local).copied());
+                    let rhs_arg = operand_local(&operands.1)
+                        .and_then(|local| loaded_values.get(&local).copied());
+
+                    if let (Some(lhs_arg), Some(rhs_arg)) = (lhs_arg, rhs_arg) {
+                        add_store = Some(VectorAddShape {
+                            lhs_arg,
+                            rhs_arg,
+                            output_arg,
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let shape = add_store
+        .ok_or_else(|| "missing `output[idx] = input_a[idx] + input_b[idx]` store".to_string())?;
+    if shape.lhs_arg == shape.rhs_arg {
+        return Err("vector add inputs resolve to the same slice argument".to_string());
+    }
+    if shape.lhs_arg == shape.output_arg || shape.rhs_arg == shape.output_arg {
+        return Err("vector add output aliases an input argument in MIR".to_string());
+    }
+    Ok(shape)
+}
+
+fn operand_local(operand: &Operand<'_>) -> Option<Local> {
+    let place = operand.place()?;
+    place.projection.is_empty().then_some(place.local)
+}
+
+fn local_arg_index(local: Local, arg_locals: &[Local]) -> Option<usize> {
+    arg_locals.iter().position(|candidate| *candidate == local)
+}
+
+fn indexed_arg_place(
+    place: Place<'_>,
+    arg_locals: &[Local],
+    index_value_locals: &HashSet<Local>,
+) -> Option<usize> {
+    let [ProjectionElem::Deref, ProjectionElem::Index(index_local)] = &place.projection[..] else {
+        return None;
+    };
+    if !index_value_locals.contains(index_local) {
+        return None;
+    }
+    local_arg_index(place.local, arg_locals)
+}
+
+fn is_deref_store(place: &Place<'_>) -> bool {
+    matches!(&place.projection[..], [ProjectionElem::Deref])
+}
+
+fn emit_vector_add_kernel(abi: &KernelAbi, shape: &VectorAddShape) -> Result<String, EmitError> {
+    validate_vector_add_abi(abi, shape)?;
 
     let params = abi
         .args
@@ -317,9 +490,9 @@ fn emit_vecadd_kernel(abi: &KernelAbi) -> Result<String, EmitError> {
         .flat_map(KernelArg::llvm_params)
         .collect::<Vec<_>>()
         .join(", ");
-    let a = &abi.args[0];
-    let b = &abi.args[1];
-    let c = &abi.args[2];
+    let a = &abi.args[shape.lhs_arg];
+    let b = &abi.args[shape.rhs_arg];
+    let c = &abi.args[shape.output_arg];
     let a_base = a.llvm_base();
     let b_base = b.llvm_base();
     let c_base = c.llvm_base();
@@ -379,25 +552,37 @@ attributes #1 = {{ nounwind readnone speculatable }}
     ))
 }
 
-fn validate_vecadd_abi(abi: &KernelAbi) -> Result<(), EmitError> {
+fn validate_vector_add_abi(abi: &KernelAbi, shape: &VectorAddShape) -> Result<(), EmitError> {
     if abi.args.len() != 3 {
         return Err(unsupported_kernel(
             &abi.name,
-            "vecadd requires exactly three slice-like arguments",
+            "vector-add lowering requires exactly three slice-like arguments",
         ));
+    }
+
+    for arg_index in [shape.lhs_arg, shape.rhs_arg, shape.output_arg] {
+        if arg_index >= abi.args.len() {
+            return Err(unsupported_kernel(
+                &abi.name,
+                "MIR vector-add argument index is outside the kernel ABI",
+            ));
+        }
     }
 
     if abi.args.iter().any(|arg| arg.element() != ScalarType::F32) {
         return Err(unsupported_kernel(
             &abi.name,
-            "vecadd currently supports only f32 slice arguments",
+            "vector-add lowering currently supports only f32 slice arguments",
         ));
     }
 
-    if abi.args[0].is_mutable() || abi.args[1].is_mutable() || !abi.args[2].is_mutable() {
+    if abi.args[shape.lhs_arg].is_mutable()
+        || abi.args[shape.rhs_arg].is_mutable()
+        || !abi.args[shape.output_arg].is_mutable()
+    {
         return Err(unsupported_kernel(
             &abi.name,
-            "vecadd expects two read-only input slices and one mutable output slice",
+            "vector-add lowering expects two read-only input slices and one mutable output slice",
         ));
     }
 
