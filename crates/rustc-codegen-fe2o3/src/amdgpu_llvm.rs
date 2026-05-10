@@ -1,6 +1,8 @@
 use crate::collector::{CollectedFunction, CollectionResult};
 use crate::{AmdGpuTarget, HsacoError, compile_llvm_ir_to_hsaco};
+use rustc_middle::mir::{Body, VarDebugInfoContents};
 use rustc_middle::ty::{EarlyBinder, FloatTy, Mutability, Ty, TyCtxt, TyKind, TypingEnv};
+use std::collections::HashSet;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
@@ -101,7 +103,7 @@ struct KernelAbi {
 
 #[derive(Clone, Debug)]
 struct KernelArg {
-    source_index: usize,
+    name: String,
     kind: KernelArgKind,
 }
 
@@ -116,8 +118,8 @@ enum ScalarType {
 }
 
 impl KernelArg {
-    fn llvm_base(&self) -> String {
-        format!("arg{}", self.source_index)
+    fn llvm_base(&self) -> &str {
+        &self.name
     }
 
     fn llvm_params(&self) -> Vec<String> {
@@ -164,6 +166,8 @@ fn analyze_kernel_abi<'tcx>(
     kernel: &CollectedFunction<'tcx>,
 ) -> Result<KernelAbi, EmitError> {
     let mir = tcx.instance_mir(kernel.instance.def);
+    let arg_names = source_arg_names(mir);
+    let mut used_names = HashSet::new();
     let mut args = Vec::new();
 
     for (source_index, local) in mir.args_iter().enumerate() {
@@ -177,13 +181,93 @@ fn analyze_kernel_abi<'tcx>(
             reason: format!("argument {source_index} has unsupported type `{ty}`: {reason}"),
         })?;
 
-        args.push(KernelArg { source_index, kind });
+        let raw_name = arg_names
+            .get(source_index)
+            .and_then(|name| name.as_deref())
+            .unwrap_or("arg");
+        let name = unique_llvm_name(raw_name, source_index, &mut used_names);
+
+        args.push(KernelArg { name, kind });
     }
 
     Ok(KernelAbi {
         name: kernel.export_name.clone(),
         args,
     })
+}
+
+fn source_arg_names<'tcx>(mir: &Body<'tcx>) -> Vec<Option<String>> {
+    let mut names = vec![None; mir.arg_count];
+
+    for debug_info in &mir.var_debug_info {
+        if let Some(argument_index) = debug_info.argument_index {
+            let source_index = usize::from(argument_index.saturating_sub(1));
+            if source_index < names.len() && names[source_index].is_none() {
+                names[source_index] = Some(debug_info.name.to_string());
+            }
+            continue;
+        }
+
+        let VarDebugInfoContents::Place(place) = debug_info.value else {
+            continue;
+        };
+        if !place.projection.is_empty() {
+            continue;
+        }
+
+        for (source_index, local) in mir.args_iter().enumerate() {
+            if place.local == local && names[source_index].is_none() {
+                names[source_index] = Some(debug_info.name.to_string());
+                break;
+            }
+        }
+    }
+
+    names
+}
+
+fn unique_llvm_name(raw_name: &str, source_index: usize, used: &mut HashSet<String>) -> String {
+    let base = sanitize_llvm_name(raw_name)
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| format!("arg{source_index}"));
+
+    if used.insert(base.clone()) {
+        return base;
+    }
+
+    for suffix in 1.. {
+        let candidate = format!("{base}_{suffix}");
+        if used.insert(candidate.clone()) {
+            return candidate;
+        }
+    }
+
+    unreachable!("unbounded suffix loop must return");
+}
+
+fn sanitize_llvm_name(raw_name: &str) -> Option<String> {
+    let mut sanitized = String::new();
+    for character in raw_name.chars() {
+        if character.is_ascii_alphanumeric() || character == '_' {
+            sanitized.push(character);
+        } else if !sanitized.ends_with('_') {
+            sanitized.push('_');
+        }
+    }
+
+    while sanitized.ends_with('_') {
+        sanitized.pop();
+    }
+
+    if sanitized
+        .chars()
+        .next()
+        .is_some_and(|character| character.is_ascii_digit())
+    {
+        sanitized.insert(0, '_');
+    }
+
+    (!sanitized.is_empty()).then_some(sanitized)
 }
 
 fn classify_kernel_arg<'tcx>(

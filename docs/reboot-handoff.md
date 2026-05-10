@@ -95,8 +95,9 @@ Result:
 vecadd passed for 1024 elements
 ```
 
-The generated `vecadd` IR now derives pointer plus length kernel parameters from
-the Rust kernel ABI and names them `arg0_ptr`, `arg0_len`, and so on.
+The generated `vecadd` IR derives pointer plus length kernel parameters from the
+Rust kernel ABI and preserves source argument names such as `a_ptr`, `b_ptr`,
+and `c_ptr` when MIR debug info provides them.
 
 ## After Reboot
 

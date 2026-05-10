@@ -43,9 +43,8 @@ For the full milestone plan, see [implementation-plan.md](implementation-plan.md
    - Rust slices lower to pointer plus `usize` length.
    - `DisjointSlice<T>` lowers to mutable pointer plus `usize` length.
    - Plain scalars pass by value.
-4. Preserve source-level argument names in generated LLVM metadata when possible.
-5. Generalize artifact naming and placement beyond the single `vecadd` sidecar.
-6. Add a repeatable hardware test target for the generated host binary plus
+4. Generalize artifact naming and placement beyond the single `vecadd` sidecar.
+5. Add a repeatable hardware test target for the generated host binary plus
    HSACO path.
 
 ## Runtime ABI Assumption

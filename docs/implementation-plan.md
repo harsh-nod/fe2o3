@@ -189,8 +189,7 @@ Remaining generalization:
 - Lower 1D thread-index intrinsics from device API calls instead of a fixed IR
   template.
 - Export AMDGPU LLVM IR for kernels beyond `vecadd`.
-- Preserve source-level argument names in generated LLVM metadata where MIR debug
-  info provides them.
+- Preserve more source-level debug metadata beyond kernel argument names.
 
 Acceptance:
 
