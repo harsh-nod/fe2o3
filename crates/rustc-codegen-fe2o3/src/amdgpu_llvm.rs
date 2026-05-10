@@ -89,14 +89,14 @@ fn emit_kernel<'tcx>(
 ) -> Result<String, EmitError> {
     let mir = tcx.instance_mir(kernel.instance.def);
     let abi = analyze_kernel_abi(tcx, kernel)?;
-    let elementwise = analyze_elementwise_binary_shape(tcx, mir).map_err(|reason| {
+    let elementwise = analyze_elementwise_shape(tcx, mir).map_err(|reason| {
         unsupported_kernel(
             &kernel.export_name,
-            format!("unsupported MIR body for binary elementwise lowering: {reason}"),
+            format!("unsupported MIR body for elementwise lowering: {reason}"),
         )
     })?;
 
-    emit_elementwise_binary_kernel(&abi, &elementwise)
+    emit_elementwise_kernel(&abi, &elementwise)
 }
 
 #[derive(Clone, Debug)]
@@ -112,10 +112,21 @@ struct KernelArg {
 }
 
 #[derive(Clone, Debug)]
-struct ElementwiseBinaryShape {
-    lhs: ValueSource,
-    rhs: ValueSource,
+struct ElementwiseShape {
+    expr: ElementwiseExpr,
     output_arg: usize,
+}
+
+#[derive(Clone, Debug)]
+struct ElementwiseExpr {
+    nodes: Vec<ExprNode>,
+    root: ExprRef,
+}
+
+#[derive(Clone, Debug)]
+struct ExprNode {
+    lhs: ExprRef,
+    rhs: ExprRef,
     op: ElementwiseBinaryOp,
 }
 
@@ -131,6 +142,12 @@ enum ElementwiseBinaryOp {
     Sub,
     Mul,
     Div,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ExprRef {
+    Value(ValueSource),
+    Node(usize),
 }
 
 #[derive(Clone, Debug)]
@@ -218,6 +235,29 @@ impl ElementwiseBinaryOp {
             Self::Sub => "fsub",
             Self::Mul => "fmul",
             Self::Div => "fdiv",
+        }
+    }
+}
+
+impl ElementwiseExpr {
+    fn sources(&self) -> Vec<ValueSource> {
+        let mut sources = Vec::new();
+        self.collect_sources(self.root, &mut sources);
+        sources
+    }
+
+    fn collect_sources(&self, expr: ExprRef, sources: &mut Vec<ValueSource>) {
+        match expr {
+            ExprRef::Value(source) => {
+                if !sources.contains(&source) {
+                    sources.push(source);
+                }
+            }
+            ExprRef::Node(index) => {
+                let node = &self.nodes[index];
+                self.collect_sources(node.lhs, sources);
+                self.collect_sources(node.rhs, sources);
+            }
         }
     }
 }
@@ -370,10 +410,10 @@ fn is_disjoint_slice(tcx: TyCtxt<'_>, def_id: rustc_hir::def_id::DefId) -> bool 
         .ends_with("fe2o3_device::DisjointSlice")
 }
 
-fn analyze_elementwise_binary_shape<'tcx>(
+fn analyze_elementwise_shape<'tcx>(
     tcx: TyCtxt<'tcx>,
     mir: &Body<'tcx>,
-) -> Result<ElementwiseBinaryShape, String> {
+) -> Result<ElementwiseShape, String> {
     let arg_locals = mir.args_iter().collect::<Vec<_>>();
     let mut borrowed_args = HashMap::new();
 
@@ -456,7 +496,8 @@ fn analyze_elementwise_binary_shape<'tcx>(
     let output_arg = output_arg
         .ok_or_else(|| "missing `DisjointSlice::get_mut(thread_index)` output path".to_string())?;
 
-    let mut loaded_values = HashMap::new();
+    let mut local_exprs = HashMap::new();
+    let mut expr_nodes = Vec::new();
     let mut elementwise_store = None;
 
     for block in mir.basic_blocks.iter() {
@@ -467,28 +508,42 @@ fn analyze_elementwise_binary_shape<'tcx>(
             let (place, rvalue) = &**assign;
 
             match rvalue {
-                Rvalue::Use(operand) if place.projection.is_empty() => {
-                    if let Some(source_place) = operand.place()
+                Rvalue::Use(operand) => {
+                    let expr = if let Some(source_place) = operand.place()
                         && let Some(arg_index) =
                             indexed_arg_place(source_place, &arg_locals, &index_value_locals)
                     {
-                        loaded_values.insert(place.local, ValueSource::SliceElement(arg_index));
+                        Some(ExprRef::Value(ValueSource::SliceElement(arg_index)))
+                    } else {
+                        operand_expr(operand, &local_exprs, &arg_locals)
+                    };
+
+                    let Some(expr) = expr else {
+                        continue;
+                    };
+
+                    if place.projection.is_empty() {
+                        local_exprs.insert(place.local, expr);
+                    } else if is_deref_store(place) {
+                        elementwise_store = Some(expr);
                     }
                 }
-                Rvalue::BinaryOp(op, operands) if is_deref_store(place) => {
+                Rvalue::BinaryOp(op, operands) => {
                     let Some(op) = ElementwiseBinaryOp::from_mir(*op) else {
                         continue;
                     };
-                    let lhs = operand_value_source(&operands.0, &loaded_values, &arg_locals);
-                    let rhs = operand_value_source(&operands.1, &loaded_values, &arg_locals);
+                    let lhs = operand_expr(&operands.0, &local_exprs, &arg_locals);
+                    let rhs = operand_expr(&operands.1, &local_exprs, &arg_locals);
 
                     if let (Some(lhs), Some(rhs)) = (lhs, rhs) {
-                        elementwise_store = Some(ElementwiseBinaryShape {
-                            lhs,
-                            rhs,
-                            output_arg,
-                            op,
-                        });
+                        let expr = ExprRef::Node(expr_nodes.len());
+                        expr_nodes.push(ExprNode { lhs, rhs, op });
+
+                        if place.projection.is_empty() {
+                            local_exprs.insert(place.local, expr);
+                        } else if is_deref_store(place) {
+                            elementwise_store = Some(expr);
+                        }
                     }
                 }
                 _ => {}
@@ -496,16 +551,25 @@ fn analyze_elementwise_binary_shape<'tcx>(
         }
     }
 
-    let shape = elementwise_store.ok_or_else(|| {
-        "missing `output[idx] = lhs <binary-op> rhs` elementwise store".to_string()
-    })?;
-    if shape.lhs == shape.rhs {
-        return Err("binary elementwise operands resolve to the same value source".to_string());
+    let root = elementwise_store
+        .ok_or_else(|| "missing `output[idx] = <elementwise expression>` store".to_string())?;
+    let expr = ElementwiseExpr {
+        nodes: expr_nodes,
+        root,
+    };
+
+    if expr.nodes.is_empty() {
+        return Err("elementwise lowering requires at least one binary operation".to_string());
     }
-    if shape.lhs.arg_index() == shape.output_arg || shape.rhs.arg_index() == shape.output_arg {
-        return Err("binary elementwise output aliases an input argument in MIR".to_string());
+    if expr
+        .sources()
+        .iter()
+        .any(|source| source.arg_index() == output_arg)
+    {
+        return Err("elementwise output aliases an input argument in MIR".to_string());
     }
-    Ok(shape)
+
+    Ok(ElementwiseShape { expr, output_arg })
 }
 
 impl ValueSource {
@@ -539,27 +603,23 @@ fn indexed_arg_place(
     local_arg_index(place.local, arg_locals)
 }
 
-fn operand_value_source(
+fn operand_expr(
     operand: &Operand<'_>,
-    loaded_values: &HashMap<Local, ValueSource>,
+    local_exprs: &HashMap<Local, ExprRef>,
     arg_locals: &[Local],
-) -> Option<ValueSource> {
+) -> Option<ExprRef> {
     let local = operand_local(operand)?;
-    loaded_values
-        .get(&local)
-        .copied()
-        .or_else(|| local_arg_index(local, arg_locals).map(ValueSource::Arg))
+    local_exprs.get(&local).copied().or_else(|| {
+        local_arg_index(local, arg_locals).map(|arg| ExprRef::Value(ValueSource::Arg(arg)))
+    })
 }
 
 fn is_deref_store(place: &Place<'_>) -> bool {
     matches!(&place.projection[..], [ProjectionElem::Deref])
 }
 
-fn emit_elementwise_binary_kernel(
-    abi: &KernelAbi,
-    shape: &ElementwiseBinaryShape,
-) -> Result<String, EmitError> {
-    validate_elementwise_binary_abi(abi, shape)?;
+fn emit_elementwise_kernel(abi: &KernelAbi, shape: &ElementwiseShape) -> Result<String, EmitError> {
+    validate_elementwise_abi(abi, shape)?;
 
     let params = abi
         .args
@@ -576,12 +636,11 @@ fn emit_elementwise_binary_kernel(
     let check_lines = emit_bounds_checks(abi, &slice_sources);
     let inbounds = emit_inbounds_reduce(&slice_sources, abi);
     let load_lines = emit_loads(abi, &slice_sources, llvm_type, align);
-    let lhs_value = value_expr(shape.lhs, abi);
-    let rhs_value = value_expr(shape.rhs, abi);
-    let op = shape.op.llvm_opcode();
+    let compute_lines = emit_expr_ops(&shape.expr, abi, llvm_type);
+    let result_value = expr_ref_value(shape.expr.root, abi);
 
     // This is the first AMDGPU LLVM IR milestone, intentionally scoped to
-    // simple f32 elementwise binary kernels. It matches
+    // simple f32 elementwise expression kernels. It matches
     // `LaunchConfig::for_num_elems`, which uses a 256-thread block. General
     // block_dim lowering will read the AMD dispatch packet instead of
     // hard-coding this constant.
@@ -602,10 +661,9 @@ entry:
   br i1 %inbounds, label %body, label %exit
 
 body:
-{load_lines}
+{load_lines}{compute_lines}
   %{c_base}_elem_ptr = getelementptr inbounds {llvm_type}, ptr addrspace(1) %{c_base}_ptr, i64 %idx
-  %result = {op} {llvm_type} {lhs_value}, {rhs_value}
-  store {llvm_type} %result, ptr addrspace(1) %{c_base}_elem_ptr, align {align}
+  store {llvm_type} {result_value}, ptr addrspace(1) %{c_base}_elem_ptr, align {align}
   br label %exit
 
 exit:
@@ -624,32 +682,23 @@ attributes #1 = {{ nounwind readnone speculatable }}
         c_base = c_base,
         llvm_type = llvm_type,
         align = align,
-        op = op,
-        lhs_value = lhs_value,
-        rhs_value = rhs_value,
+        compute_lines = compute_lines,
+        result_value = result_value,
     ))
 }
 
-fn validate_elementwise_binary_abi(
-    abi: &KernelAbi,
-    shape: &ElementwiseBinaryShape,
-) -> Result<(), EmitError> {
-    if abi.args.len() != 3 {
-        return Err(unsupported_kernel(
-            &abi.name,
-            "binary elementwise lowering requires exactly three arguments",
-        ));
-    }
+fn validate_elementwise_abi(abi: &KernelAbi, shape: &ElementwiseShape) -> Result<(), EmitError> {
+    let sources = shape.expr.sources();
 
-    for arg_index in [
-        shape.lhs.arg_index(),
-        shape.rhs.arg_index(),
-        shape.output_arg,
-    ] {
+    for arg_index in sources
+        .iter()
+        .map(|source| source.arg_index())
+        .chain(std::iter::once(shape.output_arg))
+    {
         if arg_index >= abi.args.len() {
             return Err(unsupported_kernel(
                 &abi.name,
-                "MIR binary elementwise argument index is outside the kernel ABI",
+                "MIR elementwise argument index is outside the kernel ABI",
             ));
         }
     }
@@ -657,23 +706,23 @@ fn validate_elementwise_binary_abi(
     if abi.args.iter().any(|arg| arg.element() != ScalarType::F32) {
         return Err(unsupported_kernel(
             &abi.name,
-            "binary elementwise lowering currently supports only f32 arguments",
+            "elementwise lowering currently supports only f32 arguments",
         ));
     }
 
-    for source in [shape.lhs, shape.rhs] {
+    for source in sources {
         let arg = &abi.args[source.arg_index()];
         match source {
             ValueSource::Arg(_) if !arg.is_scalar() => {
                 return Err(unsupported_kernel(
                     &abi.name,
-                    "direct binary operands must be scalar f32 arguments",
+                    "direct elementwise operands must be scalar f32 arguments",
                 ));
             }
             ValueSource::SliceElement(_) if !arg.is_slice() || arg.is_mutable() => {
                 return Err(unsupported_kernel(
                     &abi.name,
-                    "indexed binary operands must be read-only f32 slices",
+                    "indexed elementwise operands must be read-only f32 slices",
                 ));
             }
             _ => {}
@@ -683,16 +732,16 @@ fn validate_elementwise_binary_abi(
     if !abi.args[shape.output_arg].is_slice() || !abi.args[shape.output_arg].is_mutable() {
         return Err(unsupported_kernel(
             &abi.name,
-            "binary elementwise lowering expects one mutable output slice",
+            "elementwise lowering expects one mutable output slice",
         ));
     }
 
     Ok(())
 }
 
-fn slice_sources(shape: &ElementwiseBinaryShape) -> Vec<usize> {
+fn slice_sources(shape: &ElementwiseShape) -> Vec<usize> {
     let mut sources = Vec::new();
-    for source in [shape.lhs, shape.rhs] {
+    for source in shape.expr.sources() {
         if let ValueSource::SliceElement(index) = source
             && !sources.contains(&index)
         {
@@ -755,7 +804,27 @@ fn emit_loads(abi: &KernelAbi, slice_sources: &[usize], llvm_type: &str, align: 
         .collect::<String>()
 }
 
-fn value_expr(source: ValueSource, abi: &KernelAbi) -> String {
+fn emit_expr_ops(expr: &ElementwiseExpr, abi: &KernelAbi, llvm_type: &str) -> String {
+    expr.nodes
+        .iter()
+        .enumerate()
+        .map(|(index, node)| {
+            let lhs = expr_ref_value(node.lhs, abi);
+            let rhs = expr_ref_value(node.rhs, abi);
+            let op = node.op.llvm_opcode();
+            format!("  %expr{index} = {op} {llvm_type} {lhs}, {rhs}\n")
+        })
+        .collect::<String>()
+}
+
+fn expr_ref_value(expr: ExprRef, abi: &KernelAbi) -> String {
+    match expr {
+        ExprRef::Value(source) => source_value_expr(source, abi),
+        ExprRef::Node(index) => format!("%expr{index}"),
+    }
+}
+
+fn source_value_expr(source: ValueSource, abi: &KernelAbi) -> String {
     let base = abi.args[source.arg_index()].llvm_base();
     match source {
         ValueSource::Arg(_) => format!("%{base}"),

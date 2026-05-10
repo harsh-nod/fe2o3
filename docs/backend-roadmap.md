@@ -18,19 +18,19 @@ For the full milestone plan, see [implementation-plan.md](implementation-plan.md
   and dumps a deterministic collection summary.
 - `rustc-codegen-fe2o3` contains the first real backend utilities:
   - ABI validation for supported kernel arguments from monomorphized MIR locals.
-  - A narrow MIR recognizer and AMDGPU LLVM IR emitter for binary `f32`
-    elementwise kernels using read-only slice operands, scalar operands, and one
+  - A narrow MIR recognizer and AMDGPU LLVM IR emitter for `f32` elementwise
+    expression kernels using read-only slice operands, scalar operands, and one
     mutable output slice.
   - `.ll -> .o -> .hsaco` using ROCm clang and `ld.lld`.
 - `cargo-fe2o3 build -p fe2o3-vecadd` and
   `cargo-fe2o3 build -p fe2o3-scale` write `.ll` and `.hsaco` artifacts under
-  `target/fe2o3`.
-- The `vecadd` and `scale` examples load their HSACO files from
+  `target/fe2o3`; `fe2o3-saxpy` covers a multi-op expression tree.
+- The `vecadd`, `scale`, and `saxpy` examples load their HSACO files from
   `FE2O3_HSACO_DIR`, which is set by `cargo-fe2o3 build/run`.
 - `cargo-fe2o3` infers `FE2O3_TARGET` from `rocminfo` when the environment
   variable is not set.
-- End-to-end `vecadd` and `scale` have run successfully on `gfx1201` using
-  TheRock ROCm `7.13.0a20260509`.
+- End-to-end `vecadd`, `scale`, and `saxpy` have run successfully on `gfx1201`
+  using TheRock ROCm `7.13.0a20260509`.
 
 ## Next Compiler Milestones
 

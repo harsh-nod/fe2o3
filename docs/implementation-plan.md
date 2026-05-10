@@ -168,12 +168,12 @@ Acceptance:
 
 ### M3: Minimal AMDGPU LLVM IR
 
-Status: MVP implemented for binary `f32` elementwise kernel shapes.
+Status: MVP implemented for `f32` elementwise expression kernel shapes.
 
 - The backend validates supported kernel arguments from monomorphized MIR locals.
-- The backend recognizes MIR body patterns for
-  `output[index] = lhs <binary-op> rhs`, where operands are read-only slice
-  elements or scalar `f32` arguments.
+- The backend recognizes MIR body patterns for `output[index] = expr`, where
+  expression leaves are read-only slice elements or scalar `f32` arguments, and
+  expression nodes are `+`, `-`, `*`, or `/`.
 - The backend emits an AMDGPU LLVM IR `amdgpu_kernel` after validating the ABI
   and body pattern.
 - The emitted IR uses `llvm.amdgcn.workitem.id.x` and
@@ -184,7 +184,8 @@ Status: MVP implemented for binary `f32` elementwise kernel shapes.
   access.
 - It assumes the current `LaunchConfig::for_num_elems` block size of 256.
 - `vecadd` covers slice-plus-slice addition; `scale` covers scalar-times-slice
-  multiplication.
+  multiplication; `saxpy` covers a two-op expression with four kernel
+  arguments.
 
 Remaining generalization:
 
@@ -193,14 +194,16 @@ Remaining generalization:
 - Lower arithmetic, branches, loads/stores, pointer math, calls, and returns.
 - Lower 1D thread-index intrinsics from device API calls instead of a fixed IR
   template.
-- Export AMDGPU LLVM IR for kernels beyond the current elementwise template.
+- Export AMDGPU LLVM IR for kernels beyond the current elementwise expression
+  template.
 - Preserve more source-level debug metadata beyond kernel argument names.
 
 Acceptance:
 
 - `cargo fe2o3 build -p fe2o3-vecadd` and
   `cargo fe2o3 build -p fe2o3-scale` emit syntactically valid LLVM IR targeting
-  `amdgcn-amd-amdhsa`.
+  `amdgcn-amd-amdhsa`; `cargo fe2o3 build -p fe2o3-saxpy` emits multiple
+  floating-point operations in one kernel.
 
 ### M4: HSACO Generation
 
@@ -222,7 +225,8 @@ Remaining generalization:
 Acceptance:
 
 - `cargo fe2o3 build -p fe2o3-vecadd` produces `vecadd.hsaco`, and
-  `cargo fe2o3 build -p fe2o3-scale` produces `scale.hsaco`.
+  `cargo fe2o3 build -p fe2o3-scale` produces `scale.hsaco`, and
+  `cargo fe2o3 build -p fe2o3-saxpy` produces `saxpy.hsaco`.
 
 ### M5: First End-To-End Launch
 
@@ -231,7 +235,8 @@ Status: MVP implemented for the current elementwise examples.
 - `cargo-fe2o3 run` sets `FE2O3_HSACO_DIR`.
 - If `FE2O3_TARGET` is not set, `cargo-fe2o3` tries to infer the target from
   `rocminfo`.
-- The `vecadd` and `scale` examples load their HSACO files from that directory.
+- The `vecadd`, `scale`, and `saxpy` examples load their HSACO files from that
+  directory.
 - The examples use `fe2o3-core` to load modules, launch through HIP with the
   backend ABI, copy output back, and validate results.
 - The path has run successfully on `gfx1201` with TheRock ROCm
@@ -246,7 +251,8 @@ Remaining work:
 Acceptance:
 
 - `cargo fe2o3 run -p fe2o3-vecadd` and
-  `cargo fe2o3 run -p fe2o3-scale` print success on an AMD GPU.
+  `cargo fe2o3 run -p fe2o3-scale` and `cargo fe2o3 run -p fe2o3-saxpy` print
+  success on an AMD GPU.
 
 ### M6: Usability And Coverage
 
