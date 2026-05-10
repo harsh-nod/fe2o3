@@ -1,7 +1,7 @@
 use core::fmt;
 use std::ffi::{CStr, NulError};
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 pub struct HipError {
     code: fe2o3_hip_sys::hipError_t,
 }
@@ -32,9 +32,14 @@ impl fmt::Display for HipError {
     }
 }
 
+impl fmt::Debug for HipError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
+    }
+}
+
 impl std::error::Error for HipError {}
 
-#[derive(Debug)]
 pub enum Error {
     Hip(HipError),
     NoDevice { requested: i32, count: i32 },
@@ -57,6 +62,12 @@ impl fmt::Display for Error {
             Self::Io(error) => write!(f, "{error}"),
             Self::SizeOverflow => write!(f, "size calculation overflowed"),
         }
+    }
+}
+
+impl fmt::Debug for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
     }
 }
 
@@ -87,5 +98,23 @@ pub fn check(code: fe2o3_hip_sys::hipError_t) -> Result<()> {
         Ok(())
     } else {
         Err(HipError::new(code).into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Error;
+
+    #[test]
+    fn debug_uses_display_text() {
+        let error = Error::NoDevice {
+            requested: 2,
+            count: 1,
+        };
+
+        assert_eq!(
+            format!("{error:?}"),
+            "requested HIP device 2, but only 1 device(s) exist"
+        );
     }
 }
