@@ -128,9 +128,6 @@ Then rerun the build smoke:
 ```bash
 cd /home/nod/github/claude-rocm-workspace/fe2o3
 rm -rf target/fe2o3
-cargo clean -p fe2o3-vecadd
-cargo clean -p fe2o3-scale
-cargo clean -p fe2o3-saxpy
 cargo run -p cargo-fe2o3 -- build -p fe2o3-vecadd
 env -u FE2O3_TARGET cargo run -p cargo-fe2o3 -- build -p fe2o3-scale
 env -u FE2O3_TARGET cargo run -p cargo-fe2o3 -- build -p fe2o3-saxpy

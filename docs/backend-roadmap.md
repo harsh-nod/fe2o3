@@ -27,6 +27,8 @@ For the full milestone plan, see [implementation-plan.md](implementation-plan.md
   `target/fe2o3`; `fe2o3-saxpy` covers a multi-op expression tree.
 - The `vecadd`, `scale`, and `saxpy` examples load their HSACO files from
   `FE2O3_HSACO_DIR`, which is set by `cargo-fe2o3 build/run`.
+- `cargo-fe2o3 build/run -p <package>` cleans explicit package artifacts before
+  invoking Cargo so device sidecars are regenerated predictably.
 - `cargo-fe2o3` infers `FE2O3_TARGET` from `rocminfo` when the environment
   variable is not set.
 - End-to-end `vecadd`, `scale`, and `saxpy` have run successfully on `gfx1201`

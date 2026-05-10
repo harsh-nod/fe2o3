@@ -233,6 +233,8 @@ Acceptance:
 Status: MVP implemented for the current elementwise examples.
 
 - `cargo-fe2o3 run` sets `FE2O3_HSACO_DIR`.
+- `cargo-fe2o3 build/run -p <package>` cleans explicit package artifacts first
+  so the backend reruns and refreshes sidecar HSACO files.
 - If `FE2O3_TARGET` is not set, `cargo-fe2o3` tries to infer the target from
   `rocminfo`.
 - The `vecadd`, `scale`, and `saxpy` examples load their HSACO files from that

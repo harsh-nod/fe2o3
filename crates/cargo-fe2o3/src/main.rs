@@ -64,6 +64,11 @@ fn cargo_with_backend(command: &str, args: &[String]) -> ExitCode {
         }
     };
 
+    if let Err(error) = clean_explicit_packages(&workspace_root, args) {
+        eprintln!("{error}");
+        return ExitCode::FAILURE;
+    }
+
     let backend = match find_or_build_backend(&workspace_root) {
         Ok(path) => path,
         Err(error) => {
@@ -109,6 +114,66 @@ fn cargo_with_backend(command: &str, args: &[String]) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+fn clean_explicit_packages(workspace_root: &Path, args: &[String]) -> Result<(), String> {
+    let packages = explicit_packages(args);
+    if packages.is_empty() {
+        return Ok(());
+    }
+
+    eprintln!(
+        "cargo fe2o3: cleaning package artifact(s) for {}",
+        packages.join(", ")
+    );
+
+    let mut command = Command::new("cargo");
+    command.arg("clean");
+    for package in packages {
+        command.args(["-p", &package]);
+    }
+
+    let status = command
+        .current_dir(workspace_root)
+        .env_remove("RUSTFLAGS")
+        .env_remove("CARGO_ENCODED_RUSTFLAGS")
+        .status()
+        .map_err(|error| format!("failed to clean package artifacts: {error}"))?;
+
+    status
+        .success()
+        .then_some(())
+        .ok_or_else(|| "failed to clean package artifacts".to_string())
+}
+
+fn explicit_packages(args: &[String]) -> Vec<String> {
+    let mut packages = Vec::new();
+    let mut args = args.iter();
+
+    while let Some(arg) = args.next() {
+        if arg == "--" {
+            break;
+        }
+
+        let package = if arg == "-p" || arg == "--package" {
+            args.next().map(String::as_str)
+        } else if let Some(package) = arg.strip_prefix("--package=") {
+            Some(package)
+        } else if arg.starts_with("-p") && !arg.starts_with("--") && arg.len() > 2 {
+            Some(&arg[2..])
+        } else {
+            None
+        };
+
+        if let Some(package) = package
+            && !package.is_empty()
+            && !packages.iter().any(|existing| existing == package)
+        {
+            packages.push(package.to_string());
+        }
+    }
+
+    packages
 }
 
 fn find_or_build_backend(workspace_root: &Path) -> Result<PathBuf, String> {
@@ -310,7 +375,7 @@ fn print_help() {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_rocminfo_target;
+    use super::{explicit_packages, parse_rocminfo_target};
 
     #[test]
     fn parses_agent_target_before_isa_generic() {
@@ -339,5 +404,28 @@ Agent 2
             parse_rocminfo_target(text).as_deref(),
             Some("gfx12-generic")
         );
+    }
+
+    #[test]
+    fn parses_explicit_package_args() {
+        let args = [
+            "-p",
+            "fe2o3-vecadd",
+            "--package=fe2o3-scale",
+            "-pfe2o3-saxpy",
+        ]
+        .map(str::to_string);
+
+        assert_eq!(
+            explicit_packages(&args),
+            ["fe2o3-vecadd", "fe2o3-scale", "fe2o3-saxpy"]
+        );
+    }
+
+    #[test]
+    fn ignores_package_args_after_program_separator() {
+        let args = ["-p", "fe2o3-vecadd", "--", "-p", "program-arg"].map(str::to_string);
+
+        assert_eq!(explicit_packages(&args), ["fe2o3-vecadd"]);
     }
 }

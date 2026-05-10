@@ -63,6 +63,10 @@ cargo run -p cargo-fe2o3 -- doctor
 If `FE2O3_TARGET` is not set, `cargo-fe2o3` tries to infer the target from
 `rocminfo` and falls back to `gfx1100`.
 
+For explicit package builds such as `-p fe2o3-saxpy`, `cargo-fe2o3` cleans that
+package before invoking Cargo so sidecar HSACO files are regenerated even if the
+host crate was already up to date.
+
 Check the workspace:
 
 ```bash
