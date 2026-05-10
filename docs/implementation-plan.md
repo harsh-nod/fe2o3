@@ -215,19 +215,22 @@ Acceptance:
 
 ### M5: First End-To-End Launch
 
-Status: partially implemented; local execution still requires a machine with the
-ROCm kernel driver loaded and an AMD GPU visible to HIP.
+Status: MVP implemented for the `vecadd` sidecar artifact.
 
 - `cargo-fe2o3 run` sets `FE2O3_HSACO_DIR`.
+- If `FE2O3_TARGET` is not set, `cargo-fe2o3` tries to infer the target from
+  `rocminfo`.
 - The `vecadd` example loads `vecadd.hsaco` from that directory.
 - The example uses `fe2o3-core` to load the module, launch through HIP with
   pointer plus length args, copy output back, and validate results.
+- The path has run successfully on `gfx1201` with TheRock ROCm
+  `7.13.0a20260509`.
 
 Remaining work:
 
-- Validate the path on hardware where HIP can see an AMD GPU.
 - Tighten runtime errors for missing HSACO, driver initialization failure, and
   kernel metadata mismatches.
+- Add automated hardware coverage for at least one AMD GPU target.
 
 Acceptance:
 

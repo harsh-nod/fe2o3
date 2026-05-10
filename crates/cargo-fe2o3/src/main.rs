@@ -5,6 +5,7 @@ use std::process::{Command, ExitCode};
 const TARGET_ENV: &str = "FE2O3_TARGET";
 const BACKEND_ENV: &str = "FE2O3_BACKEND";
 const HSACO_DIR_ENV: &str = "FE2O3_HSACO_DIR";
+const DEFAULT_TARGET: &str = "gfx1100";
 
 fn main() -> ExitCode {
     let mut args = env::args().skip(1);
@@ -28,8 +29,9 @@ fn main() -> ExitCode {
 }
 
 fn doctor() -> ExitCode {
+    let target = amd_gpu_target();
     println!("fe2o3 diagnostics");
-    println!("target: {}", amd_gpu_target());
+    println!("target: {target}");
 
     match detect_rocm_toolchain() {
         Ok(toolchain) => {
@@ -53,6 +55,7 @@ fn doctor() -> ExitCode {
 }
 
 fn cargo_with_backend(command: &str, args: &[String]) -> ExitCode {
+    let target = amd_gpu_target();
     let workspace_root = match find_workspace_root() {
         Ok(path) => path,
         Err(error) => {
@@ -86,7 +89,7 @@ fn cargo_with_backend(command: &str, args: &[String]) -> ExitCode {
     eprintln!(
         "cargo fe2o3 {command}: using backend {} for target {}",
         backend.display(),
-        amd_gpu_target()
+        target
     );
 
     let status = Command::new("cargo")
@@ -94,7 +97,7 @@ fn cargo_with_backend(command: &str, args: &[String]) -> ExitCode {
         .args(args)
         .env("RUSTFLAGS", rustflags)
         .env(HSACO_DIR_ENV, &artifact_dir)
-        .env(TARGET_ENV, amd_gpu_target())
+        .env(TARGET_ENV, &target)
         .env("FE2O3_HOST_PASSTHROUGH", "0")
         .status();
 
@@ -247,11 +250,94 @@ fn amd_gpu_target() -> String {
     env::var(TARGET_ENV)
         .ok()
         .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| "gfx1100".to_string())
+        .or_else(detect_amd_gpu_target)
+        .unwrap_or_else(|| DEFAULT_TARGET.to_string())
+}
+
+fn detect_amd_gpu_target() -> Option<String> {
+    let output = Command::new("rocminfo").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+    if !output.stderr.is_empty() {
+        text.push('\n');
+        text.push_str(&String::from_utf8_lossy(&output.stderr));
+    }
+
+    parse_rocminfo_target(&text)
+}
+
+fn parse_rocminfo_target(text: &str) -> Option<String> {
+    let mut generic = None;
+
+    for raw in text.split_whitespace() {
+        let token = raw.trim_matches(|c: char| {
+            !(c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == ':')
+        });
+        let candidate = token.rsplit("--").next().unwrap_or(token);
+        let candidate = candidate.trim_end_matches(':');
+
+        if !is_gfx_target(candidate) {
+            continue;
+        }
+
+        if candidate.contains("generic") {
+            generic.get_or_insert_with(|| candidate.to_string());
+        } else {
+            return Some(candidate.to_string());
+        }
+    }
+
+    generic
+}
+
+fn is_gfx_target(candidate: &str) -> bool {
+    candidate.starts_with("gfx")
+        && candidate.len() > 3
+        && candidate.chars().any(|c| c.is_ascii_digit())
+        && candidate
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
 fn print_help() {
     eprintln!(
         "usage: cargo fe2o3 <command>\n\ncommands:\n  doctor   check ROCm/HIP toolchain discovery\n  build    build with the fe2o3 rustc backend\n  run      run with the fe2o3 rustc backend"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_rocminfo_target;
+
+    #[test]
+    fn parses_agent_target_before_isa_generic() {
+        let text = r#"
+Agent 2
+  Name:                    gfx1201
+  ISA Info:
+    Name:                    amdgcn-amd-amdhsa--gfx12-generic
+"#;
+
+        assert_eq!(parse_rocminfo_target(text).as_deref(), Some("gfx1201"));
+    }
+
+    #[test]
+    fn parses_isa_target_when_agent_name_is_missing() {
+        let text = "Name: amdgcn-amd-amdhsa--gfx942";
+
+        assert_eq!(parse_rocminfo_target(text).as_deref(), Some("gfx942"));
+    }
+
+    #[test]
+    fn falls_back_to_generic_target() {
+        let text = "Name: amdgcn-amd-amdhsa--gfx12-generic";
+
+        assert_eq!(
+            parse_rocminfo_target(text).as_deref(),
+            Some("gfx12-generic")
+        );
+    }
 }

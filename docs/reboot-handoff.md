@@ -1,13 +1,12 @@
 # Reboot Handoff
 
-This file captures the current fe2o3 state before rebooting the machine to bring
-up the AMD GPU driver stack.
+This file captures the fe2o3 state around bringing up the AMD GPU driver stack.
 
 ## Current Commit
 
 - Branch: `main`
 - Remote: `https://github.com/powderluv/fe2o3.git`
-- Last implementation commit: `cae3b7c Emit AMDGPU LLVM IR and HSACO for vecadd`
+- Last reboot-handoff commit: `0f7a056 Add reboot handoff notes`
 
 ## Implemented
 
@@ -52,6 +51,50 @@ Local GPU execution was not tested because:
 ROCk module is NOT loaded, possibly no GPU devices
 ```
 
+The system had `amdgpu` blacklisted and `vfio-pci` configured for
+`1002:7551,1002:ab40`. An explicit `sudo -n modprobe amdgpu` brought up
+`/dev/kfd` for the current session.
+
+## Verified After Driver Load
+
+TheRock ROCm was installed in:
+
+```text
+/home/nod/github/TheRock/.venv-rocm-latest
+```
+
+The installed ROCm Python packages are:
+
+- `rocm==7.13.0a20260509`
+- `rocm-sdk-core==7.13.0a20260509`
+- `rocm-sdk-devel==7.13.0a20260509`
+- `rocm-sdk-libraries-gfx120X-all==7.13.0a20260509`
+
+After `amdgpu` was loaded, `rocm-sdk test` passed all 26 tests.
+
+`rocminfo` reported:
+
+- GPU name: `gfx1201`
+- Marketing name: `AMD Radeon AI PRO R9700`
+- ISA: `amdgcn-amd-amdhsa--gfx1201`
+
+The end-to-end command passed:
+
+```bash
+ROCM_ROOT=/home/nod/github/TheRock/.venv-rocm-latest/lib/python3.12/site-packages/_rocm_sdk_devel
+PATH=/home/nod/github/TheRock/.venv-rocm-latest/bin:$PATH \
+  ROCM_PATH=$ROCM_ROOT \
+  HIP_PATH=$ROCM_ROOT \
+  LD_LIBRARY_PATH=$ROCM_ROOT/lib:${LD_LIBRARY_PATH:-} \
+  cargo run -p cargo-fe2o3 -- run -p fe2o3-vecadd
+```
+
+Result:
+
+```text
+vecadd passed for 1024 elements
+```
+
 ## After Reboot
 
 Confirm ROCm can see the GPU:
@@ -74,17 +117,17 @@ cargo run -p cargo-fe2o3 -- build -p fe2o3-vecadd
 If `rocminfo` succeeds, run the end-to-end vecadd path:
 
 ```bash
-FE2O3_TARGET=gfx1100 cargo run -p cargo-fe2o3 -- run -p fe2o3-vecadd
+cargo run -p cargo-fe2o3 -- run -p fe2o3-vecadd
 ```
 
 Expected result:
 
 ```text
-vecadd ok
+vecadd passed for 1024 elements
 ```
 
-If the GPU target differs from `gfx1100`, set `FE2O3_TARGET` to the architecture
-reported by ROCm, for example `gfx90a` or `gfx942`.
+If autodetection is not available, set `FE2O3_TARGET` to the architecture
+reported by ROCm, for example `gfx1201`, `gfx90a`, or `gfx942`.
 
 ## Next Implementation Step
 

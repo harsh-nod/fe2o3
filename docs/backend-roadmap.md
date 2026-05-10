@@ -23,6 +23,10 @@ For the full milestone plan, see [implementation-plan.md](implementation-plan.md
   `target/fe2o3/vecadd.hsaco`.
 - The `vecadd` example loads its HSACO from `FE2O3_HSACO_DIR`, which is set by
   `cargo-fe2o3 build/run`.
+- `cargo-fe2o3` infers `FE2O3_TARGET` from `rocminfo` when the environment
+  variable is not set.
+- End-to-end `vecadd` has run successfully on `gfx1201` using TheRock ROCm
+  `7.13.0a20260509`.
 
 ## Next Compiler Milestones
 
@@ -39,8 +43,8 @@ For the full milestone plan, see [implementation-plan.md](implementation-plan.md
    - `DisjointSlice<T>` lowers to mutable pointer plus `usize` length.
    - Plain scalars pass by value.
 4. Generalize artifact naming and placement beyond the single `vecadd` sidecar.
-5. Run the generated host binary plus HSACO on hardware in CI or a dedicated
-   ROCm test machine.
+5. Add a repeatable hardware test target for the generated host binary plus
+   HSACO path.
 
 ## Runtime ABI Assumption
 

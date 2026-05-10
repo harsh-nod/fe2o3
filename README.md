@@ -31,8 +31,9 @@ interfaces needed to reach that target:
 
 ## Current Status
 
-The HIP runtime layer and public API are compile-checkable. `cargo-fe2o3 build`
-now builds and loads `librustc_codegen_fe2o3.so`, delegates host codegen through
+The HIP runtime layer and public API are working for the current `vecadd`
+example on AMD hardware. `cargo-fe2o3 build` builds and loads
+`librustc_codegen_fe2o3.so`, delegates host codegen through
 `rustc_codegen_llvm`, detects `#[kernel]` functions in rustc codegen units, and
 dumps the currently collected device-reachable MIR functions.
 
@@ -42,6 +43,10 @@ emits a minimal AMDGPU LLVM IR kernel and compiles it through ROCm clang plus
 current `vecadd` kernel shape; general MIR/Pliron lowering is still the next
 compiler milestone.
 
+On a `gfx1201` AMD Radeon AI PRO R9700 with TheRock ROCm
+`7.13.0a20260509`, `cargo-fe2o3 run -p fe2o3-vecadd` generates the HSACO, loads
+it through HIP, launches the kernel, and validates the result.
+
 See [docs/implementation-plan.md](docs/implementation-plan.md) for the full
 compiler/runtime plan.
 
@@ -50,6 +55,9 @@ Run diagnostics:
 ```bash
 cargo run -p cargo-fe2o3 -- doctor
 ```
+
+If `FE2O3_TARGET` is not set, `cargo-fe2o3` tries to infer the target from
+`rocminfo` and falls back to `gfx1100`.
 
 Check the workspace:
 
