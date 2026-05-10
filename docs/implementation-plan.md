@@ -168,20 +168,23 @@ Acceptance:
 
 ### M3: Minimal AMDGPU LLVM IR
 
-Status: MVP implemented for the vector-add kernel shape.
+Status: MVP implemented for binary `f32` elementwise kernel shapes.
 
 - The backend validates supported kernel arguments from monomorphized MIR locals.
-- The backend recognizes the MIR body pattern for
-  `output[index] = input_a[index] + input_b[index]`.
+- The backend recognizes MIR body patterns for
+  `output[index] = lhs <binary-op> rhs`, where operands are read-only slice
+  elements or scalar `f32` arguments.
 - The backend emits an AMDGPU LLVM IR `amdgpu_kernel` after validating the ABI
   and body pattern.
 - The emitted IR uses `llvm.amdgcn.workitem.id.x` and
   `llvm.amdgcn.workgroup.id.x`.
 - It matches the current host launch ABI: slice pointer plus `usize` length for
-  each argument.
+  slice arguments and by-value passing for scalar arguments.
 - It bounds-checks the generated index against every slice length before memory
   access.
 - It assumes the current `LaunchConfig::for_num_elems` block size of 256.
+- `vecadd` covers slice-plus-slice addition; `scale` covers scalar-times-slice
+  multiplication.
 
 Remaining generalization:
 
@@ -190,17 +193,18 @@ Remaining generalization:
 - Lower arithmetic, branches, loads/stores, pointer math, calls, and returns.
 - Lower 1D thread-index intrinsics from device API calls instead of a fixed IR
   template.
-- Export AMDGPU LLVM IR for kernels beyond the current vector-add shape.
+- Export AMDGPU LLVM IR for kernels beyond the current elementwise template.
 - Preserve more source-level debug metadata beyond kernel argument names.
 
 Acceptance:
 
-- `cargo fe2o3 build -p fe2o3-vecadd` emits syntactically valid LLVM IR
-  targeting `amdgcn-amd-amdhsa`.
+- `cargo fe2o3 build -p fe2o3-vecadd` and
+  `cargo fe2o3 build -p fe2o3-scale` emit syntactically valid LLVM IR targeting
+  `amdgcn-amd-amdhsa`.
 
 ### M4: HSACO Generation
 
-Status: MVP implemented for the `vecadd` sidecar artifact.
+Status: MVP implemented for elementwise sidecar artifacts.
 
 - Generated LLVM IR is compiled to an object with ROCm clang.
 - The object is linked to HSACO with `ld.lld -shared`.
@@ -213,22 +217,23 @@ Remaining generalization:
 - Decide whether release artifacts should live next to the host executable,
   remain sidecars under `target/fe2o3`, or be embedded.
 - Add first-class metadata validation in `cargo-fe2o3`.
-- Support multiple kernels and monomorphized kernel names.
+- Support multiple kernels in one crate and monomorphized kernel names.
 
 Acceptance:
 
-- `cargo fe2o3 build -p fe2o3-vecadd` produces `vecadd.hsaco`.
+- `cargo fe2o3 build -p fe2o3-vecadd` produces `vecadd.hsaco`, and
+  `cargo fe2o3 build -p fe2o3-scale` produces `scale.hsaco`.
 
 ### M5: First End-To-End Launch
 
-Status: MVP implemented for the `vecadd` sidecar artifact.
+Status: MVP implemented for the current elementwise examples.
 
 - `cargo-fe2o3 run` sets `FE2O3_HSACO_DIR`.
 - If `FE2O3_TARGET` is not set, `cargo-fe2o3` tries to infer the target from
   `rocminfo`.
-- The `vecadd` example loads `vecadd.hsaco` from that directory.
-- The example uses `fe2o3-core` to load the module, launch through HIP with
-  pointer plus length args, copy output back, and validate results.
+- The `vecadd` and `scale` examples load their HSACO files from that directory.
+- The examples use `fe2o3-core` to load modules, launch through HIP with the
+  backend ABI, copy output back, and validate results.
 - The path has run successfully on `gfx1201` with TheRock ROCm
   `7.13.0a20260509`.
 
@@ -240,7 +245,8 @@ Remaining work:
 
 Acceptance:
 
-- `cargo fe2o3 run -p fe2o3-vecadd` prints success on an AMD GPU.
+- `cargo fe2o3 run -p fe2o3-vecadd` and
+  `cargo fe2o3 run -p fe2o3-scale` print success on an AMD GPU.
 
 ### M6: Usability And Coverage
 
@@ -289,11 +295,12 @@ calls can break GPU synchronization semantics.
 
 ## Immediate Next Task
 
-Replace the `vecadd`-specific artifact path with the first real lowering path:
+Replace the elementwise template backend with the first real lowering path:
 
 1. Add the first Pliron dependency and local dialect/import scaffolding.
 2. Import a collected kernel's MIR body into a minimal intermediate form.
-3. Lower enough operations for the vecadd kernel shape: args, basic blocks,
-   integer arithmetic, pointer arithmetic, loads/stores, branch, and return.
+3. Lower enough operations for the current elementwise kernel shapes: args,
+   basic blocks, integer arithmetic, pointer arithmetic, loads/stores, branch,
+   and return.
 4. Lower `thread::index_1d` through AMDGPU workitem/workgroup intrinsics.
 5. Preserve the current generated HSACO smoke test as the regression target.

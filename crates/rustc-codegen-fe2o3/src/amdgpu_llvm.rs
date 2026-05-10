@@ -89,14 +89,14 @@ fn emit_kernel<'tcx>(
 ) -> Result<String, EmitError> {
     let mir = tcx.instance_mir(kernel.instance.def);
     let abi = analyze_kernel_abi(tcx, kernel)?;
-    let vector_add = analyze_vector_add_shape(tcx, mir).map_err(|reason| {
+    let elementwise = analyze_elementwise_binary_shape(tcx, mir).map_err(|reason| {
         unsupported_kernel(
             &kernel.export_name,
-            format!("unsupported MIR body for vector-add lowering: {reason}"),
+            format!("unsupported MIR body for binary elementwise lowering: {reason}"),
         )
     })?;
 
-    emit_vector_add_kernel(&abi, &vector_add)
+    emit_elementwise_binary_kernel(&abi, &elementwise)
 }
 
 #[derive(Clone, Debug)]
@@ -112,14 +112,30 @@ struct KernelArg {
 }
 
 #[derive(Clone, Debug)]
-struct VectorAddShape {
-    lhs_arg: usize,
-    rhs_arg: usize,
+struct ElementwiseBinaryShape {
+    lhs: ValueSource,
+    rhs: ValueSource,
     output_arg: usize,
+    op: ElementwiseBinaryOp,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ValueSource {
+    Arg(usize),
+    SliceElement(usize),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ElementwiseBinaryOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
 }
 
 #[derive(Clone, Debug)]
 enum KernelArgKind {
+    Scalar(ScalarType),
     Slice { element: ScalarType, mutable: bool },
 }
 
@@ -135,6 +151,9 @@ impl KernelArg {
 
     fn llvm_params(&self) -> Vec<String> {
         match self.kind {
+            KernelArgKind::Scalar(element) => {
+                vec![format!("{} %{}", element.llvm_type(), self.llvm_base())]
+            }
             KernelArgKind::Slice { .. } => {
                 let base = self.llvm_base();
                 vec![
@@ -147,14 +166,24 @@ impl KernelArg {
 
     fn element(&self) -> ScalarType {
         match self.kind {
+            KernelArgKind::Scalar(element) => element,
             KernelArgKind::Slice { element, .. } => element,
         }
     }
 
     fn is_mutable(&self) -> bool {
         match self.kind {
+            KernelArgKind::Scalar(_) => false,
             KernelArgKind::Slice { mutable, .. } => mutable,
         }
+    }
+
+    fn is_scalar(&self) -> bool {
+        matches!(self.kind, KernelArgKind::Scalar(_))
+    }
+
+    fn is_slice(&self) -> bool {
+        matches!(self.kind, KernelArgKind::Slice { .. })
     }
 }
 
@@ -168,6 +197,27 @@ impl ScalarType {
     fn llvm_align(self) -> usize {
         match self {
             Self::F32 => 4,
+        }
+    }
+}
+
+impl ElementwiseBinaryOp {
+    fn from_mir(op: BinOp) -> Option<Self> {
+        match op {
+            BinOp::Add => Some(Self::Add),
+            BinOp::Sub => Some(Self::Sub),
+            BinOp::Mul => Some(Self::Mul),
+            BinOp::Div => Some(Self::Div),
+            _ => None,
+        }
+    }
+
+    fn llvm_opcode(self) -> &'static str {
+        match self {
+            Self::Add => "fadd",
+            Self::Sub => "fsub",
+            Self::Mul => "fmul",
+            Self::Div => "fdiv",
         }
     }
 }
@@ -303,7 +353,8 @@ fn classify_kernel_arg<'tcx>(
                 mutable: true,
             })
         }
-        _ => Err("expected `&[T]`, `&mut [T]`, or `DisjointSlice<T>`"),
+        TyKind::Float(FloatTy::F32) => Ok(KernelArgKind::Scalar(ScalarType::F32)),
+        _ => Err("expected `f32`, `&[T]`, `&mut [T]`, or `DisjointSlice<T>`"),
     }
 }
 
@@ -319,10 +370,10 @@ fn is_disjoint_slice(tcx: TyCtxt<'_>, def_id: rustc_hir::def_id::DefId) -> bool 
         .ends_with("fe2o3_device::DisjointSlice")
 }
 
-fn analyze_vector_add_shape<'tcx>(
+fn analyze_elementwise_binary_shape<'tcx>(
     tcx: TyCtxt<'tcx>,
     mir: &Body<'tcx>,
-) -> Result<VectorAddShape, String> {
+) -> Result<ElementwiseBinaryShape, String> {
     let arg_locals = mir.args_iter().collect::<Vec<_>>();
     let mut borrowed_args = HashMap::new();
 
@@ -406,7 +457,7 @@ fn analyze_vector_add_shape<'tcx>(
         .ok_or_else(|| "missing `DisjointSlice::get_mut(thread_index)` output path".to_string())?;
 
     let mut loaded_values = HashMap::new();
-    let mut add_store = None;
+    let mut elementwise_store = None;
 
     for block in mir.basic_blocks.iter() {
         for statement in &block.statements {
@@ -421,20 +472,22 @@ fn analyze_vector_add_shape<'tcx>(
                         && let Some(arg_index) =
                             indexed_arg_place(source_place, &arg_locals, &index_value_locals)
                     {
-                        loaded_values.insert(place.local, arg_index);
+                        loaded_values.insert(place.local, ValueSource::SliceElement(arg_index));
                     }
                 }
-                Rvalue::BinaryOp(BinOp::Add, operands) if is_deref_store(place) => {
-                    let lhs_arg = operand_local(&operands.0)
-                        .and_then(|local| loaded_values.get(&local).copied());
-                    let rhs_arg = operand_local(&operands.1)
-                        .and_then(|local| loaded_values.get(&local).copied());
+                Rvalue::BinaryOp(op, operands) if is_deref_store(place) => {
+                    let Some(op) = ElementwiseBinaryOp::from_mir(*op) else {
+                        continue;
+                    };
+                    let lhs = operand_value_source(&operands.0, &loaded_values, &arg_locals);
+                    let rhs = operand_value_source(&operands.1, &loaded_values, &arg_locals);
 
-                    if let (Some(lhs_arg), Some(rhs_arg)) = (lhs_arg, rhs_arg) {
-                        add_store = Some(VectorAddShape {
-                            lhs_arg,
-                            rhs_arg,
+                    if let (Some(lhs), Some(rhs)) = (lhs, rhs) {
+                        elementwise_store = Some(ElementwiseBinaryShape {
+                            lhs,
+                            rhs,
                             output_arg,
+                            op,
                         });
                     }
                 }
@@ -443,15 +496,24 @@ fn analyze_vector_add_shape<'tcx>(
         }
     }
 
-    let shape = add_store
-        .ok_or_else(|| "missing `output[idx] = input_a[idx] + input_b[idx]` store".to_string())?;
-    if shape.lhs_arg == shape.rhs_arg {
-        return Err("vector add inputs resolve to the same slice argument".to_string());
+    let shape = elementwise_store.ok_or_else(|| {
+        "missing `output[idx] = lhs <binary-op> rhs` elementwise store".to_string()
+    })?;
+    if shape.lhs == shape.rhs {
+        return Err("binary elementwise operands resolve to the same value source".to_string());
     }
-    if shape.lhs_arg == shape.output_arg || shape.rhs_arg == shape.output_arg {
-        return Err("vector add output aliases an input argument in MIR".to_string());
+    if shape.lhs.arg_index() == shape.output_arg || shape.rhs.arg_index() == shape.output_arg {
+        return Err("binary elementwise output aliases an input argument in MIR".to_string());
     }
     Ok(shape)
+}
+
+impl ValueSource {
+    fn arg_index(self) -> usize {
+        match self {
+            Self::Arg(index) | Self::SliceElement(index) => index,
+        }
+    }
 }
 
 fn operand_local(operand: &Operand<'_>) -> Option<Local> {
@@ -477,12 +539,27 @@ fn indexed_arg_place(
     local_arg_index(place.local, arg_locals)
 }
 
+fn operand_value_source(
+    operand: &Operand<'_>,
+    loaded_values: &HashMap<Local, ValueSource>,
+    arg_locals: &[Local],
+) -> Option<ValueSource> {
+    let local = operand_local(operand)?;
+    loaded_values
+        .get(&local)
+        .copied()
+        .or_else(|| local_arg_index(local, arg_locals).map(ValueSource::Arg))
+}
+
 fn is_deref_store(place: &Place<'_>) -> bool {
     matches!(&place.projection[..], [ProjectionElem::Deref])
 }
 
-fn emit_vector_add_kernel(abi: &KernelAbi, shape: &VectorAddShape) -> Result<String, EmitError> {
-    validate_vector_add_abi(abi, shape)?;
+fn emit_elementwise_binary_kernel(
+    abi: &KernelAbi,
+    shape: &ElementwiseBinaryShape,
+) -> Result<String, EmitError> {
+    validate_elementwise_binary_abi(abi, shape)?;
 
     let params = abi
         .args
@@ -490,20 +567,24 @@ fn emit_vector_add_kernel(abi: &KernelAbi, shape: &VectorAddShape) -> Result<Str
         .flat_map(KernelArg::llvm_params)
         .collect::<Vec<_>>()
         .join(", ");
-    let a = &abi.args[shape.lhs_arg];
-    let b = &abi.args[shape.rhs_arg];
     let c = &abi.args[shape.output_arg];
-    let a_base = a.llvm_base();
-    let b_base = b.llvm_base();
     let c_base = c.llvm_base();
     let element = c.element();
     let llvm_type = element.llvm_type();
     let align = element.llvm_align();
+    let slice_sources = slice_sources(shape);
+    let check_lines = emit_bounds_checks(abi, &slice_sources);
+    let inbounds = emit_inbounds_reduce(&slice_sources, abi);
+    let load_lines = emit_loads(abi, &slice_sources, llvm_type, align);
+    let lhs_value = value_expr(shape.lhs, abi);
+    let rhs_value = value_expr(shape.rhs, abi);
+    let op = shape.op.llvm_opcode();
 
-    // This is the first AMDGPU LLVM IR milestone, intentionally scoped to the
-    // vecadd example. It matches `LaunchConfig::for_num_elems`, which uses a
-    // 256-thread block. General block_dim lowering will read the AMD dispatch
-    // packet instead of hard-coding this constant.
+    // This is the first AMDGPU LLVM IR milestone, intentionally scoped to
+    // simple f32 elementwise binary kernels. It matches
+    // `LaunchConfig::for_num_elems`, which uses a 256-thread block. General
+    // block_dim lowering will read the AMD dispatch packet instead of
+    // hard-coding this constant.
     Ok(format!(
         r#"target triple = "{triple}"
 
@@ -517,21 +598,14 @@ entry:
   %base = mul i32 %bid, 256
   %idx32 = add i32 %base, %tid
   %idx = zext i32 %idx32 to i64
-  %in_{a_base} = icmp ult i64 %idx, %{a_base}_len
-  %in_{b_base} = icmp ult i64 %idx, %{b_base}_len
-  %in_{c_base} = icmp ult i64 %idx, %{c_base}_len
-  %in_inputs = and i1 %in_{a_base}, %in_{b_base}
-  %inbounds = and i1 %in_inputs, %in_{c_base}
+{check_lines}{inbounds}
   br i1 %inbounds, label %body, label %exit
 
 body:
-  %{a_base}_elem_ptr = getelementptr inbounds {llvm_type}, ptr addrspace(1) %{a_base}_ptr, i64 %idx
-  %{b_base}_elem_ptr = getelementptr inbounds {llvm_type}, ptr addrspace(1) %{b_base}_ptr, i64 %idx
+{load_lines}
   %{c_base}_elem_ptr = getelementptr inbounds {llvm_type}, ptr addrspace(1) %{c_base}_ptr, i64 %idx
-  %{a_base}_value = load {llvm_type}, ptr addrspace(1) %{a_base}_elem_ptr, align {align}
-  %{b_base}_value = load {llvm_type}, ptr addrspace(1) %{b_base}_elem_ptr, align {align}
-  %sum = fadd {llvm_type} %{a_base}_value, %{b_base}_value
-  store {llvm_type} %sum, ptr addrspace(1) %{c_base}_elem_ptr, align {align}
+  %result = {op} {llvm_type} {lhs_value}, {rhs_value}
+  store {llvm_type} %result, ptr addrspace(1) %{c_base}_elem_ptr, align {align}
   br label %exit
 
 exit:
@@ -544,27 +618,38 @@ attributes #1 = {{ nounwind readnone speculatable }}
         triple = dialect_amdgcn::AMDGPU_TRIPLE,
         kernel_name = abi.name,
         params = params,
-        a_base = a_base,
-        b_base = b_base,
+        check_lines = check_lines,
+        inbounds = inbounds,
+        load_lines = load_lines,
         c_base = c_base,
         llvm_type = llvm_type,
         align = align,
+        op = op,
+        lhs_value = lhs_value,
+        rhs_value = rhs_value,
     ))
 }
 
-fn validate_vector_add_abi(abi: &KernelAbi, shape: &VectorAddShape) -> Result<(), EmitError> {
+fn validate_elementwise_binary_abi(
+    abi: &KernelAbi,
+    shape: &ElementwiseBinaryShape,
+) -> Result<(), EmitError> {
     if abi.args.len() != 3 {
         return Err(unsupported_kernel(
             &abi.name,
-            "vector-add lowering requires exactly three slice-like arguments",
+            "binary elementwise lowering requires exactly three arguments",
         ));
     }
 
-    for arg_index in [shape.lhs_arg, shape.rhs_arg, shape.output_arg] {
+    for arg_index in [
+        shape.lhs.arg_index(),
+        shape.rhs.arg_index(),
+        shape.output_arg,
+    ] {
         if arg_index >= abi.args.len() {
             return Err(unsupported_kernel(
                 &abi.name,
-                "MIR vector-add argument index is outside the kernel ABI",
+                "MIR binary elementwise argument index is outside the kernel ABI",
             ));
         }
     }
@@ -572,21 +657,110 @@ fn validate_vector_add_abi(abi: &KernelAbi, shape: &VectorAddShape) -> Result<()
     if abi.args.iter().any(|arg| arg.element() != ScalarType::F32) {
         return Err(unsupported_kernel(
             &abi.name,
-            "vector-add lowering currently supports only f32 slice arguments",
+            "binary elementwise lowering currently supports only f32 arguments",
         ));
     }
 
-    if abi.args[shape.lhs_arg].is_mutable()
-        || abi.args[shape.rhs_arg].is_mutable()
-        || !abi.args[shape.output_arg].is_mutable()
-    {
+    for source in [shape.lhs, shape.rhs] {
+        let arg = &abi.args[source.arg_index()];
+        match source {
+            ValueSource::Arg(_) if !arg.is_scalar() => {
+                return Err(unsupported_kernel(
+                    &abi.name,
+                    "direct binary operands must be scalar f32 arguments",
+                ));
+            }
+            ValueSource::SliceElement(_) if !arg.is_slice() || arg.is_mutable() => {
+                return Err(unsupported_kernel(
+                    &abi.name,
+                    "indexed binary operands must be read-only f32 slices",
+                ));
+            }
+            _ => {}
+        }
+    }
+
+    if !abi.args[shape.output_arg].is_slice() || !abi.args[shape.output_arg].is_mutable() {
         return Err(unsupported_kernel(
             &abi.name,
-            "vector-add lowering expects two read-only input slices and one mutable output slice",
+            "binary elementwise lowering expects one mutable output slice",
         ));
     }
 
     Ok(())
+}
+
+fn slice_sources(shape: &ElementwiseBinaryShape) -> Vec<usize> {
+    let mut sources = Vec::new();
+    for source in [shape.lhs, shape.rhs] {
+        if let ValueSource::SliceElement(index) = source
+            && !sources.contains(&index)
+        {
+            sources.push(index);
+        }
+    }
+    if !sources.contains(&shape.output_arg) {
+        sources.push(shape.output_arg);
+    }
+    sources
+}
+
+fn emit_bounds_checks(abi: &KernelAbi, slice_sources: &[usize]) -> String {
+    slice_sources
+        .iter()
+        .map(|index| {
+            let base = abi.args[*index].llvm_base();
+            format!("  %in_{base} = icmp ult i64 %idx, %{base}_len\n")
+        })
+        .collect::<String>()
+}
+
+fn emit_inbounds_reduce(slice_sources: &[usize], abi: &KernelAbi) -> String {
+    let check_names = slice_sources
+        .iter()
+        .map(|index| format!("%in_{}", abi.args[*index].llvm_base()))
+        .collect::<Vec<_>>();
+
+    match check_names.as_slice() {
+        [] => "  %inbounds = and i1 true, true\n".to_string(),
+        [only] => format!("  %inbounds = and i1 {only}, true\n"),
+        [first, second] => format!("  %inbounds = and i1 {first}, {second}\n"),
+        [first, second, rest @ ..] => {
+            let mut lines = format!("  %inbounds_0 = and i1 {first}, {second}\n");
+            let mut previous = "%inbounds_0".to_string();
+            for (offset, name) in rest.iter().enumerate() {
+                let current = if offset == rest.len() - 1 {
+                    "%inbounds".to_string()
+                } else {
+                    format!("%inbounds_{}", offset + 1)
+                };
+                lines.push_str(&format!("  {current} = and i1 {previous}, {name}\n"));
+                previous = current;
+            }
+            lines
+        }
+    }
+}
+
+fn emit_loads(abi: &KernelAbi, slice_sources: &[usize], llvm_type: &str, align: usize) -> String {
+    slice_sources
+        .iter()
+        .filter(|index| !abi.args[**index].is_mutable())
+        .map(|index| {
+            let base = abi.args[*index].llvm_base();
+            format!(
+                "  %{base}_elem_ptr = getelementptr inbounds {llvm_type}, ptr addrspace(1) %{base}_ptr, i64 %idx\n  %{base}_value = load {llvm_type}, ptr addrspace(1) %{base}_elem_ptr, align {align}\n"
+            )
+        })
+        .collect::<String>()
+}
+
+fn value_expr(source: ValueSource, abi: &KernelAbi) -> String {
+    let base = abi.args[source.arg_index()].llvm_base();
+    match source {
+        ValueSource::Arg(_) => format!("%{base}"),
+        ValueSource::SliceElement(_) => format!("%{base}_value"),
+    }
 }
 
 fn unsupported_kernel(kernel: &str, reason: impl Into<String>) -> EmitError {

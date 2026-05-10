@@ -16,11 +16,11 @@ This file captures the fe2o3 state around bringing up the AMD GPU driver stack.
 - Direct device MIR calls are walked from kernel roots.
 - Reachable `std` functions are rejected.
 - Intrinsic placeholder bodies are skipped.
-- The current vector-add MIR shape emits AMDGPU LLVM IR.
+- The current binary `f32` elementwise MIR shapes emit AMDGPU LLVM IR.
 - Generated LLVM IR is compiled through ROCm clang and linked with `ld.lld` into
-  `target/fe2o3/vecadd.hsaco`.
-- The `vecadd` example loads HSACO from `FE2O3_HSACO_DIR`, which `cargo-fe2o3`
-  sets to `target/fe2o3`.
+  `target/fe2o3/*.hsaco`.
+- The `vecadd` and `scale` examples load HSACO from `FE2O3_HSACO_DIR`, which
+  `cargo-fe2o3` sets to `target/fe2o3`.
 
 ## Verified Before Reboot
 
@@ -78,7 +78,7 @@ After `amdgpu` was loaded, `rocm-sdk test` passed all 26 tests.
 - Marketing name: `AMD Radeon AI PRO R9700`
 - ISA: `amdgcn-amd-amdhsa--gfx1201`
 
-The end-to-end command passed:
+The end-to-end commands passed:
 
 ```bash
 ROCM_ROOT=/home/nod/github/TheRock/.venv-rocm-latest/lib/python3.12/site-packages/_rocm_sdk_devel
@@ -87,18 +87,25 @@ PATH=/home/nod/github/TheRock/.venv-rocm-latest/bin:$PATH \
   HIP_PATH=$ROCM_ROOT \
   LD_LIBRARY_PATH=$ROCM_ROOT/lib:${LD_LIBRARY_PATH:-} \
   cargo run -p cargo-fe2o3 -- run -p fe2o3-vecadd
+
+PATH=/home/nod/github/TheRock/.venv-rocm-latest/bin:$PATH \
+  ROCM_PATH=$ROCM_ROOT \
+  HIP_PATH=$ROCM_ROOT \
+  LD_LIBRARY_PATH=$ROCM_ROOT/lib:${LD_LIBRARY_PATH:-} \
+  cargo run -p cargo-fe2o3 -- run -p fe2o3-scale
 ```
 
-Result:
+Results:
 
 ```text
 vecadd passed for 1024 elements
+scale passed for 1024 elements
 ```
 
-The generated `vecadd` IR is gated by a MIR vector-add shape recognizer, derives
-pointer plus length kernel parameters from the Rust kernel ABI, and preserves
-source argument names such as `a_ptr`, `b_ptr`, and `c_ptr` when MIR debug info
-provides them.
+The generated elementwise IR is gated by a MIR shape recognizer, derives pointer
+plus length kernel parameters and scalar by-value parameters from the Rust kernel
+ABI, and preserves source argument names such as `a_ptr`, `b_ptr`, `c_ptr`, and
+`alpha` when MIR debug info provides them.
 
 ## After Reboot
 
@@ -115,20 +122,24 @@ Then rerun the build smoke:
 cd /home/nod/github/claude-rocm-workspace/fe2o3
 rm -rf target/fe2o3
 cargo clean -p fe2o3-vecadd
+cargo clean -p fe2o3-scale
 cargo run -p cargo-fe2o3 -- build -p fe2o3-vecadd
+env -u FE2O3_TARGET cargo run -p cargo-fe2o3 -- build -p fe2o3-scale
 /opt/rocm/lib/llvm/bin/llvm-readobj --notes target/fe2o3/vecadd.hsaco
 ```
 
-If `rocminfo` succeeds, run the end-to-end vecadd path:
+If `rocminfo` succeeds, run the end-to-end paths:
 
 ```bash
 cargo run -p cargo-fe2o3 -- run -p fe2o3-vecadd
+cargo run -p cargo-fe2o3 -- run -p fe2o3-scale
 ```
 
 Expected result:
 
 ```text
 vecadd passed for 1024 elements
+scale passed for 1024 elements
 ```
 
 If autodetection is not available, set `FE2O3_TARGET` to the architecture
@@ -136,11 +147,11 @@ reported by ROCm, for example `gfx1201`, `gfx90a`, or `gfx942`.
 
 ## Next Implementation Step
 
-Replace the temporary vector-add MIR recognizer/emitter with real lowering:
+Replace the temporary elementwise MIR recognizer/emitter with real lowering:
 
 1. Add the first Pliron dependency and local dialect/import scaffolding.
 2. Import collected MIR into a minimal intermediate form.
-3. Lower the vecadd operations from MIR: args, basic blocks, integer arithmetic,
-   pointer arithmetic, loads/stores, branch, and return.
+3. Lower the current elementwise operations from MIR: args, basic blocks,
+   integer arithmetic, pointer arithmetic, loads/stores, branch, and return.
 4. Lower `thread::index_1d` to AMDGPU workitem/workgroup intrinsics.
 5. Keep the current HSACO smoke test as the regression target.

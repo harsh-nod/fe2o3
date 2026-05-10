@@ -18,21 +18,24 @@ For the full milestone plan, see [implementation-plan.md](implementation-plan.md
   and dumps a deterministic collection summary.
 - `rustc-codegen-fe2o3` contains the first real backend utilities:
   - ABI validation for supported kernel arguments from monomorphized MIR locals.
-  - A narrow MIR recognizer and AMDGPU LLVM IR emitter for vector-add kernels.
+  - A narrow MIR recognizer and AMDGPU LLVM IR emitter for binary `f32`
+    elementwise kernels using read-only slice operands, scalar operands, and one
+    mutable output slice.
   - `.ll -> .o -> .hsaco` using ROCm clang and `ld.lld`.
-- `cargo-fe2o3 build -p fe2o3-vecadd` writes `target/fe2o3/vecadd.ll` and
-  `target/fe2o3/vecadd.hsaco`.
-- The `vecadd` example loads its HSACO from `FE2O3_HSACO_DIR`, which is set by
-  `cargo-fe2o3 build/run`.
+- `cargo-fe2o3 build -p fe2o3-vecadd` and
+  `cargo-fe2o3 build -p fe2o3-scale` write `.ll` and `.hsaco` artifacts under
+  `target/fe2o3`.
+- The `vecadd` and `scale` examples load their HSACO files from
+  `FE2O3_HSACO_DIR`, which is set by `cargo-fe2o3 build/run`.
 - `cargo-fe2o3` infers `FE2O3_TARGET` from `rocminfo` when the environment
   variable is not set.
-- End-to-end `vecadd` has run successfully on `gfx1201` using TheRock ROCm
-  `7.13.0a20260509`.
+- End-to-end `vecadd` and `scale` have run successfully on `gfx1201` using
+  TheRock ROCm `7.13.0a20260509`.
 
 ## Next Compiler Milestones
 
-1. Replace the temporary vector-add MIR recognizer/emitter with the first Pliron
-   import/lowering path:
+1. Replace the temporary elementwise MIR recognizer/emitter with the first
+   Pliron import/lowering path:
    `MIR -> Pliron dialect-mir -> AMDGPU LLVM dialect/export -> LLVM IR`.
 2. Replace device stubs in `fe2o3-device` with lowering rules:
    - `thread::thread_idx_*` -> `llvm.amdgcn.workitem.id.*`
@@ -43,7 +46,8 @@ For the full milestone plan, see [implementation-plan.md](implementation-plan.md
    - Rust slices lower to pointer plus `usize` length.
    - `DisjointSlice<T>` lowers to mutable pointer plus `usize` length.
    - Plain scalars pass by value.
-4. Generalize artifact naming and placement beyond the single `vecadd` sidecar.
+4. Generalize artifact naming and placement beyond sidecar files in
+   `target/fe2o3`.
 5. Add a repeatable hardware test target for the generated host binary plus
    HSACO path.
 
