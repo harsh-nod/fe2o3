@@ -17,6 +17,7 @@ For the full milestone plan, see [implementation-plan.md](implementation-plan.md
   roots, skips intrinsic placeholder bodies, rejects actual `std` reachability,
   and dumps a deterministic collection summary.
 - `rustc-codegen-fe2o3` contains the first real backend utilities:
+  - ABI validation for supported kernel arguments from monomorphized MIR locals.
   - A narrow AMDGPU LLVM IR emitter for the current `vecadd` kernel shape.
   - `.ll -> .o -> .hsaco` using ROCm clang and `ld.lld`.
 - `cargo-fe2o3 build -p fe2o3-vecadd` writes `target/fe2o3/vecadd.ll` and
@@ -42,8 +43,9 @@ For the full milestone plan, see [implementation-plan.md](implementation-plan.md
    - Rust slices lower to pointer plus `usize` length.
    - `DisjointSlice<T>` lowers to mutable pointer plus `usize` length.
    - Plain scalars pass by value.
-4. Generalize artifact naming and placement beyond the single `vecadd` sidecar.
-5. Add a repeatable hardware test target for the generated host binary plus
+4. Preserve source-level argument names in generated LLVM metadata when possible.
+5. Generalize artifact naming and placement beyond the single `vecadd` sidecar.
+6. Add a repeatable hardware test target for the generated host binary plus
    HSACO path.
 
 ## Runtime ABI Assumption

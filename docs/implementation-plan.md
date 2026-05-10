@@ -170,12 +170,15 @@ Acceptance:
 
 Status: MVP implemented for the `vecadd` kernel shape.
 
+- The backend validates supported kernel arguments from monomorphized MIR locals.
 - The backend emits an AMDGPU LLVM IR `amdgpu_kernel` for the current `vecadd`
-  example.
+  example after validating its ABI.
 - The emitted IR uses `llvm.amdgcn.workitem.id.x` and
   `llvm.amdgcn.workgroup.id.x`.
 - It matches the current host launch ABI: slice pointer plus `usize` length for
   each argument.
+- It bounds-checks the generated index against every slice length before memory
+  access.
 - It assumes the current `LaunchConfig::for_num_elems` block size of 256.
 
 Remaining generalization:
@@ -186,6 +189,8 @@ Remaining generalization:
 - Lower 1D thread-index intrinsics from device API calls instead of a fixed IR
   template.
 - Export AMDGPU LLVM IR for kernels beyond `vecadd`.
+- Preserve source-level argument names in generated LLVM metadata where MIR debug
+  info provides them.
 
 Acceptance:
 

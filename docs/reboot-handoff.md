@@ -41,7 +41,7 @@ cargo run -p cargo-fe2o3 -- build -p fe2o3-vecadd
 - format: `elf64-amdgpu`
 - target: `amdgcn-amd-amdhsa--gfx1100`
 - kernel name: `vecadd`
-- global-buffer pointer args for `a_ptr`, `b_ptr`, and `c_ptr`
+- global-buffer pointer args for slice pointers
 
 ## Blocker Before Reboot
 
@@ -94,6 +94,9 @@ Result:
 ```text
 vecadd passed for 1024 elements
 ```
+
+The generated `vecadd` IR now derives pointer plus length kernel parameters from
+the Rust kernel ABI and names them `arg0_ptr`, `arg0_len`, and so on.
 
 ## After Reboot
 

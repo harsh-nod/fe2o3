@@ -38,10 +38,11 @@ example on AMD hardware. `cargo-fe2o3 build` builds and loads
 dumps the currently collected device-reachable MIR functions.
 
 The backend also has the first AMDGPU artifact path: for the `vecadd` example it
-emits a minimal AMDGPU LLVM IR kernel and compiles it through ROCm clang plus
-`ld.lld` into `target/fe2o3/vecadd.hsaco`. This is intentionally scoped to the
-current `vecadd` kernel shape; general MIR/Pliron lowering is still the next
-compiler milestone.
+validates the Rust kernel ABI from monomorphized MIR argument locals, emits a
+minimal AMDGPU LLVM IR kernel, and compiles it through ROCm clang plus `ld.lld`
+into `target/fe2o3/vecadd.hsaco`. This is intentionally scoped to the current
+`vecadd` kernel shape; general MIR/Pliron lowering is still the next compiler
+milestone.
 
 On a `gfx1201` AMD Radeon AI PRO R9700 with TheRock ROCm
 `7.13.0a20260509`, `cargo-fe2o3 run -p fe2o3-vecadd` generates the HSACO, loads
