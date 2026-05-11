@@ -84,10 +84,29 @@ fn smoke(args: &[String]) -> ExitCode {
         return ExitCode::FAILURE;
     }
 
+    let workspace_root = match find_workspace_root() {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let context = match BackendRunContext::prepare(workspace_root) {
+        Ok(context) => context,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
     for package in SMOKE_PACKAGES {
         eprintln!("cargo fe2o3 smoke: running {package}");
         let args = ["-p".to_string(), (*package).to_string()];
-        if let Err(error) = cargo_with_backend_result("run", &args) {
+        if let Err(error) = clean_explicit_packages(&context.workspace_root, &args) {
+            eprintln!("{error}");
+            return ExitCode::FAILURE;
+        }
+        if let Err(error) = run_cargo_with_backend(&context, "run", &args) {
             eprintln!("{error}");
             return ExitCode::FAILURE;
         }
@@ -97,37 +116,66 @@ fn smoke(args: &[String]) -> ExitCode {
 }
 
 fn cargo_with_backend_result(command: &str, args: &[String]) -> Result<(), String> {
-    let target = amd_gpu_target();
     let workspace_root = find_workspace_root()?;
 
     clean_explicit_packages(&workspace_root, args)?;
-    let backend = find_or_build_backend(&workspace_root)?;
+    let context = BackendRunContext::prepare(workspace_root)?;
+    run_cargo_with_backend(&context, command, args)
+}
 
-    let artifact_dir = workspace_root.join("target/fe2o3");
-    if let Err(error) = std::fs::create_dir_all(&artifact_dir) {
-        return Err(format!(
-            "failed to create fe2o3 artifact directory {}: {error}",
-            artifact_dir.display()
-        ));
+#[derive(Debug)]
+struct BackendRunContext {
+    target: String,
+    workspace_root: PathBuf,
+    backend: PathBuf,
+    artifact_dir: PathBuf,
+    rustflags: String,
+}
+
+impl BackendRunContext {
+    fn prepare(workspace_root: PathBuf) -> Result<Self, String> {
+        let target = amd_gpu_target();
+        let backend = find_or_build_backend(&workspace_root)?;
+        let artifact_dir = workspace_root.join("target/fe2o3");
+        if let Err(error) = std::fs::create_dir_all(&artifact_dir) {
+            return Err(format!(
+                "failed to create fe2o3 artifact directory {}: {error}",
+                artifact_dir.display()
+            ));
+        }
+
+        let rustflags = append_rustflags(&[
+            format!("-Zcodegen-backend={}", backend.display()),
+            "-Zmir-enable-passes=-JumpThreading".to_string(),
+        ]);
+
+        Ok(Self {
+            target,
+            workspace_root,
+            backend,
+            artifact_dir,
+            rustflags,
+        })
     }
+}
 
-    let rustflags = append_rustflags(&[
-        format!("-Zcodegen-backend={}", backend.display()),
-        "-Zmir-enable-passes=-JumpThreading".to_string(),
-    ]);
-
+fn run_cargo_with_backend(
+    context: &BackendRunContext,
+    command: &str,
+    args: &[String],
+) -> Result<(), String> {
     eprintln!(
         "cargo fe2o3 {command}: using backend {} for target {}",
-        backend.display(),
-        target
+        context.backend.display(),
+        context.target
     );
 
     let status = Command::new("cargo")
         .arg(command)
         .args(args)
-        .env("RUSTFLAGS", rustflags)
-        .env(HSACO_DIR_ENV, &artifact_dir)
-        .env(TARGET_ENV, &target)
+        .env("RUSTFLAGS", &context.rustflags)
+        .env(HSACO_DIR_ENV, &context.artifact_dir)
+        .env(TARGET_ENV, &context.target)
         .env("FE2O3_HOST_PASSTHROUGH", "0")
         .status();
 
