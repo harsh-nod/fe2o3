@@ -10,6 +10,7 @@ members = [
     "crates/reserved-fe2o3-symbols",
     "crates/rustc-codegen-fe2o3",
     "examples/axpy_inplace",
+    "examples/copy",
     "examples/negate",
     "examples/normalize",
     "examples/pipeline",

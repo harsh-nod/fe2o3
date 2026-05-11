@@ -21,25 +21,26 @@ For the full milestone plan, see [implementation-plan.md](implementation-plan.md
   - A narrow MIR recognizer and AMDGPU LLVM IR emitter for `f32` elementwise
     expression kernels using read-only slice operands, scalar operands, one
     mutable output slice, in-place reads from that output slice, `f32` literal
-    constants, and unary negation.
+    constants, unary negation, and leaf-only copy stores.
   - `.ll -> .o -> .hsaco` using ROCm clang and `ld.lld`.
 - `cargo-fe2o3 build/run` writes `.ll` and `.hsaco` artifacts under
-  `target/fe2o3`; `fe2o3-saxpy` covers a multi-op expression tree, and
+  `target/fe2o3`; `fe2o3-copy` covers a leaf-only store,
+  `fe2o3-saxpy` covers a multi-op expression tree, and
   `fe2o3-axpy-inplace` covers indexed `&mut [f32]` output with read-before-write.
 - `fe2o3-negate` covers `fneg` emission from MIR unary negation.
 - `fe2o3-normalize` covers `f32` literal constants, `fsub`, and `fdiv`.
-- The `vecadd`, `scale`, `saxpy`, `axpy-inplace`, `negate`, `normalize`, and
-  `pipeline` examples load their HSACO files from `FE2O3_HSACO_DIR`, which is
-  set by `cargo-fe2o3 build/run`.
+- The `vecadd`, `copy`, `scale`, `saxpy`, `axpy-inplace`, `negate`,
+  `normalize`, and `pipeline` examples load their HSACO files from
+  `FE2O3_HSACO_DIR`, which is set by `cargo-fe2o3 build/run`.
 - `cargo-fe2o3 build/run -p <package>` cleans explicit package artifacts before
   invoking Cargo so device sidecars are regenerated predictably.
 - Generated HSACO files are validated with `llvm-readobj --notes` when available
   to confirm AMDGPU format, target metadata, and kernel name metadata.
 - `cargo-fe2o3` infers `FE2O3_TARGET` from `rocminfo` when the environment
   variable is not set.
-- End-to-end `vecadd`, `scale`, `saxpy`, `axpy-inplace`, `negate`,
-  `normalize`, and `pipeline` have run successfully on `gfx1201` using TheRock ROCm
-  `7.13.0a20260509`.
+- End-to-end `vecadd`, `copy`, `scale`, `saxpy`, `axpy-inplace`, `negate`,
+  `normalize`, and `pipeline` have run successfully on `gfx1201` using TheRock
+  ROCm `7.13.0a20260509`.
 
 ## Next Compiler Milestones
 

@@ -622,9 +622,6 @@ fn analyze_elementwise_shape<'tcx>(
         root,
     };
 
-    if expr.nodes.is_empty() {
-        return Err("elementwise lowering requires at least one expression operation".to_string());
-    }
     Ok(ElementwiseShape { expr, output_arg })
 }
 

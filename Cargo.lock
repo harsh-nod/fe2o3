@@ -20,6 +20,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-copy"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-core",
+ "fe2o3-device",
+ "fe2o3-host",
+]
+
+[[package]]
 name = "fe2o3-core"
 version = "0.1.0"
 dependencies = [
