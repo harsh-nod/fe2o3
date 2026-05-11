@@ -11,6 +11,15 @@ name = "dialect-amdgcn"
 version = "0.1.0"
 
 [[package]]
+name = "fe2o3-add-inplace"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-core",
+ "fe2o3-device",
+ "fe2o3-host",
+]
+
+[[package]]
 name = "fe2o3-axpy-inplace"
 version = "0.1.0"
 dependencies = [

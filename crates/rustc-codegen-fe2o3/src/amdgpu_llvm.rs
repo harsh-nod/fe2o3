@@ -564,9 +564,6 @@ fn analyze_elementwise_shape<'tcx>(
     }
 
     thread_index_local.ok_or_else(|| "missing `thread::index_1d` call".to_string())?;
-    if index_value_locals.is_empty() {
-        return Err("missing `ThreadIndex::get` calls for slice indexing".to_string());
-    }
     let mut local_exprs = HashMap::new();
     let mut expr_nodes = Vec::new();
     let mut elementwise_store = None;
@@ -583,6 +580,11 @@ fn analyze_elementwise_shape<'tcx>(
                     let expr = if let Some(source_place) = operand.place()
                         && let Some(arg_index) =
                             indexed_arg_place(source_place, &arg_locals, &index_value_locals)
+                    {
+                        Some(ExprRef::Value(ValueSource::SliceElement(arg_index)))
+                    } else if let Some(source_place) = operand.place()
+                        && is_deref_place(&source_place)
+                        && let Some(arg_index) = output_arg
                     {
                         Some(ExprRef::Value(ValueSource::SliceElement(arg_index)))
                     } else {
@@ -699,7 +701,7 @@ fn store_output_arg(
     arg_locals: &[Local],
     index_value_locals: &HashSet<Local>,
 ) -> Option<usize> {
-    if is_deref_store(place) {
+    if is_deref_place(place) {
         return disjoint_output_arg;
     }
 
@@ -733,7 +735,7 @@ fn constant_float<'tcx>(tcx: TyCtxt<'tcx>, constant: &ConstOperand<'tcx>) -> Opt
     }
 }
 
-fn is_deref_store(place: &Place<'_>) -> bool {
+fn is_deref_place(place: &Place<'_>) -> bool {
     matches!(&place.projection[..], [ProjectionElem::Deref])
 }
 

@@ -9,6 +9,7 @@ members = [
     "crates/fe2o3-macros",
     "crates/reserved-fe2o3-symbols",
     "crates/rustc-codegen-fe2o3",
+    "examples/add_inplace",
     "examples/axpy_inplace",
     "examples/copy",
     "examples/negate",
