@@ -16,14 +16,14 @@ This file captures the fe2o3 state around bringing up the AMD GPU driver stack.
 - Direct device MIR calls are walked from kernel roots.
 - Reachable `std` functions are rejected.
 - Intrinsic placeholder bodies are skipped.
-- The current `f32` elementwise MIR expression shapes emit AMDGPU LLVM IR.
+- The current `f32`/`f64` elementwise MIR expression shapes emit AMDGPU LLVM IR.
 - Generated LLVM IR is compiled through ROCm clang and linked with `ld.lld` into
   `target/fe2o3/*.hsaco`.
 - Generated HSACO metadata is validated with `llvm-readobj --notes` when that
   ROCm tool is available.
 - The `vecadd`, `copy`, `scale`, `saxpy`, `axpy-inplace`, `negate`,
-  `normalize`, and `pipeline` examples load HSACO from `FE2O3_HSACO_DIR`, which
-  `cargo-fe2o3` sets to `target/fe2o3`.
+  `normalize`, `pipeline`, and `vecadd-f64` examples load HSACO from
+  `FE2O3_HSACO_DIR`, which `cargo-fe2o3` sets to `target/fe2o3`.
 
 ## Verified Before Reboot
 
@@ -132,6 +132,12 @@ PATH=/home/nod/github/TheRock/.venv-rocm-latest/bin:$PATH \
   HIP_PATH=$ROCM_ROOT \
   LD_LIBRARY_PATH=$ROCM_ROOT/lib:${LD_LIBRARY_PATH:-} \
   cargo run -p cargo-fe2o3 -- run -p fe2o3-pipeline
+
+PATH=/home/nod/github/TheRock/.venv-rocm-latest/bin:$PATH \
+  ROCM_PATH=$ROCM_ROOT \
+  HIP_PATH=$ROCM_ROOT \
+  LD_LIBRARY_PATH=$ROCM_ROOT/lib:${LD_LIBRARY_PATH:-} \
+  cargo run -p cargo-fe2o3 -- run -p fe2o3-vecadd-f64
 ```
 
 Results:
@@ -145,6 +151,7 @@ axpy_inplace passed for 1024 elements
 negate passed for 1024 elements
 normalize passed for 1024 elements
 pipeline passed for 1024 elements
+vecadd_f64 passed for 1024 elements
 ```
 
 The generated elementwise IR is gated by a MIR shape recognizer, derives pointer
@@ -174,6 +181,7 @@ env -u FE2O3_TARGET cargo run -p cargo-fe2o3 -- build -p fe2o3-axpy-inplace
 env -u FE2O3_TARGET cargo run -p cargo-fe2o3 -- build -p fe2o3-negate
 env -u FE2O3_TARGET cargo run -p cargo-fe2o3 -- build -p fe2o3-normalize
 env -u FE2O3_TARGET cargo run -p cargo-fe2o3 -- build -p fe2o3-pipeline
+env -u FE2O3_TARGET cargo run -p cargo-fe2o3 -- build -p fe2o3-vecadd-f64
 /opt/rocm/lib/llvm/bin/llvm-readobj --notes target/fe2o3/vecadd.hsaco
 ```
 
@@ -188,6 +196,7 @@ cargo run -p cargo-fe2o3 -- run -p fe2o3-axpy-inplace
 cargo run -p cargo-fe2o3 -- run -p fe2o3-negate
 cargo run -p cargo-fe2o3 -- run -p fe2o3-normalize
 cargo run -p cargo-fe2o3 -- run -p fe2o3-pipeline
+cargo run -p cargo-fe2o3 -- run -p fe2o3-vecadd-f64
 ```
 
 Expected result:
@@ -201,6 +210,7 @@ axpy_inplace passed for 1024 elements
 negate passed for 1024 elements
 normalize passed for 1024 elements
 pipeline passed for 1024 elements
+vecadd_f64 passed for 1024 elements
 ```
 
 If autodetection is not available, set `FE2O3_TARGET` to the architecture

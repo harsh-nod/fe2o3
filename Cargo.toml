@@ -17,6 +17,7 @@ members = [
     "examples/saxpy",
     "examples/scale",
     "examples/vecadd",
+    "examples/vecadd_f64",
 ]
 resolver = "2"
 

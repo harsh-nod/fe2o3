@@ -168,13 +168,14 @@ Acceptance:
 
 ### M3: Minimal AMDGPU LLVM IR
 
-Status: MVP implemented for `f32` elementwise expression kernel shapes.
+Status: MVP implemented for `f32`/`f64` elementwise expression kernel shapes.
 
 - The backend validates supported kernel arguments from monomorphized MIR locals.
 - The backend recognizes MIR body patterns for `output[index] = expr`, where
-  expression leaves are read-only slice elements, scalar `f32` arguments, or
-  `f32` literals, and expression nodes are `+`, `-`, `*`, `/`, or unary
-  negation. Leaf-only stores such as `out[i] = x[i]` are also supported.
+  expression leaves are read-only slice elements, scalar float arguments, or
+  float literals, and expression nodes are `+`, `-`, `*`, `/`, or unary
+  negation. Operands must match the output element type. Leaf-only stores such
+  as `out[i] = x[i]` are also supported.
 - The backend emits an AMDGPU LLVM IR `amdgpu_kernel` after validating the ABI
   and body pattern.
 - The emitted IR uses `llvm.amdgcn.workitem.id.x` and
@@ -190,8 +191,8 @@ Status: MVP implemented for `f32` elementwise expression kernel shapes.
   `scale` covers scalar-times-slice multiplication; `saxpy` covers a two-op
   expression with four kernel arguments; `axpy-inplace` covers mutable-slice
   in-place updates; `negate` covers unary negation; `normalize` covers literal
-  constants plus subtraction and division; `pipeline` covers two kernels emitted
-  from one crate.
+  constants plus subtraction and division; `vecadd-f64` covers double-precision
+  addition; `pipeline` covers two kernels emitted from one crate.
 
 Remaining generalization:
 
@@ -236,7 +237,8 @@ Acceptance:
   `cargo fe2o3 build -p fe2o3-saxpy` produces `saxpy.hsaco`, and
   `cargo fe2o3 build -p fe2o3-axpy-inplace` produces `axpy_inplace.hsaco`, and
   `cargo fe2o3 build -p fe2o3-negate` produces `negate.hsaco`, and
-  `cargo fe2o3 build -p fe2o3-normalize` produces `normalize.hsaco`.
+  `cargo fe2o3 build -p fe2o3-normalize` produces `normalize.hsaco`, and
+  `cargo fe2o3 build -p fe2o3-vecadd-f64` produces `vecadd_f64.hsaco`.
 - `cargo fe2o3 build -p fe2o3-pipeline` produces `scale_stage.hsaco` and
   `bias_stage.hsaco`.
 
@@ -250,8 +252,8 @@ Status: MVP implemented for the current elementwise examples.
 - If `FE2O3_TARGET` is not set, `cargo-fe2o3` tries to infer the target from
   `rocminfo`.
 - The `vecadd`, `copy`, `scale`, `saxpy`, `axpy-inplace`, `negate`,
-  `normalize`, and `pipeline` examples load their HSACO files from that
-  directory.
+  `normalize`, `pipeline`, and `vecadd-f64` examples load their HSACO files
+  from that directory.
 - The examples use `fe2o3-core` to load modules, launch through HIP with the
   backend ABI, copy output back, and validate results.
 - The path has run successfully on `gfx1201` with TheRock ROCm
@@ -269,7 +271,8 @@ Acceptance:
   `cargo fe2o3 run -p fe2o3-scale`, `cargo fe2o3 run -p fe2o3-saxpy`,
   `cargo fe2o3 run -p fe2o3-axpy-inplace`, `cargo fe2o3 run -p fe2o3-negate`,
   `cargo fe2o3 run -p fe2o3-normalize`, and
-  `cargo fe2o3 run -p fe2o3-pipeline` print success on an AMD GPU.
+  `cargo fe2o3 run -p fe2o3-pipeline`, and
+  `cargo fe2o3 run -p fe2o3-vecadd-f64` print success on an AMD GPU.
 
 ### M6: Usability And Coverage
 

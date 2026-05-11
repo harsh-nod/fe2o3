@@ -37,15 +37,16 @@ examples on AMD hardware. `cargo-fe2o3 build` builds and loads
 `rustc_codegen_llvm`, detects `#[kernel]` functions in rustc codegen units, and
 dumps the currently collected device-reachable MIR functions.
 
-The backend also has the first AMDGPU artifact path: for the current `f32`
+The backend also has the first AMDGPU artifact path: for the current `f32`/`f64`
 elementwise kernel shapes it validates the Rust kernel ABI from monomorphized
 MIR argument locals, recognizes a small expression tree, emits a minimal AMDGPU
 LLVM IR kernel, and compiles it through ROCm clang plus `ld.lld` into
 `target/fe2o3/*.hsaco`. Supported expression leaves are read-only slice
-elements, plain `f32` scalar arguments, `f32` literals, and the mutable output
-slice when doing an in-place update. Outputs can be `DisjointSlice<f32>` or
-indexed `&mut [f32]`; expression nodes include `+`, `-`, `*`, `/`, and unary
-negation. Leaf-only copies such as `out[i] = x[i]` are also supported.
+elements, plain scalar float arguments, float literals, and the mutable output
+slice when doing an in-place update. The same shape is supported for `f64`.
+Outputs can be `DisjointSlice<T>` or indexed `&mut [T]`; expression nodes
+include `+`, `-`, `*`, `/`, and unary negation. Leaf-only copies such as
+`out[i] = x[i]` are also supported.
 General MIR/Pliron lowering is still the next compiler milestone.
 
 On a `gfx1201` AMD Radeon AI PRO R9700 with TheRock ROCm
@@ -55,6 +56,7 @@ On a `gfx1201` AMD Radeon AI PRO R9700 with TheRock ROCm
 through HIP, launch the kernels, and validate the results. `fe2o3-negate` covers
 unary negation. `fe2o3-normalize` covers literal constants plus subtraction and
 division. `fe2o3-copy` covers leaf-only stores.
+`fe2o3-vecadd-f64` covers double-precision elementwise lowering.
 `cargo-fe2o3 run -p fe2o3-pipeline` emits and launches two kernels from one Rust
 crate.
 
@@ -91,6 +93,7 @@ cargo run -p cargo-fe2o3 -- build -p fe2o3-axpy-inplace
 cargo run -p cargo-fe2o3 -- build -p fe2o3-negate
 cargo run -p cargo-fe2o3 -- build -p fe2o3-normalize
 cargo run -p cargo-fe2o3 -- build -p fe2o3-pipeline
+cargo run -p cargo-fe2o3 -- build -p fe2o3-vecadd-f64
 ```
 
 On a machine with a working AMD GPU and ROCm driver stack:
@@ -104,4 +107,5 @@ cargo run -p cargo-fe2o3 -- run -p fe2o3-axpy-inplace
 cargo run -p cargo-fe2o3 -- run -p fe2o3-negate
 cargo run -p cargo-fe2o3 -- run -p fe2o3-normalize
 cargo run -p cargo-fe2o3 -- run -p fe2o3-pipeline
+cargo run -p cargo-fe2o3 -- run -p fe2o3-vecadd-f64
 ```

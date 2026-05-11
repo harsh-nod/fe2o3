@@ -158,13 +158,14 @@ enum ElementwiseUnaryOp {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ExprRef {
     Value(ValueSource),
-    Literal(FloatLiteral),
+    Literal(ScalarLiteral),
     Node(usize),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct FloatLiteral {
-    bits: u32,
+enum ScalarLiteral {
+    F32(u32),
+    F64(u64),
 }
 
 #[derive(Clone, Debug)]
@@ -176,6 +177,7 @@ enum KernelArgKind {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ScalarType {
     F32,
+    F64,
 }
 
 impl KernelArg {
@@ -225,12 +227,23 @@ impl ScalarType {
     fn llvm_type(self) -> &'static str {
         match self {
             Self::F32 => "float",
+            Self::F64 => "double",
         }
     }
 
     fn llvm_align(self) -> usize {
         match self {
             Self::F32 => 4,
+            Self::F64 => 8,
+        }
+    }
+}
+
+impl ScalarLiteral {
+    fn scalar_type(self) -> ScalarType {
+        match self {
+            Self::F32(_) => ScalarType::F32,
+            Self::F64(_) => ScalarType::F64,
         }
     }
 }
@@ -278,6 +291,12 @@ impl ElementwiseExpr {
         sources
     }
 
+    fn literals(&self) -> Vec<ScalarLiteral> {
+        let mut literals = Vec::new();
+        self.collect_literals(self.root, &mut literals);
+        literals
+    }
+
     fn collect_sources(&self, expr: ExprRef, sources: &mut Vec<ValueSource>) {
         match expr {
             ExprRef::Value(source) => {
@@ -293,6 +312,22 @@ impl ElementwiseExpr {
                 }
                 ExprNode::Unary { operand, .. } => {
                     self.collect_sources(*operand, sources);
+                }
+            },
+        }
+    }
+
+    fn collect_literals(&self, expr: ExprRef, literals: &mut Vec<ScalarLiteral>) {
+        match expr {
+            ExprRef::Value(_) => {}
+            ExprRef::Literal(literal) => literals.push(literal),
+            ExprRef::Node(index) => match &self.nodes[index] {
+                ExprNode::Binary { lhs, rhs, .. } => {
+                    self.collect_literals(*lhs, literals);
+                    self.collect_literals(*rhs, literals);
+                }
+                ExprNode::Unary { operand, .. } => {
+                    self.collect_literals(*operand, literals);
                 }
             },
         }
@@ -431,14 +466,16 @@ fn classify_kernel_arg<'tcx>(
             })
         }
         TyKind::Float(FloatTy::F32) => Ok(KernelArgKind::Scalar(ScalarType::F32)),
-        _ => Err("expected `f32`, `&[T]`, `&mut [T]`, or `DisjointSlice<T>`"),
+        TyKind::Float(FloatTy::F64) => Ok(KernelArgKind::Scalar(ScalarType::F64)),
+        _ => Err("expected `f32`, `f64`, `&[T]`, `&mut [T]`, or `DisjointSlice<T>`"),
     }
 }
 
 fn classify_scalar(ty: Ty<'_>) -> Result<ScalarType, &'static str> {
     match ty.kind() {
         TyKind::Float(FloatTy::F32) => Ok(ScalarType::F32),
-        _ => Err("only `f32` elements are supported"),
+        TyKind::Float(FloatTy::F64) => Ok(ScalarType::F64),
+        _ => Err("only `f32` and `f64` elements are supported"),
     }
 }
 
@@ -676,7 +713,7 @@ fn operand_expr<'tcx>(
     arg_locals: &[Local],
 ) -> Option<ExprRef> {
     if let Operand::Constant(constant) = operand {
-        return constant_f32(tcx, constant).map(ExprRef::Literal);
+        return constant_float(tcx, constant).map(ExprRef::Literal);
     }
 
     let local = operand_local(operand)?;
@@ -685,16 +722,15 @@ fn operand_expr<'tcx>(
     })
 }
 
-fn constant_f32<'tcx>(tcx: TyCtxt<'tcx>, constant: &ConstOperand<'tcx>) -> Option<FloatLiteral> {
-    if !matches!(constant.const_.ty().kind(), TyKind::Float(FloatTy::F32)) {
-        return None;
-    }
-
-    let bits = constant
+fn constant_float<'tcx>(tcx: TyCtxt<'tcx>, constant: &ConstOperand<'tcx>) -> Option<ScalarLiteral> {
+    let int = constant
         .const_
-        .try_eval_scalar_int(tcx, TypingEnv::fully_monomorphized())?
-        .to_u32();
-    Some(FloatLiteral { bits })
+        .try_eval_scalar_int(tcx, TypingEnv::fully_monomorphized())?;
+    match constant.const_.ty().kind() {
+        TyKind::Float(FloatTy::F32) => Some(ScalarLiteral::F32(int.to_u32())),
+        TyKind::Float(FloatTy::F64) => Some(ScalarLiteral::F64(int.to_u64())),
+        _ => None,
+    }
 }
 
 fn is_deref_store(place: &Place<'_>) -> bool {
@@ -724,7 +760,7 @@ fn emit_elementwise_kernel(abi: &KernelAbi, shape: &ElementwiseShape) -> Result<
     let result_value = expr_ref_value(shape.expr.root, abi);
 
     // This is the first AMDGPU LLVM IR milestone, intentionally scoped to
-    // simple f32 elementwise expression kernels. It matches
+    // simple f32/f64 elementwise expression kernels. It matches
     // `LaunchConfig::for_num_elems`, which uses a 256-thread block. General
     // block_dim lowering will read the AMD dispatch packet instead of
     // hard-coding this constant.
@@ -787,26 +823,44 @@ fn validate_elementwise_abi(abi: &KernelAbi, shape: &ElementwiseShape) -> Result
         }
     }
 
-    if abi.args.iter().any(|arg| arg.element() != ScalarType::F32) {
+    if !abi.args[shape.output_arg].is_slice() || !abi.args[shape.output_arg].is_mutable() {
         return Err(unsupported_kernel(
             &abi.name,
-            "elementwise lowering currently supports only f32 arguments",
+            "elementwise lowering expects one mutable output slice",
         ));
+    }
+
+    let output_element = abi.args[shape.output_arg].element();
+
+    for literal in shape.expr.literals() {
+        if literal.scalar_type() != output_element {
+            return Err(unsupported_kernel(
+                &abi.name,
+                "literal elementwise operands must match the output element type",
+            ));
+        }
     }
 
     for source in sources {
         let arg = &abi.args[source.arg_index()];
+        if arg.element() != output_element {
+            return Err(unsupported_kernel(
+                &abi.name,
+                "elementwise operands must match the output element type",
+            ));
+        }
+
         match source {
             ValueSource::Arg(_) if !arg.is_scalar() => {
                 return Err(unsupported_kernel(
                     &abi.name,
-                    "direct elementwise operands must be scalar f32 arguments",
+                    "direct elementwise operands must be scalar arguments",
                 ));
             }
             ValueSource::SliceElement(_) if !arg.is_slice() => {
                 return Err(unsupported_kernel(
                     &abi.name,
-                    "indexed elementwise operands must be f32 slices",
+                    "indexed elementwise operands must be slices",
                 ));
             }
             ValueSource::SliceElement(index) if arg.is_mutable() && index != shape.output_arg => {
@@ -817,13 +871,6 @@ fn validate_elementwise_abi(abi: &KernelAbi, shape: &ElementwiseShape) -> Result
             }
             _ => {}
         }
-    }
-
-    if !abi.args[shape.output_arg].is_slice() || !abi.args[shape.output_arg].is_mutable() {
-        return Err(unsupported_kernel(
-            &abi.name,
-            "elementwise lowering expects one mutable output slice",
-        ));
     }
 
     Ok(())
@@ -926,11 +973,13 @@ fn expr_ref_value(expr: ExprRef, abi: &KernelAbi) -> String {
     }
 }
 
-impl FloatLiteral {
+impl ScalarLiteral {
     fn llvm_value(self) -> String {
-        let value = f32::from_bits(self.bits);
-        let double_bits = f64::from(value).to_bits();
-        format!("0x{double_bits:016X}")
+        let bits = match self {
+            Self::F32(bits) => f64::from(f32::from_bits(bits)).to_bits(),
+            Self::F64(bits) => bits,
+        };
+        format!("0x{bits:016X}")
     }
 }
 
