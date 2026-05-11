@@ -253,6 +253,7 @@ Status: MVP implemented for the current elementwise examples.
 - `cargo-fe2o3 run` sets `FE2O3_HSACO_DIR`.
 - `cargo-fe2o3 build/run -p <package>` cleans explicit package artifacts first
   so the backend reruns and refreshes sidecar HSACO files.
+- `cargo-fe2o3 smoke` runs the supported backend examples in sequence.
 - If `FE2O3_TARGET` is not set, `cargo-fe2o3` tries to infer the target from
   `rocminfo`.
 - The `vecadd`, `add-inplace`, `copy`, `fill`, `scale`, `saxpy`, `axpy-inplace`,
@@ -277,6 +278,7 @@ Acceptance:
   `cargo fe2o3 run -p fe2o3-axpy-inplace`, `cargo fe2o3 run -p fe2o3-negate`,
   `cargo fe2o3 run -p fe2o3-normalize`, `cargo fe2o3 run -p fe2o3-pipeline`, and
   `cargo fe2o3 run -p fe2o3-vecadd-f64` print success on an AMD GPU.
+- `cargo fe2o3 smoke` runs the same set successfully on an AMD GPU.
 
 ### M6: Usability And Coverage
 

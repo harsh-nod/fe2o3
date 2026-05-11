@@ -38,6 +38,7 @@ For the full milestone plan, see [implementation-plan.md](implementation-plan.md
   `cargo-fe2o3 build/run`.
 - `cargo-fe2o3 build/run -p <package>` cleans explicit package artifacts before
   invoking Cargo so device sidecars are regenerated predictably.
+- `cargo-fe2o3 smoke` runs the supported backend examples in sequence.
 - Generated HSACO files are validated with `llvm-readobj --notes` when available
   to confirm AMDGPU format, target metadata, and kernel name metadata.
 - `cargo-fe2o3` infers `FE2O3_TARGET` from `rocminfo` when the environment

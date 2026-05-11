@@ -6,6 +6,19 @@ const TARGET_ENV: &str = "FE2O3_TARGET";
 const BACKEND_ENV: &str = "FE2O3_BACKEND";
 const HSACO_DIR_ENV: &str = "FE2O3_HSACO_DIR";
 const DEFAULT_TARGET: &str = "gfx1100";
+const SMOKE_PACKAGES: &[&str] = &[
+    "fe2o3-vecadd",
+    "fe2o3-add-inplace",
+    "fe2o3-copy",
+    "fe2o3-fill",
+    "fe2o3-scale",
+    "fe2o3-saxpy",
+    "fe2o3-axpy-inplace",
+    "fe2o3-negate",
+    "fe2o3-normalize",
+    "fe2o3-pipeline",
+    "fe2o3-vecadd-f64",
+];
 
 fn main() -> ExitCode {
     let mut args = env::args().skip(1);
@@ -16,6 +29,7 @@ fn main() -> ExitCode {
         "doctor" => doctor(),
         "build" => cargo_with_backend("build", &rest),
         "run" => cargo_with_backend("run", &rest),
+        "smoke" => smoke(&rest),
         "help" | "--help" | "-h" => {
             print_help();
             ExitCode::SUCCESS
@@ -55,35 +69,46 @@ fn doctor() -> ExitCode {
 }
 
 fn cargo_with_backend(command: &str, args: &[String]) -> ExitCode {
-    let target = amd_gpu_target();
-    let workspace_root = match find_workspace_root() {
-        Ok(path) => path,
+    match cargo_with_backend_result(command, args) {
+        Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("{error}");
-            return ExitCode::FAILURE;
+            ExitCode::FAILURE
         }
-    };
+    }
+}
 
-    if let Err(error) = clean_explicit_packages(&workspace_root, args) {
-        eprintln!("{error}");
+fn smoke(args: &[String]) -> ExitCode {
+    if !args.is_empty() {
+        eprintln!("cargo fe2o3 smoke does not accept additional arguments");
         return ExitCode::FAILURE;
     }
 
-    let backend = match find_or_build_backend(&workspace_root) {
-        Ok(path) => path,
-        Err(error) => {
+    for package in SMOKE_PACKAGES {
+        eprintln!("cargo fe2o3 smoke: running {package}");
+        let args = ["-p".to_string(), (*package).to_string()];
+        if let Err(error) = cargo_with_backend_result("run", &args) {
             eprintln!("{error}");
             return ExitCode::FAILURE;
         }
-    };
+    }
+
+    ExitCode::SUCCESS
+}
+
+fn cargo_with_backend_result(command: &str, args: &[String]) -> Result<(), String> {
+    let target = amd_gpu_target();
+    let workspace_root = find_workspace_root()?;
+
+    clean_explicit_packages(&workspace_root, args)?;
+    let backend = find_or_build_backend(&workspace_root)?;
 
     let artifact_dir = workspace_root.join("target/fe2o3");
     if let Err(error) = std::fs::create_dir_all(&artifact_dir) {
-        eprintln!(
+        return Err(format!(
             "failed to create fe2o3 artifact directory {}: {error}",
             artifact_dir.display()
-        );
-        return ExitCode::FAILURE;
+        ));
     }
 
     let rustflags = append_rustflags(&[
@@ -107,12 +132,9 @@ fn cargo_with_backend(command: &str, args: &[String]) -> ExitCode {
         .status();
 
     match status {
-        Ok(status) if status.success() => ExitCode::SUCCESS,
-        Ok(_) => ExitCode::FAILURE,
-        Err(error) => {
-            eprintln!("failed to run cargo: {error}");
-            ExitCode::FAILURE
-        }
+        Ok(status) if status.success() => Ok(()),
+        Ok(status) => Err(format!("cargo {command} failed with status {status}")),
+        Err(error) => Err(format!("failed to run cargo: {error}")),
     }
 }
 
@@ -369,7 +391,7 @@ fn is_gfx_target(candidate: &str) -> bool {
 
 fn print_help() {
     eprintln!(
-        "usage: cargo fe2o3 <command>\n\ncommands:\n  doctor   check ROCm/HIP toolchain discovery\n  build    build with the fe2o3 rustc backend\n  run      run with the fe2o3 rustc backend"
+        "usage: cargo fe2o3 <command>\n\ncommands:\n  doctor   check ROCm/HIP toolchain discovery\n  build    build with the fe2o3 rustc backend\n  run      run with the fe2o3 rustc backend\n  smoke    run the supported backend examples"
     );
 }
 

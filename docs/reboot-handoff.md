@@ -204,6 +204,12 @@ env -u FE2O3_TARGET cargo run -p cargo-fe2o3 -- build -p fe2o3-vecadd-f64
 If `rocminfo` succeeds, run the end-to-end paths:
 
 ```bash
+cargo run -p cargo-fe2o3 -- smoke
+```
+
+Or run them individually:
+
+```bash
 cargo run -p cargo-fe2o3 -- run -p fe2o3-vecadd
 cargo run -p cargo-fe2o3 -- run -p fe2o3-add-inplace
 cargo run -p cargo-fe2o3 -- run -p fe2o3-copy

@@ -104,6 +104,13 @@ cargo run -p cargo-fe2o3 -- build -p fe2o3-vecadd-f64
 On a machine with a working AMD GPU and ROCm driver stack:
 
 ```bash
+cargo run -p cargo-fe2o3 -- smoke
+```
+
+The smoke command runs the supported backend examples in sequence. To run one
+package at a time:
+
+```bash
 cargo run -p cargo-fe2o3 -- run -p fe2o3-vecadd
 cargo run -p cargo-fe2o3 -- run -p fe2o3-add-inplace
 cargo run -p cargo-fe2o3 -- run -p fe2o3-copy
