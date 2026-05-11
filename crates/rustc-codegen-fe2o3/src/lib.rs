@@ -294,6 +294,10 @@ pub enum HsacoError {
         program: PathBuf,
         status: std::process::ExitStatus,
     },
+    InvalidMetadata {
+        path: PathBuf,
+        reason: String,
+    },
 }
 
 impl fmt::Display for HsacoError {
@@ -303,6 +307,13 @@ impl fmt::Display for HsacoError {
             Self::Io(error) => write!(f, "{error}"),
             Self::CommandFailed { program, status } => {
                 write!(f, "{} failed with status {status}", program.display())
+            }
+            Self::InvalidMetadata { path, reason } => {
+                write!(
+                    f,
+                    "{} has invalid AMDGPU metadata: {reason}",
+                    path.display()
+                )
             }
         }
     }
@@ -360,6 +371,75 @@ pub fn compile_llvm_ir_to_hsaco_with_toolchain(
         "-o",
         path_arg(hsaco_path).as_str(),
     ]))?;
+    validate_hsaco_metadata(hsaco_path, target, toolchain)?;
+
+    Ok(())
+}
+
+fn validate_hsaco_metadata(
+    hsaco_path: &Path,
+    target: &AmdGpuTarget,
+    toolchain: &RocmToolchain,
+) -> Result<(), HsacoError> {
+    let Some(llvm_readobj) = &toolchain.llvm_readobj else {
+        return Ok(());
+    };
+
+    let output = Command::new(llvm_readobj)
+        .args(["--notes", path_arg(hsaco_path).as_str()])
+        .output()?;
+    if !output.status.success() {
+        return Err(HsacoError::CommandFailed {
+            program: llvm_readobj.clone(),
+            status: output.status,
+        });
+    }
+
+    let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+    if !output.stderr.is_empty() {
+        text.push('\n');
+        text.push_str(&String::from_utf8_lossy(&output.stderr));
+    }
+    let kernel_name = hsaco_path
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+
+    validate_hsaco_metadata_text(&text, target, kernel_name).map_err(|reason| {
+        HsacoError::InvalidMetadata {
+            path: hsaco_path.to_path_buf(),
+            reason,
+        }
+    })
+}
+
+fn validate_hsaco_metadata_text(
+    text: &str,
+    target: &AmdGpuTarget,
+    kernel_name: &str,
+) -> Result<(), String> {
+    if !text.contains("Format: elf64-amdgpu") {
+        return Err("expected elf64-amdgpu format".to_string());
+    }
+
+    let target_line = text
+        .lines()
+        .find(|line| line.trim_start().starts_with("amdhsa.target:"))
+        .ok_or_else(|| "missing amdhsa.target metadata".to_string())?;
+    if !target_line.contains(target.as_str()) {
+        return Err(format!(
+            "expected target {}, got {}",
+            target.as_str(),
+            target_line.trim()
+        ));
+    }
+
+    if !kernel_name.is_empty() {
+        let expected_name = format!(".name:           {kernel_name}");
+        if !text.contains(&expected_name) {
+            return Err(format!("missing kernel metadata name `{kernel_name}`"));
+        }
+    }
 
     Ok(())
 }
@@ -413,4 +493,58 @@ fn require_tool(llvm_bin: &Path, name: &str) -> Result<PathBuf, ToolchainError> 
 fn optional_tool(llvm_bin: &Path, name: &str) -> Option<PathBuf> {
     let path = llvm_bin.join(name);
     path.is_file().then_some(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AmdGpuTarget, validate_hsaco_metadata_text};
+
+    #[test]
+    fn accepts_expected_hsaco_metadata() {
+        let text = r#"
+File: target/fe2o3/vecadd.hsaco
+Format: elf64-amdgpu
+AMDGPU Metadata: ---
+amdhsa.kernels:
+  - .name:           vecadd
+amdhsa.target:   amdgcn-amd-amdhsa--gfx1201
+...
+"#;
+
+        validate_hsaco_metadata_text(text, &AmdGpuTarget::new("gfx1201"), "vecadd").unwrap();
+    }
+
+    #[test]
+    fn rejects_target_mismatch() {
+        let text = r#"
+File: target/fe2o3/vecadd.hsaco
+Format: elf64-amdgpu
+AMDGPU Metadata: ---
+amdhsa.kernels:
+  - .name:           vecadd
+amdhsa.target:   amdgcn-amd-amdhsa--gfx1100
+...
+"#;
+
+        let error = validate_hsaco_metadata_text(text, &AmdGpuTarget::new("gfx1201"), "vecadd")
+            .unwrap_err();
+        assert!(error.contains("expected target gfx1201"));
+    }
+
+    #[test]
+    fn rejects_kernel_name_mismatch() {
+        let text = r#"
+File: target/fe2o3/scale.hsaco
+Format: elf64-amdgpu
+AMDGPU Metadata: ---
+amdhsa.kernels:
+  - .name:           vecadd
+amdhsa.target:   amdgcn-amd-amdhsa--gfx1201
+...
+"#;
+
+        let error =
+            validate_hsaco_metadata_text(text, &AmdGpuTarget::new("gfx1201"), "scale").unwrap_err();
+        assert!(error.contains("missing kernel metadata name `scale`"));
+    }
 }

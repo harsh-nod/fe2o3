@@ -216,13 +216,13 @@ Status: MVP implemented for elementwise sidecar artifacts.
 - The object is linked to HSACO with `ld.lld -shared`.
 - The artifact is written under `FE2O3_HSACO_DIR`, which `cargo-fe2o3` sets to
   `target/fe2o3`.
-- `llvm-readobj` can validate the generated kernel metadata when available.
+- `llvm-readobj --notes` validates generated AMDGPU format, target metadata, and
+  kernel name metadata when available.
 
 Remaining generalization:
 
 - Decide whether release artifacts should live next to the host executable,
   remain sidecars under `target/fe2o3`, or be embedded.
-- Add first-class metadata validation in `cargo-fe2o3`.
 - Support monomorphized kernel names.
 
 Acceptance:

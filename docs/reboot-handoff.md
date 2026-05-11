@@ -19,6 +19,8 @@ This file captures the fe2o3 state around bringing up the AMD GPU driver stack.
 - The current `f32` elementwise MIR expression shapes emit AMDGPU LLVM IR.
 - Generated LLVM IR is compiled through ROCm clang and linked with `ld.lld` into
   `target/fe2o3/*.hsaco`.
+- Generated HSACO metadata is validated with `llvm-readobj --notes` when that
+  ROCm tool is available.
 - The `vecadd`, `scale`, `saxpy`, `axpy-inplace`, and `pipeline` examples load
   HSACO from `FE2O3_HSACO_DIR`, which `cargo-fe2o3` sets to `target/fe2o3`.
 
