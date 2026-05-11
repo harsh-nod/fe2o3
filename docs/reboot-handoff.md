@@ -21,7 +21,7 @@ This file captures the fe2o3 state around bringing up the AMD GPU driver stack.
   `target/fe2o3/*.hsaco`.
 - Generated HSACO metadata is validated with `llvm-readobj --notes` when that
   ROCm tool is available.
-- The `vecadd`, `add-inplace`, `copy`, `scale`, `saxpy`, `axpy-inplace`,
+- The `vecadd`, `add-inplace`, `copy`, `fill`, `scale`, `saxpy`, `axpy-inplace`,
   `negate`, `normalize`, `pipeline`, and `vecadd-f64` examples load HSACO from
   `FE2O3_HSACO_DIR`, which `cargo-fe2o3` sets to `target/fe2o3`.
 
@@ -107,6 +107,12 @@ PATH=/home/nod/github/TheRock/.venv-rocm-latest/bin:$PATH \
   ROCM_PATH=$ROCM_ROOT \
   HIP_PATH=$ROCM_ROOT \
   LD_LIBRARY_PATH=$ROCM_ROOT/lib:${LD_LIBRARY_PATH:-} \
+  cargo run -p cargo-fe2o3 -- run -p fe2o3-fill
+
+PATH=/home/nod/github/TheRock/.venv-rocm-latest/bin:$PATH \
+  ROCM_PATH=$ROCM_ROOT \
+  HIP_PATH=$ROCM_ROOT \
+  LD_LIBRARY_PATH=$ROCM_ROOT/lib:${LD_LIBRARY_PATH:-} \
   cargo run -p cargo-fe2o3 -- run -p fe2o3-scale
 
 PATH=/home/nod/github/TheRock/.venv-rocm-latest/bin:$PATH \
@@ -152,6 +158,7 @@ Results:
 vecadd passed for 1024 elements
 add_inplace passed for 1024 elements
 copy passed for 1024 elements
+fill passed for 1024 elements
 scale passed for 1024 elements
 saxpy passed for 1024 elements
 axpy_inplace passed for 1024 elements
@@ -183,6 +190,7 @@ rm -rf target/fe2o3
 cargo run -p cargo-fe2o3 -- build -p fe2o3-vecadd
 env -u FE2O3_TARGET cargo run -p cargo-fe2o3 -- build -p fe2o3-add-inplace
 env -u FE2O3_TARGET cargo run -p cargo-fe2o3 -- build -p fe2o3-copy
+env -u FE2O3_TARGET cargo run -p cargo-fe2o3 -- build -p fe2o3-fill
 env -u FE2O3_TARGET cargo run -p cargo-fe2o3 -- build -p fe2o3-scale
 env -u FE2O3_TARGET cargo run -p cargo-fe2o3 -- build -p fe2o3-saxpy
 env -u FE2O3_TARGET cargo run -p cargo-fe2o3 -- build -p fe2o3-axpy-inplace
@@ -199,6 +207,7 @@ If `rocminfo` succeeds, run the end-to-end paths:
 cargo run -p cargo-fe2o3 -- run -p fe2o3-vecadd
 cargo run -p cargo-fe2o3 -- run -p fe2o3-add-inplace
 cargo run -p cargo-fe2o3 -- run -p fe2o3-copy
+cargo run -p cargo-fe2o3 -- run -p fe2o3-fill
 cargo run -p cargo-fe2o3 -- run -p fe2o3-scale
 cargo run -p cargo-fe2o3 -- run -p fe2o3-saxpy
 cargo run -p cargo-fe2o3 -- run -p fe2o3-axpy-inplace
@@ -214,6 +223,7 @@ Expected result:
 vecadd passed for 1024 elements
 add_inplace passed for 1024 elements
 copy passed for 1024 elements
+fill passed for 1024 elements
 scale passed for 1024 elements
 saxpy passed for 1024 elements
 axpy_inplace passed for 1024 elements

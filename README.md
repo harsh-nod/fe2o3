@@ -46,7 +46,7 @@ elements, plain scalar float arguments, float literals, and the mutable output
 slice when doing an in-place update. The same shape is supported for `f64`.
 Outputs can be `DisjointSlice<T>` or indexed `&mut [T]`; expression nodes
 include `+`, `-`, `*`, `/`, and unary negation. Leaf-only copies such as
-`out[i] = x[i]` are also supported.
+`out[i] = x[i]` and literal-root fills are also supported.
 `DisjointSlice::get_mut` outputs can read the current element before writing it.
 General MIR/Pliron lowering is still the next compiler milestone.
 
@@ -58,6 +58,7 @@ through HIP, launch the kernels, and validate the results. `fe2o3-negate` covers
 unary negation. `fe2o3-normalize` covers literal constants plus subtraction and
 division. `fe2o3-copy` covers leaf-only stores.
 `fe2o3-add-inplace` covers read-before-write through `DisjointSlice::get_mut`.
+`fe2o3-fill` covers literal-root stores with no input loads.
 `fe2o3-vecadd-f64` covers double-precision elementwise lowering.
 `cargo-fe2o3 run -p fe2o3-pipeline` emits and launches two kernels from one Rust
 crate.
@@ -90,6 +91,7 @@ Smoke-test the current backend entry point:
 cargo run -p cargo-fe2o3 -- build -p fe2o3-vecadd
 cargo run -p cargo-fe2o3 -- build -p fe2o3-add-inplace
 cargo run -p cargo-fe2o3 -- build -p fe2o3-copy
+cargo run -p cargo-fe2o3 -- build -p fe2o3-fill
 cargo run -p cargo-fe2o3 -- build -p fe2o3-scale
 cargo run -p cargo-fe2o3 -- build -p fe2o3-saxpy
 cargo run -p cargo-fe2o3 -- build -p fe2o3-axpy-inplace
@@ -105,6 +107,7 @@ On a machine with a working AMD GPU and ROCm driver stack:
 cargo run -p cargo-fe2o3 -- run -p fe2o3-vecadd
 cargo run -p cargo-fe2o3 -- run -p fe2o3-add-inplace
 cargo run -p cargo-fe2o3 -- run -p fe2o3-copy
+cargo run -p cargo-fe2o3 -- run -p fe2o3-fill
 cargo run -p cargo-fe2o3 -- run -p fe2o3-scale
 cargo run -p cargo-fe2o3 -- run -p fe2o3-saxpy
 cargo run -p cargo-fe2o3 -- run -p fe2o3-axpy-inplace
