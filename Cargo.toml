@@ -11,6 +11,7 @@ members = [
     "crates/rustc-codegen-fe2o3",
     "examples/axpy_inplace",
     "examples/negate",
+    "examples/normalize",
     "examples/pipeline",
     "examples/saxpy",
     "examples/scale",

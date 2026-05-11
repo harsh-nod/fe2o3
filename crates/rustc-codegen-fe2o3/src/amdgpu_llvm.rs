@@ -1,8 +1,8 @@
 use crate::collector::{CollectedFunction, CollectionResult};
 use crate::{AmdGpuTarget, HsacoError, compile_llvm_ir_to_hsaco};
 use rustc_middle::mir::{
-    BinOp, Body, Local, Operand, Place, ProjectionElem, Rvalue, StatementKind, TerminatorKind,
-    UnOp, VarDebugInfoContents,
+    BinOp, Body, ConstOperand, Local, Operand, Place, ProjectionElem, Rvalue, StatementKind,
+    TerminatorKind, UnOp, VarDebugInfoContents,
 };
 use rustc_middle::ty::{EarlyBinder, FloatTy, Mutability, Ty, TyCtxt, TyKind, TypingEnv};
 use std::collections::{HashMap, HashSet};
@@ -158,7 +158,13 @@ enum ElementwiseUnaryOp {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ExprRef {
     Value(ValueSource),
+    Literal(FloatLiteral),
     Node(usize),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct FloatLiteral {
+    bits: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -279,6 +285,7 @@ impl ElementwiseExpr {
                     sources.push(source);
                 }
             }
+            ExprRef::Literal(_) => {}
             ExprRef::Node(index) => match &self.nodes[index] {
                 ExprNode::Binary { lhs, rhs, .. } => {
                     self.collect_sources(*lhs, sources);
@@ -542,7 +549,7 @@ fn analyze_elementwise_shape<'tcx>(
                     {
                         Some(ExprRef::Value(ValueSource::SliceElement(arg_index)))
                     } else {
-                        operand_expr(operand, &local_exprs, &arg_locals)
+                        operand_expr(tcx, operand, &local_exprs, &arg_locals)
                     };
 
                     let Some(expr) = expr else {
@@ -562,8 +569,8 @@ fn analyze_elementwise_shape<'tcx>(
                     let Some(op) = ElementwiseBinaryOp::from_mir(*op) else {
                         continue;
                     };
-                    let lhs = operand_expr(&operands.0, &local_exprs, &arg_locals);
-                    let rhs = operand_expr(&operands.1, &local_exprs, &arg_locals);
+                    let lhs = operand_expr(tcx, &operands.0, &local_exprs, &arg_locals);
+                    let rhs = operand_expr(tcx, &operands.1, &local_exprs, &arg_locals);
 
                     if let (Some(lhs), Some(rhs)) = (lhs, rhs) {
                         let expr = ExprRef::Node(expr_nodes.len());
@@ -583,7 +590,8 @@ fn analyze_elementwise_shape<'tcx>(
                     let Some(op) = ElementwiseUnaryOp::from_mir(*op) else {
                         continue;
                     };
-                    let Some(operand) = operand_expr(operand, &local_exprs, &arg_locals) else {
+                    let Some(operand) = operand_expr(tcx, operand, &local_exprs, &arg_locals)
+                    else {
                         continue;
                     };
 
@@ -615,7 +623,7 @@ fn analyze_elementwise_shape<'tcx>(
     };
 
     if expr.nodes.is_empty() {
-        return Err("elementwise lowering requires at least one binary operation".to_string());
+        return Err("elementwise lowering requires at least one expression operation".to_string());
     }
     Ok(ElementwiseShape { expr, output_arg })
 }
@@ -664,15 +672,32 @@ fn store_output_arg(
     indexed_arg_place(*place, arg_locals, index_value_locals)
 }
 
-fn operand_expr(
-    operand: &Operand<'_>,
+fn operand_expr<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    operand: &Operand<'tcx>,
     local_exprs: &HashMap<Local, ExprRef>,
     arg_locals: &[Local],
 ) -> Option<ExprRef> {
+    if let Operand::Constant(constant) = operand {
+        return constant_f32(tcx, constant).map(ExprRef::Literal);
+    }
+
     let local = operand_local(operand)?;
     local_exprs.get(&local).copied().or_else(|| {
         local_arg_index(local, arg_locals).map(|arg| ExprRef::Value(ValueSource::Arg(arg)))
     })
+}
+
+fn constant_f32<'tcx>(tcx: TyCtxt<'tcx>, constant: &ConstOperand<'tcx>) -> Option<FloatLiteral> {
+    if !matches!(constant.const_.ty().kind(), TyKind::Float(FloatTy::F32)) {
+        return None;
+    }
+
+    let bits = constant
+        .const_
+        .try_eval_scalar_int(tcx, TypingEnv::fully_monomorphized())?
+        .to_u32();
+    Some(FloatLiteral { bits })
 }
 
 fn is_deref_store(place: &Place<'_>) -> bool {
@@ -899,7 +924,16 @@ fn emit_expr_ops(expr: &ElementwiseExpr, abi: &KernelAbi, llvm_type: &str) -> St
 fn expr_ref_value(expr: ExprRef, abi: &KernelAbi) -> String {
     match expr {
         ExprRef::Value(source) => source_value_expr(source, abi),
+        ExprRef::Literal(literal) => literal.llvm_value(),
         ExprRef::Node(index) => format!("%expr{index}"),
+    }
+}
+
+impl FloatLiteral {
+    fn llvm_value(self) -> String {
+        let value = f32::from_bits(self.bits);
+        let double_bits = f64::from(value).to_bits();
+        format!("0x{double_bits:016X}")
     }
 }
 

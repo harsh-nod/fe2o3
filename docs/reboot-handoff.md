@@ -21,9 +21,9 @@ This file captures the fe2o3 state around bringing up the AMD GPU driver stack.
   `target/fe2o3/*.hsaco`.
 - Generated HSACO metadata is validated with `llvm-readobj --notes` when that
   ROCm tool is available.
-- The `vecadd`, `scale`, `saxpy`, `axpy-inplace`, `negate`, and `pipeline`
-  examples load HSACO from `FE2O3_HSACO_DIR`, which `cargo-fe2o3` sets to
-  `target/fe2o3`.
+- The `vecadd`, `scale`, `saxpy`, `axpy-inplace`, `negate`, `normalize`, and
+  `pipeline` examples load HSACO from `FE2O3_HSACO_DIR`, which `cargo-fe2o3`
+  sets to `target/fe2o3`.
 
 ## Verified Before Reboot
 
@@ -119,6 +119,12 @@ PATH=/home/nod/github/TheRock/.venv-rocm-latest/bin:$PATH \
   ROCM_PATH=$ROCM_ROOT \
   HIP_PATH=$ROCM_ROOT \
   LD_LIBRARY_PATH=$ROCM_ROOT/lib:${LD_LIBRARY_PATH:-} \
+  cargo run -p cargo-fe2o3 -- run -p fe2o3-normalize
+
+PATH=/home/nod/github/TheRock/.venv-rocm-latest/bin:$PATH \
+  ROCM_PATH=$ROCM_ROOT \
+  HIP_PATH=$ROCM_ROOT \
+  LD_LIBRARY_PATH=$ROCM_ROOT/lib:${LD_LIBRARY_PATH:-} \
   cargo run -p cargo-fe2o3 -- run -p fe2o3-pipeline
 ```
 
@@ -130,6 +136,7 @@ scale passed for 1024 elements
 saxpy passed for 1024 elements
 axpy_inplace passed for 1024 elements
 negate passed for 1024 elements
+normalize passed for 1024 elements
 pipeline passed for 1024 elements
 ```
 
@@ -157,6 +164,7 @@ env -u FE2O3_TARGET cargo run -p cargo-fe2o3 -- build -p fe2o3-scale
 env -u FE2O3_TARGET cargo run -p cargo-fe2o3 -- build -p fe2o3-saxpy
 env -u FE2O3_TARGET cargo run -p cargo-fe2o3 -- build -p fe2o3-axpy-inplace
 env -u FE2O3_TARGET cargo run -p cargo-fe2o3 -- build -p fe2o3-negate
+env -u FE2O3_TARGET cargo run -p cargo-fe2o3 -- build -p fe2o3-normalize
 env -u FE2O3_TARGET cargo run -p cargo-fe2o3 -- build -p fe2o3-pipeline
 /opt/rocm/lib/llvm/bin/llvm-readobj --notes target/fe2o3/vecadd.hsaco
 ```
@@ -169,6 +177,7 @@ cargo run -p cargo-fe2o3 -- run -p fe2o3-scale
 cargo run -p cargo-fe2o3 -- run -p fe2o3-saxpy
 cargo run -p cargo-fe2o3 -- run -p fe2o3-axpy-inplace
 cargo run -p cargo-fe2o3 -- run -p fe2o3-negate
+cargo run -p cargo-fe2o3 -- run -p fe2o3-normalize
 cargo run -p cargo-fe2o3 -- run -p fe2o3-pipeline
 ```
 
@@ -180,6 +189,7 @@ scale passed for 1024 elements
 saxpy passed for 1024 elements
 axpy_inplace passed for 1024 elements
 negate passed for 1024 elements
+normalize passed for 1024 elements
 pipeline passed for 1024 elements
 ```
 
