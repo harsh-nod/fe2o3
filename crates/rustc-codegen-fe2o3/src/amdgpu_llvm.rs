@@ -493,9 +493,6 @@ fn analyze_elementwise_shape<'tcx>(
     if index_value_locals.is_empty() {
         return Err("missing `ThreadIndex::get` calls for slice indexing".to_string());
     }
-    let output_arg = output_arg
-        .ok_or_else(|| "missing `DisjointSlice::get_mut(thread_index)` output path".to_string())?;
-
     let mut local_exprs = HashMap::new();
     let mut expr_nodes = Vec::new();
     let mut elementwise_store = None;
@@ -524,7 +521,10 @@ fn analyze_elementwise_shape<'tcx>(
 
                     if place.projection.is_empty() {
                         local_exprs.insert(place.local, expr);
-                    } else if is_deref_store(place) {
+                    } else if let Some(arg_index) =
+                        store_output_arg(place, output_arg, &arg_locals, &index_value_locals)
+                    {
+                        output_arg = Some(arg_index);
                         elementwise_store = Some(expr);
                     }
                 }
@@ -541,7 +541,10 @@ fn analyze_elementwise_shape<'tcx>(
 
                         if place.projection.is_empty() {
                             local_exprs.insert(place.local, expr);
-                        } else if is_deref_store(place) {
+                        } else if let Some(arg_index) =
+                            store_output_arg(place, output_arg, &arg_locals, &index_value_locals)
+                        {
+                            output_arg = Some(arg_index);
                             elementwise_store = Some(expr);
                         }
                     }
@@ -553,6 +556,9 @@ fn analyze_elementwise_shape<'tcx>(
 
     let root = elementwise_store
         .ok_or_else(|| "missing `output[idx] = <elementwise expression>` store".to_string())?;
+    let output_arg = output_arg.ok_or_else(|| {
+        "missing mutable slice or `DisjointSlice::get_mut` output path".to_string()
+    })?;
     let expr = ElementwiseExpr {
         nodes: expr_nodes,
         root,
@@ -561,14 +567,6 @@ fn analyze_elementwise_shape<'tcx>(
     if expr.nodes.is_empty() {
         return Err("elementwise lowering requires at least one binary operation".to_string());
     }
-    if expr
-        .sources()
-        .iter()
-        .any(|source| source.arg_index() == output_arg)
-    {
-        return Err("elementwise output aliases an input argument in MIR".to_string());
-    }
-
     Ok(ElementwiseShape { expr, output_arg })
 }
 
@@ -603,6 +601,19 @@ fn indexed_arg_place(
     local_arg_index(place.local, arg_locals)
 }
 
+fn store_output_arg(
+    place: &Place<'_>,
+    disjoint_output_arg: Option<usize>,
+    arg_locals: &[Local],
+    index_value_locals: &HashSet<Local>,
+) -> Option<usize> {
+    if is_deref_store(place) {
+        return disjoint_output_arg;
+    }
+
+    indexed_arg_place(*place, arg_locals, index_value_locals)
+}
+
 fn operand_expr(
     operand: &Operand<'_>,
     local_exprs: &HashMap<Local, ExprRef>,
@@ -632,10 +643,11 @@ fn emit_elementwise_kernel(abi: &KernelAbi, shape: &ElementwiseShape) -> Result<
     let element = c.element();
     let llvm_type = element.llvm_type();
     let align = element.llvm_align();
-    let slice_sources = slice_sources(shape);
+    let read_slice_sources = read_slice_sources(shape);
+    let slice_sources = bounds_slice_sources(shape);
     let check_lines = emit_bounds_checks(abi, &slice_sources);
     let inbounds = emit_inbounds_reduce(&slice_sources, abi);
-    let load_lines = emit_loads(abi, &slice_sources, llvm_type, align);
+    let load_lines = emit_loads(abi, &read_slice_sources, llvm_type, align);
     let compute_lines = emit_expr_ops(&shape.expr, abi, llvm_type);
     let result_value = expr_ref_value(shape.expr.root, abi);
 
@@ -662,8 +674,8 @@ entry:
 
 body:
 {load_lines}{compute_lines}
-  %{c_base}_elem_ptr = getelementptr inbounds {llvm_type}, ptr addrspace(1) %{c_base}_ptr, i64 %idx
-  store {llvm_type} {result_value}, ptr addrspace(1) %{c_base}_elem_ptr, align {align}
+  %{c_base}_out_ptr = getelementptr inbounds {llvm_type}, ptr addrspace(1) %{c_base}_ptr, i64 %idx
+  store {llvm_type} {result_value}, ptr addrspace(1) %{c_base}_out_ptr, align {align}
   br label %exit
 
 exit:
@@ -719,10 +731,16 @@ fn validate_elementwise_abi(abi: &KernelAbi, shape: &ElementwiseShape) -> Result
                     "direct elementwise operands must be scalar f32 arguments",
                 ));
             }
-            ValueSource::SliceElement(_) if !arg.is_slice() || arg.is_mutable() => {
+            ValueSource::SliceElement(_) if !arg.is_slice() => {
                 return Err(unsupported_kernel(
                     &abi.name,
-                    "indexed elementwise operands must be read-only f32 slices",
+                    "indexed elementwise operands must be f32 slices",
+                ));
+            }
+            ValueSource::SliceElement(index) if arg.is_mutable() && index != shape.output_arg => {
+                return Err(unsupported_kernel(
+                    &abi.name,
+                    "mutable indexed elementwise operands must be the output slice",
                 ));
             }
             _ => {}
@@ -739,7 +757,7 @@ fn validate_elementwise_abi(abi: &KernelAbi, shape: &ElementwiseShape) -> Result
     Ok(())
 }
 
-fn slice_sources(shape: &ElementwiseShape) -> Vec<usize> {
+fn read_slice_sources(shape: &ElementwiseShape) -> Vec<usize> {
     let mut sources = Vec::new();
     for source in shape.expr.sources() {
         if let ValueSource::SliceElement(index) = source
@@ -748,6 +766,11 @@ fn slice_sources(shape: &ElementwiseShape) -> Vec<usize> {
             sources.push(index);
         }
     }
+    sources
+}
+
+fn bounds_slice_sources(shape: &ElementwiseShape) -> Vec<usize> {
+    let mut sources = read_slice_sources(shape);
     if !sources.contains(&shape.output_arg) {
         sources.push(shape.output_arg);
     }
@@ -794,7 +817,6 @@ fn emit_inbounds_reduce(slice_sources: &[usize], abi: &KernelAbi) -> String {
 fn emit_loads(abi: &KernelAbi, slice_sources: &[usize], llvm_type: &str, align: usize) -> String {
     slice_sources
         .iter()
-        .filter(|index| !abi.args[**index].is_mutable())
         .map(|index| {
             let base = abi.args[*index].llvm_base();
             format!(

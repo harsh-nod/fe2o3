@@ -41,16 +41,18 @@ The backend also has the first AMDGPU artifact path: for the current `f32`
 elementwise kernel shapes it validates the Rust kernel ABI from monomorphized
 MIR argument locals, recognizes a small expression tree, emits a minimal AMDGPU
 LLVM IR kernel, and compiles it through ROCm clang plus `ld.lld` into
-`target/fe2o3/*.hsaco`. Supported expression leaves are read-only slice elements
-and plain `f32` scalar arguments; the output is a mutable `DisjointSlice<f32>`.
-General MIR/Pliron lowering is still the next compiler milestone.
+`target/fe2o3/*.hsaco`. Supported expression leaves are read-only slice
+elements, plain `f32` scalar arguments, and the mutable output slice when doing
+an in-place update. Outputs can be `DisjointSlice<f32>` or indexed
+`&mut [f32]`. General MIR/Pliron lowering is still the next compiler milestone.
 
 On a `gfx1201` AMD Radeon AI PRO R9700 with TheRock ROCm
 `7.13.0a20260509`, `cargo-fe2o3 run -p fe2o3-vecadd`,
 `cargo-fe2o3 run -p fe2o3-scale`, `cargo-fe2o3 run -p fe2o3-saxpy`, and
-`cargo-fe2o3 run -p fe2o3-pipeline` generate HSACO artifacts, load them through
-HIP, launch the kernels, and validate the results. The pipeline example emits
-and launches two kernels from one Rust crate.
+`cargo-fe2o3 run -p fe2o3-axpy-inplace` generate HSACO artifacts, load them
+through HIP, launch the kernels, and validate the results.
+`cargo-fe2o3 run -p fe2o3-pipeline` emits and launches two kernels from one Rust
+crate.
 
 See [docs/implementation-plan.md](docs/implementation-plan.md) for the full
 compiler/runtime plan.
@@ -80,6 +82,7 @@ Smoke-test the current backend entry point:
 cargo run -p cargo-fe2o3 -- build -p fe2o3-vecadd
 cargo run -p cargo-fe2o3 -- build -p fe2o3-scale
 cargo run -p cargo-fe2o3 -- build -p fe2o3-saxpy
+cargo run -p cargo-fe2o3 -- build -p fe2o3-axpy-inplace
 cargo run -p cargo-fe2o3 -- build -p fe2o3-pipeline
 ```
 
@@ -89,5 +92,6 @@ On a machine with a working AMD GPU and ROCm driver stack:
 cargo run -p cargo-fe2o3 -- run -p fe2o3-vecadd
 cargo run -p cargo-fe2o3 -- run -p fe2o3-scale
 cargo run -p cargo-fe2o3 -- run -p fe2o3-saxpy
+cargo run -p cargo-fe2o3 -- run -p fe2o3-axpy-inplace
 cargo run -p cargo-fe2o3 -- run -p fe2o3-pipeline
 ```
