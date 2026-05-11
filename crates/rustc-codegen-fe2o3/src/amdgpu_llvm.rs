@@ -2,7 +2,7 @@ use crate::collector::{CollectedFunction, CollectionResult};
 use crate::{AmdGpuTarget, HsacoError, compile_llvm_ir_to_hsaco};
 use rustc_middle::mir::{
     BinOp, Body, Local, Operand, Place, ProjectionElem, Rvalue, StatementKind, TerminatorKind,
-    VarDebugInfoContents,
+    UnOp, VarDebugInfoContents,
 };
 use rustc_middle::ty::{EarlyBinder, FloatTy, Mutability, Ty, TyCtxt, TyKind, TypingEnv};
 use std::collections::{HashMap, HashSet};
@@ -124,10 +124,16 @@ struct ElementwiseExpr {
 }
 
 #[derive(Clone, Debug)]
-struct ExprNode {
-    lhs: ExprRef,
-    rhs: ExprRef,
-    op: ElementwiseBinaryOp,
+enum ExprNode {
+    Binary {
+        lhs: ExprRef,
+        rhs: ExprRef,
+        op: ElementwiseBinaryOp,
+    },
+    Unary {
+        operand: ExprRef,
+        op: ElementwiseUnaryOp,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -142,6 +148,11 @@ enum ElementwiseBinaryOp {
     Sub,
     Mul,
     Div,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ElementwiseUnaryOp {
+    Neg,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -239,6 +250,21 @@ impl ElementwiseBinaryOp {
     }
 }
 
+impl ElementwiseUnaryOp {
+    fn from_mir(op: UnOp) -> Option<Self> {
+        match op {
+            UnOp::Neg => Some(Self::Neg),
+            _ => None,
+        }
+    }
+
+    fn llvm_opcode(self) -> &'static str {
+        match self {
+            Self::Neg => "fneg",
+        }
+    }
+}
+
 impl ElementwiseExpr {
     fn sources(&self) -> Vec<ValueSource> {
         let mut sources = Vec::new();
@@ -253,11 +279,15 @@ impl ElementwiseExpr {
                     sources.push(source);
                 }
             }
-            ExprRef::Node(index) => {
-                let node = &self.nodes[index];
-                self.collect_sources(node.lhs, sources);
-                self.collect_sources(node.rhs, sources);
-            }
+            ExprRef::Node(index) => match &self.nodes[index] {
+                ExprNode::Binary { lhs, rhs, .. } => {
+                    self.collect_sources(*lhs, sources);
+                    self.collect_sources(*rhs, sources);
+                }
+                ExprNode::Unary { operand, .. } => {
+                    self.collect_sources(*operand, sources);
+                }
+            },
         }
     }
 }
@@ -537,7 +567,7 @@ fn analyze_elementwise_shape<'tcx>(
 
                     if let (Some(lhs), Some(rhs)) = (lhs, rhs) {
                         let expr = ExprRef::Node(expr_nodes.len());
-                        expr_nodes.push(ExprNode { lhs, rhs, op });
+                        expr_nodes.push(ExprNode::Binary { lhs, rhs, op });
 
                         if place.projection.is_empty() {
                             local_exprs.insert(place.local, expr);
@@ -547,6 +577,26 @@ fn analyze_elementwise_shape<'tcx>(
                             output_arg = Some(arg_index);
                             elementwise_store = Some(expr);
                         }
+                    }
+                }
+                Rvalue::UnaryOp(op, operand) => {
+                    let Some(op) = ElementwiseUnaryOp::from_mir(*op) else {
+                        continue;
+                    };
+                    let Some(operand) = operand_expr(operand, &local_exprs, &arg_locals) else {
+                        continue;
+                    };
+
+                    let expr = ExprRef::Node(expr_nodes.len());
+                    expr_nodes.push(ExprNode::Unary { operand, op });
+
+                    if place.projection.is_empty() {
+                        local_exprs.insert(place.local, expr);
+                    } else if let Some(arg_index) =
+                        store_output_arg(place, output_arg, &arg_locals, &index_value_locals)
+                    {
+                        output_arg = Some(arg_index);
+                        elementwise_store = Some(expr);
                     }
                 }
                 _ => {}
@@ -674,8 +724,8 @@ entry:
 
 body:
 {load_lines}{compute_lines}
-  %{c_base}_out_ptr = getelementptr inbounds {llvm_type}, ptr addrspace(1) %{c_base}_ptr, i64 %idx
-  store {llvm_type} {result_value}, ptr addrspace(1) %{c_base}_out_ptr, align {align}
+  %{c_base}_store_ptr = getelementptr inbounds {llvm_type}, ptr addrspace(1) %{c_base}_ptr, i64 %idx
+  store {llvm_type} {result_value}, ptr addrspace(1) %{c_base}_store_ptr, align {align}
   br label %exit
 
 exit:
@@ -830,11 +880,18 @@ fn emit_expr_ops(expr: &ElementwiseExpr, abi: &KernelAbi, llvm_type: &str) -> St
     expr.nodes
         .iter()
         .enumerate()
-        .map(|(index, node)| {
-            let lhs = expr_ref_value(node.lhs, abi);
-            let rhs = expr_ref_value(node.rhs, abi);
-            let op = node.op.llvm_opcode();
-            format!("  %expr{index} = {op} {llvm_type} {lhs}, {rhs}\n")
+        .map(|(index, node)| match node {
+            ExprNode::Binary { lhs, rhs, op } => {
+                let lhs = expr_ref_value(*lhs, abi);
+                let rhs = expr_ref_value(*rhs, abi);
+                let op = op.llvm_opcode();
+                format!("  %expr{index} = {op} {llvm_type} {lhs}, {rhs}\n")
+            }
+            ExprNode::Unary { operand, op } => {
+                let operand = expr_ref_value(*operand, abi);
+                let op = op.llvm_opcode();
+                format!("  %expr{index} = {op} {llvm_type} {operand}\n")
+            }
         })
         .collect::<String>()
 }

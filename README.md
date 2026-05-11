@@ -44,13 +44,15 @@ LLVM IR kernel, and compiles it through ROCm clang plus `ld.lld` into
 `target/fe2o3/*.hsaco`. Supported expression leaves are read-only slice
 elements, plain `f32` scalar arguments, and the mutable output slice when doing
 an in-place update. Outputs can be `DisjointSlice<f32>` or indexed
-`&mut [f32]`. General MIR/Pliron lowering is still the next compiler milestone.
+`&mut [f32]`; expression nodes include `+`, `-`, `*`, `/`, and unary negation.
+General MIR/Pliron lowering is still the next compiler milestone.
 
 On a `gfx1201` AMD Radeon AI PRO R9700 with TheRock ROCm
 `7.13.0a20260509`, `cargo-fe2o3 run -p fe2o3-vecadd`,
 `cargo-fe2o3 run -p fe2o3-scale`, `cargo-fe2o3 run -p fe2o3-saxpy`, and
 `cargo-fe2o3 run -p fe2o3-axpy-inplace` generate HSACO artifacts, load them
-through HIP, launch the kernels, and validate the results.
+through HIP, launch the kernels, and validate the results. `fe2o3-negate` covers
+unary negation.
 `cargo-fe2o3 run -p fe2o3-pipeline` emits and launches two kernels from one Rust
 crate.
 
@@ -83,6 +85,7 @@ cargo run -p cargo-fe2o3 -- build -p fe2o3-vecadd
 cargo run -p cargo-fe2o3 -- build -p fe2o3-scale
 cargo run -p cargo-fe2o3 -- build -p fe2o3-saxpy
 cargo run -p cargo-fe2o3 -- build -p fe2o3-axpy-inplace
+cargo run -p cargo-fe2o3 -- build -p fe2o3-negate
 cargo run -p cargo-fe2o3 -- build -p fe2o3-pipeline
 ```
 
@@ -93,5 +96,6 @@ cargo run -p cargo-fe2o3 -- run -p fe2o3-vecadd
 cargo run -p cargo-fe2o3 -- run -p fe2o3-scale
 cargo run -p cargo-fe2o3 -- run -p fe2o3-saxpy
 cargo run -p cargo-fe2o3 -- run -p fe2o3-axpy-inplace
+cargo run -p cargo-fe2o3 -- run -p fe2o3-negate
 cargo run -p cargo-fe2o3 -- run -p fe2o3-pipeline
 ```
