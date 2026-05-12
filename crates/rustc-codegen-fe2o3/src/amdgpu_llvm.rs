@@ -1479,3 +1479,64 @@ fn unsupported_kernel(kernel: &str, reason: impl Into<String>) -> EmitError {
         reason: reason.into(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_abi() -> KernelAbi {
+        KernelAbi {
+            name: "test_kernel".to_string(),
+            args: vec![
+                KernelArg {
+                    name: "x".to_string(),
+                    kind: KernelArgKind::Slice {
+                        element: ScalarType::F32,
+                        mutable: false,
+                    },
+                },
+                KernelArg {
+                    name: "out".to_string(),
+                    kind: KernelArgKind::Slice {
+                        element: ScalarType::F32,
+                        mutable: true,
+                    },
+                },
+            ],
+        }
+    }
+
+    fn test_shape(output_index: IndexExpr) -> ElementwiseShape {
+        ElementwiseShape {
+            expr: ElementwiseExpr {
+                nodes: Vec::new(),
+                root: ExprRef::Value(ValueSource::SliceElement(SliceElementSource {
+                    arg_index: 0,
+                    index: IndexExpr::Thread,
+                })),
+            },
+            output_arg: 1,
+            output_index,
+        }
+    }
+
+    #[test]
+    fn emits_derived_output_index_store() {
+        let llvm = emit_elementwise_kernel(&test_abi(), &test_shape(IndexExpr::Offset(1))).unwrap();
+
+        assert!(llvm.contains("  %idx_p1 = add i64 %idx, 1\n"));
+        assert!(llvm.contains("  %in_out_p1 = icmp ult i64 %idx_p1, %out_len\n"));
+        assert!(llvm.contains(
+            "  %out_store_ptr = getelementptr inbounds float, ptr addrspace(1) %out_ptr, i64 %idx_p1\n"
+        ));
+    }
+
+    #[test]
+    fn rejects_non_unique_output_index() {
+        let error =
+            validate_elementwise_abi(&test_abi(), &test_shape(IndexExpr::Stride(0))).unwrap_err();
+
+        assert!(matches!(error, EmitError::UnsupportedKernel { .. }));
+        assert!(error.to_string().contains("unique per thread"));
+    }
+}

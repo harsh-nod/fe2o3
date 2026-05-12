@@ -380,8 +380,8 @@ reported by ROCm, for example `gfx1201`, `gfx90a`, or `gfx942`.
 
 Short-term backend surface step:
 
-1. Add explicit negative tests for non-unique mutable output mappings such as
-   zero-stride output indexes.
+1. Add source-level coverage for derived output indexes that read the previous
+   output value before writing it.
 
 Then replace the temporary elementwise MIR recognizer/emitter with real
 lowering:
