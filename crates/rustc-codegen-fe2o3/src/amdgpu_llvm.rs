@@ -857,6 +857,31 @@ impl IndexExpr {
         }
     }
 
+    fn add_index(self, rhs: Self) -> Option<Self> {
+        let (lhs_stride, lhs_offset) = self.linear();
+        let (rhs_stride, rhs_offset) = rhs.linear();
+        let stride = lhs_stride.checked_add(rhs_stride)?;
+        let offset = lhs_offset.checked_add(rhs_offset)?;
+        Self::strided_offset(stride, offset)
+    }
+
+    fn sub_index(self, rhs: Self) -> Option<Self> {
+        let (lhs_stride, lhs_offset) = self.linear();
+        let (rhs_stride, rhs_offset) = rhs.linear();
+        let stride = lhs_stride.checked_sub(rhs_stride)?;
+        let offset = lhs_offset.checked_sub(rhs_offset)?;
+        Self::strided_offset(stride, offset)
+    }
+
+    fn linear(self) -> (i64, i64) {
+        match self {
+            Self::Thread => (1, 0),
+            Self::Offset(offset) => (1, offset),
+            Self::Stride(stride) => (stride, 0),
+            Self::StrideOffset { stride, offset } => (stride, offset),
+        }
+    }
+
     fn offset(self, offset: i64) -> Option<Self> {
         if offset == 0 {
             return Some(self);
@@ -995,11 +1020,13 @@ fn index_binary_op<'tcx>(
 
     match op {
         BinOp::Add | BinOp::AddWithOverflow => match (lhs_index, rhs_index, lhs_const, rhs_const) {
+            (Some(lhs), Some(rhs), _, _) => lhs.add_index(rhs),
             (Some(index), None, _, Some(offset)) => index.offset(offset),
             (None, Some(index), Some(offset), _) => index.offset(offset),
             _ => None,
         },
         BinOp::Sub | BinOp::SubWithOverflow => match (lhs_index, rhs_index, rhs_const) {
+            (Some(lhs), Some(rhs), _) => lhs.sub_index(rhs),
             (Some(index), None, Some(offset)) => index.offset(offset.checked_neg()?),
             _ => None,
         },
@@ -1538,5 +1565,27 @@ mod tests {
 
         assert!(matches!(error, EmitError::UnsupportedKernel { .. }));
         assert!(error.to_string().contains("unique per thread"));
+    }
+
+    #[test]
+    fn combines_non_constant_index_operands() {
+        assert_eq!(
+            IndexExpr::Thread.add_index(IndexExpr::Thread),
+            Some(IndexExpr::Stride(2))
+        );
+        assert_eq!(
+            IndexExpr::Offset(1).add_index(IndexExpr::Thread),
+            Some(IndexExpr::StrideOffset {
+                stride: 2,
+                offset: 1,
+            })
+        );
+        assert_eq!(
+            IndexExpr::Offset(1).sub_index(IndexExpr::Thread),
+            Some(IndexExpr::StrideOffset {
+                stride: 0,
+                offset: 1,
+            })
+        );
     }
 }
