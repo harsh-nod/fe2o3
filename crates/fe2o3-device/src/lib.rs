@@ -27,10 +27,13 @@ impl<T> DisjointSlice<T> {
     }
 
     pub fn get_mut(&mut self, index: ThreadIndex) -> Option<&mut T> {
-        let raw = index.get();
-        if raw >= self.len {
+        self.get_mut_at(index.get())
+    }
+
+    pub fn get_mut_at(&mut self, index: usize) -> Option<&mut T> {
+        if index >= self.len {
             return None;
         }
-        Some(unsafe { &mut *self.ptr.add(raw) })
+        Some(unsafe { &mut *self.ptr.add(index) })
     }
 }

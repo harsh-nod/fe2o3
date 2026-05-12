@@ -47,7 +47,8 @@ slice when doing an in-place update. The same shape is supported for `f64`.
 Outputs can be `DisjointSlice<T>` or indexed `&mut [T]`; expression nodes
 include `+`, `-`, `*`, `/`, and unary negation. Leaf-only copies such as
 `out[i] = x[i]` and literal-root fills are also supported.
-`DisjointSlice::get_mut` outputs can read the current element before writing it.
+`DisjointSlice::get_mut` outputs can read the current element before writing it,
+and `DisjointSlice::get_mut_at` supports raw `usize` output indexes.
 `ThreadIndex::offset` supports simple constant-offset slice reads such as
 `x[idx.offset(1)]`; `ThreadIndex::offset_signed` supports signed constant
 offsets such as `x[idx.offset_signed(-1)]`.
@@ -67,6 +68,8 @@ unary negation. `fe2o3-normalize` covers literal constants plus subtraction and
 division. `fe2o3-copy` covers leaf-only stores.
 `fe2o3-downsample` covers constant-stride input loads.
 `fe2o3-gather-odd` covers stride-plus-offset input loads.
+`fe2o3-raw-disjoint-shift` covers raw `usize` arithmetic for a
+`DisjointSlice<f32>` output store.
 `fe2o3-raw-gather` covers raw affine `usize` index arithmetic.
 `fe2o3-raw-neighbors` covers raw `usize` add/sub neighbor reads.
 `fe2o3-raw-output-shift` covers raw `usize` arithmetic for an indexed
@@ -115,6 +118,7 @@ cargo run -p cargo-fe2o3 -- build -p fe2o3-scale
 cargo run -p cargo-fe2o3 -- build -p fe2o3-shift
 cargo run -p cargo-fe2o3 -- build -p fe2o3-previous
 cargo run -p cargo-fe2o3 -- build -p fe2o3-stencil
+cargo run -p cargo-fe2o3 -- build -p fe2o3-raw-disjoint-shift
 cargo run -p cargo-fe2o3 -- build -p fe2o3-raw-gather
 cargo run -p cargo-fe2o3 -- build -p fe2o3-raw-neighbors
 cargo run -p cargo-fe2o3 -- build -p fe2o3-raw-output-shift
@@ -146,6 +150,7 @@ cargo run -p cargo-fe2o3 -- run -p fe2o3-scale
 cargo run -p cargo-fe2o3 -- run -p fe2o3-shift
 cargo run -p cargo-fe2o3 -- run -p fe2o3-previous
 cargo run -p cargo-fe2o3 -- run -p fe2o3-stencil
+cargo run -p cargo-fe2o3 -- run -p fe2o3-raw-disjoint-shift
 cargo run -p cargo-fe2o3 -- run -p fe2o3-raw-gather
 cargo run -p cargo-fe2o3 -- run -p fe2o3-raw-neighbors
 cargo run -p cargo-fe2o3 -- run -p fe2o3-raw-output-shift

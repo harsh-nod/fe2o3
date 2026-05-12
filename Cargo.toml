@@ -19,6 +19,7 @@ members = [
     "examples/normalize",
     "examples/pipeline",
     "examples/previous",
+    "examples/raw_disjoint_shift",
     "examples/raw_gather",
     "examples/raw_neighbors",
     "examples/raw_output_shift",

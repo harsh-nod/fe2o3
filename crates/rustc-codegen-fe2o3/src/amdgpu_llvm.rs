@@ -526,7 +526,7 @@ fn analyze_elementwise_shape<'tcx>(
     let mut thread_index_local = None;
     let mut index_expr_locals = HashMap::new();
     let mut overflow_index_expr_locals = HashMap::new();
-    let mut output_arg = None;
+    let mut disjoint_output_source = None;
 
     for block in mir.basic_blocks.iter() {
         let Some(terminator) = &block.terminator else {
@@ -651,18 +651,6 @@ fn analyze_elementwise_shape<'tcx>(
             }
             continue;
         }
-
-        if path.ends_with("::get_mut") && path.contains("DisjointSlice") {
-            if args
-                .get(1)
-                .and_then(|arg| operand_local(&arg.node))
-                .is_some_and(|local| Some(local) == thread_index_local)
-                && let Some(receiver_local) = args.first().and_then(|arg| operand_local(&arg.node))
-                && let Some(arg_index) = borrowed_args.get(&receiver_local).copied()
-            {
-                output_arg = Some(arg_index);
-            }
-        }
     }
 
     thread_index_local.ok_or_else(|| "missing `thread::index_1d` call".to_string())?;
@@ -672,6 +660,47 @@ fn analyze_elementwise_shape<'tcx>(
         &mut index_expr_locals,
         &mut overflow_index_expr_locals,
     );
+
+    for block in mir.basic_blocks.iter() {
+        let Some(terminator) = &block.terminator else {
+            continue;
+        };
+        let TerminatorKind::Call { func, args, .. } = &terminator.kind else {
+            continue;
+        };
+        let Some((def_id, _)) = func.const_fn_def() else {
+            continue;
+        };
+        let path = tcx.def_path_str(def_id);
+        if !path.contains("DisjointSlice") {
+            continue;
+        }
+        let Some(receiver_local) = args.first().and_then(|arg| operand_local(&arg.node)) else {
+            continue;
+        };
+        let Some(arg_index) = borrowed_args.get(&receiver_local).copied() else {
+            continue;
+        };
+
+        if path.ends_with("::get_mut") {
+            if args
+                .get(1)
+                .and_then(|arg| operand_local(&arg.node))
+                .is_some_and(|local| Some(local) == thread_index_local)
+            {
+                disjoint_output_source = Some(SliceElementSource {
+                    arg_index,
+                    index: IndexExpr::Thread,
+                });
+            }
+        } else if path.ends_with("::get_mut_at")
+            && let Some(index) = args.get(1).and_then(|arg| {
+                operand_index_expr(&arg.node, &index_expr_locals, &overflow_index_expr_locals)
+            })
+        {
+            disjoint_output_source = Some(SliceElementSource { arg_index, index });
+        }
+    }
 
     let mut local_exprs = HashMap::new();
     let mut expr_nodes = Vec::new();
@@ -693,12 +722,12 @@ fn analyze_elementwise_shape<'tcx>(
                         Some(ExprRef::Value(ValueSource::SliceElement(source)))
                     } else if let Some(source_place) = operand.place()
                         && is_deref_place(&source_place)
-                        && let Some(arg_index) = output_arg
+                        && let Some(output_source) = disjoint_output_source
                     {
                         Some(ExprRef::Value(ValueSource::SliceElement(
                             SliceElementSource {
-                                arg_index,
-                                index: IndexExpr::Thread,
+                                arg_index: output_source.arg_index,
+                                index: output_source.index,
                             },
                         )))
                     } else {
@@ -711,10 +740,13 @@ fn analyze_elementwise_shape<'tcx>(
 
                     if place.projection.is_empty() {
                         local_exprs.insert(place.local, expr);
-                    } else if let Some(output) =
-                        store_output_source(place, output_arg, &arg_locals, &index_expr_locals)
-                    {
-                        output_arg = Some(output.arg_index);
+                    } else if let Some(output) = store_output_source(
+                        place,
+                        disjoint_output_source,
+                        &arg_locals,
+                        &index_expr_locals,
+                    ) {
+                        disjoint_output_source = Some(output);
                         elementwise_store = Some((expr, output));
                     }
                 }
@@ -731,10 +763,13 @@ fn analyze_elementwise_shape<'tcx>(
 
                         if place.projection.is_empty() {
                             local_exprs.insert(place.local, expr);
-                        } else if let Some(output) =
-                            store_output_source(place, output_arg, &arg_locals, &index_expr_locals)
-                        {
-                            output_arg = Some(output.arg_index);
+                        } else if let Some(output) = store_output_source(
+                            place,
+                            disjoint_output_source,
+                            &arg_locals,
+                            &index_expr_locals,
+                        ) {
+                            disjoint_output_source = Some(output);
                             elementwise_store = Some((expr, output));
                         }
                     }
@@ -753,10 +788,13 @@ fn analyze_elementwise_shape<'tcx>(
 
                     if place.projection.is_empty() {
                         local_exprs.insert(place.local, expr);
-                    } else if let Some(output) =
-                        store_output_source(place, output_arg, &arg_locals, &index_expr_locals)
-                    {
-                        output_arg = Some(output.arg_index);
+                    } else if let Some(output) = store_output_source(
+                        place,
+                        disjoint_output_source,
+                        &arg_locals,
+                        &index_expr_locals,
+                    ) {
+                        disjoint_output_source = Some(output);
                         elementwise_store = Some((expr, output));
                     }
                 }
@@ -767,9 +805,7 @@ fn analyze_elementwise_shape<'tcx>(
 
     let (root, output) = elementwise_store
         .ok_or_else(|| "missing `output[idx] = <elementwise expression>` store".to_string())?;
-    let output_arg = output_arg.ok_or_else(|| {
-        "missing mutable slice or `DisjointSlice::get_mut` output path".to_string()
-    })?;
+    let output_arg = output.arg_index;
     let expr = ElementwiseExpr {
         nodes: expr_nodes,
         root,
@@ -1033,15 +1069,12 @@ fn indexed_arg_place(
 
 fn store_output_source(
     place: &Place<'_>,
-    disjoint_output_arg: Option<usize>,
+    disjoint_output_source: Option<SliceElementSource>,
     arg_locals: &[Local],
     index_expr_locals: &HashMap<Local, IndexExpr>,
 ) -> Option<SliceElementSource> {
     if is_deref_place(place) {
-        return disjoint_output_arg.map(|arg_index| SliceElementSource {
-            arg_index,
-            index: IndexExpr::Thread,
-        });
+        return disjoint_output_source;
     }
 
     indexed_arg_place(*place, arg_locals, index_expr_locals)

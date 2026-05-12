@@ -7,8 +7,8 @@ This file captures the fe2o3 state around bringing up the AMD GPU driver stack.
 - Local path: `/home/nod/github/fe2o3`
 - Branch: `main`
 - Remote: `https://github.com/powderluv/fe2o3.git`
-- Latest pushed commit before this raw-output update:
-  `bb40eca Add raw neighbor index example`
+- Latest pushed commit before this raw-DisjointSlice update:
+  `837cbbc Support raw output indexes`
 
 ## Implemented
 
@@ -32,16 +32,17 @@ This file captures the fe2o3 state around bringing up the AMD GPU driver stack.
   add, subtract, and multiply patterns, including debug MIR `*WithOverflow`
   tuple values.
 - The `vecadd`, `add-inplace`, `copy`, `downsample`, `fill`, `gather-odd`,
-  `scale`, `shift`, `previous`, `stencil`, `raw-gather`, `raw-neighbors`,
-  `raw-output-shift`, `saxpy`, `axpy-inplace`, `negate`, `normalize`,
-  `pipeline`, and `vecadd-f64` examples load HSACO from `FE2O3_HSACO_DIR`, which
-  `cargo-fe2o3` sets to
-  `target/fe2o3`.
+  `scale`, `shift`, `previous`, `stencil`, `raw-disjoint-shift`, `raw-gather`,
+  `raw-neighbors`, `raw-output-shift`, `saxpy`, `axpy-inplace`, `negate`,
+  `normalize`, `pipeline`, and `vecadd-f64` examples load HSACO from
+  `FE2O3_HSACO_DIR`, which `cargo-fe2o3` sets to `target/fe2o3`.
 - `downsample` verifies strided reads (`idx * 2`), `gather-odd` verifies affine
   reads (`idx * 2 + 1`), and `stencil` verifies multiple derived reads from the
   same input slice.
 - `raw-gather` verifies the same affine read using raw Rust `usize` arithmetic
   instead of the `ThreadIndex::stride_offset` helper.
+- `raw-disjoint-shift` verifies raw Rust `usize` arithmetic on a
+  `DisjointSlice<f32>` output store through `get_mut_at`.
 - `raw-neighbors` verifies raw Rust `usize` add/sub neighbor reads independent
   of the helper API.
 - `raw-output-shift` verifies raw Rust `usize` arithmetic on an indexed
@@ -191,6 +192,12 @@ PATH=/home/nod/github/TheRock/.venv-rocm-latest/bin:$PATH \
   ROCM_PATH=$ROCM_ROOT \
   HIP_PATH=$ROCM_ROOT \
   LD_LIBRARY_PATH=$ROCM_ROOT/lib:${LD_LIBRARY_PATH:-} \
+  cargo run -p cargo-fe2o3 -- run -p fe2o3-raw-disjoint-shift
+
+PATH=/home/nod/github/TheRock/.venv-rocm-latest/bin:$PATH \
+  ROCM_PATH=$ROCM_ROOT \
+  HIP_PATH=$ROCM_ROOT \
+  LD_LIBRARY_PATH=$ROCM_ROOT/lib:${LD_LIBRARY_PATH:-} \
   cargo run -p cargo-fe2o3 -- run -p fe2o3-raw-neighbors
 
 PATH=/home/nod/github/TheRock/.venv-rocm-latest/bin:$PATH \
@@ -249,6 +256,7 @@ scale passed for 1024 elements
 shift passed for 1024 elements
 previous passed for 1024 elements
 stencil passed for 1024 elements
+raw_disjoint_shift passed for 1024 elements
 raw_gather passed for 1024 elements
 raw_neighbors passed for 1024 elements
 raw_output_shift passed for 1024 elements
@@ -296,6 +304,7 @@ env -u FE2O3_TARGET cargo run -p cargo-fe2o3 -- build -p fe2o3-scale
 env -u FE2O3_TARGET cargo run -p cargo-fe2o3 -- build -p fe2o3-shift
 env -u FE2O3_TARGET cargo run -p cargo-fe2o3 -- build -p fe2o3-previous
 env -u FE2O3_TARGET cargo run -p cargo-fe2o3 -- build -p fe2o3-stencil
+env -u FE2O3_TARGET cargo run -p cargo-fe2o3 -- build -p fe2o3-raw-disjoint-shift
 env -u FE2O3_TARGET cargo run -p cargo-fe2o3 -- build -p fe2o3-raw-gather
 env -u FE2O3_TARGET cargo run -p cargo-fe2o3 -- build -p fe2o3-raw-neighbors
 env -u FE2O3_TARGET cargo run -p cargo-fe2o3 -- build -p fe2o3-raw-output-shift
@@ -327,6 +336,7 @@ cargo run -p cargo-fe2o3 -- run -p fe2o3-scale
 cargo run -p cargo-fe2o3 -- run -p fe2o3-shift
 cargo run -p cargo-fe2o3 -- run -p fe2o3-previous
 cargo run -p cargo-fe2o3 -- run -p fe2o3-stencil
+cargo run -p cargo-fe2o3 -- run -p fe2o3-raw-disjoint-shift
 cargo run -p cargo-fe2o3 -- run -p fe2o3-raw-gather
 cargo run -p cargo-fe2o3 -- run -p fe2o3-raw-neighbors
 cargo run -p cargo-fe2o3 -- run -p fe2o3-raw-output-shift
@@ -351,6 +361,7 @@ scale passed for 1024 elements
 shift passed for 1024 elements
 previous passed for 1024 elements
 stencil passed for 1024 elements
+raw_disjoint_shift passed for 1024 elements
 raw_gather passed for 1024 elements
 raw_neighbors passed for 1024 elements
 raw_output_shift passed for 1024 elements
@@ -369,8 +380,8 @@ reported by ROCm, for example `gfx1201`, `gfx90a`, or `gfx942`.
 
 Short-term backend surface step:
 
-1. Consider accepting raw arithmetic for `DisjointSlice::get_mut` output indexes
-   when the derived index is provably unique per thread.
+1. Add explicit negative tests for non-unique mutable output mappings such as
+   zero-stride output indexes.
 
 Then replace the temporary elementwise MIR recognizer/emitter with real
 lowering:
