@@ -1,0 +1,12 @@
+[package]
+name = "fe2o3-raw-disjoint-inplace-shift"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+fe2o3-core.workspace = true
+fe2o3-device.workspace = true
+fe2o3-host.workspace = true

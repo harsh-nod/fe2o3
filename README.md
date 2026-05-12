@@ -68,6 +68,8 @@ unary negation. `fe2o3-normalize` covers literal constants plus subtraction and
 division. `fe2o3-copy` covers leaf-only stores.
 `fe2o3-downsample` covers constant-stride input loads.
 `fe2o3-gather-odd` covers stride-plus-offset input loads.
+`fe2o3-raw-disjoint-inplace-shift` covers raw `usize` arithmetic for a
+`DisjointSlice<f32>` output read-before-write store.
 `fe2o3-raw-disjoint-shift` covers raw `usize` arithmetic for a
 `DisjointSlice<f32>` output store.
 `fe2o3-raw-gather` covers raw affine `usize` index arithmetic.
@@ -118,6 +120,7 @@ cargo run -p cargo-fe2o3 -- build -p fe2o3-scale
 cargo run -p cargo-fe2o3 -- build -p fe2o3-shift
 cargo run -p cargo-fe2o3 -- build -p fe2o3-previous
 cargo run -p cargo-fe2o3 -- build -p fe2o3-stencil
+cargo run -p cargo-fe2o3 -- build -p fe2o3-raw-disjoint-inplace-shift
 cargo run -p cargo-fe2o3 -- build -p fe2o3-raw-disjoint-shift
 cargo run -p cargo-fe2o3 -- build -p fe2o3-raw-gather
 cargo run -p cargo-fe2o3 -- build -p fe2o3-raw-neighbors
@@ -150,6 +153,7 @@ cargo run -p cargo-fe2o3 -- run -p fe2o3-scale
 cargo run -p cargo-fe2o3 -- run -p fe2o3-shift
 cargo run -p cargo-fe2o3 -- run -p fe2o3-previous
 cargo run -p cargo-fe2o3 -- run -p fe2o3-stencil
+cargo run -p cargo-fe2o3 -- run -p fe2o3-raw-disjoint-inplace-shift
 cargo run -p cargo-fe2o3 -- run -p fe2o3-raw-disjoint-shift
 cargo run -p cargo-fe2o3 -- run -p fe2o3-raw-gather
 cargo run -p cargo-fe2o3 -- run -p fe2o3-raw-neighbors
