@@ -19,6 +19,10 @@ impl ThreadIndex {
         self.0.wrapping_mul(stride)
     }
 
+    pub fn stride_offset(self, stride: usize, offset: isize) -> usize {
+        self.0.wrapping_mul(stride).wrapping_add_signed(offset)
+    }
+
     pub fn in_bounds(self, len: usize) -> bool {
         self.0 < len
     }

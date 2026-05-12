@@ -12,6 +12,7 @@ const SMOKE_PACKAGES: &[&str] = &[
     "fe2o3-copy",
     "fe2o3-downsample",
     "fe2o3-fill",
+    "fe2o3-gather-odd",
     "fe2o3-scale",
     "fe2o3-shift",
     "fe2o3-previous",

@@ -153,6 +153,7 @@ enum IndexExpr {
     Thread,
     Offset(i64),
     Stride(i64),
+    StrideOffset { stride: i64, offset: i64 },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -623,6 +624,30 @@ fn analyze_elementwise_shape<'tcx>(
             continue;
         }
 
+        if path.ends_with("fe2o3_device::ThreadIndex::stride_offset") {
+            let Some(thread_index_local) = thread_index_local else {
+                continue;
+            };
+            if destination.projection.is_empty()
+                && args
+                    .first()
+                    .and_then(|arg| operand_local(&arg.node))
+                    .is_some_and(|local| local == thread_index_local)
+                && let Some(stride) = args
+                    .get(1)
+                    .and_then(|arg| operand_usize_const(tcx, &arg.node))
+                    .and_then(|stride| i64::try_from(stride).ok())
+                && let Some(offset) = args
+                    .get(2)
+                    .and_then(|arg| operand_isize_const(tcx, &arg.node))
+            {
+                if let Some(index) = IndexExpr::strided_offset(stride, offset) {
+                    index_expr_locals.insert(destination.local, index);
+                }
+            }
+            continue;
+        }
+
         if path.ends_with("::get_mut") && path.contains("DisjointSlice") {
             if args
                 .get(1)
@@ -752,11 +777,27 @@ impl ValueSource {
 }
 
 impl IndexExpr {
+    fn strided_offset(stride: i64, offset: i64) -> Option<Self> {
+        if stride == 1 {
+            Self::Thread.offset(offset)
+        } else if offset == 0 {
+            Some(Self::Stride(stride))
+        } else {
+            Some(Self::StrideOffset { stride, offset })
+        }
+    }
+
     fn offset(self, offset: i64) -> Option<Self> {
         match self {
             Self::Thread => Some(Self::Offset(offset)),
             Self::Offset(base) => base.checked_add(offset).map(Self::Offset),
-            Self::Stride(_) => None,
+            Self::Stride(stride) => Self::strided_offset(stride, offset),
+            Self::StrideOffset {
+                stride,
+                offset: base,
+            } => base
+                .checked_add(offset)
+                .and_then(|offset| Self::strided_offset(stride, offset)),
         }
     }
 
@@ -765,6 +806,9 @@ impl IndexExpr {
             Self::Thread => "%idx".to_string(),
             Self::Offset(offset) => format!("%idx{}", Self::llvm_suffix_for_offset(offset)),
             Self::Stride(stride) => format!("%idx_s{stride}"),
+            Self::StrideOffset { stride, offset } => {
+                format!("%idx_s{stride}{}", Self::llvm_suffix_for_offset(offset))
+            }
         }
     }
 
@@ -773,6 +817,9 @@ impl IndexExpr {
             Self::Thread => String::new(),
             Self::Offset(offset) => Self::llvm_suffix_for_offset(offset),
             Self::Stride(stride) => format!("_s{stride}"),
+            Self::StrideOffset { stride, offset } => {
+                format!("_s{stride}{}", Self::llvm_suffix_for_offset(offset))
+            }
         }
     }
 
@@ -1047,9 +1094,14 @@ fn emit_index_calculations(slice_sources: &[SliceElementSource]) -> String {
         }
     }
 
-    indexes
-        .into_iter()
-        .map(|index| match index {
+    let mut emitted = Vec::new();
+    let mut lines = String::new();
+    for index in indexes {
+        if emitted.contains(&index) {
+            continue;
+        }
+
+        let line = match index {
             IndexExpr::Thread => String::new(),
             IndexExpr::Offset(offset) => {
                 format!("  {} = add i64 %idx, {offset}\n", index.llvm_value())
@@ -1057,8 +1109,26 @@ fn emit_index_calculations(slice_sources: &[SliceElementSource]) -> String {
             IndexExpr::Stride(stride) => {
                 format!("  {} = mul i64 %idx, {stride}\n", index.llvm_value())
             }
-        })
-        .collect()
+            IndexExpr::StrideOffset { stride, offset } => {
+                let stride_index = IndexExpr::Stride(stride);
+                if !emitted.contains(&stride_index) {
+                    lines.push_str(&format!(
+                        "  {} = mul i64 %idx, {stride}\n",
+                        stride_index.llvm_value()
+                    ));
+                    emitted.push(stride_index);
+                }
+                format!(
+                    "  {} = add i64 {}, {offset}\n",
+                    index.llvm_value(),
+                    stride_index.llvm_value()
+                )
+            }
+        };
+        lines.push_str(&line);
+        emitted.push(index);
+    }
+    lines
 }
 
 fn emit_bounds_checks(abi: &KernelAbi, slice_sources: &[SliceElementSource]) -> String {

@@ -14,6 +14,7 @@ members = [
     "examples/copy",
     "examples/downsample",
     "examples/fill",
+    "examples/gather_odd",
     "examples/negate",
     "examples/normalize",
     "examples/pipeline",
