@@ -64,6 +64,7 @@ division. `fe2o3-copy` covers leaf-only stores.
 `fe2o3-fill` covers literal-root stores with no input loads.
 `fe2o3-shift` covers constant-offset input loads.
 `fe2o3-previous` covers negative constant-offset input loads.
+`fe2o3-stencil` covers multiple derived loads from one input slice.
 `fe2o3-vecadd-f64` covers double-precision elementwise lowering.
 `cargo-fe2o3 run -p fe2o3-pipeline` emits and launches two kernels from one Rust
 crate.
@@ -100,6 +101,7 @@ cargo run -p cargo-fe2o3 -- build -p fe2o3-fill
 cargo run -p cargo-fe2o3 -- build -p fe2o3-scale
 cargo run -p cargo-fe2o3 -- build -p fe2o3-shift
 cargo run -p cargo-fe2o3 -- build -p fe2o3-previous
+cargo run -p cargo-fe2o3 -- build -p fe2o3-stencil
 cargo run -p cargo-fe2o3 -- build -p fe2o3-saxpy
 cargo run -p cargo-fe2o3 -- build -p fe2o3-axpy-inplace
 cargo run -p cargo-fe2o3 -- build -p fe2o3-negate
@@ -125,6 +127,7 @@ cargo run -p cargo-fe2o3 -- run -p fe2o3-fill
 cargo run -p cargo-fe2o3 -- run -p fe2o3-scale
 cargo run -p cargo-fe2o3 -- run -p fe2o3-shift
 cargo run -p cargo-fe2o3 -- run -p fe2o3-previous
+cargo run -p cargo-fe2o3 -- run -p fe2o3-stencil
 cargo run -p cargo-fe2o3 -- run -p fe2o3-saxpy
 cargo run -p cargo-fe2o3 -- run -p fe2o3-axpy-inplace
 cargo run -p cargo-fe2o3 -- run -p fe2o3-negate

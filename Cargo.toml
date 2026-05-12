@@ -20,6 +20,7 @@ members = [
     "examples/saxpy",
     "examples/scale",
     "examples/shift",
+    "examples/stencil",
     "examples/vecadd",
     "examples/vecadd_f64",
 ]
