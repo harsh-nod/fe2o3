@@ -4,9 +4,11 @@ This file captures the fe2o3 state around bringing up the AMD GPU driver stack.
 
 ## Current Commit
 
+- Local path: `/home/nod/github/fe2o3`
 - Branch: `main`
 - Remote: `https://github.com/powderluv/fe2o3.git`
-- Last reboot-handoff commit: `0f7a056 Add reboot handoff notes`
+- Latest pushed implementation commit before this handoff refresh:
+  `4052a12 Support affine slice reads`
 
 ## Implemented
 
@@ -21,11 +23,19 @@ This file captures the fe2o3 state around bringing up the AMD GPU driver stack.
   `target/fe2o3/*.hsaco`.
 - Generated HSACO metadata is validated with `llvm-readobj --notes` when that
   ROCm tool is available.
+- Supported read-only slice index helpers now include:
+  - `ThreadIndex::offset(<usize constant>)`
+  - `ThreadIndex::offset_signed(<isize constant>)`
+  - `ThreadIndex::stride(<usize constant>)`
+  - `ThreadIndex::stride_offset(<usize constant>, <isize constant>)`
 - The `vecadd`, `add-inplace`, `copy`, `downsample`, `fill`, `gather-odd`,
   `scale`, `shift`, `previous`, `stencil`, `saxpy`, `axpy-inplace`, `negate`,
   `normalize`, `pipeline`, and `vecadd-f64` examples
   load HSACO from `FE2O3_HSACO_DIR`, which `cargo-fe2o3` sets to
   `target/fe2o3`.
+- `downsample` verifies strided reads (`idx * 2`), `gather-odd` verifies affine
+  reads (`idx * 2 + 1`), and `stencil` verifies multiple derived reads from the
+  same input slice.
 
 ## Verified Before Reboot
 
@@ -82,6 +92,20 @@ After `amdgpu` was loaded, `rocm-sdk test` passed all 26 tests.
 - GPU name: `gfx1201`
 - Marketing name: `AMD Radeon AI PRO R9700`
 - ISA: `amdgcn-amd-amdhsa--gfx1201`
+
+The latest full smoke command that passed was:
+
+```bash
+cd /home/nod/github/fe2o3
+rm -rf target/fe2o3
+ROCM_ROOT=/home/nod/github/TheRock/.venv-rocm-latest/lib/python3.12/site-packages/_rocm_sdk_devel
+env -u FE2O3_TARGET \
+  PATH=/home/nod/github/TheRock/.venv-rocm-latest/bin:$PATH \
+  ROCM_PATH=$ROCM_ROOT \
+  HIP_PATH=$ROCM_ROOT \
+  LD_LIBRARY_PATH=$ROCM_ROOT/lib:${LD_LIBRARY_PATH:-} \
+  cargo run -p cargo-fe2o3 -- smoke
+```
 
 The end-to-end commands passed:
 
@@ -219,6 +243,13 @@ rocminfo
 hipconfig --full
 ```
 
+If ROCm reports that ROCk is not loaded or no GPU devices are visible, the
+system may still have `amdgpu` blacklisted for the other driver work. Try:
+
+```bash
+sudo -n modprobe amdgpu
+```
+
 Then rerun the build smoke:
 
 ```bash
@@ -296,7 +327,17 @@ reported by ROCm, for example `gfx1201`, `gfx90a`, or `gfx942`.
 
 ## Next Implementation Step
 
-Replace the temporary elementwise MIR recognizer/emitter with real lowering:
+Short-term backend surface step:
+
+1. Support raw Rust `usize` index arithmetic such as `idx.get() * 2 + 1` by
+   recognizing MIR `MulWithOverflow` / `AddWithOverflow` tuples and their field
+   projections. This reduces dependence on helper-only APIs like
+   `stride_offset`.
+2. Add one example that uses raw arithmetic and keep `cargo-fe2o3 smoke` as the
+   acceptance test.
+
+Then replace the temporary elementwise MIR recognizer/emitter with real
+lowering:
 
 1. Add the first Pliron dependency and local dialect/import scaffolding.
 2. Import collected MIR into a minimal intermediate form.
