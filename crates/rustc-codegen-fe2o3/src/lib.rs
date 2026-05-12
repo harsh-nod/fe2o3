@@ -12,6 +12,7 @@ extern crate rustc_session;
 mod amdgpu_llvm;
 mod collector;
 mod mir_import;
+mod record_lowering;
 
 use rustc_codegen_ssa::traits::CodegenBackend;
 use rustc_codegen_ssa::{CompiledModules, CrateInfo};
@@ -118,6 +119,9 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                 if self.config.dump_mir {
                     let mir_module = mir_import::import_collection(tcx, &collection);
                     eprintln!("{}", mir_module.summary());
+                    let lowering_plan =
+                        record_lowering::plan_from_records(&mir_module.dialect_records());
+                    eprintln!("{}", lowering_plan.summary());
                 }
 
                 match amdgpu_llvm::emit_collection(
