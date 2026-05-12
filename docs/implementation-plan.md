@@ -187,6 +187,9 @@ Status: MVP implemented for `f32`/`f64` elementwise expression kernel shapes.
   `*WithOverflow` tuple results.
 - Raw `usize` index arithmetic can combine two tracked affine index expressions
   for source and output indexes.
+- `FE2O3_DUMP_MIR=1` imports the collected device MIR into a first
+  Pliron-facing scaffold and dumps function/block/terminator shape for lowering
+  work.
 - The backend emits an AMDGPU LLVM IR `amdgpu_kernel` after validating the ABI
   and body pattern.
 - The emitted IR uses `llvm.amdgcn.workitem.id.x` and
@@ -384,12 +387,12 @@ calls can break GPU synchronization semantics.
 
 ## Immediate Next Task
 
-Replace the elementwise template backend with the first real lowering path:
+Grow the MIR import scaffold into the first real lowering path:
 
-1. Add the first Pliron dependency and local dialect/import scaffolding.
-2. Import a collected kernel's MIR body into a minimal intermediate form.
-3. Lower enough operations for the current elementwise kernel shapes: args,
+1. Add the first Pliron dependency or a local dialect trait layer that can be
+   backed by Pliron once the exact API is pinned.
+2. Lower enough operations for the current elementwise kernel shapes: args,
    basic blocks, integer arithmetic, pointer arithmetic, loads/stores, branch,
    and return.
-4. Lower `thread::index_1d` through AMDGPU workitem/workgroup intrinsics.
-5. Preserve the current generated HSACO smoke test as the regression target.
+3. Lower `thread::index_1d` through AMDGPU workitem/workgroup intrinsics.
+4. Preserve the current generated HSACO smoke test as the regression target.

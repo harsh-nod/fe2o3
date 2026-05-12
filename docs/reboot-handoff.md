@@ -7,8 +7,8 @@ This file captures the fe2o3 state around bringing up the AMD GPU driver stack.
 - Local path: `/home/nod/github/fe2o3`
 - Branch: `main`
 - Remote: `https://github.com/powderluv/fe2o3.git`
-- Latest pushed commit before this parenthesized-subtraction update:
-  `1f6ff2a Support constant-minus raw indexes`
+- Latest pushed commit before this MIR import scaffold update:
+  `9e3f8f0 Add parenthesized raw index smoke`
 
 ## Implemented
 
@@ -18,6 +18,9 @@ This file captures the fe2o3 state around bringing up the AMD GPU driver stack.
 - Direct device MIR calls are walked from kernel roots.
 - Reachable `std` functions are rejected.
 - Intrinsic placeholder bodies are skipped.
+- `FE2O3_DUMP_MIR=1` imports the collected device MIR into a first
+  Pliron-facing scaffold and prints function, block, statement, and terminator
+  shape.
 - The current `f32`/`f64` elementwise MIR expression shapes emit AMDGPU LLVM IR.
 - Generated LLVM IR is compiled through ROCm clang and linked with `ld.lld` into
   `target/fe2o3/*.hsaco`.
@@ -434,15 +437,13 @@ reported by ROCm, for example `gfx1201`, `gfx90a`, or `gfx942`.
 
 Short-term backend surface step:
 
-1. Start the first Pliron-facing MIR import scaffold while keeping the current
-   elementwise emitter as the hardware smoke-test baseline.
+1. Add the first Pliron dependency or a local dialect trait layer that can be
+   backed by Pliron once the exact API is pinned.
 
 Then replace the temporary elementwise MIR recognizer/emitter with real
 lowering:
 
-1. Add the first Pliron dependency and local dialect/import scaffolding.
-2. Import collected MIR into a minimal intermediate form.
-3. Lower the current elementwise operations from MIR: args, basic blocks,
+1. Lower the current elementwise operations from MIR: args, basic blocks,
    integer arithmetic, pointer arithmetic, loads/stores, branch, and return.
-4. Lower `thread::index_1d` to AMDGPU workitem/workgroup intrinsics.
-5. Keep the current HSACO smoke test as the regression target.
+2. Lower `thread::index_1d` to AMDGPU workitem/workgroup intrinsics.
+3. Keep the current HSACO smoke test as the regression target.

@@ -11,6 +11,7 @@ extern crate rustc_session;
 
 mod amdgpu_llvm;
 mod collector;
+mod mir_import;
 
 use rustc_codegen_ssa::traits::CodegenBackend;
 use rustc_codegen_ssa::{CompiledModules, CrateInfo};
@@ -114,6 +115,10 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                     self.config.verbose,
                 );
                 collector::dump_device_functions(tcx, &collection.functions);
+                if self.config.dump_mir {
+                    let mir_module = mir_import::import_collection(tcx, &collection);
+                    eprintln!("{}", mir_module.summary());
+                }
 
                 match amdgpu_llvm::emit_collection(
                     tcx,

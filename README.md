@@ -35,7 +35,9 @@ The HIP runtime layer and public API are working for the current elementwise
 examples on AMD hardware. `cargo-fe2o3 build` builds and loads
 `librustc_codegen_fe2o3.so`, delegates host codegen through
 `rustc_codegen_llvm`, detects `#[kernel]` functions in rustc codegen units, and
-dumps the currently collected device-reachable MIR functions.
+dumps the currently collected device-reachable MIR functions. When
+`FE2O3_DUMP_MIR=1` is set, it also prints the first Pliron-facing MIR import
+scaffold for the collected device functions.
 
 The backend also has the first AMDGPU artifact path: for the current `f32`/`f64`
 elementwise kernel shapes it validates the Rust kernel ABI from monomorphized
