@@ -58,7 +58,8 @@ offsets such as `x[idx.offset_signed(-1)]`.
 Raw `usize` index arithmetic derived from `idx.get()` is also recognized for
 constant add, subtract, and multiply patterns such as `idx.get() * 2 + 1`, plus
 affine combinations of two tracked index expressions such as
-`idx.get() + idx.get() + 1`.
+`idx.get() + idx.get() + 1`, and constant-minus-index forms such as
+`1023 - idx.get()`.
 General MIR/Pliron lowering is still the next compiler milestone.
 
 On a `gfx1201` AMD Radeon AI PRO R9700 with TheRock ROCm
@@ -72,6 +73,8 @@ division. `fe2o3-copy` covers leaf-only stores.
 `fe2o3-gather-odd` covers stride-plus-offset input loads.
 `fe2o3-raw-add-index` covers affine reads formed by adding two raw index
 expressions.
+`fe2o3-raw-const-minus` covers constant-minus-index reads with a negative
+stride.
 `fe2o3-raw-disjoint-inplace-shift` covers raw `usize` arithmetic for a
 `DisjointSlice<f32>` output read-before-write store.
 `fe2o3-raw-disjoint-shift` covers raw `usize` arithmetic for a
@@ -125,6 +128,7 @@ cargo run -p cargo-fe2o3 -- build -p fe2o3-shift
 cargo run -p cargo-fe2o3 -- build -p fe2o3-previous
 cargo run -p cargo-fe2o3 -- build -p fe2o3-stencil
 cargo run -p cargo-fe2o3 -- build -p fe2o3-raw-add-index
+cargo run -p cargo-fe2o3 -- build -p fe2o3-raw-const-minus
 cargo run -p cargo-fe2o3 -- build -p fe2o3-raw-disjoint-inplace-shift
 cargo run -p cargo-fe2o3 -- build -p fe2o3-raw-disjoint-shift
 cargo run -p cargo-fe2o3 -- build -p fe2o3-raw-gather
@@ -159,6 +163,7 @@ cargo run -p cargo-fe2o3 -- run -p fe2o3-shift
 cargo run -p cargo-fe2o3 -- run -p fe2o3-previous
 cargo run -p cargo-fe2o3 -- run -p fe2o3-stencil
 cargo run -p cargo-fe2o3 -- run -p fe2o3-raw-add-index
+cargo run -p cargo-fe2o3 -- run -p fe2o3-raw-const-minus
 cargo run -p cargo-fe2o3 -- run -p fe2o3-raw-disjoint-inplace-shift
 cargo run -p cargo-fe2o3 -- run -p fe2o3-raw-disjoint-shift
 cargo run -p cargo-fe2o3 -- run -p fe2o3-raw-gather

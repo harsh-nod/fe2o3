@@ -205,6 +205,7 @@ Status: MVP implemented for `f32`/`f64` elementwise expression kernel shapes.
   input load; `previous` covers a negative constant-offset input load; `stencil`
   covers multiple derived loads from one input slice; `raw-add-index` covers
   affine reads formed by adding two raw index expressions;
+  `raw-const-minus` covers constant-minus-index reads with a negative stride;
   `raw-disjoint-inplace-shift` covers raw `usize` arithmetic for a
   `DisjointSlice<f32>` output read-before-write store; `raw-disjoint-shift`
   covers raw `usize` arithmetic for a `DisjointSlice<f32>` output store;
@@ -266,6 +267,8 @@ Acceptance:
   `cargo fe2o3 build -p fe2o3-previous` produces `previous.hsaco`, and
   `cargo fe2o3 build -p fe2o3-stencil` produces `stencil.hsaco`, and
   `cargo fe2o3 build -p fe2o3-raw-add-index` produces `raw_add_index.hsaco`, and
+  `cargo fe2o3 build -p fe2o3-raw-const-minus` produces
+  `raw_const_minus.hsaco`, and
   `cargo fe2o3 build -p fe2o3-raw-disjoint-inplace-shift` produces
   `raw_disjoint_inplace_shift.hsaco`, and
   `cargo fe2o3 build -p fe2o3-raw-disjoint-shift` produces
@@ -294,10 +297,10 @@ Status: MVP implemented for the current elementwise examples.
   `rocminfo`.
 - The `vecadd`, `add-inplace`, `copy`, `downsample`, `fill`, `gather-odd`,
   `scale`, `shift`, `previous`, `stencil`, `raw-add-index`,
-  `raw-disjoint-inplace-shift`, `raw-disjoint-shift`, `raw-gather`,
-  `raw-neighbors`, `raw-output-shift`, `saxpy`, `axpy-inplace`, `negate`,
-  `normalize`, `pipeline`, and `vecadd-f64` examples load their HSACO files from
-  that directory.
+  `raw-const-minus`, `raw-disjoint-inplace-shift`, `raw-disjoint-shift`,
+  `raw-gather`, `raw-neighbors`, `raw-output-shift`, `saxpy`, `axpy-inplace`,
+  `negate`, `normalize`, `pipeline`, and `vecadd-f64` examples load their HSACO
+  files from that directory.
 - The examples use `fe2o3-core` to load modules, launch through HIP with the
   backend ABI, copy output back, and validate results.
 - The path has run successfully on `gfx1201` with TheRock ROCm
@@ -317,6 +320,7 @@ Acceptance:
   `cargo fe2o3 run -p fe2o3-scale`, `cargo fe2o3 run -p fe2o3-shift`,
   `cargo fe2o3 run -p fe2o3-previous`, `cargo fe2o3 run -p fe2o3-stencil`,
   `cargo fe2o3 run -p fe2o3-raw-add-index`,
+  `cargo fe2o3 run -p fe2o3-raw-const-minus`,
   `cargo fe2o3 run -p fe2o3-raw-disjoint-inplace-shift`,
   `cargo fe2o3 run -p fe2o3-raw-disjoint-shift`,
   `cargo fe2o3 run -p fe2o3-raw-gather`,

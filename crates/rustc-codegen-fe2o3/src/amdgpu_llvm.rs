@@ -828,6 +828,10 @@ impl ValueSource {
 }
 
 impl IndexExpr {
+    fn constant(value: i64) -> Option<Self> {
+        Self::strided_offset(0, value)
+    }
+
     fn strided_offset(stride: i64, offset: i64) -> Option<Self> {
         if stride == 1 && offset == 0 {
             Some(Self::Thread)
@@ -904,9 +908,13 @@ impl IndexExpr {
         match self {
             Self::Thread => "%idx".to_string(),
             Self::Offset(offset) => format!("%idx{}", Self::llvm_suffix_for_offset(offset)),
-            Self::Stride(stride) => format!("%idx_s{stride}"),
+            Self::Stride(stride) => format!("%idx{}", Self::llvm_suffix_for_stride(stride)),
             Self::StrideOffset { stride, offset } => {
-                format!("%idx_s{stride}{}", Self::llvm_suffix_for_offset(offset))
+                format!(
+                    "%idx{}{}",
+                    Self::llvm_suffix_for_stride(stride),
+                    Self::llvm_suffix_for_offset(offset)
+                )
             }
         }
     }
@@ -915,10 +923,22 @@ impl IndexExpr {
         match self {
             Self::Thread => String::new(),
             Self::Offset(offset) => Self::llvm_suffix_for_offset(offset),
-            Self::Stride(stride) => format!("_s{stride}"),
+            Self::Stride(stride) => Self::llvm_suffix_for_stride(stride),
             Self::StrideOffset { stride, offset } => {
-                format!("_s{stride}{}", Self::llvm_suffix_for_offset(offset))
+                format!(
+                    "{}{}",
+                    Self::llvm_suffix_for_stride(stride),
+                    Self::llvm_suffix_for_offset(offset)
+                )
             }
+        }
+    }
+
+    fn llvm_suffix_for_stride(stride: i64) -> String {
+        if stride >= 0 {
+            format!("_s{stride}")
+        } else {
+            format!("_sm{}", stride.unsigned_abs())
         }
     }
 
@@ -1025,9 +1045,10 @@ fn index_binary_op<'tcx>(
             (None, Some(index), Some(offset), _) => index.offset(offset),
             _ => None,
         },
-        BinOp::Sub | BinOp::SubWithOverflow => match (lhs_index, rhs_index, rhs_const) {
-            (Some(lhs), Some(rhs), _) => lhs.sub_index(rhs),
-            (Some(index), None, Some(offset)) => index.offset(offset.checked_neg()?),
+        BinOp::Sub | BinOp::SubWithOverflow => match (lhs_index, rhs_index, lhs_const, rhs_const) {
+            (Some(lhs), Some(rhs), _, _) => lhs.sub_index(rhs),
+            (Some(index), None, _, Some(offset)) => index.offset(offset.checked_neg()?),
+            (None, Some(index), Some(offset), _) => IndexExpr::constant(offset)?.sub_index(index),
             _ => None,
         },
         BinOp::Mul | BinOp::MulWithOverflow => match (lhs_index, rhs_index, lhs_const, rhs_const) {
@@ -1568,6 +1589,22 @@ mod tests {
     }
 
     #[test]
+    fn emits_negative_stride_index_names() {
+        let output_index = IndexExpr::StrideOffset {
+            stride: -1,
+            offset: 1023,
+        };
+        let llvm = emit_elementwise_kernel(&test_abi(), &test_shape(output_index)).unwrap();
+
+        assert!(llvm.contains("  %idx_sm1 = mul i64 %idx, -1\n"));
+        assert!(llvm.contains("  %idx_sm1_p1023 = add i64 %idx_sm1, 1023\n"));
+        assert!(llvm.contains("  %in_out_sm1_p1023 = icmp ult i64 %idx_sm1_p1023, %out_len\n"));
+        assert!(llvm.contains(
+            "  %out_store_ptr = getelementptr inbounds float, ptr addrspace(1) %out_ptr, i64 %idx_sm1_p1023\n"
+        ));
+    }
+
+    #[test]
     fn combines_non_constant_index_operands() {
         assert_eq!(
             IndexExpr::Thread.add_index(IndexExpr::Thread),
@@ -1585,6 +1622,13 @@ mod tests {
             Some(IndexExpr::StrideOffset {
                 stride: 0,
                 offset: 1,
+            })
+        );
+        assert_eq!(
+            IndexExpr::constant(1023).and_then(|index| index.sub_index(IndexExpr::Thread)),
+            Some(IndexExpr::StrideOffset {
+                stride: -1,
+                offset: 1023,
             })
         );
     }
