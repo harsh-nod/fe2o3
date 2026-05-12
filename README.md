@@ -39,7 +39,8 @@ examples on AMD hardware. `cargo-fe2o3 build` builds and loads
 dumps the currently collected device-reachable MIR functions. When
 `FE2O3_DUMP_MIR=1` is set, it also prints the first Pliron-facing MIR import
 scaffold for the collected device functions using local `mir.*` dialect names
-and builds a flat `mir.*` operation-record stream for the future Pliron builder.
+and builds a flat typed `mir.*` operation-record stream for the future Pliron
+builder.
 
 The backend also has the first AMDGPU artifact path: for the current `f32`/`f64`
 elementwise kernel shapes it validates the Rust kernel ABI from monomorphized

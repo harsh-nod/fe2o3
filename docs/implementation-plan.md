@@ -191,7 +191,7 @@ Status: MVP implemented for `f32`/`f64` elementwise expression kernel shapes.
 - `FE2O3_DUMP_MIR=1` imports the collected device MIR into a first
   Pliron-facing scaffold with local `mir.*` dialect names and dumps
   function/block/terminator shape for lowering work. The scaffold also builds a
-  flat `mir.*` operation-record stream for the future Pliron builder.
+  flat typed `mir.*` operation-record stream for the future Pliron builder.
 - The backend emits an AMDGPU LLVM IR `amdgpu_kernel` after validating the ABI
   and body pattern.
 - The emitted IR uses `llvm.amdgcn.workitem.id.x` and
@@ -391,9 +391,9 @@ calls can break GPU synchronization semantics.
 
 Grow the MIR import scaffold into the first real lowering path:
 
-1. Attach enough typed operand/result information to the `mir.*` operation
-   records to lower the current elementwise kernels from records instead of the
-   temporary pattern recognizer.
+1. Attach enough statement-level operand/result information to the typed
+   `mir.*` operation records to lower the current elementwise kernels from
+   records instead of the temporary pattern recognizer.
 2. Lower enough operations for the current elementwise kernel shapes: args,
    basic blocks, integer arithmetic, pointer arithmetic, loads/stores, branch,
    and return.
