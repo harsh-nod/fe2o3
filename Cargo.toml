@@ -18,6 +18,7 @@ members = [
     "examples/pipeline",
     "examples/saxpy",
     "examples/scale",
+    "examples/shift",
     "examples/vecadd",
     "examples/vecadd_f64",
 ]

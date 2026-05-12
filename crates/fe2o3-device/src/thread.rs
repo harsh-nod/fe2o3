@@ -7,6 +7,10 @@ impl ThreadIndex {
         self.0
     }
 
+    pub fn offset(self, offset: usize) -> usize {
+        self.0 + offset
+    }
+
     pub fn in_bounds(self, len: usize) -> bool {
         self.0 < len
     }

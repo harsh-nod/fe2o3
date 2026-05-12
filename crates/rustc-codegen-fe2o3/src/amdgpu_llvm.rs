@@ -139,7 +139,19 @@ enum ExprNode {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ValueSource {
     Arg(usize),
-    SliceElement(usize),
+    SliceElement(SliceElementSource),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SliceElementSource {
+    arg_index: usize,
+    index: IndexExpr,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+enum IndexExpr {
+    Thread,
+    Offset(i64),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -507,7 +519,7 @@ fn analyze_elementwise_shape<'tcx>(
     }
 
     let mut thread_index_local = None;
-    let mut index_value_locals = HashSet::new();
+    let mut index_expr_locals = HashMap::new();
     let mut output_arg = None;
 
     for block in mir.basic_blocks.iter() {
@@ -545,7 +557,28 @@ fn analyze_elementwise_shape<'tcx>(
                     .and_then(|arg| operand_local(&arg.node))
                     .is_some_and(|local| local == thread_index_local)
             {
-                index_value_locals.insert(destination.local);
+                index_expr_locals.insert(destination.local, IndexExpr::Thread);
+            }
+            continue;
+        }
+
+        if path.ends_with("fe2o3_device::ThreadIndex::offset") {
+            let Some(thread_index_local) = thread_index_local else {
+                continue;
+            };
+            if destination.projection.is_empty()
+                && args
+                    .first()
+                    .and_then(|arg| operand_local(&arg.node))
+                    .is_some_and(|local| local == thread_index_local)
+                && let Some(offset) = args
+                    .get(1)
+                    .and_then(|arg| operand_usize_const(tcx, &arg.node))
+                    .and_then(|offset| i64::try_from(offset).ok())
+            {
+                if let Some(index) = IndexExpr::Thread.offset(offset) {
+                    index_expr_locals.insert(destination.local, index);
+                }
             }
             continue;
         }
@@ -578,15 +611,20 @@ fn analyze_elementwise_shape<'tcx>(
             match rvalue {
                 Rvalue::Use(operand) => {
                     let expr = if let Some(source_place) = operand.place()
-                        && let Some(arg_index) =
-                            indexed_arg_place(source_place, &arg_locals, &index_value_locals)
+                        && let Some(source) =
+                            indexed_arg_place(source_place, &arg_locals, &index_expr_locals)
                     {
-                        Some(ExprRef::Value(ValueSource::SliceElement(arg_index)))
+                        Some(ExprRef::Value(ValueSource::SliceElement(source)))
                     } else if let Some(source_place) = operand.place()
                         && is_deref_place(&source_place)
                         && let Some(arg_index) = output_arg
                     {
-                        Some(ExprRef::Value(ValueSource::SliceElement(arg_index)))
+                        Some(ExprRef::Value(ValueSource::SliceElement(
+                            SliceElementSource {
+                                arg_index,
+                                index: IndexExpr::Thread,
+                            },
+                        )))
                     } else {
                         operand_expr(tcx, operand, &local_exprs, &arg_locals)
                     };
@@ -598,7 +636,7 @@ fn analyze_elementwise_shape<'tcx>(
                     if place.projection.is_empty() {
                         local_exprs.insert(place.local, expr);
                     } else if let Some(arg_index) =
-                        store_output_arg(place, output_arg, &arg_locals, &index_value_locals)
+                        store_output_arg(place, output_arg, &arg_locals, &index_expr_locals)
                     {
                         output_arg = Some(arg_index);
                         elementwise_store = Some(expr);
@@ -618,7 +656,7 @@ fn analyze_elementwise_shape<'tcx>(
                         if place.projection.is_empty() {
                             local_exprs.insert(place.local, expr);
                         } else if let Some(arg_index) =
-                            store_output_arg(place, output_arg, &arg_locals, &index_value_locals)
+                            store_output_arg(place, output_arg, &arg_locals, &index_expr_locals)
                         {
                             output_arg = Some(arg_index);
                             elementwise_store = Some(expr);
@@ -640,7 +678,7 @@ fn analyze_elementwise_shape<'tcx>(
                     if place.projection.is_empty() {
                         local_exprs.insert(place.local, expr);
                     } else if let Some(arg_index) =
-                        store_output_arg(place, output_arg, &arg_locals, &index_value_locals)
+                        store_output_arg(place, output_arg, &arg_locals, &index_expr_locals)
                     {
                         output_arg = Some(arg_index);
                         elementwise_store = Some(expr);
@@ -667,7 +705,39 @@ fn analyze_elementwise_shape<'tcx>(
 impl ValueSource {
     fn arg_index(self) -> usize {
         match self {
-            Self::Arg(index) | Self::SliceElement(index) => index,
+            Self::Arg(index) => index,
+            Self::SliceElement(source) => source.arg_index,
+        }
+    }
+}
+
+impl IndexExpr {
+    fn offset(self, offset: i64) -> Option<Self> {
+        match self {
+            Self::Thread => Some(Self::Offset(offset)),
+            Self::Offset(base) => base.checked_add(offset).map(Self::Offset),
+        }
+    }
+
+    fn llvm_value(self) -> String {
+        match self {
+            Self::Thread => "%idx".to_string(),
+            Self::Offset(offset) => format!("%idx{}", self.llvm_suffix_for_offset(offset)),
+        }
+    }
+
+    fn llvm_suffix(self) -> String {
+        match self {
+            Self::Thread => String::new(),
+            Self::Offset(offset) => self.llvm_suffix_for_offset(offset),
+        }
+    }
+
+    fn llvm_suffix_for_offset(self, offset: i64) -> String {
+        if offset >= 0 {
+            format!("_p{offset}")
+        } else {
+            format!("_m{}", offset.unsigned_abs())
         }
     }
 }
@@ -684,28 +754,27 @@ fn local_arg_index(local: Local, arg_locals: &[Local]) -> Option<usize> {
 fn indexed_arg_place(
     place: Place<'_>,
     arg_locals: &[Local],
-    index_value_locals: &HashSet<Local>,
-) -> Option<usize> {
+    index_expr_locals: &HashMap<Local, IndexExpr>,
+) -> Option<SliceElementSource> {
     let [ProjectionElem::Deref, ProjectionElem::Index(index_local)] = &place.projection[..] else {
         return None;
     };
-    if !index_value_locals.contains(index_local) {
-        return None;
-    }
-    local_arg_index(place.local, arg_locals)
+    let index = index_expr_locals.get(index_local).copied()?;
+    let arg_index = local_arg_index(place.local, arg_locals)?;
+    Some(SliceElementSource { arg_index, index })
 }
 
 fn store_output_arg(
     place: &Place<'_>,
     disjoint_output_arg: Option<usize>,
     arg_locals: &[Local],
-    index_value_locals: &HashSet<Local>,
+    index_expr_locals: &HashMap<Local, IndexExpr>,
 ) -> Option<usize> {
     if is_deref_place(place) {
         return disjoint_output_arg;
     }
 
-    indexed_arg_place(*place, arg_locals, index_value_locals)
+    indexed_arg_place(*place, arg_locals, index_expr_locals).map(|source| source.arg_index)
 }
 
 fn operand_expr<'tcx>(
@@ -722,6 +791,15 @@ fn operand_expr<'tcx>(
     local_exprs.get(&local).copied().or_else(|| {
         local_arg_index(local, arg_locals).map(|arg| ExprRef::Value(ValueSource::Arg(arg)))
     })
+}
+
+fn operand_usize_const<'tcx>(tcx: TyCtxt<'tcx>, operand: &Operand<'tcx>) -> Option<u64> {
+    let Operand::Constant(constant) = operand else {
+        return None;
+    };
+    constant
+        .const_
+        .try_eval_target_usize(tcx, TypingEnv::fully_monomorphized())
 }
 
 fn constant_float<'tcx>(tcx: TyCtxt<'tcx>, constant: &ConstOperand<'tcx>) -> Option<ScalarLiteral> {
@@ -755,6 +833,7 @@ fn emit_elementwise_kernel(abi: &KernelAbi, shape: &ElementwiseShape) -> Result<
     let align = element.llvm_align();
     let read_slice_sources = read_slice_sources(shape);
     let slice_sources = bounds_slice_sources(shape);
+    let index_lines = emit_index_calculations(&slice_sources);
     let check_lines = emit_bounds_checks(abi, &slice_sources);
     let inbounds = emit_inbounds_reduce(&slice_sources, abi);
     let load_lines = emit_loads(abi, &read_slice_sources, llvm_type, align);
@@ -779,7 +858,7 @@ entry:
   %base = mul i32 %bid, 256
   %idx32 = add i32 %base, %tid
   %idx = zext i32 %idx32 to i64
-{check_lines}{inbounds}
+{index_lines}{check_lines}{inbounds}
   br i1 %inbounds, label %body, label %exit
 
 body:
@@ -799,6 +878,7 @@ attributes #1 = {{ nounwind readnone speculatable }}
         kernel_name = abi.name,
         params = params,
         check_lines = check_lines,
+        index_lines = index_lines,
         inbounds = inbounds,
         load_lines = load_lines,
         c_base = c_base,
@@ -865,7 +945,9 @@ fn validate_elementwise_abi(abi: &KernelAbi, shape: &ElementwiseShape) -> Result
                     "indexed elementwise operands must be slices",
                 ));
             }
-            ValueSource::SliceElement(index) if arg.is_mutable() && index != shape.output_arg => {
+            ValueSource::SliceElement(source)
+                if arg.is_mutable() && source.arg_index != shape.output_arg =>
+            {
                 return Err(unsupported_kernel(
                     &abi.name,
                     "mutable indexed elementwise operands must be the output slice",
@@ -878,40 +960,71 @@ fn validate_elementwise_abi(abi: &KernelAbi, shape: &ElementwiseShape) -> Result
     Ok(())
 }
 
-fn read_slice_sources(shape: &ElementwiseShape) -> Vec<usize> {
+fn read_slice_sources(shape: &ElementwiseShape) -> Vec<SliceElementSource> {
     let mut sources = Vec::new();
     for source in shape.expr.sources() {
-        if let ValueSource::SliceElement(index) = source
-            && !sources.contains(&index)
+        if let ValueSource::SliceElement(source) = source
+            && !sources.contains(&source)
         {
-            sources.push(index);
+            sources.push(source);
         }
     }
     sources
 }
 
-fn bounds_slice_sources(shape: &ElementwiseShape) -> Vec<usize> {
+fn bounds_slice_sources(shape: &ElementwiseShape) -> Vec<SliceElementSource> {
     let mut sources = read_slice_sources(shape);
-    if !sources.contains(&shape.output_arg) {
-        sources.push(shape.output_arg);
+    let output_source = SliceElementSource {
+        arg_index: shape.output_arg,
+        index: IndexExpr::Thread,
+    };
+    if !sources.contains(&output_source) {
+        sources.push(output_source);
     }
     sources
 }
 
-fn emit_bounds_checks(abi: &KernelAbi, slice_sources: &[usize]) -> String {
+fn emit_index_calculations(slice_sources: &[SliceElementSource]) -> String {
+    let mut indexes = Vec::new();
+    for source in slice_sources {
+        if source.index != IndexExpr::Thread && !indexes.contains(&source.index) {
+            indexes.push(source.index);
+        }
+    }
+
+    indexes
+        .into_iter()
+        .map(|index| match index {
+            IndexExpr::Thread => String::new(),
+            IndexExpr::Offset(offset) => {
+                format!("  {} = add i64 %idx, {offset}\n", index.llvm_value())
+            }
+        })
+        .collect()
+}
+
+fn emit_bounds_checks(abi: &KernelAbi, slice_sources: &[SliceElementSource]) -> String {
     slice_sources
         .iter()
-        .map(|index| {
-            let base = abi.args[*index].llvm_base();
-            format!("  %in_{base} = icmp ult i64 %idx, %{base}_len\n")
+        .map(|source| {
+            let base = abi.args[source.arg_index].llvm_base();
+            let suffix = source.index.llvm_suffix();
+            let index = source.index.llvm_value();
+            format!("  %in_{base}{suffix} = icmp ult i64 {index}, %{base}_len\n")
         })
         .collect::<String>()
 }
 
-fn emit_inbounds_reduce(slice_sources: &[usize], abi: &KernelAbi) -> String {
+fn emit_inbounds_reduce(slice_sources: &[SliceElementSource], abi: &KernelAbi) -> String {
     let check_names = slice_sources
         .iter()
-        .map(|index| format!("%in_{}", abi.args[*index].llvm_base()))
+        .map(|source| {
+            format!(
+                "%in_{}{}",
+                abi.args[source.arg_index].llvm_base(),
+                source.index.llvm_suffix()
+            )
+        })
         .collect::<Vec<_>>();
 
     match check_names.as_slice() {
@@ -935,13 +1048,20 @@ fn emit_inbounds_reduce(slice_sources: &[usize], abi: &KernelAbi) -> String {
     }
 }
 
-fn emit_loads(abi: &KernelAbi, slice_sources: &[usize], llvm_type: &str, align: usize) -> String {
+fn emit_loads(
+    abi: &KernelAbi,
+    slice_sources: &[SliceElementSource],
+    llvm_type: &str,
+    align: usize,
+) -> String {
     slice_sources
         .iter()
-        .map(|index| {
-            let base = abi.args[*index].llvm_base();
+        .map(|source| {
+            let base = abi.args[source.arg_index].llvm_base();
+            let suffix = source.index.llvm_suffix();
+            let index = source.index.llvm_value();
             format!(
-                "  %{base}_elem_ptr = getelementptr inbounds {llvm_type}, ptr addrspace(1) %{base}_ptr, i64 %idx\n  %{base}_value = load {llvm_type}, ptr addrspace(1) %{base}_elem_ptr, align {align}\n"
+                "  %{base}{suffix}_elem_ptr = getelementptr inbounds {llvm_type}, ptr addrspace(1) %{base}_ptr, i64 {index}\n  %{base}{suffix}_value = load {llvm_type}, ptr addrspace(1) %{base}{suffix}_elem_ptr, align {align}\n"
             )
         })
         .collect::<String>()
@@ -989,7 +1109,7 @@ fn source_value_expr(source: ValueSource, abi: &KernelAbi) -> String {
     let base = abi.args[source.arg_index()].llvm_base();
     match source {
         ValueSource::Arg(_) => format!("%{base}"),
-        ValueSource::SliceElement(_) => format!("%{base}_value"),
+        ValueSource::SliceElement(source) => format!("%{base}{}_value", source.index.llvm_suffix()),
     }
 }
 
