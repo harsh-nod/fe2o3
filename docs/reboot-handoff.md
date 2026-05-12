@@ -27,8 +27,9 @@ This file captures the fe2o3 state around bringing up the AMD GPU driver stack.
   future Pliron builder, including return, argument, local type labels,
   statement destinations, statement operands, assignment operation labels, and
   the first operation-specific lowering records such as `mir.load`, `mir.store`,
-  `mir.gep`, `mir.slice_len`, and arithmetic ops. The dump also builds a first
-  record-driven lowering-plan summary from the flat record stream.
+  `mir.gep`, `mir.slice_len`, arithmetic ops, comparisons, and casts. The dump
+  also builds a first record-driven lowering-plan summary from the flat record
+  stream.
 - The current `f32`/`f64` elementwise MIR expression shapes emit AMDGPU LLVM IR.
 - Generated LLVM IR is compiled through ROCm clang and linked with `ld.lld` into
   `target/fe2o3/*.hsaco`.

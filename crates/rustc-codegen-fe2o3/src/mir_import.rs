@@ -424,6 +424,14 @@ impl MirStatement {
             "sub" | "sub_unchecked" | "sub_with_overflow" => Some(MirOp::Sub),
             "mul" | "mul_unchecked" | "mul_with_overflow" => Some(MirOp::Mul),
             "div" => Some(MirOp::Div),
+            "eq" => Some(MirOp::Eq),
+            "lt" => Some(MirOp::Lt),
+            "le" => Some(MirOp::Le),
+            "ne" => Some(MirOp::Ne),
+            "ge" => Some(MirOp::Ge),
+            "gt" => Some(MirOp::Gt),
+            "cmp" => Some(MirOp::Cmp),
+            "cast" => Some(MirOp::Cast),
             "offset" => Some(MirOp::Gep),
             "ptr_metadata" => Some(MirOp::SliceLen),
             "use" if self.operands.iter().any(MirOperandRef::is_memory_place) => Some(MirOp::Load),
@@ -988,10 +996,21 @@ mod tests {
             operands: vec![MirOperandRef::Place(local_place(4))],
             operation: Some("use".to_string()),
         };
+        let compare = MirStatement {
+            index: 3,
+            kind: MirStatementKind::Assign,
+            destination: Some(local_place(6)),
+            operands: vec![
+                MirOperandRef::Place(local_place(1)),
+                MirOperandRef::Place(local_place(2)),
+            ],
+            operation: Some("lt".to_string()),
+        };
 
         assert_eq!(arithmetic.lowering_op(), Some(MirOp::Mul));
         assert_eq!(load.lowering_op(), Some(MirOp::Load));
         assert_eq!(store.lowering_op(), Some(MirOp::Store));
+        assert_eq!(compare.lowering_op(), Some(MirOp::Lt));
     }
 
     fn simple_statement(index: usize, kind: MirStatementKind) -> MirStatement {

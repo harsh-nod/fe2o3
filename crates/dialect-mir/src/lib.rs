@@ -62,6 +62,14 @@ pub enum MirOp {
     Sub,
     Mul,
     Div,
+    Eq,
+    Lt,
+    Le,
+    Ne,
+    Ge,
+    Gt,
+    Cmp,
+    Cast,
     Load,
     Store,
     Drop,
@@ -94,6 +102,14 @@ impl MirOp {
             Self::Sub => "mir.sub",
             Self::Mul => "mir.mul",
             Self::Div => "mir.div",
+            Self::Eq => "mir.eq",
+            Self::Lt => "mir.lt",
+            Self::Le => "mir.le",
+            Self::Ne => "mir.ne",
+            Self::Ge => "mir.ge",
+            Self::Gt => "mir.gt",
+            Self::Cmp => "mir.cmp",
+            Self::Cast => "mir.cast",
             Self::Load => "mir.load",
             Self::Store => "mir.store",
             Self::Drop => "mir.drop",
@@ -154,6 +170,7 @@ mod tests {
     fn operation_names_are_dialect_qualified() {
         assert_eq!(MirOp::Func.name(), "mir.func");
         assert_eq!(MirOp::Assign.name(), "mir.assign");
+        assert_eq!(MirOp::Lt.name(), "mir.lt");
         assert_eq!(MirOp::ThreadIndex1d.name(), "mir.thread_index_1d");
     }
 
