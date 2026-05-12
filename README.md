@@ -54,6 +54,8 @@ offsets such as `x[idx.offset_signed(-1)]`.
 `ThreadIndex::stride` supports constant-stride reads such as `x[idx.stride(2)]`.
 `ThreadIndex::stride_offset` supports affine reads such as
 `x[idx.stride_offset(2, 1)]`.
+Raw `usize` index arithmetic derived from `idx.get()` is also recognized for
+constant add, subtract, and multiply patterns such as `idx.get() * 2 + 1`.
 General MIR/Pliron lowering is still the next compiler milestone.
 
 On a `gfx1201` AMD Radeon AI PRO R9700 with TheRock ROCm
@@ -65,6 +67,7 @@ unary negation. `fe2o3-normalize` covers literal constants plus subtraction and
 division. `fe2o3-copy` covers leaf-only stores.
 `fe2o3-downsample` covers constant-stride input loads.
 `fe2o3-gather-odd` covers stride-plus-offset input loads.
+`fe2o3-raw-gather` covers raw `usize` index arithmetic.
 `fe2o3-add-inplace` covers read-before-write through `DisjointSlice::get_mut`.
 `fe2o3-fill` covers literal-root stores with no input loads.
 `fe2o3-shift` covers constant-offset input loads.
@@ -109,6 +112,7 @@ cargo run -p cargo-fe2o3 -- build -p fe2o3-scale
 cargo run -p cargo-fe2o3 -- build -p fe2o3-shift
 cargo run -p cargo-fe2o3 -- build -p fe2o3-previous
 cargo run -p cargo-fe2o3 -- build -p fe2o3-stencil
+cargo run -p cargo-fe2o3 -- build -p fe2o3-raw-gather
 cargo run -p cargo-fe2o3 -- build -p fe2o3-saxpy
 cargo run -p cargo-fe2o3 -- build -p fe2o3-axpy-inplace
 cargo run -p cargo-fe2o3 -- build -p fe2o3-negate
@@ -137,6 +141,7 @@ cargo run -p cargo-fe2o3 -- run -p fe2o3-scale
 cargo run -p cargo-fe2o3 -- run -p fe2o3-shift
 cargo run -p cargo-fe2o3 -- run -p fe2o3-previous
 cargo run -p cargo-fe2o3 -- run -p fe2o3-stencil
+cargo run -p cargo-fe2o3 -- run -p fe2o3-raw-gather
 cargo run -p cargo-fe2o3 -- run -p fe2o3-saxpy
 cargo run -p cargo-fe2o3 -- run -p fe2o3-axpy-inplace
 cargo run -p cargo-fe2o3 -- run -p fe2o3-negate

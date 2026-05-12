@@ -4,7 +4,9 @@ use rustc_middle::mir::{
     BinOp, Body, ConstOperand, Local, Operand, Place, ProjectionElem, Rvalue, StatementKind,
     TerminatorKind, UnOp, VarDebugInfoContents,
 };
-use rustc_middle::ty::{EarlyBinder, FloatTy, Mutability, Ty, TyCtxt, TyKind, TypingEnv};
+use rustc_middle::ty::{
+    EarlyBinder, FloatTy, IntTy, Mutability, Ty, TyCtxt, TyKind, TypingEnv, UintTy,
+};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -522,6 +524,7 @@ fn analyze_elementwise_shape<'tcx>(
 
     let mut thread_index_local = None;
     let mut index_expr_locals = HashMap::new();
+    let mut overflow_index_expr_locals = HashMap::new();
     let mut output_arg = None;
 
     for block in mir.basic_blocks.iter() {
@@ -662,6 +665,13 @@ fn analyze_elementwise_shape<'tcx>(
     }
 
     thread_index_local.ok_or_else(|| "missing `thread::index_1d` call".to_string())?;
+    propagate_index_exprs(
+        tcx,
+        mir,
+        &mut index_expr_locals,
+        &mut overflow_index_expr_locals,
+    );
+
     let mut local_exprs = HashMap::new();
     let mut expr_nodes = Vec::new();
     let mut elementwise_store = None;
@@ -778,8 +788,10 @@ impl ValueSource {
 
 impl IndexExpr {
     fn strided_offset(stride: i64, offset: i64) -> Option<Self> {
-        if stride == 1 {
-            Self::Thread.offset(offset)
+        if stride == 1 && offset == 0 {
+            Some(Self::Thread)
+        } else if stride == 1 {
+            Some(Self::Offset(offset))
         } else if offset == 0 {
             Some(Self::Stride(stride))
         } else {
@@ -787,7 +799,28 @@ impl IndexExpr {
         }
     }
 
+    fn scale(self, factor: i64) -> Option<Self> {
+        match self {
+            Self::Thread => Self::strided_offset(factor, 0),
+            Self::Offset(offset) => offset
+                .checked_mul(factor)
+                .and_then(|offset| Self::strided_offset(factor, offset)),
+            Self::Stride(stride) => stride
+                .checked_mul(factor)
+                .and_then(|stride| Self::strided_offset(stride, 0)),
+            Self::StrideOffset { stride, offset } => {
+                let stride = stride.checked_mul(factor)?;
+                let offset = offset.checked_mul(factor)?;
+                Self::strided_offset(stride, offset)
+            }
+        }
+    }
+
     fn offset(self, offset: i64) -> Option<Self> {
+        if offset == 0 {
+            return Some(self);
+        }
+
         match self {
             Self::Thread => Some(Self::Offset(offset)),
             Self::Offset(base) => base.checked_add(offset).map(Self::Offset),
@@ -830,6 +863,138 @@ impl IndexExpr {
             format!("_m{}", offset.unsigned_abs())
         }
     }
+}
+
+fn propagate_index_exprs<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    mir: &Body<'tcx>,
+    index_expr_locals: &mut HashMap<Local, IndexExpr>,
+    overflow_index_expr_locals: &mut HashMap<Local, IndexExpr>,
+) {
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for block in mir.basic_blocks.iter() {
+            for statement in &block.statements {
+                let StatementKind::Assign(assign) = &statement.kind else {
+                    continue;
+                };
+                let (place, rvalue) = &**assign;
+                if !place.projection.is_empty() {
+                    continue;
+                }
+
+                match rvalue {
+                    Rvalue::Use(operand) => {
+                        if let Some(index) = operand_index_expr(
+                            operand,
+                            index_expr_locals,
+                            overflow_index_expr_locals,
+                        ) {
+                            changed |= insert_index_expr(index_expr_locals, place.local, index);
+                        }
+                    }
+                    Rvalue::BinaryOp(op, operands) => {
+                        let Some(index) = index_binary_op(
+                            tcx,
+                            *op,
+                            &operands.0,
+                            &operands.1,
+                            index_expr_locals,
+                            overflow_index_expr_locals,
+                        ) else {
+                            continue;
+                        };
+
+                        if bin_op_returns_overflow_tuple(*op) {
+                            changed |=
+                                insert_index_expr(overflow_index_expr_locals, place.local, index);
+                        } else {
+                            changed |= insert_index_expr(index_expr_locals, place.local, index);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+}
+
+fn insert_index_expr(
+    indexes: &mut HashMap<Local, IndexExpr>,
+    local: Local,
+    index: IndexExpr,
+) -> bool {
+    if indexes.get(&local).copied() == Some(index) {
+        return false;
+    }
+    indexes.insert(local, index);
+    true
+}
+
+fn index_binary_op<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    op: BinOp,
+    lhs: &Operand<'tcx>,
+    rhs: &Operand<'tcx>,
+    index_expr_locals: &HashMap<Local, IndexExpr>,
+    overflow_index_expr_locals: &HashMap<Local, IndexExpr>,
+) -> Option<IndexExpr> {
+    let lhs_index = operand_index_expr(lhs, index_expr_locals, overflow_index_expr_locals);
+    let rhs_index = operand_index_expr(rhs, index_expr_locals, overflow_index_expr_locals);
+    let lhs_const = operand_usize_i64_const(tcx, lhs);
+    let rhs_const = operand_usize_i64_const(tcx, rhs);
+
+    match op {
+        BinOp::Add | BinOp::AddWithOverflow => match (lhs_index, rhs_index, lhs_const, rhs_const) {
+            (Some(index), None, _, Some(offset)) => index.offset(offset),
+            (None, Some(index), Some(offset), _) => index.offset(offset),
+            _ => None,
+        },
+        BinOp::Sub | BinOp::SubWithOverflow => match (lhs_index, rhs_index, rhs_const) {
+            (Some(index), None, Some(offset)) => index.offset(offset.checked_neg()?),
+            _ => None,
+        },
+        BinOp::Mul | BinOp::MulWithOverflow => match (lhs_index, rhs_index, lhs_const, rhs_const) {
+            (Some(index), None, _, Some(factor)) => index.scale(factor),
+            (None, Some(index), Some(factor), _) => index.scale(factor),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn bin_op_returns_overflow_tuple(op: BinOp) -> bool {
+    matches!(
+        op,
+        BinOp::AddWithOverflow | BinOp::SubWithOverflow | BinOp::MulWithOverflow
+    )
+}
+
+fn operand_index_expr(
+    operand: &Operand<'_>,
+    index_expr_locals: &HashMap<Local, IndexExpr>,
+    overflow_index_expr_locals: &HashMap<Local, IndexExpr>,
+) -> Option<IndexExpr> {
+    let place = operand.place()?;
+    if place.projection.is_empty() {
+        return index_expr_locals.get(&place.local).copied();
+    }
+
+    overflow_value_place(place, overflow_index_expr_locals)
+}
+
+fn overflow_value_place(
+    place: Place<'_>,
+    overflow_index_expr_locals: &HashMap<Local, IndexExpr>,
+) -> Option<IndexExpr> {
+    let [ProjectionElem::Field(field, _)] = &place.projection[..] else {
+        return None;
+    };
+    if field.index() != 0 {
+        return None;
+    }
+    overflow_index_expr_locals.get(&place.local).copied()
 }
 
 fn operand_local(operand: &Operand<'_>) -> Option<Local> {
@@ -887,15 +1052,25 @@ fn operand_usize_const<'tcx>(tcx: TyCtxt<'tcx>, operand: &Operand<'tcx>) -> Opti
     let Operand::Constant(constant) = operand else {
         return None;
     };
+    if !matches!(constant.const_.ty().kind(), TyKind::Uint(UintTy::Usize)) {
+        return None;
+    }
     constant
         .const_
         .try_eval_target_usize(tcx, TypingEnv::fully_monomorphized())
+}
+
+fn operand_usize_i64_const<'tcx>(tcx: TyCtxt<'tcx>, operand: &Operand<'tcx>) -> Option<i64> {
+    operand_usize_const(tcx, operand).and_then(|value| i64::try_from(value).ok())
 }
 
 fn operand_isize_const<'tcx>(tcx: TyCtxt<'tcx>, operand: &Operand<'tcx>) -> Option<i64> {
     let Operand::Constant(constant) = operand else {
         return None;
     };
+    if !matches!(constant.const_.ty().kind(), TyKind::Int(IntTy::Isize)) {
+        return None;
+    }
     Some(
         constant
             .const_

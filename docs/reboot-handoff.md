@@ -7,8 +7,8 @@ This file captures the fe2o3 state around bringing up the AMD GPU driver stack.
 - Local path: `/home/nod/github/fe2o3`
 - Branch: `main`
 - Remote: `https://github.com/powderluv/fe2o3.git`
-- Latest pushed implementation commit before this handoff refresh:
-  `4052a12 Support affine slice reads`
+- Latest pushed commit before this raw-arithmetic update:
+  `0a4cda3 Refresh reboot handoff notes`
 
 ## Implemented
 
@@ -28,14 +28,19 @@ This file captures the fe2o3 state around bringing up the AMD GPU driver stack.
   - `ThreadIndex::offset_signed(<isize constant>)`
   - `ThreadIndex::stride(<usize constant>)`
   - `ThreadIndex::stride_offset(<usize constant>, <isize constant>)`
+- Raw `usize` arithmetic derived from `idx.get()` is recognized for constant
+  add, subtract, and multiply patterns, including debug MIR `*WithOverflow`
+  tuple values.
 - The `vecadd`, `add-inplace`, `copy`, `downsample`, `fill`, `gather-odd`,
-  `scale`, `shift`, `previous`, `stencil`, `saxpy`, `axpy-inplace`, `negate`,
-  `normalize`, `pipeline`, and `vecadd-f64` examples
+  `scale`, `shift`, `previous`, `stencil`, `raw-gather`, `saxpy`,
+  `axpy-inplace`, `negate`, `normalize`, `pipeline`, and `vecadd-f64` examples
   load HSACO from `FE2O3_HSACO_DIR`, which `cargo-fe2o3` sets to
   `target/fe2o3`.
 - `downsample` verifies strided reads (`idx * 2`), `gather-odd` verifies affine
   reads (`idx * 2 + 1`), and `stencil` verifies multiple derived reads from the
   same input slice.
+- `raw-gather` verifies the same affine read using raw Rust `usize` arithmetic
+  instead of the `ThreadIndex::stride_offset` helper.
 
 ## Verified Before Reboot
 
@@ -175,6 +180,12 @@ PATH=/home/nod/github/TheRock/.venv-rocm-latest/bin:$PATH \
   ROCM_PATH=$ROCM_ROOT \
   HIP_PATH=$ROCM_ROOT \
   LD_LIBRARY_PATH=$ROCM_ROOT/lib:${LD_LIBRARY_PATH:-} \
+  cargo run -p cargo-fe2o3 -- run -p fe2o3-raw-gather
+
+PATH=/home/nod/github/TheRock/.venv-rocm-latest/bin:$PATH \
+  ROCM_PATH=$ROCM_ROOT \
+  HIP_PATH=$ROCM_ROOT \
+  LD_LIBRARY_PATH=$ROCM_ROOT/lib:${LD_LIBRARY_PATH:-} \
   cargo run -p cargo-fe2o3 -- run -p fe2o3-saxpy
 
 PATH=/home/nod/github/TheRock/.venv-rocm-latest/bin:$PATH \
@@ -221,6 +232,7 @@ scale passed for 1024 elements
 shift passed for 1024 elements
 previous passed for 1024 elements
 stencil passed for 1024 elements
+raw_gather passed for 1024 elements
 saxpy passed for 1024 elements
 axpy_inplace passed for 1024 elements
 negate passed for 1024 elements
@@ -265,6 +277,7 @@ env -u FE2O3_TARGET cargo run -p cargo-fe2o3 -- build -p fe2o3-scale
 env -u FE2O3_TARGET cargo run -p cargo-fe2o3 -- build -p fe2o3-shift
 env -u FE2O3_TARGET cargo run -p cargo-fe2o3 -- build -p fe2o3-previous
 env -u FE2O3_TARGET cargo run -p cargo-fe2o3 -- build -p fe2o3-stencil
+env -u FE2O3_TARGET cargo run -p cargo-fe2o3 -- build -p fe2o3-raw-gather
 env -u FE2O3_TARGET cargo run -p cargo-fe2o3 -- build -p fe2o3-saxpy
 env -u FE2O3_TARGET cargo run -p cargo-fe2o3 -- build -p fe2o3-axpy-inplace
 env -u FE2O3_TARGET cargo run -p cargo-fe2o3 -- build -p fe2o3-negate
@@ -293,6 +306,7 @@ cargo run -p cargo-fe2o3 -- run -p fe2o3-scale
 cargo run -p cargo-fe2o3 -- run -p fe2o3-shift
 cargo run -p cargo-fe2o3 -- run -p fe2o3-previous
 cargo run -p cargo-fe2o3 -- run -p fe2o3-stencil
+cargo run -p cargo-fe2o3 -- run -p fe2o3-raw-gather
 cargo run -p cargo-fe2o3 -- run -p fe2o3-saxpy
 cargo run -p cargo-fe2o3 -- run -p fe2o3-axpy-inplace
 cargo run -p cargo-fe2o3 -- run -p fe2o3-negate
@@ -314,6 +328,7 @@ scale passed for 1024 elements
 shift passed for 1024 elements
 previous passed for 1024 elements
 stencil passed for 1024 elements
+raw_gather passed for 1024 elements
 saxpy passed for 1024 elements
 axpy_inplace passed for 1024 elements
 negate passed for 1024 elements
@@ -329,12 +344,12 @@ reported by ROCm, for example `gfx1201`, `gfx90a`, or `gfx942`.
 
 Short-term backend surface step:
 
-1. Support raw Rust `usize` index arithmetic such as `idx.get() * 2 + 1` by
-   recognizing MIR `MulWithOverflow` / `AddWithOverflow` tuples and their field
-   projections. This reduces dependence on helper-only APIs like
-   `stride_offset`.
-2. Add one example that uses raw arithmetic and keep `cargo-fe2o3 smoke` as the
-   acceptance test.
+1. Extend raw Rust `usize` index arithmetic coverage to `idx.get() - 1` and
+   `idx.get() + 1` source-level examples so `SubWithOverflow` and simple
+   `AddWithOverflow` are covered independently of the affine gather case.
+2. Consider accepting raw arithmetic for indexed `&mut [T]` outputs, not just
+   read-only source slices, while keeping mutable non-output slice reads
+   rejected.
 
 Then replace the temporary elementwise MIR recognizer/emitter with real
 lowering:

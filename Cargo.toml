@@ -19,6 +19,7 @@ members = [
     "examples/normalize",
     "examples/pipeline",
     "examples/previous",
+    "examples/raw_gather",
     "examples/saxpy",
     "examples/scale",
     "examples/shift",
