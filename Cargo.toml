@@ -20,6 +20,7 @@ members = [
     "examples/pipeline",
     "examples/previous",
     "examples/raw_gather",
+    "examples/raw_neighbors",
     "examples/saxpy",
     "examples/scale",
     "examples/shift",

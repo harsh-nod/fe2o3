@@ -7,8 +7,8 @@ This file captures the fe2o3 state around bringing up the AMD GPU driver stack.
 - Local path: `/home/nod/github/fe2o3`
 - Branch: `main`
 - Remote: `https://github.com/powderluv/fe2o3.git`
-- Latest pushed commit before this raw-arithmetic update:
-  `0a4cda3 Refresh reboot handoff notes`
+- Latest pushed commit before this raw-neighbor update:
+  `d220499 Support raw index arithmetic`
 
 ## Implemented
 
@@ -32,15 +32,18 @@ This file captures the fe2o3 state around bringing up the AMD GPU driver stack.
   add, subtract, and multiply patterns, including debug MIR `*WithOverflow`
   tuple values.
 - The `vecadd`, `add-inplace`, `copy`, `downsample`, `fill`, `gather-odd`,
-  `scale`, `shift`, `previous`, `stencil`, `raw-gather`, `saxpy`,
-  `axpy-inplace`, `negate`, `normalize`, `pipeline`, and `vecadd-f64` examples
-  load HSACO from `FE2O3_HSACO_DIR`, which `cargo-fe2o3` sets to
+  `scale`, `shift`, `previous`, `stencil`, `raw-gather`, `raw-neighbors`,
+  `saxpy`, `axpy-inplace`, `negate`, `normalize`, `pipeline`, and
+  `vecadd-f64` examples load HSACO from `FE2O3_HSACO_DIR`, which
+  `cargo-fe2o3` sets to
   `target/fe2o3`.
 - `downsample` verifies strided reads (`idx * 2`), `gather-odd` verifies affine
   reads (`idx * 2 + 1`), and `stencil` verifies multiple derived reads from the
   same input slice.
 - `raw-gather` verifies the same affine read using raw Rust `usize` arithmetic
   instead of the `ThreadIndex::stride_offset` helper.
+- `raw-neighbors` verifies raw Rust `usize` add/sub neighbor reads independent
+  of the helper API.
 
 ## Verified Before Reboot
 
@@ -186,6 +189,12 @@ PATH=/home/nod/github/TheRock/.venv-rocm-latest/bin:$PATH \
   ROCM_PATH=$ROCM_ROOT \
   HIP_PATH=$ROCM_ROOT \
   LD_LIBRARY_PATH=$ROCM_ROOT/lib:${LD_LIBRARY_PATH:-} \
+  cargo run -p cargo-fe2o3 -- run -p fe2o3-raw-neighbors
+
+PATH=/home/nod/github/TheRock/.venv-rocm-latest/bin:$PATH \
+  ROCM_PATH=$ROCM_ROOT \
+  HIP_PATH=$ROCM_ROOT \
+  LD_LIBRARY_PATH=$ROCM_ROOT/lib:${LD_LIBRARY_PATH:-} \
   cargo run -p cargo-fe2o3 -- run -p fe2o3-saxpy
 
 PATH=/home/nod/github/TheRock/.venv-rocm-latest/bin:$PATH \
@@ -233,6 +242,7 @@ shift passed for 1024 elements
 previous passed for 1024 elements
 stencil passed for 1024 elements
 raw_gather passed for 1024 elements
+raw_neighbors passed for 1024 elements
 saxpy passed for 1024 elements
 axpy_inplace passed for 1024 elements
 negate passed for 1024 elements
@@ -278,6 +288,7 @@ env -u FE2O3_TARGET cargo run -p cargo-fe2o3 -- build -p fe2o3-shift
 env -u FE2O3_TARGET cargo run -p cargo-fe2o3 -- build -p fe2o3-previous
 env -u FE2O3_TARGET cargo run -p cargo-fe2o3 -- build -p fe2o3-stencil
 env -u FE2O3_TARGET cargo run -p cargo-fe2o3 -- build -p fe2o3-raw-gather
+env -u FE2O3_TARGET cargo run -p cargo-fe2o3 -- build -p fe2o3-raw-neighbors
 env -u FE2O3_TARGET cargo run -p cargo-fe2o3 -- build -p fe2o3-saxpy
 env -u FE2O3_TARGET cargo run -p cargo-fe2o3 -- build -p fe2o3-axpy-inplace
 env -u FE2O3_TARGET cargo run -p cargo-fe2o3 -- build -p fe2o3-negate
@@ -307,6 +318,7 @@ cargo run -p cargo-fe2o3 -- run -p fe2o3-shift
 cargo run -p cargo-fe2o3 -- run -p fe2o3-previous
 cargo run -p cargo-fe2o3 -- run -p fe2o3-stencil
 cargo run -p cargo-fe2o3 -- run -p fe2o3-raw-gather
+cargo run -p cargo-fe2o3 -- run -p fe2o3-raw-neighbors
 cargo run -p cargo-fe2o3 -- run -p fe2o3-saxpy
 cargo run -p cargo-fe2o3 -- run -p fe2o3-axpy-inplace
 cargo run -p cargo-fe2o3 -- run -p fe2o3-negate
@@ -329,6 +341,7 @@ shift passed for 1024 elements
 previous passed for 1024 elements
 stencil passed for 1024 elements
 raw_gather passed for 1024 elements
+raw_neighbors passed for 1024 elements
 saxpy passed for 1024 elements
 axpy_inplace passed for 1024 elements
 negate passed for 1024 elements
@@ -344,10 +357,7 @@ reported by ROCm, for example `gfx1201`, `gfx90a`, or `gfx942`.
 
 Short-term backend surface step:
 
-1. Extend raw Rust `usize` index arithmetic coverage to `idx.get() - 1` and
-   `idx.get() + 1` source-level examples so `SubWithOverflow` and simple
-   `AddWithOverflow` are covered independently of the affine gather case.
-2. Consider accepting raw arithmetic for indexed `&mut [T]` outputs, not just
+1. Consider accepting raw arithmetic for indexed `&mut [T]` outputs, not just
    read-only source slices, while keeping mutable non-output slice reads
    rejected.
 

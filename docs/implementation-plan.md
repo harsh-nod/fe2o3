@@ -202,12 +202,13 @@ Status: MVP implemented for `f32`/`f64` elementwise expression kernel shapes.
   scalar-times-slice multiplication; `shift` covers a positive constant-offset
   input load; `previous` covers a negative constant-offset input load; `stencil`
   covers multiple derived loads from one input slice; `raw-gather` covers raw
-  `usize` index arithmetic; `saxpy` covers a two-op expression with four kernel
-  arguments; `axpy-inplace` covers indexed mutable-slice in-place updates;
-  `add-inplace` covers `DisjointSlice::get_mut` read-before-write; `negate`
-  covers unary negation; `normalize` covers literal constants plus subtraction
-  and division; `vecadd-f64` covers double-precision addition; `pipeline` covers
-  two kernels emitted from one crate.
+  affine `usize` index arithmetic; `raw-neighbors` covers raw `usize` add/sub
+  neighbor reads; `saxpy` covers a two-op expression with four kernel arguments;
+  `axpy-inplace` covers indexed mutable-slice in-place updates; `add-inplace`
+  covers `DisjointSlice::get_mut` read-before-write; `negate` covers unary
+  negation; `normalize` covers literal constants plus subtraction and division;
+  `vecadd-f64` covers double-precision addition; `pipeline` covers two kernels
+  emitted from one crate.
 
 Remaining generalization:
 
@@ -257,6 +258,7 @@ Acceptance:
   `cargo fe2o3 build -p fe2o3-previous` produces `previous.hsaco`, and
   `cargo fe2o3 build -p fe2o3-stencil` produces `stencil.hsaco`, and
   `cargo fe2o3 build -p fe2o3-raw-gather` produces `raw_gather.hsaco`, and
+  `cargo fe2o3 build -p fe2o3-raw-neighbors` produces `raw_neighbors.hsaco`, and
   `cargo fe2o3 build -p fe2o3-saxpy` produces `saxpy.hsaco`, and
   `cargo fe2o3 build -p fe2o3-axpy-inplace` produces `axpy_inplace.hsaco`, and
   `cargo fe2o3 build -p fe2o3-negate` produces `negate.hsaco`, and
@@ -276,9 +278,9 @@ Status: MVP implemented for the current elementwise examples.
 - If `FE2O3_TARGET` is not set, `cargo-fe2o3` tries to infer the target from
   `rocminfo`.
 - The `vecadd`, `add-inplace`, `copy`, `downsample`, `fill`, `gather-odd`,
-  `scale`, `shift`, `previous`, `stencil`, `raw-gather`, `saxpy`,
-  `axpy-inplace`, `negate`, `normalize`, `pipeline`, and `vecadd-f64` examples
-  load their HSACO files from that directory.
+  `scale`, `shift`, `previous`, `stencil`, `raw-gather`, `raw-neighbors`,
+  `saxpy`, `axpy-inplace`, `negate`, `normalize`, `pipeline`, and
+  `vecadd-f64` examples load their HSACO files from that directory.
 - The examples use `fe2o3-core` to load modules, launch through HIP with the
   backend ABI, copy output back, and validate results.
 - The path has run successfully on `gfx1201` with TheRock ROCm
@@ -297,7 +299,8 @@ Acceptance:
   `cargo fe2o3 run -p fe2o3-fill`, `cargo fe2o3 run -p fe2o3-gather-odd`,
   `cargo fe2o3 run -p fe2o3-scale`, `cargo fe2o3 run -p fe2o3-shift`,
   `cargo fe2o3 run -p fe2o3-previous`, `cargo fe2o3 run -p fe2o3-stencil`,
-  `cargo fe2o3 run -p fe2o3-raw-gather`, `cargo fe2o3 run -p fe2o3-saxpy`,
+  `cargo fe2o3 run -p fe2o3-raw-gather`,
+  `cargo fe2o3 run -p fe2o3-raw-neighbors`, `cargo fe2o3 run -p fe2o3-saxpy`,
   `cargo fe2o3 run -p fe2o3-axpy-inplace`, `cargo fe2o3 run -p fe2o3-negate`,
   `cargo fe2o3 run -p fe2o3-normalize`, `cargo fe2o3 run -p fe2o3-pipeline`,
   and `cargo fe2o3 run -p fe2o3-vecadd-f64` print success on an AMD GPU.
