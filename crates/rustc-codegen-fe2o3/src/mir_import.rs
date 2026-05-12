@@ -277,6 +277,11 @@ impl MirModule {
 
                 for statement in &block.statements {
                     records.push(statement.record(&function.export_name, block.index));
+                    if let Some(record) =
+                        statement.lowering_record(&function.export_name, block.index)
+                    {
+                        records.push(record);
+                    }
                 }
 
                 if let Some(terminator) = &block.terminator {
@@ -301,11 +306,12 @@ impl MirStatement {
             .map(MirPlaceRef::label)
             .unwrap_or_else(|| "_".to_string());
         let operation = self.operation.as_deref().unwrap_or(self.kind.name());
+        let dialect_op = self.lowering_op().unwrap_or_else(|| self.dialect_op());
         if self.operands.is_empty() {
             return Some(format!(
                 "stmt{}: {} {destination} = {operation}",
                 self.index,
-                self.dialect_op().name()
+                dialect_op.name()
             ));
         }
 
@@ -318,7 +324,7 @@ impl MirStatement {
         Some(format!(
             "stmt{}: {} {destination} = {operation}({operands})",
             self.index,
-            self.dialect_op().name()
+            dialect_op.name()
         ))
     }
 
@@ -354,6 +360,39 @@ impl MirStatement {
         record
     }
 
+    fn lowering_record(&self, function: &str, block: usize) -> Option<MirOpRecord> {
+        let op = self.lowering_op()?;
+        let mut record = MirOpRecord::new(op)
+            .with_attr(MirAttr::string("function", function))
+            .with_attr(MirAttr::usize("block", block))
+            .with_attr(MirAttr::usize("statement", self.index))
+            .with_attr(MirAttr::string("source", self.dialect_op().name()))
+            .with_attr(MirAttr::usize("operand_count", self.operands.len()));
+
+        if let Some(destination) = &self.destination {
+            record
+                .attrs
+                .push(MirAttr::usize("destination_local", destination.local));
+            record
+                .attrs
+                .push(MirAttr::string("destination", destination.label()));
+        }
+        if let Some(operation) = &self.operation {
+            record.attrs.push(MirAttr::string("operation", operation));
+        }
+        if !self.operands.is_empty() {
+            let operands = self
+                .operands
+                .iter()
+                .map(MirOperandRef::label)
+                .collect::<Vec<_>>()
+                .join(", ");
+            record.attrs.push(MirAttr::string("operands", operands));
+        }
+
+        Some(record)
+    }
+
     fn dialect_op(&self) -> MirOp {
         match self.kind {
             MirStatementKind::Assign => MirOp::Assign,
@@ -365,6 +404,30 @@ impl MirStatement {
             | MirStatementKind::Coverage
             | MirStatementKind::Nop
             | MirStatementKind::Other => MirOp::Statement,
+        }
+    }
+
+    fn lowering_op(&self) -> Option<MirOp> {
+        if self.kind != MirStatementKind::Assign {
+            return None;
+        }
+        if self
+            .destination
+            .as_ref()
+            .is_some_and(MirPlaceRef::is_memory_projection)
+        {
+            return Some(MirOp::Store);
+        }
+
+        match self.operation.as_deref()? {
+            "add" | "add_unchecked" | "add_with_overflow" => Some(MirOp::Add),
+            "sub" | "sub_unchecked" | "sub_with_overflow" => Some(MirOp::Sub),
+            "mul" | "mul_unchecked" | "mul_with_overflow" => Some(MirOp::Mul),
+            "div" => Some(MirOp::Div),
+            "offset" => Some(MirOp::Gep),
+            "ptr_metadata" => Some(MirOp::SliceLen),
+            "use" if self.operands.iter().any(MirOperandRef::is_memory_place) => Some(MirOp::Load),
+            _ => None,
         }
     }
 }
@@ -401,6 +464,14 @@ impl MirPlaceRef {
         }
         label
     }
+
+    fn is_memory_projection(&self) -> bool {
+        self.projection.iter().any(|projection| {
+            projection == "deref"
+                || projection.starts_with("index_")
+                || projection.starts_with("constant_index")
+        })
+    }
 }
 
 impl MirOperandRef {
@@ -409,6 +480,10 @@ impl MirOperandRef {
             Self::Place(place) => place.label(),
             Self::Constant { ty, value } => format!("const:{}={value}", ty.kind.name()),
         }
+    }
+
+    fn is_memory_place(&self) -> bool {
+        matches!(self, Self::Place(place) if place.is_memory_projection())
     }
 }
 
@@ -869,13 +944,54 @@ mod tests {
         assert_eq!(records[2].op, MirOp::Arg);
         assert_eq!(records[3].op, MirOp::Block);
         assert_eq!(records[4].op, MirOp::Assign);
-        assert_eq!(records[5].op, MirOp::Return);
+        assert_eq!(records[5].op, MirOp::Load);
+        assert_eq!(records[6].op, MirOp::Return);
         assert_eq!(record_usize(&records[4], "destination_local"), Some(3));
         assert_eq!(record_string(&records[4], "operation"), Some("use"));
         assert_eq!(
             record_string(&records[4], "operands"),
             Some("local1.deref.index_local2")
         );
+        assert_eq!(record_usize(&records[5], "statement"), Some(0));
+        assert_eq!(record_string(&records[5], "source"), Some("mir.assign"));
+    }
+
+    #[test]
+    fn assignments_classify_lowering_ops() {
+        let arithmetic = MirStatement {
+            index: 0,
+            kind: MirStatementKind::Assign,
+            destination: Some(local_place(3)),
+            operands: vec![
+                MirOperandRef::Place(local_place(1)),
+                MirOperandRef::Place(local_place(2)),
+            ],
+            operation: Some("mul_with_overflow".to_string()),
+        };
+        let load = MirStatement {
+            index: 1,
+            kind: MirStatementKind::Assign,
+            destination: Some(local_place(4)),
+            operands: vec![MirOperandRef::Place(MirPlaceRef {
+                local: 1,
+                projection: vec!["deref".to_string(), "index_local2".to_string()],
+            })],
+            operation: Some("use".to_string()),
+        };
+        let store = MirStatement {
+            index: 2,
+            kind: MirStatementKind::Assign,
+            destination: Some(MirPlaceRef {
+                local: 5,
+                projection: vec!["deref".to_string()],
+            }),
+            operands: vec![MirOperandRef::Place(local_place(4))],
+            operation: Some("use".to_string()),
+        };
+
+        assert_eq!(arithmetic.lowering_op(), Some(MirOp::Mul));
+        assert_eq!(load.lowering_op(), Some(MirOp::Load));
+        assert_eq!(store.lowering_op(), Some(MirOp::Store));
     }
 
     fn simple_statement(index: usize, kind: MirStatementKind) -> MirStatement {
@@ -885,6 +1001,13 @@ mod tests {
             destination: None,
             operands: Vec::new(),
             operation: None,
+        }
+    }
+
+    fn local_place(local: usize) -> MirPlaceRef {
+        MirPlaceRef {
+            local,
+            projection: Vec::new(),
         }
     }
 

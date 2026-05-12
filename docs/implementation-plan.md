@@ -192,7 +192,9 @@ Status: MVP implemented for `f32`/`f64` elementwise expression kernel shapes.
   Pliron-facing scaffold with local `mir.*` dialect names and dumps
   function/block/statement/terminator shape for lowering work. The scaffold
   also builds a flat typed `mir.*` operation-record stream for the future Pliron
-  builder, including typed locals plus statement destination and operand labels.
+  builder, including typed locals, statement destination and operand labels, and
+  the first operation-specific lowering records such as `mir.load`, `mir.store`,
+  `mir.gep`, `mir.slice_len`, and arithmetic ops.
 - The backend emits an AMDGPU LLVM IR `amdgpu_kernel` after validating the ABI
   and body pattern.
 - The emitted IR uses `llvm.amdgcn.workitem.id.x` and
@@ -393,7 +395,7 @@ calls can break GPU synchronization semantics.
 Grow the MIR import scaffold into the first real lowering path:
 
 1. Add the first record-driven lowering pass for the current elementwise kernel
-   shapes, using the typed local records and statement destination/operand
+   shapes, using the typed local records plus operation-specific statement
    records instead of re-walking raw rustc MIR in the temporary recognizer.
 2. Lower enough operations for the current elementwise kernel shapes: args,
    basic blocks, integer arithmetic, pointer arithmetic, loads/stores, branch,

@@ -40,7 +40,9 @@ dumps the currently collected device-reachable MIR functions. When
 `FE2O3_DUMP_MIR=1` is set, it also prints the first Pliron-facing MIR import
 scaffold for the collected device functions using local `mir.*` dialect names
 and builds a flat typed `mir.*` operation-record stream for the future Pliron
-builder, including typed locals plus statement destination and operand labels.
+builder, including typed locals, statement destination and operand labels, and
+the first operation-specific lowering records such as `mir.load`, `mir.store`,
+and arithmetic ops.
 
 The backend also has the first AMDGPU artifact path: for the current `f32`/`f64`
 elementwise kernel shapes it validates the Rust kernel ABI from monomorphized

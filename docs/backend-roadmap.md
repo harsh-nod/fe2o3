@@ -22,7 +22,9 @@ For the full milestone plan, see [implementation-plan.md](implementation-plan.md
   Pliron-facing scaffold and prints function, block, statement, and terminator
   shape without changing the current HSACO emission path. The scaffold also
   builds a flat typed `mir.*` operation-record stream for the future Pliron
-  builder, including typed locals plus statement destination and operand labels.
+  builder, including typed locals, statement destination and operand labels, and
+  the first operation-specific lowering records such as `mir.load`, `mir.store`,
+  `mir.gep`, `mir.slice_len`, and arithmetic ops.
 - `rustc-codegen-fe2o3` contains the first real backend utilities:
   - ABI validation for supported kernel arguments from monomorphized MIR locals.
   - A narrow MIR recognizer and AMDGPU LLVM IR emitter for `f32`/`f64` elementwise
