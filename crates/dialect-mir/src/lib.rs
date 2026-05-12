@@ -1,5 +1,53 @@
 pub const DIALECT: &str = "mir";
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MirOpRecord {
+    pub op: MirOp,
+    pub attrs: Vec<MirAttr>,
+}
+
+impl MirOpRecord {
+    pub fn new(op: MirOp) -> Self {
+        Self {
+            op,
+            attrs: Vec::new(),
+        }
+    }
+
+    pub fn with_attr(mut self, attr: MirAttr) -> Self {
+        self.attrs.push(attr);
+        self
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MirAttr {
+    pub name: &'static str,
+    pub value: MirAttrValue,
+}
+
+impl MirAttr {
+    pub fn string(name: &'static str, value: impl Into<String>) -> Self {
+        Self {
+            name,
+            value: MirAttrValue::String(value.into()),
+        }
+    }
+
+    pub fn usize(name: &'static str, value: usize) -> Self {
+        Self {
+            name,
+            value: MirAttrValue::Usize(value),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MirAttrValue {
+    String(String),
+    Usize(usize),
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MirOp {
     Module,
@@ -25,6 +73,7 @@ pub enum MirOp {
     SliceLen,
     SlicePtr,
     Gep,
+    Other,
 }
 
 impl MirOp {
@@ -53,6 +102,7 @@ impl MirOp {
             Self::SliceLen => "mir.slice_len",
             Self::SlicePtr => "mir.slice_ptr",
             Self::Gep => "mir.gep",
+            Self::Other => "mir.other",
         }
     }
 }
@@ -104,5 +154,15 @@ mod tests {
     fn type_names_are_dialect_qualified() {
         assert_eq!(MirType::USize.name(), "mir.usize");
         assert_eq!(MirType::DisjointSlice.name(), "mir.disjoint_slice");
+    }
+
+    #[test]
+    fn op_records_carry_attributes() {
+        let record = MirOpRecord::new(MirOp::Func)
+            .with_attr(MirAttr::string("symbol", "vecadd"))
+            .with_attr(MirAttr::usize("args", 3));
+
+        assert_eq!(record.op, MirOp::Func);
+        assert_eq!(record.attrs.len(), 2);
     }
 }

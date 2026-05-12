@@ -20,7 +20,8 @@ For the full milestone plan, see [implementation-plan.md](implementation-plan.md
   and dumps a deterministic collection summary.
 - `FE2O3_DUMP_MIR=1` imports the collected device MIR into a small
   Pliron-facing scaffold and prints function, block, statement, and terminator
-  shape without changing the current HSACO emission path.
+  shape without changing the current HSACO emission path. The scaffold also
+  builds a flat `mir.*` operation-record stream for the future Pliron builder.
 - `rustc-codegen-fe2o3` contains the first real backend utilities:
   - ABI validation for supported kernel arguments from monomorphized MIR locals.
   - A narrow MIR recognizer and AMDGPU LLVM IR emitter for `f32`/`f64` elementwise

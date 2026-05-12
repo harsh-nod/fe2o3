@@ -1,5 +1,5 @@
 use crate::collector::CollectionResult;
-use dialect_mir::MirOp;
+use dialect_mir::{MirAttr, MirOp, MirOpRecord};
 use rustc_hir::def_id::LOCAL_CRATE;
 use rustc_middle::mir::{BasicBlock, Body, Operand, StatementKind, TerminatorKind};
 use rustc_middle::ty::{TyCtxt, TyKind};
@@ -121,9 +121,10 @@ pub fn import_collection<'tcx>(
 
 impl MirModule {
     pub fn summary(&self) -> String {
+        let record_count = self.dialect_records().len();
         let mut output = format!(
-            "\n=== fe2o3 MIR import scaffold ({}) ===\n",
-            MirOp::Module.name()
+            "\n=== fe2o3 MIR import scaffold ({}, {record_count} op records) ===\n",
+            MirOp::Module.name(),
         );
         for function in &self.functions {
             let kind = match function.kind {
@@ -162,9 +163,85 @@ impl MirModule {
         output.push_str("===================================\n");
         output
     }
+
+    pub fn dialect_records(&self) -> Vec<MirOpRecord> {
+        let mut records = vec![
+            MirOpRecord::new(MirOp::Module)
+                .with_attr(MirAttr::usize("functions", self.functions.len())),
+        ];
+
+        for function in &self.functions {
+            let kind = match function.kind {
+                MirFunctionKind::Kernel => "kernel",
+                MirFunctionKind::Device => "device",
+            };
+            records.push(
+                MirOpRecord::new(MirOp::Func)
+                    .with_attr(MirAttr::string("symbol", &function.export_name))
+                    .with_attr(MirAttr::string("kind", kind))
+                    .with_attr(MirAttr::usize("args", function.arg_count))
+                    .with_attr(MirAttr::usize("locals", function.local_count))
+                    .with_attr(MirAttr::usize("blocks", function.blocks.len())),
+            );
+
+            for block in &function.blocks {
+                records.push(
+                    MirOpRecord::new(MirOp::Block)
+                        .with_attr(MirAttr::string("function", &function.export_name))
+                        .with_attr(MirAttr::usize("index", block.index))
+                        .with_attr(MirAttr::usize("statements", block.statements.len())),
+                );
+
+                if let Some(terminator) = &block.terminator {
+                    records.push(terminator.kind.record(&function.export_name, block.index));
+                }
+            }
+        }
+
+        records
+    }
 }
 
 impl MirTerminatorKind {
+    fn record(&self, function: &str, block: usize) -> MirOpRecord {
+        let mut record = MirOpRecord::new(self.dialect_op())
+            .with_attr(MirAttr::string("function", function))
+            .with_attr(MirAttr::usize("block", block));
+
+        match self {
+            Self::Goto { target } | Self::Assert { target } | Self::Drop { target } => {
+                record.attrs.push(MirAttr::usize("target", *target));
+            }
+            Self::SwitchInt { targets } => {
+                record.attrs.push(MirAttr::usize("targets", *targets));
+            }
+            Self::Call { callee, target } => {
+                if let Some(callee) = callee {
+                    record.attrs.push(MirAttr::string("callee", callee));
+                }
+                if let Some(target) = target {
+                    record.attrs.push(MirAttr::usize("target", *target));
+                }
+            }
+            Self::Return | Self::Unreachable | Self::Other => {}
+        }
+
+        record
+    }
+
+    fn dialect_op(&self) -> MirOp {
+        match self {
+            Self::Return => MirOp::Return,
+            Self::Unreachable => MirOp::Unreachable,
+            Self::Goto { .. } => MirOp::Branch,
+            Self::SwitchInt { .. } => MirOp::Switch,
+            Self::Call { .. } => MirOp::Call,
+            Self::Assert { .. } => MirOp::Assert,
+            Self::Drop { .. } => MirOp::Drop,
+            Self::Other => MirOp::Other,
+        }
+    }
+
     fn summary(&self) -> String {
         match self {
             Self::Return => MirOp::Return.name().to_string(),
@@ -306,5 +383,32 @@ mod tests {
         assert!(summary.contains("fe2o3_vecadd::fe2o3_kernel_vecadd"));
         assert!(summary.contains("1 bb, 17 locals, 3 args"));
         assert!(summary.contains("bb0 (mir.block): 2 stmt(s), mir.br -> bb1"));
+    }
+
+    #[test]
+    fn dialect_records_include_function_blocks_and_terminators() {
+        let module = MirModule {
+            functions: vec![MirFunction {
+                export_name: "vecadd".to_string(),
+                rust_path: "fe2o3_vecadd::fe2o3_kernel_vecadd".to_string(),
+                kind: MirFunctionKind::Kernel,
+                arg_count: 3,
+                local_count: 17,
+                blocks: vec![MirBlock {
+                    index: 0,
+                    statements: Vec::new(),
+                    terminator: Some(MirTerminator {
+                        kind: MirTerminatorKind::Return,
+                    }),
+                }],
+            }],
+        };
+
+        let records = module.dialect_records();
+
+        assert_eq!(records[0].op, MirOp::Module);
+        assert_eq!(records[1].op, MirOp::Func);
+        assert_eq!(records[2].op, MirOp::Block);
+        assert_eq!(records[3].op, MirOp::Return);
     }
 }
