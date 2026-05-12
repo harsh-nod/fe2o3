@@ -7,8 +7,8 @@ This file captures the fe2o3 state around bringing up the AMD GPU driver stack.
 - Local path: `/home/nod/github/fe2o3`
 - Branch: `main`
 - Remote: `https://github.com/powderluv/fe2o3.git`
-- Latest pushed commit before this MIR import scaffold update:
-  `9e3f8f0 Add parenthesized raw index smoke`
+- Latest pushed commit before this MIR dialect seam update:
+  `7c29d77 Add MIR import scaffold dump`
 
 ## Implemented
 
@@ -21,6 +21,8 @@ This file captures the fe2o3 state around bringing up the AMD GPU driver stack.
 - `FE2O3_DUMP_MIR=1` imports the collected device MIR into a first
   Pliron-facing scaffold and prints function, block, statement, and terminator
   shape.
+- `dialect-mir` defines local `mir.*` operation/type names for the MIR import
+  scaffold and future Pliron lowering.
 - The current `f32`/`f64` elementwise MIR expression shapes emit AMDGPU LLVM IR.
 - Generated LLVM IR is compiled through ROCm clang and linked with `ld.lld` into
   `target/fe2o3/*.hsaco`.
@@ -437,8 +439,8 @@ reported by ROCm, for example `gfx1201`, `gfx90a`, or `gfx942`.
 
 Short-term backend surface step:
 
-1. Add the first Pliron dependency or a local dialect trait layer that can be
-   backed by Pliron once the exact API is pinned.
+1. Add a lowering skeleton from the MIR import scaffold to `mir.*` operations,
+   starting with function/block/control-flow shape.
 
 Then replace the temporary elementwise MIR recognizer/emitter with real
 lowering:

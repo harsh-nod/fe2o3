@@ -10,6 +10,7 @@ build = "build.rs"
 
 [dependencies]
 dialect-amdgcn.workspace = true
+dialect-mir.workspace = true
 reserved-fe2o3-symbols.workspace = true
 
 [lib]

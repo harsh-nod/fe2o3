@@ -28,6 +28,7 @@ interfaces needed to reach that target:
 - `rustc-codegen-fe2o3`: backend support code and HSACO toolchain hooks.
 - `cargo-fe2o3`: cargo subcommand and environment diagnostics.
 - `dialect-amdgcn`: AMDGPU intrinsic naming seam for the future Pliron lowering.
+- `dialect-mir`: Rust MIR dialect naming seam for the future Pliron lowering.
 
 ## Current Status
 
@@ -37,7 +38,7 @@ examples on AMD hardware. `cargo-fe2o3 build` builds and loads
 `rustc_codegen_llvm`, detects `#[kernel]` functions in rustc codegen units, and
 dumps the currently collected device-reachable MIR functions. When
 `FE2O3_DUMP_MIR=1` is set, it also prints the first Pliron-facing MIR import
-scaffold for the collected device functions.
+scaffold for the collected device functions using local `mir.*` dialect names.
 
 The backend also has the first AMDGPU artifact path: for the current `f32`/`f64`
 elementwise kernel shapes it validates the Rust kernel ABI from monomorphized

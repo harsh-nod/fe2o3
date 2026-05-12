@@ -2,6 +2,7 @@
 members = [
     "crates/cargo-fe2o3",
     "crates/dialect-amdgcn",
+    "crates/dialect-mir",
     "crates/fe2o3-core",
     "crates/fe2o3-device",
     "crates/fe2o3-hip-sys",
@@ -44,6 +45,7 @@ rust-version = "1.94"
 
 [workspace.dependencies]
 dialect-amdgcn = { path = "crates/dialect-amdgcn" }
+dialect-mir = { path = "crates/dialect-mir" }
 fe2o3-core = { path = "crates/fe2o3-core" }
 fe2o3-device = { path = "crates/fe2o3-device" }
 fe2o3-hip-sys = { path = "crates/fe2o3-hip-sys" }

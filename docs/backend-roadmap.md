@@ -5,6 +5,8 @@ For the full milestone plan, see [implementation-plan.md](implementation-plan.md
 ## Implemented In This Scaffold
 
 - Project naming and reserved symbol namespace use `fe2o3`.
+- `dialect-mir` defines the local `mir.*` operation/type naming seam that the
+  MIR import scaffold can later back with Pliron operations.
 - A HIP runtime wrapper can allocate buffers, copy data, load HSACO modules, look
   up kernels, and launch them with packed parameter arrays.
 - `#[kernel]` marks device functions by renaming them to the reserved

@@ -1,4 +1,5 @@
 use crate::collector::CollectionResult;
+use dialect_mir::MirOp;
 use rustc_hir::def_id::LOCAL_CRATE;
 use rustc_middle::mir::{BasicBlock, Body, Operand, StatementKind, TerminatorKind};
 use rustc_middle::ty::{TyCtxt, TyKind};
@@ -120,13 +121,21 @@ pub fn import_collection<'tcx>(
 
 impl MirModule {
     pub fn summary(&self) -> String {
-        let mut output = String::from("\n=== fe2o3 MIR import scaffold ===\n");
+        let mut output = format!(
+            "\n=== fe2o3 MIR import scaffold ({}) ===\n",
+            MirOp::Module.name()
+        );
         for function in &self.functions {
             let kind = match function.kind {
                 MirFunctionKind::Kernel => "kernel",
                 MirFunctionKind::Device => "device",
             };
-            let _ = writeln!(output, "  [{kind}] {}", function.export_name);
+            let _ = writeln!(
+                output,
+                "  [{kind}] {} ({})",
+                function.export_name,
+                MirOp::Func.name()
+            );
             let _ = writeln!(output, "      path: {}", function.rust_path);
             let _ = writeln!(
                 output,
@@ -143,8 +152,9 @@ impl MirModule {
                     .unwrap_or("missing terminator".to_string());
                 let _ = writeln!(
                     output,
-                    "      bb{}: {} stmt(s), {terminator}",
+                    "      bb{} ({}): {} stmt(s), {terminator}",
                     block.index,
+                    MirOp::Block.name(),
                     block.statements.len()
                 );
             }
@@ -157,19 +167,21 @@ impl MirModule {
 impl MirTerminatorKind {
     fn summary(&self) -> String {
         match self {
-            Self::Return => "return".to_string(),
-            Self::Unreachable => "unreachable".to_string(),
-            Self::Goto { target } => format!("goto bb{target}"),
-            Self::SwitchInt { targets } => format!("switch_int ({targets} target(s))"),
+            Self::Return => MirOp::Return.name().to_string(),
+            Self::Unreachable => MirOp::Unreachable.name().to_string(),
+            Self::Goto { target } => format!("{} -> bb{target}", MirOp::Branch.name()),
+            Self::SwitchInt { targets } => {
+                format!("{} ({targets} target(s))", MirOp::Switch.name())
+            }
             Self::Call { callee, target } => {
                 let callee = callee.as_deref().unwrap_or("<dynamic>");
                 match target {
-                    Some(target) => format!("call {callee} -> bb{target}"),
-                    None => format!("call {callee} -> return"),
+                    Some(target) => format!("{} {callee} -> bb{target}", MirOp::Call.name()),
+                    None => format!("{} {callee} -> return", MirOp::Call.name()),
                 }
             }
-            Self::Assert { target } => format!("assert -> bb{target}"),
-            Self::Drop { target } => format!("drop -> bb{target}"),
+            Self::Assert { target } => format!("{} -> bb{target}", MirOp::Assert.name()),
+            Self::Drop { target } => format!("{} -> bb{target}", MirOp::Drop.name()),
             Self::Other => "other".to_string(),
         }
     }
@@ -290,9 +302,9 @@ mod tests {
 
         let summary = module.summary();
 
-        assert!(summary.contains("[kernel] vecadd"));
+        assert!(summary.contains("[kernel] vecadd (mir.func)"));
         assert!(summary.contains("fe2o3_vecadd::fe2o3_kernel_vecadd"));
         assert!(summary.contains("1 bb, 17 locals, 3 args"));
-        assert!(summary.contains("bb0: 2 stmt(s), goto bb1"));
+        assert!(summary.contains("bb0 (mir.block): 2 stmt(s), mir.br -> bb1"));
     }
 }

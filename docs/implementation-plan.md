@@ -92,6 +92,7 @@ shortest path to a running kernel is a Pliron-based AMDGPU LLVM IR exporter.
 - `fe2o3-core`: HIP-backed context, stream, memory, module, and launch runtime.
 - `fe2o3-host`: launch macro and host ergonomics.
 - `dialect-amdgcn`: AMDGPU intrinsic and address-space lowering seam.
+- `dialect-mir`: MIR operation/type naming seam for the future Pliron lowering.
 
 ## Device ABI
 
@@ -188,8 +189,8 @@ Status: MVP implemented for `f32`/`f64` elementwise expression kernel shapes.
 - Raw `usize` index arithmetic can combine two tracked affine index expressions
   for source and output indexes.
 - `FE2O3_DUMP_MIR=1` imports the collected device MIR into a first
-  Pliron-facing scaffold and dumps function/block/terminator shape for lowering
-  work.
+  Pliron-facing scaffold with local `mir.*` dialect names and dumps
+  function/block/terminator shape for lowering work.
 - The backend emits an AMDGPU LLVM IR `amdgpu_kernel` after validating the ABI
   and body pattern.
 - The emitted IR uses `llvm.amdgcn.workitem.id.x` and
