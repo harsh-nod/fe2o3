@@ -33,6 +33,8 @@ For the full milestone plan, see [implementation-plan.md](implementation-plan.md
   `fe2o3-stencil` covers multiple derived loads from one input slice,
   `fe2o3-raw-gather` covers raw affine `usize` index arithmetic,
   `fe2o3-raw-neighbors` covers raw `usize` add/sub neighbor reads,
+  `fe2o3-raw-output-shift` covers raw `usize` arithmetic for an indexed
+  `&mut [f32]` output store,
   `fe2o3-saxpy` covers a multi-op expression tree, and
   `fe2o3-axpy-inplace` covers indexed `&mut [f32]` output with read-before-write.
 - `fe2o3-add-inplace` covers `DisjointSlice::get_mut` output read-before-write.
@@ -41,9 +43,9 @@ For the full milestone plan, see [implementation-plan.md](implementation-plan.md
 - `fe2o3-vecadd-f64` covers double-precision elementwise emission.
 - The `vecadd`, `add-inplace`, `copy`, `downsample`, `fill`, `gather-odd`,
   `scale`, `shift`, `previous`, `stencil`, `raw-gather`, `raw-neighbors`,
-  `saxpy`, `axpy-inplace`, `negate`, `normalize`, `pipeline`, and
-  `vecadd-f64` examples load their HSACO files from `FE2O3_HSACO_DIR`, which is
-  set by `cargo-fe2o3 build/run`.
+  `raw-output-shift`, `saxpy`, `axpy-inplace`, `negate`, `normalize`,
+  `pipeline`, and `vecadd-f64` examples load their HSACO files from
+  `FE2O3_HSACO_DIR`, which is set by `cargo-fe2o3 build/run`.
 - `cargo-fe2o3 build/run -p <package>` cleans explicit package artifacts before
   invoking Cargo so device sidecars are regenerated predictably.
 - `cargo-fe2o3 smoke` runs the supported backend examples in sequence.
@@ -53,9 +55,9 @@ For the full milestone plan, see [implementation-plan.md](implementation-plan.md
   variable is not set.
 - End-to-end `vecadd`, `add-inplace`, `copy`, `downsample`, `fill`,
   `gather-odd`, `scale`, `shift`, `previous`, `stencil`, `saxpy`,
-  `raw-gather`, `raw-neighbors`, `axpy-inplace`, `negate`, `normalize`,
-  `pipeline`, and `vecadd-f64` have run successfully on `gfx1201` using
-  TheRock ROCm `7.13.0a20260509`.
+  `raw-gather`, `raw-neighbors`, `raw-output-shift`, `axpy-inplace`, `negate`,
+  `normalize`, `pipeline`, and `vecadd-f64` have run successfully on `gfx1201`
+  using TheRock ROCm `7.13.0a20260509`.
 
 ## Next Compiler Milestones
 

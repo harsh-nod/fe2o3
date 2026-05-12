@@ -19,6 +19,7 @@ const SMOKE_PACKAGES: &[&str] = &[
     "fe2o3-stencil",
     "fe2o3-raw-gather",
     "fe2o3-raw-neighbors",
+    "fe2o3-raw-output-shift",
     "fe2o3-saxpy",
     "fe2o3-axpy-inplace",
     "fe2o3-negate",

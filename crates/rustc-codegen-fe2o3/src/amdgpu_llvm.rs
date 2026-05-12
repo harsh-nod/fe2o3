@@ -117,6 +117,7 @@ struct KernelArg {
 struct ElementwiseShape {
     expr: ElementwiseExpr,
     output_arg: usize,
+    output_index: IndexExpr,
 }
 
 #[derive(Clone, Debug)]
@@ -710,11 +711,11 @@ fn analyze_elementwise_shape<'tcx>(
 
                     if place.projection.is_empty() {
                         local_exprs.insert(place.local, expr);
-                    } else if let Some(arg_index) =
-                        store_output_arg(place, output_arg, &arg_locals, &index_expr_locals)
+                    } else if let Some(output) =
+                        store_output_source(place, output_arg, &arg_locals, &index_expr_locals)
                     {
-                        output_arg = Some(arg_index);
-                        elementwise_store = Some(expr);
+                        output_arg = Some(output.arg_index);
+                        elementwise_store = Some((expr, output));
                     }
                 }
                 Rvalue::BinaryOp(op, operands) => {
@@ -730,11 +731,11 @@ fn analyze_elementwise_shape<'tcx>(
 
                         if place.projection.is_empty() {
                             local_exprs.insert(place.local, expr);
-                        } else if let Some(arg_index) =
-                            store_output_arg(place, output_arg, &arg_locals, &index_expr_locals)
+                        } else if let Some(output) =
+                            store_output_source(place, output_arg, &arg_locals, &index_expr_locals)
                         {
-                            output_arg = Some(arg_index);
-                            elementwise_store = Some(expr);
+                            output_arg = Some(output.arg_index);
+                            elementwise_store = Some((expr, output));
                         }
                     }
                 }
@@ -752,11 +753,11 @@ fn analyze_elementwise_shape<'tcx>(
 
                     if place.projection.is_empty() {
                         local_exprs.insert(place.local, expr);
-                    } else if let Some(arg_index) =
-                        store_output_arg(place, output_arg, &arg_locals, &index_expr_locals)
+                    } else if let Some(output) =
+                        store_output_source(place, output_arg, &arg_locals, &index_expr_locals)
                     {
-                        output_arg = Some(arg_index);
-                        elementwise_store = Some(expr);
+                        output_arg = Some(output.arg_index);
+                        elementwise_store = Some((expr, output));
                     }
                 }
                 _ => {}
@@ -764,7 +765,7 @@ fn analyze_elementwise_shape<'tcx>(
         }
     }
 
-    let root = elementwise_store
+    let (root, output) = elementwise_store
         .ok_or_else(|| "missing `output[idx] = <elementwise expression>` store".to_string())?;
     let output_arg = output_arg.ok_or_else(|| {
         "missing mutable slice or `DisjointSlice::get_mut` output path".to_string()
@@ -774,7 +775,11 @@ fn analyze_elementwise_shape<'tcx>(
         root,
     };
 
-    Ok(ElementwiseShape { expr, output_arg })
+    Ok(ElementwiseShape {
+        expr,
+        output_arg,
+        output_index: output.index,
+    })
 }
 
 impl ValueSource {
@@ -861,6 +866,13 @@ impl IndexExpr {
             format!("_p{offset}")
         } else {
             format!("_m{}", offset.unsigned_abs())
+        }
+    }
+
+    fn is_unique_per_thread(self) -> bool {
+        match self {
+            Self::Thread | Self::Offset(_) => true,
+            Self::Stride(stride) | Self::StrideOffset { stride, .. } => stride != 0,
         }
     }
 }
@@ -1019,17 +1031,20 @@ fn indexed_arg_place(
     Some(SliceElementSource { arg_index, index })
 }
 
-fn store_output_arg(
+fn store_output_source(
     place: &Place<'_>,
     disjoint_output_arg: Option<usize>,
     arg_locals: &[Local],
     index_expr_locals: &HashMap<Local, IndexExpr>,
-) -> Option<usize> {
+) -> Option<SliceElementSource> {
     if is_deref_place(place) {
-        return disjoint_output_arg;
+        return disjoint_output_arg.map(|arg_index| SliceElementSource {
+            arg_index,
+            index: IndexExpr::Thread,
+        });
     }
 
-    indexed_arg_place(*place, arg_locals, index_expr_locals).map(|source| source.arg_index)
+    indexed_arg_place(*place, arg_locals, index_expr_locals)
 }
 
 fn operand_expr<'tcx>(
@@ -1116,6 +1131,7 @@ fn emit_elementwise_kernel(abi: &KernelAbi, shape: &ElementwiseShape) -> Result<
     let load_lines = emit_loads(abi, &read_slice_sources, llvm_type, align);
     let compute_lines = emit_expr_ops(&shape.expr, abi, llvm_type);
     let result_value = expr_ref_value(shape.expr.root, abi);
+    let output_index = shape.output_index.llvm_value();
 
     // This is the first AMDGPU LLVM IR milestone, intentionally scoped to
     // simple f32/f64 elementwise expression kernels. It matches
@@ -1140,7 +1156,7 @@ entry:
 
 body:
 {load_lines}{compute_lines}
-  %{c_base}_store_ptr = getelementptr inbounds {llvm_type}, ptr addrspace(1) %{c_base}_ptr, i64 %idx
+  %{c_base}_store_ptr = getelementptr inbounds {llvm_type}, ptr addrspace(1) %{c_base}_ptr, i64 {output_index}
   store {llvm_type} {result_value}, ptr addrspace(1) %{c_base}_store_ptr, align {align}
   br label %exit
 
@@ -1162,6 +1178,7 @@ attributes #1 = {{ nounwind readnone speculatable }}
         llvm_type = llvm_type,
         align = align,
         compute_lines = compute_lines,
+        output_index = output_index,
         result_value = result_value,
     ))
 }
@@ -1186,6 +1203,13 @@ fn validate_elementwise_abi(abi: &KernelAbi, shape: &ElementwiseShape) -> Result
         return Err(unsupported_kernel(
             &abi.name,
             "elementwise lowering expects one mutable output slice",
+        ));
+    }
+
+    if !shape.output_index.is_unique_per_thread() {
+        return Err(unsupported_kernel(
+            &abi.name,
+            "mutable output index must be unique per thread",
         ));
     }
 
@@ -1253,7 +1277,7 @@ fn bounds_slice_sources(shape: &ElementwiseShape) -> Vec<SliceElementSource> {
     let mut sources = read_slice_sources(shape);
     let output_source = SliceElementSource {
         arg_index: shape.output_arg,
-        index: IndexExpr::Thread,
+        index: shape.output_index,
     };
     if !sources.contains(&output_source) {
         sources.push(output_source);

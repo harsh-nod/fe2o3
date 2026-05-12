@@ -21,6 +21,7 @@ members = [
     "examples/previous",
     "examples/raw_gather",
     "examples/raw_neighbors",
+    "examples/raw_output_shift",
     "examples/saxpy",
     "examples/scale",
     "examples/shift",
