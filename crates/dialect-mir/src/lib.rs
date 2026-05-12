@@ -53,9 +53,11 @@ pub enum MirOp {
     Module,
     Func,
     Block,
+    Statement,
     Arg,
     Local,
     Const,
+    Assign,
     Add,
     Sub,
     Mul,
@@ -83,9 +85,11 @@ impl MirOp {
             Self::Module => "mir.module",
             Self::Func => "mir.func",
             Self::Block => "mir.block",
+            Self::Statement => "mir.statement",
             Self::Arg => "mir.arg",
             Self::Local => "mir.local",
             Self::Const => "mir.const",
+            Self::Assign => "mir.assign",
             Self::Add => "mir.add",
             Self::Sub => "mir.sub",
             Self::Mul => "mir.mul",
@@ -149,6 +153,7 @@ mod tests {
     #[test]
     fn operation_names_are_dialect_qualified() {
         assert_eq!(MirOp::Func.name(), "mir.func");
+        assert_eq!(MirOp::Assign.name(), "mir.assign");
         assert_eq!(MirOp::ThreadIndex1d.name(), "mir.thread_index_1d");
     }
 
