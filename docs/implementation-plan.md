@@ -176,8 +176,8 @@ Status: MVP implemented for `f32`/`f64` elementwise expression kernel shapes.
   float literals, and expression nodes are `+`, `-`, `*`, `/`, or unary
   negation. Operands must match the output element type. Leaf-only stores such
   as `out[i] = x[i]` are also supported.
-- Read-only slice inputs can use `ThreadIndex::offset(<constant>)` for simple
-  shifted loads.
+- Read-only slice inputs can use `ThreadIndex::offset(<constant>)` and
+  `ThreadIndex::offset_signed(<constant>)` for simple shifted loads.
 - The backend emits an AMDGPU LLVM IR `amdgpu_kernel` after validating the ABI
   and body pattern.
 - The emitted IR uses `llvm.amdgcn.workitem.id.x` and
@@ -191,7 +191,8 @@ Status: MVP implemented for `f32`/`f64` elementwise expression kernel shapes.
 - It assumes the current `LaunchConfig::for_num_elems` block size of 256.
 - `vecadd` covers slice-plus-slice addition; `copy` covers a leaf-only store;
   `fill` covers a literal-root store; `scale` covers scalar-times-slice
-  multiplication; `shift` covers a constant-offset input load; `saxpy` covers a
+  multiplication; `shift` covers a positive constant-offset input load;
+  `previous` covers a negative constant-offset input load; `saxpy` covers a
   two-op expression with four kernel arguments; `axpy-inplace` covers indexed
   mutable-slice in-place updates; `add-inplace` covers `DisjointSlice::get_mut`
   read-before-write; `negate` covers unary negation; `normalize` covers literal
@@ -241,6 +242,7 @@ Acceptance:
   `cargo fe2o3 build -p fe2o3-fill` produces `fill.hsaco`, and
   `cargo fe2o3 build -p fe2o3-scale` produces `scale.hsaco`, and
   `cargo fe2o3 build -p fe2o3-shift` produces `shift.hsaco`, and
+  `cargo fe2o3 build -p fe2o3-previous` produces `previous.hsaco`, and
   `cargo fe2o3 build -p fe2o3-saxpy` produces `saxpy.hsaco`, and
   `cargo fe2o3 build -p fe2o3-axpy-inplace` produces `axpy_inplace.hsaco`, and
   `cargo fe2o3 build -p fe2o3-negate` produces `negate.hsaco`, and
@@ -259,8 +261,9 @@ Status: MVP implemented for the current elementwise examples.
 - `cargo-fe2o3 smoke` runs the supported backend examples in sequence.
 - If `FE2O3_TARGET` is not set, `cargo-fe2o3` tries to infer the target from
   `rocminfo`.
-- The `vecadd`, `add-inplace`, `copy`, `fill`, `scale`, `shift`, `saxpy`,
-  `axpy-inplace`, `negate`, `normalize`, `pipeline`, and `vecadd-f64` examples
+- The `vecadd`, `add-inplace`, `copy`, `fill`, `scale`, `shift`, `previous`,
+  `saxpy`, `axpy-inplace`, `negate`, `normalize`, `pipeline`, and `vecadd-f64`
+  examples
   load their HSACO files from that directory.
 - The examples use `fe2o3-core` to load modules, launch through HIP with the
   backend ABI, copy output back, and validate results.
@@ -278,9 +281,9 @@ Acceptance:
 - `cargo fe2o3 run -p fe2o3-vecadd`, `cargo fe2o3 run -p fe2o3-add-inplace`,
   `cargo fe2o3 run -p fe2o3-copy`, `cargo fe2o3 run -p fe2o3-fill`,
   `cargo fe2o3 run -p fe2o3-scale`, `cargo fe2o3 run -p fe2o3-shift`,
-  `cargo fe2o3 run -p fe2o3-saxpy`, `cargo fe2o3 run -p fe2o3-axpy-inplace`,
-  `cargo fe2o3 run -p fe2o3-negate`, `cargo fe2o3 run -p fe2o3-normalize`,
-  `cargo fe2o3 run -p fe2o3-pipeline`, and
+  `cargo fe2o3 run -p fe2o3-previous`, `cargo fe2o3 run -p fe2o3-saxpy`,
+  `cargo fe2o3 run -p fe2o3-axpy-inplace`, `cargo fe2o3 run -p fe2o3-negate`,
+  `cargo fe2o3 run -p fe2o3-normalize`, `cargo fe2o3 run -p fe2o3-pipeline`, and
   `cargo fe2o3 run -p fe2o3-vecadd-f64` print success on an AMD GPU.
 - `cargo fe2o3 smoke` runs the same set successfully on an AMD GPU.
 

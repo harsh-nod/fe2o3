@@ -13,6 +13,7 @@ const SMOKE_PACKAGES: &[&str] = &[
     "fe2o3-fill",
     "fe2o3-scale",
     "fe2o3-shift",
+    "fe2o3-previous",
     "fe2o3-saxpy",
     "fe2o3-axpy-inplace",
     "fe2o3-negate",

@@ -11,6 +11,10 @@ impl ThreadIndex {
         self.0 + offset
     }
 
+    pub fn offset_signed(self, offset: isize) -> usize {
+        self.0.wrapping_add_signed(offset)
+    }
+
     pub fn in_bounds(self, len: usize) -> bool {
         self.0 < len
     }

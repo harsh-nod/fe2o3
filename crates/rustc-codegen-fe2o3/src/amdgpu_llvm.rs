@@ -583,6 +583,26 @@ fn analyze_elementwise_shape<'tcx>(
             continue;
         }
 
+        if path.ends_with("fe2o3_device::ThreadIndex::offset_signed") {
+            let Some(thread_index_local) = thread_index_local else {
+                continue;
+            };
+            if destination.projection.is_empty()
+                && args
+                    .first()
+                    .and_then(|arg| operand_local(&arg.node))
+                    .is_some_and(|local| local == thread_index_local)
+                && let Some(offset) = args
+                    .get(1)
+                    .and_then(|arg| operand_isize_const(tcx, &arg.node))
+            {
+                if let Some(index) = IndexExpr::Thread.offset(offset) {
+                    index_expr_locals.insert(destination.local, index);
+                }
+            }
+            continue;
+        }
+
         if path.ends_with("::get_mut") && path.contains("DisjointSlice") {
             if args
                 .get(1)
@@ -800,6 +820,18 @@ fn operand_usize_const<'tcx>(tcx: TyCtxt<'tcx>, operand: &Operand<'tcx>) -> Opti
     constant
         .const_
         .try_eval_target_usize(tcx, TypingEnv::fully_monomorphized())
+}
+
+fn operand_isize_const<'tcx>(tcx: TyCtxt<'tcx>, operand: &Operand<'tcx>) -> Option<i64> {
+    let Operand::Constant(constant) = operand else {
+        return None;
+    };
+    Some(
+        constant
+            .const_
+            .try_eval_scalar_int(tcx, TypingEnv::fully_monomorphized())?
+            .to_target_isize(tcx),
+    )
 }
 
 fn constant_float<'tcx>(tcx: TyCtxt<'tcx>, constant: &ConstOperand<'tcx>) -> Option<ScalarLiteral> {

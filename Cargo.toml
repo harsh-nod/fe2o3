@@ -16,6 +16,7 @@ members = [
     "examples/negate",
     "examples/normalize",
     "examples/pipeline",
+    "examples/previous",
     "examples/saxpy",
     "examples/scale",
     "examples/shift",
