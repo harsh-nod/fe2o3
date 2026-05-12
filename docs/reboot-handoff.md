@@ -7,8 +7,8 @@ This file captures the fe2o3 state around bringing up the AMD GPU driver stack.
 - Local path: `/home/nod/github/fe2o3`
 - Branch: `main`
 - Remote: `https://github.com/powderluv/fe2o3.git`
-- Latest pushed commit before this constant-minus-index update:
-  `c102fbf Support combining raw index operands`
+- Latest pushed commit before this parenthesized-subtraction update:
+  `1f6ff2a Support constant-minus raw indexes`
 
 ## Implemented
 
@@ -34,11 +34,14 @@ This file captures the fe2o3 state around bringing up the AMD GPU driver stack.
 - Raw `usize` arithmetic can combine two tracked affine index expressions.
 - Raw `usize` arithmetic can form constant-minus-index expressions with
   negative strides.
+- Raw `usize` arithmetic can form index-minus-index expressions that collapse
+  to constant indexes.
 - The `vecadd`, `add-inplace`, `copy`, `downsample`, `fill`, `gather-odd`,
   `scale`, `shift`, `previous`, `stencil`, `raw-add-index`,
-  `raw-const-minus`, `raw-disjoint-inplace-shift`, `raw-disjoint-shift`,
-  `raw-gather`, `raw-neighbors`, `raw-output-shift`, `saxpy`, `axpy-inplace`,
-  `negate`, `normalize`, `pipeline`, and `vecadd-f64` examples load HSACO from
+  `raw-const-minus`, `raw-parenthesized-sub`, `raw-disjoint-inplace-shift`,
+  `raw-disjoint-shift`, `raw-gather`, `raw-neighbors`, `raw-output-shift`,
+  `saxpy`, `axpy-inplace`, `negate`, `normalize`, `pipeline`, and
+  `vecadd-f64` examples load HSACO from
   `FE2O3_HSACO_DIR`, which `cargo-fe2o3` sets to `target/fe2o3`.
 - `downsample` verifies strided reads (`idx * 2`), `gather-odd` verifies affine
   reads (`idx * 2 + 1`), and `stencil` verifies multiple derived reads from the
@@ -48,6 +51,8 @@ This file captures the fe2o3 state around bringing up the AMD GPU driver stack.
 - `raw-add-index` verifies affine reads formed by adding two raw Rust `usize`
   index expressions.
 - `raw-const-minus` verifies constant-minus-index reads with a negative stride.
+- `raw-parenthesized-sub` verifies index subtraction that collapses to a
+  constant read index.
 - `raw-disjoint-shift` verifies raw Rust `usize` arithmetic on a
   `DisjointSlice<f32>` output store through `get_mut_at`.
 - `raw-disjoint-inplace-shift` verifies raw Rust `usize` arithmetic on a
@@ -213,6 +218,12 @@ PATH=/home/nod/github/TheRock/.venv-rocm-latest/bin:$PATH \
   ROCM_PATH=$ROCM_ROOT \
   HIP_PATH=$ROCM_ROOT \
   LD_LIBRARY_PATH=$ROCM_ROOT/lib:${LD_LIBRARY_PATH:-} \
+  cargo run -p cargo-fe2o3 -- run -p fe2o3-raw-parenthesized-sub
+
+PATH=/home/nod/github/TheRock/.venv-rocm-latest/bin:$PATH \
+  ROCM_PATH=$ROCM_ROOT \
+  HIP_PATH=$ROCM_ROOT \
+  LD_LIBRARY_PATH=$ROCM_ROOT/lib:${LD_LIBRARY_PATH:-} \
   cargo run -p cargo-fe2o3 -- run -p fe2o3-raw-disjoint-shift
 
 PATH=/home/nod/github/TheRock/.venv-rocm-latest/bin:$PATH \
@@ -285,6 +296,7 @@ previous passed for 1024 elements
 stencil passed for 1024 elements
 raw_add_index passed for 1024 elements
 raw_const_minus passed for 1024 elements
+raw_parenthesized_sub passed for 1024 elements
 raw_disjoint_inplace_shift passed for 1024 elements
 raw_disjoint_shift passed for 1024 elements
 raw_gather passed for 1024 elements
@@ -336,6 +348,7 @@ env -u FE2O3_TARGET cargo run -p cargo-fe2o3 -- build -p fe2o3-previous
 env -u FE2O3_TARGET cargo run -p cargo-fe2o3 -- build -p fe2o3-stencil
 env -u FE2O3_TARGET cargo run -p cargo-fe2o3 -- build -p fe2o3-raw-add-index
 env -u FE2O3_TARGET cargo run -p cargo-fe2o3 -- build -p fe2o3-raw-const-minus
+env -u FE2O3_TARGET cargo run -p cargo-fe2o3 -- build -p fe2o3-raw-parenthesized-sub
 env -u FE2O3_TARGET cargo run -p cargo-fe2o3 -- build -p fe2o3-raw-disjoint-inplace-shift
 env -u FE2O3_TARGET cargo run -p cargo-fe2o3 -- build -p fe2o3-raw-disjoint-shift
 env -u FE2O3_TARGET cargo run -p cargo-fe2o3 -- build -p fe2o3-raw-gather
@@ -371,6 +384,7 @@ cargo run -p cargo-fe2o3 -- run -p fe2o3-previous
 cargo run -p cargo-fe2o3 -- run -p fe2o3-stencil
 cargo run -p cargo-fe2o3 -- run -p fe2o3-raw-add-index
 cargo run -p cargo-fe2o3 -- run -p fe2o3-raw-const-minus
+cargo run -p cargo-fe2o3 -- run -p fe2o3-raw-parenthesized-sub
 cargo run -p cargo-fe2o3 -- run -p fe2o3-raw-disjoint-inplace-shift
 cargo run -p cargo-fe2o3 -- run -p fe2o3-raw-disjoint-shift
 cargo run -p cargo-fe2o3 -- run -p fe2o3-raw-gather
@@ -399,6 +413,7 @@ previous passed for 1024 elements
 stencil passed for 1024 elements
 raw_add_index passed for 1024 elements
 raw_const_minus passed for 1024 elements
+raw_parenthesized_sub passed for 1024 elements
 raw_disjoint_inplace_shift passed for 1024 elements
 raw_disjoint_shift passed for 1024 elements
 raw_gather passed for 1024 elements
@@ -419,8 +434,8 @@ reported by ROCm, for example `gfx1201`, `gfx90a`, or `gfx942`.
 
 Short-term backend surface step:
 
-1. Add an explicit parenthesized-subtraction smoke example for tracked
-   index-minus-index expressions that collapse to a constant index.
+1. Start the first Pliron-facing MIR import scaffold while keeping the current
+   elementwise emitter as the hardware smoke-test baseline.
 
 Then replace the temporary elementwise MIR recognizer/emitter with real
 lowering:

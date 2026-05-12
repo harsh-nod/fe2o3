@@ -1555,12 +1555,16 @@ mod tests {
     }
 
     fn test_shape(output_index: IndexExpr) -> ElementwiseShape {
+        test_shape_with_input(IndexExpr::Thread, output_index)
+    }
+
+    fn test_shape_with_input(input_index: IndexExpr, output_index: IndexExpr) -> ElementwiseShape {
         ElementwiseShape {
             expr: ElementwiseExpr {
                 nodes: Vec::new(),
                 root: ExprRef::Value(ValueSource::SliceElement(SliceElementSource {
                     arg_index: 0,
-                    index: IndexExpr::Thread,
+                    index: input_index,
                 })),
             },
             output_arg: 1,
@@ -1601,6 +1605,26 @@ mod tests {
         assert!(llvm.contains("  %in_out_sm1_p1023 = icmp ult i64 %idx_sm1_p1023, %out_len\n"));
         assert!(llvm.contains(
             "  %out_store_ptr = getelementptr inbounds float, ptr addrspace(1) %out_ptr, i64 %idx_sm1_p1023\n"
+        ));
+    }
+
+    #[test]
+    fn emits_zero_stride_read_index_names() {
+        let input_index = IndexExpr::StrideOffset {
+            stride: 0,
+            offset: 1,
+        };
+        let llvm = emit_elementwise_kernel(
+            &test_abi(),
+            &test_shape_with_input(input_index, IndexExpr::Thread),
+        )
+        .unwrap();
+
+        assert!(llvm.contains("  %idx_s0 = mul i64 %idx, 0\n"));
+        assert!(llvm.contains("  %idx_s0_p1 = add i64 %idx_s0, 1\n"));
+        assert!(llvm.contains("  %in_x_s0_p1 = icmp ult i64 %idx_s0_p1, %x_len\n"));
+        assert!(llvm.contains(
+            "  %x_s0_p1_elem_ptr = getelementptr inbounds float, ptr addrspace(1) %x_ptr, i64 %idx_s0_p1\n"
         ));
     }
 

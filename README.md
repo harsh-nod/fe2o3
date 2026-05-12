@@ -75,6 +75,8 @@ division. `fe2o3-copy` covers leaf-only stores.
 expressions.
 `fe2o3-raw-const-minus` covers constant-minus-index reads with a negative
 stride.
+`fe2o3-raw-parenthesized-sub` covers parenthesized index subtraction that
+collapses to a constant read index.
 `fe2o3-raw-disjoint-inplace-shift` covers raw `usize` arithmetic for a
 `DisjointSlice<f32>` output read-before-write store.
 `fe2o3-raw-disjoint-shift` covers raw `usize` arithmetic for a
@@ -129,6 +131,7 @@ cargo run -p cargo-fe2o3 -- build -p fe2o3-previous
 cargo run -p cargo-fe2o3 -- build -p fe2o3-stencil
 cargo run -p cargo-fe2o3 -- build -p fe2o3-raw-add-index
 cargo run -p cargo-fe2o3 -- build -p fe2o3-raw-const-minus
+cargo run -p cargo-fe2o3 -- build -p fe2o3-raw-parenthesized-sub
 cargo run -p cargo-fe2o3 -- build -p fe2o3-raw-disjoint-inplace-shift
 cargo run -p cargo-fe2o3 -- build -p fe2o3-raw-disjoint-shift
 cargo run -p cargo-fe2o3 -- build -p fe2o3-raw-gather
@@ -164,6 +167,7 @@ cargo run -p cargo-fe2o3 -- run -p fe2o3-previous
 cargo run -p cargo-fe2o3 -- run -p fe2o3-stencil
 cargo run -p cargo-fe2o3 -- run -p fe2o3-raw-add-index
 cargo run -p cargo-fe2o3 -- run -p fe2o3-raw-const-minus
+cargo run -p cargo-fe2o3 -- run -p fe2o3-raw-parenthesized-sub
 cargo run -p cargo-fe2o3 -- run -p fe2o3-raw-disjoint-inplace-shift
 cargo run -p cargo-fe2o3 -- run -p fe2o3-raw-disjoint-shift
 cargo run -p cargo-fe2o3 -- run -p fe2o3-raw-gather

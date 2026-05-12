@@ -21,6 +21,7 @@ members = [
     "examples/previous",
     "examples/raw_add_index",
     "examples/raw_const_minus",
+    "examples/raw_parenthesized_sub",
     "examples/raw_disjoint_inplace_shift",
     "examples/raw_disjoint_shift",
     "examples/raw_gather",

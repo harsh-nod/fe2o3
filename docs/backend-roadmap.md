@@ -35,6 +35,8 @@ For the full milestone plan, see [implementation-plan.md](implementation-plan.md
   expressions,
   `fe2o3-raw-const-minus` covers constant-minus-index reads with a negative
   stride,
+  `fe2o3-raw-parenthesized-sub` covers index subtraction that collapses to a
+  constant read index,
   `fe2o3-raw-disjoint-inplace-shift` covers raw `usize` arithmetic for a
   `DisjointSlice<f32>` output read-before-write store,
   `fe2o3-raw-disjoint-shift` covers raw `usize` arithmetic for a
@@ -51,10 +53,11 @@ For the full milestone plan, see [implementation-plan.md](implementation-plan.md
 - `fe2o3-vecadd-f64` covers double-precision elementwise emission.
 - The `vecadd`, `add-inplace`, `copy`, `downsample`, `fill`, `gather-odd`,
   `scale`, `shift`, `previous`, `stencil`, `raw-add-index`,
-  `raw-const-minus`, `raw-disjoint-inplace-shift`, `raw-disjoint-shift`,
-  `raw-gather`, `raw-neighbors`, `raw-output-shift`, `saxpy`, `axpy-inplace`,
-  `negate`, `normalize`, `pipeline`, and `vecadd-f64` examples load their HSACO
-  files from `FE2O3_HSACO_DIR`, which is set by `cargo-fe2o3 build/run`.
+  `raw-const-minus`, `raw-parenthesized-sub`, `raw-disjoint-inplace-shift`,
+  `raw-disjoint-shift`, `raw-gather`, `raw-neighbors`, `raw-output-shift`,
+  `saxpy`, `axpy-inplace`, `negate`, `normalize`, `pipeline`, and
+  `vecadd-f64` examples load their HSACO files from `FE2O3_HSACO_DIR`, which is
+  set by `cargo-fe2o3 build/run`.
 - `cargo-fe2o3 build/run -p <package>` cleans explicit package artifacts before
   invoking Cargo so device sidecars are regenerated predictably.
 - `cargo-fe2o3 smoke` runs the supported backend examples in sequence.
@@ -64,10 +67,11 @@ For the full milestone plan, see [implementation-plan.md](implementation-plan.md
   variable is not set.
 - End-to-end `vecadd`, `add-inplace`, `copy`, `downsample`, `fill`,
   `gather-odd`, `scale`, `shift`, `previous`, `stencil`, `saxpy`,
-  `raw-add-index`, `raw-const-minus`, `raw-disjoint-inplace-shift`,
-  `raw-disjoint-shift`, `raw-gather`, `raw-neighbors`, `raw-output-shift`,
-  `axpy-inplace`, `negate`, `normalize`, `pipeline`, and `vecadd-f64` have run
-  successfully on `gfx1201` using TheRock ROCm `7.13.0a20260509`.
+  `raw-add-index`, `raw-const-minus`, `raw-parenthesized-sub`,
+  `raw-disjoint-inplace-shift`, `raw-disjoint-shift`, `raw-gather`,
+  `raw-neighbors`, `raw-output-shift`, `axpy-inplace`, `negate`, `normalize`,
+  `pipeline`, and `vecadd-f64` have run successfully on `gfx1201` using TheRock
+  ROCm `7.13.0a20260509`.
 
 ## Next Compiler Milestones
 
