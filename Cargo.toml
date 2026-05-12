@@ -12,6 +12,7 @@ members = [
     "examples/add_inplace",
     "examples/axpy_inplace",
     "examples/copy",
+    "examples/downsample",
     "examples/fill",
     "examples/negate",
     "examples/normalize",

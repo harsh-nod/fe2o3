@@ -152,6 +152,7 @@ struct SliceElementSource {
 enum IndexExpr {
     Thread,
     Offset(i64),
+    Stride(i64),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -603,6 +604,25 @@ fn analyze_elementwise_shape<'tcx>(
             continue;
         }
 
+        if path.ends_with("fe2o3_device::ThreadIndex::stride") {
+            let Some(thread_index_local) = thread_index_local else {
+                continue;
+            };
+            if destination.projection.is_empty()
+                && args
+                    .first()
+                    .and_then(|arg| operand_local(&arg.node))
+                    .is_some_and(|local| local == thread_index_local)
+                && let Some(stride) = args
+                    .get(1)
+                    .and_then(|arg| operand_usize_const(tcx, &arg.node))
+                    .and_then(|stride| i64::try_from(stride).ok())
+            {
+                index_expr_locals.insert(destination.local, IndexExpr::Stride(stride));
+            }
+            continue;
+        }
+
         if path.ends_with("::get_mut") && path.contains("DisjointSlice") {
             if args
                 .get(1)
@@ -736,24 +756,27 @@ impl IndexExpr {
         match self {
             Self::Thread => Some(Self::Offset(offset)),
             Self::Offset(base) => base.checked_add(offset).map(Self::Offset),
+            Self::Stride(_) => None,
         }
     }
 
     fn llvm_value(self) -> String {
         match self {
             Self::Thread => "%idx".to_string(),
-            Self::Offset(offset) => format!("%idx{}", self.llvm_suffix_for_offset(offset)),
+            Self::Offset(offset) => format!("%idx{}", Self::llvm_suffix_for_offset(offset)),
+            Self::Stride(stride) => format!("%idx_s{stride}"),
         }
     }
 
     fn llvm_suffix(self) -> String {
         match self {
             Self::Thread => String::new(),
-            Self::Offset(offset) => self.llvm_suffix_for_offset(offset),
+            Self::Offset(offset) => Self::llvm_suffix_for_offset(offset),
+            Self::Stride(stride) => format!("_s{stride}"),
         }
     }
 
-    fn llvm_suffix_for_offset(self, offset: i64) -> String {
+    fn llvm_suffix_for_offset(offset: i64) -> String {
         if offset >= 0 {
             format!("_p{offset}")
         } else {
@@ -1030,6 +1053,9 @@ fn emit_index_calculations(slice_sources: &[SliceElementSource]) -> String {
             IndexExpr::Thread => String::new(),
             IndexExpr::Offset(offset) => {
                 format!("  {} = add i64 %idx, {offset}\n", index.llvm_value())
+            }
+            IndexExpr::Stride(stride) => {
+                format!("  {} = mul i64 %idx, {stride}\n", index.llvm_value())
             }
         })
         .collect()

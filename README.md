@@ -51,6 +51,7 @@ include `+`, `-`, `*`, `/`, and unary negation. Leaf-only copies such as
 `ThreadIndex::offset` supports simple constant-offset slice reads such as
 `x[idx.offset(1)]`; `ThreadIndex::offset_signed` supports signed constant
 offsets such as `x[idx.offset_signed(-1)]`.
+`ThreadIndex::stride` supports constant-stride reads such as `x[idx.stride(2)]`.
 General MIR/Pliron lowering is still the next compiler milestone.
 
 On a `gfx1201` AMD Radeon AI PRO R9700 with TheRock ROCm
@@ -60,6 +61,7 @@ On a `gfx1201` AMD Radeon AI PRO R9700 with TheRock ROCm
 through HIP, launch the kernels, and validate the results. `fe2o3-negate` covers
 unary negation. `fe2o3-normalize` covers literal constants plus subtraction and
 division. `fe2o3-copy` covers leaf-only stores.
+`fe2o3-downsample` covers constant-stride input loads.
 `fe2o3-add-inplace` covers read-before-write through `DisjointSlice::get_mut`.
 `fe2o3-fill` covers literal-root stores with no input loads.
 `fe2o3-shift` covers constant-offset input loads.
@@ -97,6 +99,7 @@ Smoke-test the current backend entry point:
 cargo run -p cargo-fe2o3 -- build -p fe2o3-vecadd
 cargo run -p cargo-fe2o3 -- build -p fe2o3-add-inplace
 cargo run -p cargo-fe2o3 -- build -p fe2o3-copy
+cargo run -p cargo-fe2o3 -- build -p fe2o3-downsample
 cargo run -p cargo-fe2o3 -- build -p fe2o3-fill
 cargo run -p cargo-fe2o3 -- build -p fe2o3-scale
 cargo run -p cargo-fe2o3 -- build -p fe2o3-shift
@@ -123,6 +126,7 @@ package at a time:
 cargo run -p cargo-fe2o3 -- run -p fe2o3-vecadd
 cargo run -p cargo-fe2o3 -- run -p fe2o3-add-inplace
 cargo run -p cargo-fe2o3 -- run -p fe2o3-copy
+cargo run -p cargo-fe2o3 -- run -p fe2o3-downsample
 cargo run -p cargo-fe2o3 -- run -p fe2o3-fill
 cargo run -p cargo-fe2o3 -- run -p fe2o3-scale
 cargo run -p cargo-fe2o3 -- run -p fe2o3-shift
