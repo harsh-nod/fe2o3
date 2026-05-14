@@ -196,7 +196,9 @@ Status: MVP implemented for `f32`/`f64` elementwise expression kernel shapes.
   the first operation-specific lowering records such as `mir.load`, `mir.store`,
   `mir.gep`, `mir.slice_len`, arithmetic ops, comparisons, and casts. The dump
   also builds a first record-driven lowering-plan summary from the flat record
-  stream.
+  stream. The AMDGPU emission path consumes that plan to cross-check kernel
+  argument types and required store/return ops before using the existing MIR
+  recognizer.
 - The backend emits an AMDGPU LLVM IR `amdgpu_kernel` after validating the ABI
   and body pattern.
 - The emitted IR uses `llvm.amdgcn.workitem.id.x` and
@@ -396,8 +398,9 @@ calls can break GPU synchronization semantics.
 
 Grow the MIR import scaffold into the first real lowering path:
 
-1. Start lowering the current elementwise kernel shapes from the record-driven
-   lowering plan instead of re-walking raw rustc MIR in the temporary recognizer.
+1. Move the current elementwise shape analysis from raw rustc MIR onto the
+   record-driven lowering plan one piece at a time, starting with loads, stores,
+   comparisons, and pointer/index operations already present in the plan.
 2. Lower enough operations for the current elementwise kernel shapes: args,
    basic blocks, integer arithmetic, pointer arithmetic, loads/stores, branch,
    and return.

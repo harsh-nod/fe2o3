@@ -116,17 +116,18 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                     self.config.verbose,
                 );
                 collector::dump_device_functions(tcx, &collection.functions);
+                let mir_module = mir_import::import_collection(tcx, &collection);
+                let dialect_records = mir_module.dialect_records();
+                let lowering_plan = record_lowering::plan_from_records(&dialect_records);
                 if self.config.dump_mir {
-                    let mir_module = mir_import::import_collection(tcx, &collection);
                     eprintln!("{}", mir_module.summary());
-                    let lowering_plan =
-                        record_lowering::plan_from_records(&mir_module.dialect_records());
                     eprintln!("{}", lowering_plan.summary());
                 }
 
                 match amdgpu_llvm::emit_collection(
                     tcx,
                     &collection,
+                    Some(&lowering_plan),
                     &output_dir,
                     &self.config.target,
                 ) {

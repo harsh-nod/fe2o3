@@ -43,7 +43,9 @@ and builds a flat typed `mir.*` operation-record stream for the future Pliron
 builder, including typed locals, statement destination and operand labels, and
 the first operation-specific lowering records such as `mir.load`, `mir.store`,
 arithmetic ops, comparisons, and casts. The same dump also builds a
-record-driven lowering-plan summary from that flat record stream.
+record-driven lowering-plan summary from that flat record stream. The AMDGPU
+emission path now consumes that record plan to cross-check kernel argument
+types and required store/return ops before using the existing MIR recognizer.
 
 The backend also has the first AMDGPU artifact path: for the current `f32`/`f64`
 elementwise kernel shapes it validates the Rust kernel ABI from monomorphized

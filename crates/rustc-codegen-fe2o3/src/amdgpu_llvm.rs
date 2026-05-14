@@ -1,5 +1,7 @@
 use crate::collector::{CollectedFunction, CollectionResult};
+use crate::record_lowering::{RecordLoweringFunction, RecordLoweringLocal, RecordLoweringPlan};
 use crate::{AmdGpuTarget, HsacoError, compile_llvm_ir_to_hsaco};
+use dialect_mir::MirOp;
 use rustc_middle::mir::{
     BinOp, Body, ConstOperand, Local, Operand, Place, ProjectionElem, Rvalue, StatementKind,
     TerminatorKind, UnOp, VarDebugInfoContents,
@@ -57,6 +59,7 @@ impl From<HsacoError> for EmitError {
 pub fn emit_collection<'tcx>(
     tcx: TyCtxt<'tcx>,
     collection: &CollectionResult<'tcx>,
+    lowering_plan: Option<&RecordLoweringPlan>,
     output_dir: &Path,
     target: &AmdGpuTarget,
 ) -> Result<Vec<DeviceArtifact>, EmitError> {
@@ -68,7 +71,8 @@ pub fn emit_collection<'tcx>(
         .iter()
         .filter(|function| function.is_kernel)
     {
-        let llvm_ir = emit_kernel(tcx, kernel)?;
+        let record_function = lowering_plan.and_then(|plan| plan.function(&kernel.export_name));
+        let llvm_ir = emit_kernel(tcx, kernel, record_function)?;
         let llvm_ir_path = output_dir.join(format!("{}.ll", kernel.export_name));
         let hsaco_path = output_dir.join(format!("{}.hsaco", kernel.export_name));
 
@@ -88,9 +92,13 @@ pub fn emit_collection<'tcx>(
 fn emit_kernel<'tcx>(
     tcx: TyCtxt<'tcx>,
     kernel: &CollectedFunction<'tcx>,
+    record_function: Option<&RecordLoweringFunction>,
 ) -> Result<String, EmitError> {
     let mir = tcx.instance_mir(kernel.instance.def);
     let abi = analyze_kernel_abi(tcx, kernel)?;
+    if let Some(record_function) = record_function {
+        validate_record_abi(&kernel.export_name, &abi, record_function)?;
+    }
     let elementwise = analyze_elementwise_shape(tcx, mir).map_err(|reason| {
         unsupported_kernel(
             &kernel.export_name,
@@ -458,6 +466,82 @@ fn sanitize_llvm_name(raw_name: &str) -> Option<String> {
     }
 
     (!sanitized.is_empty()).then_some(sanitized)
+}
+
+fn validate_record_abi(
+    kernel_name: &str,
+    abi: &KernelAbi,
+    record_function: &RecordLoweringFunction,
+) -> Result<(), EmitError> {
+    if record_function.kind != "kernel" {
+        return Err(unsupported_kernel(
+            kernel_name,
+            format!(
+                "record lowering plan expected `{}` to be a kernel, found `{}`",
+                record_function.symbol, record_function.kind
+            ),
+        ));
+    }
+
+    if record_function.arg_count != abi.args.len() {
+        return Err(unsupported_kernel(
+            kernel_name,
+            format!(
+                "record lowering plan ABI has {} args, MIR ABI has {} args",
+                record_function.arg_count,
+                abi.args.len()
+            ),
+        ));
+    }
+
+    let record_args = record_function.args();
+    if record_args.len() != abi.args.len() {
+        return Err(unsupported_kernel(
+            kernel_name,
+            format!(
+                "record lowering plan has {} typed arg locals, MIR ABI has {} args",
+                record_args.len(),
+                abi.args.len()
+            ),
+        ));
+    }
+
+    for (index, (record_arg, abi_arg)) in record_args.iter().zip(&abi.args).enumerate() {
+        if !record_arg_matches_abi(record_arg, abi_arg) {
+            return Err(unsupported_kernel(
+                kernel_name,
+                format!(
+                    "record lowering arg {index} type `{}` does not match MIR ABI",
+                    record_arg.rust_ty
+                ),
+            ));
+        }
+    }
+
+    if !record_function.has_op(MirOp::Store) {
+        return Err(unsupported_kernel(
+            kernel_name,
+            "record lowering plan is missing an output store",
+        ));
+    }
+    if !record_function.has_op(MirOp::Return) {
+        return Err(unsupported_kernel(
+            kernel_name,
+            "record lowering plan is missing a return terminator",
+        ));
+    }
+
+    Ok(())
+}
+
+fn record_arg_matches_abi(record_arg: &RecordLoweringLocal, abi_arg: &KernelArg) -> bool {
+    match &abi_arg.kind {
+        KernelArgKind::Scalar(ScalarType::F32) => record_arg.ty == "mir.f32",
+        KernelArgKind::Scalar(ScalarType::F64) => record_arg.ty == "mir.f64",
+        KernelArgKind::Slice { .. } => {
+            record_arg.ty == "mir.slice" || record_arg.ty == "mir.disjoint_slice"
+        }
+    }
 }
 
 fn classify_kernel_arg<'tcx>(
@@ -1570,6 +1654,67 @@ mod tests {
             output_arg: 1,
             output_index,
         }
+    }
+
+    fn test_record_function() -> RecordLoweringFunction {
+        RecordLoweringFunction {
+            symbol: "test_kernel".to_string(),
+            kind: "kernel".to_string(),
+            arg_count: 2,
+            local_count: 3,
+            block_count: 1,
+            locals: vec![
+                RecordLoweringLocal {
+                    index: 0,
+                    role: "return".to_string(),
+                    ty: "mir.unit".to_string(),
+                    rust_ty: "()".to_string(),
+                },
+                RecordLoweringLocal {
+                    index: 1,
+                    role: "arg".to_string(),
+                    ty: "mir.slice".to_string(),
+                    rust_ty: "&[f32]".to_string(),
+                },
+                RecordLoweringLocal {
+                    index: 2,
+                    role: "arg".to_string(),
+                    ty: "mir.disjoint_slice".to_string(),
+                    rust_ty: "fe2o3_device::DisjointSlice<f32>".to_string(),
+                },
+            ],
+            ops: vec![
+                crate::record_lowering::RecordLoweringOp {
+                    op: MirOp::Store,
+                    block: Some(0),
+                    statement: Some(0),
+                    destination: Some("local2.deref".to_string()),
+                    operands: Some("local1.deref.index_local3".to_string()),
+                },
+                crate::record_lowering::RecordLoweringOp {
+                    op: MirOp::Return,
+                    block: Some(0),
+                    statement: None,
+                    destination: None,
+                    operands: None,
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn validates_matching_record_abi() {
+        validate_record_abi("test_kernel", &test_abi(), &test_record_function()).unwrap();
+    }
+
+    #[test]
+    fn rejects_mismatched_record_abi() {
+        let mut record_function = test_record_function();
+        record_function.locals[1].ty = "mir.f64".to_string();
+
+        let error = validate_record_abi("test_kernel", &test_abi(), &record_function).unwrap_err();
+
+        assert!(error.to_string().contains("does not match MIR ABI"));
     }
 
     #[test]

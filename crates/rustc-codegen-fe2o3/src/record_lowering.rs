@@ -10,8 +10,19 @@ pub struct RecordLoweringPlan {
 pub struct RecordLoweringFunction {
     pub symbol: String,
     pub kind: String,
+    pub arg_count: usize,
+    pub local_count: usize,
     pub block_count: usize,
+    pub locals: Vec<RecordLoweringLocal>,
     pub ops: Vec<RecordLoweringOp>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecordLoweringLocal {
+    pub index: usize,
+    pub role: String,
+    pub ty: String,
+    pub rust_ty: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -33,8 +44,34 @@ pub fn plan_from_records(records: &[MirOpRecord]) -> RecordLoweringPlan {
                     .unwrap_or("<anonymous>")
                     .to_string(),
                 kind: string_attr(record, "kind").unwrap_or("device").to_string(),
+                arg_count: usize_attr(record, "args").unwrap_or(0),
+                local_count: usize_attr(record, "locals").unwrap_or(0),
                 block_count: usize_attr(record, "blocks").unwrap_or(0),
+                locals: Vec::new(),
                 ops: Vec::new(),
+            });
+            continue;
+        }
+
+        if matches!(record.op, MirOp::Arg | MirOp::Local) {
+            let Some(function) = string_attr(record, "function") else {
+                continue;
+            };
+            let Some(target) = functions
+                .iter_mut()
+                .find(|candidate| candidate.symbol == function)
+            else {
+                continue;
+            };
+            target.locals.push(RecordLoweringLocal {
+                index: usize_attr(record, "index").unwrap_or(0),
+                role: string_attr(record, "role").unwrap_or("temp").to_string(),
+                ty: string_attr(record, "type")
+                    .unwrap_or("mir.unknown")
+                    .to_string(),
+                rust_ty: string_attr(record, "rust_type")
+                    .unwrap_or("<unknown>")
+                    .to_string(),
             });
             continue;
         }
@@ -64,6 +101,12 @@ pub fn plan_from_records(records: &[MirOpRecord]) -> RecordLoweringPlan {
 }
 
 impl RecordLoweringPlan {
+    pub fn function(&self, symbol: &str) -> Option<&RecordLoweringFunction> {
+        self.functions
+            .iter()
+            .find(|function| function.symbol == symbol)
+    }
+
     pub fn summary(&self) -> String {
         let op_count = self
             .functions
@@ -78,10 +121,12 @@ impl RecordLoweringPlan {
         for function in &self.functions {
             let _ = writeln!(
                 output,
-                "  [{}] {}: {} bb, {} lowering op(s)",
+                "  [{}] {}: {} bb, {} locals, {} args, {} lowering op(s)",
                 function.kind,
                 function.symbol,
                 function.block_count,
+                function.local_count,
+                function.arg_count,
                 function.ops.len()
             );
             let counts = function.op_counts();
@@ -96,6 +141,20 @@ impl RecordLoweringPlan {
 }
 
 impl RecordLoweringFunction {
+    pub fn args(&self) -> Vec<&RecordLoweringLocal> {
+        let mut args = self
+            .locals
+            .iter()
+            .filter(|local| local.role == "arg")
+            .collect::<Vec<_>>();
+        args.sort_by_key(|local| local.index);
+        args
+    }
+
+    pub fn has_op(&self, op: MirOp) -> bool {
+        self.ops.iter().any(|candidate| candidate.op == op)
+    }
+
     fn op_counts(&self) -> Vec<String> {
         LOWERING_OPS
             .iter()
@@ -177,7 +236,21 @@ mod tests {
             MirOpRecord::new(MirOp::Func)
                 .with_attr(MirAttr::string("symbol", "copy"))
                 .with_attr(MirAttr::string("kind", "kernel"))
+                .with_attr(MirAttr::usize("args", 2))
+                .with_attr(MirAttr::usize("locals", 5))
                 .with_attr(MirAttr::usize("blocks", 2)),
+            MirOpRecord::new(MirOp::Local)
+                .with_attr(MirAttr::string("function", "copy"))
+                .with_attr(MirAttr::usize("index", 0))
+                .with_attr(MirAttr::string("role", "return"))
+                .with_attr(MirAttr::string("type", "mir.unit"))
+                .with_attr(MirAttr::string("rust_type", "()")),
+            MirOpRecord::new(MirOp::Arg)
+                .with_attr(MirAttr::string("function", "copy"))
+                .with_attr(MirAttr::usize("index", 1))
+                .with_attr(MirAttr::string("role", "arg"))
+                .with_attr(MirAttr::string("type", "mir.slice"))
+                .with_attr(MirAttr::string("rust_type", "&[f32]")),
             MirOpRecord::new(MirOp::Load)
                 .with_attr(MirAttr::string("function", "copy"))
                 .with_attr(MirAttr::usize("block", 0))
@@ -194,10 +267,16 @@ mod tests {
         assert_eq!(plan.functions.len(), 1);
         assert_eq!(plan.functions[0].symbol, "copy");
         assert_eq!(plan.functions[0].kind, "kernel");
+        assert_eq!(plan.functions[0].arg_count, 2);
+        assert_eq!(plan.functions[0].local_count, 5);
         assert_eq!(plan.functions[0].block_count, 2);
+        assert_eq!(plan.functions[0].args().len(), 1);
+        assert_eq!(plan.functions[0].args()[0].ty, "mir.slice");
         assert_eq!(plan.functions[0].ops.len(), 2);
         assert_eq!(plan.functions[0].ops[0].op, MirOp::Load);
         assert_eq!(plan.functions[0].ops[0].statement, Some(1));
+        assert!(plan.function("copy").is_some());
+        assert!(plan.functions[0].has_op(MirOp::Return));
     }
 
     #[test]
@@ -206,6 +285,8 @@ mod tests {
             MirOpRecord::new(MirOp::Func)
                 .with_attr(MirAttr::string("symbol", "copy"))
                 .with_attr(MirAttr::string("kind", "kernel"))
+                .with_attr(MirAttr::usize("args", 2))
+                .with_attr(MirAttr::usize("locals", 5))
                 .with_attr(MirAttr::usize("blocks", 1)),
             MirOpRecord::new(MirOp::Load).with_attr(MirAttr::string("function", "copy")),
             MirOpRecord::new(MirOp::Store).with_attr(MirAttr::string("function", "copy")),
@@ -214,7 +295,7 @@ mod tests {
 
         let summary = plan_from_records(&records).summary();
 
-        assert!(summary.contains("[kernel] copy: 1 bb, 3 lowering op(s)"));
+        assert!(summary.contains("[kernel] copy: 1 bb, 5 locals, 2 args, 3 lowering op(s)"));
         assert!(summary.contains("mir.load=1, mir.store=1, mir.return=1"));
     }
 }

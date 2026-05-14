@@ -29,7 +29,9 @@ This file captures the fe2o3 state around bringing up the AMD GPU driver stack.
   the first operation-specific lowering records such as `mir.load`, `mir.store`,
   `mir.gep`, `mir.slice_len`, arithmetic ops, comparisons, and casts. The dump
   also builds a first record-driven lowering-plan summary from the flat record
-  stream.
+  stream. The AMDGPU emission path consumes that plan to cross-check kernel
+  argument types and required store/return ops before using the existing MIR
+  recognizer.
 - The current `f32`/`f64` elementwise MIR expression shapes emit AMDGPU LLVM IR.
 - Generated LLVM IR is compiled through ROCm clang and linked with `ld.lld` into
   `target/fe2o3/*.hsaco`.
@@ -446,8 +448,9 @@ reported by ROCm, for example `gfx1201`, `gfx90a`, or `gfx942`.
 
 Short-term backend surface step:
 
-1. Start lowering the current elementwise kernel shapes from the record-driven
-   lowering plan instead of re-walking raw rustc MIR in the temporary recognizer.
+1. Move the current elementwise shape analysis from raw rustc MIR onto the
+   record-driven lowering plan one piece at a time, starting with loads, stores,
+   comparisons, and pointer/index operations already present in the plan.
 
 Then replace the temporary elementwise MIR recognizer/emitter with real
 lowering:
