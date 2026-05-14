@@ -39,8 +39,10 @@ For the full milestone plan, see [implementation-plan.md](implementation-plan.md
   `&mut [T]` output stores from that record-derived slice sketch. A record
   expression sketch also binds slice-load leaves, scalar args, float literals,
   unary/binary expression ops, and store roots so the validator can cross-check
-  expression requirements before the existing raw MIR recognizer emits the LLVM
-  IR.
+  expression requirements. When that sketch can reconstruct the full expression
+  root, the AMDGPU path now uses the record-derived `ElementwiseExpr` for LLVM
+  IR emission; raw rustc MIR remains the temporary fallback for cases the record
+  expression sketch cannot yet represent.
 - `rustc-codegen-fe2o3` contains the first real backend utilities:
   - ABI validation for supported kernel arguments from monomorphized MIR locals.
   - A narrow MIR recognizer and AMDGPU LLVM IR emitter for `f32`/`f64` elementwise

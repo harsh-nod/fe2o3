@@ -7,8 +7,8 @@ This file captures the fe2o3 state around bringing up the AMD GPU driver stack.
 - Local path: `/home/nod/github/fe2o3`
 - Branch: `main`
 - Remote: `https://github.com/powderluv/fe2o3.git`
-- Latest pushed checkpoint before this expression-sketch update:
-  `f29a6e6 Extract record slice access sketches`
+- Latest pushed checkpoint before this record-expression emission update:
+  `0b71884 Sketch record expression requirements`
 
 ## Implemented
 
@@ -42,8 +42,10 @@ This file captures the fe2o3 state around bringing up the AMD GPU driver stack.
   `&mut [T]` output stores from that record-derived slice sketch. A record
   expression sketch also binds slice-load leaves, scalar args, float literals,
   unary/binary expression ops, and store roots so the validator can cross-check
-  expression requirements before the existing raw MIR recognizer emits the LLVM
-  IR.
+  expression requirements. When that sketch can reconstruct the full expression
+  root, the AMDGPU path now uses the record-derived `ElementwiseExpr` for LLVM
+  IR emission; raw rustc MIR remains the temporary fallback for cases the record
+  expression sketch cannot yet represent.
 - The current `f32`/`f64` elementwise MIR expression shapes emit AMDGPU LLVM IR.
 - Generated LLVM IR is compiled through ROCm clang and linked with `ld.lld` into
   `target/fe2o3/*.hsaco`.
@@ -465,10 +467,11 @@ Short-term backend surface step:
    locals, statement operation labels, call destinations/operands, parsed
    load/store access sketches, a linear index sketch, and a derived slice-access
    sketch for read/write slice sources, plus a first expression sketch for
-   leaves, literals, unary/binary ops, and store roots. The next slice should
-   make the expression sketch construct the `ElementwiseExpr` root used for
-   emission, leaving raw rustc MIR as the temporary fallback only while that path
-   comes online.
+   leaves, literals, unary/binary ops, and store roots. The AMDGPU path now uses
+   the record-derived expression root for emission when it is complete enough.
+   The next slice should cover disjoint-output read-before-write sources in the
+   record expression sketch and then move output/source discovery itself off raw
+   rustc MIR.
 
 Then replace the temporary elementwise MIR recognizer/emitter with real
 lowering:

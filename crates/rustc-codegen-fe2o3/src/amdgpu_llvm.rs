@@ -1,7 +1,8 @@
 use crate::collector::{CollectedFunction, CollectionResult};
 use crate::record_lowering::{
-    RecordAccessSketch, RecordBinaryOp, RecordLinearIndex, RecordLoweringFunction,
-    RecordLoweringLocal, RecordLoweringPlan, RecordSliceAccess, RecordUnaryOp,
+    RecordAccessSketch, RecordBinaryOp, RecordExpression, RecordExpressionOperand,
+    RecordExpressionSketch, RecordLinearIndex, RecordLoweringFunction, RecordLoweringLocal,
+    RecordLoweringPlan, RecordSliceAccess, RecordUnaryOp,
 };
 use crate::{AmdGpuTarget, HsacoError, compile_llvm_ir_to_hsaco};
 use dialect_mir::MirOp;
@@ -102,7 +103,7 @@ fn emit_kernel<'tcx>(
     if let Some(record_function) = record_function {
         validate_record_abi(&kernel.export_name, &abi, record_function)?;
     }
-    let elementwise = analyze_elementwise_shape(tcx, mir).map_err(|reason| {
+    let mut elementwise = analyze_elementwise_shape(tcx, mir).map_err(|reason| {
         unsupported_kernel(
             &kernel.export_name,
             format!("unsupported MIR body for elementwise lowering: {reason}"),
@@ -110,6 +111,9 @@ fn emit_kernel<'tcx>(
     })?;
     if let Some(record_function) = record_function {
         validate_record_elementwise_shape(&kernel.export_name, &elementwise, record_function)?;
+        if let Some(record_expr) = record_elementwise_expr(&elementwise, record_function) {
+            elementwise.expr = record_expr;
+        }
     }
 
     emit_elementwise_kernel(&abi, &elementwise)
@@ -127,20 +131,20 @@ struct KernelArg {
     kind: KernelArgKind,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct ElementwiseShape {
     expr: ElementwiseExpr,
     output_arg: usize,
     output_index: IndexExpr,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct ElementwiseExpr {
     nodes: Vec<ExprNode>,
     root: ExprRef,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum ExprNode {
     Binary {
         lhs: ExprRef,
@@ -746,6 +750,154 @@ fn literal_record_parts(literal: ScalarLiteral) -> (&'static str, String) {
         ScalarLiteral::F32(bits) => ("mir.f32", format!("0x{bits:08x}")),
         ScalarLiteral::F64(bits) => ("mir.f64", format!("0x{bits:016x}")),
     }
+}
+
+fn record_elementwise_expr(
+    shape: &ElementwiseShape,
+    record_function: &RecordLoweringFunction,
+) -> Option<ElementwiseExpr> {
+    let sketch = record_function.expression_sketch();
+    let record_args = record_function.args();
+    let output_local = record_args.get(shape.output_arg).map(|arg| arg.index);
+    let store = output_local
+        .and_then(|output_local| {
+            let mut stores = sketch
+                .stores
+                .iter()
+                .filter(|store| store.destination.local == output_local);
+            let store = stores.next()?;
+            stores.next().is_none().then_some(store)
+        })
+        .or_else(|| {
+            let mut stores = sketch.stores.iter();
+            let store = stores.next()?;
+            stores.next().is_none().then_some(store)
+        })?;
+
+    let mut nodes = Vec::new();
+    let mut local_cache = HashMap::new();
+    let mut visiting = HashSet::new();
+    let root = record_expr_ref(
+        &sketch,
+        &store.expr,
+        &mut nodes,
+        &mut local_cache,
+        &mut visiting,
+    )?;
+    Some(ElementwiseExpr { nodes, root })
+}
+
+fn record_expr_ref(
+    sketch: &RecordExpressionSketch,
+    expr: &RecordExpression,
+    nodes: &mut Vec<ExprNode>,
+    local_cache: &mut HashMap<usize, ExprRef>,
+    visiting: &mut HashSet<usize>,
+) -> Option<ExprRef> {
+    match expr {
+        RecordExpression::Use(operand) => {
+            record_operand_expr_ref(sketch, operand, nodes, local_cache, visiting)
+        }
+        RecordExpression::Binary { lhs, rhs, op } => {
+            let lhs = record_operand_expr_ref(sketch, lhs, nodes, local_cache, visiting)?;
+            let rhs = record_operand_expr_ref(sketch, rhs, nodes, local_cache, visiting)?;
+            let node = ExprRef::Node(nodes.len());
+            nodes.push(ExprNode::Binary {
+                lhs,
+                rhs,
+                op: elementwise_binary_op_from_record(*op),
+            });
+            Some(node)
+        }
+        RecordExpression::Unary { operand, op } => {
+            let operand = record_operand_expr_ref(sketch, operand, nodes, local_cache, visiting)?;
+            let node = ExprRef::Node(nodes.len());
+            nodes.push(ExprNode::Unary {
+                operand,
+                op: elementwise_unary_op_from_record(*op),
+            });
+            Some(node)
+        }
+    }
+}
+
+fn record_operand_expr_ref(
+    sketch: &RecordExpressionSketch,
+    operand: &RecordExpressionOperand,
+    nodes: &mut Vec<ExprNode>,
+    local_cache: &mut HashMap<usize, ExprRef>,
+    visiting: &mut HashSet<usize>,
+) -> Option<ExprRef> {
+    match operand {
+        RecordExpressionOperand::Local(local) => {
+            if let Some(expr) = local_cache.get(local).copied() {
+                return Some(expr);
+            }
+            if !visiting.insert(*local) {
+                return None;
+            }
+            let binding = sketch
+                .local_bindings
+                .iter()
+                .find(|binding| binding.local == *local)?;
+            let expr = record_expr_ref(sketch, &binding.expr, nodes, local_cache, visiting)?;
+            visiting.remove(local);
+            local_cache.insert(*local, expr);
+            Some(expr)
+        }
+        RecordExpressionOperand::ScalarArg { arg_index, .. } => {
+            Some(ExprRef::Value(ValueSource::Arg(*arg_index)))
+        }
+        RecordExpressionOperand::SliceElement(access) => {
+            let index = index_expr_from_record(access.index)?;
+            Some(ExprRef::Value(ValueSource::SliceElement(
+                SliceElementSource {
+                    arg_index: access.arg_index,
+                    index,
+                },
+            )))
+        }
+        RecordExpressionOperand::Constant { ty, value } => {
+            record_constant_literal(ty, value).map(ExprRef::Literal)
+        }
+    }
+}
+
+fn elementwise_binary_op_from_record(op: RecordBinaryOp) -> ElementwiseBinaryOp {
+    match op {
+        RecordBinaryOp::Add => ElementwiseBinaryOp::Add,
+        RecordBinaryOp::Sub => ElementwiseBinaryOp::Sub,
+        RecordBinaryOp::Mul => ElementwiseBinaryOp::Mul,
+        RecordBinaryOp::Div => ElementwiseBinaryOp::Div,
+    }
+}
+
+fn elementwise_unary_op_from_record(op: RecordUnaryOp) -> ElementwiseUnaryOp {
+    match op {
+        RecordUnaryOp::Neg => ElementwiseUnaryOp::Neg,
+    }
+}
+
+fn index_expr_from_record(index: RecordLinearIndex) -> Option<IndexExpr> {
+    IndexExpr::strided_offset(index.stride, index.offset)
+}
+
+fn record_constant_literal(ty: &str, value: &str) -> Option<ScalarLiteral> {
+    let bits = parse_record_hex_fragment(value)?;
+    match ty {
+        "mir.f32" => u32::try_from(bits).ok().map(ScalarLiteral::F32),
+        "mir.f64" => Some(ScalarLiteral::F64(bits)),
+        _ => None,
+    }
+}
+
+fn parse_record_hex_fragment(value: &str) -> Option<u64> {
+    let start = value.find("0x")? + 2;
+    let hex = value[start..]
+        .chars()
+        .take_while(|ch| ch.is_ascii_hexdigit())
+        .collect::<String>();
+    u64::from_str_radix(&hex, 16).ok()
 }
 
 fn validate_record_slice_accesses(
@@ -2113,6 +2265,8 @@ mod tests {
         let mut op = record_op(MirOp::Load);
         op.statement = Some(0);
         op.operation = Some("use".to_string());
+        op.destination_local = Some(5);
+        op.destination = Some("local5".to_string());
         op.operand_count = Some(1);
         op.operands = Some(operands.to_string());
         op
@@ -2121,8 +2275,9 @@ mod tests {
     fn record_store() -> crate::record_lowering::RecordLoweringOp {
         let mut op = record_op(MirOp::Store);
         op.statement = Some(0);
+        op.operation = Some("use".to_string());
         op.destination = Some("local2.deref".to_string());
-        op.operands = Some("local1.deref.index_local4".to_string());
+        op.operands = Some("local5".to_string());
         op
     }
 
@@ -2152,15 +2307,32 @@ mod tests {
     }
 
     #[test]
+    fn builds_elementwise_expr_from_record_expression_sketch() {
+        let shape = test_shape(IndexExpr::Thread);
+        let expr = record_elementwise_expr(&shape, &test_record_function()).unwrap();
+
+        assert_eq!(expr, shape.expr);
+    }
+
+    #[test]
     fn validates_record_arithmetic_on_store_operation() {
         let mut record_function = test_record_function();
-        record_function.ops[2].destination_local = Some(5);
-        record_function.ops[2].destination = Some("local5".to_string());
         record_function.ops[3].operation = Some("add".to_string());
         record_function.ops[3].operands = Some("local5, local5".to_string());
 
         validate_record_elementwise_shape("test_kernel", &binary_test_shape(), &record_function)
             .unwrap();
+    }
+
+    #[test]
+    fn builds_binary_elementwise_expr_from_record_expression_sketch() {
+        let mut record_function = test_record_function();
+        record_function.ops[3].operation = Some("add".to_string());
+        record_function.ops[3].operands = Some("local5, local5".to_string());
+        let shape = binary_test_shape();
+        let expr = record_elementwise_expr(&shape, &record_function).unwrap();
+
+        assert_eq!(expr, shape.expr);
     }
 
     #[test]

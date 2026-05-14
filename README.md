@@ -57,8 +57,10 @@ local, and affine index. The AMDGPU validator now checks read-only slice loads
 and direct `&mut [T]` output stores from that record-derived slice sketch. A
 record expression sketch also binds slice-load leaves, scalar args, float
 literals, unary/binary expression ops, and store roots so the validator can
-cross-check expression requirements before the existing raw MIR recognizer emits
-the LLVM IR.
+cross-check expression requirements. When that sketch can reconstruct the full
+expression root, the AMDGPU path now uses the record-derived `ElementwiseExpr`
+for LLVM IR emission; raw rustc MIR remains the temporary fallback for cases the
+record expression sketch cannot yet represent.
 
 The backend also has the first AMDGPU artifact path: for the current `f32`/`f64`
 elementwise kernel shapes it validates the Rust kernel ABI from monomorphized
