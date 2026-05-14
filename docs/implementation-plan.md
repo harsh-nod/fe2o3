@@ -206,8 +206,11 @@ Status: MVP implemented for `f32`/`f64` elementwise expression kernel shapes.
   records are parsed into a linear index sketch, and direct slice reads/writes
   are combined into a slice-access sketch keyed by ABI arg, MIR local, and
   affine index. The AMDGPU validator now checks read-only slice loads and direct
-  `&mut [T]` output stores from that record-derived slice sketch while the
-  existing raw MIR recognizer still builds the expression tree.
+  `&mut [T]` output stores from that record-derived slice sketch. A record
+  expression sketch also binds slice-load leaves, scalar args, float literals,
+  unary/binary expression ops, and store roots so the validator can cross-check
+  expression requirements before the existing raw MIR recognizer emits the LLVM
+  IR.
 - The backend emits an AMDGPU LLVM IR `amdgpu_kernel` after validating the ABI
   and body pattern.
 - The emitted IR uses `llvm.amdgcn.workitem.id.x` and
@@ -411,9 +414,11 @@ Grow the MIR import scaffold into the first real lowering path:
    record-driven lowering plan one piece at a time. The plan now carries typed
    locals, statement operation labels, call destinations/operands, parsed
    load/store access sketches, a linear index sketch, and a derived slice-access
-   sketch for read/write slice sources. The next slice should move expression
-   leaf and arithmetic-node construction onto the operation records, leaving raw
-   rustc MIR as the temporary fallback only while that path comes online.
+   sketch for read/write slice sources, plus a first expression sketch for
+   leaves, literals, unary/binary ops, and store roots. The next slice should
+   make the expression sketch construct the `ElementwiseExpr` root used for
+   emission, leaving raw rustc MIR as the temporary fallback only while that path
+   comes online.
 2. Lower enough operations for the current elementwise kernel shapes: args,
    basic blocks, integer arithmetic, pointer arithmetic, loads/stores, branch,
    and return.

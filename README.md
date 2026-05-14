@@ -54,8 +54,11 @@ recognizer. Load/store record place labels are parsed into a small access sketch
 helper/raw index records are parsed into a linear index sketch, and direct slice
 reads/writes are combined into a slice-access sketch keyed by ABI arg, MIR
 local, and affine index. The AMDGPU validator now checks read-only slice loads
-and direct `&mut [T]` output stores from that record-derived slice sketch while
-the existing raw MIR recognizer still builds the expression tree.
+and direct `&mut [T]` output stores from that record-derived slice sketch. A
+record expression sketch also binds slice-load leaves, scalar args, float
+literals, unary/binary expression ops, and store roots so the validator can
+cross-check expression requirements before the existing raw MIR recognizer emits
+the LLVM IR.
 
 The backend also has the first AMDGPU artifact path: for the current `f32`/`f64`
 elementwise kernel shapes it validates the Rust kernel ABI from monomorphized

@@ -1,7 +1,7 @@
 use crate::collector::{CollectedFunction, CollectionResult};
 use crate::record_lowering::{
-    RecordAccessSketch, RecordLinearIndex, RecordLoweringFunction, RecordLoweringLocal,
-    RecordLoweringPlan, RecordSliceAccess,
+    RecordAccessSketch, RecordBinaryOp, RecordLinearIndex, RecordLoweringFunction,
+    RecordLoweringLocal, RecordLoweringPlan, RecordSliceAccess, RecordUnaryOp,
 };
 use crate::{AmdGpuTarget, HsacoError, compile_llvm_ir_to_hsaco};
 use dialect_mir::MirOp;
@@ -574,6 +574,7 @@ fn validate_record_elementwise_shape(
         ));
     }
     validate_record_slice_accesses(kernel_name, shape, record_function, &access_sketch)?;
+    validate_record_expression_shape(kernel_name, &shape.expr, record_function)?;
 
     let binary_nodes = shape
         .expr
@@ -597,6 +598,154 @@ fn validate_record_elementwise_shape(
     }
 
     Ok(())
+}
+
+struct RecordExpressionRequirements {
+    binary_ops: Vec<RecordBinaryOp>,
+    unary_ops: Vec<RecordUnaryOp>,
+    scalar_args: HashSet<usize>,
+    literals: Vec<ScalarLiteral>,
+}
+
+fn validate_record_expression_shape(
+    kernel_name: &str,
+    expr: &ElementwiseExpr,
+    record_function: &RecordLoweringFunction,
+) -> Result<(), EmitError> {
+    let requirements = record_expression_requirements(expr);
+    let sketch = record_function.expression_sketch();
+
+    for op in [
+        RecordBinaryOp::Add,
+        RecordBinaryOp::Sub,
+        RecordBinaryOp::Mul,
+        RecordBinaryOp::Div,
+    ] {
+        let expected = requirements
+            .binary_ops
+            .iter()
+            .filter(|candidate| **candidate == op)
+            .count();
+        let actual = sketch.binary_op_count(op);
+        if actual < expected {
+            return Err(unsupported_kernel(
+                kernel_name,
+                format!(
+                    "record lowering plan has {actual} {:?} expression op(s), elementwise shape needs {expected}",
+                    op
+                ),
+            ));
+        }
+    }
+
+    let expected_neg = requirements
+        .unary_ops
+        .iter()
+        .filter(|candidate| **candidate == RecordUnaryOp::Neg)
+        .count();
+    let actual_neg = sketch.unary_op_count(RecordUnaryOp::Neg);
+    if actual_neg < expected_neg {
+        return Err(unsupported_kernel(
+            kernel_name,
+            format!(
+                "record lowering plan has {actual_neg} Neg expression op(s), elementwise shape needs {expected_neg}"
+            ),
+        ));
+    }
+
+    for arg_index in requirements.scalar_args {
+        if !sketch.uses_scalar_arg(arg_index) {
+            return Err(unsupported_kernel(
+                kernel_name,
+                format!("record lowering plan is missing scalar arg{arg_index} expression use"),
+            ));
+        }
+    }
+
+    for literal in requirements.literals {
+        let (ty, value_fragment) = literal_record_parts(literal);
+        if !sketch.uses_constant(ty, &value_fragment) {
+            return Err(unsupported_kernel(
+                kernel_name,
+                format!(
+                    "record lowering plan is missing {ty} literal expression use containing {value_fragment}"
+                ),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn record_expression_requirements(expr: &ElementwiseExpr) -> RecordExpressionRequirements {
+    let mut requirements = RecordExpressionRequirements {
+        binary_ops: Vec::new(),
+        unary_ops: Vec::new(),
+        scalar_args: HashSet::new(),
+        literals: Vec::new(),
+    };
+    collect_expr_ref_requirements(expr, expr.root, &mut requirements);
+    requirements
+}
+
+fn collect_expr_ref_requirements(
+    expr: &ElementwiseExpr,
+    expr_ref: ExprRef,
+    requirements: &mut RecordExpressionRequirements,
+) {
+    match expr_ref {
+        ExprRef::Value(ValueSource::Arg(arg_index)) => {
+            requirements.scalar_args.insert(arg_index);
+        }
+        ExprRef::Value(ValueSource::SliceElement(_)) => {}
+        ExprRef::Literal(literal) => {
+            if !requirements.literals.contains(&literal) {
+                requirements.literals.push(literal);
+            }
+        }
+        ExprRef::Node(index) => {
+            let Some(node) = expr.nodes.get(index) else {
+                return;
+            };
+            match node {
+                ExprNode::Binary { lhs, rhs, op } => {
+                    requirements
+                        .binary_ops
+                        .push(record_binary_op_from_elementwise(*op));
+                    collect_expr_ref_requirements(expr, *lhs, requirements);
+                    collect_expr_ref_requirements(expr, *rhs, requirements);
+                }
+                ExprNode::Unary { operand, op } => {
+                    requirements
+                        .unary_ops
+                        .push(record_unary_op_from_elementwise(*op));
+                    collect_expr_ref_requirements(expr, *operand, requirements);
+                }
+            }
+        }
+    }
+}
+
+fn record_binary_op_from_elementwise(op: ElementwiseBinaryOp) -> RecordBinaryOp {
+    match op {
+        ElementwiseBinaryOp::Add => RecordBinaryOp::Add,
+        ElementwiseBinaryOp::Sub => RecordBinaryOp::Sub,
+        ElementwiseBinaryOp::Mul => RecordBinaryOp::Mul,
+        ElementwiseBinaryOp::Div => RecordBinaryOp::Div,
+    }
+}
+
+fn record_unary_op_from_elementwise(op: ElementwiseUnaryOp) -> RecordUnaryOp {
+    match op {
+        ElementwiseUnaryOp::Neg => RecordUnaryOp::Neg,
+    }
+}
+
+fn literal_record_parts(literal: ScalarLiteral) -> (&'static str, String) {
+    match literal {
+        ScalarLiteral::F32(bits) => ("mir.f32", format!("0x{bits:08x}")),
+        ScalarLiteral::F64(bits) => ("mir.f64", format!("0x{bits:016x}")),
+    }
 }
 
 fn validate_record_slice_accesses(
@@ -2005,7 +2154,10 @@ mod tests {
     #[test]
     fn validates_record_arithmetic_on_store_operation() {
         let mut record_function = test_record_function();
+        record_function.ops[2].destination_local = Some(5);
+        record_function.ops[2].destination = Some("local5".to_string());
         record_function.ops[3].operation = Some("add".to_string());
+        record_function.ops[3].operands = Some("local5, local5".to_string());
 
         validate_record_elementwise_shape("test_kernel", &binary_test_shape(), &record_function)
             .unwrap();

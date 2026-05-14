@@ -1,5 +1,5 @@
 use dialect_mir::{MirAttrValue, MirOp, MirOpRecord};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -90,6 +90,59 @@ pub struct RecordSliceAccess {
     pub arg_index: usize,
     pub local: usize,
     pub index: RecordLinearIndex,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecordExpressionSketch {
+    pub local_bindings: Vec<RecordExpressionBinding>,
+    pub stores: Vec<RecordStoreExpression>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecordExpressionBinding {
+    pub local: usize,
+    pub expr: RecordExpression,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecordStoreExpression {
+    pub destination: RecordPlaceRef,
+    pub expr: RecordExpression,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RecordExpression {
+    Use(RecordExpressionOperand),
+    Binary {
+        lhs: RecordExpressionOperand,
+        rhs: RecordExpressionOperand,
+        op: RecordBinaryOp,
+    },
+    Unary {
+        operand: RecordExpressionOperand,
+        op: RecordUnaryOp,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RecordExpressionOperand {
+    Local(usize),
+    ScalarArg { arg_index: usize, local: usize },
+    SliceElement(RecordSliceAccess),
+    Constant { ty: String, value: String },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RecordBinaryOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RecordUnaryOp {
+    Neg,
 }
 
 pub fn plan_from_records(records: &[MirOpRecord]) -> RecordLoweringPlan {
@@ -315,6 +368,59 @@ impl RecordLoweringFunction {
         RecordSliceAccessSketch { reads, writes }
     }
 
+    pub fn expression_sketch(&self) -> RecordExpressionSketch {
+        let args = self.args();
+        let index_sketch = self.index_sketch();
+        let mut local_expressions = HashMap::new();
+        let mut stores = Vec::new();
+
+        for op in &self.ops {
+            if op.op == MirOp::Load {
+                let Some(destination) = op.destination_local else {
+                    continue;
+                };
+                let Some(access) = op.operand_places().into_iter().find_map(|place| {
+                    let access = RecordMemoryAccess {
+                        index_local: place.index_local(),
+                        place,
+                        operation: op.operation.clone(),
+                    };
+                    slice_access_from_memory(&args, &access, &index_sketch)
+                }) else {
+                    continue;
+                };
+
+                local_expressions.insert(
+                    destination,
+                    RecordExpression::Use(RecordExpressionOperand::SliceElement(access)),
+                );
+                continue;
+            }
+
+            let Some(expr) = record_expression_from_op(op, &args) else {
+                continue;
+            };
+            if op.op == MirOp::Store {
+                if let Some(destination) = op.destination_place() {
+                    stores.push(RecordStoreExpression { destination, expr });
+                }
+            } else if let Some(destination) = op.destination_local {
+                local_expressions.insert(destination, expr);
+            }
+        }
+
+        let mut local_bindings = local_expressions
+            .into_iter()
+            .map(|(local, expr)| RecordExpressionBinding { local, expr })
+            .collect::<Vec<_>>();
+        local_bindings.sort_by_key(|binding| binding.local);
+
+        RecordExpressionSketch {
+            local_bindings,
+            stores,
+        }
+    }
+
     fn op_counts(&self) -> Vec<String> {
         LOWERING_OPS
             .iter()
@@ -336,6 +442,141 @@ impl RecordIndexSketch {
             .iter()
             .find(|binding| binding.local == local)
             .map(|binding| binding.index)
+    }
+}
+
+impl RecordExpressionSketch {
+    pub fn binary_op_count(&self, op: RecordBinaryOp) -> usize {
+        self.local_bindings
+            .iter()
+            .filter(|binding| matches!(&binding.expr, RecordExpression::Binary { op: actual, .. } if *actual == op))
+            .count()
+            + self
+                .stores
+                .iter()
+                .filter(|store| matches!(&store.expr, RecordExpression::Binary { op: actual, .. } if *actual == op))
+                .count()
+    }
+
+    pub fn unary_op_count(&self, op: RecordUnaryOp) -> usize {
+        self.local_bindings
+            .iter()
+            .filter(|binding| matches!(&binding.expr, RecordExpression::Unary { op: actual, .. } if *actual == op))
+            .count()
+            + self
+                .stores
+                .iter()
+                .filter(|store| matches!(&store.expr, RecordExpression::Unary { op: actual, .. } if *actual == op))
+                .count()
+    }
+
+    pub fn uses_scalar_arg(&self, arg_index: usize) -> bool {
+        self.local_bindings.iter().any(|binding| {
+            self.expression_uses_scalar_arg(&binding.expr, arg_index, &mut HashSet::new())
+        }) || self.stores.iter().any(|store| {
+            self.expression_uses_scalar_arg(&store.expr, arg_index, &mut HashSet::new())
+        })
+    }
+
+    pub fn uses_constant(&self, ty: &str, value_fragment: &str) -> bool {
+        self.local_bindings.iter().any(|binding| {
+            self.expression_uses_constant(&binding.expr, ty, value_fragment, &mut HashSet::new())
+        }) || self.stores.iter().any(|store| {
+            self.expression_uses_constant(&store.expr, ty, value_fragment, &mut HashSet::new())
+        })
+    }
+
+    fn expression_uses_scalar_arg(
+        &self,
+        expr: &RecordExpression,
+        arg_index: usize,
+        visited: &mut HashSet<usize>,
+    ) -> bool {
+        match expr {
+            RecordExpression::Use(operand) => {
+                self.operand_uses_scalar_arg(operand, arg_index, visited)
+            }
+            RecordExpression::Binary { lhs, rhs, .. } => {
+                self.operand_uses_scalar_arg(lhs, arg_index, visited)
+                    || self.operand_uses_scalar_arg(rhs, arg_index, visited)
+            }
+            RecordExpression::Unary { operand, .. } => {
+                self.operand_uses_scalar_arg(operand, arg_index, visited)
+            }
+        }
+    }
+
+    fn operand_uses_scalar_arg(
+        &self,
+        operand: &RecordExpressionOperand,
+        arg_index: usize,
+        visited: &mut HashSet<usize>,
+    ) -> bool {
+        match operand {
+            RecordExpressionOperand::ScalarArg {
+                arg_index: actual, ..
+            } => *actual == arg_index,
+            RecordExpressionOperand::Local(local) => self
+                .local_expression(*local, visited)
+                .is_some_and(|expr| self.expression_uses_scalar_arg(expr, arg_index, visited)),
+            _ => false,
+        }
+    }
+
+    fn expression_uses_constant(
+        &self,
+        expr: &RecordExpression,
+        ty: &str,
+        value_fragment: &str,
+        visited: &mut HashSet<usize>,
+    ) -> bool {
+        match expr {
+            RecordExpression::Use(operand) => {
+                self.operand_uses_constant(operand, ty, value_fragment, visited)
+            }
+            RecordExpression::Binary { lhs, rhs, .. } => {
+                self.operand_uses_constant(lhs, ty, value_fragment, visited)
+                    || self.operand_uses_constant(rhs, ty, value_fragment, visited)
+            }
+            RecordExpression::Unary { operand, .. } => {
+                self.operand_uses_constant(operand, ty, value_fragment, visited)
+            }
+        }
+    }
+
+    fn operand_uses_constant(
+        &self,
+        operand: &RecordExpressionOperand,
+        ty: &str,
+        value_fragment: &str,
+        visited: &mut HashSet<usize>,
+    ) -> bool {
+        match operand {
+            RecordExpressionOperand::Constant {
+                ty: actual_ty,
+                value,
+            } => actual_ty == ty && value.contains(value_fragment),
+            RecordExpressionOperand::Local(local) => {
+                self.local_expression(*local, visited).is_some_and(|expr| {
+                    self.expression_uses_constant(expr, ty, value_fragment, visited)
+                })
+            }
+            _ => false,
+        }
+    }
+
+    fn local_expression(
+        &self,
+        local: usize,
+        visited: &mut HashSet<usize>,
+    ) -> Option<&RecordExpression> {
+        if !visited.insert(local) {
+            return None;
+        }
+        self.local_bindings
+            .iter()
+            .find(|binding| binding.local == local)
+            .map(|binding| &binding.expr)
     }
 }
 
@@ -677,6 +918,95 @@ fn slice_access_from_memory(
     })
 }
 
+fn record_expression_from_op(
+    op: &RecordLoweringOp,
+    args: &[&RecordLoweringLocal],
+) -> Option<RecordExpression> {
+    let operation = op.operation.as_deref()?;
+    let operands = op.operand_labels();
+
+    if operation == "use" {
+        return operands
+            .first()
+            .and_then(|operand| record_expression_operand(operand, args))
+            .map(RecordExpression::Use);
+    }
+
+    if let Some(op) = record_binary_op(operation) {
+        let [lhs, rhs] = operands.as_slice() else {
+            return None;
+        };
+        return record_expression_operand(lhs, args)
+            .zip(record_expression_operand(rhs, args))
+            .map(|(lhs, rhs)| RecordExpression::Binary { lhs, rhs, op });
+    }
+
+    if let Some(op) = record_unary_op(operation) {
+        let [operand] = operands.as_slice() else {
+            return None;
+        };
+        return record_expression_operand(operand, args)
+            .map(|operand| RecordExpression::Unary { operand, op });
+    }
+
+    None
+}
+
+fn record_expression_operand(
+    operand: &str,
+    args: &[&RecordLoweringLocal],
+) -> Option<RecordExpressionOperand> {
+    if let Some((ty, value)) = parse_record_const_operand(operand) {
+        return Some(RecordExpressionOperand::Constant { ty, value });
+    }
+
+    let place = RecordPlaceRef::parse(operand)?;
+    if !place.projection.is_empty() {
+        return (place.projection.as_slice() == ["field0"])
+            .then_some(RecordExpressionOperand::Local(place.local));
+    }
+
+    if let Some((arg_index, arg)) = args
+        .iter()
+        .enumerate()
+        .find(|(_, arg)| arg.index == place.local && is_scalar_arg(arg))
+    {
+        return Some(RecordExpressionOperand::ScalarArg {
+            arg_index,
+            local: arg.index,
+        });
+    }
+
+    Some(RecordExpressionOperand::Local(place.local))
+}
+
+fn parse_record_const_operand(operand: &str) -> Option<(String, String)> {
+    let rest = operand.strip_prefix("const:")?;
+    let (ty, value) = rest.split_once('=')?;
+    Some((ty.to_string(), value.to_string()))
+}
+
+fn record_binary_op(operation: &str) -> Option<RecordBinaryOp> {
+    match operation {
+        "add" => Some(RecordBinaryOp::Add),
+        "sub" => Some(RecordBinaryOp::Sub),
+        "mul" => Some(RecordBinaryOp::Mul),
+        "div" => Some(RecordBinaryOp::Div),
+        _ => None,
+    }
+}
+
+fn record_unary_op(operation: &str) -> Option<RecordUnaryOp> {
+    match operation {
+        "neg" => Some(RecordUnaryOp::Neg),
+        _ => None,
+    }
+}
+
+fn is_scalar_arg(arg: &RecordLoweringLocal) -> bool {
+    matches!(arg.ty.as_str(), "mir.f32" | "mir.f64")
+}
+
 fn is_lowering_op(op: MirOp) -> bool {
     LOWERING_OPS.contains(&op)
 }
@@ -990,6 +1320,96 @@ mod tests {
                 }
             }]
         );
+    }
+
+    #[test]
+    fn sketches_record_expressions_from_loads_args_literals_and_stores() {
+        let records = vec![
+            MirOpRecord::new(MirOp::Func)
+                .with_attr(MirAttr::string("symbol", "expr"))
+                .with_attr(MirAttr::string("kind", "kernel")),
+            MirOpRecord::new(MirOp::Arg)
+                .with_attr(MirAttr::string("function", "expr"))
+                .with_attr(MirAttr::usize("index", 1))
+                .with_attr(MirAttr::string("role", "arg"))
+                .with_attr(MirAttr::string("type", "mir.f32"))
+                .with_attr(MirAttr::string("rust_type", "f32")),
+            MirOpRecord::new(MirOp::Arg)
+                .with_attr(MirAttr::string("function", "expr"))
+                .with_attr(MirAttr::usize("index", 2))
+                .with_attr(MirAttr::string("role", "arg"))
+                .with_attr(MirAttr::string("type", "mir.slice"))
+                .with_attr(MirAttr::string("rust_type", "&[f32]")),
+            MirOpRecord::new(MirOp::Arg)
+                .with_attr(MirAttr::string("function", "expr"))
+                .with_attr(MirAttr::usize("index", 3))
+                .with_attr(MirAttr::string("role", "arg"))
+                .with_attr(MirAttr::string("type", "mir.disjoint_slice"))
+                .with_attr(MirAttr::string(
+                    "rust_type",
+                    "fe2o3_device::DisjointSlice<f32>",
+                )),
+            MirOpRecord::new(MirOp::Call)
+                .with_attr(MirAttr::string("function", "expr"))
+                .with_attr(MirAttr::string("callee", "fe2o3_device::thread::index_1d"))
+                .with_attr(MirAttr::usize("destination_local", 4)),
+            MirOpRecord::new(MirOp::Call)
+                .with_attr(MirAttr::string("function", "expr"))
+                .with_attr(MirAttr::string("callee", "fe2o3_device::ThreadIndex::get"))
+                .with_attr(MirAttr::usize("destination_local", 5))
+                .with_attr(MirAttr::string("operands", "local4")),
+            MirOpRecord::new(MirOp::Load)
+                .with_attr(MirAttr::string("function", "expr"))
+                .with_attr(MirAttr::string("operation", "use"))
+                .with_attr(MirAttr::usize("destination_local", 6))
+                .with_attr(MirAttr::string("destination", "local6"))
+                .with_attr(MirAttr::usize("operand_count", 1))
+                .with_attr(MirAttr::string("operands", "local2.deref.index_local5")),
+            MirOpRecord::new(MirOp::Mul)
+                .with_attr(MirAttr::string("function", "expr"))
+                .with_attr(MirAttr::usize("destination_local", 7))
+                .with_attr(MirAttr::string("operation", "mul"))
+                .with_attr(MirAttr::string("operands", "local1, local6")),
+            MirOpRecord::new(MirOp::Sub)
+                .with_attr(MirAttr::string("function", "expr"))
+                .with_attr(MirAttr::usize("destination_local", 8))
+                .with_attr(MirAttr::string("operation", "sub"))
+                .with_attr(MirAttr::string(
+                    "operands",
+                    "local7, const:mir.f32=Val(Scalar(0x3fc00000), f32)",
+                )),
+            MirOpRecord::new(MirOp::Store)
+                .with_attr(MirAttr::string("function", "expr"))
+                .with_attr(MirAttr::string("operation", "div"))
+                .with_attr(MirAttr::string("destination", "local9.deref"))
+                .with_attr(MirAttr::string(
+                    "operands",
+                    "local8, const:mir.f32=Val(Scalar(0x40000000), f32)",
+                )),
+            MirOpRecord::new(MirOp::Store)
+                .with_attr(MirAttr::string("function", "expr"))
+                .with_attr(MirAttr::string("operation", "neg"))
+                .with_attr(MirAttr::string("destination", "local10.deref"))
+                .with_attr(MirAttr::string("operands", "local6")),
+        ];
+
+        let plan = plan_from_records(&records);
+        let function = plan.function("expr").unwrap();
+        let sketch = function.expression_sketch();
+
+        assert_eq!(sketch.binary_op_count(RecordBinaryOp::Mul), 1);
+        assert_eq!(sketch.binary_op_count(RecordBinaryOp::Sub), 1);
+        assert_eq!(sketch.binary_op_count(RecordBinaryOp::Div), 1);
+        assert_eq!(sketch.unary_op_count(RecordUnaryOp::Neg), 1);
+        assert!(sketch.uses_scalar_arg(0));
+        assert!(sketch.uses_constant("mir.f32", "0x3fc00000"));
+        assert!(sketch.uses_constant("mir.f32", "0x40000000"));
+        assert_eq!(sketch.stores.len(), 2);
+        assert!(matches!(
+            &sketch.local_bindings[0].expr,
+            RecordExpression::Use(RecordExpressionOperand::SliceElement(access))
+                if access.arg_index == 1 && access.local == 2
+        ));
     }
 
     #[test]
