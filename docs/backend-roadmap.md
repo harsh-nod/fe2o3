@@ -32,9 +32,12 @@ For the full milestone plan, see [implementation-plan.md](implementation-plan.md
   consumes that plan to cross-check kernel argument types, required store/return
   ops, thread-index calls, record load coverage, and selected index/arithmetic
   shape markers before emitting through the existing MIR recognizer. Load/store
-  record place labels are parsed into a small access sketch, and helper/raw
-  index records are parsed into a linear index sketch so read-only slice loads
-  and direct `&mut [T]` output stores can be checked by MIR local and index.
+  record place labels are parsed into a small access sketch, helper/raw index
+  records are parsed into a linear index sketch, and direct slice reads/writes
+  are combined into a slice-access sketch keyed by ABI arg, MIR local, and
+  affine index. The AMDGPU validator now checks read-only slice loads and direct
+  `&mut [T]` output stores from that record-derived slice sketch while the
+  existing raw MIR recognizer still builds the expression tree.
 - `rustc-codegen-fe2o3` contains the first real backend utilities:
   - ABI validation for supported kernel arguments from monomorphized MIR locals.
   - A narrow MIR recognizer and AMDGPU LLVM IR emitter for `f32`/`f64` elementwise

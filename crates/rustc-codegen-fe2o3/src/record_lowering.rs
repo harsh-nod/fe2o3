@@ -79,6 +79,19 @@ pub struct RecordLinearIndex {
     pub offset: i64,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecordSliceAccessSketch {
+    pub reads: Vec<RecordSliceAccess>,
+    pub writes: Vec<RecordSliceAccess>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecordSliceAccess {
+    pub arg_index: usize,
+    pub local: usize,
+    pub index: RecordLinearIndex,
+}
+
 pub fn plan_from_records(records: &[MirOpRecord]) -> RecordLoweringPlan {
     let mut functions = Vec::new();
 
@@ -282,6 +295,24 @@ impl RecordLoweringFunction {
             thread_index_local,
             bindings,
         }
+    }
+
+    pub fn slice_access_sketch(&self) -> RecordSliceAccessSketch {
+        let args = self.args();
+        let access_sketch = self.access_sketch();
+        let index_sketch = self.index_sketch();
+        let reads = access_sketch
+            .loads
+            .iter()
+            .filter_map(|access| slice_access_from_memory(&args, access, &index_sketch))
+            .collect();
+        let writes = access_sketch
+            .stores
+            .iter()
+            .filter_map(|access| slice_access_from_memory(&args, access, &index_sketch))
+            .collect();
+
+        RecordSliceAccessSketch { reads, writes }
     }
 
     fn op_counts(&self) -> Vec<String> {
@@ -626,6 +657,26 @@ fn split_record_operands(operands: &str) -> Vec<String> {
     split
 }
 
+fn slice_access_from_memory(
+    args: &[&RecordLoweringLocal],
+    access: &RecordMemoryAccess,
+    index_sketch: &RecordIndexSketch,
+) -> Option<RecordSliceAccess> {
+    let (arg_index, arg) = args
+        .iter()
+        .enumerate()
+        .find(|(_, arg)| arg.index == access.place.local)?;
+    if arg.ty != "mir.slice" {
+        return None;
+    }
+
+    Some(RecordSliceAccess {
+        arg_index,
+        local: arg.index,
+        index: index_sketch.get(access.index_local?)?,
+    })
+}
+
 fn is_lowering_op(op: MirOp) -> bool {
     LOWERING_OPS.contains(&op)
 }
@@ -855,6 +906,89 @@ mod tests {
                 stride: 1,
                 offset: 1
             })
+        );
+    }
+
+    #[test]
+    fn sketches_record_slice_accesses_from_memory_and_indexes() {
+        let records = vec![
+            MirOpRecord::new(MirOp::Func)
+                .with_attr(MirAttr::string("symbol", "raw_output_shift"))
+                .with_attr(MirAttr::string("kind", "kernel")),
+            MirOpRecord::new(MirOp::Arg)
+                .with_attr(MirAttr::string("function", "raw_output_shift"))
+                .with_attr(MirAttr::usize("index", 1))
+                .with_attr(MirAttr::string("role", "arg"))
+                .with_attr(MirAttr::string("type", "mir.slice"))
+                .with_attr(MirAttr::string("rust_type", "&[f32]")),
+            MirOpRecord::new(MirOp::Arg)
+                .with_attr(MirAttr::string("function", "raw_output_shift"))
+                .with_attr(MirAttr::usize("index", 2))
+                .with_attr(MirAttr::string("role", "arg"))
+                .with_attr(MirAttr::string("type", "mir.slice"))
+                .with_attr(MirAttr::string("rust_type", "&mut [f32]")),
+            MirOpRecord::new(MirOp::Call)
+                .with_attr(MirAttr::string("function", "raw_output_shift"))
+                .with_attr(MirAttr::string("callee", "fe2o3_device::thread::index_1d"))
+                .with_attr(MirAttr::usize("destination_local", 3)),
+            MirOpRecord::new(MirOp::Call)
+                .with_attr(MirAttr::string("function", "raw_output_shift"))
+                .with_attr(MirAttr::string("callee", "fe2o3_device::ThreadIndex::get"))
+                .with_attr(MirAttr::usize("destination_local", 4))
+                .with_attr(MirAttr::string("operands", "local3")),
+            MirOpRecord::new(MirOp::Add)
+                .with_attr(MirAttr::string("function", "raw_output_shift"))
+                .with_attr(MirAttr::usize("destination_local", 6))
+                .with_attr(MirAttr::string("operation", "add_with_overflow"))
+                .with_attr(MirAttr::string(
+                    "operands",
+                    "local4, const:mir.usize=Val(Scalar(0x0000000000000001), usize)",
+                )),
+            MirOpRecord::new(MirOp::Assign)
+                .with_attr(MirAttr::string("function", "raw_output_shift"))
+                .with_attr(MirAttr::usize("destination_local", 5))
+                .with_attr(MirAttr::string("operation", "use"))
+                .with_attr(MirAttr::string("operands", "local6.field0")),
+            MirOpRecord::new(MirOp::Load)
+                .with_attr(MirAttr::string("function", "raw_output_shift"))
+                .with_attr(MirAttr::string("operation", "use"))
+                .with_attr(MirAttr::usize("destination_local", 7))
+                .with_attr(MirAttr::string("destination", "local7"))
+                .with_attr(MirAttr::usize("operand_count", 1))
+                .with_attr(MirAttr::string("operands", "local1.deref.index_local4")),
+            MirOpRecord::new(MirOp::Store)
+                .with_attr(MirAttr::string("function", "raw_output_shift"))
+                .with_attr(MirAttr::string("operation", "use"))
+                .with_attr(MirAttr::string("destination", "local2.deref.index_local5"))
+                .with_attr(MirAttr::usize("operand_count", 1))
+                .with_attr(MirAttr::string("operands", "local7")),
+        ];
+
+        let plan = plan_from_records(&records);
+        let function = plan.function("raw_output_shift").unwrap();
+        let sketch = function.slice_access_sketch();
+
+        assert_eq!(
+            sketch.reads,
+            vec![RecordSliceAccess {
+                arg_index: 0,
+                local: 1,
+                index: RecordLinearIndex {
+                    stride: 1,
+                    offset: 0
+                }
+            }]
+        );
+        assert_eq!(
+            sketch.writes,
+            vec![RecordSliceAccess {
+                arg_index: 1,
+                local: 2,
+                index: RecordLinearIndex {
+                    stride: 1,
+                    offset: 1
+                }
+            }]
         );
     }
 

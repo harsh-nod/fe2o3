@@ -1,7 +1,7 @@
 use crate::collector::{CollectedFunction, CollectionResult};
 use crate::record_lowering::{
-    RecordAccessSketch, RecordIndexSketch, RecordLinearIndex, RecordLoweringFunction,
-    RecordLoweringLocal, RecordLoweringPlan,
+    RecordAccessSketch, RecordLinearIndex, RecordLoweringFunction, RecordLoweringLocal,
+    RecordLoweringPlan, RecordSliceAccess,
 };
 use crate::{AmdGpuTarget, HsacoError, compile_llvm_ir_to_hsaco};
 use dialect_mir::MirOp;
@@ -563,7 +563,6 @@ fn validate_record_elementwise_shape(
     }
 
     let access_sketch = record_function.access_sketch();
-    let index_sketch = record_function.index_sketch();
     let expected_loads = read_slice_sources(shape).len();
     let record_loads = access_sketch.loads.len();
     if record_loads < expected_loads {
@@ -574,13 +573,7 @@ fn validate_record_elementwise_shape(
             ),
         ));
     }
-    validate_record_slice_accesses(
-        kernel_name,
-        shape,
-        record_function,
-        &access_sketch,
-        &index_sketch,
-    )?;
+    validate_record_slice_accesses(kernel_name, shape, record_function, &access_sketch)?;
 
     let binary_nodes = shape
         .expr
@@ -611,7 +604,6 @@ fn validate_record_slice_accesses(
     shape: &ElementwiseShape,
     record_function: &RecordLoweringFunction,
     access_sketch: &RecordAccessSketch,
-    index_sketch: &RecordIndexSketch,
 ) -> Result<(), EmitError> {
     if access_sketch.stores.is_empty() {
         return Err(unsupported_kernel(
@@ -621,6 +613,7 @@ fn validate_record_slice_accesses(
     }
 
     let record_args = record_function.args();
+    let slice_access_sketch = record_function.slice_access_sketch();
     let mut expected_loads_by_local = HashMap::new();
     for source in read_slice_sources(shape) {
         let Some(arg) = record_args.get(source.arg_index) else {
@@ -630,13 +623,13 @@ fn validate_record_slice_accesses(
             continue;
         }
         *expected_loads_by_local.entry(arg.index).or_insert(0usize) += 1;
-        validate_record_access_index(
+        validate_record_slice_access_index(
             kernel_name,
             "load",
-            &access_sketch.loads,
+            &slice_access_sketch.reads,
+            source.arg_index,
             arg.index,
             source.index,
-            index_sketch,
         )?;
     }
 
@@ -644,18 +637,18 @@ fn validate_record_slice_accesses(
         return Ok(());
     };
     if output_arg.ty == "mir.slice" && output_arg.rust_ty.starts_with("&mut ") {
-        validate_record_access_index(
+        validate_record_slice_access_index(
             kernel_name,
             "store",
-            &access_sketch.stores,
+            &slice_access_sketch.writes,
+            shape.output_arg,
             output_arg.index,
             shape.output_index,
-            index_sketch,
         )?;
-        if !access_sketch
-            .stores
+        if !slice_access_sketch
+            .writes
             .iter()
-            .any(|store| store.place.local == output_arg.index)
+            .any(|store| store.local == output_arg.index)
         {
             return Err(unsupported_kernel(
                 kernel_name,
@@ -686,28 +679,25 @@ fn validate_record_slice_accesses(
     Ok(())
 }
 
-fn validate_record_access_index(
+fn validate_record_slice_access_index(
     kernel_name: &str,
     access_kind: &str,
-    accesses: &[crate::record_lowering::RecordMemoryAccess],
+    accesses: &[RecordSliceAccess],
+    arg_index: usize,
     local: usize,
     expected: IndexExpr,
-    index_sketch: &RecordIndexSketch,
 ) -> Result<(), EmitError> {
     let expected = RecordLinearIndex::from(expected);
-    for access in accesses.iter().filter(|access| access.place.local == local) {
-        let Some(index_local) = access.index_local else {
-            continue;
-        };
-        if index_sketch.get(index_local) == Some(expected) {
-            return Ok(());
-        }
+    if accesses.iter().any(|access| {
+        access.arg_index == arg_index && access.local == local && access.index == expected
+    }) {
+        return Ok(());
     }
 
     Err(unsupported_kernel(
         kernel_name,
         format!(
-            "record lowering plan is missing a {access_kind} on local{local} with index stride {} offset {}",
+            "record lowering plan is missing a {access_kind} on local{local} (arg{arg_index}) with index stride {} offset {}",
             expected.stride, expected.offset
         ),
     ))

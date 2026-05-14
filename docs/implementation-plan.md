@@ -202,9 +202,12 @@ Status: MVP implemented for `f32`/`f64` elementwise expression kernel shapes.
   consumes that plan to cross-check kernel argument types, required store/return
   ops, thread-index calls, record load coverage, and selected index/arithmetic
   shape markers before emitting through the existing MIR recognizer. Load/store
-  record place labels are parsed into a small access sketch, and helper/raw
-  index records are parsed into a linear index sketch so read-only slice loads
-  and direct `&mut [T]` output stores can be checked by MIR local and index.
+  record place labels are parsed into a small access sketch, helper/raw index
+  records are parsed into a linear index sketch, and direct slice reads/writes
+  are combined into a slice-access sketch keyed by ABI arg, MIR local, and
+  affine index. The AMDGPU validator now checks read-only slice loads and direct
+  `&mut [T]` output stores from that record-derived slice sketch while the
+  existing raw MIR recognizer still builds the expression tree.
 - The backend emits an AMDGPU LLVM IR `amdgpu_kernel` after validating the ABI
   and body pattern.
 - The emitted IR uses `llvm.amdgcn.workitem.id.x` and
@@ -407,9 +410,10 @@ Grow the MIR import scaffold into the first real lowering path:
 1. Move the current elementwise shape analysis from raw rustc MIR onto the
    record-driven lowering plan one piece at a time. The plan now carries typed
    locals, statement operation labels, call destinations/operands, parsed
-   load/store access sketches, and a first linear index sketch. The next slice
-   should derive the elementwise read/write slice sources from these sketches and
-   only fall back to raw rustc MIR for expression-tree construction.
+   load/store access sketches, a linear index sketch, and a derived slice-access
+   sketch for read/write slice sources. The next slice should move expression
+   leaf and arithmetic-node construction onto the operation records, leaving raw
+   rustc MIR as the temporary fallback only while that path comes online.
 2. Lower enough operations for the current elementwise kernel shapes: args,
    basic blocks, integer arithmetic, pointer arithmetic, loads/stores, branch,
    and return.
