@@ -48,7 +48,9 @@ record-driven lowering-plan summary from that flat record stream. The AMDGPU
 emission path now consumes that record plan to cross-check kernel argument
 types, required store/return ops, thread-index calls, record load coverage, and
 selected index/arithmetic shape markers before emitting through the existing MIR
-recognizer.
+recognizer. Load/store record place labels are parsed into a small access sketch
+so read-only slice loads and direct `&mut [T]` output stores can be checked by
+MIR local.
 
 The backend also has the first AMDGPU artifact path: for the current `f32`/`f64`
 elementwise kernel shapes it validates the Rust kernel ABI from monomorphized

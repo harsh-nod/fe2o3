@@ -30,7 +30,9 @@ For the full milestone plan, see [implementation-plan.md](implementation-plan.md
   stream. The AMDGPU emission path consumes that plan to cross-check kernel
   argument types, required store/return ops, thread-index calls, record load
   coverage, and selected index/arithmetic shape markers before emitting through
-  the existing MIR recognizer.
+  the existing MIR recognizer. Load/store record place labels are parsed into a
+  small access sketch so read-only slice loads and direct `&mut [T]` output
+  stores can be checked by MIR local.
 - `rustc-codegen-fe2o3` contains the first real backend utilities:
   - ABI validation for supported kernel arguments from monomorphized MIR locals.
   - A narrow MIR recognizer and AMDGPU LLVM IR emitter for `f32`/`f64` elementwise

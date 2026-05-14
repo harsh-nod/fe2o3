@@ -41,6 +41,25 @@ pub struct RecordLoweringOp {
     pub operands: Option<String>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecordPlaceRef {
+    pub local: usize,
+    pub projection: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecordAccessSketch {
+    pub loads: Vec<RecordMemoryAccess>,
+    pub stores: Vec<RecordMemoryAccess>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecordMemoryAccess {
+    pub place: RecordPlaceRef,
+    pub index_local: Option<usize>,
+    pub operation: Option<String>,
+}
+
 pub fn plan_from_records(records: &[MirOpRecord]) -> RecordLoweringPlan {
     let mut functions = Vec::new();
 
@@ -166,7 +185,7 @@ impl RecordLoweringFunction {
     }
 
     pub fn has_op(&self, op: MirOp) -> bool {
-        self.ops.iter().any(|candidate| candidate.op == op)
+        self.op_count(op) > 0
     }
 
     pub fn op_count(&self, op: MirOp) -> usize {
@@ -192,6 +211,35 @@ impl RecordLoweringFunction {
         })
     }
 
+    pub fn access_sketch(&self) -> RecordAccessSketch {
+        let loads = self
+            .ops_by(MirOp::Load)
+            .into_iter()
+            .flat_map(|op| {
+                op.operand_places()
+                    .into_iter()
+                    .map(|place| RecordMemoryAccess {
+                        index_local: place.index_local(),
+                        place,
+                        operation: op.operation.clone(),
+                    })
+            })
+            .collect();
+        let stores = self
+            .ops_by(MirOp::Store)
+            .into_iter()
+            .filter_map(|op| {
+                op.destination_place().map(|place| RecordMemoryAccess {
+                    index_local: place.index_local(),
+                    place,
+                    operation: op.operation.clone(),
+                })
+            })
+            .collect();
+
+        RecordAccessSketch { loads, stores }
+    }
+
     fn op_counts(&self) -> Vec<String> {
         LOWERING_OPS
             .iter()
@@ -204,6 +252,51 @@ impl RecordLoweringFunction {
                 (count > 0).then(|| format!("{}={count}", op.name()))
             })
             .collect()
+    }
+}
+
+impl RecordLoweringOp {
+    pub fn destination_place(&self) -> Option<RecordPlaceRef> {
+        self.destination.as_deref().and_then(RecordPlaceRef::parse)
+    }
+
+    pub fn operand_places(&self) -> Vec<RecordPlaceRef> {
+        self.operands
+            .as_deref()
+            .into_iter()
+            .flat_map(|operands| operands.split(','))
+            .filter_map(|operand| RecordPlaceRef::parse(operand.trim()))
+            .collect()
+    }
+}
+
+impl RecordPlaceRef {
+    pub fn parse(label: &str) -> Option<Self> {
+        let label = label.strip_prefix("local")?;
+        let local_len = label.bytes().take_while(u8::is_ascii_digit).count();
+        if local_len == 0 {
+            return None;
+        }
+
+        let local = label[..local_len].parse().ok()?;
+        let rest = &label[local_len..];
+        let projection = rest
+            .strip_prefix('.')
+            .into_iter()
+            .flat_map(|projection| projection.split('.'))
+            .filter(|projection| !projection.is_empty())
+            .map(str::to_string)
+            .collect();
+
+        Some(Self { local, projection })
+    }
+
+    pub fn index_local(&self) -> Option<usize> {
+        self.projection.iter().find_map(|projection| {
+            projection
+                .strip_prefix("index_local")
+                .and_then(|index| index.parse().ok())
+        })
     }
 }
 
@@ -333,8 +426,22 @@ mod tests {
         assert_eq!(plan.functions[0].ops_by(MirOp::Call).len(), 1);
         assert!(plan.functions[0].has_call_suffix("thread::index_1d"));
         assert_eq!(plan.functions[0].op_count(MirOp::Return), 1);
+        let access = plan.functions[0].access_sketch();
+        assert_eq!(access.loads.len(), 1);
+        assert_eq!(access.loads[0].place.local, 1);
+        assert_eq!(access.loads[0].index_local, Some(2));
         assert!(plan.function("copy").is_some());
         assert!(plan.functions[0].has_op(MirOp::Return));
+    }
+
+    #[test]
+    fn parses_record_place_labels() {
+        let place = RecordPlaceRef::parse("local12.deref.index_local7").unwrap();
+
+        assert_eq!(place.local, 12);
+        assert_eq!(place.projection, vec!["deref", "index_local7"]);
+        assert_eq!(place.index_local(), Some(7));
+        assert!(RecordPlaceRef::parse("const:mir.usize=1").is_none());
     }
 
     #[test]

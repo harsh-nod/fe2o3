@@ -7,8 +7,8 @@ This file captures the fe2o3 state around bringing up the AMD GPU driver stack.
 - Local path: `/home/nod/github/fe2o3`
 - Branch: `main`
 - Remote: `https://github.com/powderluv/fe2o3.git`
-- Latest pushed checkpoint before this call-record shape-validation update:
-  `ed75756 Validate AMDGPU ABI from MIR records`
+- Latest pushed checkpoint before this access-sketch update:
+  `721d671 Cross-check elementwise shapes with MIR records`
 
 ## Implemented
 
@@ -33,7 +33,9 @@ This file captures the fe2o3 state around bringing up the AMD GPU driver stack.
   stream. The AMDGPU emission path consumes that plan to cross-check kernel
   argument types, required store/return ops, thread-index calls, record load
   coverage, and selected index/arithmetic shape markers before emitting through
-  the existing MIR recognizer.
+  the existing MIR recognizer. Load/store record place labels are parsed into a
+  small access sketch so read-only slice loads and direct `&mut [T]` output
+  stores can be checked by MIR local.
 - The current `f32`/`f64` elementwise MIR expression shapes emit AMDGPU LLVM IR.
 - Generated LLVM IR is compiled through ROCm clang and linked with `ld.lld` into
   `target/fe2o3/*.hsaco`.
@@ -452,8 +454,8 @@ Short-term backend surface step:
 
 1. Move the current elementwise shape analysis from raw rustc MIR onto the
    record-driven lowering plan one piece at a time. The plan now carries typed
-   locals, statement operation labels, and call destinations/operands, so the
-   next slice should derive read/write slice sources and affine index
+   locals, statement operation labels, call destinations/operands, and parsed
+   load/store access sketches. The next slice should derive affine index
    expressions from those records instead of re-reading raw rustc MIR.
 
 Then replace the temporary elementwise MIR recognizer/emitter with real

@@ -1,5 +1,7 @@
 use crate::collector::{CollectedFunction, CollectionResult};
-use crate::record_lowering::{RecordLoweringFunction, RecordLoweringLocal, RecordLoweringPlan};
+use crate::record_lowering::{
+    RecordAccessSketch, RecordLoweringFunction, RecordLoweringLocal, RecordLoweringPlan,
+};
 use crate::{AmdGpuTarget, HsacoError, compile_llvm_ir_to_hsaco};
 use dialect_mir::MirOp;
 use rustc_middle::mir::{
@@ -559,8 +561,9 @@ fn validate_record_elementwise_shape(
         ));
     }
 
+    let access_sketch = record_function.access_sketch();
     let expected_loads = read_slice_sources(shape).len();
-    let record_loads = record_function.op_count(MirOp::Load);
+    let record_loads = access_sketch.loads.len();
     if record_loads < expected_loads {
         return Err(unsupported_kernel(
             kernel_name,
@@ -569,6 +572,7 @@ fn validate_record_elementwise_shape(
             ),
         ));
     }
+    validate_record_slice_accesses(kernel_name, shape, record_function, &access_sketch)?;
 
     let binary_nodes = shape
         .expr
@@ -588,6 +592,69 @@ fn validate_record_elementwise_shape(
         return Err(unsupported_kernel(
             kernel_name,
             "record lowering plan is missing index transform operations for shifted output",
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_record_slice_accesses(
+    kernel_name: &str,
+    shape: &ElementwiseShape,
+    record_function: &RecordLoweringFunction,
+    access_sketch: &RecordAccessSketch,
+) -> Result<(), EmitError> {
+    if access_sketch.stores.is_empty() {
+        return Err(unsupported_kernel(
+            kernel_name,
+            "record lowering plan is missing a parsed output store",
+        ));
+    }
+
+    let record_args = record_function.args();
+    let mut expected_loads_by_local = HashMap::new();
+    for source in read_slice_sources(shape) {
+        if source.arg_index == shape.output_arg {
+            continue;
+        }
+        let Some(arg) = record_args.get(source.arg_index) else {
+            continue;
+        };
+        *expected_loads_by_local.entry(arg.index).or_insert(0usize) += 1;
+    }
+
+    for (local, expected) in expected_loads_by_local {
+        let actual = access_sketch
+            .loads
+            .iter()
+            .filter(|load| load.place.local == local)
+            .count();
+        if actual < expected {
+            return Err(unsupported_kernel(
+                kernel_name,
+                format!(
+                    "record lowering plan has {actual} load(s) from local{local}, elementwise shape needs {expected}"
+                ),
+            ));
+        }
+    }
+
+    let Some(output_arg) = record_args.get(shape.output_arg) else {
+        return Ok(());
+    };
+    if output_arg.ty == "mir.slice"
+        && output_arg.rust_ty.starts_with("&mut ")
+        && !access_sketch
+            .stores
+            .iter()
+            .any(|store| store.place.local == output_arg.index)
+    {
+        return Err(unsupported_kernel(
+            kernel_name,
+            format!(
+                "record lowering plan is missing a store to output arg local{}",
+                output_arg.index
+            ),
         ));
     }
 
@@ -1794,7 +1861,7 @@ mod tests {
             ],
             ops: vec![
                 record_call("fe2o3_device::thread::index_1d"),
-                record_op(MirOp::Load),
+                record_load("local1.deref.index_local3"),
                 record_store(),
                 record_op(MirOp::Return),
             ],
@@ -1823,6 +1890,15 @@ mod tests {
         op.callee = Some(callee.to_string());
         op.destination_local = Some(3);
         op.destination = Some("local3".to_string());
+        op
+    }
+
+    fn record_load(operands: &str) -> crate::record_lowering::RecordLoweringOp {
+        let mut op = record_op(MirOp::Load);
+        op.statement = Some(0);
+        op.operation = Some("use".to_string());
+        op.operand_count = Some(1);
+        op.operands = Some(operands.to_string());
         op
     }
 
@@ -1881,6 +1957,21 @@ mod tests {
         .unwrap_err();
 
         assert!(error.to_string().contains("thread::index_1d"));
+    }
+
+    #[test]
+    fn rejects_record_shape_without_expected_source_load() {
+        let mut record_function = test_record_function();
+        record_function.ops[1].operands = Some("local4.deref.index_local3".to_string());
+
+        let error = validate_record_elementwise_shape(
+            "test_kernel",
+            &test_shape(IndexExpr::Thread),
+            &record_function,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("load(s) from local1"));
     }
 
     #[test]

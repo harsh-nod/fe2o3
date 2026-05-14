@@ -200,7 +200,9 @@ Status: MVP implemented for `f32`/`f64` elementwise expression kernel shapes.
   stream. The AMDGPU emission path consumes that plan to cross-check kernel
   argument types, required store/return ops, thread-index calls, record load
   coverage, and selected index/arithmetic shape markers before emitting through
-  the existing MIR recognizer.
+  the existing MIR recognizer. Load/store record place labels are parsed into a
+  small access sketch so read-only slice loads and direct `&mut [T]` output
+  stores can be checked by MIR local.
 - The backend emits an AMDGPU LLVM IR `amdgpu_kernel` after validating the ABI
   and body pattern.
 - The emitted IR uses `llvm.amdgcn.workitem.id.x` and
@@ -402,8 +404,8 @@ Grow the MIR import scaffold into the first real lowering path:
 
 1. Move the current elementwise shape analysis from raw rustc MIR onto the
    record-driven lowering plan one piece at a time. The plan now carries typed
-   locals, statement operation labels, and call destinations/operands, so the
-   next slice should derive read/write slice sources and affine index
+   locals, statement operation labels, call destinations/operands, and parsed
+   load/store access sketches. The next slice should derive affine index
    expressions from those records instead of re-reading raw rustc MIR.
 2. Lower enough operations for the current elementwise kernel shapes: args,
    basic blocks, integer arithmetic, pointer arithmetic, loads/stores, branch,
