@@ -30,7 +30,14 @@ pub struct RecordLoweringOp {
     pub op: MirOp,
     pub block: Option<usize>,
     pub statement: Option<usize>,
+    pub source: Option<String>,
+    pub operation: Option<String>,
+    pub callee: Option<String>,
+    pub target: Option<usize>,
+    pub targets: Option<usize>,
+    pub destination_local: Option<usize>,
     pub destination: Option<String>,
+    pub operand_count: Option<usize>,
     pub operands: Option<String>,
 }
 
@@ -92,7 +99,14 @@ pub fn plan_from_records(records: &[MirOpRecord]) -> RecordLoweringPlan {
             op: record.op,
             block: usize_attr(record, "block"),
             statement: usize_attr(record, "statement"),
+            source: string_attr(record, "source").map(str::to_string),
+            operation: string_attr(record, "operation").map(str::to_string),
+            callee: string_attr(record, "callee").map(str::to_string),
+            target: usize_attr(record, "target"),
+            targets: usize_attr(record, "targets"),
+            destination_local: usize_attr(record, "destination_local"),
             destination: string_attr(record, "destination").map(str::to_string),
+            operand_count: usize_attr(record, "operand_count"),
             operands: string_attr(record, "operands").map(str::to_string),
         });
     }
@@ -153,6 +167,29 @@ impl RecordLoweringFunction {
 
     pub fn has_op(&self, op: MirOp) -> bool {
         self.ops.iter().any(|candidate| candidate.op == op)
+    }
+
+    pub fn op_count(&self, op: MirOp) -> usize {
+        self.ops
+            .iter()
+            .filter(|candidate| candidate.op == op)
+            .count()
+    }
+
+    pub fn ops_by(&self, op: MirOp) -> Vec<&RecordLoweringOp> {
+        self.ops
+            .iter()
+            .filter(|candidate| candidate.op == op)
+            .collect()
+    }
+
+    pub fn has_call_suffix(&self, suffix: &str) -> bool {
+        self.ops_by(MirOp::Call).into_iter().any(|candidate| {
+            candidate
+                .callee
+                .as_deref()
+                .is_some_and(|callee| callee.ends_with(suffix))
+        })
     }
 
     fn op_counts(&self) -> Vec<String> {
@@ -255,8 +292,19 @@ mod tests {
                 .with_attr(MirAttr::string("function", "copy"))
                 .with_attr(MirAttr::usize("block", 0))
                 .with_attr(MirAttr::usize("statement", 1))
+                .with_attr(MirAttr::string("source", "mir.assign"))
+                .with_attr(MirAttr::string("operation", "use"))
+                .with_attr(MirAttr::usize("destination_local", 3))
                 .with_attr(MirAttr::string("destination", "local3"))
+                .with_attr(MirAttr::usize("operand_count", 1))
                 .with_attr(MirAttr::string("operands", "local1.deref.index_local2")),
+            MirOpRecord::new(MirOp::Call)
+                .with_attr(MirAttr::string("function", "copy"))
+                .with_attr(MirAttr::usize("block", 0))
+                .with_attr(MirAttr::string("callee", "fe2o3_device::thread::index_1d"))
+                .with_attr(MirAttr::usize("target", 1))
+                .with_attr(MirAttr::usize("destination_local", 4))
+                .with_attr(MirAttr::string("destination", "local4")),
             MirOpRecord::new(MirOp::Return)
                 .with_attr(MirAttr::string("function", "copy"))
                 .with_attr(MirAttr::usize("block", 1)),
@@ -272,9 +320,19 @@ mod tests {
         assert_eq!(plan.functions[0].block_count, 2);
         assert_eq!(plan.functions[0].args().len(), 1);
         assert_eq!(plan.functions[0].args()[0].ty, "mir.slice");
-        assert_eq!(plan.functions[0].ops.len(), 2);
+        assert_eq!(plan.functions[0].ops.len(), 3);
         assert_eq!(plan.functions[0].ops[0].op, MirOp::Load);
         assert_eq!(plan.functions[0].ops[0].statement, Some(1));
+        assert_eq!(
+            plan.functions[0].ops[0].source.as_deref(),
+            Some("mir.assign")
+        );
+        assert_eq!(plan.functions[0].ops[0].operation.as_deref(), Some("use"));
+        assert_eq!(plan.functions[0].ops[0].destination_local, Some(3));
+        assert_eq!(plan.functions[0].ops[0].operand_count, Some(1));
+        assert_eq!(plan.functions[0].ops_by(MirOp::Call).len(), 1);
+        assert!(plan.functions[0].has_call_suffix("thread::index_1d"));
+        assert_eq!(plan.functions[0].op_count(MirOp::Return), 1);
         assert!(plan.function("copy").is_some());
         assert!(plan.functions[0].has_op(MirOp::Return));
     }

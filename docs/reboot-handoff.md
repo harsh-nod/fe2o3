@@ -7,8 +7,8 @@ This file captures the fe2o3 state around bringing up the AMD GPU driver stack.
 - Local path: `/home/nod/github/fe2o3`
 - Branch: `main`
 - Remote: `https://github.com/powderluv/fe2o3.git`
-- Latest pushed commit before this statement record update:
-  `35115b7 Add typed MIR local records`
+- Latest pushed checkpoint before this call-record shape-validation update:
+  `ed75756 Validate AMDGPU ABI from MIR records`
 
 ## Implemented
 
@@ -26,12 +26,14 @@ This file captures the fe2o3 state around bringing up the AMD GPU driver stack.
 - The MIR scaffold builds a flat typed `mir.*` operation-record stream for the
   future Pliron builder, including return, argument, local type labels,
   statement destinations, statement operands, assignment operation labels, and
-  the first operation-specific lowering records such as `mir.load`, `mir.store`,
+  terminator call callee, destination, and operand labels, plus the first
+  operation-specific lowering records such as `mir.load`, `mir.store`,
   `mir.gep`, `mir.slice_len`, arithmetic ops, comparisons, and casts. The dump
   also builds a first record-driven lowering-plan summary from the flat record
   stream. The AMDGPU emission path consumes that plan to cross-check kernel
-  argument types and required store/return ops before using the existing MIR
-  recognizer.
+  argument types, required store/return ops, thread-index calls, record load
+  coverage, and selected index/arithmetic shape markers before emitting through
+  the existing MIR recognizer.
 - The current `f32`/`f64` elementwise MIR expression shapes emit AMDGPU LLVM IR.
 - Generated LLVM IR is compiled through ROCm clang and linked with `ld.lld` into
   `target/fe2o3/*.hsaco`.
@@ -449,8 +451,10 @@ reported by ROCm, for example `gfx1201`, `gfx90a`, or `gfx942`.
 Short-term backend surface step:
 
 1. Move the current elementwise shape analysis from raw rustc MIR onto the
-   record-driven lowering plan one piece at a time, starting with loads, stores,
-   comparisons, and pointer/index operations already present in the plan.
+   record-driven lowering plan one piece at a time. The plan now carries typed
+   locals, statement operation labels, and call destinations/operands, so the
+   next slice should derive read/write slice sources and affine index
+   expressions from those records instead of re-reading raw rustc MIR.
 
 Then replace the temporary elementwise MIR recognizer/emitter with real
 lowering:

@@ -109,6 +109,8 @@ pub enum MirTerminatorKind {
     Call {
         callee: Option<String>,
         target: Option<usize>,
+        destination: Option<MirPlaceRef>,
+        operands: Vec<MirOperandRef>,
     },
     Assert {
         target: usize,
@@ -508,12 +510,36 @@ impl MirTerminatorKind {
             Self::SwitchInt { targets } => {
                 record.attrs.push(MirAttr::usize("targets", *targets));
             }
-            Self::Call { callee, target } => {
+            Self::Call {
+                callee,
+                target,
+                destination,
+                operands,
+            } => {
                 if let Some(callee) = callee {
                     record.attrs.push(MirAttr::string("callee", callee));
                 }
                 if let Some(target) = target {
                     record.attrs.push(MirAttr::usize("target", *target));
+                }
+                if let Some(destination) = destination {
+                    record
+                        .attrs
+                        .push(MirAttr::usize("destination_local", destination.local));
+                    record
+                        .attrs
+                        .push(MirAttr::string("destination", destination.label()));
+                }
+                record
+                    .attrs
+                    .push(MirAttr::usize("operand_count", operands.len()));
+                if !operands.is_empty() {
+                    let operands = operands
+                        .iter()
+                        .map(MirOperandRef::label)
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    record.attrs.push(MirAttr::string("operands", operands));
                 }
             }
             Self::Return | Self::Unreachable | Self::Other => {}
@@ -543,7 +569,7 @@ impl MirTerminatorKind {
             Self::SwitchInt { targets } => {
                 format!("{} ({targets} target(s))", MirOp::Switch.name())
             }
-            Self::Call { callee, target } => {
+            Self::Call { callee, target, .. } => {
                 let callee = callee.as_deref().unwrap_or("<dynamic>");
                 match target {
                     Some(target) => format!("{} {callee} -> bb{target}", MirOp::Call.name()),
@@ -829,9 +855,20 @@ fn terminator_kind<'tcx>(tcx: TyCtxt<'tcx>, kind: &TerminatorKind<'tcx>) -> MirT
         TerminatorKind::SwitchInt { targets, .. } => MirTerminatorKind::SwitchInt {
             targets: targets.all_targets().len(),
         },
-        TerminatorKind::Call { func, target, .. } => MirTerminatorKind::Call {
+        TerminatorKind::Call {
+            func,
+            args,
+            destination,
+            target,
+            ..
+        } => MirTerminatorKind::Call {
             callee: call_name(tcx, func),
             target: target.map(BasicBlock::as_usize),
+            destination: Some(import_place(*destination)),
+            operands: args
+                .iter()
+                .map(|arg| import_operand(tcx, &arg.node))
+                .collect(),
         },
         TerminatorKind::Assert { target, .. } => MirTerminatorKind::Assert {
             target: target.as_usize(),
@@ -962,6 +999,45 @@ mod tests {
         );
         assert_eq!(record_usize(&records[5], "statement"), Some(0));
         assert_eq!(record_string(&records[5], "source"), Some("mir.assign"));
+    }
+
+    #[test]
+    fn call_records_include_destination_and_operands() {
+        let module = MirModule {
+            functions: vec![MirFunction {
+                export_name: "copy".to_string(),
+                rust_path: "fe2o3_copy::fe2o3_kernel_copy".to_string(),
+                kind: MirFunctionKind::Kernel,
+                arg_count: 1,
+                local_count: 3,
+                locals: Vec::new(),
+                blocks: vec![MirBlock {
+                    index: 0,
+                    statements: Vec::new(),
+                    terminator: Some(MirTerminator {
+                        kind: MirTerminatorKind::Call {
+                            callee: Some("fe2o3_device::thread::index_1d".to_string()),
+                            target: Some(1),
+                            destination: Some(local_place(2)),
+                            operands: vec![MirOperandRef::Place(local_place(1))],
+                        },
+                    }),
+                }],
+            }],
+        };
+
+        let records = module.dialect_records();
+
+        assert_eq!(records[3].op, MirOp::Call);
+        assert_eq!(
+            record_string(&records[3], "callee"),
+            Some("fe2o3_device::thread::index_1d")
+        );
+        assert_eq!(record_usize(&records[3], "target"), Some(1));
+        assert_eq!(record_usize(&records[3], "destination_local"), Some(2));
+        assert_eq!(record_string(&records[3], "destination"), Some("local2"));
+        assert_eq!(record_usize(&records[3], "operand_count"), Some(1));
+        assert_eq!(record_string(&records[3], "operands"), Some("local1"));
     }
 
     #[test]

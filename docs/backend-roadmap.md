@@ -23,12 +23,14 @@ For the full milestone plan, see [implementation-plan.md](implementation-plan.md
   shape without changing the current HSACO emission path. The scaffold also
   builds a flat typed `mir.*` operation-record stream for the future Pliron
   builder, including typed locals, statement destination and operand labels, and
-  the first operation-specific lowering records such as `mir.load`, `mir.store`,
+  terminator call callee, destination, and operand labels, plus the first
+  operation-specific lowering records such as `mir.load`, `mir.store`,
   `mir.gep`, `mir.slice_len`, arithmetic ops, comparisons, and casts. The dump
   also builds a first record-driven lowering-plan summary from the flat record
   stream. The AMDGPU emission path consumes that plan to cross-check kernel
-  argument types and required store/return ops before using the existing MIR
-  recognizer.
+  argument types, required store/return ops, thread-index calls, record load
+  coverage, and selected index/arithmetic shape markers before emitting through
+  the existing MIR recognizer.
 - `rustc-codegen-fe2o3` contains the first real backend utilities:
   - ABI validation for supported kernel arguments from monomorphized MIR locals.
   - A narrow MIR recognizer and AMDGPU LLVM IR emitter for `f32`/`f64` elementwise

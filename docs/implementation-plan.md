@@ -193,12 +193,14 @@ Status: MVP implemented for `f32`/`f64` elementwise expression kernel shapes.
   function/block/statement/terminator shape for lowering work. The scaffold
   also builds a flat typed `mir.*` operation-record stream for the future Pliron
   builder, including typed locals, statement destination and operand labels, and
-  the first operation-specific lowering records such as `mir.load`, `mir.store`,
+  terminator call callee, destination, and operand labels, plus the first
+  operation-specific lowering records such as `mir.load`, `mir.store`,
   `mir.gep`, `mir.slice_len`, arithmetic ops, comparisons, and casts. The dump
   also builds a first record-driven lowering-plan summary from the flat record
   stream. The AMDGPU emission path consumes that plan to cross-check kernel
-  argument types and required store/return ops before using the existing MIR
-  recognizer.
+  argument types, required store/return ops, thread-index calls, record load
+  coverage, and selected index/arithmetic shape markers before emitting through
+  the existing MIR recognizer.
 - The backend emits an AMDGPU LLVM IR `amdgpu_kernel` after validating the ABI
   and body pattern.
 - The emitted IR uses `llvm.amdgcn.workitem.id.x` and
@@ -399,8 +401,10 @@ calls can break GPU synchronization semantics.
 Grow the MIR import scaffold into the first real lowering path:
 
 1. Move the current elementwise shape analysis from raw rustc MIR onto the
-   record-driven lowering plan one piece at a time, starting with loads, stores,
-   comparisons, and pointer/index operations already present in the plan.
+   record-driven lowering plan one piece at a time. The plan now carries typed
+   locals, statement operation labels, and call destinations/operands, so the
+   next slice should derive read/write slice sources and affine index
+   expressions from those records instead of re-reading raw rustc MIR.
 2. Lower enough operations for the current elementwise kernel shapes: args,
    basic blocks, integer arithmetic, pointer arithmetic, loads/stores, branch,
    and return.

@@ -105,6 +105,9 @@ fn emit_kernel<'tcx>(
             format!("unsupported MIR body for elementwise lowering: {reason}"),
         )
     })?;
+    if let Some(record_function) = record_function {
+        validate_record_elementwise_shape(&kernel.export_name, &elementwise, record_function)?;
+    }
 
     emit_elementwise_kernel(&abi, &elementwise)
 }
@@ -542,6 +545,91 @@ fn record_arg_matches_abi(record_arg: &RecordLoweringLocal, abi_arg: &KernelArg)
             record_arg.ty == "mir.slice" || record_arg.ty == "mir.disjoint_slice"
         }
     }
+}
+
+fn validate_record_elementwise_shape(
+    kernel_name: &str,
+    shape: &ElementwiseShape,
+    record_function: &RecordLoweringFunction,
+) -> Result<(), EmitError> {
+    if !record_function.has_call_suffix("fe2o3_device::thread::index_1d") {
+        return Err(unsupported_kernel(
+            kernel_name,
+            "record lowering plan is missing a `thread::index_1d` call",
+        ));
+    }
+
+    let expected_loads = read_slice_sources(shape).len();
+    let record_loads = record_function.op_count(MirOp::Load);
+    if record_loads < expected_loads {
+        return Err(unsupported_kernel(
+            kernel_name,
+            format!(
+                "record lowering plan has {record_loads} load(s), elementwise shape needs at least {expected_loads}"
+            ),
+        ));
+    }
+
+    let binary_nodes = shape
+        .expr
+        .nodes
+        .iter()
+        .filter(|node| matches!(node, ExprNode::Binary { .. }))
+        .count();
+    let arithmetic_ops = record_arithmetic_op_count(record_function);
+    if binary_nodes > 0 && arithmetic_ops == 0 {
+        return Err(unsupported_kernel(
+            kernel_name,
+            "record lowering plan is missing arithmetic for an elementwise expression",
+        ));
+    }
+
+    if shape.output_index != IndexExpr::Thread && !record_has_index_transform(record_function) {
+        return Err(unsupported_kernel(
+            kernel_name,
+            "record lowering plan is missing index transform operations for shifted output",
+        ));
+    }
+
+    Ok(())
+}
+
+fn record_arithmetic_op_count(record_function: &RecordLoweringFunction) -> usize {
+    record_function
+        .ops
+        .iter()
+        .filter(|op| {
+            matches!(op.op, MirOp::Add | MirOp::Sub | MirOp::Mul | MirOp::Div)
+                || op.operation.as_deref().is_some_and(is_arithmetic_operation)
+        })
+        .count()
+}
+
+fn is_arithmetic_operation(operation: &str) -> bool {
+    matches!(
+        operation,
+        "add"
+            | "add_unchecked"
+            | "add_with_overflow"
+            | "sub"
+            | "sub_unchecked"
+            | "sub_with_overflow"
+            | "mul"
+            | "mul_unchecked"
+            | "mul_with_overflow"
+            | "div"
+    )
+}
+
+fn record_has_index_transform(record_function: &RecordLoweringFunction) -> bool {
+    record_function.has_op(MirOp::Add)
+        || record_function.has_op(MirOp::Sub)
+        || record_function.has_op(MirOp::Mul)
+        || record_function.has_op(MirOp::Gep)
+        || record_function.has_call_suffix("fe2o3_device::ThreadIndex::offset")
+        || record_function.has_call_suffix("fe2o3_device::ThreadIndex::offset_signed")
+        || record_function.has_call_suffix("fe2o3_device::ThreadIndex::stride")
+        || record_function.has_call_suffix("fe2o3_device::ThreadIndex::stride_offset")
 }
 
 fn classify_kernel_arg<'tcx>(
@@ -1656,6 +1744,27 @@ mod tests {
         }
     }
 
+    fn binary_test_shape() -> ElementwiseShape {
+        ElementwiseShape {
+            expr: ElementwiseExpr {
+                nodes: vec![ExprNode::Binary {
+                    lhs: ExprRef::Value(ValueSource::SliceElement(SliceElementSource {
+                        arg_index: 0,
+                        index: IndexExpr::Thread,
+                    })),
+                    rhs: ExprRef::Value(ValueSource::SliceElement(SliceElementSource {
+                        arg_index: 0,
+                        index: IndexExpr::Thread,
+                    })),
+                    op: ElementwiseBinaryOp::Add,
+                }],
+                root: ExprRef::Node(0),
+            },
+            output_arg: 1,
+            output_index: IndexExpr::Thread,
+        }
+    }
+
     fn test_record_function() -> RecordLoweringFunction {
         RecordLoweringFunction {
             symbol: "test_kernel".to_string(),
@@ -1684,22 +1793,45 @@ mod tests {
                 },
             ],
             ops: vec![
-                crate::record_lowering::RecordLoweringOp {
-                    op: MirOp::Store,
-                    block: Some(0),
-                    statement: Some(0),
-                    destination: Some("local2.deref".to_string()),
-                    operands: Some("local1.deref.index_local3".to_string()),
-                },
-                crate::record_lowering::RecordLoweringOp {
-                    op: MirOp::Return,
-                    block: Some(0),
-                    statement: None,
-                    destination: None,
-                    operands: None,
-                },
+                record_call("fe2o3_device::thread::index_1d"),
+                record_op(MirOp::Load),
+                record_store(),
+                record_op(MirOp::Return),
             ],
         }
+    }
+
+    fn record_op(op: MirOp) -> crate::record_lowering::RecordLoweringOp {
+        crate::record_lowering::RecordLoweringOp {
+            op,
+            block: Some(0),
+            statement: None,
+            source: None,
+            operation: None,
+            callee: None,
+            target: None,
+            targets: None,
+            destination_local: None,
+            destination: None,
+            operand_count: None,
+            operands: None,
+        }
+    }
+
+    fn record_call(callee: &str) -> crate::record_lowering::RecordLoweringOp {
+        let mut op = record_op(MirOp::Call);
+        op.callee = Some(callee.to_string());
+        op.destination_local = Some(3);
+        op.destination = Some("local3".to_string());
+        op
+    }
+
+    fn record_store() -> crate::record_lowering::RecordLoweringOp {
+        let mut op = record_op(MirOp::Store);
+        op.statement = Some(0);
+        op.destination = Some("local2.deref".to_string());
+        op.operands = Some("local1.deref.index_local3".to_string());
+        op
     }
 
     #[test]
@@ -1715,6 +1847,52 @@ mod tests {
         let error = validate_record_abi("test_kernel", &test_abi(), &record_function).unwrap_err();
 
         assert!(error.to_string().contains("does not match MIR ABI"));
+    }
+
+    #[test]
+    fn validates_matching_record_elementwise_shape() {
+        validate_record_elementwise_shape(
+            "test_kernel",
+            &test_shape(IndexExpr::Thread),
+            &test_record_function(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn validates_record_arithmetic_on_store_operation() {
+        let mut record_function = test_record_function();
+        record_function.ops[2].operation = Some("add".to_string());
+
+        validate_record_elementwise_shape("test_kernel", &binary_test_shape(), &record_function)
+            .unwrap();
+    }
+
+    #[test]
+    fn rejects_record_shape_without_thread_index() {
+        let mut record_function = test_record_function();
+        record_function.ops.retain(|op| op.op != MirOp::Call);
+
+        let error = validate_record_elementwise_shape(
+            "test_kernel",
+            &test_shape(IndexExpr::Thread),
+            &record_function,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("thread::index_1d"));
+    }
+
+    #[test]
+    fn rejects_shifted_record_shape_without_index_transform() {
+        let error = validate_record_elementwise_shape(
+            "test_kernel",
+            &test_shape(IndexExpr::Offset(1)),
+            &test_record_function(),
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("index transform"));
     }
 
     #[test]
