@@ -24,15 +24,17 @@ For the full milestone plan, see [implementation-plan.md](implementation-plan.md
   builds a flat typed `mir.*` operation-record stream for the future Pliron
   builder, including typed locals, statement destination and operand labels, and
   terminator call callee, destination, and operand labels, plus the first
-  operation-specific lowering records such as `mir.load`, `mir.store`,
-  `mir.gep`, `mir.slice_len`, arithmetic ops, comparisons, and casts. The dump
-  also builds a first record-driven lowering-plan summary from the flat record
-  stream. The AMDGPU emission path consumes that plan to cross-check kernel
-  argument types, required store/return ops, thread-index calls, record load
-  coverage, and selected index/arithmetic shape markers before emitting through
-  the existing MIR recognizer. Load/store record place labels are parsed into a
-  small access sketch so read-only slice loads and direct `&mut [T]` output
-  stores can be checked by MIR local.
+  operation-specific lowering records such as `mir.assign`, `mir.load`,
+  `mir.store`, `mir.gep`, `mir.slice_len`, arithmetic ops, comparisons, and
+  casts. Evaluated integer constants are appended to constant operand labels
+  when rustc can resolve them. The dump also builds a first record-driven
+  lowering-plan summary from the flat record stream. The AMDGPU emission path
+  consumes that plan to cross-check kernel argument types, required store/return
+  ops, thread-index calls, record load coverage, and selected index/arithmetic
+  shape markers before emitting through the existing MIR recognizer. Load/store
+  record place labels are parsed into a small access sketch, and helper/raw
+  index records are parsed into a linear index sketch so read-only slice loads
+  and direct `&mut [T]` output stores can be checked by MIR local and index.
 - `rustc-codegen-fe2o3` contains the first real backend utilities:
   - ABI validation for supported kernel arguments from monomorphized MIR locals.
   - A narrow MIR recognizer and AMDGPU LLVM IR emitter for `f32`/`f64` elementwise

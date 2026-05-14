@@ -7,8 +7,8 @@ This file captures the fe2o3 state around bringing up the AMD GPU driver stack.
 - Local path: `/home/nod/github/fe2o3`
 - Branch: `main`
 - Remote: `https://github.com/powderluv/fe2o3.git`
-- Latest pushed checkpoint before this access-sketch update:
-  `721d671 Cross-check elementwise shapes with MIR records`
+- Latest pushed checkpoint before this linear-index update:
+  `8590ba1 Validate record memory access sketches`
 
 ## Implemented
 
@@ -27,15 +27,17 @@ This file captures the fe2o3 state around bringing up the AMD GPU driver stack.
   future Pliron builder, including return, argument, local type labels,
   statement destinations, statement operands, assignment operation labels, and
   terminator call callee, destination, and operand labels, plus the first
-  operation-specific lowering records such as `mir.load`, `mir.store`,
-  `mir.gep`, `mir.slice_len`, arithmetic ops, comparisons, and casts. The dump
-  also builds a first record-driven lowering-plan summary from the flat record
-  stream. The AMDGPU emission path consumes that plan to cross-check kernel
-  argument types, required store/return ops, thread-index calls, record load
-  coverage, and selected index/arithmetic shape markers before emitting through
-  the existing MIR recognizer. Load/store record place labels are parsed into a
-  small access sketch so read-only slice loads and direct `&mut [T]` output
-  stores can be checked by MIR local.
+  operation-specific lowering records such as `mir.assign`, `mir.load`,
+  `mir.store`, `mir.gep`, `mir.slice_len`, arithmetic ops, comparisons, and
+  casts. Evaluated integer constants are appended to constant operand labels
+  when rustc can resolve them. The dump also builds a first record-driven
+  lowering-plan summary from the flat record stream. The AMDGPU emission path
+  consumes that plan to cross-check kernel argument types, required store/return
+  ops, thread-index calls, record load coverage, and selected index/arithmetic
+  shape markers before emitting through the existing MIR recognizer. Load/store
+  record place labels are parsed into a small access sketch, and helper/raw
+  index records are parsed into a linear index sketch so read-only slice loads
+  and direct `&mut [T]` output stores can be checked by MIR local and index.
 - The current `f32`/`f64` elementwise MIR expression shapes emit AMDGPU LLVM IR.
 - Generated LLVM IR is compiled through ROCm clang and linked with `ld.lld` into
   `target/fe2o3/*.hsaco`.
@@ -454,9 +456,10 @@ Short-term backend surface step:
 
 1. Move the current elementwise shape analysis from raw rustc MIR onto the
    record-driven lowering plan one piece at a time. The plan now carries typed
-   locals, statement operation labels, call destinations/operands, and parsed
-   load/store access sketches. The next slice should derive affine index
-   expressions from those records instead of re-reading raw rustc MIR.
+   locals, statement operation labels, call destinations/operands, parsed
+   load/store access sketches, and a first linear index sketch. The next slice
+   should derive the elementwise read/write slice sources from these sketches and
+   only fall back to raw rustc MIR for expression-tree construction.
 
 Then replace the temporary elementwise MIR recognizer/emitter with real
 lowering:

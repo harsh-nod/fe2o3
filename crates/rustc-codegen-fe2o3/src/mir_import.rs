@@ -2,10 +2,10 @@ use crate::collector::CollectionResult;
 use dialect_mir::{MirAttr, MirOp, MirOpRecord, MirType};
 use rustc_hir::def_id::LOCAL_CRATE;
 use rustc_middle::mir::{
-    BasicBlock, BinOp, Body, Local, Operand, Place, ProjectionElem, Rvalue, StatementKind,
-    TerminatorKind, UnOp,
+    BasicBlock, BinOp, Body, ConstOperand, Local, Operand, Place, ProjectionElem, Rvalue,
+    StatementKind, TerminatorKind, UnOp,
 };
-use rustc_middle::ty::{FloatTy, IntTy, Ty, TyCtxt, TyKind, UintTy};
+use rustc_middle::ty::{FloatTy, IntTy, Ty, TyCtxt, TyKind, TypingEnv, UintTy};
 use std::fmt::Write;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -776,7 +776,24 @@ fn import_operand<'tcx>(tcx: TyCtxt<'tcx>, operand: &Operand<'tcx>) -> MirOperan
 
     MirOperandRef::Constant {
         ty: import_type(tcx, constant.const_.ty()),
-        value: format!("{:?}", constant.const_),
+        value: constant_value_label(tcx, constant),
+    }
+}
+
+fn constant_value_label<'tcx>(tcx: TyCtxt<'tcx>, constant: &ConstOperand<'tcx>) -> String {
+    let debug = format!("{:?}", constant.const_);
+    match constant.const_.ty().kind() {
+        TyKind::Uint(UintTy::Usize) => constant
+            .const_
+            .try_eval_target_usize(tcx, TypingEnv::fully_monomorphized())
+            .map(|value| format!("{debug};eval_u64={value}"))
+            .unwrap_or(debug),
+        TyKind::Int(IntTy::Isize) => constant
+            .const_
+            .try_eval_scalar_int(tcx, TypingEnv::fully_monomorphized())
+            .map(|value| format!("{debug};eval_i64={}", value.to_target_isize(tcx)))
+            .unwrap_or(debug),
+        _ => debug,
     }
 }
 

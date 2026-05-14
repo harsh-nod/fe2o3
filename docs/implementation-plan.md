@@ -194,15 +194,17 @@ Status: MVP implemented for `f32`/`f64` elementwise expression kernel shapes.
   also builds a flat typed `mir.*` operation-record stream for the future Pliron
   builder, including typed locals, statement destination and operand labels, and
   terminator call callee, destination, and operand labels, plus the first
-  operation-specific lowering records such as `mir.load`, `mir.store`,
-  `mir.gep`, `mir.slice_len`, arithmetic ops, comparisons, and casts. The dump
-  also builds a first record-driven lowering-plan summary from the flat record
-  stream. The AMDGPU emission path consumes that plan to cross-check kernel
-  argument types, required store/return ops, thread-index calls, record load
-  coverage, and selected index/arithmetic shape markers before emitting through
-  the existing MIR recognizer. Load/store record place labels are parsed into a
-  small access sketch so read-only slice loads and direct `&mut [T]` output
-  stores can be checked by MIR local.
+  operation-specific lowering records such as `mir.assign`, `mir.load`,
+  `mir.store`, `mir.gep`, `mir.slice_len`, arithmetic ops, comparisons, and
+  casts. Evaluated integer constants are appended to constant operand labels
+  when rustc can resolve them. The dump also builds a first record-driven
+  lowering-plan summary from the flat record stream. The AMDGPU emission path
+  consumes that plan to cross-check kernel argument types, required store/return
+  ops, thread-index calls, record load coverage, and selected index/arithmetic
+  shape markers before emitting through the existing MIR recognizer. Load/store
+  record place labels are parsed into a small access sketch, and helper/raw
+  index records are parsed into a linear index sketch so read-only slice loads
+  and direct `&mut [T]` output stores can be checked by MIR local and index.
 - The backend emits an AMDGPU LLVM IR `amdgpu_kernel` after validating the ABI
   and body pattern.
 - The emitted IR uses `llvm.amdgcn.workitem.id.x` and
@@ -404,9 +406,10 @@ Grow the MIR import scaffold into the first real lowering path:
 
 1. Move the current elementwise shape analysis from raw rustc MIR onto the
    record-driven lowering plan one piece at a time. The plan now carries typed
-   locals, statement operation labels, call destinations/operands, and parsed
-   load/store access sketches. The next slice should derive affine index
-   expressions from those records instead of re-reading raw rustc MIR.
+   locals, statement operation labels, call destinations/operands, parsed
+   load/store access sketches, and a first linear index sketch. The next slice
+   should derive the elementwise read/write slice sources from these sketches and
+   only fall back to raw rustc MIR for expression-tree construction.
 2. Lower enough operations for the current elementwise kernel shapes: args,
    basic blocks, integer arithmetic, pointer arithmetic, loads/stores, branch,
    and return.

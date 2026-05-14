@@ -42,15 +42,18 @@ scaffold for the collected device functions using local `mir.*` dialect names
 and builds a flat typed `mir.*` operation-record stream for the future Pliron
 builder, including typed locals, statement destination and operand labels, and
 terminator call callee, destination, and operand labels, plus
-the first operation-specific lowering records such as `mir.load`, `mir.store`,
-arithmetic ops, comparisons, and casts. The same dump also builds a
+`mir.assign` value-projection records and the first operation-specific lowering
+records such as `mir.load`, `mir.store`, arithmetic ops, comparisons, and casts.
+Evaluated integer constants are appended to constant operand labels when rustc
+can resolve them. The same dump also builds a
 record-driven lowering-plan summary from that flat record stream. The AMDGPU
 emission path now consumes that record plan to cross-check kernel argument
 types, required store/return ops, thread-index calls, record load coverage, and
 selected index/arithmetic shape markers before emitting through the existing MIR
-recognizer. Load/store record place labels are parsed into a small access sketch
-so read-only slice loads and direct `&mut [T]` output stores can be checked by
-MIR local.
+recognizer. Load/store record place labels are parsed into a small access sketch,
+and helper/raw index records are parsed into a linear index sketch so read-only
+slice loads and direct `&mut [T]` output stores can be checked by MIR local and
+index.
 
 The backend also has the first AMDGPU artifact path: for the current `f32`/`f64`
 elementwise kernel shapes it validates the Rust kernel ABI from monomorphized

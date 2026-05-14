@@ -1,4 +1,5 @@
 use dialect_mir::{MirAttrValue, MirOp, MirOpRecord};
+use std::collections::HashMap;
 use std::fmt::Write;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -58,6 +59,24 @@ pub struct RecordMemoryAccess {
     pub place: RecordPlaceRef,
     pub index_local: Option<usize>,
     pub operation: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecordIndexSketch {
+    pub thread_index_local: Option<usize>,
+    pub bindings: Vec<RecordIndexBinding>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecordIndexBinding {
+    pub local: usize,
+    pub index: RecordLinearIndex,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RecordLinearIndex {
+    pub stride: i64,
+    pub offset: i64,
 }
 
 pub fn plan_from_records(records: &[MirOpRecord]) -> RecordLoweringPlan {
@@ -240,6 +259,31 @@ impl RecordLoweringFunction {
         RecordAccessSketch { loads, stores }
     }
 
+    pub fn index_sketch(&self) -> RecordIndexSketch {
+        let mut thread_index_local = None;
+        let mut bindings = HashMap::new();
+
+        for op in &self.ops {
+            if op.op == MirOp::Call {
+                bind_call_index(op, &mut thread_index_local, &mut bindings);
+                continue;
+            }
+
+            bind_operation_index(op, &mut bindings);
+        }
+
+        let mut bindings = bindings
+            .into_iter()
+            .map(|(local, index)| RecordIndexBinding { local, index })
+            .collect::<Vec<_>>();
+        bindings.sort_by_key(|binding| binding.local);
+
+        RecordIndexSketch {
+            thread_index_local,
+            bindings,
+        }
+    }
+
     fn op_counts(&self) -> Vec<String> {
         LOWERING_OPS
             .iter()
@@ -255,6 +299,15 @@ impl RecordLoweringFunction {
     }
 }
 
+impl RecordIndexSketch {
+    pub fn get(&self, local: usize) -> Option<RecordLinearIndex> {
+        self.bindings
+            .iter()
+            .find(|binding| binding.local == local)
+            .map(|binding| binding.index)
+    }
+}
+
 impl RecordLoweringOp {
     pub fn destination_place(&self) -> Option<RecordPlaceRef> {
         self.destination.as_deref().and_then(RecordPlaceRef::parse)
@@ -264,8 +317,16 @@ impl RecordLoweringOp {
         self.operands
             .as_deref()
             .into_iter()
-            .flat_map(|operands| operands.split(','))
-            .filter_map(|operand| RecordPlaceRef::parse(operand.trim()))
+            .flat_map(split_record_operands)
+            .filter_map(|operand| RecordPlaceRef::parse(&operand))
+            .collect()
+    }
+
+    fn operand_labels(&self) -> Vec<String> {
+        self.operands
+            .as_deref()
+            .into_iter()
+            .flat_map(split_record_operands)
             .collect()
     }
 }
@@ -300,11 +361,277 @@ impl RecordPlaceRef {
     }
 }
 
+impl RecordLinearIndex {
+    pub fn thread() -> Self {
+        Self {
+            stride: 1,
+            offset: 0,
+        }
+    }
+
+    fn offset(self, offset: i64) -> Option<Self> {
+        Some(Self {
+            stride: self.stride,
+            offset: self.offset.checked_add(offset)?,
+        })
+    }
+
+    fn scale(self, factor: i64) -> Option<Self> {
+        Some(Self {
+            stride: self.stride.checked_mul(factor)?,
+            offset: self.offset.checked_mul(factor)?,
+        })
+    }
+
+    fn add(self, rhs: Self) -> Option<Self> {
+        Some(Self {
+            stride: self.stride.checked_add(rhs.stride)?,
+            offset: self.offset.checked_add(rhs.offset)?,
+        })
+    }
+
+    fn sub(self, rhs: Self) -> Option<Self> {
+        Some(Self {
+            stride: self.stride.checked_sub(rhs.stride)?,
+            offset: self.offset.checked_sub(rhs.offset)?,
+        })
+    }
+}
+
+fn bind_call_index(
+    op: &RecordLoweringOp,
+    thread_index_local: &mut Option<usize>,
+    bindings: &mut HashMap<usize, RecordLinearIndex>,
+) {
+    let Some(callee) = op.callee.as_deref() else {
+        return;
+    };
+    let Some(destination) = op.destination_local else {
+        return;
+    };
+
+    if callee.ends_with("fe2o3_device::thread::index_1d") {
+        *thread_index_local = Some(destination);
+        return;
+    }
+
+    let Some(thread_index_local) = *thread_index_local else {
+        return;
+    };
+    let operands = op.operand_labels();
+    let Some(receiver) = operands
+        .first()
+        .and_then(|operand| RecordPlaceRef::parse(operand))
+    else {
+        return;
+    };
+    if receiver.local != thread_index_local {
+        return;
+    }
+
+    let index = if callee.ends_with("fe2o3_device::ThreadIndex::get") {
+        Some(RecordLinearIndex::thread())
+    } else if callee.ends_with("fe2o3_device::ThreadIndex::offset") {
+        operands
+            .get(1)
+            .and_then(|operand| parse_record_unsigned_const(operand))
+            .and_then(|offset| RecordLinearIndex::thread().offset(offset))
+    } else if callee.ends_with("fe2o3_device::ThreadIndex::offset_signed") {
+        operands
+            .get(1)
+            .and_then(|operand| parse_record_signed_const(operand))
+            .and_then(|offset| RecordLinearIndex::thread().offset(offset))
+    } else if callee.ends_with("fe2o3_device::ThreadIndex::stride") {
+        operands
+            .get(1)
+            .and_then(|operand| parse_record_unsigned_const(operand))
+            .map(|stride| RecordLinearIndex { stride, offset: 0 })
+    } else if callee.ends_with("fe2o3_device::ThreadIndex::stride_offset") {
+        operands
+            .get(1)
+            .and_then(|operand| parse_record_unsigned_const(operand))
+            .zip(
+                operands
+                    .get(2)
+                    .and_then(|operand| parse_record_signed_const(operand)),
+            )
+            .map(|(stride, offset)| RecordLinearIndex { stride, offset })
+    } else {
+        None
+    };
+
+    if let Some(index) = index {
+        bindings.insert(destination, index);
+    }
+}
+
+fn bind_operation_index(op: &RecordLoweringOp, bindings: &mut HashMap<usize, RecordLinearIndex>) {
+    let Some(destination) = op.destination_local else {
+        return;
+    };
+    let operands = op.operand_labels();
+
+    if op.op == MirOp::Assign && op.operation.as_deref() == Some("use") {
+        if let Some(index) = operands
+            .first()
+            .and_then(|operand| place_index(operand, bindings))
+        {
+            bindings.insert(destination, index);
+        }
+        return;
+    }
+
+    let Some(operation) = op.operation.as_deref() else {
+        return;
+    };
+    let Some(index) = index_from_binary_operation(operation, &operands, bindings) else {
+        return;
+    };
+    bindings.insert(destination, index);
+}
+
+fn index_from_binary_operation(
+    operation: &str,
+    operands: &[String],
+    bindings: &HashMap<usize, RecordLinearIndex>,
+) -> Option<RecordLinearIndex> {
+    let [lhs, rhs] = operands else {
+        return None;
+    };
+    let lhs_index = place_index(lhs, bindings);
+    let rhs_index = place_index(rhs, bindings);
+    let lhs_const = parse_record_integer_const(lhs);
+    let rhs_const = parse_record_integer_const(rhs);
+
+    match operation {
+        "add" | "add_unchecked" | "add_with_overflow" => {
+            match (lhs_index, rhs_index, lhs_const, rhs_const) {
+                (Some(lhs), Some(rhs), _, _) => lhs.add(rhs),
+                (Some(index), None, _, Some(offset)) => index.offset(offset),
+                (None, Some(index), Some(offset), _) => index.offset(offset),
+                _ => None,
+            }
+        }
+        "sub" | "sub_unchecked" | "sub_with_overflow" => {
+            match (lhs_index, rhs_index, lhs_const, rhs_const) {
+                (Some(lhs), Some(rhs), _, _) => lhs.sub(rhs),
+                (Some(index), None, _, Some(offset)) => index.offset(offset.checked_neg()?),
+                (None, Some(index), Some(offset), _) => {
+                    RecordLinearIndex { stride: 0, offset }.sub(index)
+                }
+                _ => None,
+            }
+        }
+        "mul" | "mul_unchecked" | "mul_with_overflow" => {
+            match (lhs_index, rhs_index, lhs_const, rhs_const) {
+                (Some(index), None, _, Some(factor)) => index.scale(factor),
+                (None, Some(index), Some(factor), _) => index.scale(factor),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+fn place_index(
+    operand: &str,
+    bindings: &HashMap<usize, RecordLinearIndex>,
+) -> Option<RecordLinearIndex> {
+    let place = RecordPlaceRef::parse(operand)?;
+    if place.projection.is_empty() {
+        return bindings.get(&place.local).copied();
+    }
+    match place.projection.as_slice() {
+        [field] if field == "field0" => bindings.get(&place.local).copied(),
+        _ => None,
+    }
+}
+
+fn parse_record_integer_const(operand: &str) -> Option<i64> {
+    parse_record_unsigned_const(operand).or_else(|| parse_record_signed_const(operand))
+}
+
+fn parse_record_unsigned_const(operand: &str) -> Option<i64> {
+    if !(operand.starts_with("const:mir.usize=") || operand.contains(", usize)")) {
+        return None;
+    }
+    if let Some(value) = parse_record_eval_u64(operand) {
+        return i64::try_from(value).ok();
+    }
+    let raw = parse_record_const_hex(operand)?;
+    i64::try_from(raw).ok()
+}
+
+fn parse_record_signed_const(operand: &str) -> Option<i64> {
+    if !(operand.starts_with("const:mir.isize=") || operand.contains(", isize)")) {
+        return None;
+    }
+    if let Some(value) = parse_record_eval_i64(operand) {
+        return Some(value);
+    }
+    let raw = parse_record_const_hex(operand)?;
+    Some(i64::from_ne_bytes(raw.to_ne_bytes()))
+}
+
+fn parse_record_eval_u64(operand: &str) -> Option<u64> {
+    parse_record_eval_attr(operand, "eval_u64=")?.parse().ok()
+}
+
+fn parse_record_eval_i64(operand: &str) -> Option<i64> {
+    parse_record_eval_attr(operand, "eval_i64=")?.parse().ok()
+}
+
+fn parse_record_eval_attr<'a>(operand: &'a str, prefix: &str) -> Option<&'a str> {
+    let start = operand.find(prefix)? + prefix.len();
+    Some(
+        operand[start..]
+            .split(|ch: char| !(ch == '-' || ch.is_ascii_digit()))
+            .next()?,
+    )
+}
+
+fn parse_record_const_hex(operand: &str) -> Option<u64> {
+    let start = operand.find("0x")? + 2;
+    let hex = operand[start..]
+        .chars()
+        .take_while(|ch| ch.is_ascii_hexdigit())
+        .collect::<String>();
+    u64::from_str_radix(&hex, 16).ok()
+}
+
+fn split_record_operands(operands: &str) -> Vec<String> {
+    let mut split = Vec::new();
+    let mut start = 0;
+    let mut depth = 0usize;
+
+    for (index, ch) in operands.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                let operand = operands[start..index].trim();
+                if !operand.is_empty() {
+                    split.push(operand.to_string());
+                }
+                start = index + ch.len_utf8();
+            }
+            _ => {}
+        }
+    }
+
+    let operand = operands[start..].trim();
+    if !operand.is_empty() {
+        split.push(operand.to_string());
+    }
+    split
+}
+
 fn is_lowering_op(op: MirOp) -> bool {
     LOWERING_OPS.contains(&op)
 }
 
 const LOWERING_OPS: &[MirOp] = &[
+    MirOp::Assign,
     MirOp::Add,
     MirOp::Sub,
     MirOp::Mul,
@@ -442,6 +769,116 @@ mod tests {
         assert_eq!(place.projection, vec!["deref", "index_local7"]);
         assert_eq!(place.index_local(), Some(7));
         assert!(RecordPlaceRef::parse("const:mir.usize=1").is_none());
+    }
+
+    #[test]
+    fn sketches_thread_index_helper_calls() {
+        let records = vec![
+            MirOpRecord::new(MirOp::Func)
+                .with_attr(MirAttr::string("symbol", "gather_odd"))
+                .with_attr(MirAttr::string("kind", "kernel")),
+            MirOpRecord::new(MirOp::Call)
+                .with_attr(MirAttr::string("function", "gather_odd"))
+                .with_attr(MirAttr::string(
+                    "callee",
+                    "fe2o3_device::thread::index_1d",
+                ))
+                .with_attr(MirAttr::usize("destination_local", 3))
+                .with_attr(MirAttr::string("destination", "local3")),
+            MirOpRecord::new(MirOp::Call)
+                .with_attr(MirAttr::string("function", "gather_odd"))
+                .with_attr(MirAttr::string(
+                    "callee",
+                    "fe2o3_device::ThreadIndex::stride_offset",
+                ))
+                .with_attr(MirAttr::usize("destination_local", 4))
+                .with_attr(MirAttr::string("destination", "local4"))
+                .with_attr(MirAttr::usize("operand_count", 3))
+                .with_attr(MirAttr::string(
+                    "operands",
+                    "local3, const:mir.usize=Val(Scalar(0x0000000000000002), usize), const:mir.isize=Val(Scalar(0x0000000000000001), isize)",
+                )),
+        ];
+
+        let plan = plan_from_records(&records);
+        let function = plan.function("gather_odd").unwrap();
+        let sketch = function.index_sketch();
+
+        assert_eq!(sketch.thread_index_local, Some(3));
+        assert_eq!(
+            sketch.get(4),
+            Some(RecordLinearIndex {
+                stride: 2,
+                offset: 1
+            })
+        );
+    }
+
+    #[test]
+    fn sketches_raw_index_arithmetic_and_overflow_field_projection() {
+        let records = vec![
+            MirOpRecord::new(MirOp::Func)
+                .with_attr(MirAttr::string("symbol", "raw_output_shift"))
+                .with_attr(MirAttr::string("kind", "kernel")),
+            MirOpRecord::new(MirOp::Call)
+                .with_attr(MirAttr::string("function", "raw_output_shift"))
+                .with_attr(MirAttr::string("callee", "fe2o3_device::thread::index_1d"))
+                .with_attr(MirAttr::usize("destination_local", 3)),
+            MirOpRecord::new(MirOp::Call)
+                .with_attr(MirAttr::string("function", "raw_output_shift"))
+                .with_attr(MirAttr::string("callee", "fe2o3_device::ThreadIndex::get"))
+                .with_attr(MirAttr::usize("destination_local", 4))
+                .with_attr(MirAttr::string("operands", "local3")),
+            MirOpRecord::new(MirOp::Add)
+                .with_attr(MirAttr::string("function", "raw_output_shift"))
+                .with_attr(MirAttr::usize("destination_local", 6))
+                .with_attr(MirAttr::string("operation", "add_with_overflow"))
+                .with_attr(MirAttr::string(
+                    "operands",
+                    "local4, const:mir.usize=Val(Scalar(0x0000000000000001), usize)",
+                )),
+            MirOpRecord::new(MirOp::Assign)
+                .with_attr(MirAttr::string("function", "raw_output_shift"))
+                .with_attr(MirAttr::usize("destination_local", 5))
+                .with_attr(MirAttr::string("operation", "use"))
+                .with_attr(MirAttr::string("operands", "local6.field0")),
+        ];
+
+        let plan = plan_from_records(&records);
+        let function = plan.function("raw_output_shift").unwrap();
+        let sketch = function.index_sketch();
+
+        assert_eq!(sketch.get(4), Some(RecordLinearIndex::thread()));
+        assert_eq!(
+            sketch.get(5),
+            Some(RecordLinearIndex {
+                stride: 1,
+                offset: 1
+            })
+        );
+    }
+
+    #[test]
+    fn parses_signed_record_constants() {
+        assert_eq!(
+            parse_record_signed_const("const:mir.isize=Val(Scalar(0xffffffffffffffff), isize)"),
+            Some(-1)
+        );
+        assert_eq!(
+            parse_record_unsigned_const("const:mir.usize=Unevaluated(..., usize);eval_u64=1023"),
+            Some(1023)
+        );
+    }
+
+    #[test]
+    fn splits_record_operands_without_breaking_constant_values() {
+        assert_eq!(
+            split_record_operands("local4, const:mir.usize=Val(Scalar(0x0000000000000001), usize)"),
+            vec![
+                "local4".to_string(),
+                "const:mir.usize=Val(Scalar(0x0000000000000001), usize)".to_string(),
+            ]
+        );
     }
 
     #[test]

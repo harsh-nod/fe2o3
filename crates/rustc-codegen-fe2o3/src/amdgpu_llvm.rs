@@ -1,6 +1,7 @@
 use crate::collector::{CollectedFunction, CollectionResult};
 use crate::record_lowering::{
-    RecordAccessSketch, RecordLoweringFunction, RecordLoweringLocal, RecordLoweringPlan,
+    RecordAccessSketch, RecordIndexSketch, RecordLinearIndex, RecordLoweringFunction,
+    RecordLoweringLocal, RecordLoweringPlan,
 };
 use crate::{AmdGpuTarget, HsacoError, compile_llvm_ir_to_hsaco};
 use dialect_mir::MirOp;
@@ -562,6 +563,7 @@ fn validate_record_elementwise_shape(
     }
 
     let access_sketch = record_function.access_sketch();
+    let index_sketch = record_function.index_sketch();
     let expected_loads = read_slice_sources(shape).len();
     let record_loads = access_sketch.loads.len();
     if record_loads < expected_loads {
@@ -572,7 +574,13 @@ fn validate_record_elementwise_shape(
             ),
         ));
     }
-    validate_record_slice_accesses(kernel_name, shape, record_function, &access_sketch)?;
+    validate_record_slice_accesses(
+        kernel_name,
+        shape,
+        record_function,
+        &access_sketch,
+        &index_sketch,
+    )?;
 
     let binary_nodes = shape
         .expr
@@ -603,6 +611,7 @@ fn validate_record_slice_accesses(
     shape: &ElementwiseShape,
     record_function: &RecordLoweringFunction,
     access_sketch: &RecordAccessSketch,
+    index_sketch: &RecordIndexSketch,
 ) -> Result<(), EmitError> {
     if access_sketch.stores.is_empty() {
         return Err(unsupported_kernel(
@@ -614,13 +623,48 @@ fn validate_record_slice_accesses(
     let record_args = record_function.args();
     let mut expected_loads_by_local = HashMap::new();
     for source in read_slice_sources(shape) {
-        if source.arg_index == shape.output_arg {
-            continue;
-        }
         let Some(arg) = record_args.get(source.arg_index) else {
             continue;
         };
+        if source.arg_index == shape.output_arg && arg.ty == "mir.disjoint_slice" {
+            continue;
+        }
         *expected_loads_by_local.entry(arg.index).or_insert(0usize) += 1;
+        validate_record_access_index(
+            kernel_name,
+            "load",
+            &access_sketch.loads,
+            arg.index,
+            source.index,
+            index_sketch,
+        )?;
+    }
+
+    let Some(output_arg) = record_args.get(shape.output_arg) else {
+        return Ok(());
+    };
+    if output_arg.ty == "mir.slice" && output_arg.rust_ty.starts_with("&mut ") {
+        validate_record_access_index(
+            kernel_name,
+            "store",
+            &access_sketch.stores,
+            output_arg.index,
+            shape.output_index,
+            index_sketch,
+        )?;
+        if !access_sketch
+            .stores
+            .iter()
+            .any(|store| store.place.local == output_arg.index)
+        {
+            return Err(unsupported_kernel(
+                kernel_name,
+                format!(
+                    "record lowering plan is missing a store to output arg local{}",
+                    output_arg.index
+                ),
+            ));
+        }
     }
 
     for (local, expected) in expected_loads_by_local {
@@ -639,26 +683,48 @@ fn validate_record_slice_accesses(
         }
     }
 
-    let Some(output_arg) = record_args.get(shape.output_arg) else {
-        return Ok(());
-    };
-    if output_arg.ty == "mir.slice"
-        && output_arg.rust_ty.starts_with("&mut ")
-        && !access_sketch
-            .stores
-            .iter()
-            .any(|store| store.place.local == output_arg.index)
-    {
-        return Err(unsupported_kernel(
-            kernel_name,
-            format!(
-                "record lowering plan is missing a store to output arg local{}",
-                output_arg.index
-            ),
-        ));
+    Ok(())
+}
+
+fn validate_record_access_index(
+    kernel_name: &str,
+    access_kind: &str,
+    accesses: &[crate::record_lowering::RecordMemoryAccess],
+    local: usize,
+    expected: IndexExpr,
+    index_sketch: &RecordIndexSketch,
+) -> Result<(), EmitError> {
+    let expected = RecordLinearIndex::from(expected);
+    for access in accesses.iter().filter(|access| access.place.local == local) {
+        let Some(index_local) = access.index_local else {
+            continue;
+        };
+        if index_sketch.get(index_local) == Some(expected) {
+            return Ok(());
+        }
     }
 
-    Ok(())
+    Err(unsupported_kernel(
+        kernel_name,
+        format!(
+            "record lowering plan is missing a {access_kind} on local{local} with index stride {} offset {}",
+            expected.stride, expected.offset
+        ),
+    ))
+}
+
+impl From<IndexExpr> for RecordLinearIndex {
+    fn from(index: IndexExpr) -> Self {
+        match index {
+            IndexExpr::Thread => Self {
+                stride: 1,
+                offset: 0,
+            },
+            IndexExpr::Offset(offset) => Self { stride: 1, offset },
+            IndexExpr::Stride(stride) => Self { stride, offset: 0 },
+            IndexExpr::StrideOffset { stride, offset } => Self { stride, offset },
+        }
+    }
 }
 
 fn record_arithmetic_op_count(record_function: &RecordLoweringFunction) -> usize {
@@ -1861,7 +1927,8 @@ mod tests {
             ],
             ops: vec![
                 record_call("fe2o3_device::thread::index_1d"),
-                record_load("local1.deref.index_local3"),
+                record_thread_get(4),
+                record_load("local1.deref.index_local4"),
                 record_store(),
                 record_op(MirOp::Return),
             ],
@@ -1893,6 +1960,16 @@ mod tests {
         op
     }
 
+    fn record_thread_get(destination: usize) -> crate::record_lowering::RecordLoweringOp {
+        let mut op = record_op(MirOp::Call);
+        op.callee = Some("fe2o3_device::ThreadIndex::get".to_string());
+        op.destination_local = Some(destination);
+        op.destination = Some(format!("local{destination}"));
+        op.operand_count = Some(1);
+        op.operands = Some("local3".to_string());
+        op
+    }
+
     fn record_load(operands: &str) -> crate::record_lowering::RecordLoweringOp {
         let mut op = record_op(MirOp::Load);
         op.statement = Some(0);
@@ -1906,7 +1983,7 @@ mod tests {
         let mut op = record_op(MirOp::Store);
         op.statement = Some(0);
         op.destination = Some("local2.deref".to_string());
-        op.operands = Some("local1.deref.index_local3".to_string());
+        op.operands = Some("local1.deref.index_local4".to_string());
         op
     }
 
@@ -1938,7 +2015,7 @@ mod tests {
     #[test]
     fn validates_record_arithmetic_on_store_operation() {
         let mut record_function = test_record_function();
-        record_function.ops[2].operation = Some("add".to_string());
+        record_function.ops[3].operation = Some("add".to_string());
 
         validate_record_elementwise_shape("test_kernel", &binary_test_shape(), &record_function)
             .unwrap();
@@ -1962,7 +2039,7 @@ mod tests {
     #[test]
     fn rejects_record_shape_without_expected_source_load() {
         let mut record_function = test_record_function();
-        record_function.ops[1].operands = Some("local4.deref.index_local3".to_string());
+        record_function.ops[2].operands = Some("local9.deref.index_local4".to_string());
 
         let error = validate_record_elementwise_shape(
             "test_kernel",
@@ -1971,7 +2048,7 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(error.to_string().contains("load(s) from local1"));
+        assert!(error.to_string().contains("load on local1"));
     }
 
     #[test]
