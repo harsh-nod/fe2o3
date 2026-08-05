@@ -1,0 +1,5 @@
+error[E0599]: no method named `launch_raw` found for struct `LoadedArgumentAdmittedLaunch<'loaded, 'allocation, K>` in the current scope
+  --> tests/ui/loaded_kernel/admitted_raw_launch_is_unavailable.rs:11:14
+   |
+11 |     admitted.launch_raw(stream, params).unwrap();
+   |              ^^^^^^^^^^ method not found in `LoadedArgumentAdmittedLaunch<'_, '_, Kernel>`

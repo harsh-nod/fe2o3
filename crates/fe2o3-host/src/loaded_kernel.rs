@@ -4,8 +4,9 @@ use crate::{
     LaunchConfig, ObservedContext, PrepareLaunchError, PreparedGeometry, PreparedLaunch,
     PreparedResources, UntrustedLaunchRequest, ValidatedArtifactSelectionV1,
 };
-use fe2o3_core::{GpuContext, GpuFunction, GpuModule, Stream};
+use fe2o3_core::{BorrowedDeviceOperation, GpuContext, GpuFunction, GpuModule, Stream};
 use std::fmt;
+use std::marker::PhantomData;
 use std::sync::Arc;
 
 struct HipKernelOwnership {
@@ -19,6 +20,27 @@ enum KernelOwnership {
     Runtime(HipKernelOwnership),
     #[cfg(test)]
     Test,
+}
+
+trait ExactLaunchStreamContext {
+    fn matches_observation(&self, observed: &ObservedContext) -> bool;
+}
+
+impl ExactLaunchStreamContext for Stream {
+    fn matches_observation(&self, observed: &ObservedContext) -> bool {
+        observed.is_for_context(self.context())
+    }
+}
+
+fn validate_launch_stream(
+    observed: &ObservedContext,
+    stream: &impl ExactLaunchStreamContext,
+) -> Result<(), LoadedLaunchError> {
+    if stream.matches_observation(observed) {
+        Ok(())
+    } else {
+        Err(LoadedLaunchError::WrongStreamContext)
+    }
 }
 
 /// Owned HIP module/function authority for exactly one kernel marker `K`.
@@ -250,9 +272,7 @@ impl<K> LoadedPreparedLaunch<'_, K> {
         stream: &Stream,
         params: &mut KernelParams,
     ) -> Result<(), LoadedLaunchError> {
-        if !self.loaded.context.is_for_context(stream.context()) {
-            return Err(LoadedLaunchError::WrongStreamContext);
-        }
+        validate_launch_stream(&self.loaded.context, stream)?;
         let config = self.launch_config();
         // SAFETY: The caller owns the raw ABI, memory, semantic, and completion
         // obligations documented above. The stream/context, function owner,
@@ -275,6 +295,36 @@ pub struct LoadedArgumentAdmittedLaunch<'loaded, 'allocation, K> {
     admitted: ArgumentAdmittedLaunch<'allocation, K>,
 }
 
+/// Exact raw parameter packing produced by generated code for kernel `K`.
+///
+/// This token is crate-private and has only an unsafe constructor. It is the
+/// narrow integration point where generated bindings must establish the raw
+/// ABI before the safe scoped execution state machine can run.
+#[allow(dead_code)]
+pub(crate) struct GeneratedKernelParams<'params, K> {
+    params: &'params mut KernelParams,
+    marker: PhantomData<fn(K) -> K>,
+}
+
+#[allow(dead_code)]
+impl<'params, K> GeneratedKernelParams<'params, K> {
+    /// Marks one raw parameter list as the exact generated ABI for `K`.
+    ///
+    /// # Safety
+    ///
+    /// `params` must match `K` in field count, order, type, size, alignment,
+    /// and pointer address space. Every reachable allocation must be described
+    /// by the corresponding argument admission and remain valid for the
+    /// admitted access. Only generated binding code that has established that
+    /// association may invoke this constructor.
+    pub(crate) unsafe fn from_generated_unchecked(params: &'params mut KernelParams) -> Self {
+        Self {
+            params,
+            marker: PhantomData,
+        }
+    }
+}
+
 impl<K> fmt::Debug for LoadedArgumentAdmittedLaunch<'_, '_, K> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -285,7 +335,7 @@ impl<K> fmt::Debug for LoadedArgumentAdmittedLaunch<'_, '_, K> {
     }
 }
 
-impl<K> LoadedArgumentAdmittedLaunch<'_, '_, K> {
+impl<'loaded, 'allocation, K> LoadedArgumentAdmittedLaunch<'loaded, 'allocation, K> {
     pub fn identity(&self) -> &ArtifactKernelIdentityV1 {
         self.loaded.identity()
     }
@@ -300,6 +350,64 @@ impl<K> LoadedArgumentAdmittedLaunch<'_, '_, K> {
 
     pub fn argument_count(&self) -> usize {
         self.admitted.argument_count()
+    }
+
+    fn launch_config(&self) -> LaunchConfig {
+        let grid = self.geometry().grid().dimensions();
+        let block = self.geometry().block().dimensions();
+        LaunchConfig {
+            grid_dim: (grid[0], grid[1], grid[2]),
+            block_dim: (block[0], block[1], block[2]),
+            shared_mem_bytes: self.resources().dynamic_shared_memory_bytes(),
+        }
+    }
+
+    /// Enqueues generated exact parameters and retains this entire admitted
+    /// launch until HIP establishes completion.
+    ///
+    /// The callback receives only a non-escapable operation view. Returning
+    /// from this method means event synchronization, or its stronger stream
+    /// fallback, established quiescence. If neither can do so, the borrowed
+    /// operation policy aborts rather than releasing the loaded authority,
+    /// allocation lifetimes, or alias reservation while work may remain.
+    ///
+    /// This method is crate-private because the generated marker/ABI bridge is
+    /// not integrated yet. Raw callers cannot use it to make arbitrary
+    /// [`KernelParams`] safe.
+    #[allow(dead_code)]
+    pub(crate) fn launch_generated_scoped<'stream, O>(
+        self,
+        stream: &'stream Stream,
+        params: GeneratedKernelParams<'_, K>,
+        during: impl for<'operation> FnOnce(
+            &'operation BorrowedDeviceOperation<'stream, 'allocation>,
+        ) -> O,
+    ) -> Result<O, LoadedLaunchError> {
+        validate_launch_stream(&self.loaded.context, stream)?;
+
+        let config = self.launch_config();
+        // SAFETY: `GeneratedKernelParams` can be constructed only through its
+        // unsafe crate-private boundary, which establishes the raw ABI and its
+        // relationship to this admitted marker. `self` retains the loaded
+        // module/function, allocation borrows, and alias registration. The
+        // exact stream wrapper was checked above, and the prepared launch owns
+        // the validated geometry and resource limits.
+        unsafe {
+            BorrowedDeviceOperation::<'stream, 'allocation>::run_scoped_unchecked(
+                stream,
+                self,
+                |launch| {
+                    fe2o3_core::launch_kernel_on_stream(
+                        launch.loaded.function(),
+                        config,
+                        stream,
+                        params.params,
+                    )
+                },
+                during,
+            )
+        }
+        .map_err(LoadedLaunchError::Hip)
     }
 }
 
@@ -425,5 +533,46 @@ impl std::error::Error for LoadedKernelLoadError {
             Self::Hip(error) => Some(error),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ExactLaunchStreamContext, GeneratedKernelParams, LoadedLaunchError, validate_launch_stream,
+    };
+    use crate::ObservedContext;
+    use fe2o3_core::KernelParams;
+
+    struct TestStreamContext(bool);
+
+    impl ExactLaunchStreamContext for TestStreamContext {
+        fn matches_observation(&self, _observed: &ObservedContext) -> bool {
+            self.0
+        }
+    }
+
+    #[test]
+    fn launch_stream_must_match_the_exact_observed_context() {
+        let observed = ObservedContext::for_test(41, 0, "gfx942", 1_024, 65_536);
+
+        validate_launch_stream(&observed, &TestStreamContext(true)).unwrap();
+        assert!(matches!(
+            validate_launch_stream(&observed, &TestStreamContext(false)),
+            Err(LoadedLaunchError::WrongStreamContext)
+        ));
+    }
+
+    #[test]
+    fn generated_parameter_boundary_preserves_the_packed_fields() {
+        struct Kernel;
+
+        let mut raw = KernelParams::new();
+        raw.push(7_u32);
+        // SAFETY: this test inspects the inert packing token and never submits
+        // it as a real kernel ABI.
+        let packed = unsafe { GeneratedKernelParams::<Kernel>::from_generated_unchecked(&mut raw) };
+
+        assert_eq!(packed.params.len(), 1);
     }
 }
