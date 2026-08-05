@@ -1,5 +1,7 @@
 use std::cmp::Ordering;
 
+use fe2o3_amd_target::AmdTargetId;
+
 use crate::ValidationError;
 
 /// Maximum size of one complete encoded V1 descriptor.
@@ -820,66 +822,10 @@ fn validate_environment_sorted(
     Ok(())
 }
 
-const KNOWN_AMD_PROCESSORS: &[&str] = &[
-    "gfx600", "gfx601", "gfx602", "gfx700", "gfx701", "gfx702", "gfx703", "gfx704", "gfx705",
-    "gfx801", "gfx802", "gfx803", "gfx805", "gfx810", "gfx900", "gfx902", "gfx904", "gfx906",
-    "gfx908", "gfx909", "gfx90a", "gfx90c", "gfx942", "gfx950", "gfx1010", "gfx1011", "gfx1012",
-    "gfx1013", "gfx1030", "gfx1031", "gfx1032", "gfx1033", "gfx1034", "gfx1035", "gfx1036",
-    "gfx1100", "gfx1101", "gfx1102", "gfx1103", "gfx1150", "gfx1151", "gfx1152", "gfx1153",
-    "gfx1154", "gfx1170", "gfx1171", "gfx1172", "gfx1200", "gfx1201", "gfx1250", "gfx1251",
-    "gfx1310",
-];
-
 fn validate_amd_target(value: &str) -> Result<(), ValidationError> {
-    if value.is_empty() || !value.is_ascii() {
+    let target = AmdTargetId::parse(value).map_err(|_| ValidationError::InvalidAmdTarget)?;
+    if target.to_string() != value {
         return Err(ValidationError::InvalidAmdTarget);
-    }
-    let mut components = value.split(':');
-    let processor = components.next().ok_or(ValidationError::InvalidAmdTarget)?;
-    if !KNOWN_AMD_PROCESSORS.contains(&processor) {
-        return Err(ValidationError::InvalidAmdTarget);
-    }
-
-    let mut previous_rank = 0;
-    for component in components {
-        let (rank, supported) = match component {
-            "sramecc-" | "sramecc+" => (1, supports_sramecc(processor)),
-            "xnack-" | "xnack+" => (2, supports_xnack(processor)),
-            _ => return Err(ValidationError::InvalidAmdTarget),
-        };
-        if !supported || rank <= previous_rank {
-            return Err(ValidationError::InvalidAmdTarget);
-        }
-        previous_rank = rank;
     }
     Ok(())
-}
-
-fn supports_sramecc(processor: &str) -> bool {
-    matches!(
-        processor,
-        "gfx906" | "gfx908" | "gfx90a" | "gfx942" | "gfx950" | "gfx1250" | "gfx1251"
-    )
-}
-
-fn supports_xnack(processor: &str) -> bool {
-    matches!(
-        processor,
-        "gfx801"
-            | "gfx810"
-            | "gfx900"
-            | "gfx902"
-            | "gfx904"
-            | "gfx906"
-            | "gfx908"
-            | "gfx909"
-            | "gfx90a"
-            | "gfx90c"
-            | "gfx942"
-            | "gfx950"
-            | "gfx1010"
-            | "gfx1011"
-            | "gfx1012"
-            | "gfx1013"
-    )
 }

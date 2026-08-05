@@ -21,6 +21,7 @@ readonly CPU_TEST_PACKAGES=(
   fe2o3-kernel-descriptor
   fe2o3-kernel-ir
   fe2o3-macros
+  fe2o3-rustc-invocation
   reserved-fe2o3-symbols
   rustc-codegen-fe2o3
   verus-vecadd

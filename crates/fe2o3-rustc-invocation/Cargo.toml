@@ -9,4 +9,5 @@ description = "Canonical coordination identities for selected fe2o3 rustc invoca
 publish = false
 
 [dependencies]
+fe2o3-amd-target.workspace = true
 sha2 = { version = "0.11.0", default-features = false }
