@@ -88,14 +88,52 @@ fn opt_in_fill_publishes_g1_and_executes_on_the_gpu() {
 }
 
 #[test]
+#[ignore = "requires the configured ROCm LLVM toolchain and a local AMD GPU"]
+fn opt_in_vecadd_publishes_exact_g1_and_executes_on_the_gpu() {
+    let _lock = backend_test_lock();
+    let workspace = workspace();
+    let output = backend(&workspace, "run", "fe2o3-vecadd", Some("kernel-ir-v1"));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "kernel-ir-v1 vecadd failed:\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("selected kernel-ir-v1: verified 1 kernel(s), 4 function(s)"),
+        "missing selected-pipeline diagnostic:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("emitted vecadd"),
+        "vecadd was not transactionally published:\n{stderr}"
+    );
+    assert!(
+        stdout.contains("vecadd passed for 1024 elements"),
+        "vecadd did not execute successfully:\n{stdout}"
+    );
+
+    let llvm = std::fs::read_to_string(workspace.join("target/fe2o3/vecadd.ll"))
+        .expect("published vecadd LLVM IR");
+    assert!(llvm.contains(
+        "@vecadd(ptr addrspace(1) %arg0.data, i64 %arg0.len, ptr addrspace(1) %arg1.data, i64 %arg1.len, ptr addrspace(1) %arg2.data, i64 %arg2.len)"
+    ));
+    assert_eq!(llvm.matches("load float").count(), 2);
+    assert_eq!(llvm.matches("store float").count(), 1);
+    assert_eq!(llvm.matches("fadd float").count(), 1);
+    assert!(llvm.contains("!reqd_work_group_size !0"));
+    assert!(!llvm.contains("fe2o3_device"));
+}
+
+#[test]
 #[ignore = "requires the configured ROCm LLVM toolchain"]
 fn selected_pipeline_rejects_invalid_or_unsupported_inputs_and_cleans_stale_artifacts() {
     let _lock = backend_test_lock();
     let workspace = workspace();
 
-    let fill_artifacts = artifact_paths(&workspace, "fill");
-    preseed(&fill_artifacts);
-    let invalid = backend(&workspace, "build", "fe2o3-fill", Some("kernel-ir"));
+    let vecadd_artifacts = artifact_paths(&workspace, "vecadd");
+    preseed(&vecadd_artifacts);
+    let invalid = backend(&workspace, "build", "fe2o3-vecadd", Some("kernel-ir"));
     let invalid_stderr = String::from_utf8_lossy(&invalid.stderr);
     assert!(!invalid.status.success(), "invalid selector was accepted");
     assert!(
@@ -104,8 +142,8 @@ fn selected_pipeline_rejects_invalid_or_unsupported_inputs_and_cleans_stale_arti
         ),
         "missing strict selector diagnostic:\n{invalid_stderr}"
     );
-    assert!(!invalid_stderr.contains("emitted fill"));
-    for artifact in fill_artifacts {
+    assert!(!invalid_stderr.contains("emitted vecadd"));
+    for artifact in vecadd_artifacts {
         assert!(
             !artifact.exists(),
             "invalid selector left stale artifact {}",
@@ -113,24 +151,24 @@ fn selected_pipeline_rejects_invalid_or_unsupported_inputs_and_cleans_stale_arti
         );
     }
 
-    let vecadd_artifacts = artifact_paths(&workspace, "vecadd");
-    preseed(&vecadd_artifacts);
-    let unsupported = backend(&workspace, "build", "fe2o3-vecadd", Some("kernel-ir-v1"));
+    let copy_artifacts = artifact_paths(&workspace, "copy");
+    preseed(&copy_artifacts);
+    let unsupported = backend(&workspace, "build", "fe2o3-copy", Some("kernel-ir-v1"));
     let unsupported_stderr = String::from_utf8_lossy(&unsupported.stderr);
     assert!(
         !unsupported.status.success(),
         "unsupported selected kernel unexpectedly compiled"
     );
     assert!(
-        unsupported_stderr.contains("supports exactly the `fill` kernel export"),
-        "missing fill-only diagnostic:\n{unsupported_stderr}"
+        unsupported_stderr.contains("does not support kernel export \"copy\""),
+        "missing exact admission diagnostic:\n{unsupported_stderr}"
     );
     assert!(
         unsupported_stderr.contains("default legacy-v1 pipeline"),
         "diagnostic did not identify the available legacy path:\n{unsupported_stderr}"
     );
-    assert!(!unsupported_stderr.contains("emitted vecadd"));
-    for artifact in vecadd_artifacts {
+    assert!(!unsupported_stderr.contains("emitted copy"));
+    for artifact in copy_artifacts {
         assert!(
             !artifact.exists(),
             "unsupported selected kernel left stale artifact {}",
