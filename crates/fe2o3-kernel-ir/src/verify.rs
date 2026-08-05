@@ -340,14 +340,14 @@ impl<'module> ModuleVerifier<'module> {
             );
             return;
         };
-        let Some(body) = &entry.body else {
+        if entry.body.is_none() {
             self.emit(
                 location,
                 DiagnosticCode::KernelEntryDeclaration,
                 format!("entry function {} has no body", kernel.entry),
             );
             return;
-        };
+        }
         if !entry.signature.results.is_empty() {
             self.emit(
                 DiagnosticLocation::kernel(self.module, kernel),
@@ -356,22 +356,45 @@ impl<'module> ModuleVerifier<'module> {
             );
         }
 
-        for block in &body.blocks {
-            for (operation_index, operation) in block.operations.iter().enumerate() {
-                if let OperationKind::Intrinsic(intrinsic) = &operation.kind
-                    && !kernel.domain.contains_axis(intrinsic.kind.axis())
-                {
-                    let axis = intrinsic.kind.axis();
-                    self.emit(
-                        DiagnosticLocation::kernel(self.module, kernel)
-                            .at_block(block.id)
-                            .at_operation(operation_index),
-                        DiagnosticCode::InvalidLaunchDomain,
-                        format!(
-                            "axis {axis:?} is outside a {}D launch domain",
-                            kernel.domain.rank()
-                        ),
-                    );
+        self.verify_reachable_intrinsic_axes(kernel, entry);
+    }
+
+    fn verify_reachable_intrinsic_axes(&mut self, kernel: &Kernel, entry: &'module Function) {
+        let mut pending = vec![entry];
+        let mut visited = BTreeSet::new();
+
+        while let Some(function) = pending.pop() {
+            if !visited.insert(&function.id) {
+                continue;
+            }
+            let Some(body) = &function.body else {
+                continue;
+            };
+
+            for block in &body.blocks {
+                for (operation_index, operation) in block.operations.iter().enumerate() {
+                    if let OperationKind::Intrinsic(intrinsic) = &operation.kind
+                        && !kernel.domain.contains_axis(intrinsic.kind.axis())
+                    {
+                        let axis = intrinsic.kind.axis();
+                        let mut location = DiagnosticLocation::function(self.module, function);
+                        location.kernel = Some(kernel.id.clone());
+                        self.emit(
+                            location.at_block(block.id).at_operation(operation_index),
+                            DiagnosticCode::InvalidLaunchDomain,
+                            format!(
+                                "axis {axis:?} is outside the {}D launch domain of kernel {}",
+                                kernel.domain.rank(),
+                                kernel.id
+                            ),
+                        );
+                    }
+
+                    if let OperationKind::Call { callee, .. } = &operation.kind
+                        && let Some(callee) = self.functions.get(callee).copied()
+                    {
+                        pending.push(callee);
+                    }
                 }
             }
         }

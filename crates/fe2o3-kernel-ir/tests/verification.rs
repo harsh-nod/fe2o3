@@ -222,6 +222,81 @@ fn rejects_malformed_intrinsic_types_dimensions_and_arity() {
 }
 
 #[test]
+fn rejects_out_of_domain_intrinsics_in_recursive_kernel_helpers() {
+    let mut entry_block = BasicBlock::new(BlockId(0));
+    entry_block.operations.push(Operation::new(
+        vec![],
+        OperationKind::Call {
+            callee: FunctionId::new("helper"),
+            arguments: vec![],
+        },
+    ));
+    entry_block.terminator = Some(Terminator::Return { values: vec![] });
+
+    let mut helper_block = BasicBlock::new(BlockId(0));
+    helper_block.operations = vec![
+        op(
+            0,
+            Type::INDEX,
+            OperationKind::Intrinsic(IntrinsicOperation::new(
+                IntrinsicKind::InvocationIndex {
+                    kind: IndexKind::Global,
+                    axis: Axis::Y,
+                },
+                Type::INDEX,
+            )),
+        ),
+        Operation::new(
+            vec![],
+            OperationKind::Call {
+                callee: FunctionId::new("helper"),
+                arguments: vec![],
+            },
+        ),
+    ];
+    helper_block.terminator = Some(Terminator::Return { values: vec![] });
+
+    let mut module = Module::new("tests::helper_intrinsic");
+    module.functions = vec![
+        Function::definition(
+            "entry",
+            Signature::new(vec![], vec![]),
+            vec![],
+            vec![entry_block],
+        ),
+        Function::definition(
+            "helper",
+            Signature::new(vec![], vec![]),
+            vec![],
+            vec![helper_block],
+        ),
+    ];
+    module.kernels.push(Kernel::new(
+        "test_kernel",
+        "entry",
+        LaunchDomain::D1 {
+            x: LaunchExtent::Dynamic,
+        },
+    ));
+
+    let errors = verify_module(&module).unwrap_err();
+    let axis_errors = errors
+        .diagnostics()
+        .iter()
+        .filter(|diagnostic| diagnostic.code == DiagnosticCode::InvalidLaunchDomain)
+        .collect::<Vec<_>>();
+    assert_eq!(axis_errors.len(), 1);
+    assert_eq!(
+        axis_errors[0].location.function.as_ref().unwrap().as_str(),
+        "helper"
+    );
+    assert_eq!(
+        axis_errors[0].location.kernel.as_ref().unwrap().as_str(),
+        "test_kernel"
+    );
+}
+
+#[test]
 fn rejects_declared_capabilities_unsupported_by_the_target() {
     let mut module = one_block_module(
         vec![],
