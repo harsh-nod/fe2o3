@@ -94,6 +94,9 @@ example, copied results back, and compared them with CPU results.
 - Compiler artifact publication is transactional and generation-owned. Build
   attempt and canonical rustc invocation descriptors are versioned and
   bounded.
+- A Linux-only rustc executable primitive opens without following the final
+  symlink, hashes and retains the opened object, and builds commands through a
+  descriptor-backed procfs path. It is not connected to compile execution.
 - The Verus vecadd harness proves bounds and injective writes under a documented
   hardware-thread-ID contract. Proof-record matching can reject incomplete or
   mismatched evidence.
@@ -109,8 +112,9 @@ example, copied results back, and compared them with CPU results.
   current Verus harness is invoked separately and does not prove compiler,
   ROCm, driver, or machine-code refinement.
 - The fail-closed rustc wrapper classifies and preserves approved bootstrap
-  invocations, but compile execution remains disabled until rustc and backend
-  executable pinning is implemented.
+  invocations, but compile execution remains disabled until the pinned rustc
+  primitive is integrated and codegen-backend dynamic-library pinning is
+  implemented. Non-Linux execution strategies remain unsupported.
 - General Rust language support, LDS, atomics and barriers in emitted kernels,
   wave operations, device linking, sanitizer/debugger integration, and
   multi-device memory remain parity work.

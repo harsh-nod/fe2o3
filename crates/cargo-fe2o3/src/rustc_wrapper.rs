@@ -8,6 +8,10 @@ use fe2o3_rustc_invocation::{
     classify_rustc_invocation_v2,
 };
 
+#[cfg_attr(not(test), allow(dead_code))]
+#[path = "rustc_wrapper/pinned_executable.rs"]
+mod pinned_executable;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum WrapperPlan<'a> {
     Passthrough(RustcPassthroughInvocationV2<'a>),
