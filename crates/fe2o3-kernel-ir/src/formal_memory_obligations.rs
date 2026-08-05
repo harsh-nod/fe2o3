@@ -965,7 +965,14 @@ fn derive_alias_requirements(accesses: &[FormalMemoryAccess]) -> Vec<RuntimeAlia
 }
 
 fn address_spaces_may_alias(left: AddressSpace, right: AddressSpace) -> bool {
-    left == right || matches!(left, AddressSpace::Generic) || matches!(right, AddressSpace::Generic)
+    left == right
+        || matches!(left, AddressSpace::Generic)
+        || matches!(right, AddressSpace::Generic)
+        || matches!(
+            (left, right),
+            (AddressSpace::Global, AddressSpace::Constant)
+                | (AddressSpace::Constant, AddressSpace::Global)
+        )
 }
 
 fn derive_inter_invocation_conflicts(

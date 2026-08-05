@@ -542,39 +542,81 @@ fn shifted_formal_ranges_still_require_runtime_alias_discharge() {
     assert_eq!(requirement.right_accessed_bytes().end_exclusive(), 404);
 }
 
-fn generic_and_concrete_writes(concrete: AddressSpace) -> Module {
-    let generic_pointer = Type::pointer(Type::F32, AddressSpace::Generic, AccessMode::ReadWrite);
-    let concrete_pointer = Type::pointer(Type::F32, concrete, AccessMode::ReadWrite);
+fn address_space_pair_module(left: AddressSpace, right: AddressSpace) -> Module {
+    let parameter = |space| {
+        Type::pointer(
+            Type::F32,
+            space,
+            if space == AddressSpace::Constant {
+                AccessMode::ReadOnly
+            } else {
+                AccessMode::ReadWrite
+            },
+        )
+    };
+    let access = |space| MemoryAccess::new(space, 4);
+    let memory_operation = |pointer, space, write, result| {
+        if write {
+            Operation::new(
+                vec![],
+                OperationKind::Store {
+                    pointer: ValueId(pointer),
+                    value: ValueId(2),
+                    access: access(space),
+                },
+            )
+        } else {
+            op(
+                result,
+                Type::F32,
+                OperationKind::Load {
+                    pointer: ValueId(pointer),
+                    access: access(space),
+                },
+            )
+        }
+    };
+    let left_writes = left != AddressSpace::Constant;
+    let right_writes = !left_writes && right != AddressSpace::Constant;
     module_with_kernel(
-        vec![generic_pointer, concrete_pointer, Type::F32],
+        vec![parameter(left), parameter(right), Type::F32],
         vec![
-            Operation::new(
-                vec![],
-                OperationKind::Store {
-                    pointer: ValueId(0),
-                    value: ValueId(2),
-                    access: MemoryAccess::new(AddressSpace::Generic, 4),
-                },
-            ),
-            Operation::new(
-                vec![],
-                OperationKind::Store {
-                    pointer: ValueId(1),
-                    value: ValueId(2),
-                    access: MemoryAccess::new(concrete, 4),
-                },
-            ),
+            memory_operation(0, left, left_writes, 3),
+            memory_operation(1, right, right_writes, 4),
         ],
         dynamic_1d(),
     )
 }
 
 #[test]
-fn generic_parameters_require_alias_discharge_against_concrete_spaces() {
-    for concrete in [AddressSpace::Global, AddressSpace::Workgroup] {
-        let analysis = analyze(&generic_and_concrete_writes(concrete), 1);
-        assert!(analysis.is_complete());
-        assert_eq!(analysis.obligations().runtime_alias_requirements().len(), 1);
+fn address_space_alias_requirements_follow_the_explicit_matrix() {
+    let spaces = [
+        AddressSpace::Private,
+        AddressSpace::Workgroup,
+        AddressSpace::Global,
+        AddressSpace::Constant,
+        AddressSpace::Generic,
+    ];
+    let compatible = [
+        [true, false, false, false, true],
+        [false, true, false, false, true],
+        [false, false, true, true, true],
+        [false, false, true, true, true],
+        [true, true, true, true, true],
+    ];
+
+    for (left_index, left) in spaces.into_iter().enumerate() {
+        for (right_index, right) in spaces.into_iter().enumerate() {
+            let analysis = analyze(&address_space_pair_module(left, right), 1);
+            let has_write = left != AddressSpace::Constant || right != AddressSpace::Constant;
+            let expected = usize::from(compatible[left_index][right_index] && has_write);
+            assert!(analysis.is_complete(), "{left:?} with {right:?}");
+            assert_eq!(
+                analysis.obligations().runtime_alias_requirements().len(),
+                expected,
+                "{left:?} with {right:?}",
+            );
+        }
     }
 }
 
