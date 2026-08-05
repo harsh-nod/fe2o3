@@ -63,9 +63,10 @@ pub(crate) fn emit_collection_after_preflight(
     )
 }
 
+#[derive(Debug)]
 pub(crate) struct PreparedDeviceKernel {
-    name: String,
-    llvm_ir: String,
+    pub(crate) name: String,
+    pub(crate) llvm_ir: String,
 }
 
 pub(crate) fn prepare_collection<'tcx>(

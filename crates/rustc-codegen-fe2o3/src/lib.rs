@@ -12,6 +12,7 @@ extern crate rustc_span;
 
 mod amdgpu_llvm;
 mod collector;
+mod kernel_ir_codegen;
 mod kernel_ir_lowering;
 mod mir_import;
 mod record_lowering;
@@ -29,6 +30,7 @@ use rustc_session::Session;
 use rustc_session::config::OutputFilenames;
 use std::any::Any;
 use std::env;
+use std::ffi::OsStr;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -39,11 +41,56 @@ pub const VERBOSE_ENV: &str = "FE2O3_VERBOSE";
 pub const DUMP_MIR_ENV: &str = "FE2O3_DUMP_MIR";
 pub const DUMP_LLVM_ENV: &str = "FE2O3_DUMP_LLVM";
 pub const VERIFY_KERNEL_IR_ENV: &str = "FE2O3_VERIFY_KERNEL_IR";
+pub const CODEGEN_PIPELINE_ENV: &str = "FE2O3_CODEGEN_PIPELINE";
 pub const HSACO_DIR_ENV: &str = "FE2O3_HSACO_DIR";
 
 pub struct Fe2o3CodegenBackend {
     config: BackendConfig,
     llvm_backend: Box<dyn CodegenBackend>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CodegenPipeline {
+    LegacyV1,
+    KernelIrV1,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum PipelineSelection {
+    Valid(CodegenPipeline),
+    Invalid(String),
+}
+
+impl PipelineSelection {
+    fn from_env() -> Self {
+        Self::from_value(env::var_os(CODEGEN_PIPELINE_ENV).as_deref())
+    }
+
+    fn from_value(value: Option<&OsStr>) -> Self {
+        match value {
+            None => Self::Valid(CodegenPipeline::LegacyV1),
+            Some(value) if value == "legacy-v1" => Self::Valid(CodegenPipeline::LegacyV1),
+            Some(value) if value == "kernel-ir-v1" => Self::Valid(CodegenPipeline::KernelIrV1),
+            Some(value) => Self::Invalid(format!(
+                "{CODEGEN_PIPELINE_ENV} must be unset or exactly `legacy-v1` or `kernel-ir-v1`; found {value:?}"
+            )),
+        }
+    }
+
+    fn resolve(&self) -> Result<CodegenPipeline, amdgpu_llvm::EmitError> {
+        match self {
+            Self::Valid(pipeline) => Ok(*pipeline),
+            Self::Invalid(reason) => Err(amdgpu_llvm::EmitError::Preflight {
+                reason: reason.clone(),
+            }),
+        }
+    }
+}
+
+impl Default for PipelineSelection {
+    fn default() -> Self {
+        Self::Valid(CodegenPipeline::LegacyV1)
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -52,6 +99,7 @@ pub struct BackendConfig {
     pub dump_mir: bool,
     pub dump_llvm: bool,
     pub verify_kernel_ir: bool,
+    codegen_pipeline: PipelineSelection,
     pub hsaco_output_dir: Option<PathBuf>,
     pub target: AmdGpuTarget,
 }
@@ -63,6 +111,7 @@ impl BackendConfig {
             dump_mir: env_flag(DUMP_MIR_ENV),
             dump_llvm: env_flag(DUMP_LLVM_ENV),
             verify_kernel_ir: env_flag(VERIFY_KERNEL_IR_ENV),
+            codegen_pipeline: PipelineSelection::from_env(),
             hsaco_output_dir: env::var(HSACO_DIR_ENV).ok().map(PathBuf::from),
             target: AmdGpuTarget::from_env_or_default(),
         }
@@ -133,6 +182,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
 
             if kernel_count > 0 {
                 let output_dir = output_dir.expect("kernel output was required above");
+                let codegen_pipeline = self.config.codegen_pipeline.clone();
                 match amdgpu_llvm::emit_collection_after_preflight(
                     &producer,
                     output_dir,
@@ -150,27 +200,61 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                         })?;
                         collector::dump_device_functions(tcx, &collection.functions);
                         let mir_module = mir_import::import_collection(tcx, &collection);
-                        match run_optional_kernel_ir_analysis(self.config.verify_kernel_ir, || {
-                            kernel_ir_lowering::translate_and_verify(&mir_module)
-                        }) {
-                            Ok(Some(module)) => eprintln!(
-                                "[rustc-codegen-fe2o3] verified MIR kernel IR analysis: {} kernel(s), {} function(s)",
-                                module.kernels.len(),
-                                module.functions.len()
-                            ),
-                            Ok(None) => {}
-                            Err(errors) => {
-                                return Err(amdgpu_llvm::EmitError::Preflight {
-                                    reason: format!("MIR kernel IR analysis failed: {errors}"),
-                                });
+                        match codegen_pipeline.resolve()? {
+                            CodegenPipeline::LegacyV1 => {
+                                match run_optional_kernel_ir_analysis(
+                                    self.config.verify_kernel_ir,
+                                    || kernel_ir_lowering::translate_and_verify(&mir_module),
+                                ) {
+                                    Ok(Some(module)) => eprintln!(
+                                        "[rustc-codegen-fe2o3] verified MIR kernel IR analysis: {} kernel(s), {} function(s)",
+                                        module.kernels.len(),
+                                        module.functions.len()
+                                    ),
+                                    Ok(None) => {}
+                                    Err(errors) => {
+                                        return Err(amdgpu_llvm::EmitError::Preflight {
+                                            reason: format!(
+                                                "MIR kernel IR analysis failed: {errors}"
+                                            ),
+                                        });
+                                    }
+                                }
+                                let lowering_plan = record_lowering::plan_from_module(&mir_module);
+                                if self.config.dump_mir {
+                                    eprintln!("{}", mir_module.summary());
+                                    eprintln!("{}", lowering_plan.summary());
+                                }
+                                amdgpu_llvm::prepare_collection(
+                                    tcx,
+                                    &collection,
+                                    Some(&lowering_plan),
+                                )
+                            }
+                            CodegenPipeline::KernelIrV1 => {
+                                let module = kernel_ir_lowering::translate_and_verify(&mir_module)
+                                    .map_err(|errors| amdgpu_llvm::EmitError::Preflight {
+                                        reason: format!(
+                                            "{CODEGEN_PIPELINE_ENV}=kernel-ir-v1 MIR translation failed: {errors}"
+                                        ),
+                                    })?;
+                                eprintln!(
+                                    "[rustc-codegen-fe2o3] selected kernel-ir-v1: verified {} kernel(s), {} function(s)",
+                                    module.kernels.len(),
+                                    module.functions.len()
+                                );
+                                if self.config.dump_mir {
+                                    eprintln!("{}", mir_module.summary());
+                                }
+                                let kernel_names = collection
+                                    .functions
+                                    .iter()
+                                    .filter(|function| function.is_kernel)
+                                    .map(|function| function.export_name.clone())
+                                    .collect::<Vec<_>>();
+                                kernel_ir_codegen::prepare_fill_collection(module, &kernel_names)
                             }
                         }
-                        let lowering_plan = record_lowering::plan_from_module(&mir_module);
-                        if self.config.dump_mir {
-                            eprintln!("{}", mir_module.summary());
-                            eprintln!("{}", lowering_plan.summary());
-                        }
-                        amdgpu_llvm::prepare_collection(tcx, &collection, Some(&lowering_plan))
                     },
                 ) {
                     Ok(artifacts) => {
@@ -587,9 +671,10 @@ fn optional_tool(llvm_bin: &Path, name: &str) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{
-        AmdGpuTarget, BackendConfig, managed_artifact_output, run_optional_kernel_ir_analysis,
-        validate_hsaco_metadata_text,
+        AmdGpuTarget, BackendConfig, CodegenPipeline, PipelineSelection, managed_artifact_output,
+        run_optional_kernel_ir_analysis, validate_hsaco_metadata_text,
     };
+    use std::ffi::OsStr;
     use std::path::{Path, PathBuf};
 
     #[test]
@@ -613,6 +698,31 @@ mod tests {
         let result = run_optional_kernel_ir_analysis(true, || Err::<(), _>("translation failed"));
 
         assert_eq!(result, Err("translation failed"));
+    }
+
+    #[test]
+    fn production_pipeline_selection_is_versioned_and_strict() {
+        assert_eq!(
+            PipelineSelection::from_value(None),
+            PipelineSelection::Valid(CodegenPipeline::LegacyV1)
+        );
+        assert_eq!(
+            PipelineSelection::from_value(Some(OsStr::new("legacy-v1"))),
+            PipelineSelection::Valid(CodegenPipeline::LegacyV1)
+        );
+        assert_eq!(
+            PipelineSelection::from_value(Some(OsStr::new("kernel-ir-v1"))),
+            PipelineSelection::Valid(CodegenPipeline::KernelIrV1)
+        );
+
+        for invalid in ["", "legacy", "kernel-ir", "kernel-ir-v2", "true", "1"] {
+            let selection = PipelineSelection::from_value(Some(OsStr::new(invalid)));
+            let error = selection.resolve().expect_err("selector must be exact");
+            let message = error.to_string();
+            assert!(message.contains("FE2O3_CODEGEN_PIPELINE"));
+            assert!(message.contains("legacy-v1"));
+            assert!(message.contains("kernel-ir-v1"));
+        }
     }
 
     #[test]
