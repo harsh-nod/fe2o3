@@ -86,6 +86,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn verus_harness_includes_the_real_gpu_source_fragment() {
+        let harness = include_str!("../verus/vecadd.rs");
+        let real_body = include_str!("../../vecadd/src/vecadd_body.rs");
+
+        assert!(harness.contains("include!(\"../../vecadd/src/vecadd_body.rs\")"));
+        assert!(real_body.contains("vecadd_kernel_body"));
+        assert!(real_body.contains("*out = $a[i] + $b[i]"));
+    }
+
+    #[test]
     fn vecadd_executes_one_disjoint_write_per_thread() {
         let a = [1, 2, 3, 4];
         let b = [10, 20, 30, 40];

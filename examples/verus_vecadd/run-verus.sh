@@ -109,9 +109,21 @@ run_rejected same_source_functional_error \
     "$script_dir/verus/negative/same_source_functional_error.rs" \
     'mutated_same_source_claims_wrong_sum' \
     'postcondition.*not satisfied|postcondition failure'
+run_rejected real_kernel_wrong_bounds \
+    "$script_dir/verus/negative/real_kernel_wrong_bounds.rs" \
+    'rejects_missing_real_kernel_thread_bound' \
+    'precondition.*not satisfied|precondition failure'
+run_rejected real_kernel_wrong_index \
+    "$script_dir/verus/negative/real_kernel_wrong_index.rs" \
+    'mutated_real_kernel_index_is_injective' \
+    'postcondition.*not satisfied|postcondition failure'
+run_rejected real_kernel_output_alias \
+    "$script_dir/verus/negative/real_kernel_output_alias.rs" \
+    'rejects_real_output_input_alias' \
+    'precondition.*not satisfied|precondition failure'
 
 if [ "$failures" -ne 0 ]; then
     printf 'Verus fixture run failed: %s unexpected result(s)\n' "$failures" >&2
     exit 1
 fi
-printf 'Verus fixture run passed: 2 proof harnesses, 9 expected rejections\n'
+printf 'Verus fixture run passed: 2 proof harnesses, 12 expected rejections\n'

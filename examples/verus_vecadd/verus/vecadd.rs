@@ -1,6 +1,8 @@
 use vstd::prelude::*;
+use vstd::std_specs::ops::*;
 
 include!("../src/vecadd_body.rs");
+include!("../../vecadd/src/vecadd_body.rs");
 
 verus! {
 
@@ -415,6 +417,179 @@ pub fn same_source_vecadd_thread(
         VecAddError::DomainLengthMismatch,
         VecAddError::ArithmeticOverflow
     )
+}
+
+/// Executable model of the real GPU kernel's linear thread witness. The
+/// backend intrinsic remains outside this harness; the adapter below receives
+/// the launch witness explicitly so the shared body can be verified.
+#[derive(Copy, Clone)]
+pub struct ModelGpuThreadIndex {
+    pub linear: usize,
+}
+
+impl ModelGpuThreadIndex {
+    pub open spec fn spec_get(&self) -> usize {
+        self.linear
+    }
+
+    #[verifier::when_used_as_spec(spec_get)]
+    pub fn get(&self) -> (linear: usize)
+        ensures
+            linear == self.linear,
+    {
+        self.linear
+    }
+}
+
+/// Source-model adapter for `fe2o3_device::thread`. Passing the witness is the
+/// exact unrefined hardware-intrinsic boundary; every subsequent operation is
+/// expanded from the real kernel's shared source fragment.
+pub mod model_gpu_thread {
+    use super::ModelGpuThreadIndex;
+
+    pub fn index_1d(thread: ModelGpuThreadIndex) -> (result: ModelGpuThreadIndex)
+        ensures
+            result.linear == thread.linear,
+    {
+        thread
+    }
+}
+
+/// Owned executable model of `DisjointSlice<f32>`. It deliberately models
+/// element contents rather than raw-pointer provenance; region evidence below
+/// carries the separate symbolic allocation obligations.
+pub struct ModelGpuDisjointSlice {
+    pub values: Vec<f32>,
+}
+
+impl ModelGpuDisjointSlice {
+    pub fn get_mut(
+        &mut self,
+        index: ModelGpuThreadIndex,
+    ) -> (element: Option<&mut f32>)
+        ensures
+            match element {
+                Some(element) => {
+                    &&& index.linear < old(self).values@.len()
+                    &&& *element == old(self).values@[index.linear as int]
+                    &&& final(self).values@ == old(self).values@.update(
+                        index.linear as int,
+                        *final(element),
+                    )
+                }
+                None => {
+                    &&& index.linear >= old(self).values@.len()
+                    &&& final(self).values@ == old(self).values@
+                }
+            },
+    {
+        if index.linear < self.values.len() {
+            Some(&mut self.values[index.linear])
+        } else {
+            None
+        }
+    }
+}
+
+pub open spec fn real_vecadd_source_evidence_is_valid(
+    evidence: VecAddSourceEvidence,
+    domain_len: nat,
+    thread: nat,
+) -> bool {
+    vecadd_source_evidence_is_valid(evidence, domain_len, thread)
+        && evidence.element_size == 4
+        && evidence.a_allocation.address_space_size <= usize::MAX as nat
+        && evidence.b_allocation.address_space_size <= usize::MAX as nat
+        && evidence.output_allocation.address_space_size <= usize::MAX as nat
+}
+
+/// Expands the exact operation, identity-index extraction, guarded write, input
+/// indexing, f32 addition, and assignment used by `examples/vecadd::vecadd`.
+/// The postconditions intentionally describe only memory safety and framing;
+/// they do not assign IEEE semantics to the f32 result.
+pub fn real_kernel_vecadd_body(
+    thread: ModelGpuThreadIndex,
+    a: &[f32],
+    b: &[f32],
+    mut output: ModelGpuDisjointSlice,
+    Ghost(evidence): Ghost<VecAddSourceEvidence>,
+) -> (result: ModelGpuDisjointSlice)
+    requires
+        thread.linear < output.values@.len(),
+        a@.len() == output.values@.len(),
+        b@.len() == output.values@.len(),
+        a@[thread.linear as int].add_req(b@[thread.linear as int]),
+        real_vecadd_source_evidence_is_valid(
+            evidence,
+            output.values@.len(),
+            thread.linear as nat,
+        ),
+    ensures
+        result.values@.len() == output.values@.len(),
+        forall |other: int| 0 <= other < output.values@.len()
+            && other != thread.linear as int ==>
+                result.values@[other] == output.values@[other],
+        region_is_in_bounds(
+            evidence.a_allocation,
+            evidence.a_capability.permission.region,
+        ),
+        region_is_in_bounds(
+            evidence.b_allocation,
+            evidence.b_capability.permission.region,
+        ),
+        region_is_in_bounds(
+            evidence.output_allocation,
+            evidence.output_permission.region,
+        ),
+        capability_can_read(evidence.a_capability),
+        capability_can_read(evidence.b_capability),
+        permission_can_write(evidence.output_permission),
+        permissions_are_compatible(
+            evidence.a_capability.permission,
+            evidence.output_permission,
+        ),
+        permissions_are_compatible(
+            evidence.b_capability.permission,
+            evidence.output_permission,
+        ),
+        element_byte_end(
+            evidence.a_allocation,
+            thread.linear as nat,
+            4,
+        ) <= usize::MAX as nat,
+        element_byte_end(
+            evidence.b_allocation,
+            thread.linear as nat,
+            4,
+        ) <= usize::MAX as nat,
+        element_byte_end(
+            evidence.output_allocation,
+            thread.linear as nat,
+            4,
+        ) <= usize::MAX as nat,
+{
+    proof {
+        same_source_evidence_has_valid_permissions(
+            evidence,
+            output.values@.len(),
+            thread.linear as nat,
+        );
+    }
+    vecadd_kernel_body!(model_gpu_thread, (thread), a, b, output);
+    output
+}
+
+/// The concrete `ThreadIndex::get` mapping used by the shared body is the
+/// identity, hence two distinct launch witnesses cannot select one output.
+pub proof fn real_kernel_identity_index_is_injective(
+    left: ModelGpuThreadIndex,
+    right: ModelGpuThreadIndex,
+)
+    requires
+        left.linear != right.linear,
+    ensures
+        left.spec_get() != right.spec_get(),
+{
 }
 
 pub proof fn element_region_is_in_bounds_and_address_representable(

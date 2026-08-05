@@ -1,94 +1,81 @@
-# verus_vecadd and fill
+# Verus vecadd and fill source models
 
-This directory verifies a `u32` CPU/reference operation, not the `f32`
-`#[kernel]` in `examples/vecadd`. It is not compiled for ROCm or executed on a
-GPU.
+The primary milestone in this directory verifies the executable body of the
+real `f32` `#[kernel]` in `examples/vecadd`. The operation, index extraction,
+guarded `DisjointSlice::get_mut`, two input indexes, addition, and output write
+live once in `examples/vecadd/src/vecadd_body.rs`. Both the GPU kernel and
+`verus/vecadd.rs` mechanically expand that fragment.
 
-The narrow single-source property is mechanical: the arithmetic, overflow
-check, indexing, and write token body lives in `src/vecadd_body.rs`. Ordinary
-rustc expands those tokens from `src/lib.rs`, and Verus expands the same tokens
-from `verus/vecadd.rs`. The surrounding types are not shared. Ordinary Rust
-uses `fe2o3_contracts` domain and index types, while Verus substitutes model
-types with separately verified method bodies. This harness therefore does not
-verify the `fe2o3_contracts` implementations.
+The fragment has one explicit adapter boundary: the GPU expansion calls
+`fe2o3_device::thread::index_1d()` with no argument, while the Verus expansion
+passes a modeled launch witness to `model_gpu_thread::index_1d`. The adapter
+returns that same identity witness and introduces no `external_body`. Proving
+that the target intrinsic returns the corresponding launch witness remains a
+backend-refinement obligation.
 
-The shared body checks the logical launch extent, constructs an
-`IdentityWriteIndex`, checks `u32` addition overflow, and performs one output
-write. The Verus harness surrounds that exact expansion with target-neutral
-specifications and ghost evidence. For fill, the separate reference harness
-establishes:
+For the real shared body, Verus establishes:
 
-- each identity index is in bounds;
-- modeled byte-address arithmetic remains below an explicit address-space size;
-- distinct logical threads select disjoint singleton output locations;
-- a per-thread write changes only its owned output location; and
-- a completed hardware-thread set establishes the full fill postcondition.
+- the identity witness is in bounds for the output and both equal-length inputs;
+- `ThreadIndex::get` and the consuming output access select the same index;
+- distinct identity witnesses select distinct output elements;
+- the guarded write changes no other modeled output element;
+- symbolic input-read and exclusive-output regions are compatible; and
+- every modeled four-byte element address ends within both its allocation's
+  address space and `usize::MAX`.
 
-The vecadd harness models each access as a symbolic allocation identity,
-address space, and half-open byte region. A ghost launch brand connects a 1D
-index-space extent to one branded thread witness. Initialized shared-read
-capabilities cover both inputs, and an exclusive write permission covers the
-output element. The harness establishes:
+The `ModelGpuDisjointSlice` adapter owns a `Vec<f32>` so Verus can reason about
+the shared body's mutation and frame behavior. It is not a refinement of the
+raw pointer and length stored by `fe2o3_device::DisjointSlice`. Allocation IDs,
+base addresses, extents, and permissions remain caller-supplied ghost facts;
+the harness does not authenticate them against Rust references or a launch.
 
-- logical bounds and byte-address representability for both reads and the
-  output write;
-- compatibility of the two shared reads, including exact input aliasing;
-- incompatibility of an overlapping exclusive write and shared read;
-- pairwise-disjoint exclusive output writes for distinct identity indices;
-- frame behavior for untouched output elements and other allocations; and
-- exact per-thread `u32` vecadd behavior for the successful operation path.
+Verus/vstd does not give the Rust `f32` `+` operator a deterministic IEEE
+functional specification. The harness therefore requires vstd's opaque
+`add_req` domain obligation and makes no claim about the stored sum. Bounds,
+ownership, framing, injectivity, and address proofs do not depend on the
+addition's result. The real-body model adds no `assume`, `admit`, or
+`external_body`.
 
-There is no launch-level functional-correctness theorem in this harness.
-Establishing one requires composing the verified per-thread transitions with a
-launch execution model; assuming the final pointwise output values would not be
-such a composition.
+## Reference proofs
 
-Run the ordinary tests with:
+The older `u32` CPU/reference vecadd remains separate in
+`src/vecadd_body.rs`, `src/lib.rs`, and the first part of `verus/vecadd.rs`. It
+proves an exact per-thread integer result under an explicit no-overflow
+precondition. It is not the GPU kernel and is retained as a stronger
+target-neutral functional example, not as evidence for `f32` semantics.
+
+The fill harness additionally proves identity indexing, modeled address
+representability, disjoint writes, frame behavior, and its launch-level fill
+postcondition. Its `hardware_thread_id` model is the one existing
+`#[verifier::external_body]`; the real vecadd source model does not call it.
+
+## Running the checks
+
+Run the ordinary Rust tests with:
 
 ```text
 cargo +stable test --manifest-path examples/verus_vecadd/Cargo.toml
+cargo test -p fe2o3-vecadd
 ```
 
-With a Verus binary and `vstd` available, run both positive harnesses and the
-nine negative proof mutations with:
+Run both positive Verus harnesses and all twelve expected proof rejections with:
 
 ```text
-examples/verus_vecadd/run-verus.sh --require
+VERUS=/absolute/path/to/verus examples/verus_vecadd/run-verus.sh --require
 ```
 
-Set `VERUS=/absolute/path/to/verus` for a non-`PATH` installation. Without
-`--require`, the runner reports `SKIP` and succeeds when Verus is unavailable,
-so ordinary Cargo builds remain independent of Verus. A negative fixture counts
-as an expected rejection only when Verus emits both the fixture's stable
-proof-function marker and its expected precondition- or postcondition-failure
-diagnostic. Syntax and tool failures do not masquerade as successful tests.
+The real-kernel negative mutations independently reject a missing thread bound,
+a non-injective constant output index, and output/input allocation aliasing.
+Each expected rejection must contain both its stable marker and a proof
+precondition or postcondition diagnostic; parser and tool failures do not pass.
 
-## Trusted boundary and limits
+## Remaining refinement gap
 
-`hardware_thread_id` in each Verus harness is marked
-`#[verifier::external_body]`. The fill contract explicitly requires a 1D active
-launch slot to observe the same global logical ID. Consequently the set of
-active slots is in bounds, unique, and covers the logical domain. Passing the
-active slot to the external function is ghost modeling for this spike, not the
-signature of a GPU intrinsic. The backend, launch geometry, and runtime must
-eventually refine that model.
-
-The address proof uses mathematical naturals and an explicit exclusive
-`address_space_size`. It proves the modeled element range cannot overflow that
-space. Allocation IDs, extents, base addresses, address spaces, and element
-sizes are symbolic launch-environment inputs. This slice does not authenticate
-those inputs, connect them to Rust references, or create linear runtime tokens.
-It therefore does not independently prove pointer provenance, Rust layout, or
-that the target supplied the correct address-space limit.
-
-There are no `assume` or `admit` statements, and the region model introduces no
-new `external_body`. Verification of the mechanically shared Rust body is
-source-model evidence only. It does not prove machine-code refinement from the
-Rust expansion through canonical kernel IR, AMDGPU lowering, a code object, or
-a HIP launch, nor does it verify the separate `examples/vecadd` GPU function.
-It also does not model scheduling, barriers, atomics, fractional read tokens,
-floating-point semantics, or arbitrary index functions. The ghost brand and
-region capabilities are erased proof inputs; they neither mint nor upgrade
-runtime `Verified` authority. Proof records may bind this evidence to external
-identities, but identity equality alone cannot authorize loading or launching
-an artifact.
+This is source-model evidence, not machine-code verification. It does not yet
+prove that the model thread witness is the value returned by the AMDGPU
+intrinsic, that `ModelGpuDisjointSlice` refines the actual raw device pointer,
+that ghost allocation facts came from admitted runtime arguments, or that the
+shared Rust expansion refines canonical Kernel IR, LLVM, HSACO, and execution.
+It does not create or upgrade runtime `Verified` authority. Closing that gap
+requires authenticated compiler-generated proof bindings and a refinement
+chain from the real types and intrinsic through the loaded artifact.
