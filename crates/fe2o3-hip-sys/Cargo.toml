@@ -10,3 +10,6 @@ description = "Minimal raw HIP runtime bindings used by fe2o3."
 
 [lib]
 name = "fe2o3_hip_sys"
+
+[build-dependencies]
+cc = "1"
