@@ -6,7 +6,8 @@ The next architecture keeps the working AMD runtime while replacing the
 elementwise MIR recognizer with a target-neutral compiler pipeline and adding
 source-level Verus contracts. See the [v2 architecture](docs/architecture-v2.md),
 [cuda-oxide parity matrix](docs/cuda-oxide-parity-matrix.md),
-[verification model](docs/verification-model.md), and
+[verification model](docs/verification-model.md),
+[GPU safety contract v1](docs/gpu-safety-contract-v1.md), and
 [implementation roadmap](docs/implementation-roadmap-v2.md). The
 [testing guide](docs/testing.md) defines the generic, Verus, ROCm compile, and
 hardware execution lanes.

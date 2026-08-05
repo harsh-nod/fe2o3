@@ -3,7 +3,8 @@
 Status: execution plan for parallel implementation.
 
 This roadmap turns [architecture-v2.md](architecture-v2.md),
-[verification-model.md](verification-model.md), and the
+[verification-model.md](verification-model.md), the
+[GPU safety contract v1](gpu-safety-contract-v1.md), and the
 [cuda-oxide parity matrix](cuda-oxide-parity-matrix.md) into independently
 owned work with staged integration gates. Gates are evidence-based; calendar
 dates depend on staffing and hardware availability.

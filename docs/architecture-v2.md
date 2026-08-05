@@ -17,6 +17,7 @@ Related documents:
 
 - [cuda-oxide parity matrix](cuda-oxide-parity-matrix.md)
 - [verification model](verification-model.md)
+- [GPU safety contract v1](gpu-safety-contract-v1.md)
 - [implementation roadmap](implementation-roadmap-v2.md)
 
 ## Goals
