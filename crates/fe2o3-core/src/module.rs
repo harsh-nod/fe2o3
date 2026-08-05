@@ -8,6 +8,7 @@ use std::sync::Arc;
 pub struct GpuModule {
     raw: fe2o3_hip_sys::hipModule_t,
     context: Arc<GpuContext>,
+    _image: Option<Box<[u8]>>,
 }
 
 unsafe impl Send for GpuModule {}
@@ -24,7 +25,21 @@ unsafe impl Send for GpuFunction {}
 unsafe impl Sync for GpuFunction {}
 
 impl GpuContext {
-    pub fn load_module_from_file(
+    /// Loads a HIP code object from a file without validating its provenance or contract.
+    ///
+    /// # Safety
+    ///
+    /// The code object is not authenticated and its ABI, target compatibility, and
+    /// semantics are not checked. The caller must trust all executable behavior in
+    /// the object, including initialization during loading and finalization during
+    /// unloading. `path` and the referenced file must remain available and
+    /// acceptable to HIP for the duration of this call. The caller may use only
+    /// functions whose target and ABI are compatible with this context, and must
+    /// uphold the existing unsafe launch contract for every launch.
+    ///
+    /// This is an explicit escape hatch. Validated loading will use a separate,
+    /// sealed API.
+    pub unsafe fn load_module_from_file_unchecked(
         self: &Arc<Self>,
         path: impl AsRef<Path>,
     ) -> Result<Arc<GpuModule>> {
@@ -35,11 +50,30 @@ impl GpuContext {
         Ok(Arc::new(GpuModule {
             raw,
             context: self.clone(),
+            _image: None,
         }))
     }
 
-    pub fn load_module_from_bytes(self: &Arc<Self>, image: &[u8]) -> Result<Arc<GpuModule>> {
+    /// Loads a HIP code object from memory without validating its provenance or contract.
+    ///
+    /// # Safety
+    ///
+    /// The code object is not authenticated and its ABI, target compatibility, and
+    /// semantics are not checked. The caller must trust all executable behavior in
+    /// the object, including initialization during loading and finalization during
+    /// unloading. `image` must be a self-contained HIP code object; its bytes are
+    /// retained until the module is unloaded. The caller may use only functions
+    /// whose target and ABI are compatible with this context, and must uphold the
+    /// existing unsafe launch contract for every launch.
+    ///
+    /// This is an explicit escape hatch. Validated loading will use a separate,
+    /// sealed API.
+    pub unsafe fn load_module_from_bytes_unchecked(
+        self: &Arc<Self>,
+        image: &[u8],
+    ) -> Result<Arc<GpuModule>> {
         self.bind_to_thread()?;
+        let image: Box<[u8]> = image.into();
         let mut raw = core::ptr::null_mut();
         check(unsafe {
             fe2o3_hip_sys::hipModuleLoadData(&mut raw, image.as_ptr().cast::<c_void>())
@@ -47,6 +81,7 @@ impl GpuContext {
         Ok(Arc::new(GpuModule {
             raw,
             context: self.clone(),
+            _image: Some(image),
         }))
     }
 }
@@ -66,8 +101,13 @@ impl GpuModule {
 
 impl Drop for GpuModule {
     fn drop(&mut self) {
-        let _ = self.context.bind_to_thread();
-        let _ = check(unsafe { fe2o3_hip_sys::hipModuleUnload(self.raw) });
+        let image = self._image.take();
+        let unloaded = self.context.bind_to_thread().is_ok()
+            && check(unsafe { fe2o3_hip_sys::hipModuleUnload(self.raw) }).is_ok();
+        if !unloaded {
+            // The native module may still refer to its image, so leak both together.
+            core::mem::forget(image);
+        }
     }
 }
 

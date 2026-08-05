@@ -24,7 +24,11 @@ fn main() -> fe2o3_core::Result<()> {
     let hsaco_dir = std::env::var_os("FE2O3_HSACO_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."));
-    let module = context.load_module_from_file(hsaco_dir.join("add_inplace.hsaco"))?;
+    // SAFETY: `add_inplace.hsaco` is compiler-generated for the `add_inplace`
+    // kernel here. The subsequent launch remains independently unsafe.
+    // This example requires that output to target this device and contain no init/fini kernels.
+    let module =
+        unsafe { context.load_module_from_file_unchecked(hsaco_dir.join("add_inplace.hsaco")) }?;
 
     // SAFETY: `add_inplace` expects an f32 followed by an N-element writable
     // slice; `values_dev` has that layout and lives through synchronization.
