@@ -10,6 +10,7 @@ The accepted grammar is deliberately narrow:
 - generic family processors and marketing aliases are rejected;
 - the only feature modifiers are `xnack+`, `xnack-`, `sramecc+`, and
   `sramecc-`;
+- each modifier must be configurable for the selected concrete processor;
 - each feature may occur at most once; and
 - formatting emits features in AMD's canonical `sramecc`, then `xnack` order.
 
@@ -50,7 +51,9 @@ two declarations only. A runtime loader must obtain its observed target from a
 trusted device query, inspect or load the actual code object, and keep any
 resulting loading authority in a separate unforgeable type.
 
-The processor allowlist follows canonical LLVM AMDGPU processor spellings and
-must be reviewed when new concrete processors are added. The crate does not
-accept generic processors because their family-provision semantics are outside
-this exact-processor compatibility model.
+The processor and feature-support tables follow
+`llvm/include/llvm/TargetParser/AMDGPUTargetParser.def` at LLVM revision
+`846473237377990d00b9c353f6a2c86116b52ea5` and must be reviewed when that
+source changes. The crate does not accept generic processors because their
+family-provision semantics are outside this exact-processor compatibility
+model.

@@ -130,6 +130,9 @@ impl FromStr for AmdTargetId {
 
         for component in components {
             let (feature, state) = parse_feature(component)?;
+            if !processor_supports_feature(processor, feature) {
+                return Err(ParseAmdTargetIdError::UnsupportedFeature(feature));
+            }
             let slot = match feature {
                 AmdTargetFeature::SramEcc => &mut target.sramecc,
                 AmdTargetFeature::Xnack => &mut target.xnack,
@@ -172,6 +175,8 @@ pub enum ParseAmdTargetIdError {
     InvalidFeature(AmdTargetFeature),
     /// The feature name was not recognized.
     UnknownFeature,
+    /// The concrete processor does not permit this target-ID modifier.
+    UnsupportedFeature(AmdTargetFeature),
     /// A feature occurred more than once, including with conflicting states.
     DuplicateFeature(AmdTargetFeature),
 }
@@ -198,6 +203,12 @@ impl fmt::Display for ParseAmdTargetIdError {
                 write!(formatter, "invalid state for AMD target feature {feature}")
             }
             Self::UnknownFeature => formatter.write_str("unknown AMD target feature"),
+            Self::UnsupportedFeature(feature) => {
+                write!(
+                    formatter,
+                    "AMD target feature {feature} is unsupported by this processor"
+                )
+            }
             Self::DuplicateFeature(feature) => {
                 write!(formatter, "duplicate AMD target feature {feature}")
             }
@@ -238,6 +249,34 @@ fn parse_feature(value: &str) -> Result<(AmdTargetFeature, FeatureState), ParseA
             AmdTargetFeature::Xnack,
         )),
         _ => Err(ParseAmdTargetIdError::UnknownFeature),
+    }
+}
+
+const fn processor_supports_feature(processor: &str, feature: AmdTargetFeature) -> bool {
+    match feature {
+        AmdTargetFeature::SramEcc => matches!(
+            processor.as_bytes(),
+            b"gfx906" | b"gfx908" | b"gfx90a" | b"gfx942" | b"gfx950" | b"gfx1250" | b"gfx1251"
+        ),
+        AmdTargetFeature::Xnack => matches!(
+            processor.as_bytes(),
+            b"gfx801"
+                | b"gfx810"
+                | b"gfx900"
+                | b"gfx902"
+                | b"gfx904"
+                | b"gfx906"
+                | b"gfx908"
+                | b"gfx909"
+                | b"gfx90a"
+                | b"gfx90c"
+                | b"gfx942"
+                | b"gfx950"
+                | b"gfx1010"
+                | b"gfx1011"
+                | b"gfx1012"
+                | b"gfx1013"
+        ),
     }
 }
 
@@ -412,6 +451,41 @@ mod tests {
     }
 
     #[test]
+    fn feature_modifier_support_matches_the_llvm_processor_matrix() {
+        for &processor in KNOWN_PROCESSORS {
+            for feature in [AmdTargetFeature::SramEcc, AmdTargetFeature::Xnack] {
+                for state in [FeatureState::Disabled, FeatureState::Enabled] {
+                    let input = std::format!("{processor}:{feature}{}", state.suffix());
+                    let parsed = AmdTargetId::parse(&input);
+                    if processor_supports_feature(processor, feature) {
+                        assert!(parsed.is_ok(), "expected supported target ID: {input}");
+                    } else {
+                        assert_eq!(
+                            parsed,
+                            Err(ParseAmdTargetIdError::UnsupportedFeature(feature)),
+                            "expected unsupported target ID: {input}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn fixed_xnack_processors_reject_xnack_modifiers() {
+        for processor in ["gfx1250", "gfx1251"] {
+            for suffix in ['-', '+'] {
+                assert_eq!(
+                    AmdTargetId::parse(&std::format!("{processor}:xnack{suffix}")),
+                    Err(ParseAmdTargetIdError::UnsupportedFeature(
+                        AmdTargetFeature::Xnack
+                    ))
+                );
+            }
+        }
+    }
+
+    #[test]
     fn rejects_duplicate_features_even_when_states_conflict() {
         for (input, feature) in [
             ("gfx942:xnack+:xnack+", AmdTargetFeature::Xnack),
@@ -475,6 +549,7 @@ mod tests {
             ParseAmdTargetIdError::MissingFeatureState(AmdTargetFeature::Xnack),
             ParseAmdTargetIdError::InvalidFeature(AmdTargetFeature::SramEcc),
             ParseAmdTargetIdError::UnknownFeature,
+            ParseAmdTargetIdError::UnsupportedFeature(AmdTargetFeature::Xnack),
             ParseAmdTargetIdError::DuplicateFeature(AmdTargetFeature::Xnack),
         ];
         for error in errors {
