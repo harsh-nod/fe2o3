@@ -5,9 +5,10 @@ use std::path::PathBuf;
 
 #[kernel]
 pub fn saxpy(alpha: f32, x: &[f32], y: &[f32], mut out: DisjointSlice<f32>) {
+    let i = thread::index_1d().get();
     let idx = thread::index_1d();
     if let Some(value) = out.get_mut(idx) {
-        *value = alpha * x[idx.get()] + y[idx.get()];
+        *value = alpha * x[i] + y[i];
     }
 }
 

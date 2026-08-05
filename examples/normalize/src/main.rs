@@ -5,9 +5,10 @@ use std::path::PathBuf;
 
 #[kernel]
 pub fn normalize(x: &[f32], mut out: DisjointSlice<f32>) {
+    let i = thread::index_1d().get();
     let idx = thread::index_1d();
     if let Some(value) = out.get_mut(idx) {
-        *value = (x[idx.get()] - 1.5) / 2.0;
+        *value = (x[i] - 1.5) / 2.0;
     }
 }
 

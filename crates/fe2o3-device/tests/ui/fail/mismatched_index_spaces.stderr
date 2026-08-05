@@ -1,0 +1,15 @@
+error[E0308]: mismatched types
+ --> tests/ui/fail/mismatched_index_spaces.rs:7:28
+  |
+7 |     let _ = output.get_mut(index);
+  |                    ------- ^^^^^ expected `ThreadIndex`, found `ThreadIndex<Index2D<16>>`
+  |                    |
+  |                    arguments to this method are incorrect
+  |
+  = note: expected struct `ThreadIndex<Index1D>`
+             found struct `ThreadIndex<Index2D<16>>`
+note: method defined here
+ --> src/lib.rs
+  |
+  |     pub fn get_mut(&mut self, index: ThreadIndex<IndexSpace>) -> Option<&mut T> {
+  |            ^^^^^^^

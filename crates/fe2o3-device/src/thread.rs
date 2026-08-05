@@ -1,36 +1,67 @@
-#[derive(Clone, Copy, Debug)]
+use core::fmt;
+use core::marker::PhantomData;
+
+/// Type-level index space for the logical one-dimensional launch index.
+#[derive(Debug)]
+pub enum Index1D {}
+
+/// Type-level index space for a row-major two-dimensional launch.
+///
+/// Encoding the row stride in the type prevents a witness derived for one
+/// layout from indexing a view declared for another layout.
+#[derive(Debug)]
+pub enum Index2D<const ROW_STRIDE: usize> {}
+
+/// A non-duplicable index witness for the current device invocation.
+///
+/// `IndexSpace` identifies the mapping from invocation coordinates to the
+/// flattened element index. The marker fields are zero-sized, so the device
+/// representation remains one `usize`.
 #[repr(transparent)]
 #[rustc_diagnostic_item = "fe2o3_device_thread_index"]
-pub struct ThreadIndex(usize);
+pub struct ThreadIndex<IndexSpace = Index1D> {
+    raw: usize,
+    _index_space: PhantomData<fn() -> IndexSpace>,
+    _not_send_sync: PhantomData<*mut ()>,
+}
 
-impl ThreadIndex {
+impl<IndexSpace> ThreadIndex<IndexSpace> {
     #[rustc_diagnostic_item = "fe2o3_device_thread_index_get"]
     pub fn get(self) -> usize {
-        self.0
+        self.raw
     }
 
     #[rustc_diagnostic_item = "fe2o3_device_thread_index_offset"]
     pub fn offset(self, offset: usize) -> usize {
-        self.0 + offset
+        self.raw + offset
     }
 
     #[rustc_diagnostic_item = "fe2o3_device_thread_index_offset_signed"]
     pub fn offset_signed(self, offset: isize) -> usize {
-        self.0.wrapping_add_signed(offset)
+        self.raw.wrapping_add_signed(offset)
     }
 
     #[rustc_diagnostic_item = "fe2o3_device_thread_index_stride"]
     pub fn stride(self, stride: usize) -> usize {
-        self.0.wrapping_mul(stride)
+        self.raw.wrapping_mul(stride)
     }
 
     #[rustc_diagnostic_item = "fe2o3_device_thread_index_stride_offset"]
     pub fn stride_offset(self, stride: usize, offset: isize) -> usize {
-        self.0.wrapping_mul(stride).wrapping_add_signed(offset)
+        self.raw.wrapping_mul(stride).wrapping_add_signed(offset)
     }
 
     pub fn in_bounds(self, len: usize) -> bool {
-        self.0 < len
+        self.raw < len
+    }
+}
+
+impl<IndexSpace> fmt::Debug for ThreadIndex<IndexSpace> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_tuple("ThreadIndex")
+            .field(&self.raw)
+            .finish()
     }
 }
 
@@ -56,15 +87,32 @@ pub fn launch_extent_1d() -> usize {
 #[inline(always)]
 #[rustc_diagnostic_item = "fe2o3_device_thread_index_1d"]
 pub fn index_1d() -> ThreadIndex {
-    ThreadIndex(global_id_1d())
+    ThreadIndex {
+        raw: global_id_1d(),
+        _index_space: PhantomData,
+        _not_send_sync: PhantomData,
+    }
 }
 
+/// Returns the current invocation's row-major index for a static row stride.
+///
+/// A zero row stride cannot describe an injective two-dimensional mapping, so
+/// it produces no witness.
 #[inline(always)]
-pub fn index_2d(row_stride: usize) -> Option<ThreadIndex> {
-    let row = (block_idx_y() * block_dim_y() + thread_idx_y()) as usize;
-    let col = (block_idx_x() * block_dim_x() + thread_idx_x()) as usize;
-    if col < row_stride {
-        Some(ThreadIndex(row * row_stride + col))
+pub fn index_2d<const ROW_STRIDE: usize>() -> Option<ThreadIndex<Index2D<ROW_STRIDE>>> {
+    let row = (block_idx_y() as usize)
+        .checked_mul(block_dim_y() as usize)?
+        .checked_add(thread_idx_y() as usize)?;
+    let col = (block_idx_x() as usize)
+        .checked_mul(block_dim_x() as usize)?
+        .checked_add(thread_idx_x() as usize)?;
+    if ROW_STRIDE != 0 && col < ROW_STRIDE {
+        let raw = row.checked_mul(ROW_STRIDE)?.checked_add(col)?;
+        Some(ThreadIndex {
+            raw,
+            _index_space: PhantomData,
+            _not_send_sync: PhantomData,
+        })
     } else {
         None
     }
@@ -123,4 +171,18 @@ pub fn block_dim_y() -> u32 {
 #[inline(never)]
 pub fn block_dim_z() -> u32 {
     unreachable!("block_dim_z must be lowered by the fe2o3 backend")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Index1D, Index2D, ThreadIndex};
+    use core::mem::{align_of, size_of};
+
+    #[test]
+    fn index_space_markers_do_not_change_the_witness_abi() {
+        assert_eq!(size_of::<ThreadIndex<Index1D>>(), size_of::<usize>());
+        assert_eq!(align_of::<ThreadIndex<Index1D>>(), align_of::<usize>());
+        assert_eq!(size_of::<ThreadIndex<Index2D<64>>>(), size_of::<usize>());
+        assert_eq!(align_of::<ThreadIndex<Index2D<64>>>(), align_of::<usize>());
+    }
 }

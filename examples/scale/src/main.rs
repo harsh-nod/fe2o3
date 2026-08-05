@@ -5,9 +5,10 @@ use std::path::PathBuf;
 
 #[kernel]
 pub fn scale(alpha: f32, x: &[f32], mut y: DisjointSlice<f32>) {
+    let i = thread::index_1d().get();
     let idx = thread::index_1d();
     if let Some(out) = y.get_mut(idx) {
-        *out = alpha * x[idx.get()];
+        *out = alpha * x[i];
     }
 }
 

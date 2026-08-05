@@ -8,8 +8,8 @@ const LAST: usize = N - 1;
 
 #[kernel]
 pub fn raw_const_minus(x: &[f32], mut out: DisjointSlice<f32>) {
+    let source = LAST - thread::index_1d().get();
     let idx = thread::index_1d();
-    let source = LAST - idx.get();
     if source < x.len() {
         if let Some(value) = out.get_mut(idx) {
             *value = x[source];

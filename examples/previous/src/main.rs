@@ -5,8 +5,8 @@ use std::path::PathBuf;
 
 #[kernel]
 pub fn previous(x: &[f32], mut out: DisjointSlice<f32>) {
+    let source = thread::index_1d().offset_signed(-1);
     let idx = thread::index_1d();
-    let source = idx.offset_signed(-1);
     if source < x.len() {
         if let Some(value) = out.get_mut(idx) {
             *value = x[source];
