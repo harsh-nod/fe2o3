@@ -245,7 +245,7 @@ fn parse(contents: &str) -> Result<Manifest, String> {
                 "line {line_number}: gpu_smoke requires rocm_compile"
             ));
         }
-        if rocm_compile != !entry_artifacts.is_empty() {
+        if rocm_compile == entry_artifacts.is_empty() {
             return Err(format!(
                 "line {line_number}: rocm_compile must have one or more artifacts, and CPU-only entries must use `-`"
             ));
