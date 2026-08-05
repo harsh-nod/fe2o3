@@ -123,7 +123,10 @@ fn kernel_roots<'tcx>(tcx: TyCtxt<'tcx>, cgus: &[CodegenUnit<'tcx>]) -> Vec<Inst
 }
 
 fn is_kernel_symbol(name: &str) -> bool {
-    name.contains(reserved_fe2o3_symbols::KERNEL_PREFIX)
+    name.rsplit("::")
+        .next()
+        .unwrap_or(name)
+        .starts_with(reserved_fe2o3_symbols::KERNEL_PREFIX)
 }
 
 fn kernel_export_name(name: &str) -> String {
@@ -409,4 +412,19 @@ fn sanitize_symbol_name(name: &str) -> String {
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_kernel_symbol;
+
+    #[test]
+    fn kernel_roots_require_the_prefix_on_the_final_path_segment() {
+        assert!(is_kernel_symbol("crate_name::fe2o3_kernel_vecadd"));
+        assert!(is_kernel_symbol("fe2o3_kernel_vecadd"));
+        assert!(!is_kernel_symbol(
+            "crate_name::__fe2o3_kernel_name_vecadd::core::f32::abs"
+        ));
+        assert!(!is_kernel_symbol("crate_name::helper_fe2o3_kernel_vecadd"));
+    }
 }

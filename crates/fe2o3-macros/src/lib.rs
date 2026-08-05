@@ -218,6 +218,7 @@ pub fn kernel(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let internal_ident = format_ident!("{KERNEL_PREFIX}{original_name}");
     let marker_ident = format_ident!("__fe2o3_kernel_name_{original_name}");
+    let marker_value = syn::LitStr::new(&original_name, original_ident.span());
     input.sig.ident = internal_ident;
 
     quote! {
@@ -228,10 +229,7 @@ pub fn kernel(attr: TokenStream, item: TokenStream) -> TokenStream {
 
         #[doc(hidden)]
         #[allow(non_upper_case_globals)]
-        pub const #marker_ident: &str = {
-            extern crate core as __fe2o3_kernel_sysroot_core;
-            __fe2o3_kernel_sysroot_core::stringify!(#original_ident)
-        };
+        pub const #marker_ident: &str = #marker_value;
     }
     .into()
 }
