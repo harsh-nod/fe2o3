@@ -10,6 +10,7 @@ mod decode;
 mod digest;
 mod encode;
 mod error;
+mod host_launch_abi;
 mod identities;
 mod manifest;
 mod proof;
@@ -37,6 +38,7 @@ pub use container_encode::{
 pub use digest::{DigestAlgorithm, DigestMismatch, PayloadDigest};
 pub use encode::{MANIFEST_MAGIC, MANIFEST_VERSION, MAX_MANIFEST_BYTES};
 pub use error::{DecodeError, ValidationError};
+pub use host_launch_abi::{HostLaunchAbi, HostLaunchAbiError};
 pub use identities::{
     BlockSize, Capability, CodeObjectFormat, CodeObjectIdentity, CompilerIdentity, DigestBytes,
     Dimensions, Endianness, IdentityText, LaunchContract, MAX_IDENTITY_TEXT_BYTES, MAX_NAME_BYTES,
