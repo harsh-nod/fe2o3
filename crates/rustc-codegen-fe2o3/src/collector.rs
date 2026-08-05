@@ -1,10 +1,13 @@
+use rustc_hir::ItemKind;
 use rustc_hir::def_id::{DefId, LOCAL_CRATE};
+use rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags;
 use rustc_middle::mir::mono::{CodegenUnit, MonoItem};
-use rustc_middle::mir::{Operand, TerminatorKind};
+use rustc_middle::mir::{AggregateKind, CastKind, Operand, RETURN_PLACE, Rvalue, TerminatorKind};
+use rustc_middle::ty::adjustment::PointerCoercion;
 use rustc_middle::ty::{
     EarlyBinder, Instance, InstanceKind, TyCtxt, TyKind, TypeVisitableExt, TypingEnv,
 };
-use std::collections::{HashSet, VecDeque};
+use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::fmt;
 
 #[derive(Clone, Debug)]
@@ -28,24 +31,19 @@ enum CollectDecision {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CollectError {
-    crate_name: String,
-    fn_path: String,
+    message: String,
 }
 
 impl fmt::Display for CollectError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "fe2o3 device code reached forbidden crate `{}` via `{}`; device-reachable functions must avoid `std`",
-            self.crate_name, self.fn_path
-        )
+        f.write_str(&self.message)
     }
 }
 
 impl std::error::Error for CollectError {}
 
-pub fn count_kernels_in_cgus<'tcx>(tcx: TyCtxt<'tcx>, cgus: &[CodegenUnit<'tcx>]) -> usize {
-    kernel_roots(tcx, cgus).len()
+pub fn count_kernels_in_cgus<'tcx>(tcx: TyCtxt<'tcx>, _cgus: &[CodegenUnit<'tcx>]) -> usize {
+    registration_candidates(tcx).len()
 }
 
 pub fn collect_device_functions<'tcx>(
@@ -55,9 +53,10 @@ pub fn collect_device_functions<'tcx>(
 ) -> Result<CollectionResult<'tcx>, CollectError> {
     let mut collector = DeviceCollector::new(tcx, verbose);
 
-    for instance in kernel_roots(tcx, cgus) {
+    for root in kernel_roots(tcx, cgus).map_err(CollectError::from)? {
+        let instance = root.target;
         let raw_name = tcx.def_path_str(instance.def_id());
-        let export_name = kernel_export_name(&raw_name);
+        let export_name = root.export_name;
         if verbose {
             eprintln!("[collector] root kernel: {raw_name} -> {export_name}");
         }
@@ -109,51 +108,520 @@ pub fn dump_device_functions<'tcx>(tcx: TyCtxt<'tcx>, functions: &[CollectedFunc
     eprintln!("========================================\n");
 }
 
-fn kernel_roots<'tcx>(tcx: TyCtxt<'tcx>, cgus: &[CodegenUnit<'tcx>]) -> Vec<Instance<'tcx>> {
-    let mut roots = Vec::new();
-    let mut seen = HashSet::new();
+#[derive(Clone, Debug)]
+struct RegistrationRecord<T> {
+    registration_path: String,
+    item_name: String,
+    magic: u64,
+    version: u16,
+    kind: u16,
+    logical_name: String,
+    export_name: String,
+    target_symbol: String,
+    target_identity: String,
+    target: T,
+}
+
+#[derive(Clone, Debug)]
+struct KernelRoot<T> {
+    target: T,
+    logical_name: String,
+    export_name: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct RegistrationError {
+    registration_path: String,
+    reason: String,
+}
+
+impl RegistrationError {
+    fn new(registration_path: impl Into<String>, reason: impl Into<String>) -> Self {
+        Self {
+            registration_path: registration_path.into(),
+            reason: reason.into(),
+        }
+    }
+}
+
+impl fmt::Display for RegistrationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "invalid fe2o3 kernel registration `{}`: {}",
+            self.registration_path, self.reason
+        )
+    }
+}
+
+impl From<RegistrationError> for CollectError {
+    fn from(error: RegistrationError) -> Self {
+        Self {
+            message: error.to_string(),
+        }
+    }
+}
+
+fn kernel_roots<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    cgus: &[CodegenUnit<'tcx>],
+) -> Result<Vec<KernelRoot<Instance<'tcx>>>, RegistrationError> {
+    let mut functions_by_symbol = BTreeMap::new();
 
     for cgu in cgus {
         for (item, _data) in cgu.items() {
             let MonoItem::Fn(instance) = item else {
                 continue;
             };
-
-            let name = tcx.def_path_str(instance.def_id());
-            if !is_kernel_symbol(&name) {
-                continue;
-            }
-            if name.contains("{closure") || name.contains("::closure") {
-                continue;
-            }
             if !is_fully_monomorphized(tcx, *instance) {
                 continue;
             }
 
             let symbol = tcx.symbol_name(*instance).name.to_string();
-            if seen.insert(symbol) {
-                roots.push(*instance);
+            functions_by_symbol
+                .entry(symbol)
+                .or_insert_with(Vec::new)
+                .push(*instance);
+        }
+    }
+    for instances in functions_by_symbol.values_mut() {
+        instances.sort_by_key(|instance| tcx.def_path_str(instance.def_id()));
+    }
+
+    let mut candidates = registration_candidates(tcx);
+    candidates.sort_by(|lhs, rhs| lhs.0.cmp(&rhs.0));
+
+    let mut records = Vec::with_capacity(candidates.len());
+    for (path, item_name, def_id, item) in candidates {
+        if !matches!(item.kind, ItemKind::Static(..)) {
+            return Err(RegistrationError::new(
+                path,
+                "the reserved registration name must identify a static item",
+            ));
+        }
+        if tcx.is_mutable_static(def_id.to_def_id()) {
+            return Err(RegistrationError::new(
+                path,
+                "registration statics must be immutable",
+            ));
+        }
+
+        let flags = tcx.codegen_fn_attrs(def_id).flags;
+        if !flags.intersects(CodegenFnAttrFlags::USED_COMPILER | CodegenFnAttrFlags::USED_LINKER) {
+            return Err(RegistrationError::new(
+                path,
+                "registration statics must carry #[used]",
+            ));
+        }
+
+        records.push(decode_registration_static(
+            tcx,
+            def_id,
+            path,
+            item_name,
+            &functions_by_symbol,
+        )?);
+    }
+
+    validate_registration_records(records)
+}
+
+fn registration_candidates<'tcx>(
+    tcx: TyCtxt<'tcx>,
+) -> Vec<(
+    String,
+    String,
+    rustc_hir::def_id::LocalDefId,
+    &'tcx rustc_hir::Item<'tcx>,
+)> {
+    tcx.hir_free_items()
+        .filter_map(|item_id| {
+            let item = tcx.hir_item(item_id);
+            let def_id = item.owner_id.def_id;
+            let path = tcx.def_path_str(def_id.to_def_id());
+            let item_name = final_path_segment(&path).to_string();
+            item_name
+                .starts_with(reserved_fe2o3_symbols::KERNEL_REGISTRATION_PREFIX)
+                .then_some((path, item_name, def_id, item))
+        })
+        .collect()
+}
+
+fn decode_registration_static<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    def_id: rustc_hir::def_id::LocalDefId,
+    registration_path: String,
+    item_name: String,
+    functions_by_symbol: &BTreeMap<String, Vec<Instance<'tcx>>>,
+) -> Result<RegistrationRecord<Instance<'tcx>>, RegistrationError> {
+    let registration_ty = tcx.type_of(def_id).instantiate_identity();
+    let TyKind::Tuple(fields) = registration_ty.kind() else {
+        return Err(RegistrationError::new(
+            registration_path,
+            "V1 registration must use the exact tuple type",
+        ));
+    };
+
+    if fields.len() != reserved_fe2o3_symbols::KERNEL_REGISTRATION_V1_FIELD_COUNT
+        || fields[0] != tcx.types.u64
+        || fields[1] != tcx.types.u16
+        || fields[2] != tcx.types.u16
+        || !is_shared_str(fields[3])
+        || !is_shared_str(fields[4])
+        || !matches!(fields[5].kind(), TyKind::FnPtr(..))
+    {
+        return Err(RegistrationError::new(
+            registration_path,
+            "V1 registration type must be `(u64, u16, u16, &str, &str, fn pointer)`",
+        ));
+    }
+
+    let body = tcx.mir_for_ctfe(def_id);
+    let mut aggregate = None;
+    for block in body.basic_blocks.iter() {
+        for statement in &block.statements {
+            let Some((place, Rvalue::Aggregate(kind, fields))) = statement.kind.as_assign() else {
+                continue;
+            };
+            if place.as_local() != Some(RETURN_PLACE) || !matches!(**kind, AggregateKind::Tuple) {
+                continue;
+            }
+            if aggregate.replace(fields).is_some() {
+                return Err(RegistrationError::new(
+                    registration_path,
+                    "V1 registration initializer must contain exactly one tuple value",
+                ));
+            }
+        }
+    }
+    let fields = aggregate.ok_or_else(|| {
+        RegistrationError::new(
+            registration_path.clone(),
+            "V1 registration initializer does not contain the required tuple value",
+        )
+    })?;
+    if fields.len() != reserved_fe2o3_symbols::KERNEL_REGISTRATION_V1_FIELD_COUNT {
+        return Err(RegistrationError::new(
+            registration_path,
+            "V1 registration initializer has the wrong field count",
+        ));
+    }
+    let fields = fields.iter().collect::<Vec<_>>();
+
+    let magic = registration_integer(tcx, fields[0], tcx.types.u64, "magic", &registration_path)?;
+    let version =
+        registration_integer(tcx, fields[1], tcx.types.u16, "version", &registration_path)?;
+    let kind = registration_integer(tcx, fields[2], tcx.types.u16, "kind", &registration_path)?;
+    let logical_name = registration_string(tcx, fields[3], "logical name", &registration_path)?;
+    let export_name = registration_string(tcx, fields[4], "export name", &registration_path)?;
+    let target = registration_target(tcx, body, fields[5], &registration_path)?;
+    let target_symbol = tcx.symbol_name(target).name.to_string();
+    let target_identity = tcx.def_path_str(target.def_id());
+    let Some(cgu_targets) = functions_by_symbol.get(&target_symbol) else {
+        return Err(RegistrationError::new(
+            registration_path,
+            format!(
+                "registered target `{target_symbol}` was not monomorphized into a codegen unit"
+            ),
+        ));
+    };
+    if cgu_targets.len() != 1 {
+        let paths = cgu_targets
+            .iter()
+            .map(|instance| tcx.def_path_str(instance.def_id()))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(RegistrationError::new(
+            registration_path,
+            format!("registered target symbol `{target_symbol}` is ambiguous across: {paths}"),
+        ));
+    }
+    if cgu_targets[0] != target {
+        return Err(RegistrationError::new(
+            registration_path,
+            format!("registered target `{target_symbol}` resolved inconsistently"),
+        ));
+    }
+    let magic = u64::try_from(magic)
+        .map_err(|_| RegistrationError::new(&registration_path, "magic does not fit u64"))?;
+    let version = u16::try_from(version)
+        .map_err(|_| RegistrationError::new(&registration_path, "version does not fit u16"))?;
+    let kind = u16::try_from(kind)
+        .map_err(|_| RegistrationError::new(&registration_path, "kind does not fit u16"))?;
+
+    Ok(RegistrationRecord {
+        registration_path,
+        item_name,
+        magic,
+        version,
+        kind,
+        logical_name,
+        export_name,
+        target_symbol,
+        target_identity,
+        target,
+    })
+}
+
+fn registration_integer<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    operand: &Operand<'tcx>,
+    expected_ty: rustc_middle::ty::Ty<'tcx>,
+    field: &str,
+    registration_path: &str,
+) -> Result<u128, RegistrationError> {
+    let Operand::Constant(constant) = operand else {
+        return Err(RegistrationError::new(
+            registration_path,
+            format!("V1 {field} field must be a constant"),
+        ));
+    };
+    if constant.const_.ty() != expected_ty {
+        return Err(RegistrationError::new(
+            registration_path,
+            format!("V1 {field} field has the wrong type"),
+        ));
+    }
+    constant
+        .const_
+        .try_eval_bits(tcx, TypingEnv::fully_monomorphized())
+        .ok_or_else(|| {
+            RegistrationError::new(
+                registration_path,
+                format!("V1 {field} field could not be evaluated"),
+            )
+        })
+}
+
+fn registration_string<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    operand: &Operand<'tcx>,
+    field: &str,
+    registration_path: &str,
+) -> Result<String, RegistrationError> {
+    let Operand::Constant(constant) = operand else {
+        return Err(RegistrationError::new(
+            registration_path,
+            format!("V1 {field} field must be a string constant"),
+        ));
+    };
+    if !is_shared_str(constant.const_.ty()) {
+        return Err(RegistrationError::new(
+            registration_path,
+            format!("V1 {field} field has the wrong type"),
+        ));
+    }
+    let value = constant
+        .const_
+        .eval(tcx, TypingEnv::fully_monomorphized(), constant.span)
+        .map_err(|_| {
+            RegistrationError::new(
+                registration_path,
+                format!("V1 {field} field could not be evaluated"),
+            )
+        })?;
+    let bytes = value
+        .try_get_slice_bytes_for_diagnostics(tcx)
+        .ok_or_else(|| {
+            RegistrationError::new(
+                registration_path,
+                format!("V1 {field} field did not evaluate to string bytes"),
+            )
+        })?;
+    std::str::from_utf8(bytes).map(str::to_owned).map_err(|_| {
+        RegistrationError::new(registration_path, format!("V1 {field} field is not UTF-8"))
+    })
+}
+
+fn registration_target<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    body: &rustc_middle::mir::Body<'tcx>,
+    operand: &Operand<'tcx>,
+    registration_path: &str,
+) -> Result<Instance<'tcx>, RegistrationError> {
+    let place = match operand {
+        Operand::Copy(place) | Operand::Move(place) => place,
+        Operand::Constant(_) | Operand::RuntimeChecks(_) => {
+            return Err(RegistrationError::new(
+                registration_path,
+                "V1 target field must directly use a reified function pointer",
+            ));
+        }
+    };
+    let Some(target_local) = place.as_local() else {
+        return Err(RegistrationError::new(
+            registration_path,
+            "V1 target field must use an unprojected function-pointer local",
+        ));
+    };
+
+    let mut target = None;
+    for block in body.basic_blocks.iter() {
+        for statement in &block.statements {
+            let Some((place, Rvalue::Cast(cast, source, _))) = statement.kind.as_assign() else {
+                continue;
+            };
+            if place.as_local() != Some(target_local)
+                || !matches!(
+                    cast,
+                    CastKind::PointerCoercion(PointerCoercion::ReifyFnPointer(_), _)
+                )
+            {
+                continue;
+            }
+            let Operand::Constant(source) = source else {
+                return Err(RegistrationError::new(
+                    registration_path,
+                    "V1 target coercion must directly name a function item",
+                ));
+            };
+            let TyKind::FnDef(def_id, args) = source.const_.ty().kind() else {
+                return Err(RegistrationError::new(
+                    registration_path,
+                    "V1 target coercion does not reference a function item",
+                ));
+            };
+            let resolved =
+                Instance::try_resolve(tcx, TypingEnv::fully_monomorphized(), *def_id, args)
+                    .ok()
+                    .flatten()
+                    .ok_or_else(|| {
+                        RegistrationError::new(
+                            registration_path,
+                            "V1 target function could not be resolved",
+                        )
+                    })?;
+            if target.replace(resolved).is_some() {
+                return Err(RegistrationError::new(
+                    registration_path,
+                    "V1 target local has multiple function definitions",
+                ));
             }
         }
     }
 
-    roots.sort_by_key(|instance| tcx.def_path_str(instance.def_id()));
-    roots
+    target.ok_or_else(|| {
+        RegistrationError::new(
+            registration_path,
+            "V1 target function association is missing",
+        )
+    })
 }
 
-fn is_kernel_symbol(name: &str) -> bool {
-    name.rsplit("::")
-        .next()
-        .unwrap_or(name)
-        .starts_with(reserved_fe2o3_symbols::KERNEL_PREFIX)
+fn is_shared_str(ty: rustc_middle::ty::Ty<'_>) -> bool {
+    matches!(ty.kind(), TyKind::Ref(_, inner, mutability) if inner.is_str() && !mutability.is_mut())
 }
 
-fn kernel_export_name(name: &str) -> String {
-    let local = name.rsplit("::").next().unwrap_or(name);
-    local
-        .strip_prefix(reserved_fe2o3_symbols::KERNEL_PREFIX)
-        .unwrap_or(local)
-        .to_string()
+fn validate_registration_records<T: Copy>(
+    mut records: Vec<RegistrationRecord<T>>,
+) -> Result<Vec<KernelRoot<T>>, RegistrationError> {
+    records.sort_by(|lhs, rhs| lhs.registration_path.cmp(&rhs.registration_path));
+
+    let mut logical_names = BTreeMap::new();
+    let mut export_names = BTreeMap::new();
+    let mut target_identities = BTreeMap::new();
+    let mut roots = Vec::with_capacity(records.len());
+
+    for record in records {
+        let error = |reason| RegistrationError::new(record.registration_path.clone(), reason);
+        if record.magic != reserved_fe2o3_symbols::KERNEL_REGISTRATION_MAGIC {
+            return Err(error(format!(
+                "magic {:#018x} does not match V1 magic {:#018x}",
+                record.magic,
+                reserved_fe2o3_symbols::KERNEL_REGISTRATION_MAGIC
+            )));
+        }
+        if record.version != reserved_fe2o3_symbols::KERNEL_REGISTRATION_VERSION_V1 {
+            return Err(error(format!(
+                "unknown registration version {}",
+                record.version
+            )));
+        }
+        if record.kind != reserved_fe2o3_symbols::KERNEL_REGISTRATION_KIND_KERNEL {
+            return Err(error(format!("unknown registration kind {}", record.kind)));
+        }
+        if record.logical_name.is_empty() {
+            return Err(error("logical name must not be empty".to_string()));
+        }
+        if record.export_name.is_empty() {
+            return Err(error("export name must not be empty".to_string()));
+        }
+
+        let expected_item_name = format!(
+            "{}{}",
+            reserved_fe2o3_symbols::KERNEL_REGISTRATION_PREFIX,
+            record.logical_name
+        );
+        if record.item_name != expected_item_name {
+            return Err(error(format!(
+                "item name `{}` is inconsistent with logical name `{}`",
+                record.item_name, record.logical_name
+            )));
+        }
+
+        let expected_target_symbol = format!(
+            "{}{}",
+            reserved_fe2o3_symbols::KERNEL_PREFIX,
+            record.export_name
+        );
+        if record.target_symbol != expected_target_symbol {
+            return Err(error(format!(
+                "target symbol `{}` is inconsistent with export name `{}`",
+                record.target_symbol, record.export_name
+            )));
+        }
+
+        reject_duplicate(
+            &mut logical_names,
+            &record.logical_name,
+            &record.registration_path,
+            "logical name",
+        )?;
+        reject_duplicate(
+            &mut export_names,
+            &record.export_name,
+            &record.registration_path,
+            "export name",
+        )?;
+        reject_duplicate(
+            &mut target_identities,
+            &record.target_identity,
+            &record.registration_path,
+            "target identity",
+        )?;
+
+        roots.push(KernelRoot {
+            target: record.target,
+            logical_name: record.logical_name,
+            export_name: record.export_name,
+        });
+    }
+
+    roots.sort_by(|lhs, rhs| {
+        lhs.logical_name
+            .cmp(&rhs.logical_name)
+            .then_with(|| lhs.export_name.cmp(&rhs.export_name))
+    });
+    Ok(roots)
+}
+
+fn reject_duplicate(
+    seen: &mut BTreeMap<String, String>,
+    value: &str,
+    registration_path: &str,
+    field: &str,
+) -> Result<(), RegistrationError> {
+    if let Some(previous) = seen.insert(value.to_string(), registration_path.to_string()) {
+        return Err(RegistrationError::new(
+            registration_path,
+            format!("duplicate {field} `{value}`; first registered by `{previous}`"),
+        ));
+    }
+    Ok(())
+}
+
+fn final_path_segment(path: &str) -> &str {
+    path.rsplit("::").next().unwrap_or(path)
 }
 
 fn is_fully_monomorphized<'tcx>(tcx: TyCtxt<'tcx>, instance: Instance<'tcx>) -> bool {
@@ -256,8 +724,9 @@ impl<'tcx> DeviceCollector<'tcx> {
                 fn_path,
             } => {
                 return Err(CollectError {
-                    crate_name,
-                    fn_path,
+                    message: format!(
+                        "fe2o3 device code reached forbidden crate `{crate_name}` via `{fn_path}`; device-reachable functions must avoid `std`"
+                    ),
                 });
             }
         }
@@ -440,15 +909,192 @@ fn sanitize_symbol_name(name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::is_kernel_symbol;
+    use super::{RegistrationRecord, validate_registration_records};
+    use reserved_fe2o3_symbols::{
+        KERNEL_PREFIX, KERNEL_REGISTRATION_KIND_KERNEL, KERNEL_REGISTRATION_MAGIC,
+        KERNEL_REGISTRATION_PREFIX, KERNEL_REGISTRATION_VERSION_V1,
+    };
+
+    fn registration(
+        path: &str,
+        logical_name: &str,
+        export_name: &str,
+        target: u8,
+    ) -> RegistrationRecord<u8> {
+        RegistrationRecord {
+            registration_path: path.to_string(),
+            item_name: format!("{KERNEL_REGISTRATION_PREFIX}{logical_name}"),
+            magic: KERNEL_REGISTRATION_MAGIC,
+            version: KERNEL_REGISTRATION_VERSION_V1,
+            kind: KERNEL_REGISTRATION_KIND_KERNEL,
+            logical_name: logical_name.to_string(),
+            export_name: export_name.to_string(),
+            target_symbol: format!("{KERNEL_PREFIX}{export_name}"),
+            target_identity: format!("target-{target}"),
+            target,
+        }
+    }
 
     #[test]
-    fn kernel_roots_require_the_prefix_on_the_final_path_segment() {
-        assert!(is_kernel_symbol("crate_name::fe2o3_kernel_vecadd"));
-        assert!(is_kernel_symbol("fe2o3_kernel_vecadd"));
-        assert!(!is_kernel_symbol(
-            "crate_name::__fe2o3_kernel_name_vecadd::core::f32::abs"
-        ));
-        assert!(!is_kernel_symbol("crate_name::helper_fe2o3_kernel_vecadd"));
+    fn genuine_v1_registration_becomes_a_kernel_root() {
+        let roots = validate_registration_records(vec![registration(
+            "crate::__fe2o3_kernel_registration_vecadd",
+            "vecadd",
+            "vecadd",
+            7,
+        )])
+        .unwrap();
+
+        assert_eq!(roots.len(), 1);
+        assert_eq!(roots[0].target, 7);
+        assert_eq!(roots[0].logical_name, "vecadd");
+        assert_eq!(roots[0].export_name, "vecadd");
+    }
+
+    #[test]
+    fn kernel_prefix_spoof_without_registration_is_not_a_root() {
+        let roots = validate_registration_records::<u8>(Vec::new()).unwrap();
+        assert!(roots.is_empty());
+    }
+
+    #[test]
+    fn malformed_magic_and_unknown_version_or_kind_fail_closed() {
+        let base = registration("crate::__fe2o3_kernel_registration_bad", "bad", "bad", 1);
+
+        let mut malformed = base.clone();
+        malformed.magic ^= 1;
+        assert!(
+            validate_registration_records(vec![malformed])
+                .unwrap_err()
+                .reason
+                .contains("does not match V1 magic")
+        );
+
+        let mut unknown_version = base.clone();
+        unknown_version.version = KERNEL_REGISTRATION_VERSION_V1 + 1;
+        assert!(
+            validate_registration_records(vec![unknown_version])
+                .unwrap_err()
+                .reason
+                .contains("unknown registration version")
+        );
+
+        let mut unknown_kind = base;
+        unknown_kind.kind = KERNEL_REGISTRATION_KIND_KERNEL + 1;
+        assert!(
+            validate_registration_records(vec![unknown_kind])
+                .unwrap_err()
+                .reason
+                .contains("unknown registration kind")
+        );
+    }
+
+    #[test]
+    fn duplicate_logical_and_export_names_fail_closed() {
+        let logical_error = validate_registration_records(vec![
+            registration(
+                "crate::a::__fe2o3_kernel_registration_same",
+                "same",
+                "alpha",
+                1,
+            ),
+            registration(
+                "crate::b::__fe2o3_kernel_registration_same",
+                "same",
+                "beta",
+                2,
+            ),
+        ])
+        .unwrap_err();
+        assert!(
+            logical_error
+                .reason
+                .contains("duplicate logical name `same`")
+        );
+
+        let export_error = validate_registration_records(vec![
+            registration(
+                "crate::__fe2o3_kernel_registration_alpha",
+                "alpha",
+                "same",
+                1,
+            ),
+            registration("crate::__fe2o3_kernel_registration_beta", "beta", "same", 2),
+        ])
+        .unwrap_err();
+        assert!(export_error.reason.contains("duplicate export name `same`"));
+    }
+
+    #[test]
+    fn duplicate_target_identities_fail_closed() {
+        let mut alpha = registration(
+            "crate::__fe2o3_kernel_registration_alpha",
+            "alpha",
+            "alpha",
+            1,
+        );
+        let mut beta = registration("crate::__fe2o3_kernel_registration_beta", "beta", "beta", 2);
+        alpha.target_identity = "same-target".to_string();
+        beta.target_identity = "same-target".to_string();
+
+        let error = validate_registration_records(vec![alpha, beta]).unwrap_err();
+        assert!(
+            error
+                .reason
+                .contains("duplicate target identity `same-target`")
+        );
+    }
+
+    #[test]
+    fn inconsistent_item_or_target_associations_fail_closed() {
+        let mut item = registration(
+            "crate::__fe2o3_kernel_registration_alpha",
+            "alpha",
+            "alpha",
+            1,
+        );
+        item.item_name = format!("{KERNEL_REGISTRATION_PREFIX}beta");
+        assert!(
+            validate_registration_records(vec![item])
+                .unwrap_err()
+                .reason
+                .contains("inconsistent with logical name")
+        );
+
+        let mut target = registration(
+            "crate::__fe2o3_kernel_registration_alpha",
+            "alpha",
+            "alpha",
+            1,
+        );
+        target.target_symbol = format!("{KERNEL_PREFIX}beta");
+        assert!(
+            validate_registration_records(vec![target])
+                .unwrap_err()
+                .reason
+                .contains("inconsistent with export name")
+        );
+    }
+
+    #[test]
+    fn multiple_kernels_are_sorted_deterministically() {
+        let roots = validate_registration_records(vec![
+            registration("crate::__fe2o3_kernel_registration_zeta", "zeta", "zeta", 2),
+            registration(
+                "crate::__fe2o3_kernel_registration_alpha",
+                "alpha",
+                "alpha",
+                1,
+            ),
+        ])
+        .unwrap();
+
+        assert_eq!(
+            roots
+                .iter()
+                .map(|root| (root.logical_name.as_str(), root.target))
+                .collect::<Vec<_>>(),
+            vec![("alpha", 1), ("zeta", 2)]
+        );
     }
 }

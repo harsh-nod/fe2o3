@@ -5,6 +5,14 @@ edition.workspace = true
 license.workspace = true
 publish = false
 
+[features]
+prefix-spoof = []
+malformed-registration = []
+unknown-registration-version = []
+duplicate-logical-name = []
+duplicate-export-name = []
+multi-kernel = []
+
 [dependencies]
 device-api = { package = "fe2o3-device", path = "../../../../fe2o3-device" }
 fe2o3-macros = { path = "../../../../fe2o3-macros" }

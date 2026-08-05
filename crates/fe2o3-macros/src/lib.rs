@@ -1,7 +1,10 @@
 use proc_macro::TokenStream;
 use proc_macro_crate::{FoundCrate, crate_name};
 use quote::{format_ident, quote};
-use reserved_fe2o3_symbols::{KERNEL_PREFIX, RESERVED_ROOT};
+use reserved_fe2o3_symbols::{
+    KERNEL_PREFIX, KERNEL_REGISTRATION_KIND_KERNEL, KERNEL_REGISTRATION_MAGIC,
+    KERNEL_REGISTRATION_PREFIX, KERNEL_REGISTRATION_VERSION_V1, RESERVED_ROOT,
+};
 use syn::{Data, DeriveInput, GenericParam, ItemFn, parse_macro_input};
 
 #[proc_macro_derive(DeviceCopy)]
@@ -188,17 +191,22 @@ pub fn kernel(attr: TokenStream, item: TokenStream) -> TokenStream {
         .into();
     }
 
-    let mut input = parse_macro_input!(item as ItemFn);
+    let input = parse_macro_input!(item as ItemFn);
+
+    expand_kernel(input)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+fn expand_kernel(mut input: ItemFn) -> syn::Result<proc_macro2::TokenStream> {
     let original_ident = input.sig.ident.clone();
     let original_name = original_ident.to_string();
 
     if original_name.starts_with(RESERVED_ROOT) {
-        return syn::Error::new_spanned(
+        return Err(syn::Error::new_spanned(
             original_ident,
             format!("function names starting with `{RESERVED_ROOT}` are reserved by fe2o3"),
-        )
-        .to_compile_error()
-        .into();
+        ));
     }
 
     if input
@@ -208,20 +216,32 @@ pub fn kernel(attr: TokenStream, item: TokenStream) -> TokenStream {
         .iter()
         .any(|param| matches!(param, GenericParam::Type(_)))
     {
-        return syn::Error::new_spanned(
+        return Err(syn::Error::new_spanned(
             input.sig.ident,
             "generic kernels are not implemented in the fe2o3 MVP",
-        )
-        .to_compile_error()
-        .into();
+        ));
     }
 
     let internal_ident = format_ident!("{KERNEL_PREFIX}{original_name}");
     let marker_ident = format_ident!("__fe2o3_kernel_name_{original_name}");
+    let registration_ident = format_ident!("{KERNEL_REGISTRATION_PREFIX}{original_name}");
     let marker_value = syn::LitStr::new(&original_name, original_ident.span());
-    input.sig.ident = internal_ident;
+    let export_value = syn::LitStr::new(&original_name, original_ident.span());
+    let argument_types = input
+        .sig
+        .inputs
+        .iter()
+        .map(|argument| match argument {
+            syn::FnArg::Typed(argument) => (*argument.ty).clone(),
+            syn::FnArg::Receiver(_) => unreachable!("free function unexpectedly had a receiver"),
+        })
+        .collect::<Vec<_>>();
+    let safety = input.sig.unsafety;
+    let abi = input.sig.abi.clone();
+    let output = input.sig.output.clone();
+    input.sig.ident = internal_ident.clone();
 
-    quote! {
+    Ok(quote! {
         #[doc(hidden)]
         #[allow(non_snake_case)]
         #[unsafe(no_mangle)]
@@ -230,13 +250,31 @@ pub fn kernel(attr: TokenStream, item: TokenStream) -> TokenStream {
         #[doc(hidden)]
         #[allow(non_upper_case_globals)]
         pub const #marker_ident: &str = #marker_value;
-    }
-    .into()
+
+        #[doc(hidden)]
+        #[allow(non_upper_case_globals)]
+        #[used]
+        static #registration_ident: (
+            u64,
+            u16,
+            u16,
+            &'static str,
+            &'static str,
+            #safety #abi fn(#(#argument_types),*) #output,
+        ) = (
+            #KERNEL_REGISTRATION_MAGIC,
+            #KERNEL_REGISTRATION_VERSION_V1,
+            #KERNEL_REGISTRATION_KIND_KERNEL,
+            #marker_value,
+            #export_value,
+            #internal_ident,
+        );
+    })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{core_import_for, expand_device_copy_with_core_import};
+    use super::{core_import_for, expand_device_copy_with_core_import, expand_kernel};
     use proc_macro_crate::FoundCrate;
     use syn::parse_quote;
 
@@ -292,5 +330,24 @@ mod tests {
             core_import_for(FoundCrate::Itself).to_string(),
             "extern crate self as __fe2o3_device_copy_core ;"
         );
+    }
+
+    #[test]
+    fn kernel_emits_v1_registration_directly_associated_with_export() {
+        let input = parse_quote! {
+            pub fn saxpy(alpha: f32, input: &[f32]) -> f32 {
+                alpha + input[0]
+            }
+        };
+
+        let expansion = expand_kernel(input).unwrap().to_string();
+
+        assert!(expansion.contains("fn fe2o3_kernel_saxpy"));
+        assert!(expansion.contains("unsafe (no_mangle)"));
+        assert!(expansion.contains("static __fe2o3_kernel_registration_saxpy"));
+        assert!(expansion.contains("# [used]"));
+        assert!(expansion.contains("5643655966792762694u64"));
+        assert!(expansion.contains("1u16 , 1u16"));
+        assert!(expansion.contains("\"saxpy\" , \"saxpy\" , fe2o3_kernel_saxpy"));
     }
 }

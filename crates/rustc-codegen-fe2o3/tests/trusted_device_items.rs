@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 const GENUINE_CASES: &[(&str, &str)] = &[
     ("fe2o3-vecadd", "vecadd"),
@@ -34,6 +35,29 @@ const REJECTED_CASES: &[(&str, &str, &str)] = &[
     ),
 ];
 
+const REGISTRATION_REJECTED_CASES: &[(&str, &str)] = &[
+    ("malformed-registration", "does not match V1 magic"),
+    (
+        "unknown-registration-version",
+        "unknown registration version 2",
+    ),
+    (
+        "duplicate-logical-name",
+        "duplicate logical name `duplicate_logical`",
+    ),
+    (
+        "duplicate-export-name",
+        "duplicate export name `duplicate_export`",
+    ),
+];
+
+fn backend_test_lock() -> MutexGuard<'static, ()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("backend test lock")
+}
+
 fn workspace() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
@@ -66,6 +90,7 @@ fn backend_build_with_args(workspace: &Path, package: &str, args: &[&str]) -> Ou
 #[test]
 #[ignore = "requires the configured ROCm LLVM toolchain"]
 fn genuine_markers_emit_and_local_external_spoofs_fail_closed() {
+    let _lock = backend_test_lock();
     let workspace = workspace();
     for &(package, kernel) in GENUINE_CASES {
         let accepted = backend_build(&workspace, package);
@@ -113,6 +138,7 @@ fn genuine_markers_emit_and_local_external_spoofs_fail_closed() {
 #[test]
 #[ignore = "requires the configured ROCm LLVM toolchain"]
 fn rejected_lookalikes_remove_preseeded_artifacts_atomically() {
+    let _lock = backend_test_lock();
     let workspace = workspace();
     let artifact_dir = workspace.join("target/fe2o3");
     std::fs::create_dir_all(&artifact_dir).expect("create artifact directory");
@@ -139,6 +165,93 @@ fn rejected_lookalikes_remove_preseeded_artifacts_atomically() {
             assert!(
                 !artifact.exists(),
                 "rejected lookalike left stale artifact {}",
+                artifact.display()
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires the configured ROCm LLVM toolchain"]
+fn registration_contract_accepts_genuine_metadata_and_rejects_spoofs_and_duplicates() {
+    let _lock = backend_test_lock();
+    let workspace = workspace();
+    let package = "fe2o3-trusted-item-renamed-genuine";
+
+    let prefix_spoof =
+        backend_build_with_args(&workspace, package, &["--features", "prefix-spoof"]);
+    let stderr = String::from_utf8_lossy(&prefix_spoof.stderr);
+    assert!(
+        prefix_spoof.status.success(),
+        "unregistered prefix spoof should compile as ordinary host code:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("emitted prefix_spoof"),
+        "unregistered prefix spoof unexpectedly reached AMDGPU emission:\n{stderr}"
+    );
+
+    for &(feature, expected) in REGISTRATION_REJECTED_CASES {
+        let rejected = backend_build_with_args(&workspace, package, &["--features", feature]);
+        let stderr = String::from_utf8_lossy(&rejected.stderr);
+        assert!(
+            !rejected.status.success(),
+            "registration case `{feature}` unexpectedly compiled"
+        );
+        assert!(
+            stderr.contains(expected),
+            "registration case `{feature}` missed `{expected}`:\n{stderr}"
+        );
+    }
+
+    let ordered = backend_build_with_args(&workspace, package, &["--features", "multi-kernel"]);
+    let stderr = String::from_utf8_lossy(&ordered.stderr);
+    assert!(
+        ordered.status.success(),
+        "multi-kernel registration build failed:\n{stderr}"
+    );
+    let alpha = stderr.find("emitted alpha").expect("alpha emission");
+    let zeta = stderr.find("emitted zeta").expect("zeta emission");
+    assert!(
+        alpha < zeta,
+        "registered kernels were not emitted in deterministic order:\n{stderr}"
+    );
+}
+
+#[test]
+#[ignore = "requires the configured ROCm LLVM toolchain"]
+fn malformed_registrations_invalidate_preseeded_artifacts_atomically() {
+    let _lock = backend_test_lock();
+    let workspace = workspace();
+    let artifact_dir = workspace.join("target/fe2o3");
+    std::fs::create_dir_all(&artifact_dir).expect("create artifact directory");
+
+    for &(feature, expected) in &REGISTRATION_REJECTED_CASES[..2] {
+        let kernel = feature.replace('-', "_");
+        let artifacts = ["ll", "o", "hsaco"]
+            .map(|extension| artifact_dir.join(format!("{kernel}.{extension}")));
+        for artifact in &artifacts {
+            std::fs::write(artifact, b"preseeded stale artifact")
+                .unwrap_or_else(|error| panic!("preseed {}: {error}", artifact.display()));
+        }
+
+        let rejected = backend_build_with_args(
+            &workspace,
+            "fe2o3-trusted-item-renamed-genuine",
+            &["--features", feature],
+        );
+        let stderr = String::from_utf8_lossy(&rejected.stderr);
+        assert!(
+            !rejected.status.success(),
+            "malformed registration `{feature}` unexpectedly compiled"
+        );
+        assert!(
+            stderr.contains(expected),
+            "malformed registration `{feature}` missed `{expected}`:\n{stderr}"
+        );
+        for artifact in artifacts {
+            assert!(
+                !artifact.exists(),
+                "malformed registration left stale artifact {}",
                 artifact.display()
             );
         }
