@@ -301,6 +301,7 @@ version = "0.1.0"
 dependencies = [
  "dialect-amdgcn",
  "dialect-mir",
+ "fe2o3-kernel-ir",
  "reserved-fe2o3-symbols",
 ]
 

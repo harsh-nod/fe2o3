@@ -11,6 +11,8 @@ extern crate rustc_session;
 
 mod amdgpu_llvm;
 mod collector;
+#[allow(dead_code)] // Wired into codegen by the verification-gate layer.
+mod kernel_ir_lowering;
 mod mir_import;
 mod record_lowering;
 
