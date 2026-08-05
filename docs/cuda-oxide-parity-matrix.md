@@ -4,20 +4,22 @@ Status: normative parity baseline for fe2o3 v2.
 
 ## Baseline and Scope
 
-The fixed comparison point is the local cuda-oxide checkout at
-`/home/harsh/cuda-oxide`, commit
-`e28248c1d741105f4c043fec42c8f0e7877df771`. The primary source is
-`cuda-oxide-book/appendix/supported-features.md` at that commit. Its 94 feature
-rows are reproduced below in the same category order, including partial,
-experimental, planned, and N/A rows.
+The fixed comparison point is the fetched cuda-oxide `origin/main` commit
+`cd5ef3941d3347c7f6fcbfc78ef0fa7f4f179d87` from 2026-08-05. The primary
+source is `cuda-oxide-book/appendix/supported-features.md` at that commit. Its
+94 feature rows are reproduced below in the same category order, including
+partial, experimental, planned, and N/A rows. The supplemental audit also
+accounts for capabilities demonstrated elsewhere in the repository.
 
 The fe2o3 current-state column is based on commit
-`c61b6ead02c264283e863a0e2b7a5104b44fbf50`. At that commit fe2o3 has a HIP
-runtime, a safe-looking launch macro over an unsafe raw call, kernel discovery,
-reachable MIR collection, record sketches, and an elementwise `f32`/`f64`
-AMDGPU LLVM/HSACO emitter. It does not yet have a general MIR lowering
-pipeline, typed launch contracts, artifact bundles, async lifetime tracking, or
-Verus integration.
+`0530734917cb1f0f67273c30074229369cc2904e`. At that commit fe2o3 has a HIP
+runtime, explicit unsafe raw module and launch paths, kernel discovery,
+reachable MIR collection, a target-neutral kernel IR and verifier, a narrow
+elementwise `f32`/`f64` AMDGPU LLVM/HSACO emitter, artifact and proof schemas,
+bounded HSACO inspection/finalization, event-backed asynchronous transfer
+lifetimes, transactional artifact publication, and a Verus vecadd harness.
+These foundations are not yet connected into a general compiler, sealed
+validated loader, generated typed launch API, or proof-requiring build.
 
 This matrix compares capabilities and observable semantics, not identical
 vendor syntax. It is not a claim that either project is production-ready.
@@ -42,8 +44,14 @@ Current fe2o3 status is separate:
 - **Missing**: no qualifying implementation exists.
 - **N/A**: intentionally outside the AMD parity contract.
 
-No row is marked implemented by this document. A later generated status report
-may add **Complete** only after the gate and row definition of done pass.
+No row is **Complete** in this snapshot. A later generated status report may
+add **Complete** only after the gate and row definition of done pass.
+
+The current normative snapshot has 19 **Partial**, 63 **Missing**, 12 **N/A**,
+and zero **Complete** rows. The supplemental audit has 7 **Partial** and 8
+**Missing** rows. An IR type, schema, parser, or isolated proof is classified as
+**Partial** only when it implements a meaningful part of the row; it does not
+stand in for end-to-end compiler/runtime behavior.
 
 ## Gates
 
@@ -61,6 +69,31 @@ may add **Complete** only after the gate and row definition of done pass.
 
 The detailed dependencies and exit criteria are in
 [implementation-roadmap-v2.md](implementation-roadmap-v2.md).
+
+## Evidence Behind Current Partial Status
+
+- Rows 12, 17, 20, 24, and 25: the manifest ABI model and target-neutral kernel
+  IR represent part of the required type, control-flow, arithmetic, and cast
+  semantics. Structured MIR lowering covers a tested vecadd-shaped subset, but
+  generated host packing and general AMDGPU lowering are absent.
+- Rows 32, 33, and 35: trusted kernel marker discovery, reachable helper
+  collection, helper-call translation, and multiple kernels are exercised, but
+  only the narrow production emitter reaches executable code objects.
+- Rows 36-38 and 41-43: one-source builds, AMDGPU LLVM/HSACO sidecars, diagnostic
+  dumps, bounded HSACO inspection, and project-local cleanup exist. The general
+  pipeline, user-facing `inspect` command, and external-project orchestration do
+  not.
+- Rows 48, 49, and 60: one-dimensional `DisjointSlice` and `ThreadIndex` APIs
+  and target-neutral launch-axis verification exist. They are not yet branded
+  to a validated artifact and physical launch.
+- Row 79: launch-contract and checked one-dimensional geometry models exist,
+  but no generated `#[launch_contract]` API or `PreparedLaunch<K>` exists.
+- Row 80: the current `launch!` macro is an explicit unsafe raw-ABI escape hatch
+  with compile-fail coverage. It is not generated from a validated artifact
+  contract.
+- Supplemental rows S01-S05, S14, and S15: the corresponding bounded models,
+  parsers, lifetime types, target query, and focused UI tests exist. Publication,
+  compiler, loader, and generated-launch integration remain incomplete.
 
 ## Normative 94-row Matrix
 
@@ -99,7 +132,7 @@ The detailed dependencies and exit criteria are in
 
 | ID | cuda-oxide feature | Baseline | Class | fe2o3 now | AMD/fe2o3 acceptance target | Gate |
 |:--|:--|:--|:--|:--|:--|:--|
-| 17 | Match Expressions (integer switch) | Full | Exact | Missing | Integer switches preserve Rust semantics and lower to legal AMDGPU control flow | G1, G2 |
+| 17 | Match Expressions (integer switch) | Full | Exact | Partial | Integer switches preserve Rust semantics and lower to legal AMDGPU control flow | G1, G2 |
 | 18 | Match on Enums | Full | Exact | Missing | Variant tests, payload projections, and niche layouts work in nested control flow | G2 |
 | 19 | For Loops (range, iterator, enumerate) | Full | Exact | Missing | MIR-desugared ranges, slice iteration, enumerate, nesting, and early exits compile and execute | G2 |
 | 20 | While Loops / If-Else | Full | Exact | Partial | Arbitrary reducible baseline control flow works; support is no longer restricted to recognized elementwise shapes | G1, G2 |
@@ -112,7 +145,7 @@ The detailed dependencies and exit criteria are in
 | ID | cuda-oxide feature | Baseline | Class | fe2o3 now | AMD/fe2o3 acceptance target | Gate |
 |:--|:--|:--|:--|:--|:--|:--|
 | 24 | 64-bit Arithmetic | Full | Exact | Partial | Signed/unsigned arithmetic, comparison, shifts, bitwise operations, overflow forms, and descriptor packing pass CPU/GPU differential tests | G1, G2 |
-| 25 | Type Casting (all kinds) | Full | Exact | Missing | Integer/float widths, bitcasts, pointer casts, coercions, pointer/integer conversions, and provenance policy are explicit and tested | G2 |
+| 25 | Type Casting (all kinds) | Full | Exact | Partial | Integer/float widths, bitcasts, pointer casts, coercions, pointer/integer conversions, and provenance policy are explicit and tested | G2 |
 | 26 | Packed bf16x2 FMA | Full | AMD-equivalent | Missing | Target-gated packed BF16 FMA uses an AMD intrinsic or a documented equivalent sequence with matching lane and rounding semantics | G4 |
 
 ### Compiler: Interop
@@ -144,7 +177,7 @@ The detailed dependencies and exit criteria are in
 | 39 | LTOIR Linking | Full | AMD-equivalent | Missing | Link AMDGPU bitcode/relocatable device artifacts with deterministic provenance and option records | G6 |
 | 40 | Float Math Intrinsics (libdevice) | Full | AMD-equivalent | Missing | Rust float methods map to OCML/OCKL or LLVM intrinsics with target, precision, denormal, and contraction policy tests | G4 |
 | 41 | Pipeline Inspection | Full | Exact | Partial | `cargo fe2o3 pipeline` shows imported MIR, post-SSA IR, `gpu.*`, lowered LLVM IR, and artifact metadata | G1 |
-| 42 | PTX Inspect | Full | AMD-equivalent | Missing | `cargo fe2o3 inspect` prints AMDGPU LLVM, disassembly/metadata, or selected bundle payload without executing | G1, G3 |
+| 42 | PTX Inspect | Full | AMD-equivalent | Partial | `cargo fe2o3 inspect` prints AMDGPU LLVM, disassembly/metadata, or selected bundle payload without executing | G1, G3 |
 | 43 | Local Clean | Full | Exact | Partial | `cargo fe2o3 clean` safely removes only `target/fe2o3`; pinned cuda-oxide removes the full project target directory, and complete external-project build orchestration remains pending | G0 |
 | 44 | Compute Sanitizer Wrapper | Full | AMD-equivalent | Missing | `cargo fe2o3 sanitize` invokes supported ROCm GPU sanitizers/checkers and clearly reports unavailable tools or checks | G8 |
 | 45 | cuda-gdb Source Debugging | Full | AMD-equivalent | Missing | Debug build and `cargo fe2o3 debug` launch ROCgdb with kernel source locations | G8 |
@@ -182,7 +215,7 @@ The detailed dependencies and exit criteria are in
 
 | ID | cuda-oxide feature | Baseline | Class | fe2o3 now | AMD/fe2o3 acceptance target | Gate |
 |:--|:--|:--|:--|:--|:--|:--|
-| 60 | Thread/Block/Grid Intrinsics | Full | Exact | Partial | Complete 3D workitem/workgroup IDs and dimensions plus branded linear/tiled indexes, with rank validation | G1, G4, G5 |
+| 60 | Thread/Block/Grid Intrinsics | Full | Exact | Partial | Complete 3D workitem/workgroup IDs and dimensions plus branded linear/tiled indexes, with rank validation and runtime 2D row width bound to the indexed slice | G1, G4, G5 |
 | 61 | Block Synchronization | Full | Exact | Missing | Workgroup barrier lowers correctly and carries convergence, scope, and memory semantics through IR | G4, G7 |
 | 62 | Async Barriers (mbarrier) | Full | AMD-equivalent | Missing | Target-gated AMD split/named barrier abstraction exposes only semantics supported by the selected architecture | G6, G7 |
 | 63 | Cluster Synchronization | Full | N/A | N/A | No CUDA thread-block-cluster promise; reject cluster-only kernels unless a future AMD target adds a modeled equivalent | G6 |
@@ -216,8 +249,8 @@ The detailed dependencies and exit criteria are in
 | ID | cuda-oxide feature | Baseline | Class | fe2o3 now | AMD/fe2o3 acceptance target | Gate |
 |:--|:--|:--|:--|:--|:--|:--|
 | 78 | `#[cuda_module]` Typed Launch | Full | Exact | Missing | A neutral module macro embeds bundles and generates typed sync/async methods from manifest entries | G3 |
-| 79 | `#[launch_contract]` / `PreparedLaunch<K>` | Full | Exact | Missing | Contracts check rank, exact/bounded block shape, resources, capabilities, context, and kernel identity | G0, G3, G5 |
-| 80 | `cuda_launch!` Macro | Full | Exact | Missing | `fe2o3_launch!` is explicitly unsafe for runtime-loaded raw functions and exposes complete obligations | G0, G3 |
+| 79 | `#[launch_contract]` / `PreparedLaunch<K>` | Full | Exact | Partial | Contracts check rank, exact/bounded block shape, resources, capabilities, context, and kernel identity | G0, G3, G5 |
+| 80 | `cuda_launch!` Macro | Full | Exact | Partial | `launch!` is explicitly unsafe for runtime-loaded raw functions and exposes complete obligations | G0, G3 |
 | 81 | `cuda_launch_async!` Macro | Full | Exact | Missing | Raw lazy launch is unsafe; typed operations retain borrowed/owned resources through completion and cancellation | G3 |
 | 82 | `#[launch_bounds]` | Full | AMD-equivalent | Missing | Emit and validate AMD flat workgroup-size/occupancy metadata with architecture-specific limits | G4 |
 | 83 | `#[cluster_launch]` | Full | N/A | N/A | CUDA cluster dimensions are not accepted as portable AMD launch metadata | G6 |
@@ -251,11 +284,11 @@ for a credible parity release even though they are not separate appendix rows.
 
 | ID | Demonstrated cuda-oxide capability | Class | fe2o3 now | Acceptance target | Gate |
 |:--|:--|:--|:--|:--|:--|
-| S01 | Versioned target-neutral artifact container | Exact | Missing | Embedded, content-addressed bundle with entries, payloads, options, ABI, capabilities, and proof identity | G3 |
-| S02 | Artifact finalization and provenance | AMD-equivalent | Missing | Deterministic AMDGPU link/finalize records include inputs, target, options, and toolchain identity | G3, G6 |
-| S03 | Typed async `DeviceOperation` model | Exact | Missing | Lazy borrowed/owned operations, stream policy, events, cancellation-safe reclamation, and composition | G3 |
-| S04 | `DeviceCopy` derive and manifest-gated device types | Exact | Missing | Host byte-transfer types have compile-pass/fail bit-validity and padding checks; safe device interpretation additionally requires manifest-derived type/ABI identity, provenance, and capabilities | G3 |
-| S05 | Pinned host buffers and events | Exact | Missing | RAII pinned memory, explicit unsafe async-copy lifetimes, timing, and ordering events | G3 |
+| S01 | Versioned target-neutral artifact container | Exact | Partial | Embedded, content-addressed bundle with entries, payloads, options, ABI, capabilities, and proof identity | G3 |
+| S02 | Artifact finalization and provenance | AMD-equivalent | Partial | Deterministic AMDGPU link/finalize records include inputs, target, options, and toolchain identity | G3, G6 |
+| S03 | Typed async `DeviceOperation` model | Exact | Partial | Lazy borrowed/owned operations, stream policy, events, cancellation-safe reclamation, and composition | G3 |
+| S04 | `DeviceCopy` derive and manifest-gated device types | Exact | Partial | Host byte-transfer types have compile-pass/fail bit-validity and padding checks; safe device interpretation additionally requires manifest-derived type/ABI identity, provenance, and capabilities | G3 |
+| S05 | Pinned host buffers and events | Exact | Partial | RAII pinned memory, explicit unsafe async-copy lifetimes, timing, and ordering events | G3 |
 | S06 | VMM, peer access, and multi-device memory | AMD-equivalent | Missing | HIP/HSA-supported virtual/peer memory has context, lifetime, topology, and capability checks | G6 |
 | S07 | Device constants, statics, and relocations | Exact | Missing | Layout-aware constants/globals preserve supported pointer relocations and reject unsupported provenance | G2, G6 |
 | S08 | Kernel families and compile-time policies | Exact | Missing | Tuned monomorphized variants share a typed logical interface and carry policy identity in the bundle | G2, G3 |
@@ -265,7 +298,7 @@ for a credible parity release even though they are not separate appendix rows.
 | S12 | Tensor/matrix instructions | AMD-equivalent | Missing | Capability-gated MFMA/WMMA abstractions cover supported shapes/types with ISA and numerical tests | G6 |
 | S13 | LDS swizzles and matrix load/store helpers | AMD-equivalent | Missing | AMD-native layouts expose bank/alignment contracts and compose with proof-aware views | G6, G7 |
 | S14 | Target auto-detection and override | AMD-equivalent | Partial | Detect AMD architecture and features, accept explicit override, and record the resolved target in every payload | G0, G3 |
-| S15 | Compile-fail safety suite | Exact | Missing | UI tests cover launch brands, rank, index spaces, witness transfer, async lifetime, barrier lifecycle, and unsafe transitions | G0, G3, G5 |
+| S15 | Compile-fail safety suite | Exact | Partial | UI tests cover launch brands, rank, index spaces, witness transfer, async lifetime, barrier lifecycle, and unsafe transitions | G0, G3, G5 |
 
 ## Row Definition of Done
 
@@ -287,7 +320,7 @@ A row can become **Complete** only when all applicable requirements pass:
 10. N/A rows have a deterministic diagnostic or documented absence.
 
 Partial cuda-oxide baseline rows need only match the behavior and limitations
-at commit `e28248c1`; broader support is an extension. AMD-equivalent rows must
+at commit `cd5ef394`; broader support is an extension. AMD-equivalent rows must
 include an explicit semantic-difference note in their user documentation.
 
 ## Parity Release Rule

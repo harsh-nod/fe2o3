@@ -27,19 +27,23 @@ rustc frontend and MIR
                                      HIP module load/launch
 ```
 
-This initial implementation establishes the crate layout and runtime/compiler
-interfaces needed to reach that target:
+## Architecture
 
-- `fe2o3-device`: no-std device API and `#[kernel]` re-export.
-- `fe2o3-macros`: kernel marker macro and reserved symbol naming.
-- `fe2o3-core`: HIP-backed host runtime, buffers, streams, modules, launches.
-- `fe2o3-completion`: HIP-free resource completion and failure policy.
-- `fe2o3-host`: user-facing launch macro.
-- `fe2o3-artifact-transaction`: shared compiler artifact ownership, recovery, and publication.
-- `rustc-codegen-fe2o3`: backend support code and HSACO toolchain hooks.
-- `cargo-fe2o3`: cargo subcommand and environment diagnostics.
-- `dialect-amdgcn`: AMDGPU intrinsic naming seam for the future Pliron lowering.
-- `dialect-mir`: Rust MIR dialect naming seam for the future Pliron lowering.
+The workspace is split into explicit compiler, artifact, runtime, and proof
+boundaries:
+
+- Device surface: `fe2o3-device`, `fe2o3-macros`,
+  `reserved-fe2o3-symbols`, and `fe2o3-contracts`.
+- Compiler: `rustc-codegen-fe2o3`, `fe2o3-kernel-ir`, `dialect-mir`, and
+  `dialect-amdgcn`.
+- Artifact model: `fe2o3-artifacts`, `fe2o3-kernel-descriptor`, `fe2o3-hsaco`,
+  `fe2o3-hsaco-finalize`, and `fe2o3-artifact-transaction`.
+- Runtime: `fe2o3-core`, `fe2o3-completion`, `fe2o3-host`, and
+  `fe2o3-hip-sys`.
+- Build coordination: `cargo-fe2o3`, `fe2o3-rustc-invocation`, and the
+  `fe2o3-rustc-wrapper` binary.
+- Verification spike: `examples/verus_vecadd` plus the proof identities and
+  records in `fe2o3-contracts` and `fe2o3-artifacts`.
 
 Safe buffer element types and their limits are documented in the
 [device memory safety contract](docs/device-memory-safety.md). `DeviceCopy`
@@ -51,95 +55,75 @@ Safe ownership of resources used by asynchronous copies is documented in
 
 ## Current Status
 
-The HIP runtime layer and public API are working for the current elementwise
-examples on AMD hardware. `cargo-fe2o3 build` builds and loads
-`librustc_codegen_fe2o3.so`, delegates host codegen through
-`rustc_codegen_llvm`, detects `#[kernel]` functions in rustc codegen units, and
-dumps the currently collected device-reachable MIR functions. When
-`FE2O3_DUMP_MIR=1` is set, it also prints the first Pliron-facing MIR import
-scaffold for the collected device functions using local `mir.*` dialect names
-and builds a flat typed `mir.*` operation-record stream for the future Pliron
-builder, including typed locals, statement destination and operand labels, and
-terminator call callee, destination, and operand labels, plus
-`mir.assign` value-projection records and the first operation-specific lowering
-records such as `mir.load`, `mir.store`, arithmetic ops, comparisons, and casts.
-Evaluated integer constants are appended to constant operand labels when rustc
-can resolve them. The same dump also builds a
-record-driven lowering-plan summary from that flat record stream. The AMDGPU
-emission path now consumes that record plan to cross-check kernel argument
-types, required store/return ops, thread-index calls, record load coverage, and
-selected index/arithmetic shape markers before emitting through the existing MIR
-recognizer. Load/store record place labels are parsed into a small access sketch,
-helper/raw index records are parsed into a linear index sketch, and direct slice
-reads/writes are combined into a slice-access sketch keyed by ABI arg, MIR
-local, and affine index. The AMDGPU validator now checks read-only slice loads
-and direct `&mut [T]` output stores from that record-derived slice sketch. A
-record expression sketch also binds slice-load leaves, scalar args, float
-literals, unary/binary expression ops, and store roots so the validator can
-cross-check expression requirements. When that sketch can reconstruct the full
-expression root, the AMDGPU path now uses the record-derived `ElementwiseExpr`
-for LLVM IR emission; raw rustc MIR remains the temporary fallback for cases the
-record expression sketch cannot yet represent.
+### Working end to end
 
-The backend also has the first AMDGPU artifact path: for the current `f32`/`f64`
-elementwise kernel shapes it validates the Rust kernel ABI from monomorphized
-MIR argument locals, recognizes a small expression tree, emits a minimal AMDGPU
-LLVM IR kernel, and compiles it through ROCm clang plus `ld.lld` into
-`target/fe2o3/*.hsaco`. Supported expression leaves are read-only slice
-elements, plain scalar float arguments, float literals, and the mutable output
-slice when doing an in-place update. The same shape is supported for `f64`.
-Outputs can be `DisjointSlice<T>` or indexed `&mut [T]`; expression nodes
-include `+`, `-`, `*`, `/`, and unary negation. Leaf-only copies such as
-`out[i] = x[i]` and literal-root fills are also supported.
-`DisjointSlice::get_mut` outputs can read the current element before writing it,
-and `DisjointSlice::get_mut_at` supports raw `usize` output indexes.
-`ThreadIndex::offset` supports simple constant-offset slice reads such as
-`x[idx.offset(1)]`; `ThreadIndex::offset_signed` supports signed constant
-offsets such as `x[idx.offset_signed(-1)]`.
-`ThreadIndex::stride` supports constant-stride reads such as `x[idx.stride(2)]`.
-`ThreadIndex::stride_offset` supports affine reads such as
-`x[idx.stride_offset(2, 1)]`.
-Raw `usize` index arithmetic derived from `idx.get()` is also recognized for
-constant add, subtract, and multiply patterns such as `idx.get() * 2 + 1`, plus
-affine combinations of two tracked index expressions such as
-`idx.get() + idx.get() + 1`, and constant-minus-index forms such as
-`1023 - idx.get()`.
-General MIR/Pliron lowering is still the next compiler milestone.
+- `cargo-fe2o3 build` builds and loads the custom backend, delegates host
+  codegen to `rustc_codegen_llvm`, discovers trusted `#[kernel]` items, collects
+  device-reachable MIR, and emits HSACO sidecars.
+- The production AMDGPU emitter supports the repository's `f32`/`f64`
+  elementwise examples. It recognizes scalar float arguments and literals,
+  read-only slice loads, `DisjointSlice<T>` or indexed mutable-slice stores,
+  `+`, `-`, `*`, `/`, unary negation, read-before-write, and the documented
+  constant/affine one-dimensional index forms.
+- The HIP runtime provides contexts, streams, device buffers, pinned host
+  buffers, events, synchronous transfers, event-backed borrowed and owned
+  asynchronous transfers, module loading, and kernel launch.
+- Raw module loading and raw launch are explicit `unsafe` escape hatches. The
+  caller remains responsible for artifact trust, target and ABI compatibility,
+  pointer validity, aliasing, launch geometry, and resource lifetimes.
+- `DeviceCopy` and its derive macro restrict safe byte transfers to supported
+  layouts and have compile-pass/compile-fail coverage.
 
-On a `gfx1201` AMD Radeon AI PRO R9700 with TheRock ROCm
-`7.13.0a20260509`, `cargo-fe2o3 run -p fe2o3-vecadd`,
-`cargo-fe2o3 run -p fe2o3-scale`, `cargo-fe2o3 run -p fe2o3-saxpy`, and
-`cargo-fe2o3 run -p fe2o3-axpy-inplace` generate HSACO artifacts, load them
-through HIP, launch the kernels, and validate the results. `fe2o3-negate` covers
-unary negation. `fe2o3-normalize` covers literal constants plus subtraction and
-division. `fe2o3-copy` covers leaf-only stores.
-`fe2o3-downsample` covers constant-stride input loads.
-`fe2o3-gather-odd` covers stride-plus-offset input loads.
-`fe2o3-raw-add-index` covers affine reads formed by adding two raw index
-expressions.
-`fe2o3-raw-const-minus` covers constant-minus-index reads with a negative
-stride.
-`fe2o3-raw-parenthesized-sub` covers parenthesized index subtraction that
-collapses to a constant read index.
-`fe2o3-raw-disjoint-inplace-shift` covers raw `usize` arithmetic for a
-`DisjointSlice<f32>` output read-before-write store.
-`fe2o3-raw-disjoint-shift` covers raw `usize` arithmetic for a
-`DisjointSlice<f32>` output store.
-`fe2o3-raw-gather` covers raw affine `usize` index arithmetic.
-`fe2o3-raw-neighbors` covers raw `usize` add/sub neighbor reads.
-`fe2o3-raw-output-shift` covers raw `usize` arithmetic for an indexed
-`&mut [f32]` output store.
-`fe2o3-add-inplace` covers read-before-write through `DisjointSlice::get_mut`.
-`fe2o3-fill` covers literal-root stores with no input loads.
-`fe2o3-shift` covers constant-offset input loads.
-`fe2o3-previous` covers negative constant-offset input loads.
-`fe2o3-stencil` covers multiple derived loads from one input slice.
-`fe2o3-vecadd-f64` covers double-precision elementwise lowering.
-`cargo-fe2o3 run -p fe2o3-pipeline` emits and launches two kernels from one Rust
-crate.
+The recorded hardware run used a `gfx1201` AMD Radeon AI PRO R9700 with TheRock
+ROCm `7.13.0a20260509`. The smoke suite generated HSACO, launched every current
+example, copied results back, and compared them with CPU results.
 
-See [docs/implementation-plan.md](docs/implementation-plan.md) for the full
-compiler/runtime plan.
+### Implemented foundations
+
+- The structured MIR importer lowers the vecadd-shaped subset, including
+  scalar control flow, helper calls, and slice memory operations, into the
+  target-neutral `fe2o3-kernel-ir`. Its verifier checks types, SSA uses,
+  control-flow edges, memory accesses, launch axes, capabilities, barriers, and
+  atomics. This IR is not yet the default AMDGPU emission path.
+- Versioned artifact manifests, ABI layouts, launch contracts, bounded
+  containers, payload digests, native-kernel selection, and proof records have
+  canonical encoders, decoders, and adversarial tests.
+- Canonical AMD target IDs, HIP-observed device properties, HSACO metadata and
+  descriptor inspection, kernel-descriptor binding, and bounded post-link
+  finalization are implemented as separate validation layers.
+- Compiler artifact publication is transactional and generation-owned. Build
+  attempt and canonical rustc invocation descriptors are versioned and
+  bounded.
+- The Verus vecadd harness proves bounds and injective writes under a documented
+  hardware-thread-ID contract. Proof-record matching can reject incomplete or
+  mismatched evidence.
+
+### Not yet integrated
+
+- General MIR to kernel IR to AMDGPU lowering is not complete; the elementwise
+  recognizer remains the production emitter.
+- Artifact manifests, descriptor finalization, observed targets, and proof
+  records do not yet produce a sealed validated module or generated typed
+  launch API. There is no `PreparedLaunch<K>` implementation.
+- `cargo fe2o3 verify` and `build --require-proof` are roadmap commands. The
+  current Verus harness is invoked separately and does not prove compiler,
+  ROCm, driver, or machine-code refinement.
+- The fail-closed rustc wrapper classifies and preserves approved bootstrap
+  invocations, but compile execution remains disabled until rustc and backend
+  executable pinning is implemented.
+- General Rust language support, LDS, atomics and barriers in emitted kernels,
+  wave operations, device linking, sanitizer/debugger integration, and
+  multi-device memory remain parity work.
+
+The current comparison with cuda-oxide is tracked in the
+[parity matrix](docs/cuda-oxide-parity-matrix.md). fe2o3 is not yet at parity.
+
+See [docs/implementation-plan.md](docs/implementation-plan.md) for the original
+compiler/runtime plan and
+[docs/implementation-roadmap-v2.md](docs/implementation-roadmap-v2.md) for the
+current staged roadmap.
+
+## Commands
 
 Run diagnostics:
 
