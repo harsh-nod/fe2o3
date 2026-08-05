@@ -49,10 +49,7 @@ pub fn launch_extent_1d() -> usize {
 
 #[inline(always)]
 pub fn index_1d() -> ThreadIndex {
-    let tid = thread_idx_x();
-    let bid = block_idx_x();
-    let bdim = block_dim_x();
-    ThreadIndex((bid * bdim + tid) as usize)
+    ThreadIndex(global_id_1d())
 }
 
 #[inline(always)]
