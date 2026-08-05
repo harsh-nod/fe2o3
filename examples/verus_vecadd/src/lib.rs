@@ -89,10 +89,13 @@ mod tests {
     fn verus_harness_includes_the_real_gpu_source_fragment() {
         let harness = include_str!("../verus/vecadd.rs");
         let real_body = include_str!("../../vecadd/src/vecadd_body.rs");
+        let real_kernel = include_str!("../../vecadd/src/main.rs");
 
         assert!(harness.contains("include!(\"../../vecadd/src/vecadd_body.rs\")"));
         assert!(real_body.contains("vecadd_kernel_body"));
-        assert!(real_body.contains("*out = $a[i] + $b[i]"));
+        assert!(real_body.contains("*out = $add!($a[i], $b[i])"));
+        assert!(real_kernel.contains("macro_rules! production_f32_add"));
+        assert!(real_kernel.contains("$lhs + $rhs"));
     }
 
     #[test]
