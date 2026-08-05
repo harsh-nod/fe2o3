@@ -62,7 +62,7 @@ impl<'stream, 'resources> BorrowedDeviceOperation<'stream, 'resources> {
     pub unsafe fn run_scoped_unchecked<R, O>(
         stream: &'stream Stream,
         resources: R,
-        enqueue: impl FnOnce(&R) -> Result<()>,
+        enqueue: impl FnOnce(&mut R) -> Result<()>,
         during: impl for<'operation> FnOnce(
             &'operation BorrowedDeviceOperation<'stream, 'resources>,
         ) -> O,
@@ -449,11 +449,12 @@ struct HipOperationRuntime<'stream> {
 
 fn run_borrowed_retained<'stream, 'resources, R, O>(
     stream: &'stream Stream,
-    resources: R,
-    enqueue: impl FnOnce(&R) -> Result<()>,
+    mut resources: R,
+    enqueue: impl FnOnce(&mut R) -> Result<()>,
     during: impl for<'operation> FnOnce(&'operation BorrowedDeviceOperation<'stream, 'resources>) -> O,
 ) -> Result<O> {
-    let completion = begin_borrowed_with(HipOperationRuntime { stream }, || enqueue(&resources))?;
+    let completion =
+        begin_borrowed_with(HipOperationRuntime { stream }, || enqueue(&mut resources))?;
     let operation = BorrowedDeviceOperation {
         completion: Some(completion),
         _resources: PhantomData,
