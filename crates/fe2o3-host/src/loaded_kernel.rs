@@ -1,10 +1,11 @@
-use crate::artifact_binding::ArtifactKernelBrandV1;
+use crate::artifact_binding::{ArtifactKernelBrandV1, GeneratedKernelBindingV1};
 use crate::{
     ArgumentAdmittedLaunch, ArtifactKernelIdentityV1, DeviceIdentity, KernelBrand, KernelParams,
     LaunchConfig, ObservedContext, PrepareLaunchError, PreparedGeometry, PreparedLaunch,
     PreparedResources, UntrustedLaunchRequest, ValidatedArtifactSelectionV1,
 };
 use fe2o3_core::{BorrowedDeviceOperation, GpuContext, GpuFunction, GpuModule, Stream};
+use fe2o3_device::KernelMarkerV1;
 use std::fmt;
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -74,6 +75,39 @@ impl<K> fmt::Debug for LoadedKernel<K> {
 }
 
 impl<K> LoadedKernel<K> {
+    /// Loads a validated payload through an unsafe compiler-generated marker
+    /// binding.
+    ///
+    /// This entry rechecks the exact validated selection, context, device,
+    /// observed limits, and capabilities before loading the selected symbol.
+    /// It does not authenticate the payload or infer an ABI from
+    /// [`KernelMarkerV1::FUNCTION`].
+    ///
+    /// # Safety
+    ///
+    /// The caller must authenticate the executable payload and establish that
+    /// `K` denotes this exact kernel and complete host ABI. That includes every
+    /// argument's Rust type, size, alignment, order, mutability, address space,
+    /// ownership, aliasing, and packed layout identity. The binding's name
+    /// checks and the artifact's structural validation do not prove those
+    /// properties or the executable's behavior.
+    #[doc(hidden)]
+    pub unsafe fn load_generated(
+        binding: GeneratedKernelBindingV1<K>,
+        validated: &ValidatedArtifactSelectionV1,
+        observed: &ObservedContext,
+        context: &Arc<GpuContext>,
+    ) -> Result<Self, LoadedKernelLoadError>
+    where
+        K: KernelMarkerV1,
+    {
+        // SAFETY: the caller owns the payload-authentication, exact marker,
+        // full ABI, and executable-behavior obligations documented above. The
+        // internal loader rechecks the structural selection and context before
+        // invoking HIP.
+        unsafe { Self::load(binding.into_inner(), validated, observed, context) }
+    }
+
     /// Issues loaded authority after the private marker binding and validated
     /// artifact selection have been matched exactly.
     ///
@@ -297,17 +331,16 @@ pub struct LoadedArgumentAdmittedLaunch<'loaded, 'allocation, K> {
 
 /// Exact raw parameter packing produced by generated code for kernel `K`.
 ///
-/// This token is crate-private and has only an unsafe constructor. It is the
-/// narrow integration point where generated bindings must establish the raw
-/// ABI before the safe scoped execution state machine can run.
-#[allow(dead_code)]
-pub(crate) struct GeneratedKernelParams<'params, K, R> {
+/// This doc-hidden token has private fields and only an unsafe constructor. It
+/// is the narrow SPI where generated bindings must establish the raw ABI and
+/// typed resource borrows before the safe scoped execution state machine runs.
+#[doc(hidden)]
+pub struct GeneratedKernelParams<'params, K, R> {
     params: &'params mut KernelParams,
     resources: R,
     marker: PhantomData<fn(K) -> K>,
 }
 
-#[allow(dead_code)]
 impl<'params, K, R> GeneratedKernelParams<'params, K, R> {
     /// Marks one raw parameter list as the exact generated ABI for `K`.
     ///
@@ -320,7 +353,7 @@ impl<'params, K, R> GeneratedKernelParams<'params, K, R> {
     /// must correspond exactly to the regions in the argument admission and
     /// remain valid for every admitted access. Only generated binding code
     /// that has established that association may invoke this constructor.
-    pub(crate) unsafe fn from_generated_unchecked(
+    pub unsafe fn from_generated_unchecked(
         params: &'params mut KernelParams,
         resources: R,
     ) -> Self {
@@ -378,11 +411,11 @@ impl<'loaded, 'allocation, K> LoadedArgumentAdmittedLaunch<'loaded, 'allocation,
     /// operation policy aborts rather than releasing the loaded authority,
     /// allocation lifetimes, or alias reservation while work may remain.
     ///
-    /// This method is crate-private because the generated marker/ABI bridge is
-    /// not integrated yet. Raw callers cannot use it to make arbitrary
-    /// [`KernelParams`] safe.
-    #[allow(dead_code)]
-    pub(crate) fn launch_generated_scoped<'stream, R, O>(
+    /// This is a doc-hidden generated-code SPI. Raw callers cannot use it to
+    /// make arbitrary [`KernelParams`] safe because it accepts only the token
+    /// created by the unsafe generated packing boundary.
+    #[doc(hidden)]
+    pub fn launch_generated_scoped<'stream, R, O>(
         self,
         stream: &'stream Stream,
         params: GeneratedKernelParams<'_, K, R>,
@@ -394,7 +427,7 @@ impl<'loaded, 'allocation, K> LoadedArgumentAdmittedLaunch<'loaded, 'allocation,
 
         let config = self.launch_config();
         // SAFETY: `GeneratedKernelParams` can be constructed only through its
-        // unsafe crate-private boundary, which establishes the raw ABI and its
+        // unsafe generated-code boundary, which establishes the raw ABI and its
         // relationship to this admitted marker. The retained tuple owns both
         // `self` (loaded module/function and alias registration) and the
         // generated typed resource borrows. The exact stream wrapper was
@@ -405,6 +438,7 @@ impl<'loaded, 'allocation, K> LoadedArgumentAdmittedLaunch<'loaded, 'allocation,
                 stream,
                 (self, params),
                 |(launch, params)| {
+                    let _typed_resource_borrows = &params.resources;
                     fe2o3_core::launch_kernel_on_stream(
                         launch.loaded.function(),
                         config,
@@ -502,8 +536,11 @@ impl std::error::Error for LoadedLaunchError {
     }
 }
 
+/// Failure while loading an unsafe compiler-generated kernel binding.
+#[doc(hidden)]
 #[derive(Debug)]
-pub(crate) enum LoadedKernelLoadError {
+#[non_exhaustive]
+pub enum LoadedKernelLoadError {
     WrongValidatedSelection,
     WrongDevice,
     WrongContext,

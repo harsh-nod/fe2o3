@@ -13,8 +13,12 @@ pub use artifact_binding::{
     ARTIFACT_KERNEL_IDENTITY_VERSION, ArtifactBindingError, ArtifactKernelIdentityV1,
     ArtifactLaunchContractError, ArtifactRevalidationError, ValidatedArtifactSelectionV1,
 };
+#[doc(hidden)]
+pub use artifact_binding::{GeneratedKernelBindingV1, GeneratedMarkerBindingError};
 pub use fe2o3_core::{KernelParams, LaunchConfig};
 pub use fe2o3_kernel_descriptor::{BlockSizeV1, DimensionsV1, KernelId, LaunchConstraintsV1};
+#[doc(hidden)]
+pub use loaded_kernel::{GeneratedKernelParams, LoadedKernelLoadError};
 pub use loaded_kernel::{
     LoadedArgumentAdmittedLaunch, LoadedKernel, LoadedKernelMatchError, LoadedLaunchError,
     LoadedPreparedLaunch,

@@ -8,6 +8,7 @@ use fe2o3_artifacts::{
     HostLaunchAbiError, LaunchContract, Name, PayloadDigest, PointerWidth, SelectedNativeKernel,
     TargetIdentity,
 };
+use fe2o3_device::KernelMarkerV1;
 use fe2o3_kernel_descriptor::ValidationError as DescriptorValidationError;
 use std::fmt;
 use std::sync::Arc;
@@ -191,6 +192,48 @@ impl ValidatedArtifactSelectionV1 {
         Ok(())
     }
 
+    /// Binds a compiler-generated marker to this validated selection.
+    ///
+    /// This is an explicit unsafe SPI for compiler-generated adapters. It
+    /// checks only that the marker's logical and exported names exactly match
+    /// the validated artifact identity. It does not inspect
+    /// [`KernelMarkerV1::FUNCTION`] and does not infer a packed ABI from the
+    /// function-pointer type.
+    ///
+    /// # Safety
+    ///
+    /// The caller must independently authenticate the executable payload and
+    /// establish that `K` denotes this exact kernel. The caller must also
+    /// establish the complete host ABI association, including every argument's
+    /// Rust type, size, alignment, field order, mutability, address space,
+    /// ownership, aliasing, and packed layout identity. Structural artifact
+    /// validation and the name checks performed here discharge none of those
+    /// obligations.
+    #[doc(hidden)]
+    pub unsafe fn bind_generated_marker<K: KernelMarkerV1>(
+        &self,
+    ) -> Result<GeneratedKernelBindingV1<K>, GeneratedMarkerBindingError> {
+        let artifact_logical = self.identity.name().as_str();
+        if K::LOGICAL_NAME != artifact_logical {
+            return Err(GeneratedMarkerBindingError::LogicalNameMismatch {
+                marker: K::LOGICAL_NAME,
+                artifact: artifact_logical.to_owned(),
+            });
+        }
+
+        let artifact_export = self.identity.symbol().as_str();
+        if K::EXPORT_NAME != artifact_export {
+            return Err(GeneratedMarkerBindingError::ExportNameMismatch {
+                marker: K::EXPORT_NAME,
+                artifact: artifact_export.to_owned(),
+            });
+        }
+
+        Ok(GeneratedKernelBindingV1 {
+            inner: self.bind_marker(),
+        })
+    }
+
     /// Deliberately crate-private until generated code can provide unforgeable
     /// evidence that `K` denotes `self.identity().kernel_id()` and ABI.
     #[allow(dead_code)]
@@ -208,6 +251,54 @@ impl ValidatedArtifactSelectionV1 {
         }
     }
 }
+
+/// Unsafe generated-code association between marker `K` and one validated
+/// artifact selection.
+///
+/// Fields are private so downstream code cannot manufacture or retarget a
+/// binding. Possessing this value does not authenticate the payload or prove a
+/// complete host ABI.
+#[doc(hidden)]
+pub struct GeneratedKernelBindingV1<K: KernelMarkerV1> {
+    inner: ArtifactKernelBrandV1<K>,
+}
+
+impl<K: KernelMarkerV1> GeneratedKernelBindingV1<K> {
+    pub(crate) fn into_inner(self) -> ArtifactKernelBrandV1<K> {
+        self.inner
+    }
+}
+
+/// Failure while matching generated marker names to a validated artifact.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum GeneratedMarkerBindingError {
+    LogicalNameMismatch {
+        marker: &'static str,
+        artifact: String,
+    },
+    ExportNameMismatch {
+        marker: &'static str,
+        artifact: String,
+    },
+}
+
+impl fmt::Display for GeneratedMarkerBindingError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::LogicalNameMismatch { marker, artifact } => write!(
+                formatter,
+                "generated marker logical name {marker:?} does not match artifact name {artifact:?}"
+            ),
+            Self::ExportNameMismatch { marker, artifact } => write!(
+                formatter,
+                "generated marker export name {marker:?} does not match artifact symbol {artifact:?}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for GeneratedMarkerBindingError {}
 
 /// Internal typed bridge. It is not exported because artifact structure does
 /// not validate the marker association.
@@ -640,6 +731,40 @@ mod tests {
     };
 
     struct VecAdd;
+    struct WrongLogicalName;
+    struct WrongExportName;
+
+    fn marker_function() {}
+
+    unsafe impl KernelMarkerV1 for VecAdd {
+        type Function = fn();
+        type Registration = ();
+
+        const LOGICAL_NAME: &'static str = "vector_add";
+        const EXPORT_NAME: &'static str = "vector_add.kd";
+        const FUNCTION: Self::Function = marker_function;
+        const REGISTRATION: &'static Self::Registration = &();
+    }
+
+    unsafe impl KernelMarkerV1 for WrongLogicalName {
+        type Function = fn();
+        type Registration = ();
+
+        const LOGICAL_NAME: &'static str = "not_vector_add";
+        const EXPORT_NAME: &'static str = "vector_add.kd";
+        const FUNCTION: Self::Function = marker_function;
+        const REGISTRATION: &'static Self::Registration = &();
+    }
+
+    unsafe impl KernelMarkerV1 for WrongExportName {
+        type Function = fn();
+        type Registration = ();
+
+        const LOGICAL_NAME: &'static str = "vector_add";
+        const EXPORT_NAME: &'static str = "wrong_export.kd";
+        const FUNCTION: Self::Function = marker_function;
+        const REGISTRATION: &'static Self::Registration = &();
+    }
 
     #[derive(Clone)]
     struct FixtureSpec {
@@ -860,6 +985,38 @@ mod tests {
         assert_eq!(validated.payload(), selected.payload());
         assert_eq!(validated.device(), observed.device());
         validated.revalidate(selected, &observed).unwrap();
+    }
+
+    #[test]
+    fn generated_marker_binding_rejects_logical_and_export_name_mismatches() {
+        let observed = context(7, 3, "gfx942");
+        let validated = validate_fixture(FixtureSpec::default(), &observed).unwrap();
+
+        let logical = unsafe { validated.bind_generated_marker::<WrongLogicalName>() }
+            .err()
+            .expect("logical-name mismatch must fail");
+        assert_eq!(
+            logical,
+            GeneratedMarkerBindingError::LogicalNameMismatch {
+                marker: "not_vector_add",
+                artifact: "vector_add".to_owned(),
+            }
+        );
+
+        let export = unsafe { validated.bind_generated_marker::<WrongExportName>() }
+            .err()
+            .expect("export-name mismatch must fail");
+        assert_eq!(
+            export,
+            GeneratedMarkerBindingError::ExportNameMismatch {
+                marker: "wrong_export.kd",
+                artifact: "vector_add.kd".to_owned(),
+            }
+        );
+
+        // SAFETY: the test fixture deliberately models the exact marker names;
+        // it does not load or execute the unauthenticated fixture payload.
+        assert!(unsafe { validated.bind_generated_marker::<VecAdd>() }.is_ok());
     }
 
     #[test]
