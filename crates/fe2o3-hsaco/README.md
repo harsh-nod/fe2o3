@@ -8,9 +8,57 @@ metadata needed by a later ABI matcher.
 Inspection is descriptive metadata evidence only. An `InspectedHsaco` does not
 authorize module loading or kernel launch, and it does not establish that a
 metadata kernel name or `.symbol` agrees with an ELF symbol, kernel descriptor,
-or executable entry point. A loader must still bind those structures together
-with the payload digest, compiler descriptor, manifest ABI, observed device,
-HIP module, resolved function, and context.
+or executable entry point.
+
+`inspect_and_bind_kernel_descriptors` is a separate, fail-closed operation for
+callers that need that additional descriptive relationship. For every metadata
+kernel, it requires one exact `.symbol` match in bounded `SHT_SYMTAB` data and
+one exact `.name` match. The former must be a 64-byte `STT_OBJECT` in a
+64-byte-aligned, read-only allocated section and `PT_LOAD`; the latter must be
+a nonempty, 256-byte-aligned `STT_FUNC` in a read-only executable section and
+`PT_LOAD`. Both symbols must use the same binding, chosen from the pinned LLVM
+set `STB_GLOBAL` or `STB_WEAK`; mixed global/weak pairs reject. Section and
+segment address-to-file mappings must agree. Exactly one file-backed `PT_LOAD`
+may intersect each requested virtual range; additional `p_memsz` intersections,
+including zero-fill ranges and ranges with inappropriate permissions, reject.
+`SHT_DYNSYM` is deliberately not identity evidence: a name that also occurs
+there does not create a second static-symbol binding.
+
+The static symbol scan is capped at 32,768 records. Symbol tables must use the
+ELF64 24-byte record layout, have integral bounded counts, link to a bounded
+`SHT_STRTAB`, contain a valid null symbol and local partition, and give every
+record a bounded NUL-terminated UTF-8 name. Extended symbol section indexes are
+not accepted.
+
+The descriptor layout and resource masks are pinned to LLVM revision
+`846473237377990d00b9c353f6a2c86116b52ea5`, specifically
+`llvm/include/llvm/Support/AMDHSAKernelDescriptor.h`,
+`llvm/lib/Target/AMDGPU/AMDGPUAsmPrinter.cpp`, `SIProgramInfo.cpp`, and the
+AMDGPU disassembler. Binding rejects nonzero reserved bytes and bits,
+unsupported kernarg preload, inappropriate target-specific resource bits, and
+unchecked entry arithmetic. A signed entry displacement is accepted only when
+`descriptor_address + displacement` can be computed without overflow and is
+exactly the `STT_FUNC` address.
+
+The binder exactly cross-checks group/private/kernarg sizes, wave32/wave64,
+V5/V6 dynamic-stack use, private-segment enablement, emitted WGP mode, HSA-fixed
+resource bits, and whether encoded register capacity can contain the metadata
+counts. The SGPR checks use the pinned LLVM emitter's 8-register block encoding
+through GFX9, bounded by the documented 112-register maximum, and the documented
+128-register allocation limit for GFX10-GFX12. Targets without a pinned SGPR
+limit fail closed. Processors
+carrying LLVM's `FeatureArchitectedFlatScratch` must not request the legacy
+private-segment-buffer or flat-scratch-init kernel properties. GFX90A-family
+accumulator offset is also derived exactly from the total VGPR and AGPR counts.
+Register block counts can be larger than the reported count because LLVM can
+raise allocation for occupancy constraints. FP modes, user-SGPR composition,
+workitem/workgroup system-register enables, forward progress, non-GFX90A AGPR
+packing, instruction prefetch, and other target resource choices remain raw
+descriptive fields because metadata does not uniquely determine them.
+
+`InspectedKernelBindings` still carries no authority. A loader must bind this
+description together with the payload digest, compiler descriptor, manifest
+ABI, observed device, HIP module, resolved function, and context before launch.
 
 The inspected implicit-argument offset and size preserve the complete,
 4-byte-rounded span declared by `.kernarg_segment_size`, including reserved and
