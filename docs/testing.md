@@ -12,6 +12,12 @@ This lane does not require ROCm or a GPU:
 scripts/ci-local.sh generic
 ```
 
+The generic lane validates `examples/regression-manifest-v1.txt` against Cargo
+workspace metadata and the HSACO names referenced by each example. The manifest
+is the authoritative package selection for ordinary Rust checks, ROCm
+compilation, and GPU smoke. `verus-vecadd` remains ordinary-rustc-only and is
+never selected for ROCm compilation or GPU execution.
+
 ## ROCm compile coverage
 
 Set an explicit LLVM target and compile every supported example:
@@ -28,6 +34,9 @@ must fail closed. Rejected fixtures also preseed generated artifacts and require
 transactional invalidation of the complete artifact triplet. These markers
 identify compiler semantics; authenticating the package that provides them
 remains an artifact-provenance responsibility.
+After each example build, the lane requires every artifact declared by the
+manifest. The pipeline example declares both `scale_stage.hsaco` and
+`bias_stage.hsaco`.
 
 ## Hardware smoke
 

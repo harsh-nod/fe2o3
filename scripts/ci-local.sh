@@ -25,34 +25,6 @@ readonly CPU_TEST_PACKAGES=(
   fe2o3-rustc-invocation
   reserved-fe2o3-symbols
   rustc-codegen-fe2o3
-  verus-vecadd
-)
-
-readonly EXAMPLE_PACKAGES=(
-  fe2o3-vecadd
-  fe2o3-add-inplace
-  fe2o3-copy
-  fe2o3-downsample
-  fe2o3-fill
-  fe2o3-gather-odd
-  fe2o3-scale
-  fe2o3-shift
-  fe2o3-previous
-  fe2o3-stencil
-  fe2o3-raw-add-index
-  fe2o3-raw-const-minus
-  fe2o3-raw-parenthesized-sub
-  fe2o3-raw-disjoint-inplace-shift
-  fe2o3-raw-disjoint-shift
-  fe2o3-raw-gather
-  fe2o3-raw-neighbors
-  fe2o3-raw-output-shift
-  fe2o3-saxpy
-  fe2o3-axpy-inplace
-  fe2o3-negate
-  fe2o3-normalize
-  fe2o3-pipeline
-  fe2o3-vecadd-f64
 )
 
 usage() {
@@ -91,21 +63,64 @@ run_step() {
   fi
 }
 
+load_example_packages() {
+  local lane="$1"
+  local destination_name="$2"
+  local output
+  local -n destination="${destination_name}"
+
+  output="$(
+    cargo run --quiet --locked -p cargo-fe2o3 -- examples list "${lane}"
+  )"
+  destination=()
+  if [[ -n "${output}" ]]; then
+    mapfile -t destination <<<"${output}"
+  fi
+}
+
 run_format() {
   run_step format cargo fmt --all -- --check
 }
 
 run_check() {
+  local -a all_examples rustc_examples cargo_args
+  local -A rustc_example_set=()
+  local package
+  load_example_packages all all_examples
+  load_example_packages rustc-check rustc_examples
+  for package in "${rustc_examples[@]}"; do
+    rustc_example_set["${package}"]=1
+  done
+
+  cargo_args=(check --workspace --all-targets --locked)
+  for package in "${all_examples[@]}"; do
+    if [[ -z "${rustc_example_set[${package}]+selected}" ]]; then
+      cargo_args+=(--exclude "${package}")
+    fi
+  done
+
   # `cargo check` does not link libamdhip64, so all host-facing examples are safe
   # to validate on a generic runner.
-  run_step workspace-check cargo check --workspace --all-targets --locked
+  run_step workspace-check cargo "${cargo_args[@]}"
 }
 
 run_tests() {
   local cargo_args=(test --locked)
+  local -a rustc_examples rocm_examples
+  local -A rocm_example_set=()
   local package
   for package in "${CPU_TEST_PACKAGES[@]}"; do
     cargo_args+=(-p "${package}")
+  done
+  load_example_packages rustc-check rustc_examples
+  load_example_packages rocm-compile rocm_examples
+  for package in "${rocm_examples[@]}"; do
+    rocm_example_set["${package}"]=1
+  done
+  for package in "${rustc_examples[@]}"; do
+    if [[ -z "${rocm_example_set[${package}]+selected}" ]]; then
+      cargo_args+=(-p "${package}")
+    fi
   done
   run_step cpu-tests cargo "${cargo_args[@]}"
   # fe2o3-core unit tests link HIP, but its compile-fail doctests do not.
@@ -128,6 +143,8 @@ run_parity_matrix_checks() {
 }
 
 run_generic() {
+  run_step example-manifest \
+    cargo run --quiet --locked -p cargo-fe2o3 -- examples check
   run_parity_matrix_checks
   run_format
   run_check
@@ -137,6 +154,8 @@ run_generic() {
 
 run_rocm_compile() {
   export FE2O3_TARGET="${FE2O3_TARGET:-gfx1100}"
+  local -a example_packages
+  load_example_packages rocm-compile example_packages
   run_step rocm-doctor cargo run --locked -p cargo-fe2o3 -- doctor
   run_step rocm-trusted-device-items \
     cargo test --locked -p rustc-codegen-fe2o3 \
@@ -150,9 +169,12 @@ run_rocm_compile() {
       --ignored --exact
 
   local package
-  for package in "${EXAMPLE_PACKAGES[@]}"; do
+  for package in "${example_packages[@]}"; do
     run_step "rocm-build-${package}" \
       cargo run --locked -p cargo-fe2o3 -- build -p "${package}"
+    run_step "rocm-artifacts-${package}" \
+      cargo run --quiet --locked -p cargo-fe2o3 -- \
+        examples check-artifacts "${package}"
   done
   run_step rocm-kernel-ir-verification \
     cargo test --locked -p cargo-fe2o3 --test kernel_ir_verification \
