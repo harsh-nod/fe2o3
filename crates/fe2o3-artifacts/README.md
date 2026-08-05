@@ -27,6 +27,21 @@ claim that the identity uses a cryptographic digest.
   are nonzero, dimension products do not overflow, and static plus dynamic
   shared-memory requirements fit in `u32`.
 
-ABI layout, kernel records, serialization, payload bytes, proof records, host
-launch integration, and runtime loading policy are intentionally outside this
-initial model layer.
+## ABI invariants
+
+- ABI alignments are bounded powers of two and total argument storage is
+  bounded to 1 MiB before device-specific limits are applied. Fields are
+  aligned, ordered, non-overlapping, in bounds, and compatible with the
+  selected pointer width.
+- Scalar, pointer, and slice records have consistent size, mutability, access,
+  and address-space semantics. Immutable and constant references cannot grant
+  write access. Standalone reference fields must match one supported pointer
+  width; an `AbiLayout` binds them to the target's exact width.
+
+`AbiKind::Slice` is one logical field in the ordered ABI. Its physical launch
+representation is exactly pointer followed by length, with total size twice
+the target pointer width and target-pointer alignment. Typed launch code must
+expand that field once while preserving its single logical argument position.
+
+Kernel records, serialization, payload bytes, proof records, host launch
+integration, and runtime loading policy remain outside this layer.

@@ -9,7 +9,10 @@ pub enum ValidationError {
     Duplicate { field: &'static str },
     InvalidRank(u8),
     InvalidDimension { field: &'static str },
+    InvalidAlignment { field: &'static str, value: u32 },
     InvalidLayout(&'static str),
+    InvalidAccess(&'static str),
+    TooMany { field: &'static str, max: usize },
     Overflow(&'static str),
 }
 
@@ -22,7 +25,12 @@ impl fmt::Display for ValidationError {
             Self::Duplicate { field } => write!(f, "duplicate {field}"),
             Self::InvalidRank(rank) => write!(f, "launch rank {rank} is not in 1..=3"),
             Self::InvalidDimension { field } => write!(f, "invalid {field} dimensions"),
+            Self::InvalidAlignment { field, value } => {
+                write!(f, "{field} alignment {value} is invalid")
+            }
             Self::InvalidLayout(reason) => write!(f, "invalid ABI layout: {reason}"),
+            Self::InvalidAccess(reason) => write!(f, "invalid ABI access: {reason}"),
+            Self::TooMany { field, max } => write!(f, "{field} exceeds {max} entries"),
             Self::Overflow(field) => write!(f, "{field} overflows its representation"),
         }
     }
