@@ -174,6 +174,15 @@ run_hardware_smoke() {
 
   run_step hardware-rocminfo rocminfo
   run_step hardware-doctor cargo run --locked -p cargo-fe2o3 -- doctor
+  local rocm_path="${ROCM_PATH:-/opt/rocm}"
+  local native_test="${REPO_ROOT}/target/fe2o3-hip-device-properties-test"
+  run_step hardware-hip-device-properties-build \
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -D__HIP_PLATFORM_AMD__ \
+      -I "${rocm_path}/include" -I "${REPO_ROOT}/crates/fe2o3-hip-sys/native" \
+      "${REPO_ROOT}/crates/fe2o3-hip-sys/native/device_properties_test.c" \
+      -L "${rocm_path}/lib" -Wl,-rpath,"${rocm_path}/lib" -lamdhip64 \
+      -o "${native_test}"
+  run_step hardware-hip-device-properties-test "${native_test}"
   run_step hardware-device-copy-transfer \
     cargo test --locked -p fe2o3-core --test device_copy_derive_hardware -- \
       --ignored --exact derived_struct_bytes_round_trip_through_device_memory

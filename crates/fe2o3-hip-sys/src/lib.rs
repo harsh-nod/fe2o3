@@ -91,9 +91,6 @@ unsafe extern "C" {
         properties: *mut Fe2o3HipDeviceProperties,
     ) -> hipError_t;
 
-    #[cfg(all(test, fe2o3_hip_device_properties))]
-    fn fe2o3HipTestArchitectureFeatures(requested_features: u64) -> u64;
-
     pub fn hipStreamCreate(stream: *mut hipStream_t) -> hipError_t;
     pub fn hipStreamDestroy(stream: hipStream_t) -> hipError_t;
     pub fn hipStreamSynchronize(stream: hipStream_t) -> hipError_t;
@@ -218,30 +215,6 @@ mod tests {
         );
     }
 
-    #[cfg(fe2o3_hip_device_properties)]
-    #[test]
-    fn native_feature_extraction_preserves_every_bit() {
-        let features = [
-            HIP_DEVICE_ARCH_HAS_GLOBAL_INT32_ATOMICS,
-            HIP_DEVICE_ARCH_HAS_SHARED_INT32_ATOMICS,
-            HIP_DEVICE_ARCH_HAS_GLOBAL_INT64_ATOMICS,
-            HIP_DEVICE_ARCH_HAS_SHARED_INT64_ATOMICS,
-            HIP_DEVICE_ARCH_HAS_WARP_VOTE,
-            HIP_DEVICE_ARCH_HAS_WARP_BALLOT,
-            HIP_DEVICE_ARCH_HAS_WARP_SHUFFLE,
-        ];
-
-        for feature in features {
-            // SAFETY: This deterministic native test helper does not access HIP.
-            assert_eq!(
-                unsafe { fe2o3HipTestArchitectureFeatures(feature) },
-                feature
-            );
-        }
-        // SAFETY: This deterministic native test helper does not access HIP.
-        assert_eq!(unsafe { fe2o3HipTestArchitectureFeatures(0x7f) }, 0x7f);
-    }
-
     #[cfg(not(fe2o3_hip_device_properties))]
     #[test]
     fn unavailable_device_properties_fail_closed_and_clear_output() {
@@ -282,7 +255,10 @@ mod tests {
         assert!(properties.max_block_dim.into_iter().all(|dim| dim > 0));
         assert!(properties.max_grid_dim.into_iter().all(|dim| dim > 0));
         assert!(properties.shared_mem_per_block > 0);
-        assert!(properties.shared_mem_per_block_optin > 0);
+        assert!(
+            properties.shared_mem_per_block_optin == 0
+                || properties.shared_mem_per_block_optin >= properties.shared_mem_per_block
+        );
         assert_ne!(properties.architecture_features, 0);
         assert_eq!(properties.architecture_features & !0x7f, 0);
     }

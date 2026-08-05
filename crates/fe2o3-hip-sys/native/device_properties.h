@@ -25,6 +25,4 @@ typedef struct Fe2o3HipDeviceProperties {
 int32_t fe2o3HipGetDeviceProperties(int32_t device_id,
                                     Fe2o3HipDeviceProperties *properties);
 
-uint64_t fe2o3HipTestArchitectureFeatures(uint64_t requested_features);
-
 #endif

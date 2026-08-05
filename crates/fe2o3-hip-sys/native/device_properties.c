@@ -99,23 +99,3 @@ int32_t fe2o3HipGetDeviceProperties(int32_t device_id,
 
   return (int32_t)hipSuccess;
 }
-
-uint64_t fe2o3HipTestArchitectureFeatures(uint64_t requested_features) {
-  hipDeviceProp_t properties;
-  memset(&properties, 0, sizeof(properties));
-  properties.arch.hasGlobalInt32Atomics =
-      (requested_features & FE2O3_HIP_DEVICE_ARCH_HAS_GLOBAL_INT32_ATOMICS) != 0;
-  properties.arch.hasSharedInt32Atomics =
-      (requested_features & FE2O3_HIP_DEVICE_ARCH_HAS_SHARED_INT32_ATOMICS) != 0;
-  properties.arch.hasGlobalInt64Atomics =
-      (requested_features & FE2O3_HIP_DEVICE_ARCH_HAS_GLOBAL_INT64_ATOMICS) != 0;
-  properties.arch.hasSharedInt64Atomics =
-      (requested_features & FE2O3_HIP_DEVICE_ARCH_HAS_SHARED_INT64_ATOMICS) != 0;
-  properties.arch.hasWarpVote =
-      (requested_features & FE2O3_HIP_DEVICE_ARCH_HAS_WARP_VOTE) != 0;
-  properties.arch.hasWarpBallot =
-      (requested_features & FE2O3_HIP_DEVICE_ARCH_HAS_WARP_BALLOT) != 0;
-  properties.arch.hasWarpShuffle =
-      (requested_features & FE2O3_HIP_DEVICE_ARCH_HAS_WARP_SHUFFLE) != 0;
-  return architecture_features(&properties);
-}
