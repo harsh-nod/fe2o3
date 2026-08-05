@@ -5,9 +5,13 @@ use std::path::PathBuf;
 
 include!("vecadd_body.rs");
 
+macro_rules! production_f32_add {
+    ($lhs:expr, $rhs:expr) => {{ $lhs + $rhs }};
+}
+
 #[kernel]
 pub fn vecadd(a: &[f32], b: &[f32], mut c: DisjointSlice<f32>) {
-    vecadd_kernel_body!(thread, (), a, b, c);
+    vecadd_kernel_body!(thread, (), production_f32_add, a, b, c);
 }
 
 fn main() -> fe2o3_core::Result<()> {
@@ -65,7 +69,11 @@ mod tests {
     #[test]
     fn real_kernel_expands_the_shared_body() {
         assert!(KERNEL_SOURCE.contains("include!(\"vecadd_body.rs\")"));
-        assert!(KERNEL_SOURCE.contains("vecadd_kernel_body!(thread, (), a, b, c)"));
+        assert!(
+            KERNEL_SOURCE.contains("vecadd_kernel_body!(thread, (), production_f32_add, a, b, c)")
+        );
+        assert!(KERNEL_SOURCE.contains("macro_rules! production_f32_add"));
+        assert!(KERNEL_SOURCE.contains("$lhs + $rhs"));
     }
 
     #[test]
@@ -74,7 +82,7 @@ mod tests {
             "let idx = $thread::index_1d",
             "let i = idx.get()",
             "if let Some(out) = $output.get_mut(idx)",
-            "*out = $a[i] + $b[i]",
+            "*out = $add!($a[i], $b[i])",
         ] {
             assert!(SHARED_BODY.contains(operation), "missing `{operation}`");
         }

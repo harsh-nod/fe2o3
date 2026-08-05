@@ -1,9 +1,27 @@
 use vstd::prelude::*;
-use vstd::std_specs::ops::*;
 
 include!("../../../vecadd/src/vecadd_body.rs");
 
+macro_rules! mutated_model_float_add {
+    ($left:expr, $right:expr) => {{
+        mutated_float::add($left, $right)
+    }};
+}
+
 verus! {
+
+#[derive(Copy, Clone, PartialEq, Eq)]
+pub struct MutatedFloat {
+    token: u64,
+}
+
+mod mutated_float {
+    use super::MutatedFloat;
+
+    pub fn add(left: MutatedFloat, right: MutatedFloat) -> MutatedFloat {
+        MutatedFloat { token: left.token ^ right.token }
+    }
+}
 
 #[derive(Copy, Clone)]
 pub struct MutatedThreadIndex {
@@ -33,14 +51,14 @@ pub mod mutated_thread {
 }
 
 pub struct MutatedDisjointSlice {
-    pub values: Vec<f32>,
+    pub values: Vec<MutatedFloat>,
 }
 
 impl MutatedDisjointSlice {
     pub fn get_mut(
         &mut self,
         index: MutatedThreadIndex,
-    ) -> (element: Option<&mut f32>)
+    ) -> (element: Option<&mut MutatedFloat>)
         ensures
             match element {
                 Some(element) => {
@@ -70,8 +88,8 @@ impl MutatedDisjointSlice {
 /// collision between distinct launch witnesses.
 pub fn mutated_shared_body_claims_identity_frame(
     thread: MutatedThreadIndex,
-    a: &[f32],
-    b: &[f32],
+    a: &[MutatedFloat],
+    b: &[MutatedFloat],
     mut output: MutatedDisjointSlice,
 ) -> (result: MutatedDisjointSlice)
     requires
@@ -80,11 +98,17 @@ pub fn mutated_shared_body_claims_identity_frame(
         thread.linear != 0,
         a@.len() == output.values@.len(),
         b@.len() == output.values@.len(),
-        a@[0].add_req(b@[0]),
     ensures
         result.values@[0] == output.values@[0], // mutated_shared_body_claims_identity_frame
 {
-    vecadd_kernel_body!(mutated_thread, (thread), a, b, output);
+    vecadd_kernel_body!(
+        mutated_thread,
+        (thread),
+        mutated_model_float_add,
+        a,
+        b,
+        output,
+    );
     output
 }
 

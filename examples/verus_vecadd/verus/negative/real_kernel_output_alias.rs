@@ -1,5 +1,4 @@
 use vstd::prelude::*;
-use vstd::std_specs::ops::*;
 
 #[path = "../vecadd.rs"]
 mod model;
@@ -10,8 +9,8 @@ verus! {
 /// but this mutation aliases the output allocation with the first input.
 pub fn mutated_real_kernel_accepts_output_input_alias(
     thread: model::ModelGpuThreadIndex,
-    a: &[f32],
-    b: &[f32],
+    a: &[model::ModelFloat],
+    b: &[model::ModelFloat],
     output: model::ModelGpuDisjointSlice,
     Ghost(evidence): Ghost<model::VecAddSourceEvidence>,
 ) -> (result: model::ModelGpuDisjointSlice)
@@ -19,7 +18,6 @@ pub fn mutated_real_kernel_accepts_output_input_alias(
         thread.linear < output.values@.len(),
         a@.len() == output.values@.len(),
         b@.len() == output.values@.len(),
-        a@[thread.linear as int].add_req(b@[thread.linear as int]),
         model::vecadd_source_evidence_is_well_formed(
             evidence,
             output.values@.len(),

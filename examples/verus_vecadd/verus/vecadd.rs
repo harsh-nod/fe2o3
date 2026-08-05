@@ -1,8 +1,13 @@
 use vstd::prelude::*;
-use vstd::std_specs::ops::*;
 
 include!("../src/vecadd_body.rs");
 include!("../../vecadd/src/vecadd_body.rs");
+
+macro_rules! model_float_add {
+    ($left:expr, $right:expr) => {{
+        model_float::add($left, $right)
+    }};
+}
 
 verus! {
 
@@ -455,18 +460,36 @@ pub mod model_gpu_thread {
     }
 }
 
-/// Owned executable model of `DisjointSlice<f32>`. It deliberately models
-/// element contents rather than raw-pointer provenance; region evidence below
-/// carries the separate symbolic allocation obligations.
+/// Local value used only to verify the real kernel's memory-access shape. Its
+/// token has no specified relationship to an IEEE f32 bit pattern.
+#[derive(Copy, Clone, PartialEq, Eq)]
+pub struct ModelFloat {
+    token: u64,
+}
+
+/// Total executable arithmetic adapter for the source model. XOR deliberately
+/// supplies only a total operation over opaque tokens; no proof below exposes
+/// this result or claims refinement to production f32 addition.
+mod model_float {
+    use super::ModelFloat;
+
+    pub fn add(left: ModelFloat, right: ModelFloat) -> ModelFloat {
+        ModelFloat { token: left.token ^ right.token }
+    }
+}
+
+/// Owned executable model of `DisjointSlice<f32>`. Model values preserve only
+/// the source-level access and mutation shape; region evidence below carries
+/// the separate symbolic allocation obligations.
 pub struct ModelGpuDisjointSlice {
-    pub values: Vec<f32>,
+    pub values: Vec<ModelFloat>,
 }
 
 impl ModelGpuDisjointSlice {
     pub fn get_mut(
         &mut self,
         index: ModelGpuThreadIndex,
-    ) -> (element: Option<&mut f32>)
+    ) -> (element: Option<&mut ModelFloat>)
         ensures
             match element {
                 Some(element) => {
@@ -510,16 +533,14 @@ pub open spec fn real_vecadd_source_evidence_is_valid(
 /// and framing; they do not assign IEEE semantics to the f32 result.
 pub fn real_kernel_vecadd_body(
     thread: ModelGpuThreadIndex,
-    a: &[f32],
-    b: &[f32],
+    a: &[ModelFloat],
+    b: &[ModelFloat],
     mut output: ModelGpuDisjointSlice,
     Ghost(evidence): Ghost<VecAddSourceEvidence>,
 ) -> (result: ModelGpuDisjointSlice)
     requires
         a@.len() == output.values@.len(),
         b@.len() == output.values@.len(),
-        thread.linear < output.values@.len() ==>
-            a@[thread.linear as int].add_req(b@[thread.linear as int]),
         thread.linear < output.values@.len() ==>
             real_vecadd_source_evidence_is_valid(
                 evidence,
@@ -592,8 +613,57 @@ pub fn real_kernel_vecadd_body(
             );
         }
     }
-    vecadd_kernel_body!(model_gpu_thread, (thread), a, b, output);
+    vecadd_kernel_body!(model_gpu_thread, (thread), model_float_add, a, b, output);
     output
+}
+
+/// In-range caller theorem for arbitrary modeled operands. It exposes only
+/// bounds, ownership, and frame guarantees; the stored arithmetic result is
+/// intentionally absent from the contract.
+pub fn real_kernel_arbitrary_in_range_operands_are_memory_safe(
+    thread: ModelGpuThreadIndex,
+    a: &[ModelFloat],
+    b: &[ModelFloat],
+    output: ModelGpuDisjointSlice,
+    Ghost(evidence): Ghost<VecAddSourceEvidence>,
+) -> (result: ModelGpuDisjointSlice)
+    requires
+        thread.linear < output.values@.len(),
+        a@.len() == output.values@.len(),
+        b@.len() == output.values@.len(),
+        real_vecadd_source_evidence_is_valid(
+            evidence,
+            output.values@.len(),
+            thread.linear as nat,
+        ),
+    ensures
+        result.values@.len() == output.values@.len(),
+        forall |other: int| 0 <= other < output.values@.len()
+            && other != thread.linear as int ==>
+                result.values@[other] == output.values@[other],
+        region_is_in_bounds(
+            evidence.a_allocation,
+            evidence.a_capability.permission.region,
+        ),
+        region_is_in_bounds(
+            evidence.b_allocation,
+            evidence.b_capability.permission.region,
+        ),
+        region_is_in_bounds(
+            evidence.output_allocation,
+            evidence.output_permission.region,
+        ),
+        permission_can_write(evidence.output_permission),
+        permissions_are_compatible(
+            evidence.a_capability.permission,
+            evidence.output_permission,
+        ),
+        permissions_are_compatible(
+            evidence.b_capability.permission,
+            evidence.output_permission,
+        ),
+{
+    real_kernel_vecadd_body(thread, a, b, output, Ghost(evidence))
 }
 
 /// Composable rounded-launch tail case. When the launch witness is outside the
@@ -601,8 +671,8 @@ pub fn real_kernel_vecadd_body(
 /// output. No f32 operation-domain or allocation-region premise is needed.
 pub fn real_kernel_rounded_tail_is_noop(
     thread: ModelGpuThreadIndex,
-    a: &[f32],
-    b: &[f32],
+    a: &[ModelFloat],
+    b: &[ModelFloat],
     output: ModelGpuDisjointSlice,
     Ghost(evidence): Ghost<VecAddSourceEvidence>,
 ) -> (result: ModelGpuDisjointSlice)
