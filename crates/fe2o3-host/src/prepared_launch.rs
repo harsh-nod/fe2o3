@@ -1,3 +1,9 @@
+#[cfg(test)]
+use crate::argument_alias::fresh_alias_registry;
+use crate::argument_alias::{
+    AliasAdmissionRegistry, InFlightRegionRegistration, admit_and_register, shared_alias_registry,
+};
+use crate::{AliasAdmissionError, ArgumentAccess, ArgumentAliasAdmission};
 use fe2o3_amd_target::AmdTargetId;
 use fe2o3_core::{GpuContext, Result as CoreResult};
 use fe2o3_kernel_descriptor::{BlockSizeV1, DimensionsV1, KernelId, LaunchConstraintsV1};
@@ -68,6 +74,7 @@ pub struct ObservedContext {
     device: DeviceIdentity,
     limits: DeviceLaunchLimits,
     hip_capabilities: HipCapabilityFacts,
+    alias_registry: Arc<AliasAdmissionRegistry>,
     retained_context: Option<Arc<GpuContext>>,
 }
 
@@ -116,6 +123,7 @@ impl ObservedContext {
                 warp_ballot: observed.has_warp_ballot(),
                 warp_shuffle: observed.has_warp_shuffle(),
             },
+            alias_registry: shared_alias_registry(Arc::as_ptr(context) as usize),
             retained_context: Some(context.clone()),
         })
     }
@@ -181,6 +189,10 @@ impl ObservedContext {
         self.identity.0
     }
 
+    pub(crate) const fn alias_registry(&self) -> &Arc<AliasAdmissionRegistry> {
+        &self.alias_registry
+    }
+
     pub(crate) fn same_launch_limits(&self, other: &Self) -> bool {
         self.limits == other.limits
     }
@@ -229,6 +241,7 @@ impl ObservedContext {
                 warp_ballot: true,
                 warp_shuffle: true,
             },
+            alias_registry: fresh_alias_registry(identity),
             retained_context: None,
         }
     }
@@ -610,8 +623,75 @@ impl<K> PreparedLaunch<K> {
         Arc::ptr_eq(&self.seal, &brand.seal)
     }
 
+    /// Validates and reserves this launch's argument byte regions in its exact
+    /// observed context.
+    ///
+    /// The returned guard is tied to this prepared launch's private brand and
+    /// keeps the reservation active until it is dropped. It carries no module,
+    /// function, executable-verification, or launch authority.
+    pub fn admit_arguments<'allocation>(
+        self,
+        arguments: impl IntoIterator<Item = ArgumentAccess<'allocation>>,
+    ) -> Result<ArgumentAdmittedLaunch<'allocation, K>, AliasAdmissionError> {
+        let (admission, registration) =
+            admit_and_register(self.context.alias_registry(), &self.context, arguments)?;
+        Ok(ArgumentAdmittedLaunch {
+            prepared: self,
+            admission,
+            _registration: registration,
+        })
+    }
+
     pub(crate) const fn observed_context(&self) -> &ObservedContext {
         &self.context
+    }
+}
+
+/// A branded prepared launch whose argument regions are reserved in its exact
+/// context's in-flight registry.
+///
+/// Fields and constructors are private so standalone alias validation cannot
+/// forge this state transition. This value still has no launch method and does
+/// not represent executable verification.
+pub struct ArgumentAdmittedLaunch<'allocation, K> {
+    prepared: PreparedLaunch<K>,
+    admission: ArgumentAliasAdmission<'allocation>,
+    _registration: InFlightRegionRegistration<'allocation>,
+}
+
+impl<K> fmt::Debug for ArgumentAdmittedLaunch<'_, K> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ArgumentAdmittedLaunch")
+            .field("prepared", &self.prepared)
+            .field("argument_count", &self.admission.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl<K> ArgumentAdmittedLaunch<'_, K> {
+    pub const fn kernel(&self) -> KernelId {
+        self.prepared.kernel()
+    }
+
+    pub const fn device(&self) -> &DeviceIdentity {
+        self.prepared.device()
+    }
+
+    pub const fn geometry(&self) -> PreparedGeometry {
+        self.prepared.geometry()
+    }
+
+    pub const fn resources(&self) -> PreparedResources {
+        self.prepared.resources()
+    }
+
+    pub fn argument_count(&self) -> usize {
+        self.admission.len()
+    }
+
+    pub(crate) const fn prepared(&self) -> &PreparedLaunch<K> {
+        &self.prepared
     }
 }
 
@@ -1018,6 +1098,10 @@ fn axes(dimensions: [u32; 3]) -> impl Iterator<Item = (LaunchAxis, u32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        AllocationProvenance, ArgumentAccessMode, AtomicAccess, AtomicOperation, AtomicOrdering,
+        AtomicScope, ConflictSource,
+    };
 
     struct VecAdd;
 
@@ -1061,6 +1145,48 @@ mod tests {
         assert_eq!(brand.prepare(context, request).unwrap_err(), expected);
     }
 
+    fn prepared(brand: &KernelBrand<VecAdd>, context: &ObservedContext) -> PreparedLaunch<VecAdd> {
+        brand
+            .prepare(context, request(VECADD, 1, [1, 1, 1], [1, 1, 1], 0))
+            .unwrap()
+    }
+
+    unsafe fn allocation<'a>(
+        context: &ObservedContext,
+        owner: &'a (),
+        address: usize,
+        byte_length: usize,
+    ) -> AllocationProvenance<'a> {
+        // SAFETY: tests use inert addresses only to exercise admission; no
+        // resulting value can access memory or enqueue work.
+        unsafe {
+            AllocationProvenance::from_raw_parts(context, owner, address as *mut u8, byte_length)
+                .unwrap()
+        }
+    }
+
+    fn read(region: crate::CheckedByteRegion<'_>) -> ArgumentAccess<'_> {
+        ArgumentAccess::new(region, ArgumentAccessMode::SharedRead)
+    }
+
+    fn write(region: crate::CheckedByteRegion<'_>) -> ArgumentAccess<'_> {
+        ArgumentAccess::new(region, ArgumentAccessMode::ExclusiveWrite)
+    }
+
+    fn atomic(region: crate::CheckedByteRegion<'_>) -> ArgumentAccess<'_> {
+        ArgumentAccess::new(
+            region,
+            ArgumentAccessMode::Atomic(
+                AtomicAccess::new(
+                    AtomicOperation::ReadModifyWrite,
+                    AtomicOrdering::AcquireRelease,
+                    AtomicScope::Device,
+                )
+                .unwrap(),
+            ),
+        )
+    }
+
     #[test]
     fn preparation_binds_identity_context_device_geometry_and_resources() {
         let observed = context(11, 0, "gfx942:sramecc+:xnack-");
@@ -1098,6 +1224,120 @@ mod tests {
 
         assert!(prepared.belongs_to(&first));
         assert!(!prepared.belongs_to(&second));
+    }
+
+    #[test]
+    fn admitted_launch_retains_brand_and_accepts_touching_ranges() {
+        let observed = context(31, 0, "gfx942");
+        let brand = brand(contract(1, BlockSizeV1::Any), observed.clone());
+        let owner = ();
+        // SAFETY: see `allocation`.
+        let allocation = unsafe { allocation(&observed, &owner, 0x1000, 64) };
+
+        let first = prepared(&brand, &observed)
+            .admit_arguments([write(allocation.region(0, 16).unwrap())])
+            .unwrap();
+        let touching = prepared(&brand, &observed)
+            .admit_arguments([write(allocation.region(16, 16).unwrap())])
+            .unwrap();
+
+        assert_eq!(first.argument_count(), 1);
+        assert_eq!(first.kernel(), VECADD);
+        assert!(first.prepared().belongs_to(&brand));
+        assert_eq!(touching.geometry().total_threads(), 1);
+    }
+
+    #[test]
+    fn repeated_allocation_provenance_cannot_hide_overlap() {
+        let observed = context(32, 0, "gfx942");
+        let brand = brand(contract(1, BlockSizeV1::Any), observed.clone());
+        let first_owner = ();
+        let second_owner = ();
+        // SAFETY: both declarations model the same live allocation.
+        let first = unsafe { allocation(&observed, &first_owner, 0x2000, 64) };
+        // SAFETY: see above.
+        let repeated = unsafe { allocation(&observed, &second_owner, 0x2000, 64) };
+
+        assert_eq!(first.identity(), repeated.identity());
+        assert_eq!(
+            prepared(&brand, &observed)
+                .admit_arguments([
+                    write(first.region(0, 32).unwrap()),
+                    write(repeated.region(16, 32).unwrap()),
+                ])
+                .unwrap_err(),
+            AliasAdmissionError::Conflict {
+                argument_index: 1,
+                conflicting_with: ConflictSource::Argument {
+                    earlier_argument: 0,
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn admission_rejects_unknown_cross_context_and_atomic_overlap() {
+        let observed = context(33, 0, "gfx942");
+        let brand = brand(contract(1, BlockSizeV1::Any), observed.clone());
+        assert_eq!(
+            prepared(&brand, &observed)
+                .admit_arguments([ArgumentAccess::unknown(ArgumentAccessMode::ExclusiveWrite,)])
+                .unwrap_err(),
+            AliasAdmissionError::UnknownProvenance { argument_index: 0 }
+        );
+
+        for wrong in [context(34, 0, "gfx942"), context(35, 1, "gfx950")] {
+            let owner = ();
+            // SAFETY: see `allocation`.
+            let allocation = unsafe { allocation(&wrong, &owner, 0x3000, 16) };
+            assert_eq!(
+                prepared(&brand, &observed)
+                    .admit_arguments([read(allocation.region(0, 16).unwrap())])
+                    .unwrap_err(),
+                AliasAdmissionError::ArgumentContextMismatch { argument_index: 0 }
+            );
+        }
+
+        let owner = ();
+        // SAFETY: see `allocation`.
+        let allocation = unsafe { allocation(&observed, &owner, 0x4000, 16) };
+        assert!(matches!(
+            prepared(&brand, &observed).admit_arguments([
+                atomic(allocation.region(0, 8).unwrap()),
+                write(allocation.region(4, 8).unwrap()),
+            ]),
+            Err(AliasAdmissionError::Conflict { .. })
+        ));
+    }
+
+    #[test]
+    fn registered_cross_launch_conflict_clears_when_guard_drops() {
+        let observed = context(36, 0, "gfx942");
+        let brand = brand(contract(1, BlockSizeV1::Any), observed.clone());
+        let owner = ();
+        // SAFETY: see `allocation`.
+        let allocation = unsafe { allocation(&observed, &owner, 0x5000, 64) };
+
+        let in_flight = prepared(&brand, &observed)
+            .admit_arguments([write(allocation.region(8, 24).unwrap())])
+            .unwrap();
+        assert_eq!(
+            prepared(&brand, &observed)
+                .admit_arguments([read(allocation.region(0, 16).unwrap())])
+                .unwrap_err(),
+            AliasAdmissionError::Conflict {
+                argument_index: 0,
+                conflicting_with: ConflictSource::InFlight {
+                    launch_index: 0,
+                    argument_index: 0,
+                },
+            }
+        );
+
+        drop(in_flight);
+        prepared(&brand, &observed)
+            .admit_arguments([write(allocation.region(8, 24).unwrap())])
+            .unwrap();
     }
 
     #[test]

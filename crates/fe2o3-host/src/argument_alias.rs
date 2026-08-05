@@ -1,7 +1,9 @@
 use crate::ObservedContext;
 use fe2o3_core::{DeviceBuffer, DeviceCopy};
+use std::collections::HashMap;
 use std::fmt;
 use std::marker::PhantomData;
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 /// Opaque identity for one device allocation in one exact HIP context.
 ///
@@ -381,6 +383,147 @@ struct AdmittedAccess<'allocation> {
     mode: ArgumentAccessMode,
 }
 
+#[derive(Clone, Copy)]
+struct AccessDescriptor {
+    identity: AllocationIdentity,
+    byte_offset: usize,
+    byte_end: usize,
+    mode: ArgumentAccessMode,
+}
+
+impl AccessDescriptor {
+    fn from_admitted(access: &AdmittedAccess<'_>) -> Self {
+        Self {
+            identity: access.region.identity,
+            byte_offset: access.region.byte_offset,
+            byte_end: access.region.byte_end,
+            mode: access.mode,
+        }
+    }
+
+    const fn is_empty(self) -> bool {
+        self.byte_offset == self.byte_end
+    }
+}
+
+struct RegisteredLaunch {
+    seal: Arc<()>,
+    accesses: Vec<AccessDescriptor>,
+}
+
+#[derive(Default)]
+struct AliasAdmissionRegistryState {
+    launches: Vec<RegisteredLaunch>,
+}
+
+pub(crate) struct AliasAdmissionRegistry {
+    context: usize,
+    state: Mutex<AliasAdmissionRegistryState>,
+}
+
+impl AliasAdmissionRegistry {
+    fn new(context: usize) -> Self {
+        Self {
+            context,
+            state: Mutex::new(AliasAdmissionRegistryState::default()),
+        }
+    }
+
+    fn register<'allocation>(
+        self: &Arc<Self>,
+        context: &ObservedContext,
+        admission: &ArgumentAliasAdmission<'allocation>,
+    ) -> Result<InFlightRegionRegistration<'allocation>, AliasAdmissionError> {
+        debug_assert_eq!(self.context, context.context_key());
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        for (argument_index, candidate) in admission.accesses.iter().enumerate() {
+            let candidate = AccessDescriptor::from_admitted(candidate);
+            for (launch_index, launch) in state.launches.iter().enumerate() {
+                for (in_flight_argument, existing) in launch.accesses.iter().enumerate() {
+                    if descriptors_conflict(candidate, *existing) {
+                        return Err(AliasAdmissionError::Conflict {
+                            argument_index,
+                            conflicting_with: ConflictSource::InFlight {
+                                launch_index,
+                                argument_index: in_flight_argument,
+                            },
+                        });
+                    }
+                }
+            }
+        }
+
+        let seal = Arc::new(());
+        state.launches.push(RegisteredLaunch {
+            seal: seal.clone(),
+            accesses: admission
+                .accesses
+                .iter()
+                .map(AccessDescriptor::from_admitted)
+                .collect(),
+        });
+        Ok(InFlightRegionRegistration {
+            registry: self.clone(),
+            seal,
+            marker: PhantomData,
+        })
+    }
+}
+
+pub(crate) struct InFlightRegionRegistration<'allocation> {
+    registry: Arc<AliasAdmissionRegistry>,
+    seal: Arc<()>,
+    marker: PhantomData<&'allocation ()>,
+}
+
+impl Drop for InFlightRegionRegistration<'_> {
+    fn drop(&mut self) {
+        let mut state = self
+            .registry
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        state
+            .launches
+            .retain(|launch| !Arc::ptr_eq(&launch.seal, &self.seal));
+    }
+}
+
+pub(crate) fn shared_alias_registry(context: usize) -> Arc<AliasAdmissionRegistry> {
+    static REGISTRIES: OnceLock<Mutex<HashMap<usize, Weak<AliasAdmissionRegistry>>>> =
+        OnceLock::new();
+    let registries = REGISTRIES.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut registries = registries.lock().unwrap_or_else(|error| error.into_inner());
+    if let Some(registry) = registries.get(&context).and_then(Weak::upgrade) {
+        return registry;
+    }
+
+    let registry = Arc::new(AliasAdmissionRegistry::new(context));
+    registries.insert(context, Arc::downgrade(&registry));
+    registry
+}
+
+#[cfg(test)]
+pub(crate) fn fresh_alias_registry(context: usize) -> Arc<AliasAdmissionRegistry> {
+    Arc::new(AliasAdmissionRegistry::new(context))
+}
+
+pub(crate) fn admit_and_register<'allocation>(
+    registry: &Arc<AliasAdmissionRegistry>,
+    context: &ObservedContext,
+    arguments: impl IntoIterator<Item = ArgumentAccess<'allocation>>,
+) -> Result<
+    (
+        ArgumentAliasAdmission<'allocation>,
+        InFlightRegionRegistration<'allocation>,
+    ),
+    AliasAdmissionError,
+> {
+    let admission = ArgumentAliasValidator::new().admit(context, arguments, &[])?;
+    let registration = registry.register(context, &admission)?;
+    Ok((admission, registration))
+}
+
 /// Stateless validator for one launch's argument regions.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ArgumentAliasValidator;
@@ -454,22 +597,25 @@ impl ArgumentAliasValidator {
 }
 
 fn accesses_conflict(left: &AdmittedAccess<'_>, right: &AdmittedAccess<'_>) -> bool {
-    if left.region.identity != right.region.identity
-        || !regions_overlap(&left.region, &right.region)
-    {
-        return false;
-    }
-
-    !matches!(
-        (left.mode, right.mode),
-        (
-            ArgumentAccessMode::SharedRead,
-            ArgumentAccessMode::SharedRead
-        )
+    descriptors_conflict(
+        AccessDescriptor::from_admitted(left),
+        AccessDescriptor::from_admitted(right),
     )
 }
 
-fn regions_overlap(left: &CheckedByteRegion<'_>, right: &CheckedByteRegion<'_>) -> bool {
+fn descriptors_conflict(left: AccessDescriptor, right: AccessDescriptor) -> bool {
+    left.identity == right.identity
+        && descriptors_overlap(left, right)
+        && !matches!(
+            (left.mode, right.mode),
+            (
+                ArgumentAccessMode::SharedRead,
+                ArgumentAccessMode::SharedRead
+            )
+        )
+}
+
+fn descriptors_overlap(left: AccessDescriptor, right: AccessDescriptor) -> bool {
     !left.is_empty()
         && !right.is_empty()
         && left.byte_offset < right.byte_end

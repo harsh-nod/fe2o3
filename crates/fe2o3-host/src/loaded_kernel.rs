@@ -1,8 +1,8 @@
 use crate::artifact_binding::ArtifactKernelBrandV1;
 use crate::{
-    ArtifactKernelIdentityV1, DeviceIdentity, KernelBrand, KernelParams, LaunchConfig,
-    ObservedContext, PrepareLaunchError, PreparedGeometry, PreparedLaunch, PreparedResources,
-    UntrustedLaunchRequest, ValidatedArtifactSelectionV1,
+    ArgumentAdmittedLaunch, ArtifactKernelIdentityV1, DeviceIdentity, KernelBrand, KernelParams,
+    LaunchConfig, ObservedContext, PrepareLaunchError, PreparedGeometry, PreparedLaunch,
+    PreparedResources, UntrustedLaunchRequest, ValidatedArtifactSelectionV1,
 };
 use fe2o3_core::{GpuContext, GpuFunction, GpuModule, Stream};
 use std::fmt;
@@ -118,6 +118,31 @@ impl<K> LoadedKernel<K> {
         &self,
         prepared: PreparedLaunch<K>,
     ) -> Result<LoadedPreparedLaunch<'_, K>, LoadedKernelMatchError> {
+        self.validate_prepared(&prepared)?;
+
+        Ok(LoadedPreparedLaunch {
+            loaded: self,
+            prepared,
+        })
+    }
+
+    /// Consumes an argument-admitted launch only when its original prepared
+    /// launch belongs to this exact loaded artifact authority.
+    pub fn bind_admitted<'allocation>(
+        &self,
+        admitted: ArgumentAdmittedLaunch<'allocation, K>,
+    ) -> Result<LoadedArgumentAdmittedLaunch<'_, 'allocation, K>, LoadedKernelMatchError> {
+        self.validate_prepared(admitted.prepared())?;
+        Ok(LoadedArgumentAdmittedLaunch {
+            loaded: self,
+            admitted,
+        })
+    }
+
+    fn validate_prepared(
+        &self,
+        prepared: &PreparedLaunch<K>,
+    ) -> Result<(), LoadedKernelMatchError> {
         let prepared_context = prepared.observed_context();
         if prepared.device() != self.context.device() {
             return Err(LoadedKernelMatchError::WrongDevice);
@@ -137,11 +162,7 @@ impl<K> LoadedKernel<K> {
         if !prepared.belongs_to(&self.brand) {
             return Err(LoadedKernelMatchError::WrongArtifactAuthority);
         }
-
-        Ok(LoadedPreparedLaunch {
-            loaded: self,
-            prepared,
-        })
+        Ok(())
     }
 
     fn function(&self) -> &GpuFunction {
@@ -240,6 +261,45 @@ impl<K> LoadedPreparedLaunch<'_, K> {
             fe2o3_core::launch_kernel_on_stream(self.loaded.function(), config, stream, params)
         }
         .map_err(LoadedLaunchError::Hip)
+    }
+}
+
+/// Argument-admitted launch state tied to one exact loaded kernel authority.
+///
+/// This token has no public constructor or launch operation. Generated typed
+/// launch code may use it as the internal prerequisite for ABI packing and
+/// enqueue lifetime tracking without treating byte-region validation as
+/// executable verification.
+pub struct LoadedArgumentAdmittedLaunch<'loaded, 'allocation, K> {
+    loaded: &'loaded LoadedKernel<K>,
+    admitted: ArgumentAdmittedLaunch<'allocation, K>,
+}
+
+impl<K> fmt::Debug for LoadedArgumentAdmittedLaunch<'_, '_, K> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("LoadedArgumentAdmittedLaunch")
+            .field("identity", &self.loaded.identity)
+            .field("admitted", &self.admitted)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<K> LoadedArgumentAdmittedLaunch<'_, '_, K> {
+    pub fn identity(&self) -> &ArtifactKernelIdentityV1 {
+        self.loaded.identity()
+    }
+
+    pub const fn geometry(&self) -> PreparedGeometry {
+        self.admitted.geometry()
+    }
+
+    pub const fn resources(&self) -> PreparedResources {
+        self.admitted.resources()
+    }
+
+    pub fn argument_count(&self) -> usize {
+        self.admitted.argument_count()
     }
 }
 

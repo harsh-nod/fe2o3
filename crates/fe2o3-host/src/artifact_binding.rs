@@ -902,6 +902,34 @@ mod tests {
     }
 
     #[test]
+    fn loaded_admission_preserves_existing_artifact_authority() {
+        let observed = context(17, 0, "gfx942");
+        let validated = validate_fixture(FixtureSpec::default(), &observed).unwrap();
+        let first = test_loaded(&validated);
+        let second = test_loaded(&validated);
+        let admitted = first
+            .prepare(&observed, request(kernel_id(0x11)))
+            .unwrap()
+            .admit_arguments(std::iter::empty::<crate::ArgumentAccess<'static>>())
+            .unwrap();
+
+        assert_eq!(
+            second.bind_admitted(admitted).unwrap_err(),
+            crate::LoadedKernelMatchError::WrongArtifactAuthority
+        );
+
+        let admitted = first
+            .prepare(&observed, request(kernel_id(0x11)))
+            .unwrap()
+            .admit_arguments(std::iter::empty::<crate::ArgumentAccess<'static>>())
+            .unwrap();
+        let bound = first.bind_admitted(admitted).unwrap();
+        assert_eq!(bound.identity(), validated.identity());
+        assert_eq!(bound.argument_count(), 0);
+        assert_eq!(bound.geometry().grid().dimensions(), [17, 1, 1]);
+    }
+
+    #[test]
     fn separate_marker_issuance_cannot_reuse_a_prepared_launch() {
         let observed = context(7, 0, "gfx942");
         let validated = validate_fixture(FixtureSpec::default(), &observed).unwrap();
