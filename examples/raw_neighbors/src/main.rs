@@ -5,8 +5,8 @@ use std::path::PathBuf;
 
 #[kernel]
 pub fn raw_neighbors(x: &[f32], mut out: DisjointSlice<f32>) {
-    let center = thread::index_1d().get();
     let idx = thread::index_1d();
+    let center = idx.get();
     if center > 0 && center + 1 < x.len() {
         let left = center - 1;
         let right = center + 1;

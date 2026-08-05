@@ -27,31 +27,31 @@ pub struct ThreadIndex<IndexSpace = Index1D> {
 
 impl<IndexSpace> ThreadIndex<IndexSpace> {
     #[rustc_diagnostic_item = "fe2o3_device_thread_index_get"]
-    pub fn get(self) -> usize {
+    pub fn get(&self) -> usize {
         self.raw
     }
 
     #[rustc_diagnostic_item = "fe2o3_device_thread_index_offset"]
-    pub fn offset(self, offset: usize) -> usize {
+    pub fn offset(&self, offset: usize) -> usize {
         self.raw + offset
     }
 
     #[rustc_diagnostic_item = "fe2o3_device_thread_index_offset_signed"]
-    pub fn offset_signed(self, offset: isize) -> usize {
+    pub fn offset_signed(&self, offset: isize) -> usize {
         self.raw.wrapping_add_signed(offset)
     }
 
     #[rustc_diagnostic_item = "fe2o3_device_thread_index_stride"]
-    pub fn stride(self, stride: usize) -> usize {
+    pub fn stride(&self, stride: usize) -> usize {
         self.raw.wrapping_mul(stride)
     }
 
     #[rustc_diagnostic_item = "fe2o3_device_thread_index_stride_offset"]
-    pub fn stride_offset(self, stride: usize, offset: isize) -> usize {
+    pub fn stride_offset(&self, stride: usize, offset: isize) -> usize {
         self.raw.wrapping_mul(stride).wrapping_add_signed(offset)
     }
 
-    pub fn in_bounds(self, len: usize) -> bool {
+    pub fn in_bounds(&self, len: usize) -> bool {
         self.raw < len
     }
 }

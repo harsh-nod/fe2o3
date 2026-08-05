@@ -5,10 +5,10 @@ use std::path::PathBuf;
 
 #[kernel]
 pub fn stencil(x: &[f32], mut out: DisjointSlice<f32>) {
-    let center = thread::index_1d().get();
-    let left = center.wrapping_add_signed(-1);
-    let right = center + 1;
     let idx = thread::index_1d();
+    let left = idx.offset_signed(-1);
+    let center = idx.get();
+    let right = idx.offset(1);
     if left < x.len() && right < x.len() {
         if let Some(value) = out.get_mut(idx) {
             *value = 0.25 * x[left] + 0.5 * x[center] + 0.25 * x[right];

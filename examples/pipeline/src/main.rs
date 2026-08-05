@@ -5,8 +5,8 @@ use std::path::PathBuf;
 
 #[kernel]
 pub fn scale_stage(alpha: f32, x: &[f32], mut tmp: DisjointSlice<f32>) {
-    let i = thread::index_1d().get();
     let idx = thread::index_1d();
+    let i = idx.get();
     if let Some(value) = tmp.get_mut(idx) {
         *value = alpha * x[i];
     }
@@ -14,8 +14,8 @@ pub fn scale_stage(alpha: f32, x: &[f32], mut tmp: DisjointSlice<f32>) {
 
 #[kernel]
 pub fn bias_stage(tmp: &[f32], beta: f32, mut out: DisjointSlice<f32>) {
-    let i = thread::index_1d().get();
     let idx = thread::index_1d();
+    let i = idx.get();
     if let Some(value) = out.get_mut(idx) {
         *value = tmp[i] + beta;
     }

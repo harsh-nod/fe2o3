@@ -367,14 +367,21 @@ impl RecordLoweringFunction {
 
     pub fn index_sketch(&self) -> RecordIndexSketch {
         let mut thread_index_local = None;
+        let mut thread_index_aliases = HashSet::new();
         let mut bindings = HashMap::new();
 
         for op in &self.ops {
             if op.op == MirOp::Call {
-                bind_call_index(op, &mut thread_index_local, &mut bindings);
+                bind_call_index(
+                    op,
+                    &mut thread_index_local,
+                    &mut thread_index_aliases,
+                    &mut bindings,
+                );
                 continue;
             }
 
+            bind_thread_index_alias(op, &mut thread_index_aliases);
             bind_operation_index(op, &mut bindings);
         }
 
@@ -737,6 +744,7 @@ impl RecordLinearIndex {
 fn bind_call_index(
     op: &RecordLoweringOp,
     thread_index_local: &mut Option<usize>,
+    thread_index_aliases: &mut HashSet<usize>,
     bindings: &mut HashMap<usize, RecordLinearIndex>,
 ) {
     let Some(callee) = op.trusted_callee else {
@@ -748,12 +756,15 @@ fn bind_call_index(
 
     if callee == TrustedDeviceItem::ThreadIndex1d {
         *thread_index_local = Some(destination);
+        thread_index_aliases.clear();
+        thread_index_aliases.insert(destination);
         return;
     }
 
-    let Some(thread_index_local) = *thread_index_local else {
+    thread_index_aliases.remove(&destination);
+    if thread_index_local.is_none() {
         return;
-    };
+    }
     let operands = op.operand_labels();
     let Some(receiver) = operands
         .first()
@@ -761,7 +772,7 @@ fn bind_call_index(
     else {
         return;
     };
-    if receiver.local != thread_index_local {
+    if !receiver.projection.is_empty() || !thread_index_aliases.contains(&receiver.local) {
         return;
     }
 
@@ -798,6 +809,29 @@ fn bind_call_index(
 
     if let Some(index) = index {
         bindings.insert(destination, index);
+    }
+}
+
+fn bind_thread_index_alias(op: &RecordLoweringOp, aliases: &mut HashSet<usize>) {
+    if op.op != MirOp::Assign {
+        return;
+    }
+    let Some(destination) = op.destination_local else {
+        return;
+    };
+    aliases.remove(&destination);
+    if op.operation.as_deref() != Some("ref") {
+        return;
+    }
+    let Some(source) = op
+        .operand_labels()
+        .first()
+        .and_then(|operand| RecordPlaceRef::parse(operand))
+    else {
+        return;
+    };
+    if source.projection.is_empty() && aliases.contains(&source.local) {
+        aliases.insert(destination);
     }
 }
 
@@ -1285,6 +1319,83 @@ mod tests {
                 offset: 1
             })
         );
+    }
+
+    #[test]
+    fn sketches_thread_index_helpers_through_shared_reference_temporaries() {
+        let records = vec![
+            MirOpRecord::new(MirOp::Func)
+                .with_attr(MirAttr::string("symbol", "borrowed_index"))
+                .with_attr(MirAttr::string("kind", "kernel")),
+            MirOpRecord::new(MirOp::Call)
+                .with_attr(MirAttr::string("function", "borrowed_index"))
+                .with_attr(MirAttr::string("callee", "fe2o3_device::thread::index_1d"))
+                .with_attr(MirAttr::usize("destination_local", 3)),
+            MirOpRecord::new(MirOp::Assign)
+                .with_attr(MirAttr::string("function", "borrowed_index"))
+                .with_attr(MirAttr::usize("destination_local", 4))
+                .with_attr(MirAttr::string("operation", "ref"))
+                .with_attr(MirAttr::string("operands", "local3")),
+            MirOpRecord::new(MirOp::Call)
+                .with_attr(MirAttr::string("function", "borrowed_index"))
+                .with_attr(MirAttr::string("callee", "fe2o3_device::ThreadIndex::get"))
+                .with_attr(MirAttr::usize("destination_local", 5))
+                .with_attr(MirAttr::string("operands", "local4")),
+        ];
+
+        let mut plan = plan_from_records(&records);
+        trust_calls_for_test(
+            &mut plan,
+            "borrowed_index",
+            &[
+                TrustedDeviceItem::ThreadIndex1d,
+                TrustedDeviceItem::ThreadIndexGet,
+            ],
+        );
+        let sketch = plan.function("borrowed_index").unwrap().index_sketch();
+
+        assert_eq!(sketch.thread_index_local, Some(3));
+        assert_eq!(sketch.get(5), Some(RecordLinearIndex::thread()));
+    }
+
+    #[test]
+    fn overwritten_thread_index_reference_is_not_treated_as_an_alias() {
+        let records = vec![
+            MirOpRecord::new(MirOp::Func)
+                .with_attr(MirAttr::string("symbol", "overwritten_index"))
+                .with_attr(MirAttr::string("kind", "kernel")),
+            MirOpRecord::new(MirOp::Call)
+                .with_attr(MirAttr::string("function", "overwritten_index"))
+                .with_attr(MirAttr::usize("destination_local", 3)),
+            MirOpRecord::new(MirOp::Assign)
+                .with_attr(MirAttr::string("function", "overwritten_index"))
+                .with_attr(MirAttr::usize("destination_local", 4))
+                .with_attr(MirAttr::string("operation", "ref"))
+                .with_attr(MirAttr::string("operands", "local3")),
+            MirOpRecord::new(MirOp::Assign)
+                .with_attr(MirAttr::string("function", "overwritten_index"))
+                .with_attr(MirAttr::usize("destination_local", 4))
+                .with_attr(MirAttr::string("operation", "use"))
+                .with_attr(MirAttr::string("operands", "local8")),
+            MirOpRecord::new(MirOp::Call)
+                .with_attr(MirAttr::string("function", "overwritten_index"))
+                .with_attr(MirAttr::usize("destination_local", 5))
+                .with_attr(MirAttr::string("operands", "local4")),
+        ];
+
+        let mut plan = plan_from_records(&records);
+        trust_calls_for_test(
+            &mut plan,
+            "overwritten_index",
+            &[
+                TrustedDeviceItem::ThreadIndex1d,
+                TrustedDeviceItem::ThreadIndexGet,
+            ],
+        );
+        let sketch = plan.function("overwritten_index").unwrap().index_sketch();
+
+        assert_eq!(sketch.thread_index_local, Some(3));
+        assert_eq!(sketch.get(5), None);
     }
 
     #[test]

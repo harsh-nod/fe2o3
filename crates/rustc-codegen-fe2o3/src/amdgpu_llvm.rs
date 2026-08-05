@@ -1097,6 +1097,7 @@ fn analyze_elementwise_shape<'tcx>(
 ) -> Result<ElementwiseShape, String> {
     let arg_locals = mir.args_iter().collect::<Vec<_>>();
     let mut borrowed_args = HashMap::new();
+    let mut borrowed_locals = HashMap::new();
 
     for block in mir.basic_blocks.iter() {
         for statement in &block.statements {
@@ -1106,9 +1107,13 @@ fn analyze_elementwise_shape<'tcx>(
             let (place, rvalue) = &**assign;
             if let Rvalue::Ref(_, _, borrowed_place) = rvalue
                 && place.projection.is_empty()
-                && let Some(arg_index) = local_arg_index(borrowed_place.local, &arg_locals)
             {
-                borrowed_args.insert(place.local, arg_index);
+                if borrowed_place.projection.is_empty() {
+                    borrowed_locals.insert(place.local, borrowed_place.local);
+                }
+                if let Some(arg_index) = local_arg_index(borrowed_place.local, &arg_locals) {
+                    borrowed_args.insert(place.local, arg_index);
+                }
             }
         }
     }
@@ -1148,10 +1153,9 @@ fn analyze_elementwise_shape<'tcx>(
                 continue;
             };
             if destination.projection.is_empty()
-                && args
-                    .first()
-                    .and_then(|arg| operand_local(&arg.node))
-                    .is_some_and(|local| local == thread_index_local)
+                && args.first().is_some_and(|arg| {
+                    operand_refers_to_local(&arg.node, &borrowed_locals, thread_index_local)
+                })
             {
                 index_expr_locals.insert(destination.local, IndexExpr::Thread);
             }
@@ -1163,10 +1167,9 @@ fn analyze_elementwise_shape<'tcx>(
                 continue;
             };
             if destination.projection.is_empty()
-                && args
-                    .first()
-                    .and_then(|arg| operand_local(&arg.node))
-                    .is_some_and(|local| local == thread_index_local)
+                && args.first().is_some_and(|arg| {
+                    operand_refers_to_local(&arg.node, &borrowed_locals, thread_index_local)
+                })
                 && let Some(offset) = args
                     .get(1)
                     .and_then(|arg| operand_usize_const(tcx, &arg.node))
@@ -1183,10 +1186,9 @@ fn analyze_elementwise_shape<'tcx>(
                 continue;
             };
             if destination.projection.is_empty()
-                && args
-                    .first()
-                    .and_then(|arg| operand_local(&arg.node))
-                    .is_some_and(|local| local == thread_index_local)
+                && args.first().is_some_and(|arg| {
+                    operand_refers_to_local(&arg.node, &borrowed_locals, thread_index_local)
+                })
                 && let Some(offset) = args
                     .get(1)
                     .and_then(|arg| operand_isize_const(tcx, &arg.node))
@@ -1202,10 +1204,9 @@ fn analyze_elementwise_shape<'tcx>(
                 continue;
             };
             if destination.projection.is_empty()
-                && args
-                    .first()
-                    .and_then(|arg| operand_local(&arg.node))
-                    .is_some_and(|local| local == thread_index_local)
+                && args.first().is_some_and(|arg| {
+                    operand_refers_to_local(&arg.node, &borrowed_locals, thread_index_local)
+                })
                 && let Some(stride) = args
                     .get(1)
                     .and_then(|arg| operand_usize_const(tcx, &arg.node))
@@ -1221,10 +1222,9 @@ fn analyze_elementwise_shape<'tcx>(
                 continue;
             };
             if destination.projection.is_empty()
-                && args
-                    .first()
-                    .and_then(|arg| operand_local(&arg.node))
-                    .is_some_and(|local| local == thread_index_local)
+                && args.first().is_some_and(|arg| {
+                    operand_refers_to_local(&arg.node, &borrowed_locals, thread_index_local)
+                })
                 && let Some(stride) = args
                     .get(1)
                     .and_then(|arg| operand_usize_const(tcx, &arg.node))
@@ -1686,6 +1686,30 @@ fn overflow_value_place(
 fn operand_local(operand: &Operand<'_>) -> Option<Local> {
     let place = operand.place()?;
     place.projection.is_empty().then_some(place.local)
+}
+
+fn operand_refers_to_local(
+    operand: &Operand<'_>,
+    borrowed_locals: &HashMap<Local, Local>,
+    expected: Local,
+) -> bool {
+    let Some(mut local) = operand_local(operand) else {
+        return false;
+    };
+    let mut remaining = borrowed_locals.len();
+    loop {
+        if local == expected {
+            return true;
+        }
+        if remaining == 0 {
+            return false;
+        }
+        let Some(next) = borrowed_locals.get(&local).copied() else {
+            return false;
+        };
+        local = next;
+        remaining -= 1;
+    }
 }
 
 fn local_arg_index(local: Local, arg_locals: &[Local]) -> Option<usize> {

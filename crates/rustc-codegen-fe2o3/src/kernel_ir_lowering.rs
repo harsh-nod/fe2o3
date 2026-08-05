@@ -1596,6 +1596,79 @@ mod tests {
     }
 
     #[test]
+    fn thread_index_get_accepts_the_shared_receiver_mir_form() {
+        let index_shape = MirTypeShape::Adt {
+            identity: TrustedDeviceItem::ThreadIndex.canonical_path().to_string(),
+        };
+        let module = MirModule {
+            functions: vec![MirFunction {
+                export_name: "borrowed_index".to_string(),
+                rust_path: "tests::borrowed_index".to_string(),
+                kind: MirFunctionKind::Kernel,
+                arg_count: 0,
+                local_count: 4,
+                locals: vec![
+                    local(0, MirLocalRole::Return, MirTypeShape::Unit),
+                    local(1, MirLocalRole::Temp, index_shape.clone()),
+                    local(
+                        2,
+                        MirLocalRole::Temp,
+                        MirTypeShape::Reference {
+                            pointee: Box::new(index_shape),
+                            mutable: false,
+                        },
+                    ),
+                    local(3, MirLocalRole::Temp, MirTypeShape::USize),
+                ],
+                blocks: vec![
+                    MirBlock {
+                        index: 0,
+                        statements: Vec::new(),
+                        terminator: Some(terminator(MirTerminatorKind::Call {
+                            callee: Some(MirCallee::trusted_for_test(
+                                TrustedDeviceItem::ThreadIndex1d,
+                            )),
+                            target: Some(1),
+                            destination: Some(place(1)),
+                            operands: Vec::new(),
+                        })),
+                    },
+                    MirBlock {
+                        index: 1,
+                        statements: vec![assign(0, 2, vec![operand(1)], MirRvalueKind::Ref)],
+                        terminator: Some(terminator(MirTerminatorKind::Call {
+                            callee: Some(MirCallee::trusted_for_test(
+                                TrustedDeviceItem::ThreadIndexGet,
+                            )),
+                            target: Some(2),
+                            destination: Some(place(3)),
+                            operands: vec![operand(2)],
+                        })),
+                    },
+                    MirBlock {
+                        index: 2,
+                        statements: Vec::new(),
+                        terminator: Some(terminator(MirTerminatorKind::Return)),
+                    },
+                ],
+            }],
+        };
+
+        let module = translate_and_verify(&module).expect("borrowed receiver should lower");
+        let get = module
+            .functions
+            .iter()
+            .find(|function| {
+                function.id.as_str() == TrustedDeviceItem::ThreadIndexGet.canonical_path()
+            })
+            .expect("thread-index get declaration");
+        assert_eq!(
+            get.signature,
+            Signature::new(vec![Type::INDEX], vec![Type::INDEX])
+        );
+    }
+
+    #[test]
     fn canonical_looking_untrusted_callee_is_rejected() {
         let identity = TrustedDeviceItem::ThreadIndex1d.canonical_path();
         let fixture = helper_call_fixture(MirCallee::untrusted_for_test(identity), &[]);

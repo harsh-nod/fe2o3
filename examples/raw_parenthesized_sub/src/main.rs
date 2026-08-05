@@ -5,8 +5,8 @@ use std::path::PathBuf;
 
 #[kernel]
 pub fn raw_parenthesized_sub(x: &[f32], mut out: DisjointSlice<f32>) {
-    let base = thread::index_1d().get();
     let idx = thread::index_1d();
+    let base = idx.get();
     let source = (base + 1) - base;
     if source < x.len() {
         if let Some(value) = out.get_mut(idx) {

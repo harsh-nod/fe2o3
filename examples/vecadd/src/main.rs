@@ -5,8 +5,8 @@ use std::path::PathBuf;
 
 #[kernel]
 pub fn vecadd(a: &[f32], b: &[f32], mut c: DisjointSlice<f32>) {
-    let i = thread::index_1d().get();
     let idx = thread::index_1d();
+    let i = idx.get();
     if let Some(out) = c.get_mut(idx) {
         *out = a[i] + b[i];
     }
