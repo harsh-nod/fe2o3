@@ -2,10 +2,11 @@ use crate::{
     BlockSizeV1, DeviceIdentity, DimensionsV1, KernelBrand, KernelId, LaunchConstraintsV1,
     ObservedContext, PrepareLaunchError, PreparedLaunch, UntrustedLaunchRequest,
 };
+use fe2o3_amd_target::{AmdTargetId, ParseAmdTargetIdError};
 use fe2o3_artifacts::{
-    AbiLayout, BlockSize, Capability, CodeObjectIdentity, DeclaredTargetMismatch, DigestBytes,
-    Endianness, HostLaunchAbi, HostLaunchAbiError, LaunchContract, Name, PayloadDigest,
-    PointerWidth, SelectedNativeKernel, TargetIdentity,
+    AbiLayout, BlockSize, Capability, CodeObjectIdentity, DigestBytes, Endianness, HostLaunchAbi,
+    HostLaunchAbiError, LaunchContract, Name, PayloadDigest, PointerWidth, SelectedNativeKernel,
+    TargetIdentity,
 };
 use fe2o3_kernel_descriptor::ValidationError as DescriptorValidationError;
 use std::fmt;
@@ -128,10 +129,12 @@ impl fmt::Debug for ValidatedArtifactSelectionV1 {
 impl ValidatedArtifactSelectionV1 {
     /// Validates one native artifact selection for an observed context.
     ///
-    /// The bridge currently supports only exact AMDGPU/64-bit/little-endian
-    /// targets and kernels with no capability requirements, because the current
-    /// context observation does not expose a capability model. It validates the
-    /// declared ABI structurally against the conservative host-launch subset and
+    /// The bridge supports canonical, compatible AMDGPU/64-bit/little-endian
+    /// targets. Omitted artifact target-feature states accept observed explicit
+    /// states; explicit artifact states must match the observation. Of the
+    /// current coarse manifest capabilities, only workgroup memory has enough
+    /// HIP observation and launch-contract detail to be admitted. It validates
+    /// the ABI structurally against the conservative host-launch subset and
     /// derives launch constraints bounded by observed device limits.
     pub fn validate(
         selected: SelectedNativeKernel<'_>,
@@ -172,6 +175,9 @@ impl ValidatedArtifactSelectionV1 {
         }
         if !context.same_launch_limits(&self.context) {
             return Err(ArtifactRevalidationError::DeviceLimitsChanged);
+        }
+        if !context.same_hip_capabilities(&self.context) {
+            return Err(ArtifactRevalidationError::DeviceCapabilitiesChanged);
         }
 
         let actual = identity_from_selection(selected, context)
@@ -262,10 +268,19 @@ pub(crate) enum ArtifactMarkerPrepareError {
 #[non_exhaustive]
 pub enum ArtifactBindingError {
     UnsupportedTargetTriple(String),
-    TargetMismatch(DeclaredTargetMismatch),
+    InvalidArtifactTargetId {
+        target: String,
+        error: ParseAmdTargetIdError,
+    },
+    IncompatibleAmdTarget {
+        artifact: AmdTargetId,
+        observed: AmdTargetId,
+    },
     UnsupportedPointerWidth(PointerWidth),
     UnsupportedEndianness(Endianness),
-    UnobservedRequiredCapability(Capability),
+    RequiredCapabilityUnavailable(Capability),
+    InsufficientCapabilityObservation(Capability),
+    UnsupportedRequiredCapability(Capability),
     PayloadDigestMismatch,
     UnsupportedHostAbi(HostLaunchAbiError),
     LaunchContract(ArtifactLaunchContractError),
@@ -277,16 +292,33 @@ impl fmt::Display for ArtifactBindingError {
             Self::UnsupportedTargetTriple(triple) => {
                 write!(formatter, "unsupported artifact target triple {triple}")
             }
-            Self::TargetMismatch(error) => error.fmt(formatter),
+            Self::InvalidArtifactTargetId { target, error } => {
+                write!(
+                    formatter,
+                    "invalid artifact AMD target ID {target:?}: {error}"
+                )
+            }
+            Self::IncompatibleAmdTarget { artifact, observed } => write!(
+                formatter,
+                "artifact AMD target {artifact} is incompatible with observed target {observed}"
+            ),
             Self::UnsupportedPointerWidth(width) => {
                 write!(formatter, "unsupported artifact pointer width {width:?}")
             }
             Self::UnsupportedEndianness(endianness) => {
                 write!(formatter, "unsupported artifact endianness {endianness:?}")
             }
-            Self::UnobservedRequiredCapability(capability) => write!(
+            Self::RequiredCapabilityUnavailable(capability) => write!(
                 formatter,
-                "the observed context does not establish required capability {capability:?}"
+                "the observed context does not provide required capability {capability:?}"
+            ),
+            Self::InsufficientCapabilityObservation(capability) => write!(
+                formatter,
+                "HIP observations are too coarse to establish required capability {capability:?}"
+            ),
+            Self::UnsupportedRequiredCapability(capability) => write!(
+                formatter,
+                "the host bridge cannot observe required capability {capability:?}"
             ),
             Self::PayloadDigestMismatch => {
                 formatter.write_str("selected payload no longer matches its validated digest")
@@ -300,7 +332,7 @@ impl fmt::Display for ArtifactBindingError {
 impl std::error::Error for ArtifactBindingError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::TargetMismatch(error) => Some(error),
+            Self::InvalidArtifactTargetId { error, .. } => Some(error),
             Self::UnsupportedHostAbi(error) => Some(error),
             Self::LaunchContract(error) => Some(error),
             _ => None,
@@ -362,6 +394,7 @@ pub enum ArtifactRevalidationError {
     WrongDevice,
     WrongContext,
     DeviceLimitsChanged,
+    DeviceCapabilitiesChanged,
 }
 
 impl fmt::Display for ArtifactRevalidationError {
@@ -376,6 +409,9 @@ impl fmt::Display for ArtifactRevalidationError {
             Self::DeviceLimitsChanged => {
                 formatter.write_str("observed device launch limits changed")
             }
+            Self::DeviceCapabilitiesChanged => {
+                formatter.write_str("observed HIP device capability facts changed")
+            }
         }
     }
 }
@@ -387,7 +423,8 @@ impl std::error::Error for ArtifactRevalidationError {
             Self::WrongArtifactIdentity
             | Self::WrongDevice
             | Self::WrongContext
-            | Self::DeviceLimitsChanged => None,
+            | Self::DeviceLimitsChanged
+            | Self::DeviceCapabilitiesChanged => None,
         }
     }
 }
@@ -397,11 +434,7 @@ fn identity_from_selection(
     context: &ObservedContext,
 ) -> Result<ArtifactKernelIdentityV1, ArtifactBindingError> {
     validate_target(selected, context)?;
-    if let Some(capability) = selected.kernel().required_capabilities().first() {
-        return Err(ArtifactBindingError::UnobservedRequiredCapability(
-            *capability,
-        ));
-    }
+    validate_required_capabilities(selected.kernel().required_capabilities(), context)?;
     HostLaunchAbi::validate(selected.kernel().abi())
         .map_err(ArtifactBindingError::UnsupportedHostAbi)?;
 
@@ -453,10 +486,58 @@ fn validate_target(
             target.endianness(),
         ));
     }
-    if target.architecture().as_str() != context.device().target() {
-        return Err(ArtifactBindingError::TargetMismatch(
-            DeclaredTargetMismatch::Architecture,
-        ));
+    let architecture = target.architecture().as_str();
+    let artifact_target = AmdTargetId::parse(architecture).map_err(|error| {
+        ArtifactBindingError::InvalidArtifactTargetId {
+            target: architecture.into(),
+            error,
+        }
+    })?;
+    let observed_target = context.device().target_id();
+    if !artifact_target.is_compatible_with_observed(&observed_target) {
+        return Err(ArtifactBindingError::IncompatibleAmdTarget {
+            artifact: artifact_target,
+            observed: observed_target,
+        });
+    }
+    Ok(())
+}
+
+fn validate_required_capabilities(
+    capabilities: &[Capability],
+    context: &ObservedContext,
+) -> Result<(), ArtifactBindingError> {
+    for &capability in capabilities {
+        match capability {
+            Capability::WorkgroupMemory if context.max_shared_memory_per_block() != 0 => {}
+            Capability::WorkgroupMemory => {
+                return Err(ArtifactBindingError::RequiredCapabilityUnavailable(
+                    capability,
+                ));
+            }
+            // The default warp size and HIP architecture bits are device-level
+            // facts. The manifest does not record per-kernel wave size, ballot
+            // width, shuffle semantics, or atomic width/scope/ordering/address
+            // space, so these observations cannot satisfy these contracts.
+            Capability::Subgroup
+            | Capability::Ballot
+            | Capability::Shuffle
+            | Capability::Atomics
+            | Capability::AmdWave => {
+                return Err(ArtifactBindingError::InsufficientCapabilityObservation(
+                    capability,
+                ));
+            }
+            Capability::MatrixMultiply
+            | Capability::AsyncCopy
+            | Capability::AmdMfma
+            | Capability::AmdWmma
+            | Capability::AmdDsPermute => {
+                return Err(ArtifactBindingError::UnsupportedRequiredCapability(
+                    capability,
+                ));
+            }
+        }
     }
     Ok(())
 }
@@ -708,6 +789,15 @@ mod tests {
         ObservedContext::for_test(identity, ordinal, target, 1_024, 65_536)
     }
 
+    fn validate_fixture(
+        spec: FixtureSpec,
+        observed: &ObservedContext,
+    ) -> Result<ValidatedArtifactSelectionV1, ArtifactBindingError> {
+        let container = decoded_container(spec);
+        let selected = container.select_native_kernel(digest(0x11)).unwrap();
+        ValidatedArtifactSelectionV1::validate(selected, observed)
+    }
+
     fn kernel_id(byte: u8) -> KernelId {
         KernelId::from_bytes([byte; 32])
     }
@@ -872,37 +962,169 @@ mod tests {
     }
 
     #[test]
-    fn wrong_target_and_unobserved_capabilities_fail_binding() {
-        let observed = context(1, 0, "gfx942");
-        let wrong_target = FixtureSpec {
-            architecture: "gfx950",
-            ..FixtureSpec::default()
-        };
-        let container = decoded_container(wrong_target);
-        assert!(matches!(
-            ValidatedArtifactSelectionV1::validate(
-                container.select_native_kernel(digest(0x11)).unwrap(),
-                &observed
-            ),
-            Err(ArtifactBindingError::TargetMismatch(
-                DeclaredTargetMismatch::Architecture
-            ))
-        ));
+    fn target_feature_compatibility_is_asymmetric_and_processor_exact() {
+        let explicit = context(1, 0, "gfx942:sramecc+:xnack-");
 
-        let capability = FixtureSpec {
-            required_capabilities: vec![Capability::AmdWave],
-            ..FixtureSpec::default()
-        };
-        let container = decoded_container(capability);
+        for architecture in ["gfx942", "gfx942:sramecc+:xnack-"] {
+            validate_fixture(
+                FixtureSpec {
+                    architecture,
+                    ..FixtureSpec::default()
+                },
+                &explicit,
+            )
+            .unwrap();
+        }
+
+        for architecture in [
+            "gfx942:sramecc-:xnack-",
+            "gfx942:sramecc+:xnack+",
+            "gfx950:sramecc+:xnack-",
+        ] {
+            assert!(matches!(
+                validate_fixture(
+                    FixtureSpec {
+                        architecture,
+                        ..FixtureSpec::default()
+                    },
+                    &explicit,
+                ),
+                Err(ArtifactBindingError::IncompatibleAmdTarget { .. })
+            ));
+        }
+
+        let omitted_observation = context(1, 0, "gfx942");
+        validate_fixture(FixtureSpec::default(), &omitted_observation).unwrap();
         assert!(matches!(
-            ValidatedArtifactSelectionV1::validate(
-                container.select_native_kernel(digest(0x11)).unwrap(),
-                &observed
+            validate_fixture(
+                FixtureSpec {
+                    architecture: "gfx942:xnack-",
+                    ..FixtureSpec::default()
+                },
+                &omitted_observation,
             ),
-            Err(ArtifactBindingError::UnobservedRequiredCapability(
-                Capability::AmdWave
-            ))
+            Err(ArtifactBindingError::IncompatibleAmdTarget { .. })
         ));
+    }
+
+    #[test]
+    fn malformed_generic_and_unknown_artifact_target_ids_fail_closed() {
+        use fe2o3_amd_target::{AmdTargetFeature, ParseAmdTargetIdError};
+
+        let observed = context(1, 0, "gfx942:sramecc+:xnack-");
+        for (target, expected) in [
+            ("gfx9-generic", ParseAmdTargetIdError::GenericProcessor),
+            ("gfx9999", ParseAmdTargetIdError::UnknownProcessor),
+            ("gfx942:future+", ParseAmdTargetIdError::UnknownFeature),
+            (
+                "gfx942:xnack",
+                ParseAmdTargetIdError::MissingFeatureState(AmdTargetFeature::Xnack),
+            ),
+            (
+                "gfx942:xnack=on",
+                ParseAmdTargetIdError::InvalidFeature(AmdTargetFeature::Xnack),
+            ),
+        ] {
+            assert_eq!(
+                validate_fixture(
+                    FixtureSpec {
+                        architecture: target,
+                        ..FixtureSpec::default()
+                    },
+                    &observed,
+                )
+                .unwrap_err(),
+                ArtifactBindingError::InvalidArtifactTargetId {
+                    target: target.into(),
+                    error: expected,
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn workgroup_memory_is_the_only_currently_established_artifact_capability() {
+        let observed = context(1, 0, "gfx942");
+        let validated = validate_fixture(
+            FixtureSpec {
+                required_capabilities: vec![Capability::WorkgroupMemory],
+                ..FixtureSpec::default()
+            },
+            &observed,
+        )
+        .unwrap();
+        assert_eq!(
+            validated.identity().required_capabilities(),
+            &[Capability::WorkgroupMemory]
+        );
+
+        let without_workgroup_memory = ObservedContext::for_test(1, 0, "gfx942", 1_024, 0);
+        assert_eq!(
+            validate_fixture(
+                FixtureSpec {
+                    required_capabilities: vec![Capability::WorkgroupMemory],
+                    ..FixtureSpec::default()
+                },
+                &without_workgroup_memory,
+            )
+            .unwrap_err(),
+            ArtifactBindingError::RequiredCapabilityUnavailable(Capability::WorkgroupMemory)
+        );
+    }
+
+    #[test]
+    fn coarse_hip_facts_do_not_overclaim_artifact_capabilities() {
+        let observed = context(1, 0, "gfx942");
+        assert!(observed.has_global_int32_atomics());
+        assert!(observed.has_shared_int32_atomics());
+        assert!(observed.has_global_int64_atomics());
+        assert!(observed.has_shared_int64_atomics());
+        assert!(observed.has_warp_ballot());
+        assert!(observed.has_warp_shuffle());
+
+        for capability in [
+            Capability::Subgroup,
+            Capability::Ballot,
+            Capability::Shuffle,
+            Capability::Atomics,
+            Capability::AmdWave,
+        ] {
+            assert_eq!(
+                validate_fixture(
+                    FixtureSpec {
+                        required_capabilities: vec![capability],
+                        ..FixtureSpec::default()
+                    },
+                    &observed,
+                )
+                .unwrap_err(),
+                ArtifactBindingError::InsufficientCapabilityObservation(capability)
+            );
+        }
+    }
+
+    #[test]
+    fn unobserved_specialized_capabilities_remain_unsupported() {
+        let observed = context(1, 0, "gfx942");
+        for capability in [
+            Capability::MatrixMultiply,
+            Capability::AsyncCopy,
+            Capability::AmdMfma,
+            Capability::AmdWmma,
+            Capability::AmdDsPermute,
+        ] {
+            assert_eq!(
+                validate_fixture(
+                    FixtureSpec {
+                        required_capabilities: vec![capability],
+                        ..FixtureSpec::default()
+                    },
+                    &observed,
+                )
+                .unwrap_err(),
+                ArtifactBindingError::UnsupportedRequiredCapability(capability)
+            );
+        }
     }
 
     #[test]
@@ -1027,6 +1249,11 @@ mod tests {
         assert_eq!(
             validated.revalidate(selected, &changed_limits),
             Err(ArtifactRevalidationError::DeviceLimitsChanged)
+        );
+        let changed_capabilities = observed.clone().with_changed_test_hip_capabilities();
+        assert_eq!(
+            validated.revalidate(selected, &changed_capabilities),
+            Err(ArtifactRevalidationError::DeviceCapabilitiesChanged)
         );
     }
 

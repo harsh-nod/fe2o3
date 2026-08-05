@@ -1,3 +1,4 @@
+use fe2o3_amd_target::AmdTargetId;
 use fe2o3_core::{GpuContext, Result as CoreResult};
 use fe2o3_kernel_descriptor::{BlockSizeV1, DimensionsV1, KernelId, LaunchConstraintsV1};
 use std::fmt;
@@ -13,6 +14,7 @@ use std::sync::Arc;
 pub struct DeviceIdentity {
     ordinal: i32,
     target: String,
+    target_id: AmdTargetId,
 }
 
 impl DeviceIdentity {
@@ -22,6 +24,11 @@ impl DeviceIdentity {
 
     pub fn target(&self) -> &str {
         &self.target
+    }
+
+    /// Returns the canonical target ID obtained from HIP.
+    pub const fn target_id(&self) -> AmdTargetId {
+        self.target_id
     }
 }
 
@@ -36,7 +43,20 @@ struct DeviceLaunchLimits {
     max_shared_memory_per_block: u64,
 }
 
-/// An exact context wrapper, device identity, and launch-limit observation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct HipCapabilityFacts {
+    default_warp_size: u32,
+    global_int32_atomics: bool,
+    shared_int32_atomics: bool,
+    global_int64_atomics: bool,
+    shared_int64_atomics: bool,
+    warp_vote: bool,
+    warp_ballot: bool,
+    warp_shuffle: bool,
+}
+
+/// An exact context wrapper, device identity, launch-limit observation, and
+/// copy of HIP's coarse device capability facts.
 ///
 /// Production values retain the `Arc<GpuContext>` whose address forms the
 /// context identity, preventing address reuse while the observation or a
@@ -47,6 +67,7 @@ pub struct ObservedContext {
     identity: ContextIdentity,
     device: DeviceIdentity,
     limits: DeviceLaunchLimits,
+    hip_capabilities: HipCapabilityFacts,
     retained_context: Option<Arc<GpuContext>>,
 }
 
@@ -56,6 +77,7 @@ impl fmt::Debug for ObservedContext {
             .debug_struct("ObservedContext")
             .field("device", &self.device)
             .field("limits", &self.limits)
+            .field("hip_capabilities", &self.hip_capabilities)
             .finish_non_exhaustive()
     }
 }
@@ -66,12 +88,14 @@ impl ObservedContext {
     pub fn observe(context: &Arc<GpuContext>) -> CoreResult<Self> {
         let observed = context.observe_target()?;
         debug_assert_eq!(observed.device_id(), context.device_id());
+        let target_id = observed.target_id();
 
         Ok(Self {
             identity: ContextIdentity(Arc::as_ptr(context) as usize),
             device: DeviceIdentity {
                 ordinal: observed.device_id(),
-                target: observed.target_id().to_string(),
+                target: target_id.to_string(),
+                target_id,
             },
             limits: DeviceLaunchLimits {
                 max_threads_per_block: observed.max_threads_per_block(),
@@ -82,12 +106,65 @@ impl ObservedContext {
                 // portable default limit.
                 max_shared_memory_per_block: observed.shared_memory_per_block(),
             },
+            hip_capabilities: HipCapabilityFacts {
+                default_warp_size: observed.hip_default_warp_size(),
+                global_int32_atomics: observed.has_global_int32_atomics(),
+                shared_int32_atomics: observed.has_shared_int32_atomics(),
+                global_int64_atomics: observed.has_global_int64_atomics(),
+                shared_int64_atomics: observed.has_shared_int64_atomics(),
+                warp_vote: observed.has_warp_vote(),
+                warp_ballot: observed.has_warp_ballot(),
+                warp_shuffle: observed.has_warp_shuffle(),
+            },
             retained_context: Some(context.clone()),
         })
     }
 
     pub const fn device(&self) -> &DeviceIdentity {
         &self.device
+    }
+
+    /// Returns HIP's device-level default warp size.
+    ///
+    /// This is not a per-kernel wavefront-size observation and therefore does
+    /// not establish subgroup or AMD-wave artifact capabilities.
+    pub const fn hip_default_warp_size(&self) -> u32 {
+        self.hip_capabilities.default_warp_size
+    }
+
+    /// Returns HIP's coarse global 32-bit integer-atomics device bit.
+    pub const fn has_global_int32_atomics(&self) -> bool {
+        self.hip_capabilities.global_int32_atomics
+    }
+
+    /// Returns HIP's coarse shared 32-bit integer-atomics device bit.
+    pub const fn has_shared_int32_atomics(&self) -> bool {
+        self.hip_capabilities.shared_int32_atomics
+    }
+
+    /// Returns HIP's coarse global 64-bit integer-atomics device bit.
+    pub const fn has_global_int64_atomics(&self) -> bool {
+        self.hip_capabilities.global_int64_atomics
+    }
+
+    /// Returns HIP's coarse shared 64-bit integer-atomics device bit.
+    pub const fn has_shared_int64_atomics(&self) -> bool {
+        self.hip_capabilities.shared_int64_atomics
+    }
+
+    /// Returns HIP's coarse warp-vote device bit.
+    pub const fn has_warp_vote(&self) -> bool {
+        self.hip_capabilities.warp_vote
+    }
+
+    /// Returns HIP's coarse warp-ballot device bit.
+    pub const fn has_warp_ballot(&self) -> bool {
+        self.hip_capabilities.warp_ballot
+    }
+
+    /// Returns HIP's coarse warp-shuffle device bit.
+    pub const fn has_warp_shuffle(&self) -> bool {
+        self.hip_capabilities.warp_shuffle
     }
 
     /// Returns whether this observation names this exact `GpuContext` wrapper.
@@ -102,6 +179,10 @@ impl ObservedContext {
 
     pub(crate) fn same_launch_limits(&self, other: &Self) -> bool {
         self.limits == other.limits
+    }
+
+    pub(crate) fn same_hip_capabilities(&self, other: &Self) -> bool {
+        self.hip_capabilities == other.hip_capabilities
     }
 
     pub(crate) const fn max_threads_per_block(&self) -> u32 {
@@ -120,11 +201,13 @@ impl ObservedContext {
         max_threads_per_block: u32,
         max_shared_memory_per_block: u64,
     ) -> Self {
+        let target_id = AmdTargetId::parse(target).expect("test target must be canonical");
         Self {
             identity: ContextIdentity(identity),
             device: DeviceIdentity {
                 ordinal,
                 target: target.into(),
+                target_id,
             },
             limits: DeviceLaunchLimits {
                 max_threads_per_block,
@@ -132,8 +215,24 @@ impl ObservedContext {
                 max_grid_dimensions: [u32::MAX; 3],
                 max_shared_memory_per_block,
             },
+            hip_capabilities: HipCapabilityFacts {
+                default_warp_size: 64,
+                global_int32_atomics: true,
+                shared_int32_atomics: true,
+                global_int64_atomics: true,
+                shared_int64_atomics: true,
+                warp_vote: true,
+                warp_ballot: true,
+                warp_shuffle: true,
+            },
             retained_context: None,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_changed_test_hip_capabilities(mut self) -> Self {
+        self.hip_capabilities.warp_ballot = !self.hip_capabilities.warp_ballot;
+        self
     }
 }
 
@@ -370,6 +469,9 @@ impl<K> KernelBrand<K> {
         if context.limits != self.context.limits {
             return Err(PrepareLaunchError::DeviceLimitsChanged);
         }
+        if !context.same_hip_capabilities(&self.context) {
+            return Err(PrepareLaunchError::DeviceCapabilitiesChanged);
+        }
 
         let geometry = validate_geometry(&self.launch, &request)?;
         let resources = validate_resources(&self.launch, context.limits, &request)?;
@@ -533,6 +635,7 @@ pub enum PrepareLaunchError {
     },
     WrongContext,
     DeviceLimitsChanged,
+    DeviceCapabilitiesChanged,
     InvalidRank {
         actual: u8,
     },
@@ -610,6 +713,9 @@ impl fmt::Display for PrepareLaunchError {
             Self::WrongContext => formatter.write_str("wrong context"),
             Self::DeviceLimitsChanged => {
                 formatter.write_str("device launch limits changed since kernel validation")
+            }
+            Self::DeviceCapabilitiesChanged => {
+                formatter.write_str("HIP device capability facts changed since kernel validation")
             }
             Self::InvalidRank { actual } => write!(formatter, "invalid launch rank {actual}"),
             Self::RankMismatch { required, actual } => write!(
@@ -919,20 +1025,9 @@ mod tests {
     }
 
     fn context(identity: usize, ordinal: i32, target: &str) -> ObservedContext {
-        ObservedContext {
-            identity: ContextIdentity(identity),
-            device: DeviceIdentity {
-                ordinal,
-                target: target.into(),
-            },
-            limits: DeviceLaunchLimits {
-                max_threads_per_block: 1_024,
-                max_block_dimensions: [1_024, 1_024, 1_024],
-                max_grid_dimensions: [u32::MAX, 65_535, 65_535],
-                max_shared_memory_per_block: 65_536,
-            },
-            retained_context: None,
-        }
+        let mut observed = ObservedContext::for_test(identity, ordinal, target, 1_024, 65_536);
+        observed.limits.max_grid_dimensions = [u32::MAX, 65_535, 65_535];
+        observed
     }
 
     fn brand(contract: LaunchConstraintsV1, context: ObservedContext) -> KernelBrand<VecAdd> {
@@ -1049,6 +1144,59 @@ mod tests {
             &changed,
             request(VECADD, 1, [1, 1, 1], [1, 1, 1], 0),
             PrepareLaunchError::DeviceLimitsChanged,
+        );
+    }
+
+    #[test]
+    fn rejects_changed_hip_capabilities_for_the_same_context_device_and_limits() {
+        let observed = context(11, 0, "gfx942");
+        let brand = brand(contract(1, BlockSizeV1::Any), observed.clone());
+        let changed = observed.clone().with_changed_test_hip_capabilities();
+
+        assert_error(
+            &brand,
+            &changed,
+            request(VECADD, 1, [1, 1, 1], [1, 1, 1], 0),
+            PrepareLaunchError::DeviceCapabilitiesChanged,
+        );
+    }
+
+    #[test]
+    #[ignore = "requires a working HIP device"]
+    fn observed_context_preserves_real_hip_target_limits_and_capability_facts() {
+        let context = GpuContext::new(0).unwrap();
+        let direct = context.observe_target().unwrap();
+        let observed = ObservedContext::observe(&context).unwrap();
+
+        assert_eq!(observed.device().ordinal(), direct.device_id());
+        assert_eq!(observed.device().target_id(), direct.target_id());
+        assert_eq!(observed.device().target(), direct.target_id().to_string());
+        assert_eq!(
+            observed.hip_default_warp_size(),
+            direct.hip_default_warp_size()
+        );
+        assert_eq!(
+            observed.has_global_int32_atomics(),
+            direct.has_global_int32_atomics()
+        );
+        assert_eq!(
+            observed.has_shared_int32_atomics(),
+            direct.has_shared_int32_atomics()
+        );
+        assert_eq!(
+            observed.has_global_int64_atomics(),
+            direct.has_global_int64_atomics()
+        );
+        assert_eq!(
+            observed.has_shared_int64_atomics(),
+            direct.has_shared_int64_atomics()
+        );
+        assert_eq!(observed.has_warp_vote(), direct.has_warp_vote());
+        assert_eq!(observed.has_warp_ballot(), direct.has_warp_ballot());
+        assert_eq!(observed.has_warp_shuffle(), direct.has_warp_shuffle());
+        assert_eq!(
+            observed.max_shared_memory_per_block(),
+            direct.shared_memory_per_block()
         );
     }
 
