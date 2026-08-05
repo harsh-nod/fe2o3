@@ -12,9 +12,11 @@ validated according to the invariants below. Validation does not establish
 authenticity and does not bind an identity to executable payload bytes. That
 binding belongs to the future artifact container and loader.
 
-`DigestBytes` contains opaque identity bytes supplied by build tooling. This
-crate does not hash payloads, compare payload contents with those bytes, or
-claim that the identity uses a cryptographic digest.
+`DigestBytes` contains opaque identity bytes supplied by build tooling. A bare
+manifest does not assign those bytes a digest algorithm or bind them to a
+payload. `PayloadDigest` makes an algorithm explicit and can calculate or
+verify a digest over bytes. That primitive proves only a byte-level match under
+the selected algorithm; it does not establish who produced those bytes.
 
 ## Identity and launch invariants
 

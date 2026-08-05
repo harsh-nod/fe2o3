@@ -10,3 +10,6 @@ publish = false
 
 [lib]
 name = "fe2o3_artifacts"
+
+[dependencies]
+sha2 = { version = "0.11.0", default-features = false }

@@ -3,6 +3,7 @@
 
 mod abi;
 mod decode;
+mod digest;
 mod encode;
 mod error;
 mod identities;
@@ -12,6 +13,7 @@ pub use abi::{
     AbiField, AbiKind, AbiLayout, Access, AddressSpace, MAX_ABI_BYTES, MAX_ABI_FIELDS, Mutability,
     ScalarType,
 };
+pub use digest::{DigestAlgorithm, DigestMismatch, PayloadDigest};
 pub use encode::{MANIFEST_MAGIC, MANIFEST_VERSION, MAX_MANIFEST_BYTES};
 pub use error::{DecodeError, ValidationError};
 pub use identities::{
