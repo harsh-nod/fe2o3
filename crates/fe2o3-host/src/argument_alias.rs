@@ -1,5 +1,5 @@
 use crate::ObservedContext;
-use fe2o3_core::{DeviceBuffer, DeviceCopy};
+use fe2o3_core::{DeviceBuffer, DeviceCopy, KernelParams};
 use std::collections::HashMap;
 use std::fmt;
 use std::marker::PhantomData;
@@ -182,6 +182,133 @@ impl CheckedByteRegion<'_> {
 
     pub const fn is_empty(&self) -> bool {
         self.byte_length == 0
+    }
+}
+
+struct GeneratedDeviceSliceMetadata {
+    identity: AllocationIdentity,
+    context: ObservedContext,
+    byte_length: usize,
+}
+
+impl GeneratedDeviceSliceMetadata {
+    fn from_buffer<T: DeviceCopy>(
+        observed: &ObservedContext,
+        buffer: &DeviceBuffer<T>,
+    ) -> Result<Self, RegionError> {
+        if !observed.is_for_context(buffer.context()) {
+            return Err(RegionError::WrongContext);
+        }
+
+        let byte_length = buffer
+            .len()
+            .checked_mul(size_of::<T>())
+            .ok_or(RegionError::AllocationSizeOverflow)?;
+        let allocation = buffer.as_device_ptr().as_raw().addr();
+        allocation
+            .checked_add(byte_length)
+            .ok_or(RegionError::AllocationAddressOverflow)?;
+
+        Ok(Self {
+            identity: AllocationIdentity {
+                context: observed.context_key(),
+                allocation,
+            },
+            context: observed.clone(),
+            byte_length,
+        })
+    }
+
+    fn whole_region<'allocation>(&self) -> CheckedByteRegion<'allocation> {
+        CheckedByteRegion {
+            identity: self.identity,
+            context: self.context.clone(),
+            byte_offset: 0,
+            byte_length: self.byte_length,
+            byte_end: self.byte_length,
+            marker: PhantomData,
+        }
+    }
+}
+
+/// Generated read-only capability for one complete typed device buffer.
+///
+/// This doc-hidden SPI owns the actual shared buffer borrow. Its admission
+/// access is fixed to [`ArgumentAccessMode::SharedRead`], and its packing helper
+/// emits the pointer and element count from that same retained buffer.
+#[doc(hidden)]
+pub struct GeneratedReadDeviceSlice<'allocation, T: DeviceCopy> {
+    buffer: &'allocation DeviceBuffer<T>,
+    metadata: GeneratedDeviceSliceMetadata,
+}
+
+impl<'allocation, T: DeviceCopy> GeneratedReadDeviceSlice<'allocation, T> {
+    pub fn new(
+        observed: &ObservedContext,
+        buffer: &'allocation DeviceBuffer<T>,
+    ) -> Result<Self, RegionError> {
+        let metadata = GeneratedDeviceSliceMetadata::from_buffer(observed, buffer)?;
+        Ok(Self { buffer, metadata })
+    }
+
+    pub fn argument_access(&self) -> ArgumentAccess<'allocation> {
+        ArgumentAccess::new(self.metadata.whole_region(), ArgumentAccessMode::SharedRead)
+    }
+
+    /// Appends this slice's exact device pointer and element count.
+    pub fn push_pointer_and_len(&self, params: &mut KernelParams) {
+        params.push(self.buffer.as_device_ptr());
+        params.push(self.buffer.len());
+    }
+
+    pub fn len(&self) -> usize {
+        self.buffer.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.buffer.is_empty()
+    }
+}
+
+/// Generated writable capability for one complete typed device buffer.
+///
+/// This doc-hidden SPI owns the actual exclusive buffer borrow. Its admission
+/// access is fixed to [`ArgumentAccessMode::ExclusiveWrite`], and its packing
+/// helper emits the pointer and element count from that same retained buffer.
+#[doc(hidden)]
+pub struct GeneratedWriteDeviceSlice<'allocation, T: DeviceCopy> {
+    buffer: &'allocation mut DeviceBuffer<T>,
+    metadata: GeneratedDeviceSliceMetadata,
+}
+
+impl<'allocation, T: DeviceCopy> GeneratedWriteDeviceSlice<'allocation, T> {
+    pub fn new(
+        observed: &ObservedContext,
+        buffer: &'allocation mut DeviceBuffer<T>,
+    ) -> Result<Self, RegionError> {
+        let metadata = GeneratedDeviceSliceMetadata::from_buffer(observed, buffer)?;
+        Ok(Self { buffer, metadata })
+    }
+
+    pub fn argument_access(&self) -> ArgumentAccess<'allocation> {
+        ArgumentAccess::new(
+            self.metadata.whole_region(),
+            ArgumentAccessMode::ExclusiveWrite,
+        )
+    }
+
+    /// Appends this slice's exact device pointer and element count.
+    pub fn push_pointer_and_len(&self, params: &mut KernelParams) {
+        params.push(self.buffer.as_device_ptr());
+        params.push(self.buffer.len());
+    }
+
+    pub fn len(&self) -> usize {
+        self.buffer.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.buffer.is_empty()
     }
 }
 

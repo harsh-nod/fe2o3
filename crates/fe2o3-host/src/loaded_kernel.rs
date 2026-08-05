@@ -7,7 +7,6 @@ use crate::{
 use fe2o3_core::{BorrowedDeviceOperation, GpuContext, GpuFunction, GpuModule, Stream};
 use fe2o3_device::KernelMarkerV1;
 use std::fmt;
-use std::marker::PhantomData;
 use std::sync::Arc;
 
 struct HipKernelOwnership {
@@ -85,12 +84,16 @@ impl<K> LoadedKernel<K> {
     ///
     /// # Safety
     ///
-    /// The caller must authenticate the executable payload and establish that
-    /// `K` denotes this exact kernel and complete host ABI. That includes every
-    /// argument's Rust type, size, alignment, order, mutability, address space,
-    /// ownership, aliasing, and packed layout identity. The binding's name
-    /// checks and the artifact's structural validation do not prove those
-    /// properties or the executable's behavior.
+    /// The caller must authenticate the executable payload, including every
+    /// module initialization/finalization hook and behavior during loading and
+    /// unloading, and establish that `K` denotes this exact kernel and complete
+    /// host ABI. That includes every argument's Rust type, size, alignment,
+    /// order, mutability, address space, ownership, aliasing, and packed layout
+    /// identity. The generated adapter must also ensure that every actual
+    /// executable memory effect, including effects selected or sized by scalar
+    /// arguments, is represented by the admission paired at launch. The
+    /// binding's name checks and the artifact's structural validation do not
+    /// prove those properties or the executable's behavior.
     #[doc(hidden)]
     pub unsafe fn load_generated(
         binding: GeneratedKernelBindingV1<K>,
@@ -329,20 +332,25 @@ pub struct LoadedArgumentAdmittedLaunch<'loaded, 'allocation, K> {
     admitted: ArgumentAdmittedLaunch<'allocation, K>,
 }
 
-/// Exact raw parameter packing produced by generated code for kernel `K`.
+/// One admission permanently paired with its generated ABI parameters and
+/// typed resource capabilities.
 ///
-/// This doc-hidden token has private fields and only an unsafe constructor. It
-/// is the narrow SPI where generated bindings must establish the raw ABI and
-/// typed resource borrows before the safe scoped execution state machine runs.
+/// This doc-hidden token has private fields and only an unsafe constructor.
+/// Once constructed, neither the admission nor its resource pack can be
+/// replaced through safe code. The complete value is retained through HIP
+/// quiescence when launched.
 #[doc(hidden)]
-pub struct GeneratedKernelParams<'params, K, R> {
+pub struct GeneratedAdmittedLaunch<'loaded, 'allocation, 'params, K, R> {
+    admitted: LoadedArgumentAdmittedLaunch<'loaded, 'allocation, K>,
     params: &'params mut KernelParams,
     resources: R,
-    marker: PhantomData<fn(K) -> K>,
 }
 
-impl<'params, K, R> GeneratedKernelParams<'params, K, R> {
-    /// Marks one raw parameter list as the exact generated ABI for `K`.
+impl<'loaded, 'allocation, 'params, K, R>
+    GeneratedAdmittedLaunch<'loaded, 'allocation, 'params, K, R>
+{
+    /// Permanently pairs one loaded admission with its generated ABI and typed
+    /// resource capability pack.
     ///
     /// # Safety
     ///
@@ -350,18 +358,62 @@ impl<'params, K, R> GeneratedKernelParams<'params, K, R> {
     /// and pointer address space. `resources` must contain the generated typed
     /// borrow for every reachable allocation: shared borrows for read-only
     /// arguments and exclusive borrows for writable arguments. Those borrows
-    /// must correspond exactly to the regions in the argument admission and
-    /// remain valid for every admitted access. Only generated binding code
-    /// that has established that association may invoke this constructor.
+    /// and every actual or scalar-dependent executable memory effect must
+    /// correspond exactly to `admitted`'s regions and access modes. Only
+    /// generated binding code that has established the complete association
+    /// may invoke this constructor.
     pub unsafe fn from_generated_unchecked(
+        admitted: LoadedArgumentAdmittedLaunch<'loaded, 'allocation, K>,
         params: &'params mut KernelParams,
         resources: R,
     ) -> Self {
         Self {
+            admitted,
             params,
             resources,
-            marker: PhantomData,
         }
+    }
+
+    /// Enqueues this sealed admission/parameter/resource association and
+    /// retains the complete object until HIP establishes completion.
+    ///
+    /// The callback receives only a non-escapable operation view. Returning
+    /// means event synchronization, or its stronger stream fallback,
+    /// established quiescence. Ambiguous completion aborts rather than
+    /// releasing the loaded authority, allocation borrows, or alias
+    /// registration while work may remain.
+    #[doc(hidden)]
+    pub fn launch_generated_scoped<'stream, O>(
+        self,
+        stream: &'stream Stream,
+        during: impl for<'operation> FnOnce(
+            &'operation BorrowedDeviceOperation<'stream, 'allocation>,
+        ) -> O,
+    ) -> Result<O, LoadedLaunchError> {
+        validate_launch_stream(&self.admitted.loaded.context, stream)?;
+        let config = self.admitted.launch_config();
+
+        // SAFETY: the unsafe constructor sealed the raw ABI, admitted effects,
+        // and typed resource capabilities into this single object. The exact
+        // stream wrapper is checked above; the scoped core operation retains
+        // the whole sealed object until quiescence.
+        unsafe {
+            BorrowedDeviceOperation::<'stream, 'allocation>::run_scoped_unchecked(
+                stream,
+                self,
+                |paired| {
+                    let _typed_resource_capabilities = &paired.resources;
+                    fe2o3_core::launch_kernel_on_stream(
+                        paired.admitted.loaded.function(),
+                        config,
+                        stream,
+                        paired.params,
+                    )
+                },
+                during,
+            )
+        }
+        .map_err(LoadedLaunchError::Hip)
     }
 }
 
@@ -400,56 +452,6 @@ impl<'loaded, 'allocation, K> LoadedArgumentAdmittedLaunch<'loaded, 'allocation,
             block_dim: (block[0], block[1], block[2]),
             shared_mem_bytes: self.resources().dynamic_shared_memory_bytes(),
         }
-    }
-
-    /// Enqueues generated exact parameters and retains this entire admitted
-    /// launch until HIP establishes completion.
-    ///
-    /// The callback receives only a non-escapable operation view. Returning
-    /// from this method means event synchronization, or its stronger stream
-    /// fallback, established quiescence. If neither can do so, the borrowed
-    /// operation policy aborts rather than releasing the loaded authority,
-    /// allocation lifetimes, or alias reservation while work may remain.
-    ///
-    /// This is a doc-hidden generated-code SPI. Raw callers cannot use it to
-    /// make arbitrary [`KernelParams`] safe because it accepts only the token
-    /// created by the unsafe generated packing boundary.
-    #[doc(hidden)]
-    pub fn launch_generated_scoped<'stream, R, O>(
-        self,
-        stream: &'stream Stream,
-        params: GeneratedKernelParams<'_, K, R>,
-        during: impl for<'operation> FnOnce(
-            &'operation BorrowedDeviceOperation<'stream, 'allocation>,
-        ) -> O,
-    ) -> Result<O, LoadedLaunchError> {
-        validate_launch_stream(&self.loaded.context, stream)?;
-
-        let config = self.launch_config();
-        // SAFETY: `GeneratedKernelParams` can be constructed only through its
-        // unsafe generated-code boundary, which establishes the raw ABI and its
-        // relationship to this admitted marker. The retained tuple owns both
-        // `self` (loaded module/function and alias registration) and the
-        // generated typed resource borrows. The exact stream wrapper was
-        // checked above, and the prepared launch owns the validated geometry
-        // and resource limits.
-        unsafe {
-            BorrowedDeviceOperation::<'stream, 'allocation>::run_scoped_unchecked(
-                stream,
-                (self, params),
-                |(launch, params)| {
-                    let _typed_resource_borrows = &params.resources;
-                    fe2o3_core::launch_kernel_on_stream(
-                        launch.loaded.function(),
-                        config,
-                        stream,
-                        params.params,
-                    )
-                },
-                during,
-            )
-        }
-        .map_err(LoadedLaunchError::Hip)
     }
 }
 
@@ -583,11 +585,8 @@ impl std::error::Error for LoadedKernelLoadError {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        ExactLaunchStreamContext, GeneratedKernelParams, LoadedLaunchError, validate_launch_stream,
-    };
+    use super::{ExactLaunchStreamContext, LoadedLaunchError, validate_launch_stream};
     use crate::ObservedContext;
-    use fe2o3_core::KernelParams;
 
     struct TestStreamContext(bool);
 
@@ -606,30 +605,5 @@ mod tests {
             validate_launch_stream(&observed, &TestStreamContext(false)),
             Err(LoadedLaunchError::WrongStreamContext)
         ));
-    }
-
-    #[test]
-    fn generated_parameter_boundary_owns_fields_and_typed_resource_borrows() {
-        struct Kernel;
-
-        let mut raw = KernelParams::new();
-        raw.push(7_u32);
-        // SAFETY: this test inspects the inert packing token and never submits
-        // it as a real kernel ABI.
-        let input = 11_u32;
-        let mut output = 0_u32;
-        {
-            let packed = unsafe {
-                GeneratedKernelParams::<Kernel, _>::from_generated_unchecked(
-                    &mut raw,
-                    (&input, &mut output),
-                )
-            };
-
-            assert_eq!(packed.params.len(), 1);
-            assert_eq!(*packed.resources.0, 11);
-            *packed.resources.1 = 17;
-        }
-        assert_eq!(output, 17);
     }
 }
