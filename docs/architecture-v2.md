@@ -237,6 +237,12 @@ instructions are not treated as equivalent unless those contracts match.
 The artifact manifest is the authority for the host/device boundary. Neither a
 launch macro nor a loader independently guesses the ABI.
 
+`DeviceCopy` is structural host-side byte-copy validity evidence, not device ABI
+or semantic evidence. Integer fields may encode host addresses or handles. A
+safe typed launch may allow device interpretation only after manifest-derived
+type and ABI identities match and the required provenance, address-space, and
+capability evidence is present.
+
 Each monomorphized kernel entry contains at least:
 
 ```text

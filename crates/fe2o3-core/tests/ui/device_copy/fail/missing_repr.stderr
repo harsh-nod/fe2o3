@@ -1,0 +1,7 @@
+error: DeviceCopy requires #[repr(C)] or #[repr(transparent)]
+ --> tests/ui/device_copy/fail/missing_repr.rs:3:23
+  |
+3 | #[derive(Clone, Copy, DeviceCopy)]
+  |                       ^^^^^^^^^^
+  |
+  = note: this error originates in the derive macro `DeviceCopy` (in Nightly builds, run with -Z macro-backtrace for more info)

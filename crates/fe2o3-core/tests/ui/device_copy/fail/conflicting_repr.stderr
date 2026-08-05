@@ -1,0 +1,11 @@
+error: DeviceCopy does not support duplicate or conflicting repr hints
+ --> tests/ui/device_copy/fail/conflicting_repr.rs:4:11
+  |
+4 | #[repr(C, transparent)]
+  |           ^^^^^^^^^^^
+
+error[E0692]: transparent struct cannot have other repr hints
+ --> tests/ui/device_copy/fail/conflicting_repr.rs:4:8
+  |
+4 | #[repr(C, transparent)]
+  |        ^  ^^^^^^^^^^^

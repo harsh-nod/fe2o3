@@ -202,8 +202,9 @@ G2 passes when:
   payload, ABI, launch, capability, and proof metadata.
 - Generate typed module loaders and launch methods from kernel declarations and
   validate them against the finalized manifest.
-- Implement `DeviceCopy`, layout-safe buffers, pinned memory, events, and
-  context ownership.
+- Implement structurally host-valid `DeviceCopy`, manifest-derived type/ABI,
+  provenance, address-space, and capability gates, layout-safe buffers, pinned
+  memory, events, and context ownership.
 - Add lazy typed async operations with borrowed and owned forms.
 - Retain resources through completion, cancellation, callback failure, and
   stream error paths.

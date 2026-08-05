@@ -9,6 +9,10 @@ description = "HIP-backed host runtime for fe2o3."
 
 [dependencies]
 fe2o3-hip-sys.workspace = true
+fe2o3-macros.workspace = true
+
+[dev-dependencies]
+trybuild = "1"
 
 [lib]
 name = "fe2o3_core"
