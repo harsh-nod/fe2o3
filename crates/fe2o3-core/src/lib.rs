@@ -5,6 +5,7 @@ mod event;
 mod launch;
 mod memory;
 mod module;
+mod operation;
 mod pinned_memory;
 mod stream;
 
@@ -15,5 +16,6 @@ pub use event::{Event, EventOptions};
 pub use launch::{DevicePtr, KernelParams, LaunchConfig, launch_kernel_on_stream};
 pub use memory::DeviceBuffer;
 pub use module::{GpuFunction, GpuModule};
+pub use operation::OwnedDeviceOperation;
 pub use pinned_memory::PinnedHostBuffer;
 pub use stream::Stream;

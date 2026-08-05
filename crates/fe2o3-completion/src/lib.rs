@@ -16,6 +16,97 @@ pub enum CompletionError<O, S> {
     OperationAndSynchronization { operation: O, synchronization: S },
 }
 
+/// A completion failure classified by whether backend work is quiescent.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CompletionFailure<E> {
+    /// Completion was established, but the operation reported an error.
+    Quiescent(E),
+    /// Completion could not be established, so retained resources remain live.
+    Ambiguous(E),
+}
+
+/// Backend completion operations used by an owned pending operation.
+pub trait Completion {
+    type Error;
+
+    fn query(&self) -> Result<bool, Self::Error>;
+    fn synchronize(&self) -> Result<(), CompletionFailure<Self::Error>>;
+}
+
+/// Owned resources retained until a backend operation has completed.
+///
+/// Dropping this state synchronizes before dropping its resources. A quiescent
+/// execution error still permits cleanup. If completion remains ambiguous or
+/// synchronization panics, the resources and completion object are leaked
+/// because the backend may still refer to them.
+#[derive(Debug)]
+pub struct PendingOwned<R, C: Completion> {
+    resources: Retained<R>,
+    completion: Retained<C>,
+    active: bool,
+}
+
+impl<R, C: Completion> PendingOwned<R, C> {
+    pub fn new(resources: R, completion: C) -> Self {
+        Self {
+            resources: Retained::new(resources),
+            completion: Retained::new(completion),
+            active: true,
+        }
+    }
+
+    pub fn query(&self) -> Result<bool, C::Error> {
+        self.completion.get().query()
+    }
+
+    pub fn wait(mut self) -> Result<R, C::Error> {
+        self.active = false;
+        match self.completion.get().synchronize() {
+            Ok(()) => {
+                drop(self.completion.take());
+                Ok(self.resources.take())
+            }
+            Err(CompletionFailure::Quiescent(error)) => {
+                drop(self.completion.take());
+                drop(self.resources.take());
+                Err(error)
+            }
+            Err(CompletionFailure::Ambiguous(error)) => Err(error),
+        }
+    }
+}
+
+impl<R, C: Completion> Drop for PendingOwned<R, C> {
+    fn drop(&mut self) {
+        if !self.active {
+            return;
+        }
+        self.active = false;
+        match self.completion.get().synchronize() {
+            Ok(()) | Err(CompletionFailure::Quiescent(_)) => {
+                drop(self.completion.take());
+                drop(self.resources.take());
+            }
+            Err(CompletionFailure::Ambiguous(_)) => {}
+        }
+    }
+}
+
+/// Tries a primary synchronization method and then a stronger fallback.
+pub fn synchronize_with_fallback<E>(
+    primary: impl FnOnce() -> Result<(), E>,
+    fallback: impl FnOnce() -> Result<(), E>,
+    combine: impl FnOnce(E, E) -> E,
+) -> Result<(), CompletionFailure<E>> {
+    match primary() {
+        Ok(()) => Ok(()),
+        Err(primary) => match fallback() {
+            Ok(()) => Err(CompletionFailure::Quiescent(primary)),
+            Err(fallback) => Err(CompletionFailure::Ambiguous(combine(primary, fallback))),
+        },
+    }
+}
+
 /// Runs an operation over owned resources and establishes completion.
 ///
 /// Synchronization is attempted even when `operation` reports an error. The
@@ -67,6 +158,7 @@ pub fn complete_borrowed<O, S>(
     operation.map_err(CompletionError::Operation)
 }
 
+#[derive(Debug)]
 struct Retained<R>(Option<R>);
 
 impl<R> Retained<R> {
@@ -76,6 +168,10 @@ impl<R> Retained<R> {
 
     fn take(&mut self) -> R {
         self.0.take().expect("retained resources are present")
+    }
+
+    fn get(&self) -> &R {
+        self.0.as_ref().expect("retained resources are present")
     }
 }
 
@@ -99,7 +195,10 @@ impl Drop for AbortOnDrop {
 
 #[cfg(test)]
 mod tests {
-    use super::{CompletionError, complete_borrowed, complete_owned};
+    use super::{
+        Completion, CompletionError, CompletionFailure, PendingOwned, complete_borrowed,
+        complete_owned, synchronize_with_fallback,
+    };
     use std::cell::RefCell;
     use std::process::Command;
     use std::rc::Rc;
@@ -115,6 +214,72 @@ mod tests {
         fn drop(&mut self) {
             self.0.borrow_mut().push("resource-drop");
         }
+    }
+
+    struct FakeCompletion {
+        events: Rc<RefCell<Vec<&'static str>>>,
+        query: Result<bool, &'static str>,
+        synchronize: Result<(), CompletionFailure<&'static str>>,
+        panic_during_synchronize: bool,
+        panic_during_drop: bool,
+    }
+
+    impl Completion for FakeCompletion {
+        type Error = &'static str;
+
+        fn query(&self) -> Result<bool, Self::Error> {
+            self.events.borrow_mut().push("query");
+            self.query
+        }
+
+        fn synchronize(&self) -> Result<(), CompletionFailure<Self::Error>> {
+            self.events.borrow_mut().push("synchronize");
+            assert!(!self.panic_during_synchronize, "synchronize panic");
+            self.synchronize
+        }
+    }
+
+    impl Drop for FakeCompletion {
+        fn drop(&mut self) {
+            self.events.borrow_mut().push("completion-drop");
+            assert!(!self.panic_during_drop, "completion drop panic");
+        }
+    }
+
+    fn pending(
+        query: Result<bool, &'static str>,
+        synchronize: Result<(), CompletionFailure<&'static str>>,
+        panic_during_synchronize: bool,
+    ) -> (
+        PendingOwned<DropRecorder, FakeCompletion>,
+        Rc<RefCell<Vec<&'static str>>>,
+    ) {
+        pending_with_drop(query, synchronize, panic_during_synchronize, false)
+    }
+
+    fn pending_with_drop(
+        query: Result<bool, &'static str>,
+        synchronize: Result<(), CompletionFailure<&'static str>>,
+        panic_during_synchronize: bool,
+        panic_during_drop: bool,
+    ) -> (
+        PendingOwned<DropRecorder, FakeCompletion>,
+        Rc<RefCell<Vec<&'static str>>>,
+    ) {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        (
+            PendingOwned::new(
+                DropRecorder(events.clone()),
+                FakeCompletion {
+                    events: events.clone(),
+                    query,
+                    synchronize,
+                    panic_during_synchronize,
+                    panic_during_drop,
+                },
+            ),
+            events,
+        )
     }
 
     #[derive(Clone)]
@@ -210,6 +375,187 @@ mod tests {
             })
         ));
         assert_eq!(*backend.events.borrow(), ["operation", "synchronize"]);
+    }
+
+    #[test]
+    fn owned_panics_leak_retained_resources() {
+        let operation_events = Rc::new(RefCell::new(Vec::new()));
+        let resource_events = operation_events.clone();
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = complete_owned(
+                DropRecorder(resource_events),
+                || -> Result<(), ()> { panic!("operation panic") },
+                || Ok::<(), ()>(()),
+            );
+        }));
+        assert!(panic.is_err());
+        assert!(operation_events.borrow().is_empty());
+
+        let synchronization_events = Rc::new(RefCell::new(Vec::new()));
+        let resource_events = synchronization_events.clone();
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = complete_owned(
+                DropRecorder(resource_events),
+                || Ok::<(), ()>(()),
+                || -> Result<(), ()> { panic!("synchronization panic") },
+            );
+        }));
+        assert!(panic.is_err());
+        assert!(synchronization_events.borrow().is_empty());
+    }
+
+    #[test]
+    fn pending_owned_wait_returns_resources_after_completion() {
+        let (pending, events) = pending(Ok(false), Ok(()), false);
+
+        let resources = pending.wait().unwrap();
+        assert_eq!(*events.borrow(), ["synchronize", "completion-drop"]);
+        drop(resources);
+        assert_eq!(
+            *events.borrow(),
+            ["synchronize", "completion-drop", "resource-drop"]
+        );
+    }
+
+    #[test]
+    fn pending_owned_drop_synchronizes_before_cleanup() {
+        let (pending, events) = pending(Ok(false), Ok(()), false);
+
+        drop(pending);
+        assert_eq!(
+            *events.borrow(),
+            ["synchronize", "completion-drop", "resource-drop"]
+        );
+    }
+
+    #[test]
+    fn pending_owned_ambiguity_leaks_on_wait_and_drop() {
+        let (wait_pending, wait_events) = pending(
+            Ok(false),
+            Err(CompletionFailure::Ambiguous("ambiguous")),
+            false,
+        );
+        assert!(matches!(wait_pending.wait(), Err("ambiguous")));
+        assert_eq!(*wait_events.borrow(), ["synchronize"]);
+
+        let (drop_pending, drop_events) = pending(
+            Ok(false),
+            Err(CompletionFailure::Ambiguous("ambiguous")),
+            false,
+        );
+        drop(drop_pending);
+        assert_eq!(*drop_events.borrow(), ["synchronize"]);
+    }
+
+    #[test]
+    fn pending_owned_quiescent_error_releases_on_wait_and_drop() {
+        let (wait_pending, wait_events) =
+            pending(Ok(false), Err(CompletionFailure::Quiescent("event")), false);
+        assert!(matches!(wait_pending.wait(), Err("event")));
+        assert_eq!(
+            *wait_events.borrow(),
+            ["synchronize", "completion-drop", "resource-drop"]
+        );
+
+        let (drop_pending, drop_events) =
+            pending(Ok(false), Err(CompletionFailure::Quiescent("event")), false);
+        drop(drop_pending);
+        assert_eq!(
+            *drop_events.borrow(),
+            ["synchronize", "completion-drop", "resource-drop"]
+        );
+    }
+
+    #[test]
+    fn pending_owned_query_never_settles_or_releases_resources() {
+        let (query_pending, events) = pending(Ok(false), Ok(()), false);
+
+        assert!(!query_pending.query().unwrap());
+        assert_eq!(*events.borrow(), ["query"]);
+        drop(query_pending);
+        assert_eq!(
+            *events.borrow(),
+            ["query", "synchronize", "completion-drop", "resource-drop"]
+        );
+
+        let (pending, events) = pending(Err("query"), Ok(()), false);
+        assert!(matches!(pending.query(), Err("query")));
+        assert_eq!(*events.borrow(), ["query"]);
+        drop(pending);
+        assert_eq!(
+            *events.borrow(),
+            ["query", "synchronize", "completion-drop", "resource-drop"]
+        );
+    }
+
+    #[test]
+    fn pending_owned_leaks_if_synchronization_panics() {
+        let (pending, events) = pending(Ok(false), Ok(()), true);
+
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(pending)));
+        assert!(panic.is_err());
+        assert_eq!(*events.borrow(), ["synchronize"]);
+    }
+
+    #[test]
+    fn pending_owned_leaks_if_completion_destructor_panics() {
+        let (pending, events) = pending_with_drop(Ok(false), Ok(()), false, true);
+
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(pending)));
+        assert!(panic.is_err());
+        assert_eq!(*events.borrow(), ["synchronize", "completion-drop"]);
+    }
+
+    #[test]
+    fn synchronization_falls_back_and_preserves_both_errors() {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let primary_events = events.clone();
+        let fallback_events = events.clone();
+        let combined = synchronize_with_fallback(
+            move || {
+                primary_events.borrow_mut().push("primary");
+                Err("event".to_owned())
+            },
+            move || {
+                fallback_events.borrow_mut().push("fallback");
+                Err("stream".to_owned())
+            },
+            |primary, fallback| format!("{primary}+{fallback}"),
+        );
+
+        assert_eq!(
+            combined,
+            Err(CompletionFailure::Ambiguous("event+stream".to_owned()))
+        );
+        assert_eq!(*events.borrow(), ["primary", "fallback"]);
+
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let primary_events = events.clone();
+        let fallback_events = events.clone();
+        assert_eq!(
+            synchronize_with_fallback(
+                move || {
+                    primary_events.borrow_mut().push("primary");
+                    Ok::<(), String>(())
+                },
+                move || {
+                    fallback_events.borrow_mut().push("fallback");
+                    Ok::<(), String>(())
+                },
+                |primary, fallback| format!("{primary}+{fallback}"),
+            ),
+            Ok(())
+        );
+        assert_eq!(*events.borrow(), ["primary"]);
+
+        assert_eq!(
+            synchronize_with_fallback(
+                || Err("event".to_owned()),
+                || Ok::<(), String>(()),
+                |primary, fallback| format!("{primary}+{fallback}"),
+            ),
+            Err(CompletionFailure::Quiescent("event".to_owned()))
+        );
     }
 
     #[test]

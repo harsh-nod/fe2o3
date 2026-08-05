@@ -60,9 +60,22 @@ pub enum Error {
     },
     EventPending,
     EventTimingDisabled,
+    OperationDeviceMismatch {
+        resource: &'static str,
+        resource_device: i32,
+        stream_device: i32,
+    },
+    OperationLengthMismatch {
+        source_len: usize,
+        destination_len: usize,
+    },
     OperationRecoveryFailed {
         operation: Box<Error>,
         synchronization: Box<Error>,
+    },
+    OperationSynchronizationFailed {
+        event: Box<Error>,
+        stream: Box<Error>,
     },
     NullHostAllocation,
     Nul(NulError),
@@ -105,12 +118,31 @@ impl fmt::Display for Error {
             Self::EventTimingDisabled => {
                 write!(f, "elapsed time requires timing-enabled events")
             }
+            Self::OperationDeviceMismatch {
+                resource,
+                resource_device,
+                stream_device,
+            } => write!(
+                f,
+                "{resource} belongs to HIP device {resource_device}, but the operation stream belongs to HIP device {stream_device}"
+            ),
+            Self::OperationLengthMismatch {
+                source_len,
+                destination_len,
+            } => write!(
+                f,
+                "operation source has {source_len} element(s), but its destination has {destination_len}"
+            ),
             Self::OperationRecoveryFailed {
                 operation,
                 synchronization,
             } => write!(
                 f,
                 "operation failed ({operation}) and stream synchronization could not establish completion ({synchronization})"
+            ),
+            Self::OperationSynchronizationFailed { event, stream } => write!(
+                f,
+                "event synchronization failed ({event}) and stream synchronization could not establish completion ({stream})"
             ),
             Self::NullHostAllocation => write!(
                 f,

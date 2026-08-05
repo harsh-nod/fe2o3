@@ -59,6 +59,10 @@ impl<T: DeviceCopy> DeviceBuffer<T> {
         DevicePtr::from_raw(self.ptr)
     }
 
+    pub fn context(&self) -> &Arc<GpuContext> {
+        &self.context
+    }
+
     /// Returns the allocation's untyped HIP device address.
     ///
     /// # Safety
