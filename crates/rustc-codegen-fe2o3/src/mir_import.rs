@@ -3,9 +3,9 @@ use dialect_mir::{MirAttr, MirOp, MirOpRecord, MirType};
 use rustc_hir::def_id::LOCAL_CRATE;
 use rustc_middle::mir::{
     BasicBlock, BinOp, Body, ConstOperand, Local, Operand, Place, ProjectionElem, Rvalue,
-    StatementKind, TerminatorKind, UnOp,
+    SourceInfo, StatementKind, TerminatorKind, UnOp,
 };
-use rustc_middle::ty::{FloatTy, IntTy, Ty, TyCtxt, TyKind, TypingEnv, UintTy};
+use rustc_middle::ty::{FloatTy, IntTy, Mutability, Ty, TyCtxt, TyKind, TypingEnv, UintTy};
 use std::fmt::Write;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -48,6 +48,46 @@ pub enum MirLocalRole {
 pub struct MirImportedType {
     pub kind: MirType,
     pub rust: String,
+    pub shape: MirTypeShape,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MirTypeShape {
+    Unit,
+    Bool,
+    I32,
+    I64,
+    ISize,
+    USize,
+    F32,
+    F64,
+    Slice {
+        element: Box<MirTypeShape>,
+        mutable: bool,
+    },
+    DisjointSlice {
+        element: Box<MirTypeShape>,
+    },
+    Reference {
+        pointee: Box<MirTypeShape>,
+        mutable: bool,
+    },
+    RawPointer {
+        pointee: Box<MirTypeShape>,
+        mutable: bool,
+    },
+    Adt {
+        identity: String,
+    },
+    Tuple(Vec<MirTypeShape>),
+    Unknown,
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct MirSourceLocation {
+    pub file: String,
+    pub line: usize,
+    pub column: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -63,7 +103,10 @@ pub struct MirStatement {
     pub kind: MirStatementKind,
     pub destination: Option<MirPlaceRef>,
     pub operands: Vec<MirOperandRef>,
+    pub rvalue: Option<MirRvalueKind>,
+    /// Compatibility spelling consumed by the legacy record recognizer.
     pub operation: Option<String>,
+    pub source: Option<MirSourceLocation>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -82,18 +125,80 @@ pub enum MirStatementKind {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MirPlaceRef {
     pub local: usize,
-    pub projection: Vec<String>,
+    pub projection: Vec<MirProjectionElem>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MirProjectionElem {
+    Deref,
+    Field(usize),
+    Index {
+        local: usize,
+    },
+    ConstantIndex {
+        offset: u64,
+        min_length: u64,
+        from_end: bool,
+    },
+    Subslice {
+        from: u64,
+        to: u64,
+        from_end: bool,
+    },
+    Downcast {
+        variant: usize,
+    },
+    OpaqueCast,
+    Other,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum MirOperandRef {
     Place(MirPlaceRef),
-    Constant { ty: MirImportedType, value: String },
+    Constant {
+        ty: MirImportedType,
+        literal: MirConstant,
+        /// Compatibility spelling consumed by the legacy record recognizer.
+        value: String,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MirConstant {
+    Bool(bool),
+    I32(i32),
+    I64(i64),
+    ISize(i64),
+    USize(u64),
+    F32Bits(u32),
+    F64Bits(u64),
+    Unevaluated,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MirTerminator {
     pub kind: MirTerminatorKind,
+    pub source: Option<MirSourceLocation>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MirCallee {
+    pub identity: String,
+    pub kind: MirKnownCall,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MirKnownCall {
+    ThreadIndex1d,
+    ThreadIndexGet,
+    DisjointSliceGetMut,
+    Other,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MirSwitchTarget {
+    pub value: u128,
+    pub target: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -104,21 +209,76 @@ pub enum MirTerminatorKind {
         target: usize,
     },
     SwitchInt {
-        targets: usize,
+        discriminant: MirOperandRef,
+        targets: Vec<MirSwitchTarget>,
+        otherwise: usize,
     },
     Call {
-        callee: Option<String>,
+        callee: Option<MirCallee>,
         target: Option<usize>,
         destination: Option<MirPlaceRef>,
         operands: Vec<MirOperandRef>,
     },
     Assert {
+        condition: MirOperandRef,
+        expected: bool,
         target: usize,
     },
     Drop {
         target: usize,
     },
     Other,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MirRvalueKind {
+    Use,
+    Repeat,
+    Ref,
+    RawPointer,
+    Cast,
+    Binary(MirBinaryOp),
+    Unary(MirUnaryOp),
+    Discriminant,
+    Aggregate,
+    Other,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MirBinaryOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Rem,
+    BitXor,
+    BitAnd,
+    BitOr,
+    Shl,
+    Shr,
+    Eq,
+    Lt,
+    Le,
+    Ne,
+    Ge,
+    Gt,
+    Cmp,
+    Offset,
+    AddUnchecked,
+    SubUnchecked,
+    MulUnchecked,
+    ShlUnchecked,
+    ShrUnchecked,
+    AddWithOverflow,
+    SubWithOverflow,
+    MulWithOverflow,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MirUnaryOp {
+    Not,
+    Neg,
+    PtrMetadata,
 }
 
 pub fn import_collection<'tcx>(
@@ -421,22 +581,30 @@ impl MirStatement {
             return Some(MirOp::Store);
         }
 
-        match self.operation.as_deref()? {
-            "add" | "add_unchecked" | "add_with_overflow" => Some(MirOp::Add),
-            "sub" | "sub_unchecked" | "sub_with_overflow" => Some(MirOp::Sub),
-            "mul" | "mul_unchecked" | "mul_with_overflow" => Some(MirOp::Mul),
-            "div" => Some(MirOp::Div),
-            "eq" => Some(MirOp::Eq),
-            "lt" => Some(MirOp::Lt),
-            "le" => Some(MirOp::Le),
-            "ne" => Some(MirOp::Ne),
-            "ge" => Some(MirOp::Ge),
-            "gt" => Some(MirOp::Gt),
-            "cmp" => Some(MirOp::Cmp),
-            "cast" => Some(MirOp::Cast),
-            "offset" => Some(MirOp::Gep),
-            "ptr_metadata" => Some(MirOp::SliceLen),
-            "use" if self.operands.iter().any(MirOperandRef::is_memory_place) => Some(MirOp::Load),
+        match self.rvalue? {
+            MirRvalueKind::Binary(
+                MirBinaryOp::Add | MirBinaryOp::AddUnchecked | MirBinaryOp::AddWithOverflow,
+            ) => Some(MirOp::Add),
+            MirRvalueKind::Binary(
+                MirBinaryOp::Sub | MirBinaryOp::SubUnchecked | MirBinaryOp::SubWithOverflow,
+            ) => Some(MirOp::Sub),
+            MirRvalueKind::Binary(
+                MirBinaryOp::Mul | MirBinaryOp::MulUnchecked | MirBinaryOp::MulWithOverflow,
+            ) => Some(MirOp::Mul),
+            MirRvalueKind::Binary(MirBinaryOp::Div) => Some(MirOp::Div),
+            MirRvalueKind::Binary(MirBinaryOp::Eq) => Some(MirOp::Eq),
+            MirRvalueKind::Binary(MirBinaryOp::Lt) => Some(MirOp::Lt),
+            MirRvalueKind::Binary(MirBinaryOp::Le) => Some(MirOp::Le),
+            MirRvalueKind::Binary(MirBinaryOp::Ne) => Some(MirOp::Ne),
+            MirRvalueKind::Binary(MirBinaryOp::Ge) => Some(MirOp::Ge),
+            MirRvalueKind::Binary(MirBinaryOp::Gt) => Some(MirOp::Gt),
+            MirRvalueKind::Binary(MirBinaryOp::Cmp) => Some(MirOp::Cmp),
+            MirRvalueKind::Cast => Some(MirOp::Cast),
+            MirRvalueKind::Binary(MirBinaryOp::Offset) => Some(MirOp::Gep),
+            MirRvalueKind::Unary(MirUnaryOp::PtrMetadata) => Some(MirOp::SliceLen),
+            MirRvalueKind::Use if self.operands.iter().any(MirOperandRef::is_memory_place) => {
+                Some(MirOp::Load)
+            }
             _ => None,
         }
     }
@@ -470,17 +638,41 @@ impl MirPlaceRef {
         let mut label = format!("local{}", self.local);
         for projection in &self.projection {
             label.push('.');
-            label.push_str(projection);
+            label.push_str(&projection.label());
         }
         label
     }
 
     fn is_memory_projection(&self) -> bool {
         self.projection.iter().any(|projection| {
-            projection == "deref"
-                || projection.starts_with("index_")
-                || projection.starts_with("constant_index")
+            matches!(
+                projection,
+                MirProjectionElem::Deref
+                    | MirProjectionElem::Index { .. }
+                    | MirProjectionElem::ConstantIndex { .. }
+            )
         })
+    }
+}
+
+impl MirProjectionElem {
+    fn label(&self) -> String {
+        match self {
+            Self::Deref => "deref".to_string(),
+            Self::Field(field) => format!("field{field}"),
+            Self::Index { local } => format!("index_local{local}"),
+            Self::ConstantIndex {
+                offset,
+                min_length,
+                from_end,
+            } => format!("constant_index{offset}_min{min_length}_from_end{from_end}"),
+            Self::Subslice { from, to, from_end } => {
+                format!("subslice{from}_{to}_from_end{from_end}")
+            }
+            Self::Downcast { variant } => format!("downcast{variant}"),
+            Self::OpaqueCast => "opaque_cast".to_string(),
+            Self::Other => "projection".to_string(),
+        }
     }
 }
 
@@ -488,7 +680,7 @@ impl MirOperandRef {
     fn label(&self) -> String {
         match self {
             Self::Place(place) => place.label(),
-            Self::Constant { ty, value } => format!("const:{}={value}", ty.kind.name()),
+            Self::Constant { ty, value, .. } => format!("const:{}={value}", ty.kind.name()),
         }
     }
 
@@ -504,11 +696,13 @@ impl MirTerminatorKind {
             .with_attr(MirAttr::usize("block", block));
 
         match self {
-            Self::Goto { target } | Self::Assert { target } | Self::Drop { target } => {
+            Self::Goto { target } | Self::Assert { target, .. } | Self::Drop { target } => {
                 record.attrs.push(MirAttr::usize("target", *target));
             }
-            Self::SwitchInt { targets } => {
-                record.attrs.push(MirAttr::usize("targets", *targets));
+            Self::SwitchInt { targets, .. } => {
+                record
+                    .attrs
+                    .push(MirAttr::usize("targets", targets.len() + 1));
             }
             Self::Call {
                 callee,
@@ -517,7 +711,9 @@ impl MirTerminatorKind {
                 operands,
             } => {
                 if let Some(callee) = callee {
-                    record.attrs.push(MirAttr::string("callee", callee));
+                    record
+                        .attrs
+                        .push(MirAttr::string("callee", &callee.identity));
                 }
                 if let Some(target) = target {
                     record.attrs.push(MirAttr::usize("target", *target));
@@ -566,17 +762,20 @@ impl MirTerminatorKind {
             Self::Return => MirOp::Return.name().to_string(),
             Self::Unreachable => MirOp::Unreachable.name().to_string(),
             Self::Goto { target } => format!("{} -> bb{target}", MirOp::Branch.name()),
-            Self::SwitchInt { targets } => {
-                format!("{} ({targets} target(s))", MirOp::Switch.name())
+            Self::SwitchInt { targets, .. } => {
+                format!("{} ({} target(s))", MirOp::Switch.name(), targets.len() + 1)
             }
             Self::Call { callee, target, .. } => {
-                let callee = callee.as_deref().unwrap_or("<dynamic>");
+                let callee = callee
+                    .as_ref()
+                    .map(|callee| callee.identity.as_str())
+                    .unwrap_or("<dynamic>");
                 match target {
                     Some(target) => format!("{} {callee} -> bb{target}", MirOp::Call.name()),
                     None => format!("{} {callee} -> return", MirOp::Call.name()),
                 }
             }
-            Self::Assert { target } => format!("{} -> bb{target}", MirOp::Assert.name()),
+            Self::Assert { target, .. } => format!("{} -> bb{target}", MirOp::Assert.name()),
             Self::Drop { target } => format!("{} -> bb{target}", MirOp::Drop.name()),
             Self::Other => "other".to_string(),
         }
@@ -600,11 +799,12 @@ fn import_body<'tcx>(
                 .iter()
                 .enumerate()
                 .map(|(statement_index, statement)| {
-                    import_statement(tcx, statement_index, &statement.kind)
+                    import_statement(tcx, statement_index, &statement.kind, statement.source_info)
                 })
                 .collect(),
             terminator: block.terminator.as_ref().map(|terminator| MirTerminator {
                 kind: terminator_kind(tcx, &terminator.kind),
+                source: Some(import_source_location(tcx, terminator.source_info)),
             }),
         })
         .collect();
@@ -662,20 +862,85 @@ fn import_type<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> MirImportedType {
     MirImportedType {
         kind,
         rust: ty.to_string(),
+        shape: import_type_shape(tcx, ty),
     }
+}
+
+fn import_type_shape<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> MirTypeShape {
+    match ty.kind() {
+        TyKind::Bool => MirTypeShape::Bool,
+        TyKind::Int(IntTy::I32) => MirTypeShape::I32,
+        TyKind::Int(IntTy::I64) => MirTypeShape::I64,
+        TyKind::Int(IntTy::Isize) => MirTypeShape::ISize,
+        TyKind::Uint(UintTy::Usize) => MirTypeShape::USize,
+        TyKind::Float(FloatTy::F32) => MirTypeShape::F32,
+        TyKind::Float(FloatTy::F64) => MirTypeShape::F64,
+        TyKind::Ref(_, pointee, mutability) => match pointee.kind() {
+            TyKind::Slice(element) => MirTypeShape::Slice {
+                element: Box::new(import_type_shape(tcx, *element)),
+                mutable: *mutability == Mutability::Mut,
+            },
+            _ => MirTypeShape::Reference {
+                pointee: Box::new(import_type_shape(tcx, *pointee)),
+                mutable: *mutability == Mutability::Mut,
+            },
+        },
+        TyKind::RawPtr(pointee, mutability) => MirTypeShape::RawPointer {
+            pointee: Box::new(import_type_shape(tcx, *pointee)),
+            mutable: *mutability == Mutability::Mut,
+        },
+        TyKind::Adt(adt, args) if is_disjoint_slice(tcx, adt.did()) => {
+            MirTypeShape::DisjointSlice {
+                element: Box::new(import_type_shape(tcx, args.type_at(0))),
+            }
+        }
+        TyKind::Adt(adt, _) => MirTypeShape::Adt {
+            identity: tcx.def_path_str(adt.did()),
+        },
+        TyKind::Tuple(elements) if elements.is_empty() => MirTypeShape::Unit,
+        TyKind::Tuple(elements) => MirTypeShape::Tuple(
+            elements
+                .iter()
+                .map(|element| import_type_shape(tcx, element))
+                .collect(),
+        ),
+        _ => MirTypeShape::Unknown,
+    }
+}
+
+fn is_disjoint_slice(tcx: TyCtxt<'_>, def_id: rustc_hir::def_id::DefId) -> bool {
+    tcx.def_path_str(def_id)
+        .ends_with("fe2o3_device::DisjointSlice")
 }
 
 fn import_statement<'tcx>(
     tcx: TyCtxt<'tcx>,
     index: usize,
     kind: &StatementKind<'tcx>,
+    source_info: SourceInfo,
 ) -> MirStatement {
     MirStatement {
         index,
         kind: statement_kind(kind),
         destination: statement_destination(kind),
         operands: statement_operands(tcx, kind),
+        rvalue: statement_rvalue(kind),
         operation: statement_operation(kind),
+        source: Some(import_source_location(tcx, source_info)),
+    }
+}
+
+fn import_source_location(tcx: TyCtxt<'_>, source_info: SourceInfo) -> MirSourceLocation {
+    let location = tcx.sess.source_map().lookup_char_pos(source_info.span.lo());
+    MirSourceLocation {
+        file: location
+            .file
+            .name
+            .prefer_remapped_unconditionally()
+            .to_string_lossy()
+            .into_owned(),
+        line: location.line,
+        column: location.col.0 + 1,
     }
 }
 
@@ -723,6 +988,14 @@ fn statement_operation(kind: &StatementKind<'_>) -> Option<String> {
     Some(rvalue_operation(rvalue).to_string())
 }
 
+fn statement_rvalue(kind: &StatementKind<'_>) -> Option<MirRvalueKind> {
+    let StatementKind::Assign(assign) = kind else {
+        return None;
+    };
+    let (_, rvalue) = &**assign;
+    Some(import_rvalue_kind(rvalue))
+}
+
 fn rvalue_operands<'tcx>(tcx: TyCtxt<'tcx>, rvalue: &Rvalue<'tcx>) -> Vec<MirOperandRef> {
     match rvalue {
         Rvalue::Use(operand)
@@ -759,6 +1032,21 @@ fn rvalue_operation(rvalue: &Rvalue<'_>) -> &'static str {
     }
 }
 
+fn import_rvalue_kind(rvalue: &Rvalue<'_>) -> MirRvalueKind {
+    match rvalue {
+        Rvalue::Use(_) => MirRvalueKind::Use,
+        Rvalue::Repeat(_, _) => MirRvalueKind::Repeat,
+        Rvalue::Ref(_, _, _) => MirRvalueKind::Ref,
+        Rvalue::RawPtr(_, _) => MirRvalueKind::RawPointer,
+        Rvalue::Cast(_, _, _) => MirRvalueKind::Cast,
+        Rvalue::BinaryOp(op, _) => MirRvalueKind::Binary(import_binary_op(*op)),
+        Rvalue::UnaryOp(op, _) => MirRvalueKind::Unary(import_unary_op(*op)),
+        Rvalue::Discriminant(_) => MirRvalueKind::Discriminant,
+        Rvalue::Aggregate(_, _) => MirRvalueKind::Aggregate,
+        _ => MirRvalueKind::Other,
+    }
+}
+
 fn import_operand<'tcx>(tcx: TyCtxt<'tcx>, operand: &Operand<'tcx>) -> MirOperandRef {
     if let Some(place) = operand.place() {
         return MirOperandRef::Place(import_place(place));
@@ -769,14 +1057,60 @@ fn import_operand<'tcx>(tcx: TyCtxt<'tcx>, operand: &Operand<'tcx>) -> MirOperan
             ty: MirImportedType {
                 kind: MirType::Unknown,
                 rust: "<unknown>".to_string(),
+                shape: MirTypeShape::Unknown,
             },
+            literal: MirConstant::Unevaluated,
             value: "<unknown>".to_string(),
         };
     };
 
     MirOperandRef::Constant {
         ty: import_type(tcx, constant.const_.ty()),
+        literal: import_constant(tcx, constant),
         value: constant_value_label(tcx, constant),
+    }
+}
+
+fn import_constant<'tcx>(tcx: TyCtxt<'tcx>, constant: &ConstOperand<'tcx>) -> MirConstant {
+    let typing_env = TypingEnv::fully_monomorphized();
+    match constant.const_.ty().kind() {
+        TyKind::Uint(UintTy::Usize) => constant
+            .const_
+            .try_eval_target_usize(tcx, typing_env)
+            .map(MirConstant::USize)
+            .unwrap_or(MirConstant::Unevaluated),
+        TyKind::Int(IntTy::Isize) => constant
+            .const_
+            .try_eval_scalar_int(tcx, typing_env)
+            .map(|value| MirConstant::ISize(value.to_target_isize(tcx)))
+            .unwrap_or(MirConstant::Unevaluated),
+        TyKind::Bool => constant
+            .const_
+            .try_eval_scalar_int(tcx, typing_env)
+            .and_then(|value| value.try_to_bool().ok())
+            .map(MirConstant::Bool)
+            .unwrap_or(MirConstant::Unevaluated),
+        TyKind::Int(IntTy::I32) => constant
+            .const_
+            .try_eval_scalar_int(tcx, typing_env)
+            .map(|value| MirConstant::I32(value.to_i32()))
+            .unwrap_or(MirConstant::Unevaluated),
+        TyKind::Int(IntTy::I64) => constant
+            .const_
+            .try_eval_scalar_int(tcx, typing_env)
+            .map(|value| MirConstant::I64(value.to_i64()))
+            .unwrap_or(MirConstant::Unevaluated),
+        TyKind::Float(FloatTy::F32) => constant
+            .const_
+            .try_eval_scalar_int(tcx, typing_env)
+            .map(|value| MirConstant::F32Bits(value.to_u32()))
+            .unwrap_or(MirConstant::Unevaluated),
+        TyKind::Float(FloatTy::F64) => constant
+            .const_
+            .try_eval_scalar_int(tcx, typing_env)
+            .map(|value| MirConstant::F64Bits(value.to_u64()))
+            .unwrap_or(MirConstant::Unevaluated),
+        _ => MirConstant::Unevaluated,
     }
 }
 
@@ -800,26 +1134,77 @@ fn constant_value_label<'tcx>(tcx: TyCtxt<'tcx>, constant: &ConstOperand<'tcx>) 
 fn import_place(place: Place<'_>) -> MirPlaceRef {
     MirPlaceRef {
         local: place.local.as_usize(),
-        projection: place.projection.iter().map(projection_elem_name).collect(),
+        projection: place
+            .projection
+            .iter()
+            .map(import_projection_elem)
+            .collect(),
     }
 }
 
-fn projection_elem_name(element: ProjectionElem<Local, Ty<'_>>) -> String {
+fn import_projection_elem(element: ProjectionElem<Local, Ty<'_>>) -> MirProjectionElem {
     match element {
-        ProjectionElem::Deref => "deref".to_string(),
-        ProjectionElem::Field(field, _) => format!("field{}", field.index()),
-        ProjectionElem::Index(local) => format!("index_local{}", local.as_usize()),
+        ProjectionElem::Deref => MirProjectionElem::Deref,
+        ProjectionElem::Field(field, _) => MirProjectionElem::Field(field.index()),
+        ProjectionElem::Index(local) => MirProjectionElem::Index {
+            local: local.as_usize(),
+        },
         ProjectionElem::ConstantIndex {
             offset,
             min_length,
             from_end,
-        } => format!("constant_index{offset}_min{min_length}_from_end{from_end}"),
+        } => MirProjectionElem::ConstantIndex {
+            offset,
+            min_length,
+            from_end,
+        },
         ProjectionElem::Subslice { from, to, from_end } => {
-            format!("subslice{from}_{to}_from_end{from_end}")
+            MirProjectionElem::Subslice { from, to, from_end }
         }
-        ProjectionElem::Downcast(_, variant) => format!("downcast{}", variant.index()),
-        ProjectionElem::OpaqueCast(_) => "opaque_cast".to_string(),
-        _ => "projection".to_string(),
+        ProjectionElem::Downcast(_, variant) => MirProjectionElem::Downcast {
+            variant: variant.index(),
+        },
+        ProjectionElem::OpaqueCast(_) => MirProjectionElem::OpaqueCast,
+        _ => MirProjectionElem::Other,
+    }
+}
+
+fn import_binary_op(op: BinOp) -> MirBinaryOp {
+    match op {
+        BinOp::Add => MirBinaryOp::Add,
+        BinOp::Sub => MirBinaryOp::Sub,
+        BinOp::Mul => MirBinaryOp::Mul,
+        BinOp::Div => MirBinaryOp::Div,
+        BinOp::Rem => MirBinaryOp::Rem,
+        BinOp::BitXor => MirBinaryOp::BitXor,
+        BinOp::BitAnd => MirBinaryOp::BitAnd,
+        BinOp::BitOr => MirBinaryOp::BitOr,
+        BinOp::Shl => MirBinaryOp::Shl,
+        BinOp::Shr => MirBinaryOp::Shr,
+        BinOp::Eq => MirBinaryOp::Eq,
+        BinOp::Lt => MirBinaryOp::Lt,
+        BinOp::Le => MirBinaryOp::Le,
+        BinOp::Ne => MirBinaryOp::Ne,
+        BinOp::Ge => MirBinaryOp::Ge,
+        BinOp::Gt => MirBinaryOp::Gt,
+        BinOp::Cmp => MirBinaryOp::Cmp,
+        BinOp::Offset => MirBinaryOp::Offset,
+        BinOp::AddUnchecked => MirBinaryOp::AddUnchecked,
+        BinOp::SubUnchecked => MirBinaryOp::SubUnchecked,
+        BinOp::MulUnchecked => MirBinaryOp::MulUnchecked,
+        BinOp::ShlUnchecked => MirBinaryOp::ShlUnchecked,
+        BinOp::ShrUnchecked => MirBinaryOp::ShrUnchecked,
+        BinOp::AddWithOverflow => MirBinaryOp::AddWithOverflow,
+        BinOp::SubWithOverflow => MirBinaryOp::SubWithOverflow,
+        BinOp::MulWithOverflow => MirBinaryOp::MulWithOverflow,
+    }
+}
+
+fn import_unary_op(op: UnOp) -> MirUnaryOp {
+    match op {
+        UnOp::Not => MirUnaryOp::Not,
+        UnOp::Neg => MirUnaryOp::Neg,
+        UnOp::PtrMetadata => MirUnaryOp::PtrMetadata,
     }
 }
 
@@ -869,8 +1254,16 @@ fn terminator_kind<'tcx>(tcx: TyCtxt<'tcx>, kind: &TerminatorKind<'tcx>) -> MirT
         TerminatorKind::Goto { target } => MirTerminatorKind::Goto {
             target: target.as_usize(),
         },
-        TerminatorKind::SwitchInt { targets, .. } => MirTerminatorKind::SwitchInt {
-            targets: targets.all_targets().len(),
+        TerminatorKind::SwitchInt { discr, targets } => MirTerminatorKind::SwitchInt {
+            discriminant: import_operand(tcx, discr),
+            targets: targets
+                .iter()
+                .map(|(value, target)| MirSwitchTarget {
+                    value,
+                    target: target.as_usize(),
+                })
+                .collect(),
+            otherwise: targets.otherwise().as_usize(),
         },
         TerminatorKind::Call {
             func,
@@ -879,7 +1272,7 @@ fn terminator_kind<'tcx>(tcx: TyCtxt<'tcx>, kind: &TerminatorKind<'tcx>) -> MirT
             target,
             ..
         } => MirTerminatorKind::Call {
-            callee: call_name(tcx, func),
+            callee: call_identity(tcx, func),
             target: target.map(BasicBlock::as_usize),
             destination: Some(import_place(*destination)),
             operands: args
@@ -887,7 +1280,14 @@ fn terminator_kind<'tcx>(tcx: TyCtxt<'tcx>, kind: &TerminatorKind<'tcx>) -> MirT
                 .map(|arg| import_operand(tcx, &arg.node))
                 .collect(),
         },
-        TerminatorKind::Assert { target, .. } => MirTerminatorKind::Assert {
+        TerminatorKind::Assert {
+            cond,
+            expected,
+            target,
+            ..
+        } => MirTerminatorKind::Assert {
+            condition: import_operand(tcx, cond),
+            expected: *expected,
             target: target.as_usize(),
         },
         TerminatorKind::Drop { target, .. } => MirTerminatorKind::Drop {
@@ -897,14 +1297,24 @@ fn terminator_kind<'tcx>(tcx: TyCtxt<'tcx>, kind: &TerminatorKind<'tcx>) -> MirT
     }
 }
 
-fn call_name<'tcx>(tcx: TyCtxt<'tcx>, func: &Operand<'tcx>) -> Option<String> {
+fn call_identity<'tcx>(tcx: TyCtxt<'tcx>, func: &Operand<'tcx>) -> Option<MirCallee> {
     let Operand::Constant(constant) = func else {
         return None;
     };
     let TyKind::FnDef(def_id, _) = constant.const_.ty().kind() else {
         return None;
     };
-    Some(tcx.def_path_str(*def_id))
+    let identity = tcx.def_path_str(*def_id);
+    let kind = if identity.ends_with("fe2o3_device::thread::index_1d") {
+        MirKnownCall::ThreadIndex1d
+    } else if identity.ends_with("fe2o3_device::ThreadIndex::get") {
+        MirKnownCall::ThreadIndexGet
+    } else if identity.contains("fe2o3_device::DisjointSlice") && identity.ends_with("::get_mut") {
+        MirKnownCall::DisjointSliceGetMut
+    } else {
+        MirKnownCall::Other
+    };
+    Some(MirCallee { identity, kind })
 }
 
 #[cfg(test)]
@@ -927,6 +1337,7 @@ mod tests {
                         ty: MirImportedType {
                             kind: MirType::Unit,
                             rust: "()".to_string(),
+                            shape: MirTypeShape::Unit,
                         },
                     },
                     MirLocal {
@@ -935,6 +1346,10 @@ mod tests {
                         ty: MirImportedType {
                             kind: MirType::Slice,
                             rust: "&[f32]".to_string(),
+                            shape: MirTypeShape::Slice {
+                                element: Box::new(MirTypeShape::F32),
+                                mutable: false,
+                            },
                         },
                     },
                 ],
@@ -946,6 +1361,7 @@ mod tests {
                     ],
                     terminator: Some(MirTerminator {
                         kind: MirTerminatorKind::Goto { target: 1 },
+                        source: None,
                     }),
                 }],
             }],
@@ -975,6 +1391,10 @@ mod tests {
                     ty: MirImportedType {
                         kind: MirType::Slice,
                         rust: "&[f32]".to_string(),
+                        shape: MirTypeShape::Slice {
+                            element: Box::new(MirTypeShape::F32),
+                            mutable: false,
+                        },
                     },
                 }],
                 blocks: vec![MirBlock {
@@ -988,12 +1408,18 @@ mod tests {
                         }),
                         operands: vec![MirOperandRef::Place(MirPlaceRef {
                             local: 1,
-                            projection: vec!["deref".to_string(), "index_local2".to_string()],
+                            projection: vec![
+                                MirProjectionElem::Deref,
+                                MirProjectionElem::Index { local: 2 },
+                            ],
                         })],
+                        rvalue: Some(MirRvalueKind::Use),
                         operation: Some("use".to_string()),
+                        source: None,
                     }],
                     terminator: Some(MirTerminator {
                         kind: MirTerminatorKind::Return,
+                        source: None,
                     }),
                 }],
             }],
@@ -1033,11 +1459,15 @@ mod tests {
                     statements: Vec::new(),
                     terminator: Some(MirTerminator {
                         kind: MirTerminatorKind::Call {
-                            callee: Some("fe2o3_device::thread::index_1d".to_string()),
+                            callee: Some(MirCallee {
+                                identity: "fe2o3_device::thread::index_1d".to_string(),
+                                kind: MirKnownCall::ThreadIndex1d,
+                            }),
                             target: Some(1),
                             destination: Some(local_place(2)),
                             operands: vec![MirOperandRef::Place(local_place(1))],
                         },
+                        source: None,
                     }),
                 }],
             }],
@@ -1067,7 +1497,9 @@ mod tests {
                 MirOperandRef::Place(local_place(1)),
                 MirOperandRef::Place(local_place(2)),
             ],
+            rvalue: Some(MirRvalueKind::Binary(MirBinaryOp::MulWithOverflow)),
             operation: Some("mul_with_overflow".to_string()),
+            source: None,
         };
         let load = MirStatement {
             index: 1,
@@ -1075,19 +1507,26 @@ mod tests {
             destination: Some(local_place(4)),
             operands: vec![MirOperandRef::Place(MirPlaceRef {
                 local: 1,
-                projection: vec!["deref".to_string(), "index_local2".to_string()],
+                projection: vec![
+                    MirProjectionElem::Deref,
+                    MirProjectionElem::Index { local: 2 },
+                ],
             })],
+            rvalue: Some(MirRvalueKind::Use),
             operation: Some("use".to_string()),
+            source: None,
         };
         let store = MirStatement {
             index: 2,
             kind: MirStatementKind::Assign,
             destination: Some(MirPlaceRef {
                 local: 5,
-                projection: vec!["deref".to_string()],
+                projection: vec![MirProjectionElem::Deref],
             }),
             operands: vec![MirOperandRef::Place(local_place(4))],
+            rvalue: Some(MirRvalueKind::Use),
             operation: Some("use".to_string()),
+            source: None,
         };
         let compare = MirStatement {
             index: 3,
@@ -1097,7 +1536,9 @@ mod tests {
                 MirOperandRef::Place(local_place(1)),
                 MirOperandRef::Place(local_place(2)),
             ],
+            rvalue: Some(MirRvalueKind::Binary(MirBinaryOp::Lt)),
             operation: Some("lt".to_string()),
+            source: None,
         };
 
         assert_eq!(arithmetic.lowering_op(), Some(MirOp::Mul));
@@ -1112,7 +1553,9 @@ mod tests {
             kind,
             destination: None,
             operands: Vec::new(),
+            rvalue: None,
             operation: None,
+            source: None,
         }
     }
 
@@ -1125,10 +1568,10 @@ mod tests {
 
     fn record_usize(record: &MirOpRecord, name: &'static str) -> Option<usize> {
         record.attrs.iter().find_map(|attr| {
-            if attr.name == name {
-                if let dialect_mir::MirAttrValue::Usize(value) = &attr.value {
-                    return Some(*value);
-                }
+            if attr.name == name
+                && let dialect_mir::MirAttrValue::Usize(value) = &attr.value
+            {
+                return Some(*value);
             }
             None
         })
@@ -1136,10 +1579,10 @@ mod tests {
 
     fn record_string<'a>(record: &'a MirOpRecord, name: &'static str) -> Option<&'a str> {
         record.attrs.iter().find_map(|attr| {
-            if attr.name == name {
-                if let dialect_mir::MirAttrValue::String(value) = &attr.value {
-                    return Some(value.as_str());
-                }
+            if attr.name == name
+                && let dialect_mir::MirAttrValue::String(value) = &attr.value
+            {
+                return Some(value.as_str());
             }
             None
         })

@@ -855,11 +855,9 @@ fn parse_record_eval_i64(operand: &str) -> Option<i64> {
 
 fn parse_record_eval_attr<'a>(operand: &'a str, prefix: &str) -> Option<&'a str> {
     let start = operand.find(prefix)? + prefix.len();
-    Some(
-        operand[start..]
-            .split(|ch: char| !(ch == '-' || ch.is_ascii_digit()))
-            .next()?,
-    )
+    operand[start..]
+        .split(|ch: char| !(ch == '-' || ch.is_ascii_digit()))
+        .next()
 }
 
 fn parse_record_const_hex(operand: &str) -> Option<u64> {
@@ -1042,10 +1040,10 @@ const LOWERING_OPS: &[MirOp] = &[
 
 fn string_attr<'a>(record: &'a MirOpRecord, name: &'static str) -> Option<&'a str> {
     record.attrs.iter().find_map(|attr| {
-        if attr.name == name {
-            if let MirAttrValue::String(value) = &attr.value {
-                return Some(value.as_str());
-            }
+        if attr.name == name
+            && let MirAttrValue::String(value) = &attr.value
+        {
+            return Some(value.as_str());
         }
         None
     })
@@ -1053,10 +1051,10 @@ fn string_attr<'a>(record: &'a MirOpRecord, name: &'static str) -> Option<&'a st
 
 fn usize_attr(record: &MirOpRecord, name: &'static str) -> Option<usize> {
     record.attrs.iter().find_map(|attr| {
-        if attr.name == name {
-            if let MirAttrValue::Usize(value) = &attr.value {
-                return Some(*value);
-            }
+        if attr.name == name
+            && let MirAttrValue::Usize(value) = &attr.value
+        {
+            return Some(*value);
         }
         None
     })

@@ -11,6 +11,7 @@ extern crate rustc_session;
 
 mod amdgpu_llvm;
 mod collector;
+mod kernel_ir_lowering;
 mod mir_import;
 mod record_lowering;
 
@@ -34,6 +35,7 @@ pub const BACKEND_ENV: &str = "FE2O3_BACKEND";
 pub const VERBOSE_ENV: &str = "FE2O3_VERBOSE";
 pub const DUMP_MIR_ENV: &str = "FE2O3_DUMP_MIR";
 pub const DUMP_LLVM_ENV: &str = "FE2O3_DUMP_LLVM";
+pub const VERIFY_KERNEL_IR_ENV: &str = "FE2O3_VERIFY_KERNEL_IR";
 pub const HSACO_DIR_ENV: &str = "FE2O3_HSACO_DIR";
 
 pub struct Fe2o3CodegenBackend {
@@ -46,6 +48,7 @@ pub struct BackendConfig {
     pub verbose: bool,
     pub dump_mir: bool,
     pub dump_llvm: bool,
+    pub verify_kernel_ir: bool,
     pub hsaco_output_dir: Option<PathBuf>,
     pub target: AmdGpuTarget,
 }
@@ -56,6 +59,7 @@ impl BackendConfig {
             verbose: env_flag(VERBOSE_ENV),
             dump_mir: env_flag(DUMP_MIR_ENV),
             dump_llvm: env_flag(DUMP_LLVM_ENV),
+            verify_kernel_ir: env_flag(VERIFY_KERNEL_IR_ENV),
             hsaco_output_dir: env::var(HSACO_DIR_ENV).ok().map(PathBuf::from),
             target: AmdGpuTarget::from_env_or_default(),
         }
@@ -117,6 +121,19 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                 );
                 collector::dump_device_functions(tcx, &collection.functions);
                 let mir_module = mir_import::import_collection(tcx, &collection);
+                match run_optional_kernel_ir_analysis(self.config.verify_kernel_ir, || {
+                    kernel_ir_lowering::translate_and_verify(&mir_module)
+                }) {
+                    Ok(Some(module)) => eprintln!(
+                        "[rustc-codegen-fe2o3] verified MIR kernel IR analysis: {} kernel(s), {} function(s)",
+                        module.kernels.len(),
+                        module.functions.len()
+                    ),
+                    Ok(None) => {}
+                    Err(errors) => tcx.dcx().fatal(format!(
+                        "[rustc-codegen-fe2o3] MIR kernel IR analysis failed: {errors}"
+                    )),
+                }
                 let dialect_records = mir_module.dialect_records();
                 let lowering_plan = record_lowering::plan_from_records(&dialect_records);
                 if self.config.dump_mir {
@@ -475,6 +492,17 @@ fn env_flag(name: &str) -> bool {
     )
 }
 
+fn run_optional_kernel_ir_analysis<T, E>(
+    enabled: bool,
+    analysis: impl FnOnce() -> Result<T, E>,
+) -> Result<Option<T>, E> {
+    if enabled {
+        analysis().map(Some)
+    } else {
+        Ok(None)
+    }
+}
+
 fn find_rocm_path() -> Option<PathBuf> {
     for var in ["ROCM_PATH", "HIP_PATH"] {
         if let Ok(value) = env::var(var) {
@@ -507,7 +535,14 @@ fn optional_tool(llvm_bin: &Path, name: &str) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::{AmdGpuTarget, validate_hsaco_metadata_text};
+    use super::{AmdGpuTarget, run_optional_kernel_ir_analysis, validate_hsaco_metadata_text};
+
+    #[test]
+    fn optional_kernel_ir_analysis_is_fail_closed_when_enabled() {
+        let result = run_optional_kernel_ir_analysis(true, || Err::<(), _>("translation failed"));
+
+        assert_eq!(result, Err("translation failed"));
+    }
 
     #[test]
     fn accepts_expected_hsaco_metadata() {
