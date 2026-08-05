@@ -1,6 +1,7 @@
 [package]
 name = "cargo-fe2o3"
 version = "0.1.0"
+default-run = "cargo-fe2o3"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
