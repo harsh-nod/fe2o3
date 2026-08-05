@@ -12,6 +12,8 @@ mod error;
 mod identities;
 mod manifest;
 mod proof;
+mod proof_decode;
+mod proof_encode;
 
 pub use abi::{
     AbiField, AbiKind, AbiLayout, Access, AddressSpace, MAX_ABI_BYTES, MAX_ABI_FIELDS, Mutability,
@@ -41,3 +43,5 @@ pub use proof::{
     ProofProperty, ProofRecordV1, ProofTargetIdentity, SourceContractIdentity, TrustedItem,
     VerificationModelIdentity,
 };
+pub use proof_decode::ProofDecodeError;
+pub use proof_encode::{MAX_PROOF_RECORD_BYTES, PROOF_RECORD_MAGIC, PROOF_RECORD_VERSION};
