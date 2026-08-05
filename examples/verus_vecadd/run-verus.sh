@@ -71,6 +71,33 @@ run_rejected() {
     fi
 }
 
+run_rejected_exact() {
+    name=$1
+    file=$2
+    marker=$3
+    diagnostic=$4
+    failed_clause=$5
+    log="$tmp_dir/$name.log"
+    if "$verus_path" --crate-type lib --triggers-mode silent "$file" >"$log" 2>&1; then
+        printf 'FAIL:  %s unexpectedly verified\n' "$name" >&2
+        failures=$((failures + 1))
+    elif ! grep -Fq "$marker" "$log"; then
+        printf 'FAIL:  %s failed without marker %s\n' "$name" "$marker" >&2
+        cat "$log" >&2
+        failures=$((failures + 1))
+    elif ! grep -Fq "$diagnostic" "$log"; then
+        printf 'FAIL:  %s failed without exact diagnostic %s\n' "$name" "$diagnostic" >&2
+        cat "$log" >&2
+        failures=$((failures + 1))
+    elif ! grep -Fq "$failed_clause" "$log"; then
+        printf 'FAIL:  %s failed without exact clause %s\n' "$name" "$failed_clause" >&2
+        cat "$log" >&2
+        failures=$((failures + 1))
+    else
+        printf 'XFAIL: %s rejected at the expected proof clause\n' "$name"
+    fi
+}
+
 run_pass vecadd "$script_dir/verus/vecadd.rs"
 run_pass fill "$script_dir/verus/fill.rs"
 run_rejected fill_missing_bounds \
@@ -109,18 +136,21 @@ run_rejected same_source_functional_error \
     "$script_dir/verus/negative/same_source_functional_error.rs" \
     'mutated_same_source_claims_wrong_sum' \
     'postcondition.*not satisfied|postcondition failure'
-run_rejected real_kernel_wrong_bounds \
-    "$script_dir/verus/negative/real_kernel_wrong_bounds.rs" \
-    'rejects_missing_real_kernel_thread_bound' \
-    'precondition.*not satisfied|precondition failure'
-run_rejected real_kernel_wrong_index \
+run_rejected_exact real_kernel_guard_bypass \
+    "$script_dir/verus/negative/real_kernel_guard_bypass.rs" \
+    'real_kernel_guard_bypass_input_index' \
+    'error: precondition not met: index in bounds for this access' \
+    'let _bypassed_input = a[i]'
+run_rejected_exact real_kernel_wrong_index \
     "$script_dir/verus/negative/real_kernel_wrong_index.rs" \
-    'mutated_real_kernel_index_is_injective' \
-    'postcondition.*not satisfied|postcondition failure'
-run_rejected real_kernel_output_alias \
+    'mutated_shared_body_claims_identity_frame' \
+    'error: postcondition not satisfied' \
+    'result.values@[0] == output.values@[0]'
+run_rejected_exact real_kernel_output_alias \
     "$script_dir/verus/negative/real_kernel_output_alias.rs" \
     'rejects_real_output_input_alias' \
-    'precondition.*not satisfied|precondition failure'
+    'error: precondition not satisfied' \
+    'real_vecadd_source_evidence_is_valid('
 
 if [ "$failures" -ne 0 ]; then
     printf 'Verus fixture run failed: %s unexpected result(s)\n' "$failures" >&2

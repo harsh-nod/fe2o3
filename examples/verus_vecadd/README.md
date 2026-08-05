@@ -70,10 +70,11 @@ Run both positive Verus harnesses and all twelve expected proof rejections with:
 VERUS=/absolute/path/to/verus examples/verus_vecadd/run-verus.sh --require
 ```
 
-The real-kernel negative mutations independently reject a missing thread bound,
-a non-injective constant output index, and output/input allocation aliasing.
-Each expected rejection must contain both its stable marker and a proof
-precondition or postcondition diagnostic; parser and tool failures do not pass.
+The real-kernel negative mutations independently reject an input read moved
+ahead of the output guard, a real shared-body expansion through a constant-zero
+thread adapter, and output/input allocation aliasing. For these fixtures the
+runner requires the exact Verus error class and failed source clause in addition
+to a stable marker; parser and unrelated proof failures do not pass.
 
 ## Remaining refinement gap
 
