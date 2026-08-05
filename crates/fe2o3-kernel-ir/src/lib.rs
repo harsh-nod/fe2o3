@@ -9,11 +9,13 @@
 //! consumers must call [`verify_module`] before relying on semantic invariants.
 
 mod ir;
+mod region_effects;
 mod types;
 mod verify;
 mod wire;
 
 pub use ir::*;
+pub use region_effects::*;
 pub use types::*;
 pub use verify::*;
 pub use wire::*;
