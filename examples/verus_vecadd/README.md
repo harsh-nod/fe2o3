@@ -1,17 +1,22 @@
-# verus_vecadd
+# verus_vecadd and fill
 
 This example keeps the executable path compilable as ordinary `no_std` Rust and
-places the Verus proof harness in `verus/vecadd.rs`. The split is temporary: it
-lets this spike test the contract shape without adding Verus or `vstd` to the
-normal Cargo dependency graph.
+places the Verus proof harnesses in `verus/vecadd.rs` and `verus/fill.rs`. The
+split is temporary: it lets this spike test the contract shape without adding
+Verus or `vstd` to the normal Cargo dependency graph.
 
-The executable example checks that all buffers match the logical launch domain,
-constructs an `IdentityWriteIndex`, and performs one checked `u32` addition per
-thread. The Verus harness proves the corresponding target-neutral model:
+The executable example checks that buffers match the logical launch domain,
+constructs an `IdentityWriteIndex`, and performs either one checked `u32`
+addition or one fill write per thread. The Verus harness proves the
+corresponding target-neutral models. For fill it establishes:
 
 - each identity index is in bounds;
-- distinct logical threads select distinct singleton output locations; and
-- a per-thread vecadd write changes only its owned output location.
+- modeled byte-address arithmetic remains below an explicit address-space size;
+- distinct logical threads select disjoint singleton output locations;
+- a per-thread write changes only its owned output location; and
+- a completed hardware-thread set establishes the full fill postcondition.
+
+The vecadd proof retains its bounds, disjoint-write, and frame properties.
 
 Run the ordinary tests with:
 
@@ -19,21 +24,37 @@ Run the ordinary tests with:
 cargo +stable test --manifest-path examples/verus_vecadd/Cargo.toml
 ```
 
-With a Verus binary and `vstd` available, verify the harness with:
+With a Verus binary and `vstd` available, run both positive proofs and the three
+negative proof mutations with:
 
 ```text
-verus --crate-type lib examples/verus_vecadd/verus/vecadd.rs
+examples/verus_vecadd/run-verus.sh --require
 ```
+
+Set `VERUS=/absolute/path/to/verus` for a non-`PATH` installation. Without
+`--require`, the runner reports `SKIP` and succeeds when Verus is unavailable,
+so ordinary Cargo builds remain independent of Verus. A negative fixture counts
+as an expected rejection only when Verus emits a postcondition-failure
+diagnostic; syntax and tool failures do not masquerade as successful tests.
 
 ## Trusted boundary and limits
 
-`hardware_thread_id` in the Verus harness is marked
-`#[verifier::external_body]`. Its postcondition is the explicit trust boundary:
-the eventual backend/runtime must supply one logical ID below `thread_count` for
-each active hardware thread. The race argument additionally relies on different
-active hardware threads receiving different logical IDs; the harness proves the
-identity mapping is injective once those IDs differ.
+`hardware_thread_id` in each Verus harness is marked
+`#[verifier::external_body]`. The fill contract explicitly requires a 1D active
+launch slot to observe the same global logical ID. Consequently the set of
+active slots is in bounds, unique, and covers the logical domain. Passing the
+active slot to the external function is ghost modeling for this spike, not the
+signature of a GPU intrinsic. The backend, launch geometry, and runtime must
+eventually refine that model.
 
-There are no `assume` or `admit` statements. This spike does not model scheduling,
-barriers, atomics, floating-point semantics, arbitrary index functions, or the
-correctness of MIR/LLVM lowering. It is not a complete SIMT verifier.
+The address proof uses mathematical naturals and an explicit exclusive
+`address_space_size`. It proves the modeled element range cannot overflow that
+space. It does not prove pointer provenance, allocation size, Rust layout, or
+that a target identity supplied the correct hardware address-space limit.
+
+There are no `assume` or `admit` statements. This spike does not prove that the
+Rust function, canonical kernel IR, AMDGPU lowering, code object, or HIP launch
+refines the Verus model. It also does not model scheduling, barriers, atomics,
+floating-point semantics, or arbitrary index functions. Proof records can bind
+the model and environment identities as evidence, but identity equality alone
+does not establish compiler refinement or create verified-artifact authority.
