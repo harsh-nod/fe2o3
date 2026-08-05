@@ -1,3 +1,5 @@
+use crate::mir_import::{MirModule, MirTerminatorKind};
+use crate::trusted_device_items::TrustedDeviceItem;
 use dialect_mir::{MirAttrValue, MirOp, MirOpRecord};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
@@ -34,6 +36,7 @@ pub struct RecordLoweringOp {
     pub source: Option<String>,
     pub operation: Option<String>,
     pub callee: Option<String>,
+    trusted_callee: Option<TrustedDeviceItem>,
     pub target: Option<usize>,
     pub targets: Option<usize>,
     pub destination_local: Option<usize>,
@@ -145,6 +148,45 @@ pub enum RecordUnaryOp {
     Neg,
 }
 
+pub fn plan_from_module(module: &MirModule) -> RecordLoweringPlan {
+    let mut plan = plan_from_records(&module.dialect_records());
+
+    for function in &module.functions {
+        let Some(target) = plan
+            .functions
+            .iter_mut()
+            .find(|candidate| candidate.symbol == function.export_name)
+        else {
+            continue;
+        };
+
+        for block in &function.blocks {
+            let Some(MirTerminatorKind::Call {
+                callee: Some(callee),
+                ..
+            }) = block.terminator.as_ref().map(|terminator| &terminator.kind)
+            else {
+                continue;
+            };
+            let Some(trusted_item) = callee.trusted_item() else {
+                continue;
+            };
+            let mut matches = target
+                .ops
+                .iter()
+                .enumerate()
+                .filter(|(_, op)| op.op == MirOp::Call && op.block == Some(block.index))
+                .map(|(index, _)| index);
+            let (Some(index), None) = (matches.next(), matches.next()) else {
+                continue;
+            };
+            target.ops[index].trusted_callee = Some(trusted_item);
+        }
+    }
+
+    plan
+}
+
 pub fn plan_from_records(records: &[MirOpRecord]) -> RecordLoweringPlan {
     let mut functions = Vec::new();
 
@@ -206,6 +248,7 @@ pub fn plan_from_records(records: &[MirOpRecord]) -> RecordLoweringPlan {
             source: string_attr(record, "source").map(str::to_string),
             operation: string_attr(record, "operation").map(str::to_string),
             callee: string_attr(record, "callee").map(str::to_string),
+            trusted_callee: None,
             target: usize_attr(record, "target"),
             targets: usize_attr(record, "targets"),
             destination_local: usize_attr(record, "destination_local"),
@@ -287,13 +330,10 @@ impl RecordLoweringFunction {
             .collect()
     }
 
-    pub fn has_call_suffix(&self, suffix: &str) -> bool {
-        self.ops_by(MirOp::Call).into_iter().any(|candidate| {
-            candidate
-                .callee
-                .as_deref()
-                .is_some_and(|callee| callee.ends_with(suffix))
-        })
+    pub fn has_trusted_call(&self, item: TrustedDeviceItem) -> bool {
+        self.ops_by(MirOp::Call)
+            .into_iter()
+            .any(|candidate| candidate.trusted_callee == Some(item))
     }
 
     pub fn access_sketch(&self) -> RecordAccessSketch {
@@ -581,6 +621,30 @@ impl RecordExpressionSketch {
 }
 
 impl RecordLoweringOp {
+    #[cfg(test)]
+    pub(crate) fn new_for_test(op: MirOp) -> Self {
+        Self {
+            op,
+            block: Some(0),
+            statement: None,
+            source: None,
+            operation: None,
+            callee: None,
+            trusted_callee: None,
+            target: None,
+            targets: None,
+            destination_local: None,
+            destination: None,
+            operand_count: None,
+            operands: None,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_trusted_callee_for_test(&mut self, item: TrustedDeviceItem) {
+        self.trusted_callee = Some(item);
+    }
+
     pub fn destination_place(&self) -> Option<RecordPlaceRef> {
         self.destination.as_deref().and_then(RecordPlaceRef::parse)
     }
@@ -675,14 +739,14 @@ fn bind_call_index(
     thread_index_local: &mut Option<usize>,
     bindings: &mut HashMap<usize, RecordLinearIndex>,
 ) {
-    let Some(callee) = op.callee.as_deref() else {
+    let Some(callee) = op.trusted_callee else {
         return;
     };
     let Some(destination) = op.destination_local else {
         return;
     };
 
-    if callee.ends_with("fe2o3_device::thread::index_1d") {
+    if callee == TrustedDeviceItem::ThreadIndex1d {
         *thread_index_local = Some(destination);
         return;
     }
@@ -701,24 +765,24 @@ fn bind_call_index(
         return;
     }
 
-    let index = if callee.ends_with("fe2o3_device::ThreadIndex::get") {
+    let index = if callee == TrustedDeviceItem::ThreadIndexGet {
         Some(RecordLinearIndex::thread())
-    } else if callee.ends_with("fe2o3_device::ThreadIndex::offset") {
+    } else if callee == TrustedDeviceItem::ThreadIndexOffset {
         operands
             .get(1)
             .and_then(|operand| parse_record_unsigned_const(operand))
             .and_then(|offset| RecordLinearIndex::thread().offset(offset))
-    } else if callee.ends_with("fe2o3_device::ThreadIndex::offset_signed") {
+    } else if callee == TrustedDeviceItem::ThreadIndexOffsetSigned {
         operands
             .get(1)
             .and_then(|operand| parse_record_signed_const(operand))
             .and_then(|offset| RecordLinearIndex::thread().offset(offset))
-    } else if callee.ends_with("fe2o3_device::ThreadIndex::stride") {
+    } else if callee == TrustedDeviceItem::ThreadIndexStride {
         operands
             .get(1)
             .and_then(|operand| parse_record_unsigned_const(operand))
             .map(|stride| RecordLinearIndex { stride, offset: 0 })
-    } else if callee.ends_with("fe2o3_device::ThreadIndex::stride_offset") {
+    } else if callee == TrustedDeviceItem::ThreadIndexStrideOffset {
         operands
             .get(1)
             .and_then(|operand| parse_record_unsigned_const(operand))
@@ -1065,6 +1129,27 @@ mod tests {
     use super::*;
     use dialect_mir::MirAttr;
 
+    fn trust_calls_for_test(
+        plan: &mut RecordLoweringPlan,
+        function: &str,
+        items: &[TrustedDeviceItem],
+    ) {
+        let function = plan
+            .functions
+            .iter_mut()
+            .find(|candidate| candidate.symbol == function)
+            .expect("test function");
+        let calls = function
+            .ops
+            .iter_mut()
+            .filter(|op| op.op == MirOp::Call)
+            .collect::<Vec<_>>();
+        assert_eq!(calls.len(), items.len());
+        for (call, item) in calls.into_iter().zip(items) {
+            call.trusted_callee = Some(*item);
+        }
+    }
+
     #[test]
     fn groups_lowering_ops_by_function() {
         let records = vec![
@@ -1109,7 +1194,8 @@ mod tests {
                 .with_attr(MirAttr::usize("block", 1)),
         ];
 
-        let plan = plan_from_records(&records);
+        let mut plan = plan_from_records(&records);
+        trust_calls_for_test(&mut plan, "copy", &[TrustedDeviceItem::ThreadIndex1d]);
 
         assert_eq!(plan.functions.len(), 1);
         assert_eq!(plan.functions[0].symbol, "copy");
@@ -1130,7 +1216,7 @@ mod tests {
         assert_eq!(plan.functions[0].ops[0].destination_local, Some(3));
         assert_eq!(plan.functions[0].ops[0].operand_count, Some(1));
         assert_eq!(plan.functions[0].ops_by(MirOp::Call).len(), 1);
-        assert!(plan.functions[0].has_call_suffix("thread::index_1d"));
+        assert!(plan.functions[0].has_trusted_call(TrustedDeviceItem::ThreadIndex1d));
         assert_eq!(plan.functions[0].op_count(MirOp::Return), 1);
         let access = plan.functions[0].access_sketch();
         assert_eq!(access.loads.len(), 1);
@@ -1179,7 +1265,15 @@ mod tests {
                 )),
         ];
 
-        let plan = plan_from_records(&records);
+        let mut plan = plan_from_records(&records);
+        trust_calls_for_test(
+            &mut plan,
+            "gather_odd",
+            &[
+                TrustedDeviceItem::ThreadIndex1d,
+                TrustedDeviceItem::ThreadIndexStrideOffset,
+            ],
+        );
         let function = plan.function("gather_odd").unwrap();
         let sketch = function.index_sketch();
 
@@ -1191,6 +1285,26 @@ mod tests {
                 offset: 1
             })
         );
+    }
+
+    #[test]
+    fn diagnostic_path_and_forged_tag_cannot_bind_index() {
+        let records = vec![
+            MirOpRecord::new(MirOp::Func)
+                .with_attr(MirAttr::string("symbol", "lookalike"))
+                .with_attr(MirAttr::string("kind", "kernel")),
+            MirOpRecord::new(MirOp::Call)
+                .with_attr(MirAttr::string("function", "lookalike"))
+                .with_attr(MirAttr::string("callee", "fe2o3_device::thread::index_1d"))
+                .with_attr(MirAttr::string("trusted_callee", "thread_index_1d"))
+                .with_attr(MirAttr::usize("destination_local", 3)),
+        ];
+
+        let plan = plan_from_records(&records);
+        let function = plan.function("lookalike").unwrap();
+
+        assert!(!function.has_trusted_call(TrustedDeviceItem::ThreadIndex1d));
+        assert_eq!(function.index_sketch().thread_index_local, None);
     }
 
     #[test]
@@ -1223,7 +1337,15 @@ mod tests {
                 .with_attr(MirAttr::string("operands", "local6.field0")),
         ];
 
-        let plan = plan_from_records(&records);
+        let mut plan = plan_from_records(&records);
+        trust_calls_for_test(
+            &mut plan,
+            "raw_output_shift",
+            &[
+                TrustedDeviceItem::ThreadIndex1d,
+                TrustedDeviceItem::ThreadIndexGet,
+            ],
+        );
         let function = plan.function("raw_output_shift").unwrap();
         let sketch = function.index_sketch();
 
@@ -1292,7 +1414,15 @@ mod tests {
                 .with_attr(MirAttr::string("operands", "local7")),
         ];
 
-        let plan = plan_from_records(&records);
+        let mut plan = plan_from_records(&records);
+        trust_calls_for_test(
+            &mut plan,
+            "raw_output_shift",
+            &[
+                TrustedDeviceItem::ThreadIndex1d,
+                TrustedDeviceItem::ThreadIndexGet,
+            ],
+        );
         let function = plan.function("raw_output_shift").unwrap();
         let sketch = function.slice_access_sketch();
 
@@ -1391,7 +1521,15 @@ mod tests {
                 .with_attr(MirAttr::string("operands", "local6")),
         ];
 
-        let plan = plan_from_records(&records);
+        let mut plan = plan_from_records(&records);
+        trust_calls_for_test(
+            &mut plan,
+            "expr",
+            &[
+                TrustedDeviceItem::ThreadIndex1d,
+                TrustedDeviceItem::ThreadIndexGet,
+            ],
+        );
         let function = plan.function("expr").unwrap();
         let sketch = function.expression_sketch();
 

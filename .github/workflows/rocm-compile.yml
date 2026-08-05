@@ -31,7 +31,7 @@ jobs:
       - name: Install pinned Rust toolchain
         run: rustup show active-toolchain
 
-      - name: Compile every backend example
+      - name: Compile examples and semantic marker fixtures
         run: scripts/ci-local.sh rocm-compile
 
       - name: Upload compiler failure artifacts

@@ -8,6 +8,7 @@ use crate::record_lowering::{
     RecordExpressionSketch, RecordLinearIndex, RecordLoweringFunction, RecordLoweringLocal,
     RecordLoweringPlan, RecordSliceAccess, RecordUnaryOp,
 };
+use crate::trusted_device_items::{self, TrustedDeviceItem};
 use crate::{AmdGpuTarget, HsacoError, compile_llvm_ir_to_hsaco};
 use dialect_mir::MirOp;
 use rustc_middle::mir::{
@@ -655,7 +656,7 @@ fn validate_record_elementwise_shape(
     shape: &ElementwiseShape,
     record_function: &RecordLoweringFunction,
 ) -> Result<(), EmitError> {
-    if !record_function.has_call_suffix("fe2o3_device::thread::index_1d") {
+    if !record_function.has_trusted_call(TrustedDeviceItem::ThreadIndex1d) {
         return Err(unsupported_kernel(
             kernel_name,
             "record lowering plan is missing a `thread::index_1d` call",
@@ -1146,10 +1147,10 @@ fn record_has_index_transform(record_function: &RecordLoweringFunction) -> bool 
         || record_function.has_op(MirOp::Sub)
         || record_function.has_op(MirOp::Mul)
         || record_function.has_op(MirOp::Gep)
-        || record_function.has_call_suffix("fe2o3_device::ThreadIndex::offset")
-        || record_function.has_call_suffix("fe2o3_device::ThreadIndex::offset_signed")
-        || record_function.has_call_suffix("fe2o3_device::ThreadIndex::stride")
-        || record_function.has_call_suffix("fe2o3_device::ThreadIndex::stride_offset")
+        || record_function.has_trusted_call(TrustedDeviceItem::ThreadIndexOffset)
+        || record_function.has_trusted_call(TrustedDeviceItem::ThreadIndexOffsetSigned)
+        || record_function.has_trusted_call(TrustedDeviceItem::ThreadIndexStride)
+        || record_function.has_trusted_call(TrustedDeviceItem::ThreadIndexStrideOffset)
 }
 
 fn classify_kernel_arg<'tcx>(
@@ -1189,8 +1190,7 @@ fn classify_scalar(ty: Ty<'_>) -> Result<ScalarType, &'static str> {
 }
 
 fn is_disjoint_slice(tcx: TyCtxt<'_>, def_id: rustc_hir::def_id::DefId) -> bool {
-    tcx.def_path_str(def_id)
-        .ends_with("fe2o3_device::DisjointSlice")
+    trusted_device_items::classify(tcx, def_id) == Some(TrustedDeviceItem::DisjointSlice)
 }
 
 fn analyze_elementwise_shape<'tcx>(
@@ -1236,16 +1236,16 @@ fn analyze_elementwise_shape<'tcx>(
         let Some((def_id, _)) = func.const_fn_def() else {
             continue;
         };
-        let path = tcx.def_path_str(def_id);
+        let trusted_item = trusted_device_items::classify(tcx, def_id);
 
-        if path.ends_with("fe2o3_device::thread::index_1d") {
+        if trusted_item == Some(TrustedDeviceItem::ThreadIndex1d) {
             if destination.projection.is_empty() {
                 thread_index_local = Some(destination.local);
             }
             continue;
         }
 
-        if path.ends_with("fe2o3_device::ThreadIndex::get") {
+        if trusted_item == Some(TrustedDeviceItem::ThreadIndexGet) {
             let Some(thread_index_local) = thread_index_local else {
                 continue;
             };
@@ -1260,7 +1260,7 @@ fn analyze_elementwise_shape<'tcx>(
             continue;
         }
 
-        if path.ends_with("fe2o3_device::ThreadIndex::offset") {
+        if trusted_item == Some(TrustedDeviceItem::ThreadIndexOffset) {
             let Some(thread_index_local) = thread_index_local else {
                 continue;
             };
@@ -1280,7 +1280,7 @@ fn analyze_elementwise_shape<'tcx>(
             continue;
         }
 
-        if path.ends_with("fe2o3_device::ThreadIndex::offset_signed") {
+        if trusted_item == Some(TrustedDeviceItem::ThreadIndexOffsetSigned) {
             let Some(thread_index_local) = thread_index_local else {
                 continue;
             };
@@ -1299,7 +1299,7 @@ fn analyze_elementwise_shape<'tcx>(
             continue;
         }
 
-        if path.ends_with("fe2o3_device::ThreadIndex::stride") {
+        if trusted_item == Some(TrustedDeviceItem::ThreadIndexStride) {
             let Some(thread_index_local) = thread_index_local else {
                 continue;
             };
@@ -1318,7 +1318,7 @@ fn analyze_elementwise_shape<'tcx>(
             continue;
         }
 
-        if path.ends_with("fe2o3_device::ThreadIndex::stride_offset") {
+        if trusted_item == Some(TrustedDeviceItem::ThreadIndexStrideOffset) {
             let Some(thread_index_local) = thread_index_local else {
                 continue;
             };
@@ -1360,8 +1360,11 @@ fn analyze_elementwise_shape<'tcx>(
         let Some((def_id, _)) = func.const_fn_def() else {
             continue;
         };
-        let path = tcx.def_path_str(def_id);
-        if !path.contains("DisjointSlice") {
+        let trusted_item = trusted_device_items::classify(tcx, def_id);
+        if !matches!(
+            trusted_item,
+            Some(TrustedDeviceItem::DisjointSliceGetMut | TrustedDeviceItem::DisjointSliceGetMutAt)
+        ) {
             continue;
         }
         let Some(receiver_local) = args.first().and_then(|arg| operand_local(&arg.node)) else {
@@ -1371,7 +1374,7 @@ fn analyze_elementwise_shape<'tcx>(
             continue;
         };
 
-        if path.ends_with("::get_mut") {
+        if trusted_item == Some(TrustedDeviceItem::DisjointSliceGetMut) {
             if args
                 .get(1)
                 .and_then(|arg| operand_local(&arg.node))
@@ -1382,7 +1385,7 @@ fn analyze_elementwise_shape<'tcx>(
                     index: IndexExpr::Thread,
                 });
             }
-        } else if path.ends_with("::get_mut_at")
+        } else if trusted_item == Some(TrustedDeviceItem::DisjointSliceGetMutAt)
             && let Some(index) = args.get(1).and_then(|arg| {
                 operand_index_expr(&arg.node, &index_expr_locals, &overflow_index_expr_locals)
             })
@@ -2320,25 +2323,13 @@ mod tests {
     }
 
     fn record_op(op: MirOp) -> crate::record_lowering::RecordLoweringOp {
-        crate::record_lowering::RecordLoweringOp {
-            op,
-            block: Some(0),
-            statement: None,
-            source: None,
-            operation: None,
-            callee: None,
-            target: None,
-            targets: None,
-            destination_local: None,
-            destination: None,
-            operand_count: None,
-            operands: None,
-        }
+        crate::record_lowering::RecordLoweringOp::new_for_test(op)
     }
 
     fn record_call(callee: &str) -> crate::record_lowering::RecordLoweringOp {
         let mut op = record_op(MirOp::Call);
         op.callee = Some(callee.to_string());
+        op.set_trusted_callee_for_test(TrustedDeviceItem::ThreadIndex1d);
         op.destination_local = Some(3);
         op.destination = Some("local3".to_string());
         op
@@ -2347,6 +2338,7 @@ mod tests {
     fn record_thread_get(destination: usize) -> crate::record_lowering::RecordLoweringOp {
         let mut op = record_op(MirOp::Call);
         op.callee = Some("fe2o3_device::ThreadIndex::get".to_string());
+        op.set_trusted_callee_for_test(TrustedDeviceItem::ThreadIndexGet);
         op.destination_local = Some(destination);
         op.destination = Some(format!("local{destination}"));
         op.operand_count = Some(1);

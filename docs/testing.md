@@ -21,7 +21,13 @@ FE2O3_TARGET=gfx1151 scripts/ci-local.sh rocm-compile
 ```
 
 Use the target reported by `rocminfo` on the machine under test. Compilation
-does not execute a kernel.
+does not execute a kernel. This lane also compiles the trusted-device marker
+fixtures: genuine and renamed dependencies must emit, while local lookalikes,
+the same-name unmarked external crate, local markers, and duplicate markers
+must fail closed. Rejected fixtures also preseed generated artifacts and require
+transactional invalidation of the complete artifact triplet. These markers
+identify compiler semantics; authenticating the package that provides them
+remains an artifact-provenance responsibility.
 
 ## Hardware smoke
 

@@ -129,6 +129,16 @@ run_generic() {
 run_rocm_compile() {
   export FE2O3_TARGET="${FE2O3_TARGET:-gfx1100}"
   run_step rocm-doctor cargo run --locked -p cargo-fe2o3 -- doctor
+  run_step rocm-trusted-device-items \
+    cargo test --locked -p rustc-codegen-fe2o3 \
+      --test trusted_device_items \
+      genuine_markers_emit_and_local_external_spoofs_fail_closed -- \
+      --ignored --exact
+  run_step rocm-trusted-device-item-stale-cleanup \
+    cargo test --locked -p rustc-codegen-fe2o3 \
+      --test trusted_device_items \
+      rejected_lookalikes_remove_preseeded_artifacts_atomically -- \
+      --ignored --exact
 
   local package
   for package in "${EXAMPLE_PACKAGES[@]}"; do

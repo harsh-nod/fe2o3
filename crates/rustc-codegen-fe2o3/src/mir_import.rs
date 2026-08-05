@@ -1,4 +1,5 @@
 use crate::collector::CollectionResult;
+use crate::trusted_device_items::{self, TrustedDeviceItem};
 use dialect_mir::{MirAttr, MirOp, MirOpRecord, MirType};
 use rustc_hir::def_id::LOCAL_CRATE;
 use rustc_middle::mir::{
@@ -183,16 +184,51 @@ pub struct MirTerminator {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MirCallee {
-    pub identity: String,
-    pub kind: MirKnownCall,
+    identity: MirCalleeIdentity,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum MirKnownCall {
-    ThreadIndex1d,
-    ThreadIndexGet,
-    DisjointSliceGetMut,
-    Other,
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum MirCalleeIdentity {
+    Trusted(TrustedDeviceItem),
+    Untrusted(String),
+}
+
+impl MirCallee {
+    fn trusted(item: TrustedDeviceItem) -> Self {
+        Self {
+            identity: MirCalleeIdentity::Trusted(item),
+        }
+    }
+
+    fn untrusted(identity: String) -> Self {
+        Self {
+            identity: MirCalleeIdentity::Untrusted(identity),
+        }
+    }
+
+    pub(crate) fn identity(&self) -> &str {
+        match &self.identity {
+            MirCalleeIdentity::Trusted(item) => item.canonical_path(),
+            MirCalleeIdentity::Untrusted(identity) => identity,
+        }
+    }
+
+    pub(crate) fn trusted_item(&self) -> Option<TrustedDeviceItem> {
+        match &self.identity {
+            MirCalleeIdentity::Trusted(item) => Some(*item),
+            MirCalleeIdentity::Untrusted(_) => None,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn trusted_for_test(item: TrustedDeviceItem) -> Self {
+        Self::trusted(item)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn untrusted_for_test(identity: impl Into<String>) -> Self {
+        Self::untrusted(identity.into())
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -713,7 +749,7 @@ impl MirTerminatorKind {
                 if let Some(callee) = callee {
                     record
                         .attrs
-                        .push(MirAttr::string("callee", &callee.identity));
+                        .push(MirAttr::string("callee", callee.identity()));
                 }
                 if let Some(target) = target {
                     record.attrs.push(MirAttr::usize("target", *target));
@@ -768,7 +804,7 @@ impl MirTerminatorKind {
             Self::Call { callee, target, .. } => {
                 let callee = callee
                     .as_ref()
-                    .map(|callee| callee.identity.as_str())
+                    .map(MirCallee::identity)
                     .unwrap_or("<dynamic>");
                 match target {
                     Some(target) => format!("{} {callee} -> bb{target}", MirOp::Call.name()),
@@ -852,7 +888,10 @@ fn import_type<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> MirImportedType {
             _ => MirType::Ptr,
         },
         TyKind::RawPtr(_, _) => MirType::Ptr,
-        TyKind::Adt(adt, _) if tcx.def_path_str(adt.did()).ends_with("DisjointSlice") => {
+        TyKind::Adt(adt, _)
+            if trusted_device_items::classify(tcx, adt.did())
+                == Some(TrustedDeviceItem::DisjointSlice) =>
+        {
             MirType::DisjointSlice
         }
         TyKind::Tuple(elements) if elements.is_empty() => MirType::Unit,
@@ -909,8 +948,7 @@ fn import_type_shape<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> MirTypeShape {
 }
 
 fn is_disjoint_slice(tcx: TyCtxt<'_>, def_id: rustc_hir::def_id::DefId) -> bool {
-    tcx.def_path_str(def_id)
-        .ends_with("fe2o3_device::DisjointSlice")
+    trusted_device_items::classify(tcx, def_id) == Some(TrustedDeviceItem::DisjointSlice)
 }
 
 fn import_statement<'tcx>(
@@ -1304,17 +1342,11 @@ fn call_identity<'tcx>(tcx: TyCtxt<'tcx>, func: &Operand<'tcx>) -> Option<MirCal
     let TyKind::FnDef(def_id, _) = constant.const_.ty().kind() else {
         return None;
     };
-    let identity = tcx.def_path_str(*def_id);
-    let kind = if identity.ends_with("fe2o3_device::thread::index_1d") {
-        MirKnownCall::ThreadIndex1d
-    } else if identity.ends_with("fe2o3_device::ThreadIndex::get") {
-        MirKnownCall::ThreadIndexGet
-    } else if identity.contains("fe2o3_device::DisjointSlice") && identity.ends_with("::get_mut") {
-        MirKnownCall::DisjointSliceGetMut
-    } else {
-        MirKnownCall::Other
-    };
-    Some(MirCallee { identity, kind })
+    Some(
+        trusted_device_items::classify(tcx, *def_id)
+            .map(MirCallee::trusted)
+            .unwrap_or_else(|| MirCallee::untrusted(tcx.def_path_str(*def_id))),
+    )
 }
 
 #[cfg(test)]
@@ -1459,10 +1491,9 @@ mod tests {
                     statements: Vec::new(),
                     terminator: Some(MirTerminator {
                         kind: MirTerminatorKind::Call {
-                            callee: Some(MirCallee {
-                                identity: "fe2o3_device::thread::index_1d".to_string(),
-                                kind: MirKnownCall::ThreadIndex1d,
-                            }),
+                            callee: Some(MirCallee::trusted_for_test(
+                                TrustedDeviceItem::ThreadIndex1d,
+                            )),
                             target: Some(1),
                             destination: Some(local_place(2)),
                             operands: vec![MirOperandRef::Place(local_place(1))],
@@ -1485,6 +1516,33 @@ mod tests {
         assert_eq!(record_string(&records[3], "destination"), Some("local2"));
         assert_eq!(record_usize(&records[3], "operand_count"), Some(1));
         assert_eq!(record_string(&records[3], "operands"), Some("local1"));
+        assert_eq!(record_string(&records[3], "trusted_callee"), None);
+    }
+
+    #[test]
+    fn callee_identity_cannot_mismatch_trusted_authority() {
+        let items = [
+            TrustedDeviceItem::DisjointSlice,
+            TrustedDeviceItem::ThreadIndex,
+            TrustedDeviceItem::ThreadIndex1d,
+            TrustedDeviceItem::ThreadIndexGet,
+            TrustedDeviceItem::ThreadIndexOffset,
+            TrustedDeviceItem::ThreadIndexOffsetSigned,
+            TrustedDeviceItem::ThreadIndexStride,
+            TrustedDeviceItem::ThreadIndexStrideOffset,
+            TrustedDeviceItem::DisjointSliceGetMut,
+            TrustedDeviceItem::DisjointSliceGetMutAt,
+        ];
+
+        for item in items {
+            let trusted = MirCallee::trusted_for_test(item);
+            assert_eq!(trusted.identity(), item.canonical_path());
+            assert_eq!(trusted.trusted_item(), Some(item));
+
+            let same_spelling = MirCallee::untrusted_for_test(item.canonical_path());
+            assert_eq!(same_spelling.identity(), item.canonical_path());
+            assert_eq!(same_spelling.trusted_item(), None);
+        }
     }
 
     #[test]
