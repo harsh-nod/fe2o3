@@ -764,12 +764,36 @@ fn pointer_not_rooted_in_a_kernel_parameter_fails_closed() {
     );
     let analysis = analyze(&module, 8);
 
-    assert!(matches!(
-        analysis.incomplete_reasons(),
-        [FormalMemoryIncompleteReason::UnsupportedPointerDerivation {
+    assert!(analysis.incomplete_reasons().iter().any(|reason| matches!(
+        reason,
+        FormalMemoryIncompleteReason::UnsupportedMemoryEffect { .. }
+    )));
+    assert!(analysis.incomplete_reasons().iter().any(|reason| matches!(
+        reason,
+        FormalMemoryIncompleteReason::UnsupportedPointerDerivation {
             pointer: ValueId(1),
             ..
-        }]
+        }
+    )));
+}
+
+#[test]
+fn unmodeled_barrier_effect_fails_closed() {
+    let barrier = Barrier {
+        execution_scope: SynchronizationScope::Workgroup,
+        memory_scope: SynchronizationScope::Workgroup,
+        semantics: BarrierSemantics::new(MemoryOrdering::AcquireRelease, [AddressSpace::Workgroup]),
+    };
+    let module = module_with_kernel(
+        vec![],
+        vec![Operation::new(vec![], OperationKind::Barrier(barrier))],
+        dynamic_1d(),
+    );
+    let analysis = analyze(&module, 8);
+
+    assert!(matches!(
+        analysis.incomplete_reasons(),
+        [FormalMemoryIncompleteReason::UnsupportedMemoryEffect { .. }]
     ));
 }
 

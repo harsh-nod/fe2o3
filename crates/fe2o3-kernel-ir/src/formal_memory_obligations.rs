@@ -476,11 +476,28 @@ pub fn derive_kernel_memory_obligations(
                         }
                     }
                 }
-                OperationKind::Atomic(_) => {
+                OperationKind::Alloca { .. }
+                | OperationKind::Barrier(_)
+                | OperationKind::Atomic(_) => {
                     reasons
                         .insert(FormalMemoryIncompleteReason::UnsupportedMemoryEffect { location });
                 }
-                _ => {}
+                OperationKind::Constant(_)
+                | OperationKind::Intrinsic(_)
+                | OperationKind::Unary { .. }
+                | OperationKind::Binary { .. }
+                | OperationKind::Compare { .. }
+                | OperationKind::Cast { .. }
+                | OperationKind::Select { .. }
+                | OperationKind::SliceLength { .. }
+                | OperationKind::SliceData { .. }
+                | OperationKind::GetElementPointer { .. } => {
+                    if !operation.memory_effects().is_empty() {
+                        reasons.insert(FormalMemoryIncompleteReason::UnsupportedMemoryEffect {
+                            location,
+                        });
+                    }
+                }
             }
         }
     }
