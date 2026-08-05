@@ -505,8 +505,9 @@ pub open spec fn real_vecadd_source_evidence_is_valid(
 
 /// Expands the exact operation, identity-index extraction, guarded write, input
 /// indexing, f32 addition, and assignment used by `examples/vecadd::vecadd`.
-/// The postconditions intentionally describe only memory safety and framing;
-/// they do not assign IEEE semantics to the f32 result.
+/// Both floating-point and region obligations are conditional on the guarded
+/// in-range path. The postconditions intentionally describe only memory safety
+/// and framing; they do not assign IEEE semantics to the f32 result.
 pub fn real_kernel_vecadd_body(
     thread: ModelGpuThreadIndex,
     a: &[f32],
@@ -515,68 +516,104 @@ pub fn real_kernel_vecadd_body(
     Ghost(evidence): Ghost<VecAddSourceEvidence>,
 ) -> (result: ModelGpuDisjointSlice)
     requires
-        thread.linear < output.values@.len(),
         a@.len() == output.values@.len(),
         b@.len() == output.values@.len(),
-        a@[thread.linear as int].add_req(b@[thread.linear as int]),
-        real_vecadd_source_evidence_is_valid(
-            evidence,
-            output.values@.len(),
-            thread.linear as nat,
-        ),
+        thread.linear < output.values@.len() ==>
+            a@[thread.linear as int].add_req(b@[thread.linear as int]),
+        thread.linear < output.values@.len() ==>
+            real_vecadd_source_evidence_is_valid(
+                evidence,
+                output.values@.len(),
+                thread.linear as nat,
+            ),
     ensures
         result.values@.len() == output.values@.len(),
+        thread.linear >= output.values@.len() ==>
+            result.values@ == output.values@,
         forall |other: int| 0 <= other < output.values@.len()
             && other != thread.linear as int ==>
                 result.values@[other] == output.values@[other],
-        region_is_in_bounds(
-            evidence.a_allocation,
-            evidence.a_capability.permission.region,
-        ),
-        region_is_in_bounds(
-            evidence.b_allocation,
-            evidence.b_capability.permission.region,
-        ),
-        region_is_in_bounds(
-            evidence.output_allocation,
-            evidence.output_permission.region,
-        ),
-        capability_can_read(evidence.a_capability),
-        capability_can_read(evidence.b_capability),
-        permission_can_write(evidence.output_permission),
-        permissions_are_compatible(
-            evidence.a_capability.permission,
-            evidence.output_permission,
-        ),
-        permissions_are_compatible(
-            evidence.b_capability.permission,
-            evidence.output_permission,
-        ),
-        element_byte_end(
-            evidence.a_allocation,
-            thread.linear as nat,
-            4,
-        ) <= usize::MAX as nat,
-        element_byte_end(
-            evidence.b_allocation,
-            thread.linear as nat,
-            4,
-        ) <= usize::MAX as nat,
-        element_byte_end(
-            evidence.output_allocation,
-            thread.linear as nat,
-            4,
-        ) <= usize::MAX as nat,
+        thread.linear < output.values@.len() ==>
+            region_is_in_bounds(
+                evidence.a_allocation,
+                evidence.a_capability.permission.region,
+            ),
+        thread.linear < output.values@.len() ==>
+            region_is_in_bounds(
+                evidence.b_allocation,
+                evidence.b_capability.permission.region,
+            ),
+        thread.linear < output.values@.len() ==>
+            region_is_in_bounds(
+                evidence.output_allocation,
+                evidence.output_permission.region,
+            ),
+        thread.linear < output.values@.len() ==>
+            capability_can_read(evidence.a_capability),
+        thread.linear < output.values@.len() ==>
+            capability_can_read(evidence.b_capability),
+        thread.linear < output.values@.len() ==>
+            permission_can_write(evidence.output_permission),
+        thread.linear < output.values@.len() ==>
+            permissions_are_compatible(
+                evidence.a_capability.permission,
+                evidence.output_permission,
+            ),
+        thread.linear < output.values@.len() ==>
+            permissions_are_compatible(
+                evidence.b_capability.permission,
+                evidence.output_permission,
+            ),
+        thread.linear < output.values@.len() ==>
+            element_byte_end(
+                evidence.a_allocation,
+                thread.linear as nat,
+                4,
+            ) <= usize::MAX as nat,
+        thread.linear < output.values@.len() ==>
+            element_byte_end(
+                evidence.b_allocation,
+                thread.linear as nat,
+                4,
+            ) <= usize::MAX as nat,
+        thread.linear < output.values@.len() ==>
+            element_byte_end(
+                evidence.output_allocation,
+                thread.linear as nat,
+                4,
+            ) <= usize::MAX as nat,
 {
     proof {
-        same_source_evidence_has_valid_permissions(
-            evidence,
-            output.values@.len(),
-            thread.linear as nat,
-        );
+        if thread.linear < output.values@.len() {
+            same_source_evidence_has_valid_permissions(
+                evidence,
+                output.values@.len(),
+                thread.linear as nat,
+            );
+        }
     }
     vecadd_kernel_body!(model_gpu_thread, (thread), a, b, output);
     output
+}
+
+/// Composable rounded-launch tail case. When the launch witness is outside the
+/// logical extent, the real shared body neither indexes an input nor writes the
+/// output. No f32 operation-domain or allocation-region premise is needed.
+pub fn real_kernel_rounded_tail_is_noop(
+    thread: ModelGpuThreadIndex,
+    a: &[f32],
+    b: &[f32],
+    output: ModelGpuDisjointSlice,
+    Ghost(evidence): Ghost<VecAddSourceEvidence>,
+) -> (result: ModelGpuDisjointSlice)
+    requires
+        thread.linear >= output.values@.len(),
+        a@.len() == output.values@.len(),
+        b@.len() == output.values@.len(),
+    ensures
+        result.values@ == output.values@,
+{
+    real_kernel_vecadd_body(thread, a, b, output, Ghost(evidence))
 }
 
 /// The concrete `ThreadIndex::get` mapping used by the shared body is the

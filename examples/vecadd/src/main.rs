@@ -78,5 +78,9 @@ mod tests {
         ] {
             assert!(SHARED_BODY.contains(operation), "missing `{operation}`");
         }
+
+        let guard = SHARED_BODY.find("if let Some(out)").unwrap();
+        let first_input_access = SHARED_BODY.find("$a[i]").unwrap();
+        assert!(guard < first_input_access, "input access escaped the guard");
     }
 }

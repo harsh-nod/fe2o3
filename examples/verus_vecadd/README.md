@@ -15,7 +15,9 @@ backend-refinement obligation.
 
 For the real shared body, Verus establishes:
 
-- the identity witness is in bounds for the output and both equal-length inputs;
+- an arbitrary rounded-up thread performs no input index or output write when
+  `DisjointSlice::get_mut` rejects its identity witness;
+- an in-range witness is in bounds for the output and both equal-length inputs;
 - `ThreadIndex::get` and the consuming output access select the same index;
 - distinct identity witnesses select distinct output elements;
 - the guarded write changes no other modeled output element;
@@ -29,12 +31,16 @@ raw pointer and length stored by `fe2o3_device::DisjointSlice`. Allocation IDs,
 base addresses, extents, and permissions remain caller-supplied ghost facts;
 the harness does not authenticate them against Rust references or a launch.
 
-Verus/vstd does not give the Rust `f32` `+` operator a deterministic IEEE
-functional specification. The harness therefore requires vstd's opaque
-`add_req` domain obligation and makes no claim about the stored sum. Bounds,
-ownership, framing, injectivity, and address proofs do not depend on the
-addition's result. The real-body model adds no `assume`, `admit`, or
-`external_body`.
+The pinned vstd declares an `assume_specification` for `f32::add` with an
+uninterpreted `add_ensures` result. In the pinned Verus build, however, both the
+`+` operator and an explicit `core::ops::Add::add` call are checked through the
+generic `AddSpec::add` contract and require its opaque `add_req`; the
+float-specific declaration does not discharge that premise. The shared-body
+theorem therefore requires `add_req` only conditionally for an in-range thread.
+`real_kernel_rounded_tail_is_noop` composes for an out-of-range thread without
+any floating-point or region-evidence premise. No claim is made about the
+stored sum, and memory-safety proofs do not depend on the addition's result.
+The real-body model adds no `assume`, `admit`, or `external_body`.
 
 ## Reference proofs
 
