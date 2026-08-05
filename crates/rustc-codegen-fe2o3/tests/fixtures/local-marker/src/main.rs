@@ -31,7 +31,13 @@ pub fn fe2o3_kernel_local_marker(mut output: DisjointSlice<f32>) {
 }
 
 #[used]
-#[allow(non_upper_case_globals)]
+// Keep the exact legacy six-field registration shape that this adversarial
+// fixture attempts to spoof.
+#[allow(
+    non_upper_case_globals,
+    clippy::redundant_static_lifetimes,
+    clippy::type_complexity
+)]
 static __fe2o3_kernel_registration_local_marker: (
     u64,
     u16,
