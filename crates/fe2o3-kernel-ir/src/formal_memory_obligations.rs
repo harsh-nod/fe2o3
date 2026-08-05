@@ -21,6 +21,17 @@ pub enum ExplicitLaunchExtent1d {
     Unknown,
 }
 
+/// Pointer-sized integer width used by the target lowering.
+///
+/// The current formal affine model is defined only for 64-bit AMDGPU index
+/// arithmetic. Other widths are explicit fail-closed inputs.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum FormalIndexWidth {
+    Bits32,
+    Bits64,
+    Unknown,
+}
+
 /// A compiler-derived identity for one pointer or slice kernel parameter.
 ///
 /// This identity names a formal parameter, not a runtime allocation. There is
@@ -236,6 +247,9 @@ impl InterInvocationConflictRequirement {
 /// behavior of the selected kernel launch.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum FormalMemoryIncompleteReason {
+    UnsupportedIndexWidth {
+        width: FormalIndexWidth,
+    },
     LaunchExtentUnknown,
     LaunchExtentZero,
     LaunchRankUnsupported {
@@ -282,6 +296,7 @@ pub enum FormalMemoryAnalysisBasis {
 pub struct FormalMemoryObligations {
     kernel: KernelId,
     entry: FunctionId,
+    index_width: FormalIndexWidth,
     invocations: Option<InvocationRange1d>,
     allocations: Vec<FormalAllocationParameter>,
     accesses: Vec<FormalMemoryAccess>,
@@ -297,6 +312,10 @@ impl FormalMemoryObligations {
 
     pub fn entry(&self) -> &FunctionId {
         &self.entry
+    }
+
+    pub const fn index_width(&self) -> FormalIndexWidth {
+        self.index_width
     }
 
     pub const fn analysis_basis(&self) -> FormalMemoryAnalysisBasis {
@@ -397,6 +416,7 @@ pub fn derive_kernel_memory_obligations(
     module: &Module,
     kernel_id: &KernelId,
     launch_extent: ExplicitLaunchExtent1d,
+    index_width: FormalIndexWidth,
 ) -> Result<FormalMemoryObligationAnalysis, FormalMemoryObligationError> {
     verify_module(module).map_err(FormalMemoryObligationError::InvalidModule)?;
     let kernel = module
@@ -415,7 +435,12 @@ pub fn derive_kernel_memory_obligations(
         .expect("verified kernel entry must be a definition");
 
     let mut reasons = BTreeSet::new();
+    let index_width_supported = index_width == FormalIndexWidth::Bits64;
+    if !index_width_supported {
+        reasons.insert(FormalMemoryIncompleteReason::UnsupportedIndexWidth { width: index_width });
+    }
     let invocations = resolve_invocations(&kernel.domain, launch_extent, &mut reasons);
+    let access_invocations = index_width_supported.then_some(invocations).flatten();
     let allocations = formal_allocations(function);
     let allocation_by_value: BTreeMap<_, _> = allocations
         .iter()
@@ -441,7 +466,7 @@ pub fn derive_kernel_memory_obligations(
                     });
                 }
                 OperationKind::Load { pointer, access } => {
-                    if let Some(invocations) = invocations {
+                    if let Some(invocations) = access_invocations {
                         match derive_access(
                             location,
                             *pointer,
@@ -460,7 +485,7 @@ pub fn derive_kernel_memory_obligations(
                 OperationKind::Store {
                     pointer, access, ..
                 } => {
-                    if let Some(invocations) = invocations {
+                    if let Some(invocations) = access_invocations {
                         match derive_access(
                             location,
                             *pointer,
@@ -508,6 +533,7 @@ pub fn derive_kernel_memory_obligations(
     let obligations = FormalMemoryObligations {
         kernel: kernel.id.clone(),
         entry: kernel.entry.clone(),
+        index_width,
         invocations,
         allocations,
         accesses,

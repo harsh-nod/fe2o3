@@ -48,6 +48,7 @@ fn analyze(module: &Module, extent: u64) -> FormalMemoryObligationAnalysis {
         module,
         &KernelId::new("kernel"),
         ExplicitLaunchExtent1d::Exact(extent),
+        FormalIndexWidth::Bits64,
     )
     .unwrap()
 }
@@ -864,6 +865,7 @@ fn unsupported_atomic_effect_fails_closed() {
         &module,
         &KernelId::new("kernel"),
         ExplicitLaunchExtent1d::Exact(8),
+        FormalIndexWidth::Bits64,
     );
 
     let analysis = result.unwrap();
@@ -898,6 +900,7 @@ fn calls_and_unknown_launches_fail_closed() {
         &module,
         &KernelId::new("kernel"),
         ExplicitLaunchExtent1d::Unknown,
+        FormalIndexWidth::Bits64,
     )
     .unwrap();
     assert!(
@@ -906,6 +909,35 @@ fn calls_and_unknown_launches_fail_closed() {
             .contains(&FormalMemoryIncompleteReason::LaunchExtentUnknown)
     );
     assert_eq!(unknown_analysis.obligations().invocations(), None);
+}
+
+#[test]
+fn unknown_and_32_bit_index_widths_never_complete() {
+    let module = exact_fill_module();
+    for width in [FormalIndexWidth::Unknown, FormalIndexWidth::Bits32] {
+        let analysis = derive_kernel_memory_obligations(
+            &module,
+            &KernelId::new("kernel"),
+            ExplicitLaunchExtent1d::Exact(64),
+            width,
+        )
+        .unwrap();
+
+        assert!(!analysis.is_complete());
+        assert_eq!(analysis.obligations().index_width(), width);
+        assert_eq!(
+            analysis.incomplete_reasons(),
+            &[FormalMemoryIncompleteReason::UnsupportedIndexWidth { width }]
+        );
+        assert!(analysis.obligations().accesses().is_empty());
+        assert!(analysis.obligations().bounds_requirements().is_empty());
+        assert!(
+            analysis
+                .obligations()
+                .runtime_alias_requirements()
+                .is_empty()
+        );
+    }
 }
 
 #[test]
@@ -948,6 +980,7 @@ fn malformed_modules_and_missing_kernels_are_typed_errors() {
             &malformed,
             &KernelId::new("kernel"),
             ExplicitLaunchExtent1d::Exact(1),
+            FormalIndexWidth::Bits64,
         ),
         Err(FormalMemoryObligationError::InvalidModule(_))
     ));
@@ -958,6 +991,7 @@ fn malformed_modules_and_missing_kernels_are_typed_errors() {
             &valid,
             &KernelId::new("missing"),
             ExplicitLaunchExtent1d::Exact(1),
+            FormalIndexWidth::Bits64,
         ),
         Err(FormalMemoryObligationError::MissingKernel {
             kernel: KernelId::new("missing"),
