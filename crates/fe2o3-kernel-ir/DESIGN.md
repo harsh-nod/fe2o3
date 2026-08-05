@@ -69,3 +69,18 @@ New operations should define their SSA operands, result constraints, memory
 effects, and required capabilities together. Vendor-specific operations belong
 in a later extension dialect or target-lowering layer. Unknown semantics must
 never be represented as unstructured strings in this core IR.
+
+## Canonical Wire Format
+
+`Module` has a bounded deterministic V1 binary representation documented in
+[`WIRE_FORMAT.md`](WIRE_FORMAT.md). The format covers every stored IR node,
+operation, terminator, type, capability, and enum variant currently reachable
+from `Module`. Derived query results such as `IntrinsicMetadata`,
+`MemoryEffect`, and `MemoryEffectSummary` are intentionally recomputed rather
+than serialized.
+
+Wire decoding is a parser boundary, not a semantic trust decision. A decoded
+module can still contain undefined SSA values, invalid types, missing
+terminators, bad barriers, or other frontend errors. Every consumer must run
+`verify_module` or `verify_module_with_capabilities` before lowering or
+executing decoded IR.
