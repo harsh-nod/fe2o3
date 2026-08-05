@@ -177,6 +177,10 @@ impl ObservedContext {
         self.identity == other.identity
     }
 
+    pub(crate) const fn context_key(&self) -> usize {
+        self.identity.0
+    }
+
     pub(crate) fn same_launch_limits(&self, other: &Self) -> bool {
         self.limits == other.limits
     }

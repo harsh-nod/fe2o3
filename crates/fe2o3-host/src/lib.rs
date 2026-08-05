@@ -1,7 +1,14 @@
+mod argument_alias;
 mod artifact_binding;
 mod loaded_kernel;
 mod prepared_launch;
 
+pub use argument_alias::{
+    AliasAdmissionError, AllocationIdentity, AllocationProvenance, ArgumentAccess,
+    ArgumentAccessMode, ArgumentAliasAdmission, ArgumentAliasValidator, AtomicAccess,
+    AtomicOperation, AtomicOrdering, AtomicScope, CheckedByteRegion, ConflictSource,
+    InvalidAtomicOrdering, RegionError,
+};
 pub use artifact_binding::{
     ARTIFACT_KERNEL_IDENTITY_VERSION, ArtifactBindingError, ArtifactKernelIdentityV1,
     ArtifactLaunchContractError, ArtifactRevalidationError, ValidatedArtifactSelectionV1,
