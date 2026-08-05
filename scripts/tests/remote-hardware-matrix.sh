@@ -12,7 +12,7 @@ readonly GPU_DEVICE="${TEST_ROOT}/kfd"
 trap 'rm -rf -- "${TEST_ROOT}"' EXIT
 
 mkdir -p -- "${FAKE_BIN}" "${FAKE_ROCM}/bin"
-mkdir -p -- "${TEST_ROOT}/home"
+mkdir -p -- "${TEST_ROOT}/home/.cargo/bin"
 : >"${GPU_DEVICE}"
 
 cat >"${FAKE_BIN}/ssh" <<'EOF'
@@ -25,6 +25,14 @@ shift
 export FAKE_REMOTE_HOST="${host}"
 printf '%s\n' "${host}" >>"${FAKE_SSH_INVOCATIONS}"
 [[ "$1" == bash && "$2" == -s && $# == 2 ]] || exit 91
+if [[ "${host}" == ssh-fail-host ]]; then
+  cat >/dev/null
+  exit 77
+fi
+if [[ "${host}" == no-marker-host ]]; then
+  cat >/dev/null
+  exit 0
+fi
 exec bash -s
 EOF
 
@@ -53,16 +61,25 @@ EOF
 cat >"${FAKE_BIN}/rocminfo" <<'EOF'
 #!/usr/bin/env bash
 set -Eeuo pipefail
-if [[ "${FAKE_REMOTE_HOST:-}" == target-mismatch-host ]]; then
+if [[ "${FAKE_REMOTE_HOST:-}" == rocminfo-fail-host ]]; then
+  exit 45
+elif [[ "${FAKE_REMOTE_HOST:-}" == target-mismatch-host ]]; then
   printf '%s\n' '  Name:                    gfx000'
 else
   printf '  Name:                    %s\n' "${FE2O3_TARGET%%:*}"
 fi
 EOF
 
+cat >"${TEST_ROOT}/home/.cargo/bin/rocminfo" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' 'shadow rocminfo must not be invoked' >&2
+exit 99
+EOF
+
 chmod +x \
   "${FAKE_BIN}/ssh" "${FAKE_BIN}/cargo" \
-  "${FAKE_BIN}/rustc" "${FAKE_BIN}/rocminfo"
+  "${FAKE_BIN}/rustc" "${FAKE_BIN}/rocminfo" \
+  "${TEST_ROOT}/home/.cargo/bin/rocminfo"
 ln -s "${FAKE_BIN}/rocminfo" "${FAKE_ROCM}/bin/rocminfo"
 
 make_repo() {
@@ -85,7 +102,14 @@ case "${1:-}" in
   hardware-smoke)
     [[ "${mode}" != smoke-fail ]] || exit 42
     mkdir -p target/fe2o3
-    printf '%s\n' 'fake hsaco' >target/fe2o3/vecadd.hsaco
+    if [[ "${mode}" == empty-hsaco ]]; then
+      : >target/fe2o3/vecadd.hsaco
+    elif [[ "${mode}" != missing-hsaco ]]; then
+      printf '%s\n' 'fake hsaco' >target/fe2o3/vecadd.hsaco
+    fi
+    if [[ "${mode}" == post-run-dirty ]]; then
+      printf '%s\n' dirty >test-mode
+    fi
     ;;
   *) exit 40 ;;
 esac
@@ -183,6 +207,22 @@ run_matrix target-mismatch --commit "${success_commit}" \
 expect_status 1
 expect_output 'status=FAIL stage=gpu-target exit=27'
 
+run_matrix rocminfo-fail --commit "${success_commit}" \
+  --entry rocminfo-fail-host gfx942 "${success_repo}"
+expect_status 1
+expect_output 'status=FAIL stage=gpu-target exit=26'
+
+# SSH transport and result-protocol failures remain distinguishable.
+run_matrix ssh-fail --commit "${success_commit}" \
+  --entry ssh-fail-host gfx942 "${success_repo}"
+expect_status 1
+expect_output 'status=FAIL stage=ssh exit=77'
+
+run_matrix no-marker --commit "${success_commit}" \
+  --entry no-marker-host gfx942 "${success_repo}"
+expect_status 1
+expect_output 'status=FAIL stage=protocol exit=1'
+
 # Compile, smoke, and explicit HSACO inspection failures retain their stage.
 compile_repo="${TEST_ROOT}/compile-fail"
 compile_commit="$(make_repo "${compile_repo}" compile-fail)"
@@ -204,6 +244,28 @@ run_matrix hsaco-fail --commit "${hsaco_commit}" \
   --entry hsaco-host gfx942 "${hsaco_repo}"
 expect_status 1
 expect_output 'status=FAIL stage=hsaco-inspection exit=43'
+
+missing_hsaco_repo="${TEST_ROOT}/missing-hsaco"
+missing_hsaco_commit="$(make_repo "${missing_hsaco_repo}" missing-hsaco)"
+run_matrix missing-hsaco --commit "${missing_hsaco_commit}" \
+  --entry missing-hsaco-host gfx942 "${missing_hsaco_repo}"
+expect_status 1
+expect_output 'status=FAIL stage=hsaco-inspection exit=30'
+
+empty_hsaco_repo="${TEST_ROOT}/empty-hsaco"
+empty_hsaco_commit="$(make_repo "${empty_hsaco_repo}" empty-hsaco)"
+run_matrix empty-hsaco --commit "${empty_hsaco_commit}" \
+  --entry empty-hsaco-host gfx942 "${empty_hsaco_repo}"
+expect_status 1
+expect_output 'status=FAIL stage=hsaco-inspection exit=30'
+
+# A test step that modifies tracked state is rejected after all GPU checks.
+post_run_dirty_repo="${TEST_ROOT}/post-run-dirty"
+post_run_dirty_commit="$(make_repo "${post_run_dirty_repo}" post-run-dirty)"
+run_matrix post-run-dirty --commit "${post_run_dirty_commit}" \
+  --entry post-run-dirty-host gfx942 "${post_run_dirty_repo}"
+expect_status 1
+expect_output 'status=FAIL stage=post-run-cleanliness exit=15'
 
 # The checkout is injected into a Bash payload with shell-safe quoting.
 canary="${TEST_ROOT}/quoting-canary"

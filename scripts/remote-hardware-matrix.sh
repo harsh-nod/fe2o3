@@ -128,7 +128,9 @@ stage="toolchain"
 require_command bash
 require_command cargo
 require_command rustc
-require_command rocminfo
+require_command awk
+[[ -x "${ROCM_PATH}/bin/rocminfo" ]] || \
+  fail 20 "required executable is unavailable: ${ROCM_PATH}/bin/rocminfo"
 [[ -x "${checkout}/scripts/ci-local.sh" ]] || \
   fail 21 "missing executable scripts/ci-local.sh in ${checkout}"
 (cd -- "${checkout}" && cargo --version >/dev/null) || \
@@ -152,7 +154,7 @@ fi
   fail 25 "GPU device is not readable and writable: ${gpu_device}"
 
 stage="gpu-target"
-if ! gpu_info="$(rocminfo 2>&1)"; then
+if ! gpu_info="$("${ROCM_PATH}/bin/rocminfo" 2>&1)"; then
   fail 26 'rocminfo could not enumerate an AMD GPU'
 fi
 if ! awk -v expected="${processor}" \
