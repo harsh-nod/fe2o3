@@ -223,6 +223,210 @@ fn fill_module() -> Module {
     module
 }
 
+fn vecadd_module() -> Module {
+    let mut entry = BasicBlock::new(BlockId(0));
+    entry.operations = vec![
+        op(
+            3,
+            Type::INDEX,
+            OperationKind::Intrinsic(IntrinsicOperation::global_id_1d()),
+        ),
+        op(4, Type::INDEX, OperationKind::Constant(Constant::Index(0))),
+        op(
+            5,
+            Type::INDEX,
+            OperationKind::Binary {
+                op: BinaryOp::Add,
+                lhs: ValueId(3),
+                rhs: ValueId(4),
+            },
+        ),
+        op(
+            6,
+            Type::INDEX,
+            OperationKind::SliceLength { slice: ValueId(2) },
+        ),
+        op(
+            7,
+            Type::BOOL,
+            OperationKind::Compare {
+                predicate: ComparePredicate::LessThan,
+                lhs: ValueId(3),
+                rhs: ValueId(6),
+            },
+        ),
+        op(
+            8,
+            global_pointer(AccessMode::ReadWrite),
+            OperationKind::SliceData { slice: ValueId(2) },
+        ),
+        op(
+            9,
+            global_pointer(AccessMode::ReadWrite),
+            OperationKind::GetElementPointer {
+                base: ValueId(8),
+                offset: ValueId(3),
+            },
+        ),
+    ];
+    entry.terminator = Some(Terminator::ConditionalBranch {
+        condition: ValueId(7),
+        then_target: BlockId(1),
+        then_arguments: vec![],
+        else_target: BlockId(4),
+        else_arguments: vec![],
+    });
+
+    let mut first_bounds = BasicBlock::new(BlockId(1));
+    first_bounds.operations = vec![
+        op(
+            10,
+            Type::INDEX,
+            OperationKind::SliceLength { slice: ValueId(0) },
+        ),
+        op(
+            11,
+            Type::BOOL,
+            OperationKind::Compare {
+                predicate: ComparePredicate::LessThan,
+                lhs: ValueId(5),
+                rhs: ValueId(10),
+            },
+        ),
+    ];
+    first_bounds.terminator = Some(Terminator::ConditionalBranch {
+        condition: ValueId(11),
+        then_target: BlockId(2),
+        then_arguments: vec![],
+        else_target: BlockId(5),
+        else_arguments: vec![],
+    });
+
+    let mut second_bounds = BasicBlock::new(BlockId(2));
+    second_bounds.operations = vec![
+        op(
+            12,
+            global_pointer(AccessMode::ReadOnly),
+            OperationKind::SliceData { slice: ValueId(0) },
+        ),
+        op(
+            13,
+            global_pointer(AccessMode::ReadOnly),
+            OperationKind::GetElementPointer {
+                base: ValueId(12),
+                offset: ValueId(5),
+            },
+        ),
+        op(
+            14,
+            Type::F32,
+            OperationKind::Load {
+                pointer: ValueId(13),
+                access: MemoryAccess::new(AddressSpace::Global, 4),
+            },
+        ),
+        op(
+            15,
+            Type::INDEX,
+            OperationKind::SliceLength { slice: ValueId(1) },
+        ),
+        op(
+            16,
+            Type::BOOL,
+            OperationKind::Compare {
+                predicate: ComparePredicate::LessThan,
+                lhs: ValueId(5),
+                rhs: ValueId(15),
+            },
+        ),
+    ];
+    second_bounds.terminator = Some(Terminator::ConditionalBranch {
+        condition: ValueId(16),
+        then_target: BlockId(3),
+        then_arguments: vec![],
+        else_target: BlockId(5),
+        else_arguments: vec![],
+    });
+
+    let mut compute = BasicBlock::new(BlockId(3));
+    compute.operations = vec![
+        op(
+            17,
+            global_pointer(AccessMode::ReadOnly),
+            OperationKind::SliceData { slice: ValueId(1) },
+        ),
+        op(
+            18,
+            global_pointer(AccessMode::ReadOnly),
+            OperationKind::GetElementPointer {
+                base: ValueId(17),
+                offset: ValueId(5),
+            },
+        ),
+        op(
+            19,
+            Type::F32,
+            OperationKind::Load {
+                pointer: ValueId(18),
+                access: MemoryAccess::new(AddressSpace::Global, 4),
+            },
+        ),
+        op(
+            20,
+            Type::F32,
+            OperationKind::Binary {
+                op: BinaryOp::Add,
+                lhs: ValueId(14),
+                rhs: ValueId(19),
+            },
+        ),
+        Operation::new(
+            vec![],
+            OperationKind::Store {
+                pointer: ValueId(9),
+                value: ValueId(20),
+                access: MemoryAccess::new(AddressSpace::Global, 4),
+            },
+        ),
+    ];
+    compute.terminator = Some(Terminator::Branch {
+        target: BlockId(4),
+        arguments: vec![],
+    });
+
+    let mut exit = BasicBlock::new(BlockId(4));
+    exit.terminator = Some(Terminator::Return { values: vec![] });
+    let mut trap = BasicBlock::new(BlockId(5));
+    trap.terminator = Some(Terminator::Unreachable);
+
+    let function = Function::definition(
+        "vecadd_impl",
+        Signature::new(
+            vec![
+                global_slice(AccessMode::ReadOnly),
+                global_slice(AccessMode::ReadOnly),
+                global_slice(AccessMode::ReadWrite),
+            ],
+            vec![],
+        ),
+        vec![ValueId(0), ValueId(1), ValueId(2)],
+        vec![entry, first_bounds, second_bounds, compute, exit, trap],
+    );
+    let mut kernel = Kernel::new(
+        "vecadd",
+        "vecadd_impl",
+        LaunchDomain::D1 {
+            x: LaunchExtent::Dynamic,
+        },
+    );
+    kernel.workgroup_size = Some(WorkgroupSize::new(256, 1, 1));
+
+    let mut module = Module::new("tests::vecadd");
+    module.functions.push(function);
+    module.kernels.push(kernel);
+    module
+}
+
 fn first_code(module: &Module, kernel: &str) -> LoweringDiagnosticCode {
     lower_kernel_to_llvm_ir(module, &KernelId::new(kernel))
         .unwrap_err()
@@ -237,6 +441,18 @@ fn dynamic_1d_fill_matches_the_exact_golden() {
     assert!(output.contains("mul i64 %v2.group, 64"));
     assert!(!output.contains("256"));
     assert!(!output.contains("getelementptr inbounds"));
+}
+
+#[test]
+fn vecadd_three_slice_abi_and_cfg_match_the_exact_golden() {
+    let output = lower_kernel_to_llvm_ir(&vecadd_module(), &KernelId::new("vecadd")).unwrap();
+    assert_eq!(output, include_str!("fixtures/vecadd_g1.ll"));
+    assert!(output.contains(
+        "@vecadd(ptr addrspace(1) %arg0.data, i64 %arg0.len, ptr addrspace(1) %arg1.data, i64 %arg1.len, ptr addrspace(1) %arg2.data, i64 %arg2.len)"
+    ));
+    assert_occurrences(&output, "load float", 2);
+    assert_occurrences(&output, "store float", 1);
+    assert!(output.contains("%v20 = fadd float %v14, %v19"));
 }
 
 #[test]
