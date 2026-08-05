@@ -1,4 +1,5 @@
 mod artifact_binding;
+mod loaded_kernel;
 mod prepared_launch;
 
 pub use artifact_binding::{
@@ -7,6 +8,9 @@ pub use artifact_binding::{
 };
 pub use fe2o3_core::{KernelParams, LaunchConfig};
 pub use fe2o3_kernel_descriptor::{BlockSizeV1, DimensionsV1, KernelId, LaunchConstraintsV1};
+pub use loaded_kernel::{
+    LoadedKernel, LoadedKernelMatchError, LoadedLaunchError, LoadedPreparedLaunch,
+};
 pub use prepared_launch::{
     CheckedDimensions, DeviceIdentity, KernelBrand, LaunchAxis, LaunchDimension, ObservedContext,
     PrepareLaunchError, PreparedGeometry, PreparedLaunch, PreparedResources,

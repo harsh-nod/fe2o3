@@ -605,6 +605,10 @@ impl<K> PreparedLaunch<K> {
     pub fn belongs_to(&self, brand: &KernelBrand<K>) -> bool {
         Arc::ptr_eq(&self.seal, &brand.seal)
     }
+
+    pub(crate) const fn observed_context(&self) -> &ObservedContext {
+        &self.context
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

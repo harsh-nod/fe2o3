@@ -1,6 +1,6 @@
 use crate::{
     BlockSizeV1, DeviceIdentity, DimensionsV1, KernelBrand, KernelId, LaunchConstraintsV1,
-    ObservedContext, PrepareLaunchError, PreparedLaunch, UntrustedLaunchRequest,
+    LoadedKernel, ObservedContext, PrepareLaunchError, PreparedLaunch, UntrustedLaunchRequest,
 };
 use fe2o3_amd_target::{AmdTargetId, ParseAmdTargetIdError};
 use fe2o3_artifacts::{
@@ -110,8 +110,8 @@ impl ArtifactKernelIdentityV1 {
 /// manifest's structural ABI subset. It does not match compiler-generated host
 /// argument types, layouts, or lifetimes.
 pub struct ValidatedArtifactSelectionV1 {
-    identity: Arc<ArtifactKernelIdentityV1>,
-    payload: Arc<[u8]>,
+    pub(crate) identity: Arc<ArtifactKernelIdentityV1>,
+    pub(crate) payload: Arc<[u8]>,
     context: ObservedContext,
 }
 
@@ -213,10 +213,10 @@ impl ValidatedArtifactSelectionV1 {
 /// not validate the marker association.
 #[allow(dead_code)]
 pub(crate) struct ArtifactKernelBrandV1<K> {
-    identity: Arc<ArtifactKernelIdentityV1>,
-    payload: Arc<[u8]>,
-    context: ObservedContext,
-    brand: KernelBrand<K>,
+    pub(crate) identity: Arc<ArtifactKernelIdentityV1>,
+    pub(crate) payload: Arc<[u8]>,
+    pub(crate) context: ObservedContext,
+    pub(crate) brand: KernelBrand<K>,
 }
 
 #[allow(dead_code)]
@@ -246,6 +246,26 @@ impl<K> ArtifactKernelBrandV1<K> {
             payload: self.payload.clone(),
             prepared,
         })
+    }
+
+    /// Loads the exact validated payload and symbol represented by this marker
+    /// binding.
+    ///
+    /// # Safety
+    ///
+    /// The issuer must independently establish that the executable payload is
+    /// trusted and that `K` denotes this exact kernel identity and complete
+    /// host ABI. Structural artifact validation establishes neither fact.
+    pub(crate) unsafe fn load(
+        self,
+        validated: &ValidatedArtifactSelectionV1,
+        observed: &ObservedContext,
+        context: &Arc<fe2o3_core::GpuContext>,
+    ) -> Result<LoadedKernel<K>, crate::loaded_kernel::LoadedKernelLoadError> {
+        // SAFETY: The caller owns the executable-trust and marker/ABI proof
+        // obligations documented above. The callee rechecks every structural
+        // identity and context relationship before invoking HIP.
+        unsafe { LoadedKernel::load(self, validated, observed, context) }
     }
 }
 
@@ -806,6 +826,10 @@ mod tests {
         UntrustedLaunchRequest::new(kernel, 1, [17, 1, 1], [64, 1, 1], 128)
     }
 
+    fn test_loaded(validated: &ValidatedArtifactSelectionV1) -> crate::LoadedKernel<VecAdd> {
+        crate::LoadedKernel::from_test_binding(validated.bind_marker())
+    }
+
     #[test]
     fn validates_exact_identity_and_retains_payload_without_marker_authority() {
         let observed = context(7, 3, "gfx942");
@@ -855,6 +879,203 @@ mod tests {
         assert_eq!(prepared.payload.as_ref(), selected.payload());
         assert!(prepared.prepared.belongs_to(&brand.brand));
         assert_eq!(prepared.prepared.device(), observed.device());
+    }
+
+    #[test]
+    fn loaded_authority_consumes_only_its_own_prepared_launch() {
+        let observed = context(7, 0, "gfx942");
+        let validated = validate_fixture(FixtureSpec::default(), &observed).unwrap();
+        let loaded = test_loaded(&validated);
+        let prepared = loaded.prepare(&observed, request(kernel_id(0x11))).unwrap();
+        let bound = loaded.bind(prepared).unwrap();
+
+        assert_eq!(loaded.identity(), validated.identity());
+        assert_eq!(loaded.device(), observed.device());
+        assert_eq!(bound.identity(), validated.identity());
+        assert_eq!(bound.geometry().grid().dimensions(), [17, 1, 1]);
+        assert_eq!(bound.geometry().block().dimensions(), [64, 1, 1]);
+        assert_eq!(bound.resources().dynamic_shared_memory_bytes(), 128);
+        let config = bound.launch_config();
+        assert_eq!(config.grid_dim, (17, 1, 1));
+        assert_eq!(config.block_dim, (64, 1, 1));
+        assert_eq!(config.shared_mem_bytes, 128);
+    }
+
+    #[test]
+    fn separate_marker_issuance_cannot_reuse_a_prepared_launch() {
+        let observed = context(7, 0, "gfx942");
+        let validated = validate_fixture(FixtureSpec::default(), &observed).unwrap();
+        let first = test_loaded(&validated);
+        let second = test_loaded(&validated);
+        let prepared = first.prepare(&observed, request(kernel_id(0x11))).unwrap();
+
+        assert_eq!(
+            second.bind(prepared).unwrap_err(),
+            crate::LoadedKernelMatchError::WrongArtifactAuthority
+        );
+    }
+
+    #[test]
+    fn payload_manifest_and_abi_identity_changes_cannot_cross_authorities() {
+        let observed = context(7, 0, "gfx942");
+        let original = validate_fixture(FixtureSpec::default(), &observed).unwrap();
+        let original_loaded = test_loaded(&original);
+
+        for changed in [
+            FixtureSpec {
+                payload: b"different-native-code-object".to_vec(),
+                ..FixtureSpec::default()
+            },
+            FixtureSpec {
+                compiler_version: "1.94.1",
+                ..FixtureSpec::default()
+            },
+            FixtureSpec {
+                abi: scalar_abi(),
+                ..FixtureSpec::default()
+            },
+        ] {
+            let changed = validate_fixture(changed, &observed).unwrap();
+            assert_ne!(original.identity(), changed.identity());
+            let changed_loaded = test_loaded(&changed);
+            let prepared = changed_loaded
+                .prepare(&observed, request(kernel_id(0x11)))
+                .unwrap();
+            assert_eq!(
+                original_loaded.bind(prepared).unwrap_err(),
+                crate::LoadedKernelMatchError::WrongArtifactAuthority
+            );
+        }
+    }
+
+    #[test]
+    fn kernel_identity_change_cannot_cross_loaded_authorities() {
+        let observed = context(7, 0, "gfx942");
+        let original = validate_fixture(FixtureSpec::default(), &observed).unwrap();
+        let changed_container = decoded_container(FixtureSpec {
+            kernel_id: 0x12,
+            ..FixtureSpec::default()
+        });
+        let changed = ValidatedArtifactSelectionV1::validate(
+            changed_container
+                .select_native_kernel(digest(0x12))
+                .unwrap(),
+            &observed,
+        )
+        .unwrap();
+        let original_loaded = test_loaded(&original);
+        let changed_loaded = test_loaded(&changed);
+        let prepared = changed_loaded
+            .prepare(&observed, request(kernel_id(0x12)))
+            .unwrap();
+
+        assert_eq!(
+            original_loaded.bind(prepared).unwrap_err(),
+            crate::LoadedKernelMatchError::WrongKernel
+        );
+    }
+
+    #[test]
+    fn context_device_limits_and_capabilities_cannot_cross_loaded_authorities() {
+        let original_observed = context(7, 0, "gfx942");
+        let original = validate_fixture(FixtureSpec::default(), &original_observed).unwrap();
+        let original_loaded = test_loaded(&original);
+
+        let cases = [
+            (
+                context(7, 1, "gfx942"),
+                crate::LoadedKernelMatchError::WrongDevice,
+            ),
+            (
+                context(8, 0, "gfx942"),
+                crate::LoadedKernelMatchError::WrongContext,
+            ),
+            (
+                ObservedContext::for_test(7, 0, "gfx942", 512, 65_536),
+                crate::LoadedKernelMatchError::DeviceLimitsChanged,
+            ),
+            (
+                original_observed
+                    .clone()
+                    .with_changed_test_hip_capabilities(),
+                crate::LoadedKernelMatchError::DeviceCapabilitiesChanged,
+            ),
+        ];
+
+        for (changed_observed, expected) in cases {
+            let changed = validate_fixture(FixtureSpec::default(), &changed_observed).unwrap();
+            let changed_loaded = test_loaded(&changed);
+            let prepared = changed_loaded
+                .prepare(&changed_observed, request(kernel_id(0x11)))
+                .unwrap();
+            assert_eq!(original_loaded.bind(prepared).unwrap_err(), expected);
+        }
+    }
+
+    #[test]
+    fn loaded_issuance_rechecks_selection_context_device_limits_and_capabilities() {
+        use crate::loaded_kernel::{LoadedKernelLoadError, validate_issuance};
+
+        let observed = context(7, 0, "gfx942");
+        let first = validate_fixture(FixtureSpec::default(), &observed).unwrap();
+        let second = validate_fixture(FixtureSpec::default(), &observed).unwrap();
+        let binding = first.bind_marker::<VecAdd>();
+
+        assert!(validate_issuance(&binding, &first, &observed).is_ok());
+        assert!(matches!(
+            validate_issuance(&binding, &second, &observed),
+            Err(LoadedKernelLoadError::WrongValidatedSelection)
+        ));
+        assert!(matches!(
+            validate_issuance(&binding, &first, &context(7, 1, "gfx942")),
+            Err(LoadedKernelLoadError::WrongDevice)
+        ));
+        assert!(matches!(
+            validate_issuance(&binding, &first, &context(8, 0, "gfx942")),
+            Err(LoadedKernelLoadError::WrongContext)
+        ));
+        assert!(matches!(
+            validate_issuance(
+                &binding,
+                &first,
+                &ObservedContext::for_test(7, 0, "gfx942", 512, 65_536)
+            ),
+            Err(LoadedKernelLoadError::DeviceLimitsChanged)
+        ));
+        assert!(matches!(
+            validate_issuance(
+                &binding,
+                &first,
+                &observed.clone().with_changed_test_hip_capabilities()
+            ),
+            Err(LoadedKernelLoadError::DeviceCapabilitiesChanged)
+        ));
+    }
+
+    #[test]
+    #[ignore = "requires a working HIP device"]
+    fn loaded_issuance_rejects_another_wrapper_for_the_same_hip_device() {
+        use crate::loaded_kernel::LoadedKernelLoadError;
+
+        let context = fe2o3_core::GpuContext::new(0).unwrap();
+        let another_context = fe2o3_core::GpuContext::new(0).unwrap();
+        let observed = ObservedContext::observe(&context).unwrap();
+        let architecture: &'static str =
+            Box::leak(observed.device().target().to_owned().into_boxed_str());
+        let validated = validate_fixture(
+            FixtureSpec {
+                architecture,
+                ..FixtureSpec::default()
+            },
+            &observed,
+        )
+        .unwrap();
+        let binding = validated.bind_marker::<VecAdd>();
+
+        // SAFETY: This test expects rejection before HIP sees the deliberately
+        // fake payload, so none of the unsafe loading obligations are relied on.
+        let error = unsafe { binding.load(&validated, &observed, &another_context) }.unwrap_err();
+        assert!(matches!(error, LoadedKernelLoadError::WrongContextWrapper));
     }
 
     #[test]
