@@ -169,7 +169,7 @@ run_rejected_exact real_kernel_guard_bypass \
     'let _bypassed_input = a[i]'
 run_rejected_exact real_kernel_wrong_index \
     "$script_dir/verus/negative/real_kernel_wrong_index.rs" \
-    'mutated_shared_body_claims_identity_frame' \
+    'real_kernel_wrong_index.rs' \
     'error: postcondition not satisfied' \
     'result.values@[0] == output.values@[0]'
 run_rejected_exact real_kernel_output_alias \
