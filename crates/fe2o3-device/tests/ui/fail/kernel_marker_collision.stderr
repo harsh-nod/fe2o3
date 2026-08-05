@@ -1,0 +1,11 @@
+error[E0428]: the name `__fe2o3_kernel_marker_collides` is defined multiple times
+ --> tests/ui/fail/kernel_marker_collision.rs:6:1
+  |
+4 | enum __fe2o3_kernel_marker_collides {}
+  | ----------------------------------- previous definition of the type `__fe2o3_kernel_marker_collides` here
+5 |
+6 | #[kernel]
+  | ^^^^^^^^^ `__fe2o3_kernel_marker_collides` redefined here
+  |
+  = note: `__fe2o3_kernel_marker_collides` must be defined only once in the type namespace of this module
+  = note: this error originates in the attribute macro `kernel` (in Nightly builds, run with -Z macro-backtrace for more info)

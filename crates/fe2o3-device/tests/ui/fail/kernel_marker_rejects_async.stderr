@@ -1,0 +1,5 @@
+error: async kernels cannot be represented by the v1 kernel marker contract
+ --> tests/ui/fail/kernel_marker_rejects_async.rs:4:1
+  |
+4 | async fn asynchronous() {}
+  | ^^^^^
