@@ -1,7 +1,7 @@
 use fe2o3_artifacts::{
-    AbiField, AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership, DigestBytes,
-    MAX_ABI_BYTES, MAX_ABI_FIELDS, Mutability, Name, PointerWidth, ScalarType, TypeIdentity,
-    ValidationError,
+    AbiField, AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership,
+    DeclaredRustLayoutIdentity, DeclaredRustTypeIdentity, DigestBytes, MAX_ABI_BYTES,
+    MAX_ABI_FIELDS, Mutability, Name, PointerWidth, ScalarType, TypeIdentity, ValidationError,
 };
 
 fn name(value: &str) -> Name {
@@ -10,8 +10,10 @@ fn name(value: &str) -> Name {
 
 fn type_identity(byte: u8) -> TypeIdentity {
     TypeIdentity::new(
-        DigestBytes::from_bytes([byte; 32]),
-        DigestBytes::from_bytes([byte.wrapping_add(1); 32]),
+        DeclaredRustTypeIdentity::from_untrusted_bytes(DigestBytes::from_bytes([byte; 32])),
+        DeclaredRustLayoutIdentity::from_untrusted_bytes(DigestBytes::from_bytes(
+            [byte.wrapping_add(1); 32],
+        )),
     )
 }
 

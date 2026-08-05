@@ -162,8 +162,8 @@ impl Writer {
             self.u8(mutability_tag(field.mutability()));
             self.u8(access_tag(field.access()));
             self.u8(address_space_tag(field.address_space()));
-            self.digest(field.type_identity().rust_type());
-            self.digest(field.type_identity().layout());
+            self.digest(field.type_identity().rust_type().bytes());
+            self.digest(field.type_identity().layout().bytes());
             self.u8(ownership_tag(field.ownership()));
             self.u8(alias_class_tag(field.alias_class()));
         }

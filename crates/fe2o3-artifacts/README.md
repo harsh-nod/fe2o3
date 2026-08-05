@@ -16,9 +16,16 @@ authentication remains outside this crate.
 
 `DigestBytes` contains opaque identity bytes supplied by build tooling. A bare
 manifest does not assign those bytes a digest algorithm or bind them to a
-payload. `PayloadDigest` makes an algorithm explicit and can calculate or
-verify a digest over bytes. That primitive proves only a byte-level match under
-the selected algorithm; it does not establish who produced those bytes.
+payload. `DeclaredRustTypeIdentity` and `DeclaredRustLayoutIdentity` prevent
+accidental type/layout swaps in Rust, but deliberately preserve the V1 wire
+format's weaker semantics: they are opaque, untrusted declarations. A future
+identity scheme must normatively define its type and layout descriptor schemas,
+domain separation, and algorithm before the runtime treats its output as
+independently reproducible compiler evidence.
+
+`PayloadDigest` makes an algorithm explicit and can calculate or verify a
+digest over bytes. That primitive proves only a byte-level match under the
+selected algorithm; it does not establish who produced those bytes.
 
 ## Identity and launch invariants
 
@@ -37,10 +44,9 @@ the selected algorithm; it does not establish who produced those bytes.
   bounded to 1 MiB before device-specific limits are applied. Fields are
   aligned, ordered, non-overlapping, in bounds, and compatible with the
   selected pointer width.
-- Every logical argument carries compiler-produced identities for its fully
-  monomorphized Rust type and rustc-reported ABI layout. These are opaque,
-  versioned-domain identities: the model preserves and compares them but does
-  not calculate or authenticate them.
+- Every logical argument carries distinct, opaque declarations for its fully
+  monomorphized Rust type and rustc-reported ABI layout. The model preserves
+  and compares those declarations but does not derive or authenticate them.
 - Scalar, pointer, and slice records have consistent size, mutability, access,
   address-space, ownership, and alias semantics. Ordinary shared borrows are
   immutable and read-only; shared atomic borrows explicitly admit atomic
@@ -69,6 +75,10 @@ This check is semantic validation of caller-supplied model declarations. It
 does not authenticate type identities, bind the ABI to payload bytes, inspect a
 code object, match generated host code, discover a device, or authorize loading
 or launch. Those checks require separately constructed runtime authority.
+That sealed authority must match a separately versioned semantic descriptor
+scheme and compiler-generated descriptor evidence, the manifest, the inspected
+code-object ABI, the verified payload digest, and the observed target before
+these declarations can contribute to a safe launch decision.
 Atomics additionally need scalar width, operation, ordering, synchronization
 scope, and host-coherence contracts. Constant, workgroup, and private address
 spaces need richer provenance and address-space-specific physical ABI rules.

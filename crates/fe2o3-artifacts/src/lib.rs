@@ -20,7 +20,8 @@ mod selection;
 
 pub use abi::{
     AbiField, AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership,
-    MAX_ABI_BYTES, MAX_ABI_FIELDS, Mutability, ScalarType, TypeIdentity,
+    DeclaredRustLayoutIdentity, DeclaredRustTypeIdentity, MAX_ABI_BYTES, MAX_ABI_FIELDS,
+    Mutability, ScalarType, TypeIdentity,
 };
 pub use binding::{
     MatchedProofEvidenceV1, PROOF_IDENTITY_VERSION, ProofMatchError, ProofMatchPolicy,

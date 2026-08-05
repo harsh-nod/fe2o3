@@ -1,10 +1,11 @@
 use crate::{
     AbiField, AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership, BlockSize,
-    Capability, CodeObjectFormat, CodeObjectIdentity, CompilerIdentity, DecodeError, DigestBytes,
-    Dimensions, Endianness, IdentityText, KernelEntry, LaunchContract, MANIFEST_MAGIC,
-    MANIFEST_VERSION, MAX_ABI_FIELDS, MAX_CODE_OBJECTS, MAX_IDENTITY_TEXT_BYTES, MAX_KERNELS,
-    MAX_MANIFEST_BYTES, MAX_NAME_BYTES, ManifestV1, Mutability, Name, PointerWidth, ScalarType,
-    TargetIdentity, ToolIdentity, TypeIdentity, ValidationError,
+    Capability, CodeObjectFormat, CodeObjectIdentity, CompilerIdentity, DeclaredRustLayoutIdentity,
+    DeclaredRustTypeIdentity, DecodeError, DigestBytes, Dimensions, Endianness, IdentityText,
+    KernelEntry, LaunchContract, MANIFEST_MAGIC, MANIFEST_VERSION, MAX_ABI_FIELDS,
+    MAX_CODE_OBJECTS, MAX_IDENTITY_TEXT_BYTES, MAX_KERNELS, MAX_MANIFEST_BYTES, MAX_NAME_BYTES,
+    ManifestV1, Mutability, Name, PointerWidth, ScalarType, TargetIdentity, ToolIdentity,
+    TypeIdentity, ValidationError,
 };
 
 const CAPABILITY_COUNT: usize = 11;
@@ -283,7 +284,10 @@ impl<'a> Reader<'a> {
                 self.mutability()?,
                 self.access()?,
                 self.address_space()?,
-                TypeIdentity::new(self.digest()?, self.digest()?),
+                TypeIdentity::new(
+                    DeclaredRustTypeIdentity::from_untrusted_bytes(self.digest()?),
+                    DeclaredRustLayoutIdentity::from_untrusted_bytes(self.digest()?),
+                ),
                 self.argument_ownership()?,
                 self.alias_class()?,
             )?);
