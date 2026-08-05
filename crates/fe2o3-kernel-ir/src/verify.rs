@@ -22,6 +22,7 @@ pub enum DiagnosticCode {
     InvalidLaunchDomain,
     InvalidWorkgroupSize,
     InvalidCapability,
+    UnsupportedCapability,
     EmptyFunction,
     SignatureMismatch,
     MissingTerminator,
@@ -165,10 +166,26 @@ impl Error for VerificationErrors {}
 /// All diagnostics are collected and sorted, making the result deterministic
 /// regardless of map implementation details in the verifier.
 pub fn verify_module(module: &Module) -> Result<(), VerificationErrors> {
+    verify_module_impl(module, None)
+}
+
+/// Verifies a module and rejects requirements outside a target capability set.
+pub fn verify_module_with_capabilities(
+    module: &Module,
+    supported_capabilities: &BTreeSet<TargetCapability>,
+) -> Result<(), VerificationErrors> {
+    verify_module_impl(module, Some(supported_capabilities))
+}
+
+fn verify_module_impl(
+    module: &Module,
+    supported_capabilities: Option<&BTreeSet<TargetCapability>>,
+) -> Result<(), VerificationErrors> {
     let mut verifier = ModuleVerifier {
         module,
         diagnostics: Vec::new(),
         functions: BTreeMap::new(),
+        supported_capabilities: supported_capabilities.cloned(),
     };
     verifier.verify();
     verifier.diagnostics.sort();
@@ -185,6 +202,7 @@ struct ModuleVerifier<'module> {
     module: &'module Module,
     diagnostics: Vec<Diagnostic>,
     functions: BTreeMap<&'module FunctionId, &'module Function>,
+    supported_capabilities: Option<BTreeSet<TargetCapability>>,
 }
 
 impl<'module> ModuleVerifier<'module> {
@@ -275,6 +293,7 @@ impl<'module> ModuleVerifier<'module> {
             self.module,
             function,
             &self.functions,
+            self.supported_capabilities.as_ref(),
             &mut self.diagnostics,
         );
         function_verifier.verify();
@@ -321,14 +340,14 @@ impl<'module> ModuleVerifier<'module> {
             );
             return;
         };
-        let Some(body) = &entry.body else {
+        if entry.body.is_none() {
             self.emit(
                 location,
                 DiagnosticCode::KernelEntryDeclaration,
                 format!("entry function {} has no body", kernel.entry),
             );
             return;
-        };
+        }
         if !entry.signature.results.is_empty() {
             self.emit(
                 DiagnosticLocation::kernel(self.module, kernel),
@@ -337,21 +356,45 @@ impl<'module> ModuleVerifier<'module> {
             );
         }
 
-        for block in &body.blocks {
-            for (operation_index, operation) in block.operations.iter().enumerate() {
-                if let OperationKind::InvocationIndex { axis, .. } = operation.kind
-                    && !kernel.domain.contains_axis(axis)
-                {
-                    self.emit(
-                        DiagnosticLocation::kernel(self.module, kernel)
-                            .at_block(block.id)
-                            .at_operation(operation_index),
-                        DiagnosticCode::InvalidLaunchDomain,
-                        format!(
-                            "axis {axis:?} is outside a {}D launch domain",
-                            kernel.domain.rank()
-                        ),
-                    );
+        self.verify_reachable_intrinsic_axes(kernel, entry);
+    }
+
+    fn verify_reachable_intrinsic_axes(&mut self, kernel: &Kernel, entry: &'module Function) {
+        let mut pending = vec![entry];
+        let mut visited = BTreeSet::new();
+
+        while let Some(function) = pending.pop() {
+            if !visited.insert(&function.id) {
+                continue;
+            }
+            let Some(body) = &function.body else {
+                continue;
+            };
+
+            for block in &body.blocks {
+                for (operation_index, operation) in block.operations.iter().enumerate() {
+                    if let OperationKind::Intrinsic(intrinsic) = &operation.kind
+                        && !kernel.domain.contains_axis(intrinsic.kind.axis())
+                    {
+                        let axis = intrinsic.kind.axis();
+                        let mut location = DiagnosticLocation::function(self.module, function);
+                        location.kernel = Some(kernel.id.clone());
+                        self.emit(
+                            location.at_block(block.id).at_operation(operation_index),
+                            DiagnosticCode::InvalidLaunchDomain,
+                            format!(
+                                "axis {axis:?} is outside the {}D launch domain of kernel {}",
+                                kernel.domain.rank(),
+                                kernel.id
+                            ),
+                        );
+                    }
+
+                    if let OperationKind::Call { callee, .. } = &operation.kind
+                        && let Some(callee) = self.functions.get(callee).copied()
+                    {
+                        pending.push(callee);
+                    }
                 }
             }
         }
@@ -389,6 +432,16 @@ impl<'module> ModuleVerifier<'module> {
                     DiagnosticCode::InvalidCapability,
                     format!("malformed target capability: {capability:?}"),
                 );
+            } else if self
+                .supported_capabilities
+                .as_ref()
+                .is_some_and(|supported| !supported.contains(capability))
+            {
+                self.emit(
+                    location.clone(),
+                    DiagnosticCode::UnsupportedCapability,
+                    format!("target does not support required capability {capability:?}"),
+                );
             }
         }
     }
@@ -424,6 +477,7 @@ struct FunctionVerifier<'a, 'module> {
     module: &'module Module,
     function: &'module Function,
     functions: &'a BTreeMap<&'module FunctionId, &'module Function>,
+    supported_capabilities: Option<&'a BTreeSet<TargetCapability>>,
     diagnostics: &'a mut Vec<Diagnostic>,
     definitions: BTreeMap<ValueId, DefInfo>,
     blocks: BTreeMap<BlockId, &'module BasicBlock>,
@@ -435,12 +489,14 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
         module: &'module Module,
         function: &'module Function,
         functions: &'a BTreeMap<&'module FunctionId, &'module Function>,
+        supported_capabilities: Option<&'a BTreeSet<TargetCapability>>,
         diagnostics: &'a mut Vec<Diagnostic>,
     ) -> Self {
         Self {
             module,
             function,
             functions,
+            supported_capabilities,
             diagnostics,
             definitions: BTreeMap::new(),
             blocks: BTreeMap::new(),
@@ -579,12 +635,39 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
     }
 
     fn verify_operation(&mut self, operation: &Operation, location: DiagnosticLocation) {
+        if let Some(supported) = self.supported_capabilities {
+            for capability in operation.required_capabilities() {
+                if !supported.contains(&capability) {
+                    self.emit(
+                        location.clone(),
+                        DiagnosticCode::UnsupportedCapability,
+                        format!("target does not support required capability {capability:?}"),
+                    );
+                }
+            }
+        }
+
         match &operation.kind {
             OperationKind::Constant(constant) => {
                 self.expect_results(operation, &[constant.ty()], location);
             }
-            OperationKind::InvocationIndex { .. } => {
-                self.expect_results(operation, &[Type::INDEX], location);
+            OperationKind::Intrinsic(intrinsic) => {
+                let metadata = intrinsic.metadata();
+                if intrinsic.result_type != metadata.result_type {
+                    self.emit(
+                        location.clone(),
+                        DiagnosticCode::TypeMismatch,
+                        format!(
+                            "intrinsic declares result type {:?}, expected {:?}",
+                            intrinsic.result_type, metadata.result_type
+                        ),
+                    );
+                }
+                self.expect_results(
+                    operation,
+                    std::slice::from_ref(&intrinsic.result_type),
+                    location,
+                );
             }
             OperationKind::Unary { op, operand } => {
                 let Some(ty) = self.ty(*operand).cloned() else {

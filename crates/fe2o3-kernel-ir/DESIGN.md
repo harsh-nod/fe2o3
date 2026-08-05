@@ -15,8 +15,34 @@ CUDA, or a serialization framework.
   lowering do not need to infer target-sensitive facts.
 - Barriers and atomics carry explicit scope and ordering information. Their
   memory effects are queryable without inspecting a target backend.
+- Source-level logical launch queries use typed `IntrinsicOperation` nodes.
+  Each node carries an explicit result type, while `IntrinsicKind` owns the
+  canonical type, memory effects, and required target capabilities.
 - Capabilities describe requirements; they do not encode a particular GPU.
   Backends decide whether a target satisfies them.
+
+## Initial Intrinsic Set
+
+The first portable source subset contains `global_id_1d` and
+`launch_extent_1d`. The former has the single canonical IR representation
+`IntrinsicKind::InvocationIndex { kind: Global, axis: X }`; there is no
+parallel invocation-index operation. Both queries return the target's `Index`
+type and are pure: querying launch geometry does not read program-visible
+memory. An intrinsic axis must belong to the kernel's launch domain.
+
+Core launch queries derive no optional target capabilities. A target that
+cannot provide invocation coordinates and launch geometry cannot lower the
+core kernel IR, so treating those queries as optional features would only add
+redundant capability declarations. `verify_module_with_capabilities` remains
+available for operations and declarations that do require optional target
+features. A backend may implement launch queries using its physical
+workgroup, local-invocation, and dispatch geometry, but those details do not
+enter this IR.
+
+Global memory semantics continue to use the existing typed `Load` and `Store`
+operations. Their effect summaries report `Read(Global)` and `Write(Global)`
+respectively. This change does not add intrinsic forms of memory access or
+extend barrier and atomic semantics.
 
 ## Verification Boundary
 
@@ -25,6 +51,12 @@ checks identities, signatures, SSA definitions and dominance, CFG targets and
 block arguments, operation/result types, memory access metadata, barriers,
 atomics, launch domains, and capability metadata. Diagnostics are sorted by
 location and code for deterministic output.
+
+Intrinsic verification additionally checks the explicit result type and
+result arity against canonical metadata. Kernel verification rejects intrinsic
+axes outside the declared launch domain. Callers that know a target's
+capability set can use `verify_module_with_capabilities` to reject unsupported
+requirements.
 
 The verifier does not prove bounds, race freedom, barrier convergence,
 functional correctness, or target support. Those require later analyses and

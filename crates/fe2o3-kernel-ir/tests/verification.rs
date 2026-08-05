@@ -26,10 +26,7 @@ fn valid_vecadd_module() -> Module {
         op(
             3,
             Type::INDEX,
-            OperationKind::InvocationIndex {
-                kind: IndexKind::Global,
-                axis: Axis::X,
-            },
+            OperationKind::Intrinsic(IntrinsicOperation::global_id_1d()),
         ),
         op(
             4,
@@ -149,13 +146,174 @@ fn verifies_a_typed_ssa_kernel() {
     let module = valid_vecadd_module();
     verify_module(&module).expect("valid module should verify");
 
-    let effects: BTreeSet<_> = module.functions[0].body.as_ref().unwrap().blocks[0]
-        .operations
+    let operations = &module.functions[0].body.as_ref().unwrap().blocks[0].operations;
+    let effects: BTreeSet<_> = operations
         .iter()
         .flat_map(Operation::memory_effects)
         .collect();
     assert!(effects.contains(&MemoryEffect::Read(AddressSpace::Global)));
     assert!(effects.contains(&MemoryEffect::Write(AddressSpace::Global)));
+    assert!(operations[3].effect_summary().reads(AddressSpace::Global));
+    assert!(operations[10].effect_summary().writes(AddressSpace::Global));
+}
+
+#[test]
+fn verifies_typed_1d_intrinsics_and_derives_baseline_metadata() {
+    let module = one_block_module(
+        vec![],
+        vec![
+            op(
+                0,
+                Type::INDEX,
+                OperationKind::Intrinsic(IntrinsicOperation::global_id_1d()),
+            ),
+            op(
+                1,
+                Type::INDEX,
+                OperationKind::Intrinsic(IntrinsicOperation::launch_extent_1d()),
+            ),
+        ],
+    );
+
+    assert!(module.derived_capabilities().is_empty());
+    verify_module_with_capabilities(&module, &BTreeSet::new())
+        .expect("core launch queries require no optional target capability");
+
+    let operations = &module.functions[0].body.as_ref().unwrap().blocks[0].operations;
+    for operation in operations {
+        assert!(operation.effect_summary().is_pure());
+        assert!(operation.memory_effects().is_empty());
+    }
+}
+
+#[test]
+fn rejects_malformed_intrinsic_types_dimensions_and_arity() {
+    let operations = vec![
+        op(
+            0,
+            Type::F32,
+            OperationKind::Intrinsic(IntrinsicOperation::new(
+                IntrinsicKind::InvocationIndex {
+                    kind: IndexKind::Global,
+                    axis: Axis::Y,
+                },
+                Type::F32,
+            )),
+        ),
+        Operation::new(
+            vec![],
+            OperationKind::Intrinsic(IntrinsicOperation::launch_extent_1d()),
+        ),
+    ];
+
+    let mut module = one_block_module(vec![], operations);
+    module.kernels.push(Kernel::new(
+        "test_kernel",
+        "test",
+        LaunchDomain::D1 {
+            x: LaunchExtent::Dynamic,
+        },
+    ));
+
+    let errors = verify_module(&module).unwrap_err();
+    assert!(errors.contains(DiagnosticCode::InvalidLaunchDomain));
+    assert!(errors.contains(DiagnosticCode::TypeMismatch));
+    assert!(errors.contains(DiagnosticCode::ResultArity));
+}
+
+#[test]
+fn rejects_out_of_domain_intrinsics_in_recursive_kernel_helpers() {
+    let mut entry_block = BasicBlock::new(BlockId(0));
+    entry_block.operations.push(Operation::new(
+        vec![],
+        OperationKind::Call {
+            callee: FunctionId::new("helper"),
+            arguments: vec![],
+        },
+    ));
+    entry_block.terminator = Some(Terminator::Return { values: vec![] });
+
+    let mut helper_block = BasicBlock::new(BlockId(0));
+    helper_block.operations = vec![
+        op(
+            0,
+            Type::INDEX,
+            OperationKind::Intrinsic(IntrinsicOperation::new(
+                IntrinsicKind::InvocationIndex {
+                    kind: IndexKind::Global,
+                    axis: Axis::Y,
+                },
+                Type::INDEX,
+            )),
+        ),
+        Operation::new(
+            vec![],
+            OperationKind::Call {
+                callee: FunctionId::new("helper"),
+                arguments: vec![],
+            },
+        ),
+    ];
+    helper_block.terminator = Some(Terminator::Return { values: vec![] });
+
+    let mut module = Module::new("tests::helper_intrinsic");
+    module.functions = vec![
+        Function::definition(
+            "entry",
+            Signature::new(vec![], vec![]),
+            vec![],
+            vec![entry_block],
+        ),
+        Function::definition(
+            "helper",
+            Signature::new(vec![], vec![]),
+            vec![],
+            vec![helper_block],
+        ),
+    ];
+    module.kernels.push(Kernel::new(
+        "test_kernel",
+        "entry",
+        LaunchDomain::D1 {
+            x: LaunchExtent::Dynamic,
+        },
+    ));
+
+    let errors = verify_module(&module).unwrap_err();
+    let axis_errors = errors
+        .diagnostics()
+        .iter()
+        .filter(|diagnostic| diagnostic.code == DiagnosticCode::InvalidLaunchDomain)
+        .collect::<Vec<_>>();
+    assert_eq!(axis_errors.len(), 1);
+    assert_eq!(
+        axis_errors[0].location.function.as_ref().unwrap().as_str(),
+        "helper"
+    );
+    assert_eq!(
+        axis_errors[0].location.kernel.as_ref().unwrap().as_str(),
+        "test_kernel"
+    );
+}
+
+#[test]
+fn rejects_declared_capabilities_unsupported_by_the_target() {
+    let mut module = one_block_module(
+        vec![],
+        vec![op(
+            0,
+            Type::INDEX,
+            OperationKind::Intrinsic(IntrinsicOperation::launch_extent_1d()),
+        )],
+    );
+    module.functions[0]
+        .required_capabilities
+        .insert(TargetCapability::Float64);
+
+    verify_module(&module).expect("target-independent verification should succeed");
+    assert!(module.derived_capabilities().is_empty());
+    let errors = verify_module_with_capabilities(&module, &BTreeSet::new()).unwrap_err();
+    assert!(errors.contains(DiagnosticCode::UnsupportedCapability));
 }
 
 #[test]

@@ -28,12 +28,28 @@ impl ThreadIndex {
     }
 }
 
+/// Returns the current invocation's zero-based ID in the logical 1D launch.
+///
+/// This is a target-neutral device intrinsic. A backend may derive it from
+/// physical workgroup and local-invocation coordinates, but callers do not
+/// observe that mapping.
+#[inline(never)]
+pub fn global_id_1d() -> usize {
+    unreachable!("global_id_1d must be lowered by the fe2o3 backend")
+}
+
+/// Returns the number of invocations in the logical 1D launch.
+///
+/// This is the logical global extent, independent of how a backend partitions
+/// the launch into physical workgroups.
+#[inline(never)]
+pub fn launch_extent_1d() -> usize {
+    unreachable!("launch_extent_1d must be lowered by the fe2o3 backend")
+}
+
 #[inline(always)]
 pub fn index_1d() -> ThreadIndex {
-    let tid = thread_idx_x();
-    let bid = block_idx_x();
-    let bdim = block_dim_x();
-    ThreadIndex((bid * bdim + tid) as usize)
+    ThreadIndex(global_id_1d())
 }
 
 #[inline(always)]
