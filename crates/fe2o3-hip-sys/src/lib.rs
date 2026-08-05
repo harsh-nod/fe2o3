@@ -80,10 +80,19 @@ unsafe extern "C" {
     pub fn hipGetErrorString(error: hipError_t) -> *const c_char;
 
     #[cfg(fe2o3_hip_device_properties)]
+    /// Queries the stable fe2o3 subset of HIP properties for `device_id`.
+    ///
+    /// # Safety
+    ///
+    /// `properties` must be non-null, aligned, and valid for one writable
+    /// `Fe2o3HipDeviceProperties` value. The HIP runtime must be initialized.
     pub fn fe2o3HipGetDeviceProperties(
         device_id: c_int,
         properties: *mut Fe2o3HipDeviceProperties,
     ) -> hipError_t;
+
+    #[cfg(all(test, fe2o3_hip_device_properties))]
+    fn fe2o3HipTestArchitectureFeatures(requested_features: u64) -> u64;
 
     pub fn hipStreamCreate(stream: *mut hipStream_t) -> hipError_t;
     pub fn hipStreamDestroy(stream: hipStream_t) -> hipError_t;
@@ -207,6 +216,30 @@ mod tests {
             features.into_iter().reduce(|left, right| left | right),
             Some(0x7f)
         );
+    }
+
+    #[cfg(fe2o3_hip_device_properties)]
+    #[test]
+    fn native_feature_extraction_preserves_every_bit() {
+        let features = [
+            HIP_DEVICE_ARCH_HAS_GLOBAL_INT32_ATOMICS,
+            HIP_DEVICE_ARCH_HAS_SHARED_INT32_ATOMICS,
+            HIP_DEVICE_ARCH_HAS_GLOBAL_INT64_ATOMICS,
+            HIP_DEVICE_ARCH_HAS_SHARED_INT64_ATOMICS,
+            HIP_DEVICE_ARCH_HAS_WARP_VOTE,
+            HIP_DEVICE_ARCH_HAS_WARP_BALLOT,
+            HIP_DEVICE_ARCH_HAS_WARP_SHUFFLE,
+        ];
+
+        for feature in features {
+            // SAFETY: This deterministic native test helper does not access HIP.
+            assert_eq!(
+                unsafe { fe2o3HipTestArchitectureFeatures(feature) },
+                feature
+            );
+        }
+        // SAFETY: This deterministic native test helper does not access HIP.
+        assert_eq!(unsafe { fe2o3HipTestArchitectureFeatures(0x7f) }, 0x7f);
     }
 
     #[cfg(not(fe2o3_hip_device_properties))]

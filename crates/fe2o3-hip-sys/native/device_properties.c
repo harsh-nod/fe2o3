@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include <hip/hip_runtime_api.h>
+#include <hip/hip_version.h>
 
 _Static_assert(sizeof(int) == sizeof(int32_t), "HIP int fields must be 32-bit");
 _Static_assert(sizeof(hipError_t) == sizeof(int32_t),
@@ -32,11 +33,37 @@ _Static_assert(offsetof(Fe2o3HipDeviceProperties, shared_mem_per_block_optin) ==
 _Static_assert(offsetof(Fe2o3HipDeviceProperties, architecture_features) == 304,
                "unexpected architecture_features offset");
 
+static uint64_t architecture_features(const hipDeviceProp_t *properties) {
+  uint64_t features = 0;
+
+  if (properties->arch.hasGlobalInt32Atomics) {
+    features |= FE2O3_HIP_DEVICE_ARCH_HAS_GLOBAL_INT32_ATOMICS;
+  }
+  if (properties->arch.hasSharedInt32Atomics) {
+    features |= FE2O3_HIP_DEVICE_ARCH_HAS_SHARED_INT32_ATOMICS;
+  }
+  if (properties->arch.hasGlobalInt64Atomics) {
+    features |= FE2O3_HIP_DEVICE_ARCH_HAS_GLOBAL_INT64_ATOMICS;
+  }
+  if (properties->arch.hasSharedInt64Atomics) {
+    features |= FE2O3_HIP_DEVICE_ARCH_HAS_SHARED_INT64_ATOMICS;
+  }
+  if (properties->arch.hasWarpVote) {
+    features |= FE2O3_HIP_DEVICE_ARCH_HAS_WARP_VOTE;
+  }
+  if (properties->arch.hasWarpBallot) {
+    features |= FE2O3_HIP_DEVICE_ARCH_HAS_WARP_BALLOT;
+  }
+  if (properties->arch.hasWarpShuffle) {
+    features |= FE2O3_HIP_DEVICE_ARCH_HAS_WARP_SHUFFLE;
+  }
+  return features;
+}
+
 int32_t fe2o3HipGetDeviceProperties(int32_t device_id,
                                     Fe2o3HipDeviceProperties *properties) {
   hipDeviceProp_t hip_properties;
   hipError_t status;
-  uint64_t features = 0;
 
   if (properties == NULL) {
     return (int32_t)hipErrorInvalidValue;
@@ -62,31 +89,33 @@ int32_t fe2o3HipGetDeviceProperties(int32_t device_id,
         (int32_t)hip_properties.maxGridSize[index];
   }
   properties->shared_mem_per_block = (uint64_t)hip_properties.sharedMemPerBlock;
+#if HIP_VERSION_MAJOR >= 6
   properties->shared_mem_per_block_optin =
       (uint64_t)hip_properties.sharedMemPerBlockOptin;
-
-  if (hip_properties.arch.hasGlobalInt32Atomics) {
-    features |= FE2O3_HIP_DEVICE_ARCH_HAS_GLOBAL_INT32_ATOMICS;
-  }
-  if (hip_properties.arch.hasSharedInt32Atomics) {
-    features |= FE2O3_HIP_DEVICE_ARCH_HAS_SHARED_INT32_ATOMICS;
-  }
-  if (hip_properties.arch.hasGlobalInt64Atomics) {
-    features |= FE2O3_HIP_DEVICE_ARCH_HAS_GLOBAL_INT64_ATOMICS;
-  }
-  if (hip_properties.arch.hasSharedInt64Atomics) {
-    features |= FE2O3_HIP_DEVICE_ARCH_HAS_SHARED_INT64_ATOMICS;
-  }
-  if (hip_properties.arch.hasWarpVote) {
-    features |= FE2O3_HIP_DEVICE_ARCH_HAS_WARP_VOTE;
-  }
-  if (hip_properties.arch.hasWarpBallot) {
-    features |= FE2O3_HIP_DEVICE_ARCH_HAS_WARP_BALLOT;
-  }
-  if (hip_properties.arch.hasWarpShuffle) {
-    features |= FE2O3_HIP_DEVICE_ARCH_HAS_WARP_SHUFFLE;
-  }
-  properties->architecture_features = features;
+#else
+  properties->shared_mem_per_block_optin = 0;
+#endif
+  properties->architecture_features = architecture_features(&hip_properties);
 
   return (int32_t)hipSuccess;
+}
+
+uint64_t fe2o3HipTestArchitectureFeatures(uint64_t requested_features) {
+  hipDeviceProp_t properties;
+  memset(&properties, 0, sizeof(properties));
+  properties.arch.hasGlobalInt32Atomics =
+      (requested_features & FE2O3_HIP_DEVICE_ARCH_HAS_GLOBAL_INT32_ATOMICS) != 0;
+  properties.arch.hasSharedInt32Atomics =
+      (requested_features & FE2O3_HIP_DEVICE_ARCH_HAS_SHARED_INT32_ATOMICS) != 0;
+  properties.arch.hasGlobalInt64Atomics =
+      (requested_features & FE2O3_HIP_DEVICE_ARCH_HAS_GLOBAL_INT64_ATOMICS) != 0;
+  properties.arch.hasSharedInt64Atomics =
+      (requested_features & FE2O3_HIP_DEVICE_ARCH_HAS_SHARED_INT64_ATOMICS) != 0;
+  properties.arch.hasWarpVote =
+      (requested_features & FE2O3_HIP_DEVICE_ARCH_HAS_WARP_VOTE) != 0;
+  properties.arch.hasWarpBallot =
+      (requested_features & FE2O3_HIP_DEVICE_ARCH_HAS_WARP_BALLOT) != 0;
+  properties.arch.hasWarpShuffle =
+      (requested_features & FE2O3_HIP_DEVICE_ARCH_HAS_WARP_SHUFFLE) != 0;
+  return architecture_features(&properties);
 }
