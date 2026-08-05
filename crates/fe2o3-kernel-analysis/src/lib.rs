@@ -3,6 +3,10 @@
 //! This crate reports analysis facts and rejected obligations. It does not
 //! grant `Checked`, `Verified`, safe-launch, or any other assurance authority.
 
+mod uniformity;
+
+pub use uniformity::analyze_function;
+
 use fe2o3_kernel_ir::{BlockId, FunctionId, SynchronizationScope, ValueId};
 use std::collections::BTreeMap;
 
@@ -102,12 +106,21 @@ pub enum Diagnostic {
 }
 
 /// Why the first analysis slice could not derive a stronger fact.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum UnsupportedReason {
     FunctionDeclaration,
-    CallWithoutSummary { callee: FunctionId },
+    CallWithoutSummary {
+        callee: FunctionId,
+    },
     MalformedControlFlow,
-    UnknownValue { value: ValueId },
+    /// Postdominance was not established for these reachable blocks. This
+    /// includes cycles whose termination/dynamic iteration count is unproved.
+    PostdominanceUnavailable {
+        blocks: Vec<BlockId>,
+    },
+    UnknownValue {
+        value: ValueId,
+    },
 }
 
 #[cfg(test)]
