@@ -443,9 +443,10 @@ impl<B: OperationRuntime> BorrowedSubmission<B> {
     }
 
     fn into_completion(mut self) -> B::Completion {
+        let event = self.event.take().expect("submission event is present");
+        let completion = self.backend.make_completion(event);
         self.work_may_be_pending = false;
-        self.backend
-            .make_completion(self.event.take().expect("submission event is present"))
+        completion
     }
 }
 
@@ -954,6 +955,29 @@ mod tests {
     }
 
     #[test]
+    fn completion_construction_panic_runs_borrowed_submission_recovery() {
+        let runtime = FakeRuntime::new(Faults {
+            make_completion: Fault::Panic,
+            ..Faults::default()
+        });
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = begin_borrowed_with(runtime.clone(), || Ok(()));
+        }));
+
+        assert!(panic.is_err());
+        assert_eq!(
+            log(&runtime),
+            [
+                "create-event",
+                "record-event",
+                "into-completion",
+                "event-drop",
+                "recovery-sync"
+            ]
+        );
+    }
+
+    #[test]
     fn completion_construction_panic_leaks_owned_resources_if_recovery_is_ambiguous() {
         let runtime = FakeRuntime::new(Faults {
             make_completion: Fault::Panic,
@@ -1298,6 +1322,14 @@ mod tests {
                     },
                     || Ok(()),
                 ),
+                "completion-construction-panic-recovery-error" => (
+                    Faults {
+                        make_completion: Fault::Panic,
+                        recovery_sync: Fault::Error,
+                        ..Faults::default()
+                    },
+                    || Ok(()),
+                ),
                 "completion-ambiguous" => (
                     Faults {
                         event_sync: Fault::Error,
@@ -1330,6 +1362,7 @@ mod tests {
             "record-error-recovery-error",
             "enqueue-panic-recovery-error",
             "record-panic-recovery-error",
+            "completion-construction-panic-recovery-error",
             "completion-ambiguous",
             "completion-fallback-panic",
         ] {
