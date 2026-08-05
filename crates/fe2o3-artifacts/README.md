@@ -55,6 +55,25 @@ representation is exactly pointer followed by length, with total size twice
 the target pointer width and target-pointer alignment. Typed launch code must
 expand that field once while preserving its single logical argument position.
 
+### Host-launch ABI subset
+
+`HostLaunchAbi::validate` creates a borrowed, private-field view only when an
+`AbiLayout` uses the subset currently representable by typed host launch. It
+requires 64-bit pointers, permits scalar values, and permits pointer and slice
+arguments only in global or generic address space. References must be ordinary
+immutable shared borrows with read-only access or mutable unique borrows with
+exclusive aliasing. Raw pointers, unrestricted aliasing, and shared atomic
+references are rejected.
+
+This check is semantic validation of caller-supplied model declarations. It
+does not authenticate type identities, bind the ABI to payload bytes, inspect a
+code object, match generated host code, discover a device, or authorize loading
+or launch. Those checks require separately constructed runtime authority.
+Atomics additionally need scalar width, operation, ordering, synchronization
+scope, and host-coherence contracts. Constant, workgroup, and private address
+spaces need richer provenance and address-space-specific physical ABI rules.
+They remain outside this conservative subset.
+
 ## Manifest invariants
 
 `ManifestV1` is the structurally and semantically validated aggregate. It is
