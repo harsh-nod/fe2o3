@@ -18,14 +18,15 @@ const KNOWN_ARCHITECTURE_FEATURES: u64 = HIP_DEVICE_ARCH_HAS_GLOBAL_INT32_ATOMIC
 /// Device identity, launch limits, and capability facts observed from HIP.
 ///
 /// Fields are private so parsed text or caller-provided limits cannot forge a
-/// runtime observation. Production values are created only while constructing
-/// a [`crate::GpuContext`]. This value says nothing about a code object's
-/// embedded target or ABI and therefore does not authorize loading or launch.
+/// runtime observation. Production values are created only by explicitly
+/// observing a validated [`crate::GpuContext`]. This value says nothing about a
+/// code object's embedded target or ABI and therefore does not authorize
+/// loading or launch.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ObservedDeviceTarget {
     device_id: i32,
     target_id: AmdTargetId,
-    warp_size: u32,
+    hip_default_warp_size: u32,
     max_threads_per_block: u32,
     max_block_dimensions: [u32; 3],
     max_grid_dimensions: [u32; 3],
@@ -43,8 +44,13 @@ impl ObservedDeviceTarget {
         self.target_id
     }
 
-    pub const fn warp_size(&self) -> u32 {
-        self.warp_size
+    /// Returns HIP's device-level default warp size.
+    ///
+    /// This is not authoritative for a particular kernel. GFX10 and newer code
+    /// objects can select a different wavefront size, which must be inspected
+    /// from the loaded kernel's metadata before subgroup reasoning or launch.
+    pub const fn hip_default_warp_size(&self) -> u32 {
+        self.hip_default_warp_size
     }
 
     pub const fn max_threads_per_block(&self) -> u32 {
@@ -68,6 +74,10 @@ impl ObservedDeviceTarget {
         self.shared_memory_per_block_optin
     }
 
+    /// Reports HIP's coarse global 32-bit integer-atomics device fact.
+    ///
+    /// This does not establish operations, ordering, scope, or allocation
+    /// coherence and cannot alone satisfy an atomic kernel contract.
     pub const fn has_global_int32_atomics(&self) -> bool {
         self.has_feature(HIP_DEVICE_ARCH_HAS_GLOBAL_INT32_ATOMICS)
     }
@@ -96,14 +106,6 @@ impl ObservedDeviceTarget {
         self.has_feature(HIP_DEVICE_ARCH_HAS_WARP_SHUFFLE)
     }
 
-    /// The current coarse atomics capability requires all global/shared 32/64-bit facts.
-    pub const fn has_complete_integer_atomics(&self) -> bool {
-        self.has_global_int32_atomics()
-            && self.has_shared_int32_atomics()
-            && self.has_global_int64_atomics()
-            && self.has_shared_int64_atomics()
-    }
-
     pub(crate) fn query_hip(device_id: i32) -> Result<Self> {
         Self::query(device_id, &HipDevicePropertyQuery)
     }
@@ -120,8 +122,9 @@ impl ObservedDeviceTarget {
         }
 
         let target_id = parse_target_id(&properties.gcn_arch_name)?;
-        let warp_size = positive_u32(properties.warp_size, "warp size must be positive")?;
-        if !matches!(warp_size, 32 | 64) {
+        let hip_default_warp_size =
+            positive_u32(properties.warp_size, "warp size must be positive")?;
+        if !matches!(hip_default_warp_size, 32 | 64) {
             return Err(Error::InvalidDeviceProperties("warp size must be 32 or 64"));
         }
 
@@ -133,7 +136,7 @@ impl ObservedDeviceTarget {
             properties.max_block_dim,
             "maximum block dimensions must be positive",
         )?;
-        if warp_size > max_threads_per_block
+        if hip_default_warp_size > max_threads_per_block
             || max_block_dimensions
                 .iter()
                 .any(|&dimension| dimension > max_threads_per_block)
@@ -164,7 +167,7 @@ impl ObservedDeviceTarget {
         Ok(Self {
             device_id,
             target_id,
-            warp_size,
+            hip_default_warp_size,
             max_threads_per_block,
             max_block_dimensions,
             max_grid_dimensions,
@@ -246,7 +249,7 @@ mod tests {
 
         assert_eq!(target.device_id(), 3);
         assert_eq!(target.target_id().to_string(), "gfx942:sramecc+:xnack-");
-        assert_eq!(target.warp_size(), 64);
+        assert_eq!(target.hip_default_warp_size(), 64);
         assert_eq!(target.max_threads_per_block(), 1024);
         assert_eq!(target.max_block_dimensions(), [1024, 1024, 1024]);
         assert_eq!(
@@ -255,7 +258,10 @@ mod tests {
         );
         assert_eq!(target.shared_memory_per_block(), 65_536);
         assert_eq!(target.shared_memory_per_block_optin(), Some(131_072));
-        assert!(target.has_complete_integer_atomics());
+        assert!(target.has_global_int32_atomics());
+        assert!(target.has_shared_int32_atomics());
+        assert!(target.has_global_int64_atomics());
+        assert!(target.has_shared_int64_atomics());
         assert!(target.has_warp_vote());
         assert!(target.has_warp_ballot());
         assert!(target.has_warp_shuffle());
@@ -280,7 +286,7 @@ mod tests {
 
         let mut invalid_utf8 = valid_properties();
         invalid_utf8.gcn_arch_name = [0; 256];
-        invalid_utf8.gcn_arch_name[0] = -1;
+        invalid_utf8.gcn_arch_name[0] = u8::MAX as core::ffi::c_char;
         assert!(matches!(
             ObservedDeviceTarget::from_properties(0, invalid_utf8),
             Err(Error::InvalidDeviceProperties(_))
@@ -338,11 +344,11 @@ mod tests {
     #[ignore = "requires a working HIP device"]
     fn context_observes_a_real_hip_device() {
         let context = crate::GpuContext::new(0).unwrap();
-        let target = context.observed_target();
+        let target = context.observe_target().unwrap();
 
         assert_eq!(target.device_id(), 0);
         assert!(target.target_id().processor().starts_with("gfx"));
-        assert!(matches!(target.warp_size(), 32 | 64));
+        assert!(matches!(target.hip_default_warp_size(), 32 | 64));
         assert!(target.max_threads_per_block() > 0);
         assert!(
             target

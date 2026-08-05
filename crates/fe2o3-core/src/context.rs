@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 #[derive(Debug)]
 pub struct GpuContext {
-    observed_target: ObservedDeviceTarget,
+    device_id: i32,
 }
 
 impl GpuContext {
@@ -20,21 +20,25 @@ impl GpuContext {
         }
 
         check(unsafe { fe2o3_hip_sys::hipSetDevice(device_id) })?;
-        let observed_target = ObservedDeviceTarget::query_hip(device_id)?;
-        Ok(Arc::new(Self { observed_target }))
+        Ok(Arc::new(Self { device_id }))
     }
 
     pub fn device_id(&self) -> i32 {
-        self.observed_target.device_id()
+        self.device_id
     }
 
-    /// Returns device properties observed from HIP when this context was made.
-    pub fn observed_target(&self) -> &ObservedDeviceTarget {
-        &self.observed_target
+    /// Obtains validated device facts required by trusted loading paths.
+    ///
+    /// Basic context and raw runtime operations do not require this observation,
+    /// so builds without HIP headers and newly introduced processors remain
+    /// usable through existing unsafe APIs. Safe artifact loading must call this
+    /// method and fail closed when authoritative discovery is unavailable.
+    pub fn observe_target(&self) -> Result<ObservedDeviceTarget> {
+        ObservedDeviceTarget::query_hip(self.device_id)
     }
 
     pub fn bind_to_thread(&self) -> Result<()> {
-        check(unsafe { fe2o3_hip_sys::hipSetDevice(self.device_id()) })
+        check(unsafe { fe2o3_hip_sys::hipSetDevice(self.device_id) })
     }
 
     pub fn default_stream(self: &Arc<Self>) -> Stream {
