@@ -7,6 +7,126 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use dialect_amdgcn::{LoweringDiagnosticCode, lower_kernel_to_llvm_ir};
 use fe2o3_kernel_ir::*;
 
+struct TemporaryDirectory(PathBuf);
+
+impl TemporaryDirectory {
+    fn new(label: &str) -> Self {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "fe2o3-amdgcn-{label}-{}-{nonce}",
+            std::process::id()
+        ));
+        fs::create_dir(&path).unwrap();
+        Self(path)
+    }
+
+    fn join(&self, name: &str) -> PathBuf {
+        self.0.join(name)
+    }
+}
+
+impl Drop for TemporaryDirectory {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+fn canonical_test_target(text: &str) -> Result<&str, String> {
+    let mut components = text.split(':');
+    let processor = components.next().unwrap_or_default();
+    let suffix = processor.strip_prefix("gfx").unwrap_or_default();
+    if suffix.len() < 3 || !suffix.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(format!("invalid AMDGPU processor {processor:?}"));
+    }
+
+    let mut last_order = 0;
+    for feature in components {
+        let order = match feature {
+            "sramecc+" | "sramecc-" => 1,
+            "xnack+" | "xnack-" => 2,
+            _ => return Err(format!("invalid AMDGPU target feature {feature:?}")),
+        };
+        if order <= last_order {
+            return Err(format!("non-canonical AMDGPU target feature {feature:?}"));
+        }
+        last_order = order;
+    }
+    Ok(processor)
+}
+
+fn assert_occurrences(text: &str, needle: &str, expected: usize) {
+    assert_eq!(
+        text.matches(needle).count(),
+        expected,
+        "expected {expected} occurrence(s) of {needle:?} in:\n{text}"
+    );
+}
+
+fn symbol_blocks(report: &str) -> Vec<&str> {
+    report.split("\n  Symbol {\n").skip(1).collect()
+}
+
+fn symbol_block<'a>(report: &'a str, name: &str) -> &'a str {
+    let needle = format!("    Name: {name} (");
+    let matches = symbol_blocks(report)
+        .into_iter()
+        .filter(|block| block.contains(&needle))
+        .collect::<Vec<_>>();
+    let [block] = matches.as_slice() else {
+        panic!(
+            "expected exactly one symbol named {name:?}, found {}",
+            matches.len()
+        )
+    };
+    block
+}
+
+fn metadata(report: &str) -> &str {
+    let marker = "        AMDGPU Metadata: ---\n";
+    let matches = report.split(marker).skip(1).collect::<Vec<_>>();
+    let [metadata] = matches.as_slice() else {
+        panic!(
+            "expected exactly one decoded AMDGPU metadata note, found {}",
+            matches.len()
+        )
+    };
+    metadata
+        .split("\n...\n")
+        .next()
+        .expect("metadata terminator must follow the decoded note")
+}
+
+fn assert_metadata_argument(
+    metadata: &str,
+    name: &str,
+    offset: u64,
+    size: u64,
+    value_kind: &str,
+    address_space: Option<&str>,
+) {
+    let name_line = format!(".name:           {name}");
+    let blocks = metadata
+        .split("\n      - ")
+        .filter(|block| block.contains(&name_line))
+        .collect::<Vec<_>>();
+    let [block] = blocks.as_slice() else {
+        panic!(
+            "expected exactly one metadata argument named {name:?}, found {}",
+            blocks.len()
+        )
+    };
+    assert!(block.contains(&format!("        .offset:         {offset}\n")));
+    assert!(block.contains(&format!("        .size:           {size}\n")));
+    assert!(block.contains(&format!("        .value_kind:     {value_kind}")));
+    match address_space {
+        Some(space) => assert!(block.contains(&format!(".address_space:  {space}\n"))),
+        None => assert!(!block.contains(".address_space:")),
+    }
+}
+
 fn global_slice(access: AccessMode) -> Type {
     Type::slice(Type::F32, AddressSpace::Global, access)
 }
@@ -268,6 +388,22 @@ fn kernel_selection_and_symbol_names_are_fail_closed() {
 }
 
 #[test]
+fn kernel_selection_requires_an_exact_identity() {
+    let mut module = fill_module();
+    module.kernels[0].id = KernelId::new("fill_extra");
+
+    for alias in ["fill", "fill_impl", "extra"] {
+        assert_eq!(
+            first_code(&module, alias),
+            LoweringDiagnosticCode::MissingKernel
+        );
+    }
+    let output = lower_kernel_to_llvm_ir(&module, &KernelId::new("fill_extra")).unwrap();
+    assert!(output.contains("define amdgpu_kernel void @fill_extra("));
+    assert!(!output.contains("define amdgpu_kernel void @fill("));
+}
+
+#[test]
 fn only_rank_is_restricted_while_workgroup_size_is_mandatory() {
     let mut missing_size = fill_module();
     missing_size.kernels[0].workgroup_size = None;
@@ -292,6 +428,41 @@ fn only_rank_is_restricted_while_workgroup_size_is_mandatory() {
         assert_eq!(
             first_code(&module, "fill"),
             LoweringDiagnosticCode::UnsupportedLaunchDomain
+        );
+    }
+}
+
+#[test]
+fn invalid_or_unbounded_workgroup_geometry_is_rejected() {
+    let mut zero = fill_module();
+    zero.kernels[0].workgroup_size = Some(WorkgroupSize::new(0, 1, 1));
+    assert_eq!(
+        first_code(&zero, "fill"),
+        LoweringDiagnosticCode::InputVerification(DiagnosticCode::InvalidWorkgroupSize)
+    );
+
+    let mut zero_extent = fill_module();
+    zero_extent.kernels[0].domain = LaunchDomain::D1 {
+        x: LaunchExtent::Static(0),
+    };
+    assert_eq!(
+        first_code(&zero_extent, "fill"),
+        LoweringDiagnosticCode::InputVerification(DiagnosticCode::InvalidLaunchDomain)
+    );
+
+    let mut oversized = fill_module();
+    oversized.kernels[0].workgroup_size = Some(WorkgroupSize::new(1025, 1, 1));
+    assert_eq!(
+        first_code(&oversized, "fill"),
+        LoweringDiagnosticCode::UnsupportedWorkgroupSize
+    );
+
+    for size in [WorkgroupSize::new(64, 2, 1), WorkgroupSize::new(64, 1, 2)] {
+        let mut inactive_axis = fill_module();
+        inactive_axis.kernels[0].workgroup_size = Some(size);
+        assert_eq!(
+            first_code(&inactive_axis, "fill"),
+            LoweringDiagnosticCode::InputVerification(DiagnosticCode::InvalidWorkgroupSize)
         );
     }
 }
@@ -365,6 +536,7 @@ fn unsupported_parameter_types_and_address_spaces_are_rejected() {
             global_pointer(AccessMode::ReadWrite),
             LoweringDiagnosticCode::UnsupportedParameter,
         ),
+        (Type::Unit, LoweringDiagnosticCode::UnsupportedParameter),
     ];
     for (parameter, expected) in cases {
         let mut module = fill_module();
@@ -376,6 +548,57 @@ fn unsupported_parameter_types_and_address_spaces_are_rejected() {
             .parameters
             .push(ValueId(20));
         assert_eq!(first_code(&module, "fill"), expected);
+    }
+}
+
+#[test]
+fn read_only_and_cross_address_space_stores_fail_before_emission() {
+    let mut read_only = fill_module();
+    read_only.functions[0].signature.parameters[0] = global_slice(AccessMode::ReadOnly);
+    let body = read_only.functions[0].body.as_mut().unwrap();
+    body.blocks[1].operations[0].results[0].ty = global_pointer(AccessMode::ReadOnly);
+    body.blocks[1].operations[1].results[0].ty = global_pointer(AccessMode::ReadOnly);
+    assert_eq!(
+        first_code(&read_only, "fill"),
+        LoweringDiagnosticCode::InputVerification(DiagnosticCode::InvalidMemoryAccess)
+    );
+
+    let mut mismatched_space = fill_module();
+    let OperationKind::Store { access, .. } =
+        &mut mismatched_space.functions[0].body.as_mut().unwrap().blocks[1].operations[2].kind
+    else {
+        panic!("store expected")
+    };
+    access.address_space = AddressSpace::Workgroup;
+    assert_eq!(
+        first_code(&mismatched_space, "fill"),
+        LoweringDiagnosticCode::InputVerification(DiagnosticCode::InvalidMemoryAccess)
+    );
+}
+
+#[test]
+fn rocm_test_targets_are_exact_canonical_amd_target_ids() {
+    for target in ["gfx1151", "gfx942:sramecc+:xnack-"] {
+        assert_eq!(
+            canonical_test_target(target).unwrap(),
+            target.split(':').next().unwrap()
+        );
+    }
+    for target in [
+        "",
+        " gfx1151",
+        "gfx1151 ",
+        "gfx942:xnack-:sramecc+",
+        "gfx942:sramecc+:sramecc-",
+        "gfx942:xnack",
+        "gfx9-generic",
+        "--help",
+        "gfx1151\n-mcpu=gfx942",
+    ] {
+        assert!(
+            canonical_test_target(target).is_err(),
+            "accepted adversarial target {target:?}"
+        );
     }
 }
 
@@ -502,25 +725,24 @@ fn rocm_compiles_the_golden_to_an_amdgpu_code_object() {
     let clang = std::env::var_os("FE2O3_ROCM_CLANG")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/opt/rocm/llvm/bin/clang"));
-    let target = std::env::var("FE2O3_TARGET").expect("FE2O3_TARGET must name an AMDGPU target");
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let directory =
-        std::env::temp_dir().join(format!("fe2o3-amdgcn-g1-{}-{nonce}", std::process::id()));
-    fs::create_dir(&directory).unwrap();
+    let target_text = std::env::var("FE2O3_TARGET")
+        .expect("FE2O3_TARGET must name an exact canonical AMDGPU target");
+    let processor = canonical_test_target(&target_text).unwrap();
+    let directory = TemporaryDirectory::new("g1");
     let input = directory.join("fill.ll");
     let output = directory.join("fill.hsaco");
-    fs::write(
-        &input,
-        lower_kernel_to_llvm_ir(&fill_module(), &KernelId::new("fill")).unwrap(),
-    )
-    .unwrap();
+    let llvm_ir = lower_kernel_to_llvm_ir(&fill_module(), &KernelId::new("fill")).unwrap();
+    assert_eq!(llvm_ir, include_str!("fixtures/fill_g1.ll"));
+    assert_eq!(
+        llvm_ir,
+        lower_kernel_to_llvm_ir(&fill_module(), &KernelId::new("fill")).unwrap()
+    );
+    fs::write(&input, &llvm_ir).unwrap();
+    assert_eq!(fs::read_to_string(&input).unwrap(), llvm_ir);
 
-    let result = Command::new(clang)
+    let result = Command::new(&clang)
         .arg("--target=amdgcn-amd-amdhsa")
-        .arg(format!("-mcpu={target}"))
+        .arg(format!("-mcpu={target_text}"))
         .arg("-nogpulib")
         .arg(&input)
         .arg("-o")
@@ -533,12 +755,96 @@ fn rocm_compiles_the_golden_to_an_amdgpu_code_object() {
         String::from_utf8_lossy(&result.stderr)
     );
     let object = fs::read(&output).unwrap();
-    assert!(object.starts_with(b"\x7fELF"));
     assert!(object.len() > 64);
-    assert_eq!(
-        &object[16..18],
-        &[3, 0],
-        "HSACO must be an ELF shared object"
+
+    let readobj = std::env::var_os("FE2O3_ROCM_LLVM_READOBJ")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            let mut tool = clang;
+            tool.set_file_name("llvm-readobj");
+            tool
+        });
+    let result = Command::new(readobj)
+        .args(["--file-header", "--symbols", "--notes"])
+        .arg(&output)
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "llvm-readobj failed:\n{}",
+        String::from_utf8_lossy(&result.stderr)
     );
-    fs::remove_dir_all(directory).unwrap();
+    let report = String::from_utf8(result.stdout).unwrap();
+
+    for invariant in [
+        "Format: elf64-amdgpu",
+        "Arch: amdgcn",
+        "Class: 64-bit (0x2)",
+        "DataEncoding: LittleEndian (0x1)",
+        "OS/ABI: AMDGPU_HSA (0x40)",
+        "ABIVersion: 4",
+        "Type: SharedObject (0x3)",
+        "Machine: EM_AMDGPU (0xE0)",
+    ] {
+        assert!(
+            report.contains(invariant),
+            "missing {invariant:?} in:\n{report}"
+        );
+    }
+    let processor_flag = format!("EF_AMDGPU_MACH_AMDGCN_{}", processor.to_ascii_uppercase());
+    assert_occurrences(&report, &processor_flag, 1);
+    for feature in target_text.split(':').skip(1) {
+        let feature_flag = match feature {
+            "sramecc+" => "EF_AMDGPU_FEATURE_SRAMECC_ON_V4",
+            "sramecc-" => "EF_AMDGPU_FEATURE_SRAMECC_OFF_V4",
+            "xnack+" => "EF_AMDGPU_FEATURE_XNACK_ON_V4",
+            "xnack-" => "EF_AMDGPU_FEATURE_XNACK_OFF_V4",
+            _ => unreachable!("canonical_test_target rejected unknown features"),
+        };
+        assert_occurrences(&report, feature_flag, 1);
+    }
+
+    let entry = symbol_block(&report, "fill");
+    assert!(entry.contains("    Binding: Global (0x1)"));
+    assert!(entry.contains("    Type: Function (0x2)"));
+    assert!(entry.contains("      STV_PROTECTED (0x3)"));
+    assert!(entry.contains("    Section: .text"));
+    let descriptor = symbol_block(&report, "fill.kd");
+    assert!(descriptor.contains("    Size: 64"));
+    assert!(descriptor.contains("    Binding: Global (0x1)"));
+    assert!(descriptor.contains("    Type: Object (0x1)"));
+    assert!(descriptor.contains("    Section: .rodata"));
+    let global_functions = symbol_blocks(&report)
+        .into_iter()
+        .filter(|block| {
+            block.contains("    Binding: Global (0x1)")
+                && block.contains("    Type: Function (0x2)")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        global_functions.len(),
+        1,
+        "unexpected global kernel symbols"
+    );
+
+    assert_occurrences(&report, "Type: NT_AMDGPU_METADATA (AMDGPU Metadata)", 1);
+    let metadata = metadata(&report);
+    assert_occurrences(metadata, "    .symbol:         fill.kd", 1);
+    assert_occurrences(metadata, "    .name:           fill", 1);
+    assert!(metadata.contains("    .group_segment_fixed_size: 0\n"));
+    assert!(metadata.contains("    .kernarg_segment_align: 8\n"));
+    assert!(metadata.contains("    .max_flat_workgroup_size: 64\n"));
+    assert!(metadata.contains("    .reqd_workgroup_size:\n      - 64\n      - 1\n      - 1\n"));
+    assert!(metadata.contains("    .uses_dynamic_stack: false\n"));
+    assert_metadata_argument(metadata, "arg0.data", 0, 8, "global_buffer", Some("global"));
+    assert_metadata_argument(metadata, "arg0.len", 8, 8, "by_value", None);
+    assert_metadata_argument(metadata, "arg1", 16, 4, "by_value", None);
+    assert_occurrences(metadata, ".name:", 4);
+    assert_occurrences(metadata, "amdhsa.version:\n  - 1\n  - 2", 1);
+    let expected_target = if target_text.contains(':') {
+        format!("amdhsa.target:   'amdgcn-amd-amdhsa--{target_text}'")
+    } else {
+        format!("amdhsa.target:   amdgcn-amd-amdhsa--{target_text}")
+    };
+    assert_occurrences(metadata, &expected_target, 1);
 }

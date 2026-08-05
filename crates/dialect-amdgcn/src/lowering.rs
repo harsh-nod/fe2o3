@@ -13,6 +13,8 @@ use fe2o3_kernel_ir::{
 
 use crate::{AMDGPU_TRIPLE, AmdgcnIntrinsic, Dim};
 
+const MAX_G1_WORKGROUP_SIZE: u32 = 1024;
+
 /// Stable rejection categories for the first target-neutral AMDGPU lowering slice.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum LoweringDiagnosticCode {
@@ -334,11 +336,13 @@ fn validate_launch(module: &Module, kernel: &Kernel) -> Result<WorkgroupSize, Lo
             "G1 requires a statically declared workgroup size",
         ));
     };
-    if size.y != 1 || size.z != 1 {
+    if size.x > MAX_G1_WORKGROUP_SIZE || size.y != 1 || size.z != 1 {
         return Err(LoweringErrors::one(
             LoweringLocation::kernel(module, kernel),
             LoweringDiagnosticCode::UnsupportedWorkgroupSize,
-            "G1 requires workgroup dimensions (x, 1, 1)",
+            format!(
+                "G1 requires workgroup dimensions (x, 1, 1) with x at most {MAX_G1_WORKGROUP_SIZE}"
+            ),
         ));
     }
     Ok(size)
