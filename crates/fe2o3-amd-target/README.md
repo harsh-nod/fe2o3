@@ -54,6 +54,7 @@ resulting loading authority in a separate unforgeable type.
 The processor and feature-support tables follow
 `llvm/include/llvm/TargetParser/AMDGPUTargetParser.def` at LLVM revision
 `846473237377990d00b9c353f6a2c86116b52ea5` and must be reviewed when that
-source changes. The crate does not accept generic processors because their
-family-provision semantics are outside this exact-processor compatibility
-model.
+source changes. `AmdTargetId::amdhsa_elf_flags_v4_plus` is additionally pinned
+to `llvm/include/llvm/BinaryFormat/ELF.h` at the same revision. The crate does
+not accept generic processors because their family-provision semantics are
+outside this exact-processor compatibility model.
