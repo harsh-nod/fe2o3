@@ -212,7 +212,11 @@ pub enum AtomicScope {
     System,
 }
 
-/// Atomic access details required to compare overlapping atomic regions.
+/// Atomic access details retained for future coverage-aware admission.
+///
+/// This first admission slice validates and records the descriptor but rejects
+/// every overlapping atomic region. Accepting such overlap requires
+/// unforgeable evidence that the atomic scope covers every concurrent accessor.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AtomicAccess {
     operation: AtomicOperation,
@@ -387,8 +391,9 @@ impl ArgumentAliasValidator {
     }
 
     /// Checks aliases within `arguments` and against every supplied in-flight
-    /// admission. The result remains inert and is not consumed by any launch
-    /// method.
+    /// admission. Overlapping atomics fail closed because this validator has no
+    /// participant-domain evidence with which to establish scope coverage. The
+    /// result remains inert and is not consumed by any launch method.
     pub fn admit<'allocation>(
         &self,
         context: &ObservedContext,
@@ -455,15 +460,13 @@ fn accesses_conflict(left: &AdmittedAccess<'_>, right: &AdmittedAccess<'_>) -> b
         return false;
     }
 
-    match (left.mode, right.mode) {
-        (ArgumentAccessMode::SharedRead, ArgumentAccessMode::SharedRead) => false,
-        (ArgumentAccessMode::Atomic(left_atomic), ArgumentAccessMode::Atomic(right_atomic)) => {
-            left.region.byte_offset != right.region.byte_offset
-                || left.region.byte_length != right.region.byte_length
-                || left_atomic != right_atomic
-        }
-        _ => true,
-    }
+    !matches!(
+        (left.mode, right.mode),
+        (
+            ArgumentAccessMode::SharedRead,
+            ArgumentAccessMode::SharedRead
+        )
+    )
 }
 
 fn regions_overlap(left: &CheckedByteRegion<'_>, right: &CheckedByteRegion<'_>) -> bool {
@@ -609,13 +612,17 @@ mod tests {
     }
 
     fn atomic(region: CheckedByteRegion<'_>) -> ArgumentAccess<'_> {
+        atomic_at_scope(region, AtomicScope::Device)
+    }
+
+    fn atomic_at_scope(region: CheckedByteRegion<'_>, scope: AtomicScope) -> ArgumentAccess<'_> {
         ArgumentAccess::new(
             region,
             ArgumentAccessMode::Atomic(
                 AtomicAccess::new(
                     AtomicOperation::ReadModifyWrite,
                     AtomicOrdering::AcquireRelease,
-                    AtomicScope::Device,
+                    scope,
                 )
                 .unwrap(),
             ),
@@ -819,33 +826,42 @@ mod tests {
     }
 
     #[test]
-    fn atomic_overlap_requires_identical_region_ordering_and_scope() {
+    fn identical_workgroup_atomic_overlap_fails_closed_within_and_across_launches() {
         let context = context(1);
         let owner = ();
         // SAFETY: see `allocation`.
         let allocation = unsafe { allocation(&context, &owner, 0x1000, 8) };
         let region = || allocation.region(0, 4).unwrap();
-        let compatible = || atomic(region());
+        let workgroup_atomic = || atomic_at_scope(region(), AtomicScope::Workgroup);
+        let validator = ArgumentAliasValidator::new();
 
-        ArgumentAliasValidator::new()
-            .admit(&context, [compatible(), compatible()], &[])
-            .unwrap();
-
-        let system_atomic = ArgumentAccess::new(
-            region(),
-            ArgumentAccessMode::Atomic(
-                AtomicAccess::new(
-                    AtomicOperation::ReadModifyWrite,
-                    AtomicOrdering::AcquireRelease,
-                    AtomicScope::System,
-                )
-                .unwrap(),
-            ),
+        assert_eq!(
+            validator
+                .admit(&context, [workgroup_atomic(), workgroup_atomic()], &[],)
+                .unwrap_err(),
+            AliasAdmissionError::Conflict {
+                argument_index: 1,
+                conflicting_with: ConflictSource::Argument {
+                    earlier_argument: 0,
+                },
+            }
         );
-        assert!(matches!(
-            ArgumentAliasValidator::new().admit(&context, [compatible(), system_atomic], &[],),
-            Err(AliasAdmissionError::Conflict { .. })
-        ));
+
+        let in_flight = validator
+            .admit(&context, [workgroup_atomic()], &[])
+            .unwrap();
+        assert_eq!(
+            validator
+                .admit(&context, [workgroup_atomic()], &[&in_flight])
+                .unwrap_err(),
+            AliasAdmissionError::Conflict {
+                argument_index: 0,
+                conflicting_with: ConflictSource::InFlight {
+                    launch_index: 0,
+                    argument_index: 0,
+                },
+            }
+        );
     }
 
     #[test]
