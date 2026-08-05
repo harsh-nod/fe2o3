@@ -11,6 +11,7 @@ mod encode;
 mod error;
 mod identities;
 mod manifest;
+mod selection;
 
 pub use abi::{
     AbiField, AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership,
@@ -34,3 +35,4 @@ pub use identities::{
     Name, PointerWidth, TargetIdentity, ToolIdentity,
 };
 pub use manifest::{KernelEntry, MAX_CODE_OBJECTS, MAX_KERNELS, ManifestV1};
+pub use selection::{KernelSelectionError, SelectedNativeKernel};

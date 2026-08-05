@@ -80,6 +80,13 @@ A valid container establishes payload-byte binding under its selected digest
 algorithm. It does not establish signer authenticity, the identity of the
 producer, compiler correctness, proof validity, or runtime safety.
 
+`ArtifactContainerV1::select_native_kernel` selects only by the stable
+manifest-owned kernel ID and returns a borrowed token tying the exact kernel,
+target, code-object identity, and digest-validated native payload to the same
+container lifetime. Relocatable, bitcode, and SPIR-V payloads are rejected by
+this direct-load path. Selection does not establish device-target or generated
+host-ABI compatibility; the runtime must check both before loading or launch.
+
 ## V1 wire format
 
 `ManifestV1::to_bytes` emits a canonical little-endian binary representation.
