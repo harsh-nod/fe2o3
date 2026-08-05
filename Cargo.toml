@@ -16,6 +16,7 @@ members = [
     "crates/fe2o3-hsaco-finalize",
     "crates/fe2o3-host",
     "crates/fe2o3-kernel-descriptor",
+    "crates/fe2o3-kernel-analysis",
     "crates/fe2o3-kernel-ir",
     "crates/fe2o3-macros",
     "crates/fe2o3-rustc-invocation",
@@ -76,6 +77,7 @@ fe2o3-hsaco = { path = "crates/fe2o3-hsaco" }
 fe2o3-hsaco-finalize = { path = "crates/fe2o3-hsaco-finalize" }
 fe2o3-host = { path = "crates/fe2o3-host" }
 fe2o3-kernel-descriptor = { path = "crates/fe2o3-kernel-descriptor" }
+fe2o3-kernel-analysis = { path = "crates/fe2o3-kernel-analysis" }
 fe2o3-kernel-ir = { path = "crates/fe2o3-kernel-ir" }
 fe2o3-macros = { path = "crates/fe2o3-macros" }
 fe2o3-rustc-invocation = { path = "crates/fe2o3-rustc-invocation" }
