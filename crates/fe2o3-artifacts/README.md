@@ -74,6 +74,14 @@ scope, and host-coherence contracts. Constant, workgroup, and private address
 spaces need richer provenance and address-space-specific physical ABI rules.
 They remain outside this conservative subset.
 
+Validation classifies field contracts, not runtime values. A prepared launch
+must additionally establish non-nullness where Rust references require it,
+alignment, byte bounds, device-allocation provenance, owning-context identity,
+and cross-argument range disjointness for exclusive borrows. Empty or
+zero-sized buffers therefore need either rejection for reference arguments or
+a documented aligned non-null device sentinel; a null allocation cannot be
+reinterpreted as a Rust reference merely because this layout check succeeded.
+
 ## Manifest invariants
 
 `ManifestV1` is the structurally and semantically validated aggregate. It is

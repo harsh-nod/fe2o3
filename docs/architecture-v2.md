@@ -234,8 +234,12 @@ instructions are not treated as equivalent unless those contracts match.
 
 ## Kernel ABI and Artifact Bundle
 
-The artifact manifest is the authority for the host/device boundary. Neither a
-launch macro nor a loader independently guesses the ABI.
+The artifact manifest is the canonical serialized description of the
+host/device boundary, but it is not authority by itself. A sealed runtime token
+becomes authoritative only after matching a compiler-generated host descriptor,
+the complete manifest and payload digest, inspected code-object metadata, the
+observed device target, and the owning context. Neither a launch macro nor a
+loader independently guesses or elevates an ABI declaration.
 
 `DeviceCopy` is structural host-side byte-copy validity evidence, not device ABI
 or semantic evidence. Integer fields may encode host addresses or handles. A
@@ -361,7 +365,9 @@ Every implementation change must preserve these invariants:
 
 1. Normal host objects are produced by the standard host backend.
 2. There is one executable kernel implementation in source.
-3. The manifest is the only authority for argument layout and launch contract.
+3. Argument layout and launch contracts come from the manifest, but only a
+   sealed match of compiler descriptor, manifest, payload, code object, device,
+   and context can authorize loading or launch.
 4. A safe launch cannot be created from an arbitrary symbol, raw pointer list,
    or unbranded geometry.
 5. Proof records cannot be reused after an executable, contract, feature,
