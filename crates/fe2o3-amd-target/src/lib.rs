@@ -452,12 +452,24 @@ mod tests {
 
     #[test]
     fn feature_modifier_support_matches_the_llvm_processor_matrix() {
+        const SRAMECC_PROCESSORS: &[&str] = &[
+            "gfx906", "gfx908", "gfx90a", "gfx942", "gfx950", "gfx1250", "gfx1251",
+        ];
+        const XNACK_PROCESSORS: &[&str] = &[
+            "gfx801", "gfx810", "gfx900", "gfx902", "gfx904", "gfx906", "gfx908", "gfx909",
+            "gfx90a", "gfx90c", "gfx942", "gfx950", "gfx1010", "gfx1011", "gfx1012", "gfx1013",
+        ];
+
         for &processor in KNOWN_PROCESSORS {
             for feature in [AmdTargetFeature::SramEcc, AmdTargetFeature::Xnack] {
                 for state in [FeatureState::Disabled, FeatureState::Enabled] {
                     let input = std::format!("{processor}:{feature}{}", state.suffix());
                     let parsed = AmdTargetId::parse(&input);
-                    if processor_supports_feature(processor, feature) {
+                    let expected = match feature {
+                        AmdTargetFeature::SramEcc => SRAMECC_PROCESSORS.contains(&processor),
+                        AmdTargetFeature::Xnack => XNACK_PROCESSORS.contains(&processor),
+                    };
+                    if expected {
                         assert!(parsed.is_ok(), "expected supported target ID: {input}");
                     } else {
                         assert_eq!(
