@@ -2,8 +2,14 @@
 
 Status: normative parity baseline for fe2o3 v2.
 
+Pinned commits, row IDs, and current statuses are generated from
+[`cuda-oxide-parity-status.tsv`](cuda-oxide-parity-status.tsv). Run
+`scripts/parity-matrix.sh check` to validate this projection or
+`scripts/parity-matrix.sh generate` after changing the source of truth.
+
 ## Baseline and Scope
 
+<!-- parity-status:baseline:start -->
 The fixed comparison point is the fetched cuda-oxide `origin/main` commit
 `cd5ef3941d3347c7f6fcbfc78ef0fa7f4f179d87` from 2026-08-05. The primary
 source is `cuda-oxide-book/appendix/supported-features.md` at that commit. Its
@@ -12,8 +18,11 @@ partial, experimental, planned, and N/A rows. The supplemental audit also
 accounts for capabilities demonstrated elsewhere in the repository.
 
 The fe2o3 current-state column is based on commit
-`0530734917cb1f0f67273c30074229369cc2904e`. At that commit fe2o3 has a HIP
-runtime, explicit unsafe raw module and launch paths, kernel discovery,
+`0530734917cb1f0f67273c30074229369cc2904e`.
+<!-- parity-status:baseline:end -->
+
+At that commit fe2o3 has a HIP runtime, explicit unsafe raw module and launch
+paths, kernel discovery,
 reachable MIR collection, a target-neutral kernel IR and verifier, a narrow
 elementwise `f32`/`f64` AMDGPU LLVM/HSACO emitter, artifact and proof schemas,
 bounded HSACO inspection/finalization, event-backed asynchronous transfer
@@ -44,14 +53,19 @@ Current fe2o3 status is separate:
 - **Missing**: no qualifying implementation exists.
 - **N/A**: intentionally outside the AMD parity contract.
 
-No row is **Complete** in this snapshot. A later generated status report may
-add **Complete** only after the gate and row definition of done pass.
+A row may be marked **Complete** only after its gate and row definition of done
+pass.
 
-The current normative snapshot has 19 **Partial**, 63 **Missing**, 12 **N/A**,
-and zero **Complete** rows. The supplemental audit has 7 **Partial** and 8
-**Missing** rows. An IR type, schema, parser, or isolated proof is classified as
-**Partial** only when it implements a meaningful part of the row; it does not
-stand in for end-to-end compiler/runtime behavior.
+<!-- parity-status:counts:start -->
+| Scope | Complete | Partial | Missing | N/A | Total |
+|:--|--:|--:|--:|--:|--:|
+| Normative | 0 | 19 | 63 | 12 | 94 |
+| Supplemental | 0 | 7 | 8 | 0 | 15 |
+<!-- parity-status:counts:end -->
+
+An IR type, schema, parser, or isolated proof is classified as **Partial** only
+when it implements a meaningful part of the row; it does not stand in for
+end-to-end compiler/runtime behavior.
 
 ## Gates
 
@@ -320,7 +334,7 @@ A row can become **Complete** only when all applicable requirements pass:
 10. N/A rows have a deterministic diagnostic or documented absence.
 
 Partial cuda-oxide baseline rows need only match the behavior and limitations
-at commit `cd5ef394`; broader support is an extension. AMD-equivalent rows must
+at the pinned commit; broader support is an extension. AMD-equivalent rows must
 include an explicit semantic-difference note in their user documentation.
 
 ## Parity Release Rule

@@ -121,7 +121,13 @@ run_backend_build() {
   run_step backend-build cargo build --locked -p rustc-codegen-fe2o3
 }
 
+run_parity_matrix_checks() {
+  run_step parity-matrix-check bash scripts/parity-matrix.sh check
+  run_step parity-matrix-tests bash scripts/tests/parity-matrix.sh
+}
+
 run_generic() {
+  run_parity_matrix_checks
   run_format
   run_check
   run_backend_build
