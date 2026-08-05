@@ -58,8 +58,10 @@ Safe ownership of resources used by asynchronous copies is documented in
 ### Working end to end
 
 - `cargo-fe2o3 build` builds and loads the custom backend, delegates host
-  codegen to `rustc_codegen_llvm`, discovers trusted `#[kernel]` items, collects
-  device-reachable MIR, and emits HSACO sidecars.
+  codegen to `rustc_codegen_llvm`, discovers strict versioned registrations
+  emitted by `#[kernel]`, collects device-reachable MIR, and emits HSACO
+  sidecars. Registration identifies compiler semantics; it is not package or
+  artifact authentication.
 - The production AMDGPU emitter supports the repository's `f32`/`f64`
   elementwise examples. It recognizes scalar float arguments and literals,
   read-only slice loads, `DisjointSlice<T>` or indexed mutable-slice stores,
@@ -84,19 +86,27 @@ example, copied results back, and compared them with CPU results.
   scalar control flow, helper calls, and slice memory operations, into the
   target-neutral `fe2o3-kernel-ir`. Its verifier checks types, SSA uses,
   control-flow edges, memory accesses, launch axes, capabilities, barriers, and
-  atomics. This IR is not yet the default AMDGPU emission path.
+  atomics. The IR has a bounded canonical V1 wire format. A separate G1
+  `dialect-amdgcn` path lowers a verified 1D fill subset to AMDGPU LLVM and has
+  produced a real HSACO, but it is not yet the default emission path.
 - Versioned artifact manifests, ABI layouts, launch contracts, bounded
   containers, payload digests, native-kernel selection, and proof records have
   canonical encoders, decoders, and adversarial tests.
 - Canonical AMD target IDs, HIP-observed device properties, HSACO metadata and
   descriptor inspection, kernel-descriptor binding, and bounded post-link
   finalization are implemented as separate validation layers.
+- `fe2o3-host` has a data-only `PreparedLaunch<K>` geometry/resource checker and
+  a non-generic validated artifact-selection token. Structural artifact
+  validation cannot mint a Rust marker type, load a module, or launch a kernel.
 - Compiler artifact publication is transactional and generation-owned. Build
   attempt and canonical rustc invocation descriptors are versioned and
   bounded.
-- A Linux-only rustc executable primitive opens without following the final
-  symlink, hashes and retains the opened object, and builds commands through a
-  descriptor-backed procfs path. It is not connected to compile execution.
+- Linux-only rustc and codegen-backend primitives use descriptor-backed procfs
+  paths. The backend is copied into a rehashed, immutable sealed memfd and can
+  be inherited only by a prepared child command. Neither primitive is connected
+  to compile execution.
+- `examples/regression-manifest-v1.txt` is the authoritative package/artifact
+  inventory for ordinary checks, ROCm compilation, and GPU smoke tests.
 - The Verus vecadd harness proves bounds and injective writes under a documented
   hardware-thread-ID contract. Proof-record matching can reject incomplete or
   mismatched evidence.
@@ -107,14 +117,16 @@ example, copied results back, and compared them with CPU results.
   recognizer remains the production emitter.
 - Artifact manifests, descriptor finalization, observed targets, and proof
   records do not yet produce a sealed validated module or generated typed
-  launch API. There is no `PreparedLaunch<K>` implementation.
+  launch API. `PreparedLaunch<K>` remains inert data with no module/function
+  handle or launch authority, and marker binding remains crate-private.
 - `cargo fe2o3 verify` and `build --require-proof` are roadmap commands. The
   current Verus harness is invoked separately and does not prove compiler,
   ROCm, driver, or machine-code refinement.
 - The fail-closed rustc wrapper classifies and preserves approved bootstrap
   invocations, but compile execution remains disabled until the pinned rustc
-  primitive is integrated and codegen-backend dynamic-library pinning is
-  implemented. Non-Linux execution strategies remain unsupported.
+  and sealed backend primitives are composed with the validated invocation.
+  Rustc-descendant descriptor lifetime, dynamic loading, transitive shared
+  libraries, and non-Linux execution remain unresolved.
 - General Rust language support, LDS, atomics and barriers in emitted kernels,
   wave operations, device linking, sanitizer/debugger integration, and
   multi-device memory remain parity work.
@@ -167,73 +179,31 @@ For explicit package builds such as `-p fe2o3-saxpy`, `cargo-fe2o3` cleans that
 package before invoking Cargo so sidecar HSACO files are regenerated even if the
 host crate was already up to date.
 
-Check the workspace:
+Validate the authoritative example manifest and list a lane:
 
 ```bash
-cargo check --workspace
+cargo run --locked -p cargo-fe2o3 -- examples check
+cargo run --quiet --locked -p cargo-fe2o3 -- examples list rocm-compile
 ```
 
-Smoke-test the current backend entry point:
+Run the repository validation lanes:
 
 ```bash
-cargo run -p cargo-fe2o3 -- build -p fe2o3-vecadd
-cargo run -p cargo-fe2o3 -- build -p fe2o3-add-inplace
-cargo run -p cargo-fe2o3 -- build -p fe2o3-copy
-cargo run -p cargo-fe2o3 -- build -p fe2o3-downsample
-cargo run -p cargo-fe2o3 -- build -p fe2o3-fill
-cargo run -p cargo-fe2o3 -- build -p fe2o3-gather-odd
-cargo run -p cargo-fe2o3 -- build -p fe2o3-scale
-cargo run -p cargo-fe2o3 -- build -p fe2o3-shift
-cargo run -p cargo-fe2o3 -- build -p fe2o3-previous
-cargo run -p cargo-fe2o3 -- build -p fe2o3-stencil
-cargo run -p cargo-fe2o3 -- build -p fe2o3-raw-add-index
-cargo run -p cargo-fe2o3 -- build -p fe2o3-raw-const-minus
-cargo run -p cargo-fe2o3 -- build -p fe2o3-raw-parenthesized-sub
-cargo run -p cargo-fe2o3 -- build -p fe2o3-raw-disjoint-inplace-shift
-cargo run -p cargo-fe2o3 -- build -p fe2o3-raw-disjoint-shift
-cargo run -p cargo-fe2o3 -- build -p fe2o3-raw-gather
-cargo run -p cargo-fe2o3 -- build -p fe2o3-raw-neighbors
-cargo run -p cargo-fe2o3 -- build -p fe2o3-raw-output-shift
-cargo run -p cargo-fe2o3 -- build -p fe2o3-saxpy
-cargo run -p cargo-fe2o3 -- build -p fe2o3-axpy-inplace
-cargo run -p cargo-fe2o3 -- build -p fe2o3-negate
-cargo run -p cargo-fe2o3 -- build -p fe2o3-normalize
-cargo run -p cargo-fe2o3 -- build -p fe2o3-pipeline
-cargo run -p cargo-fe2o3 -- build -p fe2o3-vecadd-f64
+scripts/ci-local.sh generic
+FE2O3_TARGET=gfx1151 scripts/ci-local.sh rocm-compile
+FE2O3_ALLOW_GPU_SMOKE=1 FE2O3_TARGET=gfx1151 scripts/ci-local.sh hardware-smoke
 ```
 
-On a machine with a working AMD GPU and ROCm driver stack:
+The ROCm and hardware lanes require a matching AMD GPU and ROCm installation.
+To build or run one package directly:
 
 ```bash
-cargo run -p cargo-fe2o3 -- smoke
+cargo run --locked -p cargo-fe2o3 -- build -p fe2o3-vecadd
+cargo run --locked -p cargo-fe2o3 -- run -p fe2o3-vecadd
 ```
 
-The smoke command runs the supported backend examples in sequence. To run one
-package at a time:
+The smoke command reads the same manifest and runs every GPU-selected example:
 
 ```bash
-cargo run -p cargo-fe2o3 -- run -p fe2o3-vecadd
-cargo run -p cargo-fe2o3 -- run -p fe2o3-add-inplace
-cargo run -p cargo-fe2o3 -- run -p fe2o3-copy
-cargo run -p cargo-fe2o3 -- run -p fe2o3-downsample
-cargo run -p cargo-fe2o3 -- run -p fe2o3-fill
-cargo run -p cargo-fe2o3 -- run -p fe2o3-gather-odd
-cargo run -p cargo-fe2o3 -- run -p fe2o3-scale
-cargo run -p cargo-fe2o3 -- run -p fe2o3-shift
-cargo run -p cargo-fe2o3 -- run -p fe2o3-previous
-cargo run -p cargo-fe2o3 -- run -p fe2o3-stencil
-cargo run -p cargo-fe2o3 -- run -p fe2o3-raw-add-index
-cargo run -p cargo-fe2o3 -- run -p fe2o3-raw-const-minus
-cargo run -p cargo-fe2o3 -- run -p fe2o3-raw-parenthesized-sub
-cargo run -p cargo-fe2o3 -- run -p fe2o3-raw-disjoint-inplace-shift
-cargo run -p cargo-fe2o3 -- run -p fe2o3-raw-disjoint-shift
-cargo run -p cargo-fe2o3 -- run -p fe2o3-raw-gather
-cargo run -p cargo-fe2o3 -- run -p fe2o3-raw-neighbors
-cargo run -p cargo-fe2o3 -- run -p fe2o3-raw-output-shift
-cargo run -p cargo-fe2o3 -- run -p fe2o3-saxpy
-cargo run -p cargo-fe2o3 -- run -p fe2o3-axpy-inplace
-cargo run -p cargo-fe2o3 -- run -p fe2o3-negate
-cargo run -p cargo-fe2o3 -- run -p fe2o3-normalize
-cargo run -p cargo-fe2o3 -- run -p fe2o3-pipeline
-cargo run -p cargo-fe2o3 -- run -p fe2o3-vecadd-f64
+cargo run --locked -p cargo-fe2o3 -- smoke
 ```

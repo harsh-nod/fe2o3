@@ -18,16 +18,17 @@ partial, experimental, planned, and N/A rows. The supplemental audit also
 accounts for capabilities demonstrated elsewhere in the repository.
 
 The fe2o3 current-state column is based on commit
-`0530734917cb1f0f67273c30074229369cc2904e`.
+`44f2ff3a86e3e7f2fe9b5b2559937f235dc05257`.
 <!-- parity-status:baseline:end -->
 
 At that commit fe2o3 has a HIP runtime, explicit unsafe raw module and launch
-paths, kernel discovery,
-reachable MIR collection, a target-neutral kernel IR and verifier, a narrow
-elementwise `f32`/`f64` AMDGPU LLVM/HSACO emitter, artifact and proof schemas,
-bounded HSACO inspection/finalization, event-backed asynchronous transfer
-lifetimes, transactional artifact publication, and a Verus vecadd harness.
-These foundations are not yet connected into a general compiler, sealed
+paths, versioned kernel registration, reachable MIR collection, a canonical
+target-neutral kernel IR and verifier, an experimental verified-IR AMDGPU fill
+lowerer, a narrow production elementwise `f32`/`f64` LLVM/HSACO emitter,
+artifact and proof schemas, data-only artifact/launch validation, bounded HSACO
+inspection/finalization, event-backed asynchronous transfer lifetimes,
+transactional artifact publication, and a Verus vecadd harness. These
+foundations are not yet connected into a general production compiler, sealed
 validated loader, generated typed launch API, or proof-requiring build.
 
 This matrix compares capabilities and observable semantics, not identical
@@ -86,22 +87,28 @@ The detailed dependencies and exit criteria are in
 
 ## Evidence Behind Current Partial Status
 
-- Rows 12, 17, 20, 24, and 25: the manifest ABI model and target-neutral kernel
-  IR represent part of the required type, control-flow, arithmetic, and cast
-  semantics. Structured MIR lowering covers a tested vecadd-shaped subset, but
-  generated host packing and general AMDGPU lowering are absent.
-- Rows 32, 33, and 35: trusted kernel marker discovery, reachable helper
-  collection, helper-call translation, and multiple kernels are exercised, but
-  only the narrow production emitter reaches executable code objects.
+- Rows 12, 17, 20, 24, and 25: the manifest ABI model and canonical
+  target-neutral kernel IR represent part of the required type, control-flow,
+  arithmetic, and cast semantics. Structured MIR lowering covers a tested
+  vecadd-shaped subset, and the experimental G1 AMD path lowers a verified 1D
+  fill subset, but generated host packing and general AMDGPU lowering are
+  absent.
+- Rows 32, 33, and 35: `#[kernel]` emits strict V1 registration metadata tied to
+  a direct function pointer; reachable helper collection, helper-call
+  translation, and multiple kernels are exercised. This compiler contract is
+  not package authenticity, and only the narrow production emitter reaches
+  executable code objects end to end.
 - Rows 36-38 and 41-43: one-source builds, AMDGPU LLVM/HSACO sidecars, diagnostic
   dumps, bounded HSACO inspection, and project-local cleanup exist. The general
   pipeline, user-facing `inspect` command, and external-project orchestration do
   not.
-- Rows 48, 49, and 60: one-dimensional `DisjointSlice` and `ThreadIndex` APIs
-  and target-neutral launch-axis verification exist. They are not yet branded
-  to a validated artifact and physical launch.
-- Row 79: launch-contract and checked one-dimensional geometry models exist,
-  but no generated `#[launch_contract]` API or `PreparedLaunch<K>` exists.
+- Rows 48, 49, and 60: one-dimensional `DisjointSlice` and `ThreadIndex` APIs,
+  target-neutral launch-axis verification, and observed target/capability facts
+  exist. They are not yet branded to a physical launch.
+- Row 79: a data-only `PreparedLaunch<K>` checks kernel, context, device,
+  geometry, resources, and observed limits. Structural artifact validation is
+  non-generic and cannot mint `K`; no generated `#[launch_contract]`, module
+  handle, ABI binding, or launch authority exists.
 - Row 80: the current `launch!` macro is an explicit unsafe raw-ABI escape hatch
   with compile-fail coverage. It is not generated from a validated artifact
   contract.

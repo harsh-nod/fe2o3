@@ -9,15 +9,16 @@ For the full milestone plan, see [implementation-plan.md](implementation-plan.md
   MIR import scaffold can later back with Pliron operations.
 - A HIP runtime wrapper can allocate buffers, copy data, load HSACO modules, look
   up kernels, and launch them with packed parameter arrays.
-- `#[kernel]` marks device functions by renaming them to the reserved
-  `fe2o3_kernel_*` namespace for later rustc collection.
+- `#[kernel]` emits strict V1 registration metadata with a direct function
+  pointer. The collector rejects malformed, duplicate, inconsistent, or
+  unregistered prefix-only candidates transactionally.
 - `cargo-fe2o3 doctor` validates ROCm/HIP toolchain discovery.
 - `cargo-fe2o3 build` builds and loads `librustc_codegen_fe2o3.so`.
 - `rustc-codegen-fe2o3` wraps `rustc_codegen_llvm` for host codegen and detects
   kernel candidates in rustc codegen units.
-- The backend collects device-reachable MIR functions from `fe2o3_kernel_*`
-  roots, skips intrinsic placeholder bodies, rejects actual `std` reachability,
-  and dumps a deterministic collection summary.
+- The backend collects device-reachable MIR functions from validated
+  registrations, skips intrinsic placeholder bodies, rejects actual `std`
+  reachability, and dumps a deterministic collection summary.
 - `FE2O3_DUMP_MIR=1` imports the collected device MIR into a small
   Pliron-facing scaffold and prints function, block, statement, and terminator
   shape without changing the current HSACO emission path. The scaffold also
@@ -50,6 +51,10 @@ For the full milestone plan, see [implementation-plan.md](implementation-plan.md
     mutable output slice, in-place reads from that output slice, float literal
     constants, unary negation, and leaf-only copy stores.
   - `.ll -> .o -> .hsaco` using ROCm clang and `ld.lld`.
+- `dialect-amdgcn` contains a separate, non-production G1 path from a verified
+  kernel-IR module to deterministic AMDGPU LLVM for a bounded 1D fill subset.
+  Its golden output compiles and links to HSACO on `gfx1151`; unsupported IR
+  fails with located diagnostics.
 - `cargo-fe2o3 build/run` writes `.ll` and `.hsaco` artifacts under
   `target/fe2o3`; `fe2o3-copy` covers a leaf-only store,
   `fe2o3-downsample` covers a constant-stride input load,
@@ -102,9 +107,9 @@ For the full milestone plan, see [implementation-plan.md](implementation-plan.md
 
 ## Next Compiler Milestones
 
-1. Replace the temporary elementwise MIR recognizer/emitter with the first
-   Pliron import/lowering path:
-   `MIR -> Pliron dialect-mir -> AMDGPU LLVM dialect/export -> LLVM IR`.
+1. Integrate and extend the verified kernel-IR to AMDGPU lowering path until it
+   covers every current example, then disable the temporary elementwise
+   recognizer by default.
 2. Replace device stubs in `fe2o3-device` with lowering rules:
    - `thread::thread_idx_*` -> `llvm.amdgcn.workitem.id.*`
    - `thread::block_idx_*` -> `llvm.amdgcn.workgroup.id.*`

@@ -26,17 +26,18 @@ passthrough or compile plans yet.
 
 The wrapper also contains a private Linux primitive for the codegen-backend
 dynamic-library object. It applies the same final-component `O_NOFOLLOW` and
-nonblocking open policy, requires a non-empty regular file no larger than 512
-MiB, hashes exactly the opened object's bytes, and records device, inode, size,
-mtime, and ctime before and after hashing. It retains that opened descriptor
-and exposes only a validated `/proc/self/fd/<fd>` path, borrowed for no longer
-than the retained object.
+nonblocking source-open policy, requires a non-empty regular file no larger
+than 512 MiB, and copies exactly the source bytes into an anonymous memfd while
+hashing them. It rehashes the image, applies and verifies immutable
+write/grow/shrink/seal seals, drops the writable descriptor, and retains only a
+read-only `O_CLOEXEC` descriptor.
 
-The backend descriptor is opened with `O_CLOEXEC`. Its descriptor reference
-explicitly reports that rustc-child inheritance is blocked by close-on-exec.
-This increment does not clear that flag, spawn a compile, or load the library.
-Compile activation remains blocked until a later strategy can arrange and
-verify descriptor inheritance without reopening the original backend path.
+A prepared child command rejects pre-existing joined, split, underscore, and
+response-file backend selectors. It appends one descriptor-backed selector and
+uses a child-only `pre_exec` step to revalidate the image and seals before
+clearing `FD_CLOEXEC`. The prepared command borrows the pin and exposes no
+argument mutation, so the selector cannot be replaced after preparation.
+Compile activation and dynamic loading remain disabled.
 
 ## Platform and trust limits
 
@@ -46,20 +47,18 @@ they must not fall back to reopening the selected pathname. The current
 strategy is intended for native `rustc` binaries. Interpreter scripts can fail
 when the descriptor is close-on-exec and are outside this boundary.
 
-The descriptor prevents a later pathname replacement from redirecting
-execution. It does not make a writable inode immutable. The toolchain location
-must therefore be controlled against in-place writers. Parent-directory
-symlinks are resolved during the initial open, and a race before that open can
-choose which object is pinned. The SHA-256 becomes authentication evidence only
-after a future orchestration layer compares it with a trusted expected digest.
-
-The backend pin has the same mutable-inode limitation: descriptor retention
-prevents pathname substitution, but another writer can still alter the opened
-inode. Snapshot revalidation detects observable size, mode, mtime, or ctime
-changes; it does not make the object immutable or eliminate the interval
-between a future final check and dynamic loading.
+The rustc executable descriptor prevents pathname replacement from redirecting
+execution, but does not make its writable inode immutable. The backend memfd
+does provide an immutable snapshot after successful capture, so later source
+pathname replacement or inode mutation cannot change child-visible bytes.
+Parent-directory symlinks are resolved during each initial source open, and a
+race before that open can choose which object is measured. SHA-256 becomes
+authentication evidence only after an orchestration layer compares it with a
+trusted expected digest.
 
 ELF interpreters, transitive shared libraries of either rustc or the codegen
 backend, dynamic-loader search and loading behavior, procfs mount/identity
-semantics, and the kernel remain outside these primitives' boundary. In
-particular, pinning the backend object does not pin its shared dependencies.
+semantics, and the kernel remain outside these primitives' boundary. The
+backend descriptor may also remain visible to rustc descendants until an
+activation design closes or resets it. Pinning the backend object does not pin
+its shared dependencies.
