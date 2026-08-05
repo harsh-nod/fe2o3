@@ -21,17 +21,24 @@ never selected for ROCm compilation or GPU execution.
 
 ## Verus proof coverage
 
-Run the positive vecadd and fill proofs plus all expected-rejection mutations
-with an explicit Verus installation:
+Run the two positive vecadd and fill proof harnesses plus all twelve
+expected-rejection mutations with an explicit Verus installation:
 
 ```text
 VERUS=/absolute/path/to/verus scripts/ci-local.sh verus
 ```
 
 This lane requires Verus; an unavailable binary is a failure rather than a
-skip. It proves the source-level models under the documented
-`hardware_thread_id` contract. It does not establish that ordinary Rust, the
-compiler pipeline, HSACO, HIP, or the GPU refines those models.
+skip. The production `f32` vecadd and Verus expand the exact same control,
+index, guarded memory-access, and write body. The three real-body mutations
+require exactly one primary Verus error, one verification result reporting one
+error, and the expected diagnostic, failed source clause, and marker. The
+remaining mutations require their expected obligation marker and diagnostic.
+
+The lane proves source-level models under the documented thread-witness
+contracts. Verus uses a total arithmetic adapter for vecadd; it does not prove
+that production IEEE `f32` addition, ordinary Rust, the compiler pipeline,
+HSACO, HIP, or GPU execution refines that model.
 
 ## ROCm compile coverage
 
@@ -43,12 +50,15 @@ FE2O3_TARGET=gfx1151 scripts/ci-local.sh rocm-compile
 
 Use the target reported by `rocminfo` on the machine under test. Compilation
 does not execute a kernel. This lane also compiles the trusted-device marker
-fixtures: genuine and renamed dependencies must emit, while local lookalikes,
-the same-name unmarked external crate, local markers, and duplicate markers
-must fail closed. Rejected fixtures also preseed generated artifacts and require
-transactional invalidation of the complete artifact triplet. These markers
-identify compiler semantics; authenticating the package that provides them
-remains an artifact-provenance responsibility.
+fixtures. `#[kernel]` generates a typed `KernelMarkerV1` with deterministic
+marker symbol; public kernels expose the marker publicly but doc-hidden.
+Genuine and renamed dependencies must emit, while local lookalikes, the
+same-name unmarked external crate, local markers, and duplicate markers must
+fail closed. Rejected fixtures also preseed generated artifacts and require
+transactional invalidation of the complete artifact triplet. Markers identify
+compiler semantics; marker and executable authenticity plus full ABI semantics
+remain unsafe artifact-provenance and generated-binding responsibilities.
+
 The lane also compiles and inspects the hardened G1 fill code object, compiles
 the real three-slice vecadd through `kernel-ir-v1`, validates its exact ABI and
 bounds-control-flow LLVM shape, and checks that invalid selectors or

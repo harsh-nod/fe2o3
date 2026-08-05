@@ -18,20 +18,22 @@ partial, experimental, planned, and N/A rows. The supplemental audit also
 accounts for capabilities demonstrated elsewhere in the repository.
 
 The fe2o3 current-state column is based on commit
-`eddfc668e93e799180c179972d301446f52271a9`.
+`cecf0e1e86ef0dfaef3b9c9261bb9006abb62520`.
 <!-- parity-status:baseline:end -->
 
 At that commit fe2o3 has a HIP runtime, explicit unsafe raw module and launch
 paths, versioned kernel registration, reachable MIR collection, a canonical
 target-neutral kernel IR and verifier, opt-in end-to-end verified-IR AMDGPU fill
 and exact three-slice vecadd paths, a default narrow elementwise `f32`/`f64`
-LLVM/HSACO emitter, conditional region/effect analysis, artifact and proof
-schemas, exact loaded module/function authority, host argument-alias admission,
-bounded HSACO inspection/finalization, event-backed asynchronous transfer
-lifetimes, transactional artifact publication, and Verus vecadd and fill
-harnesses. These foundations are not yet connected into a general compiler,
-generated typed loader/launch API, authenticated proof-carrying artifact, or
-proof-requiring build.
+LLVM/HSACO emitter, fail-closed formal affine memory/race obligations for
+modeled effects, artifact and proof schemas, generated `KernelMarkerV1` types,
+exact loaded module/function authority, host argument-alias admission, a
+doc-hidden unsafe generated binding/loading/assembly SPI with sealed scoped
+launches, bounded HSACO inspection/finalization, event-backed asynchronous
+transfer lifetimes, transactional artifact publication, and Verus vecadd and
+fill harnesses. These foundations are not yet connected into a general
+compiler, compiler-generated user-facing typed loader/launch API, authenticated
+proof-carrying artifact, or proof-requiring build.
 
 This matrix compares capabilities and observable semantics, not identical
 vendor syntax. It is not a claim that either project is production-ready.
@@ -95,31 +97,47 @@ The detailed dependencies and exit criteria are in
   vecadd-shaped subset. The opt-in `kernel-ir-v1` backend now takes the exact
   fill and three-slice vecadd kernels through translation, verification,
   legalization, G1 AMD lowering, transactional publication, and hardware
-  execution, but generated host packing and general AMDGPU lowering are absent.
+  execution, but compiler-generated host packing and general AMDGPU lowering
+  are absent.
 - Rows 32, 33, and 35: `#[kernel]` emits strict V1 registration metadata tied to
-  a direct function pointer; reachable helper collection, helper-call
-  translation, and multiple kernels are exercised. This compiler contract is
-  not package authenticity. The default narrow emitter and opt-in exact fill
-  and vecadd paths reach executable code objects, but neither is a general
-  compiler.
+  a direct function pointer and a deterministic, doc-hidden typed
+  `KernelMarkerV1`; public kernels expose that marker publicly. Reachable helper
+  collection, helper-call translation, and multiple kernels are exercised.
+  This compiler contract authenticates neither the marker/executable
+  association nor full ABI semantics. The default narrow emitter and opt-in
+  exact fill and vecadd paths reach executable code objects, but neither is a
+  general compiler.
 - Rows 36-38 and 41-43: one-source builds, AMDGPU LLVM/HSACO sidecars, diagnostic
   dumps, bounded HSACO inspection, project-local cleanup, and the opt-in exact
   fill and vecadd paths exist. The general pipeline, user-facing `inspect`
   command, and external-project orchestration do not.
 - Rows 48, 49, and 60: one-dimensional `DisjointSlice` and `ThreadIndex` APIs,
   target-neutral launch-axis verification, and observed target/capability facts
-  exist. They are not yet branded to a physical launch.
+  exist. Kernel IR derives formal affine regions, bounds, runtime-alias, and
+  inter-invocation race obligations for modeled effects and fails closed on
+  unsupported effects. The launch extent and runtime parameter/allocation
+  mappings remain unauthenticated, and the device APIs are not yet branded to a
+  physical launch.
 - Row 79: `PreparedLaunch<K>` checks kernel, context, device, geometry,
   resources, and observed limits. `LoadedKernel<K>` owns the exact HIP module
   and function and accepts only a matching prepared authority. Host argument
   admission also reserves context-scoped ranges and rejects mutable aliasing,
-  but its opaque token has no safe launch operation. Structural artifact
-  validation still cannot authenticate executable semantics or mint `K`;
-  issuance and raw argument launch remain unsafe, and no generated
-  `#[launch_contract]` or safe ABI binding exists.
+  while generated read/write capabilities derive admission and packing from the
+  same typed buffer borrows. The doc-hidden unsafe SPI seals one admission,
+  parameter pack, and capability pack in `GeneratedAdmittedLaunch`; its scoped
+  operation retains those borrows and reservations through quiescence.
+  Structural validation still cannot authenticate executable semantics or the
+  complete ABI/effect association, assembly remains unsafe, and no generated
+  user-facing `#[launch_contract]`, typed loader, or typed launch API exists.
 - Row 80: the current `launch!` macro is an explicit unsafe raw-ABI escape hatch
-  with compile-fail coverage. It is not generated from a validated artifact
-  contract.
+  with compile-fail coverage. The sealed generated-code SPI has a safe scoped
+  launch only after unsafe association and assembly; it is not a user-facing
+  macro generated from an authenticated artifact contract.
+- Row 81 and supplemental row S03: scoped generated launch retains typed
+  resource borrows, loaded authority, alias admission, and packed parameters
+  through event completion or stronger stream quiescence. There is still no
+  compiler-generated user-facing typed asynchronous API or safe authenticated
+  artifact load, so row 81 remains Missing and S03 remains Partial.
 - Supplemental rows S01-S05, S14, and S15: the corresponding bounded models,
   parsers, lifetime types, target query, exact proof-evidence matching, and
   focused UI tests exist. Publication, compiler-refinement authentication, and
@@ -329,6 +347,12 @@ for a credible parity release even though they are not separate appendix rows.
 | S13 | LDS swizzles and matrix load/store helpers | AMD-equivalent | Missing | AMD-native layouts expose bank/alignment contracts and compose with proof-aware views | G6, G7 |
 | S14 | Target auto-detection and override | AMD-equivalent | Partial | Detect AMD architecture and features, accept explicit override, and record the resolved target in every payload | G0, G3 |
 | S15 | Compile-fail safety suite | Exact | Partial | UI tests cover launch brands, rank, index spaces, witness transfer, async lifetime, barrier lifecycle, and unsafe transitions | G0, G3, G5 |
+
+The current Verus lane has two positive harnesses and twelve
+expected-rejection mutation fixtures. The production vecadd and Verus expand
+the same control/index/guarded-memory/write body, but use different arithmetic
+adapters. The Verus adapter is a total model operation; it does not refine
+production IEEE `f32` addition, compiler lowering, HSACO, or GPU execution.
 
 ## Row Definition of Done
 

@@ -63,6 +63,12 @@ Safe ownership of resources used by asynchronous copies is documented in
   emitted by `#[kernel]`, collects device-reachable MIR, and emits HSACO
   sidecars. Registration identifies compiler semantics; it is not package or
   artifact authentication.
+- For a public kernel, `#[kernel]` emits a public, doc-hidden marker with the
+  deterministic symbol `__fe2o3_kernel_marker_<function>` and an unsafe
+  `KernelMarkerV1` implementation tied to the exact Rust function type and V1
+  registration. The marker does not authenticate an executable or establish
+  its full packed ABI and semantics; generated binding remains an unsafe
+  compiler/runtime boundary.
 - The default `legacy-v1` AMDGPU emitter supports the repository's `f32`/`f64`
   elementwise examples. It recognizes scalar float arguments and literals,
   read-only slice loads, `DisjointSlice<T>` or indexed mutable-slice stores,
@@ -97,11 +103,14 @@ example, copied results back, and compared them with CPU results.
   atomics. The IR has a bounded canonical V1 wire format. The G1
   `dialect-amdgcn` path lowers the verified 1D fill and vecadd subset to
   deterministic AMDGPU LLVM and is connected to the opt-in `kernel-ir-v1`
-  fill and vecadd paths above; it is not yet general or the default. Kernel IR memory
-  operations can also be summarized as bounded region effects and
-  cross-invocation race obligations. Those results are explicitly conditional
-  on untrusted caller-supplied provenance and invocation bindings and grant no
-  proof or launch authority.
+  fill and vecadd paths above; it is not yet general or the default. For its
+  modeled effects, Kernel IR derives formal allocation identities, affine byte
+  regions, bounds requirements, runtime-alias requirements, and
+  inter-invocation race obligations. Unsupported index widths, arithmetic,
+  calls, or memory effects make the analysis incomplete rather than silently
+  granting authority. Even a complete result is conditional on an explicit
+  launch extent; the extent and mappings from formal parameters to runtime
+  allocations remain unauthenticated and grant no proof or launch authority.
 - Versioned artifact manifests, ABI layouts, launch contracts, bounded
   containers, payload digests, native-kernel selection, and proof records have
   canonical encoders, decoders, and adversarial tests.
@@ -112,11 +121,14 @@ example, copied results back, and compared them with CPU results.
   `LoadedKernel<K>` authority that owns the exact HIP module and function and
   can bind only matching prepared launches. Argument admission reserves
   context-scoped allocation ranges and rejects overlapping mutable or
-  mutable/shared aliases before producing an opaque admitted-launch token.
-  Authority issuance remains a crate-private unsafe boundary because
-  structural artifact validation cannot authenticate executable semantics or
-  mint the generated Rust marker and ABI; the admitted token has no safe launch
-  operation, and launch with caller-packed arguments remains explicitly unsafe.
+  mutable/shared aliases. A doc-hidden generated-code SPI can unsafely bind a
+  generated marker, load it, construct read-only and writable typed device-slice
+  capabilities, and seal one exact admission, argument pack, and capability
+  pack into `GeneratedAdmittedLaunch`. Its safe scoped launch retains the typed
+  buffer borrows, alias reservation, loaded authority, and packed parameters
+  until HIP completion or a stronger stream-quiescence fallback. Marker and
+  executable authenticity, the complete ABI/effect association, and assembly
+  of the sealed launch remain explicit unsafe obligations.
 - Compiler artifact publication is transactional and generation-owned. Build
   attempt and canonical rustc invocation descriptors are versioned and
   bounded.
@@ -127,13 +139,16 @@ example, copied results back, and compared them with CPU results.
 - `examples/regression-manifest-v1.txt` is the authoritative package/artifact
   inventory for ordinary checks, ROCm compilation, and GPU smoke tests.
 - The Verus vecadd and fill harnesses prove bounded source-model properties
-  under documented assumptions. The vecadd spike mechanically shares one
-  executable `u32` CPU/reference operation body between ordinary rustc and
-  Verus, but substitutes modeled domain/index types and is not the separate
-  `f32` GPU kernel. Positive and deliberately invalid proof fixtures run in a
-  required CI lane. Proof-record matching rejects incomplete or mismatched
-  identities, but the records are currently synthetic evidence rather than
-  authenticated compiler-refinement evidence.
+  under documented assumptions. The exact control, index, guarded memory
+  access, and write body of the production `f32` vecadd kernel is mechanically
+  shared with Verus through explicit thread and arithmetic adapters. Two
+  positive harnesses and twelve expected-rejection mutations run in the
+  required proof lane; the three real-body mutations additionally require one
+  exact primary diagnostic and failed source clause. Verus uses a total model
+  arithmetic adapter and does not prove that production IEEE `f32` addition,
+  compiler output, HSACO, or GPU execution refines that model. Proof-record
+  matching rejects incomplete or mismatched identities, but the records remain
+  synthetic evidence rather than authenticated compiler-refinement evidence.
 
 ### Not yet integrated
 
@@ -141,10 +156,11 @@ example, copied results back, and compared them with CPU results.
   accepts only the exact fill and vecadd shapes, and the elementwise recognizer
   remains the default emitter.
 - Artifact manifests, descriptor finalization, observed targets, and proof
-  records do not yet produce a generated typed loader and launch API.
-  `LoadedKernel<K>` establishes module/function ownership and exact authority
-  matching, but marker issuance is crate-private and unsafe, raw argument
-  packing is unverified, and no safe launch permission is minted.
+  records do not yet produce a compiler-generated, user-facing typed module,
+  loader, or launch API. The doc-hidden unsafe generated-code SPI and sealed
+  `GeneratedAdmittedLaunch` are implementation foundations, not a safe
+  authenticated artifact load: marker/executable authenticity and the complete
+  ABI and executable-effect association still enter through unsafe code.
 - `cargo fe2o3 verify` and `build --require-proof` are roadmap commands. The
   current required Verus CI lane is invoked separately and does not prove the
   ordinary Rust function, compiler, ROCm, driver, or machine-code refinement.
