@@ -2,6 +2,7 @@
 #![doc = include_str!("../README.md")]
 
 mod abi;
+mod decode;
 mod encode;
 mod error;
 mod identities;
@@ -12,7 +13,7 @@ pub use abi::{
     ScalarType,
 };
 pub use encode::{MANIFEST_MAGIC, MANIFEST_VERSION, MAX_MANIFEST_BYTES};
-pub use error::ValidationError;
+pub use error::{DecodeError, ValidationError};
 pub use identities::{
     BlockSize, Capability, CodeObjectFormat, CodeObjectIdentity, CompilerIdentity, DigestBytes,
     Dimensions, Endianness, IdentityText, LaunchContract, MAX_IDENTITY_TEXT_BYTES, MAX_NAME_BYTES,

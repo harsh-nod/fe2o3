@@ -57,7 +57,7 @@ not evidence that referenced code is authentic or even present.
 Payload bytes, proof records, host launch integration, and runtime loading
 policy remain outside this model layer.
 
-## V1 encoding
+## V1 wire format
 
 `ManifestV1::to_bytes` emits a canonical little-endian binary representation.
 It starts with the eight bytes `FE2O3AM\0`, a `u16` version (`1`), and a reserved
@@ -67,3 +67,10 @@ zero `u16` flags field. Strings use a `u16` byte length, lists use explicit
 Records occur in model order: compiler, producer, target, canonically sorted
 code objects, then canonically sorted kernels with launch and ordered ABI
 fields. Encoding does not authenticate identities or payloads.
+
+`ManifestV1::from_bytes` treats every byte as untrusted and returns a manifest
+only after wire and model validation. It rejects inputs larger than 4 MiB,
+truncation, trailing bytes, noncanonical order, unsupported versions or flags,
+unknown tags, and invalid zero or oversized counts before allocation. A
+successfully decoded manifest is structurally and semantically validated; it
+is not authenticated and is not bound to executable payload bytes.
