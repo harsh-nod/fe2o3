@@ -37,10 +37,18 @@ the selected algorithm; it does not establish who produced those bytes.
   bounded to 1 MiB before device-specific limits are applied. Fields are
   aligned, ordered, non-overlapping, in bounds, and compatible with the
   selected pointer width.
+- Every logical argument carries compiler-produced identities for its fully
+  monomorphized Rust type and rustc-reported ABI layout. These are opaque,
+  versioned-domain identities: the model preserves and compares them but does
+  not calculate or authenticate them.
 - Scalar, pointer, and slice records have consistent size, mutability, access,
-  and address-space semantics. Immutable and constant references cannot grant
-  write access. Standalone reference fields must match one supported pointer
-  width; an `AbiLayout` binds them to the target's exact width.
+  address-space, ownership, and alias semantics. Ordinary shared borrows are
+  immutable and read-only; shared atomic borrows explicitly admit atomic
+  interior mutation and require the kernel's `Atomics` capability. Unique
+  borrows are mutable and exclusive; raw pointers carry no alias guarantee.
+  Constant references cannot grant write access. Standalone reference fields
+  must match one supported pointer width; an `AbiLayout` binds them to the
+  target's exact width.
 
 `AbiKind::Slice` is one logical field in the ordered ABI. Its physical launch
 representation is exactly pointer followed by length, with total size twice
@@ -111,6 +119,25 @@ whole canonical record, may create a stronger private type. Even that
 authenticated source-level evidence would still trust Verus, the solver, model
 axioms, proof erasure, semantic hashing, the compiler stack, and the runtime; it
 would not by itself prove that emitted AMDGPU machine code refines the source.
+
+## Native kernel selection
+
+`ArtifactContainerV1::select_native_kernel` selects only by the stable
+manifest-owned kernel ID and returns a borrowed token tying the exact kernel,
+target, code-object identity, and digest-validated native payload to the same
+container lifetime. Relocatable, bitcode, and SPIR-V payloads are rejected by
+this direct-load path. Selection does not establish device-target or generated
+host-ABI compatibility; the runtime must check both before loading or launch.
+
+`SelectedNativeKernel::check_declared_target` compares exact target triple,
+architecture, pointer width, and endianness declarations, plus every capability
+declared by the selected kernel. Candidate capabilities may be a superset. This
+is a pure comparison against caller-supplied data. It does not parse the
+payload's embedded target ID, discover hardware, or implement AMD target-feature
+compatibility rules such as XNACK and SRAMECC states. The HIP runtime must query
+its device, validate the payload metadata, and keep any stronger device-bound
+token private. A caller-constructed `TargetIdentity` cannot authorize safe
+loading, ABI matching, or launch.
 
 ## V1 wire format
 

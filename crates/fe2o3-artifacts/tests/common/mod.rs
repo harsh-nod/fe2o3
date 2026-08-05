@@ -1,8 +1,8 @@
 use fe2o3_artifacts::{
-    AbiField, AbiKind, AbiLayout, Access, AddressSpace, BlockSize, Capability, CodeObjectFormat,
-    CodeObjectIdentity, CompilerIdentity, DigestBytes, Dimensions, Endianness, IdentityText,
-    KernelEntry, LaunchContract, ManifestV1, Mutability, Name, PointerWidth, ScalarType,
-    TargetIdentity, ToolIdentity,
+    AbiField, AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership, BlockSize,
+    Capability, CodeObjectFormat, CodeObjectIdentity, CompilerIdentity, DigestBytes, Dimensions,
+    Endianness, IdentityText, KernelEntry, LaunchContract, ManifestV1, Mutability, Name,
+    PointerWidth, ScalarType, TargetIdentity, ToolIdentity, TypeIdentity,
 };
 
 pub fn text(value: &str) -> IdentityText {
@@ -43,6 +43,9 @@ fn abi(pointer_width: PointerWidth) -> AbiLayout {
                 Mutability::Immutable,
                 Access::ByValue,
                 AddressSpace::Value,
+                TypeIdentity::new(digest(0xa0), digest(0xa1)),
+                ArgumentOwnership::ByValue,
+                AliasClass::Value,
             )
             .unwrap(),
             AbiField::new(
@@ -57,6 +60,9 @@ fn abi(pointer_width: PointerWidth) -> AbiLayout {
                 Mutability::Immutable,
                 Access::ReadOnly,
                 AddressSpace::Global,
+                TypeIdentity::new(digest(0xb0), digest(0xb1)),
+                ArgumentOwnership::SharedBorrow,
+                AliasClass::SharedReadOnly,
             )
             .unwrap(),
             AbiField::new(
@@ -71,6 +77,9 @@ fn abi(pointer_width: PointerWidth) -> AbiLayout {
                 Mutability::Mutable,
                 Access::ReadWrite,
                 AddressSpace::Global,
+                TypeIdentity::new(digest(0xc0), digest(0xc1)),
+                ArgumentOwnership::UniqueBorrow,
+                AliasClass::Exclusive,
             )
             .unwrap(),
         ],

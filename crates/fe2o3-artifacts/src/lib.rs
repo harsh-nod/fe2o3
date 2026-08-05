@@ -15,10 +15,11 @@ mod manifest;
 mod proof;
 mod proof_decode;
 mod proof_encode;
+mod selection;
 
 pub use abi::{
-    AbiField, AbiKind, AbiLayout, Access, AddressSpace, MAX_ABI_BYTES, MAX_ABI_FIELDS, Mutability,
-    ScalarType,
+    AbiField, AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership,
+    MAX_ABI_BYTES, MAX_ABI_FIELDS, Mutability, ScalarType, TypeIdentity,
 };
 pub use binding::{
     MatchedProofEvidenceV1, PROOF_IDENTITY_VERSION, ProofMatchError, ProofMatchPolicy,
@@ -50,3 +51,4 @@ pub use proof::{
 };
 pub use proof_decode::ProofDecodeError;
 pub use proof_encode::{MAX_PROOF_RECORD_BYTES, PROOF_RECORD_MAGIC, PROOF_RECORD_VERSION};
+pub use selection::{DeclaredTargetMismatch, KernelSelectionError, SelectedNativeKernel};

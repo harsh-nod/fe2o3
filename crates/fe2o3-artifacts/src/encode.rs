@@ -1,7 +1,7 @@
 use crate::{
-    AbiKind, AbiLayout, Access, AddressSpace, BlockSize, Capability, CodeObjectFormat, DigestBytes,
-    Dimensions, Endianness, IdentityText, LaunchContract, ManifestV1, Mutability, Name,
-    PointerWidth, ScalarType,
+    AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership, BlockSize, Capability,
+    CodeObjectFormat, DigestBytes, Dimensions, Endianness, IdentityText, LaunchContract,
+    ManifestV1, Mutability, Name, PointerWidth, ScalarType,
 };
 
 pub const MANIFEST_MAGIC: [u8; 8] = *b"FE2O3AM\0";
@@ -162,6 +162,10 @@ impl Writer {
             self.u8(mutability_tag(field.mutability()));
             self.u8(access_tag(field.access()));
             self.u8(address_space_tag(field.address_space()));
+            self.digest(field.type_identity().rust_type());
+            self.digest(field.type_identity().layout());
+            self.u8(ownership_tag(field.ownership()));
+            self.u8(alias_class_tag(field.alias_class()));
         }
     }
 }
@@ -245,5 +249,24 @@ pub(crate) const fn address_space_tag(value: AddressSpace) -> u8 {
         AddressSpace::Workgroup => 3,
         AddressSpace::Private => 4,
         AddressSpace::Generic => 5,
+    }
+}
+
+const fn ownership_tag(value: ArgumentOwnership) -> u8 {
+    match value {
+        ArgumentOwnership::ByValue => 0,
+        ArgumentOwnership::SharedBorrow => 1,
+        ArgumentOwnership::UniqueBorrow => 2,
+        ArgumentOwnership::RawPointer => 3,
+    }
+}
+
+const fn alias_class_tag(value: AliasClass) -> u8 {
+    match value {
+        AliasClass::Value => 0,
+        AliasClass::SharedReadOnly => 1,
+        AliasClass::Exclusive => 2,
+        AliasClass::Unrestricted => 3,
+        AliasClass::SharedAtomic => 4,
     }
 }

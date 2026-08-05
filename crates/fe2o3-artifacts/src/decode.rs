@@ -1,10 +1,10 @@
 use crate::{
-    AbiField, AbiKind, AbiLayout, Access, AddressSpace, BlockSize, Capability, CodeObjectFormat,
-    CodeObjectIdentity, CompilerIdentity, DecodeError, DigestBytes, Dimensions, Endianness,
-    IdentityText, KernelEntry, LaunchContract, MANIFEST_MAGIC, MANIFEST_VERSION, MAX_ABI_FIELDS,
-    MAX_CODE_OBJECTS, MAX_IDENTITY_TEXT_BYTES, MAX_KERNELS, MAX_MANIFEST_BYTES, MAX_NAME_BYTES,
-    ManifestV1, Mutability, Name, PointerWidth, ScalarType, TargetIdentity, ToolIdentity,
-    ValidationError,
+    AbiField, AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership, BlockSize,
+    Capability, CodeObjectFormat, CodeObjectIdentity, CompilerIdentity, DecodeError, DigestBytes,
+    Dimensions, Endianness, IdentityText, KernelEntry, LaunchContract, MANIFEST_MAGIC,
+    MANIFEST_VERSION, MAX_ABI_FIELDS, MAX_CODE_OBJECTS, MAX_IDENTITY_TEXT_BYTES, MAX_KERNELS,
+    MAX_MANIFEST_BYTES, MAX_NAME_BYTES, ManifestV1, Mutability, Name, PointerWidth, ScalarType,
+    TargetIdentity, ToolIdentity, TypeIdentity, ValidationError,
 };
 
 const CAPABILITY_COUNT: usize = 11;
@@ -283,6 +283,9 @@ impl<'a> Reader<'a> {
                 self.mutability()?,
                 self.access()?,
                 self.address_space()?,
+                TypeIdentity::new(self.digest()?, self.digest()?),
+                self.argument_ownership()?,
+                self.alias_class()?,
             )?);
         }
         Ok(AbiLayout::new(size, alignment, pointer_width, fields)?)
@@ -342,6 +345,33 @@ impl<'a> Reader<'a> {
             5 => Ok(AddressSpace::Generic),
             tag => Err(DecodeError::UnknownTag {
                 kind: "address space",
+                tag,
+            }),
+        }
+    }
+
+    fn argument_ownership(&mut self) -> Result<ArgumentOwnership, DecodeError> {
+        match self.u8()? {
+            0 => Ok(ArgumentOwnership::ByValue),
+            1 => Ok(ArgumentOwnership::SharedBorrow),
+            2 => Ok(ArgumentOwnership::UniqueBorrow),
+            3 => Ok(ArgumentOwnership::RawPointer),
+            tag => Err(DecodeError::UnknownTag {
+                kind: "argument ownership",
+                tag,
+            }),
+        }
+    }
+
+    fn alias_class(&mut self) -> Result<AliasClass, DecodeError> {
+        match self.u8()? {
+            0 => Ok(AliasClass::Value),
+            1 => Ok(AliasClass::SharedReadOnly),
+            2 => Ok(AliasClass::Exclusive),
+            3 => Ok(AliasClass::Unrestricted),
+            4 => Ok(AliasClass::SharedAtomic),
+            tag => Err(DecodeError::UnknownTag {
+                kind: "alias class",
                 tag,
             }),
         }
