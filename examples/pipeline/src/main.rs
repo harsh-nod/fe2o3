@@ -37,7 +37,11 @@ fn main() -> fe2o3_core::Result<()> {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."));
 
-    let scale_module = context.load_module_from_file(hsaco_dir.join("scale_stage.hsaco"))?;
+    // SAFETY: `scale_stage.hsaco` is compiler-generated for the `scale_stage`
+    // kernel here. The subsequent launch remains independently unsafe.
+    // This example requires that output to target this device and contain no init/fini kernels.
+    let scale_module =
+        unsafe { context.load_module_from_file_unchecked(hsaco_dir.join("scale_stage.hsaco")) }?;
     // SAFETY: `scale_stage` expects an f32 and two f32 slice ABIs; `x_dev`
     // and `tmp_dev` are distinct N-element allocations kept alive until sync.
     unsafe {
@@ -50,7 +54,11 @@ fn main() -> fe2o3_core::Result<()> {
         }
     }?;
 
-    let bias_module = context.load_module_from_file(hsaco_dir.join("bias_stage.hsaco"))?;
+    // SAFETY: `bias_stage.hsaco` is compiler-generated for the `bias_stage`
+    // kernel here. The subsequent launch remains independently unsafe.
+    // This example requires that output to target this device and contain no init/fini kernels.
+    let bias_module =
+        unsafe { context.load_module_from_file_unchecked(hsaco_dir.join("bias_stage.hsaco")) }?;
     // SAFETY: `bias_stage` expects a slice, f32, and writable slice ABI;
     // same-stream ordering initializes N tmp elements before the distinct
     // N-element output is written, and both allocations live through sync.

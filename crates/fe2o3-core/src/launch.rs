@@ -92,9 +92,10 @@ impl KernelParams {
 /// the stream's context and that `params` exactly matches the function's ABI in
 /// field count, order, type, size, and alignment. All device addresses reachable
 /// through `params` must be valid for the kernel's accesses and remain alive
-/// until the stream completes the launch. The caller must also uphold the
-/// kernel's aliasing and synchronization requirements and provide valid grid,
-/// block, and shared-memory dimensions in `config`.
+/// until the stream completes the launch. The module that owns `function` must
+/// also remain loaded until that completion. The caller must uphold the kernel's
+/// aliasing and synchronization requirements and provide valid grid, block, and
+/// shared-memory dimensions in `config`.
 pub unsafe fn launch_kernel_on_stream(
     function: &GpuFunction,
     config: LaunchConfig,

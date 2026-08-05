@@ -29,7 +29,11 @@ fn main() -> fe2o3_core::Result<()> {
     let hsaco_dir = std::env::var_os("FE2O3_HSACO_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."));
-    let module = context.load_module_from_file(hsaco_dir.join("stencil.hsaco"))?;
+    // SAFETY: `stencil.hsaco` is compiler-generated for the `stencil` kernel
+    // in this exact example. The subsequent launch remains independently unsafe.
+    // This example requires that output to target this device and contain no init/fini kernels.
+    let module =
+        unsafe { context.load_module_from_file_unchecked(hsaco_dir.join("stencil.hsaco")) }?;
 
     // SAFETY: `stencil` expects two f32 slice ABIs; the buffers are distinct
     // N-element allocations that live through sync, and the kernel guards both

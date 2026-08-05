@@ -7,9 +7,11 @@ pub use fe2o3_core::{KernelParams, LaunchConfig};
 /// The caller must ensure that the named function's ABI exactly matches the
 /// argument kinds, order, and Rust types supplied here. Every device pointer
 /// must be valid for the kernel's accesses and remain alive until the stream
-/// has completed the launch. Mutable arguments must satisfy the kernel's
-/// aliasing and synchronization requirements, and the launch configuration
-/// must satisfy the kernel's grid, block, and shared-memory requirements.
+/// has completed the launch. The supplied module must remain loaded until that
+/// completion; a temporary module expression does not satisfy this requirement.
+/// Mutable arguments must satisfy the kernel's aliasing and synchronization
+/// requirements, and the launch configuration must satisfy the kernel's grid,
+/// block, and shared-memory requirements.
 ///
 /// An unguarded launch does not compile:
 ///

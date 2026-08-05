@@ -24,7 +24,13 @@ fn main() -> fe2o3_core::Result<()> {
     let hsaco_dir = std::env::var_os("FE2O3_HSACO_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."));
-    let module = context.load_module_from_file(hsaco_dir.join("copy.hsaco"))?;
+    // SAFETY: `copy.hsaco` is compiler-generated for the `copy` kernel in this
+    // exact example. The subsequent launch remains independently unsafe.
+    // This example requires that output to target this device and contain no init/fini kernels.
+    let module = {
+        let image = std::fs::read(hsaco_dir.join("copy.hsaco"))?;
+        unsafe { context.load_module_from_bytes_unchecked(&image) }?
+    };
 
     // SAFETY: `copy` expects read-only and writable f32 slice ABIs; `x_dev`
     // and `out_dev` are distinct N-element allocations kept alive until sync.

@@ -27,7 +27,11 @@ fn main() -> fe2o3_core::Result<()> {
     let hsaco_dir = std::env::var_os("FE2O3_HSACO_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."));
-    let module = context.load_module_from_file(hsaco_dir.join("downsample.hsaco"))?;
+    // SAFETY: `downsample.hsaco` is compiler-generated for the `downsample`
+    // kernel here. The subsequent launch remains independently unsafe.
+    // This example requires that output to target this device and contain no init/fini kernels.
+    let module =
+        unsafe { context.load_module_from_file_unchecked(hsaco_dir.join("downsample.hsaco")) }?;
 
     // SAFETY: `downsample` expects f32 slice ABIs; `x_dev` has 2 * N readable
     // elements and `out_dev` has N disjoint writable elements through sync.

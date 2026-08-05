@@ -28,7 +28,12 @@ fn main() -> fe2o3_core::Result<()> {
     let hsaco_dir = std::env::var_os("FE2O3_HSACO_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."));
-    let module = context.load_module_from_file(hsaco_dir.join("raw_parenthesized_sub.hsaco"))?;
+    // SAFETY: `raw_parenthesized_sub.hsaco` is compiler-generated for the
+    // identically named kernel in this example. The subsequent launch remains unsafe.
+    // This example requires that output to target this device and contain no init/fini kernels.
+    let module = unsafe {
+        context.load_module_from_file_unchecked(hsaco_dir.join("raw_parenthesized_sub.hsaco"))
+    }?;
 
     // SAFETY: `raw_parenthesized_sub` expects two f32 slice ABIs; the distinct
     // buffers have N elements and live through sync, and every thread's
