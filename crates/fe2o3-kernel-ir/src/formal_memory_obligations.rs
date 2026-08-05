@@ -932,7 +932,7 @@ fn derive_alias_requirements(accesses: &[FormalMemoryAccess]) -> Vec<RuntimeAlia
     let mut requirements = Vec::new();
     for (left_index, (left, left_envelope)) in entries.iter().enumerate() {
         for (right, right_envelope) in &entries[left_index + 1..] {
-            if left_envelope.address_space == right_envelope.address_space
+            if address_spaces_may_alias(left_envelope.address_space, right_envelope.address_space)
                 && (left_envelope.writes || right_envelope.writes)
             {
                 requirements.push(RuntimeAliasRequirement {
@@ -945,6 +945,10 @@ fn derive_alias_requirements(accesses: &[FormalMemoryAccess]) -> Vec<RuntimeAlia
         }
     }
     requirements
+}
+
+fn address_spaces_may_alias(left: AddressSpace, right: AddressSpace) -> bool {
+    left == right || matches!(left, AddressSpace::Generic) || matches!(right, AddressSpace::Generic)
 }
 
 fn derive_inter_invocation_conflicts(

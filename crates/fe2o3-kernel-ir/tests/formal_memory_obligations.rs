@@ -542,6 +542,42 @@ fn shifted_formal_ranges_still_require_runtime_alias_discharge() {
     assert_eq!(requirement.right_accessed_bytes().end_exclusive(), 404);
 }
 
+fn generic_and_concrete_writes(concrete: AddressSpace) -> Module {
+    let generic_pointer = Type::pointer(Type::F32, AddressSpace::Generic, AccessMode::ReadWrite);
+    let concrete_pointer = Type::pointer(Type::F32, concrete, AccessMode::ReadWrite);
+    module_with_kernel(
+        vec![generic_pointer, concrete_pointer, Type::F32],
+        vec![
+            Operation::new(
+                vec![],
+                OperationKind::Store {
+                    pointer: ValueId(0),
+                    value: ValueId(2),
+                    access: MemoryAccess::new(AddressSpace::Generic, 4),
+                },
+            ),
+            Operation::new(
+                vec![],
+                OperationKind::Store {
+                    pointer: ValueId(1),
+                    value: ValueId(2),
+                    access: MemoryAccess::new(concrete, 4),
+                },
+            ),
+        ],
+        dynamic_1d(),
+    )
+}
+
+#[test]
+fn generic_parameters_require_alias_discharge_against_concrete_spaces() {
+    for concrete in [AddressSpace::Global, AddressSpace::Workgroup] {
+        let analysis = analyze(&generic_and_concrete_writes(concrete), 1);
+        assert!(analysis.is_complete());
+        assert_eq!(analysis.obligations().runtime_alias_requirements().len(), 1);
+    }
+}
+
 #[test]
 fn bounds_requirement_exposes_an_out_of_bounds_runtime_extent() {
     let module = exact_fill_module();
