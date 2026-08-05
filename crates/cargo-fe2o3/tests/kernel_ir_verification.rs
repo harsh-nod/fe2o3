@@ -17,6 +17,7 @@ fn build(workspace: &Path, package: &str, verify: bool) -> Output {
 #[ignore = "requires a working ROCm toolchain"]
 fn verification_gate_accepts_rejects_and_remains_opt_in() {
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let artifact_dir = workspace.join("target/fe2o3");
 
     let supported = build(&workspace, "fe2o3-vecadd", true);
     let supported_stderr = String::from_utf8_lossy(&supported.stderr);
@@ -41,7 +42,8 @@ fn verification_gate_accepts_rejects_and_remains_opt_in() {
         "unsupported MIR unexpectedly built"
     );
     assert!(
-        unsupported_stderr.contains("error: [rustc-codegen-fe2o3] MIR kernel IR analysis failed"),
+        unsupported_stderr
+            .contains("device artifact preflight failed: MIR kernel IR analysis failed"),
         "missing rustc fatal diagnostic:\n{unsupported_stderr}"
     );
     assert!(
@@ -53,6 +55,12 @@ fn verification_gate_accepts_rejects_and_remains_opt_in() {
         !unsupported_stderr.contains("emitted negate"),
         "legacy emission ran after failed verification:\n{unsupported_stderr}"
     );
+    for extension in ["ll", "o", "hsaco"] {
+        assert!(
+            !artifact_dir.join(format!("negate.{extension}")).exists(),
+            "rejected preflight left negate.{extension} executable state"
+        );
+    }
 
     let legacy = build(&workspace, "fe2o3-negate", false);
     let legacy_stderr = String::from_utf8_lossy(&legacy.stderr);

@@ -10,6 +10,7 @@ extern crate rustc_middle;
 extern crate rustc_session;
 
 mod amdgpu_llvm;
+mod artifact_transaction;
 mod collector;
 mod kernel_ir_lowering;
 mod mir_import;
@@ -99,9 +100,28 @@ impl CodegenBackend for Fe2o3CodegenBackend {
         with_no_trimmed_paths!({
             let mono_partitions = tcx.collect_and_partition_mono_items(());
             let kernel_count = collector::count_kernels_in_cgus(tcx, mono_partitions.codegen_units);
+            let crate_name = tcx.crate_name(rustc_hir::def_id::LOCAL_CRATE);
+            let output_dir = match managed_artifact_output(&self.config, kernel_count) {
+                Ok(output_dir) => output_dir,
+                Err(()) => tcx.dcx().fatal(format!(
+                    "[rustc-codegen-fe2o3] {HSACO_DIR_ENV} must name a managed artifact directory when compiling kernels"
+                )),
+            };
+            let local_source = tcx
+                .sess
+                .local_crate_source_file()
+                .and_then(|source| source.local_path().map(Path::to_path_buf));
+            let producer = match artifact_transaction::ProducerIdentity::from_codegen(
+                crate_name.as_str(),
+                local_source.as_deref(),
+            ) {
+                Ok(producer) => producer,
+                Err(error) => tcx.dcx().fatal(format!(
+                    "[rustc-codegen-fe2o3] invalid local artifact producer: {error}"
+                )),
+            };
 
             if self.config.verbose || kernel_count > 0 {
-                let crate_name = tcx.crate_name(rustc_hir::def_id::LOCAL_CRATE);
                 eprintln!(
                     "[rustc-codegen-fe2o3] crate `{crate_name}`: {} CGU(s), {kernel_count} kernel candidate(s), target {}",
                     mono_partitions.codegen_units.len(),
@@ -110,43 +130,47 @@ impl CodegenBackend for Fe2o3CodegenBackend {
             }
 
             if kernel_count > 0 {
-                let output_dir =
-                    self.config.hsaco_output_dir.clone().unwrap_or_else(|| {
-                        env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-                    });
-                let collection = collector::collect_device_functions(
-                    tcx,
-                    mono_partitions.codegen_units,
-                    self.config.verbose,
-                );
-                collector::dump_device_functions(tcx, &collection.functions);
-                let mir_module = mir_import::import_collection(tcx, &collection);
-                match run_optional_kernel_ir_analysis(self.config.verify_kernel_ir, || {
-                    kernel_ir_lowering::translate_and_verify(&mir_module)
-                }) {
-                    Ok(Some(module)) => eprintln!(
-                        "[rustc-codegen-fe2o3] verified MIR kernel IR analysis: {} kernel(s), {} function(s)",
-                        module.kernels.len(),
-                        module.functions.len()
-                    ),
-                    Ok(None) => {}
-                    Err(errors) => tcx.dcx().fatal(format!(
-                        "[rustc-codegen-fe2o3] MIR kernel IR analysis failed: {errors}"
-                    )),
-                }
-                let dialect_records = mir_module.dialect_records();
-                let lowering_plan = record_lowering::plan_from_records(&dialect_records);
-                if self.config.dump_mir {
-                    eprintln!("{}", mir_module.summary());
-                    eprintln!("{}", lowering_plan.summary());
-                }
-
-                match amdgpu_llvm::emit_collection(
-                    tcx,
-                    &collection,
-                    Some(&lowering_plan),
-                    &output_dir,
+                let output_dir = output_dir.expect("kernel output was required above");
+                match amdgpu_llvm::emit_collection_after_preflight(
+                    &producer,
+                    output_dir,
                     &self.config.target,
+                    || {
+                        let collection = collector::collect_device_functions(
+                            tcx,
+                            mono_partitions.codegen_units,
+                            self.config.verbose,
+                        )
+                        .map_err(|error| {
+                            amdgpu_llvm::EmitError::Preflight {
+                                reason: error.to_string(),
+                            }
+                        })?;
+                        collector::dump_device_functions(tcx, &collection.functions);
+                        let mir_module = mir_import::import_collection(tcx, &collection);
+                        match run_optional_kernel_ir_analysis(self.config.verify_kernel_ir, || {
+                            kernel_ir_lowering::translate_and_verify(&mir_module)
+                        }) {
+                            Ok(Some(module)) => eprintln!(
+                                "[rustc-codegen-fe2o3] verified MIR kernel IR analysis: {} kernel(s), {} function(s)",
+                                module.kernels.len(),
+                                module.functions.len()
+                            ),
+                            Ok(None) => {}
+                            Err(errors) => {
+                                return Err(amdgpu_llvm::EmitError::Preflight {
+                                    reason: format!("MIR kernel IR analysis failed: {errors}"),
+                                });
+                            }
+                        }
+                        let dialect_records = mir_module.dialect_records();
+                        let lowering_plan = record_lowering::plan_from_records(&dialect_records);
+                        if self.config.dump_mir {
+                            eprintln!("{}", mir_module.summary());
+                            eprintln!("{}", lowering_plan.summary());
+                        }
+                        amdgpu_llvm::prepare_collection(tcx, &collection, Some(&lowering_plan))
+                    },
                 ) {
                     Ok(artifacts) => {
                         for artifact in artifacts {
@@ -163,6 +187,20 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             "[rustc-codegen-fe2o3] device codegen failed: {error}"
                         ));
                     }
+                }
+            } else if let Some(output_dir) = output_dir {
+                let collection = collector::CollectionResult::default();
+                if let Err(error) = amdgpu_llvm::emit_collection(
+                    tcx,
+                    &collection,
+                    &producer,
+                    None,
+                    output_dir,
+                    &self.config.target,
+                ) {
+                    tcx.dcx().fatal(format!(
+                        "[rustc-codegen-fe2o3] zero-kernel artifact reconciliation failed: {error}"
+                    ));
                 }
             }
 
@@ -492,6 +530,18 @@ fn env_flag(name: &str) -> bool {
     )
 }
 
+fn managed_artifact_output(
+    config: &BackendConfig,
+    kernel_count: usize,
+) -> Result<Option<&Path>, ()> {
+    match config.hsaco_output_dir.as_deref() {
+        Some(path) if !path.as_os_str().is_empty() => Ok(Some(path)),
+        Some(_) => Err(()),
+        None if kernel_count == 0 => Ok(None),
+        None => Err(()),
+    }
+}
+
 fn run_optional_kernel_ir_analysis<T, E>(
     enabled: bool,
     analysis: impl FnOnce() -> Result<T, E>,
@@ -535,7 +585,27 @@ fn optional_tool(llvm_bin: &Path, name: &str) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::{AmdGpuTarget, run_optional_kernel_ir_analysis, validate_hsaco_metadata_text};
+    use super::{
+        AmdGpuTarget, BackendConfig, managed_artifact_output, run_optional_kernel_ir_analysis,
+        validate_hsaco_metadata_text,
+    };
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn kernels_require_an_explicit_managed_artifact_directory() {
+        let mut config = BackendConfig::default();
+        assert_eq!(managed_artifact_output(&config, 0), Ok(None));
+        assert_eq!(managed_artifact_output(&config, 1), Err(()));
+
+        config.hsaco_output_dir = Some(PathBuf::new());
+        assert_eq!(managed_artifact_output(&config, 1), Err(()));
+
+        config.hsaco_output_dir = Some(PathBuf::from("target/fe2o3"));
+        assert_eq!(
+            managed_artifact_output(&config, 1),
+            Ok(Some(Path::new("target/fe2o3")))
+        );
+    }
 
     #[test]
     fn optional_kernel_ir_analysis_is_fail_closed_when_enabled() {

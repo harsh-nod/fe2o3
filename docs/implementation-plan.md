@@ -273,6 +273,16 @@ Status: MVP implemented for elementwise sidecar artifacts.
 - The object is linked to HSACO with `ld.lld -shared`.
 - The artifact is written under `FE2O3_HSACO_DIR`, which `cargo-fe2o3` sets to
   `target/fe2o3`.
+- Direct backend invocations that compile kernels must set `FE2O3_HSACO_DIR`.
+  The directory is a managed generated-artifact namespace; canonical `.ll`,
+  `.o`, and `.hsaco` entries may be replaced or removed during reconciliation.
+- Collection, MIR import, optional verification, lowering, compilation, and
+  publication execute under one cooperating-writer transaction. A rejected
+  codegen preflight invalidates the producer's prior artifacts and unowned
+  generated artifacts before returning the compiler error.
+- Compiler-side reconciliation begins only after rustc enters `codegen_crate`.
+  The sealed manifest remains responsible for ensuring that files left by an
+  earlier build are not launch authority when compilation fails before codegen.
 - `llvm-readobj --notes` validates generated AMDGPU format, target metadata, and
   kernel name metadata when available.
 

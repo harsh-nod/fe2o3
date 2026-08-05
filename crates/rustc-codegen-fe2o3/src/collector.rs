@@ -5,6 +5,7 @@ use rustc_middle::ty::{
     EarlyBinder, Instance, InstanceKind, TyCtxt, TyKind, TypeVisitableExt, TypingEnv,
 };
 use std::collections::{HashSet, VecDeque};
+use std::fmt;
 
 #[derive(Clone, Debug)]
 pub struct CollectedFunction<'tcx> {
@@ -25,6 +26,24 @@ enum CollectDecision {
     Forbidden { crate_name: String, fn_path: String },
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CollectError {
+    crate_name: String,
+    fn_path: String,
+}
+
+impl fmt::Display for CollectError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "fe2o3 device code reached forbidden crate `{}` via `{}`; device-reachable functions must avoid `std`",
+            self.crate_name, self.fn_path
+        )
+    }
+}
+
+impl std::error::Error for CollectError {}
+
 pub fn count_kernels_in_cgus<'tcx>(tcx: TyCtxt<'tcx>, cgus: &[CodegenUnit<'tcx>]) -> usize {
     kernel_roots(tcx, cgus).len()
 }
@@ -33,7 +52,7 @@ pub fn collect_device_functions<'tcx>(
     tcx: TyCtxt<'tcx>,
     cgus: &[CodegenUnit<'tcx>],
     verbose: bool,
-) -> CollectionResult<'tcx> {
+) -> Result<CollectionResult<'tcx>, CollectError> {
     let mut collector = DeviceCollector::new(tcx, verbose);
 
     for instance in kernel_roots(tcx, cgus) {
@@ -184,7 +203,7 @@ impl<'tcx> DeviceCollector<'tcx> {
         }
     }
 
-    fn collect(mut self) -> CollectionResult<'tcx> {
+    fn collect(mut self) -> Result<CollectionResult<'tcx>, CollectError> {
         while let Some(function) = self.worklist.pop_front() {
             let def_id = function.instance.def_id();
 
@@ -202,7 +221,7 @@ impl<'tcx> DeviceCollector<'tcx> {
                     if let Some(terminator) = &block.terminator
                         && let TerminatorKind::Call { func, .. } = &terminator.kind
                     {
-                        self.process_call_operand(func, &function.instance);
+                        self.process_call_operand(func, &function.instance)?;
                     }
                 }
             }
@@ -210,32 +229,36 @@ impl<'tcx> DeviceCollector<'tcx> {
             self.result.push(function);
         }
 
-        CollectionResult {
+        Ok(CollectionResult {
             functions: self.result,
-        }
+        })
     }
 
-    fn process_call_operand(&mut self, func: &Operand<'tcx>, caller: &Instance<'tcx>) {
+    fn process_call_operand(
+        &mut self,
+        func: &Operand<'tcx>,
+        caller: &Instance<'tcx>,
+    ) -> Result<(), CollectError> {
         let Operand::Constant(const_op) = func else {
-            return;
+            return Ok(());
         };
 
         let ty = const_op.const_.ty();
         let TyKind::FnDef(def_id, args) = ty.kind() else {
-            return;
+            return Ok(());
         };
 
         match self.should_collect_from_crate(*def_id) {
             CollectDecision::Collect => {}
-            CollectDecision::SkipIntentional => return,
+            CollectDecision::SkipIntentional => return Ok(()),
             CollectDecision::Forbidden {
                 crate_name,
                 fn_path,
             } => {
-                panic!(
-                    "\nfe2o3 device code reached forbidden crate `{crate_name}` via `{fn_path}`.\n\
-                     Device-reachable functions must avoid `std`; use `core`, `alloc` only when a device allocator exists, or no_std helper crates."
-                );
+                return Err(CollectError {
+                    crate_name,
+                    fn_path,
+                });
             }
         }
 
@@ -250,20 +273,20 @@ impl<'tcx> DeviceCollector<'tcx> {
                 .ok()
                 .flatten()
         else {
-            return;
+            return Ok(());
         };
 
         let symbol = self.tcx.symbol_name(resolved).name.to_string();
         if self.seen.contains(&symbol) {
-            return;
+            return Ok(());
         }
 
         if !is_fully_monomorphized(self.tcx, resolved) {
-            return;
+            return Ok(());
         }
 
         if !matches!(resolved.def, InstanceKind::Item(_)) {
-            return;
+            return Ok(());
         }
 
         if !self.tcx.is_mir_available(resolved.def_id()) {
@@ -273,7 +296,7 @@ impl<'tcx> DeviceCollector<'tcx> {
                     self.tcx.def_path_str(resolved.def_id())
                 );
             }
-            return;
+            return Ok(());
         }
 
         if self.is_unreachable_body(resolved.def_id()) {
@@ -283,7 +306,7 @@ impl<'tcx> DeviceCollector<'tcx> {
                     self.tcx.def_path_str(resolved.def_id())
                 );
             }
-            return;
+            return Ok(());
         }
 
         let name = self.fqdn(resolved.def_id());
@@ -299,6 +322,7 @@ impl<'tcx> DeviceCollector<'tcx> {
             is_kernel: false,
             export_name,
         });
+        Ok(())
     }
 
     fn should_collect_from_crate(&self, def_id: DefId) -> CollectDecision {
