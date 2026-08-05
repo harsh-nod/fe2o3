@@ -8,12 +8,14 @@
 //! wire representation. Decoding establishes wire well-formedness only;
 //! consumers must call [`verify_module`] before relying on semantic invariants.
 
+mod effect_extraction;
 mod ir;
 mod region_effects;
 mod types;
 mod verify;
 mod wire;
 
+pub use effect_extraction::*;
 pub use ir::*;
 pub use region_effects::*;
 pub use types::*;
