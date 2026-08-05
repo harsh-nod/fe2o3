@@ -78,8 +78,9 @@ VERUS=/absolute/path/to/verus examples/verus_vecadd/run-verus.sh --require
 The real-kernel negative mutations independently reject an input read moved
 ahead of the output guard, a real shared-body expansion through a constant-zero
 thread adapter, and output/input allocation aliasing. For these fixtures the
-runner requires the exact Verus error class and failed source clause in addition
-to a stable marker; parser and unrelated proof failures do not pass.
+runner requires exactly one primary Verus error, exactly one verification
+summary reporting one error, the exact error class and failed source clause,
+and a stable marker. Parser and unrelated proof failures do not pass.
 
 ## Remaining refinement gap
 

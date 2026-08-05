@@ -81,6 +81,32 @@ run_rejected_exact() {
     if "$verus_path" --crate-type lib --triggers-mode silent "$file" >"$log" 2>&1; then
         printf 'FAIL:  %s unexpectedly verified\n' "$name" >&2
         failures=$((failures + 1))
+        return
+    fi
+
+    primary_error_count=$(awk '
+        /^error:/ && $0 !~ /^error: aborting due to / { count++ }
+        END { print count + 0 }
+    ' "$log")
+    verification_result_count=$(awk '
+        /^verification results::/ { count++ }
+        END { print count + 0 }
+    ' "$log")
+    single_error_result_count=$(awk '
+        /^verification results:: [0-9]+ verified, 1 errors$/ { count++ }
+        END { print count + 0 }
+    ' "$log")
+
+    if [ "$primary_error_count" -ne 1 ]; then
+        printf 'FAIL:  %s emitted %s primary Verus errors, expected exactly one\n' \
+            "$name" "$primary_error_count" >&2
+        cat "$log" >&2
+        failures=$((failures + 1))
+    elif [ "$verification_result_count" -ne 1 ] || [ "$single_error_result_count" -ne 1 ]; then
+        printf 'FAIL:  %s did not emit one verification result reporting one error\n' \
+            "$name" >&2
+        cat "$log" >&2
+        failures=$((failures + 1))
     elif ! grep -Fq "$marker" "$log"; then
         printf 'FAIL:  %s failed without marker %s\n' "$name" "$marker" >&2
         cat "$log" >&2
