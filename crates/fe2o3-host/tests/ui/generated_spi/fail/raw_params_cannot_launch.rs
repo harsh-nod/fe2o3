@@ -8,8 +8,9 @@ fn launch(
     stream: &Stream,
     params: &mut KernelParams,
 ) {
+    let _ = params;
     admitted
-        .launch_generated_scoped(stream, params, |_| {})
+        .launch_generated_scoped(stream, |_| {})
         .unwrap();
 }
 

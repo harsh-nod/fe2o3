@@ -1,9 +1,12 @@
-use fe2o3_host::{GeneratedKernelParams, KernelParams};
+use fe2o3_host::{GeneratedAdmittedLaunch, KernelParams, LoadedArgumentAdmittedLaunch};
 
 struct Kernel;
 
-fn pack(params: &mut KernelParams) {
-    let _ = GeneratedKernelParams::<Kernel, _>::from_generated_unchecked(params, ());
+fn pair(
+    admitted: LoadedArgumentAdmittedLaunch<'_, '_, Kernel>,
+    params: &mut KernelParams,
+) {
+    let _ = GeneratedAdmittedLaunch::from_generated_unchecked(admitted, params, ());
 }
 
 fn main() {}

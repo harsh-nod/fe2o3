@@ -1,0 +1,17 @@
+error[E0616]: field `admitted` of struct `fe2o3_host::GeneratedAdmittedLaunch` is private
+  --> tests/ui/generated_spi/fail/same_marker_admission_and_pack_cannot_swap.rs:10:25
+   |
+10 |         admitted: first.admitted,
+   |                         ^^^^^^^^ private field
+
+error[E0616]: field `params` of struct `fe2o3_host::GeneratedAdmittedLaunch` is private
+  --> tests/ui/generated_spi/fail/same_marker_admission_and_pack_cannot_swap.rs:11:24
+   |
+11 |         params: second.params,
+   |                        ^^^^^^ private field
+
+error[E0616]: field `resources` of struct `fe2o3_host::GeneratedAdmittedLaunch` is private
+  --> tests/ui/generated_spi/fail/same_marker_admission_and_pack_cannot_swap.rs:12:27
+   |
+12 |         resources: second.resources,
+   |                           ^^^^^^^^^ private field

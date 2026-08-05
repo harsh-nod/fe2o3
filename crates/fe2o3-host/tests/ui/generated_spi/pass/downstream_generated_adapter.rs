@@ -1,8 +1,8 @@
 use fe2o3_core::{DeviceBuffer, GpuContext, Stream};
 use fe2o3_device::KernelMarkerV1;
 use fe2o3_host::{
-    GeneratedKernelParams, KernelParams, LoadedArgumentAdmittedLaunch, LoadedKernel,
-    LoadedLaunchError, ObservedContext, ValidatedArtifactSelectionV1,
+    GeneratedAdmittedLaunch, GeneratedReadDeviceSlice, GeneratedWriteDeviceSlice, KernelParams,
+    LoadedKernel, ObservedContext, PreparedLaunch, ValidatedArtifactSelectionV1,
 };
 use std::error::Error;
 use std::sync::Arc;
@@ -33,20 +33,47 @@ unsafe fn bind_and_load(
     Ok(loaded)
 }
 
-unsafe fn launch_with_generated_pack<'loaded, 'allocation>(
-    admitted: LoadedArgumentAdmittedLaunch<'loaded, 'allocation, GeneratedMarker>,
-    stream: &Stream,
-    params: &mut KernelParams,
+type VecAddResources<'allocation> = (
+    GeneratedReadDeviceSlice<'allocation, u32>,
+    GeneratedWriteDeviceSlice<'allocation, u32>,
+);
+
+unsafe fn assemble_generated_launch<'loaded, 'allocation, 'params>(
+    loaded: &'loaded LoadedKernel<GeneratedMarker>,
+    observed: &ObservedContext,
+    prepared: PreparedLaunch<GeneratedMarker>,
     input: &'allocation DeviceBuffer<u32>,
     output: &'allocation mut DeviceBuffer<u32>,
-) -> Result<(), LoadedLaunchError> {
-    let packed = unsafe {
-        GeneratedKernelParams::<GeneratedMarker, _>::from_generated_unchecked(
-            params,
-            (input, output),
-        )
+    params: &'params mut KernelParams,
+) -> Result<
+    GeneratedAdmittedLaunch<
+        'loaded,
+        'allocation,
+        'params,
+        GeneratedMarker,
+        VecAddResources<'allocation>,
+    >,
+    Box<dyn Error>,
+> {
+    let input = GeneratedReadDeviceSlice::new(observed, input)?;
+    let output = GeneratedWriteDeviceSlice::new(observed, output)?;
+
+    input.push_pointer_and_len(params);
+    output.push_pointer_and_len(params);
+
+    let admitted = prepared.admit_arguments([input.argument_access(), output.argument_access()])?;
+    let admitted = loaded.bind_admitted(admitted)?;
+    let paired = unsafe {
+        GeneratedAdmittedLaunch::from_generated_unchecked(admitted, params, (input, output))
     };
-    admitted.launch_generated_scoped(stream, packed, |_| {})
+    Ok(paired)
+}
+
+fn launch_paired(
+    paired: GeneratedAdmittedLaunch<'_, '_, '_, GeneratedMarker, VecAddResources<'_>>,
+    stream: &Stream,
+) -> Result<(), fe2o3_host::LoadedLaunchError> {
+    paired.launch_generated_scoped(stream, |_| {})
 }
 
 fn main() {}

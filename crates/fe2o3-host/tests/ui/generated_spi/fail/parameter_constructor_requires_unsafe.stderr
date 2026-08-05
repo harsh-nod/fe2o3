@@ -1,7 +1,7 @@
-error[E0133]: call to unsafe function `fe2o3_host::GeneratedKernelParams::<'params, K, R>::from_generated_unchecked` is unsafe and requires unsafe block
- --> tests/ui/generated_spi/fail/parameter_constructor_requires_unsafe.rs:6:13
+error[E0133]: call to unsafe function `fe2o3_host::GeneratedAdmittedLaunch::<'loaded, 'allocation, 'params, K, R>::from_generated_unchecked` is unsafe and requires unsafe block
+ --> tests/ui/generated_spi/fail/parameter_constructor_requires_unsafe.rs:9:13
   |
-6 |     let _ = GeneratedKernelParams::<Kernel, _>::from_generated_unchecked(params, ());
-  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
+9 |     let _ = GeneratedAdmittedLaunch::from_generated_unchecked(admitted, params, ());
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
   |
   = note: consult the function's documentation for information on how to avoid undefined behavior

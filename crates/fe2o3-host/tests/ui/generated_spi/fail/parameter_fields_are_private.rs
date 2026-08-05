@@ -1,13 +1,15 @@
-use fe2o3_host::{GeneratedKernelParams, KernelParams};
-use std::marker::PhantomData;
+use fe2o3_host::{GeneratedAdmittedLaunch, KernelParams, LoadedArgumentAdmittedLaunch};
 
 struct Kernel;
 
-fn forge(params: &mut KernelParams) -> GeneratedKernelParams<'_, Kernel, ()> {
-    GeneratedKernelParams {
+fn forge<'loaded, 'allocation, 'params>(
+    admitted: LoadedArgumentAdmittedLaunch<'loaded, 'allocation, Kernel>,
+    params: &'params mut KernelParams,
+) -> GeneratedAdmittedLaunch<'loaded, 'allocation, 'params, Kernel, ()> {
+    GeneratedAdmittedLaunch {
+        admitted,
         params,
         resources: (),
-        marker: PhantomData,
     }
 }
 
