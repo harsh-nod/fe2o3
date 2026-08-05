@@ -123,17 +123,40 @@ run_rocm_compile() {
   done
 }
 
+require_gpu_access() {
+  local kfd_path="${1:-/dev/kfd}"
+  local dxg_path="${2:-/dev/dxg}"
+  local device_node
+
+  if [[ -e "${kfd_path}" ]]; then
+    device_node="${kfd_path}"
+  elif [[ -e "${dxg_path}" ]]; then
+    if [[ "${HSA_ENABLE_DXG_DETECTION:-}" != "1" ]]; then
+      printf '%s\n' \
+        'WSL GPU smoke requires HSA_ENABLE_DXG_DETECTION=1' >&2
+      return 2
+    fi
+    device_node="${dxg_path}"
+  else
+    printf '%s\n' \
+      'GPU smoke requires /dev/kfd (native Linux) or /dev/dxg (WSL)' >&2
+    return 2
+  fi
+
+  if [[ ! -r "${device_node}" || ! -w "${device_node}" ]]; then
+    printf 'GPU smoke requires read/write access to %s\n' \
+      "${device_node}" >&2
+    return 2
+  fi
+}
+
 run_hardware_smoke() {
   if [[ "${FE2O3_ALLOW_GPU_SMOKE:-}" != "1" ]]; then
     printf '%s\n' \
       'refusing to run GPU smoke without FE2O3_ALLOW_GPU_SMOKE=1' >&2
     return 2
   fi
-  if [[ ! -r /dev/kfd || ! -w /dev/kfd ]]; then
-    printf '%s\n' \
-      'GPU smoke requires read/write access to /dev/kfd' >&2
-    return 2
-  fi
+  require_gpu_access
   if ! command -v rocminfo >/dev/null 2>&1; then
     printf '%s\n' 'GPU smoke requires rocminfo on PATH' >&2
     return 2
@@ -164,4 +187,6 @@ main() {
   esac
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi
