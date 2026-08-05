@@ -1,6 +1,6 @@
 use std::fmt;
 
-/// Why a typed V1 invocation input was rejected.
+/// Why a typed invocation input was rejected.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum ValidationError {
@@ -33,6 +33,21 @@ pub enum ValidationError {
         /// The rejected path field.
         field: &'static str,
     },
+    /// Two individually valid fields formed an invalid combination.
+    InvalidCombination {
+        /// The rejected combination.
+        field: &'static str,
+    },
+    /// A process-environment key or value was not valid UTF-8.
+    NonUtf8Environment {
+        /// Whether the key or value was rejected.
+        field: &'static str,
+    },
+    /// An internal transport variable was present in the compiler environment.
+    ForbiddenEnvironmentVariable {
+        /// The rejected environment key.
+        key: String,
+    },
     /// A set-like collection was not strictly increasing.
     NonCanonicalOrder {
         /// The rejected collection.
@@ -45,7 +60,7 @@ pub enum ValidationError {
     },
     /// The AMD target ID was unknown, unsupported, or noncanonical.
     InvalidAmdTarget,
-    /// The complete encoded descriptor exceeded its V1 bound.
+    /// The complete encoded descriptor exceeded its schema bound.
     EncodedDescriptorTooLarge {
         /// The maximum accepted descriptor size.
         max: usize,
@@ -65,6 +80,18 @@ impl fmt::Display for ValidationError {
             Self::TooMany { field, max } => write!(formatter, "{field} exceeds {max} entries"),
             Self::InvalidText { field } => write!(formatter, "{field} contains invalid text"),
             Self::InvalidPath { field } => write!(formatter, "{field} is not a canonical path"),
+            Self::InvalidCombination { field } => {
+                write!(formatter, "{field} contains an invalid combination")
+            }
+            Self::NonUtf8Environment { field } => {
+                write!(formatter, "compile environment {field} is not UTF-8")
+            }
+            Self::ForbiddenEnvironmentVariable { key } => {
+                write!(
+                    formatter,
+                    "compile environment contains reserved variable {key}"
+                )
+            }
             Self::NonCanonicalOrder { field } => {
                 write!(formatter, "{field} entries are not in canonical order")
             }
@@ -85,7 +112,7 @@ impl fmt::Display for ValidationError {
 
 impl std::error::Error for ValidationError {}
 
-/// Why canonical V1 descriptor bytes could not be decoded.
+/// Why canonical descriptor bytes could not be decoded.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum DecodeError {
@@ -127,7 +154,7 @@ pub enum DecodeError {
         /// The rejected numeric tag.
         tag: u16,
     },
-    /// A declared collection count exceeded its V1 bound.
+    /// A declared collection count exceeded its schema bound.
     CountOutOfRange {
         /// The rejected collection.
         field: &'static str,

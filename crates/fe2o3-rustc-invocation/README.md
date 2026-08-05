@@ -1,120 +1,141 @@
 # fe2o3-rustc-invocation
 
-This crate defines the bounded, canonical `RustcInvocationDescriptorV1`
-schema used to coordinate one selected Cargo compilation with the fe2o3 rustc
-backend. The descriptor identifies how that compilation was requested. It is
-not an artifact manifest, proof record, or launch authorization.
+This crate defines bounded canonical descriptors for coordinating one exact
+rustc process assigned the fe2o3 backend. An invocation descriptor records
+requested compiler inputs. It is not an artifact manifest, proof record, or
+launch authorization.
 
-In particular, an invocation digest does not attest source contents, the
-dependency closure, compiler output, a GPU binary, kernel ABI, Verus evidence,
-or the device on which code will execute. A later compiler-owned descriptor
-must bind those results, and a trusted runtime must validate that descriptor
-against the loaded code object and observed device before launch.
+An invocation digest does not attest source contents, dependency closure,
+compiler output, a GPU binary, kernel ABI, Verus evidence, or the execution
+device. Compiler-owned output descriptors must bind those results, and the
+runtime must validate them against the loaded code object and observed device
+before launch.
 
-## V1 model
+## Versions
 
-The descriptor records:
+V1 is the original frozen schema. Its types, encoder, decoder, digest domain,
+and golden wire fixture remain available for compatibility. V1 permits callers
+to supply overlapping semantic fields independently and therefore must not be
+used as a trusted identity for new coordinated builds. Its normative field and
+wire reference is retained in [`V1_FORMAT.md`](V1_FORMAT.md).
 
-- the Cargo executable version and SHA-256 digest;
-- the selected workspace package, manifest, Cargo target, crate types,
-  edition, source path, and activated features;
-- the rustc executable version and SHA-256 digest, crate name, host and
-  effective target triples, test state, and exact ordered final argument list;
-- role-specific identities for the backend, clang, linker, and optional
-  inspector executables;
-- a canonical concrete AMD target ID and the result-affecting verification
-  mode;
-- canonical absolute workspace and artifact-output paths; and
-- the sorted, unique compile environment selected by the caller.
+V2 represents each compiler-visible input once. V1 and V2 use explicit wire
+versions and distinct digest domains; each decoder rejects the other version.
 
-Tool roles are structural fields. V1 never accepts a free-form role name.
-Callers must hash the executable bytes they actually run and must remove
-session, attempt-token, descriptor-transport, and other non-semantic variables
-before constructing the compile-environment set.
+## V2 model
 
-All constructors validate their inputs and all fields are private. Set-like
-collections must be supplied in strictly increasing order and without
-duplicates. Rustc arguments remain in their original order and may repeat.
-V1 accepts only UTF-8 arguments, paths, and environment values; a caller that
-encounters a non-UTF-8 compiler input must fail closed rather than describe a
-different invocation.
+`RustcInvocationDescriptorV2` records:
 
-## Canonical paths and text
+- caller-asserted SHA-256 digests for the rustc executable and codegen backend;
+- rustc's lexically canonical absolute working directory;
+- the exact ordered final rustc argument vector, including `argv[0]`; and
+- the complete intended rustc process environment, sorted by key.
 
-Names are nonempty UTF-8, contain no NUL, and are at most 128 bytes. General
-text, versions, arguments, and environment values contain no NUL and are at
-most 4096 bytes; versions are additionally nonempty. Relative paths are
-nonempty, do not start with `/`, and contain only nonempty components other
-than `.` or `..`. Absolute paths start with `/` and obey the same component
-rules. Backslashes and NUL are rejected in every path. `/` is the one valid
-absolute path without a component.
+The rustc path appears only in `argv[0]`. The backend path appears only in the
+wrapper-injected `-Zcodegen-backend` argument. Crate name, source, crate types,
+edition, features, target options, and all other compiler-visible unit
+properties remain in argv or the environment. `FE2O3_TARGET`,
+`FE2O3_HSACO_DIR`, and `FE2O3_VERIFY_KERNEL_IR` are validated in place and
+exposed as derived views; they are not copied into parallel fields.
 
-The AMD target spelling contains one known concrete `gfx` processor followed
-by optional `sramecc[+-]` and `xnack[+-]` modifiers in that order. Duplicate,
-unsupported, unknown, or reordered modifiers are rejected.
+Cargo provenance, package selection, workspace containment policy, and other
+selection intent do not belong in an exact process identity. They require a
+separate selection-intent descriptor.
 
-## Wire format
+`classify_rustc_invocation_v2` provides the lossless classifier intended for
+the workspace wrapper. It is separate from frozen wire decoding and can never
+authorize artifacts by itself. Terminal and query modes are recognized before
+compile metadata. In particular, Cargo's `rustc - --crate-name ___
+--print=file-names ...` probe is passed through rather than mistaken for a
+compile. Known output-suppressing rustc modes, response files, and ambiguous or
+partial compile shapes fail closed. A managed build succeeds only after the
+backend independently claims the exact build attempt and publishes output.
 
-Integers are little-endian. Every enum has an explicit nonzero V1 tag, and all
-unknown tags are rejected. Names and versions use `u16` byte lengths. Paths,
-arguments, and environment values use `u32` byte lengths. Counts are checked
-against their public limits before allocation.
+## Environment
+
+`CompileEnvironmentV2::capture_current` captures the current process set.
+`CompileEnvironmentV2::from_child_environment` accepts a complete explicitly
+prepared child set. A wrapper must call `configure_command` on the command it
+executes; this clears inherited entries and installs exactly the recorded set.
+The environment is an intended input until trusted execution is coupled to the
+descriptor.
+
+All `FE2O3_TRANSPORT_*` variables are reserved and rejected. Build sessions,
+attempt tokens, descriptor transport, and other protocol state must use a
+separate channel. Trusted execution must also close unrelated inherited file
+descriptors and explicitly control any descriptors retained for pinned tools
+or transport. Retained descriptors must be closed before proc macros or other
+compiler children are launched.
+
+V2 accepts only UTF-8 compile arguments, paths, environment keys, and
+environment values. Query passthrough classification remains lossless for
+non-UTF-8 platform-native arguments. Environment capture stops at its entry
+bound without collecting unbounded input.
+
+## Paths and tools
+
+V2 model paths use `/`, contain no empty, `.` or `..` components, and reject
+backslashes and NUL. Model path validation is lexical. It does not resolve
+symlinks or prove filesystem containment.
+
+Executable digests are caller assertions until a trusted wrapper binds them to
+execution. The wrapper must canonicalize and open each tool, hash that opened
+object, and execute or load the same pinned object. A path that is reopened
+after hashing is vulnerable to replacement and is not a trusted binding.
+
+For rustc, Linux execution can consume a pinned executable handle. For the
+dynamically loaded backend, the wrapper must retain a pinned object until rustc
+loads it, for example through a sealed immutable object or a deliberately
+inherited descriptor path. The backend must apply equivalent pinning to tools
+it selects internally.
+
+## V2 wire format
+
+Integers are little-endian. Unknown flags and nonzero reserved values are
+rejected. Environment keys use `u16` byte lengths. Paths, arguments, and
+environment values use `u32` byte lengths. Counts and lengths are checked
+before allocation.
 
 The fixed header is:
 
 ```text
 offset  size  field
 0       8     magic = "FE2O3RI\0"
-8       2     version = 1
+8       2     version = 2
 10      2     flags = 0
 12      4     total byte length
 16      4     reserved = 0
 ```
 
-The body is encoded in this order:
+The V2 body is encoded in this order:
 
 ```text
-cargo executable identity
-cargo package name, version, workspace-relative manifest
-selected target name, kind, edition, zero flags
-crate-type count, feature count, zero reserved field
-workspace-relative source, crate-type tags, feature names
-
-rustc executable identity
-rustc crate name, host target, effective target
-test-state tag, zero reserved fields
-argument count, ordered length-prefixed arguments
-
-backend identity, clang identity, linker identity
-inspector presence tag, zero reserved fields, optional inspector identity
-
-canonical AMD target ID
-verification-mode tag, zero reserved fields
-absolute workspace root, absolute artifact output directory
+rustc executable SHA-256 digest
+codegen backend SHA-256 digest
+absolute rustc working directory
+argument count, ordered length-prefixed arguments including argv[0]
 
 environment count, zero reserved field
 sorted key and value records
 ```
 
-A tool identity is a nonempty bounded version string followed by its 32-byte
-SHA-256 executable digest. The complete descriptor is at most 256 KiB. V1
-permits at most 4096 rustc arguments, 1024 environment entries, and 1024 Cargo
-features. Decoding rejects truncation, trailing bytes, oversized fields,
-invalid UTF-8, bad tags, nonzero flags or reserved fields, and noncanonical
-sets. It then re-encodes the typed value and requires exact byte equality.
+The encoded descriptor is at most 256 KiB. V2 permits at most 4096 rustc
+arguments and 1024 environment entries. Decoding checks every bound before
+allocation, revalidates typed and cross-field invariants, and requires
+byte-identical re-encoding.
 
-## Invocation digest
+## Digests
 
-The coordination digest is exactly:
+The V2 coordination digest is:
 
 ```text
 SHA256(
-    "FE2O3/RUSTC-BUILD-INVOCATION/V1\0" ||
+    "FE2O3/RUSTC-BUILD-INVOCATION/V2\0" ||
     u64_le(encoded_descriptor_length) ||
     encoded_descriptor
 )
 ```
 
-The domain includes its terminating NUL. An all-zero digest is reserved by the
-artifact transaction protocol and cannot be constructed through
-`InvocationDigest`.
+V1 uses the same construction with its frozen V1 encoding and V1 domain. The
+terminating NUL is part of each domain. The all-zero digest is reserved by the
+artifact transaction protocol.

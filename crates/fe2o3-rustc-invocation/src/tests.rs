@@ -6,7 +6,7 @@ fn tool(version: &str, byte: u8) -> ToolIdentityV1 {
     ToolIdentityV1::new(version, [byte; 32]).expect("valid tool identity")
 }
 
-fn fixture() -> RustcInvocationDescriptorV1 {
+pub(crate) fn fixture() -> RustcInvocationDescriptorV1 {
     let cargo = CargoIdentityV1::new(
         tool("cargo 1.96.0-nightly", 0x11),
         CargoPackageV1::new("fe2o3-device", "0.1.0", "crates/fe2o3-device/Cargo.toml")
