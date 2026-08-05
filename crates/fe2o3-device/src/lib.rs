@@ -16,6 +16,55 @@ pub mod thread;
 pub use fe2o3_macros::kernel;
 pub use thread::{Index1D, Index2D, ThreadIndex};
 
+/// Version of the type-level kernel marker contract emitted by [`kernel`].
+///
+/// This versions the Rust trait contract. It intentionally does not identify a
+/// compiled artifact, target, proof, or launch authorization.
+pub const KERNEL_MARKER_CONTRACT_VERSION_V1: u16 = 1;
+
+/// Type-level identity for one function and its v1 kernel registration.
+///
+/// The associated function-pointer type preserves the function's argument and
+/// result types, safety, and calling convention. It is not a packed argument
+/// layout and carries no promise about a compiled artifact.
+///
+/// # Safety
+///
+/// An implementation is a compiler contract. It must be emitted for exactly
+/// one kernel function and satisfy all of the following requirements:
+///
+/// - [`Self::Function`] is the exact function-pointer type of that function,
+///   including its argument and result types, safety, and calling convention;
+/// - [`Self::FUNCTION`] is that function, not a wrapper or a different item;
+/// - [`Self::LOGICAL_NAME`] and [`Self::EXPORT_NAME`] exactly match the names in
+///   the associated collector registration;
+/// - [`Self::Registration`] is the exact type of that registration, including
+///   its final function-pointer field; and
+/// - [`Self::REGISTRATION`] refers to that collector-visible registration.
+///
+/// Satisfying this contract does not establish an artifact digest, target
+/// identity, packed ABI layout, verification result, or runtime launch safety.
+/// Manual implementations are unsafe and must justify every association above.
+pub unsafe trait KernelMarkerV1 {
+    /// Exact function-pointer type of the registered kernel.
+    type Function: Copy + Send + Sync + 'static;
+
+    /// Exact tuple type of the collector-visible registration.
+    type Registration: Sync + 'static;
+
+    /// Logical source-level kernel name stored in the registration.
+    const LOGICAL_NAME: &'static str;
+
+    /// Exported symbol name stored in the registration.
+    const EXPORT_NAME: &'static str;
+
+    /// Exact registered kernel function.
+    const FUNCTION: Self::Function;
+
+    /// Exact collector-visible registration for this marker.
+    const REGISTRATION: &'static Self::Registration;
+}
+
 #[derive(Debug)]
 #[repr(C)]
 #[rustc_diagnostic_item = "fe2o3_device_disjoint_slice"]
@@ -83,7 +132,7 @@ impl<T, IndexSpace> DisjointSlice<T, IndexSpace> {
 
 #[cfg(test)]
 mod tests {
-    use super::{DisjointSlice, Index1D, Index2D};
+    use super::{DisjointSlice, Index1D, Index2D, KERNEL_MARKER_CONTRACT_VERSION_V1};
     use core::mem::{align_of, size_of};
 
     #[test]
@@ -98,5 +147,10 @@ mod tests {
             align_of::<DisjointSlice<u32, Index2D<64>>>(),
             expected_align
         );
+    }
+
+    #[test]
+    fn kernel_marker_contract_version_is_stable() {
+        assert_eq!(KERNEL_MARKER_CONTRACT_VERSION_V1, 1);
     }
 }
