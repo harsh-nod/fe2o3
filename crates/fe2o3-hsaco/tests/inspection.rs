@@ -11,6 +11,72 @@ use rmpv::{Value, encode::write_value};
 
 const ELF_HEADER_BYTES: usize = 64;
 const SECTION_HEADER_BYTES: usize = 64;
+const METADATA_PROFILE_ENV: &str = "FE2O3_TEST_METADATA_PROFILE";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct GeneratedMetadataExpectation {
+    max_flat_workgroup_size: u32,
+    required_workgroup_size: Option<[u32; 3]>,
+}
+
+fn generated_metadata_expectation(
+    profile: Option<&str>,
+) -> Result<GeneratedMetadataExpectation, String> {
+    match profile.unwrap_or("legacy-v1") {
+        "legacy-v1" => Ok(GeneratedMetadataExpectation {
+            max_flat_workgroup_size: 1024,
+            required_workgroup_size: None,
+        }),
+        "kernel-ir-v1" => Ok(GeneratedMetadataExpectation {
+            max_flat_workgroup_size: 256,
+            required_workgroup_size: Some([256, 1, 1]),
+        }),
+        value => Err(format!(
+            "{METADATA_PROFILE_ENV} must be exactly `legacy-v1` or `kernel-ir-v1`, got `{value}`"
+        )),
+    }
+}
+
+#[test]
+fn generated_metadata_expectations_are_pipeline_specific() {
+    assert_eq!(
+        generated_metadata_expectation(None).unwrap(),
+        GeneratedMetadataExpectation {
+            max_flat_workgroup_size: 1024,
+            required_workgroup_size: None,
+        }
+    );
+    assert_eq!(
+        generated_metadata_expectation(Some("legacy-v1")).unwrap(),
+        GeneratedMetadataExpectation {
+            max_flat_workgroup_size: 1024,
+            required_workgroup_size: None,
+        }
+    );
+    assert_eq!(
+        generated_metadata_expectation(Some("kernel-ir-v1")).unwrap(),
+        GeneratedMetadataExpectation {
+            max_flat_workgroup_size: 256,
+            required_workgroup_size: Some([256, 1, 1]),
+        }
+    );
+}
+
+#[test]
+fn generated_metadata_expectations_reject_malformed_profiles() {
+    for value in [
+        "",
+        "legacy",
+        "kernel-ir",
+        "KERNEL-IR-V1",
+        "kernel-ir-v1 ",
+        "256",
+    ] {
+        let error = generated_metadata_expectation(Some(value)).unwrap_err();
+        assert!(error.contains(METADATA_PROFILE_ENV));
+        assert!(error.contains(value));
+    }
+}
 
 #[test]
 fn inspects_bounded_physical_kernel_metadata() {
@@ -1967,6 +2033,9 @@ fn inspects_real_generated_vecadd_hsaco() {
         .unwrap_or_else(|_| "32".to_owned())
         .parse::<u32>()
         .expect("FE2O3_TEST_WAVEFRONT must be a u32");
+    let metadata_expectation =
+        generated_metadata_expectation(env::var(METADATA_PROFILE_ENV).ok().as_deref())
+            .unwrap_or_else(|error| panic!("{error}"));
     let bytes = fs::read(path).unwrap();
     let inspected = inspect(&bytes).unwrap();
     let bound = inspect_and_bind_kernel_descriptors(&bytes).unwrap();
@@ -2000,8 +2069,14 @@ fn inspects_real_generated_vecadd_hsaco() {
             None | Some(Gfx1250Revision::B0)
         ));
     }
-    assert_eq!(kernel.max_flat_workgroup_size(), 1024);
-    assert_eq!(kernel.required_workgroup_size(), None);
+    assert_eq!(
+        kernel.max_flat_workgroup_size(),
+        metadata_expectation.max_flat_workgroup_size
+    );
+    assert_eq!(
+        kernel.required_workgroup_size(),
+        metadata_expectation.required_workgroup_size
+    );
     assert_eq!(kernel.max_workgroups(), [None, None, None]);
     assert_eq!(kernel.cluster_dims(), None);
     assert_eq!(kernel.kind(), KernelKind::Normal);
