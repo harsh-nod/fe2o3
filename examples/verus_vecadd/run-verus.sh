@@ -103,8 +103,8 @@ run_rejected same_source_wrong_bounds \
     'precondition.*not satisfied|precondition failure'
 run_rejected same_source_output_alias \
     "$script_dir/verus/negative/same_source_output_alias.rs" \
-    'mutated_same_source_output_alias_is_compatible' \
-    'postcondition.*not satisfied|postcondition failure'
+    'rejects_output_input_alias' \
+    'precondition.*not satisfied|precondition failure'
 run_rejected same_source_functional_error \
     "$script_dir/verus/negative/same_source_functional_error.rs" \
     'mutated_same_source_claims_wrong_sum' \

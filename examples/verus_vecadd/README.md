@@ -1,10 +1,16 @@
 # verus_vecadd and fill
 
-This example keeps the executable path compilable as ordinary `no_std` Rust
-without adding Verus or `vstd` to the normal Cargo dependency graph. Vecadd is
-single-sourced in `src/vecadd_body.rs`: ordinary rustc expands that body from
-`src/lib.rs`, and Verus expands the same body from `verus/vecadd.rs`. There is no
-second executable vecadd algorithm in the proof harness.
+This directory verifies a `u32` CPU/reference operation, not the `f32`
+`#[kernel]` in `examples/vecadd`. It is not compiled for ROCm or executed on a
+GPU.
+
+The narrow single-source property is mechanical: the arithmetic, overflow
+check, indexing, and write token body lives in `src/vecadd_body.rs`. Ordinary
+rustc expands those tokens from `src/lib.rs`, and Verus expands the same tokens
+from `verus/vecadd.rs`. The surrounding types are not shared. Ordinary Rust
+uses `fe2o3_contracts` domain and index types, while Verus substitutes model
+types with separately verified method bodies. This harness therefore does not
+verify the `fe2o3_contracts` implementations.
 
 The shared body checks the logical launch extent, constructs an
 `IdentityWriteIndex`, checks `u32` addition overflow, and performs one output
@@ -21,18 +27,21 @@ establishes:
 The vecadd harness models each access as a symbolic allocation identity,
 address space, and half-open byte region. A ghost launch brand connects a 1D
 index-space extent to one branded thread witness. Initialized shared-read
-capabilities cover both inputs, and an exclusive capability covers the output
-element. The harness establishes:
+capabilities cover both inputs, and an exclusive write permission covers the
+output element. The harness establishes:
 
 - logical bounds and byte-address representability for both reads and the
   output write;
 - compatibility of the two shared reads, including exact input aliasing;
 - incompatibility of an overlapping exclusive write and shared read;
-- pairwise-disjoint exclusive output writes for distinct identity indices; and
-- frame behavior for untouched output elements and other allocations;
-- initialization of the output element after the shared body writes it; and
-- exact per-thread `u32` vecadd behavior plus full functional correctness when
-  a complete branded launch supplies every identity index.
+- pairwise-disjoint exclusive output writes for distinct identity indices;
+- frame behavior for untouched output elements and other allocations; and
+- exact per-thread `u32` vecadd behavior for the successful operation path.
+
+There is no launch-level functional-correctness theorem in this harness.
+Establishing one requires composing the verified per-thread transitions with a
+launch execution model; assuming the final pointwise output values would not be
+such a composition.
 
 Run the ordinary tests with:
 
@@ -51,8 +60,8 @@ Set `VERUS=/absolute/path/to/verus` for a non-`PATH` installation. Without
 `--require`, the runner reports `SKIP` and succeeds when Verus is unavailable,
 so ordinary Cargo builds remain independent of Verus. A negative fixture counts
 as an expected rejection only when Verus emits both the fixture's stable
-proof-function marker and a postcondition-failure diagnostic. Syntax and tool
-failures do not masquerade as successful tests.
+proof-function marker and its expected precondition- or postcondition-failure
+diagnostic. Syntax and tool failures do not masquerade as successful tests.
 
 ## Trusted boundary and limits
 
@@ -76,9 +85,10 @@ There are no `assume` or `admit` statements, and the region model introduces no
 new `external_body`. Verification of the mechanically shared Rust body is
 source-model evidence only. It does not prove machine-code refinement from the
 Rust expansion through canonical kernel IR, AMDGPU lowering, a code object, or
-a HIP launch. It also does not model scheduling, barriers, atomics, fractional
-read tokens, floating-point semantics, or arbitrary index functions. The ghost
-brand and region capabilities are erased proof inputs; they neither mint nor
-upgrade runtime `Verified` authority. Proof records may bind this evidence to
-external identities, but identity equality alone cannot authorize loading or
-launching an artifact.
+a HIP launch, nor does it verify the separate `examples/vecadd` GPU function.
+It also does not model scheduling, barriers, atomics, fractional read tokens,
+floating-point semantics, or arbitrary index functions. The ghost brand and
+region capabilities are erased proof inputs; they neither mint nor upgrade
+runtime `Verified` authority. Proof records may bind this evidence to external
+identities, but identity equality alone cannot authorize loading or launching
+an artifact.

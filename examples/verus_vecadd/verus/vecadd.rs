@@ -63,7 +63,7 @@ pub struct VecAddSourceEvidence {
     pub output_allocation: Allocation,
     pub a_capability: RegionCapability,
     pub b_capability: RegionCapability,
-    pub output_capability: RegionCapability,
+    pub output_permission: RegionPermission,
     pub element_size: nat,
 }
 
@@ -121,37 +121,23 @@ pub open spec fn initialized_read_capability(region: ByteRegion) -> RegionCapabi
     }
 }
 
-pub open spec fn output_write_capability(
-    region: ByteRegion,
-    initialized: bool,
-) -> RegionCapability {
-    RegionCapability {
-        permission: exclusive_write(region),
-        initialized,
-    }
-}
-
 pub open spec fn capability_can_read(capability: RegionCapability) -> bool {
     capability.permission.kind == PermissionKind::SharedRead && capability.initialized
 }
 
-pub open spec fn capability_can_write(capability: RegionCapability) -> bool {
-    capability.permission.kind == PermissionKind::ExclusiveWrite
+pub open spec fn permission_can_write(permission: RegionPermission) -> bool {
+    permission.kind == PermissionKind::ExclusiveWrite
 }
 
-pub open spec fn capability_after_write(capability: RegionCapability) -> RegionCapability {
-    RegionCapability {
-        permission: capability.permission,
-        initialized: true,
-    }
-}
-
-pub open spec fn vecadd_source_evidence_is_valid(
+/// Structural evidence supplied alongside the executable arguments. Thread
+/// bounds and output/input disjointness are separate obligations so callers
+/// cannot accidentally discharge one with the other.
+pub open spec fn vecadd_source_evidence_is_well_formed(
     evidence: VecAddSourceEvidence,
     domain_len: nat,
     thread: nat,
 ) -> bool {
-    thread_belongs_to_space(evidence.space, evidence.thread)
+    evidence.space.brand == evidence.thread.brand
         && evidence.space.extent == domain_len
         && evidence.thread.linear == thread
         && evidence.element_size > 0
@@ -161,8 +147,6 @@ pub open spec fn vecadd_source_evidence_is_valid(
         && evidence.a_allocation.byte_length == domain_len * evidence.element_size
         && evidence.b_allocation.byte_length == domain_len * evidence.element_size
         && evidence.output_allocation.byte_length == domain_len * evidence.element_size
-        && evidence.output_allocation.id != evidence.a_allocation.id
-        && evidence.output_allocation.id != evidence.b_allocation.id
         && evidence.a_capability == initialized_read_capability(element_region(
             evidence.a_allocation,
             thread,
@@ -173,11 +157,21 @@ pub open spec fn vecadd_source_evidence_is_valid(
             thread,
             evidence.element_size,
         ))
-        && evidence.output_capability.permission == exclusive_write(element_region(
+        && evidence.output_permission == exclusive_write(element_region(
             evidence.output_allocation,
             output_index(thread),
             evidence.element_size,
         ))
+}
+
+pub open spec fn vecadd_source_evidence_is_valid(
+    evidence: VecAddSourceEvidence,
+    domain_len: nat,
+    thread: nat,
+) -> bool {
+    vecadd_source_evidence_is_well_formed(evidence, domain_len, thread)
+        && evidence.output_allocation.id != evidence.a_allocation.id
+        && evidence.output_allocation.id != evidence.b_allocation.id
 }
 
 /// Target-neutral model of the identity write mapping used by the Rust example.
@@ -243,17 +237,6 @@ pub open spec fn vecadd_value_u32(a: Seq<u32>, b: Seq<u32>, thread: nat) -> u32
         a[thread as int] as nat + b[thread as int] as nat <= u32::MAX as nat,
 {
     (a[thread as int] as nat + b[thread as int] as nat) as u32
-}
-
-pub open spec fn vecadd_postcondition_u32(
-    output: Seq<u32>,
-    a: Seq<u32>,
-    b: Seq<u32>,
-) -> bool {
-    output.len() == a.len()
-        && output.len() == b.len()
-        && forall |index: nat| index < output.len() ==>
-            output[index as int] == vecadd_value_u32(a, b, index)
 }
 
 #[derive(Copy, Clone, PartialEq, Eq)]
@@ -357,7 +340,7 @@ pub enum VecAddError {
 }
 
 /// Verus expands the same executable body that ordinary rustc expands in
-/// `src/lib.rs`; the preconditions select the successful kernel path. This is
+/// `src/lib.rs`; the preconditions select the successful operation path. This is
 /// source-model evidence, not machine-code refinement or runtime authority.
 pub fn same_source_vecadd_thread(
     domain: ModelLaunchDomain1d,
@@ -373,7 +356,8 @@ pub fn same_source_vecadd_thread(
         a@.len() == domain.length,
         b@.len() == domain.length,
         old(output)@.len() == domain.length,
-        a@[thread.linear as int] as nat + b@[thread.linear as int] as nat <= u32::MAX as nat,
+        thread.linear < domain.length ==>
+            a@[thread.linear as int] as nat + b@[thread.linear as int] as nat <= u32::MAX as nat,
         vecadd_source_evidence_is_valid(
             evidence,
             domain.length as nat,
@@ -385,7 +369,6 @@ pub fn same_source_vecadd_thread(
             thread.linear as int,
             vecadd_value_u32(a@, b@, thread.linear as nat),
         ),
-        capability_after_write(evidence.output_capability).initialized,
         region_is_in_bounds(
             evidence.a_allocation,
             evidence.a_capability.permission.region,
@@ -396,18 +379,18 @@ pub fn same_source_vecadd_thread(
         ),
         region_is_in_bounds(
             evidence.output_allocation,
-            evidence.output_capability.permission.region,
+            evidence.output_permission.region,
         ),
         capability_can_read(evidence.a_capability),
         capability_can_read(evidence.b_capability),
-        capability_can_write(evidence.output_capability),
+        permission_can_write(evidence.output_permission),
         permissions_are_compatible(
             evidence.a_capability.permission,
-            evidence.output_capability.permission,
+            evidence.output_permission,
         ),
         permissions_are_compatible(
             evidence.b_capability.permission,
-            evidence.output_capability.permission,
+            evidence.output_permission,
         ),
 {
     assert(thread.domain().len() == domain.len());
@@ -462,8 +445,8 @@ pub proof fn element_region_is_in_bounds_and_address_representable(
 }
 
 /// Connects a branded source thread to initialized input reads and its one
-/// exclusive output region. The output may start in either initialization
-/// state; the successful write establishes initialization for that element.
+/// exclusive output region. This proves permission shape only; it does not
+/// model an initialization-state transition for the output.
 pub proof fn same_source_evidence_has_valid_permissions(
     evidence: VecAddSourceEvidence,
     domain_len: nat,
@@ -471,6 +454,7 @@ pub proof fn same_source_evidence_has_valid_permissions(
 )
     requires
         vecadd_source_evidence_is_valid(evidence, domain_len, thread),
+        thread < domain_len,
     ensures
         region_is_in_bounds(
             evidence.a_allocation,
@@ -482,19 +466,18 @@ pub proof fn same_source_evidence_has_valid_permissions(
         ),
         region_is_in_bounds(
             evidence.output_allocation,
-            evidence.output_capability.permission.region,
+            evidence.output_permission.region,
         ),
         capability_can_read(evidence.a_capability),
         capability_can_read(evidence.b_capability),
-        capability_can_write(evidence.output_capability),
-        capability_after_write(evidence.output_capability).initialized,
+        permission_can_write(evidence.output_permission),
         permissions_are_compatible(
             evidence.a_capability.permission,
-            evidence.output_capability.permission,
+            evidence.output_permission,
         ),
         permissions_are_compatible(
             evidence.b_capability.permission,
-            evidence.output_capability.permission,
+            evidence.output_permission,
         ),
 {
     assert(thread < domain_len);
@@ -704,41 +687,6 @@ pub proof fn distinct_branded_threads_have_disjoint_output_regions(
         space.extent,
         element_size,
     );
-}
-
-/// Composition theorem for a complete branded launch. Every active slot must
-/// carry its matching branded identity and the value established by the shared
-/// executable body.
-pub proof fn completed_branded_vecadd_is_functionally_correct(
-    space: IndexSpace1d,
-    observed_threads: Seq<BrandedThreadIndex1d>,
-    output: Seq<u32>,
-    a: Seq<u32>,
-    b: Seq<u32>,
-)
-    requires
-        output.len() == space.extent,
-        a.len() == space.extent,
-        b.len() == space.extent,
-        observed_threads.len() == space.extent,
-        forall |slot: nat| slot < space.extent ==>
-            thread_belongs_to_space(space, observed_threads[slot as int])
-                && observed_threads[slot as int].linear == slot,
-        forall |slot: nat| slot < space.extent ==>
-            a[slot as int] as nat + b[slot as int] as nat <= u32::MAX as nat,
-        forall |slot: nat| slot < space.extent ==>
-            output[observed_threads[slot as int].linear as int]
-                == vecadd_value_u32(a, b, observed_threads[slot as int].linear),
-    ensures
-        vecadd_postcondition_u32(output, a, b),
-{
-    assert forall |index: nat| index < output.len() implies
-        output[index as int] == vecadd_value_u32(a, b, index) by {
-        assert(index < space.extent);
-        assert(observed_threads[index as int].linear == index);
-        assert(output[observed_threads[index as int].linear as int]
-            == vecadd_value_u32(a, b, observed_threads[index as int].linear));
-    }
 }
 
 pub proof fn vecadd_changes_only_the_owned_output(

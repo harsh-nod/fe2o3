@@ -20,6 +20,14 @@ pub fn mutated_same_source_without_thread_bounds(
         a@.len() == domain.length,
         b@.len() == domain.length,
         old(output)@.len() == domain.length,
+        thread.linear < domain.length ==>
+            a@[thread.linear as int] as nat + b@[thread.linear as int] as nat
+                <= u32::MAX as nat,
+        model::vecadd_source_evidence_is_valid(
+            evidence,
+            domain.length as nat,
+            thread.linear as nat,
+        ),
     ensures
         result.is_ok(),
 {
