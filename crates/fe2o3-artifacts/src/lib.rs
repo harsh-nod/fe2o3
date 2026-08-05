@@ -11,6 +11,7 @@ mod encode;
 mod error;
 mod identities;
 mod manifest;
+mod proof;
 
 pub use abi::{
     AbiField, AbiKind, AbiLayout, Access, AddressSpace, MAX_ABI_BYTES, MAX_ABI_FIELDS, Mutability,
@@ -34,3 +35,9 @@ pub use identities::{
     Name, PointerWidth, TargetIdentity, ToolIdentity,
 };
 pub use manifest::{KernelEntry, MAX_CODE_OBJECTS, MAX_KERNELS, ManifestV1};
+pub use proof::{
+    ConfigurationEntry, MAX_CONFIGURATION_ENTRIES, MAX_PROOF_PROPERTIES, MAX_TRUSTED_ITEMS,
+    MeasuredToolIdentity, ProofArtifactIdentity, ProofExecutionIdentity, ProofOutcome,
+    ProofProperty, ProofRecordV1, ProofTargetIdentity, SourceContractIdentity, TrustedItem,
+    VerificationModelIdentity,
+};
