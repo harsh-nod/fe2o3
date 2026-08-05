@@ -225,9 +225,23 @@ pub proof fn per_thread_vecadd_has_valid_region_permissions(
 /// Shared reads are compatible even when both inputs name the same bytes.
 pub proof fn shared_input_reads_may_alias(region: ByteRegion)
     ensures
-        regions_overlap(region, region) ==> permissions_are_compatible(
+        permissions_are_compatible(
             shared_read(region),
             shared_read(region),
+        ),
+{
+}
+
+pub proof fn disjoint_write_and_read_regions_are_compatible(
+    write_region: ByteRegion,
+    read_region: ByteRegion,
+)
+    requires
+        !regions_overlap(write_region, read_region),
+    ensures
+        permissions_are_compatible(
+            exclusive_write(write_region),
+            shared_read(read_region),
         ),
 {
 }

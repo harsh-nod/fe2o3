@@ -52,10 +52,15 @@ run_pass() {
 run_rejected() {
     name=$1
     file=$2
-    diagnostic=$3
+    marker=$3
+    diagnostic=$4
     log="$tmp_dir/$name.log"
     if "$verus_path" --crate-type lib "$file" >"$log" 2>&1; then
         printf 'FAIL:  %s unexpectedly verified\n' "$name" >&2
+        failures=$((failures + 1))
+    elif ! grep -Fq "$marker" "$log"; then
+        printf 'FAIL:  %s failed without marker %s\n' "$name" "$marker" >&2
+        cat "$log" >&2
         failures=$((failures + 1))
     elif grep -Eiq "$diagnostic" "$log"; then
         printf 'XFAIL: %s rejected for the expected proof obligation\n' "$name"
@@ -70,16 +75,31 @@ run_pass vecadd "$script_dir/verus/vecadd.rs"
 run_pass fill "$script_dir/verus/fill.rs"
 run_rejected fill_missing_bounds \
     "$script_dir/verus/negative/fill_missing_bounds.rs" \
+    'mutated_fill_index_is_in_bounds' \
     'postcondition.*not satisfied|postcondition failure'
 run_rejected fill_non_injective \
     "$script_dir/verus/negative/fill_non_injective.rs" \
+    'mutated_distinct_threads_have_disjoint_outputs' \
     'postcondition.*not satisfied|postcondition failure'
 run_rejected fill_incorrect_postcondition \
     "$script_dir/verus/negative/fill_incorrect_postcondition.rs" \
+    'mutated_one_write_fills_every_element' \
+    'postcondition.*not satisfied|postcondition failure'
+run_rejected permission_overlapping_output_writes \
+    "$script_dir/verus/negative/permission_overlapping_output_writes.rs" \
+    'mutated_overlapping_output_writes_are_disjoint' \
+    'postcondition.*not satisfied|postcondition failure'
+run_rejected permission_write_read_alias \
+    "$script_dir/verus/negative/permission_write_read_alias.rs" \
+    'mutated_write_read_alias_is_compatible' \
+    'postcondition.*not satisfied|postcondition failure'
+run_rejected permission_out_of_bounds_region \
+    "$script_dir/verus/negative/permission_out_of_bounds_region.rs" \
+    'mutated_unbounded_region_is_in_bounds' \
     'postcondition.*not satisfied|postcondition failure'
 
 if [ "$failures" -ne 0 ]; then
     printf 'Verus fixture run failed: %s unexpected result(s)\n' "$failures" >&2
     exit 1
 fi
-printf 'Verus fixture run passed: 2 proofs, 3 expected rejections\n'
+printf 'Verus fixture run passed: 2 proof harnesses, 6 expected rejections\n'
