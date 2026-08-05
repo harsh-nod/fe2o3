@@ -608,6 +608,7 @@ struct RecordExpressionRequirements {
     binary_ops: Vec<RecordBinaryOp>,
     unary_ops: Vec<RecordUnaryOp>,
     scalar_args: HashSet<usize>,
+    slice_sources: Vec<SliceElementSource>,
     literals: Vec<ScalarLiteral>,
 }
 
@@ -666,6 +667,19 @@ fn validate_record_expression_shape(
         }
     }
 
+    for source in requirements.slice_sources {
+        let expected = RecordLinearIndex::from(source.index);
+        if !sketch.uses_slice_element(source.arg_index, expected) {
+            return Err(unsupported_kernel(
+                kernel_name,
+                format!(
+                    "record lowering plan is missing slice arg{} expression use with index stride {} offset {}",
+                    source.arg_index, expected.stride, expected.offset
+                ),
+            ));
+        }
+    }
+
     for literal in requirements.literals {
         let (ty, value_fragment) = literal_record_parts(literal);
         if !sketch.uses_constant(ty, &value_fragment) {
@@ -686,6 +700,7 @@ fn record_expression_requirements(expr: &ElementwiseExpr) -> RecordExpressionReq
         binary_ops: Vec::new(),
         unary_ops: Vec::new(),
         scalar_args: HashSet::new(),
+        slice_sources: Vec::new(),
         literals: Vec::new(),
     };
     collect_expr_ref_requirements(expr, expr.root, &mut requirements);
@@ -701,7 +716,11 @@ fn collect_expr_ref_requirements(
         ExprRef::Value(ValueSource::Arg(arg_index)) => {
             requirements.scalar_args.insert(arg_index);
         }
-        ExprRef::Value(ValueSource::SliceElement(_)) => {}
+        ExprRef::Value(ValueSource::SliceElement(source)) => {
+            if !requirements.slice_sources.contains(&source) {
+                requirements.slice_sources.push(source);
+            }
+        }
         ExprRef::Literal(literal) => {
             if !requirements.literals.contains(&literal) {
                 requirements.literals.push(literal);
@@ -920,9 +939,6 @@ fn validate_record_slice_accesses(
         let Some(arg) = record_args.get(source.arg_index) else {
             continue;
         };
-        if source.arg_index == shape.output_arg && arg.ty == "mir.disjoint_slice" {
-            continue;
-        }
         *expected_loads_by_local.entry(arg.index).or_insert(0usize) += 1;
         validate_record_slice_access_index(
             kernel_name,
@@ -937,7 +953,9 @@ fn validate_record_slice_accesses(
     let Some(output_arg) = record_args.get(shape.output_arg) else {
         return Ok(());
     };
-    if output_arg.ty == "mir.slice" && output_arg.rust_ty.starts_with("&mut ") {
+    if (output_arg.ty == "mir.slice" && output_arg.rust_ty.starts_with("&mut "))
+        || output_arg.ty == "mir.disjoint_slice"
+    {
         validate_record_slice_access_index(
             kernel_name,
             "store",
@@ -962,10 +980,10 @@ fn validate_record_slice_accesses(
     }
 
     for (local, expected) in expected_loads_by_local {
-        let actual = access_sketch
-            .loads
+        let actual = slice_access_sketch
+            .reads
             .iter()
-            .filter(|load| load.place.local == local)
+            .filter(|load| load.local == local)
             .count();
         if actual < expected {
             return Err(unsupported_kernel(
@@ -2189,6 +2207,24 @@ mod tests {
         }
     }
 
+    fn disjoint_inplace_test_shape() -> ElementwiseShape {
+        ElementwiseShape {
+            expr: ElementwiseExpr {
+                nodes: vec![ExprNode::Binary {
+                    lhs: ExprRef::Value(ValueSource::SliceElement(SliceElementSource {
+                        arg_index: 1,
+                        index: IndexExpr::Thread,
+                    })),
+                    rhs: ExprRef::Value(ValueSource::Arg(0)),
+                    op: ElementwiseBinaryOp::Add,
+                }],
+                root: ExprRef::Node(0),
+            },
+            output_arg: 1,
+            output_index: IndexExpr::Thread,
+        }
+    }
+
     fn test_record_function() -> RecordLoweringFunction {
         RecordLoweringFunction {
             symbol: "test_kernel".to_string(),
@@ -2212,8 +2248,8 @@ mod tests {
                 RecordLoweringLocal {
                     index: 2,
                     role: "arg".to_string(),
-                    ty: "mir.disjoint_slice".to_string(),
-                    rust_ty: "fe2o3_device::DisjointSlice<f32>".to_string(),
+                    ty: "mir.slice".to_string(),
+                    rust_ty: "&mut [f32]".to_string(),
                 },
             ],
             ops: vec![
@@ -2221,6 +2257,78 @@ mod tests {
                 record_thread_get(4),
                 record_load("local1.deref.index_local4"),
                 record_store(),
+                record_op(MirOp::Return),
+            ],
+        }
+    }
+
+    fn disjoint_inplace_record_function() -> RecordLoweringFunction {
+        RecordLoweringFunction {
+            symbol: "add_inplace".to_string(),
+            kind: "kernel".to_string(),
+            arg_count: 2,
+            local_count: 9,
+            block_count: 6,
+            locals: vec![
+                RecordLoweringLocal {
+                    index: 0,
+                    role: "return".to_string(),
+                    ty: "mir.unit".to_string(),
+                    rust_ty: "()".to_string(),
+                },
+                RecordLoweringLocal {
+                    index: 1,
+                    role: "arg".to_string(),
+                    ty: "mir.f32".to_string(),
+                    rust_ty: "f32".to_string(),
+                },
+                RecordLoweringLocal {
+                    index: 2,
+                    role: "arg".to_string(),
+                    ty: "mir.disjoint_slice".to_string(),
+                    rust_ty: "fe2o3_device::DisjointSlice<f32>".to_string(),
+                },
+            ],
+            ops: vec![
+                record_call("fe2o3_device::thread::index_1d"),
+                {
+                    let mut op = record_op(MirOp::Assign);
+                    op.operation = Some("ref".to_string());
+                    op.destination_local = Some(5);
+                    op.destination = Some("local5".to_string());
+                    op.operands = Some("local2".to_string());
+                    op
+                },
+                {
+                    let mut op = record_op(MirOp::Call);
+                    op.callee = Some("fe2o3_device::DisjointSlice::<T>::get_mut".to_string());
+                    op.destination_local = Some(4);
+                    op.destination = Some("local4".to_string());
+                    op.operand_count = Some(2);
+                    op.operands = Some("local5, local3".to_string());
+                    op
+                },
+                {
+                    let mut op = record_op(MirOp::Assign);
+                    op.operation = Some("use".to_string());
+                    op.destination_local = Some(7);
+                    op.destination = Some("local7".to_string());
+                    op.operands = Some("local4.downcast1.field0".to_string());
+                    op
+                },
+                {
+                    let mut op = record_load("local7.deref");
+                    op.destination_local = Some(8);
+                    op.destination = Some("local8".to_string());
+                    op
+                },
+                {
+                    let mut op = record_op(MirOp::Store);
+                    op.operation = Some("add".to_string());
+                    op.destination = Some("local7.deref".to_string());
+                    op.operands = Some("local8, local1".to_string());
+                    op
+                },
                 record_op(MirOp::Return),
             ],
         }
@@ -2276,7 +2384,7 @@ mod tests {
         let mut op = record_op(MirOp::Store);
         op.statement = Some(0);
         op.operation = Some("use".to_string());
-        op.destination = Some("local2.deref".to_string());
+        op.destination = Some("local2.deref.index_local4".to_string());
         op.operands = Some("local5".to_string());
         op
     }
@@ -2336,6 +2444,24 @@ mod tests {
     }
 
     #[test]
+    fn validates_disjoint_read_before_write_from_record_sketch() {
+        validate_record_elementwise_shape(
+            "add_inplace",
+            &disjoint_inplace_test_shape(),
+            &disjoint_inplace_record_function(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn builds_disjoint_read_before_write_expr_from_record_expression_sketch() {
+        let shape = disjoint_inplace_test_shape();
+        let expr = record_elementwise_expr(&shape, &disjoint_inplace_record_function()).unwrap();
+
+        assert_eq!(expr, shape.expr);
+    }
+
+    #[test]
     fn rejects_record_shape_without_thread_index() {
         let mut record_function = test_record_function();
         record_function.ops.retain(|op| op.op != MirOp::Call);
@@ -2374,7 +2500,7 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(error.to_string().contains("index transform"));
+        assert!(error.to_string().contains("store on local2"));
     }
 
     #[test]

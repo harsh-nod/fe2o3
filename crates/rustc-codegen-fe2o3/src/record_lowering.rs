@@ -92,6 +92,12 @@ pub struct RecordSliceAccess {
     pub index: RecordLinearIndex,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RecordDisjointArgRef {
+    arg_index: usize,
+    local: usize,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RecordExpressionSketch {
     pub local_bindings: Vec<RecordExpressionBinding>,
@@ -354,15 +360,20 @@ impl RecordLoweringFunction {
         let args = self.args();
         let access_sketch = self.access_sketch();
         let index_sketch = self.index_sketch();
+        let disjoint_refs = disjoint_output_ref_bindings(&args, &index_sketch, &self.ops);
         let reads = access_sketch
             .loads
             .iter()
-            .filter_map(|access| slice_access_from_memory(&args, access, &index_sketch))
+            .filter_map(|access| {
+                slice_access_from_memory(&args, access, &index_sketch, &disjoint_refs)
+            })
             .collect();
         let writes = access_sketch
             .stores
             .iter()
-            .filter_map(|access| slice_access_from_memory(&args, access, &index_sketch))
+            .filter_map(|access| {
+                slice_access_from_memory(&args, access, &index_sketch, &disjoint_refs)
+            })
             .collect();
 
         RecordSliceAccessSketch { reads, writes }
@@ -371,6 +382,7 @@ impl RecordLoweringFunction {
     pub fn expression_sketch(&self) -> RecordExpressionSketch {
         let args = self.args();
         let index_sketch = self.index_sketch();
+        let disjoint_refs = disjoint_output_ref_bindings(&args, &index_sketch, &self.ops);
         let mut local_expressions = HashMap::new();
         let mut stores = Vec::new();
 
@@ -385,7 +397,7 @@ impl RecordLoweringFunction {
                         place,
                         operation: op.operation.clone(),
                     };
-                    slice_access_from_memory(&args, &access, &index_sketch)
+                    slice_access_from_memory(&args, &access, &index_sketch, &disjoint_refs)
                 }) else {
                     continue;
                 };
@@ -486,6 +498,14 @@ impl RecordExpressionSketch {
         })
     }
 
+    pub fn uses_slice_element(&self, arg_index: usize, index: RecordLinearIndex) -> bool {
+        self.local_bindings.iter().any(|binding| {
+            self.expression_uses_slice_element(&binding.expr, arg_index, index, &mut HashSet::new())
+        }) || self.stores.iter().any(|store| {
+            self.expression_uses_slice_element(&store.expr, arg_index, index, &mut HashSet::new())
+        })
+    }
+
     fn expression_uses_scalar_arg(
         &self,
         expr: &RecordExpression,
@@ -519,6 +539,47 @@ impl RecordExpressionSketch {
             RecordExpressionOperand::Local(local) => self
                 .local_expression(*local, visited)
                 .is_some_and(|expr| self.expression_uses_scalar_arg(expr, arg_index, visited)),
+            _ => false,
+        }
+    }
+
+    fn expression_uses_slice_element(
+        &self,
+        expr: &RecordExpression,
+        arg_index: usize,
+        index: RecordLinearIndex,
+        visited: &mut HashSet<usize>,
+    ) -> bool {
+        match expr {
+            RecordExpression::Use(operand) => {
+                self.operand_uses_slice_element(operand, arg_index, index, visited)
+            }
+            RecordExpression::Binary { lhs, rhs, .. } => {
+                self.operand_uses_slice_element(lhs, arg_index, index, visited)
+                    || self.operand_uses_slice_element(rhs, arg_index, index, visited)
+            }
+            RecordExpression::Unary { operand, .. } => {
+                self.operand_uses_slice_element(operand, arg_index, index, visited)
+            }
+        }
+    }
+
+    fn operand_uses_slice_element(
+        &self,
+        operand: &RecordExpressionOperand,
+        arg_index: usize,
+        index: RecordLinearIndex,
+        visited: &mut HashSet<usize>,
+    ) -> bool {
+        match operand {
+            RecordExpressionOperand::SliceElement(access) => {
+                access.arg_index == arg_index && access.index == index
+            }
+            RecordExpressionOperand::Local(local) => {
+                self.local_expression(*local, visited).is_some_and(|expr| {
+                    self.expression_uses_slice_element(expr, arg_index, index, visited)
+                })
+            }
             _ => false,
         }
     }
@@ -902,7 +963,14 @@ fn slice_access_from_memory(
     args: &[&RecordLoweringLocal],
     access: &RecordMemoryAccess,
     index_sketch: &RecordIndexSketch,
+    disjoint_refs: &HashMap<usize, RecordSliceAccess>,
 ) -> Option<RecordSliceAccess> {
+    if matches!(access.place.projection.as_slice(), [projection] if projection == "deref") {
+        if let Some(access) = disjoint_refs.get(&access.place.local) {
+            return Some(access.clone());
+        }
+    }
+
     let (arg_index, arg) = args
         .iter()
         .enumerate()
@@ -916,6 +984,176 @@ fn slice_access_from_memory(
         local: arg.index,
         index: index_sketch.get(access.index_local?)?,
     })
+}
+
+fn disjoint_output_ref_bindings(
+    args: &[&RecordLoweringLocal],
+    index_sketch: &RecordIndexSketch,
+    ops: &[RecordLoweringOp],
+) -> HashMap<usize, RecordSliceAccess> {
+    let mut borrowed_args = HashMap::new();
+    let mut call_outputs = HashMap::new();
+    let mut element_refs = HashMap::new();
+
+    for op in ops {
+        if op.op == MirOp::Assign && op.operation.as_deref() == Some("ref") {
+            bind_disjoint_borrow_arg(op, args, &mut borrowed_args);
+            continue;
+        }
+
+        if op.op == MirOp::Call {
+            bind_disjoint_call_output(op, index_sketch, &borrowed_args, &mut call_outputs);
+            continue;
+        }
+
+        if op.op == MirOp::Assign && op.operation.as_deref() == Some("use") {
+            bind_disjoint_element_ref(op, &call_outputs, &mut element_refs);
+        }
+    }
+
+    element_refs
+}
+
+fn bind_disjoint_borrow_arg(
+    op: &RecordLoweringOp,
+    args: &[&RecordLoweringLocal],
+    borrowed_args: &mut HashMap<usize, RecordDisjointArgRef>,
+) {
+    let Some(destination) = op.destination_local else {
+        return;
+    };
+    let operands = op.operand_labels();
+    let Some(place) = operands
+        .first()
+        .and_then(|operand| RecordPlaceRef::parse(operand))
+    else {
+        return;
+    };
+    if !place.projection.is_empty() {
+        return;
+    }
+    let Some((arg_index, arg)) = args
+        .iter()
+        .enumerate()
+        .find(|(_, arg)| arg.index == place.local && arg.ty == "mir.disjoint_slice")
+    else {
+        return;
+    };
+
+    borrowed_args.insert(
+        destination,
+        RecordDisjointArgRef {
+            arg_index,
+            local: arg.index,
+        },
+    );
+}
+
+fn bind_disjoint_call_output(
+    op: &RecordLoweringOp,
+    index_sketch: &RecordIndexSketch,
+    borrowed_args: &HashMap<usize, RecordDisjointArgRef>,
+    call_outputs: &mut HashMap<usize, RecordSliceAccess>,
+) {
+    let Some(destination) = op.destination_local else {
+        return;
+    };
+    let Some(callee) = op.callee.as_deref() else {
+        return;
+    };
+    if !callee.contains("DisjointSlice") {
+        return;
+    }
+
+    let operands = op.operand_labels();
+    let Some(disjoint_arg) = operands
+        .first()
+        .and_then(|operand| disjoint_receiver_arg(operand, borrowed_args))
+    else {
+        return;
+    };
+
+    let index = if callee.ends_with("::get_mut") {
+        operands
+            .get(1)
+            .and_then(|operand| RecordPlaceRef::parse(operand))
+            .filter(|place| {
+                place.projection.is_empty() && index_sketch.thread_index_local == Some(place.local)
+            })
+            .map(|_| RecordLinearIndex::thread())
+    } else if callee.ends_with("::get_mut_at") {
+        operands
+            .get(1)
+            .and_then(|operand| record_index_operand(operand, index_sketch))
+    } else {
+        None
+    };
+    let Some(index) = index else {
+        return;
+    };
+
+    call_outputs.insert(
+        destination,
+        RecordSliceAccess {
+            arg_index: disjoint_arg.arg_index,
+            local: disjoint_arg.local,
+            index,
+        },
+    );
+}
+
+fn disjoint_receiver_arg(
+    operand: &str,
+    borrowed_args: &HashMap<usize, RecordDisjointArgRef>,
+) -> Option<RecordDisjointArgRef> {
+    let place = RecordPlaceRef::parse(operand)?;
+    if !place.projection.is_empty() {
+        return None;
+    }
+    borrowed_args.get(&place.local).copied()
+}
+
+fn record_index_operand(
+    operand: &str,
+    index_sketch: &RecordIndexSketch,
+) -> Option<RecordLinearIndex> {
+    let place = RecordPlaceRef::parse(operand)?;
+    match place.projection.as_slice() {
+        [] => index_sketch.get(place.local),
+        [projection] if projection == "field0" => index_sketch.get(place.local),
+        _ => None,
+    }
+}
+
+fn bind_disjoint_element_ref(
+    op: &RecordLoweringOp,
+    call_outputs: &HashMap<usize, RecordSliceAccess>,
+    element_refs: &mut HashMap<usize, RecordSliceAccess>,
+) {
+    let Some(destination) = op.destination_local else {
+        return;
+    };
+    let operands = op.operand_labels();
+    let Some(place) = operands
+        .first()
+        .and_then(|operand| RecordPlaceRef::parse(operand))
+    else {
+        return;
+    };
+    if !is_disjoint_some_value_place(&place) {
+        return;
+    }
+    let Some(access) = call_outputs.get(&place.local) else {
+        return;
+    };
+    element_refs.insert(destination, access.clone());
+}
+
+fn is_disjoint_some_value_place(place: &RecordPlaceRef) -> bool {
+    place
+        .projection
+        .windows(2)
+        .any(|window| window[0] == "downcast1" && window[1] == "field0")
 }
 
 fn record_expression_from_op(
@@ -1410,6 +1648,178 @@ mod tests {
             RecordExpression::Use(RecordExpressionOperand::SliceElement(access))
                 if access.arg_index == 1 && access.local == 2
         ));
+    }
+
+    #[test]
+    fn sketches_disjoint_get_mut_read_before_write_source() {
+        let records = vec![
+            MirOpRecord::new(MirOp::Func)
+                .with_attr(MirAttr::string("symbol", "add_inplace"))
+                .with_attr(MirAttr::string("kind", "kernel")),
+            MirOpRecord::new(MirOp::Arg)
+                .with_attr(MirAttr::string("function", "add_inplace"))
+                .with_attr(MirAttr::usize("index", 1))
+                .with_attr(MirAttr::string("role", "arg"))
+                .with_attr(MirAttr::string("type", "mir.f32"))
+                .with_attr(MirAttr::string("rust_type", "f32")),
+            MirOpRecord::new(MirOp::Arg)
+                .with_attr(MirAttr::string("function", "add_inplace"))
+                .with_attr(MirAttr::usize("index", 2))
+                .with_attr(MirAttr::string("role", "arg"))
+                .with_attr(MirAttr::string("type", "mir.disjoint_slice"))
+                .with_attr(MirAttr::string(
+                    "rust_type",
+                    "fe2o3_device::DisjointSlice<f32>",
+                )),
+            MirOpRecord::new(MirOp::Call)
+                .with_attr(MirAttr::string("function", "add_inplace"))
+                .with_attr(MirAttr::string("callee", "fe2o3_device::thread::index_1d"))
+                .with_attr(MirAttr::usize("destination_local", 3)),
+            MirOpRecord::new(MirOp::Assign)
+                .with_attr(MirAttr::string("function", "add_inplace"))
+                .with_attr(MirAttr::usize("destination_local", 5))
+                .with_attr(MirAttr::string("operation", "ref"))
+                .with_attr(MirAttr::string("operands", "local2")),
+            MirOpRecord::new(MirOp::Call)
+                .with_attr(MirAttr::string("function", "add_inplace"))
+                .with_attr(MirAttr::string(
+                    "callee",
+                    "fe2o3_device::DisjointSlice::<T>::get_mut",
+                ))
+                .with_attr(MirAttr::usize("destination_local", 4))
+                .with_attr(MirAttr::string("operands", "local5, local3")),
+            MirOpRecord::new(MirOp::Assign)
+                .with_attr(MirAttr::string("function", "add_inplace"))
+                .with_attr(MirAttr::usize("destination_local", 7))
+                .with_attr(MirAttr::string("operation", "use"))
+                .with_attr(MirAttr::string("operands", "local4.downcast1.field0")),
+            MirOpRecord::new(MirOp::Load)
+                .with_attr(MirAttr::string("function", "add_inplace"))
+                .with_attr(MirAttr::string("operation", "use"))
+                .with_attr(MirAttr::usize("destination_local", 8))
+                .with_attr(MirAttr::string("operands", "local7.deref")),
+            MirOpRecord::new(MirOp::Store)
+                .with_attr(MirAttr::string("function", "add_inplace"))
+                .with_attr(MirAttr::string("operation", "add"))
+                .with_attr(MirAttr::string("destination", "local7.deref"))
+                .with_attr(MirAttr::string("operands", "local8, local1")),
+        ];
+
+        let plan = plan_from_records(&records);
+        let function = plan.function("add_inplace").unwrap();
+        let access = RecordSliceAccess {
+            arg_index: 1,
+            local: 2,
+            index: RecordLinearIndex::thread(),
+        };
+
+        let slice_sketch = function.slice_access_sketch();
+        assert_eq!(slice_sketch.reads, vec![access.clone()]);
+        assert_eq!(slice_sketch.writes, vec![access.clone()]);
+
+        let expr_sketch = function.expression_sketch();
+        assert!(expr_sketch.uses_slice_element(access.arg_index, access.index));
+        assert!(matches!(
+            expr_sketch.local_bindings.iter().find(|binding| binding.local == 8),
+            Some(RecordExpressionBinding {
+                expr: RecordExpression::Use(RecordExpressionOperand::SliceElement(actual)),
+                ..
+            }) if *actual == access
+        ));
+    }
+
+    #[test]
+    fn sketches_disjoint_get_mut_at_shifted_source() {
+        let records = vec![
+            MirOpRecord::new(MirOp::Func)
+                .with_attr(MirAttr::string("symbol", "raw_disjoint_inplace_shift"))
+                .with_attr(MirAttr::string("kind", "kernel")),
+            MirOpRecord::new(MirOp::Arg)
+                .with_attr(MirAttr::string("function", "raw_disjoint_inplace_shift"))
+                .with_attr(MirAttr::usize("index", 1))
+                .with_attr(MirAttr::string("role", "arg"))
+                .with_attr(MirAttr::string("type", "mir.slice"))
+                .with_attr(MirAttr::string("rust_type", "&[f32]")),
+            MirOpRecord::new(MirOp::Arg)
+                .with_attr(MirAttr::string("function", "raw_disjoint_inplace_shift"))
+                .with_attr(MirAttr::usize("index", 2))
+                .with_attr(MirAttr::string("role", "arg"))
+                .with_attr(MirAttr::string("type", "mir.disjoint_slice"))
+                .with_attr(MirAttr::string(
+                    "rust_type",
+                    "fe2o3_device::DisjointSlice<f32>",
+                )),
+            MirOpRecord::new(MirOp::Call)
+                .with_attr(MirAttr::string("function", "raw_disjoint_inplace_shift"))
+                .with_attr(MirAttr::string("callee", "fe2o3_device::thread::index_1d"))
+                .with_attr(MirAttr::usize("destination_local", 3)),
+            MirOpRecord::new(MirOp::Call)
+                .with_attr(MirAttr::string("function", "raw_disjoint_inplace_shift"))
+                .with_attr(MirAttr::string("callee", "fe2o3_device::ThreadIndex::get"))
+                .with_attr(MirAttr::usize("destination_local", 4))
+                .with_attr(MirAttr::string("operands", "local3")),
+            MirOpRecord::new(MirOp::Add)
+                .with_attr(MirAttr::string("function", "raw_disjoint_inplace_shift"))
+                .with_attr(MirAttr::usize("destination_local", 6))
+                .with_attr(MirAttr::string("operation", "add_with_overflow"))
+                .with_attr(MirAttr::string(
+                    "operands",
+                    "local4, const:mir.usize=Val(Scalar(0x0000000000000001), usize)",
+                )),
+            MirOpRecord::new(MirOp::Assign)
+                .with_attr(MirAttr::string("function", "raw_disjoint_inplace_shift"))
+                .with_attr(MirAttr::usize("destination_local", 5))
+                .with_attr(MirAttr::string("operation", "use"))
+                .with_attr(MirAttr::string("operands", "local6.field0")),
+            MirOpRecord::new(MirOp::Assign)
+                .with_attr(MirAttr::string("function", "raw_disjoint_inplace_shift"))
+                .with_attr(MirAttr::usize("destination_local", 10))
+                .with_attr(MirAttr::string("operation", "ref"))
+                .with_attr(MirAttr::string("operands", "local2")),
+            MirOpRecord::new(MirOp::Call)
+                .with_attr(MirAttr::string("function", "raw_disjoint_inplace_shift"))
+                .with_attr(MirAttr::string(
+                    "callee",
+                    "fe2o3_device::DisjointSlice::<T>::get_mut_at",
+                ))
+                .with_attr(MirAttr::usize("destination_local", 9))
+                .with_attr(MirAttr::string("operands", "local10, local5")),
+            MirOpRecord::new(MirOp::Assign)
+                .with_attr(MirAttr::string("function", "raw_disjoint_inplace_shift"))
+                .with_attr(MirAttr::usize("destination_local", 12))
+                .with_attr(MirAttr::string("operation", "use"))
+                .with_attr(MirAttr::string("operands", "local9.downcast1.field0")),
+            MirOpRecord::new(MirOp::Load)
+                .with_attr(MirAttr::string("function", "raw_disjoint_inplace_shift"))
+                .with_attr(MirAttr::string("operation", "use"))
+                .with_attr(MirAttr::usize("destination_local", 13))
+                .with_attr(MirAttr::string("operands", "local12.deref")),
+            MirOpRecord::new(MirOp::Store)
+                .with_attr(MirAttr::string("function", "raw_disjoint_inplace_shift"))
+                .with_attr(MirAttr::string("operation", "add"))
+                .with_attr(MirAttr::string("destination", "local12.deref"))
+                .with_attr(MirAttr::string("operands", "local13, local14")),
+        ];
+
+        let plan = plan_from_records(&records);
+        let function = plan.function("raw_disjoint_inplace_shift").unwrap();
+        let access = RecordSliceAccess {
+            arg_index: 1,
+            local: 2,
+            index: RecordLinearIndex {
+                stride: 1,
+                offset: 1,
+            },
+        };
+
+        let slice_sketch = function.slice_access_sketch();
+        assert_eq!(slice_sketch.reads, vec![access.clone()]);
+        assert_eq!(slice_sketch.writes, vec![access.clone()]);
+        assert!(
+            function
+                .expression_sketch()
+                .uses_slice_element(access.arg_index, access.index)
+        );
     }
 
     #[test]

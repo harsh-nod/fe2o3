@@ -51,16 +51,19 @@ emission path now consumes that record plan to cross-check kernel argument
 types, required store/return ops, thread-index calls, record load coverage, and
 selected index/arithmetic shape markers before emitting through the existing MIR
 recognizer. Load/store record place labels are parsed into a small access sketch,
-helper/raw index records are parsed into a linear index sketch, and direct slice
+helper/raw index records are parsed into a linear index sketch, and slice
 reads/writes are combined into a slice-access sketch keyed by ABI arg, MIR
-local, and affine index. The AMDGPU validator now checks read-only slice loads
-and direct `&mut [T]` output stores from that record-derived slice sketch. A
-record expression sketch also binds slice-load leaves, scalar args, float
-literals, unary/binary expression ops, and store roots so the validator can
-cross-check expression requirements. When that sketch can reconstruct the full
-expression root, the AMDGPU path now uses the record-derived `ElementwiseExpr`
-for LLVM IR emission; raw rustc MIR remains the temporary fallback for cases the
-record expression sketch cannot yet represent.
+local, and affine index. The sketch tracks direct slice accesses plus
+`DisjointSlice::get_mut`/`get_mut_at` element references through option
+projection into the final deref load/store. The AMDGPU validator now checks
+read-only slice loads, direct `&mut [T]` output stores, and disjoint output
+read-before-write stores from that record-derived slice sketch. A record
+expression sketch also binds slice-load leaves, disjoint output element leaves,
+scalar args, float literals, unary/binary expression ops, and store roots so the
+validator can cross-check expression requirements. When that sketch can
+reconstruct the full expression root, the AMDGPU path now uses the
+record-derived `ElementwiseExpr` for LLVM IR emission; raw rustc MIR remains the
+temporary fallback for shape discovery the record plan does not yet own.
 
 The backend also has the first AMDGPU artifact path: for the current `f32`/`f64`
 elementwise kernel shapes it validates the Rust kernel ABI from monomorphized
