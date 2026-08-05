@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "Minimal ordinary-Rust and Verus contract spike for fe2o3 vecadd."
+description = "Ordinary-Rust and Verus contract spike for fe2o3 identity-write kernels."
 publish = false
 
 [dependencies]

@@ -9,6 +9,11 @@ pub enum VecAddError {
     ArithmeticOverflow,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FillError {
+    DomainLengthMismatch,
+}
+
 /// Executes the work assigned to one logical thread.
 pub fn vecadd_thread(
     domain: LaunchDomain1d,
@@ -51,6 +56,35 @@ pub fn vecadd(a: &[u32], b: &[u32], output: &mut [u32]) -> Result<(), VecAddErro
     Ok(())
 }
 
+/// Executes one identity-indexed fill write for a logical thread.
+pub fn fill_thread(
+    domain: LaunchDomain1d,
+    thread: ThreadInDomain1d,
+    output: &mut [u32],
+    value: u32,
+) -> Result<(), FillError> {
+    if thread.domain() != domain || output.len() != domain.len() {
+        return Err(FillError::DomainLengthMismatch);
+    }
+
+    let write =
+        IdentityWriteIndex::new(thread, output.len()).ok_or(FillError::DomainLengthMismatch)?;
+    output[write.index().value()] = value;
+    Ok(())
+}
+
+/// CPU reference driver over the per-thread fill contract.
+pub fn fill(output: &mut [u32], value: u32) -> Result<(), FillError> {
+    let domain = LaunchDomain1d::new(output.len());
+    for linear in 0..domain.len() {
+        let thread = domain
+            .thread(linear)
+            .ok_or(FillError::DomainLengthMismatch)?;
+        fill_thread(domain, thread, output, value)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -86,5 +120,32 @@ mod tests {
             Err(VecAddError::ArithmeticOverflow)
         );
         assert_eq!(output, [0]);
+    }
+
+    #[test]
+    fn fill_executes_one_identity_write_per_thread() {
+        let mut output = [1, 2, 3, 4];
+
+        assert_eq!(fill(&mut output, 17), Ok(()));
+        assert_eq!(output, [17; 4]);
+    }
+
+    #[test]
+    fn fill_accepts_an_empty_domain() {
+        assert_eq!(fill(&mut [], 17), Ok(()));
+    }
+
+    #[test]
+    fn fill_rejects_a_thread_from_another_domain() {
+        let domain = LaunchDomain1d::new(2);
+        let other_domain = LaunchDomain1d::new(3);
+        let thread = other_domain.thread(0).unwrap();
+        let mut output = [0; 2];
+
+        assert_eq!(
+            fill_thread(domain, thread, &mut output, 17),
+            Err(FillError::DomainLengthMismatch)
+        );
+        assert_eq!(output, [0; 2]);
     }
 }
