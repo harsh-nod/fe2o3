@@ -11,6 +11,7 @@ readonly CPU_TEST_PACKAGES=(
   dialect-amdgcn
   dialect-mir
   fe2o3-completion
+  fe2o3-artifacts
   fe2o3-contracts
   fe2o3-device
   fe2o3-kernel-ir
