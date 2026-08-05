@@ -1,9 +1,9 @@
 //! Lossless classification of rustc command-line invocations.
 //!
-//! This module separates terminal and query invocations from compilations
-//! before extracting compile metadata. Every successful classification borrows
-//! the caller's complete argument vector, including `argv[0]`; no argument is
-//! normalized, reordered, decoded, or reconstructed.
+//! This module separates source-free terminal and query invocations from
+//! compilations before extracting compile metadata. Every successful
+//! classification borrows the caller's complete argument vector, including
+//! `argv[0]`; no argument is normalized, reordered, decoded, or reconstructed.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
@@ -64,6 +64,13 @@ const CRATE_NAME: &str = "--crate-name";
 const CRATE_NAME_JOINED_PREFIX: &[u8] = b"--crate-name=";
 const PRINT_JOINED_PREFIX: &[u8] = b"--print=";
 const EXPLAIN_JOINED_PREFIX: &[u8] = b"--explain=";
+const PASSTHROUGH_PRINT_KINDS_V2: &[&[u8]] = &[
+    b"cfg",
+    b"crate-name",
+    b"file-names",
+    b"split-debuginfo",
+    b"sysroot",
+];
 
 /// The lossless classification of one rustc argument vector.
 ///
@@ -108,9 +115,24 @@ impl<'a> RustcInvocationV2<'a> {
             Self::Compile(invocation) => invocation.forwarded_args(),
         }
     }
+
+    /// Returns whether this invocation belongs to the minimal bootstrap
+    /// passthrough grammar used before pinned compiler execution is available.
+    ///
+    /// This is only a syntax gate. It does not authenticate the executable or
+    /// process environment and must not be treated as an artifact-authority
+    /// decision.
+    #[must_use]
+    pub fn is_bootstrap_passthrough_approved(self) -> bool {
+        match self {
+            Self::Terminal(invocation) => bootstrap_terminal_v2(invocation.argv()),
+            Self::Query(invocation) => bootstrap_query_v2(invocation.argv()),
+            Self::Compile(_) => false,
+        }
+    }
 }
 
-/// A terminal or query invocation that must be forwarded unchanged.
+/// A terminal or query invocation whose arguments must remain unchanged.
 ///
 /// This type deliberately exposes no compile metadata. It can therefore retain
 /// arbitrary non-UTF-8 arguments without a lossy conversion.
@@ -333,10 +355,9 @@ impl Error for RustcArgsErrorV2 {}
 
 /// Classifies a complete rustc argument vector without changing any argument.
 ///
-/// The input must include the rustc executable as `argv[0]`. Response files and
-/// malformed separate-value options are rejected before classification.
-/// Terminal selectors such as `--version` and query selectors such as
-/// `--print=file-names` take precedence over compile metadata. This precedence
+/// The input must include the rustc executable as `argv[0]`. Source-free
+/// terminal selectors such as `--version` take precedence over compile metadata
+/// and compile-only validation. A fixed set of source-free print kinds also
 /// permits Cargo probes such as
 /// `rustc - --crate-name ___ --print=file-names ...` to pass through unchanged.
 ///
@@ -348,8 +369,8 @@ impl Error for RustcArgsErrorV2 {}
 ///
 /// # Errors
 ///
-/// Returns [`RustcArgsErrorV2`] for a missing executable, response files,
-/// missing option values, or malformed compile metadata.
+/// Returns [`RustcArgsErrorV2`] for a missing executable or a response file, and
+/// for missing option values and malformed metadata in a compile candidate.
 pub fn classify_rustc_invocation_v2(
     argv: &[OsString],
 ) -> Result<RustcInvocationV2<'_>, RustcArgsErrorV2> {
@@ -357,10 +378,16 @@ pub fn classify_rustc_invocation_v2(
     if executable.is_empty() {
         return Err(RustcArgsErrorV2::EmptyExecutable);
     }
-
     reject_response_files(argv)?;
-    let passthrough = classify_passthrough_form(argv)?;
+
     let invocation = RustcPassthroughInvocationV2 { argv };
+    match detect_passthrough_form(argv) {
+        Some(PassthroughForm::Terminal) => return Ok(RustcInvocationV2::Terminal(invocation)),
+        Some(PassthroughForm::Query) => return Ok(RustcInvocationV2::Query(invocation)),
+        None => {}
+    }
+
+    let passthrough = classify_passthrough_form(argv)?;
     match passthrough {
         Some(PassthroughForm::Terminal) => return Ok(RustcInvocationV2::Terminal(invocation)),
         Some(PassthroughForm::Query) => return Ok(RustcInvocationV2::Query(invocation)),
@@ -374,6 +401,48 @@ pub fn classify_rustc_invocation_v2(
 enum PassthroughForm {
     Terminal,
     Query,
+}
+
+fn detect_passthrough_form(argv: &[OsString]) -> Option<PassthroughForm> {
+    let mut saw_query = false;
+    let mut saw_source_input = false;
+    let mut options = true;
+    let mut index = 1;
+    while index < argv.len() {
+        let argument = &argv[index];
+        if options && argument == OsStr::new("--") {
+            options = false;
+            index += 1;
+            continue;
+        }
+
+        if options
+            && (is_terminal_selector(argument)
+                || separate_value_option(argument).is_some_and(|option| {
+                    argv.get(index + 1)
+                        .is_some_and(|value| is_terminal_pair(option, value))
+                }))
+        {
+            return Some(PassthroughForm::Terminal);
+        }
+
+        if options {
+            saw_query |= is_passthrough_query_selector(argument, argv.get(index + 1));
+            if separate_value_option(argument).is_some() && index + 1 < argv.len() {
+                index += 2;
+                continue;
+            }
+            if is_option(argument) {
+                index += 1;
+                continue;
+            }
+        }
+
+        saw_source_input = true;
+        index += 1;
+    }
+    (saw_query && (!saw_source_input || is_canonical_cargo_probe_v2(argv)))
+        .then_some(PassthroughForm::Query)
 }
 
 fn reject_response_files(argv: &[OsString]) -> Result<(), RustcArgsErrorV2> {
@@ -393,6 +462,7 @@ fn classify_passthrough_form(
 ) -> Result<Option<PassthroughForm>, RustcArgsErrorV2> {
     let mut saw_terminal = false;
     let mut saw_query = false;
+    let mut saw_source_input = false;
     let mut options = true;
     let mut index = 1;
 
@@ -404,6 +474,7 @@ fn classify_passthrough_form(
             continue;
         }
         if !options {
+            saw_source_input = true;
             index += 1;
             continue;
         }
@@ -417,9 +488,7 @@ fn classify_passthrough_form(
         if is_terminal_selector(argument) {
             saw_terminal = true;
         }
-        if is_query_selector(argument) {
-            saw_query = true;
-        }
+        saw_query |= is_passthrough_query_selector(argument, argv.get(index + 1));
 
         if let Some(option) = separate_value_option(argument) {
             let value_index = index + 1;
@@ -434,14 +503,17 @@ fn classify_passthrough_form(
                 saw_terminal = true;
             }
             index += 2;
+        } else if is_option(argument) {
+            index += 1;
         } else {
+            saw_source_input = true;
             index += 1;
         }
     }
 
     Ok(if saw_terminal {
         Some(PassthroughForm::Terminal)
-    } else if saw_query {
+    } else if saw_query && (!saw_source_input || is_canonical_cargo_probe_v2(argv)) {
         Some(PassthroughForm::Query)
     } else {
         None
@@ -591,38 +663,166 @@ fn empty_joined_value_option(argument: &OsStr) -> Option<&'static str> {
         })
 }
 
+fn bootstrap_terminal_v2(argv: &[OsString]) -> bool {
+    if argv.len() == 2 {
+        let selector = &argv[1];
+        return matches_os(
+            selector,
+            &[
+                "-h",
+                "--help",
+                "-V",
+                "--version",
+                "-vV",
+                "-Vv",
+                "--explain",
+                "-Chelp",
+                "-Whelp",
+                "-Zhelp",
+            ],
+        ) || has_encoded_prefix(selector, EXPLAIN_JOINED_PREFIX);
+    }
+    argv.len() == 3
+        && ((argv[1] == OsStr::new("--explain") && !argv[2].is_empty())
+            || (matches_os(&argv[1], &["-C", "-W", "-Z"]) && argv[2] == OsStr::new("help")))
+}
+
+fn bootstrap_query_v2(argv: &[OsString]) -> bool {
+    simple_print_query_v2(argv) || is_canonical_cargo_probe_v2(argv)
+}
+
+fn simple_print_query_v2(argv: &[OsString]) -> bool {
+    let mut saw_print = false;
+    let mut index = 1;
+    while index < argv.len() {
+        let argument = &argv[index];
+        if let Some(kind) = argument
+            .as_encoded_bytes()
+            .strip_prefix(PRINT_JOINED_PREFIX)
+        {
+            if !kind.is_empty() && !is_passthrough_print_kind(kind) {
+                return false;
+            }
+            saw_print = true;
+            index += 1;
+            continue;
+        }
+        if argument == OsStr::new("--print") {
+            saw_print = true;
+            let Some(kind) = argv.get(index + 1) else {
+                index += 1;
+                continue;
+            };
+            if !kind.is_empty() && !is_passthrough_print_kind(kind.as_encoded_bytes()) {
+                return false;
+            }
+            index += 2;
+            continue;
+        }
+        return false;
+    }
+    saw_print
+}
+
 fn is_terminal_selector(argument: &OsStr) -> bool {
     matches_os(argument, &["-h", "--help", "-V", "--version", "-vV", "-Vv"])
         || has_encoded_prefix(argument, EXPLAIN_JOINED_PREFIX)
         || argument == OsStr::new("--explain")
-        || matches_os(
-            argument,
-            &[
-                "-Chelp",
-                "-Whelp",
-                "-Zhelp",
-                "-Zno-analysis",
-                "-Zno-codegen",
-                "-Zparse-crate-root-only",
-            ],
-        )
-        || has_encoded_prefix(argument, b"-Zunpretty=")
-        || has_encoded_prefix(argument, b"--pretty=")
-        || has_encoded_prefix(argument, b"--unpretty=")
-        || matches_os(argument, &["--pretty", "--unpretty"])
+        || matches_os(argument, &["-Chelp", "-Whelp", "-Zhelp"])
 }
 
-fn is_query_selector(argument: &OsStr) -> bool {
-    argument == OsStr::new("--print") || has_encoded_prefix(argument, PRINT_JOINED_PREFIX)
+fn is_passthrough_query_selector(argument: &OsStr, next: Option<&OsString>) -> bool {
+    if argument == OsStr::new("--print") {
+        return next.is_none_or(|value| {
+            value.is_empty() || is_passthrough_print_kind(value.as_encoded_bytes())
+        });
+    }
+    argument
+        .as_encoded_bytes()
+        .strip_prefix(PRINT_JOINED_PREFIX)
+        .is_some_and(|value| value.is_empty() || is_passthrough_print_kind(value))
+}
+
+fn is_passthrough_print_kind(value: &[u8]) -> bool {
+    PASSTHROUGH_PRINT_KINDS_V2.contains(&value)
+}
+
+fn is_canonical_cargo_probe_v2(argv: &[OsString]) -> bool {
+    if argv
+        .get(1)
+        .is_none_or(|argument| argument != OsStr::new("-"))
+        || argv
+            .get(2)
+            .is_none_or(|argument| argument != OsStr::new("--crate-name"))
+        || argv
+            .get(3)
+            .is_none_or(|argument| argument != OsStr::new("___"))
+    {
+        return false;
+    }
+
+    let mut saw_file_names = false;
+    let mut index = 4;
+    while index < argv.len() {
+        let argument = &argv[index];
+        if let Some(kind) = argument
+            .as_encoded_bytes()
+            .strip_prefix(PRINT_JOINED_PREFIX)
+        {
+            if !is_passthrough_print_kind(kind) {
+                return false;
+            }
+            saw_file_names |= kind == b"file-names";
+            index += 1;
+            continue;
+        }
+        if argument == OsStr::new("--print") {
+            let Some(kind) = argv.get(index + 1).map(|value| value.as_encoded_bytes()) else {
+                return false;
+            };
+            if !is_passthrough_print_kind(kind) {
+                return false;
+            }
+            saw_file_names |= kind == b"file-names";
+            index += 2;
+            continue;
+        }
+        if let Some(crate_type) = argument.as_encoded_bytes().strip_prefix(b"--crate-type=") {
+            if !is_cargo_probe_crate_type(crate_type) {
+                return false;
+            }
+            index += 1;
+            continue;
+        }
+        if argument == OsStr::new("--crate-type") {
+            if argv
+                .get(index + 1)
+                .is_none_or(|value| !is_cargo_probe_crate_type(value.as_encoded_bytes()))
+            {
+                return false;
+            }
+            index += 2;
+            continue;
+        }
+        return false;
+    }
+    saw_file_names
+}
+
+fn is_cargo_probe_crate_type(value: &[u8]) -> bool {
+    [
+        b"bin".as_slice(),
+        b"rlib",
+        b"dylib",
+        b"cdylib",
+        b"staticlib",
+        b"proc-macro",
+    ]
+    .contains(&value)
 }
 
 fn is_terminal_pair(option: &str, value: &OsStr) -> bool {
-    (matches!(option, "-C" | "-W" | "-Z") && value == OsStr::new("help"))
-        || (option == "-Z"
-            && (matches_os(
-                value,
-                &["no-analysis", "no-codegen", "parse-crate-root-only"],
-            ) || has_encoded_prefix(value, b"unpretty=")))
+    matches!(option, "-C" | "-W" | "-Z") && value == OsStr::new("help")
 }
 
 fn matches_os(argument: &OsStr, choices: &[&str]) -> bool {
@@ -690,7 +890,7 @@ mod tests {
     }
 
     #[test]
-    fn classifies_print_forms_before_compile_metadata() {
+    fn source_bearing_print_forms_remain_compile_invocations() {
         let joined = args(&[
             "rustc",
             "--crate-name",
@@ -698,7 +898,7 @@ mod tests {
             "src/lib.rs",
             "--print=file-names",
         ]);
-        assert_eq!(expect_query(&joined).argv(), joined);
+        assert_eq!(expect_compile(&joined).argv(), joined);
 
         let separate = args(&["rustc", "--print", "sysroot"]);
         assert_eq!(expect_query(&separate).forwarded_args(), &separate[1..]);
@@ -735,11 +935,99 @@ mod tests {
     }
 
     #[test]
+    fn stdin_queries_require_the_canonical_cargo_probe_shape() {
+        for argv in [
+            args(&["rustc", "-", "--print=crate-name"]),
+            args(&["rustc", "-", "--crate-name", "kernel", "--print=file-names"]),
+            args(&[
+                "rustc",
+                "-",
+                "--crate-name",
+                "___",
+                "--print=file-names",
+                "--extern",
+                "proc_macro=libproc_macro.so",
+            ]),
+        ] {
+            assert!(
+                !matches!(
+                    classify_rustc_invocation_v2(&argv),
+                    Ok(RustcInvocationV2::Query(_))
+                ),
+                "noncanonical stdin invocation became a query: {argv:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn bootstrap_passthrough_policy_rejects_code_loading_and_mixed_forms() {
+        for argv in [
+            args(&["rustc", "--version"]),
+            args(&["rustc", "--print=sysroot"]),
+            args(&[
+                "rustc",
+                "-",
+                "--crate-name",
+                "___",
+                "--print=file-names",
+                "--crate-type=bin",
+            ]),
+        ] {
+            assert!(
+                classify_rustc_invocation_v2(&argv)
+                    .unwrap()
+                    .is_bootstrap_passthrough_approved(),
+                "approved passthrough was rejected: {argv:?}"
+            );
+        }
+
+        for argv in [
+            args(&[
+                "rustc",
+                "-Zcodegen-backend=/tmp/untrusted.so",
+                "--print=sysroot",
+            ]),
+            args(&["rustc", "-Zcodegen-backend=/tmp/untrusted.so", "--help"]),
+            args(&["rustc", "--verbose"]),
+            args(&["rustc", "--crate-name", "kernel", "src/lib.rs"]),
+        ] {
+            assert!(
+                !classify_rustc_invocation_v2(&argv)
+                    .unwrap()
+                    .is_bootstrap_passthrough_approved(),
+                "unsafe passthrough was approved: {argv:?}"
+            );
+        }
+    }
+
+    #[test]
     fn terminal_takes_precedence_over_query() {
         let argv = args(&["rustc", "--print=sysroot", "--version"]);
         assert!(matches!(
             classify_rustc_invocation_v2(&argv),
             Ok(RustcInvocationV2::Terminal(_))
+        ));
+    }
+
+    #[test]
+    fn selector_shaped_option_values_are_not_reclassified() {
+        let compile = args(&[
+            "rustc",
+            "--cfg",
+            "--version",
+            "--crate-name",
+            "kernel",
+            "src/lib.rs",
+        ]);
+        assert!(matches!(
+            classify_rustc_invocation_v2(&compile),
+            Ok(RustcInvocationV2::Compile(_))
+        ));
+
+        let query = args(&["rustc", "--print", "--version"]);
+        assert!(matches!(
+            classify_rustc_invocation_v2(&query),
+            Ok(RustcInvocationV2::Query(_))
         ));
     }
 
@@ -823,14 +1111,7 @@ mod tests {
                 OsString::from("--crate-name=actual"),
                 OsString::from("src/actual.rs"),
             ];
-            if *option == "--print" {
-                assert!(matches!(
-                    classify_rustc_invocation_v2(&argv),
-                    Ok(RustcInvocationV2::Query(_))
-                ));
-                continue;
-            }
-            if matches!(*option, "--explain" | "--pretty" | "--unpretty") {
+            if *option == "--explain" {
                 assert!(matches!(
                     classify_rustc_invocation_v2(&argv),
                     Ok(RustcInvocationV2::Terminal(_))
@@ -890,9 +1171,10 @@ mod tests {
     }
 
     #[test]
-    fn rejects_response_files_in_all_positions_and_forms() {
+    fn rejects_response_files_in_every_invocation_class() {
         for argv in [
             args(&["rustc", "@rustc.args"]),
+            args(&["rustc", "--version", "@terminal.args"]),
             args(&["rustc", "--print=sysroot", "@query.args"]),
             args(&["rustc", "--sysroot", "@sysroot.args"]),
             args(&["rustc", "--", "@source.rs"]),
@@ -905,21 +1187,15 @@ mod tests {
     }
 
     #[test]
-    fn rejects_missing_separate_option_values_even_for_passthrough_forms() {
-        assert_eq!(
+    fn passthrough_selectors_preserve_rustc_diagnostics_for_malformed_options() {
+        assert!(matches!(
             classify_rustc_invocation_v2(&args(&["rustc", "--print"])),
-            Err(RustcArgsErrorV2::MissingOptionValue {
-                option: "--print",
-                option_index: 1,
-            })
-        );
-        assert_eq!(
+            Ok(RustcInvocationV2::Query(_))
+        ));
+        assert!(matches!(
             classify_rustc_invocation_v2(&args(&["rustc", "--version", "--target"])),
-            Err(RustcArgsErrorV2::MissingOptionValue {
-                option: "--target",
-                option_index: 2,
-            })
-        );
+            Ok(RustcInvocationV2::Terminal(_))
+        ));
         assert_eq!(
             classify_rustc_invocation_v2(&[
                 OsString::from("rustc"),
@@ -934,13 +1210,46 @@ mod tests {
     }
 
     #[test]
-    fn rejects_empty_joined_long_option_values() {
-        for (option, joined) in [
-            ("--crate-name", "--crate-name="),
-            ("--target", "--target="),
-            ("--print", "--print="),
-            ("--explain", "--explain="),
+    fn code_producing_print_kinds_and_source_processing_modes_do_not_bypass_compile() {
+        for selector in [
+            "--print=native-static-libs",
+            "--print=link-args",
+            "-Zunpretty=expanded",
+            "-Zno-analysis",
+            "-Zno-codegen",
+            "-Zparse-crate-root-only",
+            "--pretty=expanded",
+            "--unpretty=expanded",
         ] {
+            let argv = args(&["rustc", "--crate-name", "kernel", "src/lib.rs", selector]);
+            assert!(
+                matches!(
+                    classify_rustc_invocation_v2(&argv),
+                    Ok(RustcInvocationV2::Compile(_))
+                ),
+                "{selector} bypassed compile classification"
+            );
+        }
+    }
+
+    #[test]
+    fn non_rust_suffix_source_input_does_not_become_a_query() {
+        let argv = args(&[
+            "rustc",
+            "--crate-name",
+            "kernel",
+            "src/kernel.input",
+            "--print=file-names",
+        ]);
+        assert_eq!(
+            classify_rustc_invocation_v2(&argv),
+            Err(RustcArgsErrorV2::AmbiguousSourceInput { argument_index: 3 })
+        );
+    }
+
+    #[test]
+    fn rejects_empty_joined_long_option_values() {
+        for (option, joined) in [("--crate-name", "--crate-name="), ("--target", "--target=")] {
             assert_eq!(
                 classify_rustc_invocation_v2(&args(&["rustc", joined])),
                 Err(RustcArgsErrorV2::MissingOptionValue {
@@ -949,6 +1258,14 @@ mod tests {
                 })
             );
         }
+        assert!(matches!(
+            classify_rustc_invocation_v2(&args(&["rustc", "--print="])),
+            Ok(RustcInvocationV2::Query(_))
+        ));
+        assert!(matches!(
+            classify_rustc_invocation_v2(&args(&["rustc", "--explain="])),
+            Ok(RustcInvocationV2::Terminal(_))
+        ));
     }
 
     #[test]
@@ -1074,15 +1391,11 @@ mod tests {
         fn query_passthrough_preserves_arbitrary_non_utf8_arguments() {
             let executable = OsString::from_vec(b"/toolchain/ru\xffstc".to_vec());
             let opaque = OsString::from_vec(b"opaque-\xff-value".to_vec());
-            let crate_name = OsString::from_vec(b"bad-\xff-name".to_vec());
             let argv = vec![
                 executable.clone(),
-                OsString::from("-"),
-                OsString::from("--crate-name"),
-                crate_name,
                 OsString::from("--cfg"),
                 opaque,
-                OsString::from("--print=file-names"),
+                OsString::from("--print=sysroot"),
             ];
             let query = expect_query(&argv);
             assert_eq!(query.argv(), argv);

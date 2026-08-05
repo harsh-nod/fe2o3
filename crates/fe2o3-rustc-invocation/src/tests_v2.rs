@@ -144,16 +144,13 @@ fn compiler_visible_settings_are_single_sourced() {
 fn classifier_separates_queries_from_compiles_and_rejects_ambiguity() {
     let base = fixture();
     for argument in [
-        "--print=file-names",
-        "--print",
         "--explain=E0001",
         "--help",
         "-h",
         "--version",
         "-V",
         "-vV",
-        "-Zunpretty=hir",
-        "-Zno-codegen",
+        "-Zhelp",
     ] {
         let mut argv = base
             .rustc()
@@ -167,6 +164,28 @@ fn classifier_separates_queries_from_compiles_and_rejects_ambiguity() {
                 Ok(RustcInvocationV2::Terminal(_)) | Ok(RustcInvocationV2::Query(_))
             ),
             "classified {argument} as a compile"
+        );
+    }
+
+    for argument in [
+        "--print=file-names",
+        "--print=native-static-libs",
+        "--print=link-args",
+        "-Zunpretty=hir",
+        "-Zno-codegen",
+    ] {
+        let mut argv = base
+            .rustc()
+            .argv()
+            .map(std::ffi::OsString::from)
+            .collect::<Vec<_>>();
+        argv.insert(1, argument.into());
+        assert!(
+            matches!(
+                classify_rustc_invocation_v2(&argv),
+                Ok(RustcInvocationV2::Compile(_))
+            ),
+            "{argument} bypassed compile classification"
         );
     }
 
