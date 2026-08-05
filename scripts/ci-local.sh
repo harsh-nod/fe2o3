@@ -184,6 +184,10 @@ run_hardware_smoke() {
       -L "${rocm_path}/lib" -Wl,-rpath,"${rocm_path}/lib" -lamdhip64 \
       -o "${native_test}"
   run_step hardware-hip-device-properties-test "${native_test}"
+  run_step hardware-observed-device-target \
+    cargo test --locked -p fe2o3-core --lib \
+      device_target::tests::context_observes_a_real_hip_device -- \
+      --ignored --exact
   run_step hardware-device-copy-transfer \
     cargo test --locked -p fe2o3-core --test device_copy_derive_hardware -- \
       --ignored --exact derived_struct_bytes_round_trip_through_device_memory
