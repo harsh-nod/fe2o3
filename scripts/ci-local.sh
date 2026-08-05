@@ -10,6 +10,7 @@ readonly CPU_TEST_PACKAGES=(
   cargo-fe2o3
   dialect-amdgcn
   dialect-mir
+  fe2o3-amd-target
   fe2o3-completion
   fe2o3-artifacts
   fe2o3-contracts

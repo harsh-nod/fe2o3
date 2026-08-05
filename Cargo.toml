@@ -3,6 +3,7 @@ members = [
     "crates/cargo-fe2o3",
     "crates/dialect-amdgcn",
     "crates/dialect-mir",
+    "crates/fe2o3-amd-target",
     "crates/fe2o3-completion",
     "crates/fe2o3-artifacts",
     "crates/fe2o3-contracts",
@@ -52,6 +53,7 @@ rust-version = "1.94"
 [workspace.dependencies]
 dialect-amdgcn = { path = "crates/dialect-amdgcn" }
 dialect-mir = { path = "crates/dialect-mir" }
+fe2o3-amd-target = { path = "crates/fe2o3-amd-target" }
 fe2o3-completion = { path = "crates/fe2o3-completion" }
 fe2o3-artifacts = { path = "crates/fe2o3-artifacts" }
 fe2o3-contracts = { path = "crates/fe2o3-contracts" }
