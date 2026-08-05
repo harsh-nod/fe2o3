@@ -1,26 +1,29 @@
 //! Fail-closed object pinning for a future codegen-backend dynamic library.
 //!
 //! Linux is the only supported platform in this increment. The implementation opens the final
-//! path component with `O_NOFOLLOW`, hashes through that opened descriptor, retains it, and
-//! validates a `/proc/self/fd` reference to the same object. Other platforms return
+//! path component with `O_NOFOLLOW`, copies and hashes its exact bounded contents into an anonymous
+//! memfd, seals that image against mutation, and validates a `/proc/self/fd` reference to the
+//! sealed object. Other platforms return
 //! [`PinCodegenBackendError::UnsupportedPlatform`]; they must not fall back to reopening the input
 //! pathname.
 //!
-//! The descriptor remains `O_CLOEXEC` in the parent. [`PinnedCodegenBackend::prepare_command`]
-//! validates its identity again, appends the exact descriptor-backed rustc option, and installs a
-//! child-only `pre_exec` step that verifies the object and clears `FD_CLOEXEC`. The resulting
-//! command borrows the pin, so the descriptor cannot be dropped before spawn. This module still
-//! provides no compile activation or dynamic-loading operation.
+//! The retained descriptor is read-only and remains `O_CLOEXEC` in the parent.
+//! [`PinnedCodegenBackend::prepare_command`] validates its identity and seals again, appends the
+//! exact descriptor-backed rustc option, and installs a child-only `pre_exec` step that verifies
+//! the image and clears `FD_CLOEXEC`. The resulting command borrows the pin, so the descriptor
+//! cannot be dropped before spawn. This module still provides no compile activation or
+//! dynamic-loading operation.
 //!
 //! After successful exec, the descriptor is intentionally open in rustc and may remain visible to
 //! descendants that rustc starts. A compile-activation design must define when rustc closes it or
 //! restores `FD_CLOEXEC`; this primitive claims only that unrelated commands spawned by the parent
 //! do not inherit it.
 //!
-//! This primitive identifies bytes read from one regular-file object. Its digest is not an
-//! authenticated trust or authority claim. Parent-directory resolution, in-place mutation by
-//! another writer, dynamic-loader behavior, transitive shared dependencies, and the kernel/procfs
-//! implementation remain outside this boundary.
+//! The retained image is independent of later pathname replacement or source-inode mutation. Its
+//! SHA-256 digest measures the origin bytes captured during `open`; it is unauthenticated and is
+//! not a trust or authority claim. Parent-directory resolution, hostile mutation that defeats the
+//! source metadata checks, dynamic-loader behavior, transitive shared dependencies, descendant
+//! descriptor lifetime, and the kernel/procfs implementation remain outside this boundary.
 
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
@@ -93,6 +96,24 @@ pub(crate) enum PinCodegenBackendError {
         path: PathBuf,
         source: io::Error,
     },
+    CreateImage {
+        path: PathBuf,
+        source: io::Error,
+    },
+    WriteImage {
+        path: PathBuf,
+        source: io::Error,
+    },
+    ImageDigestMismatch {
+        path: PathBuf,
+    },
+    SealImage {
+        path: PathBuf,
+        source: io::Error,
+    },
+    ImageSealsChanged {
+        path: PathBuf,
+    },
     DescriptorStrategy {
         path: PathBuf,
         source: io::Error,
@@ -101,6 +122,9 @@ pub(crate) enum PinCodegenBackendError {
         path: PathBuf,
     },
     DescriptorNotCloseOnExec {
+        path: PathBuf,
+    },
+    DescriptorNotReadOnly {
         path: PathBuf,
     },
     PreexistingCodegenBackendSelector {
@@ -169,6 +193,31 @@ impl fmt::Display for PinCodegenBackendError {
                 "failed to rewind opened codegen backend {} after hashing: {source}",
                 path.display()
             ),
+            Self::CreateImage { path, source } => write!(
+                formatter,
+                "failed to create an anonymous image for codegen backend {}: {source}",
+                path.display()
+            ),
+            Self::WriteImage { path, source } => write!(
+                formatter,
+                "failed to copy codegen backend {} into its anonymous image: {source}",
+                path.display()
+            ),
+            Self::ImageDigestMismatch { path } => write!(
+                formatter,
+                "anonymous codegen-backend image does not match the captured bytes from {}",
+                path.display()
+            ),
+            Self::SealImage { path, source } => write!(
+                formatter,
+                "failed to immutably seal the anonymous image for {}: {source}",
+                path.display()
+            ),
+            Self::ImageSealsChanged { path } => write!(
+                formatter,
+                "anonymous codegen-backend image seals are missing or changed for {}",
+                path.display()
+            ),
             Self::DescriptorStrategy { path, source } => write!(
                 formatter,
                 "fd-backed codegen-backend access is unavailable for {}: {source}",
@@ -182,6 +231,11 @@ impl fmt::Display for PinCodegenBackendError {
             Self::DescriptorNotCloseOnExec { path } => write!(
                 formatter,
                 "pinned codegen-backend descriptor unexpectedly became inheritable: {}",
+                path.display()
+            ),
+            Self::DescriptorNotReadOnly { path } => write!(
+                formatter,
+                "pinned codegen-backend descriptor is unexpectedly writable: {}",
                 path.display()
             ),
             Self::PreexistingCodegenBackendSelector { argument } => write!(
@@ -205,6 +259,9 @@ impl Error for PinCodegenBackendError {
             | Self::Inspect { source, .. }
             | Self::Read { source, .. }
             | Self::Rewind { source, .. }
+            | Self::CreateImage { source, .. }
+            | Self::WriteImage { source, .. }
+            | Self::SealImage { source, .. }
             | Self::DescriptorStrategy { source, .. } => Some(source),
             Self::UnsupportedPlatform
             | Self::NotRegular { .. }
@@ -213,8 +270,11 @@ impl Error for PinCodegenBackendError {
             | Self::UnexpectedEof { .. }
             | Self::GrewDuringRead { .. }
             | Self::ChangedDuringRead { .. }
+            | Self::ImageDigestMismatch { .. }
+            | Self::ImageSealsChanged { .. }
             | Self::DescriptorObjectChanged { .. }
             | Self::DescriptorNotCloseOnExec { .. }
+            | Self::DescriptorNotReadOnly { .. }
             | Self::PreexistingCodegenBackendSelector { .. }
             | Self::UninspectableResponseFile { .. } => None,
         }
@@ -227,11 +287,11 @@ mod platform {
         ChildDescriptorInheritance, MAX_CODEGEN_BACKEND_BYTES, Path, PathBuf,
         PinCodegenBackendError,
     };
-    use rustix::fs::{Mode, OFlags};
+    use rustix::fs::{MemfdFlags, Mode, OFlags, SealFlags};
     use rustix::io::FdFlags;
     use sha2::{Digest, Sha256};
     use std::fs::{File, Metadata};
-    use std::io::{self, Read, Seek, SeekFrom};
+    use std::io::{self, Read, Seek, SeekFrom, Write};
     use std::os::fd::{AsRawFd, BorrowedFd, RawFd};
     use std::os::unix::ffi::OsStrExt;
     use std::os::unix::fs::MetadataExt;
@@ -279,12 +339,14 @@ mod platform {
         }
     }
 
-    /// One opened codegen-backend object retained after validation.
+    /// One immutable anonymous image retained after validating its origin bytes.
     pub(crate) struct PinnedCodegenBackend {
         file: File,
         display_path: PathBuf,
         descriptor_path: PathBuf,
         snapshot: ObjectSnapshot,
+        seals: SealFlags,
+        /// An unauthenticated measurement of the captured source bytes.
         sha256: [u8; 32],
     }
 
@@ -300,11 +362,12 @@ mod platform {
                 path: display_path.clone(),
                 source: source.into(),
             })?;
-            let mut file = File::from(fd);
-            require_close_on_exec(&file, &display_path)?;
+            let mut source_file = File::from(fd);
+            require_close_on_exec(&source_file, &display_path)?;
 
             let initial_metadata =
-                file.metadata()
+                source_file
+                    .metadata()
                     .map_err(|source| PinCodegenBackendError::Inspect {
                         path: display_path.clone(),
                         source,
@@ -325,35 +388,24 @@ mod platform {
                 });
             }
 
-            let sha256 = hash_exact(&mut file, &display_path, initial.size)?;
-            let final_metadata =
-                file.metadata()
-                    .map_err(|source| PinCodegenBackendError::Inspect {
-                        path: display_path.clone(),
-                        source,
-                    })?;
-            let snapshot = ObjectSnapshot::from_metadata(&final_metadata);
-            if snapshot != initial {
-                return Err(PinCodegenBackendError::ChangedDuringRead { path: display_path });
-            }
-            file.seek(SeekFrom::Start(0))
-                .map_err(|source| PinCodegenBackendError::Rewind {
-                    path: display_path.clone(),
-                    source,
-                })?;
+            let (file, snapshot, seals, sha256) =
+                capture_source(&mut source_file, &display_path, initial)?;
+            require_read_only(&file, &display_path)?;
 
             let descriptor_path = PathBuf::from(format!("/proc/self/fd/{}", file.as_raw_fd()));
-            validate_descriptor_path(&file, &descriptor_path, snapshot, &display_path)?;
+            validate_descriptor_path(&file, &descriptor_path, snapshot, seals, &display_path)?;
 
             Ok(Self {
                 file,
                 display_path,
                 descriptor_path,
                 snapshot,
+                seals,
                 sha256,
             })
         }
 
+        /// Returns an unauthenticated SHA-256 measurement of the captured source bytes.
         pub(crate) const fn sha256(&self) -> &[u8; 32] {
             &self.sha256
         }
@@ -366,10 +418,12 @@ mod platform {
             &self,
         ) -> Result<BackendDescriptorReference<'_>, PinCodegenBackendError> {
             require_close_on_exec(&self.file, &self.display_path)?;
+            require_read_only(&self.file, &self.display_path)?;
             validate_descriptor_path(
                 &self.file,
                 &self.descriptor_path,
                 self.snapshot,
+                self.seals,
                 &self.display_path,
             )?;
 
@@ -387,19 +441,22 @@ mod platform {
         ) -> Result<PreparedCodegenBackendCommand<'_>, PinCodegenBackendError> {
             reject_preexisting_backend_selector(&command)?;
             require_close_on_exec(&self.file, &self.display_path)?;
+            require_read_only(&self.file, &self.display_path)?;
             validate_descriptor_path(
                 &self.file,
                 &self.descriptor_path,
                 self.snapshot,
+                self.seals,
                 &self.display_path,
             )?;
 
             let descriptor = self.file.as_raw_fd();
             let snapshot = self.snapshot;
+            let seals = self.seals;
             // SAFETY: the callback uses only async-signal-safe descriptor syscalls. The retained
             // File and the returned command's borrow keep `descriptor` valid until spawn.
             unsafe {
-                command.pre_exec(move || prepare_descriptor_in_child(descriptor, snapshot));
+                command.pre_exec(move || prepare_descriptor_in_child(descriptor, snapshot, seals));
             }
 
             let mut argument = OsString::from("-Zcodegen-backend=");
@@ -460,7 +517,11 @@ mod platform {
         }
     }
 
-    fn prepare_descriptor_in_child(descriptor: RawFd, expected: ObjectSnapshot) -> io::Result<()> {
+    fn prepare_descriptor_in_child(
+        descriptor: RawFd,
+        expected: ObjectSnapshot,
+        expected_seals: SealFlags,
+    ) -> io::Result<()> {
         // SAFETY: the prepared command borrows the File that owns this descriptor through spawn.
         let descriptor = unsafe { BorrowedFd::borrow_raw(descriptor) };
         let flags = rustix::io::fcntl_getfd(descriptor).map_err(io::Error::from)?;
@@ -472,6 +533,20 @@ mod platform {
 
         let stat = rustix::fs::fstat(descriptor).map_err(io::Error::from)?;
         if !expected.matches_stat(&stat) {
+            return Err(io::Error::from_raw_os_error(
+                rustix::io::Errno::STALE.raw_os_error(),
+            ));
+        }
+
+        let status_flags = rustix::fs::fcntl_getfl(descriptor).map_err(io::Error::from)?;
+        if status_flags & OFlags::ACCMODE != OFlags::RDONLY {
+            return Err(io::Error::from_raw_os_error(
+                rustix::io::Errno::PERM.raw_os_error(),
+            ));
+        }
+
+        let seals = rustix::fs::fcntl_get_seals(descriptor).map_err(io::Error::from)?;
+        if seals != expected_seals {
             return Err(io::Error::from_raw_os_error(
                 rustix::io::Errno::STALE.raw_os_error(),
             ));
@@ -518,6 +593,225 @@ mod platform {
                         .strip_prefix(*name)
                         .is_some_and(|rest| rest.starts_with(b"="))
             })
+    }
+
+    fn capture_source(
+        source: &mut File,
+        display_path: &Path,
+        initial: ObjectSnapshot,
+    ) -> Result<(File, ObjectSnapshot, SealFlags, [u8; 32]), PinCodegenBackendError> {
+        let image_fd = rustix::fs::memfd_create(
+            "fe2o3-codegen-backend",
+            MemfdFlags::CLOEXEC | MemfdFlags::ALLOW_SEALING,
+        )
+        .map_err(|source| PinCodegenBackendError::CreateImage {
+            path: display_path.to_path_buf(),
+            source: source.into(),
+        })?;
+        let mut image = File::from(image_fd);
+        require_close_on_exec(&image, display_path)?;
+
+        let source_digest = copy_exact(source, &mut image, display_path, initial.size)?;
+        let final_source = source
+            .metadata()
+            .map(|metadata| ObjectSnapshot::from_metadata(&metadata))
+            .map_err(|source| PinCodegenBackendError::Inspect {
+                path: display_path.to_path_buf(),
+                source,
+            })?;
+        if final_source != initial {
+            return Err(PinCodegenBackendError::ChangedDuringRead {
+                path: display_path.to_path_buf(),
+            });
+        }
+
+        image
+            .seek(SeekFrom::Start(0))
+            .map_err(|source| PinCodegenBackendError::Rewind {
+                path: display_path.to_path_buf(),
+                source,
+            })?;
+        let image_digest = hash_exact(&mut image, display_path, initial.size)?;
+        if image_digest != source_digest {
+            return Err(PinCodegenBackendError::ImageDigestMismatch {
+                path: display_path.to_path_buf(),
+            });
+        }
+        image
+            .seek(SeekFrom::Start(0))
+            .map_err(|source| PinCodegenBackendError::Rewind {
+                path: display_path.to_path_buf(),
+                source,
+            })?;
+
+        // `image` is the sole memfd descriptor and no mapping or duplicate has been created, so
+        // applying `F_SEAL_WRITE` cannot be blocked by a writable alias. Retention uses a fresh
+        // read-only descriptor after all seals have been verified.
+        let seals = seal_image(&image, display_path)?;
+        let snapshot = image
+            .metadata()
+            .map(|metadata| ObjectSnapshot::from_metadata(&metadata))
+            .map_err(|source| PinCodegenBackendError::Inspect {
+                path: display_path.to_path_buf(),
+                source,
+            })?;
+        if snapshot.size != initial.size {
+            return Err(PinCodegenBackendError::DescriptorObjectChanged {
+                path: display_path.to_path_buf(),
+            });
+        }
+
+        let writable_descriptor_path =
+            PathBuf::from(format!("/proc/self/fd/{}", image.as_raw_fd()));
+        validate_descriptor_path(
+            &image,
+            &writable_descriptor_path,
+            snapshot,
+            seals,
+            display_path,
+        )?;
+        let read_only_fd = rustix::fs::open(
+            &writable_descriptor_path,
+            OFlags::RDONLY | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(|source| PinCodegenBackendError::DescriptorStrategy {
+            path: display_path.to_path_buf(),
+            source: source.into(),
+        })?;
+        let read_only_image = File::from(read_only_fd);
+        require_close_on_exec(&read_only_image, display_path)?;
+        require_read_only(&read_only_image, display_path)?;
+        let read_only_snapshot = read_only_image
+            .metadata()
+            .map(|metadata| ObjectSnapshot::from_metadata(&metadata))
+            .map_err(|source| PinCodegenBackendError::Inspect {
+                path: display_path.to_path_buf(),
+                source,
+            })?;
+        if read_only_snapshot != snapshot {
+            return Err(PinCodegenBackendError::DescriptorObjectChanged {
+                path: display_path.to_path_buf(),
+            });
+        }
+        require_exact_seals(&read_only_image, seals, display_path)?;
+        drop(image);
+
+        Ok((read_only_image, snapshot, seals, source_digest))
+    }
+
+    fn seal_image(image: &File, display_path: &Path) -> Result<SealFlags, PinCodegenBackendError> {
+        let required = SealFlags::WRITE | SealFlags::GROW | SealFlags::SHRINK;
+        let with_future_write = required | SealFlags::FUTURE_WRITE;
+        let data_seals = match rustix::fs::fcntl_add_seals(image, with_future_write) {
+            Ok(()) => with_future_write,
+            Err(source) if source == rustix::io::Errno::INVAL => {
+                let existing = rustix::fs::fcntl_get_seals(image).map_err(|source| {
+                    PinCodegenBackendError::SealImage {
+                        path: display_path.to_path_buf(),
+                        source: source.into(),
+                    }
+                })?;
+                if !existing.is_empty() {
+                    return Err(PinCodegenBackendError::ImageSealsChanged {
+                        path: display_path.to_path_buf(),
+                    });
+                }
+                rustix::fs::fcntl_add_seals(image, required).map_err(|source| {
+                    PinCodegenBackendError::SealImage {
+                        path: display_path.to_path_buf(),
+                        source: source.into(),
+                    }
+                })?;
+                required
+            }
+            Err(source) => {
+                return Err(PinCodegenBackendError::SealImage {
+                    path: display_path.to_path_buf(),
+                    source: source.into(),
+                });
+            }
+        };
+
+        rustix::fs::fcntl_add_seals(image, SealFlags::SEAL).map_err(|source| {
+            PinCodegenBackendError::SealImage {
+                path: display_path.to_path_buf(),
+                source: source.into(),
+            }
+        })?;
+        let expected = data_seals | SealFlags::SEAL;
+        require_exact_seals(image, expected, display_path)?;
+        Ok(expected)
+    }
+
+    fn require_exact_seals(
+        image: &File,
+        expected: SealFlags,
+        display_path: &Path,
+    ) -> Result<(), PinCodegenBackendError> {
+        let actual = rustix::fs::fcntl_get_seals(image).map_err(|source| {
+            PinCodegenBackendError::SealImage {
+                path: display_path.to_path_buf(),
+                source: source.into(),
+            }
+        })?;
+        if actual != expected {
+            return Err(PinCodegenBackendError::ImageSealsChanged {
+                path: display_path.to_path_buf(),
+            });
+        }
+        Ok(())
+    }
+
+    fn copy_exact<R: Read, W: Write>(
+        reader: &mut R,
+        writer: &mut W,
+        display_path: &Path,
+        expected_size: u64,
+    ) -> Result<[u8; 32], PinCodegenBackendError> {
+        let mut hasher = Sha256::new();
+        let mut buffer = [0_u8; HASH_CHUNK_BYTES];
+        let mut total = 0_u64;
+
+        while total < expected_size {
+            let remaining = expected_size - total;
+            let requested = usize::try_from(remaining.min(HASH_CHUNK_BYTES as u64))
+                .expect("copy chunk length fits usize");
+            let read = read_retry(reader, &mut buffer[..requested]).map_err(|source| {
+                PinCodegenBackendError::Read {
+                    path: display_path.to_path_buf(),
+                    source,
+                }
+            })?;
+            if read == 0 {
+                return Err(PinCodegenBackendError::UnexpectedEof {
+                    path: display_path.to_path_buf(),
+                    expected: expected_size,
+                    actual: total,
+                });
+            }
+            writer.write_all(&buffer[..read]).map_err(|source| {
+                PinCodegenBackendError::WriteImage {
+                    path: display_path.to_path_buf(),
+                    source,
+                }
+            })?;
+            hasher.update(&buffer[..read]);
+            total += read as u64;
+        }
+
+        if read_retry(reader, &mut buffer[..1]).map_err(|source| PinCodegenBackendError::Read {
+            path: display_path.to_path_buf(),
+            source,
+        })? != 0
+        {
+            return Err(PinCodegenBackendError::GrewDuringRead {
+                path: display_path.to_path_buf(),
+                expected: expected_size,
+            });
+        }
+
+        Ok(hasher.finalize().into())
     }
 
     fn hash_exact<R: Read>(
@@ -591,12 +885,29 @@ mod platform {
         Ok(())
     }
 
+    fn require_read_only(file: &File, display_path: &Path) -> Result<(), PinCodegenBackendError> {
+        let flags = rustix::fs::fcntl_getfl(file).map_err(|source| {
+            PinCodegenBackendError::DescriptorStrategy {
+                path: display_path.to_path_buf(),
+                source: source.into(),
+            }
+        })?;
+        if flags & OFlags::ACCMODE != OFlags::RDONLY {
+            return Err(PinCodegenBackendError::DescriptorNotReadOnly {
+                path: display_path.to_path_buf(),
+            });
+        }
+        Ok(())
+    }
+
     fn validate_descriptor_path(
         file: &File,
         descriptor_path: &Path,
         expected: ObjectSnapshot,
+        expected_seals: SealFlags,
         display_path: &Path,
     ) -> Result<(), PinCodegenBackendError> {
+        require_exact_seals(file, expected_seals, display_path)?;
         let descriptor_metadata =
             file.metadata()
                 .map_err(|source| PinCodegenBackendError::Inspect {
@@ -629,7 +940,7 @@ mod platform {
     #[cfg(test)]
     mod tests {
         use super::*;
-        use std::fs::{self, FileTimes};
+        use std::fs::{self, OpenOptions};
         use std::os::unix::fs::{MetadataExt, symlink};
         use std::sync::atomic::{AtomicU64, Ordering};
         use std::time::{Duration, Instant};
@@ -680,7 +991,7 @@ mod platform {
         }
 
         #[test]
-        fn exact_hash_policy_rejects_short_and_growing_streams() {
+        fn exact_copy_and_hash_policies_reject_short_and_growing_streams() {
             let path = Path::new("fixture");
             let mut short = &b"abc"[..];
             assert!(matches!(
@@ -697,6 +1008,26 @@ mod platform {
                 hash_exact(&mut growing, path, 2),
                 Err(PinCodegenBackendError::GrewDuringRead { expected: 2, .. })
             ));
+
+            let mut short = &b"abc"[..];
+            let mut short_image = Vec::new();
+            assert!(matches!(
+                copy_exact(&mut short, &mut short_image, path, 4),
+                Err(PinCodegenBackendError::UnexpectedEof {
+                    expected: 4,
+                    actual: 3,
+                    ..
+                })
+            ));
+            assert_eq!(short_image, b"abc");
+
+            let mut growing = &b"abc"[..];
+            let mut growing_image = Vec::new();
+            assert!(matches!(
+                copy_exact(&mut growing, &mut growing_image, path, 2),
+                Err(PinCodegenBackendError::GrewDuringRead { expected: 2, .. })
+            ));
+            assert_eq!(growing_image, b"ab");
         }
 
         #[test]
@@ -807,35 +1138,39 @@ mod platform {
         }
 
         #[test]
-        fn same_size_mutation_with_restored_mtime_is_rejected_by_ctime() {
+        fn source_mutation_after_capture_cannot_change_the_sealed_image() {
             let root = TestDirectory::new();
             let selected = root.path().join("backend.so");
             fs::write(&selected, b"before").unwrap();
             let pinned = PinnedCodegenBackend::open(&selected).unwrap();
-            let original_metadata = fs::metadata(&selected).unwrap();
-            let original_modified = original_metadata.modified().unwrap();
-            let original_ctime = (original_metadata.ctime(), original_metadata.ctime_nsec());
+
+            fs::write(&selected, b"after!").unwrap();
+
+            let descriptor = pinned.descriptor_reference().unwrap();
+            assert_eq!(fs::read(descriptor.path()).unwrap(), b"before");
+            assert_eq!(fs::read(&selected).unwrap(), b"after!");
+        }
+
+        #[test]
+        fn source_mutation_after_initial_snapshot_fails_capture() {
+            let root = TestDirectory::new();
+            let selected = root.path().join("backend.so");
+            fs::write(&selected, b"before").unwrap();
+            let fd = rustix::fs::open(
+                &selected,
+                OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
+                Mode::empty(),
+            )
+            .unwrap();
+            let mut source = File::from(fd);
+            let initial = ObjectSnapshot::from_metadata(&source.metadata().unwrap());
 
             std::thread::sleep(Duration::from_millis(10));
             fs::write(&selected, b"after!").unwrap();
-            File::options()
-                .write(true)
-                .open(&selected)
-                .unwrap()
-                .set_times(FileTimes::new().set_modified(original_modified))
-                .unwrap();
 
-            let changed_metadata = fs::metadata(&selected).unwrap();
-            assert_eq!(changed_metadata.len(), original_metadata.len());
-            assert_eq!(changed_metadata.modified().unwrap(), original_modified);
-            assert_ne!(
-                (changed_metadata.ctime(), changed_metadata.ctime_nsec()),
-                original_ctime,
-                "fixture filesystem did not expose a ctime change"
-            );
             assert!(matches!(
-                pinned.descriptor_reference(),
-                Err(PinCodegenBackendError::DescriptorObjectChanged { .. })
+                capture_source(&mut source, &selected, initial),
+                Err(PinCodegenBackendError::ChangedDuringRead { .. })
             ));
         }
 
@@ -877,6 +1212,80 @@ mod platform {
             assert_eq!(procfs.mtime_nsec(), opened.mtime_nsec());
             assert_eq!(procfs.ctime(), opened.ctime());
             assert_eq!(procfs.ctime_nsec(), opened.ctime_nsec());
+        }
+
+        #[test]
+        fn retained_image_has_exact_immutable_seals() {
+            let root = TestDirectory::new();
+            let selected = root.path().join("backend.so");
+            fs::write(&selected, b"backend bytes").unwrap();
+            let pinned = PinnedCodegenBackend::open(&selected).unwrap();
+
+            let seals = rustix::fs::fcntl_get_seals(&pinned.file).unwrap();
+            assert_eq!(seals, pinned.seals);
+            assert!(seals.contains(SealFlags::WRITE));
+            assert!(seals.contains(SealFlags::GROW));
+            assert!(seals.contains(SealFlags::SHRINK));
+            assert!(seals.contains(SealFlags::SEAL));
+            assert!(
+                seals == (SealFlags::WRITE | SealFlags::GROW | SealFlags::SHRINK | SealFlags::SEAL)
+                    || seals
+                        == (SealFlags::WRITE
+                            | SealFlags::GROW
+                            | SealFlags::SHRINK
+                            | SealFlags::FUTURE_WRITE
+                            | SealFlags::SEAL)
+            );
+        }
+
+        #[test]
+        fn retained_image_rejects_write_resize_and_new_seals() {
+            let root = TestDirectory::new();
+            let selected = root.path().join("backend.so");
+            let original = b"backend bytes";
+            fs::write(&selected, original).unwrap();
+            let pinned = PinnedCodegenBackend::open(&selected).unwrap();
+
+            let writable_alias = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&pinned.descriptor_path)
+                .unwrap();
+            assert!(rustix::io::write(&writable_alias, b"x").is_err());
+            assert!(rustix::fs::ftruncate(&writable_alias, 1).is_err());
+            assert!(rustix::fs::ftruncate(&writable_alias, original.len() as u64 + 1).is_err());
+            assert!(rustix::fs::fcntl_add_seals(&writable_alias, SealFlags::EXEC).is_err());
+            assert_eq!(fs::read(&pinned.descriptor_path).unwrap(), original);
+            assert_eq!(
+                rustix::fs::fcntl_get_seals(&pinned.file).unwrap(),
+                pinned.seals
+            );
+        }
+
+        #[test]
+        fn retained_descriptor_is_read_only() {
+            let root = TestDirectory::new();
+            let selected = root.path().join("backend.so");
+            fs::write(&selected, b"backend bytes").unwrap();
+            let pinned = PinnedCodegenBackend::open(&selected).unwrap();
+
+            require_read_only(&pinned.file, &selected).unwrap();
+            let flags = rustix::fs::fcntl_getfl(&pinned.file).unwrap();
+            assert_eq!(flags & OFlags::ACCMODE, OFlags::RDONLY);
+        }
+
+        #[test]
+        fn procfs_cannot_create_a_write_capability_for_the_sealed_image() {
+            let root = TestDirectory::new();
+            let selected = root.path().join("backend.so");
+            let original = b"backend bytes";
+            fs::write(&selected, original).unwrap();
+            let pinned = PinnedCodegenBackend::open(&selected).unwrap();
+
+            if let Ok(mut alias) = OpenOptions::new().write(true).open(&pinned.descriptor_path) {
+                assert!(alias.write_all(b"attacker").is_err());
+            }
+            assert_eq!(fs::read(&pinned.descriptor_path).unwrap(), original);
         }
 
         #[test]
@@ -1093,45 +1502,39 @@ mod platform {
         }
 
         #[test]
-        fn in_place_mutation_after_preparation_aborts_spawn() {
+        fn in_place_source_mutation_after_preparation_cannot_affect_child() {
             let root = TestDirectory::new();
             let selected = root.path().join("backend.so");
-            fs::write(&selected, b"backend bytes").unwrap();
+            let original = b"backend bytes";
+            fs::write(&selected, original).unwrap();
             let pinned = PinnedCodegenBackend::open(&selected).unwrap();
-            let original = fs::metadata(&selected).unwrap();
-            let mut prepared = pinned.prepare_command(Command::new("/bin/true")).unwrap();
+            let mut command = Command::new("/bin/sh");
+            command.args([
+                "-c",
+                "path=${1#-Zcodegen-backend=}; cat \"$path\"",
+                "backend-probe",
+            ]);
+            let mut prepared = pinned.prepare_command(command).unwrap();
 
-            std::thread::sleep(Duration::from_millis(10));
             fs::write(&selected, b"changed bytes").unwrap();
-            let changed = fs::metadata(&selected).unwrap();
-            assert_eq!(changed.len(), original.len());
-            assert_ne!(
-                (changed.ctime(), changed.ctime_nsec()),
-                (original.ctime(), original.ctime_nsec()),
-                "fixture filesystem did not expose a ctime change"
-            );
 
-            let error = prepared.status().unwrap_err();
-            assert_eq!(
-                error.raw_os_error(),
-                Some(rustix::io::Errno::STALE.raw_os_error())
-            );
+            let output = prepared.output().unwrap();
+            assert!(output.status.success(), "child stderr: {:?}", output.stderr);
+            assert_eq!(output.stdout, original);
         }
 
         #[test]
-        fn mutation_is_rejected_immediately_before_preparation() {
+        fn source_mutation_before_preparation_cannot_affect_image() {
             let root = TestDirectory::new();
             let selected = root.path().join("backend.so");
             fs::write(&selected, b"backend bytes").unwrap();
             let pinned = PinnedCodegenBackend::open(&selected).unwrap();
 
-            std::thread::sleep(Duration::from_millis(10));
             fs::write(&selected, b"changed bytes").unwrap();
 
-            assert!(matches!(
-                pinned.prepare_command(Command::new("/bin/true")),
-                Err(PinCodegenBackendError::DescriptorObjectChanged { .. })
-            ));
+            let mut prepared = pinned.prepare_command(Command::new("/bin/true")).unwrap();
+            assert!(prepared.status().unwrap().success());
+            assert_eq!(fs::read(&pinned.descriptor_path).unwrap(), b"backend bytes");
         }
 
         #[test]
