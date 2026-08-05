@@ -11,6 +11,6 @@ macro_rules! stringify {
 fn marker_hygiene() {}
 
 #[test]
-fn kernel_marker_uses_sysroot_stringify() {
+fn kernel_marker_is_independent_of_caller_macros() {
     assert_eq!(__fe2o3_kernel_name_marker_hygiene, "marker_hygiene");
 }
