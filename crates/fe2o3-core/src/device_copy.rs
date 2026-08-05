@@ -29,7 +29,11 @@
 /// also does not prove bounds, access modes, aliasing, synchronization, or race
 /// freedom.
 ///
-/// ```
+/// This example is exercised by the HIP-free derive compile fixture. It is
+/// ignored by rustdoc because linking any executable against `fe2o3-core`
+/// requires the HIP runtime library.
+///
+/// ```ignore
 /// # pub use fe2o3_core::DeviceCopy;
 /// # fn main() {
 ///
