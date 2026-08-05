@@ -15,6 +15,7 @@ readonly CPU_TEST_PACKAGES=(
   fe2o3-artifacts
   fe2o3-contracts
   fe2o3-device
+  fe2o3-hsaco
   fe2o3-kernel-ir
   fe2o3-macros
   reserved-fe2o3-symbols
@@ -161,10 +162,27 @@ require_gpu_access() {
   fi
 }
 
+wavefront_for_target() {
+  local processor="${1%%:*}"
+  case "${processor}" in
+    gfx9*) printf '%s\n' 64 ;;
+    gfx*) printf '%s\n' 32 ;;
+    *)
+      printf 'cannot derive wavefront size for FE2O3_TARGET=%s\n' "$1" >&2
+      return 2
+      ;;
+  esac
+}
+
 run_hardware_smoke() {
   if [[ "${FE2O3_ALLOW_GPU_SMOKE:-}" != "1" ]]; then
     printf '%s\n' \
       'refusing to run GPU smoke without FE2O3_ALLOW_GPU_SMOKE=1' >&2
+    return 2
+  fi
+  if [[ -z "${FE2O3_TARGET:-}" ]]; then
+    printf '%s\n' \
+      'hardware HSACO inspection requires an explicit FE2O3_TARGET' >&2
     return 2
   fi
   require_gpu_access
@@ -192,6 +210,14 @@ run_hardware_smoke() {
     cargo test --locked -p fe2o3-core --test device_copy_derive_hardware -- \
       --ignored --exact derived_struct_bytes_round_trip_through_device_memory
   run_step hardware-smoke cargo run --locked -p cargo-fe2o3 -- smoke
+  local test_wavefront
+  test_wavefront="$(wavefront_for_target "${FE2O3_TARGET}")"
+  run_step hardware-hsaco-inspection env \
+    FE2O3_TEST_HSACO="${REPO_ROOT}/target/fe2o3/vecadd.hsaco" \
+    FE2O3_TEST_TARGET="${FE2O3_TARGET}" \
+    FE2O3_TEST_WAVEFRONT="${test_wavefront}" \
+    cargo test --locked -p fe2o3-hsaco --test inspection \
+      inspects_real_generated_vecadd_hsaco -- --ignored --exact
 }
 
 main() {

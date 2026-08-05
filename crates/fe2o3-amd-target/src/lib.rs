@@ -92,6 +92,31 @@ impl AmdTargetId {
         }
     }
 
+    /// Returns the exact AMDHSA code-object V4+ ELF flags for this target.
+    ///
+    /// This encoding is for concrete targets only. Unsupported features use
+    /// the `UNSUPPORTED` encoding, omitted supported features use `ANY`, and
+    /// explicit states use `OFF` or `ON`. Generic-version and reserved bits
+    /// are always zero.
+    pub const fn amdhsa_elf_flags_v4_plus(&self) -> u32 {
+        let machine = elf_machine(self.processor);
+        let xnack = encode_elf_feature(
+            processor_supports_feature(self.processor, AmdTargetFeature::Xnack),
+            self.xnack,
+            0x100,
+            0x200,
+            0x300,
+        );
+        let sramecc = encode_elf_feature(
+            processor_supports_feature(self.processor, AmdTargetFeature::SramEcc),
+            self.sramecc,
+            0x400,
+            0x800,
+            0xc00,
+        );
+        machine | xnack | sramecc
+    }
+
     /// Compares an artifact declaration with an observed device declaration.
     ///
     /// `self` is the artifact side. An omitted artifact feature is compatible
@@ -252,6 +277,83 @@ fn parse_feature(value: &str) -> Result<(AmdTargetFeature, FeatureState), ParseA
     }
 }
 
+// Pinned to llvm/include/llvm/BinaryFormat/ELF.h at LLVM revision
+// 846473237377990d00b9c353f6a2c86116b52ea5.
+const fn elf_machine(processor: &str) -> u32 {
+    match processor.as_bytes() {
+        b"gfx600" => 0x20,
+        b"gfx601" => 0x21,
+        b"gfx602" => 0x3a,
+        b"gfx700" => 0x22,
+        b"gfx701" => 0x23,
+        b"gfx702" => 0x24,
+        b"gfx703" => 0x25,
+        b"gfx704" => 0x26,
+        b"gfx705" => 0x3b,
+        b"gfx801" => 0x28,
+        b"gfx802" => 0x29,
+        b"gfx803" => 0x2a,
+        b"gfx805" => 0x3c,
+        b"gfx810" => 0x2b,
+        b"gfx900" => 0x2c,
+        b"gfx902" => 0x2d,
+        b"gfx904" => 0x2e,
+        b"gfx906" => 0x2f,
+        b"gfx908" => 0x30,
+        b"gfx909" => 0x31,
+        b"gfx90a" => 0x3f,
+        b"gfx90c" => 0x32,
+        b"gfx942" => 0x4c,
+        b"gfx950" => 0x4f,
+        b"gfx1010" => 0x33,
+        b"gfx1011" => 0x34,
+        b"gfx1012" => 0x35,
+        b"gfx1013" => 0x42,
+        b"gfx1030" => 0x36,
+        b"gfx1031" => 0x37,
+        b"gfx1032" => 0x38,
+        b"gfx1033" => 0x39,
+        b"gfx1034" => 0x3e,
+        b"gfx1035" => 0x3d,
+        b"gfx1036" => 0x45,
+        b"gfx1100" => 0x41,
+        b"gfx1101" => 0x46,
+        b"gfx1102" => 0x47,
+        b"gfx1103" => 0x44,
+        b"gfx1150" => 0x43,
+        b"gfx1151" => 0x4a,
+        b"gfx1152" => 0x55,
+        b"gfx1153" => 0x58,
+        b"gfx1154" => 0x57,
+        b"gfx1170" => 0x5d,
+        b"gfx1171" => 0x5e,
+        b"gfx1172" => 0x5c,
+        b"gfx1200" => 0x48,
+        b"gfx1201" => 0x4e,
+        b"gfx1250" => 0x49,
+        b"gfx1251" => 0x5a,
+        b"gfx1310" => 0x50,
+        _ => 0,
+    }
+}
+
+const fn encode_elf_feature(
+    supported: bool,
+    state: Option<FeatureState>,
+    any: u32,
+    off: u32,
+    on: u32,
+) -> u32 {
+    if !supported {
+        return 0;
+    }
+    match state {
+        None => any,
+        Some(FeatureState::Disabled) => off,
+        Some(FeatureState::Enabled) => on,
+    }
+}
+
 const fn processor_supports_feature(processor: &str, feature: AmdTargetFeature) -> bool {
     match feature {
         AmdTargetFeature::SramEcc => matches!(
@@ -345,6 +447,115 @@ mod tests {
                 assert_eq!(target.xnack(), xnack);
                 assert_eq!(target.to_string(), text);
             }
+        }
+    }
+
+    #[test]
+    fn elf_machine_mapping_matches_independent_llvm_literals() {
+        const EXPECTED: &[(&str, u32)] = &[
+            ("gfx600", 0x20),
+            ("gfx601", 0x21),
+            ("gfx602", 0x3a),
+            ("gfx700", 0x22),
+            ("gfx701", 0x23),
+            ("gfx702", 0x24),
+            ("gfx703", 0x25),
+            ("gfx704", 0x26),
+            ("gfx705", 0x3b),
+            ("gfx801", 0x28),
+            ("gfx802", 0x29),
+            ("gfx803", 0x2a),
+            ("gfx805", 0x3c),
+            ("gfx810", 0x2b),
+            ("gfx900", 0x2c),
+            ("gfx902", 0x2d),
+            ("gfx904", 0x2e),
+            ("gfx906", 0x2f),
+            ("gfx908", 0x30),
+            ("gfx909", 0x31),
+            ("gfx90a", 0x3f),
+            ("gfx90c", 0x32),
+            ("gfx942", 0x4c),
+            ("gfx950", 0x4f),
+            ("gfx1010", 0x33),
+            ("gfx1011", 0x34),
+            ("gfx1012", 0x35),
+            ("gfx1013", 0x42),
+            ("gfx1030", 0x36),
+            ("gfx1031", 0x37),
+            ("gfx1032", 0x38),
+            ("gfx1033", 0x39),
+            ("gfx1034", 0x3e),
+            ("gfx1035", 0x3d),
+            ("gfx1036", 0x45),
+            ("gfx1100", 0x41),
+            ("gfx1101", 0x46),
+            ("gfx1102", 0x47),
+            ("gfx1103", 0x44),
+            ("gfx1150", 0x43),
+            ("gfx1151", 0x4a),
+            ("gfx1152", 0x55),
+            ("gfx1153", 0x58),
+            ("gfx1154", 0x57),
+            ("gfx1170", 0x5d),
+            ("gfx1171", 0x5e),
+            ("gfx1172", 0x5c),
+            ("gfx1200", 0x48),
+            ("gfx1201", 0x4e),
+            ("gfx1250", 0x49),
+            ("gfx1251", 0x5a),
+            ("gfx1310", 0x50),
+        ];
+
+        assert_eq!(EXPECTED.len(), KNOWN_PROCESSORS.len());
+        for &(processor, machine) in EXPECTED {
+            let flags = AmdTargetId::parse(processor)
+                .unwrap()
+                .amdhsa_elf_flags_v4_plus();
+            assert_eq!(flags & 0xff, machine, "{processor}");
+            assert_eq!(flags & 0xff00_0000, 0, "{processor}");
+        }
+    }
+
+    #[test]
+    fn elf_feature_flags_use_unsupported_any_off_and_on_encodings() {
+        assert_eq!(
+            AmdTargetId::parse("gfx1151")
+                .unwrap()
+                .amdhsa_elf_flags_v4_plus(),
+            0x4a
+        );
+        assert_eq!(
+            AmdTargetId::parse("gfx1010")
+                .unwrap()
+                .amdhsa_elf_flags_v4_plus(),
+            0x133
+        );
+        assert_eq!(
+            AmdTargetId::parse("gfx1250")
+                .unwrap()
+                .amdhsa_elf_flags_v4_plus(),
+            0x449
+        );
+
+        for (target, expected) in [
+            ("gfx942", 0x54c),
+            ("gfx942:xnack-", 0x64c),
+            ("gfx942:xnack+", 0x74c),
+            ("gfx942:sramecc-", 0x94c),
+            ("gfx942:sramecc-:xnack-", 0xa4c),
+            ("gfx942:sramecc-:xnack+", 0xb4c),
+            ("gfx942:sramecc+", 0xd4c),
+            ("gfx942:sramecc+:xnack-", 0xe4c),
+            ("gfx942:sramecc+:xnack+", 0xf4c),
+        ] {
+            assert_eq!(
+                AmdTargetId::parse(target)
+                    .unwrap()
+                    .amdhsa_elf_flags_v4_plus(),
+                expected,
+                "{target}"
+            );
         }
     }
 
