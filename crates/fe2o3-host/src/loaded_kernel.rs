@@ -301,25 +301,32 @@ pub struct LoadedArgumentAdmittedLaunch<'loaded, 'allocation, K> {
 /// narrow integration point where generated bindings must establish the raw
 /// ABI before the safe scoped execution state machine can run.
 #[allow(dead_code)]
-pub(crate) struct GeneratedKernelParams<'params, K> {
+pub(crate) struct GeneratedKernelParams<'params, K, R> {
     params: &'params mut KernelParams,
+    resources: R,
     marker: PhantomData<fn(K) -> K>,
 }
 
 #[allow(dead_code)]
-impl<'params, K> GeneratedKernelParams<'params, K> {
+impl<'params, K, R> GeneratedKernelParams<'params, K, R> {
     /// Marks one raw parameter list as the exact generated ABI for `K`.
     ///
     /// # Safety
     ///
     /// `params` must match `K` in field count, order, type, size, alignment,
-    /// and pointer address space. Every reachable allocation must be described
-    /// by the corresponding argument admission and remain valid for the
-    /// admitted access. Only generated binding code that has established that
-    /// association may invoke this constructor.
-    pub(crate) unsafe fn from_generated_unchecked(params: &'params mut KernelParams) -> Self {
+    /// and pointer address space. `resources` must contain the generated typed
+    /// borrow for every reachable allocation: shared borrows for read-only
+    /// arguments and exclusive borrows for writable arguments. Those borrows
+    /// must correspond exactly to the regions in the argument admission and
+    /// remain valid for every admitted access. Only generated binding code
+    /// that has established that association may invoke this constructor.
+    pub(crate) unsafe fn from_generated_unchecked(
+        params: &'params mut KernelParams,
+        resources: R,
+    ) -> Self {
         Self {
             params,
+            resources,
             marker: PhantomData,
         }
     }
@@ -375,10 +382,10 @@ impl<'loaded, 'allocation, K> LoadedArgumentAdmittedLaunch<'loaded, 'allocation,
     /// not integrated yet. Raw callers cannot use it to make arbitrary
     /// [`KernelParams`] safe.
     #[allow(dead_code)]
-    pub(crate) fn launch_generated_scoped<'stream, O>(
+    pub(crate) fn launch_generated_scoped<'stream, R, O>(
         self,
         stream: &'stream Stream,
-        params: GeneratedKernelParams<'_, K>,
+        params: GeneratedKernelParams<'_, K, R>,
         during: impl for<'operation> FnOnce(
             &'operation BorrowedDeviceOperation<'stream, 'allocation>,
         ) -> O,
@@ -388,15 +395,16 @@ impl<'loaded, 'allocation, K> LoadedArgumentAdmittedLaunch<'loaded, 'allocation,
         let config = self.launch_config();
         // SAFETY: `GeneratedKernelParams` can be constructed only through its
         // unsafe crate-private boundary, which establishes the raw ABI and its
-        // relationship to this admitted marker. `self` retains the loaded
-        // module/function, allocation borrows, and alias registration. The
-        // exact stream wrapper was checked above, and the prepared launch owns
-        // the validated geometry and resource limits.
+        // relationship to this admitted marker. The retained tuple owns both
+        // `self` (loaded module/function and alias registration) and the
+        // generated typed resource borrows. The exact stream wrapper was
+        // checked above, and the prepared launch owns the validated geometry
+        // and resource limits.
         unsafe {
             BorrowedDeviceOperation::<'stream, 'allocation>::run_scoped_unchecked(
                 stream,
-                self,
-                |launch| {
+                (self, params),
+                |(launch, params)| {
                     fe2o3_core::launch_kernel_on_stream(
                         launch.loaded.function(),
                         config,
@@ -564,15 +572,27 @@ mod tests {
     }
 
     #[test]
-    fn generated_parameter_boundary_preserves_the_packed_fields() {
+    fn generated_parameter_boundary_owns_fields_and_typed_resource_borrows() {
         struct Kernel;
 
         let mut raw = KernelParams::new();
         raw.push(7_u32);
         // SAFETY: this test inspects the inert packing token and never submits
         // it as a real kernel ABI.
-        let packed = unsafe { GeneratedKernelParams::<Kernel>::from_generated_unchecked(&mut raw) };
+        let input = 11_u32;
+        let mut output = 0_u32;
+        {
+            let packed = unsafe {
+                GeneratedKernelParams::<Kernel, _>::from_generated_unchecked(
+                    &mut raw,
+                    (&input, &mut output),
+                )
+            };
 
-        assert_eq!(packed.params.len(), 1);
+            assert_eq!(packed.params.len(), 1);
+            assert_eq!(*packed.resources.0, 11);
+            *packed.resources.1 = 17;
+        }
+        assert_eq!(output, 17);
     }
 }
