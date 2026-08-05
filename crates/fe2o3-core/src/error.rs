@@ -42,6 +42,8 @@ impl std::error::Error for HipError {}
 
 pub enum Error {
     Hip(HipError),
+    InvalidDeviceProperties(&'static str),
+    InvalidDeviceTarget(fe2o3_amd_target::ParseAmdTargetIdError),
     NoDevice {
         requested: i32,
         count: i32,
@@ -87,6 +89,12 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Hip(error) => write!(f, "{error}"),
+            Self::InvalidDeviceProperties(reason) => {
+                write!(f, "HIP returned invalid device properties: {reason}")
+            }
+            Self::InvalidDeviceTarget(error) => {
+                write!(f, "HIP returned an invalid AMD target ID: {error}")
+            }
             Self::NoDevice { requested, count } => {
                 write!(
                     f,

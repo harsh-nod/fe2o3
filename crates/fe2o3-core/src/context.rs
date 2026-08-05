@@ -1,9 +1,9 @@
-use crate::{Result, Stream, check};
+use crate::{ObservedDeviceTarget, Result, Stream, check};
 use std::sync::Arc;
 
 #[derive(Debug)]
 pub struct GpuContext {
-    device_id: i32,
+    observed_target: ObservedDeviceTarget,
 }
 
 impl GpuContext {
@@ -20,15 +20,21 @@ impl GpuContext {
         }
 
         check(unsafe { fe2o3_hip_sys::hipSetDevice(device_id) })?;
-        Ok(Arc::new(Self { device_id }))
+        let observed_target = ObservedDeviceTarget::query_hip(device_id)?;
+        Ok(Arc::new(Self { observed_target }))
     }
 
     pub fn device_id(&self) -> i32 {
-        self.device_id
+        self.observed_target.device_id()
+    }
+
+    /// Returns device properties observed from HIP when this context was made.
+    pub fn observed_target(&self) -> &ObservedDeviceTarget {
+        &self.observed_target
     }
 
     pub fn bind_to_thread(&self) -> Result<()> {
-        check(unsafe { fe2o3_hip_sys::hipSetDevice(self.device_id) })
+        check(unsafe { fe2o3_hip_sys::hipSetDevice(self.device_id()) })
     }
 
     pub fn default_stream(self: &Arc<Self>) -> Stream {

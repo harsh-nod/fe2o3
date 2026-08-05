@@ -1,5 +1,6 @@
 mod context;
 mod device_copy;
+mod device_target;
 mod error;
 mod event;
 mod launch;
@@ -11,6 +12,7 @@ mod stream;
 
 pub use context::GpuContext;
 pub use device_copy::DeviceCopy;
+pub use device_target::ObservedDeviceTarget;
 pub use error::{Error, HipError, Result, check};
 pub use event::{Event, EventOptions};
 pub use fe2o3_macros::DeviceCopy;
