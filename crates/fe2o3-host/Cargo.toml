@@ -9,6 +9,10 @@ description = "Host-side launch helpers for fe2o3."
 
 [dependencies]
 fe2o3-core.workspace = true
+fe2o3-kernel-descriptor.workspace = true
+
+[dev-dependencies]
+trybuild = "1"
 
 [lib]
 name = "fe2o3_host"

@@ -1,0 +1,15 @@
+error[E0308]: mismatched types
+  --> tests/ui/prepared_launch/cross_kernel_request.rs:11:36
+   |
+11 |     let _ = brand.prepare(context, request);
+   |                   -------          ^^^^^^^ expected `UntrustedLaunchRequest<KernelA>`, found `UntrustedLaunchRequest<KernelB>`
+   |                   |
+   |                   arguments to this method are incorrect
+   |
+   = note: expected struct `UntrustedLaunchRequest<KernelA>`
+              found struct `UntrustedLaunchRequest<KernelB>`
+note: method defined here
+  --> src/prepared_launch.rs
+   |
+   |     pub fn prepare(
+   |            ^^^^^^^

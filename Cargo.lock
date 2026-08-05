@@ -243,6 +243,8 @@ name = "fe2o3-host"
 version = "0.1.0"
 dependencies = [
  "fe2o3-core",
+ "fe2o3-kernel-descriptor",
+ "trybuild",
 ]
 
 [[package]]

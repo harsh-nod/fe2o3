@@ -1,4 +1,12 @@
+mod prepared_launch;
+
 pub use fe2o3_core::{KernelParams, LaunchConfig};
+pub use fe2o3_kernel_descriptor::{BlockSizeV1, DimensionsV1, KernelId, LaunchConstraintsV1};
+pub use prepared_launch::{
+    CheckedDimensions, DeviceIdentity, KernelBrand, LaunchAxis, LaunchDimension, ObservedContext,
+    PrepareLaunchError, PreparedGeometry, PreparedLaunch, PreparedResources,
+    UntrustedKernelDeclaration, UntrustedLaunchRequest,
+};
 
 /// Loads and launches a GPU kernel using raw, caller-described ABI arguments.
 ///

@@ -1,0 +1,7 @@
+error[E0277]: the trait bound `KernelBrand<Kernel>: From<UntrustedKernelDeclaration<Kernel>>` is not satisfied
+  --> tests/ui/prepared_launch/declaration_cannot_become_brand.rs:14:52
+   |
+14 |     let _forged: KernelBrand<Kernel> = declaration.into();
+   |                                                    ^^^^ the trait `From<UntrustedKernelDeclaration<Kernel>>` is not implemented for `KernelBrand<Kernel>`
+   |
+   = note: required for `UntrustedKernelDeclaration<Kernel>` to implement `Into<KernelBrand<Kernel>>`
