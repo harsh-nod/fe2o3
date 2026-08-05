@@ -68,12 +68,13 @@ Safe ownership of resources used by asynchronous copies is documented in
   read-only slice loads, `DisjointSlice<T>` or indexed mutable-slice stores,
   `+`, `-`, `*`, `/`, unary negation, read-before-write, and the documented
   constant/affine one-dimensional index forms.
-- Setting `FE2O3_CODEGEN_PIPELINE=kernel-ir-v1` routes the exact `fill` kernel
-  through imported MIR, canonical target-neutral kernel IR, verification,
-  fill-only legalization, G1 AMDGPU lowering, and the normal transactional
-  LLVM/object/HSACO publication path. The selector and accepted kernel shape
-  are fail closed: invalid values and unsupported kernels remove stale
-  generation artifacts and never fall back to `legacy-v1`.
+- Setting `FE2O3_CODEGEN_PIPELINE=kernel-ir-v1` routes the exact `fill` or
+  three-slice `vecadd` kernel through imported MIR, canonical target-neutral
+  kernel IR, verification, exact-shape legalization, G1 AMDGPU lowering, and
+  the normal transactional LLVM/object/HSACO publication path. The selector,
+  ABI, witness dataflow, bounds control flow, and accepted kernel shapes are
+  fail closed: invalid values and unsupported kernels remove stale generation
+  artifacts and never fall back to `legacy-v1`.
 - The HIP runtime provides contexts, streams, device buffers, pinned host
   buffers, events, synchronous transfers, event-backed borrowed and owned
   asynchronous transfers, module loading, and kernel launch.
@@ -94,9 +95,13 @@ example, copied results back, and compared them with CPU results.
   target-neutral `fe2o3-kernel-ir`. Its verifier checks types, SSA uses,
   control-flow edges, memory accesses, launch axes, capabilities, barriers, and
   atomics. The IR has a bounded canonical V1 wire format. The G1
-  `dialect-amdgcn` path lowers the verified 1D fill subset to deterministic
-  AMDGPU LLVM and is connected to the opt-in `kernel-ir-v1` path above; it is
-  not yet general or the default.
+  `dialect-amdgcn` path lowers the verified 1D fill and vecadd subset to
+  deterministic AMDGPU LLVM and is connected to the opt-in `kernel-ir-v1`
+  fill and vecadd paths above; it is not yet general or the default. Kernel IR memory
+  operations can also be summarized as bounded region effects and
+  cross-invocation race obligations. Those results are explicitly conditional
+  on untrusted caller-supplied provenance and invocation bindings and grant no
+  proof or launch authority.
 - Versioned artifact manifests, ABI layouts, launch contracts, bounded
   containers, payload digests, native-kernel selection, and proof records have
   canonical encoders, decoders, and adversarial tests.
@@ -105,10 +110,13 @@ example, copied results back, and compared them with CPU results.
   finalization are implemented as separate validation layers.
 - `fe2o3-host` has a `PreparedLaunch<K>` geometry/resource checker and a
   `LoadedKernel<K>` authority that owns the exact HIP module and function and
-  can bind only matching prepared launches. Authority issuance remains a
-  crate-private unsafe boundary because structural artifact validation cannot
-  authenticate executable semantics or mint the generated Rust marker and ABI;
-  launch with caller-packed arguments therefore remains explicitly unsafe.
+  can bind only matching prepared launches. Argument admission reserves
+  context-scoped allocation ranges and rejects overlapping mutable or
+  mutable/shared aliases before producing an opaque admitted-launch token.
+  Authority issuance remains a crate-private unsafe boundary because
+  structural artifact validation cannot authenticate executable semantics or
+  mint the generated Rust marker and ABI; the admitted token has no safe launch
+  operation, and launch with caller-packed arguments remains explicitly unsafe.
 - Compiler artifact publication is transactional and generation-owned. Build
   attempt and canonical rustc invocation descriptors are versioned and
   bounded.
@@ -118,18 +126,20 @@ example, copied results back, and compared them with CPU results.
   to compile execution.
 - `examples/regression-manifest-v1.txt` is the authoritative package/artifact
   inventory for ordinary checks, ROCm compilation, and GPU smoke tests.
-- The Verus vecadd and fill harnesses prove bounds, modeled address arithmetic,
-  injective writes, frame properties, and functional postconditions under a
-  documented hardware-thread-ID contract. Positive and deliberately invalid
-  proof fixtures run in a required CI lane. Proof-record matching rejects
-  incomplete or mismatched identities, but the records are currently synthetic
-  evidence rather than authenticated compiler-refinement evidence.
+- The Verus vecadd and fill harnesses prove bounded source-model properties
+  under documented assumptions. The vecadd spike mechanically shares one
+  executable `u32` CPU/reference operation body between ordinary rustc and
+  Verus, but substitutes modeled domain/index types and is not the separate
+  `f32` GPU kernel. Positive and deliberately invalid proof fixtures run in a
+  required CI lane. Proof-record matching rejects incomplete or mismatched
+  identities, but the records are currently synthetic evidence rather than
+  authenticated compiler-refinement evidence.
 
 ### Not yet integrated
 
 - General MIR to kernel IR to AMDGPU lowering is not complete; `kernel-ir-v1`
-  accepts only the exact fill shape and the elementwise recognizer remains the
-  default emitter.
+  accepts only the exact fill and vecadd shapes, and the elementwise recognizer
+  remains the default emitter.
 - Artifact manifests, descriptor finalization, observed targets, and proof
   records do not yet produce a generated typed loader and launch API.
   `LoadedKernel<K>` establishes module/function ownership and exact authority
@@ -218,7 +228,7 @@ To build or run one package directly:
 cargo run --locked -p cargo-fe2o3 -- build -p fe2o3-vecadd
 cargo run --locked -p cargo-fe2o3 -- run -p fe2o3-vecadd
 FE2O3_CODEGEN_PIPELINE=kernel-ir-v1 \
-  cargo run --locked -p cargo-fe2o3 -- run -p fe2o3-fill
+  cargo run --locked -p cargo-fe2o3 -- run -p fe2o3-vecadd
 ```
 
 The smoke command reads the same manifest and runs every GPU-selected example:

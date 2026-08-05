@@ -49,9 +49,10 @@ must fail closed. Rejected fixtures also preseed generated artifacts and require
 transactional invalidation of the complete artifact triplet. These markers
 identify compiler semantics; authenticating the package that provides them
 remains an artifact-provenance responsibility.
-The lane also compiles and inspects the hardened G1 fill code object and checks
-that invalid selectors or unsupported `kernel-ir-v1` inputs fail without
-fallback and remove stale artifacts.
+The lane also compiles and inspects the hardened G1 fill code object, compiles
+the real three-slice vecadd through `kernel-ir-v1`, validates its exact ABI and
+bounds-control-flow LLVM shape, and checks that invalid selectors or
+unsupported inputs fail without fallback and remove stale artifacts.
 After each example build, the lane requires every artifact declared by the
 manifest. The pipeline example declares both `scale_stage.hsaco` and
 `bias_stage.hsaco`.
@@ -76,9 +77,10 @@ scripts/ci-local.sh hardware-smoke
 
 The smoke suite builds and runs all supported examples. Each example copies its
 result back to the host and checks it against a CPU-computed expected value. It
-also runs `fe2o3-fill` through `FE2O3_CODEGEN_PIPELINE=kernel-ir-v1`, so the
-integrated verified-IR path is exercised independently of the default legacy
-emitter.
+also runs both `fe2o3-fill` and `fe2o3-vecadd` through
+`FE2O3_CODEGEN_PIPELINE=kernel-ir-v1`, so the integrated verified-IR paths are
+exercised independently of the default legacy emitter. Generated HSACO
+inspection uses a strict pipeline-specific metadata profile.
 
 ## Guard tests
 
