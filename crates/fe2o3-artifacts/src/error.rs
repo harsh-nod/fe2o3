@@ -13,6 +13,10 @@ pub enum ValidationError {
     InvalidLayout(&'static str),
     InvalidAccess(&'static str),
     TooMany { field: &'static str, max: usize },
+    EmptyCollection { field: &'static str },
+    MissingCodeObject,
+    MissingCapability(&'static str),
+    PointerWidthMismatch,
     Overflow(&'static str),
 }
 
@@ -31,6 +35,17 @@ impl fmt::Display for ValidationError {
             Self::InvalidLayout(reason) => write!(f, "invalid ABI layout: {reason}"),
             Self::InvalidAccess(reason) => write!(f, "invalid ABI access: {reason}"),
             Self::TooMany { field, max } => write!(f, "{field} exceeds {max} entries"),
+            Self::EmptyCollection { field } => write!(f, "{field} must not be empty"),
+            Self::MissingCodeObject => write!(f, "kernel references an unknown code object"),
+            Self::MissingCapability(capability) => {
+                write!(
+                    f,
+                    "target does not provide required capability {capability}"
+                )
+            }
+            Self::PointerWidthMismatch => {
+                write!(f, "ABI pointer width does not match the target")
+            }
             Self::Overflow(field) => write!(f, "{field} overflows its representation"),
         }
     }

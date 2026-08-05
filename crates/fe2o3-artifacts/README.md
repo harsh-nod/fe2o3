@@ -43,5 +43,16 @@ representation is exactly pointer followed by length, with total size twice
 the target pointer width and target-pointer alignment. Typed launch code must
 expand that field once while preserving its single logical argument position.
 
-Kernel records, serialization, payload bytes, proof records, host launch
-integration, and runtime loading policy remain outside this layer.
+## Manifest invariants
+
+`ManifestV1` is the structurally and semantically validated aggregate. It is
+not evidence that referenced code is authentic or even present.
+
+- At least one code object and one kernel are present, with fixed upper bounds.
+- Code-object IDs, kernel IDs, logical kernel names, and exported symbols are
+  unique. Set-like records are stored in canonical order.
+- Every kernel references a listed code object, uses the target pointer width,
+  and requires only capabilities supplied by the selected target.
+
+Serialization, payload bytes, proof records, host launch integration, and
+runtime loading policy remain outside this layer.

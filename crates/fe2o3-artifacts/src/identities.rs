@@ -124,6 +124,24 @@ pub enum Capability {
     AmdDsPermute,
 }
 
+impl Capability {
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            Self::Subgroup => "subgroup",
+            Self::Ballot => "ballot",
+            Self::Shuffle => "shuffle",
+            Self::WorkgroupMemory => "workgroup-memory",
+            Self::MatrixMultiply => "matrix-multiply",
+            Self::AsyncCopy => "async-copy",
+            Self::Atomics => "atomics",
+            Self::AmdWave => "amd-wave",
+            Self::AmdMfma => "amd-mfma",
+            Self::AmdWmma => "amd-wmma",
+            Self::AmdDsPermute => "amd-ds-permute",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TargetIdentity {
     triple: IdentityText,

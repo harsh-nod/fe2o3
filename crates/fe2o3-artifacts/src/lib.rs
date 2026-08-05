@@ -4,6 +4,7 @@
 mod abi;
 mod error;
 mod identities;
+mod manifest;
 
 pub use abi::{
     AbiField, AbiKind, AbiLayout, Access, AddressSpace, MAX_ABI_BYTES, MAX_ABI_FIELDS, Mutability,
@@ -15,3 +16,4 @@ pub use identities::{
     Dimensions, Endianness, IdentityText, LaunchContract, MAX_IDENTITY_TEXT_BYTES, MAX_NAME_BYTES,
     Name, PointerWidth, TargetIdentity, ToolIdentity,
 };
+pub use manifest::{KernelEntry, MAX_CODE_OBJECTS, MAX_KERNELS, ManifestV1};
