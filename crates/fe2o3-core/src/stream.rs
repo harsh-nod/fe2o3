@@ -37,6 +37,13 @@ impl Stream {
         &self.context
     }
 
+    /// Returns the borrowed HIP stream handle.
+    ///
+    /// # Safety
+    ///
+    /// The caller must not destroy the handle or use it after this stream is
+    /// dropped. Direct HIP operations must be issued for this stream's device,
+    /// and referenced resources must remain alive until the operation finishes.
     pub unsafe fn raw(&self) -> fe2o3_hip_sys::hipStream_t {
         self.raw
     }

@@ -72,6 +72,13 @@ impl Drop for GpuModule {
 }
 
 impl GpuFunction {
+    /// Returns the borrowed HIP function handle.
+    ///
+    /// # Safety
+    ///
+    /// The caller must not destroy the handle or use it after this function is
+    /// dropped. Any direct launch must use the module's HIP device and provide
+    /// an exact kernel ABI and valid launch resources.
     pub unsafe fn raw(&self) -> fe2o3_hip_sys::hipFunction_t {
         self.raw
     }

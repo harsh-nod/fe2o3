@@ -42,7 +42,14 @@ impl std::error::Error for HipError {}
 
 pub enum Error {
     Hip(HipError),
-    NoDevice { requested: i32, count: i32 },
+    NoDevice {
+        requested: i32,
+        count: i32,
+    },
+    DeviceMismatch {
+        buffer_device: i32,
+        stream_device: i32,
+    },
     Nul(NulError),
     Io(std::io::Error),
     SizeOverflow,
@@ -58,6 +65,13 @@ impl fmt::Display for Error {
                     "requested HIP device {requested}, but only {count} device(s) exist"
                 )
             }
+            Self::DeviceMismatch {
+                buffer_device,
+                stream_device,
+            } => write!(
+                f,
+                "device buffer belongs to HIP device {buffer_device}, but the stream belongs to HIP device {stream_device}"
+            ),
             Self::Nul(error) => write!(f, "string contains an interior NUL byte: {error}"),
             Self::Io(error) => write!(f, "{error}"),
             Self::SizeOverflow => write!(f, "size calculation overflowed"),
@@ -115,6 +129,19 @@ mod tests {
         assert_eq!(
             format!("{error:?}"),
             "requested HIP device 2, but only 1 device(s) exist"
+        );
+    }
+
+    #[test]
+    fn device_mismatch_reports_both_device_ids() {
+        let error = Error::DeviceMismatch {
+            buffer_device: 1,
+            stream_device: 3,
+        };
+
+        assert_eq!(
+            error.to_string(),
+            "device buffer belongs to HIP device 1, but the stream belongs to HIP device 3"
         );
     }
 }

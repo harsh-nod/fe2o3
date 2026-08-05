@@ -37,6 +37,9 @@ interfaces needed to reach that target:
 - `dialect-amdgcn`: AMDGPU intrinsic naming seam for the future Pliron lowering.
 - `dialect-mir`: Rust MIR dialect naming seam for the future Pliron lowering.
 
+Safe buffer element types and their limits are documented in the
+[device memory safety contract](docs/device-memory-safety.md).
+
 ## Current Status
 
 The HIP runtime layer and public API are working for the current elementwise
