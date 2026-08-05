@@ -1,9 +1,9 @@
 use fe2o3_artifacts::{
     AbiField, AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership, BlockSize,
-    Capability, CodeObjectFormat, CodeObjectIdentity, CompilerIdentity, DigestBytes, Dimensions,
-    Endianness, IdentityText, KernelEntry, LaunchContract, MAX_CODE_OBJECTS, ManifestV1,
-    Mutability, Name, PointerWidth, ScalarType, TargetIdentity, ToolIdentity, TypeIdentity,
-    ValidationError,
+    Capability, CodeObjectFormat, CodeObjectIdentity, CompilerIdentity, DeclaredRustLayoutIdentity,
+    DeclaredRustTypeIdentity, DigestBytes, Dimensions, Endianness, IdentityText, KernelEntry,
+    LaunchContract, MAX_CODE_OBJECTS, ManifestV1, Mutability, Name, PointerWidth, ScalarType,
+    TargetIdentity, ToolIdentity, TypeIdentity, ValidationError,
 };
 
 fn text(value: &str) -> IdentityText {
@@ -48,7 +48,10 @@ fn abi(pointer_width: PointerWidth) -> AbiLayout {
                 Mutability::Immutable,
                 Access::ByValue,
                 AddressSpace::Value,
-                TypeIdentity::new(digest(0xa0), digest(0xa1)),
+                TypeIdentity::new(
+                    DeclaredRustTypeIdentity::from_untrusted_bytes(digest(0xa0)),
+                    DeclaredRustLayoutIdentity::from_untrusted_bytes(digest(0xa1)),
+                ),
                 ArgumentOwnership::ByValue,
                 AliasClass::Value,
             )
@@ -76,7 +79,10 @@ fn atomic_abi() -> AbiLayout {
                 Mutability::Immutable,
                 Access::ReadWrite,
                 AddressSpace::Global,
-                TypeIdentity::new(digest(0xb0), digest(0xb1)),
+                TypeIdentity::new(
+                    DeclaredRustTypeIdentity::from_untrusted_bytes(digest(0xb0)),
+                    DeclaredRustLayoutIdentity::from_untrusted_bytes(digest(0xb1)),
+                ),
                 ArgumentOwnership::SharedBorrow,
                 AliasClass::SharedAtomic,
             )

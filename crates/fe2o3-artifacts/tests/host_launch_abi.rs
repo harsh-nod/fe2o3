@@ -1,6 +1,7 @@
 use fe2o3_artifacts::{
-    AbiField, AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership, DigestBytes,
-    HostLaunchAbi, HostLaunchAbiError, Mutability, Name, PointerWidth, ScalarType, TypeIdentity,
+    AbiField, AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership,
+    DeclaredRustLayoutIdentity, DeclaredRustTypeIdentity, DigestBytes, HostLaunchAbi,
+    HostLaunchAbiError, Mutability, Name, PointerWidth, ScalarType, TypeIdentity,
 };
 
 #[derive(Clone, Copy)]
@@ -15,8 +16,8 @@ fn name(value: &str) -> Name {
 
 fn type_identity() -> TypeIdentity {
     TypeIdentity::new(
-        DigestBytes::from_bytes([0x31; 32]),
-        DigestBytes::from_bytes([0x32; 32]),
+        DeclaredRustTypeIdentity::from_untrusted_bytes(DigestBytes::from_bytes([0x31; 32])),
+        DeclaredRustLayoutIdentity::from_untrusted_bytes(DigestBytes::from_bytes([0x32; 32])),
     )
 }
 

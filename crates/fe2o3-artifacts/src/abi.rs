@@ -76,28 +76,73 @@ pub enum AddressSpace {
     Generic,
 }
 
-/// Compiler-produced identity for one logical Rust kernel argument.
+/// Opaque Rust type identity declared by an untrusted artifact manifest.
 ///
-/// `rust_type` identifies the fully monomorphized Rust type. `layout` identifies
-/// the rustc-reported host/device ABI layout, including scalarization and
-/// padding. The bytes are opaque here; build tooling owns their versioned hash
-/// domains.
+/// The wire format does not identify a digest algorithm or descriptor schema.
+/// Runtime code must compare this declaration with independently produced
+/// compiler evidence before it can contribute to launch authority.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[repr(transparent)]
+pub struct DeclaredRustTypeIdentity(DigestBytes);
+
+impl DeclaredRustTypeIdentity {
+    /// Wraps bytes declared by an untrusted wire record or build tool.
+    pub const fn from_untrusted_bytes(bytes: DigestBytes) -> Self {
+        Self(bytes)
+    }
+
+    /// Returns the opaque declared bytes without granting them authority.
+    pub const fn bytes(self) -> DigestBytes {
+        self.0
+    }
+}
+
+/// Opaque Rust layout identity declared by an untrusted artifact manifest.
+///
+/// This is deliberately distinct from [`DeclaredRustTypeIdentity`] so callers
+/// cannot swap the two manifest fields accidentally. It makes no claim about
+/// the algorithm or descriptor that produced the bytes.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[repr(transparent)]
+pub struct DeclaredRustLayoutIdentity(DigestBytes);
+
+impl DeclaredRustLayoutIdentity {
+    /// Wraps bytes declared by an untrusted wire record or build tool.
+    pub const fn from_untrusted_bytes(bytes: DigestBytes) -> Self {
+        Self(bytes)
+    }
+
+    /// Returns the opaque declared bytes without granting them authority.
+    pub const fn bytes(self) -> DigestBytes {
+        self.0
+    }
+}
+
+/// Manifest-declared identities for one logical Rust kernel argument.
+///
+/// `rust_type` purports to identify the fully monomorphized Rust type. `layout`
+/// purports to identify the rustc-reported host/device ABI layout, including
+/// scalarization and padding. Constructing this value does not authenticate
+/// either declaration.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TypeIdentity {
-    rust_type: DigestBytes,
-    layout: DigestBytes,
+    rust_type: DeclaredRustTypeIdentity,
+    layout: DeclaredRustLayoutIdentity,
 }
 
 impl TypeIdentity {
-    pub const fn new(rust_type: DigestBytes, layout: DigestBytes) -> Self {
+    pub const fn new(
+        rust_type: DeclaredRustTypeIdentity,
+        layout: DeclaredRustLayoutIdentity,
+    ) -> Self {
         Self { rust_type, layout }
     }
 
-    pub const fn rust_type(self) -> DigestBytes {
+    pub const fn rust_type(self) -> DeclaredRustTypeIdentity {
         self.rust_type
     }
 
-    pub const fn layout(self) -> DigestBytes {
+    pub const fn layout(self) -> DeclaredRustLayoutIdentity {
         self.layout
     }
 }

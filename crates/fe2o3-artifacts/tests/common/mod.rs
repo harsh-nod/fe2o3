@@ -1,8 +1,9 @@
 use fe2o3_artifacts::{
     AbiField, AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership, BlockSize,
-    Capability, CodeObjectFormat, CodeObjectIdentity, CompilerIdentity, DigestBytes, Dimensions,
-    Endianness, IdentityText, KernelEntry, LaunchContract, ManifestV1, Mutability, Name,
-    PointerWidth, ScalarType, TargetIdentity, ToolIdentity, TypeIdentity,
+    Capability, CodeObjectFormat, CodeObjectIdentity, CompilerIdentity, DeclaredRustLayoutIdentity,
+    DeclaredRustTypeIdentity, DigestBytes, Dimensions, Endianness, IdentityText, KernelEntry,
+    LaunchContract, ManifestV1, Mutability, Name, PointerWidth, ScalarType, TargetIdentity,
+    ToolIdentity, TypeIdentity,
 };
 
 pub fn text(value: &str) -> IdentityText {
@@ -15,6 +16,13 @@ pub fn name(value: &str) -> Name {
 
 pub fn digest(byte: u8) -> DigestBytes {
     DigestBytes::from_bytes([byte; 32])
+}
+
+pub fn type_identity(type_byte: u8, layout_byte: u8) -> TypeIdentity {
+    TypeIdentity::new(
+        DeclaredRustTypeIdentity::from_untrusted_bytes(digest(type_byte)),
+        DeclaredRustLayoutIdentity::from_untrusted_bytes(digest(layout_byte)),
+    )
 }
 
 fn launch() -> LaunchContract {
@@ -43,7 +51,7 @@ fn abi(pointer_width: PointerWidth) -> AbiLayout {
                 Mutability::Immutable,
                 Access::ByValue,
                 AddressSpace::Value,
-                TypeIdentity::new(digest(0xa0), digest(0xa1)),
+                type_identity(0xa0, 0xa1),
                 ArgumentOwnership::ByValue,
                 AliasClass::Value,
             )
@@ -60,7 +68,7 @@ fn abi(pointer_width: PointerWidth) -> AbiLayout {
                 Mutability::Immutable,
                 Access::ReadOnly,
                 AddressSpace::Global,
-                TypeIdentity::new(digest(0xb0), digest(0xb1)),
+                type_identity(0xb0, 0xb1),
                 ArgumentOwnership::SharedBorrow,
                 AliasClass::SharedReadOnly,
             )
@@ -77,7 +85,7 @@ fn abi(pointer_width: PointerWidth) -> AbiLayout {
                 Mutability::Mutable,
                 Access::ReadWrite,
                 AddressSpace::Global,
-                TypeIdentity::new(digest(0xc0), digest(0xc1)),
+                type_identity(0xc0, 0xc1),
                 ArgumentOwnership::UniqueBorrow,
                 AliasClass::Exclusive,
             )
