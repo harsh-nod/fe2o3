@@ -87,6 +87,16 @@ container lifetime. Relocatable, bitcode, and SPIR-V payloads are rejected by
 this direct-load path. Selection does not establish device-target or generated
 host-ABI compatibility; the runtime must check both before loading or launch.
 
+`SelectedNativeKernel::check_declared_target` compares exact target triple,
+architecture, pointer width, and endianness declarations, plus every capability
+declared by the selected kernel. Candidate capabilities may be a superset. This
+is a pure comparison against caller-supplied data. It does not parse the
+payload's embedded target ID, discover hardware, or implement AMD target-feature
+compatibility rules such as XNACK and SRAMECC states. The HIP runtime must query
+its device, validate the payload metadata, and keep any stronger device-bound
+token private. A caller-constructed `TargetIdentity` cannot authorize safe
+loading, ABI matching, or launch.
+
 ## V1 wire format
 
 `ManifestV1::to_bytes` emits a canonical little-endian binary representation.

@@ -5,8 +5,8 @@ mod common;
 use common::{digest, kernel_with_object_digest, name, object_identity, target, text};
 use fe2o3_artifacts::{
     ArtifactContainerV1, Capability, CodeObjectFormat, CodeObjectIdentity, CodeObjectPayload,
-    CompilerIdentity, DigestAlgorithm, KernelSelectionError, ManifestV1, PointerWidth,
-    ToolIdentity,
+    CompilerIdentity, DeclaredTargetMismatch, DigestAlgorithm, Endianness, KernelSelectionError,
+    ManifestV1, PointerWidth, TargetIdentity, ToolIdentity,
 };
 
 fn payload(bytes: &[u8]) -> CodeObjectPayload {
@@ -94,4 +94,124 @@ fn selection_rejects_payloads_that_require_a_finalizer() {
             CodeObjectFormat::RelocatableObject
         ))
     );
+}
+
+fn native_container() -> ArtifactContainerV1 {
+    let payload = payload(b"native-code-object");
+    let object_digest = payload.digest().bytes();
+    let manifest = ManifestV1::new(
+        CompilerIdentity::new(text("rustc"), text("1.94.0")),
+        ToolIdentity::new(text("fe2o3"), text("0.1.0")),
+        target(PointerWidth::Bits64, vec![Capability::AmdWave]),
+        vec![object_identity(object_digest, payload.bytes().len() as u64)],
+        vec![kernel_with_object_digest(
+            0x11,
+            "kernel",
+            "kernel.kd",
+            object_digest,
+            vec![Capability::AmdWave],
+        )],
+    )
+    .unwrap();
+    ArtifactContainerV1::new(manifest, DigestAlgorithm::Sha256, vec![payload]).unwrap()
+}
+
+fn runtime_target(
+    triple: &str,
+    architecture: &str,
+    pointer_width: PointerWidth,
+    endianness: Endianness,
+    capabilities: Vec<Capability>,
+) -> TargetIdentity {
+    TargetIdentity::new(
+        text(triple),
+        text(architecture),
+        pointer_width,
+        endianness,
+        capabilities,
+    )
+    .unwrap()
+}
+
+#[test]
+fn declared_target_match_is_exact_except_for_capability_supersets() {
+    let container = native_container();
+    let selected = container.select_native_kernel(digest(0x11)).unwrap();
+    let runtime = runtime_target(
+        "amdgcn-amd-amdhsa",
+        "gfx1100",
+        PointerWidth::Bits64,
+        Endianness::Little,
+        vec![Capability::Atomics, Capability::AmdWave],
+    );
+
+    selected.check_declared_target(&runtime).unwrap();
+}
+
+#[test]
+fn every_declared_target_mismatch_fails_closed() {
+    let container = native_container();
+    let selected = container.select_native_kernel(digest(0x11)).unwrap();
+    let cases = [
+        (
+            DeclaredTargetMismatch::Triple,
+            runtime_target(
+                "other-vendor-target",
+                "gfx1100",
+                PointerWidth::Bits64,
+                Endianness::Little,
+                vec![Capability::AmdWave],
+            ),
+        ),
+        (
+            DeclaredTargetMismatch::Architecture,
+            runtime_target(
+                "amdgcn-amd-amdhsa",
+                "gfx942",
+                PointerWidth::Bits64,
+                Endianness::Little,
+                vec![Capability::AmdWave],
+            ),
+        ),
+        (
+            DeclaredTargetMismatch::PointerWidth {
+                artifact: PointerWidth::Bits64,
+                candidate: PointerWidth::Bits32,
+            },
+            runtime_target(
+                "amdgcn-amd-amdhsa",
+                "gfx1100",
+                PointerWidth::Bits32,
+                Endianness::Little,
+                vec![Capability::AmdWave],
+            ),
+        ),
+        (
+            DeclaredTargetMismatch::Endianness {
+                artifact: Endianness::Little,
+                candidate: Endianness::Big,
+            },
+            runtime_target(
+                "amdgcn-amd-amdhsa",
+                "gfx1100",
+                PointerWidth::Bits64,
+                Endianness::Big,
+                vec![Capability::AmdWave],
+            ),
+        ),
+        (
+            DeclaredTargetMismatch::MissingCapability(Capability::AmdWave),
+            runtime_target(
+                "amdgcn-amd-amdhsa",
+                "gfx1100",
+                PointerWidth::Bits64,
+                Endianness::Little,
+                vec![],
+            ),
+        ),
+    ];
+
+    for (expected, runtime) in cases {
+        assert_eq!(selected.check_declared_target(&runtime), Err(expected));
+    }
 }

@@ -1,8 +1,8 @@
 use std::fmt;
 
 use crate::{
-    ArtifactContainerV1, CodeObjectFormat, CodeObjectIdentity, DigestBytes, KernelEntry,
-    ManifestV1, TargetIdentity,
+    ArtifactContainerV1, Capability, CodeObjectFormat, CodeObjectIdentity, DigestBytes, Endianness,
+    KernelEntry, ManifestV1, PointerWidth, TargetIdentity,
 };
 
 /// A kernel entry and native payload borrowed from one validated container.
@@ -37,6 +37,48 @@ impl<'container> SelectedNativeKernel<'container> {
 
     pub const fn payload(self) -> &'container [u8] {
         self.payload
+    }
+
+    /// Compares the manifest's target declaration with another declaration.
+    ///
+    /// Triple and architecture are compared as exact, opaque strings. Candidate
+    /// capabilities may be a superset of the kernel's declared requirements.
+    /// This does not inspect payload metadata, discover hardware, or implement
+    /// AMD target-feature compatibility rules.
+    pub fn check_declared_target(
+        self,
+        candidate_target: &TargetIdentity,
+    ) -> Result<(), DeclaredTargetMismatch> {
+        let artifact = self.target();
+        if artifact.triple() != candidate_target.triple() {
+            return Err(DeclaredTargetMismatch::Triple);
+        }
+        if artifact.architecture() != candidate_target.architecture() {
+            return Err(DeclaredTargetMismatch::Architecture);
+        }
+        if artifact.pointer_width() != candidate_target.pointer_width() {
+            return Err(DeclaredTargetMismatch::PointerWidth {
+                artifact: artifact.pointer_width(),
+                candidate: candidate_target.pointer_width(),
+            });
+        }
+        if artifact.endianness() != candidate_target.endianness() {
+            return Err(DeclaredTargetMismatch::Endianness {
+                artifact: artifact.endianness(),
+                candidate: candidate_target.endianness(),
+            });
+        }
+        for capability in self.kernel.required_capabilities() {
+            if candidate_target
+                .capabilities()
+                .binary_search(capability)
+                .is_err()
+            {
+                return Err(DeclaredTargetMismatch::MissingCapability(*capability));
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -109,3 +151,57 @@ impl fmt::Display for KernelSelectionError {
 }
 
 impl std::error::Error for KernelSelectionError {}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum DeclaredTargetMismatch {
+    Triple,
+    Architecture,
+    PointerWidth {
+        artifact: PointerWidth,
+        candidate: PointerWidth,
+    },
+    Endianness {
+        artifact: Endianness,
+        candidate: Endianness,
+    },
+    MissingCapability(Capability),
+}
+
+impl fmt::Display for DeclaredTargetMismatch {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Triple => write!(
+                formatter,
+                "candidate target triple does not match the artifact declaration"
+            ),
+            Self::Architecture => {
+                write!(
+                    formatter,
+                    "candidate architecture does not match the artifact declaration"
+                )
+            }
+            Self::PointerWidth {
+                artifact,
+                candidate,
+            } => write!(
+                formatter,
+                "candidate pointer width {candidate:?} does not match artifact declaration {artifact:?}"
+            ),
+            Self::Endianness {
+                artifact,
+                candidate,
+            } => write!(
+                formatter,
+                "candidate endianness {candidate:?} does not match artifact declaration {artifact:?}"
+            ),
+            Self::MissingCapability(capability) => write!(
+                formatter,
+                "candidate target lacks required capability {}",
+                capability.name()
+            ),
+        }
+    }
+}
+
+impl std::error::Error for DeclaredTargetMismatch {}
