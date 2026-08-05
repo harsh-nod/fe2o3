@@ -1,15 +1,16 @@
 # verus_vecadd and fill
 
-This example keeps the executable path compilable as ordinary `no_std` Rust and
-places the Verus proof harnesses in `verus/vecadd.rs` and `verus/fill.rs`. The
-split is temporary: it lets this spike test the contract shape without adding
-Verus or `vstd` to the normal Cargo dependency graph.
+This example keeps the executable path compilable as ordinary `no_std` Rust
+without adding Verus or `vstd` to the normal Cargo dependency graph. Vecadd is
+single-sourced in `src/vecadd_body.rs`: ordinary rustc expands that body from
+`src/lib.rs`, and Verus expands the same body from `verus/vecadd.rs`. There is no
+second executable vecadd algorithm in the proof harness.
 
-The executable algorithm remains only in `src/lib.rs`: the proof files add
-target-neutral specifications and ghost lemmas, not another executable kernel
-body. The example checks that buffers match the logical launch domain,
-constructs an `IdentityWriteIndex`, and performs either one checked `u32`
-addition or one fill write per thread. For fill, the Verus harness establishes:
+The shared body checks the logical launch extent, constructs an
+`IdentityWriteIndex`, checks `u32` addition overflow, and performs one output
+write. The Verus harness surrounds that exact expansion with target-neutral
+specifications and ghost evidence. For fill, the separate reference harness
+establishes:
 
 - each identity index is in bounds;
 - modeled byte-address arithmetic remains below an explicit address-space size;
@@ -18,14 +19,20 @@ addition or one fill write per thread. For fill, the Verus harness establishes:
 - a completed hardware-thread set establishes the full fill postcondition.
 
 The vecadd harness models each access as a symbolic allocation identity,
-address space, and half-open byte region. It establishes:
+address space, and half-open byte region. A ghost launch brand connects a 1D
+index-space extent to one branded thread witness. Initialized shared-read
+capabilities cover both inputs, and an exclusive capability covers the output
+element. The harness establishes:
 
 - logical bounds and byte-address representability for both reads and the
   output write;
 - compatibility of the two shared reads, including exact input aliasing;
 - incompatibility of an overlapping exclusive write and shared read;
 - pairwise-disjoint exclusive output writes for distinct identity indices; and
-- frame behavior for untouched output elements and other allocations.
+- frame behavior for untouched output elements and other allocations;
+- initialization of the output element after the shared body writes it; and
+- exact per-thread `u32` vecadd behavior plus full functional correctness when
+  a complete branded launch supplies every identity index.
 
 Run the ordinary tests with:
 
@@ -34,7 +41,7 @@ cargo +stable test --manifest-path examples/verus_vecadd/Cargo.toml
 ```
 
 With a Verus binary and `vstd` available, run both positive harnesses and the
-six negative proof mutations with:
+nine negative proof mutations with:
 
 ```text
 examples/verus_vecadd/run-verus.sh --require
@@ -66,10 +73,12 @@ It therefore does not independently prove pointer provenance, Rust layout, or
 that the target supplied the correct address-space limit.
 
 There are no `assume` or `admit` statements, and the region model introduces no
-new `external_body`. This spike does not prove that the Rust function,
-canonical kernel IR, AMDGPU lowering, code object, or HIP launch refines the
-Verus model. It also does not model scheduling, barriers, atomics, fractional
-read tokens, floating-point semantics, or arbitrary index functions. Proof
-records can bind the model and environment identities as evidence, but identity
-equality alone does not establish compiler refinement or create
-verified-artifact authority.
+new `external_body`. Verification of the mechanically shared Rust body is
+source-model evidence only. It does not prove machine-code refinement from the
+Rust expansion through canonical kernel IR, AMDGPU lowering, a code object, or
+a HIP launch. It also does not model scheduling, barriers, atomics, fractional
+read tokens, floating-point semantics, or arbitrary index functions. The ghost
+brand and region capabilities are erased proof inputs; they neither mint nor
+upgrade runtime `Verified` authority. Proof records may bind this evidence to
+external identities, but identity equality alone cannot authorize loading or
+launching an artifact.

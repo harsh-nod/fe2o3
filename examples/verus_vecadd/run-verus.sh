@@ -40,7 +40,7 @@ run_pass() {
     name=$1
     file=$2
     log="$tmp_dir/$name.log"
-    if "$verus_path" --crate-type lib "$file" >"$log" 2>&1; then
+    if "$verus_path" --crate-type lib --triggers-mode silent "$file" >"$log" 2>&1; then
         printf 'PASS:  %s verified\n' "$name"
     else
         printf 'FAIL:  %s was expected to verify\n' "$name" >&2
@@ -55,7 +55,7 @@ run_rejected() {
     marker=$3
     diagnostic=$4
     log="$tmp_dir/$name.log"
-    if "$verus_path" --crate-type lib "$file" >"$log" 2>&1; then
+    if "$verus_path" --crate-type lib --triggers-mode silent "$file" >"$log" 2>&1; then
         printf 'FAIL:  %s unexpectedly verified\n' "$name" >&2
         failures=$((failures + 1))
     elif ! grep -Fq "$marker" "$log"; then
@@ -97,9 +97,21 @@ run_rejected permission_out_of_bounds_region \
     "$script_dir/verus/negative/permission_out_of_bounds_region.rs" \
     'mutated_unbounded_region_is_in_bounds' \
     'postcondition.*not satisfied|postcondition failure'
+run_rejected same_source_wrong_bounds \
+    "$script_dir/verus/negative/same_source_wrong_bounds.rs" \
+    'mutated_same_source_without_thread_bounds' \
+    'precondition.*not satisfied|precondition failure'
+run_rejected same_source_output_alias \
+    "$script_dir/verus/negative/same_source_output_alias.rs" \
+    'mutated_same_source_output_alias_is_compatible' \
+    'postcondition.*not satisfied|postcondition failure'
+run_rejected same_source_functional_error \
+    "$script_dir/verus/negative/same_source_functional_error.rs" \
+    'mutated_same_source_claims_wrong_sum' \
+    'postcondition.*not satisfied|postcondition failure'
 
 if [ "$failures" -ne 0 ]; then
     printf 'Verus fixture run failed: %s unexpected result(s)\n' "$failures" >&2
     exit 1
 fi
-printf 'Verus fixture run passed: 2 proof harnesses, 6 expected rejections\n'
+printf 'Verus fixture run passed: 2 proof harnesses, 9 expected rejections\n'

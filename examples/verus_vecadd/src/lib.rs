@@ -3,6 +3,8 @@
 
 use fe2o3_contracts::{IdentityWriteIndex, LaunchDomain1d, ThreadInDomain1d};
 
+include!("vecadd_body.rs");
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum VecAddError {
     DomainLengthMismatch,
@@ -22,22 +24,16 @@ pub fn vecadd_thread(
     b: &[u32],
     output: &mut [u32],
 ) -> Result<(), VecAddError> {
-    if thread.domain() != domain
-        || a.len() != domain.len()
-        || b.len() != domain.len()
-        || output.len() != domain.len()
-    {
-        return Err(VecAddError::DomainLengthMismatch);
-    }
-
-    let write =
-        IdentityWriteIndex::new(thread, output.len()).ok_or(VecAddError::DomainLengthMismatch)?;
-    let index = write.index().value();
-    let value = a[index]
-        .checked_add(b[index])
-        .ok_or(VecAddError::ArithmeticOverflow)?;
-    output[index] = value;
-    Ok(())
+    vecadd_thread_body!(
+        domain,
+        thread,
+        a,
+        b,
+        output,
+        IdentityWriteIndex,
+        VecAddError::DomainLengthMismatch,
+        VecAddError::ArithmeticOverflow
+    )
 }
 
 /// CPU reference driver over the same per-thread contract.
@@ -103,18 +99,43 @@ mod tests {
     fn vecadd_rejects_a_domain_buffer_mismatch() {
         let domain = LaunchDomain1d::new(3);
         let thread = domain.thread(0).unwrap();
-        let mut output = [0; 2];
+        let mut output = [0; 3];
 
         assert_eq!(
-            vecadd_thread(domain, thread, &[1, 2, 3], &[4, 5, 6], &mut output),
+            vecadd_thread(domain, thread, &[1, 2], &[4, 5, 6], &mut output),
             Err(VecAddError::DomainLengthMismatch)
         );
+        assert_eq!(output, [0; 3]);
+
+        assert_eq!(
+            vecadd_thread(domain, thread, &[1, 2, 3], &[4, 5], &mut output),
+            Err(VecAddError::DomainLengthMismatch)
+        );
+        assert_eq!(output, [0; 3]);
+
+        let wrong_domain_thread = LaunchDomain1d::new(2).thread(0).unwrap();
+
+        assert_eq!(
+            vecadd_thread(
+                domain,
+                wrong_domain_thread,
+                &[1, 2, 3],
+                &[4, 5, 6],
+                &mut output,
+            ),
+            Err(VecAddError::DomainLengthMismatch)
+        );
+        assert_eq!(output, [0; 3]);
     }
 
     #[test]
     fn vecadd_reports_integer_overflow() {
         let mut output = [0];
 
+        assert_eq!(vecadd(&[u32::MAX], &[0], &mut output), Ok(()));
+        assert_eq!(output, [u32::MAX]);
+
+        output[0] = 0;
         assert_eq!(
             vecadd(&[u32::MAX], &[1], &mut output),
             Err(VecAddError::ArithmeticOverflow)
