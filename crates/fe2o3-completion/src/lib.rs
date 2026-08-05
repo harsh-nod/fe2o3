@@ -158,6 +158,28 @@ pub fn complete_borrowed<O, S>(
     operation.map_err(CompletionError::Operation)
 }
 
+/// Establishes completion before releasing resources borrowed by a backend.
+///
+/// A quiescent execution error is returned to the caller. Ambiguous completion
+/// or a panic aborts the process because unwinding would release resources that
+/// the backend may still access.
+pub fn settle_borrowed<E>(
+    synchronize: impl FnOnce() -> Result<(), CompletionFailure<E>>,
+) -> Result<(), E> {
+    let mut abort_on_unwind = AbortOnDrop(true);
+    match synchronize() {
+        Ok(()) => {
+            abort_on_unwind.0 = false;
+            Ok(())
+        }
+        Err(CompletionFailure::Quiescent(error)) => {
+            abort_on_unwind.0 = false;
+            Err(error)
+        }
+        Err(CompletionFailure::Ambiguous(_)) => std::process::abort(),
+    }
+}
+
 #[derive(Debug)]
 struct Retained<R>(Option<R>);
 
@@ -197,7 +219,7 @@ impl Drop for AbortOnDrop {
 mod tests {
     use super::{
         Completion, CompletionError, CompletionFailure, PendingOwned, complete_borrowed,
-        complete_owned, synchronize_with_fallback,
+        complete_owned, settle_borrowed, synchronize_with_fallback,
     };
     use std::cell::RefCell;
     use std::process::Command;
@@ -589,6 +611,14 @@ mod tests {
     }
 
     #[test]
+    fn borrowed_settlement_returns_quiescent_execution_error() {
+        assert_eq!(
+            settle_borrowed(|| Err(CompletionFailure::Quiescent("event"))),
+            Err("event")
+        );
+    }
+
+    #[test]
     fn ambiguous_borrowed_completion_aborts() {
         if let Ok(case) = std::env::var(ABORT_CASE) {
             match case.as_str() {
@@ -612,12 +642,24 @@ mod tests {
                         || Ok(()),
                     );
                 }
+                "settlement-ambiguous" => {
+                    let _ = settle_borrowed(|| Err(CompletionFailure::Ambiguous("stream")));
+                }
+                "settlement-panic" => {
+                    let _ = settle_borrowed::<()>(|| panic!("completion panic"));
+                }
                 _ => panic!("unknown abort case"),
             }
             std::process::exit(99);
         }
 
-        for case in ["operation-success", "operation-failure", "operation-panic"] {
+        for case in [
+            "operation-success",
+            "operation-failure",
+            "operation-panic",
+            "settlement-ambiguous",
+            "settlement-panic",
+        ] {
             let output = Command::new(std::env::current_exe().unwrap())
                 .args([
                     "--exact",

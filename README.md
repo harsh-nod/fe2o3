@@ -40,6 +40,8 @@ interfaces needed to reach that target:
 
 Safe buffer element types and their limits are documented in the
 [device memory safety contract](docs/device-memory-safety.md).
+Safe ownership of resources used by asynchronous copies is documented in
+[device operations](docs/device-operations.md).
 
 ## Current Status
 

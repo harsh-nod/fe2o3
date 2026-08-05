@@ -5,9 +5,10 @@ use std::sync::Arc;
 
 /// An initialized, page-locked host allocation managed by HIP.
 ///
-/// Safe constructors finish initialization before exposing slices. This type
-/// intentionally provides no safe asynchronous copy API: safe Rust access and
-/// destruction cannot overlap device work that uses the allocation.
+/// Safe constructors finish initialization before exposing slices. Raw
+/// asynchronous access remains unsafe; the owned and scoped device-operation
+/// APIs retain or borrow this allocation until completion before safe Rust can
+/// access or destroy it again.
 ///
 /// Types without an audited [`DeviceCopy`] implementation are rejected:
 ///

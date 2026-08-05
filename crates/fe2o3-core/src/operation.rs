@@ -2,10 +2,191 @@ use crate::{
     DeviceBuffer, DeviceCopy, Error, Event, EventOptions, PinnedHostBuffer, Result, Stream, check,
 };
 use core::ffi::c_void;
+use core::marker::PhantomData;
 use fe2o3_completion::{
-    Completion, CompletionError, CompletionFailure, PendingOwned, complete_owned,
-    synchronize_with_fallback,
+    Completion, CompletionError, CompletionFailure, PendingOwned, complete_borrowed,
+    complete_owned, settle_borrowed, synchronize_with_fallback,
 };
+
+/// A non-escapable view of one submitted operation over borrowed resources.
+///
+/// Instances are exposed only by the callback passed to the `copy_*` methods.
+/// The callback runs while the operation may be pending, and the method waits
+/// before returning to release the resource borrows. This scoped shape is
+/// necessary because a returnable RAII guard could be safely forgotten.
+#[derive(Debug)]
+pub struct BorrowedDeviceOperation<'stream, 'resources> {
+    completion: Option<HipCompletion<'stream>>,
+    _resources: PhantomData<&'resources mut ()>,
+}
+
+impl<'stream, 'resources> BorrowedDeviceOperation<'stream, 'resources> {
+    /// Enqueues a pinned-host-to-device copy for the duration of `during`.
+    ///
+    /// `source` remains immutably borrowed and `destination` remains
+    /// exclusively borrowed until HIP completion is established. The callback
+    /// may perform unrelated host work and query the operation, but it cannot
+    /// take ownership of the operation handle.
+    ///
+    /// ```compile_fail
+    /// use fe2o3_core::{BorrowedDeviceOperation, DeviceBuffer, GpuContext, PinnedHostBuffer};
+    ///
+    /// let context = GpuContext::new(0)?;
+    /// let stream = context.create_stream()?;
+    /// let source = PinnedHostBuffer::from_slice(&context, &[1_u32])?;
+    /// let mut destination = DeviceBuffer::zeroed(&stream, 1)?;
+    /// BorrowedDeviceOperation::copy_to_device(
+    ///     &stream,
+    ///     &source,
+    ///     &mut destination,
+    ///     |_| drop(destination),
+    /// )?;
+    /// # Ok::<(), fe2o3_core::Error>(())
+    /// ```
+    pub fn copy_to_device<T: DeviceCopy, O>(
+        stream: &'stream Stream,
+        source: &'resources PinnedHostBuffer<T>,
+        destination: &'resources mut DeviceBuffer<T>,
+        during: impl for<'operation> FnOnce(&'operation Self) -> O,
+    ) -> Result<O> {
+        validate_copy(
+            stream,
+            source.context().device_id(),
+            "pinned host source",
+            source.len(),
+            destination.context().device_id(),
+            "device destination",
+            destination.len(),
+        )?;
+
+        let size = copy_byte_len::<T>(source.len())?;
+        let source_ptr = unsafe { source.raw_mut_ptr() }.cast::<c_void>();
+        let destination_ptr = unsafe { destination.raw_device_ptr() }.cast::<c_void>();
+        run_borrowed(stream, during, || {
+            if size == 0 {
+                return Ok(());
+            }
+            check(unsafe {
+                fe2o3_hip_sys::hipMemcpyAsync(
+                    destination_ptr,
+                    source_ptr,
+                    size,
+                    fe2o3_hip_sys::HIP_MEMCPY_HOST_TO_DEVICE,
+                    stream.raw(),
+                )
+            })
+        })
+    }
+
+    /// Enqueues a device-to-pinned-host copy for the duration of `during`.
+    pub fn copy_to_host<T: DeviceCopy, O>(
+        stream: &'stream Stream,
+        source: &'resources DeviceBuffer<T>,
+        destination: &'resources mut PinnedHostBuffer<T>,
+        during: impl for<'operation> FnOnce(&'operation Self) -> O,
+    ) -> Result<O> {
+        validate_copy(
+            stream,
+            source.context().device_id(),
+            "device source",
+            source.len(),
+            destination.context().device_id(),
+            "pinned host destination",
+            destination.len(),
+        )?;
+
+        let size = copy_byte_len::<T>(source.len())?;
+        let source_ptr = unsafe { source.raw_device_ptr() }.cast::<c_void>();
+        let destination_ptr = unsafe { destination.raw_mut_ptr() }.cast::<c_void>();
+        run_borrowed(stream, during, || {
+            if size == 0 {
+                return Ok(());
+            }
+            check(unsafe {
+                fe2o3_hip_sys::hipMemcpyAsync(
+                    destination_ptr,
+                    source_ptr,
+                    size,
+                    fe2o3_hip_sys::HIP_MEMCPY_DEVICE_TO_HOST,
+                    stream.raw(),
+                )
+            })
+        })
+    }
+
+    /// Enqueues a device-to-device copy for the duration of `during`.
+    pub fn copy_device_to_device<T: DeviceCopy, O>(
+        stream: &'stream Stream,
+        source: &'resources DeviceBuffer<T>,
+        destination: &'resources mut DeviceBuffer<T>,
+        during: impl for<'operation> FnOnce(&'operation Self) -> O,
+    ) -> Result<O> {
+        validate_copy(
+            stream,
+            source.context().device_id(),
+            "device source",
+            source.len(),
+            destination.context().device_id(),
+            "device destination",
+            destination.len(),
+        )?;
+
+        let size = copy_byte_len::<T>(source.len())?;
+        let source_ptr = unsafe { source.raw_device_ptr() }.cast::<c_void>();
+        let destination_ptr = unsafe { destination.raw_device_ptr() }.cast::<c_void>();
+        run_borrowed(stream, during, || {
+            if size == 0 {
+                return Ok(());
+            }
+            check(unsafe {
+                fe2o3_hip_sys::hipMemcpyAsync(
+                    destination_ptr,
+                    source_ptr,
+                    size,
+                    fe2o3_hip_sys::HIP_MEMCPY_DEVICE_TO_DEVICE,
+                    stream.raw(),
+                )
+            })
+        })
+    }
+
+    /// Returns whether the operation's completion event has fired.
+    pub fn is_complete(&self) -> Result<bool> {
+        self.completion
+            .as_ref()
+            .expect("borrowed operation has completion state")
+            .query()
+    }
+
+    fn finish(mut self) -> Result<()> {
+        self.settle()
+    }
+
+    fn settle(&mut self) -> Result<()> {
+        finish_borrowed_completion(&mut self.completion)
+    }
+}
+
+fn finish_borrowed_completion<C: Completion<Error = Error>>(
+    completion: &mut Option<C>,
+) -> Result<()> {
+    let result = settle_borrowed(|| {
+        completion
+            .as_ref()
+            .expect("borrowed operation has completion state")
+            .synchronize()
+    });
+    drop(completion.take());
+    result
+}
+
+impl Drop for BorrowedDeviceOperation<'_, '_> {
+    fn drop(&mut self) {
+        if self.completion.is_some() {
+            let _ = self.settle();
+        }
+    }
+}
 
 /// A submitted device operation that owns every participating resource.
 ///
@@ -196,6 +377,91 @@ struct HipOperationRuntime<'stream> {
     stream: &'stream Stream,
 }
 
+fn run_borrowed<'stream, 'resources, O>(
+    stream: &'stream Stream,
+    during: impl for<'operation> FnOnce(&'operation BorrowedDeviceOperation<'stream, 'resources>) -> O,
+    enqueue: impl FnOnce() -> Result<()>,
+) -> Result<O> {
+    let completion = begin_borrowed_with(HipOperationRuntime { stream }, enqueue)?;
+    let operation = BorrowedDeviceOperation {
+        completion: Some(completion),
+        _resources: PhantomData,
+    };
+    let output = during(&operation);
+    operation.finish()?;
+    Ok(output)
+}
+
+fn begin_borrowed_with<B: OperationRuntime>(
+    backend: B,
+    enqueue: impl FnOnce() -> Result<()>,
+) -> Result<B::Completion> {
+    let event = backend.create_event()?;
+    let mut submission = BorrowedSubmission::new(backend, event);
+    submission.work_may_be_pending = true;
+
+    if let Err(error) = enqueue() {
+        return Err(submission.recover(error));
+    }
+    if let Err(error) = submission.record_event() {
+        return Err(submission.recover(error));
+    }
+
+    Ok(submission.into_completion())
+}
+
+struct BorrowedSubmission<B: OperationRuntime> {
+    backend: B,
+    event: Option<B::Event>,
+    work_may_be_pending: bool,
+}
+
+impl<B: OperationRuntime> BorrowedSubmission<B> {
+    fn new(backend: B, event: B::Event) -> Self {
+        Self {
+            backend,
+            event: Some(event),
+            work_may_be_pending: false,
+        }
+    }
+
+    fn record_event(&mut self) -> Result<()> {
+        self.backend
+            .record_event(self.event.as_mut().expect("submission event is present"))
+    }
+
+    fn recover(mut self, operation: Error) -> Error {
+        self.work_may_be_pending = false;
+        match complete_borrowed(|| Err(operation), || self.backend.synchronize_stream()) {
+            Err(CompletionError::Operation(operation)) => operation,
+            Ok(())
+            | Err(CompletionError::Synchronization(_))
+            | Err(CompletionError::OperationAndSynchronization { .. }) => {
+                unreachable!("borrowed recovery always reports its original operation error")
+            }
+        }
+    }
+
+    fn into_completion(mut self) -> B::Completion {
+        self.work_may_be_pending = false;
+        self.backend
+            .make_completion(self.event.take().expect("submission event is present"))
+    }
+}
+
+impl<B: OperationRuntime> Drop for BorrowedSubmission<B> {
+    fn drop(&mut self) {
+        if self.work_may_be_pending {
+            self.work_may_be_pending = false;
+            complete_borrowed(
+                || Ok::<(), core::convert::Infallible>(()),
+                || self.backend.synchronize_stream(),
+            )
+            .expect("borrowed submission recovery operation is infallible");
+        }
+    }
+}
+
 impl<'stream> OperationRuntime for HipOperationRuntime<'stream> {
     type Event = Event;
     type Completion = HipCompletion<'stream>;
@@ -274,7 +540,6 @@ impl<B: OperationRuntime, R> OwnedSubmission<B, R> {
         self.work_may_be_pending = false;
         PendingOwned::new(resources, completion)
     }
-
     fn take_retained(&mut self) -> (R, Option<B::Event>) {
         (
             self.resources
@@ -386,13 +651,20 @@ fn copy_byte_len<T>(len: usize) -> Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::{
-        HIP_COMPLETION_OBSERVATIONS, OperationRuntime, OwnedDeviceOperation, copy_byte_len,
-        ensure_copy_lengths, submit_owned_with,
+        BorrowedDeviceOperation, HIP_COMPLETION_OBSERVATIONS, OperationRuntime,
+        OwnedDeviceOperation, begin_borrowed_with, copy_byte_len, ensure_copy_lengths,
+        ensure_operation_device, finish_borrowed_completion, submit_owned_with,
     };
     use crate::{DeviceBuffer, Error, GpuContext, PinnedHostBuffer};
     use fe2o3_completion::{Completion, CompletionFailure, synchronize_with_fallback};
     use std::cell::RefCell;
+    use std::process::Command;
     use std::rc::Rc;
+
+    #[cfg(unix)]
+    use std::os::unix::process::ExitStatusExt;
+
+    const BORROWED_ABORT_CASE: &str = "FE2O3_BORROWED_OPERATION_ABORT_CASE";
 
     #[derive(Clone, Copy, Debug, Default)]
     enum Fault {
@@ -559,6 +831,15 @@ mod tests {
         assert!(matches!(
             copy_byte_len::<u16>(usize::MAX),
             Err(Error::SizeOverflow)
+        ));
+        assert!(ensure_operation_device("source", 2, 2).is_ok());
+        assert!(matches!(
+            ensure_operation_device("source", 2, 3),
+            Err(Error::OperationDeviceMismatch {
+                resource: "source",
+                resource_device: 2,
+                stream_device: 3
+            })
         ));
     }
 
@@ -861,6 +1142,221 @@ mod tests {
     }
 
     #[test]
+    fn borrowed_submission_recovers_enqueue_and_record_errors() {
+        let enqueue_runtime = FakeRuntime::new(Faults::default());
+        let error = begin_borrowed_with(enqueue_runtime.clone(), || Err(Error::SizeOverflow))
+            .err()
+            .expect("enqueue must fail");
+        assert!(matches!(error, Error::SizeOverflow));
+        assert_eq!(
+            log(&enqueue_runtime),
+            ["create-event", "recovery-sync", "event-drop"]
+        );
+
+        let record_runtime = FakeRuntime::new(Faults {
+            record: Fault::Error,
+            ..Faults::default()
+        });
+        let error = begin_borrowed_with(record_runtime.clone(), || Ok(()))
+            .err()
+            .expect("record must fail");
+        assert!(matches!(error, Error::EventPending));
+        assert_eq!(
+            log(&record_runtime),
+            [
+                "create-event",
+                "record-event",
+                "recovery-sync",
+                "event-drop"
+            ]
+        );
+    }
+
+    #[test]
+    fn borrowed_submission_drop_recovers_enqueue_and_record_panics() {
+        let enqueue_runtime = FakeRuntime::new(Faults::default());
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ =
+                begin_borrowed_with(enqueue_runtime.clone(), || panic!("injected enqueue panic"));
+        }));
+        assert!(panic.is_err());
+        assert_eq!(
+            log(&enqueue_runtime),
+            ["create-event", "recovery-sync", "event-drop"]
+        );
+
+        let record_runtime = FakeRuntime::new(Faults {
+            record: Fault::Panic,
+            ..Faults::default()
+        });
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = begin_borrowed_with(record_runtime.clone(), || Ok(()));
+        }));
+        assert!(panic.is_err());
+        assert_eq!(
+            log(&record_runtime),
+            [
+                "create-event",
+                "record-event",
+                "recovery-sync",
+                "event-drop"
+            ]
+        );
+    }
+
+    #[test]
+    fn borrowed_settlement_returns_quiescent_error_and_drops_completion() {
+        let runtime = FakeRuntime::new(Faults {
+            event_sync: Fault::Error,
+            ..Faults::default()
+        });
+        let mut completion =
+            Some(begin_borrowed_with(runtime.clone(), || Ok(())).expect("submission must succeed"));
+
+        assert!(matches!(
+            finish_borrowed_completion(&mut completion),
+            Err(Error::EventTimingDisabled)
+        ));
+        assert!(completion.is_none());
+        assert_eq!(
+            log(&runtime),
+            [
+                "create-event",
+                "record-event",
+                "into-completion",
+                "event-sync",
+                "fallback-sync",
+                "event-drop"
+            ]
+        );
+    }
+
+    #[test]
+    fn borrowed_settlement_propagates_completion_destructor_panic_after_quiescence() {
+        let runtime = FakeRuntime::new(Faults {
+            event_drop: Fault::Panic,
+            ..Faults::default()
+        });
+        let mut completion =
+            Some(begin_borrowed_with(runtime.clone(), || Ok(())).expect("submission must succeed"));
+
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = finish_borrowed_completion(&mut completion);
+        }));
+        assert!(panic.is_err());
+        assert!(completion.is_none());
+        assert_eq!(
+            log(&runtime),
+            [
+                "create-event",
+                "record-event",
+                "into-completion",
+                "event-sync",
+                "event-drop"
+            ]
+        );
+    }
+
+    #[test]
+    fn borrowed_state_machine_aborts_on_ambiguous_completion() {
+        if let Ok(case) = std::env::var(BORROWED_ABORT_CASE) {
+            let (faults, enqueue): (Faults, fn() -> crate::Result<()>) = match case.as_str() {
+                "enqueue-error-recovery-error" => (
+                    Faults {
+                        recovery_sync: Fault::Error,
+                        ..Faults::default()
+                    },
+                    || Err(Error::SizeOverflow),
+                ),
+                "enqueue-error-recovery-panic" => (
+                    Faults {
+                        recovery_sync: Fault::Panic,
+                        ..Faults::default()
+                    },
+                    || Err(Error::SizeOverflow),
+                ),
+                "record-error-recovery-error" => (
+                    Faults {
+                        record: Fault::Error,
+                        recovery_sync: Fault::Error,
+                        ..Faults::default()
+                    },
+                    || Ok(()),
+                ),
+                "enqueue-panic-recovery-error" => (
+                    Faults {
+                        recovery_sync: Fault::Error,
+                        ..Faults::default()
+                    },
+                    || panic!("injected enqueue panic"),
+                ),
+                "record-panic-recovery-error" => (
+                    Faults {
+                        record: Fault::Panic,
+                        recovery_sync: Fault::Error,
+                        ..Faults::default()
+                    },
+                    || Ok(()),
+                ),
+                "completion-ambiguous" => (
+                    Faults {
+                        event_sync: Fault::Error,
+                        fallback_sync: Fault::Error,
+                        ..Faults::default()
+                    },
+                    || Ok(()),
+                ),
+                "completion-fallback-panic" => (
+                    Faults {
+                        event_sync: Fault::Error,
+                        fallback_sync: Fault::Panic,
+                        ..Faults::default()
+                    },
+                    || Ok(()),
+                ),
+                _ => panic!("unknown borrowed abort case"),
+            };
+            let runtime = FakeRuntime::new(faults);
+            let mut completion = begin_borrowed_with(runtime, enqueue).ok().map(Some);
+            if let Some(completion) = completion.as_mut() {
+                let _ = finish_borrowed_completion(completion);
+            }
+            std::process::exit(99);
+        }
+
+        for case in [
+            "enqueue-error-recovery-error",
+            "enqueue-error-recovery-panic",
+            "record-error-recovery-error",
+            "enqueue-panic-recovery-error",
+            "record-panic-recovery-error",
+            "completion-ambiguous",
+            "completion-fallback-panic",
+        ] {
+            let output = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "operation::tests::borrowed_state_machine_aborts_on_ambiguous_completion",
+                    "--nocapture",
+                ])
+                .env(BORROWED_ABORT_CASE, case)
+                .output()
+                .unwrap();
+            assert_ne!(
+                output.status.code(),
+                Some(99),
+                "borrowed case {case} returned instead of aborting"
+            );
+            #[cfg(unix)]
+            assert_eq!(
+                output.status.signal(),
+                Some(6),
+                "borrowed case {case} did not terminate with SIGABRT"
+            );
+        }
+    }
+
+    #[test]
     #[ignore = "requires a working HIP device"]
     fn owned_copies_round_trip_and_return_resources() -> crate::Result<()> {
         let context = GpuContext::new(0)?;
@@ -891,6 +1387,61 @@ mod tests {
         let operation = OwnedDeviceOperation::copy_to_device(&stream, source, destination)?;
         drop(operation);
 
+        assert_eq!(hip_completion_observations(), 1);
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires a working HIP device"]
+    fn scoped_borrowed_copies_round_trip() -> crate::Result<()> {
+        let context = GpuContext::new(0)?;
+        let stream = context.create_stream()?;
+        let source = PinnedHostBuffer::from_slice(&context, &[2_u32, 7, 1, 8, 2, 8])?;
+        let mut first_device = DeviceBuffer::zeroed(&stream, source.len())?;
+        let callback_ran = std::cell::Cell::new(false);
+
+        BorrowedDeviceOperation::copy_to_device(
+            &stream,
+            &source,
+            &mut first_device,
+            |operation| {
+                let _snapshot = operation.is_complete().unwrap();
+                callback_ran.set(true);
+            },
+        )?;
+        assert!(callback_ran.get());
+
+        let mut second_device = DeviceBuffer::zeroed(&stream, source.len())?;
+        BorrowedDeviceOperation::copy_device_to_device(
+            &stream,
+            &first_device,
+            &mut second_device,
+            |_| {},
+        )?;
+
+        let mut output = PinnedHostBuffer::filled(&context, source.len(), 0_u32)?;
+        BorrowedDeviceOperation::copy_to_host(&stream, &second_device, &mut output, |_| {})?;
+        assert_eq!(output.as_slice(), [2, 7, 1, 8, 2, 8]);
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires a working HIP device"]
+    fn unwinding_borrowed_callback_observes_hip_completion() -> crate::Result<()> {
+        let context = GpuContext::new(0)?;
+        let stream = context.create_stream()?;
+        let source = PinnedHostBuffer::from_slice(&context, &[89_u32, 144, 233])?;
+        let mut destination = DeviceBuffer::zeroed(&stream, source.len())?;
+
+        reset_hip_completion_observations();
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ =
+                BorrowedDeviceOperation::copy_to_device(&stream, &source, &mut destination, |_| {
+                    panic!("exercise borrowed operation drop")
+                });
+        }));
+
+        assert!(panic.is_err());
         assert_eq!(hip_completion_observations(), 1);
         Ok(())
     }
