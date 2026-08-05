@@ -23,6 +23,17 @@ fn function(parameters: Vec<Type>, operations: Vec<Operation>) -> Function {
     )
 }
 
+fn module_with_functions(functions: Vec<Function>) -> Module {
+    let mut module = Module::new("effect_test");
+    module.functions = functions;
+    module
+}
+
+fn analyze(function: &Function, bindings: &FunctionEffectBindings) -> FunctionRegionEffectReport {
+    let module = module_with_functions(vec![function.clone()]);
+    extract_function_region_effects(&module, &function.id, bindings).unwrap()
+}
+
 fn store(pointer: u32, value: u32, access: MemoryAccess) -> Operation {
     Operation::new(
         vec![],
@@ -103,24 +114,29 @@ fn extracts_real_load_and_store_effects_with_derived_widths() {
         32,
     );
 
-    let report = extract_function_region_effects(&function, &bindings);
-    assert!(report.extraction_issues.is_empty());
-    assert_eq!(report.effects.len(), 2);
-    assert_eq!(report.effects[0].effect.kind, RegionEffectKind::Read);
-    assert_eq!(report.effects[1].effect.kind, RegionEffectKind::Write);
-    assert!(report.effects.iter().all(|effect| {
+    let report = analyze(&function, &bindings);
+    assert!(report.extraction_issues().is_empty());
+    assert_eq!(report.effects().len(), 2);
+    assert_eq!(report.effects()[0].effect.kind, RegionEffectKind::Read);
+    assert_eq!(report.effects()[1].effect.kind, RegionEffectKind::Write);
+    assert!(report.effects().iter().all(|effect| {
         effect.effect.access_width == 4 && effect.effect.epoch == SynchronizationEpoch::INITIAL
     }));
     assert!(
         report
-            .bounds_obligations
+            .bounds_obligations()
             .iter()
-            .all(|obligation| obligation.outcome == BoundsObligationOutcome::Proven)
+            .all(|obligation| obligation.outcome
+                == BoundsObligationOutcome::EstablishedUnderSuppliedBindings)
     );
-    assert!(report.race_obligations.iter().all(|obligation| matches!(
+    assert!(report.race_obligations().iter().all(|obligation| matches!(
         obligation.outcome,
-        RaceObligationOutcome::NoConflict(NoConflictReason::DisjointRegions)
+        RaceObligationOutcome::NoConflictUnderSuppliedBindings(NoConflictReason::DisjointRegions)
     )));
+    assert_eq!(
+        report.completeness(),
+        EffectExtractionCompleteness::CompleteUnderSuppliedBindings
+    );
 }
 
 #[test]
@@ -143,10 +159,10 @@ fn access_width_larger_than_the_bound_region_is_a_bounds_violation() {
         1,
     );
 
-    let report = extract_function_region_effects(&function, &bindings);
-    assert_eq!(report.effects[0].effect.access_width, 8);
+    let report = analyze(&function, &bindings);
+    assert_eq!(report.effects()[0].effect.access_width, 8);
     assert_eq!(
-        report.bounds_obligations[0].outcome,
+        report.bounds_obligations()[0].outcome,
         BoundsObligationOutcome::Violated(BoundsViolation::Region(
             RegionValidationError::AccessExceedsRegion {
                 access_width: 8,
@@ -156,7 +172,7 @@ fn access_width_larger_than_the_bound_region_is_a_bounds_violation() {
         ))
     );
     assert!(matches!(
-        report.race_obligations[0].outcome,
+        report.race_obligations()[0].outcome,
         RaceObligationOutcome::Indeterminate(RaceIndeterminateReason::Analysis(_))
     ));
 }
@@ -197,18 +213,18 @@ fn touching_regions_are_disjoint_but_partial_overlap_conflicts() {
             ),
             2,
         );
-        extract_function_region_effects(&function, &bindings)
+        analyze(&function, &bindings)
     };
 
     let touching = report_for_second_offset(4);
     assert_eq!(
-        touching.race_obligations[1].outcome,
-        RaceObligationOutcome::NoConflict(NoConflictReason::DisjointRegions)
+        touching.race_obligations()[1].outcome,
+        RaceObligationOutcome::NoConflictUnderSuppliedBindings(NoConflictReason::DisjointRegions)
     );
 
     let overlapping = report_for_second_offset(3);
     assert_eq!(
-        overlapping.race_obligations[1].outcome,
+        overlapping.race_obligations()[1].outcome,
         RaceObligationOutcome::Conflict(ConflictReason::OverlappingNonAtomicWrite)
     );
 }
@@ -233,10 +249,10 @@ fn reports_conflicts_between_distinct_invocations_of_one_operation() {
         64,
     );
 
-    let report = extract_function_region_effects(&function, &bindings);
+    let report = analyze(&function, &bindings);
     assert_eq!(
-        report.race_obligations,
-        vec![RaceObligation {
+        report.race_obligations(),
+        &[RaceObligation {
             left: location(0),
             right: location(0),
             outcome: RaceObligationOutcome::Conflict(ConflictReason::OverlappingNonAtomicWrite),
@@ -264,13 +280,13 @@ fn unknown_and_missing_regions_remain_indeterminate() {
         ),
         8,
     );
-    let unknown = extract_function_region_effects(&function, &unknown_bindings);
+    let unknown = analyze(&function, &unknown_bindings);
     assert_eq!(
-        unknown.bounds_obligations[0].outcome,
+        unknown.bounds_obligations()[0].outcome,
         BoundsObligationOutcome::Indeterminate(BoundsIndeterminateReason::UnknownAllocation)
     );
     assert!(matches!(
-        unknown.race_obligations[0].outcome,
+        unknown.race_obligations()[0].outcome,
         RaceObligationOutcome::Indeterminate(RaceIndeterminateReason::Conflict(
             ConflictIndeterminateReason::Region(RegionIndeterminateReason::UnknownAllocation)
         ))
@@ -278,15 +294,15 @@ fn unknown_and_missing_regions_remain_indeterminate() {
 
     let mut missing_bindings = FunctionEffectBindings::new();
     missing_bindings.bind_invocations(location(0), invocations(8));
-    let missing = extract_function_region_effects(&function, &missing_bindings);
+    let missing = analyze(&function, &missing_bindings);
     assert_eq!(
-        missing.bounds_obligations[0].outcome,
+        missing.bounds_obligations()[0].outcome,
         BoundsObligationOutcome::Indeterminate(BoundsIndeterminateReason::MissingPointerRegion {
             pointer: ValueId(0)
         })
     );
     assert!(matches!(
-        missing.race_obligations[0].outcome,
+        missing.race_obligations()[0].outcome,
         RaceObligationOutcome::Indeterminate(RaceIndeterminateReason::Conflict(
             ConflictIndeterminateReason::Region(RegionIndeterminateReason::UnknownAllocation)
         ))
@@ -313,13 +329,13 @@ fn unbounded_regions_and_address_space_mismatches_fail_closed() {
         ),
         8,
     );
-    let unbounded = extract_function_region_effects(&function, &unbounded);
+    let unbounded = analyze(&function, &unbounded);
     assert_eq!(
-        unbounded.bounds_obligations[0].outcome,
+        unbounded.bounds_obligations()[0].outcome,
         BoundsObligationOutcome::Indeterminate(BoundsIndeterminateReason::UnboundedRegion)
     );
     assert!(matches!(
-        unbounded.race_obligations[0].outcome,
+        unbounded.race_obligations()[0].outcome,
         RaceObligationOutcome::Indeterminate(RaceIndeterminateReason::Analysis(_))
     ));
 
@@ -331,9 +347,9 @@ fn unbounded_regions_and_address_space_mismatches_fail_closed() {
         ByteExpression::constant(4),
     );
     bind(&mut mismatch, 0, 0, workgroup_region, 1);
-    let mismatch = extract_function_region_effects(&function, &mismatch);
+    let mismatch = analyze(&function, &mismatch);
     assert_eq!(
-        mismatch.bounds_obligations[0].outcome,
+        mismatch.bounds_obligations()[0].outcome,
         BoundsObligationOutcome::Violated(BoundsViolation::AddressSpaceMismatch {
             region: AddressSpace::Workgroup,
             access: AddressSpace::Global,
@@ -356,13 +372,13 @@ fn incomplete_invocation_mapping_and_overflow_fail_closed() {
 
     let mut incomplete = FunctionEffectBindings::new();
     incomplete.bind_pointer_region(ValueId(0), overflowing_region.clone());
-    let incomplete = extract_function_region_effects(&function, &incomplete);
+    let incomplete = analyze(&function, &incomplete);
     assert_eq!(
-        incomplete.bounds_obligations[0].outcome,
+        incomplete.bounds_obligations()[0].outcome,
         BoundsObligationOutcome::Indeterminate(BoundsIndeterminateReason::MissingInvocationMapping)
     );
     assert_eq!(
-        incomplete.race_obligations[0].outcome,
+        incomplete.race_obligations()[0].outcome,
         RaceObligationOutcome::Indeterminate(RaceIndeterminateReason::MissingInvocationMapping {
             location: location(0)
         })
@@ -370,15 +386,15 @@ fn incomplete_invocation_mapping_and_overflow_fail_closed() {
 
     let mut overflowing = FunctionEffectBindings::new();
     bind(&mut overflowing, 0, 0, overflowing_region, 1);
-    let overflowing = extract_function_region_effects(&function, &overflowing);
+    let overflowing = analyze(&function, &overflowing);
     assert!(matches!(
-        overflowing.bounds_obligations[0].outcome,
+        overflowing.bounds_obligations()[0].outcome,
         BoundsObligationOutcome::Violated(BoundsViolation::Region(
             RegionValidationError::RegionEndOverflow { .. }
         ))
     ));
     assert!(matches!(
-        overflowing.race_obligations[0].outcome,
+        overflowing.race_obligations()[0].outcome,
         RaceObligationOutcome::Indeterminate(RaceIndeterminateReason::Analysis(_))
     ));
 }
@@ -416,13 +432,13 @@ fn narrow_atomic_scope_cannot_discharge_a_cross_invocation_obligation() {
         8,
     );
 
-    let report = extract_function_region_effects(&function, &bindings);
+    let report = analyze(&function, &bindings);
     assert_eq!(
-        report.bounds_obligations[0].outcome,
-        BoundsObligationOutcome::Proven
+        report.bounds_obligations()[0].outcome,
+        BoundsObligationOutcome::EstablishedUnderSuppliedBindings
     );
     assert_eq!(
-        report.race_obligations[0].outcome,
+        report.race_obligations()[0].outcome,
         RaceObligationOutcome::Indeterminate(RaceIndeterminateReason::Conflict(
             ConflictIndeterminateReason::AtomicScopeCoverageNotEstablished {
                 scope: SynchronizationScope::Workgroup
@@ -445,6 +461,7 @@ fn unsupported_widths_and_calls_are_reported_as_incomplete() {
         vec![pointer(ScalarType::Index), Type::INDEX],
         vec![store(0, 1, access), call],
     );
+    let helper = Function::declaration("unknown_helper", Signature::new(vec![], vec![]));
     let mut bindings = FunctionEffectBindings::new();
     bind(
         &mut bindings,
@@ -458,36 +475,171 @@ fn unsupported_widths_and_calls_are_reported_as_incomplete() {
         4,
     );
 
-    let report = extract_function_region_effects(&function, &bindings);
-    assert_eq!(report.effects, vec![]);
+    let function_id = function.id.clone();
+    let module = module_with_functions(vec![function, helper]);
+    let report = extract_function_region_effects(&module, &function_id, &bindings).unwrap();
+    assert_eq!(report.effects(), &[]);
     assert_eq!(
-        report.bounds_obligations[0].outcome,
+        report.bounds_obligations()[0].outcome,
         BoundsObligationOutcome::Indeterminate(BoundsIndeterminateReason::AccessWidthUnavailable)
     );
     assert_eq!(
-        report.race_obligations[0].outcome,
+        report.race_obligations()[0].outcome,
         RaceObligationOutcome::Indeterminate(RaceIndeterminateReason::EffectUnavailable {
             location: location(0)
         })
     );
     assert_eq!(
-        report.extraction_issues,
-        vec![EffectExtractionIssue::CallEffectsUnavailable {
+        report.extraction_issues(),
+        &[EffectExtractionIssue::CallEffectsUnavailable {
             location: location(1),
             callee: FunctionId::new("unknown_helper"),
         }]
     );
+    assert_eq!(
+        report.completeness(),
+        EffectExtractionCompleteness::Incomplete
+    );
+}
+
+#[test]
+fn unresolved_calls_force_incomplete_status_despite_favorable_modeled_effects() {
+    let access = MemoryAccess::new(AddressSpace::Global, 4);
+    let call = Operation::new(
+        vec![],
+        OperationKind::Call {
+            callee: FunctionId::new("opaque_helper"),
+            arguments: vec![],
+        },
+    );
+    let function = function(
+        vec![pointer(ScalarType::U32), Type::Scalar(ScalarType::U32)],
+        vec![store(0, 1, access), call],
+    );
+    let helper = Function::declaration("opaque_helper", Signature::new(vec![], vec![]));
+    let mut bindings = FunctionEffectBindings::new();
+    bind(
+        &mut bindings,
+        0,
+        0,
+        region(
+            allocation(1),
+            ByteExpression::constant(0),
+            ByteExpression::constant(4),
+        ),
+        1,
+    );
+
+    let function_id = function.id.clone();
+    let module = module_with_functions(vec![function, helper]);
+    let report = extract_function_region_effects(&module, &function_id, &bindings).unwrap();
+    assert!(matches!(
+        report.race_obligations()[0].outcome,
+        RaceObligationOutcome::NoConflictUnderSuppliedBindings(_)
+    ));
+    assert_eq!(
+        report.completeness(),
+        EffectExtractionCompleteness::Incomplete
+    );
+    assert_eq!(report.extraction_issues().len(), 1);
 }
 
 #[test]
 fn declarations_have_an_explicit_extraction_issue() {
     let function = Function::declaration("external", Signature::new(vec![], vec![]));
-    let report = extract_function_region_effects(&function, &FunctionEffectBindings::new());
+    let report = analyze(&function, &FunctionEffectBindings::new());
     assert_eq!(
-        report.extraction_issues,
-        vec![EffectExtractionIssue::FunctionDeclaration]
+        report.extraction_issues(),
+        &[EffectExtractionIssue::FunctionDeclaration]
     );
-    assert!(report.effects.is_empty());
-    assert!(report.bounds_obligations.is_empty());
-    assert!(report.race_obligations.is_empty());
+    assert_eq!(
+        report.completeness(),
+        EffectExtractionCompleteness::Incomplete
+    );
+    assert!(report.effects().is_empty());
+    assert!(report.bounds_obligations().is_empty());
+    assert!(report.race_obligations().is_empty());
+}
+
+#[test]
+fn malformed_modules_and_missing_functions_are_typed_errors() {
+    let mut malformed = function(vec![], vec![]);
+    malformed.body.as_mut().unwrap().blocks[0].terminator = None;
+    let malformed_id = malformed.id.clone();
+    let malformed_module = module_with_functions(vec![malformed]);
+    let error = extract_function_region_effects(
+        &malformed_module,
+        &malformed_id,
+        &FunctionEffectBindings::new(),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        FunctionRegionEffectExtractionError::InvalidModule(errors)
+            if errors.contains(DiagnosticCode::MissingTerminator)
+    ));
+
+    let module = Module::new("valid_empty");
+    assert!(matches!(
+        extract_function_region_effects(
+            &module,
+            &FunctionId::new("missing"),
+            &FunctionEffectBindings::new()
+        ),
+        Err(FunctionRegionEffectExtractionError::MissingFunction { function })
+            if function == FunctionId::new("missing")
+    ));
+}
+
+#[test]
+fn favorable_results_are_explicitly_non_authoritative_supplied_binding_results() {
+    let access = MemoryAccess::new(AddressSpace::Global, 4);
+    let function = function(
+        vec![
+            pointer(ScalarType::U32),
+            pointer(ScalarType::U32),
+            Type::Scalar(ScalarType::U32),
+        ],
+        vec![store(0, 2, access), store(1, 2, access)],
+    );
+    let mut bindings = FunctionEffectBindings::new();
+    bind(
+        &mut bindings,
+        0,
+        0,
+        region(
+            allocation(10),
+            ByteExpression::constant(0),
+            ByteExpression::constant(4),
+        ),
+        1,
+    );
+    bind(
+        &mut bindings,
+        1,
+        1,
+        region(
+            allocation(11),
+            ByteExpression::constant(0),
+            ByteExpression::constant(4),
+        ),
+        1,
+    );
+
+    let report = analyze(&function, &bindings);
+    assert_eq!(
+        report.analysis_basis(),
+        FunctionEffectAnalysisBasis::UntrustedCallerSuppliedBindings
+    );
+    assert!(report.bounds_obligations().iter().all(|obligation| {
+        obligation.outcome == BoundsObligationOutcome::EstablishedUnderSuppliedBindings
+    }));
+    assert!(report.race_obligations().iter().all(|obligation| matches!(
+        obligation.outcome,
+        RaceObligationOutcome::NoConflictUnderSuppliedBindings(_)
+    )));
+    assert_eq!(
+        report.completeness(),
+        EffectExtractionCompleteness::CompleteUnderSuppliedBindings
+    );
 }

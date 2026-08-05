@@ -1,11 +1,16 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    error::Error,
+    fmt,
+};
 
 use crate::{
     AddressSpace, AllocationIdentity, AtomicEffect, BlockId, ByteExpression,
     ConflictIndeterminateReason, ConflictReason, EffectConflict, Function, FunctionId,
-    InvocationPairing, InvocationRange1d, MemoryAccess, MemoryRegion, NoConflictReason, Operation,
-    OperationKind, RegionAnalysisError, RegionEffect, RegionEffectKind, RegionValidationError,
-    ScalarType, SynchronizationEpoch, Type, ValueId, analyze_effect_conflict,
+    InvocationPairing, InvocationRange1d, MemoryAccess, MemoryRegion, Module, NoConflictReason,
+    Operation, OperationKind, RegionAnalysisError, RegionEffect, RegionEffectKind,
+    RegionValidationError, ScalarType, SynchronizationEpoch, Type, ValueId, VerificationErrors,
+    analyze_effect_conflict, verify_module,
 };
 
 /// Stable location of an operation within one function body.
@@ -24,7 +29,7 @@ impl FunctionOperationLocation {
     }
 }
 
-/// Frontend facts required to relate SSA pointer values to dynamic invocations.
+/// Untrusted caller-supplied facts relating SSA pointers to dynamic invocations.
 ///
 /// These facts are analysis inputs only. Supplying them does not create proof,
 /// verification, or safe-launch authority.
@@ -95,7 +100,8 @@ pub struct LocatedRegionEffect {
 /// Outcome of the byte-bounds obligation for one memory operation.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum BoundsObligationOutcome {
-    Proven,
+    /// The access is in bounds if the caller-supplied bindings are accurate.
+    EstablishedUnderSuppliedBindings,
     Violated(BoundsViolation),
     Indeterminate(BoundsIndeterminateReason),
 }
@@ -129,7 +135,8 @@ pub struct BoundsObligation {
 /// Outcome of comparing two operations across distinct dynamic invocations.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum RaceObligationOutcome {
-    NoConflict(NoConflictReason),
+    /// No conflict exists if the caller-supplied bindings are accurate.
+    NoConflictUnderSuppliedBindings(NoConflictReason),
     Conflict(ConflictReason),
     Indeterminate(RaceIndeterminateReason),
 }
@@ -159,6 +166,54 @@ pub enum EffectExtractionIssue {
     },
 }
 
+/// Describes the non-authoritative facts on which this report is based.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum FunctionEffectAnalysisBasis {
+    /// Allocation identities, regions, invocation ranges, and epochs came from
+    /// an untrusted caller and have not been tied to launch or provenance facts.
+    UntrustedCallerSuppliedBindings,
+}
+
+/// Whether extraction accounted for every possible effect in the function.
+///
+/// Completeness does not establish that the supplied bindings are true or that
+/// any bounds or race obligation is satisfied.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum EffectExtractionCompleteness {
+    CompleteUnderSuppliedBindings,
+    Incomplete,
+}
+
+/// Failure to select a function from a structurally verified module.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum FunctionRegionEffectExtractionError {
+    InvalidModule(VerificationErrors),
+    MissingFunction { function: FunctionId },
+}
+
+impl fmt::Display for FunctionRegionEffectExtractionError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidModule(errors) => errors.fmt(formatter),
+            Self::MissingFunction { function } => {
+                write!(
+                    formatter,
+                    "function {function} is not present in the module"
+                )
+            }
+        }
+    }
+}
+
+impl Error for FunctionRegionEffectExtractionError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::InvalidModule(errors) => Some(errors),
+            Self::MissingFunction { .. } => None,
+        }
+    }
+}
+
 /// Descriptive extraction and obligation results for one function.
 ///
 /// This report intentionally has no conversion to `Verified` or launch
@@ -166,28 +221,68 @@ pub enum EffectExtractionIssue {
 /// outcome, and extraction issue as an unsatisfied obligation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FunctionRegionEffectReport {
-    pub function: FunctionId,
-    pub effects: Vec<LocatedRegionEffect>,
-    pub bounds_obligations: Vec<BoundsObligation>,
-    pub race_obligations: Vec<RaceObligation>,
-    pub extraction_issues: Vec<EffectExtractionIssue>,
+    function: FunctionId,
+    effects: Vec<LocatedRegionEffect>,
+    bounds_obligations: Vec<BoundsObligation>,
+    race_obligations: Vec<RaceObligation>,
+    extraction_issues: Vec<EffectExtractionIssue>,
+    completeness: EffectExtractionCompleteness,
+}
+
+impl FunctionRegionEffectReport {
+    pub fn function(&self) -> &FunctionId {
+        &self.function
+    }
+
+    pub const fn analysis_basis(&self) -> FunctionEffectAnalysisBasis {
+        FunctionEffectAnalysisBasis::UntrustedCallerSuppliedBindings
+    }
+
+    pub fn effects(&self) -> &[LocatedRegionEffect] {
+        &self.effects
+    }
+
+    pub fn bounds_obligations(&self) -> &[BoundsObligation] {
+        &self.bounds_obligations
+    }
+
+    pub fn race_obligations(&self) -> &[RaceObligation] {
+        &self.race_obligations
+    }
+
+    pub fn extraction_issues(&self) -> &[EffectExtractionIssue] {
+        &self.extraction_issues
+    }
+
+    pub const fn completeness(&self) -> EffectExtractionCompleteness {
+        self.completeness
+    }
 }
 
 /// Extracts region effects from Kernel IR memory operations and reports the
 /// bounds and cross-invocation race obligations that this bounded model can
 /// classify.
 pub fn extract_function_region_effects(
-    function: &Function,
+    module: &Module,
+    function: &FunctionId,
     bindings: &FunctionEffectBindings,
-) -> FunctionRegionEffectReport {
+) -> Result<FunctionRegionEffectReport, FunctionRegionEffectExtractionError> {
+    verify_module(module).map_err(FunctionRegionEffectExtractionError::InvalidModule)?;
+    let function = module.function(function).ok_or_else(|| {
+        FunctionRegionEffectExtractionError::MissingFunction {
+            function: function.clone(),
+        }
+    })?;
+
     let Some(body) = &function.body else {
-        return FunctionRegionEffectReport {
+        return Ok(FunctionRegionEffectReport {
             function: function.id.clone(),
             effects: Vec::new(),
             bounds_obligations: Vec::new(),
             race_obligations: Vec::new(),
             extraction_issues: vec![EffectExtractionIssue::FunctionDeclaration],
-        };
+            completeness: EffectExtractionCompleteness::Incomplete,
+        });
     };
 
     let value_types = collect_value_types(function);
@@ -265,13 +360,23 @@ pub fn extract_function_region_effects(
     }
 
     let race_obligations = race_obligations(&candidates, &effects);
-    FunctionRegionEffectReport {
+    let completeness = if extraction_issues.is_empty()
+        && candidates
+            .iter()
+            .all(|candidate| candidate.effect_index.is_some())
+    {
+        EffectExtractionCompleteness::CompleteUnderSuppliedBindings
+    } else {
+        EffectExtractionCompleteness::Incomplete
+    };
+    Ok(FunctionRegionEffectReport {
         function: function.id.clone(),
         effects,
         bounds_obligations,
         race_obligations,
         extraction_issues,
-    }
+        completeness,
+    })
 }
 
 #[derive(Clone, Copy)]
@@ -363,7 +468,7 @@ fn bounds_outcome(
         Ok(()) if matches!(effect.region.allocation, AllocationIdentity::Unknown) => {
             BoundsObligationOutcome::Indeterminate(BoundsIndeterminateReason::UnknownAllocation)
         }
-        Ok(()) => BoundsObligationOutcome::Proven,
+        Ok(()) => BoundsObligationOutcome::EstablishedUnderSuppliedBindings,
     }
 }
 
@@ -428,7 +533,9 @@ fn race_outcome(left: &LocatedRegionEffect, right: &LocatedRegionEffect) -> Race
         right_invocations,
         InvocationPairing::DistinctInvocations,
     ) {
-        Ok(EffectConflict::NoConflict(reason)) => RaceObligationOutcome::NoConflict(reason),
+        Ok(EffectConflict::NoConflict(reason)) => {
+            RaceObligationOutcome::NoConflictUnderSuppliedBindings(reason)
+        }
         Ok(EffectConflict::Conflict(reason)) => RaceObligationOutcome::Conflict(reason),
         Ok(EffectConflict::Indeterminate(reason)) => {
             RaceObligationOutcome::Indeterminate(RaceIndeterminateReason::Conflict(reason))
