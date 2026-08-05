@@ -21,6 +21,38 @@ pub struct BorrowedDeviceOperation<'stream, 'resources> {
 }
 
 impl<'stream, 'resources> BorrowedDeviceOperation<'stream, 'resources> {
+    /// Runs one caller-defined asynchronous operation while retaining all of
+    /// its resources until HIP completion is established.
+    ///
+    /// The operation handle is available only inside `during`; it cannot be
+    /// returned or safely forgotten. `resources` is owned by this scope and is
+    /// dropped only after the completion event, or the stronger stream
+    /// synchronization fallback, establishes quiescence. Ambiguous completion
+    /// aborts instead of releasing resources that the device might still use.
+    ///
+    /// This is a low-level integration point for typed wrappers. It does not
+    /// validate a kernel ABI, pointer provenance, aliasing, or backend object
+    /// identity.
+    ///
+    /// # Safety
+    ///
+    /// `enqueue` must submit work only to `stream`. `resources` must own or
+    /// borrow every allocation, module, function, and other object that the
+    /// submitted work may access, and those resources must be valid for every
+    /// such access. The caller must uphold all operation-specific safety
+    /// requirements, including raw kernel ABI and synchronization contracts.
+    #[doc(hidden)]
+    pub unsafe fn run_scoped_unchecked<R, O>(
+        stream: &'stream Stream,
+        resources: R,
+        enqueue: impl FnOnce(&R) -> Result<()>,
+        during: impl for<'operation> FnOnce(
+            &'operation BorrowedDeviceOperation<'stream, 'resources>,
+        ) -> O,
+    ) -> Result<O> {
+        run_borrowed_retained::<'stream, 'resources, _, _>(stream, resources, enqueue, during)
+    }
+
     /// Enqueues a pinned-host-to-device copy for the duration of `during`.
     ///
     /// `source` remains immutably borrowed and `destination` remains
@@ -62,20 +94,27 @@ impl<'stream, 'resources> BorrowedDeviceOperation<'stream, 'resources> {
         let size = copy_byte_len::<T>(source.len())?;
         let source_ptr = unsafe { source.raw_mut_ptr() }.cast::<c_void>();
         let destination_ptr = unsafe { destination.raw_device_ptr() }.cast::<c_void>();
-        run_borrowed(stream, during, || {
-            if size == 0 {
-                return Ok(());
-            }
-            check(unsafe {
-                fe2o3_hip_sys::hipMemcpyAsync(
-                    destination_ptr,
-                    source_ptr,
-                    size,
-                    fe2o3_hip_sys::HIP_MEMCPY_HOST_TO_DEVICE,
-                    stream.raw(),
-                )
-            })
-        })
+        // SAFETY: validation above checks the stream device and lengths. The
+        // resource tuple retains both caller borrows through completion.
+        unsafe {
+            Self::run_scoped_unchecked(
+                stream,
+                (source, destination),
+                |_| {
+                    if size == 0 {
+                        return Ok(());
+                    }
+                    check(fe2o3_hip_sys::hipMemcpyAsync(
+                        destination_ptr,
+                        source_ptr,
+                        size,
+                        fe2o3_hip_sys::HIP_MEMCPY_HOST_TO_DEVICE,
+                        stream.raw(),
+                    ))
+                },
+                during,
+            )
+        }
     }
 
     /// Enqueues a device-to-pinned-host copy for the duration of `during`.
@@ -98,20 +137,27 @@ impl<'stream, 'resources> BorrowedDeviceOperation<'stream, 'resources> {
         let size = copy_byte_len::<T>(source.len())?;
         let source_ptr = unsafe { source.raw_device_ptr() }.cast::<c_void>();
         let destination_ptr = unsafe { destination.raw_mut_ptr() }.cast::<c_void>();
-        run_borrowed(stream, during, || {
-            if size == 0 {
-                return Ok(());
-            }
-            check(unsafe {
-                fe2o3_hip_sys::hipMemcpyAsync(
-                    destination_ptr,
-                    source_ptr,
-                    size,
-                    fe2o3_hip_sys::HIP_MEMCPY_DEVICE_TO_HOST,
-                    stream.raw(),
-                )
-            })
-        })
+        // SAFETY: validation above checks the stream device and lengths. The
+        // resource tuple retains both caller borrows through completion.
+        unsafe {
+            Self::run_scoped_unchecked(
+                stream,
+                (source, destination),
+                |_| {
+                    if size == 0 {
+                        return Ok(());
+                    }
+                    check(fe2o3_hip_sys::hipMemcpyAsync(
+                        destination_ptr,
+                        source_ptr,
+                        size,
+                        fe2o3_hip_sys::HIP_MEMCPY_DEVICE_TO_HOST,
+                        stream.raw(),
+                    ))
+                },
+                during,
+            )
+        }
     }
 
     /// Enqueues a device-to-device copy for the duration of `during`.
@@ -134,20 +180,27 @@ impl<'stream, 'resources> BorrowedDeviceOperation<'stream, 'resources> {
         let size = copy_byte_len::<T>(source.len())?;
         let source_ptr = unsafe { source.raw_device_ptr() }.cast::<c_void>();
         let destination_ptr = unsafe { destination.raw_device_ptr() }.cast::<c_void>();
-        run_borrowed(stream, during, || {
-            if size == 0 {
-                return Ok(());
-            }
-            check(unsafe {
-                fe2o3_hip_sys::hipMemcpyAsync(
-                    destination_ptr,
-                    source_ptr,
-                    size,
-                    fe2o3_hip_sys::HIP_MEMCPY_DEVICE_TO_DEVICE,
-                    stream.raw(),
-                )
-            })
-        })
+        // SAFETY: validation above checks the stream device and lengths. The
+        // resource tuple retains both caller borrows through completion.
+        unsafe {
+            Self::run_scoped_unchecked(
+                stream,
+                (source, destination),
+                |_| {
+                    if size == 0 {
+                        return Ok(());
+                    }
+                    check(fe2o3_hip_sys::hipMemcpyAsync(
+                        destination_ptr,
+                        source_ptr,
+                        size,
+                        fe2o3_hip_sys::HIP_MEMCPY_DEVICE_TO_DEVICE,
+                        stream.raw(),
+                    ))
+                },
+                during,
+            )
+        }
     }
 
     /// Returns whether the operation's completion event has fired.
@@ -377,18 +430,20 @@ struct HipOperationRuntime<'stream> {
     stream: &'stream Stream,
 }
 
-fn run_borrowed<'stream, 'resources, O>(
+fn run_borrowed_retained<'stream, 'resources, R, O>(
     stream: &'stream Stream,
+    resources: R,
+    enqueue: impl FnOnce(&R) -> Result<()>,
     during: impl for<'operation> FnOnce(&'operation BorrowedDeviceOperation<'stream, 'resources>) -> O,
-    enqueue: impl FnOnce() -> Result<()>,
 ) -> Result<O> {
-    let completion = begin_borrowed_with(HipOperationRuntime { stream }, enqueue)?;
+    let completion = begin_borrowed_with(HipOperationRuntime { stream }, || enqueue(&resources))?;
     let operation = BorrowedDeviceOperation {
         completion: Some(completion),
         _resources: PhantomData,
     };
     let output = during(&operation);
     operation.finish()?;
+    drop(resources);
     Ok(output)
 }
 
