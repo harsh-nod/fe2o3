@@ -5,12 +5,20 @@ use core::ffi::{c_char, c_int, c_uint, c_void};
 
 pub type hipError_t = c_int;
 pub type hipStream_t = *mut c_void;
+pub type hipEvent_t = *mut c_void;
 pub type hipModule_t = *mut c_void;
 pub type hipFunction_t = *mut c_void;
 pub type hipDeviceptr_t = *mut c_void;
 pub type hipMemcpyKind = c_uint;
 
 pub const HIP_SUCCESS: hipError_t = 0;
+pub const HIP_ERROR_NOT_READY: hipError_t = 600;
+
+// Values from ROCm 7.2 hip_runtime_api.h. Default events use active
+// synchronization and record timing information.
+pub const HIP_EVENT_DEFAULT: c_uint = 0x0;
+pub const HIP_EVENT_BLOCKING_SYNC: c_uint = 0x1;
+pub const HIP_EVENT_DISABLE_TIMING: c_uint = 0x2;
 
 pub const HIP_MEMCPY_HOST_TO_HOST: hipMemcpyKind = 0;
 pub const HIP_MEMCPY_HOST_TO_DEVICE: hipMemcpyKind = 1;
@@ -27,6 +35,17 @@ unsafe extern "C" {
     pub fn hipStreamCreate(stream: *mut hipStream_t) -> hipError_t;
     pub fn hipStreamDestroy(stream: hipStream_t) -> hipError_t;
     pub fn hipStreamSynchronize(stream: hipStream_t) -> hipError_t;
+
+    pub fn hipEventCreateWithFlags(event: *mut hipEvent_t, flags: c_uint) -> hipError_t;
+    pub fn hipEventDestroy(event: hipEvent_t) -> hipError_t;
+    pub fn hipEventRecord(event: hipEvent_t, stream: hipStream_t) -> hipError_t;
+    pub fn hipEventSynchronize(event: hipEvent_t) -> hipError_t;
+    pub fn hipEventQuery(event: hipEvent_t) -> hipError_t;
+    pub fn hipEventElapsedTime(
+        milliseconds: *mut f32,
+        start: hipEvent_t,
+        stop: hipEvent_t,
+    ) -> hipError_t;
 
     pub fn hipMalloc(ptr: *mut *mut c_void, size: usize) -> hipError_t;
     pub fn hipFree(ptr: *mut c_void) -> hipError_t;

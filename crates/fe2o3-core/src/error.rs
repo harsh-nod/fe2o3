@@ -50,6 +50,16 @@ pub enum Error {
         buffer_device: i32,
         stream_device: i32,
     },
+    EventDeviceMismatch {
+        event_device: i32,
+        stream_device: i32,
+    },
+    EventPairDeviceMismatch {
+        start_device: i32,
+        stop_device: i32,
+    },
+    EventPending,
+    EventTimingDisabled,
     Nul(NulError),
     Io(std::io::Error),
     SizeOverflow,
@@ -72,6 +82,24 @@ impl fmt::Display for Error {
                 f,
                 "device buffer belongs to HIP device {buffer_device}, but the stream belongs to HIP device {stream_device}"
             ),
+            Self::EventDeviceMismatch {
+                event_device,
+                stream_device,
+            } => write!(
+                f,
+                "event belongs to HIP device {event_device}, but the stream belongs to HIP device {stream_device}"
+            ),
+            Self::EventPairDeviceMismatch {
+                start_device,
+                stop_device,
+            } => write!(
+                f,
+                "start event belongs to HIP device {start_device}, but the stop event belongs to HIP device {stop_device}"
+            ),
+            Self::EventPending => write!(f, "event is still pending and cannot be recorded again"),
+            Self::EventTimingDisabled => {
+                write!(f, "elapsed time requires timing-enabled events")
+            }
             Self::Nul(error) => write!(f, "string contains an interior NUL byte: {error}"),
             Self::Io(error) => write!(f, "{error}"),
             Self::SizeOverflow => write!(f, "size calculation overflowed"),
