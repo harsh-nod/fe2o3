@@ -28,10 +28,14 @@ fn invocations(count: u64) -> InvocationRange1d {
 }
 
 fn atomic(ordering: MemoryOrdering) -> RegionEffectKind {
+    atomic_with_scope(ordering, SynchronizationScope::Device)
+}
+
+fn atomic_with_scope(ordering: MemoryOrdering, scope: SynchronizationScope) -> RegionEffectKind {
     RegionEffectKind::Atomic(AtomicEffect {
         kind: AtomicKind::Add,
         value_type: ScalarType::U32,
-        scope: SynchronizationScope::Device,
+        scope,
         ordering,
     })
 }
@@ -104,6 +108,66 @@ fn detects_overlapping_writes_and_read_write_conflicts() {
         ),
         Ok(EffectConflict::Conflict(
             ConflictReason::OverlappingNonAtomicWrite
+        ))
+    );
+}
+
+#[test]
+fn effect_analysis_rejects_affine_regions_narrower_than_the_access() {
+    let undersized = effect(
+        RegionEffectKind::Write,
+        region(
+            allocation(1),
+            ByteExpression::invocation_affine(0, 2),
+            ByteExpression::invocation_affine(2, 1),
+        ),
+        0,
+    );
+    let first = InvocationRange1d::new(0, 1).unwrap();
+    let second = InvocationRange1d::new(1, 2).unwrap();
+
+    assert_eq!(
+        analyze_region_overlap(
+            &undersized.region,
+            first,
+            &undersized.region,
+            second,
+            InvocationPairing::DistinctInvocations,
+        ),
+        Ok(RegionOverlap::Disjoint)
+    );
+    assert_eq!(
+        analyze_effect_conflict(
+            &undersized,
+            first,
+            &undersized,
+            second,
+            InvocationPairing::DistinctInvocations,
+        ),
+        Err(RegionAnalysisError::LeftRegion(
+            RegionValidationError::AccessExceedsRegion {
+                access_width: 4,
+                byte_length: 2,
+                invocation_index: 0,
+            }
+        ))
+    );
+
+    let valid_later = InvocationRange1d::new(2, 3).unwrap();
+    assert_eq!(
+        analyze_effect_conflict(
+            &undersized,
+            valid_later,
+            &undersized,
+            first,
+            InvocationPairing::DistinctInvocations,
+        ),
+        Err(RegionAnalysisError::RightRegion(
+            RegionValidationError::AccessExceedsRegion {
+                access_width: 4,
+                byte_length: 2,
+                invocation_index: 0,
+            }
         ))
     );
 }
@@ -380,6 +444,60 @@ fn compatible_atomics_are_allowed_and_mismatches_fail_conservatively() {
         ),
         Ok(EffectConflict::Conflict(
             ConflictReason::AtomicNonAtomicOverlap
+        ))
+    );
+}
+
+#[test]
+fn atomic_compatibility_requires_scope_coverage_for_the_analysis_domain() {
+    let shared = region(
+        allocation(1),
+        ByteExpression::constant(0),
+        ByteExpression::constant(4),
+    );
+
+    for scope in [
+        SynchronizationScope::Invocation,
+        SynchronizationScope::Subgroup,
+        SynchronizationScope::Workgroup,
+    ] {
+        let scoped = effect(
+            atomic_with_scope(MemoryOrdering::Relaxed, scope),
+            shared.clone(),
+            0,
+        );
+        assert_eq!(
+            analyze_effect_conflict(
+                &scoped,
+                invocations(8),
+                &scoped,
+                invocations(8),
+                InvocationPairing::DistinctInvocations,
+            ),
+            Ok(EffectConflict::Indeterminate(
+                ConflictIndeterminateReason::AtomicScopeCoverageNotEstablished { scope }
+            ))
+        );
+    }
+
+    let system = effect(
+        atomic_with_scope(
+            MemoryOrdering::SequentiallyConsistent,
+            SynchronizationScope::System,
+        ),
+        shared,
+        0,
+    );
+    assert_eq!(
+        analyze_effect_conflict(
+            &system,
+            invocations(8),
+            &system,
+            invocations(8),
+            InvocationPairing::DistinctInvocations,
+        ),
+        Ok(EffectConflict::NoConflict(
+            NoConflictReason::CompatibleAtomics
         ))
     );
 }

@@ -260,7 +260,18 @@ impl RegionEffect {
 
     pub fn validate(&self, invocations: InvocationRange1d) -> Result<(), RegionValidationError> {
         self.validate_access_metadata()?;
-        self.region.validate(invocations)
+        self.region.validate(invocations)?;
+        for invocation_index in [invocations.start(), invocations.last()] {
+            let byte_length = self.region.byte_length.checked_evaluate(invocation_index)?;
+            if byte_length < self.access_width {
+                return Err(RegionValidationError::AccessExceedsRegion {
+                    access_width: self.access_width,
+                    byte_length,
+                    invocation_index,
+                });
+            }
+        }
+        Ok(())
     }
 
     fn validate_access_metadata(&self) -> Result<(), RegionValidationError> {
@@ -292,16 +303,6 @@ impl RegionEffect {
         {
             return Err(RegionValidationError::MisalignedAccess {
                 alignment: self.alignment,
-            });
-        }
-
-        if let Some((byte_length, coefficient)) = self.region.byte_length.affine_parts()
-            && coefficient == 0
-            && byte_length < self.access_width
-        {
-            return Err(RegionValidationError::AccessExceedsRegion {
-                access_width: self.access_width,
-                byte_length,
             });
         }
 
@@ -357,6 +358,11 @@ pub enum ConflictIndeterminateReason {
     EpochOrderingNotEstablished {
         left: SynchronizationEpoch,
         right: SynchronizationEpoch,
+    },
+    /// This first same-device model does not retain workgroup or subgroup
+    /// membership, so narrower atomic scopes cannot cover its whole domain.
+    AtomicScopeCoverageNotEstablished {
+        scope: SynchronizationScope,
     },
 }
 
@@ -449,10 +455,10 @@ pub fn analyze_effect_conflict(
     right_invocations: InvocationRange1d,
     pairing: InvocationPairing,
 ) -> Result<EffectConflict, RegionAnalysisError> {
-    left.validate_access_metadata()
+    left.validate(left_invocations)
         .map_err(RegionAnalysisError::LeftRegion)?;
     right
-        .validate_access_metadata()
+        .validate(right_invocations)
         .map_err(RegionAnalysisError::RightRegion)?;
 
     match analyze_region_overlap(
@@ -486,6 +492,16 @@ fn classify_overlapping_effects(
                 && left.alignment == right.alignment
                 && same_constant_atomic_object(&left.region, &right.region) =>
         {
+            if !matches!(
+                left_atomic.scope,
+                SynchronizationScope::Device | SynchronizationScope::System
+            ) {
+                return Ok(EffectConflict::Indeterminate(
+                    ConflictIndeterminateReason::AtomicScopeCoverageNotEstablished {
+                        scope: left_atomic.scope,
+                    },
+                ));
+            }
             return Ok(EffectConflict::NoConflict(
                 NoConflictReason::CompatibleAtomics,
             ));
@@ -695,6 +711,7 @@ pub enum RegionValidationError {
     AccessExceedsRegion {
         access_width: u64,
         byte_length: u64,
+        invocation_index: u64,
     },
 }
 
@@ -754,9 +771,10 @@ impl fmt::Display for RegionValidationError {
             Self::AccessExceedsRegion {
                 access_width,
                 byte_length,
+                invocation_index,
             } => write!(
                 formatter,
-                "access width {access_width} exceeds region byte length {byte_length}"
+                "access width {access_width} exceeds region byte length {byte_length} at invocation {invocation_index}"
             ),
         }
     }

@@ -114,6 +114,29 @@ fn effect_validation_checks_width_alignment_and_affine_offsets() {
         Err(RegionValidationError::AccessExceedsRegion {
             access_width: 8,
             byte_length: 4,
+            invocation_index: 0,
+        })
+    );
+}
+
+#[test]
+fn effect_validation_checks_affine_lengths_at_the_domain_endpoints() {
+    let effect = RegionEffect::new(
+        RegionEffectKind::Write,
+        region(
+            ByteExpression::invocation_affine(0, 4),
+            ByteExpression::invocation_affine(0, 1),
+        ),
+        4,
+        1,
+        SynchronizationEpoch::INITIAL,
+    );
+    assert_eq!(
+        effect.validate(InvocationRange1d::new(2, 6).unwrap()),
+        Err(RegionValidationError::AccessExceedsRegion {
+            access_width: 4,
+            byte_length: 2,
+            invocation_index: 2,
         })
     );
 }
