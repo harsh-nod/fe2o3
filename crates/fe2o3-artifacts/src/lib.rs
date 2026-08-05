@@ -3,6 +3,8 @@
 
 mod abi;
 mod container;
+mod container_decode;
+mod container_encode;
 mod decode;
 mod digest;
 mod encode;
@@ -17,6 +19,11 @@ pub use abi::{
 pub use container::{
     ArtifactContainerV1, CodeObjectPayload, ContainerValidationError, MAX_CODE_OBJECT_BYTES,
     MAX_EMBEDDED_PAYLOAD_BYTES,
+};
+pub use container_decode::ContainerDecodeError;
+pub use container_encode::{
+    CONTAINER_HEADER_BYTES, CONTAINER_MAGIC, CONTAINER_VERSION, MAX_CONTAINER_BYTES,
+    PAYLOAD_DESCRIPTOR_BYTES,
 };
 pub use digest::{DigestAlgorithm, DigestMismatch, PayloadDigest};
 pub use encode::{MANIFEST_MAGIC, MANIFEST_VERSION, MAX_MANIFEST_BYTES};

@@ -89,3 +89,22 @@ truncation, trailing bytes, noncanonical order, unsupported versions or flags,
 unknown tags, and invalid zero or oversized counts before allocation. A
 successfully decoded manifest is structurally and semantically validated; it
 is not authenticated and is not bound to executable payload bytes.
+
+## Container v1 wire format
+
+`ArtifactContainerV1` is a separate envelope, so manifest v1 bytes remain
+unchanged. Its canonical little-endian header contains `FE2O3AC\0`, container
+version `1`, zero flags, an explicit digest-algorithm tag, a zero reserved
+field, the manifest byte length, and the payload count. The canonical manifest
+follows, then a digest-sorted table of payload digest and `u64` byte length,
+then the payload bytes in that same order.
+
+Decoding rejects an envelope over its fixed maximum before parsing. It bounds
+the manifest, payload count, every payload, and aggregate payload bytes before
+allocating payload buffers. It rejects unknown versions, flags, algorithms,
+and reserved values, malformed manifests, duplicate or noncanonical payloads,
+missing or extra payloads, digest or length mismatches, truncation, and trailing
+bytes. Successful decoding establishes that the embedded bytes match the
+manifest's complete code-object closure under the selected digest algorithm.
+It does not authenticate the envelope or make claims about its producer,
+compiler, proofs, or runtime behavior.
