@@ -1,6 +1,5 @@
 use super::*;
 use crate::mir_import::{MirImportedType, MirLocal, MirLocalRole, MirSwitchTarget};
-use crate::record_lowering::plan_from_records;
 use dialect_mir::{MirOp, MirType};
 
 #[test]
@@ -105,7 +104,7 @@ fn vecadd_fixture_translates_to_verified_typed_cfg() {
         callees,
         vec![
             "fe2o3_device::thread::index_1d",
-            "fe2o3_device::DisjointSlice::<f32>::get_mut",
+            "fe2o3_device::DisjointSlice::<T>::get_mut",
             "fe2o3_device::ThreadIndex::get",
             "fe2o3_device::ThreadIndex::get",
         ]
@@ -177,7 +176,7 @@ fn unsupported_rvalue_reports_source_location() {
 #[test]
 fn vecadd_fixture_still_populates_the_legacy_record_plan() {
     let fixture = vecadd_fixture();
-    let plan = plan_from_records(&fixture.dialect_records());
+    let plan = crate::record_lowering::plan_from_module(&fixture);
     let function = plan.function("vecadd").expect("legacy vecadd plan");
 
     assert_eq!(function.op_count(MirOp::Call), 4);
@@ -548,24 +547,15 @@ fn call(
 }
 
 fn index_1d() -> MirCallee {
-    MirCallee {
-        identity: "fe2o3_device::thread::index_1d".to_string(),
-        kind: MirKnownCall::ThreadIndex1d,
-    }
+    MirCallee::trusted_for_test(crate::trusted_device_items::TrustedDeviceItem::ThreadIndex1d)
 }
 
 fn thread_get() -> MirCallee {
-    MirCallee {
-        identity: "fe2o3_device::ThreadIndex::get".to_string(),
-        kind: MirKnownCall::ThreadIndexGet,
-    }
+    MirCallee::trusted_for_test(crate::trusted_device_items::TrustedDeviceItem::ThreadIndexGet)
 }
 
 fn get_mut() -> MirCallee {
-    MirCallee {
-        identity: "fe2o3_device::DisjointSlice::<f32>::get_mut".to_string(),
-        kind: MirKnownCall::DisjointSliceGetMut,
-    }
+    MirCallee::trusted_for_test(crate::trusted_device_items::TrustedDeviceItem::DisjointSliceGetMut)
 }
 
 fn place(local: usize) -> MirPlaceRef {

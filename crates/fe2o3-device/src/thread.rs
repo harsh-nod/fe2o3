@@ -1,24 +1,30 @@
 #[derive(Clone, Copy, Debug)]
 #[repr(transparent)]
+#[rustc_diagnostic_item = "fe2o3_device_thread_index"]
 pub struct ThreadIndex(usize);
 
 impl ThreadIndex {
+    #[rustc_diagnostic_item = "fe2o3_device_thread_index_get"]
     pub fn get(self) -> usize {
         self.0
     }
 
+    #[rustc_diagnostic_item = "fe2o3_device_thread_index_offset"]
     pub fn offset(self, offset: usize) -> usize {
         self.0 + offset
     }
 
+    #[rustc_diagnostic_item = "fe2o3_device_thread_index_offset_signed"]
     pub fn offset_signed(self, offset: isize) -> usize {
         self.0.wrapping_add_signed(offset)
     }
 
+    #[rustc_diagnostic_item = "fe2o3_device_thread_index_stride"]
     pub fn stride(self, stride: usize) -> usize {
         self.0.wrapping_mul(stride)
     }
 
+    #[rustc_diagnostic_item = "fe2o3_device_thread_index_stride_offset"]
     pub fn stride_offset(self, stride: usize, offset: isize) -> usize {
         self.0.wrapping_mul(stride).wrapping_add_signed(offset)
     }
@@ -48,6 +54,7 @@ pub fn launch_extent_1d() -> usize {
 }
 
 #[inline(always)]
+#[rustc_diagnostic_item = "fe2o3_device_thread_index_1d"]
 pub fn index_1d() -> ThreadIndex {
     ThreadIndex(global_id_1d())
 }

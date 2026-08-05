@@ -8,6 +8,7 @@ extern crate rustc_hir;
 extern crate rustc_metadata;
 extern crate rustc_middle;
 extern crate rustc_session;
+extern crate rustc_span;
 
 mod amdgpu_llvm;
 mod artifact_transaction;
@@ -15,6 +16,7 @@ mod collector;
 mod kernel_ir_lowering;
 mod mir_import;
 mod record_lowering;
+mod trusted_device_items;
 
 use rustc_codegen_ssa::traits::CodegenBackend;
 use rustc_codegen_ssa::{CompiledModules, CrateInfo};
@@ -163,8 +165,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                                 });
                             }
                         }
-                        let dialect_records = mir_module.dialect_records();
-                        let lowering_plan = record_lowering::plan_from_records(&dialect_records);
+                        let lowering_plan = record_lowering::plan_from_module(&mir_module);
                         if self.config.dump_mir {
                             eprintln!("{}", mir_module.summary());
                             eprintln!("{}", lowering_plan.summary());

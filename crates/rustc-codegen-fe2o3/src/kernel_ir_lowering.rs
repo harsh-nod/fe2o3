@@ -9,17 +9,18 @@
 //! bounds assertions branch to one synthetic unreachable block.
 //!
 //! The executable subset is unprojected aliases, `Use`, `Discriminant`,
-//! `PtrMetadata`, `Add`, and `Lt`; direct/indexed dereferences; the three vecadd
-//! helper calls; and return, unreachable, goto, integer switch, call, and assert
-//! terminators. Locals must be assigned once and MIR blocks must appear in
-//! definition-before-use order. Every other construct produces a located
-//! diagnostic rather than a partial module.
+//! `PtrMetadata`, `Add`, and `Lt`; direct/indexed dereferences; the classified
+//! 1D thread-index and disjoint-slice helpers; and return, unreachable, goto,
+//! integer switch, call, and assert terminators. Locals must be assigned once
+//! and MIR blocks must appear in definition-before-use order. Every other
+//! construct produces a located diagnostic rather than a partial module.
 
 use crate::mir_import::{
-    MirBinaryOp, MirBlock, MirCallee, MirConstant, MirFunction, MirFunctionKind, MirKnownCall,
-    MirModule, MirOperandRef, MirPlaceRef, MirProjectionElem, MirRvalueKind, MirSourceLocation,
-    MirStatement, MirStatementKind, MirTerminator, MirTerminatorKind, MirTypeShape, MirUnaryOp,
+    MirBinaryOp, MirBlock, MirCallee, MirConstant, MirFunction, MirFunctionKind, MirModule,
+    MirOperandRef, MirPlaceRef, MirProjectionElem, MirRvalueKind, MirSourceLocation, MirStatement,
+    MirStatementKind, MirTerminator, MirTerminatorKind, MirTypeShape, MirUnaryOp,
 };
+use crate::trusted_device_items::TrustedDeviceItem;
 use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, BasicBlock, BinaryOp, BlockId, ComparePredicate, Constant, Function,
     FunctionId, Kernel, LaunchDomain, LaunchExtent, MemoryAccess, Module, Operation, OperationKind,
@@ -748,14 +749,17 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
             diagnostic(
                 TranslationDiagnosticCode::UnsupportedCall,
                 location.clone(),
-                format!("call to `{}` has no normal return target", callee.identity),
+                format!(
+                    "call to `{}` has no normal return target",
+                    callee.identity()
+                ),
             )
         })?;
         let destination = destination.ok_or_else(|| {
             diagnostic(
                 TranslationDiagnosticCode::MalformedMir,
                 location.clone(),
-                format!("call to `{}` has no destination", callee.identity),
+                format!("call to `{}` has no destination", callee.identity()),
             )
         })?;
         if !destination.projection.is_empty() {
@@ -775,49 +779,74 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
             .map(|value| self.value_type(*value, &location).cloned())
             .collect::<Result<Vec<_>, _>>()?;
 
-        let result_types = match callee.kind {
-            MirKnownCall::ThreadIndex1d => {
-                if !arguments.is_empty() {
-                    return Err(self.call_arity(callee, 0, arguments.len(), location));
-                }
+        let trusted_item = callee.trusted_item();
+        let result_types = match trusted_item {
+            Some(TrustedDeviceItem::ThreadIndex1d) => {
+                self.require_call_types(callee, &argument_types, &[], location.clone())?;
                 vec![Type::INDEX]
             }
-            MirKnownCall::ThreadIndexGet => {
-                if arguments.len() != 1 {
-                    return Err(self.call_arity(callee, 1, arguments.len(), location));
-                }
-                if argument_types[0] != Type::INDEX {
-                    return Err(diagnostic(
-                        TranslationDiagnosticCode::UnsupportedType,
-                        location,
-                        "ThreadIndex::get receiver must lower to index type",
-                    ));
-                }
+            Some(TrustedDeviceItem::ThreadIndexGet) => {
+                self.require_call_types(callee, &argument_types, &[Type::INDEX], location.clone())?;
                 vec![Type::INDEX]
             }
-            MirKnownCall::DisjointSliceGetMut => {
+            Some(TrustedDeviceItem::ThreadIndexOffset | TrustedDeviceItem::ThreadIndexStride) => {
+                self.require_call_types(
+                    callee,
+                    &argument_types,
+                    &[Type::INDEX, Type::INDEX],
+                    location.clone(),
+                )?;
+                vec![Type::INDEX]
+            }
+            Some(TrustedDeviceItem::ThreadIndexOffsetSigned) => {
+                self.require_call_types(
+                    callee,
+                    &argument_types,
+                    &[Type::INDEX, Type::Scalar(ScalarType::I64)],
+                    location.clone(),
+                )?;
+                vec![Type::INDEX]
+            }
+            Some(TrustedDeviceItem::ThreadIndexStrideOffset) => {
+                self.require_call_types(
+                    callee,
+                    &argument_types,
+                    &[Type::INDEX, Type::INDEX, Type::Scalar(ScalarType::I64)],
+                    location.clone(),
+                )?;
+                vec![Type::INDEX]
+            }
+            Some(
+                TrustedDeviceItem::DisjointSliceGetMut | TrustedDeviceItem::DisjointSliceGetMutAt,
+            ) => {
                 if arguments.len() != 2 {
-                    return Err(self.call_arity(callee, 2, arguments.len(), location));
+                    return Err(self.call_arity(callee, 2, arguments.len(), location.clone()));
                 }
                 let Type::Slice(slice) = &argument_types[0] else {
                     return Err(diagnostic(
                         TranslationDiagnosticCode::UnsupportedType,
-                        location,
-                        "DisjointSlice::get_mut receiver is not a translated slice",
+                        location.clone(),
+                        format!(
+                            "callee `{}` receiver is not a translated slice",
+                            callee.identity()
+                        ),
                     ));
                 };
                 if slice.access != AccessMode::ReadWrite {
                     return Err(diagnostic(
                         TranslationDiagnosticCode::UnsupportedType,
-                        location,
-                        "DisjointSlice::get_mut receiver must be writable",
+                        location.clone(),
+                        format!("callee `{}` receiver must be writable", callee.identity()),
                     ));
                 }
                 if argument_types[1] != Type::INDEX {
                     return Err(diagnostic(
                         TranslationDiagnosticCode::UnsupportedType,
-                        location,
-                        "DisjointSlice::get_mut index must lower to index type",
+                        location.clone(),
+                        format!(
+                            "callee `{}` index must lower to index type",
+                            callee.identity()
+                        ),
                     ));
                 }
                 vec![
@@ -825,11 +854,24 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                     Type::pointer((*slice.element).clone(), slice.address_space, slice.access),
                 ]
             }
-            MirKnownCall::Other => {
+            Some(TrustedDeviceItem::DisjointSlice | TrustedDeviceItem::ThreadIndex) => {
                 return Err(diagnostic(
                     TranslationDiagnosticCode::UnsupportedCall,
                     location,
-                    format!("unsupported callee `{}`", callee.identity),
+                    format!(
+                        "trusted device item `{}` is a type, not a callable helper",
+                        callee.identity()
+                    ),
+                ));
+            }
+            None => {
+                return Err(diagnostic(
+                    TranslationDiagnosticCode::UnsupportedCall,
+                    location,
+                    format!(
+                        "callee `{}` has no classified trusted device identity",
+                        callee.identity()
+                    ),
                 ));
             }
         };
@@ -843,7 +885,7 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
         block.operations.push(Operation::new(
             results.clone(),
             OperationKind::Call {
-                callee: FunctionId::new(callee.identity.clone()),
+                callee: FunctionId::new(callee.identity()),
                 arguments,
             },
         ));
@@ -854,15 +896,24 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                 LocalBinding::Value(result.id),
                 location.clone(),
             )?,
-            [discriminant, payload] if callee.kind == MirKnownCall::DisjointSliceGetMut => self
-                .bind_local(
+            [discriminant, payload]
+                if matches!(
+                    trusted_item,
+                    Some(
+                        TrustedDeviceItem::DisjointSliceGetMut
+                            | TrustedDeviceItem::DisjointSliceGetMutAt
+                    )
+                ) =>
+            {
+                self.bind_local(
                     destination.local,
                     LocalBinding::OptionPointer {
                         discriminant: discriminant.id,
                         payload: payload.id,
                     },
                     location.clone(),
-                )?,
+                )?
+            }
             _ => {
                 return Err(diagnostic(
                     TranslationDiagnosticCode::MalformedMir,
@@ -884,7 +935,7 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
         signature: Signature,
         location: &TranslationLocation,
     ) -> Result<(), TranslationDiagnostic> {
-        if let Some(previous) = self.declarations.get(&callee.identity)
+        if let Some(previous) = self.declarations.get(callee.identity())
             && previous != &signature
         {
             return Err(diagnostic(
@@ -892,13 +943,41 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                 location.clone(),
                 format!(
                     "callee `{}` was imported with inconsistent signatures",
-                    callee.identity
+                    callee.identity()
                 ),
             ));
         }
         self.declarations
-            .entry(callee.identity.clone())
+            .entry(callee.identity().to_string())
             .or_insert(signature);
+        Ok(())
+    }
+
+    fn require_call_types(
+        &self,
+        callee: &MirCallee,
+        actual: &[Type],
+        expected: &[Type],
+        location: TranslationLocation,
+    ) -> Result<(), TranslationDiagnostic> {
+        if actual.len() != expected.len() {
+            return Err(self.call_arity(callee, expected.len(), actual.len(), location));
+        }
+        if let Some((index, (actual, expected))) = actual
+            .iter()
+            .zip(expected)
+            .enumerate()
+            .find(|(_, (actual, expected))| actual != expected)
+        {
+            return Err(diagnostic(
+                TranslationDiagnosticCode::UnsupportedType,
+                location,
+                format!(
+                    "callee `{}` operand {index} must lower to {expected:?}, found {actual:?}",
+                    callee.identity()
+                ),
+            ));
+        }
         Ok(())
     }
 
@@ -914,7 +993,7 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
             location,
             format!(
                 "callee `{}` expects {expected} operand(s), found {actual}",
-                callee.identity
+                callee.identity()
             ),
         )
     }
@@ -1430,40 +1509,139 @@ mod tests {
     }
 
     #[test]
-    fn known_helper_becomes_typed_external_declaration() {
-        let mut fixture = memory_fixture();
-        let function = &mut fixture.functions[0];
-        function.local_count += 1;
-        function
-            .locals
-            .push(local(6, MirLocalRole::Temp, MirTypeShape::USize));
-        function.blocks[0].terminator = Some(terminator(MirTerminatorKind::Call {
-            callee: Some(MirCallee {
-                identity: "fe2o3_device::thread::index_1d".to_string(),
-                kind: MirKnownCall::ThreadIndex1d,
-            }),
-            target: Some(1),
-            destination: Some(place(6)),
-            operands: Vec::new(),
+    fn every_callable_trusted_helper_has_an_exact_typed_signature() {
+        let writable_slice = Type::slice(Type::F32, AddressSpace::Global, AccessMode::ReadWrite);
+        let option_pointer_results = vec![
+            Type::INDEX,
+            Type::pointer(Type::F32, AddressSpace::Global, AccessMode::ReadWrite),
+        ];
+        let cases = vec![
+            (
+                TrustedDeviceItem::ThreadIndex1d,
+                vec![],
+                Signature::new(vec![], vec![Type::INDEX]),
+            ),
+            (
+                TrustedDeviceItem::ThreadIndexGet,
+                vec![MirTypeShape::USize],
+                Signature::new(vec![Type::INDEX], vec![Type::INDEX]),
+            ),
+            (
+                TrustedDeviceItem::ThreadIndexOffset,
+                vec![MirTypeShape::USize, MirTypeShape::USize],
+                Signature::new(vec![Type::INDEX, Type::INDEX], vec![Type::INDEX]),
+            ),
+            (
+                TrustedDeviceItem::ThreadIndexOffsetSigned,
+                vec![MirTypeShape::USize, MirTypeShape::ISize],
+                Signature::new(
+                    vec![Type::INDEX, Type::Scalar(ScalarType::I64)],
+                    vec![Type::INDEX],
+                ),
+            ),
+            (
+                TrustedDeviceItem::ThreadIndexStride,
+                vec![MirTypeShape::USize, MirTypeShape::USize],
+                Signature::new(vec![Type::INDEX, Type::INDEX], vec![Type::INDEX]),
+            ),
+            (
+                TrustedDeviceItem::ThreadIndexStrideOffset,
+                vec![
+                    MirTypeShape::USize,
+                    MirTypeShape::USize,
+                    MirTypeShape::ISize,
+                ],
+                Signature::new(
+                    vec![Type::INDEX, Type::INDEX, Type::Scalar(ScalarType::I64)],
+                    vec![Type::INDEX],
+                ),
+            ),
+            (
+                TrustedDeviceItem::DisjointSliceGetMut,
+                vec![
+                    MirTypeShape::DisjointSlice {
+                        element: Box::new(MirTypeShape::F32),
+                    },
+                    MirTypeShape::USize,
+                ],
+                Signature::new(
+                    vec![writable_slice.clone(), Type::INDEX],
+                    option_pointer_results.clone(),
+                ),
+            ),
+            (
+                TrustedDeviceItem::DisjointSliceGetMutAt,
+                vec![
+                    MirTypeShape::DisjointSlice {
+                        element: Box::new(MirTypeShape::F32),
+                    },
+                    MirTypeShape::USize,
+                ],
+                Signature::new(vec![writable_slice, Type::INDEX], option_pointer_results),
+            ),
+        ];
+
+        for (item, argument_shapes, expected) in cases {
+            let fixture = helper_call_fixture(MirCallee::trusted_for_test(item), &argument_shapes);
+            let module = translate_and_verify(&fixture).expect("trusted helper should lower");
+            let declaration = module
+                .functions
+                .iter()
+                .find(|function| function.id.as_str() == item.canonical_path())
+                .expect("trusted helper declaration");
+
+            assert!(declaration.body.is_none(), "{item:?}");
+            assert_eq!(declaration.signature, expected, "{item:?}");
+        }
+    }
+
+    #[test]
+    fn canonical_looking_untrusted_callee_is_rejected() {
+        let identity = TrustedDeviceItem::ThreadIndex1d.canonical_path();
+        let fixture = helper_call_fixture(MirCallee::untrusted_for_test(identity), &[]);
+
+        let errors = translate_and_verify(&fixture).expect_err("untrusted spelling must fail");
+
+        assert!(errors.contains(TranslationDiagnosticCode::UnsupportedCall));
+        assert!(errors.diagnostics().iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("has no classified trusted device identity")
         }));
-        function.blocks.push(MirBlock {
-            index: 1,
-            statements: Vec::new(),
-            terminator: Some(terminator(MirTerminatorKind::Return)),
-        });
+    }
 
-        let module = translate_and_verify(&fixture).expect("known helper");
-        let declaration = module
-            .functions
-            .iter()
-            .find(|function| function.id.as_str() == "fe2o3_device::thread::index_1d")
-            .expect("helper declaration");
-
-        assert!(declaration.body.is_none());
-        assert_eq!(
-            declaration.signature,
-            Signature::new(Vec::new(), vec![Type::INDEX])
+    #[test]
+    fn trusted_helper_signature_mismatch_is_rejected() {
+        let fixture = helper_call_fixture(
+            MirCallee::trusted_for_test(TrustedDeviceItem::ThreadIndexOffset),
+            &[MirTypeShape::F32, MirTypeShape::USize],
         );
+
+        let errors = translate_and_verify(&fixture).expect_err("wrong helper signature must fail");
+
+        assert!(errors.contains(TranslationDiagnosticCode::UnsupportedType));
+        assert!(errors.diagnostics().iter().any(|diagnostic| {
+            diagnostic.message.contains("operand 0 must lower to")
+                && diagnostic.message.contains("found Scalar(F32)")
+        }));
+    }
+
+    #[test]
+    fn trusted_type_items_are_not_callable_helpers() {
+        for item in [
+            TrustedDeviceItem::DisjointSlice,
+            TrustedDeviceItem::ThreadIndex,
+        ] {
+            let fixture = helper_call_fixture(MirCallee::trusted_for_test(item), &[]);
+            let errors = translate_and_verify(&fixture).expect_err("type call must fail");
+
+            assert!(errors.contains(TranslationDiagnosticCode::UnsupportedCall));
+            assert!(errors.diagnostics().iter().any(|diagnostic| {
+                diagnostic
+                    .message
+                    .contains("is a type, not a callable helper")
+            }));
+        }
     }
 
     #[test]
@@ -1620,6 +1798,51 @@ mod tests {
                     ],
                     terminator: Some(terminator(MirTerminatorKind::Return)),
                 }],
+            }],
+        }
+    }
+
+    fn helper_call_fixture(callee: MirCallee, argument_shapes: &[MirTypeShape]) -> MirModule {
+        let destination = argument_shapes.len() + 1;
+        let mut locals = vec![local(0, MirLocalRole::Return, MirTypeShape::Unit)];
+        locals.extend(
+            argument_shapes
+                .iter()
+                .cloned()
+                .enumerate()
+                .map(|(index, shape)| local(index + 1, MirLocalRole::Arg, shape)),
+        );
+        locals.push(local(
+            destination,
+            MirLocalRole::Temp,
+            MirTypeShape::Unknown,
+        ));
+
+        MirModule {
+            functions: vec![MirFunction {
+                export_name: "helper_call".to_string(),
+                rust_path: "tests::helper_call".to_string(),
+                kind: MirFunctionKind::Kernel,
+                arg_count: argument_shapes.len(),
+                local_count: locals.len(),
+                locals,
+                blocks: vec![
+                    MirBlock {
+                        index: 0,
+                        statements: Vec::new(),
+                        terminator: Some(terminator(MirTerminatorKind::Call {
+                            callee: Some(callee),
+                            target: Some(1),
+                            destination: Some(place(destination)),
+                            operands: (1..=argument_shapes.len()).map(operand).collect(),
+                        })),
+                    },
+                    MirBlock {
+                        index: 1,
+                        statements: Vec::new(),
+                        terminator: Some(terminator(MirTerminatorKind::Return)),
+                    },
+                ],
             }],
         }
     }
