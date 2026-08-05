@@ -1,6 +1,7 @@
 use fe2o3_kernel_ir::{
-    AddressSpace, AllocationId, AllocationIdentity, ByteExpression, InvocationRange1d,
-    MemoryRegion, RegionEffect, RegionEffectKind, RegionValidationError, SynchronizationEpoch,
+    AddressSpace, AllocationId, AllocationIdentity, AtomicEffect, AtomicKind, ByteExpression,
+    InvocationRange1d, MemoryOrdering, MemoryRegion, RegionEffect, RegionEffectKind,
+    RegionValidationError, ScalarType, SynchronizationEpoch, SynchronizationScope,
 };
 
 fn region(offset: ByteExpression, length: ByteExpression) -> MemoryRegion {
@@ -126,4 +127,28 @@ fn unknown_allocation_provenance_is_explicit() {
         ByteExpression::Unbounded,
     );
     assert_eq!(region.allocation, AllocationIdentity::Unknown);
+}
+
+#[test]
+fn atomic_value_width_must_match_the_byte_access() {
+    let atomic = RegionEffect::new(
+        RegionEffectKind::Atomic(AtomicEffect {
+            kind: AtomicKind::Add,
+            value_type: ScalarType::U64,
+            scope: SynchronizationScope::Device,
+            ordering: MemoryOrdering::Relaxed,
+        }),
+        region(ByteExpression::constant(0), ByteExpression::constant(8)),
+        4,
+        4,
+        SynchronizationEpoch::INITIAL,
+    );
+    assert_eq!(
+        atomic.validate(InvocationRange1d::from_count(1).unwrap()),
+        Err(RegionValidationError::AtomicWidthMismatch {
+            value_type: ScalarType::U64,
+            value_width_bits: 64,
+            access_width: 4,
+        })
+    );
 }
