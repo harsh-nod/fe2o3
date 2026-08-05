@@ -9,6 +9,10 @@ use fe2o3_rustc_invocation::{
 };
 
 #[cfg_attr(not(test), allow(dead_code))]
+#[path = "rustc_wrapper/pinned_codegen_backend.rs"]
+mod pinned_codegen_backend;
+
+#[cfg_attr(not(test), allow(dead_code))]
 #[path = "rustc_wrapper/pinned_executable.rs"]
 mod pinned_executable;
 
@@ -32,7 +36,7 @@ impl fmt::Display for WrapperError {
                 write!(formatter, "invalid rustc wrapper invocation: {error}")
             }
             Self::ExecutionNotPrepared => formatter.write_str(
-                "rustc execution is not activated for this invocation until executable pinning is prepared",
+                "rustc execution is not activated for this invocation until pinned executable and codegen-backend inheritance are prepared",
             ),
             Self::Spawn(error) => write!(formatter, "failed to execute rustc passthrough: {error}"),
         }
