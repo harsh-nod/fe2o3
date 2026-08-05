@@ -20,6 +20,9 @@ pub const HIP_EVENT_DEFAULT: c_uint = 0x0;
 pub const HIP_EVENT_BLOCKING_SYNC: c_uint = 0x1;
 pub const HIP_EVENT_DISABLE_TIMING: c_uint = 0x2;
 
+// Value from ROCm 7.2 hip_runtime_api.h.
+pub const HIP_HOST_MALLOC_DEFAULT: c_uint = 0x0;
+
 pub const HIP_MEMCPY_HOST_TO_HOST: hipMemcpyKind = 0;
 pub const HIP_MEMCPY_HOST_TO_DEVICE: hipMemcpyKind = 1;
 pub const HIP_MEMCPY_DEVICE_TO_HOST: hipMemcpyKind = 2;
@@ -49,6 +52,8 @@ unsafe extern "C" {
 
     pub fn hipMalloc(ptr: *mut *mut c_void, size: usize) -> hipError_t;
     pub fn hipFree(ptr: *mut c_void) -> hipError_t;
+    pub fn hipHostMalloc(ptr: *mut *mut c_void, size: usize, flags: c_uint) -> hipError_t;
+    pub fn hipHostFree(ptr: *mut c_void) -> hipError_t;
     pub fn hipMemcpyAsync(
         dst: *mut c_void,
         src: *const c_void,

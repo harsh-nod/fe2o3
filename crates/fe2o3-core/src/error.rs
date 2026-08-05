@@ -60,6 +60,7 @@ pub enum Error {
     },
     EventPending,
     EventTimingDisabled,
+    NullHostAllocation,
     Nul(NulError),
     Io(std::io::Error),
     SizeOverflow,
@@ -100,6 +101,10 @@ impl fmt::Display for Error {
             Self::EventTimingDisabled => {
                 write!(f, "elapsed time requires timing-enabled events")
             }
+            Self::NullHostAllocation => write!(
+                f,
+                "hipHostMalloc returned a null pointer for a non-empty allocation"
+            ),
             Self::Nul(error) => write!(f, "string contains an interior NUL byte: {error}"),
             Self::Io(error) => write!(f, "{error}"),
             Self::SizeOverflow => write!(f, "size calculation overflowed"),
