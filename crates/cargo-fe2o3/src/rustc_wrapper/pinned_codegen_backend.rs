@@ -6,21 +6,34 @@
 //! [`PinCodegenBackendError::UnsupportedPlatform`]; they must not fall back to reopening the input
 //! pathname.
 //!
-//! The descriptor remains `O_CLOEXEC`. [`BackendDescriptorReference::child_inheritance`] therefore
-//! reports [`ChildDescriptorInheritance::BlockedByCloseOnExec`], and this module deliberately
-//! provides no rustc command or dynamic-loading operation. A future increment must arrange and
-//! verify race-free inheritance into the rustc child before compile execution can use the
-//! descriptor-backed path.
+//! The descriptor remains `O_CLOEXEC` in the parent. [`PinnedCodegenBackend::prepare_command`]
+//! validates its identity again, appends the exact descriptor-backed rustc option, and installs a
+//! child-only `pre_exec` step that verifies the object and clears `FD_CLOEXEC`. The resulting
+//! command borrows the pin, so the descriptor cannot be dropped before spawn. This module still
+//! provides no compile activation or dynamic-loading operation.
+//!
+//! After successful exec, the descriptor is intentionally open in rustc and may remain visible to
+//! descendants that rustc starts. A compile-activation design must define when rustc closes it or
+//! restores `FD_CLOEXEC`; this primitive claims only that unrelated commands spawned by the parent
+//! do not inherit it.
 //!
 //! This primitive identifies bytes read from one regular-file object. Its digest is not an
 //! authenticated trust or authority claim. Parent-directory resolution, in-place mutation by
 //! another writer, dynamic-loader behavior, transitive shared dependencies, and the kernel/procfs
 //! implementation remain outside this boundary.
 
+#![cfg_attr(not(target_os = "linux"), allow(dead_code))]
+
 use std::error::Error;
+#[cfg(target_os = "linux")]
+use std::ffi::OsStr;
+use std::ffi::OsString;
 use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::process::Command;
+#[cfg(target_os = "linux")]
+use std::process::{ExitStatus, Output};
 
 /// Bounds hashing work for a selected codegen-backend object.
 pub(crate) const MAX_CODEGEN_BACKEND_BYTES: u64 = 512 * 1024 * 1024;
@@ -89,6 +102,12 @@ pub(crate) enum PinCodegenBackendError {
     },
     DescriptorNotCloseOnExec {
         path: PathBuf,
+    },
+    PreexistingCodegenBackendSelector {
+        argument: OsString,
+    },
+    UninspectableResponseFile {
+        argument: OsString,
     },
 }
 
@@ -165,6 +184,16 @@ impl fmt::Display for PinCodegenBackendError {
                 "pinned codegen-backend descriptor unexpectedly became inheritable: {}",
                 path.display()
             ),
+            Self::PreexistingCodegenBackendSelector { argument } => write!(
+                formatter,
+                "refusing command with a preexisting rustc codegen-backend selector: {}",
+                argument.to_string_lossy()
+            ),
+            Self::UninspectableResponseFile { argument } => write!(
+                formatter,
+                "refusing rustc response-file argument while preparing the codegen backend: {}",
+                argument.to_string_lossy()
+            ),
         }
     }
 }
@@ -185,7 +214,9 @@ impl Error for PinCodegenBackendError {
             | Self::GrewDuringRead { .. }
             | Self::ChangedDuringRead { .. }
             | Self::DescriptorObjectChanged { .. }
-            | Self::DescriptorNotCloseOnExec { .. } => None,
+            | Self::DescriptorNotCloseOnExec { .. }
+            | Self::PreexistingCodegenBackendSelector { .. }
+            | Self::UninspectableResponseFile { .. } => None,
         }
     }
 }
@@ -201,8 +232,12 @@ mod platform {
     use sha2::{Digest, Sha256};
     use std::fs::{File, Metadata};
     use std::io::{self, Read, Seek, SeekFrom};
-    use std::os::fd::AsRawFd;
+    use std::os::fd::{AsRawFd, BorrowedFd, RawFd};
+    use std::os::unix::ffi::OsStrExt;
     use std::os::unix::fs::MetadataExt;
+    use std::os::unix::process::CommandExt;
+
+    use super::{Command, ExitStatus, OsStr, OsString, Output};
 
     const HASH_CHUNK_BYTES: usize = 64 * 1024;
 
@@ -230,6 +265,17 @@ mod platform {
                 changed_seconds: metadata.ctime(),
                 changed_nanoseconds: metadata.ctime_nsec(),
             }
+        }
+
+        fn matches_stat(self, stat: &rustix::fs::Stat) -> bool {
+            self.device == stat.st_dev
+                && self.inode == stat.st_ino
+                && self.mode == stat.st_mode
+                && u64::try_from(stat.st_size).ok() == Some(self.size)
+                && stat.st_mtime == self.modified_seconds
+                && i64::try_from(stat.st_mtime_nsec).ok() == Some(self.modified_nanoseconds)
+                && stat.st_ctime == self.changed_seconds
+                && i64::try_from(stat.st_ctime_nsec).ok() == Some(self.changed_nanoseconds)
         }
     }
 
@@ -333,6 +379,39 @@ mod platform {
                 child_inheritance: ChildDescriptorInheritance::BlockedByCloseOnExec,
             })
         }
+
+        /// Prepare one command to pass this exact opened object to rustc.
+        pub(crate) fn prepare_command(
+            &self,
+            mut command: Command,
+        ) -> Result<PreparedCodegenBackendCommand<'_>, PinCodegenBackendError> {
+            reject_preexisting_backend_selector(&command)?;
+            require_close_on_exec(&self.file, &self.display_path)?;
+            validate_descriptor_path(
+                &self.file,
+                &self.descriptor_path,
+                self.snapshot,
+                &self.display_path,
+            )?;
+
+            let descriptor = self.file.as_raw_fd();
+            let snapshot = self.snapshot;
+            // SAFETY: the callback uses only async-signal-safe descriptor syscalls. The retained
+            // File and the returned command's borrow keep `descriptor` valid until spawn.
+            unsafe {
+                command.pre_exec(move || prepare_descriptor_in_child(descriptor, snapshot));
+            }
+
+            let mut argument = OsString::from("-Zcodegen-backend=");
+            argument.push(&self.descriptor_path);
+            command.arg(&argument);
+
+            Ok(PreparedCodegenBackendCommand {
+                _backend: self,
+                command,
+                argument,
+            })
+        }
     }
 
     /// A descriptor path whose borrow cannot outlive the retained backend object.
@@ -350,6 +429,95 @@ mod platform {
         pub(crate) const fn child_inheritance(&self) -> ChildDescriptorInheritance {
             self.child_inheritance
         }
+    }
+
+    /// A rustc command that cannot outlive its pinned codegen-backend descriptor.
+    ///
+    /// Configure all ordinary arguments before preparation. This type intentionally exposes no
+    /// argument mutation, so its final and only codegen-backend selector cannot be overridden.
+    pub(crate) struct PreparedCodegenBackendCommand<'backend> {
+        _backend: &'backend PinnedCodegenBackend,
+        command: Command,
+        argument: OsString,
+    }
+
+    impl PreparedCodegenBackendCommand<'_> {
+        pub(crate) fn codegen_backend_argument(&self) -> &OsStr {
+            &self.argument
+        }
+
+        pub(crate) fn status(&mut self) -> io::Result<ExitStatus> {
+            self.command.status()
+        }
+
+        pub(crate) fn output(&mut self) -> io::Result<Output> {
+            self.command.output()
+        }
+
+        #[cfg(test)]
+        fn command(&self) -> &Command {
+            &self.command
+        }
+    }
+
+    fn prepare_descriptor_in_child(descriptor: RawFd, expected: ObjectSnapshot) -> io::Result<()> {
+        // SAFETY: the prepared command borrows the File that owns this descriptor through spawn.
+        let descriptor = unsafe { BorrowedFd::borrow_raw(descriptor) };
+        let flags = rustix::io::fcntl_getfd(descriptor).map_err(io::Error::from)?;
+        if !flags.contains(FdFlags::CLOEXEC) {
+            return Err(io::Error::from_raw_os_error(
+                rustix::io::Errno::PERM.raw_os_error(),
+            ));
+        }
+
+        let stat = rustix::fs::fstat(descriptor).map_err(io::Error::from)?;
+        if !expected.matches_stat(&stat) {
+            return Err(io::Error::from_raw_os_error(
+                rustix::io::Errno::STALE.raw_os_error(),
+            ));
+        }
+
+        let mut inherited_flags = flags;
+        inherited_flags.remove(FdFlags::CLOEXEC);
+        rustix::io::fcntl_setfd(descriptor, inherited_flags).map_err(io::Error::from)
+    }
+
+    fn reject_preexisting_backend_selector(
+        command: &Command,
+    ) -> Result<(), PinCodegenBackendError> {
+        let arguments = command.get_args().collect::<Vec<_>>();
+        for (index, argument) in arguments.iter().enumerate() {
+            let bytes = argument.as_bytes();
+            if bytes.starts_with(b"@") {
+                return Err(PinCodegenBackendError::UninspectableResponseFile {
+                    argument: (*argument).to_os_string(),
+                });
+            }
+            let joined = bytes.strip_prefix(b"-Z").is_some_and(|value| {
+                backend_selector_value(value.strip_prefix(b"=").unwrap_or(value))
+            });
+            let split = bytes == b"-Z"
+                && arguments
+                    .get(index + 1)
+                    .is_some_and(|next| backend_selector_value(next.as_bytes()));
+            if joined || split {
+                return Err(PinCodegenBackendError::PreexistingCodegenBackendSelector {
+                    argument: (*argument).to_os_string(),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn backend_selector_value(value: &[u8]) -> bool {
+        [b"codegen-backend".as_slice(), b"codegen_backend".as_slice()]
+            .iter()
+            .any(|name| {
+                value == *name
+                    || value
+                        .strip_prefix(*name)
+                        .is_some_and(|rest| rest.starts_with(b"="))
+            })
     }
 
     fn hash_exact<R: Read>(
@@ -614,16 +782,19 @@ mod platform {
         #[test]
         fn pathname_substitution_does_not_change_the_descriptor_object() {
             let root = TestDirectory::new();
-            let selected = root.path().join("backend.so");
-            let replacement = root.path().join("replacement.so");
+            let selected_parent = root.path().join("selected");
+            let retained_parent = root.path().join("retained");
+            fs::create_dir(&selected_parent).unwrap();
+            let selected = selected_parent.join("backend.so");
             let original = b"original backend bytes";
             let replacement_bytes = b"replacement backend bytes";
             fs::write(&selected, original).unwrap();
             let pinned = PinnedCodegenBackend::open(&selected).unwrap();
             let original_digest = *pinned.sha256();
 
-            fs::write(&replacement, replacement_bytes).unwrap();
-            fs::rename(&replacement, &selected).unwrap();
+            fs::rename(&selected_parent, &retained_parent).unwrap();
+            fs::create_dir(&selected_parent).unwrap();
+            fs::write(&selected, replacement_bytes).unwrap();
 
             let descriptor = pinned.descriptor_reference().unwrap();
             assert_eq!(fs::read(descriptor.path()).unwrap(), original);
@@ -739,12 +910,293 @@ mod platform {
                 Err(PinCodegenBackendError::DescriptorNotCloseOnExec { .. })
             ));
         }
+
+        #[test]
+        fn prepared_command_appends_the_exact_descriptor_argument() {
+            let root = TestDirectory::new();
+            let selected = root.path().join("backend.so");
+            fs::write(&selected, b"backend bytes").unwrap();
+            let pinned = PinnedCodegenBackend::open(&selected).unwrap();
+
+            let prepared = pinned.prepare_command(Command::new("/bin/true")).unwrap();
+            let expected = OsString::from(format!(
+                "-Zcodegen-backend=/proc/self/fd/{}",
+                pinned.file.as_raw_fd()
+            ));
+
+            assert_eq!(prepared.codegen_backend_argument(), expected);
+            assert_eq!(
+                prepared.command().get_args().collect::<Vec<_>>(),
+                vec![expected.as_os_str()]
+            );
+            assert_ne!(prepared.codegen_backend_argument(), selected.as_os_str());
+        }
+
+        #[test]
+        fn preexisting_joined_backend_selectors_are_rejected() {
+            let root = TestDirectory::new();
+            let selected = root.path().join("backend.so");
+            fs::write(&selected, b"backend bytes").unwrap();
+            let pinned = PinnedCodegenBackend::open(&selected).unwrap();
+
+            for selector in [
+                OsString::from("-Zcodegen-backend=/tmp/attacker.so"),
+                OsString::from("-Zcodegen-backend"),
+                OsString::from("-Z=codegen-backend=/tmp/attacker.so"),
+                OsString::from("-Z=codegen-backend"),
+                OsString::from("-Zcodegen_backend=/tmp/attacker.so"),
+                OsString::from("-Z=codegen_backend=/tmp/attacker.so"),
+            ] {
+                let mut command = Command::new("/bin/true");
+                command.arg(&selector);
+                assert!(matches!(
+                    pinned.prepare_command(command),
+                    Err(PinCodegenBackendError::PreexistingCodegenBackendSelector { .. })
+                ));
+            }
+
+            use std::os::unix::ffi::OsStringExt;
+            let mut command = Command::new("/bin/true");
+            command.arg(OsString::from_vec(
+                b"-Zcodegen-backend=/tmp/non-utf8-\xff.so".to_vec(),
+            ));
+            assert!(matches!(
+                pinned.prepare_command(command),
+                Err(PinCodegenBackendError::PreexistingCodegenBackendSelector { .. })
+            ));
+        }
+
+        #[test]
+        fn preexisting_split_backend_selectors_are_rejected() {
+            let root = TestDirectory::new();
+            let selected = root.path().join("backend.so");
+            fs::write(&selected, b"backend bytes").unwrap();
+            let pinned = PinnedCodegenBackend::open(&selected).unwrap();
+
+            for value in [
+                OsString::from("codegen-backend=/tmp/attacker.so"),
+                OsString::from("codegen-backend"),
+                OsString::from("codegen_backend=/tmp/attacker.so"),
+                OsString::from("codegen_backend"),
+            ] {
+                let mut command = Command::new("/bin/true");
+                command.args([OsStr::new("-Z"), value.as_os_str()]);
+                assert!(matches!(
+                    pinned.prepare_command(command),
+                    Err(PinCodegenBackendError::PreexistingCodegenBackendSelector { .. })
+                ));
+            }
+        }
+
+        #[test]
+        fn response_files_cannot_hide_a_second_backend_selector() {
+            let root = TestDirectory::new();
+            let selected = root.path().join("backend.so");
+            fs::write(&selected, b"backend bytes").unwrap();
+            let pinned = PinnedCodegenBackend::open(&selected).unwrap();
+            let mut command = Command::new("/bin/true");
+            command.arg("@/tmp/uninspected-rustc-arguments");
+
+            assert!(matches!(
+                pinned.prepare_command(command),
+                Err(PinCodegenBackendError::UninspectableResponseFile { .. })
+            ));
+        }
+
+        #[test]
+        fn non_backend_arguments_are_preserved_before_the_sole_selector() {
+            let root = TestDirectory::new();
+            let selected = root.path().join("backend.so");
+            fs::write(&selected, b"backend bytes").unwrap();
+            let pinned = PinnedCodegenBackend::open(&selected).unwrap();
+            let mut command = Command::new("/bin/true");
+            command.args(["--crate-name", "kernel", "-Zunstable-options"]);
+
+            let prepared = pinned.prepare_command(command).unwrap();
+            let arguments = prepared.command().get_args().collect::<Vec<_>>();
+
+            assert_eq!(
+                &arguments[..3],
+                ["--crate-name", "kernel", "-Zunstable-options"]
+            );
+            assert_eq!(
+                arguments.last().copied(),
+                Some(prepared.codegen_backend_argument())
+            );
+            assert_eq!(
+                arguments
+                    .iter()
+                    .filter(|argument| argument.as_bytes().starts_with(b"-Zcodegen-backend"))
+                    .count(),
+                1
+            );
+        }
+
+        #[test]
+        fn child_reads_the_pinned_object_after_pathname_substitution() {
+            let root = TestDirectory::new();
+            let selected_parent = root.path().join("selected");
+            let retained_parent = root.path().join("retained");
+            fs::create_dir(&selected_parent).unwrap();
+            let selected = selected_parent.join("backend.so");
+            let original = b"original backend object";
+            let replacement = b"replacement pathname object";
+            fs::write(&selected, original).unwrap();
+            let pinned = PinnedCodegenBackend::open(&selected).unwrap();
+
+            let mut command = Command::new("/bin/sh");
+            command.args([
+                "-c",
+                concat!(
+                    "case \"$1\" in -Zcodegen-backend=/proc/self/fd/*) ;; ",
+                    "*) exit 91 ;; esac; ",
+                    "path=${1#-Zcodegen-backend=}; cat \"$path\""
+                ),
+                "backend-probe",
+            ]);
+            let mut prepared = pinned.prepare_command(command).unwrap();
+
+            fs::rename(&selected_parent, &retained_parent).unwrap();
+            fs::create_dir(&selected_parent).unwrap();
+            fs::write(&selected, replacement).unwrap();
+
+            let output = prepared.output().unwrap();
+            assert!(output.status.success(), "child stderr: {:?}", output.stderr);
+            assert_eq!(output.stdout, original);
+            assert_eq!(fs::read(&selected).unwrap(), replacement);
+        }
+
+        #[test]
+        fn descriptor_stays_close_on_exec_in_parent_before_and_after_spawn() {
+            let root = TestDirectory::new();
+            let selected = root.path().join("backend.so");
+            fs::write(&selected, b"backend bytes").unwrap();
+            let pinned = PinnedCodegenBackend::open(&selected).unwrap();
+
+            assert!(
+                rustix::io::fcntl_getfd(&pinned.file)
+                    .unwrap()
+                    .contains(FdFlags::CLOEXEC)
+            );
+            let mut prepared = pinned.prepare_command(Command::new("/bin/true")).unwrap();
+            assert!(
+                rustix::io::fcntl_getfd(&pinned.file)
+                    .unwrap()
+                    .contains(FdFlags::CLOEXEC)
+            );
+            assert!(prepared.status().unwrap().success());
+            assert!(
+                rustix::io::fcntl_getfd(&pinned.file)
+                    .unwrap()
+                    .contains(FdFlags::CLOEXEC)
+            );
+        }
+
+        #[test]
+        fn in_place_mutation_after_preparation_aborts_spawn() {
+            let root = TestDirectory::new();
+            let selected = root.path().join("backend.so");
+            fs::write(&selected, b"backend bytes").unwrap();
+            let pinned = PinnedCodegenBackend::open(&selected).unwrap();
+            let original = fs::metadata(&selected).unwrap();
+            let mut prepared = pinned.prepare_command(Command::new("/bin/true")).unwrap();
+
+            std::thread::sleep(Duration::from_millis(10));
+            fs::write(&selected, b"changed bytes").unwrap();
+            let changed = fs::metadata(&selected).unwrap();
+            assert_eq!(changed.len(), original.len());
+            assert_ne!(
+                (changed.ctime(), changed.ctime_nsec()),
+                (original.ctime(), original.ctime_nsec()),
+                "fixture filesystem did not expose a ctime change"
+            );
+
+            let error = prepared.status().unwrap_err();
+            assert_eq!(
+                error.raw_os_error(),
+                Some(rustix::io::Errno::STALE.raw_os_error())
+            );
+        }
+
+        #[test]
+        fn mutation_is_rejected_immediately_before_preparation() {
+            let root = TestDirectory::new();
+            let selected = root.path().join("backend.so");
+            fs::write(&selected, b"backend bytes").unwrap();
+            let pinned = PinnedCodegenBackend::open(&selected).unwrap();
+
+            std::thread::sleep(Duration::from_millis(10));
+            fs::write(&selected, b"changed bytes").unwrap();
+
+            assert!(matches!(
+                pinned.prepare_command(Command::new("/bin/true")),
+                Err(PinCodegenBackendError::DescriptorObjectChanged { .. })
+            ));
+        }
+
+        #[test]
+        fn deliberate_child_descriptor_close_aborts_spawn() {
+            let root = TestDirectory::new();
+            let selected = root.path().join("backend.so");
+            fs::write(&selected, b"backend bytes").unwrap();
+            let pinned = PinnedCodegenBackend::open(&selected).unwrap();
+            let descriptor = pinned.file.as_raw_fd();
+            let mut command = Command::new("/bin/true");
+            // SAFETY: this callback runs only in the forked child. Closing its copy deliberately
+            // exercises the prepared callback's fail-closed `EBADF` path.
+            unsafe {
+                command.pre_exec(move || {
+                    rustix::io::close(descriptor);
+                    Ok(())
+                });
+            }
+            let mut prepared = pinned.prepare_command(command).unwrap();
+
+            let error = prepared.status().unwrap_err();
+            assert_eq!(
+                error.raw_os_error(),
+                Some(rustix::io::Errno::BADF.raw_os_error())
+            );
+            assert!(
+                rustix::io::fcntl_getfd(&pinned.file)
+                    .unwrap()
+                    .contains(FdFlags::CLOEXEC)
+            );
+        }
+
+        #[test]
+        fn unrelated_children_do_not_inherit_the_backend_descriptor() {
+            let root = TestDirectory::new();
+            let selected = root.path().join("backend.so");
+            fs::write(&selected, b"backend bytes").unwrap();
+            let pinned = PinnedCodegenBackend::open(&selected).unwrap();
+            let descriptor_path = pinned.descriptor_path.clone();
+            let _prepared = pinned.prepare_command(Command::new("/bin/true")).unwrap();
+
+            let status = Command::new("/bin/sh")
+                .args([
+                    OsStr::new("-c"),
+                    OsStr::new("test ! -e \"$1\""),
+                    OsStr::new("backend-leak-probe"),
+                    descriptor_path.as_os_str(),
+                ])
+                .status()
+                .unwrap();
+            assert!(status.success());
+            assert!(
+                rustix::io::fcntl_getfd(&pinned.file)
+                    .unwrap()
+                    .contains(FdFlags::CLOEXEC)
+            );
+        }
     }
 }
 
 #[cfg(target_os = "linux")]
 #[allow(unused_imports)] // Used by the parent when compile execution is activated.
-pub(crate) use platform::{BackendDescriptorReference, PinnedCodegenBackend};
+pub(crate) use platform::{
+    BackendDescriptorReference, PinnedCodegenBackend, PreparedCodegenBackendCommand,
+};
 
 #[cfg(not(target_os = "linux"))]
 pub(crate) struct PinnedCodegenBackend;
@@ -754,4 +1206,16 @@ impl PinnedCodegenBackend {
     pub(crate) fn open(_path: &Path) -> Result<Self, PinCodegenBackendError> {
         Err(PinCodegenBackendError::UnsupportedPlatform)
     }
+
+    pub(crate) fn prepare_command(
+        &self,
+        _command: Command,
+    ) -> Result<PreparedCodegenBackendCommand<'_>, PinCodegenBackendError> {
+        Err(PinCodegenBackendError::UnsupportedPlatform)
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) struct PreparedCodegenBackendCommand<'backend> {
+    _backend: &'backend PinnedCodegenBackend,
 }
