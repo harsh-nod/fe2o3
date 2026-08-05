@@ -84,6 +84,14 @@ impl Module {
     pub fn function(&self, id: &FunctionId) -> Option<&Function> {
         self.functions.iter().find(|function| &function.id == id)
     }
+
+    /// Capabilities implied by operations in the module's defined functions.
+    pub fn derived_capabilities(&self) -> BTreeSet<TargetCapability> {
+        self.functions
+            .iter()
+            .flat_map(Function::derived_capabilities)
+            .collect()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -132,6 +140,16 @@ impl Function {
             body: None,
             required_capabilities: BTreeSet::new(),
         }
+    }
+
+    /// Capabilities implied by operations in this function body.
+    pub fn derived_capabilities(&self) -> BTreeSet<TargetCapability> {
+        self.body
+            .iter()
+            .flat_map(|body| &body.blocks)
+            .flat_map(|block| &block.operations)
+            .flat_map(Operation::required_capabilities)
+            .collect()
     }
 }
 
@@ -216,6 +234,13 @@ impl Operation {
 
     pub fn memory_effects(&self) -> Vec<MemoryEffect> {
         match &self.kind {
+            OperationKind::Intrinsic(intrinsic) => intrinsic
+                .metadata()
+                .memory_effects
+                .effects()
+                .iter()
+                .cloned()
+                .collect(),
             OperationKind::Alloca { address_space, .. } => {
                 vec![MemoryEffect::Allocate(*address_space)]
             }
@@ -234,15 +259,23 @@ impl Operation {
             _ => Vec::new(),
         }
     }
+
+    pub fn effect_summary(&self) -> MemoryEffectSummary {
+        MemoryEffectSummary::new(self.memory_effects())
+    }
+
+    pub fn required_capabilities(&self) -> BTreeSet<TargetCapability> {
+        match &self.kind {
+            OperationKind::Intrinsic(intrinsic) => intrinsic.metadata().required_capabilities,
+            _ => BTreeSet::new(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum OperationKind {
     Constant(Constant),
-    InvocationIndex {
-        kind: IndexKind,
-        axis: Axis,
-    },
+    Intrinsic(IntrinsicOperation),
     Unary {
         op: UnaryOp,
         operand: ValueId,
@@ -303,7 +336,7 @@ pub enum OperationKind {
 impl OperationKind {
     pub fn operands(&self) -> Vec<ValueId> {
         match self {
-            Self::Constant(_) | Self::InvocationIndex { .. } | Self::Barrier(_) => Vec::new(),
+            Self::Constant(_) | Self::Intrinsic(_) | Self::Barrier(_) => Vec::new(),
             Self::Unary { operand, .. } => vec![*operand],
             Self::Binary { lhs, rhs, .. } | Self::Compare { lhs, rhs, .. } => vec![*lhs, *rhs],
             Self::Cast { value, .. } => vec![*value],
@@ -321,6 +354,70 @@ impl OperationKind {
             Self::Atomic(atomic) => atomic.operands(),
         }
     }
+}
+
+/// A target-neutral GPU intrinsic recognized by the core kernel IR.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum IntrinsicKind {
+    /// An invocation coordinate at the selected launch hierarchy level.
+    InvocationIndex { kind: IndexKind, axis: Axis },
+    /// The number of logical invocations in the launch dimension.
+    LaunchExtent { axis: Axis },
+}
+
+impl IntrinsicKind {
+    pub const fn axis(self) -> Axis {
+        match self {
+            Self::InvocationIndex { axis, .. } | Self::LaunchExtent { axis } => axis,
+        }
+    }
+
+    pub fn metadata(self) -> IntrinsicMetadata {
+        IntrinsicMetadata {
+            result_type: Type::INDEX,
+            memory_effects: MemoryEffectSummary::pure(),
+            required_capabilities: BTreeSet::new(),
+        }
+    }
+}
+
+/// An intrinsic invocation with an explicit frontend-provided result type.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct IntrinsicOperation {
+    pub kind: IntrinsicKind,
+    pub result_type: Type,
+}
+
+impl IntrinsicOperation {
+    pub fn new(kind: IntrinsicKind, result_type: Type) -> Self {
+        Self { kind, result_type }
+    }
+
+    pub fn global_id_1d() -> Self {
+        Self::new(
+            IntrinsicKind::InvocationIndex {
+                kind: IndexKind::Global,
+                axis: Axis::X,
+            },
+            Type::INDEX,
+        )
+    }
+
+    pub fn launch_extent_1d() -> Self {
+        Self::new(IntrinsicKind::LaunchExtent { axis: Axis::X }, Type::INDEX)
+    }
+
+    pub fn metadata(&self) -> IntrinsicMetadata {
+        self.kind.metadata()
+    }
+}
+
+/// Canonical semantic metadata for one intrinsic kind.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct IntrinsicMetadata {
+    pub result_type: Type,
+    pub memory_effects: MemoryEffectSummary,
+    pub required_capabilities: BTreeSet<TargetCapability>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -578,6 +675,42 @@ pub enum MemoryEffect {
         memory_scope: SynchronizationScope,
         address_spaces: BTreeSet<AddressSpace>,
     },
+}
+
+/// A deterministic, queryable summary of an operation's memory effects.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct MemoryEffectSummary {
+    effects: BTreeSet<MemoryEffect>,
+}
+
+impl MemoryEffectSummary {
+    pub fn new(effects: impl IntoIterator<Item = MemoryEffect>) -> Self {
+        Self {
+            effects: effects.into_iter().collect(),
+        }
+    }
+
+    pub const fn pure() -> Self {
+        Self {
+            effects: BTreeSet::new(),
+        }
+    }
+
+    pub fn is_pure(&self) -> bool {
+        self.effects.is_empty()
+    }
+
+    pub fn reads(&self, address_space: AddressSpace) -> bool {
+        self.effects.contains(&MemoryEffect::Read(address_space))
+    }
+
+    pub fn writes(&self, address_space: AddressSpace) -> bool {
+        self.effects.contains(&MemoryEffect::Write(address_space))
+    }
+
+    pub fn effects(&self) -> &BTreeSet<MemoryEffect> {
+        &self.effects
+    }
 }
 
 pub(crate) fn pointer_for(pointee: Type, address_space: AddressSpace, access: AccessMode) -> Type {
