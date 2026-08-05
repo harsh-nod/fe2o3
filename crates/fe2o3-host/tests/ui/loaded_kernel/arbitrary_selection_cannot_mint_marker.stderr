@@ -3,3 +3,15 @@ error[E0599]: no associated function or constant named `from_validated` found fo
   |
 6 |     LoadedKernel::from_validated(validated)
   |                   ^^^^^^^^^^^^^^ associated function or constant not found in `LoadedKernel<_>`
+  |
+note: if you're trying to build a new `LoadedKernel<_>`, consider using `LoadedKernel::<K>::load_generated` which returns `Result<LoadedKernel<_>, fe2o3_host::LoadedKernelLoadError>`
+ --> src/loaded_kernel.rs
+  |
+  | /     pub unsafe fn load_generated(
+  | |         binding: GeneratedKernelBindingV1<K>,
+  | |         validated: &ValidatedArtifactSelectionV1,
+  | |         observed: &ObservedContext,
+... |
+  | |     where
+  | |         K: KernelMarkerV1,
+  | |__________________________^
