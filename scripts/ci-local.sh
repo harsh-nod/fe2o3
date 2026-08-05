@@ -37,6 +37,7 @@ Commands:
   check           Check every workspace target, including example binaries
   test            Run unit tests that do not link or load the HIP runtime
   backend         Build the rustc codegen backend dylib
+  verus           Run positive and negative Verus proof fixtures; requires Verus
   rocm-compile    Compile every example to host code and HSACO; requires ROCm
   hardware-smoke  Build and run every example; requires an AMD GPU and opt-in
 EOF
@@ -137,6 +138,11 @@ run_backend_build() {
   run_step backend-build cargo build --locked -p rustc-codegen-fe2o3
 }
 
+run_verus() {
+  run_step verus-fixtures \
+    "${REPO_ROOT}/examples/verus_vecadd/run-verus.sh" --require
+}
+
 run_parity_matrix_checks() {
   run_step parity-matrix-check bash scripts/parity-matrix.sh check
   run_step parity-matrix-tests bash scripts/tests/parity-matrix.sh
@@ -166,6 +172,15 @@ run_rocm_compile() {
     cargo test --locked -p rustc-codegen-fe2o3 \
       --test trusted_device_items \
       rejected_lookalikes_remove_preseeded_artifacts_atomically -- \
+      --ignored --exact
+  run_step rocm-g1-code-object \
+    cargo test --locked -p dialect-amdgcn --test lowering \
+      rocm_compiles_the_golden_to_an_amdgpu_code_object -- \
+      --ignored --exact
+  run_step rocm-kernel-ir-codegen-rejection \
+    cargo test --locked -p rustc-codegen-fe2o3 \
+      --test kernel_ir_codegen \
+      selected_pipeline_rejects_invalid_or_unsupported_inputs_and_cleans_stale_artifacts -- \
       --ignored --exact
 
   local package
@@ -255,6 +270,11 @@ run_hardware_smoke() {
   run_step hardware-device-copy-transfer \
     cargo test --locked -p fe2o3-core --test device_copy_derive_hardware -- \
       --ignored --exact derived_struct_bytes_round_trip_through_device_memory
+  run_step hardware-kernel-ir-fill \
+    cargo test --locked -p rustc-codegen-fe2o3 \
+      --test kernel_ir_codegen \
+      opt_in_fill_publishes_g1_and_executes_on_the_gpu -- \
+      --ignored --exact
   run_step hardware-smoke cargo run --locked -p cargo-fe2o3 -- smoke
   local test_wavefront
   test_wavefront="$(wavefront_for_target "${FE2O3_TARGET}")"
@@ -276,6 +296,7 @@ main() {
     check) run_check ;;
     test) run_tests ;;
     backend) run_backend_build ;;
+    verus) run_verus ;;
     rocm-compile) run_rocm_compile ;;
     hardware-smoke) run_hardware_smoke ;;
     -h | --help | help) usage ;;
