@@ -54,5 +54,16 @@ not evidence that referenced code is authentic or even present.
 - Every kernel references a listed code object, uses the target pointer width,
   and requires only capabilities supplied by the selected target.
 
-Serialization, payload bytes, proof records, host launch integration, and
-runtime loading policy remain outside this layer.
+Payload bytes, proof records, host launch integration, and runtime loading
+policy remain outside this model layer.
+
+## V1 encoding
+
+`ManifestV1::to_bytes` emits a canonical little-endian binary representation.
+It starts with the eight bytes `FE2O3AM\0`, a `u16` version (`1`), and a reserved
+zero `u16` flags field. Strings use a `u16` byte length, lists use explicit
+`u16` or `u32` counts, and enums use fixed-width numeric tags.
+
+Records occur in model order: compiler, producer, target, canonically sorted
+code objects, then canonically sorted kernels with launch and ordered ABI
+fields. Encoding does not authenticate identities or payloads.
