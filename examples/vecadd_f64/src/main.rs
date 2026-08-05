@@ -29,12 +29,16 @@ fn main() -> fe2o3_core::Result<()> {
         .unwrap_or_else(|| PathBuf::from("."));
     let module = context.load_module_from_file(hsaco_dir.join("vecadd_f64.hsaco"))?;
 
-    launch! {
-        kernel: vecadd_f64,
-        stream: stream,
-        module: module,
-        config: LaunchConfig::for_num_elems(N as u32),
-        args: [slice(a_dev), slice(b_dev), slice_mut(c_dev)]
+    // SAFETY: `vecadd_f64` expects three f64 slice ABIs; a, b, and c are
+    // distinct N-element allocations kept alive until stream synchronization.
+    unsafe {
+        launch! {
+            kernel: vecadd_f64,
+            stream: stream,
+            module: module,
+            config: LaunchConfig::for_num_elems(N as u32),
+            args: [slice(a_dev), slice(b_dev), slice_mut(c_dev)]
+        }
     }?;
 
     let c_host = c_dev.to_host_vec(&stream)?;

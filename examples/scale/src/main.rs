@@ -27,12 +27,16 @@ fn main() -> fe2o3_core::Result<()> {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."));
     let module = context.load_module_from_file(hsaco_dir.join("scale.hsaco"))?;
-    launch! {
-        kernel: scale,
-        stream: stream,
-        module: module,
-        config: LaunchConfig::for_num_elems(N as u32),
-        args: [scalar(ALPHA), slice(x_dev), slice_mut(y_dev)]
+    // SAFETY: `scale` expects an f32 and two f32 slice ABIs; `x_dev` and
+    // `y_dev` are distinct N-element allocations kept alive until sync.
+    unsafe {
+        launch! {
+            kernel: scale,
+            stream: stream,
+            module: module,
+            config: LaunchConfig::for_num_elems(N as u32),
+            args: [scalar(ALPHA), slice(x_dev), slice_mut(y_dev)]
+        }
     }?;
 
     let y_host = y_dev.to_host_vec(&stream)?;

@@ -30,12 +30,17 @@ fn main() -> fe2o3_core::Result<()> {
         .unwrap_or_else(|| PathBuf::from("."));
     let module = context.load_module_from_file(hsaco_dir.join("raw_parenthesized_sub.hsaco"))?;
 
-    launch! {
-        kernel: raw_parenthesized_sub,
-        stream: stream,
-        module: module,
-        config: LaunchConfig::for_num_elems(N as u32),
-        args: [slice(x_dev), slice_mut(out_dev)]
+    // SAFETY: `raw_parenthesized_sub` expects two f32 slice ABIs; the distinct
+    // buffers have N elements and live through sync, and every thread's
+    // simplified source index is 1.
+    unsafe {
+        launch! {
+            kernel: raw_parenthesized_sub,
+            stream: stream,
+            module: module,
+            config: LaunchConfig::for_num_elems(N as u32),
+            args: [slice(x_dev), slice_mut(out_dev)]
+        }
     }?;
 
     let out_host = out_dev.to_host_vec(&stream)?;

@@ -1,0 +1,324 @@
+use std::collections::BTreeSet;
+
+use fe2o3_kernel_ir::*;
+
+fn global_slice(access: AccessMode) -> Type {
+    Type::slice(Type::F32, AddressSpace::Global, access)
+}
+
+fn global_pointer(access: AccessMode) -> Type {
+    Type::pointer(Type::F32, AddressSpace::Global, access)
+}
+
+fn op(result: u32, ty: Type, kind: OperationKind) -> Operation {
+    Operation::effect_free(ValueDef::new(ValueId(result), ty), kind)
+}
+
+fn valid_vecadd_module() -> Module {
+    let read_slice = global_slice(AccessMode::ReadOnly);
+    let write_slice = global_slice(AccessMode::ReadWrite);
+    let read_pointer = global_pointer(AccessMode::ReadOnly);
+    let write_pointer = global_pointer(AccessMode::ReadWrite);
+    let access = MemoryAccess::new(AddressSpace::Global, 4);
+
+    let mut entry = BasicBlock::new(BlockId(0));
+    entry.operations = vec![
+        op(
+            3,
+            Type::INDEX,
+            OperationKind::InvocationIndex {
+                kind: IndexKind::Global,
+                axis: Axis::X,
+            },
+        ),
+        op(
+            4,
+            read_pointer.clone(),
+            OperationKind::SliceData { slice: ValueId(0) },
+        ),
+        op(
+            5,
+            read_pointer.clone(),
+            OperationKind::GetElementPointer {
+                base: ValueId(4),
+                offset: ValueId(3),
+            },
+        ),
+        op(
+            6,
+            Type::F32,
+            OperationKind::Load {
+                pointer: ValueId(5),
+                access,
+            },
+        ),
+        op(
+            7,
+            read_pointer.clone(),
+            OperationKind::SliceData { slice: ValueId(1) },
+        ),
+        op(
+            8,
+            read_pointer,
+            OperationKind::GetElementPointer {
+                base: ValueId(7),
+                offset: ValueId(3),
+            },
+        ),
+        op(
+            9,
+            Type::F32,
+            OperationKind::Load {
+                pointer: ValueId(8),
+                access,
+            },
+        ),
+        op(
+            10,
+            Type::F32,
+            OperationKind::Binary {
+                op: BinaryOp::Add,
+                lhs: ValueId(6),
+                rhs: ValueId(9),
+            },
+        ),
+        op(
+            11,
+            write_pointer.clone(),
+            OperationKind::SliceData { slice: ValueId(2) },
+        ),
+        op(
+            12,
+            write_pointer,
+            OperationKind::GetElementPointer {
+                base: ValueId(11),
+                offset: ValueId(3),
+            },
+        ),
+        Operation::new(
+            vec![],
+            OperationKind::Store {
+                pointer: ValueId(12),
+                value: ValueId(10),
+                access,
+            },
+        ),
+    ];
+    entry.terminator = Some(Terminator::Return { values: vec![] });
+
+    let function = Function::definition(
+        "vecadd_impl",
+        Signature::new(vec![read_slice.clone(), read_slice, write_slice], vec![]),
+        vec![ValueId(0), ValueId(1), ValueId(2)],
+        vec![entry],
+    );
+    let kernel = Kernel::new(
+        "vecadd",
+        "vecadd_impl",
+        LaunchDomain::D1 {
+            x: LaunchExtent::Dynamic,
+        },
+    );
+
+    let mut module = Module::new("tests::vecadd");
+    module.functions.push(function);
+    module.kernels.push(kernel);
+    module
+}
+
+fn one_block_module(parameters: Vec<Type>, operations: Vec<Operation>) -> Module {
+    let parameter_values = (0..parameters.len())
+        .map(|index| ValueId(index as u32))
+        .collect();
+    let mut block = BasicBlock::new(BlockId(0));
+    block.operations = operations;
+    block.terminator = Some(Terminator::Return { values: vec![] });
+    let function = Function::definition(
+        "test",
+        Signature::new(parameters, vec![]),
+        parameter_values,
+        vec![block],
+    );
+    let mut module = Module::new("tests::invalid");
+    module.functions.push(function);
+    module
+}
+
+#[test]
+fn verifies_a_typed_ssa_kernel() {
+    let module = valid_vecadd_module();
+    verify_module(&module).expect("valid module should verify");
+
+    let effects: BTreeSet<_> = module.functions[0].body.as_ref().unwrap().blocks[0]
+        .operations
+        .iter()
+        .flat_map(Operation::memory_effects)
+        .collect();
+    assert!(effects.contains(&MemoryEffect::Read(AddressSpace::Global)));
+    assert!(effects.contains(&MemoryEffect::Write(AddressSpace::Global)));
+}
+
+#[test]
+fn rejects_undefined_and_non_dominating_ssa_uses() {
+    let undefined = op(
+        0,
+        Type::F32,
+        OperationKind::Binary {
+            op: BinaryOp::Add,
+            lhs: ValueId(99),
+            rhs: ValueId(99),
+        },
+    );
+    let errors = verify_module(&one_block_module(vec![], vec![undefined])).unwrap_err();
+    assert!(errors.contains(DiagnosticCode::UndefinedValue));
+
+    let mut entry = BasicBlock::new(BlockId(0));
+    entry.terminator = Some(Terminator::ConditionalBranch {
+        condition: ValueId(0),
+        then_target: BlockId(1),
+        then_arguments: vec![],
+        else_target: BlockId(2),
+        else_arguments: vec![],
+    });
+    let mut then_block = BasicBlock::new(BlockId(1));
+    then_block.operations.push(op(
+        1,
+        Type::F32,
+        OperationKind::Constant(Constant::F32Bits(0)),
+    ));
+    then_block.terminator = Some(Terminator::Branch {
+        target: BlockId(3),
+        arguments: vec![],
+    });
+    let mut else_block = BasicBlock::new(BlockId(2));
+    else_block.terminator = Some(Terminator::Branch {
+        target: BlockId(3),
+        arguments: vec![],
+    });
+    let mut merge = BasicBlock::new(BlockId(3));
+    merge.operations.push(op(
+        2,
+        Type::F32,
+        OperationKind::Unary {
+            op: UnaryOp::Negate,
+            operand: ValueId(1),
+        },
+    ));
+    merge.terminator = Some(Terminator::Return { values: vec![] });
+    let function = Function::definition(
+        "dominance",
+        Signature::new(vec![Type::BOOL], vec![]),
+        vec![ValueId(0)],
+        vec![entry, then_block, else_block, merge],
+    );
+    let mut module = Module::new("tests::dominance");
+    module.functions.push(function);
+    let errors = verify_module(&module).unwrap_err();
+    assert!(errors.contains(DiagnosticCode::NonDominatingUse));
+}
+
+#[test]
+fn rejects_invalid_branch_targets_and_malformed_terminators() {
+    let mut bad_target = BasicBlock::new(BlockId(0));
+    bad_target.terminator = Some(Terminator::Branch {
+        target: BlockId(7),
+        arguments: vec![],
+    });
+    let missing = BasicBlock::new(BlockId(1));
+    let function = Function::definition(
+        "cfg",
+        Signature::new(vec![], vec![]),
+        vec![],
+        vec![bad_target, missing],
+    );
+    let mut module = Module::new("tests::cfg");
+    module.functions.push(function);
+
+    let errors = verify_module(&module).unwrap_err();
+    assert!(errors.contains(DiagnosticCode::InvalidBranchTarget));
+    assert!(errors.contains(DiagnosticCode::MissingTerminator));
+}
+
+#[test]
+fn rejects_type_invalid_memory_operations() {
+    let access = MemoryAccess::new(AddressSpace::Global, 4);
+    let operations = vec![
+        op(
+            2,
+            Type::F32,
+            OperationKind::Load {
+                pointer: ValueId(0),
+                access,
+            },
+        ),
+        Operation::new(
+            vec![],
+            OperationKind::Store {
+                pointer: ValueId(1),
+                value: ValueId(0),
+                access,
+            },
+        ),
+    ];
+    let module = one_block_module(
+        vec![
+            Type::Scalar(ScalarType::I32),
+            global_pointer(AccessMode::ReadOnly),
+        ],
+        operations,
+    );
+    let errors = verify_module(&module).unwrap_err();
+    assert!(errors.contains(DiagnosticCode::InvalidOperandType));
+    assert!(errors.contains(DiagnosticCode::InvalidMemoryAccess));
+    assert!(errors.contains(DiagnosticCode::TypeMismatch));
+}
+
+#[test]
+fn rejects_obviously_invalid_barrier_and_atomic_metadata() {
+    let barrier = Operation::new(
+        vec![],
+        OperationKind::Barrier(Barrier {
+            execution_scope: SynchronizationScope::Device,
+            memory_scope: SynchronizationScope::Workgroup,
+            semantics: BarrierSemantics::new(MemoryOrdering::Relaxed, []),
+        }),
+    );
+    let atomic = op(
+        2,
+        Type::F32,
+        OperationKind::Atomic(Atomic {
+            kind: AtomicKind::BitAnd,
+            pointer: ValueId(0),
+            value: Some(ValueId(1)),
+            compare: Some(ValueId(1)),
+            access: MemoryAccess::new(AddressSpace::Global, 1),
+            scope: SynchronizationScope::Invocation,
+            ordering: MemoryOrdering::Acquire,
+            failure_ordering: Some(MemoryOrdering::Release),
+        }),
+    );
+    let module = one_block_module(
+        vec![global_pointer(AccessMode::ReadWrite), Type::F32],
+        vec![barrier, atomic],
+    );
+    let errors = verify_module(&module).unwrap_err();
+    assert!(errors.contains(DiagnosticCode::InvalidBarrier));
+    assert!(errors.contains(DiagnosticCode::InvalidAtomic));
+}
+
+#[test]
+fn diagnostics_are_deterministic_and_sorted() {
+    let operation = op(
+        0,
+        Type::F32,
+        OperationKind::Load {
+            pointer: ValueId(42),
+            access: MemoryAccess::new(AddressSpace::Global, 3),
+        },
+    );
+    let module = one_block_module(vec![], vec![operation]);
+    let first = verify_module(&module).unwrap_err().into_diagnostics();
+    let second = verify_module(&module).unwrap_err().into_diagnostics();
+    assert_eq!(first, second);
+    assert!(first.windows(2).all(|window| window[0] <= window[1]));
+}

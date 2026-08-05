@@ -2,6 +2,13 @@
 
 `fe2o3` is an experimental single-source Rust GPU stack for AMD GPUs.
 
+The next architecture keeps the working AMD runtime while replacing the
+elementwise MIR recognizer with a target-neutral compiler pipeline and adding
+source-level Verus contracts. See the [v2 architecture](docs/architecture-v2.md),
+[cuda-oxide parity matrix](docs/cuda-oxide-parity-matrix.md),
+[verification model](docs/verification-model.md), and
+[implementation roadmap](docs/implementation-roadmap-v2.md).
+
 The intended end state is:
 
 ```text

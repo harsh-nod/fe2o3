@@ -30,12 +30,17 @@ fn main() -> fe2o3_core::Result<()> {
         .unwrap_or_else(|| PathBuf::from("."));
     let module = context.load_module_from_file(hsaco_dir.join("raw_add_index.hsaco"))?;
 
-    launch! {
-        kernel: raw_add_index,
-        stream: stream,
-        module: module,
-        config: LaunchConfig::for_num_elems(N as u32),
-        args: [slice(x_dev), slice_mut(out_dev)]
+    // SAFETY: `raw_add_index` expects f32 slice ABIs; `x_dev` has 2 * N
+    // elements, `out_dev` has N, both live through sync, and the kernel guards
+    // the computed read index.
+    unsafe {
+        launch! {
+            kernel: raw_add_index,
+            stream: stream,
+            module: module,
+            config: LaunchConfig::for_num_elems(N as u32),
+            args: [slice(x_dev), slice_mut(out_dev)]
+        }
     }?;
 
     let out_host = out_dev.to_host_vec(&stream)?;

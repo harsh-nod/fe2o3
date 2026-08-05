@@ -38,21 +38,30 @@ fn main() -> fe2o3_core::Result<()> {
         .unwrap_or_else(|| PathBuf::from("."));
 
     let scale_module = context.load_module_from_file(hsaco_dir.join("scale_stage.hsaco"))?;
-    launch! {
-        kernel: scale_stage,
-        stream: stream,
-        module: scale_module,
-        config: LaunchConfig::for_num_elems(N as u32),
-        args: [scalar(ALPHA), slice(x_dev), slice_mut(tmp_dev)]
+    // SAFETY: `scale_stage` expects an f32 and two f32 slice ABIs; `x_dev`
+    // and `tmp_dev` are distinct N-element allocations kept alive until sync.
+    unsafe {
+        launch! {
+            kernel: scale_stage,
+            stream: stream,
+            module: scale_module,
+            config: LaunchConfig::for_num_elems(N as u32),
+            args: [scalar(ALPHA), slice(x_dev), slice_mut(tmp_dev)]
+        }
     }?;
 
     let bias_module = context.load_module_from_file(hsaco_dir.join("bias_stage.hsaco"))?;
-    launch! {
-        kernel: bias_stage,
-        stream: stream,
-        module: bias_module,
-        config: LaunchConfig::for_num_elems(N as u32),
-        args: [slice(tmp_dev), scalar(BETA), slice_mut(out_dev)]
+    // SAFETY: `bias_stage` expects a slice, f32, and writable slice ABI;
+    // same-stream ordering initializes N tmp elements before the distinct
+    // N-element output is written, and both allocations live through sync.
+    unsafe {
+        launch! {
+            kernel: bias_stage,
+            stream: stream,
+            module: bias_module,
+            config: LaunchConfig::for_num_elems(N as u32),
+            args: [slice(tmp_dev), scalar(BETA), slice_mut(out_dev)]
+        }
     }?;
 
     let out_host = out_dev.to_host_vec(&stream)?;

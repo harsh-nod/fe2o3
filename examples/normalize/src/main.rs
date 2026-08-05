@@ -26,12 +26,16 @@ fn main() -> fe2o3_core::Result<()> {
         .unwrap_or_else(|| PathBuf::from("."));
     let module = context.load_module_from_file(hsaco_dir.join("normalize.hsaco"))?;
 
-    launch! {
-        kernel: normalize,
-        stream: stream,
-        module: module,
-        config: LaunchConfig::for_num_elems(N as u32),
-        args: [slice(x_dev), slice_mut(out_dev)]
+    // SAFETY: `normalize` expects read-only and writable f32 slice ABIs; the
+    // two buffers are distinct N-element allocations kept alive until sync.
+    unsafe {
+        launch! {
+            kernel: normalize,
+            stream: stream,
+            module: module,
+            config: LaunchConfig::for_num_elems(N as u32),
+            args: [slice(x_dev), slice_mut(out_dev)]
+        }
     }?;
 
     let out_host = out_dev.to_host_vec(&stream)?;

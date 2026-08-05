@@ -1,5 +1,33 @@
 pub use fe2o3_core::{KernelParams, LaunchConfig};
 
+/// Loads and launches a GPU kernel using raw, caller-described ABI arguments.
+///
+/// # Safety
+///
+/// The caller must ensure that the named function's ABI exactly matches the
+/// argument kinds, order, and Rust types supplied here. Every device pointer
+/// must be valid for the kernel's accesses and remain alive until the stream
+/// has completed the launch. Mutable arguments must satisfy the kernel's
+/// aliasing and synchronization requirements, and the launch configuration
+/// must satisfy the kernel's grid, block, and shared-memory requirements.
+///
+/// An unguarded launch does not compile:
+///
+/// ```compile_fail,E0133
+/// use fe2o3_core::{GpuModule, LaunchConfig, Result, Stream};
+/// use fe2o3_host::launch;
+/// use std::sync::Arc;
+///
+/// fn unguarded(module: &Arc<GpuModule>, stream: &Stream) -> Result<()> {
+///     launch! {
+///         kernel: example,
+///         stream: stream,
+///         module: module,
+///         config: LaunchConfig::for_num_elems(1),
+///         args: []
+///     }
+/// }
+/// ```
 #[macro_export]
 macro_rules! launch {
     (
@@ -14,14 +42,12 @@ macro_rules! launch {
         $(
             $crate::__push_kernel_arg!(__fe2o3_params, $kind($value));
         )*
-        unsafe {
-            ::fe2o3_core::launch_kernel_on_stream(
-                &__fe2o3_function,
-                $config,
-                &$stream,
-                &mut __fe2o3_params,
-            )
-        }
+        ::fe2o3_core::launch_kernel_on_stream(
+            &__fe2o3_function,
+            $config,
+            &$stream,
+            &mut __fe2o3_params,
+        )
     }};
 }
 
@@ -45,4 +71,42 @@ macro_rules! __push_kernel_arg {
         $params.push(($value).as_device_ptr());
         $params.push(($value).len());
     }};
+}
+
+#[cfg(test)]
+mod tests {
+    use fe2o3_core::KernelParams;
+
+    #[derive(Clone, Copy)]
+    struct FakeBuffer {
+        ptr: usize,
+        len: usize,
+    }
+
+    impl FakeBuffer {
+        fn as_device_ptr(&self) -> usize {
+            self.ptr
+        }
+
+        fn len(&self) -> usize {
+            self.len
+        }
+    }
+
+    #[test]
+    fn argument_kinds_preserve_abi_field_counts() {
+        let buffer = FakeBuffer {
+            ptr: 0x1000,
+            len: 8,
+        };
+        let mut params = KernelParams::new();
+
+        crate::__push_kernel_arg!(params, scalar(1.0_f32));
+        crate::__push_kernel_arg!(params, raw(7_u32));
+        crate::__push_kernel_arg!(params, buffer(buffer));
+        crate::__push_kernel_arg!(params, slice(buffer));
+        crate::__push_kernel_arg!(params, slice_mut(buffer));
+
+        assert_eq!(params.len(), 7);
+    }
 }

@@ -29,12 +29,16 @@ fn main() -> fe2o3_core::Result<()> {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."));
     let module = context.load_module_from_file(hsaco_dir.join("saxpy.hsaco"))?;
-    launch! {
-        kernel: saxpy,
-        stream: stream,
-        module: module,
-        config: LaunchConfig::for_num_elems(N as u32),
-        args: [scalar(ALPHA), slice(x_dev), slice(y_dev), slice_mut(out_dev)]
+    // SAFETY: `saxpy` expects an f32 and three f32 slice ABIs; x, y, and out
+    // are distinct N-element allocations kept alive until synchronization.
+    unsafe {
+        launch! {
+            kernel: saxpy,
+            stream: stream,
+            module: module,
+            config: LaunchConfig::for_num_elems(N as u32),
+            args: [scalar(ALPHA), slice(x_dev), slice(y_dev), slice_mut(out_dev)]
+        }
     }?;
 
     let out_host = out_dev.to_host_vec(&stream)?;

@@ -26,12 +26,16 @@ fn main() -> fe2o3_core::Result<()> {
         .unwrap_or_else(|| PathBuf::from("."));
     let module = context.load_module_from_file(hsaco_dir.join("add_inplace.hsaco"))?;
 
-    launch! {
-        kernel: add_inplace,
-        stream: stream,
-        module: module,
-        config: LaunchConfig::for_num_elems(N as u32),
-        args: [scalar(DELTA), slice_mut(values_dev)]
+    // SAFETY: `add_inplace` expects an f32 followed by an N-element writable
+    // slice; `values_dev` has that layout and lives through synchronization.
+    unsafe {
+        launch! {
+            kernel: add_inplace,
+            stream: stream,
+            module: module,
+            config: LaunchConfig::for_num_elems(N as u32),
+            args: [scalar(DELTA), slice_mut(values_dev)]
+        }
     }?;
 
     let values_result = values_dev.to_host_vec(&stream)?;

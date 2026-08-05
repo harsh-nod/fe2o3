@@ -29,12 +29,16 @@ fn main() -> fe2o3_core::Result<()> {
         .unwrap_or_else(|| PathBuf::from("."));
     let module = context.load_module_from_file(hsaco_dir.join("shift.hsaco"))?;
 
-    launch! {
-        kernel: shift,
-        stream: stream,
-        module: module,
-        config: LaunchConfig::for_num_elems(N as u32),
-        args: [slice(x_dev), slice_mut(out_dev)]
+    // SAFETY: `shift` expects two f32 slice ABIs; x has N + 1 readable
+    // elements, out has N disjoint writable elements, and both live through sync.
+    unsafe {
+        launch! {
+            kernel: shift,
+            stream: stream,
+            module: module,
+            config: LaunchConfig::for_num_elems(N as u32),
+            args: [slice(x_dev), slice_mut(out_dev)]
+        }
     }?;
 
     let out_host = out_dev.to_host_vec(&stream)?;

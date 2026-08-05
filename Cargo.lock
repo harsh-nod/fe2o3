@@ -33,6 +33,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-contracts"
+version = "0.1.0"
+
+[[package]]
 name = "fe2o3-copy"
 version = "0.1.0"
 dependencies = [
@@ -92,6 +96,10 @@ version = "0.1.0"
 dependencies = [
  "fe2o3-core",
 ]
+
+[[package]]
+name = "fe2o3-kernel-ir"
+version = "0.1.0"
 
 [[package]]
 name = "fe2o3-macros"
@@ -312,3 +320,10 @@ name = "unicode-ident"
 version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
+
+[[package]]
+name = "verus-vecadd"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-contracts",
+]

@@ -30,12 +30,17 @@ fn main() -> fe2o3_core::Result<()> {
         .unwrap_or_else(|| PathBuf::from("."));
     let module = context.load_module_from_file(hsaco_dir.join("raw_disjoint_shift.hsaco"))?;
 
-    launch! {
-        kernel: raw_disjoint_shift,
-        stream: stream,
-        module: module,
-        config: LaunchConfig::for_num_elems((N - 1) as u32),
-        args: [slice(x_dev), slice_mut(out_dev)]
+    // SAFETY: `raw_disjoint_shift` expects two f32 slice ABIs; x has N - 1
+    // elements, out has N, both live through sync, and each in-bounds thread
+    // writes a unique i + 1.
+    unsafe {
+        launch! {
+            kernel: raw_disjoint_shift,
+            stream: stream,
+            module: module,
+            config: LaunchConfig::for_num_elems((N - 1) as u32),
+            args: [slice(x_dev), slice_mut(out_dev)]
+        }
     }?;
 
     let out_host = out_dev.to_host_vec(&stream)?;

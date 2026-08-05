@@ -1,0 +1,15 @@
+[package]
+name = "verus-vecadd"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Minimal ordinary-Rust and Verus contract spike for fe2o3 vecadd."
+publish = false
+
+[dependencies]
+fe2o3-contracts.workspace = true
+
+[lib]
+name = "verus_vecadd"

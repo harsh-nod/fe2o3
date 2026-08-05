@@ -31,12 +31,17 @@ fn main() -> fe2o3_core::Result<()> {
         .unwrap_or_else(|| PathBuf::from("."));
     let module = context.load_module_from_file(hsaco_dir.join("raw_neighbors.hsaco"))?;
 
-    launch! {
-        kernel: raw_neighbors,
-        stream: stream,
-        module: module,
-        config: LaunchConfig::for_num_elems(N as u32),
-        args: [slice(x_dev), slice_mut(out_dev)]
+    // SAFETY: `raw_neighbors` expects two f32 slice ABIs; the buffers are
+    // distinct N-element allocations that live through sync, and the kernel
+    // guards both neighbor reads.
+    unsafe {
+        launch! {
+            kernel: raw_neighbors,
+            stream: stream,
+            module: module,
+            config: LaunchConfig::for_num_elems(N as u32),
+            args: [slice(x_dev), slice_mut(out_dev)]
+        }
     }?;
 
     let out_host = out_dev.to_host_vec(&stream)?;

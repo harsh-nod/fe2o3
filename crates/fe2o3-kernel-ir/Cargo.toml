@@ -1,0 +1,14 @@
+[package]
+name = "fe2o3-kernel-ir"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Target-neutral semantic kernel IR for fe2o3"
+
+[lib]
+name = "fe2o3_kernel_ir"
+
+[lints.rust]
+unsafe_code = "forbid"

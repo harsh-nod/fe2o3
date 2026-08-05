@@ -1,0 +1,54 @@
+name: AMD GPU hardware smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_hardware:
+        description: Confirm this run may execute kernels on the GPU
+        required: true
+        default: false
+        type: boolean
+      target:
+        description: Optional AMDGPU target; leave empty to detect with rocminfo
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hardware-smoke-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    if: ${{ inputs.confirm_hardware }}
+    name: Build and run GPU examples
+    runs-on: [self-hosted, linux, x64, rocm, amd-gpu]
+    environment: gpu-hardware
+    timeout-minutes: 120
+    env:
+      FE2O3_ALLOW_GPU_SMOKE: '1'
+      FE2O3_TARGET: ${{ inputs.target }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install pinned Rust toolchain
+        run: rustup show active-toolchain
+
+      - name: Run guarded GPU smoke suite
+        run: scripts/ci-local.sh hardware-smoke
+
+      - name: Upload smoke failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hardware-smoke-artifacts
+          path: |
+            target/ci-logs/
+            target/fe2o3/
+          if-no-files-found: ignore
+          retention-days: 7

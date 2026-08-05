@@ -29,12 +29,16 @@ fn main() -> fe2o3_core::Result<()> {
         .unwrap_or_else(|| PathBuf::from("."));
     let module = context.load_module_from_file(hsaco_dir.join("raw_gather.hsaco"))?;
 
-    launch! {
-        kernel: raw_gather,
-        stream: stream,
-        module: module,
-        config: LaunchConfig::for_num_elems(N as u32),
-        args: [slice(x_dev), slice_mut(out_dev)]
+    // SAFETY: `raw_gather` expects f32 slice ABIs; `x_dev` has 2 * N readable
+    // elements and `out_dev` has N disjoint writable elements through sync.
+    unsafe {
+        launch! {
+            kernel: raw_gather,
+            stream: stream,
+            module: module,
+            config: LaunchConfig::for_num_elems(N as u32),
+            args: [slice(x_dev), slice_mut(out_dev)]
+        }
     }?;
 
     let out_host = out_dev.to_host_vec(&stream)?;

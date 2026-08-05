@@ -1,0 +1,46 @@
+name: ROCm compile coverage
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: AMDGPU target passed as FE2O3_TARGET
+        required: true
+        default: gfx1100
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rocm-compile-${{ inputs.target }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compile:
+    name: Compile examples for ${{ inputs.target }}
+    runs-on: [self-hosted, linux, x64, rocm]
+    timeout-minutes: 90
+    env:
+      FE2O3_TARGET: ${{ inputs.target }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install pinned Rust toolchain
+        run: rustup show active-toolchain
+
+      - name: Compile every backend example
+        run: scripts/ci-local.sh rocm-compile
+
+      - name: Upload compiler failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rocm-compile-${{ inputs.target }}-artifacts
+          path: |
+            target/ci-logs/
+            target/fe2o3/
+          if-no-files-found: ignore
+          retention-days: 7

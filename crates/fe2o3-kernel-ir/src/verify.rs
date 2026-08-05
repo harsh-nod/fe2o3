@@ -1,0 +1,1310 @@
+use std::collections::{BTreeMap, BTreeSet};
+use std::error::Error;
+use std::fmt;
+
+use crate::{
+    AccessMode, AddressSpace, Atomic, AtomicKind, Barrier, BasicBlock, BinaryOp, BlockId,
+    ComparePredicate, Function, FunctionId, Kernel, KernelId, LaunchExtent, MemoryOrdering, Module,
+    ModuleId, Operation, OperationKind, ScalarType, SynchronizationScope, TargetCapability,
+    Terminator, Type, UnaryOp, ValueId, pointer_for,
+};
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum DiagnosticCode {
+    InvalidIdentity,
+    DuplicateFunction,
+    DuplicateKernel,
+    DuplicateBlock,
+    DuplicateValue,
+    UnknownKernelEntry,
+    KernelEntryDeclaration,
+    KernelReturnsValue,
+    InvalidLaunchDomain,
+    InvalidWorkgroupSize,
+    InvalidCapability,
+    EmptyFunction,
+    SignatureMismatch,
+    MissingTerminator,
+    InvalidBranchTarget,
+    BranchArgumentCount,
+    BranchArgumentType,
+    DuplicateSwitchCase,
+    UndefinedValue,
+    NonDominatingUse,
+    UnknownCallee,
+    ResultArity,
+    TypeMismatch,
+    InvalidOperandType,
+    InvalidMemoryAccess,
+    InvalidAlignment,
+    InvalidBarrier,
+    InvalidAtomic,
+    InvalidTerminator,
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct DiagnosticLocation {
+    pub module: ModuleId,
+    pub function: Option<FunctionId>,
+    pub kernel: Option<KernelId>,
+    pub block: Option<BlockId>,
+    pub operation: Option<usize>,
+}
+
+impl DiagnosticLocation {
+    fn module(module: &Module) -> Self {
+        Self {
+            module: module.id.clone(),
+            function: None,
+            kernel: None,
+            block: None,
+            operation: None,
+        }
+    }
+
+    fn function(module: &Module, function: &Function) -> Self {
+        Self {
+            function: Some(function.id.clone()),
+            ..Self::module(module)
+        }
+    }
+
+    fn kernel(module: &Module, kernel: &Kernel) -> Self {
+        Self {
+            kernel: Some(kernel.id.clone()),
+            ..Self::module(module)
+        }
+    }
+
+    fn at_block(mut self, block: BlockId) -> Self {
+        self.block = Some(block);
+        self
+    }
+
+    fn at_operation(mut self, operation: usize) -> Self {
+        self.operation = Some(operation);
+        self
+    }
+}
+
+impl fmt::Display for DiagnosticLocation {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "module {}", self.module)?;
+        if let Some(function) = &self.function {
+            write!(formatter, ", function {function}")?;
+        }
+        if let Some(kernel) = &self.kernel {
+            write!(formatter, ", kernel {kernel}")?;
+        }
+        if let Some(block) = self.block {
+            write!(formatter, ", {block}")?;
+        }
+        if let Some(operation) = self.operation {
+            write!(formatter, ", op {operation}")?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct Diagnostic {
+    pub location: DiagnosticLocation,
+    pub code: DiagnosticCode,
+    pub message: String,
+}
+
+impl fmt::Display for Diagnostic {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "{}: {:?}: {}",
+            self.location, self.code, self.message
+        )
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VerificationErrors {
+    diagnostics: Vec<Diagnostic>,
+}
+
+impl VerificationErrors {
+    pub fn diagnostics(&self) -> &[Diagnostic] {
+        &self.diagnostics
+    }
+
+    pub fn into_diagnostics(self) -> Vec<Diagnostic> {
+        self.diagnostics
+    }
+
+    pub fn contains(&self, code: DiagnosticCode) -> bool {
+        self.diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == code)
+    }
+}
+
+impl fmt::Display for VerificationErrors {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(
+            formatter,
+            "kernel IR verification failed with {} diagnostic(s)",
+            self.diagnostics.len()
+        )?;
+        for diagnostic in &self.diagnostics {
+            writeln!(formatter, "  {diagnostic}")?;
+        }
+        Ok(())
+    }
+}
+
+impl Error for VerificationErrors {}
+
+/// Verifies structural and local semantic invariants of a complete module.
+///
+/// All diagnostics are collected and sorted, making the result deterministic
+/// regardless of map implementation details in the verifier.
+pub fn verify_module(module: &Module) -> Result<(), VerificationErrors> {
+    let mut verifier = ModuleVerifier {
+        module,
+        diagnostics: Vec::new(),
+        functions: BTreeMap::new(),
+    };
+    verifier.verify();
+    verifier.diagnostics.sort();
+    if verifier.diagnostics.is_empty() {
+        Ok(())
+    } else {
+        Err(VerificationErrors {
+            diagnostics: verifier.diagnostics,
+        })
+    }
+}
+
+struct ModuleVerifier<'module> {
+    module: &'module Module,
+    diagnostics: Vec<Diagnostic>,
+    functions: BTreeMap<&'module FunctionId, &'module Function>,
+}
+
+impl<'module> ModuleVerifier<'module> {
+    fn verify(&mut self) {
+        if self.module.id.as_str().is_empty() {
+            self.emit(
+                DiagnosticLocation::module(self.module),
+                DiagnosticCode::InvalidIdentity,
+                "module identity must not be empty",
+            );
+        }
+
+        self.verify_capabilities(
+            &self.module.required_capabilities,
+            DiagnosticLocation::module(self.module),
+        );
+
+        for function in &self.module.functions {
+            if function.id.as_str().is_empty() {
+                self.emit(
+                    DiagnosticLocation::function(self.module, function),
+                    DiagnosticCode::InvalidIdentity,
+                    "function identity must not be empty",
+                );
+            }
+            if self.functions.insert(&function.id, function).is_some() {
+                self.emit(
+                    DiagnosticLocation::function(self.module, function),
+                    DiagnosticCode::DuplicateFunction,
+                    format!("function {} is defined more than once", function.id),
+                );
+            }
+        }
+
+        for function in &self.module.functions {
+            self.verify_function(function);
+        }
+
+        let mut kernels = BTreeSet::new();
+        for kernel in &self.module.kernels {
+            if kernel.id.as_str().is_empty() {
+                self.emit(
+                    DiagnosticLocation::kernel(self.module, kernel),
+                    DiagnosticCode::InvalidIdentity,
+                    "kernel identity must not be empty",
+                );
+            }
+            if !kernels.insert(&kernel.id) {
+                self.emit(
+                    DiagnosticLocation::kernel(self.module, kernel),
+                    DiagnosticCode::DuplicateKernel,
+                    format!("kernel {} is declared more than once", kernel.id),
+                );
+            }
+            self.verify_kernel(kernel);
+        }
+    }
+
+    fn verify_function(&mut self, function: &Function) {
+        let location = DiagnosticLocation::function(self.module, function);
+        self.verify_capabilities(&function.required_capabilities, location.clone());
+
+        let Some(body) = &function.body else {
+            return;
+        };
+
+        if body.parameters.len() != function.signature.parameters.len() {
+            self.emit(
+                location.clone(),
+                DiagnosticCode::SignatureMismatch,
+                format!(
+                    "body defines {} parameter values but signature has {} parameters",
+                    body.parameters.len(),
+                    function.signature.parameters.len()
+                ),
+            );
+        }
+        if body.blocks.is_empty() {
+            self.emit(
+                location,
+                DiagnosticCode::EmptyFunction,
+                "defined function must contain an entry block",
+            );
+            return;
+        }
+
+        let mut function_verifier = FunctionVerifier::new(
+            self.module,
+            function,
+            &self.functions,
+            &mut self.diagnostics,
+        );
+        function_verifier.verify();
+    }
+
+    fn verify_kernel(&mut self, kernel: &Kernel) {
+        let location = DiagnosticLocation::kernel(self.module, kernel);
+        self.verify_capabilities(&kernel.required_capabilities, location.clone());
+
+        for extent in kernel.domain.extents() {
+            if matches!(extent, LaunchExtent::Static(0)) {
+                self.emit(
+                    location.clone(),
+                    DiagnosticCode::InvalidLaunchDomain,
+                    "static launch extents must be non-zero",
+                );
+            }
+        }
+
+        if let Some(size) = kernel.workgroup_size {
+            if size.x == 0 || size.y == 0 || size.z == 0 {
+                self.emit(
+                    location.clone(),
+                    DiagnosticCode::InvalidWorkgroupSize,
+                    "workgroup dimensions must be non-zero",
+                );
+            }
+            if (kernel.domain.rank() == 1 && (size.y != 1 || size.z != 1))
+                || (kernel.domain.rank() == 2 && size.z != 1)
+            {
+                self.emit(
+                    location.clone(),
+                    DiagnosticCode::InvalidWorkgroupSize,
+                    "inactive workgroup dimensions must be one",
+                );
+            }
+        }
+
+        let Some(entry) = self.functions.get(&kernel.entry).copied() else {
+            self.emit(
+                location,
+                DiagnosticCode::UnknownKernelEntry,
+                format!("entry function {} is not in the module", kernel.entry),
+            );
+            return;
+        };
+        let Some(body) = &entry.body else {
+            self.emit(
+                location,
+                DiagnosticCode::KernelEntryDeclaration,
+                format!("entry function {} has no body", kernel.entry),
+            );
+            return;
+        };
+        if !entry.signature.results.is_empty() {
+            self.emit(
+                DiagnosticLocation::kernel(self.module, kernel),
+                DiagnosticCode::KernelReturnsValue,
+                "kernel entry functions must not return values",
+            );
+        }
+
+        for block in &body.blocks {
+            for (operation_index, operation) in block.operations.iter().enumerate() {
+                if let OperationKind::InvocationIndex { axis, .. } = operation.kind
+                    && !kernel.domain.contains_axis(axis)
+                {
+                    self.emit(
+                        DiagnosticLocation::kernel(self.module, kernel)
+                            .at_block(block.id)
+                            .at_operation(operation_index),
+                        DiagnosticCode::InvalidLaunchDomain,
+                        format!(
+                            "axis {axis:?} is outside a {}D launch domain",
+                            kernel.domain.rank()
+                        ),
+                    );
+                }
+            }
+        }
+    }
+
+    fn verify_capabilities(
+        &mut self,
+        capabilities: &BTreeSet<TargetCapability>,
+        location: DiagnosticLocation,
+    ) {
+        for capability in capabilities {
+            let invalid = match capability {
+                TargetCapability::SubgroupSize(size) => *size == 0 || !size.is_power_of_two(),
+                TargetCapability::Atomic {
+                    width_bits,
+                    address_space,
+                    max_scope,
+                } => {
+                    *width_bits == 0
+                        || !width_bits.is_power_of_two()
+                        || !matches!(
+                            address_space,
+                            AddressSpace::Workgroup | AddressSpace::Global | AddressSpace::Generic
+                        )
+                        || *max_scope == SynchronizationScope::Invocation
+                }
+                TargetCapability::Extension { namespace, name } => {
+                    namespace.is_empty() || name.is_empty()
+                }
+                _ => false,
+            };
+            if invalid {
+                self.emit(
+                    location.clone(),
+                    DiagnosticCode::InvalidCapability,
+                    format!("malformed target capability: {capability:?}"),
+                );
+            }
+        }
+    }
+
+    fn emit(
+        &mut self,
+        location: DiagnosticLocation,
+        code: DiagnosticCode,
+        message: impl Into<String>,
+    ) {
+        self.diagnostics.push(Diagnostic {
+            location,
+            code,
+            message: message.into(),
+        });
+    }
+}
+
+#[derive(Clone, Copy)]
+enum DefSite {
+    FunctionParameter,
+    BlockParameter(BlockId),
+    Operation(BlockId, usize),
+}
+
+#[derive(Clone)]
+struct DefInfo {
+    ty: Type,
+    site: DefSite,
+}
+
+struct FunctionVerifier<'a, 'module> {
+    module: &'module Module,
+    function: &'module Function,
+    functions: &'a BTreeMap<&'module FunctionId, &'module Function>,
+    diagnostics: &'a mut Vec<Diagnostic>,
+    definitions: BTreeMap<ValueId, DefInfo>,
+    blocks: BTreeMap<BlockId, &'module BasicBlock>,
+    dominators: BTreeMap<BlockId, BTreeSet<BlockId>>,
+}
+
+impl<'a, 'module> FunctionVerifier<'a, 'module> {
+    fn new(
+        module: &'module Module,
+        function: &'module Function,
+        functions: &'a BTreeMap<&'module FunctionId, &'module Function>,
+        diagnostics: &'a mut Vec<Diagnostic>,
+    ) -> Self {
+        Self {
+            module,
+            function,
+            functions,
+            diagnostics,
+            definitions: BTreeMap::new(),
+            blocks: BTreeMap::new(),
+            dominators: BTreeMap::new(),
+        }
+    }
+
+    fn verify(&mut self) {
+        let body = self.function.body.as_ref().expect("definition required");
+        let base_location = DiagnosticLocation::function(self.module, self.function);
+
+        for (index, value) in body.parameters.iter().copied().enumerate() {
+            let Some(ty) = self.function.signature.parameters.get(index) else {
+                break;
+            };
+            self.define(
+                value,
+                ty.clone(),
+                DefSite::FunctionParameter,
+                base_location.clone(),
+            );
+        }
+
+        for block in &body.blocks {
+            let location = base_location.clone().at_block(block.id);
+            if self.blocks.insert(block.id, block).is_some() {
+                self.emit(
+                    location.clone(),
+                    DiagnosticCode::DuplicateBlock,
+                    format!("block {} is defined more than once", block.id),
+                );
+            }
+            for parameter in &block.parameters {
+                self.define(
+                    parameter.id,
+                    parameter.ty.clone(),
+                    DefSite::BlockParameter(block.id),
+                    location.clone(),
+                );
+            }
+            for (operation_index, operation) in block.operations.iter().enumerate() {
+                for result in &operation.results {
+                    self.define(
+                        result.id,
+                        result.ty.clone(),
+                        DefSite::Operation(block.id, operation_index),
+                        location.clone().at_operation(operation_index),
+                    );
+                }
+            }
+            if block.terminator.is_none() {
+                self.emit(
+                    location,
+                    DiagnosticCode::MissingTerminator,
+                    "basic block has no terminator",
+                );
+            }
+        }
+
+        self.dominators = self.compute_dominators();
+
+        for block in &body.blocks {
+            for (operation_index, operation) in block.operations.iter().enumerate() {
+                let location = base_location
+                    .clone()
+                    .at_block(block.id)
+                    .at_operation(operation_index);
+                for operand in operation.kind.operands() {
+                    self.verify_use(operand, block.id, Some(operation_index), location.clone());
+                }
+                self.verify_operation(operation, location);
+            }
+            if let Some(terminator) = &block.terminator {
+                let location = base_location.clone().at_block(block.id);
+                for operand in terminator.operands() {
+                    self.verify_use(operand, block.id, None, location.clone());
+                }
+                self.verify_terminator(block, terminator, location);
+            }
+        }
+    }
+
+    fn define(&mut self, value: ValueId, ty: Type, site: DefSite, location: DiagnosticLocation) {
+        if self
+            .definitions
+            .insert(value, DefInfo { ty, site })
+            .is_some()
+        {
+            self.emit(
+                location,
+                DiagnosticCode::DuplicateValue,
+                format!("SSA value {value} is defined more than once"),
+            );
+        }
+    }
+
+    fn verify_use(
+        &mut self,
+        value: ValueId,
+        use_block: BlockId,
+        use_operation: Option<usize>,
+        location: DiagnosticLocation,
+    ) {
+        let Some(definition) = self.definitions.get(&value) else {
+            self.emit(
+                location,
+                DiagnosticCode::UndefinedValue,
+                format!("SSA value {value} is not defined in this function"),
+            );
+            return;
+        };
+
+        let dominates = match definition.site {
+            DefSite::FunctionParameter => true,
+            DefSite::BlockParameter(def_block) => {
+                def_block == use_block || self.block_dominates(def_block, use_block)
+            }
+            DefSite::Operation(def_block, def_operation) if def_block == use_block => {
+                use_operation.is_none_or(|use_operation| def_operation < use_operation)
+            }
+            DefSite::Operation(def_block, _) => self.block_dominates(def_block, use_block),
+        };
+        if !dominates {
+            self.emit(
+                location,
+                DiagnosticCode::NonDominatingUse,
+                format!("definition of {value} does not dominate this use"),
+            );
+        }
+    }
+
+    fn block_dominates(&self, definition: BlockId, use_block: BlockId) -> bool {
+        self.dominators
+            .get(&use_block)
+            .is_some_and(|dominators| dominators.contains(&definition))
+    }
+
+    fn verify_operation(&mut self, operation: &Operation, location: DiagnosticLocation) {
+        match &operation.kind {
+            OperationKind::Constant(constant) => {
+                self.expect_results(operation, &[constant.ty()], location);
+            }
+            OperationKind::InvocationIndex { .. } => {
+                self.expect_results(operation, &[Type::INDEX], location);
+            }
+            OperationKind::Unary { op, operand } => {
+                let Some(ty) = self.ty(*operand).cloned() else {
+                    return;
+                };
+                let valid = match (op, ty.as_scalar()) {
+                    (UnaryOp::Negate, Some(scalar)) => {
+                        scalar.is_signed_integer() || scalar.is_float()
+                    }
+                    (UnaryOp::Not, Some(ScalarType::Bool)) => true,
+                    (UnaryOp::Not, Some(scalar)) => scalar.is_integer(),
+                    _ => false,
+                };
+                if !valid {
+                    self.emit(
+                        location.clone(),
+                        DiagnosticCode::InvalidOperandType,
+                        format!("unary {op:?} does not accept {ty:?}"),
+                    );
+                }
+                self.expect_results(operation, &[ty], location);
+            }
+            OperationKind::Binary { op, lhs, rhs } => {
+                self.verify_binary(operation, *op, *lhs, *rhs, location);
+            }
+            OperationKind::Compare {
+                predicate,
+                lhs,
+                rhs,
+            } => self.verify_compare(operation, *predicate, *lhs, *rhs, location),
+            OperationKind::Cast { value, to, .. } => {
+                let Some(from) = self.ty(*value).cloned() else {
+                    return;
+                };
+                if from.as_scalar().is_none() || to.as_scalar().is_none() {
+                    self.emit(
+                        location.clone(),
+                        DiagnosticCode::InvalidOperandType,
+                        format!("casts require scalar types, found {from:?} to {to:?}"),
+                    );
+                }
+                self.expect_results(operation, std::slice::from_ref(to), location);
+            }
+            OperationKind::Select {
+                condition,
+                true_value,
+                false_value,
+            } => {
+                self.expect_type(*condition, &Type::BOOL, location.clone());
+                let (Some(true_ty), Some(false_ty)) = (
+                    self.ty(*true_value).cloned(),
+                    self.ty(*false_value).cloned(),
+                ) else {
+                    return;
+                };
+                if true_ty != false_ty {
+                    self.emit(
+                        location.clone(),
+                        DiagnosticCode::TypeMismatch,
+                        format!("select alternatives differ: {true_ty:?} and {false_ty:?}"),
+                    );
+                }
+                self.expect_results(operation, &[true_ty], location);
+            }
+            OperationKind::Call { callee, arguments } => {
+                let Some(callee) = self.functions.get(callee).copied() else {
+                    self.emit(
+                        location,
+                        DiagnosticCode::UnknownCallee,
+                        format!("callee {callee} is not in the module"),
+                    );
+                    return;
+                };
+                self.verify_argument_list(
+                    arguments,
+                    &callee.signature.parameters,
+                    location.clone(),
+                );
+                self.expect_results(operation, &callee.signature.results, location);
+            }
+            OperationKind::Alloca {
+                element,
+                count,
+                address_space,
+                alignment,
+            } => {
+                if !element.is_storable()
+                    || !matches!(
+                        address_space,
+                        AddressSpace::Private | AddressSpace::Workgroup
+                    )
+                {
+                    self.emit(
+                        location.clone(),
+                        DiagnosticCode::InvalidMemoryAccess,
+                        "alloca requires a storable type in private or workgroup memory",
+                    );
+                }
+                if let Some(count) = count {
+                    self.expect_integer(*count, location.clone());
+                }
+                self.verify_alignment(*alignment, location.clone());
+                let result = pointer_for(element.clone(), *address_space, AccessMode::ReadWrite);
+                self.expect_results(operation, &[result], location);
+            }
+            OperationKind::SliceLength { slice } => {
+                if !matches!(self.ty(*slice), Some(Type::Slice(_))) {
+                    self.emit(
+                        location.clone(),
+                        DiagnosticCode::InvalidOperandType,
+                        "slice_length operand must have slice type",
+                    );
+                }
+                self.expect_results(operation, &[Type::INDEX], location);
+            }
+            OperationKind::SliceData { slice } => {
+                let Some(Type::Slice(slice_ty)) = self.ty(*slice) else {
+                    self.emit(
+                        location,
+                        DiagnosticCode::InvalidOperandType,
+                        "slice_data operand must have slice type",
+                    );
+                    return;
+                };
+                let result = pointer_for(
+                    (*slice_ty.element).clone(),
+                    slice_ty.address_space,
+                    slice_ty.access,
+                );
+                self.expect_results(operation, &[result], location);
+            }
+            OperationKind::GetElementPointer { base, offset } => {
+                let Some(base_ty) = self.ty(*base).cloned() else {
+                    return;
+                };
+                if !matches!(base_ty, Type::Pointer(_)) {
+                    self.emit(
+                        location.clone(),
+                        DiagnosticCode::InvalidOperandType,
+                        "get_element_pointer base must have pointer type",
+                    );
+                }
+                self.expect_integer(*offset, location.clone());
+                self.expect_results(operation, &[base_ty], location);
+            }
+            OperationKind::Load { pointer, access } => {
+                let Some(pointee) = self.verify_pointer_access(*pointer, *access, false, &location)
+                else {
+                    return;
+                };
+                self.expect_results(operation, &[pointee], location);
+            }
+            OperationKind::Store {
+                pointer,
+                value,
+                access,
+            } => {
+                self.expect_results(operation, &[], location.clone());
+                let Some(pointee) = self.verify_pointer_access(*pointer, *access, true, &location)
+                else {
+                    return;
+                };
+                self.expect_type(*value, &pointee, location);
+            }
+            OperationKind::Barrier(barrier) => {
+                self.expect_results(operation, &[], location.clone());
+                self.verify_barrier(barrier, location);
+            }
+            OperationKind::Atomic(atomic) => self.verify_atomic(operation, atomic, location),
+        }
+    }
+
+    fn verify_binary(
+        &mut self,
+        operation: &Operation,
+        op: BinaryOp,
+        lhs: ValueId,
+        rhs: ValueId,
+        location: DiagnosticLocation,
+    ) {
+        let (Some(lhs_ty), Some(rhs_ty)) = (self.ty(lhs).cloned(), self.ty(rhs).cloned()) else {
+            return;
+        };
+        let lhs_scalar = lhs_ty.as_scalar();
+        let rhs_scalar = rhs_ty.as_scalar();
+        let valid = match op {
+            BinaryOp::ShiftLeft | BinaryOp::ShiftRight => {
+                lhs_scalar.is_some_and(ScalarType::is_integer)
+                    && rhs_scalar.is_some_and(ScalarType::is_integer)
+            }
+            BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor => {
+                lhs_ty == rhs_ty
+                    && lhs_scalar
+                        .is_some_and(|scalar| scalar == ScalarType::Bool || scalar.is_integer())
+            }
+            _ => lhs_ty == rhs_ty && lhs_scalar.is_some_and(ScalarType::is_numeric),
+        };
+        if !valid {
+            self.emit(
+                location.clone(),
+                DiagnosticCode::InvalidOperandType,
+                format!("binary {op:?} does not accept {lhs_ty:?} and {rhs_ty:?}"),
+            );
+        }
+        self.expect_results(operation, &[lhs_ty], location);
+    }
+
+    fn verify_compare(
+        &mut self,
+        operation: &Operation,
+        predicate: ComparePredicate,
+        lhs: ValueId,
+        rhs: ValueId,
+        location: DiagnosticLocation,
+    ) {
+        let (Some(lhs_ty), Some(rhs_ty)) = (self.ty(lhs).cloned(), self.ty(rhs).cloned()) else {
+            return;
+        };
+        let comparable = lhs_ty == rhs_ty
+            && lhs_ty.as_scalar().is_some_and(|scalar| {
+                scalar.is_numeric()
+                    || (scalar == ScalarType::Bool
+                        && matches!(
+                            predicate,
+                            ComparePredicate::Equal | ComparePredicate::NotEqual
+                        ))
+            });
+        if !comparable {
+            self.emit(
+                location.clone(),
+                DiagnosticCode::InvalidOperandType,
+                format!("comparison does not accept {lhs_ty:?} and {rhs_ty:?}"),
+            );
+        }
+        self.expect_results(operation, &[Type::BOOL], location);
+    }
+
+    fn verify_pointer_access(
+        &mut self,
+        pointer: ValueId,
+        access: crate::MemoryAccess,
+        write: bool,
+        location: &DiagnosticLocation,
+    ) -> Option<Type> {
+        self.verify_alignment(access.alignment, location.clone());
+        let pointer_ty = self.ty(pointer).cloned()?;
+        let Type::Pointer(pointer_ty) = pointer_ty else {
+            self.emit(
+                location.clone(),
+                DiagnosticCode::InvalidOperandType,
+                format!("memory operand {pointer} does not have pointer type"),
+            );
+            return None;
+        };
+        if pointer_ty.address_space != access.address_space {
+            self.emit(
+                location.clone(),
+                DiagnosticCode::InvalidMemoryAccess,
+                format!(
+                    "access names {:?} memory but pointer is in {:?} memory",
+                    access.address_space, pointer_ty.address_space
+                ),
+            );
+        }
+        if write
+            && (pointer_ty.access != AccessMode::ReadWrite
+                || pointer_ty.address_space == AddressSpace::Constant)
+        {
+            self.emit(
+                location.clone(),
+                DiagnosticCode::InvalidMemoryAccess,
+                "write requires a writable pointer outside constant memory",
+            );
+        }
+        if !pointer_ty.pointee.is_storable() {
+            self.emit(
+                location.clone(),
+                DiagnosticCode::InvalidMemoryAccess,
+                "memory operation pointee is not storable",
+            );
+        }
+        Some(*pointer_ty.pointee)
+    }
+
+    fn verify_barrier(&mut self, barrier: &Barrier, location: DiagnosticLocation) {
+        let invalid_execution_scope = !matches!(
+            barrier.execution_scope,
+            SynchronizationScope::Subgroup | SynchronizationScope::Workgroup
+        );
+        let invalid_memory_scope = barrier.memory_scope.rank() < barrier.execution_scope.rank();
+        let invalid_ordering = barrier.semantics.ordering == MemoryOrdering::Relaxed;
+        let invalid_spaces = barrier.semantics.address_spaces.is_empty()
+            || barrier
+                .semantics
+                .address_spaces
+                .iter()
+                .any(|space| matches!(space, AddressSpace::Private | AddressSpace::Constant));
+        if invalid_execution_scope || invalid_memory_scope || invalid_ordering || invalid_spaces {
+            self.emit(
+                location,
+                DiagnosticCode::InvalidBarrier,
+                "barrier requires subgroup/workgroup execution, a non-narrower memory scope, non-relaxed ordering, and shared writable memory",
+            );
+        }
+    }
+
+    fn verify_atomic(
+        &mut self,
+        operation: &Operation,
+        atomic: &Atomic,
+        location: DiagnosticLocation,
+    ) {
+        let write = atomic.kind != AtomicKind::Load;
+        let pointee = self.verify_pointer_access(atomic.pointer, atomic.access, write, &location);
+        let valid_space = matches!(
+            atomic.access.address_space,
+            AddressSpace::Workgroup | AddressSpace::Global | AddressSpace::Generic
+        );
+        if !valid_space || atomic.scope == SynchronizationScope::Invocation {
+            self.emit(
+                location.clone(),
+                DiagnosticCode::InvalidAtomic,
+                "atomics require workgroup/global/generic memory and a scope wider than invocation",
+            );
+        }
+
+        let Some(pointee) = pointee else {
+            return;
+        };
+        let Some(scalar) = pointee.as_scalar() else {
+            self.emit(
+                location.clone(),
+                DiagnosticCode::InvalidAtomic,
+                "atomic pointee must be a scalar",
+            );
+            return;
+        };
+
+        if let Some(width) = scalar.bit_width()
+            && (atomic.access.alignment * 8) < u32::from(width)
+        {
+            self.emit(
+                location.clone(),
+                DiagnosticCode::InvalidAtomic,
+                "atomic alignment is smaller than the scalar width",
+            );
+        }
+
+        let expected_results: Vec<Type> = match atomic.kind {
+            AtomicKind::Store => Vec::new(),
+            AtomicKind::CompareExchange => vec![pointee.clone(), Type::BOOL],
+            _ => vec![pointee.clone()],
+        };
+        self.expect_results(operation, &expected_results, location.clone());
+
+        let valid_metadata = match atomic.kind {
+            AtomicKind::Load => {
+                atomic.value.is_none()
+                    && atomic.compare.is_none()
+                    && atomic.failure_ordering.is_none()
+                    && matches!(
+                        atomic.ordering,
+                        MemoryOrdering::Relaxed
+                            | MemoryOrdering::Acquire
+                            | MemoryOrdering::SequentiallyConsistent
+                    )
+            }
+            AtomicKind::Store => {
+                atomic.value.is_some()
+                    && atomic.compare.is_none()
+                    && atomic.failure_ordering.is_none()
+                    && matches!(
+                        atomic.ordering,
+                        MemoryOrdering::Relaxed
+                            | MemoryOrdering::Release
+                            | MemoryOrdering::SequentiallyConsistent
+                    )
+            }
+            AtomicKind::CompareExchange => {
+                atomic.value.is_some()
+                    && atomic.compare.is_some()
+                    && atomic
+                        .failure_ordering
+                        .is_some_and(|failure| valid_failure_ordering(atomic.ordering, failure))
+            }
+            _ => {
+                atomic.value.is_some()
+                    && atomic.compare.is_none()
+                    && atomic.failure_ordering.is_none()
+            }
+        };
+        if !valid_metadata {
+            self.emit(
+                location.clone(),
+                DiagnosticCode::InvalidAtomic,
+                format!("malformed {:?} operands or orderings", atomic.kind),
+            );
+        }
+
+        if matches!(
+            atomic.kind,
+            AtomicKind::Min
+                | AtomicKind::Max
+                | AtomicKind::BitAnd
+                | AtomicKind::BitOr
+                | AtomicKind::BitXor
+        ) && !scalar.is_integer()
+        {
+            self.emit(
+                location.clone(),
+                DiagnosticCode::InvalidAtomic,
+                format!("{:?} requires an integer pointee", atomic.kind),
+            );
+        }
+
+        if let Some(value) = atomic.value {
+            self.expect_type(value, &pointee, location.clone());
+        }
+        if let Some(compare) = atomic.compare {
+            self.expect_type(compare, &pointee, location);
+        }
+    }
+
+    fn verify_terminator(
+        &mut self,
+        _block: &BasicBlock,
+        terminator: &Terminator,
+        location: DiagnosticLocation,
+    ) {
+        match terminator {
+            Terminator::Branch { target, arguments } => {
+                self.verify_edge(*target, arguments, location);
+            }
+            Terminator::ConditionalBranch {
+                condition,
+                then_target,
+                then_arguments,
+                else_target,
+                else_arguments,
+            } => {
+                self.expect_type(*condition, &Type::BOOL, location.clone());
+                self.verify_edge(*then_target, then_arguments, location.clone());
+                self.verify_edge(*else_target, else_arguments, location);
+            }
+            Terminator::Switch {
+                selector,
+                cases,
+                default_target,
+                default_arguments,
+            } => {
+                self.expect_integer(*selector, location.clone());
+                let mut values = BTreeSet::new();
+                for case in cases {
+                    if !values.insert(case.value) {
+                        self.emit(
+                            location.clone(),
+                            DiagnosticCode::DuplicateSwitchCase,
+                            format!("switch case {} appears more than once", case.value),
+                        );
+                    }
+                    self.verify_edge(case.target, &case.arguments, location.clone());
+                }
+                self.verify_edge(*default_target, default_arguments, location);
+            }
+            Terminator::Return { values } => {
+                self.verify_argument_list(values, &self.function.signature.results, location);
+            }
+            Terminator::Unreachable => {}
+        }
+    }
+
+    fn verify_edge(
+        &mut self,
+        target: BlockId,
+        arguments: &[ValueId],
+        location: DiagnosticLocation,
+    ) {
+        let Some(target_block) = self.blocks.get(&target).copied() else {
+            self.emit(
+                location,
+                DiagnosticCode::InvalidBranchTarget,
+                format!("branch target {target} is not defined"),
+            );
+            return;
+        };
+        if arguments.len() != target_block.parameters.len() {
+            self.emit(
+                location.clone(),
+                DiagnosticCode::BranchArgumentCount,
+                format!(
+                    "branch to {target} supplies {} arguments for {} block parameters",
+                    arguments.len(),
+                    target_block.parameters.len()
+                ),
+            );
+        }
+        for (argument, parameter) in arguments.iter().zip(&target_block.parameters) {
+            let Some(argument_ty) = self.ty(*argument) else {
+                continue;
+            };
+            if argument_ty != &parameter.ty {
+                self.emit(
+                    location.clone(),
+                    DiagnosticCode::BranchArgumentType,
+                    format!(
+                        "branch argument {argument} has type {argument_ty:?}, expected {:?}",
+                        parameter.ty
+                    ),
+                );
+            }
+        }
+    }
+
+    fn verify_argument_list(
+        &mut self,
+        values: &[ValueId],
+        expected: &[Type],
+        location: DiagnosticLocation,
+    ) {
+        if values.len() != expected.len() {
+            self.emit(
+                location.clone(),
+                DiagnosticCode::SignatureMismatch,
+                format!(
+                    "found {} values where {} are required",
+                    values.len(),
+                    expected.len()
+                ),
+            );
+        }
+        for (value, expected_ty) in values.iter().zip(expected) {
+            self.expect_type(*value, expected_ty, location.clone());
+        }
+    }
+
+    fn expect_results(
+        &mut self,
+        operation: &Operation,
+        expected: &[Type],
+        location: DiagnosticLocation,
+    ) {
+        if operation.results.len() != expected.len() {
+            self.emit(
+                location.clone(),
+                DiagnosticCode::ResultArity,
+                format!(
+                    "operation defines {} results but {} are required",
+                    operation.results.len(),
+                    expected.len()
+                ),
+            );
+        }
+        for (result, expected_ty) in operation.results.iter().zip(expected) {
+            if &result.ty != expected_ty {
+                self.emit(
+                    location.clone(),
+                    DiagnosticCode::TypeMismatch,
+                    format!(
+                        "result {} has type {:?}, expected {expected_ty:?}",
+                        result.id, result.ty
+                    ),
+                );
+            }
+        }
+    }
+
+    fn expect_type(&mut self, value: ValueId, expected: &Type, location: DiagnosticLocation) {
+        let Some(actual) = self.ty(value) else {
+            return;
+        };
+        if actual != expected {
+            self.emit(
+                location,
+                DiagnosticCode::TypeMismatch,
+                format!("value {value} has type {actual:?}, expected {expected:?}"),
+            );
+        }
+    }
+
+    fn expect_integer(&mut self, value: ValueId, location: DiagnosticLocation) {
+        let valid = self
+            .ty(value)
+            .and_then(Type::as_scalar)
+            .is_some_and(ScalarType::is_integer);
+        if !valid && self.ty(value).is_some() {
+            self.emit(
+                location,
+                DiagnosticCode::InvalidOperandType,
+                format!("value {value} must have integer or index type"),
+            );
+        }
+    }
+
+    fn verify_alignment(&mut self, alignment: u32, location: DiagnosticLocation) {
+        if alignment == 0 || !alignment.is_power_of_two() {
+            self.emit(
+                location,
+                DiagnosticCode::InvalidAlignment,
+                format!("alignment {alignment} is not a non-zero power of two"),
+            );
+        }
+    }
+
+    fn ty(&self, value: ValueId) -> Option<&Type> {
+        self.definitions
+            .get(&value)
+            .map(|definition| &definition.ty)
+    }
+
+    fn compute_dominators(&self) -> BTreeMap<BlockId, BTreeSet<BlockId>> {
+        let body = self.function.body.as_ref().expect("definition required");
+        let entry = body.blocks[0].id;
+        let all_blocks: BTreeSet<_> = self.blocks.keys().copied().collect();
+        let mut predecessors: BTreeMap<BlockId, BTreeSet<BlockId>> = self
+            .blocks
+            .keys()
+            .copied()
+            .map(|block| (block, BTreeSet::new()))
+            .collect();
+        for block in self.blocks.values() {
+            let Some(terminator) = &block.terminator else {
+                continue;
+            };
+            for successor in terminator.successors() {
+                if let Some(predecessors) = predecessors.get_mut(&successor) {
+                    predecessors.insert(block.id);
+                }
+            }
+        }
+
+        let mut reachable = BTreeSet::from([entry]);
+        let mut frontier = vec![entry];
+        while let Some(block) = frontier.pop() {
+            let Some(terminator) = self
+                .blocks
+                .get(&block)
+                .and_then(|block| block.terminator.as_ref())
+            else {
+                continue;
+            };
+            for successor in terminator.successors() {
+                if self.blocks.contains_key(&successor) && reachable.insert(successor) {
+                    frontier.push(successor);
+                }
+            }
+        }
+
+        let mut dominators = BTreeMap::new();
+        for block in &all_blocks {
+            let initial = if *block == entry {
+                BTreeSet::from([entry])
+            } else if reachable.contains(block) {
+                reachable.clone()
+            } else {
+                BTreeSet::from([*block])
+            };
+            dominators.insert(*block, initial);
+        }
+
+        loop {
+            let mut changed = false;
+            for block in reachable.iter().copied().filter(|block| *block != entry) {
+                let reachable_predecessors: Vec<_> = predecessors[&block]
+                    .iter()
+                    .copied()
+                    .filter(|predecessor| reachable.contains(predecessor))
+                    .collect();
+                let mut next = if let Some(first) = reachable_predecessors.first() {
+                    dominators[first].clone()
+                } else {
+                    BTreeSet::new()
+                };
+                for predecessor in reachable_predecessors.iter().skip(1) {
+                    next = next
+                        .intersection(&dominators[predecessor])
+                        .copied()
+                        .collect();
+                }
+                next.insert(block);
+                if dominators[&block] != next {
+                    dominators.insert(block, next);
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        dominators
+    }
+
+    fn emit(
+        &mut self,
+        location: DiagnosticLocation,
+        code: DiagnosticCode,
+        message: impl Into<String>,
+    ) {
+        self.diagnostics.push(Diagnostic {
+            location,
+            code,
+            message: message.into(),
+        });
+    }
+}
+
+fn valid_failure_ordering(success: MemoryOrdering, failure: MemoryOrdering) -> bool {
+    match success {
+        MemoryOrdering::Relaxed => failure == MemoryOrdering::Relaxed,
+        MemoryOrdering::Acquire => {
+            matches!(failure, MemoryOrdering::Relaxed | MemoryOrdering::Acquire)
+        }
+        MemoryOrdering::Release => failure == MemoryOrdering::Relaxed,
+        MemoryOrdering::AcquireRelease => {
+            matches!(failure, MemoryOrdering::Relaxed | MemoryOrdering::Acquire)
+        }
+        MemoryOrdering::SequentiallyConsistent => matches!(
+            failure,
+            MemoryOrdering::Relaxed
+                | MemoryOrdering::Acquire
+                | MemoryOrdering::SequentiallyConsistent
+        ),
+    }
+}

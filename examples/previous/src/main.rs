@@ -29,12 +29,17 @@ fn main() -> fe2o3_core::Result<()> {
         .unwrap_or_else(|| PathBuf::from("."));
     let module = context.load_module_from_file(hsaco_dir.join("previous.hsaco"))?;
 
-    launch! {
-        kernel: previous,
-        stream: stream,
-        module: module,
-        config: LaunchConfig::for_num_elems(N as u32),
-        args: [slice(x_dev), slice_mut(out_dev)]
+    // SAFETY: `previous` expects two f32 slice ABIs; `x_dev` and `out_dev` are
+    // distinct N-element allocations that live through sync, and the kernel
+    // guards its shifted read.
+    unsafe {
+        launch! {
+            kernel: previous,
+            stream: stream,
+            module: module,
+            config: LaunchConfig::for_num_elems(N as u32),
+            args: [slice(x_dev), slice_mut(out_dev)]
+        }
     }?;
 
     let out_host = out_dev.to_host_vec(&stream)?;

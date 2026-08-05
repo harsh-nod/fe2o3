@@ -26,12 +26,16 @@ fn main() -> fe2o3_core::Result<()> {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."));
     let module = context.load_module_from_file(hsaco_dir.join("negate.hsaco"))?;
-    launch! {
-        kernel: negate,
-        stream: stream,
-        module: module,
-        config: LaunchConfig::for_num_elems(N as u32),
-        args: [slice(x_dev), slice_mut(out_dev)]
+    // SAFETY: `negate` expects read-only and writable f32 slice ABIs; the two
+    // buffers are distinct N-element allocations kept alive until sync.
+    unsafe {
+        launch! {
+            kernel: negate,
+            stream: stream,
+            module: module,
+            config: LaunchConfig::for_num_elems(N as u32),
+            args: [slice(x_dev), slice_mut(out_dev)]
+        }
     }?;
 
     let out_host = out_dev.to_host_vec(&stream)?;

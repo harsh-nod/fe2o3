@@ -25,12 +25,16 @@ fn main() -> fe2o3_core::Result<()> {
         .unwrap_or_else(|| PathBuf::from("."));
     let module = context.load_module_from_file(hsaco_dir.join("fill.hsaco"))?;
 
-    launch! {
-        kernel: fill,
-        stream: stream,
-        module: module,
-        config: LaunchConfig::for_num_elems(N as u32),
-        args: [slice_mut(out_dev)]
+    // SAFETY: `fill` expects one writable f32 slice ABI; `out_dev` contains N
+    // elements, one per launched thread, and remains alive until sync.
+    unsafe {
+        launch! {
+            kernel: fill,
+            stream: stream,
+            module: module,
+            config: LaunchConfig::for_num_elems(N as u32),
+            args: [slice_mut(out_dev)]
+        }
     }?;
 
     let out_host = out_dev.to_host_vec(&stream)?;
