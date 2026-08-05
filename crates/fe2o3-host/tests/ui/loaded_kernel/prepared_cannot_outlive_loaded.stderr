@@ -1,0 +1,8 @@
+error: lifetime may not live long enough
+ --> tests/ui/loaded_kernel/prepared_cannot_outlive_loaded.rs:9:5
+  |
+5 | fn detach<'a>(
+  |           -- lifetime `'a` defined here
+...
+9 |     loaded.bind(prepared).unwrap()
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ returning this value requires that `'a` must outlive `'static`

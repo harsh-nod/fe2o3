@@ -1,0 +1,16 @@
+error[E0624]: method `function` is private
+ --> tests/ui/loaded_kernel/handles_are_private.rs:6:20
+  |
+6 |     let _ = loaded.function();
+  |                    ^^^^^^^^ private method
+  |
+ ::: src/loaded_kernel.rs
+  |
+  |     fn function(&self) -> &GpuFunction {
+  |     ---------------------------------- private method defined here
+
+error[E0616]: field `ownership` of struct `LoadedKernel` is private
+ --> tests/ui/loaded_kernel/handles_are_private.rs:7:21
+  |
+7 |     let _ = &loaded.ownership;
+  |                     ^^^^^^^^^ private field

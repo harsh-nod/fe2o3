@@ -1,0 +1,15 @@
+error[E0308]: mismatched types
+ --> tests/ui/loaded_kernel/cross_marker_prepared.rs:7:25
+  |
+7 |     let _ = loaded.bind(prepared);
+  |                    ---- ^^^^^^^^ expected `PreparedLaunch<KernelA>`, found `PreparedLaunch<KernelB>`
+  |                    |
+  |                    arguments to this method are incorrect
+  |
+  = note: expected struct `PreparedLaunch<KernelA>`
+             found struct `PreparedLaunch<KernelB>`
+note: method defined here
+ --> src/loaded_kernel.rs
+  |
+  |     pub fn bind(
+  |            ^^^^

@@ -1,0 +1,5 @@
+error[E0599]: no associated function or constant named `from_validated` found for struct `LoadedKernel<K>` in the current scope
+ --> tests/ui/loaded_kernel/arbitrary_selection_cannot_mint_marker.rs:6:19
+  |
+6 |     LoadedKernel::from_validated(validated)
+  |                   ^^^^^^^^^^^^^^ associated function or constant not found in `LoadedKernel<_>`
