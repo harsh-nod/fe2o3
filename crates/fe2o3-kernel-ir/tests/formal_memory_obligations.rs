@@ -368,7 +368,7 @@ fn derives_complete_formal_fill_obligations() {
 
     assert_eq!(
         obligations.analysis_basis(),
-        FormalMemoryAnalysisBasis::CompilerDerivedFormalParametersUnauthenticatedAtRuntime
+        FormalMemoryAnalysisBasis::CompilerDerivedIrWithUnauthenticatedLaunchInputs
     );
     assert_eq!(obligations.invocations().unwrap().start(), 0);
     assert_eq!(obligations.invocations().unwrap().end_exclusive(), 64);
@@ -387,6 +387,32 @@ fn derives_complete_formal_fill_obligations() {
     assert_eq!(obligations.bounds_requirements()[0].minimum_byte_len(), 256);
     assert!(obligations.runtime_alias_requirements().is_empty());
     assert!(obligations.inter_invocation_conflicts().is_empty());
+}
+
+#[test]
+fn analysis_basis_discloses_caller_supplied_launch_inputs() {
+    let module = exact_fill_module();
+    let first = analyze(&module, 8);
+    let second = analyze(&module, 17);
+
+    for analysis in [&first, &second] {
+        assert_eq!(
+            analysis.obligations().analysis_basis(),
+            FormalMemoryAnalysisBasis::CompilerDerivedIrWithUnauthenticatedLaunchInputs
+        );
+        assert_eq!(
+            analysis.obligations().index_width(),
+            FormalIndexWidth::Bits64
+        );
+    }
+    assert_eq!(
+        first.obligations().invocations().unwrap().end_exclusive(),
+        8
+    );
+    assert_eq!(
+        second.obligations().invocations().unwrap().end_exclusive(),
+        17
+    );
 }
 
 #[test]

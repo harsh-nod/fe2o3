@@ -11,20 +11,22 @@ use crate::{
     VerificationErrors, verify_module,
 };
 
-/// A concrete one-dimensional launch extent supplied to formal extraction.
+/// A caller-supplied one-dimensional launch extent used for formal extraction.
 ///
-/// `Unknown` is accepted so pipeline stages can fail closed without inventing
-/// a launch size. It can never produce a complete analysis.
+/// This input is not authenticated against a runtime launch. `Unknown` is
+/// accepted so pipeline stages can fail closed without inventing a launch size;
+/// it can never produce a complete analysis.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum ExplicitLaunchExtent1d {
     Exact(u64),
     Unknown,
 }
 
-/// Pointer-sized integer width used by the target lowering.
+/// Caller-supplied pointer-sized integer width used for formal extraction.
 ///
 /// The current formal affine model is defined only for 64-bit AMDGPU index
-/// arithmetic. Other widths are explicit fail-closed inputs.
+/// arithmetic. This input is not a target-authentication token; other widths
+/// are explicit fail-closed inputs.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum FormalIndexWidth {
     Bits32,
@@ -286,9 +288,11 @@ pub enum FormalMemoryIncompleteReason {
 /// Describes exactly what the analysis result establishes.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum FormalMemoryAnalysisBasis {
-    /// Regions and identities were derived from verified IR, but no runtime
-    /// pointer, allocation extent, or alias relationship was authenticated.
-    CompilerDerivedFormalParametersUnauthenticatedAtRuntime,
+    /// Formal parameter identities and access expressions came from verified
+    /// IR. The launch extent and index width remain unauthenticated caller
+    /// inputs, and no runtime pointer, allocation extent, launch geometry, or
+    /// alias relationship has been authenticated.
+    CompilerDerivedIrWithUnauthenticatedLaunchInputs,
 }
 
 /// Partial or complete formal facts for one kernel launch.
@@ -319,7 +323,7 @@ impl FormalMemoryObligations {
     }
 
     pub const fn analysis_basis(&self) -> FormalMemoryAnalysisBasis {
-        FormalMemoryAnalysisBasis::CompilerDerivedFormalParametersUnauthenticatedAtRuntime
+        FormalMemoryAnalysisBasis::CompilerDerivedIrWithUnauthenticatedLaunchInputs
     }
 
     pub const fn invocations(&self) -> Option<InvocationRange1d> {
@@ -349,8 +353,10 @@ impl FormalMemoryObligations {
 
 /// Completeness of compiler-derived formal extraction.
 ///
-/// `Complete` means all modeled IR effects were translated into obligations.
-/// It does not mean those obligations hold for a runtime launch.
+/// `Complete` means all modeled IR effects were translated into obligations
+/// under the caller-supplied launch extent and 64-bit index-width input. It
+/// does not authenticate those inputs or mean the obligations hold for a
+/// runtime launch.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum FormalMemoryObligationAnalysis {
     Complete(FormalMemoryObligations),
@@ -407,10 +413,12 @@ impl Error for FormalMemoryObligationError {
 }
 
 /// Derives formal memory obligations from a structurally verified Kernel IR
-/// module and a concrete one-dimensional launch extent.
+/// module and caller-supplied launch-analysis inputs.
 ///
-/// No caller-selected allocation identity is accepted. The resulting formal
-/// identities still require runtime authentication before any launch-safety or
+/// No caller-selected allocation identity is accepted. The launch extent and
+/// index width are descriptive analysis inputs, not authenticated runtime or
+/// target facts. The resulting formal identities, launch geometry, and memory
+/// obligations require runtime authentication before any launch-safety or
 /// race-freedom claim can be made.
 pub fn derive_kernel_memory_obligations(
     module: &Module,
