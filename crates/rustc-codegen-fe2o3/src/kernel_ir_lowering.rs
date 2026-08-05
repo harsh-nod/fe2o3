@@ -1318,6 +1318,10 @@ fn scalar_alignment(ty: &Type) -> Option<u32> {
 }
 
 #[cfg(test)]
+#[path = "kernel_ir_lowering_vecadd_tests.rs"]
+mod vecadd_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::mir_import::{
