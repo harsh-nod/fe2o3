@@ -3,13 +3,11 @@ use fe2o3_device::{DisjointSlice, kernel, thread};
 use fe2o3_host::launch;
 use std::path::PathBuf;
 
+include!("vecadd_body.rs");
+
 #[kernel]
 pub fn vecadd(a: &[f32], b: &[f32], mut c: DisjointSlice<f32>) {
-    let idx = thread::index_1d();
-    let i = idx.get();
-    if let Some(out) = c.get_mut(idx) {
-        *out = a[i] + b[i];
-    }
+    vecadd_kernel_body!(thread, (), a, b, c);
 }
 
 fn main() -> fe2o3_core::Result<()> {
@@ -57,4 +55,28 @@ fn main() -> fe2o3_core::Result<()> {
 
     println!("vecadd passed for {N} elements");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    const KERNEL_SOURCE: &str = include_str!("main.rs");
+    const SHARED_BODY: &str = include_str!("vecadd_body.rs");
+
+    #[test]
+    fn real_kernel_expands_the_shared_body() {
+        assert!(KERNEL_SOURCE.contains("include!(\"vecadd_body.rs\")"));
+        assert!(KERNEL_SOURCE.contains("vecadd_kernel_body!(thread, (), a, b, c)"));
+    }
+
+    #[test]
+    fn shared_body_retains_the_verified_memory_shape() {
+        for operation in [
+            "let idx = $thread::index_1d",
+            "let i = idx.get()",
+            "if let Some(out) = $output.get_mut(idx)",
+            "*out = $a[i] + $b[i]",
+        ] {
+            assert!(SHARED_BODY.contains(operation), "missing `{operation}`");
+        }
+    }
 }
