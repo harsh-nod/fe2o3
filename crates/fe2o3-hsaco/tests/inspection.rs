@@ -2,9 +2,10 @@ use std::{env, fs};
 
 use fe2o3_hsaco::{
     ArgumentAddressSpace, CodeObjectVersion, ExplicitValueKind, Gfx1250Revision, HiddenValueKind,
-    InspectionError, KernelKind, MAX_ARGUMENTS_PER_KERNEL, MAX_ELF_NOTES, MAX_HSACO_BYTES,
-    MAX_KERNELS, MAX_MESSAGEPACK_COLLECTION_ITEMS, MAX_MESSAGEPACK_DEPTH, MAX_METADATA_BYTES,
-    MessagePackLimit, inspect,
+    InspectionError, KernelBindingError, KernelKind, MAX_ARGUMENTS_PER_KERNEL, MAX_ELF_NOTES,
+    MAX_ELF_SYMBOLS, MAX_HSACO_BYTES, MAX_KERNELS, MAX_MESSAGEPACK_COLLECTION_ITEMS,
+    MAX_MESSAGEPACK_DEPTH, MAX_METADATA_BYTES, MessagePackLimit, inspect,
+    inspect_and_bind_kernel_descriptors,
 };
 use rmpv::{Value, encode::write_value};
 
@@ -1044,6 +1045,920 @@ fn validates_v5_hidden_width_alignment_order_uniqueness_and_reserved_gaps() {
 }
 
 #[test]
+fn explicitly_binds_metadata_to_descriptor_and_entry_symbols() {
+    let fixture = binding_fixture(valid_kernel("vecadd", "vecadd.kd"));
+    let inspected = inspect(&fixture.bytes).unwrap();
+    assert_eq!(inspected.kernels()[0].name(), "vecadd");
+
+    let bound = inspect_and_bind_kernel_descriptors(&fixture.bytes).unwrap();
+    assert_eq!(bound.inspection(), &inspected);
+    assert_eq!(bound.bindings().len(), 1);
+    let binding = bound.bindings()[0];
+    assert_eq!(binding.kernel_index(), 0);
+    assert_eq!(binding.descriptor_address(), fixture.descriptor_address);
+    assert_eq!(
+        binding.descriptor_file_offset(),
+        fixture.descriptor_offset as u64
+    );
+    assert_eq!(binding.entry_address(), fixture.entry_address);
+    assert_eq!(binding.entry_file_offset(), fixture.entry_offset as u64);
+    assert_eq!(binding.entry_size(), 64);
+
+    let descriptor = binding.descriptor();
+    assert_eq!(descriptor.group_segment_fixed_size(), 0);
+    assert_eq!(descriptor.private_segment_fixed_size(), 16);
+    assert_eq!(descriptor.kernarg_size(), 272);
+    assert_eq!(descriptor.compute_pgm_rsrc3(), 0x40);
+    assert_eq!(descriptor.compute_pgm_rsrc1(), 0xe0af_0000);
+    assert_eq!(descriptor.compute_pgm_rsrc2(), 0x1391);
+    assert_eq!(descriptor.kernel_code_properties(), 0x041e);
+    assert_eq!(descriptor.kernarg_preload(), 0);
+    assert_eq!(descriptor.wavefront_size(), 32);
+    assert!(!descriptor.uses_dynamic_stack());
+    assert!(descriptor.private_segment_enabled());
+}
+
+#[test]
+fn metadata_only_inspection_does_not_require_static_symbols() {
+    let bytes = valid_hsaco();
+    inspect(&bytes).unwrap();
+    assert_eq!(
+        inspect_and_bind_kernel_descriptors(&bytes),
+        Err(KernelBindingError::InvalidSymbolTable(
+            "SHT_SYMTAB is missing"
+        ))
+    );
+
+    let empty = metadata((1, 2), Vec::new());
+    let bound =
+        inspect_and_bind_kernel_descriptors(&hsaco(&encode(&empty), 4, &[b"AMDGPU\0"])).unwrap();
+    assert!(bound.bindings().is_empty());
+}
+
+#[test]
+fn every_truncation_of_a_bound_hsaco_is_rejected() {
+    let fixture = binding_fixture(valid_kernel("vecadd", "vecadd.kd"));
+    for length in 0..fixture.bytes.len() {
+        assert!(
+            inspect_and_bind_kernel_descriptors(&fixture.bytes[..length]).is_err(),
+            "accepted bound prefix length {length}"
+        );
+    }
+}
+
+#[test]
+fn deterministic_bound_hsaco_mutations_are_panic_free() {
+    let fixture = binding_fixture(valid_kernel("vecadd", "vecadd.kd"));
+    for index in 0..fixture.bytes.len() {
+        for mask in [0x01, 0x80, 0xff] {
+            let mut mutated = fixture.bytes.clone();
+            mutated[index] ^= mask;
+            let _ = inspect_and_bind_kernel_descriptors(&mutated);
+        }
+    }
+}
+
+#[test]
+fn rejects_malformed_symbol_table_dimensions_links_and_names() {
+    let fixture = binding_fixture(valid_kernel("vecadd", "vecadd.kd"));
+
+    let mut missing = fixture.bytes.clone();
+    write_u32(&mut missing, fixture.symtab_header + 4, 1);
+    assert_binding_error(
+        missing,
+        KernelBindingError::InvalidSymbolTable("SHT_SYMTAB is missing"),
+    );
+
+    let mut entry_size = fixture.bytes.clone();
+    write_u64(&mut entry_size, fixture.symtab_header + 56, 16);
+    assert_binding_error(
+        entry_size,
+        KernelBindingError::InvalidSymbolTable("invalid symbol entry size or count"),
+    );
+
+    let mut table_alignment = fixture.bytes.clone();
+    write_u64(&mut table_alignment, fixture.symtab_header + 48, 4);
+    assert_binding_error(
+        table_alignment,
+        KernelBindingError::InvalidSymbolTable("invalid symbol table alignment"),
+    );
+
+    let mut string_layout = fixture.bytes.clone();
+    write_u64(&mut string_layout, fixture.strtab_header + 56, 1);
+    assert_binding_error(
+        string_layout,
+        KernelBindingError::InvalidSymbolTable("invalid symbol string-table layout"),
+    );
+
+    let mut remainder = fixture.bytes.clone();
+    write_u64(&mut remainder, fixture.symtab_header + 32, 4 * 24 + 1);
+    assert_binding_error(
+        remainder,
+        KernelBindingError::Inspection(InspectionError::InvalidElf(
+            "object parser rejected the file",
+        )),
+    );
+
+    let mut too_many = fixture.bytes.clone();
+    too_many.resize(fixture.symtab_offset + (MAX_ELF_SYMBOLS + 1) * 24, 0);
+    write_u64(
+        &mut too_many,
+        fixture.symtab_header + 32,
+        u64::try_from((MAX_ELF_SYMBOLS + 1) * 24).unwrap(),
+    );
+    assert_binding_error(too_many, KernelBindingError::TooManySymbols);
+
+    let mut bad_link = fixture.bytes.clone();
+    write_u32(&mut bad_link, fixture.symtab_header + 40, 99);
+    assert_binding_error(
+        bad_link,
+        KernelBindingError::Inspection(InspectionError::InvalidElf(
+            "object parser rejected the file",
+        )),
+    );
+
+    let mut wrong_link_type = fixture.bytes.clone();
+    write_u32(&mut wrong_link_type, fixture.symtab_header + 40, 3);
+    assert_binding_error(
+        wrong_link_type,
+        KernelBindingError::Inspection(InspectionError::InvalidElf(
+            "object parser rejected the file",
+        )),
+    );
+
+    let mut bad_info = fixture.bytes.clone();
+    write_u32(&mut bad_info, fixture.symtab_header + 44, 5);
+    assert_binding_error(
+        bad_info,
+        KernelBindingError::InvalidSymbolTable("invalid first non-local symbol index"),
+    );
+
+    let mut bad_name_offset = fixture.bytes.clone();
+    write_u32(&mut bad_name_offset, fixture.descriptor_symbol, u32::MAX);
+    assert_binding_error(
+        bad_name_offset,
+        KernelBindingError::InvalidSymbolTable("symbol name offset is out of bounds"),
+    );
+
+    let mut unterminated = fixture.bytes.clone();
+    unterminated[fixture.strtab_end - 1] = b'x';
+    assert_binding_error(
+        unterminated,
+        KernelBindingError::InvalidSymbolTable("symbol name is not NUL-terminated"),
+    );
+
+    let mut non_utf8 = fixture.bytes.clone();
+    non_utf8[fixture.other_name] = 0xff;
+    assert_binding_error(
+        non_utf8,
+        KernelBindingError::InvalidSymbolTable("symbol name is not UTF-8"),
+    );
+
+    let mut non_null_first = fixture.bytes.clone();
+    non_null_first[fixture.symtab_offset + 8] = 1;
+    assert_binding_error(
+        non_null_first,
+        KernelBindingError::InvalidSymbolTable("first symbol is not the null symbol"),
+    );
+
+    let mut nonzero_null_name = fixture.bytes.clone();
+    write_u32(&mut nonzero_null_name, fixture.symtab_offset, 7);
+    assert_binding_error(
+        nonzero_null_name,
+        KernelBindingError::InvalidSymbolTable("first symbol is not the null symbol"),
+    );
+
+    let mut bad_local_partition = fixture.bytes.clone();
+    bad_local_partition[fixture.descriptor_symbol + 4] = 1;
+    assert_binding_error(
+        bad_local_partition,
+        KernelBindingError::InvalidSymbolTable("local symbols do not match sh_info"),
+    );
+}
+
+#[test]
+fn requires_an_all_zero_sht_null_section_header_zero() {
+    let fixture = binding_fixture(valid_kernel("vecadd", "vecadd.kd"));
+
+    let mut section_type = fixture.bytes.clone();
+    write_u32(&mut section_type, fixture.section_header_zero + 4, 1);
+    assert_binding_error(
+        section_type,
+        KernelBindingError::InvalidSymbolTable(
+            "section header zero is not an all-zero SHT_NULL record",
+        ),
+    );
+
+    let mut section_offset = fixture.bytes.clone();
+    write_u64(&mut section_offset, fixture.section_header_zero + 24, 1);
+    assert_binding_error(
+        section_offset,
+        KernelBindingError::InvalidSymbolTable(
+            "section header zero is not an all-zero SHT_NULL record",
+        ),
+    );
+}
+
+#[test]
+fn rejects_missing_duplicate_and_mistyped_exact_symbols() {
+    let fixture = binding_fixture(valid_kernel("vecadd", "vecadd.kd"));
+
+    let mut missing_descriptor = fixture.bytes.clone();
+    write_u32(
+        &mut missing_descriptor,
+        fixture.descriptor_symbol,
+        fixture.other_name_index,
+    );
+    assert_binding_error(
+        missing_descriptor,
+        KernelBindingError::MissingDescriptorSymbol,
+    );
+
+    let mut duplicate_descriptor = fixture.bytes.clone();
+    let descriptor =
+        duplicate_descriptor[fixture.descriptor_symbol..fixture.descriptor_symbol + 24].to_vec();
+    duplicate_descriptor[fixture.spare_symbol..fixture.spare_symbol + 24]
+        .copy_from_slice(&descriptor);
+    assert_binding_error(
+        duplicate_descriptor,
+        KernelBindingError::AmbiguousDescriptorSymbol,
+    );
+
+    let mut descriptor_type = fixture.bytes.clone();
+    descriptor_type[fixture.descriptor_symbol + 4] = 0x12;
+    assert_binding_error(
+        descriptor_type,
+        KernelBindingError::InvalidDescriptorSymbol("symbol type is not STT_OBJECT"),
+    );
+
+    let mut descriptor_size = fixture.bytes.clone();
+    write_u64(&mut descriptor_size, fixture.descriptor_symbol + 16, 63);
+    assert_binding_error(
+        descriptor_size,
+        KernelBindingError::InvalidDescriptorSymbol("symbol size is not 64 bytes"),
+    );
+
+    let mut descriptor_alignment = fixture.bytes.clone();
+    write_u64(
+        &mut descriptor_alignment,
+        fixture.descriptor_symbol + 8,
+        fixture.descriptor_address + 8,
+    );
+    assert_binding_error(
+        descriptor_alignment,
+        KernelBindingError::InvalidDescriptorSymbol("symbol address is not 64-byte aligned"),
+    );
+
+    let mut missing_entry = fixture.bytes.clone();
+    write_u32(
+        &mut missing_entry,
+        fixture.entry_symbol,
+        fixture.other_name_index,
+    );
+    assert_binding_error(missing_entry, KernelBindingError::MissingEntrySymbol);
+
+    let mut duplicate_entry = fixture.bytes.clone();
+    let entry = duplicate_entry[fixture.entry_symbol..fixture.entry_symbol + 24].to_vec();
+    duplicate_entry[fixture.spare_symbol..fixture.spare_symbol + 24].copy_from_slice(&entry);
+    assert_binding_error(duplicate_entry, KernelBindingError::AmbiguousEntrySymbol);
+
+    let mut entry_type = fixture.bytes.clone();
+    entry_type[fixture.entry_symbol + 4] = 0x11;
+    assert_binding_error(
+        entry_type,
+        KernelBindingError::InvalidEntrySymbol("symbol type is not STT_FUNC"),
+    );
+
+    let mut entry_size = fixture.bytes.clone();
+    write_u64(&mut entry_size, fixture.entry_symbol + 16, 0);
+    assert_binding_error(
+        entry_size,
+        KernelBindingError::InvalidEntrySymbol("function symbol has zero size"),
+    );
+
+    let mut unsupported_other = fixture.bytes.clone();
+    unsupported_other[fixture.descriptor_symbol + 5] = 4;
+    assert_binding_error(
+        unsupported_other,
+        KernelBindingError::InvalidDescriptorSymbol(
+            "descriptor or entry symbol has unsupported st_other bits",
+        ),
+    );
+
+    let mut visibility = fixture.bytes.clone();
+    visibility[fixture.descriptor_symbol + 5] = 1;
+    assert_binding_error(
+        visibility,
+        KernelBindingError::InvalidDescriptorSymbol(
+            "descriptor and entry symbol visibility is inconsistent",
+        ),
+    );
+}
+
+#[test]
+fn requires_256_byte_aligned_entry_symbol_addresses() {
+    let fixture = binding_fixture(valid_kernel("vecadd", "vecadd.kd"));
+    let mut bytes = fixture.bytes.clone();
+    let unaligned_entry_address = fixture.entry_address + 4;
+    write_u64(
+        &mut bytes,
+        fixture.entry_symbol + 8,
+        unaligned_entry_address,
+    );
+    write_u64(
+        &mut bytes,
+        fixture.text_header + 16,
+        unaligned_entry_address,
+    );
+    write_u64(
+        &mut bytes,
+        fixture.second_program_header + 16,
+        unaligned_entry_address,
+    );
+    write_u64(&mut bytes, fixture.second_program_header + 48, 1);
+    write_i64(
+        &mut bytes,
+        fixture.descriptor_offset + 16,
+        i64::try_from(unaligned_entry_address - fixture.descriptor_address).unwrap(),
+    );
+    assert_binding_error(
+        bytes,
+        KernelBindingError::InvalidEntrySymbol("function address is not 256-byte aligned"),
+    );
+}
+
+#[test]
+fn restricts_kernel_symbols_to_compatible_global_or_weak_bindings() {
+    let fixture = binding_fixture(valid_kernel("vecadd", "vecadd.kd"));
+
+    let mut weak = fixture.bytes.clone();
+    weak[fixture.entry_symbol + 4] = 0x22;
+    weak[fixture.descriptor_symbol + 4] = 0x21;
+    inspect_and_bind_kernel_descriptors(&weak).unwrap();
+
+    let mut mixed_global_weak = fixture.bytes.clone();
+    mixed_global_weak[fixture.descriptor_symbol + 4] = 0x21;
+    assert_binding_error(
+        mixed_global_weak,
+        KernelBindingError::InvalidDescriptorSymbol("descriptor and entry symbol bindings differ"),
+    );
+
+    let mut local = fixture.bytes.clone();
+    write_u32(&mut local, fixture.symtab_header + 44, 3);
+    local[fixture.entry_symbol + 4] = 0x02;
+    local[fixture.descriptor_symbol + 4] = 0x01;
+    assert_binding_error(
+        local,
+        KernelBindingError::InvalidDescriptorSymbol("symbol binding is not STB_GLOBAL or STB_WEAK"),
+    );
+
+    let mut os_reserved = fixture.bytes.clone();
+    os_reserved[fixture.descriptor_symbol + 4] = 0xa1;
+    assert_binding_error(
+        os_reserved,
+        KernelBindingError::InvalidDescriptorSymbol("symbol binding is not STB_GLOBAL or STB_WEAK"),
+    );
+
+    let mut processor_reserved = fixture.bytes.clone();
+    processor_reserved[fixture.entry_symbol + 4] = 0xd2;
+    assert_binding_error(
+        processor_reserved,
+        KernelBindingError::InvalidEntrySymbol("symbol binding is not STB_GLOBAL or STB_WEAK"),
+    );
+}
+
+#[test]
+fn rejects_wrong_symbol_sections_and_load_mappings() {
+    let fixture = binding_fixture(valid_kernel("vecadd", "vecadd.kd"));
+
+    let mut descriptor_section = fixture.bytes.clone();
+    write_u64(&mut descriptor_section, fixture.rodata_header + 8, 0x3);
+    assert_binding_error(
+        descriptor_section,
+        KernelBindingError::InvalidDescriptorSymbol(
+            "descriptor section is not uncompressed read-only allocated PROGBITS",
+        ),
+    );
+
+    let mut descriptor_section_alignment = fixture.bytes.clone();
+    write_u64(
+        &mut descriptor_section_alignment,
+        fixture.rodata_header + 48,
+        32,
+    );
+    assert_binding_error(
+        descriptor_section_alignment,
+        KernelBindingError::InvalidDescriptorSymbol(
+            "descriptor section alignment is less than 64 bytes",
+        ),
+    );
+
+    let mut entry_section = fixture.bytes.clone();
+    write_u64(&mut entry_section, fixture.text_header + 8, 0x2);
+    assert_binding_error(
+        entry_section,
+        KernelBindingError::InvalidEntrySymbol(
+            "entry section is not uncompressed read-only executable PROGBITS",
+        ),
+    );
+
+    let mut entry_section_alignment = fixture.bytes.clone();
+    write_u64(&mut entry_section_alignment, fixture.text_header + 48, 3);
+    assert_binding_error(
+        entry_section_alignment,
+        KernelBindingError::InvalidEntrySymbol("entry section alignment is invalid"),
+    );
+
+    let mut descriptor_unmapped = fixture.bytes.clone();
+    write_u64(
+        &mut descriptor_unmapped,
+        fixture.first_program_header + 32,
+        fixture.descriptor_offset as u64 + 63,
+    );
+    write_u64(
+        &mut descriptor_unmapped,
+        fixture.first_program_header + 40,
+        fixture.descriptor_offset as u64 + 63,
+    );
+    assert_binding_error(
+        descriptor_unmapped,
+        KernelBindingError::InvalidLoadMapping(
+            "requested virtual range only partially intersects PT_LOAD",
+        ),
+    );
+
+    let mut descriptor_executable = fixture.bytes.clone();
+    write_u32(
+        &mut descriptor_executable,
+        fixture.first_program_header + 4,
+        5,
+    );
+    assert_binding_error(
+        descriptor_executable,
+        KernelBindingError::InvalidLoadMapping("mapped PT_LOAD has inappropriate permissions"),
+    );
+
+    let mut entry_writable = fixture.bytes.clone();
+    write_u32(&mut entry_writable, fixture.second_program_header + 4, 7);
+    assert_binding_error(
+        entry_writable,
+        KernelBindingError::InvalidLoadMapping("mapped PT_LOAD has inappropriate permissions"),
+    );
+
+    let mut overlap = fixture.bytes.clone();
+    write_u64(
+        &mut overlap,
+        fixture.text_header + 24,
+        fixture.descriptor_offset as u64,
+    );
+    write_u64(
+        &mut overlap,
+        fixture.second_program_header + 8,
+        fixture.descriptor_offset as u64,
+    );
+    write_u64(&mut overlap, fixture.second_program_header + 48, 1);
+    assert_binding_error(
+        overlap,
+        KernelBindingError::InvalidLoadMapping("descriptor and entry file ranges overlap"),
+    );
+}
+
+#[test]
+fn rejects_additional_pt_load_memory_intersections_including_zero_fill() {
+    let fixture = binding_fixture(valid_kernel("vecadd", "vecadd.kd"));
+
+    let mut zero_fill_overlap = fixture.bytes.clone();
+    write_zero_fill_load(
+        &mut zero_fill_overlap,
+        fixture.third_program_header,
+        4,
+        fixture.descriptor_address,
+        64,
+    );
+    assert_binding_error(
+        zero_fill_overlap,
+        KernelBindingError::InvalidLoadMapping("address has ambiguous PT_LOAD memory mappings"),
+    );
+
+    let mut wrong_permissions = fixture.bytes.clone();
+    write_zero_fill_load(
+        &mut wrong_permissions,
+        fixture.third_program_header,
+        6,
+        fixture.descriptor_address,
+        64,
+    );
+    assert_binding_error(
+        wrong_permissions,
+        KernelBindingError::InvalidLoadMapping("mapped PT_LOAD has inappropriate permissions"),
+    );
+
+    for (address, memory_size) in [
+        (fixture.descriptor_address - 64, 64),
+        (fixture.descriptor_address + 64, 64),
+    ] {
+        let mut adjacent = fixture.bytes.clone();
+        write_zero_fill_load(
+            &mut adjacent,
+            fixture.third_program_header,
+            4,
+            address,
+            memory_size,
+        );
+        inspect_and_bind_kernel_descriptors(&adjacent).unwrap();
+    }
+
+    for (address, memory_size) in [
+        (fixture.descriptor_address - 64, 65),
+        (fixture.descriptor_address + 63, 64),
+    ] {
+        let mut one_byte_overlap = fixture.bytes.clone();
+        write_zero_fill_load(
+            &mut one_byte_overlap,
+            fixture.third_program_header,
+            4,
+            address,
+            memory_size,
+        );
+        assert_binding_error(
+            one_byte_overlap,
+            KernelBindingError::InvalidLoadMapping("address has ambiguous PT_LOAD memory mappings"),
+        );
+    }
+}
+
+#[test]
+fn uses_checked_signed_entry_address_arithmetic() {
+    let fixture = binding_fixture(valid_kernel("vecadd", "vecadd.kd"));
+
+    let mut mismatch = fixture.bytes.clone();
+    write_i64(&mut mismatch, fixture.descriptor_offset + 16, 4);
+    assert_binding_error(
+        mismatch,
+        KernelBindingError::InvalidKernelDescriptor(
+            "entry offset does not resolve to the function symbol",
+        ),
+    );
+
+    let mut underflow = fixture.bytes.clone();
+    write_i64(&mut underflow, fixture.descriptor_offset + 16, i64::MIN);
+    assert_binding_error(
+        underflow,
+        KernelBindingError::InvalidKernelDescriptor("entry address arithmetic overflows"),
+    );
+
+    let mut negative = binding_fixture(valid_kernel("vecadd", "vecadd.kd"));
+    let high_load_address = 0x4000;
+    let high_descriptor_address = high_load_address + negative.descriptor_offset as u64;
+    write_u64(
+        &mut negative.bytes,
+        negative.first_program_header + 16,
+        high_load_address,
+    );
+    write_u64(
+        &mut negative.bytes,
+        negative.rodata_header + 16,
+        high_descriptor_address,
+    );
+    write_u64(
+        &mut negative.bytes,
+        negative.descriptor_symbol + 8,
+        high_descriptor_address,
+    );
+    write_i64(
+        &mut negative.bytes,
+        negative.descriptor_offset + 16,
+        i64::try_from(negative.entry_address).unwrap()
+            - i64::try_from(high_descriptor_address).unwrap(),
+    );
+    let bound = inspect_and_bind_kernel_descriptors(&negative.bytes).unwrap();
+    assert!(
+        bound.bindings()[0]
+            .descriptor()
+            .kernel_code_entry_byte_offset()
+            < 0
+    );
+
+    let mut overflow = binding_fixture(valid_kernel("vecadd", "vecadd.kd"));
+    let descriptor_address = u64::MAX - 127;
+    let load_address = descriptor_address - overflow.descriptor_offset as u64;
+    write_u64(
+        &mut overflow.bytes,
+        overflow.first_program_header + 16,
+        load_address,
+    );
+    write_u64(&mut overflow.bytes, overflow.first_program_header + 48, 1);
+    write_u64(
+        &mut overflow.bytes,
+        overflow.rodata_header + 16,
+        descriptor_address,
+    );
+    write_u64(
+        &mut overflow.bytes,
+        overflow.descriptor_symbol + 8,
+        descriptor_address,
+    );
+    write_i64(
+        &mut overflow.bytes,
+        overflow.descriptor_offset + 16,
+        i64::MAX,
+    );
+    assert_binding_error(
+        overflow.bytes,
+        KernelBindingError::InvalidKernelDescriptor("entry address arithmetic overflows"),
+    );
+}
+
+#[test]
+fn rejects_reserved_descriptor_bytes_bits_and_preload() {
+    let fixture = binding_fixture(valid_kernel("vecadd", "vecadd.kd"));
+    for relative in (12..16).chain(24..44).chain(60..64) {
+        let mut bytes = fixture.bytes.clone();
+        bytes[fixture.descriptor_offset + relative] = 1;
+        assert_binding_error(
+            bytes,
+            KernelBindingError::InvalidKernelDescriptor("reserved descriptor bytes are nonzero"),
+        );
+    }
+    for bit in [7, 8, 9, 12, 13, 14, 15] {
+        let mut bytes = fixture.bytes.clone();
+        let properties = read_u16(&bytes, fixture.descriptor_offset + 56) | (1 << bit);
+        write_u16(&mut bytes, fixture.descriptor_offset + 56, properties);
+        assert_binding_error(
+            bytes,
+            KernelBindingError::InvalidKernelDescriptor(
+                "reserved kernel-code-property bits are nonzero",
+            ),
+        );
+    }
+
+    let mut preload = fixture.bytes.clone();
+    write_u16(&mut preload, fixture.descriptor_offset + 58, 1);
+    assert_binding_error(
+        preload,
+        KernelBindingError::InvalidKernelDescriptor("kernarg preload is unsupported"),
+    );
+
+    for (field_offset, bit, reason) in [
+        (
+            48,
+            28,
+            "reserved or unsupported COMPUTE_PGM_RSRC1 bits are nonzero",
+        ),
+        (
+            52,
+            31,
+            "HSA-fixed or reserved COMPUTE_PGM_RSRC2 bits are nonzero",
+        ),
+        (44, 12, "target-reserved COMPUTE_PGM_RSRC3 bits are nonzero"),
+    ] {
+        let mut bytes = fixture.bytes.clone();
+        let value = read_u32(&bytes, fixture.descriptor_offset + field_offset) | (1 << bit);
+        write_u32(&mut bytes, fixture.descriptor_offset + field_offset, value);
+        assert_binding_error(bytes, KernelBindingError::InvalidKernelDescriptor(reason));
+    }
+
+    let mut gfx9_document = metadata((1, 2), vec![valid_kernel("vecadd", "vecadd.kd")]);
+    let kernels = &mut as_map_mut(&mut gfx9_document)
+        .iter_mut()
+        .find(|(key, _)| key.as_str() == Some("amdhsa.kernels"))
+        .unwrap()
+        .1;
+    let Value::Array(kernels) = kernels else {
+        panic!("expected kernels array");
+    };
+    set_field(&mut kernels[0], ".vgpr_count", Value::from(11));
+    set_field(
+        &mut gfx9_document,
+        "amdhsa.target",
+        Value::from("amdgcn-amd-amdhsa--gfx942"),
+    );
+    let mut gfx9 = binding_fixture_for_document(gfx9_document);
+    write_u32(&mut gfx9.bytes, 48, 0x54c);
+    write_u32(&mut gfx9.bytes, gfx9.descriptor_offset + 44, 1);
+    write_u32(&mut gfx9.bytes, gfx9.descriptor_offset + 48, 0x00af_0081);
+    assert_binding_error(
+        gfx9.bytes,
+        KernelBindingError::InvalidKernelDescriptor("wave32 property is reserved before GFX10"),
+    );
+}
+
+#[test]
+fn cross_checks_descriptor_metadata_and_resource_invariants() {
+    let fixture = binding_fixture(valid_kernel("vecadd", "vecadd.kd"));
+    for (offset, value, field) in [
+        (0, 1, ".group_segment_fixed_size"),
+        (4, 0, ".private_segment_fixed_size"),
+        (8, 271, ".kernarg_segment_size"),
+    ] {
+        let mut bytes = fixture.bytes.clone();
+        write_u32(&mut bytes, fixture.descriptor_offset + offset, value);
+        assert_binding_error(bytes, KernelBindingError::MetadataMismatch(field));
+    }
+
+    let mut wave = fixture.bytes.clone();
+    write_u16(&mut wave, fixture.descriptor_offset + 56, 0x001e);
+    assert_binding_error(
+        wave,
+        KernelBindingError::MetadataMismatch(".wavefront_size"),
+    );
+
+    let mut dynamic = fixture.bytes.clone();
+    write_u16(&mut dynamic, fixture.descriptor_offset + 56, 0x0c1e);
+    assert_binding_error(
+        dynamic,
+        KernelBindingError::MetadataMismatch(".uses_dynamic_stack"),
+    );
+
+    let mut private_enable = fixture.bytes.clone();
+    write_u32(&mut private_enable, fixture.descriptor_offset + 52, 0x1390);
+    assert_binding_error(
+        private_enable,
+        KernelBindingError::MetadataMismatch("private-segment enablement"),
+    );
+
+    let mut wgp = fixture.bytes.clone();
+    write_u32(&mut wgp, fixture.descriptor_offset + 48, 0xc0af_0000);
+    assert_binding_error(
+        wgp,
+        KernelBindingError::MetadataMismatch(".workgroup_processor_mode"),
+    );
+
+    let mut high_vgpr = valid_kernel("vecadd", "vecadd.kd");
+    set_field(&mut high_vgpr, ".vgpr_count", Value::from(9));
+    let high_vgpr = binding_fixture(high_vgpr);
+    assert_binding_error(
+        high_vgpr.bytes,
+        KernelBindingError::MetadataMismatch(".vgpr_count"),
+    );
+}
+
+#[test]
+fn rejects_legacy_scratch_properties_on_architected_flat_scratch_targets() {
+    for processor in ["gfx1151", "gfx942", "gfx950", "gfx1250"] {
+        let valid = binding_fixture_for_target(processor, 14);
+        inspect_and_bind_kernel_descriptors(&valid.bytes).unwrap();
+
+        for property_bit in [0, 5] {
+            let mut bytes = valid.bytes.clone();
+            let properties = read_u16(&bytes, valid.descriptor_offset + 56) | (1 << property_bit);
+            write_u16(&mut bytes, valid.descriptor_offset + 56, properties);
+            assert_binding_error(
+                bytes,
+                KernelBindingError::InvalidKernelDescriptor(
+                    "architected flat scratch forbids private-buffer and flat-scratch-init properties",
+                ),
+            );
+        }
+    }
+}
+
+#[test]
+fn enforces_pinned_sgpr_capacity_and_pre_gfx10_encoding() {
+    for processor in ["gfx1151", "gfx1250"] {
+        let accepted = binding_fixture_for_target(processor, 128);
+        inspect_and_bind_kernel_descriptors(&accepted.bytes).unwrap();
+
+        let rejected = binding_fixture_for_target(processor, 129);
+        assert_binding_error(
+            rejected.bytes,
+            KernelBindingError::MetadataMismatch(".sgpr_count"),
+        );
+    }
+
+    let gfx942_boundary = binding_fixture_for_target("gfx942", 24);
+    assert_eq!(
+        (read_u32(
+            &gfx942_boundary.bytes,
+            gfx942_boundary.descriptor_offset + 48
+        ) >> 6)
+            & 0xf,
+        2
+    );
+    inspect_and_bind_kernel_descriptors(&gfx942_boundary.bytes).unwrap();
+
+    let gfx942_too_many = binding_fixture_for_target("gfx942", 25);
+    assert_binding_error(
+        gfx942_too_many.bytes,
+        KernelBindingError::MetadataMismatch(".sgpr_count"),
+    );
+
+    let mut gfx942_max = binding_fixture_for_target("gfx942", 112);
+    set_sgpr_block_field(&mut gfx942_max, 13);
+    inspect_and_bind_kernel_descriptors(&gfx942_max.bytes).unwrap();
+
+    let mut gfx942_over_max = binding_fixture_for_target("gfx942", 113);
+    set_sgpr_block_field(&mut gfx942_over_max, 13);
+    assert_binding_error(
+        gfx942_over_max.bytes,
+        KernelBindingError::MetadataMismatch(".sgpr_count"),
+    );
+
+    for processor in ["gfx600", "gfx700", "gfx803", "gfx900", "gfx942"] {
+        let mut odd_field = binding_fixture_for_target(processor, 32);
+        set_sgpr_block_field(&mut odd_field, 3);
+        inspect_and_bind_kernel_descriptors(&odd_field.bytes)
+            .unwrap_or_else(|error| panic!("{processor}: {error:?}"));
+
+        let mut over_limit = binding_fixture_for_target(processor, 32);
+        set_sgpr_block_field(&mut over_limit, 14);
+        assert_binding_error(
+            over_limit.bytes,
+            KernelBindingError::InvalidKernelDescriptor(
+                "pre-GFX10 SGPR block field exceeds the pinned 112-register limit",
+            ),
+        );
+    }
+
+    let unpinned = binding_fixture_for_target("gfx1310", 14);
+    assert_binding_error(
+        unpinned.bytes,
+        KernelBindingError::InvalidKernelDescriptor("target SGPR capacity is not pinned"),
+    );
+}
+
+#[test]
+fn requires_a_binding_for_every_metadata_kernel() {
+    let document = metadata(
+        (1, 2),
+        vec![
+            valid_kernel("vecadd", "vecadd.kd"),
+            valid_kernel("other_kernel", "other_kernel.kd"),
+        ],
+    );
+    let fixture = binding_fixture_for_document(document);
+    assert_binding_error(fixture.bytes, KernelBindingError::MissingDescriptorSymbol);
+}
+
+#[test]
+fn preserves_observed_gfx1151_gfx942_and_gfx950_descriptor_words() {
+    let mut local_kernel = valid_kernel("vecadd", "vecadd.kd");
+    set_field(&mut local_kernel, ".kernarg_segment_size", Value::from(304));
+    let mut fixture = binding_fixture(local_kernel);
+    write_u32(&mut fixture.bytes, fixture.descriptor_offset + 8, 304);
+    let local = inspect_and_bind_kernel_descriptors(&fixture.bytes).unwrap();
+    let local_binding = local.bindings()[0];
+    assert_eq!(local_binding.descriptor_address(), 0x9c0);
+    assert_eq!(local_binding.entry_address(), 0x1a00);
+    let local = local_binding.descriptor();
+    assert_eq!(
+        (
+            local.private_segment_fixed_size(),
+            local.kernarg_size(),
+            local.compute_pgm_rsrc3(),
+            local.compute_pgm_rsrc1(),
+            local.compute_pgm_rsrc2(),
+            local.kernel_code_properties(),
+        ),
+        (16, 304, 0x40, 0xe0af_0000, 0x1391, 0x041e)
+    );
+    assert_eq!(local.kernel_code_entry_byte_offset(), 0x1040);
+
+    for target in ["gfx942", "gfx950"] {
+        let mut kernel = valid_kernel("vecadd", "vecadd.kd");
+        set_field(&mut kernel, ".private_segment_fixed_size", Value::from(0));
+        set_field(&mut kernel, ".kernarg_segment_size", Value::from(288));
+        set_field(&mut kernel, ".wavefront_size", Value::from(64));
+        set_field(&mut kernel, ".vgpr_count", Value::from(11));
+        remove_field(&mut kernel, ".workgroup_processor_mode");
+        let mut document = metadata((1, 2), vec![kernel]);
+        set_field(
+            &mut document,
+            "amdhsa.target",
+            Value::from(format!("amdgcn-amd-amdhsa--{target}")),
+        );
+        let mut fixture = binding_fixture_for_document_at(document, 0x900);
+        write_u32(
+            &mut fixture.bytes,
+            48,
+            if target == "gfx942" { 0x54c } else { 0x54f },
+        );
+        write_u32(&mut fixture.bytes, fixture.descriptor_offset + 4, 0);
+        write_u32(&mut fixture.bytes, fixture.descriptor_offset + 8, 288);
+        write_u32(&mut fixture.bytes, fixture.descriptor_offset + 44, 1);
+        write_u32(
+            &mut fixture.bytes,
+            fixture.descriptor_offset + 48,
+            0x00af_0081,
+        );
+        write_u32(&mut fixture.bytes, fixture.descriptor_offset + 52, 0x1390);
+        write_u16(&mut fixture.bytes, fixture.descriptor_offset + 56, 0x001e);
+        let bound = inspect_and_bind_kernel_descriptors(&fixture.bytes).unwrap();
+        let binding = bound.bindings()[0];
+        assert_eq!(binding.descriptor_address(), 0x900);
+        assert_eq!(binding.entry_address(), 0x1a00);
+        let descriptor = binding.descriptor();
+        assert_eq!(descriptor.private_segment_fixed_size(), 0);
+        assert_eq!(descriptor.kernarg_size(), 288);
+        assert_eq!(descriptor.compute_pgm_rsrc3(), 1);
+        assert_eq!(descriptor.compute_pgm_rsrc1(), 0x00af_0081);
+        assert_eq!(descriptor.compute_pgm_rsrc2(), 0x1390);
+        assert_eq!(descriptor.kernel_code_properties(), 0x001e);
+        assert_eq!(descriptor.kernel_code_entry_byte_offset(), 0x1100);
+    }
+}
+
+#[test]
 #[ignore = "requires FE2O3_TEST_HSACO to name a generated vecadd HSACO"]
 fn inspects_real_generated_vecadd_hsaco() {
     let path = env::var("FE2O3_TEST_HSACO").expect("set FE2O3_TEST_HSACO");
@@ -1054,6 +1969,9 @@ fn inspects_real_generated_vecadd_hsaco() {
         .expect("FE2O3_TEST_WAVEFRONT must be a u32");
     let bytes = fs::read(path).unwrap();
     let inspected = inspect(&bytes).unwrap();
+    let bound = inspect_and_bind_kernel_descriptors(&bytes).unwrap();
+    assert_eq!(bound.inspection(), &inspected);
+    assert_eq!(bound.bindings().len(), inspected.kernels().len());
     assert_eq!(inspected.target().to_string(), expected_target);
     assert!(!inspected.has_printf_metadata());
 
@@ -1092,6 +2010,35 @@ fn inspects_real_generated_vecadd_hsaco() {
     assert_eq!(kernel.device_enqueue_symbol(), None);
     assert_eq!(kernel.implicit_argument_offset(), Some(48));
     assert_eq!(kernel.implicit_argument_size(), 256);
+
+    let descriptor = bound.bindings()[0].descriptor();
+    assert_eq!(descriptor.group_segment_fixed_size(), 0);
+    assert_eq!(
+        u64::from(descriptor.private_segment_fixed_size()),
+        kernel.private_segment_fixed_size()
+    );
+    assert_eq!(
+        u64::from(descriptor.kernarg_size()),
+        kernel.kernarg_segment_size()
+    );
+    assert_eq!(descriptor.wavefront_size(), expected_wavefront);
+    assert_eq!(descriptor.uses_dynamic_stack(), kernel.uses_dynamic_stack());
+    assert_eq!(descriptor.kernarg_preload(), 0);
+    match processor {
+        "gfx1151" => {
+            assert_eq!(descriptor.compute_pgm_rsrc3(), 0x40);
+            assert_eq!(descriptor.compute_pgm_rsrc1(), 0xe0af_0000);
+            assert_eq!(descriptor.compute_pgm_rsrc2(), 0x1391);
+            assert_eq!(descriptor.kernel_code_properties(), 0x041e);
+        }
+        "gfx942" | "gfx950" => {
+            assert_eq!(descriptor.compute_pgm_rsrc3(), 1);
+            assert_eq!(descriptor.compute_pgm_rsrc1(), 0x00af_0081);
+            assert_eq!(descriptor.compute_pgm_rsrc2(), 0x1390);
+            assert_eq!(descriptor.kernel_code_properties(), 0x001e);
+        }
+        _ => {}
+    }
 
     let explicit = kernel.explicit_arguments();
     assert_eq!(explicit.len(), 6);
@@ -1544,6 +2491,312 @@ fn add_note_segment(bytes: &mut Vec<u8>, note_offset: usize, note_size: usize) {
     write_u64(bytes, program_header + 48, 4);
 }
 
+struct BindingFixture {
+    bytes: Vec<u8>,
+    descriptor_offset: usize,
+    descriptor_address: u64,
+    entry_offset: usize,
+    entry_address: u64,
+    first_program_header: usize,
+    second_program_header: usize,
+    third_program_header: usize,
+    rodata_header: usize,
+    text_header: usize,
+    section_header_zero: usize,
+    strtab_header: usize,
+    symtab_header: usize,
+    symtab_offset: usize,
+    entry_symbol: usize,
+    descriptor_symbol: usize,
+    spare_symbol: usize,
+    other_name: usize,
+    other_name_index: u32,
+    strtab_end: usize,
+}
+
+fn binding_fixture(kernel: Value) -> BindingFixture {
+    binding_fixture_for_document(metadata((1, 2), vec![kernel]))
+}
+
+fn binding_fixture_for_target(processor: &str, sgpr_count: u32) -> BindingFixture {
+    let mut kernel = valid_kernel("vecadd", "vecadd.kd");
+    set_field(&mut kernel, ".sgpr_count", Value::from(sgpr_count));
+    if matches!(
+        processor,
+        "gfx600" | "gfx700" | "gfx803" | "gfx900" | "gfx942" | "gfx950"
+    ) {
+        set_field(&mut kernel, ".wavefront_size", Value::from(64));
+    }
+    if matches!(
+        processor,
+        "gfx600" | "gfx700" | "gfx803" | "gfx900" | "gfx942" | "gfx950"
+    ) {
+        set_field(&mut kernel, ".vgpr_count", Value::from(11));
+        remove_field(&mut kernel, ".workgroup_processor_mode");
+    }
+    let mut document = metadata((1, 2), vec![kernel]);
+    set_field(
+        &mut document,
+        "amdhsa.target",
+        Value::from(format!("amdgcn-amd-amdhsa--{processor}")),
+    );
+    let mut fixture = binding_fixture_for_document(document);
+    let elf_flags = match processor {
+        "gfx600" => 0x20,
+        "gfx700" => 0x22,
+        "gfx803" => 0x2a,
+        "gfx900" => 0x12c,
+        "gfx942" => 0x54c,
+        "gfx950" => 0x54f,
+        "gfx1151" => 0x4a,
+        "gfx1250" => 0x449,
+        "gfx1310" => 0x50,
+        _ => panic!("unsupported test processor {processor}"),
+    };
+    write_u32(&mut fixture.bytes, 48, elf_flags);
+    if matches!(processor, "gfx942" | "gfx950") {
+        write_u32(&mut fixture.bytes, fixture.descriptor_offset + 44, 1);
+        write_u32(
+            &mut fixture.bytes,
+            fixture.descriptor_offset + 48,
+            0x00af_0081,
+        );
+        write_u16(&mut fixture.bytes, fixture.descriptor_offset + 56, 0x001e);
+    } else if matches!(processor, "gfx600" | "gfx700" | "gfx803" | "gfx900") {
+        write_u32(&mut fixture.bytes, fixture.descriptor_offset + 44, 0);
+        write_u32(
+            &mut fixture.bytes,
+            fixture.descriptor_offset + 48,
+            0x0000_0042,
+        );
+        write_u16(&mut fixture.bytes, fixture.descriptor_offset + 56, 0x001e);
+    }
+    fixture
+}
+
+fn set_sgpr_block_field(fixture: &mut BindingFixture, encoded_blocks: u32) {
+    let offset = fixture.descriptor_offset + 48;
+    let rsrc1 = (read_u32(&fixture.bytes, offset) & !(0xf << 6)) | (encoded_blocks << 6);
+    write_u32(&mut fixture.bytes, offset, rsrc1);
+}
+
+fn binding_fixture_for_document(document: Value) -> BindingFixture {
+    binding_fixture_for_document_at(document, 0x9c0)
+}
+
+fn binding_fixture_for_document_at(document: Value, descriptor_offset: usize) -> BindingFixture {
+    const PROGRAM_HEADER_BYTES: usize = 56;
+    const PROGRAM_COUNT: usize = 3;
+    const SECTION_COUNT: usize = 7;
+
+    let note = metadata_note(&encode(&document));
+    let first_program_header = ELF_HEADER_BYTES;
+    let second_program_header = first_program_header + PROGRAM_HEADER_BYTES;
+    let third_program_header = second_program_header + PROGRAM_HEADER_BYTES;
+    let mut bytes = vec![0; ELF_HEADER_BYTES + PROGRAM_COUNT * PROGRAM_HEADER_BYTES];
+    align(&mut bytes, 64);
+    let note_offset = bytes.len();
+    bytes.extend_from_slice(&note);
+    align(&mut bytes, 64);
+    assert!(bytes.len() <= descriptor_offset);
+    bytes.resize(descriptor_offset, 0);
+    bytes.resize(descriptor_offset + 64, 0);
+    align(&mut bytes, 256);
+    let entry_offset = bytes.len();
+    bytes.resize(entry_offset + 64, 0xbf);
+    let entry_address = entry_offset as u64 + 0x1000;
+    let descriptor_address = descriptor_offset as u64;
+
+    let strtab = b"\0vecadd\0vecadd.kd\0other\0";
+    let entry_name_index = 1u32;
+    let descriptor_name_index = 8u32;
+    let other_name_index = 18u32;
+    let strtab_offset = bytes.len();
+    bytes.extend_from_slice(strtab);
+    let strtab_end = bytes.len();
+    let other_name = strtab_offset + other_name_index as usize;
+    align(&mut bytes, 8);
+
+    let symtab_offset = bytes.len();
+    bytes.resize(symtab_offset + 4 * 24, 0);
+    let entry_symbol = symtab_offset + 24;
+    write_u32(&mut bytes, entry_symbol, entry_name_index);
+    bytes[entry_symbol + 4] = 0x12;
+    bytes[entry_symbol + 5] = 3;
+    write_u16(&mut bytes, entry_symbol + 6, 3);
+    write_u64(&mut bytes, entry_symbol + 8, entry_address);
+    write_u64(&mut bytes, entry_symbol + 16, 64);
+
+    let descriptor_symbol = symtab_offset + 48;
+    write_u32(&mut bytes, descriptor_symbol, descriptor_name_index);
+    bytes[descriptor_symbol + 4] = 0x11;
+    write_u16(&mut bytes, descriptor_symbol + 6, 2);
+    write_u64(&mut bytes, descriptor_symbol + 8, descriptor_address);
+    write_u64(&mut bytes, descriptor_symbol + 16, 64);
+
+    let spare_symbol = symtab_offset + 72;
+    write_u32(&mut bytes, spare_symbol, other_name_index);
+    bytes[spare_symbol + 4] = 0x10;
+    write_u16(&mut bytes, spare_symbol + 6, 0xfff1);
+
+    let shstrtab = b"\0.note\0.rodata\0.text\0.strtab\0.symtab\0.shstrtab\0";
+    let shstrtab_offset = bytes.len();
+    bytes.extend_from_slice(shstrtab);
+    align(&mut bytes, 8);
+    let section_offset = bytes.len();
+    bytes.resize(section_offset + SECTION_COUNT * SECTION_HEADER_BYTES, 0);
+
+    bytes[..4].copy_from_slice(b"\x7fELF");
+    bytes[4] = 2;
+    bytes[5] = 1;
+    bytes[6] = 1;
+    bytes[7] = 64;
+    bytes[8] = 4;
+    write_u16(&mut bytes, 16, 3);
+    write_u16(&mut bytes, 18, 224);
+    write_u32(&mut bytes, 20, 1);
+    write_u64(&mut bytes, 32, first_program_header as u64);
+    write_u64(&mut bytes, 40, section_offset as u64);
+    write_u32(&mut bytes, 48, 0x4a);
+    write_u16(&mut bytes, 52, 64);
+    write_u16(&mut bytes, 54, PROGRAM_HEADER_BYTES as u16);
+    write_u16(&mut bytes, 56, PROGRAM_COUNT as u16);
+    write_u16(&mut bytes, 58, SECTION_HEADER_BYTES as u16);
+    write_u16(&mut bytes, 60, SECTION_COUNT as u16);
+    write_u16(&mut bytes, 62, 6);
+
+    write_u32(&mut bytes, first_program_header, 1);
+    write_u32(&mut bytes, first_program_header + 4, 4);
+    write_u64(&mut bytes, first_program_header + 8, 0);
+    write_u64(&mut bytes, first_program_header + 16, 0);
+    write_u64(
+        &mut bytes,
+        first_program_header + 32,
+        (descriptor_offset + 64) as u64,
+    );
+    write_u64(
+        &mut bytes,
+        first_program_header + 40,
+        (descriptor_offset + 64) as u64,
+    );
+    write_u64(&mut bytes, first_program_header + 48, 0x1000);
+
+    write_u32(&mut bytes, second_program_header, 1);
+    write_u32(&mut bytes, second_program_header + 4, 5);
+    write_u64(&mut bytes, second_program_header + 8, entry_offset as u64);
+    write_u64(&mut bytes, second_program_header + 16, entry_address);
+    write_u64(&mut bytes, second_program_header + 32, 64);
+    write_u64(&mut bytes, second_program_header + 40, 64);
+    write_u64(&mut bytes, second_program_header + 48, 0x1000);
+
+    let note_header = section_offset + SECTION_HEADER_BYTES;
+    write_u32(&mut bytes, note_header, 1);
+    write_u32(&mut bytes, note_header + 4, 7);
+    write_u64(&mut bytes, note_header + 8, 2);
+    write_u64(&mut bytes, note_header + 16, note_offset as u64);
+    write_u64(&mut bytes, note_header + 24, note_offset as u64);
+    write_u64(&mut bytes, note_header + 32, note.len() as u64);
+    write_u64(&mut bytes, note_header + 48, 4);
+
+    let rodata_header = section_offset + 2 * SECTION_HEADER_BYTES;
+    write_u32(&mut bytes, rodata_header, 7);
+    write_u32(&mut bytes, rodata_header + 4, 1);
+    write_u64(&mut bytes, rodata_header + 8, 2);
+    write_u64(&mut bytes, rodata_header + 16, descriptor_address);
+    write_u64(&mut bytes, rodata_header + 24, descriptor_offset as u64);
+    write_u64(&mut bytes, rodata_header + 32, 64);
+    write_u64(&mut bytes, rodata_header + 48, 64);
+
+    let text_header = section_offset + 3 * SECTION_HEADER_BYTES;
+    write_u32(&mut bytes, text_header, 15);
+    write_u32(&mut bytes, text_header + 4, 1);
+    write_u64(&mut bytes, text_header + 8, 6);
+    write_u64(&mut bytes, text_header + 16, entry_address);
+    write_u64(&mut bytes, text_header + 24, entry_offset as u64);
+    write_u64(&mut bytes, text_header + 32, 64);
+    write_u64(&mut bytes, text_header + 48, 256);
+
+    let strtab_header = section_offset + 4 * SECTION_HEADER_BYTES;
+    write_u32(&mut bytes, strtab_header, 21);
+    write_u32(&mut bytes, strtab_header + 4, 3);
+    write_u64(&mut bytes, strtab_header + 24, strtab_offset as u64);
+    write_u64(&mut bytes, strtab_header + 32, strtab.len() as u64);
+    write_u64(&mut bytes, strtab_header + 48, 1);
+
+    let symtab_header = section_offset + 5 * SECTION_HEADER_BYTES;
+    write_u32(&mut bytes, symtab_header, 29);
+    write_u32(&mut bytes, symtab_header + 4, 2);
+    write_u64(&mut bytes, symtab_header + 24, symtab_offset as u64);
+    write_u64(&mut bytes, symtab_header + 32, 4 * 24);
+    write_u32(&mut bytes, symtab_header + 40, 4);
+    write_u32(&mut bytes, symtab_header + 44, 1);
+    write_u64(&mut bytes, symtab_header + 48, 8);
+    write_u64(&mut bytes, symtab_header + 56, 24);
+
+    let shstrtab_header = section_offset + 6 * SECTION_HEADER_BYTES;
+    write_u32(&mut bytes, shstrtab_header, 37);
+    write_u32(&mut bytes, shstrtab_header + 4, 3);
+    write_u64(&mut bytes, shstrtab_header + 24, shstrtab_offset as u64);
+    write_u64(&mut bytes, shstrtab_header + 32, shstrtab.len() as u64);
+    write_u64(&mut bytes, shstrtab_header + 48, 1);
+
+    write_u32(&mut bytes, descriptor_offset, 0);
+    write_u32(&mut bytes, descriptor_offset + 4, 16);
+    write_u32(&mut bytes, descriptor_offset + 8, 272);
+    write_i64(
+        &mut bytes,
+        descriptor_offset + 16,
+        i64::try_from(entry_address - descriptor_address).unwrap(),
+    );
+    write_u32(&mut bytes, descriptor_offset + 44, 0x40);
+    write_u32(&mut bytes, descriptor_offset + 48, 0xe0af_0000);
+    write_u32(&mut bytes, descriptor_offset + 52, 0x1391);
+    write_u16(&mut bytes, descriptor_offset + 56, 0x041e);
+
+    BindingFixture {
+        bytes,
+        descriptor_offset,
+        descriptor_address,
+        entry_offset,
+        entry_address,
+        first_program_header,
+        second_program_header,
+        third_program_header,
+        rodata_header,
+        text_header,
+        section_header_zero: section_offset,
+        strtab_header,
+        symtab_header,
+        symtab_offset,
+        entry_symbol,
+        descriptor_symbol,
+        spare_symbol,
+        other_name,
+        other_name_index,
+        strtab_end,
+    }
+}
+
+fn assert_binding_error(bytes: Vec<u8>, expected: KernelBindingError) {
+    assert_eq!(inspect_and_bind_kernel_descriptors(&bytes), Err(expected));
+}
+
+fn write_zero_fill_load(
+    bytes: &mut [u8],
+    program_header: usize,
+    flags: u32,
+    address: u64,
+    memory_size: u64,
+) {
+    write_u32(bytes, program_header, 1);
+    write_u32(bytes, program_header + 4, flags);
+    write_u64(bytes, program_header + 8, 0);
+    write_u64(bytes, program_header + 16, address);
+    write_u64(bytes, program_header + 32, 0);
+    write_u64(bytes, program_header + 40, memory_size);
+    write_u64(bytes, program_header + 48, 1);
+}
+
 fn align(bytes: &mut Vec<u8>, alignment: usize) {
     while !bytes.len().is_multiple_of(alignment) {
         bytes.push(0);
@@ -1560,6 +2813,18 @@ fn write_u32(bytes: &mut [u8], offset: usize, value: u32) {
 
 fn write_u64(bytes: &mut [u8], offset: usize, value: u64) {
     bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+}
+
+fn write_i64(bytes: &mut [u8], offset: usize, value: i64) {
+    bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+}
+
+fn read_u16(bytes: &[u8], offset: usize) -> u16 {
+    u16::from_le_bytes(bytes[offset..offset + 2].try_into().unwrap())
+}
+
+fn read_u32(bytes: &[u8], offset: usize) -> u32 {
+    u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap())
 }
 
 fn read_u64(bytes: &[u8], offset: usize) -> u64 {

@@ -3,12 +3,16 @@
 
 mod elf_inspection;
 mod error;
+mod kernel_binding;
 mod messagepack;
 mod metadata;
 
 use fe2o3_amd_target::AmdTargetId;
 
-pub use error::{InspectionError, MessagePackLimit};
+pub use error::{InspectionError, KernelBindingError, MessagePackLimit};
+pub use kernel_binding::{
+    AmdhsaKernelDescriptor, InspectedKernelBindings, KernelDescriptorBinding,
+};
 
 /// Maximum accepted HSACO size (64 MiB).
 pub const MAX_HSACO_BYTES: usize = 64 * 1024 * 1024;
@@ -38,6 +42,8 @@ pub const MAX_KERNELS: usize = 256;
 pub const MAX_ARGUMENTS_PER_KERNEL: usize = 512;
 /// Maximum accepted kernel argument segment size (1 MiB).
 pub const MAX_KERNARG_BYTES: u64 = 1024 * 1024;
+/// Maximum number of static ELF symbols scanned during explicit binding.
+pub const MAX_ELF_SYMBOLS: usize = 32 * 1024;
 
 /// AMDGPU HSA code object version encoded by the ELF ABI byte.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -486,6 +492,18 @@ pub fn inspect(bytes: &[u8]) -> Result<InspectedHsaco, InspectionError> {
         envelope.e_flags,
         envelope.metadata,
     )
+}
+
+/// Inspects one byte slice and explicitly binds every metadata kernel to its
+/// static ELF entry and 64-byte AMDHSA descriptor symbols.
+///
+/// This operation is deliberately separate from [`inspect`]. Its result is
+/// descriptive evidence only and cannot load a module or authorize a launch.
+pub fn inspect_and_bind_kernel_descriptors(
+    bytes: &[u8],
+) -> Result<InspectedKernelBindings, KernelBindingError> {
+    let inspection = inspect(bytes)?;
+    kernel_binding::bind(bytes, inspection)
 }
 
 pub(crate) struct ParsedExplicitArgument {

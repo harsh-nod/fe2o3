@@ -195,3 +195,74 @@ impl fmt::Display for MessagePackLimit {
 }
 
 impl core::error::Error for InspectionError {}
+
+/// Why explicit metadata-to-ELF kernel binding failed.
+///
+/// Binding errors never grant module-loading or dispatch authority. They only
+/// explain why the descriptive ELF evidence could not be tied to the metadata
+/// in the same byte slice.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum KernelBindingError {
+    Inspection(InspectionError),
+    InvalidSymbolTable(&'static str),
+    TooManySymbols,
+    MissingDescriptorSymbol,
+    AmbiguousDescriptorSymbol,
+    InvalidDescriptorSymbol(&'static str),
+    MissingEntrySymbol,
+    AmbiguousEntrySymbol,
+    InvalidEntrySymbol(&'static str),
+    InvalidLoadMapping(&'static str),
+    InvalidKernelDescriptor(&'static str),
+    MetadataMismatch(&'static str),
+}
+
+impl From<InspectionError> for KernelBindingError {
+    fn from(error: InspectionError) -> Self {
+        Self::Inspection(error)
+    }
+}
+
+impl fmt::Display for KernelBindingError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Inspection(error) => write!(formatter, "HSACO inspection failed: {error}"),
+            Self::InvalidSymbolTable(reason) => {
+                write!(formatter, "invalid ELF symbol table: {reason}")
+            }
+            Self::TooManySymbols => formatter.write_str("ELF has too many static symbols"),
+            Self::MissingDescriptorSymbol => {
+                formatter.write_str("metadata kernel descriptor symbol is missing")
+            }
+            Self::AmbiguousDescriptorSymbol => {
+                formatter.write_str("metadata kernel descriptor symbol is ambiguous")
+            }
+            Self::InvalidDescriptorSymbol(reason) => {
+                write!(formatter, "invalid kernel descriptor symbol: {reason}")
+            }
+            Self::MissingEntrySymbol => {
+                formatter.write_str("metadata kernel entry symbol is missing")
+            }
+            Self::AmbiguousEntrySymbol => {
+                formatter.write_str("metadata kernel entry symbol is ambiguous")
+            }
+            Self::InvalidEntrySymbol(reason) => {
+                write!(formatter, "invalid kernel entry symbol: {reason}")
+            }
+            Self::InvalidLoadMapping(reason) => {
+                write!(formatter, "invalid ELF load mapping: {reason}")
+            }
+            Self::InvalidKernelDescriptor(reason) => {
+                write!(formatter, "invalid AMDHSA kernel descriptor: {reason}")
+            }
+            Self::MetadataMismatch(field) => {
+                write!(
+                    formatter,
+                    "kernel descriptor disagrees with metadata field {field}"
+                )
+            }
+        }
+    }
+}
+
+impl core::error::Error for KernelBindingError {}

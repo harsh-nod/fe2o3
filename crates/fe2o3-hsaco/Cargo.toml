@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "Bounded, read-only HSACO metadata inspection for fe2o3."
+description = "Bounded, read-only HSACO metadata and kernel descriptor inspection for fe2o3."
 publish = false
 
 [lib]
