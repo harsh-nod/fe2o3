@@ -7,6 +7,12 @@
 //! private staging inode across pathname substitution, but is Linux-specific and does not
 //! constrain a hostile subprocess.
 //!
+//! Cargo-managed builds also use a bounded attempt registry. A generation and random build
+//! session are recorded before old producer outputs are invalidated; a backend may publish only
+//! while that exact generation is current. Both registries use the same pinned directory and
+//! exclusive lock. Attempt state prevents stale cooperating compilers from publishing, but it is
+//! coordination metadata rather than artifact or launch authority.
+//!
 //! The configured output directory is a generated-artifact namespace. Canonically named files
 //! without a registry owner are treated as legacy fe2o3 outputs: a successful transaction adopts
 //! them, while a failed transaction invalidates them so stale executable code cannot survive a
@@ -19,6 +25,10 @@
 //! not atomically visible as a unit: a crash during the rename sequence can leave a partial
 //! generation, which a later cooperating transaction will reconcile.
 
+mod attempt;
+
+pub use attempt::{AttemptCodecError, BuildAttempt, BuildInvocation, BuildSession};
+use attempt::{AttemptPhase, AttemptRegistry, MAX_ATTEMPT_BYTES, StartAttemptOutcome};
 use rustix::fd::{AsRawFd, OwnedFd};
 use rustix::fs::{
     AtFlags, Dir, FileType, FlockOperation, Mode, OFlags, flock, fstat, fsync, mkdirat, open,
@@ -60,6 +70,7 @@ pub enum EmitError {
     ArtifactOwnedByOtherProducer { kernel: String },
     OutputDirectoryChanged { path: PathBuf },
     SubprocessPathBoundary { reason: String },
+    BuildAttempt { reason: String },
     Transaction(Box<ArtifactTransactionError>),
 }
 
@@ -122,6 +133,9 @@ impl fmt::Display for EmitError {
                     "cannot establish pinned subprocess path boundary: {reason}"
                 )
             }
+            Self::BuildAttempt { reason } => {
+                write!(f, "invalid artifact build attempt: {reason}")
+            }
             Self::Transaction(error) => write!(f, "{error}"),
         }
     }
@@ -147,6 +161,8 @@ impl From<io::Error> for EmitError {
 const LOCK_FILE: &str = ".fe2o3-artifacts.lock";
 const OWNERSHIP_FILE: &str = ".fe2o3-owners-v1";
 const RECOVERY_OWNERSHIP_FILE: &str = ".fe2o3-owners-v1.recovery";
+const ATTEMPT_FILE: &str = ".fe2o3-attempts-v1";
+const RECOVERY_ATTEMPT_FILE: &str = ".fe2o3-attempts-v1.recovery";
 const STAGED_OWNERSHIP_FILE: &str = "owners-v1.next";
 const STAGING_PREFIX: &str = ".fe2o3-stage-";
 const OWNERSHIP_MAGIC: &[u8] = b"FE2O3-OWNERS-V1\0";
@@ -206,6 +222,140 @@ impl ProducerIdentity {
     fn for_test(crate_name: &str, source: &str) -> Self {
         Self::from_codegen(crate_name, Some(Path::new(source))).unwrap()
     }
+}
+
+/// Starts or resumes the durable artifact generation for one rustc invocation.
+///
+/// A new generation is recorded before this function invalidates the producer's prior owned
+/// artifacts. The generation becomes backend-authorized only after invalidation and ownership
+/// reconciliation are durable. Repeating this call for the same source, invocation, and session is
+/// idempotent while the attempt is active; a distinct invocation fingerprint supersedes it.
+/// Completed and failed invocations in the same session are terminal.
+pub fn begin_build_attempt(
+    output_dir: &Path,
+    producer: &ProducerIdentity,
+    invocation: BuildInvocation,
+    session: BuildSession,
+) -> Result<BuildAttempt, EmitError> {
+    if session == BuildSession::DIRECT {
+        return Err(build_attempt_error(
+            "the all-zero build session is reserved for direct compiler invocations",
+        ));
+    }
+    if invocation == BuildInvocation::DIRECT {
+        return Err(build_attempt_error(
+            "the all-zero build invocation is reserved for direct compiler invocations",
+        ));
+    }
+
+    let output = PinnedOutput::open(output_dir)?;
+    let _lock = output.lock()?;
+    output.verify_path_identity()?;
+    let mut attempts = read_attempt_registry(&output)?;
+    cleanup_abandoned_staging(&output)?;
+    if let Some(record) = attempts.record(&producer.stable_source)
+        && record.session == session
+        && record.crate_name != producer.crate_name
+    {
+        return Err(build_attempt_error(
+            "one source has conflicting crate names in the same build session",
+        ));
+    }
+    let outcome = attempts
+        .start_or_resume(
+            &producer.stable_source,
+            &producer.crate_name,
+            invocation,
+            session,
+        )
+        .map_err(build_attempt_error)?;
+    let attempt = match outcome {
+        StartAttemptOutcome::ReuseBuilding(attempt) => return Ok(attempt),
+        StartAttemptOutcome::New(attempt) => {
+            commit_attempt_registry_direct(&output, &attempts)?;
+            attempt
+        }
+        StartAttemptOutcome::ResumeInvalidating(attempt) => attempt,
+    };
+
+    invalidate_producer_ownership(&output, producer, &mut NoFaults)?;
+    attempts
+        .transition_building(&producer.stable_source, attempt)
+        .map_err(build_attempt_error)?;
+    commit_attempt_registry_direct(&output, &attempts)?;
+    Ok(attempt)
+}
+
+/// Marks an exact build attempt failed before invalidating all artifacts still owned by it.
+///
+/// A stale or superseded token is rejected without mutating the current generation. Revocation is
+/// transactional: if the initial durable claim reports an error, this function does not proceed to
+/// the failed state or artifact invalidation. A replayable claim may still be recovered later.
+pub fn fail_build_attempt(
+    output_dir: &Path,
+    producer: &ProducerIdentity,
+    attempt: BuildAttempt,
+) -> Result<(), EmitError> {
+    if attempt.session() == BuildSession::DIRECT {
+        return Err(build_attempt_error(
+            "the direct compiler token is not valid for cargo-managed failure",
+        ));
+    }
+    let output = PinnedOutput::open(output_dir)?;
+    let _lock = output.lock()?;
+    output.verify_path_identity()?;
+    claim_attempt_for_termination_locked(&output, producer, attempt)?;
+    fail_build_attempt_locked(&output, producer, attempt, &mut NoFaults)
+}
+
+/// Finishes an exact build attempt after at least one authorized backend publication succeeded.
+///
+/// Finishing durably marks the attempt completed; the terminal record prevents an older direct
+/// frontend from publishing afterward. Ownership remains until the next generation or an explicit
+/// failure invalidates it. A build with no observed backend fails closed and invalidates the
+/// producer's artifacts. If the initial durable claim for that failure reports an error, this
+/// function does not proceed to the failed state or artifact invalidation; a replayable claim may
+/// still be recovered later.
+pub fn finish_build_attempt(
+    output_dir: &Path,
+    producer: &ProducerIdentity,
+    attempt: BuildAttempt,
+) -> Result<(), EmitError> {
+    if attempt.session() == BuildSession::DIRECT {
+        return Err(build_attempt_error(
+            "the direct compiler token is not valid for cargo-managed completion",
+        ));
+    }
+    let output = PinnedOutput::open(output_dir)?;
+    let _lock = output.lock()?;
+    output.verify_path_identity()?;
+
+    let mut attempts = read_attempt_registry(&output)?;
+    let record = attempts
+        .record_exact(&producer.stable_source, attempt)
+        .map_err(build_attempt_error)?;
+    if record.crate_name != producer.crate_name {
+        return Err(build_attempt_error(
+            "build attempt crate name does not match the producer",
+        ));
+    }
+    if record.phase == AttemptPhase::Completed {
+        return Ok(());
+    }
+    if (record.phase == AttemptPhase::Building || record.phase == AttemptPhase::BackendClaimed)
+        && !record.backend_seen
+    {
+        let primary = build_attempt_error("build completed without an authorized device backend");
+        claim_attempt_for_termination_locked(&output, producer, attempt)?;
+        return match fail_build_attempt_locked(&output, producer, attempt, &mut NoFaults) {
+            Ok(()) => Err(primary),
+            Err(secondary) => Err(combine_attempt_errors(primary, secondary, &output)),
+        };
+    }
+    attempts
+        .mark_completed(&producer.stable_source, attempt)
+        .map_err(build_attempt_error)?;
+    commit_attempt_registry_direct(&output, &attempts)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -586,6 +736,22 @@ mod tests {
         }
     }
 
+    struct ControlCommitFault {
+        point: ControlCommitPoint,
+    }
+
+    impl ControlCommitHooks for ControlCommitFault {
+        fn before(&mut self, point: ControlCommitPoint) -> io::Result<()> {
+            if point == self.point {
+                Err(io::Error::other(format!(
+                    "injected control commit failure at {point:?}"
+                )))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
     fn fake_compile(llvm_ir_path: &Path, hsaco_path: &Path) -> Result<(), EmitError> {
         let llvm_ir = fs::read_to_string(llvm_ir_path)?;
         fs::write(hsaco_path.with_extension("o"), format!("object:{llvm_ir}"))?;
@@ -626,7 +792,10 @@ mod tests {
     ) -> Result<Vec<DeviceArtifact>, EmitError> {
         emit_artifact_transaction_with_hooks(
             output,
-            producer,
+            BackendRequest {
+                producer,
+                attempt: None,
+            },
             kernels,
             |kernel| kernel.name,
             |kernel| Ok(format!("{}:{}", kernel.generation, kernel.name)),
@@ -1608,7 +1777,11 @@ mod tests {
             transaction.primary.as_deref(),
             Some(EmitError::OutputDirectoryChanged { .. })
         ));
-        assert!(transaction.cleanup_failures.is_empty());
+        assert_eq!(transaction.cleanup_failures.len(), 1);
+        assert_eq!(
+            transaction.cleanup_failures[0].operation(),
+            "persist failed build attempt"
+        );
         assert_eq!(
             transaction.publication,
             PublicationState::Committed { final_renames: 3 }
@@ -1650,7 +1823,13 @@ mod tests {
             transaction.primary.as_deref(),
             Some(EmitError::OutputDirectoryChanged { .. })
         ));
-        assert_eq!(transaction.cleanup_failures.len(), 1);
+        assert_eq!(transaction.cleanup_failures.len(), 2);
+        assert!(
+            transaction
+                .cleanup_failures
+                .iter()
+                .any(|failure| failure.operation() == "persist failed build attempt")
+        );
         assert_eq!(
             transaction.publication,
             PublicationState::CommittedWithCleanupFailure { final_renames: 3 }
@@ -1827,6 +2006,210 @@ mod tests {
             .is_symlink()
         );
         assert_eq!(fs::read_dir(&relocated_stage).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn interrupted_control_commits_never_reopen_a_consumed_backend_claim() {
+        let points = [
+            ControlCommitPoint::CreateRecovery,
+            ControlCommitPoint::WriteRecovery,
+            ControlCommitPoint::SyncRecovery,
+            ControlCommitPoint::SyncRecoveryName,
+            ControlCommitPoint::RenameRecovery,
+            ControlCommitPoint::SyncFinalName,
+        ];
+
+        for point in points {
+            let temp = TestDirectory::new();
+            let output_path = temp.path.join("output");
+            let output = PinnedOutput::open(&output_path).unwrap();
+            let _lock = output.lock().unwrap();
+            let session = BuildSession::from_bytes([0x31; 16]);
+            let invocation = BuildInvocation::from_bytes([0x42; 32]);
+            let mut registry = AttemptRegistry::default();
+            let attempt = match registry
+                .start_or_resume("path:/src/kernel.rs", "kernel", invocation, session)
+                .unwrap()
+            {
+                StartAttemptOutcome::New(attempt) => attempt,
+                outcome => panic!("unexpected attempt start: {outcome:?}"),
+            };
+            registry
+                .transition_building("path:/src/kernel.rs", attempt)
+                .unwrap();
+            commit_attempt_registry_direct(&output, &registry).unwrap();
+
+            registry
+                .claim_backend("path:/src/kernel.rs", attempt)
+                .unwrap();
+            let bytes = registry.encode().unwrap();
+            let error = commit_control_file_direct_with_hooks(
+                &output,
+                ATTEMPT_FILE,
+                RECOVERY_ATTEMPT_FILE,
+                Some(&bytes),
+                &mut ControlCommitFault { point },
+            )
+            .unwrap_err();
+            assert!(matches!(error, EmitError::Io(_)), "{point:?}: {error}");
+
+            if point == ControlCommitPoint::CreateRecovery {
+                assert!(!output_path.join(RECOVERY_ATTEMPT_FILE).exists());
+                let current = read_attempt_registry(&output).unwrap();
+                current
+                    .authorize_backend("path:/src/kernel.rs", attempt)
+                    .unwrap();
+                continue;
+            }
+
+            match read_attempt_registry(&output) {
+                Ok(current) => assert_eq!(
+                    current.authorize_backend("path:/src/kernel.rs", attempt),
+                    Err(AttemptCodecError::BackendAlreadySeen),
+                    "{point:?}"
+                ),
+                Err(EmitError::BuildAttempt { .. }) => {
+                    assert!(
+                        output_path.join(RECOVERY_ATTEMPT_FILE).exists(),
+                        "{point:?}"
+                    );
+                }
+                Err(error) => panic!("unexpected recovery error at {point:?}: {error}"),
+            }
+        }
+    }
+
+    #[test]
+    fn termination_claim_failure_never_reports_or_performs_revocation() {
+        let points = [
+            ControlCommitPoint::CreateRecovery,
+            ControlCommitPoint::WriteRecovery,
+            ControlCommitPoint::SyncRecovery,
+            ControlCommitPoint::SyncRecoveryName,
+            ControlCommitPoint::RenameRecovery,
+            ControlCommitPoint::SyncFinalName,
+        ];
+
+        for point in points {
+            let temp = TestDirectory::new();
+            let output_path = temp.path.join("output");
+            let output = PinnedOutput::open(&output_path).unwrap();
+            let _lock = output.lock().unwrap();
+            let producer = ProducerIdentity::for_test("kernel", "/src/kernel.rs");
+            let session = BuildSession::from_bytes([0x71; 16]);
+            let invocation = BuildInvocation::from_bytes([0x72; 32]);
+            let mut registry = AttemptRegistry::default();
+            let attempt = match registry
+                .start_or_resume(
+                    &producer.stable_source,
+                    &producer.crate_name,
+                    invocation,
+                    session,
+                )
+                .unwrap()
+            {
+                StartAttemptOutcome::New(attempt) => attempt,
+                outcome => panic!("unexpected attempt start: {outcome:?}"),
+            };
+            registry
+                .transition_building(&producer.stable_source, attempt)
+                .unwrap();
+            commit_attempt_registry_direct(&output, &registry).unwrap();
+
+            claim_attempt_for_termination_locked_with_hooks(
+                &output,
+                &producer,
+                attempt,
+                &mut ControlCommitFault { point },
+            )
+            .unwrap_err();
+
+            if point == ControlCommitPoint::CreateRecovery {
+                assert!(!output_path.join(RECOVERY_ATTEMPT_FILE).exists());
+                read_attempt_registry(&output)
+                    .unwrap()
+                    .authorize_backend(&producer.stable_source, attempt)
+                    .unwrap();
+                continue;
+            }
+            match read_attempt_registry(&output) {
+                Ok(current) => assert_eq!(
+                    current.authorize_backend(&producer.stable_source, attempt),
+                    Err(AttemptCodecError::BackendAlreadySeen),
+                    "{point:?}"
+                ),
+                Err(EmitError::BuildAttempt { .. }) => assert!(
+                    output_path.join(RECOVERY_ATTEMPT_FILE).exists(),
+                    "{point:?}"
+                ),
+                Err(error) => panic!("unexpected recovery error at {point:?}: {error}"),
+            }
+        }
+    }
+
+    #[test]
+    fn interrupted_failure_commit_leaves_the_prior_backend_claim_closed() {
+        let points = [
+            ControlCommitPoint::CreateRecovery,
+            ControlCommitPoint::WriteRecovery,
+            ControlCommitPoint::SyncRecovery,
+            ControlCommitPoint::SyncRecoveryName,
+            ControlCommitPoint::RenameRecovery,
+            ControlCommitPoint::SyncFinalName,
+        ];
+
+        for point in points {
+            let temp = TestDirectory::new();
+            let output_path = temp.path.join("output");
+            let output = PinnedOutput::open(&output_path).unwrap();
+            let _lock = output.lock().unwrap();
+            let session = BuildSession::from_bytes([0x51; 16]);
+            let invocation = BuildInvocation::from_bytes([0x62; 32]);
+            let mut registry = AttemptRegistry::default();
+            let attempt = match registry
+                .start_or_resume("path:/src/kernel.rs", "kernel", invocation, session)
+                .unwrap()
+            {
+                StartAttemptOutcome::New(attempt) => attempt,
+                outcome => panic!("unexpected attempt start: {outcome:?}"),
+            };
+            registry
+                .transition_building("path:/src/kernel.rs", attempt)
+                .unwrap();
+            registry
+                .claim_backend("path:/src/kernel.rs", attempt)
+                .unwrap();
+            commit_attempt_registry_direct(&output, &registry).unwrap();
+
+            registry
+                .mark_failed("path:/src/kernel.rs", attempt)
+                .unwrap();
+            let bytes = registry.encode().unwrap();
+            commit_control_file_direct_with_hooks(
+                &output,
+                ATTEMPT_FILE,
+                RECOVERY_ATTEMPT_FILE,
+                Some(&bytes),
+                &mut ControlCommitFault { point },
+            )
+            .unwrap_err();
+
+            match read_attempt_registry(&output) {
+                Ok(current) => assert!(
+                    current
+                        .authorize_backend("path:/src/kernel.rs", attempt)
+                        .is_err(),
+                    "{point:?}"
+                ),
+                Err(EmitError::BuildAttempt { .. }) => {
+                    assert!(
+                        output_path.join(RECOVERY_ATTEMPT_FILE).exists(),
+                        "{point:?}"
+                    );
+                }
+                Err(error) => panic!("unexpected recovery error at {point:?}: {error}"),
+            }
+        }
     }
 }
 
@@ -2516,31 +2899,34 @@ fn output_scan_fd(output: &PinnedOutput) -> Result<OwnedFd, EmitError> {
     .map_err(EmitError::from)
 }
 
-fn cleanup_abandoned_staging(output: &PinnedOutput) -> Result<(), EmitError> {
-    let recovery_removed = match statat(
-        &output.fd,
-        RECOVERY_OWNERSHIP_FILE,
-        AtFlags::SYMLINK_NOFOLLOW,
-    ) {
+fn remove_abandoned_recovery(
+    output: &PinnedOutput,
+    entry: &str,
+    description: &str,
+) -> Result<bool, EmitError> {
+    match statat(&output.fd, entry, AtFlags::SYMLINK_NOFOLLOW) {
         Ok(stat)
             if FileType::from_raw_mode(stat.st_mode) == FileType::RegularFile
                 && stat.st_nlink == 1
                 && stat.st_mode & 0o077 == 0 =>
         {
-            unlinkat(&output.fd, RECOVERY_OWNERSHIP_FILE, AtFlags::empty())
-                .map_err(std::io::Error::from)?;
-            true
+            unlinkat(&output.fd, entry, AtFlags::empty()).map_err(std::io::Error::from)?;
+            Ok(true)
         }
-        Ok(_) => {
-            return Err(EmitError::InvalidArtifactDestination {
-                path: output.display_path.join(RECOVERY_OWNERSHIP_FILE),
-                reason: "abandoned ownership recovery entry is not a private single-link file"
-                    .to_string(),
-            });
-        }
-        Err(error) if error == rustix::io::Errno::NOENT => false,
-        Err(error) => return Err(std::io::Error::from(error).into()),
-    };
+        Ok(_) => Err(EmitError::InvalidArtifactDestination {
+            path: output.display_path.join(entry),
+            reason: format!(
+                "abandoned {description} recovery entry is not a private single-link file"
+            ),
+        }),
+        Err(error) if error == rustix::io::Errno::NOENT => Ok(false),
+        Err(error) => Err(std::io::Error::from(error).into()),
+    }
+}
+
+fn cleanup_abandoned_staging(output: &PinnedOutput) -> Result<(), EmitError> {
+    let ownership_recovery_removed =
+        remove_abandoned_recovery(output, RECOVERY_OWNERSHIP_FILE, "ownership")?;
     let scan_fd = output_scan_fd(output)?;
     let mut directory = Dir::read_from(&scan_fd).map_err(std::io::Error::from)?;
     let mut names = Vec::new();
@@ -2564,7 +2950,7 @@ fn cleanup_abandoned_staging(output: &PinnedOutput) -> Result<(), EmitError> {
         }
     }
 
-    let mut removed_any = recovery_removed;
+    let mut removed_any = ownership_recovery_removed;
     for name in names {
         let stat = match statat(&output.fd, &name, AtFlags::SYMLINK_NOFOLLOW) {
             Ok(stat) => stat,
@@ -2690,13 +3076,21 @@ struct PreparedArtifact {
     llvm_ir: String,
 }
 
+#[derive(Clone, Copy)]
+struct BackendRequest<'a> {
+    producer: &'a ProducerIdentity,
+    attempt: Option<BuildAttempt>,
+}
+
 /// Prepares, compiles, and publishes one producer's complete kernel set.
 ///
 /// The validated output-directory lock is held while `prepare` and `compile` run and until
 /// publication or rollback completes. Callbacks must not reenter this artifact store. Each
 /// successful compiler callback must create the requested `.o` and `.hsaco` beside its staged
 /// `.ll`. Passing an empty kernel set reconciles the producer to no outputs and also removes
-/// ownerless legacy artifacts in the managed namespace.
+/// ownerless legacy artifacts in the managed namespace. This direct form is only for producers
+/// that have never entered the cargo-managed build-attempt protocol in this output directory;
+/// managed producers must continue using the attempt-authorized form.
 pub fn emit_artifact_transaction<T>(
     output_dir: &Path,
     producer: &ProducerIdentity,
@@ -2707,7 +3101,38 @@ pub fn emit_artifact_transaction<T>(
 ) -> Result<Vec<DeviceArtifact>, EmitError> {
     emit_artifact_transaction_with_hooks(
         output_dir,
-        producer,
+        BackendRequest {
+            producer,
+            attempt: None,
+        },
+        kernels,
+        kernel_name,
+        prepare,
+        compile,
+        &mut NoFaults,
+    )
+}
+
+/// Attempt-authorized form of [`emit_artifact_transaction`].
+///
+/// The token must name the current claimable generation for `producer`. The backend durably
+/// consumes that authorization before preflight or artifact mutation, so a crash cannot make the
+/// token reusable.
+pub fn emit_artifact_transaction_for_attempt<T>(
+    output_dir: &Path,
+    producer: &ProducerIdentity,
+    attempt: BuildAttempt,
+    kernels: &[T],
+    kernel_name: impl Fn(&T) -> &str,
+    prepare: impl FnMut(&T) -> Result<String, EmitError>,
+    compile: impl FnMut(&Path, &Path) -> Result<(), EmitError>,
+) -> Result<Vec<DeviceArtifact>, EmitError> {
+    emit_artifact_transaction_with_hooks(
+        output_dir,
+        BackendRequest {
+            producer,
+            attempt: Some(attempt),
+        },
         kernels,
         kernel_name,
         prepare,
@@ -2735,7 +3160,37 @@ where
 {
     emit_artifact_transaction_after_preflight_with_hooks(
         output_dir,
-        producer,
+        BackendRequest {
+            producer,
+            attempt: None,
+        },
+        preflight,
+        kernel_name,
+        prepare,
+        compile,
+        &mut NoFaults,
+    )
+}
+
+/// Attempt-authorized form of [`emit_artifact_transaction_after_preflight`].
+pub fn emit_artifact_transaction_after_preflight_for_attempt<T, P>(
+    output_dir: &Path,
+    producer: &ProducerIdentity,
+    attempt: BuildAttempt,
+    preflight: impl FnOnce() -> Result<P, EmitError>,
+    kernel_name: impl Fn(&T) -> &str,
+    prepare: impl FnMut(&T) -> Result<String, EmitError>,
+    compile: impl FnMut(&Path, &Path) -> Result<(), EmitError>,
+) -> Result<Vec<DeviceArtifact>, EmitError>
+where
+    P: AsRef<[T]>,
+{
+    emit_artifact_transaction_after_preflight_with_hooks(
+        output_dir,
+        BackendRequest {
+            producer,
+            attempt: Some(attempt),
+        },
         preflight,
         kernel_name,
         prepare,
@@ -2746,7 +3201,7 @@ where
 
 fn emit_artifact_transaction_with_hooks<T>(
     output_dir: &Path,
-    producer: &ProducerIdentity,
+    request: BackendRequest<'_>,
     kernels: &[T],
     kernel_name: impl Fn(&T) -> &str,
     prepare: impl FnMut(&T) -> Result<String, EmitError>,
@@ -2755,7 +3210,7 @@ fn emit_artifact_transaction_with_hooks<T>(
 ) -> Result<Vec<DeviceArtifact>, EmitError> {
     emit_artifact_transaction_after_preflight_with_hooks(
         output_dir,
-        producer,
+        request,
         || Ok(kernels),
         kernel_name,
         prepare,
@@ -2766,6 +3221,56 @@ fn emit_artifact_transaction_with_hooks<T>(
 
 fn emit_artifact_transaction_after_preflight_with_hooks<T, P>(
     output_dir: &Path,
+    request: BackendRequest<'_>,
+    preflight: impl FnOnce() -> Result<P, EmitError>,
+    kernel_name: impl Fn(&T) -> &str,
+    prepare: impl FnMut(&T) -> Result<String, EmitError>,
+    compile: impl FnMut(&Path, &Path) -> Result<(), EmitError>,
+    hooks: &mut impl TransactionHooks,
+) -> Result<Vec<DeviceArtifact>, EmitError>
+where
+    P: AsRef<[T]>,
+{
+    let BackendRequest {
+        producer,
+        attempt: supplied_attempt,
+    } = request;
+    let output = PinnedOutput::open(output_dir)?;
+    let _lock = output.lock()?;
+    output.verify_path_identity()?;
+    let (attempt, externally_managed) =
+        prepare_backend_attempt_locked(&output, producer, supplied_attempt)?;
+    if let Err(primary) = cleanup_abandoned_staging(&output) {
+        return finish_backend_attempt_locked(
+            &output,
+            producer,
+            attempt,
+            externally_managed,
+            Err(primary),
+            hooks,
+        );
+    }
+    let result = emit_artifact_transaction_locked(
+        &output,
+        producer,
+        preflight,
+        kernel_name,
+        prepare,
+        compile,
+        hooks,
+    );
+    finish_backend_attempt_locked(
+        &output,
+        producer,
+        attempt,
+        externally_managed,
+        result,
+        hooks,
+    )
+}
+
+fn emit_artifact_transaction_locked<T, P>(
+    output: &PinnedOutput,
     producer: &ProducerIdentity,
     preflight: impl FnOnce() -> Result<P, EmitError>,
     kernel_name: impl Fn(&T) -> &str,
@@ -2776,15 +3281,11 @@ fn emit_artifact_transaction_after_preflight_with_hooks<T, P>(
 where
     P: AsRef<[T]>,
 {
-    let output = PinnedOutput::open(output_dir)?;
-    let _lock = output.lock()?;
-    output.verify_path_identity()?;
-    cleanup_abandoned_staging(&output)?;
-    let mut original_registry = read_registry(&output)?;
-    if prune_absent_ownership(&output, &mut original_registry)? {
-        commit_registry_direct(&output, &original_registry)?;
+    let mut original_registry = read_registry(output)?;
+    if prune_absent_ownership(output, &mut original_registry)? {
+        commit_registry_direct(output, &original_registry)?;
     }
-    let orphaned = inventory_unowned_artifacts(&output, &original_registry)?;
+    let orphaned = inventory_unowned_artifacts(output, &original_registry)?;
     let old_owned = original_registry.owned_by(producer);
 
     let preflight = match preflight() {
@@ -2792,7 +3293,7 @@ where
         Err(error) => {
             let invalidation_set = old_owned.union(&orphaned).cloned().collect::<BTreeSet<_>>();
             return Err(abort_without_staging(
-                &output,
+                output,
                 &original_registry,
                 producer,
                 &invalidation_set,
@@ -2806,7 +3307,7 @@ where
     if kernels.len() > MAX_KERNELS_PER_PRODUCER {
         let invalidation_set = old_owned.union(&orphaned).cloned().collect::<BTreeSet<_>>();
         return Err(abort_without_staging(
-            &output,
+            output,
             &original_registry,
             producer,
             &invalidation_set,
@@ -2847,7 +3348,7 @@ where
                 }
             }
             Some(_) => {
-                if let Err(error) = validate_owned_destinations(&output, artifact)
+                if let Err(error) = validate_owned_destinations(output, artifact)
                     && primary.is_none()
                 {
                     primary = Some(error);
@@ -2879,14 +3380,14 @@ where
     }
 
     let rollback = RollbackContext {
-        output: &output,
+        output,
         original_registry: &original_registry,
         producer,
         invalidation_set: &invalidation_set,
         recovery_candidates: &recovery_candidates,
     };
 
-    let mut staging = match StagingDirectory::create(&output, hooks) {
+    let mut staging = match StagingDirectory::create(output, hooks) {
         Ok(staging) => staging,
         Err(staging_error) => {
             let StagingCreateError {
@@ -2905,7 +3406,7 @@ where
                 None => staging_primary,
             };
             let mut error = abort_without_staging(
-                &output,
+                output,
                 &original_registry,
                 producer,
                 &invalidation_set,
@@ -2960,7 +3461,7 @@ where
             let llvm_ir_path = staging.subprocess_path(&artifact.names.llvm_ir);
             let hsaco_path = staging.subprocess_path(&artifact.names.hsaco);
             compile(&llvm_ir_path, &hsaco_path)?;
-            validate_staged_artifacts(&staging, &artifact.names, &output)
+            validate_staged_artifacts(&staging, &artifact.names, output)
         })();
         if let Err(error) = result {
             return Err(rollback.abort(
@@ -3037,7 +3538,7 @@ where
         .filter(|kernel| !new_owned.contains(*kernel))
         .cloned()
         .collect::<BTreeSet<_>>();
-    let (_, stale_failures) = invalidate_kernels(&output, &stale, hooks);
+    let (_, stale_failures) = invalidate_kernels(output, &stale, hooks);
     if !stale_failures.is_empty() {
         let mut error = rollback.abort(
             &mut staging,
@@ -3056,7 +3557,7 @@ where
     }
 
     if let Err(error) = commit_registry(
-        &output,
+        output,
         &staging,
         &next_registry,
         completed_final_renames,
@@ -3123,30 +3624,85 @@ where
 }
 
 fn read_registry(output: &PinnedOutput) -> Result<OwnershipRegistry, EmitError> {
+    let Some(bytes) = read_control_file(
+        output,
+        OWNERSHIP_FILE,
+        "ownership registry",
+        MAX_OWNERSHIP_BYTES,
+    )?
+    else {
+        return Ok(OwnershipRegistry::default());
+    };
+    OwnershipRegistry::decode(&bytes)
+}
+
+fn read_attempt_registry(output: &PinnedOutput) -> Result<AttemptRegistry, EmitError> {
+    recover_attempt_registry(output)?;
+    let Some(bytes) = read_control_file(
+        output,
+        ATTEMPT_FILE,
+        "build-attempt registry",
+        MAX_ATTEMPT_BYTES,
+    )?
+    else {
+        return Ok(AttemptRegistry::default());
+    };
+    AttemptRegistry::decode(&bytes).map_err(build_attempt_error)
+}
+
+fn recover_attempt_registry(output: &PinnedOutput) -> Result<(), EmitError> {
+    let Some(bytes) = read_control_file(
+        output,
+        RECOVERY_ATTEMPT_FILE,
+        "build-attempt recovery registry",
+        MAX_ATTEMPT_BYTES,
+    )?
+    else {
+        return Ok(());
+    };
+    AttemptRegistry::decode(&bytes).map_err(|error| {
+        build_attempt_error(format!(
+            "durable build-attempt recovery cannot be replayed: {error}"
+        ))
+    })?;
+    output.verify_path_identity()?;
+    renameat(&output.fd, RECOVERY_ATTEMPT_FILE, &output.fd, ATTEMPT_FILE)
+        .map_err(std::io::Error::from)?;
+    fsync(&output.fd).map_err(std::io::Error::from)?;
+    Ok(())
+}
+
+fn read_control_file(
+    output: &PinnedOutput,
+    entry: &str,
+    description: &str,
+    maximum_bytes: usize,
+) -> Result<Option<Vec<u8>>, EmitError> {
     let fd = match openat(
         &output.fd,
-        OWNERSHIP_FILE,
+        entry,
         OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
         Mode::empty(),
     ) {
         Ok(fd) => fd,
-        Err(error) if error == rustix::io::Errno::NOENT => {
-            return Ok(OwnershipRegistry::default());
-        }
+        Err(error) if error == rustix::io::Errno::NOENT => return Ok(None),
         Err(error) => return Err(std::io::Error::from(error).into()),
     };
     let stat = fstat(&fd).map_err(std::io::Error::from)?;
-    if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile {
+    if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile
+        || stat.st_nlink != 1
+        || stat.st_mode & 0o077 != 0
+    {
         return Err(EmitError::InvalidArtifactDestination {
-            path: output.display_path.join(OWNERSHIP_FILE),
-            reason: "ownership registry is not a regular file".to_string(),
+            path: output.display_path.join(entry),
+            reason: format!("{description} is not a private single-link regular file"),
         });
     }
     let mut bytes = Vec::new();
     fs::File::from(fd)
-        .take((MAX_OWNERSHIP_BYTES + 1) as u64)
+        .take((maximum_bytes + 1) as u64)
         .read_to_end(&mut bytes)?;
-    OwnershipRegistry::decode(&bytes)
+    Ok(Some(bytes))
 }
 
 fn prune_absent_ownership(
@@ -3188,41 +3744,120 @@ fn commit_registry_direct(
     output: &PinnedOutput,
     registry: &OwnershipRegistry,
 ) -> Result<(), EmitError> {
-    if registry.producers.is_empty() {
-        match unlinkat(&output.fd, OWNERSHIP_FILE, AtFlags::empty()) {
+    let bytes = (!registry.producers.is_empty())
+        .then(|| registry.encode())
+        .transpose()?;
+    commit_control_file_direct(
+        output,
+        OWNERSHIP_FILE,
+        RECOVERY_OWNERSHIP_FILE,
+        bytes.as_deref(),
+    )
+}
+
+fn commit_attempt_registry_direct(
+    output: &PinnedOutput,
+    registry: &AttemptRegistry,
+) -> Result<(), EmitError> {
+    commit_attempt_registry_direct_with_hooks(output, registry, &mut NoControlCommitFaults)
+}
+
+fn commit_attempt_registry_direct_with_hooks(
+    output: &PinnedOutput,
+    registry: &AttemptRegistry,
+    hooks: &mut impl ControlCommitHooks,
+) -> Result<(), EmitError> {
+    let bytes = registry.encode().map_err(build_attempt_error)?;
+    commit_control_file_direct_with_hooks(
+        output,
+        ATTEMPT_FILE,
+        RECOVERY_ATTEMPT_FILE,
+        Some(&bytes),
+        hooks,
+    )
+}
+
+fn commit_control_file_direct(
+    output: &PinnedOutput,
+    final_entry: &str,
+    recovery_entry: &str,
+    bytes: Option<&[u8]>,
+) -> Result<(), EmitError> {
+    commit_control_file_direct_with_hooks(
+        output,
+        final_entry,
+        recovery_entry,
+        bytes,
+        &mut NoControlCommitFaults,
+    )
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ControlCommitPoint {
+    CreateRecovery,
+    WriteRecovery,
+    SyncRecovery,
+    SyncRecoveryName,
+    RenameRecovery,
+    SyncFinalName,
+}
+
+trait ControlCommitHooks {
+    fn before(&mut self, _point: ControlCommitPoint) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+struct NoControlCommitFaults;
+
+impl ControlCommitHooks for NoControlCommitFaults {}
+
+fn commit_control_file_direct_with_hooks(
+    output: &PinnedOutput,
+    final_entry: &str,
+    recovery_entry: &str,
+    bytes: Option<&[u8]>,
+    hooks: &mut impl ControlCommitHooks,
+) -> Result<(), EmitError> {
+    let Some(bytes) = bytes else {
+        match unlinkat(&output.fd, final_entry, AtFlags::empty()) {
             Ok(()) => {}
             Err(error) if error == rustix::io::Errno::NOENT => {}
             Err(error) => return Err(std::io::Error::from(error).into()),
         }
         fsync(&output.fd).map_err(std::io::Error::from)?;
         return Ok(());
-    }
+    };
 
-    let bytes = registry.encode()?;
+    hooks.before(ControlCommitPoint::CreateRecovery)?;
     let fd = openat(
         &output.fd,
-        RECOVERY_OWNERSHIP_FILE,
+        recovery_entry,
         OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
         Mode::RUSR | Mode::WUSR,
     )
     .map_err(std::io::Error::from)?;
     let result = (|| {
         let mut file = fs::File::from(fd);
-        file.write_all(&bytes)?;
+        hooks.before(ControlCommitPoint::WriteRecovery)?;
+        file.write_all(bytes)?;
+        hooks.before(ControlCommitPoint::SyncRecovery)?;
         file.sync_all()?;
+        // The redo name must be durable before rename consumes it. A crash during the rename or
+        // its directory sync then leaves either the new final entry or a replayable redo entry.
+        hooks.before(ControlCommitPoint::SyncRecoveryName)?;
+        fsync(&output.fd).map_err(std::io::Error::from)?;
         output.verify_path_identity()?;
-        renameat(
-            &output.fd,
-            RECOVERY_OWNERSHIP_FILE,
-            &output.fd,
-            OWNERSHIP_FILE,
-        )
-        .map_err(std::io::Error::from)?;
+        hooks.before(ControlCommitPoint::RenameRecovery)?;
+        renameat(&output.fd, recovery_entry, &output.fd, final_entry)
+            .map_err(std::io::Error::from)?;
+        hooks.before(ControlCommitPoint::SyncFinalName)?;
         fsync(&output.fd).map_err(std::io::Error::from)?;
         Ok(())
     })();
     if result.is_err() {
-        let _ = unlinkat(&output.fd, RECOVERY_OWNERSHIP_FILE, AtFlags::empty());
+        // Preserve even a partial redo entry as poison. Deleting it could expose an older
+        // authorizing registry after a failed state transition.
         let _ = fsync(&output.fd);
     }
     result
@@ -3406,6 +4041,361 @@ fn invalidate_kernels(
     (failed_kernels, failures)
 }
 
+fn invalidate_producer_ownership(
+    output: &PinnedOutput,
+    producer: &ProducerIdentity,
+    hooks: &mut impl TransactionHooks,
+) -> Result<(), EmitError> {
+    let mut registry = read_registry(output)?;
+    let pruned = prune_absent_ownership(output, &mut registry)?;
+    let owned = registry.owned_by(producer);
+    let (failed_kernels, invalidation_failures) = invalidate_kernels(output, &owned, hooks);
+    let failed_owned = failed_kernels
+        .intersection(&owned)
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    registry.set_owned(producer, failed_owned);
+
+    let mut cleanup_failures = Vec::new();
+    if (pruned || !owned.is_empty())
+        && let Err(error) = commit_registry_direct(output, &registry)
+    {
+        cleanup_failures.push(FilesystemFailure {
+            operation: "reconcile ownership during generation invalidation",
+            entry: OWNERSHIP_FILE.to_string(),
+            error: io::Error::other(error.to_string()),
+        });
+    }
+    if invalidation_failures.is_empty() && cleanup_failures.is_empty() {
+        return Ok(());
+    }
+    Err(EmitError::Transaction(Box::new(ArtifactTransactionError {
+        primary: Some(Box::new(build_attempt_error(
+            "could not invalidate the producer's prior artifact generation",
+        ))),
+        cleanup_failures,
+        invalidation_failures,
+        publication: PublicationState::NotStarted {
+            total_final_renames: 0,
+        },
+    })))
+}
+
+fn fail_build_attempt_locked(
+    output: &PinnedOutput,
+    producer: &ProducerIdentity,
+    attempt: BuildAttempt,
+    hooks: &mut impl TransactionHooks,
+) -> Result<(), EmitError> {
+    let state_result = (|| {
+        let mut attempts = read_attempt_registry(output)?;
+        let record = attempts
+            .record_exact(&producer.stable_source, attempt)
+            .map_err(build_attempt_error)?;
+        if record.crate_name != producer.crate_name {
+            return Err(build_attempt_error(
+                "build attempt token does not match the producer",
+            ));
+        }
+        attempts
+            .mark_failed(&producer.stable_source, attempt)
+            .map_err(build_attempt_error)?;
+        commit_attempt_registry_direct(output, &attempts)
+    })();
+    let invalidation_result = invalidate_producer_ownership(output, producer, hooks);
+    match (state_result, invalidation_result) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Ok(()), Err(error)) | (Err(error), Ok(())) => Err(error),
+        (Err(state_error), Err(EmitError::Transaction(mut transaction))) => {
+            transaction.primary = Some(Box::new(state_error));
+            Err(EmitError::Transaction(transaction))
+        }
+        (Err(state_error), Err(invalidation_error)) => {
+            Err(EmitError::Transaction(Box::new(ArtifactTransactionError {
+                primary: Some(Box::new(state_error)),
+                cleanup_failures: vec![FilesystemFailure {
+                    operation: "prepare failed-attempt invalidation",
+                    entry: output.display_path.display().to_string(),
+                    error: io::Error::other(invalidation_error.to_string()),
+                }],
+                invalidation_failures: Vec::new(),
+                publication: PublicationState::NotStarted {
+                    total_final_renames: 0,
+                },
+            })))
+        }
+    }
+}
+
+fn claim_attempt_for_termination_locked(
+    output: &PinnedOutput,
+    producer: &ProducerIdentity,
+    attempt: BuildAttempt,
+) -> Result<(), EmitError> {
+    claim_attempt_for_termination_locked_with_hooks(
+        output,
+        producer,
+        attempt,
+        &mut NoControlCommitFaults,
+    )
+}
+
+fn claim_attempt_for_termination_locked_with_hooks(
+    output: &PinnedOutput,
+    producer: &ProducerIdentity,
+    attempt: BuildAttempt,
+    hooks: &mut impl ControlCommitHooks,
+) -> Result<(), EmitError> {
+    let mut attempts = read_attempt_registry(output)?;
+    let record = attempts
+        .record_exact(&producer.stable_source, attempt)
+        .map_err(build_attempt_error)?;
+    if record.crate_name != producer.crate_name {
+        return Err(build_attempt_error(
+            "build attempt token does not match the producer",
+        ));
+    }
+    match record.phase {
+        AttemptPhase::Building => {
+            attempts
+                .claim_backend(&producer.stable_source, attempt)
+                .map_err(build_attempt_error)?;
+            commit_attempt_registry_direct_with_hooks(output, &attempts, hooks)
+        }
+        AttemptPhase::BackendClaimed | AttemptPhase::Failed => Ok(()),
+        AttemptPhase::Invalidating | AttemptPhase::Completed => Err(build_attempt_error(
+            "build attempt cannot be terminated in its current phase",
+        )),
+    }
+}
+
+fn prepare_backend_attempt_locked(
+    output: &PinnedOutput,
+    producer: &ProducerIdentity,
+    supplied_attempt: Option<BuildAttempt>,
+) -> Result<(BuildAttempt, bool), EmitError> {
+    let mut attempts = read_attempt_registry(output)?;
+    if let Some(attempt) = supplied_attempt {
+        if attempt.session() == BuildSession::DIRECT {
+            return Err(build_attempt_error(
+                "the direct compiler token cannot authorize a managed backend",
+            ));
+        }
+        let record = attempts
+            .authorize_backend(&producer.stable_source, attempt)
+            .map_err(build_attempt_error)?;
+        if record.crate_name != producer.crate_name {
+            return Err(build_attempt_error(
+                "build attempt crate name does not match the producer",
+            ));
+        }
+        attempts
+            .claim_backend(&producer.stable_source, attempt)
+            .map_err(build_attempt_error)?;
+        commit_attempt_registry_direct(output, &attempts)?;
+        return Ok((attempt, true));
+    }
+
+    if let Some(record) = attempts.record(&producer.stable_source)
+        && record.session != BuildSession::DIRECT
+    {
+        return Err(build_attempt_error(
+            "a cargo-managed build attempt is active for this producer",
+        ));
+    }
+    let attempt = attempts
+        .allocate_direct(&producer.stable_source, &producer.crate_name)
+        .map_err(build_attempt_error)?;
+    commit_attempt_registry_direct(output, &attempts)?;
+    attempts
+        .transition_building(&producer.stable_source, attempt)
+        .map_err(build_attempt_error)?;
+    commit_attempt_registry_direct(output, &attempts)?;
+    attempts
+        .claim_backend(&producer.stable_source, attempt)
+        .map_err(build_attempt_error)?;
+    commit_attempt_registry_direct(output, &attempts)?;
+    Ok((attempt, false))
+}
+
+fn finish_backend_attempt_locked(
+    output: &PinnedOutput,
+    producer: &ProducerIdentity,
+    attempt: BuildAttempt,
+    externally_managed: bool,
+    result: Result<Vec<DeviceArtifact>, EmitError>,
+    hooks: &mut impl TransactionHooks,
+) -> Result<Vec<DeviceArtifact>, EmitError> {
+    if !externally_managed {
+        let publication_committed = matches!(
+            &result,
+            Err(EmitError::Transaction(transaction)) if transaction.publication().is_committed()
+        );
+        let state_result = (|| {
+            let mut attempts = read_attempt_registry(output)?;
+            if result.is_ok() || publication_committed {
+                attempts
+                    .mark_backend_seen(&producer.stable_source, attempt)
+                    .map_err(build_attempt_error)?;
+                attempts
+                    .mark_completed(&producer.stable_source, attempt)
+                    .map_err(build_attempt_error)?;
+            } else {
+                attempts
+                    .mark_failed(&producer.stable_source, attempt)
+                    .map_err(build_attempt_error)?;
+            }
+            commit_attempt_registry_direct(output, &attempts)
+        })();
+        return match result {
+            Ok(value) => match state_result {
+                Ok(()) => Ok(value),
+                Err(primary) => Err(committed_attempt_error(primary, value.len() * 3)),
+            },
+            Err(primary) => match state_result {
+                Ok(()) => Err(primary),
+                Err(secondary) => Err(combine_attempt_errors(primary, secondary, output)),
+            },
+        };
+    }
+
+    match result {
+        Ok(value) => {
+            let mut attempts = match read_attempt_registry(output) {
+                Ok(attempts) => attempts,
+                Err(primary) => {
+                    let primary = committed_attempt_error(primary, value.len() * 3);
+                    return Err(fail_after_backend_error(
+                        output, producer, attempt, primary, hooks,
+                    ));
+                }
+            };
+            let record = match attempts.record_exact(&producer.stable_source, attempt) {
+                Ok(record) => record,
+                Err(error) => {
+                    let primary =
+                        committed_attempt_error(build_attempt_error(error), value.len() * 3);
+                    return Err(fail_after_backend_error(
+                        output, producer, attempt, primary, hooks,
+                    ));
+                }
+            };
+            if record.crate_name != producer.crate_name {
+                let primary = committed_attempt_error(
+                    build_attempt_error(
+                        "build attempt crate name changed before backend completion",
+                    ),
+                    value.len() * 3,
+                );
+                return Err(fail_after_backend_error(
+                    output, producer, attempt, primary, hooks,
+                ));
+            }
+            let state_result = attempts
+                .mark_backend_seen(&producer.stable_source, attempt)
+                .map_err(build_attempt_error)
+                .and_then(|()| commit_attempt_registry_direct(output, &attempts));
+            if let Err(primary) = state_result {
+                let primary = committed_attempt_error(primary, value.len() * 3);
+                return Err(fail_after_backend_error(
+                    output, producer, attempt, primary, hooks,
+                ));
+            }
+            Ok(value)
+        }
+        Err(primary) => Err(fail_after_backend_error(
+            output, producer, attempt, primary, hooks,
+        )),
+    }
+}
+
+fn committed_attempt_error(primary: EmitError, final_renames: usize) -> EmitError {
+    EmitError::Transaction(Box::new(ArtifactTransactionError {
+        primary: Some(Box::new(primary)),
+        cleanup_failures: Vec::new(),
+        invalidation_failures: Vec::new(),
+        publication: PublicationState::Committed { final_renames },
+    }))
+}
+
+fn fail_after_backend_error(
+    output: &PinnedOutput,
+    producer: &ProducerIdentity,
+    attempt: BuildAttempt,
+    primary: EmitError,
+    hooks: &mut impl TransactionHooks,
+) -> EmitError {
+    match fail_build_attempt_locked(output, producer, attempt, hooks) {
+        Ok(()) => primary,
+        Err(secondary) => combine_attempt_errors(primary, secondary, output),
+    }
+}
+
+fn combine_attempt_errors(
+    primary: EmitError,
+    secondary: EmitError,
+    output: &PinnedOutput,
+) -> EmitError {
+    if let EmitError::Transaction(mut primary_transaction) = primary {
+        match secondary {
+            EmitError::Transaction(mut secondary_transaction) => {
+                if let Some(secondary_primary) = secondary_transaction.primary.take() {
+                    primary_transaction
+                        .cleanup_failures
+                        .push(FilesystemFailure {
+                            operation: "persist failed build attempt",
+                            entry: ATTEMPT_FILE.to_string(),
+                            error: io::Error::other(secondary_primary.to_string()),
+                        });
+                }
+                primary_transaction
+                    .cleanup_failures
+                    .append(&mut secondary_transaction.cleanup_failures);
+                primary_transaction
+                    .invalidation_failures
+                    .append(&mut secondary_transaction.invalidation_failures);
+            }
+            secondary => primary_transaction
+                .cleanup_failures
+                .push(FilesystemFailure {
+                    operation: "persist failed build attempt",
+                    entry: output.display_path.display().to_string(),
+                    error: io::Error::other(secondary.to_string()),
+                }),
+        }
+        return EmitError::Transaction(primary_transaction);
+    }
+
+    match secondary {
+        EmitError::Transaction(mut transaction) => {
+            if let Some(secondary_primary) = transaction.primary.take() {
+                transaction.cleanup_failures.insert(
+                    0,
+                    FilesystemFailure {
+                        operation: "persist failed build attempt",
+                        entry: ATTEMPT_FILE.to_string(),
+                        error: io::Error::other(secondary_primary.to_string()),
+                    },
+                );
+            }
+            transaction.primary = Some(Box::new(primary));
+            EmitError::Transaction(transaction)
+        }
+        secondary => EmitError::Transaction(Box::new(ArtifactTransactionError {
+            primary: Some(Box::new(primary)),
+            cleanup_failures: vec![FilesystemFailure {
+                operation: "persist failed build attempt",
+                entry: output.display_path.display().to_string(),
+                error: io::Error::other(secondary.to_string()),
+            }],
+            invalidation_failures: Vec::new(),
+            publication: PublicationState::NotStarted {
+                total_final_renames: 0,
+            },
+        })),
+    }
+}
+
 fn validate_owned_destinations(
     output: &PinnedOutput,
     artifact: &ArtifactNames,
@@ -3504,4 +4494,10 @@ fn validate_artifact_name(kernel_name: &str) -> Result<(), EmitError> {
         });
     }
     Ok(())
+}
+
+fn build_attempt_error(error: impl fmt::Display) -> EmitError {
+    EmitError::BuildAttempt {
+        reason: error.to_string(),
+    }
 }
