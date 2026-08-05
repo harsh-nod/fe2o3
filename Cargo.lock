@@ -245,6 +245,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-kernel-descriptor"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-amd-target",
+ "sha2",
+]
+
+[[package]]
 name = "fe2o3-kernel-ir"
 version = "0.1.0"
 
