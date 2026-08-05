@@ -1,4 +1,4 @@
-use crate::{Name, PointerWidth, ValidationError};
+use crate::{DigestBytes, Name, PointerWidth, ValidationError};
 
 pub const MAX_ABI_FIELDS: usize = 64;
 /// Target-neutral ceiling for a kernel argument buffer.
@@ -76,6 +76,51 @@ pub enum AddressSpace {
     Generic,
 }
 
+/// Compiler-produced identity for one logical Rust kernel argument.
+///
+/// `rust_type` identifies the fully monomorphized Rust type. `layout` identifies
+/// the rustc-reported host/device ABI layout, including scalarization and
+/// padding. The bytes are opaque here; build tooling owns their versioned hash
+/// domains.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TypeIdentity {
+    rust_type: DigestBytes,
+    layout: DigestBytes,
+}
+
+impl TypeIdentity {
+    pub const fn new(rust_type: DigestBytes, layout: DigestBytes) -> Self {
+        Self { rust_type, layout }
+    }
+
+    pub const fn rust_type(self) -> DigestBytes {
+        self.rust_type
+    }
+
+    pub const fn layout(self) -> DigestBytes {
+        self.layout
+    }
+}
+
+/// Source-level ownership carried by a logical kernel argument.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ArgumentOwnership {
+    ByValue,
+    SharedBorrow,
+    UniqueBorrow,
+    RawPointer,
+}
+
+/// Aliasing guarantee the compiler may rely on for an argument.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AliasClass {
+    Value,
+    SharedReadOnly,
+    Exclusive,
+    SharedAtomic,
+    Unrestricted,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AbiField {
     name: Name,
@@ -86,6 +131,9 @@ pub struct AbiField {
     mutability: Mutability,
     access: Access,
     address_space: AddressSpace,
+    type_identity: TypeIdentity,
+    ownership: ArgumentOwnership,
+    alias_class: AliasClass,
 }
 
 impl AbiField {
@@ -99,6 +147,9 @@ impl AbiField {
         mutability: Mutability,
         access: Access,
         address_space: AddressSpace,
+        type_identity: TypeIdentity,
+        ownership: ArgumentOwnership,
+        alias_class: AliasClass,
     ) -> Result<Self, ValidationError> {
         validate_alignment(alignment, "ABI field")?;
         if size == 0 || !offset.is_multiple_of(u64::from(alignment)) {
@@ -120,9 +171,11 @@ impl AbiField {
                 if mutability != Mutability::Immutable
                     || access != Access::ByValue
                     || address_space != AddressSpace::Value
+                    || ownership != ArgumentOwnership::ByValue
+                    || alias_class != AliasClass::Value
                 {
                     return Err(ValidationError::InvalidAccess(
-                        "scalars must be immutable by-value fields in value space",
+                        "scalars must be immutable by-value, non-aliased fields in value space",
                     ));
                 }
             }
@@ -132,7 +185,8 @@ impl AbiField {
             } => {
                 validate_supported_reference_width(size, alignment, false)?;
                 validate_referenced_layout(pointee_size, pointee_alignment, "pointee")?;
-                validate_reference_access(mutability, access, address_space)?;
+                validate_reference_access(access, address_space)?;
+                validate_reference_ownership(mutability, access, ownership, alias_class)?;
             }
             AbiKind::Slice {
                 element_size,
@@ -140,7 +194,8 @@ impl AbiField {
             } => {
                 validate_supported_reference_width(size, alignment, true)?;
                 validate_referenced_layout(element_size, element_alignment, "slice element")?;
-                validate_reference_access(mutability, access, address_space)?;
+                validate_reference_access(access, address_space)?;
+                validate_reference_ownership(mutability, access, ownership, alias_class)?;
             }
         }
 
@@ -153,6 +208,9 @@ impl AbiField {
             mutability,
             access,
             address_space,
+            type_identity,
+            ownership,
+            alias_class,
         })
     }
 
@@ -186,6 +244,18 @@ impl AbiField {
 
     pub const fn address_space(&self) -> AddressSpace {
         self.address_space
+    }
+
+    pub const fn type_identity(&self) -> TypeIdentity {
+        self.type_identity
+    }
+
+    pub const fn ownership(&self) -> ArgumentOwnership {
+        self.ownership
+    }
+
+    pub const fn alias_class(&self) -> AliasClass {
+        self.alias_class
     }
 }
 
@@ -320,7 +390,6 @@ fn validate_supported_reference_width(
 }
 
 fn validate_reference_access(
-    mutability: Mutability,
     access: Access,
     address_space: AddressSpace,
 ) -> Result<(), ValidationError> {
@@ -329,19 +398,42 @@ fn validate_reference_access(
             "pointer and slice fields require memory access and a memory address space",
         ));
     }
-    if mutability == Mutability::Immutable && access.writes() {
-        return Err(ValidationError::InvalidAccess(
-            "immutable fields cannot grant write access",
-        ));
-    }
-    if address_space == AddressSpace::Constant
-        && (mutability == Mutability::Mutable || access.writes())
-    {
+    if address_space == AddressSpace::Constant && access.writes() {
         return Err(ValidationError::InvalidAccess(
             "constant address space is immutable",
         ));
     }
     Ok(())
+}
+
+fn validate_reference_ownership(
+    mutability: Mutability,
+    access: Access,
+    ownership: ArgumentOwnership,
+    alias_class: AliasClass,
+) -> Result<(), ValidationError> {
+    let valid = match ownership {
+        ArgumentOwnership::ByValue => false,
+        ArgumentOwnership::SharedBorrow => {
+            mutability == Mutability::Immutable
+                && ((alias_class == AliasClass::SharedReadOnly && access == Access::ReadOnly)
+                    || (alias_class == AliasClass::SharedAtomic && access != Access::ByValue))
+        }
+        ArgumentOwnership::UniqueBorrow => {
+            alias_class == AliasClass::Exclusive && mutability == Mutability::Mutable
+        }
+        ArgumentOwnership::RawPointer => {
+            alias_class == AliasClass::Unrestricted
+                && (mutability == Mutability::Mutable || !access.writes())
+        }
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(ValidationError::InvalidAccess(
+            "reference ownership, aliasing, mutability, and access are inconsistent",
+        ))
+    }
 }
 
 fn validate_field_width(

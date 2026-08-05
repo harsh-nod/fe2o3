@@ -1,10 +1,18 @@
 use fe2o3_artifacts::{
-    AbiField, AbiKind, AbiLayout, Access, AddressSpace, MAX_ABI_BYTES, MAX_ABI_FIELDS, Mutability,
-    Name, PointerWidth, ScalarType, ValidationError,
+    AbiField, AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership, DigestBytes,
+    MAX_ABI_BYTES, MAX_ABI_FIELDS, Mutability, Name, PointerWidth, ScalarType, TypeIdentity,
+    ValidationError,
 };
 
 fn name(value: &str) -> Name {
     Name::new(value).unwrap()
+}
+
+fn type_identity(byte: u8) -> TypeIdentity {
+    TypeIdentity::new(
+        DigestBytes::from_bytes([byte; 32]),
+        DigestBytes::from_bytes([byte.wrapping_add(1); 32]),
+    )
 }
 
 fn scalar(field_name: &str, offset: u64) -> AbiField {
@@ -17,6 +25,9 @@ fn scalar(field_name: &str, offset: u64) -> AbiField {
         Mutability::Immutable,
         Access::ByValue,
         AddressSpace::Value,
+        type_identity(0x10),
+        ArgumentOwnership::ByValue,
+        AliasClass::Value,
     )
     .unwrap()
 }
@@ -36,6 +47,9 @@ fn fields() -> Vec<AbiField> {
             Mutability::Immutable,
             Access::ReadOnly,
             AddressSpace::Global,
+            type_identity(0x20),
+            ArgumentOwnership::SharedBorrow,
+            AliasClass::SharedReadOnly,
         )
         .unwrap(),
         AbiField::new(
@@ -50,6 +64,9 @@ fn fields() -> Vec<AbiField> {
             Mutability::Mutable,
             Access::ReadWrite,
             AddressSpace::Global,
+            type_identity(0x30),
+            ArgumentOwnership::UniqueBorrow,
+            AliasClass::Exclusive,
         )
         .unwrap(),
     ]
@@ -61,6 +78,17 @@ fn abi_fields_enforce_kind_access_and_address_space_rules() {
     assert_eq!(layout.fields().len(), 3);
     assert_eq!(layout.fields()[2].size(), 16);
     assert!(matches!(layout.fields()[2].kind(), AbiKind::Slice { .. }));
+    assert_eq!(layout.fields()[0].type_identity(), type_identity(0x10));
+    assert_eq!(
+        layout.fields()[1].ownership(),
+        ArgumentOwnership::SharedBorrow
+    );
+    assert_eq!(layout.fields()[1].alias_class(), AliasClass::SharedReadOnly);
+    assert_eq!(
+        layout.fields()[2].ownership(),
+        ArgumentOwnership::UniqueBorrow
+    );
+    assert_eq!(layout.fields()[2].alias_class(), AliasClass::Exclusive);
 
     assert!(matches!(
         AbiField::new(
@@ -72,6 +100,9 @@ fn abi_fields_enforce_kind_access_and_address_space_rules() {
             Mutability::Immutable,
             Access::ByValue,
             AddressSpace::Value,
+            type_identity(0x40),
+            ArgumentOwnership::ByValue,
+            AliasClass::Value,
         ),
         Err(ValidationError::InvalidAlignment { .. })
     ));
@@ -88,6 +119,9 @@ fn abi_fields_enforce_kind_access_and_address_space_rules() {
             Mutability::Immutable,
             Access::ReadWrite,
             AddressSpace::Global,
+            type_identity(0x41),
+            ArgumentOwnership::SharedBorrow,
+            AliasClass::SharedReadOnly,
         ),
         Err(ValidationError::InvalidAccess(_))
     ));
@@ -104,6 +138,9 @@ fn abi_fields_enforce_kind_access_and_address_space_rules() {
             Mutability::Mutable,
             Access::WriteOnly,
             AddressSpace::Constant,
+            type_identity(0x42),
+            ArgumentOwnership::UniqueBorrow,
+            AliasClass::Exclusive,
         ),
         Err(ValidationError::InvalidAccess(_))
     ));
@@ -120,6 +157,9 @@ fn abi_fields_enforce_kind_access_and_address_space_rules() {
             Mutability::Immutable,
             Access::ReadOnly,
             AddressSpace::Global,
+            type_identity(0x43),
+            ArgumentOwnership::SharedBorrow,
+            AliasClass::SharedReadOnly,
         )
         .is_ok()
     );
@@ -136,6 +176,9 @@ fn abi_fields_enforce_kind_access_and_address_space_rules() {
             Mutability::Immutable,
             Access::ReadOnly,
             AddressSpace::Global,
+            type_identity(0x44),
+            ArgumentOwnership::SharedBorrow,
+            AliasClass::SharedReadOnly,
         ),
         Err(ValidationError::InvalidLayout(_))
     ));
@@ -152,9 +195,69 @@ fn abi_fields_enforce_kind_access_and_address_space_rules() {
             Mutability::Immutable,
             Access::ReadOnly,
             AddressSpace::Global,
+            type_identity(0x45),
+            ArgumentOwnership::SharedBorrow,
+            AliasClass::SharedReadOnly,
         ),
         Err(ValidationError::InvalidLayout(_))
     ));
+    assert!(matches!(
+        AbiField::new(
+            name("shared_but_exclusive"),
+            0,
+            8,
+            8,
+            AbiKind::Pointer {
+                pointee_size: 4,
+                pointee_alignment: 4,
+            },
+            Mutability::Immutable,
+            Access::ReadOnly,
+            AddressSpace::Global,
+            type_identity(0x47),
+            ArgumentOwnership::SharedBorrow,
+            AliasClass::Exclusive,
+        ),
+        Err(ValidationError::InvalidAccess(_))
+    ));
+    assert!(matches!(
+        AbiField::new(
+            name("raw_but_shared"),
+            0,
+            8,
+            8,
+            AbiKind::Pointer {
+                pointee_size: 4,
+                pointee_alignment: 4,
+            },
+            Mutability::Immutable,
+            Access::ReadOnly,
+            AddressSpace::Global,
+            type_identity(0x48),
+            ArgumentOwnership::RawPointer,
+            AliasClass::SharedReadOnly,
+        ),
+        Err(ValidationError::InvalidAccess(_))
+    ));
+    assert!(
+        AbiField::new(
+            name("shared_atomic"),
+            0,
+            8,
+            8,
+            AbiKind::Pointer {
+                pointee_size: 4,
+                pointee_alignment: 4,
+            },
+            Mutability::Immutable,
+            Access::ReadWrite,
+            AddressSpace::Global,
+            type_identity(0x49),
+            ArgumentOwnership::SharedBorrow,
+            AliasClass::SharedAtomic,
+        )
+        .is_ok()
+    );
 }
 
 #[test]
@@ -169,6 +272,9 @@ fn abi_layout_rejects_overlap_overflow_duplicates_and_wrong_pointer_width() {
             Mutability::Immutable,
             Access::ByValue,
             AddressSpace::Value,
+            type_identity(0x46),
+            ArgumentOwnership::ByValue,
+            AliasClass::Value,
         ),
         Err(ValidationError::Overflow("ABI field end"))
     ));

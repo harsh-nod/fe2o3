@@ -35,10 +35,18 @@ the selected algorithm; it does not establish who produced those bytes.
   bounded to 1 MiB before device-specific limits are applied. Fields are
   aligned, ordered, non-overlapping, in bounds, and compatible with the
   selected pointer width.
+- Every logical argument carries compiler-produced identities for its fully
+  monomorphized Rust type and rustc-reported ABI layout. These are opaque,
+  versioned-domain identities: the model preserves and compares them but does
+  not calculate or authenticate them.
 - Scalar, pointer, and slice records have consistent size, mutability, access,
-  and address-space semantics. Immutable and constant references cannot grant
-  write access. Standalone reference fields must match one supported pointer
-  width; an `AbiLayout` binds them to the target's exact width.
+  address-space, ownership, and alias semantics. Ordinary shared borrows are
+  immutable and read-only; shared atomic borrows explicitly admit atomic
+  interior mutation and require the kernel's `Atomics` capability. Unique
+  borrows are mutable and exclusive; raw pointers carry no alias guarantee.
+  Constant references cannot grant write access. Standalone reference fields
+  must match one supported pointer width; an `AbiLayout` binds them to the
+  target's exact width.
 
 `AbiKind::Slice` is one logical field in the ordered ABI. Its physical launch
 representation is exactly pointer followed by length, with total size twice

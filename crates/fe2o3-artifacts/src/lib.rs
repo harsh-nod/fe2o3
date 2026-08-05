@@ -13,8 +13,8 @@ mod identities;
 mod manifest;
 
 pub use abi::{
-    AbiField, AbiKind, AbiLayout, Access, AddressSpace, MAX_ABI_BYTES, MAX_ABI_FIELDS, Mutability,
-    ScalarType,
+    AbiField, AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership,
+    MAX_ABI_BYTES, MAX_ABI_FIELDS, Mutability, ScalarType, TypeIdentity,
 };
 pub use container::{
     ArtifactContainerV1, CodeObjectPayload, ContainerValidationError, MAX_CODE_OBJECT_BYTES,

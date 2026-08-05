@@ -2,8 +2,8 @@ mod common;
 
 use common::{kernel, manifest, object, target, text};
 use fe2o3_artifacts::{
-    Capability, CompilerIdentity, DecodeError, MAX_ABI_BYTES, MAX_CODE_OBJECTS, MAX_MANIFEST_BYTES,
-    ManifestV1, PointerWidth, ToolIdentity, ValidationError,
+    AliasClass, ArgumentOwnership, Capability, CompilerIdentity, DecodeError, MAX_ABI_BYTES,
+    MAX_CODE_OBJECTS, MAX_MANIFEST_BYTES, ManifestV1, PointerWidth, ToolIdentity, ValidationError,
 };
 
 fn find(bytes: &[u8], needle: &[u8]) -> usize {
@@ -37,6 +37,14 @@ fn round_trip_preserves_validated_manifest() {
 
     assert_eq!(decoded, original);
     assert_eq!(decoded.kernels()[0].abi().fields().len(), 3);
+    assert_eq!(
+        decoded.kernels()[0].abi().fields()[1].ownership(),
+        ArgumentOwnership::SharedBorrow
+    );
+    assert_eq!(
+        decoded.kernels()[0].abi().fields()[2].alias_class(),
+        AliasClass::Exclusive
+    );
 }
 
 #[test]
@@ -208,6 +216,28 @@ fn malformed_names_alignment_and_layout_are_rejected() {
         ManifestV1::from_bytes(&unknown_abi_kind),
         Err(DecodeError::UnknownTag {
             kind: "ABI kind",
+            tag: 0xff
+        })
+    ));
+
+    let input_type_identity = find(&valid, &[0xb0; 32]);
+    let ownership_position = input_type_identity + 64;
+    let mut unknown_ownership = valid.clone();
+    unknown_ownership[ownership_position] = 0xff;
+    assert!(matches!(
+        ManifestV1::from_bytes(&unknown_ownership),
+        Err(DecodeError::UnknownTag {
+            kind: "argument ownership",
+            tag: 0xff
+        })
+    ));
+
+    let mut unknown_alias_class = valid.clone();
+    unknown_alias_class[ownership_position + 1] = 0xff;
+    assert!(matches!(
+        ManifestV1::from_bytes(&unknown_alias_class),
+        Err(DecodeError::UnknownTag {
+            kind: "alias class",
             tag: 0xff
         })
     ));

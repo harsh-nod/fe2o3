@@ -1,6 +1,6 @@
 use crate::{
-    AbiLayout, Capability, CodeObjectIdentity, CompilerIdentity, DigestBytes, LaunchContract, Name,
-    TargetIdentity, ToolIdentity, ValidationError,
+    AbiLayout, AliasClass, Capability, CodeObjectIdentity, CompilerIdentity, DigestBytes,
+    LaunchContract, Name, TargetIdentity, ToolIdentity, ValidationError,
 };
 
 pub const MAX_CODE_OBJECTS: usize = 128;
@@ -136,6 +136,18 @@ impl ManifestV1 {
                 if target.capabilities().binary_search(capability).is_err() {
                     return Err(ValidationError::MissingCapability(capability.name()));
                 }
+            }
+            if kernel
+                .abi()
+                .fields()
+                .iter()
+                .any(|field| field.alias_class() == AliasClass::SharedAtomic)
+                && kernel
+                    .required_capabilities()
+                    .binary_search(&Capability::Atomics)
+                    .is_err()
+            {
+                return Err(ValidationError::MissingCapability("atomics"));
             }
         }
 
