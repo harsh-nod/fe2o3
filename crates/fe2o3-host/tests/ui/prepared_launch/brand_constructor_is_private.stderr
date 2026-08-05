@@ -1,12 +1,12 @@
-error[E0624]: associated function `from_validated_artifact` is private
+error[E0624]: associated function `from_internal_binding` is private
   --> tests/ui/prepared_launch/brand_constructor_is_private.rs:11:42
    |
-11 |       let _forged = KernelBrand::<Kernel>::from_validated_artifact(
-   |                                            ^^^^^^^^^^^^^^^^^^^^^^^ private associated function
+11 |       let _forged = KernelBrand::<Kernel>::from_internal_binding(
+   |                                            ^^^^^^^^^^^^^^^^^^^^^ private associated function
    |
   ::: src/prepared_launch.rs
    |
-   | /     pub(crate) fn from_validated_artifact(
+   | /     pub(crate) fn from_internal_binding(
    | |         kernel: KernelId,
    | |         launch: LaunchConstraintsV1,
    | |         context: ObservedContext,

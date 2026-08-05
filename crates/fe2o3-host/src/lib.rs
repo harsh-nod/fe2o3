@@ -1,5 +1,10 @@
+mod artifact_binding;
 mod prepared_launch;
 
+pub use artifact_binding::{
+    ARTIFACT_KERNEL_IDENTITY_VERSION, ArtifactBindingError, ArtifactKernelIdentityV1,
+    ArtifactLaunchContractError, ArtifactRevalidationError, ValidatedArtifactSelectionV1,
+};
 pub use fe2o3_core::{KernelParams, LaunchConfig};
 pub use fe2o3_kernel_descriptor::{BlockSizeV1, DimensionsV1, KernelId, LaunchConstraintsV1};
 pub use prepared_launch::{

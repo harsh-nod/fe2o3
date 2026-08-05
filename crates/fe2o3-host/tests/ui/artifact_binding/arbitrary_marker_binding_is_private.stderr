@@ -1,0 +1,10 @@
+error[E0624]: method `bind_marker` is private
+ --> tests/ui/artifact_binding/arbitrary_marker_binding_is_private.rs:6:28
+  |
+6 |     let _brand = validated.bind_marker::<ArbitraryKernel>();
+  |                            ^^^^^^^^^^^ private method
+  |
+ ::: src/artifact_binding.rs
+  |
+  |     pub(crate) fn bind_marker<K>(&self) -> ArtifactKernelBrandV1<K> {
+  |     --------------------------------------------------------------- private method defined here

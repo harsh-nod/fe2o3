@@ -96,8 +96,44 @@ impl ObservedContext {
             && self.retained_context.is_some()
     }
 
-    fn same_context(&self, other: &Self) -> bool {
+    pub(crate) fn same_context(&self, other: &Self) -> bool {
         self.identity == other.identity
+    }
+
+    pub(crate) fn same_launch_limits(&self, other: &Self) -> bool {
+        self.limits == other.limits
+    }
+
+    pub(crate) const fn max_threads_per_block(&self) -> u32 {
+        self.limits.max_threads_per_block
+    }
+
+    pub(crate) const fn max_shared_memory_per_block(&self) -> u64 {
+        self.limits.max_shared_memory_per_block
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test(
+        identity: usize,
+        ordinal: i32,
+        target: &str,
+        max_threads_per_block: u32,
+        max_shared_memory_per_block: u64,
+    ) -> Self {
+        Self {
+            identity: ContextIdentity(identity),
+            device: DeviceIdentity {
+                ordinal,
+                target: target.into(),
+            },
+            limits: DeviceLaunchLimits {
+                max_threads_per_block,
+                max_block_dimensions: [max_threads_per_block; 3],
+                max_grid_dimensions: [u32::MAX; 3],
+                max_shared_memory_per_block,
+            },
+            retained_context: None,
+        }
     }
 }
 
@@ -105,8 +141,8 @@ impl ObservedContext {
 ///
 /// Decoding a manifest or manually constructing this value does not create a
 /// [`KernelBrand`], authorize module loading, or authorize launch. A future
-/// validated artifact loader must independently authenticate and bind these
-/// fields before it can mint a brand.
+/// generated binding must independently match both validated artifact identity
+/// and the marker `K` before it can mint a brand.
 pub struct UntrustedKernelDeclaration<K> {
     kernel: KernelId,
     launch: LaunchConstraintsV1,
@@ -250,12 +286,13 @@ impl<K> UntrustedLaunchRequest<K> {
 
 struct BrandSeal;
 
-/// A sealed association between one marker `K` and validated kernel metadata.
+/// A sealed association between one marker `K` and bound kernel metadata.
 ///
 /// There is intentionally no public constructor and no conversion from
-/// [`UntrustedKernelDeclaration`]. The future validated artifact-loading path
-/// is the only component permitted to mint this brand. A brand contains no HIP
-/// module or function handle and cannot launch anything in this G0 skeleton.
+/// [`UntrustedKernelDeclaration`]. A future generated path must establish the
+/// marker-to-kernel association in addition to artifact validation before it
+/// can mint this brand. A brand contains no HIP module or function handle and
+/// cannot launch anything in this skeleton.
 pub struct KernelBrand<K> {
     kernel: KernelId,
     launch: LaunchConstraintsV1,
@@ -276,9 +313,10 @@ impl<K> fmt::Debug for KernelBrand<K> {
 }
 
 impl<K> KernelBrand<K> {
-    // This is the deliberately crate-private seam for future validated loading.
+    // Crate privacy prevents callers from turning structural metadata into a
+    // marker association. Future generated code must add unforgeable K evidence.
     #[allow(dead_code)]
-    pub(crate) fn from_validated_artifact(
+    pub(crate) fn from_internal_binding(
         kernel: KernelId,
         launch: LaunchConstraintsV1,
         context: ObservedContext,
@@ -898,7 +936,7 @@ mod tests {
     }
 
     fn brand(contract: LaunchConstraintsV1, context: ObservedContext) -> KernelBrand<VecAdd> {
-        KernelBrand::from_validated_artifact(VECADD, contract, context)
+        KernelBrand::from_internal_binding(VECADD, contract, context)
     }
 
     fn request(
@@ -1192,7 +1230,7 @@ mod tests {
             LaunchConstraintsV1::new(2, BlockSizeV1::Any, dimensions(100, 50, 1), 64, 0, 0)
                 .unwrap();
         let flat_brand =
-            KernelBrand::from_validated_artifact(VECADD, flat_contract, observed.clone());
+            KernelBrand::from_internal_binding(VECADD, flat_contract, observed.clone());
         assert_error(
             &flat_brand,
             &observed,

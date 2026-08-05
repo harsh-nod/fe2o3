@@ -1,8 +1,8 @@
 use std::fmt;
 
 use crate::{
-    ArtifactContainerV1, Capability, CodeObjectFormat, CodeObjectIdentity, DigestBytes, Endianness,
-    KernelEntry, ManifestV1, PointerWidth, TargetIdentity,
+    ArtifactContainerV1, Capability, CodeObjectFormat, CodeObjectIdentity, DigestAlgorithm,
+    DigestBytes, Endianness, KernelEntry, ManifestV1, PointerWidth, TargetIdentity,
 };
 
 /// A kernel entry and native payload borrowed from one validated container.
@@ -12,6 +12,7 @@ use crate::{
 /// authenticity, ABI compatibility with host types, or launch safety.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SelectedNativeKernel<'container> {
+    digest_algorithm: DigestAlgorithm,
     manifest: &'container ManifestV1,
     kernel: &'container KernelEntry,
     code_object: &'container CodeObjectIdentity,
@@ -19,6 +20,11 @@ pub struct SelectedNativeKernel<'container> {
 }
 
 impl<'container> SelectedNativeKernel<'container> {
+    /// Returns the digest algorithm validated for this selection's container.
+    pub const fn digest_algorithm(self) -> DigestAlgorithm {
+        self.digest_algorithm
+    }
+
     pub const fn manifest(self) -> &'container ManifestV1 {
         self.manifest
     }
@@ -121,6 +127,7 @@ impl ArtifactContainerV1 {
             .expect("validated container must contain every manifest code object");
 
         Ok(SelectedNativeKernel {
+            digest_algorithm: self.digest_algorithm(),
             manifest: self.manifest(),
             kernel,
             code_object,

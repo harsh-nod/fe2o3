@@ -1,0 +1,1083 @@
+use crate::{
+    BlockSizeV1, DeviceIdentity, DimensionsV1, KernelBrand, KernelId, LaunchConstraintsV1,
+    ObservedContext, PrepareLaunchError, PreparedLaunch, UntrustedLaunchRequest,
+};
+use fe2o3_artifacts::{
+    AbiLayout, BlockSize, Capability, CodeObjectIdentity, DeclaredTargetMismatch, DigestBytes,
+    Endianness, HostLaunchAbi, HostLaunchAbiError, LaunchContract, Name, PayloadDigest,
+    PointerWidth, SelectedNativeKernel, TargetIdentity,
+};
+use fe2o3_kernel_descriptor::ValidationError as DescriptorValidationError;
+use std::fmt;
+use std::sync::Arc;
+
+const AMDGPU_TRIPLE: &str = "amdgcn-amd-amdhsa";
+
+/// Version of the exact artifact identity carried by the G3 host bridge.
+pub const ARTIFACT_KERNEL_IDENTITY_VERSION: u16 = 1;
+
+/// Exact, owned identity of one validated native-kernel selection.
+///
+/// Values can only be obtained from [`ValidatedArtifactSelectionV1`]. Equality
+/// covers the canonical manifest digest, kernel and code-object digests, names,
+/// target, ABI, source launch contract, and the conservative launch constraints
+/// derived for the observed device. It does not establish artifact authenticity
+/// or prove that declarations match the executable payload.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ArtifactKernelIdentityV1 {
+    manifest_digest: PayloadDigest,
+    kernel_id: KernelId,
+    name: Name,
+    symbol: Name,
+    source_digest: DigestBytes,
+    executable_digest: DigestBytes,
+    code_object: CodeObjectIdentity,
+    payload_digest: PayloadDigest,
+    target: TargetIdentity,
+    required_capabilities: Vec<Capability>,
+    abi: AbiLayout,
+    launch: LaunchContract,
+    effective_launch: LaunchConstraintsV1,
+}
+
+impl ArtifactKernelIdentityV1 {
+    pub const fn version(&self) -> u16 {
+        ARTIFACT_KERNEL_IDENTITY_VERSION
+    }
+
+    pub const fn manifest_digest(&self) -> PayloadDigest {
+        self.manifest_digest
+    }
+
+    pub const fn kernel_id(&self) -> KernelId {
+        self.kernel_id
+    }
+
+    pub const fn name(&self) -> &Name {
+        &self.name
+    }
+
+    pub const fn symbol(&self) -> &Name {
+        &self.symbol
+    }
+
+    pub const fn source_digest(&self) -> DigestBytes {
+        self.source_digest
+    }
+
+    pub const fn executable_digest(&self) -> DigestBytes {
+        self.executable_digest
+    }
+
+    pub const fn code_object(&self) -> &CodeObjectIdentity {
+        &self.code_object
+    }
+
+    pub const fn payload_digest(&self) -> PayloadDigest {
+        self.payload_digest
+    }
+
+    pub const fn target(&self) -> &TargetIdentity {
+        &self.target
+    }
+
+    pub fn required_capabilities(&self) -> &[Capability] {
+        &self.required_capabilities
+    }
+
+    pub const fn abi(&self) -> &AbiLayout {
+        &self.abi
+    }
+
+    pub const fn launch(&self) -> &LaunchContract {
+        &self.launch
+    }
+
+    pub const fn effective_launch(&self) -> &LaunchConstraintsV1 {
+        &self.effective_launch
+    }
+}
+
+/// A validated native artifact selection bound to one exact observed context.
+///
+/// This public token is intentionally non-generic: structural artifact and ABI
+/// validation cannot establish a relationship to an arbitrary Rust marker
+/// type. It retains exact identity and payload bytes but contains no HIP handle,
+/// cannot construct [`KernelBrand`], and exposes no launch operation.
+///
+/// [`HostLaunchAbi`] validation performed during construction checks only the
+/// manifest's structural ABI subset. It does not match compiler-generated host
+/// argument types, layouts, or lifetimes.
+pub struct ValidatedArtifactSelectionV1 {
+    identity: Arc<ArtifactKernelIdentityV1>,
+    payload: Arc<[u8]>,
+    context: ObservedContext,
+}
+
+impl fmt::Debug for ValidatedArtifactSelectionV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ValidatedArtifactSelectionV1")
+            .field("identity", &self.identity)
+            .field("payload_len", &self.payload.len())
+            .field("context", &self.context)
+            .finish_non_exhaustive()
+    }
+}
+
+impl ValidatedArtifactSelectionV1 {
+    /// Validates one native artifact selection for an observed context.
+    ///
+    /// The bridge currently supports only exact AMDGPU/64-bit/little-endian
+    /// targets and kernels with no capability requirements, because the current
+    /// context observation does not expose a capability model. It validates the
+    /// declared ABI structurally against the conservative host-launch subset and
+    /// derives launch constraints bounded by observed device limits.
+    pub fn validate(
+        selected: SelectedNativeKernel<'_>,
+        context: &ObservedContext,
+    ) -> Result<Self, ArtifactBindingError> {
+        let identity = identity_from_selection(selected, context)?;
+        Ok(Self {
+            identity: Arc::new(identity),
+            payload: Arc::from(selected.payload()),
+            context: context.clone(),
+        })
+    }
+
+    pub fn identity(&self) -> &ArtifactKernelIdentityV1 {
+        &self.identity
+    }
+
+    pub fn payload(&self) -> &[u8] {
+        &self.payload
+    }
+
+    pub const fn device(&self) -> &DeviceIdentity {
+        self.context.device()
+    }
+
+    /// Revalidates that a later selection and observation are exactly the ones
+    /// represented by this token.
+    pub fn revalidate(
+        &self,
+        selected: SelectedNativeKernel<'_>,
+        context: &ObservedContext,
+    ) -> Result<(), ArtifactRevalidationError> {
+        if context.device() != self.context.device() {
+            return Err(ArtifactRevalidationError::WrongDevice);
+        }
+        if !context.same_context(&self.context) {
+            return Err(ArtifactRevalidationError::WrongContext);
+        }
+        if !context.same_launch_limits(&self.context) {
+            return Err(ArtifactRevalidationError::DeviceLimitsChanged);
+        }
+
+        let actual = identity_from_selection(selected, context)
+            .map_err(ArtifactRevalidationError::Binding)?;
+        if actual != *self.identity {
+            return Err(ArtifactRevalidationError::WrongArtifactIdentity);
+        }
+        if selected.payload() != self.payload.as_ref() {
+            return Err(ArtifactRevalidationError::WrongArtifactIdentity);
+        }
+        Ok(())
+    }
+
+    /// Deliberately crate-private until generated code can provide unforgeable
+    /// evidence that `K` denotes `self.identity().kernel_id()` and ABI.
+    #[allow(dead_code)]
+    pub(crate) fn bind_marker<K>(&self) -> ArtifactKernelBrandV1<K> {
+        let brand = KernelBrand::from_internal_binding(
+            self.identity.kernel_id,
+            self.identity.effective_launch.clone(),
+            self.context.clone(),
+        );
+        ArtifactKernelBrandV1 {
+            identity: self.identity.clone(),
+            payload: self.payload.clone(),
+            context: self.context.clone(),
+            brand,
+        }
+    }
+}
+
+/// Internal typed bridge. It is not exported because artifact structure does
+/// not validate the marker association.
+#[allow(dead_code)]
+pub(crate) struct ArtifactKernelBrandV1<K> {
+    identity: Arc<ArtifactKernelIdentityV1>,
+    payload: Arc<[u8]>,
+    context: ObservedContext,
+    brand: KernelBrand<K>,
+}
+
+#[allow(dead_code)]
+impl<K> ArtifactKernelBrandV1<K> {
+    pub(crate) fn identity(&self) -> &ArtifactKernelIdentityV1 {
+        &self.identity
+    }
+
+    pub(crate) fn prepare(
+        &self,
+        validated: &ValidatedArtifactSelectionV1,
+        context: &ObservedContext,
+        request: UntrustedLaunchRequest<K>,
+    ) -> Result<ArtifactPreparedLaunchV1<K>, ArtifactMarkerPrepareError> {
+        if !Arc::ptr_eq(&self.identity, &validated.identity)
+            || !Arc::ptr_eq(&self.payload, &validated.payload)
+            || !context.same_context(&self.context)
+        {
+            return Err(ArtifactMarkerPrepareError::WrongValidatedSelection);
+        }
+        let prepared = self
+            .brand
+            .prepare(context, request)
+            .map_err(ArtifactMarkerPrepareError::Launch)?;
+        Ok(ArtifactPreparedLaunchV1 {
+            identity: self.identity.clone(),
+            payload: self.payload.clone(),
+            prepared,
+        })
+    }
+}
+
+/// Internal data-only prepared bridge; no module handle or launch method.
+#[allow(dead_code)]
+pub(crate) struct ArtifactPreparedLaunchV1<K> {
+    identity: Arc<ArtifactKernelIdentityV1>,
+    payload: Arc<[u8]>,
+    prepared: PreparedLaunch<K>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum ArtifactMarkerPrepareError {
+    WrongValidatedSelection,
+    Launch(PrepareLaunchError),
+}
+
+/// Failure while binding a validated artifact selection to an observed device.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ArtifactBindingError {
+    UnsupportedTargetTriple(String),
+    TargetMismatch(DeclaredTargetMismatch),
+    UnsupportedPointerWidth(PointerWidth),
+    UnsupportedEndianness(Endianness),
+    UnobservedRequiredCapability(Capability),
+    PayloadDigestMismatch,
+    UnsupportedHostAbi(HostLaunchAbiError),
+    LaunchContract(ArtifactLaunchContractError),
+}
+
+impl fmt::Display for ArtifactBindingError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnsupportedTargetTriple(triple) => {
+                write!(formatter, "unsupported artifact target triple {triple}")
+            }
+            Self::TargetMismatch(error) => error.fmt(formatter),
+            Self::UnsupportedPointerWidth(width) => {
+                write!(formatter, "unsupported artifact pointer width {width:?}")
+            }
+            Self::UnsupportedEndianness(endianness) => {
+                write!(formatter, "unsupported artifact endianness {endianness:?}")
+            }
+            Self::UnobservedRequiredCapability(capability) => write!(
+                formatter,
+                "the observed context does not establish required capability {capability:?}"
+            ),
+            Self::PayloadDigestMismatch => {
+                formatter.write_str("selected payload no longer matches its validated digest")
+            }
+            Self::UnsupportedHostAbi(error) => error.fmt(formatter),
+            Self::LaunchContract(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for ArtifactBindingError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::TargetMismatch(error) => Some(error),
+            Self::UnsupportedHostAbi(error) => Some(error),
+            Self::LaunchContract(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+/// Failure while converting an artifact launch declaration into the stricter
+/// host-side launch model.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ArtifactLaunchContractError {
+    FlatWorkgroupSizeOverflow,
+    BlockExceedsObservedDevice { declared: u64, observed_max: u32 },
+    StaticSharedMemoryExceedsObservedDevice { declared: u32, observed_max: u64 },
+    Descriptor(DescriptorValidationError),
+}
+
+impl fmt::Display for ArtifactLaunchContractError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::FlatWorkgroupSizeOverflow => {
+                formatter.write_str("artifact block dimensions exceed the host contract range")
+            }
+            Self::BlockExceedsObservedDevice {
+                declared,
+                observed_max,
+            } => write!(
+                formatter,
+                "artifact block permits {declared} threads, exceeding observed maximum {observed_max}"
+            ),
+            Self::StaticSharedMemoryExceedsObservedDevice {
+                declared,
+                observed_max,
+            } => write!(
+                formatter,
+                "artifact static shared memory {declared} exceeds observed maximum {observed_max}"
+            ),
+            Self::Descriptor(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for ArtifactLaunchContractError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Descriptor(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+/// Failure while revalidating a selected artifact and its context binding.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ArtifactRevalidationError {
+    Binding(ArtifactBindingError),
+    WrongArtifactIdentity,
+    WrongDevice,
+    WrongContext,
+    DeviceLimitsChanged,
+}
+
+impl fmt::Display for ArtifactRevalidationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Binding(error) => error.fmt(formatter),
+            Self::WrongArtifactIdentity => {
+                formatter.write_str("selected artifact identity does not match the validated token")
+            }
+            Self::WrongDevice => formatter.write_str("observed device identity changed"),
+            Self::WrongContext => formatter.write_str("observed context identity changed"),
+            Self::DeviceLimitsChanged => {
+                formatter.write_str("observed device launch limits changed")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ArtifactRevalidationError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Binding(error) => Some(error),
+            Self::WrongArtifactIdentity
+            | Self::WrongDevice
+            | Self::WrongContext
+            | Self::DeviceLimitsChanged => None,
+        }
+    }
+}
+
+fn identity_from_selection(
+    selected: SelectedNativeKernel<'_>,
+    context: &ObservedContext,
+) -> Result<ArtifactKernelIdentityV1, ArtifactBindingError> {
+    validate_target(selected, context)?;
+    if let Some(capability) = selected.kernel().required_capabilities().first() {
+        return Err(ArtifactBindingError::UnobservedRequiredCapability(
+            *capability,
+        ));
+    }
+    HostLaunchAbi::validate(selected.kernel().abi())
+        .map_err(ArtifactBindingError::UnsupportedHostAbi)?;
+
+    let effective_launch = effective_launch(selected.kernel().launch(), context)?;
+    let payload_digest =
+        PayloadDigest::new(selected.digest_algorithm(), selected.code_object().digest());
+    payload_digest
+        .verify(selected.payload())
+        .map_err(|_| ArtifactBindingError::PayloadDigestMismatch)?;
+    let manifest_digest = selected
+        .digest_algorithm()
+        .calculate(&selected.manifest().to_bytes());
+    let kernel = selected.kernel();
+
+    Ok(ArtifactKernelIdentityV1 {
+        manifest_digest,
+        kernel_id: KernelId::from_bytes(*kernel.kernel_id().as_bytes()),
+        name: kernel.name().clone(),
+        symbol: kernel.symbol().clone(),
+        source_digest: kernel.source_digest(),
+        executable_digest: kernel.executable_digest(),
+        code_object: selected.code_object().clone(),
+        payload_digest,
+        target: selected.target().clone(),
+        required_capabilities: kernel.required_capabilities().to_vec(),
+        abi: kernel.abi().clone(),
+        launch: kernel.launch().clone(),
+        effective_launch,
+    })
+}
+
+fn validate_target(
+    selected: SelectedNativeKernel<'_>,
+    context: &ObservedContext,
+) -> Result<(), ArtifactBindingError> {
+    let target = selected.target();
+    if target.triple().as_str() != AMDGPU_TRIPLE {
+        return Err(ArtifactBindingError::UnsupportedTargetTriple(
+            target.triple().as_str().into(),
+        ));
+    }
+    if target.pointer_width() != PointerWidth::Bits64 {
+        return Err(ArtifactBindingError::UnsupportedPointerWidth(
+            target.pointer_width(),
+        ));
+    }
+    if target.endianness() != Endianness::Little {
+        return Err(ArtifactBindingError::UnsupportedEndianness(
+            target.endianness(),
+        ));
+    }
+    if target.architecture().as_str() != context.device().target() {
+        return Err(ArtifactBindingError::TargetMismatch(
+            DeclaredTargetMismatch::Architecture,
+        ));
+    }
+    Ok(())
+}
+
+fn effective_launch(
+    launch: &LaunchContract,
+    context: &ObservedContext,
+) -> Result<LaunchConstraintsV1, ArtifactBindingError> {
+    let max_grid = descriptor_dimensions(launch.max_grid());
+    let (block_size, max_flat_workgroup_size) = match launch.block_size() {
+        BlockSize::Any => (BlockSizeV1::Any, context.max_threads_per_block()),
+        BlockSize::Exact(dimensions) => {
+            let flat = checked_flat_workgroup_size(dimensions, context)?;
+            (BlockSizeV1::Exact(descriptor_dimensions(dimensions)), flat)
+        }
+        BlockSize::AtMost(dimensions) => {
+            let flat = checked_flat_workgroup_size(dimensions, context)?;
+            (BlockSizeV1::AtMost(descriptor_dimensions(dimensions)), flat)
+        }
+    };
+    if u64::from(launch.static_shared_memory_bytes()) > context.max_shared_memory_per_block() {
+        return Err(ArtifactBindingError::LaunchContract(
+            ArtifactLaunchContractError::StaticSharedMemoryExceedsObservedDevice {
+                declared: launch.static_shared_memory_bytes(),
+                observed_max: context.max_shared_memory_per_block(),
+            },
+        ));
+    }
+
+    LaunchConstraintsV1::new(
+        launch.rank(),
+        block_size,
+        max_grid,
+        max_flat_workgroup_size,
+        launch.static_shared_memory_bytes(),
+        launch.max_dynamic_shared_memory_bytes(),
+    )
+    .map_err(|error| {
+        ArtifactBindingError::LaunchContract(ArtifactLaunchContractError::Descriptor(error))
+    })
+}
+
+fn checked_flat_workgroup_size(
+    dimensions: fe2o3_artifacts::Dimensions,
+    context: &ObservedContext,
+) -> Result<u32, ArtifactBindingError> {
+    let product = u64::from(dimensions.x())
+        .checked_mul(u64::from(dimensions.y()))
+        .and_then(|value| value.checked_mul(u64::from(dimensions.z())))
+        .ok_or(ArtifactBindingError::LaunchContract(
+            ArtifactLaunchContractError::FlatWorkgroupSizeOverflow,
+        ))?;
+    let flat = u32::try_from(product).map_err(|_| {
+        ArtifactBindingError::LaunchContract(ArtifactLaunchContractError::FlatWorkgroupSizeOverflow)
+    })?;
+    if flat > context.max_threads_per_block() {
+        return Err(ArtifactBindingError::LaunchContract(
+            ArtifactLaunchContractError::BlockExceedsObservedDevice {
+                declared: product,
+                observed_max: context.max_threads_per_block(),
+            },
+        ));
+    }
+    Ok(flat)
+}
+
+fn descriptor_dimensions(dimensions: fe2o3_artifacts::Dimensions) -> DimensionsV1 {
+    DimensionsV1::new(dimensions.x(), dimensions.y(), dimensions.z())
+        .expect("validated artifact dimensions must satisfy descriptor dimensions")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fe2o3_artifacts::{
+        AbiField, AbiKind, Access, AddressSpace, AliasClass, ArgumentOwnership,
+        ArtifactContainerV1, CodeObjectFormat, CodeObjectPayload, CompilerIdentity,
+        DeclaredRustLayoutIdentity, DeclaredRustTypeIdentity, DigestAlgorithm, Dimensions,
+        IdentityText, KernelEntry, ManifestV1, Mutability, ScalarType, ToolIdentity, TypeIdentity,
+    };
+
+    struct VecAdd;
+
+    #[derive(Clone)]
+    struct FixtureSpec {
+        payload: Vec<u8>,
+        kernel_id: u8,
+        architecture: &'static str,
+        triple: &'static str,
+        pointer_width: PointerWidth,
+        endianness: Endianness,
+        compiler_version: &'static str,
+        abi: AbiLayout,
+        launch: LaunchContract,
+        required_capabilities: Vec<Capability>,
+    }
+
+    impl Default for FixtureSpec {
+        fn default() -> Self {
+            Self {
+                payload: b"native-gfx942-code-object".to_vec(),
+                kernel_id: 0x11,
+                architecture: "gfx942",
+                triple: AMDGPU_TRIPLE,
+                pointer_width: PointerWidth::Bits64,
+                endianness: Endianness::Little,
+                compiler_version: "1.94.0",
+                abi: empty_abi(),
+                launch: exact_launch(64, 32, 4_096),
+                required_capabilities: vec![],
+            }
+        }
+    }
+
+    fn text(value: &str) -> IdentityText {
+        IdentityText::new(value).unwrap()
+    }
+
+    fn name(value: &str) -> Name {
+        Name::new(value).unwrap()
+    }
+
+    fn digest(byte: u8) -> DigestBytes {
+        DigestBytes::from_bytes([byte; 32])
+    }
+
+    fn type_identity(byte: u8) -> TypeIdentity {
+        TypeIdentity::new(
+            DeclaredRustTypeIdentity::from_untrusted_bytes(digest(byte)),
+            DeclaredRustLayoutIdentity::from_untrusted_bytes(digest(byte.wrapping_add(1))),
+        )
+    }
+
+    fn empty_abi() -> AbiLayout {
+        empty_abi_with_width(PointerWidth::Bits64)
+    }
+
+    fn empty_abi_with_width(pointer_width: PointerWidth) -> AbiLayout {
+        AbiLayout::new(0, 1, pointer_width, vec![]).unwrap()
+    }
+
+    fn scalar_abi() -> AbiLayout {
+        AbiLayout::new(
+            4,
+            4,
+            PointerWidth::Bits64,
+            vec![
+                AbiField::new(
+                    name("value"),
+                    0,
+                    4,
+                    4,
+                    AbiKind::Scalar(ScalarType::U32),
+                    Mutability::Immutable,
+                    Access::ByValue,
+                    AddressSpace::Value,
+                    type_identity(0x61),
+                    ArgumentOwnership::ByValue,
+                    AliasClass::Value,
+                )
+                .unwrap(),
+            ],
+        )
+        .unwrap()
+    }
+
+    fn unsupported_constant_pointer_abi() -> AbiLayout {
+        AbiLayout::new(
+            8,
+            8,
+            PointerWidth::Bits64,
+            vec![
+                AbiField::new(
+                    name("input"),
+                    0,
+                    8,
+                    8,
+                    AbiKind::Pointer {
+                        pointee_size: 4,
+                        pointee_alignment: 4,
+                    },
+                    Mutability::Immutable,
+                    Access::ReadOnly,
+                    AddressSpace::Constant,
+                    type_identity(0x71),
+                    ArgumentOwnership::SharedBorrow,
+                    AliasClass::SharedReadOnly,
+                )
+                .unwrap(),
+            ],
+        )
+        .unwrap()
+    }
+
+    fn exact_launch(block_x: u32, static_bytes: u32, dynamic_bytes: u32) -> LaunchContract {
+        LaunchContract::new(
+            1,
+            BlockSize::Exact(Dimensions::new(block_x, 1, 1).unwrap()),
+            Dimensions::new(65_535, 1, 1).unwrap(),
+            static_bytes,
+            dynamic_bytes,
+        )
+        .unwrap()
+    }
+
+    fn decoded_container(spec: FixtureSpec) -> ArtifactContainerV1 {
+        let payload = CodeObjectPayload::from_bytes(DigestAlgorithm::Sha256, spec.payload).unwrap();
+        let object_digest = payload.digest().bytes();
+        let code_object = CodeObjectIdentity::new(
+            object_digest,
+            CodeObjectFormat::NativeExecutable,
+            payload.bytes().len() as u64,
+        )
+        .unwrap();
+        let target = TargetIdentity::new(
+            text(spec.triple),
+            text(spec.architecture),
+            spec.pointer_width,
+            spec.endianness,
+            spec.required_capabilities.clone(),
+        )
+        .unwrap();
+        let kernel = KernelEntry::new(
+            digest(spec.kernel_id),
+            name("vector_add"),
+            name("vector_add.kd"),
+            digest(0x22),
+            digest(0x33),
+            object_digest,
+            spec.required_capabilities,
+            spec.launch,
+            spec.abi,
+        )
+        .unwrap();
+        let manifest = ManifestV1::new(
+            CompilerIdentity::new(text("rustc"), text(spec.compiler_version)),
+            ToolIdentity::new(text("fe2o3"), text("0.1.0")),
+            target,
+            vec![code_object],
+            vec![kernel],
+        )
+        .unwrap();
+        let container =
+            ArtifactContainerV1::new(manifest, DigestAlgorithm::Sha256, vec![payload]).unwrap();
+        ArtifactContainerV1::from_bytes(&container.to_bytes()).unwrap()
+    }
+
+    fn context(identity: usize, ordinal: i32, target: &str) -> ObservedContext {
+        ObservedContext::for_test(identity, ordinal, target, 1_024, 65_536)
+    }
+
+    fn kernel_id(byte: u8) -> KernelId {
+        KernelId::from_bytes([byte; 32])
+    }
+
+    fn request(kernel: KernelId) -> UntrustedLaunchRequest<VecAdd> {
+        UntrustedLaunchRequest::new(kernel, 1, [17, 1, 1], [64, 1, 1], 128)
+    }
+
+    #[test]
+    fn validates_exact_identity_and_retains_payload_without_marker_authority() {
+        let observed = context(7, 3, "gfx942");
+        let container = decoded_container(FixtureSpec::default());
+        let selected = container.select_native_kernel(digest(0x11)).unwrap();
+        let validated = ValidatedArtifactSelectionV1::validate(selected, &observed).unwrap();
+
+        assert_eq!(validated.identity().version(), 1);
+        assert_eq!(validated.identity().kernel_id(), kernel_id(0x11));
+        assert_eq!(validated.identity().name().as_str(), "vector_add");
+        assert_eq!(validated.identity().symbol().as_str(), "vector_add.kd");
+        assert_eq!(validated.identity().source_digest(), digest(0x22));
+        assert_eq!(validated.identity().executable_digest(), digest(0x33));
+        assert_eq!(
+            validated.identity().payload_digest().bytes(),
+            selected.code_object().digest()
+        );
+        assert_eq!(validated.identity().target(), selected.target());
+        assert_eq!(validated.identity().abi(), selected.kernel().abi());
+        assert_eq!(validated.identity().launch(), selected.kernel().launch());
+        assert_eq!(
+            validated
+                .identity()
+                .effective_launch()
+                .max_flat_workgroup_size(),
+            64
+        );
+        assert_eq!(validated.payload(), selected.payload());
+        assert_eq!(validated.device(), observed.device());
+        validated.revalidate(selected, &observed).unwrap();
+    }
+
+    #[test]
+    fn internal_typed_bridge_preserves_brand_and_prepared_identity() {
+        let observed = context(7, 0, "gfx942");
+        let container = decoded_container(FixtureSpec::default());
+        let selected = container.select_native_kernel(digest(0x11)).unwrap();
+        let validated = ValidatedArtifactSelectionV1::validate(selected, &observed).unwrap();
+        let brand = validated.bind_marker::<VecAdd>();
+        let prepared = brand
+            .prepare(&validated, &observed, request(kernel_id(0x11)))
+            .unwrap();
+
+        assert_eq!(brand.identity(), validated.identity());
+        assert!(Arc::ptr_eq(&prepared.identity, &validated.identity));
+        assert!(Arc::ptr_eq(&prepared.payload, &validated.payload));
+        assert_eq!(prepared.payload.as_ref(), selected.payload());
+        assert!(prepared.prepared.belongs_to(&brand.brand));
+        assert_eq!(prepared.prepared.device(), observed.device());
+    }
+
+    #[test]
+    fn same_names_and_kernel_id_cannot_confuse_different_payloads() {
+        let observed = context(1, 0, "gfx942");
+        let first = decoded_container(FixtureSpec::default());
+        let second_spec = FixtureSpec {
+            payload: b"different-native-code-object".to_vec(),
+            ..FixtureSpec::default()
+        };
+        let second = decoded_container(second_spec);
+        let first_selected = first.select_native_kernel(digest(0x11)).unwrap();
+        let second_selected = second.select_native_kernel(digest(0x11)).unwrap();
+        assert_eq!(
+            first_selected.kernel().name(),
+            second_selected.kernel().name()
+        );
+        assert_eq!(
+            first_selected.kernel().kernel_id(),
+            second_selected.kernel().kernel_id()
+        );
+
+        let validated = ValidatedArtifactSelectionV1::validate(first_selected, &observed).unwrap();
+        assert_eq!(
+            validated.revalidate(second_selected, &observed),
+            Err(ArtifactRevalidationError::WrongArtifactIdentity)
+        );
+        let second_validated =
+            ValidatedArtifactSelectionV1::validate(second_selected, &observed).unwrap();
+        assert_ne!(validated.identity(), second_validated.identity());
+        let brand = validated.bind_marker::<VecAdd>();
+        assert!(matches!(
+            brand.prepare(&second_validated, &observed, request(kernel_id(0x11))),
+            Err(ArtifactMarkerPrepareError::WrongValidatedSelection)
+        ));
+    }
+
+    #[test]
+    fn whole_manifest_identity_prevents_cross_artifact_confusion() {
+        let observed = context(1, 0, "gfx942");
+        let first = decoded_container(FixtureSpec::default());
+        let second_spec = FixtureSpec {
+            compiler_version: "1.94.1",
+            ..FixtureSpec::default()
+        };
+        let second = decoded_container(second_spec);
+        let first_selected = first.select_native_kernel(digest(0x11)).unwrap();
+        let second_selected = second.select_native_kernel(digest(0x11)).unwrap();
+        assert_eq!(first_selected.payload(), second_selected.payload());
+        assert_eq!(first_selected.kernel(), second_selected.kernel());
+
+        let validated = ValidatedArtifactSelectionV1::validate(first_selected, &observed).unwrap();
+        assert_eq!(
+            validated.revalidate(second_selected, &observed),
+            Err(ArtifactRevalidationError::WrongArtifactIdentity)
+        );
+    }
+
+    #[test]
+    fn valid_kernel_abi_and_launch_mutations_fail_exact_revalidation() {
+        let observed = context(1, 0, "gfx942");
+        let original = decoded_container(FixtureSpec::default());
+        let original_selected = original.select_native_kernel(digest(0x11)).unwrap();
+        let validated =
+            ValidatedArtifactSelectionV1::validate(original_selected, &observed).unwrap();
+
+        let abi_spec = FixtureSpec {
+            abi: scalar_abi(),
+            ..FixtureSpec::default()
+        };
+        let changed_abi = decoded_container(abi_spec);
+        assert_eq!(
+            validated.revalidate(
+                changed_abi.select_native_kernel(digest(0x11)).unwrap(),
+                &observed
+            ),
+            Err(ArtifactRevalidationError::WrongArtifactIdentity)
+        );
+
+        let launch_spec = FixtureSpec {
+            launch: exact_launch(32, 32, 4_096),
+            ..FixtureSpec::default()
+        };
+        let changed_launch = decoded_container(launch_spec);
+        assert_eq!(
+            validated.revalidate(
+                changed_launch.select_native_kernel(digest(0x11)).unwrap(),
+                &observed
+            ),
+            Err(ArtifactRevalidationError::WrongArtifactIdentity)
+        );
+
+        let kernel_spec = FixtureSpec {
+            kernel_id: 0x12,
+            ..FixtureSpec::default()
+        };
+        let changed_kernel = decoded_container(kernel_spec);
+        assert_eq!(
+            validated.revalidate(
+                changed_kernel.select_native_kernel(digest(0x12)).unwrap(),
+                &observed
+            ),
+            Err(ArtifactRevalidationError::WrongArtifactIdentity)
+        );
+    }
+
+    #[test]
+    fn wrong_target_and_unobserved_capabilities_fail_binding() {
+        let observed = context(1, 0, "gfx942");
+        let wrong_target = FixtureSpec {
+            architecture: "gfx950",
+            ..FixtureSpec::default()
+        };
+        let container = decoded_container(wrong_target);
+        assert!(matches!(
+            ValidatedArtifactSelectionV1::validate(
+                container.select_native_kernel(digest(0x11)).unwrap(),
+                &observed
+            ),
+            Err(ArtifactBindingError::TargetMismatch(
+                DeclaredTargetMismatch::Architecture
+            ))
+        ));
+
+        let capability = FixtureSpec {
+            required_capabilities: vec![Capability::AmdWave],
+            ..FixtureSpec::default()
+        };
+        let container = decoded_container(capability);
+        assert!(matches!(
+            ValidatedArtifactSelectionV1::validate(
+                container.select_native_kernel(digest(0x11)).unwrap(),
+                &observed
+            ),
+            Err(ArtifactBindingError::UnobservedRequiredCapability(
+                Capability::AmdWave
+            ))
+        ));
+    }
+
+    #[test]
+    fn every_unsupported_target_component_fails_binding() {
+        let observed = context(1, 0, "gfx942");
+
+        let triple = FixtureSpec {
+            triple: "spirv64-unknown-unknown",
+            ..FixtureSpec::default()
+        };
+        let container = decoded_container(triple);
+        assert!(matches!(
+            ValidatedArtifactSelectionV1::validate(
+                container.select_native_kernel(digest(0x11)).unwrap(),
+                &observed
+            ),
+            Err(ArtifactBindingError::UnsupportedTargetTriple(_))
+        ));
+
+        let width = FixtureSpec {
+            pointer_width: PointerWidth::Bits32,
+            abi: empty_abi_with_width(PointerWidth::Bits32),
+            ..FixtureSpec::default()
+        };
+        let container = decoded_container(width);
+        assert!(matches!(
+            ValidatedArtifactSelectionV1::validate(
+                container.select_native_kernel(digest(0x11)).unwrap(),
+                &observed
+            ),
+            Err(ArtifactBindingError::UnsupportedPointerWidth(
+                PointerWidth::Bits32
+            ))
+        ));
+
+        let endianness = FixtureSpec {
+            endianness: Endianness::Big,
+            ..FixtureSpec::default()
+        };
+        let container = decoded_container(endianness);
+        assert!(matches!(
+            ValidatedArtifactSelectionV1::validate(
+                container.select_native_kernel(digest(0x11)).unwrap(),
+                &observed
+            ),
+            Err(ArtifactBindingError::UnsupportedEndianness(Endianness::Big))
+        ));
+    }
+
+    #[test]
+    fn unsupported_structural_abi_fails_without_claiming_host_type_matching() {
+        let observed = context(1, 0, "gfx942");
+        let spec = FixtureSpec {
+            abi: unsupported_constant_pointer_abi(),
+            ..FixtureSpec::default()
+        };
+        let container = decoded_container(spec);
+        assert!(matches!(
+            ValidatedArtifactSelectionV1::validate(
+                container.select_native_kernel(digest(0x11)).unwrap(),
+                &observed
+            ),
+            Err(ArtifactBindingError::UnsupportedHostAbi(
+                HostLaunchAbiError::UnsupportedAddressSpace {
+                    address_space: AddressSpace::Constant,
+                    ..
+                }
+            ))
+        ));
+    }
+
+    #[test]
+    fn impossible_launch_contracts_fail_before_validation_token_creation() {
+        let observed = context(1, 0, "gfx942");
+        let block = FixtureSpec {
+            launch: exact_launch(2_048, 0, 0),
+            ..FixtureSpec::default()
+        };
+        let container = decoded_container(block);
+        assert!(matches!(
+            ValidatedArtifactSelectionV1::validate(
+                container.select_native_kernel(digest(0x11)).unwrap(),
+                &observed
+            ),
+            Err(ArtifactBindingError::LaunchContract(
+                ArtifactLaunchContractError::BlockExceedsObservedDevice { .. }
+            ))
+        ));
+
+        let shared = FixtureSpec {
+            launch: exact_launch(64, 65_537, 0),
+            ..FixtureSpec::default()
+        };
+        let container = decoded_container(shared);
+        assert!(matches!(
+            ValidatedArtifactSelectionV1::validate(
+                container.select_native_kernel(digest(0x11)).unwrap(),
+                &observed
+            ),
+            Err(ArtifactBindingError::LaunchContract(
+                ArtifactLaunchContractError::StaticSharedMemoryExceedsObservedDevice { .. }
+            ))
+        ));
+    }
+
+    #[test]
+    fn exact_context_device_and_limit_changes_fail_revalidation() {
+        let observed = context(1, 0, "gfx942");
+        let container = decoded_container(FixtureSpec::default());
+        let selected = container.select_native_kernel(digest(0x11)).unwrap();
+        let validated = ValidatedArtifactSelectionV1::validate(selected, &observed).unwrap();
+
+        assert_eq!(
+            validated.revalidate(selected, &context(1, 1, "gfx942")),
+            Err(ArtifactRevalidationError::WrongDevice)
+        );
+        assert_eq!(
+            validated.revalidate(selected, &context(2, 0, "gfx942")),
+            Err(ArtifactRevalidationError::WrongContext)
+        );
+        let changed_limits = ObservedContext::for_test(1, 0, "gfx942", 512, 65_536);
+        assert_eq!(
+            validated.revalidate(selected, &changed_limits),
+            Err(ArtifactRevalidationError::DeviceLimitsChanged)
+        );
+    }
+
+    #[test]
+    fn internal_typed_preparation_rejects_wrong_kernel_and_cross_issuance() {
+        let observed = context(1, 0, "gfx942");
+        let container = decoded_container(FixtureSpec::default());
+        let selected = container.select_native_kernel(digest(0x11)).unwrap();
+        let validated = ValidatedArtifactSelectionV1::validate(selected, &observed).unwrap();
+        let first = validated.bind_marker::<VecAdd>();
+        let second = validated.bind_marker::<VecAdd>();
+
+        assert!(matches!(
+            first.prepare(&validated, &observed, request(kernel_id(0x12))),
+            Err(ArtifactMarkerPrepareError::Launch(
+                PrepareLaunchError::WrongKernel { .. }
+            ))
+        ));
+        let prepared = first
+            .prepare(&validated, &observed, request(kernel_id(0x11)))
+            .unwrap();
+        assert!(prepared.prepared.belongs_to(&first.brand));
+        assert!(!prepared.prepared.belongs_to(&second.brand));
+    }
+
+    #[test]
+    fn payload_bytes_survive_container_lifetime() {
+        let observed = context(1, 0, "gfx942");
+        let validated = {
+            let container = decoded_container(FixtureSpec::default());
+            let selected = container.select_native_kernel(digest(0x11)).unwrap();
+            ValidatedArtifactSelectionV1::validate(selected, &observed).unwrap()
+        };
+        assert_eq!(validated.payload(), b"native-gfx942-code-object");
+    }
+
+    #[test]
+    fn adversarial_wire_mutations_never_reach_selection_validation() {
+        let container = decoded_container(FixtureSpec::default());
+        let encoded = container.to_bytes();
+
+        for length in [0, 1, 8, encoded.len() - 1] {
+            assert!(ArtifactContainerV1::from_bytes(&encoded[..length]).is_err());
+        }
+        for payload_offset in encoded.len() - container.payloads()[0].bytes().len()..encoded.len() {
+            let mut mutated = encoded.clone();
+            mutated[payload_offset] ^= 0x80;
+            assert!(ArtifactContainerV1::from_bytes(&mutated).is_err());
+        }
+        let mut unknown_version = encoded;
+        unknown_version[8..10].copy_from_slice(&u16::MAX.to_le_bytes());
+        assert!(ArtifactContainerV1::from_bytes(&unknown_version).is_err());
+    }
+}

@@ -49,6 +49,7 @@ fn selection_borrows_the_exact_kernel_target_identity_and_payload() {
         ArtifactContainerV1::new(manifest, DigestAlgorithm::Sha256, vec![second, first]).unwrap();
 
     let selected = container.select_native_kernel(digest(0x12)).unwrap();
+    assert_eq!(selected.digest_algorithm(), DigestAlgorithm::Sha256);
     assert_eq!(selected.manifest(), container.manifest());
     assert_eq!(selected.target(), container.manifest().target());
     assert_eq!(selected.kernel().name(), &name("second"));
