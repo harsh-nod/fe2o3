@@ -1,3 +1,7 @@
+use crate::artifact_transaction::{
+    ArtifactTransactionError, ProducerIdentity, emit_artifact_transaction,
+    emit_artifact_transaction_after_preflight,
+};
 use crate::collector::{CollectedFunction, CollectionResult};
 use crate::record_lowering::{
     RecordAccessSketch, RecordBinaryOp, RecordExpression, RecordExpressionOperand,
@@ -29,6 +33,18 @@ pub enum EmitError {
     Io(std::io::Error),
     Hsaco(HsacoError),
     UnsupportedKernel { kernel: String, reason: String },
+    Preflight { reason: String },
+    InvalidArtifactName { kernel: String, reason: String },
+    DuplicateArtifactName { kernel: String },
+    InvalidArtifactDestination { path: PathBuf, reason: String },
+    MissingStagedArtifact { path: PathBuf },
+    StagingExhausted { output_dir: PathBuf },
+    InvalidProducer { reason: String },
+    Ownership { reason: String },
+    ArtifactOwnedByOtherProducer { kernel: String },
+    OutputDirectoryChanged { path: PathBuf },
+    SubprocessPathBoundary { reason: String },
+    Transaction(Box<ArtifactTransactionError>),
 }
 
 impl fmt::Display for EmitError {
@@ -42,6 +58,55 @@ impl fmt::Display for EmitError {
                     "unsupported kernel shape for AMDGPU LLVM IR MVP: {kernel}: {reason}"
                 )
             }
+            Self::Preflight { reason } => write!(f, "device artifact preflight failed: {reason}"),
+            Self::InvalidArtifactName { kernel, reason } => {
+                write!(f, "invalid kernel artifact name `{kernel}`: {reason}")
+            }
+            Self::DuplicateArtifactName { kernel } => {
+                write!(f, "duplicate kernel artifact name `{kernel}`")
+            }
+            Self::InvalidArtifactDestination { path, reason } => {
+                write!(
+                    f,
+                    "invalid kernel artifact destination {}: {reason}",
+                    path.display()
+                )
+            }
+            Self::MissingStagedArtifact { path } => {
+                write!(
+                    f,
+                    "compiler did not produce staged artifact {}",
+                    path.display()
+                )
+            }
+            Self::StagingExhausted { output_dir } => {
+                write!(
+                    f,
+                    "could not reserve an artifact staging directory in {}",
+                    output_dir.display()
+                )
+            }
+            Self::InvalidProducer { reason } => write!(f, "invalid artifact producer: {reason}"),
+            Self::Ownership { reason } => {
+                write!(f, "invalid non-authoritative ownership registry: {reason}")
+            }
+            Self::ArtifactOwnedByOtherProducer { kernel } => {
+                write!(f, "artifact name {kernel} is owned by another producer")
+            }
+            Self::OutputDirectoryChanged { path } => {
+                write!(
+                    f,
+                    "artifact output directory changed while pinned: {}",
+                    path.display()
+                )
+            }
+            Self::SubprocessPathBoundary { reason } => {
+                write!(
+                    f,
+                    "cannot establish pinned subprocess path boundary: {reason}"
+                )
+            }
+            Self::Transaction(error) => write!(f, "{error}"),
         }
     }
 }
@@ -63,34 +128,65 @@ impl From<HsacoError> for EmitError {
 pub fn emit_collection<'tcx>(
     tcx: TyCtxt<'tcx>,
     collection: &CollectionResult<'tcx>,
+    producer: &ProducerIdentity,
     lowering_plan: Option<&RecordLoweringPlan>,
     output_dir: &Path,
     target: &AmdGpuTarget,
 ) -> Result<Vec<DeviceArtifact>, EmitError> {
-    std::fs::create_dir_all(output_dir)?;
+    let kernels = prepare_collection(tcx, collection, lowering_plan)?;
 
-    let mut artifacts = Vec::new();
-    for kernel in collection
+    emit_artifact_transaction(
+        output_dir,
+        producer,
+        &kernels,
+        |kernel| &kernel.name,
+        |kernel| Ok(kernel.llvm_ir.clone()),
+        |llvm_ir_path, hsaco_path| {
+            compile_llvm_ir_to_hsaco(llvm_ir_path, hsaco_path, target).map_err(EmitError::from)
+        },
+    )
+}
+
+pub(crate) fn emit_collection_after_preflight(
+    producer: &ProducerIdentity,
+    output_dir: &Path,
+    target: &AmdGpuTarget,
+    preflight: impl FnOnce() -> Result<Vec<PreparedDeviceKernel>, EmitError>,
+) -> Result<Vec<DeviceArtifact>, EmitError> {
+    emit_artifact_transaction_after_preflight(
+        output_dir,
+        producer,
+        preflight,
+        |kernel| &kernel.name,
+        |kernel| Ok(kernel.llvm_ir.clone()),
+        |llvm_ir_path, hsaco_path| {
+            compile_llvm_ir_to_hsaco(llvm_ir_path, hsaco_path, target).map_err(EmitError::from)
+        },
+    )
+}
+
+pub(crate) struct PreparedDeviceKernel {
+    name: String,
+    llvm_ir: String,
+}
+
+pub(crate) fn prepare_collection<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    collection: &CollectionResult<'tcx>,
+    lowering_plan: Option<&RecordLoweringPlan>,
+) -> Result<Vec<PreparedDeviceKernel>, EmitError> {
+    collection
         .functions
         .iter()
         .filter(|function| function.is_kernel)
-    {
-        let record_function = lowering_plan.and_then(|plan| plan.function(&kernel.export_name));
-        let llvm_ir = emit_kernel(tcx, kernel, record_function)?;
-        let llvm_ir_path = output_dir.join(format!("{}.ll", kernel.export_name));
-        let hsaco_path = output_dir.join(format!("{}.hsaco", kernel.export_name));
-
-        std::fs::write(&llvm_ir_path, llvm_ir)?;
-        compile_llvm_ir_to_hsaco(&llvm_ir_path, &hsaco_path, target)?;
-
-        artifacts.push(DeviceArtifact {
-            kernel_name: kernel.export_name.clone(),
-            llvm_ir_path,
-            hsaco_path,
-        });
-    }
-
-    Ok(artifacts)
+        .map(|kernel| {
+            let record_function = lowering_plan.and_then(|plan| plan.function(&kernel.export_name));
+            Ok(PreparedDeviceKernel {
+                name: kernel.export_name.clone(),
+                llvm_ir: emit_kernel(tcx, kernel, record_function)?,
+            })
+        })
+        .collect()
 }
 
 fn emit_kernel<'tcx>(

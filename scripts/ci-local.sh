@@ -135,6 +135,9 @@ run_rocm_compile() {
     run_step "rocm-build-${package}" \
       cargo run --locked -p cargo-fe2o3 -- build -p "${package}"
   done
+  run_step rocm-kernel-ir-verification \
+    cargo test --locked -p cargo-fe2o3 --test kernel_ir_verification \
+      verification_gate_accepts_rejects_and_remains_opt_in -- --ignored --exact
 }
 
 require_gpu_access() {
