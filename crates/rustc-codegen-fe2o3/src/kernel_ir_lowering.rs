@@ -1,24 +1,29 @@
 //! Verification-only lowering from imported MIR to `fe2o3-kernel-ir`.
 //!
-//! This layer extends scalar CFG lowering with the slice and memory operations
-//! needed by `vecadd`. Device-helper calls remain unsupported until the next
-//! layer. Failed bounds assertions branch to one synthetic unreachable block.
+//! This vertical slice intentionally models only the optimized MIR shape of the
+//! existing `vecadd` kernel. Known helper calls remain typed external calls with
+//! their exact rustc identities. The `DisjointSlice::get_mut` declaration uses
+//! two results (the `Option` discriminant and payload pointer), because kernel IR
+//! does not yet have Rust aggregate types. MIR unwind actions are not represented
+//! by kernel IR; supported helper calls are treated as non-unwinding and failed
+//! bounds assertions branch to one synthetic unreachable block.
 //!
-//! The executable subset is unprojected aliases, `Use`, `PtrMetadata`, `Add`,
-//! and `Lt`; direct/indexed dereferences; and return, unreachable, goto, integer
-//! switch, and assert terminators. Locals must be assigned once and MIR blocks
-//! must appear in definition-before-use order. Every other construct produces a
-//! located diagnostic rather than a partial module.
+//! The executable subset is unprojected aliases, `Use`, `Discriminant`,
+//! `PtrMetadata`, `Add`, and `Lt`; direct/indexed dereferences; the three vecadd
+//! helper calls; and return, unreachable, goto, integer switch, call, and assert
+//! terminators. Locals must be assigned once and MIR blocks must appear in
+//! definition-before-use order. Every other construct produces a located
+//! diagnostic rather than a partial module.
 
 use crate::mir_import::{
-    MirBinaryOp, MirBlock, MirConstant, MirFunction, MirFunctionKind, MirModule, MirOperandRef,
-    MirPlaceRef, MirProjectionElem, MirRvalueKind, MirSourceLocation, MirStatement,
-    MirStatementKind, MirTerminator, MirTerminatorKind, MirTypeShape, MirUnaryOp,
+    MirBinaryOp, MirBlock, MirCallee, MirConstant, MirFunction, MirFunctionKind, MirKnownCall,
+    MirModule, MirOperandRef, MirPlaceRef, MirProjectionElem, MirRvalueKind, MirSourceLocation,
+    MirStatement, MirStatementKind, MirTerminator, MirTerminatorKind, MirTypeShape, MirUnaryOp,
 };
 use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, BasicBlock, BinaryOp, BlockId, ComparePredicate, Constant, Function,
-    Kernel, LaunchDomain, LaunchExtent, MemoryAccess, Module, Operation, OperationKind, ScalarType,
-    Signature, SwitchCase, Terminator, Type, ValueDef, ValueId, verify_module,
+    FunctionId, Kernel, LaunchDomain, LaunchExtent, MemoryAccess, Module, Operation, OperationKind,
+    ScalarType, Signature, SwitchCase, Terminator, Type, ValueDef, ValueId, verify_module,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
@@ -528,6 +533,35 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                 let value = self.lower_operand(operand, block, &location)?;
                 self.assign_value(destination, value, block, location)
             }
+            MirRvalueKind::Discriminant => {
+                let [MirOperandRef::Place(place)] = statement.operands.as_slice() else {
+                    return Err(diagnostic(
+                        TranslationDiagnosticCode::MalformedMir,
+                        location,
+                        "discriminant assignment must have one place operand",
+                    ));
+                };
+                if !place.projection.is_empty() {
+                    return Err(diagnostic(
+                        TranslationDiagnosticCode::UnsupportedProjection,
+                        location,
+                        "projected discriminants are not supported",
+                    ));
+                }
+                let LocalBinding::OptionPointer { discriminant, .. } = self
+                    .locals
+                    .get(&place.local)
+                    .copied()
+                    .ok_or_else(|| self.undefined_local(place.local, location.clone()))?
+                else {
+                    return Err(diagnostic(
+                        TranslationDiagnosticCode::UnsupportedType,
+                        location,
+                        "discriminant operand is not a translated Option pointer",
+                    ));
+                };
+                self.bind_plain_destination(destination, discriminant, location)
+            }
             MirRvalueKind::Unary(MirUnaryOp::PtrMetadata) => {
                 let [operand] = statement.operands.as_slice() else {
                     return Err(diagnostic(
@@ -645,11 +679,19 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                     default_arguments: Vec::new(),
                 })
             }
-            MirTerminatorKind::Call { .. } => Err(diagnostic(
-                TranslationDiagnosticCode::UnsupportedCall,
+            MirTerminatorKind::Call {
+                callee,
+                target,
+                destination,
+                operands,
+            } => self.lower_call(
+                callee.as_ref(),
+                *target,
+                destination.as_ref(),
+                operands,
+                block,
                 location,
-                "MIR calls are not supported by the memory model",
-            )),
+            ),
             MirTerminatorKind::Assert {
                 condition,
                 expected,
@@ -683,6 +725,198 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                 format!("unsupported MIR terminator: {unsupported:?}"),
             )),
         }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn lower_call(
+        &mut self,
+        callee: Option<&MirCallee>,
+        target: Option<usize>,
+        destination: Option<&MirPlaceRef>,
+        operands: &[MirOperandRef],
+        block: &mut BasicBlock,
+        location: TranslationLocation,
+    ) -> Result<Terminator, TranslationDiagnostic> {
+        let callee = callee.ok_or_else(|| {
+            diagnostic(
+                TranslationDiagnosticCode::UnsupportedCall,
+                location.clone(),
+                "indirect calls are not supported",
+            )
+        })?;
+        let target = target.ok_or_else(|| {
+            diagnostic(
+                TranslationDiagnosticCode::UnsupportedCall,
+                location.clone(),
+                format!("call to `{}` has no normal return target", callee.identity),
+            )
+        })?;
+        let destination = destination.ok_or_else(|| {
+            diagnostic(
+                TranslationDiagnosticCode::MalformedMir,
+                location.clone(),
+                format!("call to `{}` has no destination", callee.identity),
+            )
+        })?;
+        if !destination.projection.is_empty() {
+            return Err(diagnostic(
+                TranslationDiagnosticCode::UnsupportedProjection,
+                location,
+                "projected call destinations are not supported",
+            ));
+        }
+
+        let arguments = operands
+            .iter()
+            .map(|operand| self.lower_operand(operand, block, &location))
+            .collect::<Result<Vec<_>, _>>()?;
+        let argument_types = arguments
+            .iter()
+            .map(|value| self.value_type(*value, &location).cloned())
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let result_types = match callee.kind {
+            MirKnownCall::ThreadIndex1d => {
+                if !arguments.is_empty() {
+                    return Err(self.call_arity(callee, 0, arguments.len(), location));
+                }
+                vec![Type::INDEX]
+            }
+            MirKnownCall::ThreadIndexGet => {
+                if arguments.len() != 1 {
+                    return Err(self.call_arity(callee, 1, arguments.len(), location));
+                }
+                if argument_types[0] != Type::INDEX {
+                    return Err(diagnostic(
+                        TranslationDiagnosticCode::UnsupportedType,
+                        location,
+                        "ThreadIndex::get receiver must lower to index type",
+                    ));
+                }
+                vec![Type::INDEX]
+            }
+            MirKnownCall::DisjointSliceGetMut => {
+                if arguments.len() != 2 {
+                    return Err(self.call_arity(callee, 2, arguments.len(), location));
+                }
+                let Type::Slice(slice) = &argument_types[0] else {
+                    return Err(diagnostic(
+                        TranslationDiagnosticCode::UnsupportedType,
+                        location,
+                        "DisjointSlice::get_mut receiver is not a translated slice",
+                    ));
+                };
+                if slice.access != AccessMode::ReadWrite {
+                    return Err(diagnostic(
+                        TranslationDiagnosticCode::UnsupportedType,
+                        location,
+                        "DisjointSlice::get_mut receiver must be writable",
+                    ));
+                }
+                if argument_types[1] != Type::INDEX {
+                    return Err(diagnostic(
+                        TranslationDiagnosticCode::UnsupportedType,
+                        location,
+                        "DisjointSlice::get_mut index must lower to index type",
+                    ));
+                }
+                vec![
+                    Type::INDEX,
+                    Type::pointer((*slice.element).clone(), slice.address_space, slice.access),
+                ]
+            }
+            MirKnownCall::Other => {
+                return Err(diagnostic(
+                    TranslationDiagnosticCode::UnsupportedCall,
+                    location,
+                    format!("unsupported callee `{}`", callee.identity),
+                ));
+            }
+        };
+
+        let signature = Signature::new(argument_types, result_types.clone());
+        self.register_declaration(callee, signature, &location)?;
+        let results = result_types
+            .into_iter()
+            .map(|ty| self.fresh_value(ty, &location))
+            .collect::<Result<Vec<_>, _>>()?;
+        block.operations.push(Operation::new(
+            results.clone(),
+            OperationKind::Call {
+                callee: FunctionId::new(callee.identity.clone()),
+                arguments,
+            },
+        ));
+
+        match results.as_slice() {
+            [result] => self.bind_local(
+                destination.local,
+                LocalBinding::Value(result.id),
+                location.clone(),
+            )?,
+            [discriminant, payload] if callee.kind == MirKnownCall::DisjointSliceGetMut => self
+                .bind_local(
+                    destination.local,
+                    LocalBinding::OptionPointer {
+                        discriminant: discriminant.id,
+                        payload: payload.id,
+                    },
+                    location.clone(),
+                )?,
+            _ => {
+                return Err(diagnostic(
+                    TranslationDiagnosticCode::MalformedMir,
+                    location,
+                    "known call produced an unexpected result shape",
+                ));
+            }
+        }
+
+        Ok(Terminator::Branch {
+            target: self.block_id(target, location)?,
+            arguments: Vec::new(),
+        })
+    }
+
+    fn register_declaration(
+        &mut self,
+        callee: &MirCallee,
+        signature: Signature,
+        location: &TranslationLocation,
+    ) -> Result<(), TranslationDiagnostic> {
+        if let Some(previous) = self.declarations.get(&callee.identity)
+            && previous != &signature
+        {
+            return Err(diagnostic(
+                TranslationDiagnosticCode::MalformedMir,
+                location.clone(),
+                format!(
+                    "callee `{}` was imported with inconsistent signatures",
+                    callee.identity
+                ),
+            ));
+        }
+        self.declarations
+            .entry(callee.identity.clone())
+            .or_insert(signature);
+        Ok(())
+    }
+
+    fn call_arity(
+        &self,
+        callee: &MirCallee,
+        expected: usize,
+        actual: usize,
+        location: TranslationLocation,
+    ) -> TranslationDiagnostic {
+        diagnostic(
+            TranslationDiagnosticCode::MalformedMir,
+            location,
+            format!(
+                "callee `{}` expects {expected} operand(s), found {actual}",
+                callee.identity
+            ),
+        )
     }
 
     fn lower_operand(
@@ -727,6 +961,18 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                         "local{} is a Rust aggregate, not one kernel IR value",
                         place.local
                     ),
+                )),
+                None => Err(self.undefined_local(place.local, location.clone())),
+            },
+            [
+                MirProjectionElem::Downcast { variant: 1 },
+                MirProjectionElem::Field(0),
+            ] => match self.locals.get(&place.local).copied() {
+                Some(LocalBinding::OptionPointer { payload, .. }) => Ok(payload),
+                Some(LocalBinding::Value(_)) => Err(diagnostic(
+                    TranslationDiagnosticCode::UnsupportedType,
+                    location.clone(),
+                    format!("local{} is not a translated Option pointer", place.local),
                 )),
                 None => Err(self.undefined_local(place.local, location.clone())),
             },
@@ -1176,6 +1422,43 @@ mod tests {
                 .filter(|operation| matches!(operation.kind, OperationKind::SliceData { .. }))
                 .count(),
             2
+        );
+    }
+
+    #[test]
+    fn known_helper_becomes_typed_external_declaration() {
+        let mut fixture = memory_fixture();
+        let function = &mut fixture.functions[0];
+        function.local_count += 1;
+        function
+            .locals
+            .push(local(6, MirLocalRole::Temp, MirTypeShape::USize));
+        function.blocks[0].terminator = Some(terminator(MirTerminatorKind::Call {
+            callee: Some(MirCallee {
+                identity: "fe2o3_device::thread::index_1d".to_string(),
+                kind: MirKnownCall::ThreadIndex1d,
+            }),
+            target: Some(1),
+            destination: Some(place(6)),
+            operands: Vec::new(),
+        }));
+        function.blocks.push(MirBlock {
+            index: 1,
+            statements: Vec::new(),
+            terminator: Some(terminator(MirTerminatorKind::Return)),
+        });
+
+        let module = translate_and_verify(&fixture).expect("known helper");
+        let declaration = module
+            .functions
+            .iter()
+            .find(|function| function.id.as_str() == "fe2o3_device::thread::index_1d")
+            .expect("helper declaration");
+
+        assert!(declaration.body.is_none());
+        assert_eq!(
+            declaration.signature,
+            Signature::new(Vec::new(), vec![Type::INDEX])
         );
     }
 
