@@ -183,6 +183,11 @@ run_rocm_compile() {
       --test kernel_ir_codegen \
       selected_pipeline_rejects_invalid_or_unsupported_inputs_and_cleans_stale_artifacts -- \
       --ignored --exact
+  run_step rocm-kernel-ir-vecadd \
+    cargo test --locked -p rustc-codegen-fe2o3 \
+      --test kernel_ir_codegen \
+      opt_in_vecadd_publishes_exact_g1_without_gpu -- \
+      --ignored --exact
 
   local package
   for package in "${example_packages[@]}"; do
@@ -275,6 +280,11 @@ run_hardware_smoke() {
     cargo test --locked -p rustc-codegen-fe2o3 \
       --test kernel_ir_codegen \
       opt_in_fill_publishes_g1_and_executes_on_the_gpu -- \
+      --ignored --exact
+  run_step hardware-kernel-ir-vecadd \
+    cargo test --locked -p rustc-codegen-fe2o3 \
+      --test kernel_ir_codegen \
+      opt_in_vecadd_publishes_exact_g1_and_executes_on_the_gpu -- \
       --ignored --exact
   run_step hardware-smoke cargo run --locked -p cargo-fe2o3 -- smoke
   local test_wavefront

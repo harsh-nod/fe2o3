@@ -53,6 +53,95 @@ fn preseed(paths: &[PathBuf]) {
     }
 }
 
+fn llvm_block<'a>(llvm: &'a str, label: &str) -> &'a str {
+    let marker = format!("{label}:\n");
+    let start = llvm
+        .find(&marker)
+        .unwrap_or_else(|| panic!("missing LLVM block {label}"))
+        + marker.len();
+    let remainder = &llvm[start..];
+    let end = remainder
+        .find("\nbb")
+        .or_else(|| remainder.find("\n}"))
+        .unwrap_or(remainder.len());
+    &remainder[..end]
+}
+
+fn assert_exact_vecadd_llvm(llvm: &str) {
+    assert!(llvm.contains(
+        "@vecadd(ptr addrspace(1) %arg0.data, i64 %arg0.len, ptr addrspace(1) %arg1.data, i64 %arg1.len, ptr addrspace(1) %arg2.data, i64 %arg2.len)"
+    ));
+    assert_eq!(llvm.matches("icmp ult i64").count(), 3);
+    assert_eq!(llvm.matches("load float").count(), 2);
+    assert_eq!(llvm.matches("store float").count(), 1);
+    assert_eq!(llvm.matches("fadd float").count(), 1);
+
+    let output_check = llvm_block(llvm, "bb2");
+    assert!(output_check.contains("  %v19 = add i64 %arg2.len, 0\n  %v5 = icmp ult i64 %v3, %v19"));
+    assert!(!output_check.contains("load float"));
+    assert!(!output_check.contains("store float"));
+    assert_eq!(
+        llvm_block(llvm, "bb3").trim(),
+        "br i1 %v5, label %bb4, label %bb7"
+    );
+
+    let first_input_check = llvm_block(llvm, "bb4");
+    assert!(first_input_check.contains(
+        "  %v7 = add i64 %arg0.len, 0\n  %v8 = icmp ult i64 %v4, %v7\n  br i1 %v8, label %bb5, label %bb9"
+    ));
+    assert!(!first_input_check.contains("load float"));
+    assert!(!first_input_check.contains("store float"));
+
+    let first_load_and_second_check = llvm_block(llvm, "bb5");
+    assert!(first_load_and_second_check.contains(
+        "  %v11 = load float, ptr addrspace(1) %v10, align 4\n  %v12 = add i64 %arg1.len, 0\n  %v13 = icmp ult i64 %v4, %v12\n  br i1 %v13, label %bb6, label %bb9"
+    ));
+    assert!(!first_load_and_second_check.contains("store float"));
+
+    let second_load_and_store = llvm_block(llvm, "bb6");
+    assert!(second_load_and_store.contains(
+        "  %v16 = load float, ptr addrspace(1) %v15, align 4\n  %v17 = fadd float %v11, %v16\n  store float %v17, ptr addrspace(1) %v6, align 4\n  br label %bb7"
+    ));
+    assert_eq!(llvm_block(llvm, "bb7").trim(), "ret void");
+    assert_eq!(llvm_block(llvm, "bb9").trim(), "unreachable");
+    assert!(llvm.contains("!reqd_work_group_size !0"));
+    assert!(!llvm.contains("fe2o3_device"));
+}
+
+fn assert_vecadd_publication(workspace: &Path, command: &str, expect_execution: bool) {
+    let output = backend(workspace, command, "fe2o3-vecadd", Some("kernel-ir-v1"));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "kernel-ir-v1 vecadd {command} failed:\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("selected kernel-ir-v1: verified 1 kernel(s), 4 function(s)"),
+        "missing selected-pipeline diagnostic:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("emitted vecadd"),
+        "vecadd was not transactionally published:\n{stderr}"
+    );
+    if expect_execution {
+        assert!(
+            stdout.contains("vecadd passed for 1024 elements"),
+            "vecadd did not execute successfully:\n{stdout}"
+        );
+    } else {
+        assert!(
+            !stdout.contains("vecadd passed for 1024 elements"),
+            "compile-only vecadd test unexpectedly executed the binary:\n{stdout}"
+        );
+    }
+
+    let llvm = std::fs::read_to_string(workspace.join("target/fe2o3/vecadd.ll"))
+        .expect("published vecadd LLVM IR");
+    assert_exact_vecadd_llvm(&llvm);
+}
+
 #[test]
 #[ignore = "requires the configured ROCm LLVM toolchain and a local AMD GPU"]
 fn opt_in_fill_publishes_g1_and_executes_on_the_gpu() {
@@ -88,41 +177,19 @@ fn opt_in_fill_publishes_g1_and_executes_on_the_gpu() {
 }
 
 #[test]
+#[ignore = "requires the configured ROCm LLVM toolchain"]
+fn opt_in_vecadd_publishes_exact_g1_without_gpu() {
+    let _lock = backend_test_lock();
+    let workspace = workspace();
+    assert_vecadd_publication(&workspace, "build", false);
+}
+
+#[test]
 #[ignore = "requires the configured ROCm LLVM toolchain and a local AMD GPU"]
 fn opt_in_vecadd_publishes_exact_g1_and_executes_on_the_gpu() {
     let _lock = backend_test_lock();
     let workspace = workspace();
-    let output = backend(&workspace, "run", "fe2o3-vecadd", Some("kernel-ir-v1"));
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    assert!(
-        output.status.success(),
-        "kernel-ir-v1 vecadd failed:\nstdout:\n{stdout}\nstderr:\n{stderr}"
-    );
-    assert!(
-        stderr.contains("selected kernel-ir-v1: verified 1 kernel(s), 4 function(s)"),
-        "missing selected-pipeline diagnostic:\n{stderr}"
-    );
-    assert!(
-        stderr.contains("emitted vecadd"),
-        "vecadd was not transactionally published:\n{stderr}"
-    );
-    assert!(
-        stdout.contains("vecadd passed for 1024 elements"),
-        "vecadd did not execute successfully:\n{stdout}"
-    );
-
-    let llvm = std::fs::read_to_string(workspace.join("target/fe2o3/vecadd.ll"))
-        .expect("published vecadd LLVM IR");
-    assert!(llvm.contains(
-        "@vecadd(ptr addrspace(1) %arg0.data, i64 %arg0.len, ptr addrspace(1) %arg1.data, i64 %arg1.len, ptr addrspace(1) %arg2.data, i64 %arg2.len)"
-    ));
-    assert_eq!(llvm.matches("load float").count(), 2);
-    assert_eq!(llvm.matches("store float").count(), 1);
-    assert_eq!(llvm.matches("fadd float").count(), 1);
-    assert!(llvm.contains("!reqd_work_group_size !0"));
-    assert!(!llvm.contains("fe2o3_device"));
+    assert_vecadd_publication(&workspace, "run", true);
 }
 
 #[test]
