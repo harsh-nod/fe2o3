@@ -6,6 +6,7 @@ members = [
     "crates/fe2o3-completion",
     "crates/fe2o3-contracts",
     "crates/fe2o3-core",
+    "crates/fe2o3-core/tests/renamed-dependency",
     "crates/fe2o3-device",
     "crates/fe2o3-hip-sys",
     "crates/fe2o3-host",
@@ -62,5 +63,6 @@ reserved-fe2o3-symbols = { path = "crates/reserved-fe2o3-symbols" }
 rustc-codegen-fe2o3 = { path = "crates/rustc-codegen-fe2o3" }
 
 proc-macro2 = "1"
+proc-macro-crate = "3"
 quote = "1"
 syn = { version = "2", features = ["full"] }

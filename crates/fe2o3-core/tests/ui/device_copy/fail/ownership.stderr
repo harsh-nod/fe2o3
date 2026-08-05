@@ -1,0 +1,57 @@
+error[E0277]: the trait bound `OwnsMemory: Copy` is not satisfied
+ --> tests/ui/device_copy/fail/ownership.rs:5:8
+  |
+5 | struct OwnsMemory {
+  |        ^^^^^^^^^^ unsatisfied trait bound
+  |
+help: the trait `Copy` is not implemented for `OwnsMemory`
+ --> tests/ui/device_copy/fail/ownership.rs:5:1
+  |
+5 | struct OwnsMemory {
+  | ^^^^^^^^^^^^^^^^^
+note: required by a bound in `DeviceCopy`
+ --> src/device_copy.rs
+  |
+  | pub unsafe trait DeviceCopy: Copy + Send + Sync + 'static {}
+  |                              ^^^^ required by this bound in `DeviceCopy`
+
+error[E0277]: the trait bound `String: DeviceCopy` is not satisfied
+ --> tests/ui/device_copy/fail/ownership.rs:6:12
+  |
+6 |     value: String,
+  |            ^^^^^^ the trait `DeviceCopy` is not implemented for `String`
+  |
+  = help: the following other types implement trait `DeviceCopy`:
+            OwnsMemory
+            [T; N]
+            f32
+            f64
+            i128
+            i16
+            i32
+            i64
+          and $N others
+note: required by a bound in `__fe2o3_assert_device_copy`
+ --> tests/ui/device_copy/fail/ownership.rs:3:17
+  |
+3 | #[derive(Clone, DeviceCopy)]
+  |                 ^^^^^^^^^^ required by this bound in `__fe2o3_assert_device_copy`
+  = note: this error originates in the derive macro `DeviceCopy` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `OwnsMemory: Copy` is not satisfied
+ --> tests/ui/device_copy/fail/ownership.rs:5:8
+  |
+5 | struct OwnsMemory {
+  |        ^^^^^^^^^^ unsatisfied trait bound
+  |
+help: the trait `Copy` is not implemented for `OwnsMemory`
+ --> tests/ui/device_copy/fail/ownership.rs:5:1
+  |
+5 | struct OwnsMemory {
+  | ^^^^^^^^^^^^^^^^^
+note: required by a bound in `__fe2o3_assert_copy`
+ --> tests/ui/device_copy/fail/ownership.rs:3:17
+  |
+3 | #[derive(Clone, DeviceCopy)]
+  |                 ^^^^^^^^^^ required by this bound in `__fe2o3_assert_copy`
+  = note: this error originates in the derive macro `DeviceCopy` (in Nightly builds, run with -Z macro-backtrace for more info)

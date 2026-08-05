@@ -41,7 +41,10 @@ interfaces needed to reach that target:
 - `dialect-mir`: Rust MIR dialect naming seam for the future Pliron lowering.
 
 Safe buffer element types and their limits are documented in the
-[device memory safety contract](docs/device-memory-safety.md).
+[device memory safety contract](docs/device-memory-safety.md). `DeviceCopy`
+establishes structural host-side byte validity only. Safe device interpretation
+also requires manifest-derived type and ABI identity, provenance/address-space,
+and capability evidence.
 Safe ownership of resources used by asynchronous copies is documented in
 [device operations](docs/device-operations.md).
 

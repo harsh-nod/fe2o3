@@ -102,6 +102,12 @@ run_tests() {
   run_step cpu-tests cargo "${cargo_args[@]}"
   # fe2o3-core unit tests link HIP, but its compile-fail doctests do not.
   run_step core-doc-tests cargo test --locked --doc -p fe2o3-core
+  run_step device-copy-renamed-dependency \
+    cargo check --locked -p device-copy-renamed-dependency
+  run_step device-copy-derive-real-trait \
+    cargo check --locked -p fe2o3-core --test device_copy_derive_compile
+  run_step device-copy-derive-ui \
+    cargo test --locked -p fe2o3-core --test device_copy_derive_ui
 }
 
 run_backend_build() {
@@ -167,6 +173,9 @@ run_hardware_smoke() {
 
   run_step hardware-rocminfo rocminfo
   run_step hardware-doctor cargo run --locked -p cargo-fe2o3 -- doctor
+  run_step hardware-device-copy-transfer \
+    cargo test --locked -p fe2o3-core --test device_copy_derive_hardware -- \
+      --ignored --exact derived_struct_bytes_round_trip_through_device_memory
   run_step hardware-smoke cargo run --locked -p cargo-fe2o3 -- smoke
 }
 

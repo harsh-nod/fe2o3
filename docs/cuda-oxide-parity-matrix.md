@@ -254,7 +254,7 @@ for a credible parity release even though they are not separate appendix rows.
 | S01 | Versioned target-neutral artifact container | Exact | Missing | Embedded, content-addressed bundle with entries, payloads, options, ABI, capabilities, and proof identity | G3 |
 | S02 | Artifact finalization and provenance | AMD-equivalent | Missing | Deterministic AMDGPU link/finalize records include inputs, target, options, and toolchain identity | G3, G6 |
 | S03 | Typed async `DeviceOperation` model | Exact | Missing | Lazy borrowed/owned operations, stream policy, events, cancellation-safe reclamation, and composition | G3 |
-| S04 | `DeviceCopy` derive and ABI-safe buffer elements | Exact | Missing | Safe transfer/launch types have compile-pass/fail layout and ownership checks | G3 |
+| S04 | `DeviceCopy` derive and manifest-gated device types | Exact | Missing | Host byte-transfer types have compile-pass/fail bit-validity and padding checks; safe device interpretation additionally requires manifest-derived type/ABI identity, provenance, and capabilities | G3 |
 | S05 | Pinned host buffers and events | Exact | Missing | RAII pinned memory, explicit unsafe async-copy lifetimes, timing, and ordering events | G3 |
 | S06 | VMM, peer access, and multi-device memory | AMD-equivalent | Missing | HIP/HSA-supported virtual/peer memory has context, lifetime, topology, and capability checks | G6 |
 | S07 | Device constants, statics, and relocations | Exact | Missing | Layout-aware constants/globals preserve supported pointer relocations and reject unsupported provenance | G2, G6 |

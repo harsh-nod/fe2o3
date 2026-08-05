@@ -1,0 +1,5 @@
+error[E0080]: evaluation panicked: DeviceCopy cannot be derived for `InternalPadding` because its layout contains internal or trailing padding
+ --> tests/ui/device_copy/fail/internal_padding.rs:3:23
+  |
+3 | #[derive(Clone, Copy, DeviceCopy)]
+  |                       ^^^^^^^^^^ evaluation of `_` failed here

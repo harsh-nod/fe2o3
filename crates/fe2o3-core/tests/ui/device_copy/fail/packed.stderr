@@ -1,0 +1,5 @@
+error: DeviceCopy does not support packed representations
+ --> tests/ui/device_copy/fail/packed.rs:4:11
+  |
+4 | #[repr(C, packed)]
+  |           ^^^^^^
