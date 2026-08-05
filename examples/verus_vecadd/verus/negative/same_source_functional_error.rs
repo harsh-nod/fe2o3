@@ -35,7 +35,9 @@ pub fn mutated_same_source_claims_wrong_sum(
             (model::vecadd_value_u32(a@, b@, thread.linear as nat) as nat + 1) as u32,
         ),
 {
-    model::same_source_vecadd_thread(domain, thread, a, b, output, Ghost(evidence)) // mutated_same_source_claims_wrong_sum
+    let mutated_same_source_claims_wrong_sum =
+        model::same_source_vecadd_thread(domain, thread, a, b, output, Ghost(evidence));
+    mutated_same_source_claims_wrong_sum
 }
 
 } // verus!

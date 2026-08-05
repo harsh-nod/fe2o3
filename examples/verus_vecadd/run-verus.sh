@@ -99,7 +99,7 @@ run_rejected permission_out_of_bounds_region \
     'postcondition.*not satisfied|postcondition failure'
 run_rejected same_source_wrong_bounds \
     "$script_dir/verus/negative/same_source_wrong_bounds.rs" \
-    'mutated_same_source_without_thread_bounds' \
+    'thread.linear < domain.length' \
     'precondition.*not satisfied|precondition failure'
 run_rejected same_source_output_alias \
     "$script_dir/verus/negative/same_source_output_alias.rs" \
