@@ -88,6 +88,23 @@ fn backend_build_with_args(workspace: &Path, package: &str, args: &[&str]) -> Ou
 }
 
 #[test]
+fn local_marker_adversary_clears_generic_frontend_compilation() {
+    let _lock = backend_test_lock();
+    let workspace = workspace();
+    let output = Command::new(env!("CARGO"))
+        .current_dir(&workspace)
+        .args(["check", "--locked", "-p", "fe2o3-trusted-item-local-marker"])
+        .output()
+        .expect("check local-marker adversarial fixture");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "local-marker adversary failed before reaching the backend boundary:\n{stderr}"
+    );
+}
+
+#[test]
 #[ignore = "requires the configured ROCm LLVM toolchain"]
 fn genuine_markers_emit_and_local_external_spoofs_fail_closed() {
     let _lock = backend_test_lock();

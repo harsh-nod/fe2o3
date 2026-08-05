@@ -469,7 +469,6 @@ name = "fe2o3-trusted-item-local-marker"
 version = "0.0.0"
 dependencies = [
  "fe2o3-device",
- "fe2o3-macros",
 ]
 
 [[package]]
