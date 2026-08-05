@@ -52,6 +52,7 @@ name = "cargo-fe2o3"
 version = "0.1.0"
 dependencies = [
  "cap-primitives",
+ "fe2o3-rustc-invocation",
  "serde_json",
 ]
 
