@@ -551,24 +551,30 @@ fn require_exact_vecadd_shape(
             data_pointers.len()
         )));
     }
+    let first_length = require_map_value(&lengths, parameters[0], "first input length")?;
+    let second_length = require_map_value(&lengths, parameters[1], "second input length")?;
+    let output_length = require_map_value(&lengths, parameters[2], "output length")?;
+    let first_data = require_map_value(&data_pointers, parameters[0], "first input data")?;
+    let second_data = require_map_value(&data_pointers, parameters[1], "second input data")?;
+    let output_data = require_map_value(&data_pointers, parameters[2], "output data")?;
     let input_access = MemoryAccess::new(AddressSpace::Global, 4);
     let first_gep = require_gep(
         &geps,
-        data_pointers[&parameters[0]],
+        first_data,
         read_index,
         &readonly_f32_pointer(),
         "first input",
     )?;
     let second_gep = require_gep(
         &geps,
-        data_pointers[&parameters[1]],
+        second_data,
         read_index,
         &readonly_f32_pointer(),
         "second input",
     )?;
     let expected_output_pointer = require_gep(
         &geps,
-        data_pointers[&parameters[2]],
+        output_data,
         thread_index,
         &writable_f32_pointer(),
         "output",
@@ -616,36 +622,26 @@ fn require_exact_vecadd_shape(
         ));
     }
 
-    let first_condition = find_compare(
-        &compares,
-        read_index,
-        lengths[&parameters[0]],
-        "first input",
-    )?;
-    let second_condition = find_compare(
-        &compares,
-        read_index,
-        lengths[&parameters[1]],
-        "second input",
-    )?;
+    let first_condition = find_compare(&compares, read_index, first_length, "first input")?;
+    let second_condition = find_compare(&compares, read_index, second_length, "second input")?;
     let expected_compares = [
         (
             output_condition,
             ComparePredicate::LessThan,
             thread_index,
-            lengths[&parameters[2]],
+            output_length,
         ),
         (
             first_condition,
             ComparePredicate::LessThan,
             read_index,
-            lengths[&parameters[0]],
+            first_length,
         ),
         (
             second_condition,
             ComparePredicate::LessThan,
             read_index,
-            lengths[&parameters[1]],
+            second_length,
         ),
     ];
     let compare_set = compares.iter().copied().collect::<BTreeSet<_>>();
@@ -706,14 +702,36 @@ fn require_exact_vecadd_shape(
         )));
     }
     let return_block = *return_blocks.iter().next().expect("one return checked");
-    let first_bounds_block = result_blocks[&first_condition];
-    let first_load_block = result_blocks[&first_load];
-    let second_bounds_block = result_blocks[&second_condition];
-    let second_load_block = result_blocks[&second_load];
+    let first_bounds_block = require_map_value(
+        &result_blocks,
+        first_condition,
+        "first bounds operation block",
+    )?;
+    let first_load_block =
+        require_map_value(&result_blocks, first_load, "first load operation block")?;
+    let second_bounds_block = require_map_value(
+        &result_blocks,
+        second_condition,
+        "second bounds operation block",
+    )?;
+    let second_load_block =
+        require_map_value(&result_blocks, second_load, "second load operation block")?;
     let store_block = store_block.expect("one store checked");
-    let output_targets = condition_targets[&output_condition];
-    let first_targets = condition_targets[&first_condition];
-    let second_targets = condition_targets[&second_condition];
+    let output_targets = require_map_value(
+        &condition_targets,
+        output_condition,
+        "output branch targets",
+    )?;
+    let first_targets = require_map_value(
+        &condition_targets,
+        first_condition,
+        "first bounds branch targets",
+    )?;
+    let second_targets = require_map_value(
+        &condition_targets,
+        second_condition,
+        "second bounds branch targets",
+    )?;
     if output_targets != (first_bounds_block, return_block)
         || first_targets.0 != first_load_block
         || !unreachable_blocks.contains(&first_targets.1)
@@ -769,6 +787,17 @@ fn insert_unique(
         )));
     }
     Ok(())
+}
+
+fn require_map_value<T: Copy>(
+    values: &BTreeMap<ValueId, T>,
+    key: ValueId,
+    label: &str,
+) -> Result<T, EmitError> {
+    values
+        .get(&key)
+        .copied()
+        .ok_or_else(|| reject(format!("vecadd is missing {label} for {key}")))
 }
 
 fn require_gep(
@@ -1379,6 +1408,38 @@ mod tests {
         let text = error.to_string();
         assert!(text.contains("must have exact kernel IR signature"));
         assert!(!text.contains("G1 AMDGPU lowering"));
+    }
+
+    #[test]
+    fn vecadd_missing_kernel_slice_projection_fails_closed() {
+        let mut module = translated_vecadd();
+        let body = module.functions[0].body.as_mut().expect("body");
+        body.blocks[5]
+            .parameters
+            .push(ValueDef::new(ValueId(18), readonly_f32_slice()));
+        let Some(Terminator::ConditionalBranch { then_arguments, .. }) =
+            &mut body.blocks[4].terminator
+        else {
+            panic!("first bounds branch")
+        };
+        then_arguments.push(ValueId(1));
+        let OperationKind::SliceLength { slice } = &mut body.blocks[5].operations[3].kind else {
+            panic!("second input length")
+        };
+        *slice = ValueId(18);
+        let OperationKind::SliceData { slice } = &mut body.blocks[6].operations[0].kind else {
+            panic!("second input data")
+        };
+        *slice = ValueId(18);
+        verify_module(&module).expect("block-parameter slice fixture must remain verified");
+
+        let error = prepare_fill_collection(module, &[VECADD_KERNEL.to_string()])
+            .expect_err("non-kernel projection key must fail closed instead of panicking");
+        assert!(
+            error
+                .to_string()
+                .contains("missing second input length for %1")
+        );
     }
 
     #[test]
