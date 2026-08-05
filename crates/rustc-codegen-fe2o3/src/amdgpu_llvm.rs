@@ -1177,10 +1177,9 @@ fn analyze_elementwise_shape<'tcx>(
                     .get(1)
                     .and_then(|arg| operand_usize_const(tcx, &arg.node))
                     .and_then(|offset| i64::try_from(offset).ok())
+                && let Some(index) = IndexExpr::Thread.offset(offset)
             {
-                if let Some(index) = IndexExpr::Thread.offset(offset) {
-                    index_expr_locals.insert(destination.local, index);
-                }
+                index_expr_locals.insert(destination.local, index);
             }
             continue;
         }
@@ -1197,10 +1196,9 @@ fn analyze_elementwise_shape<'tcx>(
                 && let Some(offset) = args
                     .get(1)
                     .and_then(|arg| operand_isize_const(tcx, &arg.node))
+                && let Some(index) = IndexExpr::Thread.offset(offset)
             {
-                if let Some(index) = IndexExpr::Thread.offset(offset) {
-                    index_expr_locals.insert(destination.local, index);
-                }
+                index_expr_locals.insert(destination.local, index);
             }
             continue;
         }
@@ -1240,10 +1238,9 @@ fn analyze_elementwise_shape<'tcx>(
                 && let Some(offset) = args
                     .get(2)
                     .and_then(|arg| operand_isize_const(tcx, &arg.node))
+                && let Some(index) = IndexExpr::strided_offset(stride, offset)
             {
-                if let Some(index) = IndexExpr::strided_offset(stride, offset) {
-                    index_expr_locals.insert(destination.local, index);
-                }
+                index_expr_locals.insert(destination.local, index);
             }
             continue;
         }
