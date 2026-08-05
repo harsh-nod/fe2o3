@@ -24,6 +24,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-artifacts"
+version = "0.1.0"
+
+[[package]]
 name = "fe2o3-axpy-inplace"
 version = "0.1.0"
 dependencies = [
