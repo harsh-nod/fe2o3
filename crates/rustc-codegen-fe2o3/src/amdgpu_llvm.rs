@@ -1,7 +1,3 @@
-use crate::artifact_transaction::{
-    ArtifactTransactionError, ProducerIdentity, emit_artifact_transaction,
-    emit_artifact_transaction_after_preflight,
-};
 use crate::collector::{CollectedFunction, CollectionResult};
 use crate::record_lowering::{
     RecordAccessSketch, RecordBinaryOp, RecordExpression, RecordExpressionOperand,
@@ -9,8 +5,12 @@ use crate::record_lowering::{
     RecordLoweringPlan, RecordSliceAccess, RecordUnaryOp,
 };
 use crate::trusted_device_items::{self, TrustedDeviceItem};
-use crate::{AmdGpuTarget, HsacoError, compile_llvm_ir_to_hsaco};
+use crate::{AmdGpuTarget, compile_llvm_ir_to_hsaco};
 use dialect_mir::MirOp;
+pub use fe2o3_artifact_transaction::{DeviceArtifact, EmitError};
+use fe2o3_artifact_transaction::{
+    ProducerIdentity, emit_artifact_transaction, emit_artifact_transaction_after_preflight,
+};
 use rustc_middle::mir::{
     BinOp, Body, ConstOperand, Local, Operand, Place, ProjectionElem, Rvalue, StatementKind,
     TerminatorKind, UnOp, VarDebugInfoContents,
@@ -19,112 +19,7 @@ use rustc_middle::ty::{
     EarlyBinder, FloatTy, IntTy, Mutability, Ty, TyCtxt, TyKind, TypingEnv, UintTy,
 };
 use std::collections::{HashMap, HashSet};
-use std::fmt;
-use std::path::{Path, PathBuf};
-
-#[derive(Clone, Debug)]
-pub struct DeviceArtifact {
-    pub kernel_name: String,
-    pub llvm_ir_path: PathBuf,
-    pub hsaco_path: PathBuf,
-}
-
-#[derive(Debug)]
-pub enum EmitError {
-    Io(std::io::Error),
-    Hsaco(HsacoError),
-    UnsupportedKernel { kernel: String, reason: String },
-    Preflight { reason: String },
-    InvalidArtifactName { kernel: String, reason: String },
-    DuplicateArtifactName { kernel: String },
-    InvalidArtifactDestination { path: PathBuf, reason: String },
-    MissingStagedArtifact { path: PathBuf },
-    StagingExhausted { output_dir: PathBuf },
-    InvalidProducer { reason: String },
-    Ownership { reason: String },
-    ArtifactOwnedByOtherProducer { kernel: String },
-    OutputDirectoryChanged { path: PathBuf },
-    SubprocessPathBoundary { reason: String },
-    Transaction(Box<ArtifactTransactionError>),
-}
-
-impl fmt::Display for EmitError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Io(error) => write!(f, "{error}"),
-            Self::Hsaco(error) => write!(f, "{error}"),
-            Self::UnsupportedKernel { kernel, reason } => {
-                write!(
-                    f,
-                    "unsupported kernel shape for AMDGPU LLVM IR MVP: {kernel}: {reason}"
-                )
-            }
-            Self::Preflight { reason } => write!(f, "device artifact preflight failed: {reason}"),
-            Self::InvalidArtifactName { kernel, reason } => {
-                write!(f, "invalid kernel artifact name `{kernel}`: {reason}")
-            }
-            Self::DuplicateArtifactName { kernel } => {
-                write!(f, "duplicate kernel artifact name `{kernel}`")
-            }
-            Self::InvalidArtifactDestination { path, reason } => {
-                write!(
-                    f,
-                    "invalid kernel artifact destination {}: {reason}",
-                    path.display()
-                )
-            }
-            Self::MissingStagedArtifact { path } => {
-                write!(
-                    f,
-                    "compiler did not produce staged artifact {}",
-                    path.display()
-                )
-            }
-            Self::StagingExhausted { output_dir } => {
-                write!(
-                    f,
-                    "could not reserve an artifact staging directory in {}",
-                    output_dir.display()
-                )
-            }
-            Self::InvalidProducer { reason } => write!(f, "invalid artifact producer: {reason}"),
-            Self::Ownership { reason } => {
-                write!(f, "invalid non-authoritative ownership registry: {reason}")
-            }
-            Self::ArtifactOwnedByOtherProducer { kernel } => {
-                write!(f, "artifact name {kernel} is owned by another producer")
-            }
-            Self::OutputDirectoryChanged { path } => {
-                write!(
-                    f,
-                    "artifact output directory changed while pinned: {}",
-                    path.display()
-                )
-            }
-            Self::SubprocessPathBoundary { reason } => {
-                write!(
-                    f,
-                    "cannot establish pinned subprocess path boundary: {reason}"
-                )
-            }
-            Self::Transaction(error) => write!(f, "{error}"),
-        }
-    }
-}
-
-impl std::error::Error for EmitError {}
-
-impl From<std::io::Error> for EmitError {
-    fn from(error: std::io::Error) -> Self {
-        Self::Io(error)
-    }
-}
-
-impl From<HsacoError> for EmitError {
-    fn from(error: HsacoError) -> Self {
-        Self::Hsaco(error)
-    }
-}
+use std::path::Path;
 
 pub fn emit_collection<'tcx>(
     tcx: TyCtxt<'tcx>,
@@ -143,7 +38,8 @@ pub fn emit_collection<'tcx>(
         |kernel| &kernel.name,
         |kernel| Ok(kernel.llvm_ir.clone()),
         |llvm_ir_path, hsaco_path| {
-            compile_llvm_ir_to_hsaco(llvm_ir_path, hsaco_path, target).map_err(EmitError::from)
+            compile_llvm_ir_to_hsaco(llvm_ir_path, hsaco_path, target)
+                .map_err(|error| EmitError::Compilation(Box::new(error)))
         },
     )
 }
@@ -161,7 +57,8 @@ pub(crate) fn emit_collection_after_preflight(
         |kernel| &kernel.name,
         |kernel| Ok(kernel.llvm_ir.clone()),
         |llvm_ir_path, hsaco_path| {
-            compile_llvm_ir_to_hsaco(llvm_ir_path, hsaco_path, target).map_err(EmitError::from)
+            compile_llvm_ir_to_hsaco(llvm_ir_path, hsaco_path, target)
+                .map_err(|error| EmitError::Compilation(Box::new(error)))
         },
     )
 }
