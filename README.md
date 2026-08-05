@@ -31,6 +31,7 @@ interfaces needed to reach that target:
 - `fe2o3-device`: no-std device API and `#[kernel]` re-export.
 - `fe2o3-macros`: kernel marker macro and reserved symbol naming.
 - `fe2o3-core`: HIP-backed host runtime, buffers, streams, modules, launches.
+- `fe2o3-completion`: HIP-free resource completion and failure policy.
 - `fe2o3-host`: user-facing launch macro.
 - `rustc-codegen-fe2o3`: backend support code and HSACO toolchain hooks.
 - `cargo-fe2o3`: cargo subcommand and environment diagnostics.

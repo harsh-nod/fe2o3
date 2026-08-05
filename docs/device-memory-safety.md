@@ -18,6 +18,21 @@ buffer-to-host transfer rejects a stream from another device before calling
 HIP. Numeric device identity is used because separately created wrappers for a
 HIP primary context on the same device refer to the same device domain.
 
+Safe `DeviceBuffer` constructors and host transfers establish stream completion
+before returning. This includes attempting stream synchronization after an
+asynchronous HIP enqueue reports an error, because an error does not prove that
+the operation retained no resources. Empty and zero-sized-type buffers perform
+no zero-byte HIP memory operation and use no null pointer in memory FFI.
+
+Failure handling follows resource ownership. Initialization owns its allocation:
+if completion cannot be established, it leaks the allocation rather than free
+memory that HIP may still access. When both enqueue and recovery synchronization
+fail, `Error::OperationRecoveryFailed` retains both errors. Upload and download
+borrow caller storage. If synchronization cannot establish completion after
+either a successful or failed enqueue, the process aborts rather than return
+control while HIP may still access that storage. Raw pointers remain an unsafe
+escape hatch whose caller must enforce the documented asynchronous lifetimes.
+
 `DeviceCopy` is only a representation and Rust-validity guarantee. It does not
 prove kernel bounds, buffer access modes, absence of data races, stream
 ordering, or kernel ABI field ordering. Those require the typed launch,

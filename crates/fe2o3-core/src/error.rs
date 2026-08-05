@@ -60,6 +60,10 @@ pub enum Error {
     },
     EventPending,
     EventTimingDisabled,
+    OperationRecoveryFailed {
+        operation: Box<Error>,
+        synchronization: Box<Error>,
+    },
     NullHostAllocation,
     Nul(NulError),
     Io(std::io::Error),
@@ -101,6 +105,13 @@ impl fmt::Display for Error {
             Self::EventTimingDisabled => {
                 write!(f, "elapsed time requires timing-enabled events")
             }
+            Self::OperationRecoveryFailed {
+                operation,
+                synchronization,
+            } => write!(
+                f,
+                "operation failed ({operation}) and stream synchronization could not establish completion ({synchronization})"
+            ),
             Self::NullHostAllocation => write!(
                 f,
                 "hipHostMalloc returned a null pointer for a non-empty allocation"
@@ -175,6 +186,22 @@ mod tests {
         assert_eq!(
             error.to_string(),
             "device buffer belongs to HIP device 1, but the stream belongs to HIP device 3"
+        );
+    }
+
+    #[test]
+    fn operation_recovery_error_reports_both_failures() {
+        let error = Error::OperationRecoveryFailed {
+            operation: Box::new(Error::SizeOverflow),
+            synchronization: Box::new(Error::DeviceMismatch {
+                buffer_device: 1,
+                stream_device: 2,
+            }),
+        };
+
+        assert_eq!(
+            error.to_string(),
+            "operation failed (size calculation overflowed) and stream synchronization could not establish completion (device buffer belongs to HIP device 1, but the stream belongs to HIP device 2)"
         );
     }
 }

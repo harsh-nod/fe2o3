@@ -10,6 +10,7 @@ readonly CPU_TEST_PACKAGES=(
   cargo-fe2o3
   dialect-amdgcn
   dialect-mir
+  fe2o3-completion
   fe2o3-contracts
   fe2o3-device
   fe2o3-kernel-ir
@@ -99,6 +100,8 @@ run_tests() {
     cargo_args+=(-p "${package}")
   done
   run_step cpu-tests cargo "${cargo_args[@]}"
+  # fe2o3-core unit tests link HIP, but its compile-fail doctests do not.
+  run_step core-doc-tests cargo test --locked --doc -p fe2o3-core
 }
 
 run_backend_build() {

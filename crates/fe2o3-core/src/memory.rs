@@ -1,5 +1,6 @@
 use crate::{DeviceCopy, DevicePtr, Error, GpuContext, Result, Stream, check};
 use core::ffi::c_void;
+use fe2o3_completion::{CompletionError, complete_borrowed, complete_owned};
 use std::sync::Arc;
 
 #[derive(Debug)]
@@ -13,11 +14,12 @@ unsafe impl<T: DeviceCopy> Send for DeviceBuffer<T> {}
 unsafe impl<T: DeviceCopy> Sync for DeviceBuffer<T> {}
 
 impl<T: DeviceCopy> DeviceBuffer<T> {
-    /// Allocates `len` elements and enqueues a zero fill on `stream`.
+    /// Allocates `len` elements and fills them with zero on `stream`.
     ///
-    /// This operation preserves stream ordering but does not synchronize. If
-    /// zero-fill enqueueing fails after allocation, the allocation is dropped
-    /// before the error is returned.
+    /// The function synchronizes the stream before returning, including after
+    /// an enqueue error. If synchronization cannot establish completion, the
+    /// allocation is leaked rather than freed while HIP may still use it. A
+    /// failed enqueue plus failed recovery reports both errors.
     pub fn zeroed(stream: &Stream, len: usize) -> Result<Self> {
         let context = stream.context().clone();
         context.bind_to_thread()?;
@@ -37,8 +39,12 @@ impl<T: DeviceCopy> DeviceBuffer<T> {
             len,
             context,
         };
-        check(unsafe { fe2o3_hip_sys::hipMemsetAsync(raw, 0, size, stream.raw()) })?;
-        Ok(buffer)
+        complete_owned(
+            buffer,
+            || check(unsafe { fe2o3_hip_sys::hipMemsetAsync(raw, 0, size, stream.raw()) }),
+            || stream.synchronize(),
+        )
+        .map_err(completion_error)
     }
 
     pub fn len(&self) -> usize {
@@ -70,23 +76,31 @@ impl<T: DeviceCopy> DeviceBuffer<T> {
     /// Copies `values` into a new device allocation.
     ///
     /// The borrowed upload is synchronous with respect to `stream`: after the
-    /// copy is enqueued, the function waits for that stream before returning,
-    /// so the caller may immediately mutate or drop `values`. On an enqueue or
-    /// synchronization error, destination cleanup happens before the error is
-    /// returned. There is intentionally no safe nonblocking borrowed upload.
+    /// copy is attempted, the function waits for that stream before returning,
+    /// so the caller may immediately mutate or drop `values`. An enqueue error
+    /// is followed by a recovery synchronization before destination cleanup. If
+    /// completion remains ambiguous, the process aborts rather than release the
+    /// borrow of `values`. There is intentionally no safe nonblocking borrowed
+    /// upload.
     pub fn from_host(stream: &Stream, values: &[T]) -> Result<Self> {
+        let size = byte_len::<T>(values.len())?;
         let buffer = Self::zeroed(stream, values.len())?;
-        if !values.is_empty() {
-            check(unsafe {
-                fe2o3_hip_sys::hipMemcpyAsync(
-                    buffer.ptr.cast::<c_void>(),
-                    values.as_ptr().cast::<c_void>(),
-                    byte_len::<T>(values.len())?,
-                    fe2o3_hip_sys::HIP_MEMCPY_HOST_TO_DEVICE,
-                    stream.raw(),
-                )
-            })?;
-            return finish_borrowed_transfer(buffer, || stream.synchronize());
+        if size != 0 {
+            complete_borrowed(
+                || {
+                    check(unsafe {
+                        fe2o3_hip_sys::hipMemcpyAsync(
+                            buffer.ptr.cast::<c_void>(),
+                            values.as_ptr().cast::<c_void>(),
+                            size,
+                            fe2o3_hip_sys::HIP_MEMCPY_HOST_TO_DEVICE,
+                            stream.raw(),
+                        )
+                    })
+                },
+                || stream.synchronize(),
+            )
+            .map_err(completion_error)?;
         }
         Ok(buffer)
     }
@@ -94,26 +108,34 @@ impl<T: DeviceCopy> DeviceBuffer<T> {
     /// Copies the buffer to host memory after validating the stream's device.
     ///
     /// The returned vector is initialized only after stream synchronization.
-    /// On an enqueue or synchronization error, its backing allocation is
-    /// dropped before the error is returned.
+    /// An enqueue error is followed by a recovery synchronization before host
+    /// allocation cleanup. If completion remains ambiguous, the process aborts
+    /// rather than release the borrow of this device buffer.
     pub fn to_host_vec(&self, stream: &Stream) -> Result<Vec<T>> {
         ensure_same_device(self.context.device_id(), stream.context().device_id())?;
         stream.context().bind_to_thread()?;
+        let size = byte_len::<T>(self.len)?;
         let mut values = Vec::<T>::with_capacity(self.len);
-        if self.len != 0 {
-            check(unsafe {
-                fe2o3_hip_sys::hipMemcpyAsync(
-                    values.as_mut_ptr().cast::<c_void>(),
-                    self.ptr.cast::<c_void>(),
-                    byte_len::<T>(self.len)?,
-                    fe2o3_hip_sys::HIP_MEMCPY_DEVICE_TO_HOST,
-                    stream.raw(),
-                )
-            })?;
+        if size != 0 {
+            complete_borrowed(
+                || {
+                    check(unsafe {
+                        fe2o3_hip_sys::hipMemcpyAsync(
+                            values.as_mut_ptr().cast::<c_void>(),
+                            self.ptr.cast::<c_void>(),
+                            size,
+                            fe2o3_hip_sys::HIP_MEMCPY_DEVICE_TO_HOST,
+                            stream.raw(),
+                        )
+                    })
+                },
+                || stream.synchronize(),
+            )
+            .map_err(completion_error)?;
         }
-        let mut values = finish_borrowed_transfer(values, || stream.synchronize())?;
         // SAFETY: a successful copy and synchronization initialized every
-        // element, and `DeviceCopy` guarantees every bit pattern is valid.
+        // non-ZST element. ZSTs require no backing bytes, and `DeviceCopy`
+        // guarantees every bit pattern is valid.
         unsafe {
             values.set_len(self.len);
         }
@@ -135,6 +157,19 @@ fn byte_len<T>(len: usize) -> Result<usize> {
         .ok_or(crate::Error::SizeOverflow)
 }
 
+fn completion_error(error: CompletionError<Error, Error>) -> Error {
+    match error {
+        CompletionError::Operation(error) | CompletionError::Synchronization(error) => error,
+        CompletionError::OperationAndSynchronization {
+            operation,
+            synchronization,
+        } => Error::OperationRecoveryFailed {
+            operation: Box::new(operation),
+            synchronization: Box::new(synchronization),
+        },
+    }
+}
+
 fn ensure_same_device(buffer_device: i32, stream_device: i32) -> Result<()> {
     if buffer_device == stream_device {
         Ok(())
@@ -146,25 +181,11 @@ fn ensure_same_device(buffer_device: i32, stream_device: i32) -> Result<()> {
     }
 }
 
-fn finish_borrowed_transfer<T>(value: T, synchronize: impl FnOnce() -> Result<()>) -> Result<T> {
-    synchronize()?;
-    Ok(value)
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{DeviceBuffer, ensure_same_device, finish_borrowed_transfer};
+    use super::{DeviceBuffer, byte_len, completion_error, ensure_same_device};
     use crate::{Error, GpuContext};
-    use std::cell::RefCell;
-    use std::rc::Rc;
-
-    struct DropRecorder(Rc<RefCell<Vec<&'static str>>>);
-
-    impl Drop for DropRecorder {
-        fn drop(&mut self) {
-            self.0.borrow_mut().push("drop");
-        }
-    }
+    use fe2o3_completion::CompletionError;
 
     #[test]
     fn device_identity_uses_hip_device_ids() {
@@ -180,17 +201,35 @@ mod tests {
     }
 
     #[test]
-    fn synchronization_failure_precedes_transfer_cleanup() {
-        let events = Rc::new(RefCell::new(Vec::new()));
-        let value = DropRecorder(events.clone());
+    fn empty_and_zst_buffers_have_no_transfer_bytes() {
+        assert_eq!(byte_len::<u32>(0).unwrap(), 0);
+        assert_eq!(byte_len::<[u8; 0]>(usize::MAX).unwrap(), 0);
+    }
 
-        let result = finish_borrowed_transfer(value, || {
-            events.borrow_mut().push("synchronize");
-            Err(Error::SizeOverflow)
+    #[test]
+    fn dual_completion_failure_maps_both_errors() {
+        let error = completion_error(CompletionError::OperationAndSynchronization {
+            operation: Error::SizeOverflow,
+            synchronization: Error::DeviceMismatch {
+                buffer_device: 3,
+                stream_device: 4,
+            },
         });
 
-        assert!(matches!(result, Err(Error::SizeOverflow)));
-        assert_eq!(*events.borrow(), ["synchronize", "drop"]);
+        assert!(matches!(
+            error,
+            Error::OperationRecoveryFailed {
+                operation,
+                synchronization,
+            } if matches!(*operation, Error::SizeOverflow)
+                && matches!(
+                    *synchronization,
+                    Error::DeviceMismatch {
+                        buffer_device: 3,
+                        stream_device: 4
+                    }
+                )
+        ));
     }
 
     #[test]
