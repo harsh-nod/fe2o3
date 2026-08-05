@@ -11,13 +11,13 @@ extern crate rustc_session;
 extern crate rustc_span;
 
 mod amdgpu_llvm;
-mod artifact_transaction;
 mod collector;
 mod kernel_ir_lowering;
 mod mir_import;
 mod record_lowering;
 mod trusted_device_items;
 
+use fe2o3_artifact_transaction as artifact_transaction;
 use rustc_codegen_ssa::traits::CodegenBackend;
 use rustc_codegen_ssa::{CompiledModules, CrateInfo};
 use rustc_data_structures::fx::FxIndexMap;

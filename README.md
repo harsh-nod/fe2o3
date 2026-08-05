@@ -35,6 +35,7 @@ interfaces needed to reach that target:
 - `fe2o3-core`: HIP-backed host runtime, buffers, streams, modules, launches.
 - `fe2o3-completion`: HIP-free resource completion and failure policy.
 - `fe2o3-host`: user-facing launch macro.
+- `fe2o3-artifact-transaction`: shared compiler artifact ownership, recovery, and publication.
 - `rustc-codegen-fe2o3`: backend support code and HSACO toolchain hooks.
 - `cargo-fe2o3`: cargo subcommand and environment diagnostics.
 - `dialect-amdgcn`: AMDGPU intrinsic naming seam for the future Pliron lowering.

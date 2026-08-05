@@ -11,9 +11,9 @@ build = "build.rs"
 [dependencies]
 dialect-amdgcn.workspace = true
 dialect-mir.workspace = true
+fe2o3-artifact-transaction.workspace = true
 fe2o3-kernel-ir.workspace = true
 reserved-fe2o3-symbols.workspace = true
-rustix.workspace = true
 
 [lib]
 name = "rustc_codegen_fe2o3"

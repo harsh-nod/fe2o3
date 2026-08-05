@@ -19,7 +19,6 @@
 //! not atomically visible as a unit: a crash during the rename sequence can leave a partial
 //! generation, which a later cooperating transaction will reconcile.
 
-use crate::amdgpu_llvm::{DeviceArtifact, EmitError};
 use rustix::fd::{AsRawFd, OwnedFd};
 use rustix::fs::{
     AtFlags, Dir, FileType, FlockOperation, Mode, OFlags, flock, fstat, fsync, mkdirat, open,
@@ -32,6 +31,118 @@ use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process;
 use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Files published for one successfully compiled kernel.
+#[derive(Clone, Debug)]
+pub struct DeviceArtifact {
+    /// Canonical kernel artifact stem.
+    pub kernel_name: String,
+    /// Published LLVM IR path.
+    pub llvm_ir_path: PathBuf,
+    /// Published AMDGPU code-object path.
+    pub hsaco_path: PathBuf,
+}
+
+/// Failure while preparing, compiling, or transactionally publishing device artifacts.
+#[derive(Debug)]
+pub enum EmitError {
+    Io(io::Error),
+    Compilation(Box<dyn std::error::Error + Send + Sync>),
+    UnsupportedKernel { kernel: String, reason: String },
+    Preflight { reason: String },
+    InvalidArtifactName { kernel: String, reason: String },
+    DuplicateArtifactName { kernel: String },
+    InvalidArtifactDestination { path: PathBuf, reason: String },
+    MissingStagedArtifact { path: PathBuf },
+    StagingExhausted { output_dir: PathBuf },
+    InvalidProducer { reason: String },
+    Ownership { reason: String },
+    ArtifactOwnedByOtherProducer { kernel: String },
+    OutputDirectoryChanged { path: PathBuf },
+    SubprocessPathBoundary { reason: String },
+    Transaction(Box<ArtifactTransactionError>),
+}
+
+impl fmt::Display for EmitError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Io(error) => write!(f, "{error}"),
+            Self::Compilation(error) => write!(f, "{error}"),
+            Self::UnsupportedKernel { kernel, reason } => {
+                write!(
+                    f,
+                    "unsupported kernel shape for AMDGPU LLVM IR MVP: {kernel}: {reason}"
+                )
+            }
+            Self::Preflight { reason } => write!(f, "device artifact preflight failed: {reason}"),
+            Self::InvalidArtifactName { kernel, reason } => {
+                write!(f, "invalid kernel artifact name `{kernel}`: {reason}")
+            }
+            Self::DuplicateArtifactName { kernel } => {
+                write!(f, "duplicate kernel artifact name `{kernel}`")
+            }
+            Self::InvalidArtifactDestination { path, reason } => {
+                write!(
+                    f,
+                    "invalid kernel artifact destination {}: {reason}",
+                    path.display()
+                )
+            }
+            Self::MissingStagedArtifact { path } => {
+                write!(
+                    f,
+                    "compiler did not produce staged artifact {}",
+                    path.display()
+                )
+            }
+            Self::StagingExhausted { output_dir } => {
+                write!(
+                    f,
+                    "could not reserve an artifact staging directory in {}",
+                    output_dir.display()
+                )
+            }
+            Self::InvalidProducer { reason } => write!(f, "invalid artifact producer: {reason}"),
+            Self::Ownership { reason } => {
+                write!(f, "invalid non-authoritative ownership registry: {reason}")
+            }
+            Self::ArtifactOwnedByOtherProducer { kernel } => {
+                write!(f, "artifact name {kernel} is owned by another producer")
+            }
+            Self::OutputDirectoryChanged { path } => {
+                write!(
+                    f,
+                    "artifact output directory changed while pinned: {}",
+                    path.display()
+                )
+            }
+            Self::SubprocessPathBoundary { reason } => {
+                write!(
+                    f,
+                    "cannot establish pinned subprocess path boundary: {reason}"
+                )
+            }
+            Self::Transaction(error) => write!(f, "{error}"),
+        }
+    }
+}
+
+impl std::error::Error for EmitError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Io(error) => Some(error),
+            Self::Compilation(error) => Some(error.as_ref()),
+            Self::Transaction(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+impl From<io::Error> for EmitError {
+    fn from(error: io::Error) -> Self {
+        Self::Io(error)
+    }
+}
 
 const LOCK_FILE: &str = ".fe2o3-artifacts.lock";
 const OWNERSHIP_FILE: &str = ".fe2o3-owners-v1";
@@ -51,17 +162,19 @@ const MAX_OUTPUT_ENTRIES: usize = MAX_TOTAL_OWNED_KERNELS * 7;
 
 static NEXT_STAGING_ID: AtomicU64 = AtomicU64::new(0);
 
+/// Non-authoritative cleanup identity for one compiler producer.
+///
+/// Source paths are intentionally retained exactly as rustc reports them. Callers that need to
+/// match an existing producer must supply the byte-for-byte same path spelling.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub(crate) struct ProducerIdentity {
+pub struct ProducerIdentity {
     stable_source: String,
     crate_name: String,
 }
 
 impl ProducerIdentity {
-    pub(crate) fn from_codegen(
-        crate_name: &str,
-        local_source: Option<&Path>,
-    ) -> Result<Self, EmitError> {
+    /// Builds a cleanup identity from rustc's crate name and local source path.
+    pub fn from_codegen(crate_name: &str, local_source: Option<&Path>) -> Result<Self, EmitError> {
         validate_simple_name(crate_name, "crate name")?;
         let stable_source = match local_source {
             Some(path) => {
@@ -328,24 +441,32 @@ fn ownership_error(reason: impl Into<String>) -> EmitError {
     }
 }
 
+/// Last durable publication milestone reached by a failed transaction.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PublicationState {
-    NotStarted {
-        total_final_renames: usize,
-    },
+pub enum PublicationState {
+    /// No final artifact rename started.
+    NotStarted { total_final_renames: usize },
+    /// Some, but not all, final artifact renames completed before rollback.
     Partial {
         completed_final_renames: usize,
         total_final_renames: usize,
     },
-    FinalsPublished {
-        final_renames: usize,
-    },
-    CommittedWithCleanupFailure {
-        final_renames: usize,
-    },
-    Committed {
-        final_renames: usize,
-    },
+    /// All final artifacts were renamed, but the ownership registry was not committed.
+    FinalsPublished { final_renames: usize },
+    /// The registry committed, but cleanup or final synchronization failed.
+    CommittedWithCleanupFailure { final_renames: usize },
+    /// The registry and final artifacts committed successfully.
+    Committed { final_renames: usize },
+}
+
+impl PublicationState {
+    /// Returns whether the ownership registry committed this generation.
+    pub const fn is_committed(self) -> bool {
+        matches!(
+            self,
+            Self::CommittedWithCleanupFailure { .. } | Self::Committed { .. }
+        )
+    }
 }
 
 #[cfg(test)]
@@ -1709,11 +1830,29 @@ mod tests {
     }
 }
 
+/// One structured filesystem failure recorded while reconciling a transaction.
 #[derive(Debug)]
-pub(crate) struct FilesystemFailure {
+pub struct FilesystemFailure {
     pub(crate) operation: &'static str,
     pub(crate) entry: String,
     pub(crate) error: io::Error,
+}
+
+impl FilesystemFailure {
+    /// Operation that failed.
+    pub const fn operation(&self) -> &'static str {
+        self.operation
+    }
+
+    /// Managed-directory entry or diagnostic path associated with the failure.
+    pub fn entry(&self) -> &str {
+        &self.entry
+    }
+
+    /// Underlying operating-system error.
+    pub const fn error(&self) -> &io::Error {
+        &self.error
+    }
 }
 
 impl fmt::Display for FilesystemFailure {
@@ -1726,12 +1865,41 @@ impl fmt::Display for FilesystemFailure {
     }
 }
 
+impl std::error::Error for FilesystemFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.error)
+    }
+}
+
+/// Structured failure report for one artifact transaction.
 #[derive(Debug)]
-pub(crate) struct ArtifactTransactionError {
+pub struct ArtifactTransactionError {
     pub(crate) primary: Option<Box<EmitError>>,
     pub(crate) cleanup_failures: Vec<FilesystemFailure>,
     pub(crate) invalidation_failures: Vec<FilesystemFailure>,
     pub(crate) publication: PublicationState,
+}
+
+impl ArtifactTransactionError {
+    /// Primary preparation, compilation, publication, or synchronization failure, if any.
+    pub fn primary(&self) -> Option<&EmitError> {
+        self.primary.as_deref()
+    }
+
+    /// Failures encountered while removing staging or recovery state.
+    pub fn cleanup_failures(&self) -> &[FilesystemFailure] {
+        &self.cleanup_failures
+    }
+
+    /// Failures encountered while invalidating final artifacts.
+    pub fn invalidation_failures(&self) -> &[FilesystemFailure] {
+        &self.invalidation_failures
+    }
+
+    /// Last durable publication milestone reached by the transaction.
+    pub const fn publication(&self) -> PublicationState {
+        self.publication
+    }
 }
 
 impl fmt::Display for ArtifactTransactionError {
@@ -1748,6 +1916,24 @@ impl fmt::Display for ArtifactTransactionError {
             write!(f, "; cleanup: {failure}")?;
         }
         Ok(())
+    }
+}
+
+impl std::error::Error for ArtifactTransactionError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.primary
+            .as_deref()
+            .map(|error| error as &(dyn std::error::Error + 'static))
+            .or_else(|| {
+                self.invalidation_failures
+                    .first()
+                    .map(|error| error as &(dyn std::error::Error + 'static))
+            })
+            .or_else(|| {
+                self.cleanup_failures
+                    .first()
+                    .map(|error| error as &(dyn std::error::Error + 'static))
+            })
     }
 }
 
@@ -2504,7 +2690,14 @@ struct PreparedArtifact {
     llvm_ir: String,
 }
 
-pub(crate) fn emit_artifact_transaction<T>(
+/// Prepares, compiles, and publishes one producer's complete kernel set.
+///
+/// The validated output-directory lock is held while `prepare` and `compile` run and until
+/// publication or rollback completes. Callbacks must not reenter this artifact store. Each
+/// successful compiler callback must create the requested `.o` and `.hsaco` beside its staged
+/// `.ll`. Passing an empty kernel set reconciles the producer to no outputs and also removes
+/// ownerless legacy artifacts in the managed namespace.
+pub fn emit_artifact_transaction<T>(
     output_dir: &Path,
     producer: &ProducerIdentity,
     kernels: &[T],
@@ -2523,7 +2716,13 @@ pub(crate) fn emit_artifact_transaction<T>(
     )
 }
 
-pub(crate) fn emit_artifact_transaction_after_preflight<T, P>(
+/// Runs fallible collection before preparing, compiling, and publishing a complete kernel set.
+///
+/// The validated output-directory lock is acquired before `preflight` and retained through all
+/// callbacks, publication, and rollback. This guarantees that a preflight failure invalidates the
+/// producer's previous generation under the same lock. Callbacks must not reenter this artifact
+/// store. See [`emit_artifact_transaction`] for staged-output and empty-set semantics.
+pub fn emit_artifact_transaction_after_preflight<T, P>(
     output_dir: &Path,
     producer: &ProducerIdentity,
     preflight: impl FnOnce() -> Result<P, EmitError>,

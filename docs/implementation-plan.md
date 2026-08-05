@@ -85,6 +85,7 @@ shortest path to a running kernel is a Pliron-based AMDGPU LLVM IR exporter.
 ## Crate Responsibilities
 
 - `cargo-fe2o3`: user command, backend discovery, build/run orchestration.
+- `fe2o3-artifact-transaction`: rustc-independent artifact ownership and publication protocol.
 - `rustc-codegen-fe2o3`: rustc codegen backend and HSACO toolchain helpers.
 - `fe2o3-macros`: `#[kernel]` and future device extern annotations.
 - `reserved-fe2o3-symbols`: shared reserved symbol namespace.

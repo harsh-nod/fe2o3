@@ -144,6 +144,13 @@ name = "fe2o3-amd-target"
 version = "0.1.0"
 
 [[package]]
+name = "fe2o3-artifact-transaction"
+version = "0.1.0"
+dependencies = [
+ "rustix",
+]
+
+[[package]]
 name = "fe2o3-artifacts"
 version = "0.1.0"
 dependencies = [
@@ -669,9 +676,9 @@ version = "0.1.0"
 dependencies = [
  "dialect-amdgcn",
  "dialect-mir",
+ "fe2o3-artifact-transaction",
  "fe2o3-kernel-ir",
  "reserved-fe2o3-symbols",
- "rustix",
 ]
 
 [[package]]
