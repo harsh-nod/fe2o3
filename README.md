@@ -146,6 +146,31 @@ Run diagnostics:
 cargo run -p cargo-fe2o3 -- doctor
 ```
 
+Preview or remove only fe2o3-generated artifacts under `target/fe2o3`:
+
+```bash
+cargo run -p cargo-fe2o3 -- clean --dry-run
+cargo run -p cargo-fe2o3 -- clean
+```
+
+The clean command discovers the enclosing Cargo project or workspace and
+preserves the rest of its target directory. Planning opens and retains the
+canonical project-root capability. Each successful no-follow component open is
+authoritative: substitution completed before that open selects the current
+ordinary directory, while substitution after it cannot redirect later access.
+Metadata is used only after an open failure to produce a fail-closed diagnostic.
+
+Destructive cleanup is supported on Unix, where the opened `target/fe2o3`
+directory is passed to capability-relative opened-directory removal. With the
+pinned capability implementation, Windows removal is pathname-based, so fe2o3
+fails closed there; `--dry-run` remains available. Unix opened-directory removal
+is not atomic against every concurrent rename and can fail after partially
+removing the opened directory's contents.
+
+This is intentionally narrower than pinned cuda-oxide's clean command, which
+removes the project's full target directory. Parity remains partial until fe2o3
+also supports complete build orchestration from an external Cargo project.
+
 If `FE2O3_TARGET` is not set, `cargo-fe2o3` tries to infer the target from
 `rocminfo` and falls back to `gfx1100`.
 
