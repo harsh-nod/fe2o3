@@ -1,4 +1,4 @@
-//! Fill-only legalization for the opt-in production kernel-IR pipeline.
+//! Exact-kernel legalization for the opt-in production kernel-IR pipeline.
 //!
 //! Helper names are matched here only after `mir_import` classified their rustc `DefId` and
 //! `translate_and_verify` produced this in-memory module. This module must not be used to grant
@@ -8,13 +8,15 @@ use crate::CODEGEN_PIPELINE_ENV;
 use crate::amdgpu_llvm::{EmitError, PreparedDeviceKernel};
 use crate::trusted_device_items::TrustedDeviceItem;
 use fe2o3_kernel_ir::{
-    AccessMode, AddressSpace, ComparePredicate, FunctionBody, IntrinsicOperation, KernelId, Module,
-    Operation, OperationKind, Terminator, Type, ValueDef, ValueId, WorkgroupSize, verify_module,
+    AccessMode, AddressSpace, BasicBlock, BinaryOp, BlockId, ComparePredicate, Constant,
+    FunctionBody, IntrinsicOperation, KernelId, MemoryAccess, Module, Operation, OperationKind,
+    Terminator, Type, ValueDef, ValueId, WorkgroupSize, verify_module,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
 const FILL_KERNEL: &str = "fill";
-const FILL_WORKGROUP_X: u32 = 256;
+const VECADD_KERNEL: &str = "vecadd";
+const WORKGROUP_X: u32 = 256;
 
 pub(crate) fn prepare_fill_collection(
     mut module: Module,
@@ -28,9 +30,14 @@ pub(crate) fn prepare_fill_collection(
 
     let mut expected = expected_kernel_names.to_vec();
     expected.sort();
-    if expected.as_slice() != [FILL_KERNEL] {
+    let [kernel_name] = expected.as_slice() else {
         return Err(reject(format!(
-            "currently supports exactly the `{FILL_KERNEL}` kernel export; collected {expected:?}; unset {CODEGEN_PIPELINE_ENV} to use the default legacy-v1 pipeline"
+            "supports exactly one kernel export from {FILL_KERNEL:?} or {VECADD_KERNEL:?}; collected {expected:?}; unset {CODEGEN_PIPELINE_ENV} to use the default legacy-v1 pipeline"
+        )));
+    };
+    if !matches!(kernel_name.as_str(), FILL_KERNEL | VECADD_KERNEL) {
+        return Err(reject(format!(
+            "does not support kernel export {kernel_name:?}; expected {FILL_KERNEL:?} or {VECADD_KERNEL:?}; unset {CODEGEN_PIPELINE_ENV} to use the default legacy-v1 pipeline"
         )));
     }
 
@@ -49,9 +56,9 @@ pub(crate) fn prepare_fill_collection(
     let kernel = module
         .kernels
         .iter_mut()
-        .find(|kernel| kernel.id.as_str() == FILL_KERNEL)
-        .expect("identity equality established the fill kernel");
-    kernel.workgroup_size = Some(WorkgroupSize::new(FILL_WORKGROUP_X, 1, 1));
+        .find(|kernel| kernel.id.as_str() == kernel_name)
+        .expect("identity equality established the selected kernel");
+    kernel.workgroup_size = Some(WorkgroupSize::new(WORKGROUP_X, 1, 1));
     let entry = kernel.entry.clone();
 
     let function = module
@@ -59,32 +66,44 @@ pub(crate) fn prepare_fill_collection(
         .iter_mut()
         .find(|function| function.id == entry)
         .expect("initial verification established the kernel entry");
-    let expected_slice = writable_f32_slice();
-    if function.signature.parameters != [expected_slice.clone()]
+    let expected_parameters = match kernel_name.as_str() {
+        FILL_KERNEL => vec![writable_f32_slice()],
+        VECADD_KERNEL => vec![
+            readonly_f32_slice(),
+            readonly_f32_slice(),
+            writable_f32_slice(),
+        ],
+        _ => unreachable!("kernel admission checked the selected identity"),
+    };
+    if function.signature.parameters != expected_parameters
         || !function.signature.results.is_empty()
     {
         return Err(reject(format!(
-            "`{FILL_KERNEL}` must have exact kernel IR signature ([writable global f32 slice]) -> (); found {:?} -> {:?}",
+            "`{kernel_name}` must have exact kernel IR signature {expected_parameters:?} -> (); found {:?} -> {:?}",
             function.signature.parameters, function.signature.results
         )));
     }
     let body = function.body.as_mut().expect("verified kernel entry body");
-    legalize_fill_body(body, &function.signature.parameters)?;
+    match kernel_name.as_str() {
+        FILL_KERNEL => legalize_fill_body(body, &function.signature.parameters)?,
+        VECADD_KERNEL => legalize_vecadd_body(body, &function.signature.parameters)?,
+        _ => unreachable!("kernel admission checked the selected identity"),
+    }
 
     verify_module(&module).map_err(|errors| {
         reject(format!(
-            "fill legalization produced invalid kernel IR and was not emitted: {errors}"
+            "{kernel_name} legalization produced invalid kernel IR and was not emitted: {errors}"
         ))
     })?;
-    let llvm_ir = dialect_amdgcn::lower_kernel_to_llvm_ir(&module, &KernelId::new(FILL_KERNEL))
+    let llvm_ir = dialect_amdgcn::lower_kernel_to_llvm_ir(&module, &KernelId::new(kernel_name))
         .map_err(|errors| {
             reject(format!(
-                "G1 AMDGPU lowering rejected `{FILL_KERNEL}`: {errors}"
+                "G1 AMDGPU lowering rejected `{kernel_name}`: {errors}"
             ))
         })?;
 
     Ok(vec![PreparedDeviceKernel {
-        name: FILL_KERNEL.to_string(),
+        name: kernel_name.to_string(),
         llvm_ir,
     }])
 }
@@ -202,6 +221,626 @@ fn legalize_fill_body(body: &mut FunctionBody, parameters: &[Type]) -> Result<()
         )));
     }
 
+    legalize_option_switches(body, FILL_KERNEL, &option_conditions)?;
+    Ok(())
+}
+
+fn legalize_vecadd_body(body: &mut FunctionBody, parameters: &[Type]) -> Result<(), EmitError> {
+    if body.parameters.len() != parameters.len() {
+        return Err(reject(
+            "vecadd entry parameter identities do not match its signature",
+        ));
+    }
+
+    let value_types = collect_value_types(body, parameters);
+    let mut next_value = value_types.keys().next_back().map_or(Ok(0), |value| {
+        value
+            .0
+            .checked_add(1)
+            .ok_or_else(|| reject("vecadd kernel exhausted kernel IR value identities"))
+    })?;
+    let mut thread_index = None;
+    let mut read_index = None;
+    let mut identity_zero = None;
+    let mut get_mut_index = None;
+    let mut output_slice = None;
+    let mut output_pointer = None;
+    let mut option_conditions = BTreeSet::new();
+    let mut thread_calls = 0usize;
+    let mut get_calls = 0usize;
+    let mut get_mut_calls = 0usize;
+
+    for block in &mut body.blocks {
+        let mut legalized = Vec::with_capacity(block.operations.len() + 6);
+        for operation in std::mem::take(&mut block.operations) {
+            let OperationKind::Call { callee, arguments } = &operation.kind else {
+                legalized.push(operation);
+                continue;
+            };
+
+            if callee.as_str() == TrustedDeviceItem::ThreadIndex1d.canonical_path() {
+                require_call_shape(
+                    "thread::index_1d",
+                    &operation,
+                    arguments,
+                    &[],
+                    &[Type::INDEX],
+                    &value_types,
+                )?;
+                thread_calls += 1;
+                thread_index = Some(operation.results[0].id);
+                legalized.push(Operation::effect_free(
+                    operation.results[0].clone(),
+                    OperationKind::Intrinsic(IntrinsicOperation::global_id_1d()),
+                ));
+                continue;
+            }
+
+            if callee.as_str() == TrustedDeviceItem::ThreadIndexGet.canonical_path() {
+                require_call_shape(
+                    "ThreadIndex::get",
+                    &operation,
+                    arguments,
+                    &[Type::INDEX],
+                    &[Type::INDEX],
+                    &value_types,
+                )?;
+                get_calls += 1;
+                read_index = Some(operation.results[0].id);
+                let zero = fresh_value(&mut next_value, Type::INDEX)?;
+                identity_zero = Some(zero.id);
+                legalized.push(Operation::effect_free(
+                    zero.clone(),
+                    OperationKind::Constant(Constant::Index(0)),
+                ));
+                legalized.push(Operation::effect_free(
+                    operation.results[0].clone(),
+                    OperationKind::Binary {
+                        op: BinaryOp::Add,
+                        lhs: arguments[0],
+                        rhs: zero.id,
+                    },
+                ));
+                continue;
+            }
+
+            if callee.as_str() == TrustedDeviceItem::DisjointSliceGetMut.canonical_path() {
+                let pointer = writable_f32_pointer();
+                require_call_shape(
+                    "DisjointSlice::get_mut",
+                    &operation,
+                    arguments,
+                    &[writable_f32_slice(), Type::INDEX],
+                    &[Type::INDEX, pointer.clone()],
+                    &value_types,
+                )?;
+                get_mut_calls += 1;
+                output_slice = Some(arguments[0]);
+                get_mut_index = Some(arguments[1]);
+
+                let length = fresh_value(&mut next_value, Type::INDEX)?;
+                legalized.push(Operation::effect_free(
+                    length.clone(),
+                    OperationKind::SliceLength {
+                        slice: arguments[0],
+                    },
+                ));
+
+                let condition = ValueDef::new(operation.results[0].id, Type::BOOL);
+                option_conditions.insert(condition.id);
+                legalized.push(Operation::effect_free(
+                    condition,
+                    OperationKind::Compare {
+                        predicate: ComparePredicate::LessThan,
+                        lhs: arguments[1],
+                        rhs: length.id,
+                    },
+                ));
+
+                let data = fresh_value(&mut next_value, pointer)?;
+                legalized.push(Operation::effect_free(
+                    data.clone(),
+                    OperationKind::SliceData {
+                        slice: arguments[0],
+                    },
+                ));
+                output_pointer = Some(operation.results[1].id);
+                legalized.push(Operation::effect_free(
+                    operation.results[1].clone(),
+                    OperationKind::GetElementPointer {
+                        base: data.id,
+                        offset: arguments[1],
+                    },
+                ));
+                continue;
+            }
+
+            return Err(reject(format!(
+                "vecadd legalization does not support call `{callee}`; no legacy fallback was attempted"
+            )));
+        }
+        block.operations = legalized;
+    }
+
+    if thread_calls != 1 || get_calls != 1 || get_mut_calls != 1 {
+        return Err(reject(format!(
+            "vecadd legalization requires exactly one trusted thread::index_1d call, one trusted ThreadIndex::get call, and one trusted DisjointSlice::get_mut call; found {thread_calls}, {get_calls}, and {get_mut_calls}"
+        )));
+    }
+    if thread_index != get_mut_index {
+        return Err(reject(format!(
+            "vecadd DisjointSlice::get_mut must consume the exact trusted global thread index; found thread result {thread_index:?} and get_mut index {get_mut_index:?}"
+        )));
+    }
+    let thread_index = thread_index.expect("exact call count checked");
+    let read_index = read_index.expect("exact call count checked");
+    let identity_zero = identity_zero.expect("exact call count checked");
+    let output_pointer = output_pointer.expect("exact call count checked");
+    let output_condition = *option_conditions
+        .iter()
+        .next()
+        .expect("exact get_mut call count checked");
+    let [first_input, second_input, expected_output] = body.parameters.as_slice() else {
+        unreachable!("vecadd signature and parameter count checked")
+    };
+    let parameters = [*first_input, *second_input, *expected_output];
+    if output_slice != Some(*expected_output) {
+        return Err(reject(format!(
+            "vecadd DisjointSlice::get_mut must derive its pointer from output parameter {expected_output}; found {output_slice:?}"
+        )));
+    }
+
+    legalize_option_switches(body, VECADD_KERNEL, &option_conditions)?;
+    require_exact_vecadd_shape(
+        body,
+        parameters,
+        thread_index,
+        read_index,
+        identity_zero,
+        output_pointer,
+        output_condition,
+    )
+}
+
+fn require_exact_vecadd_shape(
+    body: &FunctionBody,
+    parameters: [ValueId; 3],
+    thread_index: ValueId,
+    read_index: ValueId,
+    identity_zero: ValueId,
+    output_pointer: ValueId,
+    output_condition: ValueId,
+) -> Result<(), EmitError> {
+    let mut lengths = BTreeMap::new();
+    let mut data_pointers = BTreeMap::new();
+    let mut geps = BTreeMap::new();
+    let mut loads = BTreeMap::new();
+    let mut compares = Vec::new();
+    let mut float_adds = Vec::new();
+    let mut stores = Vec::new();
+    let mut result_blocks = BTreeMap::new();
+    let mut store_block = None;
+    let mut saw_thread_intrinsic = false;
+    let mut saw_identity_zero = false;
+    let mut saw_index_identity = false;
+
+    for block in &body.blocks {
+        for operation in &block.operations {
+            for result in &operation.results {
+                result_blocks.insert(result.id, block.id);
+            }
+            match &operation.kind {
+                OperationKind::Intrinsic(intrinsic)
+                    if intrinsic == &IntrinsicOperation::global_id_1d()
+                        && operation.results.len() == 1
+                        && operation.results[0].id == thread_index =>
+                {
+                    single_result(operation, &Type::INDEX)?;
+                    if saw_thread_intrinsic {
+                        return Err(reject("vecadd contains duplicate global thread intrinsics"));
+                    }
+                    saw_thread_intrinsic = true;
+                }
+                OperationKind::Constant(Constant::Index(0))
+                    if operation.results.len() == 1 && operation.results[0].id == identity_zero =>
+                {
+                    single_result(operation, &Type::INDEX)?;
+                    if saw_identity_zero {
+                        return Err(reject("vecadd contains duplicate index identity constants"));
+                    }
+                    saw_identity_zero = true;
+                }
+                OperationKind::Binary {
+                    op: BinaryOp::Add,
+                    lhs,
+                    rhs,
+                } if operation.results.len() == 1
+                    && operation.results[0].id == read_index
+                    && *lhs == thread_index
+                    && *rhs == identity_zero =>
+                {
+                    single_result(operation, &Type::INDEX)?;
+                    if saw_index_identity {
+                        return Err(reject("vecadd contains duplicate thread-index identities"));
+                    }
+                    saw_index_identity = true;
+                }
+                OperationKind::SliceLength { slice } => {
+                    insert_unique(
+                        &mut lengths,
+                        *slice,
+                        single_result(operation, &Type::INDEX)?,
+                        "slice length",
+                    )?;
+                }
+                OperationKind::SliceData { slice } => {
+                    let expected_type = if *slice == parameters[2] {
+                        writable_f32_pointer()
+                    } else {
+                        readonly_f32_pointer()
+                    };
+                    insert_unique(
+                        &mut data_pointers,
+                        *slice,
+                        single_result(operation, &expected_type)?,
+                        "slice data",
+                    )?;
+                }
+                OperationKind::GetElementPointer { base, offset } => {
+                    let result = operation
+                        .results
+                        .first()
+                        .ok_or_else(|| reject("vecadd GEP has no result"))?;
+                    if operation.results.len() != 1 {
+                        return Err(reject("vecadd GEP must have exactly one result"));
+                    }
+                    geps.insert(result.id, (*base, *offset, result.ty.clone()));
+                }
+                OperationKind::Load { pointer, access } => {
+                    let result = single_result(operation, &Type::F32)?;
+                    loads.insert(result, (*pointer, *access));
+                }
+                OperationKind::Compare {
+                    predicate,
+                    lhs,
+                    rhs,
+                } => compares.push((
+                    single_result(operation, &Type::BOOL)?,
+                    *predicate,
+                    *lhs,
+                    *rhs,
+                )),
+                OperationKind::Binary {
+                    op: BinaryOp::Add,
+                    lhs,
+                    rhs,
+                } if operation
+                    .results
+                    .as_slice()
+                    .first()
+                    .is_some_and(|result| result.ty == Type::F32) =>
+                {
+                    float_adds.push((single_result(operation, &Type::F32)?, *lhs, *rhs));
+                }
+                OperationKind::Store {
+                    pointer,
+                    value,
+                    access,
+                } => {
+                    stores.push((*pointer, *value, *access));
+                    store_block = Some(block.id);
+                }
+                other => {
+                    return Err(reject(format!(
+                        "vecadd contains unsupported operation {other:?}; no legacy fallback was attempted"
+                    )));
+                }
+            }
+        }
+    }
+
+    if !saw_thread_intrinsic || !saw_identity_zero || !saw_index_identity {
+        return Err(reject(
+            "vecadd did not preserve its trusted global thread-index dataflow",
+        ));
+    }
+    if lengths.len() != 3 || data_pointers.len() != 3 {
+        return Err(reject(format!(
+            "vecadd requires one length and one data projection for each slice; found {} lengths and {} data projections",
+            lengths.len(),
+            data_pointers.len()
+        )));
+    }
+    let input_access = MemoryAccess::new(AddressSpace::Global, 4);
+    let first_gep = require_gep(
+        &geps,
+        data_pointers[&parameters[0]],
+        read_index,
+        &readonly_f32_pointer(),
+        "first input",
+    )?;
+    let second_gep = require_gep(
+        &geps,
+        data_pointers[&parameters[1]],
+        read_index,
+        &readonly_f32_pointer(),
+        "second input",
+    )?;
+    let expected_output_pointer = require_gep(
+        &geps,
+        data_pointers[&parameters[2]],
+        thread_index,
+        &writable_f32_pointer(),
+        "output",
+    )?;
+    if geps.len() != 3 || expected_output_pointer != output_pointer {
+        return Err(reject(
+            "vecadd output store pointer was not derived solely from trusted DisjointSlice::get_mut",
+        ));
+    }
+
+    if loads.len() != 2 {
+        return Err(reject(format!(
+            "vecadd requires exactly two f32 loads; found {}",
+            loads.len()
+        )));
+    }
+    let first_load = require_load(&loads, first_gep, input_access, "first input")?;
+    let second_load = require_load(&loads, second_gep, input_access, "second input")?;
+    let [(sum, lhs, rhs)] = float_adds.as_slice() else {
+        return Err(reject(format!(
+            "vecadd requires exactly one f32 add; found {}",
+            float_adds.len()
+        )));
+    };
+    if (*lhs, *rhs) != (first_load, second_load) {
+        return Err(reject(
+            "vecadd f32 add must combine the first and second input loads in parameter order",
+        ));
+    }
+    let [(store_pointer, store_value, store_access)] = stores.as_slice() else {
+        return Err(reject(format!(
+            "vecadd requires exactly one disjoint f32 store; found {}",
+            stores.len()
+        )));
+    };
+    if (*store_pointer, *store_value, *store_access)
+        != (
+            output_pointer,
+            *sum,
+            MemoryAccess::new(AddressSpace::Global, 4),
+        )
+    {
+        return Err(reject(
+            "vecadd store must write the f32 sum through the exact disjoint output pointer with aligned non-volatile global access",
+        ));
+    }
+
+    let first_condition = find_compare(
+        &compares,
+        read_index,
+        lengths[&parameters[0]],
+        "first input",
+    )?;
+    let second_condition = find_compare(
+        &compares,
+        read_index,
+        lengths[&parameters[1]],
+        "second input",
+    )?;
+    let expected_compares = [
+        (
+            output_condition,
+            ComparePredicate::LessThan,
+            thread_index,
+            lengths[&parameters[2]],
+        ),
+        (
+            first_condition,
+            ComparePredicate::LessThan,
+            read_index,
+            lengths[&parameters[0]],
+        ),
+        (
+            second_condition,
+            ComparePredicate::LessThan,
+            read_index,
+            lengths[&parameters[1]],
+        ),
+    ];
+    let compare_set = compares.iter().copied().collect::<BTreeSet<_>>();
+    if compares.len() != 3 || compare_set != expected_compares.into_iter().collect() {
+        return Err(reject(
+            "vecadd requires exactly the output admission check and both input bounds checks",
+        ));
+    }
+
+    let expected_conditions = expected_compares
+        .iter()
+        .map(|(condition, ..)| *condition)
+        .collect::<BTreeSet<_>>();
+    let mut condition_targets = BTreeMap::new();
+    let mut return_blocks = BTreeSet::new();
+    let mut unreachable_blocks = BTreeSet::new();
+    for block in &body.blocks {
+        match block.terminator.as_ref().expect("verified terminator") {
+            Terminator::ConditionalBranch {
+                condition,
+                then_target,
+                else_target,
+                ..
+            } => {
+                if condition_targets
+                    .insert(*condition, (*then_target, *else_target))
+                    .is_some()
+                {
+                    return Err(reject(format!(
+                        "vecadd branches more than once on condition {condition}"
+                    )));
+                }
+            }
+            Terminator::Branch { .. } => {}
+            Terminator::Return { values } if values.is_empty() => {
+                return_blocks.insert(block.id);
+            }
+            Terminator::Unreachable => {
+                unreachable_blocks.insert(block.id);
+            }
+            terminator => {
+                return Err(reject(format!(
+                    "vecadd contains unsupported terminator {terminator:?}; no legacy fallback was attempted"
+                )));
+            }
+        }
+    }
+    if condition_targets.len() != 3
+        || condition_targets.keys().copied().collect::<BTreeSet<_>>() != expected_conditions
+        || return_blocks.len() != 1
+        || unreachable_blocks.is_empty()
+    {
+        return Err(reject(format!(
+            "vecadd control flow must branch once on output admission and once per input bound, with one return and at least one trap; found conditions {:?}, {} returns, and {} traps",
+            condition_targets.keys().collect::<Vec<_>>(),
+            return_blocks.len(),
+            unreachable_blocks.len()
+        )));
+    }
+    let return_block = *return_blocks.iter().next().expect("one return checked");
+    let first_bounds_block = result_blocks[&first_condition];
+    let first_load_block = result_blocks[&first_load];
+    let second_bounds_block = result_blocks[&second_condition];
+    let second_load_block = result_blocks[&second_load];
+    let store_block = store_block.expect("one store checked");
+    let output_targets = condition_targets[&output_condition];
+    let first_targets = condition_targets[&first_condition];
+    let second_targets = condition_targets[&second_condition];
+    if output_targets != (first_bounds_block, return_block)
+        || first_targets.0 != first_load_block
+        || !unreachable_blocks.contains(&first_targets.1)
+        || first_load_block != second_bounds_block
+        || second_targets.0 != second_load_block
+        || !unreachable_blocks.contains(&second_targets.1)
+        || second_load_block != store_block
+        || !matches!(
+            block(body, store_block).terminator.as_ref(),
+            Some(Terminator::Branch { target, arguments })
+                if *target == return_block && arguments.is_empty()
+        )
+    {
+        return Err(reject(
+            "vecadd control-flow edges do not match output admission, ordered input bounds checks, compute, trap, and return",
+        ));
+    }
+    Ok(())
+}
+
+fn block(body: &FunctionBody, id: BlockId) -> &BasicBlock {
+    body.blocks
+        .iter()
+        .find(|block| block.id == id)
+        .expect("verified branch target")
+}
+
+fn single_result(operation: &Operation, expected_type: &Type) -> Result<ValueId, EmitError> {
+    let [result] = operation.results.as_slice() else {
+        return Err(reject(format!(
+            "vecadd operation {:?} must have exactly one result",
+            operation.kind
+        )));
+    };
+    if &result.ty != expected_type {
+        return Err(reject(format!(
+            "vecadd operation {:?} has result type {:?}; expected {expected_type:?}",
+            operation.kind, result.ty
+        )));
+    }
+    Ok(result.id)
+}
+
+fn insert_unique(
+    values: &mut BTreeMap<ValueId, ValueId>,
+    key: ValueId,
+    value: ValueId,
+    label: &str,
+) -> Result<(), EmitError> {
+    if values.insert(key, value).is_some() {
+        return Err(reject(format!(
+            "vecadd contains duplicate {label} operations for {key}"
+        )));
+    }
+    Ok(())
+}
+
+fn require_gep(
+    geps: &BTreeMap<ValueId, (ValueId, ValueId, Type)>,
+    base: ValueId,
+    offset: ValueId,
+    ty: &Type,
+    label: &str,
+) -> Result<ValueId, EmitError> {
+    let matches = geps
+        .iter()
+        .filter(|(_, candidate)| candidate == &&(base, offset, ty.clone()))
+        .map(|(result, _)| *result)
+        .collect::<Vec<_>>();
+    let [result] = matches.as_slice() else {
+        return Err(reject(format!(
+            "vecadd requires exactly one {label} element pointer at the trusted read/write index; found {}",
+            matches.len()
+        )));
+    };
+    Ok(*result)
+}
+
+fn require_load(
+    loads: &BTreeMap<ValueId, (ValueId, MemoryAccess)>,
+    pointer: ValueId,
+    access: MemoryAccess,
+    label: &str,
+) -> Result<ValueId, EmitError> {
+    let matches = loads
+        .iter()
+        .filter(|(_, candidate)| candidate == &&(pointer, access))
+        .map(|(result, _)| *result)
+        .collect::<Vec<_>>();
+    let [result] = matches.as_slice() else {
+        return Err(reject(format!(
+            "vecadd requires exactly one aligned non-volatile global load from the {label}; found {}",
+            matches.len()
+        )));
+    };
+    Ok(*result)
+}
+
+fn find_compare(
+    compares: &[(ValueId, ComparePredicate, ValueId, ValueId)],
+    lhs: ValueId,
+    rhs: ValueId,
+    label: &str,
+) -> Result<ValueId, EmitError> {
+    let matches = compares
+        .iter()
+        .filter(|(_, predicate, candidate_lhs, candidate_rhs)| {
+            *predicate == ComparePredicate::LessThan
+                && *candidate_lhs == lhs
+                && *candidate_rhs == rhs
+        })
+        .map(|(result, ..)| *result)
+        .collect::<Vec<_>>();
+    let [result] = matches.as_slice() else {
+        return Err(reject(format!(
+            "vecadd requires exactly one {label} bounds comparison; found {}",
+            matches.len()
+        )));
+    };
+    Ok(*result)
+}
+
+fn legalize_option_switches(
+    body: &mut FunctionBody,
+    kernel_name: &str,
+    option_conditions: &BTreeSet<ValueId>,
+) -> Result<(), EmitError> {
     let unreachable_blocks = body
         .blocks
         .iter()
@@ -225,7 +864,7 @@ fn legalize_fill_body(body: &mut FunctionBody, parameters: &[Type]) -> Result<()
         };
         if !option_conditions.contains(selector) {
             return Err(reject(format!(
-                "fill contains unsupported non-Option switch in {}",
+                "{kernel_name} contains unsupported non-Option switch in {}",
                 block.id
             )));
         }
@@ -235,7 +874,7 @@ fn legalize_fill_body(body: &mut FunctionBody, parameters: &[Type]) -> Result<()
             || !unreachable_blocks.contains(default_target)
         {
             return Err(reject(format!(
-                "fill Option switch in {} must have cases 0 and 1 with an unreachable default and no block arguments",
+                "{kernel_name} Option switch in {} must have cases 0 and 1 with an unreachable default and no block arguments",
                 block.id
             )));
         }
@@ -249,7 +888,7 @@ fn legalize_fill_body(body: &mut FunctionBody, parameters: &[Type]) -> Result<()
             .map(|case| case.target);
         let (Some(false_target), Some(true_target)) = (false_target, true_target) else {
             return Err(reject(format!(
-                "fill Option switch in {} must contain exactly discriminants 0 and 1",
+                "{kernel_name} Option switch in {} must contain exactly discriminants 0 and 1",
                 block.id
             )));
         };
@@ -264,7 +903,7 @@ fn legalize_fill_body(body: &mut FunctionBody, parameters: &[Type]) -> Result<()
     }
     if option_switches != 1 {
         return Err(reject(format!(
-            "fill legalization requires exactly one Option switch; found {option_switches}"
+            "{kernel_name} legalization requires exactly one Option switch; found {option_switches}"
         )));
     }
     Ok(())
@@ -320,12 +959,20 @@ fn fresh_value(next: &mut u32, ty: Type) -> Result<ValueDef, EmitError> {
     let value = ValueDef::new(ValueId(*next), ty);
     *next = next
         .checked_add(1)
-        .ok_or_else(|| reject("fill kernel exhausted kernel IR value identities"))?;
+        .ok_or_else(|| reject("kernel exhausted kernel IR value identities"))?;
     Ok(value)
+}
+
+fn readonly_f32_slice() -> Type {
+    Type::slice(Type::F32, AddressSpace::Global, AccessMode::ReadOnly)
 }
 
 fn writable_f32_slice() -> Type {
     Type::slice(Type::F32, AddressSpace::Global, AccessMode::ReadWrite)
+}
+
+fn readonly_f32_pointer() -> Type {
+    Type::pointer(Type::F32, AddressSpace::Global, AccessMode::ReadOnly)
 }
 
 fn writable_f32_pointer() -> Type {
@@ -450,6 +1097,227 @@ mod tests {
         module
     }
 
+    fn translated_vecadd() -> Module {
+        let input = readonly_f32_slice();
+        let output = writable_f32_slice();
+        let input_pointer = readonly_f32_pointer();
+        let output_pointer = writable_f32_pointer();
+
+        let mut index = BasicBlock::new(BlockId(0));
+        index.operations.push(Operation::effect_free(
+            ValueDef::new(ValueId(3), Type::INDEX),
+            OperationKind::Call {
+                callee: FunctionId::new(TrustedDeviceItem::ThreadIndex1d.canonical_path()),
+                arguments: vec![],
+            },
+        ));
+        index.terminator = Some(Terminator::Branch {
+            target: BlockId(1),
+            arguments: vec![],
+        });
+
+        let mut read_index = BasicBlock::new(BlockId(1));
+        read_index.operations.push(Operation::effect_free(
+            ValueDef::new(ValueId(4), Type::INDEX),
+            OperationKind::Call {
+                callee: FunctionId::new(TrustedDeviceItem::ThreadIndexGet.canonical_path()),
+                arguments: vec![ValueId(3)],
+            },
+        ));
+        read_index.terminator = Some(Terminator::Branch {
+            target: BlockId(2),
+            arguments: vec![],
+        });
+
+        let mut get_mut = BasicBlock::new(BlockId(2));
+        get_mut.operations.push(Operation::new(
+            vec![
+                ValueDef::new(ValueId(5), Type::INDEX),
+                ValueDef::new(ValueId(6), output_pointer.clone()),
+            ],
+            OperationKind::Call {
+                callee: FunctionId::new(TrustedDeviceItem::DisjointSliceGetMut.canonical_path()),
+                arguments: vec![ValueId(2), ValueId(3)],
+            },
+        ));
+        get_mut.terminator = Some(Terminator::Branch {
+            target: BlockId(3),
+            arguments: vec![],
+        });
+
+        let mut select = BasicBlock::new(BlockId(3));
+        select.terminator = Some(Terminator::Switch {
+            selector: ValueId(5),
+            cases: vec![
+                SwitchCase {
+                    value: 0,
+                    target: BlockId(7),
+                    arguments: vec![],
+                },
+                SwitchCase {
+                    value: 1,
+                    target: BlockId(4),
+                    arguments: vec![],
+                },
+            ],
+            default_target: BlockId(8),
+            default_arguments: vec![],
+        });
+
+        let mut first_bounds = BasicBlock::new(BlockId(4));
+        first_bounds.operations = vec![
+            Operation::effect_free(
+                ValueDef::new(ValueId(7), Type::INDEX),
+                OperationKind::SliceLength { slice: ValueId(0) },
+            ),
+            Operation::effect_free(
+                ValueDef::new(ValueId(8), Type::BOOL),
+                OperationKind::Compare {
+                    predicate: ComparePredicate::LessThan,
+                    lhs: ValueId(4),
+                    rhs: ValueId(7),
+                },
+            ),
+        ];
+        first_bounds.terminator = Some(Terminator::ConditionalBranch {
+            condition: ValueId(8),
+            then_target: BlockId(5),
+            then_arguments: vec![],
+            else_target: BlockId(9),
+            else_arguments: vec![],
+        });
+
+        let mut second_bounds = BasicBlock::new(BlockId(5));
+        second_bounds.operations = vec![
+            Operation::effect_free(
+                ValueDef::new(ValueId(9), input_pointer.clone()),
+                OperationKind::SliceData { slice: ValueId(0) },
+            ),
+            Operation::effect_free(
+                ValueDef::new(ValueId(10), input_pointer.clone()),
+                OperationKind::GetElementPointer {
+                    base: ValueId(9),
+                    offset: ValueId(4),
+                },
+            ),
+            Operation::effect_free(
+                ValueDef::new(ValueId(11), Type::F32),
+                OperationKind::Load {
+                    pointer: ValueId(10),
+                    access: MemoryAccess::new(AddressSpace::Global, 4),
+                },
+            ),
+            Operation::effect_free(
+                ValueDef::new(ValueId(12), Type::INDEX),
+                OperationKind::SliceLength { slice: ValueId(1) },
+            ),
+            Operation::effect_free(
+                ValueDef::new(ValueId(13), Type::BOOL),
+                OperationKind::Compare {
+                    predicate: ComparePredicate::LessThan,
+                    lhs: ValueId(4),
+                    rhs: ValueId(12),
+                },
+            ),
+        ];
+        second_bounds.terminator = Some(Terminator::ConditionalBranch {
+            condition: ValueId(13),
+            then_target: BlockId(6),
+            then_arguments: vec![],
+            else_target: BlockId(9),
+            else_arguments: vec![],
+        });
+
+        let mut compute = BasicBlock::new(BlockId(6));
+        compute.operations = vec![
+            Operation::effect_free(
+                ValueDef::new(ValueId(14), input_pointer.clone()),
+                OperationKind::SliceData { slice: ValueId(1) },
+            ),
+            Operation::effect_free(
+                ValueDef::new(ValueId(15), input_pointer),
+                OperationKind::GetElementPointer {
+                    base: ValueId(14),
+                    offset: ValueId(4),
+                },
+            ),
+            Operation::effect_free(
+                ValueDef::new(ValueId(16), Type::F32),
+                OperationKind::Load {
+                    pointer: ValueId(15),
+                    access: MemoryAccess::new(AddressSpace::Global, 4),
+                },
+            ),
+            Operation::effect_free(
+                ValueDef::new(ValueId(17), Type::F32),
+                OperationKind::Binary {
+                    op: BinaryOp::Add,
+                    lhs: ValueId(11),
+                    rhs: ValueId(16),
+                },
+            ),
+            Operation::new(
+                vec![],
+                OperationKind::Store {
+                    pointer: ValueId(6),
+                    value: ValueId(17),
+                    access: MemoryAccess::new(AddressSpace::Global, 4),
+                },
+            ),
+        ];
+        compute.terminator = Some(Terminator::Branch {
+            target: BlockId(7),
+            arguments: vec![],
+        });
+
+        let mut exit = BasicBlock::new(BlockId(7));
+        exit.terminator = Some(Terminator::Return { values: vec![] });
+        let mut option_trap = BasicBlock::new(BlockId(8));
+        option_trap.terminator = Some(Terminator::Unreachable);
+        let mut bounds_trap = BasicBlock::new(BlockId(9));
+        bounds_trap.terminator = Some(Terminator::Unreachable);
+
+        let function = Function::definition(
+            "vecadd_impl",
+            Signature::new(vec![input.clone(), input.clone(), output.clone()], vec![]),
+            vec![ValueId(0), ValueId(1), ValueId(2)],
+            vec![
+                index,
+                read_index,
+                get_mut,
+                select,
+                first_bounds,
+                second_bounds,
+                compute,
+                exit,
+                option_trap,
+                bounds_trap,
+            ],
+        );
+        let mut module = Module::new("tests::translated_vecadd");
+        module.functions.push(function);
+        module.functions.push(Function::declaration(
+            TrustedDeviceItem::ThreadIndex1d.canonical_path(),
+            Signature::new(vec![], vec![Type::INDEX]),
+        ));
+        module.functions.push(Function::declaration(
+            TrustedDeviceItem::ThreadIndexGet.canonical_path(),
+            Signature::new(vec![Type::INDEX], vec![Type::INDEX]),
+        ));
+        module.functions.push(Function::declaration(
+            TrustedDeviceItem::DisjointSliceGetMut.canonical_path(),
+            Signature::new(vec![output, Type::INDEX], vec![Type::INDEX, output_pointer]),
+        ));
+        module.kernels.push(fe2o3_kernel_ir::Kernel::new(
+            VECADD_KERNEL,
+            "vecadd_impl",
+            LaunchDomain::D1 {
+                x: LaunchExtent::Dynamic,
+            },
+        ));
+        module
+    }
+
     #[test]
     fn verified_fill_uses_g1_deterministically() {
         let first = prepare_fill_collection(translated_fill(), &[FILL_KERNEL.to_string()])
@@ -468,12 +1336,144 @@ mod tests {
 
     #[test]
     fn kernel_admission_is_exact_and_never_falls_back() {
-        let error = prepare_fill_collection(translated_fill(), &["vecadd".to_string()])
-            .expect_err("vecadd must remain on legacy-v1");
+        let error = prepare_fill_collection(translated_fill(), &["saxpy".to_string()])
+            .expect_err("saxpy must remain on legacy-v1");
 
         let text = error.to_string();
-        assert!(text.contains("supports exactly the `fill` kernel export"));
+        assert!(text.contains("does not support kernel export \"saxpy\""));
         assert!(text.contains("default legacy-v1 pipeline"));
+    }
+
+    #[test]
+    fn verified_vecadd_uses_exact_three_slice_g1_lowering_deterministically() {
+        let first = prepare_fill_collection(translated_vecadd(), &[VECADD_KERNEL.to_string()])
+            .expect("supported vecadd");
+        let second = prepare_fill_collection(translated_vecadd(), &[VECADD_KERNEL.to_string()])
+            .expect("supported vecadd");
+
+        let [kernel] = first.as_slice() else {
+            panic!("one vecadd kernel")
+        };
+        assert_eq!(first[0].name, second[0].name);
+        assert_eq!(first[0].llvm_ir, second[0].llvm_ir);
+        assert_eq!(kernel.name, VECADD_KERNEL);
+        assert!(kernel.llvm_ir.contains(
+            "@vecadd(ptr addrspace(1) %arg0.data, i64 %arg0.len, ptr addrspace(1) %arg1.data, i64 %arg1.len, ptr addrspace(1) %arg2.data, i64 %arg2.len)"
+        ));
+        assert_eq!(kernel.llvm_ir.matches("load float").count(), 2);
+        assert_eq!(kernel.llvm_ir.matches("store float").count(), 1);
+        assert_eq!(kernel.llvm_ir.matches("fadd float").count(), 1);
+        assert!(!kernel.llvm_ir.contains("fe2o3_device"));
+    }
+
+    #[test]
+    fn vecadd_rejects_non_exact_slice_abi() {
+        let mut module = translated_vecadd();
+        module.functions[0].signature.parameters[0] = writable_f32_slice();
+        let body = module.functions[0].body.as_mut().expect("body");
+        body.blocks[5].operations[0].results[0].ty = writable_f32_pointer();
+        body.blocks[5].operations[1].results[0].ty = writable_f32_pointer();
+
+        let error = prepare_fill_collection(module, &[VECADD_KERNEL.to_string()])
+            .expect_err("writable input must be outside the exact vecadd ABI");
+        let text = error.to_string();
+        assert!(text.contains("must have exact kernel IR signature"));
+        assert!(!text.contains("G1 AMDGPU lowering"));
+    }
+
+    #[test]
+    fn vecadd_rejects_mismatched_disjoint_write_witness() {
+        let mut module = translated_vecadd();
+        let body = module.functions[0].body.as_mut().expect("body");
+        body.blocks[2].operations.insert(
+            0,
+            Operation::effect_free(
+                ValueDef::new(ValueId(18), Type::INDEX),
+                OperationKind::Constant(Constant::Index(0)),
+            ),
+        );
+        let OperationKind::Call { arguments, .. } = &mut body.blocks[2].operations[1].kind else {
+            panic!("get_mut call")
+        };
+        arguments[1] = ValueId(18);
+
+        let error = prepare_fill_collection(module, &[VECADD_KERNEL.to_string()])
+            .expect_err("constant output index must not inherit the disjoint witness");
+        assert!(
+            error
+                .to_string()
+                .contains("must consume the exact trusted global thread index")
+        );
+    }
+
+    #[test]
+    fn vecadd_rejects_wrong_input_index_and_arithmetic() {
+        let mut wrong_index = translated_vecadd();
+        let body = wrong_index.functions[0].body.as_mut().expect("body");
+        let OperationKind::GetElementPointer { offset, .. } =
+            &mut body.blocks[5].operations[1].kind
+        else {
+            panic!("first input GEP")
+        };
+        *offset = ValueId(3);
+        let error = prepare_fill_collection(wrong_index, &[VECADD_KERNEL.to_string()])
+            .expect_err("input loads must use ThreadIndex::get");
+        assert!(error.to_string().contains("first input element pointer"));
+
+        let mut multiply = translated_vecadd();
+        let body = multiply.functions[0].body.as_mut().expect("body");
+        let OperationKind::Binary { op, .. } = &mut body.blocks[6].operations[3].kind else {
+            panic!("f32 add")
+        };
+        *op = BinaryOp::Multiply;
+        let error = prepare_fill_collection(multiply, &[VECADD_KERNEL.to_string()])
+            .expect_err("vecadd must not silently broaden to other arithmetic");
+        let text = error.to_string();
+        assert!(text.contains("unsupported operation"));
+        assert!(text.contains("no legacy fallback"));
+    }
+
+    #[test]
+    fn vecadd_rejects_inverted_bounds_control_flow() {
+        let mut module = translated_vecadd();
+        let body = module.functions[0].body.as_mut().expect("body");
+        let Some(Terminator::ConditionalBranch {
+            then_target,
+            else_target,
+            ..
+        }) = &mut body.blocks[4].terminator
+        else {
+            panic!("first bounds branch")
+        };
+        std::mem::swap(then_target, else_target);
+
+        let error = prepare_fill_collection(module, &[VECADD_KERNEL.to_string()])
+            .expect_err("inverted bounds edge must not reach emission");
+        assert!(
+            error
+                .to_string()
+                .contains("control-flow edges do not match")
+        );
+    }
+
+    #[test]
+    fn vecadd_rejects_unsupported_calls_without_fallback() {
+        let mut module = translated_vecadd();
+        let body = module.functions[0].body.as_mut().expect("body");
+        let OperationKind::Call { callee, .. } = &mut body.blocks[1].operations[0].kind else {
+            panic!("ThreadIndex::get call")
+        };
+        *callee = FunctionId::new("tests::unsupported_index_projection");
+        module.functions.push(Function::declaration(
+            "tests::unsupported_index_projection",
+            Signature::new(vec![Type::INDEX], vec![Type::INDEX]),
+        ));
+
+        let error = prepare_fill_collection(module, &[VECADD_KERNEL.to_string()])
+            .expect_err("unknown helper must fail closed");
+        let text = error.to_string();
+        assert!(text.contains("does not support call"));
+        assert!(text.contains("no legacy fallback"));
     }
 
     #[test]
