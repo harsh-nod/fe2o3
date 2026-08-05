@@ -166,21 +166,21 @@ impl Writer {
     }
 }
 
-const fn pointer_width_tag(value: PointerWidth) -> u8 {
+pub(crate) const fn pointer_width_tag(value: PointerWidth) -> u8 {
     match value {
         PointerWidth::Bits32 => 0,
         PointerWidth::Bits64 => 1,
     }
 }
 
-const fn endianness_tag(value: Endianness) -> u8 {
+pub(crate) const fn endianness_tag(value: Endianness) -> u8 {
     match value {
         Endianness::Little => 0,
         Endianness::Big => 1,
     }
 }
 
-const fn capability_tag(value: Capability) -> u16 {
+pub(crate) const fn capability_tag(value: Capability) -> u16 {
     match value {
         Capability::Subgroup => 0,
         Capability::Ballot => 1,
@@ -196,7 +196,7 @@ const fn capability_tag(value: Capability) -> u16 {
     }
 }
 
-const fn code_object_format_tag(value: CodeObjectFormat) -> u8 {
+pub(crate) const fn code_object_format_tag(value: CodeObjectFormat) -> u8 {
     match value {
         CodeObjectFormat::NativeExecutable => 0,
         CodeObjectFormat::RelocatableObject => 1,
@@ -205,7 +205,7 @@ const fn code_object_format_tag(value: CodeObjectFormat) -> u8 {
     }
 }
 
-const fn scalar_tag(value: ScalarType) -> u8 {
+pub(crate) const fn scalar_tag(value: ScalarType) -> u8 {
     match value {
         ScalarType::I8 => 0,
         ScalarType::U8 => 1,
@@ -221,14 +221,14 @@ const fn scalar_tag(value: ScalarType) -> u8 {
     }
 }
 
-const fn mutability_tag(value: Mutability) -> u8 {
+pub(crate) const fn mutability_tag(value: Mutability) -> u8 {
     match value {
         Mutability::Immutable => 0,
         Mutability::Mutable => 1,
     }
 }
 
-const fn access_tag(value: Access) -> u8 {
+pub(crate) const fn access_tag(value: Access) -> u8 {
     match value {
         Access::ByValue => 0,
         Access::ReadOnly => 1,
@@ -237,7 +237,7 @@ const fn access_tag(value: Access) -> u8 {
     }
 }
 
-const fn address_space_tag(value: AddressSpace) -> u8 {
+pub(crate) const fn address_space_tag(value: AddressSpace) -> u8 {
     match value {
         AddressSpace::Value => 0,
         AddressSpace::Global => 1,

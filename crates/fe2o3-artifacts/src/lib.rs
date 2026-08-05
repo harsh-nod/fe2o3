@@ -2,6 +2,7 @@
 #![doc = include_str!("../README.md")]
 
 mod abi;
+mod binding;
 mod container;
 mod container_decode;
 mod container_encode;
@@ -18,6 +19,10 @@ mod proof_encode;
 pub use abi::{
     AbiField, AbiKind, AbiLayout, Access, AddressSpace, MAX_ABI_BYTES, MAX_ABI_FIELDS, Mutability,
     ScalarType,
+};
+pub use binding::{
+    MatchedProofEvidenceV1, PROOF_IDENTITY_VERSION, ProofMatchError, ProofMatchPolicy,
+    ProofTargetError, V1_REQUIRED_PROPERTIES,
 };
 pub use container::{
     ArtifactContainerV1, CodeObjectPayload, ContainerValidationError, MAX_CODE_OBJECT_BYTES,

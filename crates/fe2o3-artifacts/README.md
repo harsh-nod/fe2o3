@@ -1,8 +1,9 @@
 # fe2o3 artifact manifests
 
 `fe2o3-artifacts` owns target-neutral artifact identity and launch-contract
-records. It does not load payloads, launch kernels, select a device, or make
-proof claims.
+records, bounded artifact containers, and source-level proof evidence. It does
+not load payloads, launch kernels, select a device, run Verus, or verify
+compiled machine code.
 
 ## Validation boundary
 
@@ -10,7 +11,8 @@ Model fields are private and direct construction uses fallible constructors.
 Values returned by those constructors are structurally and semantically
 validated according to the invariants below. Validation does not establish
 authenticity and does not bind an identity to executable payload bytes. That
-binding belongs to the future artifact container and loader.
+binding is provided separately by `ArtifactContainerV1`; producer
+authentication remains outside this crate.
 
 `DigestBytes` contains opaque identity bytes supplied by build tooling. A bare
 manifest does not assign those bytes a digest algorithm or bind them to a
@@ -56,8 +58,8 @@ not evidence that referenced code is authentic or even present.
 - Every kernel references a listed code object, uses the target pointer width,
   and requires only capabilities supplied by the selected target.
 
-Proof records, host launch integration, and runtime loading policy remain
-outside this model layer.
+Host launch integration and runtime loading policy remain outside this model
+layer.
 
 ## Container model
 
@@ -71,6 +73,44 @@ order so the validated closure has one canonical model representation.
 A valid container establishes payload-byte binding under its selected digest
 algorithm. It does not establish signer authenticity, the identity of the
 producer, compiler correctness, proof validity, or runtime safety.
+
+## Proof records and matching
+
+`ProofRecordV1` records algorithm-tagged identities for a concrete kernel
+instance, source tree, crate graph, proof-erased executable, build environment,
+artifact selection, artifact contract, source memory semantics, effects, type
+layout, capability semantics, and the functional specification. It also records
+the build configuration, verification model and axioms, measured verifier,
+solver, and evidence-recorder identities, invocation, outcome, proved
+properties, and named trusted contracts. A measured tool identity includes its
+name, version, executable or immutable-distribution digest, and complete
+result-affecting configuration digest. Variable collections are bounded, unique,
+and canonical.
+
+`ManifestV1::proof_target` reconstructs the artifact-owned environment,
+selection, and contract identities under versioned domains. Because manifest v1
+stores opaque digest bytes, callers must supply explicit algorithm-tagged
+kernel, source, executable, and code-object identities. Reconstruction rejects
+any byte mismatch instead of assigning an algorithm to manifest bytes. Artifact
+selection hashes both the code-object digest algorithm and bytes. It also
+requires measured compiler and artifact-producer identities whose names and
+versions match the manifest; their executable and configuration measurements
+are included in the environment identity. Instance, crate-graph, and
+source-contract identities remain explicit compiler inputs.
+`ProofMatchPolicy` returns `MatchedProofEvidenceV1` only when every expected
+identity matches, the proof completed, all V1 properties are present, and the
+trusted-item list exactly matches policy. Failure and timeout are rejected.
+
+Matching establishes equality with caller-supplied evidence. It does not
+authenticate a Verus invocation and cannot create a `Verified` assurance.
+Invocation authentication alone is insufficient, and
+`MatchedProofEvidenceV1` is never sufficient for assurance promotion. Only a
+future audited driver that authoritatively derives the complete property set and
+trusted escape inventory from source and verifier output, and authenticates the
+whole canonical record, may create a stronger private type. Even that
+authenticated source-level evidence would still trust Verus, the solver, model
+axioms, proof erasure, semantic hashing, the compiler stack, and the runtime; it
+would not by itself prove that emitted AMDGPU machine code refines the source.
 
 ## V1 wire format
 
@@ -108,3 +148,12 @@ bytes. Successful decoding establishes that the embedded bytes match the
 manifest's complete code-object closure under the selected digest algorithm.
 It does not authenticate the envelope or make claims about its producer,
 compiler, proofs, or runtime behavior.
+
+## Proof record v1 wire format
+
+`ProofRecordV1` uses a separate canonical little-endian envelope beginning
+with `FE2O3PR\0`, version `1`, and zero flags. Decoding is capped at 1 MiB and
+rejects truncation, trailing data, unknown tags, unsupported versions or flags,
+out-of-range counts, noncanonical ordering, duplicate logical keys, and model
+validation failures. Its SHA-256 digest can be embedded by later bundle
+finalization without changing manifest v1 bytes.
