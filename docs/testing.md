@@ -1,8 +1,9 @@
 # Testing fe2o3
 
-The test matrix separates target-independent checks, code-object compilation,
-and hardware execution. Every pull request should run the first lane. Compiler
-and runtime changes should also run the applicable AMD GPU lanes.
+The test matrix separates target-independent checks, Verus proofs, code-object
+compilation, and hardware execution. Every pull request should run the generic
+lane. Proof, compiler, and runtime changes should also run their applicable
+lanes.
 
 ## Generic validation
 
@@ -17,6 +18,20 @@ workspace metadata and the HSACO names referenced by each example. The manifest
 is the authoritative package selection for ordinary Rust checks, ROCm
 compilation, and GPU smoke. `verus-vecadd` remains ordinary-rustc-only and is
 never selected for ROCm compilation or GPU execution.
+
+## Verus proof coverage
+
+Run the positive vecadd and fill proofs plus all expected-rejection mutations
+with an explicit Verus installation:
+
+```text
+VERUS=/absolute/path/to/verus scripts/ci-local.sh verus
+```
+
+This lane requires Verus; an unavailable binary is a failure rather than a
+skip. It proves the source-level models under the documented
+`hardware_thread_id` contract. It does not establish that ordinary Rust, the
+compiler pipeline, HSACO, HIP, or the GPU refines those models.
 
 ## ROCm compile coverage
 
@@ -34,6 +49,9 @@ must fail closed. Rejected fixtures also preseed generated artifacts and require
 transactional invalidation of the complete artifact triplet. These markers
 identify compiler semantics; authenticating the package that provides them
 remains an artifact-provenance responsibility.
+The lane also compiles and inspects the hardened G1 fill code object and checks
+that invalid selectors or unsupported `kernel-ir-v1` inputs fail without
+fallback and remove stale artifacts.
 After each example build, the lane requires every artifact declared by the
 manifest. The pipeline example declares both `scale_stage.hsaco` and
 `bias_stage.hsaco`.
@@ -57,7 +75,10 @@ scripts/ci-local.sh hardware-smoke
 ```
 
 The smoke suite builds and runs all supported examples. Each example copies its
-result back to the host and checks it against a CPU-computed expected value.
+result back to the host and checks it against a CPU-computed expected value. It
+also runs `fe2o3-fill` through `FE2O3_CODEGEN_PIPELINE=kernel-ir-v1`, so the
+integrated verified-IR path is exercised independently of the default legacy
+emitter.
 
 ## Guard tests
 

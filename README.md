@@ -8,8 +8,8 @@ source-level Verus contracts. See the [v2 architecture](docs/architecture-v2.md)
 [cuda-oxide parity matrix](docs/cuda-oxide-parity-matrix.md),
 [verification model](docs/verification-model.md), and
 [implementation roadmap](docs/implementation-roadmap-v2.md). The
-[testing guide](docs/testing.md) defines the generic, ROCm compile, and hardware
-execution lanes.
+[testing guide](docs/testing.md) defines the generic, Verus, ROCm compile, and
+hardware execution lanes.
 
 The intended end state is:
 
@@ -62,11 +62,17 @@ Safe ownership of resources used by asynchronous copies is documented in
   emitted by `#[kernel]`, collects device-reachable MIR, and emits HSACO
   sidecars. Registration identifies compiler semantics; it is not package or
   artifact authentication.
-- The production AMDGPU emitter supports the repository's `f32`/`f64`
+- The default `legacy-v1` AMDGPU emitter supports the repository's `f32`/`f64`
   elementwise examples. It recognizes scalar float arguments and literals,
   read-only slice loads, `DisjointSlice<T>` or indexed mutable-slice stores,
   `+`, `-`, `*`, `/`, unary negation, read-before-write, and the documented
   constant/affine one-dimensional index forms.
+- Setting `FE2O3_CODEGEN_PIPELINE=kernel-ir-v1` routes the exact `fill` kernel
+  through imported MIR, canonical target-neutral kernel IR, verification,
+  fill-only legalization, G1 AMDGPU lowering, and the normal transactional
+  LLVM/object/HSACO publication path. The selector and accepted kernel shape
+  are fail closed: invalid values and unsupported kernels remove stale
+  generation artifacts and never fall back to `legacy-v1`.
 - The HIP runtime provides contexts, streams, device buffers, pinned host
   buffers, events, synchronous transfers, event-backed borrowed and owned
   asynchronous transfers, module loading, and kernel launch.
@@ -86,18 +92,22 @@ example, copied results back, and compared them with CPU results.
   scalar control flow, helper calls, and slice memory operations, into the
   target-neutral `fe2o3-kernel-ir`. Its verifier checks types, SSA uses,
   control-flow edges, memory accesses, launch axes, capabilities, barriers, and
-  atomics. The IR has a bounded canonical V1 wire format. A separate G1
-  `dialect-amdgcn` path lowers a verified 1D fill subset to AMDGPU LLVM and has
-  produced a real HSACO, but it is not yet the default emission path.
+  atomics. The IR has a bounded canonical V1 wire format. The G1
+  `dialect-amdgcn` path lowers the verified 1D fill subset to deterministic
+  AMDGPU LLVM and is connected to the opt-in `kernel-ir-v1` path above; it is
+  not yet general or the default.
 - Versioned artifact manifests, ABI layouts, launch contracts, bounded
   containers, payload digests, native-kernel selection, and proof records have
   canonical encoders, decoders, and adversarial tests.
 - Canonical AMD target IDs, HIP-observed device properties, HSACO metadata and
   descriptor inspection, kernel-descriptor binding, and bounded post-link
   finalization are implemented as separate validation layers.
-- `fe2o3-host` has a data-only `PreparedLaunch<K>` geometry/resource checker and
-  a non-generic validated artifact-selection token. Structural artifact
-  validation cannot mint a Rust marker type, load a module, or launch a kernel.
+- `fe2o3-host` has a `PreparedLaunch<K>` geometry/resource checker and a
+  `LoadedKernel<K>` authority that owns the exact HIP module and function and
+  can bind only matching prepared launches. Authority issuance remains a
+  crate-private unsafe boundary because structural artifact validation cannot
+  authenticate executable semantics or mint the generated Rust marker and ABI;
+  launch with caller-packed arguments therefore remains explicitly unsafe.
 - Compiler artifact publication is transactional and generation-owned. Build
   attempt and canonical rustc invocation descriptors are versioned and
   bounded.
@@ -107,21 +117,26 @@ example, copied results back, and compared them with CPU results.
   to compile execution.
 - `examples/regression-manifest-v1.txt` is the authoritative package/artifact
   inventory for ordinary checks, ROCm compilation, and GPU smoke tests.
-- The Verus vecadd harness proves bounds and injective writes under a documented
-  hardware-thread-ID contract. Proof-record matching can reject incomplete or
-  mismatched evidence.
+- The Verus vecadd and fill harnesses prove bounds, modeled address arithmetic,
+  injective writes, frame properties, and functional postconditions under a
+  documented hardware-thread-ID contract. Positive and deliberately invalid
+  proof fixtures run in a required CI lane. Proof-record matching rejects
+  incomplete or mismatched identities, but the records are currently synthetic
+  evidence rather than authenticated compiler-refinement evidence.
 
 ### Not yet integrated
 
-- General MIR to kernel IR to AMDGPU lowering is not complete; the elementwise
-  recognizer remains the production emitter.
+- General MIR to kernel IR to AMDGPU lowering is not complete; `kernel-ir-v1`
+  accepts only the exact fill shape and the elementwise recognizer remains the
+  default emitter.
 - Artifact manifests, descriptor finalization, observed targets, and proof
-  records do not yet produce a sealed validated module or generated typed
-  launch API. `PreparedLaunch<K>` remains inert data with no module/function
-  handle or launch authority, and marker binding remains crate-private.
+  records do not yet produce a generated typed loader and launch API.
+  `LoadedKernel<K>` establishes module/function ownership and exact authority
+  matching, but marker issuance is crate-private and unsafe, raw argument
+  packing is unverified, and no safe launch permission is minted.
 - `cargo fe2o3 verify` and `build --require-proof` are roadmap commands. The
-  current Verus harness is invoked separately and does not prove compiler,
-  ROCm, driver, or machine-code refinement.
+  current required Verus CI lane is invoked separately and does not prove the
+  ordinary Rust function, compiler, ROCm, driver, or machine-code refinement.
 - The fail-closed rustc wrapper classifies and preserves approved bootstrap
   invocations, but compile execution remains disabled until the pinned rustc
   and sealed backend primitives are composed with the validated invocation.
@@ -190,6 +205,7 @@ Run the repository validation lanes:
 
 ```bash
 scripts/ci-local.sh generic
+VERUS=/absolute/path/to/verus scripts/ci-local.sh verus
 FE2O3_TARGET=gfx1151 scripts/ci-local.sh rocm-compile
 FE2O3_ALLOW_GPU_SMOKE=1 FE2O3_TARGET=gfx1151 scripts/ci-local.sh hardware-smoke
 ```
@@ -200,6 +216,8 @@ To build or run one package directly:
 ```bash
 cargo run --locked -p cargo-fe2o3 -- build -p fe2o3-vecadd
 cargo run --locked -p cargo-fe2o3 -- run -p fe2o3-vecadd
+FE2O3_CODEGEN_PIPELINE=kernel-ir-v1 \
+  cargo run --locked -p cargo-fe2o3 -- run -p fe2o3-fill
 ```
 
 The smoke command reads the same manifest and runs every GPU-selected example:

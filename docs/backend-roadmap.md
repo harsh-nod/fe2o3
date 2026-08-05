@@ -51,10 +51,17 @@ For the full milestone plan, see [implementation-plan.md](implementation-plan.md
     mutable output slice, in-place reads from that output slice, float literal
     constants, unary negation, and leaf-only copy stores.
   - `.ll -> .o -> .hsaco` using ROCm clang and `ld.lld`.
-- `dialect-amdgcn` contains a separate, non-production G1 path from a verified
-  kernel-IR module to deterministic AMDGPU LLVM for a bounded 1D fill subset.
-  Its golden output compiles and links to HSACO on `gfx1151`; unsupported IR
-  fails with located diagnostics.
+- `FE2O3_CODEGEN_PIPELINE=kernel-ir-v1` selects the first integrated G1 path:
+  imported device MIR is translated to canonical kernel IR, verified, strictly
+  legalized for the exact 1D `fill` shape, lowered by `dialect-amdgcn`, and
+  published through the existing transactional LLVM/object/HSACO path. Invalid
+  selectors and unsupported selected inputs fail without legacy fallback and
+  remove stale artifacts. The default remains `legacy-v1` while coverage is
+  extended.
+- `dialect-amdgcn` lowers that verified fill subset to deterministic AMDGPU
+  LLVM. Its code-object regression checks target/features, ELF and metadata
+  versions, exact kernel symbol and descriptor, ABI, address space, and fixed
+  workgroup metadata. Unsupported IR fails with located diagnostics.
 - `cargo-fe2o3 build/run` writes `.ll` and `.hsaco` artifacts under
   `target/fe2o3`; `fe2o3-copy` covers a leaf-only store,
   `fe2o3-downsample` covers a constant-stride input load,
@@ -107,9 +114,10 @@ For the full milestone plan, see [implementation-plan.md](implementation-plan.md
 
 ## Next Compiler Milestones
 
-1. Integrate and extend the verified kernel-IR to AMDGPU lowering path until it
-   covers every current example, then disable the temporary elementwise
-   recognizer by default.
+1. Extend the integrated `kernel-ir-v1` path from fill to vecadd and then every
+   current example, preserving strict rejection and transactional cleanup,
+   before making it the default and removing the temporary elementwise
+   recognizer.
 2. Replace device stubs in `fe2o3-device` with lowering rules:
    - `thread::thread_idx_*` -> `llvm.amdgcn.workitem.id.*`
    - `thread::block_idx_*` -> `llvm.amdgcn.workgroup.id.*`

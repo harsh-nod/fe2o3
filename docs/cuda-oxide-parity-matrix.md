@@ -18,18 +18,19 @@ partial, experimental, planned, and N/A rows. The supplemental audit also
 accounts for capabilities demonstrated elsewhere in the repository.
 
 The fe2o3 current-state column is based on commit
-`44f2ff3a86e3e7f2fe9b5b2559937f235dc05257`.
+`4fea654bf5c4cba226e07f1a784c139f537cd740`.
 <!-- parity-status:baseline:end -->
 
 At that commit fe2o3 has a HIP runtime, explicit unsafe raw module and launch
 paths, versioned kernel registration, reachable MIR collection, a canonical
-target-neutral kernel IR and verifier, an experimental verified-IR AMDGPU fill
-lowerer, a narrow production elementwise `f32`/`f64` LLVM/HSACO emitter,
-artifact and proof schemas, data-only artifact/launch validation, bounded HSACO
+target-neutral kernel IR and verifier, an opt-in end-to-end verified-IR AMDGPU
+fill path, a default narrow elementwise `f32`/`f64` LLVM/HSACO emitter, artifact
+and proof schemas, exact loaded module/function authority, bounded HSACO
 inspection/finalization, event-backed asynchronous transfer lifetimes,
-transactional artifact publication, and a Verus vecadd harness. These
-foundations are not yet connected into a general production compiler, sealed
-validated loader, generated typed launch API, or proof-requiring build.
+transactional artifact publication, and Verus vecadd and fill harnesses. These
+foundations are not yet connected into a general compiler, generated typed
+loader/launch API, authenticated proof-carrying artifact, or proof-requiring
+build.
 
 This matrix compares capabilities and observable semantics, not identical
 vendor syntax. It is not a claim that either project is production-ready.
@@ -90,31 +91,35 @@ The detailed dependencies and exit criteria are in
 - Rows 12, 17, 20, 24, and 25: the manifest ABI model and canonical
   target-neutral kernel IR represent part of the required type, control-flow,
   arithmetic, and cast semantics. Structured MIR lowering covers a tested
-  vecadd-shaped subset, and the experimental G1 AMD path lowers a verified 1D
-  fill subset, but generated host packing and general AMDGPU lowering are
-  absent.
+  vecadd-shaped subset. The opt-in `kernel-ir-v1` backend now takes the exact
+  fill kernel through translation, verification, legalization, G1 AMD lowering,
+  transactional publication, and hardware execution, but generated host
+  packing and general AMDGPU lowering are absent.
 - Rows 32, 33, and 35: `#[kernel]` emits strict V1 registration metadata tied to
   a direct function pointer; reachable helper collection, helper-call
   translation, and multiple kernels are exercised. This compiler contract is
-  not package authenticity, and only the narrow production emitter reaches
-  executable code objects end to end.
+  not package authenticity. The default narrow emitter and opt-in exact fill
+  path reach executable code objects, but neither is a general compiler.
 - Rows 36-38 and 41-43: one-source builds, AMDGPU LLVM/HSACO sidecars, diagnostic
-  dumps, bounded HSACO inspection, and project-local cleanup exist. The general
-  pipeline, user-facing `inspect` command, and external-project orchestration do
-  not.
+  dumps, bounded HSACO inspection, project-local cleanup, and the opt-in exact
+  fill path exist. The general pipeline, user-facing `inspect` command, and
+  external-project orchestration do not.
 - Rows 48, 49, and 60: one-dimensional `DisjointSlice` and `ThreadIndex` APIs,
   target-neutral launch-axis verification, and observed target/capability facts
   exist. They are not yet branded to a physical launch.
-- Row 79: a data-only `PreparedLaunch<K>` checks kernel, context, device,
-  geometry, resources, and observed limits. Structural artifact validation is
-  non-generic and cannot mint `K`; no generated `#[launch_contract]`, module
-  handle, ABI binding, or launch authority exists.
+- Row 79: `PreparedLaunch<K>` checks kernel, context, device, geometry,
+  resources, and observed limits. `LoadedKernel<K>` owns the exact HIP module
+  and function and accepts only a matching prepared authority. Structural
+  artifact validation still cannot authenticate executable semantics or mint
+  `K`; issuance and raw argument launch remain unsafe, and no generated
+  `#[launch_contract]` or safe ABI binding exists.
 - Row 80: the current `launch!` macro is an explicit unsafe raw-ABI escape hatch
   with compile-fail coverage. It is not generated from a validated artifact
   contract.
 - Supplemental rows S01-S05, S14, and S15: the corresponding bounded models,
-  parsers, lifetime types, target query, and focused UI tests exist. Publication,
-  compiler, loader, and generated-launch integration remain incomplete.
+  parsers, lifetime types, target query, exact proof-evidence matching, and
+  focused UI tests exist. Publication, compiler-refinement authentication, and
+  generated safe-launch integration remain incomplete.
 
 ## Normative 94-row Matrix
 
