@@ -206,6 +206,7 @@ name = "fe2o3-device"
 version = "0.1.0"
 dependencies = [
  "fe2o3-macros",
+ "trybuild",
 ]
 
 [[package]]

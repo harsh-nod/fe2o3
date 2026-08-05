@@ -44,11 +44,27 @@ impl<T> DisjointSlice<T> {
 
     #[rustc_diagnostic_item = "fe2o3_device_disjoint_slice_get_mut"]
     pub fn get_mut(&mut self, index: ThreadIndex) -> Option<&mut T> {
-        self.get_mut_at(index.get())
+        // SAFETY: `ThreadIndex` can only be produced for the current device
+        // invocation, so its index preserves this view's per-invocation write
+        // partition. `from_raw_parts` establishes the pointer validity and
+        // aliasing requirements for the lifetime of this view.
+        unsafe { self.get_mut_at(index.get()) }
     }
 
+    /// Returns mutable access to an arbitrary integer index in this view.
+    ///
+    /// Returns `None` when `index` is outside the view's element extent.
+    ///
+    /// # Safety
+    ///
+    /// In addition to satisfying the validity and aliasing requirements of
+    /// [`Self::from_raw_parts`], the caller must prove that no concurrently
+    /// executing invocation can access the selected element through this view
+    /// or any alias unless those accesses are synchronized and compatible.
+    /// The index calculation must not undermine the exclusive-write partition
+    /// represented by this `DisjointSlice`.
     #[rustc_diagnostic_item = "fe2o3_device_disjoint_slice_get_mut_at"]
-    pub fn get_mut_at(&mut self, index: usize) -> Option<&mut T> {
+    pub unsafe fn get_mut_at(&mut self, index: usize) -> Option<&mut T> {
         if index >= self.len {
             return None;
         }

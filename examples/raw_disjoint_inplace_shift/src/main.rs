@@ -9,7 +9,10 @@ pub fn raw_disjoint_inplace_shift(x: &[f32], mut out: DisjointSlice<f32>) {
     let source = idx.get();
     let target = source + 1;
     if source < x.len() {
-        if let Some(value) = out.get_mut_at(target) {
+        // SAFETY: each invocation maps its unique `source` to the unique
+        // `source + 1` output element, and the bounds check is performed by
+        // `get_mut_at`.
+        if let Some(value) = unsafe { out.get_mut_at(target) } {
             *value = *value + x[source];
         }
     }

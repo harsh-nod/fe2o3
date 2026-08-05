@@ -10,5 +10,8 @@ description = "No-std device-side API for fe2o3 kernels."
 [dependencies]
 fe2o3-macros.workspace = true
 
+[dev-dependencies]
+trybuild = "1"
+
 [lib]
 name = "fe2o3_device"
