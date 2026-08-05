@@ -145,7 +145,7 @@ The detailed dependencies and exit criteria are in
 | 40 | Float Math Intrinsics (libdevice) | Full | AMD-equivalent | Missing | Rust float methods map to OCML/OCKL or LLVM intrinsics with target, precision, denormal, and contraction policy tests | G4 |
 | 41 | Pipeline Inspection | Full | Exact | Partial | `cargo fe2o3 pipeline` shows imported MIR, post-SSA IR, `gpu.*`, lowered LLVM IR, and artifact metadata | G1 |
 | 42 | PTX Inspect | Full | AMD-equivalent | Missing | `cargo fe2o3 inspect` prints AMDGPU LLVM, disassembly/metadata, or selected bundle payload without executing | G1, G3 |
-| 43 | Local Clean | Full | Exact | Missing | `cargo fe2o3 clean` removes only project-local generated artifacts and cache records, with dry-run/path safety tests | G0 |
+| 43 | Local Clean | Full | Exact | Partial | `cargo fe2o3 clean` safely removes only `target/fe2o3`; pinned cuda-oxide removes the full project target directory, and complete external-project build orchestration remains pending | G0 |
 | 44 | Compute Sanitizer Wrapper | Full | AMD-equivalent | Missing | `cargo fe2o3 sanitize` invokes supported ROCm GPU sanitizers/checkers and clearly reports unavailable tools or checks | G8 |
 | 45 | cuda-gdb Source Debugging | Full | AMD-equivalent | Missing | Debug build and `cargo fe2o3 debug` launch ROCgdb with kernel source locations | G8 |
 | 46 | cuda-gdb Local / Argument Inspection | Partial | AMD-equivalent | Missing | Match the pinned baseline's scalar, pointer/reference, struct, tuple, and array inspection scope in ROCgdb, with known gaps listed | G8 |

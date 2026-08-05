@@ -1,3 +1,5 @@
+mod clean;
+
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -34,7 +36,8 @@ const SMOKE_PACKAGES: &[&str] = &[
 ];
 
 fn main() -> ExitCode {
-    let mut args = env::args().skip(1);
+    let mut invocation = normalize_invocation(env::args().skip(1).collect());
+    let mut args = invocation.drain(..);
     let command = args.next().unwrap_or_else(|| "help".to_string());
     let rest: Vec<String> = args.collect();
 
@@ -43,6 +46,7 @@ fn main() -> ExitCode {
         "build" => cargo_with_backend("build", &rest),
         "run" => cargo_with_backend("run", &rest),
         "smoke" => smoke(&rest),
+        "clean" => clean_command(&rest),
         "help" | "--help" | "-h" => {
             print_help();
             ExitCode::SUCCESS
@@ -50,6 +54,50 @@ fn main() -> ExitCode {
         other => {
             eprintln!("unknown cargo-fe2o3 command `{other}`");
             print_help();
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn normalize_invocation(mut args: Vec<String>) -> Vec<String> {
+    if args.first().is_some_and(|arg| arg == "fe2o3") {
+        args.remove(0);
+    }
+    args
+}
+
+fn clean_command(args: &[String]) -> ExitCode {
+    let options = match clean::parse_options(args) {
+        Ok(options) => options,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let workspace_root = match find_workspace_root() {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let plan = match clean::plan(&workspace_root) {
+        Ok(plan) => plan,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    match clean::execute(&plan, options) {
+        Ok(actions) => {
+            for action in actions {
+                eprintln!("{}", action.diagnostic());
+            }
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("{error}");
             ExitCode::FAILURE
         }
     }
@@ -303,17 +351,31 @@ fn dylib_path(workspace_root: &Path) -> PathBuf {
 }
 
 fn find_workspace_root() -> Result<PathBuf, String> {
-    let mut dir = env::current_dir().map_err(|error| format!("failed to read cwd: {error}"))?;
-    loop {
-        if dir.join("Cargo.toml").is_file() && dir.join("crates/rustc-codegen-fe2o3").is_dir() {
-            return Ok(dir);
-        }
-        if !dir.pop() {
-            return Err(
-                "could not find fe2o3 workspace root; run cargo-fe2o3 from the repo".to_string(),
-            );
-        }
+    let cargo = env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let output = Command::new(cargo)
+        .args(["locate-project", "--workspace", "--message-format", "json"])
+        .output()
+        .map_err(|error| format!("failed to run cargo locate-project: {error}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "could not find Cargo project/workspace root: {}",
+            stderr.trim()
+        ));
     }
+
+    let record: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("failed to parse cargo locate-project output: {error}"))?;
+    let manifest = record
+        .get("root")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "cargo locate-project output did not contain a string `root`".to_string())?;
+    let root = Path::new(manifest)
+        .parent()
+        .ok_or_else(|| format!("Cargo manifest has no parent directory: {manifest}"))?;
+
+    std::fs::canonicalize(root)
+        .map_err(|error| format!("failed to resolve Cargo project/workspace root: {error}"))
 }
 
 fn append_rustflags(extra: &[String]) -> String {
@@ -452,13 +514,28 @@ fn is_gfx_target(candidate: &str) -> bool {
 
 fn print_help() {
     eprintln!(
-        "usage: cargo fe2o3 <command>\n\ncommands:\n  doctor   check ROCm/HIP toolchain discovery\n  build    build with the fe2o3 rustc backend\n  run      run with the fe2o3 rustc backend\n  smoke    run the supported backend examples"
+        "usage: cargo fe2o3 <command>\n\ncommands:\n  doctor              check ROCm/HIP toolchain discovery\n  build               build with the fe2o3 rustc backend\n  run                 run with the fe2o3 rustc backend\n  smoke               run the supported backend examples\n  clean [--dry-run]   preview or remove target/fe2o3 artifacts (removal requires Unix)"
     );
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{explicit_packages, parse_rocminfo_target};
+    use super::{explicit_packages, normalize_invocation, parse_rocminfo_target};
+
+    #[test]
+    fn normalizes_direct_and_cargo_subcommand_invocations() {
+        for command in ["doctor", "build", "run", "smoke", "clean"] {
+            let direct = vec![command.to_string(), "argument".to_string()];
+            let cargo = vec![
+                "fe2o3".to_string(),
+                command.to_string(),
+                "argument".to_string(),
+            ];
+
+            assert_eq!(normalize_invocation(direct.clone()), direct);
+            assert_eq!(normalize_invocation(cargo), direct);
+        }
+    }
 
     #[test]
     fn parses_agent_target_before_isa_generic() {
