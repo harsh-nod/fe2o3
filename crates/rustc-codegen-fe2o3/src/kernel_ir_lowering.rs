@@ -1,18 +1,24 @@
-//! Deterministic, verification-only lowering from imported MIR to kernel IR.
+//! Verification-only lowering from imported MIR to `fe2o3-kernel-ir`.
 //!
-//! This layer establishes diagnostics, scalar signatures, SSA values, and
-//! basic control flow. Slice, memory, and device-helper semantics are added by
-//! the vecadd vertical slice; unsupported constructs fail explicitly here.
+//! This layer extends scalar CFG lowering with the slice and memory operations
+//! needed by `vecadd`. Device-helper calls remain unsupported until the next
+//! layer. Failed bounds assertions branch to one synthetic unreachable block.
+//!
+//! The executable subset is unprojected aliases, `Use`, `PtrMetadata`, `Add`,
+//! and `Lt`; direct/indexed dereferences; and return, unreachable, goto, integer
+//! switch, and assert terminators. Locals must be assigned once and MIR blocks
+//! must appear in definition-before-use order. Every other construct produces a
+//! located diagnostic rather than a partial module.
 
 use crate::mir_import::{
-    MirBinaryOp, MirBlock, MirConstant, MirFunction, MirFunctionKind, MirLocalRole, MirModule,
-    MirOperandRef, MirRvalueKind, MirSourceLocation, MirStatement, MirStatementKind, MirTerminator,
-    MirTerminatorKind, MirTypeShape,
+    MirBinaryOp, MirBlock, MirConstant, MirFunction, MirFunctionKind, MirModule, MirOperandRef,
+    MirPlaceRef, MirProjectionElem, MirRvalueKind, MirSourceLocation, MirStatement,
+    MirStatementKind, MirTerminator, MirTerminatorKind, MirTypeShape, MirUnaryOp,
 };
 use fe2o3_kernel_ir::{
-    BasicBlock, BinaryOp, BlockId, ComparePredicate, Constant, Function, Kernel, LaunchDomain,
-    LaunchExtent, Module, Operation, OperationKind, ScalarType, Signature, SwitchCase, Terminator,
-    Type, ValueDef, ValueId, verify_module,
+    AccessMode, AddressSpace, BasicBlock, BinaryOp, BlockId, ComparePredicate, Constant, Function,
+    Kernel, LaunchDomain, LaunchExtent, MemoryAccess, Module, Operation, OperationKind, ScalarType,
+    Signature, SwitchCase, Terminator, Type, ValueDef, ValueId, verify_module,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
@@ -136,12 +142,12 @@ pub struct TranslationErrors {
 
 impl TranslationErrors {
     #[cfg(test)]
-    fn diagnostics(&self) -> &[TranslationDiagnostic] {
+    pub fn diagnostics(&self) -> &[TranslationDiagnostic] {
         &self.diagnostics
     }
 
     #[cfg(test)]
-    fn contains(&self, code: TranslationDiagnosticCode) -> bool {
+    pub fn contains(&self, code: TranslationDiagnosticCode) -> bool {
         self.diagnostics
             .iter()
             .any(|diagnostic| diagnostic.code == code)
@@ -175,9 +181,11 @@ pub fn translate_and_verify(mir: &MirModule) -> Result<Module, TranslationErrors
     });
 
     let mut diagnostics = Vec::new();
-    let mut functions = Vec::new();
-    let mut entries = Vec::new();
+    let mut declarations = BTreeMap::new();
+    let mut definitions = Vec::new();
+    let mut kernel_entries = Vec::new();
     let mut kernel_ids = BTreeSet::new();
+
     for function in kernels {
         if !kernel_ids.insert(function.export_name.as_str()) {
             diagnostics.push(diagnostic(
@@ -187,21 +195,34 @@ pub fn translate_and_verify(mir: &MirModule) -> Result<Module, TranslationErrors
             ));
             continue;
         }
-        match FunctionLowerer::new(function).lower() {
+
+        match FunctionLowerer::new(function, &mut declarations).lower() {
             Ok(definition) => {
-                entries.push((function.export_name.clone(), definition.id.clone()));
-                functions.push(definition);
+                kernel_entries.push((function.export_name.clone(), definition.id.clone()));
+                definitions.push(definition);
             }
             Err(error) => diagnostics.push(error),
         }
     }
+
     if !diagnostics.is_empty() {
         return Err(errors(diagnostics));
     }
 
+    let definition_ids = definitions
+        .iter()
+        .map(|function| function.id.as_str().to_string())
+        .collect::<BTreeSet<_>>();
+    definitions.extend(
+        declarations
+            .into_iter()
+            .filter(|(identity, _)| !definition_ids.contains(identity))
+            .map(|(identity, signature)| Function::declaration(identity, signature)),
+    );
+
     let mut module = Module::new(MODULE_ID);
-    module.functions = functions;
-    module.kernels = entries
+    module.functions = definitions;
+    module.kernels = kernel_entries
         .into_iter()
         .map(|(kernel, entry)| {
             Kernel::new(
@@ -237,6 +258,7 @@ pub fn translate_and_verify(mir: &MirModule) -> Result<Module, TranslationErrors
             .collect();
         return Err(errors(diagnostics));
     }
+
     Ok(module)
 }
 
@@ -257,18 +279,32 @@ fn diagnostic(
     }
 }
 
-struct FunctionLowerer<'function> {
+#[derive(Clone, Copy, Debug)]
+enum LocalBinding {
+    Value(ValueId),
+    OptionPointer {
+        discriminant: ValueId,
+        payload: ValueId,
+    },
+}
+
+struct FunctionLowerer<'function, 'declarations> {
     function: &'function MirFunction,
-    locals: BTreeMap<usize, ValueId>,
+    declarations: &'declarations mut BTreeMap<String, Signature>,
+    locals: BTreeMap<usize, LocalBinding>,
     value_types: BTreeMap<ValueId, Type>,
     next_value: u32,
     trap_block: Option<BlockId>,
 }
 
-impl<'function> FunctionLowerer<'function> {
-    fn new(function: &'function MirFunction) -> Self {
+impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
+    fn new(
+        function: &'function MirFunction,
+        declarations: &'declarations mut BTreeMap<String, Signature>,
+    ) -> Self {
         Self {
             function,
+            declarations,
             locals: BTreeMap::new(),
             value_types: BTreeMap::new(),
             next_value: 0,
@@ -281,7 +317,7 @@ impl<'function> FunctionLowerer<'function> {
             .function
             .locals
             .iter()
-            .filter(|local| local.role == MirLocalRole::Arg)
+            .filter(|local| local.role == crate::mir_import::MirLocalRole::Arg)
             .collect::<Vec<_>>();
         args.sort_by_key(|local| local.index);
         if args.len() != self.function.arg_count {
@@ -299,19 +335,29 @@ impl<'function> FunctionLowerer<'function> {
         let mut parameter_types = Vec::with_capacity(args.len());
         let mut parameter_values = Vec::with_capacity(args.len());
         for arg in args {
-            let location = TranslationLocation::function(self.function);
-            let ty = lower_scalar_type(&arg.ty.shape).ok_or_else(|| {
+            let ty = lower_parameter_type(&arg.ty.shape).ok_or_else(|| {
                 diagnostic(
                     TranslationDiagnosticCode::UnsupportedType,
-                    location.clone(),
+                    TranslationLocation::function(self.function),
                     format!(
                         "argument local{} has unsupported type `{}`",
                         arg.index, arg.ty.rust
                     ),
                 )
             })?;
-            let id = self.fresh_id(&location)?;
-            self.bind_local(arg.index, id, location)?;
+            let id = ValueId(self.next_value);
+            self.next_value = self.next_value.checked_add(1).ok_or_else(|| {
+                diagnostic(
+                    TranslationDiagnosticCode::MalformedMir,
+                    TranslationLocation::function(self.function),
+                    "function has too many SSA values",
+                )
+            })?;
+            self.bind_local(
+                arg.index,
+                LocalBinding::Value(id),
+                TranslationLocation::function(self.function),
+            )?;
             self.value_types.insert(id, ty.clone());
             parameter_types.push(ty);
             parameter_values.push(id);
@@ -353,6 +399,7 @@ impl<'function> FunctionLowerer<'function> {
                 TranslationLocation::block(self.function, block),
             )?;
         }
+
         if source_blocks.iter().any(|block| {
             matches!(
                 block.terminator.as_ref().map(|terminator| &terminator.kind),
@@ -377,8 +424,8 @@ impl<'function> FunctionLowerer<'function> {
 
         let mut blocks =
             Vec::with_capacity(source_blocks.len() + usize::from(self.trap_block.is_some()));
-        for source in source_blocks {
-            blocks.push(self.lower_block(source)?);
+        for source_block in source_blocks {
+            blocks.push(self.lower_block(source_block)?);
         }
         if let Some(trap) = self.trap_block {
             let mut block = BasicBlock::new(trap);
@@ -443,13 +490,6 @@ impl<'function> FunctionLowerer<'function> {
                 "assignment has no destination",
             )
         })?;
-        if !destination.projection.is_empty() {
-            return Err(diagnostic(
-                TranslationDiagnosticCode::UnsupportedProjection,
-                location,
-                "projected assignment destinations are not supported",
-            ));
-        }
         let rvalue = statement.rvalue.ok_or_else(|| {
             diagnostic(
                 TranslationDiagnosticCode::MalformedMir,
@@ -458,7 +498,25 @@ impl<'function> FunctionLowerer<'function> {
             )
         })?;
 
-        let value = match rvalue {
+        match rvalue {
+            MirRvalueKind::Ref => {
+                let [MirOperandRef::Place(place)] = statement.operands.as_slice() else {
+                    return Err(diagnostic(
+                        TranslationDiagnosticCode::MalformedMir,
+                        location,
+                        "reference assignment must have one place operand",
+                    ));
+                };
+                if !place.projection.is_empty() {
+                    return Err(diagnostic(
+                        TranslationDiagnosticCode::UnsupportedProjection,
+                        location,
+                        "projected reference rvalues are not supported",
+                    ));
+                }
+                let value = self.plain_local(place.local, &location)?;
+                self.bind_plain_destination(destination, value, location)
+            }
             MirRvalueKind::Use => {
                 let [operand] = statement.operands.as_slice() else {
                     return Err(diagnostic(
@@ -467,7 +525,25 @@ impl<'function> FunctionLowerer<'function> {
                         "use assignment must have one operand",
                     ));
                 };
-                self.lower_operand(operand, block, &location)?
+                let value = self.lower_operand(operand, block, &location)?;
+                self.assign_value(destination, value, block, location)
+            }
+            MirRvalueKind::Unary(MirUnaryOp::PtrMetadata) => {
+                let [operand] = statement.operands.as_slice() else {
+                    return Err(diagnostic(
+                        TranslationDiagnosticCode::MalformedMir,
+                        location,
+                        "PtrMetadata must have one operand",
+                    ));
+                };
+                let slice = self.lower_operand(operand, block, &location)?;
+                let result = self.emit_result(
+                    block,
+                    Type::INDEX,
+                    OperationKind::SliceLength { slice },
+                    &location,
+                )?;
+                self.bind_plain_destination(destination, result, location)
             }
             MirRvalueKind::Binary(MirBinaryOp::Add) => {
                 let [lhs, rhs] = statement.operands.as_slice() else {
@@ -480,7 +556,7 @@ impl<'function> FunctionLowerer<'function> {
                 let lhs = self.lower_operand(lhs, block, &location)?;
                 let rhs = self.lower_operand(rhs, block, &location)?;
                 let ty = self.value_type(lhs, &location)?.clone();
-                self.emit_result(
+                let result = self.emit_result(
                     block,
                     ty,
                     OperationKind::Binary {
@@ -489,7 +565,8 @@ impl<'function> FunctionLowerer<'function> {
                         rhs,
                     },
                     &location,
-                )?
+                )?;
+                self.assign_value(destination, result, block, location)
             }
             MirRvalueKind::Binary(MirBinaryOp::Lt) => {
                 let [lhs, rhs] = statement.operands.as_slice() else {
@@ -501,7 +578,7 @@ impl<'function> FunctionLowerer<'function> {
                 };
                 let lhs = self.lower_operand(lhs, block, &location)?;
                 let rhs = self.lower_operand(rhs, block, &location)?;
-                self.emit_result(
+                let result = self.emit_result(
                     block,
                     Type::BOOL,
                     OperationKind::Compare {
@@ -510,17 +587,15 @@ impl<'function> FunctionLowerer<'function> {
                         rhs,
                     },
                     &location,
-                )?
+                )?;
+                self.bind_plain_destination(destination, result, location)
             }
-            unsupported => {
-                return Err(diagnostic(
-                    TranslationDiagnosticCode::UnsupportedRvalue,
-                    location,
-                    format!("unsupported structured MIR rvalue: {unsupported:?}"),
-                ));
-            }
-        };
-        self.bind_local(destination.local, value, location)
+            unsupported => Err(diagnostic(
+                TranslationDiagnosticCode::UnsupportedRvalue,
+                location,
+                format!("unsupported structured MIR rvalue: {unsupported:?}"),
+            )),
+        }
     }
 
     fn lower_terminator(
@@ -570,6 +645,11 @@ impl<'function> FunctionLowerer<'function> {
                     default_arguments: Vec::new(),
                 })
             }
+            MirTerminatorKind::Call { .. } => Err(diagnostic(
+                TranslationDiagnosticCode::UnsupportedCall,
+                location,
+                "MIR calls are not supported by the memory model",
+            )),
             MirTerminatorKind::Assert {
                 condition,
                 expected,
@@ -597,11 +677,6 @@ impl<'function> FunctionLowerer<'function> {
                     else_arguments: Vec::new(),
                 })
             }
-            MirTerminatorKind::Call { .. } => Err(diagnostic(
-                TranslationDiagnosticCode::UnsupportedCall,
-                location,
-                "MIR calls are not supported by the scalar framework",
-            )),
             unsupported => Err(diagnostic(
                 TranslationDiagnosticCode::UnsupportedStatement,
                 location,
@@ -617,22 +692,7 @@ impl<'function> FunctionLowerer<'function> {
         location: &TranslationLocation,
     ) -> Result<ValueId, TranslationDiagnostic> {
         match operand {
-            MirOperandRef::Place(place) => {
-                if !place.projection.is_empty() {
-                    return Err(diagnostic(
-                        TranslationDiagnosticCode::UnsupportedProjection,
-                        location.clone(),
-                        format!("unsupported place projection: {:?}", place.projection),
-                    ));
-                }
-                self.locals.get(&place.local).copied().ok_or_else(|| {
-                    diagnostic(
-                        TranslationDiagnosticCode::MalformedMir,
-                        location.clone(),
-                        format!("local{} is used before it is defined", place.local),
-                    )
-                })
-            }
+            MirOperandRef::Place(place) => self.lower_place_read(place, block, location),
             MirOperandRef::Constant { literal, .. } => {
                 let constant = lower_constant(literal).ok_or_else(|| {
                     diagnostic(
@@ -651,6 +711,194 @@ impl<'function> FunctionLowerer<'function> {
         }
     }
 
+    fn lower_place_read(
+        &mut self,
+        place: &MirPlaceRef,
+        block: &mut BasicBlock,
+        location: &TranslationLocation,
+    ) -> Result<ValueId, TranslationDiagnostic> {
+        match place.projection.as_slice() {
+            [] => match self.locals.get(&place.local).copied() {
+                Some(LocalBinding::Value(value)) => Ok(value),
+                Some(LocalBinding::OptionPointer { .. }) => Err(diagnostic(
+                    TranslationDiagnosticCode::UnsupportedType,
+                    location.clone(),
+                    format!(
+                        "local{} is a Rust aggregate, not one kernel IR value",
+                        place.local
+                    ),
+                )),
+                None => Err(self.undefined_local(place.local, location.clone())),
+            },
+            [MirProjectionElem::Deref, MirProjectionElem::Index { local }] => {
+                let pointer = self.indexed_pointer(place.local, *local, block, location)?;
+                let pointee =
+                    pointer_pointee(self.value_type(pointer, location)?).ok_or_else(|| {
+                        diagnostic(
+                            TranslationDiagnosticCode::UnsupportedType,
+                            location.clone(),
+                            "indexed place did not produce a pointer",
+                        )
+                    })?;
+                let alignment = scalar_alignment(&pointee).ok_or_else(|| {
+                    diagnostic(
+                        TranslationDiagnosticCode::UnsupportedType,
+                        location.clone(),
+                        format!("cannot load unsupported pointee type {pointee:?}"),
+                    )
+                })?;
+                self.emit_result(
+                    block,
+                    pointee,
+                    OperationKind::Load {
+                        pointer,
+                        access: MemoryAccess::new(AddressSpace::Global, alignment),
+                    },
+                    location,
+                )
+            }
+            [MirProjectionElem::Deref] => {
+                let pointer = self.plain_local(place.local, location)?;
+                let pointee =
+                    pointer_pointee(self.value_type(pointer, location)?).ok_or_else(|| {
+                        diagnostic(
+                            TranslationDiagnosticCode::UnsupportedType,
+                            location.clone(),
+                            "deref place base is not a pointer",
+                        )
+                    })?;
+                let alignment = scalar_alignment(&pointee).ok_or_else(|| {
+                    diagnostic(
+                        TranslationDiagnosticCode::UnsupportedType,
+                        location.clone(),
+                        format!("cannot load unsupported pointee type {pointee:?}"),
+                    )
+                })?;
+                self.emit_result(
+                    block,
+                    pointee,
+                    OperationKind::Load {
+                        pointer,
+                        access: MemoryAccess::new(AddressSpace::Global, alignment),
+                    },
+                    location,
+                )
+            }
+            projection => Err(diagnostic(
+                TranslationDiagnosticCode::UnsupportedProjection,
+                location.clone(),
+                format!("unsupported place projection: {projection:?}"),
+            )),
+        }
+    }
+
+    fn assign_value(
+        &mut self,
+        destination: &MirPlaceRef,
+        value: ValueId,
+        block: &mut BasicBlock,
+        location: TranslationLocation,
+    ) -> Result<(), TranslationDiagnostic> {
+        if destination.projection.is_empty() {
+            return self.bind_local(destination.local, LocalBinding::Value(value), location);
+        }
+        let pointer = self.place_pointer(destination, block, &location)?;
+        let pointee = pointer_pointee(self.value_type(pointer, &location)?).ok_or_else(|| {
+            diagnostic(
+                TranslationDiagnosticCode::UnsupportedType,
+                location.clone(),
+                "store destination is not a pointer",
+            )
+        })?;
+        let alignment = scalar_alignment(&pointee).ok_or_else(|| {
+            diagnostic(
+                TranslationDiagnosticCode::UnsupportedType,
+                location.clone(),
+                format!("cannot store unsupported pointee type {pointee:?}"),
+            )
+        })?;
+        block.operations.push(Operation::new(
+            Vec::new(),
+            OperationKind::Store {
+                pointer,
+                value,
+                access: MemoryAccess::new(AddressSpace::Global, alignment),
+            },
+        ));
+        Ok(())
+    }
+
+    fn bind_plain_destination(
+        &mut self,
+        destination: &MirPlaceRef,
+        value: ValueId,
+        location: TranslationLocation,
+    ) -> Result<(), TranslationDiagnostic> {
+        if !destination.projection.is_empty() {
+            return Err(diagnostic(
+                TranslationDiagnosticCode::UnsupportedProjection,
+                location,
+                "this rvalue requires an unprojected local destination",
+            ));
+        }
+        self.bind_local(destination.local, LocalBinding::Value(value), location)
+    }
+
+    fn place_pointer(
+        &mut self,
+        place: &MirPlaceRef,
+        block: &mut BasicBlock,
+        location: &TranslationLocation,
+    ) -> Result<ValueId, TranslationDiagnostic> {
+        match place.projection.as_slice() {
+            [MirProjectionElem::Deref] => self.plain_local(place.local, location),
+            [MirProjectionElem::Deref, MirProjectionElem::Index { local }] => {
+                self.indexed_pointer(place.local, *local, block, location)
+            }
+            projection => Err(diagnostic(
+                TranslationDiagnosticCode::UnsupportedProjection,
+                location.clone(),
+                format!("unsupported store projection: {projection:?}"),
+            )),
+        }
+    }
+
+    fn indexed_pointer(
+        &mut self,
+        base_local: usize,
+        index_local: usize,
+        block: &mut BasicBlock,
+        location: &TranslationLocation,
+    ) -> Result<ValueId, TranslationDiagnostic> {
+        let slice = self.plain_local(base_local, location)?;
+        let slice_ty = self.value_type(slice, location)?.clone();
+        let Type::Slice(slice_type) = &slice_ty else {
+            return Err(diagnostic(
+                TranslationDiagnosticCode::UnsupportedType,
+                location.clone(),
+                format!("local{base_local} is not a slice"),
+            ));
+        };
+        let pointer_ty = Type::pointer(
+            (*slice_type.element).clone(),
+            slice_type.address_space,
+            slice_type.access,
+        );
+        let data = self.emit_result(
+            block,
+            pointer_ty.clone(),
+            OperationKind::SliceData { slice },
+            location,
+        )?;
+        let offset = self.plain_local(index_local, location)?;
+        self.emit_result(
+            block,
+            pointer_ty,
+            OperationKind::GetElementPointer { base: data, offset },
+            location,
+        )
+    }
+
     fn emit_result(
         &mut self,
         block: &mut BasicBlock,
@@ -658,18 +906,19 @@ impl<'function> FunctionLowerer<'function> {
         kind: OperationKind,
         location: &TranslationLocation,
     ) -> Result<ValueId, TranslationDiagnostic> {
-        let id = self.fresh_id(location)?;
-        self.value_types.insert(id, ty.clone());
+        let definition = self.fresh_value(ty, location)?;
+        let id = definition.id;
         block
             .operations
-            .push(Operation::effect_free(ValueDef::new(id, ty), kind));
+            .push(Operation::effect_free(definition, kind));
         Ok(id)
     }
 
-    fn fresh_id(
+    fn fresh_value(
         &mut self,
+        ty: Type,
         location: &TranslationLocation,
-    ) -> Result<ValueId, TranslationDiagnostic> {
+    ) -> Result<ValueDef, TranslationDiagnostic> {
         let id = ValueId(self.next_value);
         self.next_value = self.next_value.checked_add(1).ok_or_else(|| {
             diagnostic(
@@ -678,16 +927,17 @@ impl<'function> FunctionLowerer<'function> {
                 "function has too many SSA values",
             )
         })?;
-        Ok(id)
+        self.value_types.insert(id, ty.clone());
+        Ok(ValueDef::new(id, ty))
     }
 
     fn bind_local(
         &mut self,
         local: usize,
-        value: ValueId,
+        binding: LocalBinding,
         location: TranslationLocation,
     ) -> Result<(), TranslationDiagnostic> {
-        if self.locals.insert(local, value).is_some() {
+        if self.locals.insert(local, binding).is_some() {
             return Err(diagnostic(
                 TranslationDiagnosticCode::MalformedMir,
                 location,
@@ -695,6 +945,22 @@ impl<'function> FunctionLowerer<'function> {
             ));
         }
         Ok(())
+    }
+
+    fn plain_local(
+        &self,
+        local: usize,
+        location: &TranslationLocation,
+    ) -> Result<ValueId, TranslationDiagnostic> {
+        match self.locals.get(&local).copied() {
+            Some(LocalBinding::Value(value)) => Ok(value),
+            Some(LocalBinding::OptionPointer { .. }) => Err(diagnostic(
+                TranslationDiagnosticCode::UnsupportedType,
+                location.clone(),
+                format!("local{local} is a Rust aggregate, not one kernel IR value"),
+            )),
+            None => Err(self.undefined_local(local, location.clone())),
+        }
     }
 
     fn value_type(
@@ -709,6 +975,18 @@ impl<'function> FunctionLowerer<'function> {
                 format!("SSA value {value} has no imported type"),
             )
         })
+    }
+
+    fn undefined_local(
+        &self,
+        local: usize,
+        location: TranslationLocation,
+    ) -> TranslationDiagnostic {
+        diagnostic(
+            TranslationDiagnosticCode::MalformedMir,
+            location,
+            format!("local{local} is used before it is defined"),
+        )
     }
 
     fn block_id(
@@ -726,12 +1004,34 @@ impl<'function> FunctionLowerer<'function> {
     }
 }
 
-fn lower_scalar_type(shape: &MirTypeShape) -> Option<Type> {
+fn lower_parameter_type(shape: &MirTypeShape) -> Option<Type> {
     match shape {
         MirTypeShape::Bool => Some(Type::BOOL),
         MirTypeShape::I32 => Some(Type::Scalar(ScalarType::I32)),
         MirTypeShape::I64 | MirTypeShape::ISize => Some(Type::Scalar(ScalarType::I64)),
         MirTypeShape::USize => Some(Type::INDEX),
+        MirTypeShape::F32 => Some(Type::F32),
+        MirTypeShape::F64 => Some(Type::F64),
+        MirTypeShape::Slice { element, mutable } => Some(Type::slice(
+            lower_element_type(element)?,
+            AddressSpace::Global,
+            if *mutable {
+                AccessMode::ReadWrite
+            } else {
+                AccessMode::ReadOnly
+            },
+        )),
+        MirTypeShape::DisjointSlice { element } => Some(Type::slice(
+            lower_element_type(element)?,
+            AddressSpace::Global,
+            AccessMode::ReadWrite,
+        )),
+        _ => None,
+    }
+}
+
+fn lower_element_type(shape: &MirTypeShape) -> Option<Type> {
+    match shape {
         MirTypeShape::F32 => Some(Type::F32),
         MirTypeShape::F64 => Some(Type::F64),
         _ => None,
@@ -750,10 +1050,33 @@ fn lower_constant(constant: &MirConstant) -> Option<Constant> {
     }
 }
 
+fn pointer_pointee(ty: &Type) -> Option<Type> {
+    let Type::Pointer(pointer) = ty else {
+        return None;
+    };
+    Some((*pointer.pointee).clone())
+}
+
+fn scalar_alignment(ty: &Type) -> Option<u32> {
+    match ty {
+        Type::Scalar(ScalarType::Bool | ScalarType::I8 | ScalarType::U8) => Some(1),
+        Type::Scalar(ScalarType::I16 | ScalarType::U16 | ScalarType::F16 | ScalarType::Bf16) => {
+            Some(2)
+        }
+        Type::Scalar(ScalarType::I32 | ScalarType::U32 | ScalarType::F32) => Some(4),
+        Type::Scalar(ScalarType::I64 | ScalarType::U64 | ScalarType::F64 | ScalarType::Index) => {
+            Some(8)
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mir_import::{MirImportedType, MirLocal, MirPlaceRef, MirProjectionElem};
+    use crate::mir_import::{
+        MirImportedType, MirLocal, MirLocalRole, MirPlaceRef, MirProjectionElem,
+    };
     use dialect_mir::MirType;
 
     #[test]
@@ -835,6 +1158,28 @@ mod tests {
     }
 
     #[test]
+    fn slice_metadata_and_indexed_memory_verify() {
+        let module = translate_and_verify(&memory_fixture()).expect("memory fixture");
+        let operations = &module.functions[0].body.as_ref().expect("body").blocks[0].operations;
+
+        let expected: [fn(&OperationKind) -> bool; 3] = [
+            |kind: &OperationKind| matches!(kind, OperationKind::SliceLength { .. }),
+            |kind: &OperationKind| matches!(kind, OperationKind::Load { .. }),
+            |kind: &OperationKind| matches!(kind, OperationKind::Store { .. }),
+        ];
+        for expected in expected {
+            assert!(operations.iter().any(|operation| expected(&operation.kind)));
+        }
+        assert_eq!(
+            operations
+                .iter()
+                .filter(|operation| matches!(operation.kind, OperationKind::SliceData { .. }))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
     fn malformed_block_fails_explicitly() {
         let mut fixture = scalar_fixture();
         fixture.functions[0].blocks[1].terminator = None;
@@ -854,7 +1199,7 @@ mod tests {
             });
 
         let errors = translate_and_verify(&fixture).expect_err("projection must fail");
-        assert!(errors.contains(TranslationDiagnosticCode::UnsupportedProjection));
+        assert!(errors.contains(TranslationDiagnosticCode::UnsupportedType));
         assert_eq!(
             errors.diagnostics()[0]
                 .location
@@ -909,6 +1254,85 @@ mod tests {
                         terminator: Some(terminator(MirTerminatorKind::Return)),
                     },
                 ],
+            }],
+        }
+    }
+
+    fn memory_fixture() -> MirModule {
+        let indexed = |local| MirPlaceRef {
+            local,
+            projection: vec![
+                MirProjectionElem::Deref,
+                MirProjectionElem::Index { local: 3 },
+            ],
+        };
+        let mut load = assign(
+            1,
+            5,
+            vec![MirOperandRef::Place(indexed(1))],
+            MirRvalueKind::Use,
+        );
+        load.source = Some(source());
+        let store = MirStatement {
+            index: 2,
+            kind: MirStatementKind::Assign,
+            destination: Some(indexed(2)),
+            operands: vec![operand(5)],
+            rvalue: Some(MirRvalueKind::Use),
+            operation: Some("store".to_string()),
+            source: Some(source()),
+        };
+
+        MirModule {
+            functions: vec![MirFunction {
+                export_name: "memory".to_string(),
+                rust_path: "tests::memory".to_string(),
+                kind: MirFunctionKind::Kernel,
+                arg_count: 3,
+                local_count: 6,
+                locals: vec![
+                    local(0, MirLocalRole::Return, MirTypeShape::Unit),
+                    MirLocal {
+                        index: 1,
+                        role: MirLocalRole::Arg,
+                        ty: MirImportedType {
+                            kind: MirType::Slice,
+                            rust: "&[f32]".to_string(),
+                            shape: MirTypeShape::Slice {
+                                element: Box::new(MirTypeShape::F32),
+                                mutable: false,
+                            },
+                        },
+                    },
+                    MirLocal {
+                        index: 2,
+                        role: MirLocalRole::Arg,
+                        ty: MirImportedType {
+                            kind: MirType::DisjointSlice,
+                            rust: "DisjointSlice<f32>".to_string(),
+                            shape: MirTypeShape::DisjointSlice {
+                                element: Box::new(MirTypeShape::F32),
+                            },
+                        },
+                    },
+                    local(3, MirLocalRole::Arg, MirTypeShape::USize),
+                    local(4, MirLocalRole::Temp, MirTypeShape::USize),
+                    local(5, MirLocalRole::Temp, MirTypeShape::F32),
+                ],
+                blocks: vec![MirBlock {
+                    index: 0,
+                    statements: vec![
+                        assign(
+                            0,
+                            4,
+                            vec![operand(1)],
+                            MirRvalueKind::Unary(MirUnaryOp::PtrMetadata),
+                        ),
+                        load,
+                        store,
+                    ],
+                    terminator: Some(terminator(MirTerminatorKind::Return)),
+                }],
             }],
         }
     }
