@@ -16,6 +16,7 @@ readonly CPU_TEST_PACKAGES=(
   fe2o3-contracts
   fe2o3-device
   fe2o3-hsaco
+  fe2o3-hsaco-finalize
   fe2o3-kernel-descriptor
   fe2o3-kernel-ir
   fe2o3-macros

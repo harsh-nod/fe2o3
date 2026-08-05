@@ -245,6 +245,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-hsaco-finalize"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-hsaco",
+ "fe2o3-kernel-descriptor",
+ "rmpv",
+ "sha2",
+]
+
+[[package]]
 name = "fe2o3-kernel-descriptor"
 version = "0.1.0"
 dependencies = [
