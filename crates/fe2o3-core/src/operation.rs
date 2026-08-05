@@ -34,6 +34,23 @@ impl<'stream, 'resources> BorrowedDeviceOperation<'stream, 'resources> {
     /// validate a kernel ABI, pointer provenance, aliasing, or backend object
     /// identity.
     ///
+    /// ```compile_fail
+    /// use fe2o3_core::{BorrowedDeviceOperation, Result, Stream};
+    ///
+    /// fn escape<'stream>(
+    ///     stream: &'stream Stream,
+    /// ) -> Result<&'stream BorrowedDeviceOperation<'stream, 'stream>> {
+    ///     unsafe {
+    ///         BorrowedDeviceOperation::run_scoped_unchecked(
+    ///             stream,
+    ///             (),
+    ///             |_| Ok(()),
+    ///             |operation| operation,
+    ///         )
+    ///     }
+    /// }
+    /// ```
+    ///
     /// # Safety
     ///
     /// `enqueue` must submit work only to `stream`. `resources` must own or
