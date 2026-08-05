@@ -56,8 +56,21 @@ not evidence that referenced code is authentic or even present.
 - Every kernel references a listed code object, uses the target pointer width,
   and requires only capabilities supplied by the selected target.
 
-Payload bytes, proof records, host launch integration, and runtime loading
-policy remain outside this model layer.
+Proof records, host launch integration, and runtime loading policy remain
+outside this model layer.
+
+## Container model
+
+`CodeObjectPayload` verifies nonempty, bounded bytes against an explicitly
+identified cryptographic digest. `ArtifactContainerV1` requires one payload for
+every code object in its manifest and no others. It rejects digest-algorithm or
+declared-length mismatches, duplicate, missing, and extra payloads, and payload
+sets over fixed per-object and total byte limits. Payloads are stored in digest
+order so the validated closure has one canonical model representation.
+
+A valid container establishes payload-byte binding under its selected digest
+algorithm. It does not establish signer authenticity, the identity of the
+producer, compiler correctness, proof validity, or runtime safety.
 
 ## V1 wire format
 

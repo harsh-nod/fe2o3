@@ -96,13 +96,23 @@ pub fn kernel(
     object_id: u8,
     capabilities: Vec<Capability>,
 ) -> KernelEntry {
+    kernel_with_object_digest(id, logical_name, symbol, digest(object_id), capabilities)
+}
+
+pub fn kernel_with_object_digest(
+    id: u8,
+    logical_name: &str,
+    symbol: &str,
+    object_digest: DigestBytes,
+    capabilities: Vec<Capability>,
+) -> KernelEntry {
     KernelEntry::new(
         digest(id),
         name(logical_name),
         name(symbol),
         digest(0x22),
         digest(0x33),
-        digest(object_id),
+        object_digest,
         capabilities,
         launch(),
         abi(PointerWidth::Bits64),
@@ -111,7 +121,11 @@ pub fn kernel(
 }
 
 pub fn object(id: u8) -> CodeObjectIdentity {
-    CodeObjectIdentity::new(digest(id), CodeObjectFormat::NativeExecutable, 12_345).unwrap()
+    object_identity(digest(id), 12_345)
+}
+
+pub fn object_identity(digest: DigestBytes, byte_len: u64) -> CodeObjectIdentity {
+    CodeObjectIdentity::new(digest, CodeObjectFormat::NativeExecutable, byte_len).unwrap()
 }
 
 pub fn manifest() -> ManifestV1 {
