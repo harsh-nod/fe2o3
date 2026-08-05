@@ -35,8 +35,8 @@ boundaries:
 
 - Device surface: `fe2o3-device`, `fe2o3-macros`,
   `reserved-fe2o3-symbols`, and `fe2o3-contracts`.
-- Compiler: `rustc-codegen-fe2o3`, `fe2o3-kernel-ir`, `dialect-mir`, and
-  `dialect-amdgcn`.
+- Compiler: `rustc-codegen-fe2o3`, `fe2o3-kernel-ir`,
+  `fe2o3-kernel-analysis`, `dialect-mir`, and `dialect-amdgcn`.
 - Artifact model: `fe2o3-artifacts`, `fe2o3-kernel-descriptor`, `fe2o3-hsaco`,
   `fe2o3-hsaco-finalize`, and `fe2o3-artifact-transaction`.
 - Runtime: `fe2o3-core`, `fe2o3-completion`, `fe2o3-host`, and
