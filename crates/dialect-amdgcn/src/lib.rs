@@ -1,3 +1,12 @@
+//! AMDGPU intrinsic vocabulary and fail-closed target lowering primitives.
+//!
+//! The initial target-neutral lowering subset is documented in
+//! `crates/dialect-amdgcn/G1_LOWERING.md` and is not wired into the production emitter.
+
+mod lowering;
+
+pub use lowering::*;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Dim {
     X,

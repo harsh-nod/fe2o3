@@ -9,3 +9,6 @@ description = "AMDGPU intrinsic names and lowering seam for fe2o3."
 
 [lib]
 name = "dialect_amdgcn"
+
+[dependencies]
+fe2o3-kernel-ir.workspace = true

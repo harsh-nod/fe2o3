@@ -103,6 +103,9 @@ dependencies = [
 [[package]]
 name = "dialect-amdgcn"
 version = "0.1.0"
+dependencies = [
+ "fe2o3-kernel-ir",
+]
 
 [[package]]
 name = "dialect-mir"
