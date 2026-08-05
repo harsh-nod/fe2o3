@@ -1,0 +1,15 @@
+error[E0308]: mismatched types
+  --> tests/ui/generated_spi/fail/raw_params_cannot_launch.rs:12:42
+   |
+12 |         .launch_generated_scoped(stream, params, |_| {})
+   |          -----------------------         ^^^^^^ expected `GeneratedKernelParams<'_, Kernel, _>`, found `&mut KernelParams`
+   |          |
+   |          arguments to this method are incorrect
+   |
+   = note:         expected struct `fe2o3_host::GeneratedKernelParams<'_, Kernel, _>`
+           found mutable reference `&mut KernelParams`
+note: method defined here
+  --> src/loaded_kernel.rs
+   |
+   |     pub fn launch_generated_scoped<'stream, R, O>(
+   |            ^^^^^^^^^^^^^^^^^^^^^^^

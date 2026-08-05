@@ -1,0 +1,11 @@
+error[E0451]: fields `params`, `resources` and `marker` of struct `fe2o3_host::GeneratedKernelParams` are private
+  --> tests/ui/generated_spi/fail/parameter_fields_are_private.rs:8:9
+   |
+ 7 |     GeneratedKernelParams {
+   |     --------------------- in this type
+ 8 |         params,
+   |         ^^^^^^ private field
+ 9 |         resources: (),
+   |         ^^^^^^^^^ private field
+10 |         marker: PhantomData,
+   |         ^^^^^^ private field
