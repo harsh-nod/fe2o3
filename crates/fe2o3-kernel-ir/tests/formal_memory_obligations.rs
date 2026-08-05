@@ -576,6 +576,72 @@ fn address_overflow_fails_closed() {
     assert!(analysis.obligations().accesses().is_empty());
 }
 
+fn fixed_width_index_module(lhs: Constant, rhs: Constant, binary_op: BinaryOp) -> Module {
+    let result_type = lhs.ty();
+    assert_eq!(rhs.ty(), result_type);
+    let pointer = global_pointer(AccessMode::ReadWrite);
+    let access = MemoryAccess::new(AddressSpace::Global, 4);
+    module_with_kernel(
+        vec![global_slice(AccessMode::ReadWrite), Type::F32],
+        vec![
+            op(2, result_type.clone(), OperationKind::Constant(lhs)),
+            op(3, result_type.clone(), OperationKind::Constant(rhs)),
+            op(
+                4,
+                result_type,
+                OperationKind::Binary {
+                    op: binary_op,
+                    lhs: ValueId(2),
+                    rhs: ValueId(3),
+                },
+            ),
+            op(
+                5,
+                pointer.clone(),
+                OperationKind::SliceData { slice: ValueId(0) },
+            ),
+            op(
+                6,
+                pointer,
+                OperationKind::GetElementPointer {
+                    base: ValueId(5),
+                    offset: ValueId(4),
+                },
+            ),
+            Operation::new(
+                vec![],
+                OperationKind::Store {
+                    pointer: ValueId(6),
+                    value: ValueId(1),
+                    access,
+                },
+            ),
+        ],
+        dynamic_1d(),
+    )
+}
+
+#[test]
+fn fixed_width_wrapping_arithmetic_fails_closed() {
+    let cases = [
+        fixed_width_index_module(Constant::U8(255), Constant::U8(1), BinaryOp::Add),
+        fixed_width_index_module(Constant::I8(127), Constant::I8(1), BinaryOp::Add),
+        fixed_width_index_module(Constant::U8(255), Constant::U8(2), BinaryOp::Multiply),
+    ];
+
+    for module in cases {
+        let analysis = analyze(&module, 1);
+        assert!(matches!(
+            analysis.incomplete_reasons(),
+            [FormalMemoryIncompleteReason::UnsupportedIndexExpression {
+                index: ValueId(4),
+                ..
+            }]
+        ));
+        assert!(analysis.obligations().accesses().is_empty());
+    }
+}
+
 #[test]
 fn nonlinear_gep_index_fails_closed() {
     let pointer = global_pointer(AccessMode::ReadWrite);

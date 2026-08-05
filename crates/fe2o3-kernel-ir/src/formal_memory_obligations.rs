@@ -812,10 +812,11 @@ fn derive_affine_index(
         .operations
         .get(&value)
         .ok_or(IndexExpressionError::Unsupported)?;
+    if !matches!(operation.results.as_slice(), [result] if result.ty == Type::INDEX) {
+        return Err(IndexExpressionError::Unsupported);
+    }
     match &operation.kind {
-        OperationKind::Constant(constant) => unsigned_constant(constant)
-            .map(AffineExpression::constant)
-            .ok_or(IndexExpressionError::Unsupported),
+        OperationKind::Constant(Constant::Index(value)) => Ok(AffineExpression::constant(*value)),
         OperationKind::Intrinsic(intrinsic)
             if intrinsic.kind
                 == (IntrinsicKind::InvocationIndex {
@@ -841,16 +842,6 @@ fn derive_affine_index(
             }
         }
         _ => Err(IndexExpressionError::Unsupported),
-    }
-}
-
-const fn unsigned_constant(constant: &Constant) -> Option<u64> {
-    match constant {
-        Constant::U8(value) => Some(*value as u64),
-        Constant::U16(value) => Some(*value as u64),
-        Constant::U32(value) => Some(*value as u64),
-        Constant::U64(value) | Constant::Index(value) => Some(*value),
-        _ => None,
     }
 }
 
