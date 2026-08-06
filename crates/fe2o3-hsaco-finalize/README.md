@@ -55,24 +55,36 @@ descriptor table. A plan does not prove that LLVM/LLD ran, that an option is sup
 are valid AMDGPU ELF, or that any device can load or launch them. The existing single-HSACO
 inspection and finalization functions are unchanged.
 
-## Compiler FFI request closure
+## Staged compiler FFI claims
 
-`CompilerFfiClosureV1` is the compiler-neutral input to the G4-to-G1 bridge. Each FFI symbol
-retains its exact contract identity, direction, physical ABI, target, code-object version, declared
-effects, semantic claim, and stable source owner. The canonical bytes label direction, symbol,
-physical ABI, source ownership, and definition location as compiler-derived facts. Target,
-code-object version, effects, and semantics remain declaration claims. The bridge also requires a
-separate compiler-derived complete required-symbol set, so it never invents kernel entry points from
-FFI names.
+`G4FfiClaimEnvelopeV1` is the exact public contract for a future adapter from private
+`rustc-codegen-fe2o3::CollectionResult` and `DeviceFfiClosure` state. No such adapter exists yet. All
+values entering this crate are labeled assertion-only caller claims; G4 wording does not make them
+compiler attestations. Each symbol retains its authoritative `reserved-fe2o3-symbols` contract ID,
+direction, exact physical ABI grammar, target, code-object version, effects, semantic identity,
+declaration owner, and provider-class claim. Declaration ownership is separate from unauthenticated
+artifact producer metadata.
 
-`bind_compiler_ffi_closure_v1` accepts exact caller-supplied input roles and provider bindings. Input
-bindings must match the existing `MultiInputLinkPlanV1` canonical input sequence exactly by digest
-and byte length. Every Rust definition must bind to the one Rust compiler LLVM-bitcode input;
-every external import must bind to one exact external provider input and its exact
-`WorkerInputKindV1`. Contract IDs, source-owner IDs, target, code-object version, input identities,
-kinds, roles, ordering, cardinality, and reciprocal references are checked before the bridge creates
-`LinkSymbolClosureV1` and `LinkInputKindClosureV1`.
+Compiler-required symbols are deliberately distinct from exact expected final defined symbols. The
+latter remain absent unless the caller supplies `ExpectedFinalDefinedSymbolsClaimV1` with exact
+identity-and-kind coverage for every canonical plan input, attributed to bounded inspection or an
+authenticated-manifest claim. This crate validates structural coverage but does not authenticate the
+evidence source.
 
-The provider map is still an unauthenticated caller claim. Successful closure does not prove that an
-input defines a symbol, that declared effects or semantics are correct, or that any output may be
-linked, loaded, or launched. Provider authentication and artifact admission remain later boundaries.
+`stage_g4_ffi_link_plan_v1` matches exact input identities, kinds, roles, producers, symbol providers,
+target, code-object version, ordering, cardinality, aggregate bounds, and optional all-input symbol
+evidence. Rust definitions or kernels require exactly one neutral `CompilerModule` input claim. That
+role does not imply LLVM bitcode, and current rustc output does not provide the required exact module:
+the backend still emits per-kernel textual IR and omits non-kernel exports.
+
+Successful staging returns only `StagedFfiLinkPlanV1`. It does not expose generic
+`LinkSymbolClosureV1` or `LinkInputKindClosureV1` projections and cannot call
+`construct_worker_request_v1`. Worker request V1 has no field for the complete staged FFI identity,
+so a V1 response could not distinguish changes to ABI, owner, provider, producer, effects, or
+semantics. A closure-aware worker protocol revision and response evidence binding are required before
+this path can execute. Staging grants no link, load, or launch authority.
+
+The separate rustc-side work must expose an assertion-only adapter over `CollectionResult`, emit one
+exact compiler module containing kernels, reachable helpers, and non-kernel FFI exports, measure that
+artifact's content identity and kind, and provide bounded compiler-required symbol and definition
+counts. None of those compiler integration steps is implemented by this crate.
