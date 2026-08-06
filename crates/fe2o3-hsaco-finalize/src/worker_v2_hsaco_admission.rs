@@ -199,6 +199,11 @@ impl InspectedRawWorkerV2HsacoV1 {
         self.source.handoff_identity()
     }
 
+    /// Returns the identity of the complete link plan retained by sealed first-build evidence.
+    pub const fn link_plan_identity(&self) -> crate::LinkPlanIdentityV1 {
+        self.source.link_plan_identity()
+    }
+
     pub const fn worker_measurement(&self) -> &WorkerMeasurementV1 {
         self.source.worker_measurement()
     }

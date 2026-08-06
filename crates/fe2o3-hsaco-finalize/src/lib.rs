@@ -25,6 +25,7 @@ mod worker_executor;
 mod worker_protocol;
 mod worker_protocol_v2;
 mod worker_v2_hsaco_admission;
+mod worker_v2_hsaco_publication;
 
 pub use compiler_ffi_bridge::{
     ExpectedFinalDefinedSymbolsClaimIdentityV1, ExpectedFinalDefinedSymbolsClaimV1,
@@ -96,6 +97,10 @@ pub use worker_v2_hsaco_admission::{
     InspectedRawWorkerV2HsacoV1, ObservedWorkerV2KernelSymbolsV1, SealedWorkerV2ResponseIdentityV1,
     WorkerV2RawHsacoInspectionError, WorkerV2RawHsacoPolicyIdentityV1, WorkerV2RawHsacoPolicyV1,
     WorkerV2RawLaunchContractV1, inspect_worker_v2_raw_hsaco_v1,
+};
+pub use worker_v2_hsaco_publication::{
+    PreparedWorkerV2HsacoPublicationV1, WorkerV2HsacoPublicationError,
+    prepare_worker_v2_hsaco_publication_v1, publish_prepared_worker_v2_hsaco_v1,
 };
 
 /// The only ELF section name recognized for a canonical V1 descriptor table.

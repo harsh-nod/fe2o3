@@ -42,7 +42,8 @@ use attempt::{AttemptPhase, AttemptRegistry, MAX_ATTEMPT_BYTES, StartAttemptOutc
 pub use attempt_scoped_hsaco_publication::{
     AttemptScopedHsacoPublicationErrorV1, AttemptScopedHsacoPublicationOutcomeV1,
     AttemptScopedHsacoPublicationResultV1, PersistedBackendReceiptV1,
-    UpstreamCodeObjectEvidenceIdentityV1, publish_exact_hsaco_evidence_for_attempt_v1,
+    UpstreamCodeObjectEvidenceIdentityV1, producer_package_identity_v1,
+    publish_exact_hsaco_evidence_for_attempt_v1,
     publish_exact_hsaco_evidence_for_attempt_v1_with_options, read_backend_publication_receipt_v1,
 };
 pub use compiler_module_handoff::{

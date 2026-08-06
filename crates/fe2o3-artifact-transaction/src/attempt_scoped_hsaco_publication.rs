@@ -6,7 +6,7 @@ use crate::{
     BackendPublicationReceiptV1, BuildAttempt, BuildSession, DurableCurrentLinkPublicationLeaseV1,
     DurableLinkPublicationError, DurableLinkPublicationOptionsV1, DurableLinkPublicationOutcomeV1,
     DurableLinkPublicationPlanV1, DurableLinkPublicationResultV1, DurableLinkPublicationSnapshotV1,
-    EmitError, NoFaults, PinnedOutput, ProducerIdentity, build_attempt_error,
+    EmitError, NoFaults, PackageIdentityV1, PinnedOutput, ProducerIdentity, build_attempt_error,
     commit_attempt_registry_direct, fail_build_attempt_locked, read_attempt_registry,
 };
 use sha2::{Digest, Sha256};
@@ -15,7 +15,26 @@ use std::path::Path;
 
 const ATTEMPT_IDENTITY_DOMAIN: &[u8] = b"fe2o3.backend-receipt.attempt.v1\0";
 const PRODUCER_IDENTITY_DOMAIN: &[u8] = b"fe2o3.backend-receipt.producer.v1\0";
+const PRODUCER_PACKAGE_IDENTITY_DOMAIN_V1: &[u8] = b"FE2O3/COORDINATION-PRODUCER-PACKAGE/V1\0";
 const SCOPE_IDENTITY_DOMAIN: &[u8] = b"fe2o3.backend-receipt.scope.v1\0";
+
+/// Derives a non-authoritative package namespace from one validated producer identity.
+///
+/// This helper deliberately does not expose the producer's private source or crate-name fields.
+/// The result coordinates cooperating artifact writers; it does not authenticate a package,
+/// compiler, source tree, artifact, or launch decision.
+pub fn producer_package_identity_v1(producer: &ProducerIdentity) -> PackageIdentityV1 {
+    let mut digest = Sha256::new();
+    digest.update(PRODUCER_PACKAGE_IDENTITY_DOMAIN_V1);
+    update_length_prefixed(&mut digest, producer.stable_source.as_bytes());
+    update_length_prefixed(&mut digest, producer.crate_name.as_bytes());
+    PackageIdentityV1::from_bytes(digest.finalize().into())
+}
+
+fn update_length_prefixed(digest: &mut Sha256, bytes: &[u8]) {
+    digest.update((bytes.len() as u64).to_le_bytes());
+    digest.update(bytes);
+}
 
 /// Identity of upstream code-object evidence committed into a backend receipt.
 ///

@@ -91,6 +91,11 @@ impl InertFirstBuildWorkerV2EvidenceV1 {
         &self.plan
     }
 
+    /// Returns the identity of the complete retained native link plan.
+    pub const fn link_plan_identity(&self) -> crate::LinkPlanIdentityV1 {
+        self.plan.identity()
+    }
+
     pub const fn candidate(&self) -> &InertWorkerExecutionV1 {
         &self.candidate
     }
