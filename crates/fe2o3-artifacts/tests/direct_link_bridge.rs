@@ -360,8 +360,21 @@ fn typed_bridge_drives_and_validates_the_complete_g5_chain() {
     )
     .unwrap();
     let published = publish_bridge(&bridge);
+    let durable = bridge.durable_publication_plan();
 
     assert_eq!(bridge.validate_published(published), Ok(()));
+    assert_eq!(durable.attempt(), bridge.attempt());
+    assert_eq!(durable.scope(), bridge.trusted_scope());
+    assert_eq!(durable.request(), bridge.request_identity());
+    assert_eq!(durable.worker(), bridge.worker_identity());
+    assert_eq!(durable.response(), bridge.response_identity());
+    assert_eq!(durable.linked_output(), bridge.linked_output_identity());
+    assert_eq!(durable.finalization(), bridge.finalization_identity());
+    assert_eq!(
+        durable.finalized_output(),
+        bridge.finalized_output_identity()
+    );
+    assert_eq!(durable.publication(), bridge.publication_identity());
     assert_eq!(
         *bridge.publication_identity().as_bytes(),
         [
