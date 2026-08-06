@@ -21,7 +21,7 @@ partial, experimental, planned, and N/A rows. The supplemental audit also
 accounts for capabilities demonstrated elsewhere in the repository.
 
 The fe2o3 current-state column is based on commit
-`4a6bd7fd2f4ee89f9e79b05a5bbad503539cc9ec`.
+`fb7d3fcd69b632d9fc154fda2240ee81257bc414`.
 <!-- parity-status:baseline:end -->
 
 At that commit fe2o3 has a HIP runtime, explicit unsafe raw module and launch
@@ -76,7 +76,7 @@ pass.
 <!-- parity-status:counts:start -->
 | Scope | Complete | Partial | Missing | N/A | Total |
 |:--|--:|--:|--:|--:|--:|
-| Normative | 0 | 43 | 39 | 12 | 94 |
+| Normative | 0 | 45 | 37 | 12 | 94 |
 | Supplemental | 0 | 10 | 5 | 0 | 15 |
 <!-- parity-status:counts:end -->
 
@@ -140,15 +140,20 @@ The detailed dependencies and exit criteria are in
   dumps, bounded HSACO inspection, a read-only `cargo fe2o3 inspect` command,
   project-local cleanup, and the opt-in exact fill and vecadd paths exist. The
   general pipeline and complete external-project orchestration do not.
-- Row 39: a bounded canonical multi-input native-link plan binds ordered input
-  digests, structured options, one concrete AMD target, an expected output, and
-  a complete provenance DAG. There is no direct LLVM/LLD worker or executed
-  device link.
-- Rows 44 and 45: `cargo fe2o3 sanitize` and `debug` discover ROCgdb and produce
-  normalized argument-vector plans. They do not execute the tool. Precise
-  memory mode improves fault location but does not detect data races,
-  uninitialized memory, or synchronization defects; source-debug metadata and
-  aggregate inspection remain unvalidated.
+- Rows 27, 28, and 39: bounded device FFI macros and compiler validation bind
+  import/export direction, exact symbols, physical scalar/pointer ABI,
+  address spaces, effects, target, code-object version, and semantic identity.
+  A standalone worker implements canonical Rust/C++ request/response codecs,
+  LLVM bitcode linking, AMDGPU `TargetMachine` emission, and in-process LLD.
+  The worker is not connected to artifact publication, and no successful link
+  has been validated with one consistent pinned ROCm LLVM development build.
+- Rows 44 and 45: `cargo fe2o3 sanitize` and `debug` retain plan-only mode and
+  can execute an exact descriptor-pinned native ROCgdb binary with bounded
+  output, timeout, process cleanup, an environment allowlist, and diagnostic
+  evidence. Precise-memory support is checked at execution and fails closed
+  when unavailable. It is not a race, API, initialization, synchronization, or
+  memory-safety proof; source-debug metadata and aggregate inspection remain
+  unvalidated.
 - Rows 48, 49, and 60: one-dimensional `DisjointSlice` and `ThreadIndex` APIs,
   target-neutral launch-axis verification, and observed target/capability facts
   exist. Kernel IR derives formal affine regions, bounds, runtime-alias, and
@@ -166,10 +171,12 @@ The detailed dependencies and exit criteria are in
   integration, dynamic-LDS launch-byte admission, float and standard-library
   atomics, broad wave types/tiles/collectives, and GPU semantic execution are
   still absent.
-- Row 74 and supplemental row S06: raw HIP declarations expose cooperative
-  launch and peer-access queries/operations, and V2 descriptors can declare
-  cooperative requirements. No safe high-level authority, occupancy proof,
-  topology/lifetime model, or observed-device admission consumes them yet.
+- Row 74 and supplemental row S06: observed capabilities retain exact live
+  contexts. Cooperative admission retains the exact loaded function and stream
+  and conservatively accepts one workgroup until per-function occupancy is
+  available. Directional peer enablement has linear cleanup ownership and
+  retains contexts on ambiguous failure. Neither layer proves pointer validity,
+  coherence, aliasing, race freedom, completion, or cross-device topology.
 - Rows 78 and 79: for the exact public
   `fn(&[f32], &[f32], DisjointSlice<f32>)` profile, `#[kernel(typed)]`
   generates the public `<kernel>_gpu` module with `Kernel` and `Prepared`
@@ -214,11 +221,11 @@ The detailed dependencies and exit criteria are in
   relocation model that rejects function, vtable, thread-local, and unknown
   relocations. Rustc promotions, emitted device globals/statics, and GPU use
   are not integrated.
-- Supplemental row S10: a standalone deterministic engine generates bounded
-  scalar kernel cases from exact seeds, evaluates wrapping `i32` CPU semantics,
-  encodes canonical reproducers, reports mismatches, and reduces them. It does
-  not invoke the compiler or GPU, so it is infrastructure rather than a
-  differential codegen result.
+- Supplemental row S10: the deterministic model generator/reducer remains,
+  and a separate bounded harness now compiles and executes fill, vecadd, and
+  affine kernels against an independent HIP/CPU oracle over boundary lengths,
+  deterministic data, NaN/infinity policy, and physical canaries. This is a
+  narrow conformance corpus, not general MIR fuzzing or safety proof.
 
 ## Normative 94-row Matrix
 
@@ -277,8 +284,8 @@ The detailed dependencies and exit criteria are in
 
 | ID | cuda-oxide feature | Baseline | Class | fe2o3 now | AMD/fe2o3 acceptance target | Gate |
 |:--|:--|:--|:--|:--|:--|:--|
-| 27 | Bi-directional LTOIR Support | Full | AMD-equivalent | Missing | Rust calls AMDGPU bitcode/device objects and external device code calls exported Rust functions through a versioned direct LLVM/LLD link contract | G6 |
-| 28 | Device FFI (`extern "C"`) | Full | AMD-equivalent | Missing | Typed declarations preserve AMDGPU ABI, convergence/effect attributes, layouts, symbols, and diagnostics | G6 |
+| 27 | Bi-directional LTOIR Support | Full | AMD-equivalent | Partial | Rust calls AMDGPU bitcode/device objects and external device code calls exported Rust functions through a versioned direct LLVM/LLD link contract | G6 |
+| 28 | Device FFI (`extern "C"`) | Full | AMD-equivalent | Partial | Typed declarations preserve AMDGPU ABI, convergence/effect attributes, layouts, symbols, and diagnostics | G6 |
 | 29 | MathDx FFI (cuFFTDx / cuBLASDx) | Full | AMD-equivalent | Missing | Demonstrate equivalent in-kernel FFT and matrix-library integration where ROCm supplies device-callable artifacts; unsupported targets report the gap | G6 |
 | 30 | Tile interop | Experimental | AMD-equivalent | Missing | AMD tile/SIMT kernels share allocations and HIP streams between kernels; intra-kernel interop remains experimental unless a stable AMD contract exists | G6 |
 | 31 | Cross-Crate Kernels | Full | Exact | Missing | Library kernels and helpers finalize concrete monomorphizations in the application bundle | G1, G2, G3 |

@@ -1,7 +1,7 @@
 schema_version	1
 cuda_oxide_commit	cd5ef3941d3347c7f6fcbfc78ef0fa7f4f179d87
 cuda_oxide_date	2026-08-05
-fe2o3_commit	4a6bd7fd2f4ee89f9e79b05a5bbad503539cc9ec
+fe2o3_commit	fb7d3fcd69b632d9fc154fda2240ee81257bc414
 kind	id	status
 normative	01	Missing
 normative	02	Partial
@@ -29,8 +29,8 @@ normative	23	Missing
 normative	24	Partial
 normative	25	Partial
 normative	26	Missing
-normative	27	Missing
-normative	28	Missing
+normative	27	Partial
+normative	28	Partial
 normative	29	Missing
 normative	30	Missing
 normative	31	Missing

@@ -229,17 +229,19 @@ turn the foundations below into end-to-end features.
   executor, and can convert validated results into descriptive proof records.
   It still has no reviewed Verus adapter, authenticated binary measurement,
   compiler or machine-code refinement, or runtime authority.
-- G6/G7 foundations include canonical multi-input AMDGPU link plans, raw HIP
-  cooperative-launch and peer-access bindings, and a V2 kernel descriptor that
-  binds wave width, LDS limits, cooperative launch, synchronization, and atomic
-  scope requirements to target capabilities. There is no direct LLVM/LLD link
-  worker, high-level cooperative/peer safety layer, occupancy admission, or
-  observed device binding for those records yet.
-- G8 adds a deterministic bounded kernel-case generator, wrapping `i32` CPU
-  evaluator, canonical codec, mismatch reporting, and reducer. `cargo fe2o3
-  inspect` performs bounded read-only decoding. `sanitize` and `debug` produce
-  normalized ROCgdb plans only; they do not execute ROCgdb, and precise-memory
-  mode is not a race, initialization, or synchronization checker.
+- G6/G7 includes canonical multi-input AMDGPU link plans and a standalone
+  direct LLVM/LLD worker with bounded Rust/C++ protocols. Device FFI macros and
+  compiler validation bind import/export symbols, physical ABI, address spaces,
+  effects, target, and code-object version. Cooperative and peer capabilities
+  retain exact contexts, streams, and cleanup ownership. The worker is not yet
+  connected to artifact publication, and successful native linking still needs
+  one consistent pinned ROCm LLVM development toolchain.
+- G8 adds deterministic model generation/reduction and a bounded conformance
+  harness that executes fill, vecadd, and affine kernels against an independent
+  HIP/CPU oracle. `cargo fe2o3 inspect` performs bounded read-only decoding.
+  `sanitize` and `debug` retain plan mode and can execute descriptor-pinned
+  native ROCgdb under bounded supervision. ROCgdb precise-memory diagnostics
+  are not a race, API, initialization, synchronization, or safety proof.
 
 ### Not yet integrated
 
@@ -278,12 +280,12 @@ turn the foundations below into end-to-end features.
   Rustc-descendant descriptor lifetime, dynamic loading, transitive shared
   libraries, and non-Linux execution remain unresolved.
 - General Rust language support, frontend-to-layout integration, broad atomic
-  and wave collective support, direct LLVM device linking, safe
-  cooperative/peer runtime APIs, executable sanitizer/debugger integration,
-  GPU-backed differential testing, and authenticated Verus refinement remain
-  parity work. LDS, atomics, waves, fences, and barriers exist only in bounded
-  experimental paths and are not yet generally available from ordinary Rust
-  kernels.
+  and wave collective support, production direct-link integration, general
+  device FFI, occupancy-complete cooperative launch, multi-device memory
+  semantics, full sanitizer/debugger coverage, broad differential fuzzing, and
+  authenticated Verus refinement remain parity work. LDS, atomics, waves,
+  fences, and barriers exist only in bounded experimental paths and are not yet
+  generally available from ordinary Rust kernels.
 
 The current comparison with cuda-oxide is tracked in the
 [parity matrix](docs/cuda-oxide-parity-matrix.md) and the generated
@@ -312,7 +314,16 @@ cargo run -p cargo-fe2o3 -- sanitize -- ./target/debug/application
 cargo run -p cargo-fe2o3 -- debug -- ./target/debug/application
 ```
 
-The sanitizer and debugger commands are plan-only foundations in this release.
+Execution is explicit and bounded. Debug execution requires an explicit batch
+or interactive mode:
+
+```bash
+cargo run -p cargo-fe2o3 -- sanitize --execute -- ./target/debug/application
+cargo run -p cargo-fe2o3 -- debug --execute --batch -- ./target/debug/application
+```
+
+Sanitize fails when requested precise-memory coverage is unavailable. Race and
+API coverage are reported as unsupported rather than inferred from a clean run.
 
 Preview or remove only fe2o3-generated artifacts under `target/fe2o3`:
 
