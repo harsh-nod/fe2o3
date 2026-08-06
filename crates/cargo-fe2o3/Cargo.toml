@@ -10,6 +10,8 @@ description = "Cargo subcommand for fe2o3."
 
 [dependencies]
 cap-primitives = "=4.0.2"
+fe2o3-artifacts.workspace = true
+fe2o3-hsaco.workspace = true
 fe2o3-rustc-invocation.workspace = true
 reserved-fe2o3-symbols.workspace = true
 rustix.workspace = true

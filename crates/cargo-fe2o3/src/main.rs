@@ -1,6 +1,8 @@
 mod binding_wrapper;
 mod clean;
 mod example_manifest;
+mod inspect;
+mod tool_commands;
 
 use std::env;
 use std::path::{Path, PathBuf};
@@ -35,6 +37,9 @@ fn main() -> ExitCode {
         "smoke" => smoke(&rest),
         "examples" => example_manifest::command(&rest),
         "clean" => clean_command(&rest),
+        "inspect" => report(inspect::command(&rest)),
+        "sanitize" => report(tool_commands::command(tool_commands::Mode::Sanitize, &rest)),
+        "debug" => report(tool_commands::command(tool_commands::Mode::Debug, &rest)),
         "help" | "--help" | "-h" => {
             print_help();
             ExitCode::SUCCESS
@@ -42,6 +47,19 @@ fn main() -> ExitCode {
         other => {
             eprintln!("unknown cargo-fe2o3 command `{other}`");
             print_help();
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn report(result: Result<String, String>) -> ExitCode {
+    match result {
+        Ok(output) => {
+            println!("{output}");
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("{error}");
             ExitCode::FAILURE
         }
     }
@@ -527,7 +545,7 @@ fn is_gfx_target(candidate: &str) -> bool {
 
 fn print_help() {
     eprintln!(
-        "usage: cargo fe2o3 <command>\n\ncommands:\n  doctor              check ROCm/HIP toolchain discovery\n  build               build with the fe2o3 rustc backend\n  run                 run with the fe2o3 rustc backend\n  smoke               run manifest-selected GPU examples\n  examples            validate or query the example regression manifest\n  clean [--dry-run]   preview or remove target/fe2o3 artifacts (removal requires Unix)"
+        "usage: cargo fe2o3 <command>\n\ncommands:\n  doctor              check ROCm/HIP toolchain discovery\n  build               build with the fe2o3 rustc backend\n  run                 run with the fe2o3 rustc backend\n  smoke               run manifest-selected GPU examples\n  examples            validate or query the example regression manifest\n  clean [--dry-run]   preview or remove target/fe2o3 artifacts (removal requires Unix)\n  inspect             inspect bounded artifact or HSACO metadata without execution\n  sanitize            print a ROCgdb precise-memory checker plan without execution\n  debug               print an interactive ROCgdb plan without execution"
     );
 }
 
@@ -537,7 +555,9 @@ mod tests {
 
     #[test]
     fn normalizes_direct_and_cargo_subcommand_invocations() {
-        for command in ["doctor", "build", "run", "smoke", "examples", "clean"] {
+        for command in [
+            "doctor", "build", "run", "smoke", "examples", "clean", "inspect", "sanitize", "debug",
+        ] {
             let direct = vec![command.to_string(), "argument".to_string()];
             let cargo = vec![
                 "fe2o3".to_string(),

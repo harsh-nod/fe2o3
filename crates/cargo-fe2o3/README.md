@@ -4,6 +4,23 @@
 The adjacent `fe2o3-rustc-wrapper` is fail closed for compile invocations while
 its trusted execution boundary is built incrementally.
 
+## Inspection and tool plans
+
+`cargo fe2o3 inspect` performs bounded, read-only decoding of fe2o3 v1
+manifests, artifact containers, bundle indexes, and AMDGPU HSACO metadata. Its
+output is descriptive only: inspection neither loads code nor grants launch
+authority. Auto-detection uses validated wire magic, and `--format` can require
+one exact decoder.
+
+`cargo fe2o3 sanitize -- <program>` and `cargo fe2o3 debug -- <program>`
+currently print normalized ROCgdb invocation plans without executing them.
+Discovery checks `ROCM_PATH`, `HIP_PATH`, supported `/opt/rocm` roots, and
+absolute `PATH` entries in a fixed order; `--tool` accepts one explicit absolute
+ROCgdb path. The sanitize foundation enables ROCgdb precise-memory mode, which
+improves GPU memory-fault location but is not a race, uninitialized-memory, or
+synchronization sanitizer. The debug foundation does not itself establish that
+source maps or Rust aggregate layouts are complete.
+
 ## Pinned rustc executable
 
 The wrapper now contains a private pinned-executable primitive for a future
