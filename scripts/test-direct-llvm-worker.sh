@@ -23,7 +23,7 @@ if [[ $target != gfx942 ]]; then
   printf 'error: the exported mixed-input fixture is pinned to gfx942, got %s\n' "$target" >&2
   exit 65
 fi
-for command in cmake ctest; do
+for command in cmake ctest cmp; do
   if ! command -v "$command" >/dev/null 2>&1; then
     printf 'error: required command is unavailable: %s\n' "$command" >&2
     exit 69
@@ -87,6 +87,7 @@ FE2O3_DIRECT_LLVM_TARGET="$target" \
     -p fe2o3-hsaco-finalize --locked \
     --test direct_llvm_worker_integration -- \
     --ignored --exact real_worker_links_mixed_inputs_through_pinned_supervision --nocapture
+cmp -- "$native_hsaco" "$rust_hsaco"
 
 llvm_root=${llvm_dir%/lib/cmake/llvm}
 llvm_readelf="$llvm_root/bin/llvm-readelf"
