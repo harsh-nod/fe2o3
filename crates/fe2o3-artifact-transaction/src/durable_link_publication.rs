@@ -34,6 +34,7 @@ use sha2::{Digest, Sha256};
 use std::fmt;
 use std::fs;
 use std::io::{Read, Write};
+use std::os::unix::fs::FileExt;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -293,10 +294,13 @@ impl DurableLinkPublicationSnapshotV1 {
 }
 
 /// Snapshot and idempotency classification returned after publication.
-#[derive(Clone, Debug)]
+///
+/// The result owns the non-clone current-publication lease minted while the publication lock was
+/// still held. Call [`Self::into_current_lease`] to move that lease into the next validation stage.
+#[derive(Debug)]
 pub struct DurableLinkPublicationResultV1 {
     outcome: DurableLinkPublicationOutcomeV1,
-    snapshot: DurableLinkPublicationSnapshotV1,
+    lease: DurableCurrentLinkPublicationLeaseV1,
 }
 
 impl DurableLinkPublicationResultV1 {
@@ -305,7 +309,174 @@ impl DurableLinkPublicationResultV1 {
     }
 
     pub const fn snapshot(&self) -> &DurableLinkPublicationSnapshotV1 {
+        self.lease.snapshot()
+    }
+
+    /// Moves the exact-file-handle lease into a later inert validation stage.
+    pub fn into_current_lease(self) -> DurableCurrentLinkPublicationLeaseV1 {
+        self.lease
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DurableFileIdentityV1 {
+    device: u64,
+    inode: u64,
+}
+
+impl DurableFileIdentityV1 {
+    const fn from_stat(stat: &rustix::fs::Stat) -> Self {
+        Self {
+            device: stat.st_dev,
+            inode: stat.st_ino,
+        }
+    }
+}
+
+/// Opaque exact-file-handle lease for one publication that was current when minted.
+///
+/// The lease owns read-only descriptors for the canonical journal record and content-addressed
+/// artifact, plus the immutable descriptor-derived snapshot. It is deliberately not `Clone`.
+/// Possessing it proves only that the local durable protocol validated those exact files while
+/// holding its cooperative lock. A later generation does not alter the snapshot, but it prevents
+/// [`Self::acquire_current_token`] from issuing a fresh currentness token.
+///
+/// The private binding cannot be reconstructed or cloned by downstream code:
+///
+/// ```compile_fail
+/// use fe2o3_artifact_transaction::DurableCurrentLinkPublicationLeaseV1;
+///
+/// fn cannot_clone(
+///     lease: DurableCurrentLinkPublicationLeaseV1,
+/// ) -> (DurableCurrentLinkPublicationLeaseV1, DurableCurrentLinkPublicationLeaseV1) {
+///     (lease.clone(), lease)
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use fe2o3_artifact_transaction::DurableCurrentLinkPublicationLeaseV1;
+///
+/// fn cannot_extract_generation(lease: &DurableCurrentLinkPublicationLeaseV1) -> u64 {
+///     lease.generation
+/// }
+/// ```
+pub struct DurableCurrentLinkPublicationLeaseV1 {
+    output: PinnedOutput,
+    record_file: fs::File,
+    artifact_file: fs::File,
+    record_identity: DurableFileIdentityV1,
+    artifact_identity: DurableFileIdentityV1,
+    record_bytes: Arc<[u8]>,
+    artifact_length: usize,
+    artifact_digest: FinalizedOutputIdentityV1,
+    plan_commitment: [u8; 32],
+    published: super::PublishedLinkArtifactV1,
+    snapshot: DurableLinkPublicationSnapshotV1,
+}
+
+impl fmt::Debug for DurableCurrentLinkPublicationLeaseV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("DurableCurrentLinkPublicationLeaseV1")
+            .field("generation", &self.published.attempt().generation())
+            .field("record_identity", &self.record_identity)
+            .field("artifact_identity", &self.artifact_identity)
+            .field("artifact_length", &self.artifact_length)
+            .field("artifact_digest", &self.artifact_digest)
+            .finish_non_exhaustive()
+    }
+}
+
+impl DurableCurrentLinkPublicationLeaseV1 {
+    /// Returns the exact inert publication identity chain bound to this lease.
+    pub const fn published(&self) -> super::PublishedLinkArtifactV1 {
+        self.published
+    }
+
+    /// Returns the immutable bytes captured from the retained artifact descriptor at issuance.
+    pub const fn snapshot(&self) -> &DurableLinkPublicationSnapshotV1 {
         &self.snapshot
+    }
+
+    /// Borrows the exact descriptor-derived bytes for parsing without reopening a path.
+    pub fn exact_artifact_bytes(&self) -> &[u8] {
+        self.snapshot.artifact().bytes()
+    }
+
+    /// Revalidates this lease as the current canonical generation under the cooperative lock.
+    ///
+    /// The returned token keeps that lock held. A future loader must consume such a token in
+    /// addition to any compiler-provenance, ABI, and release witnesses; the lease alone is an
+    /// immutable snapshot and may have become stale.
+    pub fn acquire_current_token(
+        &self,
+    ) -> Result<DurableCurrentLinkPublicationTokenV1<'_>, DurableLinkPublicationError> {
+        let lock = self.output.lock()?;
+        self.output.verify_path_identity()?;
+        let names = DurableNames::new(self.published.scope());
+        let mut envelope = recover_envelope(&self.output, &names, self.published.scope())?;
+        recover_incomplete(&self.output, &names, &mut envelope)?;
+        verify_or_invalidate_published(
+            &self.output,
+            &names,
+            &mut envelope,
+            &mut FaultInjector::new(None),
+        )?;
+        require_current_publication(
+            &envelope,
+            self.published.attempt().generation(),
+            self.plan_commitment,
+            self.published,
+        )?;
+        validate_retained_lease_files(self, &names)?;
+        Ok(DurableCurrentLinkPublicationTokenV1 {
+            lease: self,
+            _lock: lock,
+        })
+    }
+
+    /// A lease authenticates an exact local descriptor snapshot, but does not grant loading.
+    pub const fn grants_load_authority(&self) -> bool {
+        false
+    }
+
+    /// A lease never grants kernel-launch authority.
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
+    }
+}
+
+/// Borrowed proof that one lease remained current while the cooperative publication lock is held.
+///
+/// This token is non-clone and cannot outlive its lease. It deliberately grants no module-loading
+/// or launch authority; later stages must require it so stale immutable snapshots cannot be used as
+/// current publications.
+pub struct DurableCurrentLinkPublicationTokenV1<'lease> {
+    lease: &'lease DurableCurrentLinkPublicationLeaseV1,
+    _lock: super::OutputLock,
+}
+
+impl fmt::Debug for DurableCurrentLinkPublicationTokenV1<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("DurableCurrentLinkPublicationTokenV1")
+            .field("generation", &self.lease.published.attempt().generation())
+            .finish_non_exhaustive()
+    }
+}
+
+impl DurableCurrentLinkPublicationTokenV1<'_> {
+    /// Borrows the immutable descriptor-derived artifact bytes while currentness is locked.
+    pub fn exact_artifact_bytes(&self) -> &[u8] {
+        self.lease.exact_artifact_bytes()
+    }
+
+    pub const fn grants_load_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
     }
 }
 
@@ -340,6 +511,9 @@ pub enum DurableLinkPublicationError {
         point: DurableLinkPublicationFaultPointV1,
     },
     Cleanup {
+        reason: String,
+    },
+    CurrentPublication {
         reason: String,
     },
 }
@@ -391,6 +565,9 @@ impl fmt::Display for DurableLinkPublicationError {
             }
             Self::Cleanup { reason } => {
                 write!(formatter, "durable publication cleanup failed: {reason}")
+            }
+            Self::CurrentPublication { reason } => {
+                write!(formatter, "publication is not current: {reason}")
             }
         }
     }
@@ -732,10 +909,11 @@ where
 
     if let Some(record) = envelope.published.as_ref() {
         if record_matches_plan(record, plan) {
-            let snapshot = snapshot_for_record(&output, record, &mut faults)?;
+            let lease =
+                mint_current_publication_lease(output, &names, &envelope, plan, &mut faults)?;
             return Ok(DurableLinkPublicationResultV1 {
                 outcome: DurableLinkPublicationOutcomeV1::AlreadyPublished,
-                snapshot,
+                lease,
             });
         }
         if record.attempt().generation() >= plan.attempt.generation() {
@@ -820,7 +998,7 @@ where
             invalid_record("finalized phase omitted immutable bytes"),
         );
     };
-    let artifact = match publish_artifact(
+    let _artifact = match publish_artifact(
         transaction.output,
         bytes,
         transaction.plan.finalized_output,
@@ -863,18 +1041,13 @@ where
     transaction.record = published_record;
     transaction.catalog = published_catalog;
     *transaction.envelope = published_envelope;
-    Ok(DurableLinkPublicationResultV1 {
-        outcome: match publication_outcome {
-            PublicationOutcomeV1::Published => DurableLinkPublicationOutcomeV1::Published,
-            PublicationOutcomeV1::AlreadyPublished => {
-                DurableLinkPublicationOutcomeV1::AlreadyPublished
-            }
-        },
-        snapshot: DurableLinkPublicationSnapshotV1 {
-            record: transaction.record.clone(),
-            artifact,
-        },
-    })
+    let outcome = match publication_outcome {
+        PublicationOutcomeV1::Published => DurableLinkPublicationOutcomeV1::Published,
+        PublicationOutcomeV1::AlreadyPublished => DurableLinkPublicationOutcomeV1::AlreadyPublished,
+    };
+    drop(transaction);
+    let lease = mint_current_publication_lease(output, &names, &envelope, plan, &mut faults)?;
+    Ok(DurableLinkPublicationResultV1 { outcome, lease })
 }
 
 fn fail_after_terminal_invalidation<T>(
@@ -1521,6 +1694,286 @@ fn open_artifact(
         output.display_path.join(entry),
         Arc::<[u8]>::from(bytes),
     ))
+}
+
+struct OpenedPrivateFileV1 {
+    file: fs::File,
+    stat: rustix::fs::Stat,
+    bytes: Arc<[u8]>,
+}
+
+fn mint_current_publication_lease(
+    output: PinnedOutput,
+    names: &DurableNames,
+    envelope: &DurableEnvelopeV1,
+    plan: DurableLinkPublicationPlanV1,
+    faults: &mut FaultInjector,
+) -> Result<DurableCurrentLinkPublicationLeaseV1, DurableLinkPublicationError> {
+    let record = envelope.published.as_ref().ok_or_else(|| {
+        current_publication_error("canonical journal has no published generation")
+    })?;
+    let published = record.published_artifact()?;
+    require_current_publication(
+        envelope,
+        plan.attempt.generation(),
+        plan.identity(),
+        published,
+    )?;
+    if !record_matches_plan(record, plan) {
+        return Err(current_publication_error(
+            "canonical publication does not match the complete requested plan",
+        ));
+    }
+
+    output.verify_path_identity()?;
+    let opened_record = open_private_file(
+        &output,
+        &names.record,
+        "canonical durable publication record",
+        MAX_DURABLE_LINK_PUBLICATION_RECORD_BYTES,
+    )?;
+    let decoded = DurableEnvelopeV1::decode(&opened_record.bytes, plan.scope)?;
+    if &decoded != envelope || decoded.encode()?.as_slice() != opened_record.bytes.as_ref() {
+        return Err(current_publication_error(
+            "canonical journal changed while the lease was issued",
+        ));
+    }
+
+    faults
+        .hit_snapshot_read()
+        .map_err(|error| error.into_public("published artifact"))?;
+    let artifact_entry = artifact_name(plan.finalized_output);
+    let opened_artifact = open_private_file(
+        &output,
+        &artifact_entry,
+        "published finalized artifact",
+        MAX_DURABLE_FINALIZED_ARTIFACT_BYTES,
+    )?;
+    validate_artifact_size(opened_artifact.bytes.len())?;
+    if sha256(&opened_artifact.bytes) != *plan.finalized_output.as_bytes() {
+        return Err(DurableLinkPublicationError::FinalizedArtifactDigestMismatch);
+    }
+
+    // Recheck the record and parent after the potentially large artifact read. The held lock
+    // excludes cooperating writers; these checks close pathname and in-place mutation races during
+    // issuance against non-cooperating mutation that happens between our observations.
+    output.verify_path_identity()?;
+    validate_open_file(
+        &output,
+        &names.record,
+        &opened_record.file,
+        DurableFileIdentityV1::from_stat(&opened_record.stat),
+        &opened_record.bytes,
+        "canonical durable publication record",
+    )?;
+
+    let snapshot = DurableLinkPublicationSnapshotV1 {
+        record: record.clone(),
+        artifact: FinalizedArtifactSnapshot::from_bytes(
+            output.display_path.join(&artifact_entry),
+            Arc::clone(&opened_artifact.bytes),
+        ),
+    };
+    Ok(DurableCurrentLinkPublicationLeaseV1 {
+        output,
+        record_file: opened_record.file,
+        artifact_file: opened_artifact.file,
+        record_identity: DurableFileIdentityV1::from_stat(&opened_record.stat),
+        artifact_identity: DurableFileIdentityV1::from_stat(&opened_artifact.stat),
+        record_bytes: opened_record.bytes,
+        artifact_length: opened_artifact.bytes.len(),
+        artifact_digest: plan.finalized_output,
+        plan_commitment: plan.identity(),
+        published,
+        snapshot,
+    })
+}
+
+fn require_current_publication(
+    envelope: &DurableEnvelopeV1,
+    generation: u64,
+    plan_commitment: [u8; 32],
+    published: super::PublishedLinkArtifactV1,
+) -> Result<(), DurableLinkPublicationError> {
+    if envelope.poisoned {
+        return Err(current_publication_error(
+            "canonical journal carries a corruption tombstone",
+        ));
+    }
+    if envelope.active.is_some() || envelope.active_plan.is_some() {
+        return Err(current_publication_error(
+            "a planned, recovered, or failed generation supersedes lease issuance",
+        ));
+    }
+    if envelope.generation_floor != generation {
+        return Err(current_publication_error(
+            "canonical generation floor differs from the lease generation",
+        ));
+    }
+    let record = envelope.published.as_ref().ok_or_else(|| {
+        current_publication_error("canonical journal has no published generation")
+    })?;
+    if record.attempt().generation() != generation
+        || record.published_artifact().ok() != Some(published)
+        || published_plan_identity(record) != Some(plan_commitment)
+    {
+        return Err(current_publication_error(
+            "canonical publication or complete-plan commitment differs from the lease",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_retained_lease_files(
+    lease: &DurableCurrentLinkPublicationLeaseV1,
+    names: &DurableNames,
+) -> Result<(), DurableLinkPublicationError> {
+    validate_open_file(
+        &lease.output,
+        &names.record,
+        &lease.record_file,
+        lease.record_identity,
+        &lease.record_bytes,
+        "canonical durable publication record",
+    )?;
+    let decoded = DurableEnvelopeV1::decode(&lease.record_bytes, lease.published.scope())?;
+    require_current_publication(
+        &decoded,
+        lease.published.attempt().generation(),
+        lease.plan_commitment,
+        lease.published,
+    )?;
+
+    validate_open_file(
+        &lease.output,
+        &artifact_name(lease.artifact_digest),
+        &lease.artifact_file,
+        lease.artifact_identity,
+        lease.snapshot.artifact().bytes(),
+        "published finalized artifact",
+    )?;
+    if lease.snapshot.artifact().bytes().len() != lease.artifact_length
+        || sha256(lease.snapshot.artifact().bytes()) != *lease.artifact_digest.as_bytes()
+    {
+        return Err(current_publication_error(
+            "retained artifact snapshot no longer matches its lease binding",
+        ));
+    }
+    Ok(())
+}
+
+fn open_private_file(
+    output: &PinnedOutput,
+    entry: &str,
+    description: &str,
+    maximum_bytes: usize,
+) -> Result<OpenedPrivateFileV1, DurableLinkPublicationError> {
+    let fd = openat(
+        &output.fd,
+        entry,
+        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(|error| match error {
+        rustix::io::Errno::LOOP => unsafe_entry(entry, "managed entry resolves to a symlink"),
+        rustix::io::Errno::NOENT => current_publication_error(format!("{description} is absent")),
+        error => DurableLinkPublicationError::from(std::io::Error::from(error)),
+    })?;
+    let mut file = fs::File::from(fd);
+    let before = fstat(&file).map_err(std::io::Error::from)?;
+    if !is_private_regular(&before) {
+        return Err(unsafe_entry(
+            entry,
+            format!("{description} is not a private single-link regular file"),
+        ));
+    }
+    let length = usize::try_from(before.st_size)
+        .map_err(|_| current_publication_error(format!("{description} length is invalid")))?;
+    if length == 0 || length > maximum_bytes {
+        return Err(current_publication_error(format!(
+            "{description} length is outside 1..={maximum_bytes}"
+        )));
+    }
+    let mut bytes = Vec::with_capacity(length);
+    Read::by_ref(&mut file)
+        .take((maximum_bytes + 1) as u64)
+        .read_to_end(&mut bytes)?;
+    let after = fstat(&file).map_err(std::io::Error::from)?;
+    let named =
+        statat(&output.fd, entry, AtFlags::SYMLINK_NOFOLLOW).map_err(std::io::Error::from)?;
+    if bytes.len() != length
+        || !same_private_file(&before, &after, length)
+        || !same_private_file(&before, &named, length)
+    {
+        return Err(current_publication_error(format!(
+            "{description} changed while its descriptor was read"
+        )));
+    }
+    Ok(OpenedPrivateFileV1 {
+        file,
+        stat: before,
+        bytes: Arc::from(bytes),
+    })
+}
+
+fn validate_open_file(
+    output: &PinnedOutput,
+    entry: &str,
+    file: &fs::File,
+    expected_identity: DurableFileIdentityV1,
+    expected_bytes: &[u8],
+    description: &str,
+) -> Result<(), DurableLinkPublicationError> {
+    let before = fstat(file).map_err(std::io::Error::from)?;
+    let named =
+        statat(&output.fd, entry, AtFlags::SYMLINK_NOFOLLOW).map_err(std::io::Error::from)?;
+    if DurableFileIdentityV1::from_stat(&before) != expected_identity
+        || DurableFileIdentityV1::from_stat(&named) != expected_identity
+        || !same_private_file(&before, &named, expected_bytes.len())
+    {
+        return Err(current_publication_error(format!(
+            "{description} no longer names the retained private file"
+        )));
+    }
+    let bytes = read_exact_at(file, expected_bytes.len(), description)?;
+    let after = fstat(file).map_err(std::io::Error::from)?;
+    if bytes != expected_bytes || !same_private_file(&before, &after, expected_bytes.len()) {
+        return Err(current_publication_error(format!(
+            "{description} changed in place"
+        )));
+    }
+    Ok(())
+}
+
+fn read_exact_at(
+    file: &fs::File,
+    length: usize,
+    description: &str,
+) -> Result<Vec<u8>, DurableLinkPublicationError> {
+    let mut bytes = vec![0; length];
+    let mut offset = 0;
+    while offset < length {
+        let read = file.read_at(&mut bytes[offset..], offset as u64)?;
+        if read == 0 {
+            return Err(current_publication_error(format!(
+                "{description} was truncated while being revalidated"
+            )));
+        }
+        offset += read;
+    }
+    let mut extra = [0_u8; 1];
+    if file.read_at(&mut extra, length as u64)? != 0 {
+        return Err(current_publication_error(format!(
+            "{description} grew while being revalidated"
+        )));
+    }
+    Ok(bytes)
+}
+
+fn current_publication_error(reason: impl Into<String>) -> DurableLinkPublicationError {
+    DurableLinkPublicationError::CurrentPublication {
+        reason: reason.into(),
+    }
 }
 
 fn record_matches_plan(

@@ -550,7 +550,9 @@ fn normal_failure_is_invalidated_and_preserves_prior_publication() {
     let output = temp.path.join("output");
     let old_bytes = b"old complete artifact";
     let old_plan = plan(1, 0x41, 0x81, old_bytes);
-    publish(&output, old_plan, old_bytes).unwrap();
+    let old_result = publish(&output, old_plan, old_bytes).unwrap();
+    let old_record = old_result.snapshot().record().clone();
+    let old_lease = old_result.into_current_lease();
 
     let new_bytes = b"new incomplete artifact";
     let new_plan = plan(2, 0x41, 0x91, new_bytes);
@@ -565,14 +567,17 @@ fn normal_failure_is_invalidated_and_preserves_prior_publication() {
     let current = recover_durable_link_publication_v1(&output, old_plan.scope())
         .unwrap()
         .unwrap();
-    assert_eq!(
-        current.record(),
-        publish(&output, old_plan, old_bytes)
-            .unwrap()
-            .snapshot()
-            .record()
-    );
+    assert_eq!(current.record(), &old_record);
     assert_eq!(current.artifact().bytes(), old_bytes);
+    assert_eq!(old_lease.exact_artifact_bytes(), old_bytes);
+    assert!(matches!(
+        old_lease.acquire_current_token(),
+        Err(DurableLinkPublicationError::CurrentPublication { .. })
+    ));
+    assert!(matches!(
+        publish(&output, old_plan, old_bytes),
+        Err(DurableLinkPublicationError::CurrentPublication { .. })
+    ));
     assert!(matches!(
         publish_durable_link_v1(&output, new_plan, |_| {
             panic!("an explicitly failed attempt must never run again")
@@ -1068,4 +1073,173 @@ fn output_directory_substitution_never_redirects_publication() {
             .unwrap()
             .is_none()
     );
+}
+
+#[test]
+fn current_lease_retains_exact_descriptor_snapshot_and_revalidates_under_lock() {
+    let temp = TestDirectory::new();
+    let output = temp.path.join("output");
+    let bytes = b"current exact descriptor payload";
+    let plan = plan(1, 0x76, 0xd6, bytes);
+
+    let result = publish(&output, plan, bytes).unwrap();
+    let lease = result.into_current_lease();
+    assert_eq!(lease.published().attempt(), plan.attempt());
+    assert_eq!(lease.published().scope(), plan.scope());
+    assert_eq!(lease.exact_artifact_bytes(), bytes);
+    assert!(!lease.grants_load_authority());
+    assert!(!lease.grants_launch_authority());
+
+    let token = lease.acquire_current_token().unwrap();
+    assert_eq!(token.exact_artifact_bytes(), bytes);
+    assert!(!token.grants_load_authority());
+    assert!(!token.grants_launch_authority());
+}
+
+#[test]
+fn newer_planned_or_failed_generation_invalidates_old_lease_currentness() {
+    for fail_normally in [false, true] {
+        let temp = TestDirectory::new();
+        let output = temp.path.join("output");
+        let old_bytes = b"immutable old lease payload";
+        let old_plan = plan(1, 0x77, 0xd7, old_bytes);
+        let old_lease = publish(&output, old_plan, old_bytes)
+            .unwrap()
+            .into_current_lease();
+        let next_bytes = b"superseding attempt payload";
+        let next = plan(2, 0x77, 0xe7, next_bytes);
+
+        if fail_normally {
+            assert!(matches!(
+                publish_durable_link_v1(&output, next, |_| {
+                    Err(DurableLinkPublicationError::work("expected failure"))
+                }),
+                Err(DurableLinkPublicationError::Work { .. })
+            ));
+        } else {
+            let point = DurableLinkPublicationFaultPointV1::Journal {
+                stage: DurableJournalStageV1::Planned,
+                boundary: DurableJournalBoundaryV1::SyncCanonicalName,
+                timing: DurableFaultTimingV1::After,
+            };
+            assert!(matches!(
+                publish_durable_link_v1_with_options(
+                    &output,
+                    next,
+                    DurableLinkPublicationOptionsV1::inject_crash(point),
+                    |_| panic!("planned crash fires before callback"),
+                ),
+                Err(DurableLinkPublicationError::InjectedCrash { point: actual }) if actual == point
+            ));
+        }
+
+        assert_eq!(old_lease.exact_artifact_bytes(), old_bytes);
+        assert!(matches!(
+            old_lease.acquire_current_token(),
+            Err(DurableLinkPublicationError::CurrentPublication { .. })
+        ));
+    }
+}
+
+#[test]
+fn current_token_serializes_future_cooperating_publication() {
+    let temp = TestDirectory::new();
+    let output = temp.path.join("output");
+    let old_bytes = b"locked old payload";
+    let old_plan = plan(1, 0x78, 0xd8, old_bytes);
+    let lease = publish(&output, old_plan, old_bytes)
+        .unwrap()
+        .into_current_lease();
+    let token = lease.acquire_current_token().unwrap();
+    let next_bytes = b"blocked next payload";
+    let next = plan(2, 0x78, 0xe8, next_bytes);
+    let (entered_tx, entered_rx) = mpsc::channel();
+
+    thread::scope(|scope| {
+        let output = output.clone();
+        let handle = scope.spawn(move || {
+            publish_durable_link_v1(&output, next, |transaction| {
+                entered_tx.send(()).unwrap();
+                complete(transaction, next_bytes)
+            })
+        });
+        assert!(matches!(
+            entered_rx.recv_timeout(Duration::from_millis(100)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+        drop(token);
+        entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        handle.join().unwrap().unwrap();
+    });
+    assert!(lease.acquire_current_token().is_err());
+}
+
+#[test]
+fn record_and_artifact_path_replacement_with_identical_bytes_fail_closed() {
+    for replace_record in [false, true] {
+        let temp = TestDirectory::new();
+        let output = temp.path.join("output");
+        let bytes = b"identical replacement payload";
+        let plan = plan(1, 0x79, 0xd9, bytes);
+        let lease = publish(&output, plan, bytes).unwrap().into_current_lease();
+        let path = if replace_record {
+            canonical_record(&output)
+        } else {
+            artifact_path(&output, bytes)
+        };
+        let original = fs::read(&path).unwrap();
+        fs::remove_file(&path).unwrap();
+        fs::write(&path, original).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+
+        assert!(lease.acquire_current_token().is_err());
+        assert_eq!(lease.exact_artifact_bytes(), bytes);
+    }
+}
+
+#[test]
+fn lease_revalidation_rejects_symlink_hardlink_and_in_place_artifact_changes() {
+    for attack in ["symlink", "hardlink", "mutate", "truncate", "grow"] {
+        let temp = TestDirectory::new();
+        let output = temp.path.join("output");
+        let bytes = b"artifact adversary payload";
+        let plan = plan(1, 0x7a, 0xda, bytes);
+        let lease = publish(&output, plan, bytes).unwrap().into_current_lease();
+        let artifact = artifact_path(&output, bytes);
+        match attack {
+            "symlink" => {
+                let target = temp.path.join("symlink-target");
+                fs::write(&target, bytes).unwrap();
+                fs::remove_file(&artifact).unwrap();
+                symlink(target, &artifact).unwrap();
+            }
+            "hardlink" => {
+                let target = temp.path.join("hardlink-target");
+                fs::write(&target, bytes).unwrap();
+                fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).unwrap();
+                fs::remove_file(&artifact).unwrap();
+                fs::hard_link(target, &artifact).unwrap();
+            }
+            "mutate" => fs::write(&artifact, vec![b'x'; bytes.len()]).unwrap(),
+            "truncate" => fs::write(&artifact, b"short").unwrap(),
+            "grow" => fs::write(&artifact, [bytes.as_slice(), b"extra"].concat()).unwrap(),
+            _ => unreachable!(),
+        }
+        assert!(lease.acquire_current_token().is_err(), "attack={attack}");
+    }
+}
+
+#[test]
+fn lease_revalidation_rejects_output_parent_substitution() {
+    let temp = TestDirectory::new();
+    let output = temp.path.join("output");
+    let moved = temp.path.join("moved-output");
+    let bytes = b"parent substitution lease payload";
+    let plan = plan(1, 0x7b, 0xdb, bytes);
+    let lease = publish(&output, plan, bytes).unwrap().into_current_lease();
+
+    fs::rename(&output, &moved).unwrap();
+    fs::create_dir(&output).unwrap();
+    assert!(lease.acquire_current_token().is_err());
+    assert_eq!(lease.exact_artifact_bytes(), bytes);
 }

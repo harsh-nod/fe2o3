@@ -658,7 +658,9 @@ impl LinkPublicationRecordV1 {
         Ok(())
     }
 
-    fn published_artifact(&self) -> Result<PublishedLinkArtifactV1, LinkPublicationCodecError> {
+    pub(crate) fn published_artifact(
+        &self,
+    ) -> Result<PublishedLinkArtifactV1, LinkPublicationCodecError> {
         self.validate()?;
         if self.state.evidence_phase() != LinkPublicationPhaseV1::Published {
             return Err(LinkPublicationCodecError::InvalidTransition {

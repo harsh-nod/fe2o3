@@ -36,7 +36,8 @@ mod link_publication;
 pub use attempt::{AttemptCodecError, BuildAttempt, BuildInvocation, BuildSession};
 use attempt::{AttemptPhase, AttemptRegistry, MAX_ATTEMPT_BYTES, StartAttemptOutcome};
 pub use durable_link_publication::{
-    DurableArtifactBoundaryV1, DurableFaultTimingV1, DurableJournalBoundaryV1,
+    DurableArtifactBoundaryV1, DurableCurrentLinkPublicationLeaseV1,
+    DurableCurrentLinkPublicationTokenV1, DurableFaultTimingV1, DurableJournalBoundaryV1,
     DurableJournalStageV1, DurableLinkPublicationError, DurableLinkPublicationFaultPointV1,
     DurableLinkPublicationOptionsV1, DurableLinkPublicationOutcomeV1, DurableLinkPublicationPlanV1,
     DurableLinkPublicationResultV1, DurableLinkPublicationSnapshotV1,
