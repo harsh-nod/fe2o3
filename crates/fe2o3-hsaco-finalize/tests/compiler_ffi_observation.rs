@@ -71,7 +71,7 @@ fn complete_cross_crate_envelope_is_staged_without_worker_authority() {
     assert_eq!(inspection.export_count(), 1);
     assert_eq!(
         inspection.blocker(),
-        StagedCompilerFfiEnvelopeBlockerV1::MissingExactCompilerModuleArtifactAndWorkerProtocolV2
+        StagedCompilerFfiEnvelopeBlockerV1::MissingExactCompilerModuleArtifact
     );
     assert_eq!(
         staged.identity().to_hex(),

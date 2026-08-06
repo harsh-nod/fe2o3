@@ -23,7 +23,8 @@ fn main() {
 
     let mut prefix = [0_u8; 46];
     io::stdin().read_exact(&mut prefix).unwrap();
-    let mode = prefix[14];
+    let is_v2 = &prefix[..8] == b"F3LREQ02";
+    let mode = if is_v2 { 1 } else { prefix[14] };
     if mode == 2 {
         loop {
             thread::sleep(Duration::from_secs(60));
@@ -106,24 +107,37 @@ fn spawn_descendant() -> std::process::Child {
 
 fn response(request: &[u8], worker: &str, with_output: bool, wrong_request: bool) -> Vec<u8> {
     let request_id: [u8; 32] = request[14..46].try_into().unwrap();
-    let mut request_identity: [u8; 32] = field(request, 10).try_into().unwrap();
+    let is_v2 = &request[..8] == b"F3LREQ02";
+    let mut request_identity: [u8; 32] = field(request, if is_v2 { 15 } else { 10 })
+        .try_into()
+        .unwrap();
     if wrong_request {
         request_identity[0] ^= 1;
     }
-    let mut bytes = b"F3LRSP01".to_vec();
+    let mut bytes = if is_v2 {
+        b"F3LRSP02".to_vec()
+    } else {
+        b"F3LRSP01".to_vec()
+    };
     push_field(&mut bytes, 1, &request_id);
     push_field(&mut bytes, 2, &request_identity);
-    push_field(&mut bytes, 3, worker.as_bytes());
-    push_field(&mut bytes, 4, &[if with_output { 9 } else { 6 }]);
-    push_field(&mut bytes, 5, &0_u32.to_le_bytes());
+    let offset = if is_v2 {
+        push_field(&mut bytes, 3, field(request, 8));
+        1
+    } else {
+        0
+    };
+    push_field(&mut bytes, 3 + offset, worker.as_bytes());
+    push_field(&mut bytes, 4 + offset, &[if with_output { 9 } else { 6 }]);
+    push_field(&mut bytes, 5 + offset, &0_u32.to_le_bytes());
     if with_output {
         let mut output = vec![1];
         output.extend_from_slice(&OUTPUT_SHA256);
         output.extend_from_slice(&(OUTPUT.len() as u64).to_le_bytes());
         output.extend_from_slice(OUTPUT);
-        push_field(&mut bytes, 6, &output);
+        push_field(&mut bytes, 6 + offset, &output);
     } else {
-        push_field(&mut bytes, 6, &[0]);
+        push_field(&mut bytes, 6 + offset, &[0]);
     }
     bytes
 }

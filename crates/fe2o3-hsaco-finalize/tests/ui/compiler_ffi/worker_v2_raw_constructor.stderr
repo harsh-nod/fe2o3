@@ -1,0 +1,11 @@
+error[E0599]: no associated function or constant named `new` found for struct `WorkerRequestV2` in the current scope
+ --> tests/ui/compiler_ffi/worker_v2_raw_constructor.rs:4:30
+  |
+4 |     let _ = WorkerRequestV2::new();
+  |                              ^^^ associated function or constant not found in `WorkerRequestV2`
+  |
+help: there is a method `ne` with a similar name, but with different arguments
+ --> $RUST/core/src/cmp.rs
+  |
+  |     fn ne(&self, other: &Rhs) -> bool {
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -22,6 +22,7 @@ mod link_plan;
 mod request_construction;
 mod worker_executor;
 mod worker_protocol;
+mod worker_protocol_v2;
 
 pub use compiler_ffi_bridge::{
     ExpectedFinalDefinedSymbolsClaimIdentityV1, ExpectedFinalDefinedSymbolsClaimV1,
@@ -61,14 +62,16 @@ pub use link_plan::{
     MAX_LINK_PROVENANCE_EDGES, MAX_LINK_PROVENANCE_NODES, MultiInputLinkPlanV1, ProvenanceNodeV1,
 };
 pub use request_construction::{
-    LinkInputKindClosureIdentityV1, LinkInputKindClosureV1, LinkSymbolClosureIdentityV1,
-    LinkSymbolClosureV1, WorkerRequestConstructionError, construct_worker_request_v1,
+    ExactCompilerModuleArtifactV1, LinkInputKindClosureIdentityV1, LinkInputKindClosureV1,
+    LinkSymbolClosureIdentityV1, LinkSymbolClosureV1, WorkerRequestConstructionError,
+    construct_worker_request_v1, construct_worker_request_v2,
+    stage_exact_compiler_module_artifact_v1,
 };
 pub use worker_executor::{
     DEFAULT_WORKER_STDERR_BYTES, DEFAULT_WORKER_TIMEOUT, InertWorkerExecutionV1,
-    MAX_WORKER_EXECUTABLE_BYTES, MAX_WORKER_STDERR_BYTES, MAX_WORKER_TIMEOUT, PinnedWorkerV1,
-    WORKER_ENVIRONMENT_ALLOWLIST_V1, WorkerExecutionError, WorkerExecutionErrorKind,
-    WorkerExecutionLimitsV1, WorkerMeasurementV1, WorkerTerminationV1,
+    InertWorkerExecutionV2, MAX_WORKER_EXECUTABLE_BYTES, MAX_WORKER_STDERR_BYTES,
+    MAX_WORKER_TIMEOUT, PinnedWorkerV1, WORKER_ENVIRONMENT_ALLOWLIST_V1, WorkerExecutionError,
+    WorkerExecutionErrorKind, WorkerExecutionLimitsV1, WorkerMeasurementV1, WorkerTerminationV1,
 };
 pub use worker_protocol::{
     MAX_WORKER_DIAGNOSTIC_BYTES, MAX_WORKER_DIAGNOSTICS, MAX_WORKER_OUTPUT_BYTES,
@@ -78,6 +81,10 @@ pub use worker_protocol::{
     WORKER_RESPONSE_MAGIC_V1, WorkerEvidenceClassV1, WorkerInputKindV1, WorkerInputV1,
     WorkerOptimizationLevelV1, WorkerOptionsV1, WorkerOutputConstraintsV1, WorkerOutputV1,
     WorkerProtocolError, WorkerRequestV1, WorkerResponseV1, WorkerStageV1,
+};
+pub use worker_protocol_v2::{
+    WORKER_REQUEST_MAGIC_V2, WORKER_RESPONSE_MAGIC_V2, WorkerCompilerFfiEnvelopeIdentityV2,
+    WorkerEvidenceClassV2, WorkerOutputV2, WorkerRequestV2, WorkerResponseV2,
 };
 
 /// The only ELF section name recognized for a canonical V1 descriptor table.

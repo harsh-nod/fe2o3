@@ -1,0 +1,5 @@
+error[E0616]: field `input` of struct `ExactCompilerModuleArtifactV1` is private
+ --> tests/ui/compiler_ffi/exact_module_fields_are_private.rs:9:22
+  |
+9 |     let _ = artifact.input;
+  |                      ^^^^^ private field

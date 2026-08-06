@@ -25,7 +25,9 @@ impl StagedCompilerFfiEnvelopeIdentityV1 {
 /// Exact reason this observation cannot enter an executable worker path.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum StagedCompilerFfiEnvelopeBlockerV1 {
+    /// Retained for source compatibility with pre-V2 callers.
     MissingExactCompilerModuleArtifactAndWorkerProtocolV2,
+    MissingExactCompilerModuleArtifact,
 }
 
 /// Non-authoritative summary without contract or linker closures.
@@ -113,8 +115,7 @@ pub fn stage_compiler_ffi_envelope_v1(
         code_object_version: envelope.code_object_version(),
         import_count: envelope_inspection.import_count(),
         export_count: envelope_inspection.export_count(),
-        blocker:
-            StagedCompilerFfiEnvelopeBlockerV1::MissingExactCompilerModuleArtifactAndWorkerProtocolV2,
+        blocker: StagedCompilerFfiEnvelopeBlockerV1::MissingExactCompilerModuleArtifact,
     };
     let mut digest = Sha256::new();
     digest.update(STAGED_COMPILER_FFI_ENVELOPE_DOMAIN_V1);

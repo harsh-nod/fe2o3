@@ -21,7 +21,8 @@ use std::{io, path::PathBuf, process::ExitStatus};
 
 use crate::{
     ContentIdentityV1, MAX_WORKER_RESPONSE_BYTES, MAX_WORKER_TOOLCHAIN_ID_BYTES,
-    WorkerEvidenceClassV1, WorkerProtocolError, WorkerRequestV1, WorkerResponseV1,
+    WorkerEvidenceClassV1, WorkerEvidenceClassV2, WorkerProtocolError, WorkerRequestV1,
+    WorkerRequestV2, WorkerResponseV1, WorkerResponseV2,
 };
 
 /// Maximum bytes accepted for a selected native worker executable.
@@ -300,6 +301,39 @@ impl InertWorkerExecutionV1 {
     }
 }
 
+/// A sealed V2 response bound to the measured worker with no artifact authority.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InertWorkerExecutionV2 {
+    worker_executable: ContentIdentityV1,
+    response: WorkerResponseV2,
+}
+
+impl InertWorkerExecutionV2 {
+    pub const fn worker_executable(&self) -> ContentIdentityV1 {
+        self.worker_executable
+    }
+
+    pub const fn response(&self) -> &WorkerResponseV2 {
+        &self.response
+    }
+
+    pub const fn evidence_class(&self) -> WorkerEvidenceClassV2 {
+        WorkerEvidenceClassV2::CompilerFfiLink
+    }
+
+    pub const fn grants_publication_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_load_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
+    }
+}
+
 fn valid_build_identity(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= MAX_WORKER_TOOLCHAIN_ID_BYTES
@@ -544,6 +578,98 @@ mod platform {
                 ));
             }
             Ok(InertWorkerExecutionV1 {
+                worker_executable: self.measurement.executable,
+                response,
+            })
+        }
+
+        /// Runs one sealed compiler-FFI V2 request under the V1 supervisor limits.
+        ///
+        /// The request must bind this exact executable, worker build, and LLVM
+        /// build. The response must use the V2 domain and echo the exact request
+        /// and compiler-envelope identities. The result remains inert.
+        pub fn execute_v2(
+            &self,
+            request: &WorkerRequestV2,
+            limits: WorkerExecutionLimitsV1,
+        ) -> Result<InertWorkerExecutionV2, WorkerExecutionError> {
+            if request.llvm_build_identity() != self.measurement.llvm_build_identity {
+                return Err(WorkerExecutionError::plain(
+                    WorkerExecutionErrorKind::LlvmBuildIdentityMismatch,
+                ));
+            }
+            if request.worker_build_identity() != self.measurement.worker_build_identity {
+                return Err(WorkerExecutionError::plain(
+                    WorkerExecutionErrorKind::WorkerBuildIdentityMismatch,
+                ));
+            }
+            if request.worker_executable() != self.measurement.executable {
+                return Err(WorkerExecutionError::plain(
+                    WorkerExecutionErrorKind::WorkerIdentityMismatch {
+                        expected: request.worker_executable(),
+                        actual: self.measurement.executable,
+                    },
+                ));
+            }
+            validate_image(&self.image, &self.descriptor_path, self.snapshot)?;
+
+            let mut command = Command::new(&self.descriptor_path);
+            command
+                .arg0("fe2o3-llvm-link-worker")
+                .env_clear()
+                .envs(WORKER_ENVIRONMENT_ALLOWLIST_V1.iter().copied())
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .process_group(0);
+            let mut child = command.spawn().map_err(|error| {
+                WorkerExecutionError::io(WorkerExecutionErrorKind::Spawn, error)
+            })?;
+            let capture = supervise(&mut child, request.canonical_bytes(), limits)?;
+
+            if !capture.status.success() {
+                return Err(WorkerExecutionError::process(
+                    WorkerExecutionErrorKind::ExitFailure(termination(capture.status)),
+                    &capture,
+                ));
+            }
+            if capture.request_written != request.canonical_bytes().len() {
+                return Err(WorkerExecutionError::process(
+                    WorkerExecutionErrorKind::RequestWriteIncomplete,
+                    &capture,
+                ));
+            }
+            if !capture.stderr.bytes.is_empty() {
+                return Err(WorkerExecutionError::process(
+                    WorkerExecutionErrorKind::UnexpectedStderr,
+                    &capture,
+                ));
+            }
+            let response = WorkerResponseV2::decode_for_request(&capture.stdout.bytes, request)
+                .map_err(|error| {
+                    WorkerExecutionError::process(
+                        WorkerExecutionErrorKind::DecodeResponse(error),
+                        &capture,
+                    )
+                })?;
+            if response.worker_build_identity() != self.measurement.worker_build_identity {
+                return Err(WorkerExecutionError::process(
+                    WorkerExecutionErrorKind::WorkerBuildIdentityMismatch,
+                    &capture,
+                ));
+            }
+            if response.output().is_some_and(|output| {
+                output.bytes().len() as u64 > request.output_constraints().max_bytes()
+                    || !output.identity().matches(output.bytes())
+                    || output.request_identity() != request.identity()
+                    || output.compiler_envelope_identity() != request.compiler_envelope_identity()
+            }) {
+                return Err(WorkerExecutionError::process(
+                    WorkerExecutionErrorKind::OutputLimitExceeded,
+                    &capture,
+                ));
+            }
+            Ok(InertWorkerExecutionV2 {
                 worker_executable: self.measurement.executable,
                 response,
             })
@@ -926,6 +1052,16 @@ impl PinnedWorkerV1 {
         _request: &WorkerRequestV1,
         _limits: WorkerExecutionLimitsV1,
     ) -> Result<InertWorkerExecutionV1, WorkerExecutionError> {
+        Err(WorkerExecutionError::plain(
+            WorkerExecutionErrorKind::UnsupportedPlatform,
+        ))
+    }
+
+    pub fn execute_v2(
+        &self,
+        _request: &WorkerRequestV2,
+        _limits: WorkerExecutionLimitsV1,
+    ) -> Result<InertWorkerExecutionV2, WorkerExecutionError> {
         Err(WorkerExecutionError::plain(
             WorkerExecutionErrorKind::UnsupportedPlatform,
         ))

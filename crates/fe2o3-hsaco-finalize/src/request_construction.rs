@@ -6,14 +6,56 @@ use fe2o3_kernel_descriptor::{CodeObjectVersion, DeviceTargetV1};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    ContentIdentityV1, LinkPlanIdentityV1, MultiInputLinkPlanV1, WorkerInputKindV1, WorkerInputV1,
-    WorkerOptimizationLevelV1, WorkerOptionsV1, WorkerOutputConstraintsV1, WorkerProtocolError,
-    WorkerRequestV1, worker_protocol::validate_symbols,
+    ContentIdentityV1, LinkPlanIdentityV1, MultiInputLinkPlanV1, StagedCompilerFfiEnvelopeV1,
+    WorkerInputKindV1, WorkerInputV1, WorkerMeasurementV1, WorkerOptimizationLevelV1,
+    WorkerOptionsV1, WorkerOutputConstraintsV1, WorkerProtocolError, WorkerRequestV1,
+    WorkerRequestV2,
+    worker_protocol::validate_symbols,
+    worker_protocol_v2::{SealedWorkerRequestV2Parts, WorkerCompilerFfiEnvelopeIdentityV2},
 };
 
 const INPUT_KIND_CLOSURE_DOMAIN_V1: &[u8] = b"FE2O3/DEVICE-LINK-INPUT-KIND-CLOSURE/V1\0";
 const SYMBOL_CLOSURE_DOMAIN_V1: &[u8] = b"FE2O3/DEVICE-LINK-SYMBOL-CLOSURE/V1\0";
 const PLAN_REQUEST_DOMAIN_V1: &[u8] = b"FE2O3/PLAN-BOUND-WORKER-REQUEST/V1\0";
+const PLAN_REQUEST_DOMAIN_V2: &[u8] = b"FE2O3/PLAN-BOUND-WORKER-REQUEST/V2\0";
+
+/// Exact compiler-module bytes retained without accepting a caller-supplied digest.
+///
+/// This neutral witness exists until G3 provides its own sealed artifact type. It
+/// authenticates only byte/kind consistency, not compiler origin, and can only be
+/// consumed by the sealed Worker V2 constructor.
+#[derive(Debug, Eq, PartialEq)]
+pub struct ExactCompilerModuleArtifactV1 {
+    input: WorkerInputV1,
+}
+
+impl ExactCompilerModuleArtifactV1 {
+    pub const fn identity(&self) -> ContentIdentityV1 {
+        self.input.identity()
+    }
+
+    pub const fn kind(&self) -> WorkerInputKindV1 {
+        self.input.kind()
+    }
+
+    pub const fn grants_link_authority(&self) -> bool {
+        false
+    }
+
+    fn into_input(self) -> WorkerInputV1 {
+        self.input
+    }
+}
+
+/// Seals exact compiler-module bytes into a non-forgeable-by-digest witness.
+pub fn stage_exact_compiler_module_artifact_v1(
+    kind: WorkerInputKindV1,
+    bytes: Vec<u8>,
+) -> Result<ExactCompilerModuleArtifactV1, WorkerProtocolError> {
+    Ok(ExactCompilerModuleArtifactV1 {
+        input: WorkerInputV1::new(kind, bytes)?,
+    })
+}
 
 /// Stable identity of a canonical required/import/export symbol closure.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -248,6 +290,119 @@ pub fn construct_worker_request_v1(
     .map_err(WorkerRequestConstructionError::WorkerProtocol)
 }
 
+/// Builds one compiler-FFI-aware V2 request through the sealed path.
+///
+/// The complete staged compiler envelope and exact compiler-module witness are
+/// consumed. The module plus every external provider must exactly cover the
+/// plan inputs; the envelope target/version and directional contract counts
+/// must match the explicit symbol closure. No V1 request participates in this
+/// construction.
+#[allow(clippy::too_many_arguments)]
+pub fn construct_worker_request_v2(
+    plan: &MultiInputLinkPlanV1,
+    measurement: &WorkerMeasurementV1,
+    target: DeviceTargetV1,
+    code_object_version: CodeObjectVersion,
+    options: WorkerOptionsV1,
+    staged_envelope: StagedCompilerFfiEnvelopeV1,
+    compiler_module: ExactCompilerModuleArtifactV1,
+    external_providers: Vec<WorkerInputV1>,
+    input_kinds: &LinkInputKindClosureV1,
+    symbols: &LinkSymbolClosureV1,
+    output: WorkerOutputConstraintsV1,
+) -> Result<WorkerRequestV2, WorkerRequestConstructionError> {
+    if target != plan.target() {
+        return Err(WorkerRequestConstructionError::TargetMismatch);
+    }
+    let envelope = staged_envelope.inspection();
+    if envelope.target() != target {
+        return Err(WorkerRequestConstructionError::CompilerEnvelopeTargetMismatch);
+    }
+    if envelope.code_object_version() != code_object_version {
+        return Err(WorkerRequestConstructionError::CompilerEnvelopeCodeObjectVersionMismatch);
+    }
+    if envelope.import_count() != symbols.import_symbols.len() {
+        return Err(
+            WorkerRequestConstructionError::CompilerEnvelopeImportCountMismatch {
+                envelope: envelope.import_count(),
+                symbols: symbols.import_symbols.len(),
+            },
+        );
+    }
+    if envelope.export_count() != symbols.export_symbols.len() {
+        return Err(
+            WorkerRequestConstructionError::CompilerEnvelopeExportCountMismatch {
+                envelope: envelope.export_count(),
+                symbols: symbols.export_symbols.len(),
+            },
+        );
+    }
+    let (planned_code_object_version, planned_options) = decode_plan_options(plan)?;
+    if code_object_version != planned_code_object_version {
+        return Err(WorkerRequestConstructionError::CodeObjectVersionMismatch {
+            planned: planned_code_object_version,
+            requested: code_object_version,
+        });
+    }
+    if options != planned_options {
+        return Err(WorkerRequestConstructionError::OptionsMismatch {
+            planned: planned_options,
+            requested: options,
+        });
+    }
+    let expected_output_bytes = plan.output().identity().byte_len();
+    if output.max_bytes() != expected_output_bytes {
+        return Err(WorkerRequestConstructionError::OutputBoundMismatch {
+            planned: expected_output_bytes,
+            requested: output.max_bytes(),
+        });
+    }
+
+    let compiler_module = compiler_module.into_input();
+    let mut all_inputs = external_providers.clone();
+    all_inputs.push(compiler_module.clone());
+    all_inputs.sort_by_key(|input| (input.identity(), input.kind()));
+    validate_inputs(plan, input_kinds, &all_inputs)?;
+
+    let request_id = calculate_request_id_v2(
+        plan,
+        measurement,
+        staged_envelope.identity().as_bytes(),
+        envelope.envelope_identity().as_bytes(),
+        target,
+        code_object_version,
+        options,
+        &compiler_module,
+        &external_providers,
+        input_kinds,
+        symbols,
+        &output,
+    );
+    if request_id == [0; 32] {
+        return Err(WorkerRequestConstructionError::ReservedRequestId);
+    }
+
+    WorkerRequestV2::from_sealed_parts(SealedWorkerRequestV2Parts {
+        request_id,
+        llvm_build_identity: measurement.llvm_build_identity().to_owned(),
+        worker_build_identity: measurement.worker_build_identity().to_owned(),
+        worker_executable: measurement.executable(),
+        target,
+        code_object_version,
+        options,
+        compiler_envelope: WorkerCompilerFfiEnvelopeIdentityV2::from_compiler_identity(
+            envelope.envelope_identity(),
+        ),
+        compiler_module,
+        external_providers,
+        import_symbols: symbols.import_symbols.clone(),
+        export_symbols: symbols.export_symbols.clone(),
+        final_symbols: symbols.required_symbols.clone(),
+        output,
+    })
+    .map_err(WorkerRequestConstructionError::WorkerProtocol)
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum WorkerRequestConstructionError {
@@ -258,6 +413,16 @@ pub enum WorkerRequestConstructionError {
     UnreferencedImport(String),
     UnreferencedExport(String),
     ConflictingSymbolRole(String),
+    CompilerEnvelopeTargetMismatch,
+    CompilerEnvelopeCodeObjectVersionMismatch,
+    CompilerEnvelopeImportCountMismatch {
+        envelope: usize,
+        symbols: usize,
+    },
+    CompilerEnvelopeExportCountMismatch {
+        envelope: usize,
+        symbols: usize,
+    },
     TargetMismatch,
     MissingCodeObjectVersion,
     InvalidCodeObjectVersion(String),
@@ -336,6 +501,20 @@ impl fmt::Display for WorkerRequestConstructionError {
             Self::ConflictingSymbolRole(symbol) => {
                 write!(formatter, "symbol {symbol} is both imported and exported")
             }
+            Self::CompilerEnvelopeTargetMismatch => {
+                formatter.write_str("compiler FFI envelope target does not match worker request")
+            }
+            Self::CompilerEnvelopeCodeObjectVersionMismatch => formatter.write_str(
+                "compiler FFI envelope code-object version does not match worker request",
+            ),
+            Self::CompilerEnvelopeImportCountMismatch { envelope, symbols } => write!(
+                formatter,
+                "compiler envelope import count {envelope} does not match symbol closure {symbols}"
+            ),
+            Self::CompilerEnvelopeExportCountMismatch { envelope, symbols } => write!(
+                formatter,
+                "compiler envelope export count {envelope} does not match symbol closure {symbols}"
+            ),
             Self::TargetMismatch => {
                 formatter.write_str("worker request target does not match link plan")
             }
@@ -584,6 +763,57 @@ fn calculate_request_id(
     }
     hasher.update(output.max_bytes().to_le_bytes());
     hasher.finalize().into()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn calculate_request_id_v2(
+    plan: &MultiInputLinkPlanV1,
+    measurement: &WorkerMeasurementV1,
+    staged_envelope_identity: [u8; 32],
+    compiler_envelope_identity: [u8; 32],
+    target: DeviceTargetV1,
+    code_object_version: CodeObjectVersion,
+    options: WorkerOptionsV1,
+    compiler_module: &WorkerInputV1,
+    external_providers: &[WorkerInputV1],
+    input_kinds: &LinkInputKindClosureV1,
+    symbols: &LinkSymbolClosureV1,
+    output: &WorkerOutputConstraintsV1,
+) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(PLAN_REQUEST_DOMAIN_V2);
+    hasher.update(plan.identity().as_bytes());
+    hasher.update(input_kinds.identity.as_bytes());
+    hasher.update(symbols.identity.as_bytes());
+    hasher.update(staged_envelope_identity);
+    hasher.update(compiler_envelope_identity);
+    hasher.update(measurement.executable().sha256());
+    hasher.update(measurement.executable().byte_len().to_le_bytes());
+    hash_text(&mut hasher, measurement.worker_build_identity());
+    hash_text(&mut hasher, measurement.llvm_build_identity());
+    hash_text(&mut hasher, &target.to_string());
+    hasher.update([code_object_version_byte(code_object_version)]);
+    hasher.update([
+        options.optimization() as u8,
+        u8::from(options.strip_debug()),
+        u8::from(options.verify_each()),
+    ]);
+    hash_input(&mut hasher, compiler_module);
+    hasher.update((external_providers.len() as u64).to_le_bytes());
+    for input in external_providers {
+        hash_input(&mut hasher, input);
+    }
+    hash_strings(&mut hasher, &symbols.import_symbols);
+    hash_strings(&mut hasher, &symbols.export_symbols);
+    hash_strings(&mut hasher, &symbols.required_symbols);
+    hasher.update(output.max_bytes().to_le_bytes());
+    hasher.finalize().into()
+}
+
+fn hash_input(hasher: &mut Sha256, input: &WorkerInputV1) {
+    hasher.update([input.kind() as u8]);
+    hasher.update(input.identity().sha256());
+    hasher.update(input.identity().byte_len().to_le_bytes());
 }
 
 fn hash_strings(hasher: &mut Sha256, strings: &[String]) {
