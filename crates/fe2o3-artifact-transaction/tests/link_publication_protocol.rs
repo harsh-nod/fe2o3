@@ -441,7 +441,7 @@ fn published_restart_requires_exact_catalog_identity() {
 }
 
 #[test]
-fn published_identity_mutation_invalidates_only_the_owned_scope() {
+fn published_identity_mutation_cannot_remove_the_valid_publication() {
     let mut catalog = LinkPublicationCatalogV1::default();
     let mutated_attempt = attempt(1, 13);
     let unrelated_attempt = attempt(2, 14);
@@ -459,6 +459,7 @@ fn published_identity_mutation_invalidates_only_the_owned_scope() {
         unrelated_scope,
         identities(140),
     );
+    let mutated_before = *catalog.published(&mutated_scope).unwrap();
     let unrelated_before = *catalog.published(&unrelated_scope).unwrap();
 
     let mut encoded = mutated.encode_canonical().unwrap();
@@ -475,8 +476,55 @@ fn published_identity_mutation_invalidates_only_the_owned_scope() {
             reason: InvalidationReasonV1::CorruptPublication,
         }
     );
-    assert!(catalog.published(&mutated_scope).is_none());
+    assert_eq!(catalog.published(&mutated_scope), Some(&mutated_before));
     assert_eq!(catalog.published(&unrelated_scope), Some(&unrelated_before));
+}
+
+#[test]
+fn same_attempt_different_request_stale_recovery_preserves_valid_publication() {
+    let attempt = attempt(7, 15);
+    let scope = scope(13);
+    let valid_ids = identities(150);
+    let stale_ids = identities(160);
+
+    let mut valid_catalog = LinkPublicationCatalogV1::default();
+    let valid = publish(&mut valid_catalog, attempt, scope, valid_ids);
+    let valid_artifact = *valid_catalog.published(&scope).unwrap();
+
+    let mut stale_catalog = LinkPublicationCatalogV1::default();
+    let mut stale = publish(&mut stale_catalog, attempt, scope, stale_ids);
+    assert_ne!(stale.request(), valid.request());
+
+    assert_eq!(
+        stale.recover(&mut valid_catalog),
+        Ok(RecoveryOutcomeV1::InvalidatedStaleAttempt)
+    );
+    assert_eq!(valid_catalog.published(&scope), Some(&valid_artifact));
+    assert_eq!(valid_catalog.active_attempt(&scope), Some(attempt));
+}
+
+#[test]
+fn same_attempt_request_but_different_publication_cannot_claim_catalog_ownership() {
+    let attempt = attempt(8, 16);
+    let scope = scope(14);
+    let valid_ids = identities(170);
+    let mut conflicting_ids = valid_ids;
+    conflicting_ids.publication = AtomicPublicationIdentityV1::from_bytes([0xfd; 32]);
+
+    let mut valid_catalog = LinkPublicationCatalogV1::default();
+    publish(&mut valid_catalog, attempt, scope, valid_ids);
+    let valid_artifact = *valid_catalog.published(&scope).unwrap();
+
+    let mut conflicting_catalog = LinkPublicationCatalogV1::default();
+    let mut conflicting = publish(&mut conflicting_catalog, attempt, scope, conflicting_ids);
+    assert_eq!(conflicting.request(), valid_ids.request);
+
+    assert_eq!(
+        conflicting.recover(&mut valid_catalog),
+        Ok(RecoveryOutcomeV1::InvalidatedCorruptPublication)
+    );
+    assert_eq!(valid_catalog.published(&scope), Some(&valid_artifact));
+    assert!(valid_catalog.active_attempt(&scope).is_none());
 }
 
 #[test]

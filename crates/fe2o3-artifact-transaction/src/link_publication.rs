@@ -461,8 +461,8 @@ impl LinkPublicationRecordV1 {
         };
 
         let mut next_catalog = catalog.clone();
-        next_catalog.remove_owned(self.scope, self.attempt);
-        next_catalog.deactivate(self.scope, self.attempt);
+        next_catalog.remove_owned(self);
+        next_catalog.deactivate(self.scope, self.attempt, self.evidence.request);
         self.state = LinkPublicationStateV1::Invalidated {
             prior_phase,
             reason,
@@ -474,28 +474,28 @@ impl LinkPublicationRecordV1 {
     /// Reconciles a decoded record after restart.
     ///
     /// Incomplete or stale records are invalidated and only publication state owned by their exact
-    /// attempt is removed. A published record survives only when the catalog contains the exact
-    /// same identity chain.
+    /// scope, attempt, request, and complete publication chain is removed. A published record
+    /// survives only when the catalog contains the exact same identity chain.
     pub fn recover(
         &mut self,
         catalog: &mut LinkPublicationCatalogV1,
     ) -> Result<RecoveryOutcomeV1, LinkPublicationCodecError> {
         self.validate()?;
         if matches!(self.state, LinkPublicationStateV1::Invalidated { .. }) {
-            catalog.remove_owned(self.scope, self.attempt);
-            catalog.deactivate(self.scope, self.attempt);
+            catalog.remove_owned(self);
+            catalog.deactivate(self.scope, self.attempt, self.evidence.request);
             return Ok(RecoveryOutcomeV1::AlreadyInvalidated);
         }
 
         if self.state == LinkPublicationStateV1::Active(LinkPublicationPhaseV1::Published) {
             let expected = self.published_artifact()?;
             if catalog.published(&self.scope) == Some(&expected) {
-                catalog.deactivate(self.scope, self.attempt);
+                catalog.deactivate(self.scope, self.attempt, self.evidence.request);
                 return Ok(RecoveryOutcomeV1::PublicationConfirmed);
             }
             if catalog.is_current(self.scope, self.attempt, self.evidence.request) {
-                catalog.remove_owned(self.scope, self.attempt);
-                catalog.deactivate(self.scope, self.attempt);
+                catalog.remove_owned(self);
+                catalog.deactivate(self.scope, self.attempt, self.evidence.request);
                 self.state = LinkPublicationStateV1::Invalidated {
                     prior_phase: LinkPublicationPhaseV1::Published,
                     reason: InvalidationReasonV1::CorruptPublication,
@@ -506,7 +506,7 @@ impl LinkPublicationRecordV1 {
 
         if !catalog.is_current(self.scope, self.attempt, self.evidence.request) {
             let prior_phase = self.state.evidence_phase();
-            catalog.remove_owned(self.scope, self.attempt);
+            catalog.remove_owned(self);
             self.state = LinkPublicationStateV1::Invalidated {
                 prior_phase,
                 reason: InvalidationReasonV1::StaleAttempt,
@@ -516,8 +516,8 @@ impl LinkPublicationRecordV1 {
 
         match self.state {
             LinkPublicationStateV1::Active(prior_phase) => {
-                catalog.remove_owned(self.scope, self.attempt);
-                catalog.deactivate(self.scope, self.attempt);
+                catalog.remove_owned(self);
+                catalog.deactivate(self.scope, self.attempt, self.evidence.request);
                 self.state = LinkPublicationStateV1::Invalidated {
                     prior_phase,
                     reason: InvalidationReasonV1::CrashRecovery,
@@ -885,21 +885,25 @@ impl LinkPublicationCatalogV1 {
         Ok(())
     }
 
-    fn remove_owned(&mut self, scope: LinkPublicationScopeV1, attempt: BuildAttempt) {
-        if self
-            .published
-            .get(&scope)
-            .is_some_and(|artifact| artifact.attempt == attempt)
-        {
-            self.published.remove(&scope);
+    fn remove_owned(&mut self, record: &LinkPublicationRecordV1) {
+        let Ok(expected) = record.published_artifact() else {
+            return;
+        };
+        if self.published.get(&record.scope) == Some(&expected) {
+            self.published.remove(&record.scope);
         }
     }
 
-    fn deactivate(&mut self, scope: LinkPublicationScopeV1, attempt: BuildAttempt) {
+    fn deactivate(
+        &mut self,
+        scope: LinkPublicationScopeV1,
+        attempt: BuildAttempt,
+        request: CanonicalLinkRequestIdentityV1,
+    ) {
         if self
             .active
             .get(&scope)
-            .is_some_and(|active| active.attempt == attempt)
+            .is_some_and(|active| *active == ActiveAttemptV1 { attempt, request })
         {
             self.active.remove(&scope);
         }
@@ -924,7 +928,8 @@ pub enum RecoveryOutcomeV1 {
     InvalidatedStaleAttempt,
     /// Published state and catalog identity agreed exactly.
     PublicationConfirmed,
-    /// Published state disagreed with the catalog and its owned entry was removed.
+    /// Published state disagreed with the catalog and the conflicting record was invalidated.
+    /// Catalog publication is retained unless the record identifies its complete chain exactly.
     InvalidatedCorruptPublication,
     /// The record was already terminal and cleanup remained idempotent.
     AlreadyInvalidated,

@@ -9,8 +9,14 @@ use fe2o3_artifacts::{
     CompilerIdentity, DIRECT_LINK_EVIDENCE_HEADER_BYTES, DIRECT_LINK_EVIDENCE_VERSION,
     DigestAlgorithm, DirectLinkBindingExpectationV1, DirectLinkBindingSourceV1,
     DirectLinkBundleEvidenceV1, DirectLinkDecodeError, DirectLinkEvidenceError,
-    DirectLinkToolIdentityV1, DirectLinkTransformationIdentityV1, MAX_DIRECT_LINK_BINDINGS,
-    MAX_DIRECT_LINK_EVIDENCE_BYTES, ManifestV1, PayloadDigest, PointerWidth, ToolIdentity,
+    DirectLinkFfiClosureIdentityV1, DirectLinkFinalizationIdentityV1,
+    DirectLinkFinalizedPayloadIdentityV1, DirectLinkLinkedOutputIdentityV1,
+    DirectLinkRequestIdentityV1, DirectLinkResponseIdentityV1,
+    DirectLinkToolchainConfigurationIdentityV1, DirectLinkToolchainExecutableIdentityV1,
+    DirectLinkToolchainIdentityV1, DirectLinkTransformationIdentityV1,
+    DirectLinkWorkerConfigurationIdentityV1, DirectLinkWorkerExecutableIdentityV1,
+    DirectLinkWorkerIdentityV1, MAX_DIRECT_LINK_BINDINGS, MAX_DIRECT_LINK_EVIDENCE_BYTES,
+    ManifestV1, PayloadDigest, PointerWidth, ToolIdentity,
 };
 
 struct Fixture {
@@ -18,12 +24,21 @@ struct Fixture {
     expectation: DirectLinkBindingExpectationV1,
 }
 
-fn measured(seed: u8, name: &str) -> DirectLinkToolIdentityV1 {
-    DirectLinkToolIdentityV1::new(
+fn measured_worker(seed: u8, name: &str) -> DirectLinkWorkerIdentityV1 {
+    DirectLinkWorkerIdentityV1::new(
         text(name),
         text("22.0.0-build.17"),
-        tagged(seed),
-        tagged(seed.wrapping_add(1)),
+        DirectLinkWorkerExecutableIdentityV1::new(tagged(seed)),
+        DirectLinkWorkerConfigurationIdentityV1::new(tagged(seed.wrapping_add(1))),
+    )
+}
+
+fn measured_toolchain(seed: u8, name: &str) -> DirectLinkToolchainIdentityV1 {
+    DirectLinkToolchainIdentityV1::new(
+        text(name),
+        text("22.0.0-build.17"),
+        DirectLinkToolchainExecutableIdentityV1::new(tagged(seed)),
+        DirectLinkToolchainConfigurationIdentityV1::new(tagged(seed.wrapping_add(1))),
     )
 }
 
@@ -33,16 +48,16 @@ fn tagged(seed: u8) -> PayloadDigest {
 
 fn expectation(seed: u8, payload: PayloadDigest) -> DirectLinkBindingExpectationV1 {
     DirectLinkBindingExpectationV1::new(
-        tagged(seed),
-        measured(0x80, "fe2o3-llvm-link-worker"),
-        measured(0x90, "rocm-llvm-lld"),
-        tagged(seed.wrapping_add(1)),
+        DirectLinkRequestIdentityV1::new(tagged(seed)),
+        measured_worker(0x80, "fe2o3-llvm-link-worker"),
+        measured_toolchain(0x90, "rocm-llvm-lld"),
+        DirectLinkResponseIdentityV1::new(tagged(seed.wrapping_add(1))),
         DirectLinkTransformationIdentityV1::new(
-            tagged(seed.wrapping_add(2)),
-            tagged(seed.wrapping_add(3)),
-            payload,
+            DirectLinkLinkedOutputIdentityV1::new(tagged(seed.wrapping_add(2))),
+            DirectLinkFinalizationIdentityV1::new(tagged(seed.wrapping_add(3))),
+            DirectLinkFinalizedPayloadIdentityV1::new(payload),
         ),
-        tagged(seed.wrapping_add(4)),
+        DirectLinkFfiClosureIdentityV1::new(tagged(seed.wrapping_add(4))),
     )
 }
 
@@ -136,6 +151,14 @@ fn canonical_round_trip_binds_exact_container_bundle_and_provenance() {
     let decoded = DirectLinkBundleEvidenceV1::from_bytes(&bytes).unwrap();
 
     assert_eq!(decoded, record);
+    assert_eq!(
+        *record.digest(DigestAlgorithm::Sha256).bytes().as_bytes(),
+        [
+            0xb0, 0x3d, 0x55, 0x10, 0xcf, 0xa9, 0x7f, 0xee, 0xa2, 0xa9, 0xb0, 0x19, 0x81, 0x90,
+            0x20, 0xdb, 0x7d, 0xdf, 0x56, 0x26, 0x6d, 0xbd, 0x3b, 0x16, 0x1d, 0x01, 0x77, 0x97,
+            0xc1, 0x80, 0xd4, 0xe0,
+        ]
+    );
     assert_eq!(decoded.to_bytes(), bytes);
     assert!(!decoded.grants_load_authority());
     assert!(!decoded.grants_launch_authority());
@@ -173,7 +196,7 @@ fn every_provenance_substitution_is_rejected_by_external_matching() {
 
     let substitutions = [
         DirectLinkBindingExpectationV1::new(
-            tagged(0x01),
+            DirectLinkRequestIdentityV1::new(tagged(0x01)),
             worker.clone(),
             toolchain.clone(),
             response,
@@ -182,7 +205,7 @@ fn every_provenance_substitution_is_rejected_by_external_matching() {
         ),
         DirectLinkBindingExpectationV1::new(
             request,
-            measured(0x02, "substituted-worker"),
+            measured_worker(0x02, "substituted-worker"),
             toolchain.clone(),
             response,
             DirectLinkTransformationIdentityV1::new(linked, finalization, payload),
@@ -191,7 +214,7 @@ fn every_provenance_substitution_is_rejected_by_external_matching() {
         DirectLinkBindingExpectationV1::new(
             request,
             worker.clone(),
-            measured(0x03, "substituted-toolchain"),
+            measured_toolchain(0x03, "substituted-toolchain"),
             response,
             DirectLinkTransformationIdentityV1::new(linked, finalization, payload),
             ffi,
@@ -200,7 +223,7 @@ fn every_provenance_substitution_is_rejected_by_external_matching() {
             request,
             worker.clone(),
             toolchain.clone(),
-            tagged(0x04),
+            DirectLinkResponseIdentityV1::new(tagged(0x04)),
             DirectLinkTransformationIdentityV1::new(linked, finalization, payload),
             ffi,
         ),
@@ -209,7 +232,11 @@ fn every_provenance_substitution_is_rejected_by_external_matching() {
             worker.clone(),
             toolchain.clone(),
             response,
-            DirectLinkTransformationIdentityV1::new(tagged(0x05), finalization, payload),
+            DirectLinkTransformationIdentityV1::new(
+                DirectLinkLinkedOutputIdentityV1::new(tagged(0x05)),
+                finalization,
+                payload,
+            ),
             ffi,
         ),
         DirectLinkBindingExpectationV1::new(
@@ -217,7 +244,11 @@ fn every_provenance_substitution_is_rejected_by_external_matching() {
             worker.clone(),
             toolchain.clone(),
             response,
-            DirectLinkTransformationIdentityV1::new(linked, tagged(0x06), payload),
+            DirectLinkTransformationIdentityV1::new(
+                linked,
+                DirectLinkFinalizationIdentityV1::new(tagged(0x06)),
+                payload,
+            ),
             ffi,
         ),
         DirectLinkBindingExpectationV1::new(
@@ -225,7 +256,11 @@ fn every_provenance_substitution_is_rejected_by_external_matching() {
             worker.clone(),
             toolchain.clone(),
             response,
-            DirectLinkTransformationIdentityV1::new(linked, finalization, tagged(0x07)),
+            DirectLinkTransformationIdentityV1::new(
+                linked,
+                finalization,
+                DirectLinkFinalizedPayloadIdentityV1::new(tagged(0x07)),
+            ),
             ffi,
         ),
         DirectLinkBindingExpectationV1::new(
@@ -234,7 +269,7 @@ fn every_provenance_substitution_is_rejected_by_external_matching() {
             toolchain,
             response,
             DirectLinkTransformationIdentityV1::new(linked, finalization, payload),
-            tagged(0x08),
+            DirectLinkFfiClosureIdentityV1::new(tagged(0x08)),
         ),
     ];
 
@@ -249,7 +284,10 @@ fn every_provenance_substitution_is_rejected_by_external_matching() {
         );
     }
 
-    assert_ne!(original.expectation.linked_output_identity(), payload);
+    assert_ne!(
+        original.expectation.linked_output_identity().digest(),
+        payload.digest()
+    );
 }
 
 #[test]
@@ -288,12 +326,67 @@ fn container_and_bundle_substitution_and_extra_inputs_are_rejected() {
 }
 
 #[test]
+fn bundle_evidence_requires_exact_container_and_binding_closure() {
+    let first = fixture(0x43, CodeObjectFormat::NativeExecutable);
+    let second = fixture(0x44, CodeObjectFormat::NativeExecutable);
+    let extra = fixture(0x45, CodeObjectFormat::NativeExecutable);
+    let bundle = bundle_for(&[&first, &second]);
+
+    let first_only = [DirectLinkBindingSourceV1::new(
+        &first.container,
+        first.expectation.clone(),
+    )];
+    assert_eq!(
+        DirectLinkBundleEvidenceV1::bind(&bundle, &first_only),
+        Err(DirectLinkEvidenceError::MissingContainer)
+    );
+
+    let record = evidence(&bundle, [&first, &second]);
+    assert_eq!(
+        record.validate_against(
+            &bundle,
+            std::slice::from_ref(&first.container),
+            &[first.expectation.clone(), second.expectation.clone()],
+        ),
+        Err(DirectLinkEvidenceError::MissingContainer)
+    );
+    assert_eq!(
+        record.validate_against(
+            &bundle,
+            &[first.container, second.container, extra.container],
+            &[first.expectation, second.expectation],
+        ),
+        Err(DirectLinkEvidenceError::ExtraContainer)
+    );
+}
+
+#[test]
+fn explicit_request_response_domain_swap_cannot_match_runtime_policy() {
+    let item = fixture(0x46, CodeObjectFormat::NativeExecutable);
+    let bundle = bundle_for(&[&item]);
+    let record = evidence(&bundle, [&item]);
+    let swapped = DirectLinkBindingExpectationV1::new(
+        DirectLinkRequestIdentityV1::new(item.expectation.response_identity().digest()),
+        item.expectation.worker().clone(),
+        item.expectation.toolchain().clone(),
+        DirectLinkResponseIdentityV1::new(item.expectation.request_identity().digest()),
+        item.expectation.transformation(),
+        item.expectation.ffi_contract_identity(),
+    );
+
+    assert_eq!(
+        record.validate_against(&bundle, std::slice::from_ref(&item.container), &[swapped],),
+        Err(DirectLinkEvidenceError::ExpectationMismatch)
+    );
+}
+
+#[test]
 fn binding_requires_native_payload_and_complete_bundle_membership() {
     let native = fixture(0x51, CodeObjectFormat::NativeExecutable);
     let other = fixture(0x52, CodeObjectFormat::NativeExecutable);
     assert_ne!(
-        native.expectation.linked_output_identity(),
-        native.expectation.finalized_payload_identity()
+        native.expectation.linked_output_identity().digest(),
+        native.expectation.finalized_payload_identity().digest()
     );
     let unrelated_bundle =
         BundleIndexV1::from_containers(std::slice::from_ref(&other.container)).unwrap();
@@ -311,7 +404,7 @@ fn binding_requires_native_payload_and_complete_bundle_membership() {
         native.expectation.toolchain().clone(),
         native.expectation.response_identity(),
         DirectLinkTransformationIdentityV1::new(
-            tagged(0xf1),
+            DirectLinkLinkedOutputIdentityV1::new(tagged(0xf1)),
             native.expectation.finalization_identity(),
             native.expectation.finalized_payload_identity(),
         ),
@@ -328,7 +421,7 @@ fn binding_requires_native_payload_and_complete_bundle_membership() {
         DirectLinkTransformationIdentityV1::new(
             native.expectation.linked_output_identity(),
             native.expectation.finalization_identity(),
-            tagged(0xf2),
+            DirectLinkFinalizedPayloadIdentityV1::new(tagged(0xf2)),
         ),
         native.expectation.ffi_contract_identity(),
     );
@@ -387,6 +480,40 @@ fn binding_requires_native_payload_and_complete_bundle_membership() {
     assert_eq!(
         DirectLinkBundleEvidenceV1::bind(&bundle, &[source]),
         Err(DirectLinkEvidenceError::UnreferencedFinalizedPayload)
+    );
+}
+
+#[test]
+fn every_native_payload_in_a_container_requires_one_binding() {
+    let first =
+        CodeObjectPayload::from_bytes(DigestAlgorithm::Sha256, b"first native payload".to_vec())
+            .unwrap();
+    let second =
+        CodeObjectPayload::from_bytes(DigestAlgorithm::Sha256, b"second native payload".to_vec())
+            .unwrap();
+    let manifest = ManifestV1::new(
+        CompilerIdentity::new(text("rustc"), text("1.94.0")),
+        ToolIdentity::new(text("fe2o3"), text("0.1.0")),
+        target(PointerWidth::Bits64, vec![]),
+        vec![
+            object_identity(first.digest().bytes(), first.bytes().len() as u64),
+            object_identity(second.digest().bytes(), second.bytes().len() as u64),
+        ],
+        vec![
+            kernel_with_object_digest(0x56, "first", "first.kd", first.digest().bytes(), vec![]),
+            kernel_with_object_digest(0x57, "second", "second.kd", second.digest().bytes(), vec![]),
+        ],
+    )
+    .unwrap();
+    let first_identity = first.digest();
+    let container =
+        ArtifactContainerV1::new(manifest, DigestAlgorithm::Sha256, vec![first, second]).unwrap();
+    let bundle = BundleIndexV1::from_containers(std::slice::from_ref(&container)).unwrap();
+    let source = DirectLinkBindingSourceV1::new(&container, expectation(0x58, first_identity));
+
+    assert_eq!(
+        DirectLinkBundleEvidenceV1::bind(&bundle, &[source]),
+        Err(DirectLinkEvidenceError::MissingExecutableBinding)
     );
 }
 
@@ -518,8 +645,8 @@ fn duplicate_and_noncanonical_wire_bindings_are_rejected() {
     let combined = evidence(&bundle, [&first, &second]);
 
     let mut duplicate_request = combined.to_bytes();
-    let first_request = first.expectation.request_identity().bytes();
-    let second_request = second.expectation.request_identity().bytes();
+    let first_request = first.expectation.request_identity().digest().bytes();
+    let second_request = second.expectation.request_identity().digest().bytes();
     let second_request_at = find(&duplicate_request, second_request.as_bytes());
     duplicate_request[second_request_at..second_request_at + 32]
         .copy_from_slice(first_request.as_bytes());
@@ -532,10 +659,13 @@ fn duplicate_and_noncanonical_wire_bindings_are_rejected() {
         ))
     );
 
+    let first_bundle = bundle_for(&[&first]);
+    let second_bundle = bundle_for(&[&second]);
     let first_entry =
-        evidence(&bundle, [&first]).to_bytes()[DIRECT_LINK_EVIDENCE_HEADER_BYTES..].to_vec();
-    let second_entry =
-        evidence(&bundle, [&second]).to_bytes()[DIRECT_LINK_EVIDENCE_HEADER_BYTES..].to_vec();
+        evidence(&first_bundle, [&first]).to_bytes()[DIRECT_LINK_EVIDENCE_HEADER_BYTES..].to_vec();
+    let second_entry = evidence(&second_bundle, [&second]).to_bytes()
+        [DIRECT_LINK_EVIDENCE_HEADER_BYTES..]
+        .to_vec();
     assert_eq!(first_entry.len(), second_entry.len());
     let mut reversed = combined.to_bytes();
     let body = &reversed[DIRECT_LINK_EVIDENCE_HEADER_BYTES..];
@@ -588,7 +718,7 @@ fn valid_identity_mutation_changes_record_digest_and_cannot_match_original_polic
     let original = evidence(&bundle, [&item]);
     let payload = item.expectation.finalized_payload_identity();
     let changed_expectation = DirectLinkBindingExpectationV1::new(
-        tagged(0xee),
+        DirectLinkRequestIdentityV1::new(tagged(0xee)),
         item.expectation.worker().clone(),
         item.expectation.toolchain().clone(),
         item.expectation.response_identity(),

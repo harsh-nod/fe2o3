@@ -1,6 +1,7 @@
 use crate::{
     DigestAlgorithm, DirectLinkBindingExpectationV1, DirectLinkBindingV1,
-    DirectLinkBundleEvidenceV1, DirectLinkToolIdentityV1, IdentityText, PayloadDigest,
+    DirectLinkBundleEvidenceV1, DirectLinkToolchainIdentityV1, DirectLinkWorkerIdentityV1,
+    IdentityText, PayloadDigest,
 };
 
 pub const DIRECT_LINK_EVIDENCE_MAGIC: [u8; 8] = *b"FE2O3DL\0";
@@ -15,7 +16,7 @@ impl DirectLinkBundleEvidenceV1 {
         writer.bytes(&DIRECT_LINK_EVIDENCE_MAGIC);
         writer.u16(DIRECT_LINK_EVIDENCE_VERSION);
         writer.u16(0);
-        writer.payload_digest(self.bundle_index_identity());
+        writer.payload_digest(self.bundle_index_identity().digest());
         writer.u16(self.bindings().len() as u16);
         writer.u16(0);
         for binding in self.bindings() {
@@ -64,26 +65,33 @@ impl Writer {
         self.bytes(value.bytes().as_bytes());
     }
 
-    fn tool(&mut self, tool: &DirectLinkToolIdentityV1) {
+    fn worker(&mut self, tool: &DirectLinkWorkerIdentityV1) {
         self.text(tool.name());
         self.text(tool.version());
-        self.payload_digest(tool.executable_digest());
-        self.payload_digest(tool.configuration_digest());
+        self.payload_digest(tool.executable_digest().digest());
+        self.payload_digest(tool.configuration_digest().digest());
+    }
+
+    fn toolchain(&mut self, tool: &DirectLinkToolchainIdentityV1) {
+        self.text(tool.name());
+        self.text(tool.version());
+        self.payload_digest(tool.executable_digest().digest());
+        self.payload_digest(tool.configuration_digest().digest());
     }
 
     fn expectation(&mut self, expectation: &DirectLinkBindingExpectationV1) {
-        self.payload_digest(expectation.request_identity());
-        self.tool(expectation.worker());
-        self.tool(expectation.toolchain());
-        self.payload_digest(expectation.response_identity());
-        self.payload_digest(expectation.linked_output_identity());
-        self.payload_digest(expectation.finalization_identity());
-        self.payload_digest(expectation.finalized_payload_identity());
-        self.payload_digest(expectation.ffi_contract_identity());
+        self.payload_digest(expectation.request_identity().digest());
+        self.worker(expectation.worker());
+        self.toolchain(expectation.toolchain());
+        self.payload_digest(expectation.response_identity().digest());
+        self.payload_digest(expectation.linked_output_identity().digest());
+        self.payload_digest(expectation.finalization_identity().digest());
+        self.payload_digest(expectation.finalized_payload_identity().digest());
+        self.payload_digest(expectation.ffi_contract_identity().digest());
     }
 
     fn binding(&mut self, binding: &DirectLinkBindingV1) {
-        self.payload_digest(binding.container_identity());
+        self.payload_digest(binding.container_identity().digest());
         self.expectation(binding.expectation());
     }
 }

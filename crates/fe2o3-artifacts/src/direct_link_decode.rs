@@ -3,8 +3,14 @@ use std::fmt;
 use crate::{
     DIRECT_LINK_EVIDENCE_HEADER_BYTES, DIRECT_LINK_EVIDENCE_MAGIC, DIRECT_LINK_EVIDENCE_VERSION,
     DigestAlgorithm, DigestBytes, DirectLinkBindingExpectationV1, DirectLinkBindingV1,
-    DirectLinkBundleEvidenceV1, DirectLinkEvidenceError, DirectLinkToolIdentityV1,
-    DirectLinkTransformationIdentityV1, IdentityText, MAX_DIRECT_LINK_BINDINGS,
+    DirectLinkBundleEvidenceV1, DirectLinkBundleIndexIdentityV1, DirectLinkContainerIdentityV1,
+    DirectLinkEvidenceError, DirectLinkFfiClosureIdentityV1, DirectLinkFinalizationIdentityV1,
+    DirectLinkFinalizedPayloadIdentityV1, DirectLinkLinkedOutputIdentityV1,
+    DirectLinkRequestIdentityV1, DirectLinkResponseIdentityV1,
+    DirectLinkToolchainConfigurationIdentityV1, DirectLinkToolchainExecutableIdentityV1,
+    DirectLinkToolchainIdentityV1, DirectLinkTransformationIdentityV1,
+    DirectLinkWorkerConfigurationIdentityV1, DirectLinkWorkerExecutableIdentityV1,
+    DirectLinkWorkerIdentityV1, IdentityText, MAX_DIRECT_LINK_BINDINGS,
     MAX_DIRECT_LINK_EVIDENCE_BYTES, MAX_IDENTITY_TEXT_BYTES, PayloadDigest, ValidationError,
 };
 
@@ -35,7 +41,7 @@ impl DirectLinkBundleEvidenceV1 {
         if flags != 0 {
             return Err(DirectLinkDecodeError::UnsupportedFlags(flags));
         }
-        let bundle_index_identity = reader.payload_digest()?;
+        let bundle_index_identity = DirectLinkBundleIndexIdentityV1::new(reader.payload_digest()?);
         let count = reader.count("direct-link bindings", 1, MAX_DIRECT_LINK_BINDINGS)?;
         let reserved = reader.u16()?;
         if reserved != 0 {
@@ -44,18 +50,18 @@ impl DirectLinkBundleEvidenceV1 {
 
         let mut bindings = Vec::with_capacity(count);
         for _ in 0..count {
-            let container_identity = reader.payload_digest()?;
+            let container_identity = DirectLinkContainerIdentityV1::new(reader.payload_digest()?);
             let expectation = DirectLinkBindingExpectationV1::new(
-                reader.payload_digest()?,
-                reader.tool()?,
-                reader.tool()?,
-                reader.payload_digest()?,
+                DirectLinkRequestIdentityV1::new(reader.payload_digest()?),
+                reader.worker()?,
+                reader.toolchain()?,
+                DirectLinkResponseIdentityV1::new(reader.payload_digest()?),
                 DirectLinkTransformationIdentityV1::new(
-                    reader.payload_digest()?,
-                    reader.payload_digest()?,
-                    reader.payload_digest()?,
+                    DirectLinkLinkedOutputIdentityV1::new(reader.payload_digest()?),
+                    DirectLinkFinalizationIdentityV1::new(reader.payload_digest()?),
+                    DirectLinkFinalizedPayloadIdentityV1::new(reader.payload_digest()?),
                 ),
-                reader.payload_digest()?,
+                DirectLinkFfiClosureIdentityV1::new(reader.payload_digest()?),
             );
             bindings.push(DirectLinkBindingV1::from_decoded(
                 container_identity,
@@ -144,12 +150,21 @@ impl<'a> Reader<'a> {
         ))
     }
 
-    fn tool(&mut self) -> Result<DirectLinkToolIdentityV1, DirectLinkDecodeError> {
-        Ok(DirectLinkToolIdentityV1::new(
+    fn worker(&mut self) -> Result<DirectLinkWorkerIdentityV1, DirectLinkDecodeError> {
+        Ok(DirectLinkWorkerIdentityV1::new(
             self.text("tool name")?,
             self.text("tool version")?,
-            self.payload_digest()?,
-            self.payload_digest()?,
+            DirectLinkWorkerExecutableIdentityV1::new(self.payload_digest()?),
+            DirectLinkWorkerConfigurationIdentityV1::new(self.payload_digest()?),
+        ))
+    }
+
+    fn toolchain(&mut self) -> Result<DirectLinkToolchainIdentityV1, DirectLinkDecodeError> {
+        Ok(DirectLinkToolchainIdentityV1::new(
+            self.text("tool name")?,
+            self.text("tool version")?,
+            DirectLinkToolchainExecutableIdentityV1::new(self.payload_digest()?),
+            DirectLinkToolchainConfigurationIdentityV1::new(self.payload_digest()?),
         ))
     }
 }

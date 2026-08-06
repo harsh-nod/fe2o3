@@ -12,6 +12,7 @@ mod container_encode;
 mod decode;
 mod digest;
 mod direct_link;
+mod direct_link_bridge;
 mod direct_link_decode;
 mod direct_link_encode;
 mod encode;
@@ -55,8 +56,17 @@ pub use digest::{DigestAlgorithm, DigestMismatch, PayloadDigest};
 pub use direct_link::{
     DIRECT_LINK_EVIDENCE_DIGEST_ALGORITHM, DirectLinkBindingExpectationV1,
     DirectLinkBindingSourceV1, DirectLinkBindingV1, DirectLinkBundleEvidenceV1,
-    DirectLinkEvidenceError, DirectLinkToolIdentityV1, DirectLinkTransformationIdentityV1,
-    MAX_DIRECT_LINK_BINDINGS,
+    DirectLinkBundleIndexIdentityV1, DirectLinkContainerIdentityV1, DirectLinkEvidenceError,
+    DirectLinkFfiClosureIdentityV1, DirectLinkFinalizationIdentityV1,
+    DirectLinkFinalizedPayloadIdentityV1, DirectLinkLinkedOutputIdentityV1,
+    DirectLinkRequestIdentityV1, DirectLinkResponseIdentityV1,
+    DirectLinkToolchainConfigurationIdentityV1, DirectLinkToolchainExecutableIdentityV1,
+    DirectLinkToolchainIdentityV1, DirectLinkTransformationIdentityV1,
+    DirectLinkWorkerConfigurationIdentityV1, DirectLinkWorkerExecutableIdentityV1,
+    DirectLinkWorkerIdentityV1, MAX_DIRECT_LINK_BINDINGS,
+};
+pub use direct_link_bridge::{
+    DirectLinkBridgeError, DirectLinkBridgeIdentityKindV1, DirectLinkPublicationBridgeV1,
 };
 pub use direct_link_decode::DirectLinkDecodeError;
 pub use direct_link_encode::{

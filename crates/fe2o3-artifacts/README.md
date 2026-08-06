@@ -186,8 +186,19 @@ contract identities. The linked and finalized output identities are distinct:
 descriptor finalization patches the canonical code-object digest slot. An
 explicit finalization identity binds the descriptor transformation and
 independent inspection between those byte identities. Construction verifies that the finalized payload is a
-digest-valid native executable in the container and that the container's full
-target, payload, and kernel closure appears unchanged in the bundle index.
+digest-valid native executable in the container. Evidence construction and
+validation require the supplied containers to reproduce the complete bundle
+index exactly and require one binding for every native executable payload.
+Partial A-of-A+B evidence, unbound containers, and missing or extra executable
+bindings are rejected.
+
+Request, response, linked output, finalization, finalized payload, FFI closure,
+container, bundle, worker executable/configuration, and toolchain
+executable/configuration identities have distinct Rust types. This prevents
+accidental domain swaps in construction code while preserving the V1 field
+order and algorithm-tagged canonical bytes. Runtime validation still compares
+every domain against independently supplied expectations; the types do not
+authenticate a caller that deliberately lies about a measurement.
 
 The record begins with `FE2O3DL\0`, version `1`, and zero flags. Bindings are
 bounded, unique by request, response, and finalized payload identity, and
@@ -205,6 +216,21 @@ nor successful matching grants device selection, module loading, symbol lookup,
 ABI compatibility, or kernel launch authority. The explicit
 `grants_load_authority` and `grants_launch_authority` queries therefore always
 return `false`.
+
+`DirectLinkPublicationBridgeV1` is the normative typed conversion from one G6
+binding to one G5 publication chain. Its domain-separated publication identity
+commits to the build attempt, publication scope, request, worker/toolchain
+closure, response, transformation identities, FFI closure, container, and
+bundle, including the complete direct-link evidence-envelope digest. A
+completed G5 `PublishedLinkArtifactV1` can be checked against that entire chain
+without reinterpreting an untyped `[u8; 32]` between domains.
+
+The bridge and `LinkPublicationCatalogV1` remain inert models. They perform no
+filesystem I/O, do not reconstruct a catalog from durable bytes, do not
+authenticate measurements or transformation claims, and do not connect the
+existing filesystem transaction to direct-link publication. That integration
+must be implemented under the artifact lock with crash-safe persistence before
+the project can claim durable exactly-once linked-artifact publication.
 
 ## V1 wire format
 

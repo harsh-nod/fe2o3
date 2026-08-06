@@ -12,4 +12,5 @@ publish = false
 name = "fe2o3_artifacts"
 
 [dependencies]
+fe2o3-artifact-transaction.workspace = true
 sha2 = { version = "0.11.0", default-features = false }
