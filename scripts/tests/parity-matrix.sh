@@ -46,8 +46,14 @@ reset_case
 awk '{
   sub(/cd5ef3941d3347c7f6fcbfc78ef0fa7f4f179d87/,
       "dd5ef3941d3347c7f6fcbfc78ef0fa7f4f179d87")
-  sub(/\| Normative \| 0 \| 21 \| 61 \| 12 \| 94 \|/,
-      "| Normative | 0 | 20 | 62 | 12 | 94 |")
+  if ($0 ~ /^\| Normative \|/) {
+    count = split($0, cells, "|")
+    if (count == 8) {
+      printf "| Normative | %d | %d | %d | %d | %d |\n", \
+        cells[3], cells[4] - 1, cells[5] + 1, cells[6], cells[7]
+      next
+    }
+  }
   if ($0 ~ /^\| 01 \|/) {
     sub(/\| Missing \|/, "| Partial |")
   }
@@ -114,8 +120,14 @@ expect_check_failure invalid_markdown_status \
 
 reset_case
 awk '{
-  sub(/\| Normative \| 0 \| 21 \| 61 \| 12 \| 94 \|/,
-      "| Normative | 0 | 20 | 61 | 12 | 94 |")
+  if ($0 ~ /^\| Normative \|/) {
+    count = split($0, cells, "|")
+    if (count == 8) {
+      printf "| Normative | %d | %d | %d | %d | %d |\n", \
+        cells[3], cells[4] - 1, cells[5], cells[6], cells[7]
+      next
+    }
+  }
   print
 }' "${TEST_ROOT}/matrix.md" >"${TEST_ROOT}/matrix.md.new"
 replace_file "${TEST_ROOT}/matrix.md"
@@ -125,8 +137,6 @@ reset_case
 awk '{
   sub(/cd5ef3941d3347c7f6fcbfc78ef0fa7f4f179d87/,
       "dd5ef3941d3347c7f6fcbfc78ef0fa7f4f179d87")
-  sub(/ea7ca6e4cce38ebe07083fb18d4bc5165e8eb048/,
-      "fa7ca6e4cce38ebe07083fb18d4bc5165e8eb048")
   print
 }' "${TEST_ROOT}/matrix.md" >"${TEST_ROOT}/matrix.md.new"
 replace_file "${TEST_ROOT}/matrix.md"
