@@ -1,7 +1,7 @@
 use crate::{AnalysisReport, Diagnostic, UnsupportedReason, Variation};
 use fe2o3_kernel_ir::{
     AddressSpace, BasicBlock, BlockId, Function, FunctionBody, IndexKind, IntrinsicKind, Operation,
-    OperationKind, Terminator, ValueId,
+    OperationKind, Terminator, ValueId, WaveOperationKind,
 };
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -325,6 +325,29 @@ impl<'a> Analyzer<'a> {
                 allocation.join(join_values(count.iter().copied(), &self.report.values))
             }
             OperationKind::WorkgroupMemory(_) => Variation::WorkgroupUniform,
+            OperationKind::Wave(wave) => match wave.kind {
+                WaveOperationKind::LaneId => Variation::Varying,
+                WaveOperationKind::Ballot { predicate }
+                | WaveOperationKind::Any { predicate }
+                | WaveOperationKind::All { predicate } => {
+                    subgroup_collective_variation(self.value(predicate))
+                }
+                WaveOperationKind::ShuffleIndex {
+                    value, source_lane, ..
+                } => {
+                    let value = self.value(value);
+                    if value.is_uniform_for(fe2o3_kernel_ir::SynchronizationScope::Subgroup) {
+                        value
+                    } else if self
+                        .value(source_lane)
+                        .is_uniform_for(fe2o3_kernel_ir::SynchronizationScope::Subgroup)
+                    {
+                        Variation::SubgroupUniform
+                    } else {
+                        Variation::Varying
+                    }
+                }
+            },
             OperationKind::Store { .. }
             | OperationKind::Barrier(_)
             | OperationKind::Fence(_)
@@ -379,6 +402,14 @@ impl<'a> Analyzer<'a> {
             .get(&value)
             .copied()
             .unwrap_or(Variation::Varying)
+    }
+}
+
+fn subgroup_collective_variation(input: Variation) -> Variation {
+    if input.is_uniform_for(fe2o3_kernel_ir::SynchronizationScope::Subgroup) {
+        input
+    } else {
+        Variation::SubgroupUniform
     }
 }
 

@@ -3,8 +3,8 @@ use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, Axis, Barrier, BarrierSemantics, BasicBlock, BlockId,
     ComparePredicate, Constant, Convergence, Function, FunctionId, IndexKind, IntrinsicKind,
     IntrinsicOperation, MemoryAccess, MemoryOrdering, Operation, OperationKind, Signature,
-    SynchronizationScope, Terminator, Type, ValueDef, ValueId, WorkgroupBarrier, WorkgroupMemory,
-    WorkgroupMemoryExtent,
+    SynchronizationScope, Terminator, Type, ValueDef, ValueId, WaveOperation, WaveOperationKind,
+    WaveWidth, WorkgroupBarrier, WorkgroupMemory, WorkgroupMemoryExtent,
 };
 
 fn function(parameters: Vec<ValueId>, blocks: Vec<BasicBlock>) -> Function {
@@ -69,6 +69,13 @@ fn explicit_workgroup_barrier() -> Operation {
     )
 }
 
+fn wave(id: u32, kind: WaveOperationKind) -> Operation {
+    Operation::effect_free(
+        ValueDef::new(ValueId(id), Type::INDEX),
+        OperationKind::Wave(WaveOperation::full(kind, WaveWidth::Wave64)),
+    )
+}
+
 fn returning(id: u32) -> BasicBlock {
     let mut block = BasicBlock::new(BlockId(id));
     block.terminator = Some(Terminator::Return { values: vec![] });
@@ -125,6 +132,77 @@ fn intrinsic_rules_cover_launch_hierarchy() {
     assert_eq!(report.value(ValueId(3)), Variation::Varying);
     assert_eq!(report.value(ValueId(4)), Variation::GridUniform);
     assert_eq!(report.value(ValueId(5)), Variation::GridUniform);
+    assert!(report.diagnostics().is_empty());
+}
+
+#[test]
+fn wave_rules_preserve_uniform_inputs_and_collapse_full_wave_collectives() {
+    let mut entry = returning(0);
+    entry.operations = vec![
+        constant(2, Constant::Bool(true)),
+        intrinsic(
+            3,
+            IntrinsicKind::InvocationIndex {
+                kind: IndexKind::Workgroup,
+                axis: Axis::X,
+            },
+        ),
+        constant(4, Constant::Index(0)),
+        compare(5, 3, 4),
+        wave(6, WaveOperationKind::LaneId),
+        wave(
+            7,
+            WaveOperationKind::Ballot {
+                predicate: ValueId(0),
+            },
+        ),
+        wave(
+            8,
+            WaveOperationKind::Any {
+                predicate: ValueId(2),
+            },
+        ),
+        wave(
+            9,
+            WaveOperationKind::All {
+                predicate: ValueId(5),
+            },
+        ),
+        wave(
+            10,
+            WaveOperationKind::ShuffleIndex {
+                value: ValueId(0),
+                source_lane: ValueId(4),
+                tile_width: 64,
+            },
+        ),
+        wave(
+            11,
+            WaveOperationKind::ShuffleIndex {
+                value: ValueId(4),
+                source_lane: ValueId(1),
+                tile_width: 64,
+            },
+        ),
+        wave(
+            12,
+            WaveOperationKind::ShuffleIndex {
+                value: ValueId(0),
+                source_lane: ValueId(1),
+                tile_width: 64,
+            },
+        ),
+    ];
+
+    let report = analyze_function(&function(vec![ValueId(0), ValueId(1)], vec![entry]));
+
+    assert_eq!(report.value(ValueId(6)), Variation::Varying);
+    assert_eq!(report.value(ValueId(7)), Variation::SubgroupUniform);
+    assert_eq!(report.value(ValueId(8)), Variation::GridUniform);
+    assert_eq!(report.value(ValueId(9)), Variation::WorkgroupUniform);
+    assert_eq!(report.value(ValueId(10)), Variation::SubgroupUniform);
+    assert_eq!(report.value(ValueId(11)), Variation::GridUniform);
+    assert_eq!(report.value(ValueId(12)), Variation::Varying);
     assert!(report.diagnostics().is_empty());
 }
 
