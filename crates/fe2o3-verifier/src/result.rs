@@ -19,6 +19,7 @@ pub enum RecorderTermination {
 /// Validated proof evidence. This value does not grant load or launch authority.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProofResultV1 {
+    correlation_id: CorrelationId,
     target: ProofTargetIdentity,
     configuration: Configuration,
     model: VerificationModelIdentity,
@@ -30,6 +31,10 @@ pub struct ProofResultV1 {
 }
 
 impl ProofResultV1 {
+    pub const fn correlation_id(&self) -> CorrelationId {
+        self.correlation_id
+    }
+
     pub const fn target(&self) -> ProofTargetIdentity {
         self.target
     }
@@ -112,6 +117,7 @@ pub fn parse_recorder_result(
     }
 
     Ok(ProofResultV1 {
+        correlation_id: correlation,
         target: plan.request().target(),
         configuration: plan.request().configuration().clone(),
         model: plan.request().model().clone(),

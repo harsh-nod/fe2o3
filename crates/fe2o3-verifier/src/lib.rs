@@ -5,11 +5,16 @@
 //! Tool measurements remain caller-supplied evidence, not measurements
 //! performed or authenticated by this crate.
 
+mod artifact_record;
 mod executor;
 mod model;
 mod plan;
 mod result;
 
+pub use artifact_record::{
+    ArtifactProofEvidenceV1, ArtifactRecordConversionError, ReviewedInvocationIdentityV1,
+    canonical_invocation_digest, convert_to_artifact_proof_record,
+};
 pub use executor::{
     ExecutionError, ExecutionErrorKind, ExecutionLimits, ExecutionPath, ExecutionStage,
     ExecutionSuccess, MAX_CAPTURE_BYTES, OutputStream, ProcessOutput, execute_recorder,

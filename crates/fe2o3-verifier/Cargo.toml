@@ -11,6 +11,9 @@ publish = false
 [lib]
 name = "fe2o3_verifier"
 
+[dependencies]
+fe2o3-artifacts.workspace = true
+
 [[bin]]
 name = "fe2o3-verifier-test-recorder"
 path = "tests/support/recorder.rs"
