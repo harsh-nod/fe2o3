@@ -57,9 +57,26 @@ inspection and finalization functions are unchanged.
 
 ## Staged compiler FFI claims
 
+`rustc-codegen-fe2o3` now constructs a real `CompilerFfiEnvelopeV1` from its private successful
+`CollectionResult` and `DeviceFfiClosure`. The LLVM-free neutral type lives in
+`fe2o3-compiler-ffi`. It commits to the canonical target and code-object version plus every import
+and export's shared contract ID, direction, explicit required-definition role, source owner, symbol,
+physical ABI, effects/effect-ABI identity, and semantic identity. It contains no artifact provider,
+input kind, expected final symbol, bitcode, or Worker V1 claim.
+
+`stage_compiler_ffi_envelope_v1` consumes and privately retains the complete envelope. Its public
+surface exposes only a domain-separated staged identity and target/version/count/blocker inspection.
+It cannot reveal contract or generic linker closures and cannot create or bind Worker V1 evidence.
+The explicit blocker is the absence of one exact compiler module artifact and a Worker V2 request
+and response that bind the complete envelope identity.
+
+The older `G4FfiClaimEnvelopeV1` path below remains caller-constructible assertion-only plan
+scaffolding. It is not the real rustc observation and cannot upgrade generic Worker V1 evidence.
+
 `G4FfiClaimEnvelopeV1` is the exact public contract for a future adapter from private
-`rustc-codegen-fe2o3::CollectionResult` and `DeviceFfiClosure` state. No such adapter exists yet. All
-values entering this crate are labeled assertion-only caller claims; G4 wording does not make them
+`rustc-codegen-fe2o3::CollectionResult` and `DeviceFfiClosure` state. That legacy trait remains
+unimplemented; the real adapter produces the separate neutral envelope described above. All values
+entering the legacy path are labeled assertion-only caller claims; G4 wording does not make them
 compiler attestations. Each symbol retains its authoritative `reserved-fe2o3-symbols` contract ID,
 direction, exact physical ABI grammar, target, code-object version, effects, semantic identity,
 declaration owner, and provider-class claim. Declaration ownership is separate from unauthenticated
@@ -91,7 +108,7 @@ generic request with similar inputs and symbol strings, but that request and its
 FFI provenance. No conversion exists in either direction. A closure-aware worker protocol revision
 and response evidence binding are required before this path can execute.
 
-The separate rustc-side work must expose an assertion-only adapter over `CollectionResult`, emit one
-exact compiler module containing kernels, reachable helpers, and non-kernel FFI exports, measure that
-artifact's content identity and kind, and provide bounded compiler-required symbol and definition
-counts. None of those compiler integration steps is implemented by this crate.
+The remaining compiler-side work must emit one exact compiler module containing kernels, reachable
+helpers, and non-kernel FFI exports, measure that artifact's content identity and neutral kind, and
+bind it together with the complete compiler envelope in Worker Protocol V2. None of those executable
+integration steps is implemented by this crate.

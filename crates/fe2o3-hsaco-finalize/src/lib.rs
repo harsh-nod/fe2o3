@@ -17,6 +17,7 @@ use fe2o3_kernel_descriptor::{
 };
 
 mod compiler_ffi_bridge;
+mod compiler_ffi_observation;
 mod link_plan;
 mod request_construction;
 mod worker_executor;
@@ -38,6 +39,21 @@ pub use compiler_ffi_bridge::{
     StagedFfiExecutionBlockerV1, StagedFfiLinkError, StagedFfiLinkPlanIdentityV1,
     StagedFfiLinkPlanInspectionV1, StagedFfiLinkPlanV1, UnauthenticatedProducerClaimIdentityV1,
     UnauthenticatedProducerClaimV1, stage_g4_ffi_link_plan_v1,
+};
+pub use compiler_ffi_observation::{
+    StagedCompilerFfiEnvelopeBlockerV1, StagedCompilerFfiEnvelopeIdentityV1,
+    StagedCompilerFfiEnvelopeInspectionV1, StagedCompilerFfiEnvelopeV1,
+    stage_compiler_ffi_envelope_v1,
+};
+pub use fe2o3_compiler_ffi::{
+    CodeObjectVersion as CompilerFfiCodeObjectVersion, CompilerFfiContractV1,
+    CompilerFfiEffectAbiIdentityV1, CompilerFfiEnvelopeBuilderV1, CompilerFfiEnvelopeError,
+    CompilerFfiEnvelopeIdentityV1, CompilerFfiEnvelopeInspectionV1, CompilerFfiEnvelopeV1,
+    CompilerFfiLinkRoleV1, CompilerFfiSourceOwnerIdentityV1, CompilerFfiSourceOwnerV1,
+    CompilerFfiTextFieldV1, DeviceTargetV1 as CompilerFfiDeviceTargetV1,
+    MAX_COMPILER_FFI_AGGREGATE_TEXT_BYTES_V1, MAX_COMPILER_FFI_CONTRACTS_V1,
+    MAX_COMPILER_FFI_CRATE_LABEL_BYTES_V1, MAX_COMPILER_FFI_ENVELOPE_BYTES_V1,
+    MAX_COMPILER_FFI_INSTANCE_SYMBOL_BYTES_V1, MAX_COMPILER_FFI_ITEM_PATH_BYTES_V1,
 };
 pub use link_plan::{
     ContentIdentityV1, LinkInputV1, LinkOptionV1, LinkOutputV1, LinkPlanError, LinkPlanIdentityV1,

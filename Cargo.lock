@@ -290,6 +290,7 @@ dependencies = [
 name = "fe2o3-hsaco-finalize"
 version = "0.1.0"
 dependencies = [
+ "fe2o3-compiler-ffi",
  "fe2o3-hsaco",
  "fe2o3-kernel-descriptor",
  "reserved-fe2o3-symbols",
