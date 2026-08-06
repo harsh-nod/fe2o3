@@ -4,10 +4,11 @@ use crate::{
 };
 use fe2o3_amd_target::{AmdTargetId, ParseAmdTargetIdError};
 use fe2o3_artifacts::{
-    AbiLayout, ArtifactContainerV1, BlockSize, Capability, CodeObjectIdentity,
-    ContainerDecodeError, DigestBytes, Endianness, HostLaunchAbi, HostLaunchAbiError,
-    KernelSelectionError, LaunchContract, Name, PayloadDigest, PointerWidth, SelectedNativeKernel,
-    TargetIdentity,
+    AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership, ArtifactContainerV1,
+    BlockSize, Capability, CodeObjectIdentity, ContainerDecodeError, DeclaredRustLayoutIdentity,
+    DeclaredRustTypeIdentity, DigestAlgorithm, DigestBytes, Endianness, HostLaunchAbi,
+    HostLaunchAbiError, KernelSelectionError, LaunchContract, Mutability, Name, PayloadDigest,
+    PointerWidth, SelectedNativeKernel, TypeIdentity, TargetIdentity,
 };
 use fe2o3_device::KernelMarkerV1;
 use fe2o3_kernel_descriptor::ValidationError as DescriptorValidationError;
@@ -18,6 +19,9 @@ const AMDGPU_TRIPLE: &str = "amdgcn-amd-amdhsa";
 
 /// Version of the exact artifact identity carried by the G3 host bridge.
 pub const ARTIFACT_KERNEL_IDENTITY_VERSION: u16 = 1;
+
+const TYPE_ID_DOMAIN: &[u8] = b"fe2o3.rust-type.v1\0";
+const LAYOUT_ID_DOMAIN: &[u8] = b"fe2o3.rust-layout.v1\0";
 
 /// Exact, owned identity of one validated native-kernel selection.
 ///
@@ -278,8 +282,20 @@ impl ValidatedArtifactSelectionV1 {
 /// A false implementation can make safe code load arbitrary native code.
 #[doc(hidden)]
 pub unsafe trait CompilerGeneratedKernelContractV1: KernelMarkerV1 {
+    /// Versioned host ABI and memory-effect profile expected by generated code.
+    const PROFILE: CompilerGeneratedKernelProfileV1;
+
     /// Returns the exact canonical artifact container embedded by the backend.
     fn artifact_container_bytes() -> &'static [u8];
+}
+
+/// Exact generated host contract understood by this runtime version.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[doc(hidden)]
+#[non_exhaustive]
+pub enum CompilerGeneratedKernelProfileV1 {
+    /// `(&[f32], &[f32], DisjointSlice<f32>)` with read/read/write effects.
+    TypedVecAddF32V1,
 }
 
 /// Authenticated compiler-generated artifact for exactly one kernel marker.
@@ -330,6 +346,8 @@ impl<K: CompilerGeneratedKernelContractV1> AuthenticatedKernelArtifactV1<K> {
             .map_err(GeneratedArtifactAuthenticationError::Selection)?;
         let validated = ValidatedArtifactSelectionV1::validate(selected, observed)
             .map_err(GeneratedArtifactAuthenticationError::Binding)?;
+        validate_generated_profile(K::PROFILE, validated.identity())
+            .map_err(GeneratedArtifactAuthenticationError::Profile)?;
 
         // SAFETY: `CompilerGeneratedKernelContractV1` requires the trusted
         // backend to establish the exact marker, identity, complete ABI,
@@ -375,6 +393,7 @@ pub enum GeneratedArtifactAuthenticationError {
     MultipleMatchingKernels,
     Selection(KernelSelectionError),
     Binding(ArtifactBindingError),
+    Profile(GeneratedKernelProfileError),
     Marker(GeneratedMarkerBindingError),
 }
 
@@ -389,6 +408,7 @@ impl fmt::Display for GeneratedArtifactAuthenticationError {
             ),
             Self::Selection(error) => error.fmt(formatter),
             Self::Binding(error) => error.fmt(formatter),
+            Self::Profile(error) => error.fmt(formatter),
             Self::Marker(error) => error.fmt(formatter),
         }
     }
@@ -400,10 +420,149 @@ impl std::error::Error for GeneratedArtifactAuthenticationError {
             Self::Decode(error) => Some(error),
             Self::Selection(error) => Some(error),
             Self::Binding(error) => Some(error),
+            Self::Profile(error) => Some(error),
             Self::Marker(error) => Some(error),
             Self::MatchingKernelNotFound | Self::MultipleMatchingKernels => None,
         }
     }
+}
+
+/// Mismatch between an embedded manifest and generated typed host code.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[doc(hidden)]
+#[non_exhaustive]
+pub enum GeneratedKernelProfileError {
+    AbiMismatch,
+    LaunchMismatch,
+}
+
+impl fmt::Display for GeneratedKernelProfileError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::AbiMismatch => formatter.write_str(
+                "embedded artifact ABI/effects do not match the generated kernel profile",
+            ),
+            Self::LaunchMismatch => formatter.write_str(
+                "embedded artifact launch contract does not match the generated kernel profile",
+            ),
+        }
+    }
+}
+
+impl std::error::Error for GeneratedKernelProfileError {}
+
+fn validate_generated_profile(
+    profile: CompilerGeneratedKernelProfileV1,
+    identity: &ArtifactKernelIdentityV1,
+) -> Result<(), GeneratedKernelProfileError> {
+    match profile {
+        CompilerGeneratedKernelProfileV1::TypedVecAddF32V1 => {
+            validate_typed_vecadd_abi(identity.abi())?;
+            let launch = identity.launch();
+            let exact_block = match launch.block_size() {
+                BlockSize::Exact(block) => block,
+                BlockSize::Any | BlockSize::AtMost(_) => {
+                    return Err(GeneratedKernelProfileError::LaunchMismatch);
+                }
+            };
+            if launch.rank() != 1
+                || [exact_block.x(), exact_block.y(), exact_block.z()] != [256, 1, 1]
+                || launch.max_grid().y() != 1
+                || launch.max_grid().z() != 1
+                || launch.static_shared_memory_bytes() != 0
+                || launch.max_dynamic_shared_memory_bytes() != 0
+            {
+                return Err(GeneratedKernelProfileError::LaunchMismatch);
+            }
+            Ok(())
+        }
+    }
+}
+
+fn validate_typed_vecadd_abi(abi: &AbiLayout) -> Result<(), GeneratedKernelProfileError> {
+    if abi.size() != 48
+        || abi.alignment() != 8
+        || abi.pointer_width() != PointerWidth::Bits64
+        || abi.fields().len() != 3
+    {
+        return Err(GeneratedKernelProfileError::AbiMismatch);
+    }
+
+    let shared_identity = generated_type_identity("&[f32]", "slice-f32-ptr64-size16-align8");
+    let output_identity = generated_type_identity(
+        "fe2o3_device::DisjointSlice<f32>",
+        "disjoint-slice-f32-ptr64-size16-align8",
+    );
+    let expected = [
+        (
+            0,
+            Mutability::Immutable,
+            Access::ReadOnly,
+            ArgumentOwnership::SharedBorrow,
+            AliasClass::SharedReadOnly,
+            shared_identity,
+        ),
+        (
+            16,
+            Mutability::Immutable,
+            Access::ReadOnly,
+            ArgumentOwnership::SharedBorrow,
+            AliasClass::SharedReadOnly,
+            shared_identity,
+        ),
+        (
+            32,
+            Mutability::Mutable,
+            Access::WriteOnly,
+            ArgumentOwnership::UniqueBorrow,
+            AliasClass::Exclusive,
+            output_identity,
+        ),
+    ];
+
+    for (field, (offset, mutability, access, ownership, alias, type_identity)) in
+        abi.fields().iter().zip(expected)
+    {
+        if field.offset() != offset
+            || field.size() != 16
+            || field.alignment() != 8
+            || field.kind()
+                != (AbiKind::Slice {
+                    element_size: 4,
+                    element_alignment: 4,
+                })
+            || field.mutability() != mutability
+            || field.access() != access
+            || field.address_space() != AddressSpace::Global
+            || field.ownership() != ownership
+            || field.alias_class() != alias
+            || field.type_identity() != type_identity
+        {
+            return Err(GeneratedKernelProfileError::AbiMismatch);
+        }
+    }
+    Ok(())
+}
+
+fn generated_type_identity(rust_type: &str, layout: &str) -> TypeIdentity {
+    TypeIdentity::new(
+        DeclaredRustTypeIdentity::from_untrusted_bytes(generated_profile_digest(
+            TYPE_ID_DOMAIN,
+            rust_type.as_bytes(),
+        )),
+        DeclaredRustLayoutIdentity::from_untrusted_bytes(generated_profile_digest(
+            LAYOUT_ID_DOMAIN,
+            layout.as_bytes(),
+        )),
+    )
+}
+
+fn generated_profile_digest(domain: &[u8], field: &[u8]) -> DigestBytes {
+    let mut canonical = Vec::with_capacity(domain.len() + 8 + field.len());
+    canonical.extend_from_slice(domain);
+    canonical.extend_from_slice(&(field.len() as u64).to_le_bytes());
+    canonical.extend_from_slice(field);
+    DigestAlgorithm::Sha256.calculate(&canonical).bytes()
 }
 
 /// Unsafe generated-code association between marker `K` and one validated

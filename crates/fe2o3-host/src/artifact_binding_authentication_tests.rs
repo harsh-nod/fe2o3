@@ -1,9 +1,10 @@
 use super::*;
 use crate::loaded_kernel::{LoadedKernelLoadError, validate_issuance};
 use fe2o3_artifacts::{
-    AbiLayout, ArtifactContainerV1, BlockSize, CodeObjectFormat, CodeObjectPayload,
-    CompilerIdentity, ContainerValidationError, DigestAlgorithm, Dimensions, IdentityText,
-    KernelEntry, ManifestV1, Name, ToolIdentity,
+    AbiField, AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership,
+    ArtifactContainerV1, BlockSize, CodeObjectFormat, CodeObjectPayload, CompilerIdentity,
+    ContainerValidationError, DigestAlgorithm, Dimensions, IdentityText, KernelEntry, ManifestV1,
+    Mutability, Name, ToolIdentity,
 };
 use std::sync::OnceLock;
 
@@ -30,6 +31,9 @@ macro_rules! marker {
         // authentication-only tests. Invalid fixtures exercise rejection and
         // are never loaded; the valid fixture stops at the inert test binding.
         unsafe impl CompilerGeneratedKernelContractV1 for $marker {
+            const PROFILE: CompilerGeneratedKernelProfileV1 =
+                CompilerGeneratedKernelProfileV1::TypedVecAddF32V1;
+
             fn artifact_container_bytes() -> &'static [u8] {
                 static BYTES: OnceLock<Vec<u8>> = OnceLock::new();
                 BYTES.get_or_init(|| $bytes).as_slice()
@@ -73,6 +77,20 @@ marker!(ManifestMutationMarker, {
     mutate_first(&mut bytes, LOGICAL_NAME.as_bytes(), b"wector_add");
     bytes
 });
+marker!(WrongEffectProfileMarker, {
+    container_bytes_with_abi(
+        &[(0x11, LOGICAL_NAME, EXPORT_NAME)],
+        "gfx942",
+        typed_vecadd_abi(Access::ReadWrite, false),
+    )
+});
+marker!(WrongTypeIdentityProfileMarker, {
+    container_bytes_with_abi(
+        &[(0x11, LOGICAL_NAME, EXPORT_NAME)],
+        "gfx942",
+        typed_vecadd_abi(Access::WriteOnly, true),
+    )
+});
 marker!(
     WrongTargetMarker,
     container_bytes(&[(0x11, LOGICAL_NAME, EXPORT_NAME)], "gfx1100")
@@ -91,6 +109,18 @@ fn digest(byte: u8) -> DigestBytes {
 }
 
 fn container_bytes(kernels: &[(u8, &str, &str)], architecture: &str) -> Vec<u8> {
+    container_bytes_with_abi(
+        kernels,
+        architecture,
+        typed_vecadd_abi(Access::WriteOnly, false),
+    )
+}
+
+fn container_bytes_with_abi(
+    kernels: &[(u8, &str, &str)],
+    architecture: &str,
+    abi: AbiLayout,
+) -> Vec<u8> {
     let payload =
         CodeObjectPayload::from_bytes(DigestAlgorithm::Sha256, b"inert-test-hsaco".to_vec())
             .unwrap();
@@ -122,13 +152,13 @@ fn container_bytes(kernels: &[(u8, &str, &str)], architecture: &str) -> Vec<u8> 
                 vec![],
                 LaunchContract::new(
                     1,
-                    BlockSize::Exact(Dimensions::new(64, 1, 1).unwrap()),
+                    BlockSize::Exact(Dimensions::new(256, 1, 1).unwrap()),
                     Dimensions::new(65_535, 1, 1).unwrap(),
                     0,
                     0,
                 )
                 .unwrap(),
-                AbiLayout::new(0, 1, PointerWidth::Bits64, vec![]).unwrap(),
+                abi.clone(),
             )
             .unwrap()
         })
@@ -144,6 +174,75 @@ fn container_bytes(kernels: &[(u8, &str, &str)], architecture: &str) -> Vec<u8> 
     ArtifactContainerV1::new(manifest, DigestAlgorithm::Sha256, vec![payload])
         .unwrap()
         .to_bytes()
+}
+
+fn typed_vecadd_abi(output_access: Access, wrong_type_identity: bool) -> AbiLayout {
+    let kind = AbiKind::Slice {
+        element_size: 4,
+        element_alignment: 4,
+    };
+    let shared = if wrong_type_identity {
+        TypeIdentity::new(
+            DeclaredRustTypeIdentity::from_untrusted_bytes(digest(0xd1)),
+            DeclaredRustLayoutIdentity::from_untrusted_bytes(digest(0xd2)),
+        )
+    } else {
+        generated_type_identity("&[f32]", "slice-f32-ptr64-size16-align8")
+    };
+    let output = generated_type_identity(
+        "fe2o3_device::DisjointSlice<f32>",
+        "disjoint-slice-f32-ptr64-size16-align8",
+    );
+    AbiLayout::new(
+        48,
+        8,
+        PointerWidth::Bits64,
+        vec![
+            AbiField::new(
+                name("arg0"),
+                0,
+                16,
+                8,
+                kind,
+                Mutability::Immutable,
+                Access::ReadOnly,
+                AddressSpace::Global,
+                shared,
+                ArgumentOwnership::SharedBorrow,
+                AliasClass::SharedReadOnly,
+            )
+            .unwrap(),
+            AbiField::new(
+                name("arg1"),
+                16,
+                16,
+                8,
+                kind,
+                Mutability::Immutable,
+                Access::ReadOnly,
+                AddressSpace::Global,
+                shared,
+                ArgumentOwnership::SharedBorrow,
+                AliasClass::SharedReadOnly,
+            )
+            .unwrap(),
+            AbiField::new(
+                name("arg2"),
+                32,
+                16,
+                8,
+                kind,
+                Mutability::Mutable,
+                output_access,
+                AddressSpace::Global,
+                output,
+                ArgumentOwnership::UniqueBorrow,
+                AliasClass::Exclusive,
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap()
 }
 
 fn mutate_first(bytes: &mut [u8], from: &[u8], to: &[u8]) {
@@ -229,6 +328,26 @@ fn rejects_payload_and_manifest_mutation() {
             7, "gfx942"
         )),
         Err(GeneratedArtifactAuthenticationError::MatchingKernelNotFound)
+    ));
+}
+
+#[test]
+fn rejects_wrong_effects_and_opaque_type_identity() {
+    assert!(matches!(
+        AuthenticatedKernelArtifactV1::<WrongEffectProfileMarker>::authenticate(&context(
+            7, "gfx942",
+        )),
+        Err(GeneratedArtifactAuthenticationError::Profile(
+            GeneratedKernelProfileError::AbiMismatch
+        ))
+    ));
+    assert!(matches!(
+        AuthenticatedKernelArtifactV1::<WrongTypeIdentityProfileMarker>::authenticate(&context(
+            7, "gfx942",
+        )),
+        Err(GeneratedArtifactAuthenticationError::Profile(
+            GeneratedKernelProfileError::AbiMismatch
+        ))
     ));
 }
 

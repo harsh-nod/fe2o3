@@ -1,5 +1,6 @@
 mod argument_alias;
 mod artifact_binding;
+mod generated_vecadd;
 mod loaded_kernel;
 mod prepared_launch;
 
@@ -18,7 +19,13 @@ pub use artifact_binding::{
 #[doc(hidden)]
 pub use artifact_binding::{
     AuthenticatedKernelArtifactV1, CompilerGeneratedKernelContractV1,
-    GeneratedArtifactAuthenticationError, GeneratedKernelBindingV1, GeneratedMarkerBindingError,
+    CompilerGeneratedKernelProfileV1, GeneratedArtifactAuthenticationError,
+    GeneratedKernelBindingV1, GeneratedKernelProfileError, GeneratedMarkerBindingError,
+};
+#[doc(hidden)]
+pub use generated_vecadd::{
+    GeneratedVecAddKernelV1, GeneratedVecAddLoadError, GeneratedVecAddPrepareError,
+    GeneratedVecAddPreparedV1, GeneratedVecAddProfileError,
 };
 pub use fe2o3_core::{KernelParams, LaunchConfig};
 pub use fe2o3_kernel_descriptor::{BlockSizeV1, DimensionsV1, KernelId, LaunchConstraintsV1};
@@ -40,10 +47,41 @@ pub use prepared_launch::{
 pub mod __generated {
     pub use crate::{
         AuthenticatedKernelArtifactV1, CompilerGeneratedKernelContractV1,
-        GeneratedAdmittedLaunch, GeneratedArtifactAuthenticationError,
-        GeneratedKernelBindingV1, GeneratedMarkerBindingError, GeneratedReadDeviceSlice,
-        GeneratedWriteDeviceSlice, LoadedKernelLoadError,
+        CompilerGeneratedKernelProfileV1, GeneratedAdmittedLaunch,
+        GeneratedArtifactAuthenticationError, GeneratedKernelBindingV1,
+        GeneratedKernelProfileError, GeneratedMarkerBindingError, GeneratedReadDeviceSlice,
+        GeneratedVecAddKernelV1, GeneratedVecAddLoadError, GeneratedVecAddPrepareError,
+        GeneratedVecAddPreparedV1, GeneratedVecAddProfileError, GeneratedWriteDeviceSlice,
+        LoadedKernelLoadError,
     };
+
+    /// Constructs the exact immutable slice promised by a generated backend
+    /// accessor pair.
+    ///
+    /// # Safety
+    ///
+    /// `pointer` must be non-null, correctly aligned, and point to one live,
+    /// immutable allocation containing exactly `length` initialized bytes.
+    /// That allocation must remain live and immutable for the entire program.
+    /// `length` must not exceed `isize::MAX`, and the range must not wrap the
+    /// address space. Only compiler-generated unsafe trait implementations may
+    /// call this function with values returned by the trusted backend object.
+    pub unsafe fn artifact_bytes_from_backend_v1(
+        pointer: *const u8,
+        length: usize,
+    ) -> &'static [u8] {
+        if pointer.is_null()
+            || length == 0
+            || length > isize::MAX as usize
+            || pointer.addr().checked_add(length).is_none()
+        {
+            return &[];
+        }
+
+        // SAFETY: the caller establishes the single-allocation, initialization,
+        // immutability, range, and static-lifetime requirements above.
+        unsafe { core::slice::from_raw_parts(pointer, length) }
+    }
 }
 
 /// Loads and launches a GPU kernel using raw, caller-described ABI arguments.

@@ -1,5 +1,5 @@
 use fe2o3_device::KernelMarkerV1;
-use fe2o3_host::CompilerGeneratedKernelContractV1;
+use fe2o3_host::{CompilerGeneratedKernelContractV1, CompilerGeneratedKernelProfileV1};
 
 struct Marker;
 
@@ -16,6 +16,9 @@ unsafe impl KernelMarkerV1 for Marker {
 }
 
 impl CompilerGeneratedKernelContractV1 for Marker {
+    const PROFILE: CompilerGeneratedKernelProfileV1 =
+        CompilerGeneratedKernelProfileV1::TypedVecAddF32V1;
+
     fn artifact_container_bytes() -> &'static [u8] {
         &[]
     }
