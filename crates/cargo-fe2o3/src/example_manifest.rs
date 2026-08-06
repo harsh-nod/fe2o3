@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use syn::visit::{self, Visit};
-use syn::{Expr, ExprMethodCall, Lit};
+use syn::{Attribute, Expr, ExprMethodCall, ItemFn, Lit, Meta};
 
 const MANIFEST_PATH: &str = "examples/regression-manifest-v1.txt";
 const MANIFEST_VERSION: &str = "fe2o3-example-regressions-v1";
@@ -375,7 +375,7 @@ fn source_artifacts(package_root: &Path) -> Result<Vec<String>, String> {
     for source_path in source_files {
         let source = fs::read_to_string(&source_path)
             .map_err(|error| format!("failed to read {}: {error}", source_path.display()))?;
-        for artifact in artifact_join_literals(&source)
+        for artifact in source_artifact_literals(&source)
             .map_err(|error| format!("failed to inspect {}: {error}", source_path.display()))?
         {
             seen.insert(artifact);
@@ -413,11 +413,18 @@ fn collect_rust_sources(directory: &Path, files: &mut Vec<PathBuf>) -> Result<()
 }
 
 #[derive(Default)]
-struct ArtifactJoinVisitor {
+struct SourceArtifactVisitor {
     artifacts: Vec<String>,
 }
 
-impl<'ast> Visit<'ast> for ArtifactJoinVisitor {
+impl<'ast> Visit<'ast> for SourceArtifactVisitor {
+    fn visit_item_fn(&mut self, node: &'ast ItemFn) {
+        if node.attrs.iter().any(is_typed_kernel_attribute) {
+            self.artifacts.push(format!("{}.hsaco", node.sig.ident));
+        }
+        visit::visit_item_fn(self, node);
+    }
+
     fn visit_expr_method_call(&mut self, node: &'ast ExprMethodCall) {
         if node.method == "join"
             && node.args.len() == 1
@@ -431,9 +438,21 @@ impl<'ast> Visit<'ast> for ArtifactJoinVisitor {
     }
 }
 
-fn artifact_join_literals(source: &str) -> Result<Vec<String>, String> {
+fn is_typed_kernel_attribute(attribute: &Attribute) -> bool {
+    let Meta::List(list) = &attribute.meta else {
+        return false;
+    };
+    let Some(segment) = list.path.segments.last() else {
+        return false;
+    };
+    segment.ident == "kernel"
+        && segment.arguments.is_empty()
+        && syn::parse2::<syn::Ident>(list.tokens.clone()).is_ok_and(|argument| argument == "typed")
+}
+
+fn source_artifact_literals(source: &str) -> Result<Vec<String>, String> {
     let file = syn::parse_file(source).map_err(|error| format!("invalid Rust source: {error}"))?;
-    let mut visitor = ArtifactJoinVisitor::default();
+    let mut visitor = SourceArtifactVisitor::default();
     visitor.visit_file(&file);
 
     let mut artifacts = BTreeSet::new();
@@ -490,8 +509,8 @@ fn validate_projection(
 #[cfg(test)]
 mod tests {
     use super::{
-        Lane, MANIFEST_COLUMNS, MANIFEST_VERSION, WorkspaceExample, artifact_join_literals, load,
-        parse, validate_projection,
+        Lane, MANIFEST_COLUMNS, MANIFEST_VERSION, WorkspaceExample, load, parse,
+        source_artifact_literals, validate_projection,
     };
     use std::path::Path;
 
@@ -596,14 +615,25 @@ mod tests {
     }
 
     #[test]
-    fn structurally_extracts_and_canonicalizes_hsaco_join_arguments() {
+    fn structurally_extracts_and_canonicalizes_source_artifacts() {
         let source = r##"
+#[kernel(typed)]
+pub fn vecadd() {}
+
+#[fe2o3_device::kernel(typed)]
+pub fn nested() {}
+
+#[kernel]
+pub fn ordinary() {}
+
 fn inspect(root: &std::path::Path, dynamic: &str) {
     // root.join("commented.hsaco");
+    // #[kernel(typed)] pub fn commented() {}
     let _quote = '\"';
     let _bytes = b"bytes.hsaco";
     let _raw_bytes = br#"raw_bytes.hsaco"#;
     let _detached = "detached.hsaco";
+    let _typed_text = "#[kernel(typed)] pub fn string_literal() {}";
     ignored!(root.join("macro_tokens.hsaco"));
     let _beta = root.join(r#"beta.hsaco"#);
     let _dynamic = root.join(dynamic);
@@ -611,21 +641,27 @@ fn inspect(root: &std::path::Path, dynamic: &str) {
     let _alpha = root.join("alpha.hsaco");
 }
 "##;
-        let artifacts = artifact_join_literals(source).expect("inspect Rust syntax");
+        let artifacts = source_artifact_literals(source).expect("inspect Rust syntax");
 
-        assert_eq!(artifacts, ["alpha.hsaco", "beta.hsaco"]);
+        assert_eq!(
+            artifacts,
+            ["alpha.hsaco", "beta.hsaco", "nested.hsaco", "vecadd.hsaco"]
+        );
     }
 
     #[test]
-    fn structured_artifact_projection_rejects_bad_syntax_and_unsafe_joins() {
-        let malformed = artifact_join_literals("fn main( {").expect_err("invalid Rust");
-        let unsafe_join = artifact_join_literals(
+    fn structured_artifact_projection_rejects_bad_syntax_and_unsafe_names() {
+        let malformed = source_artifact_literals("fn main( {").expect_err("invalid Rust");
+        let unsafe_join = source_artifact_literals(
             r#"fn main() { std::path::Path::new(".").join("../escape.hsaco"); }"#,
         )
         .expect_err("unsafe join");
+        let unsafe_kernel = source_artifact_literals(r#"#[kernel(typed)] pub fn Uppercase() {}"#)
+            .expect_err("unsafe typed kernel name");
 
         assert!(malformed.contains("invalid Rust source"));
         assert!(unsafe_join.contains("non-canonical HSACO join argument"));
+        assert!(unsafe_kernel.contains("non-canonical HSACO join argument"));
     }
 
     #[test]
