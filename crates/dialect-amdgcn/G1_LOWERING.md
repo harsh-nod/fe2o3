@@ -38,3 +38,28 @@ private/constant/generic memory, unsupported scalar types, legacy barriers
 without convergence evidence, scoped atomics, ambiguous workgroup `Alloca`,
 and every operation not explicitly listed above. It does not select a GPU
 processor, invoke LLVM, produce an artifact, or grant launch authority.
+
+## Inert compiler-module construction
+
+`lower_compiler_module_to_llvm_ir` reuses the same structured preflight and body
+lowering to produce one textual LLVM module from one verified kernel-IR
+`Module`. It is additive and is not wired into the production emitter.
+
+The module path emits kernel entries in canonical kernel-ID order, emits every
+non-entry definition and external declaration once in canonical function-ID
+order, and preserves verified block and operation order inside each definition.
+AMDGPU intrinsic declarations are deduplicated across entries. Every kernel has
+its own workgroup attribute and metadata node. The complete module is
+preflighted before the private output string is returned.
+
+This slice supports calls between ordinary device functions and external
+declarations with void or one scalar/global-or-workgroup-pointer result. Kernel
+slice ABIs remain supported only at kernel entries. Calls to kernel entries,
+multi-result and slice helper ABIs, duplicate output symbols, multiple exports
+of one entry definition, and kernel-context intrinsics, LDS, barriers, or wave
+operations in shared helpers fail closed.
+
+The result is textual LLVM IR only. It is not bitcode, a linked module, a code
+object, compiler provenance, or publication/load/launch authority. The bounded
+rustc-facing wrapper in `kernel_ir_codegen.rs` additionally limits all graph
+dimensions and the final text size before this path can be wired to collection.

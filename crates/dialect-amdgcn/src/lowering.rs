@@ -7,9 +7,10 @@ use fe2o3_kernel_ir::{
     AddressSpace as KernelAddressSpace, Atomic, AtomicKind, Axis, BasicBlock, BinaryOp, BlockId,
     CastKind, ComparePredicate, Constant, DiagnosticCode as VerificationDiagnosticCode, Function,
     FunctionId, IndexKind, IntrinsicKind, Kernel, KernelId, LaunchDomain, LaunchExtent,
-    MemoryOrdering, Module, ModuleId, Operation, OperationKind, ScalarType, SynchronizationScope,
-    TargetCapability, Terminator, Type, ValueId, VerificationErrors, WaveOperation,
-    WaveOperationKind, WaveWidth, WorkgroupMemoryExtent, WorkgroupSize, verify_module,
+    MemoryOrdering, Module, ModuleId, Operation, OperationKind, ScalarType, Signature,
+    SynchronizationScope, TargetCapability, Terminator, Type, ValueId, VerificationErrors,
+    WaveOperation, WaveOperationKind, WaveWidth, WorkgroupMemoryExtent, WorkgroupSize,
+    verify_module,
 };
 
 use crate::{AMDGPU_TRIPLE, AmdgcnIntrinsic, Dim};
@@ -22,6 +23,7 @@ pub enum LoweringDiagnosticCode {
     InputVerification(VerificationDiagnosticCode),
     MissingKernel,
     AmbiguousKernel,
+    ConflictingSymbol,
     UnsafeSymbolName,
     UnsupportedLaunchDomain,
     MissingWorkgroupSize,
@@ -78,6 +80,13 @@ impl LoweringLocation {
         }
     }
 
+    fn device_function(module: &Module, function: &Function) -> Self {
+        Self {
+            function: Some(function.id.clone()),
+            ..Self::module(module)
+        }
+    }
+
     fn block(module: &Module, kernel: &Kernel, function: &Function, block: BlockId) -> Self {
         Self {
             block: Some(block),
@@ -95,6 +104,25 @@ impl LoweringLocation {
         Self {
             operation: Some(operation),
             ..Self::block(module, kernel, function, block)
+        }
+    }
+
+    fn device_block(module: &Module, function: &Function, block: BlockId) -> Self {
+        Self {
+            block: Some(block),
+            ..Self::device_function(module, function)
+        }
+    }
+
+    fn device_operation(
+        module: &Module,
+        function: &Function,
+        block: BlockId,
+        operation: usize,
+    ) -> Self {
+        Self {
+            operation: Some(operation),
+            ..Self::device_block(module, function, block)
         }
     }
 }
@@ -309,6 +337,469 @@ pub fn lower_kernel_to_llvm_ir(
     lowerer.emit()
 }
 
+/// Lowers one verified kernel-IR module to one deterministic textual AMDGPU LLVM module.
+///
+/// This is an inert compiler-module construction primitive. It performs no linking, target
+/// selection, optimization, publication, or code-object generation. Kernel entries are emitted
+/// in kernel-identity order. Non-kernel definitions and external declarations are emitted once in
+/// function-identity order, while each function body preserves its verified block and operation
+/// order. All functions are preflighted before any output is returned.
+///
+/// The current bounded feature slice supports void or single-result scalar/pointer helper ABIs.
+/// Slice ABIs remain kernel-entry-only. Calls to kernel entry functions and context-dependent
+/// operations in helpers are rejected.
+pub fn lower_compiler_module_to_llvm_ir(module: &Module) -> Result<String, LoweringErrors> {
+    verify_module(module).map_err(LoweringErrors::verification)?;
+    if module.kernels.is_empty() {
+        return Err(LoweringErrors::one(
+            LoweringLocation::module(module),
+            LoweringDiagnosticCode::MissingKernel,
+            "compiler-module lowering requires at least one kernel entry",
+        ));
+    }
+
+    let module_wave = validate_capabilities(
+        LoweringLocation::module(module),
+        &module.required_capabilities,
+        "module",
+    )?;
+    let mut kernels = module.kernels.iter().collect::<Vec<_>>();
+    kernels.sort_by(|lhs, rhs| lhs.id.cmp(&rhs.id));
+    let mut functions = module.functions.iter().collect::<Vec<_>>();
+    functions.sort_by(|lhs, rhs| lhs.id.cmp(&rhs.id));
+
+    let mut entries = BTreeMap::<FunctionId, &Kernel>::new();
+    let mut emitted_symbols = BTreeMap::<String, String>::new();
+    for kernel in &kernels {
+        if !is_safe_symbol(kernel.id.as_str()) {
+            return Err(LoweringErrors::one(
+                LoweringLocation::kernel(module, kernel),
+                LoweringDiagnosticCode::UnsafeSymbolName,
+                "kernel identity is not a safe unquoted LLVM symbol",
+            ));
+        }
+        if let Some(previous) = entries.insert(kernel.entry.clone(), kernel) {
+            return Err(LoweringErrors::one(
+                LoweringLocation::kernel(module, kernel),
+                LoweringDiagnosticCode::ConflictingSymbol,
+                format!(
+                    "kernel entry function {} is already emitted as kernel {}; one definition cannot back multiple exported entries",
+                    kernel.entry, previous.id
+                ),
+            ));
+        }
+        reserve_emitted_symbol(
+            &mut emitted_symbols,
+            kernel.id.as_str(),
+            format!("kernel {}", kernel.id),
+            LoweringLocation::kernel(module, kernel),
+        )?;
+    }
+
+    let mut call_symbols = BTreeMap::<FunctionId, String>::new();
+    let mut declarations = Vec::new();
+    let mut helper_definitions = Vec::new();
+    for function in &functions {
+        if entries.contains_key(&function.id) {
+            continue;
+        }
+        let location = LoweringLocation::device_function(module, function);
+        if !is_safe_symbol(function.id.as_str()) {
+            return Err(LoweringErrors::one(
+                location,
+                LoweringDiagnosticCode::UnsafeSymbolName,
+                "device function identity is not a safe unquoted LLVM symbol",
+            ));
+        }
+        reserve_emitted_symbol(
+            &mut emitted_symbols,
+            function.id.as_str(),
+            format!("device function {}", function.id),
+            location.clone(),
+        )?;
+        validate_device_signature(module, function)?;
+        call_symbols.insert(function.id.clone(), function.id.as_str().to_string());
+        if function.body.is_some() {
+            helper_definitions.push(*function);
+        } else {
+            if !function.required_capabilities.is_empty() {
+                return Err(LoweringErrors::one(
+                    location,
+                    LoweringDiagnosticCode::UnsupportedCapability,
+                    "external declarations cannot carry target capability claims in this textual compiler-module slice",
+                ));
+            }
+            declarations.push(*function);
+        }
+    }
+
+    let mut kernel_lowerers = Vec::with_capacity(kernels.len());
+    for kernel in &kernels {
+        let workgroup_size = validate_launch(module, kernel)?;
+        let entry = module
+            .function(&kernel.entry)
+            .expect("verify_module established the kernel entry");
+        let kernel_wave = validate_capabilities(
+            LoweringLocation::kernel(module, kernel),
+            &kernel.required_capabilities,
+            "kernel",
+        )?;
+        let function_wave = validate_capabilities(
+            LoweringLocation::function(module, kernel, entry),
+            &entry.required_capabilities,
+            "entry function",
+        )?;
+        let wave_width = unique_wave_width(
+            LoweringLocation::function(module, kernel, entry),
+            [module_wave, kernel_wave, function_wave],
+        )?;
+        let mut lowerer = FunctionLowerer::compiler_module_kernel(
+            module,
+            kernel,
+            entry,
+            workgroup_size.x,
+            wave_width,
+            &call_symbols,
+        );
+        preflight_function(&mut lowerer)?;
+        kernel_lowerers.push(lowerer);
+    }
+
+    let mut helper_lowerers = Vec::with_capacity(helper_definitions.len());
+    for function in helper_definitions {
+        let function_wave = validate_capabilities(
+            LoweringLocation::device_function(module, function),
+            &function.required_capabilities,
+            "device function",
+        )?;
+        let wave_width = unique_wave_width(
+            LoweringLocation::device_function(module, function),
+            [module_wave, function_wave, None],
+        )?;
+        let mut lowerer = FunctionLowerer::compiler_module_device_function(
+            module,
+            function,
+            wave_width,
+            &call_symbols,
+        );
+        preflight_function(&mut lowerer)?;
+        helper_lowerers.push(lowerer);
+    }
+
+    emit_compiler_module(&kernel_lowerers, &helper_lowerers, &declarations)
+}
+
+fn reserve_emitted_symbol(
+    symbols: &mut BTreeMap<String, String>,
+    symbol: &str,
+    owner: String,
+    location: LoweringLocation,
+) -> Result<(), LoweringErrors> {
+    if let Some(previous) = symbols.insert(symbol.to_string(), owner.clone()) {
+        return Err(LoweringErrors::one(
+            location,
+            LoweringDiagnosticCode::ConflictingSymbol,
+            format!("LLVM symbol {symbol:?} is claimed by both {previous} and {owner}"),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_device_signature(module: &Module, function: &Function) -> Result<(), LoweringErrors> {
+    let location = LoweringLocation::device_function(module, function);
+    for (index, ty) in function.signature.parameters.iter().enumerate() {
+        validate_device_abi_type(ty, &location).map_err(|error| {
+            LoweringErrors::one(
+                location.clone(),
+                LoweringDiagnosticCode::UnsupportedParameter,
+                format!("unsupported device parameter {index}: {error}"),
+            )
+        })?;
+    }
+    if function.signature.results.len() > 1 {
+        return Err(LoweringErrors::one(
+            location,
+            LoweringDiagnosticCode::UnsupportedResults,
+            "device functions may return at most one scalar or pointer value",
+        ));
+    }
+    if let Some(result) = function.signature.results.first() {
+        validate_device_abi_type(result, &location).map_err(|error| {
+            LoweringErrors::one(
+                location,
+                LoweringDiagnosticCode::UnsupportedResults,
+                format!("unsupported device result: {error}"),
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn validate_device_abi_type(ty: &Type, location: &LoweringLocation) -> Result<(), String> {
+    match ty {
+        Type::Scalar(scalar) if supported_scalar(*scalar) => Ok(()),
+        Type::Pointer(_) => validate_pointer(ty, location).map_err(|error| error.to_string()),
+        _ => Err(format!("{ty:?}")),
+    }
+}
+
+fn unique_wave_width(
+    location: LoweringLocation,
+    widths: [Option<WaveWidth>; 3],
+) -> Result<Option<WaveWidth>, LoweringErrors> {
+    let widths = widths.into_iter().flatten().collect::<BTreeSet<_>>();
+    if widths.len() > 1 {
+        return Err(LoweringErrors::one(
+            location,
+            LoweringDiagnosticCode::UnsupportedCapability,
+            format!("conflicting exact wave-width requirements: {widths:?}"),
+        ));
+    }
+    Ok(widths.first().copied())
+}
+
+fn preflight_function(lowerer: &mut FunctionLowerer<'_>) -> Result<(), LoweringErrors> {
+    lowerer.validate_parameters()?;
+    let body = lowerer.function.body.as_ref().expect("definition required");
+    for block in &body.blocks {
+        lowerer.validate_block(block)?;
+    }
+    lowerer.validate_block_arguments()
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum IntrinsicAttribute {
+    ReadNone,
+    Convergent,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct IntrinsicDeclaration {
+    result: &'static str,
+    arguments: &'static str,
+    attribute: IntrinsicAttribute,
+}
+
+fn emit_compiler_module(
+    kernels: &[FunctionLowerer<'_>],
+    helpers: &[FunctionLowerer<'_>],
+    declarations: &[&Function],
+) -> Result<String, LoweringErrors> {
+    let intrinsics = collect_intrinsic_declarations(kernels.iter().chain(helpers));
+    let has_readnone = intrinsics
+        .values()
+        .any(|declaration| declaration.attribute == IntrinsicAttribute::ReadNone);
+    let has_convergent = intrinsics
+        .values()
+        .any(|declaration| declaration.attribute == IntrinsicAttribute::Convergent);
+    let readnone_attribute = has_readnone.then_some(kernels.len());
+    let convergent_attribute = has_convergent.then_some(kernels.len() + usize::from(has_readnone));
+
+    let mut output = String::new();
+    writeln!(output, "target triple = \"{AMDGPU_TRIPLE}\"\n").unwrap();
+
+    let mut has_lds = false;
+    for lowerer in kernels {
+        has_lds |= lowerer.emit_workgroup_memory_declarations(&mut output);
+    }
+    if has_lds {
+        writeln!(output).unwrap();
+    }
+
+    for (symbol, declaration) in &intrinsics {
+        let attribute = match declaration.attribute {
+            IntrinsicAttribute::ReadNone => readnone_attribute.expect("readnone attribute"),
+            IntrinsicAttribute::Convergent => convergent_attribute.expect("convergent attribute"),
+        };
+        writeln!(
+            output,
+            "declare {} @{symbol}({}) #{attribute}",
+            declaration.result, declaration.arguments
+        )
+        .unwrap();
+    }
+    for function in declarations {
+        writeln!(
+            output,
+            "declare {} @{}({})",
+            llvm_result_type(&function.signature),
+            function.id,
+            llvm_parameter_types(&function.signature).join(", ")
+        )
+        .unwrap();
+    }
+    if !intrinsics.is_empty() || !declarations.is_empty() {
+        writeln!(output).unwrap();
+    }
+
+    for (index, lowerer) in kernels.iter().enumerate() {
+        lowerer.emit_compiler_module_definition(&mut output, Some(index), Some(index))?;
+    }
+    for lowerer in helpers {
+        lowerer.emit_compiler_module_definition(&mut output, None, None)?;
+    }
+
+    for (index, lowerer) in kernels.iter().enumerate() {
+        let wave_attribute = lowerer.wave_width.map_or("", wave_target_feature);
+        let workgroup_x = lowerer
+            .workgroup_x
+            .expect("compiler-module kernel requires a workgroup size");
+        writeln!(
+            output,
+            "attributes #{index} = {{ nounwind \"amdgpu-flat-work-group-size\"=\"{workgroup_x},{workgroup_x}\"{wave_attribute} }}"
+        )
+        .unwrap();
+    }
+    if let Some(index) = readnone_attribute {
+        writeln!(
+            output,
+            "attributes #{index} = {{ nounwind readnone speculatable willreturn }}"
+        )
+        .unwrap();
+    }
+    if let Some(index) = convergent_attribute {
+        writeln!(output, "attributes #{index} = {{ convergent nounwind }}").unwrap();
+    }
+    writeln!(output).unwrap();
+    for (index, lowerer) in kernels.iter().enumerate() {
+        let workgroup_x = lowerer
+            .workgroup_x
+            .expect("compiler-module kernel requires a workgroup size");
+        writeln!(output, "!{index} = !{{i32 {workgroup_x}, i32 1, i32 1}}").unwrap();
+    }
+    Ok(output)
+}
+
+fn collect_intrinsic_declarations<'a>(
+    lowerers: impl Iterator<Item = &'a FunctionLowerer<'a>>,
+) -> BTreeMap<&'static str, IntrinsicDeclaration> {
+    let mut declarations = BTreeMap::new();
+    for lowerer in lowerers {
+        let body = lowerer.function.body.as_ref().expect("definition required");
+        for operation in body.blocks.iter().flat_map(|block| &block.operations) {
+            match &operation.kind {
+                OperationKind::Intrinsic(_) => {
+                    insert_intrinsic(
+                        &mut declarations,
+                        AmdgcnIntrinsic::WorkItemId(Dim::X),
+                        "i32",
+                        "",
+                        IntrinsicAttribute::ReadNone,
+                    );
+                    insert_intrinsic(
+                        &mut declarations,
+                        AmdgcnIntrinsic::WorkGroupId(Dim::X),
+                        "i32",
+                        "",
+                        IntrinsicAttribute::ReadNone,
+                    );
+                }
+                OperationKind::WorkgroupBarrier(_) => insert_intrinsic(
+                    &mut declarations,
+                    AmdgcnIntrinsic::SBarrier,
+                    "void",
+                    "",
+                    IntrinsicAttribute::Convergent,
+                ),
+                OperationKind::Wave(wave) => {
+                    if matches!(
+                        wave.kind,
+                        WaveOperationKind::LaneId | WaveOperationKind::ShuffleIndex { .. }
+                    ) {
+                        insert_intrinsic(
+                            &mut declarations,
+                            AmdgcnIntrinsic::MbcntLo,
+                            "i32",
+                            "i32, i32",
+                            IntrinsicAttribute::ReadNone,
+                        );
+                        if wave.width == WaveWidth::Wave64 {
+                            insert_intrinsic(
+                                &mut declarations,
+                                AmdgcnIntrinsic::MbcntHi,
+                                "i32",
+                                "i32, i32",
+                                IntrinsicAttribute::ReadNone,
+                            );
+                        }
+                    }
+                    if matches!(
+                        wave.kind,
+                        WaveOperationKind::Ballot { .. }
+                            | WaveOperationKind::Any { .. }
+                            | WaveOperationKind::All { .. }
+                    ) {
+                        let (result, intrinsic) = ballot_intrinsic(wave.width);
+                        declarations.insert(
+                            intrinsic,
+                            IntrinsicDeclaration {
+                                result,
+                                arguments: "i1",
+                                attribute: IntrinsicAttribute::Convergent,
+                            },
+                        );
+                    }
+                    if matches!(wave.kind, WaveOperationKind::ShuffleIndex { .. }) {
+                        insert_intrinsic(
+                            &mut declarations,
+                            AmdgcnIntrinsic::DsBpermute,
+                            "i32",
+                            "i32, i32",
+                            IntrinsicAttribute::Convergent,
+                        );
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    declarations
+}
+
+fn insert_intrinsic(
+    declarations: &mut BTreeMap<&'static str, IntrinsicDeclaration>,
+    intrinsic: AmdgcnIntrinsic,
+    result: &'static str,
+    arguments: &'static str,
+    attribute: IntrinsicAttribute,
+) {
+    let previous = declarations.insert(
+        intrinsic.llvm_name(),
+        IntrinsicDeclaration {
+            result,
+            arguments,
+            attribute,
+        },
+    );
+    debug_assert!(previous.is_none_or(|previous| {
+        previous
+            == IntrinsicDeclaration {
+                result,
+                arguments,
+                attribute,
+            }
+    }));
+}
+
+fn llvm_parameter_types(signature: &Signature) -> Vec<&'static str> {
+    signature.parameters.iter().map(llvm_type).collect()
+}
+
+fn llvm_result_type(signature: &Signature) -> &'static str {
+    match signature.results.as_slice() {
+        [] => "void",
+        [result] => llvm_type(result),
+        _ => unreachable!("compiler-module preflight rejected multi-value returns"),
+    }
+}
+
+fn wave_target_feature(width: WaveWidth) -> &'static str {
+    match width {
+        WaveWidth::Wave32 => " \"target-features\"=\"+wavefrontsize32,-wavefrontsize64\"",
+        WaveWidth::Wave64 => " \"target-features\"=\"-wavefrontsize32,+wavefrontsize64\"",
+    }
+}
+
 fn is_safe_symbol(symbol: &str) -> bool {
     let mut bytes = symbol.bytes();
     let Some(first) = bytes.next() else {
@@ -406,10 +897,12 @@ impl ValueBinding {
 
 struct FunctionLowerer<'a> {
     module: &'a Module,
-    kernel: &'a Kernel,
+    kernel: Option<&'a Kernel>,
     function: &'a Function,
-    workgroup_x: u32,
+    symbol: &'a str,
+    workgroup_x: Option<u32>,
     wave_width: Option<WaveWidth>,
+    call_symbols: Option<&'a BTreeMap<FunctionId, String>>,
     bindings: BTreeMap<ValueId, ValueBinding>,
 }
 
@@ -423,12 +916,75 @@ impl<'a> FunctionLowerer<'a> {
     ) -> Self {
         Self {
             module,
-            kernel,
+            kernel: Some(kernel),
             function,
-            workgroup_x,
+            symbol: kernel.id.as_str(),
+            workgroup_x: Some(workgroup_x),
             wave_width,
+            call_symbols: None,
             bindings: BTreeMap::new(),
         }
+    }
+
+    fn compiler_module_kernel(
+        module: &'a Module,
+        kernel: &'a Kernel,
+        function: &'a Function,
+        workgroup_x: u32,
+        wave_width: Option<WaveWidth>,
+        call_symbols: &'a BTreeMap<FunctionId, String>,
+    ) -> Self {
+        Self {
+            module,
+            kernel: Some(kernel),
+            function,
+            symbol: kernel.id.as_str(),
+            workgroup_x: Some(workgroup_x),
+            wave_width,
+            call_symbols: Some(call_symbols),
+            bindings: BTreeMap::new(),
+        }
+    }
+
+    fn compiler_module_device_function(
+        module: &'a Module,
+        function: &'a Function,
+        wave_width: Option<WaveWidth>,
+        call_symbols: &'a BTreeMap<FunctionId, String>,
+    ) -> Self {
+        Self {
+            module,
+            kernel: None,
+            function,
+            symbol: function.id.as_str(),
+            workgroup_x: None,
+            wave_width,
+            call_symbols: Some(call_symbols),
+            bindings: BTreeMap::new(),
+        }
+    }
+
+    fn function_location(&self) -> LoweringLocation {
+        self.kernel.map_or_else(
+            || LoweringLocation::device_function(self.module, self.function),
+            |kernel| LoweringLocation::function(self.module, kernel, self.function),
+        )
+    }
+
+    fn block_location(&self, block: BlockId) -> LoweringLocation {
+        self.kernel.map_or_else(
+            || LoweringLocation::device_block(self.module, self.function, block),
+            |kernel| LoweringLocation::block(self.module, kernel, self.function, block),
+        )
+    }
+
+    fn operation_location(&self, block: BlockId, operation: usize) -> LoweringLocation {
+        self.kernel.map_or_else(
+            || LoweringLocation::device_operation(self.module, self.function, block, operation),
+            |kernel| {
+                LoweringLocation::operation(self.module, kernel, self.function, block, operation)
+            },
+        )
     }
 
     fn validate_parameters(&mut self) -> Result<(), LoweringErrors> {
@@ -440,7 +996,7 @@ impl<'a> FunctionLowerer<'a> {
             .zip(&self.function.signature.parameters)
             .enumerate()
         {
-            let location = LoweringLocation::function(self.module, self.kernel, self.function);
+            let location = self.function_location();
             match ty {
                 Type::Scalar(scalar) => {
                     if !supported_scalar(*scalar) {
@@ -458,8 +1014,19 @@ impl<'a> FunctionLowerer<'a> {
                         },
                     );
                 }
+                Type::Pointer(_) if self.kernel.is_none() => {
+                    validate_pointer(ty, &location)?;
+                    self.bindings.insert(
+                        value,
+                        ValueBinding::Value {
+                            llvm_name: format!("%arg{index}"),
+                            ty: ty.clone(),
+                        },
+                    );
+                }
                 Type::Slice(slice)
-                    if slice.address_space == KernelAddressSpace::Global
+                    if self.kernel.is_some()
+                        && slice.address_space == KernelAddressSpace::Global
                         && supported_memory_type(&slice.element) =>
                 {
                     self.bindings.insert(
@@ -494,8 +1061,7 @@ impl<'a> FunctionLowerer<'a> {
         }
         for block in &body.blocks {
             for parameter in &block.parameters {
-                let location =
-                    LoweringLocation::block(self.module, self.kernel, self.function, block.id);
+                let location = self.block_location(block.id);
                 match &parameter.ty {
                     Type::Scalar(scalar) if supported_scalar(*scalar) => {
                         self.bindings.insert(
@@ -517,7 +1083,8 @@ impl<'a> FunctionLowerer<'a> {
                         );
                     }
                     Type::Slice(slice)
-                        if slice.address_space == KernelAddressSpace::Global
+                        if self.kernel.is_some()
+                            && slice.address_space == KernelAddressSpace::Global
                             && supported_memory_type(&slice.element) =>
                     {
                         self.bindings.insert(
@@ -603,8 +1170,7 @@ impl<'a> FunctionLowerer<'a> {
             .iter()
             .filter(|block| !block.parameters.is_empty())
         {
-            let location =
-                LoweringLocation::block(self.module, self.kernel, self.function, block.id);
+            let location = self.block_location(block.id);
             if block.id == entry.id {
                 return Err(LoweringErrors::one(
                     location,
@@ -644,8 +1210,7 @@ impl<'a> FunctionLowerer<'a> {
         index: usize,
         operation: &Operation,
     ) -> Result<(), LoweringErrors> {
-        let location =
-            LoweringLocation::operation(self.module, self.kernel, self.function, block, index);
+        let location = self.operation_location(block, index);
         match &operation.kind {
             OperationKind::Constant(constant) => {
                 validate_constant(constant).map_err(|message| {
@@ -657,11 +1222,12 @@ impl<'a> FunctionLowerer<'a> {
                 })?;
             }
             OperationKind::Intrinsic(intrinsic)
-                if intrinsic.kind
-                    == (IntrinsicKind::InvocationIndex {
-                        kind: IndexKind::Global,
-                        axis: Axis::X,
-                    }) => {}
+                if self.kernel.is_some()
+                    && intrinsic.kind
+                        == (IntrinsicKind::InvocationIndex {
+                            kind: IndexKind::Global,
+                            axis: Axis::X,
+                        }) => {}
             OperationKind::Binary { op, lhs, .. } => {
                 let ty = self.value_type(*lhs);
                 if !supported_binary(*op, ty) {
@@ -718,8 +1284,23 @@ impl<'a> FunctionLowerer<'a> {
             } => {
                 validate_memory_access(self.value_type(*pointer), access.address_space, &location)?;
             }
-            OperationKind::Fence(_) | OperationKind::WorkgroupBarrier(_) => {}
+            OperationKind::Fence(_) => {}
+            OperationKind::WorkgroupBarrier(_) if self.kernel.is_some() => {}
+            OperationKind::WorkgroupBarrier(_) => {
+                return Err(LoweringErrors::one(
+                    location,
+                    LoweringDiagnosticCode::UnsupportedBarrier,
+                    "compiler-module helpers cannot contain kernel-context workgroup barriers",
+                ));
+            }
             OperationKind::WorkgroupMemory(memory) => {
+                if self.kernel.is_none() {
+                    return Err(LoweringErrors::one(
+                        location,
+                        LoweringDiagnosticCode::UnsupportedWorkgroupMemory,
+                        "compiler-module helpers cannot own kernel-context LDS declarations",
+                    ));
+                }
                 if !supported_memory_type(&memory.element) {
                     return Err(LoweringErrors::one(
                         location,
@@ -750,6 +1331,9 @@ impl<'a> FunctionLowerer<'a> {
                     "workgroup Alloca is ambiguous; use explicit WorkgroupMemory",
                 ));
             }
+            OperationKind::Call { callee, arguments } if self.call_symbols.is_some() => {
+                self.validate_call(callee, arguments, operation, &location)?;
+            }
             OperationKind::Intrinsic(_)
             | OperationKind::Unary { .. }
             | OperationKind::Select { .. }
@@ -765,15 +1349,37 @@ impl<'a> FunctionLowerer<'a> {
         Ok(())
     }
 
+    fn validate_call(
+        &self,
+        callee: &FunctionId,
+        _arguments: &[ValueId],
+        _operation: &Operation,
+        location: &LoweringLocation,
+    ) -> Result<(), LoweringErrors> {
+        let call_symbols = self
+            .call_symbols
+            .expect("compiler-module call validation requires a symbol table");
+        if call_symbols.contains_key(callee) {
+            return Ok(());
+        }
+
+        Err(LoweringErrors::one(
+            location.clone(),
+            LoweringDiagnosticCode::UnsupportedOperation,
+            format!("compiler-module calls cannot target kernel entry function {callee}"),
+        ))
+    }
+
     fn validate_terminator(
         &self,
         block: BlockId,
         terminator: &Terminator,
     ) -> Result<(), LoweringErrors> {
-        let location = LoweringLocation::block(self.module, self.kernel, self.function, block);
+        let location = self.block_location(block);
         match terminator {
             Terminator::Branch { .. } | Terminator::ConditionalBranch { .. } => Ok(()),
             Terminator::Return { values } if values.is_empty() => Ok(()),
+            Terminator::Return { .. } if self.call_symbols.is_some() => Ok(()),
             Terminator::Unreachable => Ok(()),
             Terminator::Switch { .. }
             | Terminator::IntegerSwitch { .. }
@@ -840,6 +1446,13 @@ impl<'a> FunctionLowerer<'a> {
         wave: &WaveOperation,
         location: &LoweringLocation,
     ) -> Result<(), LoweringErrors> {
+        let Some(workgroup_x) = self.workgroup_x else {
+            return Err(LoweringErrors::one(
+                location.clone(),
+                LoweringDiagnosticCode::UnsupportedWaveOperation,
+                "compiler-module helpers cannot contain kernel-context wave operations",
+            ));
+        };
         if self.wave_width != Some(wave.width) {
             return Err(LoweringErrors::one(
                 location.clone(),
@@ -850,13 +1463,13 @@ impl<'a> FunctionLowerer<'a> {
                 ),
             ));
         }
-        if !self.workgroup_x.is_multiple_of(wave.width.lanes()) {
+        if !workgroup_x.is_multiple_of(wave.width.lanes()) {
             return Err(LoweringErrors::one(
                 location.clone(),
                 LoweringDiagnosticCode::UnsupportedWaveOperation,
                 format!(
                     "full-wave execution requires workgroup size {} to be a multiple of {}",
-                    self.workgroup_x,
+                    workgroup_x,
                     wave.width.lanes()
                 ),
             ));
@@ -942,28 +1555,12 @@ impl<'a> FunctionLowerer<'a> {
         }
         writeln!(output).unwrap();
 
-        write!(
-            output,
-            "define amdgpu_kernel void @{}(",
-            self.kernel.id.as_str()
-        )
-        .unwrap();
+        write!(output, "define amdgpu_kernel void @{}(", self.symbol).unwrap();
         let parameters = self.llvm_parameters()?;
         write!(output, "{}", parameters.join(", ")).unwrap();
         writeln!(output, ") #0 !reqd_work_group_size !0 {{").unwrap();
 
-        let body = self.function.body.as_ref().expect("definition required");
-        for block in &body.blocks {
-            writeln!(output, "{}:", block_label(block.id)).unwrap();
-            self.emit_block_parameters(&mut output, block);
-            for operation in &block.operations {
-                self.emit_operation(&mut output, operation)?;
-            }
-            self.emit_terminator(
-                &mut output,
-                block.terminator.as_ref().expect("verified terminator"),
-            );
-        }
+        self.emit_body(&mut output)?;
         writeln!(output, "}}\n").unwrap();
         let wave_attribute = self.wave_width.map_or("", |width| match width {
             WaveWidth::Wave32 => " \"target-features\"=\"+wavefrontsize32,-wavefrontsize64\"",
@@ -973,6 +1570,7 @@ impl<'a> FunctionLowerer<'a> {
             output,
             "attributes #0 = {{ nounwind \"amdgpu-flat-work-group-size\"=\"{0},{0}\"{wave_attribute} }}",
             self.workgroup_x
+                .expect("single-kernel emission requires a workgroup size")
         )
         .unwrap();
         writeln!(
@@ -984,8 +1582,61 @@ impl<'a> FunctionLowerer<'a> {
             writeln!(output, "attributes #2 = {{ convergent nounwind }}").unwrap();
         }
         writeln!(output).unwrap();
-        writeln!(output, "!0 = !{{i32 {}, i32 1, i32 1}}", self.workgroup_x).unwrap();
+        writeln!(
+            output,
+            "!0 = !{{i32 {}, i32 1, i32 1}}",
+            self.workgroup_x
+                .expect("single-kernel emission requires a workgroup size")
+        )
+        .unwrap();
         Ok(output)
+    }
+
+    fn emit_compiler_module_definition(
+        &self,
+        output: &mut String,
+        kernel_attribute: Option<usize>,
+        kernel_metadata: Option<usize>,
+    ) -> Result<(), LoweringErrors> {
+        let parameters = self.llvm_parameters()?.join(", ");
+        if self.kernel.is_some() {
+            writeln!(
+                output,
+                "define amdgpu_kernel void @{}({parameters}) #{} !reqd_work_group_size !{} {{",
+                self.symbol,
+                kernel_attribute.expect("kernel attribute index"),
+                kernel_metadata.expect("kernel metadata index"),
+            )
+            .unwrap();
+        } else {
+            let result = llvm_result_type(&self.function.signature);
+            let wave_attribute = self.wave_width.map_or("", wave_target_feature);
+            writeln!(
+                output,
+                "define {result} @{}({parameters}) nounwind{wave_attribute} {{",
+                self.symbol,
+            )
+            .unwrap();
+        }
+        self.emit_body(output)?;
+        writeln!(output, "}}\n").unwrap();
+        Ok(())
+    }
+
+    fn emit_body(&self, output: &mut String) -> Result<(), LoweringErrors> {
+        let body = self.function.body.as_ref().expect("definition required");
+        for block in &body.blocks {
+            writeln!(output, "{}:", block_label(block.id)).unwrap();
+            self.emit_block_parameters(output, block);
+            for operation in &block.operations {
+                self.emit_operation(output, operation)?;
+            }
+            self.emit_terminator(
+                output,
+                block.terminator.as_ref().expect("verified terminator"),
+            );
+        }
+        Ok(())
     }
 
     fn has_workgroup_barrier(&self) -> bool {
@@ -1017,7 +1668,11 @@ impl<'a> FunctionLowerer<'a> {
             };
             emitted = true;
             let result = operation.results.first().expect("verified LDS result");
-            let symbol = lds_symbol(self.kernel, result.id);
+            let symbol = lds_symbol(
+                self.kernel
+                    .expect("workgroup memory declarations require a kernel"),
+                result.id,
+            );
             let element = llvm_type(&memory.element);
             match memory.extent {
                 WorkgroupMemoryExtent::Static(elements) => writeln!(
@@ -1123,11 +1778,14 @@ impl<'a> FunctionLowerer<'a> {
             .enumerate()
             .map(|(index, ty)| match ty {
                 Type::Scalar(scalar) => Ok(format!("{} %arg{index}", llvm_scalar(*scalar))),
+                Type::Pointer(_) if self.kernel.is_none() => {
+                    Ok(format!("{} %arg{index}", llvm_type(ty)))
+                }
                 Type::Slice(_) => Ok(format!(
                     "ptr addrspace(1) %arg{index}.data, i64 %arg{index}.len"
                 )),
                 _ => Err(LoweringErrors::one(
-                    LoweringLocation::function(self.module, self.kernel, self.function),
+                    self.function_location(),
                     LoweringDiagnosticCode::UnsupportedParameter,
                     format!("unsupported kernel parameter {index}: {ty:?}"),
                 )),
@@ -1202,6 +1860,7 @@ impl<'a> FunctionLowerer<'a> {
                     output,
                     "  {result}.base = mul i64 {result}.group, {}",
                     self.workgroup_x
+                        .expect("global invocation index requires a kernel workgroup size")
                 )
                 .unwrap();
                 writeln!(output, "  {result} = add i64 {result}.base, {result}.local").unwrap();
@@ -1313,6 +1972,36 @@ impl<'a> FunctionLowerer<'a> {
                 )
                 .unwrap();
             }
+            OperationKind::Call { callee, arguments } => {
+                let callee_function = self
+                    .module
+                    .function(callee)
+                    .expect("verify_module checked the callee");
+                let symbol = self
+                    .call_symbols
+                    .expect("compiler-module call emission requires a symbol table")
+                    .get(callee)
+                    .expect("compiler-module preflight rejected kernel-entry calls");
+                let arguments = arguments
+                    .iter()
+                    .map(|argument| {
+                        let (name, ty) = self.value(*argument);
+                        format!("{} {name}", llvm_type(ty))
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                match callee_function.signature.results.as_slice() {
+                    [] => writeln!(output, "  call void @{symbol}({arguments})").unwrap(),
+                    [result] => writeln!(
+                        output,
+                        "  {} = call {} @{symbol}({arguments})",
+                        result_name.expect("verified call result"),
+                        llvm_type(result)
+                    )
+                    .unwrap(),
+                    _ => unreachable!("compiler-module preflight rejected multi-value returns"),
+                }
+            }
             OperationKind::Atomic(atomic) => {
                 self.emit_atomic(output, operation, atomic);
             }
@@ -1368,7 +2057,11 @@ impl<'a> FunctionLowerer<'a> {
                 writeln!(
                     output,
                     "  {result_name} = getelementptr [{elements} x {element}], ptr addrspace(3) {}, i32 0, i32 0",
-                    lds_symbol(self.kernel, result.id)
+                    lds_symbol(
+                        self.kernel
+                            .expect("workgroup memory emission requires a kernel"),
+                        result.id,
+                    )
                 )
                 .unwrap();
             }
@@ -1646,7 +2339,14 @@ impl<'a> FunctionLowerer<'a> {
                 )
                 .unwrap();
             }
-            Terminator::Return { .. } => writeln!(output, "  ret void").unwrap(),
+            Terminator::Return { values } => match values.as_slice() {
+                [] => writeln!(output, "  ret void").unwrap(),
+                [value] => {
+                    let (name, ty) = self.value(*value);
+                    writeln!(output, "  ret {} {name}", llvm_type(ty)).unwrap();
+                }
+                _ => unreachable!("compiler-module preflight rejected multi-value returns"),
+            },
             Terminator::Unreachable => writeln!(output, "  unreachable").unwrap(),
             _ => unreachable!("preflight rejected unsupported terminator"),
         }
