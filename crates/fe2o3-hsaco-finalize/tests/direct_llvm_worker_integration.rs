@@ -136,7 +136,8 @@ fn inspect_gfx942_v5_hsaco(bytes: &[u8]) {
     assert_eq!(bytes[5], 1, "output is not little-endian");
     assert_eq!(bytes[6], 1, "invalid ELF identification version");
     assert_eq!(bytes[7], 64, "output does not use the AMDHSA OS ABI");
-    assert_eq!(bytes[8], 5, "output is not an AMDHSA V5 code object");
+    // ELF ABI versions 2, 3, and 4 encode AMDHSA code objects V4, V5, and V6.
+    assert_eq!(bytes[8], 3, "output is not an AMDHSA V5 code object");
     assert_eq!(read_u16(bytes, 16), 3, "output is not ET_DYN");
     assert_eq!(read_u16(bytes, 18), 224, "output is not EM_AMDGPU");
     assert_eq!(read_u32(bytes, 20), 1, "invalid ELF version");
