@@ -13,11 +13,13 @@ use fe2o3_compiler_ffi::{
     CompilerFfiEnvelopeV1, CompilerModuleHandoffErrorV1, CompilerModuleHandoffV1,
     CompilerModuleKindV1,
 };
-use fe2o3_kernel_ir::{Module, TargetCapability, WaveWidth};
+use fe2o3_kernel_ir::{Module, TargetCapability, WaveWidth, WorkgroupSize};
 use std::collections::BTreeSet;
 use std::error::Error;
 use std::fmt;
 use std::path::Path;
+
+const G1_WORKGROUP_X: u32 = 256;
 
 /// Constructs and publishes one canonical, inert compiler-module handoff.
 ///
@@ -32,7 +34,8 @@ pub(crate) fn publish_worker_v2_compiler_module(
 ) -> Result<CompilerModuleHandoffReceiptV1, WorkerV2ProducerError> {
     let attempt = attempt.ok_or(WorkerV2ProducerError::MissingBuildAttempt)?;
     let envelope = envelope.ok_or(WorkerV2ProducerError::MissingCompilerFfiEnvelope)?;
-    let module = bind_exact_target_wave_mode(envelope, module)?;
+    let module = bind_g1_launch_contract(module);
+    let module = bind_exact_target_wave_mode(envelope, &module)?;
     let compiler_module = construct_inert_compiler_module_text_v1(&module)
         .map_err(WorkerV2ProducerError::CompilerModule)?;
     validate_envelope_module_roles(envelope, &compiler_module)?;
@@ -48,6 +51,18 @@ pub(crate) fn publish_worker_v2_compiler_module(
 
     publish_compiler_module_handoff_v1(output_dir, producer, attempt, handoff.canonical_bytes())
         .map_err(WorkerV2ProducerError::Publication)
+}
+
+fn bind_g1_launch_contract(module: &Module) -> Module {
+    let mut bound = module.clone();
+    for kernel in &mut bound.kernels {
+        // G1's host adapter launches 256 threads. Preserve explicit Kernel IR metadata so a
+        // later source-level launch contract can replace this compatibility binding per kernel.
+        kernel
+            .workgroup_size
+            .get_or_insert(WorkgroupSize::new(G1_WORKGROUP_X, 1, 1));
+    }
+    bound
 }
 
 fn bind_exact_target_wave_mode(
@@ -514,6 +529,37 @@ mod tests {
             consume_compiler_module_handoff_v1(&directory.0, &producer, attempt),
             Err(PublicationError::NotPublished)
         ));
+    }
+
+    #[test]
+    fn binds_only_missing_workgroup_sizes_to_the_g1_launch_contract() {
+        let explicit = complete_module();
+        assert_eq!(
+            bind_g1_launch_contract(&explicit).kernels[0].workgroup_size,
+            Some(WorkgroupSize::new(64, 1, 1))
+        );
+
+        let directory = TestDirectory::new();
+        let producer = producer();
+        let attempt = begin_attempt(&directory.0, &producer);
+        let envelope = envelope();
+        let mut module = complete_module();
+        module.kernels[0].workgroup_size = None;
+
+        publish_worker_v2_compiler_module(
+            &directory.0,
+            &producer,
+            Some(attempt),
+            Some(&envelope),
+            &module,
+        )
+        .unwrap();
+        let consumed =
+            consume_compiler_module_handoff_v1(&directory.0, &producer, attempt).unwrap();
+        let handoff = CompilerModuleHandoffV1::decode(consumed.bytes()).unwrap();
+        let text = std::str::from_utf8(handoff.module_bytes()).unwrap();
+        assert!(text.contains("\"amdgpu-flat-work-group-size\"=\"256,256\""));
+        assert!(text.contains("!reqd_work_group_size"));
     }
 
     #[test]
