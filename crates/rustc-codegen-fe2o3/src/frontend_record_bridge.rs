@@ -520,14 +520,17 @@ fn kernel(value: u32) -> u32 {
             let helper = collected(tcx, "helper", false);
             let first_collection = CollectionResult {
                 functions: vec![kernel.clone(), helper.clone()],
+                ..CollectionResult::default()
             };
             let reordered_collection = CollectionResult {
                 functions: vec![helper.clone(), kernel.clone()],
+                ..CollectionResult::default()
             };
             let helper_only = extract_frontend_record_v1(
                 tcx,
                 &CollectionResult {
                     functions: vec![helper.clone()],
+                    ..CollectionResult::default()
                 },
             )
             .unwrap_err();
@@ -535,6 +538,7 @@ fn kernel(value: u32) -> u32 {
                 tcx,
                 &CollectionResult {
                     functions: vec![kernel.clone(), kernel],
+                    ..CollectionResult::default()
                 },
             )
             .unwrap_err();

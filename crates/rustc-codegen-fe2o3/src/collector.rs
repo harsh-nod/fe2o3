@@ -38,6 +38,9 @@ pub struct CollectedFunction<'tcx> {
 #[derive(Clone, Debug, Default)]
 pub struct CollectionResult<'tcx> {
     pub functions: Vec<CollectedFunction<'tcx>>,
+    // Consumed by the direct-link integration after the G4 collection gate.
+    #[allow(dead_code)]
+    pub(crate) device_ffi: crate::device_ffi::DeviceFfiClosure,
 }
 
 #[derive(Debug)]
@@ -71,13 +74,20 @@ pub fn collect_device_functions<'tcx>(
     cgus: &[CodegenUnit<'tcx>],
     verbose: bool,
 ) -> Result<CollectionResult<'tcx>, CollectError> {
-    let mut collector = DeviceCollector::new(tcx, verbose);
-
     let ffi_declarations =
         crate::device_ffi::collect_declarations(tcx, cgus).map_err(|error| CollectError {
             message: error.to_string(),
         })?;
-    for declaration in ffi_declarations {
+    let ffi_exports = ffi_declarations
+        .iter()
+        .filter(|declaration| {
+            declaration.contract.direction == crate::device_ffi::DeviceFfiDirection::Export
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut collector = DeviceCollector::new(tcx, verbose, ffi_declarations);
+
+    for declaration in ffi_exports {
         if declaration.contract.direction == crate::device_ffi::DeviceFfiDirection::Export {
             if verbose {
                 eprintln!(
@@ -87,14 +97,7 @@ pub fn collect_device_functions<'tcx>(
                     declaration.contract.id.to_hex(),
                 );
             }
-            collector.add_device_export(declaration.instance, declaration.contract.symbol);
-        } else if verbose {
-            eprintln!(
-                "[collector] declared device import: {} -> {} ({})",
-                tcx.def_path_str(declaration.instance.def_id()),
-                declaration.contract.symbol,
-                declaration.contract.id.to_hex(),
-            );
+            collector.add_device_export(declaration.instance, declaration.contract.symbol)?;
         }
     }
 
@@ -113,7 +116,7 @@ pub fn collect_device_functions<'tcx>(
             root.typed_profile,
             root.kernel_binding,
             root.typed_layout_identities,
-        );
+        )?;
     }
 
     collector.collect()
@@ -875,12 +878,18 @@ struct DeviceCollector<'tcx> {
     used_export_names: BTreeSet<String>,
     worklist: VecDeque<CollectedFunction<'tcx>>,
     result: Vec<CollectedFunction<'tcx>>,
+    ffi_declarations: Vec<crate::device_ffi::CollectedDeviceFfi<'tcx>>,
+    reachable_ffi_imports: BTreeSet<reserved_fe2o3_symbols::DeviceFfiContractIdV1>,
     expected_target: String,
     verbose: bool,
 }
 
 impl<'tcx> DeviceCollector<'tcx> {
-    fn new(tcx: TyCtxt<'tcx>, verbose: bool) -> Self {
+    fn new(
+        tcx: TyCtxt<'tcx>,
+        verbose: bool,
+        ffi_declarations: Vec<crate::device_ffi::CollectedDeviceFfi<'tcx>>,
+    ) -> Self {
         Self {
             tcx,
             seen: BTreeSet::new(),
@@ -888,6 +897,8 @@ impl<'tcx> DeviceCollector<'tcx> {
             used_export_names: BTreeSet::new(),
             worklist: VecDeque::new(),
             result: Vec::new(),
+            ffi_declarations,
+            reachable_ffi_imports: BTreeSet::new(),
             expected_target: std::env::var("FE2O3_TARGET")
                 .ok()
                 .filter(|target| !target.trim().is_empty())
@@ -896,12 +907,22 @@ impl<'tcx> DeviceCollector<'tcx> {
         }
     }
 
-    fn add_device_export(&mut self, instance: Instance<'tcx>, export_name: String) {
+    fn add_device_export(
+        &mut self,
+        instance: Instance<'tcx>,
+        export_name: String,
+    ) -> Result<(), CollectError> {
+        if !self.used_export_names.insert(export_name.clone()) {
+            return Err(CollectError {
+                message: format!(
+                    "fe2o3 device FFI export `{export_name}` has duplicate symbol ownership"
+                ),
+            });
+        }
         let identity = self.instance_identity(instance);
         if self.seen.insert(identity.clone()) {
             self.call_chains
                 .insert(identity, vec![self.instance_label(instance)]);
-            self.used_export_names.insert(export_name.clone());
             self.worklist.push_back(CollectedFunction {
                 instance,
                 is_kernel: false,
@@ -912,6 +933,7 @@ impl<'tcx> DeviceCollector<'tcx> {
                 typed_layout_identities: None,
             });
         }
+        Ok(())
     }
 
     fn add_root(
@@ -922,12 +944,18 @@ impl<'tcx> DeviceCollector<'tcx> {
         typed_profile: Option<TypedKernelProfile>,
         kernel_binding: Option<KernelBindingIdV1>,
         typed_layout_identities: Option<[TypeIdentity; 3]>,
-    ) {
+    ) -> Result<(), CollectError> {
+        if !self.used_export_names.insert(export_name.clone()) {
+            return Err(CollectError {
+                message: format!(
+                    "fe2o3 kernel export `{export_name}` conflicts with an existing kernel or device FFI symbol"
+                ),
+            });
+        }
         let identity = self.instance_identity(instance);
         if self.seen.insert(identity.clone()) {
             self.call_chains
                 .insert(identity.clone(), vec![self.instance_label(instance)]);
-            self.used_export_names.insert(export_name.clone());
             self.worklist.push_back(CollectedFunction {
                 instance,
                 is_kernel: true,
@@ -938,6 +966,7 @@ impl<'tcx> DeviceCollector<'tcx> {
                 typed_layout_identities,
             });
         }
+        Ok(())
     }
 
     fn collect(mut self) -> Result<CollectionResult<'tcx>, CollectError> {
@@ -972,8 +1001,26 @@ impl<'tcx> DeviceCollector<'tcx> {
             self.result.push(function);
         }
 
+        let device_ffi = crate::device_ffi::close_declarations(
+            &mut self.ffi_declarations,
+            &self.reachable_ffi_imports,
+        )
+        .map_err(|error| CollectError {
+            message: error.to_string(),
+        })?;
+        if self.verbose && !device_ffi.is_empty() {
+            eprintln!(
+                "[collector] closed device FFI: {} imports, {} exports, target {}, code object v{}",
+                device_ffi.imports.len(),
+                device_ffi.exports.len(),
+                device_ffi.target.as_deref().unwrap_or("<none>"),
+                device_ffi.code_object_version.unwrap_or_default(),
+            );
+        }
+
         Ok(CollectionResult {
             functions: self.result,
+            device_ffi,
         })
     }
 
@@ -996,29 +1043,68 @@ impl<'tcx> DeviceCollector<'tcx> {
             TypingEnv::fully_monomorphized(),
             EarlyBinder::bind(*args),
         );
-        let ffi_instance = Instance::try_resolve(
-            self.tcx,
-            TypingEnv::fully_monomorphized(),
-            *def_id,
-            normalized_args,
-        )
-        .ok()
-        .flatten();
-        if let Some(instance) = ffi_instance
-            && let Some(contract) =
+        let marked_contract = crate::device_ffi::contract_for_def(self.tcx, *def_id)
+            .map_err(|error| self.reachable_error(caller, &error.to_string(), None))?;
+        if marked_contract.is_some() {
+            let instance = Instance::try_resolve(
+                self.tcx,
+                TypingEnv::fully_monomorphized(),
+                *def_id,
+                normalized_args,
+            )
+            .map_err(|_| {
+                self.reachable_error(
+                    caller,
+                    "device FFI declaration normalization failed",
+                    Some(self.tcx.def_path_str(*def_id)),
+                )
+            })?
+            .ok_or_else(|| {
+                self.reachable_error(
+                    caller,
+                    "device FFI declaration did not resolve to a concrete instance",
+                    Some(self.tcx.def_path_str(*def_id)),
+                )
+            })?;
+            let contract =
                 crate::device_ffi::contract_for_instance(self.tcx, instance, &self.expected_target)
                     .map_err(|error| self.reachable_error(caller, &error.to_string(), None))?
-            && contract.direction == crate::device_ffi::DeviceFfiDirection::Import
-        {
-            if self.verbose {
-                eprintln!(
-                    "[collector] external device import: {} -> {} ({})",
-                    self.tcx.def_path_str(instance.def_id()),
-                    contract.symbol,
-                    contract.id.to_hex(),
-                );
+                    .ok_or_else(|| {
+                        self.reachable_error(
+                            caller,
+                            "resolved device FFI declaration lost its compiler marker",
+                            Some(self.tcx.def_path_str(*def_id)),
+                        )
+                    })?;
+            let declaration =
+                crate::device_ffi::collected_declaration(self.tcx, instance, contract.clone());
+            if let Some(existing) = self
+                .ffi_declarations
+                .iter()
+                .find(|entry| entry.owner.item_path == declaration.owner.item_path)
+            {
+                if existing.contract != contract {
+                    return Err(self.reachable_error(
+                        caller,
+                        "reachable device FFI marker disagrees with its collected declaration",
+                        Some(self.tcx.def_path_str(*def_id)),
+                    ));
+                }
+            } else {
+                self.ffi_declarations.push(declaration);
             }
-            return Ok(());
+            if contract.direction == crate::device_ffi::DeviceFfiDirection::Import {
+                self.reachable_ffi_imports.insert(contract.id);
+                if self.verbose {
+                    eprintln!(
+                        "[collector] external device import: {} -> {} ({})",
+                        self.tcx.def_path_str(instance.def_id()),
+                        contract.symbol,
+                        contract.id.to_hex(),
+                    );
+                }
+                return Ok(());
+            }
         }
 
         match self.should_collect_from_crate(*def_id) {

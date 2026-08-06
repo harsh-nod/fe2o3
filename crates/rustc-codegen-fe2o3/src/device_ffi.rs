@@ -59,10 +59,53 @@ pub(crate) struct DeviceFfiContract {
     pub(crate) semantic_identity: String,
 }
 
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) struct DeviceFfiSourceOwner {
+    pub(crate) crate_name: String,
+    pub(crate) item_path: String,
+    pub(crate) instance_identity: String,
+}
+
+impl DeviceFfiSourceOwner {
+    fn label(&self) -> &str {
+        &self.item_path
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) enum DeviceFfiLinkRole {
+    /// The definition must be assigned to a typed external input by G5.
+    RequiresExternalDefinition,
+    /// The definition is emitted by rustc into the compiler LLVM bitcode input.
+    DefinesInRustLlvmBitcode,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ClosedDeviceFfiContract {
+    pub(crate) contract: DeviceFfiContract,
+    pub(crate) owner: DeviceFfiSourceOwner,
+    pub(crate) link_role: DeviceFfiLinkRole,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct DeviceFfiClosure {
+    pub(crate) target: Option<String>,
+    pub(crate) code_object_version: Option<u16>,
+    pub(crate) imports: Vec<ClosedDeviceFfiContract>,
+    pub(crate) exports: Vec<ClosedDeviceFfiContract>,
+}
+
+impl DeviceFfiClosure {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.imports.is_empty() && self.exports.is_empty()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct CollectedDeviceFfi<'tcx> {
     pub(crate) contract: DeviceFfiContract,
     pub(crate) instance: Instance<'tcx>,
+    pub(crate) owner: DeviceFfiSourceOwner,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -127,13 +170,20 @@ pub(crate) fn collect_declarations<'tcx>(
     let mut declarations = Vec::new();
     let mut seen_instances = BTreeSet::new();
 
-    for instance in cgu_instances(cgus) {
-        let identity = tcx.symbol_name(instance).name.to_string();
+    for instance in local_registration_instances(tcx)?
+        .into_iter()
+        .chain(cgu_instances(cgus))
+    {
+        let identity = format!(
+            "{}|{}",
+            tcx.def_path_str(instance.def_id()),
+            tcx.symbol_name(instance).name
+        );
         if !seen_instances.insert(identity) {
             continue;
         }
         if let Some(contract) = contract_for_instance(tcx, instance, &expected_target)? {
-            declarations.push(CollectedDeviceFfi { contract, instance });
+            declarations.push(collected_declaration(tcx, instance, contract));
             if declarations.len() > MAX_DEVICE_FFI_CONTRACTS {
                 return Err(DeviceFfiError::new(format!(
                     "more than {MAX_DEVICE_FFI_CONTRACTS} declarations were collected"
@@ -145,6 +195,102 @@ pub(crate) fn collect_declarations<'tcx>(
     validate_local_registrations(tcx, &declarations)?;
     validate_contract_set(&mut declarations)?;
     Ok(declarations)
+}
+
+fn local_registration_instances<'tcx>(
+    tcx: TyCtxt<'tcx>,
+) -> Result<Vec<Instance<'tcx>>, DeviceFfiError> {
+    let mut instances = Vec::new();
+    for item_id in tcx.hir_free_items() {
+        let item = tcx.hir_item(item_id);
+        let def_id = item.owner_id.def_id;
+        let path = tcx.def_path_str(def_id.to_def_id());
+        let item_name = path.rsplit("::").next().unwrap_or(&path);
+        if !item_name.starts_with(reserved_fe2o3_symbols::DEVICE_FFI_REGISTRATION_PREFIX_V1) {
+            continue;
+        }
+        let body = tcx.mir_for_ctfe(def_id.to_def_id());
+        for block in body.basic_blocks.iter() {
+            for statement in &block.statements {
+                let Some((_, value)) = statement.kind.as_assign() else {
+                    continue;
+                };
+                let operands = match value {
+                    Rvalue::Use(operand) | Rvalue::Cast(_, operand, _) => {
+                        vec![operand]
+                    }
+                    Rvalue::Aggregate(_, operands) => operands.iter().collect(),
+                    _ => Vec::new(),
+                };
+                for operand in operands {
+                    let Operand::Constant(constant) = operand else {
+                        continue;
+                    };
+                    let TyKind::FnDef(function, args) = constant.const_.ty().kind() else {
+                        continue;
+                    };
+                    let instance = Instance::try_resolve(
+                        tcx,
+                        TypingEnv::fully_monomorphized(),
+                        *function,
+                        args,
+                    )
+                    .map_err(|_| {
+                        DeviceFfiError::new(format!(
+                            "registration `{path}` function normalization failed"
+                        ))
+                    })?
+                    .ok_or_else(|| {
+                        DeviceFfiError::new(format!(
+                            "registration `{path}` function did not resolve to a concrete instance"
+                        ))
+                    })?;
+                    if contract_for_def(tcx, instance.def_id())?.is_some() {
+                        instances.push(instance);
+                    }
+                }
+            }
+        }
+    }
+    instances.sort_by_key(|instance| {
+        format!(
+            "{}|{}",
+            tcx.def_path_str(instance.def_id()),
+            tcx.symbol_name(*instance).name
+        )
+    });
+    instances.dedup_by_key(|instance| {
+        format!(
+            "{}|{}",
+            tcx.def_path_str(instance.def_id()),
+            tcx.symbol_name(*instance).name
+        )
+    });
+    Ok(instances)
+}
+
+pub(crate) fn collected_declaration<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+    contract: DeviceFfiContract,
+) -> CollectedDeviceFfi<'tcx> {
+    let def_id = instance.def_id();
+    let crate_name = tcx.crate_name(def_id.krate).as_str().to_owned();
+    let raw_path = tcx.def_path_str(def_id);
+    let item_path = if def_id.is_local() {
+        format!("{crate_name}::{raw_path}")
+    } else {
+        raw_path
+    };
+    CollectedDeviceFfi {
+        contract,
+        instance,
+        owner: DeviceFfiSourceOwner {
+            crate_name,
+            item_path,
+            instance_identity: tcx.symbol_name(instance).name.to_string(),
+        },
+    }
 }
 
 fn validate_local_registrations<'tcx>(
@@ -241,6 +387,16 @@ pub(crate) fn contract_for_instance<'tcx>(
     expected_target: &str,
 ) -> Result<Option<DeviceFfiContract>, DeviceFfiError> {
     let def_id = instance.def_id();
+    let Some(contract) = contract_for_def(tcx, def_id)? else {
+        return Ok(None);
+    };
+    validate_contract_for_instance(tcx, instance, expected_target, contract).map(Some)
+}
+
+pub(crate) fn contract_for_def(
+    tcx: TyCtxt<'_>,
+    def_id: DefId,
+) -> Result<Option<DeviceFfiContract>, DeviceFfiError> {
     let markers = marker_strings(tcx, def_id)
         .into_iter()
         .filter(|marker| marker.starts_with(DEVICE_FFI_MARKER_PREFIX_V1))
@@ -254,7 +410,22 @@ pub(crate) fn contract_for_instance<'tcx>(
             tcx.def_path_str(def_id)
         )));
     }
-    let contract = parse_marker(&markers[0])?;
+    parse_marker(&markers[0]).map(Some).map_err(|error| {
+        DeviceFfiError::new(format!(
+            "declaration `{}`: {}",
+            tcx.def_path_str(def_id),
+            error.reason
+        ))
+    })
+}
+
+fn validate_contract_for_instance<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+    expected_target: &str,
+    contract: DeviceFfiContract,
+) -> Result<DeviceFfiContract, DeviceFfiError> {
+    let def_id = instance.def_id();
     if contract.target != expected_target {
         return Err(DeviceFfiError::new(format!(
             "`{}` declares target `{}` but this compilation targets `{expected_target}`",
@@ -308,7 +479,7 @@ pub(crate) fn contract_for_instance<'tcx>(
         )));
     }
 
-    Ok(Some(contract))
+    Ok(contract)
 }
 
 fn validate_export_body<'tcx>(
@@ -642,7 +813,20 @@ fn validate_contract_set<'tcx>(
             .cmp(&rhs.contract.symbol)
             .then_with(|| lhs.contract.direction.cmp(&rhs.contract.direction))
             .then_with(|| lhs.contract.id.cmp(&rhs.contract.id))
+            .then_with(|| lhs.owner.cmp(&rhs.owner))
     });
+    let closed = declarations
+        .iter()
+        .map(|declaration| ClosedDeviceFfiContract {
+            contract: declaration.contract.clone(),
+            owner: declaration.owner.clone(),
+            link_role: match declaration.contract.direction {
+                DeviceFfiDirection::Import => DeviceFfiLinkRole::RequiresExternalDefinition,
+                DeviceFfiDirection::Export => DeviceFfiLinkRole::DefinesInRustLlvmBitcode,
+            },
+        })
+        .collect::<Vec<_>>();
+    validate_source_bindings(&closed)?;
     validate_contract_values(declarations.iter().map(|declaration| &declaration.contract))
 }
 
@@ -651,7 +835,20 @@ fn validate_contract_values<'a>(
 ) -> Result<(), DeviceFfiError> {
     let mut ids = BTreeSet::new();
     let mut symbols: BTreeMap<&str, &DeviceFfiContract> = BTreeMap::new();
+    let mut semantics: BTreeMap<&str, &DeviceFfiContract> = BTreeMap::new();
+    let mut target = None;
+    let mut code_object_version = None;
     for contract in contracts {
+        if contract
+            .symbol
+            .starts_with(reserved_fe2o3_symbols::KERNEL_PREFIX)
+            || contract.symbol.starts_with("__fe2o3_")
+        {
+            return Err(DeviceFfiError::new(format!(
+                "device FFI symbol `{}` uses a compiler-reserved namespace",
+                contract.symbol
+            )));
+        }
         if !ids.insert(contract.id) {
             return Err(DeviceFfiError::new(format!(
                 "duplicate contract identity {}",
@@ -659,23 +856,182 @@ fn validate_contract_values<'a>(
             )));
         }
         if let Some(previous) = symbols.insert(&contract.symbol, contract) {
-            if previous.direction == contract.direction {
+            if previous.direction == contract.direction && previous == contract {
                 return Err(DeviceFfiError::new(format!(
                     "duplicate {:?} declaration for symbol `{}`",
                     contract.direction, contract.symbol
                 )));
             }
-            if previous.target != contract.target
-                || previous.code_object_version != contract.code_object_version
+            return Err(DeviceFfiError::new(format!(
+                "conflicting {:?}/{:?} declarations for symbol `{}`",
+                previous.direction, contract.direction, contract.symbol
+            )));
+        }
+        if let Some(previous) = semantics.insert(&contract.semantic_identity, contract)
+            && (previous.symbol != contract.symbol
+                || previous.direction != contract.direction
                 || previous.physical_abi != contract.physical_abi
-                || previous.effects != contract.effects
-                || previous.semantic_identity != contract.semantic_identity
-            {
-                return Err(DeviceFfiError::new(format!(
-                    "conflicting import/export declarations for symbol `{}`",
-                    contract.symbol
-                )));
+                || previous.effects != contract.effects)
+        {
+            return Err(DeviceFfiError::new(format!(
+                "semantic identity `{}` is claimed by incompatible symbols `{}` and `{}`",
+                contract.semantic_identity, previous.symbol, contract.symbol
+            )));
+        }
+        if let Some(previous) = target.replace(contract.target.as_str())
+            && previous != contract.target
+        {
+            return Err(DeviceFfiError::new(format!(
+                "device FFI closure mixes targets `{previous}` and `{}`",
+                contract.target
+            )));
+        }
+        if let Some(previous) = code_object_version.replace(contract.code_object_version)
+            && previous != contract.code_object_version
+        {
+            return Err(DeviceFfiError::new(format!(
+                "device FFI closure mixes code-object versions `{previous}` and `{}`",
+                contract.code_object_version
+            )));
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn close_declarations<'tcx>(
+    declarations: &mut Vec<CollectedDeviceFfi<'tcx>>,
+    reachable_imports: &BTreeSet<DeviceFfiContractIdV1>,
+) -> Result<DeviceFfiClosure, DeviceFfiError> {
+    validate_contract_set(declarations)?;
+    close_contracts(
+        declarations
+            .iter()
+            .map(|declaration| ClosedDeviceFfiContract {
+                contract: declaration.contract.clone(),
+                owner: declaration.owner.clone(),
+                link_role: match declaration.contract.direction {
+                    DeviceFfiDirection::Import => DeviceFfiLinkRole::RequiresExternalDefinition,
+                    DeviceFfiDirection::Export => DeviceFfiLinkRole::DefinesInRustLlvmBitcode,
+                },
+            })
+            .collect(),
+        reachable_imports,
+    )
+}
+
+fn close_contracts(
+    declarations: Vec<ClosedDeviceFfiContract>,
+    reachable_imports: &BTreeSet<DeviceFfiContractIdV1>,
+) -> Result<DeviceFfiClosure, DeviceFfiError> {
+    validate_source_bindings(&declarations)?;
+    validate_contract_values(declarations.iter().map(|entry| &entry.contract))?;
+
+    for declaration in &declarations {
+        let expected_role = match declaration.contract.direction {
+            DeviceFfiDirection::Import => DeviceFfiLinkRole::RequiresExternalDefinition,
+            DeviceFfiDirection::Export => DeviceFfiLinkRole::DefinesInRustLlvmBitcode,
+        };
+        if declaration.link_role != expected_role {
+            return Err(DeviceFfiError::new(format!(
+                "device FFI `{}` has link role {:?} incompatible with direction {:?}",
+                declaration.contract.symbol, declaration.link_role, declaration.contract.direction,
+            )));
+        }
+    }
+
+    let declared_imports = declarations
+        .iter()
+        .filter(|entry| entry.contract.direction == DeviceFfiDirection::Import)
+        .map(|entry| entry.contract.id)
+        .collect::<BTreeSet<_>>();
+    if let Some(unknown) = reachable_imports.difference(&declared_imports).next() {
+        return Err(DeviceFfiError::new(format!(
+            "reachable import {} has no collected declaration",
+            unknown.to_hex()
+        )));
+    }
+
+    let mut imports = Vec::new();
+    let mut exports = Vec::new();
+    for declaration in declarations {
+        match declaration.contract.direction {
+            DeviceFfiDirection::Import => {
+                if !reachable_imports.contains(&declaration.contract.id) {
+                    return Err(DeviceFfiError::new(format!(
+                        "import `{}` declared by `{}` is host-only or unreachable from the final device graph",
+                        declaration.contract.symbol,
+                        declaration.owner.label(),
+                    )));
+                }
+                imports.push(declaration);
             }
+            DeviceFfiDirection::Export => exports.push(declaration),
+        }
+    }
+    let canonical = |lhs: &ClosedDeviceFfiContract, rhs: &ClosedDeviceFfiContract| {
+        lhs.contract
+            .symbol
+            .cmp(&rhs.contract.symbol)
+            .then_with(|| lhs.contract.id.cmp(&rhs.contract.id))
+            .then_with(|| lhs.owner.cmp(&rhs.owner))
+    };
+    imports.sort_by(canonical);
+    exports.sort_by(canonical);
+
+    let first = imports.first().or_else(|| exports.first());
+    Ok(DeviceFfiClosure {
+        target: first.map(|entry| entry.contract.target.clone()),
+        code_object_version: first.map(|entry| entry.contract.code_object_version),
+        imports,
+        exports,
+    })
+}
+
+fn validate_source_bindings(
+    declarations: &[ClosedDeviceFfiContract],
+) -> Result<(), DeviceFfiError> {
+    let mut instance_owners = BTreeMap::new();
+    let mut source_items = BTreeMap::new();
+    let mut ids = BTreeMap::new();
+    let mut symbols: BTreeMap<&str, &ClosedDeviceFfiContract> = BTreeMap::new();
+    for declaration in declarations {
+        if let Some(previous) = ids.insert(declaration.contract.id, declaration) {
+            return Err(DeviceFfiError::new(format!(
+                "duplicate device FFI contract {} is owned by both `{}` and `{}`",
+                declaration.contract.id.to_hex(),
+                previous.owner.label(),
+                declaration.owner.label(),
+            )));
+        }
+        if let Some(previous) = symbols.insert(&declaration.contract.symbol, declaration) {
+            return Err(DeviceFfiError::new(format!(
+                "duplicate or conflicting providers for device FFI symbol `{}` are owned by `{}` and `{}` ({:?} versus {:?})",
+                declaration.contract.symbol,
+                previous.owner.label(),
+                declaration.owner.label(),
+                previous.contract.direction,
+                declaration.contract.direction,
+            )));
+        }
+        if let Some(previous) = instance_owners.insert(
+            declaration.owner.instance_identity.as_str(),
+            declaration.owner.label(),
+        ) {
+            return Err(DeviceFfiError::new(format!(
+                "device FFI instance `{}` is attributed to both `{previous}` and `{}`",
+                declaration.owner.instance_identity,
+                declaration.owner.label(),
+            )));
+        }
+        if let Some(previous) =
+            source_items.insert(declaration.owner.label(), declaration.contract.id)
+        {
+            return Err(DeviceFfiError::new(format!(
+                "source item `{}` owns multiple device FFI contracts {} and {}",
+                declaration.owner.label(),
+                previous.to_hex(),
+                declaration.contract.id.to_hex(),
+            )));
         }
     }
     Ok(())
@@ -809,6 +1165,58 @@ mod tests {
         reserved_fe2o3_symbols::device_ffi_marker_v1(id, fields)
     }
 
+    fn contract(
+        direction: DeviceFfiDirection,
+        symbol: &str,
+        target: &str,
+        code_object_version: u16,
+        physical_abi: &str,
+        effects: &str,
+        semantic_byte: u8,
+    ) -> DeviceFfiContract {
+        let semantic_identity = format!("{semantic_byte:02x}").repeat(32);
+        let fields = DeviceFfiContractFieldsV1 {
+            direction: direction.tag(),
+            symbol,
+            calling_convention: "C",
+            code_object_version,
+            target,
+            physical_abi,
+            effects,
+            semantic_identity: &semantic_identity,
+        };
+        DeviceFfiContract {
+            id: derive_device_ffi_contract_id_v1(fields),
+            direction,
+            symbol: symbol.to_owned(),
+            target: target.to_owned(),
+            code_object_version,
+            physical_abi: physical_abi.to_owned(),
+            effects: effects.to_owned(),
+            semantic_identity,
+        }
+    }
+
+    fn closed(
+        contract: DeviceFfiContract,
+        crate_name: &str,
+        item_name: &str,
+    ) -> ClosedDeviceFfiContract {
+        let link_role = match contract.direction {
+            DeviceFfiDirection::Import => DeviceFfiLinkRole::RequiresExternalDefinition,
+            DeviceFfiDirection::Export => DeviceFfiLinkRole::DefinesInRustLlvmBitcode,
+        };
+        ClosedDeviceFfiContract {
+            owner: DeviceFfiSourceOwner {
+                crate_name: crate_name.to_owned(),
+                item_path: format!("{crate_name}::{item_name}"),
+                instance_identity: format!("_R_{crate_name}_{item_name}"),
+            },
+            contract,
+            link_role,
+        }
+    }
+
     #[test]
     fn canonical_marker_round_trips() {
         let parsed = parse_marker(&marker(
@@ -875,7 +1283,12 @@ mod tests {
             "C()->unit[size=0,align=1]",
         ))
         .unwrap();
-        validate_contract_values([&export, &import]).unwrap();
+        assert!(
+            validate_contract_values([&export, &import])
+                .unwrap_err()
+                .reason
+                .contains("conflicting")
+        );
 
         let conflicting = parse_marker(&marker(
             DEVICE_FFI_DIRECTION_IMPORT_V1,
@@ -888,6 +1301,352 @@ mod tests {
                 .unwrap_err()
                 .reason
                 .contains("conflicting")
+        );
+    }
+
+    #[test]
+    fn closure_is_canonical_and_preserves_cross_crate_ownership() {
+        let import = closed(
+            contract(
+                DeviceFfiDirection::Import,
+                "external_add",
+                "gfx942",
+                5,
+                "C(u32[size=4,align=4])->u32[size=4,align=4]",
+                "none",
+                0x11,
+            ),
+            "consumer",
+            "same_logical_name",
+        );
+        let export_a = closed(
+            contract(
+                DeviceFfiDirection::Export,
+                "export_a",
+                "gfx942",
+                5,
+                "C()->unit[size=0,align=1]",
+                "none",
+                0x22,
+            ),
+            "provider_a",
+            "same_logical_name",
+        );
+        let export_b = closed(
+            contract(
+                DeviceFfiDirection::Export,
+                "export_b",
+                "gfx942",
+                5,
+                "C()->unit[size=0,align=1]",
+                "none",
+                0x33,
+            ),
+            "provider_b",
+            "same_logical_name",
+        );
+        let reachable = BTreeSet::from([import.contract.id]);
+
+        let first = close_contracts(
+            vec![export_b.clone(), import.clone(), export_a.clone()],
+            &reachable,
+        )
+        .unwrap();
+        let reordered = close_contracts(vec![export_a, export_b, import], &reachable).unwrap();
+
+        assert_eq!(first, reordered);
+        assert_eq!(first.target.as_deref(), Some("gfx942"));
+        assert_eq!(first.code_object_version, Some(5));
+        assert_eq!(first.imports[0].owner.crate_name, "consumer");
+        assert_eq!(
+            first.imports[0].link_role,
+            DeviceFfiLinkRole::RequiresExternalDefinition
+        );
+        assert_eq!(first.exports[0].owner.crate_name, "provider_a");
+        assert_eq!(
+            first.exports[0].link_role,
+            DeviceFfiLinkRole::DefinesInRustLlvmBitcode
+        );
+        assert_eq!(first.exports[1].owner.crate_name, "provider_b");
+    }
+
+    #[test]
+    fn host_only_and_unresolved_imports_fail_closed() {
+        let import = closed(
+            contract(
+                DeviceFfiDirection::Import,
+                "external_add",
+                "gfx942",
+                5,
+                "C()->unit[size=0,align=1]",
+                "none",
+                0x11,
+            ),
+            "consumer",
+            "external_add",
+        );
+        let error = close_contracts(vec![import.clone()], &BTreeSet::new()).unwrap_err();
+        assert!(error.reason.contains("host-only or unreachable"));
+
+        let unknown = contract(
+            DeviceFfiDirection::Import,
+            "missing",
+            "gfx942",
+            5,
+            "C()->unit[size=0,align=1]",
+            "none",
+            0x22,
+        );
+        let error = close_contracts(vec![import], &BTreeSet::from([unknown.id])).unwrap_err();
+        assert!(error.reason.contains("has no collected declaration"));
+    }
+
+    #[test]
+    fn target_version_and_semantic_spoofing_fail_closed() {
+        let base = contract(
+            DeviceFfiDirection::Export,
+            "first",
+            "gfx942",
+            5,
+            "C()->unit[size=0,align=1]",
+            "none",
+            0x11,
+        );
+        let wrong_target = contract(
+            DeviceFfiDirection::Export,
+            "second",
+            "gfx950",
+            5,
+            "C()->unit[size=0,align=1]",
+            "none",
+            0x22,
+        );
+        assert!(
+            validate_contract_values([&base, &wrong_target])
+                .unwrap_err()
+                .reason
+                .contains("mixes targets")
+        );
+
+        let wrong_version = contract(
+            DeviceFfiDirection::Export,
+            "second",
+            "gfx942",
+            6,
+            "C()->unit[size=0,align=1]",
+            "none",
+            0x22,
+        );
+        assert!(
+            validate_contract_values([&base, &wrong_version])
+                .unwrap_err()
+                .reason
+                .contains("mixes code-object versions")
+        );
+
+        let mut spoofed = contract(
+            DeviceFfiDirection::Export,
+            "second",
+            "gfx942",
+            5,
+            "C(u32[size=4,align=4])->unit[size=0,align=1]",
+            "none",
+            0x22,
+        );
+        spoofed.semantic_identity = base.semantic_identity.clone();
+        assert!(
+            validate_contract_values([&base, &spoofed])
+                .unwrap_err()
+                .reason
+                .contains("semantic identity")
+        );
+    }
+
+    #[test]
+    fn same_symbol_contract_mismatches_and_link_role_swaps_fail_closed() {
+        let base = contract(
+            DeviceFfiDirection::Export,
+            "shared_symbol",
+            "gfx942",
+            5,
+            "C()->unit[size=0,align=1]",
+            "none",
+            0x11,
+        );
+        let variants = [
+            contract(
+                DeviceFfiDirection::Import,
+                "shared_symbol",
+                "gfx942",
+                5,
+                "C()->unit[size=0,align=1]",
+                "none",
+                0x11,
+            ),
+            contract(
+                DeviceFfiDirection::Export,
+                "shared_symbol",
+                "gfx942",
+                5,
+                "C(u32[size=4,align=4])->unit[size=0,align=1]",
+                "none",
+                0x11,
+            ),
+            contract(
+                DeviceFfiDirection::Export,
+                "shared_symbol",
+                "gfx942",
+                5,
+                "C(mut_ptr<global,u32>[size=8,align=8,as=global])->unit[size=0,align=1]",
+                "write_global",
+                0x11,
+            ),
+            contract(
+                DeviceFfiDirection::Export,
+                "shared_symbol",
+                "gfx950",
+                5,
+                "C()->unit[size=0,align=1]",
+                "none",
+                0x11,
+            ),
+            contract(
+                DeviceFfiDirection::Export,
+                "shared_symbol",
+                "gfx942",
+                6,
+                "C()->unit[size=0,align=1]",
+                "none",
+                0x11,
+            ),
+            contract(
+                DeviceFfiDirection::Export,
+                "shared_symbol",
+                "gfx942",
+                5,
+                "C()->unit[size=0,align=1]",
+                "none",
+                0x22,
+            ),
+        ];
+        for variant in &variants {
+            let error = validate_contract_values([&base, variant]).unwrap_err();
+            assert!(
+                error.reason.contains("conflicting"),
+                "unexpected mismatch diagnostic: {error}"
+            );
+        }
+
+        let mut swapped = closed(
+            contract(
+                DeviceFfiDirection::Import,
+                "external_add",
+                "gfx942",
+                5,
+                "C()->unit[size=0,align=1]",
+                "none",
+                0x33,
+            ),
+            "consumer",
+            "external_add",
+        );
+        swapped.link_role = DeviceFfiLinkRole::DefinesInRustLlvmBitcode;
+        let reachable = BTreeSet::from([swapped.contract.id]);
+        assert!(
+            close_contracts(vec![swapped], &reachable)
+                .unwrap_err()
+                .reason
+                .contains("link role")
+        );
+    }
+
+    #[test]
+    fn duplicate_cross_crate_providers_fail_with_stable_ownership() {
+        let first = closed(
+            contract(
+                DeviceFfiDirection::Export,
+                "duplicate_provider",
+                "gfx942",
+                5,
+                "C()->unit[size=0,align=1]",
+                "none",
+                0x11,
+            ),
+            "provider_a",
+            "same_logical_name",
+        );
+        let second = closed(
+            contract(
+                DeviceFfiDirection::Export,
+                "duplicate_provider",
+                "gfx942",
+                5,
+                "C()->unit[size=0,align=1]",
+                "none",
+                0x11,
+            ),
+            "provider_b",
+            "same_logical_name",
+        );
+        let error = close_contracts(vec![second, first], &BTreeSet::new()).unwrap_err();
+        assert!(
+            error.reason.contains("duplicate device FFI contract")
+                && error.reason.contains("provider_a::same_logical_name")
+                && error.reason.contains("provider_b::same_logical_name"),
+            "unexpected duplicate-provider diagnostic: {error}"
+        );
+    }
+
+    #[test]
+    fn reserved_symbols_and_effect_address_space_mismatches_fail_closed() {
+        let reserved = contract(
+            DeviceFfiDirection::Export,
+            "fe2o3_kernel_spoofed",
+            "gfx942",
+            5,
+            "C()->unit[size=0,align=1]",
+            "none",
+            0x11,
+        );
+        assert!(
+            validate_contract_values([&reserved])
+                .unwrap_err()
+                .reason
+                .contains("reserved namespace")
+        );
+
+        let abi = "C(mut_ptr<global,u32>[size=8,align=8,as=global])->unit[size=0,align=1]";
+        let marker = marker(DEVICE_FFI_DIRECTION_IMPORT_V1, "external_add", abi).replacen(
+            "|none|",
+            "|write_workgroup|",
+            1,
+        );
+        assert!(
+            parse_marker(&marker)
+                .unwrap_err()
+                .reason
+                .contains("identity")
+        );
+
+        let fields = DeviceFfiContractFieldsV1 {
+            direction: DEVICE_FFI_DIRECTION_IMPORT_V1,
+            symbol: "external_add",
+            calling_convention: "C",
+            code_object_version: 5,
+            target: "gfx942",
+            physical_abi: abi,
+            effects: "write_workgroup",
+            semantic_identity: "1111111111111111111111111111111111111111111111111111111111111111",
+        };
+        let marker = reserved_fe2o3_symbols::device_ffi_marker_v1(
+            derive_device_ffi_contract_id_v1(fields),
+            fields,
+        );
+        assert!(
+            parse_marker(&marker)
+                .unwrap_err()
+                .reason
+                .contains("compatible physical pointer")
         );
     }
 }
