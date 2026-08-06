@@ -27,8 +27,9 @@ pub struct MirFunction {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MirFunctionKind {
-    Kernel,
-    Device,
+    KernelEntry,
+    InternalHelper,
+    DeviceFfiExport,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -57,6 +58,7 @@ pub enum MirTypeShape {
     Unit,
     Bool,
     I32,
+    U32,
     I64,
     ISize,
     USize,
@@ -168,6 +170,7 @@ pub enum MirOperandRef {
 pub enum MirConstant {
     Bool(bool),
     I32(i32),
+    U32(u32),
     I64(i64),
     ISize(i64),
     USize(u64),
@@ -345,16 +348,22 @@ pub fn import_collection<'tcx>(
                 body,
                 function.export_name.clone(),
                 rust_path,
-                if function.is_kernel {
-                    MirFunctionKind::Kernel
-                } else {
-                    MirFunctionKind::Device
-                },
+                import_function_kind(function.role),
             ))
         })
         .collect();
 
     MirModule { functions }
+}
+
+fn import_function_kind(role: crate::collector::CollectedFunctionRole) -> MirFunctionKind {
+    match role {
+        crate::collector::CollectedFunctionRole::KernelEntry => MirFunctionKind::KernelEntry,
+        crate::collector::CollectedFunctionRole::InternalHelper => MirFunctionKind::InternalHelper,
+        crate::collector::CollectedFunctionRole::DeviceFfiExport => {
+            MirFunctionKind::DeviceFfiExport
+        }
+    }
 }
 
 impl MirModule {
@@ -366,8 +375,9 @@ impl MirModule {
         );
         for function in &self.functions {
             let kind = match function.kind {
-                MirFunctionKind::Kernel => "kernel",
-                MirFunctionKind::Device => "device",
+                MirFunctionKind::KernelEntry => "kernel-entry",
+                MirFunctionKind::InternalHelper => "internal-helper",
+                MirFunctionKind::DeviceFfiExport => "device-ffi-export",
             };
             let _ = writeln!(
                 output,
@@ -433,8 +443,9 @@ impl MirModule {
 
         for function in &self.functions {
             let kind = match function.kind {
-                MirFunctionKind::Kernel => "kernel",
-                MirFunctionKind::Device => "device",
+                MirFunctionKind::KernelEntry => "kernel-entry",
+                MirFunctionKind::InternalHelper => "internal-helper",
+                MirFunctionKind::DeviceFfiExport => "device-ffi-export",
             };
             records.push(
                 MirOpRecord::new(MirOp::Func)
@@ -879,6 +890,7 @@ fn import_type<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> MirImportedType {
     let kind = match ty.kind() {
         TyKind::Bool => MirType::I1,
         TyKind::Int(IntTy::I32) => MirType::I32,
+        TyKind::Uint(UintTy::U32) => MirType::I32,
         TyKind::Int(IntTy::I64) => MirType::I64,
         TyKind::Uint(UintTy::Usize) => MirType::USize,
         TyKind::Float(FloatTy::F32) => MirType::F32,
@@ -909,6 +921,7 @@ fn import_type_shape<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> MirTypeShape {
     match ty.kind() {
         TyKind::Bool => MirTypeShape::Bool,
         TyKind::Int(IntTy::I32) => MirTypeShape::I32,
+        TyKind::Uint(UintTy::U32) => MirTypeShape::U32,
         TyKind::Int(IntTy::I64) => MirTypeShape::I64,
         TyKind::Int(IntTy::Isize) => MirTypeShape::ISize,
         TyKind::Uint(UintTy::Usize) => MirTypeShape::USize,
@@ -1133,6 +1146,11 @@ fn import_constant<'tcx>(tcx: TyCtxt<'tcx>, constant: &ConstOperand<'tcx>) -> Mi
             .try_eval_scalar_int(tcx, typing_env)
             .map(|value| MirConstant::I32(value.to_i32()))
             .unwrap_or(MirConstant::Unevaluated),
+        TyKind::Uint(UintTy::U32) => constant
+            .const_
+            .try_eval_scalar_int(tcx, typing_env)
+            .map(|value| MirConstant::U32(value.to_u32()))
+            .unwrap_or(MirConstant::Unevaluated),
         TyKind::Int(IntTy::I64) => constant
             .const_
             .try_eval_scalar_int(tcx, typing_env)
@@ -1352,6 +1370,23 @@ fn call_identity<'tcx>(tcx: TyCtxt<'tcx>, func: &Operand<'tcx>) -> Option<MirCal
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::collector::CollectedFunctionRole;
+
+    #[test]
+    fn collection_roles_map_to_mir_roles_without_name_inference() {
+        assert_eq!(
+            import_function_kind(CollectedFunctionRole::KernelEntry),
+            MirFunctionKind::KernelEntry
+        );
+        assert_eq!(
+            import_function_kind(CollectedFunctionRole::InternalHelper),
+            MirFunctionKind::InternalHelper
+        );
+        assert_eq!(
+            import_function_kind(CollectedFunctionRole::DeviceFfiExport),
+            MirFunctionKind::DeviceFfiExport
+        );
+    }
 
     #[test]
     fn summary_includes_function_and_block_shape() {
@@ -1359,7 +1394,7 @@ mod tests {
             functions: vec![MirFunction {
                 export_name: "vecadd".to_string(),
                 rust_path: "fe2o3_vecadd::fe2o3_kernel_vecadd".to_string(),
-                kind: MirFunctionKind::Kernel,
+                kind: MirFunctionKind::KernelEntry,
                 arg_count: 3,
                 local_count: 17,
                 locals: vec![
@@ -1401,7 +1436,7 @@ mod tests {
 
         let summary = module.summary();
 
-        assert!(summary.contains("[kernel] vecadd (mir.func)"));
+        assert!(summary.contains("[kernel-entry] vecadd (mir.func)"));
         assert!(summary.contains("fe2o3_vecadd::fe2o3_kernel_vecadd"));
         assert!(summary.contains("1 bb, 17 locals, 3 args"));
         assert!(summary.contains("local1: arg mir.slice (&[f32])"));
@@ -1414,7 +1449,7 @@ mod tests {
             functions: vec![MirFunction {
                 export_name: "vecadd".to_string(),
                 rust_path: "fe2o3_vecadd::fe2o3_kernel_vecadd".to_string(),
-                kind: MirFunctionKind::Kernel,
+                kind: MirFunctionKind::KernelEntry,
                 arg_count: 3,
                 local_count: 17,
                 locals: vec![MirLocal {
@@ -1482,7 +1517,7 @@ mod tests {
             functions: vec![MirFunction {
                 export_name: "copy".to_string(),
                 rust_path: "fe2o3_copy::fe2o3_kernel_copy".to_string(),
-                kind: MirFunctionKind::Kernel,
+                kind: MirFunctionKind::KernelEntry,
                 arg_count: 1,
                 local_count: 3,
                 locals: Vec::new(),

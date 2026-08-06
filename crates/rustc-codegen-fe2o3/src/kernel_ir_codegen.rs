@@ -39,9 +39,8 @@ const MAX_COMPILER_MODULE_TYPE_DEPTH: usize = 8;
 /// One inert, deterministic textual LLVM AMDGPU module.
 ///
 /// This value is not LLVM bitcode, a link result, a code object, compiler provenance, or load
-/// authority. The API is intentionally not connected to rustc collection yet, and records the
-/// target properties that remain deliberately unbound.
-#[allow(dead_code)]
+/// authority. The Worker V2 producer may place its exact text in an attempt-scoped handoff after
+/// checking the compiler FFI roles; target properties remain absent from the LLVM text itself.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct InertCompilerModuleTextV1 {
     llvm_ir: String,
@@ -54,7 +53,6 @@ pub(crate) struct InertCompilerModuleTextV1 {
 }
 
 /// Target properties required before textual compiler-module output can become an artifact.
-#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum UnboundCompilerModuleTargetPropertyV1 {
     DataLayout,
@@ -94,7 +92,6 @@ impl InertCompilerModuleTextV1 {
 }
 
 /// Fail-closed compiler-module construction error.
-#[allow(dead_code)]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum CompilerModuleConstructionError {
     LimitExceeded {
@@ -123,7 +120,6 @@ impl std::error::Error for CompilerModuleConstructionError {}
 /// Structural bounds are checked before kernel-IR verification. The dialect lowerer then
 /// preflights every kernel, helper, declaration, call, attribute, and metadata record before its
 /// private capacity-limited emission pass. An error returns no partially constructed module.
-#[allow(dead_code)]
 pub(crate) fn construct_inert_compiler_module_text_v1(
     module: &Module,
 ) -> Result<InertCompilerModuleTextV1, CompilerModuleConstructionError> {

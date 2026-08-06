@@ -105,7 +105,7 @@ pub(crate) fn prepare_collection<'tcx>(
     collection
         .functions
         .iter()
-        .filter(|function| function.is_kernel)
+        .filter(|function| function.is_kernel_entry())
         .map(|kernel| {
             let record_function = lowering_plan.and_then(|plan| plan.function(&kernel.export_name));
             Ok(PreparedDeviceKernel {

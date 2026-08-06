@@ -22,10 +22,20 @@ pub(crate) enum TypedKernelProfile {
     VecAddRustcLayoutV2,
 }
 
+/// Compiler-authoritative role attached when a function enters the closed
+/// device graph. Downstream consumers must preserve it rather than reconstruct
+/// it from symbol spelling or later reachability analysis.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CollectedFunctionRole {
+    KernelEntry,
+    InternalHelper,
+    DeviceFfiExport,
+}
+
 #[derive(Clone, Debug)]
 pub struct CollectedFunction<'tcx> {
     pub instance: Instance<'tcx>,
-    pub is_kernel: bool,
+    pub(crate) role: CollectedFunctionRole,
     pub export_name: String,
     /// Present only for registered kernel roots.
     pub(crate) logical_name: Option<String>,
@@ -45,6 +55,12 @@ pub struct CollectionResult<'tcx> {
     pub(crate) device_ffi: crate::device_ffi::DeviceFfiClosure,
     /// Inert canonical observation produced from the successfully closed graph.
     pub(crate) compiler_ffi_observation: Option<fe2o3_compiler_ffi::CompilerFfiEnvelopeV1>,
+}
+
+impl CollectedFunction<'_> {
+    pub(crate) fn is_kernel_entry(&self) -> bool {
+        self.role == CollectedFunctionRole::KernelEntry
+    }
 }
 
 #[derive(Debug)]
@@ -131,10 +147,10 @@ pub fn dump_device_functions<'tcx>(tcx: TyCtxt<'tcx>, functions: &[CollectedFunc
         .iter()
         .map(|function| {
             let def_id = function.instance.def_id();
-            debug_assert_eq!(function.is_kernel, function.logical_name.is_some());
-            debug_assert!(function.is_kernel || function.typed_profile.is_none());
-            debug_assert!(function.is_kernel || function.kernel_binding.is_none());
-            debug_assert!(function.is_kernel || function.typed_layout_identities.is_none());
+            debug_assert_eq!(function.is_kernel_entry(), function.logical_name.is_some());
+            debug_assert!(function.is_kernel_entry() || function.typed_profile.is_none());
+            debug_assert!(function.is_kernel_entry() || function.kernel_binding.is_none());
+            debug_assert!(function.is_kernel_entry() || function.typed_layout_identities.is_none());
             let mir_stats = if tcx.is_mir_available(def_id) {
                 let mir = tcx.instance_mir(function.instance.def);
                 format!(
@@ -152,8 +168,11 @@ pub fn dump_device_functions<'tcx>(tcx: TyCtxt<'tcx>, functions: &[CollectedFunc
                     Some(TypedKernelProfile::VecAddRustcLayoutV2) => {
                         "kernel/typed-vecadd-rustc-layout-v2"
                     }
-                    None if function.is_kernel => "kernel",
-                    None => "device",
+                    None => match function.role {
+                        CollectedFunctionRole::KernelEntry => "kernel",
+                        CollectedFunctionRole::InternalHelper => "internal-helper",
+                        CollectedFunctionRole::DeviceFfiExport => "device-ffi-export",
+                    },
                 },
                 function.logical_name.clone(),
                 tcx.crate_name(def_id.krate).to_string(),
@@ -929,7 +948,7 @@ impl<'tcx> DeviceCollector<'tcx> {
                 .insert(identity, vec![self.instance_label(instance)]);
             self.worklist.push_back(CollectedFunction {
                 instance,
-                is_kernel: false,
+                role: CollectedFunctionRole::DeviceFfiExport,
                 export_name,
                 logical_name: None,
                 typed_profile: None,
@@ -962,7 +981,7 @@ impl<'tcx> DeviceCollector<'tcx> {
                 .insert(identity.clone(), vec![self.instance_label(instance)]);
             self.worklist.push_back(CollectedFunction {
                 instance,
-                is_kernel: true,
+                role: CollectedFunctionRole::KernelEntry,
                 export_name,
                 logical_name: Some(logical_name),
                 typed_profile,
@@ -999,7 +1018,7 @@ impl<'tcx> DeviceCollector<'tcx> {
                     self.process_terminator(
                         &terminator.kind,
                         &function.instance,
-                        function.is_kernel,
+                        function.is_kernel_entry(),
                     )?;
                 }
             }
@@ -1295,7 +1314,7 @@ impl<'tcx> DeviceCollector<'tcx> {
         self.seen.insert(identity.clone());
         self.worklist.push_back(CollectedFunction {
             instance: resolved,
-            is_kernel: false,
+            role: CollectedFunctionRole::InternalHelper,
             export_name,
             logical_name: None,
             typed_profile: None,

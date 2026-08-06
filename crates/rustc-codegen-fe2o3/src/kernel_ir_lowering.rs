@@ -1,7 +1,8 @@
 //! Verification-only lowering from imported MIR to `fe2o3-kernel-ir`.
 //!
-//! This vertical slice intentionally models only the optimized MIR shape of the
-//! existing `vecadd` kernel. Known helper calls remain typed external calls with
+//! This vertical slice models the optimized MIR shape of the existing `vecadd`
+//! kernel plus explicitly classified internal helpers and device FFI exports.
+//! Known helper calls remain typed external calls with
 //! their exact rustc identities. The `DisjointSlice::get_mut` declaration uses
 //! two results (the `Option` discriminant and payload pointer), because kernel IR
 //! does not yet have Rust aggregate types. MIR unwind actions are not represented
@@ -177,12 +178,8 @@ impl fmt::Display for TranslationErrors {
 impl Error for TranslationErrors {}
 
 pub fn translate_and_verify(mir: &MirModule) -> Result<Module, TranslationErrors> {
-    let mut kernels = mir
-        .functions
-        .iter()
-        .filter(|function| function.kind == MirFunctionKind::Kernel)
-        .collect::<Vec<_>>();
-    kernels.sort_by(|lhs, rhs| {
+    let mut functions = mir.functions.iter().collect::<Vec<_>>();
+    functions.sort_by(|lhs, rhs| {
         (&lhs.export_name, &lhs.rust_path).cmp(&(&rhs.export_name, &rhs.rust_path))
     });
 
@@ -192,8 +189,10 @@ pub fn translate_and_verify(mir: &MirModule) -> Result<Module, TranslationErrors
     let mut kernel_entries = Vec::new();
     let mut kernel_ids = BTreeSet::new();
 
-    for function in kernels {
-        if !kernel_ids.insert(function.export_name.as_str()) {
+    for function in functions {
+        if function.kind == MirFunctionKind::KernelEntry
+            && !kernel_ids.insert(function.export_name.as_str())
+        {
             diagnostics.push(diagnostic(
                 TranslationDiagnosticCode::MalformedMir,
                 TranslationLocation::function(function),
@@ -204,7 +203,9 @@ pub fn translate_and_verify(mir: &MirModule) -> Result<Module, TranslationErrors
 
         match FunctionLowerer::new(function, &mut declarations).lower() {
             Ok(definition) => {
-                kernel_entries.push((function.export_name.clone(), definition.id.clone()));
+                if function.kind == MirFunctionKind::KernelEntry {
+                    kernel_entries.push((function.export_name.clone(), definition.id.clone()));
+                }
                 definitions.push(definition);
             }
             Err(error) => diagnostics.push(error),
@@ -299,6 +300,7 @@ struct FunctionLowerer<'function, 'declarations> {
     declarations: &'declarations mut BTreeMap<String, Signature>,
     locals: BTreeMap<usize, LocalBinding>,
     value_types: BTreeMap<ValueId, Type>,
+    return_type: Option<Type>,
     next_value: u32,
     trap_block: Option<BlockId>,
 }
@@ -313,6 +315,7 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
             declarations,
             locals: BTreeMap::new(),
             value_types: BTreeMap::new(),
+            return_type: None,
             next_value: 0,
             trap_block: None,
         }
@@ -369,18 +372,53 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
             parameter_values.push(id);
         }
 
-        if let Some(return_local) = self.function.locals.iter().find(|local| local.index == 0)
-            && return_local.ty.shape != MirTypeShape::Unit
-        {
+        let return_local = self
+            .function
+            .locals
+            .iter()
+            .find(|local| local.index == 0)
+            .ok_or_else(|| {
+                diagnostic(
+                    TranslationDiagnosticCode::MalformedMir,
+                    TranslationLocation::function(self.function),
+                    "function has no return local0",
+                )
+            })?;
+        if return_local.role != crate::mir_import::MirLocalRole::Return {
             return Err(diagnostic(
-                TranslationDiagnosticCode::UnsupportedType,
+                TranslationDiagnosticCode::MalformedMir,
                 TranslationLocation::function(self.function),
-                format!(
-                    "kernel return type `{}` is not supported",
-                    return_local.ty.rust
-                ),
+                "local0 is not marked as the function return local",
             ));
         }
+        let result_types = match (&self.function.kind, &return_local.ty.shape) {
+            (_, MirTypeShape::Unit) => Vec::new(),
+            (
+                MirFunctionKind::InternalHelper | MirFunctionKind::DeviceFfiExport,
+                MirTypeShape::U32,
+            ) => vec![Type::Scalar(ScalarType::U32)],
+            (MirFunctionKind::KernelEntry, _) => {
+                return Err(diagnostic(
+                    TranslationDiagnosticCode::UnsupportedType,
+                    TranslationLocation::function(self.function),
+                    format!(
+                        "kernel entry return type `{}` is not supported",
+                        return_local.ty.rust
+                    ),
+                ));
+            }
+            _ => {
+                return Err(diagnostic(
+                    TranslationDiagnosticCode::UnsupportedType,
+                    TranslationLocation::function(self.function),
+                    format!(
+                        "device definition return type `{}` is not supported; only `()` and `u32` are accepted",
+                        return_local.ty.rust
+                    ),
+                ));
+            }
+        };
+        self.return_type = result_types.first().cloned();
 
         let mut source_blocks = self.function.blocks.iter().collect::<Vec<_>>();
         source_blocks.sort_by_key(|block| block.index);
@@ -439,12 +477,27 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
             blocks.push(block);
         }
 
-        Ok(Function::kernel_entry(
-            self.function.rust_path.clone(),
-            Signature::new(parameter_types, Vec::new()),
-            parameter_values,
-            blocks,
-        ))
+        let signature = Signature::new(parameter_types, result_types);
+        Ok(match self.function.kind {
+            MirFunctionKind::KernelEntry => Function::kernel_entry(
+                self.function.rust_path.clone(),
+                signature,
+                parameter_values,
+                blocks,
+            ),
+            MirFunctionKind::InternalHelper => Function::internal_helper(
+                self.function.export_name.clone(),
+                signature,
+                parameter_values,
+                blocks,
+            ),
+            MirFunctionKind::DeviceFfiExport => Function::device_ffi_export(
+                self.function.export_name.clone(),
+                signature,
+                parameter_values,
+                blocks,
+            ),
+        })
     }
 
     fn lower_block(&mut self, source: &MirBlock) -> Result<BasicBlock, TranslationDiagnostic> {
@@ -641,7 +694,24 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
     ) -> Result<Terminator, TranslationDiagnostic> {
         let location = TranslationLocation::terminator(self.function, block_index, terminator);
         match &terminator.kind {
-            MirTerminatorKind::Return => Ok(Terminator::Return { values: Vec::new() }),
+            MirTerminatorKind::Return => {
+                let values = match self.return_type.clone() {
+                    Some(expected) => {
+                        let value = self.plain_local(0, &location)?;
+                        let actual = self.value_type(value, &location)?;
+                        if actual != &expected {
+                            return Err(diagnostic(
+                                TranslationDiagnosticCode::UnsupportedType,
+                                location,
+                                format!("return local0 has type {actual:?}, expected {expected:?}"),
+                            ));
+                        }
+                        vec![value]
+                    }
+                    None => Vec::new(),
+                };
+                Ok(Terminator::Return { values })
+            }
             MirTerminatorKind::Unreachable => Ok(Terminator::Unreachable),
             MirTerminatorKind::Goto { target } => Ok(Terminator::Branch {
                 target: self.block_id(*target, location)?,
@@ -1333,6 +1403,7 @@ fn lower_parameter_type(shape: &MirTypeShape) -> Option<Type> {
     match shape {
         MirTypeShape::Bool => Some(Type::BOOL),
         MirTypeShape::I32 => Some(Type::Scalar(ScalarType::I32)),
+        MirTypeShape::U32 => Some(Type::Scalar(ScalarType::U32)),
         MirTypeShape::I64 | MirTypeShape::ISize => Some(Type::Scalar(ScalarType::I64)),
         MirTypeShape::USize => Some(Type::INDEX),
         MirTypeShape::F32 => Some(Type::F32),
@@ -1367,6 +1438,7 @@ fn lower_constant(constant: &MirConstant) -> Option<Constant> {
     match constant {
         MirConstant::Bool(value) => Some(Constant::Bool(*value)),
         MirConstant::I32(value) => Some(Constant::I32(*value)),
+        MirConstant::U32(value) => Some(Constant::U32(*value)),
         MirConstant::I64(value) | MirConstant::ISize(value) => Some(Constant::I64(*value)),
         MirConstant::USize(value) => Some(Constant::Index(*value)),
         MirConstant::F32Bits(value) => Some(Constant::F32Bits(*value)),
@@ -1427,6 +1499,124 @@ mod tests {
 
         assert_eq!(module.kernels[0].id.as_str(), "alpha");
         assert_eq!(module.kernels[1].id.as_str(), "zeta");
+    }
+
+    #[test]
+    fn explicit_device_roles_and_u32_returns_are_preserved() {
+        let helper = u32_definition(
+            "fe2o3_kernel_looking_helper",
+            MirFunctionKind::InternalHelper,
+            false,
+        );
+        let export = u32_definition("device_add", MirFunctionKind::DeviceFfiExport, true);
+
+        let module = translate_and_verify(&MirModule {
+            functions: vec![export, helper],
+        })
+        .expect("u32 device definitions");
+
+        assert!(module.kernels.is_empty());
+        let helper = module
+            .functions
+            .iter()
+            .find(|function| function.id.as_str() == "fe2o3_kernel_looking_helper")
+            .expect("helper definition");
+        assert_eq!(helper.role, fe2o3_kernel_ir::FunctionRole::InternalHelper);
+        assert_eq!(
+            helper.signature,
+            Signature::new(
+                vec![Type::Scalar(ScalarType::U32)],
+                vec![Type::Scalar(ScalarType::U32)]
+            )
+        );
+        assert!(matches!(
+            helper.body.as_ref().expect("helper body").blocks[0].terminator,
+            Some(Terminator::Return { ref values }) if values.len() == 1
+        ));
+
+        let export = module
+            .functions
+            .iter()
+            .find(|function| function.id.as_str() == "device_add")
+            .expect("device export definition");
+        assert_eq!(export.role, fe2o3_kernel_ir::FunctionRole::DeviceFfiExport);
+        assert_eq!(
+            export.signature,
+            Signature::new(
+                vec![Type::Scalar(ScalarType::U32), Type::Scalar(ScalarType::U32)],
+                vec![Type::Scalar(ScalarType::U32)]
+            )
+        );
+        assert!(
+            export.body.as_ref().expect("export body").blocks[0]
+                .operations
+                .iter()
+                .any(|operation| matches!(
+                    operation.kind,
+                    OperationKind::Binary {
+                        op: BinaryOp::Add,
+                        ..
+                    }
+                ))
+        );
+    }
+
+    #[test]
+    fn kernel_entries_cannot_return_u32() {
+        let function = u32_definition("not_a_device_return", MirFunctionKind::KernelEntry, false);
+
+        let errors = translate_and_verify(&MirModule {
+            functions: vec![function],
+        })
+        .expect_err("kernel result must be rejected");
+
+        assert!(errors.contains(TranslationDiagnosticCode::UnsupportedType));
+        assert!(
+            errors
+                .diagnostics()
+                .iter()
+                .any(|diagnostic| { diagnostic.message.contains("kernel entry return type") })
+        );
+    }
+
+    #[test]
+    fn device_definition_rejects_non_u32_scalar_return() {
+        let mut function = u32_definition("bad_export", MirFunctionKind::DeviceFfiExport, false);
+        function.locals[0] = local(0, MirLocalRole::Return, MirTypeShape::F32);
+
+        let errors = translate_and_verify(&MirModule {
+            functions: vec![function],
+        })
+        .expect_err("f32 result must be rejected");
+
+        assert!(errors.contains(TranslationDiagnosticCode::UnsupportedType));
+        assert!(errors.diagnostics().iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("only `()` and `u32` are accepted")
+        }));
+    }
+
+    #[test]
+    fn u32_return_requires_an_initialized_return_local() {
+        let mut function = u32_definition(
+            "missing_return_value",
+            MirFunctionKind::DeviceFfiExport,
+            false,
+        );
+        function.blocks[0].statements.clear();
+
+        let errors = translate_and_verify(&MirModule {
+            functions: vec![function],
+        })
+        .expect_err("uninitialized return local must fail");
+
+        assert!(errors.contains(TranslationDiagnosticCode::MalformedMir));
+        assert!(errors.diagnostics().iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("local0 is used before it is defined")
+        }));
     }
 
     #[test]
@@ -1604,7 +1794,7 @@ mod tests {
             functions: vec![MirFunction {
                 export_name: "borrowed_index".to_string(),
                 rust_path: "tests::borrowed_index".to_string(),
-                kind: MirFunctionKind::Kernel,
+                kind: MirFunctionKind::KernelEntry,
                 arg_count: 0,
                 local_count: 4,
                 locals: vec![
@@ -1753,7 +1943,7 @@ mod tests {
             functions: vec![MirFunction {
                 export_name: "scalar".to_string(),
                 rust_path: "tests::scalar".to_string(),
-                kind: MirFunctionKind::Kernel,
+                kind: MirFunctionKind::KernelEntry,
                 arg_count: 2,
                 local_count: 5,
                 locals: vec![
@@ -1825,7 +2015,7 @@ mod tests {
             functions: vec![MirFunction {
                 export_name: "memory".to_string(),
                 rust_path: "tests::memory".to_string(),
-                kind: MirFunctionKind::Kernel,
+                kind: MirFunctionKind::KernelEntry,
                 arg_count: 3,
                 local_count: 6,
                 locals: vec![
@@ -1895,7 +2085,7 @@ mod tests {
             functions: vec![MirFunction {
                 export_name: "helper_call".to_string(),
                 rust_path: "tests::helper_call".to_string(),
-                kind: MirFunctionKind::Kernel,
+                kind: MirFunctionKind::KernelEntry,
                 arg_count: argument_shapes.len(),
                 local_count: locals.len(),
                 locals,
@@ -1920,10 +2110,42 @@ mod tests {
         }
     }
 
+    fn u32_definition(name: &str, kind: MirFunctionKind, add: bool) -> MirFunction {
+        let arg_count = if add { 2 } else { 1 };
+        let operands = if add {
+            vec![operand(1), operand(2)]
+        } else {
+            vec![operand(1)]
+        };
+        let rvalue = if add {
+            MirRvalueKind::Binary(MirBinaryOp::Add)
+        } else {
+            MirRvalueKind::Use
+        };
+        let mut locals = vec![local(0, MirLocalRole::Return, MirTypeShape::U32)];
+        locals.extend(
+            (1..=arg_count).map(|index| local(index, MirLocalRole::Arg, MirTypeShape::U32)),
+        );
+        MirFunction {
+            export_name: name.to_string(),
+            rust_path: format!("tests::{name}"),
+            kind,
+            arg_count,
+            local_count: locals.len(),
+            locals,
+            blocks: vec![MirBlock {
+                index: 0,
+                statements: vec![assign(0, 0, operands, rvalue)],
+                terminator: Some(terminator(MirTerminatorKind::Return)),
+            }],
+        }
+    }
+
     fn local(index: usize, role: MirLocalRole, shape: MirTypeShape) -> MirLocal {
         let (kind, rust) = match shape {
             MirTypeShape::Unit => (MirType::Unit, "()"),
             MirTypeShape::Bool => (MirType::I1, "bool"),
+            MirTypeShape::U32 => (MirType::I32, "u32"),
             MirTypeShape::F32 => (MirType::F32, "f32"),
             _ => (MirType::Unknown, "<unknown>"),
         };

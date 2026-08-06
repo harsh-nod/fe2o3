@@ -22,7 +22,7 @@ pub(crate) fn adapt_collection_v1<'tcx>(
 ) -> Result<Option<CompilerFfiEnvelopeV1>, CompilerFfiAdapterError> {
     adapt_closure_v1(&collection.device_ffi, |entry| {
         collection.functions.iter().any(|function| {
-            !function.is_kernel
+            function.role == crate::collector::CollectedFunctionRole::DeviceFfiExport
                 && function.export_name == entry.contract.symbol
                 && crate::device_ffi::source_owner_matches_instance(
                     tcx,

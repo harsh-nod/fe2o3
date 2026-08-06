@@ -31,6 +31,7 @@ mod rust_type_layout_general;
 pub mod semantic_layout_bridge;
 mod trusted_device_items;
 mod typed_artifact;
+mod worker_v2_producer;
 
 use fe2o3_artifact_transaction as artifact_transaction;
 use rustc_codegen_ssa::traits::CodegenBackend;
@@ -155,6 +156,7 @@ impl Drop for TemporaryHostObjects {
 enum CodegenPipeline {
     LegacyV1,
     KernelIrV1,
+    KernelIrWorkerV2,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -163,8 +165,9 @@ enum PipelineSelection {
     Invalid(String),
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 enum BuildAttemptSelection {
+    #[default]
     Direct,
     Managed(artifact_transaction::BuildAttempt),
     Invalid(String),
@@ -195,12 +198,6 @@ impl BuildAttemptSelection {
     }
 }
 
-impl Default for BuildAttemptSelection {
-    fn default() -> Self {
-        Self::Direct
-    }
-}
-
 impl PipelineSelection {
     fn from_env() -> Self {
         Self::from_value(env::var_os(CODEGEN_PIPELINE_ENV).as_deref())
@@ -211,8 +208,11 @@ impl PipelineSelection {
             None => Self::Valid(CodegenPipeline::LegacyV1),
             Some(value) if value == "legacy-v1" => Self::Valid(CodegenPipeline::LegacyV1),
             Some(value) if value == "kernel-ir-v1" => Self::Valid(CodegenPipeline::KernelIrV1),
+            Some(value) if value == "kernel-ir-worker-v2" => {
+                Self::Valid(CodegenPipeline::KernelIrWorkerV2)
+            }
             Some(value) => Self::Invalid(format!(
-                "{CODEGEN_PIPELINE_ENV} must be unset or exactly `legacy-v1` or `kernel-ir-v1`; found {value:?}"
+                "{CODEGEN_PIPELINE_ENV} must be unset or exactly `legacy-v1`, `kernel-ir-v1`, or `kernel-ir-worker-v2`; found {value:?}"
             )),
         }
     }
@@ -333,28 +333,22 @@ impl CodegenBackend for Fe2o3CodegenBackend {
             if kernel_count > 0 {
                 let output_dir = output_dir.expect("kernel output was required above");
                 let codegen_pipeline = self.config.codegen_pipeline.clone();
-                let mut typed_roots = Vec::new();
-                match amdgpu_llvm::emit_collection_after_preflight(
-                    &producer,
-                    output_dir,
-                    &self.config.target,
-                    build_attempt,
-                    || {
+                if matches!(
+                    codegen_pipeline,
+                    PipelineSelection::Valid(CodegenPipeline::KernelIrWorkerV2)
+                ) {
+                    let attempt = build_attempt.unwrap_or_else(|| {
+                        tcx.dcx().fatal(format!(
+                            "[rustc-codegen-fe2o3] {CODEGEN_PIPELINE_ENV}=kernel-ir-worker-v2 requires a managed {BUILD_ATTEMPT_ENV}"
+                        ))
+                    });
+                    let publication = (|| -> Result<_, String> {
                         let collection = collector::collect_device_functions(
                             tcx,
                             mono_partitions.codegen_units,
                             self.config.verbose,
                         )
-                        .map_err(|error| {
-                            amdgpu_llvm::EmitError::Preflight {
-                                reason: error.to_string(),
-                            }
-                        })?;
-                        typed_roots = typed_roots_from_collection(&collection.functions).map_err(
-                            |error| amdgpu_llvm::EmitError::Preflight {
-                                reason: error.to_string(),
-                            },
-                        )?;
+                        .map_err(|error| error.to_string())?;
                         if self.config.verbose
                             && let Some(envelope) = &collection.compiler_ffi_observation
                         {
@@ -369,8 +363,8 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                         }
                         let frontend_record =
                             frontend_record_bridge::extract_frontend_record_v1(tcx, &collection)
-                                .map_err(|error| amdgpu_llvm::EmitError::Preflight {
-                                    reason: format!("frontend record extraction failed: {error}"),
+                                .map_err(|error| {
+                                    format!("frontend record extraction failed: {error}")
                                 })?;
                         if self.config.verbose {
                             eprintln!(
@@ -381,7 +375,94 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                         }
                         collector::dump_device_functions(tcx, &collection.functions);
                         let mir_module = mir_import::import_collection(tcx, &collection);
-                        match codegen_pipeline.resolve()? {
+                        let module = kernel_ir_lowering::translate_and_verify(&mir_module)
+                            .map_err(|errors| {
+                                format!(
+                                    "{CODEGEN_PIPELINE_ENV}=kernel-ir-worker-v2 compiler-module MIR translation failed: {errors}"
+                                )
+                            })?;
+                        eprintln!(
+                            "[rustc-codegen-fe2o3] selected kernel-ir-worker-v2: verified compiler-module candidate with {} kernel(s), {} function(s)",
+                            module.kernels.len(),
+                            module.functions.len()
+                        );
+                        if self.config.dump_mir {
+                            eprintln!("{}", mir_module.summary());
+                        }
+                        worker_v2_producer::publish_worker_v2_compiler_module(
+                            output_dir,
+                            &producer,
+                            Some(attempt),
+                            collection.compiler_ffi_observation.as_ref(),
+                            &module,
+                        )
+                        .map_err(|error| error.to_string())
+                    })();
+                    match publication {
+                        Ok(receipt) => eprintln!(
+                            "[rustc-codegen-fe2o3] published inert Worker V2 compiler-module handoff: {} canonical byte(s)",
+                            receipt.length()
+                        ),
+                        Err(error) => tcx.dcx().fatal(format!(
+                            "[rustc-codegen-fe2o3] Worker V2 producer failed: {error}"
+                        )),
+                    }
+                } else {
+                    let mut typed_roots = Vec::new();
+                    match amdgpu_llvm::emit_collection_after_preflight(
+                        &producer,
+                        output_dir,
+                        &self.config.target,
+                        build_attempt,
+                        || {
+                            let collection = collector::collect_device_functions(
+                                tcx,
+                                mono_partitions.codegen_units,
+                                self.config.verbose,
+                            )
+                            .map_err(|error| {
+                                amdgpu_llvm::EmitError::Preflight {
+                                    reason: error.to_string(),
+                                }
+                            })?;
+                            typed_roots = typed_roots_from_collection(&collection.functions)
+                                .map_err(|error| amdgpu_llvm::EmitError::Preflight {
+                                    reason: error.to_string(),
+                                })?;
+                            if self.config.verbose
+                                && let Some(envelope) = &collection.compiler_ffi_observation
+                            {
+                                let inspection = envelope.inspection();
+                                eprintln!(
+                                    "[rustc-codegen-fe2o3] collected compiler FFI envelope {}: {} import(s), {} export(s), {} compiler-module definition requirement(s)",
+                                    envelope.identity().to_hex(),
+                                    inspection.import_count(),
+                                    inspection.export_count(),
+                                    inspection.requires_compiler_module_definition_count(),
+                                );
+                            }
+                            let frontend_record =
+                                frontend_record_bridge::extract_frontend_record_v1(
+                                    tcx,
+                                    &collection,
+                                )
+                                .map_err(|error| {
+                                    amdgpu_llvm::EmitError::Preflight {
+                                        reason: format!(
+                                            "frontend record extraction failed: {error}"
+                                        ),
+                                    }
+                                })?;
+                            if self.config.verbose {
+                                eprintln!(
+                                    "[rustc-codegen-fe2o3] validated frontend record: {} function(s), {} canonical byte(s)",
+                                    frontend_record.unit().functions().len(),
+                                    frontend_record.canonical_bytes().len()
+                                );
+                            }
+                            collector::dump_device_functions(tcx, &collection.functions);
+                            let mir_module = mir_import::import_collection(tcx, &collection);
+                            match codegen_pipeline.resolve()? {
                             CodegenPipeline::LegacyV1 => {
                                 match run_optional_kernel_ir_analysis(
                                     self.config.verify_kernel_ir,
@@ -430,43 +511,50 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                                 let kernel_names = collection
                                     .functions
                                     .iter()
-                                    .filter(|function| function.is_kernel)
+                                    .filter(|function| function.is_kernel_entry())
                                     .map(|function| function.export_name.clone())
                                     .collect::<Vec<_>>();
                                 kernel_ir_codegen::prepare_fill_collection(module, &kernel_names)
                             }
-                        }
-                    },
-                ) {
-                    Ok(artifacts) => {
-                        match generate_typed_host_objects(
-                            &typed_roots,
-                            &artifacts,
-                            output_dir,
-                            &self.config.target,
-                            tcx.sess.target.llvm_target.as_ref(),
-                        ) {
-                            Ok((objects, temporary)) => {
-                                generated_host_objects = objects;
-                                temporary_host_objects = temporary;
+                            CodegenPipeline::KernelIrWorkerV2 => {
+                                Err(amdgpu_llvm::EmitError::Preflight {
+                                    reason: "internal error: Worker V2 entered the legacy artifact transaction"
+                                        .to_owned(),
+                                })
                             }
-                            Err(error) => tcx.dcx().fatal(format!(
-                                "[rustc-codegen-fe2o3] typed artifact binding failed: {error}"
-                            )),
                         }
-                        for artifact in &artifacts {
-                            eprintln!(
-                                "[rustc-codegen-fe2o3] emitted {}: LLVM IR {}, HSACO {}",
-                                artifact.kernel_name,
-                                artifact.llvm_ir.path().display(),
-                                artifact.hsaco.path().display()
-                            );
+                        },
+                    ) {
+                        Ok(artifacts) => {
+                            match generate_typed_host_objects(
+                                &typed_roots,
+                                &artifacts,
+                                output_dir,
+                                &self.config.target,
+                                tcx.sess.target.llvm_target.as_ref(),
+                            ) {
+                                Ok((objects, temporary)) => {
+                                    generated_host_objects = objects;
+                                    temporary_host_objects = temporary;
+                                }
+                                Err(error) => tcx.dcx().fatal(format!(
+                                    "[rustc-codegen-fe2o3] typed artifact binding failed: {error}"
+                                )),
+                            }
+                            for artifact in &artifacts {
+                                eprintln!(
+                                    "[rustc-codegen-fe2o3] emitted {}: LLVM IR {}, HSACO {}",
+                                    artifact.kernel_name,
+                                    artifact.llvm_ir.path().display(),
+                                    artifact.hsaco.path().display()
+                                );
+                            }
                         }
-                    }
-                    Err(error) => {
-                        tcx.dcx().fatal(format!(
-                            "[rustc-codegen-fe2o3] device codegen failed: {error}"
-                        ));
+                        Err(error) => {
+                            tcx.dcx().fatal(format!(
+                                "[rustc-codegen-fe2o3] device codegen failed: {error}"
+                            ));
+                        }
                     }
                 }
             } else if let Some(output_dir) = output_dir {
@@ -557,7 +645,7 @@ fn typed_roots_from_collection(
         .iter()
         .filter_map(|function| {
             function.typed_profile.map(|profile| {
-                if !function.is_kernel {
+                if !function.is_kernel_entry() {
                     return Err(TypedVerticalError::InvalidCollectedRoot {
                         export_name: function.export_name.clone(),
                         reason: "typed profile is attached to a non-root device function",
@@ -1447,14 +1535,19 @@ mod tests {
             PipelineSelection::from_value(Some(OsStr::new("kernel-ir-v1"))),
             PipelineSelection::Valid(CodegenPipeline::KernelIrV1)
         );
+        assert_eq!(
+            PipelineSelection::from_value(Some(OsStr::new("kernel-ir-worker-v2"))),
+            PipelineSelection::Valid(CodegenPipeline::KernelIrWorkerV2)
+        );
 
-        for invalid in ["", "legacy", "kernel-ir", "kernel-ir-v2", "true", "1"] {
+        for invalid in ["", "legacy", "kernel-ir", "worker-v2", "true", "1"] {
             let selection = PipelineSelection::from_value(Some(OsStr::new(invalid)));
             let error = selection.resolve().expect_err("selector must be exact");
             let message = error.to_string();
             assert!(message.contains("FE2O3_CODEGEN_PIPELINE"));
             assert!(message.contains("legacy-v1"));
             assert!(message.contains("kernel-ir-v1"));
+            assert!(message.contains("kernel-ir-worker-v2"));
         }
     }
 

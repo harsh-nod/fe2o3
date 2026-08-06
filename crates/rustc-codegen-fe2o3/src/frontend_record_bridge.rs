@@ -281,7 +281,7 @@ fn extract_function<'tcx>(
 
     MonomorphizedFunctionV1::new(
         identity,
-        if function.is_kernel {
+        if function.is_kernel_entry() {
             FunctionRoleV1::Kernel
         } else {
             FunctionRoleV1::Helper
@@ -556,7 +556,11 @@ fn kernel(value: u32) -> u32 {
         let definition = local_function(tcx, name);
         CollectedFunction {
             instance: Instance::mono(tcx, definition.to_def_id()),
-            is_kernel,
+            role: if is_kernel {
+                crate::collector::CollectedFunctionRole::KernelEntry
+            } else {
+                crate::collector::CollectedFunctionRole::InternalHelper
+            },
             export_name: format!("fe2o3_test_{name}"),
             logical_name: is_kernel.then(|| name.to_owned()),
             typed_profile: None,

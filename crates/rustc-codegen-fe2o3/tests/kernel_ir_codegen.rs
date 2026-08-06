@@ -205,7 +205,7 @@ fn selected_pipeline_rejects_invalid_or_unsupported_inputs_and_cleans_stale_arti
     assert!(!invalid.status.success(), "invalid selector was accepted");
     assert!(
         invalid_stderr.contains(
-            "FE2O3_CODEGEN_PIPELINE must be unset or exactly `legacy-v1` or `kernel-ir-v1`"
+            "FE2O3_CODEGEN_PIPELINE must be unset or exactly `legacy-v1`, `kernel-ir-v1`, or `kernel-ir-worker-v2`"
         ),
         "missing strict selector diagnostic:\n{invalid_stderr}"
     );
@@ -241,5 +241,47 @@ fn selected_pipeline_rejects_invalid_or_unsupported_inputs_and_cleans_stale_arti
             "unsupported selected kernel left stale artifact {}",
             artifact.display()
         );
+    }
+}
+
+#[test]
+#[ignore = "runs the configured rustc codegen backend through the managed wrapper"]
+fn worker_v2_rejects_a_missing_envelope_without_touching_legacy_artifacts() {
+    let _lock = backend_test_lock();
+    let workspace = workspace();
+    let fill_artifacts = artifact_paths(&workspace, "fill");
+    preseed(&fill_artifacts);
+
+    let output = backend(
+        &workspace,
+        "build",
+        "fe2o3-fill",
+        Some("kernel-ir-worker-v2"),
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        !output.status.success(),
+        "Worker V2 accepted a collection without an FFI envelope"
+    );
+    assert!(
+        stderr.contains(
+            "selected kernel-ir-worker-v2: verified compiler-module candidate with 1 kernel(s), 3 function(s)"
+        ),
+        "the collection did not reach compiler-module candidate verification:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("kernel-ir-worker-v2 requires a complete compiler FFI envelope"),
+        "missing fail-closed envelope diagnostic:\n{stderr}"
+    );
+    assert!(!stderr.contains("emitted fill"));
+    for artifact in fill_artifacts {
+        assert_eq!(
+            std::fs::read(&artifact).unwrap(),
+            b"preseeded stale artifact",
+            "Worker V2 touched legacy artifact {}",
+            artifact.display(),
+        );
+        std::fs::remove_file(&artifact).expect("remove preseeded legacy artifact");
     }
 }
