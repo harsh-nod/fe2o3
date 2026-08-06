@@ -4,11 +4,12 @@ use std::fmt;
 use std::fmt::Write as _;
 
 use fe2o3_kernel_ir::{
-    AddressSpace as KernelAddressSpace, Axis, BasicBlock, BinaryOp, BlockId, CastKind,
-    ComparePredicate, Constant, DiagnosticCode as VerificationDiagnosticCode, Function, FunctionId,
-    IndexKind, IntrinsicKind, Kernel, KernelId, LaunchDomain, LaunchExtent, MemoryOrdering, Module,
-    ModuleId, Operation, OperationKind, ScalarType, TargetCapability, Terminator, Type, ValueId,
-    VerificationErrors, WaveWidth, WorkgroupMemoryExtent, WorkgroupSize, verify_module,
+    AddressSpace as KernelAddressSpace, Atomic, AtomicKind, Axis, BasicBlock, BinaryOp, BlockId,
+    CastKind, ComparePredicate, Constant, DiagnosticCode as VerificationDiagnosticCode, Function,
+    FunctionId, IndexKind, IntrinsicKind, Kernel, KernelId, LaunchDomain, LaunchExtent,
+    MemoryOrdering, Module, ModuleId, Operation, OperationKind, ScalarType, SynchronizationScope,
+    TargetCapability, Terminator, Type, ValueId, VerificationErrors, WaveWidth,
+    WorkgroupMemoryExtent, WorkgroupSize, verify_module,
 };
 
 use crate::{AMDGPU_TRIPLE, AmdgcnIntrinsic, Dim};
@@ -328,6 +329,11 @@ fn validate_capabilities(
             | TargetCapability::WorkgroupBarrier
             | TargetCapability::DynamicWorkgroupMemory => {}
             TargetCapability::WaveWidth(width) => wave_width = Some(*width),
+            TargetCapability::Atomic {
+                width_bits,
+                address_space,
+                max_scope,
+            } if supported_atomic_capability(*width_bits, *address_space, *max_scope) => {}
             _ => {
                 return Err(LoweringErrors::one(
                     location,
@@ -722,13 +728,7 @@ impl<'a> FunctionLowerer<'a> {
                     ));
                 }
             }
-            OperationKind::Atomic(_) => {
-                return Err(LoweringErrors::one(
-                    location,
-                    LoweringDiagnosticCode::UnsupportedAtomic,
-                    "scoped atomic lowering is not implemented",
-                ));
-            }
+            OperationKind::Atomic(atomic) => self.validate_atomic(atomic, &location)?,
             OperationKind::Barrier(_) => {
                 return Err(LoweringErrors::one(
                     location,
@@ -1217,6 +1217,9 @@ impl<'a> FunctionLowerer<'a> {
                 )
                 .unwrap();
             }
+            OperationKind::Atomic(atomic) => {
+                self.emit_atomic(output, operation, atomic);
+            }
             OperationKind::Fence(fence) => {
                 emit_fence(output, fence.memory_scope, fence.semantics.ordering);
             }
@@ -1278,6 +1281,154 @@ impl<'a> FunctionLowerer<'a> {
         Ok(())
     }
 
+    fn validate_atomic(
+        &self,
+        atomic: &Atomic,
+        location: &LoweringLocation,
+    ) -> Result<(), LoweringErrors> {
+        let pointer = self.value_type(atomic.pointer);
+        validate_memory_access(pointer, atomic.access.address_space, location)?;
+        let Type::Pointer(pointer) = pointer else {
+            unreachable!("kernel IR verification required an atomic pointer")
+        };
+        let Some(scalar) = pointer.pointee.as_scalar() else {
+            unreachable!("kernel IR verification required a scalar atomic pointee")
+        };
+
+        if !matches!(
+            scalar,
+            ScalarType::I32 | ScalarType::U32 | ScalarType::I64 | ScalarType::U64
+        ) {
+            return Err(LoweringErrors::one(
+                location.clone(),
+                LoweringDiagnosticCode::UnsupportedAtomic,
+                format!(
+                    "AMDGPU atomic lowering supports only 32-bit and 64-bit integers, found {scalar:?}"
+                ),
+            ));
+        }
+        if atomic.access.volatile {
+            return Err(LoweringErrors::one(
+                location.clone(),
+                LoweringDiagnosticCode::UnsupportedAtomic,
+                "volatile scoped atomics are outside the supported AMDGPU subset",
+            ));
+        }
+        if !supported_atomic_address_scope(atomic.access.address_space, atomic.scope) {
+            return Err(LoweringErrors::one(
+                location.clone(),
+                LoweringDiagnosticCode::UnsupportedAtomic,
+                format!(
+                    "AMDGPU atomic lowering does not support {:?} memory at {:?} scope",
+                    atomic.access.address_space, atomic.scope
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    fn emit_atomic(&self, output: &mut String, operation: &Operation, atomic: &Atomic) {
+        let (pointer_name, pointer_ty) = self.value(atomic.pointer);
+        let Type::Pointer(pointer_ty) = pointer_ty else {
+            unreachable!("atomic preflight required a pointer")
+        };
+        let value_type = llvm_type(&pointer_ty.pointee);
+        let address_space = llvm_address_space(pointer_ty.address_space);
+        let sync_scope = llvm_atomic_sync_scope(atomic.scope);
+        let ordering = llvm_atomic_ordering(atomic.ordering);
+
+        match atomic.kind {
+            AtomicKind::Load => {
+                let result = operation
+                    .results
+                    .first()
+                    .expect("verified atomic load result");
+                writeln!(
+                    output,
+                    "  {} = load atomic {value_type}, ptr addrspace({address_space}) {pointer_name}{sync_scope} {ordering}, align {}",
+                    value_name(result.id),
+                    atomic.access.alignment
+                )
+                .unwrap();
+            }
+            AtomicKind::Store => {
+                let value = self
+                    .value(atomic.value.expect("verified atomic store value"))
+                    .0;
+                writeln!(
+                    output,
+                    "  store atomic {value_type} {value}, ptr addrspace({address_space}) {pointer_name}{sync_scope} {ordering}, align {}",
+                    atomic.access.alignment
+                )
+                .unwrap();
+            }
+            AtomicKind::CompareExchange => {
+                let [old, succeeded] = operation.results.as_slice() else {
+                    unreachable!("verified compare-exchange results")
+                };
+                let desired = self
+                    .value(
+                        atomic
+                            .value
+                            .expect("verified compare-exchange desired value"),
+                    )
+                    .0;
+                let expected = self
+                    .value(
+                        atomic
+                            .compare
+                            .expect("verified compare-exchange expected value"),
+                    )
+                    .0;
+                let failure_ordering = llvm_atomic_ordering(
+                    atomic
+                        .failure_ordering
+                        .expect("verified compare-exchange failure ordering"),
+                );
+                let pair = format!("{}.cmpxchg", value_name(old.id));
+                writeln!(
+                    output,
+                    "  {pair} = cmpxchg ptr addrspace({address_space}) {pointer_name}, {value_type} {expected}, {value_type} {desired}{sync_scope} {ordering} {failure_ordering}, align {}",
+                    atomic.access.alignment
+                )
+                .unwrap();
+                writeln!(
+                    output,
+                    "  {} = extractvalue {{ {value_type}, i1 }} {pair}, 0",
+                    value_name(old.id)
+                )
+                .unwrap();
+                writeln!(
+                    output,
+                    "  {} = extractvalue {{ {value_type}, i1 }} {pair}, 1",
+                    value_name(succeeded.id)
+                )
+                .unwrap();
+            }
+            kind => {
+                let result = operation
+                    .results
+                    .first()
+                    .expect("verified atomic RMW result");
+                let value = self
+                    .value(atomic.value.expect("verified atomic RMW value"))
+                    .0;
+                let scalar = pointer_ty
+                    .pointee
+                    .as_scalar()
+                    .expect("atomic preflight required a scalar");
+                let opcode = llvm_atomic_rmw_opcode(kind, scalar);
+                writeln!(
+                    output,
+                    "  {} = atomicrmw {opcode} ptr addrspace({address_space}) {pointer_name}, {value_type} {value}{sync_scope} {ordering}, align {}",
+                    value_name(result.id),
+                    atomic.access.alignment
+                )
+                .unwrap();
+            }
+        }
+    }
+
     fn emit_terminator(&self, output: &mut String, terminator: &Terminator) {
         match terminator {
             Terminator::Branch { target, .. } => {
@@ -1326,6 +1477,32 @@ fn supported_integer(scalar: ScalarType) -> bool {
 
 fn supported_memory_type(ty: &Type) -> bool {
     matches!(ty, Type::Scalar(scalar) if supported_integer(*scalar) || *scalar == ScalarType::F32)
+}
+
+fn supported_atomic_capability(
+    width_bits: u16,
+    address_space: KernelAddressSpace,
+    max_scope: SynchronizationScope,
+) -> bool {
+    matches!(width_bits, 32 | 64) && supported_atomic_address_scope(address_space, max_scope)
+}
+
+fn supported_atomic_address_scope(
+    address_space: KernelAddressSpace,
+    scope: SynchronizationScope,
+) -> bool {
+    match address_space {
+        KernelAddressSpace::Workgroup => scope == SynchronizationScope::Workgroup,
+        KernelAddressSpace::Global => matches!(
+            scope,
+            SynchronizationScope::Workgroup
+                | SynchronizationScope::Device
+                | SynchronizationScope::System
+        ),
+        KernelAddressSpace::Generic
+        | KernelAddressSpace::Private
+        | KernelAddressSpace::Constant => false,
+    }
 }
 
 fn supported_binary(op: BinaryOp, ty: &Type) -> bool {
@@ -1475,6 +1652,45 @@ fn emit_fence(
         }
         fe2o3_kernel_ir::SynchronizationScope::Invocation => {
             unreachable!("verification rejected invocation-scoped synchronization")
+        }
+    }
+}
+
+fn llvm_atomic_sync_scope(scope: SynchronizationScope) -> &'static str {
+    match scope {
+        SynchronizationScope::Workgroup => " syncscope(\"workgroup\")",
+        SynchronizationScope::Device => " syncscope(\"agent\")",
+        SynchronizationScope::System => "",
+        SynchronizationScope::Invocation | SynchronizationScope::Subgroup => {
+            unreachable!("atomic preflight rejected unsupported synchronization scope")
+        }
+    }
+}
+
+fn llvm_atomic_ordering(ordering: MemoryOrdering) -> &'static str {
+    match ordering {
+        MemoryOrdering::Relaxed => "monotonic",
+        MemoryOrdering::Acquire => "acquire",
+        MemoryOrdering::Release => "release",
+        MemoryOrdering::AcquireRelease => "acq_rel",
+        MemoryOrdering::SequentiallyConsistent => "seq_cst",
+    }
+}
+
+fn llvm_atomic_rmw_opcode(kind: AtomicKind, scalar: ScalarType) -> &'static str {
+    match kind {
+        AtomicKind::Exchange => "xchg",
+        AtomicKind::Add => "add",
+        AtomicKind::Subtract => "sub",
+        AtomicKind::Min if scalar.is_signed_integer() => "min",
+        AtomicKind::Min => "umin",
+        AtomicKind::Max if scalar.is_signed_integer() => "max",
+        AtomicKind::Max => "umax",
+        AtomicKind::BitAnd => "and",
+        AtomicKind::BitOr => "or",
+        AtomicKind::BitXor => "xor",
+        AtomicKind::Load | AtomicKind::Store | AtomicKind::CompareExchange => {
+            unreachable!("non-RMW atomic kind")
         }
     }
 }

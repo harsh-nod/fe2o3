@@ -586,6 +586,274 @@ fn g4_synchronization_module() -> Module {
     module
 }
 
+fn atomic(
+    kind: AtomicKind,
+    pointer: ValueId,
+    address_space: AddressSpace,
+    scope: SynchronizationScope,
+    ordering: MemoryOrdering,
+) -> Atomic {
+    Atomic {
+        kind,
+        pointer,
+        value: (kind != AtomicKind::Load).then_some(ValueId(1)),
+        compare: (kind == AtomicKind::CompareExchange).then_some(ValueId(2)),
+        access: MemoryAccess::new(address_space, 4),
+        scope,
+        ordering,
+        failure_ordering: (kind == AtomicKind::CompareExchange).then_some(MemoryOrdering::Acquire),
+    }
+}
+
+fn atomic_result(result: u32, atomic: Atomic) -> Operation {
+    op(
+        result,
+        Type::Scalar(ScalarType::U32),
+        OperationKind::Atomic(atomic),
+    )
+}
+
+fn scoped_atomics_module() -> Module {
+    let u32_type = Type::Scalar(ScalarType::U32);
+    let global_slice = Type::slice(
+        u32_type.clone(),
+        AddressSpace::Global,
+        AccessMode::ReadWrite,
+    );
+    let global_pointer = Type::pointer(
+        u32_type.clone(),
+        AddressSpace::Global,
+        AccessMode::ReadWrite,
+    );
+    let workgroup_pointer = Type::pointer(
+        u32_type.clone(),
+        AddressSpace::Workgroup,
+        AccessMode::ReadWrite,
+    );
+
+    let mut entry = BasicBlock::new(BlockId(0));
+    entry.operations = vec![
+        op(
+            3,
+            global_pointer,
+            OperationKind::SliceData { slice: ValueId(0) },
+        ),
+        op(
+            4,
+            workgroup_pointer,
+            OperationKind::WorkgroupMemory(WorkgroupMemory {
+                element: u32_type.clone(),
+                extent: WorkgroupMemoryExtent::Static(1),
+                alignment: 4,
+            }),
+        ),
+        atomic_result(
+            5,
+            atomic(
+                AtomicKind::Load,
+                ValueId(3),
+                AddressSpace::Global,
+                SynchronizationScope::Workgroup,
+                MemoryOrdering::Relaxed,
+            ),
+        ),
+        Operation::new(
+            vec![],
+            OperationKind::Atomic(atomic(
+                AtomicKind::Store,
+                ValueId(3),
+                AddressSpace::Global,
+                SynchronizationScope::Device,
+                MemoryOrdering::Release,
+            )),
+        ),
+        atomic_result(
+            6,
+            atomic(
+                AtomicKind::Exchange,
+                ValueId(3),
+                AddressSpace::Global,
+                SynchronizationScope::System,
+                MemoryOrdering::SequentiallyConsistent,
+            ),
+        ),
+        Operation::new(
+            vec![
+                ValueDef::new(ValueId(7), u32_type.clone()),
+                ValueDef::new(ValueId(8), Type::BOOL),
+            ],
+            OperationKind::Atomic(atomic(
+                AtomicKind::CompareExchange,
+                ValueId(3),
+                AddressSpace::Global,
+                SynchronizationScope::Device,
+                MemoryOrdering::AcquireRelease,
+            )),
+        ),
+        atomic_result(
+            9,
+            atomic(
+                AtomicKind::Add,
+                ValueId(4),
+                AddressSpace::Workgroup,
+                SynchronizationScope::Workgroup,
+                MemoryOrdering::Relaxed,
+            ),
+        ),
+        atomic_result(
+            10,
+            atomic(
+                AtomicKind::Subtract,
+                ValueId(3),
+                AddressSpace::Global,
+                SynchronizationScope::Workgroup,
+                MemoryOrdering::Relaxed,
+            ),
+        ),
+        atomic_result(
+            11,
+            atomic(
+                AtomicKind::Min,
+                ValueId(3),
+                AddressSpace::Global,
+                SynchronizationScope::Device,
+                MemoryOrdering::Acquire,
+            ),
+        ),
+        atomic_result(
+            12,
+            atomic(
+                AtomicKind::Max,
+                ValueId(3),
+                AddressSpace::Global,
+                SynchronizationScope::Device,
+                MemoryOrdering::Release,
+            ),
+        ),
+        atomic_result(
+            13,
+            atomic(
+                AtomicKind::BitAnd,
+                ValueId(3),
+                AddressSpace::Global,
+                SynchronizationScope::System,
+                MemoryOrdering::AcquireRelease,
+            ),
+        ),
+        atomic_result(
+            14,
+            atomic(
+                AtomicKind::BitOr,
+                ValueId(3),
+                AddressSpace::Global,
+                SynchronizationScope::System,
+                MemoryOrdering::SequentiallyConsistent,
+            ),
+        ),
+        atomic_result(
+            15,
+            atomic(
+                AtomicKind::BitXor,
+                ValueId(3),
+                AddressSpace::Global,
+                SynchronizationScope::Workgroup,
+                MemoryOrdering::Relaxed,
+            ),
+        ),
+    ];
+    entry.terminator = Some(Terminator::Return { values: vec![] });
+
+    let function = Function::definition(
+        "scoped_atomics_impl",
+        Signature::new(vec![global_slice, u32_type.clone(), u32_type], vec![]),
+        vec![ValueId(0), ValueId(1), ValueId(2)],
+        vec![entry],
+    );
+    let mut kernel = Kernel::new(
+        "scoped_atomics",
+        "scoped_atomics_impl",
+        LaunchDomain::D1 {
+            x: LaunchExtent::Dynamic,
+        },
+    );
+    kernel.workgroup_size = Some(WorkgroupSize::new(64, 1, 1));
+
+    let mut module = Module::new("tests::scoped_atomics");
+    module.required_capabilities.extend([
+        TargetCapability::WorkgroupMemory,
+        TargetCapability::Atomic {
+            width_bits: 32,
+            address_space: AddressSpace::Workgroup,
+            max_scope: SynchronizationScope::Workgroup,
+        },
+        TargetCapability::Atomic {
+            width_bits: 32,
+            address_space: AddressSpace::Global,
+            max_scope: SynchronizationScope::System,
+        },
+    ]);
+    module.functions.push(function);
+    module.kernels.push(kernel);
+    module
+}
+
+fn single_global_atomic_module(
+    scalar: ScalarType,
+    kind: AtomicKind,
+    scope: SynchronizationScope,
+    ordering: MemoryOrdering,
+    failure_ordering: Option<MemoryOrdering>,
+) -> Module {
+    let scalar_type = Type::Scalar(scalar);
+    let slice = Type::slice(
+        scalar_type.clone(),
+        AddressSpace::Global,
+        AccessMode::ReadWrite,
+    );
+    let pointer = Type::pointer(
+        scalar_type.clone(),
+        AddressSpace::Global,
+        AccessMode::ReadWrite,
+    );
+    let results = match kind {
+        AtomicKind::Store => vec![],
+        AtomicKind::CompareExchange => vec![
+            ValueDef::new(ValueId(4), scalar_type.clone()),
+            ValueDef::new(ValueId(5), Type::BOOL),
+        ],
+        _ => vec![ValueDef::new(ValueId(4), scalar_type.clone())],
+    };
+
+    let mut entry = BasicBlock::new(BlockId(0));
+    let mut atomic = atomic(kind, ValueId(3), AddressSpace::Global, scope, ordering);
+    atomic.failure_ordering = failure_ordering;
+    entry.operations = vec![
+        op(3, pointer, OperationKind::SliceData { slice: ValueId(0) }),
+        Operation::new(results, OperationKind::Atomic(atomic)),
+    ];
+    entry.terminator = Some(Terminator::Return { values: vec![] });
+
+    let function = Function::definition(
+        "single_atomic_impl",
+        Signature::new(vec![slice, scalar_type.clone(), scalar_type], vec![]),
+        vec![ValueId(0), ValueId(1), ValueId(2)],
+        vec![entry],
+    );
+    let mut kernel = Kernel::new(
+        "single_atomic",
+        "single_atomic_impl",
+        LaunchDomain::D1 {
+            x: LaunchExtent::Dynamic,
+        },
+    );
+    kernel.workgroup_size = Some(WorkgroupSize::new(64, 1, 1));
+
+    let mut module = Module::new("tests::single_atomic");
+    module.functions.push(function);
+    module.kernels.push(kernel);
+    module
+}
+
 #[test]
 fn lowers_fences_convergent_barriers_static_dynamic_lds_and_wave_width() {
     let llvm =
@@ -605,6 +873,264 @@ fn lowers_fences_convergent_barriers_static_dynamic_lds_and_wave_width() {
     ] {
         assert!(llvm.contains(expected), "missing {expected:?} in:\n{llvm}");
     }
+}
+
+#[test]
+fn scoped_integer_atomics_match_the_exact_golden() {
+    let llvm = lower_kernel_to_llvm_ir(&scoped_atomics_module(), &KernelId::new("scoped_atomics"))
+        .unwrap();
+
+    assert_eq!(llvm, include_str!("fixtures/scoped_atomics.ll"));
+    assert!(llvm.contains("syncscope(\"workgroup\") monotonic"));
+    assert!(llvm.contains("syncscope(\"agent\") release"));
+    assert!(llvm.contains("atomicrmw xchg ptr addrspace(1) %v3, i32 %arg1 seq_cst"));
+    assert!(llvm.contains("%v7.cmpxchg = cmpxchg"));
+    assert!(llvm.contains("%v8 = extractvalue { i32, i1 } %v7.cmpxchg, 1"));
+    assert!(llvm.contains("atomicrmw add ptr addrspace(3) %v4"));
+    assert!(llvm.contains("atomicrmw umin"));
+    assert!(llvm.contains("atomicrmw umax"));
+}
+
+#[test]
+fn signed_integer_min_and_max_select_signed_llvm_operations() {
+    for (kind, opcode) in [(AtomicKind::Min, "min"), (AtomicKind::Max, "max")] {
+        let module = single_global_atomic_module(
+            ScalarType::I32,
+            kind,
+            SynchronizationScope::Device,
+            MemoryOrdering::Relaxed,
+            None,
+        );
+        let llvm = lower_kernel_to_llvm_ir(&module, &KernelId::new("single_atomic")).unwrap();
+        assert!(
+            llvm.contains(&format!(
+                "atomicrmw {opcode} ptr addrspace(1) %v3, i32 %arg1 syncscope(\"agent\") monotonic"
+            )),
+            "wrong signed atomic operation in:\n{llvm}"
+        );
+    }
+}
+
+#[test]
+fn lowers_aligned_64_bit_integer_atomics() {
+    let mut module = single_global_atomic_module(
+        ScalarType::U64,
+        AtomicKind::Add,
+        SynchronizationScope::System,
+        MemoryOrdering::SequentiallyConsistent,
+        None,
+    );
+    let OperationKind::Atomic(atomic) =
+        &mut module.functions[0].body.as_mut().unwrap().blocks[0].operations[1].kind
+    else {
+        panic!("atomic expected")
+    };
+    atomic.access.alignment = 8;
+
+    let llvm = lower_kernel_to_llvm_ir(&module, &KernelId::new("single_atomic")).unwrap();
+    assert!(llvm.contains("%v4 = atomicrmw add ptr addrspace(1) %v3, i64 %arg1 seq_cst, align 8"));
+}
+
+#[test]
+fn rust_atomic_ordering_legality_is_rejected_before_lowering() {
+    let cases = [
+        single_global_atomic_module(
+            ScalarType::U32,
+            AtomicKind::Load,
+            SynchronizationScope::Device,
+            MemoryOrdering::Release,
+            None,
+        ),
+        single_global_atomic_module(
+            ScalarType::U32,
+            AtomicKind::Store,
+            SynchronizationScope::Device,
+            MemoryOrdering::Acquire,
+            None,
+        ),
+        single_global_atomic_module(
+            ScalarType::U32,
+            AtomicKind::CompareExchange,
+            SynchronizationScope::Device,
+            MemoryOrdering::AcquireRelease,
+            Some(MemoryOrdering::Release),
+        ),
+    ];
+
+    for module in cases {
+        let errors = lower_kernel_to_llvm_ir(&module, &KernelId::new("single_atomic")).unwrap_err();
+        assert_eq!(
+            errors.diagnostics()[0].code,
+            LoweringDiagnosticCode::InputVerification(DiagnosticCode::InvalidAtomic)
+        );
+        assert!(errors.diagnostics()[0].message.contains("malformed"));
+    }
+}
+
+#[test]
+fn unsupported_atomic_type_scope_and_volatile_modes_fail_closed() {
+    let float = single_global_atomic_module(
+        ScalarType::F32,
+        AtomicKind::Add,
+        SynchronizationScope::Device,
+        MemoryOrdering::Relaxed,
+        None,
+    );
+    let float_error = lower_kernel_to_llvm_ir(&float, &KernelId::new("single_atomic")).unwrap_err();
+    assert_eq!(
+        float_error.diagnostics()[0].code,
+        LoweringDiagnosticCode::UnsupportedAtomic
+    );
+    assert_eq!(
+        float_error.diagnostics()[0].message,
+        "AMDGPU atomic lowering supports only 32-bit and 64-bit integers, found F32"
+    );
+
+    let subword = single_global_atomic_module(
+        ScalarType::U16,
+        AtomicKind::BitXor,
+        SynchronizationScope::Device,
+        MemoryOrdering::Relaxed,
+        None,
+    );
+    let subword_error =
+        lower_kernel_to_llvm_ir(&subword, &KernelId::new("single_atomic")).unwrap_err();
+    assert_eq!(
+        subword_error.diagnostics()[0].code,
+        LoweringDiagnosticCode::UnsupportedAtomic
+    );
+    assert_eq!(
+        subword_error.diagnostics()[0].message,
+        "AMDGPU atomic lowering supports only 32-bit and 64-bit integers, found U16"
+    );
+
+    let subgroup = single_global_atomic_module(
+        ScalarType::U32,
+        AtomicKind::Add,
+        SynchronizationScope::Subgroup,
+        MemoryOrdering::Relaxed,
+        None,
+    );
+    let subgroup_error =
+        lower_kernel_to_llvm_ir(&subgroup, &KernelId::new("single_atomic")).unwrap_err();
+    assert_eq!(
+        subgroup_error.diagnostics()[0].code,
+        LoweringDiagnosticCode::UnsupportedAtomic
+    );
+    assert_eq!(
+        subgroup_error.diagnostics()[0].message,
+        "AMDGPU atomic lowering does not support Global memory at Subgroup scope"
+    );
+
+    let mut volatile = single_global_atomic_module(
+        ScalarType::U32,
+        AtomicKind::Add,
+        SynchronizationScope::Device,
+        MemoryOrdering::Relaxed,
+        None,
+    );
+    let OperationKind::Atomic(atomic) =
+        &mut volatile.functions[0].body.as_mut().unwrap().blocks[0].operations[1].kind
+    else {
+        panic!("atomic expected")
+    };
+    atomic.access.volatile = true;
+    let volatile_error =
+        lower_kernel_to_llvm_ir(&volatile, &KernelId::new("single_atomic")).unwrap_err();
+    assert_eq!(
+        volatile_error.diagnostics()[0].code,
+        LoweringDiagnosticCode::UnsupportedAtomic
+    );
+    assert_eq!(
+        volatile_error.diagnostics()[0].message,
+        "volatile scoped atomics are outside the supported AMDGPU subset"
+    );
+}
+
+#[test]
+fn unsupported_atomic_capabilities_and_address_spaces_are_rejected() {
+    let mut unsupported_capability = single_global_atomic_module(
+        ScalarType::U32,
+        AtomicKind::Add,
+        SynchronizationScope::Device,
+        MemoryOrdering::Relaxed,
+        None,
+    );
+    unsupported_capability
+        .required_capabilities
+        .insert(TargetCapability::Atomic {
+            width_bits: 16,
+            address_space: AddressSpace::Global,
+            max_scope: SynchronizationScope::Device,
+        });
+    assert_eq!(
+        first_code(&unsupported_capability, "single_atomic"),
+        LoweringDiagnosticCode::UnsupportedCapability
+    );
+
+    let mut generic = single_global_atomic_module(
+        ScalarType::U32,
+        AtomicKind::Add,
+        SynchronizationScope::System,
+        MemoryOrdering::Relaxed,
+        None,
+    );
+    let Type::Slice(slice) = &mut generic.functions[0].signature.parameters[0] else {
+        panic!("slice expected")
+    };
+    slice.address_space = AddressSpace::Generic;
+    let Type::Pointer(pointer) =
+        &mut generic.functions[0].body.as_mut().unwrap().blocks[0].operations[0].results[0].ty
+    else {
+        panic!("pointer expected")
+    };
+    pointer.address_space = AddressSpace::Generic;
+    let OperationKind::Atomic(atomic) =
+        &mut generic.functions[0].body.as_mut().unwrap().blocks[0].operations[1].kind
+    else {
+        panic!("atomic expected")
+    };
+    atomic.access.address_space = AddressSpace::Generic;
+    assert_eq!(
+        first_code(&generic, "single_atomic"),
+        LoweringDiagnosticCode::UnsupportedAddressSpace
+    );
+
+    let mut invalid_system_lds = scoped_atomics_module();
+    let OperationKind::Atomic(atomic) = &mut invalid_system_lds.functions[0]
+        .body
+        .as_mut()
+        .unwrap()
+        .blocks[0]
+        .operations[6]
+        .kind
+    else {
+        panic!("atomic expected")
+    };
+    atomic.scope = SynchronizationScope::System;
+    assert_eq!(
+        first_code(&invalid_system_lds, "scoped_atomics"),
+        LoweringDiagnosticCode::InputVerification(DiagnosticCode::InvalidAtomic)
+    );
+}
+
+#[test]
+fn atomic_lowering_diagnostics_are_deterministic() {
+    let module = single_global_atomic_module(
+        ScalarType::F32,
+        AtomicKind::Exchange,
+        SynchronizationScope::System,
+        MemoryOrdering::SequentiallyConsistent,
+        None,
+    );
+    let diagnostics = (0..32)
+        .map(|_| {
+            lower_kernel_to_llvm_ir(&module, &KernelId::new("single_atomic"))
+                .unwrap_err()
+                .into_diagnostics()
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(diagnostics.len(), 1);
 }
 
 #[test]
@@ -1323,6 +1849,55 @@ fn unsupported_phi_types_and_address_spaces_fail_before_emission() {
         LoweringDiagnosticCode::UnsupportedAddressSpace
     );
     assert_eq!(error.diagnostics()[0].location.block, Some(BlockId(1)));
+}
+
+fn compile_scoped_atomics_for_target(target: &str) {
+    canonical_test_target(target).unwrap();
+    let clang = std::env::var_os("FE2O3_ROCM_CLANG")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/opt/rocm/llvm/bin/clang"));
+    let directory = TemporaryDirectory::new(&format!("g4-atomics-{target}"));
+    let input = directory.join("scoped_atomics.ll");
+    let output = directory.join("scoped_atomics.hsaco");
+    let llvm_ir =
+        lower_kernel_to_llvm_ir(&scoped_atomics_module(), &KernelId::new("scoped_atomics"))
+            .unwrap();
+    assert_eq!(llvm_ir, include_str!("fixtures/scoped_atomics.ll"));
+    fs::write(&input, llvm_ir).unwrap();
+
+    let result = Command::new(clang)
+        .arg("--target=amdgcn-amd-amdhsa")
+        .arg(format!("-mcpu={target}"))
+        .arg("-nogpulib")
+        .arg(&input)
+        .arg("-o")
+        .arg(&output)
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "clang failed for {target}:\n{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(fs::metadata(output).unwrap().len() > 64);
+}
+
+#[test]
+#[ignore = "requires a ROCm LLVM toolchain with gfx1151 support"]
+fn rocm_compiles_scoped_atomics_for_gfx1151() {
+    compile_scoped_atomics_for_target("gfx1151");
+}
+
+#[test]
+#[ignore = "requires a ROCm LLVM toolchain with gfx942 support"]
+fn rocm_compiles_scoped_atomics_for_gfx942() {
+    compile_scoped_atomics_for_target("gfx942");
+}
+
+#[test]
+#[ignore = "requires a ROCm LLVM toolchain with gfx950 support"]
+fn rocm_compiles_scoped_atomics_for_gfx950() {
+    compile_scoped_atomics_for_target("gfx950");
 }
 
 #[test]
