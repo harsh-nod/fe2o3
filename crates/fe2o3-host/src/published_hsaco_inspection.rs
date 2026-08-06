@@ -3,11 +3,10 @@ use crate::published_direct_link::{
 };
 use crate::{ObservedContext, PublishedDirectLinkAdmissionError};
 use fe2o3_amd_target::{AmdTargetId, ParseAmdTargetIdError};
-use fe2o3_artifact_transaction::PublishedLinkArtifactV1;
 use fe2o3_artifacts::{
     AbiKind, AddressSpace, ArtifactContainerV1, BlockSize,
-    ManifestClaimDirectLinkPublicationBridgeV1, SelectedNativeKernel,
-    ValidatedDirectLinkBundleEvidenceV1,
+    ManifestClaimDirectLinkCurrentPublicationTokenV1, ManifestClaimDirectLinkPublicationBridgeV1,
+    SelectedNativeKernel, ValidatedDirectLinkBundleEvidenceV1,
 };
 use fe2o3_hsaco::{
     ArgumentAccess, ArgumentAddressSpace, CodeObjectVersion, ExplicitArgument, ExplicitValueKind,
@@ -15,7 +14,6 @@ use fe2o3_hsaco::{
     KernelDescriptorBinding, KernelKind, inspect_and_bind_kernel_descriptors,
 };
 use std::fmt;
-use std::sync::Arc;
 
 /// Version of the AMDHSA export-to-descriptor symbol rule used by this bridge.
 ///
@@ -249,16 +247,16 @@ impl PublishedKernelPhysicalLayoutV1 {
 /// Inert physical-layout inspection bound to one complete published direct-link admission.
 ///
 /// Construction consumes and retains the full admission, including its observed context, bridge,
-/// publication, container, payload occurrence, kernel set, and artifact selection. Exact payload
-/// bytes are revalidated before [`inspect_and_bind_kernel_descriptors`] parses them.
+/// publication lease, container, payload occurrence, kernel set, and artifact selection. It
+/// acquires a fresh currentness token and parses only the retained descriptor snapshot; no caller
+/// pathname or byte slice participates.
 ///
-/// The result is physical, directional evidence only. It authenticates no filesystem object,
-/// compiler, producer, Rust type, ownership, alias/effect contract, or executable behavior and
-/// grants no module-loading or launch authority.
+/// The result retains a locally authenticated exact-file lease but is physical, directional
+/// evidence only. It authenticates no compiler, producer, Rust type, ownership, alias/effect
+/// contract, or executable behavior and grants no module-loading or launch authority.
 pub struct InspectedPublishedDirectLinkPhysicalLayoutV1 {
     admission: ValidatedPublishedDirectLinkSelectionV1,
     inspected: InspectedKernelBindings,
-    payload: Arc<[u8]>,
     kernels: Box<[PublishedKernelPhysicalLayoutV1]>,
     selected_kernel_index: usize,
 }
@@ -268,7 +266,7 @@ impl fmt::Debug for InspectedPublishedDirectLinkPhysicalLayoutV1 {
         formatter
             .debug_struct("InspectedPublishedDirectLinkPhysicalLayoutV1")
             .field("admission", &self.admission)
-            .field("payload_len", &self.payload.len())
+            .field("payload_len", &self.admission.exact_artifact_bytes().len())
             .field("kernel_count", &self.kernels.len())
             .field("selected_kernel_index", &self.selected_kernel_index)
             .finish_non_exhaustive()
@@ -276,20 +274,27 @@ impl fmt::Debug for InspectedPublishedDirectLinkPhysicalLayoutV1 {
 }
 
 impl InspectedPublishedDirectLinkPhysicalLayoutV1 {
-    /// Inspects exact bytes and consumes the complete admission they are bound to.
+    /// Inspects the retained exact descriptor snapshot and consumes its complete admission.
     pub fn inspect(
         admission: ValidatedPublishedDirectLinkSelectionV1,
-        exact_selected_payload_bytes: &[u8],
     ) -> Result<Self, PublishedPhysicalLayoutInspectionError> {
-        validate_payload_occurrence(&admission, exact_selected_payload_bytes)?;
-        let inspected = inspect_and_bind_kernel_descriptors(exact_selected_payload_bytes)
-            .map_err(PublishedPhysicalLayoutInspectionError::Inspection)?;
-        let (selected_kernel_index, kernels) = validate_inspection(&admission, &inspected)?;
+        let (inspected, selected_kernel_index, kernels) = {
+            let current = admission.acquire_current_token().map_err(|error| {
+                PublishedPhysicalLayoutInspectionError::CurrentPublication {
+                    reason: error.to_string(),
+                }
+            })?;
+            let exact_selected_payload_bytes = current.exact_artifact_bytes();
+            validate_payload_occurrence(&admission, exact_selected_payload_bytes)?;
+            let inspected = inspect_and_bind_kernel_descriptors(exact_selected_payload_bytes)
+                .map_err(PublishedPhysicalLayoutInspectionError::Inspection)?;
+            let (selected_kernel_index, kernels) = validate_inspection(&admission, &inspected)?;
+            (inspected, selected_kernel_index, kernels)
+        };
 
         Ok(Self {
             admission,
             inspected,
-            payload: Arc::from(exact_selected_payload_bytes),
             kernels,
             selected_kernel_index,
         })
@@ -301,27 +306,13 @@ impl InspectedPublishedDirectLinkPhysicalLayoutV1 {
         &self,
         validated_bundle: &ValidatedDirectLinkBundleEvidenceV1<'_>,
         bridge: &ManifestClaimDirectLinkPublicationBridgeV1,
-        published: PublishedLinkArtifactV1,
         container: &ArtifactContainerV1,
         selected: SelectedNativeKernel<'_>,
         observed: &ObservedContext,
-        exact_selected_payload_bytes: &[u8],
     ) -> Result<(), PublishedPhysicalLayoutInspectionError> {
         self.admission
-            .revalidate(
-                validated_bundle,
-                bridge,
-                published,
-                container,
-                selected,
-                observed,
-            )
-            .map_err(PublishedPhysicalLayoutInspectionError::AdmissionRevalidation)?;
-        validate_payload_occurrence(&self.admission, exact_selected_payload_bytes)?;
-        if exact_selected_payload_bytes != self.payload.as_ref() {
-            return Err(PublishedPhysicalLayoutInspectionError::PayloadSubstitution);
-        }
-        Ok(())
+            .revalidate(validated_bundle, bridge, container, selected, observed)
+            .map_err(PublishedPhysicalLayoutInspectionError::AdmissionRevalidation)
     }
 
     pub fn code_object_version(&self) -> CodeObjectVersion {
@@ -344,8 +335,22 @@ impl InspectedPublishedDirectLinkPhysicalLayoutV1 {
         self.inspected.bindings()[self.selected_kernel_index]
     }
 
+    /// Revalidates currentness and holds the cooperative publication lock for a later stage.
+    pub fn acquire_current_publication_token(
+        &self,
+    ) -> Result<
+        ManifestClaimDirectLinkCurrentPublicationTokenV1<'_>,
+        PublishedPhysicalLayoutInspectionError,
+    > {
+        self.admission.acquire_current_token().map_err(|error| {
+            PublishedPhysicalLayoutInspectionError::CurrentPublication {
+                reason: error.to_string(),
+            }
+        })
+    }
+
     pub const fn authenticates_filesystem_artifact(&self) -> bool {
-        false
+        true
     }
 
     pub const fn proves_compiler_provenance(&self) -> bool {
@@ -760,6 +765,9 @@ pub enum PublishedPhysicalLayoutInspectionError {
         field: &'static str,
     },
     AdmissionRevalidation(PublishedDirectLinkAdmissionError),
+    CurrentPublication {
+        reason: String,
+    },
 }
 
 impl fmt::Display for PublishedPhysicalLayoutInspectionError {
@@ -797,6 +805,9 @@ impl fmt::Display for PublishedPhysicalLayoutInspectionError {
                 "kernel export {export_symbol} physical metadata conflicts for {field}"
             ),
             Self::AdmissionRevalidation(error) => error.fmt(formatter),
+            Self::CurrentPublication { reason } => {
+                write!(formatter, "current publication lease failed revalidation: {reason}")
+            }
         }
     }
 }
@@ -811,6 +822,7 @@ impl std::error::Error for PublishedPhysicalLayoutInspectionError {
             | Self::PayloadLengthMismatch
             | Self::PayloadDigestMismatch
             | Self::PayloadSubstitution
+            | Self::CurrentPublication { .. }
             | Self::TargetMismatch
             | Self::KernelSetMismatch
             | Self::SelectedKernelMismatch

@@ -474,6 +474,16 @@ fn manifest_claim_handoff_publishes_and_recovers_inert_durable_bytes() {
     assert_eq!(recovered.artifact().bytes(), PAYLOAD);
     assert!(!recovered.grants_load_authority());
     assert!(!recovered.grants_launch_authority());
+
+    let lease = result.into_current_lease();
+    assert!(lease.is_bound_to_handoff(&handoff));
+    assert_eq!(lease.exact_artifact_bytes(), PAYLOAD);
+    assert!(!lease.grants_load_authority());
+    assert!(!lease.grants_launch_authority());
+    let token = lease.acquire_current_token().unwrap();
+    assert_eq!(token.exact_artifact_bytes(), PAYLOAD);
+    assert!(!token.grants_load_authority());
+    assert!(!token.grants_launch_authority());
 }
 
 #[test]

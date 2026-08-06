@@ -3,7 +3,7 @@ error[E0308]: mismatched types
    |
 16 |     let _ = ValidatedPublishedDirectLinkSelectionV1::validate(
    |             ------------------------------------------------- arguments to this function are incorrect
-17 |         validated, legacy, published, container, selected, observed,
+17 |         validated, legacy, current, container, selected, observed,
    |                    ^^^^^^ expected `&...`, found `&DirectLinkPublicationBridgeV1`
    |
    = note: expected reference `&ManifestClaimDirectLinkPublicationBridgeV1`

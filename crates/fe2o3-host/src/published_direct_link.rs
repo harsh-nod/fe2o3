@@ -1,11 +1,12 @@
 use crate::{
     ArtifactBindingError, ArtifactRevalidationError, ObservedContext, ValidatedArtifactSelectionV1,
 };
-use fe2o3_artifact_transaction::PublishedLinkArtifactV1;
+use fe2o3_artifact_transaction::{DurableLinkPublicationError, PublishedLinkArtifactV1};
 use fe2o3_artifacts::{
     AbiLayout, ArtifactContainerV1, DIRECT_LINK_EVIDENCE_DIGEST_ALGORITHM, DigestBytes,
     DirectLinkBridgeError, DirectLinkContainerIdentityV1, DirectLinkFinalizedPayloadIdentityV1,
-    LaunchContract, ManifestClaimDirectLinkDurablePlanHandoffV1,
+    LaunchContract, ManifestClaimDirectLinkCurrentPublicationLeaseV1,
+    ManifestClaimDirectLinkCurrentPublicationTokenV1, ManifestClaimDirectLinkDurablePlanHandoffV1,
     ManifestClaimDirectLinkPublicationBridgeV1, Name, SelectedNativeKernel,
     ValidatedDirectLinkBundleEvidenceV1,
 };
@@ -13,11 +14,11 @@ use std::fmt;
 
 /// An opaque, inert host-side admission of one structurally validated G5/G6 selection.
 ///
-/// Construction binds one validated direct-link evidence envelope and a manifest-claim-derived
-/// bridge to an exact G5 publication, canonical container identity, finalized payload occurrence,
-/// selected kernel, complete manifest launch claims, and observed context. The token owns the
-/// existing structural [`ValidatedArtifactSelectionV1`] result and can revalidate the complete
-/// input tuple against substitutions.
+/// Construction consumes a manifest-claim-derived exact-file-handle lease and binds it with one
+/// validated direct-link evidence envelope, bridge, canonical container identity, finalized
+/// payload occurrence, selected kernel, complete manifest launch claims, and observed context. The
+/// token owns the existing structural [`ValidatedArtifactSelectionV1`] result and can revalidate
+/// the complete input tuple and current durable generation against substitutions.
 ///
 /// The legacy bridge is structurally excluded:
 ///
@@ -33,13 +34,14 @@ use std::fmt;
 /// }
 /// ```
 ///
-/// This value authenticates no filesystem object or compiler marker, does not establish that the
-/// executable is safe, and grants no module-loading or kernel-launch authority.
+/// This value retains locally authenticated record and artifact descriptors. It authenticates no
+/// compiler marker, does not establish that the executable is safe, and grants no module-loading
+/// or kernel-launch authority.
 pub struct ValidatedPublishedDirectLinkSelectionV1 {
     selection: ValidatedArtifactSelectionV1,
     bridge: ManifestClaimDirectLinkPublicationBridgeV1,
     durable_handoff: ManifestClaimDirectLinkDurablePlanHandoffV1,
-    published: PublishedLinkArtifactV1,
+    current_lease: ManifestClaimDirectLinkCurrentPublicationLeaseV1,
     binding_index: usize,
     container_identity: DirectLinkContainerIdentityV1,
     finalized_payload_identity: DirectLinkFinalizedPayloadIdentityV1,
@@ -78,7 +80,7 @@ impl fmt::Debug for ValidatedPublishedDirectLinkSelectionV1 {
             .debug_struct("ValidatedPublishedDirectLinkSelectionV1")
             .field("selection", &self.selection)
             .field("durable_handoff", &self.durable_handoff)
-            .field("published", &self.published)
+            .field("current_lease", &self.current_lease)
             .field("binding_index", &self.binding_index)
             .field("container_identity", &self.container_identity)
             .field(
@@ -95,12 +97,19 @@ impl ValidatedPublishedDirectLinkSelectionV1 {
     pub fn validate(
         validated_bundle: &ValidatedDirectLinkBundleEvidenceV1<'_>,
         bridge: &ManifestClaimDirectLinkPublicationBridgeV1,
-        published: PublishedLinkArtifactV1,
+        current_lease: ManifestClaimDirectLinkCurrentPublicationLeaseV1,
         container: &ArtifactContainerV1,
         selected: SelectedNativeKernel<'_>,
         observed: &ObservedContext,
     ) -> Result<Self, PublishedDirectLinkAdmissionError> {
         let durable_handoff = bridge.durable_plan_handoff();
+        if !current_lease.is_bound_to_handoff(&durable_handoff) {
+            return Err(PublishedDirectLinkAdmissionError::CurrentLeaseSubstitution);
+        }
+        let published = current_lease.published();
+        let _current = current_lease
+            .acquire_current_token()
+            .map_err(PublishedDirectLinkAdmissionError::current_publication)?;
         let (binding_index, container_identity, finalized_payload_identity) =
             validate_direct_link_inputs(
                 validated_bundle,
@@ -113,12 +122,13 @@ impl ValidatedPublishedDirectLinkSelectionV1 {
         let selection = ValidatedArtifactSelectionV1::validate(selected, observed)
             .map_err(PublishedDirectLinkAdmissionError::ArtifactSelection)?;
         let payload_kernel_set = payload_kernel_set(selected);
+        drop(_current);
 
         Ok(Self {
             selection,
             bridge: bridge.clone(),
             durable_handoff,
-            published,
+            current_lease,
             binding_index,
             container_identity,
             finalized_payload_identity,
@@ -132,7 +142,6 @@ impl ValidatedPublishedDirectLinkSelectionV1 {
         &self,
         validated_bundle: &ValidatedDirectLinkBundleEvidenceV1<'_>,
         bridge: &ManifestClaimDirectLinkPublicationBridgeV1,
-        published: PublishedLinkArtifactV1,
         container: &ArtifactContainerV1,
         selected: SelectedNativeKernel<'_>,
         observed: &ObservedContext,
@@ -140,13 +149,17 @@ impl ValidatedPublishedDirectLinkSelectionV1 {
         if bridge != &self.bridge {
             return Err(PublishedDirectLinkAdmissionError::BridgeSubstitution);
         }
-        if published != self.published {
-            return Err(PublishedDirectLinkAdmissionError::PublicationSubstitution);
-        }
         let durable_handoff = bridge.durable_plan_handoff();
-        if durable_handoff != self.durable_handoff {
+        if durable_handoff != self.durable_handoff
+            || !self.current_lease.is_bound_to_handoff(&durable_handoff)
+        {
             return Err(PublishedDirectLinkAdmissionError::BridgeSubstitution);
         }
+        let published = self.current_lease.published();
+        let _current = self
+            .current_lease
+            .acquire_current_token()
+            .map_err(PublishedDirectLinkAdmissionError::current_publication)?;
 
         let (binding_index, container_identity, finalized_payload_identity) =
             validate_direct_link_inputs(
@@ -175,7 +188,7 @@ impl ValidatedPublishedDirectLinkSelectionV1 {
     }
 
     pub const fn published(&self) -> PublishedLinkArtifactV1 {
-        self.published
+        self.current_lease.published()
     }
 
     /// Returns the unique canonical G6 binding index associated with this admission.
@@ -199,9 +212,20 @@ impl ValidatedPublishedDirectLinkSelectionV1 {
         &self.payload_kernel_set
     }
 
-    /// Structural admission does not authenticate a filesystem object or pathname.
+    pub(crate) fn exact_artifact_bytes(&self) -> &[u8] {
+        self.current_lease.exact_artifact_bytes()
+    }
+
+    pub(crate) fn acquire_current_token(
+        &self,
+    ) -> Result<ManifestClaimDirectLinkCurrentPublicationTokenV1<'_>, DurableLinkPublicationError>
+    {
+        self.current_lease.acquire_current_token()
+    }
+
+    /// Admission retains a locally validated exact-file-handle lease.
     pub const fn authenticates_filesystem_artifact(&self) -> bool {
-        false
+        true
     }
 
     /// Structural admission does not prove an association with a compiler-generated marker.
@@ -350,6 +374,8 @@ pub enum PublishedDirectLinkAdmissionError {
     ArtifactSelection(ArtifactBindingError),
     BridgeSubstitution,
     PublicationSubstitution,
+    CurrentLeaseSubstitution,
+    CurrentPublication { reason: String },
     BindingIndexSubstitution,
     ArtifactRevalidation(ArtifactRevalidationError),
 }
@@ -380,6 +406,14 @@ impl fmt::Display for PublishedDirectLinkAdmissionError {
             Self::PublicationSubstitution => {
                 formatter.write_str("published artifact differs from the admitted publication")
             }
+            Self::CurrentLeaseSubstitution => formatter
+                .write_str("current publication lease differs from the manifest-claim handoff"),
+            Self::CurrentPublication { reason } => {
+                write!(
+                    formatter,
+                    "current publication lease failed revalidation: {reason}"
+                )
+            }
             Self::BindingIndexSubstitution => formatter
                 .write_str("canonical G6 binding index differs from the admitted occurrence"),
             Self::ArtifactRevalidation(error) => error.fmt(formatter),
@@ -400,7 +434,17 @@ impl std::error::Error for PublishedDirectLinkAdmissionError {
             | Self::PayloadKernelSetSubstitution
             | Self::BridgeSubstitution
             | Self::PublicationSubstitution
+            | Self::CurrentLeaseSubstitution
+            | Self::CurrentPublication { .. }
             | Self::BindingIndexSubstitution => None,
+        }
+    }
+}
+
+impl PublishedDirectLinkAdmissionError {
+    fn current_publication(error: DurableLinkPublicationError) -> Self {
+        Self::CurrentPublication {
+            reason: error.to_string(),
         }
     }
 }
@@ -412,9 +456,7 @@ mod tests {
         InspectedPublishedDirectLinkPhysicalLayoutV1, PhysicalMetadataValueV1,
         PublishedPhysicalLayoutInspectionError,
     };
-    use fe2o3_artifact_transaction::{
-        BuildAttempt, LinkPublicationCatalogV1, PackageIdentityV1, PublicationOutcomeV1,
-    };
+    use fe2o3_artifact_transaction::{BuildAttempt, PackageIdentityV1};
     use fe2o3_artifacts::{
         AbiField, AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership,
         BlockSize, BundleIndexV1, CallerClaimedPackageIdentityV1, CodeObjectFormat,
@@ -428,17 +470,46 @@ mod tests {
         DirectLinkToolchainIdentityV1, DirectLinkTransformationIdentityV1,
         DirectLinkWorkerConfigurationIdentityV1, DirectLinkWorkerExecutableIdentityV1,
         DirectLinkWorkerIdentityV1, Endianness, IdentityText, KernelEntry, LaunchContract,
-        ManifestClaimDerivedLinkPublicationScopeV1, ManifestV1, Mutability, Name, PayloadDigest,
-        PointerWidth, ScalarType, TargetIdentity, ToolIdentity, TypeIdentity,
+        ManifestClaimDerivedLinkPublicationScopeV1,
+        ManifestClaimDirectLinkCurrentPublicationLeaseV1, ManifestV1, Mutability, Name,
+        PayloadDigest, PointerWidth, ScalarType, TargetIdentity, ToolIdentity, TypeIdentity,
+        publish_manifest_claim_direct_link_durable_v1,
     };
     use fe2o3_hsaco::{
         ArgumentAccess, ArgumentAddressSpace, CodeObjectVersion, ExplicitValueKind,
         InspectionError, KernelBindingError,
     };
     use rmpv::{Value, encode::write_value};
+    use std::fs;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     const ELF_HEADER_BYTES: usize = 64;
     const SECTION_HEADER_BYTES: usize = 64;
+
+    static NEXT_PUBLICATION_DIRECTORY: AtomicU64 = AtomicU64::new(1);
+
+    struct TestPublicationDirectory {
+        path: PathBuf,
+    }
+
+    impl TestPublicationDirectory {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "fe2o3-host-current-publication-{}-{}",
+                std::process::id(),
+                NEXT_PUBLICATION_DIRECTORY.fetch_add(1, Ordering::Relaxed)
+            ));
+            fs::create_dir(&path).unwrap();
+            Self { path }
+        }
+    }
+
+    impl Drop for TestPublicationDirectory {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
 
     struct Fixture {
         container: ArtifactContainerV1,
@@ -984,53 +1055,22 @@ mod tests {
         .unwrap()
     }
 
-    fn publish(bridge: &ManifestClaimDirectLinkPublicationBridgeV1) -> PublishedLinkArtifactV1 {
-        let scope = bridge
-            .non_authoritative_diagnostics()
-            .descriptive_scope_claim();
-        let mut catalog = LinkPublicationCatalogV1::default();
-        let mut record = catalog
-            .begin(bridge.attempt(), scope, bridge.request_identity())
-            .unwrap();
-        record
-            .record_pinned_worker(
-                &catalog,
-                bridge.attempt(),
-                bridge.request_identity(),
-                bridge.worker_identity(),
-            )
-            .unwrap();
-        record
-            .record_validated_response(
-                &catalog,
-                bridge.attempt(),
-                bridge.request_identity(),
-                bridge.worker_identity(),
-                bridge.response_identity(),
-                bridge.linked_output_identity(),
-            )
-            .unwrap();
-        record
-            .record_finalization(
-                &catalog,
-                bridge.attempt(),
-                bridge.response_identity(),
-                bridge.linked_output_identity(),
-                bridge.finalization_identity(),
-                bridge.finalized_output_identity(),
-            )
-            .unwrap();
-        assert_eq!(
-            record.publish(
-                &mut catalog,
-                bridge.attempt(),
-                bridge.finalization_identity(),
-                bridge.finalized_output_identity(),
-                bridge.publication_identity(),
-            ),
-            Ok(PublicationOutcomeV1::Published)
-        );
-        *catalog.published(&scope).unwrap()
+    fn publish(
+        directory: &TestPublicationDirectory,
+        bridge: &ManifestClaimDirectLinkPublicationBridgeV1,
+        bytes: &[u8],
+    ) -> ManifestClaimDirectLinkCurrentPublicationLeaseV1 {
+        publish_manifest_claim_direct_link_durable_v1(
+            &directory.path,
+            &bridge.durable_plan_handoff(),
+            |transaction| {
+                transaction.record_worker_pinned()?;
+                transaction.record_response_validated()?;
+                transaction.record_finalized(bytes)
+            },
+        )
+        .unwrap()
+        .into_current_lease()
     }
 
     fn make_observed(identity: usize) -> ObservedContext {
@@ -1041,18 +1081,10 @@ mod tests {
         ObservedContext::for_test(identity, 0, architecture, 1024, 65_536)
     }
 
-    fn admit_hsaco(
-        fixture: &Fixture,
-        identity: usize,
-        architecture: &str,
-    ) -> ValidatedPublishedDirectLinkSelectionV1 {
-        prepare_hsaco_admission(fixture, identity, architecture).admission
-    }
-
     struct HsacoAdmission<'fixture> {
+        _publication_directory: TestPublicationDirectory,
         validated: ValidatedDirectLinkBundleEvidenceV1<'fixture>,
         bridge: ManifestClaimDirectLinkPublicationBridgeV1,
-        published: PublishedLinkArtifactV1,
         selected: SelectedNativeKernel<'fixture>,
         observed: ObservedContext,
         admission: ValidatedPublishedDirectLinkSelectionV1,
@@ -1065,25 +1097,26 @@ mod tests {
     ) -> HsacoAdmission<'fixture> {
         let validated = fixture.validated();
         let bridge = make_bridge(fixture, &validated, 0, identity as u64, identity as u8);
-        let published = publish(&bridge);
         let selected = fixture
             .container
             .select_native_kernel(fixture.primary_kernel)
             .unwrap();
+        let publication_directory = TestPublicationDirectory::new();
+        let current_lease = publish(&publication_directory, &bridge, selected.payload());
         let observed = make_observed_for(identity, architecture);
         let admission = ValidatedPublishedDirectLinkSelectionV1::validate(
             &validated,
             &bridge,
-            published,
+            current_lease,
             &fixture.container,
             selected,
             &observed,
         )
         .unwrap();
         HsacoAdmission {
+            _publication_directory: publication_directory,
             validated,
             bridge,
-            published,
             selected,
             observed,
             admission,
@@ -1576,18 +1609,20 @@ mod tests {
         let fixture = make_fixture(1);
         let validated = fixture.validated();
         let bridge = make_bridge(&fixture, &validated, 0, 1, 1);
-        let published = publish(&bridge);
         let selected = fixture
             .container
             .select_native_kernel(fixture.primary_kernel)
             .unwrap();
+        let publication_directory = TestPublicationDirectory::new();
+        let current_lease = publish(&publication_directory, &bridge, selected.payload());
+        let published = current_lease.published();
         let observed = make_observed(1);
         let durable_handoff = bridge.durable_plan_handoff();
 
         let admitted = ValidatedPublishedDirectLinkSelectionV1::validate(
             &validated,
             &bridge,
-            published,
+            current_lease,
             &fixture.container,
             selected,
             &observed,
@@ -1608,20 +1643,13 @@ mod tests {
             admitted.finalized_payload_identity(),
             fixture.expectations[0].finalized_payload_identity()
         );
-        assert!(!admitted.authenticates_filesystem_artifact());
+        assert!(admitted.authenticates_filesystem_artifact());
         assert!(!admitted.proves_compiler_marker_binding());
         assert!(!admitted.establishes_executable_safety());
         assert!(!admitted.grants_load_authority());
         assert!(!admitted.grants_launch_authority());
         assert_eq!(
-            admitted.revalidate(
-                &validated,
-                &bridge,
-                published,
-                &fixture.container,
-                selected,
-                &observed,
-            ),
+            admitted.revalidate(&validated, &bridge, &fixture.container, selected, &observed,),
             Ok(())
         );
     }
@@ -1631,16 +1659,17 @@ mod tests {
         let fixture = make_fixture(2);
         let validated = fixture.validated();
         let bridge = make_bridge(&fixture, &validated, 0, 2, 2);
-        let published = publish(&bridge);
         let selected = fixture
             .container
             .select_native_kernel(fixture.primary_kernel)
             .unwrap();
+        let publication_directory = TestPublicationDirectory::new();
+        let current_lease = publish(&publication_directory, &bridge, selected.payload());
         let observed = make_observed(2);
         let admitted = ValidatedPublishedDirectLinkSelectionV1::validate(
             &validated,
             &bridge,
-            published,
+            current_lease,
             &fixture.container,
             selected,
             &observed,
@@ -1653,7 +1682,6 @@ mod tests {
             admitted.revalidate(
                 &other_validated,
                 &bridge,
-                published,
                 &fixture.container,
                 selected,
                 &observed,
@@ -1662,23 +1690,24 @@ mod tests {
         );
 
         let other_bridge = make_bridge(&fixture, &validated, 0, 3, 4);
-        let other_publication = publish(&other_bridge);
+        let other_directory = TestPublicationDirectory::new();
+        let other_lease = publish(&other_directory, &other_bridge, selected.payload());
         assert_eq!(
-            admitted.revalidate(
+            ValidatedPublishedDirectLinkSelectionV1::validate(
                 &validated,
                 &bridge,
-                other_publication,
+                other_lease,
                 &fixture.container,
                 selected,
                 &observed,
-            ),
-            Err(PublishedDirectLinkAdmissionError::PublicationSubstitution)
+            )
+            .unwrap_err(),
+            PublishedDirectLinkAdmissionError::CurrentLeaseSubstitution
         );
         assert_eq!(
             admitted.revalidate(
                 &validated,
                 &other_bridge,
-                other_publication,
                 &fixture.container,
                 selected,
                 &observed,
@@ -1692,16 +1721,17 @@ mod tests {
         let fixture = make_fixture(4);
         let validated = fixture.validated();
         let bridge = make_bridge(&fixture, &validated, 0, 4, 4);
-        let published = publish(&bridge);
         let selected = fixture
             .container
             .select_native_kernel(fixture.primary_kernel)
             .unwrap();
+        let publication_directory = TestPublicationDirectory::new();
+        let current_lease = publish(&publication_directory, &bridge, selected.payload());
         let observed = make_observed(4);
         let admitted = ValidatedPublishedDirectLinkSelectionV1::validate(
             &validated,
             &bridge,
-            published,
+            current_lease,
             &fixture.container,
             selected,
             &observed,
@@ -1717,7 +1747,6 @@ mod tests {
             admitted.revalidate(
                 &validated,
                 &bridge,
-                published,
                 &substitute.container,
                 substitute_selected,
                 &observed,
@@ -1731,7 +1760,12 @@ mod tests {
         let fixture = make_fixture(6);
         let validated = fixture.validated();
         let bridge = make_bridge(&fixture, &validated, 0, 6, 6);
-        let published = publish(&bridge);
+        let selected = fixture
+            .container
+            .select_native_kernel(fixture.primary_kernel)
+            .unwrap();
+        let publication_directory = TestPublicationDirectory::new();
+        let current_lease = publish(&publication_directory, &bridge, selected.payload());
         let substituted = fixture
             .container
             .select_native_kernel(fixture.other_payload_kernel)
@@ -1741,7 +1775,7 @@ mod tests {
             ValidatedPublishedDirectLinkSelectionV1::validate(
                 &validated,
                 &bridge,
-                published,
+                current_lease,
                 &fixture.container,
                 substituted,
                 &make_observed(6),
@@ -1756,7 +1790,6 @@ mod tests {
         let fixture = make_fixture(7);
         let validated = fixture.validated();
         let bridge = make_bridge(&fixture, &validated, 0, 7, 7);
-        let published = publish(&bridge);
         let selected = fixture
             .container
             .select_native_kernel(fixture.primary_kernel)
@@ -1765,11 +1798,13 @@ mod tests {
             .container
             .select_native_kernel(fixture.alias_kernel)
             .unwrap();
+        let publication_directory = TestPublicationDirectory::new();
+        let current_lease = publish(&publication_directory, &bridge, selected.payload());
         let observed = make_observed(7);
         let admitted = ValidatedPublishedDirectLinkSelectionV1::validate(
             &validated,
             &bridge,
-            published,
+            current_lease,
             &fixture.container,
             selected,
             &observed,
@@ -1780,7 +1815,6 @@ mod tests {
             admitted.revalidate(
                 &validated,
                 &bridge,
-                published,
                 &fixture.container,
                 substituted,
                 &observed,
@@ -1796,16 +1830,17 @@ mod tests {
         let fixture = make_fixture(8);
         let validated = fixture.validated();
         let bridge = make_bridge(&fixture, &validated, 0, 8, 8);
-        let published = publish(&bridge);
         let selected = fixture
             .container
             .select_native_kernel(fixture.primary_kernel)
             .unwrap();
+        let publication_directory = TestPublicationDirectory::new();
+        let current_lease = publish(&publication_directory, &bridge, selected.payload());
         let observed = make_observed(8);
         let admitted = ValidatedPublishedDirectLinkSelectionV1::validate(
             &validated,
             &bridge,
-            published,
+            current_lease,
             &fixture.container,
             selected,
             &observed,
@@ -1816,7 +1851,6 @@ mod tests {
             admitted.revalidate(
                 &validated,
                 &bridge,
-                published,
                 &fixture.container,
                 selected,
                 &make_observed(9),
@@ -1848,11 +1882,8 @@ mod tests {
             "primary_kernel"
         );
 
-        let inspected = InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(
-            admission.admission,
-            &hsaco.bytes,
-        )
-        .unwrap();
+        let inspected =
+            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(admission.admission).unwrap();
 
         assert_eq!(inspected.code_object_version(), CodeObjectVersion::V6);
         assert_eq!(inspected.target().to_string(), "gfx1151");
@@ -1883,7 +1914,7 @@ mod tests {
                 .descriptor_file_offset(),
             hsaco.descriptor_offset as u64
         );
-        assert!(!inspected.authenticates_filesystem_artifact());
+        assert!(inspected.authenticates_filesystem_artifact());
         assert!(!inspected.proves_compiler_provenance());
         assert!(!inspected.proves_rust_type_or_abi_agreement());
         assert!(!inspected.proves_ownership_alias_or_effects());
@@ -1894,11 +1925,9 @@ mod tests {
             inspected.revalidate(
                 &admission.validated,
                 &admission.bridge,
-                admission.published,
                 &fixture.container,
                 admission.selected,
                 &admission.observed,
-                &hsaco.bytes,
             ),
             Ok(())
         );
@@ -1922,14 +1951,9 @@ mod tests {
         );
 
         let fixture = fixture_from_generated_container(40, container);
-        let payload = fixture
-            .container
-            .select_native_kernel(fixture.primary_kernel)
-            .unwrap()
-            .payload();
-        let admission = admit_hsaco(&fixture, 40, "gfx1151");
+        let admission = prepare_hsaco_admission(&fixture, 40, "gfx1151");
         let inspected =
-            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(admission, payload).unwrap();
+            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(admission.admission).unwrap();
 
         assert_eq!(inspected.code_object_version(), CodeObjectVersion::V6);
         assert_eq!(inspected.target().to_string(), "gfx1151");
@@ -1962,6 +1986,51 @@ mod tests {
         assert_eq!(launch.private_segment_fixed_size(), 16);
         assert!(!inspected.grants_load_authority());
         assert!(!inspected.grants_launch_authority());
+    }
+
+    #[test]
+    fn inspected_snapshot_survives_but_cannot_revalidate_after_newer_publication() {
+        let hsaco = test_hsaco("gfx1151", 0);
+        let fixture = make_hsaco_fixture(
+            50,
+            hsaco.bytes.clone(),
+            "gfx1151",
+            "primary_kernel",
+            false,
+            0,
+        );
+        let validated = fixture.validated();
+        let selected = fixture
+            .container
+            .select_native_kernel(fixture.primary_kernel)
+            .unwrap();
+        let observed = make_observed_for(50, "gfx1151");
+        let directory = TestPublicationDirectory::new();
+        let first_bridge = make_bridge(&fixture, &validated, 0, 1, 50);
+        let first_lease = publish(&directory, &first_bridge, selected.payload());
+        let admission = ValidatedPublishedDirectLinkSelectionV1::validate(
+            &validated,
+            &first_bridge,
+            first_lease,
+            &fixture.container,
+            selected,
+            &observed,
+        )
+        .unwrap();
+        let inspected = InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(admission).unwrap();
+
+        let second_bridge = make_bridge(&fixture, &validated, 0, 2, 50);
+        let second_lease = publish(&directory, &second_bridge, selected.payload());
+        assert!(second_lease.acquire_current_token().is_ok());
+        assert!(matches!(
+            inspected.acquire_current_publication_token(),
+            Err(PublishedPhysicalLayoutInspectionError::CurrentPublication { .. })
+        ));
+        assert_eq!(
+            inspected.selected_kernel().export_symbol(),
+            "primary_kernel"
+        );
+        assert!(!inspected.grants_load_authority());
     }
 
     #[test]
@@ -2125,7 +2194,7 @@ mod tests {
     }
 
     #[test]
-    fn payload_substitution_is_rejected_before_hsaco_parsing() {
+    fn in_place_payload_mutation_is_rejected_before_hsaco_parsing() {
         let hsaco = test_hsaco("gfx1151", 0);
         let fixture = make_hsaco_fixture(
             21,
@@ -2135,15 +2204,26 @@ mod tests {
             false,
             0,
         );
-        let admitted = admit_hsaco(&fixture, 21, "gfx1151");
+        let admitted = prepare_hsaco_admission(&fixture, 21, "gfx1151");
         let mut substitute = hsaco.bytes.clone();
         substitute[0] ^= 0xff;
+        let artifact = fs::read_dir(&admitted._publication_directory.path)
+            .unwrap()
+            .map(Result::unwrap)
+            .find(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".fe2o3-link-artifact-v1-")
+            })
+            .unwrap()
+            .path();
+        fs::write(artifact, substitute).unwrap();
 
-        assert_eq!(
-            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(admitted, &substitute)
-                .unwrap_err(),
-            PublishedPhysicalLayoutInspectionError::PayloadDigestMismatch
-        );
+        assert!(matches!(
+            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(admitted.admission),
+            Err(PublishedPhysicalLayoutInspectionError::CurrentPublication { .. })
+        ));
     }
 
     #[test]
@@ -2158,10 +2238,10 @@ mod tests {
             false,
             0,
         );
-        let admitted = admit_hsaco(&fixture, 22, "gfx1151");
+        let admitted = prepare_hsaco_admission(&fixture, 22, "gfx1151");
 
         assert!(matches!(
-            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(admitted, &hsaco.bytes),
+            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(admitted.admission),
             Err(PublishedPhysicalLayoutInspectionError::Inspection(
                 KernelBindingError::Inspection(InspectionError::InvalidElf("invalid ELF magic"))
             ))
@@ -2180,11 +2260,10 @@ mod tests {
             false,
             0,
         );
-        let admitted = admit_hsaco(&fixture, 23, "gfx1151");
+        let admitted = prepare_hsaco_admission(&fixture, 23, "gfx1151");
 
         assert_eq!(
-            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(admitted, &hsaco.bytes)
-                .unwrap_err(),
+            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(admitted.admission).unwrap_err(),
             PublishedPhysicalLayoutInspectionError::Inspection(KernelBindingError::Inspection(
                 InspectionError::UnsupportedCodeObjectVersion,
             ))
@@ -2202,11 +2281,10 @@ mod tests {
             false,
             0,
         );
-        let admitted = admit_hsaco(&fixture, 24, "gfx1151");
+        let admitted = prepare_hsaco_admission(&fixture, 24, "gfx1151");
 
         assert_eq!(
-            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(admitted, &hsaco.bytes)
-                .unwrap_err(),
+            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(admitted.admission).unwrap_err(),
             PublishedPhysicalLayoutInspectionError::TargetMismatch
         );
     }
@@ -2222,11 +2300,10 @@ mod tests {
             false,
             0,
         );
-        let admitted = admit_hsaco(&fixture, 25, "gfx1151");
+        let admitted = prepare_hsaco_admission(&fixture, 25, "gfx1151");
 
         assert_eq!(
-            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(admitted, &hsaco.bytes)
-                .unwrap_err(),
+            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(admitted.admission).unwrap_err(),
             PublishedPhysicalLayoutInspectionError::KernelSetMismatch
         );
     }
@@ -2242,11 +2319,10 @@ mod tests {
             true,
             0,
         );
-        let admitted = admit_hsaco(&fixture, 26, "gfx1151");
+        let admitted = prepare_hsaco_admission(&fixture, 26, "gfx1151");
 
         assert_eq!(
-            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(admitted, &hsaco.bytes)
-                .unwrap_err(),
+            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(admitted.admission).unwrap_err(),
             PublishedPhysicalLayoutInspectionError::KernelSetMismatch
         );
     }
@@ -2262,11 +2338,10 @@ mod tests {
             false,
             0,
         );
-        let admitted = admit_hsaco(&fixture, 27, "gfx1151");
+        let admitted = prepare_hsaco_admission(&fixture, 27, "gfx1151");
 
         assert_eq!(
-            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(admitted, &hsaco.bytes)
-                .unwrap_err(),
+            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(admitted.admission).unwrap_err(),
             PublishedPhysicalLayoutInspectionError::PhysicalLayoutMismatch {
                 export_symbol: "primary_kernel".to_owned(),
                 field: "static group segment size",
@@ -2286,11 +2361,10 @@ mod tests {
             false,
             0,
         );
-        let admitted = admit_hsaco(&fixture, 28, "gfx1151");
+        let admitted = prepare_hsaco_admission(&fixture, 28, "gfx1151");
 
         assert_eq!(
-            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(admitted, &hsaco.bytes)
-                .unwrap_err(),
+            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(admitted.admission).unwrap_err(),
             PublishedPhysicalLayoutInspectionError::Inspection(
                 KernelBindingError::InvalidKernelDescriptor(
                     "reserved descriptor bytes are nonzero"
@@ -2325,13 +2399,10 @@ mod tests {
             false,
             0,
         );
+        let admitted = prepare_hsaco_admission(&fixture, 44, "gfx1151");
 
         assert_eq!(
-            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(
-                admit_hsaco(&fixture, 44, "gfx1151"),
-                &hsaco.bytes,
-            )
-            .unwrap_err(),
+            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(admitted.admission).unwrap_err(),
             PublishedPhysicalLayoutInspectionError::Inspection(
                 KernelBindingError::MissingDescriptorSymbol,
             )
@@ -2356,16 +2427,14 @@ mod tests {
             physical_test_abi(true),
             physical_test_launch(0),
         );
-        let first = InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(
-            admit_hsaco(&first_fixture, 36, "gfx1151"),
-            &hsaco.bytes,
-        )
-        .unwrap();
-        let second = InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(
-            admit_hsaco(&second_fixture, 37, "gfx1151"),
-            &hsaco.bytes,
-        )
-        .unwrap();
+        let first_admission = prepare_hsaco_admission(&first_fixture, 36, "gfx1151");
+        let second_admission = prepare_hsaco_admission(&second_fixture, 37, "gfx1151");
+        let first =
+            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(first_admission.admission)
+                .unwrap();
+        let second =
+            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(second_admission.admission)
+                .unwrap();
 
         let arguments = first.selected_kernel().arguments();
         assert_eq!(arguments, second.selected_kernel().arguments());
@@ -2471,12 +2540,15 @@ mod tests {
             physical_test_abi(false),
             physical_test_launch_with_rank(3, 0),
         );
-        let admission = admit_hsaco(&fixture, 48, "gfx1151");
+        let admission = prepare_hsaco_admission(&fixture, 48, "gfx1151");
 
-        assert_eq!(admission.payload_kernel_set().len(), 1);
-        assert_eq!(admission.payload_kernel_set()[0].launch().rank(), 3);
+        assert_eq!(admission.admission.payload_kernel_set().len(), 1);
+        assert_eq!(
+            admission.admission.payload_kernel_set()[0].launch().rank(),
+            3
+        );
         let inspected =
-            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(admission, &hsaco.bytes).unwrap();
+            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(admission.admission).unwrap();
         assert_eq!(
             inspected.selected_kernel().launch().rank(),
             PhysicalMetadataValueV1::Unknown
@@ -2528,11 +2600,9 @@ mod tests {
             false,
             0,
         );
-        let inspected = InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(
-            admit_hsaco(&fixture, 49, "gfx1151"),
-            &hsaco.bytes,
-        )
-        .unwrap();
+        let admission = prepare_hsaco_admission(&fixture, 49, "gfx1151");
+        let inspected =
+            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(admission.admission).unwrap();
         let launch = inspected.selected_kernel().launch();
 
         assert_eq!(
@@ -2585,12 +2655,10 @@ mod tests {
                 physical_test_abi(false),
                 physical_test_launch(0),
             );
+            let admission = prepare_hsaco_admission(&fixture, 38, "gfx1151");
             assert_eq!(
-                InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(
-                    admit_hsaco(&fixture, 38, "gfx1151"),
-                    &hsaco.bytes,
-                )
-                .unwrap_err(),
+                InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(admission.admission)
+                    .unwrap_err(),
                 PublishedPhysicalLayoutInspectionError::PhysicalLayoutMismatch {
                     export_symbol: "primary_kernel".to_owned(),
                     field,
@@ -2606,11 +2674,9 @@ mod tests {
             physical_test_abi(false),
             physical_test_launch(1024),
         );
-        let inspected = InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(
-            admit_hsaco(&fixture, 39, "gfx1151"),
-            &hsaco.bytes,
-        )
-        .unwrap();
+        let admission = prepare_hsaco_admission(&fixture, 39, "gfx1151");
+        let inspected =
+            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(admission.admission).unwrap();
         assert_eq!(
             inspected
                 .selected_kernel()
@@ -2633,12 +2699,10 @@ mod tests {
             padded_abi,
             physical_test_launch(0),
         );
+        let padded_admission = prepare_hsaco_admission(&padded_fixture, 45, "gfx1151");
         assert_eq!(
-            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(
-                admit_hsaco(&padded_fixture, 45, "gfx1151"),
-                &hsaco.bytes,
-            )
-            .unwrap_err(),
+            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(padded_admission.admission)
+                .unwrap_err(),
             PublishedPhysicalLayoutInspectionError::PhysicalLayoutMismatch {
                 export_symbol: "primary_kernel".to_owned(),
                 field: "explicit kernarg size",
@@ -2655,10 +2719,11 @@ mod tests {
                 physical_test_abi(false),
                 physical_test_launch(0),
             );
+            let alignment_admission =
+                prepare_hsaco_admission(&alignment_fixture, usize::from(seed), "gfx1151");
             assert_eq!(
                 InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(
-                    admit_hsaco(&alignment_fixture, usize::from(seed), "gfx1151"),
-                    &hsaco.bytes,
+                    alignment_admission.admission,
                 )
                 .unwrap_err(),
                 PublishedPhysicalLayoutInspectionError::PhysicalLayoutMismatch {
@@ -2691,18 +2756,15 @@ mod tests {
         let first = prepare_hsaco_admission(&first_fixture, 29, "gfx1151");
         let second = prepare_hsaco_admission(&second_fixture, 30, "gfx1151");
         let inspected =
-            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(first.admission, &hsaco.bytes)
-                .unwrap();
+            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(first.admission).unwrap();
 
         assert_eq!(
             inspected.revalidate(
                 &second.validated,
                 &second.bridge,
-                second.published,
                 &second_fixture.container,
                 second.selected,
                 &second.observed,
-                &hsaco.bytes,
             ),
             Err(
                 PublishedPhysicalLayoutInspectionError::AdmissionRevalidation(
@@ -2726,18 +2788,15 @@ mod tests {
         let first = prepare_hsaco_admission(&fixture, 31, "gfx1151");
         let second = prepare_hsaco_admission(&fixture, 32, "gfx1151");
         let inspected =
-            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(first.admission, &hsaco.bytes)
-                .unwrap();
+            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(first.admission).unwrap();
 
         assert_eq!(
             inspected.revalidate(
                 &second.validated,
                 &second.bridge,
-                second.published,
                 &fixture.container,
                 second.selected,
                 &second.observed,
-                &hsaco.bytes,
             ),
             Err(
                 PublishedPhysicalLayoutInspectionError::AdmissionRevalidation(
@@ -2765,11 +2824,8 @@ mod tests {
             .observed
             .clone()
             .with_changed_test_hip_capabilities();
-        let inspected = InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(
-            admission.admission,
-            &hsaco.bytes,
-        )
-        .unwrap();
+        let inspected =
+            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(admission.admission).unwrap();
 
         for (observed, expected) in [
             (wrong_context, ArtifactRevalidationError::WrongContext),
@@ -2786,11 +2842,9 @@ mod tests {
                 inspected.revalidate(
                     &admission.validated,
                     &admission.bridge,
-                    admission.published,
                     &fixture.container,
                     admission.selected,
                     &observed,
-                    &hsaco.bytes,
                 ),
                 Err(
                     PublishedPhysicalLayoutInspectionError::AdmissionRevalidation(

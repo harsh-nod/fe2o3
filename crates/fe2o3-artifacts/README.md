@@ -300,9 +300,11 @@ for coordination with the separately owned durable G5 adapter. It exposes no
 raw `LinkPublicationScopeV1` or descriptive scope getter. The durable publish
 and recovery entry points owned here consume that opaque handoff rather than
 reconstructing a plan from provenance-erasing values. This crate intentionally
-does not invent the required G5 package lease/current-publication witness or the
-G7 authenticated HSACO inspection witness. Both remain blocking prerequisites
-for any authoritative path.
+wraps the durable adapter's exact-file-handle lease in
+`ManifestClaimDirectLinkCurrentPublicationLeaseV1`; the generic G5 lease and
+legacy bridge cannot enter G7 admission. The wrapper remains
+manifest-claim-derived and does not authenticate compiler provenance or grant
+runtime authority.
 
 The bridge and `LinkPublicationCatalogV1` remain inert models and authenticate
 neither measurements nor transformation claims. This crate's validated durable
@@ -314,11 +316,25 @@ finalized bytes through a content-addressed file plus canonical record. Legacy
 bridge values and provenance-erasing diagnostic scope claims cannot enter the
 validated adapter path. The lower-level transaction API models durable mechanics
 and does not independently establish G6 provenance.
-Plans, returned descriptor snapshots, and recovered snapshots remain
-non-authorizing: none grants package ownership, module loading, symbol lookup,
-ABI acceptance, or kernel launch authority. The separately owned G5 package
-lease/current-publication witness and G7 authenticated HSACO inspection witness
-remain prerequisites for any authoritative path.
+Successful publication mints a non-clone lease before releasing the cooperative
+lock. It retains read-only canonical-record and artifact descriptors, their
+device/inode identities, the complete-plan commitment, generation, publication
+identity, digest, length, and immutable artifact snapshot. `fe2o3-host`
+consumes only the manifest-derived wrapper and parses the descriptor snapshot
+rather than reopening a caller path. Plans, leases, currentness tokens, and
+physical-layout inspection remain non-authorizing: none grants package
+ownership, module loading, symbol lookup, semantic ABI acceptance, or kernel
+launch authority.
+
+For this protocol, a publication is current only when its published generation
+equals the canonical journal generation floor, its complete plan and
+publication identities match, and the journal has no active planned, recovered,
+or failed successor. A newer planned or failed generation therefore prevents
+new currentness-token issuance for an older successful lease. An already-issued
+lease still owns an immutable snapshot, but a future loader must obtain a fresh
+non-clone currentness token. That token revalidates the retained record and
+artifact descriptors, exact names, inode/device pairs, bytes, digest, length,
+and output-directory identity while holding the cooperative lock.
 
 Durable V1 requires an already existing output directory whose parent topology
 was durably provisioned by the caller. It writes and syncs journal bytes under
@@ -332,7 +348,10 @@ error and permits retry only when recovery proves the exact complete plan.
 These guarantees assume a cooperative process lock, Linux descriptor-relative
 filesystem behavior, truthful `fsync`, and atomic local-filesystem rename.
 Processes that mutate the directory without taking the lock and storage that
-does not honor those primitives remain outside the model. V1 deliberately does
+does not honor those primitives remain outside the model. Checksums and digests
+detect accidental or observed mutation but do not authenticate against a
+same-user process that can rewrite all local state between observations. V1
+deliberately does
 not scan or delete abandoned temp, staging, artifact, redo, or quarantine
 entries. Such entries can consume unbounded disk space and require a separately
 trusted operator garbage-collection or repair facility.

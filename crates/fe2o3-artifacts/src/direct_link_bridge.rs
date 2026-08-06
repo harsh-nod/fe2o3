@@ -2,7 +2,8 @@ use std::{fmt, path::Path};
 
 use fe2o3_artifact_transaction::{
     AtomicPublicationIdentityV1, BuildAttempt, CanonicalLinkRequestIdentityV1,
-    DurableLinkPublicationError, DurableLinkPublicationPlanV1, DurableLinkPublicationResultV1,
+    DurableCurrentLinkPublicationLeaseV1, DurableCurrentLinkPublicationTokenV1,
+    DurableLinkPublicationError, DurableLinkPublicationOutcomeV1, DurableLinkPublicationPlanV1,
     DurableLinkPublicationSnapshotV1, DurableLinkPublicationTransactionV1, FinalizationIdentityV1,
     FinalizedOutputIdentityV1, KernelSetIdentityV1, LinkPublicationScopeV1, LinkedOutputIdentityV1,
     PackageIdentityV1, PinnedWorkerIdentityV1, PublishedLinkArtifactV1, TargetIdentityV1,
@@ -455,6 +456,145 @@ impl ManifestClaimDirectLinkDurablePlanHandoffV1 {
     }
 }
 
+/// Manifest-claim-derived wrapper around one exact durable current-publication lease.
+///
+/// The wrapper is deliberately non-clone and exposes neither its generic G5 lease nor raw scope.
+/// It retains the complete opaque handoff used to publish the artifact, preventing a legacy bridge
+/// or diagnostics-only scope from entering the G7 current-publication path.
+///
+/// ```compile_fail
+/// use fe2o3_artifacts::ManifestClaimDirectLinkCurrentPublicationLeaseV1;
+///
+/// fn cannot_clone(
+///     lease: ManifestClaimDirectLinkCurrentPublicationLeaseV1,
+/// ) -> (
+///     ManifestClaimDirectLinkCurrentPublicationLeaseV1,
+///     ManifestClaimDirectLinkCurrentPublicationLeaseV1,
+/// ) {
+///     (lease.clone(), lease)
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use fe2o3_artifact_transaction::DurableCurrentLinkPublicationLeaseV1;
+/// use fe2o3_artifacts::ManifestClaimDirectLinkCurrentPublicationLeaseV1;
+///
+/// fn cannot_extract_generic(
+///     lease: ManifestClaimDirectLinkCurrentPublicationLeaseV1,
+/// ) -> DurableCurrentLinkPublicationLeaseV1 {
+///     lease.lease
+/// }
+/// ```
+pub struct ManifestClaimDirectLinkCurrentPublicationLeaseV1 {
+    handoff: ManifestClaimDirectLinkDurablePlanHandoffV1,
+    lease: DurableCurrentLinkPublicationLeaseV1,
+}
+
+impl fmt::Debug for ManifestClaimDirectLinkCurrentPublicationLeaseV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ManifestClaimDirectLinkCurrentPublicationLeaseV1")
+            .field("handoff", &self.handoff)
+            .field("lease", &self.lease)
+            .finish_non_exhaustive()
+    }
+}
+
+impl ManifestClaimDirectLinkCurrentPublicationLeaseV1 {
+    pub const fn published(&self) -> PublishedLinkArtifactV1 {
+        self.lease.published()
+    }
+
+    /// Returns whether this lease retains the exact opaque handoff supplied by the bridge.
+    pub fn is_bound_to_handoff(
+        &self,
+        handoff: &ManifestClaimDirectLinkDurablePlanHandoffV1,
+    ) -> bool {
+        &self.handoff == handoff
+    }
+
+    /// Borrows descriptor-derived bytes without reopening a pathname.
+    pub fn exact_artifact_bytes(&self) -> &[u8] {
+        self.lease.exact_artifact_bytes()
+    }
+
+    /// Revalidates currentness and retains the cooperative lock in the returned inert token.
+    pub fn acquire_current_token(
+        &self,
+    ) -> Result<ManifestClaimDirectLinkCurrentPublicationTokenV1<'_>, DurableLinkPublicationError>
+    {
+        Ok(ManifestClaimDirectLinkCurrentPublicationTokenV1 {
+            token: self.lease.acquire_current_token()?,
+        })
+    }
+
+    pub const fn grants_load_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
+    }
+}
+
+/// Locked currentness token for one manifest-claim-derived exact-file lease.
+pub struct ManifestClaimDirectLinkCurrentPublicationTokenV1<'lease> {
+    token: DurableCurrentLinkPublicationTokenV1<'lease>,
+}
+
+impl fmt::Debug for ManifestClaimDirectLinkCurrentPublicationTokenV1<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ManifestClaimDirectLinkCurrentPublicationTokenV1")
+            .field("token", &self.token)
+            .finish_non_exhaustive()
+    }
+}
+
+impl ManifestClaimDirectLinkCurrentPublicationTokenV1<'_> {
+    pub fn exact_artifact_bytes(&self) -> &[u8] {
+        self.token.exact_artifact_bytes()
+    }
+
+    pub const fn grants_load_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
+    }
+}
+
+/// Result of provenance-preserving durable publication and current-lease issuance.
+pub struct ManifestClaimDirectLinkDurablePublicationResultV1 {
+    outcome: DurableLinkPublicationOutcomeV1,
+    lease: ManifestClaimDirectLinkCurrentPublicationLeaseV1,
+}
+
+impl fmt::Debug for ManifestClaimDirectLinkDurablePublicationResultV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ManifestClaimDirectLinkDurablePublicationResultV1")
+            .field("outcome", &self.outcome)
+            .field("lease", &self.lease)
+            .finish()
+    }
+}
+
+impl ManifestClaimDirectLinkDurablePublicationResultV1 {
+    pub const fn outcome(&self) -> DurableLinkPublicationOutcomeV1 {
+        self.outcome
+    }
+
+    pub const fn snapshot(&self) -> &DurableLinkPublicationSnapshotV1 {
+        self.lease.lease.snapshot()
+    }
+
+    pub fn into_current_lease(self) -> ManifestClaimDirectLinkCurrentPublicationLeaseV1 {
+        self.lease
+    }
+}
+
 /// Publishes through the provenance-preserving G5/G6 durable adapter.
 ///
 /// The opaque handoff is the only accepted bridge input. Its complete G5 plan
@@ -497,13 +637,42 @@ pub fn publish_manifest_claim_direct_link_durable_v1<F>(
     output_dir: &Path,
     handoff: &ManifestClaimDirectLinkDurablePlanHandoffV1,
     work: F,
-) -> Result<DurableLinkPublicationResultV1, DurableLinkPublicationError>
+) -> Result<ManifestClaimDirectLinkDurablePublicationResultV1, DurableLinkPublicationError>
 where
     F: FnOnce(
         &mut DurableLinkPublicationTransactionV1<'_>,
     ) -> Result<(), DurableLinkPublicationError>,
 {
-    publish_durable_link_v1(output_dir, handoff.durable_publication_plan(), work)
+    let result = publish_durable_link_v1(output_dir, handoff.durable_publication_plan(), work)?;
+    let outcome = result.outcome();
+    let lease = result.into_current_lease();
+    if !published_matches_handoff(lease.published(), handoff) {
+        return Err(DurableLinkPublicationError::CurrentPublication {
+            reason: "durable lease differs from its manifest-claim handoff".to_string(),
+        });
+    }
+    Ok(ManifestClaimDirectLinkDurablePublicationResultV1 {
+        outcome,
+        lease: ManifestClaimDirectLinkCurrentPublicationLeaseV1 {
+            handoff: handoff.clone(),
+            lease,
+        },
+    })
+}
+
+fn published_matches_handoff(
+    published: PublishedLinkArtifactV1,
+    handoff: &ManifestClaimDirectLinkDurablePlanHandoffV1,
+) -> bool {
+    published.attempt() == handoff.attempt
+        && published.scope() == handoff._scope_claim
+        && published.request() == handoff.request
+        && published.worker() == handoff.worker
+        && published.response() == handoff.response
+        && published.linked_output() == handoff.linked_output
+        && published.finalization() == handoff.finalization
+        && published.finalized_output() == handoff.finalized_output
+        && published.publication() == handoff.publication
 }
 
 /// Recovers the current inert publication for an opaque manifest-claim scope.
