@@ -4,6 +4,34 @@
 The adjacent `fe2o3-rustc-wrapper` is fail closed for compile invocations while
 its trusted execution boundary is built incrementally.
 
+## Narrow Worker V2 handoff flow
+
+`FE2O3_CODEGEN_PIPELINE=kernel-ir-worker-v2` requires
+`FE2O3_WORKER_V2_CONFIG_V1` to name an absolute path to a strict V1 JSON
+manifest. The manifest is an explicit operator policy input, not compiler
+attestation. It must be compact canonical JSON with sorted object keys and
+contains exact compilation-unit selectors, a measured worker, measured typed
+providers, the complete final-symbol claim, all four supported link options,
+and explicit output and process limits. Unknown fields, defaults, relative
+paths, identity mismatches, and noncanonical collections are rejected before
+rustc is spawned.
+
+Each `units` selector binds `crate_name`, rustc's exact `source` path spelling,
+and the absolute `working_directory`. An unselected compilation receives no
+managed attempt, allowing inherited host and dependency compilations with no
+device kernels to proceed. If such a compilation unexpectedly contains a
+device kernel, the backend rejects it because the required managed attempt is
+absent. A selected compilation must publish exactly one attempt-scoped handoff;
+a missing handoff is an error and invalidates the attempt.
+
+For a selected unit, the wrapper pins and validates all configured inputs,
+binds the SHA-256 identity of the exact manifest bytes into `BuildInvocation`,
+runs rustc, consumes the handoff once, and invokes the reproducible GenericLink
+V1 plus compiler-aware Worker V2 workflow. Successful output remains inert.
+Until an authenticated publication adapter exists, the wrapper reports the
+exact inert evidence identity, refuses attempt completion, and invalidates the
+attempt. No HSACO is published, loaded, or launched by this flow.
+
 ## Inspection and tool plans
 
 `cargo fe2o3 inspect` performs bounded, read-only decoding of fe2o3 v1

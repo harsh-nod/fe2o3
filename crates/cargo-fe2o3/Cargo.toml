@@ -12,7 +12,9 @@ description = "Cargo subcommand for fe2o3."
 cap-primitives = "=4.0.2"
 fe2o3-artifacts.workspace = true
 fe2o3-artifact-transaction.workspace = true
+fe2o3-compiler-ffi.workspace = true
 fe2o3-hsaco.workspace = true
+fe2o3-hsaco-finalize.workspace = true
 fe2o3-rustc-invocation.workspace = true
 reserved-fe2o3-symbols.workspace = true
 rustix.workspace = true
@@ -27,3 +29,9 @@ path = "src/main.rs"
 [[bin]]
 name = "fe2o3-rustc-wrapper"
 path = "src/bin/fe2o3-rustc-wrapper.rs"
+
+[[bin]]
+name = "cargo-fe2o3-worker-v2-fixture"
+path = "tests/fixtures/worker_v2_fixture.rs"
+test = false
+bench = false

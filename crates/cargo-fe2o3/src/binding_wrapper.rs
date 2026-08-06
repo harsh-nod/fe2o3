@@ -6,7 +6,7 @@ use std::process::{Command, ExitStatus};
 
 use fe2o3_artifact_transaction::{
     BuildAttempt, BuildInvocation, BuildSession, EmitError, ProducerIdentity, begin_build_attempt,
-    fail_build_attempt, finish_build_attempt,
+    consume_compiler_module_handoff_v1, fail_build_attempt, finish_build_attempt,
 };
 use fe2o3_rustc_invocation::{
     RustcArgsErrorV2, RustcCompileInvocationV2, RustcInvocationV2, classify_rustc_invocation_v2,
@@ -14,11 +14,14 @@ use fe2o3_rustc_invocation::{
 use reserved_fe2o3_symbols::{CRATE_BINDING_ID_ENV_V1, derive_crate_binding_id_v1};
 use sha2::{Digest, Sha256};
 
+use crate::worker_v2::{PreparedWorkerV2Config, WorkerV2ConfigError, WorkerV2ConfigIdentity};
+
 const HSACO_DIR_ENV: &str = "FE2O3_HSACO_DIR";
 const TARGET_ENV: &str = "FE2O3_TARGET";
 const BUILD_SESSION_ENV: &str = "FE2O3_BUILD_SESSION_V1";
 const BUILD_ATTEMPT_ENV: &str = "FE2O3_BUILD_ATTEMPT_V1";
 const BUILD_INVOCATION_DOMAIN: &[u8] = b"FE2O3/BUILD-INVOCATION/V1\0";
+const WORKER_V2_CONFIG_ID_DOMAIN: &[u8] = b"FE2O3/WORKER-V2-CONFIG-ID/V1\0";
 
 #[derive(Debug)]
 pub(crate) enum BindingWrapperError {
@@ -35,7 +38,16 @@ pub(crate) enum BindingWrapperError {
     MissingManagedEnvironment(&'static str),
     InvalidBuildSession,
     CurrentDirectory(std::io::Error),
+    WorkerV2Configuration(WorkerV2ConfigError),
     Artifact(EmitError),
+    ManagedCompletion {
+        primary: String,
+        cleanup: Option<EmitError>,
+    },
+    InertWorkerV2PublicationBoundary {
+        evidence_identity: [u8; 32],
+        cleanup: Option<EmitError>,
+    },
     AttemptTermination {
         rustc_status: ExitStatus,
         cleanup: EmitError,
@@ -71,7 +83,37 @@ impl fmt::Display for BindingWrapperError {
                     "failed to resolve rustc working directory: {error}"
                 )
             }
+            Self::WorkerV2Configuration(error) => {
+                write!(formatter, "Worker V2 setup failed: {error}")
+            }
             Self::Artifact(error) => write!(formatter, "artifact build attempt failed: {error}"),
+            Self::ManagedCompletion { primary, cleanup } => {
+                write!(formatter, "managed build completion failed: {primary}")?;
+                if let Some(cleanup) = cleanup {
+                    write!(
+                        formatter,
+                        "; build-attempt invalidation also failed: {cleanup}"
+                    )?;
+                }
+                Ok(())
+            }
+            Self::InertWorkerV2PublicationBoundary {
+                evidence_identity,
+                cleanup,
+            } => {
+                write!(
+                    formatter,
+                    "Worker V2 produced inert evidence identity sha256:{}, but no authenticated publication adapter can consume that evidence; refusing attempt completion",
+                    encode_hex(evidence_identity)
+                )?;
+                if let Some(cleanup) = cleanup {
+                    write!(
+                        formatter,
+                        "; build-attempt invalidation also failed: {cleanup}"
+                    )?;
+                }
+                Ok(())
+            }
             Self::AttemptTermination {
                 rustc_status,
                 cleanup,
@@ -93,7 +135,14 @@ impl Error for BindingWrapperError {
             Self::Arguments(error) => Some(error),
             Self::Spawn(error) => Some(error),
             Self::CurrentDirectory(error) => Some(error),
+            Self::WorkerV2Configuration(error) => Some(error),
             Self::Artifact(error) => Some(error),
+            Self::ManagedCompletion { cleanup, .. } => cleanup
+                .as_ref()
+                .map(|error| error as &(dyn Error + 'static)),
+            Self::InertWorkerV2PublicationBoundary { cleanup, .. } => cleanup
+                .as_ref()
+                .map(|error| error as &(dyn Error + 'static)),
             Self::AttemptTermination { cleanup, .. } => Some(cleanup),
             Self::MissingMetadata { .. }
             | Self::InvalidCodegenOption { .. }
@@ -134,8 +183,18 @@ pub(crate) fn run(argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperError
                 compile.crate_name(),
                 metadata.iter().map(String::as_str),
             );
-            let attempt = prepare_managed_attempt(compile)?;
-            (Some(binding), Some(attempt))
+            let worker_v2 = PreparedWorkerV2Config::from_environment()
+                .map_err(BindingWrapperError::WorkerV2Configuration)?;
+            let current_dir =
+                std::env::current_dir().map_err(BindingWrapperError::CurrentDirectory)?;
+            let managed = if worker_v2.as_ref().is_some_and(|config| {
+                !config.selects(compile.crate_name(), compile.source_path(), &current_dir)
+            }) {
+                None
+            } else {
+                Some(prepare_managed_attempt(compile, worker_v2, &current_dir)?)
+            };
+            (Some(binding), managed)
         }
         RustcInvocationV2::Terminal(_) | RustcInvocationV2::Query(_) => (None, None),
         _ => return Err(BindingWrapperError::UnsupportedInvocation),
@@ -165,8 +224,7 @@ pub(crate) fn run(argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperError
     };
     if let Some(managed) = managed_attempt {
         if status.success() {
-            finish_build_attempt(&managed.output_dir, &managed.producer, managed.attempt)
-                .map_err(BindingWrapperError::Artifact)?;
+            complete_managed_attempt(managed)?;
         } else if let Err(cleanup) =
             fail_build_attempt(&managed.output_dir, &managed.producer, managed.attempt)
         {
@@ -183,10 +241,13 @@ struct ManagedAttempt {
     output_dir: PathBuf,
     producer: ProducerIdentity,
     attempt: BuildAttempt,
+    worker_v2: Option<PreparedWorkerV2Config>,
 }
 
 fn prepare_managed_attempt(
     compile: RustcCompileInvocationV2<'_>,
+    worker_v2: Option<PreparedWorkerV2Config>,
+    current_dir: &std::path::Path,
 ) -> Result<ManagedAttempt, BindingWrapperError> {
     let output_dir = std::env::var_os(HSACO_DIR_ENV)
         .filter(|value| !value.is_empty())
@@ -202,18 +263,89 @@ fn prepare_managed_attempt(
     let producer =
         ProducerIdentity::from_codegen(compile.crate_name(), Some(compile.source_path()))
             .map_err(BindingWrapperError::Artifact)?;
-    let invocation = derive_build_invocation(compile.argv())?;
+    let invocation = derive_build_invocation(compile.argv(), worker_v2.as_ref(), current_dir);
     let attempt = begin_build_attempt(&output_dir, &producer, invocation, session)
         .map_err(BindingWrapperError::Artifact)?;
     Ok(ManagedAttempt {
         output_dir,
         producer,
         attempt,
+        worker_v2,
     })
 }
 
-fn derive_build_invocation(argv: &[OsString]) -> Result<BuildInvocation, BindingWrapperError> {
-    let current_dir = std::env::current_dir().map_err(BindingWrapperError::CurrentDirectory)?;
+fn complete_managed_attempt(managed: ManagedAttempt) -> Result<(), BindingWrapperError> {
+    enum CompletionFailure {
+        Operation(String),
+        PublicationBoundary([u8; 32]),
+    }
+
+    let completion = (|| -> Result<(), CompletionFailure> {
+        if let Some(worker_v2) = &managed.worker_v2 {
+            let consumed = consume_compiler_module_handoff_v1(
+                &managed.output_dir,
+                &managed.producer,
+                managed.attempt,
+            )
+            .map_err(|error| {
+                CompletionFailure::Operation(format!(
+                    "compiler-module handoff consumption failed: {error}"
+                ))
+            })?;
+            let evidence = worker_v2.execute(consumed).map_err(|error| {
+                CompletionFailure::Operation(format!(
+                    "reproducible Worker V2 execution failed: {error}"
+                ))
+            })?;
+            debug_assert_eq!(evidence.attempt(), managed.attempt);
+            return Err(CompletionFailure::PublicationBoundary(
+                *evidence.identity().as_bytes(),
+            ));
+        }
+        finish_build_attempt(&managed.output_dir, &managed.producer, managed.attempt).map_err(
+            |error| {
+                CompletionFailure::Operation(format!("build-attempt completion failed: {error}"))
+            },
+        )
+    })();
+
+    match completion {
+        Ok(()) => Ok(()),
+        Err(failure) => {
+            let cleanup =
+                fail_build_attempt(&managed.output_dir, &managed.producer, managed.attempt).err();
+            match failure {
+                CompletionFailure::Operation(primary) => {
+                    Err(BindingWrapperError::ManagedCompletion { primary, cleanup })
+                }
+                CompletionFailure::PublicationBoundary(evidence_identity) => {
+                    Err(BindingWrapperError::InertWorkerV2PublicationBoundary {
+                        evidence_identity,
+                        cleanup,
+                    })
+                }
+            }
+        }
+    }
+}
+
+fn derive_build_invocation(
+    argv: &[OsString],
+    worker_v2: Option<&PreparedWorkerV2Config>,
+    current_dir: &std::path::Path,
+) -> BuildInvocation {
+    derive_build_invocation_with_config_identity(
+        argv,
+        worker_v2.map(PreparedWorkerV2Config::identity),
+        current_dir,
+    )
+}
+
+fn derive_build_invocation_with_config_identity(
+    argv: &[OsString],
+    worker_v2_identity: Option<WorkerV2ConfigIdentity>,
+    current_dir: &std::path::Path,
+) -> BuildInvocation {
     let mut digest = Sha256::new();
     digest.update(BUILD_INVOCATION_DOMAIN);
     hash_os(&mut digest, current_dir.as_os_str());
@@ -231,7 +363,15 @@ fn derive_build_invocation(argv: &[OsString]) -> Result<BuildInvocation, Binding
     for argument in argv {
         hash_os(&mut digest, argument);
     }
-    Ok(BuildInvocation::from_bytes(digest.finalize().into()))
+    if let Some(worker_v2_identity) = worker_v2_identity {
+        digest.update(WORKER_V2_CONFIG_ID_DOMAIN);
+        digest.update(worker_v2_identity.as_bytes());
+    }
+    BuildInvocation::from_bytes(digest.finalize().into())
+}
+
+fn encode_hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 fn hash_os(digest: &mut Sha256, value: &OsStr) {
@@ -319,8 +459,10 @@ pub(crate) fn exit_code(status: ExitStatus) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::{
-        BindingWrapperError, derive_build_invocation, is_cargo_stdin_probe, ordered_metadata_values,
+        BindingWrapperError, derive_build_invocation_with_config_identity, is_cargo_stdin_probe,
+        ordered_metadata_values,
     };
+    use crate::worker_v2::WorkerV2ConfigIdentity;
     use reserved_fe2o3_symbols::derive_crate_binding_id_v1;
     use std::ffi::OsString;
 
@@ -401,13 +543,26 @@ mod tests {
     fn invocation_identity_is_deterministic_and_argument_order_sensitive() {
         let first = args(&["rustc", "--crate-name", "unit", "unit.rs"]);
         let second = args(&["rustc", "unit.rs", "--crate-name", "unit"]);
+        let current_dir = std::env::current_dir().unwrap();
         assert_eq!(
-            derive_build_invocation(&first).unwrap(),
-            derive_build_invocation(&first).unwrap()
+            derive_build_invocation_with_config_identity(&first, None, &current_dir),
+            derive_build_invocation_with_config_identity(&first, None, &current_dir)
         );
         assert_ne!(
-            derive_build_invocation(&first).unwrap(),
-            derive_build_invocation(&second).unwrap()
+            derive_build_invocation_with_config_identity(&first, None, &current_dir),
+            derive_build_invocation_with_config_identity(&second, None, &current_dir)
+        );
+    }
+
+    #[test]
+    fn worker_v2_config_identity_changes_build_invocation() {
+        let argv = args(&["rustc", "--crate-name", "unit", "unit.rs"]);
+        let current_dir = std::env::current_dir().unwrap();
+        let first = WorkerV2ConfigIdentity::for_test([0x11; 32]);
+        let second = WorkerV2ConfigIdentity::for_test([0x12; 32]);
+        assert_ne!(
+            derive_build_invocation_with_config_identity(&argv, Some(first), &current_dir),
+            derive_build_invocation_with_config_identity(&argv, Some(second), &current_dir)
         );
     }
 }

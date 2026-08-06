@@ -3,6 +3,7 @@ mod clean;
 mod example_manifest;
 mod inspect;
 mod tool_commands;
+mod worker_v2;
 
 use std::env;
 use std::io::Read;
