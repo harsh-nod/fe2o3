@@ -24,6 +24,10 @@
 //! after registry commit and staging cleanup. Each final rename is atomic, but the collection is
 //! not atomically visible as a unit: a crash during the rename sequence can leave a partial
 //! generation, which a later cooperating transaction will reconcile.
+//!
+//! Successful transactions return immutable IR and code-object snapshots read through the exact
+//! staged file descriptors after publication and before releasing the lock. Returned paths are
+//! diagnostics only, so later publication at the same names cannot change an earlier result.
 
 mod attempt;
 
@@ -40,17 +44,52 @@ use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// Files published for one successfully compiled kernel.
+/// Immutable bytes captured from one finalized artifact while its publication lock was held.
+///
+/// The path is diagnostic only. Consumers must use [`Self::bytes`] rather than reopening it: a
+/// later transaction may legitimately publish a newer generation at the same path.
+#[derive(Clone, Debug)]
+pub struct FinalizedArtifactSnapshot {
+    path: PathBuf,
+    bytes: Arc<[u8]>,
+}
+
+impl FinalizedArtifactSnapshot {
+    /// Constructs an immutable in-memory snapshot.
+    ///
+    /// Transaction results use the same representation after pinning and validating the exact
+    /// published file. This constructor is useful for consumers that already own trusted bytes;
+    /// it does not claim that `path` was transactionally published.
+    pub fn from_bytes(path: impl Into<PathBuf>, bytes: impl Into<Arc<[u8]>>) -> Self {
+        Self {
+            path: path.into(),
+            bytes: bytes.into(),
+        }
+    }
+
+    /// Returns the publication path for diagnostics only.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Returns the exact bytes captured for this generation.
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+}
+
+/// Generation-pinned files published for one successfully compiled kernel.
 #[derive(Clone, Debug)]
 pub struct DeviceArtifact {
     /// Canonical kernel artifact stem.
     pub kernel_name: String,
-    /// Published LLVM IR path.
-    pub llvm_ir_path: PathBuf,
-    /// Published AMDGPU code-object path.
-    pub hsaco_path: PathBuf,
+    /// Exact finalized LLVM IR captured by this transaction.
+    pub llvm_ir: FinalizedArtifactSnapshot,
+    /// Exact finalized AMDGPU code object captured by this transaction.
+    pub hsaco: FinalizedArtifactSnapshot,
 }
 
 /// Failure while preparing, compiling, or transactionally publishing device artifacts.
@@ -63,6 +102,7 @@ pub enum EmitError {
     InvalidArtifactName { kernel: String, reason: String },
     DuplicateArtifactName { kernel: String },
     InvalidArtifactDestination { path: PathBuf, reason: String },
+    InvalidFinalizedArtifact { path: PathBuf, reason: String },
     MissingStagedArtifact { path: PathBuf },
     StagingExhausted { output_dir: PathBuf },
     InvalidProducer { reason: String },
@@ -98,6 +138,9 @@ impl fmt::Display for EmitError {
                     "invalid kernel artifact destination {}: {reason}",
                     path.display()
                 )
+            }
+            Self::InvalidFinalizedArtifact { path, reason } => {
+                write!(f, "invalid finalized artifact {}: {reason}", path.display())
             }
             Self::MissingStagedArtifact { path } => {
                 write!(
@@ -175,6 +218,8 @@ const MAX_OWNERSHIP_BYTES: usize = 1024 * 1024;
 const MAX_STAGING_ATTEMPTS: u64 = 64;
 // Three files for every owned and ownerless kernel, plus bounded staging/metadata headroom.
 const MAX_OUTPUT_ENTRIES: usize = MAX_TOTAL_OWNED_KERNELS * 7;
+const MAX_FINALIZED_LLVM_IR_BYTES: usize = 16 * 1024 * 1024;
+const MAX_FINALIZED_HSACO_BYTES: usize = 4 * 1024 * 1024;
 
 static NEXT_STAGING_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -833,6 +878,101 @@ mod tests {
                 format!("hsaco:{generation}:{name}")
             );
         }
+    }
+
+    fn assert_snapshot(artifact: &DeviceArtifact, generation: &str, name: &str) {
+        assert_eq!(artifact.kernel_name, name);
+        assert_eq!(
+            artifact.llvm_ir.bytes(),
+            format!("{generation}:{name}").as_bytes()
+        );
+        assert_eq!(
+            artifact.hsaco.bytes(),
+            format!("hsaco:{generation}:{name}").as_bytes()
+        );
+    }
+
+    #[test]
+    fn snapshots_remain_bound_to_their_exact_generation_after_republish() {
+        let temp = TestDirectory::new();
+        let output = temp.path.join("output");
+        let producer = ProducerIdentity::for_test("producer", "/src/producer.rs");
+
+        let first = run(&output, &producer, &one("alpha", "first"))
+            .unwrap()
+            .remove(0);
+        let second = run(&output, &producer, &one("alpha", "second"))
+            .unwrap()
+            .remove(0);
+
+        assert_generation(&output, &["alpha"], "second");
+        assert_snapshot(&first, "first", "alpha");
+        assert_snapshot(&second, "second", "alpha");
+    }
+
+    #[test]
+    fn snapshots_survive_final_path_replacement_without_reopening() {
+        let temp = TestDirectory::new();
+        let output = temp.path.join("output");
+        let producer = ProducerIdentity::for_test("producer", "/src/producer.rs");
+        let artifact = run(&output, &producer, &one("alpha", "pinned"))
+            .unwrap()
+            .remove(0);
+
+        let displaced_ir = output.join("alpha.ll.displaced");
+        let displaced_hsaco = output.join("alpha.hsaco.displaced");
+        fs::rename(output.join("alpha.ll"), &displaced_ir).unwrap();
+        fs::rename(output.join("alpha.hsaco"), &displaced_hsaco).unwrap();
+        fs::write(output.join("alpha.ll"), b"replacement-ir").unwrap();
+        fs::write(output.join("alpha.hsaco"), b"replacement-hsaco").unwrap();
+
+        assert_eq!(
+            fs::read(artifact.llvm_ir.path()).unwrap(),
+            b"replacement-ir"
+        );
+        assert_eq!(
+            fs::read(artifact.hsaco.path()).unwrap(),
+            b"replacement-hsaco"
+        );
+        assert_snapshot(&artifact, "pinned", "alpha");
+    }
+
+    #[test]
+    fn invalid_snapshot_sizes_fail_before_publication() {
+        let temp = TestDirectory::new();
+        let output = temp.path.join("output");
+        let producer = ProducerIdentity::for_test("producer", "/src/producer.rs");
+        let kernels = one("alpha", "invalid");
+
+        let error = emit_artifact_transaction(
+            &output,
+            &producer,
+            &kernels,
+            |kernel| kernel.name,
+            |kernel| Ok(format!("{}:{}", kernel.generation, kernel.name)),
+            |llvm_ir, hsaco| {
+                fs::write(hsaco.with_extension("o"), fs::read(llvm_ir)?)?;
+                fs::write(hsaco, b"")?;
+                Ok(())
+            },
+        )
+        .unwrap_err();
+
+        let EmitError::Transaction(transaction) = error else {
+            panic!("expected composite transaction error");
+        };
+        assert!(matches!(
+            transaction.primary.as_deref(),
+            Some(EmitError::InvalidFinalizedArtifact { .. })
+        ));
+        assert_eq!(
+            transaction.publication(),
+            PublicationState::NotStarted {
+                total_final_renames: 3
+            }
+        );
+        assert_absent(&output, &["alpha"]);
+        assert_no_staging(&output);
     }
 
     fn assert_absent(output: &Path, names: &[&str]) {
@@ -1563,13 +1703,19 @@ mod tests {
                 .is_err()
         );
         release_tx.send(()).unwrap();
-        first.join().unwrap().unwrap();
+        let first_artifacts = first.join().unwrap().unwrap();
         second_entered_rx
             .recv_timeout(Duration::from_secs(2))
             .unwrap();
-        second.join().unwrap().unwrap();
+        let second_artifacts = second.join().unwrap().unwrap();
 
         assert_generation(&output, &["alpha", "beta"], "second");
+        for artifact in &first_artifacts {
+            assert_snapshot(artifact, "first", &artifact.kernel_name);
+        }
+        for artifact in &second_artifacts {
+            assert_snapshot(artifact, "second", &artifact.kernel_name);
+        }
         assert_no_staging(&output);
     }
 
@@ -3076,6 +3222,177 @@ struct PreparedArtifact {
     llvm_ir: String,
 }
 
+struct PinnedArtifactSnapshot {
+    llvm_ir: PinnedFinalizedFile,
+    hsaco: PinnedFinalizedFile,
+}
+
+impl PinnedArtifactSnapshot {
+    fn open(
+        staging: &StagingDirectory,
+        output: &PinnedOutput,
+        names: &ArtifactNames,
+    ) -> Result<Self, EmitError> {
+        Ok(Self {
+            llvm_ir: PinnedFinalizedFile::open(
+                staging,
+                output,
+                &names.llvm_ir,
+                MAX_FINALIZED_LLVM_IR_BYTES,
+            )?,
+            hsaco: PinnedFinalizedFile::open(
+                staging,
+                output,
+                &names.hsaco,
+                MAX_FINALIZED_HSACO_BYTES,
+            )?,
+        })
+    }
+
+    fn materialize(
+        self,
+        output: &PinnedOutput,
+        names: &ArtifactNames,
+    ) -> Result<(FinalizedArtifactSnapshot, FinalizedArtifactSnapshot), EmitError> {
+        let llvm_ir = self.llvm_ir.materialize(output, &names.llvm_ir)?;
+        let hsaco = self.hsaco.materialize(output, &names.hsaco)?;
+        Ok((llvm_ir, hsaco))
+    }
+}
+
+#[derive(Clone, Copy)]
+struct FinalizedFileIdentity {
+    device: u64,
+    inode: u64,
+    length: i64,
+    modified_seconds: i64,
+    modified_nanoseconds: u64,
+    changed_seconds: i64,
+    changed_nanoseconds: u64,
+}
+
+impl FinalizedFileIdentity {
+    fn from_stat(stat: &rustix::fs::Stat) -> Self {
+        Self {
+            device: stat.st_dev,
+            inode: stat.st_ino,
+            length: stat.st_size,
+            modified_seconds: stat.st_mtime,
+            modified_nanoseconds: stat.st_mtime_nsec,
+            changed_seconds: stat.st_ctime,
+            changed_nanoseconds: stat.st_ctime_nsec,
+        }
+    }
+
+    fn matches(self, stat: &rustix::fs::Stat) -> bool {
+        self.matches_pinned(stat)
+            && self.changed_seconds == stat.st_ctime
+            && self.changed_nanoseconds == stat.st_ctime_nsec
+    }
+
+    fn matches_pinned(self, stat: &rustix::fs::Stat) -> bool {
+        FileType::from_raw_mode(stat.st_mode) == FileType::RegularFile
+            && stat.st_nlink == 1
+            && self.device == stat.st_dev
+            && self.inode == stat.st_ino
+            && self.length == stat.st_size
+            && self.modified_seconds == stat.st_mtime
+            && self.modified_nanoseconds == stat.st_mtime_nsec
+    }
+}
+
+struct PinnedFinalizedFile {
+    file: fs::File,
+    identity: FinalizedFileIdentity,
+    path: PathBuf,
+    expected: usize,
+    maximum: usize,
+}
+
+impl PinnedFinalizedFile {
+    fn open(
+        staging: &StagingDirectory,
+        output: &PinnedOutput,
+        entry: &str,
+        maximum: usize,
+    ) -> Result<Self, EmitError> {
+        let path = output.display_path.join(entry);
+        let fd = openat(
+            &staging.fd,
+            entry,
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(|error| EmitError::InvalidFinalizedArtifact {
+            path: path.clone(),
+            reason: std::io::Error::from(error).to_string(),
+        })?;
+        let stat = fstat(&fd).map_err(std::io::Error::from)?;
+        let identity = FinalizedFileIdentity::from_stat(&stat);
+        if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile || stat.st_nlink != 1 {
+            return Err(EmitError::InvalidFinalizedArtifact {
+                path,
+                reason: "expected a single-link regular file".to_string(),
+            });
+        }
+        let expected = usize::try_from(stat.st_size).unwrap_or(usize::MAX);
+        if expected == 0 || expected > maximum {
+            return Err(EmitError::InvalidFinalizedArtifact {
+                path,
+                reason: format!("size {expected} is outside 1..={maximum} bytes"),
+            });
+        }
+        Ok(Self {
+            file: fs::File::from(fd),
+            identity,
+            path,
+            expected,
+            maximum,
+        })
+    }
+
+    fn materialize(
+        mut self,
+        output: &PinnedOutput,
+        entry: &str,
+    ) -> Result<FinalizedArtifactSnapshot, EmitError> {
+        let opened = fstat(&self.file).map_err(std::io::Error::from)?;
+        let published =
+            statat(&output.fd, entry, AtFlags::SYMLINK_NOFOLLOW).map_err(std::io::Error::from)?;
+        if !self.identity.matches_pinned(&opened) || !self.identity.matches_pinned(&published) {
+            return Err(EmitError::InvalidFinalizedArtifact {
+                path: self.path,
+                reason: "pinned file no longer matches the published generation".to_string(),
+            });
+        }
+        let published_identity = FinalizedFileIdentity::from_stat(&opened);
+        if !published_identity.matches(&published) {
+            return Err(EmitError::InvalidFinalizedArtifact {
+                path: self.path,
+                reason: "pinned file metadata differs from the published generation".to_string(),
+            });
+        }
+
+        let mut bytes = Vec::with_capacity(self.expected);
+        Read::by_ref(&mut self.file)
+            .take((self.maximum as u64) + 1)
+            .read_to_end(&mut bytes)?;
+        let completed = fstat(&self.file).map_err(std::io::Error::from)?;
+        let still_published =
+            statat(&output.fd, entry, AtFlags::SYMLINK_NOFOLLOW).map_err(std::io::Error::from)?;
+        if bytes.len() != self.expected
+            || !published_identity.matches(&completed)
+            || !published_identity.matches(&still_published)
+        {
+            return Err(EmitError::InvalidFinalizedArtifact {
+                path: self.path,
+                reason: "pinned file changed while its bytes were captured".to_string(),
+            });
+        }
+        Ok(FinalizedArtifactSnapshot::from_bytes(self.path, bytes))
+    }
+}
+
 #[derive(Clone, Copy)]
 struct BackendRequest<'a> {
     producer: &'a ProducerIdentity,
@@ -3455,23 +3772,28 @@ where
         }
     }
 
+    let mut pinned_snapshots = Vec::with_capacity(prepared.len());
     for artifact in &prepared {
         let result = (|| {
             staging.write(&artifact.names.llvm_ir, artifact.llvm_ir.as_bytes())?;
             let llvm_ir_path = staging.subprocess_path(&artifact.names.llvm_ir);
             let hsaco_path = staging.subprocess_path(&artifact.names.hsaco);
             compile(&llvm_ir_path, &hsaco_path)?;
-            validate_staged_artifacts(&staging, &artifact.names, output)
+            validate_staged_artifacts(&staging, &artifact.names, output)?;
+            PinnedArtifactSnapshot::open(&staging, output, &artifact.names)
         })();
-        if let Err(error) = result {
-            return Err(rollback.abort(
-                &mut staging,
-                PublicationState::NotStarted {
-                    total_final_renames: prepared.len() * 3,
-                },
-                error,
-                hooks,
-            ));
+        match result {
+            Ok(snapshot) => pinned_snapshots.push(snapshot),
+            Err(error) => {
+                return Err(rollback.abort(
+                    &mut staging,
+                    PublicationState::NotStarted {
+                        total_final_renames: prepared.len() * 3,
+                    },
+                    error,
+                    hooks,
+                ));
+            }
         }
     }
 
@@ -3530,6 +3852,23 @@ where
                 ));
             }
             completed_final_renames += 1;
+        }
+    }
+
+    let mut finalized_snapshots = Vec::with_capacity(prepared.len());
+    for (artifact, pinned) in prepared.iter().zip(pinned_snapshots) {
+        match pinned.materialize(output, &artifact.names) {
+            Ok(snapshot) => finalized_snapshots.push(snapshot),
+            Err(error) => {
+                return Err(rollback.abort(
+                    &mut staging,
+                    PublicationState::FinalsPublished {
+                        final_renames: completed_final_renames,
+                    },
+                    error,
+                    hooks,
+                ));
+            }
         }
     }
 
@@ -3615,10 +3954,11 @@ where
     }
     Ok(prepared
         .iter()
-        .map(|artifact| DeviceArtifact {
+        .zip(finalized_snapshots)
+        .map(|(artifact, (llvm_ir, hsaco))| DeviceArtifact {
             kernel_name: artifact.names.kernel.clone(),
-            llvm_ir_path: output.display_path.join(&artifact.names.llvm_ir),
-            hsaco_path: output.display_path.join(&artifact.names.hsaco),
+            llvm_ir,
+            hsaco,
         })
         .collect())
 }

@@ -34,9 +34,8 @@ use std::any::Any;
 use std::env;
 use std::ffi::OsStr;
 use std::fmt;
-use std::fs::{self, File};
-use std::io::Read;
-use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+use std::fs;
+use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
@@ -373,8 +372,8 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             eprintln!(
                                 "[rustc-codegen-fe2o3] emitted {}: LLVM IR {}, HSACO {}",
                                 artifact.kernel_name,
-                                artifact.llvm_ir_path.display(),
-                                artifact.hsaco_path.display()
+                                artifact.llvm_ir.path().display(),
+                                artifact.hsaco.path().display()
                             );
                         }
                     }
@@ -513,21 +512,17 @@ fn generate_typed_host_objects(
 
     for (root, artifact_index) in roots.iter().zip(artifact_indexes) {
         let artifact = &artifacts[artifact_index];
-        let llvm_ir = read_finalized_artifact(
-            &artifact.llvm_ir_path,
-            "LLVM IR",
-            MAX_FINALIZED_LLVM_IR_BYTES,
-        )?;
-        let hsaco =
-            read_finalized_artifact(&artifact.hsaco_path, "HSACO", MAX_FINALIZED_HSACO_BYTES)?;
+        let llvm_ir =
+            finalized_artifact_bytes(&artifact.llvm_ir, "LLVM IR", MAX_FINALIZED_LLVM_IR_BYTES)?;
+        let hsaco = finalized_artifact_bytes(&artifact.hsaco, "HSACO", MAX_FINALIZED_HSACO_BYTES)?;
         let generated = match root.profile {
             collector::TypedKernelProfile::VecAddV1 => {
                 typed_artifact::build_typed_vecadd_artifact_v1(
                     &root.logical_name,
                     &root.export_name,
                     target,
-                    &llvm_ir,
-                    hsaco,
+                    llvm_ir,
+                    hsaco.to_vec(),
                 )
                 .map_err(TypedVerticalError::Artifact)?
             }
@@ -612,75 +607,21 @@ fn valid_ascii_symbol_stem(name: &str) -> bool {
         && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
 }
 
-fn read_finalized_artifact(
-    path: &Path,
+fn finalized_artifact_bytes<'artifact>(
+    snapshot: &'artifact artifact_transaction::FinalizedArtifactSnapshot,
     kind: &'static str,
     maximum: usize,
-) -> Result<Vec<u8>, TypedVerticalError> {
-    let published = fs::symlink_metadata(path).map_err(|source| TypedVerticalError::Io {
-        path: path.to_path_buf(),
-        source,
-    })?;
-    if !published.file_type().is_file() {
-        return Err(TypedVerticalError::NotRegularFinalizedArtifact {
-            kind,
-            path: path.to_path_buf(),
-        });
-    }
-    let expected = usize::try_from(published.len()).unwrap_or(usize::MAX);
-    if expected == 0 || expected > maximum {
+) -> Result<&'artifact [u8], TypedVerticalError> {
+    let bytes = snapshot.bytes();
+    if bytes.is_empty() || bytes.len() > maximum {
         return Err(TypedVerticalError::InvalidFinalizedArtifactSize {
             kind,
-            path: path.to_path_buf(),
-            actual: expected,
+            path: snapshot.path().to_path_buf(),
+            actual: bytes.len(),
             maximum,
         });
     }
-
-    let mut file = File::open(path).map_err(|source| TypedVerticalError::Io {
-        path: path.to_path_buf(),
-        source,
-    })?;
-    let opened = file.metadata().map_err(|source| TypedVerticalError::Io {
-        path: path.to_path_buf(),
-        source,
-    })?;
-    if !same_finalized_file(&published, &opened) {
-        return Err(TypedVerticalError::FinalizedArtifactChanged(
-            path.to_path_buf(),
-        ));
-    }
-
-    let mut bytes = Vec::with_capacity(expected);
-    file.by_ref()
-        .take((maximum as u64) + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|source| TypedVerticalError::Io {
-            path: path.to_path_buf(),
-            source,
-        })?;
-    let completed = file.metadata().map_err(|source| TypedVerticalError::Io {
-        path: path.to_path_buf(),
-        source,
-    })?;
-    if bytes.len() != expected || !same_finalized_file(&opened, &completed) {
-        return Err(TypedVerticalError::FinalizedArtifactChanged(
-            path.to_path_buf(),
-        ));
-    }
     Ok(bytes)
-}
-
-fn same_finalized_file(first: &fs::Metadata, second: &fs::Metadata) -> bool {
-    first.file_type().is_file()
-        && second.file_type().is_file()
-        && first.dev() == second.dev()
-        && first.ino() == second.ino()
-        && first.len() == second.len()
-        && first.mtime() == second.mtime()
-        && first.mtime_nsec() == second.mtime_nsec()
-        && first.ctime() == second.ctime()
-        && first.ctime_nsec() == second.ctime_nsec()
 }
 
 #[derive(Debug)]
@@ -698,17 +639,12 @@ enum TypedVerticalError {
     },
     InvalidSymbolName(String),
     InvalidArtifactId(String),
-    NotRegularFinalizedArtifact {
-        kind: &'static str,
-        path: PathBuf,
-    },
     InvalidFinalizedArtifactSize {
         kind: &'static str,
         path: PathBuf,
         actual: usize,
         maximum: usize,
     },
-    FinalizedArtifactChanged(PathBuf),
     TemporaryDirectory {
         path: PathBuf,
         source: std::io::Error,
@@ -717,10 +653,6 @@ enum TypedVerticalError {
     Toolchain(ToolchainError),
     Artifact(typed_artifact::TypedArtifactError),
     HostObject(host_object::HostObjectError),
-    Io {
-        path: PathBuf,
-        source: std::io::Error,
-    },
 }
 
 impl fmt::Display for TypedVerticalError {
@@ -756,11 +688,6 @@ impl fmt::Display for TypedVerticalError {
             Self::InvalidArtifactId(id) => {
                 write!(formatter, "typed artifact has an invalid content ID `{id}`")
             }
-            Self::NotRegularFinalizedArtifact { kind, path } => write!(
-                formatter,
-                "finalized {kind} is not a regular file: {}",
-                path.display()
-            ),
             Self::InvalidFinalizedArtifactSize {
                 kind,
                 path,
@@ -769,11 +696,6 @@ impl fmt::Display for TypedVerticalError {
             } => write!(
                 formatter,
                 "finalized {kind} {} has invalid size {actual}; maximum is {maximum}",
-                path.display()
-            ),
-            Self::FinalizedArtifactChanged(path) => write!(
-                formatter,
-                "finalized artifact changed while it was read: {}",
                 path.display()
             ),
             Self::TemporaryDirectory { path, source } => write!(
@@ -789,13 +711,6 @@ impl fmt::Display for TypedVerticalError {
             Self::Toolchain(error) => write!(formatter, "{error}"),
             Self::Artifact(error) => write!(formatter, "{error}"),
             Self::HostObject(error) => write!(formatter, "{error}"),
-            Self::Io { path, source } => {
-                write!(
-                    formatter,
-                    "artifact I/O failed for {}: {source}",
-                    path.display()
-                )
-            }
         }
     }
 }
@@ -803,7 +718,7 @@ impl fmt::Display for TypedVerticalError {
 impl std::error::Error for TypedVerticalError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::TemporaryDirectory { source, .. } | Self::Io { source, .. } => Some(source),
+            Self::TemporaryDirectory { source, .. } => Some(source),
             Self::Toolchain(error) => Some(error),
             Self::Artifact(error) => Some(error),
             Self::HostObject(error) => Some(error),
@@ -814,9 +729,7 @@ impl std::error::Error for TypedVerticalError {
             | Self::MissingPublishedArtifact { .. }
             | Self::InvalidSymbolName(_)
             | Self::InvalidArtifactId(_)
-            | Self::NotRegularFinalizedArtifact { .. }
             | Self::InvalidFinalizedArtifactSize { .. }
-            | Self::FinalizedArtifactChanged(_)
             | Self::TemporaryDirectoryExhausted(_) => None,
         }
     }
@@ -1179,16 +1092,16 @@ fn optional_tool(llvm_bin: &Path, name: &str) -> Option<PathBuf> {
 mod tests {
     use super::{
         AmdGpuTarget, BackendConfig, CodegenPipeline, PipelineSelection, TemporaryHostObjects,
-        TypedKernelRootV1, TypedVerticalError, generate_typed_host_objects,
-        managed_artifact_output, match_typed_artifacts, read_finalized_artifact,
+        TypedKernelRootV1, TypedVerticalError, finalized_artifact_bytes,
+        generate_typed_host_objects, managed_artifact_output, match_typed_artifacts,
         run_optional_kernel_ir_analysis, validate_hsaco_metadata_text,
     };
     use crate::amdgpu_llvm::DeviceArtifact;
     use crate::collector::TypedKernelProfile;
+    use fe2o3_artifact_transaction::FinalizedArtifactSnapshot;
     use rustc_codegen_ssa::CompiledModules;
     use std::ffi::OsStr;
     use std::fs;
-    use std::os::unix::fs::symlink;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -1225,8 +1138,14 @@ mod tests {
     fn published_artifact(name: &str) -> DeviceArtifact {
         DeviceArtifact {
             kernel_name: name.to_owned(),
-            llvm_ir_path: PathBuf::from(format!("{name}.ll")),
-            hsaco_path: PathBuf::from(format!("{name}.hsaco")),
+            llvm_ir: FinalizedArtifactSnapshot::from_bytes(
+                format!("{name}.ll"),
+                b"test-ir".to_vec(),
+            ),
+            hsaco: FinalizedArtifactSnapshot::from_bytes(
+                format!("{name}.hsaco"),
+                b"test-hsaco".to_vec(),
+            ),
         }
     }
 
@@ -1322,35 +1241,33 @@ mod tests {
     }
 
     #[test]
-    fn finalized_artifact_reads_are_exact_bounded_and_regular() {
+    fn finalized_artifact_snapshots_are_exact_and_bounded() {
         let directory = TestDirectory::new();
-        let artifact = directory.0.join("vecadd.ll");
-        fs::write(&artifact, b"finalized-ir").unwrap();
+        let path = directory.0.join("vecadd.ll");
+        fs::write(&path, b"newer-path-generation").unwrap();
+        let artifact = FinalizedArtifactSnapshot::from_bytes(&path, b"finalized-ir".to_vec());
         assert_eq!(
-            read_finalized_artifact(&artifact, "LLVM IR", 64).unwrap(),
+            finalized_artifact_bytes(&artifact, "LLVM IR", 64).unwrap(),
+            b"finalized-ir"
+        );
+        fs::write(&path, b"replacement-generation").unwrap();
+        assert_eq!(
+            finalized_artifact_bytes(&artifact, "LLVM IR", 64).unwrap(),
             b"finalized-ir"
         );
 
-        let empty = directory.0.join("empty.ll");
-        fs::write(&empty, b"").unwrap();
+        let empty = FinalizedArtifactSnapshot::from_bytes("empty.ll", Vec::new());
         assert!(matches!(
-            read_finalized_artifact(&empty, "LLVM IR", 64),
+            finalized_artifact_bytes(&empty, "LLVM IR", 64),
             Err(TypedVerticalError::InvalidFinalizedArtifactSize { actual: 0, .. })
         ));
         assert!(matches!(
-            read_finalized_artifact(&artifact, "LLVM IR", 4),
+            finalized_artifact_bytes(&artifact, "LLVM IR", 4),
             Err(TypedVerticalError::InvalidFinalizedArtifactSize {
                 actual: 12,
                 maximum: 4,
                 ..
             })
-        ));
-
-        let alias = directory.0.join("alias.ll");
-        symlink(&artifact, &alias).unwrap();
-        assert!(matches!(
-            read_finalized_artifact(&alias, "LLVM IR", 64),
-            Err(TypedVerticalError::NotRegularFinalizedArtifact { .. })
         ));
     }
 
