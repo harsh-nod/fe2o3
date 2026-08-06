@@ -1,5 +1,15 @@
+mod semantic_constant;
 mod semantic_type;
 
+pub use semantic_constant::{
+    MAX_CONSTANT_ALLOCATION_BYTES, MAX_CONSTANT_ALLOCATIONS, MAX_CONSTANT_GRAPH_DEPTH,
+    MAX_CONSTANT_IDENTITY_BYTES, MAX_CONSTANT_RELOCATIONS, MAX_CONSTANT_TOTAL_BYTES,
+    MAX_CONSTANT_WIRE_BYTES, MirAlignment, MirAllocationId, MirAllocationOrigin, MirByteOffset,
+    MirConstantAllocation, MirConstantDecodeError, MirConstantIdentity, MirConstantRepresentation,
+    MirConstantValidationError, MirInitializedMask, MirMemoryIdentity, MirPointerProvenance,
+    MirPointerRelocation, MirPointerWidth, MirPromotedIdentity, MirSemanticConstantPool,
+    MirStaticIdentity, MirSymbolIdentity,
+};
 pub use semantic_type::{
     MirAddressSpace, MirAggregateLayout, MirEnumEncoding, MirEnumType, MirField, MirLayout,
     MirMutability, MirPadding, MirScalarType, MirSemanticType, MirStructType, MirTypeKind,
