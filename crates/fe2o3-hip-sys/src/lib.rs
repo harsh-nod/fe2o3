@@ -3,6 +3,10 @@
 
 use core::ffi::{c_char, c_int, c_uint, c_void};
 
+mod cooperative_peer;
+
+pub use cooperative_peer::*;
+
 pub type hipError_t = c_int;
 pub type hipStream_t = *mut c_void;
 pub type hipEvent_t = *mut c_void;
@@ -13,6 +17,9 @@ pub type hipMemcpyKind = c_uint;
 
 pub const HIP_SUCCESS: hipError_t = 0;
 pub const HIP_ERROR_NOT_READY: hipError_t = 600;
+pub const HIP_ERROR_PEER_ACCESS_ALREADY_ENABLED: hipError_t = 704;
+pub const HIP_ERROR_PEER_ACCESS_NOT_ENABLED: hipError_t = 705;
+pub const HIP_ERROR_COOPERATIVE_LAUNCH_TOO_LARGE: hipError_t = 720;
 pub const HIP_ERROR_NOT_SUPPORTED: hipError_t = 801;
 
 pub const HIP_DEVICE_ARCH_HAS_GLOBAL_INT32_ATOMICS: u64 = 1 << 0;
@@ -25,6 +32,9 @@ pub const HIP_DEVICE_ARCH_HAS_WARP_SHUFFLE: u64 = 1 << 6;
 
 /// Whether the build found HIP headers and compiled device-property discovery.
 pub const HIP_DEVICE_PROPERTIES_AVAILABLE: bool = cfg!(fe2o3_hip_device_properties);
+
+/// Whether the build found a HIP runtime library to link.
+pub const HIP_RUNTIME_AVAILABLE: bool = cfg!(fe2o3_hip_runtime);
 
 /// Stable subset of `hipDeviceProp_t` used by fe2o3 runtime discovery.
 ///
