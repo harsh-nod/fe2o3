@@ -30,11 +30,17 @@
 //! diagnostics only, so later publication at the same names cannot change an earlier result.
 
 mod attempt;
+mod compiler_module_handoff;
 mod durable_link_publication;
 mod link_publication;
 
 pub use attempt::{AttemptCodecError, BuildAttempt, BuildInvocation, BuildSession};
 use attempt::{AttemptPhase, AttemptRegistry, MAX_ATTEMPT_BYTES, StartAttemptOutcome};
+pub use compiler_module_handoff::{
+    CompilerModuleHandoffErrorV1, CompilerModuleHandoffIdentityV1, CompilerModuleHandoffReceiptV1,
+    ConsumedCompilerModuleHandoffV1, MAX_COMPILER_MODULE_HANDOFF_BYTES,
+    consume_compiler_module_handoff_v1, publish_compiler_module_handoff_v1,
+};
 pub use durable_link_publication::{
     DurableArtifactBoundaryV1, DurableCurrentLinkPublicationLeaseV1,
     DurableCurrentLinkPublicationTokenV1, DurableFaultTimingV1, DurableJournalBoundaryV1,
