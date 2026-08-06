@@ -34,6 +34,18 @@ pub use prepared_launch::{
     PreparedResources, UntrustedKernelDeclaration, UntrustedLaunchRequest,
 };
 
+/// Compiler-generated host bindings. This is an unstable implementation SPI,
+/// not an application extension point.
+#[doc(hidden)]
+pub mod __generated {
+    pub use crate::{
+        AuthenticatedKernelArtifactV1, CompilerGeneratedKernelContractV1,
+        GeneratedAdmittedLaunch, GeneratedArtifactAuthenticationError,
+        GeneratedKernelBindingV1, GeneratedMarkerBindingError, GeneratedReadDeviceSlice,
+        GeneratedWriteDeviceSlice, LoadedKernelLoadError,
+    };
+}
+
 /// Loads and launches a GPU kernel using raw, caller-described ABI arguments.
 ///
 /// # Safety
