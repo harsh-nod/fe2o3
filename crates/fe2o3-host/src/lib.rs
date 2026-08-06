@@ -5,6 +5,7 @@ mod generated_argument_plan;
 mod generated_vecadd;
 mod loaded_kernel;
 mod prepared_launch;
+mod published_direct_link;
 
 pub use argument_alias::{
     AliasAdmissionError, AllocationIdentity, AllocationProvenance, ArgumentAccess,
@@ -51,6 +52,9 @@ pub use prepared_launch::{
     ArgumentAdmittedLaunch, CheckedDimensions, DeviceIdentity, KernelBrand, LaunchAxis,
     LaunchDimension, ObservedContext, PrepareLaunchError, PreparedGeometry, PreparedLaunch,
     PreparedResources, UntrustedKernelDeclaration, UntrustedLaunchRequest,
+};
+pub use published_direct_link::{
+    PublishedDirectLinkAdmissionError, ValidatedPublishedDirectLinkSelectionV1,
 };
 
 /// Compiler-generated host bindings. This is an unstable implementation SPI,
