@@ -6,6 +6,9 @@ Pinned commits, row IDs, and current statuses are generated from
 [`cuda-oxide-parity-status.tsv`](cuda-oxide-parity-status.tsv). Run
 `scripts/parity-matrix.sh check` to validate this projection or
 `scripts/parity-matrix.sh generate` after changing the source of truth.
+The generated [evidence dashboard](generated/cuda-oxide-parity-dashboard.md)
+and its machine-readable TSV are validated with
+`scripts/parity-dashboard.sh check`.
 
 ## Baseline and Scope
 
@@ -18,21 +21,23 @@ partial, experimental, planned, and N/A rows. The supplemental audit also
 accounts for capabilities demonstrated elsewhere in the repository.
 
 The fe2o3 current-state column is based on commit
-`576cb56fa4979b125c10c4e03681972b0f8844ad`.
+`4a6bd7fd2f4ee89f9e79b05a5bbad503539cc9ec`.
 <!-- parity-status:baseline:end -->
 
 At that commit fe2o3 has a HIP runtime, explicit unsafe raw module and launch
 paths, versioned kernel registration, reachable MIR collection, bounded rustc
 frontend and general layout records, a canonical target-neutral kernel IR and
-verifier, reducible-CFG analysis, block-argument lowering, opt-in end-to-end
+verifier, concrete generic-helper collection, semantic constants,
+reducible-CFG analysis, block-argument lowering, opt-in end-to-end
 verified-IR AMDGPU fill and exact three-slice vecadd paths, experimental LDS,
-fence, and workgroup-barrier lowering, a default narrow elementwise `f32`/`f64`
-LLVM/HSACO emitter, fail-closed formal affine memory/race obligations for
-modeled effects, artifact and proof schemas, a multi-kernel bundle index,
-generated `KernelMarkerV1` types, exact loaded module/function authority, host
-argument-alias admission, bounded HSACO inspection/finalization, event-backed
-asynchronous transfer lifetimes, transactional artifact publication, bounded
-Verus driver records, and paired Verus elementwise harnesses.
+scoped integer atomics, wave operations, fence, and workgroup-barrier lowering,
+a default narrow elementwise `f32`/`f64` LLVM/HSACO emitter, fail-closed formal
+affine memory/race obligations for modeled effects, artifact and proof schemas,
+a multi-kernel bundle index, generated `KernelMarkerV1` types, exact loaded
+module/function authority, host argument-alias admission, bounded HSACO
+inspection/finalization, event-backed asynchronous transfer lifetimes,
+transactional artifact publication, bounded Verus driver records, and paired
+Verus harnesses.
 `#[kernel(typed)]` additionally connects one exact
 `pub fn(&[f32], &[f32], DisjointSlice<f32>)` profile to a backend-generated,
 canonical embedded artifact and safe load, prepare, synchronous launch, and
@@ -71,8 +76,8 @@ pass.
 <!-- parity-status:counts:start -->
 | Scope | Complete | Partial | Missing | N/A | Total |
 |:--|--:|--:|--:|--:|--:|
-| Normative | 0 | 38 | 44 | 12 | 94 |
-| Supplemental | 0 | 9 | 6 | 0 | 15 |
+| Normative | 0 | 43 | 39 | 12 | 94 |
+| Supplemental | 0 | 10 | 5 | 0 | 15 |
 <!-- parity-status:counts:end -->
 
 An IR type, schema, parser, or isolated proof is classified as **Partial** only
@@ -98,6 +103,11 @@ The detailed dependencies and exit criteria are in
 
 ## Evidence Behind Current Partial Status
 
+- Row 07: reachable collection now distinguishes concrete generic and
+  const-generic helper instances, deduplicates them deterministically,
+  terminates recursive graphs, and diagnoses unavailable cross-crate MIR with
+  a complete call chain. Generic registered kernel roots and final
+  application-bundle integration remain unsupported.
 - Rows 02, 03, and 08-10: a rustc-private bounded extractor records fully
   monomorphized scalar, pointer, array, tuple, struct, direct-enum, and
   niche-enum layouts, including ABI representation, field offsets, variants,
@@ -146,14 +156,16 @@ The detailed dependencies and exit criteria are in
   unsupported effects. The exact generated vecadd adapter authenticates its
   fixed launch contract and maps three runtime allocations to it; general
   launch extents and parameter/allocation mappings remain unauthenticated.
-- Rows 53-55, 57, 58, 61, 64, and 67: canonical Kernel IR now models scoped
-  atomic operations, static and dynamic workgroup memory, scoped fences, and
-  convergence-bearing workgroup barriers. AMD lowering emits LDS, fences, and
-  workgroup barriers and has compiled into real `gfx1151` and `gfx942` code
-  objects. Target capability records and branded 3D invocation/wave-lane
-  witnesses preserve exact wave width. Atomic lowering, ordinary Rust frontend
-  integration, dynamic-LDS launch-byte admission, executable wave IDs, and GPU
-  semantic tests are still absent.
+- Rows 53-55, 57, 58, 61, 64-67, 70, and 71: canonical Kernel IR models scoped
+  integer atomics, static and dynamic workgroup memory, scoped fences,
+  convergence-bearing workgroup barriers, and explicit wave32/wave64 lane,
+  ballot, vote, and bounded shuffle operations. AMD lowering for those bounded
+  operations has compiled into `gfx1151`, `gfx942`, and, where recorded by the
+  claim ledger, `gfx950` code objects. Branded dynamic-LDS views enforce
+  bounded disjoint typestates at the source API. Ordinary Rust frontend
+  integration, dynamic-LDS launch-byte admission, float and standard-library
+  atomics, broad wave types/tiles/collectives, and GPU semantic execution are
+  still absent.
 - Row 74 and supplemental row S06: raw HIP declarations expose cooperative
   launch and peer-access queries/operations, and V2 descriptors can declare
   cooperative requirements. No safe high-level authority, occupancy proof,
@@ -185,7 +197,7 @@ The detailed dependencies and exit criteria are in
   higher-ranked callback cannot return the in-flight operation. Generalized
   returnable borrowed or owned generated async operations, cancellation, and
   composition are incomplete, so both rows remain Partial.
-- Supplemental rows S01-S05, S14, and S15: the corresponding bounded models,
+- Supplemental rows S01-S07, S14, and S15: the corresponding bounded models,
   parsers, lifetime types, target query, exact proof-evidence matching, and
   focused UI tests exist. The typed vecadd backend now emits and embeds a
   canonical container whose fixed argument identities come from normalized
@@ -198,6 +210,10 @@ The detailed dependencies and exit criteria are in
   proof binding/refinement is not authenticated into the artifact, general
   generated safe-launch integration is incomplete, and host-object embedding
   is limited to `x86_64-unknown-linux-gnu`.
+- Supplemental row S07 specifically has a bounded semantic-constant and data
+  relocation model that rejects function, vtable, thread-local, and unknown
+  relocations. Rustc promotions, emitted device globals/statics, and GPU use
+  are not integrated.
 - Supplemental row S10: a standalone deterministic engine generates bounded
   scalar kernel cases from exact seeds, evaluates wrapping `i32` CPU semantics,
   encodes canonical reproducers, reports mismatches, and reduces them. It does
@@ -221,7 +237,7 @@ The detailed dependencies and exit criteria are in
 
 | ID | cuda-oxide feature | Baseline | Class | fe2o3 now | AMD/fe2o3 acceptance target | Gate |
 |:--|:--|:--|:--|:--|:--|:--|
-| 07 | Generics and Monomorphization | Full | Exact | Missing | Generic and const-generic kernels/helpers are collected at final use sites with deterministic symbols and cross-crate tests | G1, G2 |
+| 07 | Generics and Monomorphization | Full | Exact | Partial | Generic and const-generic kernels/helpers are collected at final use sites with deterministic symbols and cross-crate tests | G1, G2 |
 | 08 | Enums (`Option`, `Result`, custom) | Full | Exact | Partial | Direct and niche layouts, discriminants, payloads, matches, and supported enum constants follow rustc layout | G2 |
 | 09 | Struct Construction and Field Access | Full | Exact | Partial | Literals, projections, by-value parameters/returns, nested structs, and padding pass layout-differential tests | G2 |
 | 10 | Array Types (`[T; N]`) | Full | Exact | Partial | Construction, constants, nested arrays, runtime/constant indexing, mutation, and padded element stride work | G2 |
@@ -334,13 +350,13 @@ The detailed dependencies and exit criteria are in
 
 | ID | cuda-oxide feature | Baseline | Class | fe2o3 now | AMD/fe2o3 acceptance target | Gate |
 |:--|:--|:--|:--|:--|:--|:--|
-| 65 | Warp Shuffle Operations | Full | AMD-equivalent | Missing | Wave shuffle/permutation operations support declared types and explicit wave32/wave64 width/active-lane contracts | G4, G7 |
-| 66 | Warp Vote Operations | Full | AMD-equivalent | Missing | Wave all/any/ballot return width-correct masks and define inactive-lane behavior | G4, G7 |
+| 65 | Warp Shuffle Operations | Full | AMD-equivalent | Partial | Wave shuffle/permutation operations support declared types and explicit wave32/wave64 width/active-lane contracts | G4, G7 |
+| 66 | Warp Vote Operations | Full | AMD-equivalent | Partial | Wave all/any/ballot return width-correct masks and define inactive-lane behavior | G4, G7 |
 | 67 | Lane/Warp ID | Full | AMD-equivalent | Partial | `lane_id` and wave ID use AMD semantics; no fixed width of 32 is assumed by portable code | G4 |
 | 68 | Typed Group Handles | Full | AMD-equivalent | Missing | Provide `Grid`, `Workgroup`, `SubgroupTile<N>`, and active-lane groups; unsupported CUDA `Cluster` behavior is unavailable | G4, G6 |
 | 69 | Group Universal API | Full | Exact | Missing | Every supported group has typed `size`, `thread_rank`, and legal synchronization behavior | G4 |
-| 70 | Warp Tile Partitioning | Full | AMD-equivalent | Missing | Wave tiles are valid only for supported divisors and wave widths, with active-lane and convergence contracts | G4, G7 |
-| 71 | Warp Collectives | Full | AMD-equivalent | Missing | Ballot, vote, shuffle, match, and active-mask operations cover baseline types with wave-width-correct semantics | G4, G7 |
+| 70 | Warp Tile Partitioning | Full | AMD-equivalent | Partial | Wave tiles are valid only for supported divisors and wave widths, with active-lane and convergence contracts | G4, G7 |
+| 71 | Warp Collectives | Full | AMD-equivalent | Partial | Ballot, vote, shuffle, match, and active-mask operations cover baseline types with wave-width-correct semantics | G4, G7 |
 | 72 | Warp Reductions / Scans | Full | AMD-equivalent | Missing | Wave reductions/scans cover the pinned operation/type matrix across supported widths | G4, G7 |
 | 73 | Block Reductions / Scans | Full | Exact | Missing | Workgroup collectives use LDS and barriers, support the baseline operation/type matrix, and work across wave widths | G4, G7 |
 | 74 | Cooperative Kernel Launch | Full | AMD-equivalent | Partial | HIP cooperative launch and grid synchronization are capability-checked, occupancy-safe, and encoded in the launch contract | G6, G7 |
@@ -399,7 +415,7 @@ for a credible parity release even though they are not separate appendix rows.
 | S04 | `DeviceCopy` derive and manifest-gated device types | Exact | Partial | Host byte-transfer types have compile-pass/fail bit-validity and padding checks; safe device interpretation additionally requires manifest-derived type/ABI identity, provenance, and capabilities | G3 |
 | S05 | Pinned host buffers and events | Exact | Partial | RAII pinned memory, explicit unsafe async-copy lifetimes, timing, and ordering events | G3 |
 | S06 | VMM, peer access, and multi-device memory | AMD-equivalent | Partial | HIP/HSA-supported virtual/peer memory has context, lifetime, topology, and capability checks | G6 |
-| S07 | Device constants, statics, and relocations | Exact | Missing | Layout-aware constants/globals preserve supported pointer relocations and reject unsupported provenance | G2, G6 |
+| S07 | Device constants, statics, and relocations | Exact | Partial | Layout-aware constants/globals preserve supported pointer relocations and reject unsupported provenance | G2, G6 |
 | S08 | Kernel families and compile-time policies | Exact | Missing | Tuned monomorphized variants share a typed logical interface and carry policy identity in the bundle | G2, G3 |
 | S09 | Source debug metadata | Exact | Missing | Spans, functions, arguments, locals, and aggregate layouts survive supported optimization/debug modes | G2, G8 |
 | S10 | Differential MIR/codegen fuzzer | Exact | Partial | Generated accepted programs compare CPU reference behavior and AMD execution; reducer preserves failures | G8 |

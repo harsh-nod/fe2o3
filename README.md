@@ -6,6 +6,7 @@ The next architecture keeps the working AMD runtime while replacing the
 elementwise MIR recognizer with a target-neutral compiler pipeline and adding
 source-level Verus contracts. See the [v2 architecture](docs/architecture-v2.md),
 [cuda-oxide parity matrix](docs/cuda-oxide-parity-matrix.md),
+[evidence-backed parity dashboard](docs/generated/cuda-oxide-parity-dashboard.md),
 [verification model](docs/verification-model.md),
 [GPU safety contract v1](docs/gpu-safety-contract-v1.md), and
 [implementation roadmap](docs/implementation-roadmap-v2.md). The
@@ -47,7 +48,8 @@ boundaries:
 - Verification: `fe2o3-contracts`, the bounded `fe2o3-verifier` driver model,
   `examples/verus_vecadd`, and proof records in `fe2o3-artifacts`.
 - Test and release evidence: `fe2o3-differential`, the Cargo inspection/tool
-  commands, and `scripts/parity-evidence.sh`.
+  commands, `scripts/parity-evidence.sh`, and the deterministic claim gate in
+  `scripts/parity-dashboard.sh`.
 
 Safe buffer element types and their limits are documented in the
 [device memory safety contract](docs/device-memory-safety.md). `DeviceCopy`
@@ -150,18 +152,21 @@ turn the foundations below into end-to-end features.
   granting authority. Even a complete result is conditional on an explicit
   launch extent; the extent and mappings from formal parameters to runtime
   allocations remain unauthenticated and grant no proof or launch authority.
-- A bounded standalone rustc-front record now models canonical collected
-  function signatures, source locations, and CFG edges. Reducible-CFG analysis
-  and block-argument-to-LLVM-phi lowering are implemented and tested, including
-  loop-shaped Kernel IR. The record is not yet emitted by rustc or consumed by
-  the production backend, and general Rust MIR operations are still absent.
+- A bounded rustc-front record models canonical collected function signatures,
+  source locations, and CFG edges, and the rustc backend can construct those
+  records for monomorphized functions. Reducible-CFG analysis and
+  block-argument-to-LLVM-phi lowering are implemented and tested, including
+  loop-shaped Kernel IR. The production device pipeline still does not consume
+  these records generally, and most Rust MIR operations remain absent.
 - The G2 type foundation records validated semantic scalars, pointers,
   references, slices, tuples, arrays, structs, direct and niche enums, padding,
   and rustc ABI facts. A bounded rustc-private extractor obtains those facts
-  for fully monomorphized types. It is not connected to artifact identity,
-  generated host packing, constant extraction, or general device lowering.
-  Dedicated fixtures make the current generic, const-generic, aggregate,
-  integer-match, loop, and cross-crate collection/lowering frontiers explicit.
+  for fully monomorphized types. Separate bounded foundations now model
+  semantic constants/data relocations and manifest-driven scalar/slice packing,
+  but neither is a general rustc-to-artifact integration. Dedicated fixtures
+  make the current generic, const-generic, aggregate, integer-match, loop, and
+  cross-crate collection/lowering frontiers explicit; generic registered kernel
+  roots remain unsupported.
 - Versioned artifact manifests, ABI layouts, launch contracts, bounded
   containers, payload digests, native-kernel selection, and proof records have
   canonical encoders, decoders, and adversarial tests.
@@ -176,10 +181,13 @@ turn the foundations below into end-to-end features.
 - The G4 model includes capability tables for supported AMD targets, branded
   3D invocation and wave-lane witnesses, canonical Kernel IR for static and
   dynamic LDS, scoped atomics, fences, and convergence-bearing workgroup
-  barriers. The experimental AMD lowering emits LDS, fences, and workgroup
-  barriers and has produced real `gfx1151` and `gfx942` code objects. Scoped
-  atomic lowering, dynamic-LDS launch-byte plumbing, wave collectives, and
-  general source-to-IR integration remain fail-closed gaps.
+  barriers. The experimental AMD lowering emits LDS, scoped integer atomics,
+  fences, workgroup barriers, and explicit wave32/wave64 lane, ballot, vote,
+  and bounded shuffle operations. These paths have produced target-specific
+  code objects, and a branded dynamic-LDS API enforces bounded disjoint
+  typestates. Dynamic-LDS launch-byte plumbing, broad atomics and wave
+  collectives, GPU semantic execution, and general source-to-IR integration
+  remain fail-closed gaps.
 - `fe2o3-host` has a `PreparedLaunch<K>` geometry/resource checker and a
   `LoadedKernel<K>` authority that owns the exact HIP module and function and
   can bind only matching prepared launches. Argument admission reserves
@@ -201,14 +209,15 @@ turn the foundations below into end-to-end features.
   to compile execution.
 - `examples/regression-manifest-v1.txt` is the authoritative package/artifact
   inventory for ordinary checks, ROCm compilation, and GPU smoke tests.
-- The Verus vecadd and fill harnesses prove bounded source-model properties
-  under documented assumptions. The exact control, index, guarded memory
-  access, and write body of the production `f32` vecadd kernel is mechanically
-  shared with Verus through explicit thread and arithmetic adapters. Two
-  three positive harnesses and fifteen expected-rejection mutations run in the
-  required proof lane; the three real-body mutations additionally require one
-  exact primary diagnostic and failed source clause. Verus uses a total model
-  arithmetic adapter and does not prove that production IEEE `f32` addition,
+- The Verus vecadd, fill, active-wave, and LDS harnesses prove bounded
+  source-model properties under documented assumptions. The exact control,
+  index, guarded memory access, and write body of the production `f32` vecadd
+  kernel is mechanically shared with Verus through explicit thread and
+  arithmetic adapters. Positive harnesses and paired expected-rejection
+  mutations run in the required proof lane; the three real-body mutations
+  additionally require one exact primary diagnostic and failed source clause.
+  Verus uses a total model arithmetic adapter and does not prove that
+  production IEEE `f32` addition,
   compiler output, HSACO, or GPU execution refines that model. Proof-record
   matching rejects incomplete or mismatched identities, but the records remain
   synthetic evidence rather than authenticated compiler-refinement evidence.
@@ -216,9 +225,10 @@ turn the foundations below into end-to-end features.
   allocation provenance, bounds, injective writes, and deterministic proof
   obligations. Paired copy, gather, and affine elementwise bodies have positive
   and negative Verus harnesses. `fe2o3-verifier` canonicalizes bounded tool,
-  policy, invocation, and result records, but deliberately has no process
-  executor, Verus adapter, binary measurement, proof-record conversion, or
-  runtime authority.
+  policy, invocation, and result records, has a bounded shell-free process
+  executor, and can convert validated results into descriptive proof records.
+  It still has no reviewed Verus adapter, authenticated binary measurement,
+  compiler or machine-code refinement, or runtime authority.
 - G6/G7 foundations include canonical multi-input AMDGPU link plans, raw HIP
   cooperative-launch and peer-access bindings, and a V2 kernel descriptor that
   binds wave width, LDS limits, cooperative launch, synchronization, and atomic
@@ -267,15 +277,18 @@ turn the foundations below into end-to-end features.
   and sealed backend primitives are composed with the validated invocation.
   Rustc-descendant descriptor lifetime, dynamic loading, transitive shared
   libraries, and non-Linux execution remain unresolved.
-- General Rust language support, frontend-to-layout integration, scoped atomic
-  lowering, wave operations and collectives, direct LLVM device linking, safe
+- General Rust language support, frontend-to-layout integration, broad atomic
+  and wave collective support, direct LLVM device linking, safe
   cooperative/peer runtime APIs, executable sanitizer/debugger integration,
   GPU-backed differential testing, and authenticated Verus refinement remain
-  parity work. LDS, fences, and barriers exist only in the experimental Kernel
-  IR path and are not yet available from ordinary Rust kernels.
+  parity work. LDS, atomics, waves, fences, and barriers exist only in bounded
+  experimental paths and are not yet generally available from ordinary Rust
+  kernels.
 
 The current comparison with cuda-oxide is tracked in the
-[parity matrix](docs/cuda-oxide-parity-matrix.md). fe2o3 is not yet at parity.
+[parity matrix](docs/cuda-oxide-parity-matrix.md) and the generated
+[evidence dashboard](docs/generated/cuda-oxide-parity-dashboard.md). fe2o3 is
+not yet at parity.
 
 See [docs/implementation-plan.md](docs/implementation-plan.md) for the original
 compiler/runtime plan and
@@ -359,7 +372,13 @@ scripts/parity-evidence.sh collect \
   --rows rows.tsv --hardware-lane mi300x-gfx942-release > evidence.tsv
 scripts/parity-evidence.sh validate evidence.tsv
 scripts/tests/parity-evidence.sh
+scripts/parity-dashboard.sh check
+scripts/tests/parity-dashboard.sh
 ```
+
+`scripts/parity-dashboard.sh update` rewrites only the deterministic generated
+Markdown and TSV dashboard. The check rejects stale paths, missing claims,
+unsupported status upgrades, target/evidence mismatches, and generated drift.
 
 To build or run one package directly:
 
