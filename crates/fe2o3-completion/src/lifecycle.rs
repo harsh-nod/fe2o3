@@ -124,12 +124,22 @@ impl<R, E> OperationLifecycle<R, E> {
     }
 
     /// Records successful completion after the backend establishes quiescence.
-    pub fn complete(&mut self) -> Result<(), TransitionError> {
+    ///
+    /// # Safety
+    ///
+    /// The caller must have established that the GPU can no longer access any
+    /// retained resource. A successful transition permits safe reclamation.
+    pub unsafe fn complete(&mut self) -> Result<(), TransitionError> {
         self.transition_to(OperationState::Completed)
     }
 
     /// Records a device-operation failure after the backend establishes quiescence.
-    pub fn fail(&mut self, error: E) -> Result<(), TransitionError> {
+    ///
+    /// # Safety
+    ///
+    /// The caller must have established that the GPU can no longer access any
+    /// retained resource. A successful transition permits safe reclamation.
+    pub unsafe fn fail(&mut self, error: E) -> Result<(), TransitionError> {
         self.transition_to(OperationState::Failed(error))
     }
 
@@ -138,21 +148,31 @@ impl<R, E> OperationLifecycle<R, E> {
     /// The state becomes terminal before the callback runs. Therefore a
     /// callback error or panic cannot make resources in-flight again, and drop
     /// will still reclaim them exactly once.
-    pub fn complete_with_notification<C>(
+    ///
+    /// # Safety
+    ///
+    /// The caller must satisfy the quiescence requirement of [`Self::complete`].
+    pub unsafe fn complete_with_notification<C>(
         &mut self,
         notify: impl FnOnce(&OperationState<E>) -> Result<(), C>,
     ) -> Result<(), NotificationError<C>> {
-        self.complete().map_err(NotificationError::Transition)?;
+        // SAFETY: Required by this method's contract.
+        unsafe { self.complete() }.map_err(NotificationError::Transition)?;
         notify(&self.state).map_err(NotificationError::Callback)
     }
 
     /// Records a quiescent operation failure and invokes one notification.
-    pub fn fail_with_notification<C>(
+    ///
+    /// # Safety
+    ///
+    /// The caller must satisfy the quiescence requirement of [`Self::fail`].
+    pub unsafe fn fail_with_notification<C>(
         &mut self,
         error: E,
         notify: impl FnOnce(&OperationState<E>) -> Result<(), C>,
     ) -> Result<(), NotificationError<C>> {
-        self.fail(error).map_err(NotificationError::Transition)?;
+        // SAFETY: Required by this method's contract.
+        unsafe { self.fail(error) }.map_err(NotificationError::Transition)?;
         notify(&self.state).map_err(NotificationError::Callback)
     }
 

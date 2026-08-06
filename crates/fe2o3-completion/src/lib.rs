@@ -1,10 +1,11 @@
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 
 //! Completion policy for safe wrappers around asynchronous backend calls.
 //!
 //! This crate deliberately has no HIP dependency so failure and cleanup policy
 //! can be exercised on CPU-only CI runners.
 
+#[allow(unsafe_code)]
 mod lifecycle;
 
 pub use lifecycle::{
