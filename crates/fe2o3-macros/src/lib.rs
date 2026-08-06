@@ -236,6 +236,7 @@ fn expand_kernel(input: ItemFn, mode: KernelMode) -> syn::Result<proc_macro2::To
     expand_kernel_with_imports(input, mode, &device_import, host_import.as_ref())
 }
 
+#[cfg(test)]
 fn expand_kernel_with_device_import(
     input: ItemFn,
     device_import: &proc_macro2::TokenStream,
@@ -316,7 +317,7 @@ fn expand_kernel_with_imports(
                     unsafe impl __fe2o3_kernel_host::__generated::CompilerGeneratedKernelContractV1
                         for super::#type_marker_ident
                     {
-                        fn artifact_bytes() -> &'static [u8] {
+                        fn artifact_container_bytes() -> &'static [u8] {
                             let start_pointer =
                                 __fe2o3_kernel_sysroot_core::ptr::addr_of!(
                                     __FE2O3_ARTIFACT_START
@@ -834,7 +835,7 @@ mod tests {
         assert!(expansion.contains(
             "unsafe impl __fe2o3_kernel_host :: __generated :: CompilerGeneratedKernelContractV1"
         ));
-        assert!(expansion.contains("fn artifact_bytes () -> & 'static [u8]"));
+        assert!(expansion.contains("fn artifact_container_bytes () -> & 'static [u8]"));
         assert!(expansion.contains("checked_sub"));
         assert!(expansion.contains("length == 0"));
         assert!(expansion.contains("primitive :: isize :: MAX"));
