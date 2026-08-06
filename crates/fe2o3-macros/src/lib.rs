@@ -204,6 +204,8 @@ enum KernelMode {
     Typed,
 }
 
+const MAX_TYPED_KERNEL_SYMBOL_STEM_BYTES: usize = 128;
+
 fn parse_kernel_mode(attr: proc_macro2::TokenStream) -> syn::Result<KernelMode> {
     if attr.is_empty() {
         return Ok(KernelMode::Basic);
@@ -224,6 +226,7 @@ fn parse_kernel_mode(attr: proc_macro2::TokenStream) -> syn::Result<KernelMode> 
 fn expand_kernel(input: ItemFn, mode: KernelMode) -> syn::Result<proc_macro2::TokenStream> {
     if mode == KernelMode::Typed {
         validate_typed_kernel_signature(&input)?;
+        validate_typed_kernel_symbol_stem(&input.sig.ident)?;
     }
     validate_kernel_signature(&input)?;
 
@@ -253,6 +256,7 @@ fn expand_kernel_with_imports(
 ) -> syn::Result<proc_macro2::TokenStream> {
     if mode == KernelMode::Typed {
         validate_typed_kernel_signature(&input)?;
+        validate_typed_kernel_symbol_stem(&input.sig.ident)?;
     }
     validate_kernel_signature(&input)?;
 
@@ -295,28 +299,30 @@ fn expand_kernel_with_imports(
     let typed_module = if mode == KernelMode::Typed {
         let host_import = host_import.expect("typed expansion requires a host import");
         let module_ident = format_ident!("{original_name}_gpu");
-        let artifact_start_symbol = syn::LitStr::new(
-            &format!("__fe2o3_kernel_artifact_{original_name}_start"),
-            original_ident.span(),
-        );
-        let artifact_end_symbol = syn::LitStr::new(
-            &format!("__fe2o3_kernel_artifact_{original_name}_end"),
-            original_ident.span(),
-        );
+        let artifact_pointer_ident = format_ident!("__fe2o3_kernel_artifact_{original_name}_ptr");
+        let artifact_length_ident = format_ident!("__fe2o3_kernel_artifact_{original_name}_len");
 
         quote! {
             pub mod #module_ident {
                 unsafe extern "C" {
-                    #[link_name = #artifact_start_symbol]
-                    static __FE2O3_ARTIFACT_START: u8;
-                    #[link_name = #artifact_end_symbol]
-                    static __FE2O3_ARTIFACT_END: u8;
+                    fn #artifact_pointer_ident() -> *const u8;
+                    fn #artifact_length_ident() -> usize;
                 }
 
-                const _: () = {
-                    extern crate core as __fe2o3_kernel_sysroot_core;
-                    #host_import
+                #host_import
 
+                pub type Kernel =
+                    __fe2o3_kernel_host::__generated::GeneratedVecAddKernelV1<
+                        super::#type_marker_ident,
+                    >;
+                pub type Prepared<'loaded, 'allocation> =
+                    __fe2o3_kernel_host::__generated::GeneratedVecAddPreparedV1<
+                        'loaded,
+                        'allocation,
+                        super::#type_marker_ident,
+                    >;
+
+                const _: () = {
                     // SAFETY: the fe2o3 backend owns these reserved symbols and
                     // binds them to the artifact for this exact generated marker.
                     unsafe impl __fe2o3_kernel_host::__generated::CompilerGeneratedKernelContractV1
@@ -327,36 +333,13 @@ fn expand_kernel_with_imports(
                             __fe2o3_kernel_host::__generated::CompilerGeneratedKernelProfileV1::TypedVecAddF32V1;
 
                         fn artifact_container_bytes() -> &'static [u8] {
-                            let start_pointer =
-                                __fe2o3_kernel_sysroot_core::ptr::addr_of!(
-                                    __FE2O3_ARTIFACT_START
-                                );
-                            let end_pointer =
-                                __fe2o3_kernel_sysroot_core::ptr::addr_of!(
-                                    __FE2O3_ARTIFACT_END
-                                );
-                            let start_address = start_pointer.addr();
-                            let end_address = end_pointer.addr();
-                            let __fe2o3_kernel_sysroot_core::option::Option::Some(length) =
-                                end_address.checked_sub(start_address)
-                            else {
-                                return &[];
-                            };
-
-                            if length == 0
-                                || length
-                                    > __fe2o3_kernel_sysroot_core::primitive::isize::MAX as usize
-                            {
-                                return &[];
-                            }
-
-                            // SAFETY: the generated unsafe trait implementation
-                            // relies on the backend/linker contract that the ordered
-                            // symbols bound one contiguous immutable artifact.
+                            // SAFETY: the generated unsafe trait implementation relies
+                            // on the backend/linker contract that this accessor pair
+                            // returns one exact, immutable, program-lifetime artifact.
                             unsafe {
-                                __fe2o3_kernel_sysroot_core::slice::from_raw_parts(
-                                    start_pointer,
-                                    length,
+                                __fe2o3_kernel_host::__generated::artifact_bytes_from_backend_v1(
+                                    #artifact_pointer_ident(),
+                                    #artifact_length_ident(),
                                 )
                             }
                         }
@@ -471,6 +454,27 @@ fn host_import_for(found: FoundCrate) -> proc_macro2::TokenStream {
             let ident = format_ident!("{name}");
             quote!(extern crate #ident as __fe2o3_kernel_host;)
         }
+    }
+}
+
+fn validate_typed_kernel_symbol_stem(ident: &syn::Ident) -> syn::Result<()> {
+    let symbol_stem = ident.to_string();
+    let mut bytes = symbol_stem.bytes();
+    let valid = symbol_stem.len() <= MAX_TYPED_KERNEL_SYMBOL_STEM_BYTES
+        && bytes
+            .next()
+            .is_some_and(|byte| byte.is_ascii_alphabetic() || byte == b'_')
+        && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_');
+
+    if valid {
+        Ok(())
+    } else {
+        Err(syn::Error::new_spanned(
+            ident,
+            format!(
+                "#[kernel(typed)] kernel name must be 1 to {MAX_TYPED_KERNEL_SYMBOL_STEM_BYTES} ASCII identifier bytes for backend artifact symbols"
+            ),
+        ))
     }
 }
 
@@ -697,7 +701,7 @@ mod tests {
     use super::{
         KernelMode, core_import_for, device_import_for, expand_device_copy_with_core_import,
         expand_kernel_with_device_import, expand_kernel_with_imports, host_import_for,
-        parse_kernel_mode, validate_typed_kernel_signature,
+        parse_kernel_mode, validate_typed_kernel_signature, validate_typed_kernel_symbol_stem,
     };
     use proc_macro_crate::FoundCrate;
     use syn::{ItemFn, parse_quote};
@@ -841,9 +845,15 @@ mod tests {
         assert!(expansion.contains("pub mod vecadd_gpu"));
         assert!(expansion.contains("1u16 , 2u16"));
         assert!(!expansion.contains("1u16 , 1u16"));
-        assert!(expansion.contains("__fe2o3_kernel_artifact_vecadd_start"));
-        assert!(expansion.contains("__fe2o3_kernel_artifact_vecadd_end"));
+        assert!(expansion.contains("fn __fe2o3_kernel_artifact_vecadd_ptr () -> * const u8"));
+        assert!(expansion.contains("fn __fe2o3_kernel_artifact_vecadd_len () -> usize"));
         assert!(expansion.contains("extern crate gpu_host as __fe2o3_kernel_host"));
+        assert!(expansion.contains(
+            "pub type Kernel = __fe2o3_kernel_host :: __generated :: GeneratedVecAddKernelV1"
+        ));
+        assert!(expansion.contains(
+            "pub type Prepared < 'loaded , 'allocation > = __fe2o3_kernel_host :: __generated :: GeneratedVecAddPreparedV1"
+        ));
         assert!(expansion.contains(
             "unsafe impl __fe2o3_kernel_host :: __generated :: CompilerGeneratedKernelContractV1"
         ));
@@ -851,12 +861,51 @@ mod tests {
             "const PROFILE : __fe2o3_kernel_host :: __generated :: CompilerGeneratedKernelProfileV1 = __fe2o3_kernel_host :: __generated :: CompilerGeneratedKernelProfileV1 :: TypedVecAddF32V1"
         ));
         assert!(expansion.contains("fn artifact_container_bytes () -> & 'static [u8]"));
-        assert!(expansion.contains("checked_sub"));
-        assert!(expansion.contains("length == 0"));
-        assert!(expansion.contains("primitive :: isize :: MAX"));
-        assert!(expansion.contains("slice :: from_raw_parts"));
+        assert!(
+            expansion
+                .contains("__fe2o3_kernel_host :: __generated :: artifact_bytes_from_backend_v1")
+        );
+        assert!(!expansion.contains("artifact_vecadd_start"));
+        assert!(!expansion.contains("artifact_vecadd_end"));
+        assert!(!expansion.contains("from_raw_parts"));
+        assert!(!expansion.contains("checked_sub"));
         assert!(!expansion.contains("KernelParams"));
         assert!(!expansion.contains("launch_unchecked"));
+    }
+
+    #[test]
+    fn typed_kernel_symbol_stem_matches_the_backend_contract() {
+        let valid = parse_quote!(vecadd);
+        validate_typed_kernel_symbol_stem(&valid).unwrap();
+
+        let raw: syn::Ident = parse_quote!(r#type);
+        let unicode = syn::Ident::new("v\u{e9}cadd", proc_macro2::Span::call_site());
+        let long = syn::Ident::new(&"a".repeat(129), proc_macro2::Span::call_site());
+        let expected = "#[kernel(typed)] kernel name must be 1 to 128 ASCII identifier bytes for backend artifact symbols";
+
+        for rejected in [&raw, &unicode, &long] {
+            assert_eq!(
+                validate_typed_kernel_symbol_stem(rejected)
+                    .unwrap_err()
+                    .to_string(),
+                expected,
+            );
+        }
+    }
+
+    #[test]
+    fn basic_kernel_keeps_accepting_non_ascii_identifiers() {
+        let mut input: ItemFn = parse_quote! {
+            pub fn placeholder() {}
+        };
+        input.sig.ident = syn::Ident::new("v\u{e9}cadd", input.sig.ident.span());
+        let device_import = device_import_for(FoundCrate::Name("gpu_device".to_string()));
+
+        let expansion = expand_kernel_with_device_import(input, &device_import)
+            .unwrap()
+            .to_string();
+
+        assert!(expansion.contains("fe2o3_kernel_v\u{e9}cadd"));
     }
 
     #[test]
