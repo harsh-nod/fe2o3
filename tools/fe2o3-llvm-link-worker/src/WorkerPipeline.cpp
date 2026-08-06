@@ -405,7 +405,9 @@ Expected<std::unique_ptr<Module>> linkBitcode(const Request &RequestValue,
         return parseBitcodeFile(MemoryBufferRef(Bytes, InputName), Context,
                                 std::move(Callbacks));
       SMDiagnostic Diagnostic;
-      auto TextModule = parseAssemblyString(Bytes, Diagnostic, Context);
+      auto TextBuffer = MemoryBuffer::getMemBufferCopy(Bytes, InputName);
+      auto TextModule =
+          parseAssembly(TextBuffer->getMemBufferRef(), Diagnostic, Context);
       if (!TextModule) {
         std::string Message;
         raw_string_ostream Stream(Message);
@@ -588,7 +590,9 @@ Expected<SymbolContract> inspectModuleSymbols(const Input &InputValue,
     if (InputValue.Kind == InputKind::LlvmBitcode)
       return parseBitcodeFile(MemoryBufferRef(Bytes, InputName), Context);
     SMDiagnostic Diagnostic;
-    auto TextModule = parseAssemblyString(Bytes, Diagnostic, Context);
+    auto TextBuffer = MemoryBuffer::getMemBufferCopy(Bytes, InputName);
+    auto TextModule =
+        parseAssembly(TextBuffer->getMemBufferRef(), Diagnostic, Context);
     if (!TextModule) {
       std::string Message;
       raw_string_ostream Stream(Message);
