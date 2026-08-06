@@ -1146,9 +1146,8 @@ impl PinnedWorkerV1 {
 mod configured_v2_tests {
     use super::*;
     use crate::{
-        LinkInputKindClosureV1, LinkInputV1, LinkOptionV1, LinkOutputV1, MultiInputLinkPlanV1,
-        ProvenanceNodeV1, WorkerInputKindV1, WorkerInputV1, WorkerOutputConstraintsV1,
-        construct_worker_request_v2_from_consumed_handoff,
+        LinkOptionV1, WorkerInputKindV1, WorkerInputV1, WorkerOutputConstraintsV1,
+        execute_reproducible_first_build_worker_v2,
     };
     use fe2o3_artifact_transaction::{
         BuildInvocation, BuildSession, ProducerIdentity, begin_build_attempt,
@@ -1159,7 +1158,6 @@ mod configured_v2_tests {
         CompilerFfiEnvelopeBuilderV1, CompilerFfiLinkRoleV1, CompilerFfiSourceOwnerV1,
         CompilerModuleHandoffV1, CompilerModuleKindV1, DeviceTargetV1 as CompilerDeviceTargetV1,
     };
-    use fe2o3_kernel_descriptor::DeviceTargetV1;
     use reserved_fe2o3_symbols::{
         DEVICE_FFI_DIRECTION_EXPORT_V1, DEVICE_FFI_DIRECTION_IMPORT_V1, DeviceFfiContractFieldsV1,
         DeviceFfiDirectionV1, derive_device_ffi_contract_id_v1,
@@ -1244,49 +1242,6 @@ mod configured_v2_tests {
         .unwrap()
     }
 
-    fn link_plan(
-        compiler_module: &WorkerInputV1,
-        external_provider: &WorkerInputV1,
-        expected_output: &[u8],
-    ) -> (MultiInputLinkPlanV1, LinkInputKindClosureV1) {
-        let target = DeviceTargetV1::parse(TARGET).unwrap();
-        let mut inputs = [compiler_module.clone(), external_provider.clone()];
-        inputs.sort_by_key(|input| (input.identity(), input.kind()));
-        let link_inputs = inputs
-            .iter()
-            .map(|input| LinkInputV1::new(input.identity(), target))
-            .collect::<Vec<_>>();
-        let output_identity = ContentIdentityV1::calculate(expected_output);
-        let mut provenance = link_inputs
-            .iter()
-            .map(|input| ProvenanceNodeV1::new(input.identity(), vec![]).unwrap())
-            .collect::<Vec<_>>();
-        provenance.push(
-            ProvenanceNodeV1::new(
-                output_identity,
-                link_inputs.iter().map(|input| input.identity()).collect(),
-            )
-            .unwrap(),
-        );
-        let plan = MultiInputLinkPlanV1::canonicalized(
-            target,
-            link_inputs,
-            vec![
-                LinkOptionV1::new("code-object-version", "5").unwrap(),
-                LinkOptionV1::new("opt-level", "3").unwrap(),
-                LinkOptionV1::new("strip-debug", "true").unwrap(),
-                LinkOptionV1::new("verify-each", "true").unwrap(),
-            ],
-            LinkOutputV1::new(output_identity, target),
-            provenance,
-        )
-        .unwrap();
-        let kinds =
-            LinkInputKindClosureV1::new(&plan, inputs.iter().map(|input| input.kind()).collect())
-                .unwrap();
-        (plan, kinds)
-    }
-
     #[test]
     #[ignore = "requires the explicitly configured native LLVM/LLD worker"]
     fn configured_cpp_worker_v2_round_trip() {
@@ -1300,15 +1255,12 @@ mod configured_v2_tests {
         .unwrap();
         let pinned = PinnedWorkerV1::open(worker_path, measurement).unwrap();
         let module_bytes = fs::read(required_env("FE2O3_LLVM_V2_MODULE")).unwrap();
-        let compiler_module =
-            WorkerInputV1::new(WorkerInputKindV1::LlvmBitcode, module_bytes.clone()).unwrap();
         let external_provider = WorkerInputV1::new(
             WorkerInputKindV1::AmdGpuRelocatable,
             fs::read(required_env("FE2O3_LLVM_V2_PROVIDER")).unwrap(),
         )
         .unwrap();
         let expected_output = fs::read(required_env("FE2O3_LLVM_V2_EXPECTED_OUTPUT")).unwrap();
-        let (plan, input_kinds) = link_plan(&compiler_module, &external_provider, &expected_output);
 
         let mut envelope = CompilerFfiEnvelopeBuilderV1::new(
             CompilerDeviceTargetV1::parse(TARGET).unwrap(),
@@ -1362,44 +1314,39 @@ mod configured_v2_tests {
         .unwrap();
         let consumed =
             consume_compiler_module_handoff_v1(&directory.0, &producer, attempt).unwrap();
-        let request = construct_worker_request_v2_from_consumed_handoff(
-            &plan,
-            pinned.measurement(),
+        let evidence = execute_reproducible_first_build_worker_v2(
             consumed,
+            &pinned,
             vec![external_provider],
-            &input_kinds,
-            &["mixed_entry".to_owned(), "object_helper".to_owned()],
-            WorkerOutputConstraintsV1::new(expected_output.len() as u64).unwrap(),
+            vec!["mixed_entry".to_owned(), "object_helper".to_owned()],
+            vec![
+                LinkOptionV1::new("code-object-version", "5").unwrap(),
+                LinkOptionV1::new("opt-level", "3").unwrap(),
+                LinkOptionV1::new("strip-debug", "true").unwrap(),
+                LinkOptionV1::new("verify-each", "true").unwrap(),
+            ],
+            WorkerOutputConstraintsV1::new(4 * 1024 * 1024).unwrap(),
+            WorkerExecutionLimitsV1::new(
+                Duration::from_secs(120),
+                MAX_WORKER_RESPONSE_BYTES,
+                DEFAULT_WORKER_STDERR_BYTES,
+            )
+            .unwrap(),
         )
         .unwrap();
-        assert_eq!(request.attempt(), attempt);
-        assert_eq!(request.handoff_identity(), receipt.identity());
-        assert!(!request.grants_publication_authority());
-        assert!(!request.grants_load_authority());
-        assert!(!request.grants_launch_authority());
-
-        let execution = pinned
-            .execute_compiler_handoff_v2(
-                &request,
-                WorkerExecutionLimitsV1::new(
-                    Duration::from_secs(120),
-                    MAX_WORKER_RESPONSE_BYTES,
-                    DEFAULT_WORKER_STDERR_BYTES,
-                )
-                .unwrap(),
-            )
-            .unwrap();
-        let output = execution.response().output().unwrap();
-        assert_eq!(output.bytes(), expected_output);
-        assert!(execution.response().binds_request(request.sealed_request()));
-        assert_eq!(execution.attempt(), attempt);
-        assert_eq!(execution.handoff_identity(), receipt.identity());
+        assert_eq!(evidence.output_bytes(), expected_output);
+        assert_eq!(evidence.attempt(), attempt);
+        assert_eq!(evidence.handoff_identity(), receipt.identity());
         assert_eq!(
-            execution.evidence_class(),
+            evidence.candidate().evidence_class(),
+            WorkerEvidenceClassV1::GenericLink
+        );
+        assert_eq!(
+            evidence.authorized().evidence_class(),
             WorkerEvidenceClassV2::CompilerFfiLink
         );
-        assert!(!execution.grants_publication_authority());
-        assert!(!execution.grants_load_authority());
-        assert!(!execution.grants_launch_authority());
+        assert!(!evidence.grants_publication_authority());
+        assert!(!evidence.grants_load_authority());
+        assert!(!evidence.grants_launch_authority());
     }
 }
