@@ -415,6 +415,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-rustc-front"
+version = "0.1.0"
+
+[[package]]
 name = "fe2o3-rustc-invocation"
 version = "0.1.0"
 dependencies = [
