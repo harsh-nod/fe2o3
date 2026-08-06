@@ -666,6 +666,22 @@ class PolicyStateTests(unittest.TestCase):
         with self.assertRaisesRegex(EvidenceError, "closed"):
             store.observe()
 
+    def test_oversized_api_identities_and_nonce_are_rejected_before_validation(
+        self,
+    ) -> None:
+        oversized_policy = f"{POLICY_7}{'0' * 10_000}"
+        with mock.patch.object(policy_state, "require_typed_identity") as validator:
+            with (
+                self.store() as store,
+                self.assertRaisesRegex(EvidenceError, "bounded"),
+            ):
+                store.pin_policy(oversized_policy, 7)
+            validator.assert_not_called()
+        with self.assertRaisesRegex(EvidenceError, "exceeds 64"):
+            policy_state.require_campaign_nonce("a" * 10_000)
+        with self.assertRaisesRegex(EvidenceError, "bounded"):
+            policy_state.ReplayConsumptionV1("campaign-a", f"{CONTEXT_A}{'0' * 10_000}")
+
     def test_observations_are_explicitly_forgeable_data(self) -> None:
         state = policy_state.PolicyReplayStateV1(POLICY_7, 7, 1, ())
         forged = policy_state.LocalPolicyStateObservationV1(

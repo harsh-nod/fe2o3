@@ -155,7 +155,11 @@ def require_policy_epoch(value: object) -> int:
 
 
 def require_campaign_nonce(value: object) -> str:
-    if not isinstance(value, str) or _CAMPAIGN_NONCE_RE.fullmatch(value) is None:
+    if (
+        not isinstance(value, str)
+        or len(value) > 64
+        or _CAMPAIGN_NONCE_RE.fullmatch(value) is None
+    ):
         raise EvidenceError("campaign_nonce is malformed or exceeds 64 bytes")
     return value
 
@@ -167,7 +171,7 @@ class ReplayConsumptionV1:
 
     def __post_init__(self) -> None:
         require_campaign_nonce(self.campaign_nonce)
-        require_typed_identity(
+        _require_identity(
             self.build_context_identity,
             BUILD_CONTEXT_DOMAIN,
             "build_context_identity",
@@ -197,6 +201,8 @@ class ReplayConsumptionV1:
 def _require_identity(value: object, domain: str, name: str) -> str:
     if not isinstance(value, str):
         raise EvidenceError(f"{name} must be a string")
+    if len(value) != len(domain) + len("-sha256-") + 64:
+        raise EvidenceError(f"{name} must use one bounded {domain} identity")
     return require_typed_identity(value, domain, name)
 
 
@@ -208,7 +214,7 @@ class PolicyReplayStateV1:
     consumptions: tuple[ReplayConsumptionV1, ...]
 
     def __post_init__(self) -> None:
-        require_typed_identity(self.policy_identity, POLICY_DOMAIN, "policy_identity")
+        _require_identity(self.policy_identity, POLICY_DOMAIN, "policy_identity")
         require_policy_epoch(self.policy_epoch)
         _require_positive_bounded_integer(self.generation, "generation", MAX_GENERATION)
         if len(self.consumptions) > MAX_CONSUMPTIONS:
