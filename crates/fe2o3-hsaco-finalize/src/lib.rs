@@ -16,6 +16,14 @@ use fe2o3_kernel_descriptor::{
     decode_device_descriptor_table_v1,
 };
 
+mod link_plan;
+
+pub use link_plan::{
+    ContentIdentityV1, LinkInputV1, LinkOptionV1, LinkOutputV1, LinkPlanError, LinkPlanIdentityV1,
+    MAX_LINK_INPUTS, MAX_LINK_OPTION_NAME_BYTES, MAX_LINK_OPTION_VALUE_BYTES, MAX_LINK_OPTIONS,
+    MAX_LINK_PROVENANCE_EDGES, MAX_LINK_PROVENANCE_NODES, MultiInputLinkPlanV1, ProvenanceNodeV1,
+};
+
 /// The only ELF section name recognized for a canonical V1 descriptor table.
 pub const DEVICE_DESCRIPTOR_SECTION_NAME: &str = ".fe2o3.kd.v1";
 /// The exact required alignment of the descriptor section and its file offset.
