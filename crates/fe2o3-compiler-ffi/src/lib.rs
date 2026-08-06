@@ -13,6 +13,13 @@ use reserved_fe2o3_symbols::{
 };
 use sha2::{Digest, Sha256};
 
+mod module_handoff;
+
+pub use module_handoff::{
+    CompilerModuleHandoffErrorV1, CompilerModuleHandoffV1, CompilerModuleIdentityV1,
+    CompilerModuleKindV1, MAX_COMPILER_MODULE_BYTES_V1, MAX_COMPILER_MODULE_HANDOFF_BYTES_V1,
+};
+
 /// Maximum complete import/export contracts in one compiler observation.
 pub const MAX_COMPILER_FFI_CONTRACTS_V1: usize = 128;
 /// Maximum bytes in a source crate label.
