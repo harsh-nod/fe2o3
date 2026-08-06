@@ -1,4 +1,10 @@
+#![allow(
+    dead_code,
+    reason = "host-object generation remains dormant until the typed artifact producer is connected"
+)]
+
 use crate::{RocmToolchain, require_tool};
+use rustc_codegen_ssa::{CompiledModule, CompiledModules, ModuleKind};
 use std::fmt;
 use std::fs;
 use std::io::Write;
@@ -9,6 +15,7 @@ const SUPPORTED_HOST_TRIPLE: &str = "x86_64-unknown-linux-gnu";
 const ARTIFACT_ID_HEX_BYTES: usize = 64;
 const MAX_PAYLOAD_BYTES: usize = 4 * 1024 * 1024;
 const MAX_OBJECT_BYTES: usize = 8 * 1024 * 1024;
+const MAX_HOST_OBJECTS: usize = 256;
 const SYMBOL_PREFIX: &str = "__fe2o3_host_object_";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -44,6 +51,96 @@ impl GeneratedHostObject {
         }
         Ok(())
     }
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct GeneratedHostObjects {
+    objects: Vec<GeneratedHostObject>,
+}
+
+impl GeneratedHostObjects {
+    pub(crate) fn register(&mut self, object: GeneratedHostObject) -> Result<(), HostObjectError> {
+        if self.objects.len() >= MAX_HOST_OBJECTS {
+            return Err(HostObjectError::TooManyObjects);
+        }
+        object.validate_unchanged()?;
+        for existing in &self.objects {
+            if existing.path() == object.path() {
+                return Err(HostObjectError::DuplicateObjectPath(
+                    object.path().to_path_buf(),
+                ));
+            }
+            if symbols_collide(existing, &object) {
+                return Err(HostObjectError::SymbolCollision {
+                    first: existing.start_symbol().to_owned(),
+                    second: object.start_symbol().to_owned(),
+                });
+            }
+            if existing.module_name() == object.module_name() {
+                return Err(HostObjectError::ModuleNameCollision(
+                    object.module_name().to_owned(),
+                ));
+            }
+        }
+        self.objects.push(object);
+        Ok(())
+    }
+
+    pub(crate) fn append_to(
+        self,
+        compiled_modules: &mut CompiledModules,
+    ) -> Result<(), HostObjectError> {
+        if self.objects.is_empty() {
+            return Ok(());
+        }
+
+        for object in &self.objects {
+            object.validate_unchanged()?;
+            if compiled_modules
+                .modules
+                .iter()
+                .any(|module| module.name == object.module_name())
+            {
+                return Err(HostObjectError::ModuleNameCollision(
+                    object.module_name().to_owned(),
+                ));
+            }
+            if compiled_modules.modules.iter().any(|module| {
+                module.object.as_deref() == Some(object.path())
+                    || module.dwarf_object.as_deref() == Some(object.path())
+            }) {
+                return Err(HostObjectError::DuplicateObjectPath(
+                    object.path().to_path_buf(),
+                ));
+            }
+        }
+
+        let mut objects = self.objects;
+        objects.sort_by(|first, second| first.module_name.cmp(&second.module_name));
+        compiled_modules
+            .modules
+            .extend(objects.into_iter().map(|object| CompiledModule {
+                name: object.module_name,
+                kind: ModuleKind::Regular,
+                object: Some(object.path),
+                dwarf_object: None,
+                bytecode: None,
+                assembly: None,
+                llvm_ir: None,
+                links_from_incr_cache: Vec::new(),
+            }));
+        Ok(())
+    }
+}
+
+fn symbols_collide(first: &GeneratedHostObject, second: &GeneratedHostObject) -> bool {
+    [first.start_symbol(), first.end_symbol()]
+        .into_iter()
+        .any(|first_symbol| {
+            [second.start_symbol(), second.end_symbol()]
+                .into_iter()
+                .any(|second_symbol| first_symbol == second_symbol)
+        })
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -90,15 +187,21 @@ pub(crate) fn generate_host_object(
             source,
         })?;
 
-    child
+    let mut tool_stdin = child
         .stdin
         .take()
-        .ok_or_else(|| HostObjectError::ToolProtocol("llvm-mc stdin was unavailable".into()))?
-        .write_all(assembly.as_bytes())
-        .map_err(|source| HostObjectError::Io {
+        .ok_or_else(|| HostObjectError::ToolProtocol("llvm-mc stdin was unavailable".into()))?;
+    if let Err(source) = tool_stdin.write_all(assembly.as_bytes()) {
+        drop(tool_stdin);
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = fs::remove_file(output_path);
+        return Err(HostObjectError::Io {
             path: toolchain.llvm_mc.clone(),
             source,
-        })?;
+        });
+    }
+    drop(tool_stdin);
 
     let output = child
         .wait_with_output()
@@ -115,7 +218,13 @@ pub(crate) fn generate_host_object(
         });
     }
 
-    let exact_object = read_bounded_object(output_path)?.into_boxed_slice();
+    let exact_object = match read_bounded_object(output_path) {
+        Ok(exact_object) => exact_object.into_boxed_slice(),
+        Err(error) => {
+            let _ = fs::remove_file(output_path);
+            return Err(error);
+        }
+    };
     Ok(GeneratedHostObject {
         module_name,
         path: output_path.to_path_buf(),
@@ -231,7 +340,32 @@ fn read_bounded_object(path: &Path) -> Result<Vec<u8>, HostObjectError> {
     if bytes.len() != length {
         return Err(HostObjectError::ObjectChanged(path.to_path_buf()));
     }
+    validate_host_object_header(path, &bytes)?;
     Ok(bytes)
+}
+
+fn validate_host_object_header(path: &Path, bytes: &[u8]) -> Result<(), HostObjectError> {
+    const ELF64_HEADER_BYTES: usize = 64;
+    const ELF_MAGIC: &[u8; 4] = b"\x7fELF";
+    const ELFCLASS64: u8 = 2;
+    const ELFDATA2LSB: u8 = 1;
+    const EV_CURRENT: u8 = 1;
+    const ET_REL: [u8; 2] = 1_u16.to_le_bytes();
+    const EM_X86_64: [u8; 2] = 62_u16.to_le_bytes();
+    const EV_CURRENT_WORD: [u8; 4] = 1_u32.to_le_bytes();
+
+    let valid = bytes.len() >= ELF64_HEADER_BYTES
+        && bytes.get(0..4) == Some(ELF_MAGIC.as_slice())
+        && bytes[4] == ELFCLASS64
+        && bytes[5] == ELFDATA2LSB
+        && bytes[6] == EV_CURRENT
+        && bytes.get(16..18) == Some(ET_REL.as_slice())
+        && bytes.get(18..20) == Some(EM_X86_64.as_slice())
+        && bytes.get(20..24) == Some(EV_CURRENT_WORD.as_slice());
+    if !valid {
+        return Err(HostObjectError::UnsupportedObjectFormat(path.to_path_buf()));
+    }
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -250,6 +384,14 @@ pub(crate) enum HostObjectError {
         length: usize,
     },
     ObjectChanged(PathBuf),
+    UnsupportedObjectFormat(PathBuf),
+    TooManyObjects,
+    DuplicateObjectPath(PathBuf),
+    SymbolCollision {
+        first: String,
+        second: String,
+    },
+    ModuleNameCollision(String),
     ToolProtocol(String),
     ToolFailed {
         tool: PathBuf,
@@ -311,6 +453,28 @@ impl fmt::Display for HostObjectError {
                 "host object changed after generation: {}",
                 path.display()
             ),
+            Self::UnsupportedObjectFormat(path) => write!(
+                formatter,
+                "host object is not an x86-64 little-endian relocatable ELF file: {}",
+                path.display()
+            ),
+            Self::TooManyObjects => write!(
+                formatter,
+                "one crate may inject at most {MAX_HOST_OBJECTS} generated host objects"
+            ),
+            Self::DuplicateObjectPath(path) => write!(
+                formatter,
+                "generated host-object path was registered more than once: {}",
+                path.display()
+            ),
+            Self::SymbolCollision { first, second } => write!(
+                formatter,
+                "generated host-object symbols collide: {first} and {second}"
+            ),
+            Self::ModuleNameCollision(name) => write!(
+                formatter,
+                "generated host-object module name collides: {name}"
+            ),
             Self::ToolProtocol(reason) => {
                 write!(formatter, "host-object tool protocol failed: {reason}")
             }
@@ -365,22 +529,22 @@ mod tests {
         }
     }
 
-    fn test_toolchain() -> Option<HostObjectToolchain> {
-        [
-            PathBuf::from("/opt/rocm/lib/llvm/bin/llvm-mc"),
-            PathBuf::from("/usr/bin/llvm-mc"),
-        ]
-        .into_iter()
-        .find(|path| path.is_file())
-        .map(HostObjectToolchain::for_test)
+    fn test_toolchain() -> HostObjectToolchain {
+        let rocm = RocmToolchain::detect().expect("detect configured ROCm toolchain");
+        HostObjectToolchain::from_rocm(&rocm).expect("detect pinned ROCm llvm-mc")
+    }
+
+    fn empty_compiled_modules() -> CompiledModules {
+        CompiledModules {
+            modules: Vec::new(),
+            allocator_module: None,
+        }
     }
 
     #[test]
+    #[ignore = "requires the configured ROCm LLVM toolchain"]
     fn generates_deterministic_bounded_object() {
-        let Some(toolchain) = test_toolchain() else {
-            eprintln!("skipping: llvm-mc is unavailable");
-            return;
-        };
+        let toolchain = test_toolchain();
         let first_dir = TestDir::new();
         let second_dir = TestDir::new();
         let first = generate_host_object(
@@ -407,11 +571,9 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires the configured ROCm LLVM toolchain"]
     fn linked_symbols_bracket_exact_payload() {
-        let Some(toolchain) = test_toolchain() else {
-            eprintln!("skipping: llvm-mc is unavailable");
-            return;
-        };
+        let toolchain = test_toolchain();
         let directory = TestDir::new();
         let object = generate_host_object(
             &toolchain,
@@ -421,6 +583,19 @@ mod tests {
             PAYLOAD,
         )
         .expect("generate object");
+        let mut host_objects = GeneratedHostObjects::default();
+        host_objects
+            .register(object.clone())
+            .expect("register object");
+        let mut compiled_modules = empty_compiled_modules();
+        host_objects
+            .append_to(&mut compiled_modules)
+            .expect("append object");
+        let linked_path = compiled_modules.modules[0]
+            .object
+            .as_deref()
+            .expect("regular object path");
+        assert_eq!(compiled_modules.modules[0].kind, ModuleKind::Regular);
         let expected = PAYLOAD
             .iter()
             .map(u8::to_string)
@@ -455,7 +630,7 @@ fn main() {{
             .arg("-o")
             .arg(&executable_path)
             .arg("-C")
-            .arg(format!("link-arg={}", object.path().display()))
+            .arg(format!("link-arg={}", linked_path.display()))
             .output()
             .expect("run rustc");
         assert!(
@@ -496,11 +671,22 @@ fn main() {{
     }
 
     #[test]
+    fn rejects_failed_tool_without_retaining_partial_output() {
+        let directory = TestDir::new();
+        let output = directory.0.join("fixture.o");
+        let toolchain = HostObjectToolchain::for_test(PathBuf::from("/bin/false"));
+
+        assert!(matches!(
+            generate_host_object(&toolchain, SUPPORTED_HOST_TRIPLE, &output, ID, PAYLOAD),
+            Err(HostObjectError::ToolFailed { .. })
+        ));
+        assert!(!output.exists());
+    }
+
+    #[test]
+    #[ignore = "requires the configured ROCm LLVM toolchain"]
     fn detects_object_replacement() {
-        let Some(toolchain) = test_toolchain() else {
-            eprintln!("skipping: llvm-mc is unavailable");
-            return;
-        };
+        let toolchain = test_toolchain();
         let directory = TestDir::new();
         let object = generate_host_object(
             &toolchain,
@@ -510,11 +696,116 @@ fn main() {{
             PAYLOAD,
         )
         .expect("generate object");
-        fs::write(object.path(), b"replacement").expect("replace object");
+        let mut replacement = fs::read(object.path()).expect("read object");
+        let last = replacement.last_mut().expect("nonempty object");
+        *last ^= 1;
+        fs::write(object.path(), replacement).expect("replace object");
 
         assert!(matches!(
             object.validate_unchanged(),
             Err(HostObjectError::ObjectChanged(_))
         ));
+    }
+
+    #[test]
+    #[ignore = "requires the configured ROCm LLVM toolchain"]
+    fn rejects_duplicate_paths_and_symbol_ranges() {
+        let toolchain = test_toolchain();
+        let first_dir = TestDir::new();
+        let second_dir = TestDir::new();
+        let first = generate_host_object(
+            &toolchain,
+            SUPPORTED_HOST_TRIPLE,
+            &first_dir.0.join("fixture.o"),
+            ID,
+            PAYLOAD,
+        )
+        .expect("generate first object");
+        let second = generate_host_object(
+            &toolchain,
+            SUPPORTED_HOST_TRIPLE,
+            &second_dir.0.join("fixture.o"),
+            ID,
+            b"different synthetic payload",
+        )
+        .expect("generate second object");
+
+        let mut duplicate_path = GeneratedHostObjects::default();
+        duplicate_path
+            .register(first.clone())
+            .expect("first registration");
+        assert!(matches!(
+            duplicate_path.register(first),
+            Err(HostObjectError::DuplicateObjectPath(_))
+        ));
+
+        let mut duplicate_symbols = GeneratedHostObjects::default();
+        duplicate_symbols
+            .register(second)
+            .expect("second registration");
+        let first_again = generate_host_object(
+            &toolchain,
+            SUPPORTED_HOST_TRIPLE,
+            &first_dir.0.join("fixture-again.o"),
+            ID,
+            PAYLOAD,
+        )
+        .expect("generate alternate path");
+        assert!(matches!(
+            duplicate_symbols.register(first_again),
+            Err(HostObjectError::SymbolCollision { .. })
+        ));
+    }
+
+    #[test]
+    #[ignore = "requires the configured ROCm LLVM toolchain"]
+    fn rejects_missing_registered_object() {
+        let toolchain = test_toolchain();
+        let directory = TestDir::new();
+        let object = generate_host_object(
+            &toolchain,
+            SUPPORTED_HOST_TRIPLE,
+            &directory.0.join("fixture.o"),
+            ID,
+            PAYLOAD,
+        )
+        .expect("generate object");
+        let mut host_objects = GeneratedHostObjects::default();
+        host_objects
+            .register(object.clone())
+            .expect("register object");
+        fs::remove_file(object.path()).expect("remove object");
+
+        assert!(matches!(
+            host_objects.append_to(&mut empty_compiled_modules()),
+            Err(HostObjectError::Io { .. })
+        ));
+    }
+
+    #[test]
+    fn empty_registry_leaves_ordinary_modules_untouched() {
+        let missing_path = PathBuf::from("/missing/ordinary-module.o");
+        let mut compiled_modules = CompiledModules {
+            modules: vec![CompiledModule {
+                name: "ordinary".to_owned(),
+                kind: ModuleKind::Regular,
+                object: Some(missing_path.clone()),
+                dwarf_object: None,
+                bytecode: None,
+                assembly: None,
+                llvm_ir: None,
+                links_from_incr_cache: Vec::new(),
+            }],
+            allocator_module: None,
+        };
+
+        GeneratedHostObjects::default()
+            .append_to(&mut compiled_modules)
+            .expect("empty registry is a no-op");
+        assert_eq!(compiled_modules.modules.len(), 1);
+        assert_eq!(
+            compiled_modules.modules[0].object.as_ref(),
+            Some(&missing_path)
+        );
     }
 }

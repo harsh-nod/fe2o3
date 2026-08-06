@@ -50,6 +50,11 @@ pub struct Fe2o3CodegenBackend {
     llvm_backend: Box<dyn CodegenBackend>,
 }
 
+struct OngoingFe2o3Codegen {
+    llvm_codegen: Box<dyn Any>,
+    host_objects: host_object::GeneratedHostObjects,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CodegenPipeline {
     LegacyV1,
@@ -290,7 +295,11 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                 }
             }
 
-            self.llvm_backend.codegen_crate(tcx, crate_info)
+            let llvm_codegen = self.llvm_backend.codegen_crate(tcx, crate_info);
+            Box::new(OngoingFe2o3Codegen {
+                llvm_codegen,
+                host_objects: host_object::GeneratedHostObjects::default(),
+            }) as Box<dyn Any>
         })
     }
 
@@ -300,8 +309,24 @@ impl CodegenBackend for Fe2o3CodegenBackend {
         sess: &Session,
         outputs: &OutputFilenames,
     ) -> (CompiledModules, FxIndexMap<WorkProductId, WorkProduct>) {
-        self.llvm_backend
-            .join_codegen(ongoing_codegen, sess, outputs)
+        let ongoing_codegen = match ongoing_codegen.downcast::<OngoingFe2o3Codegen>() {
+            Ok(ongoing_codegen) => *ongoing_codegen,
+            Err(_) => sess.dcx().fatal(
+                "[rustc-codegen-fe2o3] internal error: ongoing codegen state had the wrong type",
+            ),
+        };
+        let (mut compiled_modules, work_products) =
+            self.llvm_backend
+                .join_codegen(ongoing_codegen.llvm_codegen, sess, outputs);
+        if let Err(error) = ongoing_codegen
+            .host_objects
+            .append_to(&mut compiled_modules)
+        {
+            sess.dcx().fatal(format!(
+                "[rustc-codegen-fe2o3] generated host-object injection failed: {error}"
+            ));
+        }
+        (compiled_modules, work_products)
     }
 
     fn link(
