@@ -2,10 +2,10 @@ use fe2o3_host::{GeneratedAdmittedLaunch, KernelParams, LoadedArgumentAdmittedLa
 
 struct Kernel;
 
-fn forge<'loaded, 'allocation, 'params>(
+fn forge<'loaded, 'allocation>(
     admitted: LoadedArgumentAdmittedLaunch<'loaded, 'allocation, Kernel>,
-    params: &'params mut KernelParams,
-) -> GeneratedAdmittedLaunch<'loaded, 'allocation, 'params, Kernel, ()> {
+    params: KernelParams,
+) -> GeneratedAdmittedLaunch<'loaded, 'allocation, Kernel, ()> {
     GeneratedAdmittedLaunch {
         admitted,
         params,

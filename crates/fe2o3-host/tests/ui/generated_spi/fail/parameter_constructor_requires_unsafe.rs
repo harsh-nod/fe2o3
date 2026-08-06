@@ -4,7 +4,7 @@ struct Kernel;
 
 fn pair(
     admitted: LoadedArgumentAdmittedLaunch<'_, '_, Kernel>,
-    params: &mut KernelParams,
+    params: KernelParams,
 ) {
     let _ = GeneratedAdmittedLaunch::from_generated_unchecked(admitted, params, ());
 }

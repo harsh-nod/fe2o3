@@ -38,18 +38,16 @@ type VecAddResources<'allocation> = (
     GeneratedWriteDeviceSlice<'allocation, u32>,
 );
 
-unsafe fn assemble_generated_launch<'loaded, 'allocation, 'params>(
+unsafe fn assemble_generated_launch<'loaded, 'allocation>(
     loaded: &'loaded LoadedKernel<GeneratedMarker>,
     observed: &ObservedContext,
     prepared: PreparedLaunch<GeneratedMarker>,
     input: &'allocation DeviceBuffer<u32>,
     output: &'allocation mut DeviceBuffer<u32>,
-    params: &'params mut KernelParams,
 ) -> Result<
     GeneratedAdmittedLaunch<
         'loaded,
         'allocation,
-        'params,
         GeneratedMarker,
         VecAddResources<'allocation>,
     >,
@@ -58,8 +56,9 @@ unsafe fn assemble_generated_launch<'loaded, 'allocation, 'params>(
     let input = GeneratedReadDeviceSlice::new(observed, input)?;
     let output = GeneratedWriteDeviceSlice::new(observed, output)?;
 
-    input.push_pointer_and_len(params);
-    output.push_pointer_and_len(params);
+    let mut params = KernelParams::new();
+    input.push_pointer_and_len(&mut params);
+    output.push_pointer_and_len(&mut params);
 
     let admitted = prepared.admit_arguments([input.argument_access(), output.argument_access()])?;
     let admitted = loaded.bind_admitted(admitted)?;
@@ -70,7 +69,14 @@ unsafe fn assemble_generated_launch<'loaded, 'allocation, 'params>(
 }
 
 fn launch_paired(
-    paired: GeneratedAdmittedLaunch<'_, '_, '_, GeneratedMarker, VecAddResources<'_>>,
+    paired: GeneratedAdmittedLaunch<'_, '_, GeneratedMarker, VecAddResources<'_>>,
+    stream: &Stream,
+) -> Result<(), fe2o3_host::LoadedLaunchError> {
+    paired.launch_generated(stream)
+}
+
+fn launch_paired_scoped(
+    paired: GeneratedAdmittedLaunch<'_, '_, GeneratedMarker, VecAddResources<'_>>,
     stream: &Stream,
 ) -> Result<(), fe2o3_host::LoadedLaunchError> {
     paired.launch_generated_scoped(stream, |_| {})

@@ -340,15 +340,13 @@ pub struct LoadedArgumentAdmittedLaunch<'loaded, 'allocation, K> {
 /// replaced through safe code. The complete value is retained through HIP
 /// quiescence when launched.
 #[doc(hidden)]
-pub struct GeneratedAdmittedLaunch<'loaded, 'allocation, 'params, K, R> {
+pub struct GeneratedAdmittedLaunch<'loaded, 'allocation, K, R> {
     admitted: LoadedArgumentAdmittedLaunch<'loaded, 'allocation, K>,
-    params: &'params mut KernelParams,
+    params: KernelParams,
     resources: R,
 }
 
-impl<'loaded, 'allocation, 'params, K, R>
-    GeneratedAdmittedLaunch<'loaded, 'allocation, 'params, K, R>
-{
+impl<'loaded, 'allocation, K, R> GeneratedAdmittedLaunch<'loaded, 'allocation, K, R> {
     /// Permanently pairs one loaded admission with its generated ABI and typed
     /// resource capability pack.
     ///
@@ -364,7 +362,7 @@ impl<'loaded, 'allocation, 'params, K, R>
     /// may invoke this constructor.
     pub unsafe fn from_generated_unchecked(
         admitted: LoadedArgumentAdmittedLaunch<'loaded, 'allocation, K>,
-        params: &'params mut KernelParams,
+        params: KernelParams,
         resources: R,
     ) -> Self {
         Self {
@@ -372,6 +370,13 @@ impl<'loaded, 'allocation, 'params, K, R>
             params,
             resources,
         }
+    }
+
+    /// Enqueues this sealed association and waits until HIP establishes
+    /// completion before releasing its parameters or typed resources.
+    #[doc(hidden)]
+    pub fn launch_generated(self, stream: &Stream) -> Result<(), LoadedLaunchError> {
+        self.launch_generated_scoped(stream, |_| ())
     }
 
     /// Enqueues this sealed admission/parameter/resource association and
@@ -407,7 +412,7 @@ impl<'loaded, 'allocation, 'params, K, R>
                         paired.admitted.loaded.function(),
                         config,
                         stream,
-                        paired.params,
+                        &mut paired.params,
                     )
                 },
                 during,
