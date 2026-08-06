@@ -71,13 +71,31 @@ V1 limits a unit to 4 MiB, 4096 functions, 131072 blocks in total, 65535
 blocks per function, 128 parameters per function, 256 successors per block,
 and 512 UTF-8 bytes per diagnostic name.
 
+## rustc producer
+
+`rustc-codegen-fe2o3` contains a fail-closed producer for this wire format. It
+reads collected `Instance` and optimized MIR data from the active `TyCtxt`,
+requires ordinary fully monomorphized items with available MIR, and records
+instantiated signatures, definition and block source locations, dense MIR
+block IDs, and canonical successor sets. Before later backend stages consume
+the record, the producer encodes and decodes it through this crate and requires
+an identical canonical model.
+
+Producer identities are domain-separated SHA-256 digests. Function identities
+bind rustc's monomorphized symbol, type identities bind the normalized
+untrimmed Rust type, and source-file identities bind the remapped source name.
+They are deterministic for the same bound rustc inputs; they are not claimed
+to be compiler-version-independent semantic identities. Tool and invocation
+identity must be bound separately when records become durable evidence.
+
 ## Trust boundary and non-goals
 
 This crate validates structure and canonical representation only. In
 particular, it does **not**:
 
 - collect MIR or prove that a record came from rustc;
-- define how stable function, type, or source-file identities are derived;
+- authenticate the rustc producer's function, type, or source-file identity
+  derivations, or require other producers to use those derivations;
 - prove that a function was monomorphized, that helpers are reachable from a
   kernel, or that names and source locations are truthful;
 - encode MIR statements, terminators, edge conditions, call sites, constants,

@@ -15,6 +15,7 @@ extern crate rustc_span;
 
 mod amdgpu_llvm;
 mod collector;
+mod frontend_record_bridge;
 mod host_object;
 mod kernel_ir_codegen;
 mod kernel_ir_lowering;
@@ -302,6 +303,18 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                                 reason: error.to_string(),
                             },
                         )?;
+                        let frontend_record =
+                            frontend_record_bridge::extract_frontend_record_v1(tcx, &collection)
+                                .map_err(|error| amdgpu_llvm::EmitError::Preflight {
+                                    reason: format!("frontend record extraction failed: {error}"),
+                                })?;
+                        if self.config.verbose {
+                            eprintln!(
+                                "[rustc-codegen-fe2o3] validated frontend record: {} function(s), {} canonical byte(s)",
+                                frontend_record.unit().functions().len(),
+                                frontend_record.canonical_bytes().len()
+                            );
+                        }
                         collector::dump_device_functions(tcx, &collection.functions);
                         let mir_module = mir_import::import_collection(tcx, &collection);
                         match codegen_pipeline.resolve()? {
