@@ -5,6 +5,7 @@ mod inspect;
 mod tool_commands;
 
 use std::env;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
@@ -13,6 +14,7 @@ const BACKEND_ENV: &str = "FE2O3_BACKEND";
 const HSACO_DIR_ENV: &str = "FE2O3_HSACO_DIR";
 const DEFAULT_TARGET: &str = "gfx1100";
 const BINDING_WRAPPER_MODE_ENV: &str = "FE2O3_BINDING_WRAPPER_MODE_V1";
+const BUILD_SESSION_ENV: &str = "FE2O3_BUILD_SESSION_V1";
 
 fn main() -> ExitCode {
     if env::var_os(BINDING_WRAPPER_MODE_ENV).is_some() {
@@ -222,6 +224,7 @@ struct BackendRunContext {
     artifact_dir: PathBuf,
     rustflags: String,
     binding_wrapper: PathBuf,
+    build_session: fe2o3_artifact_transaction::BuildSession,
 }
 
 impl BackendRunContext {
@@ -242,6 +245,7 @@ impl BackendRunContext {
         ]);
         let binding_wrapper = env::current_exe()
             .map_err(|error| format!("failed to locate cargo-fe2o3 executable: {error}"))?;
+        let build_session = random_build_session()?;
 
         Ok(Self {
             target,
@@ -250,6 +254,7 @@ impl BackendRunContext {
             artifact_dir,
             rustflags,
             binding_wrapper,
+            build_session,
         })
     }
 }
@@ -275,6 +280,7 @@ fn run_cargo_with_backend(
         .env("FE2O3_HOST_PASSTHROUGH", "0")
         .env("RUSTC_WORKSPACE_WRAPPER", &context.binding_wrapper)
         .env(BINDING_WRAPPER_MODE_ENV, "1")
+        .env(BUILD_SESSION_ENV, context.build_session.to_hex())
         .status();
 
     match status {
@@ -282,6 +288,20 @@ fn run_cargo_with_backend(
         Ok(status) => Err(format!("cargo {command} failed with status {status}")),
         Err(error) => Err(format!("failed to run cargo: {error}")),
     }
+}
+
+fn random_build_session() -> Result<fe2o3_artifact_transaction::BuildSession, String> {
+    for _ in 0..8 {
+        let mut bytes = [0_u8; 16];
+        std::fs::File::open("/dev/urandom")
+            .and_then(|mut source| source.read_exact(&mut bytes))
+            .map_err(|error| format!("failed to obtain a build-session nonce: {error}"))?;
+        let session = fe2o3_artifact_transaction::BuildSession::from_bytes(bytes);
+        if session != fe2o3_artifact_transaction::BuildSession::DIRECT {
+            return Ok(session);
+        }
+    }
+    Err("failed to obtain a nonzero build-session nonce".to_string())
 }
 
 fn reject_preexisting_rustc_wrappers() -> Result<(), String> {

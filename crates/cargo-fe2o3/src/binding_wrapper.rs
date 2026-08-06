@@ -1,17 +1,45 @@
 use std::error::Error;
 use std::ffi::{OsStr, OsString};
 use std::fmt;
+use std::path::PathBuf;
 use std::process::{Command, ExitStatus};
 
-use fe2o3_rustc_invocation::{RustcArgsErrorV2, RustcInvocationV2, classify_rustc_invocation_v2};
+use fe2o3_artifact_transaction::{
+    BuildAttempt, BuildInvocation, BuildSession, EmitError, ProducerIdentity, begin_build_attempt,
+    fail_build_attempt, finish_build_attempt,
+};
+use fe2o3_rustc_invocation::{
+    RustcArgsErrorV2, RustcCompileInvocationV2, RustcInvocationV2, classify_rustc_invocation_v2,
+};
 use reserved_fe2o3_symbols::{CRATE_BINDING_ID_ENV_V1, derive_crate_binding_id_v1};
+use sha2::{Digest, Sha256};
+
+const HSACO_DIR_ENV: &str = "FE2O3_HSACO_DIR";
+const TARGET_ENV: &str = "FE2O3_TARGET";
+const BUILD_SESSION_ENV: &str = "FE2O3_BUILD_SESSION_V1";
+const BUILD_ATTEMPT_ENV: &str = "FE2O3_BUILD_ATTEMPT_V1";
+const BUILD_INVOCATION_DOMAIN: &[u8] = b"FE2O3/BUILD-INVOCATION/V1\0";
 
 #[derive(Debug)]
 pub(crate) enum BindingWrapperError {
     Arguments(RustcArgsErrorV2),
-    MissingMetadata { crate_name: String },
-    InvalidCodegenOption { argument_index: usize },
-    EmptyMetadata { argument_index: usize },
+    MissingMetadata {
+        crate_name: String,
+    },
+    InvalidCodegenOption {
+        argument_index: usize,
+    },
+    EmptyMetadata {
+        argument_index: usize,
+    },
+    MissingManagedEnvironment(&'static str),
+    InvalidBuildSession,
+    CurrentDirectory(std::io::Error),
+    Artifact(EmitError),
+    AttemptTermination {
+        rustc_status: ExitStatus,
+        cleanup: EmitError,
+    },
     UnsupportedInvocation,
     Spawn(std::io::Error),
 }
@@ -32,6 +60,25 @@ impl fmt::Display for BindingWrapperError {
                 formatter,
                 "rustc metadata value at argv[{argument_index}] is empty"
             ),
+            Self::MissingManagedEnvironment(name) => {
+                write!(formatter, "managed rustc invocation is missing {name}")
+            }
+            Self::InvalidBuildSession => formatter
+                .write_str("managed rustc invocation has a noncanonical or reserved build session"),
+            Self::CurrentDirectory(error) => {
+                write!(
+                    formatter,
+                    "failed to resolve rustc working directory: {error}"
+                )
+            }
+            Self::Artifact(error) => write!(formatter, "artifact build attempt failed: {error}"),
+            Self::AttemptTermination {
+                rustc_status,
+                cleanup,
+            } => write!(
+                formatter,
+                "rustc exited with {rustc_status}, and build-attempt invalidation failed: {cleanup}"
+            ),
             Self::UnsupportedInvocation => {
                 formatter.write_str("unsupported future rustc invocation classification")
             }
@@ -45,9 +92,14 @@ impl Error for BindingWrapperError {
         match self {
             Self::Arguments(error) => Some(error),
             Self::Spawn(error) => Some(error),
+            Self::CurrentDirectory(error) => Some(error),
+            Self::Artifact(error) => Some(error),
+            Self::AttemptTermination { cleanup, .. } => Some(cleanup),
             Self::MissingMetadata { .. }
             | Self::InvalidCodegenOption { .. }
             | Self::EmptyMetadata { .. }
+            | Self::MissingManagedEnvironment(_)
+            | Self::InvalidBuildSession
             | Self::UnsupportedInvocation => None,
         }
     }
@@ -70,7 +122,7 @@ pub(crate) fn run(argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperError
         }
         Err(error) => return Err(error.into()),
     };
-    let crate_binding = match invocation {
+    let (crate_binding, managed_attempt) = match invocation {
         RustcInvocationV2::Compile(compile) => {
             let metadata = ordered_metadata_values(compile.argv())?;
             if metadata.is_empty() {
@@ -78,12 +130,14 @@ pub(crate) fn run(argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperError
                     crate_name: compile.crate_name().to_owned(),
                 });
             }
-            Some(derive_crate_binding_id_v1(
+            let binding = derive_crate_binding_id_v1(
                 compile.crate_name(),
                 metadata.iter().map(String::as_str),
-            ))
+            );
+            let attempt = prepare_managed_attempt(compile)?;
+            (Some(binding), Some(attempt))
         }
-        RustcInvocationV2::Terminal(_) | RustcInvocationV2::Query(_) => None,
+        RustcInvocationV2::Terminal(_) | RustcInvocationV2::Query(_) => (None, None),
         _ => return Err(BindingWrapperError::UnsupportedInvocation),
     };
 
@@ -94,7 +148,102 @@ pub(crate) fn run(argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperError
     } else {
         command.env_remove(CRATE_BINDING_ID_ENV_V1);
     }
-    command.status().map_err(BindingWrapperError::Spawn)
+    if let Some(managed) = &managed_attempt {
+        command.env(BUILD_ATTEMPT_ENV, managed.attempt.to_env_value());
+    } else {
+        command.env_remove(BUILD_ATTEMPT_ENV);
+    }
+    let status = match command.status() {
+        Ok(status) => status,
+        Err(error) => {
+            if let Some(managed) = managed_attempt {
+                fail_build_attempt(&managed.output_dir, &managed.producer, managed.attempt)
+                    .map_err(BindingWrapperError::Artifact)?;
+            }
+            return Err(BindingWrapperError::Spawn(error));
+        }
+    };
+    if let Some(managed) = managed_attempt {
+        if status.success() {
+            finish_build_attempt(&managed.output_dir, &managed.producer, managed.attempt)
+                .map_err(BindingWrapperError::Artifact)?;
+        } else if let Err(cleanup) =
+            fail_build_attempt(&managed.output_dir, &managed.producer, managed.attempt)
+        {
+            return Err(BindingWrapperError::AttemptTermination {
+                rustc_status: status,
+                cleanup,
+            });
+        }
+    }
+    Ok(status)
+}
+
+struct ManagedAttempt {
+    output_dir: PathBuf,
+    producer: ProducerIdentity,
+    attempt: BuildAttempt,
+}
+
+fn prepare_managed_attempt(
+    compile: RustcCompileInvocationV2<'_>,
+) -> Result<ManagedAttempt, BindingWrapperError> {
+    let output_dir = std::env::var_os(HSACO_DIR_ENV)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .ok_or(BindingWrapperError::MissingManagedEnvironment(
+            HSACO_DIR_ENV,
+        ))?;
+    let session = std::env::var(BUILD_SESSION_ENV)
+        .ok()
+        .and_then(|value| BuildSession::from_hex(&value).ok())
+        .filter(|session| *session != BuildSession::DIRECT)
+        .ok_or(BindingWrapperError::InvalidBuildSession)?;
+    let producer =
+        ProducerIdentity::from_codegen(compile.crate_name(), Some(compile.source_path()))
+            .map_err(BindingWrapperError::Artifact)?;
+    let invocation = derive_build_invocation(compile.argv())?;
+    let attempt = begin_build_attempt(&output_dir, &producer, invocation, session)
+        .map_err(BindingWrapperError::Artifact)?;
+    Ok(ManagedAttempt {
+        output_dir,
+        producer,
+        attempt,
+    })
+}
+
+fn derive_build_invocation(argv: &[OsString]) -> Result<BuildInvocation, BindingWrapperError> {
+    let current_dir = std::env::current_dir().map_err(BindingWrapperError::CurrentDirectory)?;
+    let mut digest = Sha256::new();
+    digest.update(BUILD_INVOCATION_DOMAIN);
+    hash_os(&mut digest, current_dir.as_os_str());
+    hash_os(
+        &mut digest,
+        std::env::var_os(TARGET_ENV).as_deref().unwrap_or_default(),
+    );
+    hash_os(
+        &mut digest,
+        std::env::var_os(HSACO_DIR_ENV)
+            .as_deref()
+            .unwrap_or_default(),
+    );
+    digest.update((argv.len() as u64).to_le_bytes());
+    for argument in argv {
+        hash_os(&mut digest, argument);
+    }
+    Ok(BuildInvocation::from_bytes(digest.finalize().into()))
+}
+
+fn hash_os(digest: &mut Sha256, value: &OsStr) {
+    #[cfg(unix)]
+    let bytes = {
+        use std::os::unix::ffi::OsStrExt;
+        value.as_bytes()
+    };
+    #[cfg(not(unix))]
+    let bytes = value.to_str().unwrap_or_default().as_bytes();
+    digest.update((bytes.len() as u64).to_le_bytes());
+    digest.update(bytes);
 }
 
 fn is_cargo_stdin_probe(argv: &[OsString]) -> bool {
@@ -169,7 +318,9 @@ pub(crate) fn exit_code(status: ExitStatus) -> u8 {
 
 #[cfg(test)]
 mod tests {
-    use super::{BindingWrapperError, is_cargo_stdin_probe, ordered_metadata_values};
+    use super::{
+        BindingWrapperError, derive_build_invocation, is_cargo_stdin_probe, ordered_metadata_values,
+    };
     use reserved_fe2o3_symbols::derive_crate_binding_id_v1;
     use std::ffi::OsString;
 
@@ -244,5 +395,19 @@ mod tests {
             "--crate-name",
             "real_compile",
         ])));
+    }
+
+    #[test]
+    fn invocation_identity_is_deterministic_and_argument_order_sensitive() {
+        let first = args(&["rustc", "--crate-name", "unit", "unit.rs"]);
+        let second = args(&["rustc", "unit.rs", "--crate-name", "unit"]);
+        assert_eq!(
+            derive_build_invocation(&first).unwrap(),
+            derive_build_invocation(&first).unwrap()
+        );
+        assert_ne!(
+            derive_build_invocation(&first).unwrap(),
+            derive_build_invocation(&second).unwrap()
+        );
     }
 }

@@ -7,10 +7,12 @@ use crate::record_lowering::{
 use crate::trusted_device_items::{self, TrustedDeviceItem};
 use crate::{AmdGpuTarget, compile_llvm_ir_to_hsaco};
 use dialect_mir::MirOp;
-pub use fe2o3_artifact_transaction::{DeviceArtifact, EmitError};
 use fe2o3_artifact_transaction::{
-    ProducerIdentity, emit_artifact_transaction, emit_artifact_transaction_after_preflight,
+    BuildAttempt, ProducerIdentity, emit_artifact_transaction,
+    emit_artifact_transaction_after_preflight,
+    emit_artifact_transaction_after_preflight_for_attempt, emit_artifact_transaction_for_attempt,
 };
+pub use fe2o3_artifact_transaction::{DeviceArtifact, EmitError};
 use rustc_middle::mir::{
     BinOp, Body, ConstOperand, Local, Operand, Place, ProjectionElem, Rvalue, StatementKind,
     TerminatorKind, UnOp, VarDebugInfoContents,
@@ -28,39 +30,65 @@ pub fn emit_collection<'tcx>(
     lowering_plan: Option<&RecordLoweringPlan>,
     output_dir: &Path,
     target: &AmdGpuTarget,
+    attempt: Option<BuildAttempt>,
 ) -> Result<Vec<DeviceArtifact>, EmitError> {
     let kernels = prepare_collection(tcx, collection, lowering_plan)?;
 
-    emit_artifact_transaction(
-        output_dir,
-        producer,
-        &kernels,
-        |kernel| &kernel.name,
-        |kernel| Ok(kernel.llvm_ir.clone()),
-        |llvm_ir_path, hsaco_path| {
-            compile_llvm_ir_to_hsaco(llvm_ir_path, hsaco_path, target)
-                .map_err(|error| EmitError::Compilation(Box::new(error)))
-        },
-    )
+    let compile = |llvm_ir_path: &Path, hsaco_path: &Path| {
+        compile_llvm_ir_to_hsaco(llvm_ir_path, hsaco_path, target)
+            .map_err(|error| EmitError::Compilation(Box::new(error)))
+    };
+    match attempt {
+        Some(attempt) => emit_artifact_transaction_for_attempt(
+            output_dir,
+            producer,
+            attempt,
+            &kernels,
+            |kernel| &kernel.name,
+            |kernel| Ok(kernel.llvm_ir.clone()),
+            compile,
+        ),
+        None => emit_artifact_transaction(
+            output_dir,
+            producer,
+            &kernels,
+            |kernel| &kernel.name,
+            |kernel| Ok(kernel.llvm_ir.clone()),
+            compile,
+        ),
+    }
 }
 
 pub(crate) fn emit_collection_after_preflight(
     producer: &ProducerIdentity,
     output_dir: &Path,
     target: &AmdGpuTarget,
+    attempt: Option<BuildAttempt>,
     preflight: impl FnOnce() -> Result<Vec<PreparedDeviceKernel>, EmitError>,
 ) -> Result<Vec<DeviceArtifact>, EmitError> {
-    emit_artifact_transaction_after_preflight(
-        output_dir,
-        producer,
-        preflight,
-        |kernel| &kernel.name,
-        |kernel| Ok(kernel.llvm_ir.clone()),
-        |llvm_ir_path, hsaco_path| {
-            compile_llvm_ir_to_hsaco(llvm_ir_path, hsaco_path, target)
-                .map_err(|error| EmitError::Compilation(Box::new(error)))
-        },
-    )
+    let compile = |llvm_ir_path: &Path, hsaco_path: &Path| {
+        compile_llvm_ir_to_hsaco(llvm_ir_path, hsaco_path, target)
+            .map_err(|error| EmitError::Compilation(Box::new(error)))
+    };
+    match attempt {
+        Some(attempt) => emit_artifact_transaction_after_preflight_for_attempt(
+            output_dir,
+            producer,
+            attempt,
+            preflight,
+            |kernel| &kernel.name,
+            |kernel| Ok(kernel.llvm_ir.clone()),
+            compile,
+        ),
+        None => emit_artifact_transaction_after_preflight(
+            output_dir,
+            producer,
+            preflight,
+            |kernel| &kernel.name,
+            |kernel| Ok(kernel.llvm_ir.clone()),
+            compile,
+        ),
+    }
 }
 
 #[derive(Debug)]

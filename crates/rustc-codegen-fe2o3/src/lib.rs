@@ -66,6 +66,7 @@ pub const DUMP_LLVM_ENV: &str = "FE2O3_DUMP_LLVM";
 pub const VERIFY_KERNEL_IR_ENV: &str = "FE2O3_VERIFY_KERNEL_IR";
 pub const CODEGEN_PIPELINE_ENV: &str = "FE2O3_CODEGEN_PIPELINE";
 pub const HSACO_DIR_ENV: &str = "FE2O3_HSACO_DIR";
+pub const BUILD_ATTEMPT_ENV: &str = "FE2O3_BUILD_ATTEMPT_V1";
 
 pub struct Fe2o3CodegenBackend {
     config: BackendConfig,
@@ -162,6 +163,44 @@ enum PipelineSelection {
     Invalid(String),
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum BuildAttemptSelection {
+    Direct,
+    Managed(artifact_transaction::BuildAttempt),
+    Invalid(String),
+}
+
+impl BuildAttemptSelection {
+    fn from_env() -> Self {
+        match env::var(BUILD_ATTEMPT_ENV) {
+            Err(env::VarError::NotPresent) => Self::Direct,
+            Err(env::VarError::NotUnicode(_)) => {
+                Self::Invalid(format!("{BUILD_ATTEMPT_ENV} is not valid UTF-8"))
+            }
+            Ok(value) => match artifact_transaction::BuildAttempt::from_env_value(&value) {
+                Ok(attempt) => Self::Managed(attempt),
+                Err(error) => Self::Invalid(format!(
+                    "{BUILD_ATTEMPT_ENV} is not a canonical build attempt: {error}"
+                )),
+            },
+        }
+    }
+
+    fn resolve(&self) -> Result<Option<artifact_transaction::BuildAttempt>, &str> {
+        match self {
+            Self::Direct => Ok(None),
+            Self::Managed(attempt) => Ok(Some(*attempt)),
+            Self::Invalid(reason) => Err(reason),
+        }
+    }
+}
+
+impl Default for BuildAttemptSelection {
+    fn default() -> Self {
+        Self::Direct
+    }
+}
+
 impl PipelineSelection {
     fn from_env() -> Self {
         Self::from_value(env::var_os(CODEGEN_PIPELINE_ENV).as_deref())
@@ -201,6 +240,7 @@ pub struct BackendConfig {
     pub dump_llvm: bool,
     pub verify_kernel_ir: bool,
     codegen_pipeline: PipelineSelection,
+    build_attempt: BuildAttemptSelection,
     pub hsaco_output_dir: Option<PathBuf>,
     pub target: AmdGpuTarget,
 }
@@ -213,6 +253,7 @@ impl BackendConfig {
             dump_llvm: env_flag(DUMP_LLVM_ENV),
             verify_kernel_ir: env_flag(VERIFY_KERNEL_IR_ENV),
             codegen_pipeline: PipelineSelection::from_env(),
+            build_attempt: BuildAttemptSelection::from_env(),
             hsaco_output_dir: env::var(HSACO_DIR_ENV).ok().map(PathBuf::from),
             target: AmdGpuTarget::from_env_or_default(),
         }
@@ -259,6 +300,12 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                     "[rustc-codegen-fe2o3] {HSACO_DIR_ENV} must name a managed artifact directory when compiling kernels"
                 )),
             };
+            let build_attempt = match self.config.build_attempt.resolve() {
+                Ok(attempt) => attempt,
+                Err(reason) => tcx.dcx().fatal(format!(
+                    "[rustc-codegen-fe2o3] invalid managed build attempt: {reason}"
+                )),
+            };
             let local_source = tcx
                 .sess
                 .local_crate_source_file()
@@ -291,6 +338,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                     &producer,
                     output_dir,
                     &self.config.target,
+                    build_attempt,
                     || {
                         let collection = collector::collect_device_functions(
                             tcx,
@@ -430,6 +478,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                     None,
                     output_dir,
                     &self.config.target,
+                    build_attempt,
                 ) {
                     tcx.dcx().fatal(format!(
                         "[rustc-codegen-fe2o3] zero-kernel artifact reconciliation failed: {error}"
@@ -1147,8 +1196,8 @@ fn optional_tool(llvm_bin: &Path, name: &str) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{
-        AmdGpuTarget, BackendConfig, CodegenPipeline, PipelineSelection, TemporaryHostObjects,
-        TypedKernelRootV1, TypedVerticalError, finalized_artifact_bytes,
+        AmdGpuTarget, BackendConfig, BuildAttemptSelection, CodegenPipeline, PipelineSelection,
+        TemporaryHostObjects, TypedKernelRootV1, TypedVerticalError, finalized_artifact_bytes,
         generate_typed_host_objects, managed_artifact_output, match_typed_artifacts,
         run_optional_kernel_ir_analysis, validate_hsaco_metadata_text,
     };
@@ -1234,6 +1283,24 @@ mod tests {
         assert_eq!(
             managed_artifact_output(&config, 1),
             Ok(Some(Path::new("target/fe2o3")))
+        );
+    }
+
+    #[test]
+    fn build_attempt_selection_is_direct_or_exactly_canonical() {
+        assert_eq!(BuildAttemptSelection::default().resolve(), Ok(None));
+        let value = concat!(
+            "7:11111111111111111111111111111111:",
+            "2222222222222222222222222222222222222222222222222222222222222222"
+        );
+        let selection = BuildAttemptSelection::Managed(
+            fe2o3_artifact_transaction::BuildAttempt::from_env_value(value).unwrap(),
+        );
+        assert_eq!(selection.resolve().unwrap().unwrap().to_env_value(), value);
+        assert!(
+            BuildAttemptSelection::Invalid("bad".to_owned())
+                .resolve()
+                .is_err()
         );
     }
 
