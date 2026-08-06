@@ -22,6 +22,7 @@ pub struct ValidatedPublishedDirectLinkSelectionV1 {
     selection: ValidatedArtifactSelectionV1,
     bridge: DirectLinkPublicationBridgeV1,
     published: PublishedLinkArtifactV1,
+    binding_index: usize,
     container_identity: DirectLinkContainerIdentityV1,
     finalized_payload_identity: DirectLinkFinalizedPayloadIdentityV1,
 }
@@ -32,6 +33,7 @@ impl fmt::Debug for ValidatedPublishedDirectLinkSelectionV1 {
             .debug_struct("ValidatedPublishedDirectLinkSelectionV1")
             .field("selection", &self.selection)
             .field("published", &self.published)
+            .field("binding_index", &self.binding_index)
             .field("container_identity", &self.container_identity)
             .field(
                 "finalized_payload_identity",
@@ -51,7 +53,7 @@ impl ValidatedPublishedDirectLinkSelectionV1 {
         selected: SelectedNativeKernel<'_>,
         observed: &ObservedContext,
     ) -> Result<Self, PublishedDirectLinkAdmissionError> {
-        let (container_identity, finalized_payload_identity) =
+        let (binding_index, container_identity, finalized_payload_identity) =
             validate_direct_link_inputs(validated_bundle, bridge, published, container, selected)?;
         let selection = ValidatedArtifactSelectionV1::validate(selected, observed)
             .map_err(PublishedDirectLinkAdmissionError::ArtifactSelection)?;
@@ -60,6 +62,7 @@ impl ValidatedPublishedDirectLinkSelectionV1 {
             selection,
             bridge: bridge.clone(),
             published,
+            binding_index,
             container_identity,
             finalized_payload_identity,
         })
@@ -83,8 +86,11 @@ impl ValidatedPublishedDirectLinkSelectionV1 {
             return Err(PublishedDirectLinkAdmissionError::PublicationSubstitution);
         }
 
-        let (container_identity, finalized_payload_identity) =
+        let (binding_index, container_identity, finalized_payload_identity) =
             validate_direct_link_inputs(validated_bundle, bridge, published, container, selected)?;
+        if binding_index != self.binding_index {
+            return Err(PublishedDirectLinkAdmissionError::BindingIndexSubstitution);
+        }
         if container_identity != self.container_identity {
             return Err(PublishedDirectLinkAdmissionError::ContainerIdentityMismatch);
         }
@@ -98,6 +104,11 @@ impl ValidatedPublishedDirectLinkSelectionV1 {
 
     pub const fn published(&self) -> PublishedLinkArtifactV1 {
         self.published
+    }
+
+    /// Returns the unique canonical G6 binding index associated with this admission.
+    pub const fn binding_index(&self) -> usize {
+        self.binding_index
     }
 
     pub const fn container_identity(&self) -> DirectLinkContainerIdentityV1 {
@@ -142,16 +153,17 @@ fn validate_direct_link_inputs(
     selected: SelectedNativeKernel<'_>,
 ) -> Result<
     (
+        usize,
         DirectLinkContainerIdentityV1,
         DirectLinkFinalizedPayloadIdentityV1,
     ),
     PublishedDirectLinkAdmissionError,
 > {
-    if validated_bundle.evidence() != bridge.bundle()
-        || !validated_bundle.bindings().contains(bridge.binding())
-    {
+    if validated_bundle.evidence() != bridge.bundle() {
         return Err(PublishedDirectLinkAdmissionError::EvidenceBridgeMismatch);
     }
+    let binding_index = unique_binding_index(validated_bundle, bridge)
+        .ok_or(PublishedDirectLinkAdmissionError::EvidenceBridgeMismatch)?;
 
     bridge
         .validate_published(published)
@@ -188,7 +200,33 @@ fn validate_direct_link_inputs(
         return Err(PublishedDirectLinkAdmissionError::FinalizedPayloadMismatch);
     }
 
-    Ok((container_identity, finalized_payload_identity))
+    Ok((
+        binding_index,
+        container_identity,
+        finalized_payload_identity,
+    ))
+}
+
+fn unique_binding_index(
+    validated_bundle: &ValidatedDirectLinkBundleEvidenceV1<'_>,
+    bridge: &DirectLinkPublicationBridgeV1,
+) -> Option<usize> {
+    let mut matches = validated_bundle
+        .bindings()
+        .iter()
+        .enumerate()
+        .filter(|(_, binding)| *binding == bridge.binding());
+    let (index, _) = matches.next()?;
+
+    // G6 canonical validation rejects duplicate (container identity, finalized payload identity)
+    // occurrences. Equal bindings necessarily have the same occurrence key, so one full-equality
+    // match identifies exactly one canonical index. Keep the cardinality check fail-closed here in
+    // case that upstream invariant ever changes.
+    if matches.next().is_some() {
+        None
+    } else {
+        Some(index)
+    }
 }
 
 /// Failure to establish or revalidate inert published direct-link admission.
@@ -203,6 +241,7 @@ pub enum PublishedDirectLinkAdmissionError {
     ArtifactSelection(ArtifactBindingError),
     BridgeSubstitution,
     PublicationSubstitution,
+    BindingIndexSubstitution,
     ArtifactRevalidation(ArtifactRevalidationError),
 }
 
@@ -229,6 +268,8 @@ impl fmt::Display for PublishedDirectLinkAdmissionError {
             Self::PublicationSubstitution => {
                 formatter.write_str("published artifact differs from the admitted publication")
             }
+            Self::BindingIndexSubstitution => formatter
+                .write_str("canonical G6 binding index differs from the admitted occurrence"),
             Self::ArtifactRevalidation(error) => error.fmt(formatter),
         }
     }
@@ -245,7 +286,8 @@ impl std::error::Error for PublishedDirectLinkAdmissionError {
             | Self::SelectedKernelContainerMismatch
             | Self::FinalizedPayloadMismatch
             | Self::BridgeSubstitution
-            | Self::PublicationSubstitution => None,
+            | Self::PublicationSubstitution
+            | Self::BindingIndexSubstitution => None,
         }
     }
 }
@@ -553,6 +595,10 @@ mod tests {
         .unwrap();
 
         assert_eq!(admitted.published(), published);
+        assert_eq!(
+            admitted.binding_index(),
+            fixture.binding_index(&validated, 0)
+        );
         assert_eq!(
             admitted.finalized_payload_identity(),
             fixture.expectations[0].finalized_payload_identity()
