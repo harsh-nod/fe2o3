@@ -274,6 +274,47 @@ pub struct OwnedDeviceOperation<'stream, R> {
 }
 
 impl<'stream, R> OwnedDeviceOperation<'stream, R> {
+    /// Submits caller-defined asynchronous work while retaining all resources
+    /// that the work may access.
+    ///
+    /// `enqueue` receives exclusive access to `resources` while it prepares
+    /// and submits the operation. On success, the returned handle owns those
+    /// resources until [`OwnedDeviceOperation::wait`] or `Drop` establishes
+    /// HIP quiescence. Exclusive resources must be transferred by value, so
+    /// safe code cannot access or release them while the operation is pending.
+    /// Non-static borrows are deliberately rejected because a returnable RAII
+    /// handle can be safely forgotten; borrowed resources must use
+    /// [`BorrowedDeviceOperation::run_scoped_unchecked`] instead.
+    ///
+    /// This is a low-level integration point for generated typed launch
+    /// wrappers. It does not validate a kernel ABI, pointer provenance,
+    /// aliasing, backend object identity, or launch synchronization.
+    ///
+    /// # Safety
+    ///
+    /// `enqueue` must submit work only to `stream`. `resources` must own every
+    /// allocation, module, function, argument backing store, and other object
+    /// that the submitted work may access, and each resource must remain at a
+    /// stable address and be valid for every device access until completion.
+    /// Once work may be pending, `enqueue` must not remove or destroy any such
+    /// resource, including on its error and panic paths. The caller must uphold
+    /// the submitted operation's ABI, pointer provenance, bounds, alignment,
+    /// initialization, aliasing, mutability, device-affinity, and cross-stream
+    /// synchronization requirements. Returning an error after work may have
+    /// been submitted is permitted only when synchronizing `stream` is
+    /// sufficient to establish quiescence for all such work.
+    #[doc(hidden)]
+    pub unsafe fn submit_unchecked(
+        stream: &'stream Stream,
+        resources: R,
+        enqueue: impl FnOnce(&mut R) -> Result<()>,
+    ) -> Result<Self>
+    where
+        R: 'static,
+    {
+        submit_owned(stream, resources, enqueue)
+    }
+
     /// Returns whether the operation's completion event has fired.
     ///
     /// Errors leave the operation submitted and retain all resources.
@@ -313,7 +354,7 @@ impl<'stream, T: DeviceCopy> OwnedDeviceOperation<'stream, (PinnedHostBuffer<T>,
         let size = copy_byte_len::<T>(source.len())?;
         let source_ptr = unsafe { source.raw_mut_ptr() }.cast::<c_void>();
         let destination_ptr = unsafe { destination.raw_device_ptr() }.cast::<c_void>();
-        submit_owned(stream, (source, destination), || {
+        submit_owned(stream, (source, destination), |_| {
             if size == 0 {
                 return Ok(());
             }
@@ -350,7 +391,7 @@ impl<'stream, T: DeviceCopy> OwnedDeviceOperation<'stream, (DeviceBuffer<T>, Pin
         let size = copy_byte_len::<T>(source.len())?;
         let source_ptr = unsafe { source.raw_device_ptr() }.cast::<c_void>();
         let destination_ptr = unsafe { destination.raw_mut_ptr() }.cast::<c_void>();
-        submit_owned(stream, (source, destination), || {
+        submit_owned(stream, (source, destination), |_| {
             if size == 0 {
                 return Ok(());
             }
@@ -387,7 +428,7 @@ impl<'stream, T: DeviceCopy> OwnedDeviceOperation<'stream, (DeviceBuffer<T>, Dev
         let size = copy_byte_len::<T>(source.len())?;
         let source_ptr = unsafe { source.raw_device_ptr() }.cast::<c_void>();
         let destination_ptr = unsafe { destination.raw_device_ptr() }.cast::<c_void>();
-        submit_owned(stream, (source, destination), || {
+        submit_owned(stream, (source, destination), |_| {
             if size == 0 {
                 return Ok(());
             }
@@ -407,7 +448,7 @@ impl<'stream, T: DeviceCopy> OwnedDeviceOperation<'stream, (DeviceBuffer<T>, Dev
 fn submit_owned<'stream, R>(
     stream: &'stream Stream,
     resources: R,
-    enqueue: impl FnOnce() -> Result<()>,
+    enqueue: impl FnOnce(&mut R) -> Result<()>,
 ) -> Result<OwnedDeviceOperation<'stream, R>> {
     let pending = submit_owned_with(HipOperationRuntime { stream }, resources, enqueue)?;
     Ok(OwnedDeviceOperation { pending })
@@ -416,13 +457,18 @@ fn submit_owned<'stream, R>(
 fn submit_owned_with<B: OperationRuntime, R>(
     backend: B,
     resources: R,
-    enqueue: impl FnOnce() -> Result<()>,
+    enqueue: impl FnOnce(&mut R) -> Result<()>,
 ) -> Result<PendingOwned<R, B::Completion>> {
     let event = backend.create_event()?;
     let mut submission = OwnedSubmission::new(backend, event, resources);
     submission.work_may_be_pending = true;
 
-    if let Err(error) = enqueue() {
+    if let Err(error) = enqueue(
+        submission
+            .resources
+            .as_mut()
+            .expect("submission resources are present"),
+    ) {
         return Err(submission.recover(error));
     }
     if let Err(error) = submission.record_event() {
@@ -918,9 +964,40 @@ mod tests {
     }
 
     #[test]
+    fn owned_submission_enqueues_with_mutable_retained_resources() {
+        let runtime = FakeRuntime::new(Faults::default());
+        let pending = submit_owned_with(
+            runtime.clone(),
+            (runtime.resource(), Vec::new()),
+            |resources| {
+                resources.1.push(42_u32);
+                runtime.events.borrow_mut().push("enqueue");
+                Ok(())
+            },
+        )
+        .expect("submission must succeed");
+
+        let (resource, values) = pending.wait().expect("completion must succeed");
+        assert_eq!(values, [42]);
+        assert_eq!(
+            log(&runtime),
+            [
+                "create-event",
+                "enqueue",
+                "record-event",
+                "into-completion",
+                "event-sync",
+                "event-drop"
+            ]
+        );
+        drop(resource);
+        assert_eq!(log(&runtime).last(), Some(&"resource-drop"));
+    }
+
+    #[test]
     fn owned_submission_recovers_enqueue_and_record_errors() {
         let enqueue_runtime = FakeRuntime::new(Faults::default());
-        let error = submit_owned_with(enqueue_runtime.clone(), enqueue_runtime.resource(), || {
+        let error = submit_owned_with(enqueue_runtime.clone(), enqueue_runtime.resource(), |_| {
             enqueue_runtime.events.borrow_mut().push("enqueue");
             Err(Error::SizeOverflow)
         })
@@ -942,7 +1019,7 @@ mod tests {
             record: Fault::Error,
             ..Faults::default()
         });
-        let error = submit_owned_with(record_runtime.clone(), record_runtime.resource(), || {
+        let error = submit_owned_with(record_runtime.clone(), record_runtime.resource(), |_| {
             record_runtime.events.borrow_mut().push("enqueue");
             Ok(())
         })
@@ -966,7 +1043,7 @@ mod tests {
     fn owned_submission_drop_recovers_enqueue_and_record_panics() {
         let enqueue_runtime = FakeRuntime::new(Faults::default());
         let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _ = submit_owned_with(enqueue_runtime.clone(), enqueue_runtime.resource(), || {
+            let _ = submit_owned_with(enqueue_runtime.clone(), enqueue_runtime.resource(), |_| {
                 enqueue_runtime.events.borrow_mut().push("enqueue");
                 panic!("injected enqueue panic")
             });
@@ -988,7 +1065,11 @@ mod tests {
             ..Faults::default()
         });
         let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _ = submit_owned_with(record_runtime.clone(), record_runtime.resource(), || Ok(()));
+            let _ = submit_owned_with(
+                record_runtime.clone(),
+                record_runtime.resource(),
+                |_| Ok(()),
+            );
         }));
         assert!(panic.is_err());
         assert_eq!(
@@ -1010,7 +1091,7 @@ mod tests {
             ..Faults::default()
         });
         let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _ = submit_owned_with(runtime.clone(), runtime.resource(), || Ok(()));
+            let _ = submit_owned_with(runtime.clone(), runtime.resource(), |_| Ok(()));
         }));
 
         assert!(panic.is_err());
@@ -1058,7 +1139,7 @@ mod tests {
             ..Faults::default()
         });
         let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _ = submit_owned_with(runtime.clone(), runtime.resource(), || Ok(()));
+            let _ = submit_owned_with(runtime.clone(), runtime.resource(), |_| Ok(()));
         }));
 
         assert!(panic.is_err());
@@ -1081,7 +1162,7 @@ mod tests {
             ..Faults::default()
         });
         let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _ = submit_owned_with(runtime.clone(), runtime.resource(), || {
+            let _ = submit_owned_with(runtime.clone(), runtime.resource(), |_| {
                 runtime.events.borrow_mut().push("enqueue");
                 panic!("injected enqueue panic")
             });
@@ -1098,7 +1179,7 @@ mod tests {
             recovery_sync: Fault::Error,
             ..Faults::default()
         });
-        let error = submit_owned_with(error_runtime.clone(), error_runtime.resource(), || Ok(()))
+        let error = submit_owned_with(error_runtime.clone(), error_runtime.resource(), |_| Ok(()))
             .err()
             .expect("record and recovery must fail");
         assert!(matches!(
@@ -1120,7 +1201,7 @@ mod tests {
             ..Faults::default()
         });
         let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _ = submit_owned_with(panic_runtime.clone(), panic_runtime.resource(), || Ok(()));
+            let _ = submit_owned_with(panic_runtime.clone(), panic_runtime.resource(), |_| Ok(()));
         }));
         assert!(panic.is_err());
         assert_eq!(
@@ -1138,7 +1219,7 @@ mod tests {
         let pending = submit_owned_with(
             quiescent_runtime.clone(),
             quiescent_runtime.resource(),
-            || Ok(()),
+            |_| Ok(()),
         )
         .expect("submission must succeed");
         assert!(matches!(pending.wait(), Err(Error::EventTimingDisabled)));
@@ -1163,7 +1244,7 @@ mod tests {
         let pending = submit_owned_with(
             ambiguous_runtime.clone(),
             ambiguous_runtime.resource(),
-            || Ok(()),
+            |_| Ok(()),
         )
         .expect("submission must succeed");
         assert!(matches!(
@@ -1194,7 +1275,7 @@ mod tests {
         let pending = submit_owned_with(
             fallback_runtime.clone(),
             fallback_runtime.resource(),
-            || Ok(()),
+            |_| Ok(()),
         )
         .expect("submission must succeed");
         let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1219,7 +1300,7 @@ mod tests {
         let pending = submit_owned_with(
             destructor_runtime.clone(),
             destructor_runtime.resource(),
-            || Ok(()),
+            |_| Ok(()),
         )
         .expect("submission must succeed");
         let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
