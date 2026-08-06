@@ -2,8 +2,9 @@ use proc_macro::TokenStream;
 use proc_macro_crate::{FoundCrate, crate_name};
 use quote::{format_ident, quote};
 use reserved_fe2o3_symbols::{
-    KERNEL_PREFIX, KERNEL_REGISTRATION_KIND_KERNEL, KERNEL_REGISTRATION_MAGIC,
-    KERNEL_REGISTRATION_PREFIX, KERNEL_REGISTRATION_VERSION_V1, RESERVED_ROOT,
+    KERNEL_PREFIX, KERNEL_REGISTRATION_KIND_KERNEL, KERNEL_REGISTRATION_KIND_TYPED_VECADD_V1,
+    KERNEL_REGISTRATION_MAGIC, KERNEL_REGISTRATION_PREFIX, KERNEL_REGISTRATION_VERSION_V1,
+    RESERVED_ROOT,
 };
 use syn::{
     Data, DeriveInput, FnArg, GenericArgument, ItemFn, Meta, Pat, PathArguments, ReturnType, Type,
@@ -269,6 +270,10 @@ fn expand_kernel_with_imports(
     let name_marker_ident = format_ident!("__fe2o3_kernel_name_{original_name}");
     let type_marker_ident = format_ident!("__fe2o3_kernel_marker_{original_name}");
     let registration_ident = format_ident!("{KERNEL_REGISTRATION_PREFIX}{original_name}");
+    let registration_kind = match mode {
+        KernelMode::Basic => KERNEL_REGISTRATION_KIND_KERNEL,
+        KernelMode::Typed => KERNEL_REGISTRATION_KIND_TYPED_VECADD_V1,
+    };
     let marker_value = syn::LitStr::new(&original_name, original_ident.span());
     let export_value = syn::LitStr::new(&original_name, original_ident.span());
     let argument_types = input
@@ -386,7 +391,7 @@ fn expand_kernel_with_imports(
         ) = (
             #KERNEL_REGISTRATION_MAGIC,
             #KERNEL_REGISTRATION_VERSION_V1,
-            #KERNEL_REGISTRATION_KIND_KERNEL,
+            #registration_kind,
             #marker_value,
             #export_value,
             #internal_ident,
@@ -767,6 +772,7 @@ mod tests {
         assert!(expansion.contains("# [used]"));
         assert!(expansion.contains("5643655966792762694u64"));
         assert!(expansion.contains("1u16 , 1u16"));
+        assert!(!expansion.contains("1u16 , 2u16"));
         assert!(expansion.contains("\"saxpy\" , \"saxpy\" , fe2o3_kernel_saxpy"));
         assert!(expansion.contains("extern crate renamed_device as __fe2o3_kernel_device"));
         assert!(expansion.contains(
@@ -829,6 +835,8 @@ mod tests {
         .to_string();
 
         assert!(expansion.contains("pub mod vecadd_gpu"));
+        assert!(expansion.contains("1u16 , 2u16"));
+        assert!(!expansion.contains("1u16 , 1u16"));
         assert!(expansion.contains("__fe2o3_kernel_artifact_vecadd_start"));
         assert!(expansion.contains("__fe2o3_kernel_artifact_vecadd_end"));
         assert!(expansion.contains("extern crate gpu_host as __fe2o3_kernel_host"));

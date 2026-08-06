@@ -17,7 +17,10 @@ pub const KERNEL_REGISTRATION_PREFIX: &str = "__fe2o3_kernel_registration_";
 /// ASCII `FE2O3KRN`, interpreted as a little-endian `u64`.
 pub const KERNEL_REGISTRATION_MAGIC: u64 = 0x4e52_4b33_4f32_4546;
 pub const KERNEL_REGISTRATION_VERSION_V1: u16 = 1;
+/// An ordinary `#[kernel]` registration without a generated typed profile.
 pub const KERNEL_REGISTRATION_KIND_KERNEL: u16 = 1;
+/// A `#[kernel(typed)]` registration using the exact typed vecadd V1 profile.
+pub const KERNEL_REGISTRATION_KIND_TYPED_VECADD_V1: u16 = 2;
 
 /// V1 is an immutable `#[used]` static with this exact tuple shape:
 ///
@@ -35,6 +38,11 @@ mod tests {
         assert_eq!(KERNEL_REGISTRATION_MAGIC.to_le_bytes(), *b"FE2O3KRN");
         assert_eq!(KERNEL_REGISTRATION_VERSION_V1, 1);
         assert_eq!(KERNEL_REGISTRATION_KIND_KERNEL, 1);
+        assert_eq!(KERNEL_REGISTRATION_KIND_TYPED_VECADD_V1, 2);
+        assert_ne!(
+            KERNEL_REGISTRATION_KIND_KERNEL,
+            KERNEL_REGISTRATION_KIND_TYPED_VECADD_V1
+        );
         assert_eq!(KERNEL_REGISTRATION_V1_FIELD_COUNT, 6);
     }
 }
