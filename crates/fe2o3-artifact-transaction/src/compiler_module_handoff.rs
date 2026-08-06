@@ -1,9 +1,11 @@
-//! One-shot, build-attempt-scoped transfer of exact compiler module bytes.
+//! One-shot, build-attempt-scoped transfer of exact module-handoff bytes.
 //!
 //! A handoff is coordination state, not artifact publication or loading authority. Both producer
 //! and consumer must present the exact [`BuildAttempt`] and [`ProducerIdentity`], and the attempt
-//! must still be claimable in the durable attempt registry. There is deliberately no lookup for a
-//! "current" handoff.
+//! must still be claimable in the durable attempt registry. Success proves only that a cooperating
+//! process possessing that current attempt committed the measured bytes through this protocol. It
+//! does not authenticate that rustc, the fe2o3 backend, or any other particular program authored
+//! them. There is deliberately no lookup for a "current" handoff.
 
 use super::{
     AttemptPhase, BuildAttempt, BuildSession, EmitError, PinnedOutput, ProducerIdentity,
@@ -40,10 +42,17 @@ const RECORD_BYTES: usize = RECORD_MAGIC.len() + 2 + 32 + 8 + 16 + 32 + 32 + 32 
 
 static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(1);
 
-/// Maximum exact compiler module accepted by the V1 handoff.
-pub const MAX_COMPILER_MODULE_HANDOFF_BYTES: usize = 64 * 1024 * 1024;
+/// Maximum complete canonical compiler-FFI V1 handoff accepted by this transport.
+///
+/// This mirrors `fe2o3_compiler_ffi::MAX_COMPILER_MODULE_HANDOFF_BYTES_V1`: a 64 MiB module,
+/// 512 KiB envelope, 128-byte target, and 83 bytes of canonical framing. This lower-level
+/// filesystem crate deliberately does not depend on `fe2o3-compiler-ffi`; integration must keep
+/// the two V1 constants equal.
+pub const MAX_COMPILER_MODULE_HANDOFF_BYTES: usize = (64 * 1024 * 1024) + (512 * 1024) + 128 + 83;
 
-/// SHA-256 identity of exact compiler-produced module bytes.
+/// SHA-256 identity of exact bytes committed by a holder of the named cooperative attempt.
+///
+/// The identity authenticates byte equality only. It does not establish who authored the bytes.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct CompilerModuleHandoffIdentityV1([u8; 32]);
 
@@ -59,7 +68,9 @@ impl CompilerModuleHandoffIdentityV1 {
     }
 }
 
-/// Durable receipt for a module committed to one exact handoff slot.
+/// Durable receipt for bytes committed by a holder of one exact cooperative attempt.
+///
+/// The receipt records attempt possession and byte integrity, not rustc or backend authorship.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CompilerModuleHandoffReceiptV1 {
     attempt: BuildAttempt,
@@ -84,9 +95,17 @@ impl CompilerModuleHandoffReceiptV1 {
     pub const fn grants_publication_authority(self) -> bool {
         false
     }
+
+    /// Attempt possession does not authenticate compiler authorship.
+    pub const fn grants_compiler_authority(self) -> bool {
+        false
+    }
 }
 
-/// Immutable bytes returned by the one successful consumption of a slot.
+/// Immutable bytes returned by the one successful consumption of a cooperative-attempt slot.
+///
+/// This value proves only that the measured bytes passed through the slot while its exact attempt
+/// remained claimable. It is inert and carries no compiler-authorship or executable authority.
 #[derive(Clone, Debug)]
 pub struct ConsumedCompilerModuleHandoffV1 {
     attempt: BuildAttempt,
@@ -111,6 +130,26 @@ impl ConsumedCompilerModuleHandoffV1 {
     pub const fn grants_publication_authority(&self) -> bool {
         false
     }
+
+    /// Attempt possession does not authenticate compiler authorship.
+    pub const fn grants_compiler_authority(&self) -> bool {
+        false
+    }
+
+    /// Consumed handoff bytes do not authorize linking.
+    pub const fn grants_link_authority(&self) -> bool {
+        false
+    }
+
+    /// Consumed handoff bytes do not authorize module loading.
+    pub const fn grants_load_authority(&self) -> bool {
+        false
+    }
+
+    /// Consumed handoff bytes do not authorize kernel launch.
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
+    }
 }
 
 /// Failure to publish, recover, or consume a compiler module handoff.
@@ -119,7 +158,7 @@ pub enum CompilerModuleHandoffErrorV1 {
     Io(std::io::Error),
     Attempt { reason: String },
     InvalidSlot { path: PathBuf, reason: String },
-    InvalidModuleSize { actual: usize, maximum: usize },
+    InvalidHandoffSize { actual: usize, maximum: usize },
     AlreadyPublished,
     ConflictingPublication,
     AlreadyConsumed,
@@ -141,9 +180,9 @@ impl fmt::Display for CompilerModuleHandoffErrorV1 {
                     path.display()
                 )
             }
-            Self::InvalidModuleSize { actual, maximum } => write!(
+            Self::InvalidHandoffSize { actual, maximum } => write!(
                 formatter,
-                "compiler module handoff size {actual} is outside 1..={maximum} bytes"
+                "canonical compiler module handoff size {actual} is outside 1..={maximum} bytes"
             ),
             Self::AlreadyPublished => {
                 formatter.write_str("compiler module handoff is already published")
@@ -189,7 +228,10 @@ impl From<EmitError> for CompilerModuleHandoffErrorV1 {
     }
 }
 
-/// Atomically publishes exact compiler-produced bytes for one explicit attempt.
+/// Atomically publishes caller-supplied bytes under one explicit cooperative attempt.
+///
+/// Success establishes attempt possession and a durable SHA-256 binding. The caller remains
+/// responsible for establishing compiler authorship through a separate trusted process boundary.
 ///
 /// This function takes the artifact-store lock and must not be called from an artifact transaction
 /// callback, because those callbacks run under the same non-reentrant lock.
@@ -197,12 +239,12 @@ pub fn publish_compiler_module_handoff_v1(
     output_dir: &Path,
     producer: &ProducerIdentity,
     attempt: BuildAttempt,
-    module: &[u8],
+    handoff_bytes: &[u8],
 ) -> Result<CompilerModuleHandoffReceiptV1, CompilerModuleHandoffErrorV1> {
-    publish_with_hooks(output_dir, producer, attempt, module, &mut NoFaults)
+    publish_with_hooks(output_dir, producer, attempt, handoff_bytes, &mut NoFaults)
 }
 
-/// Consumes one explicit attempt's module exactly once.
+/// Consumes one explicit attempt's complete canonical handoff exactly once.
 ///
 /// The durable `consumed` tombstone is committed before bytes are returned. Cleanup of the now
 /// inert payload is best-effort; a later replay rejects the tombstone and retries cleanup.
@@ -406,10 +448,10 @@ fn publish_with_hooks(
     output_dir: &Path,
     producer: &ProducerIdentity,
     attempt: BuildAttempt,
-    module: &[u8],
+    handoff_bytes: &[u8],
     hooks: &mut impl HandoffHooks,
 ) -> Result<CompilerModuleHandoffReceiptV1, CompilerModuleHandoffErrorV1> {
-    validate_module_size(module.len())?;
+    validate_handoff_size(handoff_bytes.len())?;
     let output = PinnedOutput::open(output_dir)?;
     let _lock = output.lock()?;
     output.verify_path_identity()?;
@@ -438,17 +480,17 @@ fn publish_with_hooks(
     if entry_exists(&slot, READY_ENTRY)? {
         let committed = read_bound_record(&slot, READY_ENTRY, producer_id, slot_id, attempt)?;
         let committed_bytes = read_payload(&slot, &committed)?;
-        return if committed_bytes == module {
+        return if committed_bytes == handoff_bytes {
             Err(CompilerModuleHandoffErrorV1::AlreadyPublished)
         } else {
             Err(CompilerModuleHandoffErrorV1::ConflictingPublication)
         };
     }
 
-    let identity = CompilerModuleHandoffIdentityV1(sha256(module));
+    let identity = CompilerModuleHandoffIdentityV1(sha256(handoff_bytes));
     let (payload_temp, mut payload) = create_temp(&slot, "module")?;
     hooks.hit(FaultPoint::PayloadCreated)?;
-    payload.write_all(module)?;
+    payload.write_all(handoff_bytes)?;
     hooks.hit(FaultPoint::PayloadWritten)?;
     payload.sync_all()?;
     hooks.hit(FaultPoint::PayloadSynced)?;
@@ -466,7 +508,7 @@ fn publish_with_hooks(
     let payload_stat = fstat(&payload).map_err(std::io::Error::from)?;
     let named =
         statat(&slot.fd, PAYLOAD_ENTRY, AtFlags::SYMLINK_NOFOLLOW).map_err(std::io::Error::from)?;
-    if !same_private_file(&payload_stat, &named, module.len()) {
+    if !same_private_file(&payload_stat, &named, handoff_bytes.len()) {
         return Err(invalid_slot(
             &slot.path,
             "published payload does not match its pinned descriptor",
@@ -477,7 +519,7 @@ fn publish_with_hooks(
         attempt,
         producer: producer_id,
         identity,
-        length: module.len(),
+        length: handoff_bytes.len(),
         file: FileIdentity::from_stat(&named),
     };
     let record_bytes = record.encode();
@@ -502,7 +544,7 @@ fn publish_with_hooks(
     Ok(CompilerModuleHandoffReceiptV1 {
         attempt,
         identity,
-        length: module.len(),
+        length: handoff_bytes.len(),
     })
 }
 
@@ -1025,9 +1067,9 @@ fn reject_nonregular_before_cleanup(
     Ok(())
 }
 
-fn validate_module_size(length: usize) -> Result<(), CompilerModuleHandoffErrorV1> {
+fn validate_handoff_size(length: usize) -> Result<(), CompilerModuleHandoffErrorV1> {
     if length == 0 || length > MAX_COMPILER_MODULE_HANDOFF_BYTES {
-        return Err(CompilerModuleHandoffErrorV1::InvalidModuleSize {
+        return Err(CompilerModuleHandoffErrorV1::InvalidHandoffSize {
             actual: length,
             maximum: MAX_COMPILER_MODULE_HANDOFF_BYTES,
         });
@@ -1181,6 +1223,7 @@ mod tests {
         assert_eq!(receipt.identity().as_bytes(), &sha256(module));
         assert_eq!(receipt.length(), module.len());
         assert!(!receipt.grants_publication_authority());
+        assert!(!receipt.grants_compiler_authority());
 
         let slot = slot_path(&temp.0, &producer, attempt);
         assert_eq!(
@@ -1206,6 +1249,10 @@ mod tests {
         assert_eq!(consumed.bytes(), module);
         assert_eq!(consumed.identity(), receipt.identity());
         assert!(!consumed.grants_publication_authority());
+        assert!(!consumed.grants_compiler_authority());
+        assert!(!consumed.grants_link_authority());
+        assert!(!consumed.grants_load_authority());
+        assert!(!consumed.grants_launch_authority());
         assert!(slot.join(CONSUMED_ENTRY).is_file());
         assert!(!slot.join(PAYLOAD_ENTRY).exists());
         assert!(matches!(
@@ -1240,18 +1287,19 @@ mod tests {
     }
 
     #[test]
-    fn empty_and_oversize_modules_are_rejected_before_slot_creation() {
+    fn empty_and_oversize_handoffs_are_rejected_before_slot_creation() {
         let temp = TestDirectory::new();
         let producer = producer("kernel");
         let attempt = begin(&temp.0, &producer, 2);
+        assert_eq!(MAX_COMPILER_MODULE_HANDOFF_BYTES, 67_633_363);
         assert!(matches!(
             publish_compiler_module_handoff_v1(&temp.0, &producer, attempt, &[]),
-            Err(CompilerModuleHandoffErrorV1::InvalidModuleSize { actual: 0, .. })
+            Err(CompilerModuleHandoffErrorV1::InvalidHandoffSize { actual: 0, .. })
         ));
         let oversized = vec![0; MAX_COMPILER_MODULE_HANDOFF_BYTES + 1];
         assert!(matches!(
             publish_compiler_module_handoff_v1(&temp.0, &producer, attempt, &oversized),
-            Err(CompilerModuleHandoffErrorV1::InvalidModuleSize { .. })
+            Err(CompilerModuleHandoffErrorV1::InvalidHandoffSize { .. })
         ));
         assert!(!slot_path(&temp.0, &producer, attempt).exists());
     }
