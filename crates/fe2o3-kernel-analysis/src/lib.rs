@@ -3,8 +3,13 @@
 //! This crate reports analysis facts and rejected obligations. It does not
 //! grant `Checked`, `Verified`, safe-launch, or any other assurance authority.
 
+mod control_flow;
 mod uniformity;
 
+pub use control_flow::{
+    ControlFlowAnalysis, ControlFlowDiagnostic, ControlFlowEdge, ControlFlowErrors,
+    analyze_control_flow,
+};
 pub use uniformity::analyze_function;
 
 use fe2o3_kernel_ir::{BlockId, FunctionId, SynchronizationScope, ValueId};
