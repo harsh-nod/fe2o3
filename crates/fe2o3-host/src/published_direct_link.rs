@@ -1607,4 +1607,25 @@ mod tests {
             Err(PublishedHsacoInspectionError::AdmissionSubstitution)
         );
     }
+
+    #[test]
+    fn inspection_revalidation_rejects_a_different_publication_of_identical_bytes() {
+        let hsaco = test_hsaco("gfx1151", 0);
+        let fixture = make_hsaco_fixture(
+            31,
+            hsaco.bytes.clone(),
+            "gfx1151",
+            "primary_kernel.kd",
+            false,
+            0,
+        );
+        let first = admit_hsaco(&fixture, 31, "gfx1151");
+        let second = admit_hsaco(&fixture, 32, "gfx1151");
+        let inspected = InspectedPublishedDirectLinkHsacoV1::inspect(&first, &hsaco.bytes).unwrap();
+
+        assert_eq!(
+            inspected.revalidate(&second, &hsaco.bytes),
+            Err(PublishedHsacoInspectionError::AdmissionSubstitution)
+        );
+    }
 }

@@ -2,6 +2,7 @@ use crate::published_direct_link::{
     PublishedPayloadKernelV1, ValidatedPublishedDirectLinkSelectionV1,
 };
 use fe2o3_amd_target::{AmdTargetId, ParseAmdTargetIdError};
+use fe2o3_artifact_transaction::PublishedLinkArtifactV1;
 use fe2o3_artifacts::{
     AbiKind, Access, AddressSpace, BlockSize, DirectLinkContainerIdentityV1,
     DirectLinkFinalizedPayloadIdentityV1, PayloadDigest,
@@ -29,6 +30,7 @@ pub struct InspectedPublishedDirectLinkHsacoV1 {
     inspected: InspectedKernelBindings,
     payload: Arc<[u8]>,
     payload_digest: PayloadDigest,
+    published: PublishedLinkArtifactV1,
     binding_index: usize,
     container_identity: DirectLinkContainerIdentityV1,
     finalized_payload_identity: DirectLinkFinalizedPayloadIdentityV1,
@@ -43,6 +45,7 @@ impl fmt::Debug for InspectedPublishedDirectLinkHsacoV1 {
             .debug_struct("InspectedPublishedDirectLinkHsacoV1")
             .field("payload_len", &self.payload.len())
             .field("payload_digest", &self.payload_digest)
+            .field("published", &self.published)
             .field("binding_index", &self.binding_index)
             .field("container_identity", &self.container_identity)
             .field(
@@ -73,6 +76,7 @@ impl InspectedPublishedDirectLinkHsacoV1 {
             inspected,
             payload: Arc::from(exact_selected_payload_bytes),
             payload_digest: selection.identity().payload_digest(),
+            published: admitted.published(),
             binding_index: admitted.binding_index(),
             container_identity: admitted.container_identity(),
             finalized_payload_identity: admitted.finalized_payload_identity(),
@@ -88,7 +92,8 @@ impl InspectedPublishedDirectLinkHsacoV1 {
         admitted: &ValidatedPublishedDirectLinkSelectionV1,
         exact_selected_payload_bytes: &[u8],
     ) -> Result<(), PublishedHsacoInspectionError> {
-        if admitted.binding_index() != self.binding_index
+        if admitted.published() != self.published
+            || admitted.binding_index() != self.binding_index
             || admitted.container_identity() != self.container_identity
             || admitted.finalized_payload_identity() != self.finalized_payload_identity
             || admitted.artifact_selection().identity().kernel_id() != self.selected_kernel_id
