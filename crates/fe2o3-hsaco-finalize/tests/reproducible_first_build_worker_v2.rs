@@ -15,7 +15,8 @@ use fe2o3_artifact_transaction::{
 use fe2o3_compiler_ffi::{
     CodeObjectVersion as CompilerCodeObjectVersion, CompilerFfiContractV1,
     CompilerFfiEnvelopeBuilderV1, CompilerFfiLinkRoleV1, CompilerFfiSourceOwnerV1,
-    CompilerModuleHandoffV1, CompilerModuleKindV1, DeviceTargetV1 as CompilerDeviceTargetV1,
+    CompilerModuleHandoffV2, CompilerModuleKindV1, CompilerModuleSymbolManifestV1,
+    CompilerModuleSymbolRoleV1, DeviceTargetV1 as CompilerDeviceTargetV1,
 };
 use fe2o3_hsaco_finalize::{
     ContentIdentityV1, FirstBuildWorkerV2Error, LinkOptionV1, LinkPlanError, PinnedWorkerV1,
@@ -31,7 +32,7 @@ use reserved_fe2o3_symbols::{
 
 const WORKER_ID: &str = "fixture-worker-v1";
 const LLVM_ID: &str = "fixture-llvm-v1";
-const MODULE: &[u8] = b"define amdgpu_kernel void @workflow_kernel() { ret void }\n";
+const MODULE: &[u8] = b"define amdgpu_kernel void @workflow_kernel() { ret void }\ndefine i32 @workflow_export(i32 %value) { ret i32 %value }\n";
 const PROVIDER: &[u8] = b"exact workflow external provider";
 const OUTPUT: &[u8] = b"fixture-output";
 
@@ -60,13 +61,6 @@ fn options() -> Vec<LinkOptionV1> {
     .into_iter()
     .map(|(name, value)| LinkOptionV1::new(name, value).unwrap())
     .collect()
-}
-
-fn final_symbols(extra: &[&str]) -> Vec<String> {
-    let mut symbols = vec!["workflow_kernel".to_owned()];
-    symbols.extend(extra.iter().map(|symbol| (*symbol).to_owned()));
-    symbols.sort();
-    symbols
 }
 
 fn provider() -> WorkerInputV1 {
@@ -103,7 +97,7 @@ fn compiler_export() -> CompilerFfiContractV1 {
         .collect::<String>();
     let fields = DeviceFfiContractFieldsV1 {
         direction: DEVICE_FFI_DIRECTION_EXPORT_V1,
-        symbol: "workflow_kernel",
+        symbol: "workflow_export",
         calling_convention: "C",
         code_object_version: 6,
         target: "gfx942:xnack-",
@@ -119,12 +113,12 @@ fn compiler_export() -> CompilerFfiContractV1 {
         CompilerCodeObjectVersion::V6,
         CompilerFfiSourceOwnerV1::new(
             "workflow_fixture",
-            "workflow_fixture::workflow_kernel",
+            "workflow_fixture::workflow_export",
             [0x35; 16],
-            "_RINvNtCs1234_16workflow_fixture15workflow_kernel",
+            "_RINvNtCs1234_16workflow_fixture15workflow_export",
         )
         .unwrap(),
-        "workflow_kernel",
+        "workflow_export",
         ABI,
         "none",
         semantic_identity,
@@ -132,7 +126,7 @@ fn compiler_export() -> CompilerFfiContractV1 {
     .unwrap()
 }
 
-fn canonical_handoff() -> CompilerModuleHandoffV1 {
+fn canonical_handoff(extra_kernels: &[&str]) -> CompilerModuleHandoffV2 {
     let mut envelope = CompilerFfiEnvelopeBuilderV1::new(
         CompilerDeviceTargetV1::parse("gfx942:xnack-").unwrap(),
         CompilerCodeObjectVersion::V6,
@@ -140,11 +134,38 @@ fn canonical_handoff() -> CompilerModuleHandoffV1 {
     )
     .unwrap();
     envelope.push(compiler_export()).unwrap();
-    CompilerModuleHandoffV1::new(
+    let mut entries = vec![
+        (
+            CompilerModuleSymbolRoleV1::KernelEntry,
+            "workflow_kernel".to_owned(),
+        ),
+        (
+            CompilerModuleSymbolRoleV1::KernelDescriptor,
+            "workflow_kernel.kd".to_owned(),
+        ),
+        (
+            CompilerModuleSymbolRoleV1::DeviceFfiExport,
+            "workflow_export".to_owned(),
+        ),
+    ];
+    for kernel in extra_kernels {
+        entries.push((
+            CompilerModuleSymbolRoleV1::KernelEntry,
+            (*kernel).to_owned(),
+        ));
+        entries.push((
+            CompilerModuleSymbolRoleV1::KernelDescriptor,
+            format!("{kernel}.kd"),
+        ));
+    }
+    entries.sort();
+    let manifest = CompilerModuleSymbolManifestV1::new(entries).unwrap();
+    CompilerModuleHandoffV2::new(
         CompilerModuleKindV1::LlvmTextIr,
         CompilerDeviceTargetV1::parse("gfx942:xnack-").unwrap(),
         CompilerCodeObjectVersion::V6,
         envelope.finish().unwrap(),
+        manifest,
         MODULE,
     )
     .unwrap()
@@ -157,7 +178,21 @@ fn consumed_handoff(
     CompilerModuleHandoffIdentityV1,
     ConsumedCompilerModuleHandoffV1,
 ) {
-    consumed_bytes(directory, canonical_handoff().canonical_bytes())
+    consumed_handoff_with_extra(directory, &[])
+}
+
+fn consumed_handoff_with_extra(
+    directory: &TestDirectory,
+    extra_kernels: &[&str],
+) -> (
+    BuildAttempt,
+    CompilerModuleHandoffIdentityV1,
+    ConsumedCompilerModuleHandoffV1,
+) {
+    consumed_bytes(
+        directory,
+        canonical_handoff(extra_kernels).canonical_bytes(),
+    )
 }
 
 fn consumed_bytes(
@@ -195,7 +230,6 @@ fn derives_exact_plan_and_returns_only_inert_dual_execution_evidence() {
         consumed,
         &worker,
         vec![provider()],
-        final_symbols(&[]),
         options(),
         WorkerOutputConstraintsV1::new(4096).unwrap(),
         limits(),
@@ -204,6 +238,21 @@ fn derives_exact_plan_and_returns_only_inert_dual_execution_evidence() {
 
     assert_eq!(evidence.attempt(), attempt);
     assert_eq!(evidence.handoff_identity(), handoff_identity);
+    assert_eq!(
+        evidence.compiler_envelope_identity(),
+        evidence.compiler_envelope().identity()
+    );
+    assert_eq!(
+        evidence.manifest_identity(),
+        evidence.symbol_manifest().identity()
+    );
+    assert_eq!(
+        evidence
+            .symbol_manifest()
+            .symbols(CompilerModuleSymbolRoleV1::KernelEntry)
+            .collect::<Vec<_>>(),
+        ["workflow_kernel"]
+    );
     assert_eq!(evidence.worker_measurement(), worker.measurement());
     assert_eq!(
         evidence.candidate().worker_executable(),
@@ -234,6 +283,14 @@ fn derives_exact_plan_and_returns_only_inert_dual_execution_evidence() {
         evidence.candidate().response().request_id(),
         evidence.authorized().response().request_id()
     );
+    assert_eq!(
+        evidence.authorized_request_id(),
+        evidence.authorized().response().request_id()
+    );
+    assert_eq!(
+        evidence.authorized_request_identity(),
+        evidence.authorized().response().request_identity()
+    );
     assert!(!evidence.grants_publication_authority());
     assert!(!evidence.grants_load_authority());
     assert!(!evidence.grants_launch_authority());
@@ -250,7 +307,6 @@ fn identical_first_build_inputs_are_deterministic_across_independent_roots() {
         first_consumed,
         &worker,
         vec![provider()],
-        final_symbols(&[]),
         options(),
         WorkerOutputConstraintsV1::new(4096).unwrap(),
         limits(),
@@ -262,7 +318,6 @@ fn identical_first_build_inputs_are_deterministic_across_independent_roots() {
         second_consumed,
         &worker,
         vec![provider()],
-        final_symbols(&[]),
         reordered_options,
         WorkerOutputConstraintsV1::new(4096).unwrap(),
         limits(),
@@ -288,12 +343,11 @@ fn identical_first_build_inputs_are_deterministic_across_independent_roots() {
 #[test]
 fn exact_byte_mismatch_retains_both_inert_executions_and_fails_closed() {
     let directory = TestDirectory::new();
-    let (_, _, consumed) = consumed_handoff(&directory);
+    let (_, _, consumed) = consumed_handoff_with_extra(&directory, &["workflow_mismatch"]);
     let error = execute_reproducible_first_build_worker_v2(
         consumed,
         &pinned(),
         vec![provider()],
-        final_symbols(&["workflow_mismatch"]),
         options(),
         WorkerOutputConstraintsV1::new(4096).unwrap(),
         limits(),
@@ -319,12 +373,12 @@ fn exact_byte_mismatch_retains_both_inert_executions_and_fails_closed() {
 #[test]
 fn candidate_and_v2_failure_responses_are_distinguished() {
     let candidate_directory = TestDirectory::new();
-    let (_, _, candidate_consumed) = consumed_handoff(&candidate_directory);
+    let (_, _, candidate_consumed) =
+        consumed_handoff_with_extra(&candidate_directory, &["workflow_candidate_failure"]);
     let candidate_error = execute_reproducible_first_build_worker_v2(
         candidate_consumed,
         &pinned(),
         vec![provider()],
-        final_symbols(&["workflow_candidate_failure"]),
         options(),
         WorkerOutputConstraintsV1::new(4096).unwrap(),
         limits(),
@@ -339,12 +393,11 @@ fn candidate_and_v2_failure_responses_are_distinguished() {
     assert!(candidate_diagnostic.contains("Codegen: []"));
 
     let v2_directory = TestDirectory::new();
-    let (_, _, v2_consumed) = consumed_handoff(&v2_directory);
+    let (_, _, v2_consumed) = consumed_handoff_with_extra(&v2_directory, &["workflow_v2_failure"]);
     let v2_error = execute_reproducible_first_build_worker_v2(
         v2_consumed,
         &pinned(),
         vec![provider()],
-        final_symbols(&["workflow_v2_failure"]),
         options(),
         WorkerOutputConstraintsV1::new(4096).unwrap(),
         limits(),
@@ -367,12 +420,12 @@ fn candidate_and_v2_failure_responses_are_distinguished() {
 #[test]
 fn candidate_and_v2_identity_corruption_are_distinguished() {
     let candidate_directory = TestDirectory::new();
-    let (_, _, candidate_consumed) = consumed_handoff(&candidate_directory);
+    let (_, _, candidate_consumed) =
+        consumed_handoff_with_extra(&candidate_directory, &["workflow_candidate_bad_response"]);
     let candidate_error = execute_reproducible_first_build_worker_v2(
         candidate_consumed,
         &pinned(),
         vec![provider()],
-        final_symbols(&["workflow_candidate_bad_response"]),
         options(),
         WorkerOutputConstraintsV1::new(4096).unwrap(),
         limits(),
@@ -385,12 +438,12 @@ fn candidate_and_v2_identity_corruption_are_distinguished() {
     ));
 
     let v2_directory = TestDirectory::new();
-    let (_, _, v2_consumed) = consumed_handoff(&v2_directory);
+    let (_, _, v2_consumed) =
+        consumed_handoff_with_extra(&v2_directory, &["workflow_v2_bad_response"]);
     let v2_error = execute_reproducible_first_build_worker_v2(
         v2_consumed,
         &pinned(),
         vec![provider()],
-        final_symbols(&["workflow_v2_bad_response"]),
         options(),
         WorkerOutputConstraintsV1::new(4096).unwrap(),
         limits(),
@@ -417,7 +470,6 @@ fn malformed_handoff_and_invalid_options_fail_before_candidate_execution() {
             malformed,
             &pinned(),
             vec![provider()],
-            final_symbols(&[]),
             options(),
             WorkerOutputConstraintsV1::new(4096).unwrap(),
             limits(),
@@ -434,7 +486,6 @@ fn malformed_handoff_and_invalid_options_fail_before_candidate_execution() {
             consumed,
             &pinned(),
             vec![provider()],
-            final_symbols(&[]),
             invalid_options,
             WorkerOutputConstraintsV1::new(4096).unwrap(),
             limits(),
@@ -453,7 +504,6 @@ fn caller_output_bound_is_enforced_on_the_candidate() {
         consumed,
         &pinned(),
         vec![provider()],
-        final_symbols(&[]),
         options(),
         WorkerOutputConstraintsV1::new(1).unwrap(),
         limits(),
@@ -476,7 +526,6 @@ fn duplicate_content_under_a_different_input_kind_is_rejected_before_execution()
         consumed,
         &pinned(),
         vec![duplicate],
-        final_symbols(&[]),
         options(),
         WorkerOutputConstraintsV1::new(4096).unwrap(),
         limits(),

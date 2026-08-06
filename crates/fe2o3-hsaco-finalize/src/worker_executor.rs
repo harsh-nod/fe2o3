@@ -1156,7 +1156,8 @@ mod configured_v2_tests {
     use fe2o3_compiler_ffi::{
         CodeObjectVersion as CompilerCodeObjectVersion, CompilerFfiContractV1,
         CompilerFfiEnvelopeBuilderV1, CompilerFfiLinkRoleV1, CompilerFfiSourceOwnerV1,
-        CompilerModuleHandoffV1, CompilerModuleKindV1, DeviceTargetV1 as CompilerDeviceTargetV1,
+        CompilerModuleHandoffV2, CompilerModuleKindV1, CompilerModuleSymbolManifestV1,
+        CompilerModuleSymbolRoleV1, DeviceTargetV1 as CompilerDeviceTargetV1,
     };
     use reserved_fe2o3_symbols::{
         DEVICE_FFI_DIRECTION_EXPORT_V1, DEVICE_FFI_DIRECTION_IMPORT_V1, DeviceFfiContractFieldsV1,
@@ -1284,11 +1285,20 @@ mod configured_v2_tests {
                 0x42,
             ))
             .unwrap();
-        let handoff = CompilerModuleHandoffV1::new(
+        let symbol_manifest = CompilerModuleSymbolManifestV1::new([
+            (CompilerModuleSymbolRoleV1::DeviceFfiExport, "mixed_entry"),
+            (
+                CompilerModuleSymbolRoleV1::UnresolvedExternalImport,
+                "object_helper",
+            ),
+        ])
+        .unwrap();
+        let handoff = CompilerModuleHandoffV2::new(
             CompilerModuleKindV1::LlvmBitcode,
             CompilerDeviceTargetV1::parse(TARGET).unwrap(),
             CompilerCodeObjectVersion::V5,
             envelope.finish().unwrap(),
+            symbol_manifest,
             &module_bytes,
         )
         .unwrap();
@@ -1318,7 +1328,6 @@ mod configured_v2_tests {
             consumed,
             &pinned,
             vec![external_provider],
-            vec!["mixed_entry".to_owned(), "object_helper".to_owned()],
             vec![
                 LinkOptionV1::new("code-object-version", "5").unwrap(),
                 LinkOptionV1::new("opt-level", "3").unwrap(),

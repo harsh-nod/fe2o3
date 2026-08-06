@@ -6,7 +6,9 @@ use fe2o3_artifact_transaction::{
     BuildAttempt, CompilerModuleHandoffIdentityV1, ConsumedCompilerModuleHandoffV1,
 };
 use fe2o3_compiler_ffi::{
-    CompilerModuleHandoffErrorV1, CompilerModuleHandoffV1, CompilerModuleKindV1,
+    CompilerFfiEnvelopeIdentityV1, CompilerFfiEnvelopeV1, CompilerModuleHandoffErrorV2,
+    CompilerModuleHandoffV2, CompilerModuleKindV1, CompilerModuleSymbolManifestIdentityV1,
+    CompilerModuleSymbolManifestV1,
 };
 use sha2::{Digest, Sha256};
 
@@ -18,7 +20,8 @@ use crate::{
     WorkerOutputConstraintsV1, WorkerProtocolError, WorkerRequestConstructionError,
     WorkerRequestV1,
     request_construction::{
-        LinkSymbolClosureV1, construct_worker_request_v2_from_consumed_handoff, decode_link_options,
+        LinkSymbolClosureV1, construct_worker_request_v2_from_consumed_handoff,
+        decode_link_options, derive_manifest_symbol_closure,
     },
 };
 
@@ -43,6 +46,8 @@ pub struct InertFirstBuildWorkerV2EvidenceV1 {
     identity: FirstBuildWorkerV2IdentityV1,
     attempt: BuildAttempt,
     handoff_identity: CompilerModuleHandoffIdentityV1,
+    compiler_envelope: CompilerFfiEnvelopeV1,
+    symbol_manifest: CompilerModuleSymbolManifestV1,
     worker: WorkerMeasurementV1,
     plan: MultiInputLinkPlanV1,
     candidate: InertWorkerExecutionV1,
@@ -62,6 +67,22 @@ impl InertFirstBuildWorkerV2EvidenceV1 {
         self.handoff_identity
     }
 
+    pub const fn manifest_identity(&self) -> CompilerModuleSymbolManifestIdentityV1 {
+        self.symbol_manifest.identity()
+    }
+
+    pub const fn compiler_envelope_identity(&self) -> CompilerFfiEnvelopeIdentityV1 {
+        self.compiler_envelope.identity()
+    }
+
+    pub const fn compiler_envelope(&self) -> &CompilerFfiEnvelopeV1 {
+        &self.compiler_envelope
+    }
+
+    pub const fn symbol_manifest(&self) -> &CompilerModuleSymbolManifestV1 {
+        &self.symbol_manifest
+    }
+
     pub const fn worker_measurement(&self) -> &WorkerMeasurementV1 {
         &self.worker
     }
@@ -76,6 +97,14 @@ impl InertFirstBuildWorkerV2EvidenceV1 {
 
     pub const fn authorized(&self) -> &InertCompilerHandoffExecutionV2 {
         &self.authorized
+    }
+
+    pub const fn authorized_request_id(&self) -> &[u8; 32] {
+        self.authorized.response().request_id()
+    }
+
+    pub const fn authorized_request_identity(&self) -> &[u8; 32] {
+        self.authorized.response().request_identity()
     }
 
     pub const fn output_identity(&self) -> ContentIdentityV1 {
@@ -107,7 +136,7 @@ impl InertFirstBuildWorkerV2EvidenceV1 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum FirstBuildWorkerV2Error {
-    CompilerModuleHandoff(CompilerModuleHandoffErrorV1),
+    CompilerModuleHandoff(CompilerModuleHandoffErrorV2),
     LinkPlan(LinkPlanError),
     RequestConstruction(WorkerRequestConstructionError),
     CandidateRequest(WorkerProtocolError),
@@ -198,27 +227,27 @@ impl Error for FirstBuildWorkerV2Error {
 /// use the same exact compiler-module and external-provider bytes. The candidate output is inert
 /// GenericLink evidence; its identity becomes the expected plan output. Success requires V2 to
 /// reproduce the candidate bytes exactly and grants no publication, loading, or launch authority.
-#[allow(clippy::too_many_arguments)]
 pub fn execute_reproducible_first_build_worker_v2(
     consumed: ConsumedCompilerModuleHandoffV1,
     worker: &PinnedWorkerV1,
     mut external_providers: Vec<WorkerInputV1>,
-    final_symbols: Vec<String>,
     mut link_options: Vec<LinkOptionV1>,
     candidate_output_bound: WorkerOutputConstraintsV1,
     limits: WorkerExecutionLimitsV1,
 ) -> Result<InertFirstBuildWorkerV2EvidenceV1, FirstBuildWorkerV2Error> {
     let attempt = consumed.attempt();
     let handoff_identity = consumed.identity();
-    let handoff = CompilerModuleHandoffV1::decode(consumed.bytes())
+    let handoff = CompilerModuleHandoffV2::decode(consumed.bytes())
         .map_err(FirstBuildWorkerV2Error::CompilerModuleHandoff)?;
     let parts = handoff.into_parts();
     let target = parts.target();
     let code_object_version = parts.code_object_version();
-    let (envelope, module) = parts.into_envelope_and_module();
+    let (envelope, symbol_manifest, module) = parts.into_envelope_manifest_and_module();
+    let compiler_envelope_identity = envelope.identity();
+    let manifest_identity = symbol_manifest.identity();
     let directional_symbols = envelope.directional_symbols();
-    let symbols = LinkSymbolClosureV1::new(
-        final_symbols,
+    let symbols = derive_manifest_symbol_closure(
+        &symbol_manifest,
         directional_symbols.imports().map(str::to_owned).collect(),
         directional_symbols.exports().map(str::to_owned).collect(),
     )
@@ -251,6 +280,8 @@ pub fn execute_reproducible_first_build_worker_v2(
     let candidate_request_id = calculate_candidate_request_id(
         attempt,
         handoff_identity,
+        compiler_envelope_identity,
+        manifest_identity,
         worker.measurement(),
         target,
         code_object_version,
@@ -298,7 +329,6 @@ pub fn execute_reproducible_first_build_worker_v2(
         consumed,
         external_providers,
         &input_kinds,
-        symbols.required_symbols(),
         exact_output,
     )
     .map_err(FirstBuildWorkerV2Error::RequestConstruction)?;
@@ -321,6 +351,7 @@ pub fn execute_reproducible_first_build_worker_v2(
     let identity = calculate_evidence_identity(
         attempt,
         handoff_identity,
+        manifest_identity,
         worker.measurement(),
         &plan,
         &candidate,
@@ -330,6 +361,8 @@ pub fn execute_reproducible_first_build_worker_v2(
         identity,
         attempt,
         handoff_identity,
+        compiler_envelope: envelope,
+        symbol_manifest,
         worker: worker.measurement().clone(),
         plan,
         candidate,
@@ -401,6 +434,8 @@ fn derive_plan(
 fn calculate_candidate_request_id(
     attempt: BuildAttempt,
     handoff_identity: CompilerModuleHandoffIdentityV1,
+    compiler_envelope_identity: CompilerFfiEnvelopeIdentityV1,
+    manifest_identity: CompilerModuleSymbolManifestIdentityV1,
     worker: &WorkerMeasurementV1,
     target: fe2o3_kernel_descriptor::DeviceTargetV1,
     code_object_version: fe2o3_kernel_descriptor::CodeObjectVersion,
@@ -414,6 +449,8 @@ fn calculate_candidate_request_id(
     hasher.update(CANDIDATE_REQUEST_ID_DOMAIN_V1);
     hash_attempt(&mut hasher, attempt);
     hasher.update(handoff_identity.as_bytes());
+    hasher.update(compiler_envelope_identity.as_bytes());
+    hash_manifest(&mut hasher, manifest_identity);
     hash_content(&mut hasher, worker.executable());
     hash_text(&mut hasher, worker.worker_build_identity());
     hash_text(&mut hasher, worker.llvm_build_identity());
@@ -444,6 +481,7 @@ fn calculate_candidate_request_id(
 fn calculate_evidence_identity(
     attempt: BuildAttempt,
     handoff_identity: CompilerModuleHandoffIdentityV1,
+    manifest_identity: CompilerModuleSymbolManifestIdentityV1,
     worker: &WorkerMeasurementV1,
     plan: &MultiInputLinkPlanV1,
     candidate: &InertWorkerExecutionV1,
@@ -453,6 +491,7 @@ fn calculate_evidence_identity(
     hasher.update(FIRST_BUILD_EVIDENCE_DOMAIN_V1);
     hash_attempt(&mut hasher, attempt);
     hasher.update(handoff_identity.as_bytes());
+    hash_manifest(&mut hasher, manifest_identity);
     hash_content(&mut hasher, worker.executable());
     hash_text(&mut hasher, worker.worker_build_identity());
     hash_text(&mut hasher, worker.llvm_build_identity());
@@ -478,6 +517,11 @@ fn hash_attempt(hasher: &mut Sha256, attempt: BuildAttempt) {
 }
 
 fn hash_content(hasher: &mut Sha256, identity: ContentIdentityV1) {
+    hasher.update(identity.sha256());
+    hasher.update(identity.byte_len().to_le_bytes());
+}
+
+fn hash_manifest(hasher: &mut Sha256, identity: CompilerModuleSymbolManifestIdentityV1) {
     hasher.update(identity.sha256());
     hasher.update(identity.byte_len().to_le_bytes());
 }

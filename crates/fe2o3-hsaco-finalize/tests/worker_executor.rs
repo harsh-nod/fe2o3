@@ -14,7 +14,8 @@ use fe2o3_artifact_transaction::{
 use fe2o3_compiler_ffi::{
     CodeObjectVersion as CompilerCodeObjectVersion, CompilerFfiContractV1,
     CompilerFfiEnvelopeBuilderV1, CompilerFfiLinkRoleV1, CompilerFfiSourceOwnerV1,
-    CompilerModuleHandoffV1, CompilerModuleKindV1, DeviceTargetV1 as CompilerDeviceTargetV1,
+    CompilerModuleHandoffV2, CompilerModuleKindV1, CompilerModuleSymbolManifestV1,
+    CompilerModuleSymbolRoleV1, DeviceTargetV1 as CompilerDeviceTargetV1,
 };
 use fe2o3_hsaco_finalize::{
     ContentIdentityV1, InertWorkerExecutionV1, LinkInputKindClosureV1, LinkInputV1, LinkOptionV1,
@@ -169,13 +170,27 @@ fn consumed_compiler_handoff_executes_v2_without_gaining_authority() {
         1,
     )
     .unwrap();
-    envelope.push(compiler_export("kernel_main")).unwrap();
-    let module_bytes = b"define amdgpu_kernel void @kernel_main() { ret void }\n";
-    let handoff = CompilerModuleHandoffV1::new(
+    envelope.push(compiler_export("kernel_export")).unwrap();
+    let module_bytes = b"define amdgpu_kernel void @kernel_main() { ret void }\n\
+define i32 @kernel_export(i32 %value) { ret i32 %value }\n";
+    let manifest = CompilerModuleSymbolManifestV1::new([
+        (CompilerModuleSymbolRoleV1::KernelEntry, "kernel_main"),
+        (
+            CompilerModuleSymbolRoleV1::KernelDescriptor,
+            "kernel_main.kd",
+        ),
+        (
+            CompilerModuleSymbolRoleV1::DeviceFfiExport,
+            "kernel_export",
+        ),
+    ])
+    .unwrap();
+    let handoff = CompilerModuleHandoffV2::new(
         CompilerModuleKindV1::LlvmTextIr,
         CompilerDeviceTargetV1::parse("gfx942:xnack-").unwrap(),
         CompilerCodeObjectVersion::V6,
         envelope.finish().unwrap(),
+        manifest,
         module_bytes,
     )
     .unwrap();
@@ -196,7 +211,6 @@ fn consumed_compiler_handoff_executes_v2_without_gaining_authority() {
         consumed,
         vec![],
         &kinds,
-        &["kernel_main".to_owned()],
         WorkerOutputConstraintsV1::new(b"fixture-output".len() as u64).unwrap(),
     )
     .unwrap();

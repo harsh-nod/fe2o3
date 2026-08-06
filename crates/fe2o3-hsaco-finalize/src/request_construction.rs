@@ -9,7 +9,9 @@ use fe2o3_artifact_transaction::{
     BuildAttempt, CompilerModuleHandoffIdentityV1, ConsumedCompilerModuleHandoffV1,
 };
 use fe2o3_compiler_ffi::{
-    CompilerModuleHandoffErrorV1, CompilerModuleHandoffV1, CompilerModuleKindV1,
+    CompilerModuleHandoffErrorV2, CompilerModuleHandoffV2, CompilerModuleKindV1,
+    CompilerModuleSymbolManifestIdentityV1, CompilerModuleSymbolManifestV1,
+    CompilerModuleSymbolRoleV1,
 };
 
 use crate::{
@@ -219,6 +221,51 @@ impl LinkSymbolClosureV1 {
     }
 }
 
+pub(crate) fn derive_manifest_symbol_closure(
+    manifest: &CompilerModuleSymbolManifestV1,
+    import_symbols: Vec<String>,
+    export_symbols: Vec<String>,
+) -> Result<LinkSymbolClosureV1, WorkerRequestConstructionError> {
+    use CompilerModuleSymbolRoleV1 as Role;
+
+    let manifest_imports = manifest
+        .symbols(Role::UnresolvedExternalImport)
+        .collect::<Vec<_>>();
+    if let Some(symbol) = first_directional_mismatch(&manifest_imports, &import_symbols) {
+        return Err(WorkerRequestConstructionError::CompilerEnvelopeImportRoleMismatch(symbol));
+    }
+
+    let manifest_exports = manifest.symbols(Role::DeviceFfiExport).collect::<Vec<_>>();
+    if let Some(symbol) = first_directional_mismatch(&manifest_exports, &export_symbols) {
+        return Err(WorkerRequestConstructionError::CompilerEnvelopeExportRoleMismatch(symbol));
+    }
+
+    let mut required_symbols = Vec::new();
+    for role in [
+        Role::KernelEntry,
+        Role::KernelDescriptor,
+        Role::DeviceFfiExport,
+        Role::UnresolvedExternalImport,
+    ] {
+        required_symbols.extend(manifest.symbols(role).map(str::to_owned));
+    }
+    required_symbols.sort();
+
+    LinkSymbolClosureV1::new(required_symbols, import_symbols, export_symbols)
+}
+
+fn first_directional_mismatch(manifest: &[&str], envelope: &[String]) -> Option<String> {
+    for (manifest_symbol, envelope_symbol) in manifest.iter().zip(envelope) {
+        if *manifest_symbol != envelope_symbol {
+            return Some((*manifest_symbol).to_owned());
+        }
+    }
+    manifest
+        .get(envelope.len())
+        .map(|symbol| (*symbol).to_owned())
+        .or_else(|| envelope.get(manifest.len()).cloned())
+}
+
 /// Builds one deterministic worker request from a fully validated link plan.
 ///
 /// The caller must supply inputs in the plan's canonical identity order. The
@@ -298,8 +345,9 @@ pub fn construct_worker_request_v1(
 /// The complete staged compiler envelope and exact compiler-module witness are
 /// consumed. The module plus every external provider must exactly cover the
 /// plan inputs. Import and export symbols are derived from the retained
-/// envelope; the caller supplies only the complete final symbol closure. No V1
-/// request participates in this construction.
+/// envelope, while the complete final symbol closure is derived from the
+/// compiler manifest. No caller-provided symbol list or V1 handoff participates
+/// in this construction.
 #[allow(dead_code, clippy::too_many_arguments)]
 pub(crate) fn construct_worker_request_v2(
     plan: &MultiInputLinkPlanV1,
@@ -308,10 +356,10 @@ pub(crate) fn construct_worker_request_v2(
     code_object_version: CodeObjectVersion,
     options: WorkerOptionsV1,
     staged_envelope: StagedCompilerFfiEnvelopeV1,
+    symbol_manifest: CompilerModuleSymbolManifestV1,
     compiler_module: ExactCompilerModuleArtifactV1,
     external_providers: Vec<WorkerInputV1>,
     input_kinds: &LinkInputKindClosureV1,
-    final_symbols: &[String],
     output: WorkerOutputConstraintsV1,
 ) -> Result<WorkerRequestV2, WorkerRequestConstructionError> {
     if target != plan.target() {
@@ -324,20 +372,9 @@ pub(crate) fn construct_worker_request_v2(
     if envelope.code_object_version() != code_object_version {
         return Err(WorkerRequestConstructionError::CompilerEnvelopeCodeObjectVersionMismatch);
     }
-    validate_symbols(final_symbols).map_err(WorkerRequestConstructionError::InvalidFinalSymbols)?;
-    if final_symbols.is_empty() {
-        return Err(WorkerRequestConstructionError::EmptySymbolClosure);
-    }
     let (import_symbols, export_symbols) = staged_envelope.directional_symbols();
-    for symbol in import_symbols.iter().chain(&export_symbols) {
-        if final_symbols.binary_search(symbol).is_err() {
-            return Err(
-                WorkerRequestConstructionError::CompilerEnvelopeSymbolAbsentFromFinal(
-                    symbol.clone(),
-                ),
-            );
-        }
-    }
+    let symbols = derive_manifest_symbol_closure(&symbol_manifest, import_symbols, export_symbols)?;
+    let manifest_identity = symbol_manifest.identity();
     let (planned_code_object_version, planned_options) = decode_plan_options(plan)?;
     if code_object_version != planned_code_object_version {
         return Err(WorkerRequestConstructionError::CodeObjectVersionMismatch {
@@ -370,15 +407,16 @@ pub(crate) fn construct_worker_request_v2(
         measurement,
         staged_envelope.identity().as_bytes(),
         envelope.envelope_identity().as_bytes(),
+        manifest_identity,
         target,
         code_object_version,
         options,
         &compiler_module,
         &external_providers,
         input_kinds,
-        &import_symbols,
-        &export_symbols,
-        final_symbols,
+        symbols.import_symbols(),
+        symbols.export_symbols(),
+        symbols.required_symbols(),
         &output,
     );
     if request_id == [0; 32] {
@@ -398,9 +436,9 @@ pub(crate) fn construct_worker_request_v2(
         ),
         compiler_module,
         external_providers,
-        import_symbols,
-        export_symbols,
-        final_symbols: final_symbols.to_vec(),
+        import_symbols: symbols.import_symbols().to_vec(),
+        export_symbols: symbols.export_symbols().to_vec(),
+        final_symbols: symbols.required_symbols().to_vec(),
         output,
     })
     .map_err(WorkerRequestConstructionError::WorkerProtocol)
@@ -415,6 +453,7 @@ pub(crate) fn construct_worker_request_v2(
 pub struct CompilerHandoffWorkerRequestV2 {
     attempt: BuildAttempt,
     handoff_identity: CompilerModuleHandoffIdentityV1,
+    manifest_identity: CompilerModuleSymbolManifestIdentityV1,
     request: WorkerRequestV2,
 }
 
@@ -425,6 +464,10 @@ impl CompilerHandoffWorkerRequestV2 {
 
     pub const fn handoff_identity(&self) -> CompilerModuleHandoffIdentityV1 {
         self.handoff_identity
+    }
+
+    pub const fn manifest_identity(&self) -> CompilerModuleSymbolManifestIdentityV1 {
+        self.manifest_identity
     }
 
     pub const fn sealed_request(&self) -> &WorkerRequestV2 {
@@ -447,26 +490,27 @@ impl CompilerHandoffWorkerRequestV2 {
 /// Constructs the only public Worker V2 request from a consumed, attempt-scoped handoff.
 ///
 /// The complete canonical handoff is decoded again after one-shot consumption. Target,
-/// code-object version, envelope, module kind, exact module bytes, plan inputs, worker
-/// measurement, final symbol closure, and output bound must all agree. A decode or construction
-/// failure consumes no lesser authority: the on-disk tombstone prevents replay.
+/// code-object version, envelope, symbol manifest, module kind, exact module bytes, plan inputs,
+/// worker measurement, and output bound must all agree. The final symbol closure is derived only
+/// from the manifest. A decode or construction failure consumes no lesser authority: the on-disk
+/// tombstone prevents replay.
 pub fn construct_worker_request_v2_from_consumed_handoff(
     plan: &MultiInputLinkPlanV1,
     measurement: &WorkerMeasurementV1,
     consumed: ConsumedCompilerModuleHandoffV1,
     external_providers: Vec<WorkerInputV1>,
     input_kinds: &LinkInputKindClosureV1,
-    final_symbols: &[String],
     output: WorkerOutputConstraintsV1,
 ) -> Result<CompilerHandoffWorkerRequestV2, WorkerRequestConstructionError> {
     let attempt = consumed.attempt();
     let handoff_identity = consumed.identity();
-    let handoff = CompilerModuleHandoffV1::decode(consumed.bytes())
+    let handoff = CompilerModuleHandoffV2::decode(consumed.bytes())
         .map_err(WorkerRequestConstructionError::CompilerModuleHandoff)?;
     let parts = handoff.into_parts();
     let target = parts.target();
     let code_object_version = parts.code_object_version();
-    let (envelope, module) = parts.into_envelope_and_module();
+    let (envelope, symbol_manifest, module) = parts.into_envelope_manifest_and_module();
+    let manifest_identity = symbol_manifest.identity();
     let kind = match module.kind() {
         CompilerModuleKindV1::LlvmTextIr => WorkerInputKindV1::LlvmTextIr,
         CompilerModuleKindV1::LlvmBitcode => WorkerInputKindV1::LlvmBitcode,
@@ -482,15 +526,16 @@ pub fn construct_worker_request_v2_from_consumed_handoff(
         code_object_version,
         options,
         staged_envelope,
+        symbol_manifest,
         compiler_module,
         external_providers,
         input_kinds,
-        final_symbols,
         output,
     )?;
     Ok(CompilerHandoffWorkerRequestV2 {
         attempt,
         handoff_identity,
+        manifest_identity,
         request,
     })
 }
@@ -498,7 +543,7 @@ pub fn construct_worker_request_v2_from_consumed_handoff(
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum WorkerRequestConstructionError {
-    CompilerModuleHandoff(CompilerModuleHandoffErrorV1),
+    CompilerModuleHandoff(CompilerModuleHandoffErrorV2),
     EmptySymbolClosure,
     InvalidRequiredSymbols(WorkerProtocolError),
     InvalidImportSymbols(WorkerProtocolError),
@@ -510,6 +555,8 @@ pub enum WorkerRequestConstructionError {
     CompilerEnvelopeTargetMismatch,
     CompilerEnvelopeCodeObjectVersionMismatch,
     CompilerEnvelopeSymbolAbsentFromFinal(String),
+    CompilerEnvelopeImportRoleMismatch(String),
+    CompilerEnvelopeExportRoleMismatch(String),
     TargetMismatch,
     MissingCodeObjectVersion,
     InvalidCodeObjectVersion(String),
@@ -606,6 +653,14 @@ impl fmt::Display for WorkerRequestConstructionError {
             Self::CompilerEnvelopeSymbolAbsentFromFinal(symbol) => write!(
                 formatter,
                 "compiler envelope symbol {symbol} is absent from the final-symbol set"
+            ),
+            Self::CompilerEnvelopeImportRoleMismatch(symbol) => write!(
+                formatter,
+                "compiler manifest and FFI envelope disagree about import {symbol}"
+            ),
+            Self::CompilerEnvelopeExportRoleMismatch(symbol) => write!(
+                formatter,
+                "compiler manifest and FFI envelope disagree about export {symbol}"
             ),
             Self::TargetMismatch => {
                 formatter.write_str("worker request target does not match link plan")
@@ -881,6 +936,7 @@ fn calculate_request_id_v2(
     measurement: &WorkerMeasurementV1,
     staged_envelope_identity: [u8; 32],
     compiler_envelope_identity: [u8; 32],
+    manifest_identity: CompilerModuleSymbolManifestIdentityV1,
     target: DeviceTargetV1,
     code_object_version: CodeObjectVersion,
     options: WorkerOptionsV1,
@@ -898,6 +954,8 @@ fn calculate_request_id_v2(
     hasher.update(input_kinds.identity.as_bytes());
     hasher.update(staged_envelope_identity);
     hasher.update(compiler_envelope_identity);
+    hasher.update(manifest_identity.sha256());
+    hasher.update(manifest_identity.byte_len().to_le_bytes());
     hasher.update(measurement.executable().sha256());
     hasher.update(measurement.executable().byte_len().to_le_bytes());
     hash_text(&mut hasher, measurement.worker_build_identity());
@@ -959,7 +1017,8 @@ mod v2_tests {
     use fe2o3_compiler_ffi::{
         CodeObjectVersion as CompilerCodeObjectVersion, CompilerFfiContractV1,
         CompilerFfiEnvelopeBuilderV1, CompilerFfiEnvelopeV1, CompilerFfiLinkRoleV1,
-        CompilerFfiSourceOwnerV1, CompilerModuleHandoffV1, CompilerModuleKindV1,
+        CompilerFfiSourceOwnerV1, CompilerModuleHandoffV2, CompilerModuleKindV1,
+        CompilerModuleSymbolManifestV1, CompilerModuleSymbolRoleV1,
         DeviceTargetV1 as CompilerDeviceTargetV1,
     };
     use reserved_fe2o3_symbols::{
@@ -1117,11 +1176,34 @@ mod v2_tests {
         .unwrap()
     }
 
+    fn symbol_manifest(imports: &[&str], internal_helper: &str) -> CompilerModuleSymbolManifestV1 {
+        use CompilerModuleSymbolRoleV1 as Role;
+
+        let mut entries = vec![
+            (Role::KernelEntry, "kernel_main".to_owned()),
+            (Role::KernelDescriptor, "kernel_main.kd".to_owned()),
+            (Role::DeviceFfiExport, "rust_helper".to_owned()),
+            (Role::InternalHelper, internal_helper.to_owned()),
+        ];
+        entries.extend(
+            imports
+                .iter()
+                .map(|symbol| (Role::UnresolvedExternalImport, (*symbol).to_owned())),
+        );
+        entries.sort();
+        CompilerModuleSymbolManifestV1::new(entries).unwrap()
+    }
+
     fn final_symbols() -> Vec<String> {
-        ["external_add", "kernel_main", "rust_helper"]
-            .into_iter()
-            .map(str::to_owned)
-            .collect()
+        [
+            "external_add",
+            "kernel_main",
+            "kernel_main.kd",
+            "rust_helper",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect()
     }
 
     struct TestDirectory(PathBuf);
@@ -1159,11 +1241,14 @@ mod v2_tests {
             BuildSession::from_bytes([0x72; 16]),
         )
         .unwrap();
-        let handoff = CompilerModuleHandoffV1::new(
+        let manifest = symbol_manifest(&["external_add"], "internal_only");
+        let manifest_identity = manifest.identity();
+        let handoff = CompilerModuleHandoffV2::new(
             CompilerModuleKindV1::LlvmBitcode,
             CompilerDeviceTargetV1::parse("gfx942:xnack-").unwrap(),
             CompilerCodeObjectVersion::V6,
             compiler_envelope("external_add"),
+            manifest,
             MODULE,
         )
         .unwrap();
@@ -1182,13 +1267,13 @@ mod v2_tests {
             consumed,
             vec![fixture.provider.clone()],
             &fixture.kinds,
-            &final_symbols(),
             fixture.output,
         )
         .unwrap();
 
         assert_eq!(request.attempt(), attempt);
         assert_eq!(request.handoff_identity(), receipt.identity());
+        assert_eq!(request.manifest_identity(), manifest_identity);
         assert_eq!(request.sealed_request().compiler_module().bytes(), MODULE);
         assert_eq!(
             request.sealed_request().external_providers(),
@@ -1200,7 +1285,7 @@ mod v2_tests {
     }
 
     #[test]
-    fn derives_exact_directions_from_the_retained_envelope() {
+    fn operator_cannot_omit_or_inject_manifest_symbols_and_internal_helpers_do_not_escape() {
         let fixture = fixture();
         let staged = envelope("external_add");
         let compiler_identity = staged.inspection().envelope_identity();
@@ -1217,10 +1302,10 @@ mod v2_tests {
             CodeObjectVersion::V6,
             options(),
             staged,
+            symbol_manifest(&["external_add"], "internal_only"),
             artifact,
             vec![fixture.provider.clone()],
             &fixture.kinds,
-            &final_symbols(),
             fixture.output.clone(),
         )
         .unwrap();
@@ -1233,6 +1318,12 @@ mod v2_tests {
         assert_eq!(request.import_symbols(), ["external_add"]);
         assert_eq!(request.export_symbols(), ["rust_helper"]);
         assert_eq!(request.final_symbols(), final_symbols());
+        assert!(
+            !request
+                .final_symbols()
+                .iter()
+                .any(|symbol| symbol == "internal_only")
+        );
         assert_eq!(request.external_providers(), &[fixture.provider]);
     }
 
@@ -1252,15 +1343,15 @@ mod v2_tests {
                 CodeObjectVersion::V6,
                 options(),
                 envelope("substituted_add"),
+                symbol_manifest(&["external_add"], "internal_only"),
                 artifact,
                 vec![fixture.provider.clone()],
                 &fixture.kinds,
-                &final_symbols(),
                 fixture.output.clone(),
             ),
             Err(
-                WorkerRequestConstructionError::CompilerEnvelopeSymbolAbsentFromFinal(
-                    "substituted_add".to_owned()
+                WorkerRequestConstructionError::CompilerEnvelopeImportRoleMismatch(
+                    "external_add".to_owned()
                 )
             )
         );
@@ -1278,14 +1369,76 @@ mod v2_tests {
                 CodeObjectVersion::V6,
                 options(),
                 envelope("external_add"),
+                symbol_manifest(&["external_add"], "internal_only"),
                 wrong_artifact,
                 vec![fixture.provider],
                 &fixture.kinds,
-                &final_symbols(),
                 fixture.output,
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn uncontracted_manifest_import_fails_closed() {
+        let fixture = fixture();
+        let artifact = stage_exact_compiler_module_artifact_v1(
+            WorkerInputKindV1::LlvmBitcode,
+            MODULE.to_vec(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            construct_worker_request_v2(
+                &fixture.plan,
+                &measurement(),
+                target(),
+                CodeObjectVersion::V6,
+                options(),
+                envelope("external_add"),
+                symbol_manifest(&["external_add", "uncontracted_external"], "internal_only",),
+                artifact,
+                vec![fixture.provider],
+                &fixture.kinds,
+                fixture.output,
+            ),
+            Err(
+                WorkerRequestConstructionError::CompilerEnvelopeImportRoleMismatch(
+                    "uncontracted_external".to_owned()
+                )
+            )
+        );
+    }
+
+    #[test]
+    fn manifest_identity_binds_roles_that_do_not_escape_the_final_closure() {
+        let fixture = fixture();
+        let construct = |internal_helper: &str| {
+            construct_worker_request_v2(
+                &fixture.plan,
+                &measurement(),
+                target(),
+                CodeObjectVersion::V6,
+                options(),
+                envelope("external_add"),
+                symbol_manifest(&["external_add"], internal_helper),
+                stage_exact_compiler_module_artifact_v1(
+                    WorkerInputKindV1::LlvmBitcode,
+                    MODULE.to_vec(),
+                )
+                .unwrap(),
+                vec![fixture.provider.clone()],
+                &fixture.kinds,
+                fixture.output.clone(),
+            )
+            .unwrap()
+        };
+
+        let first = construct("internal_alpha");
+        let second = construct("internal_beta");
+        assert_eq!(first.final_symbols(), second.final_symbols());
+        assert_ne!(first.request_id(), second.request_id());
+        assert_ne!(first.identity(), second.identity());
     }
 
     fn lower_hex(bytes: &[u8]) -> String {
