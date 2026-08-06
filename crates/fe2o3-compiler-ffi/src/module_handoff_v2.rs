@@ -524,9 +524,10 @@ fn validate_envelope_manifest(
     let imports = manifest
         .symbols(CompilerModuleSymbolRoleV1::UnresolvedExternalImport)
         .collect::<Vec<_>>();
-    if directional
-        .imports()
-        .any(|symbol| imports.binary_search(&symbol).is_err())
+    if directional.import_count() != imports.len()
+        || directional
+            .imports()
+            .any(|symbol| imports.binary_search(&symbol).is_err())
     {
         return Err(CompilerModuleHandoffErrorV2::FfiImportRoleMismatch);
     }
@@ -780,6 +781,26 @@ mod tests {
                 CodeObjectVersion::V5,
                 envelope(),
                 missing_import,
+                LLVM_IR,
+            ),
+            Err(CompilerModuleHandoffErrorV2::FfiImportRoleMismatch)
+        );
+
+        let extra_import = CompilerModuleSymbolManifestV1::new([
+            (Role::KernelEntry, "kernel"),
+            (Role::KernelDescriptor, "kernel.kd"),
+            (Role::DeviceFfiExport, "rust_helper"),
+            (Role::UnresolvedExternalImport, "external_add"),
+            (Role::UnresolvedExternalImport, "uncontracted_import"),
+        ])
+        .unwrap();
+        assert_eq!(
+            CompilerModuleHandoffV2::new(
+                CompilerModuleKindV1::LlvmTextIr,
+                target(),
+                CodeObjectVersion::V5,
+                envelope(),
+                extra_import,
                 LLVM_IR,
             ),
             Err(CompilerModuleHandoffErrorV2::FfiImportRoleMismatch)
