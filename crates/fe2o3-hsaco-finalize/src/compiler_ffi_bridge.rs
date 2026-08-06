@@ -1,173 +1,164 @@
-//! Compiler-neutral closure of inert device FFI facts over an exact link plan.
+//! Assertion-only staging for a future G4-to-G1 device FFI request path.
+//!
+//! The current worker V1 wire schema cannot bind the complete staged FFI
+//! identity. This module therefore stops before request construction. It does
+//! not project its data into the generic `LinkSymbolClosureV1` or
+//! `LinkInputKindClosureV1`, because doing so would erase ABI, declaration
+//! owner, provider, effects, semantics, and producer claims.
 
 use std::{collections::BTreeMap, fmt};
 
 use fe2o3_kernel_descriptor::{CodeObjectVersion, DeviceTargetV1};
+use reserved_fe2o3_symbols::{
+    DEVICE_FFI_DIRECTION_EXPORT_V1, DEVICE_FFI_DIRECTION_IMPORT_V1, DeviceFfiContractFieldsV1,
+    DeviceFfiContractIdV1, MAX_DEVICE_FFI_EFFECT_BYTES_V1, MAX_DEVICE_FFI_PHYSICAL_ABI_BYTES_V1,
+    MAX_DEVICE_FFI_SYMBOL_BYTES_V1, derive_device_ffi_contract_id_v1,
+};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    ContentIdentityV1, LinkInputKindClosureV1, LinkPlanIdentityV1, LinkSymbolClosureV1,
-    MultiInputLinkPlanV1, WorkerInputKindV1, WorkerProtocolError,
+    ContentIdentityV1, LinkPlanIdentityV1, MAX_LINK_INPUTS, MultiInputLinkPlanV1,
+    WorkerInputKindV1, WorkerProtocolError,
     worker_protocol::validate_symbols,
 };
 
-/// Maximum device FFI symbols accepted from one compiler closure.
-pub const MAX_COMPILER_FFI_SYMBOLS_V1: usize = 128;
-/// Maximum bytes in one compiler-derived physical ABI spelling.
-pub const MAX_COMPILER_FFI_PHYSICAL_ABI_BYTES_V1: usize = 2_048;
-/// Maximum bytes in one declared effect-set spelling.
-pub const MAX_COMPILER_FFI_EFFECT_BYTES_V1: usize = 256;
-/// Maximum bytes in a source crate name.
-pub const MAX_COMPILER_FFI_CRATE_NAME_BYTES_V1: usize = 128;
-/// Maximum bytes in a compiler source item path.
-pub const MAX_COMPILER_FFI_ITEM_PATH_BYTES_V1: usize = 1_024;
-/// Maximum bytes in a concrete compiler instance symbol.
-pub const MAX_COMPILER_FFI_INSTANCE_SYMBOL_BYTES_V1: usize = 512;
-/// Upper bound for one canonical compiler FFI closure.
-pub const MAX_COMPILER_FFI_CLOSURE_BYTES_V1: usize = 512 * 1024;
+pub use reserved_fe2o3_symbols::DeviceFfiContractIdV1 as G4FfiContractIdV1;
 
-const SOURCE_OWNER_DOMAIN_V1: &[u8] = b"FE2O3/COMPILER-FFI-SOURCE-OWNER/V1\0";
-const COMPILER_CLOSURE_DOMAIN_V1: &[u8] = b"FE2O3/COMPILER-FFI-CLOSURE/V1\0";
-const PLAN_BOUND_CLOSURE_DOMAIN_V1: &[u8] = b"FE2O3/PLAN-BOUND-COMPILER-FFI-CLOSURE/V1\0";
-const DEVICE_FFI_CONTRACT_DOMAIN_V1: &[u8] = b"fe2o3.device-ffi-contract.v1\0";
+/// Maximum G4 FFI symbol claims in one envelope.
+pub const MAX_G4_FFI_SYMBOL_CLAIMS_V1: usize = 128;
+/// Maximum non-kernel Rust definitions represented by the adapter claim.
+pub const MAX_G4_RUST_DEFINITION_CLAIMS_V1: u32 = 4_096;
+/// Maximum Rust kernels represented by the adapter claim.
+pub const MAX_G4_KERNEL_CLAIMS_V1: u32 = 128;
+/// Maximum aggregate bytes across one envelope's variable-length text fields.
+pub const MAX_G4_FFI_AGGREGATE_TEXT_BYTES_V1: usize = 384 * 1024;
+/// Maximum bytes in one declaration-owner crate label.
+pub const MAX_G4_FFI_CRATE_LABEL_BYTES_V1: usize = 128;
+/// Maximum bytes in one declaration-owner item label.
+pub const MAX_G4_FFI_ITEM_LABEL_BYTES_V1: usize = 1_024;
+/// Maximum bytes in one exact concrete instance symbol claim.
+pub const MAX_G4_FFI_INSTANCE_SYMBOL_BYTES_V1: usize = 512;
+/// Maximum bytes in an unauthenticated producer name.
+pub const MAX_FFI_PRODUCER_NAME_BYTES_V1: usize = 128;
+/// Maximum bytes in an unauthenticated producer version.
+pub const MAX_FFI_PRODUCER_VERSION_BYTES_V1: usize = 256;
+/// Maximum canonical bytes retained by an assertion-only G4 envelope.
+pub const MAX_G4_FFI_ENVELOPE_BYTES_V1: usize = 512 * 1024;
+/// Maximum canonical bytes retained by one staged plan.
+pub const MAX_STAGED_FFI_LINK_PLAN_BYTES_V1: usize = 1024 * 1024;
 
-/// Provenance class encoded beside every compiler FFI bridge field.
+const DECLARATION_OWNER_DOMAIN_V1: &[u8] = b"FE2O3/G4-FFI-DECLARATION-OWNER-CLAIM/V1\0";
+const PRODUCER_CLAIM_DOMAIN_V1: &[u8] = b"FE2O3/UNAUTHENTICATED-PRODUCER-CLAIM/V1\0";
+const G4_CLAIM_ENVELOPE_DOMAIN_V1: &[u8] = b"FE2O3/G4-FFI-ASSERTION-ONLY-ENVELOPE/V1\0";
+const FINAL_SYMBOLS_CLAIM_DOMAIN_V1: &[u8] = b"FE2O3/EXPECTED-FINAL-DEFINED-SYMBOLS-CLAIM/V1\0";
+const STAGED_FFI_LINK_PLAN_DOMAIN_V1: &[u8] = b"FE2O3/STAGED-FFI-LINK-PLAN/V1\0";
+
+/// Claim provenance encoded in staging records.
 ///
-/// `CompilerDerived` records a fact that a compiler adapter must derive from
-/// compiler state. `DeclaredClaim` remains an unverified source declaration.
-/// `CallerBindingClaim` is supplied by the build/package layer. None of these
-/// classes is an attestation or an authority grant.
+/// Every variant remains caller-supplied data at this crate boundary. In
+/// particular, `G4AssertionOnly` does not attest that rustc produced the value.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[repr(u8)]
-pub enum CompilerFfiFieldOriginV1 {
-    CompilerDerived = 1,
-    DeclaredClaim = 2,
-    CallerBindingClaim = 3,
+pub enum FfiClaimOriginV1 {
+    G4AssertionOnly = 1,
+    CallerBindingAssertionOnly = 2,
+    UnauthenticatedProducerClaim = 3,
+    UnauthenticatedEvidenceClaim = 4,
 }
 
-/// Named fields whose provenance can be inspected without decoding bytes.
+/// Fields carried by one G4 assertion-only symbol claim.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub enum CompilerFfiSymbolFieldV1 {
+pub enum G4FfiSymbolClaimFieldV1 {
     ContractIdentity,
     Direction,
     Symbol,
     PhysicalAbi,
-    SourceOwner,
-    Definition,
+    DeclarationOwner,
+    ProviderClass,
     Target,
     CodeObjectVersion,
     Effects,
-    SemanticClaim,
+    SemanticIdentity,
 }
 
-impl CompilerFfiSymbolFieldV1 {
-    pub const fn origin(self) -> CompilerFfiFieldOriginV1 {
-        match self {
-            Self::ContractIdentity
-            | Self::Direction
-            | Self::Symbol
-            | Self::PhysicalAbi
-            | Self::SourceOwner
-            | Self::Definition => CompilerFfiFieldOriginV1::CompilerDerived,
-            Self::Target | Self::CodeObjectVersion | Self::Effects | Self::SemanticClaim => {
-                CompilerFfiFieldOriginV1::DeclaredClaim
-            }
-        }
+impl G4FfiSymbolClaimFieldV1 {
+    pub const fn claim_origin(self) -> FfiClaimOriginV1 {
+        let _ = self;
+        FfiClaimOriginV1::G4AssertionOnly
     }
 }
 
-/// Stable identity of one exact compiler FFI contract record.
+/// Identity of an assertion-only declaration-owner record.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct CompilerFfiContractIdentityV1([u8; 32]);
+pub struct G4DeclarationOwnerClaimIdentityV1([u8; 32]);
 
-impl CompilerFfiContractIdentityV1 {
-    pub fn from_bytes(bytes: [u8; 32]) -> Result<Self, CompilerFfiBridgeError> {
-        if bytes == [0; 32] {
-            return Err(CompilerFfiBridgeError::ReservedIdentity(
-                "compiler FFI contract",
-            ));
-        }
-        Ok(Self(bytes))
-    }
-
+impl G4DeclarationOwnerClaimIdentityV1 {
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
 }
 
-/// Stable identity of compiler-derived source ownership.
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct CompilerFfiSourceOwnerIdentityV1([u8; 32]);
-
-impl CompilerFfiSourceOwnerIdentityV1 {
-    pub const fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
-    }
-}
-
-/// Compiler-derived owner of one concrete FFI declaration or definition.
+/// Declaration ownership copied from private G4 state by a future adapter.
 ///
-/// The stable identity uses only `def_path_hash` and
-/// `concrete_instance_symbol`. The crate name and item path are retained in
-/// canonical records as diagnostic labels, but relabeling does not change
-/// source-owner identity.
+/// This is not an artifact producer identity. The stable claim identity uses
+/// the `DefPathHash` and concrete instance symbol; labels remain diagnostic.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CompilerFfiSourceOwnerV1 {
-    crate_name: String,
-    item_path: String,
+pub struct G4DeclarationOwnerClaimV1 {
+    crate_label: String,
+    item_label: String,
     def_path_hash: [u8; 16],
     concrete_instance_symbol: String,
-    identity: CompilerFfiSourceOwnerIdentityV1,
+    identity: G4DeclarationOwnerClaimIdentityV1,
 }
 
-impl CompilerFfiSourceOwnerV1 {
+impl G4DeclarationOwnerClaimV1 {
     pub fn new(
-        crate_name: impl Into<String>,
-        item_path: impl Into<String>,
+        crate_label: impl Into<String>,
+        item_label: impl Into<String>,
         def_path_hash: [u8; 16],
         concrete_instance_symbol: impl Into<String>,
-    ) -> Result<Self, CompilerFfiBridgeError> {
-        let crate_name = crate_name.into();
-        let item_path = item_path.into();
+    ) -> Result<Self, StagedFfiLinkError> {
+        let crate_label = crate_label.into();
+        let item_label = item_label.into();
         let concrete_instance_symbol = concrete_instance_symbol.into();
         validate_text(
-            "source crate name",
-            &crate_name,
-            MAX_COMPILER_FFI_CRATE_NAME_BYTES_V1,
+            "declaration owner crate label",
+            &crate_label,
+            MAX_G4_FFI_CRATE_LABEL_BYTES_V1,
             false,
         )?;
         validate_text(
-            "source item path",
-            &item_path,
-            MAX_COMPILER_FFI_ITEM_PATH_BYTES_V1,
+            "declaration owner item label",
+            &item_label,
+            MAX_G4_FFI_ITEM_LABEL_BYTES_V1,
             false,
         )?;
         validate_ascii_token(
             "concrete instance symbol",
             &concrete_instance_symbol,
-            MAX_COMPILER_FFI_INSTANCE_SYMBOL_BYTES_V1,
+            MAX_G4_FFI_INSTANCE_SYMBOL_BYTES_V1,
         )?;
 
-        let mut identity_preimage = Vec::new();
-        identity_preimage.extend_from_slice(SOURCE_OWNER_DOMAIN_V1);
-        identity_preimage.extend_from_slice(&def_path_hash);
-        push_text(&mut identity_preimage, &concrete_instance_symbol);
-        let identity = CompilerFfiSourceOwnerIdentityV1(Sha256::digest(identity_preimage).into());
+        let mut preimage = Vec::new();
+        preimage.extend_from_slice(DECLARATION_OWNER_DOMAIN_V1);
+        preimage.extend_from_slice(&def_path_hash);
+        push_text(&mut preimage, &concrete_instance_symbol);
+        let identity = G4DeclarationOwnerClaimIdentityV1(Sha256::digest(preimage).into());
         Ok(Self {
-            crate_name,
-            item_path,
+            crate_label,
+            item_label,
             def_path_hash,
             concrete_instance_symbol,
             identity,
         })
     }
 
-    pub fn crate_name(&self) -> &str {
-        &self.crate_name
+    pub fn crate_label(&self) -> &str {
+        &self.crate_label
     }
 
-    pub fn item_path(&self) -> &str {
-        &self.item_path
+    pub fn item_label(&self) -> &str {
+        &self.item_label
     }
 
     pub const fn def_path_hash(&self) -> &[u8; 16] {
@@ -178,53 +169,137 @@ impl CompilerFfiSourceOwnerV1 {
         &self.concrete_instance_symbol
     }
 
-    pub const fn identity(&self) -> CompilerFfiSourceOwnerIdentityV1 {
+    pub const fn identity(&self) -> G4DeclarationOwnerClaimIdentityV1 {
         self.identity
+    }
+
+    pub const fn claim_origin(&self) -> FfiClaimOriginV1 {
+        FfiClaimOriginV1::G4AssertionOnly
     }
 }
 
-/// Direction derived by the compiler from the validated declaration shape.
+/// Identity of an unauthenticated producer claim.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct UnauthenticatedProducerClaimIdentityV1([u8; 32]);
+
+impl UnauthenticatedProducerClaimIdentityV1 {
+    pub const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+/// Separate, unauthenticated producer metadata for one exact plan input.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UnauthenticatedProducerClaimV1 {
+    name: String,
+    version: String,
+    build_identity_claim: [u8; 32],
+    identity: UnauthenticatedProducerClaimIdentityV1,
+}
+
+impl UnauthenticatedProducerClaimV1 {
+    pub fn new(
+        name: impl Into<String>,
+        version: impl Into<String>,
+        build_identity_claim: [u8; 32],
+    ) -> Result<Self, StagedFfiLinkError> {
+        let name = name.into();
+        let version = version.into();
+        validate_text("producer name", &name, MAX_FFI_PRODUCER_NAME_BYTES_V1, true)?;
+        validate_text(
+            "producer version",
+            &version,
+            MAX_FFI_PRODUCER_VERSION_BYTES_V1,
+            true,
+        )?;
+        if build_identity_claim == [0; 32] {
+            return Err(StagedFfiLinkError::ReservedIdentity(
+                "producer build identity claim",
+            ));
+        }
+        let mut preimage = Vec::new();
+        preimage.extend_from_slice(PRODUCER_CLAIM_DOMAIN_V1);
+        push_text(&mut preimage, &name);
+        push_text(&mut preimage, &version);
+        preimage.extend_from_slice(&build_identity_claim);
+        let identity = UnauthenticatedProducerClaimIdentityV1(Sha256::digest(preimage).into());
+        Ok(Self {
+            name,
+            version,
+            build_identity_claim,
+            identity,
+        })
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn version(&self) -> &str {
+        &self.version
+    }
+
+    pub const fn build_identity_claim(&self) -> &[u8; 32] {
+        &self.build_identity_claim
+    }
+
+    pub const fn identity(&self) -> UnauthenticatedProducerClaimIdentityV1 {
+        self.identity
+    }
+
+    pub const fn claim_origin(&self) -> FfiClaimOriginV1 {
+        FfiClaimOriginV1::UnauthenticatedProducerClaim
+    }
+
+    pub const fn is_authenticated(&self) -> bool {
+        false
+    }
+}
+
+/// G4's assertion-only import/export direction.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[repr(u8)]
-pub enum CompilerFfiDirectionV1 {
+pub enum G4FfiDirectionClaimV1 {
     Import = 1,
     Export = 2,
 }
 
-/// Location in which a compiler says the symbol definition must reside.
+/// G4's assertion-only class for where a symbol provider must be bound.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[repr(u8)]
-pub enum CompilerFfiDefinitionV1 {
+pub enum G4SymbolProviderClassClaimV1 {
     ExternalPlanInput = 1,
-    RustCompilerBitcode = 2,
+    CompilerModuleInput = 2,
 }
 
-/// Declaration-origin fields that remain claims after compiler collection.
+/// Source-declared contract claims retained by G4.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CompilerFfiDeclaredClaimsV1 {
+pub struct G4DeclaredContractClaimsV1 {
     target: DeviceTargetV1,
     code_object_version: CodeObjectVersion,
     effects: String,
-    semantic_claim: [u8; 32],
+    semantic_identity: [u8; 32],
 }
 
-impl CompilerFfiDeclaredClaimsV1 {
+impl G4DeclaredContractClaimsV1 {
     pub fn new(
         target: DeviceTargetV1,
         code_object_version: CodeObjectVersion,
         effects: impl Into<String>,
-        semantic_claim: [u8; 32],
-    ) -> Result<Self, CompilerFfiBridgeError> {
+        semantic_identity: [u8; 32],
+    ) -> Result<Self, StagedFfiLinkError> {
         let effects = effects.into();
         validate_effects(&effects)?;
-        if semantic_claim == [0; 32] {
-            return Err(CompilerFfiBridgeError::ReservedIdentity("semantic claim"));
+        if semantic_identity == [0; 32] {
+            return Err(StagedFfiLinkError::ReservedIdentity(
+                "semantic identity claim",
+            ));
         }
         Ok(Self {
             target,
             code_object_version,
             effects,
-            semantic_claim,
+            semantic_identity,
         })
     }
 
@@ -240,12 +315,12 @@ impl CompilerFfiDeclaredClaimsV1 {
         &self.effects
     }
 
-    pub const fn semantic_claim(&self) -> &[u8; 32] {
-        &self.semantic_claim
+    pub const fn semantic_identity(&self) -> &[u8; 32] {
+        &self.semantic_identity
     }
 
-    pub const fn origin(&self) -> CompilerFfiFieldOriginV1 {
-        CompilerFfiFieldOriginV1::DeclaredClaim
+    pub const fn claim_origin(&self) -> FfiClaimOriginV1 {
+        FfiClaimOriginV1::G4AssertionOnly
     }
 
     pub const fn effects_are_derived(&self) -> bool {
@@ -257,55 +332,61 @@ impl CompilerFfiDeclaredClaimsV1 {
     }
 }
 
-/// One compiler-neutral, inert FFI symbol record.
+/// One exact assertion-only symbol record expected from a future G4 adapter.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CompilerFfiSymbolV1 {
-    contract_identity: CompilerFfiContractIdentityV1,
-    direction: CompilerFfiDirectionV1,
+pub struct G4FfiSymbolClaimV1 {
+    contract_identity: DeviceFfiContractIdV1,
+    direction: G4FfiDirectionClaimV1,
     symbol: String,
     physical_abi: String,
-    source_owner: CompilerFfiSourceOwnerV1,
-    definition: CompilerFfiDefinitionV1,
-    declared: CompilerFfiDeclaredClaimsV1,
+    declaration_owner: G4DeclarationOwnerClaimV1,
+    provider_class: G4SymbolProviderClassClaimV1,
+    declared: G4DeclaredContractClaimsV1,
 }
 
-impl CompilerFfiSymbolV1 {
+impl G4FfiSymbolClaimV1 {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        contract_identity: CompilerFfiContractIdentityV1,
-        direction: CompilerFfiDirectionV1,
+        contract_identity: DeviceFfiContractIdV1,
+        direction: G4FfiDirectionClaimV1,
         symbol: impl Into<String>,
         physical_abi: impl Into<String>,
-        source_owner: CompilerFfiSourceOwnerV1,
-        definition: CompilerFfiDefinitionV1,
-        declared: CompilerFfiDeclaredClaimsV1,
-    ) -> Result<Self, CompilerFfiBridgeError> {
+        declaration_owner: G4DeclarationOwnerClaimV1,
+        provider_class: G4SymbolProviderClassClaimV1,
+        declared: G4DeclaredContractClaimsV1,
+    ) -> Result<Self, StagedFfiLinkError> {
         let symbol = symbol.into();
-        validate_symbols(std::slice::from_ref(&symbol))
-            .map_err(CompilerFfiBridgeError::InvalidSymbolSet)?;
+        validate_ffi_symbol(&symbol)?;
         let physical_abi = physical_abi.into();
-        validate_ascii_token(
-            "physical ABI",
-            &physical_abi,
-            MAX_COMPILER_FFI_PHYSICAL_ABI_BYTES_V1,
-        )?;
-        let expected = match direction {
-            CompilerFfiDirectionV1::Import => CompilerFfiDefinitionV1::ExternalPlanInput,
-            CompilerFfiDirectionV1::Export => CompilerFfiDefinitionV1::RustCompilerBitcode,
+        validate_physical_abi(&physical_abi)?;
+        validate_effect_abi_compatibility(&declared.effects, &physical_abi)?;
+        let expected_provider = match direction {
+            G4FfiDirectionClaimV1::Import => G4SymbolProviderClassClaimV1::ExternalPlanInput,
+            G4FfiDirectionClaimV1::Export => G4SymbolProviderClassClaimV1::CompilerModuleInput,
         };
-        if definition != expected {
-            return Err(CompilerFfiBridgeError::DirectionDefinitionMismatch {
+        if provider_class != expected_provider {
+            return Err(StagedFfiLinkError::DirectionProviderClassMismatch {
                 symbol,
                 direction,
-                definition,
+                provider_class,
             });
         }
-        let derived_contract_identity =
-            derive_contract_identity(direction, &symbol, &physical_abi, &declared);
-        if derived_contract_identity != contract_identity {
-            return Err(CompilerFfiBridgeError::ContractIdentityMismatch {
+        let semantic_identity = lower_hex(&declared.semantic_identity);
+        let target = declared.target.to_string();
+        let derived = derive_device_ffi_contract_id_v1(DeviceFfiContractFieldsV1 {
+            direction: direction_tag(direction),
+            symbol: &symbol,
+            calling_convention: "C",
+            code_object_version: u16::from(code_object_version_byte(declared.code_object_version)),
+            target: &target,
+            physical_abi: &physical_abi,
+            effects: &declared.effects,
+            semantic_identity: &semantic_identity,
+        });
+        if derived != contract_identity {
+            return Err(StagedFfiLinkError::ContractIdentityMismatch {
                 claimed: contract_identity,
-                derived: derived_contract_identity,
+                derived,
             });
         }
         Ok(Self {
@@ -313,17 +394,17 @@ impl CompilerFfiSymbolV1 {
             direction,
             symbol,
             physical_abi,
-            source_owner,
-            definition,
+            declaration_owner,
+            provider_class,
             declared,
         })
     }
 
-    pub const fn contract_identity(&self) -> CompilerFfiContractIdentityV1 {
+    pub const fn contract_identity(&self) -> DeviceFfiContractIdV1 {
         self.contract_identity
     }
 
-    pub const fn direction(&self) -> CompilerFfiDirectionV1 {
+    pub const fn direction(&self) -> G4FfiDirectionClaimV1 {
         self.direction
     }
 
@@ -335,75 +416,112 @@ impl CompilerFfiSymbolV1 {
         &self.physical_abi
     }
 
-    pub const fn source_owner(&self) -> &CompilerFfiSourceOwnerV1 {
-        &self.source_owner
+    pub const fn declaration_owner(&self) -> &G4DeclarationOwnerClaimV1 {
+        &self.declaration_owner
     }
 
-    pub const fn definition(&self) -> CompilerFfiDefinitionV1 {
-        self.definition
+    pub const fn provider_class(&self) -> G4SymbolProviderClassClaimV1 {
+        self.provider_class
     }
 
-    pub const fn declared(&self) -> &CompilerFfiDeclaredClaimsV1 {
+    pub const fn declared(&self) -> &G4DeclaredContractClaimsV1 {
         &self.declared
     }
 
-    pub const fn field_origin(field: CompilerFfiSymbolFieldV1) -> CompilerFfiFieldOriginV1 {
-        field.origin()
+    pub const fn field_claim_origin(field: G4FfiSymbolClaimFieldV1) -> FfiClaimOriginV1 {
+        field.claim_origin()
     }
 }
 
-/// Stable identity of a complete canonical compiler FFI closure.
+/// Identity of the exact assertion-only G4 claim envelope.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct CompilerFfiClosureIdentityV1([u8; 32]);
+pub struct G4FfiClaimEnvelopeIdentityV1([u8; 32]);
 
-impl CompilerFfiClosureIdentityV1 {
+impl G4FfiClaimEnvelopeIdentityV1 {
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
 }
 
-/// Inert compiler facts and declaration claims before provider binding.
+/// Exact public envelope a future rustc-side `CollectionResult` adapter needs.
 ///
-/// `required_symbols` is a compiler-derived claim for the complete final
-/// defined-symbol set, including non-FFI entry points. A later rustc adapter
-/// must supply it independently of `symbols`; this type never invents kernel
-/// entries from FFI names.
+/// No implementation of [`G4FfiClaimEnvelopeAdapterV1`] exists yet. Values
+/// entering this crate remain caller claims, even when copied from G4.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CompilerFfiClosureV1 {
+pub struct G4FfiClaimEnvelopeV1 {
     target: DeviceTargetV1,
     code_object_version: CodeObjectVersion,
-    required_symbols: Vec<String>,
-    symbols: Vec<CompilerFfiSymbolV1>,
+    compiler_required_symbols: Vec<String>,
+    rust_definition_count: u32,
+    kernel_count: u32,
+    symbols: Vec<G4FfiSymbolClaimV1>,
     canonical_bytes: Vec<u8>,
-    identity: CompilerFfiClosureIdentityV1,
+    identity: G4FfiClaimEnvelopeIdentityV1,
 }
 
-impl CompilerFfiClosureV1 {
+impl G4FfiClaimEnvelopeV1 {
     pub fn new(
         target: DeviceTargetV1,
         code_object_version: CodeObjectVersion,
-        required_symbols: Vec<String>,
-        symbols: Vec<CompilerFfiSymbolV1>,
-    ) -> Result<Self, CompilerFfiBridgeError> {
-        validate_symbols(&required_symbols).map_err(CompilerFfiBridgeError::InvalidSymbolSet)?;
-        if required_symbols.is_empty() {
-            return Err(CompilerFfiBridgeError::EmptyRequiredSymbolSet);
+        compiler_required_symbols: Vec<String>,
+        rust_definition_count: u32,
+        kernel_count: u32,
+        symbols: Vec<G4FfiSymbolClaimV1>,
+    ) -> Result<Self, StagedFfiLinkError> {
+        validate_symbols(&compiler_required_symbols)
+            .map_err(StagedFfiLinkError::InvalidCompilerRequiredSymbols)?;
+        if rust_definition_count > MAX_G4_RUST_DEFINITION_CLAIMS_V1 {
+            return Err(StagedFfiLinkError::TooManyRustDefinitionClaims);
         }
-        if symbols.len() > MAX_COMPILER_FFI_SYMBOLS_V1 {
-            return Err(CompilerFfiBridgeError::TooManyCompilerFfiSymbols);
+        if kernel_count > MAX_G4_KERNEL_CLAIMS_V1 {
+            return Err(StagedFfiLinkError::TooManyKernelClaims);
         }
-        validate_compiler_symbols(target, code_object_version, &required_symbols, &symbols)?;
-
-        let canonical_bytes =
-            encode_compiler_closure(target, code_object_version, &required_symbols, &symbols);
-        if canonical_bytes.len() > MAX_COMPILER_FFI_CLOSURE_BYTES_V1 {
-            return Err(CompilerFfiBridgeError::CompilerClosureTooLarge);
+        if symbols.len() > MAX_G4_FFI_SYMBOL_CLAIMS_V1 {
+            return Err(StagedFfiLinkError::TooManyFfiSymbolClaims);
         }
-        let identity = CompilerFfiClosureIdentityV1(Sha256::digest(&canonical_bytes).into());
+        if (rust_definition_count != 0 || kernel_count != 0 || !symbols.is_empty())
+            && compiler_required_symbols.is_empty()
+        {
+            return Err(StagedFfiLinkError::MissingCompilerRequiredSymbols);
+        }
+        let export_count = symbols
+            .iter()
+            .filter(|symbol| symbol.direction == G4FfiDirectionClaimV1::Export)
+            .count();
+        if export_count > rust_definition_count as usize {
+            return Err(StagedFfiLinkError::RustDefinitionCountTooSmall {
+                claimed: rust_definition_count,
+                exports: export_count,
+            });
+        }
+        validate_g4_symbol_claims(
+            target,
+            code_object_version,
+            &compiler_required_symbols,
+            &symbols,
+        )?;
+        let aggregate_text_bytes = envelope_text_bytes(&compiler_required_symbols, &symbols)?;
+        if aggregate_text_bytes > MAX_G4_FFI_AGGREGATE_TEXT_BYTES_V1 {
+            return Err(StagedFfiLinkError::AggregateTextBoundExceeded);
+        }
+        let canonical_bytes = encode_g4_envelope(
+            target,
+            code_object_version,
+            &compiler_required_symbols,
+            rust_definition_count,
+            kernel_count,
+            &symbols,
+        );
+        if canonical_bytes.len() > MAX_G4_FFI_ENVELOPE_BYTES_V1 {
+            return Err(StagedFfiLinkError::EnvelopeByteBoundExceeded);
+        }
+        let identity = G4FfiClaimEnvelopeIdentityV1(Sha256::digest(&canonical_bytes).into());
         Ok(Self {
             target,
             code_object_version,
-            required_symbols,
+            compiler_required_symbols,
+            rust_definition_count,
+            kernel_count,
             symbols,
             canonical_bytes,
             identity,
@@ -418,11 +536,23 @@ impl CompilerFfiClosureV1 {
         self.code_object_version
     }
 
-    pub fn required_symbols(&self) -> &[String] {
-        &self.required_symbols
+    pub fn compiler_required_symbols(&self) -> &[String] {
+        &self.compiler_required_symbols
     }
 
-    pub fn symbols(&self) -> &[CompilerFfiSymbolV1] {
+    pub const fn rust_definition_count(&self) -> u32 {
+        self.rust_definition_count
+    }
+
+    pub const fn kernel_count(&self) -> u32 {
+        self.kernel_count
+    }
+
+    pub const fn requires_compiler_module(&self) -> bool {
+        self.rust_definition_count != 0 || self.kernel_count != 0
+    }
+
+    pub fn symbols(&self) -> &[G4FfiSymbolClaimV1] {
         &self.symbols
     }
 
@@ -430,189 +560,346 @@ impl CompilerFfiClosureV1 {
         &self.canonical_bytes
     }
 
-    pub const fn identity(&self) -> CompilerFfiClosureIdentityV1 {
+    pub const fn identity(&self) -> G4FfiClaimEnvelopeIdentityV1 {
         self.identity
     }
 
-    pub const fn required_symbols_origin(&self) -> CompilerFfiFieldOriginV1 {
-        CompilerFfiFieldOriginV1::CompilerDerived
+    pub const fn claim_origin(&self) -> FfiClaimOriginV1 {
+        FfiClaimOriginV1::G4AssertionOnly
+    }
+
+    pub const fn is_actual_compiler_integration(&self) -> bool {
+        false
     }
 
     pub const fn grants_link_authority(&self) -> bool {
         false
     }
-
-    pub const fn grants_load_authority(&self) -> bool {
-        false
-    }
-
-    pub const fn grants_launch_authority(&self) -> bool {
-        false
-    }
 }
 
-/// Caller-declared role of one exact input in the canonical plan sequence.
+/// Adapter contract to be implemented on rustc-side state in a separate change.
+///
+/// The implementation must copy `CollectionResult.device_ffi`, exact compiler
+/// required symbols, Rust definition count, and kernel count into one envelope.
+/// It must not invent a compiler-module artifact identity.
+pub trait G4FfiClaimEnvelopeAdapterV1 {
+    fn assertion_only_g4_ffi_claim_envelope_v1(
+        &self,
+    ) -> Result<G4FfiClaimEnvelopeV1, StagedFfiLinkError>;
+}
+
+/// Caller-asserted role of an exact plan input.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[repr(u8)]
-pub enum CompilerFfiPlanInputRoleV1 {
-    RustCompilerBitcode = 1,
-    ExternalDefinitionProvider = 2,
+pub enum FfiPlanInputRoleClaimV1 {
+    /// A future exact compiler-module artifact; no format is inferred.
+    CompilerModule = 1,
+    ExternalSymbolProvider = 2,
     LinkSupport = 3,
 }
 
-/// Exact kind and role claim for one plan input.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct CompilerFfiPlanInputBindingV1 {
+/// Exact caller claim for one input in the plan's canonical sequence.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FfiPlanInputClaimV1 {
     identity: ContentIdentityV1,
     kind: WorkerInputKindV1,
-    role: CompilerFfiPlanInputRoleV1,
+    role: FfiPlanInputRoleClaimV1,
+    producer: UnauthenticatedProducerClaimV1,
 }
 
-impl CompilerFfiPlanInputBindingV1 {
-    pub fn new(
+impl FfiPlanInputClaimV1 {
+    pub const fn new(
         identity: ContentIdentityV1,
         kind: WorkerInputKindV1,
-        role: CompilerFfiPlanInputRoleV1,
-    ) -> Result<Self, CompilerFfiBridgeError> {
-        if role == CompilerFfiPlanInputRoleV1::RustCompilerBitcode
-            && kind != WorkerInputKindV1::LlvmBitcode
-        {
-            return Err(CompilerFfiBridgeError::CompilerInputIsNotLlvmBitcode);
-        }
-        Ok(Self {
+        role: FfiPlanInputRoleClaimV1,
+        producer: UnauthenticatedProducerClaimV1,
+    ) -> Self {
+        Self {
             identity,
             kind,
             role,
-        })
-    }
-
-    pub const fn identity(self) -> ContentIdentityV1 {
-        self.identity
-    }
-
-    pub const fn kind(self) -> WorkerInputKindV1 {
-        self.kind
-    }
-
-    pub const fn role(self) -> CompilerFfiPlanInputRoleV1 {
-        self.role
-    }
-
-    pub const fn origin(self) -> CompilerFfiFieldOriginV1 {
-        CompilerFfiFieldOriginV1::CallerBindingClaim
-    }
-}
-
-/// Caller binding from one exact compiler contract and owner to one plan input.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct CompilerFfiProviderBindingV1 {
-    contract_identity: CompilerFfiContractIdentityV1,
-    source_owner_identity: CompilerFfiSourceOwnerIdentityV1,
-    provider_input_identity: ContentIdentityV1,
-    provider_input_kind: WorkerInputKindV1,
-}
-
-impl CompilerFfiProviderBindingV1 {
-    pub const fn new(
-        contract_identity: CompilerFfiContractIdentityV1,
-        source_owner_identity: CompilerFfiSourceOwnerIdentityV1,
-        provider_input_identity: ContentIdentityV1,
-        provider_input_kind: WorkerInputKindV1,
-    ) -> Self {
-        Self {
-            contract_identity,
-            source_owner_identity,
-            provider_input_identity,
-            provider_input_kind,
+            producer,
         }
     }
 
-    pub const fn contract_identity(self) -> CompilerFfiContractIdentityV1 {
-        self.contract_identity
+    pub const fn identity(&self) -> ContentIdentityV1 {
+        self.identity
     }
 
-    pub const fn source_owner_identity(self) -> CompilerFfiSourceOwnerIdentityV1 {
-        self.source_owner_identity
+    pub const fn kind(&self) -> WorkerInputKindV1 {
+        self.kind
     }
 
-    pub const fn provider_input_identity(self) -> ContentIdentityV1 {
-        self.provider_input_identity
+    pub const fn role(&self) -> FfiPlanInputRoleClaimV1 {
+        self.role
     }
 
-    pub const fn provider_input_kind(self) -> WorkerInputKindV1 {
-        self.provider_input_kind
+    pub const fn producer(&self) -> &UnauthenticatedProducerClaimV1 {
+        &self.producer
     }
 
-    pub const fn origin(self) -> CompilerFfiFieldOriginV1 {
-        CompilerFfiFieldOriginV1::CallerBindingClaim
+    pub const fn claim_origin(&self) -> FfiClaimOriginV1 {
+        FfiClaimOriginV1::CallerBindingAssertionOnly
     }
 }
 
-/// Stable identity of the exact plan, compiler closure, and caller bindings.
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct PlanBoundCompilerFfiClosureIdentityV1([u8; 32]);
+/// Exact caller binding of one FFI contract claim to one plan input claim.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FfiSymbolProviderBindingClaimV1 {
+    contract_identity: DeviceFfiContractIdV1,
+    declaration_owner_identity: G4DeclarationOwnerClaimIdentityV1,
+    provider_input_identity: ContentIdentityV1,
+    provider_input_kind: WorkerInputKindV1,
+    producer_claim_identity: UnauthenticatedProducerClaimIdentityV1,
+}
 
-impl PlanBoundCompilerFfiClosureIdentityV1 {
+impl FfiSymbolProviderBindingClaimV1 {
+    pub const fn new(
+        contract_identity: DeviceFfiContractIdV1,
+        declaration_owner_identity: G4DeclarationOwnerClaimIdentityV1,
+        provider_input_identity: ContentIdentityV1,
+        provider_input_kind: WorkerInputKindV1,
+        producer_claim_identity: UnauthenticatedProducerClaimIdentityV1,
+    ) -> Self {
+        Self {
+            contract_identity,
+            declaration_owner_identity,
+            provider_input_identity,
+            provider_input_kind,
+            producer_claim_identity,
+        }
+    }
+
+    pub const fn contract_identity(&self) -> DeviceFfiContractIdV1 {
+        self.contract_identity
+    }
+
+    pub const fn declaration_owner_identity(&self) -> G4DeclarationOwnerClaimIdentityV1 {
+        self.declaration_owner_identity
+    }
+
+    pub const fn provider_input_identity(&self) -> ContentIdentityV1 {
+        self.provider_input_identity
+    }
+
+    pub const fn provider_input_kind(&self) -> WorkerInputKindV1 {
+        self.provider_input_kind
+    }
+
+    pub const fn producer_claim_identity(&self) -> UnauthenticatedProducerClaimIdentityV1 {
+        self.producer_claim_identity
+    }
+
+    pub const fn claim_origin(&self) -> FfiClaimOriginV1 {
+        FfiClaimOriginV1::CallerBindingAssertionOnly
+    }
+}
+
+/// Claimed source of complete final-defined-symbol expectations.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[repr(u8)]
+pub enum FinalSymbolEvidenceSourceClaimV1 {
+    BoundedInputInspection = 1,
+    AuthenticatedInputManifest = 2,
+}
+
+/// Caller claim that one exact input was covered by symbol evidence.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InputSymbolEvidenceCoverageClaimV1 {
+    input_identity: ContentIdentityV1,
+    input_kind: WorkerInputKindV1,
+    source: FinalSymbolEvidenceSourceClaimV1,
+    evidence_identity_claim: [u8; 32],
+}
+
+impl InputSymbolEvidenceCoverageClaimV1 {
+    pub fn new(
+        input_identity: ContentIdentityV1,
+        input_kind: WorkerInputKindV1,
+        source: FinalSymbolEvidenceSourceClaimV1,
+        evidence_identity_claim: [u8; 32],
+    ) -> Result<Self, StagedFfiLinkError> {
+        if evidence_identity_claim == [0; 32] {
+            return Err(StagedFfiLinkError::ReservedIdentity(
+                "input symbol evidence identity claim",
+            ));
+        }
+        Ok(Self {
+            input_identity,
+            input_kind,
+            source,
+            evidence_identity_claim,
+        })
+    }
+
+    pub const fn input_identity(&self) -> ContentIdentityV1 {
+        self.input_identity
+    }
+
+    pub const fn input_kind(&self) -> WorkerInputKindV1 {
+        self.input_kind
+    }
+
+    pub const fn source(&self) -> FinalSymbolEvidenceSourceClaimV1 {
+        self.source
+    }
+
+    pub const fn evidence_identity_claim(&self) -> &[u8; 32] {
+        &self.evidence_identity_claim
+    }
+
+    pub const fn claim_origin(&self) -> FfiClaimOriginV1 {
+        FfiClaimOriginV1::UnauthenticatedEvidenceClaim
+    }
+}
+
+/// Identity of complete, but still caller-asserted, final symbol expectations.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct ExpectedFinalDefinedSymbolsClaimIdentityV1([u8; 32]);
+
+impl ExpectedFinalDefinedSymbolsClaimIdentityV1 {
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
 }
 
-/// G1 closures produced only after exact plan/provider validation.
-///
-/// This is still inert build data. In particular, successful construction is
-/// not proof that a provider defines a symbol or that declared effects and
-/// semantics are true.
+/// Optional exact final-defined-symbol expectations with all-input coverage.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PlanBoundCompilerFfiClosureV1 {
-    plan_identity: LinkPlanIdentityV1,
-    compiler_closure_identity: CompilerFfiClosureIdentityV1,
-    plan_inputs: Vec<CompilerFfiPlanInputBindingV1>,
-    provider_bindings: Vec<CompilerFfiProviderBindingV1>,
-    input_kinds: LinkInputKindClosureV1,
-    symbols: LinkSymbolClosureV1,
+pub struct ExpectedFinalDefinedSymbolsClaimV1 {
+    symbols: Vec<String>,
+    coverage: Vec<InputSymbolEvidenceCoverageClaimV1>,
     canonical_bytes: Vec<u8>,
-    identity: PlanBoundCompilerFfiClosureIdentityV1,
+    identity: ExpectedFinalDefinedSymbolsClaimIdentityV1,
 }
 
-impl PlanBoundCompilerFfiClosureV1 {
-    pub const fn plan_identity(&self) -> LinkPlanIdentityV1 {
-        self.plan_identity
+impl ExpectedFinalDefinedSymbolsClaimV1 {
+    pub fn new(
+        symbols: Vec<String>,
+        coverage: Vec<InputSymbolEvidenceCoverageClaimV1>,
+    ) -> Result<Self, StagedFfiLinkError> {
+        validate_symbols(&symbols).map_err(StagedFfiLinkError::InvalidFinalDefinedSymbols)?;
+        if symbols.is_empty() {
+            return Err(StagedFfiLinkError::EmptyFinalDefinedSymbols);
+        }
+        if coverage.is_empty() || coverage.len() > MAX_LINK_INPUTS {
+            return Err(StagedFfiLinkError::InvalidSymbolEvidenceCoverageCount);
+        }
+        validate_coverage_order(&coverage)?;
+        let symbol_bytes = aggregate_string_bytes(&symbols)?;
+        if symbol_bytes > MAX_G4_FFI_AGGREGATE_TEXT_BYTES_V1 {
+            return Err(StagedFfiLinkError::AggregateTextBoundExceeded);
+        }
+        let canonical_bytes = encode_final_symbols_claim(&symbols, &coverage);
+        let identity =
+            ExpectedFinalDefinedSymbolsClaimIdentityV1(Sha256::digest(&canonical_bytes).into());
+        Ok(Self {
+            symbols,
+            coverage,
+            canonical_bytes,
+            identity,
+        })
     }
 
-    pub const fn compiler_closure_identity(&self) -> CompilerFfiClosureIdentityV1 {
-        self.compiler_closure_identity
-    }
-
-    pub fn plan_inputs(&self) -> &[CompilerFfiPlanInputBindingV1] {
-        &self.plan_inputs
-    }
-
-    pub fn provider_bindings(&self) -> &[CompilerFfiProviderBindingV1] {
-        &self.provider_bindings
-    }
-
-    pub const fn input_kinds(&self) -> &LinkInputKindClosureV1 {
-        &self.input_kinds
-    }
-
-    pub const fn symbols(&self) -> &LinkSymbolClosureV1 {
+    pub fn symbols(&self) -> &[String] {
         &self.symbols
+    }
+
+    pub fn coverage(&self) -> &[InputSymbolEvidenceCoverageClaimV1] {
+        &self.coverage
     }
 
     pub fn canonical_bytes(&self) -> &[u8] {
         &self.canonical_bytes
     }
 
-    pub const fn identity(&self) -> PlanBoundCompilerFfiClosureIdentityV1 {
+    pub const fn identity(&self) -> ExpectedFinalDefinedSymbolsClaimIdentityV1 {
         self.identity
     }
 
-    pub const fn effects_are_derived(&self) -> bool {
+    pub const fn claim_origin(&self) -> FfiClaimOriginV1 {
+        FfiClaimOriginV1::UnauthenticatedEvidenceClaim
+    }
+
+    pub const fn is_authenticated(&self) -> bool {
+        false
+    }
+}
+
+/// Identity of the complete opaque staged FFI plan.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct StagedFfiLinkPlanIdentityV1([u8; 32]);
+
+impl StagedFfiLinkPlanIdentityV1 {
+    pub const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+/// Why a staged FFI plan cannot become a worker V1 request.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum StagedFfiExecutionBlockerV1 {
+    MissingExpectedFinalDefinedSymbolsClaim,
+    WorkerProtocolV1CannotBindCompleteFfiIdentity,
+}
+
+/// Opaque, assertion-only staging record that cannot construct a worker request.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StagedFfiLinkPlanV1 {
+    plan_identity: LinkPlanIdentityV1,
+    g4_claim_envelope_identity: G4FfiClaimEnvelopeIdentityV1,
+    input_claims: Vec<FfiPlanInputClaimV1>,
+    provider_binding_claims: Vec<FfiSymbolProviderBindingClaimV1>,
+    final_symbols_claim: Option<ExpectedFinalDefinedSymbolsClaimV1>,
+    canonical_bytes: Vec<u8>,
+    identity: StagedFfiLinkPlanIdentityV1,
+}
+
+impl StagedFfiLinkPlanV1 {
+    pub const fn plan_identity(&self) -> LinkPlanIdentityV1 {
+        self.plan_identity
+    }
+
+    pub const fn g4_claim_envelope_identity(&self) -> G4FfiClaimEnvelopeIdentityV1 {
+        self.g4_claim_envelope_identity
+    }
+
+    pub fn input_claims(&self) -> &[FfiPlanInputClaimV1] {
+        &self.input_claims
+    }
+
+    pub fn provider_binding_claims(&self) -> &[FfiSymbolProviderBindingClaimV1] {
+        &self.provider_binding_claims
+    }
+
+    pub const fn final_symbols_claim(&self) -> Option<&ExpectedFinalDefinedSymbolsClaimV1> {
+        self.final_symbols_claim.as_ref()
+    }
+
+    pub fn canonical_bytes(&self) -> &[u8] {
+        &self.canonical_bytes
+    }
+
+    pub const fn identity(&self) -> StagedFfiLinkPlanIdentityV1 {
+        self.identity
+    }
+
+    pub const fn execution_blocker(&self) -> StagedFfiExecutionBlockerV1 {
+        if self.final_symbols_claim.is_none() {
+            StagedFfiExecutionBlockerV1::MissingExpectedFinalDefinedSymbolsClaim
+        } else {
+            StagedFfiExecutionBlockerV1::WorkerProtocolV1CannotBindCompleteFfiIdentity
+        }
+    }
+
+    pub const fn can_construct_worker_request_v1(&self) -> bool {
         false
     }
 
-    pub const fn semantics_are_verified(&self) -> bool {
+    pub const fn can_bind_worker_response_v1(&self) -> bool {
+        false
+    }
+
+    pub const fn compiler_module_claim_is_authenticated(&self) -> bool {
         false
     }
 
@@ -629,70 +916,47 @@ impl PlanBoundCompilerFfiClosureV1 {
     }
 }
 
-/// Validates exact provider bindings and closes compiler FFI facts over `plan`.
-///
-/// `plan_inputs` must be in the plan's existing canonical input order. Provider
-/// bindings must be strictly ordered by contract identity. The function never
-/// sorts, guesses a provider by symbol name, or inspects provider bytes.
-pub fn bind_compiler_ffi_closure_v1(
+/// Stages exact claims over a canonical link plan without creating a request.
+pub fn stage_g4_ffi_link_plan_v1(
     plan: &MultiInputLinkPlanV1,
-    compiler: &CompilerFfiClosureV1,
-    plan_inputs: Vec<CompilerFfiPlanInputBindingV1>,
-    provider_bindings: Vec<CompilerFfiProviderBindingV1>,
-) -> Result<PlanBoundCompilerFfiClosureV1, CompilerFfiBridgeError> {
-    if compiler.target != plan.target() {
-        return Err(CompilerFfiBridgeError::PlanTargetMismatch);
+    envelope: &G4FfiClaimEnvelopeV1,
+    input_claims: Vec<FfiPlanInputClaimV1>,
+    provider_binding_claims: Vec<FfiSymbolProviderBindingClaimV1>,
+    final_symbols_claim: Option<ExpectedFinalDefinedSymbolsClaimV1>,
+) -> Result<StagedFfiLinkPlanV1, StagedFfiLinkError> {
+    if envelope.target != plan.target() {
+        return Err(StagedFfiLinkError::PlanTargetMismatch);
     }
     let plan_code_object_version = plan_code_object_version(plan)?;
-    if compiler.code_object_version != plan_code_object_version {
-        return Err(CompilerFfiBridgeError::PlanCodeObjectVersionMismatch {
+    if envelope.code_object_version != plan_code_object_version {
+        return Err(StagedFfiLinkError::PlanCodeObjectVersionMismatch {
             plan: plan_code_object_version,
-            compiler: compiler.code_object_version,
+            g4_claim: envelope.code_object_version,
         });
     }
-    validate_plan_inputs(plan, &plan_inputs)?;
-    validate_provider_bindings(compiler, &plan_inputs, &provider_bindings)?;
+    validate_input_claims(plan, envelope, &input_claims)?;
+    validate_provider_binding_claims(envelope, &input_claims, &provider_binding_claims)?;
+    if let Some(final_symbols) = &final_symbols_claim {
+        validate_final_symbols_claim(envelope, &input_claims, final_symbols)?;
+    }
 
-    let input_kinds = LinkInputKindClosureV1::new(
+    let canonical_bytes = encode_staged_plan(
         plan,
-        plan_inputs.iter().map(|binding| binding.kind).collect(),
-    )
-    .map_err(CompilerFfiBridgeError::RequestClosure)?;
-    let import_symbols = compiler
-        .symbols
-        .iter()
-        .filter(|symbol| symbol.direction == CompilerFfiDirectionV1::Import)
-        .map(|symbol| symbol.symbol.clone())
-        .collect();
-    let export_symbols = compiler
-        .symbols
-        .iter()
-        .filter(|symbol| symbol.direction == CompilerFfiDirectionV1::Export)
-        .map(|symbol| symbol.symbol.clone())
-        .collect();
-    let symbols = LinkSymbolClosureV1::new(
-        compiler.required_symbols.clone(),
-        import_symbols,
-        export_symbols,
-    )
-    .map_err(CompilerFfiBridgeError::RequestClosure)?;
-
-    let canonical_bytes = encode_plan_bound_closure(
-        plan,
-        compiler,
-        &plan_inputs,
-        &provider_bindings,
-        &input_kinds,
-        &symbols,
+        envelope,
+        &input_claims,
+        &provider_binding_claims,
+        final_symbols_claim.as_ref(),
     );
-    let identity = PlanBoundCompilerFfiClosureIdentityV1(Sha256::digest(&canonical_bytes).into());
-    Ok(PlanBoundCompilerFfiClosureV1 {
+    if canonical_bytes.len() > MAX_STAGED_FFI_LINK_PLAN_BYTES_V1 {
+        return Err(StagedFfiLinkError::StagedPlanByteBoundExceeded);
+    }
+    let identity = StagedFfiLinkPlanIdentityV1(Sha256::digest(&canonical_bytes).into());
+    Ok(StagedFfiLinkPlanV1 {
         plan_identity: plan.identity(),
-        compiler_closure_identity: compiler.identity,
-        plan_inputs,
-        provider_bindings,
-        input_kinds,
-        symbols,
+        g4_claim_envelope_identity: envelope.identity,
+        input_claims,
+        provider_binding_claims,
+        final_symbols_claim,
         canonical_bytes,
         identity,
     })
@@ -700,267 +964,346 @@ pub fn bind_compiler_ffi_closure_v1(
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
-pub enum CompilerFfiBridgeError {
-    EmptyRequiredSymbolSet,
-    TooManyCompilerFfiSymbols,
-    CompilerClosureTooLarge,
+pub enum StagedFfiLinkError {
     ReservedIdentity(&'static str),
     InvalidText(&'static str),
+    InvalidFfiSymbol,
+    InvalidPhysicalAbi,
+    TooManyPhysicalAbiArguments,
     InvalidEffects,
-    InvalidSymbolSet(WorkerProtocolError),
-    NonCanonicalCompilerSymbols,
-    DuplicateContractIdentity(CompilerFfiContractIdentityV1),
+    EffectAbiMismatch(String),
     ContractIdentityMismatch {
-        claimed: CompilerFfiContractIdentityV1,
-        derived: CompilerFfiContractIdentityV1,
+        claimed: DeviceFfiContractIdV1,
+        derived: DeviceFfiContractIdV1,
     },
-    DuplicateCompilerSymbol(String),
-    DuplicateSourceOwner(CompilerFfiSourceOwnerIdentityV1),
-    MissingRequiredSymbol(String),
+    DirectionProviderClassMismatch {
+        symbol: String,
+        direction: G4FfiDirectionClaimV1,
+        provider_class: G4SymbolProviderClassClaimV1,
+    },
+    InvalidCompilerRequiredSymbols(WorkerProtocolError),
+    MissingCompilerRequiredSymbols,
+    TooManyRustDefinitionClaims,
+    TooManyKernelClaims,
+    TooManyFfiSymbolClaims,
+    RustDefinitionCountTooSmall {
+        claimed: u32,
+        exports: usize,
+    },
+    NonCanonicalFfiSymbolClaims,
+    DuplicateContractClaim(DeviceFfiContractIdV1),
+    DuplicateSymbolClaim(String),
+    DuplicateDeclarationOwnerClaim(G4DeclarationOwnerClaimIdentityV1),
+    MissingCompilerRequiredSymbol(String),
     SymbolTargetMismatch(String),
     SymbolCodeObjectVersionMismatch(String),
-    DirectionDefinitionMismatch {
-        symbol: String,
-        direction: CompilerFfiDirectionV1,
-        definition: CompilerFfiDefinitionV1,
-    },
+    AggregateTextBoundExceeded,
+    EnvelopeByteBoundExceeded,
     PlanTargetMismatch,
     MissingPlanCodeObjectVersion,
     InvalidPlanCodeObjectVersion(String),
     PlanCodeObjectVersionMismatch {
         plan: CodeObjectVersion,
-        compiler: CodeObjectVersion,
+        g4_claim: CodeObjectVersion,
     },
-    PlanInputCountMismatch {
+    PlanInputClaimCountMismatch {
         plan: usize,
-        bindings: usize,
+        claims: usize,
     },
-    PlanInputSequenceMismatch {
+    PlanInputClaimSequenceMismatch {
         index: usize,
         plan: ContentIdentityV1,
-        binding: ContentIdentityV1,
+        claim: ContentIdentityV1,
     },
-    CompilerInputIsNotLlvmBitcode,
-    MissingRustCompilerInput,
-    MultipleRustCompilerInputs,
-    NonCanonicalProviderBindings,
-    DuplicateProviderBinding(CompilerFfiContractIdentityV1),
-    ConflictingProviderBinding(CompilerFfiContractIdentityV1),
-    UnreferencedProviderBinding(CompilerFfiContractIdentityV1),
-    MissingProviderBinding(CompilerFfiContractIdentityV1),
-    ProviderSourceOwnerMismatch(CompilerFfiContractIdentityV1),
-    ProviderInputNotInPlan(ContentIdentityV1),
-    UnreferencedProviderInput(ContentIdentityV1),
+    MissingCompilerModuleInputClaim,
+    UnexpectedCompilerModuleInputClaim,
+    MultipleCompilerModuleInputClaims,
+    NonCanonicalProviderBindingClaims,
+    DuplicateProviderBindingClaim(DeviceFfiContractIdV1),
+    ConflictingProviderBindingClaim(DeviceFfiContractIdV1),
+    UnreferencedProviderBindingClaim(DeviceFfiContractIdV1),
+    MissingProviderBindingClaim(DeviceFfiContractIdV1),
+    ProviderDeclarationOwnerMismatch(DeviceFfiContractIdV1),
+    ProviderInputAbsent(ContentIdentityV1),
     ProviderInputKindMismatch {
-        contract: CompilerFfiContractIdentityV1,
-        declared: WorkerInputKindV1,
-        planned: WorkerInputKindV1,
+        contract: DeviceFfiContractIdV1,
+        binding: WorkerInputKindV1,
+        input: WorkerInputKindV1,
     },
     ProviderInputRoleMismatch {
-        contract: CompilerFfiContractIdentityV1,
-        definition: CompilerFfiDefinitionV1,
-        role: CompilerFfiPlanInputRoleV1,
+        contract: DeviceFfiContractIdV1,
+        provider_class: G4SymbolProviderClassClaimV1,
+        input_role: FfiPlanInputRoleClaimV1,
     },
-    RequestClosure(crate::WorkerRequestConstructionError),
+    ProviderProducerClaimMismatch(DeviceFfiContractIdV1),
+    UnreferencedExternalProviderInput(ContentIdentityV1),
+    InvalidFinalDefinedSymbols(WorkerProtocolError),
+    EmptyFinalDefinedSymbols,
+    InvalidSymbolEvidenceCoverageCount,
+    NonCanonicalSymbolEvidenceCoverage,
+    SymbolEvidenceCoverageCountMismatch {
+        inputs: usize,
+        coverage: usize,
+    },
+    SymbolEvidenceCoverageMismatch {
+        index: usize,
+    },
+    CompilerRequiredSymbolAbsentFromFinalExpectation(String),
+    StagedPlanByteBoundExceeded,
 }
 
-impl fmt::Display for CompilerFfiBridgeError {
+impl fmt::Display for StagedFfiLinkError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::EmptyRequiredSymbolSet => {
-                formatter.write_str("compiler FFI closure has no required symbols")
-            }
-            Self::TooManyCompilerFfiSymbols => {
-                formatter.write_str("compiler FFI symbol count exceeds the V1 bound")
-            }
-            Self::CompilerClosureTooLarge => {
-                formatter.write_str("canonical compiler FFI closure exceeds the V1 byte bound")
-            }
             Self::ReservedIdentity(field) => {
                 write!(formatter, "{field} uses the reserved zero identity")
             }
             Self::InvalidText(field) => {
                 write!(formatter, "{field} is empty, oversized, or noncanonical")
             }
+            Self::InvalidFfiSymbol => {
+                formatter.write_str("FFI symbol violates the authoritative V1 grammar")
+            }
+            Self::InvalidPhysicalAbi => {
+                formatter.write_str("physical ABI is not in the exact G4 V1 grammar")
+            }
+            Self::TooManyPhysicalAbiArguments => {
+                formatter.write_str("physical ABI argument count exceeds the G4 V1 bound")
+            }
             Self::InvalidEffects => {
-                formatter.write_str("declared effects are not a bounded canonical set")
+                formatter.write_str("effect claim is not a canonical G4 V1 effect set")
             }
-            Self::InvalidSymbolSet(error) => {
-                write!(formatter, "invalid compiler FFI symbol set: {error}")
-            }
-            Self::NonCanonicalCompilerSymbols => {
-                formatter.write_str("compiler FFI symbols are not in canonical order")
-            }
-            Self::DuplicateContractIdentity(identity) => {
-                write!(formatter, "duplicate compiler FFI contract {identity:?}")
-            }
+            Self::EffectAbiMismatch(effect) => write!(
+                formatter,
+                "effect {effect} has no compatible physical ABI argument"
+            ),
             Self::ContractIdentityMismatch { claimed, derived } => write!(
                 formatter,
-                "compiler FFI contract identity {claimed:?} does not match derived identity {derived:?}"
+                "contract claim {claimed:?} does not match authoritative derivation {derived:?}"
             ),
-            Self::DuplicateCompilerSymbol(symbol) => {
-                write!(formatter, "duplicate compiler FFI symbol {symbol}")
+            Self::DirectionProviderClassMismatch {
+                symbol,
+                direction,
+                provider_class,
+            } => write!(
+                formatter,
+                "symbol {symbol} direction {direction:?} conflicts with provider class claim {provider_class:?}"
+            ),
+            Self::InvalidCompilerRequiredSymbols(error) => {
+                write!(formatter, "invalid compiler-required symbol claim: {error}")
             }
-            Self::DuplicateSourceOwner(identity) => write!(
+            Self::MissingCompilerRequiredSymbols => {
+                formatter.write_str("nonempty G4 claim envelope has no compiler-required symbols")
+            }
+            Self::TooManyRustDefinitionClaims => {
+                formatter.write_str("Rust definition count exceeds the G4 V1 bound")
+            }
+            Self::TooManyKernelClaims => {
+                formatter.write_str("kernel count exceeds the G4 V1 bound")
+            }
+            Self::TooManyFfiSymbolClaims => {
+                formatter.write_str("FFI symbol count exceeds the G4 V1 bound")
+            }
+            Self::RustDefinitionCountTooSmall { claimed, exports } => write!(
                 formatter,
-                "duplicate compiler FFI source owner {identity:?}"
+                "Rust definition count {claimed} is smaller than {exports} FFI exports"
             ),
-            Self::MissingRequiredSymbol(symbol) => write!(
+            Self::NonCanonicalFfiSymbolClaims => {
+                formatter.write_str("FFI symbol claims are not in canonical order")
+            }
+            Self::DuplicateContractClaim(identity) => {
+                write!(formatter, "duplicate FFI contract claim {identity:?}")
+            }
+            Self::DuplicateSymbolClaim(symbol) => {
+                write!(formatter, "duplicate FFI symbol claim {symbol}")
+            }
+            Self::DuplicateDeclarationOwnerClaim(identity) => {
+                write!(formatter, "duplicate declaration-owner claim {identity:?}")
+            }
+            Self::MissingCompilerRequiredSymbol(symbol) => write!(
                 formatter,
-                "compiler FFI symbol {symbol} is absent from the complete required-symbol set"
+                "FFI symbol {symbol} is absent from compiler-required symbols"
             ),
             Self::SymbolTargetMismatch(symbol) => write!(
                 formatter,
-                "compiler FFI symbol {symbol} disagrees with the closure target"
+                "FFI symbol {symbol} disagrees with the envelope target"
             ),
             Self::SymbolCodeObjectVersionMismatch(symbol) => write!(
                 formatter,
-                "compiler FFI symbol {symbol} disagrees with the closure code-object version"
+                "FFI symbol {symbol} disagrees with the envelope code-object version"
             ),
-            Self::DirectionDefinitionMismatch {
-                symbol,
-                direction,
-                definition,
-            } => write!(
-                formatter,
-                "compiler FFI symbol {symbol} direction {direction:?} conflicts with definition role {definition:?}"
-            ),
+            Self::AggregateTextBoundExceeded => {
+                formatter.write_str("aggregate FFI claim text exceeds the V1 bound")
+            }
+            Self::EnvelopeByteBoundExceeded => {
+                formatter.write_str("canonical G4 claim envelope exceeds the V1 bound")
+            }
             Self::PlanTargetMismatch => {
-                formatter.write_str("compiler FFI closure target does not match the link plan")
+                formatter.write_str("G4 target claim does not match the link plan")
             }
             Self::MissingPlanCodeObjectVersion => {
                 formatter.write_str("link plan has no code-object-version option")
             }
             Self::InvalidPlanCodeObjectVersion(value) => write!(
                 formatter,
-                "link plan has unsupported code-object version {value}"
+                "link plan has invalid code-object version {value}"
             ),
-            Self::PlanCodeObjectVersionMismatch { plan, compiler } => write!(
+            Self::PlanCodeObjectVersionMismatch { plan, g4_claim } => write!(
                 formatter,
-                "compiler FFI code-object version {compiler:?} does not match plan {plan:?}"
+                "G4 code-object claim {g4_claim:?} does not match plan {plan:?}"
             ),
-            Self::PlanInputCountMismatch { plan, bindings } => write!(
+            Self::PlanInputClaimCountMismatch { plan, claims } => write!(
                 formatter,
-                "plan has {plan} inputs but compiler FFI bridge received {bindings} input bindings"
+                "plan has {plan} inputs but received {claims} input claims"
             ),
-            Self::PlanInputSequenceMismatch {
-                index,
-                plan,
-                binding,
-            } => write!(
+            Self::PlanInputClaimSequenceMismatch { index, plan, claim } => write!(
                 formatter,
-                "input binding {index} identity {binding} does not match canonical plan input {plan}"
+                "input claim {index} identity {claim} does not match plan input {plan}"
             ),
-            Self::CompilerInputIsNotLlvmBitcode => {
-                formatter.write_str("Rust compiler input role requires LLVM bitcode")
+            Self::MissingCompilerModuleInputClaim => formatter.write_str(
+                "Rust definitions or kernels require one exact compiler-module input claim",
+            ),
+            Self::UnexpectedCompilerModuleInputClaim => formatter
+                .write_str("compiler-module input is claimed without Rust definitions or kernels"),
+            Self::MultipleCompilerModuleInputClaims => {
+                formatter.write_str("more than one compiler-module input is claimed")
             }
-            Self::MissingRustCompilerInput => formatter
-                .write_str("Rust FFI definitions have no unique compiler LLVM-bitcode input"),
-            Self::MultipleRustCompilerInputs => formatter
-                .write_str("multiple plan inputs claim the unique Rust compiler-bitcode role"),
-            Self::NonCanonicalProviderBindings => {
-                formatter.write_str("provider bindings are not in canonical contract order")
+            Self::NonCanonicalProviderBindingClaims => {
+                formatter.write_str("provider binding claims are not in canonical contract order")
             }
-            Self::DuplicateProviderBinding(identity) => write!(
+            Self::DuplicateProviderBindingClaim(identity) => write!(
                 formatter,
-                "duplicate provider binding for contract {identity:?}"
+                "duplicate provider binding claim for {identity:?}"
             ),
-            Self::ConflictingProviderBinding(identity) => write!(
+            Self::ConflictingProviderBindingClaim(identity) => write!(
                 formatter,
-                "conflicting provider bindings for contract {identity:?}"
+                "conflicting provider binding claims for {identity:?}"
             ),
-            Self::UnreferencedProviderBinding(identity) => write!(
+            Self::UnreferencedProviderBindingClaim(identity) => write!(
                 formatter,
-                "provider binding references unknown contract {identity:?}"
+                "provider binding claim references unknown contract {identity:?}"
             ),
-            Self::MissingProviderBinding(identity) => write!(
+            Self::MissingProviderBindingClaim(identity) => write!(
                 formatter,
-                "compiler FFI contract {identity:?} has no provider binding"
+                "FFI contract {identity:?} has no provider binding claim"
             ),
-            Self::ProviderSourceOwnerMismatch(identity) => write!(
+            Self::ProviderDeclarationOwnerMismatch(identity) => write!(
                 formatter,
-                "provider binding source owner does not match contract {identity:?}"
+                "provider binding declaration owner disagrees for {identity:?}"
             ),
-            Self::ProviderInputNotInPlan(identity) => write!(
+            Self::ProviderInputAbsent(identity) => write!(
                 formatter,
-                "provider input {identity} is absent from the exact link plan"
-            ),
-            Self::UnreferencedProviderInput(identity) => write!(
-                formatter,
-                "provider-role input {identity} is not referenced by any exact symbol binding"
+                "provider input {identity} is absent from the exact plan claims"
             ),
             Self::ProviderInputKindMismatch {
                 contract,
-                declared,
-                planned,
+                binding,
+                input,
             } => write!(
                 formatter,
-                "provider for contract {contract:?} declares kind {declared:?} but plan binding declares {planned:?}"
+                "provider {contract:?} kind {binding:?} disagrees with input claim {input:?}"
             ),
             Self::ProviderInputRoleMismatch {
                 contract,
-                definition,
-                role,
+                provider_class,
+                input_role,
             } => write!(
                 formatter,
-                "provider for contract {contract:?} has input role {role:?}, incompatible with {definition:?}"
+                "provider {contract:?} class {provider_class:?} disagrees with input role {input_role:?}"
             ),
-            Self::RequestClosure(error) => {
-                write!(formatter, "G1 request closure construction failed: {error}")
+            Self::ProviderProducerClaimMismatch(identity) => write!(
+                formatter,
+                "provider producer claim disagrees for contract {identity:?}"
+            ),
+            Self::UnreferencedExternalProviderInput(identity) => write!(
+                formatter,
+                "external-provider input {identity} is not referenced by a symbol binding"
+            ),
+            Self::InvalidFinalDefinedSymbols(error) => {
+                write!(formatter, "invalid final-defined-symbol claim: {error}")
+            }
+            Self::EmptyFinalDefinedSymbols => {
+                formatter.write_str("final-defined-symbol claim is empty")
+            }
+            Self::InvalidSymbolEvidenceCoverageCount => formatter
+                .write_str("symbol evidence coverage count is outside the plan-input bound"),
+            Self::NonCanonicalSymbolEvidenceCoverage => {
+                formatter.write_str("symbol evidence coverage is not in canonical input order")
+            }
+            Self::SymbolEvidenceCoverageCountMismatch { inputs, coverage } => write!(
+                formatter,
+                "{coverage} symbol evidence records do not cover {inputs} inputs"
+            ),
+            Self::SymbolEvidenceCoverageMismatch { index } => write!(
+                formatter,
+                "symbol evidence record {index} does not cover the exact input identity and kind"
+            ),
+            Self::CompilerRequiredSymbolAbsentFromFinalExpectation(symbol) => write!(
+                formatter,
+                "compiler-required symbol {symbol} is absent from final-defined-symbol expectations"
+            ),
+            Self::StagedPlanByteBoundExceeded => {
+                formatter.write_str("canonical staged FFI plan exceeds the V1 bound")
             }
         }
     }
 }
 
-impl std::error::Error for CompilerFfiBridgeError {}
+impl std::error::Error for StagedFfiLinkError {}
 
-fn validate_compiler_symbols(
+fn validate_g4_symbol_claims(
     target: DeviceTargetV1,
     code_object_version: CodeObjectVersion,
-    required_symbols: &[String],
-    symbols: &[CompilerFfiSymbolV1],
-) -> Result<(), CompilerFfiBridgeError> {
+    compiler_required_symbols: &[String],
+    symbols: &[G4FfiSymbolClaimV1],
+) -> Result<(), StagedFfiLinkError> {
     let mut contracts = BTreeMap::new();
     let mut names = BTreeMap::new();
     let mut owners = BTreeMap::new();
     let mut previous = None;
     for symbol in symbols {
-        let order_key = (
+        let key = (
             symbol.symbol.as_str(),
             symbol.contract_identity,
-            symbol.source_owner.identity,
+            symbol.declaration_owner.identity,
         );
-        if previous.is_some_and(|previous| previous >= order_key) {
-            return Err(CompilerFfiBridgeError::NonCanonicalCompilerSymbols);
+        if previous.is_some_and(|previous| previous >= key) {
+            return Err(StagedFfiLinkError::NonCanonicalFfiSymbolClaims);
         }
-        previous = Some(order_key);
+        previous = Some(key);
         if contracts.insert(symbol.contract_identity, ()).is_some() {
-            return Err(CompilerFfiBridgeError::DuplicateContractIdentity(
+            return Err(StagedFfiLinkError::DuplicateContractClaim(
                 symbol.contract_identity,
             ));
         }
         if names.insert(symbol.symbol.as_str(), ()).is_some() {
-            return Err(CompilerFfiBridgeError::DuplicateCompilerSymbol(
+            return Err(StagedFfiLinkError::DuplicateSymbolClaim(
                 symbol.symbol.clone(),
             ));
         }
-        if owners.insert(symbol.source_owner.identity, ()).is_some() {
-            return Err(CompilerFfiBridgeError::DuplicateSourceOwner(
-                symbol.source_owner.identity,
+        if owners
+            .insert(symbol.declaration_owner.identity, ())
+            .is_some()
+        {
+            return Err(StagedFfiLinkError::DuplicateDeclarationOwnerClaim(
+                symbol.declaration_owner.identity,
             ));
         }
-        if required_symbols.binary_search(&symbol.symbol).is_err() {
-            return Err(CompilerFfiBridgeError::MissingRequiredSymbol(
+        if compiler_required_symbols
+            .binary_search(&symbol.symbol)
+            .is_err()
+        {
+            return Err(StagedFfiLinkError::MissingCompilerRequiredSymbol(
                 symbol.symbol.clone(),
             ));
         }
         if symbol.declared.target != target {
-            return Err(CompilerFfiBridgeError::SymbolTargetMismatch(
+            return Err(StagedFfiLinkError::SymbolTargetMismatch(
                 symbol.symbol.clone(),
             ));
         }
         if symbol.declared.code_object_version != code_object_version {
-            return Err(CompilerFfiBridgeError::SymbolCodeObjectVersionMismatch(
+            return Err(StagedFfiLinkError::SymbolCodeObjectVersionMismatch(
                 symbol.symbol.clone(),
             ));
         }
@@ -968,133 +1311,124 @@ fn validate_compiler_symbols(
     Ok(())
 }
 
-fn validate_plan_inputs(
+fn validate_input_claims(
     plan: &MultiInputLinkPlanV1,
-    bindings: &[CompilerFfiPlanInputBindingV1],
-) -> Result<(), CompilerFfiBridgeError> {
-    if plan.inputs().len() != bindings.len() {
-        return Err(CompilerFfiBridgeError::PlanInputCountMismatch {
+    envelope: &G4FfiClaimEnvelopeV1,
+    claims: &[FfiPlanInputClaimV1],
+) -> Result<(), StagedFfiLinkError> {
+    if claims.len() != plan.inputs().len() {
+        return Err(StagedFfiLinkError::PlanInputClaimCountMismatch {
             plan: plan.inputs().len(),
-            bindings: bindings.len(),
+            claims: claims.len(),
         });
     }
-    let mut compiler_inputs = 0;
-    for (index, (planned, binding)) in plan.inputs().iter().zip(bindings).enumerate() {
-        if planned.identity() != binding.identity {
-            return Err(CompilerFfiBridgeError::PlanInputSequenceMismatch {
+    let mut compiler_modules = 0;
+    for (index, (planned, claim)) in plan.inputs().iter().zip(claims).enumerate() {
+        if planned.identity() != claim.identity {
+            return Err(StagedFfiLinkError::PlanInputClaimSequenceMismatch {
                 index,
                 plan: planned.identity(),
-                binding: binding.identity,
+                claim: claim.identity,
             });
         }
-        if binding.role == CompilerFfiPlanInputRoleV1::RustCompilerBitcode {
-            compiler_inputs += 1;
-            if binding.kind != WorkerInputKindV1::LlvmBitcode {
-                return Err(CompilerFfiBridgeError::CompilerInputIsNotLlvmBitcode);
-            }
+        if claim.role == FfiPlanInputRoleClaimV1::CompilerModule {
+            compiler_modules += 1;
         }
     }
-    if compiler_inputs > 1 {
-        return Err(CompilerFfiBridgeError::MultipleRustCompilerInputs);
+    if compiler_modules > 1 {
+        return Err(StagedFfiLinkError::MultipleCompilerModuleInputClaims);
     }
-    Ok(())
+    match (envelope.requires_compiler_module(), compiler_modules) {
+        (true, 0) => Err(StagedFfiLinkError::MissingCompilerModuleInputClaim),
+        (false, 1) => Err(StagedFfiLinkError::UnexpectedCompilerModuleInputClaim),
+        _ => Ok(()),
+    }
 }
 
-fn validate_provider_bindings(
-    compiler: &CompilerFfiClosureV1,
-    plan_inputs: &[CompilerFfiPlanInputBindingV1],
-    bindings: &[CompilerFfiProviderBindingV1],
-) -> Result<(), CompilerFfiBridgeError> {
-    let has_rust_definitions = compiler
-        .symbols
-        .iter()
-        .any(|symbol| symbol.definition == CompilerFfiDefinitionV1::RustCompilerBitcode);
-    if has_rust_definitions
-        && !plan_inputs
-            .iter()
-            .any(|input| input.role == CompilerFfiPlanInputRoleV1::RustCompilerBitcode)
-    {
-        return Err(CompilerFfiBridgeError::MissingRustCompilerInput);
-    }
-    let symbols_by_contract: BTreeMap<_, _> = compiler
+fn validate_provider_binding_claims(
+    envelope: &G4FfiClaimEnvelopeV1,
+    input_claims: &[FfiPlanInputClaimV1],
+    bindings: &[FfiSymbolProviderBindingClaimV1],
+) -> Result<(), StagedFfiLinkError> {
+    let symbols: BTreeMap<_, _> = envelope
         .symbols
         .iter()
         .map(|symbol| (symbol.contract_identity, symbol))
         .collect();
-    let plan_inputs_by_identity: BTreeMap<_, _> = plan_inputs
+    let inputs: BTreeMap<_, _> = input_claims
         .iter()
         .map(|input| (input.identity, input))
         .collect();
-    let mut previous: Option<&CompilerFfiProviderBindingV1> = None;
+    let mut previous: Option<&FfiSymbolProviderBindingClaimV1> = None;
     let mut seen = BTreeMap::new();
     let mut referenced_inputs = BTreeMap::new();
     for binding in bindings {
         if let Some(previous) = previous {
             if previous.contract_identity > binding.contract_identity {
-                return Err(CompilerFfiBridgeError::NonCanonicalProviderBindings);
+                return Err(StagedFfiLinkError::NonCanonicalProviderBindingClaims);
             }
             if previous.contract_identity == binding.contract_identity {
                 return Err(if previous == binding {
-                    CompilerFfiBridgeError::DuplicateProviderBinding(binding.contract_identity)
+                    StagedFfiLinkError::DuplicateProviderBindingClaim(binding.contract_identity)
                 } else {
-                    CompilerFfiBridgeError::ConflictingProviderBinding(binding.contract_identity)
+                    StagedFfiLinkError::ConflictingProviderBindingClaim(binding.contract_identity)
                 });
             }
         }
         previous = Some(binding);
-        let symbol = symbols_by_contract.get(&binding.contract_identity).ok_or(
-            CompilerFfiBridgeError::UnreferencedProviderBinding(binding.contract_identity),
+        let symbol = symbols.get(&binding.contract_identity).ok_or(
+            StagedFfiLinkError::UnreferencedProviderBindingClaim(binding.contract_identity),
         )?;
-        if symbol.source_owner.identity != binding.source_owner_identity {
-            return Err(CompilerFfiBridgeError::ProviderSourceOwnerMismatch(
+        if symbol.declaration_owner.identity != binding.declaration_owner_identity {
+            return Err(StagedFfiLinkError::ProviderDeclarationOwnerMismatch(
                 binding.contract_identity,
             ));
         }
-        let input = plan_inputs_by_identity
-            .get(&binding.provider_input_identity)
-            .ok_or(CompilerFfiBridgeError::ProviderInputNotInPlan(
-                binding.provider_input_identity,
-            ))?;
+        let input = inputs.get(&binding.provider_input_identity).ok_or(
+            StagedFfiLinkError::ProviderInputAbsent(binding.provider_input_identity),
+        )?;
         if input.kind != binding.provider_input_kind {
-            return Err(CompilerFfiBridgeError::ProviderInputKindMismatch {
+            return Err(StagedFfiLinkError::ProviderInputKindMismatch {
                 contract: binding.contract_identity,
-                declared: binding.provider_input_kind,
-                planned: input.kind,
+                binding: binding.provider_input_kind,
+                input: input.kind,
             });
         }
-        let expected_role = match symbol.definition {
-            CompilerFfiDefinitionV1::RustCompilerBitcode => {
-                CompilerFfiPlanInputRoleV1::RustCompilerBitcode
+        let expected_role = match symbol.provider_class {
+            G4SymbolProviderClassClaimV1::ExternalPlanInput => {
+                FfiPlanInputRoleClaimV1::ExternalSymbolProvider
             }
-            CompilerFfiDefinitionV1::ExternalPlanInput => {
-                CompilerFfiPlanInputRoleV1::ExternalDefinitionProvider
+            G4SymbolProviderClassClaimV1::CompilerModuleInput => {
+                FfiPlanInputRoleClaimV1::CompilerModule
             }
         };
         if input.role != expected_role {
-            return Err(CompilerFfiBridgeError::ProviderInputRoleMismatch {
+            return Err(StagedFfiLinkError::ProviderInputRoleMismatch {
                 contract: binding.contract_identity,
-                definition: symbol.definition,
-                role: input.role,
+                provider_class: symbol.provider_class,
+                input_role: input.role,
             });
+        }
+        if input.producer.identity != binding.producer_claim_identity {
+            return Err(StagedFfiLinkError::ProviderProducerClaimMismatch(
+                binding.contract_identity,
+            ));
         }
         seen.insert(binding.contract_identity, ());
         referenced_inputs.insert(binding.provider_input_identity, ());
     }
-    for symbol in &compiler.symbols {
+    for symbol in &envelope.symbols {
         if !seen.contains_key(&symbol.contract_identity) {
-            return Err(CompilerFfiBridgeError::MissingProviderBinding(
+            return Err(StagedFfiLinkError::MissingProviderBindingClaim(
                 symbol.contract_identity,
             ));
         }
     }
-    for input in plan_inputs {
-        if matches!(
-            input.role,
-            CompilerFfiPlanInputRoleV1::RustCompilerBitcode
-                | CompilerFfiPlanInputRoleV1::ExternalDefinitionProvider
-        ) && !referenced_inputs.contains_key(&input.identity)
+    for input in input_claims {
+        if input.role == FfiPlanInputRoleClaimV1::ExternalSymbolProvider
+            && !referenced_inputs.contains_key(&input.identity)
         {
-            return Err(CompilerFfiBridgeError::UnreferencedProviderInput(
+            return Err(StagedFfiLinkError::UnreferencedExternalProviderInput(
                 input.identity,
             ));
         }
@@ -1102,28 +1436,168 @@ fn validate_provider_bindings(
     Ok(())
 }
 
+fn validate_final_symbols_claim(
+    envelope: &G4FfiClaimEnvelopeV1,
+    input_claims: &[FfiPlanInputClaimV1],
+    final_symbols: &ExpectedFinalDefinedSymbolsClaimV1,
+) -> Result<(), StagedFfiLinkError> {
+    if final_symbols.coverage.len() != input_claims.len() {
+        return Err(StagedFfiLinkError::SymbolEvidenceCoverageCountMismatch {
+            inputs: input_claims.len(),
+            coverage: final_symbols.coverage.len(),
+        });
+    }
+    for (index, (input, coverage)) in input_claims.iter().zip(&final_symbols.coverage).enumerate() {
+        if input.identity != coverage.input_identity || input.kind != coverage.input_kind {
+            return Err(StagedFfiLinkError::SymbolEvidenceCoverageMismatch { index });
+        }
+    }
+    for required in &envelope.compiler_required_symbols {
+        if final_symbols.symbols.binary_search(required).is_err() {
+            return Err(
+                StagedFfiLinkError::CompilerRequiredSymbolAbsentFromFinalExpectation(
+                    required.clone(),
+                ),
+            );
+        }
+    }
+    Ok(())
+}
+
+fn validate_coverage_order(
+    coverage: &[InputSymbolEvidenceCoverageClaimV1],
+) -> Result<(), StagedFfiLinkError> {
+    for pair in coverage.windows(2) {
+        if pair[0].input_identity >= pair[1].input_identity {
+            return Err(StagedFfiLinkError::NonCanonicalSymbolEvidenceCoverage);
+        }
+    }
+    Ok(())
+}
+
 fn plan_code_object_version(
     plan: &MultiInputLinkPlanV1,
-) -> Result<CodeObjectVersion, CompilerFfiBridgeError> {
+) -> Result<CodeObjectVersion, StagedFfiLinkError> {
     let value = plan
         .options()
         .iter()
         .find(|option| option.name() == "code-object-version")
-        .ok_or(CompilerFfiBridgeError::MissingPlanCodeObjectVersion)?
+        .ok_or(StagedFfiLinkError::MissingPlanCodeObjectVersion)?
         .value();
     match value {
         "4" => Ok(CodeObjectVersion::V4),
         "5" => Ok(CodeObjectVersion::V5),
         "6" => Ok(CodeObjectVersion::V6),
-        value => Err(CompilerFfiBridgeError::InvalidPlanCodeObjectVersion(
+        value => Err(StagedFfiLinkError::InvalidPlanCodeObjectVersion(
             value.to_owned(),
         )),
     }
 }
 
-fn validate_effects(effects: &str) -> Result<(), CompilerFfiBridgeError> {
-    if effects.is_empty() || effects.len() > MAX_COMPILER_FFI_EFFECT_BYTES_V1 {
-        return Err(CompilerFfiBridgeError::InvalidEffects);
+fn validate_ffi_symbol(symbol: &str) -> Result<(), StagedFfiLinkError> {
+    let mut bytes = symbol.bytes();
+    let valid = !symbol.is_empty()
+        && symbol.len() <= MAX_DEVICE_FFI_SYMBOL_BYTES_V1
+        && bytes
+            .next()
+            .is_some_and(|byte| byte.is_ascii_alphabetic() || matches!(byte, b'_' | b'.' | b'$'))
+        && bytes.all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'$' | b'@' | b'-')
+        });
+    if valid {
+        Ok(())
+    } else {
+        Err(StagedFfiLinkError::InvalidFfiSymbol)
+    }
+}
+
+fn validate_physical_abi(abi: &str) -> Result<(), StagedFfiLinkError> {
+    if abi.is_empty() || abi.len() > MAX_DEVICE_FFI_PHYSICAL_ABI_BYTES_V1 {
+        return Err(StagedFfiLinkError::InvalidPhysicalAbi);
+    }
+    let mut rest = abi
+        .strip_prefix("C(")
+        .ok_or(StagedFfiLinkError::InvalidPhysicalAbi)?;
+    let mut arguments = 0;
+    if let Some(after) = rest.strip_prefix(")->") {
+        rest = after;
+    } else {
+        loop {
+            rest = consume_abi_type(rest).ok_or(StagedFfiLinkError::InvalidPhysicalAbi)?;
+            arguments += 1;
+            if arguments > 32 {
+                return Err(StagedFfiLinkError::TooManyPhysicalAbiArguments);
+            }
+            if let Some(after) = rest.strip_prefix(',') {
+                rest = after;
+                continue;
+            }
+            rest = rest
+                .strip_prefix(")->")
+                .ok_or(StagedFfiLinkError::InvalidPhysicalAbi)?;
+            break;
+        }
+    }
+    if rest == "unit[size=0,align=1]" || consume_abi_type(rest) == Some("") {
+        Ok(())
+    } else {
+        Err(StagedFfiLinkError::InvalidPhysicalAbi)
+    }
+}
+
+fn consume_abi_type(input: &str) -> Option<&str> {
+    for (name, size) in [
+        ("i8", 1),
+        ("u8", 1),
+        ("i16", 2),
+        ("u16", 2),
+        ("i32", 4),
+        ("u32", 4),
+        ("i64", 8),
+        ("u64", 8),
+        ("f32", 4),
+        ("f64", 8),
+    ] {
+        let spelling = format!("{name}[size={size},align={size}]");
+        if let Some(rest) = input.strip_prefix(&spelling) {
+            return Some(rest);
+        }
+    }
+    let (mutable, rest) = if let Some(rest) = input.strip_prefix("const_ptr<") {
+        (false, rest)
+    } else if let Some(rest) = input.strip_prefix("mut_ptr<") {
+        (true, rest)
+    } else {
+        return None;
+    };
+    for address_space in ["constant", "global", "private", "workgroup"] {
+        if mutable && address_space == "constant" {
+            continue;
+        }
+        let Some(rest) = rest.strip_prefix(address_space) else {
+            continue;
+        };
+        let Some(rest) = rest.strip_prefix(',') else {
+            continue;
+        };
+        for scalar in [
+            "i8", "u8", "i16", "u16", "i32", "u32", "i64", "u64", "f32", "f64",
+        ] {
+            let suffix = format!(">[size=8,align=8,as={address_space}]");
+            if let Some(rest) = rest
+                .strip_prefix(scalar)
+                .and_then(|rest| rest.strip_prefix(&suffix))
+            {
+                return Some(rest);
+            }
+        }
+    }
+    None
+}
+
+fn validate_effects(effects: &str) -> Result<(), StagedFfiLinkError> {
+    if effects.is_empty() || effects.len() > MAX_DEVICE_FFI_EFFECT_BYTES_V1 {
+        return Err(StagedFfiLinkError::InvalidEffects);
     }
     if effects == "none" {
         return Ok(());
@@ -1144,9 +1618,29 @@ fn validate_effects(effects: &str) -> Result<(), CompilerFfiBridgeError> {
                 | "write_workgroup"
         ) || previous.is_some_and(|previous: &str| previous >= effect)
         {
-            return Err(CompilerFfiBridgeError::InvalidEffects);
+            return Err(StagedFfiLinkError::InvalidEffects);
         }
         previous = Some(effect);
+    }
+    Ok(())
+}
+
+fn validate_effect_abi_compatibility(effects: &str, abi: &str) -> Result<(), StagedFfiLinkError> {
+    for effect in effects.split(',').filter(|effect| *effect != "none") {
+        let required = match effect {
+            "read_constant" => "const_ptr<constant,",
+            "read_global" => "ptr<global,",
+            "read_private" => "ptr<private,",
+            "read_workgroup" => "ptr<workgroup,",
+            "write_global" | "atomic_global" => "mut_ptr<global,",
+            "write_private" => "mut_ptr<private,",
+            "write_workgroup" | "atomic_workgroup" => "mut_ptr<workgroup,",
+            "barrier_workgroup" => continue,
+            _ => return Err(StagedFfiLinkError::InvalidEffects),
+        };
+        if !abi.contains(required) {
+            return Err(StagedFfiLinkError::EffectAbiMismatch(effect.to_owned()));
+        }
     }
     Ok(())
 }
@@ -1156,13 +1650,13 @@ fn validate_text(
     text: &str,
     max_bytes: usize,
     ascii: bool,
-) -> Result<(), CompilerFfiBridgeError> {
+) -> Result<(), StagedFfiLinkError> {
     if text.is_empty()
         || text.len() > max_bytes
         || (ascii && !text.is_ascii())
         || text.chars().any(char::is_control)
     {
-        return Err(CompilerFfiBridgeError::InvalidText(field));
+        return Err(StagedFfiLinkError::InvalidText(field));
     }
     Ok(())
 }
@@ -1171,97 +1665,151 @@ fn validate_ascii_token(
     field: &'static str,
     text: &str,
     max_bytes: usize,
-) -> Result<(), CompilerFfiBridgeError> {
+) -> Result<(), StagedFfiLinkError> {
     validate_text(field, text, max_bytes, true)?;
     if text.bytes().any(|byte| byte.is_ascii_whitespace()) {
-        return Err(CompilerFfiBridgeError::InvalidText(field));
+        return Err(StagedFfiLinkError::InvalidText(field));
     }
     Ok(())
 }
 
-fn encode_compiler_closure(
+fn envelope_text_bytes(
+    compiler_required_symbols: &[String],
+    symbols: &[G4FfiSymbolClaimV1],
+) -> Result<usize, StagedFfiLinkError> {
+    let mut total = aggregate_string_bytes(compiler_required_symbols)?;
+    for symbol in symbols {
+        for text in [
+            symbol.symbol.as_str(),
+            symbol.physical_abi.as_str(),
+            symbol.declaration_owner.crate_label.as_str(),
+            symbol.declaration_owner.item_label.as_str(),
+            symbol.declaration_owner.concrete_instance_symbol.as_str(),
+            symbol.declared.effects.as_str(),
+        ] {
+            total = total
+                .checked_add(text.len())
+                .ok_or(StagedFfiLinkError::AggregateTextBoundExceeded)?;
+        }
+    }
+    Ok(total)
+}
+
+fn aggregate_string_bytes(strings: &[String]) -> Result<usize, StagedFfiLinkError> {
+    strings.iter().try_fold(0_usize, |total, text| {
+        total
+            .checked_add(text.len())
+            .ok_or(StagedFfiLinkError::AggregateTextBoundExceeded)
+    })
+}
+
+fn encode_g4_envelope(
     target: DeviceTargetV1,
     code_object_version: CodeObjectVersion,
-    required_symbols: &[String],
-    symbols: &[CompilerFfiSymbolV1],
+    compiler_required_symbols: &[String],
+    rust_definition_count: u32,
+    kernel_count: u32,
+    symbols: &[G4FfiSymbolClaimV1],
 ) -> Vec<u8> {
     let mut bytes = Vec::new();
-    bytes.extend_from_slice(COMPILER_CLOSURE_DOMAIN_V1);
-    push_origin(&mut bytes, CompilerFfiFieldOriginV1::DeclaredClaim);
+    bytes.extend_from_slice(G4_CLAIM_ENVELOPE_DOMAIN_V1);
+    push_claim_origin(&mut bytes, FfiClaimOriginV1::G4AssertionOnly);
     push_text(&mut bytes, &target.to_string());
-    push_origin(&mut bytes, CompilerFfiFieldOriginV1::DeclaredClaim);
     bytes.push(code_object_version_byte(code_object_version));
-    push_origin(&mut bytes, CompilerFfiFieldOriginV1::CompilerDerived);
-    push_strings(&mut bytes, required_symbols);
+    bytes.extend_from_slice(&rust_definition_count.to_le_bytes());
+    bytes.extend_from_slice(&kernel_count.to_le_bytes());
+    push_strings(&mut bytes, compiler_required_symbols);
     push_u32(&mut bytes, symbols.len());
     for symbol in symbols {
-        encode_symbol(&mut bytes, symbol);
+        encode_g4_symbol_claim(&mut bytes, symbol);
     }
     bytes
 }
 
-fn encode_symbol(bytes: &mut Vec<u8>, symbol: &CompilerFfiSymbolV1) {
-    push_origin(bytes, CompilerFfiSymbolFieldV1::ContractIdentity.origin());
-    bytes.extend_from_slice(symbol.contract_identity.as_bytes());
-    push_origin(bytes, CompilerFfiSymbolFieldV1::Direction.origin());
+fn encode_g4_symbol_claim(bytes: &mut Vec<u8>, symbol: &G4FfiSymbolClaimV1) {
+    push_claim_origin(bytes, FfiClaimOriginV1::G4AssertionOnly);
+    bytes.extend_from_slice(&symbol.contract_identity.as_bytes());
     bytes.push(symbol.direction as u8);
-    push_origin(bytes, CompilerFfiSymbolFieldV1::Symbol.origin());
     push_text(bytes, &symbol.symbol);
-    push_origin(bytes, CompilerFfiSymbolFieldV1::PhysicalAbi.origin());
     push_text(bytes, &symbol.physical_abi);
-    push_origin(bytes, CompilerFfiSymbolFieldV1::SourceOwner.origin());
-    bytes.extend_from_slice(symbol.source_owner.identity.as_bytes());
-    push_text(bytes, &symbol.source_owner.crate_name);
-    push_text(bytes, &symbol.source_owner.item_path);
-    bytes.extend_from_slice(&symbol.source_owner.def_path_hash);
-    push_text(bytes, &symbol.source_owner.concrete_instance_symbol);
-    push_origin(bytes, CompilerFfiSymbolFieldV1::Definition.origin());
-    bytes.push(symbol.definition as u8);
-    push_origin(bytes, CompilerFfiSymbolFieldV1::Target.origin());
+    bytes.extend_from_slice(symbol.declaration_owner.identity.as_bytes());
+    push_text(bytes, &symbol.declaration_owner.crate_label);
+    push_text(bytes, &symbol.declaration_owner.item_label);
+    bytes.extend_from_slice(&symbol.declaration_owner.def_path_hash);
+    push_text(bytes, &symbol.declaration_owner.concrete_instance_symbol);
+    bytes.push(symbol.provider_class as u8);
     push_text(bytes, &symbol.declared.target.to_string());
-    push_origin(bytes, CompilerFfiSymbolFieldV1::CodeObjectVersion.origin());
     bytes.push(code_object_version_byte(
         symbol.declared.code_object_version,
     ));
-    push_origin(bytes, CompilerFfiSymbolFieldV1::Effects.origin());
     push_text(bytes, &symbol.declared.effects);
-    push_origin(bytes, CompilerFfiSymbolFieldV1::SemanticClaim.origin());
-    bytes.extend_from_slice(&symbol.declared.semantic_claim);
+    bytes.extend_from_slice(&symbol.declared.semantic_identity);
 }
 
-fn encode_plan_bound_closure(
-    plan: &MultiInputLinkPlanV1,
-    compiler: &CompilerFfiClosureV1,
-    plan_inputs: &[CompilerFfiPlanInputBindingV1],
-    providers: &[CompilerFfiProviderBindingV1],
-    input_kinds: &LinkInputKindClosureV1,
-    symbols: &LinkSymbolClosureV1,
+fn encode_final_symbols_claim(
+    symbols: &[String],
+    coverage: &[InputSymbolEvidenceCoverageClaimV1],
 ) -> Vec<u8> {
     let mut bytes = Vec::new();
-    bytes.extend_from_slice(PLAN_BOUND_CLOSURE_DOMAIN_V1);
-    bytes.extend_from_slice(plan.identity().as_bytes());
-    bytes.extend_from_slice(compiler.identity.as_bytes());
-    push_origin(&mut bytes, CompilerFfiFieldOriginV1::CallerBindingClaim);
-    push_u32(&mut bytes, plan_inputs.len());
-    for input in plan_inputs {
-        push_content_identity(&mut bytes, input.identity);
-        bytes.push(input.kind as u8);
-        bytes.push(input.role as u8);
+    bytes.extend_from_slice(FINAL_SYMBOLS_CLAIM_DOMAIN_V1);
+    push_claim_origin(&mut bytes, FfiClaimOriginV1::UnauthenticatedEvidenceClaim);
+    push_strings(&mut bytes, symbols);
+    push_u32(&mut bytes, coverage.len());
+    for record in coverage {
+        push_content_identity(&mut bytes, record.input_identity);
+        bytes.push(record.input_kind as u8);
+        bytes.push(record.source as u8);
+        bytes.extend_from_slice(&record.evidence_identity_claim);
     }
-    push_origin(&mut bytes, CompilerFfiFieldOriginV1::CallerBindingClaim);
-    push_u32(&mut bytes, providers.len());
-    for provider in providers {
-        bytes.extend_from_slice(provider.contract_identity.as_bytes());
-        bytes.extend_from_slice(provider.source_owner_identity.as_bytes());
-        push_content_identity(&mut bytes, provider.provider_input_identity);
-        bytes.push(provider.provider_input_kind as u8);
-    }
-    bytes.extend_from_slice(input_kinds.identity().as_bytes());
-    bytes.extend_from_slice(symbols.identity().as_bytes());
     bytes
 }
 
-fn push_origin(bytes: &mut Vec<u8>, origin: CompilerFfiFieldOriginV1) {
+fn encode_staged_plan(
+    plan: &MultiInputLinkPlanV1,
+    envelope: &G4FfiClaimEnvelopeV1,
+    input_claims: &[FfiPlanInputClaimV1],
+    provider_binding_claims: &[FfiSymbolProviderBindingClaimV1],
+    final_symbols_claim: Option<&ExpectedFinalDefinedSymbolsClaimV1>,
+) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(STAGED_FFI_LINK_PLAN_DOMAIN_V1);
+    bytes.extend_from_slice(plan.identity().as_bytes());
+    bytes.extend_from_slice(envelope.identity.as_bytes());
+    push_claim_origin(&mut bytes, FfiClaimOriginV1::CallerBindingAssertionOnly);
+    push_u32(&mut bytes, input_claims.len());
+    for input in input_claims {
+        push_content_identity(&mut bytes, input.identity);
+        bytes.push(input.kind as u8);
+        bytes.push(input.role as u8);
+        encode_producer_claim(&mut bytes, &input.producer);
+    }
+    push_u32(&mut bytes, provider_binding_claims.len());
+    for binding in provider_binding_claims {
+        bytes.extend_from_slice(&binding.contract_identity.as_bytes());
+        bytes.extend_from_slice(binding.declaration_owner_identity.as_bytes());
+        push_content_identity(&mut bytes, binding.provider_input_identity);
+        bytes.push(binding.provider_input_kind as u8);
+        bytes.extend_from_slice(binding.producer_claim_identity.as_bytes());
+    }
+    match final_symbols_claim {
+        Some(claim) => {
+            bytes.push(1);
+            bytes.extend_from_slice(claim.identity.as_bytes());
+        }
+        None => bytes.push(0),
+    }
+    bytes
+}
+
+fn encode_producer_claim(bytes: &mut Vec<u8>, producer: &UnauthenticatedProducerClaimV1) {
+    push_claim_origin(bytes, FfiClaimOriginV1::UnauthenticatedProducerClaim);
+    bytes.extend_from_slice(producer.identity.as_bytes());
+    push_text(bytes, &producer.name);
+    push_text(bytes, &producer.version);
+    bytes.extend_from_slice(&producer.build_identity_claim);
+}
+
+fn push_claim_origin(bytes: &mut Vec<u8>, origin: FfiClaimOriginV1) {
     bytes.push(origin as u8);
 }
 
@@ -1294,40 +1842,11 @@ const fn code_object_version_byte(version: CodeObjectVersion) -> u8 {
     }
 }
 
-const fn direction_tag(direction: CompilerFfiDirectionV1) -> u16 {
+const fn direction_tag(direction: G4FfiDirectionClaimV1) -> u16 {
     match direction {
-        CompilerFfiDirectionV1::Import => 1,
-        CompilerFfiDirectionV1::Export => 2,
+        G4FfiDirectionClaimV1::Import => DEVICE_FFI_DIRECTION_IMPORT_V1,
+        G4FfiDirectionClaimV1::Export => DEVICE_FFI_DIRECTION_EXPORT_V1,
     }
-}
-
-fn derive_contract_identity(
-    direction: CompilerFfiDirectionV1,
-    symbol: &str,
-    physical_abi: &str,
-    declared: &CompilerFfiDeclaredClaimsV1,
-) -> CompilerFfiContractIdentityV1 {
-    // This is the compiler-marker V1 preimage. Keeping the compatibility code
-    // here avoids making the plan/request crate depend on compiler integration.
-    let target = declared.target.to_string();
-    let semantic_identity = lower_hex(&declared.semantic_claim);
-    let mut digest = Sha256::new();
-    digest.update(DEVICE_FFI_CONTRACT_DOMAIN_V1);
-    digest.update(direction_tag(direction).to_le_bytes());
-    hash_contract_field(&mut digest, symbol.as_bytes());
-    hash_contract_field(&mut digest, b"C");
-    digest.update(u16::from(code_object_version_byte(declared.code_object_version)).to_le_bytes());
-    hash_contract_field(&mut digest, target.as_bytes());
-    hash_contract_field(&mut digest, physical_abi.as_bytes());
-    hash_contract_field(&mut digest, declared.effects.as_bytes());
-    hash_contract_field(&mut digest, semantic_identity.as_bytes());
-    hash_contract_field(&mut digest, b"nounwind;nopanic");
-    CompilerFfiContractIdentityV1(digest.finalize().into())
-}
-
-fn hash_contract_field(digest: &mut Sha256, field: &[u8]) {
-    digest.update((field.len() as u64).to_le_bytes());
-    digest.update(field);
 }
 
 fn lower_hex(bytes: &[u8]) -> String {

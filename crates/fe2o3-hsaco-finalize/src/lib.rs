@@ -23,16 +23,21 @@ mod worker_executor;
 mod worker_protocol;
 
 pub use compiler_ffi_bridge::{
-    CompilerFfiBridgeError, CompilerFfiClosureIdentityV1, CompilerFfiClosureV1,
-    CompilerFfiContractIdentityV1, CompilerFfiDeclaredClaimsV1, CompilerFfiDefinitionV1,
-    CompilerFfiDirectionV1, CompilerFfiFieldOriginV1, CompilerFfiPlanInputBindingV1,
-    CompilerFfiPlanInputRoleV1, CompilerFfiProviderBindingV1, CompilerFfiSourceOwnerIdentityV1,
-    CompilerFfiSourceOwnerV1, CompilerFfiSymbolFieldV1, CompilerFfiSymbolV1,
-    MAX_COMPILER_FFI_CLOSURE_BYTES_V1, MAX_COMPILER_FFI_CRATE_NAME_BYTES_V1,
-    MAX_COMPILER_FFI_EFFECT_BYTES_V1, MAX_COMPILER_FFI_INSTANCE_SYMBOL_BYTES_V1,
-    MAX_COMPILER_FFI_ITEM_PATH_BYTES_V1, MAX_COMPILER_FFI_PHYSICAL_ABI_BYTES_V1,
-    MAX_COMPILER_FFI_SYMBOLS_V1, PlanBoundCompilerFfiClosureIdentityV1,
-    PlanBoundCompilerFfiClosureV1, bind_compiler_ffi_closure_v1,
+    ExpectedFinalDefinedSymbolsClaimIdentityV1, ExpectedFinalDefinedSymbolsClaimV1,
+    FfiClaimOriginV1, FfiPlanInputClaimV1, FfiPlanInputRoleClaimV1,
+    FfiSymbolProviderBindingClaimV1, FinalSymbolEvidenceSourceClaimV1,
+    G4DeclarationOwnerClaimIdentityV1, G4DeclarationOwnerClaimV1, G4DeclaredContractClaimsV1,
+    G4FfiClaimEnvelopeAdapterV1, G4FfiClaimEnvelopeIdentityV1, G4FfiClaimEnvelopeV1,
+    G4FfiContractIdV1, G4FfiDirectionClaimV1, G4FfiSymbolClaimFieldV1, G4FfiSymbolClaimV1,
+    G4SymbolProviderClassClaimV1, InputSymbolEvidenceCoverageClaimV1,
+    MAX_FFI_PRODUCER_NAME_BYTES_V1, MAX_FFI_PRODUCER_VERSION_BYTES_V1,
+    MAX_G4_FFI_AGGREGATE_TEXT_BYTES_V1, MAX_G4_FFI_CRATE_LABEL_BYTES_V1,
+    MAX_G4_FFI_ENVELOPE_BYTES_V1, MAX_G4_FFI_INSTANCE_SYMBOL_BYTES_V1,
+    MAX_G4_FFI_ITEM_LABEL_BYTES_V1, MAX_G4_FFI_SYMBOL_CLAIMS_V1, MAX_G4_KERNEL_CLAIMS_V1,
+    MAX_G4_RUST_DEFINITION_CLAIMS_V1, MAX_STAGED_FFI_LINK_PLAN_BYTES_V1,
+    StagedFfiExecutionBlockerV1, StagedFfiLinkError, StagedFfiLinkPlanIdentityV1,
+    StagedFfiLinkPlanV1, UnauthenticatedProducerClaimIdentityV1, UnauthenticatedProducerClaimV1,
+    stage_g4_ffi_link_plan_v1,
 };
 pub use link_plan::{
     ContentIdentityV1, LinkInputV1, LinkOptionV1, LinkOutputV1, LinkPlanError, LinkPlanIdentityV1,
