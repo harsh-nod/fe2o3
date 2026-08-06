@@ -1,0 +1,5 @@
+error[E0599]: no method named `clone` found for struct `WaveLane<Width>` in the current scope
+ --> tests/ui/fail/wave_lane_is_not_clone.rs:4:18
+  |
+4 |     let _ = lane.clone();
+  |                  ^^^^^ method not found in `WaveLane<Wave32>`

@@ -1,0 +1,137 @@
+use core::fmt;
+use core::marker::PhantomData;
+
+mod sealed {
+    pub trait Sealed {}
+}
+
+/// A statically known AMD wave width.
+///
+/// This sealed trait admits only [`Wave32`] and [`Wave64`]. It describes a
+/// contract with code generation; it does not detect the target's configured
+/// wave width.
+pub trait WaveWidth: sealed::Sealed + 'static {
+    const LANES: u32;
+}
+
+/// Type-level identity for a 32-lane wave.
+#[derive(Debug)]
+pub enum Wave32 {}
+
+impl sealed::Sealed for Wave32 {}
+
+impl WaveWidth for Wave32 {
+    const LANES: u32 = 32;
+}
+
+/// Type-level identity for a 64-lane wave.
+#[derive(Debug)]
+pub enum Wave64 {}
+
+impl sealed::Sealed for Wave64 {}
+
+impl WaveWidth for Wave64 {
+    const LANES: u32 = 64;
+}
+
+/// Invocation-bound evidence for the current lane in the current wave.
+///
+/// `Width` makes the required native wave width part of the Rust type. The
+/// witness is deliberately neither `Copy`, `Clone`, `Send`, nor `Sync`; a lane
+/// number copied as plain integer data is not a substitute for this identity.
+#[repr(transparent)]
+#[rustc_diagnostic_item = "fe2o3_device_wave_lane"]
+pub struct WaveLane<Width: WaveWidth> {
+    lane: u32,
+    _width: PhantomData<fn() -> Width>,
+    _not_send_sync: PhantomData<*mut ()>,
+}
+
+impl<Width: WaveWidth> WaveLane<Width> {
+    /// Constructs a lane witness from a backend-provided lane ID.
+    ///
+    /// Returns `None` when `lane` is outside `Width`. This API is unsafe because
+    /// the range check cannot establish lane identity or the target wave mode.
+    ///
+    /// # Safety
+    ///
+    /// `lane` must be the current invocation's lane ID, and the active kernel
+    /// must execute with a native wave width of exactly `Width::LANES`. Both
+    /// facts must come from authenticated compilation and launch metadata. The
+    /// current compiler does not lower this constructor or expose a safe lane
+    /// intrinsic.
+    #[rustc_diagnostic_item = "fe2o3_device_wave_lane_from_raw"]
+    pub unsafe fn from_raw(lane: u32) -> Option<Self> {
+        Self::checked(lane)
+    }
+
+    const fn checked(lane: u32) -> Option<Self> {
+        if lane >= Width::LANES {
+            return None;
+        }
+        Some(Self {
+            lane,
+            _width: PhantomData,
+            _not_send_sync: PhantomData,
+        })
+    }
+
+    pub const fn get(&self) -> u32 {
+        self.lane
+    }
+
+    pub const fn width(&self) -> u32 {
+        Width::LANES
+    }
+
+    pub const fn is_first(&self) -> bool {
+        self.lane == 0
+    }
+
+    pub const fn is_last(&self) -> bool {
+        self.lane + 1 == Width::LANES
+    }
+}
+
+impl<Width: WaveWidth> fmt::Debug for WaveLane<Width> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("WaveLane")
+            .field("lane", &self.lane)
+            .field("width", &Width::LANES)
+            .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Wave32, Wave64, WaveLane, WaveWidth};
+    use core::mem::{align_of, size_of};
+
+    #[test]
+    fn widths_are_explicit_and_sealed() {
+        assert_eq!(Wave32::LANES, 32);
+        assert_eq!(Wave64::LANES, 64);
+    }
+
+    #[test]
+    fn lane_witnesses_validate_the_static_width() {
+        let first = WaveLane::<Wave32>::checked(0).unwrap();
+        let last = WaveLane::<Wave32>::checked(31).unwrap();
+        assert!(first.is_first());
+        assert!(last.is_last());
+        assert_eq!(last.get(), 31);
+        assert_eq!(last.width(), 32);
+        assert!(WaveLane::<Wave32>::checked(32).is_none());
+        assert!(WaveLane::<Wave64>::checked(63).is_some());
+        assert!(WaveLane::<Wave64>::checked(64).is_none());
+    }
+
+    #[test]
+    fn width_markers_do_not_change_the_lane_abi() {
+        assert_eq!(size_of::<WaveLane<Wave32>>(), size_of::<u32>());
+        assert_eq!(align_of::<WaveLane<Wave32>>(), align_of::<u32>());
+        assert_eq!(size_of::<WaveLane<Wave64>>(), size_of::<u32>());
+        assert_eq!(align_of::<WaveLane<Wave64>>(), align_of::<u32>());
+    }
+}

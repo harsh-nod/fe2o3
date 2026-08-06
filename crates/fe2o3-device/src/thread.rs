@@ -1,6 +1,323 @@
 use core::fmt;
 use core::marker::PhantomData;
 
+/// A work-item's local coordinate within its workgroup.
+///
+/// This is copyable coordinate data, not evidence that the values describe the
+/// current invocation. Use [`Invocation3D`] when invocation identity matters.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[repr(C)]
+#[rustc_diagnostic_item = "fe2o3_device_workitem_id_3d"]
+pub struct WorkitemId {
+    x: u32,
+    y: u32,
+    z: u32,
+}
+
+impl WorkitemId {
+    pub const fn new(x: u32, y: u32, z: u32) -> Self {
+        Self { x, y, z }
+    }
+
+    pub const fn x(self) -> u32 {
+        self.x
+    }
+
+    pub const fn y(self) -> u32 {
+        self.y
+    }
+
+    pub const fn z(self) -> u32 {
+        self.z
+    }
+}
+
+/// A workgroup's coordinate within a grid.
+///
+/// This is copyable coordinate data, not evidence that the values describe the
+/// current invocation. Use [`Invocation3D`] when invocation identity matters.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[repr(C)]
+#[rustc_diagnostic_item = "fe2o3_device_workgroup_id_3d"]
+pub struct WorkgroupId {
+    x: u32,
+    y: u32,
+    z: u32,
+}
+
+impl WorkgroupId {
+    pub const fn new(x: u32, y: u32, z: u32) -> Self {
+        Self { x, y, z }
+    }
+
+    pub const fn x(self) -> u32 {
+        self.x
+    }
+
+    pub const fn y(self) -> u32 {
+        self.y
+    }
+
+    pub const fn z(self) -> u32 {
+        self.z
+    }
+}
+
+/// Nonzero three-dimensional workgroup dimensions, measured in work-items.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[repr(C)]
+#[rustc_diagnostic_item = "fe2o3_device_workgroup_size_3d"]
+pub struct WorkgroupSize {
+    x: u32,
+    y: u32,
+    z: u32,
+}
+
+impl WorkgroupSize {
+    pub const fn new(x: u32, y: u32, z: u32) -> Option<Self> {
+        if x == 0 || y == 0 || z == 0 {
+            None
+        } else {
+            Some(Self { x, y, z })
+        }
+    }
+
+    pub const fn x(self) -> u32 {
+        self.x
+    }
+
+    pub const fn y(self) -> u32 {
+        self.y
+    }
+
+    pub const fn z(self) -> u32 {
+        self.z
+    }
+
+    pub const fn contains(self, id: WorkitemId) -> bool {
+        id.x < self.x && id.y < self.y && id.z < self.z
+    }
+
+    pub const fn volume(self) -> Option<u64> {
+        match (self.x as u64).checked_mul(self.y as u64) {
+            Some(xy) => xy.checked_mul(self.z as u64),
+            None => None,
+        }
+    }
+}
+
+/// Nonzero three-dimensional grid dimensions, measured in workgroups.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[repr(C)]
+#[rustc_diagnostic_item = "fe2o3_device_grid_size_3d"]
+pub struct GridSize {
+    x: u32,
+    y: u32,
+    z: u32,
+}
+
+impl GridSize {
+    pub const fn new(x: u32, y: u32, z: u32) -> Option<Self> {
+        if x == 0 || y == 0 || z == 0 {
+            None
+        } else {
+            Some(Self { x, y, z })
+        }
+    }
+
+    pub const fn x(self) -> u32 {
+        self.x
+    }
+
+    pub const fn y(self) -> u32 {
+        self.y
+    }
+
+    pub const fn z(self) -> u32 {
+        self.z
+    }
+
+    pub const fn contains(self, id: WorkgroupId) -> bool {
+        id.x < self.x && id.y < self.y && id.z < self.z
+    }
+
+    pub const fn volume(self) -> Option<u64> {
+        match (self.x as u64).checked_mul(self.y as u64) {
+            Some(xy) => xy.checked_mul(self.z as u64),
+            None => None,
+        }
+    }
+}
+
+/// A global work-item coordinate within the full grid.
+///
+/// Components are 64-bit because a grid dimension and its workgroup dimension
+/// are independently 32-bit quantities.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[repr(C)]
+pub struct GlobalWorkitemId {
+    x: u64,
+    y: u64,
+    z: u64,
+}
+
+impl GlobalWorkitemId {
+    pub const fn x(self) -> u64 {
+        self.x
+    }
+
+    pub const fn y(self) -> u64 {
+        self.y
+    }
+
+    pub const fn z(self) -> u64 {
+        self.z
+    }
+
+    /// Returns the row-major linear coordinate, with x as the fastest axis.
+    pub const fn linear(self, grid: GlobalGridSize) -> Option<u64> {
+        if !grid.contains(self) {
+            return None;
+        }
+        let zy = match self.z.checked_mul(grid.y) {
+            Some(value) => value,
+            None => return None,
+        };
+        let row = match zy.checked_add(self.y) {
+            Some(value) => value,
+            None => return None,
+        };
+        match row.checked_mul(grid.x) {
+            Some(value) => value.checked_add(self.x),
+            None => None,
+        }
+    }
+}
+
+/// Full grid dimensions measured in work-items.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[repr(C)]
+pub struct GlobalGridSize {
+    x: u64,
+    y: u64,
+    z: u64,
+}
+
+impl GlobalGridSize {
+    pub const fn x(self) -> u64 {
+        self.x
+    }
+
+    pub const fn y(self) -> u64 {
+        self.y
+    }
+
+    pub const fn z(self) -> u64 {
+        self.z
+    }
+
+    pub const fn contains(self, id: GlobalWorkitemId) -> bool {
+        id.x < self.x && id.y < self.y && id.z < self.z
+    }
+
+    pub const fn volume(self) -> Option<u64> {
+        match self.x.checked_mul(self.y) {
+            Some(xy) => xy.checked_mul(self.z),
+            None => None,
+        }
+    }
+}
+
+/// Invocation-bound evidence for one complete three-dimensional launch index.
+///
+/// Coordinate getters return ordinary copyable data. The witness itself is
+/// deliberately neither `Copy`, `Clone`, `Send`, nor `Sync`: code that later
+/// grants memory or collective authority from it must retain the association
+/// with the invocation that produced it.
+#[derive(Debug)]
+#[rustc_diagnostic_item = "fe2o3_device_invocation_3d"]
+pub struct Invocation3D {
+    workitem: WorkitemId,
+    workgroup: WorkgroupId,
+    workgroup_size: WorkgroupSize,
+    grid_size: GridSize,
+    _not_send_sync: PhantomData<*mut ()>,
+}
+
+impl Invocation3D {
+    /// Constructs an invocation witness from backend-provided coordinates.
+    ///
+    /// Returns `None` when either coordinate is outside its corresponding
+    /// extent. This API is unsafe because bounds checks cannot establish the
+    /// invocation identity.
+    ///
+    /// # Safety
+    ///
+    /// All four arguments must describe the current device invocation and its
+    /// active launch. In particular, they must come from authenticated backend
+    /// intrinsics for the same invocation. The current compiler does not lower
+    /// this constructor or provide a safe source for these values.
+    #[rustc_diagnostic_item = "fe2o3_device_invocation_3d_from_raw_parts"]
+    pub unsafe fn from_raw_parts(
+        workitem: WorkitemId,
+        workgroup: WorkgroupId,
+        workgroup_size: WorkgroupSize,
+        grid_size: GridSize,
+    ) -> Option<Self> {
+        Self::checked(workitem, workgroup, workgroup_size, grid_size)
+    }
+
+    const fn checked(
+        workitem: WorkitemId,
+        workgroup: WorkgroupId,
+        workgroup_size: WorkgroupSize,
+        grid_size: GridSize,
+    ) -> Option<Self> {
+        if !workgroup_size.contains(workitem) || !grid_size.contains(workgroup) {
+            return None;
+        }
+        Some(Self {
+            workitem,
+            workgroup,
+            workgroup_size,
+            grid_size,
+            _not_send_sync: PhantomData,
+        })
+    }
+
+    pub const fn workitem_id(&self) -> WorkitemId {
+        self.workitem
+    }
+
+    pub const fn workgroup_id(&self) -> WorkgroupId {
+        self.workgroup
+    }
+
+    pub const fn workgroup_size(&self) -> WorkgroupSize {
+        self.workgroup_size
+    }
+
+    pub const fn grid_size(&self) -> GridSize {
+        self.grid_size
+    }
+
+    pub const fn global_workitem_id(&self) -> GlobalWorkitemId {
+        GlobalWorkitemId {
+            x: self.workgroup.x as u64 * self.workgroup_size.x as u64 + self.workitem.x as u64,
+            y: self.workgroup.y as u64 * self.workgroup_size.y as u64 + self.workitem.y as u64,
+            z: self.workgroup.z as u64 * self.workgroup_size.z as u64 + self.workitem.z as u64,
+        }
+    }
+
+    pub const fn global_grid_size(&self) -> GlobalGridSize {
+        GlobalGridSize {
+            x: self.grid_size.x as u64 * self.workgroup_size.x as u64,
+            y: self.grid_size.y as u64 * self.workgroup_size.y as u64,
+            z: self.grid_size.z as u64 * self.workgroup_size.z as u64,
+        }
+    }
+}
+
 /// Type-level index space for the logical one-dimensional launch index.
 #[derive(Debug)]
 pub enum Index1D {}
@@ -175,7 +492,10 @@ pub fn block_dim_z() -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{Index1D, Index2D, ThreadIndex};
+    use super::{
+        GridSize, Index1D, Index2D, Invocation3D, ThreadIndex, WorkgroupId, WorkgroupSize,
+        WorkitemId,
+    };
     use core::mem::{align_of, size_of};
 
     #[test]
@@ -184,5 +504,63 @@ mod tests {
         assert_eq!(align_of::<ThreadIndex<Index1D>>(), align_of::<usize>());
         assert_eq!(size_of::<ThreadIndex<Index2D<64>>>(), size_of::<usize>());
         assert_eq!(align_of::<ThreadIndex<Index2D<64>>>(), align_of::<usize>());
+    }
+
+    #[test]
+    fn dimensions_reject_zero_and_bound_their_coordinates() {
+        assert_eq!(WorkgroupSize::new(0, 1, 1), None);
+        assert_eq!(GridSize::new(1, 0, 1), None);
+
+        let workgroup_size = WorkgroupSize::new(8, 4, 2).unwrap();
+        let grid_size = GridSize::new(3, 5, 7).unwrap();
+        assert!(workgroup_size.contains(WorkitemId::new(7, 3, 1)));
+        assert!(!workgroup_size.contains(WorkitemId::new(8, 3, 1)));
+        assert!(grid_size.contains(WorkgroupId::new(2, 4, 6)));
+        assert!(!grid_size.contains(WorkgroupId::new(3, 4, 6)));
+        assert_eq!(workgroup_size.volume(), Some(64));
+        assert_eq!(grid_size.volume(), Some(105));
+    }
+
+    #[test]
+    fn invocation_derives_global_3d_coordinates() {
+        let invocation = Invocation3D::checked(
+            WorkitemId::new(3, 2, 1),
+            WorkgroupId::new(4, 5, 6),
+            WorkgroupSize::new(8, 4, 2).unwrap(),
+            GridSize::new(10, 20, 30).unwrap(),
+        )
+        .unwrap();
+
+        let global = invocation.global_workitem_id();
+        let extent = invocation.global_grid_size();
+        assert_eq!((global.x(), global.y(), global.z()), (35, 22, 13));
+        assert_eq!((extent.x(), extent.y(), extent.z()), (80, 80, 60));
+        assert_eq!(global.linear(extent), Some((13 * 80 + 22) * 80 + 35));
+        assert_eq!(extent.volume(), Some(384_000));
+    }
+
+    #[test]
+    fn invocation_rejects_out_of_range_coordinates() {
+        let workgroup_size = WorkgroupSize::new(8, 4, 2).unwrap();
+        let grid_size = GridSize::new(10, 20, 30).unwrap();
+
+        assert!(
+            Invocation3D::checked(
+                WorkitemId::new(8, 0, 0),
+                WorkgroupId::new(0, 0, 0),
+                workgroup_size,
+                grid_size,
+            )
+            .is_none()
+        );
+        assert!(
+            Invocation3D::checked(
+                WorkitemId::new(0, 0, 0),
+                WorkgroupId::new(0, 20, 0),
+                workgroup_size,
+                grid_size,
+            )
+            .is_none()
+        );
     }
 }

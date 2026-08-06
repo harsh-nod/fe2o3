@@ -12,9 +12,14 @@ use core::marker::PhantomData;
 
 pub mod sync;
 pub mod thread;
+pub mod wave;
 
 pub use fe2o3_macros::kernel;
-pub use thread::{Index1D, Index2D, ThreadIndex};
+pub use thread::{
+    GlobalGridSize, GlobalWorkitemId, GridSize, Index1D, Index2D, Invocation3D, ThreadIndex,
+    WorkgroupId, WorkgroupSize, WorkitemId,
+};
+pub use wave::{Wave32, Wave64, WaveLane, WaveWidth};
 
 /// Version of the type-level kernel marker contract emitted by [`kernel`].
 ///

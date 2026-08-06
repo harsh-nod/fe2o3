@@ -1,0 +1,9 @@
+error[E0382]: use of moved value: `lane`
+ --> tests/ui/fail/wave_lane_is_not_copy.rs:5:18
+  |
+3 | fn duplicate(lane: WaveLane<Wave32>) {
+  |              ---- move occurs because `lane` has type `WaveLane<Wave32>`, which does not implement the `Copy` trait
+4 |     let first = lane;
+  |                 ---- value moved here
+5 |     let second = lane;
+  |                  ^^^^ value used here after move

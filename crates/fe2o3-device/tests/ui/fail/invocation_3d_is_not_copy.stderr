@@ -1,0 +1,9 @@
+error[E0382]: use of moved value: `invocation`
+ --> tests/ui/fail/invocation_3d_is_not_copy.rs:5:18
+  |
+3 | fn duplicate(invocation: Invocation3D) {
+  |              ---------- move occurs because `invocation` has type `Invocation3D`, which does not implement the `Copy` trait
+4 |     let first = invocation;
+  |                 ---------- value moved here
+5 |     let second = invocation;
+  |                  ^^^^^^^^^^ value used here after move
