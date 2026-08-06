@@ -62,7 +62,10 @@ fn expectation(seed: u8, payload: PayloadDigest) -> DirectLinkBindingExpectation
 }
 
 fn fixture(seed: u8, format: CodeObjectFormat) -> Fixture {
-    let bytes = vec![seed; 32];
+    fixture_with_bytes(seed, format, vec![seed; 32])
+}
+
+fn fixture_with_bytes(seed: u8, format: CodeObjectFormat, bytes: Vec<u8>) -> Fixture {
     let payload = CodeObjectPayload::from_bytes(DigestAlgorithm::Sha256, bytes).unwrap();
     let payload_identity = payload.digest();
     let object = CodeObjectIdentity::new(
@@ -104,7 +107,11 @@ fn evidence<'a>(
             DirectLinkBindingSourceV1::new(&fixture.container, fixture.expectation.clone())
         })
         .collect::<Vec<_>>();
-    DirectLinkBundleEvidenceV1::bind(bundle, &sources).unwrap()
+    let containers = fixtures
+        .iter()
+        .map(|fixture| &fixture.container)
+        .collect::<Vec<_>>();
+    DirectLinkBundleEvidenceV1::bind(bundle, &containers, &sources).unwrap()
 }
 
 fn bundle_for(fixtures: &[&Fixture]) -> BundleIndexV1 {
@@ -114,15 +121,18 @@ fn bundle_for(fixtures: &[&Fixture]) -> BundleIndexV1 {
             BundleIndexV1::from_containers(std::slice::from_ref(&fixture.container)).unwrap()
         })
         .collect::<Vec<_>>();
+    let mut payloads = indexes
+        .iter()
+        .flat_map(|index| index.payloads().iter().cloned())
+        .collect::<Vec<_>>();
+    payloads.sort_unstable_by_key(|payload| payload.digest());
+    payloads.dedup();
     BundleIndexV1::new(
         indexes
             .iter()
             .flat_map(|index| index.target_associations().iter().cloned())
             .collect(),
-        indexes
-            .iter()
-            .flat_map(|index| index.payloads().iter().cloned())
-            .collect(),
+        payloads,
         indexes
             .iter()
             .flat_map(|index| index.kernels().iter().cloned())
@@ -154,9 +164,9 @@ fn canonical_round_trip_binds_exact_container_bundle_and_provenance() {
     assert_eq!(
         *record.digest(DigestAlgorithm::Sha256).bytes().as_bytes(),
         [
-            0xb0, 0x3d, 0x55, 0x10, 0xcf, 0xa9, 0x7f, 0xee, 0xa2, 0xa9, 0xb0, 0x19, 0x81, 0x90,
-            0x20, 0xdb, 0x7d, 0xdf, 0x56, 0x26, 0x6d, 0xbd, 0x3b, 0x16, 0x1d, 0x01, 0x77, 0x97,
-            0xc1, 0x80, 0xd4, 0xe0,
+            0xd7, 0x57, 0x6b, 0x54, 0x63, 0x3f, 0xd2, 0xf9, 0x82, 0xcb, 0xe0, 0xff, 0x88, 0x93,
+            0xed, 0x23, 0xec, 0xd9, 0xcc, 0xc8, 0x9e, 0x9a, 0x20, 0x6c, 0xd3, 0x5f, 0x12, 0x93,
+            0x88, 0x49, 0x6b, 0x9c,
         ]
     );
     assert_eq!(decoded.to_bytes(), bytes);
@@ -166,17 +176,25 @@ fn canonical_round_trip_binds_exact_container_bundle_and_provenance() {
     assert_eq!(bundle.to_bytes(), bundle_v1_before);
     assert_eq!(decoded.bindings().len(), 2);
     assert!(
-        decoded.bindings()[0]
-            .expectation()
-            .finalized_payload_identity()
-            < decoded.bindings()[1]
+        (
+            decoded.bindings()[0].container_identity(),
+            decoded.bindings()[0]
                 .expectation()
-                .finalized_payload_identity()
+                .finalized_payload_identity(),
+        ) < (
+            decoded.bindings()[1].container_identity(),
+            decoded.bindings()[1]
+                .expectation()
+                .finalized_payload_identity(),
+        )
     );
 
-    let expectations = vec![first.expectation.clone(), second.expectation.clone()];
+    let sources = [
+        DirectLinkBindingSourceV1::new(&first.container, first.expectation.clone()),
+        DirectLinkBindingSourceV1::new(&second.container, second.expectation.clone()),
+    ];
     let validation: Result<(), DirectLinkEvidenceError> =
-        decoded.validate_against(&bundle, &[first.container, second.container], &expectations);
+        decoded.validate_against(&bundle, &[&first.container, &second.container], &sources);
     assert_eq!(validation, Ok(()));
 }
 
@@ -274,12 +292,12 @@ fn every_provenance_substitution_is_rejected_by_external_matching() {
     ];
 
     for substitution in substitutions {
+        let sources = [DirectLinkBindingSourceV1::new(
+            &original.container,
+            substitution,
+        )];
         assert_eq!(
-            record.validate_against(
-                &bundle,
-                std::slice::from_ref(&original.container),
-                &[substitution]
-            ),
+            record.validate_against(&bundle, &[&original.container], &sources),
             Err(DirectLinkEvidenceError::ExpectationMismatch)
         );
     }
@@ -298,28 +316,28 @@ fn container_and_bundle_substitution_and_extra_inputs_are_rejected() {
     let replacement_bundle =
         BundleIndexV1::from_containers(std::slice::from_ref(&replacement.container)).unwrap();
     let record = evidence(&bundle, [&original]);
+    let original_source = [DirectLinkBindingSourceV1::new(
+        &original.container,
+        original.expectation.clone(),
+    )];
 
     assert_eq!(
         record.validate_against(
             &replacement_bundle,
-            std::slice::from_ref(&original.container),
-            std::slice::from_ref(&original.expectation),
+            &[&original.container],
+            &original_source,
         ),
         Err(DirectLinkEvidenceError::BundleIdentityMismatch)
     );
     assert_eq!(
-        record.validate_against(
-            &bundle,
-            std::slice::from_ref(&replacement.container),
-            std::slice::from_ref(&original.expectation),
-        ),
+        record.validate_against(&bundle, &[&replacement.container], &original_source,),
         Err(DirectLinkEvidenceError::MissingContainer)
     );
     assert_eq!(
         record.validate_against(
             &bundle,
-            &[original.container, replacement.container],
-            std::slice::from_ref(&original.expectation),
+            &[&original.container, &replacement.container],
+            &original_source,
         ),
         Err(DirectLinkEvidenceError::ExtraContainer)
     );
@@ -337,26 +355,130 @@ fn bundle_evidence_requires_exact_container_and_binding_closure() {
         first.expectation.clone(),
     )];
     assert_eq!(
-        DirectLinkBundleEvidenceV1::bind(&bundle, &first_only),
-        Err(DirectLinkEvidenceError::MissingContainer)
+        DirectLinkBundleEvidenceV1::bind(
+            &bundle,
+            &[&first.container, &second.container],
+            &first_only,
+        ),
+        Err(DirectLinkEvidenceError::MissingExecutableBinding)
     );
 
     let record = evidence(&bundle, [&first, &second]);
+    let both_sources = [
+        DirectLinkBindingSourceV1::new(&first.container, first.expectation.clone()),
+        DirectLinkBindingSourceV1::new(&second.container, second.expectation.clone()),
+    ];
     assert_eq!(
-        record.validate_against(
-            &bundle,
-            std::slice::from_ref(&first.container),
-            &[first.expectation.clone(), second.expectation.clone()],
-        ),
+        record.validate_against(&bundle, &[&first.container], &both_sources,),
         Err(DirectLinkEvidenceError::MissingContainer)
     );
     assert_eq!(
         record.validate_against(
             &bundle,
-            &[first.container, second.container, extra.container],
-            &[first.expectation, second.expectation],
+            &[&first.container, &second.container, &extra.container],
+            &both_sources,
         ),
         Err(DirectLinkEvidenceError::ExtraContainer)
+    );
+}
+
+#[test]
+fn identical_native_bytes_require_one_binding_per_container_occurrence() {
+    let first = fixture_with_bytes(
+        0x47,
+        CodeObjectFormat::NativeExecutable,
+        b"shared native payload".to_vec(),
+    );
+    let mut second = fixture_with_bytes(
+        0x48,
+        CodeObjectFormat::NativeExecutable,
+        b"shared native payload".to_vec(),
+    );
+    second.expectation = first.expectation.clone();
+    let bundle = bundle_for(&[&first, &second]);
+    let containers = [&first.container, &second.container];
+    let sources = [
+        DirectLinkBindingSourceV1::new(&first.container, first.expectation.clone()),
+        DirectLinkBindingSourceV1::new(&second.container, second.expectation.clone()),
+    ];
+
+    let record = DirectLinkBundleEvidenceV1::bind(&bundle, &containers, &sources).unwrap();
+    assert_eq!(record.bindings().len(), 2);
+    assert_ne!(
+        record.bindings()[0].container_identity(),
+        record.bindings()[1].container_identity()
+    );
+    assert_eq!(
+        record.bindings()[0]
+            .expectation()
+            .finalized_payload_identity(),
+        record.bindings()[1]
+            .expectation()
+            .finalized_payload_identity()
+    );
+    assert!(
+        record
+            .validate_against(&bundle, &containers, &sources)
+            .is_ok()
+    );
+
+    let first_only = [DirectLinkBindingSourceV1::new(
+        &first.container,
+        first.expectation.clone(),
+    )];
+    assert_eq!(
+        DirectLinkBundleEvidenceV1::bind(&bundle, &containers, &first_only),
+        Err(DirectLinkEvidenceError::MissingExecutableBinding)
+    );
+
+    let duplicate_first = [
+        DirectLinkBindingSourceV1::new(&first.container, first.expectation.clone()),
+        DirectLinkBindingSourceV1::new(&first.container, first.expectation.clone()),
+        DirectLinkBindingSourceV1::new(&second.container, second.expectation.clone()),
+    ];
+    assert_eq!(
+        DirectLinkBundleEvidenceV1::bind(&bundle, &containers, &duplicate_first),
+        Err(DirectLinkEvidenceError::Duplicate {
+            field: "container/finalized payload occurrence"
+        })
+    );
+
+    assert_eq!(
+        DirectLinkBundleEvidenceV1::bind(&bundle, &[&first.container], &sources),
+        Err(DirectLinkEvidenceError::MissingContainer)
+    );
+}
+
+#[test]
+fn complete_container_closure_allows_relocatable_members_without_bindings() {
+    let native = fixture(0x49, CodeObjectFormat::NativeExecutable);
+    let relocatable = fixture(0x4a, CodeObjectFormat::RelocatableObject);
+    let bundle = bundle_for(&[&native, &relocatable]);
+    let containers = [&native.container, &relocatable.container];
+    let native_sources = [DirectLinkBindingSourceV1::new(
+        &native.container,
+        native.expectation.clone(),
+    )];
+
+    let record = DirectLinkBundleEvidenceV1::bind(&bundle, &containers, &native_sources).unwrap();
+    assert_eq!(record.bindings().len(), 1);
+    assert!(
+        record
+            .validate_against(&bundle, &containers, &native_sources)
+            .is_ok()
+    );
+    assert_eq!(
+        DirectLinkBundleEvidenceV1::bind(&bundle, &[&native.container], &native_sources,),
+        Err(DirectLinkEvidenceError::MissingContainer)
+    );
+
+    let invalid_sources = [
+        DirectLinkBindingSourceV1::new(&native.container, native.expectation.clone()),
+        DirectLinkBindingSourceV1::new(&relocatable.container, relocatable.expectation.clone()),
+    ];
+    assert_eq!(
+        DirectLinkBundleEvidenceV1::bind(&bundle, &containers, &invalid_sources),
+        Err(DirectLinkEvidenceError::FinalizedPayloadNotNative)
     );
 }
 
@@ -375,7 +497,11 @@ fn explicit_request_response_domain_swap_cannot_match_runtime_policy() {
     );
 
     assert_eq!(
-        record.validate_against(&bundle, std::slice::from_ref(&item.container), &[swapped],),
+        record.validate_against(
+            &bundle,
+            &[&item.container],
+            &[DirectLinkBindingSourceV1::new(&item.container, swapped)],
+        ),
         Err(DirectLinkEvidenceError::ExpectationMismatch)
     );
 }
@@ -392,7 +518,7 @@ fn binding_requires_native_payload_and_complete_bundle_membership() {
         BundleIndexV1::from_containers(std::slice::from_ref(&other.container)).unwrap();
     let source = DirectLinkBindingSourceV1::new(&native.container, native.expectation.clone());
     assert!(matches!(
-        DirectLinkBundleEvidenceV1::bind(&unrelated_bundle, &[source]),
+        DirectLinkBundleEvidenceV1::bind(&unrelated_bundle, &[&native.container], &[source]),
         Err(DirectLinkEvidenceError::ContainerBundleMismatch { .. })
     ));
 
@@ -411,7 +537,9 @@ fn binding_requires_native_payload_and_complete_bundle_membership() {
         native.expectation.ffi_contract_identity(),
     );
     let source = DirectLinkBindingSourceV1::new(&native.container, changed_linked_output);
-    assert!(DirectLinkBundleEvidenceV1::bind(&native_bundle, &[source]).is_ok());
+    assert!(
+        DirectLinkBundleEvidenceV1::bind(&native_bundle, &[&native.container], &[source]).is_ok()
+    );
 
     let changed_finalized_output = DirectLinkBindingExpectationV1::new(
         native.expectation.request_identity(),
@@ -427,7 +555,7 @@ fn binding_requires_native_payload_and_complete_bundle_membership() {
     );
     let source = DirectLinkBindingSourceV1::new(&native.container, changed_finalized_output);
     assert_eq!(
-        DirectLinkBundleEvidenceV1::bind(&native_bundle, &[source]),
+        DirectLinkBundleEvidenceV1::bind(&native_bundle, &[&native.container], &[source]),
         Err(DirectLinkEvidenceError::MissingFinalizedPayload)
     );
 
@@ -437,7 +565,7 @@ fn binding_requires_native_payload_and_complete_bundle_membership() {
     let source =
         DirectLinkBindingSourceV1::new(&relocatable.container, relocatable.expectation.clone());
     assert_eq!(
-        DirectLinkBundleEvidenceV1::bind(&relocatable_bundle, &[source]),
+        DirectLinkBundleEvidenceV1::bind(&relocatable_bundle, &[&relocatable.container], &[source],),
         Err(DirectLinkEvidenceError::FinalizedPayloadNotNative)
     );
 
@@ -478,7 +606,7 @@ fn binding_requires_native_payload_and_complete_bundle_membership() {
     let source =
         DirectLinkBindingSourceV1::new(&container, expectation(0x55, unreferenced_identity));
     assert_eq!(
-        DirectLinkBundleEvidenceV1::bind(&bundle, &[source]),
+        DirectLinkBundleEvidenceV1::bind(&bundle, &[&container], &[source]),
         Err(DirectLinkEvidenceError::UnreferencedFinalizedPayload)
     );
 }
@@ -512,18 +640,18 @@ fn every_native_payload_in_a_container_requires_one_binding() {
     let source = DirectLinkBindingSourceV1::new(&container, expectation(0x58, first_identity));
 
     assert_eq!(
-        DirectLinkBundleEvidenceV1::bind(&bundle, &[source]),
+        DirectLinkBundleEvidenceV1::bind(&bundle, &[&container], &[source]),
         Err(DirectLinkEvidenceError::MissingExecutableBinding)
     );
 }
 
 #[test]
-fn constructor_rejects_empty_duplicate_and_mismatched_closures() {
+fn constructor_accepts_empty_relocatable_closure_and_rejects_duplicate_occurrences() {
     let item = fixture(0x61, CodeObjectFormat::NativeExecutable);
     let bundle = BundleIndexV1::from_containers(std::slice::from_ref(&item.container)).unwrap();
     assert_eq!(
-        DirectLinkBundleEvidenceV1::bind(&bundle, &[]),
-        Err(DirectLinkEvidenceError::EmptyBindings)
+        DirectLinkBundleEvidenceV1::bind(&bundle, &[&item.container], &[]),
+        Err(DirectLinkEvidenceError::MissingExecutableBinding)
     );
 
     let sources = [
@@ -531,10 +659,27 @@ fn constructor_rejects_empty_duplicate_and_mismatched_closures() {
         DirectLinkBindingSourceV1::new(&item.container, item.expectation.clone()),
     ];
     assert_eq!(
-        DirectLinkBundleEvidenceV1::bind(&bundle, &sources),
+        DirectLinkBundleEvidenceV1::bind(&bundle, &[&item.container], &sources),
         Err(DirectLinkEvidenceError::Duplicate {
-            field: "request identity"
+            field: "container/finalized payload occurrence"
         })
+    );
+
+    let relocatable = fixture(0x62, CodeObjectFormat::RelocatableObject);
+    let relocatable_bundle =
+        BundleIndexV1::from_containers(std::slice::from_ref(&relocatable.container)).unwrap();
+    let empty =
+        DirectLinkBundleEvidenceV1::bind(&relocatable_bundle, &[&relocatable.container], &[])
+            .unwrap();
+    assert!(empty.bindings().is_empty());
+    assert!(
+        empty
+            .validate_against(&relocatable_bundle, &[&relocatable.container], &[])
+            .is_ok()
+    );
+    assert_eq!(
+        DirectLinkBundleEvidenceV1::from_bytes(&empty.to_bytes()).unwrap(),
+        empty
     );
 }
 
@@ -598,10 +743,10 @@ fn header_downgrades_unknowns_bounds_and_oversized_text_are_rejected() {
 
     let mut zero_count = valid.clone();
     zero_count[45..47].copy_from_slice(&0_u16.to_le_bytes());
-    assert!(matches!(
+    assert_eq!(
         DirectLinkBundleEvidenceV1::from_bytes(&zero_count),
-        Err(DirectLinkDecodeError::CountOutOfRange { count: 0, .. })
-    ));
+        Err(DirectLinkDecodeError::TrailingBytes)
+    );
 
     let mut excessive_count = valid.clone();
     excessive_count[45..47].copy_from_slice(&((MAX_DIRECT_LINK_BINDINGS + 1) as u16).to_le_bytes());
@@ -638,7 +783,7 @@ fn header_downgrades_unknowns_bounds_and_oversized_text_are_rejected() {
 }
 
 #[test]
-fn duplicate_and_noncanonical_wire_bindings_are_rejected() {
+fn duplicate_occurrence_and_noncanonical_wire_bindings_are_rejected() {
     let first = fixture(0x73, CodeObjectFormat::NativeExecutable);
     let second = fixture(0x74, CodeObjectFormat::NativeExecutable);
     let bundle = bundle_for(&[&first, &second]);
@@ -650,14 +795,8 @@ fn duplicate_and_noncanonical_wire_bindings_are_rejected() {
     let second_request_at = find(&duplicate_request, second_request.as_bytes());
     duplicate_request[second_request_at..second_request_at + 32]
         .copy_from_slice(first_request.as_bytes());
-    assert_eq!(
-        DirectLinkBundleEvidenceV1::from_bytes(&duplicate_request),
-        Err(DirectLinkDecodeError::Evidence(
-            DirectLinkEvidenceError::Duplicate {
-                field: "request identity"
-            }
-        ))
-    );
+    let shared_request = DirectLinkBundleEvidenceV1::from_bytes(&duplicate_request).unwrap();
+    assert_eq!(shared_request.to_bytes(), duplicate_request);
 
     let first_bundle = bundle_for(&[&first]);
     let second_bundle = bundle_for(&[&second]);
@@ -667,6 +806,19 @@ fn duplicate_and_noncanonical_wire_bindings_are_rejected() {
         [DIRECT_LINK_EVIDENCE_HEADER_BYTES..]
         .to_vec();
     assert_eq!(first_entry.len(), second_entry.len());
+
+    let mut duplicate_occurrence = combined.to_bytes();
+    duplicate_occurrence[DIRECT_LINK_EVIDENCE_HEADER_BYTES + first_entry.len()..]
+        .copy_from_slice(&first_entry);
+    assert_eq!(
+        DirectLinkBundleEvidenceV1::from_bytes(&duplicate_occurrence),
+        Err(DirectLinkDecodeError::Evidence(
+            DirectLinkEvidenceError::Duplicate {
+                field: "container/finalized payload occurrence"
+            }
+        ))
+    );
+
     let mut reversed = combined.to_bytes();
     let body = &reversed[DIRECT_LINK_EVIDENCE_HEADER_BYTES..];
     let reversed_body = if body.starts_with(&first_entry) {
@@ -730,18 +882,18 @@ fn valid_identity_mutation_changes_record_digest_and_cannot_match_original_polic
         item.expectation.ffi_contract_identity(),
     );
     let source = DirectLinkBindingSourceV1::new(&item.container, changed_expectation);
-    let changed = DirectLinkBundleEvidenceV1::bind(&bundle, &[source]).unwrap();
+    let changed = DirectLinkBundleEvidenceV1::bind(&bundle, &[&item.container], &[source]).unwrap();
+    let original_source = [DirectLinkBindingSourceV1::new(
+        &item.container,
+        item.expectation.clone(),
+    )];
 
     assert_ne!(
         original.digest(DigestAlgorithm::Sha256),
         changed.digest(DigestAlgorithm::Sha256)
     );
     assert_eq!(
-        changed.validate_against(
-            &bundle,
-            std::slice::from_ref(&item.container),
-            std::slice::from_ref(&item.expectation),
-        ),
+        changed.validate_against(&bundle, &[&item.container], &original_source,),
         Err(DirectLinkEvidenceError::ExpectationMismatch)
     );
 }
@@ -774,7 +926,7 @@ fn canonical_container_and_bundle_v1_encodings_remain_unchanged_by_companion_rec
     let bundle_bytes = bundle.to_bytes();
     let expectation = expectation(0xd0, container.payloads()[0].digest());
     let source = DirectLinkBindingSourceV1::new(&container, expectation);
-    let _record = DirectLinkBundleEvidenceV1::bind(&bundle, &[source]).unwrap();
+    let _record = DirectLinkBundleEvidenceV1::bind(&bundle, &[&container], &[source]).unwrap();
 
     assert_eq!(container.to_bytes(), container_bytes);
     assert_eq!(bundle.to_bytes(), bundle_bytes);

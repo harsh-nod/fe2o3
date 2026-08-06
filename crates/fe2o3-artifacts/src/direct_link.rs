@@ -269,6 +269,14 @@ impl<'a> DirectLinkBindingSourceV1<'a> {
             expectation,
         }
     }
+
+    pub const fn container(&self) -> &'a ArtifactContainerV1 {
+        self.container
+    }
+
+    pub const fn expectation(&self) -> &DirectLinkBindingExpectationV1 {
+        &self.expectation
+    }
 }
 
 /// Canonical evidence for one directly linked payload.
@@ -317,9 +325,11 @@ pub struct DirectLinkBundleEvidenceV1 {
 impl DirectLinkBundleEvidenceV1 {
     pub fn bind(
         bundle: &BundleIndexV1,
+        containers: &[&ArtifactContainerV1],
         sources: &[DirectLinkBindingSourceV1<'_>],
     ) -> Result<Self, DirectLinkEvidenceError> {
         require_binding_count(sources.len())?;
+        validate_container_set(containers)?;
         let mut bindings = Vec::with_capacity(sources.len());
         for source in sources {
             validate_binding_source(source.container, &source.expectation)?;
@@ -329,17 +339,7 @@ impl DirectLinkBundleEvidenceV1 {
             });
         }
         canonicalize_bindings(&mut bindings)?;
-        let mut containers = sources
-            .iter()
-            .map(|source| (container_identity(source.container), source.container))
-            .collect::<Vec<_>>();
-        containers.sort_unstable_by_key(|(identity, _)| *identity);
-        containers.dedup_by_key(|(identity, _)| *identity);
-        let containers = containers
-            .into_iter()
-            .map(|(_, container)| container)
-            .collect::<Vec<_>>();
-        validate_complete_bundle_closure(bundle, &containers, &bindings)?;
+        validate_complete_bundle_closure(bundle, containers, &bindings)?;
         Ok(Self {
             bundle_index_identity: bundle_identity(bundle),
             bindings,
@@ -369,57 +369,46 @@ impl DirectLinkBundleEvidenceV1 {
     pub fn validate_against(
         &self,
         bundle: &BundleIndexV1,
-        containers: &[ArtifactContainerV1],
-        expectations: &[DirectLinkBindingExpectationV1],
+        containers: &[&ArtifactContainerV1],
+        sources: &[DirectLinkBindingSourceV1<'_>],
     ) -> Result<(), DirectLinkEvidenceError> {
         if self.bundle_index_identity != bundle_identity(bundle) {
             return Err(DirectLinkEvidenceError::BundleIdentityMismatch);
         }
-        require_binding_count(expectations.len())?;
-        if expectations.len() != self.bindings.len() {
+        require_binding_count(sources.len())?;
+        validate_container_set(containers)?;
+        let measured_container_identities = containers
+            .iter()
+            .map(|container| container_identity(container))
+            .collect::<Vec<_>>();
+        if self
+            .bindings
+            .iter()
+            .any(|binding| !measured_container_identities.contains(&binding.container_identity))
+        {
+            return Err(DirectLinkEvidenceError::MissingContainer);
+        }
+        if sources.len() != self.bindings.len() {
             return Err(DirectLinkEvidenceError::BindingCountMismatch {
-                expected: expectations.len(),
+                expected: sources.len(),
                 actual: self.bindings.len(),
             });
         }
-        let mut expectations = expectations.to_vec();
-        canonicalize_expectations(&mut expectations)?;
-        for (binding, expected) in self.bindings.iter().zip(&expectations) {
-            if binding.expectation != *expected {
-                return Err(DirectLinkEvidenceError::ExpectationMismatch);
-            }
-        }
-
-        let mut measured_containers = containers
-            .iter()
-            .map(|container| (container_identity(container), container, false))
-            .collect::<Vec<_>>();
-        measured_containers.sort_unstable_by_key(|(identity, _, _)| *identity);
-        if measured_containers
-            .windows(2)
-            .any(|pair| pair[0].0 == pair[1].0)
-        {
-            return Err(DirectLinkEvidenceError::Duplicate {
-                field: "container identity",
+        let mut expected_bindings = Vec::with_capacity(sources.len());
+        for source in sources {
+            expected_bindings.push(DirectLinkBindingV1 {
+                container_identity: container_identity(source.container),
+                expectation: source.expectation.clone(),
             });
         }
-
-        for binding in &self.bindings {
-            let index = measured_containers
-                .binary_search_by_key(&binding.container_identity, |(identity, _, _)| *identity)
-                .map_err(|_| DirectLinkEvidenceError::MissingContainer)?;
-            let (_, container, used) = &mut measured_containers[index];
-            *used = true;
-            validate_binding_source(container, &binding.expectation)?;
+        canonicalize_bindings(&mut expected_bindings)?;
+        if self.bindings != expected_bindings {
+            return Err(DirectLinkEvidenceError::ExpectationMismatch);
         }
-        if measured_containers.iter().any(|(_, _, used)| !used) {
-            return Err(DirectLinkEvidenceError::ExtraContainer);
+        for source in sources {
+            validate_binding_source(source.container, &source.expectation)?;
         }
-        let containers = measured_containers
-            .iter()
-            .map(|(_, container, _)| *container)
-            .collect::<Vec<_>>();
-        validate_complete_bundle_closure(bundle, &containers, &self.bindings)?;
+        validate_complete_bundle_closure(bundle, containers, &self.bindings)?;
         Ok(())
     }
 
@@ -441,7 +430,6 @@ impl DirectLinkBundleEvidenceV1 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum DirectLinkEvidenceError {
-    EmptyBindings,
     TooManyBindings { max: usize },
     Duplicate { field: &'static str },
     NonCanonicalBindingOrder,
@@ -461,7 +449,6 @@ pub enum DirectLinkEvidenceError {
 impl fmt::Display for DirectLinkEvidenceError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::EmptyBindings => write!(formatter, "direct-link evidence must not be empty"),
             Self::TooManyBindings { max } => {
                 write!(formatter, "direct-link evidence exceeds {max} bindings")
             }
@@ -515,9 +502,7 @@ impl fmt::Display for DirectLinkEvidenceError {
 impl std::error::Error for DirectLinkEvidenceError {}
 
 fn require_binding_count(count: usize) -> Result<(), DirectLinkEvidenceError> {
-    if count == 0 {
-        Err(DirectLinkEvidenceError::EmptyBindings)
-    } else if count > MAX_DIRECT_LINK_BINDINGS {
+    if count > MAX_DIRECT_LINK_BINDINGS {
         Err(DirectLinkEvidenceError::TooManyBindings {
             max: MAX_DIRECT_LINK_BINDINGS,
         })
@@ -529,23 +514,19 @@ fn require_binding_count(count: usize) -> Result<(), DirectLinkEvidenceError> {
 fn canonicalize_bindings(
     bindings: &mut [DirectLinkBindingV1],
 ) -> Result<(), DirectLinkEvidenceError> {
-    bindings.sort_unstable_by_key(|binding| binding.expectation.finalized_payload_identity());
-    reject_binding_duplicates(bindings)
+    bindings.sort_unstable_by_key(binding_occurrence_key);
+    reject_binding_occurrence_duplicates(bindings)
 }
 
 fn ensure_canonical_bindings(
     bindings: &[DirectLinkBindingV1],
 ) -> Result<(), DirectLinkEvidenceError> {
     for pair in bindings.windows(2) {
-        match pair[0]
-            .expectation
-            .finalized_payload_identity()
-            .cmp(&pair[1].expectation.finalized_payload_identity())
-        {
+        match binding_occurrence_key(&pair[0]).cmp(&binding_occurrence_key(&pair[1])) {
             std::cmp::Ordering::Less => {}
             std::cmp::Ordering::Equal => {
                 return Err(DirectLinkEvidenceError::Duplicate {
-                    field: "finalized payload identity",
+                    field: "container/finalized payload occurrence",
                 });
             }
             std::cmp::Ordering::Greater => {
@@ -553,64 +534,31 @@ fn ensure_canonical_bindings(
             }
         }
     }
-    reject_binding_duplicates(bindings)
+    reject_binding_occurrence_duplicates(bindings)
 }
 
-fn reject_binding_duplicates(
+fn binding_occurrence_key(
+    binding: &DirectLinkBindingV1,
+) -> (
+    DirectLinkContainerIdentityV1,
+    DirectLinkFinalizedPayloadIdentityV1,
+) {
+    (
+        binding.container_identity,
+        binding.expectation.finalized_payload_identity(),
+    )
+}
+
+fn reject_binding_occurrence_duplicates(
     bindings: &[DirectLinkBindingV1],
 ) -> Result<(), DirectLinkEvidenceError> {
-    reject_duplicate_digest(
-        bindings
-            .iter()
-            .map(|binding| binding.expectation.request_identity()),
-        "request identity",
-    )?;
-    reject_duplicate_digest(
-        bindings
-            .iter()
-            .map(|binding| binding.expectation.response_identity()),
-        "response identity",
-    )?;
-    reject_duplicate_digest(
-        bindings
-            .iter()
-            .map(|binding| binding.expectation.finalized_payload_identity()),
-        "finalized payload identity",
-    )
-}
-
-fn canonicalize_expectations(
-    expectations: &mut [DirectLinkBindingExpectationV1],
-) -> Result<(), DirectLinkEvidenceError> {
-    expectations.sort_unstable_by_key(|expectation| expectation.finalized_payload_identity());
-    reject_duplicate_digest(
-        expectations
-            .iter()
-            .map(DirectLinkBindingExpectationV1::request_identity),
-        "request identity",
-    )?;
-    reject_duplicate_digest(
-        expectations
-            .iter()
-            .map(DirectLinkBindingExpectationV1::response_identity),
-        "response identity",
-    )?;
-    reject_duplicate_digest(
-        expectations
-            .iter()
-            .map(DirectLinkBindingExpectationV1::finalized_payload_identity),
-        "finalized payload identity",
-    )
-}
-
-fn reject_duplicate_digest<T: Ord>(
-    values: impl IntoIterator<Item = T>,
-    field: &'static str,
-) -> Result<(), DirectLinkEvidenceError> {
-    let mut values = values.into_iter().collect::<Vec<_>>();
-    values.sort_unstable();
-    if values.windows(2).any(|pair| pair[0] == pair[1]) {
-        Err(DirectLinkEvidenceError::Duplicate { field })
+    if bindings
+        .windows(2)
+        .any(|pair| binding_occurrence_key(&pair[0]) == binding_occurrence_key(&pair[1]))
+    {
+        Err(DirectLinkEvidenceError::Duplicate {
+            field: "container/finalized payload occurrence",
+        })
     } else {
         Ok(())
     }
@@ -626,6 +574,23 @@ fn bundle_identity(bundle: &BundleIndexV1) -> DirectLinkBundleIndexIdentityV1 {
     DirectLinkBundleIndexIdentityV1::new(
         DIRECT_LINK_EVIDENCE_DIGEST_ALGORITHM.calculate(&bundle.to_bytes()),
     )
+}
+
+fn validate_container_set(
+    containers: &[&ArtifactContainerV1],
+) -> Result<(), DirectLinkEvidenceError> {
+    let mut identities = containers
+        .iter()
+        .map(|container| container_identity(container))
+        .collect::<Vec<_>>();
+    identities.sort_unstable();
+    if identities.windows(2).any(|pair| pair[0] == pair[1]) {
+        Err(DirectLinkEvidenceError::Duplicate {
+            field: "container identity",
+        })
+    } else {
+        Ok(())
+    }
 }
 
 fn validate_binding_source(
@@ -711,39 +676,42 @@ fn validate_complete_bundle_closure(
         };
     }
 
-    let mut expected_payloads = containers
+    let mut expected_occurrences = containers
         .iter()
         .flat_map(|container| {
+            let container_identity = container_identity(container);
             container
                 .manifest()
                 .code_objects()
                 .iter()
                 .filter(|object| object.format() == CodeObjectFormat::NativeExecutable)
-                .map(|object| {
-                    DirectLinkFinalizedPayloadIdentityV1::new(PayloadDigest::new(
-                        container.digest_algorithm(),
-                        object.digest(),
-                    ))
+                .map(move |object| {
+                    (
+                        container_identity,
+                        DirectLinkFinalizedPayloadIdentityV1::new(PayloadDigest::new(
+                            container.digest_algorithm(),
+                            object.digest(),
+                        )),
+                    )
                 })
         })
         .collect::<Vec<_>>();
-    expected_payloads.sort_unstable();
-    expected_payloads.dedup();
+    expected_occurrences.sort_unstable();
 
-    let mut actual_payloads = bindings
+    let mut actual_occurrences = bindings
         .iter()
-        .map(|binding| binding.expectation.finalized_payload_identity())
+        .map(binding_occurrence_key)
         .collect::<Vec<_>>();
-    actual_payloads.sort_unstable();
-    if expected_payloads
+    actual_occurrences.sort_unstable();
+    if expected_occurrences
         .iter()
-        .any(|identity| actual_payloads.binary_search(identity).is_err())
+        .any(|occurrence| actual_occurrences.binary_search(occurrence).is_err())
     {
         return Err(DirectLinkEvidenceError::MissingExecutableBinding);
     }
-    if actual_payloads
+    if actual_occurrences
         .iter()
-        .any(|identity| expected_payloads.binary_search(identity).is_err())
+        .any(|occurrence| expected_occurrences.binary_search(occurrence).is_err())
     {
         return Err(DirectLinkEvidenceError::ExtraExecutableBinding);
     }

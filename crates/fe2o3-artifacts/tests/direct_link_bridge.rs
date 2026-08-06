@@ -89,7 +89,7 @@ fn evidence(ffi_seed: u8) -> DirectLinkBundleEvidenceV1 {
     let bundle = BundleIndexV1::from_containers(std::slice::from_ref(&container)).unwrap();
     let source =
         DirectLinkBindingSourceV1::new(&container, expectation(payload_identity, ffi_seed));
-    DirectLinkBundleEvidenceV1::bind(&bundle, &[source]).unwrap()
+    DirectLinkBundleEvidenceV1::bind(&bundle, &[&container], &[source]).unwrap()
 }
 
 fn publish_bridge(

@@ -188,9 +188,13 @@ explicit finalization identity binds the descriptor transformation and
 independent inspection between those byte identities. Construction verifies that the finalized payload is a
 digest-valid native executable in the container. Evidence construction and
 validation require the supplied containers to reproduce the complete bundle
-index exactly and require one binding for every native executable payload.
-Partial A-of-A+B evidence, unbound containers, and missing or extra executable
-bindings are rejected.
+index exactly and require one binding for every native executable occurrence,
+keyed by (container identity, finalized payload identity). The complete
+container set is supplied separately from native binding sources, so
+relocatable-only containers remain part of the bundle closure without acquiring
+native-executable evidence. Identical native bytes in distinct containers still
+require distinct bindings. Partial A-of-A+B evidence, unbound containers, and
+missing or extra executable bindings are rejected.
 
 Request, response, linked output, finalization, finalized payload, FFI closure,
 container, bundle, worker executable/configuration, and toolchain
@@ -201,12 +205,15 @@ every domain against independently supplied expectations; the types do not
 authenticate a caller that deliberately lies about a measurement.
 
 The record begins with `FE2O3DL\0`, version `1`, and zero flags. Bindings are
-bounded, unique by request, response, and finalized payload identity, and
-ordered by finalized payload identity. Tool names and versions use the same
-bounded identity-text grammar as other artifact records. Decoding rejects
-unknown versions, flags, algorithms, nonzero reserved fields, zero or excessive
-counts, oversized text, duplicate or noncanonical bindings, truncation, and
-trailing bytes. This companion leaves all existing V1 wire encodings unchanged.
+bounded, unique by container/finalized-payload occurrence, and ordered by that
+tuple. Request and response identities may repeat when one transformation is
+embedded in multiple containers. Zero bindings canonically represent a
+concretely validated closure containing no native executable payloads. Tool
+names and versions use the same bounded identity-text grammar as other artifact
+records. Decoding rejects unknown versions, flags, algorithms, nonzero reserved
+fields, excessive counts, oversized text, duplicate or noncanonical bindings,
+truncation, and trailing bytes. This companion leaves all existing manifest,
+container, and bundle V1 wire encodings unchanged.
 
 Decoded evidence remains untrusted. `validate_against` compares every recorded
 field with caller-derived expectations and recomputes container and bundle

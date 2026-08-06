@@ -42,7 +42,7 @@ impl DirectLinkBundleEvidenceV1 {
             return Err(DirectLinkDecodeError::UnsupportedFlags(flags));
         }
         let bundle_index_identity = DirectLinkBundleIndexIdentityV1::new(reader.payload_digest()?);
-        let count = reader.count("direct-link bindings", 1, MAX_DIRECT_LINK_BINDINGS)?;
+        let count = reader.count("direct-link bindings", 0, MAX_DIRECT_LINK_BINDINGS)?;
         let reserved = reader.u16()?;
         if reserved != 0 {
             return Err(DirectLinkDecodeError::NonZeroReserved(reserved));
