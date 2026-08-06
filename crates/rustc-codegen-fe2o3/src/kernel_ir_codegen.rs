@@ -39,7 +39,8 @@ const MAX_COMPILER_MODULE_TYPE_DEPTH: usize = 8;
 /// One inert, deterministic textual LLVM AMDGPU module.
 ///
 /// This value is not LLVM bitcode, a link result, a code object, compiler provenance, or load
-/// authority. The API is intentionally not connected to rustc collection yet.
+/// authority. The API is intentionally not connected to rustc collection yet, and records the
+/// target properties that remain deliberately unbound.
 #[allow(dead_code)]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct InertCompilerModuleTextV1 {
@@ -49,6 +50,16 @@ pub(crate) struct InertCompilerModuleTextV1 {
     internal_helpers: Vec<String>,
     device_ffi_exports: Vec<String>,
     external_declarations: Vec<String>,
+    unbound_target_properties: [UnboundCompilerModuleTargetPropertyV1; 3],
+}
+
+/// Target properties required before textual compiler-module output can become an artifact.
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum UnboundCompilerModuleTargetPropertyV1 {
+    DataLayout,
+    TargetProcessor,
+    CodeObjectVersion,
 }
 
 #[allow(dead_code)]
@@ -75,6 +86,10 @@ impl InertCompilerModuleTextV1 {
 
     pub(crate) fn external_declarations(&self) -> &[String] {
         &self.external_declarations
+    }
+
+    pub(crate) fn unbound_target_properties(&self) -> &[UnboundCompilerModuleTargetPropertyV1; 3] {
+        &self.unbound_target_properties
     }
 }
 
@@ -163,6 +178,11 @@ pub(crate) fn construct_inert_compiler_module_text_v1(
         internal_helpers,
         device_ffi_exports,
         external_declarations,
+        unbound_target_properties: [
+            UnboundCompilerModuleTargetPropertyV1::DataLayout,
+            UnboundCompilerModuleTargetPropertyV1::TargetProcessor,
+            UnboundCompilerModuleTargetPropertyV1::CodeObjectVersion,
+        ],
     })
 }
 
@@ -2048,6 +2068,14 @@ mod tests {
         assert!(first.internal_helpers().is_empty());
         assert_eq!(first.device_ffi_exports(), &["visible_helper"]);
         assert_eq!(first.external_declarations(), &["external_import"]);
+        assert_eq!(
+            first.unbound_target_properties(),
+            &[
+                UnboundCompilerModuleTargetPropertyV1::DataLayout,
+                UnboundCompilerModuleTargetPropertyV1::TargetProcessor,
+                UnboundCompilerModuleTargetPropertyV1::CodeObjectVersion,
+            ]
+        );
         assert!(first.llvm_ir().contains("define amdgpu_kernel void @entry"));
         assert!(first.llvm_ir().contains("define void @visible_helper"));
         assert!(first.llvm_ir().contains("declare void @external_import"));

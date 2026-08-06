@@ -176,6 +176,9 @@ fn multi_entry_module_matches_exact_golden() {
     assert_eq!(actual.matches("declare i32 @external_bias").count(), 1);
     assert!(!actual.contains("@alpha_entry"));
     assert!(!actual.contains("@zeta_entry"));
+    assert!(!actual.contains("target datalayout"));
+    assert!(!actual.contains("target-cpu"));
+    assert!(!actual.contains("code_object_version"));
 }
 
 #[test]
@@ -463,8 +466,7 @@ fn mixed_wave_kernels_cannot_enter_different_nodes_of_one_recursive_scc() {
     assert!(first.to_string().contains("recursive_a, recursive_b"));
 }
 
-#[test]
-fn inherited_wave_mode_reaches_branch_phi_helpers_and_recursive_sccs() {
+fn effective_wave_module() -> Module {
     let i32_type = Type::Scalar(fe2o3_kernel_ir::ScalarType::I32);
     let mut entry = BasicBlock::new(BlockId(0));
     entry.operations = vec![
@@ -524,7 +526,12 @@ fn inherited_wave_mode_reaches_branch_phi_helpers_and_recursive_sccs() {
         void_helper("recursive_b", &["recursive_a"]),
     ];
     module.kernels = vec![wave_kernel("kernel", "entry", WaveWidth::Wave32)];
+    module
+}
 
+#[test]
+fn inherited_wave_mode_reaches_branch_phi_helpers_and_recursive_sccs() {
+    let module = effective_wave_module();
     let llvm = lower_compiler_module_to_llvm_ir(&module).unwrap();
     let wave32 = "\"target-features\"=\"+wavefrontsize32,-wavefrontsize64\"";
     assert!(llvm.contains(&format!(
@@ -559,4 +566,122 @@ fn unreachable_helper_roots_require_an_explicit_mode() {
     assert!(llvm.contains(
         "define internal void @orphan() nounwind \"target-features\"=\"-wavefrontsize32,+wavefrontsize64\""
     ));
+}
+
+#[test]
+fn call_graph_edge_limit_fails_before_scc_allocation_can_grow_unbounded() {
+    const OVER_LIMIT: usize = 131_073;
+    let entry = Function::kernel_entry(
+        "entry",
+        Signature::new(vec![], vec![]),
+        vec![],
+        vec![returning_block(
+            (0..OVER_LIMIT).map(|_| void_call("external")).collect(),
+            vec![],
+        )],
+    );
+    let mut module = Module::new("tests::call_graph_limit");
+    module.functions = vec![
+        entry,
+        Function::external_import("external", Signature::new(vec![], vec![])),
+    ];
+    module.kernels = vec![wave_kernel("kernel", "entry", WaveWidth::Wave64)];
+
+    let error = lower_compiler_module_to_llvm_ir(&module).unwrap_err();
+    assert!(error.contains(LoweringDiagnosticCode::ResourceLimit));
+    assert!(
+        error
+            .to_string()
+            .contains("compiler-module call edges count 131073 exceeds limit 131072")
+    );
+}
+
+#[test]
+#[ignore = "requires clang and LLVM tools with gfx1151 support"]
+fn gfx1151_object_symbols_and_effective_wave_helpers_are_physical() {
+    use std::ffi::OsString;
+    use std::process::Command;
+
+    let clang = std::env::var_os("CLANG").unwrap_or_else(|| OsString::from("clang"));
+    let readelf =
+        std::env::var_os("LLVM_READELF").unwrap_or_else(|| OsString::from("llvm-readelf"));
+    let objdump =
+        std::env::var_os("LLVM_OBJDUMP").unwrap_or_else(|| OsString::from("llvm-objdump"));
+    let directory = std::env::temp_dir();
+    let suffix = std::process::id();
+    let role_ir = directory.join(format!("fe2o3-g3-roles-{suffix}.ll"));
+    let role_object = directory.join(format!("fe2o3-g3-roles-{suffix}.o"));
+    let wave_ir = directory.join(format!("fe2o3-g3-wave-{suffix}.ll"));
+    let wave_object = directory.join(format!("fe2o3-g3-wave-{suffix}.o"));
+
+    let compile = |ir: &std::path::Path, object: &std::path::Path| {
+        let output = Command::new(&clang)
+            .args([
+                "-x",
+                "ir",
+                "--target=amdgcn-amd-amdhsa",
+                "-mcpu=gfx1151",
+                "-nogpulib",
+                "-c",
+            ])
+            .arg(ir)
+            .arg("-o")
+            .arg(object)
+            .output()
+            .expect("run clang");
+        assert!(
+            output.status.success(),
+            "clang failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+
+    std::fs::write(
+        &role_ir,
+        lower_compiler_module_to_llvm_ir(&compiler_module()).unwrap(),
+    )
+    .unwrap();
+    compile(&role_ir, &role_object);
+    let symbols = Command::new(&readelf)
+        .arg("-s")
+        .arg(&role_object)
+        .output()
+        .expect("run llvm-readelf");
+    assert!(symbols.status.success());
+    let symbols = String::from_utf8(symbols.stdout).unwrap();
+    let symbol_line = |name: &str| {
+        symbols
+            .lines()
+            .find(|line| line.split_whitespace().last() == Some(name))
+            .unwrap_or_else(|| panic!("missing symbol {name}"))
+    };
+    assert!(symbol_line("scale").contains("FUNC    LOCAL  DEFAULT"));
+    assert!(symbol_line("public_adjust").contains("FUNC    GLOBAL DEFAULT"));
+    assert!(symbol_line("alpha_kernel").contains("FUNC    GLOBAL PROTECTED"));
+    assert!(symbol_line("zeta_kernel").contains("FUNC    GLOBAL PROTECTED"));
+    assert!(symbol_line("external_bias").contains("GLOBAL DEFAULT   UND"));
+
+    std::fs::write(
+        &wave_ir,
+        lower_compiler_module_to_llvm_ir(&effective_wave_module()).unwrap(),
+    )
+    .unwrap();
+    compile(&wave_ir, &wave_object);
+    let disassembly = Command::new(&objdump)
+        .args(["-d", "--mcpu=gfx1151"])
+        .arg(&wave_object)
+        .output()
+        .expect("run llvm-objdump");
+    assert!(disassembly.status.success());
+    let disassembly = String::from_utf8(disassembly.stdout).unwrap();
+    assert!(disassembly.contains("file format elf64-amdgpu"));
+    assert!(disassembly.contains("<kernel>"));
+    assert!(disassembly.contains("<branching>"));
+    assert!(disassembly.contains("<recursive_a>"));
+    assert!(disassembly.contains("<recursive_b>"));
+    assert!(disassembly.contains("s_endpgm"));
+
+    for path in [role_ir, role_object, wave_ir, wave_object] {
+        let _ = std::fs::remove_file(path);
+    }
 }

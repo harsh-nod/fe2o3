@@ -355,7 +355,11 @@ pub fn lower_kernel_to_llvm_ir(
 ///
 /// The current bounded feature slice supports void or single-result scalar/pointer helper ABIs.
 /// Slice ABIs remain kernel-entry-only. Calls to kernel entry functions and context-dependent
-/// operations in helpers are rejected.
+/// operations in helpers are rejected. Helper wave modes are resolved through a bounded SCC call
+/// graph before lowering, and textual output is capacity-limited and returned atomically.
+///
+/// The text binds the AMDGPU target triple only. Target data layout, processor identity, and code
+/// object version are deliberately absent and remain blockers for artifact construction.
 pub fn lower_compiler_module_to_llvm_ir(module: &Module) -> Result<String, LoweringErrors> {
     if module.kernels.is_empty() {
         return Err(LoweringErrors::one(

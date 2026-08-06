@@ -48,9 +48,22 @@ lowering to produce one textual LLVM module from one verified kernel-IR
 The module path emits kernel entries in canonical kernel-ID order, emits every
 non-entry definition and external declaration once in canonical function-ID
 order, and preserves verified block and operation order inside each definition.
+Roles are explicit in kernel IR: `InternalHelper` definitions use LLVM internal
+linkage, `DeviceFfiExport` definitions remain externally visible,
+`ExternalImport` functions become declarations, and only `KernelEntry`
+functions referenced by kernel records use the AMDGPU kernel calling
+convention. Visibility is never inferred from reachability or symbol spelling.
 AMDGPU intrinsic declarations are deduplicated across entries. Every kernel has
-its own workgroup attribute and metadata node. The complete module is
-preflighted before the private output string is returned.
+its own workgroup attribute and metadata node.
+
+Before body lowering, the module path constructs a bounded helper call graph
+and iterative SCC decomposition. Each kernel's exact wave32/wave64 mode is
+propagated through its reachable helper SCCs. A helper SCC reachable from both
+modes is rejected rather than cloned. A helper without a local claim inherits
+the unique effective caller mode, while a non-kernel-reachable root SCC must
+declare an exact mode before that mode can propagate to its callees. The
+effective mode is attached to helper definitions, so LLVM lowers their
+branches, phi nodes, and control masks under the same wave contract as callers.
 
 This slice supports calls between ordinary device functions and external
 declarations with void or one scalar/global-or-workgroup-pointer result. Kernel
@@ -59,7 +72,14 @@ multi-result and slice helper ABIs, duplicate output symbols, multiple exports
 of one entry definition, and kernel-context intrinsics, LDS, barriers, or wave
 operations in shared helpers fail closed.
 
-The result is textual LLVM IR only. It is not bitcode, a linked module, a code
-object, compiler provenance, or publication/load/launch authority. The bounded
-rustc-facing wrapper in `kernel_ir_codegen.rs` additionally limits all graph
-dimensions and the final text size before this path can be wired to collection.
+The result is textual LLVM IR only. Emission uses a private 16 MiB
+capacity-limited writer; crossing the limit returns an error and exposes no
+partial text. It is not bitcode, a linked module, a code object, compiler
+provenance, or publication/load/launch authority. The emitted text binds only
+the AMDGPU target triple. A target data layout, exact processor, and code-object
+version are deliberately unbound and remain required blockers before artifact
+construction. The ignored `gfx1151` toolchain probe demonstrates that an
+external Clang invocation can compile and disassemble current fixtures; that
+probe is test evidence, not target binding or production integration. The
+bounded rustc-facing wrapper in `kernel_ir_codegen.rs` additionally limits all
+input graph dimensions before this path can be wired to collection.
