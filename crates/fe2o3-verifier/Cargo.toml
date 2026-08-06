@@ -10,8 +10,3 @@ publish = false
 
 [lib]
 name = "fe2o3_verifier"
-
-# This crate is intentionally developed independently until its artifact API is
-# integrated into the repository workspace.
-[workspace]
-resolver = "2"
