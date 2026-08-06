@@ -245,6 +245,30 @@ Request makeRequest(std::vector<Input> Inputs,
   return Result;
 }
 
+Request makeV2Request(Input CompilerModule,
+                      std::vector<Input> ExternalProviders,
+                      std::vector<std::string> Imports,
+                      std::vector<std::string> Exports,
+                      std::vector<std::string> FinalSymbols) {
+  std::vector<Input> Inputs = ExternalProviders;
+  Inputs.push_back(CompilerModule);
+  Request Result = makeRequest(std::move(Inputs), FinalSymbols);
+  Result.Protocol = ProtocolVersion::V2;
+  Result.WorkerBuildIdentity = FE2O3_WORKER_BUILD_ID;
+  Result.WorkerExecutableDigest.fill(0x51);
+  Result.WorkerExecutableBytes = 4096;
+  Result.CompilerEnvelopeIdentity.fill(0x62);
+  Result.CompilerModule = std::move(CompilerModule);
+  Result.ExternalProviders = std::move(ExternalProviders);
+  llvm::sort(Imports);
+  llvm::sort(Exports);
+  llvm::sort(FinalSymbols);
+  Result.ImportSymbols = std::move(Imports);
+  Result.ExportSymbols = std::move(Exports);
+  Result.FinalSymbols = std::move(FinalSymbols);
+  return Result;
+}
+
 std::set<std::string> inspectHsaco(ArrayRef<uint8_t> Bytes) {
   StringRef Data(reinterpret_cast<const char *>(Bytes.data()), Bytes.size());
   auto ObjectOrError =
@@ -433,22 +457,10 @@ int main(int ArgumentCount, char **Arguments) {
   require(MixedFirst.LinkedOutput->Bytes == MixedSecond.LinkedOutput->Bytes,
           "identical requests produced different HSACO bytes");
 
-  Request MixedV2 = Mixed;
-  MixedV2.Protocol = ProtocolVersion::V2;
-  MixedV2.WorkerBuildIdentity = FE2O3_WORKER_BUILD_ID;
-  MixedV2.WorkerExecutableDigest.fill(0x51);
-  MixedV2.WorkerExecutableBytes = 4096;
-  MixedV2.CompilerEnvelopeIdentity.fill(0x62);
-  for (const Input &InputValue : Mixed.Inputs) {
-    if (InputValue.Kind == InputKind::LlvmBitcode)
-      MixedV2.CompilerModule = InputValue;
-    else
-      MixedV2.ExternalProviders.push_back(InputValue);
-  }
-  MixedV2.ImportSymbols = {"object_helper"};
-  MixedV2.ExportSymbols = {"mixed_entry"};
-  MixedV2.FinalSymbols = {"mixed_entry", "object_helper"};
-  llvm::sort(MixedV2.FinalSymbols);
+  Request MixedV2 = makeV2Request(
+      makeInput(InputKind::LlvmBitcode, MixedBitcode),
+      {makeInput(InputKind::AmdGpuRelocatable, MixedObject)}, {"object_helper"},
+      {"mixed_entry"}, {"mixed_entry", "object_helper"});
   Response MixedV2Response =
       runSuccess(MixedV2, {"mixed_entry", "object_helper"});
   require(MixedV2Response.Protocol == ProtocolVersion::V2,
@@ -459,6 +471,35 @@ int main(int ArgumentCount, char **Arguments) {
   Request WrongV2Worker = MixedV2;
   WrongV2Worker.WorkerBuildIdentity = "wrong-worker";
   requireFailure(WrongV2Worker, Stage::Toolchain);
+
+  Request SameCardinalitySubstitution = MixedV2;
+  SameCardinalitySubstitution.ImportSymbols = {"substituted_helper"};
+  requireFailure(SameCardinalitySubstitution, Stage::InputValidation);
+
+  Request SwappedRoles = MixedV2;
+  std::swap(SwappedRoles.CompilerModule,
+            SwappedRoles.ExternalProviders.front());
+  requireFailure(SwappedRoles, Stage::InputValidation);
+
+  Request ImportedSymbolDefinedByModule = MixedV2;
+  ImportedSymbolDefinedByModule.ImportSymbols = {"mixed_entry"};
+  ImportedSymbolDefinedByModule.ExportSymbols.clear();
+  requireFailure(ImportedSymbolDefinedByModule, Stage::InputValidation);
+
+  Request ExportDefinedOnlyByProvider = MixedV2;
+  ExportDefinedOnlyByProvider.ImportSymbols.clear();
+  ExportDefinedOnlyByProvider.ExportSymbols = {"object_helper"};
+  requireFailure(ExportDefinedOnlyByProvider, Stage::InputValidation);
+
+  Request V2Duplicate = makeV2Request(
+      makeInput(InputKind::LlvmBitcode,
+                makeBitcode("v2-duplicate-module", "v2_duplicate", std::nullopt,
+                            withAddend(1))),
+      {makeInput(InputKind::AmdGpuRelocatable,
+                 makeObject("v2-duplicate-provider", "v2_duplicate",
+                            std::nullopt, withAddend(2)))},
+      {}, {"v2_duplicate"}, {"v2_duplicate"});
+  requireFailure(V2Duplicate, Stage::InputValidation);
   if (ArgumentCount >= 2)
     writeOutput(Arguments[1], MixedFirst.LinkedOutput->Bytes);
   if (ArgumentCount == 4) {

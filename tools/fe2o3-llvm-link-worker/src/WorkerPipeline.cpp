@@ -486,6 +486,12 @@ struct ElfContract {
   std::set<std::string> RequiredImports;
 };
 
+struct SymbolContract {
+  std::set<std::string> Definitions;
+  std::set<std::string> PublicDefinitions;
+  std::set<std::string> RequiredImports;
+};
+
 bool matches(const ElfContract &Left, const ElfContract &Right) {
   return Left.Flags == Right.Flags && Left.OsAbi == Right.OsAbi &&
          Left.AbiVersion == Right.AbiVersion &&
@@ -544,6 +550,100 @@ Expected<ElfContract> inspectRelocatable(ArrayRef<uint8_t> Bytes) {
     }
   }
   return Result;
+}
+
+Expected<SymbolContract> inspectBitcodeSymbols(const Input &InputValue,
+                                               StringRef InputName) {
+  StringRef Bytes(reinterpret_cast<const char *>(InputValue.Bytes.data()),
+                  InputValue.Bytes.size());
+  LLVMContext Context;
+  auto Parsed = parseBitcodeFile(MemoryBufferRef(Bytes, InputName), Context);
+  if (!Parsed)
+    return pipelineError(Twine(InputName) + ": " +
+                         errorToDiagnostic(Parsed.takeError()));
+
+  SymbolContract Result;
+  for (const GlobalValue &Value : (*Parsed)->global_values()) {
+    if (!Value.hasName() || Value.hasLocalLinkage())
+      continue;
+    std::string Name = Value.getName().str();
+    if (Value.isDeclaration()) {
+      Result.RequiredImports.insert(std::move(Name));
+      continue;
+    }
+    if (Value.isDeclarationForLinker())
+      continue;
+    Result.Definitions.insert(Name);
+    if (Value.getVisibility() == GlobalValue::DefaultVisibility)
+      Result.PublicDefinitions.insert(std::move(Name));
+  }
+  return Result;
+}
+
+Expected<SymbolContract> inspectInputSymbols(const Input &InputValue,
+                                             StringRef InputName) {
+  if (InputValue.Kind == InputKind::LlvmBitcode)
+    return inspectBitcodeSymbols(InputValue, InputName);
+  auto Elf = inspectRelocatable(InputValue.Bytes);
+  if (!Elf)
+    return Elf.takeError();
+  return SymbolContract{std::move(Elf->Definitions),
+                        std::move(Elf->PublicDefinitions),
+                        std::move(Elf->RequiredImports)};
+}
+
+Error validateV2SymbolRoles(const Request &RequestValue) {
+  auto Module =
+      inspectInputSymbols(RequestValue.CompilerModule, "<compiler-module>");
+  if (!Module)
+    return Module.takeError();
+
+  std::vector<SymbolContract> Providers;
+  Providers.reserve(RequestValue.ExternalProviders.size());
+  for (size_t I = 0; I < RequestValue.ExternalProviders.size(); ++I) {
+    std::string Name = (Twine("<external-provider-") + Twine(I) + ">").str();
+    auto Provider =
+        inspectInputSymbols(RequestValue.ExternalProviders[I], Name);
+    if (!Provider)
+      return Provider.takeError();
+    Providers.push_back(std::move(*Provider));
+  }
+
+  std::map<std::string, size_t> DefinitionCounts;
+  for (const std::string &Name : Module->Definitions)
+    ++DefinitionCounts[Name];
+  for (const SymbolContract &Provider : Providers)
+    for (const std::string &Name : Provider.Definitions)
+      ++DefinitionCounts[Name];
+  for (const auto &[Name, Count] : DefinitionCounts)
+    if (Count > 1)
+      return pipelineError(Twine("duplicate definition: ") + Name);
+
+  for (const std::string &Name : RequestValue.ExportSymbols)
+    if (!Module->PublicDefinitions.contains(Name))
+      return pipelineError(Twine("compiler-module export is not defined by "
+                                 "the compiler module: ") +
+                           Name);
+
+  for (const std::string &Name : RequestValue.ImportSymbols) {
+    if (Module->Definitions.contains(Name))
+      return pipelineError(Twine("compiler-module import is defined by the "
+                                 "compiler module: ") +
+                           Name);
+    if (!Module->RequiredImports.contains(Name))
+      return pipelineError(Twine("compiler-module import is not unresolved "
+                                 "by the compiler module: ") +
+                           Name);
+    bool ResolvedByProvider =
+        llvm::any_of(Providers, [&Name](const SymbolContract &Provider) {
+          return Provider.Definitions.contains(Name);
+        });
+    if (!ResolvedByProvider)
+      return pipelineError(Twine("compiler-module import has no external "
+                                 "provider: ") +
+                           Name);
+  }
+  return Error::success();
 }
 
 Expected<std::set<std::string>> inspectOutput(ArrayRef<uint8_t> Bytes,
@@ -731,6 +831,10 @@ Response execute(const Request &RequestValue) {
   if (!MachineOrError)
     return failure(RequestValue, Stage::Toolchain, MachineOrError.takeError());
   std::unique_ptr<TargetMachine> Machine = std::move(*MachineOrError);
+
+  if (RequestValue.Protocol == ProtocolVersion::V2)
+    if (Error E = validateV2SymbolRoles(RequestValue))
+      return failure(RequestValue, Stage::InputValidation, std::move(E));
 
   LLVMContext Context;
   auto LinkedModule = linkBitcode(RequestValue, Context, *Machine);
