@@ -1,414 +1,545 @@
 use crate::published_direct_link::{
     PublishedPayloadKernelV1, ValidatedPublishedDirectLinkSelectionV1,
 };
+use crate::{ObservedContext, PublishedDirectLinkAdmissionError};
 use fe2o3_amd_target::{AmdTargetId, ParseAmdTargetIdError};
 use fe2o3_artifact_transaction::PublishedLinkArtifactV1;
 use fe2o3_artifacts::{
-    AbiKind, Access, AddressSpace, BlockSize, DirectLinkContainerIdentityV1,
-    DirectLinkFinalizedPayloadIdentityV1, PayloadDigest,
+    AbiKind, AddressSpace, ArtifactContainerV1, BlockSize, DirectLinkPublicationBridgeV1,
+    SelectedNativeKernel, ValidatedDirectLinkBundleEvidenceV1,
 };
 use fe2o3_hsaco::{
     ArgumentAccess, ArgumentAddressSpace, CodeObjectVersion, ExplicitArgument, ExplicitValueKind,
-    InspectedKernel, InspectedKernelBindings, KernelBindingError, KernelDescriptorBinding,
-    KernelKind, inspect_and_bind_kernel_descriptors,
+    HiddenValueKind, InspectedKernel, InspectedKernelBindings, KernelBindingError,
+    KernelDescriptorBinding, KernelKind, inspect_and_bind_kernel_descriptors,
 };
 use std::fmt;
 use std::sync::Arc;
 
-use crate::KernelId;
+/// Version of the AMDHSA export-to-descriptor symbol rule used by this bridge.
+///
+/// Rule V1 maps a manifest loader/export symbol `S` to metadata `.name = S` and metadata
+/// `.symbol = S + ".kd"` for code-object versions 4 through 6. Manifest logical names do not
+/// participate in AMDHSA symbol matching.
+pub const AMDHSA_KERNEL_IDENTITY_RULE_V1: u16 = 1;
 
-/// Inert HSACO inspection bound to one exact published direct-link selection.
+/// Whether optional physical metadata was present in the inspected HSACO.
 ///
-/// Construction first revalidates the admitted payload occurrence and exact bytes, then invokes
-/// [`inspect_and_bind_kernel_descriptors`]. It also requires the inspected target, complete
-/// payload-local kernel set, selected symbol, physical ABI metadata, and descriptor bindings to
-/// agree with the admitted manifest snapshot.
-///
-/// This value is descriptive evidence only. It does not authenticate a filesystem object,
-/// compiler, producer, or provenance chain and grants no module-loading or launch authority.
-pub struct InspectedPublishedDirectLinkHsacoV1 {
-    inspected: InspectedKernelBindings,
-    payload: Arc<[u8]>,
-    payload_digest: PayloadDigest,
-    published: PublishedLinkArtifactV1,
-    binding_index: usize,
-    container_identity: DirectLinkContainerIdentityV1,
-    finalized_payload_identity: DirectLinkFinalizedPayloadIdentityV1,
-    selected_kernel_id: KernelId,
-    selected_kernel_index: usize,
-    payload_kernel_set: Box<[PublishedPayloadKernelV1]>,
+/// `Unknown` is preserved rather than interpreted as agreement with a manifest declaration.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PhysicalMetadataValueV1<T> {
+    Unknown,
+    Known(T),
 }
 
-impl fmt::Debug for InspectedPublishedDirectLinkHsacoV1 {
+impl<T> PhysicalMetadataValueV1<T> {
+    fn from_option(value: Option<T>) -> Self {
+        match value {
+            Some(value) => Self::Known(value),
+            None => Self::Unknown,
+        }
+    }
+}
+
+/// Descriptive physical metadata for one explicit AMDHSA argument.
+///
+/// Value kind and address/access qualifiers are producer metadata. They do not establish a Rust
+/// scalar type, pointee or slice element type, ownership, aliasing, effects, or provenance.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PublishedPhysicalArgumentLayoutV1 {
+    offset: u64,
+    size: u64,
+    alignment: PhysicalMetadataValueV1<u64>,
+    value_kind: ExplicitValueKind,
+    address_space: PhysicalMetadataValueV1<ArgumentAddressSpace>,
+    declared_access: PhysicalMetadataValueV1<ArgumentAccess>,
+    actual_access: PhysicalMetadataValueV1<ArgumentAccess>,
+}
+
+impl PublishedPhysicalArgumentLayoutV1 {
+    pub const fn offset(&self) -> u64 {
+        self.offset
+    }
+
+    pub const fn size(&self) -> u64 {
+        self.size
+    }
+
+    pub const fn alignment(&self) -> PhysicalMetadataValueV1<u64> {
+        self.alignment
+    }
+
+    pub const fn value_kind(&self) -> ExplicitValueKind {
+        self.value_kind
+    }
+
+    pub const fn address_space(&self) -> PhysicalMetadataValueV1<ArgumentAddressSpace> {
+        self.address_space
+    }
+
+    pub const fn declared_access(&self) -> PhysicalMetadataValueV1<ArgumentAccess> {
+        self.declared_access
+    }
+
+    pub const fn actual_access(&self) -> PhysicalMetadataValueV1<ArgumentAccess> {
+        self.actual_access
+    }
+}
+
+/// Directional launch and resource metadata observed for one kernel.
+///
+/// Known values were read from the executable. Unknown optional values remain unknown. Validation
+/// only establishes that represented executable constraints do not contradict the narrower
+/// manifest launch contract; it does not establish complete launch-contract equality.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PublishedPhysicalLaunchLayoutV1 {
+    required_workgroup_size: PhysicalMetadataValueV1<[u32; 3]>,
+    max_workgroups: [PhysicalMetadataValueV1<u32>; 3],
+    max_flat_workgroup_size: u32,
+    kernarg_segment_size: u64,
+    kernarg_segment_alignment: u64,
+    implicit_argument_offset: PhysicalMetadataValueV1<u64>,
+    group_segment_fixed_size: u64,
+    private_segment_fixed_size: u64,
+    dynamic_shared_memory_indicator: PhysicalMetadataValueV1<bool>,
+}
+
+impl PublishedPhysicalLaunchLayoutV1 {
+    pub const fn required_workgroup_size(&self) -> PhysicalMetadataValueV1<[u32; 3]> {
+        self.required_workgroup_size
+    }
+
+    pub const fn max_workgroups(&self) -> [PhysicalMetadataValueV1<u32>; 3] {
+        self.max_workgroups
+    }
+
+    pub const fn max_flat_workgroup_size(&self) -> u32 {
+        self.max_flat_workgroup_size
+    }
+
+    pub const fn kernarg_segment_size(&self) -> u64 {
+        self.kernarg_segment_size
+    }
+
+    pub const fn kernarg_segment_alignment(&self) -> u64 {
+        self.kernarg_segment_alignment
+    }
+
+    pub const fn implicit_argument_offset(&self) -> PhysicalMetadataValueV1<u64> {
+        self.implicit_argument_offset
+    }
+
+    pub const fn group_segment_fixed_size(&self) -> u64 {
+        self.group_segment_fixed_size
+    }
+
+    pub const fn private_segment_fixed_size(&self) -> u64 {
+        self.private_segment_fixed_size
+    }
+
+    /// Returns `Known(true)` only when metadata contains a dynamic-LDS physical argument.
+    /// Absence remains `Unknown`; this API never infers `Known(false)`.
+    pub const fn dynamic_shared_memory_indicator(&self) -> PhysicalMetadataValueV1<bool> {
+        self.dynamic_shared_memory_indicator
+    }
+}
+
+/// Physical metadata for one exact manifest export symbol.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PublishedKernelPhysicalLayoutV1 {
+    export_symbol: Box<str>,
+    descriptor_symbol: Box<str>,
+    arguments: Box<[PublishedPhysicalArgumentLayoutV1]>,
+    launch: PublishedPhysicalLaunchLayoutV1,
+}
+
+impl PublishedKernelPhysicalLayoutV1 {
+    /// Returns the manifest loader/export symbol, which is metadata `.name` under rule V1.
+    pub fn export_symbol(&self) -> &str {
+        &self.export_symbol
+    }
+
+    /// Returns the descriptor symbol derived and checked under rule V1.
+    pub fn descriptor_symbol(&self) -> &str {
+        &self.descriptor_symbol
+    }
+
+    pub fn arguments(&self) -> &[PublishedPhysicalArgumentLayoutV1] {
+        &self.arguments
+    }
+
+    pub const fn launch(&self) -> &PublishedPhysicalLaunchLayoutV1 {
+        &self.launch
+    }
+}
+
+/// Inert physical-layout inspection bound to one complete published direct-link admission.
+///
+/// Construction consumes and retains the full admission, including its observed context, bridge,
+/// publication, container, payload occurrence, kernel set, and artifact selection. Exact payload
+/// bytes are revalidated before [`inspect_and_bind_kernel_descriptors`] parses them.
+///
+/// The result is physical, directional evidence only. It authenticates no filesystem object,
+/// compiler, producer, Rust type, ownership, alias/effect contract, or executable behavior and
+/// grants no module-loading or launch authority.
+pub struct InspectedPublishedDirectLinkPhysicalLayoutV1 {
+    admission: ValidatedPublishedDirectLinkSelectionV1,
+    inspected: InspectedKernelBindings,
+    payload: Arc<[u8]>,
+    kernels: Box<[PublishedKernelPhysicalLayoutV1]>,
+    selected_kernel_index: usize,
+}
+
+impl fmt::Debug for InspectedPublishedDirectLinkPhysicalLayoutV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("InspectedPublishedDirectLinkHsacoV1")
+            .debug_struct("InspectedPublishedDirectLinkPhysicalLayoutV1")
+            .field("admission", &self.admission)
             .field("payload_len", &self.payload.len())
-            .field("payload_digest", &self.payload_digest)
-            .field("published", &self.published)
-            .field("binding_index", &self.binding_index)
-            .field("container_identity", &self.container_identity)
-            .field(
-                "finalized_payload_identity",
-                &self.finalized_payload_identity,
-            )
-            .field("selected_kernel_id", &self.selected_kernel_id)
+            .field("kernel_count", &self.kernels.len())
             .field("selected_kernel_index", &self.selected_kernel_index)
-            .field("payload_kernel_count", &self.payload_kernel_set.len())
             .finish_non_exhaustive()
     }
 }
 
-impl InspectedPublishedDirectLinkHsacoV1 {
-    /// Inspects the exact bytes represented by an inert published selection.
+impl InspectedPublishedDirectLinkPhysicalLayoutV1 {
+    /// Inspects exact bytes and consumes the complete admission they are bound to.
     pub fn inspect(
-        admitted: &ValidatedPublishedDirectLinkSelectionV1,
+        admission: ValidatedPublishedDirectLinkSelectionV1,
         exact_selected_payload_bytes: &[u8],
-    ) -> Result<Self, PublishedHsacoInspectionError> {
-        validate_payload_occurrence(admitted, exact_selected_payload_bytes)?;
-
+    ) -> Result<Self, PublishedPhysicalLayoutInspectionError> {
+        validate_payload_occurrence(&admission, exact_selected_payload_bytes)?;
         let inspected = inspect_and_bind_kernel_descriptors(exact_selected_payload_bytes)
-            .map_err(PublishedHsacoInspectionError::Inspection)?;
-        let selected_kernel_index = validate_inspection(admitted, &inspected)?;
-        let selection = admitted.artifact_selection();
+            .map_err(PublishedPhysicalLayoutInspectionError::Inspection)?;
+        let (selected_kernel_index, kernels) = validate_inspection(&admission, &inspected)?;
 
         Ok(Self {
+            admission,
             inspected,
             payload: Arc::from(exact_selected_payload_bytes),
-            payload_digest: selection.identity().payload_digest(),
-            published: admitted.published(),
-            binding_index: admitted.binding_index(),
-            container_identity: admitted.container_identity(),
-            finalized_payload_identity: admitted.finalized_payload_identity(),
-            selected_kernel_id: selection.identity().kernel_id(),
+            kernels,
             selected_kernel_index,
-            payload_kernel_set: admitted.payload_kernel_set().into(),
         })
     }
 
-    /// Revalidates the inert admission and exact payload bytes represented by this result.
+    /// Revalidates the complete original admission tuple and exact payload bytes.
+    #[allow(clippy::too_many_arguments)]
     pub fn revalidate(
         &self,
-        admitted: &ValidatedPublishedDirectLinkSelectionV1,
+        validated_bundle: &ValidatedDirectLinkBundleEvidenceV1<'_>,
+        bridge: &DirectLinkPublicationBridgeV1,
+        published: PublishedLinkArtifactV1,
+        container: &ArtifactContainerV1,
+        selected: SelectedNativeKernel<'_>,
+        observed: &ObservedContext,
         exact_selected_payload_bytes: &[u8],
-    ) -> Result<(), PublishedHsacoInspectionError> {
-        if admitted.published() != self.published
-            || admitted.binding_index() != self.binding_index
-            || admitted.container_identity() != self.container_identity
-            || admitted.finalized_payload_identity() != self.finalized_payload_identity
-            || admitted.artifact_selection().identity().kernel_id() != self.selected_kernel_id
-            || admitted.payload_kernel_set() != self.payload_kernel_set.as_ref()
-        {
-            return Err(PublishedHsacoInspectionError::AdmissionSubstitution);
-        }
-        validate_payload_occurrence(admitted, exact_selected_payload_bytes)?;
+    ) -> Result<(), PublishedPhysicalLayoutInspectionError> {
+        self.admission
+            .revalidate(
+                validated_bundle,
+                bridge,
+                published,
+                container,
+                selected,
+                observed,
+            )
+            .map_err(PublishedPhysicalLayoutInspectionError::AdmissionRevalidation)?;
+        validate_payload_occurrence(&self.admission, exact_selected_payload_bytes)?;
         if exact_selected_payload_bytes != self.payload.as_ref() {
-            return Err(PublishedHsacoInspectionError::PayloadSubstitution);
+            return Err(PublishedPhysicalLayoutInspectionError::PayloadSubstitution);
         }
         Ok(())
     }
 
-    /// Returns the explicitly parsed AMDGPU HSA code-object version (V4, V5, or V6).
     pub fn code_object_version(&self) -> CodeObjectVersion {
         self.inspected.inspection().code_object_version()
     }
 
-    /// Returns the exact target ID inspected from the HSACO metadata and ELF flags.
     pub fn target(&self) -> AmdTargetId {
         self.inspected.inspection().target()
     }
 
-    /// Returns the complete number of manifest and inspected kernels bound to this payload.
     pub fn kernel_count(&self) -> usize {
-        self.payload_kernel_set.len()
+        self.kernels.len()
     }
 
-    /// Returns descriptive metadata for the selected manifest kernel.
-    pub fn selected_kernel(&self) -> &InspectedKernel {
-        &self.inspected.inspection().kernels()[self.selected_kernel_index]
+    pub fn selected_kernel(&self) -> &PublishedKernelPhysicalLayoutV1 {
+        &self.kernels[self.selected_kernel_index]
     }
 
-    /// Returns the selected kernel's descriptive ELF descriptor binding.
     pub fn selected_descriptor_binding(&self) -> KernelDescriptorBinding {
         self.inspected.bindings()[self.selected_kernel_index]
     }
 
-    /// Inspection does not authenticate a current filesystem publication.
     pub const fn authenticates_filesystem_artifact(&self) -> bool {
         false
     }
 
-    /// Inspection does not authenticate compiler or producer provenance.
     pub const fn proves_compiler_provenance(&self) -> bool {
         false
     }
 
-    /// Inspection never grants module-loading authority.
+    pub const fn proves_rust_type_or_abi_agreement(&self) -> bool {
+        false
+    }
+
+    pub const fn proves_ownership_alias_or_effects(&self) -> bool {
+        false
+    }
+
+    pub const fn proves_complete_launch_contract(&self) -> bool {
+        false
+    }
+
     pub const fn grants_load_authority(&self) -> bool {
         false
     }
 
-    /// Inspection never grants kernel-launch authority.
     pub const fn grants_launch_authority(&self) -> bool {
         false
     }
 }
 
 fn validate_payload_occurrence(
-    admitted: &ValidatedPublishedDirectLinkSelectionV1,
+    admission: &ValidatedPublishedDirectLinkSelectionV1,
     exact_selected_payload_bytes: &[u8],
-) -> Result<(), PublishedHsacoInspectionError> {
-    let selection = admitted.artifact_selection();
+) -> Result<(), PublishedPhysicalLayoutInspectionError> {
+    let selection = admission.artifact_selection();
     let selected_digest = selection.identity().payload_digest();
-    if admitted.finalized_payload_identity().digest() != selected_digest {
-        return Err(PublishedHsacoInspectionError::PayloadOccurrenceMismatch);
+    if admission.finalized_payload_identity().digest() != selected_digest {
+        return Err(PublishedPhysicalLayoutInspectionError::PayloadOccurrenceMismatch);
     }
     if selection.identity().code_object().byte_len()
         != u64::try_from(exact_selected_payload_bytes.len()).unwrap_or(u64::MAX)
     {
-        return Err(PublishedHsacoInspectionError::PayloadLengthMismatch);
+        return Err(PublishedPhysicalLayoutInspectionError::PayloadLengthMismatch);
     }
     if selected_digest
         .verify(exact_selected_payload_bytes)
         .is_err()
     {
-        return Err(PublishedHsacoInspectionError::PayloadDigestMismatch);
+        return Err(PublishedPhysicalLayoutInspectionError::PayloadDigestMismatch);
     }
     if selection.payload() != exact_selected_payload_bytes {
-        return Err(PublishedHsacoInspectionError::PayloadSubstitution);
+        return Err(PublishedPhysicalLayoutInspectionError::PayloadSubstitution);
     }
     Ok(())
 }
 
 fn validate_inspection(
-    admitted: &ValidatedPublishedDirectLinkSelectionV1,
+    admission: &ValidatedPublishedDirectLinkSelectionV1,
     inspected: &InspectedKernelBindings,
-) -> Result<usize, PublishedHsacoInspectionError> {
-    // The parser rejects every value outside V4 through V6 and validates the matching metadata
-    // schema. Keep the supported versions explicit here because the manifest model cannot yet
-    // carry an independently authenticated code-object-version declaration.
-    match inspected.inspection().code_object_version() {
+) -> Result<(usize, Box<[PublishedKernelPhysicalLayoutV1]>), PublishedPhysicalLayoutInspectionError>
+{
+    let code_object_version = inspected.inspection().code_object_version();
+    match code_object_version {
         CodeObjectVersion::V4 | CodeObjectVersion::V5 | CodeObjectVersion::V6 => {}
     }
 
     let declared_target = AmdTargetId::parse(
-        admitted
+        admission
             .artifact_selection()
             .identity()
             .target()
             .architecture()
             .as_str(),
     )
-    .map_err(PublishedHsacoInspectionError::InvalidManifestTarget)?;
+    .map_err(PublishedPhysicalLayoutInspectionError::InvalidManifestTarget)?;
     if inspected.inspection().target() != declared_target {
-        return Err(PublishedHsacoInspectionError::TargetMismatch);
+        return Err(PublishedPhysicalLayoutInspectionError::TargetMismatch);
     }
 
-    let expected = admitted.payload_kernel_set();
+    let expected = admission.payload_kernel_set();
     let actual = inspected.inspection().kernels();
     if expected.len() != actual.len() || inspected.bindings().len() != actual.len() {
-        return Err(PublishedHsacoInspectionError::KernelSetMismatch);
+        return Err(PublishedPhysicalLayoutInspectionError::KernelSetMismatch);
     }
 
-    let mut expected_names = expected
+    let mut expected_symbols = expected
         .iter()
-        .map(|kernel| (kernel.name().as_str(), kernel.symbol().as_str()))
-        .collect::<Vec<_>>();
-    let mut actual_names = actual
-        .iter()
-        .map(|kernel| (kernel.name(), kernel.symbol()))
-        .collect::<Vec<_>>();
-    expected_names.sort_unstable();
-    actual_names.sort_unstable();
-    if expected_names != actual_names {
-        return Err(PublishedHsacoInspectionError::KernelSetMismatch);
-    }
-
-    for expected_kernel in expected {
-        let inspected_kernel = actual
-            .iter()
-            .find(|kernel| {
-                kernel.name() == expected_kernel.name().as_str()
-                    && kernel.symbol() == expected_kernel.symbol().as_str()
-            })
-            .ok_or(PublishedHsacoInspectionError::KernelSetMismatch)?;
-        validate_kernel_metadata(expected_kernel, inspected_kernel)?;
-    }
-
-    let selected_identity = admitted.artifact_selection().identity();
-    actual
-        .iter()
-        .position(|kernel| {
-            kernel.name() == selected_identity.name().as_str()
-                && kernel.symbol() == selected_identity.symbol().as_str()
+        .map(|kernel| {
+            let export = kernel.symbol().as_str().to_owned();
+            let descriptor = descriptor_symbol_v1(kernel.symbol().as_str(), code_object_version);
+            (export, descriptor)
         })
-        .ok_or(PublishedHsacoInspectionError::SelectedKernelMismatch)
+        .collect::<Vec<_>>();
+    let mut actual_symbols = actual
+        .iter()
+        .map(|kernel| (kernel.name().to_owned(), kernel.symbol().to_owned()))
+        .collect::<Vec<_>>();
+    expected_symbols.sort_unstable();
+    actual_symbols.sort_unstable();
+    if expected_symbols != actual_symbols {
+        return Err(PublishedPhysicalLayoutInspectionError::KernelSetMismatch);
+    }
+
+    let mut layouts = Vec::with_capacity(actual.len());
+    for actual_kernel in actual {
+        let expected_kernel = expected
+            .iter()
+            .find(|kernel| kernel.symbol().as_str() == actual_kernel.name())
+            .ok_or(PublishedPhysicalLayoutInspectionError::KernelSetMismatch)?;
+        layouts.push(validate_kernel_physical_layout(
+            expected_kernel,
+            actual_kernel,
+            code_object_version,
+        )?);
+    }
+
+    let selected_export = admission.artifact_selection().identity().symbol().as_str();
+    let selected_kernel_index = actual
+        .iter()
+        .position(|kernel| kernel.name() == selected_export)
+        .ok_or(PublishedPhysicalLayoutInspectionError::SelectedKernelMismatch)?;
+    Ok((selected_kernel_index, layouts.into_boxed_slice()))
 }
 
-fn validate_kernel_metadata(
+fn descriptor_symbol_v1(export: &str, code_object_version: CodeObjectVersion) -> String {
+    match code_object_version {
+        CodeObjectVersion::V4 | CodeObjectVersion::V5 | CodeObjectVersion::V6 => {
+            format!("{export}.kd")
+        }
+    }
+}
+
+fn validate_kernel_physical_layout(
     expected: &PublishedPayloadKernelV1,
     actual: &InspectedKernel,
-) -> Result<(), PublishedHsacoInspectionError> {
+    code_object_version: CodeObjectVersion,
+) -> Result<PublishedKernelPhysicalLayoutV1, PublishedPhysicalLayoutInspectionError> {
+    let export = expected.symbol().as_str();
+    if actual.name() != export
+        || actual.symbol() != descriptor_symbol_v1(export, code_object_version)
+    {
+        return physical_mismatch(expected, "AMDHSA kernel identity rule V1");
+    }
     if actual.kind() != KernelKind::Normal {
-        return metadata_mismatch(expected, "kernel kind");
+        return physical_mismatch(expected, "kernel kind");
     }
     if actual.uses_dynamic_stack() || actual.device_enqueue_symbol().is_some() {
-        return metadata_mismatch(expected, "unsupported loader lifecycle");
+        return physical_mismatch(expected, "unsupported loader lifecycle");
     }
-    if actual.group_segment_fixed_size()
-        != u64::from(expected.launch().static_shared_memory_bytes())
-    {
-        return metadata_mismatch(expected, "static shared memory");
-    }
-    validate_launch_metadata(expected, actual)?;
-    validate_physical_abi(expected, actual)
+
+    let arguments = validate_physical_arguments(expected, actual)?;
+    let launch = validate_launch_evidence(expected, actual)?;
+    Ok(PublishedKernelPhysicalLayoutV1 {
+        export_symbol: export.into(),
+        descriptor_symbol: actual.symbol().into(),
+        arguments,
+        launch,
+    })
 }
 
-fn validate_launch_metadata(
+fn validate_physical_arguments(
     expected: &PublishedPayloadKernelV1,
     actual: &InspectedKernel,
-) -> Result<(), PublishedHsacoInspectionError> {
-    let block = expected.launch().block_size();
-    let expected_dimensions = match block {
-        BlockSize::Any => None,
-        BlockSize::Exact(dimensions) | BlockSize::AtMost(dimensions) => Some(dimensions),
-    };
-    if let Some(dimensions) = expected_dimensions {
-        let flat = u64::from(dimensions.x())
-            .checked_mul(u64::from(dimensions.y()))
-            .and_then(|value| value.checked_mul(u64::from(dimensions.z())))
-            .ok_or_else(|| PublishedHsacoInspectionError::KernelMetadataMismatch {
-                kernel: expected.name().as_str().to_owned(),
-                field: "workgroup dimensions",
-            })?;
-        if flat > u64::from(actual.max_flat_workgroup_size()) {
-            return metadata_mismatch(expected, "maximum flat workgroup size");
-        }
-    }
-    if let Some(required) = actual.required_workgroup_size() {
-        let exact = match block {
-            BlockSize::Exact(dimensions) => [dimensions.x(), dimensions.y(), dimensions.z()],
-            BlockSize::Any | BlockSize::AtMost(_) => {
-                return metadata_mismatch(expected, "required workgroup size");
-            }
-        };
-        if required != exact {
-            return metadata_mismatch(expected, "required workgroup size");
-        }
-    }
-    Ok(())
-}
-
-fn validate_physical_abi(
-    expected: &PublishedPayloadKernelV1,
-    actual: &InspectedKernel,
-) -> Result<(), PublishedHsacoInspectionError> {
+) -> Result<Box<[PublishedPhysicalArgumentLayoutV1]>, PublishedPhysicalLayoutInspectionError> {
     let abi = expected.abi();
     let explicit_size = actual
         .implicit_argument_offset()
         .unwrap_or_else(|| actual.kernarg_segment_size());
-    if abi.size() != explicit_size {
-        return metadata_mismatch(expected, "explicit kernarg size");
+    if abi.size() != explicit_size || actual.kernarg_segment_size() < explicit_size {
+        return physical_mismatch(expected, "explicit kernarg size");
     }
-    if !abi.fields().is_empty() && u64::from(abi.alignment()) != actual.kernarg_segment_alignment()
-    {
-        return metadata_mismatch(expected, "kernarg alignment");
+    let abi_alignment = u64::from(abi.alignment());
+    if !abi.fields().is_empty() && actual.kernarg_segment_alignment() != abi_alignment {
+        return physical_mismatch(expected, "kernarg segment alignment");
     }
 
-    let mut physical_index = 0usize;
+    let mut expected_arguments = Vec::new();
     for field in abi.fields() {
         match field.kind() {
-            AbiKind::Scalar(_) => {
-                validate_argument(
-                    expected,
-                    actual.explicit_arguments().get(physical_index),
-                    field.offset(),
-                    field.size(),
-                    field.alignment(),
-                    ExplicitValueKind::ByValue,
-                    None,
-                    field.access(),
-                )?;
-                physical_index += 1;
-            }
-            AbiKind::Pointer { .. } => {
-                validate_argument(
-                    expected,
-                    actual.explicit_arguments().get(physical_index),
-                    field.offset(),
-                    field.size(),
-                    field.alignment(),
-                    ExplicitValueKind::GlobalBuffer,
-                    Some(field.address_space()),
-                    field.access(),
-                )?;
-                physical_index += 1;
-            }
+            AbiKind::Scalar(_) => expected_arguments.push(ExpectedPhysicalArgument {
+                offset: field.offset(),
+                size: field.size(),
+                alignment: u64::from(field.alignment()),
+                value_kind: ExplicitValueKind::ByValue,
+                address_space: None,
+            }),
+            AbiKind::Pointer { .. } => expected_arguments.push(ExpectedPhysicalArgument {
+                offset: field.offset(),
+                size: field.size(),
+                alignment: u64::from(field.alignment()),
+                value_kind: pointer_value_kind(field.address_space()),
+                address_space: map_address_space(field.address_space()),
+            }),
             AbiKind::Slice { .. } => {
                 let pointer_bytes = abi.pointer_width().bytes();
-                validate_argument(
-                    expected,
-                    actual.explicit_arguments().get(physical_index),
-                    field.offset(),
-                    pointer_bytes,
-                    field.alignment(),
-                    ExplicitValueKind::GlobalBuffer,
-                    Some(field.address_space()),
-                    field.access(),
-                )?;
-                validate_argument(
-                    expected,
-                    actual.explicit_arguments().get(physical_index + 1),
-                    field.offset() + pointer_bytes,
-                    pointer_bytes,
-                    field.alignment(),
-                    ExplicitValueKind::ByValue,
-                    None,
-                    Access::ByValue,
-                )?;
-                physical_index += 2;
+                expected_arguments.push(ExpectedPhysicalArgument {
+                    offset: field.offset(),
+                    size: pointer_bytes,
+                    alignment: u64::from(field.alignment()),
+                    value_kind: pointer_value_kind(field.address_space()),
+                    address_space: map_address_space(field.address_space()),
+                });
+                expected_arguments.push(ExpectedPhysicalArgument {
+                    offset: field.offset() + pointer_bytes,
+                    size: pointer_bytes,
+                    alignment: u64::from(field.alignment()),
+                    value_kind: ExplicitValueKind::ByValue,
+                    address_space: None,
+                });
             }
         }
     }
-    if physical_index != actual.explicit_arguments().len() {
-        return metadata_mismatch(expected, "physical argument count");
+    if expected_arguments.len() != actual.explicit_arguments().len() {
+        return physical_mismatch(expected, "physical argument count");
+    }
+
+    let mut evidence = Vec::with_capacity(expected_arguments.len());
+    for (expected_argument, actual_argument) in
+        expected_arguments.iter().zip(actual.explicit_arguments())
+    {
+        validate_argument(expected, expected_argument, actual_argument)?;
+        evidence.push(PublishedPhysicalArgumentLayoutV1 {
+            offset: actual_argument.offset(),
+            size: actual_argument.size(),
+            alignment: PhysicalMetadataValueV1::from_option(actual_argument.alignment()),
+            value_kind: actual_argument.value_kind(),
+            address_space: PhysicalMetadataValueV1::from_option(actual_argument.address_space()),
+            declared_access: PhysicalMetadataValueV1::from_option(actual_argument.access()),
+            actual_access: PhysicalMetadataValueV1::from_option(actual_argument.actual_access()),
+        });
+    }
+    Ok(evidence.into_boxed_slice())
+}
+
+#[derive(Clone, Copy)]
+struct ExpectedPhysicalArgument {
+    offset: u64,
+    size: u64,
+    alignment: u64,
+    value_kind: ExplicitValueKind,
+    address_space: Option<ArgumentAddressSpace>,
+}
+
+fn validate_argument(
+    kernel: &PublishedPayloadKernelV1,
+    expected: &ExpectedPhysicalArgument,
+    actual: &ExplicitArgument,
+) -> Result<(), PublishedPhysicalLayoutInspectionError> {
+    if actual.offset() != expected.offset
+        || actual.size() != expected.size
+        || actual
+            .alignment()
+            .is_some_and(|alignment| alignment != expected.alignment)
+        || actual.value_kind() != expected.value_kind
+        || actual.address_space() != expected.address_space
+    {
+        return physical_mismatch(kernel, "physical argument layout");
     }
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-fn validate_argument(
-    kernel: &PublishedPayloadKernelV1,
-    actual: Option<&ExplicitArgument>,
-    offset: u64,
-    size: u64,
-    alignment: u32,
-    value_kind: ExplicitValueKind,
-    address_space: Option<AddressSpace>,
-    access: Access,
-) -> Result<(), PublishedHsacoInspectionError> {
-    let Some(actual) = actual else {
-        return metadata_mismatch(kernel, "physical argument count");
-    };
-    let expected_address_space = address_space.and_then(map_address_space);
-    let expected_access = map_access(access);
-    if actual.offset() != offset
-        || actual.size() != size
-        || actual
-            .alignment()
-            .is_some_and(|actual| actual != u64::from(alignment))
-        || actual.value_kind() != value_kind
-        || actual.address_space() != expected_address_space
-        || actual
-            .access()
-            .is_some_and(|actual| Some(actual) != expected_access)
-        || actual
-            .actual_access()
-            .is_some_and(|actual| Some(actual) != expected_access)
-    {
-        return metadata_mismatch(kernel, "physical argument layout");
+fn pointer_value_kind(address_space: AddressSpace) -> ExplicitValueKind {
+    match address_space {
+        AddressSpace::Workgroup => ExplicitValueKind::DynamicSharedPointer,
+        AddressSpace::Value
+        | AddressSpace::Global
+        | AddressSpace::Constant
+        | AddressSpace::Private
+        | AddressSpace::Generic => ExplicitValueKind::GlobalBuffer,
     }
-    Ok(())
 }
 
 fn map_address_space(value: AddressSpace) -> Option<ArgumentAddressSpace> {
@@ -422,29 +553,104 @@ fn map_address_space(value: AddressSpace) -> Option<ArgumentAddressSpace> {
     }
 }
 
-fn map_access(value: Access) -> Option<ArgumentAccess> {
-    match value {
-        Access::ReadOnly => Some(ArgumentAccess::ReadOnly),
-        Access::WriteOnly => Some(ArgumentAccess::WriteOnly),
-        Access::ReadWrite => Some(ArgumentAccess::ReadWrite),
-        Access::ByValue => None,
+fn validate_launch_evidence(
+    expected: &PublishedPayloadKernelV1,
+    actual: &InspectedKernel,
+) -> Result<PublishedPhysicalLaunchLayoutV1, PublishedPhysicalLayoutInspectionError> {
+    let launch = expected.launch();
+    if actual.group_segment_fixed_size() != u64::from(launch.static_shared_memory_bytes()) {
+        return physical_mismatch(expected, "static group segment size");
     }
-}
 
-fn metadata_mismatch<T>(
-    kernel: &PublishedPayloadKernelV1,
-    field: &'static str,
-) -> Result<T, PublishedHsacoInspectionError> {
-    Err(PublishedHsacoInspectionError::KernelMetadataMismatch {
-        kernel: kernel.name().as_str().to_owned(),
-        field,
+    let required_workgroup_size = match actual.required_workgroup_size() {
+        Some(required) => {
+            let BlockSize::Exact(dimensions) = launch.block_size() else {
+                return physical_mismatch(expected, "required workgroup size");
+            };
+            if required != [dimensions.x(), dimensions.y(), dimensions.z()] {
+                return physical_mismatch(expected, "required workgroup size");
+            }
+            PhysicalMetadataValueV1::Known(required)
+        }
+        None => PhysicalMetadataValueV1::Unknown,
+    };
+
+    if let BlockSize::Exact(dimensions) | BlockSize::AtMost(dimensions) = launch.block_size() {
+        let flat = u64::from(dimensions.x())
+            .checked_mul(u64::from(dimensions.y()))
+            .and_then(|value| value.checked_mul(u64::from(dimensions.z())))
+            .ok_or_else(
+                || PublishedPhysicalLayoutInspectionError::PhysicalLayoutMismatch {
+                    export_symbol: expected.symbol().as_str().to_owned(),
+                    field: "workgroup dimensions",
+                },
+            )?;
+        if flat > u64::from(actual.max_flat_workgroup_size()) {
+            return physical_mismatch(expected, "maximum flat workgroup size");
+        }
+    }
+
+    let manifest_grid = launch.max_grid();
+    let manifest_grid_axes = [manifest_grid.x(), manifest_grid.y(), manifest_grid.z()];
+    let inspected_max = actual.max_workgroups();
+    let mut max_workgroups = [PhysicalMetadataValueV1::Unknown; 3];
+    for axis in 0..3 {
+        if let Some(maximum) = inspected_max[axis] {
+            if manifest_grid_axes[axis] > maximum {
+                return physical_mismatch(expected, "maximum workgroups");
+            }
+            max_workgroups[axis] = PhysicalMetadataValueV1::Known(maximum);
+        }
+    }
+
+    let dynamic_shared_memory_indicator = if actual
+        .explicit_arguments()
+        .iter()
+        .any(|argument| argument.value_kind() == ExplicitValueKind::DynamicSharedPointer)
+        || actual
+            .hidden_arguments()
+            .iter()
+            .any(|argument| argument.value_kind() == HiddenValueKind::DynamicLdsSize)
+    {
+        if launch.max_dynamic_shared_memory_bytes() == 0 {
+            return physical_mismatch(expected, "dynamic shared-memory relation");
+        }
+        PhysicalMetadataValueV1::Known(true)
+    } else {
+        PhysicalMetadataValueV1::Unknown
+    };
+
+    Ok(PublishedPhysicalLaunchLayoutV1 {
+        required_workgroup_size,
+        max_workgroups,
+        max_flat_workgroup_size: actual.max_flat_workgroup_size(),
+        kernarg_segment_size: actual.kernarg_segment_size(),
+        kernarg_segment_alignment: actual.kernarg_segment_alignment(),
+        implicit_argument_offset: PhysicalMetadataValueV1::from_option(
+            actual.implicit_argument_offset(),
+        ),
+        group_segment_fixed_size: actual.group_segment_fixed_size(),
+        private_segment_fixed_size: actual.private_segment_fixed_size(),
+        dynamic_shared_memory_indicator,
     })
 }
 
-/// Failure to bind inert HSACO inspection to an admitted published selection.
+fn physical_mismatch<T>(
+    kernel: &PublishedPayloadKernelV1,
+    field: &'static str,
+) -> Result<T, PublishedPhysicalLayoutInspectionError> {
+    Err(
+        PublishedPhysicalLayoutInspectionError::PhysicalLayoutMismatch {
+            export_symbol: kernel.symbol().as_str().to_owned(),
+            field,
+        },
+    )
+}
+
+/// Failure to bind inert physical-layout inspection to an exact published admission.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
-pub enum PublishedHsacoInspectionError {
+pub enum PublishedPhysicalLayoutInspectionError {
     PayloadOccurrenceMismatch,
     PayloadLengthMismatch,
     PayloadDigestMismatch,
@@ -454,11 +660,14 @@ pub enum PublishedHsacoInspectionError {
     TargetMismatch,
     KernelSetMismatch,
     SelectedKernelMismatch,
-    KernelMetadataMismatch { kernel: String, field: &'static str },
-    AdmissionSubstitution,
+    PhysicalLayoutMismatch {
+        export_symbol: String,
+        field: &'static str,
+    },
+    AdmissionRevalidation(PublishedDirectLinkAdmissionError),
 }
 
-impl fmt::Display for PublishedHsacoInspectionError {
+impl fmt::Display for PublishedPhysicalLayoutInspectionError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::PayloadOccurrenceMismatch => {
@@ -471,7 +680,7 @@ impl fmt::Display for PublishedHsacoInspectionError {
                 formatter.write_str("selected payload digest differs from the manifest")
             }
             Self::PayloadSubstitution => {
-                formatter.write_str("payload bytes differ from the admitted selection")
+                formatter.write_str("payload bytes differ from the retained admission")
             }
             Self::Inspection(error) => error.fmt(formatter),
             Self::InvalidManifestTarget(error) => {
@@ -481,24 +690,28 @@ impl fmt::Display for PublishedHsacoInspectionError {
                 formatter.write_str("inspected HSACO target differs from the manifest target")
             }
             Self::KernelSetMismatch => formatter.write_str(
-                "inspected HSACO kernel names and symbols differ from the manifest payload set",
+                "inspected AMDHSA export and descriptor symbols differ from the manifest payload set",
             ),
             Self::SelectedKernelMismatch => formatter
-                .write_str("selected manifest kernel is absent from inspected HSACO metadata"),
-            Self::KernelMetadataMismatch { kernel, field } => {
-                write!(formatter, "kernel {kernel} metadata differs for {field}")
-            }
-            Self::AdmissionSubstitution => formatter
-                .write_str("published direct-link admission differs from the inspected one"),
+                .write_str("selected manifest export symbol is absent from inspected metadata"),
+            Self::PhysicalLayoutMismatch {
+                export_symbol,
+                field,
+            } => write!(
+                formatter,
+                "kernel export {export_symbol} physical metadata conflicts for {field}"
+            ),
+            Self::AdmissionRevalidation(error) => error.fmt(formatter),
         }
     }
 }
 
-impl std::error::Error for PublishedHsacoInspectionError {
+impl std::error::Error for PublishedPhysicalLayoutInspectionError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Inspection(error) => Some(error),
             Self::InvalidManifestTarget(error) => Some(error),
+            Self::AdmissionRevalidation(error) => Some(error),
             Self::PayloadOccurrenceMismatch
             | Self::PayloadLengthMismatch
             | Self::PayloadDigestMismatch
@@ -506,8 +719,7 @@ impl std::error::Error for PublishedHsacoInspectionError {
             | Self::TargetMismatch
             | Self::KernelSetMismatch
             | Self::SelectedKernelMismatch
-            | Self::KernelMetadataMismatch { .. }
-            | Self::AdmissionSubstitution => None,
+            | Self::PhysicalLayoutMismatch { .. } => None,
         }
     }
 }

@@ -42,10 +42,6 @@ pub(crate) struct PublishedPayloadKernelV1 {
 }
 
 impl PublishedPayloadKernelV1 {
-    pub(crate) const fn name(&self) -> &Name {
-        &self.name
-    }
-
     pub(crate) const fn symbol(&self) -> &Name {
         &self.symbol
     }
@@ -363,25 +359,33 @@ impl std::error::Error for PublishedDirectLinkAdmissionError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{InspectedPublishedDirectLinkHsacoV1, PublishedHsacoInspectionError};
+    use crate::{
+        InspectedPublishedDirectLinkPhysicalLayoutV1, PhysicalMetadataValueV1,
+        PublishedPhysicalLayoutInspectionError,
+    };
     use fe2o3_artifact_transaction::{
         BuildAttempt, KernelSetIdentityV1, LinkPublicationCatalogV1, LinkPublicationScopeV1,
         PackageIdentityV1, PublicationOutcomeV1, TargetIdentityV1,
     };
     use fe2o3_artifacts::{
-        AbiLayout, BlockSize, BundleIndexV1, CodeObjectFormat, CodeObjectIdentity,
-        CodeObjectPayload, CompilerIdentity, DigestAlgorithm, DigestBytes, Dimensions,
-        DirectLinkBindingExpectationV1, DirectLinkBindingSourceV1, DirectLinkBundleEvidenceV1,
-        DirectLinkFfiClosureIdentityV1, DirectLinkFinalizationIdentityV1,
-        DirectLinkFinalizedPayloadIdentityV1, DirectLinkLinkedOutputIdentityV1,
-        DirectLinkRequestIdentityV1, DirectLinkResponseIdentityV1,
-        DirectLinkToolchainConfigurationIdentityV1, DirectLinkToolchainExecutableIdentityV1,
-        DirectLinkToolchainIdentityV1, DirectLinkTransformationIdentityV1,
-        DirectLinkWorkerConfigurationIdentityV1, DirectLinkWorkerExecutableIdentityV1,
-        DirectLinkWorkerIdentityV1, Endianness, IdentityText, KernelEntry, LaunchContract,
-        ManifestV1, Name, PayloadDigest, PointerWidth, TargetIdentity, ToolIdentity,
+        AbiField, AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership,
+        BlockSize, BundleIndexV1, CodeObjectFormat, CodeObjectIdentity, CodeObjectPayload,
+        CompilerIdentity, DeclaredRustLayoutIdentity, DeclaredRustTypeIdentity, DigestAlgorithm,
+        DigestBytes, Dimensions, DirectLinkBindingExpectationV1, DirectLinkBindingSourceV1,
+        DirectLinkBundleEvidenceV1, DirectLinkFfiClosureIdentityV1,
+        DirectLinkFinalizationIdentityV1, DirectLinkFinalizedPayloadIdentityV1,
+        DirectLinkLinkedOutputIdentityV1, DirectLinkRequestIdentityV1,
+        DirectLinkResponseIdentityV1, DirectLinkToolchainConfigurationIdentityV1,
+        DirectLinkToolchainExecutableIdentityV1, DirectLinkToolchainIdentityV1,
+        DirectLinkTransformationIdentityV1, DirectLinkWorkerConfigurationIdentityV1,
+        DirectLinkWorkerExecutableIdentityV1, DirectLinkWorkerIdentityV1, Endianness, IdentityText,
+        KernelEntry, LaunchContract, ManifestV1, Mutability, Name, PayloadDigest, PointerWidth,
+        ScalarType, TargetIdentity, ToolIdentity, TypeIdentity,
     };
-    use fe2o3_hsaco::{CodeObjectVersion, InspectionError, KernelBindingError};
+    use fe2o3_hsaco::{
+        ArgumentAccess, ArgumentAddressSpace, CodeObjectVersion, ExplicitValueKind,
+        InspectionError, KernelBindingError,
+    };
     use rmpv::{Value, encode::write_value};
 
     const ELF_HEADER_BYTES: usize = 64;
@@ -390,7 +394,7 @@ mod tests {
     struct Fixture {
         container: ArtifactContainerV1,
         bundle: BundleIndexV1,
-        expectations: [DirectLinkBindingExpectationV1; 2],
+        expectations: Vec<DirectLinkBindingExpectationV1>,
         evidence: DirectLinkBundleEvidenceV1,
         primary_kernel: DigestBytes,
         alias_kernel: DigestBytes,
@@ -434,6 +438,112 @@ mod tests {
 
     fn repeated_digest(seed: u8) -> DigestBytes {
         DigestBytes::from_bytes([seed; 32])
+    }
+
+    fn type_identity(seed: u8) -> TypeIdentity {
+        TypeIdentity::new(
+            DeclaredRustTypeIdentity::from_untrusted_bytes(repeated_digest(seed)),
+            DeclaredRustLayoutIdentity::from_untrusted_bytes(repeated_digest(seed.wrapping_add(1))),
+        )
+    }
+
+    fn physical_test_abi(alternate_semantics: bool) -> AbiLayout {
+        let scalar = AbiField::new(
+            name("scalar"),
+            0,
+            4,
+            4,
+            AbiKind::Scalar(if alternate_semantics {
+                ScalarType::F32
+            } else {
+                ScalarType::U32
+            }),
+            Mutability::Immutable,
+            Access::ByValue,
+            AddressSpace::Value,
+            type_identity(if alternate_semantics { 0xa1 } else { 0x91 }),
+            ArgumentOwnership::ByValue,
+            AliasClass::Value,
+        )
+        .unwrap();
+        let pointer = AbiField::new(
+            name("pointer"),
+            8,
+            8,
+            8,
+            AbiKind::Pointer {
+                pointee_size: if alternate_semantics { 8 } else { 4 },
+                pointee_alignment: if alternate_semantics { 8 } else { 4 },
+            },
+            if alternate_semantics {
+                Mutability::Mutable
+            } else {
+                Mutability::Immutable
+            },
+            if alternate_semantics {
+                Access::ReadWrite
+            } else {
+                Access::ReadOnly
+            },
+            AddressSpace::Global,
+            type_identity(if alternate_semantics { 0xa2 } else { 0x92 }),
+            if alternate_semantics {
+                ArgumentOwnership::UniqueBorrow
+            } else {
+                ArgumentOwnership::SharedBorrow
+            },
+            if alternate_semantics {
+                AliasClass::Exclusive
+            } else {
+                AliasClass::SharedReadOnly
+            },
+        )
+        .unwrap();
+        let slice = AbiField::new(
+            name("slice"),
+            16,
+            16,
+            8,
+            AbiKind::Slice {
+                element_size: if alternate_semantics { 8 } else { 4 },
+                element_alignment: if alternate_semantics { 8 } else { 4 },
+            },
+            if alternate_semantics {
+                Mutability::Immutable
+            } else {
+                Mutability::Mutable
+            },
+            if alternate_semantics {
+                Access::ReadOnly
+            } else {
+                Access::ReadWrite
+            },
+            AddressSpace::Global,
+            type_identity(if alternate_semantics { 0xa3 } else { 0x93 }),
+            if alternate_semantics {
+                ArgumentOwnership::SharedBorrow
+            } else {
+                ArgumentOwnership::UniqueBorrow
+            },
+            if alternate_semantics {
+                AliasClass::SharedReadOnly
+            } else {
+                AliasClass::Exclusive
+            },
+        )
+        .unwrap();
+        AbiLayout::new(32, 8, PointerWidth::Bits64, vec![scalar, pointer, slice]).unwrap()
+    }
+
+    fn physical_test_launch(max_dynamic_shared_memory_bytes: u32) -> LaunchContract {
+        LaunchContract::new(
+            1,
+            BlockSize::Exact(Dimensions::new(64, 1, 1).unwrap()),
+            Dimensions::new(65_535, 1, 1).unwrap(),
+            0,
+            max_dynamic_shared_memory_bytes,
+        )
+        .unwrap()
     }
 
     fn tagged(seed: u8) -> PayloadDigest {
@@ -541,7 +651,7 @@ mod tests {
         )
         .unwrap();
         let bundle = BundleIndexV1::from_containers(std::slice::from_ref(&container)).unwrap();
-        let expectations = [
+        let expectations = vec![
             expectation(seed.wrapping_add(0x20), first_identity),
             expectation(seed.wrapping_add(0x30), second_identity),
         ];
@@ -610,7 +720,7 @@ mod tests {
         let other_payload_kernel = repeated_digest(seed.wrapping_add(0x12));
         let mut kernels = vec![hsaco_kernel(
             seed.wrapping_add(0x10),
-            "primary_kernel",
+            "logical_primary",
             manifest_symbol,
             first_identity,
             manifest_static_shared_memory_bytes,
@@ -618,16 +728,16 @@ mod tests {
         if include_payload_alias {
             kernels.push(hsaco_kernel(
                 seed.wrapping_add(0x11),
+                "logical_alias",
                 "alias_kernel",
-                "alias_kernel.kd",
                 first_identity,
                 manifest_static_shared_memory_bytes,
             ));
         }
         kernels.push(hsaco_kernel(
             seed.wrapping_add(0x12),
+            "logical_other_payload",
             "other_payload_kernel",
-            "other_payload_kernel.kd",
             second_identity,
             0,
         ));
@@ -667,7 +777,7 @@ mod tests {
         )
         .unwrap();
         let bundle = BundleIndexV1::from_containers(std::slice::from_ref(&container)).unwrap();
-        let expectations = [
+        let expectations = vec![
             expectation(seed.wrapping_add(0x20), first_identity),
             expectation(seed.wrapping_add(0x30), second_identity),
         ];
@@ -685,6 +795,99 @@ mod tests {
             primary_kernel,
             alias_kernel,
             other_payload_kernel,
+        }
+    }
+
+    fn make_single_hsaco_fixture(
+        seed: u8,
+        payload_bytes: Vec<u8>,
+        architecture: &str,
+        abi: AbiLayout,
+        launch: LaunchContract,
+    ) -> Fixture {
+        let payload =
+            CodeObjectPayload::from_bytes(DigestAlgorithm::Sha256, payload_bytes).unwrap();
+        let payload_identity = payload.digest();
+        let primary_kernel = repeated_digest(seed.wrapping_add(0x10));
+        let manifest = ManifestV1::new(
+            CompilerIdentity::new(text("rustc"), text("1.94.0")),
+            ToolIdentity::new(text("fe2o3"), text("0.1.0")),
+            TargetIdentity::new(
+                text("amdgcn-amd-amdhsa"),
+                text(architecture),
+                PointerWidth::Bits64,
+                Endianness::Little,
+                vec![],
+            )
+            .unwrap(),
+            vec![
+                CodeObjectIdentity::new(
+                    payload_identity.bytes(),
+                    CodeObjectFormat::NativeExecutable,
+                    payload.bytes().len() as u64,
+                )
+                .unwrap(),
+            ],
+            vec![
+                KernelEntry::new(
+                    primary_kernel,
+                    name("logical_primary"),
+                    name("primary_kernel"),
+                    repeated_digest(seed.wrapping_add(0x40)),
+                    repeated_digest(seed.wrapping_add(0x50)),
+                    payload_identity.bytes(),
+                    vec![],
+                    launch,
+                    abi,
+                )
+                .unwrap(),
+            ],
+        )
+        .unwrap();
+        let container =
+            ArtifactContainerV1::new(manifest, DigestAlgorithm::Sha256, vec![payload]).unwrap();
+        let bundle = BundleIndexV1::from_containers(std::slice::from_ref(&container)).unwrap();
+        let expectations = vec![expectation(seed.wrapping_add(0x20), payload_identity)];
+        let sources = expectations
+            .iter()
+            .cloned()
+            .map(|expectation| DirectLinkBindingSourceV1::new(&container, expectation))
+            .collect::<Vec<_>>();
+        let evidence = DirectLinkBundleEvidenceV1::bind(&bundle, &[&container], &sources).unwrap();
+        Fixture {
+            container,
+            bundle,
+            expectations,
+            evidence,
+            primary_kernel,
+            alias_kernel: repeated_digest(seed.wrapping_add(0x11)),
+            other_payload_kernel: repeated_digest(seed.wrapping_add(0x12)),
+        }
+    }
+
+    fn fixture_from_generated_container(seed: u8, container: ArtifactContainerV1) -> Fixture {
+        assert_eq!(container.manifest().kernels().len(), 1);
+        let primary_kernel = container.manifest().kernels()[0].kernel_id();
+        let payload_identity = PayloadDigest::new(
+            container.digest_algorithm(),
+            container.manifest().kernels()[0].code_object_digest(),
+        );
+        let bundle = BundleIndexV1::from_containers(std::slice::from_ref(&container)).unwrap();
+        let expectations = vec![expectation(seed.wrapping_add(0x20), payload_identity)];
+        let sources = expectations
+            .iter()
+            .cloned()
+            .map(|expectation| DirectLinkBindingSourceV1::new(&container, expectation))
+            .collect::<Vec<_>>();
+        let evidence = DirectLinkBundleEvidenceV1::bind(&bundle, &[&container], &sources).unwrap();
+        Fixture {
+            container,
+            bundle,
+            expectations,
+            evidence,
+            primary_kernel,
+            alias_kernel: repeated_digest(seed.wrapping_add(0x11)),
+            other_payload_kernel: repeated_digest(seed.wrapping_add(0x12)),
         }
     }
 
@@ -781,6 +984,23 @@ mod tests {
         identity: usize,
         architecture: &str,
     ) -> ValidatedPublishedDirectLinkSelectionV1 {
+        prepare_hsaco_admission(fixture, identity, architecture).admission
+    }
+
+    struct HsacoAdmission<'fixture> {
+        validated: ValidatedDirectLinkBundleEvidenceV1<'fixture>,
+        bridge: DirectLinkPublicationBridgeV1,
+        published: PublishedLinkArtifactV1,
+        selected: SelectedNativeKernel<'fixture>,
+        observed: ObservedContext,
+        admission: ValidatedPublishedDirectLinkSelectionV1,
+    }
+
+    fn prepare_hsaco_admission<'fixture>(
+        fixture: &'fixture Fixture,
+        identity: usize,
+        architecture: &str,
+    ) -> HsacoAdmission<'fixture> {
         let validated = fixture.validated();
         let bridge = make_bridge(fixture, &validated, 0, identity as u64, identity as u8);
         let published = publish(&bridge);
@@ -788,15 +1008,24 @@ mod tests {
             .container
             .select_native_kernel(fixture.primary_kernel)
             .unwrap();
-        ValidatedPublishedDirectLinkSelectionV1::validate(
+        let observed = make_observed_for(identity, architecture);
+        let admission = ValidatedPublishedDirectLinkSelectionV1::validate(
             &validated,
             &bridge,
             published,
             &fixture.container,
             selected,
-            &make_observed_for(identity, architecture),
+            &observed,
         )
-        .unwrap()
+        .unwrap();
+        HsacoAdmission {
+            validated,
+            bridge,
+            published,
+            selected,
+            observed,
+            admission,
+        }
     }
 
     struct TestHsaco {
@@ -807,13 +1036,83 @@ mod tests {
     fn test_hsaco(target: &str, static_shared_memory_bytes: u32) -> TestHsaco {
         let metadata = test_metadata(
             target,
-            vec![test_metadata_kernel(
+            vec![test_metadata_kernel_with(
                 "primary_kernel",
                 "primary_kernel.kd",
+                Vec::new(),
+                256,
+                8,
                 static_shared_memory_bytes,
+                16,
+                None,
+                [None; 3],
+                false,
             )],
         );
-        binding_hsaco(metadata, target, static_shared_memory_bytes)
+        binding_hsaco(metadata, target, static_shared_memory_bytes, 16, 256)
+    }
+
+    fn physical_arguments_hsaco(
+        required_workgroup_size: Option<[u32; 3]>,
+        max_workgroups: [Option<u32>; 3],
+        dynamic_lds_size: bool,
+    ) -> TestHsaco {
+        physical_arguments_hsaco_with_layout(
+            288,
+            8,
+            required_workgroup_size,
+            max_workgroups,
+            dynamic_lds_size,
+        )
+    }
+
+    fn physical_arguments_hsaco_with_layout(
+        kernarg_segment_size: u32,
+        kernarg_segment_alignment: u32,
+        required_workgroup_size: Option<[u32; 3]>,
+        max_workgroups: [Option<u32>; 3],
+        dynamic_lds_size: bool,
+    ) -> TestHsaco {
+        let arguments = vec![
+            test_explicit_argument("scalar", 0, 4, "by_value", None, None, None, None),
+            test_explicit_argument(
+                "pointer",
+                8,
+                8,
+                "global_buffer",
+                Some("global"),
+                Some(8),
+                Some("read_only"),
+                Some("read_write"),
+            ),
+            test_explicit_argument(
+                "slice_ptr",
+                16,
+                8,
+                "global_buffer",
+                Some("global"),
+                None,
+                None,
+                None,
+            ),
+            test_explicit_argument("slice_len", 24, 8, "by_value", None, None, None, None),
+        ];
+        let metadata = test_metadata(
+            "gfx1151",
+            vec![test_metadata_kernel_with(
+                "primary_kernel",
+                "primary_kernel.kd",
+                arguments,
+                kernarg_segment_size,
+                kernarg_segment_alignment,
+                0,
+                16,
+                required_workgroup_size,
+                max_workgroups,
+                dynamic_lds_size,
+            )],
+        );
+        binding_hsaco(metadata, "gfx1151", 0, 16, kernarg_segment_size)
     }
 
     fn test_metadata(target: &str, kernels: Vec<Value>) -> Value {
@@ -830,22 +1129,45 @@ mod tests {
         ])
     }
 
-    fn test_metadata_kernel(
-        logical_name: &str,
+    #[allow(clippy::too_many_arguments)]
+    fn test_metadata_kernel_with(
+        export_symbol: &str,
         symbol: &str,
+        mut explicit_arguments: Vec<Value>,
+        kernarg_segment_size: u32,
+        kernarg_segment_alignment: u32,
         static_shared_memory_bytes: u32,
+        private_segment_fixed_size: u32,
+        required_workgroup_size: Option<[u32; 3]>,
+        max_workgroups: [Option<u32>; 3],
+        dynamic_lds_size: bool,
     ) -> Value {
-        value_map(vec![
-            (".name", Value::from(logical_name)),
+        let explicit_size = u64::from(kernarg_segment_size) - 256;
+        explicit_arguments.extend(test_hidden_arguments(explicit_size));
+        if dynamic_lds_size {
+            explicit_arguments.push(value_map(vec![
+                (".offset", Value::from(explicit_size + 120)),
+                (".size", Value::from(4)),
+                (".value_kind", Value::from("hidden_dynamic_lds_size")),
+            ]));
+        }
+        let mut fields = vec![
+            (".name", Value::from(export_symbol)),
             (".symbol", Value::from(symbol)),
-            (".args", Value::Array(test_hidden_arguments(0))),
-            (".kernarg_segment_size", Value::from(256)),
-            (".kernarg_segment_align", Value::from(8)),
+            (".args", Value::Array(explicit_arguments)),
+            (".kernarg_segment_size", Value::from(kernarg_segment_size)),
+            (
+                ".kernarg_segment_align",
+                Value::from(kernarg_segment_alignment),
+            ),
             (
                 ".group_segment_fixed_size",
                 Value::from(static_shared_memory_bytes),
             ),
-            (".private_segment_fixed_size", Value::from(16)),
+            (
+                ".private_segment_fixed_size",
+                Value::from(private_segment_fixed_size),
+            ),
             (".wavefront_size", Value::from(32)),
             (".sgpr_count", Value::from(14)),
             (".vgpr_count", Value::from(7)),
@@ -854,7 +1176,55 @@ mod tests {
             (".vgpr_spill_count", Value::from(4)),
             (".workgroup_processor_mode", Value::from(1)),
             (".max_flat_workgroup_size", Value::from(1024)),
-        ])
+        ];
+        if let Some(required) = required_workgroup_size {
+            fields.push((
+                ".reqd_workgroup_size",
+                Value::Array(required.into_iter().map(Value::from).collect()),
+            ));
+        }
+        for (field, value) in [
+            (".max_num_workgroups_x", max_workgroups[0]),
+            (".max_num_workgroups_y", max_workgroups[1]),
+            (".max_num_workgroups_z", max_workgroups[2]),
+        ] {
+            if let Some(value) = value {
+                fields.push((field, Value::from(value)));
+            }
+        }
+        value_map(fields)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn test_explicit_argument(
+        name: &str,
+        offset: u64,
+        size: u64,
+        value_kind: &str,
+        address_space: Option<&str>,
+        alignment: Option<u64>,
+        access: Option<&str>,
+        actual_access: Option<&str>,
+    ) -> Value {
+        let mut fields = vec![
+            (".name", Value::from(name)),
+            (".offset", Value::from(offset)),
+            (".size", Value::from(size)),
+            (".value_kind", Value::from(value_kind)),
+        ];
+        for (field, value) in [
+            (".address_space", address_space),
+            (".access", access),
+            (".actual_access", actual_access),
+        ] {
+            if let Some(value) = value {
+                fields.push((field, Value::from(value)));
+            }
+        }
+        if let Some(alignment) = alignment {
+            fields.push((".align", Value::from(alignment)));
+        }
+        value_map(fields)
     }
 
     fn test_hidden_arguments(base: u64) -> Vec<Value> {
@@ -912,7 +1282,13 @@ mod tests {
         note
     }
 
-    fn binding_hsaco(document: Value, target: &str, static_shared_memory_bytes: u32) -> TestHsaco {
+    fn binding_hsaco(
+        document: Value,
+        target: &str,
+        static_shared_memory_bytes: u32,
+        private_segment_fixed_size: u32,
+        kernarg_segment_size: u32,
+    ) -> TestHsaco {
         const PROGRAM_HEADER_BYTES: usize = 56;
         const PROGRAM_COUNT: usize = 2;
         const SECTION_COUNT: usize = 7;
@@ -1081,8 +1457,12 @@ mod tests {
         write_test_u64(&mut bytes, section_strings_header + 48, 1);
 
         write_test_u32(&mut bytes, DESCRIPTOR_OFFSET, static_shared_memory_bytes);
-        write_test_u32(&mut bytes, DESCRIPTOR_OFFSET + 4, 16);
-        write_test_u32(&mut bytes, DESCRIPTOR_OFFSET + 8, 256);
+        write_test_u32(
+            &mut bytes,
+            DESCRIPTOR_OFFSET + 4,
+            private_segment_fixed_size,
+        );
+        write_test_u32(&mut bytes, DESCRIPTOR_OFFSET + 8, kernarg_segment_size);
         write_test_i64(
             &mut bytes,
             DESCRIPTOR_OFFSET + 16,
@@ -1386,20 +1766,49 @@ mod tests {
             20,
             hsaco.bytes.clone(),
             "gfx1151",
-            "primary_kernel.kd",
+            "primary_kernel",
             false,
             0,
         );
-        let admitted = admit_hsaco(&fixture, 20, "gfx1151");
+        let admission = prepare_hsaco_admission(&fixture, 20, "gfx1151");
+        assert_eq!(
+            fixture.container.manifest().kernels()[0].name().as_str(),
+            "logical_primary"
+        );
+        assert_eq!(
+            fixture.container.manifest().kernels()[0].symbol().as_str(),
+            "primary_kernel"
+        );
 
-        let inspected =
-            InspectedPublishedDirectLinkHsacoV1::inspect(&admitted, &hsaco.bytes).unwrap();
+        let inspected = InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(
+            admission.admission,
+            &hsaco.bytes,
+        )
+        .unwrap();
 
         assert_eq!(inspected.code_object_version(), CodeObjectVersion::V6);
         assert_eq!(inspected.target().to_string(), "gfx1151");
         assert_eq!(inspected.kernel_count(), 1);
-        assert_eq!(inspected.selected_kernel().name(), "primary_kernel");
-        assert_eq!(inspected.selected_kernel().symbol(), "primary_kernel.kd");
+        assert_eq!(
+            inspected.selected_kernel().export_symbol(),
+            "primary_kernel"
+        );
+        assert_eq!(
+            inspected.selected_kernel().descriptor_symbol(),
+            "primary_kernel.kd"
+        );
+        assert!(inspected.selected_kernel().arguments().is_empty());
+        assert_eq!(
+            inspected
+                .selected_kernel()
+                .launch()
+                .required_workgroup_size(),
+            crate::PhysicalMetadataValueV1::Unknown
+        );
+        assert_eq!(
+            inspected.selected_kernel().launch().max_workgroups(),
+            [crate::PhysicalMetadataValueV1::Unknown; 3]
+        );
         assert_eq!(
             inspected
                 .selected_descriptor_binding()
@@ -1408,9 +1817,120 @@ mod tests {
         );
         assert!(!inspected.authenticates_filesystem_artifact());
         assert!(!inspected.proves_compiler_provenance());
+        assert!(!inspected.proves_rust_type_or_abi_agreement());
+        assert!(!inspected.proves_ownership_alias_or_effects());
+        assert!(!inspected.proves_complete_launch_contract());
         assert!(!inspected.grants_load_authority());
         assert!(!inspected.grants_launch_authority());
-        assert_eq!(inspected.revalidate(&admitted, &hsaco.bytes), Ok(()));
+        assert_eq!(
+            inspected.revalidate(
+                &admission.validated,
+                &admission.bridge,
+                admission.published,
+                &fixture.container,
+                admission.selected,
+                &admission.observed,
+                &hsaco.bytes,
+            ),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn compiler_generated_gfx1151_container_inspects_end_to_end() {
+        let fixture_bytes = include_bytes!("../tests/fixtures/gfx1151-typed-vecadd-v1.fe2o3");
+        assert_eq!(fixture_bytes.len(), 6_045);
+        let container = ArtifactContainerV1::from_bytes(fixture_bytes).unwrap();
+        assert_eq!(container.to_bytes(), fixture_bytes);
+        assert_eq!(
+            container.manifest().target().architecture().as_str(),
+            "gfx1151"
+        );
+        assert_eq!(container.manifest().kernels().len(), 1);
+        assert_eq!(container.manifest().kernels()[0].name().as_str(), "vecadd");
+        assert_eq!(
+            container.manifest().kernels()[0].symbol().as_str(),
+            "vecadd"
+        );
+
+        let fixture = fixture_from_generated_container(40, container);
+        let payload = fixture
+            .container
+            .select_native_kernel(fixture.primary_kernel)
+            .unwrap()
+            .payload();
+        let admission = admit_hsaco(&fixture, 40, "gfx1151");
+        let inspected =
+            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(admission, payload).unwrap();
+
+        assert_eq!(inspected.code_object_version(), CodeObjectVersion::V6);
+        assert_eq!(inspected.target().to_string(), "gfx1151");
+        assert_eq!(inspected.selected_kernel().export_symbol(), "vecadd");
+        assert_eq!(inspected.selected_kernel().descriptor_symbol(), "vecadd.kd");
+        assert_eq!(
+            inspected
+                .selected_kernel()
+                .arguments()
+                .iter()
+                .map(|argument| (argument.offset(), argument.size(), argument.value_kind()))
+                .collect::<Vec<_>>(),
+            vec![
+                (0, 8, ExplicitValueKind::GlobalBuffer),
+                (8, 8, ExplicitValueKind::ByValue),
+                (16, 8, ExplicitValueKind::GlobalBuffer),
+                (24, 8, ExplicitValueKind::ByValue),
+                (32, 8, ExplicitValueKind::GlobalBuffer),
+                (40, 8, ExplicitValueKind::ByValue),
+            ]
+        );
+        let launch = inspected.selected_kernel().launch();
+        assert_eq!(launch.kernarg_segment_size(), 304);
+        assert_eq!(launch.kernarg_segment_alignment(), 8);
+        assert_eq!(
+            launch.implicit_argument_offset(),
+            PhysicalMetadataValueV1::Known(48)
+        );
+        assert_eq!(launch.group_segment_fixed_size(), 0);
+        assert_eq!(launch.private_segment_fixed_size(), 16);
+        assert!(!inspected.grants_load_authority());
+        assert!(!inspected.grants_launch_authority());
+    }
+
+    fn inspect_environment_generated_container(variable: &str, target: &str, seed: u8) {
+        let path = std::env::var(variable).unwrap_or_else(|_| panic!("set {variable}"));
+        let bytes = std::fs::read(path).unwrap();
+        let container = ArtifactContainerV1::from_bytes(&bytes).unwrap();
+        assert_eq!(container.to_bytes(), bytes);
+        assert_eq!(
+            container.manifest().target().architecture().as_str(),
+            target
+        );
+        let fixture = fixture_from_generated_container(seed, container);
+        let payload = fixture
+            .container
+            .select_native_kernel(fixture.primary_kernel)
+            .unwrap()
+            .payload();
+        let inspected = InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(
+            admit_hsaco(&fixture, usize::from(seed), target),
+            payload,
+        )
+        .unwrap();
+        assert_eq!(inspected.target().to_string(), target);
+        assert!(!inspected.grants_load_authority());
+        assert!(!inspected.grants_launch_authority());
+    }
+
+    #[test]
+    #[ignore = "requires FE2O3_GFX942_TYPED_CONTAINER_V1 from a pinned gfx942 build"]
+    fn ingests_environment_pinned_gfx942_container() {
+        inspect_environment_generated_container("FE2O3_GFX942_TYPED_CONTAINER_V1", "gfx942", 42);
+    }
+
+    #[test]
+    #[ignore = "requires FE2O3_GFX950_TYPED_CONTAINER_V1 from a pinned gfx950 build"]
+    fn ingests_environment_pinned_gfx950_container() {
+        inspect_environment_generated_container("FE2O3_GFX950_TYPED_CONTAINER_V1", "gfx950", 43);
     }
 
     #[test]
@@ -1420,7 +1940,7 @@ mod tests {
             21,
             hsaco.bytes.clone(),
             "gfx1151",
-            "primary_kernel.kd",
+            "primary_kernel",
             false,
             0,
         );
@@ -1429,8 +1949,9 @@ mod tests {
         substitute[0] ^= 0xff;
 
         assert_eq!(
-            InspectedPublishedDirectLinkHsacoV1::inspect(&admitted, &substitute).unwrap_err(),
-            PublishedHsacoInspectionError::PayloadDigestMismatch
+            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(admitted, &substitute)
+                .unwrap_err(),
+            PublishedPhysicalLayoutInspectionError::PayloadDigestMismatch
         );
     }
 
@@ -1442,15 +1963,15 @@ mod tests {
             22,
             hsaco.bytes.clone(),
             "gfx1151",
-            "primary_kernel.kd",
+            "primary_kernel",
             false,
             0,
         );
         let admitted = admit_hsaco(&fixture, 22, "gfx1151");
 
         assert!(matches!(
-            InspectedPublishedDirectLinkHsacoV1::inspect(&admitted, &hsaco.bytes),
-            Err(PublishedHsacoInspectionError::Inspection(
+            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(admitted, &hsaco.bytes),
+            Err(PublishedPhysicalLayoutInspectionError::Inspection(
                 KernelBindingError::Inspection(InspectionError::InvalidElf("invalid ELF magic"))
             ))
         ));
@@ -1464,15 +1985,16 @@ mod tests {
             23,
             hsaco.bytes.clone(),
             "gfx1151",
-            "primary_kernel.kd",
+            "primary_kernel",
             false,
             0,
         );
         let admitted = admit_hsaco(&fixture, 23, "gfx1151");
 
         assert_eq!(
-            InspectedPublishedDirectLinkHsacoV1::inspect(&admitted, &hsaco.bytes).unwrap_err(),
-            PublishedHsacoInspectionError::Inspection(KernelBindingError::Inspection(
+            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(admitted, &hsaco.bytes)
+                .unwrap_err(),
+            PublishedPhysicalLayoutInspectionError::Inspection(KernelBindingError::Inspection(
                 InspectionError::UnsupportedCodeObjectVersion,
             ))
         );
@@ -1485,15 +2007,16 @@ mod tests {
             24,
             hsaco.bytes.clone(),
             "gfx1151",
-            "primary_kernel.kd",
+            "primary_kernel",
             false,
             0,
         );
         let admitted = admit_hsaco(&fixture, 24, "gfx1151");
 
         assert_eq!(
-            InspectedPublishedDirectLinkHsacoV1::inspect(&admitted, &hsaco.bytes).unwrap_err(),
-            PublishedHsacoInspectionError::TargetMismatch
+            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(admitted, &hsaco.bytes)
+                .unwrap_err(),
+            PublishedPhysicalLayoutInspectionError::TargetMismatch
         );
     }
 
@@ -1504,15 +2027,16 @@ mod tests {
             25,
             hsaco.bytes.clone(),
             "gfx1151",
-            "substituted_symbol.kd",
+            "substituted_symbol",
             false,
             0,
         );
         let admitted = admit_hsaco(&fixture, 25, "gfx1151");
 
         assert_eq!(
-            InspectedPublishedDirectLinkHsacoV1::inspect(&admitted, &hsaco.bytes).unwrap_err(),
-            PublishedHsacoInspectionError::KernelSetMismatch
+            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(admitted, &hsaco.bytes)
+                .unwrap_err(),
+            PublishedPhysicalLayoutInspectionError::KernelSetMismatch
         );
     }
 
@@ -1523,15 +2047,16 @@ mod tests {
             26,
             hsaco.bytes.clone(),
             "gfx1151",
-            "primary_kernel.kd",
+            "primary_kernel",
             true,
             0,
         );
         let admitted = admit_hsaco(&fixture, 26, "gfx1151");
 
         assert_eq!(
-            InspectedPublishedDirectLinkHsacoV1::inspect(&admitted, &hsaco.bytes).unwrap_err(),
-            PublishedHsacoInspectionError::KernelSetMismatch
+            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(admitted, &hsaco.bytes)
+                .unwrap_err(),
+            PublishedPhysicalLayoutInspectionError::KernelSetMismatch
         );
     }
 
@@ -1542,17 +2067,18 @@ mod tests {
             27,
             hsaco.bytes.clone(),
             "gfx1151",
-            "primary_kernel.kd",
+            "primary_kernel",
             false,
             0,
         );
         let admitted = admit_hsaco(&fixture, 27, "gfx1151");
 
         assert_eq!(
-            InspectedPublishedDirectLinkHsacoV1::inspect(&admitted, &hsaco.bytes).unwrap_err(),
-            PublishedHsacoInspectionError::KernelMetadataMismatch {
-                kernel: "primary_kernel".to_owned(),
-                field: "static shared memory",
+            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(admitted, &hsaco.bytes)
+                .unwrap_err(),
+            PublishedPhysicalLayoutInspectionError::PhysicalLayoutMismatch {
+                export_symbol: "primary_kernel".to_owned(),
+                field: "static group segment size",
             }
         );
     }
@@ -1565,18 +2091,260 @@ mod tests {
             28,
             hsaco.bytes.clone(),
             "gfx1151",
-            "primary_kernel.kd",
+            "primary_kernel",
             false,
             0,
         );
         let admitted = admit_hsaco(&fixture, 28, "gfx1151");
 
         assert_eq!(
-            InspectedPublishedDirectLinkHsacoV1::inspect(&admitted, &hsaco.bytes).unwrap_err(),
-            PublishedHsacoInspectionError::Inspection(KernelBindingError::InvalidKernelDescriptor(
-                "reserved descriptor bytes are nonzero"
-            ))
+            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(admitted, &hsaco.bytes)
+                .unwrap_err(),
+            PublishedPhysicalLayoutInspectionError::Inspection(
+                KernelBindingError::InvalidKernelDescriptor(
+                    "reserved descriptor bytes are nonzero"
+                )
+            )
         );
+    }
+
+    #[test]
+    fn substituted_metadata_descriptor_symbol_is_rejected() {
+        let metadata = test_metadata(
+            "gfx1151",
+            vec![test_metadata_kernel_with(
+                "primary_kernel",
+                "substituted_descriptor.kd",
+                Vec::new(),
+                256,
+                8,
+                0,
+                16,
+                None,
+                [None; 3],
+                false,
+            )],
+        );
+        let hsaco = binding_hsaco(metadata, "gfx1151", 0, 16, 256);
+        let fixture = make_hsaco_fixture(
+            44,
+            hsaco.bytes.clone(),
+            "gfx1151",
+            "primary_kernel",
+            false,
+            0,
+        );
+
+        assert_eq!(
+            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(
+                admit_hsaco(&fixture, 44, "gfx1151"),
+                &hsaco.bytes,
+            )
+            .unwrap_err(),
+            PublishedPhysicalLayoutInspectionError::Inspection(
+                KernelBindingError::MissingDescriptorSymbol,
+            )
+        );
+    }
+
+    #[test]
+    fn physical_layout_evidence_does_not_overclaim_rust_argument_semantics() {
+        let hsaco =
+            physical_arguments_hsaco(Some([64, 1, 1]), [Some(65_535), Some(2), None], false);
+        let first_fixture = make_single_hsaco_fixture(
+            36,
+            hsaco.bytes.clone(),
+            "gfx1151",
+            physical_test_abi(false),
+            physical_test_launch(0),
+        );
+        let second_fixture = make_single_hsaco_fixture(
+            37,
+            hsaco.bytes.clone(),
+            "gfx1151",
+            physical_test_abi(true),
+            physical_test_launch(0),
+        );
+        let first = InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(
+            admit_hsaco(&first_fixture, 36, "gfx1151"),
+            &hsaco.bytes,
+        )
+        .unwrap();
+        let second = InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(
+            admit_hsaco(&second_fixture, 37, "gfx1151"),
+            &hsaco.bytes,
+        )
+        .unwrap();
+
+        let arguments = first.selected_kernel().arguments();
+        assert_eq!(arguments, second.selected_kernel().arguments());
+        assert_eq!(arguments.len(), 4);
+        assert_eq!(
+            arguments
+                .iter()
+                .map(|argument| (argument.offset(), argument.size(), argument.value_kind()))
+                .collect::<Vec<_>>(),
+            vec![
+                (0, 4, ExplicitValueKind::ByValue),
+                (8, 8, ExplicitValueKind::GlobalBuffer),
+                (16, 8, ExplicitValueKind::GlobalBuffer),
+                (24, 8, ExplicitValueKind::ByValue),
+            ]
+        );
+        assert_eq!(arguments[0].alignment(), PhysicalMetadataValueV1::Unknown);
+        assert_eq!(arguments[1].alignment(), PhysicalMetadataValueV1::Known(8));
+        assert_eq!(
+            arguments[1].address_space(),
+            PhysicalMetadataValueV1::Known(ArgumentAddressSpace::Global)
+        );
+        assert_eq!(
+            arguments[1].declared_access(),
+            PhysicalMetadataValueV1::Known(ArgumentAccess::ReadOnly)
+        );
+        assert_eq!(
+            arguments[1].actual_access(),
+            PhysicalMetadataValueV1::Known(ArgumentAccess::ReadWrite)
+        );
+        assert_eq!(
+            arguments[2].declared_access(),
+            PhysicalMetadataValueV1::Unknown
+        );
+        assert!(!first.proves_rust_type_or_abi_agreement());
+        assert!(!first.proves_ownership_alias_or_effects());
+
+        let launch = first.selected_kernel().launch();
+        assert_eq!(
+            launch.required_workgroup_size(),
+            PhysicalMetadataValueV1::Known([64, 1, 1])
+        );
+        assert_eq!(
+            launch.max_workgroups(),
+            [
+                PhysicalMetadataValueV1::Known(65_535),
+                PhysicalMetadataValueV1::Known(2),
+                PhysicalMetadataValueV1::Unknown,
+            ]
+        );
+        assert_eq!(launch.kernarg_segment_size(), 288);
+        assert_eq!(launch.kernarg_segment_alignment(), 8);
+        assert_eq!(
+            launch.implicit_argument_offset(),
+            PhysicalMetadataValueV1::Known(32)
+        );
+        assert_eq!(launch.group_segment_fixed_size(), 0);
+        assert_eq!(launch.private_segment_fixed_size(), 16);
+        assert_eq!(
+            launch.dynamic_shared_memory_indicator(),
+            PhysicalMetadataValueV1::Unknown
+        );
+        assert!(!first.proves_complete_launch_contract());
+    }
+
+    #[test]
+    fn represented_launch_constraints_are_directionally_checked() {
+        for (hsaco, field) in [
+            (
+                physical_arguments_hsaco(Some([32, 1, 1]), [None; 3], false),
+                "required workgroup size",
+            ),
+            (
+                physical_arguments_hsaco(None, [Some(65_534), None, None], false),
+                "maximum workgroups",
+            ),
+            (
+                physical_arguments_hsaco(None, [None; 3], true),
+                "dynamic shared-memory relation",
+            ),
+        ] {
+            let fixture = make_single_hsaco_fixture(
+                38,
+                hsaco.bytes.clone(),
+                "gfx1151",
+                physical_test_abi(false),
+                physical_test_launch(0),
+            );
+            assert_eq!(
+                InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(
+                    admit_hsaco(&fixture, 38, "gfx1151"),
+                    &hsaco.bytes,
+                )
+                .unwrap_err(),
+                PublishedPhysicalLayoutInspectionError::PhysicalLayoutMismatch {
+                    export_symbol: "primary_kernel".to_owned(),
+                    field,
+                }
+            );
+        }
+
+        let hsaco = physical_arguments_hsaco(None, [None; 3], true);
+        let fixture = make_single_hsaco_fixture(
+            39,
+            hsaco.bytes.clone(),
+            "gfx1151",
+            physical_test_abi(false),
+            physical_test_launch(1024),
+        );
+        let inspected = InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(
+            admit_hsaco(&fixture, 39, "gfx1151"),
+            &hsaco.bytes,
+        )
+        .unwrap();
+        assert_eq!(
+            inspected
+                .selected_kernel()
+                .launch()
+                .dynamic_shared_memory_indicator(),
+            PhysicalMetadataValueV1::Known(true)
+        );
+    }
+
+    #[test]
+    fn kernarg_size_and_alignment_must_cover_the_manifest_physical_layout() {
+        let hsaco = physical_arguments_hsaco(None, [None; 3], false);
+        let base_abi = physical_test_abi(false);
+        let padded_abi =
+            AbiLayout::new(40, 8, PointerWidth::Bits64, base_abi.fields().to_vec()).unwrap();
+        let padded_fixture = make_single_hsaco_fixture(
+            45,
+            hsaco.bytes.clone(),
+            "gfx1151",
+            padded_abi,
+            physical_test_launch(0),
+        );
+        assert_eq!(
+            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(
+                admit_hsaco(&padded_fixture, 45, "gfx1151"),
+                &hsaco.bytes,
+            )
+            .unwrap_err(),
+            PublishedPhysicalLayoutInspectionError::PhysicalLayoutMismatch {
+                export_symbol: "primary_kernel".to_owned(),
+                field: "explicit kernarg size",
+            }
+        );
+
+        for (seed, alignment) in [(46, 4), (47, 16)] {
+            let hsaco =
+                physical_arguments_hsaco_with_layout(288, alignment, None, [None; 3], false);
+            let alignment_fixture = make_single_hsaco_fixture(
+                seed,
+                hsaco.bytes.clone(),
+                "gfx1151",
+                physical_test_abi(false),
+                physical_test_launch(0),
+            );
+            assert_eq!(
+                InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(
+                    admit_hsaco(&alignment_fixture, usize::from(seed), "gfx1151"),
+                    &hsaco.bytes,
+                )
+                .unwrap_err(),
+                PublishedPhysicalLayoutInspectionError::PhysicalLayoutMismatch {
+                    export_symbol: "primary_kernel".to_owned(),
+                    field: "kernarg segment alignment",
+                }
+            );
+        }
     }
 
     #[test]
@@ -1586,7 +2354,7 @@ mod tests {
             29,
             hsaco.bytes.clone(),
             "gfx1151",
-            "primary_kernel.kd",
+            "primary_kernel",
             false,
             0,
         );
@@ -1594,17 +2362,31 @@ mod tests {
             30,
             hsaco.bytes.clone(),
             "gfx1151",
-            "primary_kernel.kd",
+            "primary_kernel",
             false,
             0,
         );
-        let first = admit_hsaco(&first_fixture, 29, "gfx1151");
-        let second = admit_hsaco(&second_fixture, 30, "gfx1151");
-        let inspected = InspectedPublishedDirectLinkHsacoV1::inspect(&first, &hsaco.bytes).unwrap();
+        let first = prepare_hsaco_admission(&first_fixture, 29, "gfx1151");
+        let second = prepare_hsaco_admission(&second_fixture, 30, "gfx1151");
+        let inspected =
+            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(first.admission, &hsaco.bytes)
+                .unwrap();
 
         assert_eq!(
-            inspected.revalidate(&second, &hsaco.bytes),
-            Err(PublishedHsacoInspectionError::AdmissionSubstitution)
+            inspected.revalidate(
+                &second.validated,
+                &second.bridge,
+                second.published,
+                &second_fixture.container,
+                second.selected,
+                &second.observed,
+                &hsaco.bytes,
+            ),
+            Err(
+                PublishedPhysicalLayoutInspectionError::AdmissionRevalidation(
+                    PublishedDirectLinkAdmissionError::BridgeSubstitution,
+                )
+            )
         );
     }
 
@@ -1615,17 +2397,85 @@ mod tests {
             31,
             hsaco.bytes.clone(),
             "gfx1151",
-            "primary_kernel.kd",
+            "primary_kernel",
             false,
             0,
         );
-        let first = admit_hsaco(&fixture, 31, "gfx1151");
-        let second = admit_hsaco(&fixture, 32, "gfx1151");
-        let inspected = InspectedPublishedDirectLinkHsacoV1::inspect(&first, &hsaco.bytes).unwrap();
+        let first = prepare_hsaco_admission(&fixture, 31, "gfx1151");
+        let second = prepare_hsaco_admission(&fixture, 32, "gfx1151");
+        let inspected =
+            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(first.admission, &hsaco.bytes)
+                .unwrap();
 
         assert_eq!(
-            inspected.revalidate(&second, &hsaco.bytes),
-            Err(PublishedHsacoInspectionError::AdmissionSubstitution)
+            inspected.revalidate(
+                &second.validated,
+                &second.bridge,
+                second.published,
+                &fixture.container,
+                second.selected,
+                &second.observed,
+                &hsaco.bytes,
+            ),
+            Err(
+                PublishedPhysicalLayoutInspectionError::AdmissionRevalidation(
+                    PublishedDirectLinkAdmissionError::BridgeSubstitution,
+                )
+            )
         );
+    }
+
+    #[test]
+    fn inspection_revalidation_binds_context_identity_limits_and_capabilities() {
+        let hsaco = test_hsaco("gfx1151", 0);
+        let fixture = make_hsaco_fixture(
+            33,
+            hsaco.bytes.clone(),
+            "gfx1151",
+            "primary_kernel",
+            false,
+            0,
+        );
+        let admission = prepare_hsaco_admission(&fixture, 33, "gfx1151");
+        let wrong_context = make_observed_for(34, "gfx1151");
+        let changed_limits = ObservedContext::for_test(33, 0, "gfx1151", 512, 65_536);
+        let changed_capabilities = admission
+            .observed
+            .clone()
+            .with_changed_test_hip_capabilities();
+        let inspected = InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(
+            admission.admission,
+            &hsaco.bytes,
+        )
+        .unwrap();
+
+        for (observed, expected) in [
+            (wrong_context, ArtifactRevalidationError::WrongContext),
+            (
+                changed_limits,
+                ArtifactRevalidationError::DeviceLimitsChanged,
+            ),
+            (
+                changed_capabilities,
+                ArtifactRevalidationError::DeviceCapabilitiesChanged,
+            ),
+        ] {
+            assert_eq!(
+                inspected.revalidate(
+                    &admission.validated,
+                    &admission.bridge,
+                    admission.published,
+                    &fixture.container,
+                    admission.selected,
+                    &observed,
+                    &hsaco.bytes,
+                ),
+                Err(
+                    PublishedPhysicalLayoutInspectionError::AdmissionRevalidation(
+                        PublishedDirectLinkAdmissionError::ArtifactRevalidation(expected),
+                    )
+                )
+            );
+        }
     }
 }

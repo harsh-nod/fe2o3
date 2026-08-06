@@ -261,8 +261,10 @@ dependencies = [
  "fe2o3-artifacts",
  "fe2o3-core",
  "fe2o3-device",
+ "fe2o3-hsaco",
  "fe2o3-kernel-descriptor",
  "reserved-fe2o3-symbols",
+ "rmpv",
  "trybuild",
 ]
 
