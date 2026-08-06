@@ -239,6 +239,7 @@ pub(crate) struct VariantLayoutFacts {
     pub(crate) name: String,
     pub(crate) discriminant_bits: Option<u128>,
     pub(crate) discriminant_type: Option<String>,
+    pub(crate) discriminant_scalar: Option<SourceScalarKind>,
     pub(crate) uninhabited: bool,
     pub(crate) fields: Vec<FieldLayoutFacts>,
 }
@@ -730,6 +731,8 @@ impl<'tcx> Extractor<'tcx> {
                 name: variant.name.to_string(),
                 discriminant_bits: discriminant.map(|value| value.val),
                 discriminant_type: discriminant.map(|value| type_name(value.ty)),
+                discriminant_scalar: discriminant
+                    .and_then(|value| source_scalar_kind(&self.layout_cx, value.ty)),
                 uninhabited: variant_layout.is_uninhabited(),
                 fields,
             });
@@ -931,6 +934,23 @@ fn float_bits(float: FloatTy) -> u64 {
         FloatTy::F32 => 32,
         FloatTy::F64 => 64,
         FloatTy::F128 => 128,
+    }
+}
+
+fn source_scalar_kind(layout_cx: &LayoutCx<'_>, ty: Ty<'_>) -> Option<SourceScalarKind> {
+    match *ty.kind() {
+        TyKind::Bool => Some(SourceScalarKind::Bool),
+        TyKind::Char => Some(SourceScalarKind::Char),
+        TyKind::Int(integer) => Some(SourceScalarKind::SignedInteger {
+            bits: integer_bits(layout_cx, integer),
+        }),
+        TyKind::Uint(integer) => Some(SourceScalarKind::UnsignedInteger {
+            bits: unsigned_integer_bits(layout_cx, integer),
+        }),
+        TyKind::Float(float) => Some(SourceScalarKind::Float {
+            bits: float_bits(float),
+        }),
+        _ => None,
     }
 }
 
@@ -1312,6 +1332,10 @@ const FUNCTION: fn() = target;
         };
         assert_eq!(choice.kind, AdtKind::Enum);
         assert_eq!(choice.variants.len(), 3);
+        assert!(choice.variants.iter().all(|variant| matches!(
+            variant.discriminant_scalar,
+            Some(SourceScalarKind::UnsignedInteger { bits: 8 })
+        )));
         assert!(matches!(
             choice.tag.unwrap().encoding,
             EnumTagEncodingFacts::Direct

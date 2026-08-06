@@ -25,6 +25,7 @@ mod record_lowering;
 mod rust_type_layout;
 #[allow(dead_code)]
 mod rust_type_layout_general;
+pub mod semantic_layout_bridge;
 mod trusted_device_items;
 mod typed_artifact;
 
