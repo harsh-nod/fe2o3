@@ -41,7 +41,10 @@ const REJECTED_CASES: &[(&str, &str, &str)] = &[
 ];
 
 const REGISTRATION_REJECTED_CASES: &[(&str, &str)] = &[
-    ("malformed-registration", "does not match registration magic"),
+    (
+        "malformed-registration",
+        "does not match registration magic",
+    ),
     (
         "unknown-registration-version",
         "unknown registration version 3",
