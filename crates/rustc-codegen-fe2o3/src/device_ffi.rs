@@ -1356,9 +1356,7 @@ fn validate_hex_identity(value: &str, field: &str) -> Result<(), DeviceFfiError>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use reserved_fe2o3_symbols::{
-        DEVICE_FFI_DIRECTION_EXPORT_V1, DEVICE_FFI_DIRECTION_IMPORT_V1,
-    };
+    use reserved_fe2o3_symbols::{DEVICE_FFI_DIRECTION_EXPORT_V1, DEVICE_FFI_DIRECTION_IMPORT_V1};
 
     fn marker(direction: u16, symbol: &str, abi: &str) -> String {
         let fields = DeviceFfiContractFieldsV1 {
