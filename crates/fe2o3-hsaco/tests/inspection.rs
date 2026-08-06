@@ -249,16 +249,14 @@ fn rejects_hsaco_and_metadata_note_size_limits() {
 }
 
 #[test]
-fn requires_exactly_one_owned_metadata_note() {
+fn accepts_identical_owned_metadata_notes_and_limits_note_count() {
     let metadata = encode(&metadata((1, 2), vec![valid_kernel("k", "k.kd")]));
     assert_eq!(
         inspect(&hsaco(&metadata, 4, &[b"OTHER\0"])),
         Err(InspectionError::MissingMetadataNote)
     );
-    assert_eq!(
-        inspect(&hsaco(&metadata, 4, &[b"AMDGPU\0", b"AMDGPU\0"])),
-        Err(InspectionError::DuplicateMetadataNote)
-    );
+    let inspected = inspect(&hsaco(&metadata, 4, &[b"AMDGPU\0", b"AMDGPU\0"])).unwrap();
+    assert_eq!(inspected.kernels()[0].name(), "k");
 
     let owners = vec![b"OTHER\0".as_slice(); MAX_ELF_NOTES + 1];
     assert_eq!(
