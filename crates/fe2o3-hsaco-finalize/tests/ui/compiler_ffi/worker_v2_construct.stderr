@@ -1,0 +1,11 @@
+error[E0432]: unresolved import `fe2o3_hsaco_finalize::construct_worker_request_v2`
+ --> tests/ui/compiler_ffi/worker_v2_construct.rs:1:5
+  |
+1 | use fe2o3_hsaco_finalize::construct_worker_request_v2;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `construct_worker_request_v2` in the root
+  |
+help: a similar name exists in the module
+  |
+1 - use fe2o3_hsaco_finalize::construct_worker_request_v2;
+1 + use fe2o3_hsaco_finalize::construct_worker_request_v1;
+  |

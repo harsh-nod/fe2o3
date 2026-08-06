@@ -303,11 +303,13 @@ impl InertWorkerExecutionV1 {
 
 /// A sealed V2 response bound to the measured worker with no artifact authority.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct InertWorkerExecutionV2 {
+#[allow(dead_code)]
+pub(crate) struct InertWorkerExecutionV2 {
     worker_executable: ContentIdentityV1,
     response: WorkerResponseV2,
 }
 
+#[allow(dead_code)]
 impl InertWorkerExecutionV2 {
     pub const fn worker_executable(&self) -> ContentIdentityV1 {
         self.worker_executable
@@ -588,7 +590,8 @@ mod platform {
         /// The request must bind this exact executable, worker build, and LLVM
         /// build. The response must use the V2 domain and echo the exact request
         /// and compiler-envelope identities. The result remains inert.
-        pub fn execute_v2(
+        #[allow(dead_code)]
+        pub(crate) fn execute_v2(
             &self,
             request: &WorkerRequestV2,
             limits: WorkerExecutionLimitsV1,
@@ -1057,7 +1060,8 @@ impl PinnedWorkerV1 {
         ))
     }
 
-    pub fn execute_v2(
+    #[allow(dead_code)]
+    pub(crate) fn execute_v2(
         &self,
         _request: &WorkerRequestV2,
         _limits: WorkerExecutionLimitsV1,
@@ -1065,5 +1069,86 @@ impl PinnedWorkerV1 {
         Err(WorkerExecutionError::plain(
             WorkerExecutionErrorKind::UnsupportedPlatform,
         ))
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod configured_v2_tests {
+    use super::*;
+    use crate::{
+        WorkerCompilerFfiEnvelopeIdentityV2, WorkerInputKindV1, WorkerInputV1,
+        WorkerOptimizationLevelV1, WorkerOptionsV1, WorkerOutputConstraintsV1,
+        worker_protocol_v2::SealedWorkerRequestV2Parts,
+    };
+    use fe2o3_kernel_descriptor::{CodeObjectVersion, DeviceTargetV1};
+    use std::fs;
+
+    fn required_env(name: &str) -> String {
+        std::env::var(name).unwrap_or_else(|_| panic!("missing configured test variable {name}"))
+    }
+
+    #[test]
+    #[ignore = "requires the explicitly configured native LLVM/LLD worker"]
+    fn configured_cpp_worker_v2_round_trip() {
+        let worker_path = required_env("FE2O3_LLVM_LINK_WORKER");
+        let worker_bytes = fs::read(&worker_path).unwrap();
+        let measurement = WorkerMeasurementV1::new(
+            ContentIdentityV1::calculate(&worker_bytes),
+            required_env("FE2O3_LLVM_LINK_WORKER_BUILD_ID"),
+            required_env("FE2O3_LLVM_BUILD_ID"),
+        )
+        .unwrap();
+        let pinned = PinnedWorkerV1::open(worker_path, measurement).unwrap();
+        let compiler_module = WorkerInputV1::new(
+            WorkerInputKindV1::LlvmBitcode,
+            fs::read(required_env("FE2O3_LLVM_V2_MODULE")).unwrap(),
+        )
+        .unwrap();
+        let external_provider = WorkerInputV1::new(
+            WorkerInputKindV1::AmdGpuRelocatable,
+            fs::read(required_env("FE2O3_LLVM_V2_PROVIDER")).unwrap(),
+        )
+        .unwrap();
+        let request = WorkerRequestV2::from_sealed_parts(SealedWorkerRequestV2Parts {
+            request_id: [0x91; 32],
+            llvm_build_identity: pinned.measurement().llvm_build_identity().to_owned(),
+            worker_build_identity: pinned.measurement().worker_build_identity().to_owned(),
+            worker_executable: pinned.measurement().executable(),
+            target: DeviceTargetV1::parse("gfx942").unwrap(),
+            code_object_version: CodeObjectVersion::V5,
+            options: WorkerOptionsV1::new(WorkerOptimizationLevelV1::O3, true, true),
+            compiler_envelope: WorkerCompilerFfiEnvelopeIdentityV2::from_test_bytes([0x62; 32]),
+            compiler_module,
+            external_providers: vec![external_provider],
+            import_symbols: vec!["object_helper".to_owned()],
+            export_symbols: vec!["mixed_entry".to_owned()],
+            final_symbols: vec!["mixed_entry".to_owned(), "object_helper".to_owned()],
+            output: WorkerOutputConstraintsV1::new(4 * 1024 * 1024).unwrap(),
+        })
+        .unwrap();
+        let execution = pinned
+            .execute_v2(
+                &request,
+                WorkerExecutionLimitsV1::new(
+                    Duration::from_secs(120),
+                    MAX_WORKER_RESPONSE_BYTES,
+                    DEFAULT_WORKER_STDERR_BYTES,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let output = execution.response().output().unwrap();
+        assert_eq!(
+            output.bytes(),
+            fs::read(required_env("FE2O3_LLVM_V2_EXPECTED_OUTPUT")).unwrap()
+        );
+        assert!(execution.response().binds_request(&request));
+        assert_eq!(
+            execution.evidence_class(),
+            WorkerEvidenceClassV2::CompilerFfiLink
+        );
+        assert!(!execution.grants_publication_authority());
+        assert!(!execution.grants_load_authority());
+        assert!(!execution.grants_launch_authority());
     }
 }

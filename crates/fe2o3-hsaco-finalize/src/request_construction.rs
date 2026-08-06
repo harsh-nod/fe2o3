@@ -17,6 +17,7 @@ use crate::{
 const INPUT_KIND_CLOSURE_DOMAIN_V1: &[u8] = b"FE2O3/DEVICE-LINK-INPUT-KIND-CLOSURE/V1\0";
 const SYMBOL_CLOSURE_DOMAIN_V1: &[u8] = b"FE2O3/DEVICE-LINK-SYMBOL-CLOSURE/V1\0";
 const PLAN_REQUEST_DOMAIN_V1: &[u8] = b"FE2O3/PLAN-BOUND-WORKER-REQUEST/V1\0";
+#[allow(dead_code)] // V2 stays unconnected until compiler-owned provenance exists.
 const PLAN_REQUEST_DOMAIN_V2: &[u8] = b"FE2O3/PLAN-BOUND-WORKER-REQUEST/V2\0";
 
 /// Exact compiler-module bytes retained without accepting a caller-supplied digest.
@@ -25,21 +26,15 @@ const PLAN_REQUEST_DOMAIN_V2: &[u8] = b"FE2O3/PLAN-BOUND-WORKER-REQUEST/V2\0";
 /// authenticates only byte/kind consistency, not compiler origin, and can only be
 /// consumed by the sealed Worker V2 constructor.
 #[derive(Debug, Eq, PartialEq)]
-pub struct ExactCompilerModuleArtifactV1 {
+#[allow(dead_code)]
+pub(crate) struct ExactCompilerModuleArtifactV1 {
     input: WorkerInputV1,
 }
 
+#[allow(dead_code)]
 impl ExactCompilerModuleArtifactV1 {
     pub const fn identity(&self) -> ContentIdentityV1 {
         self.input.identity()
-    }
-
-    pub const fn kind(&self) -> WorkerInputKindV1 {
-        self.input.kind()
-    }
-
-    pub const fn grants_link_authority(&self) -> bool {
-        false
     }
 
     fn into_input(self) -> WorkerInputV1 {
@@ -48,7 +43,8 @@ impl ExactCompilerModuleArtifactV1 {
 }
 
 /// Seals exact compiler-module bytes into a non-forgeable-by-digest witness.
-pub fn stage_exact_compiler_module_artifact_v1(
+#[allow(dead_code)]
+pub(crate) fn stage_exact_compiler_module_artifact_v1(
     kind: WorkerInputKindV1,
     bytes: Vec<u8>,
 ) -> Result<ExactCompilerModuleArtifactV1, WorkerProtocolError> {
@@ -294,11 +290,11 @@ pub fn construct_worker_request_v1(
 ///
 /// The complete staged compiler envelope and exact compiler-module witness are
 /// consumed. The module plus every external provider must exactly cover the
-/// plan inputs; the envelope target/version and directional contract counts
-/// must match the explicit symbol closure. No V1 request participates in this
-/// construction.
-#[allow(clippy::too_many_arguments)]
-pub fn construct_worker_request_v2(
+/// plan inputs. Import and export symbols are derived from the retained
+/// envelope; the caller supplies only the complete final symbol closure. No V1
+/// request participates in this construction.
+#[allow(dead_code, clippy::too_many_arguments)]
+pub(crate) fn construct_worker_request_v2(
     plan: &MultiInputLinkPlanV1,
     measurement: &WorkerMeasurementV1,
     target: DeviceTargetV1,
@@ -308,7 +304,7 @@ pub fn construct_worker_request_v2(
     compiler_module: ExactCompilerModuleArtifactV1,
     external_providers: Vec<WorkerInputV1>,
     input_kinds: &LinkInputKindClosureV1,
-    symbols: &LinkSymbolClosureV1,
+    final_symbols: &[String],
     output: WorkerOutputConstraintsV1,
 ) -> Result<WorkerRequestV2, WorkerRequestConstructionError> {
     if target != plan.target() {
@@ -321,21 +317,19 @@ pub fn construct_worker_request_v2(
     if envelope.code_object_version() != code_object_version {
         return Err(WorkerRequestConstructionError::CompilerEnvelopeCodeObjectVersionMismatch);
     }
-    if envelope.import_count() != symbols.import_symbols.len() {
-        return Err(
-            WorkerRequestConstructionError::CompilerEnvelopeImportCountMismatch {
-                envelope: envelope.import_count(),
-                symbols: symbols.import_symbols.len(),
-            },
-        );
+    validate_symbols(final_symbols).map_err(WorkerRequestConstructionError::InvalidFinalSymbols)?;
+    if final_symbols.is_empty() {
+        return Err(WorkerRequestConstructionError::EmptySymbolClosure);
     }
-    if envelope.export_count() != symbols.export_symbols.len() {
-        return Err(
-            WorkerRequestConstructionError::CompilerEnvelopeExportCountMismatch {
-                envelope: envelope.export_count(),
-                symbols: symbols.export_symbols.len(),
-            },
-        );
+    let (import_symbols, export_symbols) = staged_envelope.directional_symbols();
+    for symbol in import_symbols.iter().chain(&export_symbols) {
+        if final_symbols.binary_search(symbol).is_err() {
+            return Err(
+                WorkerRequestConstructionError::CompilerEnvelopeSymbolAbsentFromFinal(
+                    symbol.clone(),
+                ),
+            );
+        }
     }
     let (planned_code_object_version, planned_options) = decode_plan_options(plan)?;
     if code_object_version != planned_code_object_version {
@@ -375,7 +369,9 @@ pub fn construct_worker_request_v2(
         &compiler_module,
         &external_providers,
         input_kinds,
-        symbols,
+        &import_symbols,
+        &export_symbols,
+        final_symbols,
         &output,
     );
     if request_id == [0; 32] {
@@ -395,9 +391,9 @@ pub fn construct_worker_request_v2(
         ),
         compiler_module,
         external_providers,
-        import_symbols: symbols.import_symbols.clone(),
-        export_symbols: symbols.export_symbols.clone(),
-        final_symbols: symbols.required_symbols.clone(),
+        import_symbols,
+        export_symbols,
+        final_symbols: final_symbols.to_vec(),
         output,
     })
     .map_err(WorkerRequestConstructionError::WorkerProtocol)
@@ -410,19 +406,13 @@ pub enum WorkerRequestConstructionError {
     InvalidRequiredSymbols(WorkerProtocolError),
     InvalidImportSymbols(WorkerProtocolError),
     InvalidExportSymbols(WorkerProtocolError),
+    InvalidFinalSymbols(WorkerProtocolError),
     UnreferencedImport(String),
     UnreferencedExport(String),
     ConflictingSymbolRole(String),
     CompilerEnvelopeTargetMismatch,
     CompilerEnvelopeCodeObjectVersionMismatch,
-    CompilerEnvelopeImportCountMismatch {
-        envelope: usize,
-        symbols: usize,
-    },
-    CompilerEnvelopeExportCountMismatch {
-        envelope: usize,
-        symbols: usize,
-    },
+    CompilerEnvelopeSymbolAbsentFromFinal(String),
     TargetMismatch,
     MissingCodeObjectVersion,
     InvalidCodeObjectVersion(String),
@@ -486,6 +476,9 @@ impl fmt::Display for WorkerRequestConstructionError {
             Self::InvalidExportSymbols(error) => {
                 write!(formatter, "invalid export-symbol set: {error}")
             }
+            Self::InvalidFinalSymbols(error) => {
+                write!(formatter, "invalid final-symbol set: {error}")
+            }
             Self::UnreferencedImport(symbol) => {
                 write!(
                     formatter,
@@ -507,13 +500,9 @@ impl fmt::Display for WorkerRequestConstructionError {
             Self::CompilerEnvelopeCodeObjectVersionMismatch => formatter.write_str(
                 "compiler FFI envelope code-object version does not match worker request",
             ),
-            Self::CompilerEnvelopeImportCountMismatch { envelope, symbols } => write!(
+            Self::CompilerEnvelopeSymbolAbsentFromFinal(symbol) => write!(
                 formatter,
-                "compiler envelope import count {envelope} does not match symbol closure {symbols}"
-            ),
-            Self::CompilerEnvelopeExportCountMismatch { envelope, symbols } => write!(
-                formatter,
-                "compiler envelope export count {envelope} does not match symbol closure {symbols}"
+                "compiler envelope symbol {symbol} is absent from the final-symbol set"
             ),
             Self::TargetMismatch => {
                 formatter.write_str("worker request target does not match link plan")
@@ -765,7 +754,7 @@ fn calculate_request_id(
     hasher.finalize().into()
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(dead_code, clippy::too_many_arguments)]
 fn calculate_request_id_v2(
     plan: &MultiInputLinkPlanV1,
     measurement: &WorkerMeasurementV1,
@@ -777,14 +766,15 @@ fn calculate_request_id_v2(
     compiler_module: &WorkerInputV1,
     external_providers: &[WorkerInputV1],
     input_kinds: &LinkInputKindClosureV1,
-    symbols: &LinkSymbolClosureV1,
+    import_symbols: &[String],
+    export_symbols: &[String],
+    final_symbols: &[String],
     output: &WorkerOutputConstraintsV1,
 ) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(PLAN_REQUEST_DOMAIN_V2);
     hasher.update(plan.identity().as_bytes());
     hasher.update(input_kinds.identity.as_bytes());
-    hasher.update(symbols.identity.as_bytes());
     hasher.update(staged_envelope_identity);
     hasher.update(compiler_envelope_identity);
     hasher.update(measurement.executable().sha256());
@@ -803,13 +793,14 @@ fn calculate_request_id_v2(
     for input in external_providers {
         hash_input(&mut hasher, input);
     }
-    hash_strings(&mut hasher, &symbols.import_symbols);
-    hash_strings(&mut hasher, &symbols.export_symbols);
-    hash_strings(&mut hasher, &symbols.required_symbols);
+    hash_strings(&mut hasher, import_symbols);
+    hash_strings(&mut hasher, export_symbols);
+    hash_strings(&mut hasher, final_symbols);
     hasher.update(output.max_bytes().to_le_bytes());
     hasher.finalize().into()
 }
 
+#[allow(dead_code)]
 fn hash_input(hasher: &mut Sha256, input: &WorkerInputV1) {
     hasher.update([input.kind() as u8]);
     hasher.update(input.identity().sha256());
@@ -820,6 +811,262 @@ fn hash_strings(hasher: &mut Sha256, strings: &[String]) {
     hasher.update((strings.len() as u64).to_le_bytes());
     for string in strings {
         hash_text(hasher, string);
+    }
+}
+
+#[cfg(test)]
+mod v2_tests {
+    use super::*;
+    use crate::{LinkInputV1, LinkOptionV1, LinkOutputV1, ProvenanceNodeV1};
+    use fe2o3_compiler_ffi::{
+        CodeObjectVersion as CompilerCodeObjectVersion, CompilerFfiContractV1,
+        CompilerFfiEnvelopeBuilderV1, CompilerFfiLinkRoleV1, CompilerFfiSourceOwnerV1,
+        DeviceTargetV1 as CompilerDeviceTargetV1,
+    };
+    use reserved_fe2o3_symbols::{
+        DEVICE_FFI_DIRECTION_EXPORT_V1, DEVICE_FFI_DIRECTION_IMPORT_V1, DeviceFfiContractFieldsV1,
+        DeviceFfiDirectionV1, derive_device_ffi_contract_id_v1,
+    };
+
+    const ABI: &str = "C(u32[size=4,align=4])->u32[size=4,align=4]";
+    const MODULE: &[u8] = b"exact compiler module bitcode";
+    const PROVIDER: &[u8] = b"exact external provider object";
+
+    struct Fixture {
+        plan: MultiInputLinkPlanV1,
+        kinds: LinkInputKindClosureV1,
+        provider: WorkerInputV1,
+        output: WorkerOutputConstraintsV1,
+    }
+
+    fn target() -> DeviceTargetV1 {
+        DeviceTargetV1::parse("gfx942:xnack-").unwrap()
+    }
+
+    fn options() -> WorkerOptionsV1 {
+        WorkerOptionsV1::new(WorkerOptimizationLevelV1::O2, true, true)
+    }
+
+    fn fixture() -> Fixture {
+        let module = WorkerInputV1::new(WorkerInputKindV1::LlvmBitcode, MODULE.to_vec()).unwrap();
+        let provider =
+            WorkerInputV1::new(WorkerInputKindV1::AmdGpuRelocatable, PROVIDER.to_vec()).unwrap();
+        let mut inputs = [module, provider.clone()];
+        inputs.sort_by_key(|input| (input.identity(), input.kind()));
+        let link_inputs = inputs
+            .iter()
+            .map(|input| LinkInputV1::new(input.identity(), target()))
+            .collect::<Vec<_>>();
+        let output_identity = ContentIdentityV1::calculate(b"expected exact hsaco");
+        let mut provenance = link_inputs
+            .iter()
+            .map(|input| ProvenanceNodeV1::new(input.identity(), vec![]).unwrap())
+            .collect::<Vec<_>>();
+        provenance.push(
+            ProvenanceNodeV1::new(
+                output_identity,
+                link_inputs.iter().map(|input| input.identity()).collect(),
+            )
+            .unwrap(),
+        );
+        let plan = MultiInputLinkPlanV1::canonicalized(
+            target(),
+            link_inputs,
+            vec![
+                LinkOptionV1::new("code-object-version", "6").unwrap(),
+                LinkOptionV1::new("opt-level", "2").unwrap(),
+                LinkOptionV1::new("strip-debug", "true").unwrap(),
+                LinkOptionV1::new("verify-each", "true").unwrap(),
+            ],
+            LinkOutputV1::new(output_identity, target()),
+            provenance,
+        )
+        .unwrap();
+        let kinds =
+            LinkInputKindClosureV1::new(&plan, inputs.iter().map(|input| input.kind()).collect())
+                .unwrap();
+        Fixture {
+            plan,
+            kinds,
+            provider,
+            output: WorkerOutputConstraintsV1::new(output_identity.byte_len()).unwrap(),
+        }
+    }
+
+    fn envelope(import_symbol: &str) -> StagedCompilerFfiEnvelopeV1 {
+        let compiler_target = CompilerDeviceTargetV1::parse("gfx942:xnack-").unwrap();
+        let mut builder =
+            CompilerFfiEnvelopeBuilderV1::new(compiler_target, CompilerCodeObjectVersion::V6, 2)
+                .unwrap();
+        builder
+            .push(contract(
+                import_symbol,
+                DeviceFfiDirectionV1::Import,
+                CompilerFfiLinkRoleV1::RequiresExternalDefinition,
+                0x31,
+            ))
+            .unwrap();
+        builder
+            .push(contract(
+                "rust_helper",
+                DeviceFfiDirectionV1::Export,
+                CompilerFfiLinkRoleV1::RequiresCompilerModuleDefinition,
+                0x42,
+            ))
+            .unwrap();
+        crate::stage_compiler_ffi_envelope_v1(builder.finish().unwrap())
+    }
+
+    fn contract(
+        symbol: &str,
+        direction: DeviceFfiDirectionV1,
+        role: CompilerFfiLinkRoleV1,
+        semantic_byte: u8,
+    ) -> CompilerFfiContractV1 {
+        let semantic_identity = [semantic_byte; 32];
+        let semantic_text = lower_hex(&semantic_identity);
+        let direction_tag = match direction {
+            DeviceFfiDirectionV1::Import => DEVICE_FFI_DIRECTION_IMPORT_V1,
+            DeviceFfiDirectionV1::Export => DEVICE_FFI_DIRECTION_EXPORT_V1,
+        };
+        let fields = DeviceFfiContractFieldsV1 {
+            direction: direction_tag,
+            symbol,
+            calling_convention: "C",
+            code_object_version: 6,
+            target: "gfx942:xnack-",
+            physical_abi: ABI,
+            effects: "none",
+            semantic_identity: &semantic_text,
+        };
+        CompilerFfiContractV1::new(
+            derive_device_ffi_contract_id_v1(fields),
+            direction,
+            role,
+            CompilerDeviceTargetV1::parse("gfx942:xnack-").unwrap(),
+            CompilerCodeObjectVersion::V6,
+            CompilerFfiSourceOwnerV1::new(
+                "ffi_crate",
+                &format!("ffi_crate::{symbol}"),
+                [semantic_byte; 16],
+                &format!("_RINvNtCs1234_9ffi_crate{symbol}"),
+            )
+            .unwrap(),
+            symbol,
+            ABI,
+            "none",
+            semantic_identity,
+        )
+        .unwrap()
+    }
+
+    fn measurement() -> WorkerMeasurementV1 {
+        WorkerMeasurementV1::new(
+            ContentIdentityV1::calculate(b"pinned worker executable"),
+            "worker-v1-build",
+            "llvm-v2-build",
+        )
+        .unwrap()
+    }
+
+    fn final_symbols() -> Vec<String> {
+        ["external_add", "kernel_main", "rust_helper"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect()
+    }
+
+    #[test]
+    fn derives_exact_directions_from_the_retained_envelope() {
+        let fixture = fixture();
+        let staged = envelope("external_add");
+        let compiler_identity = staged.inspection().envelope_identity();
+        let artifact = stage_exact_compiler_module_artifact_v1(
+            WorkerInputKindV1::LlvmBitcode,
+            MODULE.to_vec(),
+        )
+        .unwrap();
+        let artifact_identity = artifact.identity();
+        let request = construct_worker_request_v2(
+            &fixture.plan,
+            &measurement(),
+            target(),
+            CodeObjectVersion::V6,
+            options(),
+            staged,
+            artifact,
+            vec![fixture.provider.clone()],
+            &fixture.kinds,
+            &final_symbols(),
+            fixture.output.clone(),
+        )
+        .unwrap();
+
+        assert_eq!(request.compiler_module().identity(), artifact_identity);
+        assert_eq!(
+            request.compiler_envelope_identity().as_bytes(),
+            compiler_identity.as_bytes()
+        );
+        assert_eq!(request.import_symbols(), ["external_add"]);
+        assert_eq!(request.export_symbols(), ["rust_helper"]);
+        assert_eq!(request.final_symbols(), final_symbols());
+        assert_eq!(request.external_providers(), &[fixture.provider]);
+    }
+
+    #[test]
+    fn same_cardinality_envelope_substitution_and_wrong_module_fail_closed() {
+        let fixture = fixture();
+        let artifact = stage_exact_compiler_module_artifact_v1(
+            WorkerInputKindV1::LlvmBitcode,
+            MODULE.to_vec(),
+        )
+        .unwrap();
+        assert_eq!(
+            construct_worker_request_v2(
+                &fixture.plan,
+                &measurement(),
+                target(),
+                CodeObjectVersion::V6,
+                options(),
+                envelope("substituted_add"),
+                artifact,
+                vec![fixture.provider.clone()],
+                &fixture.kinds,
+                &final_symbols(),
+                fixture.output.clone(),
+            ),
+            Err(
+                WorkerRequestConstructionError::CompilerEnvelopeSymbolAbsentFromFinal(
+                    "substituted_add".to_owned()
+                )
+            )
+        );
+
+        let wrong_artifact = stage_exact_compiler_module_artifact_v1(
+            WorkerInputKindV1::LlvmBitcode,
+            b"different module".to_vec(),
+        )
+        .unwrap();
+        assert!(
+            construct_worker_request_v2(
+                &fixture.plan,
+                &measurement(),
+                target(),
+                CodeObjectVersion::V6,
+                options(),
+                envelope("external_add"),
+                wrong_artifact,
+                vec![fixture.provider],
+                &fixture.kinds,
+                &final_symbols(),
+                fixture.output,
+            )
+            .is_err()
+        );
+    }
+
+    fn lower_hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|byte| format!("{byte:02x}")).collect()
     }
 }
 

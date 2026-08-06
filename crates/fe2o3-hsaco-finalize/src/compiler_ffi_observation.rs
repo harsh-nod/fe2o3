@@ -102,6 +102,15 @@ impl StagedCompilerFfiEnvelopeV1 {
     pub const fn authenticates_compiler_origin(&self) -> bool {
         false
     }
+
+    #[allow(dead_code)] // Consumed only by the deliberately unconnected V2 path.
+    pub(crate) fn directional_symbols(&self) -> (Vec<String>, Vec<String>) {
+        let projection = self.envelope.directional_symbols();
+        (
+            projection.imports().map(str::to_owned).collect(),
+            projection.exports().map(str::to_owned).collect(),
+        )
+    }
 }
 
 /// Consumes and retains one already-bounded compiler envelope as inert state.

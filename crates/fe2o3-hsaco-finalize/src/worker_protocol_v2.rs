@@ -4,6 +4,8 @@
 //! sealed construction path. The wire format is still inert: it grants no
 //! publication, loading, or launch authority.
 
+#![allow(dead_code)] // Framing remains dormant until compiler-owned provenance exists.
+
 use std::{fmt, str};
 
 use fe2o3_compiler_ffi::CompilerFfiEnvelopeIdentityV1;
@@ -55,6 +57,11 @@ impl WorkerCompilerFfiEnvelopeIdentityV2 {
 
     pub(crate) fn from_compiler_identity(identity: CompilerFfiEnvelopeIdentityV1) -> Self {
         Self(identity.as_bytes())
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn from_test_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
     }
 }
 

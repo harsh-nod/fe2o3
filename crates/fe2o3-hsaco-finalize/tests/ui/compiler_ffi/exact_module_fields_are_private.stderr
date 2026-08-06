@@ -1,5 +1,5 @@
-error[E0616]: field `input` of struct `ExactCompilerModuleArtifactV1` is private
- --> tests/ui/compiler_ffi/exact_module_fields_are_private.rs:9:22
+error[E0432]: unresolved import `fe2o3_hsaco_finalize::stage_exact_compiler_module_artifact_v1`
+ --> tests/ui/compiler_ffi/exact_module_fields_are_private.rs:1:47
   |
-9 |     let _ = artifact.input;
-  |                      ^^^^^ private field
+1 | use fe2o3_hsaco_finalize::{WorkerInputKindV1, stage_exact_compiler_module_artifact_v1};
+  |                                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `stage_exact_compiler_module_artifact_v1` in the root

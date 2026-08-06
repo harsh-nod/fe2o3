@@ -62,16 +62,14 @@ pub use link_plan::{
     MAX_LINK_PROVENANCE_EDGES, MAX_LINK_PROVENANCE_NODES, MultiInputLinkPlanV1, ProvenanceNodeV1,
 };
 pub use request_construction::{
-    ExactCompilerModuleArtifactV1, LinkInputKindClosureIdentityV1, LinkInputKindClosureV1,
-    LinkSymbolClosureIdentityV1, LinkSymbolClosureV1, WorkerRequestConstructionError,
-    construct_worker_request_v1, construct_worker_request_v2,
-    stage_exact_compiler_module_artifact_v1,
+    LinkInputKindClosureIdentityV1, LinkInputKindClosureV1, LinkSymbolClosureIdentityV1,
+    LinkSymbolClosureV1, WorkerRequestConstructionError, construct_worker_request_v1,
 };
 pub use worker_executor::{
     DEFAULT_WORKER_STDERR_BYTES, DEFAULT_WORKER_TIMEOUT, InertWorkerExecutionV1,
-    InertWorkerExecutionV2, MAX_WORKER_EXECUTABLE_BYTES, MAX_WORKER_STDERR_BYTES,
-    MAX_WORKER_TIMEOUT, PinnedWorkerV1, WORKER_ENVIRONMENT_ALLOWLIST_V1, WorkerExecutionError,
-    WorkerExecutionErrorKind, WorkerExecutionLimitsV1, WorkerMeasurementV1, WorkerTerminationV1,
+    MAX_WORKER_EXECUTABLE_BYTES, MAX_WORKER_STDERR_BYTES, MAX_WORKER_TIMEOUT, PinnedWorkerV1,
+    WORKER_ENVIRONMENT_ALLOWLIST_V1, WorkerExecutionError, WorkerExecutionErrorKind,
+    WorkerExecutionLimitsV1, WorkerMeasurementV1, WorkerTerminationV1,
 };
 pub use worker_protocol::{
     MAX_WORKER_DIAGNOSTIC_BYTES, MAX_WORKER_DIAGNOSTICS, MAX_WORKER_OUTPUT_BYTES,

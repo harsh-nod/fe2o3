@@ -8,20 +8,11 @@ use std::{
 };
 
 use fe2o3_hsaco_finalize::{
-    CompilerFfiCodeObjectVersion, CompilerFfiContractV1, CompilerFfiDeviceTargetV1,
-    CompilerFfiEnvelopeBuilderV1, CompilerFfiLinkRoleV1, CompilerFfiSourceOwnerV1,
-    ContentIdentityV1, InertWorkerExecutionV1, LinkInputKindClosureV1, LinkInputV1, LinkOptionV1,
-    LinkOutputV1, LinkSymbolClosureV1, MultiInputLinkPlanV1, PinnedWorkerV1, ProvenanceNodeV1,
-    WorkerEvidenceClassV2, WorkerExecutionErrorKind, WorkerExecutionLimitsV1, WorkerInputKindV1,
-    WorkerInputV1, WorkerMeasurementV1, WorkerOptimizationLevelV1, WorkerOptionsV1,
-    WorkerOutputConstraintsV1, WorkerRequestV1, WorkerRequestV2, construct_worker_request_v2,
-    stage_compiler_ffi_envelope_v1, stage_exact_compiler_module_artifact_v1,
+    ContentIdentityV1, InertWorkerExecutionV1, PinnedWorkerV1, WorkerExecutionErrorKind,
+    WorkerExecutionLimitsV1, WorkerInputKindV1, WorkerInputV1, WorkerMeasurementV1,
+    WorkerOptimizationLevelV1, WorkerOptionsV1, WorkerOutputConstraintsV1, WorkerRequestV1,
 };
 use fe2o3_kernel_descriptor::{CodeObjectVersion, DeviceTargetV1};
-use reserved_fe2o3_symbols::{
-    DEVICE_FFI_DIRECTION_EXPORT_V1, DeviceFfiContractFieldsV1, DeviceFfiDirectionV1,
-    derive_device_ffi_contract_id_v1,
-};
 
 const WORKER_ID: &str = "fixture-worker-v1";
 const LLVM_ID: &str = "fixture-llvm-v1";
@@ -58,123 +49,6 @@ fn limits() -> WorkerExecutionLimitsV1 {
 
 fn execute(mode: u8) -> Result<InertWorkerExecutionV1, fe2o3_hsaco_finalize::WorkerExecutionError> {
     pinned().execute(&request(mode, 1, 1024), limits())
-}
-
-fn v2_request(pinned: &PinnedWorkerV1) -> WorkerRequestV2 {
-    let module_bytes = b"fixture compiler module".to_vec();
-    let module = WorkerInputV1::new(WorkerInputKindV1::LlvmBitcode, module_bytes.clone()).unwrap();
-    let output_identity = ContentIdentityV1::calculate(b"fixture-output");
-    let link_input = LinkInputV1::new(module.identity(), request_target());
-    let plan = MultiInputLinkPlanV1::canonicalized(
-        request_target(),
-        vec![link_input],
-        vec![
-            LinkOptionV1::new("code-object-version", "6").unwrap(),
-            LinkOptionV1::new("opt-level", "2").unwrap(),
-            LinkOptionV1::new("strip-debug", "true").unwrap(),
-            LinkOptionV1::new("verify-each", "true").unwrap(),
-        ],
-        LinkOutputV1::new(output_identity, request_target()),
-        vec![
-            ProvenanceNodeV1::new(module.identity(), vec![]).unwrap(),
-            ProvenanceNodeV1::new(output_identity, vec![module.identity()]).unwrap(),
-        ],
-    )
-    .unwrap();
-    let input_kinds =
-        LinkInputKindClosureV1::new(&plan, vec![WorkerInputKindV1::LlvmBitcode]).unwrap();
-    let mut envelope_builder = CompilerFfiEnvelopeBuilderV1::new(
-        CompilerFfiDeviceTargetV1::parse("gfx942:xnack-").unwrap(),
-        CompilerFfiCodeObjectVersion::V6,
-        1,
-    )
-    .unwrap();
-    envelope_builder.push(v2_export_contract()).unwrap();
-    let envelope = envelope_builder.finish().unwrap();
-    construct_worker_request_v2(
-        &plan,
-        pinned.measurement(),
-        request_target(),
-        CodeObjectVersion::V6,
-        WorkerOptionsV1::new(WorkerOptimizationLevelV1::O2, true, true),
-        stage_compiler_ffi_envelope_v1(envelope),
-        stage_exact_compiler_module_artifact_v1(WorkerInputKindV1::LlvmBitcode, module_bytes)
-            .unwrap(),
-        vec![],
-        &input_kinds,
-        &LinkSymbolClosureV1::new(
-            vec!["fixture_symbol".to_owned(), "rust_helper".to_owned()],
-            vec![],
-            vec!["rust_helper".to_owned()],
-        )
-        .unwrap(),
-        WorkerOutputConstraintsV1::new(output_identity.byte_len()).unwrap(),
-    )
-    .unwrap()
-}
-
-fn v2_export_contract() -> CompilerFfiContractV1 {
-    const ABI: &str = "C(u32[size=4,align=4])->u32[size=4,align=4]";
-    let semantic_identity = [0x44; 32];
-    let semantic_text = semantic_identity
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    let fields = DeviceFfiContractFieldsV1 {
-        direction: DEVICE_FFI_DIRECTION_EXPORT_V1,
-        symbol: "rust_helper",
-        calling_convention: "C",
-        code_object_version: 6,
-        target: "gfx942:xnack-",
-        physical_abi: ABI,
-        effects: "none",
-        semantic_identity: &semantic_text,
-    };
-    CompilerFfiContractV1::new(
-        derive_device_ffi_contract_id_v1(fields),
-        DeviceFfiDirectionV1::Export,
-        CompilerFfiLinkRoleV1::RequiresCompilerModuleDefinition,
-        CompilerFfiDeviceTargetV1::parse("gfx942:xnack-").unwrap(),
-        CompilerFfiCodeObjectVersion::V6,
-        CompilerFfiSourceOwnerV1::new(
-            "fixture",
-            "fixture::rust_helper",
-            [0x44; 16],
-            "_RINvNtCs1234_7fixturerust_helper",
-        )
-        .unwrap(),
-        "rust_helper",
-        ABI,
-        "none",
-        semantic_identity,
-    )
-    .unwrap()
-}
-
-fn request_target() -> DeviceTargetV1 {
-    DeviceTargetV1::parse("gfx942:xnack-").unwrap()
-}
-
-#[test]
-fn v2_uses_the_same_supervisor_and_retains_sealed_evidence() {
-    let pinned = pinned();
-    let request = v2_request(&pinned);
-    let execution = pinned.execute_v2(&request, limits()).unwrap();
-    assert!(execution.response().binds_request(&request));
-    assert_eq!(
-        execution.evidence_class(),
-        WorkerEvidenceClassV2::CompilerFfiLink
-    );
-    let output = execution.response().output().unwrap();
-    assert_eq!(output.bytes(), b"fixture-output");
-    assert_eq!(output.request_identity(), request.identity());
-    assert_eq!(
-        output.compiler_envelope_identity(),
-        request.compiler_envelope_identity()
-    );
-    assert!(!execution.grants_publication_authority());
-    assert!(!execution.grants_load_authority());
-    assert!(!execution.grants_launch_authority());
 }
 
 #[test]
