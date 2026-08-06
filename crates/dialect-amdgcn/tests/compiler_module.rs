@@ -1,0 +1,325 @@
+use dialect_amdgcn::{LoweringDiagnosticCode, lower_compiler_module_to_llvm_ir};
+use fe2o3_kernel_ir::{
+    AccessMode, AddressSpace, BasicBlock, BinaryOp, BlockId, Function, FunctionId,
+    IntrinsicOperation, Kernel, LaunchDomain, LaunchExtent, Module, Operation, OperationKind,
+    Signature, Terminator, Type, ValueDef, ValueId, WorkgroupSize,
+};
+
+fn returning_block(operations: Vec<Operation>, values: Vec<ValueId>) -> BasicBlock {
+    let mut block = BasicBlock::new(BlockId(0));
+    block.operations = operations;
+    block.terminator = Some(Terminator::Return { values });
+    block
+}
+
+fn call(result: u32, callee: &str, argument: u32) -> Operation {
+    Operation::effect_free(
+        ValueDef::new(
+            ValueId(result),
+            Type::Scalar(fe2o3_kernel_ir::ScalarType::I32),
+        ),
+        OperationKind::Call {
+            callee: FunctionId::new(callee),
+            arguments: vec![ValueId(argument)],
+        },
+    )
+}
+
+fn kernel_entry(id: &str, callees: &[&str]) -> Function {
+    let parameter_count = callees.len().max(1);
+    let operations = callees
+        .iter()
+        .enumerate()
+        .map(|(index, callee)| call((parameter_count + index) as u32, callee, index as u32))
+        .collect();
+    Function::definition(
+        id,
+        Signature::new(
+            vec![Type::Scalar(fe2o3_kernel_ir::ScalarType::I32); parameter_count],
+            vec![],
+        ),
+        (0..parameter_count)
+            .map(|index| ValueId(index as u32))
+            .collect(),
+        vec![returning_block(operations, vec![])],
+    )
+}
+
+fn kernel(id: &str, entry: &str, workgroup_x: u32) -> Kernel {
+    let mut kernel = Kernel::new(
+        id,
+        entry,
+        LaunchDomain::D1 {
+            x: LaunchExtent::Dynamic,
+        },
+    );
+    kernel.workgroup_size = Some(WorkgroupSize::new(workgroup_x, 1, 1));
+    kernel
+}
+
+fn compiler_module() -> Module {
+    let scale = Function::definition(
+        "scale",
+        Signature::new(
+            vec![Type::Scalar(fe2o3_kernel_ir::ScalarType::I32)],
+            vec![Type::Scalar(fe2o3_kernel_ir::ScalarType::I32)],
+        ),
+        vec![ValueId(0)],
+        vec![returning_block(
+            vec![
+                Operation::effect_free(
+                    ValueDef::new(ValueId(1), Type::Scalar(fe2o3_kernel_ir::ScalarType::I32)),
+                    OperationKind::Constant(fe2o3_kernel_ir::Constant::I32(2)),
+                ),
+                Operation::effect_free(
+                    ValueDef::new(ValueId(2), Type::Scalar(fe2o3_kernel_ir::ScalarType::I32)),
+                    OperationKind::Binary {
+                        op: BinaryOp::Multiply,
+                        lhs: ValueId(0),
+                        rhs: ValueId(1),
+                    },
+                ),
+            ],
+            vec![ValueId(2)],
+        )],
+    );
+    let public_adjust = Function::definition(
+        "public_adjust",
+        Signature::new(
+            vec![Type::Scalar(fe2o3_kernel_ir::ScalarType::I32)],
+            vec![Type::Scalar(fe2o3_kernel_ir::ScalarType::I32)],
+        ),
+        vec![ValueId(0)],
+        vec![returning_block(
+            vec![call(1, "external_bias", 0)],
+            vec![ValueId(1)],
+        )],
+    );
+    let external = Function::declaration(
+        "external_bias",
+        Signature::new(
+            vec![Type::Scalar(fe2o3_kernel_ir::ScalarType::I32)],
+            vec![Type::Scalar(fe2o3_kernel_ir::ScalarType::I32)],
+        ),
+    );
+
+    let mut module = Module::new("tests::compiler_module");
+    module.functions = vec![
+        kernel_entry("zeta_entry", &["scale", "public_adjust"]),
+        external,
+        scale,
+        kernel_entry("alpha_entry", &["scale"]),
+        public_adjust,
+    ];
+    module.kernels = vec![
+        kernel("zeta_kernel", "zeta_entry", 128),
+        kernel("alpha_kernel", "alpha_entry", 64),
+    ];
+    module
+}
+
+#[test]
+fn multi_entry_module_matches_exact_golden() {
+    let actual = lower_compiler_module_to_llvm_ir(&compiler_module()).expect("supported module");
+    assert_eq!(actual, include_str!("fixtures/compiler_module_g3.ll"));
+    assert_eq!(actual.matches("define i32 @scale").count(), 1);
+    assert_eq!(actual.matches("define i32 @public_adjust").count(), 1);
+    assert_eq!(actual.matches("declare i32 @external_bias").count(), 1);
+    assert!(!actual.contains("@alpha_entry"));
+    assert!(!actual.contains("@zeta_entry"));
+}
+
+#[test]
+fn canonical_order_is_independent_of_module_vector_order() {
+    let baseline = lower_compiler_module_to_llvm_ir(&compiler_module()).unwrap();
+    let mut permuted = compiler_module();
+    permuted.functions.reverse();
+    permuted.kernels.reverse();
+    assert_eq!(
+        lower_compiler_module_to_llvm_ir(&permuted).unwrap(),
+        baseline
+    );
+}
+
+#[test]
+fn pointer_declarations_and_visible_definitions_preserve_physical_types() {
+    let pointer = Type::pointer(
+        Type::Scalar(fe2o3_kernel_ir::ScalarType::I32),
+        AddressSpace::Global,
+        AccessMode::ReadOnly,
+    );
+    let mut module = compiler_module();
+    module.functions.push(Function::declaration(
+        "consume_pointer",
+        Signature::new(vec![pointer.clone()], vec![]),
+    ));
+    module.functions.push(Function::definition(
+        "identity_pointer",
+        Signature::new(vec![pointer.clone()], vec![pointer]),
+        vec![ValueId(0)],
+        vec![returning_block(vec![], vec![ValueId(0)])],
+    ));
+
+    let llvm = lower_compiler_module_to_llvm_ir(&module).unwrap();
+    assert!(llvm.contains("declare void @consume_pointer(ptr addrspace(1))"));
+    assert!(
+        llvm.contains("define ptr addrspace(1) @identity_pointer(ptr addrspace(1) %arg0) nounwind")
+    );
+    assert!(llvm.contains("ret ptr addrspace(1) %arg0"));
+}
+
+#[test]
+fn intrinsic_declarations_are_aggregated_once_across_kernel_entries() {
+    let mut module = compiler_module();
+    for entry in ["alpha_entry", "zeta_entry"] {
+        let function = module
+            .functions
+            .iter_mut()
+            .find(|function| function.id.as_str() == entry)
+            .unwrap();
+        function.body.as_mut().unwrap().blocks[0].operations.insert(
+            0,
+            Operation::effect_free(
+                ValueDef::new(ValueId(20), Type::INDEX),
+                OperationKind::Intrinsic(IntrinsicOperation::global_id_1d()),
+            ),
+        );
+    }
+
+    let llvm = lower_compiler_module_to_llvm_ir(&module).unwrap();
+    assert_eq!(
+        llvm.matches("declare i32 @llvm.amdgcn.workitem.id.x")
+            .count(),
+        1
+    );
+    assert_eq!(
+        llvm.matches("declare i32 @llvm.amdgcn.workgroup.id.x")
+            .count(),
+        1
+    );
+    assert!(llvm.contains("attributes #2 = { nounwind readnone speculatable willreturn }"));
+}
+
+#[test]
+fn missing_kernels_and_output_namespace_collisions_fail_closed() {
+    let mut missing = compiler_module();
+    missing.kernels.clear();
+    let error = lower_compiler_module_to_llvm_ir(&missing).unwrap_err();
+    assert!(error.contains(LoweringDiagnosticCode::MissingKernel));
+
+    let mut collision = compiler_module();
+    collision.kernels[0].id = "scale".into();
+    let error = lower_compiler_module_to_llvm_ir(&collision).unwrap_err();
+    assert!(error.contains(LoweringDiagnosticCode::ConflictingSymbol));
+}
+
+#[test]
+fn duplicate_function_names_are_rejected_before_symbol_planning() {
+    let mut module = compiler_module();
+    module.functions.push(Function::declaration(
+        "scale",
+        Signature::new(vec![], vec![]),
+    ));
+    let error = lower_compiler_module_to_llvm_ir(&module).unwrap_err();
+    assert!(error.contains(LoweringDiagnosticCode::InputVerification(
+        fe2o3_kernel_ir::DiagnosticCode::DuplicateFunction,
+    )));
+}
+
+#[test]
+fn one_definition_cannot_back_multiple_kernel_exports() {
+    let mut module = compiler_module();
+    module.kernels[1].entry = module.kernels[0].entry.clone();
+    let error = lower_compiler_module_to_llvm_ir(&module).unwrap_err();
+    assert!(error.contains(LoweringDiagnosticCode::ConflictingSymbol));
+}
+
+#[test]
+fn helpers_cannot_call_kernel_entries() {
+    let mut module = compiler_module();
+    let scale = module
+        .functions
+        .iter_mut()
+        .find(|function| function.id.as_str() == "scale")
+        .unwrap();
+    let body = scale.body.as_mut().unwrap();
+    body.blocks[0].operations.insert(
+        0,
+        Operation::new(
+            vec![],
+            OperationKind::Call {
+                callee: "alpha_entry".into(),
+                arguments: vec![ValueId(0)],
+            },
+        ),
+    );
+
+    let error = lower_compiler_module_to_llvm_ir(&module).unwrap_err();
+    assert!(error.contains(LoweringDiagnosticCode::UnsupportedOperation));
+    assert!(
+        error
+            .to_string()
+            .contains("kernel entry function alpha_entry")
+    );
+}
+
+#[test]
+fn unsupported_helper_abis_and_context_dependent_bodies_are_atomic_errors() {
+    let mut slice = compiler_module();
+    slice.functions.push(Function::declaration(
+        "slice_import",
+        Signature::new(
+            vec![Type::slice(
+                Type::F32,
+                fe2o3_kernel_ir::AddressSpace::Global,
+                fe2o3_kernel_ir::AccessMode::ReadOnly,
+            )],
+            vec![],
+        ),
+    ));
+    let error = lower_compiler_module_to_llvm_ir(&slice).unwrap_err();
+    assert!(error.contains(LoweringDiagnosticCode::UnsupportedParameter));
+
+    let mut contextual = compiler_module();
+    let scale = contextual
+        .functions
+        .iter_mut()
+        .find(|function| function.id.as_str() == "scale")
+        .unwrap();
+    let body = scale.body.as_mut().unwrap();
+    body.blocks[0].operations.insert(
+        0,
+        Operation::effect_free(
+            ValueDef::new(ValueId(3), Type::INDEX),
+            OperationKind::Intrinsic(IntrinsicOperation::global_id_1d()),
+        ),
+    );
+    let error = lower_compiler_module_to_llvm_ir(&contextual).unwrap_err();
+    assert!(error.contains(LoweringDiagnosticCode::UnsupportedOperation));
+    assert!(error.to_string().contains("function scale"));
+}
+
+#[test]
+fn unsafe_import_names_and_multi_value_results_are_rejected() {
+    let mut unsafe_name = compiler_module();
+    unsafe_name.functions.push(Function::declaration(
+        "external::bias",
+        Signature::new(vec![], vec![]),
+    ));
+    let error = lower_compiler_module_to_llvm_ir(&unsafe_name).unwrap_err();
+    assert!(error.contains(LoweringDiagnosticCode::UnsafeSymbolName));
+
+    let mut multiple = compiler_module();
+    multiple.functions.push(Function::declaration(
+        "pair_import",
+        Signature::new(
+            vec![],
+            vec![
+                Type::Scalar(fe2o3_kernel_ir::ScalarType::I32),
+                Type::Scalar(fe2o3_kernel_ir::ScalarType::I32),
+            ],
+        ),
+    ));
+    let error = lower_compiler_module_to_llvm_ir(&multiple).unwrap_err();
+    assert!(error.contains(LoweringDiagnosticCode::UnsupportedResults));
+}
