@@ -1,10 +1,12 @@
+use reserved_fe2o3_symbols::CrateBindingIdV1;
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
+use syn::parse::Parser;
 use syn::visit::{self, Visit};
-use syn::{Attribute, Expr, ExprMethodCall, ItemFn, Lit, Meta};
+use syn::{Attribute, Expr, ExprMethodCall, ItemFn, Lit, Meta, Token, punctuated::Punctuated};
 
 const MANIFEST_PATH: &str = "examples/regression-manifest-v1.txt";
 const MANIFEST_VERSION: &str = "fe2o3-example-regressions-v1";
@@ -445,9 +447,35 @@ fn is_typed_kernel_attribute(attribute: &Attribute) -> bool {
     let Some(segment) = list.path.segments.last() else {
         return false;
     };
-    segment.ident == "kernel"
-        && segment.arguments.is_empty()
-        && syn::parse2::<syn::Ident>(list.tokens.clone()).is_ok_and(|argument| argument == "typed")
+    if segment.ident != "kernel" || !segment.arguments.is_empty() {
+        return false;
+    }
+
+    let Ok(arguments) = Punctuated::<Meta, Token![,]>::parse_terminated.parse2(list.tokens.clone())
+    else {
+        return false;
+    };
+    let mut typed = false;
+    let mut namespace = false;
+    for argument in arguments {
+        match argument {
+            Meta::Path(path) if path.is_ident("typed") && !typed => typed = true,
+            Meta::NameValue(value) if value.path.is_ident("namespace") && !namespace => {
+                let Expr::Lit(literal) = value.value else {
+                    return false;
+                };
+                let Lit::Str(literal) = literal.lit else {
+                    return false;
+                };
+                if CrateBindingIdV1::from_hex(&literal.value()).is_err() {
+                    return false;
+                }
+                namespace = true;
+            }
+            _ => return false,
+        }
+    }
+    typed
 }
 
 fn source_artifact_literals(source: &str) -> Result<Vec<String>, String> {
@@ -623,6 +651,24 @@ pub fn vecadd() {}
 #[fe2o3_device::kernel(typed)]
 pub fn nested() {}
 
+#[kernel(
+    typed,
+    namespace = "7c0e8b256bc76d2d17529f43ca8e2ee3480c40dfd019491bd4fb1fc22c4f5f2d"
+)]
+pub fn namespaced() {}
+
+#[kernel(
+    namespace = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    typed,
+)]
+pub fn reordered() {}
+
+#[kernel(typed, namespace = "not-a-binding")]
+pub fn invalid_namespace() {}
+
+#[kernel(typed, other = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")]
+pub fn unknown_option() {}
+
 #[kernel]
 pub fn ordinary() {}
 
@@ -645,7 +691,14 @@ fn inspect(root: &std::path::Path, dynamic: &str) {
 
         assert_eq!(
             artifacts,
-            ["alpha.hsaco", "beta.hsaco", "nested.hsaco", "vecadd.hsaco"]
+            [
+                "alpha.hsaco",
+                "beta.hsaco",
+                "namespaced.hsaco",
+                "nested.hsaco",
+                "reordered.hsaco",
+                "vecadd.hsaco",
+            ]
         );
     }
 

@@ -1,0 +1,11 @@
+[package]
+name = "fe2o3-binding-kernel-a"
+edition = "2024"
+version = "0.0.0"
+publish = false
+
+[dependencies]
+fe2o3-device = { path = "../../../../../fe2o3-device" }
+fe2o3-host = { path = "../../../../../fe2o3-host" }
+
+[workspace]
