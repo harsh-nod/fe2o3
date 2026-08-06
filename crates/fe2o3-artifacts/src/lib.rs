@@ -10,6 +10,7 @@ mod decode;
 mod digest;
 mod encode;
 mod error;
+mod generated_kernel_identity;
 mod host_launch_abi;
 mod identities;
 mod manifest;
@@ -40,6 +41,9 @@ pub use container_encode::{
 pub use digest::{DigestAlgorithm, DigestMismatch, PayloadDigest};
 pub use encode::{MANIFEST_MAGIC, MANIFEST_VERSION, MAX_MANIFEST_BYTES};
 pub use error::{DecodeError, ValidationError};
+pub use generated_kernel_identity::{
+    GENERATED_KERNEL_IDENTITY_DOMAIN_V2, derive_generated_kernel_identity_v2,
+};
 pub use host_launch_abi::{HostLaunchAbi, HostLaunchAbiError};
 pub use identities::{
     BlockSize, Capability, CodeObjectFormat, CodeObjectIdentity, CompilerIdentity, DigestBytes,
