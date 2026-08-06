@@ -10,11 +10,20 @@ use rustc_middle::ty::{
 use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::fmt;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum TypedKernelProfile {
+    VecAddV1,
+}
+
 #[derive(Clone, Debug)]
 pub struct CollectedFunction<'tcx> {
     pub instance: Instance<'tcx>,
     pub is_kernel: bool,
     pub export_name: String,
+    /// Present only for registered kernel roots.
+    pub(crate) logical_name: Option<String>,
+    /// Present only when the registration selects a versioned typed profile.
+    pub(crate) typed_profile: Option<TypedKernelProfile>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -56,11 +65,12 @@ pub fn collect_device_functions<'tcx>(
     for root in kernel_roots(tcx, cgus).map_err(CollectError::from)? {
         let instance = root.target;
         let raw_name = tcx.def_path_str(instance.def_id());
+        let logical_name = root.logical_name;
         let export_name = root.export_name;
         if verbose {
             eprintln!("[collector] root kernel: {raw_name} -> {export_name}");
         }
-        collector.add_root(instance, export_name);
+        collector.add_root(instance, logical_name, export_name, root.typed_profile);
     }
 
     collector.collect()
@@ -71,6 +81,8 @@ pub fn dump_device_functions<'tcx>(tcx: TyCtxt<'tcx>, functions: &[CollectedFunc
         .iter()
         .map(|function| {
             let def_id = function.instance.def_id();
+            debug_assert_eq!(function.is_kernel, function.logical_name.is_some());
+            debug_assert!(function.is_kernel || function.typed_profile.is_none());
             let mir_stats = if tcx.is_mir_available(def_id) {
                 let mir = tcx.instance_mir(function.instance.def);
                 format!(
@@ -84,11 +96,12 @@ pub fn dump_device_functions<'tcx>(tcx: TyCtxt<'tcx>, functions: &[CollectedFunc
             };
             (
                 function.export_name.clone(),
-                if function.is_kernel {
-                    "kernel"
-                } else {
-                    "device"
+                match function.typed_profile {
+                    Some(TypedKernelProfile::VecAddV1) => "kernel/typed-vecadd-v1",
+                    None if function.is_kernel => "kernel",
+                    None => "device",
                 },
+                function.logical_name.clone(),
                 tcx.crate_name(def_id.krate).to_string(),
                 tcx.def_path_str(def_id),
                 mir_stats,
@@ -96,11 +109,14 @@ pub fn dump_device_functions<'tcx>(tcx: TyCtxt<'tcx>, functions: &[CollectedFunc
         })
         .collect::<Vec<_>>();
 
-    rows.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.2.cmp(&b.2)));
+    rows.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.3.cmp(&b.3)));
 
     eprintln!("\n=== fe2o3 device function collection ===");
-    for (export_name, kind, crate_name, path, mir_stats) in rows {
+    for (export_name, kind, logical_name, crate_name, path, mir_stats) in rows {
         eprintln!("  [{kind}] {export_name}");
+        if let Some(logical_name) = logical_name.filter(|name| name != &export_name) {
+            eprintln!("      logical name: {logical_name}");
+        }
         eprintln!("      crate: {crate_name}");
         eprintln!("      path: {path}");
         eprintln!("      MIR:  {mir_stats}");
@@ -127,6 +143,7 @@ struct KernelRoot<T> {
     target: T,
     logical_name: String,
     export_name: String,
+    typed_profile: Option<TypedKernelProfile>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -537,9 +554,13 @@ fn validate_registration_records<T: Copy>(
                 record.version
             )));
         }
-        if record.kind != reserved_fe2o3_symbols::KERNEL_REGISTRATION_KIND_KERNEL {
-            return Err(error(format!("unknown registration kind {}", record.kind)));
-        }
+        let typed_profile = match record.kind {
+            reserved_fe2o3_symbols::KERNEL_REGISTRATION_KIND_KERNEL => None,
+            reserved_fe2o3_symbols::KERNEL_REGISTRATION_KIND_TYPED_VECADD_V1 => {
+                Some(TypedKernelProfile::VecAddV1)
+            }
+            _ => return Err(error(format!("unknown registration kind {}", record.kind))),
+        };
         if record.logical_name.is_empty() {
             return Err(error("logical name must not be empty".to_string()));
         }
@@ -594,6 +615,7 @@ fn validate_registration_records<T: Copy>(
             target: record.target,
             logical_name: record.logical_name,
             export_name: record.export_name,
+            typed_profile,
         });
     }
 
@@ -659,7 +681,13 @@ impl<'tcx> DeviceCollector<'tcx> {
         }
     }
 
-    fn add_root(&mut self, instance: Instance<'tcx>, export_name: String) {
+    fn add_root(
+        &mut self,
+        instance: Instance<'tcx>,
+        logical_name: String,
+        export_name: String,
+        typed_profile: Option<TypedKernelProfile>,
+    ) {
         let symbol = self.tcx.symbol_name(instance).name.to_string();
         if self.seen.insert(symbol) {
             self.used_export_names.insert(export_name.clone());
@@ -667,6 +695,8 @@ impl<'tcx> DeviceCollector<'tcx> {
                 instance,
                 is_kernel: true,
                 export_name,
+                logical_name: Some(logical_name),
+                typed_profile,
             });
         }
     }
@@ -790,6 +820,8 @@ impl<'tcx> DeviceCollector<'tcx> {
             instance: resolved,
             is_kernel: false,
             export_name,
+            logical_name: None,
+            typed_profile: None,
         });
         Ok(())
     }
@@ -909,10 +941,10 @@ fn sanitize_symbol_name(name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{RegistrationRecord, validate_registration_records};
+    use super::{RegistrationRecord, TypedKernelProfile, validate_registration_records};
     use reserved_fe2o3_symbols::{
-        KERNEL_PREFIX, KERNEL_REGISTRATION_KIND_KERNEL, KERNEL_REGISTRATION_MAGIC,
-        KERNEL_REGISTRATION_PREFIX, KERNEL_REGISTRATION_VERSION_V1,
+        KERNEL_PREFIX, KERNEL_REGISTRATION_KIND_KERNEL, KERNEL_REGISTRATION_KIND_TYPED_VECADD_V1,
+        KERNEL_REGISTRATION_MAGIC, KERNEL_REGISTRATION_PREFIX, KERNEL_REGISTRATION_VERSION_V1,
     };
 
     fn registration(
@@ -949,6 +981,26 @@ mod tests {
         assert_eq!(roots[0].target, 7);
         assert_eq!(roots[0].logical_name, "vecadd");
         assert_eq!(roots[0].export_name, "vecadd");
+        assert_eq!(roots[0].typed_profile, None);
+    }
+
+    #[test]
+    fn typed_vecadd_registration_carries_its_profile_into_the_kernel_root() {
+        let mut typed = registration(
+            "crate::__fe2o3_kernel_registration_vecadd",
+            "vecadd",
+            "vecadd",
+            7,
+        );
+        typed.kind = KERNEL_REGISTRATION_KIND_TYPED_VECADD_V1;
+
+        let roots = validate_registration_records(vec![typed]).unwrap();
+
+        assert_eq!(roots.len(), 1);
+        assert_eq!(roots[0].target, 7);
+        assert_eq!(roots[0].logical_name, "vecadd");
+        assert_eq!(roots[0].export_name, "vecadd");
+        assert_eq!(roots[0].typed_profile, Some(TypedKernelProfile::VecAddV1));
     }
 
     #[test]
@@ -979,14 +1031,16 @@ mod tests {
                 .contains("unknown registration version")
         );
 
-        let mut unknown_kind = base;
-        unknown_kind.kind = KERNEL_REGISTRATION_KIND_KERNEL + 1;
-        assert!(
-            validate_registration_records(vec![unknown_kind])
-                .unwrap_err()
-                .reason
-                .contains("unknown registration kind")
-        );
+        for kind in [0, KERNEL_REGISTRATION_KIND_TYPED_VECADD_V1 + 1, u16::MAX] {
+            let mut unknown_kind = base.clone();
+            unknown_kind.kind = kind;
+            assert_eq!(
+                validate_registration_records(vec![unknown_kind])
+                    .unwrap_err()
+                    .reason,
+                format!("unknown registration kind {kind}")
+            );
+        }
     }
 
     #[test]
@@ -1023,6 +1077,29 @@ mod tests {
         ])
         .unwrap_err();
         assert!(export_error.reason.contains("duplicate export name `same`"));
+
+        let mut typed_duplicate = registration(
+            "crate::b::__fe2o3_kernel_registration_same",
+            "same",
+            "typed",
+            2,
+        );
+        typed_duplicate.kind = KERNEL_REGISTRATION_KIND_TYPED_VECADD_V1;
+        let cross_kind_error = validate_registration_records(vec![
+            registration(
+                "crate::a::__fe2o3_kernel_registration_same",
+                "same",
+                "basic",
+                1,
+            ),
+            typed_duplicate,
+        ])
+        .unwrap_err();
+        assert!(
+            cross_kind_error
+                .reason
+                .contains("duplicate logical name `same`")
+        );
     }
 
     #[test]
