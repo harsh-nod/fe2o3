@@ -17,12 +17,17 @@ use fe2o3_kernel_descriptor::{
 };
 
 mod link_plan;
+mod request_construction;
 mod worker_protocol;
 
 pub use link_plan::{
     ContentIdentityV1, LinkInputV1, LinkOptionV1, LinkOutputV1, LinkPlanError, LinkPlanIdentityV1,
     MAX_LINK_INPUTS, MAX_LINK_OPTION_NAME_BYTES, MAX_LINK_OPTION_VALUE_BYTES, MAX_LINK_OPTIONS,
     MAX_LINK_PROVENANCE_EDGES, MAX_LINK_PROVENANCE_NODES, MultiInputLinkPlanV1, ProvenanceNodeV1,
+};
+pub use request_construction::{
+    LinkSymbolClosureIdentityV1, LinkSymbolClosureV1, WorkerRequestConstructionError,
+    construct_worker_request_v1,
 };
 pub use worker_protocol::{
     MAX_WORKER_DIAGNOSTIC_BYTES, MAX_WORKER_DIAGNOSTICS, MAX_WORKER_OUTPUT_BYTES,

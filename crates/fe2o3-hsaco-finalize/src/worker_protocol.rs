@@ -711,7 +711,7 @@ fn validate_input_order(inputs: &[WorkerInputV1]) -> Result<(), WorkerProtocolEr
     Ok(())
 }
 
-fn validate_symbols(symbols: &[String]) -> Result<(), WorkerProtocolError> {
+pub(crate) fn validate_symbols(symbols: &[String]) -> Result<(), WorkerProtocolError> {
     if symbols.len() > MAX_WORKER_SYMBOLS {
         return Err(WorkerProtocolError::TooManySymbols);
     }
