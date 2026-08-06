@@ -1,5 +1,6 @@
 mod argument_alias;
 mod artifact_binding;
+mod generated_argument_plan;
 mod generated_vecadd;
 mod loaded_kernel;
 mod prepared_launch;
@@ -25,6 +26,12 @@ pub use artifact_binding::{
 pub use fe2o3_core::{KernelParams, LaunchConfig};
 pub use fe2o3_kernel_descriptor::{BlockSizeV1, DimensionsV1, KernelId, LaunchConstraintsV1};
 #[doc(hidden)]
+pub use generated_argument_plan::{
+    CompilerGeneratedArgumentLayoutV1, GeneratedArgumentFieldProperty,
+    GeneratedArgumentLayoutError, GeneratedArgumentPackingError, GeneratedArgumentPackingPlanV1,
+    GeneratedPackingComponentKindV1, GeneratedPackingComponentV1,
+};
+#[doc(hidden)]
 pub use generated_vecadd::{
     GeneratedVecAddKernelV1, GeneratedVecAddLoadError, GeneratedVecAddPrepareError,
     GeneratedVecAddPreparedV1, GeneratedVecAddProfileError,
@@ -46,13 +53,15 @@ pub use prepared_launch::{
 #[doc(hidden)]
 pub mod __generated {
     pub use crate::{
-        AuthenticatedKernelArtifactV1, CompilerGeneratedKernelContractV1,
-        CompilerGeneratedKernelProfileV1, GeneratedAdmittedLaunch,
+        AuthenticatedKernelArtifactV1, CompilerGeneratedArgumentLayoutV1,
+        CompilerGeneratedKernelContractV1, CompilerGeneratedKernelProfileV1,
+        GeneratedAdmittedLaunch, GeneratedArgumentFieldProperty, GeneratedArgumentLayoutError,
+        GeneratedArgumentPackingError, GeneratedArgumentPackingPlanV1,
         GeneratedArtifactAuthenticationError, GeneratedKernelBindingV1,
-        GeneratedKernelProfileError, GeneratedMarkerBindingError, GeneratedReadDeviceSlice,
-        GeneratedVecAddKernelV1, GeneratedVecAddLoadError, GeneratedVecAddPrepareError,
-        GeneratedVecAddPreparedV1, GeneratedVecAddProfileError, GeneratedWriteDeviceSlice,
-        LoadedKernelLoadError,
+        GeneratedKernelProfileError, GeneratedMarkerBindingError, GeneratedPackingComponentKindV1,
+        GeneratedPackingComponentV1, GeneratedReadDeviceSlice, GeneratedVecAddKernelV1,
+        GeneratedVecAddLoadError, GeneratedVecAddPrepareError, GeneratedVecAddPreparedV1,
+        GeneratedVecAddProfileError, GeneratedWriteDeviceSlice, LoadedKernelLoadError,
     };
 
     /// Constructs the exact immutable slice promised by a generated backend

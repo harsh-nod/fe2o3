@@ -1,0 +1,5 @@
+error[E0616]: field `fields` of struct `fe2o3_host::GeneratedArgumentPackingPlanV1` is private
+ --> tests/ui/generated_spi/fail/packing_plan_raw_fields_are_private.rs:4:18
+  |
+4 |     let _ = plan.fields;
+  |                  ^^^^^^ private field
