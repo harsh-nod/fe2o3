@@ -66,8 +66,8 @@ separate compiler-derived complete required-symbol set, so it never invents kern
 FFI names.
 
 `bind_compiler_ffi_closure_v1` accepts exact caller-supplied input roles and provider bindings. Input
-bindings must match the existing `MultiInputLinkPlanV1` canonical input sequence byte-for-byte by
-content identity. Every Rust definition must bind to the one Rust compiler LLVM-bitcode input;
+bindings must match the existing `MultiInputLinkPlanV1` canonical input sequence exactly by digest
+and byte length. Every Rust definition must bind to the one Rust compiler LLVM-bitcode input;
 every external import must bind to one exact external provider input and its exact
 `WorkerInputKindV1`. Contract IDs, source-owner IDs, target, code-object version, input identities,
 kinds, roles, ordering, cardinality, and reciprocal references are checked before the bridge creates

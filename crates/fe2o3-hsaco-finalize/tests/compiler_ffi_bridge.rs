@@ -320,11 +320,11 @@ fn canonical_bytes_and_identities_are_domain_separated_and_stable() {
     );
     assert_eq!(
         hex(fixture.compiler.identity().as_bytes()),
-        "b44a499036d31078cdb2425b75f8dbdcde3960c151e153f53ace3ec171709908"
+        "908b69b538a599d6c3499ecff0a3d746863f31561f975a63ee5be27708811388"
     );
     assert_eq!(
         hex(first.identity().as_bytes()),
-        "8738bb9b71aaf1fb1e6a5a9c8ee9f1a276fb3503809acc596c7b26d78a74a01e"
+        "2c563bc51223174f2565d3184b69eece6788d1211d442b1410ac8d2cd38a8bad"
     );
 }
 
@@ -358,6 +358,34 @@ fn field_origins_do_not_upgrade_declaration_claims() {
     assert_eq!(declared.origin(), CompilerFfiFieldOriginV1::DeclaredClaim);
     assert!(!declared.effects_are_derived());
     assert!(!declared.semantics_are_verified());
+}
+
+#[test]
+fn source_owner_identity_uses_stable_instance_fields_not_labels() {
+    let first = CompilerFfiSourceOwnerV1::new(
+        "first_label",
+        "first_label::path",
+        [7; 16],
+        "_Rstable_instance",
+    )
+    .unwrap();
+    let relabeled = CompilerFfiSourceOwnerV1::new(
+        "second_label",
+        "second_label::different_path",
+        [7; 16],
+        "_Rstable_instance",
+    )
+    .unwrap();
+    let other_instance = CompilerFfiSourceOwnerV1::new(
+        "first_label",
+        "first_label::path",
+        [7; 16],
+        "_Rother_instance",
+    )
+    .unwrap();
+
+    assert_eq!(first.identity(), relabeled.identity());
+    assert_ne!(first.identity(), other_instance.identity());
 }
 
 #[test]
@@ -813,6 +841,27 @@ fn compiler_input_is_unique_typed_and_referenced() {
             fixture.providers.clone()
         ),
         Err(CompilerFfiBridgeError::MultipleRustCompilerInputs)
+    );
+
+    let mut missing_compiler = fixture.plan_inputs.clone();
+    let rust_index = missing_compiler
+        .iter()
+        .position(|binding| binding.identity() == fixture.rust_input)
+        .unwrap();
+    missing_compiler[rust_index] = CompilerFfiPlanInputBindingV1::new(
+        fixture.rust_input,
+        WorkerInputKindV1::LlvmBitcode,
+        CompilerFfiPlanInputRoleV1::LinkSupport,
+    )
+    .unwrap();
+    assert_eq!(
+        bind_compiler_ffi_closure_v1(
+            &fixture.plan,
+            &fixture.compiler,
+            missing_compiler,
+            fixture.providers.clone()
+        ),
+        Err(CompilerFfiBridgeError::MissingRustCompilerInput)
     );
 
     let mut unreferenced_external = fixture.plan_inputs.clone();

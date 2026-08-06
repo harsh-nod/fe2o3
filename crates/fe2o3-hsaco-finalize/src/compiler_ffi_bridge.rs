@@ -106,6 +106,11 @@ impl CompilerFfiSourceOwnerIdentityV1 {
 }
 
 /// Compiler-derived owner of one concrete FFI declaration or definition.
+///
+/// The stable identity uses only `def_path_hash` and
+/// `concrete_instance_symbol`. The crate name and item path are retained in
+/// canonical records as diagnostic labels, but relabeling does not change
+/// source-owner identity.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CompilerFfiSourceOwnerV1 {
     crate_name: String,
@@ -143,13 +148,11 @@ impl CompilerFfiSourceOwnerV1 {
             MAX_COMPILER_FFI_INSTANCE_SYMBOL_BYTES_V1,
         )?;
 
-        let mut canonical = Vec::new();
-        canonical.extend_from_slice(SOURCE_OWNER_DOMAIN_V1);
-        push_text(&mut canonical, &crate_name);
-        push_text(&mut canonical, &item_path);
-        canonical.extend_from_slice(&def_path_hash);
-        push_text(&mut canonical, &concrete_instance_symbol);
-        let identity = CompilerFfiSourceOwnerIdentityV1(Sha256::digest(canonical).into());
+        let mut identity_preimage = Vec::new();
+        identity_preimage.extend_from_slice(SOURCE_OWNER_DOMAIN_V1);
+        identity_preimage.extend_from_slice(&def_path_hash);
+        push_text(&mut identity_preimage, &concrete_instance_symbol);
+        let identity = CompilerFfiSourceOwnerIdentityV1(Sha256::digest(identity_preimage).into());
         Ok(Self {
             crate_name,
             item_path,
@@ -1002,6 +1005,17 @@ fn validate_provider_bindings(
     plan_inputs: &[CompilerFfiPlanInputBindingV1],
     bindings: &[CompilerFfiProviderBindingV1],
 ) -> Result<(), CompilerFfiBridgeError> {
+    let has_rust_definitions = compiler
+        .symbols
+        .iter()
+        .any(|symbol| symbol.definition == CompilerFfiDefinitionV1::RustCompilerBitcode);
+    if has_rust_definitions
+        && !plan_inputs
+            .iter()
+            .any(|input| input.role == CompilerFfiPlanInputRoleV1::RustCompilerBitcode)
+    {
+        return Err(CompilerFfiBridgeError::MissingRustCompilerInput);
+    }
     let symbols_by_contract: BTreeMap<_, _> = compiler
         .symbols
         .iter()
@@ -1072,16 +1086,6 @@ fn validate_provider_bindings(
                 symbol.contract_identity,
             ));
         }
-    }
-    if compiler
-        .symbols
-        .iter()
-        .any(|symbol| symbol.definition == CompilerFfiDefinitionV1::RustCompilerBitcode)
-        && !plan_inputs
-            .iter()
-            .any(|input| input.role == CompilerFfiPlanInputRoleV1::RustCompilerBitcode)
-    {
-        return Err(CompilerFfiBridgeError::MissingRustCompilerInput);
     }
     for input in plan_inputs {
         if matches!(
@@ -1303,6 +1307,8 @@ fn derive_contract_identity(
     physical_abi: &str,
     declared: &CompilerFfiDeclaredClaimsV1,
 ) -> CompilerFfiContractIdentityV1 {
+    // This is the compiler-marker V1 preimage. Keeping the compatibility code
+    // here avoids making the plan/request crate depend on compiler integration.
     let target = declared.target.to_string();
     let semantic_identity = lower_hex(&declared.semantic_claim);
     let mut digest = Sha256::new();
