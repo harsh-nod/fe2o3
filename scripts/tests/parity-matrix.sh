@@ -46,8 +46,8 @@ reset_case
 awk '{
   sub(/cd5ef3941d3347c7f6fcbfc78ef0fa7f4f179d87/,
       "dd5ef3941d3347c7f6fcbfc78ef0fa7f4f179d87")
-  sub(/\| Normative \| 0 \| 19 \| 63 \| 12 \| 94 \|/,
-      "| Normative | 0 | 18 | 64 | 12 | 94 |")
+  sub(/\| Normative \| 0 \| 21 \| 61 \| 12 \| 94 \|/,
+      "| Normative | 0 | 20 | 62 | 12 | 94 |")
   if ($0 ~ /^\| 01 \|/) {
     sub(/\| Missing \|/, "| Partial |")
   }
@@ -114,8 +114,8 @@ expect_check_failure invalid_markdown_status \
 
 reset_case
 awk '{
-  sub(/\| Normative \| 0 \| 19 \| 63 \| 12 \| 94 \|/,
-      "| Normative | 0 | 18 | 63 | 12 | 94 |")
+  sub(/\| Normative \| 0 \| 21 \| 61 \| 12 \| 94 \|/,
+      "| Normative | 0 | 20 | 61 | 12 | 94 |")
   print
 }' "${TEST_ROOT}/matrix.md" >"${TEST_ROOT}/matrix.md.new"
 replace_file "${TEST_ROOT}/matrix.md"
@@ -125,8 +125,8 @@ reset_case
 awk '{
   sub(/cd5ef3941d3347c7f6fcbfc78ef0fa7f4f179d87/,
       "dd5ef3941d3347c7f6fcbfc78ef0fa7f4f179d87")
-  sub(/0530734917cb1f0f67273c30074229369cc2904e/,
-      "1530734917cb1f0f67273c30074229369cc2904e")
+  sub(/62e375d8273285514e43ab1678fb24c772133fa4/,
+      "72e375d8273285514e43ab1678fb24c772133fa4")
   print
 }' "${TEST_ROOT}/matrix.md" >"${TEST_ROOT}/matrix.md.new"
 replace_file "${TEST_ROOT}/matrix.md"
