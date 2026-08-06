@@ -10,13 +10,400 @@ use crate::trusted_device_items::TrustedDeviceItem;
 use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, BasicBlock, BinaryOp, BlockId, ComparePredicate, Constant,
     FunctionBody, IntrinsicOperation, KernelId, MemoryAccess, Module, Operation, OperationKind,
-    Terminator, Type, ValueDef, ValueId, WorkgroupSize, verify_module,
+    TargetCapability, Terminator, Type, ValueDef, ValueId, WorkgroupSize, verify_module,
 };
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 
 const FILL_KERNEL: &str = "fill";
 const VECADD_KERNEL: &str = "vecadd";
 const WORKGROUP_X: u32 = 256;
+
+const MAX_COMPILER_MODULE_ID_BYTES: usize = 256;
+const MAX_COMPILER_MODULE_SYMBOL_BYTES: usize = 256;
+const MAX_COMPILER_MODULE_FUNCTIONS: usize = 1_024;
+const MAX_COMPILER_MODULE_KERNELS: usize = 256;
+const MAX_COMPILER_MODULE_CAPABILITIES: usize = 4_096;
+const MAX_COMPILER_MODULE_PARAMETERS: usize = 64;
+const MAX_COMPILER_MODULE_RESULTS: usize = 8;
+const MAX_COMPILER_MODULE_BLOCKS: usize = 16_384;
+const MAX_COMPILER_MODULE_BLOCK_PARAMETERS: usize = 65_536;
+const MAX_COMPILER_MODULE_OPERATIONS: usize = 131_072;
+const MAX_COMPILER_MODULE_OPERATION_RESULTS: usize = 131_072;
+const MAX_COMPILER_MODULE_CALL_ARGUMENTS: usize = 64;
+const MAX_COMPILER_MODULE_CFG_ARGUMENTS: usize = 65_536;
+const MAX_COMPILER_MODULE_SWITCH_CASES: usize = 65_536;
+const MAX_COMPILER_MODULE_TYPE_DEPTH: usize = 8;
+const MAX_COMPILER_MODULE_TEXT_BYTES: usize = 16 * 1024 * 1024;
+
+/// One inert, deterministic textual LLVM AMDGPU module.
+///
+/// This value is not LLVM bitcode, a link result, a code object, compiler provenance, or load
+/// authority. The API is intentionally not connected to rustc collection yet.
+#[allow(dead_code)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct InertCompilerModuleTextV1 {
+    llvm_ir: String,
+    kernel_entries: Vec<String>,
+    device_definitions: Vec<String>,
+    external_declarations: Vec<String>,
+}
+
+#[allow(dead_code)]
+impl InertCompilerModuleTextV1 {
+    pub(crate) fn llvm_ir(&self) -> &str {
+        &self.llvm_ir
+    }
+
+    pub(crate) fn kernel_entries(&self) -> &[String] {
+        &self.kernel_entries
+    }
+
+    pub(crate) fn device_definitions(&self) -> &[String] {
+        &self.device_definitions
+    }
+
+    pub(crate) fn external_declarations(&self) -> &[String] {
+        &self.external_declarations
+    }
+}
+
+/// Fail-closed compiler-module construction error.
+#[allow(dead_code)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum CompilerModuleConstructionError {
+    LimitExceeded {
+        field: &'static str,
+        actual: usize,
+        max: usize,
+    },
+    Lowering(dialect_amdgcn::LoweringErrors),
+}
+
+impl fmt::Display for CompilerModuleConstructionError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::LimitExceeded { field, actual, max } => {
+                write!(formatter, "{field} count/size {actual} exceeds limit {max}")
+            }
+            Self::Lowering(error) => write!(formatter, "{error}"),
+        }
+    }
+}
+
+impl std::error::Error for CompilerModuleConstructionError {}
+
+/// Constructs one bounded canonical textual module without invoking or wiring LLVM.
+///
+/// Structural bounds are checked before kernel-IR verification. The dialect lowerer then
+/// preflights every kernel, helper, declaration, call, attribute, and metadata record before its
+/// private emission pass. An error returns no partially constructed module.
+#[allow(dead_code)]
+pub(crate) fn construct_inert_compiler_module_text_v1(
+    module: &Module,
+) -> Result<InertCompilerModuleTextV1, CompilerModuleConstructionError> {
+    enforce_compiler_module_bounds(module)?;
+    let llvm_ir = dialect_amdgcn::lower_compiler_module_to_llvm_ir(module)
+        .map_err(CompilerModuleConstructionError::Lowering)?;
+    check_compiler_module_limit(
+        "compiler-module textual LLVM bytes",
+        llvm_ir.len(),
+        MAX_COMPILER_MODULE_TEXT_BYTES,
+    )?;
+
+    let entry_functions = module
+        .kernels
+        .iter()
+        .map(|kernel| &kernel.entry)
+        .collect::<BTreeSet<_>>();
+    let mut kernel_entries = module
+        .kernels
+        .iter()
+        .map(|kernel| kernel.id.as_str().to_string())
+        .collect::<Vec<_>>();
+    let mut device_definitions = module
+        .functions
+        .iter()
+        .filter(|function| function.body.is_some() && !entry_functions.contains(&function.id))
+        .map(|function| function.id.as_str().to_string())
+        .collect::<Vec<_>>();
+    let mut external_declarations = module
+        .functions
+        .iter()
+        .filter(|function| function.body.is_none() && !entry_functions.contains(&function.id))
+        .map(|function| function.id.as_str().to_string())
+        .collect::<Vec<_>>();
+    kernel_entries.sort();
+    device_definitions.sort();
+    external_declarations.sort();
+
+    Ok(InertCompilerModuleTextV1 {
+        llvm_ir,
+        kernel_entries,
+        device_definitions,
+        external_declarations,
+    })
+}
+
+fn enforce_compiler_module_bounds(module: &Module) -> Result<(), CompilerModuleConstructionError> {
+    check_compiler_module_limit(
+        "compiler-module ID bytes",
+        module.id.as_str().len(),
+        MAX_COMPILER_MODULE_ID_BYTES,
+    )?;
+    check_compiler_module_limit(
+        "compiler-module functions",
+        module.functions.len(),
+        MAX_COMPILER_MODULE_FUNCTIONS,
+    )?;
+    check_compiler_module_limit(
+        "compiler-module kernels",
+        module.kernels.len(),
+        MAX_COMPILER_MODULE_KERNELS,
+    )?;
+
+    let mut total_capabilities = module.required_capabilities.len();
+    check_compiler_module_limit(
+        "compiler-module capabilities",
+        total_capabilities,
+        MAX_COMPILER_MODULE_CAPABILITIES,
+    )?;
+    check_capability_text(&module.required_capabilities)?;
+    let mut total_blocks = 0usize;
+    let mut total_block_parameters = 0usize;
+    let mut total_operations = 0usize;
+    let mut total_operation_results = 0usize;
+    let mut total_cfg_arguments = 0usize;
+    let mut total_switch_cases = 0usize;
+
+    for function in &module.functions {
+        check_symbol_bytes(function.id.as_str())?;
+        check_compiler_module_limit(
+            "compiler-module function parameters",
+            function.signature.parameters.len(),
+            MAX_COMPILER_MODULE_PARAMETERS,
+        )?;
+        check_compiler_module_limit(
+            "compiler-module function results",
+            function.signature.results.len(),
+            MAX_COMPILER_MODULE_RESULTS,
+        )?;
+        for ty in function
+            .signature
+            .parameters
+            .iter()
+            .chain(&function.signature.results)
+        {
+            check_type_depth(ty, 0)?;
+        }
+        add_compiler_module_count(
+            "compiler-module capabilities",
+            &mut total_capabilities,
+            function.required_capabilities.len(),
+            MAX_COMPILER_MODULE_CAPABILITIES,
+        )?;
+        check_capability_text(&function.required_capabilities)?;
+
+        let Some(body) = &function.body else {
+            continue;
+        };
+        check_compiler_module_limit(
+            "compiler-module body parameters",
+            body.parameters.len(),
+            MAX_COMPILER_MODULE_PARAMETERS,
+        )?;
+        add_compiler_module_count(
+            "compiler-module blocks",
+            &mut total_blocks,
+            body.blocks.len(),
+            MAX_COMPILER_MODULE_BLOCKS,
+        )?;
+        for block in &body.blocks {
+            add_compiler_module_count(
+                "compiler-module block parameters",
+                &mut total_block_parameters,
+                block.parameters.len(),
+                MAX_COMPILER_MODULE_BLOCK_PARAMETERS,
+            )?;
+            for parameter in &block.parameters {
+                check_type_depth(&parameter.ty, 0)?;
+            }
+            add_compiler_module_count(
+                "compiler-module operations",
+                &mut total_operations,
+                block.operations.len(),
+                MAX_COMPILER_MODULE_OPERATIONS,
+            )?;
+            for operation in &block.operations {
+                add_compiler_module_count(
+                    "compiler-module operation results",
+                    &mut total_operation_results,
+                    operation.results.len(),
+                    MAX_COMPILER_MODULE_OPERATION_RESULTS,
+                )?;
+                for result in &operation.results {
+                    check_type_depth(&result.ty, 0)?;
+                }
+                check_operation_bounds(operation)?;
+            }
+            if let Some(terminator) = &block.terminator {
+                check_terminator_bounds(
+                    terminator,
+                    &mut total_cfg_arguments,
+                    &mut total_switch_cases,
+                )?;
+            }
+        }
+    }
+
+    for kernel in &module.kernels {
+        check_symbol_bytes(kernel.id.as_str())?;
+        check_symbol_bytes(kernel.entry.as_str())?;
+        add_compiler_module_count(
+            "compiler-module capabilities",
+            &mut total_capabilities,
+            kernel.required_capabilities.len(),
+            MAX_COMPILER_MODULE_CAPABILITIES,
+        )?;
+        check_capability_text(&kernel.required_capabilities)?;
+    }
+    Ok(())
+}
+
+fn check_operation_bounds(operation: &Operation) -> Result<(), CompilerModuleConstructionError> {
+    match &operation.kind {
+        OperationKind::Call { callee, arguments } => {
+            check_symbol_bytes(callee.as_str())?;
+            check_compiler_module_limit(
+                "compiler-module call arguments",
+                arguments.len(),
+                MAX_COMPILER_MODULE_CALL_ARGUMENTS,
+            )?;
+        }
+        OperationKind::Intrinsic(intrinsic) => check_type_depth(&intrinsic.result_type, 0)?,
+        OperationKind::Cast { to, .. } => check_type_depth(to, 0)?,
+        OperationKind::Alloca { element, .. }
+        | OperationKind::WorkgroupMemory(fe2o3_kernel_ir::WorkgroupMemory { element, .. }) => {
+            check_type_depth(element, 0)?;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn check_terminator_bounds(
+    terminator: &Terminator,
+    total_arguments: &mut usize,
+    total_cases: &mut usize,
+) -> Result<(), CompilerModuleConstructionError> {
+    let (arguments, cases) = match terminator {
+        Terminator::Branch { arguments, .. } => (arguments.len(), 0),
+        Terminator::ConditionalBranch {
+            then_arguments,
+            else_arguments,
+            ..
+        } => (then_arguments.len().saturating_add(else_arguments.len()), 0),
+        Terminator::Switch {
+            cases,
+            default_arguments,
+            ..
+        } => (
+            cases.iter().fold(default_arguments.len(), |total, case| {
+                total.saturating_add(case.arguments.len())
+            }),
+            cases.len(),
+        ),
+        Terminator::IntegerSwitch {
+            cases,
+            default_arguments,
+            ..
+        } => (
+            cases.iter().fold(default_arguments.len(), |total, case| {
+                total.saturating_add(case.arguments.len())
+            }),
+            cases.len(),
+        ),
+        Terminator::Return { values } => (values.len(), 0),
+        Terminator::Unreachable => (0, 0),
+    };
+    add_compiler_module_count(
+        "compiler-module CFG arguments",
+        total_arguments,
+        arguments,
+        MAX_COMPILER_MODULE_CFG_ARGUMENTS,
+    )?;
+    add_compiler_module_count(
+        "compiler-module switch cases",
+        total_cases,
+        cases,
+        MAX_COMPILER_MODULE_SWITCH_CASES,
+    )
+}
+
+fn check_type_depth(ty: &Type, depth: usize) -> Result<(), CompilerModuleConstructionError> {
+    if depth > MAX_COMPILER_MODULE_TYPE_DEPTH {
+        return Err(CompilerModuleConstructionError::LimitExceeded {
+            field: "compiler-module type nesting",
+            actual: depth,
+            max: MAX_COMPILER_MODULE_TYPE_DEPTH,
+        });
+    }
+    match ty {
+        Type::Pointer(pointer) => check_type_depth(&pointer.pointee, depth + 1),
+        Type::Slice(slice) => check_type_depth(&slice.element, depth + 1),
+        Type::Unit | Type::Scalar(_) => Ok(()),
+    }
+}
+
+fn check_capability_text(
+    capabilities: &BTreeSet<TargetCapability>,
+) -> Result<(), CompilerModuleConstructionError> {
+    for capability in capabilities {
+        if let TargetCapability::Extension { namespace, name } = capability {
+            check_compiler_module_limit(
+                "compiler-module capability namespace bytes",
+                namespace.len(),
+                MAX_COMPILER_MODULE_SYMBOL_BYTES,
+            )?;
+            check_compiler_module_limit(
+                "compiler-module capability name bytes",
+                name.len(),
+                MAX_COMPILER_MODULE_SYMBOL_BYTES,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn check_symbol_bytes(symbol: &str) -> Result<(), CompilerModuleConstructionError> {
+    check_compiler_module_limit(
+        "compiler-module symbol bytes",
+        symbol.len(),
+        MAX_COMPILER_MODULE_SYMBOL_BYTES,
+    )
+}
+
+fn add_compiler_module_count(
+    field: &'static str,
+    total: &mut usize,
+    increment: usize,
+    max: usize,
+) -> Result<(), CompilerModuleConstructionError> {
+    *total = total.saturating_add(increment);
+    check_compiler_module_limit(field, *total, max)
+}
+
+fn check_compiler_module_limit(
+    field: &'static str,
+    actual: usize,
+    max: usize,
+) -> Result<(), CompilerModuleConstructionError> {
+    if actual > max {
+        Err(CompilerModuleConstructionError::LimitExceeded { field, actual, max })
+    } else {
+        Ok(())
+    }
+}
 
 pub(crate) fn prepare_fill_collection(
     mut module: Module,
@@ -1581,5 +1968,148 @@ mod tests {
                 .to_string()
                 .contains("must use the exact trusted global thread index")
         );
+    }
+
+    fn inert_compiler_module_fixture() -> Module {
+        let mut entry_block = BasicBlock::new(BlockId(0));
+        entry_block.terminator = Some(Terminator::Return { values: vec![] });
+        let entry = Function::definition(
+            "entry_impl",
+            Signature::new(vec![], vec![]),
+            vec![],
+            vec![entry_block],
+        );
+
+        let mut helper_block = BasicBlock::new(BlockId(0));
+        helper_block.terminator = Some(Terminator::Return { values: vec![] });
+        let helper = Function::definition(
+            "visible_helper",
+            Signature::new(vec![], vec![]),
+            vec![],
+            vec![helper_block],
+        );
+        let declaration = Function::declaration("external_import", Signature::new(vec![], vec![]));
+
+        let mut kernel = fe2o3_kernel_ir::Kernel::new(
+            "entry",
+            "entry_impl",
+            LaunchDomain::D1 {
+                x: LaunchExtent::Dynamic,
+            },
+        );
+        kernel.workgroup_size = Some(WorkgroupSize::new(64, 1, 1));
+
+        let mut module = Module::new("tests::inert_compiler_module");
+        module.functions = vec![helper, entry, declaration];
+        module.kernels.push(kernel);
+        module
+    }
+
+    #[test]
+    fn inert_compiler_module_wrapper_is_descriptive_and_deterministic() {
+        let module = inert_compiler_module_fixture();
+        let first = construct_inert_compiler_module_text_v1(&module).expect("bounded module");
+        let second = construct_inert_compiler_module_text_v1(&module).expect("bounded module");
+
+        assert_eq!(first, second);
+        assert_eq!(first.kernel_entries(), &["entry"]);
+        assert_eq!(first.device_definitions(), &["visible_helper"]);
+        assert_eq!(first.external_declarations(), &["external_import"]);
+        assert!(first.llvm_ir().contains("define amdgpu_kernel void @entry"));
+        assert!(first.llvm_ir().contains("define void @visible_helper"));
+        assert!(first.llvm_ir().contains("declare void @external_import"));
+        assert!(!first.llvm_ir().contains("bitcode"));
+    }
+
+    #[test]
+    fn compiler_module_limits_run_before_graph_verification() {
+        let mut oversized_id = Module::new("x".repeat(MAX_COMPILER_MODULE_ID_BYTES + 1));
+        oversized_id.functions.push(Function::declaration(
+            "duplicate",
+            Signature::new(vec![], vec![]),
+        ));
+        oversized_id.functions.push(Function::declaration(
+            "duplicate",
+            Signature::new(vec![], vec![]),
+        ));
+        let error = construct_inert_compiler_module_text_v1(&oversized_id).unwrap_err();
+        assert!(matches!(
+            error,
+            CompilerModuleConstructionError::LimitExceeded {
+                field: "compiler-module ID bytes",
+                ..
+            }
+        ));
+
+        let mut too_many_functions = inert_compiler_module_fixture();
+        let declaration = Function::declaration("f", Signature::new(vec![], vec![]));
+        too_many_functions.functions = vec![declaration; MAX_COMPILER_MODULE_FUNCTIONS + 1];
+        let error = construct_inert_compiler_module_text_v1(&too_many_functions).unwrap_err();
+        assert!(matches!(
+            error,
+            CompilerModuleConstructionError::LimitExceeded {
+                field: "compiler-module functions",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn compiler_module_bounds_cover_call_fanout_and_nested_types() {
+        let mut wide_call = inert_compiler_module_fixture();
+        let entry = wide_call
+            .functions
+            .iter_mut()
+            .find(|function| function.id.as_str() == "entry_impl")
+            .unwrap();
+        entry.body.as_mut().unwrap().blocks[0]
+            .operations
+            .push(Operation::new(
+                vec![],
+                OperationKind::Call {
+                    callee: "external_import".into(),
+                    arguments: vec![ValueId(999); MAX_COMPILER_MODULE_CALL_ARGUMENTS + 1],
+                },
+            ));
+        let error = construct_inert_compiler_module_text_v1(&wide_call).unwrap_err();
+        assert!(matches!(
+            error,
+            CompilerModuleConstructionError::LimitExceeded {
+                field: "compiler-module call arguments",
+                ..
+            }
+        ));
+
+        let mut nested = inert_compiler_module_fixture();
+        let mut ty = Type::F32;
+        for _ in 0..=MAX_COMPILER_MODULE_TYPE_DEPTH {
+            ty = Type::pointer(ty, AddressSpace::Global, AccessMode::ReadOnly);
+        }
+        nested.functions.push(Function::declaration(
+            "nested_import",
+            Signature::new(vec![ty], vec![]),
+        ));
+        let error = construct_inert_compiler_module_text_v1(&nested).unwrap_err();
+        assert!(matches!(
+            error,
+            CompilerModuleConstructionError::LimitExceeded {
+                field: "compiler-module type nesting",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn unsupported_compiler_module_input_returns_no_partial_text_value() {
+        let mut module = inert_compiler_module_fixture();
+        module.functions.push(Function::declaration(
+            "unsupported_slice_import",
+            Signature::new(vec![readonly_f32_slice()], vec![]),
+        ));
+        let result = construct_inert_compiler_module_text_v1(&module);
+        assert!(matches!(
+            result,
+            Err(CompilerModuleConstructionError::Lowering(_))
+        ));
     }
 }
