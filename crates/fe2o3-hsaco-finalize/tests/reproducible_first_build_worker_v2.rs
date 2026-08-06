@@ -330,11 +330,13 @@ fn candidate_and_v2_failure_responses_are_distinguished() {
         limits(),
     )
     .unwrap_err();
+    let candidate_diagnostic = candidate_error.to_string();
     let FirstBuildWorkerV2Error::CandidateDidNotProduceOutput(candidate) = candidate_error else {
         panic!("unexpected error: {candidate_error:?}");
     };
     assert_eq!(candidate.response().stage(), WorkerStageV1::Codegen);
     assert!(candidate.response().output().is_none());
+    assert!(candidate_diagnostic.contains("Codegen: []"));
 
     let v2_directory = TestDirectory::new();
     let (_, _, v2_consumed) = consumed_handoff(&v2_directory);
@@ -348,6 +350,7 @@ fn candidate_and_v2_failure_responses_are_distinguished() {
         limits(),
     )
     .unwrap_err();
+    let v2_diagnostic = v2_error.to_string();
     let FirstBuildWorkerV2Error::AuthorizedDidNotProduceOutput {
         candidate,
         authorized,
@@ -358,6 +361,7 @@ fn candidate_and_v2_failure_responses_are_distinguished() {
     assert!(candidate.response().output().is_some());
     assert_eq!(authorized.response().stage(), WorkerStageV1::Codegen);
     assert!(authorized.response().output().is_none());
+    assert!(v2_diagnostic.contains("Codegen: []"));
 }
 
 #[test]

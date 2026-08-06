@@ -149,14 +149,26 @@ impl fmt::Display for FirstBuildWorkerV2Error {
             Self::CandidateExecution(error) => {
                 write!(formatter, "GenericLink candidate execution failed: {error}")
             }
-            Self::CandidateDidNotProduceOutput(_) => {
-                formatter.write_str("GenericLink candidate did not produce output")
+            Self::CandidateDidNotProduceOutput(candidate) => {
+                let response = candidate.response();
+                write!(
+                    formatter,
+                    "GenericLink candidate did not produce output at {:?}: {:?}",
+                    response.stage(),
+                    response.diagnostics()
+                )
             }
             Self::AuthorizedExecution(error) => {
                 write!(formatter, "Worker V2 execution failed: {error}")
             }
-            Self::AuthorizedDidNotProduceOutput { .. } => {
-                formatter.write_str("Worker V2 did not produce output")
+            Self::AuthorizedDidNotProduceOutput { authorized, .. } => {
+                let response = authorized.response();
+                write!(
+                    formatter,
+                    "Worker V2 did not produce output at {:?}: {:?}",
+                    response.stage(),
+                    response.diagnostics()
+                )
             }
             Self::OutputMismatch { .. } => formatter.write_str(
                 "GenericLink candidate and compiler-FFI-aware Worker V2 output bytes differ",
