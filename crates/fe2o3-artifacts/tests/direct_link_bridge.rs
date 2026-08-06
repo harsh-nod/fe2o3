@@ -19,7 +19,8 @@ use fe2o3_artifacts::{
     DirectLinkToolchainIdentityV1, DirectLinkTransformationIdentityV1,
     DirectLinkWorkerConfigurationIdentityV1, DirectLinkWorkerExecutableIdentityV1,
     DirectLinkWorkerIdentityV1, Endianness, KernelEntry,
-    ManifestClaimDerivedLinkPublicationScopeV1, PayloadDigest, PointerWidth, TargetIdentity,
+    ManifestClaimDerivedLinkPublicationScopeV1, ManifestClaimDirectLinkDurablePlanHandoffV1,
+    ManifestClaimDirectLinkPublicationBridgeV1, PayloadDigest, PointerWidth, TargetIdentity,
     ToolIdentity,
 };
 
@@ -290,6 +291,63 @@ fn publish_bridge(
     *catalog.published(&bridge.trusted_scope()).unwrap()
 }
 
+fn manifest_scope_claim(
+    bridge: &ManifestClaimDirectLinkPublicationBridgeV1,
+) -> LinkPublicationScopeV1 {
+    bridge
+        .non_authoritative_diagnostics()
+        .descriptive_scope_claim()
+}
+
+fn publish_manifest_claim_bridge(
+    bridge: &ManifestClaimDirectLinkPublicationBridgeV1,
+) -> fe2o3_artifact_transaction::PublishedLinkArtifactV1 {
+    let scope = manifest_scope_claim(bridge);
+    let mut catalog = LinkPublicationCatalogV1::default();
+    let mut record = catalog
+        .begin(bridge.attempt(), scope, bridge.request_identity())
+        .unwrap();
+    record
+        .record_pinned_worker(
+            &catalog,
+            bridge.attempt(),
+            bridge.request_identity(),
+            bridge.worker_identity(),
+        )
+        .unwrap();
+    record
+        .record_validated_response(
+            &catalog,
+            bridge.attempt(),
+            bridge.request_identity(),
+            bridge.worker_identity(),
+            bridge.response_identity(),
+            bridge.linked_output_identity(),
+        )
+        .unwrap();
+    record
+        .record_finalization(
+            &catalog,
+            bridge.attempt(),
+            bridge.response_identity(),
+            bridge.linked_output_identity(),
+            bridge.finalization_identity(),
+            bridge.finalized_output_identity(),
+        )
+        .unwrap();
+    assert_eq!(
+        record.publish(
+            &mut catalog,
+            bridge.attempt(),
+            bridge.finalization_identity(),
+            bridge.finalized_output_identity(),
+            bridge.publication_identity(),
+        ),
+        Ok(PublicationOutcomeV1::Published)
+    );
+    *catalog.published(&scope).unwrap()
+}
+
 #[test]
 fn typed_bridge_drives_and_validates_the_complete_g5_chain() {
     let fixture = evidence(0x18);
@@ -437,44 +495,47 @@ fn manifest_claim_scope_drives_the_complete_inert_g5_chain() {
     assert!(!derived.grants_load_authority());
     assert!(!derived.grants_launch_authority());
 
-    let bridge = DirectLinkPublicationBridgeV1::prepare_with_manifest_claim_scope(
+    let bridge = ManifestClaimDirectLinkPublicationBridgeV1::prepare_with_manifest_claim_scope(
         attempt(20, 0x43),
         derived,
         &validated,
         0,
     )
     .unwrap();
+    let diagnostics = bridge.non_authoritative_diagnostics();
     assert_eq!(
-        bridge.scope_provenance(),
+        diagnostics.scope_provenance(),
         DirectLinkPublicationScopeProvenanceV1::ManifestClaimDerivedV1
     );
-    assert_eq!(bridge.validate_published(publish_bridge(&bridge)), Ok(()));
+    assert!(!diagnostics.grants_publication_authority());
+    assert!(!diagnostics.grants_load_authority());
+    assert!(!diagnostics.grants_launch_authority());
+    assert_eq!(
+        bridge.validate_published(publish_manifest_claim_bridge(&bridge)),
+        Ok(())
+    );
+    assert!(!bridge.grants_publication_authority());
     assert!(!bridge.grants_load_authority());
     assert!(!bridge.grants_launch_authority());
-    let handoff = bridge.durable_plan_handoff();
-    assert_eq!(
-        handoff.scope_provenance(),
-        DirectLinkPublicationScopeProvenanceV1::ManifestClaimDerivedV1
-    );
+    let handoff: ManifestClaimDirectLinkDurablePlanHandoffV1 = bridge.durable_plan_handoff();
     assert_eq!(handoff.occurrence_identity(), bridge.occurrence_identity());
     assert_eq!(
         handoff.container_identity(),
-        bridge.binding().container_identity()
+        validated.bindings()[0].container_identity()
     );
     assert_eq!(
         handoff.finalized_payload_identity(),
-        bridge.binding().expectation().finalized_payload_identity()
-    );
-    assert_eq!(
-        handoff.descriptive_scope_claim(),
-        bridge.publication_scope()
+        validated.bindings()[0]
+            .expectation()
+            .finalized_payload_identity()
     );
     assert!(!handoff.grants_publication_authority());
     assert!(!handoff.grants_load_authority());
     assert!(!handoff.grants_launch_authority());
+    let descriptive_scope = diagnostics.descriptive_scope_claim();
     let weaker_same_scope = DirectLinkPublicationBridgeV1::prepare_with_trusted_scope(
         bridge.attempt(),
-        bridge.publication_scope(),
+        descriptive_scope,
         &validated,
         0,
     )
@@ -485,7 +546,7 @@ fn manifest_claim_scope_drives_the_complete_inert_g5_chain() {
     );
 
     assert_eq!(
-        *bridge.publication_scope().target().as_bytes(),
+        *descriptive_scope.target().as_bytes(),
         [
             0xcc, 0x48, 0x6c, 0xff, 0xe7, 0x51, 0xc0, 0xe8, 0x39, 0x29, 0xff, 0x50, 0x65, 0x40,
             0x7b, 0xb4, 0x1c, 0x06, 0x87, 0xa8, 0x94, 0x58, 0x7a, 0xea, 0xbd, 0x6b, 0xd2, 0xa1,
@@ -493,7 +554,7 @@ fn manifest_claim_scope_drives_the_complete_inert_g5_chain() {
         ]
     );
     assert_eq!(
-        *bridge.publication_scope().kernel_set().as_bytes(),
+        *descriptive_scope.kernel_set().as_bytes(),
         [
             0xda, 0x81, 0x04, 0xb9, 0xe2, 0x15, 0x2a, 0xbb, 0xf2, 0xb4, 0xda, 0x3b, 0x3e, 0xea,
             0x37, 0xdd, 0x12, 0xed, 0x19, 0x55, 0x72, 0x4a, 0x5e, 0x0c, 0x9a, 0x60, 0xe6, 0xb7,
@@ -535,6 +596,9 @@ fn trusted_scope_constructor_is_explicitly_the_weaker_compatibility_path() {
         DirectLinkPublicationScopeProvenanceV1::UnsafeLegacyExternalClaims
     );
     assert_eq!(bridge.publication_scope(), bridge.trusted_scope());
+    assert!(!bridge.grants_publication_authority());
+    assert!(!bridge.grants_load_authority());
+    assert!(!bridge.grants_launch_authority());
 }
 
 #[test]
@@ -569,7 +633,7 @@ fn manifest_claim_scope_rejects_container_and_binding_substitution() {
     .unwrap();
     let changed_validated = changed_container.validated();
     assert_eq!(
-        DirectLinkPublicationBridgeV1::prepare_with_manifest_claim_scope(
+        ManifestClaimDirectLinkPublicationBridgeV1::prepare_with_manifest_claim_scope(
             attempt(22, 0x47),
             witness,
             &changed_validated,
@@ -626,7 +690,7 @@ fn manifest_claim_scope_rejects_binding_index_substitution() {
     .unwrap();
 
     assert_eq!(
-        DirectLinkPublicationBridgeV1::prepare_with_manifest_claim_scope(
+        ManifestClaimDirectLinkPublicationBridgeV1::prepare_with_manifest_claim_scope(
             attempt(23, 0x49),
             witness,
             &validated,
@@ -698,7 +762,7 @@ fn manifest_claim_scope_rejects_a_different_bundle_around_the_same_binding() {
 
     assert_eq!(validated.bindings()[0], native_binding);
     assert_eq!(
-        DirectLinkPublicationBridgeV1::prepare_with_manifest_claim_scope(
+        ManifestClaimDirectLinkPublicationBridgeV1::prepare_with_manifest_claim_scope(
             attempt(24, 0x4d),
             witness,
             &validated,
@@ -808,7 +872,7 @@ fn target_and_logical_contracts_change_scope_but_rebuild_content_does_not() {
             &fixture.container,
         )
         .unwrap();
-        DirectLinkPublicationBridgeV1::prepare_with_manifest_claim_scope(
+        ManifestClaimDirectLinkPublicationBridgeV1::prepare_with_manifest_claim_scope(
             attempt(25, 0x4e),
             witness,
             &validated,
@@ -829,37 +893,43 @@ fn target_and_logical_contracts_change_scope_but_rebuild_content_does_not() {
     let abi = derive(&changed_abi);
 
     assert_ne!(
-        base.publication_scope().target(),
-        target.publication_scope().target()
+        manifest_scope_claim(&base).target(),
+        manifest_scope_claim(&target).target()
     );
     assert_eq!(
-        base.publication_scope().kernel_set(),
-        target.publication_scope().kernel_set()
+        manifest_scope_claim(&base).kernel_set(),
+        manifest_scope_claim(&target).kernel_set()
     );
-    assert_eq!(base.publication_scope(), payload.publication_scope());
-    assert_eq!(base.publication_scope(), compiler.publication_scope());
-    assert_eq!(base.publication_scope(), producer.publication_scope());
-    assert_eq!(base.publication_scope(), toolchain.publication_scope());
-    assert_eq!(base.publication_scope(), executable.publication_scope());
+    assert_eq!(manifest_scope_claim(&base), manifest_scope_claim(&payload));
+    assert_eq!(manifest_scope_claim(&base), manifest_scope_claim(&compiler));
+    assert_eq!(manifest_scope_claim(&base), manifest_scope_claim(&producer));
     assert_eq!(
-        base.publication_scope().target(),
-        alias.publication_scope().target()
+        manifest_scope_claim(&base),
+        manifest_scope_claim(&toolchain)
+    );
+    assert_eq!(
+        manifest_scope_claim(&base),
+        manifest_scope_claim(&executable)
+    );
+    assert_eq!(
+        manifest_scope_claim(&base).target(),
+        manifest_scope_claim(&alias).target()
     );
     assert_ne!(
-        base.publication_scope().kernel_set(),
-        alias.publication_scope().kernel_set()
+        manifest_scope_claim(&base).kernel_set(),
+        manifest_scope_claim(&alias).kernel_set()
     );
     assert_ne!(
-        base.publication_scope().kernel_set(),
-        ffi.publication_scope().kernel_set()
+        manifest_scope_claim(&base).kernel_set(),
+        manifest_scope_claim(&ffi).kernel_set()
     );
     assert_ne!(
-        base.publication_scope().kernel_set(),
-        source.publication_scope().kernel_set()
+        manifest_scope_claim(&base).kernel_set(),
+        manifest_scope_claim(&source).kernel_set()
     );
     assert_ne!(
-        base.publication_scope().kernel_set(),
-        abi.publication_scope().kernel_set()
+        manifest_scope_claim(&base).kernel_set(),
+        manifest_scope_claim(&abi).kernel_set()
     );
     for changed in [
         &target,
@@ -953,24 +1023,26 @@ fn identical_logical_claims_across_rebuild_containers_share_scope_not_occurrence
         &second.container,
     )
     .unwrap();
-    let first_bridge = DirectLinkPublicationBridgeV1::prepare_with_manifest_claim_scope(
-        attempt(26, 0x51),
-        first_witness,
-        &first_validated,
-        0,
-    )
-    .unwrap();
-    let second_bridge = DirectLinkPublicationBridgeV1::prepare_with_manifest_claim_scope(
-        attempt(26, 0x51),
-        second_witness,
-        &second_validated,
-        0,
-    )
-    .unwrap();
+    let first_bridge =
+        ManifestClaimDirectLinkPublicationBridgeV1::prepare_with_manifest_claim_scope(
+            attempt(26, 0x51),
+            first_witness,
+            &first_validated,
+            0,
+        )
+        .unwrap();
+    let second_bridge =
+        ManifestClaimDirectLinkPublicationBridgeV1::prepare_with_manifest_claim_scope(
+            attempt(26, 0x51),
+            second_witness,
+            &second_validated,
+            0,
+        )
+        .unwrap();
 
     assert_eq!(
-        first_bridge.publication_scope(),
-        second_bridge.publication_scope()
+        manifest_scope_claim(&first_bridge),
+        manifest_scope_claim(&second_bridge)
     );
     assert_eq!(
         first_bridge.finalized_output_identity(),
@@ -985,7 +1057,7 @@ fn identical_logical_claims_across_rebuild_containers_share_scope_not_occurrence
         second_bridge.publication_identity()
     );
     assert_eq!(
-        first_bridge.validate_published(publish_bridge(&second_bridge)),
+        first_bridge.validate_published(publish_manifest_claim_bridge(&second_bridge)),
         Err(DirectLinkBridgeError::IdentityMismatch {
             kind: DirectLinkBridgeIdentityKindV1::Publication,
         })
@@ -1052,20 +1124,22 @@ fn identical_payload_aliases_in_one_bundle_remain_occurrence_local() {
         alias_witness.descriptive_scope_claim().kernel_set()
     );
 
-    let first_bridge = DirectLinkPublicationBridgeV1::prepare_with_manifest_claim_scope(
-        attempt(27, 0x53),
-        first_witness,
-        &validated,
-        first_index,
-    )
-    .unwrap();
-    let alias_bridge = DirectLinkPublicationBridgeV1::prepare_with_manifest_claim_scope(
-        attempt(27, 0x53),
-        alias_witness,
-        &validated,
-        alias_index,
-    )
-    .unwrap();
+    let first_bridge =
+        ManifestClaimDirectLinkPublicationBridgeV1::prepare_with_manifest_claim_scope(
+            attempt(27, 0x53),
+            first_witness,
+            &validated,
+            first_index,
+        )
+        .unwrap();
+    let alias_bridge =
+        ManifestClaimDirectLinkPublicationBridgeV1::prepare_with_manifest_claim_scope(
+            attempt(27, 0x53),
+            alias_witness,
+            &validated,
+            alias_index,
+        )
+        .unwrap();
     assert_ne!(
         first_bridge.occurrence_identity(),
         alias_bridge.occurrence_identity()
@@ -1075,7 +1149,7 @@ fn identical_payload_aliases_in_one_bundle_remain_occurrence_local() {
         alias_bridge.publication_identity()
     );
     assert_eq!(
-        first_bridge.validate_published(publish_bridge(&alias_bridge)),
+        first_bridge.validate_published(publish_manifest_claim_bridge(&alias_bridge)),
         Err(DirectLinkBridgeError::IdentityMismatch {
             kind: DirectLinkBridgeIdentityKindV1::Scope,
         })

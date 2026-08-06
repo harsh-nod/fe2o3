@@ -226,11 +226,18 @@ module loading, symbol lookup, ABI compatibility, or kernel launch authority.
 The explicit `grants_load_authority` and `grants_launch_authority` queries
 therefore always return `false`.
 
-`DirectLinkPublicationBridgeV1` is the normative typed conversion from one
-binding selected by index from a validated G6 witness to one G5 publication
-chain. The bridge is occurrence-local: it describes exactly one canonical
-`(container identity, finalized payload identity)` G6 binding occurrence, not
-every occurrence of equal payload bytes and not the whole bundle as one scope.
+`DirectLinkPublicationBridgeV1` is the legacy, explicitly non-authoritative
+conversion from raw external scope claims into the inert G5 model. It retains
+`prepare_with_trusted_scope` and historical raw scope getters for compatibility,
+but the name `trusted_scope` does not imply trust. The type has no durable G5
+handoff API.
+
+`ManifestClaimDirectLinkPublicationBridgeV1` is the structurally separate typed
+conversion from one binding selected by index from a validated G6 witness to one
+G5 publication chain. The bridge is occurrence-local: it describes exactly one
+canonical `(container identity, finalized payload identity)` G6 binding
+occurrence, not every occurrence of equal payload bytes and not the whole bundle
+as one scope.
 Its domain-separated publication identity commits to the build attempt,
 descriptive publication-scope claims, request, worker/toolchain closure,
 response, transformation identities, FFI closure, exact occurrence identity,
@@ -274,24 +281,28 @@ payload descriptors, and the already-owned payload bytes are hashed in canonical
 order through a bounded streaming SHA-256 calculation. Validated container
 construction separately enforces the existing 256 MiB aggregate payload bound.
 
-`prepare_with_manifest_claim_scope` consumes the witness and rechecks its exact
-binding index, binding value, and G6 envelope before constructing the bridge.
-`prepare_with_trusted_scope` retains its historical name solely for API
-compatibility; it is an unsafe, inert path in which package, kernel-set, and
-target are unauthenticated external claims. `scope_provenance` distinguishes
-`UnsafeLegacyExternalClaims` from `ManifestClaimDerivedV1`, and the two paths
-use separate publication domains even when raw scope values are equal.
+`ManifestClaimDirectLinkPublicationBridgeV1::prepare_with_manifest_claim_scope`
+consumes the witness and rechecks its exact binding index, binding value, and G6
+envelope before constructing the derived bridge. The legacy
+`prepare_with_trusted_scope` path cannot construct that type, and no conversion
+from the legacy bridge to the derived bridge or handoff is exposed. The two
+paths use separate publication domains even when raw scope values are equal.
+Raw derived scope is available only through
+`NonAuthoritativeDirectLinkPublicationDiagnosticsV1`, whose name and authority
+queries make its diagnostic status explicit.
 
 Manifest target, kernel, ABI, source-contract, and FFI fields remain claims.
 They are not authenticated compiler output, do not establish native executable
 truth, and cannot authorize publication, loading, or launch.
-`DirectLinkDurablePlanHandoffV1` preserves scope provenance and occurrence
-identity for coordination with the separately owned durable G5 adapter; future
-durable-plan code must accept that handoff intact rather than reconstructing a
-plan from provenance-erasing raw getters. This crate intentionally does not
-invent the required G5 package lease/current-publication witness or the G7
-authenticated HSACO inspection witness. Both remain blocking prerequisites for
-any authoritative path.
+`ManifestClaimDirectLinkDurablePlanHandoffV1` is constructible only from the
+manifest-claim bridge and privately preserves its scope and occurrence identity
+for coordination with the separately owned durable G5 adapter. It exposes no
+raw `LinkPublicationScopeV1` or descriptive scope getter. Future durable-plan
+code must consume that opaque handoff through an API owned here rather than
+reconstructing a plan from provenance-erasing values. This crate intentionally
+does not invent the required G5 package lease/current-publication witness or the
+G7 authenticated HSACO inspection witness. Both remain blocking prerequisites
+for any authoritative path.
 
 The bridge and `LinkPublicationCatalogV1` remain inert models. They perform no
 filesystem I/O, do not reconstruct a catalog from durable bytes, do not

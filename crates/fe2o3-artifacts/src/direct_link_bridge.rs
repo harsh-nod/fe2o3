@@ -320,17 +320,45 @@ impl ManifestClaimDerivedLinkPublicationScopeV1 {
     }
 }
 
-/// Inert, provenance-preserving API boundary for the future durable G5 adapter.
+/// Inert, manifest-claim-only API boundary for the future durable G5 adapter.
 ///
-/// Raw G5 identities are exposed only as descriptive model inputs. This value
-/// must stay intact through durable-plan construction so scope provenance and
-/// occurrence identity cannot be silently dropped. It is not a package lease,
-/// current-publication witness, HSACO inspection witness, or runtime authority.
+/// This type can be constructed only by
+/// [`ManifestClaimDirectLinkPublicationBridgeV1`]. Its raw G5 scope is private:
+/// a future G5 adapter must consume this opaque value through an API owned by
+/// this crate instead of reconstructing authority from provenance-erasing
+/// getters. It is not a package lease, current-publication witness, HSACO
+/// inspection witness, or runtime authority.
+///
+/// A legacy bridge cannot obtain this handoff at compile time:
+///
+/// ```compile_fail
+/// use fe2o3_artifacts::{
+///     DirectLinkPublicationBridgeV1, ManifestClaimDirectLinkDurablePlanHandoffV1,
+/// };
+///
+/// fn cannot_escalate_legacy_claims(
+///     legacy: &DirectLinkPublicationBridgeV1,
+/// ) -> ManifestClaimDirectLinkDurablePlanHandoffV1 {
+///     legacy.durable_plan_handoff()
+/// }
+/// ```
+///
+/// The handoff also cannot erase its scope provenance through a raw getter:
+///
+/// ```compile_fail
+/// use fe2o3_artifact_transaction::LinkPublicationScopeV1;
+/// use fe2o3_artifacts::ManifestClaimDirectLinkDurablePlanHandoffV1;
+///
+/// fn cannot_extract_raw_scope(
+///     handoff: &ManifestClaimDirectLinkDurablePlanHandoffV1,
+/// ) -> LinkPublicationScopeV1 {
+///     handoff.descriptive_scope_claim()
+/// }
+/// ```
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DirectLinkDurablePlanHandoffV1 {
+pub struct ManifestClaimDirectLinkDurablePlanHandoffV1 {
     attempt: BuildAttempt,
-    scope_claim: LinkPublicationScopeV1,
-    scope_provenance: DirectLinkPublicationScopeProvenanceV1,
+    _scope_claim: LinkPublicationScopeV1,
     request: CanonicalLinkRequestIdentityV1,
     worker: PinnedWorkerIdentityV1,
     response: ValidatedResponseIdentityV1,
@@ -345,18 +373,9 @@ pub struct DirectLinkDurablePlanHandoffV1 {
     evidence_identity: PayloadDigest,
 }
 
-impl DirectLinkDurablePlanHandoffV1 {
+impl ManifestClaimDirectLinkDurablePlanHandoffV1 {
     pub const fn attempt(&self) -> BuildAttempt {
         self.attempt
-    }
-
-    /// Descriptive raw scope claim required by the current G5 model.
-    pub const fn descriptive_scope_claim(&self) -> LinkPublicationScopeV1 {
-        self.scope_claim
-    }
-
-    pub const fn scope_provenance(&self) -> DirectLinkPublicationScopeProvenanceV1 {
-        self.scope_provenance
     }
 
     pub const fn request_identity(&self) -> CanonicalLinkRequestIdentityV1 {
@@ -420,25 +439,17 @@ impl DirectLinkDurablePlanHandoffV1 {
     }
 }
 
-/// Typed, inert conversion between one G6 binding and one G5 publication chain.
+/// Legacy, explicitly non-authoritative conversion into the inert G5 model.
 ///
-/// Construction requires an opaque witness produced by exact validation
-/// against a concrete bundle, complete container set, and binding sources. The
-/// returned values are the only normative conversions into G5 identity domains:
-/// direct SHA-256 identities are converted field by field, while worker/toolchain
-/// and publication identities are derived from domain-separated canonical
-/// preimages. Scope is either an unsafe legacy external claim or a caller
-/// package claim plus manifest target/logical-kernel claims. The publication
-/// preimage commits to the attempt, descriptive scope claims,
-/// request, worker and toolchain measurements, response, transformation, FFI
-/// closure, exact container/finalized-payload occurrence, bundle, and complete
-/// direct-link evidence envelope.
+/// This compatibility type accepts raw external scope claims and deliberately
+/// has no durable-handoff API. Its historical constructor and scope getters
+/// remain available for descriptive model integration, but a value of this type
+/// cannot enter the manifest-claim-derived G5 handoff path. Use
+/// [`ManifestClaimDirectLinkPublicationBridgeV1`] for that structurally distinct
+/// path.
 ///
-/// This model performs no filesystem I/O, does not authenticate caller-supplied measurements, and
-/// grants no authority to load or launch code. Filesystem publication and durable recovery remain
-/// the responsibility of a future adapter under the artifact transaction lock.
-/// Any future authoritative path must retain this opaque bridge or its durable
-/// handoff and combine it with the separately owned G5 and G7 witnesses.
+/// This model performs no filesystem I/O, authenticates no caller-supplied
+/// measurement, and grants no publication, load, or launch authority.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DirectLinkPublicationBridgeV1 {
     attempt: BuildAttempt,
@@ -473,35 +484,6 @@ impl DirectLinkPublicationBridgeV1 {
             attempt,
             scope: trusted_scope,
             scope_provenance: DirectLinkPublicationScopeProvenanceV1::UnsafeLegacyExternalClaims,
-            bundle: validated.evidence().clone(),
-            binding: binding.clone(),
-        };
-        bridge.require_sha256_domains()?;
-        Ok(bridge)
-    }
-
-    /// Prepares a bridge with target and logical-kernel-set manifest claims.
-    ///
-    /// The witness is consumed and must match the selected index, exact binding,
-    /// and complete validated G6 evidence envelope. Package identity remains an
-    /// explicit unauthenticated caller claim captured by the witness.
-    pub fn prepare_with_manifest_claim_scope(
-        attempt: BuildAttempt,
-        manifest_claim_scope: ManifestClaimDerivedLinkPublicationScopeV1,
-        validated: &ValidatedDirectLinkBundleEvidenceV1<'_>,
-        binding_index: usize,
-    ) -> Result<Self, DirectLinkBridgeError> {
-        let binding = validated.bindings().get(binding_index).ok_or(
-            DirectLinkBridgeError::BindingIndexOutOfRange {
-                index: binding_index,
-                binding_count: validated.bindings().len(),
-            },
-        )?;
-        manifest_claim_scope.require_matches(validated, binding_index, binding)?;
-        let bridge = Self {
-            attempt,
-            scope: manifest_claim_scope.scope,
-            scope_provenance: DirectLinkPublicationScopeProvenanceV1::ManifestClaimDerivedV1,
             bundle: validated.evidence().clone(),
             binding: binding.clone(),
         };
@@ -636,33 +618,6 @@ impl DirectLinkPublicationBridgeV1 {
         }))
     }
 
-    /// Produces an inert, provenance-preserving handoff for a future durable adapter.
-    ///
-    /// The G5 filesystem adapter must accept this handoff as a whole and record
-    /// its provenance rather than reconstructing a plan from raw getters. This
-    /// crate does not create the separately owned G5 package lease/current
-    /// publication witness or G7 authenticated HSACO inspection witness, so the
-    /// handoff cannot authorize publication, loading, or launch.
-    pub fn durable_plan_handoff(&self) -> DirectLinkDurablePlanHandoffV1 {
-        DirectLinkDurablePlanHandoffV1 {
-            attempt: self.attempt,
-            scope_claim: self.scope,
-            scope_provenance: self.scope_provenance,
-            request: self.request_identity(),
-            worker: self.worker_identity(),
-            response: self.response_identity(),
-            linked_output: self.linked_output_identity(),
-            finalization: self.finalization_identity(),
-            finalized_output: self.finalized_output_identity(),
-            publication: self.publication_identity(),
-            occurrence: self.occurrence_identity(),
-            container_identity: self.binding.container_identity(),
-            finalized_payload_identity: self.binding.expectation().finalized_payload_identity(),
-            bundle_index_identity: self.bundle.bundle_index_identity(),
-            evidence_identity: self.bundle.digest(DIRECT_LINK_EVIDENCE_DIGEST_ALGORITHM),
-        }
-    }
-
     /// Validates a completed G5 publication against every identity prepared by this bridge.
     pub fn validate_published(
         &self,
@@ -704,6 +659,11 @@ impl DirectLinkPublicationBridgeV1 {
             published.publication() == self.publication_identity(),
             DirectLinkBridgeIdentityKindV1::Publication,
         )
+    }
+
+    /// Legacy bridge claims never grant publication authority.
+    pub const fn grants_publication_authority(&self) -> bool {
+        false
     }
 
     /// Bridge evidence never grants module-loading authority.
@@ -755,6 +715,185 @@ impl DirectLinkPublicationBridgeV1 {
             }
         }
         Ok(())
+    }
+}
+
+/// Explicitly non-authoritative diagnostics for a direct-link publication bridge.
+///
+/// This is the only API by which the manifest-claim bridge reveals the raw G5
+/// scope claim. The returned scope is suitable for diagnostics and tests of the
+/// inert G5 model only. This value is not accepted by the durable-handoff path
+/// and grants no package, publication, load, or launch authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NonAuthoritativeDirectLinkPublicationDiagnosticsV1 {
+    scope_claim: LinkPublicationScopeV1,
+    scope_provenance: DirectLinkPublicationScopeProvenanceV1,
+}
+
+impl NonAuthoritativeDirectLinkPublicationDiagnosticsV1 {
+    pub const fn descriptive_scope_claim(&self) -> LinkPublicationScopeV1 {
+        self.scope_claim
+    }
+
+    pub const fn scope_provenance(&self) -> DirectLinkPublicationScopeProvenanceV1 {
+        self.scope_provenance
+    }
+
+    pub const fn grants_publication_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_load_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
+    }
+}
+
+/// Opaque, inert manifest-claim bridge for one G6 binding and G5 model chain.
+///
+/// Unlike [`DirectLinkPublicationBridgeV1`], this type can be constructed only
+/// by consuming a [`ManifestClaimDerivedLinkPublicationScopeV1`] that matches
+/// the selected binding and validated evidence envelope. It alone can produce
+/// [`ManifestClaimDirectLinkDurablePlanHandoffV1`], making legacy external
+/// scope claims structurally unable to enter that future adapter boundary.
+///
+/// Manifest fields and the caller package identity remain unauthenticated
+/// claims. This bridge grants no publication, load, or launch authority. A
+/// future authoritative adapter must additionally require the separately owned
+/// G5 package lease/current-publication witness and G7 HSACO inspection witness.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ManifestClaimDirectLinkPublicationBridgeV1 {
+    bridge: DirectLinkPublicationBridgeV1,
+}
+
+impl ManifestClaimDirectLinkPublicationBridgeV1 {
+    /// Prepares a bridge with target and logical-kernel-set manifest claims.
+    ///
+    /// The witness is consumed and must match the selected index, exact binding,
+    /// and complete validated G6 evidence envelope. Package identity remains an
+    /// explicit unauthenticated caller claim captured by the witness.
+    pub fn prepare_with_manifest_claim_scope(
+        attempt: BuildAttempt,
+        manifest_claim_scope: ManifestClaimDerivedLinkPublicationScopeV1,
+        validated: &ValidatedDirectLinkBundleEvidenceV1<'_>,
+        binding_index: usize,
+    ) -> Result<Self, DirectLinkBridgeError> {
+        let binding = validated.bindings().get(binding_index).ok_or(
+            DirectLinkBridgeError::BindingIndexOutOfRange {
+                index: binding_index,
+                binding_count: validated.bindings().len(),
+            },
+        )?;
+        manifest_claim_scope.require_matches(validated, binding_index, binding)?;
+        let bridge = DirectLinkPublicationBridgeV1 {
+            attempt,
+            scope: manifest_claim_scope.scope,
+            scope_provenance: DirectLinkPublicationScopeProvenanceV1::ManifestClaimDerivedV1,
+            bundle: validated.evidence().clone(),
+            binding: binding.clone(),
+        };
+        bridge.require_sha256_domains()?;
+        Ok(Self { bridge })
+    }
+
+    pub const fn attempt(&self) -> BuildAttempt {
+        self.bridge.attempt()
+    }
+
+    /// Returns raw claims only through an explicitly non-authoritative view.
+    pub const fn non_authoritative_diagnostics(
+        &self,
+    ) -> NonAuthoritativeDirectLinkPublicationDiagnosticsV1 {
+        NonAuthoritativeDirectLinkPublicationDiagnosticsV1 {
+            scope_claim: self.bridge.scope,
+            scope_provenance: DirectLinkPublicationScopeProvenanceV1::ManifestClaimDerivedV1,
+        }
+    }
+
+    pub fn request_identity(&self) -> CanonicalLinkRequestIdentityV1 {
+        self.bridge.request_identity()
+    }
+
+    pub fn worker_identity(&self) -> PinnedWorkerIdentityV1 {
+        self.bridge.worker_identity()
+    }
+
+    pub fn response_identity(&self) -> ValidatedResponseIdentityV1 {
+        self.bridge.response_identity()
+    }
+
+    pub fn linked_output_identity(&self) -> LinkedOutputIdentityV1 {
+        self.bridge.linked_output_identity()
+    }
+
+    pub fn finalization_identity(&self) -> FinalizationIdentityV1 {
+        self.bridge.finalization_identity()
+    }
+
+    pub fn finalized_output_identity(&self) -> FinalizedOutputIdentityV1 {
+        self.bridge.finalized_output_identity()
+    }
+
+    pub fn occurrence_identity(&self) -> DirectLinkPublicationOccurrenceIdentityV1 {
+        self.bridge.occurrence_identity()
+    }
+
+    pub fn publication_identity(&self) -> AtomicPublicationIdentityV1 {
+        self.bridge.publication_identity()
+    }
+
+    /// Produces the derived-only opaque handoff for a future durable adapter.
+    ///
+    /// No raw publication scope can be extracted from the returned value. The
+    /// future G5 adapter must consume it through a dedicated API that preserves
+    /// its manifest-claim provenance and exact occurrence binding.
+    pub fn durable_plan_handoff(&self) -> ManifestClaimDirectLinkDurablePlanHandoffV1 {
+        ManifestClaimDirectLinkDurablePlanHandoffV1 {
+            attempt: self.bridge.attempt,
+            _scope_claim: self.bridge.scope,
+            request: self.request_identity(),
+            worker: self.worker_identity(),
+            response: self.response_identity(),
+            linked_output: self.linked_output_identity(),
+            finalization: self.finalization_identity(),
+            finalized_output: self.finalized_output_identity(),
+            publication: self.publication_identity(),
+            occurrence: self.occurrence_identity(),
+            container_identity: self.bridge.binding.container_identity(),
+            finalized_payload_identity: self
+                .bridge
+                .binding
+                .expectation()
+                .finalized_payload_identity(),
+            bundle_index_identity: self.bridge.bundle.bundle_index_identity(),
+            evidence_identity: self
+                .bridge
+                .bundle
+                .digest(DIRECT_LINK_EVIDENCE_DIGEST_ALGORITHM),
+        }
+    }
+
+    /// Validates a completed inert G5 model publication against this bridge.
+    pub fn validate_published(
+        &self,
+        published: PublishedLinkArtifactV1,
+    ) -> Result<(), DirectLinkBridgeError> {
+        self.bridge.validate_published(published)
+    }
+
+    pub const fn grants_publication_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_load_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
     }
 }
 
