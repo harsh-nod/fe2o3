@@ -7,8 +7,14 @@ verifier="$repo_root/scripts/verify-cargo-test-json.py"
 temporary=$(mktemp -d)
 trap 'rm -rf -- "$temporary"' EXIT
 
-true_bin=$(realpath -e -- /usr/bin/true)
-read -r true_sha256 _ < <(sha256sum -- "$true_bin")
+fake_toolchain="$temporary/nightly-2026-04-03-fake"
+mkdir -p "$fake_toolchain/bin" "$fake_toolchain/lib"
+cp -- /usr/bin/true "$fake_toolchain/bin/cargo"
+cp -- /usr/bin/true "$fake_toolchain/bin/rustc"
+fake_cargo="$fake_toolchain/bin/cargo"
+fake_rustc="$fake_toolchain/bin/rustc"
+read -r cargo_sha256 _ < <(sha256sum -- "$fake_cargo")
+read -r rustc_sha256 _ < <(sha256sum -- "$fake_rustc")
 read -r manifest_sha256 _ < <(sha256sum -- "$repo_root/rust-toolchain.toml")
 source_commit=$(git -C "$repo_root" rev-parse HEAD)
 
@@ -17,8 +23,8 @@ run_probe() {
   set +e
   probe_output=$(
     "$driver" "$build_dir" /missing/llvm /missing/lld 22.0.0git \
-      /missing/build-id gfx942 "$true_bin" "$true_sha256" \
-      "$true_bin" "$true_sha256" nightly-2026-04-03 \
+      /missing/build-id gfx942 "$fake_cargo" "$cargo_sha256" \
+      "$fake_rustc" "$rustc_sha256" nightly-2026-04-03 \
       "$manifest_sha256" "$source_commit" 2>&1
   )
   probe_status=$?

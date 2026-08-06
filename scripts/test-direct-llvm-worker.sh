@@ -101,8 +101,20 @@ verify_file_identity() {
 
 verify_executable Cargo "$cargo_bin" "$cargo_sha256"
 verify_executable rustc "$rustc_bin" "$rustc_sha256"
-cargo_version=$("$cargo_bin" --version)
-rustc_version=$("$rustc_bin" --version --verbose)
+toolchain_bin_dir=${rustc_bin%/*}
+if [[ ${cargo_bin%/*} != "$toolchain_bin_dir" ]]; then
+  printf 'error: pinned Cargo and rustc must come from one toolchain bin directory\n' >&2
+  exit 70
+fi
+toolchain_root=$(realpath -e -- "$toolchain_bin_dir/..")
+toolchain_directory=${toolchain_root##*/}
+if [[ $toolchain_directory != "$rust_toolchain"-* || ! -d $toolchain_root/lib ]]; then
+  printf 'error: pinned executables do not belong to the declared Rust toolchain\n' >&2
+  exit 70
+fi
+toolchain_lib="$toolchain_root/lib"
+cargo_version=$(LD_LIBRARY_PATH="$toolchain_lib" "$cargo_bin" --version)
+rustc_version=$(LD_LIBRARY_PATH="$toolchain_lib" "$rustc_bin" --version --verbose)
 if [[ $cargo_version != cargo\ * ]]; then
   printf 'error: pinned Cargo executable returned an invalid version\n' >&2
   exit 70
@@ -187,7 +199,8 @@ if [[ ! -x $worker || ! -f $worker_build_id_file ]]; then
 fi
 worker_build_id=$(<"$worker_build_id_file")
 
-RUSTC="$rustc_bin" "$cargo_bin" test --manifest-path "$repo_root/Cargo.toml" \
+LD_LIBRARY_PATH="$toolchain_lib" RUSTC="$rustc_bin" \
+  "$cargo_bin" test --manifest-path "$repo_root/Cargo.toml" \
   -p fe2o3-hsaco-finalize --locked --tests
 FE2O3_DIRECT_LLVM_WORKER="$worker" \
 FE2O3_DIRECT_LLVM_WORKER_BUILD_ID="$worker_build_id" \
@@ -198,6 +211,7 @@ FE2O3_DIRECT_LLVM_EXPECTED_OUTPUT="$native_hsaco" \
 FE2O3_DIRECT_LLVM_OUTPUT="$rust_hsaco" \
 FE2O3_DIRECT_LLVM_TARGET="$target" \
 RUSTC="$rustc_bin" \
+LD_LIBRARY_PATH="$toolchain_lib" \
   "$cargo_bin" test --manifest-path "$repo_root/Cargo.toml" \
     -p fe2o3-hsaco-finalize --locked --message-format=json \
     --test "$test_target" "$test_name" -- \
