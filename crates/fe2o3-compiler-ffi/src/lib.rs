@@ -31,7 +31,7 @@ const EFFECT_ABI_DOMAIN_V1: &[u8] = b"FE2O3/COMPILER-FFI-EFFECT-ABI/V1\0";
 const ENVELOPE_DOMAIN_V1: &[u8] = b"FE2O3/COMPILER-FFI-ENVELOPE/V1\0";
 const ENCODED_CONTRACT_FIXED_BYTES_V1: usize = 32 + 1 + 1 + 32 + 16 + 32 + 32;
 
-/// Borrowed text fields used only for allocation-free envelope preflight.
+/// Borrowed text fields used to preflight bulk envelope allocation.
 #[derive(Clone, Copy, Debug)]
 pub struct CompilerFfiContractTextV1<'a> {
     crate_label: &'a str,
@@ -62,7 +62,7 @@ impl<'a> CompilerFfiContractTextV1<'a> {
     }
 }
 
-/// Opaque proof that exact V1 allocation bounds were checked over borrowed fields.
+/// Opaque proof that exact V1 bulk-allocation bounds were checked over borrowed fields.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CompilerFfiEnvelopePreflightV1 {
     target: DeviceTargetV1,
@@ -72,7 +72,10 @@ pub struct CompilerFfiEnvelopePreflightV1 {
     exact_envelope_bytes: usize,
 }
 
-/// Checks exact count, text, grammar, aggregate, and encoded-size bounds without allocating.
+/// Checks exact count, text, grammar, aggregate, and encoded-size bounds before contract-vector
+/// reservation, contract-field cloning, and canonical-envelope allocation.
+///
+/// Canonical target formatting may allocate one bounded temporary string during this preflight.
 pub fn preflight_compiler_ffi_envelope_v1<'a>(
     target: DeviceTargetV1,
     code_object_version: CodeObjectVersion,
