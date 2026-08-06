@@ -6,12 +6,11 @@ use std::{
     time::Duration,
 };
 
+use sha2::{Digest, Sha256};
+
 const WORKER_ID: &str = "fixture-worker-v1";
 const OUTPUT: &[u8] = b"fixture-output";
-const OUTPUT_SHA256: [u8; 32] = [
-    0xda, 0xcd, 0x9e, 0x21, 0xe8, 0x30, 0xa7, 0x63, 0x7c, 0x28, 0xa4, 0x34, 0xe9, 0x18, 0x3e, 0x3f,
-    0x37, 0x83, 0x1c, 0xfb, 0x3b, 0x87, 0xc2, 0x2f, 0xac, 0x6a, 0x89, 0xc6, 0xa9, 0xef, 0xc0, 0xdb,
-];
+const MISMATCH_OUTPUT: &[u8] = b"changed-output";
 
 #[allow(clippy::zombie_processes)] // Mode 8 verifies that the external supervisor owns reaping.
 fn main() {
@@ -24,21 +23,48 @@ fn main() {
     let mut prefix = [0_u8; 46];
     io::stdin().read_exact(&mut prefix).unwrap();
     let is_v2 = &prefix[..8] == b"F3LREQ02";
-    let mode = if is_v2 { 1 } else { prefix[14] };
-    if mode == 2 {
+    let legacy_mode = prefix[14];
+    if !is_v2 && legacy_mode == 2 {
         loop {
             thread::sleep(Duration::from_secs(60));
         }
     }
-    if mode == 9 {
+    if !is_v2 && legacy_mode == 9 {
         exit(0);
     }
-
     let mut request = prefix.to_vec();
     io::stdin().read_to_end(&mut request).unwrap();
+    let is_workflow = contains(&request, b"workflow_kernel");
+    let mode = if is_v2 || is_workflow { 1 } else { legacy_mode };
+
+    if is_workflow {
+        let with_output = if is_v2 {
+            !contains(&request, b"workflow_v2_failure")
+        } else {
+            !contains(&request, b"workflow_candidate_failure")
+        };
+        let wrong_request = (!is_v2 && contains(&request, b"workflow_candidate_bad_response"))
+            || (is_v2 && contains(&request, b"workflow_v2_bad_response"));
+        let output = if is_v2 && contains(&request, b"workflow_mismatch") {
+            MISMATCH_OUTPUT
+        } else {
+            OUTPUT
+        };
+        io::stdout()
+            .write_all(&response(
+                &request,
+                WORKER_ID,
+                with_output,
+                wrong_request,
+                output,
+            ))
+            .unwrap();
+        return;
+    }
+
     match mode {
         1 => io::stdout()
-            .write_all(&response(&request, WORKER_ID, true, false))
+            .write_all(&response(&request, WORKER_ID, true, false, OUTPUT))
             .unwrap(),
         3 => loop {
             io::stdout().write_all(&[b'x'; 8192]).unwrap()
@@ -57,16 +83,16 @@ fn main() {
             }
         }
         10 => io::stdout()
-            .write_all(&response(&request, WORKER_ID, true, true))
+            .write_all(&response(&request, WORKER_ID, true, true, OUTPUT))
             .unwrap(),
         11 => io::stdout()
-            .write_all(&response(&request, "wrong-worker", true, false))
+            .write_all(&response(&request, "wrong-worker", true, false, OUTPUT))
             .unwrap(),
         12 => io::stdout()
-            .write_all(&response(&request, WORKER_ID, true, false))
+            .write_all(&response(&request, WORKER_ID, true, false, OUTPUT))
             .unwrap(),
         13 => io::stdout()
-            .write_all(&response(&request, WORKER_ID, false, false))
+            .write_all(&response(&request, WORKER_ID, false, false, OUTPUT))
             .unwrap(),
         14 => {
             let mut environment = env::vars().collect::<Vec<_>>();
@@ -78,17 +104,17 @@ fn main() {
                 exit(70);
             }
             io::stdout()
-                .write_all(&response(&request, WORKER_ID, true, false))
+                .write_all(&response(&request, WORKER_ID, true, false, OUTPUT))
                 .unwrap();
         }
         15 => {
             io::stderr().write_all(b"unbound diagnostic").unwrap();
             io::stdout()
-                .write_all(&response(&request, WORKER_ID, true, false))
+                .write_all(&response(&request, WORKER_ID, true, false, OUTPUT))
                 .unwrap();
         }
         16 => {
-            let mut malformed = response(&request, WORKER_ID, true, false);
+            let mut malformed = response(&request, WORKER_ID, true, false, OUTPUT);
             *malformed.last_mut().unwrap() ^= 1;
             io::stdout().write_all(&malformed).unwrap();
         }
@@ -105,7 +131,13 @@ fn spawn_descendant() -> std::process::Child {
         .unwrap()
 }
 
-fn response(request: &[u8], worker: &str, with_output: bool, wrong_request: bool) -> Vec<u8> {
+fn response(
+    request: &[u8],
+    worker: &str,
+    with_output: bool,
+    wrong_request: bool,
+    output_bytes: &[u8],
+) -> Vec<u8> {
     let request_id: [u8; 32] = request[14..46].try_into().unwrap();
     let is_v2 = &request[..8] == b"F3LREQ02";
     let mut request_identity: [u8; 32] = field(request, if is_v2 { 15 } else { 10 })
@@ -131,15 +163,20 @@ fn response(request: &[u8], worker: &str, with_output: bool, wrong_request: bool
     push_field(&mut bytes, 4 + offset, &[if with_output { 9 } else { 6 }]);
     push_field(&mut bytes, 5 + offset, &0_u32.to_le_bytes());
     if with_output {
+        let output_identity: [u8; 32] = Sha256::digest(output_bytes).into();
         let mut output = vec![1];
-        output.extend_from_slice(&OUTPUT_SHA256);
-        output.extend_from_slice(&(OUTPUT.len() as u64).to_le_bytes());
-        output.extend_from_slice(OUTPUT);
+        output.extend_from_slice(&output_identity);
+        output.extend_from_slice(&(output_bytes.len() as u64).to_le_bytes());
+        output.extend_from_slice(output_bytes);
         push_field(&mut bytes, 6 + offset, &output);
     } else {
         push_field(&mut bytes, 6 + offset, &[0]);
     }
     bytes
+}
+
+fn contains(bytes: &[u8], needle: &[u8]) -> bool {
+    bytes.windows(needle.len()).any(|window| window == needle)
 }
 
 fn field(bytes: &[u8], wanted: u16) -> &[u8] {
