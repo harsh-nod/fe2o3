@@ -5,10 +5,15 @@ This crate defines the LLVM-free, authority-free envelope produced from a succes
 code-object version, canonical imports and exports, source ownership, physical ABI, declared
 effects, effect-to-ABI compatibility, semantic identity, and required definition role.
 
-Construction is bounded and deterministic. The builder checks cardinality before reserving its
-contract vector, validates borrowed text before cloning it, requires one canonical contract order,
-computes the exact encoded size before allocating canonical bytes, and hashes those bytes under a
-dedicated V1 domain. Contract grammar and IDs come from `reserved-fe2o3-symbols`.
+Construction is bounded and deterministic. The rustc adapter first streams borrowed contract fields
+through `preflight_compiler_ffi_envelope_v1`, which checks cardinality, grammar, aggregate text, and
+the exact encoded size before reserving the contract vector or cloning text. The builder requires
+one canonical contract order, rejects duplicate IDs, symbols, owners, and semantic identities,
+rechecks preflight sizes, and hashes canonical bytes under a dedicated V1 domain. Contract grammar
+and IDs come from `reserved-fe2o3-symbols`.
+
+The constructors are public so tests and non-rustc producers can create structurally identical
+values. The envelope binds bytes but does not authenticate that rustc produced them.
 
 The finished envelope deliberately exposes no contract list, provider artifact, linker input kind,
 expected final symbol set, bitcode claim, or Worker V1 conversion. It is an inert compiler

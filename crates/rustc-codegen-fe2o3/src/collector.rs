@@ -1035,11 +1035,11 @@ impl<'tcx> DeviceCollector<'tcx> {
             compiler_ffi_observation: None,
         };
         collection.compiler_ffi_observation =
-            crate::compiler_ffi_adapter::adapt_collection_v1(&collection).map_err(|error| {
-                CollectError {
+            crate::compiler_ffi_adapter::adapt_collection_v1(self.tcx, &collection).map_err(
+                |error| CollectError {
                     message: format!("compiler FFI envelope construction failed: {error}"),
-                }
-            })?;
+                },
+            )?;
         Ok(collection)
     }
 

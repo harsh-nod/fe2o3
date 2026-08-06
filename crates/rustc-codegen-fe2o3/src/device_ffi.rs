@@ -499,6 +499,16 @@ pub(crate) fn stable_instance_identity<'tcx>(
     }
 }
 
+pub(crate) fn source_owner_matches_instance<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    owner: &DeviceFfiSourceOwner,
+    instance: Instance<'tcx>,
+) -> bool {
+    let identity = stable_instance_identity(tcx, instance);
+    owner.def_path_hash == identity.def_path_hash
+        && owner.concrete_instance_symbol == identity.concrete_instance_symbol
+}
+
 pub(crate) fn collected_declaration<'tcx>(
     tcx: TyCtxt<'tcx>,
     instance: Instance<'tcx>,
@@ -1969,8 +1979,8 @@ mod tests {
             &BTreeSet::from([import.contract.id]),
         )
         .unwrap();
-        let envelope = crate::compiler_ffi_adapter::adapt_closure_v1(&closure, |symbol| {
-            symbol == "rust_helper"
+        let envelope = crate::compiler_ffi_adapter::adapt_closure_v1(&closure, |entry| {
+            entry.contract.symbol == "rust_helper"
         })
         .unwrap()
         .unwrap();

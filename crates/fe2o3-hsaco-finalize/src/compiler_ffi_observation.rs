@@ -4,6 +4,7 @@ use fe2o3_compiler_ffi::{
     CodeObjectVersion, CompilerFfiEnvelopeIdentityV1, CompilerFfiEnvelopeV1, DeviceTargetV1,
 };
 use sha2::{Digest, Sha256};
+use std::fmt;
 
 const STAGED_COMPILER_FFI_ENVELOPE_DOMAIN_V1: &[u8] = b"FE2O3/STAGED-COMPILER-FFI-ENVELOPE/V1\0";
 
@@ -64,13 +65,23 @@ impl StagedCompilerFfiEnvelopeInspectionV1 {
     }
 }
 
-/// Complete compiler observation retained without exposing reducible closures.
-#[derive(Clone, Debug, Eq, PartialEq)]
+/// Complete caller-supplied compiler observation retained without exposing reducible closures.
+#[derive(Clone, Eq, PartialEq)]
 pub struct StagedCompilerFfiEnvelopeV1 {
     identity: StagedCompilerFfiEnvelopeIdentityV1,
     inspection: StagedCompilerFfiEnvelopeInspectionV1,
     #[allow(dead_code)]
     envelope: CompilerFfiEnvelopeV1,
+}
+
+impl fmt::Debug for StagedCompilerFfiEnvelopeV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("StagedCompilerFfiEnvelopeV1")
+            .field("identity", &self.identity)
+            .field("inspection", &self.inspection)
+            .finish_non_exhaustive()
+    }
 }
 
 impl StagedCompilerFfiEnvelopeV1 {
@@ -83,6 +94,10 @@ impl StagedCompilerFfiEnvelopeV1 {
     }
 
     pub const fn grants_worker_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn authenticates_compiler_origin(&self) -> bool {
         false
     }
 }

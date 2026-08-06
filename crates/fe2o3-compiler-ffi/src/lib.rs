@@ -29,6 +29,132 @@ pub const MAX_COMPILER_FFI_ENVELOPE_BYTES_V1: usize = 512 * 1024;
 const SOURCE_OWNER_DOMAIN_V1: &[u8] = b"FE2O3/COMPILER-FFI-SOURCE-OWNER/V1\0";
 const EFFECT_ABI_DOMAIN_V1: &[u8] = b"FE2O3/COMPILER-FFI-EFFECT-ABI/V1\0";
 const ENVELOPE_DOMAIN_V1: &[u8] = b"FE2O3/COMPILER-FFI-ENVELOPE/V1\0";
+const ENCODED_CONTRACT_FIXED_BYTES_V1: usize = 32 + 1 + 1 + 32 + 16 + 32 + 32;
+
+/// Borrowed text fields used only for allocation-free envelope preflight.
+#[derive(Clone, Copy, Debug)]
+pub struct CompilerFfiContractTextV1<'a> {
+    crate_label: &'a str,
+    item_path: &'a str,
+    concrete_instance_symbol: &'a str,
+    symbol: &'a str,
+    physical_abi: &'a str,
+    effects: &'a str,
+}
+
+impl<'a> CompilerFfiContractTextV1<'a> {
+    pub const fn new(
+        crate_label: &'a str,
+        item_path: &'a str,
+        concrete_instance_symbol: &'a str,
+        symbol: &'a str,
+        physical_abi: &'a str,
+        effects: &'a str,
+    ) -> Self {
+        Self {
+            crate_label,
+            item_path,
+            concrete_instance_symbol,
+            symbol,
+            physical_abi,
+            effects,
+        }
+    }
+}
+
+/// Opaque proof that exact V1 allocation bounds were checked over borrowed fields.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CompilerFfiEnvelopePreflightV1 {
+    target: DeviceTargetV1,
+    code_object_version: CodeObjectVersion,
+    contract_count: usize,
+    aggregate_text_bytes: usize,
+    exact_envelope_bytes: usize,
+}
+
+/// Checks exact count, text, grammar, aggregate, and encoded-size bounds without allocating.
+pub fn preflight_compiler_ffi_envelope_v1<'a>(
+    target: DeviceTargetV1,
+    code_object_version: CodeObjectVersion,
+    contract_count: usize,
+    contracts: impl IntoIterator<Item = CompilerFfiContractTextV1<'a>>,
+) -> Result<CompilerFfiEnvelopePreflightV1, CompilerFfiEnvelopeError> {
+    validate_contract_count(contract_count)?;
+    let target_text = target.to_string();
+    validate_text(
+        &target_text,
+        MAX_DEVICE_FFI_TARGET_BYTES_V1,
+        CompilerFfiTextFieldV1::Target,
+        true,
+    )?;
+    let mut aggregate_text_bytes = target_text.len();
+    let mut exact_envelope_bytes = ENVELOPE_DOMAIN_V1
+        .len()
+        .checked_add(encoded_text_size(&target_text)?)
+        .and_then(|size| size.checked_add(1 + 4))
+        .ok_or(CompilerFfiEnvelopeError::EnvelopeByteBoundExceeded)?;
+    let mut actual_count = 0_usize;
+    for contract in contracts {
+        actual_count =
+            actual_count
+                .checked_add(1)
+                .ok_or(CompilerFfiEnvelopeError::ContractCountMismatch {
+                    expected: contract_count,
+                    actual: usize::MAX,
+                })?;
+        if actual_count > contract_count {
+            return Err(CompilerFfiEnvelopeError::ContractCountMismatch {
+                expected: contract_count,
+                actual: actual_count,
+            });
+        }
+        validate_source_owner_text(
+            contract.crate_label,
+            contract.item_path,
+            contract.concrete_instance_symbol,
+        )?;
+        validate_contract_text(contract.symbol, contract.physical_abi, contract.effects)?;
+        let texts = [
+            contract.crate_label,
+            contract.item_path,
+            contract.concrete_instance_symbol,
+            contract.symbol,
+            target_text.as_str(),
+            contract.physical_abi,
+            contract.effects,
+        ];
+        for text in texts {
+            aggregate_text_bytes = aggregate_text_bytes
+                .checked_add(text.len())
+                .ok_or(CompilerFfiEnvelopeError::AggregateTextBoundExceeded)?;
+            exact_envelope_bytes = exact_envelope_bytes
+                .checked_add(encoded_text_size(text)?)
+                .ok_or(CompilerFfiEnvelopeError::EnvelopeByteBoundExceeded)?;
+        }
+        exact_envelope_bytes = exact_envelope_bytes
+            .checked_add(ENCODED_CONTRACT_FIXED_BYTES_V1)
+            .ok_or(CompilerFfiEnvelopeError::EnvelopeByteBoundExceeded)?;
+        if aggregate_text_bytes > MAX_COMPILER_FFI_AGGREGATE_TEXT_BYTES_V1 {
+            return Err(CompilerFfiEnvelopeError::AggregateTextBoundExceeded);
+        }
+        if exact_envelope_bytes > MAX_COMPILER_FFI_ENVELOPE_BYTES_V1 {
+            return Err(CompilerFfiEnvelopeError::EnvelopeByteBoundExceeded);
+        }
+    }
+    if actual_count != contract_count {
+        return Err(CompilerFfiEnvelopeError::ContractCountMismatch {
+            expected: contract_count,
+            actual: actual_count,
+        });
+    }
+    Ok(CompilerFfiEnvelopePreflightV1 {
+        target,
+        code_object_version,
+        contract_count,
+        aggregate_text_bytes,
+        exact_envelope_bytes,
+    })
+}
 
 /// Identity of one exact source-owner record.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -57,24 +183,7 @@ impl CompilerFfiSourceOwnerV1 {
         def_path_hash: [u8; 16],
         concrete_instance_symbol: &str,
     ) -> Result<Self, CompilerFfiEnvelopeError> {
-        validate_text(
-            crate_label,
-            MAX_COMPILER_FFI_CRATE_LABEL_BYTES_V1,
-            CompilerFfiTextFieldV1::CrateLabel,
-            false,
-        )?;
-        validate_text(
-            item_path,
-            MAX_COMPILER_FFI_ITEM_PATH_BYTES_V1,
-            CompilerFfiTextFieldV1::ItemPath,
-            false,
-        )?;
-        validate_text(
-            concrete_instance_symbol,
-            MAX_COMPILER_FFI_INSTANCE_SYMBOL_BYTES_V1,
-            CompilerFfiTextFieldV1::ConcreteInstanceSymbol,
-            true,
-        )?;
+        validate_source_owner_text(crate_label, item_path, concrete_instance_symbol)?;
 
         let mut digest = Sha256::new();
         digest.update(SOURCE_OWNER_DOMAIN_V1);
@@ -152,26 +261,7 @@ impl CompilerFfiContractV1 {
         if link_role != expected_role {
             return Err(CompilerFfiEnvelopeError::DirectionRoleMismatch);
         }
-        validate_text(
-            symbol,
-            MAX_DEVICE_FFI_SYMBOL_BYTES_V1,
-            CompilerFfiTextFieldV1::Symbol,
-            true,
-        )?;
-        validate_text(
-            physical_abi,
-            MAX_DEVICE_FFI_PHYSICAL_ABI_BYTES_V1,
-            CompilerFfiTextFieldV1::PhysicalAbi,
-            true,
-        )?;
-        validate_text(
-            effects,
-            MAX_DEVICE_FFI_EFFECT_BYTES_V1,
-            CompilerFfiTextFieldV1::Effects,
-            true,
-        )?;
-        validate_device_ffi_contract_grammar_v1(symbol, physical_abi, effects)
-            .map_err(CompilerFfiEnvelopeError::Grammar)?;
+        validate_contract_text(symbol, physical_abi, effects)?;
 
         let target_text = target.to_string();
         validate_text(
@@ -278,7 +368,7 @@ impl CompilerFfiEnvelopeInspectionV1 {
 }
 
 /// Opaque, canonical compiler observation with no executable authority.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct CompilerFfiEnvelopeV1 {
     target: DeviceTargetV1,
     code_object_version: CodeObjectVersion,
@@ -286,6 +376,18 @@ pub struct CompilerFfiEnvelopeV1 {
     canonical_bytes: Vec<u8>,
     identity: CompilerFfiEnvelopeIdentityV1,
     inspection: CompilerFfiEnvelopeInspectionV1,
+}
+
+impl fmt::Debug for CompilerFfiEnvelopeV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CompilerFfiEnvelopeV1")
+            .field("target", &self.target)
+            .field("code_object_version", &self.code_object_version)
+            .field("identity", &self.identity)
+            .field("inspection", &self.inspection)
+            .finish_non_exhaustive()
+    }
 }
 
 impl CompilerFfiEnvelopeV1 {
@@ -312,6 +414,10 @@ impl CompilerFfiEnvelopeV1 {
     pub const fn grants_link_authority(&self) -> bool {
         false
     }
+
+    pub const fn authenticates_compiler_origin(&self) -> bool {
+        false
+    }
 }
 
 /// Count-first builder for one exact canonical envelope.
@@ -321,6 +427,8 @@ pub struct CompilerFfiEnvelopeBuilderV1 {
     expected_contract_count: usize,
     contracts: Vec<CompilerFfiContractV1>,
     aggregate_text_bytes: usize,
+    expected_aggregate_text_bytes: Option<usize>,
+    expected_envelope_bytes: Option<usize>,
 }
 
 impl CompilerFfiEnvelopeBuilderV1 {
@@ -329,14 +437,7 @@ impl CompilerFfiEnvelopeBuilderV1 {
         code_object_version: CodeObjectVersion,
         contract_count: usize,
     ) -> Result<Self, CompilerFfiEnvelopeError> {
-        if contract_count == 0 {
-            return Err(CompilerFfiEnvelopeError::EmptyEnvelope);
-        }
-        if contract_count > MAX_COMPILER_FFI_CONTRACTS_V1 {
-            return Err(CompilerFfiEnvelopeError::TooManyContracts {
-                count: contract_count,
-            });
-        }
+        validate_contract_count(contract_count)?;
         let target_text = target.to_string();
         validate_text(
             &target_text,
@@ -350,7 +451,21 @@ impl CompilerFfiEnvelopeBuilderV1 {
             expected_contract_count: contract_count,
             contracts: Vec::with_capacity(contract_count),
             aggregate_text_bytes: target_text.len(),
+            expected_aggregate_text_bytes: None,
+            expected_envelope_bytes: None,
         })
+    }
+
+    pub fn from_preflight(preflight: CompilerFfiEnvelopePreflightV1) -> Self {
+        Self {
+            target: preflight.target,
+            code_object_version: preflight.code_object_version,
+            expected_contract_count: preflight.contract_count,
+            contracts: Vec::with_capacity(preflight.contract_count),
+            aggregate_text_bytes: preflight.target.to_string().len(),
+            expected_aggregate_text_bytes: Some(preflight.aggregate_text_bytes),
+            expected_envelope_bytes: Some(preflight.exact_envelope_bytes),
+        }
     }
 
     pub fn push(
@@ -368,6 +483,34 @@ impl CompilerFfiEnvelopeBuilderV1 {
         }
         if contract.code_object_version != self.code_object_version {
             return Err(CompilerFfiEnvelopeError::CodeObjectVersionMismatch);
+        }
+        if self
+            .contracts
+            .iter()
+            .any(|previous| previous.contract_identity == contract.contract_identity)
+        {
+            return Err(CompilerFfiEnvelopeError::DuplicateContractIdentity);
+        }
+        if self
+            .contracts
+            .iter()
+            .any(|previous| previous.symbol == contract.symbol)
+        {
+            return Err(CompilerFfiEnvelopeError::DuplicateSymbol);
+        }
+        if self
+            .contracts
+            .iter()
+            .any(|previous| previous.source_owner.identity == contract.source_owner.identity)
+        {
+            return Err(CompilerFfiEnvelopeError::DuplicateSourceOwner);
+        }
+        if self
+            .contracts
+            .iter()
+            .any(|previous| previous.semantic_identity == contract.semantic_identity)
+        {
+            return Err(CompilerFfiEnvelopeError::DuplicateSemanticIdentity);
         }
         if let Some(previous) = self.contracts.last()
             && contract_sort_key(previous) >= contract_sort_key(&contract)
@@ -392,7 +535,19 @@ impl CompilerFfiEnvelopeBuilderV1 {
                 actual: self.contracts.len(),
             });
         }
+        if self
+            .expected_aggregate_text_bytes
+            .is_some_and(|expected| expected != self.aggregate_text_bytes)
+        {
+            return Err(CompilerFfiEnvelopeError::PreflightMismatch);
+        }
         let exact_size = exact_envelope_size(self.target, &self.contracts)?;
+        if self
+            .expected_envelope_bytes
+            .is_some_and(|expected| expected != exact_size)
+        {
+            return Err(CompilerFfiEnvelopeError::PreflightMismatch);
+        }
         if exact_size > MAX_COMPILER_FFI_ENVELOPE_BYTES_V1 {
             return Err(CompilerFfiEnvelopeError::EnvelopeByteBoundExceeded);
         }
@@ -459,9 +614,14 @@ pub enum CompilerFfiEnvelopeError {
     },
     TargetMismatch,
     CodeObjectVersionMismatch,
+    DuplicateContractIdentity,
+    DuplicateSymbol,
+    DuplicateSourceOwner,
+    DuplicateSemanticIdentity,
     NonCanonicalContractOrder,
     AggregateTextBoundExceeded,
     EnvelopeByteBoundExceeded,
+    PreflightMismatch,
 }
 
 impl fmt::Display for CompilerFfiEnvelopeError {
@@ -491,6 +651,16 @@ impl fmt::Display for CompilerFfiEnvelopeError {
             Self::CodeObjectVersionMismatch => {
                 formatter.write_str("device FFI contract code-object version mismatch")
             }
+            Self::DuplicateContractIdentity => {
+                formatter.write_str("duplicate compiler FFI contract identity")
+            }
+            Self::DuplicateSymbol => formatter.write_str("duplicate compiler FFI symbol"),
+            Self::DuplicateSourceOwner => {
+                formatter.write_str("one source owner claims multiple compiler FFI contracts")
+            }
+            Self::DuplicateSemanticIdentity => {
+                formatter.write_str("duplicate compiler FFI semantic identity")
+            }
             Self::NonCanonicalContractOrder => {
                 formatter.write_str("device FFI contracts are not in strict canonical order")
             }
@@ -499,6 +669,9 @@ impl fmt::Display for CompilerFfiEnvelopeError {
             }
             Self::EnvelopeByteBoundExceeded => {
                 formatter.write_str("compiler FFI canonical byte bound exceeded")
+            }
+            Self::PreflightMismatch => {
+                formatter.write_str("compiler FFI sizes disagree with allocation preflight")
             }
         }
     }
@@ -538,6 +711,71 @@ fn validate_text(
     Ok(())
 }
 
+fn validate_contract_count(contract_count: usize) -> Result<(), CompilerFfiEnvelopeError> {
+    if contract_count == 0 {
+        return Err(CompilerFfiEnvelopeError::EmptyEnvelope);
+    }
+    if contract_count > MAX_COMPILER_FFI_CONTRACTS_V1 {
+        return Err(CompilerFfiEnvelopeError::TooManyContracts {
+            count: contract_count,
+        });
+    }
+    Ok(())
+}
+
+fn validate_source_owner_text(
+    crate_label: &str,
+    item_path: &str,
+    concrete_instance_symbol: &str,
+) -> Result<(), CompilerFfiEnvelopeError> {
+    validate_text(
+        crate_label,
+        MAX_COMPILER_FFI_CRATE_LABEL_BYTES_V1,
+        CompilerFfiTextFieldV1::CrateLabel,
+        false,
+    )?;
+    validate_text(
+        item_path,
+        MAX_COMPILER_FFI_ITEM_PATH_BYTES_V1,
+        CompilerFfiTextFieldV1::ItemPath,
+        false,
+    )?;
+    validate_text(
+        concrete_instance_symbol,
+        MAX_COMPILER_FFI_INSTANCE_SYMBOL_BYTES_V1,
+        CompilerFfiTextFieldV1::ConcreteInstanceSymbol,
+        true,
+    )
+}
+
+fn validate_contract_text(
+    symbol: &str,
+    physical_abi: &str,
+    effects: &str,
+) -> Result<(), CompilerFfiEnvelopeError> {
+    validate_text(
+        symbol,
+        MAX_DEVICE_FFI_SYMBOL_BYTES_V1,
+        CompilerFfiTextFieldV1::Symbol,
+        true,
+    )?;
+    validate_text(
+        physical_abi,
+        MAX_DEVICE_FFI_PHYSICAL_ABI_BYTES_V1,
+        CompilerFfiTextFieldV1::PhysicalAbi,
+        true,
+    )?;
+    validate_text(
+        effects,
+        MAX_DEVICE_FFI_EFFECT_BYTES_V1,
+        CompilerFfiTextFieldV1::Effects,
+        true,
+    )?;
+    validate_device_ffi_contract_grammar_v1(symbol, physical_abi, effects)
+        .map_err(CompilerFfiEnvelopeError::Grammar)?;
+    Ok(())
+}
+
 fn contract_sort_key(
     contract: &CompilerFfiContractV1,
 ) -> (
@@ -570,9 +808,8 @@ fn exact_envelope_size(
         .and_then(|size| size.checked_add(1 + 4))
         .ok_or(CompilerFfiEnvelopeError::EnvelopeByteBoundExceeded)?;
     for contract in contracts {
-        let fixed = 32 + 1 + 1 + 32 + 16 + 32 + 32;
         size = size
-            .checked_add(fixed)
+            .checked_add(ENCODED_CONTRACT_FIXED_BYTES_V1)
             .ok_or(CompilerFfiEnvelopeError::EnvelopeByteBoundExceeded)?;
         for text in [
             contract.source_owner.crate_label.as_str(),
@@ -739,6 +976,11 @@ mod tests {
         );
         assert!(first.canonical_bytes().starts_with(ENVELOPE_DOMAIN_V1));
         assert!(!first.grants_link_authority());
+        assert!(!first.authenticates_compiler_origin());
+        let debug = format!("{first:?}");
+        for secret in ["external_add", "rust_helper", "ffi_crate::", "C("] {
+            assert!(!debug.contains(secret), "debug leaked `{secret}`: {debug}");
+        }
         assert_eq!(first.inspection().import_count(), 1);
         assert_eq!(first.inspection().export_count(), 1);
         assert_eq!(
@@ -789,6 +1031,55 @@ mod tests {
                 expected: 1,
                 actual: 0
             })
+        ));
+    }
+
+    #[test]
+    fn borrowed_preflight_checks_bounds_before_builder_allocation() {
+        let preflight = preflight_compiler_ffi_envelope_v1(
+            target(),
+            CodeObjectVersion::V5,
+            1,
+            std::iter::once(CompilerFfiContractTextV1::new(
+                "ffi_crate",
+                "ffi_crate::external_add",
+                "_RINvNtCs1234_ffi_crateexternal_add",
+                "external_add",
+                IMPORT_ABI,
+                "read_global",
+            )),
+        )
+        .unwrap();
+        let mut builder = CompilerFfiEnvelopeBuilderV1::from_preflight(preflight);
+        builder
+            .push(contract(
+                DeviceFfiDirectionV1::Import,
+                "external_add",
+                IMPORT_ABI,
+                "read_global",
+                0x11,
+                CompilerFfiSourceOwnerV1::new(
+                    "ffi_crate",
+                    "ffi_crate::external_add",
+                    [1; 16],
+                    "_RINvNtCs1234_ffi_crateexternal_add",
+                )
+                .unwrap(),
+            ))
+            .unwrap();
+        assert!(builder.finish().is_ok());
+
+        let never_polled = std::iter::from_fn(|| -> Option<CompilerFfiContractTextV1<'static>> {
+            panic!("oversized count consumed contract fields before failing")
+        });
+        assert!(matches!(
+            preflight_compiler_ffi_envelope_v1(
+                target(),
+                CodeObjectVersion::V5,
+                MAX_COMPILER_FFI_CONTRACTS_V1 + 1,
+                never_polled,
+            ),
+            Err(CompilerFfiEnvelopeError::TooManyContracts { .. })
         ));
     }
 
@@ -882,5 +1173,63 @@ mod tests {
             owner(2, "ffi_crate", "external_write"),
         );
         assert_ne!(read.effect_abi_identity(), write.effect_abi_identity());
+    }
+
+    #[test]
+    fn duplicate_contract_symbol_owner_and_semantics_are_rejected() {
+        let first = contract(
+            DeviceFfiDirectionV1::Import,
+            "external_a",
+            IMPORT_ABI,
+            "read_global",
+            0x11,
+            owner(1, "ffi_crate", "external_a"),
+        );
+        let duplicate_id = first.clone();
+        let duplicate_symbol = contract(
+            DeviceFfiDirectionV1::Import,
+            "external_a",
+            IMPORT_ABI,
+            "write_global",
+            0x12,
+            owner(2, "ffi_crate", "external_b"),
+        );
+        let duplicate_owner = contract(
+            DeviceFfiDirectionV1::Import,
+            "external_b",
+            IMPORT_ABI,
+            "read_global",
+            0x12,
+            owner(1, "ffi_crate", "external_a"),
+        );
+        let duplicate_semantics = contract(
+            DeviceFfiDirectionV1::Import,
+            "external_b",
+            IMPORT_ABI,
+            "read_global",
+            0x11,
+            owner(2, "ffi_crate", "external_b"),
+        );
+
+        for (duplicate, expected) in [
+            (
+                duplicate_id,
+                CompilerFfiEnvelopeError::DuplicateContractIdentity,
+            ),
+            (duplicate_symbol, CompilerFfiEnvelopeError::DuplicateSymbol),
+            (
+                duplicate_owner,
+                CompilerFfiEnvelopeError::DuplicateSourceOwner,
+            ),
+            (
+                duplicate_semantics,
+                CompilerFfiEnvelopeError::DuplicateSemanticIdentity,
+            ),
+        ] {
+            let mut builder =
+                CompilerFfiEnvelopeBuilderV1::new(target(), CodeObjectVersion::V5, 2).unwrap();
+            builder.push(first.clone()).unwrap();
+            assert_eq!(builder.push(duplicate), Err(expected));
+        }
     }
 }

@@ -3,31 +3,39 @@
 use std::{error::Error, fmt};
 
 use fe2o3_compiler_ffi::{
-    CodeObjectVersion, CompilerFfiContractV1, CompilerFfiEnvelopeBuilderV1,
-    CompilerFfiEnvelopeError, CompilerFfiEnvelopeV1, CompilerFfiLinkRoleV1,
-    CompilerFfiSourceOwnerV1, DeviceTargetV1,
+    CodeObjectVersion, CompilerFfiContractTextV1, CompilerFfiContractV1,
+    CompilerFfiEnvelopeBuilderV1, CompilerFfiEnvelopeError, CompilerFfiEnvelopeV1,
+    CompilerFfiLinkRoleV1, CompilerFfiSourceOwnerV1, DeviceTargetV1,
+    preflight_compiler_ffi_envelope_v1,
 };
 use reserved_fe2o3_symbols::DeviceFfiDirectionV1;
+use rustc_middle::ty::TyCtxt;
 
 use crate::{
     collector::CollectionResult,
     device_ffi::{ClosedDeviceFfiContract, DeviceFfiClosure, DeviceFfiLinkRole},
 };
 
-pub(crate) fn adapt_collection_v1(
-    collection: &CollectionResult<'_>,
+pub(crate) fn adapt_collection_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    collection: &CollectionResult<'tcx>,
 ) -> Result<Option<CompilerFfiEnvelopeV1>, CompilerFfiAdapterError> {
-    adapt_closure_v1(&collection.device_ffi, |symbol| {
-        collection
-            .functions
-            .iter()
-            .any(|function| function.export_name == symbol)
+    adapt_closure_v1(&collection.device_ffi, |entry| {
+        collection.functions.iter().any(|function| {
+            !function.is_kernel
+                && function.export_name == entry.contract.symbol
+                && crate::device_ffi::source_owner_matches_instance(
+                    tcx,
+                    &entry.owner,
+                    function.instance,
+                )
+        })
     })
 }
 
 pub(crate) fn adapt_closure_v1(
     closure: &DeviceFfiClosure,
-    export_is_collected: impl Fn(&str) -> bool,
+    export_is_collected: impl Fn(&ClosedDeviceFfiContract) -> bool,
 ) -> Result<Option<CompilerFfiEnvelopeV1>, CompilerFfiAdapterError> {
     let contract_count = closure
         .imports
@@ -59,9 +67,26 @@ pub(crate) fn adapt_closure_v1(
         value => return Err(CompilerFfiAdapterError::InvalidCodeObjectVersion(value)),
     };
 
-    let mut builder =
-        CompilerFfiEnvelopeBuilderV1::new(target, code_object_version, contract_count)
-            .map_err(CompilerFfiAdapterError::Envelope)?;
+    let preflight = preflight_compiler_ffi_envelope_v1(
+        target,
+        code_object_version,
+        contract_count,
+        closure.imports.iter().chain(&closure.exports).map(|entry| {
+            CompilerFfiContractTextV1::new(
+                &entry.owner.crate_name,
+                &entry.owner.item_path,
+                &entry.owner.concrete_instance_symbol,
+                &entry.contract.symbol,
+                &entry.contract.physical_abi,
+                entry
+                    .contract
+                    .effects_assertion
+                    .asserted_for_consistency_check(),
+            )
+        }),
+    )
+    .map_err(CompilerFfiAdapterError::Envelope)?;
+    let mut builder = CompilerFfiEnvelopeBuilderV1::from_preflight(preflight);
     for entry in &closure.imports {
         builder
             .push(adapt_contract_v1(
@@ -74,7 +99,7 @@ pub(crate) fn adapt_closure_v1(
             .map_err(CompilerFfiAdapterError::Envelope)?;
     }
     for entry in &closure.exports {
-        if !export_is_collected(&entry.contract.symbol) {
+        if !export_is_collected(entry) {
             return Err(CompilerFfiAdapterError::ExportMissingFromCollection(
                 entry.contract.symbol.clone(),
             ));

@@ -67,6 +67,7 @@ input kind, expected final symbol, bitcode, or Worker V1 claim.
 `stage_compiler_ffi_envelope_v1` consumes and privately retains the complete envelope. Its public
 surface exposes only a domain-separated staged identity and target/version/count/blocker inspection.
 It cannot reveal contract or generic linker closures and cannot create or bind Worker V1 evidence.
+Because the neutral envelope has public constructors, staging does not authenticate rustc origin.
 The explicit blocker is the absence of one exact compiler module artifact and a Worker V2 request
 and response that bind the complete envelope identity.
 

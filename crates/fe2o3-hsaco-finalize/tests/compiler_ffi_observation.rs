@@ -78,6 +78,11 @@ fn complete_cross_crate_envelope_is_staged_without_worker_authority() {
         "fa427b43b74f5be4255fc4e3e033b7d46bddcac33b4958277b2cc30d71c0915c"
     );
     assert!(!staged.grants_worker_authority());
+    assert!(!staged.authenticates_compiler_origin());
+    let debug = format!("{staged:?}");
+    for secret in ["rust_helper", "ffi_crate::", "C("] {
+        assert!(!debug.contains(secret), "debug leaked `{secret}`: {debug}");
+    }
 }
 
 #[test]
