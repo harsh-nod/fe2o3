@@ -316,8 +316,7 @@ impl<K: CompilerGeneratedKernelContractV1> AuthenticatedKernelArtifactV1<K> {
             .map_err(GeneratedArtifactAuthenticationError::Decode)?;
 
         let mut matching = container.manifest().kernels().iter().filter(|kernel| {
-            kernel.name().as_str() == K::LOGICAL_NAME
-                && kernel.symbol().as_str() == K::EXPORT_NAME
+            kernel.name().as_str() == K::LOGICAL_NAME && kernel.symbol().as_str() == K::EXPORT_NAME
         });
         let kernel = matching
             .next()
@@ -383,9 +382,8 @@ impl fmt::Display for GeneratedArtifactAuthenticationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Decode(error) => write!(formatter, "invalid embedded artifact: {error}"),
-            Self::MatchingKernelNotFound => formatter.write_str(
-                "embedded artifact has no kernel matching the generated marker names",
-            ),
+            Self::MatchingKernelNotFound => formatter
+                .write_str("embedded artifact has no kernel matching the generated marker names"),
             Self::MultipleMatchingKernels => formatter.write_str(
                 "embedded artifact has multiple kernels matching the generated marker names",
             ),
@@ -875,6 +873,10 @@ fn descriptor_dimensions(dimensions: fe2o3_artifacts::Dimensions) -> DimensionsV
     DimensionsV1::new(dimensions.x(), dimensions.y(), dimensions.z())
         .expect("validated artifact dimensions must satisfy descriptor dimensions")
 }
+
+#[cfg(test)]
+#[path = "artifact_binding_authentication_tests.rs"]
+mod authentication_tests;
 
 #[cfg(test)]
 mod tests {
