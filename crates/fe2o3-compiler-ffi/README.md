@@ -23,6 +23,9 @@ rejects oversized or truncated fields before retaining payload storage, malforme
 bytes, digest substitution, target or code-object disagreement, and noncanonical envelope roles or
 contract order. Public construction and decoding remain authority-free: the handoff does not
 authenticate its producer or grant compiler, link, load, or launch authority.
+`CompilerModuleHandoffV1::into_parts` moves the retained envelope and exact module payload into
+opaque owned components, allowing finalization to reuse both without interpreting wire offsets or
+reconstructing envelope fields. The decomposition does not change that authority classification.
 
 The finished envelope exposes only a borrowed opaque directional-symbol projection over its
 retained validated contracts. The projection preserves canonical order and cannot be constructed,

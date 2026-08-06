@@ -16,8 +16,9 @@ use sha2::{Digest, Sha256};
 mod module_handoff;
 
 pub use module_handoff::{
-    CompilerModuleHandoffErrorV1, CompilerModuleHandoffV1, CompilerModuleIdentityV1,
-    CompilerModuleKindV1, MAX_COMPILER_MODULE_BYTES_V1, MAX_COMPILER_MODULE_HANDOFF_BYTES_V1,
+    CompilerModuleHandoffErrorV1, CompilerModuleHandoffPartsV1, CompilerModuleHandoffV1,
+    CompilerModuleIdentityV1, CompilerModuleKindV1, CompilerModulePayloadV1,
+    MAX_COMPILER_MODULE_BYTES_V1, MAX_COMPILER_MODULE_HANDOFF_BYTES_V1,
 };
 
 /// Maximum complete import/export contracts in one compiler observation.

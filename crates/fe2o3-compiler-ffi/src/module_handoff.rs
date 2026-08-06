@@ -93,6 +93,142 @@ impl fmt::Debug for CompilerModuleHandoffV1 {
     }
 }
 
+/// Owned exact module payload extracted from one structurally validated handoff.
+///
+/// The payload preserves its typed representation and declared identity with the exact retained
+/// bytes. It is neutral data: neither extraction nor ownership authenticates its producer or grants
+/// compiler, worker, link, load, or launch authority.
+#[derive(Clone, Eq, PartialEq)]
+pub struct CompilerModulePayloadV1 {
+    kind: CompilerModuleKindV1,
+    identity: CompilerModuleIdentityV1,
+    bytes: Vec<u8>,
+}
+
+impl fmt::Debug for CompilerModulePayloadV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CompilerModulePayloadV1")
+            .field("kind", &self.kind)
+            .field("identity", &self.identity)
+            .finish_non_exhaustive()
+    }
+}
+
+impl CompilerModulePayloadV1 {
+    pub const fn kind(&self) -> CompilerModuleKindV1 {
+        self.kind
+    }
+
+    pub const fn identity(&self) -> CompilerModuleIdentityV1 {
+        self.identity
+    }
+
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// Moves out the exact retained module bytes without another payload allocation.
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.bytes
+    }
+
+    pub const fn authenticates_compiler_origin(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_compiler_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_worker_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_link_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_load_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
+    }
+}
+
+/// Owned envelope and module components retained from one coherent handoff.
+///
+/// There is no public constructor. [`CompilerModuleHandoffV1::into_parts`] is the only way to
+/// obtain this decomposition, so callers do not need to parse offsets or reconstruct envelope
+/// fields when passing the data to the finalizer. This structural relationship carries no origin
+/// or execution authority.
+#[derive(Clone, Eq, PartialEq)]
+pub struct CompilerModuleHandoffPartsV1 {
+    envelope: CompilerFfiEnvelopeV1,
+    module: CompilerModulePayloadV1,
+}
+
+impl fmt::Debug for CompilerModuleHandoffPartsV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CompilerModuleHandoffPartsV1")
+            .field("target", &self.target())
+            .field("code_object_version", &self.code_object_version())
+            .field("envelope_identity", &self.envelope.identity())
+            .field("module", &self.module)
+            .finish_non_exhaustive()
+    }
+}
+
+impl CompilerModuleHandoffPartsV1 {
+    pub const fn target(&self) -> DeviceTargetV1 {
+        self.envelope.target()
+    }
+
+    pub const fn code_object_version(&self) -> CodeObjectVersion {
+        self.envelope.code_object_version()
+    }
+
+    pub const fn envelope(&self) -> &CompilerFfiEnvelopeV1 {
+        &self.envelope
+    }
+
+    pub const fn module(&self) -> &CompilerModulePayloadV1 {
+        &self.module
+    }
+
+    /// Moves out both coherent components without exposing their private representation.
+    pub fn into_envelope_and_module(self) -> (CompilerFfiEnvelopeV1, CompilerModulePayloadV1) {
+        (self.envelope, self.module)
+    }
+
+    pub const fn authenticates_compiler_origin(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_compiler_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_worker_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_link_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_load_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
+    }
+}
+
 impl CompilerModuleHandoffV1 {
     pub fn new(
         kind: CompilerModuleKindV1,
@@ -234,7 +370,41 @@ impl CompilerModuleHandoffV1 {
         &self.canonical_bytes
     }
 
+    /// Moves the retained envelope and exact module payload into opaque owned components.
+    ///
+    /// The module reuses the canonical buffer allocation. Removing the bounded wire prefix may
+    /// move bytes within that allocation, but does not parse the wire format or allocate another
+    /// module payload.
+    pub fn into_parts(self) -> CompilerModuleHandoffPartsV1 {
+        let Self {
+            kind,
+            module_identity,
+            envelope,
+            mut canonical_bytes,
+            module_offset,
+            ..
+        } = self;
+        canonical_bytes.drain(..module_offset);
+        debug_assert!(module_identity.matches(&canonical_bytes));
+        CompilerModuleHandoffPartsV1 {
+            envelope,
+            module: CompilerModulePayloadV1 {
+                kind,
+                identity: module_identity,
+                bytes: canonical_bytes,
+            },
+        }
+    }
+
     pub const fn authenticates_compiler_origin(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_compiler_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_worker_authority(&self) -> bool {
         false
     }
 
@@ -248,6 +418,15 @@ impl CompilerModuleHandoffV1 {
 
     pub const fn grants_launch_authority(&self) -> bool {
         false
+    }
+}
+
+impl<'a> TryFrom<&'a [u8]> for CompilerModuleHandoffV1 {
+    type Error = CompilerModuleHandoffErrorV1;
+
+    /// Uses the same bounded, strict, exact-reencoding decoder as [`Self::decode`].
+    fn try_from(bytes: &'a [u8]) -> Result<Self, Self::Error> {
+        Self::decode(bytes)
     }
 }
 
@@ -720,8 +899,10 @@ mod tests {
         ] {
             let first = handoff(kind, module);
             let second = CompilerModuleHandoffV1::decode(first.canonical_bytes()).unwrap();
+            let via_try_from = CompilerModuleHandoffV1::try_from(first.canonical_bytes()).unwrap();
 
             assert_eq!(second, first);
+            assert_eq!(via_try_from, first);
             assert_eq!(second.kind(), kind);
             assert_eq!(second.target(), target());
             assert_eq!(second.code_object_version(), CodeObjectVersion::V5);
@@ -750,6 +931,64 @@ mod tests {
             first.module_bytes().as_ptr(),
             first.canonical_bytes()[offsets(first.canonical_bytes()).module_start..].as_ptr()
         );
+    }
+
+    #[test]
+    fn owned_parts_reuse_retained_data_without_exposing_authority() {
+        let handoff = handoff(CompilerModuleKindV1::LlvmTextIr, LLVM_IR);
+        let expected_envelope_identity = handoff.envelope().identity();
+        let expected_module_identity = handoff.module_identity();
+        let canonical_allocation = handoff.canonical_bytes.as_ptr();
+        let canonical_capacity = handoff.canonical_bytes.capacity();
+
+        let parts = handoff.into_parts();
+        assert_eq!(parts.target(), target());
+        assert_eq!(parts.code_object_version(), CodeObjectVersion::V5);
+        assert_eq!(parts.envelope().identity(), expected_envelope_identity);
+        assert_eq!(parts.module().kind(), CompilerModuleKindV1::LlvmTextIr);
+        assert_eq!(parts.module().identity(), expected_module_identity);
+        assert_eq!(parts.module().bytes(), LLVM_IR);
+        assert_eq!(parts.module.bytes.as_ptr(), canonical_allocation);
+        assert_eq!(parts.module.bytes.capacity(), canonical_capacity);
+        assert!(!parts.authenticates_compiler_origin());
+        assert!(!parts.grants_compiler_authority());
+        assert!(!parts.grants_worker_authority());
+        assert!(!parts.grants_link_authority());
+        assert!(!parts.grants_load_authority());
+        assert!(!parts.grants_launch_authority());
+        assert!(!parts.module().authenticates_compiler_origin());
+        assert!(!parts.module().grants_compiler_authority());
+        assert!(!parts.module().grants_worker_authority());
+        assert!(!parts.module().grants_link_authority());
+        assert!(!parts.module().grants_load_authority());
+        assert!(!parts.module().grants_launch_authority());
+
+        let (envelope, module) = parts.into_envelope_and_module();
+        assert_eq!(envelope.identity(), expected_envelope_identity);
+        let module_allocation = module.bytes.as_ptr();
+        let module_bytes = module.into_bytes();
+        assert_eq!(module_bytes, LLVM_IR);
+        assert_eq!(module_bytes.as_ptr(), module_allocation);
+    }
+
+    #[test]
+    fn coordinated_payload_and_digest_rewrite_is_new_authority_free_data() {
+        let original = handoff(CompilerModuleKindV1::LlvmTextIr, LLVM_IR);
+        let mut encoded = original.canonical_bytes().to_vec();
+        let location = offsets(&encoded);
+        encoded[location.module_start + 2] ^= 1;
+        let digest: [u8; 32] = Sha256::digest(&encoded[location.module_start..]).into();
+        encoded[location.digest..location.digest + 32].copy_from_slice(&digest);
+
+        let changed = CompilerModuleHandoffV1::decode(&encoded).unwrap();
+        assert_ne!(changed.module_identity(), original.module_identity());
+        assert_ne!(changed.module_bytes(), original.module_bytes());
+        assert!(!changed.authenticates_compiler_origin());
+        assert!(!changed.grants_compiler_authority());
+        assert!(!changed.grants_worker_authority());
+        assert!(!changed.grants_link_authority());
+        assert!(!changed.grants_load_authority());
+        assert!(!changed.grants_launch_authority());
     }
 
     #[test]
