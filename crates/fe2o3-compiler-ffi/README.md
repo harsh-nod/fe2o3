@@ -16,6 +16,9 @@ domain. Contract grammar and IDs come from `reserved-fe2o3-symbols`.
 The constructors are public so tests and non-rustc producers can create structurally identical
 values. The envelope binds bytes but does not authenticate that rustc produced them.
 
-The finished envelope deliberately exposes no contract list, provider artifact, linker input kind,
-expected final symbol set, bitcode claim, or Worker V1 conversion. It is an inert compiler
-observation, not proof that a compiler module exists and not link, load, or launch authority.
+The finished envelope exposes only a borrowed opaque directional-symbol projection over its
+retained validated contracts. The projection preserves canonical order and cannot be constructed,
+mutated, or kept independently of its envelope. It exposes no complete contract list, provider
+artifact, linker input kind, bitcode claim, or Worker V1 conversion. Both envelope and projection
+remain inert compiler observations: neither authenticates compiler origin, proves that a compiler
+module exists, nor grants compiler, link, load, or launch authority.

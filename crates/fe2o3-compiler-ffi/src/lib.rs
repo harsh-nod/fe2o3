@@ -370,6 +370,102 @@ impl CompilerFfiEnvelopeInspectionV1 {
     }
 }
 
+/// Borrowed canonical import and export symbols derived from one validated envelope.
+///
+/// The projection has no public constructor and retains references to the envelope's private
+/// contract storage. Its two sequences therefore cannot be substituted independently, reordered,
+/// or kept after the envelope is dropped. Both sequences preserve the envelope's strict canonical
+/// order and their combined length is at most [`MAX_COMPILER_FFI_CONTRACTS_V1`].
+///
+/// This is neutral data. It does not authenticate compiler origin or grant compiler, link, load,
+/// or launch authority.
+///
+/// ```compile_fail
+/// use fe2o3_compiler_ffi::{
+///     CompilerFfiDirectionalSymbolsV1, CompilerFfiEnvelopeV1,
+/// };
+///
+/// fn outlive_envelope(
+///     envelope: CompilerFfiEnvelopeV1,
+/// ) -> CompilerFfiDirectionalSymbolsV1<'static> {
+///     envelope.directional_symbols()
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use fe2o3_compiler_ffi::CompilerFfiDirectionalSymbolsV1;
+///
+/// fn forge<'a>() -> CompilerFfiDirectionalSymbolsV1<'a> {
+///     CompilerFfiDirectionalSymbolsV1 {
+///         imports: &[],
+///         exports: &[],
+///     }
+/// }
+/// ```
+#[derive(Clone, Copy)]
+pub struct CompilerFfiDirectionalSymbolsV1<'envelope> {
+    imports: &'envelope [CompilerFfiContractV1],
+    exports: &'envelope [CompilerFfiContractV1],
+}
+
+impl fmt::Debug for CompilerFfiDirectionalSymbolsV1<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CompilerFfiDirectionalSymbolsV1")
+            .field("import_count", &self.import_count())
+            .field("export_count", &self.export_count())
+            .finish_non_exhaustive()
+    }
+}
+
+impl<'envelope> CompilerFfiDirectionalSymbolsV1<'envelope> {
+    /// Iterates exact device imports in canonical envelope order.
+    pub fn imports(
+        &self,
+    ) -> impl Clone + DoubleEndedIterator<Item = &str> + ExactSizeIterator + '_ {
+        self.imports.iter().map(|contract| contract.symbol.as_str())
+    }
+
+    /// Iterates exact device exports in canonical envelope order.
+    pub fn exports(
+        &self,
+    ) -> impl Clone + DoubleEndedIterator<Item = &str> + ExactSizeIterator + '_ {
+        self.exports.iter().map(|contract| contract.symbol.as_str())
+    }
+
+    pub const fn import_count(&self) -> usize {
+        self.imports.len()
+    }
+
+    pub const fn export_count(&self) -> usize {
+        self.exports.len()
+    }
+
+    pub const fn total_count(&self) -> usize {
+        self.import_count() + self.export_count()
+    }
+
+    pub const fn authenticates_compiler_origin(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_compiler_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_link_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_load_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
+    }
+}
+
 /// Opaque, canonical compiler observation with no executable authority.
 #[derive(Clone, Eq, PartialEq)]
 pub struct CompilerFfiEnvelopeV1 {
@@ -412,6 +508,21 @@ impl CompilerFfiEnvelopeV1 {
 
     pub const fn inspection(&self) -> CompilerFfiEnvelopeInspectionV1 {
         self.inspection
+    }
+
+    /// Derives exact directional symbols from the envelope's retained validated contracts.
+    pub fn directional_symbols(&self) -> CompilerFfiDirectionalSymbolsV1<'_> {
+        let import_count = self
+            .contracts
+            .partition_point(|contract| contract.direction == DeviceFfiDirectionV1::Import);
+        let (imports, exports) = self.contracts.split_at(import_count);
+        debug_assert!(
+            exports
+                .iter()
+                .all(|contract| contract.direction == DeviceFfiDirectionV1::Export),
+            "validated compiler FFI envelope lost canonical direction order"
+        );
+        CompilerFfiDirectionalSymbolsV1 { imports, exports }
     }
 
     pub const fn grants_link_authority(&self) -> bool {
@@ -996,6 +1107,195 @@ mod tests {
     }
 
     #[test]
+    fn directional_projection_derives_exact_roles_without_authority() {
+        let envelope = envelope("ffi_crate");
+        let projection = envelope.directional_symbols();
+
+        assert_eq!(projection.imports().collect::<Vec<_>>(), ["external_add"]);
+        assert_eq!(projection.exports().collect::<Vec<_>>(), ["rust_helper"]);
+        assert_eq!(projection.import_count(), 1);
+        assert_eq!(projection.export_count(), 1);
+        assert_eq!(projection.total_count(), 2);
+        assert!(!projection.authenticates_compiler_origin());
+        assert!(!projection.grants_compiler_authority());
+        assert!(!projection.grants_link_authority());
+        assert!(!projection.grants_load_authority());
+        assert!(!projection.grants_launch_authority());
+    }
+
+    #[test]
+    fn directional_projection_preserves_deterministic_canonical_order() {
+        let mut builder =
+            CompilerFfiEnvelopeBuilderV1::new(target(), CodeObjectVersion::V5, 4).unwrap();
+        for contract in [
+            contract(
+                DeviceFfiDirectionV1::Import,
+                "external_a",
+                IMPORT_ABI,
+                "read_global",
+                0x11,
+                owner(1, "ffi_crate", "external_a"),
+            ),
+            contract(
+                DeviceFfiDirectionV1::Import,
+                "external_z",
+                IMPORT_ABI,
+                "read_global",
+                0x12,
+                owner(2, "ffi_crate", "external_z"),
+            ),
+            contract(
+                DeviceFfiDirectionV1::Export,
+                "rust_a",
+                EXPORT_ABI,
+                "none",
+                0x21,
+                owner(3, "ffi_crate", "rust_a"),
+            ),
+            contract(
+                DeviceFfiDirectionV1::Export,
+                "rust_z",
+                EXPORT_ABI,
+                "none",
+                0x22,
+                owner(4, "ffi_crate", "rust_z"),
+            ),
+        ] {
+            builder.push(contract).unwrap();
+        }
+        let envelope = builder.finish().unwrap();
+
+        for _ in 0..2 {
+            let projection = envelope.directional_symbols();
+            assert_eq!(
+                projection.imports().collect::<Vec<_>>(),
+                ["external_a", "external_z"]
+            );
+            assert_eq!(
+                projection.exports().collect::<Vec<_>>(),
+                ["rust_a", "rust_z"]
+            );
+        }
+    }
+
+    #[test]
+    fn same_cardinality_envelopes_cannot_substitute_projected_symbols() {
+        let original = envelope("ffi_crate");
+        let mut substituted_builder =
+            CompilerFfiEnvelopeBuilderV1::new(target(), CodeObjectVersion::V5, 2).unwrap();
+        substituted_builder
+            .push(contract(
+                DeviceFfiDirectionV1::Import,
+                "external_substitute",
+                IMPORT_ABI,
+                "read_global",
+                0x31,
+                owner(3, "ffi_crate", "external_substitute"),
+            ))
+            .unwrap();
+        substituted_builder
+            .push(contract(
+                DeviceFfiDirectionV1::Export,
+                "rust_substitute",
+                EXPORT_ABI,
+                "none",
+                0x32,
+                owner(4, "ffi_crate", "rust_substitute"),
+            ))
+            .unwrap();
+        let substituted = substituted_builder.finish().unwrap();
+        let original_projection = original.directional_symbols();
+        let substituted_projection = substituted.directional_symbols();
+
+        assert_eq!(
+            original_projection.import_count(),
+            substituted_projection.import_count()
+        );
+        assert_eq!(
+            original_projection.export_count(),
+            substituted_projection.export_count()
+        );
+        assert_ne!(
+            original_projection.imports().collect::<Vec<_>>(),
+            substituted_projection.imports().collect::<Vec<_>>()
+        );
+        assert_ne!(
+            original_projection.exports().collect::<Vec<_>>(),
+            substituted_projection.exports().collect::<Vec<_>>()
+        );
+        assert_ne!(original.identity(), substituted.identity());
+    }
+
+    #[test]
+    fn directional_projection_supports_empty_one_sided_sets() {
+        for (direction, symbol, abi, expected_imports, expected_exports) in [
+            (
+                DeviceFfiDirectionV1::Import,
+                "external_only",
+                IMPORT_ABI,
+                vec!["external_only"],
+                Vec::new(),
+            ),
+            (
+                DeviceFfiDirectionV1::Export,
+                "rust_only",
+                EXPORT_ABI,
+                Vec::new(),
+                vec!["rust_only"],
+            ),
+        ] {
+            let mut builder =
+                CompilerFfiEnvelopeBuilderV1::new(target(), CodeObjectVersion::V5, 1).unwrap();
+            builder
+                .push(contract(
+                    direction,
+                    symbol,
+                    abi,
+                    "none",
+                    0x11,
+                    owner(1, "ffi_crate", symbol),
+                ))
+                .unwrap();
+            let envelope = builder.finish().unwrap();
+            let projection = envelope.directional_symbols();
+
+            assert_eq!(projection.imports().collect::<Vec<_>>(), expected_imports);
+            assert_eq!(projection.exports().collect::<Vec<_>>(), expected_exports);
+        }
+    }
+
+    #[test]
+    fn directional_projection_is_bounded_by_envelope_contract_limit() {
+        let mut builder = CompilerFfiEnvelopeBuilderV1::new(
+            target(),
+            CodeObjectVersion::V5,
+            MAX_COMPILER_FFI_CONTRACTS_V1,
+        )
+        .unwrap();
+        for index in 0..MAX_COMPILER_FFI_CONTRACTS_V1 {
+            let symbol = format!("external_{index:03}");
+            builder
+                .push(contract(
+                    DeviceFfiDirectionV1::Import,
+                    &symbol,
+                    IMPORT_ABI,
+                    "read_global",
+                    index as u8,
+                    owner(index as u8, "ffi_crate", &symbol),
+                ))
+                .unwrap();
+        }
+        let envelope = builder.finish().unwrap();
+        let projection = envelope.directional_symbols();
+
+        assert_eq!(projection.import_count(), MAX_COMPILER_FFI_CONTRACTS_V1);
+        assert_eq!(projection.exports().len(), 0);
+        assert_eq!(projection.total_count(), MAX_COMPILER_FFI_CONTRACTS_V1);
+        assert_eq!(projection.imports().next(), Some("external_000"));
+        assert_eq!(projection.imports().next_back(), Some("external_127"));
+    }
+
+    #[test]
     fn count_and_text_bounds_are_checked_before_builder_storage() {
         assert!(matches!(
             CompilerFfiEnvelopeBuilderV1::new(
@@ -1234,5 +1534,33 @@ mod tests {
             builder.push(first.clone()).unwrap();
             assert_eq!(builder.push(duplicate), Err(expected));
         }
+    }
+
+    #[test]
+    fn conflicting_direction_for_the_same_symbol_is_rejected_before_projection() {
+        let mut builder =
+            CompilerFfiEnvelopeBuilderV1::new(target(), CodeObjectVersion::V5, 2).unwrap();
+        builder
+            .push(contract(
+                DeviceFfiDirectionV1::Import,
+                "shared_symbol",
+                IMPORT_ABI,
+                "read_global",
+                0x11,
+                owner(1, "ffi_crate", "import_owner"),
+            ))
+            .unwrap();
+
+        assert_eq!(
+            builder.push(contract(
+                DeviceFfiDirectionV1::Export,
+                "shared_symbol",
+                EXPORT_ABI,
+                "none",
+                0x22,
+                owner(2, "ffi_crate", "export_owner"),
+            )),
+            Err(CompilerFfiEnvelopeError::DuplicateSymbol)
+        );
     }
 }
