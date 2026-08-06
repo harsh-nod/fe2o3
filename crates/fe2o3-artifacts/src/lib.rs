@@ -66,9 +66,10 @@ pub use direct_link::{
     DirectLinkWorkerIdentityV1, MAX_DIRECT_LINK_BINDINGS, ValidatedDirectLinkBundleEvidenceV1,
 };
 pub use direct_link_bridge::{
-    ArtifactDerivedLinkPublicationScopeV1, DirectLinkBridgeError, DirectLinkBridgeIdentityKindV1,
-    DirectLinkDerivedScopeFieldV1, DirectLinkPublicationBridgeV1,
-    DirectLinkPublicationScopeProvenanceV1,
+    CallerClaimedPackageIdentityV1, DirectLinkBridgeError, DirectLinkBridgeIdentityKindV1,
+    DirectLinkDurablePlanHandoffV1, DirectLinkManifestClaimScopeFieldV1,
+    DirectLinkPublicationBridgeV1, DirectLinkPublicationOccurrenceIdentityV1,
+    DirectLinkPublicationScopeProvenanceV1, ManifestClaimDerivedLinkPublicationScopeV1,
 };
 pub use direct_link_decode::DirectLinkDecodeError;
 pub use direct_link_encode::{

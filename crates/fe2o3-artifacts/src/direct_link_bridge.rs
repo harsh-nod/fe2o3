@@ -6,21 +6,27 @@ use fe2o3_artifact_transaction::{
     LinkedOutputIdentityV1, PackageIdentityV1, PinnedWorkerIdentityV1, PublishedLinkArtifactV1,
     TargetIdentityV1, ValidatedResponseIdentityV1,
 };
+use sha2::{Digest as _, Sha256};
 
 use crate::{
-    ArtifactContainerV1, CodeObjectFormat, DIRECT_LINK_EVIDENCE_DIGEST_ALGORITHM, DigestAlgorithm,
-    DirectLinkBindingV1, DirectLinkBundleEvidenceV1, DirectLinkBundleIndexIdentityV1,
-    DirectLinkContainerIdentityV1, DirectLinkFinalizedPayloadIdentityV1,
-    DirectLinkToolchainIdentityV1, DirectLinkWorkerIdentityV1, ManifestV1, PayloadDigest,
-    ValidatedDirectLinkBundleEvidenceV1, ValidationError,
+    AbiKind, AliasClass, ArgumentOwnership, ArtifactContainerV1, BlockSize, CONTAINER_MAGIC,
+    CONTAINER_VERSION, CodeObjectFormat, DIRECT_LINK_EVIDENCE_DIGEST_ALGORITHM, DigestAlgorithm,
+    DigestBytes, Dimensions, DirectLinkBindingV1, DirectLinkBundleEvidenceV1,
+    DirectLinkBundleIndexIdentityV1, DirectLinkContainerIdentityV1,
+    DirectLinkFinalizedPayloadIdentityV1, DirectLinkToolchainIdentityV1,
+    DirectLinkWorkerIdentityV1, KernelEntry, MAX_MANIFEST_BYTES, PayloadDigest,
+    ValidatedDirectLinkBundleEvidenceV1,
 };
 
 const WORKER_CLOSURE_DOMAIN: &[u8] = b"fe2o3.direct-link.worker-closure.v1\0";
 const PUBLICATION_DOMAIN: &[u8] = b"fe2o3.direct-link.publication-bridge.v1\0";
-const DERIVED_SCOPE_PUBLICATION_DOMAIN: &[u8] =
-    b"fe2o3.direct-link.publication-bridge.derived-scope.v1\0";
-const DERIVED_TARGET_DOMAIN: &[u8] = b"fe2o3.direct-link.publication-scope.target.v1\0";
-const DERIVED_KERNEL_SET_DOMAIN: &[u8] = b"fe2o3.direct-link.publication-scope.kernel-set.v1\0";
+const MANIFEST_CLAIM_SCOPE_PUBLICATION_DOMAIN: &[u8] =
+    b"fe2o3.direct-link.publication-bridge.manifest-claim-scope.v1\0";
+const MANIFEST_CLAIM_TARGET_DOMAIN: &[u8] =
+    b"fe2o3.direct-link.publication-scope.manifest-claim-target.v1\0";
+const MANIFEST_CLAIM_KERNEL_SET_DOMAIN: &[u8] =
+    b"fe2o3.direct-link.publication-scope.manifest-claim-logical-kernel-set.v1\0";
+const PUBLICATION_OCCURRENCE_DOMAIN: &[u8] = b"fe2o3.direct-link.publication-occurrence.v1\0";
 
 /// Identity domain involved in a rejected G5/G6 bridge operation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -39,15 +45,15 @@ pub enum DirectLinkBridgeIdentityKindV1 {
 /// Provenance of the G5 publication scope committed by a bridge.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DirectLinkPublicationScopeProvenanceV1 {
-    /// Weaker compatibility path: all three identities came from external policy.
-    TrustedExternalPolicy,
-    /// Package policy is external; target and kernel-set identities were derived from artifacts.
-    ArtifactDerivedV1,
+    /// Unsafe compatibility path: all three identities are unauthenticated external claims.
+    UnsafeLegacyExternalClaims,
+    /// Package is a caller claim; target and logical kernel set are manifest claims.
+    ManifestClaimDerivedV1,
 }
 
-/// Field that did not match an opaque artifact-derived scope witness.
+/// Field that did not match an opaque manifest-claim-derived scope witness.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum DirectLinkDerivedScopeFieldV1 {
+pub enum DirectLinkManifestClaimScopeFieldV1 {
     BindingIndex,
     Binding,
     BundleEvidence,
@@ -69,10 +75,13 @@ pub enum DirectLinkBridgeError {
     IdentityMismatch {
         kind: DirectLinkBridgeIdentityKindV1,
     },
-    DerivedScopeMismatch {
-        field: DirectLinkDerivedScopeFieldV1,
+    ManifestClaimScopeMismatch {
+        field: DirectLinkManifestClaimScopeFieldV1,
     },
-    DerivedScopeProjectionInvalid(ValidationError),
+    CanonicalManifestEncodingTooLarge {
+        actual: usize,
+        max: usize,
+    },
 }
 
 impl fmt::Display for DirectLinkBridgeError {
@@ -94,41 +103,74 @@ impl fmt::Display for DirectLinkBridgeError {
             Self::IdentityMismatch { kind } => {
                 write!(formatter, "G5/G6 {kind:?} identity mismatch")
             }
-            Self::DerivedScopeMismatch { field } => {
-                write!(formatter, "artifact-derived G5 scope {field:?} mismatch")
-            }
-            Self::DerivedScopeProjectionInvalid(error) => {
+            Self::ManifestClaimScopeMismatch { field } => {
                 write!(
                     formatter,
-                    "artifact-derived G5 scope projection is invalid: {error}"
+                    "manifest-claim-derived G5 scope {field:?} mismatch"
+                )
+            }
+            Self::CanonicalManifestEncodingTooLarge { actual, max } => {
+                write!(
+                    formatter,
+                    "canonical manifest encoding has {actual} bytes, exceeding {max}"
                 )
             }
         }
     }
 }
 
-impl std::error::Error for DirectLinkBridgeError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::DerivedScopeProjectionInvalid(error) => Some(error),
-            _ => None,
-        }
+impl std::error::Error for DirectLinkBridgeError {}
+
+/// Explicitly unauthenticated package-identity claim supplied by a caller.
+///
+/// This wrapper does not establish package ownership, namespace control, a
+/// lease, or current publication authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CallerClaimedPackageIdentityV1(PackageIdentityV1);
+
+impl CallerClaimedPackageIdentityV1 {
+    pub const fn new(claim: PackageIdentityV1) -> Self {
+        Self(claim)
+    }
+
+    /// Returns the descriptive package claim for the inert G5 model.
+    pub const fn descriptive_claim(self) -> PackageIdentityV1 {
+        self.0
+    }
+
+    pub const fn grants_package_ownership_authority(self) -> bool {
+        false
     }
 }
 
-/// Opaque V1 witness for one artifact-derived G5 publication scope.
+/// Canonical identity of one container/finalized-payload occurrence.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct DirectLinkPublicationOccurrenceIdentityV1([u8; 32]);
+
+impl DirectLinkPublicationOccurrenceIdentityV1 {
+    pub const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+/// Opaque V1 witness for one manifest-claim-derived G5 publication scope.
 ///
-/// Construction binds an externally trusted package identity to one exact G6
-/// binding occurrence and concrete container. The target identity covers every
-/// canonical target field. The kernel-set identity covers a canonical manifest
-/// projection containing the producer identities, complete target, finalized
-/// native code-object record, and the complete sorted set of kernel records
-/// that reference that payload.
+/// Construction binds an explicit caller package claim to one exact G6 binding
+/// occurrence and concrete container. The target identity covers every
+/// canonical manifest target field. The logical kernel-set identity covers the
+/// complete sorted set of manifest kernel claims referencing that occurrence:
+/// stable kernel ID, logical name, symbol, source-identity claim, required
+/// capabilities, launch contract, ABI, and the binding's FFI-closure claim. It
+/// deliberately excludes payload, executable, code-object, compiler, producer,
+/// toolchain, container, and other build-content identities.
 ///
-/// This witness authenticates none of its inputs and grants no load or launch
-/// authority. In particular, `package` remains an external policy assertion.
+/// These remain claims, not authenticated compiler or native-code facts. This
+/// witness grants no package ownership, durable publication, load, or launch
+/// authority. A future authoritative path must additionally require the G5
+/// package lease/current-publication witness and G7 HSACO inspection witness.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ArtifactDerivedLinkPublicationScopeV1 {
+pub struct ManifestClaimDerivedLinkPublicationScopeV1 {
+    package_claim: CallerClaimedPackageIdentityV1,
     binding_index: usize,
     bundle_index_identity: DirectLinkBundleIndexIdentityV1,
     evidence_identity: PayloadDigest,
@@ -136,10 +178,14 @@ pub struct ArtifactDerivedLinkPublicationScopeV1 {
     scope: LinkPublicationScopeV1,
 }
 
-impl ArtifactDerivedLinkPublicationScopeV1 {
-    /// Derives a scope from one validated binding and its exact container.
+impl ManifestClaimDerivedLinkPublicationScopeV1 {
+    /// Derives descriptive scope claims from one binding occurrence and container.
+    ///
+    /// Exact container identity is recomputed with bounded streaming. Only the
+    /// canonical manifest encoding is allocated, and it is rejected above
+    /// `MAX_MANIFEST_BYTES`; payload bytes are borrowed and streamed once.
     pub fn derive(
-        package: PackageIdentityV1,
+        package_claim: CallerClaimedPackageIdentityV1,
         validated: &ValidatedDirectLinkBundleEvidenceV1<'_>,
         binding_index: usize,
         container: &ArtifactContainerV1,
@@ -150,34 +196,32 @@ impl ArtifactDerivedLinkPublicationScopeV1 {
                 binding_count: validated.bindings().len(),
             },
         )?;
-        let measured_container_identity = DirectLinkContainerIdentityV1::new(
-            DIRECT_LINK_EVIDENCE_DIGEST_ALGORITHM.calculate(&container.to_bytes()),
-        );
-        require_derived(
+        let measured_container_identity = stream_container_identity(container)?;
+        require_manifest_claim(
             measured_container_identity == binding.container_identity(),
-            DirectLinkDerivedScopeFieldV1::ContainerIdentity,
+            DirectLinkManifestClaimScopeFieldV1::ContainerIdentity,
         )?;
 
         let finalized = binding.expectation().finalized_payload_identity();
-        let object = container
+        container
             .manifest()
             .code_objects()
             .iter()
             .find(|object| object.digest() == finalized.digest().bytes())
             .filter(|object| object.format() == CodeObjectFormat::NativeExecutable)
-            .ok_or(DirectLinkBridgeError::DerivedScopeMismatch {
-                field: DirectLinkDerivedScopeFieldV1::FinalizedPayloadOccurrence,
+            .ok_or(DirectLinkBridgeError::ManifestClaimScopeMismatch {
+                field: DirectLinkManifestClaimScopeFieldV1::FinalizedPayloadOccurrence,
             })?;
         let payload = container
             .payloads()
             .iter()
             .find(|payload| payload.digest() == finalized.digest())
-            .ok_or(DirectLinkBridgeError::DerivedScopeMismatch {
-                field: DirectLinkDerivedScopeFieldV1::FinalizedPayloadOccurrence,
+            .ok_or(DirectLinkBridgeError::ManifestClaimScopeMismatch {
+                field: DirectLinkManifestClaimScopeFieldV1::FinalizedPayloadOccurrence,
             })?;
         payload.digest().verify(payload.bytes()).map_err(|_| {
-            DirectLinkBridgeError::DerivedScopeMismatch {
-                field: DirectLinkDerivedScopeFieldV1::FinalizedPayloadOccurrence,
+            DirectLinkBridgeError::ManifestClaimScopeMismatch {
+                field: DirectLinkManifestClaimScopeFieldV1::FinalizedPayloadOccurrence,
             }
         })?;
 
@@ -186,39 +230,44 @@ impl ArtifactDerivedLinkPublicationScopeV1 {
             .kernels()
             .iter()
             .filter(|kernel| kernel.code_object_digest() == finalized.digest().bytes())
-            .cloned()
             .collect::<Vec<_>>();
         if kernels.is_empty() {
-            return Err(DirectLinkBridgeError::DerivedScopeMismatch {
-                field: DirectLinkDerivedScopeFieldV1::FinalizedPayloadOccurrence,
+            return Err(DirectLinkBridgeError::ManifestClaimScopeMismatch {
+                field: DirectLinkManifestClaimScopeFieldV1::FinalizedPayloadOccurrence,
             });
         }
-        let kernel_projection = ManifestV1::new(
-            container.manifest().compiler().clone(),
-            container.manifest().producer().clone(),
-            container.manifest().target().clone(),
-            vec![object.clone()],
-            kernels,
-        )
-        .map_err(DirectLinkBridgeError::DerivedScopeProjectionInvalid)?;
 
-        let target = TargetIdentityV1::from_bytes(derive_target_identity(container));
-        let kernel_set = KernelSetIdentityV1::from_bytes(derive_kernel_set_identity(
-            finalized,
-            &kernel_projection,
+        let target = TargetIdentityV1::from_bytes(derive_manifest_claim_target(container));
+        let kernel_set = KernelSetIdentityV1::from_bytes(derive_logical_kernel_set_claim(
+            binding.expectation().ffi_contract_identity().digest(),
+            &kernels,
         ));
         Ok(Self {
+            package_claim,
             binding_index,
             bundle_index_identity: validated.evidence().bundle_index_identity(),
             evidence_identity: validated
                 .evidence()
                 .digest(DIRECT_LINK_EVIDENCE_DIGEST_ALGORITHM),
             binding: binding.clone(),
-            scope: LinkPublicationScopeV1::new(package, kernel_set, target),
+            scope: LinkPublicationScopeV1::new(
+                package_claim.descriptive_claim(),
+                kernel_set,
+                target,
+            ),
         })
     }
 
-    pub const fn scope(&self) -> LinkPublicationScopeV1 {
+    /// Returns the caller's descriptive package claim without adding authority.
+    pub const fn caller_package_claim(&self) -> CallerClaimedPackageIdentityV1 {
+        self.package_claim
+    }
+
+    /// Returns raw scope claims required by the inert G5 model.
+    ///
+    /// This getter erases no stored provenance from the witness itself, but the
+    /// returned G5 value carries no provenance and must never authorize use.
+    pub const fn descriptive_scope_claim(&self) -> LinkPublicationScopeV1 {
         self.scope
     }
 
@@ -234,12 +283,16 @@ impl ArtifactDerivedLinkPublicationScopeV1 {
         self.binding.expectation().finalized_payload_identity()
     }
 
-    /// Derived-scope evidence never grants module-loading authority.
+    pub fn occurrence_identity(&self) -> DirectLinkPublicationOccurrenceIdentityV1 {
+        publication_occurrence_identity(&self.binding)
+    }
+
+    /// Manifest-claim scope evidence never grants module-loading authority.
     pub const fn grants_load_authority(&self) -> bool {
         false
     }
 
-    /// Derived-scope evidence never grants kernel-launch authority.
+    /// Manifest-claim scope evidence never grants kernel-launch authority.
     pub const fn grants_launch_authority(&self) -> bool {
         false
     }
@@ -250,20 +303,120 @@ impl ArtifactDerivedLinkPublicationScopeV1 {
         binding_index: usize,
         binding: &DirectLinkBindingV1,
     ) -> Result<(), DirectLinkBridgeError> {
-        require_derived(
+        require_manifest_claim(
             self.binding_index == binding_index,
-            DirectLinkDerivedScopeFieldV1::BindingIndex,
+            DirectLinkManifestClaimScopeFieldV1::BindingIndex,
         )?;
-        require_derived(
+        require_manifest_claim(
             self.binding == *binding,
-            DirectLinkDerivedScopeFieldV1::Binding,
+            DirectLinkManifestClaimScopeFieldV1::Binding,
         )?;
         let evidence = validated.evidence();
-        require_derived(
+        require_manifest_claim(
             self.bundle_index_identity == evidence.bundle_index_identity()
                 && self.evidence_identity == evidence.digest(DIRECT_LINK_EVIDENCE_DIGEST_ALGORITHM),
-            DirectLinkDerivedScopeFieldV1::BundleEvidence,
+            DirectLinkManifestClaimScopeFieldV1::BundleEvidence,
         )
+    }
+}
+
+/// Inert, provenance-preserving API boundary for the future durable G5 adapter.
+///
+/// Raw G5 identities are exposed only as descriptive model inputs. This value
+/// must stay intact through durable-plan construction so scope provenance and
+/// occurrence identity cannot be silently dropped. It is not a package lease,
+/// current-publication witness, HSACO inspection witness, or runtime authority.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DirectLinkDurablePlanHandoffV1 {
+    attempt: BuildAttempt,
+    scope_claim: LinkPublicationScopeV1,
+    scope_provenance: DirectLinkPublicationScopeProvenanceV1,
+    request: CanonicalLinkRequestIdentityV1,
+    worker: PinnedWorkerIdentityV1,
+    response: ValidatedResponseIdentityV1,
+    linked_output: LinkedOutputIdentityV1,
+    finalization: FinalizationIdentityV1,
+    finalized_output: FinalizedOutputIdentityV1,
+    publication: AtomicPublicationIdentityV1,
+    occurrence: DirectLinkPublicationOccurrenceIdentityV1,
+    container_identity: DirectLinkContainerIdentityV1,
+    finalized_payload_identity: DirectLinkFinalizedPayloadIdentityV1,
+    bundle_index_identity: DirectLinkBundleIndexIdentityV1,
+    evidence_identity: PayloadDigest,
+}
+
+impl DirectLinkDurablePlanHandoffV1 {
+    pub const fn attempt(&self) -> BuildAttempt {
+        self.attempt
+    }
+
+    /// Descriptive raw scope claim required by the current G5 model.
+    pub const fn descriptive_scope_claim(&self) -> LinkPublicationScopeV1 {
+        self.scope_claim
+    }
+
+    pub const fn scope_provenance(&self) -> DirectLinkPublicationScopeProvenanceV1 {
+        self.scope_provenance
+    }
+
+    pub const fn request_identity(&self) -> CanonicalLinkRequestIdentityV1 {
+        self.request
+    }
+
+    pub const fn worker_identity(&self) -> PinnedWorkerIdentityV1 {
+        self.worker
+    }
+
+    pub const fn response_identity(&self) -> ValidatedResponseIdentityV1 {
+        self.response
+    }
+
+    pub const fn linked_output_identity(&self) -> LinkedOutputIdentityV1 {
+        self.linked_output
+    }
+
+    pub const fn finalization_identity(&self) -> FinalizationIdentityV1 {
+        self.finalization
+    }
+
+    pub const fn finalized_output_identity(&self) -> FinalizedOutputIdentityV1 {
+        self.finalized_output
+    }
+
+    pub const fn publication_identity(&self) -> AtomicPublicationIdentityV1 {
+        self.publication
+    }
+
+    pub const fn occurrence_identity(&self) -> DirectLinkPublicationOccurrenceIdentityV1 {
+        self.occurrence
+    }
+
+    pub const fn container_identity(&self) -> DirectLinkContainerIdentityV1 {
+        self.container_identity
+    }
+
+    pub const fn finalized_payload_identity(&self) -> DirectLinkFinalizedPayloadIdentityV1 {
+        self.finalized_payload_identity
+    }
+
+    pub const fn bundle_index_identity(&self) -> DirectLinkBundleIndexIdentityV1 {
+        self.bundle_index_identity
+    }
+
+    pub const fn evidence_identity(&self) -> PayloadDigest {
+        self.evidence_identity
+    }
+
+    pub const fn grants_publication_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_load_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
     }
 }
 
@@ -274,15 +427,18 @@ impl ArtifactDerivedLinkPublicationScopeV1 {
 /// returned values are the only normative conversions into G5 identity domains:
 /// direct SHA-256 identities are converted field by field, while worker/toolchain
 /// and publication identities are derived from domain-separated canonical
-/// preimages. Scope is either externally asserted by the weaker compatibility
-/// path or target/kernel-set-derived from an exact container. The publication
-/// preimage commits to the attempt, scope,
+/// preimages. Scope is either an unsafe legacy external claim or a caller
+/// package claim plus manifest target/logical-kernel claims. The publication
+/// preimage commits to the attempt, descriptive scope claims,
 /// request, worker and toolchain measurements, response, transformation, FFI
-/// closure, container, bundle, and complete direct-link evidence envelope.
+/// closure, exact container/finalized-payload occurrence, bundle, and complete
+/// direct-link evidence envelope.
 ///
 /// This model performs no filesystem I/O, does not authenticate caller-supplied measurements, and
 /// grants no authority to load or launch code. Filesystem publication and durable recovery remain
 /// the responsibility of a future adapter under the artifact transaction lock.
+/// Any future authoritative path must retain this opaque bridge or its durable
+/// handoff and combine it with the separately owned G5 and G7 witnesses.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DirectLinkPublicationBridgeV1 {
     attempt: BuildAttempt,
@@ -295,11 +451,12 @@ pub struct DirectLinkPublicationBridgeV1 {
 impl DirectLinkPublicationBridgeV1 {
     /// Prepares a bridge for one binding in a concretely validated envelope.
     ///
-    /// This is the weaker compatibility constructor. `trusted_scope` is
-    /// supplied entirely by an external trusted policy boundary.
+    /// This is an unsafe, inert compatibility constructor. Its historical name
+    /// is retained for API compatibility only; `trusted_scope` is not trusted.
+    /// All three identities are unauthenticated caller claims.
     /// This model does not derive or verify its package, kernel-set, or target
     /// identities from artifact records. The value is committed into the
-    /// publication identity without being elevated to an artifact-derived fact.
+    /// publication identity without being elevated beyond a claim.
     pub fn prepare_with_trusted_scope(
         attempt: BuildAttempt,
         trusted_scope: LinkPublicationScopeV1,
@@ -315,7 +472,7 @@ impl DirectLinkPublicationBridgeV1 {
         let bridge = Self {
             attempt,
             scope: trusted_scope,
-            scope_provenance: DirectLinkPublicationScopeProvenanceV1::TrustedExternalPolicy,
+            scope_provenance: DirectLinkPublicationScopeProvenanceV1::UnsafeLegacyExternalClaims,
             bundle: validated.evidence().clone(),
             binding: binding.clone(),
         };
@@ -323,14 +480,14 @@ impl DirectLinkPublicationBridgeV1 {
         Ok(bridge)
     }
 
-    /// Prepares a bridge with target and kernel-set scope derived from artifacts.
+    /// Prepares a bridge with target and logical-kernel-set manifest claims.
     ///
     /// The witness is consumed and must match the selected index, exact binding,
     /// and complete validated G6 evidence envelope. Package identity remains an
-    /// explicitly trusted external policy input captured by the witness.
-    pub fn prepare_with_derived_scope(
+    /// explicit unauthenticated caller claim captured by the witness.
+    pub fn prepare_with_manifest_claim_scope(
         attempt: BuildAttempt,
-        derived_scope: ArtifactDerivedLinkPublicationScopeV1,
+        manifest_claim_scope: ManifestClaimDerivedLinkPublicationScopeV1,
         validated: &ValidatedDirectLinkBundleEvidenceV1<'_>,
         binding_index: usize,
     ) -> Result<Self, DirectLinkBridgeError> {
@@ -340,11 +497,11 @@ impl DirectLinkPublicationBridgeV1 {
                 binding_count: validated.bindings().len(),
             },
         )?;
-        derived_scope.require_matches(validated, binding_index, binding)?;
+        manifest_claim_scope.require_matches(validated, binding_index, binding)?;
         let bridge = Self {
             attempt,
-            scope: derived_scope.scope,
-            scope_provenance: DirectLinkPublicationScopeProvenanceV1::ArtifactDerivedV1,
+            scope: manifest_claim_scope.scope,
+            scope_provenance: DirectLinkPublicationScopeProvenanceV1::ManifestClaimDerivedV1,
             bundle: validated.evidence().clone(),
             binding: binding.clone(),
         };
@@ -356,28 +513,34 @@ impl DirectLinkPublicationBridgeV1 {
         self.attempt
     }
 
-    /// Compatibility accessor for the publication scope.
+    /// Compatibility accessor for raw descriptive publication-scope claims.
     ///
-    /// Callers must inspect `scope_provenance` before treating target or
-    /// kernel-set fields as artifact-derived.
+    /// The historical name is misleading and retained only for G5 model
+    /// compatibility. The returned value carries no provenance or authority.
     pub const fn trusted_scope(&self) -> LinkPublicationScopeV1 {
         self.scope
     }
 
-    /// Returns the publication scope committed by this bridge.
+    /// Returns raw descriptive scope claims committed by this bridge.
+    ///
+    /// This raw G5 model value carries no provenance. Future authoritative code
+    /// must retain this opaque bridge or its provenance-preserving durable
+    /// handoff and additionally require the separate G5 and G7 witnesses.
     pub const fn publication_scope(&self) -> LinkPublicationScopeV1 {
         self.scope
     }
 
-    /// Returns whether scope fields were externally asserted or artifact-derived.
+    /// Returns whether scope fields are legacy external or manifest-derived claims.
     pub const fn scope_provenance(&self) -> DirectLinkPublicationScopeProvenanceV1 {
         self.scope_provenance
     }
 
+    /// Returns the descriptive G6 binding claim; it carries no authority alone.
     pub const fn binding(&self) -> &DirectLinkBindingV1 {
         &self.binding
     }
 
+    /// Returns the descriptive G6 evidence envelope; it carries no authority alone.
     pub const fn bundle(&self) -> &DirectLinkBundleEvidenceV1 {
         &self.bundle
     }
@@ -422,12 +585,19 @@ impl DirectLinkPublicationBridgeV1 {
         ))
     }
 
+    /// Returns the exact container/finalized-payload occurrence identity.
+    pub fn occurrence_identity(&self) -> DirectLinkPublicationOccurrenceIdentityV1 {
+        publication_occurrence_identity(&self.binding)
+    }
+
     /// Derives the atomic G5 publication identity over the complete G5/G6 closure.
     pub fn publication_identity(&self) -> AtomicPublicationIdentityV1 {
         let domain = match self.scope_provenance {
-            DirectLinkPublicationScopeProvenanceV1::TrustedExternalPolicy => PUBLICATION_DOMAIN,
-            DirectLinkPublicationScopeProvenanceV1::ArtifactDerivedV1 => {
-                DERIVED_SCOPE_PUBLICATION_DOMAIN
+            DirectLinkPublicationScopeProvenanceV1::UnsafeLegacyExternalClaims => {
+                PUBLICATION_DOMAIN
+            }
+            DirectLinkPublicationScopeProvenanceV1::ManifestClaimDerivedV1 => {
+                MANIFEST_CLAIM_SCOPE_PUBLICATION_DOMAIN
             }
         };
         AtomicPublicationIdentityV1::from_bytes(calculate_identity(domain, |bytes| {
@@ -458,7 +628,39 @@ impl DirectLinkPublicationBridgeV1 {
                 0x33,
                 self.bundle.digest(DIRECT_LINK_EVIDENCE_DIGEST_ALGORITHM),
             );
+            if self.scope_provenance
+                == DirectLinkPublicationScopeProvenanceV1::ManifestClaimDerivedV1
+            {
+                write_identity(bytes, 0x34, self.occurrence_identity().as_bytes());
+            }
         }))
+    }
+
+    /// Produces an inert, provenance-preserving handoff for a future durable adapter.
+    ///
+    /// The G5 filesystem adapter must accept this handoff as a whole and record
+    /// its provenance rather than reconstructing a plan from raw getters. This
+    /// crate does not create the separately owned G5 package lease/current
+    /// publication witness or G7 authenticated HSACO inspection witness, so the
+    /// handoff cannot authorize publication, loading, or launch.
+    pub fn durable_plan_handoff(&self) -> DirectLinkDurablePlanHandoffV1 {
+        DirectLinkDurablePlanHandoffV1 {
+            attempt: self.attempt,
+            scope_claim: self.scope,
+            scope_provenance: self.scope_provenance,
+            request: self.request_identity(),
+            worker: self.worker_identity(),
+            response: self.response_identity(),
+            linked_output: self.linked_output_identity(),
+            finalization: self.finalization_identity(),
+            finalized_output: self.finalized_output_identity(),
+            publication: self.publication_identity(),
+            occurrence: self.occurrence_identity(),
+            container_identity: self.binding.container_identity(),
+            finalized_payload_identity: self.binding.expectation().finalized_payload_identity(),
+            bundle_index_identity: self.bundle.bundle_index_identity(),
+            evidence_identity: self.bundle.digest(DIRECT_LINK_EVIDENCE_DIGEST_ALGORITHM),
+        }
     }
 
     /// Validates a completed G5 publication against every identity prepared by this bridge.
@@ -567,20 +769,59 @@ fn require(
     }
 }
 
-fn require_derived(
+fn require_manifest_claim(
     matches: bool,
-    field: DirectLinkDerivedScopeFieldV1,
+    field: DirectLinkManifestClaimScopeFieldV1,
 ) -> Result<(), DirectLinkBridgeError> {
     if matches {
         Ok(())
     } else {
-        Err(DirectLinkBridgeError::DerivedScopeMismatch { field })
+        Err(DirectLinkBridgeError::ManifestClaimScopeMismatch { field })
     }
 }
 
-fn derive_target_identity(container: &ArtifactContainerV1) -> [u8; 32] {
+fn stream_container_identity(
+    container: &ArtifactContainerV1,
+) -> Result<DirectLinkContainerIdentityV1, DirectLinkBridgeError> {
+    let manifest = container.manifest().to_bytes();
+    if manifest.len() > MAX_MANIFEST_BYTES {
+        return Err(DirectLinkBridgeError::CanonicalManifestEncodingTooLarge {
+            actual: manifest.len(),
+            max: MAX_MANIFEST_BYTES,
+        });
+    }
+
+    let mut hasher = Sha256::new();
+    hasher.update(CONTAINER_MAGIC);
+    hasher.update(CONTAINER_VERSION.to_le_bytes());
+    hasher.update(0_u16.to_le_bytes());
+    hasher.update(
+        match container.digest_algorithm() {
+            DigestAlgorithm::Sha256 => 1_u16,
+        }
+        .to_le_bytes(),
+    );
+    hasher.update(0_u16.to_le_bytes());
+    hasher.update((manifest.len() as u32).to_le_bytes());
+    hasher.update((container.payloads().len() as u32).to_le_bytes());
+    hasher.update(&manifest);
+    for payload in container.payloads() {
+        hasher.update(payload.digest().bytes().as_bytes());
+        hasher.update((payload.bytes().len() as u64).to_le_bytes());
+    }
+    for payload in container.payloads() {
+        hasher.update(payload.bytes());
+    }
+    let digest = PayloadDigest::new(
+        DigestAlgorithm::Sha256,
+        DigestBytes::from_bytes(hasher.finalize().into()),
+    );
+    Ok(DirectLinkContainerIdentityV1::new(digest))
+}
+
+fn derive_manifest_claim_target(container: &ArtifactContainerV1) -> [u8; 32] {
     let target = container.manifest().target();
-    calculate_identity(DERIVED_TARGET_DOMAIN, |bytes| {
+    calculate_identity(MANIFEST_CLAIM_TARGET_DOMAIN, |bytes| {
         bytes.push(1);
         write_text(bytes, target.triple().as_str());
         write_text(bytes, target.architecture().as_str());
@@ -593,17 +834,134 @@ fn derive_target_identity(container: &ArtifactContainerV1) -> [u8; 32] {
     })
 }
 
-fn derive_kernel_set_identity(
-    finalized: DirectLinkFinalizedPayloadIdentityV1,
-    projection: &ManifestV1,
+fn derive_logical_kernel_set_claim(
+    ffi_closure_claim: PayloadDigest,
+    kernels: &[&KernelEntry],
 ) -> [u8; 32] {
-    calculate_identity(DERIVED_KERNEL_SET_DOMAIN, |bytes| {
+    calculate_identity(MANIFEST_CLAIM_KERNEL_SET_DOMAIN, |bytes| {
         bytes.push(1);
-        write_digest(bytes, finalized.digest());
-        let projection = projection.to_bytes();
-        bytes.extend_from_slice(&(projection.len() as u32).to_le_bytes());
-        bytes.extend_from_slice(&projection);
+        write_typed_digest(bytes, 0x10, ffi_closure_claim);
+        bytes.extend_from_slice(&(kernels.len() as u16).to_le_bytes());
+        for kernel in kernels {
+            write_logical_kernel_claim(bytes, kernel);
+        }
     })
+}
+
+fn write_logical_kernel_claim(bytes: &mut Vec<u8>, kernel: &KernelEntry) {
+    bytes.push(0x20);
+    write_digest_bytes(bytes, kernel.kernel_id());
+    write_text(bytes, kernel.name().as_str());
+    write_text(bytes, kernel.symbol().as_str());
+    write_digest_bytes(bytes, kernel.source_digest());
+    bytes.extend_from_slice(&(kernel.required_capabilities().len() as u16).to_le_bytes());
+    for capability in kernel.required_capabilities() {
+        bytes.extend_from_slice(&crate::encode::capability_tag(*capability).to_le_bytes());
+    }
+    write_launch_claim(bytes, kernel.launch());
+    write_abi_claim(bytes, kernel.abi());
+}
+
+fn write_launch_claim(bytes: &mut Vec<u8>, launch: &crate::LaunchContract) {
+    bytes.push(launch.rank());
+    match launch.block_size() {
+        BlockSize::Any => bytes.push(0),
+        BlockSize::Exact(dimensions) => {
+            bytes.push(1);
+            write_dimensions(bytes, dimensions);
+        }
+        BlockSize::AtMost(dimensions) => {
+            bytes.push(2);
+            write_dimensions(bytes, dimensions);
+        }
+    }
+    write_dimensions(bytes, launch.max_grid());
+    bytes.extend_from_slice(&launch.static_shared_memory_bytes().to_le_bytes());
+    bytes.extend_from_slice(&launch.max_dynamic_shared_memory_bytes().to_le_bytes());
+}
+
+fn write_dimensions(bytes: &mut Vec<u8>, dimensions: Dimensions) {
+    bytes.extend_from_slice(&dimensions.x().to_le_bytes());
+    bytes.extend_from_slice(&dimensions.y().to_le_bytes());
+    bytes.extend_from_slice(&dimensions.z().to_le_bytes());
+}
+
+fn write_abi_claim(bytes: &mut Vec<u8>, abi: &crate::AbiLayout) {
+    bytes.extend_from_slice(&abi.size().to_le_bytes());
+    bytes.extend_from_slice(&abi.alignment().to_le_bytes());
+    bytes.push(crate::encode::pointer_width_tag(abi.pointer_width()));
+    bytes.extend_from_slice(&(abi.fields().len() as u16).to_le_bytes());
+    for field in abi.fields() {
+        write_text(bytes, field.name().as_str());
+        bytes.extend_from_slice(&field.offset().to_le_bytes());
+        bytes.extend_from_slice(&field.size().to_le_bytes());
+        bytes.extend_from_slice(&field.alignment().to_le_bytes());
+        match field.kind() {
+            AbiKind::Scalar(scalar) => {
+                bytes.push(0);
+                bytes.push(crate::encode::scalar_tag(scalar));
+            }
+            AbiKind::Pointer {
+                pointee_size,
+                pointee_alignment,
+            } => {
+                bytes.push(1);
+                bytes.extend_from_slice(&pointee_size.to_le_bytes());
+                bytes.extend_from_slice(&pointee_alignment.to_le_bytes());
+            }
+            AbiKind::Slice {
+                element_size,
+                element_alignment,
+            } => {
+                bytes.push(2);
+                bytes.extend_from_slice(&element_size.to_le_bytes());
+                bytes.extend_from_slice(&element_alignment.to_le_bytes());
+            }
+        }
+        bytes.push(crate::encode::mutability_tag(field.mutability()));
+        bytes.push(crate::encode::access_tag(field.access()));
+        bytes.push(crate::encode::address_space_tag(field.address_space()));
+        write_digest_bytes(bytes, field.type_identity().rust_type().bytes());
+        write_digest_bytes(bytes, field.type_identity().layout().bytes());
+        bytes.push(ownership_tag(field.ownership()));
+        bytes.push(alias_class_tag(field.alias_class()));
+    }
+}
+
+const fn ownership_tag(value: ArgumentOwnership) -> u8 {
+    match value {
+        ArgumentOwnership::ByValue => 0,
+        ArgumentOwnership::SharedBorrow => 1,
+        ArgumentOwnership::UniqueBorrow => 2,
+        ArgumentOwnership::RawPointer => 3,
+    }
+}
+
+const fn alias_class_tag(value: AliasClass) -> u8 {
+    match value {
+        AliasClass::Value => 0,
+        AliasClass::SharedReadOnly => 1,
+        AliasClass::Exclusive => 2,
+        AliasClass::Unrestricted => 3,
+        AliasClass::SharedAtomic => 4,
+    }
+}
+
+fn publication_occurrence_identity(
+    binding: &DirectLinkBindingV1,
+) -> DirectLinkPublicationOccurrenceIdentityV1 {
+    DirectLinkPublicationOccurrenceIdentityV1(calculate_identity(
+        PUBLICATION_OCCURRENCE_DOMAIN,
+        |bytes| {
+            bytes.push(1);
+            write_typed_digest(bytes, 0x10, binding.container_identity().digest());
+            write_typed_digest(
+                bytes,
+                0x11,
+                binding.expectation().finalized_payload_identity().digest(),
+            );
+        },
+    ))
 }
 
 fn calculate_identity(domain: &[u8], write: impl FnOnce(&mut Vec<u8>)) -> [u8; 32] {
@@ -622,6 +980,10 @@ fn write_digest(bytes: &mut Vec<u8>, digest: PayloadDigest) {
         DigestAlgorithm::Sha256 => 0,
     });
     bytes.extend_from_slice(digest.bytes().as_bytes());
+}
+
+fn write_digest_bytes(bytes: &mut Vec<u8>, digest: DigestBytes) {
+    bytes.extend_from_slice(digest.as_bytes());
 }
 
 fn write_identity(bytes: &mut Vec<u8>, tag: u8, identity: &[u8; 32]) {

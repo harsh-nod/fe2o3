@@ -228,46 +228,79 @@ therefore always return `false`.
 
 `DirectLinkPublicationBridgeV1` is the normative typed conversion from one
 binding selected by index from a validated G6 witness to one G5 publication
-chain. Its domain-separated publication identity commits to the build attempt,
-publication scope, request, worker/toolchain closure, response, transformation
-identities, FFI closure, container, and bundle, including the complete
-direct-link evidence-envelope digest. A completed G5
+chain. The bridge is occurrence-local: it describes exactly one canonical
+`(container identity, finalized payload identity)` G6 binding occurrence, not
+every occurrence of equal payload bytes and not the whole bundle as one scope.
+Its domain-separated publication identity commits to the build attempt,
+descriptive publication-scope claims, request, worker/toolchain closure,
+response, transformation identities, FFI closure, exact occurrence identity,
+container, finalized payload, and bundle, including the complete direct-link
+evidence-envelope digest. Content and build identities belong here, not in the
+logical kernel-set identity. A completed G5
 `PublishedLinkArtifactV1` can be checked against the entire committed chain
 without reinterpreting an untyped `[u8; 32]` between domains.
 
-`ArtifactDerivedLinkPublicationScopeV1` is an opaque canonical witness for the
-stronger scope-construction path. It accepts one explicitly trusted external
-`PackageIdentityV1`, one binding index from a
+`CallerClaimedPackageIdentityV1` makes package provenance explicit. It wraps a
+raw `PackageIdentityV1` as an unauthenticated caller claim and establishes no
+package ownership, namespace control, lease, or current-publication authority.
+
+`ManifestClaimDerivedLinkPublicationScopeV1` is an opaque canonical witness for
+the more structured scope-claim path. It accepts one caller package claim, one
+binding index from a
 `ValidatedDirectLinkBundleEvidenceV1`, and the exact concrete
 `ArtifactContainerV1`. Construction recomputes and matches the container
 identity, verifies the finalized native payload occurrence, and binds the
 selected binding and complete G6 evidence envelope. The V1 target identity is a
-domain-separated digest over every canonical target field: triple,
-architecture, pointer width, endianness, and the sorted capability set. The V1
-kernel-set identity is a separately domain-separated digest over a canonical
-payload-scoped manifest projection containing the original compiler and
-producer identities, complete target, selected native code-object record, and
-the complete sorted set of kernel records that reference that finalized
-payload. Consequently, alias kernels sharing one payload are part of the same
-publication unit and cannot be omitted from its kernel-set identity.
+domain-separated digest over every canonical manifest target field: triple,
+architecture, pointer width, endianness, and sorted capabilities.
 
-`prepare_with_derived_scope` consumes that witness and rechecks its exact
+The separately domain-separated `KernelSetIdentityV1` is stable across rebuild
+content. It covers the complete canonical sorted logical kernel closure for the
+selected occurrence: stable kernel ID, logical name, symbol, source-identity
+claim, required capabilities, launch contract, complete ABI, and the binding's
+FFI-closure claim. The manifest's source digest is the only source identity
+available here; it is not an authenticated semantic contract. The logical
+identity deliberately excludes payload and executable digests,
+code-object identity, compiler, producer, worker/toolchain, container, bundle,
+and all other build-content identities. Equal logical closures therefore retain
+one scope across changed payload or producer content, while their occurrence
+and publication identities differ. Alias kernels sharing payload bytes remain
+distinct logical closures and distinct occurrences.
+
+Container identity is recomputed without serializing a second potentially
+large container. The canonical manifest encoding is the only allocation; it is
+explicitly rejected above `MAX_MANIFEST_BYTES` (4 MiB). Container headers,
+payload descriptors, and the already-owned payload bytes are hashed in canonical
+order through a bounded streaming SHA-256 calculation. Validated container
+construction separately enforces the existing 256 MiB aggregate payload bound.
+
+`prepare_with_manifest_claim_scope` consumes the witness and rechecks its exact
 binding index, binding value, and G6 envelope before constructing the bridge.
-`prepare_with_trusted_scope` remains as a weaker compatibility path in which
-package, kernel-set, and target identities are all supplied by external policy.
-`scope_provenance` distinguishes those paths, and artifact-derived-scope
-publication identities use a separate domain from compatibility publications
-even when their three scope identity values are equal. Neither path
-authenticates the package policy, compiler, artifact producer, or G6 inputs,
-and neither grants load or launch authority.
+`prepare_with_trusted_scope` retains its historical name solely for API
+compatibility; it is an unsafe, inert path in which package, kernel-set, and
+target are unauthenticated external claims. `scope_provenance` distinguishes
+`UnsafeLegacyExternalClaims` from `ManifestClaimDerivedV1`, and the two paths
+use separate publication domains even when raw scope values are equal.
+
+Manifest target, kernel, ABI, source-contract, and FFI fields remain claims.
+They are not authenticated compiler output, do not establish native executable
+truth, and cannot authorize publication, loading, or launch.
+`DirectLinkDurablePlanHandoffV1` preserves scope provenance and occurrence
+identity for coordination with the separately owned durable G5 adapter; future
+durable-plan code must accept that handoff intact rather than reconstructing a
+plan from provenance-erasing raw getters. This crate intentionally does not
+invent the required G5 package lease/current-publication witness or the G7
+authenticated HSACO inspection witness. Both remain blocking prerequisites for
+any authoritative path.
 
 The bridge and `LinkPublicationCatalogV1` remain inert models. They perform no
 filesystem I/O, do not reconstruct a catalog from durable bytes, do not
 authenticate measurements or transformation claims, and do not connect the
 existing filesystem transaction to direct-link publication. That integration
-must authenticate package policy and measurements, then persist
-catalog and artifact state under the artifact lock with crash-safe recovery
-before the project can claim durable exactly-once linked-artifact publication.
+must retain the provenance-preserving handoff, obtain the separately owned G5
+and G7 witnesses, then persist catalog and artifact state under the artifact
+lock with crash-safe recovery before the project can claim durable exactly-once
+linked-artifact publication.
 
 ## V1 wire format
 
