@@ -26,7 +26,7 @@ const REJECTED_CASES: &[(&str, &str, &str)] = &[
     (
         "fe2o3-trusted-item-external-spoof",
         "external_spoof",
-        "missing `thread::index_1d` call",
+        "MIR is unavailable for a device-reachable item",
     ),
     (
         "fe2o3-trusted-item-local-marker",

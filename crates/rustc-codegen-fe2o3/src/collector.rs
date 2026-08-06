@@ -1004,6 +1004,21 @@ impl<'tcx> DeviceCollector<'tcx> {
             return Ok(());
         }
 
+        // Exact diagnostic-item identity is the compiler lowering boundary.
+        // Traversing the implementation of one of these semantic operations
+        // would incorrectly turn its host-side unreachable stub into a device
+        // dependency (and non-inline dependency stubs may intentionally have
+        // no encoded MIR at all). Local/path lookalikes do not classify.
+        if crate::trusted_device_items::classify(self.tcx, resolved.def_id()).is_some() {
+            if self.verbose {
+                eprintln!(
+                    "[collector] stopping at trusted device item {}",
+                    self.tcx.def_path_str(resolved.def_id())
+                );
+            }
+            return Ok(());
+        }
+
         if !self.tcx.is_mir_available(resolved.def_id()) {
             return Err(self.reachable_error(
                 caller,
