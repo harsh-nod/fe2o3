@@ -174,6 +174,12 @@ run_rocm_compile() {
       --test trusted_device_items \
       rejected_lookalikes_remove_preseeded_artifacts_atomically -- \
       --ignored --exact
+  run_step rocm-cross-crate-typed-binding \
+    env FE2O3_TEST_TARGET="${FE2O3_TARGET}" \
+      cargo test --locked -p rustc-codegen-fe2o3 \
+      --test cross_crate_typed_binding \
+      same_logical_name_in_two_rlibs_resolves_distinct_artifacts -- \
+      --ignored --exact
   run_step rocm-g1-code-object \
     cargo test --locked -p dialect-amdgcn --test lowering \
       rocm_compiles_the_golden_to_an_amdgpu_code_object -- \
