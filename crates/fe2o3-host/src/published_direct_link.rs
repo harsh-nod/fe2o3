@@ -5,23 +5,40 @@ use fe2o3_artifact_transaction::PublishedLinkArtifactV1;
 use fe2o3_artifacts::{
     AbiLayout, ArtifactContainerV1, DIRECT_LINK_EVIDENCE_DIGEST_ALGORITHM, DigestBytes,
     DirectLinkBridgeError, DirectLinkContainerIdentityV1, DirectLinkFinalizedPayloadIdentityV1,
-    DirectLinkPublicationBridgeV1, LaunchContract, Name, SelectedNativeKernel,
+    LaunchContract, ManifestClaimDirectLinkDurablePlanHandoffV1,
+    ManifestClaimDirectLinkPublicationBridgeV1, Name, SelectedNativeKernel,
     ValidatedDirectLinkBundleEvidenceV1,
 };
 use std::fmt;
 
 /// An opaque, inert host-side admission of one structurally validated G5/G6 selection.
 ///
-/// Construction binds one validated direct-link evidence envelope and bridge to an exact G5
-/// publication, canonical container identity, finalized payload occurrence, selected kernel, and
-/// observed context. The token owns the existing structural [`ValidatedArtifactSelectionV1`]
-/// result and can revalidate the complete input tuple against substitutions.
+/// Construction binds one validated direct-link evidence envelope and a manifest-claim-derived
+/// bridge to an exact G5 publication, canonical container identity, finalized payload occurrence,
+/// selected kernel, complete manifest launch claims, and observed context. The token owns the
+/// existing structural [`ValidatedArtifactSelectionV1`] result and can revalidate the complete
+/// input tuple against substitutions.
+///
+/// The legacy bridge is structurally excluded:
+///
+/// ```compile_fail
+/// use fe2o3_artifacts::{
+///     DirectLinkPublicationBridgeV1, ManifestClaimDirectLinkPublicationBridgeV1,
+/// };
+///
+/// fn g7_requires_manifest_claim(_: &ManifestClaimDirectLinkPublicationBridgeV1) {}
+///
+/// fn legacy_cannot_enter_g7(legacy: &DirectLinkPublicationBridgeV1) {
+///     g7_requires_manifest_claim(legacy);
+/// }
+/// ```
 ///
 /// This value authenticates no filesystem object or compiler marker, does not establish that the
 /// executable is safe, and grants no module-loading or kernel-launch authority.
 pub struct ValidatedPublishedDirectLinkSelectionV1 {
     selection: ValidatedArtifactSelectionV1,
-    bridge: DirectLinkPublicationBridgeV1,
+    bridge: ManifestClaimDirectLinkPublicationBridgeV1,
+    durable_handoff: ManifestClaimDirectLinkDurablePlanHandoffV1,
     published: PublishedLinkArtifactV1,
     binding_index: usize,
     container_identity: DirectLinkContainerIdentityV1,
@@ -60,6 +77,7 @@ impl fmt::Debug for ValidatedPublishedDirectLinkSelectionV1 {
         formatter
             .debug_struct("ValidatedPublishedDirectLinkSelectionV1")
             .field("selection", &self.selection)
+            .field("durable_handoff", &self.durable_handoff)
             .field("published", &self.published)
             .field("binding_index", &self.binding_index)
             .field("container_identity", &self.container_identity)
@@ -76,14 +94,22 @@ impl ValidatedPublishedDirectLinkSelectionV1 {
     /// Jointly validates one exact structural publication selection.
     pub fn validate(
         validated_bundle: &ValidatedDirectLinkBundleEvidenceV1<'_>,
-        bridge: &DirectLinkPublicationBridgeV1,
+        bridge: &ManifestClaimDirectLinkPublicationBridgeV1,
         published: PublishedLinkArtifactV1,
         container: &ArtifactContainerV1,
         selected: SelectedNativeKernel<'_>,
         observed: &ObservedContext,
     ) -> Result<Self, PublishedDirectLinkAdmissionError> {
+        let durable_handoff = bridge.durable_plan_handoff();
         let (binding_index, container_identity, finalized_payload_identity) =
-            validate_direct_link_inputs(validated_bundle, bridge, published, container, selected)?;
+            validate_direct_link_inputs(
+                validated_bundle,
+                bridge,
+                &durable_handoff,
+                published,
+                container,
+                selected,
+            )?;
         let selection = ValidatedArtifactSelectionV1::validate(selected, observed)
             .map_err(PublishedDirectLinkAdmissionError::ArtifactSelection)?;
         let payload_kernel_set = payload_kernel_set(selected);
@@ -91,6 +117,7 @@ impl ValidatedPublishedDirectLinkSelectionV1 {
         Ok(Self {
             selection,
             bridge: bridge.clone(),
+            durable_handoff,
             published,
             binding_index,
             container_identity,
@@ -104,7 +131,7 @@ impl ValidatedPublishedDirectLinkSelectionV1 {
     pub fn revalidate(
         &self,
         validated_bundle: &ValidatedDirectLinkBundleEvidenceV1<'_>,
-        bridge: &DirectLinkPublicationBridgeV1,
+        bridge: &ManifestClaimDirectLinkPublicationBridgeV1,
         published: PublishedLinkArtifactV1,
         container: &ArtifactContainerV1,
         selected: SelectedNativeKernel<'_>,
@@ -116,9 +143,20 @@ impl ValidatedPublishedDirectLinkSelectionV1 {
         if published != self.published {
             return Err(PublishedDirectLinkAdmissionError::PublicationSubstitution);
         }
+        let durable_handoff = bridge.durable_plan_handoff();
+        if durable_handoff != self.durable_handoff {
+            return Err(PublishedDirectLinkAdmissionError::BridgeSubstitution);
+        }
 
         let (binding_index, container_identity, finalized_payload_identity) =
-            validate_direct_link_inputs(validated_bundle, bridge, published, container, selected)?;
+            validate_direct_link_inputs(
+                validated_bundle,
+                bridge,
+                &durable_handoff,
+                published,
+                container,
+                selected,
+            )?;
         if binding_index != self.binding_index {
             return Err(PublishedDirectLinkAdmissionError::BindingIndexSubstitution);
         }
@@ -206,7 +244,8 @@ fn payload_kernel_set(selected: SelectedNativeKernel<'_>) -> Box<[PublishedPaylo
 
 fn validate_direct_link_inputs(
     validated_bundle: &ValidatedDirectLinkBundleEvidenceV1<'_>,
-    bridge: &DirectLinkPublicationBridgeV1,
+    bridge: &ManifestClaimDirectLinkPublicationBridgeV1,
+    durable_handoff: &ManifestClaimDirectLinkDurablePlanHandoffV1,
     published: PublishedLinkArtifactV1,
     container: &ArtifactContainerV1,
     selected: SelectedNativeKernel<'_>,
@@ -218,10 +257,16 @@ fn validate_direct_link_inputs(
     ),
     PublishedDirectLinkAdmissionError,
 > {
-    if validated_bundle.evidence() != bridge.bundle() {
+    if durable_handoff.bundle_index_identity()
+        != validated_bundle.evidence().bundle_index_identity()
+        || durable_handoff.evidence_identity()
+            != validated_bundle
+                .evidence()
+                .digest(DIRECT_LINK_EVIDENCE_DIGEST_ALGORITHM)
+    {
         return Err(PublishedDirectLinkAdmissionError::EvidenceBridgeMismatch);
     }
-    let binding_index = unique_binding_index(validated_bundle, bridge)
+    let binding_index = unique_binding_index(validated_bundle, durable_handoff)
         .ok_or(PublishedDirectLinkAdmissionError::EvidenceBridgeMismatch)?;
 
     bridge
@@ -231,7 +276,7 @@ fn validate_direct_link_inputs(
     let container_identity = DirectLinkContainerIdentityV1::new(
         DIRECT_LINK_EVIDENCE_DIGEST_ALGORITHM.calculate(&container.to_bytes()),
     );
-    if bridge.binding().container_identity() != container_identity
+    if durable_handoff.container_identity() != container_identity
         || !validated_bundle
             .container_identities()
             .contains(&container_identity)
@@ -246,7 +291,7 @@ fn validate_direct_link_inputs(
         return Err(PublishedDirectLinkAdmissionError::SelectedKernelContainerMismatch);
     }
 
-    let finalized_payload_identity = bridge.binding().expectation().finalized_payload_identity();
+    let finalized_payload_identity = durable_handoff.finalized_payload_identity();
     let selected_payload_identity = fe2o3_artifacts::PayloadDigest::new(
         selected.digest_algorithm(),
         selected.code_object().digest(),
@@ -268,13 +313,17 @@ fn validate_direct_link_inputs(
 
 fn unique_binding_index(
     validated_bundle: &ValidatedDirectLinkBundleEvidenceV1<'_>,
-    bridge: &DirectLinkPublicationBridgeV1,
+    durable_handoff: &ManifestClaimDirectLinkDurablePlanHandoffV1,
 ) -> Option<usize> {
     let mut matches = validated_bundle
         .bindings()
         .iter()
         .enumerate()
-        .filter(|(_, binding)| *binding == bridge.binding());
+        .filter(|(_, binding)| {
+            binding.container_identity() == durable_handoff.container_identity()
+                && binding.expectation().finalized_payload_identity()
+                    == durable_handoff.finalized_payload_identity()
+        });
     let (index, _) = matches.next()?;
 
     // G6 canonical validation rejects duplicate (container identity, finalized payload identity)
@@ -364,23 +413,23 @@ mod tests {
         PublishedPhysicalLayoutInspectionError,
     };
     use fe2o3_artifact_transaction::{
-        BuildAttempt, KernelSetIdentityV1, LinkPublicationCatalogV1, LinkPublicationScopeV1,
-        PackageIdentityV1, PublicationOutcomeV1, TargetIdentityV1,
+        BuildAttempt, LinkPublicationCatalogV1, PackageIdentityV1, PublicationOutcomeV1,
     };
     use fe2o3_artifacts::{
         AbiField, AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership,
-        BlockSize, BundleIndexV1, CodeObjectFormat, CodeObjectIdentity, CodeObjectPayload,
-        CompilerIdentity, DeclaredRustLayoutIdentity, DeclaredRustTypeIdentity, DigestAlgorithm,
-        DigestBytes, Dimensions, DirectLinkBindingExpectationV1, DirectLinkBindingSourceV1,
-        DirectLinkBundleEvidenceV1, DirectLinkFfiClosureIdentityV1,
-        DirectLinkFinalizationIdentityV1, DirectLinkFinalizedPayloadIdentityV1,
-        DirectLinkLinkedOutputIdentityV1, DirectLinkRequestIdentityV1,
-        DirectLinkResponseIdentityV1, DirectLinkToolchainConfigurationIdentityV1,
-        DirectLinkToolchainExecutableIdentityV1, DirectLinkToolchainIdentityV1,
-        DirectLinkTransformationIdentityV1, DirectLinkWorkerConfigurationIdentityV1,
-        DirectLinkWorkerExecutableIdentityV1, DirectLinkWorkerIdentityV1, Endianness, IdentityText,
-        KernelEntry, LaunchContract, ManifestV1, Mutability, Name, PayloadDigest, PointerWidth,
-        ScalarType, TargetIdentity, ToolIdentity, TypeIdentity,
+        BlockSize, BundleIndexV1, CallerClaimedPackageIdentityV1, CodeObjectFormat,
+        CodeObjectIdentity, CodeObjectPayload, CompilerIdentity, DeclaredRustLayoutIdentity,
+        DeclaredRustTypeIdentity, DigestAlgorithm, DigestBytes, Dimensions,
+        DirectLinkBindingExpectationV1, DirectLinkBindingSourceV1, DirectLinkBundleEvidenceV1,
+        DirectLinkFfiClosureIdentityV1, DirectLinkFinalizationIdentityV1,
+        DirectLinkFinalizedPayloadIdentityV1, DirectLinkLinkedOutputIdentityV1,
+        DirectLinkRequestIdentityV1, DirectLinkResponseIdentityV1,
+        DirectLinkToolchainConfigurationIdentityV1, DirectLinkToolchainExecutableIdentityV1,
+        DirectLinkToolchainIdentityV1, DirectLinkTransformationIdentityV1,
+        DirectLinkWorkerConfigurationIdentityV1, DirectLinkWorkerExecutableIdentityV1,
+        DirectLinkWorkerIdentityV1, Endianness, IdentityText, KernelEntry, LaunchContract,
+        ManifestClaimDerivedLinkPublicationScopeV1, ManifestV1, Mutability, Name, PayloadDigest,
+        PointerWidth, ScalarType, TargetIdentity, ToolIdentity, TypeIdentity,
     };
     use fe2o3_hsaco::{
         ArgumentAccess, ArgumentAddressSpace, CodeObjectVersion, ExplicitValueKind,
@@ -536,10 +585,24 @@ mod tests {
     }
 
     fn physical_test_launch(max_dynamic_shared_memory_bytes: u32) -> LaunchContract {
+        physical_test_launch_with_rank(1, max_dynamic_shared_memory_bytes)
+    }
+
+    fn physical_test_launch_with_rank(
+        rank: u8,
+        max_dynamic_shared_memory_bytes: u32,
+    ) -> LaunchContract {
+        let max_grid = match rank {
+            1 => Dimensions::new(65_535, 1, 1),
+            2 => Dimensions::new(65_535, 65_535, 1),
+            3 => Dimensions::new(65_535, 65_535, 65_535),
+            _ => panic!("unsupported test rank {rank}"),
+        }
+        .unwrap();
         LaunchContract::new(
-            1,
+            rank,
             BlockSize::Exact(Dimensions::new(64, 1, 1).unwrap()),
-            Dimensions::new(65_535, 1, 1).unwrap(),
+            max_grid,
             0,
             max_dynamic_shared_memory_bytes,
         )
@@ -897,38 +960,37 @@ mod tests {
         BuildAttempt::from_env_value(&format!("{generation}:{session}:{invocation}")).unwrap()
     }
 
-    fn scope(seed: u8) -> LinkPublicationScopeV1 {
-        LinkPublicationScopeV1::new(
-            PackageIdentityV1::from_bytes([seed; 32]),
-            KernelSetIdentityV1::from_bytes([seed.wrapping_add(1); 32]),
-            TargetIdentityV1::from_bytes([seed.wrapping_add(2); 32]),
-        )
-    }
-
     fn make_bridge(
         fixture: &Fixture,
         validated: &ValidatedDirectLinkBundleEvidenceV1<'_>,
         expectation_index: usize,
         generation: u64,
         seed: u8,
-    ) -> DirectLinkPublicationBridgeV1 {
-        DirectLinkPublicationBridgeV1::prepare_with_trusted_scope(
-            attempt(generation, seed),
-            scope(seed),
+    ) -> ManifestClaimDirectLinkPublicationBridgeV1 {
+        let binding_index = fixture.binding_index(validated, expectation_index);
+        let manifest_claim_scope = ManifestClaimDerivedLinkPublicationScopeV1::derive(
+            CallerClaimedPackageIdentityV1::new(PackageIdentityV1::from_bytes([seed; 32])),
             validated,
-            fixture.binding_index(validated, expectation_index),
+            binding_index,
+            &fixture.container,
+        )
+        .unwrap();
+        ManifestClaimDirectLinkPublicationBridgeV1::prepare_with_manifest_claim_scope(
+            attempt(generation, seed),
+            manifest_claim_scope,
+            validated,
+            binding_index,
         )
         .unwrap()
     }
 
-    fn publish(bridge: &DirectLinkPublicationBridgeV1) -> PublishedLinkArtifactV1 {
+    fn publish(bridge: &ManifestClaimDirectLinkPublicationBridgeV1) -> PublishedLinkArtifactV1 {
+        let scope = bridge
+            .non_authoritative_diagnostics()
+            .descriptive_scope_claim();
         let mut catalog = LinkPublicationCatalogV1::default();
         let mut record = catalog
-            .begin(
-                bridge.attempt(),
-                bridge.trusted_scope(),
-                bridge.request_identity(),
-            )
+            .begin(bridge.attempt(), scope, bridge.request_identity())
             .unwrap();
         record
             .record_pinned_worker(
@@ -968,7 +1030,7 @@ mod tests {
             ),
             Ok(PublicationOutcomeV1::Published)
         );
-        *catalog.published(&bridge.trusted_scope()).unwrap()
+        *catalog.published(&scope).unwrap()
     }
 
     fn make_observed(identity: usize) -> ObservedContext {
@@ -989,7 +1051,7 @@ mod tests {
 
     struct HsacoAdmission<'fixture> {
         validated: ValidatedDirectLinkBundleEvidenceV1<'fixture>,
-        bridge: DirectLinkPublicationBridgeV1,
+        bridge: ManifestClaimDirectLinkPublicationBridgeV1,
         published: PublishedLinkArtifactV1,
         selected: SelectedNativeKernel<'fixture>,
         observed: ObservedContext,
@@ -1520,6 +1582,7 @@ mod tests {
             .select_native_kernel(fixture.primary_kernel)
             .unwrap();
         let observed = make_observed(1);
+        let durable_handoff = bridge.durable_plan_handoff();
 
         let admitted = ValidatedPublishedDirectLinkSelectionV1::validate(
             &validated,
@@ -1532,6 +1595,11 @@ mod tests {
         .unwrap();
 
         assert_eq!(admitted.published(), published);
+        assert_eq!(admitted.bridge, bridge);
+        assert_eq!(admitted.durable_handoff, durable_handoff);
+        assert!(!admitted.durable_handoff.grants_publication_authority());
+        assert!(!admitted.durable_handoff.grants_load_authority());
+        assert!(!admitted.durable_handoff.grants_launch_authority());
         assert_eq!(
             admitted.binding_index(),
             fixture.binding_index(&validated, 0)
@@ -1896,41 +1964,164 @@ mod tests {
         assert!(!inspected.grants_launch_authority());
     }
 
-    fn inspect_environment_generated_container(variable: &str, target: &str, seed: u8) {
-        let path = std::env::var(variable).unwrap_or_else(|_| panic!("set {variable}"));
+    #[test]
+    fn parser_fixture_pins_are_exact_and_canonical() {
+        let fixture_bytes = include_bytes!("../tests/fixtures/gfx1151-typed-vecadd-v1.fe2o3");
+        let container = ArtifactContainerV1::from_bytes(fixture_bytes).unwrap();
+        assert_eq!(
+            parse_sha256_pin("c74ee3f593b0bc302f67312e415a867f541fe3e3e79973ee596bc7bbf98a22d1"),
+            Some(DigestAlgorithm::Sha256.calculate(fixture_bytes))
+        );
+        assert_eq!(
+            parse_sha256_pin("053551d6a21604bec295acf1aedb4e3b2dedefa7f904a5fa160660b889b480fa"),
+            Some(container.payloads()[0].digest())
+        );
+        assert_eq!(parse_sha256_pin("00"), None);
+        assert_eq!(
+            parse_sha256_pin("C74ee3f593b0bc302f67312e415a867f541fe3e3e79973ee596bc7bbf98a22d1"),
+            None
+        );
+
+        assert!(canonical_source_commit(
+            "30f6d75cf1c10c5dc18e2f9de6eb33015f6aab80"
+        ));
+        assert!(!canonical_source_commit(
+            "0000000000000000000000000000000000000000"
+        ));
+        assert!(!canonical_source_commit(
+            "30F6d75cf1c10c5dc18e2f9de6eb33015f6aab80"
+        ));
+        assert!(!canonical_source_commit("30f6d75"));
+    }
+
+    fn required_environment_pin(variable: &str) -> String {
+        std::env::var(variable).unwrap_or_else(|_| panic!("set {variable}"))
+    }
+
+    fn pinned_sha256(variable: &str) -> PayloadDigest {
+        let value = required_environment_pin(variable);
+        parse_sha256_pin(&value)
+            .unwrap_or_else(|| panic!("{variable} must be 64 lowercase hex digits"))
+    }
+
+    fn parse_sha256_pin(value: &str) -> Option<PayloadDigest> {
+        if value.len() != 64 {
+            return None;
+        }
+        let mut bytes = [0_u8; 32];
+        for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
+            let high = canonical_hex_nibble(pair[0])?;
+            let low = canonical_hex_nibble(pair[1])?;
+            bytes[index] = high << 4 | low;
+        }
+        Some(PayloadDigest::new(
+            DigestAlgorithm::Sha256,
+            DigestBytes::from_bytes(bytes),
+        ))
+    }
+
+    fn canonical_hex_nibble(value: u8) -> Option<u8> {
+        match value {
+            b'0'..=b'9' => Some(value - b'0'),
+            b'a'..=b'f' => Some(value - b'a' + 10),
+            _ => None,
+        }
+    }
+
+    fn pinned_source_commit(variable: &str) -> String {
+        let value = required_environment_pin(variable);
+        assert!(
+            canonical_source_commit(&value),
+            "{variable} must be a full, nonzero 40-digit lowercase Git commit ID"
+        );
+        value
+    }
+
+    fn canonical_source_commit(value: &str) -> bool {
+        value.len() == 40
+            && value
+                .bytes()
+                .all(|byte| canonical_hex_nibble(byte).is_some())
+            && value.bytes().any(|byte| byte != b'0')
+    }
+
+    fn assert_manifest_commit_pin_where_available(container: &ArtifactContainerV1, expected: &str) {
+        for version in [
+            container.manifest().compiler().version().as_str(),
+            container.manifest().producer().version().as_str(),
+        ] {
+            let declared = version
+                .strip_prefix("git:")
+                .or_else(|| version.rsplit_once("+git.").map(|(_, commit)| commit));
+            if let Some(declared) = declared {
+                assert_eq!(
+                    declared.len(),
+                    40,
+                    "embedded Git commit must be full length"
+                );
+                assert!(
+                    declared
+                        .bytes()
+                        .all(|byte| canonical_hex_nibble(byte).is_some()),
+                    "embedded Git commit must be lowercase hexadecimal"
+                );
+                assert_eq!(
+                    declared, expected,
+                    "environment parser fixture source-commit pin mismatch"
+                );
+            }
+        }
+    }
+
+    fn inspect_environment_parser_fixture(prefix: &str, target: &str) {
+        let path_variable = format!("{prefix}_CONTAINER_V1");
+        let container_digest_variable = format!("{prefix}_CONTAINER_SHA256");
+        let payload_digest_variable = format!("{prefix}_PAYLOAD_SHA256");
+        let source_commit_variable = format!("{prefix}_SOURCE_COMMIT");
+        let path = required_environment_pin(&path_variable);
+        let expected_container_digest = pinned_sha256(&container_digest_variable);
+        let expected_payload_digest = pinned_sha256(&payload_digest_variable);
+        let source_commit = pinned_source_commit(&source_commit_variable);
         let bytes = std::fs::read(path).unwrap();
+        assert_eq!(
+            DigestAlgorithm::Sha256.calculate(&bytes),
+            expected_container_digest,
+            "environment parser fixture container digest mismatch"
+        );
         let container = ArtifactContainerV1::from_bytes(&bytes).unwrap();
         assert_eq!(container.to_bytes(), bytes);
+        assert_manifest_commit_pin_where_available(&container, &source_commit);
         assert_eq!(
             container.manifest().target().architecture().as_str(),
             target
         );
-        let fixture = fixture_from_generated_container(seed, container);
-        let payload = fixture
-            .container
-            .select_native_kernel(fixture.primary_kernel)
-            .unwrap()
-            .payload();
-        let inspected = InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(
-            admit_hsaco(&fixture, usize::from(seed), target),
-            payload,
-        )
-        .unwrap();
-        assert_eq!(inspected.target().to_string(), target);
-        assert!(!inspected.grants_load_authority());
-        assert!(!inspected.grants_launch_authority());
+        let [payload] = container.payloads() else {
+            panic!("environment parser fixture must contain exactly one payload");
+        };
+        assert_eq!(
+            payload.digest(),
+            expected_payload_digest,
+            "environment parser fixture payload digest mismatch"
+        );
+        expected_payload_digest.verify(payload.bytes()).unwrap();
+        let inspected = fe2o3_hsaco::inspect_and_bind_kernel_descriptors(payload.bytes()).unwrap();
+        assert_eq!(inspected.inspection().target().to_string(), target);
+        assert_eq!(
+            inspected.bindings().len(),
+            inspected.inspection().kernels().len()
+        );
     }
 
     #[test]
-    #[ignore = "requires FE2O3_GFX942_TYPED_CONTAINER_V1 from a pinned gfx942 build"]
-    fn ingests_environment_pinned_gfx942_container() {
-        inspect_environment_generated_container("FE2O3_GFX942_TYPED_CONTAINER_V1", "gfx942", 42);
+    #[ignore = "parser-only: requires all FE2O3_GFX942_PARSER_* pins"]
+    fn parses_environment_pinned_gfx942_container_without_g7_or_g8_evidence() {
+        inspect_environment_parser_fixture("FE2O3_GFX942_PARSER", "gfx942");
     }
 
     #[test]
-    #[ignore = "requires FE2O3_GFX950_TYPED_CONTAINER_V1 from a pinned gfx950 build"]
-    fn ingests_environment_pinned_gfx950_container() {
-        inspect_environment_generated_container("FE2O3_GFX950_TYPED_CONTAINER_V1", "gfx950", 43);
+    #[ignore = "parser-only: requires all FE2O3_GFX950_PARSER_* pins"]
+    fn parses_environment_pinned_gfx950_container_without_g7_or_g8_evidence() {
+        inspect_environment_parser_fixture("FE2O3_GFX950_PARSER", "gfx950");
     }
 
     #[test]
@@ -2213,6 +2404,7 @@ mod tests {
         assert!(!first.proves_ownership_alias_or_effects());
 
         let launch = first.selected_kernel().launch();
+        assert_eq!(launch.rank(), PhysicalMetadataValueV1::Unknown);
         assert_eq!(
             launch.required_workgroup_size(),
             PhysicalMetadataValueV1::Known([64, 1, 1])
@@ -2225,19 +2417,149 @@ mod tests {
                 PhysicalMetadataValueV1::Unknown,
             ]
         );
+        assert_eq!(
+            launch.cluster_dimensions(),
+            PhysicalMetadataValueV1::Unknown
+        );
         assert_eq!(launch.kernarg_segment_size(), 288);
         assert_eq!(launch.kernarg_segment_alignment(), 8);
         assert_eq!(
             launch.implicit_argument_offset(),
             PhysicalMetadataValueV1::Known(32)
         );
+        assert_eq!(launch.implicit_argument_size(), 256);
         assert_eq!(launch.group_segment_fixed_size(), 0);
         assert_eq!(launch.private_segment_fixed_size(), 16);
+        assert_eq!(launch.wavefront_size(), 32);
+        assert_eq!(launch.scalar_register_count(), 14);
+        assert_eq!(launch.vector_register_count(), 7);
+        assert_eq!(
+            launch.accumulator_register_count(),
+            PhysicalMetadataValueV1::Known(3)
+        );
+        assert_eq!(
+            launch.scalar_register_spill_count(),
+            PhysicalMetadataValueV1::Known(2)
+        );
+        assert_eq!(
+            launch.vector_register_spill_count(),
+            PhysicalMetadataValueV1::Known(4)
+        );
+        assert_eq!(
+            launch.workgroup_processor_mode(),
+            PhysicalMetadataValueV1::Known(true)
+        );
+        assert_eq!(launch.gfx1250_revision(), PhysicalMetadataValueV1::Unknown);
+        assert_eq!(
+            launch.uniform_workgroup_size_indicator(),
+            PhysicalMetadataValueV1::Unknown
+        );
         assert_eq!(
             launch.dynamic_shared_memory_indicator(),
             PhysicalMetadataValueV1::Unknown
         );
         assert!(!first.proves_complete_launch_contract());
+    }
+
+    #[test]
+    fn hidden_grid_dimensions_never_upgrade_manifest_rank_to_physical_evidence() {
+        let hsaco = physical_arguments_hsaco(None, [None; 3], false);
+        let fixture = make_single_hsaco_fixture(
+            48,
+            hsaco.bytes.clone(),
+            "gfx1151",
+            physical_test_abi(false),
+            physical_test_launch_with_rank(3, 0),
+        );
+        let admission = admit_hsaco(&fixture, 48, "gfx1151");
+
+        assert_eq!(admission.payload_kernel_set().len(), 1);
+        assert_eq!(admission.payload_kernel_set()[0].launch().rank(), 3);
+        let inspected =
+            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(admission, &hsaco.bytes).unwrap();
+        assert_eq!(
+            inspected.selected_kernel().launch().rank(),
+            PhysicalMetadataValueV1::Unknown
+        );
+    }
+
+    #[test]
+    fn optional_launch_resources_preserve_unknown_and_known_metadata() {
+        let mut kernel = test_metadata_kernel_with(
+            "primary_kernel",
+            "primary_kernel.kd",
+            Vec::new(),
+            256,
+            8,
+            0,
+            16,
+            None,
+            [None; 3],
+            false,
+        );
+        let Value::Map(fields) = &mut kernel else {
+            panic!("test kernel metadata must be a map");
+        };
+        fields.retain(|(key, _)| {
+            !matches!(
+                key.as_str(),
+                Some(
+                    ".agpr_count"
+                        | ".sgpr_spill_count"
+                        | ".vgpr_spill_count"
+                        | ".workgroup_processor_mode"
+                )
+            )
+        });
+        fields.extend([
+            (
+                Value::from(".cluster_dims"),
+                Value::Array(vec![Value::from(2), Value::from(1), Value::from(1)]),
+            ),
+            (Value::from(".uniform_work_group_size"), Value::from(1)),
+        ]);
+        let metadata = test_metadata("gfx1151", vec![kernel]);
+        let hsaco = binding_hsaco(metadata, "gfx1151", 0, 16, 256);
+        let fixture = make_hsaco_fixture(
+            49,
+            hsaco.bytes.clone(),
+            "gfx1151",
+            "primary_kernel",
+            false,
+            0,
+        );
+        let inspected = InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(
+            admit_hsaco(&fixture, 49, "gfx1151"),
+            &hsaco.bytes,
+        )
+        .unwrap();
+        let launch = inspected.selected_kernel().launch();
+
+        assert_eq!(
+            launch.cluster_dimensions(),
+            PhysicalMetadataValueV1::Known([2, 1, 1])
+        );
+        assert_eq!(
+            launch.accumulator_register_count(),
+            PhysicalMetadataValueV1::Unknown
+        );
+        assert_eq!(
+            launch.scalar_register_spill_count(),
+            PhysicalMetadataValueV1::Unknown
+        );
+        assert_eq!(
+            launch.vector_register_spill_count(),
+            PhysicalMetadataValueV1::Unknown
+        );
+        assert_eq!(
+            launch.workgroup_processor_mode(),
+            PhysicalMetadataValueV1::Unknown
+        );
+        assert_eq!(
+            launch.uniform_workgroup_size_indicator(),
+            PhysicalMetadataValueV1::Known(true)
+        );
+        assert_eq!(launch.rank(), PhysicalMetadataValueV1::Unknown);
     }
 
     #[test]

@@ -5,12 +5,13 @@ use crate::{ObservedContext, PublishedDirectLinkAdmissionError};
 use fe2o3_amd_target::{AmdTargetId, ParseAmdTargetIdError};
 use fe2o3_artifact_transaction::PublishedLinkArtifactV1;
 use fe2o3_artifacts::{
-    AbiKind, AddressSpace, ArtifactContainerV1, BlockSize, DirectLinkPublicationBridgeV1,
-    SelectedNativeKernel, ValidatedDirectLinkBundleEvidenceV1,
+    AbiKind, AddressSpace, ArtifactContainerV1, BlockSize,
+    ManifestClaimDirectLinkPublicationBridgeV1, SelectedNativeKernel,
+    ValidatedDirectLinkBundleEvidenceV1,
 };
 use fe2o3_hsaco::{
     ArgumentAccess, ArgumentAddressSpace, CodeObjectVersion, ExplicitArgument, ExplicitValueKind,
-    HiddenValueKind, InspectedKernel, InspectedKernelBindings, KernelBindingError,
+    Gfx1250Revision, HiddenValueKind, InspectedKernel, InspectedKernelBindings, KernelBindingError,
     KernelDescriptorBinding, KernelKind, inspect_and_bind_kernel_descriptors,
 };
 use std::fmt;
@@ -91,26 +92,56 @@ impl PublishedPhysicalArgumentLayoutV1 {
 /// Known values were read from the executable. Unknown optional values remain unknown. Validation
 /// only establishes that represented executable constraints do not contradict the narrower
 /// manifest launch contract; it does not establish complete launch-contract equality.
+/// AMDHSA does not constrain a source-level static rank, so `rank` is always `Unknown`, including
+/// when hidden runtime grid-dimension arguments are present.
+///
+/// Workgroup requirements, maximum workgroups, maximum flat size, kernarg layout, fixed group
+/// memory, and dynamic-LDS presence are compared where the manifest has matching semantics.
+/// Cluster dimensions, private memory, wavefront/register resources, execution mode, and the
+/// temporary GFX1250 revision have no matching manifest field and remain descriptive only. Kernel
+/// lifecycle, dynamic-stack, and device-enqueue metadata are fail-closed admission checks and are
+/// not converted into positive evidence.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PublishedPhysicalLaunchLayoutV1 {
+    rank: PhysicalMetadataValueV1<u8>,
     required_workgroup_size: PhysicalMetadataValueV1<[u32; 3]>,
     max_workgroups: [PhysicalMetadataValueV1<u32>; 3],
+    cluster_dimensions: PhysicalMetadataValueV1<[u32; 3]>,
     max_flat_workgroup_size: u32,
     kernarg_segment_size: u64,
     kernarg_segment_alignment: u64,
     implicit_argument_offset: PhysicalMetadataValueV1<u64>,
+    implicit_argument_size: u64,
     group_segment_fixed_size: u64,
     private_segment_fixed_size: u64,
+    wavefront_size: u32,
+    scalar_register_count: u16,
+    vector_register_count: u16,
+    accumulator_register_count: PhysicalMetadataValueV1<u32>,
+    scalar_register_spill_count: PhysicalMetadataValueV1<u32>,
+    vector_register_spill_count: PhysicalMetadataValueV1<u32>,
+    workgroup_processor_mode: PhysicalMetadataValueV1<bool>,
+    gfx1250_revision: PhysicalMetadataValueV1<Gfx1250Revision>,
+    uniform_workgroup_size_indicator: PhysicalMetadataValueV1<bool>,
     dynamic_shared_memory_indicator: PhysicalMetadataValueV1<bool>,
 }
 
 impl PublishedPhysicalLaunchLayoutV1 {
+    /// AMDHSA carries runtime grid dimensions but no static source-rank constraint.
+    pub const fn rank(&self) -> PhysicalMetadataValueV1<u8> {
+        self.rank
+    }
+
     pub const fn required_workgroup_size(&self) -> PhysicalMetadataValueV1<[u32; 3]> {
         self.required_workgroup_size
     }
 
     pub const fn max_workgroups(&self) -> [PhysicalMetadataValueV1<u32>; 3] {
         self.max_workgroups
+    }
+
+    pub const fn cluster_dimensions(&self) -> PhysicalMetadataValueV1<[u32; 3]> {
+        self.cluster_dimensions
     }
 
     pub const fn max_flat_workgroup_size(&self) -> u32 {
@@ -129,12 +160,54 @@ impl PublishedPhysicalLaunchLayoutV1 {
         self.implicit_argument_offset
     }
 
+    pub const fn implicit_argument_size(&self) -> u64 {
+        self.implicit_argument_size
+    }
+
     pub const fn group_segment_fixed_size(&self) -> u64 {
         self.group_segment_fixed_size
     }
 
     pub const fn private_segment_fixed_size(&self) -> u64 {
         self.private_segment_fixed_size
+    }
+
+    pub const fn wavefront_size(&self) -> u32 {
+        self.wavefront_size
+    }
+
+    pub const fn scalar_register_count(&self) -> u16 {
+        self.scalar_register_count
+    }
+
+    pub const fn vector_register_count(&self) -> u16 {
+        self.vector_register_count
+    }
+
+    pub const fn accumulator_register_count(&self) -> PhysicalMetadataValueV1<u32> {
+        self.accumulator_register_count
+    }
+
+    pub const fn scalar_register_spill_count(&self) -> PhysicalMetadataValueV1<u32> {
+        self.scalar_register_spill_count
+    }
+
+    pub const fn vector_register_spill_count(&self) -> PhysicalMetadataValueV1<u32> {
+        self.vector_register_spill_count
+    }
+
+    pub const fn workgroup_processor_mode(&self) -> PhysicalMetadataValueV1<bool> {
+        self.workgroup_processor_mode
+    }
+
+    pub const fn gfx1250_revision(&self) -> PhysicalMetadataValueV1<Gfx1250Revision> {
+        self.gfx1250_revision
+    }
+
+    /// Returns `Known(true)` only when AMDHSA requires uniform workgroup sizes.
+    /// Metadata absence and explicit false both remain `Unknown`.
+    pub const fn uniform_workgroup_size_indicator(&self) -> PhysicalMetadataValueV1<bool> {
+        self.uniform_workgroup_size_indicator
     }
 
     /// Returns `Known(true)` only when metadata contains a dynamic-LDS physical argument.
@@ -227,7 +300,7 @@ impl InspectedPublishedDirectLinkPhysicalLayoutV1 {
     pub fn revalidate(
         &self,
         validated_bundle: &ValidatedDirectLinkBundleEvidenceV1<'_>,
-        bridge: &DirectLinkPublicationBridgeV1,
+        bridge: &ManifestClaimDirectLinkPublicationBridgeV1,
         published: PublishedLinkArtifactV1,
         container: &ArtifactContainerV1,
         selected: SelectedNativeKernel<'_>,
@@ -621,16 +694,38 @@ fn validate_launch_evidence(
     };
 
     Ok(PublishedPhysicalLaunchLayoutV1 {
+        rank: PhysicalMetadataValueV1::Unknown,
         required_workgroup_size,
         max_workgroups,
+        cluster_dimensions: PhysicalMetadataValueV1::from_option(actual.cluster_dims()),
         max_flat_workgroup_size: actual.max_flat_workgroup_size(),
         kernarg_segment_size: actual.kernarg_segment_size(),
         kernarg_segment_alignment: actual.kernarg_segment_alignment(),
         implicit_argument_offset: PhysicalMetadataValueV1::from_option(
             actual.implicit_argument_offset(),
         ),
+        implicit_argument_size: actual.implicit_argument_size(),
         group_segment_fixed_size: actual.group_segment_fixed_size(),
         private_segment_fixed_size: actual.private_segment_fixed_size(),
+        wavefront_size: actual.wavefront_size(),
+        scalar_register_count: actual.sgpr_count(),
+        vector_register_count: actual.vgpr_count(),
+        accumulator_register_count: PhysicalMetadataValueV1::from_option(actual.agpr_count()),
+        scalar_register_spill_count: PhysicalMetadataValueV1::from_option(
+            actual.sgpr_spill_count(),
+        ),
+        vector_register_spill_count: PhysicalMetadataValueV1::from_option(
+            actual.vgpr_spill_count(),
+        ),
+        workgroup_processor_mode: PhysicalMetadataValueV1::from_option(
+            actual.workgroup_processor_mode(),
+        ),
+        gfx1250_revision: PhysicalMetadataValueV1::from_option(actual.gfx1250_revision()),
+        uniform_workgroup_size_indicator: if actual.uniform_work_group_size() {
+            PhysicalMetadataValueV1::Known(true)
+        } else {
+            PhysicalMetadataValueV1::Unknown
+        },
         dynamic_shared_memory_indicator,
     })
 }
