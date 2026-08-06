@@ -200,6 +200,37 @@ fn publishes_recovers_and_exact_replay_skips_work() {
 }
 
 #[test]
+fn durable_envelope_is_deterministic_and_checksum_bound() {
+    let first = TestDirectory::new();
+    let second = TestDirectory::new();
+    let first_output = first.path.join("output");
+    let second_output = second.path.join("output");
+    let bytes = b"canonical durable envelope payload";
+    let plan = plan(7, 0x12, 0x42, bytes);
+    publish(&first_output, plan, bytes).unwrap();
+    publish(&second_output, plan, bytes).unwrap();
+    let first_record = fs::read(canonical_record(&first_output)).unwrap();
+    let second_record = fs::read(canonical_record(&second_output)).unwrap();
+    assert_eq!(first_record, second_record);
+    assert_eq!(
+        hex(&Sha256::digest(&first_record)),
+        "d88176e0e2781eb01426353e61846ee30e86cefe9da37f69ca3db8809a44d525"
+    );
+
+    let record_path = canonical_record(&first_output);
+    let changed = first_record.len() / 2;
+    let mut corrupted = first_record;
+    corrupted[changed] ^= 1;
+    fs::write(record_path, corrupted).unwrap();
+    assert!(
+        recover_durable_link_publication_v1(&first_output, plan.scope())
+            .unwrap()
+            .is_none()
+    );
+    assert!(artifact_path(&first_output, bytes).exists());
+}
+
+#[test]
 fn exclusive_artifact_lock_is_held_through_callback_and_commit() {
     let temp = TestDirectory::new();
     let output = temp.path.join("output");
@@ -410,6 +441,34 @@ fn stale_attempt_request_and_scope_are_isolated() {
             .artifact()
             .bytes(),
         bytes
+    );
+}
+
+#[test]
+fn stale_valid_redo_cannot_replace_a_newer_canonical_publication() {
+    let temp = TestDirectory::new();
+    let output = temp.path.join("output");
+    let first_bytes = b"first redo generation";
+    let second_bytes = b"second redo generation";
+    let first = plan(1, 0x52, 0xa2, first_bytes);
+    let second = plan(2, 0x52, 0xb2, second_bytes);
+    publish(&output, first, first_bytes).unwrap();
+    let record = canonical_record(&output);
+    let stale_record = fs::read(&record).unwrap();
+    publish(&output, second, second_bytes).unwrap();
+
+    let redo = PathBuf::from(format!("{}.redo", record.display()));
+    fs::write(&redo, stale_record).unwrap();
+    fs::set_permissions(&redo, fs::Permissions::from_mode(0o600)).unwrap();
+    let recovered = recover_durable_link_publication_v1(&output, second.scope())
+        .unwrap()
+        .unwrap();
+    assert_eq!(recovered.record().attempt(), second.attempt());
+    assert_eq!(recovered.artifact().bytes(), second_bytes);
+    assert!(!redo.exists());
+    assert_eq!(
+        managed_entries(&output, ".fe2o3-link-quarantine-v1-").len(),
+        1
     );
 }
 

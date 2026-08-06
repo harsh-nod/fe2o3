@@ -41,6 +41,7 @@ const ARTIFACT_SUFFIX: &str = ".bin";
 const QUARANTINE_PREFIX: &str = ".fe2o3-link-quarantine-v1-";
 const STAGED_ARTIFACT: &str = "finalized-link-artifact";
 const SCOPE_IDENTITY_DOMAIN: &[u8] = b"fe2o3.durable-link.scope.v1\0";
+const ENVELOPE_CHECKSUM_DOMAIN: &[u8] = b"fe2o3.durable-link.envelope-checksum.v1\0";
 const MAX_DURABLE_DIRECTORY_ENTRIES: usize = 16_384;
 const MAX_QUARANTINE_ATTEMPTS: u64 = 128;
 
@@ -403,6 +404,8 @@ impl DurableEnvelopeV1 {
         push_scope(&mut bytes, self.scope);
         push_record(&mut bytes, published.as_deref())?;
         push_record(&mut bytes, active.as_deref())?;
+        let checksum = domain_sha256(ENVELOPE_CHECKSUM_DOMAIN, &bytes);
+        bytes.extend_from_slice(&checksum);
         if bytes.len() > MAX_DURABLE_LINK_PUBLICATION_RECORD_BYTES {
             return Err(invalid_record("encoded envelope exceeds its byte bound"));
         }
@@ -426,7 +429,15 @@ impl DurableEnvelopeV1 {
         if bytes.len() > MAX_DURABLE_LINK_PUBLICATION_RECORD_BYTES {
             return Err(invalid_record("envelope exceeds its byte bound"));
         }
-        let mut decoder = EnvelopeDecoder::new(bytes);
+        let body_length = bytes
+            .len()
+            .checked_sub(32)
+            .ok_or_else(|| invalid_record("truncated durable envelope checksum"))?;
+        let (body, checksum) = bytes.split_at(body_length);
+        if domain_sha256(ENVELOPE_CHECKSUM_DOMAIN, body) != checksum {
+            return Err(invalid_record("durable envelope checksum mismatch"));
+        }
+        let mut decoder = EnvelopeDecoder::new(body);
         if decoder.take(ENVELOPE_MAGIC.len())? != ENVELOPE_MAGIC {
             return Err(invalid_record("bad envelope magic"));
         }
@@ -567,6 +578,12 @@ impl DurableLinkPublicationTransactionV1<'_> {
 }
 
 /// Publishes with production defaults.
+///
+/// The lock is held from recovery through callback completion and canonical record commit. This
+/// relies on Linux descriptor-relative operations and a local filesystem honoring `fsync` and
+/// atomic rename. It does not cover lying storage caches, weaker network filesystems, hardware
+/// loss, or mutation by another process that ignores the lock. The record checksum detects
+/// accidental corruption; it is not a keyed authenticator against a same-user attacker.
 pub fn publish_durable_link_v1<F>(
     output_dir: &Path,
     plan: DurableLinkPublicationPlanV1,
@@ -702,15 +719,13 @@ where
     transaction.envelope.published = Some(transaction.record.clone());
     transaction.envelope.active = None;
     transaction.envelope.poisoned = false;
-    if let Err(error) = persist_envelope(
+    persist_envelope(
         transaction.output,
         transaction.names,
         transaction.envelope,
         DurableJournalStageV1::Published,
         transaction.faults,
-    ) {
-        return Err(error);
-    }
+    )?;
     cleanup_orphans(transaction.output)?;
     Ok(DurableLinkPublicationResultV1 {
         outcome: match publication_outcome {
@@ -727,6 +742,10 @@ where
 }
 
 /// Recovers one scope and returns its last complete immutable publication, if any.
+///
+/// Recovery uses the same storage assumptions documented by [`publish_durable_link_v1`]. A
+/// corrupt record is quarantined and replaced by a non-authorizing tombstone; bytes that might
+/// belong to a prior current publication are retained for explicit operator repair.
 pub fn recover_durable_link_publication_v1(
     output_dir: &Path,
     scope: LinkPublicationScopeV1,
@@ -800,7 +819,15 @@ fn recover_envelope(
         MAX_DURABLE_LINK_PUBLICATION_RECORD_BYTES,
     )? {
         match DurableEnvelopeV1::decode(&redo, scope) {
-            Ok(_) => {
+            Ok(redo_envelope) => {
+                match read_envelope(output, &names.record, scope) {
+                    Ok(Some(canonical)) if redo_precedes(&canonical, &redo_envelope) => {
+                        quarantine_entry(output, &names.redo)?;
+                        return Ok(canonical);
+                    }
+                    Ok(_) => {}
+                    Err(_) => quarantine_entry(output, &names.record)?,
+                }
                 renameat(&output.fd, &names.redo, &output.fd, &names.record)
                     .map_err(std::io::Error::from)?;
                 fsync(&output.fd).map_err(std::io::Error::from)?;
@@ -1108,7 +1135,7 @@ fn open_artifact(
         OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
         Mode::empty(),
     )
-    .map_err(|error| std::io::Error::from(error))?;
+    .map_err(std::io::Error::from)?;
     let mut file = fs::File::from(fd);
     let before = fstat(&file).map_err(std::io::Error::from)?;
     let length = usize::try_from(before.st_size).unwrap_or(usize::MAX);
@@ -1191,10 +1218,10 @@ fn cleanup_orphans(output: &PinnedOutput) -> Result<(), DurableLinkPublicationEr
         if entry != expected.record && entry != expected.redo {
             return Ok(());
         }
-        if let Some(record) = envelope.published {
-            if let Some(identity) = record.finalized_output() {
-                referenced.insert(artifact_name(identity));
-            }
+        if let Some(record) = envelope.published
+            && let Some(identity) = record.finalized_output()
+        {
+            referenced.insert(artifact_name(identity));
         }
     }
     for entry in artifact_entries {
@@ -1293,6 +1320,48 @@ fn record_prefix_matches_plan(
             .is_none_or(|identity| identity == plan.publication)
 }
 
+fn redo_precedes(canonical: &DurableEnvelopeV1, redo: &DurableEnvelopeV1) -> bool {
+    if redo.generation_floor != canonical.generation_floor {
+        return redo.generation_floor < canonical.generation_floor;
+    }
+    if let Some(published) = canonical.published.as_ref()
+        && published.attempt().generation() == canonical.generation_floor
+        && redo.published.as_ref() != Some(published)
+    {
+        return true;
+    }
+    match (canonical.active.as_ref(), redo.active.as_ref()) {
+        (Some(current), Some(candidate))
+            if records_have_same_prefix(current, candidate)
+                && matches!(current.state(), LinkPublicationStateV1::Active(_))
+                && matches!(candidate.state(), LinkPublicationStateV1::Active(_)) =>
+        {
+            phase_number(evidence_phase(candidate.state()))
+                < phase_number(evidence_phase(current.state()))
+        }
+        _ => false,
+    }
+}
+
+fn records_have_same_prefix(
+    left: &LinkPublicationRecordV1,
+    right: &LinkPublicationRecordV1,
+) -> bool {
+    left.attempt() == right.attempt()
+        && left.scope() == right.scope()
+        && left.request() == right.request()
+        && options_compatible(left.worker(), right.worker())
+        && options_compatible(left.response(), right.response())
+        && options_compatible(left.linked_output(), right.linked_output())
+        && options_compatible(left.finalization(), right.finalization())
+        && options_compatible(left.finalized_output(), right.finalized_output())
+        && options_compatible(left.publication(), right.publication())
+}
+
+fn options_compatible<T: Eq>(left: Option<T>, right: Option<T>) -> bool {
+    left.is_none() || right.is_none() || left == right
+}
+
 fn validate_pinned_file(
     file: &fs::File,
     expected: usize,
@@ -1361,6 +1430,13 @@ const fn phase_number(phase: LinkPublicationPhaseV1) -> u8 {
 
 fn sha256(bytes: &[u8]) -> [u8; 32] {
     Sha256::digest(bytes).into()
+}
+
+fn domain_sha256(domain: &[u8], bytes: &[u8]) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(domain);
+    digest.update(bytes);
+    digest.finalize().into()
 }
 
 fn artifact_name(identity: FinalizedOutputIdentityV1) -> String {
