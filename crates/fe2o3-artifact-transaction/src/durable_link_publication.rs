@@ -1,10 +1,17 @@
 //! Durable, inert publication of one finalized direct-link artifact.
 //!
-//! This adapter assumes Linux `renameat2(RENAME_NOREPLACE)`, descriptor-relative filesystem
-//! operations, and a local filesystem that implements the usual `fsync` and atomic-rename
-//! contract. It cannot make guarantees for storage that lies about cache flushes, network
-//! filesystems with weaker semantics, failing hardware, or a process with permission to mutate
-//! the managed directory outside this protocol.
+//! V1 requires the canonical output directory and all of its parents to exist before publication.
+//! The caller is responsible for durably creating that topology, including syncing each newly
+//! created directory into its parent. The adapter pins the existing output directory, performs
+//! descriptor-relative operations beneath it, and syncs it after durable name changes.
+//!
+//! This adapter assumes Linux `renameat2(RENAME_NOREPLACE)` and a local filesystem that implements
+//! the usual `fsync` and atomic-rename contract. It cannot make guarantees for storage that lies
+//! about cache flushes, network filesystems with weaker semantics, failing hardware, or a process
+//! with permission to mutate the managed directory outside this protocol. V1 does not scan or
+//! delete abandoned staging, artifact, redo, or quarantine entries. Suspect entries remain inert
+//! and may block the affected scope until an operator repairs them through a separately trusted
+//! maintenance path.
 
 use super::{
     AtomicPublicationIdentityV1, CanonicalLinkRequestIdentityV1, ControlCommitHooks,
@@ -13,20 +20,18 @@ use super::{
     LinkPublicationCodecError, LinkPublicationPhaseV1, LinkPublicationRecordV1,
     LinkPublicationScopeV1, LinkPublicationStateV1, LinkedOutputIdentityV1, NoFaults, PinnedOutput,
     PinnedWorkerIdentityV1, PublicationOutcomeV1, StagingDirectory, ValidatedResponseIdentityV1,
-    cleanup_abandoned_staging, commit_control_file_direct_with_hooks, read_control_file,
+    commit_control_file_direct_with_hooks, read_control_file,
 };
 use rustix::fs::{
-    AtFlags, Dir, FileType, Mode, OFlags, RenameFlags, fstat, fsync, openat, renameat,
-    renameat_with, statat, unlinkat,
+    AtFlags, FileType, Mode, OFlags, RenameFlags, fstat, fsync, openat, renameat, renameat_with,
+    statat,
 };
 use sha2::{Digest, Sha256};
-use std::collections::BTreeSet;
 use std::fmt;
 use std::fs;
 use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 const ENVELOPE_MAGIC: &[u8] = b"FE2O3-DURABLE-LINK-V1\0";
 const ENVELOPE_VERSION: u16 = 1;
@@ -38,14 +43,9 @@ const RECORD_SUFFIX: &str = ".record";
 const REDO_SUFFIX: &str = ".redo";
 const ARTIFACT_PREFIX: &str = ".fe2o3-link-artifact-v1-";
 const ARTIFACT_SUFFIX: &str = ".bin";
-const QUARANTINE_PREFIX: &str = ".fe2o3-link-quarantine-v1-";
 const STAGED_ARTIFACT: &str = "finalized-link-artifact";
 const SCOPE_IDENTITY_DOMAIN: &[u8] = b"fe2o3.durable-link.scope.v1\0";
 const ENVELOPE_CHECKSUM_DOMAIN: &[u8] = b"fe2o3.durable-link.envelope-checksum.v1\0";
-const MAX_DURABLE_DIRECTORY_ENTRIES: usize = 16_384;
-const MAX_QUARANTINE_ATTEMPTS: u64 = 128;
-
-static NEXT_QUARANTINE_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Maximum canonical size of one durable scope envelope.
 pub const MAX_DURABLE_LINK_PUBLICATION_RECORD_BYTES: usize = 1_280;
@@ -187,6 +187,8 @@ pub enum DurableLinkPublicationFaultPointV1 {
     ArtifactSync,
     ArtifactRename,
     ArtifactDirectorySync,
+    /// Transient failure while opening a committed artifact snapshot.
+    SnapshotRead,
 }
 
 /// Options for deterministic durability testing.
@@ -198,6 +200,11 @@ pub struct DurableLinkPublicationOptionsV1 {
 impl DurableLinkPublicationOptionsV1 {
     /// Injects one crash-like interruption and suppresses normal failure invalidation.
     pub const fn inject_crash(point: DurableLinkPublicationFaultPointV1) -> Self {
+        Self { fault: Some(point) }
+    }
+
+    /// Injects one deterministic filesystem fault for integration testing.
+    pub const fn inject_fault(point: DurableLinkPublicationFaultPointV1) -> Self {
         Self { fault: Some(point) }
     }
 }
@@ -590,6 +597,10 @@ impl DurableLinkPublicationTransactionV1<'_> {
 /// atomic rename. It does not cover lying storage caches, weaker network filesystems, hardware
 /// loss, or mutation by another process that ignores the lock. The record checksum detects
 /// accidental corruption; it is not a keyed authenticator against a same-user attacker.
+///
+/// `output_dir` must already exist. V1 never creates its directory or parents because publication
+/// cannot prove that newly created topology was synced into every parent. The caller must durably
+/// provision that topology before calling this function.
 pub fn publish_durable_link_v1<F>(
     output_dir: &Path,
     plan: DurableLinkPublicationPlanV1,
@@ -620,18 +631,17 @@ where
         &mut DurableLinkPublicationTransactionV1<'_>,
     ) -> Result<(), DurableLinkPublicationError>,
 {
-    let output = PinnedOutput::open(output_dir)?;
+    let output = PinnedOutput::open_existing(output_dir)?;
     let _lock = output.lock()?;
-    cleanup_abandoned_staging(&output)?;
     let names = DurableNames::new(plan.scope);
+    let mut faults = FaultInjector::new(options.fault);
     let mut envelope = recover_envelope(&output, &names, plan.scope)?;
     recover_incomplete(&output, &names, &mut envelope)?;
-    verify_or_invalidate_published(&output, &names, &mut envelope)?;
+    verify_or_invalidate_published(&output, &names, &mut envelope, &mut faults)?;
 
     if let Some(record) = envelope.published.as_ref() {
         if record_matches_plan(record, plan) {
-            let snapshot = snapshot_for_record(&output, record)?;
-            cleanup_orphans(&output)?;
+            let snapshot = snapshot_for_record(&output, record, &mut faults)?;
             return Ok(DurableLinkPublicationResultV1 {
                 outcome: DurableLinkPublicationOutcomeV1::AlreadyPublished,
                 snapshot,
@@ -664,7 +674,6 @@ where
     let record = catalog.begin(plan.attempt, plan.scope, plan.request)?;
     envelope.generation_floor = envelope.generation_floor.max(plan.attempt.generation());
     envelope.active = Some(record.clone());
-    let mut faults = FaultInjector::new(options.fault);
     persist_envelope(
         &output,
         &names,
@@ -732,7 +741,6 @@ where
         DurableJournalStageV1::Published,
         transaction.faults,
     )?;
-    cleanup_orphans(transaction.output)?;
     Ok(DurableLinkPublicationResultV1 {
         outcome: match publication_outcome {
             PublicationOutcomeV1::Published => DurableLinkPublicationOutcomeV1::Published,
@@ -749,25 +757,25 @@ where
 
 /// Recovers one scope and returns its last complete immutable publication, if any.
 ///
-/// Recovery uses the same storage assumptions documented by [`publish_durable_link_v1`]. A
-/// corrupt record is quarantined and replaced by a non-authorizing tombstone; bytes that might
-/// belong to a prior current publication are retained for explicit operator repair.
+/// Recovery uses the same existing-directory and storage assumptions documented by
+/// [`publish_durable_link_v1`]. Corrupt, conflicting, and unsafe entries are left in place and
+/// reported without mutating canonical state. Incomplete protocol records are durably invalidated;
+/// their artifact and staging names remain inert for explicit operator repair.
 pub fn recover_durable_link_publication_v1(
     output_dir: &Path,
     scope: LinkPublicationScopeV1,
 ) -> Result<Option<DurableLinkPublicationSnapshotV1>, DurableLinkPublicationError> {
-    let output = PinnedOutput::open(output_dir)?;
+    let output = PinnedOutput::open_existing(output_dir)?;
     let _lock = output.lock()?;
-    cleanup_abandoned_staging(&output)?;
     let names = DurableNames::new(scope);
+    let mut faults = FaultInjector::new(None);
     let mut envelope = recover_envelope(&output, &names, scope)?;
     recover_incomplete(&output, &names, &mut envelope)?;
-    verify_or_invalidate_published(&output, &names, &mut envelope)?;
-    cleanup_orphans(&output)?;
+    verify_or_invalidate_published(&output, &names, &mut envelope, &mut faults)?;
     envelope
         .published
         .as_ref()
-        .map(|record| snapshot_for_record(&output, record))
+        .map(|record| snapshot_for_record(&output, record, &mut faults))
         .transpose()
 }
 
@@ -818,83 +826,49 @@ fn recover_envelope(
     names: &DurableNames,
     scope: LinkPublicationScopeV1,
 ) -> Result<DurableEnvelopeV1, DurableLinkPublicationError> {
-    if let Some(redo) = read_control_file(
-        output,
-        &names.redo,
-        "durable link publication redo",
-        MAX_DURABLE_LINK_PUBLICATION_RECORD_BYTES,
-    )? {
-        match DurableEnvelopeV1::decode(&redo, scope) {
-            Ok(redo_envelope) => {
-                match read_envelope(output, &names.record, scope) {
-                    Ok(Some(canonical)) => match classify_redo(&canonical, &redo_envelope) {
-                        RedoDisposition::Replay => {}
-                        RedoDisposition::Stale => {
-                            quarantine_entry(output, &names.redo)?;
-                            return Ok(canonical);
-                        }
-                        RedoDisposition::Conflict => {
-                            return Err(DurableLinkPublicationError::ConflictingRedo {
-                                reason: "same-generation redo is not a forward transition from canonical state"
-                                    .to_string(),
-                            });
-                        }
-                    },
-                    Ok(None) => {}
-                    Err(_) => quarantine_entry(output, &names.record)?,
-                }
-                renameat(&output.fd, &names.redo, &output.fd, &names.record)
-                    .map_err(std::io::Error::from)?;
-                fsync(&output.fd).map_err(std::io::Error::from)?;
-            }
-            Err(_) => {
-                quarantine_entry(output, &names.redo)?;
-                let mut prior = match read_envelope(output, &names.record, scope) {
-                    Ok(Some(prior)) => prior,
-                    Ok(None) => DurableEnvelopeV1::empty(scope),
-                    Err(_) => {
-                        quarantine_entry(output, &names.record)?;
-                        DurableEnvelopeV1 {
-                            scope,
-                            generation_floor: u64::MAX,
-                            poisoned: true,
-                            published: None,
-                            active: None,
-                        }
+    match read_envelope(output, &names.redo, scope) {
+        Ok(Some(redo)) => {
+            if let Some(canonical) = read_envelope(output, &names.record, scope)
+                .map_err(DurableReadError::into_public)?
+            {
+                match classify_redo(&canonical, &redo) {
+                    RedoDisposition::Replay => {}
+                    RedoDisposition::Stale => {
+                        return Err(DurableLinkPublicationError::ConflictingRedo {
+                            reason: "stale redo remains beside newer canonical state; V1 refuses destructive cleanup"
+                                .to_string(),
+                        });
                     }
-                };
-                prior.poisoned = true;
-                persist_envelope(
-                    output,
-                    names,
-                    &prior,
-                    DurableJournalStageV1::Recovered,
-                    &mut FaultInjector::new(None),
-                )?;
+                    RedoDisposition::Conflict => {
+                        return Err(DurableLinkPublicationError::ConflictingRedo {
+                            reason: "same-generation redo is not a forward transition from canonical state"
+                                .to_string(),
+                        });
+                    }
+                }
             }
+            renameat(&output.fd, &names.redo, &output.fd, &names.record)
+                .map_err(std::io::Error::from)?;
+            fsync(&output.fd).map_err(std::io::Error::from)?;
         }
+        Ok(None) => {}
+        Err(error) => return Err(error.into_public()),
     }
 
-    match read_envelope(output, &names.record, scope) {
-        Ok(Some(envelope)) => Ok(envelope),
-        Ok(None) => Ok(DurableEnvelopeV1::empty(scope)),
-        Err(_) => {
-            quarantine_entry(output, &names.record)?;
-            let envelope = DurableEnvelopeV1 {
-                scope,
-                generation_floor: u64::MAX,
-                poisoned: true,
-                published: None,
-                active: None,
-            };
-            persist_envelope(
-                output,
-                names,
-                &envelope,
-                DurableJournalStageV1::Recovered,
-                &mut FaultInjector::new(None),
-            )?;
-            Ok(envelope)
+    Ok(read_envelope(output, &names.record, scope)
+        .map_err(DurableReadError::into_public)?
+        .unwrap_or_else(|| DurableEnvelopeV1::empty(scope)))
+}
+
+enum DurableReadError {
+    Transient(DurableLinkPublicationError),
+    Corrupt(DurableLinkPublicationError),
+}
+
+impl DurableReadError {
+    fn into_public(self) -> DurableLinkPublicationError {
+        match self {
+            Self::Transient(error) | Self::Corrupt(error) => error,
         }
     }
 }
@@ -903,15 +877,31 @@ fn read_envelope(
     output: &PinnedOutput,
     entry: &str,
     scope: LinkPublicationScopeV1,
-) -> Result<Option<DurableEnvelopeV1>, DurableLinkPublicationError> {
-    read_control_file(
+) -> Result<Option<DurableEnvelopeV1>, DurableReadError> {
+    let bytes = read_control_file(
         output,
         entry,
         "durable link publication record",
         MAX_DURABLE_LINK_PUBLICATION_RECORD_BYTES,
-    )?
-    .map(|bytes| DurableEnvelopeV1::decode(&bytes, scope))
-    .transpose()
+    )
+    .map_err(classify_control_read_error)?;
+    bytes
+        .map(|bytes| DurableEnvelopeV1::decode(&bytes, scope).map_err(DurableReadError::Corrupt))
+        .transpose()
+}
+
+fn classify_control_read_error(error: EmitError) -> DurableReadError {
+    match error {
+        EmitError::InvalidArtifactDestination { .. } => {
+            DurableReadError::Corrupt(DurableLinkPublicationError::Filesystem(error))
+        }
+        EmitError::Io(ref io_error)
+            if io_error.raw_os_error() == Some(rustix::io::Errno::LOOP.raw_os_error()) =>
+        {
+            DurableReadError::Corrupt(DurableLinkPublicationError::Filesystem(error))
+        }
+        _ => DurableReadError::Transient(DurableLinkPublicationError::Filesystem(error)),
+    }
 }
 
 fn recover_incomplete(
@@ -943,12 +933,15 @@ fn verify_or_invalidate_published(
     output: &PinnedOutput,
     names: &DurableNames,
     envelope: &mut DurableEnvelopeV1,
+    faults: &mut FaultInjector,
 ) -> Result<(), DurableLinkPublicationError> {
     let Some(record) = envelope.published.as_ref() else {
         return Ok(());
     };
-    if snapshot_for_record(output, record).is_ok() {
-        return Ok(());
+    match snapshot_for_record_checked(output, record, faults) {
+        Ok(_) => return Ok(()),
+        Err(SnapshotReadError::Transient(error)) => return Err(error),
+        Err(SnapshotReadError::Missing | SnapshotReadError::Corrupt(_)) => {}
     }
     envelope.generation_floor = envelope.generation_floor.max(record.attempt().generation());
     envelope.published = None;
@@ -1058,11 +1051,10 @@ fn publish_artifact(
     faults: &mut FaultInjector,
 ) -> Result<FinalizedArtifactSnapshot, DurableLinkPublicationError> {
     let entry = artifact_name(identity);
-    match open_artifact(output, &entry, identity) {
+    match open_artifact(output, &entry, identity, faults) {
         Ok(snapshot) => return Ok(snapshot),
-        Err(DurableLinkPublicationError::Filesystem(EmitError::Io(error)))
-            if error.raw_os_error() == Some(rustix::io::Errno::NOENT.raw_os_error()) => {}
-        Err(error) => return Err(error),
+        Err(SnapshotReadError::Missing) => {}
+        Err(error) => return Err(error.into_public(&entry)),
     }
 
     faults.hit(DurableLinkPublicationFaultPointV1::ArtifactCreate)?;
@@ -1124,18 +1116,43 @@ fn publish_artifact(
 fn snapshot_for_record(
     output: &PinnedOutput,
     record: &LinkPublicationRecordV1,
+    faults: &mut FaultInjector,
 ) -> Result<DurableLinkPublicationSnapshotV1, DurableLinkPublicationError> {
-    if record.state() != LinkPublicationStateV1::Active(LinkPublicationPhaseV1::Published) {
-        return Err(invalid_record(
-            "snapshot requested for an incomplete record",
-        ));
+    snapshot_for_record_checked(output, record, faults)
+        .map_err(|error| error.into_public("published artifact"))
+}
+
+enum SnapshotReadError {
+    Missing,
+    Corrupt(DurableLinkPublicationError),
+    Transient(DurableLinkPublicationError),
+}
+
+impl SnapshotReadError {
+    fn into_public(self, entry: &str) -> DurableLinkPublicationError {
+        match self {
+            Self::Missing => unsafe_entry(entry, "committed artifact is absent"),
+            Self::Corrupt(error) | Self::Transient(error) => error,
+        }
     }
-    let identity = record
-        .finalized_output()
-        .ok_or_else(|| invalid_record("published record omitted finalized output"))?;
+}
+
+fn snapshot_for_record_checked(
+    output: &PinnedOutput,
+    record: &LinkPublicationRecordV1,
+    faults: &mut FaultInjector,
+) -> Result<DurableLinkPublicationSnapshotV1, SnapshotReadError> {
+    if record.state() != LinkPublicationStateV1::Active(LinkPublicationPhaseV1::Published) {
+        return Err(SnapshotReadError::Corrupt(invalid_record(
+            "snapshot requested for an incomplete record",
+        )));
+    }
+    let identity = record.finalized_output().ok_or_else(|| {
+        SnapshotReadError::Corrupt(invalid_record("published record omitted finalized output"))
+    })?;
     Ok(DurableLinkPublicationSnapshotV1 {
         record: record.clone(),
-        artifact: open_artifact(output, &artifact_name(identity), identity)?,
+        artifact: open_artifact(output, &artifact_name(identity), identity, faults)?,
     })
 }
 
@@ -1143,152 +1160,85 @@ fn open_artifact(
     output: &PinnedOutput,
     entry: &str,
     identity: FinalizedOutputIdentityV1,
-) -> Result<FinalizedArtifactSnapshot, DurableLinkPublicationError> {
-    let fd = openat(
+    faults: &mut FaultInjector,
+) -> Result<FinalizedArtifactSnapshot, SnapshotReadError> {
+    faults.hit_snapshot_read()?;
+    let fd = match openat(
         &output.fd,
         entry,
         OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
         Mode::empty(),
-    )
-    .map_err(std::io::Error::from)?;
+    ) {
+        Ok(fd) => fd,
+        Err(error) if error == rustix::io::Errno::NOENT => {
+            return Err(SnapshotReadError::Missing);
+        }
+        Err(error) if error == rustix::io::Errno::LOOP => {
+            return Err(SnapshotReadError::Corrupt(unsafe_entry(
+                entry,
+                "artifact name resolves to a symlink",
+            )));
+        }
+        Err(error) => {
+            return Err(SnapshotReadError::Transient(
+                std::io::Error::from(error).into(),
+            ));
+        }
+    };
     let mut file = fs::File::from(fd);
-    let before = fstat(&file).map_err(std::io::Error::from)?;
+    let before = fstat(&file)
+        .map_err(std::io::Error::from)
+        .map_err(DurableLinkPublicationError::from)
+        .map_err(SnapshotReadError::Transient)?;
     let length = usize::try_from(before.st_size).unwrap_or(usize::MAX);
-    validate_artifact_size(length)?;
+    validate_artifact_size(length).map_err(SnapshotReadError::Corrupt)?;
     if !is_private_regular(&before) {
-        return Err(unsafe_entry(
+        return Err(SnapshotReadError::Corrupt(unsafe_entry(
             entry,
             "artifact is not a private single-link regular file",
-        ));
+        )));
     }
     let mut bytes = Vec::with_capacity(length);
     Read::by_ref(&mut file)
         .take((MAX_DURABLE_FINALIZED_ARTIFACT_BYTES + 1) as u64)
-        .read_to_end(&mut bytes)?;
-    let after = fstat(&file).map_err(std::io::Error::from)?;
-    let named =
-        statat(&output.fd, entry, AtFlags::SYMLINK_NOFOLLOW).map_err(std::io::Error::from)?;
+        .read_to_end(&mut bytes)
+        .map_err(DurableLinkPublicationError::from)
+        .map_err(SnapshotReadError::Transient)?;
+    let after = fstat(&file)
+        .map_err(std::io::Error::from)
+        .map_err(DurableLinkPublicationError::from)
+        .map_err(SnapshotReadError::Transient)?;
+    let named = match statat(&output.fd, entry, AtFlags::SYMLINK_NOFOLLOW) {
+        Ok(named) => named,
+        Err(error) if error == rustix::io::Errno::NOENT => {
+            return Err(SnapshotReadError::Corrupt(unsafe_entry(
+                entry,
+                "artifact name disappeared while its descriptor was read",
+            )));
+        }
+        Err(error) => {
+            return Err(SnapshotReadError::Transient(
+                std::io::Error::from(error).into(),
+            ));
+        }
+    };
     if bytes.len() != length
         || !same_private_file(&before, &after, length)
         || !same_private_file(&before, &named, length)
     {
-        return Err(unsafe_entry(
+        return Err(SnapshotReadError::Corrupt(unsafe_entry(
             entry,
             "artifact changed while its descriptor snapshot was captured",
-        ));
+        )));
     }
     if sha256(&bytes) != *identity.as_bytes() {
-        return Err(DurableLinkPublicationError::FinalizedArtifactDigestMismatch);
+        return Err(SnapshotReadError::Corrupt(
+            DurableLinkPublicationError::FinalizedArtifactDigestMismatch,
+        ));
     }
     Ok(FinalizedArtifactSnapshot::from_bytes(
         output.display_path.join(entry),
         Arc::<[u8]>::from(bytes),
-    ))
-}
-
-fn cleanup_orphans(output: &PinnedOutput) -> Result<(), DurableLinkPublicationError> {
-    let scan_fd = rustix::io::fcntl_dupfd_cloexec(&output.fd, 0).map_err(std::io::Error::from)?;
-    let mut directory = Dir::read_from(&scan_fd).map_err(std::io::Error::from)?;
-    let mut record_entries = Vec::new();
-    let mut artifact_entries = Vec::new();
-    let mut count = 0usize;
-    for entry in &mut directory {
-        let entry = entry.map_err(std::io::Error::from)?;
-        let name = entry.file_name().to_string_lossy();
-        if name == "." || name == ".." {
-            continue;
-        }
-        count += 1;
-        if count > MAX_DURABLE_DIRECTORY_ENTRIES {
-            return Err(invalid_record(
-                "managed directory exceeds durable scan bound",
-            ));
-        }
-        if is_record_name(&name) || is_redo_name(&name) {
-            record_entries.push(name.into_owned());
-        } else if is_artifact_name(&name) {
-            artifact_entries.push(name.into_owned());
-        }
-    }
-
-    let mut referenced = BTreeSet::new();
-    for entry in record_entries {
-        let bytes = match read_control_file(
-            output,
-            &entry,
-            "durable publication during orphan scan",
-            MAX_DURABLE_LINK_PUBLICATION_RECORD_BYTES,
-        ) {
-            Ok(Some(bytes)) => bytes,
-            Ok(None) => continue,
-            Err(_) => return Ok(()),
-        };
-        let Ok(envelope) = DurableEnvelopeV1::decode_any(&bytes) else {
-            return Ok(());
-        };
-        if envelope.poisoned {
-            return Ok(());
-        }
-        let expected = DurableNames::new(envelope.scope);
-        if entry != expected.record && entry != expected.redo {
-            return Ok(());
-        }
-        if let Some(record) = envelope.published
-            && let Some(identity) = record.finalized_output()
-        {
-            referenced.insert(artifact_name(identity));
-        }
-    }
-    for entry in artifact_entries {
-        if referenced.contains(&entry) {
-            continue;
-        }
-        let stat = match statat(&output.fd, &entry, AtFlags::SYMLINK_NOFOLLOW) {
-            Ok(stat) => stat,
-            Err(error) if error == rustix::io::Errno::NOENT => continue,
-            Err(error) => return Err(std::io::Error::from(error).into()),
-        };
-        if !is_private_regular(&stat) {
-            continue;
-        }
-        let Some(identity) = artifact_identity_from_name(&entry) else {
-            continue;
-        };
-        if open_artifact(output, &entry, identity).is_err() {
-            continue;
-        }
-        unlinkat(&output.fd, &entry, AtFlags::empty()).map_err(std::io::Error::from)?;
-    }
-    fsync(&output.fd).map_err(std::io::Error::from)?;
-    Ok(())
-}
-
-fn quarantine_entry(output: &PinnedOutput, entry: &str) -> Result<(), DurableLinkPublicationError> {
-    let start = NEXT_QUARANTINE_ID.fetch_add(MAX_QUARANTINE_ATTEMPTS, Ordering::Relaxed);
-    for offset in 0..MAX_QUARANTINE_ATTEMPTS {
-        let quarantine = format!(
-            "{QUARANTINE_PREFIX}{}-{}",
-            std::process::id(),
-            start.wrapping_add(offset)
-        );
-        match renameat_with(
-            &output.fd,
-            entry,
-            &output.fd,
-            &quarantine,
-            RenameFlags::NOREPLACE,
-        ) {
-            Ok(()) => {
-                fsync(&output.fd).map_err(std::io::Error::from)?;
-                return Ok(());
-            }
-            Err(error) if error == rustix::io::Errno::EXIST => {}
-            Err(error) if error == rustix::io::Errno::NOENT => return Ok(()),
-            Err(error) => return Err(std::io::Error::from(error).into()),
-        }
-    }
-    Err(invalid_record(
-        "could not reserve a corruption quarantine name",
     ))
 }
 
@@ -1540,53 +1490,6 @@ fn artifact_name(identity: FinalizedOutputIdentityV1) -> String {
     )
 }
 
-fn is_artifact_name(name: &str) -> bool {
-    name.strip_prefix(ARTIFACT_PREFIX)
-        .and_then(|rest| rest.strip_suffix(ARTIFACT_SUFFIX))
-        .is_some_and(is_lower_hex_64)
-}
-
-fn artifact_identity_from_name(name: &str) -> Option<FinalizedOutputIdentityV1> {
-    let encoded = name
-        .strip_prefix(ARTIFACT_PREFIX)?
-        .strip_suffix(ARTIFACT_SUFFIX)?;
-    let mut bytes = [0; 32];
-    decode_lower_hex_64(encoded, &mut bytes)?;
-    Some(FinalizedOutputIdentityV1::from_bytes(bytes))
-}
-
-fn is_record_name(name: &str) -> bool {
-    name.strip_prefix(RECORD_PREFIX)
-        .and_then(|rest| rest.strip_suffix(RECORD_SUFFIX))
-        .is_some_and(is_lower_hex_64)
-}
-
-fn is_redo_name(name: &str) -> bool {
-    name.strip_suffix(REDO_SUFFIX).is_some_and(is_record_name)
-}
-
-fn is_lower_hex_64(value: &str) -> bool {
-    value.len() == 64
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-}
-
-fn decode_lower_hex_64(value: &str, output: &mut [u8; 32]) -> Option<()> {
-    if !is_lower_hex_64(value) {
-        return None;
-    }
-    for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
-        let digit = |byte: u8| match byte {
-            b'0'..=b'9' => Some(byte - b'0'),
-            b'a'..=b'f' => Some(byte - b'a' + 10),
-            _ => None,
-        };
-        output[index] = (digit(pair[0])? << 4) | digit(pair[1])?;
-    }
-    Some(())
-}
-
 fn hex(bytes: &[u8]) -> String {
     const DIGITS: &[u8; 16] = b"0123456789abcdef";
     let mut encoded = String::with_capacity(bytes.len() * 2);
@@ -1633,6 +1536,18 @@ impl FaultInjector {
         if self.fired.is_none() && self.point == Some(point) {
             self.fired = Some(point);
             Err(DurableLinkPublicationError::InjectedCrash { point })
+        } else {
+            Ok(())
+        }
+    }
+
+    fn hit_snapshot_read(&mut self) -> Result<(), SnapshotReadError> {
+        let point = DurableLinkPublicationFaultPointV1::SnapshotRead;
+        if self.fired.is_none() && self.point == Some(point) {
+            self.fired = Some(point);
+            Err(SnapshotReadError::Transient(
+                std::io::Error::other("injected transient snapshot read failure").into(),
+            ))
         } else {
             Ok(())
         }

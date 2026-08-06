@@ -36,6 +36,7 @@ impl TestDirectory {
             NEXT_TEST_ID.fetch_add(1, Ordering::Relaxed)
         ));
         fs::create_dir(&path).unwrap();
+        fs::create_dir(path.join("output")).unwrap();
         Self { path }
     }
 }
@@ -149,6 +150,17 @@ fn canonical_record(output: &Path) -> PathBuf {
         .expect("canonical durable record")
 }
 
+fn redo_record(output: &Path) -> Option<PathBuf> {
+    managed_entries(output, RECORD_PREFIX)
+        .into_iter()
+        .find(|path| {
+            path.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .ends_with(".redo")
+        })
+}
+
 #[test]
 fn publishes_recovers_and_exact_replay_skips_work() {
     let temp = TestDirectory::new();
@@ -221,12 +233,9 @@ fn durable_envelope_is_deterministic_and_checksum_bound() {
     let changed = first_record.len() / 2;
     let mut corrupted = first_record;
     corrupted[changed] ^= 1;
-    fs::write(record_path, corrupted).unwrap();
-    assert!(
-        recover_durable_link_publication_v1(&first_output, plan.scope())
-            .unwrap()
-            .is_none()
-    );
+    fs::write(&record_path, &corrupted).unwrap();
+    assert!(recover_durable_link_publication_v1(&first_output, plan.scope()).is_err());
+    assert_eq!(fs::read(record_path).unwrap(), corrupted);
     assert!(artifact_path(&first_output, bytes).exists());
 }
 
@@ -320,7 +329,31 @@ fn every_journal_boundary_recovers_or_replays_idempotently() {
                 "unexpected {stage:?}/{boundary:?} error: {error}"
             );
 
-            let _ = recover_durable_link_publication_v1(&output, plan.scope()).unwrap();
+            let canonical = managed_entries(&output, RECORD_PREFIX)
+                .into_iter()
+                .find(|path| {
+                    path.file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .ends_with(RECORD_SUFFIX)
+                })
+                .map(|path| (path.clone(), fs::read(path).unwrap()));
+            if let Err(error) = recover_durable_link_publication_v1(&output, plan.scope()) {
+                assert!(
+                    matches!(
+                        error,
+                        DurableLinkPublicationError::InvalidDurableRecord { .. }
+                    ),
+                    "unexpected recovery failure after {stage:?}/{boundary:?}: {error}"
+                );
+                if let Some((path, bytes)) = canonical {
+                    assert_eq!(fs::read(path).unwrap(), bytes);
+                }
+                let redo = redo_record(&output)
+                    .unwrap_or_else(|| panic!("{stage:?}/{boundary:?} omitted poison redo"));
+                fs::remove_file(redo).unwrap();
+                let _ = recover_durable_link_publication_v1(&output, plan.scope()).unwrap();
+            }
             let retried = publish(&output, plan, bytes).unwrap_or_else(|error| {
                 panic!("retry failed after {stage:?}/{boundary:?}: {error}")
             });
@@ -362,9 +395,10 @@ fn every_artifact_boundary_leaves_no_visible_failed_publication() {
                 .is_none(),
             "{point:?} exposed an incomplete publication"
         );
-        assert!(
-            !artifact_path(&output, bytes).exists(),
-            "{point:?} left a referenced artifact"
+        assert_eq!(
+            artifact_path(&output, bytes).exists(),
+            point == DurableLinkPublicationFaultPointV1::ArtifactDirectorySync,
+            "{point:?} retained an unexpected artifact name"
         );
         assert_eq!(
             publish(&output, plan, bytes).unwrap().outcome(),
@@ -465,20 +499,24 @@ fn stale_valid_redo_cannot_replace_a_newer_canonical_publication() {
     let record = canonical_record(&output);
     let stale_record = fs::read(&record).unwrap();
     publish(&output, second, second_bytes).unwrap();
+    let current_record = fs::read(&record).unwrap();
 
     let redo = PathBuf::from(format!("{}.redo", record.display()));
     fs::write(&redo, stale_record).unwrap();
     fs::set_permissions(&redo, fs::Permissions::from_mode(0o600)).unwrap();
+    assert!(matches!(
+        recover_durable_link_publication_v1(&output, second.scope()),
+        Err(DurableLinkPublicationError::ConflictingRedo { .. })
+    ));
+    assert_eq!(fs::read(&record).unwrap(), current_record);
+    assert!(redo.exists());
+
+    fs::remove_file(redo).unwrap();
     let recovered = recover_durable_link_publication_v1(&output, second.scope())
         .unwrap()
         .unwrap();
     assert_eq!(recovered.record().attempt(), second.attempt());
     assert_eq!(recovered.artifact().bytes(), second_bytes);
-    assert!(!redo.exists());
-    assert_eq!(
-        managed_entries(&output, ".fe2o3-link-quarantine-v1-").len(),
-        1
-    );
 }
 
 #[test]
@@ -549,11 +587,45 @@ fn finalized_bytes_must_match_validated_sha256_identity() {
 }
 
 #[test]
+fn transient_snapshot_failure_does_not_mutate_or_poison_publication() {
+    let temp = TestDirectory::new();
+    let output = temp.path.join("output");
+    let bytes = b"transient snapshot payload";
+    let plan = plan(1, 0x61, 0xc1, bytes);
+    publish(&output, plan, bytes).unwrap();
+    let record = canonical_record(&output);
+    let canonical = fs::read(&record).unwrap();
+
+    assert!(matches!(
+        publish_durable_link_v1_with_options(
+            &output,
+            plan,
+            DurableLinkPublicationOptionsV1::inject_fault(
+                DurableLinkPublicationFaultPointV1::SnapshotRead,
+            ),
+            |_| panic!("snapshot failure occurs before work"),
+        ),
+        Err(DurableLinkPublicationError::Filesystem(_))
+    ));
+    assert_eq!(fs::read(&record).unwrap(), canonical);
+    assert!(managed_entries(&output, ".fe2o3-link-quarantine-v1-").is_empty());
+
+    let replay = publish_durable_link_v1(&output, plan, |_| {
+        panic!("a transient read failure must not revoke exact replay")
+    })
+    .unwrap();
+    assert_eq!(
+        replay.outcome(),
+        DurableLinkPublicationOutcomeV1::AlreadyPublished
+    );
+    assert_eq!(replay.snapshot().artifact().bytes(), bytes);
+}
+
+#[test]
 fn symlink_and_hardlink_artifact_substitution_fail_closed() {
     for hardlink in [false, true] {
         let temp = TestDirectory::new();
         let output = temp.path.join("output");
-        fs::create_dir(&output).unwrap();
         let bytes = b"substitution target bytes";
         let plan = plan(1, 0x70, 0xd0, bytes);
         let unrelated = temp.path.join("unrelated");
@@ -578,7 +650,7 @@ fn symlink_and_hardlink_artifact_substitution_fail_closed() {
 }
 
 #[test]
-fn record_symlink_and_hardlink_substitution_invalidate_without_deleting_target() {
+fn record_symlink_and_hardlink_substitution_fail_closed_without_deleting_target() {
     for hardlink in [false, true] {
         let temp = TestDirectory::new();
         let output = temp.path.join("output");
@@ -596,18 +668,15 @@ fn record_symlink_and_hardlink_substitution_invalidate_without_deleting_target()
             symlink(&unrelated, &record).unwrap();
         }
 
-        assert!(
-            recover_durable_link_publication_v1(&output, plan.scope())
-                .unwrap()
-                .is_none()
-        );
+        assert!(recover_durable_link_publication_v1(&output, plan.scope()).is_err());
         assert_eq!(fs::read(&unrelated).unwrap(), b"do not delete");
+        assert!(record.symlink_metadata().is_ok());
         assert!(artifact_path(&output, bytes).exists());
     }
 }
 
 #[test]
-fn malformed_truncated_and_oversized_records_are_quarantined() {
+fn malformed_truncated_and_oversized_records_fail_closed_without_path_mutation() {
     for corrupt in [vec![0x13], vec![0x55; 2_048]] {
         let temp = TestDirectory::new();
         let output = temp.path.join("output");
@@ -619,23 +688,17 @@ fn malformed_truncated_and_oversized_records_are_quarantined() {
         let unrelated = output.join("unrelated.txt");
         fs::write(&unrelated, b"keep").unwrap();
 
-        assert!(
-            recover_durable_link_publication_v1(&output, plan.scope())
-                .unwrap()
-                .is_none()
-        );
+        assert!(recover_durable_link_publication_v1(&output, plan.scope()).is_err());
         assert_eq!(fs::read(unrelated).unwrap(), b"keep");
+        assert_eq!(fs::read(&record).unwrap(), corrupt);
         assert!(artifact_path(&output, bytes).exists());
-        assert_eq!(
-            managed_entries(&output, ".fe2o3-link-quarantine-v1-").len(),
-            1
-        );
+        assert!(managed_entries(&output, ".fe2o3-link-quarantine-v1-").is_empty());
         assert!(publish(&output, plan, bytes).is_err());
     }
 }
 
 #[test]
-fn orphan_cleanup_removes_only_private_canonical_artifacts() {
+fn conservative_v1_never_deletes_unreferenced_managed_entries() {
     let temp = TestDirectory::new();
     let output = temp.path.join("output");
     let bytes = b"live artifact";
@@ -662,11 +725,24 @@ fn orphan_cleanup_removes_only_private_canonical_artifacts() {
     fs::set_permissions(&mismatched, fs::Permissions::from_mode(0o600)).unwrap();
 
     recover_durable_link_publication_v1(&output, plan.scope()).unwrap();
-    assert!(!orphan.exists());
+    assert!(orphan.exists());
     assert!(hardlink.exists());
     assert!(mismatched.exists());
     assert_eq!(fs::read(hardlink_target).unwrap(), b"keep hardlink");
     assert!(artifact_path(&output, bytes).exists());
+}
+
+#[test]
+fn missing_output_directory_is_rejected_without_creating_topology() {
+    let temp = TestDirectory::new();
+    let output = temp.path.join("missing-output");
+    let bytes = b"missing topology payload";
+    let plan = plan(1, 0x75, 0xd5, bytes);
+
+    assert!(publish(&output, plan, bytes).is_err());
+    assert!(!output.exists());
+    assert!(recover_durable_link_publication_v1(&output, plan.scope()).is_err());
+    assert!(!output.exists());
 }
 
 #[test]

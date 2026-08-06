@@ -2531,7 +2531,15 @@ struct PinnedOutput {
 
 impl PinnedOutput {
     fn open(path: &Path) -> Result<Self, EmitError> {
-        let fd = open_directory_walk(path, true)?;
+        Self::open_with_create(path, true)
+    }
+
+    fn open_existing(path: &Path) -> Result<Self, EmitError> {
+        Self::open_with_create(path, false)
+    }
+
+    fn open_with_create(path: &Path, create: bool) -> Result<Self, EmitError> {
+        let fd = open_directory_walk(path, create)?;
         let stat = fstat(&fd).map_err(std::io::Error::from)?;
         if FileType::from_raw_mode(stat.st_mode) != FileType::Directory {
             return Err(EmitError::InvalidArtifactDestination {
