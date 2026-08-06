@@ -26,8 +26,8 @@ pub use link_plan::{
     MAX_LINK_PROVENANCE_EDGES, MAX_LINK_PROVENANCE_NODES, MultiInputLinkPlanV1, ProvenanceNodeV1,
 };
 pub use request_construction::{
-    LinkSymbolClosureIdentityV1, LinkSymbolClosureV1, WorkerRequestConstructionError,
-    construct_worker_request_v1,
+    LinkInputKindClosureIdentityV1, LinkInputKindClosureV1, LinkSymbolClosureIdentityV1,
+    LinkSymbolClosureV1, WorkerRequestConstructionError, construct_worker_request_v1,
 };
 pub use worker_protocol::{
     MAX_WORKER_DIAGNOSTIC_BYTES, MAX_WORKER_DIAGNOSTICS, MAX_WORKER_OUTPUT_BYTES,

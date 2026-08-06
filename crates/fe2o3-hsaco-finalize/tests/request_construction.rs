@@ -1,7 +1,7 @@
 use fe2o3_hsaco_finalize::{
-    ContentIdentityV1, LinkInputV1, LinkOptionV1, LinkOutputV1, LinkSymbolClosureV1,
-    MAX_WORKER_SYMBOLS, MAX_WORKER_TOOLCHAIN_ID_BYTES, MultiInputLinkPlanV1, ProvenanceNodeV1,
-    WorkerInputKindV1, WorkerInputV1, WorkerOptimizationLevelV1, WorkerOptionsV1,
+    ContentIdentityV1, LinkInputKindClosureV1, LinkInputV1, LinkOptionV1, LinkOutputV1,
+    LinkSymbolClosureV1, MAX_WORKER_SYMBOLS, MAX_WORKER_TOOLCHAIN_ID_BYTES, MultiInputLinkPlanV1,
+    ProvenanceNodeV1, WorkerInputKindV1, WorkerInputV1, WorkerOptimizationLevelV1, WorkerOptionsV1,
     WorkerOutputConstraintsV1, WorkerProtocolError, WorkerRequestConstructionError,
     WorkerRequestV1, construct_worker_request_v1,
 };
@@ -12,6 +12,7 @@ const LLVM_BUILD_ID: &str = "llvmorg-22.0.0-rocm-7.2+0123456789abcdef";
 struct Fixture {
     plan: MultiInputLinkPlanV1,
     inputs: Vec<WorkerInputV1>,
+    input_kinds: LinkInputKindClosureV1,
 }
 
 fn target() -> DeviceTargetV1 {
@@ -86,7 +87,14 @@ fn fixture_with(target: DeviceTargetV1, options: Vec<LinkOptionV1>) -> Fixture {
         provenance,
     )
     .unwrap();
-    Fixture { plan, inputs }
+    let input_kinds =
+        LinkInputKindClosureV1::new(&plan, inputs.iter().map(|input| input.kind()).collect())
+            .unwrap();
+    Fixture {
+        plan,
+        inputs,
+        input_kinds,
+    }
 }
 
 fn construct(
@@ -101,6 +109,7 @@ fn construct(
         CodeObjectVersion::V6,
         options(),
         inputs,
+        &fixture.input_kinds,
         closure,
         WorkerOutputConstraintsV1::new(fixture.plan.output().identity().byte_len()).unwrap(),
     )
@@ -305,6 +314,7 @@ fn target_code_object_and_worker_options_must_exactly_match_the_plan() {
             CodeObjectVersion::V6,
             options(),
             fixture.inputs.clone(),
+            &fixture.input_kinds,
             &closure,
             output.clone()
         ),
@@ -318,6 +328,7 @@ fn target_code_object_and_worker_options_must_exactly_match_the_plan() {
             CodeObjectVersion::V5,
             options(),
             fixture.inputs.clone(),
+            &fixture.input_kinds,
             &closure,
             output.clone()
         ),
@@ -335,6 +346,7 @@ fn target_code_object_and_worker_options_must_exactly_match_the_plan() {
             CodeObjectVersion::V6,
             wrong_options,
             fixture.inputs.clone(),
+            &fixture.input_kinds,
             &closure,
             output
         ),
@@ -404,6 +416,7 @@ fn output_and_public_text_bounds_are_checked_before_execution() {
             CodeObjectVersion::V6,
             options(),
             fixture.inputs.clone(),
+            &fixture.input_kinds,
             &closure,
             wrong_output
         ),
@@ -421,6 +434,7 @@ fn output_and_public_text_bounds_are_checked_before_execution() {
             CodeObjectVersion::V6,
             options(),
             fixture.inputs.clone(),
+            &fixture.input_kinds,
             &closure,
             WorkerOutputConstraintsV1::new(fixture.plan.output().identity().byte_len()).unwrap()
         ),
@@ -431,10 +445,9 @@ fn output_and_public_text_bounds_are_checked_before_execution() {
 }
 
 #[test]
-fn input_kind_is_part_of_the_derived_request_identity() {
+fn input_kind_swap_fails_against_the_plan_bound_kind_closure() {
     let fixture = fixture();
     let closure = closure();
-    let first = construct(&fixture, fixture.inputs.clone(), &closure).unwrap();
     let mut changed_kind = fixture.inputs.clone();
     let replacement_kind = match changed_kind[0].kind() {
         WorkerInputKindV1::LlvmBitcode => WorkerInputKindV1::AmdGpuRelocatable,
@@ -446,9 +459,55 @@ fn input_kind_is_part_of_the_derived_request_identity() {
         changed_kind[0].bytes().to_vec(),
     )
     .unwrap();
-    let second = construct(&fixture, changed_kind, &closure).unwrap();
-    assert_ne!(first.request_id(), second.request_id());
-    assert_ne!(first.identity(), second.identity());
+    assert_eq!(
+        construct(&fixture, changed_kind, &closure),
+        Err(WorkerRequestConstructionError::InputKindMismatch {
+            index: 0,
+            planned: fixture.input_kinds.kinds()[0],
+            provided: replacement_kind,
+        })
+    );
+    assert!(!fixture.input_kinds.grants_link_authority());
+    assert!(!fixture.input_kinds.grants_launch_authority());
+}
+
+#[test]
+fn input_kind_closure_rejects_wrong_count_and_different_plan() {
+    let fixture = fixture();
+    assert_eq!(
+        LinkInputKindClosureV1::new(&fixture.plan, vec![WorkerInputKindV1::LlvmBitcode]),
+        Err(WorkerRequestConstructionError::InputKindCountMismatch {
+            planned: 2,
+            declared: 1,
+        })
+    );
+
+    let other = fixture_with(
+        target(),
+        vec![
+            LinkOptionV1::new("code-object-version", "6").unwrap(),
+            LinkOptionV1::new("opt-level", "3").unwrap(),
+            LinkOptionV1::new("strip-debug", "true").unwrap(),
+            LinkOptionV1::new("verify-each", "true").unwrap(),
+        ],
+    );
+    assert_eq!(
+        construct_worker_request_v1(
+            &fixture.plan,
+            LLVM_BUILD_ID,
+            target(),
+            CodeObjectVersion::V6,
+            options(),
+            fixture.inputs.clone(),
+            &other.input_kinds,
+            &closure(),
+            WorkerOutputConstraintsV1::new(fixture.plan.output().identity().byte_len()).unwrap(),
+        ),
+        Err(WorkerRequestConstructionError::InputKindPlanMismatch {
+            planned: fixture.plan.identity(),
+            declared: other.plan.identity(),
+        })
+    );
 }
 
 fn strings(values: &[&str]) -> Vec<String> {

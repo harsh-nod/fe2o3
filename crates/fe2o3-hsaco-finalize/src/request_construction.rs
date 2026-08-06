@@ -6,11 +6,12 @@ use fe2o3_kernel_descriptor::{CodeObjectVersion, DeviceTargetV1};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    ContentIdentityV1, MultiInputLinkPlanV1, WorkerInputV1, WorkerOptimizationLevelV1,
-    WorkerOptionsV1, WorkerOutputConstraintsV1, WorkerProtocolError, WorkerRequestV1,
-    worker_protocol::validate_symbols,
+    ContentIdentityV1, LinkPlanIdentityV1, MultiInputLinkPlanV1, WorkerInputKindV1, WorkerInputV1,
+    WorkerOptimizationLevelV1, WorkerOptionsV1, WorkerOutputConstraintsV1, WorkerProtocolError,
+    WorkerRequestV1, worker_protocol::validate_symbols,
 };
 
+const INPUT_KIND_CLOSURE_DOMAIN_V1: &[u8] = b"FE2O3/DEVICE-LINK-INPUT-KIND-CLOSURE/V1\0";
 const SYMBOL_CLOSURE_DOMAIN_V1: &[u8] = b"FE2O3/DEVICE-LINK-SYMBOL-CLOSURE/V1\0";
 const PLAN_REQUEST_DOMAIN_V1: &[u8] = b"FE2O3/PLAN-BOUND-WORKER-REQUEST/V1\0";
 
@@ -21,6 +22,70 @@ pub struct LinkSymbolClosureIdentityV1([u8; 32]);
 impl LinkSymbolClosureIdentityV1 {
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
+    }
+}
+
+/// Stable identity of the plan-bound input-role sequence.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct LinkInputKindClosureIdentityV1([u8; 32]);
+
+impl LinkInputKindClosureIdentityV1 {
+    pub const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+/// Independent source of truth for each canonical link input's file kind.
+///
+/// `MultiInputLinkPlanV1` predates typed inputs, so changing its V1 canonical
+/// bytes would be a wire-format break. This companion closure binds one kind to
+/// each plan input in canonical identity order. It is inert data and grants no
+/// link, load, or launch authority.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LinkInputKindClosureV1 {
+    plan_identity: LinkPlanIdentityV1,
+    kinds: Vec<WorkerInputKindV1>,
+    identity: LinkInputKindClosureIdentityV1,
+}
+
+impl LinkInputKindClosureV1 {
+    pub fn new(
+        plan: &MultiInputLinkPlanV1,
+        kinds: Vec<WorkerInputKindV1>,
+    ) -> Result<Self, WorkerRequestConstructionError> {
+        if kinds.len() != plan.inputs().len() {
+            return Err(WorkerRequestConstructionError::InputKindCountMismatch {
+                planned: plan.inputs().len(),
+                declared: kinds.len(),
+            });
+        }
+        let plan_identity = plan.identity();
+        let identity = calculate_input_kind_closure_identity(plan, &kinds);
+        Ok(Self {
+            plan_identity,
+            kinds,
+            identity,
+        })
+    }
+
+    pub const fn plan_identity(&self) -> LinkPlanIdentityV1 {
+        self.plan_identity
+    }
+
+    pub fn kinds(&self) -> &[WorkerInputKindV1] {
+        &self.kinds
+    }
+
+    pub const fn identity(&self) -> LinkInputKindClosureIdentityV1 {
+        self.identity
+    }
+
+    pub const fn grants_link_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
     }
 }
 
@@ -123,6 +188,7 @@ pub fn construct_worker_request_v1(
     code_object_version: CodeObjectVersion,
     options: WorkerOptionsV1,
     inputs: Vec<WorkerInputV1>,
+    input_kinds: &LinkInputKindClosureV1,
     symbols: &LinkSymbolClosureV1,
     output: WorkerOutputConstraintsV1,
 ) -> Result<WorkerRequestV1, WorkerRequestConstructionError> {
@@ -142,7 +208,7 @@ pub fn construct_worker_request_v1(
             requested: options,
         });
     }
-    validate_inputs(plan, &inputs)?;
+    validate_inputs(plan, input_kinds, &inputs)?;
 
     let expected_output_bytes = plan.output().identity().byte_len();
     if output.max_bytes() != expected_output_bytes {
@@ -160,6 +226,7 @@ pub fn construct_worker_request_v1(
         code_object_version,
         options,
         &inputs,
+        input_kinds,
         symbols,
         &output,
     );
@@ -210,6 +277,19 @@ pub enum WorkerRequestConstructionError {
     InputCountMismatch {
         planned: usize,
         provided: usize,
+    },
+    InputKindCountMismatch {
+        planned: usize,
+        declared: usize,
+    },
+    InputKindPlanMismatch {
+        planned: LinkPlanIdentityV1,
+        declared: LinkPlanIdentityV1,
+    },
+    InputKindMismatch {
+        index: usize,
+        planned: WorkerInputKindV1,
+        provided: WorkerInputKindV1,
     },
     InputIdentityMismatch {
         index: usize,
@@ -286,6 +366,22 @@ impl fmt::Display for WorkerRequestConstructionError {
                 formatter,
                 "provided input count {provided} does not match plan count {planned}"
             ),
+            Self::InputKindCountMismatch { planned, declared } => write!(
+                formatter,
+                "declared input-kind count {declared} does not match plan count {planned}"
+            ),
+            Self::InputKindPlanMismatch { planned, declared } => write!(
+                formatter,
+                "input-kind closure plan identity {declared:?} does not match plan {planned:?}"
+            ),
+            Self::InputKindMismatch {
+                index,
+                planned,
+                provided,
+            } => write!(
+                formatter,
+                "provided input {index} kind {provided:?} does not match declared kind {planned:?}"
+            ),
             Self::InputIdentityMismatch {
                 index,
                 planned,
@@ -316,15 +412,28 @@ impl std::error::Error for WorkerRequestConstructionError {}
 
 fn validate_inputs(
     plan: &MultiInputLinkPlanV1,
+    input_kinds: &LinkInputKindClosureV1,
     inputs: &[WorkerInputV1],
 ) -> Result<(), WorkerRequestConstructionError> {
+    if input_kinds.plan_identity != plan.identity() {
+        return Err(WorkerRequestConstructionError::InputKindPlanMismatch {
+            planned: plan.identity(),
+            declared: input_kinds.plan_identity,
+        });
+    }
     if inputs.len() != plan.inputs().len() {
         return Err(WorkerRequestConstructionError::InputCountMismatch {
             planned: plan.inputs().len(),
             provided: inputs.len(),
         });
     }
-    for (index, (planned, provided)) in plan.inputs().iter().zip(inputs).enumerate() {
+    for (index, ((planned, planned_kind), provided)) in plan
+        .inputs()
+        .iter()
+        .zip(&input_kinds.kinds)
+        .zip(inputs)
+        .enumerate()
+    {
         if provided.identity() != planned.identity() {
             return Err(WorkerRequestConstructionError::InputIdentityMismatch {
                 index,
@@ -336,6 +445,13 @@ fn validate_inputs(
             return Err(WorkerRequestConstructionError::InputBytesMismatch {
                 index,
                 planned: planned.identity(),
+            });
+        }
+        if *planned_kind != provided.kind() {
+            return Err(WorkerRequestConstructionError::InputKindMismatch {
+                index,
+                planned: *planned_kind,
+                provided: provided.kind(),
             });
         }
     }
@@ -419,6 +535,22 @@ fn calculate_closure_identity(
     LinkSymbolClosureIdentityV1(hasher.finalize().into())
 }
 
+fn calculate_input_kind_closure_identity(
+    plan: &MultiInputLinkPlanV1,
+    kinds: &[WorkerInputKindV1],
+) -> LinkInputKindClosureIdentityV1 {
+    let mut hasher = Sha256::new();
+    hasher.update(INPUT_KIND_CLOSURE_DOMAIN_V1);
+    hasher.update(plan.identity().as_bytes());
+    hasher.update((kinds.len() as u64).to_le_bytes());
+    for (input, kind) in plan.inputs().iter().zip(kinds) {
+        hasher.update(input.identity().sha256());
+        hasher.update(input.identity().byte_len().to_le_bytes());
+        hasher.update([*kind as u8]);
+    }
+    LinkInputKindClosureIdentityV1(hasher.finalize().into())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn calculate_request_id(
     plan: &MultiInputLinkPlanV1,
@@ -427,12 +559,14 @@ fn calculate_request_id(
     code_object_version: CodeObjectVersion,
     options: WorkerOptionsV1,
     inputs: &[WorkerInputV1],
+    input_kinds: &LinkInputKindClosureV1,
     symbols: &LinkSymbolClosureV1,
     output: &WorkerOutputConstraintsV1,
 ) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(PLAN_REQUEST_DOMAIN_V1);
     hasher.update(plan.identity().as_bytes());
+    hasher.update(input_kinds.identity.as_bytes());
     hasher.update(symbols.identity.as_bytes());
     hash_text(&mut hasher, llvm_build_identity);
     hash_text(&mut hasher, &target.to_string());
