@@ -103,6 +103,8 @@ string(SHA256 FE2O3_WORKER_MEASUREMENT_SHA256
 set(FE2O3_WORKER_MEASUREMENT
   "fe2o3-worker-v1-sha256-${FE2O3_WORKER_MEASUREMENT_SHA256}")
 message(STATUS "fe2o3 worker asserted build claim: ${FE2O3_WORKER_MEASUREMENT}")
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/fe2o3-worker-build-id.txt"
+  "${FE2O3_WORKER_MEASUREMENT}\n")
 
 add_library(fe2o3_worker_protocol STATIC src/WorkerProtocol.cpp)
 target_include_directories(fe2o3_worker_protocol
