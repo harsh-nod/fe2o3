@@ -31,5 +31,5 @@ shell interpretation. Unit tests use only in-memory records.
 There is no process executor, Verus adapter, binary measurement implementation,
 proof-record conversion, signature verification, or GPU runtime integration.
 The v1 result model deliberately mirrors the existing artifact outcomes and
-properties, but compatibility is conceptual until the crate is registered and
-an explicit conversion is reviewed.
+properties, but compatibility remains conceptual until an explicit conversion
+is implemented and reviewed.
