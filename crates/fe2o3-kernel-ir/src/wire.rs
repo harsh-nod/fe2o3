@@ -9,7 +9,8 @@ use crate::{
     Kernel, KernelId, LaunchDomain, LaunchExtent, MemoryAccess, MemoryOrdering, Module, ModuleId,
     Operation, OperationKind, PointerType, ScalarType, Signature, SliceType, SwitchCase,
     SynchronizationScope, TargetCapability, Terminator, Type, UnaryOp, ValueDef, ValueId,
-    WaveWidth, WorkgroupBarrier, WorkgroupMemory, WorkgroupMemoryExtent, WorkgroupSize,
+    WaveOperation, WaveOperationKind, WaveWidth, WorkgroupBarrier, WorkgroupMemory,
+    WorkgroupMemoryExtent, WorkgroupSize,
 };
 
 /// Fixed magic at the start of every canonical kernel IR module.
@@ -630,6 +631,11 @@ fn encode_operation_kind(
             writer.u8(19)?;
             encode_workgroup_memory(writer, memory)?;
         }
+        OperationKind::Wave(wave) => {
+            require_v2(writer, "physical wave operation")?;
+            writer.u8(20)?;
+            encode_wave_operation(writer, wave)?;
+        }
     }
     Ok(())
 }
@@ -699,6 +705,9 @@ fn decode_operation_kind(reader: &mut Reader<'_>) -> Result<OperationKind, Kerne
         }
         19 if reader.version >= KERNEL_IR_VERSION_V2 => {
             OperationKind::WorkgroupMemory(decode_workgroup_memory(reader)?)
+        }
+        20 if reader.version >= KERNEL_IR_VERSION_V2 => {
+            OperationKind::Wave(decode_wave_operation(reader)?)
         }
         tag => {
             return Err(KernelIrDecodeError::UnknownTag {
@@ -1069,6 +1078,75 @@ fn decode_workgroup_memory(
         element,
         extent,
         alignment: reader.u32()?,
+    })
+}
+
+fn encode_wave_operation(
+    writer: &mut Writer,
+    wave: &WaveOperation,
+) -> Result<(), KernelIrEncodeError> {
+    writer.u8(wave_width_tag(wave.width))?;
+    writer.u32(wave.active_lanes)?;
+    encode_convergence(writer, wave.convergence)?;
+    match wave.kind {
+        WaveOperationKind::LaneId => writer.u8(1),
+        WaveOperationKind::Ballot { predicate } => {
+            writer.u8(2)?;
+            writer.u32(predicate.0)
+        }
+        WaveOperationKind::Any { predicate } => {
+            writer.u8(3)?;
+            writer.u32(predicate.0)
+        }
+        WaveOperationKind::All { predicate } => {
+            writer.u8(4)?;
+            writer.u32(predicate.0)
+        }
+        WaveOperationKind::ShuffleIndex {
+            value,
+            source_lane,
+            tile_width,
+        } => {
+            writer.u8(5)?;
+            writer.u32(value.0)?;
+            writer.u32(source_lane.0)?;
+            writer.u32(tile_width)
+        }
+    }
+}
+
+fn decode_wave_operation(reader: &mut Reader<'_>) -> Result<WaveOperation, KernelIrDecodeError> {
+    let width = decode_wave_width(reader.u8()?)?;
+    let active_lanes = reader.u32()?;
+    let convergence = decode_convergence(reader)?;
+    let kind = match reader.u8()? {
+        1 => WaveOperationKind::LaneId,
+        2 => WaveOperationKind::Ballot {
+            predicate: ValueId(reader.u32()?),
+        },
+        3 => WaveOperationKind::Any {
+            predicate: ValueId(reader.u32()?),
+        },
+        4 => WaveOperationKind::All {
+            predicate: ValueId(reader.u32()?),
+        },
+        5 => WaveOperationKind::ShuffleIndex {
+            value: ValueId(reader.u32()?),
+            source_lane: ValueId(reader.u32()?),
+            tile_width: reader.u32()?,
+        },
+        tag => {
+            return Err(KernelIrDecodeError::UnknownTag {
+                kind: "wave operation",
+                tag,
+            });
+        }
+    };
+    Ok(WaveOperation {
+        kind,
+        width,
+        active_lanes,
+        convergence,
     })
 }
 

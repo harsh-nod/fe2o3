@@ -6,8 +6,8 @@ use crate::{
     AccessMode, AddressSpace, Atomic, AtomicKind, Barrier, BasicBlock, BinaryOp, BlockId,
     ComparePredicate, Fence, Function, FunctionId, Kernel, KernelId, LaunchExtent, MemoryOrdering,
     Module, ModuleId, Operation, OperationKind, ScalarType, SynchronizationScope, TargetCapability,
-    Terminator, Type, UnaryOp, ValueId, WorkgroupBarrier, WorkgroupMemory, WorkgroupMemoryExtent,
-    pointer_for,
+    Terminator, Type, UnaryOp, ValueId, WaveOperation, WaveOperationKind, WorkgroupBarrier,
+    WorkgroupMemory, WorkgroupMemoryExtent, pointer_for,
 };
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -45,6 +45,7 @@ pub enum DiagnosticCode {
     InvalidFence,
     InvalidConvergence,
     InvalidWorkgroupMemory,
+    InvalidWaveOperation,
     InvalidTerminator,
 }
 
@@ -888,6 +889,89 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
             }
             OperationKind::WorkgroupMemory(memory) => {
                 self.verify_workgroup_memory(operation, memory, location);
+            }
+            OperationKind::Wave(wave) => self.verify_wave(operation, wave, location),
+        }
+    }
+
+    fn verify_wave(
+        &mut self,
+        operation: &Operation,
+        wave: &WaveOperation,
+        location: DiagnosticLocation,
+    ) {
+        if wave.active_lanes != wave.width.lanes() {
+            self.emit(
+                location.clone(),
+                DiagnosticCode::InvalidWaveOperation,
+                format!(
+                    "the first wave-operation subset requires all {} lanes active, found {}",
+                    wave.width.lanes(),
+                    wave.active_lanes
+                ),
+            );
+        }
+        if wave.convergence.scope() != SynchronizationScope::Subgroup {
+            self.emit(
+                location.clone(),
+                DiagnosticCode::InvalidConvergence,
+                "wave operation requires a uniform subgroup convergence claim",
+            );
+        }
+
+        match wave.kind {
+            WaveOperationKind::LaneId => {
+                self.expect_results(operation, &[Type::Scalar(ScalarType::U32)], location)
+            }
+            WaveOperationKind::Ballot { predicate } => {
+                self.expect_type(predicate, &Type::BOOL, location.clone());
+                let result = match wave.width {
+                    crate::WaveWidth::Wave32 => Type::Scalar(ScalarType::U32),
+                    crate::WaveWidth::Wave64 => Type::Scalar(ScalarType::U64),
+                };
+                self.expect_results(operation, &[result], location);
+            }
+            WaveOperationKind::Any { predicate } | WaveOperationKind::All { predicate } => {
+                self.expect_type(predicate, &Type::BOOL, location.clone());
+                self.expect_results(operation, &[Type::BOOL], location);
+            }
+            WaveOperationKind::ShuffleIndex {
+                value,
+                source_lane,
+                tile_width,
+            } => {
+                let value_ty = self.ty(value).cloned();
+                if !matches!(
+                    value_ty,
+                    Some(Type::Scalar(ScalarType::I32 | ScalarType::U32))
+                ) {
+                    self.emit(
+                        location.clone(),
+                        DiagnosticCode::InvalidOperandType,
+                        "wave shuffle supports only i32 and u32 values",
+                    );
+                }
+                self.expect_type(
+                    source_lane,
+                    &Type::Scalar(ScalarType::U32),
+                    location.clone(),
+                );
+                if tile_width == 0
+                    || !tile_width.is_power_of_two()
+                    || tile_width > wave.width.lanes()
+                {
+                    self.emit(
+                        location.clone(),
+                        DiagnosticCode::InvalidWaveOperation,
+                        format!(
+                            "shuffle tile width {tile_width} must be a non-zero power of two no larger than {}",
+                            wave.width.lanes()
+                        ),
+                    );
+                }
+                if let Some(value_ty) = value_ty {
+                    self.expect_results(operation, &[value_ty], location);
+                }
             }
         }
     }

@@ -139,6 +139,83 @@ fn op(result: u32, ty: Type, kind: OperationKind) -> Operation {
     Operation::effect_free(ValueDef::new(ValueId(result), ty), kind)
 }
 
+fn wave_module(width: WaveWidth) -> Module {
+    let wave_op = |result, ty, kind| {
+        op(
+            result,
+            ty,
+            OperationKind::Wave(WaveOperation::full(kind, width)),
+        )
+    };
+    let mask_type = match width {
+        WaveWidth::Wave32 => Type::Scalar(ScalarType::U32),
+        WaveWidth::Wave64 => Type::Scalar(ScalarType::U64),
+    };
+    let mut block = BasicBlock::new(BlockId(0));
+    block.operations = vec![
+        wave_op(3, Type::Scalar(ScalarType::U32), WaveOperationKind::LaneId),
+        wave_op(
+            4,
+            mask_type,
+            WaveOperationKind::Ballot {
+                predicate: ValueId(0),
+            },
+        ),
+        wave_op(
+            5,
+            Type::BOOL,
+            WaveOperationKind::Any {
+                predicate: ValueId(0),
+            },
+        ),
+        wave_op(
+            6,
+            Type::BOOL,
+            WaveOperationKind::All {
+                predicate: ValueId(0),
+            },
+        ),
+        wave_op(
+            7,
+            Type::Scalar(ScalarType::I32),
+            WaveOperationKind::ShuffleIndex {
+                value: ValueId(1),
+                source_lane: ValueId(2),
+                tile_width: width.lanes() / 2,
+            },
+        ),
+    ];
+    block.terminator = Some(Terminator::Return { values: vec![] });
+    let mut function = Function::definition(
+        "wave_impl",
+        Signature::new(
+            vec![
+                Type::BOOL,
+                Type::Scalar(ScalarType::I32),
+                Type::Scalar(ScalarType::U32),
+            ],
+            vec![],
+        ),
+        vec![ValueId(0), ValueId(1), ValueId(2)],
+        vec![block],
+    );
+    function
+        .required_capabilities
+        .extend(WaveOperation::full(WaveOperationKind::LaneId, width).required_capabilities());
+    let mut kernel = Kernel::new(
+        "wave_kernel",
+        "wave_impl",
+        LaunchDomain::D1 {
+            x: LaunchExtent::Dynamic,
+        },
+    );
+    kernel.workgroup_size = Some(WorkgroupSize::new(64, 1, 1));
+    let mut module = Module::new("tests::wave");
+    module.functions.push(function);
+    module.kernels.push(kernel);
+    module
+}
+
 fn fill_module() -> Module {
     let mut entry = BasicBlock::new(BlockId(0));
     entry.operations = vec![
@@ -1593,6 +1670,90 @@ fn read_only_and_cross_address_space_stores_fail_before_emission() {
 }
 
 #[test]
+fn lowers_wave32_and_wave64_to_exact_width_bound_llvm() {
+    let wave32 = lower_kernel_to_llvm_ir(
+        &wave_module(WaveWidth::Wave32),
+        &KernelId::new("wave_kernel"),
+    )
+    .unwrap();
+    let wave64 = lower_kernel_to_llvm_ir(
+        &wave_module(WaveWidth::Wave64),
+        &KernelId::new("wave_kernel"),
+    )
+    .unwrap();
+    assert_eq!(wave32, include_str!("fixtures/wave32.ll"));
+    assert_eq!(wave64, include_str!("fixtures/wave64.ll"));
+    assert!(wave32.contains("\"target-features\"=\"+wavefrontsize32,-wavefrontsize64\""));
+    assert!(wave64.contains("\"target-features\"=\"-wavefrontsize32,+wavefrontsize64\""));
+    assert!(wave32.contains("@llvm.amdgcn.ballot.i32"));
+    assert!(!wave32.contains("@llvm.amdgcn.mbcnt.hi"));
+    assert!(wave64.contains("@llvm.amdgcn.ballot.i64"));
+    assert!(wave64.contains("@llvm.amdgcn.mbcnt.hi"));
+}
+
+#[test]
+fn rejects_missing_mismatched_and_partial_wave_execution() {
+    let mut missing = wave_module(WaveWidth::Wave64);
+    missing.functions[0].required_capabilities.clear();
+    assert_eq!(
+        first_code(&missing, "wave_kernel"),
+        LoweringDiagnosticCode::UnsupportedWaveOperation
+    );
+
+    let mut mismatch = wave_module(WaveWidth::Wave32);
+    mismatch.functions[0].required_capabilities = BTreeSet::from([
+        TargetCapability::Subgroups,
+        TargetCapability::SubgroupSize(64),
+        TargetCapability::WaveWidth(WaveWidth::Wave64),
+    ]);
+    assert_eq!(
+        first_code(&mismatch, "wave_kernel"),
+        LoweringDiagnosticCode::UnsupportedWaveOperation
+    );
+
+    let mut partial = wave_module(WaveWidth::Wave64);
+    partial.kernels[0].workgroup_size = Some(WorkgroupSize::new(96, 1, 1));
+    let error = lower_kernel_to_llvm_ir(&partial, &KernelId::new("wave_kernel")).unwrap_err();
+    assert_eq!(
+        error.diagnostics()[0].code,
+        LoweringDiagnosticCode::UnsupportedWaveOperation
+    );
+    assert_eq!(
+        error.diagnostics()[0].message,
+        "full-wave execution requires workgroup size 96 to be a multiple of 64"
+    );
+}
+
+#[test]
+fn invalid_wave_types_tiles_and_convergence_fail_before_emission() {
+    let mut tile = wave_module(WaveWidth::Wave32);
+    let OperationKind::Wave(WaveOperation {
+        kind: WaveOperationKind::ShuffleIndex { tile_width, .. },
+        ..
+    }) = &mut tile.functions[0].body.as_mut().unwrap().blocks[0].operations[4].kind
+    else {
+        panic!("shuffle expected")
+    };
+    *tile_width = 3;
+    assert_eq!(
+        first_code(&tile, "wave_kernel"),
+        LoweringDiagnosticCode::InputVerification(DiagnosticCode::InvalidWaveOperation)
+    );
+
+    let mut convergence = wave_module(WaveWidth::Wave64);
+    let OperationKind::Wave(wave) =
+        &mut convergence.functions[0].body.as_mut().unwrap().blocks[0].operations[0].kind
+    else {
+        panic!("wave operation expected")
+    };
+    wave.convergence = Convergence::uniform(SynchronizationScope::Workgroup);
+    assert_eq!(
+        first_code(&convergence, "wave_kernel"),
+        LoweringDiagnosticCode::InputVerification(DiagnosticCode::InvalidConvergence)
+    );
+}
+
+#[test]
 fn rocm_test_targets_are_exact_canonical_amd_target_ids() {
     for target in ["gfx1151", "gfx942:sramecc+:xnack-"] {
         assert_eq!(
@@ -1880,6 +2041,53 @@ fn compile_scoped_atomics_for_target(target: &str) {
         String::from_utf8_lossy(&result.stderr)
     );
     assert!(fs::metadata(output).unwrap().len() > 64);
+}
+
+fn compile_wave_for_target(target: &str, width: WaveWidth) {
+    canonical_test_target(target).unwrap();
+    let clang = std::env::var_os("FE2O3_ROCM_CLANG")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/opt/rocm/llvm/bin/clang"));
+    let directory = TemporaryDirectory::new(&format!("g4-wave-{target}"));
+    let input = directory.join("wave.ll");
+    let output = directory.join("wave.hsaco");
+    let llvm_ir =
+        lower_kernel_to_llvm_ir(&wave_module(width), &KernelId::new("wave_kernel")).unwrap();
+    fs::write(&input, llvm_ir).unwrap();
+
+    let result = Command::new(clang)
+        .arg("--target=amdgcn-amd-amdhsa")
+        .arg(format!("-mcpu={target}"))
+        .arg("-nogpulib")
+        .arg(&input)
+        .arg("-o")
+        .arg(&output)
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "clang failed for {target} {width:?}:\n{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(fs::metadata(output).unwrap().len() > 64);
+}
+
+#[test]
+#[ignore = "requires a ROCm LLVM toolchain with gfx1151 support"]
+fn rocm_compiles_wave32_for_gfx1151() {
+    compile_wave_for_target("gfx1151", WaveWidth::Wave32);
+}
+
+#[test]
+#[ignore = "requires a ROCm LLVM toolchain with gfx942 support"]
+fn rocm_compiles_wave64_for_gfx942() {
+    compile_wave_for_target("gfx942", WaveWidth::Wave64);
+}
+
+#[test]
+#[ignore = "requires a ROCm LLVM toolchain with gfx950 support"]
+fn rocm_compiles_wave64_for_gfx950() {
+    compile_wave_for_target("gfx950", WaveWidth::Wave64);
 }
 
 #[test]

@@ -8,8 +8,8 @@ use fe2o3_kernel_ir::{
     CastKind, ComparePredicate, Constant, DiagnosticCode as VerificationDiagnosticCode, Function,
     FunctionId, IndexKind, IntrinsicKind, Kernel, KernelId, LaunchDomain, LaunchExtent,
     MemoryOrdering, Module, ModuleId, Operation, OperationKind, ScalarType, SynchronizationScope,
-    TargetCapability, Terminator, Type, ValueId, VerificationErrors, WaveWidth,
-    WorkgroupMemoryExtent, WorkgroupSize, verify_module,
+    TargetCapability, Terminator, Type, ValueId, VerificationErrors, WaveOperation,
+    WaveOperationKind, WaveWidth, WorkgroupMemoryExtent, WorkgroupSize, verify_module,
 };
 
 use crate::{AMDGPU_TRIPLE, AmdgcnIntrinsic, Dim};
@@ -37,6 +37,7 @@ pub enum LoweringDiagnosticCode {
     UnsupportedAtomic,
     UnsupportedBarrier,
     UnsupportedWorkgroupMemory,
+    UnsupportedWaveOperation,
     UnsupportedCast,
     UnsupportedConstant,
     UnsupportedTerminator,
@@ -327,7 +328,9 @@ fn validate_capabilities(
         match capability {
             TargetCapability::WorkgroupMemory
             | TargetCapability::WorkgroupBarrier
-            | TargetCapability::DynamicWorkgroupMemory => {}
+            | TargetCapability::DynamicWorkgroupMemory
+            | TargetCapability::Subgroups => {}
+            TargetCapability::SubgroupSize(32 | 64) => {}
             TargetCapability::WaveWidth(width) => wave_width = Some(*width),
             TargetCapability::Atomic {
                 width_bits,
@@ -728,6 +731,7 @@ impl<'a> FunctionLowerer<'a> {
                     ));
                 }
             }
+            OperationKind::Wave(wave) => self.validate_wave(wave, &location)?,
             OperationKind::Atomic(atomic) => self.validate_atomic(atomic, &location)?,
             OperationKind::Barrier(_) => {
                 return Err(LoweringErrors::one(
@@ -831,10 +835,56 @@ impl<'a> FunctionLowerer<'a> {
             .expect("validated scalar or pointer value")
     }
 
+    fn validate_wave(
+        &self,
+        wave: &WaveOperation,
+        location: &LoweringLocation,
+    ) -> Result<(), LoweringErrors> {
+        if self.wave_width != Some(wave.width) {
+            return Err(LoweringErrors::one(
+                location.clone(),
+                LoweringDiagnosticCode::UnsupportedWaveOperation,
+                format!(
+                    "wave operation requires an exact {:?} capability on the module, kernel, or entry function",
+                    wave.width
+                ),
+            ));
+        }
+        if !self.workgroup_x.is_multiple_of(wave.width.lanes()) {
+            return Err(LoweringErrors::one(
+                location.clone(),
+                LoweringDiagnosticCode::UnsupportedWaveOperation,
+                format!(
+                    "full-wave execution requires workgroup size {} to be a multiple of {}",
+                    self.workgroup_x,
+                    wave.width.lanes()
+                ),
+            ));
+        }
+        Ok(())
+    }
+
     fn emit(&self) -> Result<String, LoweringErrors> {
         let mut output = String::new();
         writeln!(output, "target triple = \"{AMDGPU_TRIPLE}\"\n").unwrap();
         let has_workgroup_barrier = self.has_workgroup_barrier();
+        let has_lane_id = self.has_wave_kind(|kind| {
+            matches!(
+                kind,
+                WaveOperationKind::LaneId | WaveOperationKind::ShuffleIndex { .. }
+            )
+        });
+        let has_ballot = self.has_wave_kind(|kind| {
+            matches!(
+                kind,
+                WaveOperationKind::Ballot { .. }
+                    | WaveOperationKind::Any { .. }
+                    | WaveOperationKind::All { .. }
+            )
+        });
+        let has_shuffle =
+            self.has_wave_kind(|kind| matches!(kind, WaveOperationKind::ShuffleIndex { .. }));
+        let has_convergent_operation = has_workgroup_barrier || self.has_wave_kind(|_| true);
         if self.emit_workgroup_memory_declarations(&mut output) {
             writeln!(output).unwrap();
         }
@@ -855,6 +905,38 @@ impl<'a> FunctionLowerer<'a> {
                 output,
                 "declare void @{}() #2",
                 AmdgcnIntrinsic::SBarrier.llvm_name()
+            )
+            .unwrap();
+        }
+        if has_lane_id {
+            writeln!(
+                output,
+                "declare i32 @{}(i32, i32) #1",
+                AmdgcnIntrinsic::MbcntLo.llvm_name()
+            )
+            .unwrap();
+            if self.wave_width == Some(WaveWidth::Wave64) {
+                writeln!(
+                    output,
+                    "declare i32 @{}(i32, i32) #1",
+                    AmdgcnIntrinsic::MbcntHi.llvm_name()
+                )
+                .unwrap();
+            }
+        }
+        if has_ballot {
+            let (ty, intrinsic) = match self.wave_width {
+                Some(WaveWidth::Wave32) => ("i32", AmdgcnIntrinsic::Ballot32),
+                Some(WaveWidth::Wave64) => ("i64", AmdgcnIntrinsic::Ballot64),
+                None => unreachable!("wave preflight required an exact width"),
+            };
+            writeln!(output, "declare {ty} @{}(i1) #2", intrinsic.llvm_name()).unwrap();
+        }
+        if has_shuffle {
+            writeln!(
+                output,
+                "declare i32 @{}(i32, i32) #2",
+                AmdgcnIntrinsic::DsBpermute.llvm_name()
             )
             .unwrap();
         }
@@ -898,7 +980,7 @@ impl<'a> FunctionLowerer<'a> {
             "attributes #1 = {{ nounwind readnone speculatable willreturn }}"
         )
         .unwrap();
-        if has_workgroup_barrier {
+        if has_convergent_operation {
             writeln!(output, "attributes #2 = {{ convergent nounwind }}").unwrap();
         }
         writeln!(output).unwrap();
@@ -913,6 +995,17 @@ impl<'a> FunctionLowerer<'a> {
             .flat_map(|body| &body.blocks)
             .flat_map(|block| &block.operations)
             .any(|operation| matches!(&operation.kind, OperationKind::WorkgroupBarrier(_)))
+    }
+
+    fn has_wave_kind(&self, predicate: impl Fn(&WaveOperationKind) -> bool) -> bool {
+        self.function
+            .body
+            .iter()
+            .flat_map(|body| &body.blocks)
+            .flat_map(|block| &block.operations)
+            .any(|operation| {
+                matches!(&operation.kind, OperationKind::Wave(wave) if predicate(&wave.kind))
+            })
     }
 
     fn emit_workgroup_memory_declarations(&self, output: &mut String) -> bool {
@@ -1279,9 +1372,110 @@ impl<'a> FunctionLowerer<'a> {
                 )
                 .unwrap();
             }
+            OperationKind::Wave(wave) => {
+                self.emit_wave(
+                    output,
+                    result_name.as_deref().expect("verified wave result"),
+                    wave,
+                );
+            }
             _ => unreachable!("preflight rejected unsupported operation"),
         }
         Ok(())
+    }
+
+    fn emit_wave(&self, output: &mut String, result: &str, wave: &WaveOperation) {
+        match wave.kind {
+            WaveOperationKind::LaneId => self.emit_lane_id(output, result, wave.width),
+            WaveOperationKind::Ballot { predicate } => {
+                let predicate = self.value(predicate).0;
+                let (ty, intrinsic) = ballot_intrinsic(wave.width);
+                writeln!(
+                    output,
+                    "  {result} = call {ty} @{intrinsic}(i1 {predicate})"
+                )
+                .unwrap();
+            }
+            WaveOperationKind::Any { predicate } | WaveOperationKind::All { predicate } => {
+                let predicate = self.value(predicate).0;
+                let (ty, intrinsic) = ballot_intrinsic(wave.width);
+                writeln!(
+                    output,
+                    "  {result}.mask = call {ty} @{intrinsic}(i1 {predicate})"
+                )
+                .unwrap();
+                let comparison = if matches!(wave.kind, WaveOperationKind::Any { .. }) {
+                    "ne"
+                } else {
+                    "eq"
+                };
+                let expected = if comparison == "ne" { "0" } else { "-1" };
+                writeln!(
+                    output,
+                    "  {result} = icmp {comparison} {ty} {result}.mask, {expected}"
+                )
+                .unwrap();
+            }
+            WaveOperationKind::ShuffleIndex {
+                value,
+                source_lane,
+                tile_width,
+            } => {
+                let value = self.value(value).0;
+                let source_lane = self.value(source_lane).0;
+                let lane = format!("{result}.lane");
+                self.emit_lane_id(output, &lane, wave.width);
+                writeln!(
+                    output,
+                    "  {result}.tile.base = and i32 {lane}, -{tile_width}"
+                )
+                .unwrap();
+                writeln!(
+                    output,
+                    "  {result}.tile.relative = and i32 {source_lane}, {}",
+                    tile_width - 1
+                )
+                .unwrap();
+                writeln!(
+                    output,
+                    "  {result}.source = or i32 {result}.tile.base, {result}.tile.relative"
+                )
+                .unwrap();
+                writeln!(
+                    output,
+                    "  {result}.source.byte = shl i32 {result}.source, 2"
+                )
+                .unwrap();
+                writeln!(
+                    output,
+                    "  {result} = call i32 @{}(i32 {result}.source.byte, i32 {value})",
+                    AmdgcnIntrinsic::DsBpermute.llvm_name()
+                )
+                .unwrap();
+            }
+        }
+    }
+
+    fn emit_lane_id(&self, output: &mut String, result: &str, width: WaveWidth) {
+        writeln!(
+            output,
+            "  {result}.lo = call i32 @{}(i32 -1, i32 0)",
+            AmdgcnIntrinsic::MbcntLo.llvm_name()
+        )
+        .unwrap();
+        match width {
+            WaveWidth::Wave32 => {
+                writeln!(output, "  {result} = add i32 {result}.lo, 0").unwrap();
+            }
+            WaveWidth::Wave64 => {
+                writeln!(
+                    output,
+                    "  {result} = call i32 @{}(i32 -1, i32 {result}.lo)",
+                    AmdgcnIntrinsic::MbcntHi.llvm_name()
+                )
+                .unwrap();
+            }
+        }
     }
 
     fn validate_atomic(
@@ -1695,6 +1889,13 @@ fn llvm_atomic_rmw_opcode(kind: AtomicKind, scalar: ScalarType) -> &'static str 
         AtomicKind::Load | AtomicKind::Store | AtomicKind::CompareExchange => {
             unreachable!("non-RMW atomic kind")
         }
+    }
+}
+
+fn ballot_intrinsic(width: WaveWidth) -> (&'static str, &'static str) {
+    match width {
+        WaveWidth::Wave32 => ("i32", AmdgcnIntrinsic::Ballot32.llvm_name()),
+        WaveWidth::Wave64 => ("i64", AmdgcnIntrinsic::Ballot64.llvm_name()),
     }
 }
 

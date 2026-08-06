@@ -3,7 +3,7 @@ use std::fmt;
 
 use crate::{
     AccessMode, AddressSpace, Axis, BarrierSemantics, LaunchDomain, MemoryOrdering, ScalarType,
-    SynchronizationScope, TargetCapability, Type, WorkgroupSize,
+    SynchronizationScope, TargetCapability, Type, WaveWidth, WorkgroupSize,
 };
 
 macro_rules! string_id {
@@ -312,6 +312,7 @@ impl Operation {
             OperationKind::WorkgroupMemory(_) => {
                 vec![MemoryEffect::Allocate(AddressSpace::Workgroup)]
             }
+            OperationKind::Wave(_) => Vec::new(),
             _ => Vec::new(),
         }
     }
@@ -354,6 +355,7 @@ impl Operation {
                 }
                 capabilities
             }
+            OperationKind::Wave(wave) => wave.required_capabilities(),
             _ => BTreeSet::new(),
         }
     }
@@ -424,6 +426,8 @@ pub enum OperationKind {
     WorkgroupBarrier(WorkgroupBarrier),
     /// A statically or dynamically sized workgroup-memory declaration.
     WorkgroupMemory(WorkgroupMemory),
+    /// A width-bound, convergent operation over one physical AMD-style wave.
+    Wave(WaveOperation),
 }
 
 impl OperationKind {
@@ -434,7 +438,11 @@ impl OperationKind {
             | Self::Barrier(_)
             | Self::Fence(_)
             | Self::WorkgroupBarrier(_)
-            | Self::WorkgroupMemory(_) => Vec::new(),
+            | Self::WorkgroupMemory(_)
+            | Self::Wave(WaveOperation {
+                kind: WaveOperationKind::LaneId,
+                ..
+            }) => Vec::new(),
             Self::Unary { operand, .. } => vec![*operand],
             Self::Binary { lhs, rhs, .. } | Self::Compare { lhs, rhs, .. } => vec![*lhs, *rhs],
             Self::Cast { value, .. } => vec![*value],
@@ -450,6 +458,7 @@ impl OperationKind {
             Self::Load { pointer, .. } => vec![*pointer],
             Self::Store { pointer, value, .. } => vec![*pointer, *value],
             Self::Atomic(atomic) => atomic.operands(),
+            Self::Wave(wave) => wave.operands(),
         }
     }
 }
@@ -683,6 +692,70 @@ pub struct WorkgroupMemory {
     pub element: Type,
     pub extent: WorkgroupMemoryExtent,
     pub alignment: u32,
+}
+
+/// A physical-wave operation with explicit execution assumptions.
+///
+/// `active_lanes` is intentionally explicit even though this first executable
+/// subset accepts only a full physical wave. This prevents a consumer from
+/// silently treating a partially active final wave as if every source lane
+/// were available.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WaveOperation {
+    pub kind: WaveOperationKind,
+    pub width: WaveWidth,
+    pub active_lanes: u32,
+    pub convergence: Convergence,
+}
+
+impl WaveOperation {
+    pub fn full(kind: WaveOperationKind, width: WaveWidth) -> Self {
+        Self {
+            kind,
+            width,
+            active_lanes: width.lanes(),
+            convergence: Convergence::uniform(SynchronizationScope::Subgroup),
+        }
+    }
+
+    pub fn operands(&self) -> Vec<ValueId> {
+        match self.kind {
+            WaveOperationKind::LaneId => Vec::new(),
+            WaveOperationKind::Ballot { predicate }
+            | WaveOperationKind::Any { predicate }
+            | WaveOperationKind::All { predicate } => vec![predicate],
+            WaveOperationKind::ShuffleIndex {
+                value, source_lane, ..
+            } => vec![value, source_lane],
+        }
+    }
+
+    pub fn required_capabilities(&self) -> BTreeSet<TargetCapability> {
+        BTreeSet::from([
+            TargetCapability::Subgroups,
+            TargetCapability::SubgroupSize(self.width.lanes()),
+            TargetCapability::WaveWidth(self.width),
+        ])
+    }
+}
+
+/// The bounded first wave-operation vertical.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum WaveOperationKind {
+    /// The physical lane number in `[0, width)`.
+    LaneId,
+    /// A bit per active lane whose predicate is true.
+    Ballot { predicate: ValueId },
+    /// True when at least one active lane's predicate is true.
+    Any { predicate: ValueId },
+    /// True when every active lane's predicate is true.
+    All { predicate: ValueId },
+    /// Read a 32-bit integer from an indexed lane in a static tiled subgroup.
+    ShuffleIndex {
+        value: ValueId,
+        source_lane: ValueId,
+        tile_width: u32,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]

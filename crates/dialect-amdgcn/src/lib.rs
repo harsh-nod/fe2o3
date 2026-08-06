@@ -30,6 +30,11 @@ pub enum AmdgcnIntrinsic {
     WorkGroupId(Dim),
     DispatchPtr,
     SBarrier,
+    MbcntLo,
+    MbcntHi,
+    Ballot32,
+    Ballot64,
+    DsBpermute,
 }
 
 impl AmdgcnIntrinsic {
@@ -43,6 +48,11 @@ impl AmdgcnIntrinsic {
             Self::WorkGroupId(Dim::Z) => "llvm.amdgcn.workgroup.id.z",
             Self::DispatchPtr => "llvm.amdgcn.dispatch.ptr",
             Self::SBarrier => "llvm.amdgcn.s.barrier",
+            Self::MbcntLo => "llvm.amdgcn.mbcnt.lo",
+            Self::MbcntHi => "llvm.amdgcn.mbcnt.hi",
+            Self::Ballot32 => "llvm.amdgcn.ballot.i32",
+            Self::Ballot64 => "llvm.amdgcn.ballot.i64",
+            Self::DsBpermute => "llvm.amdgcn.ds.bpermute",
         }
     }
 }
