@@ -71,6 +71,7 @@ pub use direct_link_bridge::{
     DirectLinkPublicationOccurrenceIdentityV1, DirectLinkPublicationScopeProvenanceV1,
     ManifestClaimDerivedLinkPublicationScopeV1, ManifestClaimDirectLinkDurablePlanHandoffV1,
     ManifestClaimDirectLinkPublicationBridgeV1, NonAuthoritativeDirectLinkPublicationDiagnosticsV1,
+    publish_manifest_claim_direct_link_durable_v1, recover_manifest_claim_direct_link_durable_v1,
 };
 pub use direct_link_decode::DirectLinkDecodeError;
 pub use direct_link_encode::{

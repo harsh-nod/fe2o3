@@ -1,11 +1,12 @@
-use std::fmt;
+use std::{fmt, path::Path};
 
 use fe2o3_artifact_transaction::{
     AtomicPublicationIdentityV1, BuildAttempt, CanonicalLinkRequestIdentityV1,
-    DurableLinkPublicationPlanV1, FinalizationIdentityV1, FinalizedOutputIdentityV1,
-    KernelSetIdentityV1, LinkPublicationScopeV1, LinkedOutputIdentityV1, PackageIdentityV1,
-    PinnedWorkerIdentityV1, PublishedLinkArtifactV1, TargetIdentityV1,
-    ValidatedResponseIdentityV1,
+    DurableLinkPublicationError, DurableLinkPublicationPlanV1, DurableLinkPublicationResultV1,
+    DurableLinkPublicationSnapshotV1, DurableLinkPublicationTransactionV1, FinalizationIdentityV1,
+    FinalizedOutputIdentityV1, KernelSetIdentityV1, LinkPublicationScopeV1, LinkedOutputIdentityV1,
+    PackageIdentityV1, PinnedWorkerIdentityV1, PublishedLinkArtifactV1, TargetIdentityV1,
+    ValidatedResponseIdentityV1, publish_durable_link_v1, recover_durable_link_publication_v1,
 };
 use sha2::{Digest as _, Sha256};
 
@@ -321,14 +322,14 @@ impl ManifestClaimDerivedLinkPublicationScopeV1 {
     }
 }
 
-/// Inert, manifest-claim-only API boundary for the future durable G5 adapter.
+/// Inert, manifest-claim-only API boundary for the durable G5 adapter.
 ///
 /// This type can be constructed only by
 /// [`ManifestClaimDirectLinkPublicationBridgeV1`]. Its raw G5 scope is private:
-/// a future G5 adapter must consume this opaque value through an API owned by
-/// this crate instead of reconstructing authority from provenance-erasing
-/// getters. It is not a package lease, current-publication witness, HSACO
-/// inspection witness, or runtime authority.
+/// the durable adapter consumes this opaque value through an API owned by this
+/// crate instead of reconstructing authority from provenance-erasing getters.
+/// It is not a package lease, current-publication witness, HSACO inspection
+/// witness, or runtime authority.
 ///
 /// A legacy bridge cannot obtain this handoff at compile time:
 ///
@@ -375,11 +376,7 @@ pub struct ManifestClaimDirectLinkDurablePlanHandoffV1 {
 }
 
 impl ManifestClaimDirectLinkDurablePlanHandoffV1 {
-    /// Returns the complete expected chain consumed by the durable G5 filesystem adapter.
-    ///
-    /// Keeping this conversion on the opaque handoff prevents legacy bridges and
-    /// provenance-erasing diagnostic scope claims from entering the validated adapter path.
-    pub fn durable_publication_plan(&self) -> DurableLinkPublicationPlanV1 {
+    fn durable_publication_plan(&self) -> DurableLinkPublicationPlanV1 {
         DurableLinkPublicationPlanV1::new(
             self.attempt,
             self._scope_claim,
@@ -456,6 +453,68 @@ impl ManifestClaimDirectLinkDurablePlanHandoffV1 {
     pub const fn grants_launch_authority(&self) -> bool {
         false
     }
+}
+
+/// Publishes through the provenance-preserving G5/G6 durable adapter.
+///
+/// The opaque handoff is the only accepted bridge input. Its complete G5 plan
+/// remains private, so neither a legacy bridge nor a provenance-erasing
+/// diagnostic scope can be substituted at this boundary. The handoff and
+/// returned snapshot remain inert and grant no package, load, or launch
+/// authority.
+///
+/// A legacy bridge cannot enter this adapter:
+///
+/// ```compile_fail
+/// use std::path::Path;
+/// use fe2o3_artifacts::{
+///     DirectLinkPublicationBridgeV1, publish_manifest_claim_direct_link_durable_v1,
+/// };
+///
+/// fn cannot_publish_legacy(output: &Path, legacy: &DirectLinkPublicationBridgeV1) {
+///     let _ = publish_manifest_claim_direct_link_durable_v1(output, legacy, |_| Ok(()));
+/// }
+/// ```
+///
+/// A diagnostic raw scope cannot enter this adapter either:
+///
+/// ```compile_fail
+/// use std::path::Path;
+/// use fe2o3_artifacts::{
+///     NonAuthoritativeDirectLinkPublicationDiagnosticsV1,
+///     publish_manifest_claim_direct_link_durable_v1,
+/// };
+///
+/// fn cannot_publish_diagnostic_scope(
+///     output: &Path,
+///     diagnostics: &NonAuthoritativeDirectLinkPublicationDiagnosticsV1,
+/// ) {
+///     let scope = diagnostics.descriptive_scope_claim();
+///     let _ = publish_manifest_claim_direct_link_durable_v1(output, &scope, |_| Ok(()));
+/// }
+/// ```
+pub fn publish_manifest_claim_direct_link_durable_v1<F>(
+    output_dir: &Path,
+    handoff: &ManifestClaimDirectLinkDurablePlanHandoffV1,
+    work: F,
+) -> Result<DurableLinkPublicationResultV1, DurableLinkPublicationError>
+where
+    F: FnOnce(
+        &mut DurableLinkPublicationTransactionV1<'_>,
+    ) -> Result<(), DurableLinkPublicationError>,
+{
+    publish_durable_link_v1(output_dir, handoff.durable_publication_plan(), work)
+}
+
+/// Recovers the current inert publication for an opaque manifest-claim scope.
+///
+/// Recovery is scope-based and may return a newer publication than the handoff's
+/// attempt. It provides immutable evidence only and grants no use authority.
+pub fn recover_manifest_claim_direct_link_durable_v1(
+    output_dir: &Path,
+    handoff: &ManifestClaimDirectLinkDurablePlanHandoffV1,
+) -> Result<Option<DurableLinkPublicationSnapshotV1>, DurableLinkPublicationError> {
+    recover_durable_link_publication_v1(output_dir, handoff._scope_claim)
 }
 
 /// Legacy, explicitly non-authoritative conversion into the inert G5 model.
@@ -864,11 +923,11 @@ impl ManifestClaimDirectLinkPublicationBridgeV1 {
         self.bridge.publication_identity()
     }
 
-    /// Produces the derived-only opaque handoff for a future durable adapter.
+    /// Produces the derived-only opaque handoff for the durable adapter.
     ///
     /// No raw publication scope can be extracted from the returned value. The
-    /// future G5 adapter must consume it through a dedicated API that preserves
-    /// its manifest-claim provenance and exact occurrence binding.
+    /// G5 adapter consumes it through a dedicated API that preserves its
+    /// manifest-claim provenance and exact occurrence binding.
     pub fn durable_plan_handoff(&self) -> ManifestClaimDirectLinkDurablePlanHandoffV1 {
         ManifestClaimDirectLinkDurablePlanHandoffV1 {
             attempt: self.bridge.attempt,

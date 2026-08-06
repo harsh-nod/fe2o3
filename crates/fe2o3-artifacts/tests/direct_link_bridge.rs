@@ -5,8 +5,7 @@ use common::{digest, kernel_with_object_digest, object_identity, target, text};
 use fe2o3_artifact_transaction::{
     BuildAttempt, DurableLinkPublicationOutcomeV1, KernelSetIdentityV1, LinkPublicationCatalogV1,
     LinkPublicationPhaseV1, LinkPublicationScopeV1, LinkPublicationStateV1, PackageIdentityV1,
-    PublicationOutcomeV1, TargetIdentityV1, publish_durable_link_v1,
-    recover_durable_link_publication_v1,
+    PublicationOutcomeV1, TargetIdentityV1,
 };
 use fe2o3_artifacts::{
     AbiLayout, ArtifactContainerV1, BundleIndexV1, CallerClaimedPackageIdentityV1, Capability,
@@ -23,7 +22,8 @@ use fe2o3_artifacts::{
     DirectLinkWorkerIdentityV1, Endianness, KernelEntry,
     ManifestClaimDerivedLinkPublicationScopeV1, ManifestClaimDirectLinkDurablePlanHandoffV1,
     ManifestClaimDirectLinkPublicationBridgeV1, PayloadDigest, PointerWidth, TargetIdentity,
-    ToolIdentity,
+    ToolIdentity, publish_manifest_claim_direct_link_durable_v1,
+    recover_manifest_claim_direct_link_durable_v1,
 };
 use std::fs;
 use std::path::PathBuf;
@@ -387,21 +387,8 @@ fn typed_bridge_drives_and_validates_the_complete_g5_chain() {
     )
     .unwrap();
     let published = publish_bridge(&bridge);
-    let durable = bridge.durable_publication_plan();
 
     assert_eq!(bridge.validate_published(published), Ok(()));
-    assert_eq!(durable.attempt(), bridge.attempt());
-    assert_eq!(durable.scope(), bridge.trusted_scope());
-    assert_eq!(durable.request(), bridge.request_identity());
-    assert_eq!(durable.worker(), bridge.worker_identity());
-    assert_eq!(durable.response(), bridge.response_identity());
-    assert_eq!(durable.linked_output(), bridge.linked_output_identity());
-    assert_eq!(durable.finalization(), bridge.finalization_identity());
-    assert_eq!(
-        durable.finalized_output(),
-        bridge.finalized_output_identity()
-    );
-    assert_eq!(durable.publication(), bridge.publication_identity());
     assert_eq!(
         *bridge.publication_identity().as_bytes(),
         [
@@ -415,24 +402,32 @@ fn typed_bridge_drives_and_validates_the_complete_g5_chain() {
 }
 
 #[test]
-fn validated_bridge_plan_publishes_and_recovers_inert_durable_bytes() {
+fn manifest_claim_handoff_publishes_and_recovers_inert_durable_bytes() {
     const PAYLOAD: &[u8] = b"bridge native payload";
 
     let fixture = evidence(0x18);
     let validated = fixture.validated();
-    let bridge = DirectLinkPublicationBridgeV1::prepare_with_trusted_scope(
+    let derived = ManifestClaimDerivedLinkPublicationScopeV1::derive(
+        CallerClaimedPackageIdentityV1::new(PackageIdentityV1::from_bytes([0x31; 32])),
+        &validated,
+        0,
+        &fixture.container,
+    )
+    .unwrap();
+    let bridge = ManifestClaimDirectLinkPublicationBridgeV1::prepare_with_manifest_claim_scope(
         attempt(13, 10),
-        scope(11),
+        derived,
         &validated,
         0,
     )
     .unwrap();
-    let durable = bridge.durable_publication_plan();
+    let expected_scope = manifest_scope_claim(&bridge);
+    let handoff = bridge.durable_plan_handoff();
     let temp = TestDirectory::new();
     let output = temp.0.join("output");
     fs::create_dir(&output).unwrap();
 
-    let result = publish_durable_link_v1(&output, durable, |transaction| {
+    let result = publish_manifest_claim_direct_link_durable_v1(&output, &handoff, |transaction| {
         transaction.record_worker_pinned()?;
         transaction.record_response_validated()?;
         transaction.record_finalized(PAYLOAD)
@@ -442,7 +437,7 @@ fn validated_bridge_plan_publishes_and_recovers_inert_durable_bytes() {
     let snapshot = result.snapshot();
     assert_eq!(snapshot.artifact().bytes(), PAYLOAD);
     assert_eq!(snapshot.record().attempt(), bridge.attempt());
-    assert_eq!(snapshot.record().scope(), bridge.trusted_scope());
+    assert_eq!(snapshot.record().scope(), expected_scope);
     assert_eq!(snapshot.record().request(), bridge.request_identity());
     assert_eq!(snapshot.record().worker(), Some(bridge.worker_identity()));
     assert_eq!(
@@ -472,7 +467,7 @@ fn validated_bridge_plan_publishes_and_recovers_inert_durable_bytes() {
     assert!(!snapshot.grants_load_authority());
     assert!(!snapshot.grants_launch_authority());
 
-    let recovered = recover_durable_link_publication_v1(&output, bridge.trusted_scope())
+    let recovered = recover_manifest_claim_direct_link_durable_v1(&output, &handoff)
         .unwrap()
         .unwrap();
     assert_eq!(recovered.record(), snapshot.record());

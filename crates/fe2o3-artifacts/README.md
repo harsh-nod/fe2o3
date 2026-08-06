@@ -297,21 +297,23 @@ truth, and cannot authorize publication, loading, or launch.
 `ManifestClaimDirectLinkDurablePlanHandoffV1` is constructible only from the
 manifest-claim bridge and privately preserves its scope and occurrence identity
 for coordination with the separately owned durable G5 adapter. It exposes no
-raw `LinkPublicationScopeV1` or descriptive scope getter. Future durable-plan
-code must consume that opaque handoff through an API owned here rather than
+raw `LinkPublicationScopeV1` or descriptive scope getter. The durable publish
+and recovery entry points owned here consume that opaque handoff rather than
 reconstructing a plan from provenance-erasing values. This crate intentionally
 does not invent the required G5 package lease/current-publication witness or the
 G7 authenticated HSACO inspection witness. Both remain blocking prerequisites
 for any authoritative path.
 
 The bridge and `LinkPublicationCatalogV1` remain inert models and authenticate
-neither measurements nor transformation claims. The
-`fe2o3-artifact-transaction` durable direct-link adapter consumes only the
-opaque `ManifestClaimDirectLinkDurablePlanHandoffV1`, commits a domain-separated
-identity of its complete plan before work, records every ordered transition
-under the artifact lock, and publishes exact SHA-256-verified finalized bytes
-through a content-addressed file plus canonical record. Legacy bridge values
-and provenance-erasing diagnostic scope claims cannot enter that adapter path.
+neither measurements nor transformation claims. This crate's validated durable
+adapter accepts only `ManifestClaimDirectLinkDurablePlanHandoffV1` and delegates
+to the lower-level `fe2o3-artifact-transaction` protocol, which commits a
+domain-separated identity of the complete plan before work, records every
+ordered transition under the artifact lock, and publishes exact SHA-256-verified
+finalized bytes through a content-addressed file plus canonical record. Legacy
+bridge values and provenance-erasing diagnostic scope claims cannot enter the
+validated adapter path. The lower-level transaction API models durable mechanics
+and does not independently establish G6 provenance.
 Plans, returned descriptor snapshots, and recovered snapshots remain
 non-authorizing: none grants package ownership, module loading, symbol lookup,
 ABI acceptance, or kernel launch authority. The separately owned G5 package
