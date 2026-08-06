@@ -1,3 +1,11 @@
+mod semantic_type;
+
+pub use semantic_type::{
+    MirAddressSpace, MirAggregateLayout, MirEnumEncoding, MirEnumType, MirField, MirLayout,
+    MirMutability, MirPadding, MirScalarType, MirSemanticType, MirStructType, MirTypeKind,
+    MirTypeValidationError, MirVariant,
+};
+
 pub const DIALECT: &str = "mir";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
