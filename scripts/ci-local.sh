@@ -16,6 +16,7 @@ readonly CPU_TEST_PACKAGES=(
   fe2o3-artifacts
   fe2o3-contracts
   fe2o3-device
+  fe2o3-differential
   fe2o3-hsaco
   fe2o3-hsaco-finalize
   fe2o3-host
@@ -23,7 +24,9 @@ readonly CPU_TEST_PACKAGES=(
   fe2o3-kernel-descriptor
   fe2o3-kernel-ir
   fe2o3-macros
+  fe2o3-rustc-front
   fe2o3-rustc-invocation
+  fe2o3-verifier
   reserved-fe2o3-symbols
   rustc-codegen-fe2o3
 )
@@ -147,6 +150,7 @@ run_verus() {
 run_parity_matrix_checks() {
   run_step parity-matrix-check bash scripts/parity-matrix.sh check
   run_step parity-matrix-tests bash scripts/tests/parity-matrix.sh
+  run_step parity-evidence-tests bash scripts/tests/parity-evidence.sh
 }
 
 run_generic() {
