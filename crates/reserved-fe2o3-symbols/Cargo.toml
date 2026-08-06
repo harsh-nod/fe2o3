@@ -9,3 +9,6 @@ description = "Reserved symbol names shared by fe2o3 macros and backend."
 
 [lib]
 name = "reserved_fe2o3_symbols"
+
+[dependencies]
+sha2.workspace = true
