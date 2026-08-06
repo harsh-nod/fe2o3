@@ -9,8 +9,10 @@
 mod lifecycle;
 
 pub use lifecycle::{
-    CancelRequestError, NotificationError, OperationLifecycle, OperationState, ReclaimError,
-    TerminalState, TransitionError,
+    BoundedQuarantine, CancelRequestError, ConcurrentOperationLifecycle, LeakReason,
+    MAX_QUARANTINED_OPERATIONS, NotificationError, OperationLifecycle, OperationState,
+    PoisonedLifecycle, QuarantineCapacityError, QuarantineTicket, ReclaimError, RetentionOutcome,
+    SynchronizedLifecycleError, TerminalState, TransitionError,
 };
 
 /// A backend operation or completion failure.
