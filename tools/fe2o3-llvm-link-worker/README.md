@@ -33,6 +33,24 @@ validated bytes in a private temporary directory, supplies only those paths to
 `lld::lldMain`, removes the directory before exit, and redacts it from bounded
 diagnostics. No path crosses the protocol boundary.
 
+The native pipeline validates each input's actual file kind, AMDHSA OS ABI,
+processor flags, and code-object ABI before linking. It rejects duplicate
+strong definitions and unresolved non-weak imports, preserves requested LLVM
+exports through optimization, and accepts output only when its public dynamic
+symbols exactly match the request. LLVM verification and LLD diagnostics are
+bounded before they enter the response.
+
+`fe2o3-worker-pipeline-tests` builds real fixtures through the configured LLVM
+libraries and covers bitcode plus bitcode, bitcode plus AMDGPU relocatable, and
+multiple AMDGPU relocatables. It also checks deterministic output and rejects
+kind, target, code-object, import, definition, and export mismatches. Supplying
+an optional path writes the successful mixed-input HSACO for independent
+inspection:
+
+```sh
+build/llvm-link-worker/fe2o3-worker-pipeline-tests /tmp/fe2o3-mixed.hsaco
+```
+
 The worker response is descriptive evidence. It grants no loading or launch
 authority. The local `/home/harsh/llvm-project/build` tree is an LLVM 24
 development CMake package with a separately reporting `llvm-config`; it is not

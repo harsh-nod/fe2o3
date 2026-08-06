@@ -26,6 +26,17 @@ endif()
 find_package(LLVM REQUIRED CONFIG NO_DEFAULT_PATH PATHS "${LLVM_DIR}")
 find_package(LLD REQUIRED CONFIG NO_DEFAULT_PATH PATHS "${LLD_DIR}")
 
+file(REAL_PATH "${LLVM_DIR}" FE2O3_REAL_LLVM_DIR)
+file(REAL_PATH "${LLD_DIR}" FE2O3_REAL_LLD_DIR)
+get_filename_component(FE2O3_LLVM_CMAKE_ROOT "${FE2O3_REAL_LLVM_DIR}"
+  DIRECTORY)
+get_filename_component(FE2O3_LLD_CMAKE_ROOT "${FE2O3_REAL_LLD_DIR}"
+  DIRECTORY)
+if(NOT FE2O3_LLVM_CMAKE_ROOT STREQUAL FE2O3_LLD_CMAKE_ROOT)
+  message(FATAL_ERROR
+    "LLVM_DIR and LLD_DIR must come from one CMake package tree")
+endif()
+
 if(NOT LLVM_PACKAGE_VERSION STREQUAL FE2O3_PINNED_LLVM_VERSION)
   message(FATAL_ERROR
     "LLVM version mismatch: found '${LLVM_PACKAGE_VERSION}', expected "
@@ -33,6 +44,13 @@ if(NOT LLVM_PACKAGE_VERSION STREQUAL FE2O3_PINNED_LLVM_VERSION)
 endif()
 file(READ "${FE2O3_LLVM_BUILD_ID_FILE}" FE2O3_MEASURED_LLVM_BUILD_ID)
 string(STRIP "${FE2O3_MEASURED_LLVM_BUILD_ID}" FE2O3_MEASURED_LLVM_BUILD_ID)
+string(LENGTH "${FE2O3_MEASURED_LLVM_BUILD_ID}"
+  FE2O3_MEASURED_LLVM_BUILD_ID_LENGTH)
+if(FE2O3_MEASURED_LLVM_BUILD_ID_LENGTH GREATER 160 OR
+   NOT FE2O3_MEASURED_LLVM_BUILD_ID MATCHES
+     "^[A-Za-z0-9][A-Za-z0-9._+:=-]*$")
+  message(FATAL_ERROR "LLVM build-ID is empty or noncanonical")
+endif()
 if(NOT FE2O3_MEASURED_LLVM_BUILD_ID STREQUAL FE2O3_EXPECTED_LLVM_BUILD_ID)
   message(FATAL_ERROR
     "LLVM build-ID mismatch: measured '${FE2O3_MEASURED_LLVM_BUILD_ID}', "
@@ -44,21 +62,36 @@ endif()
 if(NOT TARGET lldELF OR NOT TARGET lldCommon)
   message(FATAL_ERROR "the explicit LLD package does not export lldELF/lldCommon")
 endif()
+if(CMAKE_CONFIGURATION_TYPES)
+  message(FATAL_ERROR
+    "multi-config generators cannot produce one measured worker identity")
+endif()
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 llvm_map_components_to_libnames(FE2O3_LLVM_LIBS
-  Core BitReader Linker Passes Target CodeGen Object Support
+  Core BitReader Linker Passes Target CodeGen Object Support TransformUtils
   AMDGPUCodeGen AMDGPUAsmParser AMDGPUDesc AMDGPUInfo AMDGPUUtils)
+llvm_map_components_to_libnames(FE2O3_LLVM_TEST_LIBS BitWriter)
 
 set(FE2O3_WORKER_MEASUREMENT_PREIMAGE
   "llvm=${FE2O3_MEASURED_LLVM_BUILD_ID}|version=${LLVM_PACKAGE_VERSION}"
-  "|compiler=${CMAKE_CXX_COMPILER_ID}-${CMAKE_CXX_COMPILER_VERSION}"
-  "|cxx=20|flags=-fno-exceptions,-fno-rtti")
+  "|compiler=${CMAKE_CXX_COMPILER}"
+  "|compiler_id=${CMAKE_CXX_COMPILER_ID}-${CMAKE_CXX_COMPILER_VERSION}"
+  "|build_type=${CMAKE_BUILD_TYPE}|cxx_flags=${CMAKE_CXX_FLAGS}"
+  "|cxx_flags_debug=${CMAKE_CXX_FLAGS_DEBUG}"
+  "|cxx_flags_release=${CMAKE_CXX_FLAGS_RELEASE}"
+  "|cxx_flags_relwithdebinfo=${CMAKE_CXX_FLAGS_RELWITHDEBINFO}"
+  "|cxx_flags_minsizerel=${CMAKE_CXX_FLAGS_MINSIZEREL}"
+  "|exe_linker_flags=${CMAKE_EXE_LINKER_FLAGS}"
+  "|ipo=${CMAKE_INTERPROCEDURAL_OPTIMIZATION}"
+  "|pic=${CMAKE_POSITION_INDEPENDENT_CODE}"
+  "|cxx=20|target_flags=-fno-exceptions,-fno-rtti")
 foreach(FE2O3_WORKER_SOURCE IN ITEMS
-    include/WorkerProtocol.h include/WorkerPipeline.h
+    CMakeLists.txt include/WorkerProtocol.h include/WorkerPipeline.h
+    include/WorkerLldPolicy.h
     src/WorkerProtocol.cpp src/WorkerPipeline.cpp src/main.cpp)
   file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/${FE2O3_WORKER_SOURCE}"
     FE2O3_WORKER_SOURCE_SHA256)
@@ -69,7 +102,7 @@ string(SHA256 FE2O3_WORKER_MEASUREMENT_SHA256
   "${FE2O3_WORKER_MEASUREMENT_PREIMAGE}")
 set(FE2O3_WORKER_MEASUREMENT
   "fe2o3-worker-v1-sha256-${FE2O3_WORKER_MEASUREMENT_SHA256}")
-message(STATUS "fe2o3 worker measurement: ${FE2O3_WORKER_MEASUREMENT}")
+message(STATUS "fe2o3 worker asserted build claim: ${FE2O3_WORKER_MEASUREMENT}")
 
 add_library(fe2o3_worker_protocol STATIC src/WorkerProtocol.cpp)
 target_include_directories(fe2o3_worker_protocol
@@ -112,4 +145,17 @@ if(BUILD_TESTING)
     -Wpedantic -Werror -Wno-unused-parameter -fno-exceptions -fno-rtti)
   target_link_libraries(fe2o3-worker-codec-tests PRIVATE fe2o3_worker_protocol)
   add_test(NAME fe2o3-worker-codec-tests COMMAND fe2o3-worker-codec-tests)
+
+  add_executable(fe2o3-worker-pipeline-tests tests/PipelineTests.cpp)
+  target_include_directories(fe2o3-worker-pipeline-tests SYSTEM PRIVATE
+    ${LLVM_INCLUDE_DIRS} ${LLD_INCLUDE_DIRS})
+  target_compile_definitions(fe2o3-worker-pipeline-tests PRIVATE
+    FE2O3_LLVM_BUILD_ID="${FE2O3_MEASURED_LLVM_BUILD_ID}"
+    FE2O3_WORKER_BUILD_ID="${FE2O3_WORKER_MEASUREMENT}")
+  target_compile_options(fe2o3-worker-pipeline-tests PRIVATE -Wall -Wextra
+    -Wpedantic -Werror -Wno-unused-parameter -fno-exceptions -fno-rtti)
+  target_link_libraries(fe2o3-worker-pipeline-tests PRIVATE
+    fe2o3_worker_pipeline ${FE2O3_LLVM_TEST_LIBS})
+  add_test(NAME fe2o3-worker-pipeline-tests
+    COMMAND fe2o3-worker-pipeline-tests)
 endif()
