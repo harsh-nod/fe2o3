@@ -31,7 +31,7 @@ unsafe extern "C" {
 }
 
 #[kernel]
-pub fn bidirectional_device_ffi(input: &[u32], mut output: DisjointSlice<u32>) {
+pub fn rust_calls_hip_kernel_v1(input: &[u32], mut output: DisjointSlice<u32>) {
     let index = thread::index_1d();
     let lane = index.get();
     if let Some(value) = input.get(lane)
@@ -39,6 +39,7 @@ pub fn bidirectional_device_ffi(input: &[u32], mut output: DisjointSlice<u32>) {
     {
         // SAFETY: the direct-link contract binds the exact symbol, target,
         // physical ABI, effects, and semantic identity used by this fixture.
+        // Observable result: 3 * input[lane] + 5 + lane, modulo 2^32.
         *destination = unsafe { external_scale_bias(*value, lane as u32) };
     }
 }
