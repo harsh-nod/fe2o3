@@ -106,13 +106,6 @@ pub enum RustPointerMutabilityV1 {
     Mut,
 }
 
-/// Semantic role of a zero-sized physical component.
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-#[non_exhaustive]
-pub enum RustZstRoleV1 {
-    DisjointIndexSpace(RustDisjointIndexSpaceV1),
-}
-
 /// Kind and semantic identity of one physical Rust layout component.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[non_exhaustive]
@@ -122,7 +115,8 @@ pub enum RustPhysicalComponentKindV1 {
         pointee: RustScalarElementTypeV1,
     },
     Usize,
-    Zst(RustZstRoleV1),
+    /// A zero-sized component explicitly present in rustc's physical ABI evidence.
+    Zst,
     /// Explicit bytes not occupied by a source field.
     Padding,
 }
@@ -167,7 +161,7 @@ impl RustPhysicalComponentV1 {
         }
 
         match kind {
-            RustPhysicalComponentKindV1::Zst(_) if size != 0 => {
+            RustPhysicalComponentKindV1::Zst if size != 0 => {
                 return Err(RustLayoutEvidenceError::InvalidComponent(
                     "a ZST component must have size zero",
                 ));
@@ -478,33 +472,21 @@ fn validate_source_semantics(
         ));
     }
 
-    let (element, pointer_mutability, expected_class, expected_zst) = match source_type {
-        RustSourceTypeShapeV1::SharedSlice { element } => (
-            element,
-            RustPointerMutabilityV1::Const,
-            RustcAbiClassV1::ScalarPair,
-            None,
-        ),
-        RustSourceTypeShapeV1::DisjointSlice {
-            element,
-            index_space,
-        } => (
-            element,
-            RustPointerMutabilityV1::Mut,
-            RustcAbiClassV1::Aggregate,
-            Some(RustZstRoleV1::DisjointIndexSpace(index_space)),
-        ),
+    let (element, pointer_mutability) = match source_type {
+        RustSourceTypeShapeV1::SharedSlice { element } => (element, RustPointerMutabilityV1::Const),
+        RustSourceTypeShapeV1::DisjointSlice { element, .. } => {
+            (element, RustPointerMutabilityV1::Mut)
+        }
     };
-    if abi_class != expected_class {
+    if abi_class != RustcAbiClassV1::ScalarPair {
         return Err(RustLayoutEvidenceError::SemanticMismatch(
             "rustc ABI class does not match the source type shape",
         ));
     }
 
-    let expected_count = if expected_zst.is_some() { 3 } else { 2 };
-    if components.len() != expected_count {
+    if components.len() != 2 {
         return Err(RustLayoutEvidenceError::SemanticMismatch(
-            "physical component count does not match the source type shape",
+            "slice ABI must contain exactly one pointer and one usize",
         ));
     }
     let pointer = components[0];
@@ -528,17 +510,6 @@ fn validate_source_semantics(
         return Err(RustLayoutEvidenceError::SemanticMismatch(
             "slice length is not a pointer-width usize after the data pointer",
         ));
-    }
-    if let Some(expected_role) = expected_zst {
-        let marker = components[2];
-        if marker.offset != size
-            || marker.abi_alignment != 1
-            || marker.kind != RustPhysicalComponentKindV1::Zst(expected_role)
-        {
-            return Err(RustLayoutEvidenceError::SemanticMismatch(
-                "DisjointSlice index-space marker does not match its source type",
-            ));
-        }
     }
     Ok(())
 }
@@ -577,14 +548,8 @@ fn encode_component(component: RustPhysicalComponentV1) -> Vec<u8> {
             writer.u8(scalar_tag(pointee));
         }
         RustPhysicalComponentKindV1::Usize => writer.u8(2),
-        RustPhysicalComponentKindV1::Zst(role) => {
+        RustPhysicalComponentKindV1::Zst => {
             writer.u8(3);
-            match role {
-                RustZstRoleV1::DisjointIndexSpace(index_space) => {
-                    writer.u8(1);
-                    writer.u8(index_space_tag(index_space));
-                }
-            }
         }
         RustPhysicalComponentKindV1::Padding => writer.u8(4),
     }

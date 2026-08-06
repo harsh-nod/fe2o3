@@ -2,8 +2,7 @@ use fe2o3_artifacts::{
     MAX_RUST_LAYOUT_ALIGNMENT, MAX_RUST_LAYOUT_BYTES, MAX_RUST_LAYOUT_COMPONENTS, PointerWidth,
     RustDisjointIndexSpaceV1, RustLayoutEvidenceError, RustLayoutEvidenceV1,
     RustPhysicalComponentKindV1, RustPhysicalComponentV1, RustPointerMutabilityV1,
-    RustScalarElementTypeV1, RustSourceTypeShapeV1, RustTypeEvidenceV1, RustZstRoleV1,
-    RustcAbiClassV1,
+    RustScalarElementTypeV1, RustSourceTypeShapeV1, RustTypeEvidenceV1, RustcAbiClassV1,
 };
 
 fn pointer(
@@ -30,16 +29,8 @@ fn usize_component(offset: u64, width: u64, alignment: u32) -> RustPhysicalCompo
         .unwrap()
 }
 
-fn index_1d_zst(offset: u64) -> RustPhysicalComponentV1 {
-    RustPhysicalComponentV1::new(
-        offset,
-        0,
-        1,
-        RustPhysicalComponentKindV1::Zst(RustZstRoleV1::DisjointIndexSpace(
-            RustDisjointIndexSpaceV1::Index1D,
-        )),
-    )
-    .unwrap()
+fn zst(offset: u64, alignment: u32) -> RustPhysicalComponentV1 {
+    RustPhysicalComponentV1::new(offset, 0, alignment, RustPhysicalComponentKindV1::Zst).unwrap()
 }
 
 fn shared_slice(
@@ -74,14 +65,13 @@ fn disjoint_slice(
             element,
             RustDisjointIndexSpaceV1::Index1D,
         )),
-        RustcAbiClassV1::Aggregate,
+        RustcAbiClassV1::ScalarPair,
         pointer_width,
         size,
         alignment,
         vec![
             pointer(0, width, alignment, RustPointerMutabilityV1::Mut, element),
             usize_component(width, width, alignment),
-            index_1d_zst(size),
         ],
     )
     .unwrap()
@@ -127,9 +117,8 @@ fn exact_vecadd_evidence_has_stable_golden_encodings_and_identities() {
         concat!(
             "1e0000004645324f332f525553542d4c41594f55542d45564944454e43452f563100010029000000",
             "1c0000004645324f332f525553542d545950452d45564944454e43452f563100010003000000020a",
-            "010302100000000000000008000000030000001700000000000000000000000800000000000000",
-            "0800000001020a150000000800000000000000080000000000000008000000021700000010000000",
-            "00000000000000000000000001000000030101"
+            "010202100000000000000008000000020000001700000000000000000000000800000000000000",
+            "0800000001020a15000000080000000000000008000000000000000800000002"
         )
     );
     assert_eq!(
@@ -138,7 +127,7 @@ fn exact_vecadd_evidence_has_stable_golden_encodings_and_identities() {
     );
     assert_eq!(
         hex(disjoint.type_identity().layout().bytes().as_bytes()),
-        "ec1831ff672840d58d46ecfddca0f04e3d4058577968bf117bad0a5b9491e654"
+        "d12579e2b46502e88aa0b663d986f4dd34b8f167c1b7796e7ea0e272398686ce"
     );
 }
 
@@ -156,6 +145,17 @@ fn construction_is_deterministic_and_exposes_validated_evidence() {
     assert_eq!(first.abi_alignment(), 8);
     assert_eq!(first.components().len(), 2);
     assert_eq!(first.rust_type().source_type().element().size_bytes(), 4);
+
+    let disjoint = disjoint_slice(RustScalarElementTypeV1::F32, PointerWidth::Bits64);
+    assert_eq!(disjoint.abi_class(), RustcAbiClassV1::ScalarPair);
+    assert_eq!(disjoint.components().len(), 2);
+    assert_eq!(
+        disjoint.rust_type().source_type(),
+        RustSourceTypeShapeV1::disjoint_slice(
+            RustScalarElementTypeV1::F32,
+            RustDisjointIndexSpaceV1::Index1D,
+        )
+    );
 }
 
 #[test]
@@ -204,14 +204,7 @@ fn component_constructor_rejects_malformed_values() {
         Err(RustLayoutEvidenceError::InvalidComponent(_))
     ));
     assert!(matches!(
-        RustPhysicalComponentV1::new(
-            0,
-            1,
-            1,
-            RustPhysicalComponentKindV1::Zst(RustZstRoleV1::DisjointIndexSpace(
-                RustDisjointIndexSpaceV1::Index1D,
-            )),
-        ),
+        RustPhysicalComponentV1::new(0, 1, 1, RustPhysicalComponentKindV1::Zst),
         Err(RustLayoutEvidenceError::InvalidComponent(_))
     ));
     assert!(matches!(
@@ -305,7 +298,7 @@ fn layout_constructor_enforces_bounds_and_alignment() {
         Err(RustLayoutEvidenceError::EmptyComponents)
     ));
 
-    let too_many = vec![index_1d_zst(0); MAX_RUST_LAYOUT_COMPONENTS + 1];
+    let too_many = vec![zst(0, 1); MAX_RUST_LAYOUT_COMPONENTS + 1];
     assert!(matches!(
         RustLayoutEvidenceV1::new(
             rust_type,
@@ -374,7 +367,7 @@ fn layout_constructor_requires_order_non_overlap_and_full_coverage() {
             RustPointerMutabilityV1::Const,
             RustScalarElementTypeV1::F32,
         ),
-        index_1d_zst(8),
+        zst(8, 1),
     ];
     assert!(matches!(
         make(incomplete),
@@ -469,41 +462,25 @@ fn semantic_validation_rejects_descriptive_but_inconsistent_evidence() {
         ),
         Err(RustLayoutEvidenceError::SemanticMismatch(_))
     ));
+}
 
+#[test]
+fn disjoint_slice_rejects_aggregate_source_field_topology_as_abi_evidence() {
     let disjoint_type = RustTypeEvidenceV1::new(RustSourceTypeShapeV1::disjoint_slice(
         RustScalarElementTypeV1::F32,
         RustDisjointIndexSpaceV1::Index1D,
     ));
-    assert!(matches!(
-        RustLayoutEvidenceV1::new(
-            disjoint_type,
-            RustcAbiClassV1::Aggregate,
-            PointerWidth::Bits64,
-            16,
+    let source_field_topology = vec![
+        pointer(
+            0,
             8,
-            vec![
-                pointer(
-                    0,
-                    8,
-                    8,
-                    RustPointerMutabilityV1::Mut,
-                    RustScalarElementTypeV1::F32,
-                ),
-                usize_component(8, 8, 8),
-            ],
+            8,
+            RustPointerMutabilityV1::Mut,
+            RustScalarElementTypeV1::F32,
         ),
-        Err(RustLayoutEvidenceError::SemanticMismatch(_))
-    ));
-
-    let misaligned_marker = RustPhysicalComponentV1::new(
-        16,
-        0,
-        2,
-        RustPhysicalComponentKindV1::Zst(RustZstRoleV1::DisjointIndexSpace(
-            RustDisjointIndexSpaceV1::Index1D,
-        )),
-    )
-    .unwrap();
+        usize_component(8, 8, 8),
+        zst(16, 1),
+    ];
     assert!(matches!(
         RustLayoutEvidenceV1::new(
             disjoint_type,
@@ -511,17 +488,7 @@ fn semantic_validation_rejects_descriptive_but_inconsistent_evidence() {
             PointerWidth::Bits64,
             16,
             8,
-            vec![
-                pointer(
-                    0,
-                    8,
-                    8,
-                    RustPointerMutabilityV1::Mut,
-                    RustScalarElementTypeV1::F32,
-                ),
-                usize_component(8, 8, 8),
-                misaligned_marker,
-            ],
+            source_field_topology,
         ),
         Err(RustLayoutEvidenceError::SemanticMismatch(_))
     ));

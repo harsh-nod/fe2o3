@@ -60,7 +60,6 @@ pub use rust_layout::{
     RUST_LAYOUT_EVIDENCE_DOMAIN_V1, RUST_LAYOUT_EVIDENCE_VERSION_V1, RUST_TYPE_EVIDENCE_DOMAIN_V1,
     RustDisjointIndexSpaceV1, RustLayoutEvidenceError, RustLayoutEvidenceV1,
     RustPhysicalComponentKindV1, RustPhysicalComponentV1, RustPointerMutabilityV1,
-    RustScalarElementTypeV1, RustSourceTypeShapeV1, RustTypeEvidenceV1, RustZstRoleV1,
-    RustcAbiClassV1,
+    RustScalarElementTypeV1, RustSourceTypeShapeV1, RustTypeEvidenceV1, RustcAbiClassV1,
 };
 pub use selection::{DeclaredTargetMismatch, KernelSelectionError, SelectedNativeKernel};
