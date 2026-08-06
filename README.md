@@ -74,10 +74,23 @@ Safe ownership of resources used by asynchronous copies is documented in
   `pub fn(&[f32], &[f32], DisjointSlice<f32>)`. It emits
   `<kernel>_gpu::{Kernel, Prepared}`. The backend packages the finalized LLVM IR
   identity, native HSACO payload, target, exact 48-byte read/read/write slice
-  ABI, and fixed one-dimensional launch contract into a canonical
-  `ArtifactContainerV1`, then embeds those immutable bytes in the host link.
-  `Kernel::load` authenticates the embedded container against the observed
-  context and exact vecadd profile before loading it.
+  ABI, canonical rustc-derived type/layout identities, and fixed
+  one-dimensional launch contract into a canonical `ArtifactContainerV1`, then
+  embeds those immutable bytes in the host link. Extraction uses normalized,
+  monomorphized rustc types, so token aliases such as `type f32 = f64` fail at
+  the compiler boundary.
+- The typed vecadd V2 profile records a domain-separated canonical source shape,
+  rustc ABI class, pointer width, size, alignment, and ordered physical
+  components for all three arguments. The host independently reconstructs the
+  same evidence from its actual slice and `DisjointSlice` layouts.
+  `Kernel::load` recomputes an identity over the profile, full kernel binding,
+  names, source and executable digests, ABI fields, effects, type/layout
+  identities, and launch contract before loading the embedded payload.
+- Before embedding, the backend parses the finalized HSACO and binds its ELF
+  entries to AMDHSA descriptors. The fixed profile requires one normal kernel,
+  the exact target and symbol, no printf/init/fini entry, and six 8-byte
+  pointer/length kernargs at offsets `0, 8, 16, 24, 32, 40`, followed by the
+  runtime-populated implicit argument region at offset 48.
 - Typed V2 registrations carry full SHA-256 crate and kernel binding IDs. The
   Cargo wrapper derives the crate ID from rustc's crate name and ordered
   `-C metadata` values; the macro and backend independently derive and validate
@@ -178,10 +191,17 @@ example, copied results back, and compared them with CPU results.
   remains the default emitter.
 - The generated typed path supports only
   `pub fn(&[f32], &[f32], DisjointSlice<f32>)`; general typed signatures,
-  multi-profile module generation, and compiler-derived Rust type and layout
-  identities are not implemented. The vecadd container uses exact fixed ABI
-  declarations and deterministic opaque type/layout identities rather than
-  layout evidence imported from rustc.
+  arbitrary rustc layouts, aggregate arguments, multi-profile module
+  generation, and multi-kernel bundles are not implemented. Canonical
+  rustc-derived evidence currently covers only the fixed two shared slices and
+  one `DisjointSlice<f32, Index1D>` profile on 64-bit targets.
+- The generated contract identity authenticates compiler declarations and the
+  exact payload bytes; it does not inspect machine code to prove that declared
+  read/read/write effects match every executable memory access. The fixed
+  lowering, Kernel IR checks, host alias admission, and tests provide separate
+  defenses, but general illegal-access and race freedom still require complete
+  analysis and Verus/refinement evidence. Trusted rustc diagnostic-item
+  classification also remains part of the compiler TCB.
 - The generated vecadd API has synchronous launch and a scoped asynchronous
   callback that cannot return the in-flight operation. Generalized returnable
   borrowed or owned generated async APIs, cancellation, and composition are not
