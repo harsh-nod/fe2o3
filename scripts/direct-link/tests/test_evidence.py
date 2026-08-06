@@ -2,26 +2,27 @@
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest import mock
 
 SCRIPT_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SCRIPT_DIR))
 
-import common  # noqa: E402
 import evidence  # noqa: E402
 import reproduce  # noqa: E402
+from common import typed_file_identity, typed_identity  # noqa: E402
 
-COMMIT = "01" * 20
-REQUEST = "02" * 32
-WORKER_BUILD = "fe2o3-worker-v1-sha256-" + "03" * 32
-LLVM_BUILD = "rocm-llvm-dev=22.0.0.26084.70204-93~24.04"
-HARDWARE_ID = "fe2o3-hardware-v1-sha256-" + "04" * 32
+COMMIT = "12" * 20
+TARGET = "gfx942:sramecc+:xnack-"
+TOOLCHAIN = typed_identity(reproduce.TOOLCHAIN_DOMAIN, b"llvm-toolchain")
+WORKER = typed_identity(reproduce.WORKER_DOMAIN, b"worker")
+REQUEST = typed_identity(reproduce.REQUEST_DOMAIN, b"request")
+PYTHON = str(Path(sys.executable).resolve(strict=True))
 
 
 class EvidenceCliTests(unittest.TestCase):
@@ -29,320 +30,239 @@ class EvidenceCliTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
         self.worker = self.root / "worker"
-        self.artifact = self.root / "linked.hsaco"
-        self.worker.write_bytes(b"measured worker executable\n")
-        self.artifact.write_bytes(b"deterministic linked artifact\n")
-        self.worker.chmod(0o700)
-        artifact_digest = evidence.sha256_file(self.artifact)
-        result = reproduce.ReproducibilityResult(
-            "gfx942", artifact_digest, artifact_digest, "pass", "-"
-        )
-        self.reproduction = self.root / "repro.tsv"
-        self.reproduction.write_bytes(result.canonical_bytes())
+        self.linked = self.root / "linked.hsaco"
+        self.final = self.root / "final.hsaco"
+        self.worker.write_bytes(b"worker executable")
+        self.linked.write_bytes(b"linked hsaco")
+        self.final.write_bytes(b"final hsaco")
+        self.reproduction = self.root / "reproduction.tsv"
+        self.write_reproduction("pass", "-")
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
-    def run_cli(
-        self, *arguments: str, check: bool = False
-    ) -> subprocess.CompletedProcess[bytes]:
+    def run_cli(self, *arguments: str) -> subprocess.CompletedProcess[bytes]:
         return subprocess.run(
             [sys.executable, str(SCRIPT_DIR / "evidence.py"), *arguments],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            check=check,
+            check=False,
         )
 
-    def collect_arguments(self, hardware: str = "pass") -> list[str]:
-        hardware_argument = (
-            ["--hardware-execution-identity", HARDWARE_ID] if hardware == "pass" else []
+    def make_reproduction(
+        self, status: str, reason: str
+    ) -> reproduce.ReproducibilityResult:
+        command = reproduce.canonical_json(
+            [PYTHON, "{source_dir}/build.py"], "canonical_argv"
         )
-        suites = [
-            "clean-build-reproducibility=pass",
-            "compile=pass",
-            "direct-llvm-link=pass",
-            (
-                "hardware-execution=pass"
-                if hardware == "pass"
-                else "hardware-execution=unavailable:no-compatible-gpu"
+        environment = reproduce.canonical_json(
+            {"LANG": "C", "LC_ALL": "C", "PATH": "/usr/bin:/bin"},
+            "environment",
+        )
+        linked = typed_file_identity(reproduce.LINKED_ARTIFACT_DOMAIN, self.linked)
+        finalized = typed_file_identity(reproduce.FINAL_ARTIFACT_DOMAIN, self.final)
+        if status != "pass":
+            linked_values = ("none", "none")
+            final_values = ("none", "none")
+        else:
+            linked_values = (linked, linked)
+            final_values = (finalized, finalized)
+        return reproduce.ReproducibilityResult(
+            git_commit=COMMIT,
+            source_tree_identity=typed_identity(
+                reproduce.SOURCE_TREE_DOMAIN, b"source tree"
             ),
-            "static-checks=pass",
-        ]
-        arguments = [
-            "collect",
+            git_executable_identity=typed_identity(
+                reproduce.GIT_EXECUTABLE_DOMAIN, b"git executable"
+            ),
+            canonical_argv=command,
+            canonical_argv_identity=typed_identity(
+                reproduce.ARGV_DOMAIN, command.encode("ascii")
+            ),
+            build_executable_identity=typed_identity(
+                reproduce.EXECUTABLE_DOMAIN, b"build executable"
+            ),
+            environment=environment,
+            environment_identity=typed_identity(
+                reproduce.ENVIRONMENT_DOMAIN, environment.encode("ascii")
+            ),
+            llvm_toolchain_identity=TOOLCHAIN,
+            worker_identity=WORKER,
+            request_identity=REQUEST,
+            target=TARGET,
+            first_linked_artifact_identity=linked_values[0],
+            second_linked_artifact_identity=linked_values[1],
+            first_final_artifact_identity=final_values[0],
+            second_final_artifact_identity=final_values[1],
+            status=status,
+            reason=reason,
+        )
+
+    def write_reproduction(self, status: str, reason: str) -> None:
+        self.reproduction.write_bytes(
+            self.make_reproduction(status, reason).canonical_bytes()
+        )
+
+    def collection_arguments(self) -> list[str]:
+        return [
             "--git-commit",
             COMMIT,
             "--target",
-            "gfx942",
+            TARGET,
             "--worker-executable",
             str(self.worker),
-            "--worker-build-id",
-            WORKER_BUILD,
-            "--llvm-build-identity",
-            LLVM_BUILD,
+            "--worker-identity",
+            WORKER,
+            "--llvm-toolchain-identity",
+            TOOLCHAIN,
             "--request-identity",
             REQUEST,
-            "--artifact",
-            str(self.artifact),
-            *hardware_argument,
-        ]
-        for suite in suites:
-            arguments.extend(("--suite", suite))
-        return arguments
-
-    def collect_record(self, hardware: str = "pass") -> Path:
-        completed = self.run_cli(*self.collect_arguments(hardware), check=True)
-        path = self.root / f"evidence-{hardware}.tsv"
-        path.write_bytes(completed.stdout)
-        return path
-
-    def validate_arguments(self, record: Path) -> list[str]:
-        return [
-            "validate",
-            str(record),
-            "--expect-commit",
-            COMMIT,
-            "--expect-target",
-            "gfx942",
-            "--worker-executable",
-            str(self.worker),
-            "--expect-worker-build-id",
-            WORKER_BUILD,
-            "--expect-llvm-build-identity",
-            LLVM_BUILD,
-            "--expect-request-identity",
-            REQUEST,
-            "--artifact",
-            str(self.artifact),
+            "--linked-artifact",
+            str(self.linked),
+            "--final-artifact",
+            str(self.final),
             "--repro-result",
             str(self.reproduction),
         ]
 
-    def test_collect_is_deterministic_and_validate_pins_every_identity(self) -> None:
-        first = self.run_cli(*self.collect_arguments(), check=True).stdout
-        second = self.run_cli(*self.collect_arguments(), check=True).stdout
-        self.assertEqual(first, second)
-        record = self.root / "evidence.tsv"
-        record.write_bytes(first)
-        parsed = evidence.parse_record(record)
-        self.assertEqual(parsed.scalars["release_gate"], "pass")
-        completed = self.run_cli(*self.validate_arguments(record))
-        self.assertEqual(completed.returncode, 0, completed.stderr.decode())
+    def collect_record(self, name: str = "evidence.tsv") -> Path:
+        completed = self.run_cli("collect", *self.collection_arguments())
+        self.assertEqual(completed.returncode, 1, completed.stderr.decode())
+        path = self.root / name
+        path.write_bytes(completed.stdout)
+        return path
 
-    def test_explicit_hardware_unavailability_blocks_release(self) -> None:
-        record = self.collect_record("unavailable")
-        parsed = evidence.parse_record(record)
-        self.assertEqual(parsed.scalars["release_gate"], "blocked")
-        self.assertEqual(parsed.scalars["hardware_execution_identity"], "none")
+    def test_collection_is_canonical_but_fail_closed(self) -> None:
+        path = self.collect_record()
+        record = evidence.parse_record(path)
+        self.assertEqual(record.scalars["schema_version"], "2")
+        self.assertEqual(record.scalars["release_gate"], "blocked")
+        self.assertEqual(record.suites["clean-build-reproducibility"].status, "pass")
+        for name in (
+            "compile",
+            "direct-llvm-link",
+            "hardware-execution",
+            "static-checks",
+        ):
+            self.assertEqual(record.suites[name].status, "unavailable")
+            self.assertEqual(record.suites[name].provenance_identity, "none")
 
-    def test_unavailable_or_skipped_suite_requires_a_reason(self) -> None:
-        arguments = self.collect_arguments("unavailable")
-        index = arguments.index("hardware-execution=unavailable:no-compatible-gpu")
-        arguments[index] = "hardware-execution=unavailable"
-        completed = self.run_cli(*arguments)
-        self.assertNotEqual(completed.returncode, 0)
-        self.assertIn(b"reason must be", completed.stderr)
+    def test_inspect_accepts_blocked_record_validate_does_not(self) -> None:
+        path = self.collect_record()
+        inspect = self.run_cli("inspect", str(path))
+        self.assertEqual(inspect.returncode, 0, inspect.stderr.decode())
+        validate = self.run_cli("validate", str(path), *self.collection_arguments())
+        self.assertEqual(validate.returncode, 1, validate.stderr.decode())
+        self.assertIn(b"gate=blocked", validate.stdout)
 
-    def test_wrong_authenticated_pins_are_rejected(self) -> None:
-        record = self.collect_record()
-        cases = {
-            "commit": ("--expect-commit", "ab" * 20, b"git_commit mismatch"),
-            "target": ("--expect-target", "gfx950", b"target mismatch"),
-            "worker build": (
-                "--expect-worker-build-id",
-                "fe2o3-worker-v1-sha256-" + "aa" * 32,
-                b"worker_build_id mismatch",
-            ),
-            "LLVM build": (
-                "--expect-llvm-build-identity",
-                "rocm-llvm-dev=wrong",
-                b"llvm_build_identity mismatch",
-            ),
-            "request": (
-                "--expect-request-identity",
-                "bb" * 32,
-                b"request_identity mismatch",
-            ),
-        }
-        base = self.validate_arguments(record)
-        for name, (option, replacement, expected) in cases.items():
-            with self.subTest(name=name):
-                arguments = list(base)
-                arguments[arguments.index(option) + 1] = replacement
-                completed = self.run_cli(*arguments)
-                self.assertEqual(completed.returncode, 2)
-                self.assertIn(expected, completed.stderr)
-
-    def test_changed_worker_and_artifact_bytes_are_rejected(self) -> None:
-        record = self.collect_record()
-        self.worker.write_bytes(b"replaced worker\n")
-        completed = self.run_cli(*self.validate_arguments(record))
-        self.assertEqual(completed.returncode, 2)
-        self.assertIn(b"worker_executable_sha256 mismatch", completed.stderr)
-
-        self.worker.write_bytes(b"measured worker executable\n")
-        self.artifact.write_bytes(b"replaced artifact\n")
-        completed = self.run_cli(*self.validate_arguments(record))
-        self.assertEqual(completed.returncode, 2)
-        self.assertIn(b"artifact_identity mismatch", completed.stderr)
-
-    def test_hash_rejects_same_inode_mutation_and_opens_the_path_once(self) -> None:
-        measured = self.root / "measured.bin"
-        measured.write_bytes(b"a" * 4096)
-        original_read = common.os.read
-        mutated = False
-
-        def mutate_after_read(descriptor: int, size: int) -> bytes:
-            nonlocal mutated
-            data = original_read(descriptor, size)
-            if data and not mutated:
-                mutated = True
-                with measured.open("r+b") as output:
-                    output.seek(0, os.SEEK_END)
-                    output.write(b"b")
-                    output.flush()
-                    os.fsync(output.fileno())
-            return data
-
-        with mock.patch.object(common.os, "read", side_effect=mutate_after_read):
-            with self.assertRaisesRegex(
-                common.EvidenceError, "changed while being measured"
-            ):
-                common.sha256_file(measured)
-
-        measured.write_bytes(b"stable")
-        original_open = common.os.open
-        open_calls = 0
-
-        def count_open(*args: object, **kwargs: object) -> int:
-            nonlocal open_calls
-            open_calls += 1
-            return original_open(*args, **kwargs)
-
-        with mock.patch.object(common.os, "open", side_effect=count_open):
-            common.sha256_file(measured)
-        self.assertEqual(open_calls, 1)
-
-    def test_reproducibility_record_is_bound_to_target_outcome_and_artifact(
-        self,
-    ) -> None:
-        record = self.collect_record()
-        digest = evidence.sha256_file(self.artifact)
-        cases = (
-            reproduce.ReproducibilityResult("gfx950", digest, digest, "pass", "-"),
-            reproduce.ReproducibilityResult(
-                "gfx942", "aa" * 32, "aa" * 32, "pass", "-"
-            ),
-            reproduce.ReproducibilityResult(
-                "gfx942", "none", "none", "unavailable", "toolchain-unavailable"
-            ),
+    def test_failed_reproduction_makes_release_gate_fail(self) -> None:
+        self.write_reproduction("fail", "artifact-mismatch")
+        path = self.collect_record("failed.tsv")
+        record = evidence.parse_record(path)
+        self.assertEqual(record.scalars["release_gate"], "fail")
+        self.assertEqual(self.run_cli("inspect", str(path)).returncode, 0)
+        self.assertEqual(
+            self.run_cli(
+                "validate", str(path), *self.collection_arguments()
+            ).returncode,
+            1,
         )
-        expected = (
-            b"reproducibility target",
-            b"does not bind the recorded artifact",
-            b"outcome does not match",
-        )
-        for index, result in enumerate(cases):
-            with self.subTest(index=index):
-                self.reproduction.write_bytes(result.canonical_bytes())
-                completed = self.run_cli(*self.validate_arguments(record))
-                self.assertEqual(completed.returncode, 2)
-                self.assertIn(expected[index], completed.stderr)
 
-    def test_parser_rejects_duplicate_unknown_noncanonical_and_truncated_data(
-        self,
-    ) -> None:
-        record = self.collect_record()
-        original = record.read_bytes()
-        lines = original.splitlines(keepends=True)
-        mutations = {
-            "duplicate": lines[:-1] + [lines[1], lines[-1]],
-            "unknown": lines[:-1] + [b"environment\tpoisoned\n", lines[-1]],
-            "noncanonical": [lines[1], lines[0], *lines[2:]],
-        }
-        expected = {
-            "duplicate": "duplicate scalar field",
-            "unknown": "unknown field",
-            "noncanonical": "noncanonical field order",
-        }
-        for name, mutation in mutations.items():
-            with self.subTest(name=name):
-                path = self.root / f"{name}.tsv"
-                path.write_bytes(b"".join(mutation))
-                with self.assertRaisesRegex(evidence.EvidenceError, expected[name]):
+    def test_arbitrary_cli_suite_pass_is_not_an_input_surface(self) -> None:
+        completed = self.run_cli(
+            "collect",
+            *self.collection_arguments(),
+            "--suite",
+            "hardware-execution=pass",
+        )
+        self.assertEqual(completed.returncode, 2)
+        self.assertIn(b"unrecognized arguments", completed.stderr)
+
+    def test_forged_compile_and_hardware_provenance_are_rejected(self) -> None:
+        record = evidence.parse_record(self.collect_record())
+        for suite_name in ("compile", "hardware-execution"):
+            with self.subTest(suite=suite_name):
+                suites = dict(record.suites)
+                original = suites[suite_name]
+                suites[suite_name] = dataclasses.replace(
+                    original,
+                    status="pass",
+                    reason="-",
+                    provenance_identity=typed_identity(
+                        "fe2o3-forged-provenance-v1", b"did not run"
+                    ),
+                )
+                scalars = dict(record.scalars)
+                scalars["release_gate"] = "blocked"
+                forged = evidence.EvidenceRecord(scalars, suites)
+                path = self.root / f"forged-{suite_name}.tsv"
+                path.write_bytes(forged.canonical_bytes())
+                with self.assertRaisesRegex(
+                    evidence.EvidenceError, "cannot pass until"
+                ):
                     evidence.parse_record(path)
 
-        truncated = self.root / "truncated.tsv"
-        truncated.write_bytes(original[:-1])
-        with self.assertRaisesRegex(evidence.EvidenceError, "truncated"):
-            evidence.parse_record(truncated)
-
-    def test_parser_rejects_overlong_and_non_ascii_values(self) -> None:
-        record = self.collect_record()
-        parsed = evidence.parse_record(record)
-        scalars = dict(parsed.scalars)
-        scalars["llvm_build_identity"] = "x" * 193
-        overlong = evidence.EvidenceRecord(scalars, parsed.suites)
-        path = self.root / "overlong.tsv"
-        path.write_bytes(overlong.canonical_bytes())
-        with self.assertRaisesRegex(evidence.EvidenceError, "exceeds 192"):
-            evidence.parse_record(path)
-
-        path.write_bytes(
-            record.read_bytes().replace(LLVM_BUILD.encode(), b"LLVM-\xc3\xa9")
+    def test_reproduction_provenance_and_artifact_substitution_fail(self) -> None:
+        path = self.collect_record()
+        record = evidence.parse_record(path)
+        suites = dict(record.suites)
+        suites["clean-build-reproducibility"] = dataclasses.replace(
+            suites["clean-build-reproducibility"],
+            provenance_identity=typed_identity(
+                reproduce.RECORD_DOMAIN, b"different reproduction"
+            ),
         )
-        with self.assertRaisesRegex(evidence.EvidenceError, "ASCII"):
-            evidence.parse_record(path)
+        forged = evidence.EvidenceRecord(dict(record.scalars), suites)
+        forged_path = self.root / "forged-reproduction.tsv"
+        forged_path.write_bytes(forged.canonical_bytes())
+        with self.assertRaisesRegex(evidence.EvidenceError, "does not bind"):
+            evidence.parse_record(forged_path)
 
-    def test_compile_only_cannot_claim_hardware_execution(self) -> None:
-        record = self.collect_record("unavailable")
-        parsed = evidence.parse_record(record)
+        self.final.write_bytes(b"substituted final artifact")
+        completed = self.run_cli("validate", str(path), *self.collection_arguments())
+        self.assertEqual(completed.returncode, 2)
+        self.assertIn(b"does not match evidence", completed.stderr)
 
-        suites = dict(parsed.suites)
-        suites["hardware-execution"] = evidence.SuiteOutcome(
-            "hardware-execution", "hardware", "pass", "-"
+    def test_request_and_toolchain_substitution_fail(self) -> None:
+        path = self.collect_record()
+        for option, value in (
+            (
+                "--request-identity",
+                typed_identity(reproduce.REQUEST_DOMAIN, b"other request"),
+            ),
+            (
+                "--llvm-toolchain-identity",
+                typed_identity(reproduce.TOOLCHAIN_DOMAIN, b"other toolchain"),
+            ),
+        ):
+            with self.subTest(option=option):
+                arguments = self.collection_arguments()
+                arguments[arguments.index(option) + 1] = value
+                completed = self.run_cli("validate", str(path), *arguments)
+                self.assertEqual(completed.returncode, 2)
+                self.assertIn(b"does not match evidence", completed.stderr)
+
+    def test_record_identity_uses_domain_separation_and_detects_tampering(self) -> None:
+        path = self.collect_record()
+        record = evidence.parse_record(path)
+        self.assertNotEqual(
+            record.identity().rsplit("-", 1)[1],
+            typed_identity("fe2o3-other-record-v1", record.preimage()).rsplit("-", 1)[
+                1
+            ],
         )
-        forged = evidence.EvidenceRecord(dict(parsed.scalars), suites)
-        path = self.root / "forged-hardware.tsv"
-        path.write_bytes(forged.canonical_bytes())
-        with self.assertRaisesRegex(evidence.EvidenceError, "hardware pass requires"):
-            evidence.parse_record(path)
-
-        suites["hardware-execution"] = evidence.SuiteOutcome(
-            "hardware-execution", "compile", "pass", "-"
-        )
-        scalars = dict(parsed.scalars)
-        scalars["hardware_execution_identity"] = HARDWARE_ID
-        path.write_bytes(evidence.EvidenceRecord(scalars, suites).canonical_bytes())
-        with self.assertRaisesRegex(evidence.EvidenceError, "wrong evidence class"):
-            evidence.parse_record(path)
-
-    def test_release_gate_cannot_overclaim_a_skipped_suite(self) -> None:
-        record = self.collect_record("unavailable")
-        parsed = evidence.parse_record(record)
-        scalars = dict(parsed.scalars)
-        scalars["release_gate"] = "pass"
-        forged = evidence.EvidenceRecord(scalars, parsed.suites)
-        path = self.root / "overclaim.tsv"
-        path.write_bytes(forged.canonical_bytes())
-        with self.assertRaisesRegex(evidence.EvidenceError, "overclaims outcomes"):
+        data = path.read_bytes()
+        path.write_bytes(data[:-2] + (b"0" if data[-2:-1] != b"0" else b"1") + b"\n")
+        with self.assertRaisesRegex(evidence.EvidenceError, "does not authenticate"):
             evidence.parse_record(path)
 
     @unittest.skipUnless(hasattr(os, "symlink"), "symlinks unavailable")
-    def test_validator_does_not_follow_evidence_or_binary_symlinks(self) -> None:
-        record = self.collect_record()
-        record_link = self.root / "record-link.tsv"
-        record_link.symlink_to(record)
+    def test_measurement_does_not_follow_symlinks(self) -> None:
+        path = self.collect_record()
+        link = self.root / "evidence-link.tsv"
+        link.symlink_to(path)
         with self.assertRaisesRegex(evidence.EvidenceError, "cannot open regular file"):
-            evidence.parse_record(record_link)
-
-        worker_link = self.root / "worker-link"
-        worker_link.symlink_to(self.worker)
-        arguments = self.validate_arguments(record)
-        arguments[arguments.index("--worker-executable") + 1] = str(worker_link)
-        completed = self.run_cli(*arguments)
-        self.assertEqual(completed.returncode, 2)
-        self.assertIn(b"cannot open regular file", completed.stderr)
+            evidence.parse_record(link)
 
 
 if __name__ == "__main__":

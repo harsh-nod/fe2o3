@@ -1,95 +1,107 @@
 # Direct LLVM link release evidence
 
-These tools produce inert, canonical evidence for the direct LLVM linking
-milestone. They do not publish an artifact, authorize module loading, or grant
-kernel launch authority.
+These tools produce inert, canonical evidence. They do not publish an artifact,
+authorize module loading, grant kernel launch authority, or prove that a claim
+was produced by trusted CI.
 
-## Evidence record
+## Fail-closed release gate
 
-`evidence.py collect` hashes the worker executable and linked artifact and emits
-a bounded V1 TSV record. It also binds the exact Git commit, AMD target, worker
-build identity, LLVM package/build identity, request identity, suite outcomes,
-and an optional hardware execution identity. Every non-passing suite must carry
-an explicit bounded reason code.
+V2 separates structural inspection from release validation:
 
-Files are opened once with symlink following disabled, checked as regular and
-bounded, hashed through that descriptor, and rejected if their device, inode,
-size, modification time, or change time differs after measurement.
+- `inspect` verifies bounds, canonical encoding, typed identities, and record
+  integrity. It returns success for structurally valid pass, fail, or blocked
+  records.
+- `validate` verifies the caller's pinned expectations and returns success only
+  for a passing gate. A valid blocked or failed record returns nonzero.
 
-The required suites are:
+`evidence.py collect` no longer accepts caller-supplied suite pass statuses. It
+consumes a V2 clean-build runner record for reproducibility. Compile, direct-link,
+hardware, and static suites remain unavailable until canonical G2/G5/G6/G7 and
+static-runner record parsers are connected. Therefore the aggregate release gate
+is truthfully blocked even when reproducibility passes.
 
-- `clean-build-reproducibility`
-- `compile`
-- `direct-llvm-link`
-- `hardware-execution`
-- `static-checks`
+A future hardware pass must consume a canonical runner record that binds the
+exact commit, link request, finalized artifact, target, observed GPU and driver,
+test executable and argv, oracle, and execution outcome. A digest-shaped string
+or CLI status is insufficient.
 
-The release gate is derived from those outcomes. It is `pass` only when every
-suite passed. A hardware pass additionally requires a
-`fe2o3-hardware-v1-sha256-*` execution identity; compile-only evidence cannot
-satisfy that requirement.
+## Reproducibility V2
+
+`reproduce.py run`:
+
+1. resolves an exact Git commit and hashes its canonical `git ls-tree` snapshot;
+2. creates two independent local clones and detached checkouts of that commit;
+3. verifies each checkout is clean before and after its build;
+4. executes an absolute build executable directly, without a shell, in two new
+   build directories;
+5. binds canonical argv, executable bytes, a fixed environment, Git executable,
+   LLVM/toolchain identity, worker identity, request identity, and target; and
+6. measures both the linked and finalized artifacts under distinct identity
+   domains.
+
+Identity hashes include a versioned magic value, the length-delimited identity
+domain, the payload length, and the payload. Files are opened once with symlink
+following disabled and rejected if their device, inode, size, modification time,
+or change time changes during measurement.
+
+Stdout and stderr are captured through bounded parent-owned pipes. The log bound
+does not limit object or HSACO sizes. The runner creates a process group and kills
+that group after every outcome, including normal parent exit and timeout. It does
+not contain a hostile process that creates a new session or escapes into another
+process group; production gating needs the G2 supervisor plus OS containment,
+such as a delegated cgroup, for that threat model.
+
+The executable and artifacts are measured evidence, not same-descriptor runtime
+authority. A later publisher or loader must consume the typed G5/G6 bundle and
+load the exact admitted bytes. LLVM/toolchain, worker, and request identities are
+bound assertions until their canonical upstream records are parsed.
+
+Example:
+
+```console
+python3 scripts/direct-link/reproduce.py run \
+  --commit "$COMMIT" \
+  --target gfx942 \
+  --linked-artifact output/linked.hsaco \
+  --final-artifact output/final.hsaco \
+  --source-dir "$PWD" \
+  --work-root /tmp \
+  --llvm-toolchain-identity "$LLVM_TOOLCHAIN_ID" \
+  --worker-identity "$WORKER_ID" \
+  --request-identity "$REQUEST_ID" \
+  -- /absolute/path/to/build-tool \
+     --source '{source_dir}' \
+     --output '{build_dir}' \
+     --target '{target}' > repro-gfx942.tsv
+```
+
+The former existing-file `compare` command was removed because comparing two
+caller-selected paths cannot satisfy clean-build release gating.
+
+## Evidence collection
+
+Collection consumes the exact release files and the V2 reproducibility result:
 
 ```console
 python3 scripts/direct-link/evidence.py collect \
   --git-commit "$COMMIT" \
   --target gfx942 \
   --worker-executable "$WORKER" \
-  --worker-build-id "$WORKER_BUILD_ID" \
-  --llvm-build-identity "$LLVM_BUILD_ID" \
-  --request-identity "$REQUEST_ID_HEX" \
-  --artifact "$HSACO" \
-  --hardware-execution-identity "$HARDWARE_EXECUTION_ID" \
-  --suite clean-build-reproducibility=pass \
-  --suite compile=pass \
-  --suite direct-llvm-link=pass \
-  --suite hardware-execution=pass \
-  --suite static-checks=pass > evidence.tsv
+  --worker-identity "$WORKER_ID" \
+  --llvm-toolchain-identity "$LLVM_TOOLCHAIN_ID" \
+  --request-identity "$REQUEST_ID" \
+  --linked-artifact "$LINKED_HSACO" \
+  --final-artifact "$FINAL_HSACO" \
+  --repro-result repro-gfx942.tsv > evidence.tsv
 ```
 
-Release validation requires authenticated CI expectations and the actual worker
-and artifact files. It also checks that a canonical reproducibility record
-matches the target, suite outcome, and artifact digest.
+This currently returns nonzero with a canonical blocked record. That is expected
+until the remaining typed provenance consumers exist.
 
-```console
-python3 scripts/direct-link/evidence.py validate evidence.tsv \
-  --expect-commit "$COMMIT" \
-  --expect-target gfx942 \
-  --worker-executable "$WORKER" \
-  --expect-worker-build-id "$WORKER_BUILD_ID" \
-  --expect-llvm-build-identity "$LLVM_BUILD_ID" \
-  --expect-request-identity "$REQUEST_ID_HEX" \
-  --artifact "$HSACO" \
-  --repro-result repro-gfx942.tsv
-```
-
-## Reproducibility records
-
-`reproduce.py run` executes one argv command in two newly created build
-directories. It uses a fixed locale, timezone, source-date epoch, and exact
-target. The command is executed directly without a shell. The placeholders
-`{build_dir}`, `{source_dir}`, and `{target}` are replaced in each argument.
-
-```console
-python3 scripts/direct-link/reproduce.py run \
-  --target gfx942 \
-  --artifact output/kernel.hsaco \
-  --source-dir "$PWD" \
-  --work-root /tmp \
-  -- cmake --build '{build_dir}' --target direct-link-gfx942 \
-  > repro-gfx942.tsv
-```
-
-Existing artifacts can be compared with `reproduce.py compare`. A complete
-release matrix requires canonical passing base-target records for `gfx1151`,
-`gfx942`, and `gfx950`:
-
-```console
-python3 scripts/direct-link/reproduce.py matrix \
-  repro-gfx1151.tsv repro-gfx942.tsv repro-gfx950.tsv
-```
-
-Run the CPU-only tooling suite with:
+Run the CPU-only hardening tests with:
 
 ```console
 python3 -m unittest discover -s scripts/direct-link/tests -v
+ruff check scripts/direct-link
+ruff format --check scripts/direct-link
 ```

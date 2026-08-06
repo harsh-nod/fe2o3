@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Collect and validate canonical direct-LLVM-link release evidence."""
+"""Collect fail-closed V2 evidence for the direct LLVM link release gate."""
 
 from __future__ import annotations
 
 import argparse
-import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,28 +12,37 @@ from common import (
     EvidenceError,
     decode_canonical_text,
     read_regular_file,
-    require_bounded_text,
     require_commit,
-    require_digest,
     require_reason,
     require_target,
-    sha256_file,
+    require_typed_identity,
+    typed_file_identity,
     typed_identity,
 )
+from reproduce import (
+    FINAL_ARTIFACT_DOMAIN,
+    LINKED_ARTIFACT_DOMAIN,
+    RECORD_DOMAIN as REPRO_RECORD_DOMAIN,
+    REQUEST_DOMAIN,
+    TOOLCHAIN_DOMAIN,
+    WORKER_DOMAIN,
+    parse_result,
+)
 
-SCHEMA_VERSION = "1"
-RECORD_DOMAIN = "fe2o3-direct-link-evidence-v1"
-MAX_RECORD_IDENTITY_BYTES = 128
+SCHEMA_VERSION = "2"
+RECORD_DOMAIN = "fe2o3-direct-link-evidence-v2"
+WORKER_EXECUTABLE_DOMAIN = "fe2o3-worker-executable-v1"
 SCALAR_FIELDS = (
     "schema_version",
     "git_commit",
     "target",
-    "worker_executable_sha256",
-    "worker_build_id",
-    "llvm_build_identity",
+    "worker_executable_identity",
+    "worker_identity",
+    "llvm_toolchain_identity",
     "request_identity",
-    "artifact_identity",
-    "hardware_execution_identity",
+    "linked_artifact_identity",
+    "final_artifact_identity",
+    "reproducibility_identity",
     "release_gate",
 )
 REQUIRED_SUITES = (
@@ -44,10 +52,7 @@ REQUIRED_SUITES = (
     ("hardware-execution", "hardware"),
     ("static-checks", "static"),
 )
-STATUSES = frozenset(("pass", "fail", "skipped", "unavailable"))
-_WORKER_BUILD_RE = re.compile(r"fe2o3-worker-v1-sha256-[0-9a-f]{64}\Z")
-_HARDWARE_ID_RE = re.compile(r"fe2o3-hardware-v1-sha256-[0-9a-f]{64}\Z")
-_RECORD_ID_RE = re.compile(r"fe2o3-direct-link-evidence-v1-sha256-[0-9a-f]{64}\Z")
+STATUSES = frozenset(("pass", "fail", "unavailable"))
 
 
 @dataclass(frozen=True)
@@ -56,6 +61,7 @@ class SuiteOutcome:
     evidence_class: str
     status: str
     reason: str
+    provenance_identity: str
 
 
 @dataclass(frozen=True)
@@ -75,6 +81,7 @@ class EvidenceRecord:
                         suite.evidence_class,
                         suite.status,
                         suite.reason,
+                        suite.provenance_identity,
                     )
                 )
             )
@@ -91,7 +98,7 @@ def derive_release_gate(suites: dict[str, SuiteOutcome]) -> str:
     statuses = {suite.status for suite in suites.values()}
     if "fail" in statuses:
         return "fail"
-    if statuses & {"skipped", "unavailable"}:
+    if statuses != {"pass"}:
         return "blocked"
     return "pass"
 
@@ -109,15 +116,19 @@ def validate_record(record: EvidenceRecord) -> None:
 
     scalars = record.scalars
     if scalars["schema_version"] != SCHEMA_VERSION:
-        raise EvidenceError("schema_version must be exactly 1")
+        raise EvidenceError("schema_version must be exactly 2")
     require_commit(scalars["git_commit"])
     require_target(scalars["target"])
-    require_digest(scalars["worker_executable_sha256"], "worker_executable_sha256")
-    if _WORKER_BUILD_RE.fullmatch(scalars["worker_build_id"]) is None:
-        raise EvidenceError("worker_build_id is not a canonical V1 worker identity")
-    require_bounded_text(scalars["llvm_build_identity"], "llvm_build_identity", 192)
-    require_digest(scalars["request_identity"], "request_identity")
-    require_digest(scalars["artifact_identity"], "artifact_identity")
+    for field, domain in (
+        ("worker_executable_identity", WORKER_EXECUTABLE_DOMAIN),
+        ("worker_identity", WORKER_DOMAIN),
+        ("llvm_toolchain_identity", TOOLCHAIN_DOMAIN),
+        ("request_identity", REQUEST_DOMAIN),
+        ("linked_artifact_identity", LINKED_ARTIFACT_DOMAIN),
+        ("final_artifact_identity", FINAL_ARTIFACT_DOMAIN),
+        ("reproducibility_identity", REPRO_RECORD_DOMAIN),
+    ):
+        require_typed_identity(scalars[field], domain, field)
 
     for name, expected_class in REQUIRED_SUITES:
         suite = record.suites[name]
@@ -127,20 +138,33 @@ def validate_record(record: EvidenceRecord) -> None:
             raise EvidenceError(f"suite {name} has an unknown status")
         if suite.status == "pass":
             if suite.reason != "-":
-                raise EvidenceError(f"passing suite {name} must use reason '-' ")
+                raise EvidenceError(f"passing suite {name} must use reason '-'")
+            if name != "clean-build-reproducibility":
+                raise EvidenceError(
+                    f"suite {name} cannot pass until its typed provenance parser exists"
+                )
+            require_typed_identity(
+                suite.provenance_identity,
+                REPRO_RECORD_DOMAIN,
+                "reproducibility provenance",
+            )
         else:
             require_reason(suite.reason)
+            if (
+                suite.provenance_identity != "none"
+                and name != "clean-build-reproducibility"
+            ):
+                raise EvidenceError(
+                    f"non-passing suite {name} must not assert unvalidated provenance"
+                )
 
+    reproduction = record.suites["clean-build-reproducibility"]
+    if reproduction.provenance_identity != scalars["reproducibility_identity"]:
+        raise EvidenceError("reproducibility suite does not bind its V2 record")
     hardware = record.suites["hardware-execution"]
-    hardware_identity = scalars["hardware_execution_identity"]
     if hardware.status == "pass":
-        if _HARDWARE_ID_RE.fullmatch(hardware_identity) is None:
-            raise EvidenceError(
-                "hardware pass requires a canonical hardware execution identity"
-            )
-    elif hardware_identity != "none":
         raise EvidenceError(
-            "hardware execution identity must be none when hardware did not pass"
+            "hardware pass requires the unavailable typed G7 execution parser"
         )
 
     expected_gate = derive_release_gate(record.suites)
@@ -157,24 +181,23 @@ def parse_record(path: Path) -> EvidenceRecord:
     scalars: dict[str, str] = {}
     suites: dict[str, SuiteOutcome] = {}
     record_identity: str | None = None
-
     for line_number, line in enumerate(lines, start=1):
         fields = line.split("\t")
         key = fields[0]
         if key == "suite":
-            if len(fields) != 5:
+            if len(fields) != 6:
                 raise EvidenceError(
-                    f"suite line {line_number} must contain exactly five fields"
+                    f"suite line {line_number} must contain exactly six fields"
                 )
-            _, name, evidence_class, status, reason = fields
+            _, name, evidence_class, status, reason, provenance = fields
             if name in suites:
                 raise EvidenceError(f"duplicate suite: {name}")
-            suites[name] = SuiteOutcome(name, evidence_class, status, reason)
+            suites[name] = SuiteOutcome(
+                name, evidence_class, status, reason, provenance
+            )
         elif key == "record_identity":
-            if len(fields) != 2:
-                raise EvidenceError("record_identity must contain exactly two fields")
-            if record_identity is not None:
-                raise EvidenceError("duplicate record_identity")
+            if len(fields) != 2 or record_identity is not None:
+                raise EvidenceError("duplicate or malformed record_identity")
             record_identity = fields[1]
         elif key in SCALAR_FIELDS:
             if len(fields) != 2:
@@ -186,17 +209,11 @@ def parse_record(path: Path) -> EvidenceRecord:
             scalars[key] = fields[1]
         else:
             raise EvidenceError(f"unknown field: {key}")
-
     if record_identity is None:
         raise EvidenceError("missing record_identity")
-    if (
-        len(record_identity) > MAX_RECORD_IDENTITY_BYTES
-        or _RECORD_ID_RE.fullmatch(record_identity) is None
-    ):
-        raise EvidenceError("record_identity is malformed")
-
     record = EvidenceRecord(scalars, suites)
     validate_record(record)
+    require_typed_identity(record_identity, RECORD_DOMAIN, "record_identity")
     if record.identity() != record_identity:
         raise EvidenceError(
             "record_identity does not authenticate the canonical record"
@@ -206,132 +223,185 @@ def parse_record(path: Path) -> EvidenceRecord:
     return record
 
 
-def parse_suite_argument(value: str) -> SuiteOutcome:
-    if "=" not in value:
-        raise argparse.ArgumentTypeError("suite must use NAME=STATUS[:REASON]")
-    name, outcome = value.split("=", 1)
-    if ":" in outcome:
-        status, reason = outcome.split(":", 1)
-    else:
-        status, reason = outcome, "-"
-    expected_classes = dict(REQUIRED_SUITES)
-    if name not in expected_classes:
-        raise argparse.ArgumentTypeError(f"unknown suite: {name}")
-    suite = SuiteOutcome(name, expected_classes[name], status, reason)
-    if status not in STATUSES:
-        raise argparse.ArgumentTypeError(f"unknown status for {name}: {status}")
-    if status == "pass" and reason != "-":
-        raise argparse.ArgumentTypeError("passing suites cannot carry a reason")
-    if status != "pass":
-        try:
-            require_reason(reason)
-        except EvidenceError as error:
-            raise argparse.ArgumentTypeError(str(error)) from error
-    return suite
+def validate_reproduction_bindings(
+    reproduction: object,
+    commit: str,
+    target: str,
+    toolchain: str,
+    worker: str,
+    request: str,
+    linked_artifact: str,
+    final_artifact: str,
+) -> None:
+    expected = {
+        "git_commit": commit,
+        "target": target,
+        "llvm_toolchain_identity": toolchain,
+        "worker_identity": worker,
+        "request_identity": request,
+    }
+    for field, value in expected.items():
+        if getattr(reproduction, field) != value:
+            raise EvidenceError(f"reproducibility {field} does not match evidence")
+    for field, actual in (
+        ("first_linked_artifact_identity", linked_artifact),
+        ("second_linked_artifact_identity", linked_artifact),
+        ("first_final_artifact_identity", final_artifact),
+        ("second_final_artifact_identity", final_artifact),
+    ):
+        recorded = getattr(reproduction, field)
+        if recorded != "none" and recorded != actual:
+            raise EvidenceError(f"reproducibility {field} does not match evidence")
 
 
-def collect(args: argparse.Namespace) -> int:
-    suites: dict[str, SuiteOutcome] = {}
-    for suite in args.suite:
-        if suite.name in suites:
-            raise EvidenceError(f"duplicate suite: {suite.name}")
-        suites[suite.name] = suite
+def build_record(args: argparse.Namespace) -> EvidenceRecord:
+    commit = require_commit(args.git_commit)
+    target = require_target(args.target)
+    for identity, domain, name in (
+        (args.worker_identity, WORKER_DOMAIN, "worker_identity"),
+        (args.llvm_toolchain_identity, TOOLCHAIN_DOMAIN, "llvm_toolchain_identity"),
+        (args.request_identity, REQUEST_DOMAIN, "request_identity"),
+    ):
+        require_typed_identity(identity, domain, name)
+    worker_executable = typed_file_identity(
+        WORKER_EXECUTABLE_DOMAIN, args.worker_executable
+    )
+    linked_artifact = typed_file_identity(LINKED_ARTIFACT_DOMAIN, args.linked_artifact)
+    final_artifact = typed_file_identity(FINAL_ARTIFACT_DOMAIN, args.final_artifact)
+    reproduction = parse_result(args.repro_result)
+    validate_reproduction_bindings(
+        reproduction,
+        commit,
+        target,
+        args.llvm_toolchain_identity,
+        args.worker_identity,
+        args.request_identity,
+        linked_artifact,
+        final_artifact,
+    )
+
+    suites = {
+        "clean-build-reproducibility": SuiteOutcome(
+            "clean-build-reproducibility",
+            "reproducibility",
+            reproduction.status,
+            reproduction.reason,
+            reproduction.identity(),
+        ),
+        "compile": SuiteOutcome(
+            "compile", "compile", "unavailable", "missing-g2-provenance", "none"
+        ),
+        "direct-llvm-link": SuiteOutcome(
+            "direct-llvm-link",
+            "worker",
+            "unavailable",
+            "missing-g5-g6-provenance",
+            "none",
+        ),
+        "hardware-execution": SuiteOutcome(
+            "hardware-execution",
+            "hardware",
+            "unavailable",
+            "missing-g7-hardware-provenance",
+            "none",
+        ),
+        "static-checks": SuiteOutcome(
+            "static-checks",
+            "static",
+            "unavailable",
+            "missing-static-runner-provenance",
+            "none",
+        ),
+    }
     scalars = {
         "schema_version": SCHEMA_VERSION,
-        "git_commit": args.git_commit,
-        "target": args.target,
-        "worker_executable_sha256": sha256_file(args.worker_executable),
-        "worker_build_id": args.worker_build_id,
-        "llvm_build_identity": args.llvm_build_identity,
+        "git_commit": commit,
+        "target": target,
+        "worker_executable_identity": worker_executable,
+        "worker_identity": args.worker_identity,
+        "llvm_toolchain_identity": args.llvm_toolchain_identity,
         "request_identity": args.request_identity,
-        "artifact_identity": sha256_file(args.artifact),
-        "hardware_execution_identity": args.hardware_execution_identity,
+        "linked_artifact_identity": linked_artifact,
+        "final_artifact_identity": final_artifact,
+        "reproducibility_identity": reproduction.identity(),
         "release_gate": derive_release_gate(suites),
     }
     record = EvidenceRecord(scalars, suites)
     validate_record(record)
+    return record
+
+
+def collect(args: argparse.Namespace) -> int:
+    record = build_record(args)
     sys.stdout.buffer.write(record.canonical_bytes())
-    return 0
+    return 0 if record.scalars["release_gate"] == "pass" else 1
 
 
-def validate(args: argparse.Namespace) -> int:
+def inspect(args: argparse.Namespace) -> int:
     record = parse_record(args.record)
-    expected = {
-        "git_commit": args.expect_commit,
-        "target": args.expect_target,
-        "worker_executable_sha256": sha256_file(args.worker_executable),
-        "worker_build_id": args.expect_worker_build_id,
-        "llvm_build_identity": args.expect_llvm_build_identity,
-        "request_identity": args.expect_request_identity,
-        "artifact_identity": sha256_file(args.artifact),
-    }
-    for field, value in expected.items():
-        if record.scalars[field] != value:
-            raise EvidenceError(
-                f"{field} mismatch: expected {value}, found {record.scalars[field]}"
-            )
-
-    from reproduce import parse_result
-
-    reproduction = parse_result(args.repro_result)
-    suite = record.suites["clean-build-reproducibility"]
-    if reproduction.target != record.scalars["target"]:
-        raise EvidenceError("reproducibility target does not match the evidence target")
-    if reproduction.status != suite.status or reproduction.reason != suite.reason:
-        raise EvidenceError("reproducibility outcome does not match its suite row")
-    if reproduction.status == "pass":
-        artifact_identity = record.scalars["artifact_identity"]
-        if (
-            reproduction.first_artifact_sha256 != artifact_identity
-            or reproduction.second_artifact_sha256 != artifact_identity
-        ):
-            raise EvidenceError(
-                "reproducibility result does not bind the recorded artifact identity"
-            )
     print(
-        f"direct-link evidence is canonical and pinned: {record.identity()} "
+        f"direct-link evidence is structurally canonical: {record.identity()} "
         f"gate={record.scalars['release_gate']}"
     )
     return 0
 
 
+def validate(args: argparse.Namespace) -> int:
+    record = parse_record(args.record)
+    expected = build_record(args)
+    for field in SCALAR_FIELDS[:-1]:
+        if record.scalars[field] != expected.scalars[field]:
+            raise EvidenceError(
+                f"{field} mismatch: expected {expected.scalars[field]}, "
+                f"found {record.scalars[field]}"
+            )
+    if record.suites != expected.suites:
+        raise EvidenceError("suite provenance does not match canonical runner records")
+    print(
+        f"direct-link evidence gate: {record.identity()} "
+        f"gate={record.scalars['release_gate']}"
+    )
+    return 0 if record.scalars["release_gate"] == "pass" else 1
+
+
+def add_collection_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--git-commit", required=True)
+    parser.add_argument("--target", required=True)
+    parser.add_argument("--worker-executable", required=True, type=Path)
+    parser.add_argument("--worker-identity", required=True)
+    parser.add_argument("--llvm-toolchain-identity", required=True)
+    parser.add_argument("--request-identity", required=True)
+    parser.add_argument("--linked-artifact", required=True, type=Path)
+    parser.add_argument("--final-artifact", required=True, type=Path)
+    parser.add_argument("--repro-result", required=True, type=Path)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
-
-    collect_parser = subparsers.add_parser("collect", help="emit canonical evidence")
-    collect_parser.add_argument("--git-commit", required=True)
-    collect_parser.add_argument("--target", required=True)
-    collect_parser.add_argument("--worker-executable", required=True, type=Path)
-    collect_parser.add_argument("--worker-build-id", required=True)
-    collect_parser.add_argument("--llvm-build-identity", required=True)
-    collect_parser.add_argument("--request-identity", required=True)
-    collect_parser.add_argument("--artifact", required=True, type=Path)
-    collect_parser.add_argument("--hardware-execution-identity", default="none")
-    collect_parser.add_argument(
-        "--suite", required=True, action="append", type=parse_suite_argument
+    collect_parser = subparsers.add_parser(
+        "collect", help="emit fail-closed evidence from canonical runner records"
     )
+    add_collection_arguments(collect_parser)
     collect_parser.set_defaults(handler=collect)
 
+    inspect_parser = subparsers.add_parser(
+        "inspect", help="validate structure without asserting a passing gate"
+    )
+    inspect_parser.add_argument("record", type=Path)
+    inspect_parser.set_defaults(handler=inspect)
+
     validate_parser = subparsers.add_parser(
-        "validate", help="validate canonical evidence against authenticated CI inputs"
+        "validate", help="validate pinned provenance and require a passing gate"
     )
     validate_parser.add_argument("record", type=Path)
-    validate_parser.add_argument("--expect-commit", required=True)
-    validate_parser.add_argument("--expect-target", required=True)
-    validate_parser.add_argument("--worker-executable", required=True, type=Path)
-    validate_parser.add_argument("--expect-worker-build-id", required=True)
-    validate_parser.add_argument("--expect-llvm-build-identity", required=True)
-    validate_parser.add_argument("--expect-request-identity", required=True)
-    validate_parser.add_argument("--artifact", required=True, type=Path)
-    validate_parser.add_argument("--repro-result", required=True, type=Path)
+    add_collection_arguments(validate_parser)
     validate_parser.set_defaults(handler=validate)
     return parser
 
 
 def main() -> int:
-    parser = build_parser()
-    args = parser.parse_args()
+    args = build_parser().parse_args()
     try:
         return args.handler(args)
     except EvidenceError as error:

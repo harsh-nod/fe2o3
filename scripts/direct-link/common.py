@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Shared bounded codecs for direct-link release evidence."""
+"""Shared bounded codecs and typed identities for direct-link evidence."""
 
 from __future__ import annotations
 
@@ -9,24 +9,19 @@ import re
 import stat
 from pathlib import Path
 
-MAX_RECORD_BYTES = 64 * 1024
+MAX_RECORD_BYTES = 256 * 1024
 MAX_HASHED_FILE_BYTES = 512 * 1024 * 1024
 SUPPORTED_PROCESSORS = frozenset(("gfx1151", "gfx942", "gfx950"))
 
-_DIGEST_RE = re.compile(r"[0-9a-f]{64}\Z")
 _COMMIT_RE = re.compile(r"[0-9a-f]{40}\Z")
+_DOMAIN_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,63}-v[1-9][0-9]*\Z")
 _REASON_RE = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}\Z")
 _FEATURE_RE = re.compile(r"(?:sramecc|xnack)[+-]\Z")
+_IDENTITY_MAGIC = b"FE2O3-TYPED-IDENTITY\x00\x01"
 
 
 class EvidenceError(ValueError):
     """An evidence record or its authenticated input is invalid."""
-
-
-def require_digest(value: str, name: str) -> str:
-    if _DIGEST_RE.fullmatch(value) is None:
-        raise EvidenceError(f"{name} must be exactly 64 lowercase hexadecimal digits")
-    return value
 
 
 def require_commit(value: str) -> str:
@@ -64,6 +59,54 @@ def require_target(value: str) -> str:
     return value
 
 
+def require_bounded_text(value: str, name: str, maximum: int) -> str:
+    try:
+        encoded = value.encode("ascii")
+    except UnicodeEncodeError as error:
+        raise EvidenceError(f"{name} must contain ASCII only") from error
+    if not 1 <= len(encoded) <= maximum:
+        raise EvidenceError(f"{name} is empty or exceeds {maximum} bytes")
+    if any(byte < 0x20 or byte > 0x7E for byte in encoded):
+        raise EvidenceError(f"{name} contains a control character")
+    return value
+
+
+def require_typed_identity(value: str, domain: str, name: str) -> str:
+    require_domain(domain)
+    expected_prefix = f"{domain}-sha256-"
+    if not value.startswith(expected_prefix):
+        raise EvidenceError(f"{name} must use the {domain} identity domain")
+    digest = value[len(expected_prefix) :]
+    if re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+        raise EvidenceError(f"{name} has a malformed SHA-256 digest")
+    return value
+
+
+def require_domain(domain: str) -> str:
+    if _DOMAIN_RE.fullmatch(domain) is None:
+        raise EvidenceError("identity domain is malformed")
+    return domain
+
+
+def identity_prefix(domain: str, payload_length: int) -> bytes:
+    encoded_domain = require_domain(domain).encode("ascii")
+    if payload_length < 0:
+        raise EvidenceError("identity payload length must not be negative")
+    return (
+        _IDENTITY_MAGIC
+        + len(encoded_domain).to_bytes(4, "big")
+        + encoded_domain
+        + payload_length.to_bytes(8, "big")
+    )
+
+
+def typed_identity(domain: str, payload: bytes) -> str:
+    digest = hashlib.sha256()
+    digest.update(identity_prefix(domain, len(payload)))
+    digest.update(payload)
+    return f"{domain}-sha256-{digest.hexdigest()}"
+
+
 def metadata_snapshot(metadata: os.stat_result) -> tuple[int, int, int, int, int]:
     return (
         metadata.st_dev,
@@ -74,25 +117,7 @@ def metadata_snapshot(metadata: os.stat_result) -> tuple[int, int, int, int, int
     )
 
 
-def require_bounded_text(value: str, name: str, maximum: int) -> str:
-    if not 1 <= len(value) <= maximum:
-        raise EvidenceError(f"{name} is empty or exceeds {maximum} bytes")
-    try:
-        encoded = value.encode("ascii")
-    except UnicodeEncodeError as error:
-        raise EvidenceError(f"{name} must contain ASCII only") from error
-    if len(encoded) != len(value):
-        raise EvidenceError(f"{name} must contain ASCII only")
-    if value != value.strip() or "  " in value:
-        raise EvidenceError(f"{name} has noncanonical whitespace")
-    if any(ord(character) < 0x20 or ord(character) > 0x7E for character in value):
-        raise EvidenceError(f"{name} contains a control character")
-    if "\t" in value:
-        raise EvidenceError(f"{name} contains a tab")
-    return value
-
-
-def read_regular_file(path: Path, maximum: int = MAX_RECORD_BYTES) -> bytes:
+def _open_regular(path: Path) -> int:
     flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
@@ -102,10 +127,17 @@ def read_regular_file(path: Path, maximum: int = MAX_RECORD_BYTES) -> bytes:
         raise EvidenceError(
             f"cannot open regular file {path}: {error.strerror}"
         ) from error
+    metadata = os.fstat(descriptor)
+    if not stat.S_ISREG(metadata.st_mode):
+        os.close(descriptor)
+        raise EvidenceError(f"input is not a regular file: {path}")
+    return descriptor
+
+
+def read_regular_file(path: Path, maximum: int = MAX_RECORD_BYTES) -> bytes:
+    descriptor = _open_regular(path)
     try:
         before = os.fstat(descriptor)
-        if not stat.S_ISREG(before.st_mode):
-            raise EvidenceError(f"input is not a regular file: {path}")
         if before.st_size > maximum:
             raise EvidenceError(f"input exceeds the {maximum}-byte bound: {path}")
         chunks: list[bytes] = []
@@ -129,42 +161,16 @@ def read_regular_file(path: Path, maximum: int = MAX_RECORD_BYTES) -> bytes:
         os.close(descriptor)
 
 
-def decode_canonical_text(data: bytes, name: str) -> list[str]:
-    try:
-        text = data.decode("ascii")
-    except UnicodeDecodeError as error:
-        raise EvidenceError(f"{name} must contain ASCII only") from error
-    if not text:
-        raise EvidenceError(f"{name} is empty")
-    if not text.endswith("\n"):
-        raise EvidenceError(f"{name} is truncated or lacks its final newline")
-    if "\r" in text or "\0" in text:
-        raise EvidenceError(f"{name} contains a forbidden byte")
-    lines = text[:-1].split("\n")
-    if any(not line for line in lines):
-        raise EvidenceError(f"{name} contains a blank line")
-    return lines
-
-
-def sha256_file(path: Path) -> str:
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
-    try:
-        descriptor = os.open(path, flags)
-    except OSError as error:
-        raise EvidenceError(
-            f"cannot open regular file {path}: {error.strerror}"
-        ) from error
+def typed_file_identity(domain: str, path: Path) -> str:
+    descriptor = _open_regular(path)
     try:
         before = os.fstat(descriptor)
-        if not stat.S_ISREG(before.st_mode):
-            raise EvidenceError(f"hashed input is not a regular file: {path}")
         if before.st_size > MAX_HASHED_FILE_BYTES:
             raise EvidenceError(
                 f"hashed input exceeds the {MAX_HASHED_FILE_BYTES}-byte bound: {path}"
             )
         digest = hashlib.sha256()
+        digest.update(identity_prefix(domain, before.st_size))
         total = 0
         while True:
             chunk = os.read(descriptor, 1024 * 1024)
@@ -181,10 +187,23 @@ def sha256_file(path: Path) -> str:
             after
         ):
             raise EvidenceError(f"hashed input changed while being measured: {path}")
-        return digest.hexdigest()
+        return f"{domain}-sha256-{digest.hexdigest()}"
     finally:
         os.close(descriptor)
 
 
-def typed_identity(domain: str, payload: bytes) -> str:
-    return f"{domain}-sha256-{hashlib.sha256(payload).hexdigest()}"
+def decode_canonical_text(data: bytes, name: str) -> list[str]:
+    try:
+        text = data.decode("ascii")
+    except UnicodeDecodeError as error:
+        raise EvidenceError(f"{name} must contain ASCII only") from error
+    if not text:
+        raise EvidenceError(f"{name} is empty")
+    if not text.endswith("\n"):
+        raise EvidenceError(f"{name} is truncated or lacks its final newline")
+    if "\r" in text or "\0" in text:
+        raise EvidenceError(f"{name} contains a forbidden byte")
+    lines = text[:-1].split("\n")
+    if any(not line for line in lines):
+        raise EvidenceError(f"{name} contains a blank line")
+    return lines
