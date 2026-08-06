@@ -6,6 +6,7 @@ mod generated_vecadd;
 mod loaded_kernel;
 mod prepared_launch;
 mod published_direct_link;
+mod published_hsaco_inspection;
 
 pub use argument_alias::{
     AliasAdmissionError, AllocationIdentity, AllocationProvenance, ArgumentAccess,
@@ -55,6 +56,9 @@ pub use prepared_launch::{
 };
 pub use published_direct_link::{
     PublishedDirectLinkAdmissionError, ValidatedPublishedDirectLinkSelectionV1,
+};
+pub use published_hsaco_inspection::{
+    InspectedPublishedDirectLinkHsacoV1, PublishedHsacoInspectionError,
 };
 
 /// Compiler-generated host bindings. This is an unstable implementation SPI,
