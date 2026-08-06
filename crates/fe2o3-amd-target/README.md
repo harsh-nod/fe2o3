@@ -14,6 +14,37 @@ The accepted grammar is deliberately narrow:
 - each feature may occur at most once; and
 - formatting emits features in AMD's canonical `sramecc`, then `xnack` order.
 
+## Target capabilities
+
+`AmdTargetId::capabilities` derives a canonical V1 capability record from the
+concrete processor and its target-ID features. The record includes supported
+and default wavefront widths, the maximum addressable LDS bytes for one
+workgroup, lowerable atomic scopes, and narrowly named matrix and VMEM/LDS copy
+instruction families. Its `Display` implementation and `encode_canonical`
+method emit the same deterministic text.
+
+The model deliberately distinguishes target facts from runtime facts.
+Cooperative launch is always `runtime-evidence`: HIP's observed device
+attribute and an occupancy-safe launch must authorize it. System-scope atomic
+lowering is a target fact, but a system-scope operation additionally needs
+runtime evidence that its allocation and mapping are eligible. An instruction
+family is not itself a complete high-level matrix or asynchronous-copy
+contract.
+
+```rust
+use fe2o3_amd_target::{AmdTargetId, CapabilitySupport, WavefrontWidth};
+
+let target: AmdTargetId = "gfx942".parse()?;
+let capabilities = target.capabilities()?;
+assert_eq!(capabilities.default_wavefront_width(), WavefrontWidth::Wave64);
+assert_eq!(capabilities.max_lds_bytes_per_workgroup(), 64 * 1024);
+assert_eq!(
+    capabilities.cooperative_launch(),
+    CapabilitySupport::RequiresRuntimeEvidence,
+);
+# Ok::<(), Box<dyn core::error::Error>>(())
+```
+
 ```rust
 use fe2o3_amd_target::{AmdTargetId, FeatureState};
 
@@ -55,6 +86,8 @@ The processor and feature-support tables follow
 `llvm/include/llvm/TargetParser/AMDGPUTargetParser.def` at LLVM revision
 `846473237377990d00b9c353f6a2c86116b52ea5` and must be reviewed when that
 source changes. `AmdTargetId::amdhsa_elf_flags_v4_plus` is additionally pinned
-to `llvm/include/llvm/BinaryFormat/ELF.h` at the same revision. The crate does
-not accept generic processors because their family-provision semantics are
-outside this exact-processor compatibility model.
+to `llvm/include/llvm/BinaryFormat/ELF.h` at the same revision. Capability
+profiles are pinned to `llvm/lib/Target/AMDGPU/AMDGPU.td`, `GCNProcessors.td`,
+`GCNSubtarget.h`, and `Utils/AMDGPUBaseInfo.cpp` at that revision. The crate
+does not accept generic processors because their family-provision semantics
+are outside this exact-processor compatibility model.

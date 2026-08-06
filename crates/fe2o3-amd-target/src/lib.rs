@@ -4,6 +4,14 @@
 
 use core::{fmt, str::FromStr};
 
+mod capabilities;
+
+pub use capabilities::{
+    AmdTargetCapabilities, AsyncCopyInstructionSet, AsyncCopyInstructionSets, AtomicScope,
+    AtomicScopes, CapabilityDerivationError, CapabilitySupport, MatrixInstructionSet,
+    MatrixInstructionSets, WavefrontWidth, WavefrontWidths,
+};
+
 /// Concrete canonical AMDGPU processor names understood by this crate.
 ///
 /// Membership establishes only that a spelling is recognized. It does not
@@ -90,6 +98,11 @@ impl AmdTargetId {
             AmdTargetFeature::SramEcc => self.sramecc,
             AmdTargetFeature::Xnack => self.xnack,
         }
+    }
+
+    /// Derives canonical ISA/codegen capabilities for this target.
+    pub fn capabilities(&self) -> Result<AmdTargetCapabilities, CapabilityDerivationError> {
+        AmdTargetCapabilities::derive(*self)
     }
 
     /// Returns the exact AMDHSA code-object V4+ ELF flags for this target.
