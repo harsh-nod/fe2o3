@@ -64,7 +64,8 @@ link integration rather than a GPU dispatch test:
 scripts/test-direct-llvm-worker.sh build/llvm-link-worker \
   /opt/rocm/lib/llvm/lib/cmake/llvm \
   /opt/rocm/lib/llvm/lib/cmake/lld \
-  22.0.0git /tmp/fe2o3-rocm-llvm-build-id.txt gfx942
+  22.0.0git /tmp/fe2o3-rocm-llvm-build-id.txt gfx942 \
+  "$HOME/.cargo/bin/cargo" nightly-2026-04-03
 ```
 
 The worker response is descriptive evidence. It grants no loading or launch
