@@ -164,6 +164,22 @@ pub struct DeviceFfiContractFieldsV1<'a> {
     pub semantic_identity: &'a str,
 }
 
+/// Canonical direction carried by a V1 device FFI declaration.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum DeviceFfiDirectionV1 {
+    Import,
+    Export,
+}
+
+impl DeviceFfiDirectionV1 {
+    pub const fn tag(self) -> u16 {
+        match self {
+            Self::Import => DEVICE_FFI_DIRECTION_IMPORT_V1,
+            Self::Export => DEVICE_FFI_DIRECTION_EXPORT_V1,
+        }
+    }
+}
+
 /// Canonical scalar types allowed in a V1 device FFI physical ABI.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum DeviceFfiScalarTypeV1 {
@@ -317,6 +333,7 @@ impl ValidatedDeviceFfiContractGrammarV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum DeviceFfiGrammarError {
+    InvalidDirection,
     InvalidSymbol,
     InvalidPhysicalAbi,
     TooManyPhysicalAbiArguments,
@@ -327,6 +344,7 @@ pub enum DeviceFfiGrammarError {
 impl fmt::Display for DeviceFfiGrammarError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidDirection => formatter.write_str("noncanonical device FFI direction"),
             Self::InvalidSymbol => formatter.write_str("invalid external symbol"),
             Self::InvalidPhysicalAbi => {
                 formatter.write_str("physical ABI is empty, oversized, or noncanonical")
@@ -345,6 +363,17 @@ impl fmt::Display for DeviceFfiGrammarError {
 }
 
 impl Error for DeviceFfiGrammarError {}
+
+/// Parses the exact canonical decimal direction spelling used in V1 markers.
+pub fn parse_device_ffi_direction_v1(
+    direction: &str,
+) -> Result<DeviceFfiDirectionV1, DeviceFfiGrammarError> {
+    match direction {
+        "1" => Ok(DeviceFfiDirectionV1::Import),
+        "2" => Ok(DeviceFfiDirectionV1::Export),
+        _ => Err(DeviceFfiGrammarError::InvalidDirection),
+    }
+}
 
 /// Validates the exact canonical grammar for an external FFI symbol.
 pub fn validate_device_ffi_symbol_v1(symbol: &str) -> Result<(), DeviceFfiGrammarError> {
@@ -905,6 +934,22 @@ mod tests {
 
     #[test]
     fn shared_device_ffi_grammar_rejects_noncanonical_spellings() {
+        assert_eq!(
+            parse_device_ffi_direction_v1("1"),
+            Ok(DeviceFfiDirectionV1::Import)
+        );
+        assert_eq!(
+            parse_device_ffi_direction_v1("2"),
+            Ok(DeviceFfiDirectionV1::Export)
+        );
+        for direction in ["", "0", "01", "02", "+1", " 1", "1 ", "3"] {
+            assert_eq!(
+                parse_device_ffi_direction_v1(direction),
+                Err(DeviceFfiGrammarError::InvalidDirection),
+                "{direction:?}"
+            );
+        }
+
         for symbol in ["", "9bad", "bad symbol", "x\n", &"x".repeat(129)] {
             assert_eq!(
                 validate_device_ffi_symbol_v1(symbol),

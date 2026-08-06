@@ -2,10 +2,10 @@
 
 use reserved_fe2o3_symbols::{
     DEVICE_FFI_DIRECTION_EXPORT_V1, DEVICE_FFI_DIRECTION_IMPORT_V1, DEVICE_FFI_MARKER_PREFIX_V1,
-    DeviceFfiContractFieldsV1, DeviceFfiContractIdV1, MAX_DEVICE_FFI_ARGUMENTS_V1,
-    MAX_DEVICE_FFI_TARGET_BYTES_V1, derive_device_ffi_contract_id_v1, parse_device_ffi_effects_v1,
-    parse_device_ffi_physical_abi_v1, validate_device_ffi_effect_abi_v1,
-    validate_device_ffi_symbol_v1,
+    DeviceFfiContractFieldsV1, DeviceFfiContractIdV1, DeviceFfiDirectionV1,
+    MAX_DEVICE_FFI_ARGUMENTS_V1, MAX_DEVICE_FFI_TARGET_BYTES_V1, derive_device_ffi_contract_id_v1,
+    parse_device_ffi_direction_v1, parse_device_ffi_effects_v1, parse_device_ffi_physical_abi_v1,
+    validate_device_ffi_effect_abi_v1, validate_device_ffi_symbol_v1,
 };
 use rustc_abi::ExternAbi;
 use rustc_ast::LitKind;
@@ -23,30 +23,7 @@ use std::fmt;
 
 const MAX_DEVICE_FFI_CONTRACTS: usize = 128;
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub(crate) enum DeviceFfiDirection {
-    Import,
-    Export,
-}
-
-impl DeviceFfiDirection {
-    fn from_tag(tag: u16) -> Result<Self, DeviceFfiError> {
-        match tag {
-            DEVICE_FFI_DIRECTION_IMPORT_V1 => Ok(Self::Import),
-            DEVICE_FFI_DIRECTION_EXPORT_V1 => Ok(Self::Export),
-            _ => Err(DeviceFfiError::new(format!(
-                "unknown device FFI direction {tag}"
-            ))),
-        }
-    }
-
-    const fn tag(self) -> u16 {
-        match self {
-            Self::Import => DEVICE_FFI_DIRECTION_IMPORT_V1,
-            Self::Export => DEVICE_FFI_DIRECTION_EXPORT_V1,
-        }
-    }
-}
+pub(crate) type DeviceFfiDirection = DeviceFfiDirectionV1;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct DeviceFfiContract {
@@ -116,8 +93,10 @@ fn lower_hex(bytes: &[u8]) -> String {
 pub(crate) enum DeviceFfiLinkRole {
     /// The definition must be assigned to a typed external input by G5.
     RequiresExternalDefinition,
-    /// The definition is emitted by rustc into the compiler LLVM bitcode input.
-    DefinesInRustLlvmBitcode,
+    /// A future exact compiler-module input must provide the definition.
+    ///
+    /// This requirement does not assert that the current backend emits such a module.
+    RequiresCompilerModuleDefinition,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -131,8 +110,8 @@ pub(crate) struct ClosedDeviceFfiContract {
 /// Inert, locally authenticated compiler evidence after device graph traversal.
 ///
 /// This private value does not construct a G1 link request. A later bridge must
-/// bind external provider artifact identities and exact bitcode/object kinds
-/// before translating it into plan-bound symbol and input-kind closures.
+/// bind external provider artifact identities and exact compiler-module and
+/// external-provider input kinds before any future protocol integration.
 /// Code-object version, effects, semantic identity, and expected link roles are
 /// declaration assertions, represented by [`AssertionOnly`], not derived facts.
 ///
@@ -1005,10 +984,8 @@ fn parse_marker(marker: &str) -> Result<DeviceFfiContract, DeviceFfiError> {
     if fields.len() != 9 {
         return Err(DeviceFfiError::new("marker has the wrong field count"));
     }
-    let direction_tag = fields[0]
-        .parse::<u16>()
-        .map_err(|_| DeviceFfiError::new("direction is not a canonical integer"))?;
-    let direction = DeviceFfiDirection::from_tag(direction_tag)?;
+    let direction = parse_device_ffi_direction_v1(fields[0])
+        .map_err(|error| DeviceFfiError::new(error.to_string()))?;
     let id = DeviceFfiContractIdV1::from_hex(fields[1])
         .map_err(|error| DeviceFfiError::new(format!("invalid contract identity: {error}")))?;
     validate_device_ffi_symbol_v1(fields[2])
@@ -1078,7 +1055,7 @@ fn validate_contract_set<'tcx>(
             owner: declaration.owner.clone(),
             link_role_assertion: AssertionOnly::new(match declaration.contract.direction {
                 DeviceFfiDirection::Import => DeviceFfiLinkRole::RequiresExternalDefinition,
-                DeviceFfiDirection::Export => DeviceFfiLinkRole::DefinesInRustLlvmBitcode,
+                DeviceFfiDirection::Export => DeviceFfiLinkRole::RequiresCompilerModuleDefinition,
             }),
         })
         .collect::<Vec<_>>();
@@ -1182,7 +1159,9 @@ pub(crate) fn validate_local_closure<'tcx>(
                 owner: declaration.owner.clone(),
                 link_role_assertion: AssertionOnly::new(match declaration.contract.direction {
                     DeviceFfiDirection::Import => DeviceFfiLinkRole::RequiresExternalDefinition,
-                    DeviceFfiDirection::Export => DeviceFfiLinkRole::DefinesInRustLlvmBitcode,
+                    DeviceFfiDirection::Export => {
+                        DeviceFfiLinkRole::RequiresCompilerModuleDefinition
+                    }
                 }),
             })
             .collect(),
@@ -1203,7 +1182,7 @@ fn close_contracts(
     for declaration in &declarations {
         let expected_role = match declaration.contract.direction {
             DeviceFfiDirection::Import => DeviceFfiLinkRole::RequiresExternalDefinition,
-            DeviceFfiDirection::Export => DeviceFfiLinkRole::DefinesInRustLlvmBitcode,
+            DeviceFfiDirection::Export => DeviceFfiLinkRole::RequiresCompilerModuleDefinition,
         };
         if declaration
             .link_role_assertion
@@ -1432,7 +1411,7 @@ mod tests {
     ) -> ClosedDeviceFfiContract {
         let link_role_assertion = AssertionOnly::new(match contract.direction {
             DeviceFfiDirection::Import => DeviceFfiLinkRole::RequiresExternalDefinition,
-            DeviceFfiDirection::Export => DeviceFfiLinkRole::DefinesInRustLlvmBitcode,
+            DeviceFfiDirection::Export => DeviceFfiLinkRole::RequiresCompilerModuleDefinition,
         });
         ClosedDeviceFfiContract {
             owner: DeviceFfiSourceOwner {
@@ -1465,6 +1444,23 @@ mod tests {
         assert_eq!(parsed.direction, DeviceFfiDirection::Export);
         assert_eq!(parsed.symbol, "helper");
         assert_eq!(parsed.target, "gfx942");
+    }
+
+    #[test]
+    fn marker_direction_requires_exact_canonical_decimal_spelling() {
+        let marker = marker(
+            DEVICE_FFI_DIRECTION_IMPORT_V1,
+            "helper",
+            "C()->unit[size=0,align=1]",
+        );
+        for direction in ["01", "+1", " 1", "1 ", "0", "3"] {
+            let malformed = marker.replacen("|1|", &format!("|{direction}|"), 1);
+            let error = parse_marker(&malformed).unwrap_err();
+            assert!(
+                error.reason.contains("noncanonical device FFI direction"),
+                "unexpected error for {direction:?}: {error}"
+            );
+        }
     }
 
     #[test]
@@ -1612,7 +1608,7 @@ mod tests {
             first.exports[0]
                 .link_role_assertion
                 .asserted_for_consistency_check(),
-            &DeviceFfiLinkRole::DefinesInRustLlvmBitcode
+            &DeviceFfiLinkRole::RequiresCompilerModuleDefinition
         );
         assert_eq!(first.exports[1].owner.crate_name, "provider_b");
     }
@@ -1822,7 +1818,7 @@ mod tests {
             "external_add",
         );
         swapped.link_role_assertion =
-            AssertionOnly::new(DeviceFfiLinkRole::DefinesInRustLlvmBitcode);
+            AssertionOnly::new(DeviceFfiLinkRole::RequiresCompilerModuleDefinition);
         let reachable = BTreeSet::from([swapped.contract.id]);
         assert!(
             close_contracts(vec![swapped], &reachable)
