@@ -21,7 +21,7 @@ partial, experimental, planned, and N/A rows. The supplemental audit also
 accounts for capabilities demonstrated elsewhere in the repository.
 
 The fe2o3 current-state column is based on commit
-`fb7d3fcd69b632d9fc154fda2240ee81257bc414`.
+`37eee8f15b985190449ece7a93f4ab386aa3cb18`.
 <!-- parity-status:baseline:end -->
 
 At that commit fe2o3 has a HIP runtime, explicit unsafe raw module and launch

@@ -18,8 +18,11 @@ kernel. `hip/bidirectional.hip` defines the imported device function and a HIP
 kernel that imports the Rust function. `device_ffi.h` fixes the external ABI.
 
 `rust-device/link-surrogate.amdgpu.ll` is a deterministic surrogate for the
-Rust compiler output so the checked-in fixture can test LLVM linking before the
-production compiler handoff is public. It is not compiler-derived evidence.
+Rust compiler output so the checked-in bidirectional fixture remains stable and
+independent of the narrow production compiler handoff. The handoff can now
+carry a bounded compiler-derived textual module to Worker V2, but it does not
+yet replace this fixture's two-direction source or provider closure. The
+surrogate is not compiler-derived evidence.
 The positive check requires target `gfx942:sramecc+:xnack-`, code-object version
 5, exact device-function and protected kernel symbols, both `.kd` symbols, a
 closed linked module, LLVM verification, and AMDGPU object generation.

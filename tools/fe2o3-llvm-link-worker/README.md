@@ -104,3 +104,10 @@ The worker response is descriptive evidence. It grants no loading or launch
 authority. The local `/home/harsh/llvm-project/build` tree is an LLVM 24
 development CMake package with a separately reporting `llvm-config`; it is not
 the installed ROCm LLVM 22 toolchain and can validate source/API mechanics only.
+
+The opt-in rustc `kernel-ir-worker-v2` path also supplies textual LLVM IR from
+one consumed compiler handoff. `cargo-fe2o3` first obtains GenericLink V1 output,
+then requires a compiler-FFI-aware V2 request against the same pinned worker to
+produce byte-identical output. The current gfx942 source integration stops at
+that inert evidence identity; it intentionally has no authenticated publication
+adapter and does not load or launch the linked bytes.

@@ -16,6 +16,11 @@ and explicit output and process limits. Unknown fields, defaults, relative
 paths, identity mismatches, and noncanonical collections are rejected before
 rustc is spawned.
 
+`final_symbols` names the exact public dynamic-symbol closure expected in the
+linked code object. For each AMDHSA kernel this includes both the kernel symbol
+and its `<kernel>.kd` descriptor symbol; omitting or adding a symbol fails output
+inspection rather than weakening closure equality.
+
 Each `units` selector binds `crate_name`, rustc's exact `source` path spelling,
 and the absolute `working_directory`. An unselected compilation receives no
 managed attempt, allowing inherited host and dependency compilations with no

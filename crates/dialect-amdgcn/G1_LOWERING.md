@@ -43,7 +43,10 @@ processor, invoke LLVM, produce an artifact, or grant launch authority.
 
 `lower_compiler_module_to_llvm_ir` reuses the same structured preflight and body
 lowering to produce one textual LLVM module from one verified kernel-IR
-`Module`. It is additive and is not wired into the production emitter.
+`Module`. The opt-in `kernel-ir-worker-v2` producer invokes this path after
+binding its fixed G1 launch and target wave contracts, then publishes the text
+only as an attempt-scoped inert compiler handoff. The legacy default emitter
+and the specialized `kernel-ir-v1` path remain separate.
 
 The module path emits kernel entries in canonical kernel-ID order, emits every
 non-entry definition and external declaration once in canonical function-ID
