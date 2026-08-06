@@ -11,8 +11,9 @@ use reserved_fe2o3_symbols::{
     artifact_pointer_symbol_v1, derive_kernel_binding_id_v1, host_kernel_symbol_v1,
 };
 use syn::{
-    Data, DeriveInput, Expr, FnArg, GenericArgument, ItemFn, Lit, Meta, Pat, PathArguments,
-    ReturnType, Token, Type, Visibility, parse::Parser, parse_macro_input, punctuated::Punctuated,
+    Data, DeriveInput, Expr, FnArg, ForeignItem, GenericArgument, ItemFn, ItemForeignMod, Lit,
+    Meta, Pat, PathArguments, ReturnType, Token, Type, Visibility, parse::Parser,
+    parse_macro_input, punctuated::Punctuated,
 };
 
 #[proc_macro_derive(DeviceCopy)]
@@ -827,13 +828,679 @@ fn validate_kernel_signature(input: &ItemFn) -> syn::Result<()> {
     Ok(())
 }
 
+#[proc_macro_attribute]
+pub fn device_export(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let options = match parse_device_ffi_options(attr.into()) {
+        Ok(options) => options,
+        Err(error) => return error.to_compile_error().into(),
+    };
+    let input = parse_macro_input!(item as ItemFn);
+    expand_device_export(input, options)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+#[proc_macro_attribute]
+pub fn device_import(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let options = match parse_device_ffi_options(attr.into()) {
+        Ok(options) => options,
+        Err(error) => return error.to_compile_error().into(),
+    };
+    let input = parse_macro_input!(item as ItemForeignMod);
+    expand_device_import(input, options)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct DeviceFfiOptions {
+    symbol: String,
+    target: String,
+    code_object: u16,
+    effects: String,
+    semantic: String,
+}
+
+const DEVICE_FFI_OPTION_HELP: &str = "device FFI requires `symbol = \"...\", target = \"gfx...\", code_object = 4|5|6, effects = \"...\", semantic = \"<64 lowercase hex bytes>\"`";
+const MAX_DEVICE_FFI_ARGUMENTS: usize = 32;
+
+fn parse_device_ffi_options(tokens: proc_macro2::TokenStream) -> syn::Result<DeviceFfiOptions> {
+    let arguments = Punctuated::<Meta, Token![,]>::parse_terminated.parse2(tokens)?;
+    let mut symbol = None;
+    let mut target = None;
+    let mut code_object = None;
+    let mut effects = None;
+    let mut semantic = None;
+
+    for argument in arguments {
+        let Meta::NameValue(value) = argument else {
+            return Err(syn::Error::new_spanned(argument, DEVICE_FFI_OPTION_HELP));
+        };
+        let slot = if value.path.is_ident("symbol") {
+            &mut symbol
+        } else if value.path.is_ident("target") {
+            &mut target
+        } else if value.path.is_ident("effects") {
+            &mut effects
+        } else if value.path.is_ident("semantic") {
+            &mut semantic
+        } else if value.path.is_ident("code_object") {
+            if code_object.is_some() {
+                return Err(syn::Error::new_spanned(
+                    value,
+                    "duplicate device FFI option",
+                ));
+            }
+            let Expr::Lit(literal) = &value.value else {
+                return Err(syn::Error::new_spanned(value, DEVICE_FFI_OPTION_HELP));
+            };
+            let Lit::Int(literal) = &literal.lit else {
+                return Err(syn::Error::new_spanned(value, DEVICE_FFI_OPTION_HELP));
+            };
+            let parsed = literal.base10_parse::<u16>()?;
+            if !matches!(parsed, 4..=6) {
+                return Err(syn::Error::new_spanned(
+                    literal,
+                    "device FFI code_object must be exactly 4, 5, or 6",
+                ));
+            }
+            code_object = Some(parsed);
+            continue;
+        } else {
+            return Err(syn::Error::new_spanned(value, DEVICE_FFI_OPTION_HELP));
+        };
+        if slot.is_some() {
+            return Err(syn::Error::new_spanned(
+                value,
+                "duplicate device FFI option",
+            ));
+        }
+        let Expr::Lit(literal) = &value.value else {
+            return Err(syn::Error::new_spanned(value, DEVICE_FFI_OPTION_HELP));
+        };
+        let Lit::Str(literal) = &literal.lit else {
+            return Err(syn::Error::new_spanned(value, DEVICE_FFI_OPTION_HELP));
+        };
+        *slot = Some(literal.value());
+    }
+
+    let options = DeviceFfiOptions {
+        symbol: symbol.ok_or_else(|| {
+            syn::Error::new(proc_macro2::Span::call_site(), DEVICE_FFI_OPTION_HELP)
+        })?,
+        target: target.ok_or_else(|| {
+            syn::Error::new(proc_macro2::Span::call_site(), DEVICE_FFI_OPTION_HELP)
+        })?,
+        code_object: code_object.ok_or_else(|| {
+            syn::Error::new(proc_macro2::Span::call_site(), DEVICE_FFI_OPTION_HELP)
+        })?,
+        effects: effects.ok_or_else(|| {
+            syn::Error::new(proc_macro2::Span::call_site(), DEVICE_FFI_OPTION_HELP)
+        })?,
+        semantic: semantic.ok_or_else(|| {
+            syn::Error::new(proc_macro2::Span::call_site(), DEVICE_FFI_OPTION_HELP)
+        })?,
+    };
+    validate_device_ffi_symbol(&options.symbol)?;
+    validate_device_ffi_target(&options.target)?;
+    validate_device_ffi_effects(&options.effects)?;
+    validate_lower_hex_256(&options.semantic, "semantic identity")?;
+    Ok(options)
+}
+
+fn expand_device_export(
+    input: ItemFn,
+    options: DeviceFfiOptions,
+) -> syn::Result<proc_macro2::TokenStream> {
+    let device_import = fe2o3_device_import()?;
+    expand_device_export_with_import(input, options, &device_import)
+}
+
+fn expand_device_export_with_import(
+    input: ItemFn,
+    options: DeviceFfiOptions,
+    device_import: &proc_macro2::TokenStream,
+) -> syn::Result<proc_macro2::TokenStream> {
+    validate_device_ffi_signature(&input.sig, &input.vis, true)?;
+    validate_device_ffi_attributes(&input.attrs)?;
+    let physical_abi = canonical_device_ffi_signature(&input.sig)?;
+    validate_effect_abi_compatibility(&options.effects, &physical_abi)?;
+    let direction = reserved_fe2o3_symbols::DEVICE_FFI_DIRECTION_EXPORT_V1;
+    let contract = device_ffi_contract(direction, &options, &physical_abi);
+    let marker = reserved_fe2o3_symbols::device_ffi_marker_v1(
+        contract,
+        device_ffi_fields(direction, &options, &physical_abi),
+    );
+    let contract_hex = contract.to_hex();
+    let registration_ident = format_ident!(
+        "{}{}",
+        reserved_fe2o3_symbols::DEVICE_FFI_REGISTRATION_PREFIX_V1,
+        contract_hex
+    );
+    let function_ident = &input.sig.ident;
+    let symbol = syn::LitStr::new(&options.symbol, function_ident.span());
+    let marker = syn::LitStr::new(&marker, function_ident.span());
+    let registration = device_ffi_registration_tokens(
+        direction,
+        &options,
+        &physical_abi,
+        &contract_hex,
+        quote!(#function_ident),
+        &input.sig,
+    );
+    let abi_assertions = device_ffi_abi_assertions(&input.sig, device_import)?;
+
+    Ok(quote! {
+        #[doc = #marker]
+        #[unsafe(export_name = #symbol)]
+        #input
+
+        #[doc(hidden)]
+        #[allow(non_upper_case_globals)]
+        #[used]
+        static #registration_ident: #registration
+
+        #abi_assertions
+    })
+}
+
+fn expand_device_import(
+    input: ItemForeignMod,
+    options: DeviceFfiOptions,
+) -> syn::Result<proc_macro2::TokenStream> {
+    let device_import = fe2o3_device_import()?;
+    expand_device_import_with_import(input, options, &device_import)
+}
+
+fn expand_device_import_with_import(
+    mut input: ItemForeignMod,
+    options: DeviceFfiOptions,
+    device_import: &proc_macro2::TokenStream,
+) -> syn::Result<proc_macro2::TokenStream> {
+    if input.unsafety.is_none() {
+        return Err(syn::Error::new_spanned(
+            &input.abi,
+            "#[device_import] requires an `unsafe extern \"C\"` block",
+        ));
+    }
+    validate_c_abi(input.abi.name.as_ref(), &input.abi)?;
+    if input.items.len() != 1 {
+        return Err(syn::Error::new_spanned(
+            &input,
+            "#[device_import] requires exactly one foreign function declaration",
+        ));
+    }
+    let inherited_abi = input.abi.clone();
+    let ForeignItem::Fn(function) = &mut input.items[0] else {
+        return Err(syn::Error::new_spanned(
+            &input.items[0],
+            "#[device_import] accepts only a foreign function declaration",
+        ));
+    };
+    let mut effective_signature = function.sig.clone();
+    effective_signature.abi = Some(inherited_abi);
+    validate_device_ffi_signature(&effective_signature, &function.vis, false)?;
+    validate_device_ffi_attributes(&function.attrs)?;
+    let physical_abi = canonical_device_ffi_signature(&function.sig)?;
+    validate_effect_abi_compatibility(&options.effects, &physical_abi)?;
+    let direction = reserved_fe2o3_symbols::DEVICE_FFI_DIRECTION_IMPORT_V1;
+    let contract = device_ffi_contract(direction, &options, &physical_abi);
+    let marker = reserved_fe2o3_symbols::device_ffi_marker_v1(
+        contract,
+        device_ffi_fields(direction, &options, &physical_abi),
+    );
+    let contract_hex = contract.to_hex();
+    let registration_ident = format_ident!(
+        "{}{}",
+        reserved_fe2o3_symbols::DEVICE_FFI_REGISTRATION_PREFIX_V1,
+        contract_hex
+    );
+    let function_ident = function.sig.ident.clone();
+    let symbol = syn::LitStr::new(&options.symbol, function_ident.span());
+    let marker = syn::LitStr::new(&marker, function_ident.span());
+    function.attrs.push(syn::parse_quote!(#[doc = #marker]));
+    function
+        .attrs
+        .push(syn::parse_quote!(#[link_name = #symbol]));
+    let registration = device_ffi_registration_tokens(
+        direction,
+        &options,
+        &physical_abi,
+        &contract_hex,
+        quote!(#function_ident),
+        &function.sig,
+    );
+    let abi_assertions = device_ffi_abi_assertions(&function.sig, device_import)?;
+
+    Ok(quote! {
+        #input
+
+        #[doc(hidden)]
+        #[allow(non_upper_case_globals)]
+        #[used]
+        static #registration_ident: #registration
+
+        #abi_assertions
+    })
+}
+
+fn device_ffi_fields<'a>(
+    direction: u16,
+    options: &'a DeviceFfiOptions,
+    physical_abi: &'a str,
+) -> reserved_fe2o3_symbols::DeviceFfiContractFieldsV1<'a> {
+    reserved_fe2o3_symbols::DeviceFfiContractFieldsV1 {
+        direction,
+        symbol: &options.symbol,
+        calling_convention: "C",
+        code_object_version: options.code_object,
+        target: &options.target,
+        physical_abi,
+        effects: &options.effects,
+        semantic_identity: &options.semantic,
+    }
+}
+
+fn device_ffi_contract(
+    direction: u16,
+    options: &DeviceFfiOptions,
+    physical_abi: &str,
+) -> reserved_fe2o3_symbols::DeviceFfiContractIdV1 {
+    reserved_fe2o3_symbols::derive_device_ffi_contract_id_v1(device_ffi_fields(
+        direction,
+        options,
+        physical_abi,
+    ))
+}
+
+fn device_ffi_registration_tokens(
+    direction: u16,
+    options: &DeviceFfiOptions,
+    physical_abi: &str,
+    contract_hex: &str,
+    function: proc_macro2::TokenStream,
+    signature: &syn::Signature,
+) -> proc_macro2::TokenStream {
+    let magic = reserved_fe2o3_symbols::DEVICE_FFI_REGISTRATION_MAGIC_V1;
+    let version = reserved_fe2o3_symbols::DEVICE_FFI_REGISTRATION_VERSION_V1;
+    let contract = syn::LitStr::new(contract_hex, signature.ident.span());
+    let symbol = syn::LitStr::new(&options.symbol, signature.ident.span());
+    let target = syn::LitStr::new(&options.target, signature.ident.span());
+    let physical_abi = syn::LitStr::new(physical_abi, signature.ident.span());
+    let effects = syn::LitStr::new(&options.effects, signature.ident.span());
+    let semantic = syn::LitStr::new(&options.semantic, signature.ident.span());
+    let code_object = options.code_object;
+    let inputs = signature.inputs.iter().map(|argument| match argument {
+        FnArg::Typed(argument) => argument.ty.as_ref(),
+        FnArg::Receiver(_) => unreachable!("device FFI methods were rejected"),
+    });
+    let output = &signature.output;
+    quote! {
+        (
+            u64, u16, u16, &'static str, &'static str, &'static str, u16,
+            &'static str, &'static str, &'static str, &'static str,
+            unsafe extern "C" fn(#(#inputs),*) #output,
+        ) = (
+            #magic, #version, #direction, #contract, #symbol, "C", #code_object,
+            #target, #physical_abi, #effects, #semantic, #function,
+        );
+    }
+}
+
+fn device_ffi_abi_assertions(
+    signature: &syn::Signature,
+    device_import: &proc_macro2::TokenStream,
+) -> syn::Result<proc_macro2::TokenStream> {
+    let inputs = signature.inputs.iter().map(|argument| match argument {
+        FnArg::Typed(argument) => argument.ty.as_ref(),
+        FnArg::Receiver(_) => unreachable!("device FFI methods were rejected"),
+    });
+    let outputs = match &signature.output {
+        ReturnType::Default => Vec::new(),
+        ReturnType::Type(_, ty) if matches!(ty.as_ref(), Type::Tuple(tuple) if tuple.elems.is_empty()) => {
+            Vec::new()
+        }
+        ReturnType::Type(_, ty) => vec![ty.as_ref()],
+    };
+    Ok(quote! {
+        const _: () = {
+            #device_import
+            fn __fe2o3_assert_device_ffi_abi_v1<T: __fe2o3_kernel_device::DeviceFfiAbiTypeV1>() {}
+            #(let _ = __fe2o3_assert_device_ffi_abi_v1::<#inputs>;)*
+            #(let _ = __fe2o3_assert_device_ffi_abi_v1::<#outputs>;)*
+        };
+    })
+}
+
+fn validate_device_ffi_signature(
+    signature: &syn::Signature,
+    visibility: &Visibility,
+    export: bool,
+) -> syn::Result<()> {
+    if !matches!(visibility, Visibility::Public(_)) {
+        return Err(syn::Error::new_spanned(
+            visibility,
+            "device FFI declarations must be public",
+        ));
+    }
+    if export && signature.unsafety.is_none() {
+        return Err(syn::Error::new_spanned(
+            signature,
+            "#[device_export] requires `pub unsafe extern \"C\" fn`; the attribute grants no safe-call authority",
+        ));
+    }
+    if signature.constness.is_some() || signature.asyncness.is_some() {
+        return Err(syn::Error::new_spanned(
+            signature,
+            "device FFI declarations cannot be const or async",
+        ));
+    }
+    if signature.variadic.is_some() {
+        return Err(syn::Error::new_spanned(
+            signature,
+            "variadic device FFI is unsupported",
+        ));
+    }
+    if !signature.generics.params.is_empty() || signature.generics.where_clause.is_some() {
+        return Err(syn::Error::new_spanned(
+            &signature.generics,
+            "device FFI roots require a concrete, nongeneric instance identity",
+        ));
+    }
+    validate_c_abi(
+        signature.abi.as_ref().and_then(|abi| abi.name.as_ref()),
+        signature,
+    )?;
+    if signature.inputs.len() > MAX_DEVICE_FFI_ARGUMENTS {
+        return Err(syn::Error::new_spanned(
+            &signature.inputs,
+            "device FFI has more than 32 physical arguments",
+        ));
+    }
+    for argument in &signature.inputs {
+        let FnArg::Typed(argument) = argument else {
+            return Err(syn::Error::new_spanned(
+                argument,
+                "device FFI methods are unsupported",
+            ));
+        };
+        canonical_device_ffi_type(&argument.ty)?;
+    }
+    if let ReturnType::Type(_, result) = &signature.output
+        && !matches!(result.as_ref(), Type::Tuple(tuple) if tuple.elems.is_empty())
+    {
+        canonical_device_ffi_type(result)?;
+    }
+    Ok(())
+}
+
+fn validate_c_abi<T: quote::ToTokens>(name: Option<&syn::LitStr>, tokens: T) -> syn::Result<()> {
+    if name.is_some_and(|name| name.value() == "C") {
+        Ok(())
+    } else {
+        Err(syn::Error::new_spanned(
+            tokens,
+            "device FFI requires the non-unwinding `extern \"C\"` calling convention",
+        ))
+    }
+}
+
+fn validate_device_ffi_attributes(attributes: &[syn::Attribute]) -> syn::Result<()> {
+    for attribute in attributes {
+        let forbidden = [
+            "no_mangle",
+            "export_name",
+            "link_name",
+            "target_feature",
+            "naked",
+            "track_caller",
+        ]
+        .into_iter()
+        .any(|name| attribute.path().is_ident(name));
+        if forbidden || attribute.path().is_ident("unsafe") {
+            return Err(syn::Error::new_spanned(
+                attribute,
+                "device FFI macros exclusively control symbol, ABI, and unwind-relevant attributes",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn canonical_device_ffi_signature(signature: &syn::Signature) -> syn::Result<String> {
+    let mut value = String::from("C(");
+    for (index, argument) in signature.inputs.iter().enumerate() {
+        if index != 0 {
+            value.push(',');
+        }
+        let FnArg::Typed(argument) = argument else {
+            unreachable!("device FFI methods were rejected");
+        };
+        value.push_str(&canonical_device_ffi_type(&argument.ty)?);
+    }
+    value.push_str(")->");
+    match &signature.output {
+        ReturnType::Default => value.push_str("unit[size=0,align=1]"),
+        ReturnType::Type(_, result) if matches!(result.as_ref(), Type::Tuple(tuple) if tuple.elems.is_empty()) =>
+        {
+            value.push_str("unit[size=0,align=1]");
+        }
+        ReturnType::Type(_, result) => value.push_str(&canonical_device_ffi_type(result)?),
+    }
+    if value.len() > reserved_fe2o3_symbols::MAX_DEVICE_FFI_PHYSICAL_ABI_BYTES_V1 {
+        return Err(syn::Error::new_spanned(
+            signature,
+            "device FFI physical ABI exceeds its bounded canonical representation",
+        ));
+    }
+    Ok(value)
+}
+
+fn canonical_device_ffi_type(ty: &Type) -> syn::Result<String> {
+    let Type::Path(path) = ty else {
+        return Err(unsupported_device_ffi_type(ty));
+    };
+    if path.qself.is_some() {
+        return Err(unsupported_device_ffi_type(ty));
+    }
+    let segment = path.path.segments.last().expect("type path is nonempty");
+    if path.path.segments.len() == 1 && matches!(segment.arguments, PathArguments::None) {
+        let (size, name) = match segment.ident.to_string().as_str() {
+            "i8" => (1, "i8"),
+            "u8" => (1, "u8"),
+            "i16" => (2, "i16"),
+            "u16" => (2, "u16"),
+            "i32" => (4, "i32"),
+            "u32" => (4, "u32"),
+            "i64" => (8, "i64"),
+            "u64" => (8, "u64"),
+            "f32" => (4, "f32"),
+            "f64" => (8, "f64"),
+            _ => return Err(unsupported_device_ffi_type(ty)),
+        };
+        return Ok(format!("{name}[size={size},align={size}]"));
+    }
+
+    let (mutable, address_space) = match segment.ident.to_string().as_str() {
+        "DeviceGlobalConstPtr" => (false, "global"),
+        "DeviceGlobalMutPtr" => (true, "global"),
+        "DeviceConstantPtr" => (false, "constant"),
+        "DeviceWorkgroupConstPtr" => (false, "workgroup"),
+        "DeviceWorkgroupMutPtr" => (true, "workgroup"),
+        "DevicePrivateConstPtr" => (false, "private"),
+        "DevicePrivateMutPtr" => (true, "private"),
+        _ => return Err(unsupported_device_ffi_type(ty)),
+    };
+    let PathArguments::AngleBracketed(arguments) = &segment.arguments else {
+        return Err(unsupported_device_ffi_type(ty));
+    };
+    if arguments.args.len() != 1 {
+        return Err(unsupported_device_ffi_type(ty));
+    }
+    let Some(GenericArgument::Type(element)) = arguments.args.first() else {
+        return Err(unsupported_device_ffi_type(ty));
+    };
+    let element = canonical_device_ffi_type(element)?;
+    let Some(element) = element.split('[').next() else {
+        return Err(unsupported_device_ffi_type(ty));
+    };
+    if element.contains("ptr") {
+        return Err(unsupported_device_ffi_type(ty));
+    }
+    Ok(format!(
+        "{}_ptr<{address_space},{element}>[size=8,align=8,as={address_space}]",
+        if mutable { "mut" } else { "const" },
+    ))
+}
+
+fn unsupported_device_ffi_type<T: quote::ToTokens>(ty: T) -> syn::Error {
+    syn::Error::new_spanned(
+        ty,
+        "unsupported device FFI type; use fixed-width scalars or fe2o3 address-space pointer wrappers (references, aggregates, trait objects, and function pointers are rejected)",
+    )
+}
+
+fn validate_device_ffi_symbol(symbol: &str) -> syn::Result<()> {
+    let mut bytes = symbol.bytes();
+    let valid = symbol.len() <= reserved_fe2o3_symbols::MAX_DEVICE_FFI_SYMBOL_BYTES_V1
+        && bytes
+            .next()
+            .is_some_and(|byte| byte.is_ascii_alphabetic() || matches!(byte, b'_' | b'.' | b'$'))
+        && bytes.all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'$' | b'@' | b'-')
+        });
+    if valid {
+        Ok(())
+    } else {
+        Err(syn::Error::new(
+            proc_macro2::Span::call_site(),
+            "device FFI symbol is empty, too long, or contains noncanonical bytes",
+        ))
+    }
+}
+
+fn validate_device_ffi_target(target: &str) -> syn::Result<()> {
+    if target.len() > reserved_fe2o3_symbols::MAX_DEVICE_FFI_TARGET_BYTES_V1 {
+        return Err(syn::Error::new(
+            proc_macro2::Span::call_site(),
+            "device FFI target is too long",
+        ));
+    }
+    let mut parts = target.split(':');
+    let processor = parts.next().unwrap_or_default();
+    if !processor.starts_with("gfx")
+        || processor.len() <= 3
+        || !processor[3..]
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(syn::Error::new(
+            proc_macro2::Span::call_site(),
+            "device FFI target must be a canonical concrete `gfx...` target",
+        ));
+    }
+    let mut previous = None;
+    let mut names = std::collections::BTreeSet::new();
+    for feature in parts {
+        let valid = matches!(feature, "sramecc+" | "sramecc-" | "xnack+" | "xnack-");
+        if !valid
+            || previous.is_some_and(|previous: &str| previous >= feature)
+            || !names.insert(&feature[..feature.len() - 1])
+        {
+            return Err(syn::Error::new(
+                proc_macro2::Span::call_site(),
+                "device FFI target features must be unique and canonically sorted",
+            ));
+        }
+        previous = Some(feature);
+    }
+    Ok(())
+}
+
+fn validate_device_ffi_effects(effects: &str) -> syn::Result<()> {
+    if effects.len() > reserved_fe2o3_symbols::MAX_DEVICE_FFI_EFFECT_BYTES_V1 {
+        return Err(syn::Error::new(
+            proc_macro2::Span::call_site(),
+            "device FFI effects are too long",
+        ));
+    }
+    if effects == "none" {
+        return Ok(());
+    }
+    let mut previous = None;
+    for effect in effects.split(',') {
+        let valid = matches!(
+            effect,
+            "atomic_global"
+                | "atomic_workgroup"
+                | "barrier_workgroup"
+                | "read_constant"
+                | "read_global"
+                | "read_private"
+                | "read_workgroup"
+                | "write_global"
+                | "write_private"
+                | "write_workgroup"
+        );
+        if !valid || previous.is_some_and(|previous: &str| previous >= effect) {
+            return Err(syn::Error::new(
+                proc_macro2::Span::call_site(),
+                "device FFI effects must use unique, canonically sorted V1 effect names",
+            ));
+        }
+        previous = Some(effect);
+    }
+    Ok(())
+}
+
+fn validate_lower_hex_256(value: &str, field: &str) -> syn::Result<()> {
+    if value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        && value.bytes().any(|byte| byte != b'0')
+    {
+        Ok(())
+    } else {
+        Err(syn::Error::new(
+            proc_macro2::Span::call_site(),
+            format!("device FFI {field} must contain exactly 64 lowercase hexadecimal bytes"),
+        ))
+    }
+}
+
+fn validate_effect_abi_compatibility(effects: &str, abi: &str) -> syn::Result<()> {
+    for effect in effects.split(',').filter(|effect| *effect != "none") {
+        let required = match effect {
+            "read_constant" => "const_ptr<constant,",
+            "read_global" => "ptr<global,",
+            "read_private" => "ptr<private,",
+            "read_workgroup" => "ptr<workgroup,",
+            "write_global" | "atomic_global" => "mut_ptr<global,",
+            "write_private" => "mut_ptr<private,",
+            "write_workgroup" | "atomic_workgroup" => "mut_ptr<workgroup,",
+            "barrier_workgroup" => continue,
+            _ => unreachable!("effect grammar was validated"),
+        };
+        if !abi.contains(required) {
+            return Err(syn::Error::new(
+                proc_macro2::Span::call_site(),
+                format!("device FFI effect `{effect}` has no compatible physical pointer argument"),
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        KernelMode, KernelOptions, core_import_for, device_import_for,
-        expand_device_copy_with_core_import, expand_kernel_with_device_import,
-        expand_kernel_with_imports, host_import_for, parse_kernel_options,
-        validate_typed_kernel_signature, validate_typed_kernel_symbol_stem,
+        DeviceFfiOptions, KernelMode, KernelOptions, canonical_device_ffi_signature,
+        core_import_for, device_import_for, expand_device_copy_with_core_import,
+        expand_device_export_with_import, expand_device_import_with_import,
+        expand_kernel_with_device_import, expand_kernel_with_imports, host_import_for,
+        parse_device_ffi_options, parse_kernel_options, validate_typed_kernel_signature,
+        validate_typed_kernel_symbol_stem,
     };
     use proc_macro_crate::FoundCrate;
     use reserved_fe2o3_symbols::{
@@ -841,7 +1508,128 @@ mod tests {
         artifact_pointer_symbol_v1, derive_crate_binding_id_v1, derive_kernel_binding_id_v1,
         host_kernel_symbol_v1,
     };
-    use syn::{ItemFn, parse_quote};
+    use syn::{ItemFn, ItemForeignMod, parse_quote};
+
+    fn ffi_options() -> DeviceFfiOptions {
+        DeviceFfiOptions {
+            symbol: "reviewed_helper".to_owned(),
+            target: "gfx942".to_owned(),
+            code_object: 5,
+            effects: "read_global,write_global".to_owned(),
+            semantic: "1111111111111111111111111111111111111111111111111111111111111111".to_owned(),
+        }
+    }
+
+    #[test]
+    fn device_ffi_options_and_physical_abi_are_canonical() {
+        let parsed = parse_device_ffi_options(quote::quote!(
+            symbol = "reviewed_helper",
+            target = "gfx942",
+            code_object = 5,
+            effects = "read_global,write_global",
+            semantic = "1111111111111111111111111111111111111111111111111111111111111111"
+        ))
+        .unwrap();
+        assert_eq!(parsed, ffi_options());
+
+        let function: ItemFn = parse_quote!(
+            pub unsafe extern "C" fn helper(
+                input: DeviceGlobalConstPtr<f32>,
+                output: DeviceGlobalMutPtr<f32>,
+                count: u64,
+            ) -> u32 {
+                0
+            }
+        );
+        assert_eq!(
+            canonical_device_ffi_signature(&function.sig).unwrap(),
+            "C(const_ptr<global,f32>[size=8,align=8,as=global],mut_ptr<global,f32>[size=8,align=8,as=global],u64[size=8,align=8])->u32[size=4,align=4]"
+        );
+    }
+
+    #[test]
+    fn device_ffi_expansions_bind_symbol_and_registration() {
+        let device_import = device_import_for(FoundCrate::Name("device".to_owned()));
+        let export: ItemFn = parse_quote!(
+            pub unsafe extern "C" fn helper(value: u32) -> u32 {
+                value
+            }
+        );
+        let expanded = expand_device_export_with_import(
+            export,
+            DeviceFfiOptions {
+                effects: "none".to_owned(),
+                ..ffi_options()
+            },
+            &device_import,
+        )
+        .unwrap()
+        .to_string();
+        assert!(expanded.contains("export_name = \"reviewed_helper\""));
+        assert!(expanded.contains("__fe2o3_device_ffi_registration_v1_"));
+        assert!(expanded.contains("__fe2o3_device_ffi_v1|2|"));
+
+        let import: ItemForeignMod = parse_quote!(
+            unsafe extern "C" {
+                pub fn helper(value: u32) -> u32;
+            }
+        );
+        let expanded = expand_device_import_with_import(
+            import,
+            DeviceFfiOptions {
+                effects: "none".to_owned(),
+                ..ffi_options()
+            },
+            &device_import,
+        )
+        .unwrap()
+        .to_string();
+        assert!(expanded.contains("link_name = \"reviewed_helper\""));
+        assert!(expanded.contains("__fe2o3_device_ffi_v1|1|"));
+    }
+
+    #[test]
+    fn malformed_device_ffi_options_fail_closed() {
+        for options in [
+            quote::quote!(
+                symbol = "bad|symbol",
+                target = "gfx942",
+                code_object = 5,
+                effects = "none",
+                semantic = "1111111111111111111111111111111111111111111111111111111111111111"
+            ),
+            quote::quote!(
+                symbol = "valid",
+                target = "gfx942:xnack-:sramecc+",
+                code_object = 5,
+                effects = "none",
+                semantic = "1111111111111111111111111111111111111111111111111111111111111111"
+            ),
+            quote::quote!(
+                symbol = "valid",
+                target = "gfx942",
+                code_object = 7,
+                effects = "none",
+                semantic = "1111111111111111111111111111111111111111111111111111111111111111"
+            ),
+            quote::quote!(
+                symbol = "valid",
+                target = "gfx942",
+                code_object = 5,
+                effects = "write_global,read_global",
+                semantic = "1111111111111111111111111111111111111111111111111111111111111111"
+            ),
+            quote::quote!(
+                symbol = "valid",
+                target = "gfx942",
+                code_object = 5,
+                effects = "none",
+                semantic = "ABC"
+            ),
+        ] {
+            assert!(parse_device_ffi_options(options).is_err());
+        }
+    }
 
     #[test]
     fn derive_emits_all_safety_obligations() {

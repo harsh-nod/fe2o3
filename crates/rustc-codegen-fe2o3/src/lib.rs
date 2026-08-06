@@ -15,6 +15,7 @@ extern crate rustc_span;
 
 mod amdgpu_llvm;
 mod collector;
+mod device_ffi;
 mod frontend_record_bridge;
 mod host_object;
 mod kernel_ir_codegen;

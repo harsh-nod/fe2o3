@@ -1,0 +1,5 @@
+error: device FFI roots require a concrete, nongeneric instance identity
+  --> tests/device_ffi_ui/fail/device_ffi_generic_root.rs:10:34
+   |
+10 | pub unsafe extern "C" fn exported<T>(value: T) {
+   |                                  ^^^

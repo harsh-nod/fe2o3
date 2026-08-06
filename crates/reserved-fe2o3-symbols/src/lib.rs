@@ -41,6 +41,25 @@ pub const KERNEL_REGISTRATION_V1_FIELD_COUNT: usize = 6;
 /// function pointer. Typed registrations must use this version.
 pub const KERNEL_REGISTRATION_V2_FIELD_COUNT: usize = 8;
 
+/// Final-path-segment prefix for device FFI registration statics.
+pub const DEVICE_FFI_REGISTRATION_PREFIX_V1: &str = "__fe2o3_device_ffi_registration_v1_";
+/// Prefix carried in compiler-visible documentation metadata on an FFI item.
+pub const DEVICE_FFI_MARKER_PREFIX_V1: &str = "__fe2o3_device_ffi_v1|";
+/// ASCII `FE2O3FFI`, interpreted as a little-endian `u64`.
+pub const DEVICE_FFI_REGISTRATION_MAGIC_V1: u64 = 0x4946_4633_4f32_4546;
+pub const DEVICE_FFI_REGISTRATION_VERSION_V1: u16 = 1;
+pub const DEVICE_FFI_DIRECTION_IMPORT_V1: u16 = 1;
+pub const DEVICE_FFI_DIRECTION_EXPORT_V1: u16 = 2;
+/// `(magic, version, direction, contract, symbol, cc, code-object,
+/// target, physical ABI, effects, semantic identity, function pointer)`.
+pub const DEVICE_FFI_REGISTRATION_V1_FIELD_COUNT: usize = 12;
+pub const MAX_DEVICE_FFI_SYMBOL_BYTES_V1: usize = 128;
+pub const MAX_DEVICE_FFI_TARGET_BYTES_V1: usize = 128;
+pub const MAX_DEVICE_FFI_PHYSICAL_ABI_BYTES_V1: usize = 2_048;
+pub const MAX_DEVICE_FFI_EFFECT_BYTES_V1: usize = 256;
+
+const DEVICE_FFI_CONTRACT_DOMAIN_V1: &[u8] = b"fe2o3.device-ffi-contract.v1\0";
+
 /// Environment variable populated by the fe2o3 rustc wrapper with the exact
 /// compilation unit's crate binding ID.
 pub const CRATE_BINDING_ID_ENV_V1: &str = "FE2O3_CRATE_BINDING_ID_V1";
@@ -107,6 +126,81 @@ impl KernelBindingIdV1 {
     pub fn to_hex(self) -> String {
         encode_binding_hex(self.0)
     }
+}
+
+/// Full SHA-256 identity of one exact device FFI declaration.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct DeviceFfiContractIdV1([u8; BINDING_ID_BYTES]);
+
+impl DeviceFfiContractIdV1 {
+    pub const fn from_bytes(bytes: [u8; BINDING_ID_BYTES]) -> Self {
+        Self(bytes)
+    }
+
+    pub const fn as_bytes(self) -> [u8; BINDING_ID_BYTES] {
+        self.0
+    }
+
+    pub fn from_hex(value: &str) -> Result<Self, BindingIdError> {
+        parse_binding_hex(value).map(Self)
+    }
+
+    pub fn to_hex(self) -> String {
+        encode_binding_hex(self.0)
+    }
+}
+
+/// Canonical fields hashed into a [`DeviceFfiContractIdV1`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DeviceFfiContractFieldsV1<'a> {
+    pub direction: u16,
+    pub symbol: &'a str,
+    pub calling_convention: &'a str,
+    pub code_object_version: u16,
+    pub target: &'a str,
+    pub physical_abi: &'a str,
+    pub effects: &'a str,
+    pub semantic_identity: &'a str,
+}
+
+/// Derives the collision-resistant identity for one canonical FFI declaration.
+///
+/// The fixed V1 safety policy (`nounwind` and `nopanic`) is part of the hash
+/// domain. Callers must validate field grammar and bounds before derivation.
+pub fn derive_device_ffi_contract_id_v1(
+    fields: DeviceFfiContractFieldsV1<'_>,
+) -> DeviceFfiContractIdV1 {
+    let mut digest = Sha256::new();
+    digest.update(DEVICE_FFI_CONTRACT_DOMAIN_V1);
+    digest.update(fields.direction.to_le_bytes());
+    update_field(&mut digest, fields.symbol.as_bytes());
+    update_field(&mut digest, fields.calling_convention.as_bytes());
+    digest.update(fields.code_object_version.to_le_bytes());
+    update_field(&mut digest, fields.target.as_bytes());
+    update_field(&mut digest, fields.physical_abi.as_bytes());
+    update_field(&mut digest, fields.effects.as_bytes());
+    update_field(&mut digest, fields.semantic_identity.as_bytes());
+    update_field(&mut digest, b"nounwind;nopanic");
+    DeviceFfiContractIdV1(digest.finalize().into())
+}
+
+/// Encodes a bounded compiler marker. Fields use a grammar that excludes `|`.
+pub fn device_ffi_marker_v1(
+    id: DeviceFfiContractIdV1,
+    fields: DeviceFfiContractFieldsV1<'_>,
+) -> String {
+    format!(
+        "{DEVICE_FFI_MARKER_PREFIX_V1}{}|{}|{}|{}|{}|{}|{}|{}|{}",
+        fields.direction,
+        id.to_hex(),
+        fields.symbol,
+        fields.calling_convention,
+        fields.code_object_version,
+        fields.target,
+        fields.physical_abi,
+        fields.effects,
+        fields.semantic_identity,
+    )
 }
 
 /// Error returned for a noncanonical binding ID.
@@ -297,5 +391,33 @@ mod tests {
             assert!(CrateBindingIdV1::from_hex(invalid).is_err(), "{invalid}");
             assert!(KernelBindingIdV1::from_hex(invalid).is_err(), "{invalid}");
         }
+    }
+
+    #[test]
+    fn device_ffi_registration_and_identity_are_stable_and_bound() {
+        assert_eq!(DEVICE_FFI_REGISTRATION_MAGIC_V1.to_le_bytes(), *b"FE2O3FFI");
+        assert_eq!(DEVICE_FFI_REGISTRATION_VERSION_V1, 1);
+        assert_eq!(DEVICE_FFI_REGISTRATION_V1_FIELD_COUNT, 12);
+        let fields = DeviceFfiContractFieldsV1 {
+            direction: DEVICE_FFI_DIRECTION_EXPORT_V1,
+            symbol: "helper",
+            calling_convention: "C",
+            code_object_version: 5,
+            target: "gfx942",
+            physical_abi: "C(u32[size=4,align=4])->unit[size=0,align=1]",
+            effects: "none",
+            semantic_identity: "1111111111111111111111111111111111111111111111111111111111111111",
+        };
+        let id = derive_device_ffi_contract_id_v1(fields);
+        let marker = device_ffi_marker_v1(id, fields);
+        assert!(marker.starts_with("__fe2o3_device_ffi_v1|2|"));
+        assert!(marker.contains(&id.to_hex()));
+
+        let changed = derive_device_ffi_contract_id_v1(DeviceFfiContractFieldsV1 {
+            direction: DEVICE_FFI_DIRECTION_IMPORT_V1,
+            ..fields
+        });
+        assert_ne!(id, changed);
+        assert_eq!(DeviceFfiContractIdV1::from_hex(&id.to_hex()).unwrap(), id);
     }
 }

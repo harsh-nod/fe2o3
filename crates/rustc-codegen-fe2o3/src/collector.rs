@@ -60,8 +60,10 @@ impl fmt::Display for CollectError {
 
 impl std::error::Error for CollectError {}
 
-pub fn count_kernels_in_cgus<'tcx>(tcx: TyCtxt<'tcx>, _cgus: &[CodegenUnit<'tcx>]) -> usize {
+pub fn count_kernels_in_cgus<'tcx>(tcx: TyCtxt<'tcx>, cgus: &[CodegenUnit<'tcx>]) -> usize {
     registration_candidates(tcx).len()
+        + crate::device_ffi::count_exports_in_cgus(tcx, cgus)
+            .max(crate::device_ffi::count_local_registration_candidates(tcx))
 }
 
 pub fn collect_device_functions<'tcx>(
@@ -70,6 +72,31 @@ pub fn collect_device_functions<'tcx>(
     verbose: bool,
 ) -> Result<CollectionResult<'tcx>, CollectError> {
     let mut collector = DeviceCollector::new(tcx, verbose);
+
+    let ffi_declarations =
+        crate::device_ffi::collect_declarations(tcx, cgus).map_err(|error| CollectError {
+            message: error.to_string(),
+        })?;
+    for declaration in ffi_declarations {
+        if declaration.contract.direction == crate::device_ffi::DeviceFfiDirection::Export {
+            if verbose {
+                eprintln!(
+                    "[collector] standalone device export: {} -> {} ({})",
+                    tcx.def_path_str(declaration.instance.def_id()),
+                    declaration.contract.symbol,
+                    declaration.contract.id.to_hex(),
+                );
+            }
+            collector.add_device_export(declaration.instance, declaration.contract.symbol);
+        } else if verbose {
+            eprintln!(
+                "[collector] declared device import: {} -> {} ({})",
+                tcx.def_path_str(declaration.instance.def_id()),
+                declaration.contract.symbol,
+                declaration.contract.id.to_hex(),
+            );
+        }
+    }
 
     for root in kernel_roots(tcx, cgus).map_err(CollectError::from)? {
         let instance = root.target;
@@ -848,6 +875,7 @@ struct DeviceCollector<'tcx> {
     used_export_names: BTreeSet<String>,
     worklist: VecDeque<CollectedFunction<'tcx>>,
     result: Vec<CollectedFunction<'tcx>>,
+    expected_target: String,
     verbose: bool,
 }
 
@@ -860,7 +888,29 @@ impl<'tcx> DeviceCollector<'tcx> {
             used_export_names: BTreeSet::new(),
             worklist: VecDeque::new(),
             result: Vec::new(),
+            expected_target: std::env::var("FE2O3_TARGET")
+                .ok()
+                .filter(|target| !target.trim().is_empty())
+                .unwrap_or_else(|| "gfx1100".to_owned()),
             verbose,
+        }
+    }
+
+    fn add_device_export(&mut self, instance: Instance<'tcx>, export_name: String) {
+        let identity = self.instance_identity(instance);
+        if self.seen.insert(identity.clone()) {
+            self.call_chains
+                .insert(identity, vec![self.instance_label(instance)]);
+            self.used_export_names.insert(export_name.clone());
+            self.worklist.push_back(CollectedFunction {
+                instance,
+                is_kernel: false,
+                export_name,
+                logical_name: None,
+                typed_profile: None,
+                kernel_binding: None,
+                typed_layout_identities: None,
+            });
         }
     }
 
@@ -941,6 +991,36 @@ impl<'tcx> DeviceCollector<'tcx> {
             return Ok(());
         };
 
+        let normalized_args = self.tcx.instantiate_and_normalize_erasing_regions(
+            caller.args,
+            TypingEnv::fully_monomorphized(),
+            EarlyBinder::bind(*args),
+        );
+        let ffi_instance = Instance::try_resolve(
+            self.tcx,
+            TypingEnv::fully_monomorphized(),
+            *def_id,
+            normalized_args,
+        )
+        .ok()
+        .flatten();
+        if let Some(instance) = ffi_instance
+            && let Some(contract) =
+                crate::device_ffi::contract_for_instance(self.tcx, instance, &self.expected_target)
+                    .map_err(|error| self.reachable_error(caller, &error.to_string(), None))?
+            && contract.direction == crate::device_ffi::DeviceFfiDirection::Import
+        {
+            if self.verbose {
+                eprintln!(
+                    "[collector] external device import: {} -> {} ({})",
+                    self.tcx.def_path_str(instance.def_id()),
+                    contract.symbol,
+                    contract.id.to_hex(),
+                );
+            }
+            return Ok(());
+        }
+
         match self.should_collect_from_crate(*def_id) {
             CollectDecision::Collect => {}
             CollectDecision::SkipIntentional => return Ok(()),
@@ -958,11 +1038,7 @@ impl<'tcx> DeviceCollector<'tcx> {
             }
         }
 
-        let args = self.tcx.instantiate_and_normalize_erasing_regions(
-            caller.args,
-            TypingEnv::fully_monomorphized(),
-            EarlyBinder::bind(*args),
-        );
+        let args = normalized_args;
 
         let resolved = match Instance::try_resolve(
             self.tcx,

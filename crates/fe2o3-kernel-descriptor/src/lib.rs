@@ -5,6 +5,7 @@ mod decode;
 mod digest;
 mod encode;
 mod error;
+pub mod ffi_contract;
 mod model;
 mod requirements_v2;
 mod wire_v2;

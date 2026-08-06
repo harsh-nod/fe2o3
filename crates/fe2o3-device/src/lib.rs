@@ -10,12 +10,17 @@
 
 use core::marker::PhantomData;
 
+pub mod ffi;
 pub mod lds;
 pub mod sync;
 pub mod thread;
 pub mod wave;
 
-pub use fe2o3_macros::kernel;
+pub use fe2o3_macros::{device_export, device_import, kernel};
+pub use ffi::{
+    DeviceConstantPtr, DeviceFfiAbiTypeV1, DeviceGlobalConstPtr, DeviceGlobalMutPtr,
+    DevicePrivateConstPtr, DevicePrivateMutPtr, DeviceWorkgroupConstPtr, DeviceWorkgroupMutPtr,
+};
 pub use lds::{
     DynamicLds, DynamicLdsError, LdsElement, LdsInitialized, LdsUninitialized,
     MAX_DYNAMIC_LDS_ALIGNMENT, WorkgroupLdsScope,

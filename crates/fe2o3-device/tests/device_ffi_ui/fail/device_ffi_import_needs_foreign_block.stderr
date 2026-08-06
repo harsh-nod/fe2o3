@@ -1,0 +1,5 @@
+error: expected `extern`
+  --> tests/device_ffi_ui/fail/device_ffi_import_needs_foreign_block.rs:10:1
+   |
+10 | pub unsafe extern "C" fn imported(value: u32) -> u32 {
+   | ^^^
