@@ -30,9 +30,19 @@
 //! diagnostics only, so later publication at the same names cannot change an earlier result.
 
 mod attempt;
+mod link_publication;
 
 pub use attempt::{AttemptCodecError, BuildAttempt, BuildInvocation, BuildSession};
 use attempt::{AttemptPhase, AttemptRegistry, MAX_ATTEMPT_BYTES, StartAttemptOutcome};
+pub use link_publication::{
+    AtomicPublicationIdentityV1, CanonicalLinkRequestIdentityV1, FinalizationIdentityV1,
+    FinalizedOutputIdentityV1, IdentityKindV1, InvalidationReasonV1, KernelSetIdentityV1,
+    LinkPublicationCatalogV1, LinkPublicationCodecError, LinkPublicationPhaseV1,
+    LinkPublicationRecordV1, LinkPublicationScopeV1, LinkPublicationStateV1,
+    LinkedOutputIdentityV1, MAX_LINK_PUBLICATION_RECORD_BYTES, MAX_LINK_PUBLICATION_SCOPES,
+    PackageIdentityV1, PinnedWorkerIdentityV1, PublicationOutcomeV1, PublishedLinkArtifactV1,
+    RecoveryOutcomeV1, TargetIdentityV1, ValidatedResponseIdentityV1,
+};
 use rustix::fd::{AsRawFd, OwnedFd};
 use rustix::fs::{
     AtFlags, Dir, FileType, FlockOperation, Mode, OFlags, flock, fstat, fsync, mkdirat, open,
