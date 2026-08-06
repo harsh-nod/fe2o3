@@ -16,6 +16,7 @@ mod manifest;
 mod proof;
 mod proof_decode;
 mod proof_encode;
+mod rust_layout;
 mod selection;
 
 pub use abi::{
@@ -54,4 +55,12 @@ pub use proof::{
 };
 pub use proof_decode::ProofDecodeError;
 pub use proof_encode::{MAX_PROOF_RECORD_BYTES, PROOF_RECORD_MAGIC, PROOF_RECORD_VERSION};
+pub use rust_layout::{
+    MAX_RUST_LAYOUT_ALIGNMENT, MAX_RUST_LAYOUT_BYTES, MAX_RUST_LAYOUT_COMPONENTS,
+    RUST_LAYOUT_EVIDENCE_DOMAIN_V1, RUST_LAYOUT_EVIDENCE_VERSION_V1, RUST_TYPE_EVIDENCE_DOMAIN_V1,
+    RustDisjointIndexSpaceV1, RustLayoutEvidenceError, RustLayoutEvidenceV1,
+    RustPhysicalComponentKindV1, RustPhysicalComponentV1, RustPointerMutabilityV1,
+    RustScalarElementTypeV1, RustSourceTypeShapeV1, RustTypeEvidenceV1, RustZstRoleV1,
+    RustcAbiClassV1,
+};
 pub use selection::{DeclaredTargetMismatch, KernelSelectionError, SelectedNativeKernel};
