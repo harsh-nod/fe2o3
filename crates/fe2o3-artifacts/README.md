@@ -304,14 +304,36 @@ does not invent the required G5 package lease/current-publication witness or the
 G7 authenticated HSACO inspection witness. Both remain blocking prerequisites
 for any authoritative path.
 
-The bridge and `LinkPublicationCatalogV1` remain inert models. They perform no
-filesystem I/O, do not reconstruct a catalog from durable bytes, do not
-authenticate measurements or transformation claims, and do not connect the
-existing filesystem transaction to direct-link publication. That integration
-must retain the provenance-preserving handoff, obtain the separately owned G5
-and G7 witnesses, then persist catalog and artifact state under the artifact
-lock with crash-safe recovery before the project can claim durable exactly-once
-linked-artifact publication.
+The bridge and `LinkPublicationCatalogV1` remain inert models and authenticate
+neither measurements nor transformation claims. The
+`fe2o3-artifact-transaction` durable direct-link adapter consumes only the
+opaque `ManifestClaimDirectLinkDurablePlanHandoffV1`, commits a domain-separated
+identity of its complete plan before work, records every ordered transition
+under the artifact lock, and publishes exact SHA-256-verified finalized bytes
+through a content-addressed file plus canonical record. Legacy bridge values
+and provenance-erasing diagnostic scope claims cannot enter that adapter path.
+Plans, returned descriptor snapshots, and recovered snapshots remain
+non-authorizing: none grants package ownership, module loading, symbol lookup,
+ABI acceptance, or kernel launch authority. The separately owned G5 package
+lease/current-publication witness and G7 authenticated HSACO inspection witness
+remain prerequisites for any authoritative path.
+
+Durable V1 requires an already existing output directory whose parent topology
+was durably provisioned by the caller. It writes and syncs journal bytes under
+a unique ignored temp name before atomically exposing a complete redo record;
+recovery never interprets partial temp bytes. The first externally supplied
+generation observed for a scope may be arbitrary, while subsequent generations
+must be contiguous. Ordinary work failures are returned only after a terminal
+invalidation record is durable. Interrupted invalidation returns a durability
+error and permits retry only when recovery proves the exact complete plan.
+
+These guarantees assume a cooperative process lock, Linux descriptor-relative
+filesystem behavior, truthful `fsync`, and atomic local-filesystem rename.
+Processes that mutate the directory without taking the lock and storage that
+does not honor those primitives remain outside the model. V1 deliberately does
+not scan or delete abandoned temp, staging, artifact, redo, or quarantine
+entries. Such entries can consume unbounded disk space and require a separately
+trusted operator garbage-collection or repair facility.
 
 ## V1 wire format
 
