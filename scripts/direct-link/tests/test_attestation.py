@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
+import socket
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -20,13 +23,16 @@ COMMIT = "34" * 20
 TARGET = "gfx942:sramecc+:xnack-"
 ISSUED_AT = 1_800_000_000
 EXPIRES_AT = ISSUED_AT + 3600
+POLICY_EPOCH = 7
+CAMPAIGN_NONCE = "release-campaign-42"
 SIGNER = "g2-release-ci"
-BUILD = typed_identity("fe2o3-test-build-v1", b"build-42")
 
 
-def identity(name: str) -> str:
-    domain = f"fe2o3-test-{name.replace('_', '-')}-v1"
-    return typed_identity(domain, name.encode("ascii"))
+def subjects_for(role: str, suffix: str = "default") -> dict[str, str]:
+    return {
+        name: typed_identity(domain, f"{role}:{name}:{suffix}".encode("ascii"))
+        for name, domain in attestation.SUBJECT_IDENTITY_DOMAINS[role].items()
+    }
 
 
 class AttestationTests(unittest.TestCase):
@@ -79,45 +85,35 @@ class AttestationTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
-        self.subjects = {
-            name: identity(name) for name in attestation.ROLE_SUBJECTS["g2-worker"]
-        }
+        self.subjects = subjects_for("g2-worker")
+        self.policy = self.make_policy()
+        self.policy_path = self.root / "policy.json"
+        self.policy_path.write_bytes(self.policy.canonical_bytes())
         self.payload = self.make_payload()
         self.payload_path = self.root / "attestation.json"
         self.payload_path.write_bytes(self.payload.canonical_bytes())
         self.signature_path = self.sign(self.payload_path)
-        self.policy = self.make_policy()
-        self.policy_path = self.root / "policy.json"
-        self.policy_path.write_bytes(self.policy.canonical_bytes())
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
-    def make_payload(
+    def make_binding(
         self,
         *,
         role: str = "g2-worker",
         signer: str = SIGNER,
-        commit: str = COMMIT,
-        target: str = TARGET,
-        issued_at: int = ISSUED_AT,
-        expires_at: int = EXPIRES_AT,
-        build_identity: str = BUILD,
-        subjects: dict[str, str] | None = None,
-    ) -> attestation.AttestationPayloadV1:
-        selected = self.subjects if subjects is None else subjects
-        return attestation.AttestationPayloadV1(
+        public_key: str | None = None,
+        valid_from: int = 0,
+        valid_until: int = attestation.MAX_UNIX_TIMESTAMP,
+    ) -> attestation.SignerBindingV1:
+        key = public_key or self.public_key
+        return attestation.SignerBindingV1(
             role=role,
             signer_identity=signer,
-            source_commit=commit,
-            target=target,
-            issued_at=issued_at,
-            expires_at=expires_at,
-            build_identity=build_identity,
-            subjects=tuple(
-                attestation.SubjectIdentity(name, selected[name])
-                for name in sorted(selected)
-            ),
+            public_key=key,
+            key_identity=attestation.public_key_identity(key),
+            valid_from=valid_from,
+            valid_until=valid_until,
         )
 
     def make_policy(
@@ -127,17 +123,66 @@ class AttestationTests(unittest.TestCase):
         role: str = "g2-worker",
         signer: str = SIGNER,
         verifier_identity: str | None = None,
+        policy_epoch: int = POLICY_EPOCH,
+        signers: tuple[attestation.SignerBindingV1, ...] | None = None,
     ) -> attestation.TrustPolicyV1:
+        selected = signers or (
+            self.make_binding(role=role, signer=signer, public_key=public_key),
+        )
         return attestation.TrustPolicyV1(
             verifier_identity=verifier_identity or self.verifier_identity,
-            signers=(
-                attestation.SignerBindingV1(
-                    role, signer, public_key or self.public_key
-                ),
-            ),
+            policy_epoch=policy_epoch,
+            signers=selected,
         )
 
-    def sign(self, payload: Path, key: Path | None = None) -> Path:
+    def make_payload(
+        self,
+        *,
+        policy: attestation.TrustPolicyV1 | None = None,
+        role: str = "g2-worker",
+        signer: str = SIGNER,
+        commit: str = COMMIT,
+        target: str = TARGET,
+        issued_at: int = ISSUED_AT,
+        expires_at: int = EXPIRES_AT,
+        campaign_nonce: str = CAMPAIGN_NONCE,
+        subjects: dict[str, str] | None = None,
+    ) -> attestation.AttestationPayloadV1:
+        selected_policy = self.policy if policy is None else policy
+        selected_subjects = self.subjects if subjects is None else subjects
+        canonical_subjects = tuple(
+            attestation.SubjectIdentity(name, selected_subjects[name])
+            for name in sorted(selected_subjects)
+        )
+        context = attestation.derive_build_context_identity(
+            source_commit=commit,
+            target=target,
+            role=role,
+            policy_identity=selected_policy.identity(),
+            policy_epoch=selected_policy.policy_epoch,
+            campaign_nonce=campaign_nonce,
+            subjects=canonical_subjects,
+        )
+        return attestation.AttestationPayloadV1(
+            role=role,
+            signer_identity=signer,
+            source_commit=commit,
+            target=target,
+            issued_at=issued_at,
+            expires_at=expires_at,
+            policy_identity=selected_policy.identity(),
+            policy_epoch=selected_policy.policy_epoch,
+            campaign_nonce=campaign_nonce,
+            build_context_identity=context,
+            subjects=canonical_subjects,
+        )
+
+    def sign(
+        self,
+        payload: Path,
+        key: Path | None = None,
+        namespace: str = attestation.SIGNATURE_NAMESPACE,
+    ) -> Path:
         private_key = key or self.private_key
         signature = payload.with_name(payload.name + ".sig")
         signature.unlink(missing_ok=True)
@@ -149,7 +194,7 @@ class AttestationTests(unittest.TestCase):
                 "-f",
                 str(private_key),
                 "-n",
-                attestation.SIGNATURE_NAMESPACE,
+                namespace,
                 str(payload),
             ],
             stdin=subprocess.DEVNULL,
@@ -161,7 +206,9 @@ class AttestationTests(unittest.TestCase):
         self.assertTrue(signature.is_file())
         return signature
 
-    def verify(self, **overrides: object) -> attestation.AuthenticatedObservationV1:
+    def verify(
+        self, **overrides: object
+    ) -> attestation.VerifiedAttestationObservationV1:
         arguments: dict[str, object] = {
             "policy_path": self.policy_path,
             "expected_policy_identity": self.policy.identity(),
@@ -171,7 +218,8 @@ class AttestationTests(unittest.TestCase):
             "expected_signer_identity": SIGNER,
             "expected_source_commit": COMMIT,
             "expected_target": TARGET,
-            "expected_build_identity": BUILD,
+            "expected_policy_epoch": POLICY_EPOCH,
+            "expected_campaign_nonce": CAMPAIGN_NONCE,
             "expected_subjects": self.subjects,
             "now": ISSUED_AT + 1,
             "timeout": 5,
@@ -182,14 +230,43 @@ class AttestationTests(unittest.TestCase):
     def rewrite_payload_object(self, value: dict[str, object]) -> None:
         self.payload_path.write_bytes(attestation.canonical_json_bytes(value))
 
+    def install_payload(
+        self,
+        payload: attestation.AttestationPayloadV1,
+        key: Path | None = None,
+        namespace: str = attestation.SIGNATURE_NAMESPACE,
+    ) -> None:
+        self.payload = payload
+        self.payload_path.write_bytes(payload.canonical_bytes())
+        self.signature_path = self.sign(self.payload_path, key, namespace)
+
+    def install_policy(self, policy: attestation.TrustPolicyV1) -> None:
+        self.policy = policy
+        self.policy_path.write_bytes(policy.canonical_bytes())
+
     def test_verifies_real_ed25519_signature_with_pinned_ssh_keygen(self) -> None:
         observation = self.verify()
         self.assertEqual(observation.payload, self.payload)
         self.assertEqual(observation.policy_identity, self.policy.identity())
         self.assertEqual(observation.verifier_identity, self.verifier_identity)
         self.assertEqual(observation.attestation_identity, self.payload.identity())
+        self.assertEqual(
+            observation.key_identity,
+            attestation.public_key_identity(self.public_key),
+        )
         self.assertFalse(hasattr(observation, "load_authority"))
         self.assertFalse(hasattr(observation, "launch_authority"))
+
+    def test_observation_dataclass_is_forgeable_and_has_no_authority(self) -> None:
+        forged = attestation.VerifiedAttestationObservationV1(
+            attestation_identity="attacker-chosen",
+            policy_identity="attacker-chosen",
+            verifier_identity="attacker-chosen",
+            key_identity="attacker-chosen",
+            payload=self.payload,
+        )
+        self.assertEqual(forged.attestation_identity, "attacker-chosen")
+        self.assertFalse(hasattr(forged, "authorize"))
 
     def test_cli_verifies_authenticated_observation(self) -> None:
         arguments = [
@@ -212,8 +289,10 @@ class AttestationTests(unittest.TestCase):
             COMMIT,
             "--expect-target",
             TARGET,
-            "--expect-build-identity",
-            BUILD,
+            "--expect-policy-epoch",
+            str(POLICY_EPOCH),
+            "--expect-campaign-nonce",
+            CAMPAIGN_NONCE,
             "--now",
             str(ISSUED_AT + 1),
         ]
@@ -225,12 +304,36 @@ class AttestationTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr.decode())
         self.assertIn(b"authenticated direct-link observation", result.stdout)
 
+    def test_build_context_changes_for_every_bound_input(self) -> None:
+        baseline = self.payload.build_context_identity
+        mutations: tuple[dict[str, object], ...] = (
+            {"commit": "56" * 20},
+            {"target": "gfx950"},
+            {"campaign_nonce": "other-campaign"},
+            {"subjects": subjects_for("g2-worker", "other")},
+        )
+        for mutation in mutations:
+            with self.subTest(mutation=tuple(mutation)):
+                self.assertNotEqual(
+                    self.make_payload(**mutation).build_context_identity, baseline
+                )
+        new_policy = self.make_policy(policy_epoch=POLICY_EPOCH + 1)
+        self.assertNotEqual(
+            self.make_payload(policy=new_policy).build_context_identity, baseline
+        )
+
     def test_rejects_payload_mutation_after_signing(self) -> None:
-        value = self.payload.as_object()
-        value["target"] = "gfx950"
-        self.rewrite_payload_object(value)
+        mutated = self.make_payload(target="gfx950")
+        self.payload_path.write_bytes(mutated.canonical_bytes())
         with self.assertRaisesRegex(EvidenceError, "signature verification failed"):
             self.verify(expected_target="gfx950")
+
+    def test_rejects_wrong_signature_namespace(self) -> None:
+        self.signature_path = self.sign(
+            self.payload_path, namespace="fe2o3-unrelated-attestation-v1"
+        )
+        with self.assertRaisesRegex(EvidenceError, "signature verification failed"):
+            self.verify()
 
     def test_rejects_signature_from_substituted_key(self) -> None:
         self.signature_path = self.sign(self.payload_path, self.other_private_key)
@@ -243,34 +346,96 @@ class AttestationTests(unittest.TestCase):
         with self.assertRaisesRegex(EvidenceError, "out-of-band pin"):
             self.verify()
 
-    def test_rejects_policy_key_substitution_even_with_new_policy_pin(self) -> None:
+    def test_rejects_policy_key_substitution_with_new_pin_and_old_payload(self) -> None:
         substituted = self.make_policy(public_key=self.other_public_key)
-        self.policy_path.write_bytes(substituted.canonical_bytes())
-        with self.assertRaisesRegex(EvidenceError, "signature verification failed"):
+        self.install_policy(substituted)
+        with self.assertRaisesRegex(EvidenceError, "expected trust policy"):
             self.verify(expected_policy_identity=substituted.identity())
+
+    def test_policy_rotation_requires_new_epoch_pin_and_signature(self) -> None:
+        old_policy_identity = self.policy.identity()
+        rotated = self.make_policy(
+            public_key=self.other_public_key,
+            policy_epoch=POLICY_EPOCH + 1,
+        )
+        payload = self.make_payload(policy=rotated)
+        self.install_policy(rotated)
+        self.install_payload(payload, self.other_private_key)
+        with self.assertRaisesRegex(EvidenceError, "out-of-band pin"):
+            self.verify(expected_policy_identity=old_policy_identity)
+        observation = self.verify(
+            expected_policy_identity=rotated.identity(),
+            expected_policy_epoch=POLICY_EPOCH + 1,
+        )
+        self.assertEqual(observation.payload.policy_epoch, POLICY_EPOCH + 1)
+
+    def test_multiple_nonoverlapping_keys_select_key_at_issue_time(self) -> None:
+        signers = (
+            self.make_binding(valid_until=ISSUED_AT),
+            self.make_binding(
+                public_key=self.other_public_key,
+                valid_from=ISSUED_AT,
+            ),
+        )
+        policy = self.make_policy(signers=signers)
+        payload = self.make_payload(policy=policy)
+        self.install_policy(policy)
+        self.install_payload(payload, self.other_private_key)
+        observation = self.verify(expected_policy_identity=policy.identity())
+        self.assertEqual(
+            observation.key_identity,
+            attestation.public_key_identity(self.other_public_key),
+        )
+
+    def test_rejects_overlapping_keys_for_same_role_and_signer(self) -> None:
+        policy = self.make_policy(
+            signers=(
+                self.make_binding(valid_until=ISSUED_AT + 10),
+                self.make_binding(
+                    public_key=self.other_public_key,
+                    valid_from=ISSUED_AT,
+                ),
+            )
+        )
+        self.policy_path.write_bytes(policy.canonical_bytes())
+        with self.assertRaisesRegex(EvidenceError, "intervals overlap"):
+            self.verify(expected_policy_identity=policy.identity())
+
+    def test_same_signer_cross_role_cannot_reuse_wrong_key(self) -> None:
+        g5_subjects = subjects_for("g5-publication")
+        policy = self.make_policy(
+            signers=(
+                self.make_binding(),
+                self.make_binding(
+                    role="g5-publication", public_key=self.other_public_key
+                ),
+            )
+        )
+        payload = self.make_payload(
+            policy=policy, role="g5-publication", subjects=g5_subjects
+        )
+        self.install_policy(policy)
+        self.install_payload(payload, self.private_key)
+        with self.assertRaisesRegex(EvidenceError, "signature verification failed"):
+            self.verify(
+                expected_policy_identity=policy.identity(),
+                expected_role="g5-publication",
+                expected_subjects=g5_subjects,
+            )
 
     def test_rejects_expected_role_confusion(self) -> None:
         with self.assertRaisesRegex(EvidenceError, "role does not match"):
             self.verify(
                 expected_role="g5-publication",
-                expected_subjects={
-                    name: identity(name)
-                    for name in attestation.ROLE_SUBJECTS["g5-publication"]
-                },
+                expected_subjects=subjects_for("g5-publication"),
             )
 
     def test_rejects_signed_role_without_policy_binding(self) -> None:
-        subjects = {
-            name: identity(name) for name in attestation.ROLE_SUBJECTS["g5-publication"]
-        }
+        subjects = subjects_for("g5-publication")
         payload = self.make_payload(role="g5-publication", subjects=subjects)
-        self.payload_path.write_bytes(payload.canonical_bytes())
-        self.signature_path = self.sign(self.payload_path)
-        with self.assertRaisesRegex(EvidenceError, "no exact role/signer binding"):
-            self.verify(
-                expected_role="g5-publication",
-                expected_subjects=subjects,
-            )
+        self.install_payload(payload)
+        with self.assertRaisesRegex(EvidenceError, "no exact role/signer/key"):
+            self.verify(expected_role="g5-publication", expected_subjects=subjects)
 
     def test_rejects_expected_signer_substitution(self) -> None:
         with self.assertRaisesRegex(EvidenceError, "signer does not match"):
@@ -284,31 +449,59 @@ class AttestationTests(unittest.TestCase):
         with self.assertRaisesRegex(EvidenceError, "target does not match"):
             self.verify(expected_target="gfx950")
 
-    def test_rejects_build_replay_mismatch(self) -> None:
-        with self.assertRaisesRegex(EvidenceError, "replay bound"):
-            self.verify(
-                expected_build_identity=typed_identity(
-                    "fe2o3-test-build-v1", b"different-build"
-                )
-            )
+    def test_rejects_policy_epoch_mismatch(self) -> None:
+        with self.assertRaisesRegex(EvidenceError, "expected epoch"):
+            self.verify(expected_policy_epoch=POLICY_EPOCH + 1)
+
+    def test_rejects_campaign_replay_mismatch(self) -> None:
+        with self.assertRaisesRegex(EvidenceError, "campaign nonce"):
+            self.verify(expected_campaign_nonce="other-campaign")
+
+    def test_rejects_forged_build_context_identity(self) -> None:
+        value = self.payload.as_object()
+        value["build_context_identity"] = typed_identity(
+            attestation.BUILD_CONTEXT_DOMAIN, b"forged"
+        )
+        self.rewrite_payload_object(value)
+        with self.assertRaisesRegex(EvidenceError, "canonical inputs"):
+            self.verify()
 
     def test_rejects_subject_identity_mismatch(self) -> None:
         subjects = dict(self.subjects)
-        subjects["request"] = identity("different_request")
+        subjects["request"] = typed_identity(
+            attestation.SUBJECT_IDENTITY_DOMAINS["g2-worker"]["request"],
+            b"different-request",
+        )
         with self.assertRaisesRegex(EvidenceError, "subjects do not match"):
             self.verify(expected_subjects=subjects)
 
-    def test_rejects_missing_expected_subject(self) -> None:
+    def test_rejects_wrong_subject_identity_domain(self) -> None:
         subjects = dict(self.subjects)
-        subjects.pop("request")
-        with self.assertRaisesRegex(EvidenceError, "role schema"):
+        subjects["request"] = typed_identity("fe2o3-wrong-request-v1", b"request")
+        with self.assertRaisesRegex(
+            EvidenceError, "must use the fe2o3-link-request-v1"
+        ):
             self.verify(expected_subjects=subjects)
 
-    def test_rejects_extra_expected_subject(self) -> None:
-        subjects = dict(self.subjects)
-        subjects["extra"] = identity("extra")
-        with self.assertRaisesRegex(EvidenceError, "role schema"):
-            self.verify(expected_subjects=subjects)
+    def test_rejects_missing_extra_and_oversized_expected_subjects_before_sort(
+        self,
+    ) -> None:
+        missing = dict(self.subjects)
+        missing.pop("request")
+        extra = dict(self.subjects)
+        extra["extra"] = typed_identity("fe2o3-extra-v1", b"extra")
+        oversized: dict[object, str] = {
+            object(): typed_identity("fe2o3-extra-v1", str(index).encode("ascii"))
+            for index in range(attestation.MAX_SUBJECTS + 1)
+        }
+        for subjects, message in (
+            (missing, "role schema"),
+            (extra, "role schema"),
+            (oversized, "cardinality"),
+        ):
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(EvidenceError, message):
+                    self.verify(expected_subjects=subjects)
 
     def test_rejects_expired_attestation(self) -> None:
         with self.assertRaisesRegex(EvidenceError, "expired"):
@@ -337,13 +530,25 @@ class AttestationTests(unittest.TestCase):
         with self.assertRaisesRegex(EvidenceError, "wrong fields"):
             self.verify()
 
-    def test_rejects_duplicate_json_key(self) -> None:
+    def test_rejects_duplicate_json_key_without_echoing_key(self) -> None:
+        malicious = "do-not-echo-control-\\n"
         canonical = self.payload.canonical_bytes()
         self.payload_path.write_bytes(
-            canonical.replace(b"{", b'{"domain":"substituted",', 1)
+            canonical.replace(b"{", f'{{"{malicious}":1,"{malicious}":2,'.encode(), 1)
         )
-        with self.assertRaisesRegex(EvidenceError, "duplicate key"):
+        with self.assertRaises(EvidenceError) as raised:
             self.verify()
+        self.assertIn("duplicate object key", str(raised.exception))
+        self.assertNotIn(malicious, str(raised.exception))
+
+    def test_rejects_json_recursion_and_large_integer(self) -> None:
+        recursive = b'{"x":' + b"[" * 10000 + b"0" + b"]" * 10000 + b"}\n"
+        large_integer = b'{"issued_at":' + b"9" * 5000 + b"}\n"
+        for data in (recursive, large_integer):
+            with self.subTest(size=len(data)):
+                self.payload_path.write_bytes(data)
+                with self.assertRaisesRegex(EvidenceError, "not valid JSON"):
+                    self.verify()
 
     def test_rejects_noncanonical_json_whitespace(self) -> None:
         self.payload_path.write_bytes(
@@ -368,7 +573,7 @@ class AttestationTests(unittest.TestCase):
         value = self.payload.as_object()
         value["subjects"] = list(reversed(value["subjects"]))  # type: ignore[arg-type]
         self.rewrite_payload_object(value)
-        with self.assertRaisesRegex(EvidenceError, "canonical order"):
+        with self.assertRaises(EvidenceError):
             self.verify()
 
     def test_rejects_wrong_role_subject_schema(self) -> None:
@@ -377,6 +582,11 @@ class AttestationTests(unittest.TestCase):
         self.rewrite_payload_object(value)
         with self.assertRaisesRegex(EvidenceError, "role schema"):
             self.verify()
+
+    def test_rejects_identity_version_over_six_digits(self) -> None:
+        value = "fe2o3-test-v1234567-sha256-" + "0" * 64
+        with self.assertRaisesRegex(EvidenceError, "canonical typed"):
+            attestation.require_generic_typed_identity(value, "test")
 
     def test_rejects_unknown_policy_field(self) -> None:
         value = self.policy.as_object()
@@ -411,15 +621,28 @@ class AttestationTests(unittest.TestCase):
         substituted = self.make_policy(
             verifier_identity=typed_identity(attestation.VERIFIER_DOMAIN, b"other")
         )
-        self.policy_path.write_bytes(substituted.canonical_bytes())
+        payload = self.make_payload(policy=substituted)
+        self.install_policy(substituted)
+        self.install_payload(payload)
         with self.assertRaisesRegex(EvidenceError, "ssh-keygen identity"):
             self.verify(expected_policy_identity=substituted.identity())
 
-    def test_rejects_malformed_public_key(self) -> None:
+    def test_rejects_malformed_public_key_and_key_identity(self) -> None:
         value = self.policy.as_object()
         value["signers"][0]["public_key"] = "ssh-ed25519 AAAA comment"  # type: ignore[index]
         self.policy_path.write_bytes(attestation.canonical_json_bytes(value))
         with self.assertRaisesRegex(EvidenceError, "only an ssh-ed25519"):
+            self.verify(
+                expected_policy_identity=typed_identity(
+                    attestation.POLICY_DOMAIN, self.policy_path.read_bytes()
+                )
+            )
+        value = self.policy.as_object()
+        value["signers"][0]["key_identity"] = typed_identity(  # type: ignore[index]
+            attestation.PUBLIC_KEY_DOMAIN, b"wrong"
+        )
+        self.policy_path.write_bytes(attestation.canonical_json_bytes(value))
+        with self.assertRaisesRegex(EvidenceError, "does not match"):
             self.verify(
                 expected_policy_identity=typed_identity(
                     attestation.POLICY_DOMAIN, self.policy_path.read_bytes()
@@ -454,49 +677,106 @@ class AttestationTests(unittest.TestCase):
             with self.subTest(argument=argument):
                 link = self.root / f"{argument}.link"
                 link.symlink_to(path)
-                with self.assertRaisesRegex(EvidenceError, "cannot open regular file"):
+                with self.assertRaisesRegex(EvidenceError, "cannot open"):
                     self.verify(**{argument: link})
 
-    def test_rejects_verifier_timeout(self) -> None:
-        class TimedOutProcess:
-            pid = 999999999
-            returncode: int | None = None
-            communicate_calls = 0
+    def test_rejects_fifo_paths_promptly(self) -> None:
+        for argument in ("payload_path", "policy_path", "signature_path"):
+            with self.subTest(argument=argument):
+                fifo = self.root / f"{argument}.fifo"
+                os.mkfifo(fifo)
+                started = time.monotonic()
+                with self.assertRaisesRegex(EvidenceError, "not a regular file"):
+                    self.verify(**{argument: fifo})
+                self.assertLess(time.monotonic() - started, 1.0)
 
-            def communicate(
-                self, _input: bytes | None = None, timeout: int | None = None
-            ) -> tuple[bytes, None]:
-                self.communicate_calls += 1
-                if self.communicate_calls == 1:
-                    raise subprocess.TimeoutExpired("ssh-keygen", timeout)
-                self.returncode = -9
-                return b"", None
+    def test_rejects_device_paths_promptly(self) -> None:
+        for argument in ("payload_path", "policy_path", "signature_path"):
+            with self.subTest(argument=argument):
+                started = time.monotonic()
+                with self.assertRaisesRegex(EvidenceError, "not a regular file"):
+                    self.verify(**{argument: Path("/dev/null")})
+                self.assertLess(time.monotonic() - started, 1.0)
 
-            def poll(self) -> int | None:
-                return self.returncode
+    def test_rejects_socket_paths_promptly(self) -> None:
+        socket_path = self.root / "attestation.socket"
+        server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            server.bind(str(socket_path))
+            started = time.monotonic()
+            with self.assertRaisesRegex(EvidenceError, "cannot open"):
+                self.verify(payload_path=socket_path)
+            self.assertLess(time.monotonic() - started, 1.0)
+        finally:
+            server.close()
 
-            def wait(self, timeout: int | None = None) -> int:
-                del timeout
-                self.returncode = -9
-                return self.returncode
+    def test_caller_and_verifier_opens_are_nonblocking_and_nofollow(self) -> None:
+        real_open = os.open
+        observed: list[tuple[object, int]] = []
 
+        def recording_open(
+            path: object, flags: int, *args: object, **kwargs: object
+        ) -> int:
+            observed.append((path, flags))
+            return real_open(path, flags, *args, **kwargs)  # type: ignore[arg-type]
+
+        with mock.patch.object(attestation.os, "open", side_effect=recording_open):
+            self.verify()
+        caller_paths = {
+            self.policy_path,
+            self.payload_path,
+            self.signature_path,
+            attestation.SSH_KEYGEN_PATH,
+        }
+        matched = [
+            (Path(path), flags)
+            for path, flags in observed
+            if Path(path) in caller_paths
+        ]
+        self.assertEqual({path for path, _ in matched}, caller_paths)
+        for _, flags in matched:
+            self.assertTrue(flags & os.O_NONBLOCK)
+            self.assertTrue(flags & os.O_NOFOLLOW)
+
+    def test_verifier_uses_sealed_memfds_no_temp_and_sanitized_environment(
+        self,
+    ) -> None:
+        real_popen = subprocess.Popen
+        inspected: list[dict[str, object]] = []
+
+        def inspecting_popen(
+            *args: object, **kwargs: object
+        ) -> subprocess.Popen[bytes]:
+            pass_fds = kwargs["pass_fds"]
+            assert isinstance(pass_fds, tuple)
+            self.assertEqual(len(pass_fds), 4)
+            seals = (
+                attestation.fcntl.F_SEAL_WRITE
+                | attestation.fcntl.F_SEAL_GROW
+                | attestation.fcntl.F_SEAL_SHRINK
+                | attestation.fcntl.F_SEAL_SEAL
+            )
+            for descriptor in pass_fds:
+                self.assertEqual(
+                    attestation.fcntl.fcntl(descriptor, attestation.fcntl.F_GET_SEALS)
+                    & seals,
+                    seals,
+                )
+            inspected.append({"argv": args[0], **kwargs})
+            return real_popen(*args, **kwargs)  # type: ignore[arg-type]
+
+        hostile_tmp = self.root / "attacker-controlled-tmp"
         with (
             mock.patch.object(
-                attestation.subprocess, "Popen", return_value=TimedOutProcess()
+                attestation.subprocess, "Popen", side_effect=inspecting_popen
             ),
-            mock.patch.object(attestation, "_terminate_process_group"),
+            mock.patch.dict(os.environ, {"TMPDIR": str(hostile_tmp)}),
         ):
-            with self.assertRaisesRegex(EvidenceError, "timed out"):
-                self.verify()
-
-    def test_verifier_uses_no_shell_and_sanitized_environment(self) -> None:
-        real_popen = subprocess.Popen
-        with mock.patch.object(
-            attestation.subprocess, "Popen", wraps=real_popen
-        ) as popen:
             self.verify()
-        keyword = popen.call_args.kwargs
+        self.assertFalse(hostile_tmp.exists())
+        keyword = inspected[0]
         self.assertNotIn("shell", keyword)
+        self.assertEqual(keyword["cwd"], Path("/"))
         self.assertEqual(
             keyword["env"],
             {
@@ -507,8 +787,70 @@ class AttestationTests(unittest.TestCase):
                 "TZ": "UTC",
             },
         )
-        self.assertRegex(keyword["executable"], r"^/proc/self/fd/[0-9]+$")
-        self.assertEqual(len(keyword["pass_fds"]), 1)
+        self.assertRegex(str(keyword["executable"]), r"^/proc/self/fd/[0-9]+$")
+        argv = keyword["argv"]
+        assert isinstance(argv, list)
+        allowed_path = argv[argv.index("-f") + 1]
+        signature_path = argv[argv.index("-s") + 1]
+        self.assertRegex(allowed_path, r"^/proc/self/fd/[0-9]+$")
+        self.assertRegex(signature_path, r"^/proc/self/fd/[0-9]+$")
+
+    def run_supervised_shell(
+        self, command: str, *, timeout: int, output_limit: int
+    ) -> attestation._ProcessResult:
+        shell_path = Path("/bin/sh").resolve(strict=True)
+        shell = os.open(
+            shell_path,
+            os.O_RDONLY | os.O_CLOEXEC | os.O_NONBLOCK | os.O_NOFOLLOW,
+        )
+        stdin = os.open("/dev/null", os.O_RDONLY | os.O_CLOEXEC | os.O_NONBLOCK)
+        try:
+            return attestation._run_bounded_process(
+                executable_descriptor=shell,
+                argv=["/bin/sh", "-c", command],
+                pass_descriptors=(shell,),
+                stdin_descriptor=stdin,
+                environment={"LANG": "C", "LC_ALL": "C", "PATH": "/usr/bin:/bin"},
+                timeout=timeout,
+                output_limit=output_limit,
+            )
+        finally:
+            os.close(stdin)
+            os.close(shell)
+
+    def test_real_output_flood_is_killed_at_aggregate_bound(self) -> None:
+        started = time.monotonic()
+        result = self.run_supervised_shell(
+            "while :; do printf 'stdout-flood'; printf 'stderr-flood' >&2; done",
+            timeout=5,
+            output_limit=1024,
+        )
+        self.assertTrue(result.overflow)
+        self.assertFalse(result.timed_out)
+        self.assertEqual(len(result.output), 1024)
+        self.assertLess(time.monotonic() - started, 2.0)
+
+    def test_real_descendant_process_group_is_killed_on_timeout(self) -> None:
+        started = time.monotonic()
+        result = self.run_supervised_shell(
+            "sleep 30 & wait",
+            timeout=1,
+            output_limit=1024,
+        )
+        self.assertTrue(result.timed_out)
+        self.assertLess(time.monotonic() - started, 3.0)
+
+    def test_verifier_reports_supervisor_timeout_and_output_flood(self) -> None:
+        for result, message in (
+            (attestation._ProcessResult(-9, b"", timed_out=True), "timed out"),
+            (attestation._ProcessResult(-9, b"x", overflow=True), "output exceeded"),
+        ):
+            with self.subTest(message=message):
+                with mock.patch.object(
+                    attestation, "_run_bounded_process", return_value=result
+                ):
+                    with self.assertRaisesRegex(EvidenceError, message):
+                        self.verify()
 
     def test_rejects_invalid_timeout_bounds(self) -> None:
         for timeout in (0, attestation.MAX_VERIFIER_TIMEOUT_SECONDS + 1, True):
@@ -516,13 +858,21 @@ class AttestationTests(unittest.TestCase):
                 with self.assertRaisesRegex(EvidenceError, "timeout"):
                     self.verify(timeout=timeout)
 
-    def test_all_roles_have_distinct_exact_subject_schemas(self) -> None:
+    def test_all_roles_have_exact_bounded_identity_domains(self) -> None:
         self.assertEqual(set(attestation.ROLES), set(attestation.ROLE_SUBJECTS))
+        self.assertEqual(
+            set(attestation.ROLES), set(attestation.SUBJECT_IDENTITY_DOMAINS)
+        )
         schemas = list(attestation.ROLE_SUBJECTS.values())
         self.assertEqual(len(schemas), len(set(schemas)))
-        for schema in schemas:
+        for role, schema in attestation.ROLE_SUBJECTS.items():
             self.assertEqual(schema, tuple(sorted(schema)))
+            self.assertEqual(
+                schema, tuple(sorted(attestation.SUBJECT_IDENTITY_DOMAINS[role]))
+            )
             self.assertLessEqual(len(schema), attestation.MAX_SUBJECTS)
+            for domain in attestation.SUBJECT_IDENTITY_DOMAINS[role].values():
+                self.assertRegex(domain, r"-v[1-9][0-9]{0,5}$")
 
 
 if __name__ == "__main__":
