@@ -64,7 +64,8 @@ compiler attestations. Each symbol retains its authoritative `reserved-fe2o3-sym
 direction, exact physical ABI grammar, target, code-object version, effects, semantic identity,
 declaration owner, and provider-class claim. Declaration ownership is separate from unauthenticated
 artifact producer metadata. Symbol, physical-ABI, effects, and effect-to-pointer compatibility use
-the same typed V1 parser as `rustc-codegen-fe2o3`, exported by `reserved-fe2o3-symbols`.
+the same typed V1 parser as `fe2o3-macros` and `rustc-codegen-fe2o3`, exported by
+`reserved-fe2o3-symbols`.
 
 Compiler-required symbols are deliberately distinct from exact expected final defined symbols. The
 latter remain absent unless the caller supplies `ExpectedFinalDefinedSymbolsClaimV1` with exact

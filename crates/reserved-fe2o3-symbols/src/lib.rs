@@ -1039,4 +1039,55 @@ mod tests {
             Err(DeviceFfiGrammarError::TooManyPhysicalAbiArguments)
         );
     }
+
+    #[test]
+    fn shared_golden_corpus_matches_the_authoritative_parser() {
+        const CORPUS: &str = include_str!("../tests/data/device_ffi_grammar_v1.tsv");
+        const SEMANTIC: &str = "1111111111111111111111111111111111111111111111111111111111111111";
+
+        for line in CORPUS.lines().filter(|line| !line.starts_with('#')) {
+            let fields = line.split('\t').collect::<Vec<_>>();
+            assert_eq!(fields.len(), 7, "malformed corpus row: {line}");
+            let [name, expected, direction, symbol, abi, effects, golden] = fields.as_slice()
+            else {
+                unreachable!("field count was checked")
+            };
+            let direction = match parse_device_ffi_direction_v1(direction) {
+                Ok(direction) => direction,
+                Err(error) => {
+                    assert_eq!(*expected, grammar_error_class(error), "{name}");
+                    continue;
+                }
+            };
+            match validate_device_ffi_contract_grammar_v1(symbol, abi, effects) {
+                Ok(_) => {
+                    assert_eq!(*expected, "ok", "{name}");
+                    let id = derive_device_ffi_contract_id_v1(DeviceFfiContractFieldsV1 {
+                        direction: direction.tag(),
+                        symbol,
+                        calling_convention: "C",
+                        code_object_version: 5,
+                        target: "gfx942",
+                        physical_abi: abi,
+                        effects,
+                        semantic_identity: SEMANTIC,
+                    });
+                    assert_ne!(*golden, "-", "missing golden identity for {name}");
+                    assert_eq!(id.to_hex(), *golden, "{name}");
+                }
+                Err(error) => assert_eq!(*expected, grammar_error_class(error), "{name}"),
+            }
+        }
+    }
+
+    fn grammar_error_class(error: DeviceFfiGrammarError) -> &'static str {
+        match error {
+            DeviceFfiGrammarError::InvalidDirection => "direction",
+            DeviceFfiGrammarError::InvalidSymbol => "symbol",
+            DeviceFfiGrammarError::InvalidPhysicalAbi
+            | DeviceFfiGrammarError::TooManyPhysicalAbiArguments => "physical_abi",
+            DeviceFfiGrammarError::InvalidEffects => "effects",
+            DeviceFfiGrammarError::EffectAbiMismatch(_) => "effect_abi",
+        }
+    }
 }

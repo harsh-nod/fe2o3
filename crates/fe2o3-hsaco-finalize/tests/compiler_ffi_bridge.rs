@@ -755,6 +755,88 @@ fn authoritative_contract_derivation_and_exact_g4_grammar_fail_closed() {
 }
 
 #[test]
+fn finalize_staging_matches_the_shared_device_ffi_golden_corpus() {
+    const CORPUS: &str =
+        include_str!("../../reserved-fe2o3-symbols/tests/data/device_ffi_grammar_v1.tsv");
+    let target = DeviceTargetV1::parse("gfx942").unwrap();
+
+    for line in CORPUS.lines().filter(|line| !line.starts_with('#')) {
+        let fields = line.split('\t').collect::<Vec<_>>();
+        assert_eq!(fields.len(), 7, "malformed corpus row: {line}");
+        let [name, expected, direction, symbol_name, abi, effects, golden] = fields.as_slice()
+        else {
+            unreachable!("field count was checked")
+        };
+        let direction = match reserved_fe2o3_symbols::parse_device_ffi_direction_v1(direction) {
+            Ok(direction) => direction,
+            Err(_) => {
+                assert_eq!(*expected, "direction", "{name}");
+                continue;
+            }
+        };
+        let direction_claim = match direction {
+            reserved_fe2o3_symbols::DeviceFfiDirectionV1::Import => G4FfiDirectionClaimV1::Import,
+            reserved_fe2o3_symbols::DeviceFfiDirectionV1::Export => G4FfiDirectionClaimV1::Export,
+        };
+        let declared = match G4DeclaredContractClaimsV1::new(
+            target,
+            CodeObjectVersion::V5,
+            *effects,
+            [0x11; 32],
+        ) {
+            Ok(declared) => declared,
+            Err(error) => {
+                assert_eq!(finalize_grammar_error_class(&error), *expected, "{name}");
+                continue;
+            }
+        };
+        let fields = DeviceFfiContractFieldsV1 {
+            direction: direction.tag(),
+            symbol: symbol_name,
+            calling_convention: "C",
+            code_object_version: 5,
+            target: "gfx942",
+            physical_abi: abi,
+            effects,
+            semantic_identity: "1111111111111111111111111111111111111111111111111111111111111111",
+        };
+        let id = derive_device_ffi_contract_id_v1(fields);
+        let provider = match direction_claim {
+            G4FfiDirectionClaimV1::Import => G4SymbolProviderClassClaimV1::ExternalPlanInput,
+            G4FfiDirectionClaimV1::Export => G4SymbolProviderClassClaimV1::CompilerModuleInput,
+        };
+        match G4FfiSymbolClaimV1::new(
+            id,
+            direction_claim,
+            *symbol_name,
+            *abi,
+            owner(0x7f, name),
+            provider,
+            declared,
+        ) {
+            Ok(claim) => {
+                assert_eq!(*expected, "ok", "{name}");
+                assert_eq!(claim.contract_identity().to_hex(), *golden, "{name}");
+            }
+            Err(error) => {
+                assert_eq!(finalize_grammar_error_class(&error), *expected, "{name}")
+            }
+        }
+    }
+}
+
+fn finalize_grammar_error_class(error: &StagedFfiLinkError) -> &'static str {
+    match error {
+        StagedFfiLinkError::InvalidFfiSymbol => "symbol",
+        StagedFfiLinkError::InvalidPhysicalAbi
+        | StagedFfiLinkError::TooManyPhysicalAbiArguments => "physical_abi",
+        StagedFfiLinkError::InvalidEffects => "effects",
+        StagedFfiLinkError::EffectAbiMismatch(_) => "effect_abi",
+        error => panic!("unexpected finalize grammar error: {error}"),
+    }
+}
+
+#[test]
 fn provider_claims_reject_permutation_cardinality_and_substitution() {
     let fixture = fixture();
     let mut reversed = fixture.providers.clone();

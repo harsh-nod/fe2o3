@@ -1,0 +1,13 @@
+error: device FFI effect `write_global` has no compatible physical pointer argument
+ --> tests/device_ffi_ui/fail/device_ffi_effect_abi_mismatch.rs:3:1
+  |
+3 | / #[device_export(
+4 | |     symbol = "write_without_mutable_pointer",
+5 | |     target = "gfx942",
+6 | |     code_object = 5,
+7 | |     effects = "write_global",
+8 | |     semantic = "1111111111111111111111111111111111111111111111111111111111111111"
+9 | | )]
+  | |__^
+  |
+  = note: this error originates in the attribute macro `device_export` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -1464,6 +1464,75 @@ mod tests {
     }
 
     #[test]
+    fn rustc_marker_parser_matches_the_shared_device_ffi_golden_corpus() {
+        const CORPUS: &str =
+            include_str!("../../reserved-fe2o3-symbols/tests/data/device_ffi_grammar_v1.tsv");
+        const SEMANTIC: &str = "1111111111111111111111111111111111111111111111111111111111111111";
+
+        for line in CORPUS.lines().filter(|line| !line.starts_with('#')) {
+            let fields = line.split('\t').collect::<Vec<_>>();
+            assert_eq!(fields.len(), 7, "malformed corpus row: {line}");
+            let [name, expected, direction, symbol, abi, effects, golden] = fields.as_slice()
+            else {
+                unreachable!("field count was checked")
+            };
+            let parsed_direction = parse_device_ffi_direction_v1(direction);
+            if parsed_direction.is_err() {
+                let marker = marker(
+                    DEVICE_FFI_DIRECTION_IMPORT_V1,
+                    symbol,
+                    "C()->unit[size=0,align=1]",
+                )
+                .replacen("|1|", &format!("|{direction}|"), 1);
+                let error = parse_marker(&marker).unwrap_err();
+                assert_eq!(*expected, "direction", "{name}");
+                assert!(error.reason.contains("noncanonical device FFI direction"));
+                continue;
+            }
+            let direction = parsed_direction.unwrap();
+            let contract_fields = DeviceFfiContractFieldsV1 {
+                direction: direction.tag(),
+                symbol,
+                calling_convention: "C",
+                code_object_version: 5,
+                target: "gfx942",
+                physical_abi: abi,
+                effects,
+                semantic_identity: SEMANTIC,
+            };
+            let id = derive_device_ffi_contract_id_v1(contract_fields);
+            let marker = reserved_fe2o3_symbols::device_ffi_marker_v1(id, contract_fields);
+            match parse_marker(&marker) {
+                Ok(contract) => {
+                    assert_eq!(*expected, "ok", "{name}");
+                    assert_eq!(contract.id.to_hex(), *golden, "{name}");
+                }
+                Err(error) => assert_eq!(
+                    rustc_grammar_error_class(&error.reason),
+                    *expected,
+                    "{name}: {error}"
+                ),
+            }
+        }
+    }
+
+    fn rustc_grammar_error_class(message: &str) -> &'static str {
+        if message.contains("direction") {
+            "direction"
+        } else if message.contains("external symbol") {
+            "symbol"
+        } else if message.contains("physical ABI") {
+            "physical_abi"
+        } else if message.contains("effects are") {
+            "effects"
+        } else if message.contains("compatible physical pointer") {
+            "effect_abi"
+        } else {
+            panic!("unexpected rustc grammar diagnostic: {message}")
+        }
+    }
+
+    #[test]
     fn every_marker_field_is_hash_bound() {
         let base = marker(
             DEVICE_FFI_DIRECTION_IMPORT_V1,

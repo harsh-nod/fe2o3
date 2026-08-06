@@ -862,7 +862,6 @@ struct DeviceFfiOptions {
 }
 
 const DEVICE_FFI_OPTION_HELP: &str = "device FFI requires `symbol = \"...\", target = \"gfx...\", code_object = 4|5|6, effects = \"...\", semantic = \"<64 lowercase hex bytes>\"`";
-const MAX_DEVICE_FFI_ARGUMENTS: usize = 32;
 
 fn parse_device_ffi_options(tokens: proc_macro2::TokenStream) -> syn::Result<DeviceFfiOptions> {
     let arguments = Punctuated::<Meta, Token![,]>::parse_terminated.parse2(tokens)?;
@@ -941,9 +940,11 @@ fn parse_device_ffi_options(tokens: proc_macro2::TokenStream) -> syn::Result<Dev
             syn::Error::new(proc_macro2::Span::call_site(), DEVICE_FFI_OPTION_HELP)
         })?,
     };
-    validate_device_ffi_symbol(&options.symbol)?;
+    reserved_fe2o3_symbols::validate_device_ffi_symbol_v1(&options.symbol)
+        .map_err(|error| device_ffi_grammar_diagnostic(error, &options.effects))?;
     validate_device_ffi_target(&options.target)?;
-    validate_device_ffi_effects(&options.effects)?;
+    reserved_fe2o3_symbols::parse_device_ffi_effects_v1(&options.effects)
+        .map_err(|error| device_ffi_grammar_diagnostic(error, &options.effects))?;
     validate_lower_hex_256(&options.semantic, "semantic identity")?;
     Ok(options)
 }
@@ -964,7 +965,7 @@ fn expand_device_export_with_import(
     validate_device_ffi_signature(&input.sig, &input.vis, true)?;
     validate_device_ffi_attributes(&input.attrs)?;
     let physical_abi = canonical_device_ffi_signature(&input.sig)?;
-    validate_effect_abi_compatibility(&options.effects, &physical_abi)?;
+    validate_generated_device_ffi_contract_grammar(&options, &physical_abi)?;
     let direction = reserved_fe2o3_symbols::DEVICE_FFI_DIRECTION_EXPORT_V1;
     let contract = device_ffi_contract(direction, &options, &physical_abi);
     let marker = reserved_fe2o3_symbols::device_ffi_marker_v1(
@@ -1042,7 +1043,7 @@ fn expand_device_import_with_import(
     validate_device_ffi_signature(&effective_signature, &function.vis, false)?;
     validate_device_ffi_attributes(&function.attrs)?;
     let physical_abi = canonical_device_ffi_signature(&function.sig)?;
-    validate_effect_abi_compatibility(&options.effects, &physical_abi)?;
+    validate_generated_device_ffi_contract_grammar(&options, &physical_abi)?;
     let direction = reserved_fe2o3_symbols::DEVICE_FFI_DIRECTION_IMPORT_V1;
     let contract = device_ffi_contract(direction, &options, &physical_abi);
     let marker = reserved_fe2o3_symbols::device_ffi_marker_v1(
@@ -1211,10 +1212,13 @@ fn validate_device_ffi_signature(
         signature.abi.as_ref().and_then(|abi| abi.name.as_ref()),
         signature,
     )?;
-    if signature.inputs.len() > MAX_DEVICE_FFI_ARGUMENTS {
+    if signature.inputs.len() > reserved_fe2o3_symbols::MAX_DEVICE_FFI_ARGUMENTS_V1 {
         return Err(syn::Error::new_spanned(
             &signature.inputs,
-            "device FFI has more than 32 physical arguments",
+            format!(
+                "device FFI has more than {} physical arguments",
+                reserved_fe2o3_symbols::MAX_DEVICE_FFI_ARGUMENTS_V1
+            ),
         ));
     }
     for argument in &signature.inputs {
@@ -1360,23 +1364,54 @@ fn unsupported_device_ffi_type<T: quote::ToTokens>(ty: T) -> syn::Error {
     )
 }
 
-fn validate_device_ffi_symbol(symbol: &str) -> syn::Result<()> {
-    let mut bytes = symbol.bytes();
-    let valid = symbol.len() <= reserved_fe2o3_symbols::MAX_DEVICE_FFI_SYMBOL_BYTES_V1
-        && bytes
-            .next()
-            .is_some_and(|byte| byte.is_ascii_alphabetic() || matches!(byte, b'_' | b'.' | b'$'))
-        && bytes.all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'$' | b'@' | b'-')
-        });
-    if valid {
-        Ok(())
-    } else {
-        Err(syn::Error::new(
-            proc_macro2::Span::call_site(),
-            "device FFI symbol is empty, too long, or contains noncanonical bytes",
-        ))
-    }
+fn validate_generated_device_ffi_contract_grammar(
+    options: &DeviceFfiOptions,
+    physical_abi: &str,
+) -> syn::Result<()> {
+    reserved_fe2o3_symbols::validate_device_ffi_contract_grammar_v1(
+        &options.symbol,
+        physical_abi,
+        &options.effects,
+    )
+    .map(|_| ())
+    .map_err(|error| device_ffi_grammar_diagnostic(error, &options.effects))
+}
+
+fn device_ffi_grammar_diagnostic(
+    error: reserved_fe2o3_symbols::DeviceFfiGrammarError,
+    effects: &str,
+) -> syn::Error {
+    use reserved_fe2o3_symbols::DeviceFfiGrammarError;
+
+    let message = match error {
+        DeviceFfiGrammarError::InvalidDirection => {
+            "device FFI direction is not canonical".to_owned()
+        }
+        DeviceFfiGrammarError::InvalidSymbol => {
+            "device FFI symbol is empty, too long, or contains noncanonical bytes".to_owned()
+        }
+        DeviceFfiGrammarError::InvalidPhysicalAbi => {
+            "device FFI physical ABI is not canonical".to_owned()
+        }
+        DeviceFfiGrammarError::TooManyPhysicalAbiArguments => format!(
+            "device FFI has more than {} physical arguments",
+            reserved_fe2o3_symbols::MAX_DEVICE_FFI_ARGUMENTS_V1
+        ),
+        DeviceFfiGrammarError::InvalidEffects
+            if effects.len() > reserved_fe2o3_symbols::MAX_DEVICE_FFI_EFFECT_BYTES_V1 =>
+        {
+            "device FFI effects are too long".to_owned()
+        }
+        DeviceFfiGrammarError::InvalidEffects => {
+            "device FFI effects must use unique, canonically sorted V1 effect names".to_owned()
+        }
+        DeviceFfiGrammarError::EffectAbiMismatch(effect) => format!(
+            "device FFI effect `{}` has no compatible physical pointer argument",
+            effect.as_str()
+        ),
+        _ => "device FFI contract uses unsupported V1 grammar".to_owned(),
+    };
+    syn::Error::new(proc_macro2::Span::call_site(), message)
 }
 
 fn validate_device_ffi_target(target: &str) -> syn::Result<()> {
@@ -1417,42 +1452,6 @@ fn validate_device_ffi_target(target: &str) -> syn::Result<()> {
     Ok(())
 }
 
-fn validate_device_ffi_effects(effects: &str) -> syn::Result<()> {
-    if effects.len() > reserved_fe2o3_symbols::MAX_DEVICE_FFI_EFFECT_BYTES_V1 {
-        return Err(syn::Error::new(
-            proc_macro2::Span::call_site(),
-            "device FFI effects are too long",
-        ));
-    }
-    if effects == "none" {
-        return Ok(());
-    }
-    let mut previous = None;
-    for effect in effects.split(',') {
-        let valid = matches!(
-            effect,
-            "atomic_global"
-                | "atomic_workgroup"
-                | "barrier_workgroup"
-                | "read_constant"
-                | "read_global"
-                | "read_private"
-                | "read_workgroup"
-                | "write_global"
-                | "write_private"
-                | "write_workgroup"
-        );
-        if !valid || previous.is_some_and(|previous: &str| previous >= effect) {
-            return Err(syn::Error::new(
-                proc_macro2::Span::call_site(),
-                "device FFI effects must use unique, canonically sorted V1 effect names",
-            ));
-        }
-        previous = Some(effect);
-    }
-    Ok(())
-}
-
 fn validate_lower_hex_256(value: &str, field: &str) -> syn::Result<()> {
     if value.len() == 64
         && value
@@ -1469,38 +1468,16 @@ fn validate_lower_hex_256(value: &str, field: &str) -> syn::Result<()> {
     }
 }
 
-fn validate_effect_abi_compatibility(effects: &str, abi: &str) -> syn::Result<()> {
-    for effect in effects.split(',').filter(|effect| *effect != "none") {
-        let required = match effect {
-            "read_constant" => "const_ptr<constant,",
-            "read_global" => "ptr<global,",
-            "read_private" => "ptr<private,",
-            "read_workgroup" => "ptr<workgroup,",
-            "write_global" | "atomic_global" => "mut_ptr<global,",
-            "write_private" => "mut_ptr<private,",
-            "write_workgroup" | "atomic_workgroup" => "mut_ptr<workgroup,",
-            "barrier_workgroup" => continue,
-            _ => unreachable!("effect grammar was validated"),
-        };
-        if !abi.contains(required) {
-            return Err(syn::Error::new(
-                proc_macro2::Span::call_site(),
-                format!("device FFI effect `{effect}` has no compatible physical pointer argument"),
-            ));
-        }
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
         DeviceFfiOptions, KernelMode, KernelOptions, canonical_device_ffi_signature,
-        core_import_for, device_import_for, expand_device_copy_with_core_import,
-        expand_device_export_with_import, expand_device_import_with_import,
-        expand_kernel_with_device_import, expand_kernel_with_imports, host_import_for,
-        parse_device_ffi_options, parse_kernel_options, validate_typed_kernel_signature,
-        validate_typed_kernel_symbol_stem,
+        core_import_for, device_ffi_contract, device_import_for,
+        expand_device_copy_with_core_import, expand_device_export_with_import,
+        expand_device_import_with_import, expand_kernel_with_device_import,
+        expand_kernel_with_imports, host_import_for, parse_device_ffi_options,
+        parse_kernel_options, validate_generated_device_ffi_contract_grammar,
+        validate_typed_kernel_signature, validate_typed_kernel_symbol_stem,
     };
     use proc_macro_crate::FoundCrate;
     use reserved_fe2o3_symbols::{
@@ -1545,6 +1522,88 @@ mod tests {
             canonical_device_ffi_signature(&function.sig).unwrap(),
             "C(const_ptr<global,f32>[size=8,align=8,as=global],mut_ptr<global,f32>[size=8,align=8,as=global],u64[size=8,align=8])->u32[size=4,align=4]"
         );
+    }
+
+    #[test]
+    fn macro_uses_the_shared_device_ffi_golden_corpus() {
+        const CORPUS: &str =
+            include_str!("../../reserved-fe2o3-symbols/tests/data/device_ffi_grammar_v1.tsv");
+        for line in CORPUS.lines().filter(|line| !line.starts_with('#')) {
+            let fields = line.split('\t').collect::<Vec<_>>();
+            assert_eq!(fields.len(), 7, "malformed corpus row: {line}");
+            let [name, expected, direction, symbol, abi, effects, golden] = fields.as_slice()
+            else {
+                unreachable!("field count was checked")
+            };
+            let direction = match reserved_fe2o3_symbols::parse_device_ffi_direction_v1(direction) {
+                Ok(direction) => direction,
+                Err(_) => {
+                    assert_eq!(*expected, "direction", "{name}");
+                    continue;
+                }
+            };
+            let options = DeviceFfiOptions {
+                symbol: (*symbol).to_owned(),
+                target: "gfx942".to_owned(),
+                code_object: 5,
+                effects: (*effects).to_owned(),
+                semantic: "1111111111111111111111111111111111111111111111111111111111111111"
+                    .to_owned(),
+            };
+            match validate_generated_device_ffi_contract_grammar(&options, abi) {
+                Ok(()) => {
+                    assert_eq!(*expected, "ok", "{name}");
+                    assert_eq!(
+                        device_ffi_contract(direction.tag(), &options, abi).to_hex(),
+                        *golden,
+                        "{name}"
+                    );
+                }
+                Err(error) => assert_eq!(
+                    macro_grammar_error_class(&error.to_string()),
+                    *expected,
+                    "{name}: {error}"
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn shared_grammar_adapter_preserves_proc_macro_diagnostics() {
+        let mut options = ffi_options();
+        options.symbol = "bad|symbol".to_owned();
+        assert_eq!(
+            validate_generated_device_ffi_contract_grammar(&options, "C()->unit[size=0,align=1]")
+                .unwrap_err()
+                .to_string(),
+            "device FFI symbol is empty, too long, or contains noncanonical bytes"
+        );
+
+        let mut options = ffi_options();
+        options.effects = "write_global".to_owned();
+        assert_eq!(
+            validate_generated_device_ffi_contract_grammar(
+                &options,
+                "C(const_ptr<global,u32>[size=8,align=8,as=global])->unit[size=0,align=1]"
+            )
+            .unwrap_err()
+            .to_string(),
+            "device FFI effect `write_global` has no compatible physical pointer argument"
+        );
+    }
+
+    fn macro_grammar_error_class(message: &str) -> &'static str {
+        if message.contains("symbol is empty") {
+            "symbol"
+        } else if message.contains("physical ABI") {
+            "physical_abi"
+        } else if message.contains("effects must use") {
+            "effects"
+        } else if message.contains("effect `") {
+            "effect_abi"
+        } else {
+            panic!("unexpected macro grammar diagnostic: {message}")
+        }
     }
 
     #[test]
