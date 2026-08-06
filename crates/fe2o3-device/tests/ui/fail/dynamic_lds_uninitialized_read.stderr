@@ -1,0 +1,10 @@
+error[E0599]: no method named `as_slice` found for reference `&'a DynamicLds<'a, u32>` in the current scope
+ --> tests/ui/fail/dynamic_lds_uninitialized_read.rs:4:10
+  |
+4 |     view.as_slice()
+  |          ^^^^^^^^
+  |
+help: there is a method `as_uninit_slice` with a similar name
+  |
+4 |     view.as_uninit_slice()
+  |             +++++++

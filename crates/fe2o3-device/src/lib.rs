@@ -10,11 +10,16 @@
 
 use core::marker::PhantomData;
 
+pub mod lds;
 pub mod sync;
 pub mod thread;
 pub mod wave;
 
 pub use fe2o3_macros::kernel;
+pub use lds::{
+    DynamicLds, DynamicLdsError, LdsElement, LdsInitialized, LdsUninitialized,
+    MAX_DYNAMIC_LDS_ALIGNMENT, WorkgroupLdsScope,
+};
 pub use thread::{
     GlobalGridSize, GlobalWorkitemId, GridSize, Index1D, Index2D, Invocation3D, ThreadIndex,
     WorkgroupId, WorkgroupSize, WorkitemId,
