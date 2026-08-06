@@ -814,6 +814,19 @@ fn hash_strings(hasher: &mut Sha256, strings: &[String]) {
     }
 }
 
+fn hash_text(hasher: &mut Sha256, text: &str) {
+    hasher.update((text.len() as u64).to_le_bytes());
+    hasher.update(text.as_bytes());
+}
+
+const fn code_object_version_byte(version: CodeObjectVersion) -> u8 {
+    match version {
+        CodeObjectVersion::V4 => 4,
+        CodeObjectVersion::V5 => 5,
+        CodeObjectVersion::V6 => 6,
+    }
+}
+
 #[cfg(test)]
 mod v2_tests {
     use super::*;
@@ -1067,18 +1080,5 @@ mod v2_tests {
 
     fn lower_hex(bytes: &[u8]) -> String {
         bytes.iter().map(|byte| format!("{byte:02x}")).collect()
-    }
-}
-
-fn hash_text(hasher: &mut Sha256, text: &str) {
-    hasher.update((text.len() as u64).to_le_bytes());
-    hasher.update(text.as_bytes());
-}
-
-const fn code_object_version_byte(version: CodeObjectVersion) -> u8 {
-    match version {
-        CodeObjectVersion::V4 => 4,
-        CodeObjectVersion::V5 => 5,
-        CodeObjectVersion::V6 => 6,
     }
 }
