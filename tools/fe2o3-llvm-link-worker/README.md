@@ -40,21 +40,30 @@ diagnostics. No path crosses the protocol boundary.
 
 The native pipeline validates each input's actual file kind, AMDHSA OS ABI,
 processor flags, and code-object ABI before linking. It rejects duplicate
-strong definitions and unresolved non-weak imports, preserves requested LLVM
-exports through optimization, and accepts output only when its public dynamic
-symbols exactly match the request. Before aggregate linking, V2 additionally
-requires each declared export to be a public compiler-module definition and
-each declared import to be unresolved by that module and defined by an
-external provider. LLVM verification and LLD diagnostics are bounded before
-they enter the response.
+definitions and every unresolved output symbol, including `__ockl_` and
+`__ocml_` names because the protocol carries no authenticated runtime-import
+allowance. Requested LLVM exports survive optimization, and post-link
+inspection accepts output only when its public dynamic symbols exactly match
+the request. The `gfx942` processor is independently checked from ELF
+`e_flags`. AMDGPU MsgPack notes are decoded strictly and each metadata kernel
+must bind an allowed entry plus its `.kd` descriptor. A `gfx942` output with
+expected descriptors is admitted only when every kernel has required
+workgroup size `[256, 1, 1]`, maximum flat workgroup size `256`, and wavefront
+size `64`; descriptor-free generic requests do not acquire that G1 profile.
+Before aggregate linking, V2 additionally requires each declared export to be
+a public compiler-module definition and each declared import to be unresolved
+by that module and defined by an external provider. LLVM verification, stable
+post-link diagnostics, and LLD diagnostics are bounded before they enter the
+response.
 
 `fe2o3-worker-pipeline-tests` builds real fixtures through the configured LLVM
 libraries and covers bitcode plus bitcode, bitcode plus AMDGPU relocatable, and
 multiple AMDGPU relocatables. It also checks deterministic output and rejects
-kind, target, code-object, import, definition, and export mismatches. Supplying
-an optional path writes the successful mixed-input HSACO for independent
-inspection. Two additional paths also export the exact bitcode and relocatable
-inputs used for that link:
+kind, target, code-object, import, definition, export, descriptor, unresolved
+runtime-name, metadata, and G1 launch-profile mismatches while retaining a
+descriptor-free generic path. Supplying an optional path writes the successful
+mixed-input HSACO for independent inspection. Two additional paths also export
+the exact bitcode and relocatable inputs used for that link:
 
 `fe2o3-worker-codec-tests` decodes a Rust-produced V2 golden, rejects every
 single-byte mutation and V2-to-V1 downgrade, and checks V2 response framing.

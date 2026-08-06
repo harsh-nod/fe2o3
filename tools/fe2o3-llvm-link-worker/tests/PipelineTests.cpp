@@ -14,6 +14,7 @@
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Object/ELFObjectFile.h"
 #include "llvm/Object/ObjectFile.h"
+#include "llvm/Support/Endian.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/SHA256.h"
 #include "llvm/Support/TargetSelect.h"
@@ -24,7 +25,9 @@
 #include <algorithm>
 #include <array>
 #include <cerrno>
+#include <cstddef>
 #include <cstdlib>
+#include <cstring>
 #include <memory>
 #include <optional>
 #include <set>
@@ -213,6 +216,47 @@ std::vector<uint8_t> makeTextIr(StringRef ModuleName, StringRef Definition,
   return std::vector<uint8_t>(Buffer.begin(), Buffer.end());
 }
 
+std::vector<uint8_t>
+makeKernelBitcode(StringRef Name,
+                  std::optional<std::array<uint32_t, 3>> RequiredWorkgroup =
+                      std::array<uint32_t, 3>{256, 1, 1},
+                  uint32_t MaxWorkgroup = 256) {
+  LLVMContext Context;
+  auto ModuleValue = std::make_unique<Module>("publication-kernel", Context);
+  std::unique_ptr<TargetMachine> Machine = createMachine("gfx942");
+  ModuleValue->setTargetTriple(Triple(AmdGpuTriple));
+  ModuleValue->setDataLayout(Machine->createDataLayout());
+  ModuleValue->addModuleFlag(Module::Error, "amdhsa_code_object_version", 500);
+
+  FunctionType *Signature = FunctionType::get(Type::getVoidTy(Context), false);
+  Function *Kernel = Function::Create(Signature, GlobalValue::ExternalLinkage,
+                                      Name, *ModuleValue);
+  Kernel->setCallingConv(CallingConv::AMDGPU_KERNEL);
+  Kernel->addFnAttr("target-cpu", "gfx942");
+  Kernel->addFnAttr("target-features", "-wavefrontsize32,+wavefrontsize64");
+  std::string FlatWorkgroup =
+      (Twine(MaxWorkgroup) + "," + Twine(MaxWorkgroup)).str();
+  Kernel->addFnAttr("amdgpu-flat-work-group-size", FlatWorkgroup);
+  if (RequiredWorkgroup) {
+    Metadata *Workgroup[] = {
+        ConstantAsMetadata::get(ConstantInt::get(Type::getInt32Ty(Context),
+                                                 (*RequiredWorkgroup)[0])),
+        ConstantAsMetadata::get(ConstantInt::get(Type::getInt32Ty(Context),
+                                                 (*RequiredWorkgroup)[1])),
+        ConstantAsMetadata::get(ConstantInt::get(Type::getInt32Ty(Context),
+                                                 (*RequiredWorkgroup)[2]))};
+    Kernel->setMetadata("reqd_work_group_size",
+                        MDNode::get(Context, Workgroup));
+  }
+  BasicBlock *Entry = BasicBlock::Create(Context, "entry", Kernel);
+  IRBuilder<>(Entry).CreateRetVoid();
+
+  SmallVector<char, 0> Buffer;
+  raw_svector_ostream Stream(Buffer);
+  WriteBitcodeToFile(*ModuleValue, Stream);
+  return std::vector<uint8_t>(Buffer.begin(), Buffer.end());
+}
+
 std::vector<uint8_t> makeObject(StringRef ModuleName, StringRef Definition,
                                 std::optional<StringRef> Callee,
                                 const FixtureOptions &Options = {}) {
@@ -344,7 +388,7 @@ Response runSuccess(const Request &RequestValue,
   return Result;
 }
 
-void requireFailure(const Request &RequestValue, Stage ExpectedStage) {
+Response requireFailure(const Request &RequestValue, Stage ExpectedStage) {
   Response Result = execute(RequestValue);
   require(!Result.LinkedOutput, "rejected request returned output bytes");
   if (Result.FailureStage != ExpectedStage) {
@@ -364,6 +408,133 @@ void requireFailure(const Request &RequestValue, Stage ExpectedStage) {
   }
   require(Total <= MaxTotalDiagnosticBytes,
           "diagnostics exceeded their total byte bound");
+  return Result;
+}
+
+void requireDiagnostic(const Response &ResponseValue, StringRef Text) {
+  require(llvm::any_of(ResponseValue.Diagnostics,
+                       [Text](const std::string &Diagnostic) {
+                         return StringRef(Diagnostic).contains(Text);
+                       }),
+          Text);
+}
+
+void requireInspectionFailure(ArrayRef<uint8_t> Bytes,
+                              const Request &RequestValue,
+                              StringRef ExpectedDiagnostic) {
+  auto Inspection = inspectLinkedOutputForPublication(Bytes, RequestValue);
+  require(!Inspection, "adversarial output passed publication inspection");
+  std::string Diagnostic = toString(Inspection.takeError());
+  if (!StringRef(Diagnostic).contains(ExpectedDiagnostic)) {
+    errs() << "unexpected publication diagnostic: " << Diagnostic << '\n';
+    fail("publication inspection failed for the wrong reason");
+  }
+}
+
+uint64_t read64(ArrayRef<uint8_t> Bytes, size_t Offset) {
+  require(Offset <= Bytes.size() && Bytes.size() - Offset >= 8,
+          "fixture ELF read is out of bounds");
+  return support::endian::read64le(Bytes.data() + Offset);
+}
+
+uint32_t read32(ArrayRef<uint8_t> Bytes, size_t Offset) {
+  require(Offset <= Bytes.size() && Bytes.size() - Offset >= 4,
+          "fixture ELF read is out of bounds");
+  return support::endian::read32le(Bytes.data() + Offset);
+}
+
+uint16_t read16(ArrayRef<uint8_t> Bytes, size_t Offset) {
+  require(Offset <= Bytes.size() && Bytes.size() - Offset >= 2,
+          "fixture ELF read is out of bounds");
+  return support::endian::read16le(Bytes.data() + Offset);
+}
+
+void write32(MutableArrayRef<uint8_t> Bytes, size_t Offset, uint32_t Value) {
+  require(Offset <= Bytes.size() && Bytes.size() - Offset >= 4,
+          "fixture ELF write is out of bounds");
+  support::endian::write32le(Bytes.data() + Offset, Value);
+}
+
+void write16(MutableArrayRef<uint8_t> Bytes, size_t Offset, uint16_t Value) {
+  require(Offset <= Bytes.size() && Bytes.size() - Offset >= 2,
+          "fixture ELF write is out of bounds");
+  support::endian::write16le(Bytes.data() + Offset, Value);
+}
+
+void makeDynamicSymbolUndefined(
+    std::vector<uint8_t> &Bytes, StringRef SymbolName,
+    std::optional<StringRef> Replacement = std::nullopt) {
+  constexpr size_t Elf64SectionTypeOffset = 4;
+  constexpr size_t Elf64SectionOffsetOffset = 24;
+  constexpr size_t Elf64SectionSizeOffset = 32;
+  constexpr size_t Elf64SectionLinkOffset = 40;
+  constexpr size_t Elf64SectionEntrySizeOffset = 56;
+  constexpr size_t Elf64SymbolNameOffset = 0;
+  constexpr size_t Elf64SymbolSectionIndexOffset = 6;
+  uint64_t SectionTable = read64(Bytes, 40);
+  uint16_t SectionEntrySize = read16(Bytes, 58);
+  uint16_t SectionCount = read16(Bytes, 60);
+  require(SectionEntrySize >= 64, "fixture has a short section header");
+
+  for (uint16_t I = 0; I < SectionCount; ++I) {
+    size_t Section = SectionTable + static_cast<uint64_t>(I) * SectionEntrySize;
+    if (read32(Bytes, Section + Elf64SectionTypeOffset) != ELF::SHT_DYNSYM)
+      continue;
+    uint64_t Symbols = read64(Bytes, Section + Elf64SectionOffsetOffset);
+    uint64_t SymbolBytes = read64(Bytes, Section + Elf64SectionSizeOffset);
+    uint64_t SymbolSize = read64(Bytes, Section + Elf64SectionEntrySizeOffset);
+    uint32_t StringsIndex = read32(Bytes, Section + Elf64SectionLinkOffset);
+    require(StringsIndex < SectionCount && SymbolSize >= 24,
+            "fixture has an invalid dynamic symbol section");
+    size_t StringsSection =
+        SectionTable + static_cast<uint64_t>(StringsIndex) * SectionEntrySize;
+    uint64_t Strings = read64(Bytes, StringsSection + Elf64SectionOffsetOffset);
+    uint64_t StringBytes =
+        read64(Bytes, StringsSection + Elf64SectionSizeOffset);
+    for (uint64_t Offset = 0; Offset < SymbolBytes; Offset += SymbolSize) {
+      uint32_t NameOffset =
+          read32(Bytes, Symbols + Offset + Elf64SymbolNameOffset);
+      require(NameOffset < StringBytes,
+              "fixture dynamic symbol has an invalid name");
+      const char *Name =
+          reinterpret_cast<const char *>(Bytes.data() + Strings + NameOffset);
+      size_t Remaining = StringBytes - NameOffset;
+      size_t Length = strnlen(Name, Remaining);
+      require(Length < Remaining, "fixture dynamic symbol is unterminated");
+      if (StringRef(Name, Length) != SymbolName)
+        continue;
+      if (Replacement) {
+        require(Replacement->size() <= Length,
+                "replacement dynamic symbol is too long");
+        std::fill(Bytes.begin() + Strings + NameOffset,
+                  Bytes.begin() + Strings + NameOffset + Length, 0);
+        llvm::copy(*Replacement, Bytes.begin() + Strings + NameOffset);
+      }
+      write16(Bytes, Symbols + Offset + Elf64SymbolSectionIndexOffset,
+              ELF::SHN_UNDEF);
+      return;
+    }
+  }
+  fail("fixture did not contain the requested dynamic symbol");
+}
+
+void corruptMetadataKey(std::vector<uint8_t> &Bytes, StringRef Key) {
+  auto Position = std::search(Bytes.begin(), Bytes.end(), Key.bytes_begin(),
+                              Key.bytes_end());
+  require(Position != Bytes.end(), "fixture has no requested metadata key");
+  *Position ^= 0x20;
+}
+
+void replaceMetadataByte(std::vector<uint8_t> &Bytes, StringRef Key,
+                         uint8_t Expected, uint8_t Replacement) {
+  auto Position = std::search(Bytes.begin(), Bytes.end(), Key.bytes_begin(),
+                              Key.bytes_end());
+  require(Position != Bytes.end(), "fixture has no requested metadata key");
+  auto Value = Position + Key.size();
+  auto End = std::min(Bytes.end(), Value + 8);
+  Value = std::find(Value, End, Expected);
+  require(Value != End, "fixture metadata value has an unexpected encoding");
+  *Value = Replacement;
 }
 
 void writeOutput(StringRef Path, ArrayRef<uint8_t> Bytes) {
@@ -500,7 +671,129 @@ int main(int ArgumentCount, char **Arguments) {
       makeInput(InputKind::LlvmTextIr,
                 makeTextIr("text-v2", "text_v2_entry", std::nullopt)),
       {}, {}, {"text_v2_entry"}, {"text_v2_entry"});
-  runSuccess(TextV2, {"text_v2_entry"});
+  Response TextV2Response = runSuccess(TextV2, {"text_v2_entry"});
+  requireDiagnostic(TextV2Response,
+                    "post_link.check=metadata status=ok kernels=0");
+
+  Request PublicationKernel =
+      makeV2Request(makeInput(InputKind::LlvmBitcode,
+                              makeKernelBitcode("publication_kernel")),
+                    {}, {}, {"publication_kernel"},
+                    {"publication_kernel", "publication_kernel.kd"});
+  Response PublicationResponse = runSuccess(
+      PublicationKernel, {"publication_kernel", "publication_kernel.kd"});
+  requireDiagnostic(PublicationResponse,
+                    "post_link.check=target status=ok arch=gfx942");
+  requireDiagnostic(PublicationResponse,
+                    "post_link.check=exports status=ok "
+                    "symbols=[publication_kernel,publication_kernel.kd]");
+  requireDiagnostic(PublicationResponse,
+                    "post_link.check=unresolved status=ok symbols=[]");
+  requireDiagnostic(PublicationResponse,
+                    "post_link.check=metadata status=ok kernels=1");
+  requireDiagnostic(PublicationResponse,
+                    "post_link.kernel name=publication_kernel "
+                    "symbol=publication_kernel.kd");
+  requireDiagnostic(PublicationResponse, "wavefront_size=64");
+  requireDiagnostic(PublicationResponse, "max_workgroup_size=256");
+  requireDiagnostic(PublicationResponse, "reqd_workgroup_size=[256,1,1]");
+
+  auto PublicationInspection = inspectLinkedOutputForPublication(
+      PublicationResponse.LinkedOutput->Bytes, PublicationKernel);
+  if (!PublicationInspection)
+    fail(toString(PublicationInspection.takeError()));
+
+  Request DescriptorOmitted = PublicationKernel;
+  DescriptorOmitted.ExpectedDefinedSymbols = {"publication_kernel"};
+  requireInspectionFailure(PublicationResponse.LinkedOutput->Bytes,
+                           DescriptorOmitted,
+                           "post_link.check=exports status=failed");
+
+  std::vector<uint8_t> WrongOutputTarget =
+      PublicationResponse.LinkedOutput->Bytes;
+  constexpr size_t Elf64FlagsOffset = 48;
+  uint32_t Flags = read32(WrongOutputTarget, Elf64FlagsOffset);
+  write32(WrongOutputTarget, Elf64FlagsOffset, Flags & ~ELF::EF_AMDGPU_MACH);
+  requireInspectionFailure(WrongOutputTarget, PublicationKernel,
+                           "post_link.check=target status=failed "
+                           "expected=gfx942");
+
+  std::vector<uint8_t> UndefinedOutput =
+      PublicationResponse.LinkedOutput->Bytes;
+  makeDynamicSymbolUndefined(UndefinedOutput, "publication_kernel");
+  requireInspectionFailure(UndefinedOutput, PublicationKernel,
+                           "post_link.check=unresolved status=failed "
+                           "symbols=[publication_kernel]");
+
+  std::vector<uint8_t> RuntimeUndefinedOutput =
+      PublicationResponse.LinkedOutput->Bytes;
+  makeDynamicSymbolUndefined(RuntimeUndefinedOutput, "publication_kernel",
+                             "__ockl_bad");
+  requireInspectionFailure(RuntimeUndefinedOutput, PublicationKernel,
+                           "post_link.check=unresolved status=failed "
+                           "symbols=[__ockl_bad]");
+
+  RuntimeUndefinedOutput = PublicationResponse.LinkedOutput->Bytes;
+  makeDynamicSymbolUndefined(RuntimeUndefinedOutput, "publication_kernel",
+                             "__ocml_bad");
+  requireInspectionFailure(RuntimeUndefinedOutput, PublicationKernel,
+                           "post_link.check=unresolved status=failed "
+                           "symbols=[__ocml_bad]");
+
+  std::vector<uint8_t> InvalidMetadata =
+      PublicationResponse.LinkedOutput->Bytes;
+  corruptMetadataKey(InvalidMetadata, ".wavefront_size");
+  requireInspectionFailure(InvalidMetadata, PublicationKernel,
+                           "post_link.check=metadata status=failed "
+                           "reason=linked%20output%20has%20invalid%20AMDGPU%20"
+                           "metadata%20schema");
+
+  Request WrongRequiredWorkgroup = makeV2Request(
+      makeInput(InputKind::LlvmBitcode,
+                makeKernelBitcode("wrong_required_workgroup",
+                                  std::array<uint32_t, 3>{128, 1, 1})),
+      {}, {}, {"wrong_required_workgroup"},
+      {"wrong_required_workgroup", "wrong_required_workgroup.kd"});
+  Response WrongRequiredFailure =
+      requireFailure(WrongRequiredWorkgroup, Stage::OutputInspection);
+  requireDiagnostic(WrongRequiredFailure,
+                    "post_link.check=g1_profile status=failed "
+                    "kernel=wrong_required_workgroup "
+                    "field=reqd_workgroup_size expected=[256,1,1]");
+
+  Request MissingRequiredWorkgroup = makeV2Request(
+      makeInput(InputKind::LlvmBitcode,
+                makeKernelBitcode("missing_required_workgroup", std::nullopt)),
+      {}, {}, {"missing_required_workgroup"},
+      {"missing_required_workgroup", "missing_required_workgroup.kd"});
+  Response MissingRequiredFailure =
+      requireFailure(MissingRequiredWorkgroup, Stage::OutputInspection);
+  requireDiagnostic(MissingRequiredFailure,
+                    "post_link.check=g1_profile status=failed "
+                    "kernel=missing_required_workgroup "
+                    "field=reqd_workgroup_size expected=[256,1,1]");
+
+  Request WrongMaxWorkgroup = makeV2Request(
+      makeInput(InputKind::LlvmBitcode,
+                makeKernelBitcode("wrong_max_workgroup",
+                                  std::array<uint32_t, 3>{256, 1, 1}, 512)),
+      {}, {}, {"wrong_max_workgroup"},
+      {"wrong_max_workgroup", "wrong_max_workgroup.kd"});
+  Response WrongMaxFailure =
+      requireFailure(WrongMaxWorkgroup, Stage::OutputInspection);
+  requireDiagnostic(WrongMaxFailure,
+                    "post_link.check=g1_profile status=failed "
+                    "kernel=wrong_max_workgroup "
+                    "field=max_flat_workgroup_size expected=256 actual=512");
+
+  std::vector<uint8_t> WrongOutputWavefront =
+      PublicationResponse.LinkedOutput->Bytes;
+  replaceMetadataByte(WrongOutputWavefront, ".wavefront_size", 64, 32);
+  requireInspectionFailure(WrongOutputWavefront, PublicationKernel,
+                           "post_link.check=g1_profile status=failed "
+                           "kernel=publication_kernel field=wavefront_size "
+                           "expected=64 actual=32");
+
   Request WrongV2Worker = MixedV2;
   WrongV2Worker.WorkerBuildIdentity = "wrong-worker";
   requireFailure(WrongV2Worker, Stage::Toolchain);
