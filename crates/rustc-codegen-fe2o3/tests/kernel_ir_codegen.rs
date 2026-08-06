@@ -79,12 +79,122 @@ impl WorkerV2TestConfig {
         std::fs::write(&path, json).expect("write Worker V2 test config");
         Self(path)
     }
+
+    fn native_source(
+        directory: &Path,
+        workspace: &Path,
+        source: &Path,
+        worker: &Path,
+        worker_build_identity: &str,
+        llvm_build_identity: &str,
+    ) -> Self {
+        let bytes = std::fs::read(worker).expect("read configured Worker V2 executable");
+        let digest = DigestAlgorithm::Sha256.calculate(&bytes).bytes();
+        let hex = digest
+            .as_bytes()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let path = directory.join("worker-v2-native-source.json");
+        let worker = worker.to_str().expect("UTF-8 worker path");
+        let workspace = workspace.to_str().expect("UTF-8 workspace path");
+        let source = source.to_str().expect("UTF-8 source path");
+        let json = format!(
+            "{{\"candidate_output_max_bytes\":4194304,\"final_symbols\":[\"local_device_add_v1\",\"worker_v2_kernel\"],\"format\":\"fe2o3-worker-v2-config-v1\",\"limits\":{{\"stderr_bytes\":65536,\"stdout_bytes\":8388608,\"timeout_ms\":30000}},\"link_options\":[{{\"name\":\"code-object-version\",\"value\":\"5\"}},{{\"name\":\"opt-level\",\"value\":\"2\"}},{{\"name\":\"strip-debug\",\"value\":\"true\"}},{{\"name\":\"verify-each\",\"value\":\"true\"}}],\"providers\":[],\"units\":[{{\"crate_name\":\"worker_v2_source\",\"source\":{source:?},\"working_directory\":{workspace:?}}}],\"worker\":{{\"byte_len\":{},\"llvm_build_identity\":{llvm_build_identity:?},\"path\":{worker:?},\"sha256\":\"{hex}\",\"worker_build_identity\":{worker_build_identity:?}}}}}",
+            bytes.len()
+        );
+        std::fs::write(&path, json).expect("write native Worker V2 source config");
+        Self(path)
+    }
 }
 
 impl Drop for WorkerV2TestConfig {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.0);
     }
+}
+
+struct WorkerV2SourceDirectory(PathBuf);
+
+impl WorkerV2SourceDirectory {
+    fn new(workspace: &Path) -> Self {
+        let path = workspace.join(format!(
+            "target/worker-v2-native-source-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).expect("create native Worker V2 source directory");
+        Self(path)
+    }
+}
+
+impl Drop for WorkerV2SourceDirectory {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn build_codegen_backend(workspace: &Path) -> PathBuf {
+    let output = Command::new(env!("CARGO"))
+        .current_dir(workspace)
+        .args(["build", "--locked", "-p", "rustc-codegen-fe2o3"])
+        .output()
+        .expect("build rustc-codegen-fe2o3");
+    assert!(
+        output.status.success(),
+        "backend build failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    workspace.join("target/debug/librustc_codegen_fe2o3.so")
+}
+
+fn worker_v2_source() -> String {
+    let fields = reserved_fe2o3_symbols::DeviceFfiContractFieldsV1 {
+        direction: reserved_fe2o3_symbols::DEVICE_FFI_DIRECTION_EXPORT_V1,
+        symbol: "local_device_add_v1",
+        calling_convention: "C",
+        code_object_version: 5,
+        target: "gfx942:xnack-",
+        physical_abi: "C(u32[size=4,align=4])->u32[size=4,align=4]",
+        effects: "none",
+        semantic_identity: "5656565656565656565656565656565656565656565656565656565656565656",
+    };
+    let contract = reserved_fe2o3_symbols::derive_device_ffi_contract_id_v1(fields);
+    let marker = reserved_fe2o3_symbols::device_ffi_marker_v1(contract, fields);
+    format!(
+        r#"
+#[inline(always)]
+#[doc = "{marker}"]
+#[unsafe(export_name = "local_device_add_v1")]
+pub unsafe extern "C" fn local_device_add(value: u32) -> u32 {{
+    value.wrapping_add(1)
+}}
+
+#[used]
+static __fe2o3_device_ffi_registration_v1_{contract}: (
+    u64, u16, u16, &'static str, &'static str, &'static str, u16,
+    &'static str, &'static str, &'static str, &'static str,
+    unsafe extern "C" fn(u32) -> u32,
+) = (
+    0x4946_4633_4f32_4546, 1, 2, "{contract}", "local_device_add_v1",
+    "C", 5, "gfx942:xnack-", "C(u32[size=4,align=4])->u32[size=4,align=4]",
+    "none", "5656565656565656565656565656565656565656565656565656565656565656",
+    local_device_add,
+);
+
+#[unsafe(no_mangle)]
+pub fn worker_v2_kernel() {{}}
+
+#[used]
+static __fe2o3_kernel_registration_worker_v2: (
+    u64, u16, u16, &'static str, &'static str, fn(),
+) = (
+    0x4e52_4b33_4f32_4546, 1, 1, "worker_v2_kernel",
+    "worker_v2_kernel", worker_v2_kernel,
+);
+"#,
+        contract = contract.to_hex(),
+    )
 }
 
 fn artifact_paths(workspace: &Path, kernel: &str) -> [PathBuf; 3] {
@@ -334,4 +444,72 @@ fn worker_v2_rejects_a_missing_envelope_without_touching_legacy_artifacts() {
         );
         std::fs::remove_file(&artifact).expect("remove preseeded legacy artifact");
     }
+}
+
+#[test]
+#[ignore = "requires the configured native LLVM/LLD Worker V2 executable"]
+fn worker_v2_real_source_reaches_the_native_publication_boundary() {
+    let _lock = backend_test_lock();
+    let workspace = workspace();
+    let directory = WorkerV2SourceDirectory::new(&workspace);
+    let source = directory.0.join("worker-v2-source.rs");
+    std::fs::write(&source, worker_v2_source()).expect("write Worker V2 source fixture");
+    let worker =
+        PathBuf::from(std::env::var_os("FE2O3_LLVM_LINK_WORKER").expect("FE2O3_LLVM_LINK_WORKER"));
+    let worker_build_identity =
+        std::env::var("FE2O3_LLVM_LINK_WORKER_BUILD_ID").expect("worker build identity");
+    let llvm_build_identity = std::env::var("FE2O3_LLVM_BUILD_ID").expect("LLVM build identity");
+    let config = WorkerV2TestConfig::native_source(
+        &directory.0,
+        &workspace,
+        &source,
+        &worker,
+        &worker_build_identity,
+        &llvm_build_identity,
+    );
+    let backend = build_codegen_backend(&workspace);
+    let output = Command::new(env!("CARGO"))
+        .current_dir(&workspace)
+        .args(["run", "--locked", "-p", "cargo-fe2o3", "--"])
+        .arg("rustc")
+        .arg(&source)
+        .args([
+            "--crate-name",
+            "worker_v2_source",
+            "--edition=2024",
+            "--crate-type=lib",
+            "--emit=obj",
+            "-Cpanic=abort",
+            "-Cmetadata=worker-v2-native-source",
+        ])
+        .arg(format!("-Zcodegen-backend={}", backend.display()))
+        .arg("-Zmir-enable-passes=-JumpThreading")
+        .arg("-o")
+        .arg(directory.0.join("host.o"))
+        .env("FE2O3_BINDING_WRAPPER_MODE_V1", "1")
+        .env("FE2O3_BUILD_SESSION_V1", "77".repeat(16))
+        .env("FE2O3_CODEGEN_PIPELINE", "kernel-ir-worker-v2")
+        .env("FE2O3_HSACO_DIR", directory.0.join("artifacts"))
+        .env("FE2O3_TARGET", "gfx942:xnack-")
+        .env("FE2O3_VERBOSE", "1")
+        .env("FE2O3_WORKER_V2_CONFIG_V1", &config.0)
+        .output()
+        .expect("run real-source Worker V2 flow");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(!output.status.success(), "unpublished output was accepted");
+    assert!(
+        stderr.contains("selected kernel-ir-worker-v2: verified compiler-module candidate"),
+        "rustc did not construct the compiler module:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("published inert Worker V2 compiler-module handoff"),
+        "rustc did not publish the handoff:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("Worker V2 produced inert evidence identity sha256:")
+            && stderr.contains("no authenticated publication adapter"),
+        "native worker did not reach the explicit publication boundary:\n{stderr}"
+    );
+    assert!(!stderr.contains("Worker V2 execution failed"), "{stderr}");
 }
