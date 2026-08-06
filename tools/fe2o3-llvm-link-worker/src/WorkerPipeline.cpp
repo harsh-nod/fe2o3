@@ -342,9 +342,9 @@ Error setAndCheckModuleContract(Module &ModuleValue,
         continue;
       }
       ArrayRef<SubtargetFeatureKV> KnownFeatures =
-          Machine.getMCSubtargetInfo().getAllProcessorFeatures();
+          Machine.getMCSubtargetInfo()->getAllProcessorFeatures();
       auto Known = llvm::lower_bound(KnownFeatures, Name);
-      if (Known == KnownFeatures.end() || StringRef(Known->key()) != Name)
+      if (Known == KnownFeatures.end() || StringRef(Known->Key) != Name)
         return pipelineError(Twine("bitcode function '") +
                              FunctionValue.getName() +
                              "' names an unknown target feature");
@@ -353,7 +353,7 @@ Error setAndCheckModuleContract(Module &ModuleValue,
       CheckedFeatures.append(Feature);
     }
     if (!CheckedFeatures.empty() &&
-        !Machine.getMCSubtargetInfo().checkFeatures(CheckedFeatures))
+        !Machine.getMCSubtargetInfo()->checkFeatures(CheckedFeatures))
       return pipelineError(Twine("bitcode function '") +
                            FunctionValue.getName() +
                            "' target features are incompatible with target");
@@ -504,8 +504,7 @@ Expected<ElfContract> inspectRelocatable(ArrayRef<uint8_t> Bytes) {
       Bytes[ELF::EI_CLASS] != ELF::ELFCLASS64 ||
       Bytes[ELF::EI_DATA] != ELF::ELFDATA2LSB ||
       Bytes[ELF::EI_VERSION] != ELF::EV_CURRENT ||
-      Elf->getBytesInAddress() != 8 || !Elf->isLittleEndian() ||
-      Elf->getArch() != Triple::amdgpu)
+      Elf->getBytesInAddress() != 8 || !Elf->isLittleEndian())
     return pipelineError("AMDGPU relocatable is not 64-bit little-endian ELF");
   uint8_t OsAbi = Bytes[ELF::EI_OSABI];
   if (OsAbi != ELF::ELFOSABI_AMDGPU_HSA)
@@ -559,8 +558,7 @@ Expected<std::set<std::string>> inspectOutput(ArrayRef<uint8_t> Bytes,
       Bytes[ELF::EI_CLASS] != ELF::ELFCLASS64 ||
       Bytes[ELF::EI_DATA] != ELF::ELFDATA2LSB ||
       Bytes[ELF::EI_VERSION] != ELF::EV_CURRENT ||
-      Elf->getBytesInAddress() != 8 || !Elf->isLittleEndian() ||
-      Elf->getArch() != Triple::amdgpu)
+      Elf->getBytesInAddress() != 8 || !Elf->isLittleEndian())
     return pipelineError("linked output has an invalid AMDGPU ELF envelope");
   if (Elf->getPlatformFlags() != Expected.Flags ||
       Bytes[ELF::EI_OSABI] != Expected.OsAbi ||
