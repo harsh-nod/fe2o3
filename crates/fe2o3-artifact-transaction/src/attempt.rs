@@ -9,6 +9,11 @@ const MAX_STABLE_SOURCE_BYTES: usize = 4096;
 const MAX_CRATE_NAME_BYTES: usize = 128;
 const ATTEMPT_HEADER_BYTES: usize = ATTEMPT_MAGIC.len() + 8 + 4;
 const ATTEMPT_RECORD_FIXED_BYTES: usize = 2 + 2 + 32 + 8 + 16 + 1 + 1;
+const BACKEND_RECEIPT_NONE: u8 = 0;
+const BACKEND_RECEIPT_LEGACY: u8 = 1;
+const BACKEND_RECEIPT_PROVENANCE_V1: u8 = 2;
+const BACKEND_RECEIPT_PENDING_PROVENANCE_V1: u8 = 3;
+const BACKEND_PROVENANCE_RECEIPT_BYTES: usize = 7 * 32;
 
 /// Process-independent identity shared by the cooperating processes in one build.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -122,6 +127,79 @@ pub struct BuildAttempt {
     generation: u64,
     session: BuildSession,
     invocation: BuildInvocation,
+}
+
+/// Durable provenance fields bound to one successful exact-byte backend publication.
+///
+/// This receipt is coordination evidence, not proof that the code object passed semantic, ABI,
+/// memory-safety, or launch-safety admission. In particular, `upstream_evidence_identity` records
+/// an identity supplied by the caller; this crate does not validate the evidence behind it.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct BackendPublicationReceiptV1 {
+    attempt_identity: [u8; 32],
+    producer_identity: [u8; 32],
+    scope_identity: [u8; 32],
+    plan_commitment: [u8; 32],
+    upstream_evidence_identity: [u8; 32],
+    finalized_output_identity: [u8; 32],
+    publication_identity: [u8; 32],
+}
+
+impl BackendPublicationReceiptV1 {
+    pub(crate) const fn new(
+        attempt_identity: [u8; 32],
+        producer_identity: [u8; 32],
+        scope_identity: [u8; 32],
+        plan_commitment: [u8; 32],
+        upstream_evidence_identity: [u8; 32],
+        finalized_output_identity: [u8; 32],
+        publication_identity: [u8; 32],
+    ) -> Self {
+        Self {
+            attempt_identity,
+            producer_identity,
+            scope_identity,
+            plan_commitment,
+            upstream_evidence_identity,
+            finalized_output_identity,
+            publication_identity,
+        }
+    }
+
+    /// Returns the canonical identity of the exact build attempt.
+    pub const fn attempt_identity(self) -> [u8; 32] {
+        self.attempt_identity
+    }
+
+    /// Returns the canonical identity of the producer source and crate name.
+    pub const fn producer_identity(self) -> [u8; 32] {
+        self.producer_identity
+    }
+
+    /// Returns the canonical package, kernel-set, and target scope identity.
+    pub const fn scope_identity(self) -> [u8; 32] {
+        self.scope_identity
+    }
+
+    /// Returns the commitment to every field in the durable publication plan.
+    pub const fn plan_commitment(self) -> [u8; 32] {
+        self.plan_commitment
+    }
+
+    /// Returns the caller-supplied upstream evidence identity.
+    pub const fn upstream_evidence_identity(self) -> [u8; 32] {
+        self.upstream_evidence_identity
+    }
+
+    /// Returns the SHA-256 identity of the exact finalized bytes.
+    pub const fn finalized_output_identity(self) -> [u8; 32] {
+        self.finalized_output_identity
+    }
+
+    /// Returns the atomic publication identity committed by the durable plan.
+    pub const fn publication_identity(self) -> [u8; 32] {
+        self.publication_identity
+    }
 }
 
 impl BuildAttempt {
@@ -242,7 +320,20 @@ pub(crate) struct AttemptRecord {
     pub(crate) generation: u64,
     pub(crate) session: BuildSession,
     pub(crate) phase: AttemptPhase,
-    pub(crate) backend_seen: bool,
+    pub(crate) backend_receipt: Option<BackendReceiptV1>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BackendReceiptV1 {
+    LegacyCoordination,
+    PendingProvenance(BackendPublicationReceiptV1),
+    Provenance(BackendPublicationReceiptV1),
+}
+
+impl BackendReceiptV1 {
+    pub(crate) const fn is_completed(self) -> bool {
+        matches!(self, Self::LegacyCoordination | Self::Provenance(_))
+    }
 }
 
 impl AttemptRecord {
@@ -276,7 +367,7 @@ pub enum AttemptCodecError {
     InvalidUtf8,
     InvalidTextLength,
     InvalidPhase(u8),
-    InvalidBoolean(u8),
+    InvalidBackendReceiptTag(u8),
     ZeroGeneration,
     GenerationBeyondWatermark,
     DuplicateGeneration,
@@ -313,7 +404,7 @@ impl fmt::Display for AttemptCodecError {
             Self::InvalidUtf8 => "attempt registry text is not UTF-8",
             Self::InvalidTextLength => "invalid attempt registry text length",
             Self::InvalidPhase(_) => "invalid attempt phase",
-            Self::InvalidBoolean(_) => "invalid attempt boolean",
+            Self::InvalidBackendReceiptTag(_) => "invalid backend receipt tag",
             Self::ZeroGeneration => "attempt generation is zero",
             Self::GenerationBeyondWatermark => "attempt generation exceeds registry watermark",
             Self::DuplicateGeneration => "duplicate active attempt generation",
@@ -330,7 +421,7 @@ impl fmt::Display for AttemptCodecError {
             Self::InvalidTransition => "build attempt is in the wrong phase",
         };
         match self {
-            Self::InvalidPhase(value) | Self::InvalidBoolean(value) => {
+            Self::InvalidPhase(value) | Self::InvalidBackendReceiptTag(value) => {
                 write!(formatter, "{message}: {value}")
             }
             _ => formatter.write_str(message),
@@ -360,7 +451,32 @@ impl AttemptRegistry {
             bytes.extend_from_slice(&record.generation.to_le_bytes());
             bytes.extend_from_slice(record.session.as_bytes());
             bytes.push(record.phase.encode());
-            bytes.push(u8::from(record.backend_seen));
+            match record.backend_receipt {
+                None => bytes.push(BACKEND_RECEIPT_NONE),
+                Some(BackendReceiptV1::LegacyCoordination) => {
+                    bytes.push(BACKEND_RECEIPT_LEGACY);
+                }
+                Some(BackendReceiptV1::Provenance(receipt)) => {
+                    bytes.push(BACKEND_RECEIPT_PROVENANCE_V1);
+                    bytes.extend_from_slice(&receipt.attempt_identity);
+                    bytes.extend_from_slice(&receipt.producer_identity);
+                    bytes.extend_from_slice(&receipt.scope_identity);
+                    bytes.extend_from_slice(&receipt.plan_commitment);
+                    bytes.extend_from_slice(&receipt.upstream_evidence_identity);
+                    bytes.extend_from_slice(&receipt.finalized_output_identity);
+                    bytes.extend_from_slice(&receipt.publication_identity);
+                }
+                Some(BackendReceiptV1::PendingProvenance(receipt)) => {
+                    bytes.push(BACKEND_RECEIPT_PENDING_PROVENANCE_V1);
+                    bytes.extend_from_slice(&receipt.attempt_identity);
+                    bytes.extend_from_slice(&receipt.producer_identity);
+                    bytes.extend_from_slice(&receipt.scope_identity);
+                    bytes.extend_from_slice(&receipt.plan_commitment);
+                    bytes.extend_from_slice(&receipt.upstream_evidence_identity);
+                    bytes.extend_from_slice(&receipt.finalized_output_identity);
+                    bytes.extend_from_slice(&receipt.publication_identity);
+                }
+            }
         }
         if bytes.len() > MAX_ATTEMPT_BYTES {
             return Err(AttemptCodecError::RegistryTooLarge);
@@ -395,10 +511,32 @@ impl AttemptRegistry {
             let mut session = [0; 16];
             session.copy_from_slice(decoder.take(16)?);
             let phase = AttemptPhase::decode(decoder.byte()?)?;
-            let backend_seen = match decoder.byte()? {
-                0 => false,
-                1 => true,
-                value => return Err(AttemptCodecError::InvalidBoolean(value)),
+            let backend_receipt = match decoder.byte()? {
+                BACKEND_RECEIPT_NONE => None,
+                BACKEND_RECEIPT_LEGACY => Some(BackendReceiptV1::LegacyCoordination),
+                BACKEND_RECEIPT_PROVENANCE_V1 => Some(BackendReceiptV1::Provenance(
+                    BackendPublicationReceiptV1::new(
+                        decoder.fixed()?,
+                        decoder.fixed()?,
+                        decoder.fixed()?,
+                        decoder.fixed()?,
+                        decoder.fixed()?,
+                        decoder.fixed()?,
+                        decoder.fixed()?,
+                    ),
+                )),
+                BACKEND_RECEIPT_PENDING_PROVENANCE_V1 => Some(BackendReceiptV1::PendingProvenance(
+                    BackendPublicationReceiptV1::new(
+                        decoder.fixed()?,
+                        decoder.fixed()?,
+                        decoder.fixed()?,
+                        decoder.fixed()?,
+                        decoder.fixed()?,
+                        decoder.fixed()?,
+                        decoder.fixed()?,
+                    ),
+                )),
+                value => return Err(AttemptCodecError::InvalidBackendReceiptTag(value)),
             };
             if records
                 .insert(
@@ -409,7 +547,7 @@ impl AttemptRegistry {
                         generation,
                         session: BuildSession::from_bytes(session),
                         phase,
-                        backend_seen,
+                        backend_receipt,
                     },
                 )
                 .is_some()
@@ -474,7 +612,7 @@ impl AttemptRegistry {
             generation: attempt.generation,
             session,
             phase: AttemptPhase::Invalidating,
-            backend_seen: false,
+            backend_receipt: None,
         };
         self.last_issued_generation = attempt.generation;
         self.records.insert(stable_source.to_string(), record);
@@ -487,7 +625,7 @@ impl AttemptRegistry {
         attempt: BuildAttempt,
     ) -> Result<(), AttemptCodecError> {
         let record = self.exact_record_mut(stable_source, attempt)?;
-        if record.phase != AttemptPhase::Invalidating || record.backend_seen {
+        if record.phase != AttemptPhase::Invalidating || record.backend_receipt.is_some() {
             return Err(AttemptCodecError::InvalidTransition);
         }
         record.phase = AttemptPhase::Building;
@@ -500,7 +638,7 @@ impl AttemptRegistry {
         attempt: BuildAttempt,
     ) -> Result<(), AttemptCodecError> {
         let record = self.exact_record_mut(stable_source, attempt)?;
-        if record.backend_seen {
+        if record.backend_receipt.is_some() {
             return Err(AttemptCodecError::BackendAlreadySeen);
         }
         if record.phase != AttemptPhase::Building {
@@ -510,20 +648,56 @@ impl AttemptRegistry {
         Ok(())
     }
 
-    pub(crate) fn mark_backend_seen(
+    pub(crate) fn claim_backend_with_pending_receipt(
+        &mut self,
+        stable_source: &str,
+        attempt: BuildAttempt,
+        receipt: BackendPublicationReceiptV1,
+    ) -> Result<(), AttemptCodecError> {
+        let record = self.exact_record_mut(stable_source, attempt)?;
+        if record.backend_receipt.is_some() {
+            return Err(AttemptCodecError::BackendAlreadySeen);
+        }
+        if record.phase != AttemptPhase::Building {
+            return Err(AttemptCodecError::InvalidTransition);
+        }
+        record.phase = AttemptPhase::BackendClaimed;
+        record.backend_receipt = Some(BackendReceiptV1::PendingProvenance(receipt));
+        Ok(())
+    }
+
+    pub(crate) fn record_legacy_backend_receipt(
         &mut self,
         stable_source: &str,
         attempt: BuildAttempt,
     ) -> Result<(), AttemptCodecError> {
         let record = self.exact_record_mut(stable_source, attempt)?;
-        if record.backend_seen {
+        if record.backend_receipt.is_some() {
             return Err(AttemptCodecError::BackendAlreadySeen);
         }
         if record.phase != AttemptPhase::BackendClaimed {
             return Err(AttemptCodecError::InvalidTransition);
         }
-        record.backend_seen = true;
+        record.backend_receipt = Some(BackendReceiptV1::LegacyCoordination);
         Ok(())
+    }
+
+    pub(crate) fn record_backend_publication_receipt(
+        &mut self,
+        stable_source: &str,
+        attempt: BuildAttempt,
+        receipt: BackendPublicationReceiptV1,
+    ) -> Result<(), AttemptCodecError> {
+        let record = self.exact_record_mut(stable_source, attempt)?;
+        match record.backend_receipt {
+            Some(BackendReceiptV1::PendingProvenance(pending)) if pending == receipt => {
+                record.backend_receipt = Some(BackendReceiptV1::Provenance(receipt));
+                Ok(())
+            }
+            Some(BackendReceiptV1::Provenance(existing)) if existing == receipt => Ok(()),
+            Some(_) => Err(AttemptCodecError::BackendAlreadySeen),
+            None => Err(AttemptCodecError::InvalidTransition),
+        }
     }
 
     pub(crate) fn mark_failed(
@@ -538,6 +712,12 @@ impl AttemptRegistry {
         if record.phase == AttemptPhase::Failed {
             return Ok(());
         }
+        if matches!(
+            record.backend_receipt,
+            Some(BackendReceiptV1::PendingProvenance(_))
+        ) {
+            record.backend_receipt = None;
+        }
         record.phase = AttemptPhase::Failed;
         Ok(())
     }
@@ -549,13 +729,20 @@ impl AttemptRegistry {
     ) -> Result<(), AttemptCodecError> {
         let record = self.exact_record_mut(stable_source, attempt)?;
         if record.phase == AttemptPhase::Completed {
-            return if record.backend_seen {
+            return if record
+                .backend_receipt
+                .is_some_and(BackendReceiptV1::is_completed)
+            {
                 Ok(())
             } else {
                 Err(AttemptCodecError::InvalidTransition)
             };
         }
-        if record.phase != AttemptPhase::BackendClaimed || !record.backend_seen {
+        if record.phase != AttemptPhase::BackendClaimed
+            || !record
+                .backend_receipt
+                .is_some_and(BackendReceiptV1::is_completed)
+        {
             return Err(AttemptCodecError::InvalidTransition);
         }
         record.phase = AttemptPhase::Completed;
@@ -581,7 +768,7 @@ impl AttemptRegistry {
         if record.phase != AttemptPhase::Building {
             return Err(AttemptCodecError::InvalidTransition);
         }
-        if record.backend_seen {
+        if record.backend_receipt.is_some() {
             return Err(AttemptCodecError::BackendAlreadySeen);
         }
         Ok(record)
@@ -608,7 +795,7 @@ impl AttemptRegistry {
                 generation: attempt.generation,
                 session: BuildSession::DIRECT,
                 phase: AttemptPhase::Invalidating,
-                backend_seen: false,
+                backend_receipt: None,
             },
         );
         Ok(attempt)
@@ -632,13 +819,12 @@ impl AttemptRegistry {
         crate_name: &str,
     ) -> Result<(), AttemptCodecError> {
         let current_size = self.canonical_size()?;
-        let replaced_size = self
-            .records
-            .get(stable_source)
-            .map_or(0, |record| record_size(stable_source, &record.crate_name));
+        let replaced_size = self.records.get(stable_source).map_or(0, |record| {
+            record_size(stable_source, &record.crate_name, record.backend_receipt)
+        });
         let next_size = current_size
             .checked_sub(replaced_size)
-            .and_then(|size| size.checked_add(record_size(stable_source, crate_name)))
+            .and_then(|size| size.checked_add(record_size(stable_source, crate_name, None)))
             .ok_or(AttemptCodecError::RegistryTooLarge)?;
         if next_size > MAX_ATTEMPT_BYTES {
             return Err(AttemptCodecError::RegistryTooLarge);
@@ -650,8 +836,12 @@ impl AttemptRegistry {
         self.records
             .iter()
             .try_fold(ATTEMPT_HEADER_BYTES, |size, (source, record)| {
-                size.checked_add(record_size(source, &record.crate_name))
-                    .ok_or(AttemptCodecError::RegistryTooLarge)
+                size.checked_add(record_size(
+                    source,
+                    &record.crate_name,
+                    record.backend_receipt,
+                ))
+                .ok_or(AttemptCodecError::RegistryTooLarge)
             })
     }
 
@@ -715,8 +905,11 @@ impl AttemptRegistry {
             }
             if ((record.phase == AttemptPhase::Invalidating
                 || record.phase == AttemptPhase::Building)
-                && record.backend_seen)
-                || (record.phase == AttemptPhase::Completed && !record.backend_seen)
+                && record.backend_receipt.is_some())
+                || (record.phase == AttemptPhase::Completed
+                    && !record
+                        .backend_receipt
+                        .is_some_and(BackendReceiptV1::is_completed))
             {
                 return Err(AttemptCodecError::InvalidTransition);
             }
@@ -728,8 +921,18 @@ impl AttemptRegistry {
     }
 }
 
-fn record_size(stable_source: &str, crate_name: &str) -> usize {
-    ATTEMPT_RECORD_FIXED_BYTES + stable_source.len() + crate_name.len()
+fn record_size(
+    stable_source: &str,
+    crate_name: &str,
+    backend_receipt: Option<BackendReceiptV1>,
+) -> usize {
+    ATTEMPT_RECORD_FIXED_BYTES
+        + stable_source.len()
+        + crate_name.len()
+        + usize::from(matches!(
+            backend_receipt,
+            Some(BackendReceiptV1::PendingProvenance(_) | BackendReceiptV1::Provenance(_))
+        )) * BACKEND_PROVENANCE_RECEIPT_BYTES
 }
 
 fn encode_hex(bytes: &[u8]) -> String {
@@ -834,6 +1037,12 @@ impl<'a> AttemptDecoder<'a> {
         Ok(u64::from_le_bytes(self.take(8)?.try_into().unwrap()))
     }
 
+    fn fixed<const N: usize>(&mut self) -> Result<[u8; N], AttemptCodecError> {
+        self.take(N)?
+            .try_into()
+            .map_err(|_| AttemptCodecError::Truncated)
+    }
+
     fn text(&mut self, maximum: usize) -> Result<String, AttemptCodecError> {
         let length = u16::from_le_bytes(self.take(2)?.try_into().unwrap()) as usize;
         if length == 0 || length > maximum {
@@ -874,8 +1083,22 @@ mod tests {
         let attempt = start(&mut registry, "path:a", SESSION_A);
         registry.transition_building("path:a", attempt).unwrap();
         registry.claim_backend("path:a", attempt).unwrap();
-        registry.mark_backend_seen("path:a", attempt).unwrap();
+        registry
+            .record_legacy_backend_receipt("path:a", attempt)
+            .unwrap();
         registry.encode().unwrap()
+    }
+
+    fn provenance_receipt(seed: u8) -> BackendPublicationReceiptV1 {
+        BackendPublicationReceiptV1::new(
+            [seed; 32],
+            [seed.wrapping_add(1); 32],
+            [seed.wrapping_add(2); 32],
+            [seed.wrapping_add(3); 32],
+            [seed.wrapping_add(4); 32],
+            [seed.wrapping_add(5); 32],
+            [seed.wrapping_add(6); 32],
+        )
     }
 
     fn raw_registry(
@@ -1041,11 +1264,11 @@ mod tests {
         let m = start(&mut registry, "path:m", SESSION_A);
         registry.transition_building("path:z", z).unwrap();
         registry.claim_backend("path:z", z).unwrap();
-        registry.mark_backend_seen("path:z", z).unwrap();
+        registry.record_legacy_backend_receipt("path:z", z).unwrap();
         registry.mark_failed("path:z", z).unwrap();
         registry.transition_building("path:m", m).unwrap();
         registry.claim_backend("path:m", m).unwrap();
-        registry.mark_backend_seen("path:m", m).unwrap();
+        registry.record_legacy_backend_receipt("path:m", m).unwrap();
         registry.mark_completed("path:m", m).unwrap();
         assert_eq!(a.generation(), 2);
 
@@ -1061,6 +1284,50 @@ mod tests {
                     .windows(6)
                     .position(|window| window == b"path:z")
                     .unwrap()
+        );
+    }
+
+    #[test]
+    fn provenance_receipt_roundtrips_and_only_exact_pending_receipt_completes() {
+        let mut registry = AttemptRegistry::default();
+        let attempt = start(&mut registry, "path:receipt", SESSION_A);
+        registry
+            .transition_building("path:receipt", attempt)
+            .unwrap();
+        let receipt = provenance_receipt(0x30);
+        registry
+            .claim_backend_with_pending_receipt("path:receipt", attempt, receipt)
+            .unwrap();
+
+        let pending_bytes = registry.encode().unwrap();
+        assert_eq!(AttemptRegistry::decode(&pending_bytes).unwrap(), registry);
+        assert_eq!(
+            registry.mark_completed("path:receipt", attempt),
+            Err(AttemptCodecError::InvalidTransition)
+        );
+        assert_eq!(
+            registry.record_backend_publication_receipt(
+                "path:receipt",
+                attempt,
+                provenance_receipt(0x31),
+            ),
+            Err(AttemptCodecError::BackendAlreadySeen)
+        );
+
+        registry
+            .record_backend_publication_receipt("path:receipt", attempt, receipt)
+            .unwrap();
+        let completed_bytes = registry.encode().unwrap();
+        assert_ne!(pending_bytes, completed_bytes);
+        assert_eq!(pending_bytes.len(), completed_bytes.len());
+        assert_eq!(AttemptRegistry::decode(&completed_bytes).unwrap(), registry);
+        registry.mark_completed("path:receipt", attempt).unwrap();
+        assert_eq!(
+            registry
+                .record_exact("path:receipt", attempt)
+                .unwrap()
+                .backend_receipt,
+            Some(BackendReceiptV1::Provenance(receipt))
         );
     }
 
@@ -1131,8 +1398,8 @@ mod tests {
             Err(AttemptCodecError::InvalidPhase(9))
         );
         assert_eq!(
-            AttemptRegistry::decode(&raw_registry(1, &[("path:a", "a", 1, SESSION_A, 0, 2)])),
-            Err(AttemptCodecError::InvalidBoolean(2))
+            AttemptRegistry::decode(&raw_registry(1, &[("path:a", "a", 1, SESSION_A, 0, 4)])),
+            Err(AttemptCodecError::InvalidBackendReceiptTag(4))
         );
         assert_eq!(
             AttemptRegistry::decode(&raw_registry(1, &[("path:a", "a", 1, SESSION_A, 0, 1)])),
@@ -1254,7 +1521,9 @@ mod tests {
         let completed = start(&mut registry, "path:b", SESSION_A);
         registry.transition_building("path:b", completed).unwrap();
         registry.claim_backend("path:b", completed).unwrap();
-        registry.mark_backend_seen("path:b", completed).unwrap();
+        registry
+            .record_legacy_backend_receipt("path:b", completed)
+            .unwrap();
         registry.mark_completed("path:b", completed).unwrap();
         let before = registry.clone();
         assert_eq!(
@@ -1270,7 +1539,9 @@ mod tests {
         let first = start(&mut registry, "path:a", SESSION_A);
         registry.transition_building("path:a", first).unwrap();
         registry.claim_backend("path:a", first).unwrap();
-        registry.mark_backend_seen("path:a", first).unwrap();
+        registry
+            .record_legacy_backend_receipt("path:a", first)
+            .unwrap();
 
         let second = match registry
             .start_or_resume("path:a", "renamed_crate", INVOCATION_B, SESSION_B)
@@ -1283,7 +1554,7 @@ mod tests {
         let record = registry.record("path:a").unwrap();
         assert_eq!(record.crate_name, "renamed_crate");
         assert_eq!(record.phase, AttemptPhase::Invalidating);
-        assert!(!record.backend_seen);
+        assert!(record.backend_receipt.is_none());
         assert_eq!(record.session, SESSION_B);
         assert_eq!(
             registry.authorize_backend("path:a", first),
@@ -1312,7 +1583,7 @@ mod tests {
                 Err(AttemptCodecError::AttemptMismatch)
             );
             assert_eq!(
-                registry.mark_backend_seen("path:a", wrong),
+                registry.record_legacy_backend_receipt("path:a", wrong),
                 Err(AttemptCodecError::AttemptMismatch)
             );
             assert_eq!(
@@ -1346,18 +1617,23 @@ mod tests {
             1
         );
         registry.claim_backend("path:a", attempt).unwrap();
-        registry.mark_backend_seen("path:a", attempt).unwrap();
-        let backend_seen = registry.clone();
+        registry
+            .record_legacy_backend_receipt("path:a", attempt)
+            .unwrap();
+        let backend_receipt = registry.clone();
         assert_eq!(
-            registry.mark_backend_seen("path:a", attempt),
+            registry.record_legacy_backend_receipt("path:a", attempt),
             Err(AttemptCodecError::BackendAlreadySeen)
         );
-        assert_eq!(registry, backend_seen);
+        assert_eq!(registry, backend_receipt);
         assert_eq!(
             registry.authorize_backend("path:a", attempt),
             Err(AttemptCodecError::BackendAlreadySeen)
         );
-        assert!(registry.record("path:a").unwrap().backend_seen);
+        assert_eq!(
+            registry.record("path:a").unwrap().backend_receipt,
+            Some(BackendReceiptV1::LegacyCoordination)
+        );
         registry.mark_completed("path:a", attempt).unwrap();
         registry.mark_completed("path:a", attempt).unwrap();
         assert_eq!(
@@ -1374,7 +1650,7 @@ mod tests {
         );
 
         let record = registry.records.get_mut("path:a").unwrap();
-        record.backend_seen = false;
+        record.backend_receipt = None;
         let invalid_completed = registry.clone();
         assert_eq!(
             registry.mark_completed("path:a", attempt),
@@ -1390,13 +1666,18 @@ mod tests {
         let attempt = start(&mut registry, "path:a", SESSION_A);
         registry.transition_building("path:a", attempt).unwrap();
         registry.claim_backend("path:a", attempt).unwrap();
-        registry.mark_backend_seen("path:a", attempt).unwrap();
+        registry
+            .record_legacy_backend_receipt("path:a", attempt)
+            .unwrap();
         registry.mark_failed("path:a", attempt).unwrap();
         let failed = registry.clone();
 
         registry.mark_failed("path:a", attempt).unwrap();
         assert_eq!(registry, failed);
-        assert!(registry.record("path:a").unwrap().backend_seen);
+        assert_eq!(
+            registry.record("path:a").unwrap().backend_receipt,
+            Some(BackendReceiptV1::LegacyCoordination)
+        );
         assert_eq!(
             registry.mark_completed("path:a", attempt),
             Err(AttemptCodecError::InvalidTransition)

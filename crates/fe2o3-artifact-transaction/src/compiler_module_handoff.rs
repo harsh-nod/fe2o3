@@ -622,7 +622,7 @@ fn authorize(
             "build attempt crate name does not match the producer",
         ));
     }
-    if record.phase != AttemptPhase::Building || record.backend_seen {
+    if record.phase != AttemptPhase::Building || record.backend_receipt.is_some() {
         return Err(attempt_error(
             "build attempt is not in the claimable building phase",
         ));

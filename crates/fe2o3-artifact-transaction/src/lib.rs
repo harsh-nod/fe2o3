@@ -30,12 +30,21 @@
 //! diagnostics only, so later publication at the same names cannot change an earlier result.
 
 mod attempt;
+mod attempt_scoped_hsaco_publication;
 mod compiler_module_handoff;
 mod durable_link_publication;
 mod link_publication;
 
-pub use attempt::{AttemptCodecError, BuildAttempt, BuildInvocation, BuildSession};
+pub use attempt::{
+    AttemptCodecError, BackendPublicationReceiptV1, BuildAttempt, BuildInvocation, BuildSession,
+};
 use attempt::{AttemptPhase, AttemptRegistry, MAX_ATTEMPT_BYTES, StartAttemptOutcome};
+pub use attempt_scoped_hsaco_publication::{
+    AttemptScopedHsacoPublicationErrorV1, AttemptScopedHsacoPublicationOutcomeV1,
+    AttemptScopedHsacoPublicationResultV1, PersistedBackendReceiptV1,
+    UpstreamCodeObjectEvidenceIdentityV1, publish_exact_hsaco_evidence_for_attempt_v1,
+    publish_exact_hsaco_evidence_for_attempt_v1_with_options, read_backend_publication_receipt_v1,
+};
 pub use compiler_module_handoff::{
     CompilerModuleHandoffErrorV1, CompilerModuleHandoffIdentityV1, CompilerModuleHandoffReceiptV1,
     ConsumedCompilerModuleHandoffV1, MAX_COMPILER_MODULE_HANDOFF_BYTES,
@@ -415,7 +424,9 @@ pub fn finish_build_attempt(
         return Ok(());
     }
     if (record.phase == AttemptPhase::Building || record.phase == AttemptPhase::BackendClaimed)
-        && !record.backend_seen
+        && !record
+            .backend_receipt
+            .is_some_and(attempt::BackendReceiptV1::is_completed)
     {
         let primary = build_attempt_error("build completed without an authorized device backend");
         claim_attempt_for_termination_locked(&output, producer, attempt)?;
@@ -2573,6 +2584,15 @@ impl PinnedOutput {
         Ok(())
     }
 
+    fn try_clone(&self) -> Result<Self, EmitError> {
+        Ok(Self {
+            fd: rustix::io::dup(&self.fd).map_err(std::io::Error::from)?,
+            display_path: self.display_path.clone(),
+            device: self.device,
+            inode: self.inode,
+        })
+    }
+
     fn lock(&self) -> Result<OutputLock, EmitError> {
         self.lock_with(FlockOperation::LockExclusive)
             .and_then(|lock| {
@@ -4631,7 +4651,7 @@ fn finish_backend_attempt_locked(
             let mut attempts = read_attempt_registry(output)?;
             if result.is_ok() || publication_committed {
                 attempts
-                    .mark_backend_seen(&producer.stable_source, attempt)
+                    .record_legacy_backend_receipt(&producer.stable_source, attempt)
                     .map_err(build_attempt_error)?;
                 attempts
                     .mark_completed(&producer.stable_source, attempt)
@@ -4688,7 +4708,7 @@ fn finish_backend_attempt_locked(
                 ));
             }
             let state_result = attempts
-                .mark_backend_seen(&producer.stable_source, attempt)
+                .record_legacy_backend_receipt(&producer.stable_source, attempt)
                 .map_err(build_attempt_error)
                 .and_then(|()| commit_attempt_registry_direct(output, &attempts));
             if let Err(primary) = state_result {

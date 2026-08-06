@@ -16,7 +16,8 @@
 //! Each active attempt durably commits a domain-separated digest of its complete publication plan
 //! before callback work starts. Redo bytes are written and synced under a unique ignored temp name
 //! and become replayable only after an atomic rename. The first generation observed for a scope
-//! may be any nonzero external build generation; every later scope generation must be contiguous.
+//! may be any nonzero external build generation. Later generations need only increase because the
+//! global build-attempt allocator may issue unrelated generations between updates to this scope.
 
 use super::{
     AtomicPublicationIdentityV1, CanonicalLinkRequestIdentityV1, EmitError, FinalizationIdentityV1,
@@ -155,7 +156,7 @@ impl DurableLinkPublicationPlanV1 {
         self.publication
     }
 
-    fn identity(self) -> [u8; 32] {
+    pub(crate) fn identity(self) -> [u8; 32] {
         let mut digest = Sha256::new();
         digest.update(PLAN_IDENTITY_DOMAIN);
         digest.update(self.attempt.generation().to_le_bytes());
@@ -940,11 +941,25 @@ where
 {
     let output = PinnedOutput::open_existing(output_dir)?;
     let _lock = output.lock()?;
+    publish_durable_link_v1_locked(&output, plan, options, work)
+}
+
+pub(crate) fn publish_durable_link_v1_locked<F>(
+    output: &PinnedOutput,
+    plan: DurableLinkPublicationPlanV1,
+    options: DurableLinkPublicationOptionsV1,
+    work: F,
+) -> Result<DurableLinkPublicationResultV1, DurableLinkPublicationError>
+where
+    F: FnOnce(
+        &mut DurableLinkPublicationTransactionV1<'_>,
+    ) -> Result<(), DurableLinkPublicationError>,
+{
     let names = DurableNames::new(plan.scope);
     let mut faults = FaultInjector::new(options.fault);
-    let mut envelope = recover_envelope(&output, &names, plan.scope)?;
-    recover_incomplete(&output, &names, &mut envelope)?;
-    verify_or_invalidate_published(&output, &names, &mut envelope, &mut faults)?;
+    let mut envelope = recover_envelope(output, &names, plan.scope)?;
+    recover_incomplete(output, &names, &mut envelope)?;
+    verify_or_invalidate_published(output, &names, &mut envelope, &mut faults)?;
 
     if let Some(record) = envelope.published.as_ref() {
         if record_matches_plan(record, plan) {
@@ -974,18 +989,6 @@ where
             LinkPublicationCodecError::StaleAttempt,
         ));
     }
-    if !crash_retry
-        && envelope.generation_floor != 0
-        && envelope
-            .generation_floor
-            .checked_add(1)
-            .is_none_or(|next| plan.attempt.generation() != next)
-    {
-        return Err(invalid_record(
-            "a subsequent scope generation must advance the durable floor by exactly one",
-        ));
-    }
-
     let mut catalog = catalog_from_published(envelope.published.as_ref())?;
     let record = if crash_retry {
         let recovered = envelope
@@ -1002,7 +1005,7 @@ where
     envelope.active_plan = Some(plan.identity());
     envelope.active = Some(record.clone());
     persist_envelope(
-        &output,
+        output,
         &names,
         &envelope,
         DurableJournalStageV1::Planned,
@@ -1010,7 +1013,7 @@ where
     )?;
 
     let mut transaction = DurableLinkPublicationTransactionV1 {
-        output: &output,
+        output,
         names: &names,
         envelope: &mut envelope,
         catalog,
@@ -1087,6 +1090,30 @@ where
     drop(transaction);
     let lease = mint_current_publication_lease(output, &names, &envelope, plan, &mut faults)?;
     Ok(DurableLinkPublicationResultV1 { outcome, lease })
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DurablePlanRecoveryStateV1 {
+    Incomplete,
+    Published,
+}
+
+pub(crate) fn recover_durable_link_plan_locked(
+    output: &PinnedOutput,
+    plan: DurableLinkPublicationPlanV1,
+) -> Result<Option<DurablePlanRecoveryStateV1>, DurableLinkPublicationError> {
+    let names = DurableNames::new(plan.scope);
+    let mut envelope = recover_envelope(output, &names, plan.scope)?;
+    recover_incomplete(output, &names, &mut envelope)?;
+    verify_or_invalidate_published(output, &names, &mut envelope, &mut FaultInjector::new(None))?;
+    if envelope
+        .published
+        .as_ref()
+        .is_some_and(|record| record_matches_plan(record, plan))
+    {
+        return Ok(Some(DurablePlanRecoveryStateV1::Published));
+    }
+    Ok(crash_retry_matches_plan(&envelope, plan).then_some(DurablePlanRecoveryStateV1::Incomplete))
 }
 
 fn fail_after_terminal_invalidation<T>(
@@ -1742,7 +1769,7 @@ struct OpenedPrivateFileV1 {
 }
 
 fn mint_current_publication_lease(
-    output: PinnedOutput,
+    output: &PinnedOutput,
     names: &DurableNames,
     envelope: &DurableEnvelopeV1,
     plan: DurableLinkPublicationPlanV1,
@@ -1766,7 +1793,7 @@ fn mint_current_publication_lease(
 
     output.verify_path_identity()?;
     let opened_record = open_private_file(
-        &output,
+        output,
         &names.record,
         "canonical durable publication record",
         MAX_DURABLE_LINK_PUBLICATION_RECORD_BYTES,
@@ -1783,7 +1810,7 @@ fn mint_current_publication_lease(
         .map_err(|error| error.into_public("published artifact"))?;
     let artifact_entry = artifact_name(plan.finalized_output);
     let opened_artifact = open_private_file(
-        &output,
+        output,
         &artifact_entry,
         "published finalized artifact",
         MAX_DURABLE_FINALIZED_ARTIFACT_BYTES,
@@ -1798,7 +1825,7 @@ fn mint_current_publication_lease(
     // issuance against non-cooperating mutation that happens between our observations.
     output.verify_path_identity()?;
     validate_open_file(
-        &output,
+        output,
         &names.record,
         &opened_record.file,
         DurableFileIdentityV1::from_stat(&opened_record.stat),
@@ -1815,7 +1842,7 @@ fn mint_current_publication_lease(
     };
     Ok(DurableCurrentLinkPublicationLeaseV1 {
         binding: Arc::new(DurableCurrentLinkPublicationBindingV1 {
-            output,
+            output: output.try_clone()?,
             record_file: opened_record.file,
             artifact_file: opened_artifact.file,
             record_identity: DurableFileIdentityV1::from_stat(&opened_record.stat),
@@ -2103,10 +2130,7 @@ fn is_legal_next_generation(canonical: &DurableEnvelopeV1, redo: &DurableEnvelop
         && canonical.published.is_none()
         && canonical.active.is_none()
         && !canonical.poisoned;
-    let contiguous_generation = canonical
-        .generation_floor
-        .checked_add(1)
-        .is_some_and(|next| redo.generation_floor == next);
+    let advanced_generation = redo.generation_floor > canonical.generation_floor;
     let canonical_is_terminal = canonical
         .active
         .as_ref()
@@ -2114,7 +2138,7 @@ fn is_legal_next_generation(canonical: &DurableEnvelopeV1, redo: &DurableEnvelop
     let Some(candidate) = redo.active.as_ref() else {
         return false;
     };
-    (first_observed_generation || contiguous_generation)
+    (first_observed_generation || advanced_generation)
         && canonical_is_terminal
         && redo.published == canonical.published
         && redo.poisoned == canonical.poisoned

@@ -743,7 +743,7 @@ fn stale_attempt_request_and_scope_are_isolated() {
 }
 
 #[test]
-fn higher_generation_redo_requires_one_exact_next_planned_transition() {
+fn higher_generation_redo_accepts_scope_skips_but_rejects_conflicting_state() {
     let temp = TestDirectory::new();
     let output = temp.path.join("output");
     let first_bytes = b"higher generation prior publication";
@@ -775,13 +775,14 @@ fn higher_generation_redo_requires_one_exact_next_planned_transition() {
         publish(&output, next, next_bytes).unwrap().outcome(),
         DurableLinkPublicationOutcomeV1::Published
     );
-    let skipped = plan(4, 0x54, 0xd4, b"skipped scope generation");
-    assert!(matches!(
-        publish_durable_link_v1(&output, skipped, |_| {
-            panic!("a noncontiguous scope generation must fail before work")
-        }),
-        Err(DurableLinkPublicationError::InvalidDurableRecord { .. })
-    ));
+    let skipped_bytes = b"skipped scope generation";
+    let skipped = plan(4, 0x54, 0xd4, skipped_bytes);
+    let skipped_result = publish(&output, skipped, skipped_bytes).unwrap();
+    assert_eq!(
+        skipped_result.outcome(),
+        DurableLinkPublicationOutcomeV1::Published
+    );
+    assert_eq!(skipped_result.snapshot().record().attempt().generation(), 4);
 
     for impossible_generation in [2, 3] {
         let canonical_temp = TestDirectory::new();
