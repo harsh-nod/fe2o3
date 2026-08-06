@@ -1,7 +1,7 @@
 pub mod __generated {
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub enum CompilerGeneratedKernelProfileV1 {
-        TypedVecAddF32V1,
+        TypedVecAddF32RustcLayoutV2,
     }
 
     /// Minimal fixture copy of the host contract consumed by generated bindings.

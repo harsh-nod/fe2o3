@@ -33,6 +33,11 @@ const REJECTED_CASES: &[(&str, &str, &str)] = &[
         "local_marker",
         "argument 0 has unsupported type",
     ),
+    (
+        "fe2o3-typed-alias-spoof",
+        "typed_alias_spoof",
+        "argument 1 must be exactly `&[f32]`",
+    ),
 ];
 
 const REGISTRATION_REJECTED_CASES: &[(&str, &str)] = &[

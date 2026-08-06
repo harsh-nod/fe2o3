@@ -43,6 +43,35 @@ macro_rules! marker {
     };
 }
 
+macro_rules! marker_v2 {
+    ($marker:ident, $binding:expr, $bytes:expr) => {
+        struct $marker;
+
+        unsafe impl KernelMarkerV1 for $marker {
+            type Function = fn();
+            type Registration = ();
+
+            const LOGICAL_NAME: &'static str = LOGICAL_NAME;
+            const EXPORT_NAME: &'static str = EXPORT_NAME;
+            const FUNCTION: Self::Function = marker_function;
+            const REGISTRATION: &'static Self::Registration = &();
+        }
+
+        // SAFETY: These data-only fixtures exercise V2 authentication and are
+        // never loaded into HIP.
+        unsafe impl CompilerGeneratedKernelContractV1 for $marker {
+            const PROFILE: CompilerGeneratedKernelProfileV1 =
+                CompilerGeneratedKernelProfileV1::TypedVecAddF32RustcLayoutV2;
+            const KERNEL_BINDING_ID_V1: [u8; 32] = $binding;
+
+            fn artifact_container_bytes() -> &'static [u8] {
+                static BYTES: OnceLock<Vec<u8>> = OnceLock::new();
+                BYTES.get_or_init(|| $bytes).as_slice()
+            }
+        }
+    };
+}
+
 marker!(
     ValidMarker,
     container_bytes(&[(0x11, LOGICAL_NAME, EXPORT_NAME)], "gfx942")
@@ -95,6 +124,26 @@ marker!(WrongTypeIdentityProfileMarker, {
 marker!(
     WrongTargetMarker,
     container_bytes(&[(0x11, LOGICAL_NAME, EXPORT_NAME)], "gfx1100")
+);
+marker_v2!(
+    ValidRustcLayoutMarker,
+    [0x42; 32],
+    rustc_layout_container_bytes([0x42; 32], true, true)
+);
+marker_v2!(
+    WrongRustcLayoutBindingMarker,
+    [0x43; 32],
+    rustc_layout_container_bytes([0x42; 32], true, true)
+);
+marker_v2!(
+    LegacyIdentityUnderRustcLayoutMarker,
+    [0x42; 32],
+    rustc_layout_container_bytes([0x42; 32], false, true)
+);
+marker_v2!(
+    ForgedRustcLayoutKernelIdMarker,
+    [0x42; 32],
+    rustc_layout_container_bytes([0x42; 32], true, false)
 );
 
 fn text(value: &str) -> IdentityText {
@@ -177,6 +226,83 @@ fn container_bytes_with_abi(
         .to_bytes()
 }
 
+fn rustc_layout_container_bytes(
+    binding: [u8; 32],
+    canonical_layout: bool,
+    canonical_kernel_id: bool,
+) -> Vec<u8> {
+    let payload =
+        CodeObjectPayload::from_bytes(DigestAlgorithm::Sha256, b"inert-test-hsaco".to_vec())
+            .unwrap();
+    let object_digest = payload.digest().bytes();
+    let code_object = CodeObjectIdentity::new(
+        object_digest,
+        CodeObjectFormat::NativeExecutable,
+        payload.bytes().len() as u64,
+    )
+    .unwrap();
+    let target = TargetIdentity::new(
+        text(AMDGPU_TRIPLE),
+        text("gfx942"),
+        PointerWidth::Bits64,
+        Endianness::Little,
+        vec![],
+    )
+    .unwrap();
+    let abi = if canonical_layout {
+        typed_vecadd_rustc_layout_abi()
+    } else {
+        typed_vecadd_abi(Access::WriteOnly, false)
+    };
+    let launch = LaunchContract::new(
+        1,
+        BlockSize::Exact(Dimensions::new(256, 1, 1).unwrap()),
+        Dimensions::new(65_535, 1, 1).unwrap(),
+        0,
+        0,
+    )
+    .unwrap();
+    let source_digest = digest(0x31);
+    let executable_digest = digest(0x51);
+    let kernel_id = if canonical_kernel_id {
+        derive_generated_kernel_identity_v2(
+            TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2,
+            binding,
+            LOGICAL_NAME,
+            EXPORT_NAME,
+            source_digest,
+            executable_digest,
+            &abi,
+            &launch,
+        )
+    } else {
+        digest(0x11)
+    };
+    let kernel = KernelEntry::new(
+        kernel_id,
+        name(LOGICAL_NAME),
+        name(EXPORT_NAME),
+        source_digest,
+        executable_digest,
+        object_digest,
+        vec![],
+        launch,
+        abi,
+    )
+    .unwrap();
+    let manifest = ManifestV1::new(
+        CompilerIdentity::new(text("rustc"), text("test")),
+        ToolIdentity::new(text("fe2o3"), text("test")),
+        target,
+        vec![code_object],
+        vec![kernel],
+    )
+    .unwrap();
+    ArtifactContainerV1::new(manifest, DigestAlgorithm::Sha256, vec![payload])
+        .unwrap()
+        .to_bytes()
+}
+
 fn typed_vecadd_abi(output_access: Access, wrong_type_identity: bool) -> AbiLayout {
     let kind = AbiKind::Slice {
         element_size: 4,
@@ -235,6 +361,64 @@ fn typed_vecadd_abi(output_access: Access, wrong_type_identity: bool) -> AbiLayo
                 kind,
                 Mutability::Mutable,
                 output_access,
+                AddressSpace::Global,
+                output,
+                ArgumentOwnership::UniqueBorrow,
+                AliasClass::Exclusive,
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap()
+}
+
+fn typed_vecadd_rustc_layout_abi() -> AbiLayout {
+    let [shared0, shared1, output] = host_typed_vecadd_type_identities().unwrap();
+    let kind = AbiKind::Slice {
+        element_size: 4,
+        element_alignment: 4,
+    };
+    AbiLayout::new(
+        48,
+        8,
+        PointerWidth::Bits64,
+        vec![
+            AbiField::new(
+                name("arg0"),
+                0,
+                16,
+                8,
+                kind,
+                Mutability::Immutable,
+                Access::ReadOnly,
+                AddressSpace::Global,
+                shared0,
+                ArgumentOwnership::SharedBorrow,
+                AliasClass::SharedReadOnly,
+            )
+            .unwrap(),
+            AbiField::new(
+                name("arg1"),
+                16,
+                16,
+                8,
+                kind,
+                Mutability::Immutable,
+                Access::ReadOnly,
+                AddressSpace::Global,
+                shared1,
+                ArgumentOwnership::SharedBorrow,
+                AliasClass::SharedReadOnly,
+            )
+            .unwrap(),
+            AbiField::new(
+                name("arg2"),
+                32,
+                16,
+                8,
+                kind,
+                Mutability::Mutable,
+                Access::WriteOnly,
                 AddressSpace::Global,
                 output,
                 ArgumentOwnership::UniqueBorrow,
@@ -348,6 +532,37 @@ fn rejects_wrong_effects_and_opaque_type_identity() {
         )),
         Err(GeneratedArtifactAuthenticationError::Profile(
             GeneratedKernelProfileError::AbiMismatch
+        ))
+    ));
+}
+
+#[test]
+fn authenticates_only_canonical_rustc_layout_evidence_and_bound_identity() {
+    AuthenticatedKernelArtifactV1::<ValidRustcLayoutMarker>::authenticate(&context(7, "gfx942"))
+        .expect("canonical V2 evidence and binding must authenticate");
+
+    assert!(matches!(
+        AuthenticatedKernelArtifactV1::<LegacyIdentityUnderRustcLayoutMarker>::authenticate(
+            &context(7, "gfx942")
+        ),
+        Err(GeneratedArtifactAuthenticationError::Profile(
+            GeneratedKernelProfileError::AbiMismatch
+        ))
+    ));
+    assert!(matches!(
+        AuthenticatedKernelArtifactV1::<WrongRustcLayoutBindingMarker>::authenticate(&context(
+            7, "gfx942"
+        )),
+        Err(GeneratedArtifactAuthenticationError::Profile(
+            GeneratedKernelProfileError::KernelIdentityMismatch
+        ))
+    ));
+    assert!(matches!(
+        AuthenticatedKernelArtifactV1::<ForgedRustcLayoutKernelIdMarker>::authenticate(&context(
+            7, "gfx942"
+        )),
+        Err(GeneratedArtifactAuthenticationError::Profile(
+            GeneratedKernelProfileError::KernelIdentityMismatch
         ))
     ));
 }

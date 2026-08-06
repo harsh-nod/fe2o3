@@ -1,11 +1,16 @@
-//! Provisional rustc-derived facts for the exact typed vecadd profile.
+//! rustc-derived evidence for the exact typed vecadd profile.
 //!
-//! This module deliberately does not define an artifact format. It records the
-//! source shape and the raw target layout facts reported by the pinned rustc so
-//! a later collector change can adapt them into a versioned schema.
+//! The extractor operates on normalized monomorphized types, records target
+//! layout facts from rustc, and converts them into the shared canonical
+//! evidence schema consumed by artifact generation.
 
 use std::fmt;
 
+use fe2o3_artifacts::{
+    PointerWidth, RustDisjointIndexSpaceV1, RustLayoutEvidenceError, RustLayoutEvidenceV1,
+    RustPhysicalComponentKindV1, RustPhysicalComponentV1, RustPointerMutabilityV1,
+    RustScalarElementTypeV1, RustSourceTypeShapeV1, RustTypeEvidenceV1, RustcAbiClassV1,
+};
 use rustc_abi::{BackendRepr, ExternAbi, HasDataLayout, Primitive, Scalar};
 use rustc_hir::Safety;
 use rustc_hir::def::DefKind;
@@ -75,6 +80,10 @@ pub(crate) enum ExtractError {
         argument: &'static str,
         detail: String,
     },
+    Evidence {
+        argument: &'static str,
+        source: RustLayoutEvidenceError,
+    },
 }
 
 impl fmt::Display for ExtractError {
@@ -102,11 +111,24 @@ impl fmt::Display for ExtractError {
             Self::UnexpectedLayout { argument, detail } => {
                 write!(formatter, "unexpected layout for {argument}: {detail}")
             }
+            Self::Evidence { argument, source } => {
+                write!(
+                    formatter,
+                    "invalid canonical layout evidence for {argument}: {source}"
+                )
+            }
         }
     }
 }
 
-impl std::error::Error for ExtractError {}
+impl std::error::Error for ExtractError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Evidence { source, .. } => Some(source),
+            _ => None,
+        }
+    }
+}
 
 /// Extract rustc's raw source and target-layout facts for the current exact
 /// `#[kernel(typed)]` vecadd profile.
@@ -117,6 +139,19 @@ impl std::error::Error for ExtractError {}
 /// All target-layout decisions use the codegen typing environment appropriate
 /// for such an instance.
 pub(crate) fn extract_exact_typed_vecadd_layout<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+) -> Result<[RustLayoutEvidenceV1; 3], ExtractError> {
+    let facts = extract_exact_typed_vecadd_layout_facts(tcx, instance)?;
+    let [input_a, input_b, output] = facts.arguments;
+    Ok([
+        canonical_evidence(input_a, "argument 1")?,
+        canonical_evidence(input_b, "argument 2")?,
+        canonical_evidence(output, "argument 3")?,
+    ])
+}
+
+fn extract_exact_typed_vecadd_layout_facts<'tcx>(
     tcx: TyCtxt<'tcx>,
     instance: Instance<'tcx>,
 ) -> Result<TypedVecaddLayoutFacts, ExtractError> {
@@ -188,6 +223,78 @@ pub(crate) fn extract_exact_typed_vecadd_layout<'tcx>(
             )?,
         ],
     })
+}
+
+fn canonical_evidence(
+    facts: ArgumentLayoutFacts,
+    argument: &'static str,
+) -> Result<RustLayoutEvidenceV1, ExtractError> {
+    let (source_type, pointer_mutability) = match facts.source_shape {
+        SourceShape::SharedSliceF32 => (
+            RustSourceTypeShapeV1::shared_slice(RustScalarElementTypeV1::F32),
+            RustPointerMutabilityV1::Const,
+        ),
+        SourceShape::DisjointSliceF32Index1d => (
+            RustSourceTypeShapeV1::disjoint_slice(
+                RustScalarElementTypeV1::F32,
+                RustDisjointIndexSpaceV1::Index1D,
+            ),
+            RustPointerMutabilityV1::Mut,
+        ),
+    };
+    let abi_class = match facts.abi_class {
+        AbiClass::ScalarPair => RustcAbiClassV1::ScalarPair,
+    };
+    let mut components = Vec::with_capacity(facts.physical_components.len());
+    for component in facts.physical_components {
+        let kind = match component.class {
+            PhysicalComponentClass::Pointer { address_space: 0 } => {
+                RustPhysicalComponentKindV1::Pointer {
+                    mutability: pointer_mutability,
+                    pointee: RustScalarElementTypeV1::F32,
+                }
+            }
+            PhysicalComponentClass::Integer {
+                bits: 64,
+                signed: false,
+            } => RustPhysicalComponentKindV1::Usize,
+            unexpected => {
+                return Err(ExtractError::UnexpectedLayout {
+                    argument,
+                    detail: format!("unsupported canonical physical component {unexpected:?}"),
+                });
+            }
+        };
+        let alignment = u32::try_from(component.abi_alignment_bytes).map_err(|_| {
+            ExtractError::UnexpectedLayout {
+                argument,
+                detail: "component ABI alignment exceeds u32".to_owned(),
+            }
+        })?;
+        components.push(
+            RustPhysicalComponentV1::new(
+                component.offset_bytes,
+                component.size_bytes,
+                alignment,
+                kind,
+            )
+            .map_err(|source| ExtractError::Evidence { argument, source })?,
+        );
+    }
+    let alignment =
+        u32::try_from(facts.abi_alignment_bytes).map_err(|_| ExtractError::UnexpectedLayout {
+            argument,
+            detail: "layout ABI alignment exceeds u32".to_owned(),
+        })?;
+    RustLayoutEvidenceV1::new(
+        RustTypeEvidenceV1::new(source_type),
+        abi_class,
+        PointerWidth::Bits64,
+        facts.size_bytes,
+        alignment,
+        components,
+    )
+    .map_err(|source| ExtractError::Evidence { argument, source })
 }
 
 fn require_shared_f32_slice<'tcx>(
@@ -448,7 +555,37 @@ fn require_exact_components(
 
 #[cfg(test)]
 mod tests {
-    use super::{PhysicalComponentClass, PhysicalComponentFacts, require_exact_components};
+    use super::{
+        AbiClass, ArgumentLayoutFacts, PhysicalComponentClass, PhysicalComponentFacts, SourceShape,
+        canonical_evidence, require_exact_components,
+    };
+    use fe2o3_artifacts::{RustDisjointIndexSpaceV1, RustSourceTypeShapeV1, RustcAbiClassV1};
+
+    fn exact_facts(source_shape: SourceShape) -> ArgumentLayoutFacts {
+        ArgumentLayoutFacts {
+            source_shape,
+            size_bytes: 16,
+            abi_alignment_bytes: 8,
+            abi_class: AbiClass::ScalarPair,
+            physical_components: vec![
+                PhysicalComponentFacts {
+                    offset_bytes: 0,
+                    size_bytes: 8,
+                    abi_alignment_bytes: 8,
+                    class: PhysicalComponentClass::Pointer { address_space: 0 },
+                },
+                PhysicalComponentFacts {
+                    offset_bytes: 8,
+                    size_bytes: 8,
+                    abi_alignment_bytes: 8,
+                    class: PhysicalComponentClass::Integer {
+                        bits: 64,
+                        signed: false,
+                    },
+                },
+            ],
+        }
+    }
 
     #[test]
     fn physical_components_fail_closed_on_reordering() {
@@ -471,5 +608,28 @@ mod tests {
         ];
 
         assert!(require_exact_components("test argument", &components).is_err());
+    }
+
+    #[test]
+    fn canonical_evidence_preserves_resolved_source_identity() {
+        let shared = canonical_evidence(exact_facts(SourceShape::SharedSliceF32), "input").unwrap();
+        let output =
+            canonical_evidence(exact_facts(SourceShape::DisjointSliceF32Index1d), "output")
+                .unwrap();
+
+        assert!(matches!(
+            shared.rust_type().source_type(),
+            RustSourceTypeShapeV1::SharedSlice { .. }
+        ));
+        assert!(matches!(
+            output.rust_type().source_type(),
+            RustSourceTypeShapeV1::DisjointSlice {
+                index_space: RustDisjointIndexSpaceV1::Index1D,
+                ..
+            }
+        ));
+        assert_eq!(shared.abi_class(), RustcAbiClassV1::ScalarPair);
+        assert_eq!(output.abi_class(), RustcAbiClassV1::ScalarPair);
+        assert_ne!(shared.type_identity(), output.type_identity());
     }
 }

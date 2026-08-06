@@ -8,10 +8,14 @@ use fe2o3_artifacts::{
     BlockSize, Capability, CodeObjectIdentity, ContainerDecodeError, DeclaredRustLayoutIdentity,
     DeclaredRustTypeIdentity, DigestAlgorithm, DigestBytes, Endianness, HostLaunchAbi,
     HostLaunchAbiError, KernelSelectionError, LaunchContract, Mutability, Name, PayloadDigest,
-    PointerWidth, SelectedNativeKernel, TargetIdentity, TypeIdentity,
+    PointerWidth, RustDisjointIndexSpaceV1, RustLayoutEvidenceV1, RustPhysicalComponentKindV1,
+    RustPhysicalComponentV1, RustPointerMutabilityV1, RustScalarElementTypeV1,
+    RustSourceTypeShapeV1, RustTypeEvidenceV1, RustcAbiClassV1, SelectedNativeKernel,
+    TargetIdentity, TypeIdentity, derive_generated_kernel_identity_v2,
 };
-use fe2o3_device::KernelMarkerV1;
+use fe2o3_device::{DisjointSlice, Index1D, KernelMarkerV1};
 use fe2o3_kernel_descriptor::ValidationError as DescriptorValidationError;
+use reserved_fe2o3_symbols::TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2;
 use std::fmt;
 use std::sync::Arc;
 
@@ -299,6 +303,9 @@ pub unsafe trait CompilerGeneratedKernelContractV1: KernelMarkerV1 {
 pub enum CompilerGeneratedKernelProfileV1 {
     /// `(&[f32], &[f32], DisjointSlice<f32>)` with read/read/write effects.
     TypedVecAddF32V1,
+    /// The same fixed signature with canonical rustc-derived type/layout
+    /// identities independently reconstructed by the host.
+    TypedVecAddF32RustcLayoutV2,
 }
 
 /// Authenticated compiler-generated artifact for exactly one kernel marker.
@@ -349,7 +356,7 @@ impl<K: CompilerGeneratedKernelContractV1> AuthenticatedKernelArtifactV1<K> {
             .map_err(GeneratedArtifactAuthenticationError::Selection)?;
         let validated = ValidatedArtifactSelectionV1::validate(selected, observed)
             .map_err(GeneratedArtifactAuthenticationError::Binding)?;
-        validate_generated_profile(K::PROFILE, validated.identity())
+        validate_generated_profile(K::PROFILE, K::KERNEL_BINDING_ID_V1, validated.identity())
             .map_err(GeneratedArtifactAuthenticationError::Profile)?;
 
         // SAFETY: `CompilerGeneratedKernelContractV1` requires the trusted
@@ -437,6 +444,7 @@ impl std::error::Error for GeneratedArtifactAuthenticationError {
 pub enum GeneratedKernelProfileError {
     AbiMismatch,
     LaunchMismatch,
+    KernelIdentityMismatch,
 }
 
 impl fmt::Display for GeneratedKernelProfileError {
@@ -448,6 +456,9 @@ impl fmt::Display for GeneratedKernelProfileError {
             Self::LaunchMismatch => formatter.write_str(
                 "embedded artifact launch contract does not match the generated kernel profile",
             ),
+            Self::KernelIdentityMismatch => formatter.write_str(
+                "embedded artifact kernel identity does not match the generated binding and contract",
+            ),
         }
     }
 }
@@ -456,6 +467,7 @@ impl std::error::Error for GeneratedKernelProfileError {}
 
 fn validate_generated_profile(
     profile: CompilerGeneratedKernelProfileV1,
+    kernel_binding: [u8; 32],
     identity: &ArtifactKernelIdentityV1,
 ) -> Result<(), GeneratedKernelProfileError> {
     match profile {
@@ -479,7 +491,47 @@ fn validate_generated_profile(
             }
             Ok(())
         }
+        CompilerGeneratedKernelProfileV1::TypedVecAddF32RustcLayoutV2 => {
+            validate_typed_vecadd_rustc_layout_abi(identity.abi())?;
+            let launch = identity.launch();
+            let exact_block = match launch.block_size() {
+                BlockSize::Exact(block) => block,
+                BlockSize::Any | BlockSize::AtMost(_) => {
+                    return Err(GeneratedKernelProfileError::LaunchMismatch);
+                }
+            };
+            if launch.rank() != 1
+                || [exact_block.x(), exact_block.y(), exact_block.z()] != [256, 1, 1]
+                || launch.max_grid().y() != 1
+                || launch.max_grid().z() != 1
+                || launch.static_shared_memory_bytes() != 0
+                || launch.max_dynamic_shared_memory_bytes() != 0
+            {
+                return Err(GeneratedKernelProfileError::LaunchMismatch);
+            }
+            let expected_kernel_id = derive_generated_kernel_identity_v2(
+                TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2,
+                kernel_binding,
+                identity.name().as_str(),
+                identity.symbol().as_str(),
+                identity.source_digest(),
+                identity.executable_digest(),
+                identity.abi(),
+                identity.launch(),
+            );
+            if identity.kernel_id().as_bytes() != expected_kernel_id.as_bytes() {
+                return Err(GeneratedKernelProfileError::KernelIdentityMismatch);
+            }
+            Ok(())
+        }
     }
+}
+
+fn validate_typed_vecadd_rustc_layout_abi(
+    abi: &AbiLayout,
+) -> Result<(), GeneratedKernelProfileError> {
+    let type_identities = host_typed_vecadd_type_identities()?;
+    validate_typed_vecadd_abi_with_identities(abi, type_identities)
 }
 
 fn validate_typed_vecadd_abi(abi: &AbiLayout) -> Result<(), GeneratedKernelProfileError> {
@@ -496,6 +548,24 @@ fn validate_typed_vecadd_abi(abi: &AbiLayout) -> Result<(), GeneratedKernelProfi
         "fe2o3_device::DisjointSlice<f32>",
         "disjoint-slice-f32-ptr64-size16-align8",
     );
+    validate_typed_vecadd_abi_with_identities(
+        abi,
+        [shared_identity, shared_identity, output_identity],
+    )
+}
+
+fn validate_typed_vecadd_abi_with_identities(
+    abi: &AbiLayout,
+    type_identities: [TypeIdentity; 3],
+) -> Result<(), GeneratedKernelProfileError> {
+    if abi.size() != 48
+        || abi.alignment() != 8
+        || abi.pointer_width() != PointerWidth::Bits64
+        || abi.fields().len() != 3
+    {
+        return Err(GeneratedKernelProfileError::AbiMismatch);
+    }
+
     let expected = [
         (
             0,
@@ -503,7 +573,7 @@ fn validate_typed_vecadd_abi(abi: &AbiLayout) -> Result<(), GeneratedKernelProfi
             Access::ReadOnly,
             ArgumentOwnership::SharedBorrow,
             AliasClass::SharedReadOnly,
-            shared_identity,
+            type_identities[0],
         ),
         (
             16,
@@ -511,7 +581,7 @@ fn validate_typed_vecadd_abi(abi: &AbiLayout) -> Result<(), GeneratedKernelProfi
             Access::ReadOnly,
             ArgumentOwnership::SharedBorrow,
             AliasClass::SharedReadOnly,
-            shared_identity,
+            type_identities[1],
         ),
         (
             32,
@@ -519,7 +589,7 @@ fn validate_typed_vecadd_abi(abi: &AbiLayout) -> Result<(), GeneratedKernelProfi
             Access::WriteOnly,
             ArgumentOwnership::UniqueBorrow,
             AliasClass::Exclusive,
-            output_identity,
+            type_identities[2],
         ),
     ];
 
@@ -545,6 +615,97 @@ fn validate_typed_vecadd_abi(abi: &AbiLayout) -> Result<(), GeneratedKernelProfi
         }
     }
     Ok(())
+}
+
+fn host_typed_vecadd_type_identities() -> Result<[TypeIdentity; 3], GeneratedKernelProfileError> {
+    let pointer_size = u64::try_from(core::mem::size_of::<*const f32>())
+        .map_err(|_| GeneratedKernelProfileError::AbiMismatch)?;
+    let pointer_alignment = u32::try_from(core::mem::align_of::<*const f32>())
+        .map_err(|_| GeneratedKernelProfileError::AbiMismatch)?;
+    let usize_size = u64::try_from(core::mem::size_of::<usize>())
+        .map_err(|_| GeneratedKernelProfileError::AbiMismatch)?;
+    let usize_alignment = u32::try_from(core::mem::align_of::<usize>())
+        .map_err(|_| GeneratedKernelProfileError::AbiMismatch)?;
+    if pointer_size != 8 || pointer_alignment != 8 || usize_size != 8 || usize_alignment != 8 {
+        return Err(GeneratedKernelProfileError::AbiMismatch);
+    }
+
+    let shared = RustLayoutEvidenceV1::new(
+        RustTypeEvidenceV1::new(RustSourceTypeShapeV1::shared_slice(
+            RustScalarElementTypeV1::F32,
+        )),
+        RustcAbiClassV1::ScalarPair,
+        PointerWidth::Bits64,
+        u64::try_from(core::mem::size_of::<&[f32]>())
+            .map_err(|_| GeneratedKernelProfileError::AbiMismatch)?,
+        u32::try_from(core::mem::align_of::<&[f32]>())
+            .map_err(|_| GeneratedKernelProfileError::AbiMismatch)?,
+        vec![
+            rust_layout_component(
+                0,
+                pointer_size,
+                pointer_alignment,
+                RustPhysicalComponentKindV1::Pointer {
+                    mutability: RustPointerMutabilityV1::Const,
+                    pointee: RustScalarElementTypeV1::F32,
+                },
+            )?,
+            rust_layout_component(
+                pointer_size,
+                usize_size,
+                usize_alignment,
+                RustPhysicalComponentKindV1::Usize,
+            )?,
+        ],
+    )
+    .map_err(|_| GeneratedKernelProfileError::AbiMismatch)?
+    .type_identity();
+
+    let (output_size, output_alignment, pointer_offset, length_offset) =
+        DisjointSlice::<f32, Index1D>::__fe2o3_rust_layout_v1();
+    let output = RustLayoutEvidenceV1::new(
+        RustTypeEvidenceV1::new(RustSourceTypeShapeV1::disjoint_slice(
+            RustScalarElementTypeV1::F32,
+            RustDisjointIndexSpaceV1::Index1D,
+        )),
+        RustcAbiClassV1::ScalarPair,
+        PointerWidth::Bits64,
+        u64::try_from(output_size).map_err(|_| GeneratedKernelProfileError::AbiMismatch)?,
+        u32::try_from(output_alignment).map_err(|_| GeneratedKernelProfileError::AbiMismatch)?,
+        vec![
+            rust_layout_component(
+                u64::try_from(pointer_offset)
+                    .map_err(|_| GeneratedKernelProfileError::AbiMismatch)?,
+                pointer_size,
+                pointer_alignment,
+                RustPhysicalComponentKindV1::Pointer {
+                    mutability: RustPointerMutabilityV1::Mut,
+                    pointee: RustScalarElementTypeV1::F32,
+                },
+            )?,
+            rust_layout_component(
+                u64::try_from(length_offset)
+                    .map_err(|_| GeneratedKernelProfileError::AbiMismatch)?,
+                usize_size,
+                usize_alignment,
+                RustPhysicalComponentKindV1::Usize,
+            )?,
+        ],
+    )
+    .map_err(|_| GeneratedKernelProfileError::AbiMismatch)?
+    .type_identity();
+
+    Ok([shared, shared, output])
+}
+
+fn rust_layout_component(
+    offset: u64,
+    size: u64,
+    alignment: u32,
+    kind: RustPhysicalComponentKindV1,
+) -> Result<RustPhysicalComponentV1, GeneratedKernelProfileError> {
+    RustPhysicalComponentV1::new(offset, size, alignment, kind)
+        .map_err(|_| GeneratedKernelProfileError::AbiMismatch)
 }
 
 fn generated_type_identity(rust_type: &str, layout: &str) -> TypeIdentity {

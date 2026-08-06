@@ -75,6 +75,18 @@ pub struct DisjointSlice<T, IndexSpace = Index1D> {
 }
 
 impl<T, IndexSpace> DisjointSlice<T, IndexSpace> {
+    /// Returns host-rustc layout facts used by the generated ABI evidence
+    /// profile. These values are data only and grant no artifact authority.
+    #[doc(hidden)]
+    pub const fn __fe2o3_rust_layout_v1() -> (usize, usize, usize, usize) {
+        (
+            core::mem::size_of::<Self>(),
+            core::mem::align_of::<Self>(),
+            core::mem::offset_of!(Self, ptr),
+            core::mem::offset_of!(Self, len),
+        )
+    }
+
     /// Constructs a device slice from its raw representation.
     ///
     /// # Safety
@@ -146,6 +158,14 @@ mod tests {
         assert_eq!(
             align_of::<DisjointSlice<u32, Index2D<64>>>(),
             expected_align
+        );
+        assert_eq!(
+            DisjointSlice::<u32, Index1D>::__fe2o3_rust_layout_v1(),
+            (expected_size, expected_align, 0, size_of::<*mut u32>())
+        );
+        assert_eq!(
+            DisjointSlice::<u32, Index2D<64>>::__fe2o3_rust_layout_v1(),
+            (expected_size, expected_align, 0, size_of::<*mut u32>())
         );
     }
 

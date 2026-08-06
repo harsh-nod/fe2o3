@@ -26,6 +26,9 @@ pub const KERNEL_REGISTRATION_VERSION_V2: u16 = 2;
 pub const KERNEL_REGISTRATION_KIND_KERNEL: u16 = 1;
 /// A `#[kernel(typed)]` registration using the exact typed vecadd V1 profile.
 pub const KERNEL_REGISTRATION_KIND_TYPED_VECADD_V1: u16 = 2;
+/// A `#[kernel(typed)]` registration whose exact vecadd ABI identities are
+/// derived from canonical rustc type/layout evidence.
+pub const KERNEL_REGISTRATION_KIND_TYPED_VECADD_LAYOUT_V2: u16 = 3;
 
 /// V1 is an immutable `#[used]` static with this exact tuple shape:
 ///
@@ -44,6 +47,8 @@ pub const CRATE_BINDING_ID_ENV_V1: &str = "FE2O3_CRATE_BINDING_ID_V1";
 
 /// Stable profile tag included in typed vecadd kernel binding derivation.
 pub const TYPED_VECADD_F32_PROFILE_TAG_V1: &str = "typed-vecadd-f32-v1";
+/// Stable profile tag for rustc-derived typed vecadd ABI evidence.
+pub const TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2: &str = "typed-vecadd-f32-rustc-layout-v2";
 
 const CRATE_BINDING_DOMAIN_V1: &[u8] = b"fe2o3.crate-binding.v1\0";
 const KERNEL_BINDING_DOMAIN_V1: &[u8] = b"fe2o3.kernel-binding.v1\0";
@@ -220,9 +225,10 @@ mod tests {
         assert_eq!(KERNEL_REGISTRATION_VERSION_V2, 2);
         assert_eq!(KERNEL_REGISTRATION_KIND_KERNEL, 1);
         assert_eq!(KERNEL_REGISTRATION_KIND_TYPED_VECADD_V1, 2);
+        assert_eq!(KERNEL_REGISTRATION_KIND_TYPED_VECADD_LAYOUT_V2, 3);
         assert_ne!(
-            KERNEL_REGISTRATION_KIND_KERNEL,
-            KERNEL_REGISTRATION_KIND_TYPED_VECADD_V1
+            KERNEL_REGISTRATION_KIND_TYPED_VECADD_V1,
+            KERNEL_REGISTRATION_KIND_TYPED_VECADD_LAYOUT_V2
         );
         assert_eq!(KERNEL_REGISTRATION_V1_FIELD_COUNT, 6);
         assert_eq!(KERNEL_REGISTRATION_V2_FIELD_COUNT, 8);
@@ -237,8 +243,15 @@ mod tests {
         assert_ne!(first, different_crate);
         assert_eq!(CrateBindingIdV1::from_hex(&first.to_hex()).unwrap(), first);
 
-        let kernel =
+        let opaque_kernel =
             derive_kernel_binding_id_v1(first, TYPED_VECADD_F32_PROFILE_TAG_V1, "vecadd", "vecadd");
+        let kernel = derive_kernel_binding_id_v1(
+            first,
+            TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2,
+            "vecadd",
+            "vecadd",
+        );
+        assert_ne!(opaque_kernel, kernel);
         assert_ne!(kernel.as_bytes(), first.as_bytes());
         assert_eq!(
             KernelBindingIdV1::from_hex(&kernel.to_hex()).unwrap(),
@@ -251,7 +264,7 @@ mod tests {
         let crate_id = derive_crate_binding_id_v1("crate", ["metadata"]);
         let kernel = derive_kernel_binding_id_v1(
             crate_id,
-            TYPED_VECADD_F32_PROFILE_TAG_V1,
+            TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2,
             "vecadd",
             "vecadd",
         );

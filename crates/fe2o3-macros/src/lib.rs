@@ -5,9 +5,9 @@ use proc_macro_crate::{FoundCrate, crate_name};
 use quote::{format_ident, quote};
 use reserved_fe2o3_symbols::{
     CRATE_BINDING_ID_ENV_V1, CrateBindingIdV1, KERNEL_PREFIX, KERNEL_REGISTRATION_KIND_KERNEL,
-    KERNEL_REGISTRATION_KIND_TYPED_VECADD_V1, KERNEL_REGISTRATION_MAGIC,
+    KERNEL_REGISTRATION_KIND_TYPED_VECADD_LAYOUT_V2, KERNEL_REGISTRATION_MAGIC,
     KERNEL_REGISTRATION_PREFIX, KERNEL_REGISTRATION_VERSION_V1, KERNEL_REGISTRATION_VERSION_V2,
-    RESERVED_ROOT, TYPED_VECADD_F32_PROFILE_TAG_V1, artifact_length_symbol_v1,
+    RESERVED_ROOT, TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2, artifact_length_symbol_v1,
     artifact_pointer_symbol_v1, derive_kernel_binding_id_v1, host_kernel_symbol_v1,
 };
 use syn::{
@@ -362,7 +362,7 @@ fn expand_kernel_with_imports(
     let kernel_binding = crate_binding.map(|crate_binding| {
         derive_kernel_binding_id_v1(
             crate_binding,
-            TYPED_VECADD_F32_PROFILE_TAG_V1,
+            TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2,
             &original_name,
             &original_name,
         )
@@ -376,7 +376,7 @@ fn expand_kernel_with_imports(
     let registration_ident = format_ident!("{KERNEL_REGISTRATION_PREFIX}{original_name}");
     let registration_kind = match mode {
         KernelMode::Basic => KERNEL_REGISTRATION_KIND_KERNEL,
-        KernelMode::Typed => KERNEL_REGISTRATION_KIND_TYPED_VECADD_V1,
+        KernelMode::Typed => KERNEL_REGISTRATION_KIND_TYPED_VECADD_LAYOUT_V2,
     };
     let marker_value = syn::LitStr::new(&original_name, original_ident.span());
     let export_value = syn::LitStr::new(&original_name, original_ident.span());
@@ -480,7 +480,7 @@ fn expand_kernel_with_imports(
                     {
                         const PROFILE:
                             __fe2o3_kernel_host::__generated::CompilerGeneratedKernelProfileV1 =
-                            __fe2o3_kernel_host::__generated::CompilerGeneratedKernelProfileV1::TypedVecAddF32V1;
+                            __fe2o3_kernel_host::__generated::CompilerGeneratedKernelProfileV1::TypedVecAddF32RustcLayoutV2;
 
                         const KERNEL_BINDING_ID_V1: [u8; 32] = [#(#binding_bytes),*];
 
@@ -837,8 +837,9 @@ mod tests {
     };
     use proc_macro_crate::FoundCrate;
     use reserved_fe2o3_symbols::{
-        TYPED_VECADD_F32_PROFILE_TAG_V1, artifact_length_symbol_v1, artifact_pointer_symbol_v1,
-        derive_crate_binding_id_v1, derive_kernel_binding_id_v1, host_kernel_symbol_v1,
+        TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2, artifact_length_symbol_v1,
+        artifact_pointer_symbol_v1, derive_crate_binding_id_v1, derive_kernel_binding_id_v1,
+        host_kernel_symbol_v1,
     };
     use syn::{ItemFn, parse_quote};
 
@@ -992,7 +993,7 @@ mod tests {
         let crate_binding = derive_crate_binding_id_v1("fixture", ["metadata"]);
         let kernel_binding = derive_kernel_binding_id_v1(
             crate_binding,
-            TYPED_VECADD_F32_PROFILE_TAG_V1,
+            TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2,
             "vecadd",
             "vecadd",
         );
@@ -1008,7 +1009,7 @@ mod tests {
         .to_string();
 
         assert!(expansion.contains("pub mod vecadd_gpu"));
-        assert!(expansion.contains("2u16 , 2u16"));
+        assert!(expansion.contains("2u16 , 3u16"));
         assert!(!expansion.contains("1u16 , 1u16"));
         assert!(expansion.contains(&format!(
             "fn {} () -> * const u8",
@@ -1032,7 +1033,7 @@ mod tests {
             "unsafe impl __fe2o3_kernel_host :: __generated :: CompilerGeneratedKernelContractV1"
         ));
         assert!(expansion.contains(
-            "const PROFILE : __fe2o3_kernel_host :: __generated :: CompilerGeneratedKernelProfileV1 = __fe2o3_kernel_host :: __generated :: CompilerGeneratedKernelProfileV1 :: TypedVecAddF32V1"
+            "const PROFILE : __fe2o3_kernel_host :: __generated :: CompilerGeneratedKernelProfileV1 = __fe2o3_kernel_host :: __generated :: CompilerGeneratedKernelProfileV1 :: TypedVecAddF32RustcLayoutV2"
         ));
         assert!(expansion.contains("const KERNEL_BINDING_ID_V1 : [u8 ; 32]"));
         assert!(expansion.contains("fn artifact_container_bytes () -> & 'static [u8]"));

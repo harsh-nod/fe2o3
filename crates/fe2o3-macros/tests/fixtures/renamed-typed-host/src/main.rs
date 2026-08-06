@@ -21,7 +21,7 @@ fn main() {
     assert_safe_aliases(None, None);
     assert_eq!(
         <__fe2o3_kernel_marker_renamed_typed as gpu_host::__generated::CompilerGeneratedKernelContractV1>::PROFILE,
-        gpu_host::__generated::CompilerGeneratedKernelProfileV1::TypedVecAddF32V1
+        gpu_host::__generated::CompilerGeneratedKernelProfileV1::TypedVecAddF32RustcLayoutV2
     );
     assert_ne!(
         <__fe2o3_kernel_marker_renamed_typed as gpu_host::__generated::CompilerGeneratedKernelContractV1>::KERNEL_BINDING_ID_V1,

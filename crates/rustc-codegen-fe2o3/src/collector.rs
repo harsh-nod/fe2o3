@@ -1,5 +1,6 @@
+use fe2o3_artifacts::TypeIdentity;
 use reserved_fe2o3_symbols::{
-    CrateBindingIdV1, KernelBindingIdV1, TYPED_VECADD_F32_PROFILE_TAG_V1,
+    CrateBindingIdV1, KernelBindingIdV1, TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2,
     derive_crate_binding_id_v1, derive_kernel_binding_id_v1, host_kernel_symbol_v1,
 };
 use rustc_hir::ItemKind;
@@ -16,7 +17,7 @@ use std::fmt;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum TypedKernelProfile {
-    VecAddV1,
+    VecAddRustcLayoutV2,
 }
 
 #[derive(Clone, Debug)]
@@ -30,6 +31,8 @@ pub struct CollectedFunction<'tcx> {
     pub(crate) typed_profile: Option<TypedKernelProfile>,
     /// Present only for a V2 typed registration validated by the backend.
     pub(crate) kernel_binding: Option<KernelBindingIdV1>,
+    /// rustc-derived identities for each source argument in a typed profile.
+    pub(crate) typed_layout_identities: Option<[TypeIdentity; 3]>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -82,6 +85,7 @@ pub fn collect_device_functions<'tcx>(
             export_name,
             root.typed_profile,
             root.kernel_binding,
+            root.typed_layout_identities,
         );
     }
 
@@ -96,6 +100,7 @@ pub fn dump_device_functions<'tcx>(tcx: TyCtxt<'tcx>, functions: &[CollectedFunc
             debug_assert_eq!(function.is_kernel, function.logical_name.is_some());
             debug_assert!(function.is_kernel || function.typed_profile.is_none());
             debug_assert!(function.is_kernel || function.kernel_binding.is_none());
+            debug_assert!(function.is_kernel || function.typed_layout_identities.is_none());
             let mir_stats = if tcx.is_mir_available(def_id) {
                 let mir = tcx.instance_mir(function.instance.def);
                 format!(
@@ -110,7 +115,9 @@ pub fn dump_device_functions<'tcx>(tcx: TyCtxt<'tcx>, functions: &[CollectedFunc
             (
                 function.export_name.clone(),
                 match function.typed_profile {
-                    Some(TypedKernelProfile::VecAddV1) => "kernel/typed-vecadd-v1",
+                    Some(TypedKernelProfile::VecAddRustcLayoutV2) => {
+                        "kernel/typed-vecadd-rustc-layout-v2"
+                    }
                     None if function.is_kernel => "kernel",
                     None => "device",
                 },
@@ -160,6 +167,7 @@ struct KernelRoot<T> {
     export_name: String,
     typed_profile: Option<TypedKernelProfile>,
     kernel_binding: Option<KernelBindingIdV1>,
+    typed_layout_identities: Option<[TypeIdentity; 3]>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -256,7 +264,28 @@ fn kernel_roots<'tcx>(
         )?);
     }
 
-    validate_registration_records(records, session_crate_binding(tcx))
+    let mut roots = validate_registration_records(records, session_crate_binding(tcx))?;
+    for root in &mut roots {
+        root.typed_layout_identities = match root.typed_profile {
+            Some(TypedKernelProfile::VecAddRustcLayoutV2) => {
+                let evidence =
+                    crate::rust_type_layout::extract_exact_typed_vecadd_layout(tcx, root.target)
+                        .map_err(|error| {
+                            RegistrationError::new(
+                                format!(
+                                    "{}{}",
+                                    reserved_fe2o3_symbols::KERNEL_REGISTRATION_PREFIX,
+                                    root.logical_name
+                                ),
+                                format!("rustc type/layout evidence extraction failed: {error}"),
+                            )
+                        })?;
+                Some(evidence.map(|argument| argument.type_identity()))
+            }
+            None => None,
+        };
+    }
+    Ok(roots)
 }
 
 fn session_crate_binding(tcx: TyCtxt<'_>) -> Option<CrateBindingIdV1> {
@@ -635,12 +664,21 @@ fn validate_registration_records<T: Copy>(
             ) => None,
             (
                 reserved_fe2o3_symbols::KERNEL_REGISTRATION_VERSION_V2,
-                reserved_fe2o3_symbols::KERNEL_REGISTRATION_KIND_TYPED_VECADD_V1,
-            ) => Some(TypedKernelProfile::VecAddV1),
+                reserved_fe2o3_symbols::KERNEL_REGISTRATION_KIND_TYPED_VECADD_LAYOUT_V2,
+            ) => Some(TypedKernelProfile::VecAddRustcLayoutV2),
             (reserved_fe2o3_symbols::KERNEL_REGISTRATION_VERSION_V1, kind)
-                if kind == reserved_fe2o3_symbols::KERNEL_REGISTRATION_KIND_TYPED_VECADD_V1 =>
+                if kind
+                    == reserved_fe2o3_symbols::KERNEL_REGISTRATION_KIND_TYPED_VECADD_LAYOUT_V2 =>
             {
                 return Err(error("typed registrations require version 2".to_owned()));
+            }
+            (_, kind)
+                if kind == reserved_fe2o3_symbols::KERNEL_REGISTRATION_KIND_TYPED_VECADD_V1 =>
+            {
+                return Err(error(
+                    "typed vecadd profile V1 uses unauthenticated opaque layout identities and is no longer accepted"
+                        .to_owned(),
+                ));
             }
             (reserved_fe2o3_symbols::KERNEL_REGISTRATION_VERSION_V2, kind)
                 if kind == reserved_fe2o3_symbols::KERNEL_REGISTRATION_KIND_KERNEL =>
@@ -677,7 +715,7 @@ fn validate_registration_records<T: Copy>(
         }
 
         let kernel_binding = match typed_profile {
-            Some(TypedKernelProfile::VecAddV1) => {
+            Some(TypedKernelProfile::VecAddRustcLayoutV2) => {
                 let crate_binding = record
                     .crate_binding
                     .ok_or_else(|| error("V2 registration has no crate binding".to_owned()))?;
@@ -695,7 +733,7 @@ fn validate_registration_records<T: Copy>(
                     .ok_or_else(|| error("V2 registration has no kernel binding".to_owned()))?;
                 let expected = derive_kernel_binding_id_v1(
                     crate_binding,
-                    TYPED_VECADD_F32_PROFILE_TAG_V1,
+                    TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2,
                     &record.logical_name,
                     &record.export_name,
                 );
@@ -758,6 +796,7 @@ fn validate_registration_records<T: Copy>(
             export_name: record.export_name,
             typed_profile,
             kernel_binding,
+            typed_layout_identities: None,
         });
     }
 
@@ -830,6 +869,7 @@ impl<'tcx> DeviceCollector<'tcx> {
         export_name: String,
         typed_profile: Option<TypedKernelProfile>,
         kernel_binding: Option<KernelBindingIdV1>,
+        typed_layout_identities: Option<[TypeIdentity; 3]>,
     ) {
         let symbol = self.tcx.symbol_name(instance).name.to_string();
         if self.seen.insert(symbol) {
@@ -841,6 +881,7 @@ impl<'tcx> DeviceCollector<'tcx> {
                 logical_name: Some(logical_name),
                 typed_profile,
                 kernel_binding,
+                typed_layout_identities,
             });
         }
     }
@@ -967,6 +1008,7 @@ impl<'tcx> DeviceCollector<'tcx> {
             logical_name: None,
             typed_profile: None,
             kernel_binding: None,
+            typed_layout_identities: None,
         });
         Ok(())
     }
@@ -1091,9 +1133,10 @@ mod tests {
         validate_registration_records as validate_records,
     };
     use reserved_fe2o3_symbols::{
-        KERNEL_PREFIX, KERNEL_REGISTRATION_KIND_KERNEL, KERNEL_REGISTRATION_KIND_TYPED_VECADD_V1,
+        KERNEL_PREFIX, KERNEL_REGISTRATION_KIND_KERNEL,
+        KERNEL_REGISTRATION_KIND_TYPED_VECADD_LAYOUT_V2, KERNEL_REGISTRATION_KIND_TYPED_VECADD_V1,
         KERNEL_REGISTRATION_MAGIC, KERNEL_REGISTRATION_PREFIX, KERNEL_REGISTRATION_VERSION_V1,
-        KERNEL_REGISTRATION_VERSION_V2, TYPED_VECADD_F32_PROFILE_TAG_V1,
+        KERNEL_REGISTRATION_VERSION_V2, TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2,
         derive_crate_binding_id_v1, derive_kernel_binding_id_v1, host_kernel_symbol_v1,
     };
 
@@ -1135,12 +1178,12 @@ mod tests {
         let crate_binding = derive_crate_binding_id_v1("fixture", ["metadata"]);
         let kernel_binding = derive_kernel_binding_id_v1(
             crate_binding,
-            TYPED_VECADD_F32_PROFILE_TAG_V1,
+            TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2,
             logical_name,
             export_name,
         );
         registration.version = KERNEL_REGISTRATION_VERSION_V2;
-        registration.kind = KERNEL_REGISTRATION_KIND_TYPED_VECADD_V1;
+        registration.kind = KERNEL_REGISTRATION_KIND_TYPED_VECADD_LAYOUT_V2;
         registration.crate_binding = Some(crate_binding);
         registration.kernel_binding = Some(kernel_binding);
         registration.target_symbol = host_kernel_symbol_v1(kernel_binding);
@@ -1178,7 +1221,10 @@ mod tests {
         assert_eq!(roots[0].target, 7);
         assert_eq!(roots[0].logical_name, "vecadd");
         assert_eq!(roots[0].export_name, "vecadd");
-        assert_eq!(roots[0].typed_profile, Some(TypedKernelProfile::VecAddV1));
+        assert_eq!(
+            roots[0].typed_profile,
+            Some(TypedKernelProfile::VecAddRustcLayoutV2)
+        );
         assert!(roots[0].kernel_binding.is_some());
     }
 
@@ -1201,7 +1247,7 @@ mod tests {
         let mut wrong_kernel = typed.clone();
         wrong_kernel.kernel_binding = Some(derive_kernel_binding_id_v1(
             wrong_kernel.crate_binding.unwrap(),
-            TYPED_VECADD_F32_PROFILE_TAG_V1,
+            TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2,
             "different",
             "different",
         ));
@@ -1243,7 +1289,11 @@ mod tests {
                 .contains("unknown registration version")
         );
 
-        for kind in [0, KERNEL_REGISTRATION_KIND_TYPED_VECADD_V1 + 1, u16::MAX] {
+        for kind in [
+            0,
+            KERNEL_REGISTRATION_KIND_TYPED_VECADD_LAYOUT_V2 + 1,
+            u16::MAX,
+        ] {
             let mut unknown_kind = base.clone();
             unknown_kind.kind = kind;
             assert_eq!(
@@ -1253,6 +1303,16 @@ mod tests {
                 format!("unknown registration kind {kind}")
             );
         }
+
+        let mut obsolete_typed = base;
+        obsolete_typed.version = KERNEL_REGISTRATION_VERSION_V2;
+        obsolete_typed.kind = KERNEL_REGISTRATION_KIND_TYPED_VECADD_V1;
+        assert!(
+            validate_registration_records(vec![obsolete_typed])
+                .unwrap_err()
+                .reason
+                .contains("opaque layout identities")
+        );
     }
 
     #[test]

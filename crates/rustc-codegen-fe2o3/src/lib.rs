@@ -76,6 +76,7 @@ struct TypedKernelRootV1 {
     export_name: String,
     profile: collector::TypedKernelProfile,
     kernel_binding: reserved_fe2o3_symbols::KernelBindingIdV1,
+    type_identities: [fe2o3_artifacts::TypeIdentity; 3],
 }
 
 #[derive(Debug, Default)]
@@ -492,11 +493,18 @@ fn typed_roots_from_collection(
                         reason: "typed kernel root has no validated kernel binding",
                     }
                 })?;
+                let type_identities = function.typed_layout_identities.ok_or_else(|| {
+                    TypedVerticalError::InvalidCollectedRoot {
+                        export_name: function.export_name.clone(),
+                        reason: "typed kernel root has no rustc-derived layout identities",
+                    }
+                })?;
                 Ok(TypedKernelRootV1 {
                     logical_name,
                     export_name: function.export_name.clone(),
                     profile,
                     kernel_binding,
+                    type_identities,
                 })
             })
         })
@@ -527,10 +535,14 @@ fn generate_typed_host_objects(
             finalized_artifact_bytes(&artifact.llvm_ir, "LLVM IR", MAX_FINALIZED_LLVM_IR_BYTES)?;
         let hsaco = finalized_artifact_bytes(&artifact.hsaco, "HSACO", MAX_FINALIZED_HSACO_BYTES)?;
         let generated = match root.profile {
-            collector::TypedKernelProfile::VecAddV1 => {
+            collector::TypedKernelProfile::VecAddRustcLayoutV2 => {
+                typed_artifact::validate_typed_vecadd_hsaco_v2(&root.export_name, target, hsaco)
+                    .map_err(TypedVerticalError::Artifact)?;
                 typed_artifact::build_typed_vecadd_artifact_v1(
                     &root.logical_name,
                     &root.export_name,
+                    root.kernel_binding,
+                    root.type_identities,
                     target,
                     llvm_ir,
                     hsaco.to_vec(),
@@ -1144,13 +1156,21 @@ mod tests {
         TypedKernelRootV1 {
             logical_name: logical_name.to_owned(),
             export_name: export_name.to_owned(),
-            profile: TypedKernelProfile::VecAddV1,
+            profile: TypedKernelProfile::VecAddRustcLayoutV2,
             kernel_binding: reserved_fe2o3_symbols::derive_kernel_binding_id_v1(
                 crate_binding,
-                reserved_fe2o3_symbols::TYPED_VECADD_F32_PROFILE_TAG_V1,
+                reserved_fe2o3_symbols::TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2,
                 logical_name,
                 export_name,
             ),
+            type_identities: [fe2o3_artifacts::TypeIdentity::new(
+                fe2o3_artifacts::DeclaredRustTypeIdentity::from_untrusted_bytes(
+                    fe2o3_artifacts::DigestBytes::from_bytes([0x31; 32]),
+                ),
+                fe2o3_artifacts::DeclaredRustLayoutIdentity::from_untrusted_bytes(
+                    fe2o3_artifacts::DigestBytes::from_bytes([0x32; 32]),
+                ),
+            ); 3],
         }
     }
 
