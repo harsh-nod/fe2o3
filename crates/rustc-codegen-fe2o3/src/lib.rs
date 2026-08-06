@@ -12,6 +12,7 @@ extern crate rustc_span;
 
 mod amdgpu_llvm;
 mod collector;
+mod host_object;
 mod kernel_ir_codegen;
 mod kernel_ir_lowering;
 mod mir_import;
