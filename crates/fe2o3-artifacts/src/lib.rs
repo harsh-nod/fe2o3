@@ -63,7 +63,7 @@ pub use direct_link::{
     DirectLinkToolchainConfigurationIdentityV1, DirectLinkToolchainExecutableIdentityV1,
     DirectLinkToolchainIdentityV1, DirectLinkTransformationIdentityV1,
     DirectLinkWorkerConfigurationIdentityV1, DirectLinkWorkerExecutableIdentityV1,
-    DirectLinkWorkerIdentityV1, MAX_DIRECT_LINK_BINDINGS,
+    DirectLinkWorkerIdentityV1, MAX_DIRECT_LINK_BINDINGS, ValidatedDirectLinkBundleEvidenceV1,
 };
 pub use direct_link_bridge::{
     DirectLinkBridgeError, DirectLinkBridgeIdentityKindV1, DirectLinkPublicationBridgeV1,

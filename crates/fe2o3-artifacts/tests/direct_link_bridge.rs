@@ -62,7 +62,26 @@ fn expectation(payload: PayloadDigest, ffi_seed: u8) -> DirectLinkBindingExpecta
     )
 }
 
-fn evidence(ffi_seed: u8) -> DirectLinkBundleEvidenceV1 {
+struct EvidenceFixture {
+    container: ArtifactContainerV1,
+    bundle: BundleIndexV1,
+    expectation: DirectLinkBindingExpectationV1,
+    evidence: DirectLinkBundleEvidenceV1,
+}
+
+impl EvidenceFixture {
+    fn validated(&self) -> fe2o3_artifacts::ValidatedDirectLinkBundleEvidenceV1<'_> {
+        let sources = [DirectLinkBindingSourceV1::new(
+            &self.container,
+            self.expectation.clone(),
+        )];
+        self.evidence
+            .validate_against(&self.bundle, &[&self.container], &sources)
+            .unwrap()
+    }
+}
+
+fn evidence(ffi_seed: u8) -> EvidenceFixture {
     let payload =
         CodeObjectPayload::from_bytes(DigestAlgorithm::Sha256, b"bridge native payload".to_vec())
             .unwrap();
@@ -87,9 +106,15 @@ fn evidence(ffi_seed: u8) -> DirectLinkBundleEvidenceV1 {
     let container =
         ArtifactContainerV1::new(manifest, DigestAlgorithm::Sha256, vec![payload]).unwrap();
     let bundle = BundleIndexV1::from_containers(std::slice::from_ref(&container)).unwrap();
-    let source =
-        DirectLinkBindingSourceV1::new(&container, expectation(payload_identity, ffi_seed));
-    DirectLinkBundleEvidenceV1::bind(&bundle, &[&container], &[source]).unwrap()
+    let expectation = expectation(payload_identity, ffi_seed);
+    let source = DirectLinkBindingSourceV1::new(&container, expectation.clone());
+    let evidence = DirectLinkBundleEvidenceV1::bind(&bundle, &[&container], &[source]).unwrap();
+    EvidenceFixture {
+        container,
+        bundle,
+        expectation,
+        evidence,
+    }
 }
 
 fn publish_bridge(
@@ -97,7 +122,11 @@ fn publish_bridge(
 ) -> fe2o3_artifact_transaction::PublishedLinkArtifactV1 {
     let mut catalog = LinkPublicationCatalogV1::default();
     let mut record = catalog
-        .begin(bridge.attempt(), bridge.scope(), bridge.request_identity())
+        .begin(
+            bridge.attempt(),
+            bridge.trusted_scope(),
+            bridge.request_identity(),
+        )
         .unwrap();
     record
         .record_pinned_worker(
@@ -137,17 +166,18 @@ fn publish_bridge(
         ),
         Ok(PublicationOutcomeV1::Published)
     );
-    *catalog.published(&bridge.scope()).unwrap()
+    *catalog.published(&bridge.trusted_scope()).unwrap()
 }
 
 #[test]
 fn typed_bridge_drives_and_validates_the_complete_g5_chain() {
-    let evidence = evidence(0x18);
-    let bridge = DirectLinkPublicationBridgeV1::prepare(
+    let fixture = evidence(0x18);
+    let validated = fixture.validated();
+    let bridge = DirectLinkPublicationBridgeV1::prepare_with_trusted_scope(
         attempt(9, 3),
         scope(4),
-        &evidence,
-        &evidence.bindings()[0],
+        &validated,
+        0,
     )
     .unwrap();
     let published = publish_bridge(&bridge);
@@ -169,32 +199,34 @@ fn typed_bridge_drives_and_validates_the_complete_g5_chain() {
 fn ffi_bundle_attempt_and_scope_are_committed_by_publication_identity() {
     let first_evidence = evidence(0x18);
     let changed_ffi_evidence = evidence(0x19);
-    let first = DirectLinkPublicationBridgeV1::prepare(
+    let first_validated = first_evidence.validated();
+    let changed_ffi_validated = changed_ffi_evidence.validated();
+    let first = DirectLinkPublicationBridgeV1::prepare_with_trusted_scope(
         attempt(10, 5),
         scope(6),
-        &first_evidence,
-        &first_evidence.bindings()[0],
+        &first_validated,
+        0,
     )
     .unwrap();
-    let changed_ffi = DirectLinkPublicationBridgeV1::prepare(
+    let changed_ffi = DirectLinkPublicationBridgeV1::prepare_with_trusted_scope(
         first.attempt(),
-        first.scope(),
-        &changed_ffi_evidence,
-        &changed_ffi_evidence.bindings()[0],
+        first.trusted_scope(),
+        &changed_ffi_validated,
+        0,
     )
     .unwrap();
-    let changed_attempt = DirectLinkPublicationBridgeV1::prepare(
+    let changed_attempt = DirectLinkPublicationBridgeV1::prepare_with_trusted_scope(
         attempt(11, 5),
-        first.scope(),
-        &first_evidence,
-        &first_evidence.bindings()[0],
+        first.trusted_scope(),
+        &first_validated,
+        0,
     )
     .unwrap();
-    let changed_scope = DirectLinkPublicationBridgeV1::prepare(
+    let changed_scope = DirectLinkPublicationBridgeV1::prepare_with_trusted_scope(
         first.attempt(),
         scope(7),
-        &first_evidence,
-        &first_evidence.bindings()[0],
+        &first_validated,
+        0,
     )
     .unwrap();
 
@@ -219,16 +251,34 @@ fn ffi_bundle_attempt_and_scope_are_committed_by_publication_identity() {
 }
 
 #[test]
-fn binding_from_another_evidence_record_is_rejected() {
-    let first = evidence(0x18);
-    let second = evidence(0x19);
+fn bridge_rejects_unvalidated_inputs_and_out_of_range_binding_selection() {
+    let fixture = evidence(0x18);
+    let validated = fixture.validated();
     assert_eq!(
-        DirectLinkPublicationBridgeV1::prepare(
+        DirectLinkPublicationBridgeV1::prepare_with_trusted_scope(
             attempt(12, 8),
             scope(9),
-            &first,
-            &second.bindings()[0],
+            &validated,
+            1,
         ),
-        Err(DirectLinkBridgeError::BindingOutsideEvidence)
+        Err(DirectLinkBridgeError::BindingIndexOutOfRange {
+            index: 1,
+            binding_count: 1,
+        })
+    );
+
+    let changed_expectation = expectation(
+        fixture.expectation.finalized_payload_identity().digest(),
+        0x19,
+    );
+    let changed_sources = [DirectLinkBindingSourceV1::new(
+        &fixture.container,
+        changed_expectation,
+    )];
+    assert_eq!(
+        fixture
+            .evidence
+            .validate_against(&fixture.bundle, &[&fixture.container], &changed_sources),
+        Err(fe2o3_artifacts::DirectLinkEvidenceError::ExpectationMismatch)
     );
 }

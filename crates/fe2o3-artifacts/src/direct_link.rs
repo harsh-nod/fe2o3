@@ -322,6 +322,40 @@ pub struct DirectLinkBundleEvidenceV1 {
     bindings: Vec<DirectLinkBindingV1>,
 }
 
+/// Inert witness that direct-link evidence matched concrete bundle inputs.
+///
+/// This value can only be created by `DirectLinkBundleEvidenceV1::validate_against`.
+/// It records the measured container identities and exact binding expectations
+/// used for that successful validation. It grants no load or launch authority.
+#[derive(Debug, Eq, PartialEq)]
+pub struct ValidatedDirectLinkBundleEvidenceV1<'a> {
+    evidence: &'a DirectLinkBundleEvidenceV1,
+    container_identities: Vec<DirectLinkContainerIdentityV1>,
+    bindings: Vec<DirectLinkBindingV1>,
+}
+
+impl<'a> ValidatedDirectLinkBundleEvidenceV1<'a> {
+    pub const fn evidence(&self) -> &'a DirectLinkBundleEvidenceV1 {
+        self.evidence
+    }
+
+    pub fn container_identities(&self) -> &[DirectLinkContainerIdentityV1] {
+        &self.container_identities
+    }
+
+    pub fn bindings(&self) -> &[DirectLinkBindingV1] {
+        &self.bindings
+    }
+
+    pub const fn grants_load_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
+    }
+}
+
 impl DirectLinkBundleEvidenceV1 {
     pub fn bind(
         bundle: &BundleIndexV1,
@@ -364,14 +398,17 @@ impl DirectLinkBundleEvidenceV1 {
         false
     }
 
-    /// Matches decoded evidence against exact caller-derived expectations and
-    /// canonical containers. Success returns no runtime-authority token.
-    pub fn validate_against(
-        &self,
+    /// Matches decoded evidence against exact caller-derived expectations,
+    /// canonical containers, and the complete bundle closure.
+    ///
+    /// The returned witness only attests that these concrete inputs matched. It
+    /// does not authenticate their source or grant runtime authority.
+    pub fn validate_against<'a>(
+        &'a self,
         bundle: &BundleIndexV1,
         containers: &[&ArtifactContainerV1],
         sources: &[DirectLinkBindingSourceV1<'_>],
-    ) -> Result<(), DirectLinkEvidenceError> {
+    ) -> Result<ValidatedDirectLinkBundleEvidenceV1<'a>, DirectLinkEvidenceError> {
         if self.bundle_index_identity != bundle_identity(bundle) {
             return Err(DirectLinkEvidenceError::BundleIdentityMismatch);
         }
@@ -409,7 +446,13 @@ impl DirectLinkBundleEvidenceV1 {
             validate_binding_source(source.container, &source.expectation)?;
         }
         validate_complete_bundle_closure(bundle, containers, &self.bindings)?;
-        Ok(())
+        let mut container_identities = measured_container_identities;
+        container_identities.sort_unstable();
+        Ok(ValidatedDirectLinkBundleEvidenceV1 {
+            evidence: self,
+            container_identities,
+            bindings: expected_bindings,
+        })
     }
 
     pub(crate) fn from_decoded(

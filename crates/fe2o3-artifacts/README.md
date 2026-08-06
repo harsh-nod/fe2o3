@@ -216,28 +216,35 @@ truncation, and trailing bytes. This companion leaves all existing manifest,
 container, and bundle V1 wire encodings unchanged.
 
 Decoded evidence remains untrusted. `validate_against` compares every recorded
-field with caller-derived expectations and recomputes container and bundle
-identities, but returns only `Result<(), _>`. The caller must authenticate the
-complete evidence record under its own policy. Neither an authenticated record
-nor successful matching grants device selection, module loading, symbol lookup,
-ABI compatibility, or kernel launch authority. The explicit
-`grants_load_authority` and `grants_launch_authority` queries therefore always
-return `false`.
+field with caller-derived binding sources and recomputes the complete container
+and bundle closure. Success returns an opaque
+`ValidatedDirectLinkBundleEvidenceV1` witness tied to the evidence and the
+concrete container identities and expectations used for that validation. The
+caller must still authenticate those inputs under its own policy. Neither an
+authenticated record nor the validation witness grants device selection,
+module loading, symbol lookup, ABI compatibility, or kernel launch authority.
+The explicit `grants_load_authority` and `grants_launch_authority` queries
+therefore always return `false`.
 
-`DirectLinkPublicationBridgeV1` is the normative typed conversion from one G6
-binding to one G5 publication chain. Its domain-separated publication identity
-commits to the build attempt, publication scope, request, worker/toolchain
-closure, response, transformation identities, FFI closure, container, and
-bundle, including the complete direct-link evidence-envelope digest. A
-completed G5 `PublishedLinkArtifactV1` can be checked against that entire chain
-without reinterpreting an untyped `[u8; 32]` between domains.
+`DirectLinkPublicationBridgeV1` is the normative typed conversion from one
+binding selected by index from a validated G6 witness to one G5 publication
+chain. Its domain-separated publication identity commits to the build attempt,
+caller-supplied trusted publication scope, request, worker/toolchain closure,
+response, transformation identities, FFI closure, container, and bundle,
+including the complete direct-link evidence-envelope digest. The trusted scope
+is explicitly not derived from the current artifact records; an external
+trusted policy must derive or check its package, kernel-set, and target
+identities. A completed G5 `PublishedLinkArtifactV1` can be checked against the
+entire committed chain without reinterpreting an untyped `[u8; 32]` between
+domains.
 
 The bridge and `LinkPublicationCatalogV1` remain inert models. They perform no
 filesystem I/O, do not reconstruct a catalog from durable bytes, do not
 authenticate measurements or transformation claims, and do not connect the
 existing filesystem transaction to direct-link publication. That integration
-must be implemented under the artifact lock with crash-safe persistence before
-the project can claim durable exactly-once linked-artifact publication.
+must derive/check trusted scope and authenticated measurements, then persist
+catalog and artifact state under the artifact lock with crash-safe recovery
+before the project can claim durable exactly-once linked-artifact publication.
 
 ## V1 wire format
 

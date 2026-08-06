@@ -10,7 +10,7 @@ use fe2o3_artifact_transaction::{
 use crate::{
     DIRECT_LINK_EVIDENCE_DIGEST_ALGORITHM, DigestAlgorithm, DirectLinkBindingV1,
     DirectLinkBundleEvidenceV1, DirectLinkToolchainIdentityV1, DirectLinkWorkerIdentityV1,
-    PayloadDigest,
+    PayloadDigest, ValidatedDirectLinkBundleEvidenceV1,
 };
 
 const WORKER_CLOSURE_DOMAIN: &[u8] = b"fe2o3.direct-link.worker-closure.v1\0";
@@ -34,7 +34,10 @@ pub enum DirectLinkBridgeIdentityKindV1 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum DirectLinkBridgeError {
-    BindingOutsideEvidence,
+    BindingIndexOutOfRange {
+        index: usize,
+        binding_count: usize,
+    },
     UnsupportedDigestAlgorithm {
         field: &'static str,
     },
@@ -46,9 +49,13 @@ pub enum DirectLinkBridgeError {
 impl fmt::Display for DirectLinkBridgeError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::BindingOutsideEvidence => {
-                formatter.write_str("direct-link binding is absent from its evidence record")
-            }
+            Self::BindingIndexOutOfRange {
+                index,
+                binding_count,
+            } => write!(
+                formatter,
+                "direct-link binding index {index} is outside validated count {binding_count}"
+            ),
             Self::UnsupportedDigestAlgorithm { field } => {
                 write!(
                     formatter,
@@ -66,12 +73,14 @@ impl std::error::Error for DirectLinkBridgeError {}
 
 /// Typed, inert conversion between one G6 binding and one G5 publication chain.
 ///
-/// `prepare` verifies that the binding belongs to the named evidence envelope. The returned
-/// values are the only normative conversions into G5 identity domains: direct SHA-256 identities
-/// are converted field by field, while worker/toolchain and publication identities are derived
-/// from domain-separated canonical preimages. The publication preimage commits to the attempt,
-/// scope, request, worker and toolchain measurements, response, transformation, FFI closure,
-/// container, bundle, and complete direct-link evidence envelope.
+/// Construction requires an opaque witness produced by exact validation
+/// against a concrete bundle, complete container set, and binding sources. The
+/// returned values are the only normative conversions into G5 identity domains:
+/// direct SHA-256 identities are converted field by field, while worker/toolchain
+/// and publication identities are derived from domain-separated canonical
+/// preimages. The publication preimage commits to the attempt, trusted scope,
+/// request, worker and toolchain measurements, response, transformation, FFI
+/// closure, container, bundle, and complete direct-link evidence envelope.
 ///
 /// This model performs no filesystem I/O, does not authenticate caller-supplied measurements, and
 /// grants no authority to load or launch code. Filesystem publication and durable recovery remain
@@ -79,26 +88,34 @@ impl std::error::Error for DirectLinkBridgeError {}
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DirectLinkPublicationBridgeV1 {
     attempt: BuildAttempt,
-    scope: LinkPublicationScopeV1,
+    trusted_scope: LinkPublicationScopeV1,
     bundle: DirectLinkBundleEvidenceV1,
     binding: DirectLinkBindingV1,
 }
 
 impl DirectLinkPublicationBridgeV1 {
-    /// Prepares an exact bridge for a binding present in `bundle`.
-    pub fn prepare(
+    /// Prepares a bridge for one binding in a concretely validated envelope.
+    ///
+    /// `trusted_scope` is supplied by an external trusted policy boundary.
+    /// This model does not derive or verify its package, kernel-set, or target
+    /// identities from artifact records. The value is committed into the
+    /// publication identity without being elevated to an artifact-derived fact.
+    pub fn prepare_with_trusted_scope(
         attempt: BuildAttempt,
-        scope: LinkPublicationScopeV1,
-        bundle: &DirectLinkBundleEvidenceV1,
-        binding: &DirectLinkBindingV1,
+        trusted_scope: LinkPublicationScopeV1,
+        validated: &ValidatedDirectLinkBundleEvidenceV1<'_>,
+        binding_index: usize,
     ) -> Result<Self, DirectLinkBridgeError> {
-        if !bundle.bindings().contains(binding) {
-            return Err(DirectLinkBridgeError::BindingOutsideEvidence);
-        }
+        let binding = validated.bindings().get(binding_index).ok_or(
+            DirectLinkBridgeError::BindingIndexOutOfRange {
+                index: binding_index,
+                binding_count: validated.bindings().len(),
+            },
+        )?;
         let bridge = Self {
             attempt,
-            scope,
-            bundle: bundle.clone(),
+            trusted_scope,
+            bundle: validated.evidence().clone(),
             binding: binding.clone(),
         };
         bridge.require_sha256_domains()?;
@@ -109,8 +126,11 @@ impl DirectLinkPublicationBridgeV1 {
         self.attempt
     }
 
-    pub const fn scope(&self) -> LinkPublicationScopeV1 {
-        self.scope
+    /// Returns the caller-supplied scope committed by this bridge.
+    ///
+    /// The scope remains a trusted external input, not an artifact-derived fact.
+    pub const fn trusted_scope(&self) -> LinkPublicationScopeV1 {
+        self.trusted_scope
     }
 
     pub const fn binding(&self) -> &DirectLinkBindingV1 {
@@ -170,9 +190,9 @@ impl DirectLinkPublicationBridgeV1 {
             bytes.extend_from_slice(self.attempt.session().as_bytes());
             bytes.push(0x03);
             bytes.extend_from_slice(self.attempt.invocation().as_bytes());
-            write_identity(bytes, 0x10, self.scope.package().as_bytes());
-            write_identity(bytes, 0x11, self.scope.kernel_set().as_bytes());
-            write_identity(bytes, 0x12, self.scope.target().as_bytes());
+            write_identity(bytes, 0x10, self.trusted_scope.package().as_bytes());
+            write_identity(bytes, 0x11, self.trusted_scope.kernel_set().as_bytes());
+            write_identity(bytes, 0x12, self.trusted_scope.target().as_bytes());
             write_identity(bytes, 0x20, self.request_identity().as_bytes());
             write_identity(bytes, 0x21, self.worker_identity().as_bytes());
             write_identity(bytes, 0x22, self.response_identity().as_bytes());
@@ -204,7 +224,7 @@ impl DirectLinkPublicationBridgeV1 {
             DirectLinkBridgeIdentityKindV1::Attempt,
         )?;
         require(
-            published.scope() == self.scope,
+            published.scope() == self.trusted_scope,
             DirectLinkBridgeIdentityKindV1::Scope,
         )?;
         require(

@@ -193,9 +193,13 @@ fn canonical_round_trip_binds_exact_container_bundle_and_provenance() {
         DirectLinkBindingSourceV1::new(&first.container, first.expectation.clone()),
         DirectLinkBindingSourceV1::new(&second.container, second.expectation.clone()),
     ];
-    let validation: Result<(), DirectLinkEvidenceError> =
-        decoded.validate_against(&bundle, &[&first.container, &second.container], &sources);
-    assert_eq!(validation, Ok(()));
+    let validated = decoded
+        .validate_against(&bundle, &[&first.container, &second.container], &sources)
+        .unwrap();
+    assert_eq!(validated.container_identities().len(), 2);
+    assert_eq!(validated.bindings(), decoded.bindings());
+    assert!(!validated.grants_load_authority());
+    assert!(!validated.grants_launch_authority());
 }
 
 #[test]
