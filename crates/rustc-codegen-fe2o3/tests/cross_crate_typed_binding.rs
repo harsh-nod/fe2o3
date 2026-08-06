@@ -1,6 +1,30 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+struct TestOutputDir {
+    path: PathBuf,
+}
+
+impl TestOutputDir {
+    fn new(workspace: &Path) -> Self {
+        let path = workspace.join(format!(
+            "target/fe2o3/test-output/cross-crate-binding-{}",
+            std::process::id()
+        ));
+        if path.exists() {
+            std::fs::remove_dir_all(&path).expect("remove stale link output directory");
+        }
+        std::fs::create_dir_all(&path).expect("create link output directory");
+        Self { path }
+    }
+}
+
+impl Drop for TestOutputDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
 fn workspace() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
@@ -31,9 +55,8 @@ fn same_logical_name_in_two_rlibs_resolves_distinct_artifacts() {
     let kernel_a = build_kernel(&workspace, &backend, &fixture_root.join("kernel-a"), "a");
     let kernel_b = build_kernel(&workspace, &backend, &fixture_root.join("kernel-b"), "b");
 
-    let output_dir = fixture_root.join("linked");
-    std::fs::create_dir_all(&output_dir).expect("create link output directory");
-    let executable = output_dir.join("binding-link-app");
+    let output_dir = TestOutputDir::new(&workspace);
+    let executable = output_dir.path.join("binding-link-app");
     let source = fixture_root.join("app/src/main.rs");
     let rocm_path = std::env::var_os("ROCM_PATH")
         .map(PathBuf::from)
