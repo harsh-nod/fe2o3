@@ -137,6 +137,33 @@ TargetParts parseTarget(StringRef Target) {
   return Result;
 }
 
+std::string targetMachineFeatures(const TargetParts &Parts) {
+  SmallString<32> Features;
+  auto Append = [&](StringRef Name, std::optional<bool> Enabled) {
+    if (!Enabled)
+      return;
+    if (!Features.empty())
+      Features.push_back(',');
+    Features.push_back(*Enabled ? '+' : '-');
+    Features.append(Name);
+  };
+  Append("sramecc", Parts.SramEcc);
+  Append("xnack", Parts.Xnack);
+  return Features.str().str();
+}
+
+uint32_t expectedGfx942Flags(const TargetParts &Parts) {
+  uint32_t Flags = ELF::EF_AMDGPU_MACH_AMDGCN_GFX942;
+  Flags |= Parts.Xnack ? (*Parts.Xnack ? ELF::EF_AMDGPU_FEATURE_XNACK_ON_V4
+                                       : ELF::EF_AMDGPU_FEATURE_XNACK_OFF_V4)
+                       : ELF::EF_AMDGPU_FEATURE_XNACK_ANY_V4;
+  Flags |= Parts.SramEcc
+               ? (*Parts.SramEcc ? ELF::EF_AMDGPU_FEATURE_SRAMECC_ON_V4
+                                 : ELF::EF_AMDGPU_FEATURE_SRAMECC_OFF_V4)
+               : ELF::EF_AMDGPU_FEATURE_SRAMECC_ANY_V4;
+  return Flags;
+}
+
 Error validateRequest(const Request &RequestValue) {
   switch (RequestValue.LinkOptions.Optimization) {
   case OptimizationLevel::O0:
@@ -264,10 +291,11 @@ createMachine(const Request &RequestValue) {
   if (!TargetValue)
     return pipelineError(Twine("AMDGPU target lookup failed: ") + LookupError);
   TargetParts Parts = parseTarget(RequestValue.Target);
+  std::string Features = targetMachineFeatures(Parts);
   TargetOptions OptionsValue;
   std::unique_ptr<TargetMachine> Machine(TargetValue->createTargetMachine(
-      TripleValue, Parts.Cpu, "", OptionsValue, Reloc::PIC_, CodeModel::Small,
-      codegenLevel(RequestValue.LinkOptions.Optimization)));
+      TripleValue, Parts.Cpu, Features, OptionsValue, Reloc::PIC_,
+      CodeModel::Small, codegenLevel(RequestValue.LinkOptions.Optimization)));
   if (!Machine)
     return pipelineError("AMDGPU target-machine creation failed");
   return Machine;
@@ -710,6 +738,7 @@ struct KernelLaunchContract {
 
 struct MetadataContract {
   bool Present = false;
+  std::optional<std::string> Target;
   std::vector<KernelLaunchContract> Kernels;
 };
 
@@ -848,6 +877,13 @@ inspectMetadata(const ELFObjectFile<ELF64LE> &ObjectValue) {
       return pipelineError("linked output has invalid AMDGPU metadata schema");
 
     auto &Root = Document.getRoot().getMap();
+    auto Target = metadataString(Root, "amdhsa.target");
+    if (!Target)
+      return Target.takeError();
+    if (Result.Target && *Result.Target != *Target)
+      return pipelineError(
+          "linked output has conflicting AMDGPU metadata targets");
+    Result.Target = Target->str();
     auto KernelsField = requiredMetadataField(Root, "amdhsa.kernels");
     if (!KernelsField)
       return KernelsField.takeError();
@@ -944,12 +980,15 @@ Expected<std::vector<std::string>> inspectOutput(ArrayRef<uint8_t> Bytes,
     return postLinkError("elf", "invalid_envelope");
 
   TargetParts RequestedTarget = parseTarget(RequestValue.Target);
-  uint32_t ActualMachine = Elf->getPlatformFlags() & ELF::EF_AMDGPU_MACH;
-  if (RequestedTarget.Cpu == "gfx942" &&
-      ActualMachine != ELF::EF_AMDGPU_MACH_AMDGCN_GFX942)
-    return pipelineError(Twine("post_link.check=target status=failed "
-                               "expected=gfx942 actual_mach=") +
-                         hexadecimal(ActualMachine));
+  uint32_t PlatformFlags = Elf->getPlatformFlags();
+  if (RequestedTarget.Cpu == "gfx942") {
+    uint32_t ExpectedFlags = expectedGfx942Flags(RequestedTarget);
+    if (PlatformFlags != ExpectedFlags)
+      return postLinkError("target", (Twine("e_flags expected=") +
+                                      hexadecimal(ExpectedFlags) +
+                                      " actual=" + hexadecimal(PlatformFlags))
+                                         .str());
+  }
   if (Elf->getPlatformFlags() != Expected.Flags ||
       Bytes[ELF::EI_OSABI] != Expected.OsAbi ||
       Elf->getEIdentABIVersion() != Expected.AbiVersion ||
@@ -1008,6 +1047,16 @@ Expected<std::vector<std::string>> inspectOutput(ArrayRef<uint8_t> Bytes,
   auto Metadata = inspectMetadata(*ConcreteElf);
   if (!Metadata)
     return postLinkError("metadata", errorToDiagnostic(Metadata.takeError()));
+  if (Metadata->Present) {
+    std::string ExpectedMetadataTarget =
+        (Twine(AmdGpuTriple) + "--" + RequestValue.Target).str();
+    if (!Metadata->Target || *Metadata->Target != ExpectedMetadataTarget)
+      return postLinkError(
+          "metadata_target",
+          (Twine("expected=") + ExpectedMetadataTarget +
+           " actual=" + (Metadata->Target ? *Metadata->Target : "absent"))
+              .str());
+  }
 
   std::set<std::string> ExpectedDescriptors;
   for (const std::string &Name : ExpectedSymbols)
@@ -1063,10 +1112,13 @@ Expected<std::vector<std::string>> inspectOutput(ArrayRef<uint8_t> Bytes,
                          diagnosticList(Defined))
                             .str());
   Diagnostics.push_back("post_link.check=unresolved status=ok symbols=[]");
-  Diagnostics.push_back((Twine("post_link.check=metadata status=") +
-                         (Metadata->Present ? "ok" : "absent") +
-                         " kernels=" + Twine(Metadata->Kernels.size()))
-                            .str());
+  Diagnostics.push_back(
+      (Twine("post_link.check=metadata status=") +
+       (Metadata->Present ? "ok" : "absent") +
+       " kernels=" + Twine(Metadata->Kernels.size()) + " target=" +
+       diagnosticAtom(Metadata->Target ? StringRef(*Metadata->Target)
+                                       : StringRef("absent")))
+          .str());
   for (const KernelLaunchContract &Kernel : Metadata->Kernels) {
     std::string Required = "absent";
     if (Kernel.RequiredWorkgroupSize)

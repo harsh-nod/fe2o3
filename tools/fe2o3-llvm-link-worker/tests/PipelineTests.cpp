@@ -525,6 +525,16 @@ void corruptMetadataKey(std::vector<uint8_t> &Bytes, StringRef Key) {
   *Position ^= 0x20;
 }
 
+void replaceMetadataText(std::vector<uint8_t> &Bytes, StringRef Expected,
+                         StringRef Replacement) {
+  require(Expected.size() == Replacement.size(),
+          "metadata replacement changes the encoded length");
+  auto Position = std::search(Bytes.begin(), Bytes.end(),
+                              Expected.bytes_begin(), Expected.bytes_end());
+  require(Position != Bytes.end(), "fixture has no requested metadata text");
+  llvm::copy(Replacement, Position);
+}
+
 void replaceMetadataByte(std::vector<uint8_t> &Bytes, StringRef Key,
                          uint8_t Expected, uint8_t Replacement) {
   auto Position = std::search(Bytes.begin(), Bytes.end(), Key.bytes_begin(),
@@ -680,6 +690,7 @@ int main(int ArgumentCount, char **Arguments) {
                               makeKernelBitcode("publication_kernel")),
                     {}, {}, {"publication_kernel"},
                     {"publication_kernel", "publication_kernel.kd"});
+  PublicationKernel.Target = "gfx942:xnack-";
   Response PublicationResponse = runSuccess(
       PublicationKernel, {"publication_kernel", "publication_kernel.kd"});
   requireDiagnostic(PublicationResponse,
@@ -698,6 +709,26 @@ int main(int ArgumentCount, char **Arguments) {
   requireDiagnostic(PublicationResponse, "max_workgroup_size=256");
   requireDiagnostic(PublicationResponse, "reqd_workgroup_size=[256,1,1]");
 
+  struct TargetFlagCase {
+    const char *Target;
+    uint32_t Flags;
+  };
+  static constexpr TargetFlagCase TargetFlagCases[] = {
+      {"gfx942", 0x54c},
+      {"gfx942:xnack-", 0x64c},
+      {"gfx942:xnack+", 0x74c},
+      {"gfx942:sramecc-:xnack-", 0xa4c},
+      {"gfx942:sramecc+:xnack-", 0xe4c},
+  };
+  for (const TargetFlagCase &Case : TargetFlagCases) {
+    Request TargetRequest = PublicationKernel;
+    TargetRequest.Target = Case.Target;
+    Response TargetResponse = runSuccess(
+        TargetRequest, {"publication_kernel", "publication_kernel.kd"});
+    require(read32(TargetResponse.LinkedOutput->Bytes, 48) == Case.Flags,
+            "gfx942 target emitted unexpected ELF flags");
+  }
+
   auto PublicationInspection = inspectLinkedOutputForPublication(
       PublicationResponse.LinkedOutput->Bytes, PublicationKernel);
   if (!PublicationInspection)
@@ -715,8 +746,32 @@ int main(int ArgumentCount, char **Arguments) {
   uint32_t Flags = read32(WrongOutputTarget, Elf64FlagsOffset);
   write32(WrongOutputTarget, Elf64FlagsOffset, Flags & ~ELF::EF_AMDGPU_MACH);
   requireInspectionFailure(WrongOutputTarget, PublicationKernel,
-                           "post_link.check=target status=failed "
-                           "expected=gfx942");
+                           "post_link.check=target status=failed");
+
+  std::vector<uint8_t> WrongXnack = PublicationResponse.LinkedOutput->Bytes;
+  write32(WrongXnack, Elf64FlagsOffset,
+          (Flags & ~ELF::EF_AMDGPU_FEATURE_XNACK_V4) |
+              ELF::EF_AMDGPU_FEATURE_XNACK_ANY_V4);
+  requireInspectionFailure(
+      WrongXnack, PublicationKernel,
+      "post_link.check=target status=failed "
+      "reason=e_flags%20expected%3D0x64c%20actual%3D0x54c");
+
+  std::vector<uint8_t> WrongSramEcc = PublicationResponse.LinkedOutput->Bytes;
+  write32(WrongSramEcc, Elf64FlagsOffset,
+          (Flags & ~ELF::EF_AMDGPU_FEATURE_SRAMECC_V4) |
+              ELF::EF_AMDGPU_FEATURE_SRAMECC_OFF_V4);
+  requireInspectionFailure(
+      WrongSramEcc, PublicationKernel,
+      "post_link.check=target status=failed "
+      "reason=e_flags%20expected%3D0x64c%20actual%3D0xa4c");
+
+  std::vector<uint8_t> WrongMetadataTarget =
+      PublicationResponse.LinkedOutput->Bytes;
+  replaceMetadataText(WrongMetadataTarget, "amdgcn-amd-amdhsa--gfx942:xnack-",
+                      "amdgcn-amd-amdhsa--gfx942:xnack+");
+  requireInspectionFailure(WrongMetadataTarget, PublicationKernel,
+                           "post_link.check=metadata_target status=failed");
 
   std::vector<uint8_t> UndefinedOutput =
       PublicationResponse.LinkedOutput->Bytes;
