@@ -10,8 +10,9 @@ use fe2o3_artifact_transaction::{
     CompilerModuleHandoffReceiptV1, ProducerIdentity, publish_compiler_module_handoff_v1,
 };
 use fe2o3_compiler_ffi::{
-    CompilerFfiEnvelopeV1, CompilerModuleHandoffErrorV1, CompilerModuleHandoffV1,
-    CompilerModuleKindV1,
+    CompilerFfiEnvelopeV1, CompilerModuleHandoffErrorV2, CompilerModuleHandoffV2,
+    CompilerModuleKindV1, CompilerModuleSymbolManifestErrorV1, CompilerModuleSymbolManifestV1,
+    CompilerModuleSymbolRoleV1,
 };
 use fe2o3_kernel_ir::{Module, TargetCapability, WaveWidth, WorkgroupSize};
 use std::collections::BTreeSet;
@@ -40,17 +41,62 @@ pub(crate) fn publish_worker_v2_compiler_module(
         .map_err(WorkerV2ProducerError::CompilerModule)?;
     validate_envelope_module_roles(envelope, &compiler_module)?;
 
-    let handoff = CompilerModuleHandoffV1::new(
+    let symbol_manifest = construct_symbol_manifest(&compiler_module)?;
+    let handoff = CompilerModuleHandoffV2::new(
         CompilerModuleKindV1::LlvmTextIr,
         envelope.target(),
         envelope.code_object_version(),
         envelope.clone(),
+        symbol_manifest,
         compiler_module.llvm_ir().as_bytes(),
     )
     .map_err(WorkerV2ProducerError::Handoff)?;
 
     publish_compiler_module_handoff_v1(output_dir, producer, attempt, handoff.canonical_bytes())
         .map_err(WorkerV2ProducerError::Publication)
+}
+
+fn construct_symbol_manifest(
+    module: &InertCompilerModuleTextV1,
+) -> Result<CompilerModuleSymbolManifestV1, WorkerV2ProducerError> {
+    use CompilerModuleSymbolRoleV1 as Role;
+
+    let mut entries = Vec::new();
+    entries.extend(
+        module
+            .kernel_entries()
+            .iter()
+            .cloned()
+            .map(|symbol| (Role::KernelEntry, symbol)),
+    );
+    entries.extend(
+        module
+            .kernel_entries()
+            .iter()
+            .map(|symbol| (Role::KernelDescriptor, format!("{symbol}.kd"))),
+    );
+    entries.extend(
+        module
+            .device_ffi_exports()
+            .iter()
+            .cloned()
+            .map(|symbol| (Role::DeviceFfiExport, symbol)),
+    );
+    entries.extend(
+        module
+            .internal_helpers()
+            .iter()
+            .cloned()
+            .map(|symbol| (Role::InternalHelper, symbol)),
+    );
+    entries.extend(
+        module
+            .external_declarations()
+            .iter()
+            .cloned()
+            .map(|symbol| (Role::UnresolvedExternalImport, symbol)),
+    );
+    CompilerModuleSymbolManifestV1::new(entries).map_err(WorkerV2ProducerError::SymbolManifest)
 }
 
 fn bind_g1_launch_contract(module: &Module) -> Result<Module, WorkerV2ProducerError> {
@@ -180,7 +226,8 @@ pub(crate) enum WorkerV2ProducerError {
         required: WorkgroupSize,
     },
     CompilerModule(CompilerModuleConstructionError),
-    Handoff(CompilerModuleHandoffErrorV1),
+    SymbolManifest(CompilerModuleSymbolManifestErrorV1),
+    Handoff(CompilerModuleHandoffErrorV2),
     Publication(HandoffPublicationErrorV1),
 }
 
@@ -226,6 +273,12 @@ impl fmt::Display for WorkerV2ProducerError {
                     "whole compiler-module construction failed: {error}"
                 )
             }
+            Self::SymbolManifest(error) => {
+                write!(
+                    formatter,
+                    "compiler symbol manifest construction failed: {error}"
+                )
+            }
             Self::Handoff(error) => {
                 write!(
                     formatter,
@@ -246,6 +299,7 @@ impl Error for WorkerV2ProducerError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::CompilerModule(error) => Some(error),
+            Self::SymbolManifest(error) => Some(error),
             Self::TargetCapabilities(error) => Some(error),
             Self::Handoff(error) => Some(error),
             Self::Publication(error) => Some(error),
@@ -268,7 +322,7 @@ mod tests {
     };
     use fe2o3_compiler_ffi::{
         CodeObjectVersion, CompilerFfiContractV1, CompilerFfiEnvelopeBuilderV1,
-        CompilerFfiLinkRoleV1, CompilerFfiSourceOwnerV1, CompilerModuleHandoffV1, DeviceTargetV1,
+        CompilerFfiLinkRoleV1, CompilerFfiSourceOwnerV1, CompilerModuleHandoffV2, DeviceTargetV1,
     };
     use fe2o3_kernel_ir::{
         BasicBlock, BlockId, Function, Kernel, LaunchDomain, LaunchExtent, Signature,
@@ -459,7 +513,7 @@ mod tests {
         .unwrap();
         let consumed =
             consume_compiler_module_handoff_v1(&directory.0, &producer, attempt).unwrap();
-        let handoff = CompilerModuleHandoffV1::decode(consumed.bytes()).unwrap();
+        let handoff = CompilerModuleHandoffV2::decode(consumed.bytes()).unwrap();
 
         assert_eq!(receipt.attempt(), attempt);
         assert_eq!(receipt.identity(), consumed.identity());
@@ -473,6 +527,31 @@ mod tests {
         assert!(module_text.contains("define amdgpu_kernel void @entry"));
         assert!(module_text.contains("define void @rust_helper"));
         assert!(module_text.contains("declare void @external_add"));
+        let manifest = handoff.symbol_manifest();
+        assert_eq!(
+            manifest
+                .symbols(CompilerModuleSymbolRoleV1::KernelEntry)
+                .collect::<Vec<_>>(),
+            ["entry"]
+        );
+        assert_eq!(
+            manifest
+                .symbols(CompilerModuleSymbolRoleV1::KernelDescriptor)
+                .collect::<Vec<_>>(),
+            ["entry.kd"]
+        );
+        assert_eq!(
+            manifest
+                .symbols(CompilerModuleSymbolRoleV1::DeviceFfiExport)
+                .collect::<Vec<_>>(),
+            ["rust_helper"]
+        );
+        assert_eq!(
+            manifest
+                .symbols(CompilerModuleSymbolRoleV1::UnresolvedExternalImport)
+                .collect::<Vec<_>>(),
+            ["external_add"]
+        );
         assert!(!receipt.grants_publication_authority());
         assert!(!receipt.grants_compiler_authority());
         assert!(!consumed.grants_link_authority());
@@ -581,7 +660,7 @@ mod tests {
         .unwrap();
         let consumed =
             consume_compiler_module_handoff_v1(&directory.0, &producer, attempt).unwrap();
-        let handoff = CompilerModuleHandoffV1::decode(consumed.bytes()).unwrap();
+        let handoff = CompilerModuleHandoffV2::decode(consumed.bytes()).unwrap();
         let text = std::str::from_utf8(handoff.module_bytes()).unwrap();
         assert!(text.contains("\"amdgpu-flat-work-group-size\"=\"256,256\""));
         assert!(text.contains("!reqd_work_group_size"));
@@ -644,7 +723,7 @@ mod tests {
         .unwrap();
         let consumed =
             consume_compiler_module_handoff_v1(&directory.0, &producer, attempt).unwrap();
-        let handoff = CompilerModuleHandoffV1::decode(consumed.bytes()).unwrap();
+        let handoff = CompilerModuleHandoffV2::decode(consumed.bytes()).unwrap();
         let text = std::str::from_utf8(handoff.module_bytes()).unwrap();
         assert!(text.contains("-wavefrontsize32,+wavefrontsize64"));
     }
