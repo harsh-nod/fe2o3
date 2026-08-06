@@ -1,7 +1,10 @@
 # fe2o3 direct LLVM link worker
 
-This standalone process accepts only the canonical bounded V1 stdin protocol
-defined by `fe2o3-hsaco-finalize`. It parses and links bitcode through LLVM
+This standalone process accepts the disjoint canonical bounded V1 and V2 stdin
+protocols defined by `fe2o3-hsaco-finalize`. V1 remains byte-compatible and
+generic. V2 binds the complete opaque compiler-envelope identity, exact
+compiler-module input, every external provider, directional and final symbol
+closures, target/options, and worker/toolchain identities. It parses and links bitcode through LLVM
 libraries, emits AMDGPU relocatables through `TargetMachine`, invokes the ELF
 LLD library directly, and returns a measured response on stdout. It never
 loads LLVM into rustc, invokes a shell, runs `clang`/`ld.lld`, accepts caller
@@ -22,11 +25,13 @@ cmake --build build/llvm-link-worker
 ctest --test-dir build/llvm-link-worker --output-on-failure
 ```
 
-CMake prints a `fe2o3-worker-v1-sha256-*` response measurement derived from
+CMake prints a `fe2o3-worker-v2-sha256-*` response measurement derived from
 the worker sources, LLVM version/build ID, C++ compiler identity, language
 level, and fixed exception/RTTI settings. The request names the raw LLVM build
-ID; the response carries this composite worker/toolchain measurement and binds
-the complete request identity.
+ID; V2 additionally names the expected worker measurement and pinned executable
+content identity. Responses use the same version as their request and bind the
+complete request identity. Unknown versions, V1/V2 mixing, and malformed V2
+requests fail without downgrade.
 
 LLD's library API is path-oriented. The worker therefore materializes exact
 validated bytes in a private temporary directory, supplies only those paths to
@@ -47,6 +52,11 @@ kind, target, code-object, import, definition, and export mismatches. Supplying
 an optional path writes the successful mixed-input HSACO for independent
 inspection. Two additional paths also export the exact bitcode and relocatable
 inputs used for that link:
+
+`fe2o3-worker-codec-tests` decodes a Rust-produced V2 golden, rejects every
+single-byte mutation and V2-to-V1 downgrade, and checks V2 response framing.
+The pipeline suite also executes the same mixed link as V2 and verifies that
+the response echoes the exact compiler-envelope identity.
 
 ```sh
 build/llvm-link-worker/fe2o3-worker-pipeline-tests /tmp/fe2o3-mixed.hsaco
