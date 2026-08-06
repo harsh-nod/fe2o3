@@ -27,6 +27,10 @@ use fe2o3_kernel_ir::{
     FunctionId, Kernel, LaunchDomain, LaunchExtent, MemoryAccess, Module, Operation, OperationKind,
     ScalarType, Signature, SwitchCase, Terminator, Type, ValueDef, ValueId, verify_module,
 };
+use reserved_fe2o3_symbols::{
+    DeviceFfiAddressSpaceV1, DeviceFfiPhysicalResultV1, DeviceFfiPhysicalTypeV1,
+    DeviceFfiPointerAccessV1, DeviceFfiScalarTypeV1,
+};
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
@@ -850,99 +854,129 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
             .collect::<Result<Vec<_>, _>>()?;
 
         let trusted_item = callee.trusted_item();
-        let result_types = match trusted_item {
-            Some(TrustedDeviceItem::ThreadIndex1d) => {
-                self.require_call_types(callee, &argument_types, &[], location.clone())?;
-                vec![Type::INDEX]
-            }
-            Some(TrustedDeviceItem::ThreadIndexGet) => {
-                self.require_call_types(callee, &argument_types, &[Type::INDEX], location.clone())?;
-                vec![Type::INDEX]
-            }
-            Some(TrustedDeviceItem::ThreadIndexOffset | TrustedDeviceItem::ThreadIndexStride) => {
-                self.require_call_types(
-                    callee,
-                    &argument_types,
-                    &[Type::INDEX, Type::INDEX],
-                    location.clone(),
-                )?;
-                vec![Type::INDEX]
-            }
-            Some(TrustedDeviceItem::ThreadIndexOffsetSigned) => {
-                self.require_call_types(
-                    callee,
-                    &argument_types,
-                    &[Type::INDEX, Type::Scalar(ScalarType::I64)],
-                    location.clone(),
-                )?;
-                vec![Type::INDEX]
-            }
-            Some(TrustedDeviceItem::ThreadIndexStrideOffset) => {
-                self.require_call_types(
-                    callee,
-                    &argument_types,
-                    &[Type::INDEX, Type::INDEX, Type::Scalar(ScalarType::I64)],
-                    location.clone(),
-                )?;
-                vec![Type::INDEX]
-            }
-            Some(
-                TrustedDeviceItem::DisjointSliceGetMut | TrustedDeviceItem::DisjointSliceGetMutAt,
-            ) => {
-                if arguments.len() != 2 {
-                    return Err(self.call_arity(callee, 2, arguments.len(), location.clone()));
-                }
-                let Type::Slice(slice) = &argument_types[0] else {
-                    return Err(diagnostic(
-                        TranslationDiagnosticCode::UnsupportedType,
-                        location.clone(),
-                        format!(
-                            "callee `{}` receiver is not a translated slice",
-                            callee.identity()
-                        ),
-                    ));
-                };
-                if slice.access != AccessMode::ReadWrite {
-                    return Err(diagnostic(
-                        TranslationDiagnosticCode::UnsupportedType,
-                        location.clone(),
-                        format!("callee `{}` receiver must be writable", callee.identity()),
-                    ));
-                }
-                if argument_types[1] != Type::INDEX {
-                    return Err(diagnostic(
-                        TranslationDiagnosticCode::UnsupportedType,
-                        location.clone(),
-                        format!(
-                            "callee `{}` index must lower to index type",
-                            callee.identity()
-                        ),
-                    ));
-                }
-                vec![
-                    Type::INDEX,
-                    Type::pointer((*slice.element).clone(), slice.address_space, slice.access),
-                ]
-            }
-            Some(TrustedDeviceItem::DisjointSlice | TrustedDeviceItem::ThreadIndex) => {
+        let external_import = callee.external_import_evidence();
+        let result_types = if let Some(import) = external_import {
+            if !import.effects().is_none() {
                 return Err(diagnostic(
                     TranslationDiagnosticCode::UnsupportedCall,
                     location,
                     format!(
-                        "trusted device item `{}` is a type, not a callable helper",
+                        "device FFI import `{}` has effects that kernel IR cannot preserve",
                         callee.identity()
                     ),
                 ));
             }
-            None => {
-                return Err(diagnostic(
-                    TranslationDiagnosticCode::UnsupportedCall,
-                    location,
-                    format!(
-                        "callee `{}` has no classified trusted device identity",
-                        callee.identity()
-                    ),
-                ));
+            let signature = lower_device_ffi_signature(import.physical_abi());
+            self.require_call_types(
+                callee,
+                &argument_types,
+                &signature.parameters,
+                location.clone(),
+            )?;
+            signature.results
+        } else {
+            match trusted_item {
+                Some(TrustedDeviceItem::ThreadIndex1d) => {
+                    self.require_call_types(callee, &argument_types, &[], location.clone())?;
+                    vec![Type::INDEX]
+                }
+                Some(TrustedDeviceItem::ThreadIndexGet) => {
+                    self.require_call_types(
+                        callee,
+                        &argument_types,
+                        &[Type::INDEX],
+                        location.clone(),
+                    )?;
+                    vec![Type::INDEX]
+                }
+                Some(
+                    TrustedDeviceItem::ThreadIndexOffset | TrustedDeviceItem::ThreadIndexStride,
+                ) => {
+                    self.require_call_types(
+                        callee,
+                        &argument_types,
+                        &[Type::INDEX, Type::INDEX],
+                        location.clone(),
+                    )?;
+                    vec![Type::INDEX]
+                }
+                Some(TrustedDeviceItem::ThreadIndexOffsetSigned) => {
+                    self.require_call_types(
+                        callee,
+                        &argument_types,
+                        &[Type::INDEX, Type::Scalar(ScalarType::I64)],
+                        location.clone(),
+                    )?;
+                    vec![Type::INDEX]
+                }
+                Some(TrustedDeviceItem::ThreadIndexStrideOffset) => {
+                    self.require_call_types(
+                        callee,
+                        &argument_types,
+                        &[Type::INDEX, Type::INDEX, Type::Scalar(ScalarType::I64)],
+                        location.clone(),
+                    )?;
+                    vec![Type::INDEX]
+                }
+                Some(
+                    TrustedDeviceItem::DisjointSliceGetMut
+                    | TrustedDeviceItem::DisjointSliceGetMutAt,
+                ) => {
+                    if arguments.len() != 2 {
+                        return Err(self.call_arity(callee, 2, arguments.len(), location.clone()));
+                    }
+                    let Type::Slice(slice) = &argument_types[0] else {
+                        return Err(diagnostic(
+                            TranslationDiagnosticCode::UnsupportedType,
+                            location.clone(),
+                            format!(
+                                "callee `{}` receiver is not a translated slice",
+                                callee.identity()
+                            ),
+                        ));
+                    };
+                    if slice.access != AccessMode::ReadWrite {
+                        return Err(diagnostic(
+                            TranslationDiagnosticCode::UnsupportedType,
+                            location.clone(),
+                            format!("callee `{}` receiver must be writable", callee.identity()),
+                        ));
+                    }
+                    if argument_types[1] != Type::INDEX {
+                        return Err(diagnostic(
+                            TranslationDiagnosticCode::UnsupportedType,
+                            location.clone(),
+                            format!(
+                                "callee `{}` index must lower to index type",
+                                callee.identity()
+                            ),
+                        ));
+                    }
+                    vec![
+                        Type::INDEX,
+                        Type::pointer((*slice.element).clone(), slice.address_space, slice.access),
+                    ]
+                }
+                Some(TrustedDeviceItem::DisjointSlice | TrustedDeviceItem::ThreadIndex) => {
+                    return Err(diagnostic(
+                        TranslationDiagnosticCode::UnsupportedCall,
+                        location,
+                        format!(
+                            "trusted device item `{}` is a type, not a callable helper",
+                            callee.identity()
+                        ),
+                    ));
+                }
+                None => {
+                    return Err(diagnostic(
+                        TranslationDiagnosticCode::UnsupportedCall,
+                        location,
+                        format!(
+                            "callee `{}` has no classified trusted device identity",
+                            callee.identity()
+                        ),
+                    ));
+                }
             }
         };
 
@@ -961,6 +995,7 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
         ));
 
         match results.as_slice() {
+            [] if external_import.is_some() => {}
             [result] => self.bind_local(
                 destination.local,
                 LocalBinding::Value(result.id),
@@ -1426,6 +1461,52 @@ fn lower_parameter_type(shape: &MirTypeShape) -> Option<Type> {
     }
 }
 
+fn lower_device_ffi_signature(
+    physical_abi: &reserved_fe2o3_symbols::DeviceFfiPhysicalAbiV1,
+) -> Signature {
+    let parameters = physical_abi
+        .arguments()
+        .iter()
+        .copied()
+        .map(lower_device_ffi_type)
+        .collect();
+    let results = match physical_abi.result() {
+        DeviceFfiPhysicalResultV1::Unit => Vec::new(),
+        DeviceFfiPhysicalResultV1::Value(result) => vec![lower_device_ffi_type(result)],
+    };
+    Signature::new(parameters, results)
+}
+
+fn lower_device_ffi_type(physical: DeviceFfiPhysicalTypeV1) -> Type {
+    match physical {
+        DeviceFfiPhysicalTypeV1::Scalar(scalar) => Type::Scalar(match scalar {
+            DeviceFfiScalarTypeV1::I8 => ScalarType::I8,
+            DeviceFfiScalarTypeV1::U8 => ScalarType::U8,
+            DeviceFfiScalarTypeV1::I16 => ScalarType::I16,
+            DeviceFfiScalarTypeV1::U16 => ScalarType::U16,
+            DeviceFfiScalarTypeV1::I32 => ScalarType::I32,
+            DeviceFfiScalarTypeV1::U32 => ScalarType::U32,
+            DeviceFfiScalarTypeV1::I64 => ScalarType::I64,
+            DeviceFfiScalarTypeV1::U64 => ScalarType::U64,
+            DeviceFfiScalarTypeV1::F32 => ScalarType::F32,
+            DeviceFfiScalarTypeV1::F64 => ScalarType::F64,
+        }),
+        DeviceFfiPhysicalTypeV1::Pointer(pointer) => Type::pointer(
+            lower_device_ffi_type(DeviceFfiPhysicalTypeV1::Scalar(pointer.element())),
+            match pointer.address_space() {
+                DeviceFfiAddressSpaceV1::Constant => AddressSpace::Constant,
+                DeviceFfiAddressSpaceV1::Global => AddressSpace::Global,
+                DeviceFfiAddressSpaceV1::Private => AddressSpace::Private,
+                DeviceFfiAddressSpaceV1::Workgroup => AddressSpace::Workgroup,
+            },
+            match pointer.access() {
+                DeviceFfiPointerAccessV1::Const => AccessMode::ReadOnly,
+                DeviceFfiPointerAccessV1::Mut => AccessMode::ReadWrite,
+            },
+        ),
+    }
+}
+
 fn lower_element_type(shape: &MirTypeShape) -> Option<Type> {
     match shape {
         MirTypeShape::F32 => Some(Type::F32),
@@ -1865,6 +1946,68 @@ mod tests {
 
         let errors = translate_and_verify(&fixture).expect_err("untrusted spelling must fail");
 
+        assert!(errors.contains(TranslationDiagnosticCode::UnsupportedCall));
+        assert!(errors.diagnostics().iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("has no classified trusted device identity")
+        }));
+    }
+
+    #[test]
+    fn authenticated_device_ffi_import_lowers_to_an_external_declaration() {
+        let callee = MirCallee::external_import_for_test(
+            "external_device_add_v1",
+            "C(u32[size=4,align=4])->u32[size=4,align=4]",
+            "none",
+        );
+        let fixture = helper_call_fixture(callee, &[MirTypeShape::U32]);
+
+        let module = translate_and_verify(&fixture).expect("authenticated import should lower");
+        let declaration = module
+            .functions
+            .iter()
+            .find(|function| function.id.as_str() == "external_device_add_v1")
+            .expect("external import declaration");
+        assert_eq!(
+            declaration.role,
+            fe2o3_kernel_ir::FunctionRole::ExternalImport
+        );
+        assert_eq!(declaration.body, None);
+        assert_eq!(
+            declaration.signature,
+            Signature::new(
+                vec![Type::Scalar(ScalarType::U32)],
+                vec![Type::Scalar(ScalarType::U32)]
+            )
+        );
+    }
+
+    #[test]
+    fn authenticated_device_ffi_import_rejects_rust_operand_abi_mismatch() {
+        let callee = MirCallee::external_import_for_test(
+            "external_device_add_v1",
+            "C(i32[size=4,align=4])->u32[size=4,align=4]",
+            "none",
+        );
+        let fixture = helper_call_fixture(callee, &[MirTypeShape::U32]);
+
+        let errors = translate_and_verify(&fixture).expect_err("ABI mismatch must fail closed");
+        assert!(errors.contains(TranslationDiagnosticCode::UnsupportedType));
+        assert!(errors.diagnostics().iter().any(|diagnostic| {
+            diagnostic.message.contains("operand 0 must lower to")
+                && diagnostic.message.contains("found Scalar(U32)")
+        }));
+    }
+
+    #[test]
+    fn ordinary_host_extern_is_not_promoted_by_matching_symbol_spelling() {
+        let fixture = helper_call_fixture(
+            MirCallee::untrusted_for_test("external_device_add_v1"),
+            &[MirTypeShape::U32],
+        );
+
+        let errors = translate_and_verify(&fixture).expect_err("host extern must remain rejected");
         assert!(errors.contains(TranslationDiagnosticCode::UnsupportedCall));
         assert!(errors.diagnostics().iter().any(|diagnostic| {
             diagnostic

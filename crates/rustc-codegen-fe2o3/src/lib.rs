@@ -374,7 +374,13 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             );
                         }
                         collector::dump_device_functions(tcx, &collection.functions);
-                        let mir_module = mir_import::import_collection(tcx, &collection);
+                        let mir_module = mir_import::import_collection(tcx, &collection).map_err(
+                            |error| {
+                                format!(
+                                    "{CODEGEN_PIPELINE_ENV}=kernel-ir-worker-v2 compiler FFI MIR import failed: {error}"
+                                )
+                            },
+                        )?;
                         let module = kernel_ir_lowering::translate_and_verify(&mir_module)
                             .map_err(|errors| {
                                 format!(
@@ -461,7 +467,10 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                                 );
                             }
                             collector::dump_device_functions(tcx, &collection.functions);
-                            let mir_module = mir_import::import_collection(tcx, &collection);
+                            let mir_module = mir_import::import_collection(tcx, &collection)
+                                .map_err(|error| amdgpu_llvm::EmitError::Preflight {
+                                    reason: format!("compiler FFI MIR import failed: {error}"),
+                                })?;
                             match codegen_pipeline.resolve()? {
                             CodegenPipeline::LegacyV1 => {
                                 match run_optional_kernel_ir_analysis(

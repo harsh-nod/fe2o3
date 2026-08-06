@@ -1,13 +1,21 @@
 use crate::collector::CollectionResult;
 use crate::trusted_device_items::{self, TrustedDeviceItem};
 use dialect_mir::{MirAttr, MirOp, MirOpRecord, MirType};
+use fe2o3_compiler_ffi::CodeObjectVersion;
+use reserved_fe2o3_symbols::{
+    DEVICE_FFI_DIRECTION_IMPORT_V1, DeviceFfiContractFieldsV1, DeviceFfiContractIdV1,
+    DeviceFfiEffectsV1, DeviceFfiPhysicalAbiV1, derive_device_ffi_contract_id_v1,
+    parse_device_ffi_effects_v1, parse_device_ffi_physical_abi_v1,
+    validate_device_ffi_effect_abi_v1,
+};
 use rustc_hir::def_id::LOCAL_CRATE;
 use rustc_middle::mir::{
     BasicBlock, BinOp, Body, ConstOperand, Local, Operand, Place, ProjectionElem, Rvalue,
     SourceInfo, StatementKind, TerminatorKind, UnOp,
 };
 use rustc_middle::ty::{FloatTy, IntTy, Mutability, Ty, TyCtxt, TyKind, TypingEnv, UintTy};
-use std::fmt::Write;
+use std::error::Error;
+use std::fmt::{self, Write};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MirModule {
@@ -191,8 +199,20 @@ pub struct MirCallee {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct MirExternalImport {
+    contract_identity: DeviceFfiContractIdV1,
+    symbol: String,
+    target: String,
+    code_object_version: u16,
+    physical_abi: DeviceFfiPhysicalAbiV1,
+    effects: DeviceFfiEffectsV1,
+    semantic_identity: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum MirCalleeIdentity {
     Trusted(TrustedDeviceItem),
+    ExternalImport(MirExternalImport),
     Untrusted(String),
 }
 
@@ -209,9 +229,16 @@ impl MirCallee {
         }
     }
 
+    fn external_import(import: MirExternalImport) -> Self {
+        Self {
+            identity: MirCalleeIdentity::ExternalImport(import),
+        }
+    }
+
     pub(crate) fn identity(&self) -> &str {
         match &self.identity {
             MirCalleeIdentity::Trusted(item) => item.canonical_path(),
+            MirCalleeIdentity::ExternalImport(import) => &import.symbol,
             MirCalleeIdentity::Untrusted(identity) => identity,
         }
     }
@@ -219,7 +246,14 @@ impl MirCallee {
     pub(crate) fn trusted_item(&self) -> Option<TrustedDeviceItem> {
         match &self.identity {
             MirCalleeIdentity::Trusted(item) => Some(*item),
-            MirCalleeIdentity::Untrusted(_) => None,
+            MirCalleeIdentity::ExternalImport(_) | MirCalleeIdentity::Untrusted(_) => None,
+        }
+    }
+
+    pub(crate) fn external_import_evidence(&self) -> Option<&MirExternalImport> {
+        match &self.identity {
+            MirCalleeIdentity::ExternalImport(import) => Some(import),
+            MirCalleeIdentity::Trusted(_) | MirCalleeIdentity::Untrusted(_) => None,
         }
     }
 
@@ -231,6 +265,39 @@ impl MirCallee {
     #[cfg(test)]
     pub(crate) fn untrusted_for_test(identity: impl Into<String>) -> Self {
         Self::untrusted(identity.into())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn external_import_for_test(
+        symbol: &str,
+        physical_abi: &str,
+        effects: &str,
+    ) -> Self {
+        let physical_abi = parse_device_ffi_physical_abi_v1(physical_abi)
+            .expect("test external-import ABI must be canonical");
+        let effects =
+            parse_device_ffi_effects_v1(effects).expect("test external-import effects must parse");
+        validate_device_ffi_effect_abi_v1(&effects, &physical_abi)
+            .expect("test external-import ABI/effects must agree");
+        Self::external_import(MirExternalImport {
+            contract_identity: DeviceFfiContractIdV1::from_bytes([0x5a; 32]),
+            symbol: symbol.to_owned(),
+            target: "gfx942:xnack-".to_owned(),
+            code_object_version: 5,
+            physical_abi,
+            effects,
+            semantic_identity: "6b".repeat(32),
+        })
+    }
+}
+
+impl MirExternalImport {
+    pub(crate) fn physical_abi(&self) -> &DeviceFfiPhysicalAbiV1 {
+        &self.physical_abi
+    }
+
+    pub(crate) fn effects(&self) -> &DeviceFfiEffectsV1 {
+        &self.effects
     }
 }
 
@@ -320,10 +387,212 @@ pub enum MirUnaryOp {
     PtrMetadata,
 }
 
+#[derive(Clone, Debug)]
+struct CompilerFfiImports {
+    entries: Vec<(crate::device_ffi::DeviceFfiSourceOwner, MirExternalImport)>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct MirImportError {
+    message: String,
+}
+
+impl MirImportError {
+    fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+}
+
+impl fmt::Display for MirImportError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl Error for MirImportError {}
+
+impl CompilerFfiImports {
+    fn from_collection<'tcx>(
+        tcx: TyCtxt<'tcx>,
+        collection: &CollectionResult<'tcx>,
+    ) -> Result<Self, MirImportError> {
+        let reconstructed = crate::compiler_ffi_adapter::adapt_collection_v1(tcx, collection)
+            .map_err(|error| {
+                MirImportError::new(format!(
+                    "compiler FFI evidence could not be reconstructed before MIR import: {error}"
+                ))
+            })?;
+        if reconstructed.as_ref() != collection.compiler_ffi_observation.as_ref() {
+            return Err(MirImportError::new(
+                "compiler FFI observation disagrees with the closed collection",
+            ));
+        }
+
+        let imports = &collection.device_ffi.imports;
+        if imports.is_empty() {
+            return Ok(Self {
+                entries: Vec::new(),
+            });
+        }
+        let envelope = reconstructed.as_ref().ok_or_else(|| {
+            MirImportError::new("reachable device FFI imports have no compiler envelope")
+        })?;
+        let envelope_symbols = envelope
+            .directional_symbols()
+            .imports()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        let collected_symbols = imports
+            .iter()
+            .map(|entry| entry.contract.symbol.clone())
+            .collect::<Vec<_>>();
+        if envelope_symbols != collected_symbols {
+            return Err(MirImportError::new(
+                "compiler FFI import symbols disagree with the closed collection",
+            ));
+        }
+
+        let envelope_target = envelope.target().to_string();
+        let envelope_code_object_version =
+            code_object_version_number(envelope.code_object_version());
+        let mut entries = Vec::with_capacity(imports.len());
+        for entry in imports {
+            let contract = &entry.contract;
+            if contract.direction != crate::device_ffi::DeviceFfiDirection::Import
+                || entry.link_role_assertion.asserted_for_consistency_check()
+                    != &crate::device_ffi::DeviceFfiLinkRole::RequiresExternalDefinition
+            {
+                return Err(MirImportError::new(format!(
+                    "device FFI `{}` is not an external import",
+                    contract.symbol
+                )));
+            }
+            let asserted_code_object_version = *contract
+                .code_object_version_assertion
+                .asserted_for_consistency_check();
+            let semantic_identity = contract
+                .semantic_identity_assertion
+                .asserted_for_consistency_check();
+            let effects_text = contract.effects_assertion.asserted_for_consistency_check();
+            entries.push((
+                entry.owner.clone(),
+                validate_external_import_fields(
+                    contract.id,
+                    &contract.symbol,
+                    &contract.target,
+                    asserted_code_object_version,
+                    &contract.physical_abi,
+                    effects_text,
+                    semantic_identity,
+                    &envelope_target,
+                    envelope_code_object_version,
+                )?,
+            ));
+        }
+        Ok(Self { entries })
+    }
+
+    fn classify<'tcx>(
+        &self,
+        tcx: TyCtxt<'tcx>,
+        def_id: rustc_hir::def_id::DefId,
+    ) -> Option<MirExternalImport> {
+        let def_path_hash = tcx.def_path_hash(def_id).0.to_le_bytes();
+        self.entries.iter().find_map(|(owner, import)| {
+            (owner.def_path_hash == def_path_hash
+                && crate::device_ffi::source_owner_matches_instance(
+                    tcx,
+                    owner,
+                    rustc_middle::ty::Instance::mono(tcx, def_id),
+                ))
+            .then(|| import.clone())
+        })
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_external_import_fields(
+    contract_identity: DeviceFfiContractIdV1,
+    symbol: &str,
+    target: &str,
+    code_object_version: u16,
+    physical_abi_text: &str,
+    effects_text: &str,
+    semantic_identity: &str,
+    envelope_target: &str,
+    envelope_code_object_version: u16,
+) -> Result<MirExternalImport, MirImportError> {
+    if target != envelope_target {
+        return Err(MirImportError::new(format!(
+            "device FFI import `{symbol}` target `{target}` disagrees with compiler envelope target `{envelope_target}`"
+        )));
+    }
+    if code_object_version != envelope_code_object_version {
+        return Err(MirImportError::new(format!(
+            "device FFI import `{symbol}` code-object version {code_object_version} disagrees with compiler envelope version {envelope_code_object_version}"
+        )));
+    }
+    let derived_identity = derive_device_ffi_contract_id_v1(DeviceFfiContractFieldsV1 {
+        direction: DEVICE_FFI_DIRECTION_IMPORT_V1,
+        symbol,
+        calling_convention: "C",
+        code_object_version,
+        target,
+        physical_abi: physical_abi_text,
+        effects: effects_text,
+        semantic_identity,
+    });
+    if derived_identity != contract_identity {
+        return Err(MirImportError::new(format!(
+            "device FFI import `{symbol}` contract identity does not match its canonical fields"
+        )));
+    }
+    let physical_abi = parse_device_ffi_physical_abi_v1(physical_abi_text).map_err(|_| {
+        MirImportError::new(format!(
+            "device FFI import `{symbol}` has a malformed physical ABI"
+        ))
+    })?;
+    let effects = parse_device_ffi_effects_v1(effects_text).map_err(|_| {
+        MirImportError::new(format!(
+            "device FFI import `{symbol}` has malformed effects"
+        ))
+    })?;
+    validate_device_ffi_effect_abi_v1(&effects, &physical_abi).map_err(|_| {
+        MirImportError::new(format!(
+            "device FFI import `{symbol}` effects disagree with its physical ABI"
+        ))
+    })?;
+    if !effects.is_none() {
+        return Err(MirImportError::new(format!(
+            "device FFI import `{symbol}` declares effects that kernel IR cannot yet preserve"
+        )));
+    }
+    Ok(MirExternalImport {
+        contract_identity,
+        symbol: symbol.to_owned(),
+        target: target.to_owned(),
+        code_object_version,
+        physical_abi,
+        effects,
+        semantic_identity: semantic_identity.to_owned(),
+    })
+}
+
+const fn code_object_version_number(version: CodeObjectVersion) -> u16 {
+    match version {
+        CodeObjectVersion::V4 => 4,
+        CodeObjectVersion::V5 => 5,
+        CodeObjectVersion::V6 => 6,
+    }
+}
+
 pub fn import_collection<'tcx>(
     tcx: TyCtxt<'tcx>,
     collection: &CollectionResult<'tcx>,
-) -> MirModule {
+) -> Result<MirModule, MirImportError> {
+    let compiler_ffi_imports = CompilerFfiImports::from_collection(tcx, collection)?;
     let functions = collection
         .functions
         .iter()
@@ -349,11 +618,12 @@ pub fn import_collection<'tcx>(
                 function.export_name.clone(),
                 rust_path,
                 import_function_kind(function.role),
+                &compiler_ffi_imports,
             ))
         })
         .collect();
 
-    MirModule { functions }
+    Ok(MirModule { functions })
 }
 
 fn import_function_kind(role: crate::collector::CollectedFunctionRole) -> MirFunctionKind {
@@ -762,6 +1032,23 @@ impl MirTerminatorKind {
                     record
                         .attrs
                         .push(MirAttr::string("callee", callee.identity()));
+                    if let Some(import) = callee.external_import_evidence() {
+                        record.attrs.push(MirAttr::string(
+                            "device_ffi_contract",
+                            import.contract_identity.to_hex(),
+                        ));
+                        record
+                            .attrs
+                            .push(MirAttr::string("device_ffi_target", &import.target));
+                        record.attrs.push(MirAttr::usize(
+                            "device_ffi_code_object_version",
+                            usize::from(import.code_object_version),
+                        ));
+                        record.attrs.push(MirAttr::string(
+                            "device_ffi_semantic_identity",
+                            &import.semantic_identity,
+                        ));
+                    }
                 }
                 if let Some(target) = target {
                     record.attrs.push(MirAttr::usize("target", *target));
@@ -836,6 +1123,7 @@ fn import_body<'tcx>(
     export_name: String,
     rust_path: String,
     kind: MirFunctionKind,
+    compiler_ffi_imports: &CompilerFfiImports,
 ) -> MirFunction {
     let blocks = body
         .basic_blocks
@@ -851,7 +1139,7 @@ fn import_body<'tcx>(
                 })
                 .collect(),
             terminator: block.terminator.as_ref().map(|terminator| MirTerminator {
-                kind: terminator_kind(tcx, &terminator.kind),
+                kind: terminator_kind(tcx, &terminator.kind, compiler_ffi_imports),
                 source: Some(import_source_location(tcx, terminator.source_info)),
             }),
         })
@@ -1304,7 +1592,11 @@ fn unary_op_name(op: UnOp) -> &'static str {
     }
 }
 
-fn terminator_kind<'tcx>(tcx: TyCtxt<'tcx>, kind: &TerminatorKind<'tcx>) -> MirTerminatorKind {
+fn terminator_kind<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    kind: &TerminatorKind<'tcx>,
+    compiler_ffi_imports: &CompilerFfiImports,
+) -> MirTerminatorKind {
     match kind {
         TerminatorKind::Return => MirTerminatorKind::Return,
         TerminatorKind::Unreachable => MirTerminatorKind::Unreachable,
@@ -1329,7 +1621,7 @@ fn terminator_kind<'tcx>(tcx: TyCtxt<'tcx>, kind: &TerminatorKind<'tcx>) -> MirT
             target,
             ..
         } => MirTerminatorKind::Call {
-            callee: call_identity(tcx, func),
+            callee: call_identity(tcx, func, compiler_ffi_imports),
             target: target.map(BasicBlock::as_usize),
             destination: Some(import_place(*destination)),
             operands: args
@@ -1354,7 +1646,11 @@ fn terminator_kind<'tcx>(tcx: TyCtxt<'tcx>, kind: &TerminatorKind<'tcx>) -> MirT
     }
 }
 
-fn call_identity<'tcx>(tcx: TyCtxt<'tcx>, func: &Operand<'tcx>) -> Option<MirCallee> {
+fn call_identity<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    func: &Operand<'tcx>,
+    compiler_ffi_imports: &CompilerFfiImports,
+) -> Option<MirCallee> {
     let Operand::Constant(constant) = func else {
         return None;
     };
@@ -1362,9 +1658,13 @@ fn call_identity<'tcx>(tcx: TyCtxt<'tcx>, func: &Operand<'tcx>) -> Option<MirCal
         return None;
     };
     Some(
-        trusted_device_items::classify(tcx, *def_id)
-            .map(MirCallee::trusted)
-            .unwrap_or_else(|| MirCallee::untrusted(tcx.def_path_str(*def_id))),
+        if let Some(item) = trusted_device_items::classify(tcx, *def_id) {
+            MirCallee::trusted(item)
+        } else if let Some(import) = compiler_ffi_imports.classify(tcx, *def_id) {
+            MirCallee::external_import(import)
+        } else {
+            MirCallee::untrusted(tcx.def_path_str(*def_id))
+        },
     )
 }
 
@@ -1580,6 +1880,180 @@ mod tests {
             assert_eq!(same_spelling.identity(), item.canonical_path());
             assert_eq!(same_spelling.trusted_item(), None);
         }
+    }
+
+    #[test]
+    fn external_import_evidence_uses_the_contract_symbol_and_retains_provenance() {
+        let callee = MirCallee::external_import_for_test(
+            "external_device_add_v1",
+            "C(u32[size=4,align=4])->u32[size=4,align=4]",
+            "none",
+        );
+        let module = MirModule {
+            functions: vec![MirFunction {
+                export_name: "consumer".to_string(),
+                rust_path: "tests::consumer".to_string(),
+                kind: MirFunctionKind::KernelEntry,
+                arg_count: 0,
+                local_count: 1,
+                locals: Vec::new(),
+                blocks: vec![MirBlock {
+                    index: 0,
+                    statements: Vec::new(),
+                    terminator: Some(MirTerminator {
+                        kind: MirTerminatorKind::Call {
+                            callee: Some(callee),
+                            target: Some(1),
+                            destination: Some(local_place(0)),
+                            operands: Vec::new(),
+                        },
+                        source: None,
+                    }),
+                }],
+            }],
+        };
+
+        let records = module.dialect_records();
+        let call = records
+            .iter()
+            .find(|record| record.op == MirOp::Call)
+            .expect("call record");
+        assert_eq!(
+            record_string(call, "callee"),
+            Some("external_device_add_v1")
+        );
+        assert_eq!(
+            record_string(call, "device_ffi_target"),
+            Some("gfx942:xnack-")
+        );
+        assert_eq!(
+            record_usize(call, "device_ffi_code_object_version"),
+            Some(5)
+        );
+        assert!(record_string(call, "device_ffi_contract").is_some());
+        assert!(record_string(call, "device_ffi_semantic_identity").is_some());
+    }
+
+    #[test]
+    fn ordinary_extern_spelling_has_no_external_import_evidence() {
+        let callee = MirCallee::untrusted_for_test("external_device_add_v1");
+
+        assert_eq!(callee.identity(), "external_device_add_v1");
+        assert_eq!(callee.trusted_item(), None);
+        assert_eq!(callee.external_import_evidence(), None);
+    }
+
+    #[test]
+    fn external_import_fields_fail_closed_independently() {
+        const SYMBOL: &str = "external_device_add_v1";
+        const TARGET: &str = "gfx942:xnack-";
+        const ABI: &str = "C(u32[size=4,align=4])->u32[size=4,align=4]";
+        const SEMANTIC: &str = "6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b";
+        let identity = derive_device_ffi_contract_id_v1(DeviceFfiContractFieldsV1 {
+            direction: DEVICE_FFI_DIRECTION_IMPORT_V1,
+            symbol: SYMBOL,
+            calling_convention: "C",
+            code_object_version: 5,
+            target: TARGET,
+            physical_abi: ABI,
+            effects: "none",
+            semantic_identity: SEMANTIC,
+        });
+        assert!(
+            validate_external_import_fields(
+                identity, SYMBOL, TARGET, 5, ABI, "none", SEMANTIC, TARGET, 5,
+            )
+            .is_ok()
+        );
+
+        let wrong_target = validate_external_import_fields(
+            identity, SYMBOL, "gfx1100", 5, ABI, "none", SEMANTIC, TARGET, 5,
+        )
+        .expect_err("target mismatch");
+        assert!(wrong_target.to_string().contains("target"));
+        let wrong_cov = validate_external_import_fields(
+            identity, SYMBOL, TARGET, 6, ABI, "none", SEMANTIC, TARGET, 5,
+        )
+        .expect_err("code-object version mismatch");
+        assert!(wrong_cov.to_string().contains("code-object version"));
+        let wrong_identity = validate_external_import_fields(
+            DeviceFfiContractIdV1::from_bytes([0x11; 32]),
+            SYMBOL,
+            TARGET,
+            5,
+            ABI,
+            "none",
+            SEMANTIC,
+            TARGET,
+            5,
+        )
+        .expect_err("identity mismatch");
+        assert!(wrong_identity.to_string().contains("contract identity"));
+
+        let malformed_abi = "C(u32)->u32";
+        let malformed_abi_identity = derive_device_ffi_contract_id_v1(DeviceFfiContractFieldsV1 {
+            direction: DEVICE_FFI_DIRECTION_IMPORT_V1,
+            symbol: SYMBOL,
+            calling_convention: "C",
+            code_object_version: 5,
+            target: TARGET,
+            physical_abi: malformed_abi,
+            effects: "none",
+            semantic_identity: SEMANTIC,
+        });
+        let malformed_abi_error = validate_external_import_fields(
+            malformed_abi_identity,
+            SYMBOL,
+            TARGET,
+            5,
+            malformed_abi,
+            "none",
+            SEMANTIC,
+            TARGET,
+            5,
+        )
+        .expect_err("malformed ABI");
+        assert!(malformed_abi_error.to_string().contains("physical ABI"));
+
+        let incompatible_effects = "read_global";
+        let incompatible_effects_identity =
+            derive_device_ffi_contract_id_v1(DeviceFfiContractFieldsV1 {
+                direction: DEVICE_FFI_DIRECTION_IMPORT_V1,
+                symbol: SYMBOL,
+                calling_convention: "C",
+                code_object_version: 5,
+                target: TARGET,
+                physical_abi: ABI,
+                effects: incompatible_effects,
+                semantic_identity: SEMANTIC,
+            });
+        let effects_error = validate_external_import_fields(
+            incompatible_effects_identity,
+            SYMBOL,
+            TARGET,
+            5,
+            ABI,
+            incompatible_effects,
+            SEMANTIC,
+            TARGET,
+            5,
+        )
+        .expect_err("effects/ABI mismatch");
+        assert!(effects_error.to_string().contains("effects disagree"));
+
+        let semantic_error = validate_external_import_fields(
+            identity,
+            SYMBOL,
+            TARGET,
+            5,
+            ABI,
+            "none",
+            &"7c".repeat(32),
+            TARGET,
+            5,
+        )
+        .expect_err("semantic identity mismatch");
+        assert!(semantic_error.to_string().contains("contract identity"));
     }
 
     #[test]
