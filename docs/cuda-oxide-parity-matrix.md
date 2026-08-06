@@ -25,7 +25,7 @@ The fe2o3 current-state column is based on commit
 <!-- parity-status:baseline:end -->
 
 Post-snapshot update: commit
-`603a63768086802f4a3cd00771dde3923ccc7d72` extends the bounded `gfx942`
+`10a1fc8dbd18189c2ec4e1b04f85bd3aaed56385` extends the bounded `gfx942`
 Worker V2 vertical slice without changing any row to Complete. One real Rust
 source fixture now reaches an exact compiler symbol-role handoff, two
 byte-identical direct LLVM/LLD worker executions, independent raw-HSACO
@@ -34,11 +34,17 @@ The worker calls LLVM and LLD library APIs directly and does not use COMGR or
 command-line linking. This evidence remains source/unit and negative-test
 evidence: compiler origin and Verus results are unauthenticated, canonical
 artifact finalization and bundle binding are absent, and no HSA load or launch
-authority is granted. Hardware success is not recorded because the release
-worker currently terminates with a stack-smashing failure while returning from
-`emitObject` on the MI300X `gfx942` lane. The generated dashboard remains the
-older pinned evidence snapshot until that hardware blocker and its evidence
-gate are resolved.
+authority is granted. Both ignored `gfx942` Worker V2 integration tests pass on
+the MI300X with an unoptimized Debug worker: direct real-source publication and
+real-source publication with an external LLVM bitcode provider. Commit
+`8f81306` propagates the measured LLVM include path and major-version guard to
+all worker-protocol consumers, preventing the mixed-header ABI that caused the
+earlier `emitObject` failure; `10a1fc8` binds target-machine features, ELF
+flags, and AMDHSA metadata to the exact requested target. These runs establish
+compile, inspection, provider-link, and durable-publication behavior on the
+named host. They do not execute an HSA kernel and do not cover an optimized
+Release worker. The generated dashboard remains the older pinned evidence
+snapshot until this post-snapshot evidence is admitted through its gate.
 
 At that commit fe2o3 has a HIP runtime, explicit unsafe raw module and launch
 paths, versioned kernel registration, reachable MIR collection, bounded rustc
@@ -168,8 +174,11 @@ The detailed dependencies and exit criteria are in
   under the originating build attempt with a provenance receipt. The compiler
   and its origin are not authenticated, Verus evidence is not authenticated or
   executable-bound, canonical artifact finalization and bundle binding are not
-  run, and HSA load/launch remain absent. Hardware success is still pending due
-  to the release-worker `emitObject` stack-smashing failure on MI300X.
+  run, and HSA load/launch remain absent. On MI300X, the ignored direct-kernel
+  and external-bitcode-provider Worker V2 tests both pass with an unoptimized
+  Debug worker after the pinned LLVM headers were propagated to every protocol
+  consumer. This is target-specific compile and publication evidence, not GPU
+  execution or optimized-Release evidence.
 - Rows 44 and 45: `cargo fe2o3 sanitize` and `debug` retain plan-only mode and
   can execute an exact descriptor-pinned native ROCgdb binary with bounded
   output, timeout, process cleanup, an environment allowlist, and diagnostic

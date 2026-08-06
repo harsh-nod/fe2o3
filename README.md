@@ -247,8 +247,15 @@ turn the foundations below into end-to-end features.
   same Cargo process. Compiler identity and origin are not authenticated, no
   Verus proof is authenticated or bound to the executable, canonical artifact
   finalization is not performed, and the output grants no HSA load or launch
-  authority. A release-worker `emitObject` stack-smashing failure on the MI300X
-  still blocks successful `gfx942` hardware validation of this vertical slice.
+  authority. On the MI300X `gfx942` lane, both ignored Worker V2 integration
+  tests pass with an unoptimized Debug worker: the direct real-source kernel
+  and the real-source kernel linked against an external LLVM bitcode provider.
+  Commit `8f81306` fixed the earlier mixed-header failure by propagating the
+  pinned LLVM include path and major-version guard to every worker-protocol
+  consumer; `10a1fc8` additionally binds target-machine features, ELF flags,
+  and AMDHSA target metadata to the exact requested `gfx942` feature set. This
+  is compile, inspection, and durable-publication evidence on that host, not an
+  HSA kernel load/launch result, and an optimized Release worker is not covered.
 - G8 adds deterministic model generation/reduction and a bounded conformance
   harness that executes fill, vecadd, and affine kernels against an independent
   HIP/CPU oracle. `cargo fe2o3 inspect` performs bounded read-only decoding.

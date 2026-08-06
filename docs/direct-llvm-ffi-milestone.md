@@ -39,10 +39,25 @@ bound to the emitted code. Canonical descriptor-table finalization, G6 bundle
 binding, G7 HSA loading, and kernel launch are not connected to this path and
 gain no authority from its publication receipt.
 
-The generic and adversarial suites pass, but successful hardware evidence is
-still pending. On the MI300X `gfx942` lane, the release worker currently aborts
-with stack smashing while returning from `emitObject`; therefore this document
-does not claim a successful hardware link, load, or launch for Worker V2.
+The generic and adversarial suites pass. On the MI300X `gfx942` lane, both
+ignored Worker V2 integration tests also pass with an unoptimized Debug worker:
+`worker_v2_real_source_publishes_inspected_gfx942_hsaco` and
+`worker_v2_real_source_links_an_external_bitcode_provider`. Together they cover
+the direct real-source path and the closed external LLVM bitcode-provider path
+through reproducible worker execution, independent inspection, and durable
+publication.
+
+Commit `8f81306` fixed the earlier `emitObject` failure by making the measured
+LLVM include directories and pinned major-version definition public usage
+requirements of the worker protocol library. Every protocol consumer therefore
+uses the same pinned LLVM headers, with a compile-time major-version check.
+Commit `10a1fc8` propagates the exact requested target features into AMDGPU
+`TargetMachine` creation and checks their ELF flags and AMDHSA metadata.
+
+This successful evidence is limited to the named MI300X host and unoptimized
+Debug worker. These integration tests compile, inspect, and publish `gfx942`
+HSACO but do not load or execute it through HSA; no optimized Release-worker or
+kernel-launch result is claimed.
 
 ## Program Invariants
 
