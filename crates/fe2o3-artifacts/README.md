@@ -229,20 +229,43 @@ therefore always return `false`.
 `DirectLinkPublicationBridgeV1` is the normative typed conversion from one
 binding selected by index from a validated G6 witness to one G5 publication
 chain. Its domain-separated publication identity commits to the build attempt,
-caller-supplied trusted publication scope, request, worker/toolchain closure,
-response, transformation identities, FFI closure, container, and bundle,
-including the complete direct-link evidence-envelope digest. The trusted scope
-is explicitly not derived from the current artifact records; an external
-trusted policy must derive or check its package, kernel-set, and target
-identities. A completed G5 `PublishedLinkArtifactV1` can be checked against the
-entire committed chain without reinterpreting an untyped `[u8; 32]` between
-domains.
+publication scope, request, worker/toolchain closure, response, transformation
+identities, FFI closure, container, and bundle, including the complete
+direct-link evidence-envelope digest. A completed G5
+`PublishedLinkArtifactV1` can be checked against the entire committed chain
+without reinterpreting an untyped `[u8; 32]` between domains.
+
+`ArtifactDerivedLinkPublicationScopeV1` is an opaque canonical witness for the
+stronger scope-construction path. It accepts one explicitly trusted external
+`PackageIdentityV1`, one binding index from a
+`ValidatedDirectLinkBundleEvidenceV1`, and the exact concrete
+`ArtifactContainerV1`. Construction recomputes and matches the container
+identity, verifies the finalized native payload occurrence, and binds the
+selected binding and complete G6 evidence envelope. The V1 target identity is a
+domain-separated digest over every canonical target field: triple,
+architecture, pointer width, endianness, and the sorted capability set. The V1
+kernel-set identity is a separately domain-separated digest over a canonical
+payload-scoped manifest projection containing the original compiler and
+producer identities, complete target, selected native code-object record, and
+the complete sorted set of kernel records that reference that finalized
+payload. Consequently, alias kernels sharing one payload are part of the same
+publication unit and cannot be omitted from its kernel-set identity.
+
+`prepare_with_derived_scope` consumes that witness and rechecks its exact
+binding index, binding value, and G6 envelope before constructing the bridge.
+`prepare_with_trusted_scope` remains as a weaker compatibility path in which
+package, kernel-set, and target identities are all supplied by external policy.
+`scope_provenance` distinguishes those paths, and artifact-derived-scope
+publication identities use a separate domain from compatibility publications
+even when their three scope identity values are equal. Neither path
+authenticates the package policy, compiler, artifact producer, or G6 inputs,
+and neither grants load or launch authority.
 
 The bridge and `LinkPublicationCatalogV1` remain inert models. They perform no
 filesystem I/O, do not reconstruct a catalog from durable bytes, do not
 authenticate measurements or transformation claims, and do not connect the
 existing filesystem transaction to direct-link publication. That integration
-must derive/check trusted scope and authenticated measurements, then persist
+must authenticate package policy and measurements, then persist
 catalog and artifact state under the artifact lock with crash-safe recovery
 before the project can claim durable exactly-once linked-artifact publication.
 
