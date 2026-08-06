@@ -108,8 +108,11 @@ file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/fe2o3-worker-build-id.txt"
 
 add_library(fe2o3_worker_protocol STATIC src/WorkerProtocol.cpp)
 target_include_directories(fe2o3_worker_protocol
-  PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include"
-  SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
+  PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_include_directories(fe2o3_worker_protocol SYSTEM PUBLIC
+  ${LLVM_INCLUDE_DIRS})
+target_compile_definitions(fe2o3_worker_protocol PUBLIC
+  FE2O3_PINNED_LLVM_VERSION_MAJOR=${LLVM_VERSION_MAJOR})
 target_compile_definitions(fe2o3_worker_protocol PRIVATE
   FE2O3_LLVM_BUILD_ID="${FE2O3_MEASURED_LLVM_BUILD_ID}"
   FE2O3_WORKER_BUILD_ID="${FE2O3_WORKER_MEASUREMENT}")
@@ -119,8 +122,9 @@ target_link_libraries(fe2o3_worker_protocol PUBLIC LLVMSupport)
 
 add_library(fe2o3_worker_pipeline STATIC src/WorkerPipeline.cpp)
 target_include_directories(fe2o3_worker_pipeline
-  PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include"
-  SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS} ${LLD_INCLUDE_DIRS})
+  PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_include_directories(fe2o3_worker_pipeline SYSTEM PRIVATE
+  ${LLVM_INCLUDE_DIRS} ${LLD_INCLUDE_DIRS})
 target_compile_definitions(fe2o3_worker_pipeline PRIVATE
   FE2O3_LLVM_BUILD_ID="${FE2O3_MEASURED_LLVM_BUILD_ID}"
   FE2O3_WORKER_BUILD_ID="${FE2O3_WORKER_MEASUREMENT}")

@@ -2,6 +2,7 @@
 #define FE2O3_LLVM_LINK_WORKER_PROTOCOL_H
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/Config/llvm-config.h"
 #include "llvm/Support/Error.h"
 
 #include <array>
@@ -9,6 +10,13 @@
 #include <optional>
 #include <string>
 #include <vector>
+
+#ifndef FE2O3_PINNED_LLVM_VERSION_MAJOR
+#error "FE2O3_PINNED_LLVM_VERSION_MAJOR must be provided by the pinned worker build"
+#endif
+
+static_assert(LLVM_VERSION_MAJOR == FE2O3_PINNED_LLVM_VERSION_MAJOR,
+              "worker headers do not match the pinned LLVM major version");
 
 namespace fe2o3::worker {
 
