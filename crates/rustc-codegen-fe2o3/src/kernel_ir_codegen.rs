@@ -1487,7 +1487,7 @@ mod tests {
         let mut unreachable = BasicBlock::new(BlockId(5));
         unreachable.terminator = Some(Terminator::Unreachable);
 
-        let function = Function::definition(
+        let function = Function::kernel_entry(
             "fill_impl",
             Signature::new(vec![slice.clone()], vec![]),
             vec![ValueId(0)],
@@ -1693,7 +1693,7 @@ mod tests {
         let mut bounds_trap = BasicBlock::new(BlockId(9));
         bounds_trap.terminator = Some(Terminator::Unreachable);
 
-        let function = Function::definition(
+        let function = Function::kernel_entry(
             "vecadd_impl",
             Signature::new(vec![input.clone(), input.clone(), output.clone()], vec![]),
             vec![ValueId(0), ValueId(1), ValueId(2)],
@@ -1973,7 +1973,7 @@ mod tests {
     fn inert_compiler_module_fixture() -> Module {
         let mut entry_block = BasicBlock::new(BlockId(0));
         entry_block.terminator = Some(Terminator::Return { values: vec![] });
-        let entry = Function::definition(
+        let entry = Function::kernel_entry(
             "entry_impl",
             Signature::new(vec![], vec![]),
             vec![],

@@ -186,7 +186,7 @@ fn wave_module(width: WaveWidth) -> Module {
         ),
     ];
     block.terminator = Some(Terminator::Return { values: vec![] });
-    let mut function = Function::definition(
+    let mut function = Function::kernel_entry(
         "wave_impl",
         Signature::new(
             vec![
@@ -279,7 +279,7 @@ fn fill_module() -> Module {
     let mut exit = BasicBlock::new(BlockId(2));
     exit.terminator = Some(Terminator::Return { values: vec![] });
 
-    let function = Function::definition(
+    let function = Function::kernel_entry(
         "fill_impl",
         Signature::new(vec![global_slice(AccessMode::ReadWrite), Type::F32], vec![]),
         vec![ValueId(0), ValueId(1)],
@@ -358,7 +358,7 @@ fn phi_loop_module() -> Module {
     let mut exit = BasicBlock::new(BlockId(2));
     exit.terminator = Some(Terminator::Return { values: vec![] });
 
-    let function = Function::definition(
+    let function = Function::kernel_entry(
         "phi_loop_impl",
         Signature::new(vec![slice, Type::INDEX], vec![]),
         vec![ValueId(0), ValueId(1)],
@@ -555,7 +555,7 @@ fn vecadd_module() -> Module {
     let mut trap = BasicBlock::new(BlockId(5));
     trap.terminator = Some(Terminator::Unreachable);
 
-    let function = Function::definition(
+    let function = Function::kernel_entry(
         "vecadd_impl",
         Signature::new(
             vec![
@@ -840,7 +840,7 @@ fn scoped_atomics_module() -> Module {
     ];
     entry.terminator = Some(Terminator::Return { values: vec![] });
 
-    let function = Function::definition(
+    let function = Function::kernel_entry(
         "scoped_atomics_impl",
         Signature::new(vec![global_slice, u32_type.clone(), u32_type], vec![]),
         vec![ValueId(0), ValueId(1), ValueId(2)],
@@ -910,7 +910,7 @@ fn single_global_atomic_module(
     ];
     entry.terminator = Some(Terminator::Return { values: vec![] });
 
-    let function = Function::definition(
+    let function = Function::kernel_entry(
         "single_atomic_impl",
         Signature::new(vec![slice, scalar_type.clone(), scalar_type], vec![]),
         vec![ValueId(0), ValueId(1), ValueId(2)],

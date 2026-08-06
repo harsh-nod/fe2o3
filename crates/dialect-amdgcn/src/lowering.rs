@@ -6,11 +6,11 @@ use std::fmt::Write as _;
 use fe2o3_kernel_ir::{
     AddressSpace as KernelAddressSpace, Atomic, AtomicKind, Axis, BasicBlock, BinaryOp, BlockId,
     CastKind, ComparePredicate, Constant, DiagnosticCode as VerificationDiagnosticCode, Function,
-    FunctionId, IndexKind, IntrinsicKind, Kernel, KernelId, LaunchDomain, LaunchExtent,
-    MemoryOrdering, Module, ModuleId, Operation, OperationKind, ScalarType, Signature,
-    SynchronizationScope, TargetCapability, Terminator, Type, ValueId, VerificationErrors,
-    WaveOperation, WaveOperationKind, WaveWidth, WorkgroupMemoryExtent, WorkgroupSize,
-    verify_module,
+    FunctionId, FunctionRole, IndexKind, IntrinsicKind, Kernel, KernelId, LaunchDomain,
+    LaunchExtent, MemoryOrdering, Module, ModuleId, Operation, OperationKind, ScalarType,
+    Signature, SynchronizationScope, TargetCapability, Terminator, Type, ValueId,
+    VerificationErrors, WaveOperation, WaveOperationKind, WaveWidth, WorkgroupMemoryExtent,
+    WorkgroupSize, verify_module,
 };
 
 use crate::{AMDGPU_TRIPLE, AmdgcnIntrinsic, Dim};
@@ -349,7 +349,6 @@ pub fn lower_kernel_to_llvm_ir(
 /// Slice ABIs remain kernel-entry-only. Calls to kernel entry functions and context-dependent
 /// operations in helpers are rejected.
 pub fn lower_compiler_module_to_llvm_ir(module: &Module) -> Result<String, LoweringErrors> {
-    verify_module(module).map_err(LoweringErrors::verification)?;
     if module.kernels.is_empty() {
         return Err(LoweringErrors::one(
             LoweringLocation::module(module),
@@ -357,6 +356,7 @@ pub fn lower_compiler_module_to_llvm_ir(module: &Module) -> Result<String, Lower
             "compiler-module lowering requires at least one kernel entry",
         ));
     }
+    verify_module(module).map_err(LoweringErrors::verification)?;
 
     let module_wave = validate_capabilities(
         LoweringLocation::module(module),
@@ -443,17 +443,23 @@ pub fn lower_compiler_module_to_llvm_ir(module: &Module) -> Result<String, Lower
         )?;
         validate_device_signature(module, function)?;
         call_symbols.insert(function.id.clone(), function.id.as_str().to_string());
-        if function.body.is_some() {
-            helper_definitions.push(*function);
-        } else {
-            if !function.required_capabilities.is_empty() {
-                return Err(LoweringErrors::one(
-                    location,
-                    LoweringDiagnosticCode::UnsupportedCapability,
-                    "external declarations cannot carry target capability claims in this textual compiler-module slice",
-                ));
+        match function.role {
+            FunctionRole::InternalHelper | FunctionRole::DeviceFfiExport => {
+                helper_definitions.push(*function);
             }
-            declarations.push(*function);
+            FunctionRole::ExternalImport => {
+                if !function.required_capabilities.is_empty() {
+                    return Err(LoweringErrors::one(
+                        location,
+                        LoweringDiagnosticCode::UnsupportedCapability,
+                        "external declarations cannot carry target capability claims in this textual compiler-module slice",
+                    ));
+                }
+                declarations.push(*function);
+            }
+            FunctionRole::KernelEntry => {
+                unreachable!("verify_module rejects unreferenced KernelEntry definitions")
+            }
         }
     }
 
@@ -1635,9 +1641,16 @@ impl<'a> FunctionLowerer<'a> {
         } else {
             let result = llvm_result_type(&self.function.signature);
             let wave_attribute = self.wave_width.map_or("", wave_target_feature);
+            let linkage = match self.function.role {
+                FunctionRole::InternalHelper => "internal ",
+                FunctionRole::DeviceFfiExport => "",
+                FunctionRole::KernelEntry | FunctionRole::ExternalImport => {
+                    unreachable!("helper definition has a definition role")
+                }
+            };
             writeln!(
                 output,
-                "define {result} @{}({parameters}) nounwind{wave_attribute} {{",
+                "define {linkage}{result} @{}({parameters}) nounwind{wave_attribute} {{",
                 self.symbol,
             )
             .unwrap();

@@ -113,9 +113,20 @@ impl Signature {
 pub struct Function {
     pub id: FunctionId,
     pub signature: Signature,
-    /// `None` represents an external declaration.
+    /// Semantic linkage and entry role. This is never inferred from identity or reachability.
+    pub role: FunctionRole,
+    /// Definitions have a body; [`FunctionRole::ExternalImport`] does not.
     pub body: Option<FunctionBody>,
     pub required_capabilities: BTreeSet<TargetCapability>,
+}
+
+/// Explicit semantic role of a function in one complete kernel-IR module.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum FunctionRole {
+    KernelEntry,
+    InternalHelper,
+    DeviceFfiExport,
+    ExternalImport,
 }
 
 impl Function {
@@ -125,18 +136,73 @@ impl Function {
         parameters: Vec<ValueId>,
         blocks: Vec<BasicBlock>,
     ) -> Self {
+        Self::internal_helper(id, signature, parameters, blocks)
+    }
+
+    pub fn kernel_entry(
+        id: impl Into<FunctionId>,
+        signature: Signature,
+        parameters: Vec<ValueId>,
+        blocks: Vec<BasicBlock>,
+    ) -> Self {
+        Self::definition_with_role(id, signature, parameters, blocks, FunctionRole::KernelEntry)
+    }
+
+    pub fn internal_helper(
+        id: impl Into<FunctionId>,
+        signature: Signature,
+        parameters: Vec<ValueId>,
+        blocks: Vec<BasicBlock>,
+    ) -> Self {
+        Self::definition_with_role(
+            id,
+            signature,
+            parameters,
+            blocks,
+            FunctionRole::InternalHelper,
+        )
+    }
+
+    pub fn device_ffi_export(
+        id: impl Into<FunctionId>,
+        signature: Signature,
+        parameters: Vec<ValueId>,
+        blocks: Vec<BasicBlock>,
+    ) -> Self {
+        Self::definition_with_role(
+            id,
+            signature,
+            parameters,
+            blocks,
+            FunctionRole::DeviceFfiExport,
+        )
+    }
+
+    fn definition_with_role(
+        id: impl Into<FunctionId>,
+        signature: Signature,
+        parameters: Vec<ValueId>,
+        blocks: Vec<BasicBlock>,
+        role: FunctionRole,
+    ) -> Self {
         Self {
             id: id.into(),
             signature,
+            role,
             body: Some(FunctionBody { parameters, blocks }),
             required_capabilities: BTreeSet::new(),
         }
     }
 
     pub fn declaration(id: impl Into<FunctionId>, signature: Signature) -> Self {
+        Self::external_import(id, signature)
+    }
+
+    pub fn external_import(id: impl Into<FunctionId>, signature: Signature) -> Self {
         Self {
             id: id.into(),
             signature,
+            role: FunctionRole::ExternalImport,
             body: None,
             required_capabilities: BTreeSet::new(),
         }

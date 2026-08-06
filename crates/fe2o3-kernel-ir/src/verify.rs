@@ -4,21 +4,23 @@ use std::fmt;
 
 use crate::{
     AccessMode, AddressSpace, Atomic, AtomicKind, Barrier, BasicBlock, BinaryOp, BlockId,
-    ComparePredicate, Fence, Function, FunctionId, Kernel, KernelId, LaunchExtent, MemoryOrdering,
-    Module, ModuleId, Operation, OperationKind, ScalarType, SynchronizationScope, TargetCapability,
-    Terminator, Type, UnaryOp, ValueId, WaveOperation, WaveOperationKind, WorkgroupBarrier,
-    WorkgroupMemory, WorkgroupMemoryExtent, pointer_for,
+    ComparePredicate, Fence, Function, FunctionId, FunctionRole, Kernel, KernelId, LaunchExtent,
+    MemoryOrdering, Module, ModuleId, Operation, OperationKind, ScalarType, SynchronizationScope,
+    TargetCapability, Terminator, Type, UnaryOp, ValueId, WaveOperation, WaveOperationKind,
+    WorkgroupBarrier, WorkgroupMemory, WorkgroupMemoryExtent, pointer_for,
 };
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum DiagnosticCode {
     InvalidIdentity,
     DuplicateFunction,
+    ConflictingFunctionRole,
     DuplicateKernel,
     DuplicateBlock,
     DuplicateValue,
     UnknownKernelEntry,
     KernelEntryDeclaration,
+    InvalidFunctionRole,
     KernelReturnsValue,
     InvalidLaunchDomain,
     InvalidWorkgroupSize,
@@ -238,12 +240,22 @@ impl<'module> ModuleVerifier<'module> {
                     "function identity must not be empty",
                 );
             }
-            if self.functions.insert(&function.id, function).is_some() {
+            if let Some(previous) = self.functions.insert(&function.id, function) {
                 self.emit(
                     DiagnosticLocation::function(self.module, function),
                     DiagnosticCode::DuplicateFunction,
                     format!("function {} is defined more than once", function.id),
                 );
+                if previous.role != function.role {
+                    self.emit(
+                        DiagnosticLocation::function(self.module, function),
+                        DiagnosticCode::ConflictingFunctionRole,
+                        format!(
+                            "function {} has conflicting roles {:?} and {:?}",
+                            function.id, previous.role, function.role
+                        ),
+                    );
+                }
             }
         }
 
@@ -252,6 +264,7 @@ impl<'module> ModuleVerifier<'module> {
         }
 
         let mut kernels = BTreeSet::new();
+        let mut referenced_entries = BTreeSet::new();
         for kernel in &self.module.kernels {
             if kernel.id.as_str().is_empty() {
                 self.emit(
@@ -267,13 +280,42 @@ impl<'module> ModuleVerifier<'module> {
                     format!("kernel {} is declared more than once", kernel.id),
                 );
             }
+            referenced_entries.insert(&kernel.entry);
             self.verify_kernel(kernel);
+        }
+        for function in &self.module.functions {
+            if function.role == FunctionRole::KernelEntry
+                && !referenced_entries.contains(&function.id)
+            {
+                self.emit(
+                    DiagnosticLocation::function(self.module, function),
+                    DiagnosticCode::InvalidFunctionRole,
+                    "KernelEntry function is not referenced by any kernel record",
+                );
+            }
         }
     }
 
     fn verify_function(&mut self, function: &Function) {
         let location = DiagnosticLocation::function(self.module, function);
         self.verify_capabilities(&function.required_capabilities, location.clone());
+
+        let role_requires_body = function.role != FunctionRole::ExternalImport;
+        if role_requires_body != function.body.is_some() {
+            self.emit(
+                location.clone(),
+                DiagnosticCode::InvalidFunctionRole,
+                format!(
+                    "function role {:?} is incompatible with a {} body",
+                    function.role,
+                    if function.body.is_some() {
+                        "present"
+                    } else {
+                        "missing"
+                    }
+                ),
+            );
+        }
 
         let Some(body) = &function.body else {
             return;
@@ -350,6 +392,16 @@ impl<'module> ModuleVerifier<'module> {
             );
             return;
         };
+        if entry.role != FunctionRole::KernelEntry {
+            self.emit(
+                location.clone(),
+                DiagnosticCode::ConflictingFunctionRole,
+                format!(
+                    "kernel {} references function {} with role {:?}, expected KernelEntry",
+                    kernel.id, kernel.entry, entry.role
+                ),
+            );
+        }
         if entry.body.is_none() {
             self.emit(
                 location,

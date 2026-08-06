@@ -336,7 +336,7 @@ fn full_module() -> Module {
     unreachable.terminator = Some(Terminator::Unreachable);
     let missing_terminator = BasicBlock::new(BlockId(5));
 
-    let mut defined = Function::definition(
+    let mut defined = Function::kernel_entry(
         "entry",
         Signature::new(parameter_types, vec![Type::INDEX]),
         vec![ValueId(0), ValueId(1)],
@@ -771,6 +771,32 @@ fn decoding_does_not_claim_semantic_verification() {
     let decoded = decode_module_v1(&encode_module_v1(&module).unwrap()).unwrap();
     assert_eq!(decoded, module);
     assert!(verify_module(&decoded).is_err());
+}
+
+#[test]
+fn frozen_wire_versions_reject_unrepresentable_export_roles() {
+    let mut block = BasicBlock::new(BlockId(0));
+    block.terminator = Some(Terminator::Return { values: vec![] });
+    let mut module = Module::new("explicit-export");
+    module.functions.push(Function::device_ffi_export(
+        "exported",
+        Signature::new(vec![], vec![]),
+        vec![],
+        vec![block],
+    ));
+
+    for (version, result) in [
+        (KERNEL_IR_VERSION_V1, encode_module_v1(&module)),
+        (KERNEL_IR_VERSION_V2, encode_module_v2(&module)),
+    ] {
+        assert_eq!(
+            result,
+            Err(KernelIrEncodeError::UnsupportedInVersion {
+                version,
+                feature: "device-FFI export function roles",
+            })
+        );
+    }
 }
 
 #[test]

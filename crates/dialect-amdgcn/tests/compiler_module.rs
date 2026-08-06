@@ -33,7 +33,7 @@ fn kernel_entry(id: &str, callees: &[&str]) -> Function {
         .enumerate()
         .map(|(index, callee)| call((parameter_count + index) as u32, callee, index as u32))
         .collect();
-    Function::definition(
+    Function::kernel_entry(
         id,
         Signature::new(
             vec![Type::Scalar(fe2o3_kernel_ir::ScalarType::I32); parameter_count],
@@ -84,7 +84,7 @@ fn compiler_module() -> Module {
             vec![ValueId(2)],
         )],
     );
-    let public_adjust = Function::definition(
+    let public_adjust = Function::device_ffi_export(
         "public_adjust",
         Signature::new(
             vec![Type::Scalar(fe2o3_kernel_ir::ScalarType::I32)],
@@ -123,7 +123,7 @@ fn compiler_module() -> Module {
 fn multi_entry_module_matches_exact_golden() {
     let actual = lower_compiler_module_to_llvm_ir(&compiler_module()).expect("supported module");
     assert_eq!(actual, include_str!("fixtures/compiler_module_g3.ll"));
-    assert_eq!(actual.matches("define i32 @scale").count(), 1);
+    assert_eq!(actual.matches("define internal i32 @scale").count(), 1);
     assert_eq!(actual.matches("define i32 @public_adjust").count(), 1);
     assert_eq!(actual.matches("declare i32 @external_bias").count(), 1);
     assert!(!actual.contains("@alpha_entry"));
@@ -163,9 +163,9 @@ fn pointer_declarations_and_visible_definitions_preserve_physical_types() {
 
     let llvm = lower_compiler_module_to_llvm_ir(&module).unwrap();
     assert!(llvm.contains("declare void @consume_pointer(ptr addrspace(1))"));
-    assert!(
-        llvm.contains("define ptr addrspace(1) @identity_pointer(ptr addrspace(1) %arg0) nounwind")
-    );
+    assert!(llvm.contains(
+        "define internal ptr addrspace(1) @identity_pointer(ptr addrspace(1) %arg0) nounwind"
+    ));
     assert!(llvm.contains("ret ptr addrspace(1) %arg0"));
 }
 
@@ -266,7 +266,14 @@ fn duplicate_function_names_are_rejected_before_symbol_planning() {
 #[test]
 fn one_definition_cannot_back_multiple_kernel_exports() {
     let mut module = compiler_module();
+    let old_entry = module.kernels[1].entry.clone();
     module.kernels[1].entry = module.kernels[0].entry.clone();
+    module
+        .functions
+        .iter_mut()
+        .find(|function| function.id == old_entry)
+        .unwrap()
+        .role = fe2o3_kernel_ir::FunctionRole::InternalHelper;
     let error = lower_compiler_module_to_llvm_ir(&module).unwrap_err();
     assert!(error.contains(LoweringDiagnosticCode::ConflictingSymbol));
 }

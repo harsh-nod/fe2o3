@@ -21,7 +21,7 @@ bb0:
   ret i32 %v1
 }
 
-define i32 @scale(i32 %arg0) nounwind {
+define internal i32 @scale(i32 %arg0) nounwind {
 bb0:
   %v2 = mul i32 %arg0, 2
   ret i32 %v2

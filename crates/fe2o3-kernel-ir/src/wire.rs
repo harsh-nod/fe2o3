@@ -5,11 +5,11 @@ use std::str;
 use crate::{
     AccessMode, AddressSpace, Atomic, AtomicKind, Axis, Barrier, BarrierSemantics, BasicBlock,
     BinaryOp, BlockId, CastKind, ComparePredicate, Constant, Convergence, Fence, Function,
-    FunctionBody, FunctionId, IndexKind, IntegerSwitchCase, IntrinsicKind, IntrinsicOperation,
-    Kernel, KernelId, LaunchDomain, LaunchExtent, MemoryAccess, MemoryOrdering, Module, ModuleId,
-    Operation, OperationKind, PointerType, ScalarType, Signature, SliceType, SwitchCase,
-    SynchronizationScope, TargetCapability, Terminator, Type, UnaryOp, ValueDef, ValueId,
-    WaveOperation, WaveOperationKind, WaveWidth, WorkgroupBarrier, WorkgroupMemory,
+    FunctionBody, FunctionId, FunctionRole, IndexKind, IntegerSwitchCase, IntrinsicKind,
+    IntrinsicOperation, Kernel, KernelId, LaunchDomain, LaunchExtent, MemoryAccess, MemoryOrdering,
+    Module, ModuleId, Operation, OperationKind, PointerType, ScalarType, Signature, SliceType,
+    SwitchCase, SynchronizationScope, TargetCapability, Terminator, Type, UnaryOp, ValueDef,
+    ValueId, WaveOperation, WaveOperationKind, WaveWidth, WorkgroupBarrier, WorkgroupMemory,
     WorkgroupMemoryExtent, WorkgroupSize,
 };
 
@@ -211,6 +211,7 @@ fn encode_module(module: &Module, version: u16) -> Result<Vec<u8>, KernelIrEncod
     writer.text("module ID", module.id.as_str())?;
     writer.count("module functions", module.functions.len(), MAX_FUNCTIONS_V1)?;
     writer.count("module kernels", module.kernels.len(), MAX_KERNELS_V1)?;
+    validate_legacy_function_roles(module, version)?;
     encode_capabilities(&mut writer, &module.required_capabilities)?;
     for function in &module.functions {
         encode_function(&mut writer, function)?;
@@ -297,12 +298,13 @@ fn decode_module(
     if !reader.is_finished() {
         return Err(KernelIrDecodeError::TrailingBytes);
     }
-    let module = Module {
+    let mut module = Module {
         id,
         functions,
         kernels,
         required_capabilities,
     };
+    restore_legacy_function_roles(&mut module);
     if encode_module(&module, version)? != bytes {
         return Err(KernelIrDecodeError::NonCanonical);
     }
@@ -334,9 +336,63 @@ fn decode_function(reader: &mut Reader<'_>) -> Result<Function, KernelIrDecodeEr
     Ok(Function {
         id,
         signature,
+        role: if body.is_some() {
+            FunctionRole::InternalHelper
+        } else {
+            FunctionRole::ExternalImport
+        },
         body,
         required_capabilities,
     })
+}
+
+fn validate_legacy_function_roles(
+    module: &Module,
+    version: u16,
+) -> Result<(), KernelIrEncodeError> {
+    let entries = module
+        .kernels
+        .iter()
+        .map(|kernel| kernel.entry.clone())
+        .collect::<BTreeSet<_>>();
+    for function in &module.functions {
+        let representable = match function.role {
+            FunctionRole::KernelEntry => function.body.is_some() && entries.contains(&function.id),
+            FunctionRole::InternalHelper => {
+                function.body.is_some() && !entries.contains(&function.id)
+            }
+            FunctionRole::ExternalImport => function.body.is_none(),
+            FunctionRole::DeviceFfiExport => {
+                return Err(KernelIrEncodeError::UnsupportedInVersion {
+                    version,
+                    feature: "device-FFI export function roles",
+                });
+            }
+        };
+        if !representable {
+            return Err(KernelIrEncodeError::NonCanonical {
+                field: "function role does not match the V1/V2 body and kernel records",
+            });
+        }
+    }
+    Ok(())
+}
+
+fn restore_legacy_function_roles(module: &mut Module) {
+    let entries = module
+        .kernels
+        .iter()
+        .map(|kernel| kernel.entry.clone())
+        .collect::<BTreeSet<_>>();
+    for function in &mut module.functions {
+        function.role = if entries.contains(&function.id) {
+            FunctionRole::KernelEntry
+        } else if function.body.is_some() {
+            FunctionRole::InternalHelper
+        } else {
+            FunctionRole::ExternalImport
+        };
+    }
 }
 
 fn encode_signature(writer: &mut Writer, signature: &Signature) -> Result<(), KernelIrEncodeError> {

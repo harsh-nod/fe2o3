@@ -23,7 +23,7 @@ fn module_with_kernel(
     let mut block = BasicBlock::new(BlockId(0));
     block.operations = operations;
     block.terminator = Some(Terminator::Return { values: vec![] });
-    let function = Function::definition(
+    let function = Function::kernel_entry(
         "kernel_impl",
         Signature::new(parameters, vec![]),
         parameter_values,
@@ -148,7 +148,7 @@ fn exact_fill_module() -> Module {
 
     let mut exit = BasicBlock::new(BlockId(2));
     exit.terminator = Some(Terminator::Return { values: vec![] });
-    let function = Function::definition(
+    let function = Function::kernel_entry(
         "kernel_impl",
         Signature::new(vec![global_slice(AccessMode::ReadWrite), Type::F32], vec![]),
         vec![ValueId(0), ValueId(1)],
@@ -338,7 +338,7 @@ fn vecadd_module() -> Module {
     exit.terminator = Some(Terminator::Return { values: vec![] });
     let mut trap = BasicBlock::new(BlockId(5));
     trap.terminator = Some(Terminator::Unreachable);
-    let function = Function::definition(
+    let function = Function::kernel_entry(
         "kernel_impl",
         Signature::new(
             vec![

@@ -9,7 +9,9 @@
 //! LDS, exact wave-width records, and typed canonical integer switches;
 //! [`decode_module_v2`] accepts canonical V1 and V2 bytes. Decoding establishes
 //! wire well-formedness only; consumers must call [`verify_module`] before
-//! relying on semantic invariants.
+//! relying on semantic invariants. V1/V2 reconstruct kernel-entry and import
+//! roles from their legacy records; they reject device-FFI exports because the
+//! frozen formats cannot distinguish those definitions from internal helpers.
 
 mod effect_extraction;
 mod formal_memory_obligations;

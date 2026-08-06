@@ -439,7 +439,7 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
             blocks.push(block);
         }
 
-        Ok(Function::definition(
+        Ok(Function::kernel_entry(
             self.function.rust_path.clone(),
             Signature::new(parameter_types, Vec::new()),
             parameter_values,

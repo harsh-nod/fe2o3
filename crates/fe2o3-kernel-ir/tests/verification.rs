@@ -103,7 +103,7 @@ fn valid_vecadd_module() -> Module {
     ];
     entry.terminator = Some(Terminator::Return { values: vec![] });
 
-    let function = Function::definition(
+    let function = Function::kernel_entry(
         "vecadd_impl",
         Signature::new(vec![read_slice.clone(), read_slice, write_slice], vec![]),
         vec![ValueId(0), ValueId(1), ValueId(2)],
@@ -258,7 +258,7 @@ fn rejects_out_of_domain_intrinsics_in_recursive_kernel_helpers() {
 
     let mut module = Module::new("tests::helper_intrinsic");
     module.functions = vec![
-        Function::definition(
+        Function::kernel_entry(
             "entry",
             Signature::new(vec![], vec![]),
             vec![],
@@ -479,4 +479,58 @@ fn diagnostics_are_deterministic_and_sorted() {
     let second = verify_module(&module).unwrap_err().into_diagnostics();
     assert_eq!(first, second);
     assert!(first.windows(2).all(|window| window[0] <= window[1]));
+}
+
+#[test]
+fn function_roles_are_explicit_and_conflicts_fail_closed() {
+    let mut valid = valid_vecadd_module();
+    let mut returning = BasicBlock::new(BlockId(0));
+    returning.terminator = Some(Terminator::Return { values: vec![] });
+    valid.functions.extend([
+        Function::internal_helper(
+            "private_helper",
+            Signature::new(vec![], vec![]),
+            vec![],
+            vec![returning.clone()],
+        ),
+        Function::device_ffi_export(
+            "public_helper",
+            Signature::new(vec![], vec![]),
+            vec![],
+            vec![returning],
+        ),
+        Function::external_import("imported", Signature::new(vec![], vec![])),
+    ]);
+    verify_module(&valid).expect("consistent explicit roles");
+
+    let mut wrong_entry = valid.clone();
+    wrong_entry.functions[0].role = FunctionRole::InternalHelper;
+    let errors = verify_module(&wrong_entry).unwrap_err();
+    assert!(errors.contains(DiagnosticCode::ConflictingFunctionRole));
+
+    let mut bodyless_export = valid.clone();
+    bodyless_export
+        .functions
+        .iter_mut()
+        .find(|function| function.id.as_str() == "public_helper")
+        .unwrap()
+        .body = None;
+    let errors = verify_module(&bodyless_export).unwrap_err();
+    assert!(errors.contains(DiagnosticCode::InvalidFunctionRole));
+
+    let mut duplicate_role = valid;
+    duplicate_role.functions.push(Function::device_ffi_export(
+        "private_helper",
+        Signature::new(vec![], vec![]),
+        vec![],
+        vec![BasicBlock {
+            id: BlockId(0),
+            parameters: vec![],
+            operations: vec![],
+            terminator: Some(Terminator::Return { values: vec![] }),
+        }],
+    ));
+    let errors = verify_module(&duplicate_role).unwrap_err();
+    assert!(errors.contains(DiagnosticCode::DuplicateFunction));
+    assert!(errors.contains(DiagnosticCode::ConflictingFunctionRole));
 }
