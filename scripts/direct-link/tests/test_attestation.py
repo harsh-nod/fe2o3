@@ -461,11 +461,13 @@ class AttestationTests(unittest.TestCase):
         class TimedOutProcess:
             pid = 999999999
             returncode: int | None = None
+            communicate_calls = 0
 
             def communicate(
                 self, _input: bytes | None = None, timeout: int | None = None
             ) -> tuple[bytes, None]:
-                if timeout is not None:
+                self.communicate_calls += 1
+                if self.communicate_calls == 1:
                     raise subprocess.TimeoutExpired("ssh-keygen", timeout)
                 self.returncode = -9
                 return b"", None

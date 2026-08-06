@@ -638,7 +638,13 @@ def _invoke_verifier(
                 output, _ = process.communicate(payload, timeout=timeout)
             except subprocess.TimeoutExpired as error:
                 _terminate_process_group(process)
-                process.communicate()
+                try:
+                    process.communicate(timeout=1)
+                except subprocess.TimeoutExpired as cleanup_error:
+                    _terminate_process_group(process)
+                    raise EvidenceError(
+                        "OpenSSH verifier did not terminate after timeout"
+                    ) from cleanup_error
                 raise EvidenceError("OpenSSH verifier timed out") from error
             if len(output) > MAX_VERIFIER_OUTPUT_BYTES:
                 raise EvidenceError("OpenSSH verifier output exceeded its bound")
