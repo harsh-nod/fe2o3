@@ -7,19 +7,20 @@ its trusted execution boundary is built incrementally.
 ## Narrow Worker V2 handoff flow
 
 `FE2O3_CODEGEN_PIPELINE=kernel-ir-worker-v2` requires
-`FE2O3_WORKER_V2_CONFIG_V1` to name an absolute path to a strict V1 JSON
+`FE2O3_WORKER_V2_CONFIG_V2` to name an absolute path to a strict V2 JSON
 manifest. The manifest is an explicit operator policy input, not compiler
 attestation. It must be compact canonical JSON with sorted object keys and
 contains exact compilation-unit selectors, a measured worker, measured typed
-providers, the complete final-symbol claim, all four supported link options,
-and explicit output and process limits. Unknown fields, defaults, relative
-paths, identity mismatches, and noncanonical collections are rejected before
-rustc is spawned.
+providers, all four supported link options, and explicit output and process
+limits. Unknown fields, defaults, relative paths, identity mismatches, and
+noncanonical collections are rejected before rustc is spawned.
 
-`final_symbols` names the exact public dynamic-symbol closure expected in the
-linked code object. For each AMDHSA kernel this includes both the kernel symbol
-and its `<kernel>.kd` descriptor symbol; omitting or adding a symbol fails output
-inspection rather than weakening closure equality.
+V2 has no operator-supplied `final_symbols` field. The verified compiler module
+emits a canonical role manifest covering kernel entries, `<kernel>.kd`
+descriptor symbols, device FFI exports, internal helpers, and contracted
+external imports. Worker requests derive the complete final dynamic-symbol
+closure from that manifest; unknown JSON fields are rejected, so an operator
+cannot inject or omit final symbols.
 
 Each `units` selector binds `crate_name`, rustc's exact `source` path spelling,
 and the absolute `working_directory`. An unselected compilation receives no
@@ -32,10 +33,18 @@ a missing handoff is an error and invalidates the attempt.
 For a selected unit, the wrapper pins and validates all configured inputs,
 binds the SHA-256 identity of the exact manifest bytes into `BuildInvocation`,
 runs rustc, consumes the handoff once, and invokes the reproducible GenericLink
-V1 plus compiler-aware Worker V2 workflow. Successful output remains inert.
-Until an authenticated publication adapter exists, the wrapper reports the
-exact inert evidence identity, refuses attempt completion, and invalidates the
-attempt. No HSACO is published, loaded, or launched by this flow.
+V1 plus compiler-aware Worker V2 workflow. It requires byte-identical output
+from two executions, independently inspects the raw HSACO target, exports,
+descriptors, and AMDHSA launch metadata, and derives a typed publication plan
+only from the retained inspection evidence. Publication is attempt-scoped,
+durable, digest-bound, and followed by managed attempt completion; exact
+in-process retries recover the same publication without rebinding its inputs.
+
+The published raw HSACO remains inert. This flow does not authenticate compiler
+origin or Verus proof evidence, does not run canonical `.fe2o3.kd.v1`
+descriptor-table finalization, and grants no HSA loading or launch authority.
+Process-restart recovery after handoff consumption still requires a persisted
+publication intent and retained handoff design.
 
 ## Inspection and tool plans
 
