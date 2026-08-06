@@ -1,11 +1,11 @@
 use fe2o3_artifact_transaction::{
     AtomicPublicationIdentityV1, BuildAttempt, CanonicalLinkRequestIdentityV1,
-    DurableJournalBoundaryV1, DurableJournalStageV1, DurableLinkPublicationError,
-    DurableLinkPublicationFaultPointV1, DurableLinkPublicationOptionsV1,
-    DurableLinkPublicationOutcomeV1, DurableLinkPublicationPlanV1, FinalizationIdentityV1,
-    FinalizedOutputIdentityV1, KernelSetIdentityV1, LinkPublicationPhaseV1, LinkPublicationScopeV1,
-    LinkPublicationStateV1, LinkedOutputIdentityV1, PackageIdentityV1, PinnedWorkerIdentityV1,
-    TargetIdentityV1, ValidatedResponseIdentityV1, publish_durable_link_v1,
+    DurableArtifactBoundaryV1, DurableFaultTimingV1, DurableJournalBoundaryV1,
+    DurableJournalStageV1, DurableLinkPublicationError, DurableLinkPublicationFaultPointV1,
+    DurableLinkPublicationOptionsV1, DurableLinkPublicationOutcomeV1, DurableLinkPublicationPlanV1,
+    FinalizationIdentityV1, FinalizedOutputIdentityV1, KernelSetIdentityV1, LinkPublicationPhaseV1,
+    LinkPublicationScopeV1, LinkPublicationStateV1, LinkedOutputIdentityV1, PackageIdentityV1,
+    PinnedWorkerIdentityV1, TargetIdentityV1, ValidatedResponseIdentityV1, publish_durable_link_v1,
     publish_durable_link_v1_with_options, recover_durable_link_publication_v1,
 };
 use sha2::{Digest, Sha256};
@@ -150,17 +150,6 @@ fn canonical_record(output: &Path) -> PathBuf {
         .expect("canonical durable record")
 }
 
-fn redo_record(output: &Path) -> Option<PathBuf> {
-    managed_entries(output, RECORD_PREFIX)
-        .into_iter()
-        .find(|path| {
-            path.file_name()
-                .unwrap()
-                .to_string_lossy()
-                .ends_with(".redo")
-        })
-}
-
 #[test]
 fn publishes_recovers_and_exact_replay_skips_work() {
     let temp = TestDirectory::new();
@@ -248,6 +237,7 @@ fn crash_retry_requires_the_complete_plan_and_preserves_the_recovered_prefix() {
     let interrupted = DurableLinkPublicationFaultPointV1::Journal {
         stage: DurableJournalStageV1::ResponseValidated,
         boundary: DurableJournalBoundaryV1::SyncCanonicalName,
+        timing: DurableFaultTimingV1::After,
     };
     assert!(matches!(
         publish_durable_link_v1_with_options(
@@ -343,7 +333,8 @@ fn crash_retry_requires_the_complete_plan_and_preserves_the_recovered_prefix() {
 
     let worker_boundary = DurableLinkPublicationFaultPointV1::Journal {
         stage: DurableJournalStageV1::WorkerPinned,
-        boundary: DurableJournalBoundaryV1::CreateRedo,
+        boundary: DurableJournalBoundaryV1::CreateRedoTemp,
+        timing: DurableFaultTimingV1::Before,
     };
     let retried = publish_durable_link_v1_with_options(
         &output,
@@ -418,21 +409,69 @@ fn every_journal_boundary_recovers_or_replays_idempotently() {
         DurableJournalStageV1::Published,
     ];
     let boundaries = [
-        DurableJournalBoundaryV1::CreateRedo,
-        DurableJournalBoundaryV1::WriteRedo,
-        DurableJournalBoundaryV1::SyncRedo,
+        DurableJournalBoundaryV1::CreateRedoTemp,
+        DurableJournalBoundaryV1::WriteRedoTemp,
+        DurableJournalBoundaryV1::SyncRedoTemp,
+        DurableJournalBoundaryV1::RenameTempToRedo,
         DurableJournalBoundaryV1::SyncRedoName,
-        DurableJournalBoundaryV1::RenameRedo,
+        DurableJournalBoundaryV1::RenameRedoToCanonical,
         DurableJournalBoundaryV1::SyncCanonicalName,
     ];
+    let timings = [DurableFaultTimingV1::Before, DurableFaultTimingV1::After];
 
     for stage in stages {
         for boundary in boundaries {
+            for timing in timings {
+                let temp = TestDirectory::new();
+                let output = temp.path.join("output");
+                let bytes = b"journal fault artifact";
+                let plan = plan(1, 0x20, 0x60, bytes);
+                let point = DurableLinkPublicationFaultPointV1::Journal {
+                    stage,
+                    boundary,
+                    timing,
+                };
+                let error = publish_durable_link_v1_with_options(
+                    &output,
+                    plan,
+                    DurableLinkPublicationOptionsV1::inject_crash(point),
+                    |transaction| complete(transaction, bytes),
+                )
+                .unwrap_err();
+                assert!(
+                    matches!(error, DurableLinkPublicationError::InjectedCrash { point: actual } if actual == point),
+                    "unexpected {stage:?}/{boundary:?}/{timing:?} error: {error}"
+                );
+
+                let _ = recover_durable_link_publication_v1(&output, plan.scope()).unwrap();
+                let retried = publish(&output, plan, bytes).unwrap_or_else(|error| {
+                    panic!("retry failed after {stage:?}/{boundary:?}/{timing:?}: {error}")
+                });
+                assert_eq!(retried.snapshot().artifact().bytes(), bytes);
+                assert!(managed_entries(&output, ".fe2o3-stage-").is_empty());
+            }
+        }
+    }
+}
+
+#[test]
+fn every_artifact_boundary_before_and_after_leaves_no_visible_failed_publication() {
+    let boundaries = [
+        DurableArtifactBoundaryV1::CreateTemp,
+        DurableArtifactBoundaryV1::WriteTemp,
+        DurableArtifactBoundaryV1::SyncTemp,
+        DurableArtifactBoundaryV1::RenameToContentAddress,
+        DurableArtifactBoundaryV1::SyncDirectory,
+    ];
+    let timings = [DurableFaultTimingV1::Before, DurableFaultTimingV1::After];
+
+    for boundary in boundaries {
+        for timing in timings {
             let temp = TestDirectory::new();
             let output = temp.path.join("output");
-            let bytes = b"journal fault artifact";
-            let plan = plan(1, 0x20, 0x60, bytes);
-            let point = DurableLinkPublicationFaultPointV1::Journal { stage, boundary };
+            let bytes = b"artifact boundary payload";
+            let plan = plan(1, 0x30, 0x70, bytes);
+            let point = DurableLinkPublicationFaultPointV1::Artifact { boundary, timing };
             let error = publish_durable_link_v1_with_options(
                 &output,
                 plan,
@@ -441,85 +480,28 @@ fn every_journal_boundary_recovers_or_replays_idempotently() {
             )
             .unwrap_err();
             assert!(
-                matches!(error, DurableLinkPublicationError::InjectedCrash { point: actual } if actual == point),
-                "unexpected {stage:?}/{boundary:?} error: {error}"
+                matches!(error, DurableLinkPublicationError::InjectedCrash { point: actual } if actual == point)
             );
 
-            let canonical = managed_entries(&output, RECORD_PREFIX)
-                .into_iter()
-                .find(|path| {
-                    path.file_name()
-                        .unwrap()
-                        .to_string_lossy()
-                        .ends_with(RECORD_SUFFIX)
-                })
-                .map(|path| (path.clone(), fs::read(path).unwrap()));
-            if let Err(error) = recover_durable_link_publication_v1(&output, plan.scope()) {
-                assert!(
-                    matches!(
-                        error,
-                        DurableLinkPublicationError::InvalidDurableRecord { .. }
-                    ),
-                    "unexpected recovery failure after {stage:?}/{boundary:?}: {error}"
-                );
-                if let Some((path, bytes)) = canonical {
-                    assert_eq!(fs::read(path).unwrap(), bytes);
-                }
-                let redo = redo_record(&output)
-                    .unwrap_or_else(|| panic!("{stage:?}/{boundary:?} omitted poison redo"));
-                fs::remove_file(redo).unwrap();
-                let _ = recover_durable_link_publication_v1(&output, plan.scope()).unwrap();
-            }
-            let retried = publish(&output, plan, bytes).unwrap_or_else(|error| {
-                panic!("retry failed after {stage:?}/{boundary:?}: {error}")
-            });
-            assert_eq!(retried.snapshot().artifact().bytes(), bytes);
-            assert!(managed_entries(&output, ".fe2o3-stage-").is_empty());
+            assert!(
+                recover_durable_link_publication_v1(&output, plan.scope())
+                    .unwrap()
+                    .is_none(),
+                "{point:?} exposed an incomplete publication"
+            );
+            let renamed = boundary == DurableArtifactBoundaryV1::SyncDirectory
+                || (boundary == DurableArtifactBoundaryV1::RenameToContentAddress
+                    && timing == DurableFaultTimingV1::After);
+            assert_eq!(
+                artifact_path(&output, bytes).exists(),
+                renamed,
+                "{point:?} retained an unexpected artifact name"
+            );
+            assert_eq!(
+                publish(&output, plan, bytes).unwrap().outcome(),
+                DurableLinkPublicationOutcomeV1::Published
+            );
         }
-    }
-}
-
-#[test]
-fn every_artifact_boundary_leaves_no_visible_failed_publication() {
-    let points = [
-        DurableLinkPublicationFaultPointV1::ArtifactCreate,
-        DurableLinkPublicationFaultPointV1::ArtifactWrite,
-        DurableLinkPublicationFaultPointV1::ArtifactSync,
-        DurableLinkPublicationFaultPointV1::ArtifactRename,
-        DurableLinkPublicationFaultPointV1::ArtifactDirectorySync,
-    ];
-
-    for point in points {
-        let temp = TestDirectory::new();
-        let output = temp.path.join("output");
-        let bytes = b"artifact boundary payload";
-        let plan = plan(1, 0x30, 0x70, bytes);
-        let error = publish_durable_link_v1_with_options(
-            &output,
-            plan,
-            DurableLinkPublicationOptionsV1::inject_crash(point),
-            |transaction| complete(transaction, bytes),
-        )
-        .unwrap_err();
-        assert!(
-            matches!(error, DurableLinkPublicationError::InjectedCrash { point: actual } if actual == point)
-        );
-
-        assert!(
-            recover_durable_link_publication_v1(&output, plan.scope())
-                .unwrap()
-                .is_none(),
-            "{point:?} exposed an incomplete publication"
-        );
-        assert_eq!(
-            artifact_path(&output, bytes).exists(),
-            point == DurableLinkPublicationFaultPointV1::ArtifactDirectorySync,
-            "{point:?} retained an unexpected artifact name"
-        );
-        assert_eq!(
-            publish(&output, plan, bytes).unwrap().outcome(),
-            DurableLinkPublicationOutcomeV1::Published
-        );
     }
 }
 
@@ -568,6 +550,94 @@ fn normal_failure_is_invalidated_and_preserves_prior_publication() {
 }
 
 #[test]
+fn invalidation_is_terminal_only_after_its_complete_record_is_exposed() {
+    let boundaries = [
+        DurableJournalBoundaryV1::CreateRedoTemp,
+        DurableJournalBoundaryV1::WriteRedoTemp,
+        DurableJournalBoundaryV1::SyncRedoTemp,
+        DurableJournalBoundaryV1::RenameTempToRedo,
+        DurableJournalBoundaryV1::SyncRedoName,
+        DurableJournalBoundaryV1::RenameRedoToCanonical,
+        DurableJournalBoundaryV1::SyncCanonicalName,
+    ];
+    let timings = [DurableFaultTimingV1::Before, DurableFaultTimingV1::After];
+
+    for boundary in boundaries {
+        for timing in timings {
+            let temp = TestDirectory::new();
+            let output = temp.path.join("output");
+            let bytes = b"terminal invalidation matrix";
+            let plan = plan(1, 0x42, 0x82, bytes);
+            let point = DurableLinkPublicationFaultPointV1::Journal {
+                stage: DurableJournalStageV1::Invalidated,
+                boundary,
+                timing,
+            };
+            let result = publish_durable_link_v1_with_options(
+                &output,
+                plan,
+                DurableLinkPublicationOptionsV1::inject_crash(point),
+                |transaction| {
+                    transaction.record_worker_pinned()?;
+                    Err(DurableLinkPublicationError::work("observed worker failure"))
+                },
+            );
+            assert!(
+                matches!(result, Err(DurableLinkPublicationError::InjectedCrash { point: actual }) if actual == point),
+                "ordinary failure escaped before durable invalidation at {boundary:?}/{timing:?}"
+            );
+
+            let _ = recover_durable_link_publication_v1(&output, plan.scope()).unwrap();
+            let terminal = matches!(
+                (boundary, timing),
+                (
+                    DurableJournalBoundaryV1::RenameTempToRedo,
+                    DurableFaultTimingV1::After
+                ) | (DurableJournalBoundaryV1::SyncRedoName, _)
+                    | (DurableJournalBoundaryV1::RenameRedoToCanonical, _)
+                    | (DurableJournalBoundaryV1::SyncCanonicalName, _)
+            );
+            if terminal {
+                assert!(matches!(
+                    publish_durable_link_v1(&output, plan, |_| {
+                        panic!("durably invalidated work must never run again")
+                    }),
+                    Err(DurableLinkPublicationError::Protocol(_))
+                ));
+            } else {
+                assert_eq!(
+                    publish(&output, plan, bytes).unwrap().outcome(),
+                    DurableLinkPublicationOutcomeV1::Published,
+                    "unexposed invalidation must recover as a crash at {boundary:?}/{timing:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn callback_cannot_forge_a_crash_to_bypass_terminal_invalidation() {
+    let temp = TestDirectory::new();
+    let output = temp.path.join("output");
+    let bytes = b"forged crash callback";
+    let plan = plan(1, 0x43, 0x83, bytes);
+    let forged = DurableLinkPublicationFaultPointV1::SnapshotRead;
+
+    assert!(matches!(
+        publish_durable_link_v1(&output, plan, |_| {
+            Err(DurableLinkPublicationError::InjectedCrash { point: forged })
+        }),
+        Err(DurableLinkPublicationError::InjectedCrash { point }) if point == forged
+    ));
+    assert!(matches!(
+        publish_durable_link_v1(&output, plan, |_| {
+            panic!("forged crash failure must be durably terminal")
+        }),
+        Err(DurableLinkPublicationError::Protocol(_))
+    ));
+}
+
+#[test]
 fn stale_attempt_request_and_scope_are_isolated() {
     let temp = TestDirectory::new();
     let output = temp.path.join("output");
@@ -604,6 +674,85 @@ fn stale_attempt_request_and_scope_are_isolated() {
 }
 
 #[test]
+fn higher_generation_redo_requires_one_exact_next_planned_transition() {
+    let temp = TestDirectory::new();
+    let output = temp.path.join("output");
+    let first_bytes = b"higher generation prior publication";
+    let next_bytes = b"higher generation next publication";
+    let first = plan(1, 0x54, 0xa4, first_bytes);
+    let next = plan(2, 0x54, 0xb4, next_bytes);
+    publish(&output, first, first_bytes).unwrap();
+    let point = DurableLinkPublicationFaultPointV1::Journal {
+        stage: DurableJournalStageV1::Planned,
+        boundary: DurableJournalBoundaryV1::RenameTempToRedo,
+        timing: DurableFaultTimingV1::After,
+    };
+    assert!(matches!(
+        publish_durable_link_v1_with_options(
+            &output,
+            next,
+            DurableLinkPublicationOptionsV1::inject_crash(point),
+            |_| panic!("planned redo is exposed before work"),
+        ),
+        Err(DurableLinkPublicationError::InjectedCrash { point: actual }) if actual == point
+    ));
+
+    let recovered = recover_durable_link_publication_v1(&output, next.scope())
+        .unwrap()
+        .unwrap();
+    assert_eq!(recovered.record().attempt(), first.attempt());
+    assert_eq!(recovered.artifact().bytes(), first_bytes);
+    assert_eq!(
+        publish(&output, next, next_bytes).unwrap().outcome(),
+        DurableLinkPublicationOutcomeV1::Published
+    );
+    let skipped = plan(4, 0x54, 0xd4, b"skipped scope generation");
+    assert!(matches!(
+        publish_durable_link_v1(&output, skipped, |_| {
+            panic!("a noncontiguous scope generation must fail before work")
+        }),
+        Err(DurableLinkPublicationError::InvalidDurableRecord { .. })
+    ));
+
+    for impossible_generation in [2, 3] {
+        let canonical_temp = TestDirectory::new();
+        let forged_temp = TestDirectory::new();
+        let canonical_output = canonical_temp.path.join("output");
+        let forged_output = forged_temp.path.join("output");
+        let canonical_plan = plan(1, 0x55, 0xa5, first_bytes);
+        publish(&canonical_output, canonical_plan, first_bytes).unwrap();
+        let canonical = canonical_record(&canonical_output);
+        let canonical_bytes = fs::read(&canonical).unwrap();
+
+        let impossible = plan(impossible_generation, 0x55, 0xc5, next_bytes);
+        let complete_point = DurableLinkPublicationFaultPointV1::Journal {
+            stage: DurableJournalStageV1::Planned,
+            boundary: DurableJournalBoundaryV1::SyncCanonicalName,
+            timing: DurableFaultTimingV1::After,
+        };
+        assert!(matches!(
+            publish_durable_link_v1_with_options(
+                &forged_output,
+                impossible,
+                DurableLinkPublicationOptionsV1::inject_crash(complete_point),
+                |_| panic!("planned record commits before work"),
+            ),
+            Err(DurableLinkPublicationError::InjectedCrash { point: actual }) if actual == complete_point
+        ));
+        let redo = PathBuf::from(format!("{}.redo", canonical.display()));
+        fs::write(&redo, fs::read(canonical_record(&forged_output)).unwrap()).unwrap();
+        fs::set_permissions(&redo, fs::Permissions::from_mode(0o600)).unwrap();
+
+        assert!(matches!(
+            recover_durable_link_publication_v1(&canonical_output, canonical_plan.scope()),
+            Err(DurableLinkPublicationError::ConflictingRedo { .. })
+        ));
+        assert_eq!(fs::read(canonical).unwrap(), canonical_bytes);
+        assert!(redo.exists());
+    }
+}
+
+#[test]
 fn stale_valid_redo_cannot_replace_a_newer_canonical_publication() {
     let temp = TestDirectory::new();
     let output = temp.path.join("output");
@@ -626,13 +775,6 @@ fn stale_valid_redo_cannot_replace_a_newer_canonical_publication() {
     ));
     assert_eq!(fs::read(&record).unwrap(), current_record);
     assert!(redo.exists());
-
-    fs::remove_file(redo).unwrap();
-    let recovered = recover_durable_link_publication_v1(&output, second.scope())
-        .unwrap()
-        .unwrap();
-    assert_eq!(recovered.record().attempt(), second.attempt());
-    assert_eq!(recovered.artifact().bytes(), second_bytes);
 }
 
 #[test]
@@ -647,6 +789,7 @@ fn conflicting_same_generation_redo_never_replaces_canonical_active_state() {
     let point = DurableLinkPublicationFaultPointV1::Journal {
         stage: DurableJournalStageV1::Planned,
         boundary: DurableJournalBoundaryV1::SyncCanonicalName,
+        timing: DurableFaultTimingV1::After,
     };
 
     for (output, plan) in [

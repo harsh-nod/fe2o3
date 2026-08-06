@@ -12,15 +12,19 @@
 //! delete abandoned staging, artifact, redo, or quarantine entries. Suspect entries remain inert
 //! and may block the affected scope until an operator repairs them through a separately trusted
 //! maintenance path.
+//!
+//! Each active attempt durably commits a domain-separated digest of its complete publication plan
+//! before callback work starts. Redo bytes are written and synced under a unique ignored temp name
+//! and become replayable only after an atomic rename. The first generation observed for a scope
+//! may be any nonzero external build generation; every later scope generation must be contiguous.
 
 use super::{
-    AtomicPublicationIdentityV1, CanonicalLinkRequestIdentityV1, ControlCommitHooks,
-    ControlCommitPoint, EmitError, FinalizationIdentityV1, FinalizedArtifactSnapshot,
-    FinalizedOutputIdentityV1, InvalidationReasonV1, LinkPublicationCatalogV1,
-    LinkPublicationCodecError, LinkPublicationPhaseV1, LinkPublicationRecordV1,
-    LinkPublicationScopeV1, LinkPublicationStateV1, LinkedOutputIdentityV1, NoFaults, PinnedOutput,
-    PinnedWorkerIdentityV1, PublicationOutcomeV1, StagingDirectory, ValidatedResponseIdentityV1,
-    commit_control_file_direct_with_hooks, read_control_file,
+    AtomicPublicationIdentityV1, CanonicalLinkRequestIdentityV1, EmitError, FinalizationIdentityV1,
+    FinalizedArtifactSnapshot, FinalizedOutputIdentityV1, InvalidationReasonV1,
+    LinkPublicationCatalogV1, LinkPublicationCodecError, LinkPublicationPhaseV1,
+    LinkPublicationRecordV1, LinkPublicationScopeV1, LinkPublicationStateV1,
+    LinkedOutputIdentityV1, NoFaults, PinnedOutput, PinnedWorkerIdentityV1, PublicationOutcomeV1,
+    StagingDirectory, ValidatedResponseIdentityV1, read_control_file,
 };
 use rustix::fs::{
     AtFlags, FileType, Mode, OFlags, RenameFlags, fstat, fsync, openat, renameat, renameat_with,
@@ -32,6 +36,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 const ENVELOPE_MAGIC: &[u8] = b"FE2O3-DURABLE-LINK-V1\0";
 const ENVELOPE_VERSION: u16 = 1;
@@ -48,6 +53,9 @@ const STAGED_ARTIFACT: &str = "finalized-link-artifact";
 const SCOPE_IDENTITY_DOMAIN: &[u8] = b"fe2o3.durable-link.scope.v1\0";
 const PLAN_IDENTITY_DOMAIN: &[u8] = b"fe2o3.durable-link.complete-plan.v1\0";
 const ENVELOPE_CHECKSUM_DOMAIN: &[u8] = b"fe2o3.durable-link.envelope-checksum.v1\0";
+const MAX_REDO_TEMP_ATTEMPTS: u64 = 128;
+
+static NEXT_REDO_TEMP_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Maximum canonical size of one durable scope envelope.
 pub const MAX_DURABLE_LINK_PUBLICATION_RECORD_BYTES: usize = 1_280;
@@ -188,12 +196,30 @@ pub enum DurableJournalStageV1 {
 /// Atomic control-file operation at which a deterministic test may interrupt a commit.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DurableJournalBoundaryV1 {
-    CreateRedo,
-    WriteRedo,
-    SyncRedo,
+    CreateRedoTemp,
+    WriteRedoTemp,
+    SyncRedoTemp,
+    RenameTempToRedo,
     SyncRedoName,
-    RenameRedo,
+    RenameRedoToCanonical,
     SyncCanonicalName,
+}
+
+/// Whether a simulated interruption occurs immediately before or after one journal operation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DurableFaultTimingV1 {
+    Before,
+    After,
+}
+
+/// Finalized-artifact operation at which a deterministic test may interrupt publication.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DurableArtifactBoundaryV1 {
+    CreateTemp,
+    WriteTemp,
+    SyncTemp,
+    RenameToContentAddress,
+    SyncDirectory,
 }
 
 /// Deterministic crash boundary exposed for integration testing.
@@ -202,12 +228,12 @@ pub enum DurableLinkPublicationFaultPointV1 {
     Journal {
         stage: DurableJournalStageV1,
         boundary: DurableJournalBoundaryV1,
+        timing: DurableFaultTimingV1,
     },
-    ArtifactCreate,
-    ArtifactWrite,
-    ArtifactSync,
-    ArtifactRename,
-    ArtifactDirectorySync,
+    Artifact {
+        boundary: DurableArtifactBoundaryV1,
+        timing: DurableFaultTimingV1,
+    },
     /// Transient failure while opening a committed artifact snapshot.
     SnapshotRead,
 }
@@ -326,8 +352,8 @@ impl DurableLinkPublicationError {
         }
     }
 
-    fn is_injected_crash(&self) -> bool {
-        matches!(self, Self::InjectedCrash { .. })
+    fn is_injected_crash_from(&self, faults: &FaultInjector) -> bool {
+        matches!(self, Self::InjectedCrash { point } if faults.fired == Some(*point))
     }
 }
 
@@ -661,6 +687,11 @@ impl DurableLinkPublicationTransactionV1<'_> {
 /// `output_dir` must already exist. V1 never creates its directory or parents because publication
 /// cannot prove that newly created topology was synced into every parent. The caller must durably
 /// provision that topology before calling this function.
+///
+/// An ordinary callback, validation, or artifact failure is returned only after its terminal
+/// `ExplicitFailure` record and canonical directory entry are durable. If that terminal commit
+/// cannot be completed, this function returns the journal or injected-crash error instead; restart
+/// may then classify the attempt as `CrashRecovery` and permit only an exact complete-plan retry.
 pub fn publish_durable_link_v1<F>(
     output_dir: &Path,
     plan: DurableLinkPublicationPlanV1,
@@ -726,6 +757,17 @@ where
             LinkPublicationCodecError::StaleAttempt,
         ));
     }
+    if !crash_retry
+        && envelope.generation_floor != 0
+        && envelope
+            .generation_floor
+            .checked_add(1)
+            .is_none_or(|next| plan.attempt.generation() != next)
+    {
+        return Err(invalid_record(
+            "a subsequent scope generation must advance the durable floor by exactly one",
+        ));
+    }
 
     let mut catalog = catalog_from_published(envelope.published.as_ref())?;
     let record = if crash_retry {
@@ -762,7 +804,7 @@ where
     };
     let work_result = work(&mut transaction);
     if let Err(error) = work_result {
-        if !error.is_injected_crash() {
+        if !error.is_injected_crash_from(transaction.faults) {
             invalidate_transaction(&mut transaction, InvalidationReasonV1::ExplicitFailure)?;
         }
         return Err(error);
@@ -785,7 +827,7 @@ where
     ) {
         Ok(snapshot) => snapshot,
         Err(error) => {
-            if !error.is_injected_crash() {
+            if !error.is_injected_crash_from(transaction.faults) {
                 invalidate_transaction(&mut transaction, InvalidationReasonV1::ExplicitFailure)?;
             }
             return Err(error);
@@ -873,21 +915,122 @@ fn persist_envelope(
     faults: &mut FaultInjector,
 ) -> Result<(), DurableLinkPublicationError> {
     let bytes = envelope.encode()?;
-    let mut hooks = DurableControlHooks { stage, faults };
-    let result = commit_control_file_direct_with_hooks(
-        output,
-        &names.record,
-        &names.redo,
-        Some(&bytes),
-        &mut hooks,
-    );
-    match result {
-        Ok(()) => Ok(()),
-        Err(_) if hooks.faults.fired.is_some() => Err(DurableLinkPublicationError::InjectedCrash {
-            point: hooks.faults.fired.expect("checked injected point"),
-        }),
-        Err(error) => Err(error.into()),
+    let start = NEXT_REDO_TEMP_ID.fetch_add(MAX_REDO_TEMP_ATTEMPTS, Ordering::Relaxed);
+    let mut temporary = None;
+    for offset in 0..MAX_REDO_TEMP_ATTEMPTS {
+        let candidate = format!(
+            "{}.tmp-{}-{}",
+            names.redo,
+            std::process::id(),
+            start.wrapping_add(offset)
+        );
+        faults.hit_journal(
+            stage,
+            DurableJournalBoundaryV1::CreateRedoTemp,
+            DurableFaultTimingV1::Before,
+        )?;
+        match openat(
+            &output.fd,
+            &candidate,
+            OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::RUSR | Mode::WUSR,
+        ) {
+            Ok(fd) => {
+                faults.hit_journal(
+                    stage,
+                    DurableJournalBoundaryV1::CreateRedoTemp,
+                    DurableFaultTimingV1::After,
+                )?;
+                temporary = Some((candidate, fs::File::from(fd)));
+                break;
+            }
+            Err(error) if error == rustix::io::Errno::EXIST => {}
+            Err(error) => return Err(std::io::Error::from(error).into()),
+        }
     }
+    let Some((temporary_name, mut temporary_file)) = temporary else {
+        return Err(invalid_record("could not reserve a private redo temp name"));
+    };
+
+    faults.hit_journal(
+        stage,
+        DurableJournalBoundaryV1::WriteRedoTemp,
+        DurableFaultTimingV1::Before,
+    )?;
+    temporary_file.write_all(&bytes)?;
+    faults.hit_journal(
+        stage,
+        DurableJournalBoundaryV1::WriteRedoTemp,
+        DurableFaultTimingV1::After,
+    )?;
+
+    faults.hit_journal(
+        stage,
+        DurableJournalBoundaryV1::SyncRedoTemp,
+        DurableFaultTimingV1::Before,
+    )?;
+    temporary_file.sync_all()?;
+    faults.hit_journal(
+        stage,
+        DurableJournalBoundaryV1::SyncRedoTemp,
+        DurableFaultTimingV1::After,
+    )?;
+
+    faults.hit_journal(
+        stage,
+        DurableJournalBoundaryV1::RenameTempToRedo,
+        DurableFaultTimingV1::Before,
+    )?;
+    renameat_with(
+        &output.fd,
+        &temporary_name,
+        &output.fd,
+        &names.redo,
+        RenameFlags::NOREPLACE,
+    )
+    .map_err(std::io::Error::from)?;
+    faults.hit_journal(
+        stage,
+        DurableJournalBoundaryV1::RenameTempToRedo,
+        DurableFaultTimingV1::After,
+    )?;
+
+    faults.hit_journal(
+        stage,
+        DurableJournalBoundaryV1::SyncRedoName,
+        DurableFaultTimingV1::Before,
+    )?;
+    fsync(&output.fd).map_err(std::io::Error::from)?;
+    faults.hit_journal(
+        stage,
+        DurableJournalBoundaryV1::SyncRedoName,
+        DurableFaultTimingV1::After,
+    )?;
+
+    output.verify_path_identity()?;
+    faults.hit_journal(
+        stage,
+        DurableJournalBoundaryV1::RenameRedoToCanonical,
+        DurableFaultTimingV1::Before,
+    )?;
+    renameat(&output.fd, &names.redo, &output.fd, &names.record).map_err(std::io::Error::from)?;
+    faults.hit_journal(
+        stage,
+        DurableJournalBoundaryV1::RenameRedoToCanonical,
+        DurableFaultTimingV1::After,
+    )?;
+
+    faults.hit_journal(
+        stage,
+        DurableJournalBoundaryV1::SyncCanonicalName,
+        DurableFaultTimingV1::Before,
+    )?;
+    fsync(&output.fd).map_err(std::io::Error::from)?;
+    faults.hit_journal(
+        stage,
+        DurableJournalBoundaryV1::SyncCanonicalName,
+        DurableFaultTimingV1::After,
+    )
 }
 
 fn recover_envelope(
@@ -897,25 +1040,25 @@ fn recover_envelope(
 ) -> Result<DurableEnvelopeV1, DurableLinkPublicationError> {
     match read_envelope(output, &names.redo, scope) {
         Ok(Some(redo)) => {
-            if let Some(canonical) = read_envelope(output, &names.record, scope)
+            let canonical = read_envelope(output, &names.record, scope)
                 .map_err(DurableReadError::into_public)?
-            {
-                match classify_redo(&canonical, &redo) {
-                    RedoDisposition::Replay => {}
-                    RedoDisposition::Stale => {
-                        return Err(DurableLinkPublicationError::ConflictingRedo {
-                            reason: "stale redo remains beside newer canonical state; V1 refuses destructive cleanup"
-                                .to_string(),
-                        });
-                    }
-                    RedoDisposition::Conflict => {
-                        return Err(DurableLinkPublicationError::ConflictingRedo {
-                            reason: "same-generation redo is not a forward transition from canonical state"
-                                .to_string(),
-                        });
-                    }
+                .unwrap_or_else(|| DurableEnvelopeV1::empty(scope));
+            match classify_redo(&canonical, &redo) {
+                RedoDisposition::Replay => {}
+                RedoDisposition::Stale => {
+                    return Err(DurableLinkPublicationError::ConflictingRedo {
+                        reason: "stale redo remains beside newer canonical state; V1 refuses destructive cleanup"
+                            .to_string(),
+                    });
+                }
+                RedoDisposition::Conflict => {
+                    return Err(DurableLinkPublicationError::ConflictingRedo {
+                        reason: "redo is not one exact legal transition from canonical state"
+                            .to_string(),
+                    });
                 }
             }
+            output.verify_path_identity()?;
             renameat(&output.fd, &names.redo, &output.fd, &names.record)
                 .map_err(std::io::Error::from)?;
             fsync(&output.fd).map_err(std::io::Error::from)?;
@@ -1126,12 +1269,15 @@ fn publish_artifact(
         Err(error) => return Err(error.into_public(&entry)),
     }
 
-    faults.hit(DurableLinkPublicationFaultPointV1::ArtifactCreate)?;
     let mut staging = StagingDirectory::create(output, &mut NoFaults).map_err(|failure| {
         DurableLinkPublicationError::Cleanup {
             reason: failure.primary.to_string(),
         }
     })?;
+    faults.hit_artifact(
+        DurableArtifactBoundaryV1::CreateTemp,
+        DurableFaultTimingV1::Before,
+    )?;
     let fd = openat(
         &staging.fd,
         STAGED_ARTIFACT,
@@ -1139,13 +1285,34 @@ fn publish_artifact(
         Mode::RUSR | Mode::WUSR,
     )
     .map_err(std::io::Error::from)?;
+    faults.hit_artifact(
+        DurableArtifactBoundaryV1::CreateTemp,
+        DurableFaultTimingV1::After,
+    )?;
     let mut file = fs::File::from(fd);
-    faults.hit(DurableLinkPublicationFaultPointV1::ArtifactWrite)?;
+    faults.hit_artifact(
+        DurableArtifactBoundaryV1::WriteTemp,
+        DurableFaultTimingV1::Before,
+    )?;
     file.write_all(&bytes)?;
-    faults.hit(DurableLinkPublicationFaultPointV1::ArtifactSync)?;
+    faults.hit_artifact(
+        DurableArtifactBoundaryV1::WriteTemp,
+        DurableFaultTimingV1::After,
+    )?;
+    faults.hit_artifact(
+        DurableArtifactBoundaryV1::SyncTemp,
+        DurableFaultTimingV1::Before,
+    )?;
     file.sync_all()?;
+    faults.hit_artifact(
+        DurableArtifactBoundaryV1::SyncTemp,
+        DurableFaultTimingV1::After,
+    )?;
     validate_pinned_file(&file, bytes.len())?;
-    faults.hit(DurableLinkPublicationFaultPointV1::ArtifactRename)?;
+    faults.hit_artifact(
+        DurableArtifactBoundaryV1::RenameToContentAddress,
+        DurableFaultTimingV1::Before,
+    )?;
     renameat_with(
         &staging.fd,
         STAGED_ARTIFACT,
@@ -1154,8 +1321,19 @@ fn publish_artifact(
         RenameFlags::NOREPLACE,
     )
     .map_err(std::io::Error::from)?;
-    faults.hit(DurableLinkPublicationFaultPointV1::ArtifactDirectorySync)?;
+    faults.hit_artifact(
+        DurableArtifactBoundaryV1::RenameToContentAddress,
+        DurableFaultTimingV1::After,
+    )?;
+    faults.hit_artifact(
+        DurableArtifactBoundaryV1::SyncDirectory,
+        DurableFaultTimingV1::Before,
+    )?;
     fsync(&output.fd).map_err(std::io::Error::from)?;
+    faults.hit_artifact(
+        DurableArtifactBoundaryV1::SyncDirectory,
+        DurableFaultTimingV1::After,
+    )?;
     let published =
         statat(&output.fd, &entry, AtFlags::SYMLINK_NOFOLLOW).map_err(std::io::Error::from)?;
     let pinned = fstat(&file).map_err(std::io::Error::from)?;
@@ -1372,47 +1550,100 @@ enum RedoDisposition {
 }
 
 fn classify_redo(canonical: &DurableEnvelopeV1, redo: &DurableEnvelopeV1) -> RedoDisposition {
-    if redo.generation_floor != canonical.generation_floor {
-        return if redo.generation_floor < canonical.generation_floor {
-            RedoDisposition::Stale
-        } else {
-            RedoDisposition::Replay
-        };
-    }
     if redo == canonical {
         return RedoDisposition::Replay;
     }
-    if let Some(published) = canonical.published.as_ref()
-        && published.attempt().generation() == canonical.generation_floor
-        && redo.published.as_ref() != Some(published)
-    {
-        return if redo
-            .active
-            .as_ref()
-            .is_some_and(|candidate| records_have_same_prefix(published, candidate))
-        {
-            RedoDisposition::Stale
+    if redo.generation_floor < canonical.generation_floor {
+        return RedoDisposition::Stale;
+    }
+    if redo.generation_floor > canonical.generation_floor {
+        return if is_legal_next_generation(canonical, redo) {
+            RedoDisposition::Replay
         } else {
             RedoDisposition::Conflict
         };
     }
+    if is_legal_same_generation_transition(canonical, redo) {
+        RedoDisposition::Replay
+    } else {
+        RedoDisposition::Conflict
+    }
+}
 
-    if canonical.published == redo.published {
-        return classify_active_redo(canonical.active.as_ref(), redo.active.as_ref());
+fn is_legal_next_generation(canonical: &DurableEnvelopeV1, redo: &DurableEnvelopeV1) -> bool {
+    let first_observed_generation = canonical.generation_floor == 0
+        && canonical.published.is_none()
+        && canonical.active.is_none()
+        && !canonical.poisoned;
+    let contiguous_generation = canonical
+        .generation_floor
+        .checked_add(1)
+        .is_some_and(|next| redo.generation_floor == next);
+    let canonical_is_terminal = canonical
+        .active
+        .as_ref()
+        .is_none_or(|record| matches!(record.state(), LinkPublicationStateV1::Invalidated { .. }));
+    let Some(candidate) = redo.active.as_ref() else {
+        return false;
+    };
+    (first_observed_generation || contiguous_generation)
+        && canonical_is_terminal
+        && redo.published == canonical.published
+        && redo.poisoned == canonical.poisoned
+        && redo.active_plan.is_some()
+        && candidate.attempt().generation() == redo.generation_floor
+        && candidate.state() == LinkPublicationStateV1::Active(LinkPublicationPhaseV1::RequestBound)
+}
+
+fn is_legal_same_generation_transition(
+    canonical: &DurableEnvelopeV1,
+    redo: &DurableEnvelopeV1,
+) -> bool {
+    if canonical.published == redo.published
+        && canonical.poisoned == redo.poisoned
+        && canonical.active_plan == redo.active_plan
+    {
+        return classify_active_redo(canonical.active.as_ref(), redo.active.as_ref())
+            == RedoDisposition::Replay;
     }
 
-    match (canonical.active.as_ref(), redo.published.as_ref()) {
-        (Some(current), Some(candidate))
-            if redo.active.is_none()
-                && candidate.attempt().generation() == redo.generation_floor
-                && records_have_same_prefix(current, candidate)
-                && candidate.state()
-                    == LinkPublicationStateV1::Active(LinkPublicationPhaseV1::Published) =>
-        {
-            RedoDisposition::Replay
-        }
-        _ => RedoDisposition::Conflict,
+    if let (Some(current), Some(candidate)) = (canonical.active.as_ref(), redo.published.as_ref())
+        && current.state() == LinkPublicationStateV1::Active(LinkPublicationPhaseV1::Finalized)
+        && candidate.state() == LinkPublicationStateV1::Active(LinkPublicationPhaseV1::Published)
+        && redo.active.is_none()
+        && redo.active_plan.is_none()
+        && !redo.poisoned
+        && records_have_same_prefix(current, candidate)
+        && canonical.active_plan == published_plan_identity(candidate)
+    {
+        return true;
     }
+
+    canonical.published.is_some()
+        && redo.published.is_none()
+        && redo.poisoned
+        && canonical.active == redo.active
+        && canonical.active_plan == redo.active_plan
+}
+
+fn published_plan_identity(record: &LinkPublicationRecordV1) -> Option<[u8; 32]> {
+    if record.state() != LinkPublicationStateV1::Active(LinkPublicationPhaseV1::Published) {
+        return None;
+    }
+    Some(
+        DurableLinkPublicationPlanV1::new(
+            record.attempt(),
+            record.scope(),
+            record.request(),
+            record.worker()?,
+            record.response()?,
+            record.linked_output()?,
+            record.finalization()?,
+            record.finalized_output()?,
+            record.publication()?,
+        )
+        .identity(),
+    )
 }
 
 fn classify_active_redo(
@@ -1420,44 +1651,53 @@ fn classify_active_redo(
     redo: Option<&LinkPublicationRecordV1>,
 ) -> RedoDisposition {
     match (canonical, redo) {
-        (None, Some(candidate))
-            if candidate.state()
-                == LinkPublicationStateV1::Active(LinkPublicationPhaseV1::RequestBound) =>
-        {
-            RedoDisposition::Replay
+        (Some(current), Some(candidate)) if !records_have_same_prefix(current, candidate) => {
+            RedoDisposition::Conflict
         }
-        (None, None) => RedoDisposition::Replay,
-        (Some(_), None) => RedoDisposition::Conflict,
-        (Some(current), Some(candidate)) => {
-            if !records_have_same_prefix(current, candidate) {
-                return RedoDisposition::Conflict;
+        (Some(current), Some(candidate)) => match (current.state(), candidate.state()) {
+            (
+                LinkPublicationStateV1::Active(current_phase),
+                LinkPublicationStateV1::Active(next_phase),
+            ) if phase_number(next_phase) == phase_number(current_phase).saturating_add(1) => {
+                RedoDisposition::Replay
             }
-            match (current.state(), candidate.state()) {
-                (LinkPublicationStateV1::Active(current), LinkPublicationStateV1::Active(next)) => {
-                    if phase_number(next) < phase_number(current) {
-                        RedoDisposition::Stale
-                    } else {
-                        RedoDisposition::Replay
-                    }
-                }
-                (
-                    LinkPublicationStateV1::Active(current),
-                    LinkPublicationStateV1::Invalidated {
-                        prior_phase: next, ..
-                    },
-                ) if phase_number(next) >= phase_number(current) => RedoDisposition::Replay,
-                (
-                    LinkPublicationStateV1::Invalidated {
-                        reason: InvalidationReasonV1::CrashRecovery,
-                        ..
-                    },
-                    LinkPublicationStateV1::Active(LinkPublicationPhaseV1::RequestBound),
-                ) => RedoDisposition::Replay,
-                _ => RedoDisposition::Conflict,
+            (
+                LinkPublicationStateV1::Active(current_phase),
+                LinkPublicationStateV1::Invalidated {
+                    prior_phase: next_phase,
+                    ..
+                },
+            ) if next_phase == current_phase && records_have_exact_evidence(current, candidate) => {
+                RedoDisposition::Replay
             }
-        }
-        (None, Some(_)) => RedoDisposition::Conflict,
+            (
+                LinkPublicationStateV1::Invalidated {
+                    prior_phase: current_phase,
+                    reason: InvalidationReasonV1::CrashRecovery,
+                },
+                LinkPublicationStateV1::Active(next_phase),
+            ) if next_phase == current_phase && records_have_exact_evidence(current, candidate) => {
+                RedoDisposition::Replay
+            }
+            _ => RedoDisposition::Conflict,
+        },
+        _ => RedoDisposition::Conflict,
     }
+}
+
+fn records_have_exact_evidence(
+    left: &LinkPublicationRecordV1,
+    right: &LinkPublicationRecordV1,
+) -> bool {
+    left.attempt() == right.attempt()
+        && left.scope() == right.scope()
+        && left.request() == right.request()
+        && left.worker() == right.worker()
+        && left.response() == right.response()
+        && left.linked_output() == right.linked_output()
+        && left.finalization() == right.finalization()
+        && left.finalized_output() == right.finalized_output()
+        && left.publication() == right.publication()
 }
 
 fn records_have_same_prefix(
@@ -1625,29 +1865,26 @@ impl FaultInjector {
             Ok(())
         }
     }
-}
 
-struct DurableControlHooks<'a> {
-    stage: DurableJournalStageV1,
-    faults: &'a mut FaultInjector,
-}
+    fn hit_journal(
+        &mut self,
+        stage: DurableJournalStageV1,
+        boundary: DurableJournalBoundaryV1,
+        timing: DurableFaultTimingV1,
+    ) -> Result<(), DurableLinkPublicationError> {
+        self.hit(DurableLinkPublicationFaultPointV1::Journal {
+            stage,
+            boundary,
+            timing,
+        })
+    }
 
-impl ControlCommitHooks for DurableControlHooks<'_> {
-    fn before(&mut self, point: ControlCommitPoint) -> std::io::Result<()> {
-        let boundary = match point {
-            ControlCommitPoint::CreateRecovery => DurableJournalBoundaryV1::CreateRedo,
-            ControlCommitPoint::WriteRecovery => DurableJournalBoundaryV1::WriteRedo,
-            ControlCommitPoint::SyncRecovery => DurableJournalBoundaryV1::SyncRedo,
-            ControlCommitPoint::SyncRecoveryName => DurableJournalBoundaryV1::SyncRedoName,
-            ControlCommitPoint::RenameRecovery => DurableJournalBoundaryV1::RenameRedo,
-            ControlCommitPoint::SyncFinalName => DurableJournalBoundaryV1::SyncCanonicalName,
-        };
-        self.faults
-            .hit(DurableLinkPublicationFaultPointV1::Journal {
-                stage: self.stage,
-                boundary,
-            })
-            .map_err(std::io::Error::other)
+    fn hit_artifact(
+        &mut self,
+        boundary: DurableArtifactBoundaryV1,
+        timing: DurableFaultTimingV1,
+    ) -> Result<(), DurableLinkPublicationError> {
+        self.hit(DurableLinkPublicationFaultPointV1::Artifact { boundary, timing })
     }
 }
 
