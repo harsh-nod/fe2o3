@@ -226,7 +226,7 @@ fn durable_envelope_is_deterministic_and_checksum_bound() {
     assert_eq!(first_record, second_record);
     assert_eq!(
         hex(&Sha256::digest(&first_record)),
-        "d88176e0e2781eb01426353e61846ee30e86cefe9da37f69ca3db8809a44d525"
+        "e62fc430e9032d8b6156b7311c3707f4092839f7218395d5f1421119ed968a39"
     );
 
     let record_path = canonical_record(&first_output);
@@ -237,6 +237,122 @@ fn durable_envelope_is_deterministic_and_checksum_bound() {
     assert!(recover_durable_link_publication_v1(&first_output, plan.scope()).is_err());
     assert_eq!(fs::read(record_path).unwrap(), corrupted);
     assert!(artifact_path(&first_output, bytes).exists());
+}
+
+#[test]
+fn crash_retry_requires_the_complete_plan_and_preserves_the_recovered_prefix() {
+    let temp = TestDirectory::new();
+    let output = temp.path.join("output");
+    let bytes = b"complete plan retry payload";
+    let original = plan(1, 0x13, 0x43, bytes);
+    let interrupted = DurableLinkPublicationFaultPointV1::Journal {
+        stage: DurableJournalStageV1::ResponseValidated,
+        boundary: DurableJournalBoundaryV1::SyncCanonicalName,
+    };
+    assert!(matches!(
+        publish_durable_link_v1_with_options(
+            &output,
+            original,
+            DurableLinkPublicationOptionsV1::inject_crash(interrupted),
+            |transaction| complete(transaction, bytes),
+        ),
+        Err(DurableLinkPublicationError::InjectedCrash { point }) if point == interrupted
+    ));
+    assert!(
+        recover_durable_link_publication_v1(&output, original.scope())
+            .unwrap()
+            .is_none()
+    );
+
+    let changed_plans = [
+        DurableLinkPublicationPlanV1::new(
+            original.attempt(),
+            original.scope(),
+            original.request(),
+            PinnedWorkerIdentityV1::from_bytes(identity(0xe0)),
+            original.response(),
+            original.linked_output(),
+            original.finalization(),
+            original.finalized_output(),
+            original.publication(),
+        ),
+        DurableLinkPublicationPlanV1::new(
+            original.attempt(),
+            original.scope(),
+            original.request(),
+            original.worker(),
+            ValidatedResponseIdentityV1::from_bytes(identity(0xe1)),
+            original.linked_output(),
+            original.finalization(),
+            original.finalized_output(),
+            original.publication(),
+        ),
+        DurableLinkPublicationPlanV1::new(
+            original.attempt(),
+            original.scope(),
+            original.request(),
+            original.worker(),
+            original.response(),
+            LinkedOutputIdentityV1::from_bytes(identity(0xe2)),
+            original.finalization(),
+            original.finalized_output(),
+            original.publication(),
+        ),
+        DurableLinkPublicationPlanV1::new(
+            original.attempt(),
+            original.scope(),
+            original.request(),
+            original.worker(),
+            original.response(),
+            original.linked_output(),
+            FinalizationIdentityV1::from_bytes(identity(0xe3)),
+            original.finalized_output(),
+            original.publication(),
+        ),
+        DurableLinkPublicationPlanV1::new(
+            original.attempt(),
+            original.scope(),
+            original.request(),
+            original.worker(),
+            original.response(),
+            original.linked_output(),
+            original.finalization(),
+            FinalizedOutputIdentityV1::from_bytes(identity(0xe4)),
+            original.publication(),
+        ),
+        DurableLinkPublicationPlanV1::new(
+            original.attempt(),
+            original.scope(),
+            original.request(),
+            original.worker(),
+            original.response(),
+            original.linked_output(),
+            original.finalization(),
+            original.finalized_output(),
+            AtomicPublicationIdentityV1::from_bytes(identity(0xe5)),
+        ),
+    ];
+    for changed in changed_plans {
+        assert!(matches!(
+            publish_durable_link_v1(&output, changed, |_| {
+                panic!("a changed complete plan must not reach work")
+            }),
+            Err(DurableLinkPublicationError::Protocol(_))
+        ));
+    }
+
+    let worker_boundary = DurableLinkPublicationFaultPointV1::Journal {
+        stage: DurableJournalStageV1::WorkerPinned,
+        boundary: DurableJournalBoundaryV1::CreateRedo,
+    };
+    let retried = publish_durable_link_v1_with_options(
+        &output,
+        original,
+        DurableLinkPublicationOptionsV1::inject_crash(worker_boundary),
+        |transaction| complete(transaction, bytes),
+    )
+    .expect("the recovered response prefix skips the worker journal stage");
+    assert_eq!(retried.snapshot().artifact().bytes(), bytes);
 }
 
 #[test]

@@ -38,6 +38,7 @@ const ENVELOPE_VERSION: u16 = 1;
 const SCOPE_TAG_PACKAGE: u8 = 0x10;
 const SCOPE_TAG_KERNEL_SET: u8 = 0x11;
 const SCOPE_TAG_TARGET: u8 = 0x12;
+const PLAN_IDENTITY_TAG: u8 = 0x20;
 const RECORD_PREFIX: &str = ".fe2o3-link-publication-v1-";
 const RECORD_SUFFIX: &str = ".record";
 const REDO_SUFFIX: &str = ".redo";
@@ -45,6 +46,7 @@ const ARTIFACT_PREFIX: &str = ".fe2o3-link-artifact-v1-";
 const ARTIFACT_SUFFIX: &str = ".bin";
 const STAGED_ARTIFACT: &str = "finalized-link-artifact";
 const SCOPE_IDENTITY_DOMAIN: &[u8] = b"fe2o3.durable-link.scope.v1\0";
+const PLAN_IDENTITY_DOMAIN: &[u8] = b"fe2o3.durable-link.complete-plan.v1\0";
 const ENVELOPE_CHECKSUM_DOMAIN: &[u8] = b"fe2o3.durable-link.envelope-checksum.v1\0";
 
 /// Maximum canonical size of one durable scope envelope.
@@ -142,6 +144,25 @@ impl DurableLinkPublicationPlanV1 {
     /// Returns the validated bridge publication identity.
     pub const fn publication(self) -> AtomicPublicationIdentityV1 {
         self.publication
+    }
+
+    fn identity(self) -> [u8; 32] {
+        let mut digest = Sha256::new();
+        digest.update(PLAN_IDENTITY_DOMAIN);
+        digest.update(self.attempt.generation().to_le_bytes());
+        digest.update(self.attempt.session().as_bytes());
+        digest.update(self.attempt.invocation().as_bytes());
+        digest.update(self.scope.package().as_bytes());
+        digest.update(self.scope.kernel_set().as_bytes());
+        digest.update(self.scope.target().as_bytes());
+        digest.update(self.request.as_bytes());
+        digest.update(self.worker.as_bytes());
+        digest.update(self.response.as_bytes());
+        digest.update(self.linked_output.as_bytes());
+        digest.update(self.finalization.as_bytes());
+        digest.update(self.finalized_output.as_bytes());
+        digest.update(self.publication.as_bytes());
+        digest.finalize().into()
     }
 }
 
@@ -383,6 +404,7 @@ struct DurableEnvelopeV1 {
     generation_floor: u64,
     poisoned: bool,
     published: Option<LinkPublicationRecordV1>,
+    active_plan: Option<[u8; 32]>,
     active: Option<LinkPublicationRecordV1>,
 }
 
@@ -393,6 +415,7 @@ impl DurableEnvelopeV1 {
             generation_floor: 0,
             poisoned: false,
             published: None,
+            active_plan: None,
             active: None,
         }
     }
@@ -416,6 +439,7 @@ impl DurableEnvelopeV1 {
         bytes.extend_from_slice(&self.generation_floor.to_le_bytes());
         push_scope(&mut bytes, self.scope);
         push_record(&mut bytes, published.as_deref())?;
+        push_optional_identity(&mut bytes, self.active_plan);
         push_record(&mut bytes, active.as_deref())?;
         let checksum = domain_sha256(ENVELOPE_CHECKSUM_DOMAIN, &bytes);
         bytes.extend_from_slice(&checksum);
@@ -468,6 +492,7 @@ impl DurableEnvelopeV1 {
         let generation_floor = decoder.u64()?;
         let scope = decode_scope(&mut decoder)?;
         let published = decoder.record()?;
+        let active_plan = decoder.optional_identity(PLAN_IDENTITY_TAG)?;
         let active = decoder.record()?;
         if !decoder.finished() {
             return Err(invalid_record("trailing durable envelope bytes"));
@@ -477,6 +502,7 @@ impl DurableEnvelopeV1 {
             generation_floor,
             poisoned,
             published,
+            active_plan,
             active,
         };
         envelope.validate()?;
@@ -487,6 +513,11 @@ impl DurableEnvelopeV1 {
     }
 
     fn validate(&self) -> Result<(), DurableLinkPublicationError> {
+        if self.active.is_some() != self.active_plan.is_some() {
+            return Err(invalid_record(
+                "active record and complete-plan commitment must appear together",
+            ));
+        }
         if let Some(record) = &self.published {
             if record.scope() != self.scope
                 || record.state()
@@ -530,6 +561,14 @@ pub struct DurableLinkPublicationTransactionV1<'a> {
 impl DurableLinkPublicationTransactionV1<'_> {
     /// Durably records that the expected worker and toolchain closure was pinned.
     pub fn record_worker_pinned(&mut self) -> Result<(), DurableLinkPublicationError> {
+        if phase_at_least(self.phase(), LinkPublicationPhaseV1::WorkerPinned) {
+            if self.record.worker() != Some(self.plan.worker) {
+                return Err(invalid_record(
+                    "recovered worker does not match the complete publication plan",
+                ));
+            }
+            return Ok(());
+        }
         self.record.record_pinned_worker(
             &self.catalog,
             self.plan.attempt,
@@ -541,6 +580,16 @@ impl DurableLinkPublicationTransactionV1<'_> {
 
     /// Durably records validation of the expected response and linked output.
     pub fn record_response_validated(&mut self) -> Result<(), DurableLinkPublicationError> {
+        if phase_at_least(self.phase(), LinkPublicationPhaseV1::ResponseValidated) {
+            if self.record.response() != Some(self.plan.response)
+                || self.record.linked_output() != Some(self.plan.linked_output)
+            {
+                return Err(invalid_record(
+                    "recovered response does not match the complete publication plan",
+                ));
+            }
+            return Ok(());
+        }
         self.record.record_validated_response(
             &self.catalog,
             self.plan.attempt,
@@ -557,6 +606,17 @@ impl DurableLinkPublicationTransactionV1<'_> {
         validate_artifact_size(bytes.len())?;
         if sha256(bytes) != *self.plan.finalized_output.as_bytes() {
             return Err(DurableLinkPublicationError::FinalizedArtifactDigestMismatch);
+        }
+        if phase_at_least(self.phase(), LinkPublicationPhaseV1::Finalized) {
+            if self.record.finalization() != Some(self.plan.finalization)
+                || self.record.finalized_output() != Some(self.plan.finalized_output)
+            {
+                return Err(invalid_record(
+                    "recovered finalization does not match the complete publication plan",
+                ));
+            }
+            self.finalized_bytes = Some(Arc::from(bytes));
+            return Ok(());
         }
         self.record.record_finalization(
             &self.catalog,
@@ -653,10 +713,7 @@ where
             ));
         }
     }
-    let crash_retry = envelope
-        .active
-        .as_ref()
-        .is_some_and(|record| crash_retry_matches_plan(record, plan));
+    let crash_retry = crash_retry_matches_plan(&envelope, plan);
     if envelope.poisoned && plan.attempt.generation() <= envelope.generation_floor && !crash_retry {
         return Err(invalid_record(
             "corruption tombstone requires a newer build generation",
@@ -671,8 +728,19 @@ where
     }
 
     let mut catalog = catalog_from_published(envelope.published.as_ref())?;
-    let record = catalog.begin(plan.attempt, plan.scope, plan.request)?;
+    let record = if crash_retry {
+        let recovered = envelope
+            .active
+            .as_ref()
+            .expect("crash retry requires an active record");
+        let mut resumed = catalog.begin(plan.attempt, plan.scope, plan.request)?;
+        advance_record(&mut resumed, &catalog, recovered)?;
+        resumed
+    } else {
+        catalog.begin(plan.attempt, plan.scope, plan.request)?
+    };
     envelope.generation_floor = envelope.generation_floor.max(plan.attempt.generation());
+    envelope.active_plan = Some(plan.identity());
     envelope.active = Some(record.clone());
     persist_envelope(
         &output,
@@ -732,6 +800,7 @@ where
         transaction.plan.publication,
     )?;
     transaction.envelope.published = Some(transaction.record.clone());
+    transaction.envelope.active_plan = None;
     transaction.envelope.active = None;
     transaction.envelope.poisoned = false;
     persist_envelope(
@@ -1259,16 +1328,20 @@ fn record_matches_plan(
 }
 
 fn crash_retry_matches_plan(
-    record: &LinkPublicationRecordV1,
+    envelope: &DurableEnvelopeV1,
     plan: DurableLinkPublicationPlanV1,
 ) -> bool {
+    let Some(record) = envelope.active.as_ref() else {
+        return false;
+    };
     matches!(
         record.state(),
         LinkPublicationStateV1::Invalidated {
             reason: InvalidationReasonV1::CrashRecovery,
             ..
         }
-    ) && record.attempt() == plan.attempt
+    ) && envelope.active_plan == Some(plan.identity())
+        && record.attempt() == plan.attempt
         && record.scope() == plan.scope
         && record.request() == plan.request
         && record
@@ -1587,6 +1660,16 @@ fn push_scope(bytes: &mut Vec<u8>, scope: LinkPublicationScopeV1) {
     bytes.extend_from_slice(scope.target().as_bytes());
 }
 
+fn push_optional_identity(bytes: &mut Vec<u8>, identity: Option<[u8; 32]>) {
+    match identity {
+        Some(identity) => {
+            bytes.push(PLAN_IDENTITY_TAG);
+            bytes.extend_from_slice(&identity);
+        }
+        None => bytes.push(0),
+    }
+}
+
 fn decode_scope(
     decoder: &mut EnvelopeDecoder<'_>,
 ) -> Result<LinkPublicationScopeV1, DurableLinkPublicationError> {
@@ -1658,6 +1741,22 @@ impl<'a> EnvelopeDecoder<'a> {
             )));
         }
         Ok(self.take(32)?.try_into().expect("32-byte identity"))
+    }
+
+    fn optional_identity(
+        &mut self,
+        expected_tag: u8,
+    ) -> Result<Option<[u8; 32]>, DurableLinkPublicationError> {
+        let actual = self.byte()?;
+        if actual == 0 {
+            return Ok(None);
+        }
+        if actual != expected_tag {
+            return Err(invalid_record(format!(
+                "optional identity tag {actual:#x} does not match {expected_tag:#x}",
+            )));
+        }
+        Ok(Some(self.take(32)?.try_into().expect("32-byte identity")))
     }
 
     fn record(&mut self) -> Result<Option<LinkPublicationRecordV1>, DurableLinkPublicationError> {
