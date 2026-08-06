@@ -1,14 +1,19 @@
 use fe2o3_hsaco_finalize::{
-    CompilerFfiBridgeError, CompilerFfiClosureV1, CompilerFfiContractIdentityV1,
-    CompilerFfiDeclaredClaimsV1, CompilerFfiDefinitionV1, CompilerFfiDirectionV1,
-    CompilerFfiFieldOriginV1, CompilerFfiPlanInputBindingV1, CompilerFfiPlanInputRoleV1,
-    CompilerFfiProviderBindingV1, CompilerFfiSourceOwnerV1, CompilerFfiSymbolFieldV1,
-    CompilerFfiSymbolV1, ContentIdentityV1, LinkInputV1, LinkOptionV1, LinkOutputV1,
-    MAX_COMPILER_FFI_CRATE_NAME_BYTES_V1, MAX_COMPILER_FFI_PHYSICAL_ABI_BYTES_V1,
-    MAX_COMPILER_FFI_SYMBOLS_V1, MultiInputLinkPlanV1, ProvenanceNodeV1, WorkerInputKindV1,
-    bind_compiler_ffi_closure_v1,
+    ContentIdentityV1, ExpectedFinalDefinedSymbolsClaimV1, FfiClaimOriginV1, FfiPlanInputClaimV1,
+    FfiPlanInputRoleClaimV1, FfiSymbolProviderBindingClaimV1, FinalSymbolEvidenceSourceClaimV1,
+    G4DeclarationOwnerClaimV1, G4DeclaredContractClaimsV1, G4FfiClaimEnvelopeV1,
+    G4FfiDirectionClaimV1, G4FfiSymbolClaimFieldV1, G4FfiSymbolClaimV1,
+    G4SymbolProviderClassClaimV1, InputSymbolEvidenceCoverageClaimV1, LinkInputV1, LinkOptionV1,
+    LinkOutputV1, MAX_G4_FFI_AGGREGATE_TEXT_BYTES_V1, MAX_G4_FFI_SYMBOL_CLAIMS_V1,
+    MAX_G4_KERNEL_CLAIMS_V1, MAX_G4_RUST_DEFINITION_CLAIMS_V1, MultiInputLinkPlanV1,
+    ProvenanceNodeV1, StagedFfiExecutionBlockerV1, StagedFfiLinkError, StagedFfiLinkPlanV1,
+    UnauthenticatedProducerClaimV1, WorkerInputKindV1, stage_g4_ffi_link_plan_v1,
 };
 use fe2o3_kernel_descriptor::{CodeObjectVersion, DeviceTargetV1};
+use reserved_fe2o3_symbols::{
+    DEVICE_FFI_DIRECTION_EXPORT_V1, DEVICE_FFI_DIRECTION_IMPORT_V1, DeviceFfiContractFieldsV1,
+    DeviceFfiContractIdV1, derive_device_ffi_contract_id_v1,
+};
 use sha2::{Digest, Sha256};
 
 const IMPORT_ABI: &str = "C(mut_ptr<global,u32>[size=8,align=8,as=global])->unit[size=0,align=1]";
@@ -17,10 +22,11 @@ const EXPORT_ABI: &str = "C(u32[size=4,align=4])->u32[size=4,align=4]";
 #[derive(Clone)]
 struct Fixture {
     plan: MultiInputLinkPlanV1,
-    compiler: CompilerFfiClosureV1,
-    plan_inputs: Vec<CompilerFfiPlanInputBindingV1>,
-    providers: Vec<CompilerFfiProviderBindingV1>,
-    rust_input: ContentIdentityV1,
+    envelope: G4FfiClaimEnvelopeV1,
+    inputs: Vec<FfiPlanInputClaimV1>,
+    providers: Vec<FfiSymbolProviderBindingClaimV1>,
+    final_symbols: ExpectedFinalDefinedSymbolsClaimV1,
+    compiler_module: ContentIdentityV1,
     external_input: ContentIdentityV1,
     support_input: ContentIdentityV1,
 }
@@ -33,8 +39,8 @@ fn other_target() -> DeviceTargetV1 {
     DeviceTargetV1::parse("gfx950").unwrap()
 }
 
-fn owner(index: u8, item: &str) -> CompilerFfiSourceOwnerV1 {
-    CompilerFfiSourceOwnerV1::new(
+fn owner(index: u8, item: &str) -> G4DeclarationOwnerClaimV1 {
+    G4DeclarationOwnerClaimV1::new(
         "ffi_crate",
         format!("ffi_crate::{item}"),
         [index; 16],
@@ -43,96 +49,91 @@ fn owner(index: u8, item: &str) -> CompilerFfiSourceOwnerV1 {
     .unwrap()
 }
 
-fn claims(
+fn producer(index: u8, name: &str) -> UnauthenticatedProducerClaimV1 {
+    UnauthenticatedProducerClaimV1::new(name, format!("assertion-v{index}"), [index; 32]).unwrap()
+}
+
+fn declared(
     target: DeviceTargetV1,
     version: CodeObjectVersion,
     effects: &str,
     semantic_byte: u8,
-) -> CompilerFfiDeclaredClaimsV1 {
-    CompilerFfiDeclaredClaimsV1::new(target, version, effects, [semantic_byte; 32]).unwrap()
+) -> G4DeclaredContractClaimsV1 {
+    G4DeclaredContractClaimsV1::new(target, version, effects, [semantic_byte; 32]).unwrap()
 }
 
 fn contract_identity(
-    direction: CompilerFfiDirectionV1,
+    direction: G4FfiDirectionClaimV1,
     symbol: &str,
     physical_abi: &str,
-    declared: &CompilerFfiDeclaredClaimsV1,
-) -> CompilerFfiContractIdentityV1 {
-    let mut digest = Sha256::new();
-    digest.update(b"fe2o3.device-ffi-contract.v1\0");
-    digest.update(
-        match direction {
-            CompilerFfiDirectionV1::Import => 1_u16,
-            CompilerFfiDirectionV1::Export => 2_u16,
-        }
-        .to_le_bytes(),
-    );
-    contract_field(&mut digest, symbol.as_bytes());
-    contract_field(&mut digest, b"C");
-    digest.update(
-        match declared.code_object_version() {
-            CodeObjectVersion::V4 => 4_u16,
-            CodeObjectVersion::V5 => 5_u16,
-            CodeObjectVersion::V6 => 6_u16,
-        }
-        .to_le_bytes(),
-    );
-    contract_field(&mut digest, declared.target().to_string().as_bytes());
-    contract_field(&mut digest, physical_abi.as_bytes());
-    contract_field(&mut digest, declared.effects().as_bytes());
-    contract_field(&mut digest, hex(declared.semantic_claim()).as_bytes());
-    contract_field(&mut digest, b"nounwind;nopanic");
-    CompilerFfiContractIdentityV1::from_bytes(digest.finalize().into()).unwrap()
-}
-
-fn contract_field(digest: &mut Sha256, field: &[u8]) {
-    digest.update((field.len() as u64).to_le_bytes());
-    digest.update(field);
-}
-
-fn make_symbol(
-    direction: CompilerFfiDirectionV1,
-    symbol: &str,
-    physical_abi: &str,
-    source_owner: CompilerFfiSourceOwnerV1,
-    declared: CompilerFfiDeclaredClaimsV1,
-) -> CompilerFfiSymbolV1 {
-    let definition = match direction {
-        CompilerFfiDirectionV1::Import => CompilerFfiDefinitionV1::ExternalPlanInput,
-        CompilerFfiDirectionV1::Export => CompilerFfiDefinitionV1::RustCompilerBitcode,
-    };
-    CompilerFfiSymbolV1::new(
-        contract_identity(direction, symbol, physical_abi, &declared),
-        direction,
+    claim: &G4DeclaredContractClaimsV1,
+) -> DeviceFfiContractIdV1 {
+    derive_device_ffi_contract_id_v1(DeviceFfiContractFieldsV1 {
+        direction: match direction {
+            G4FfiDirectionClaimV1::Import => DEVICE_FFI_DIRECTION_IMPORT_V1,
+            G4FfiDirectionClaimV1::Export => DEVICE_FFI_DIRECTION_EXPORT_V1,
+        },
         symbol,
+        calling_convention: "C",
+        code_object_version: match claim.code_object_version() {
+            CodeObjectVersion::V4 => 4,
+            CodeObjectVersion::V5 => 5,
+            CodeObjectVersion::V6 => 6,
+        },
+        target: &claim.target().to_string(),
         physical_abi,
-        source_owner,
-        definition,
+        effects: claim.effects(),
+        semantic_identity: &hex(claim.semantic_identity()),
+    })
+}
+
+fn symbol(
+    direction: G4FfiDirectionClaimV1,
+    name: &str,
+    abi: &str,
+    owner: G4DeclarationOwnerClaimV1,
+    declared: G4DeclaredContractClaimsV1,
+) -> G4FfiSymbolClaimV1 {
+    let provider_class = match direction {
+        G4FfiDirectionClaimV1::Import => G4SymbolProviderClassClaimV1::ExternalPlanInput,
+        G4FfiDirectionClaimV1::Export => G4SymbolProviderClassClaimV1::CompilerModuleInput,
+    };
+    G4FfiSymbolClaimV1::new(
+        contract_identity(direction, name, abi, &declared),
+        direction,
+        name,
+        abi,
+        owner,
+        provider_class,
         declared,
     )
     .unwrap()
 }
 
-fn plan(
+fn build_plan(
     target: DeviceTargetV1,
     version: &str,
-    identities: &[ContentIdentityV1],
+    inputs: &[FfiPlanInputClaimV1],
 ) -> MultiInputLinkPlanV1 {
-    let inputs: Vec<_> = identities
+    let link_inputs: Vec<_> = inputs
         .iter()
-        .copied()
-        .map(|identity| LinkInputV1::new(identity, target))
+        .map(|input| LinkInputV1::new(input.identity(), target))
         .collect();
-    let output = ContentIdentityV1::calculate(b"expected linked compiler FFI fixture");
-    let mut provenance: Vec<_> = identities
+    let output = ContentIdentityV1::calculate(b"expected staged FFI output identity claim");
+    let mut provenance: Vec<_> = link_inputs
         .iter()
-        .copied()
-        .map(|identity| ProvenanceNodeV1::new(identity, vec![]).unwrap())
+        .map(|input| ProvenanceNodeV1::new(input.identity(), vec![]).unwrap())
         .collect();
-    provenance.push(ProvenanceNodeV1::new(output, identities.to_vec()).unwrap());
+    provenance.push(
+        ProvenanceNodeV1::new(
+            output,
+            link_inputs.iter().map(|input| input.identity()).collect(),
+        )
+        .unwrap(),
+    );
     MultiInputLinkPlanV1::canonicalized(
         target,
-        inputs,
+        link_inputs,
         vec![LinkOptionV1::new("code-object-version", version).unwrap()],
         LinkOutputV1::new(output, target),
         provenance,
@@ -140,606 +141,638 @@ fn plan(
     .unwrap()
 }
 
+fn final_symbols_claim(
+    symbols: Vec<String>,
+    inputs: &[FfiPlanInputClaimV1],
+) -> ExpectedFinalDefinedSymbolsClaimV1 {
+    let coverage = inputs
+        .iter()
+        .enumerate()
+        .map(|(index, input)| {
+            InputSymbolEvidenceCoverageClaimV1::new(
+                input.identity(),
+                input.kind(),
+                if index % 2 == 0 {
+                    FinalSymbolEvidenceSourceClaimV1::BoundedInputInspection
+                } else {
+                    FinalSymbolEvidenceSourceClaimV1::AuthenticatedInputManifest
+                },
+                [0x40 + index as u8; 32],
+            )
+            .unwrap()
+        })
+        .collect();
+    ExpectedFinalDefinedSymbolsClaimV1::new(symbols, coverage).unwrap()
+}
+
 fn fixture() -> Fixture {
-    let rust_input = ContentIdentityV1::calculate(b"compiler Rust LLVM bitcode");
-    let external_input = ContentIdentityV1::calculate(b"external AMDGPU object");
-    let support_input = ContentIdentityV1::calculate(b"link support LLVM bitcode");
-    let mut plan_inputs = vec![
-        CompilerFfiPlanInputBindingV1::new(
-            rust_input,
-            WorkerInputKindV1::LlvmBitcode,
-            CompilerFfiPlanInputRoleV1::RustCompilerBitcode,
-        )
-        .unwrap(),
-        CompilerFfiPlanInputBindingV1::new(
+    let compiler_module = ContentIdentityV1::calculate(b"future exact compiler module claim");
+    let external_input = ContentIdentityV1::calculate(b"external AMDGPU provider object");
+    let support_input = ContentIdentityV1::calculate(b"link support bitcode");
+    let mut inputs = vec![
+        FfiPlanInputClaimV1::new(
+            compiler_module,
+            WorkerInputKindV1::AmdGpuRelocatable,
+            FfiPlanInputRoleClaimV1::CompilerModule,
+            producer(1, "future-rustc-module-producer"),
+        ),
+        FfiPlanInputClaimV1::new(
             external_input,
             WorkerInputKindV1::AmdGpuRelocatable,
-            CompilerFfiPlanInputRoleV1::ExternalDefinitionProvider,
-        )
-        .unwrap(),
-        CompilerFfiPlanInputBindingV1::new(
+            FfiPlanInputRoleClaimV1::ExternalSymbolProvider,
+            producer(2, "external-provider"),
+        ),
+        FfiPlanInputClaimV1::new(
             support_input,
             WorkerInputKindV1::LlvmBitcode,
-            CompilerFfiPlanInputRoleV1::LinkSupport,
-        )
-        .unwrap(),
+            FfiPlanInputRoleClaimV1::LinkSupport,
+            producer(3, "link-support"),
+        ),
     ];
-    plan_inputs.sort_by_key(|binding| binding.identity());
-    let identities: Vec<_> = plan_inputs
-        .iter()
-        .map(|binding| binding.identity())
-        .collect();
-    let plan = plan(target(), "5", &identities);
-
+    inputs.sort_by_key(FfiPlanInputClaimV1::identity);
+    let plan = build_plan(target(), "5", &inputs);
     let mut symbols = vec![
-        make_symbol(
-            CompilerFfiDirectionV1::Import,
+        symbol(
+            G4FfiDirectionClaimV1::Import,
             "external_add",
             IMPORT_ABI,
             owner(1, "external_add"),
-            claims(target(), CodeObjectVersion::V5, "read_global", 0x11),
+            declared(target(), CodeObjectVersion::V5, "read_global", 0x11),
         ),
-        make_symbol(
-            CompilerFfiDirectionV1::Export,
+        symbol(
+            G4FfiDirectionClaimV1::Export,
             "rust_helper",
             EXPORT_ABI,
             owner(2, "rust_helper"),
-            claims(target(), CodeObjectVersion::V5, "none", 0x22),
+            declared(target(), CodeObjectVersion::V5, "none", 0x22),
         ),
     ];
     symbols.sort_by(|left, right| left.symbol().cmp(right.symbol()));
-    let compiler = CompilerFfiClosureV1::new(
+    let envelope = G4FfiClaimEnvelopeV1::new(
         target(),
         CodeObjectVersion::V5,
         strings(&["external_add", "kernel_main", "rust_helper"]),
+        1,
+        1,
         symbols,
     )
     .unwrap();
-    let mut providers: Vec<_> = compiler
+    let mut providers: Vec<_> = envelope
         .symbols()
         .iter()
         .map(|symbol| {
-            let (identity, kind) = match symbol.definition() {
-                CompilerFfiDefinitionV1::ExternalPlanInput => {
-                    (external_input, WorkerInputKindV1::AmdGpuRelocatable)
-                }
-                CompilerFfiDefinitionV1::RustCompilerBitcode => {
-                    (rust_input, WorkerInputKindV1::LlvmBitcode)
-                }
+            let input = match symbol.provider_class() {
+                G4SymbolProviderClassClaimV1::ExternalPlanInput => inputs
+                    .iter()
+                    .find(|input| input.identity() == external_input)
+                    .unwrap(),
+                G4SymbolProviderClassClaimV1::CompilerModuleInput => inputs
+                    .iter()
+                    .find(|input| input.identity() == compiler_module)
+                    .unwrap(),
             };
-            CompilerFfiProviderBindingV1::new(
+            FfiSymbolProviderBindingClaimV1::new(
                 symbol.contract_identity(),
-                symbol.source_owner().identity(),
-                identity,
-                kind,
+                symbol.declaration_owner().identity(),
+                input.identity(),
+                input.kind(),
+                input.producer().identity(),
             )
         })
         .collect();
-    providers.sort_by_key(|binding| binding.contract_identity());
+    providers.sort_by_key(FfiSymbolProviderBindingClaimV1::contract_identity);
+    let final_symbols = final_symbols_claim(
+        strings(&["external_add", "kernel_main", "rust_helper"]),
+        &inputs,
+    );
     Fixture {
         plan,
-        compiler,
-        plan_inputs,
+        envelope,
+        inputs,
         providers,
-        rust_input,
+        final_symbols,
+        compiler_module,
         external_input,
         support_input,
     }
 }
 
-#[test]
-fn closes_exact_compiler_facts_over_the_canonical_g1_plan() {
-    let fixture = fixture();
-    let closed = bind_compiler_ffi_closure_v1(
+fn stage(fixture: &Fixture) -> StagedFfiLinkPlanV1 {
+    stage_g4_ffi_link_plan_v1(
         &fixture.plan,
-        &fixture.compiler,
-        fixture.plan_inputs.clone(),
+        &fixture.envelope,
+        fixture.inputs.clone(),
         fixture.providers.clone(),
+        Some(fixture.final_symbols.clone()),
     )
-    .unwrap();
-
-    assert_eq!(closed.plan_identity(), fixture.plan.identity());
-    assert_eq!(
-        closed.compiler_closure_identity(),
-        fixture.compiler.identity()
-    );
-    assert_eq!(closed.plan_inputs(), fixture.plan_inputs);
-    assert_eq!(closed.provider_bindings(), fixture.providers);
-    assert_eq!(
-        closed.input_kinds().kinds(),
-        fixture
-            .plan_inputs
-            .iter()
-            .map(|binding| binding.kind())
-            .collect::<Vec<_>>()
-    );
-    assert_eq!(
-        closed.symbols().required_symbols(),
-        &strings(&["external_add", "kernel_main", "rust_helper"])
-    );
-    assert_eq!(
-        closed.symbols().import_symbols(),
-        &strings(&["external_add"])
-    );
-    assert_eq!(
-        closed.symbols().export_symbols(),
-        &strings(&["rust_helper"])
-    );
-    assert!(!closed.grants_link_authority());
-    assert!(!closed.grants_load_authority());
-    assert!(!closed.grants_launch_authority());
-    assert!(!closed.effects_are_derived());
-    assert!(!closed.semantics_are_verified());
-    assert_eq!(
-        fixture.compiler.required_symbols_origin(),
-        CompilerFfiFieldOriginV1::CompilerDerived
-    );
-    assert_eq!(
-        fixture.plan_inputs[0].origin(),
-        CompilerFfiFieldOriginV1::CallerBindingClaim
-    );
+    .unwrap()
 }
 
 #[test]
-fn canonical_bytes_and_identities_are_domain_separated_and_stable() {
+fn complete_ffi_identity_is_staged_but_never_decomposed_into_worker_v1() {
     let fixture = fixture();
-    let first = bind_compiler_ffi_closure_v1(
-        &fixture.plan,
-        &fixture.compiler,
-        fixture.plan_inputs.clone(),
-        fixture.providers.clone(),
-    )
-    .unwrap();
-    let second = bind_compiler_ffi_closure_v1(
-        &fixture.plan,
-        &fixture.compiler,
-        fixture.plan_inputs.clone(),
-        fixture.providers.clone(),
-    )
-    .unwrap();
+    let staged = stage(&fixture);
 
-    assert_eq!(first, second);
-    assert!(
-        fixture
-            .compiler
-            .canonical_bytes()
-            .starts_with(b"FE2O3/COMPILER-FFI-CLOSURE/V1\0")
+    assert_eq!(staged.plan_identity(), fixture.plan.identity());
+    assert_eq!(
+        staged.g4_claim_envelope_identity(),
+        fixture.envelope.identity()
     );
-    assert!(
-        first
-            .canonical_bytes()
-            .starts_with(b"FE2O3/PLAN-BOUND-COMPILER-FFI-CLOSURE/V1\0")
+    assert_eq!(staged.input_claims(), fixture.inputs);
+    assert_eq!(staged.provider_binding_claims(), fixture.providers);
+    assert_eq!(
+        staged.final_symbols_claim().unwrap(),
+        &fixture.final_symbols
     );
     assert_eq!(
-        fixture.compiler.identity().as_bytes(),
-        &<[u8; 32]>::from(Sha256::digest(fixture.compiler.canonical_bytes()))
+        staged.execution_blocker(),
+        StagedFfiExecutionBlockerV1::WorkerProtocolV1CannotBindCompleteFfiIdentity
     );
-    assert_eq!(
-        first.identity().as_bytes(),
-        &<[u8; 32]>::from(Sha256::digest(first.canonical_bytes()))
-    );
-    assert_eq!(
-        hex(fixture.compiler.identity().as_bytes()),
-        "908b69b538a599d6c3499ecff0a3d746863f31561f975a63ee5be27708811388"
-    );
-    assert_eq!(
-        hex(first.identity().as_bytes()),
-        "2c563bc51223174f2565d3184b69eece6788d1211d442b1410ac8d2cd38a8bad"
-    );
+    assert!(!staged.can_construct_worker_request_v1());
+    assert!(!staged.can_bind_worker_response_v1());
+    assert!(!staged.compiler_module_claim_is_authenticated());
+    assert!(!staged.grants_link_authority());
+    assert!(!staged.grants_load_authority());
+    assert!(!staged.grants_launch_authority());
 }
 
 #[test]
-fn field_origins_do_not_upgrade_declaration_claims() {
+fn missing_final_symbol_evidence_remains_explicitly_nonexecutable() {
+    let fixture = fixture();
+    let staged = stage_g4_ffi_link_plan_v1(
+        &fixture.plan,
+        &fixture.envelope,
+        fixture.inputs.clone(),
+        fixture.providers.clone(),
+        None,
+    )
+    .unwrap();
+
+    assert!(staged.final_symbols_claim().is_none());
+    assert_eq!(
+        staged.execution_blocker(),
+        StagedFfiExecutionBlockerV1::MissingExpectedFinalDefinedSymbolsClaim
+    );
+    assert!(!staged.can_construct_worker_request_v1());
+}
+
+#[test]
+fn every_public_adapter_field_remains_an_assertion_only_claim() {
+    let fixture = fixture();
+    assert_eq!(
+        fixture.envelope.claim_origin(),
+        FfiClaimOriginV1::G4AssertionOnly
+    );
+    assert!(!fixture.envelope.is_actual_compiler_integration());
     for field in [
-        CompilerFfiSymbolFieldV1::ContractIdentity,
-        CompilerFfiSymbolFieldV1::Direction,
-        CompilerFfiSymbolFieldV1::Symbol,
-        CompilerFfiSymbolFieldV1::PhysicalAbi,
-        CompilerFfiSymbolFieldV1::SourceOwner,
-        CompilerFfiSymbolFieldV1::Definition,
+        G4FfiSymbolClaimFieldV1::ContractIdentity,
+        G4FfiSymbolClaimFieldV1::Direction,
+        G4FfiSymbolClaimFieldV1::Symbol,
+        G4FfiSymbolClaimFieldV1::PhysicalAbi,
+        G4FfiSymbolClaimFieldV1::DeclarationOwner,
+        G4FfiSymbolClaimFieldV1::ProviderClass,
+        G4FfiSymbolClaimFieldV1::Target,
+        G4FfiSymbolClaimFieldV1::CodeObjectVersion,
+        G4FfiSymbolClaimFieldV1::Effects,
+        G4FfiSymbolClaimFieldV1::SemanticIdentity,
     ] {
         assert_eq!(
-            CompilerFfiSymbolV1::field_origin(field),
-            CompilerFfiFieldOriginV1::CompilerDerived
+            G4FfiSymbolClaimV1::field_claim_origin(field),
+            FfiClaimOriginV1::G4AssertionOnly
         );
     }
-    for field in [
-        CompilerFfiSymbolFieldV1::Target,
-        CompilerFfiSymbolFieldV1::CodeObjectVersion,
-        CompilerFfiSymbolFieldV1::Effects,
-        CompilerFfiSymbolFieldV1::SemanticClaim,
-    ] {
-        assert_eq!(
-            CompilerFfiSymbolV1::field_origin(field),
-            CompilerFfiFieldOriginV1::DeclaredClaim
-        );
-    }
-    let declared = claims(target(), CodeObjectVersion::V5, "none", 1);
-    assert_eq!(declared.origin(), CompilerFfiFieldOriginV1::DeclaredClaim);
-    assert!(!declared.effects_are_derived());
-    assert!(!declared.semantics_are_verified());
+    assert_eq!(
+        fixture.inputs[0].claim_origin(),
+        FfiClaimOriginV1::CallerBindingAssertionOnly
+    );
+    assert_eq!(
+        fixture.inputs[0].producer().claim_origin(),
+        FfiClaimOriginV1::UnauthenticatedProducerClaim
+    );
+    assert!(!fixture.inputs[0].producer().is_authenticated());
+    assert_eq!(
+        fixture.final_symbols.claim_origin(),
+        FfiClaimOriginV1::UnauthenticatedEvidenceClaim
+    );
+    assert!(!fixture.final_symbols.is_authenticated());
 }
 
 #[test]
-fn source_owner_identity_uses_stable_instance_fields_not_labels() {
-    let first = CompilerFfiSourceOwnerV1::new(
-        "first_label",
-        "first_label::path",
-        [7; 16],
-        "_Rstable_instance",
+fn declaration_owner_and_unauthenticated_producer_are_separate_identities() {
+    let first = owner(7, "same_item");
+    let relabeled = G4DeclarationOwnerClaimV1::new(
+        "new_label",
+        "new_label::path",
+        *first.def_path_hash(),
+        first.concrete_instance_symbol(),
     )
     .unwrap();
-    let relabeled = CompilerFfiSourceOwnerV1::new(
-        "second_label",
-        "second_label::different_path",
-        [7; 16],
-        "_Rstable_instance",
-    )
-    .unwrap();
-    let other_instance = CompilerFfiSourceOwnerV1::new(
-        "first_label",
-        "first_label::path",
-        [7; 16],
-        "_Rother_instance",
-    )
-    .unwrap();
+    let producer = producer(7, "producer-is-not-owner");
 
     assert_eq!(first.identity(), relabeled.identity());
-    assert_ne!(first.identity(), other_instance.identity());
-}
-
-#[test]
-fn contract_identity_rejects_field_substitution() {
-    let declared = claims(target(), CodeObjectVersion::V5, "none", 0x22);
-    let identity = contract_identity(
-        CompilerFfiDirectionV1::Export,
-        "rust_helper",
-        EXPORT_ABI,
-        &declared,
-    );
-    let error = CompilerFfiSymbolV1::new(
-        identity,
-        CompilerFfiDirectionV1::Export,
-        "rust_helper",
-        "C(u64[size=8,align=8])->u64[size=8,align=8]",
-        owner(2, "rust_helper"),
-        CompilerFfiDefinitionV1::RustCompilerBitcode,
-        declared,
-    )
-    .unwrap_err();
-    assert!(matches!(
-        error,
-        CompilerFfiBridgeError::ContractIdentityMismatch { .. }
-    ));
-
+    assert_ne!(first.identity().as_bytes(), producer.identity().as_bytes());
+    assert_eq!(first.claim_origin(), FfiClaimOriginV1::G4AssertionOnly);
     assert_eq!(
-        CompilerFfiContractIdentityV1::from_bytes([0; 32]),
-        Err(CompilerFfiBridgeError::ReservedIdentity(
-            "compiler FFI contract"
-        ))
+        producer.claim_origin(),
+        FfiClaimOriginV1::UnauthenticatedProducerClaim
     );
 }
 
 #[test]
-fn compiler_closure_rejects_permutations_bounds_and_incomplete_symbols() {
+fn neutral_compiler_module_claim_does_not_imply_llvm_bitcode_or_actual_emission() {
     let fixture = fixture();
-    let mut reversed = fixture.compiler.symbols().to_vec();
-    reversed.reverse();
-    assert_eq!(
-        CompilerFfiClosureV1::new(
-            target(),
-            CodeObjectVersion::V5,
-            fixture.compiler.required_symbols().to_vec(),
-            reversed,
-        ),
-        Err(CompilerFfiBridgeError::NonCanonicalCompilerSymbols)
-    );
+    let module = fixture
+        .inputs
+        .iter()
+        .find(|input| input.identity() == fixture.compiler_module)
+        .unwrap();
+    assert_eq!(module.role(), FfiPlanInputRoleClaimV1::CompilerModule);
+    assert_eq!(module.kind(), WorkerInputKindV1::AmdGpuRelocatable);
+    assert!(!stage(&fixture).compiler_module_claim_is_authenticated());
+}
 
-    let only_export = fixture
-        .compiler
+#[test]
+fn import_only_and_kernel_only_claims_still_require_one_compiler_module() {
+    let fixture = fixture();
+    let import = fixture
+        .envelope
         .symbols()
         .iter()
-        .find(|symbol| symbol.direction() == CompilerFfiDirectionV1::Export)
+        .find(|symbol| symbol.direction() == G4FfiDirectionClaimV1::Import)
         .unwrap()
         .clone();
+    let import_only = G4FfiClaimEnvelopeV1::new(
+        target(),
+        CodeObjectVersion::V5,
+        strings(&["external_add", "kernel_main"]),
+        0,
+        1,
+        vec![import],
+    )
+    .unwrap();
+    let without_module: Vec<_> = fixture
+        .inputs
+        .iter()
+        .filter(|input| input.identity() != fixture.compiler_module)
+        .cloned()
+        .collect();
+    let plan_without_module = build_plan(target(), "5", &without_module);
+    let external_binding = fixture
+        .providers
+        .iter()
+        .find(|binding| binding.provider_input_identity() == fixture.external_input)
+        .copied()
+        .unwrap();
     assert_eq!(
-        CompilerFfiClosureV1::new(
-            target(),
-            CodeObjectVersion::V5,
-            strings(&["kernel_main"]),
-            vec![only_export],
+        stage_g4_ffi_link_plan_v1(
+            &plan_without_module,
+            &import_only,
+            without_module,
+            vec![external_binding],
+            None,
         ),
-        Err(CompilerFfiBridgeError::MissingRequiredSymbol(
-            "rust_helper".to_owned()
-        ))
+        Err(StagedFfiLinkError::MissingCompilerModuleInputClaim)
     );
 
-    let too_many = vec![fixture.compiler.symbols()[0].clone(); MAX_COMPILER_FFI_SYMBOLS_V1 + 1];
+    let module_input = fixture
+        .inputs
+        .iter()
+        .find(|input| input.identity() == fixture.compiler_module)
+        .unwrap()
+        .clone();
+    let kernel_inputs = vec![module_input];
+    let kernel_plan = build_plan(target(), "5", &kernel_inputs);
+    let kernel_only = G4FfiClaimEnvelopeV1::new(
+        target(),
+        CodeObjectVersion::V5,
+        strings(&["kernel_main"]),
+        0,
+        1,
+        vec![],
+    )
+    .unwrap();
+    let staged =
+        stage_g4_ffi_link_plan_v1(&kernel_plan, &kernel_only, kernel_inputs, vec![], None).unwrap();
     assert_eq!(
-        CompilerFfiClosureV1::new(
-            target(),
-            CodeObjectVersion::V5,
-            fixture.compiler.required_symbols().to_vec(),
-            too_many,
-        ),
-        Err(CompilerFfiBridgeError::TooManyCompilerFfiSymbols)
+        staged.execution_blocker(),
+        StagedFfiExecutionBlockerV1::MissingExpectedFinalDefinedSymbolsClaim
     );
 }
 
 #[test]
-fn symbol_target_version_role_and_text_must_be_canonical() {
-    let wrong_target_symbol = make_symbol(
-        CompilerFfiDirectionV1::Export,
-        "rust_helper",
-        EXPORT_ABI,
-        owner(2, "rust_helper"),
-        claims(other_target(), CodeObjectVersion::V5, "none", 0x22),
+fn compiler_module_cardinality_matches_rust_definition_and_kernel_claims() {
+    let fixture = fixture();
+    let mut no_module = fixture.inputs.clone();
+    let index = no_module
+        .iter()
+        .position(|input| input.identity() == fixture.compiler_module)
+        .unwrap();
+    let original = no_module[index].clone();
+    no_module[index] = FfiPlanInputClaimV1::new(
+        original.identity(),
+        original.kind(),
+        FfiPlanInputRoleClaimV1::LinkSupport,
+        original.producer().clone(),
     );
     assert_eq!(
-        CompilerFfiClosureV1::new(
-            target(),
-            CodeObjectVersion::V5,
-            strings(&["rust_helper"]),
-            vec![wrong_target_symbol],
+        stage_g4_ffi_link_plan_v1(
+            &fixture.plan,
+            &fixture.envelope,
+            no_module,
+            fixture.providers.clone(),
+            None,
         ),
-        Err(CompilerFfiBridgeError::SymbolTargetMismatch(
-            "rust_helper".to_owned()
-        ))
+        Err(StagedFfiLinkError::MissingCompilerModuleInputClaim)
     );
 
-    let wrong_version_symbol = make_symbol(
-        CompilerFfiDirectionV1::Export,
-        "rust_helper",
-        EXPORT_ABI,
-        owner(2, "rust_helper"),
-        claims(target(), CodeObjectVersion::V6, "none", 0x22),
+    let mut two_modules = fixture.inputs.clone();
+    let support = two_modules
+        .iter()
+        .position(|input| input.identity() == fixture.support_input)
+        .unwrap();
+    let original = two_modules[support].clone();
+    two_modules[support] = FfiPlanInputClaimV1::new(
+        original.identity(),
+        original.kind(),
+        FfiPlanInputRoleClaimV1::CompilerModule,
+        original.producer().clone(),
     );
     assert_eq!(
-        CompilerFfiClosureV1::new(
-            target(),
-            CodeObjectVersion::V5,
-            strings(&["rust_helper"]),
-            vec![wrong_version_symbol],
+        stage_g4_ffi_link_plan_v1(
+            &fixture.plan,
+            &fixture.envelope,
+            two_modules,
+            fixture.providers.clone(),
+            None,
         ),
-        Err(CompilerFfiBridgeError::SymbolCodeObjectVersionMismatch(
-            "rust_helper".to_owned()
-        ))
+        Err(StagedFfiLinkError::MultipleCompilerModuleInputClaims)
     );
 
-    let declared = claims(target(), CodeObjectVersion::V5, "none", 0x22);
-    let identity = contract_identity(
-        CompilerFfiDirectionV1::Export,
-        "rust_helper",
-        EXPORT_ABI,
-        &declared,
+    let empty_envelope =
+        G4FfiClaimEnvelopeV1::new(target(), CodeObjectVersion::V5, vec![], 0, 0, vec![]).unwrap();
+    assert_eq!(
+        stage_g4_ffi_link_plan_v1(
+            &fixture.plan,
+            &empty_envelope,
+            fixture.inputs.clone(),
+            vec![],
+            None,
+        ),
+        Err(StagedFfiLinkError::UnexpectedCompilerModuleInputClaim)
+    );
+}
+
+#[test]
+fn compiler_required_symbols_are_not_final_defined_symbol_expectations() {
+    let fixture = fixture();
+    let staged_without_final = stage_g4_ffi_link_plan_v1(
+        &fixture.plan,
+        &fixture.envelope,
+        fixture.inputs.clone(),
+        fixture.providers.clone(),
+        None,
+    )
+    .unwrap();
+    assert!(staged_without_final.final_symbols_claim().is_none());
+
+    let incomplete =
+        final_symbols_claim(strings(&["external_add", "rust_helper"]), &fixture.inputs);
+    assert_eq!(
+        stage_g4_ffi_link_plan_v1(
+            &fixture.plan,
+            &fixture.envelope,
+            fixture.inputs.clone(),
+            fixture.providers.clone(),
+            Some(incomplete),
+        ),
+        Err(
+            StagedFfiLinkError::CompilerRequiredSymbolAbsentFromFinalExpectation(
+                "kernel_main".to_owned()
+            )
+        )
+    );
+}
+
+#[test]
+fn final_symbol_expectations_require_exact_all_input_evidence_coverage() {
+    let fixture = fixture();
+    let mut short_coverage = fixture.final_symbols.coverage().to_vec();
+    short_coverage.pop();
+    let short = ExpectedFinalDefinedSymbolsClaimV1::new(
+        fixture.final_symbols.symbols().to_vec(),
+        short_coverage,
+    )
+    .unwrap();
+    assert_eq!(
+        stage_g4_ffi_link_plan_v1(
+            &fixture.plan,
+            &fixture.envelope,
+            fixture.inputs.clone(),
+            fixture.providers.clone(),
+            Some(short),
+        ),
+        Err(StagedFfiLinkError::SymbolEvidenceCoverageCountMismatch {
+            inputs: 3,
+            coverage: 2,
+        })
+    );
+
+    let mut wrong_kind = fixture.final_symbols.coverage().to_vec();
+    let first = wrong_kind[0];
+    wrong_kind[0] = InputSymbolEvidenceCoverageClaimV1::new(
+        first.input_identity(),
+        opposite_kind(first.input_kind()),
+        first.source(),
+        *first.evidence_identity_claim(),
+    )
+    .unwrap();
+    let wrong = ExpectedFinalDefinedSymbolsClaimV1::new(
+        fixture.final_symbols.symbols().to_vec(),
+        wrong_kind,
+    )
+    .unwrap();
+    assert_eq!(
+        stage_g4_ffi_link_plan_v1(
+            &fixture.plan,
+            &fixture.envelope,
+            fixture.inputs.clone(),
+            fixture.providers.clone(),
+            Some(wrong),
+        ),
+        Err(StagedFfiLinkError::SymbolEvidenceCoverageMismatch { index: 0 })
+    );
+
+    let mut permuted = fixture.final_symbols.coverage().to_vec();
+    permuted.swap(0, 1);
+    assert_eq!(
+        ExpectedFinalDefinedSymbolsClaimV1::new(fixture.final_symbols.symbols().to_vec(), permuted,),
+        Err(StagedFfiLinkError::NonCanonicalSymbolEvidenceCoverage)
+    );
+}
+
+#[test]
+fn authoritative_contract_derivation_and_exact_g4_grammar_fail_closed() {
+    let claim = declared(target(), CodeObjectVersion::V5, "read_global", 0x11);
+    let valid = contract_identity(
+        G4FfiDirectionClaimV1::Import,
+        "external_add",
+        IMPORT_ABI,
+        &claim,
+    );
+    assert!(
+        G4FfiSymbolClaimV1::new(
+            valid,
+            G4FfiDirectionClaimV1::Import,
+            "external_add",
+            IMPORT_ABI,
+            owner(1, "external_add"),
+            G4SymbolProviderClassClaimV1::ExternalPlanInput,
+            claim.clone(),
+        )
+        .is_ok()
     );
     assert!(matches!(
-        CompilerFfiSymbolV1::new(
-            identity,
-            CompilerFfiDirectionV1::Export,
-            "rust_helper",
-            EXPORT_ABI,
-            owner(2, "rust_helper"),
-            CompilerFfiDefinitionV1::ExternalPlanInput,
-            declared,
+        G4FfiSymbolClaimV1::new(
+            DeviceFfiContractIdV1::from_bytes([0xfe; 32]),
+            G4FfiDirectionClaimV1::Import,
+            "external_add",
+            IMPORT_ABI,
+            owner(1, "external_add"),
+            G4SymbolProviderClassClaimV1::ExternalPlanInput,
+            claim.clone(),
         ),
-        Err(CompilerFfiBridgeError::DirectionDefinitionMismatch { .. })
+        Err(StagedFfiLinkError::ContractIdentityMismatch { .. })
     ));
-
     assert_eq!(
-        CompilerFfiDeclaredClaimsV1::new(
+        G4FfiSymbolClaimV1::new(
+            valid,
+            G4FfiDirectionClaimV1::Import,
+            "bad symbol",
+            IMPORT_ABI,
+            owner(1, "external_add"),
+            G4SymbolProviderClassClaimV1::ExternalPlanInput,
+            claim.clone(),
+        ),
+        Err(StagedFfiLinkError::InvalidFfiSymbol)
+    );
+    assert_eq!(
+        G4DeclaredContractClaimsV1::new(
             target(),
             CodeObjectVersion::V5,
             "write_global,read_global",
-            [1; 32]
+            [1; 32],
         ),
-        Err(CompilerFfiBridgeError::InvalidEffects)
+        Err(StagedFfiLinkError::InvalidEffects)
     );
     assert_eq!(
-        CompilerFfiSourceOwnerV1::new(
-            "x".repeat(MAX_COMPILER_FFI_CRATE_NAME_BYTES_V1 + 1),
-            "item",
-            [1; 16],
-            "instance"
+        G4FfiSymbolClaimV1::new(
+            valid,
+            G4FfiDirectionClaimV1::Import,
+            "external_add",
+            IMPORT_ABI,
+            owner(1, "external_add"),
+            G4SymbolProviderClassClaimV1::CompilerModuleInput,
+            claim.clone(),
         ),
-        Err(CompilerFfiBridgeError::InvalidText("source crate name"))
+        Err(StagedFfiLinkError::DirectionProviderClassMismatch {
+            symbol: "external_add".to_owned(),
+            direction: G4FfiDirectionClaimV1::Import,
+            provider_class: G4SymbolProviderClassClaimV1::CompilerModuleInput,
+        })
     );
 
-    let oversized_abi = "x".repeat(MAX_COMPILER_FFI_PHYSICAL_ABI_BYTES_V1 + 1);
-    let declared = claims(target(), CodeObjectVersion::V5, "none", 0x22);
+    for bad_abi in [
+        "C( u32[size=4,align=4])->unit[size=0,align=1]",
+        "C(u32[size=8,align=8])->unit[size=0,align=1]",
+        "C(f16[size=2,align=2])->unit[size=0,align=1]",
+        "C(mut_ptr<constant,u32>[size=8,align=8,as=constant])->unit[size=0,align=1]",
+        "C(mut_ptr<global,ptr>[size=8,align=8,as=global])->unit[size=0,align=1]",
+    ] {
+        let identity = contract_identity(
+            G4FfiDirectionClaimV1::Import,
+            "external_add",
+            bad_abi,
+            &claim,
+        );
+        assert_eq!(
+            G4FfiSymbolClaimV1::new(
+                identity,
+                G4FfiDirectionClaimV1::Import,
+                "external_add",
+                bad_abi,
+                owner(1, "external_add"),
+                G4SymbolProviderClassClaimV1::ExternalPlanInput,
+                claim.clone(),
+            ),
+            Err(StagedFfiLinkError::InvalidPhysicalAbi)
+        );
+    }
+
+    let arguments = std::iter::repeat_n("u8[size=1,align=1]", 33)
+        .collect::<Vec<_>>()
+        .join(",");
+    let oversized_arguments = format!("C({arguments})->unit[size=0,align=1]");
     let identity = contract_identity(
-        CompilerFfiDirectionV1::Export,
-        "rust_helper",
-        &oversized_abi,
-        &declared,
+        G4FfiDirectionClaimV1::Import,
+        "external_add",
+        &oversized_arguments,
+        &claim,
     );
     assert_eq!(
-        CompilerFfiSymbolV1::new(
+        G4FfiSymbolClaimV1::new(
             identity,
-            CompilerFfiDirectionV1::Export,
-            "rust_helper",
-            oversized_abi,
-            owner(2, "rust_helper"),
-            CompilerFfiDefinitionV1::RustCompilerBitcode,
-            declared,
+            G4FfiDirectionClaimV1::Import,
+            "external_add",
+            oversized_arguments,
+            owner(1, "external_add"),
+            G4SymbolProviderClassClaimV1::ExternalPlanInput,
+            claim,
         ),
-        Err(CompilerFfiBridgeError::InvalidText("physical ABI"))
+        Err(StagedFfiLinkError::TooManyPhysicalAbiArguments)
     );
 }
 
 #[test]
-fn exact_plan_sequence_target_and_code_object_version_are_required() {
+fn provider_claims_reject_permutation_cardinality_and_substitution() {
     let fixture = fixture();
-    let mut permuted = fixture.plan_inputs.clone();
-    permuted.swap(0, 1);
-    assert!(matches!(
-        bind_compiler_ffi_closure_v1(
+    let mut reversed = fixture.providers.clone();
+    reversed.reverse();
+    assert_eq!(
+        stage_g4_ffi_link_plan_v1(
             &fixture.plan,
-            &fixture.compiler,
-            permuted,
-            fixture.providers.clone()
+            &fixture.envelope,
+            fixture.inputs.clone(),
+            reversed,
+            None,
         ),
-        Err(CompilerFfiBridgeError::PlanInputSequenceMismatch { index: 0, .. })
-    ));
-
-    let mut missing = fixture.plan_inputs.clone();
-    missing.pop();
-    assert_eq!(
-        bind_compiler_ffi_closure_v1(
-            &fixture.plan,
-            &fixture.compiler,
-            missing,
-            fixture.providers.clone()
-        ),
-        Err(CompilerFfiBridgeError::PlanInputCountMismatch {
-            plan: 3,
-            bindings: 2,
-        })
+        Err(StagedFfiLinkError::NonCanonicalProviderBindingClaims)
     );
 
-    let identities: Vec<_> = fixture
-        .plan_inputs
-        .iter()
-        .map(|binding| binding.identity())
-        .collect();
-    assert_eq!(
-        bind_compiler_ffi_closure_v1(
-            &plan(other_target(), "5", &identities),
-            &fixture.compiler,
-            fixture.plan_inputs.clone(),
-            fixture.providers.clone()
-        ),
-        Err(CompilerFfiBridgeError::PlanTargetMismatch)
-    );
-    assert_eq!(
-        bind_compiler_ffi_closure_v1(
-            &plan(target(), "6", &identities),
-            &fixture.compiler,
-            fixture.plan_inputs.clone(),
-            fixture.providers.clone()
-        ),
-        Err(CompilerFfiBridgeError::PlanCodeObjectVersionMismatch {
-            plan: CodeObjectVersion::V6,
-            compiler: CodeObjectVersion::V5,
-        })
-    );
-    assert_eq!(
-        bind_compiler_ffi_closure_v1(
-            &plan(target(), "7", &identities),
-            &fixture.compiler,
-            fixture.plan_inputs.clone(),
-            fixture.providers.clone()
-        ),
-        Err(CompilerFfiBridgeError::InvalidPlanCodeObjectVersion(
-            "7".to_owned()
-        ))
-    );
-}
-
-#[test]
-fn provider_bindings_reject_missing_duplicate_conflicting_and_unknown_contracts() {
-    let fixture = fixture();
     let mut missing = fixture.providers.clone();
     let omitted = missing.pop().unwrap().contract_identity();
     assert_eq!(
-        bind_compiler_ffi_closure_v1(
+        stage_g4_ffi_link_plan_v1(
             &fixture.plan,
-            &fixture.compiler,
-            fixture.plan_inputs.clone(),
-            missing
+            &fixture.envelope,
+            fixture.inputs.clone(),
+            missing,
+            None,
         ),
-        Err(CompilerFfiBridgeError::MissingProviderBinding(omitted))
+        Err(StagedFfiLinkError::MissingProviderBindingClaim(omitted))
     );
 
     let mut duplicate = fixture.providers.clone();
     duplicate.insert(1, duplicate[0]);
     assert_eq!(
-        bind_compiler_ffi_closure_v1(
+        stage_g4_ffi_link_plan_v1(
             &fixture.plan,
-            &fixture.compiler,
-            fixture.plan_inputs.clone(),
-            duplicate
+            &fixture.envelope,
+            fixture.inputs.clone(),
+            duplicate,
+            None,
         ),
-        Err(CompilerFfiBridgeError::DuplicateProviderBinding(
+        Err(StagedFfiLinkError::DuplicateProviderBindingClaim(
             fixture.providers[0].contract_identity()
-        ))
-    );
-
-    let mut conflicting = fixture.providers.clone();
-    let first = conflicting[0];
-    conflicting.insert(
-        1,
-        CompilerFfiProviderBindingV1::new(
-            first.contract_identity(),
-            first.source_owner_identity(),
-            fixture.support_input,
-            WorkerInputKindV1::LlvmBitcode,
-        ),
-    );
-    assert_eq!(
-        bind_compiler_ffi_closure_v1(
-            &fixture.plan,
-            &fixture.compiler,
-            fixture.plan_inputs.clone(),
-            conflicting
-        ),
-        Err(CompilerFfiBridgeError::ConflictingProviderBinding(
-            first.contract_identity()
-        ))
-    );
-
-    let unknown = CompilerFfiContractIdentityV1::from_bytes([0xfe; 32]).unwrap();
-    let mut unreferenced = fixture.providers.clone();
-    unreferenced.push(CompilerFfiProviderBindingV1::new(
-        unknown,
-        fixture.compiler.symbols()[0].source_owner().identity(),
-        fixture.external_input,
-        WorkerInputKindV1::AmdGpuRelocatable,
-    ));
-    unreferenced.sort_by_key(|binding| binding.contract_identity());
-    assert_eq!(
-        bind_compiler_ffi_closure_v1(
-            &fixture.plan,
-            &fixture.compiler,
-            fixture.plan_inputs.clone(),
-            unreferenced
-        ),
-        Err(CompilerFfiBridgeError::UnreferencedProviderBinding(unknown))
-    );
-}
-
-#[test]
-fn provider_permutations_owner_kind_role_and_substitution_fail_closed() {
-    let fixture = fixture();
-    let mut permuted = fixture.providers.clone();
-    permuted.reverse();
-    assert_eq!(
-        bind_compiler_ffi_closure_v1(
-            &fixture.plan,
-            &fixture.compiler,
-            fixture.plan_inputs.clone(),
-            permuted
-        ),
-        Err(CompilerFfiBridgeError::NonCanonicalProviderBindings)
-    );
-
-    let mut wrong_owner = fixture.providers.clone();
-    let binding = wrong_owner[0];
-    wrong_owner[0] = CompilerFfiProviderBindingV1::new(
-        binding.contract_identity(),
-        owner(99, "substitute").identity(),
-        binding.provider_input_identity(),
-        binding.provider_input_kind(),
-    );
-    assert_eq!(
-        bind_compiler_ffi_closure_v1(
-            &fixture.plan,
-            &fixture.compiler,
-            fixture.plan_inputs.clone(),
-            wrong_owner
-        ),
-        Err(CompilerFfiBridgeError::ProviderSourceOwnerMismatch(
-            binding.contract_identity()
         ))
     );
 
@@ -749,180 +782,345 @@ fn provider_permutations_owner_kind_role_and_substitution_fail_closed() {
         .position(|binding| binding.provider_input_identity() == fixture.external_input)
         .unwrap();
     let external = fixture.providers[external_index];
-    let mut wrong_kind = fixture.providers.clone();
-    wrong_kind[external_index] = CompilerFfiProviderBindingV1::new(
-        external.contract_identity(),
-        external.source_owner_identity(),
-        external.provider_input_identity(),
-        WorkerInputKindV1::LlvmBitcode,
-    );
-    assert_eq!(
-        bind_compiler_ffi_closure_v1(
-            &fixture.plan,
-            &fixture.compiler,
-            fixture.plan_inputs.clone(),
-            wrong_kind
-        ),
-        Err(CompilerFfiBridgeError::ProviderInputKindMismatch {
-            contract: external.contract_identity(),
-            declared: WorkerInputKindV1::LlvmBitcode,
-            planned: WorkerInputKindV1::AmdGpuRelocatable,
-        })
-    );
-
-    let mut wrong_role = fixture.providers.clone();
-    wrong_role[external_index] = CompilerFfiProviderBindingV1::new(
-        external.contract_identity(),
-        external.source_owner_identity(),
-        fixture.support_input,
-        WorkerInputKindV1::LlvmBitcode,
-    );
-    assert_eq!(
-        bind_compiler_ffi_closure_v1(
-            &fixture.plan,
-            &fixture.compiler,
-            fixture.plan_inputs.clone(),
-            wrong_role
-        ),
-        Err(CompilerFfiBridgeError::ProviderInputRoleMismatch {
-            contract: external.contract_identity(),
-            definition: CompilerFfiDefinitionV1::ExternalPlanInput,
-            role: CompilerFfiPlanInputRoleV1::LinkSupport,
-        })
-    );
-
-    let substitute = ContentIdentityV1::calculate(b"substituted provider bytes");
+    let substitute = ContentIdentityV1::calculate(b"substituted provider");
     let mut substituted = fixture.providers.clone();
-    substituted[external_index] = CompilerFfiProviderBindingV1::new(
+    substituted[external_index] = FfiSymbolProviderBindingClaimV1::new(
         external.contract_identity(),
-        external.source_owner_identity(),
+        external.declaration_owner_identity(),
         substitute,
-        WorkerInputKindV1::AmdGpuRelocatable,
+        external.provider_input_kind(),
+        external.producer_claim_identity(),
     );
     assert_eq!(
-        bind_compiler_ffi_closure_v1(
+        stage_g4_ffi_link_plan_v1(
             &fixture.plan,
-            &fixture.compiler,
-            fixture.plan_inputs.clone(),
-            substituted
+            &fixture.envelope,
+            fixture.inputs.clone(),
+            substituted,
+            None,
         ),
-        Err(CompilerFfiBridgeError::ProviderInputNotInPlan(substitute))
-    );
-}
-
-#[test]
-fn compiler_input_is_unique_typed_and_referenced() {
-    let fixture = fixture();
-    assert_eq!(
-        CompilerFfiPlanInputBindingV1::new(
-            fixture.rust_input,
-            WorkerInputKindV1::AmdGpuRelocatable,
-            CompilerFfiPlanInputRoleV1::RustCompilerBitcode,
-        ),
-        Err(CompilerFfiBridgeError::CompilerInputIsNotLlvmBitcode)
+        Err(StagedFfiLinkError::ProviderInputAbsent(substitute))
     );
 
-    let mut duplicate_compiler = fixture.plan_inputs.clone();
-    let support_index = duplicate_compiler
-        .iter()
-        .position(|binding| binding.identity() == fixture.support_input)
-        .unwrap();
-    duplicate_compiler[support_index] = CompilerFfiPlanInputBindingV1::new(
-        fixture.support_input,
-        WorkerInputKindV1::LlvmBitcode,
-        CompilerFfiPlanInputRoleV1::RustCompilerBitcode,
-    )
-    .unwrap();
-    assert_eq!(
-        bind_compiler_ffi_closure_v1(
-            &fixture.plan,
-            &fixture.compiler,
-            duplicate_compiler,
-            fixture.providers.clone()
-        ),
-        Err(CompilerFfiBridgeError::MultipleRustCompilerInputs)
+    let mut wrong_producer = fixture.providers.clone();
+    wrong_producer[external_index] = FfiSymbolProviderBindingClaimV1::new(
+        external.contract_identity(),
+        external.declaration_owner_identity(),
+        external.provider_input_identity(),
+        external.provider_input_kind(),
+        producer(99, "substitute-producer").identity(),
     );
-
-    let mut missing_compiler = fixture.plan_inputs.clone();
-    let rust_index = missing_compiler
-        .iter()
-        .position(|binding| binding.identity() == fixture.rust_input)
-        .unwrap();
-    missing_compiler[rust_index] = CompilerFfiPlanInputBindingV1::new(
-        fixture.rust_input,
-        WorkerInputKindV1::LlvmBitcode,
-        CompilerFfiPlanInputRoleV1::LinkSupport,
-    )
-    .unwrap();
     assert_eq!(
-        bind_compiler_ffi_closure_v1(
+        stage_g4_ffi_link_plan_v1(
             &fixture.plan,
-            &fixture.compiler,
-            missing_compiler,
-            fixture.providers.clone()
+            &fixture.envelope,
+            fixture.inputs.clone(),
+            wrong_producer,
+            None,
         ),
-        Err(CompilerFfiBridgeError::MissingRustCompilerInput)
-    );
-
-    let mut unreferenced_external = fixture.plan_inputs.clone();
-    let support_index = unreferenced_external
-        .iter()
-        .position(|binding| binding.identity() == fixture.support_input)
-        .unwrap();
-    unreferenced_external[support_index] = CompilerFfiPlanInputBindingV1::new(
-        fixture.support_input,
-        WorkerInputKindV1::LlvmBitcode,
-        CompilerFfiPlanInputRoleV1::ExternalDefinitionProvider,
-    )
-    .unwrap();
-    assert_eq!(
-        bind_compiler_ffi_closure_v1(
-            &fixture.plan,
-            &fixture.compiler,
-            unreferenced_external,
-            fixture.providers.clone()
-        ),
-        Err(CompilerFfiBridgeError::UnreferencedProviderInput(
-            fixture.support_input
+        Err(StagedFfiLinkError::ProviderProducerClaimMismatch(
+            external.contract_identity()
         ))
     );
 }
 
 #[test]
-fn binding_mutations_change_the_plan_bound_identity() {
+fn exact_plan_input_sequence_target_and_code_object_version_are_required() {
     let fixture = fixture();
-    let original = bind_compiler_ffi_closure_v1(
-        &fixture.plan,
-        &fixture.compiler,
-        fixture.plan_inputs.clone(),
-        fixture.providers.clone(),
-    )
-    .unwrap();
+    let mut permuted = fixture.inputs.clone();
+    permuted.swap(0, 1);
+    assert!(matches!(
+        stage_g4_ffi_link_plan_v1(
+            &fixture.plan,
+            &fixture.envelope,
+            permuted,
+            fixture.providers.clone(),
+            None,
+        ),
+        Err(StagedFfiLinkError::PlanInputClaimSequenceMismatch { index: 0, .. })
+    ));
 
-    let support_index = fixture
-        .plan_inputs
-        .iter()
-        .position(|binding| binding.identity() == fixture.support_input)
-        .unwrap();
-    let mut changed_inputs = fixture.plan_inputs.clone();
-    changed_inputs[support_index] = CompilerFfiPlanInputBindingV1::new(
-        fixture.support_input,
-        WorkerInputKindV1::AmdGpuRelocatable,
-        CompilerFfiPlanInputRoleV1::LinkSupport,
+    let mut short = fixture.inputs.clone();
+    short.pop();
+    assert_eq!(
+        stage_g4_ffi_link_plan_v1(
+            &fixture.plan,
+            &fixture.envelope,
+            short,
+            fixture.providers.clone(),
+            None,
+        ),
+        Err(StagedFfiLinkError::PlanInputClaimCountMismatch { plan: 3, claims: 2 })
+    );
+
+    let other_plan = build_plan(other_target(), "5", &fixture.inputs);
+    assert_eq!(
+        stage_g4_ffi_link_plan_v1(
+            &other_plan,
+            &fixture.envelope,
+            fixture.inputs.clone(),
+            fixture.providers.clone(),
+            None,
+        ),
+        Err(StagedFfiLinkError::PlanTargetMismatch)
+    );
+    let v6_plan = build_plan(target(), "6", &fixture.inputs);
+    assert_eq!(
+        stage_g4_ffi_link_plan_v1(
+            &v6_plan,
+            &fixture.envelope,
+            fixture.inputs.clone(),
+            fixture.providers.clone(),
+            None,
+        ),
+        Err(StagedFfiLinkError::PlanCodeObjectVersionMismatch {
+            plan: CodeObjectVersion::V6,
+            g4_claim: CodeObjectVersion::V5,
+        })
+    );
+}
+
+#[test]
+fn exact_cardinality_and_aggregate_bounds_fail_before_staging() {
+    let fixture = fixture();
+    assert_eq!(
+        G4FfiClaimEnvelopeV1::new(
+            target(),
+            CodeObjectVersion::V5,
+            fixture.envelope.compiler_required_symbols().to_vec(),
+            MAX_G4_RUST_DEFINITION_CLAIMS_V1 + 1,
+            0,
+            vec![],
+        ),
+        Err(StagedFfiLinkError::TooManyRustDefinitionClaims)
+    );
+    assert_eq!(
+        G4FfiClaimEnvelopeV1::new(
+            target(),
+            CodeObjectVersion::V5,
+            fixture.envelope.compiler_required_symbols().to_vec(),
+            0,
+            MAX_G4_KERNEL_CLAIMS_V1 + 1,
+            vec![],
+        ),
+        Err(StagedFfiLinkError::TooManyKernelClaims)
+    );
+    assert_eq!(
+        G4FfiClaimEnvelopeV1::new(
+            target(),
+            CodeObjectVersion::V5,
+            fixture.envelope.compiler_required_symbols().to_vec(),
+            MAX_G4_FFI_SYMBOL_CLAIMS_V1 as u32 + 1,
+            0,
+            vec![fixture.envelope.symbols()[1].clone(); MAX_G4_FFI_SYMBOL_CLAIMS_V1 + 1],
+        ),
+        Err(StagedFfiLinkError::TooManyFfiSymbolClaims)
+    );
+    assert_eq!(
+        G4FfiClaimEnvelopeV1::new(
+            target(),
+            CodeObjectVersion::V5,
+            fixture.envelope.compiler_required_symbols().to_vec(),
+            0,
+            0,
+            vec![fixture.envelope.symbols()[1].clone()],
+        ),
+        Err(StagedFfiLinkError::RustDefinitionCountTooSmall {
+            claimed: 0,
+            exports: 1,
+        })
+    );
+
+    let long_symbols: Vec<_> = (0..1_900)
+        .map(|index| format!("s{index:04}_{}", "x".repeat(210)))
+        .collect();
+    assert!(
+        long_symbols.iter().map(String::len).sum::<usize>() > MAX_G4_FFI_AGGREGATE_TEXT_BYTES_V1
+    );
+    assert_eq!(
+        G4FfiClaimEnvelopeV1::new(
+            target(),
+            CodeObjectVersion::V5,
+            long_symbols.clone(),
+            1,
+            0,
+            vec![],
+        ),
+        Err(StagedFfiLinkError::AggregateTextBoundExceeded)
+    );
+    assert_eq!(
+        ExpectedFinalDefinedSymbolsClaimV1::new(
+            long_symbols,
+            vec![
+                InputSymbolEvidenceCoverageClaimV1::new(
+                    fixture.inputs[0].identity(),
+                    fixture.inputs[0].kind(),
+                    FinalSymbolEvidenceSourceClaimV1::BoundedInputInspection,
+                    [1; 32],
+                )
+                .unwrap()
+            ],
+        ),
+        Err(StagedFfiLinkError::AggregateTextBoundExceeded)
+    );
+}
+
+#[test]
+fn abi_owner_provider_effect_and_semantic_changes_alter_the_opaque_identity() {
+    let fixture = fixture();
+    let original = stage(&fixture);
+
+    let import_changed_effect = symbol(
+        G4FfiDirectionClaimV1::Import,
+        "external_add",
+        IMPORT_ABI,
+        owner(1, "external_add"),
+        declared(target(), CodeObjectVersion::V5, "write_global", 0x11),
+    );
+    let export_changed_abi = symbol(
+        G4FfiDirectionClaimV1::Export,
+        "rust_helper",
+        "C(u64[size=8,align=8])->u64[size=8,align=8]",
+        owner(9, "rust_helper"),
+        declared(target(), CodeObjectVersion::V5, "none", 0x33),
+    );
+    let mut changed_symbols = vec![import_changed_effect, export_changed_abi];
+    changed_symbols.sort_by(|left, right| left.symbol().cmp(right.symbol()));
+    let changed_envelope = G4FfiClaimEnvelopeV1::new(
+        target(),
+        CodeObjectVersion::V5,
+        fixture.envelope.compiler_required_symbols().to_vec(),
+        1,
+        1,
+        changed_symbols,
     )
     .unwrap();
-    let changed = bind_compiler_ffi_closure_v1(
+    assert_ne!(fixture.envelope.identity(), changed_envelope.identity());
+
+    let mut changed_providers: Vec<_> = changed_envelope
+        .symbols()
+        .iter()
+        .map(|symbol| {
+            let input = match symbol.provider_class() {
+                G4SymbolProviderClassClaimV1::ExternalPlanInput => fixture
+                    .inputs
+                    .iter()
+                    .find(|input| input.identity() == fixture.external_input)
+                    .unwrap(),
+                G4SymbolProviderClassClaimV1::CompilerModuleInput => fixture
+                    .inputs
+                    .iter()
+                    .find(|input| input.identity() == fixture.compiler_module)
+                    .unwrap(),
+            };
+            FfiSymbolProviderBindingClaimV1::new(
+                symbol.contract_identity(),
+                symbol.declaration_owner().identity(),
+                input.identity(),
+                input.kind(),
+                input.producer().identity(),
+            )
+        })
+        .collect();
+    changed_providers.sort_by_key(FfiSymbolProviderBindingClaimV1::contract_identity);
+    let changed = stage_g4_ffi_link_plan_v1(
         &fixture.plan,
-        &fixture.compiler,
-        changed_inputs,
-        fixture.providers.clone(),
+        &changed_envelope,
+        fixture.inputs.clone(),
+        changed_providers,
+        Some(fixture.final_symbols.clone()),
     )
     .unwrap();
     assert_ne!(original.identity(), changed.identity());
-    assert_ne!(
-        original.input_kinds().identity(),
-        changed.input_kinds().identity()
+
+    let mut changed_inputs = fixture.inputs.clone();
+    let external_index = changed_inputs
+        .iter()
+        .position(|input| input.identity() == fixture.external_input)
+        .unwrap();
+    let external = changed_inputs[external_index].clone();
+    changed_inputs[external_index] = FfiPlanInputClaimV1::new(
+        external.identity(),
+        external.kind(),
+        external.role(),
+        producer(88, "different-producer-claim"),
     );
+    let mut reciprocal = fixture.providers.clone();
+    let provider_index = reciprocal
+        .iter()
+        .position(|binding| binding.provider_input_identity() == fixture.external_input)
+        .unwrap();
+    let binding = reciprocal[provider_index];
+    reciprocal[provider_index] = FfiSymbolProviderBindingClaimV1::new(
+        binding.contract_identity(),
+        binding.declaration_owner_identity(),
+        binding.provider_input_identity(),
+        binding.provider_input_kind(),
+        changed_inputs[external_index].producer().identity(),
+    );
+    let producer_changed = stage_g4_ffi_link_plan_v1(
+        &fixture.plan,
+        &fixture.envelope,
+        changed_inputs,
+        reciprocal,
+        Some(fixture.final_symbols.clone()),
+    )
+    .unwrap();
+    assert_ne!(original.identity(), producer_changed.identity());
+}
+
+#[test]
+fn canonical_staging_bytes_have_stable_golden_identities() {
+    let fixture = fixture();
+    let staged = stage(&fixture);
+    assert!(
+        fixture
+            .envelope
+            .canonical_bytes()
+            .starts_with(b"FE2O3/G4-FFI-ASSERTION-ONLY-ENVELOPE/V1\0")
+    );
+    assert!(
+        fixture
+            .final_symbols
+            .canonical_bytes()
+            .starts_with(b"FE2O3/EXPECTED-FINAL-DEFINED-SYMBOLS-CLAIM/V1\0")
+    );
+    assert!(
+        staged
+            .canonical_bytes()
+            .starts_with(b"FE2O3/STAGED-FFI-LINK-PLAN/V1\0")
+    );
+    assert_eq!(
+        fixture.envelope.identity().as_bytes(),
+        &<[u8; 32]>::from(Sha256::digest(fixture.envelope.canonical_bytes()))
+    );
+    assert_eq!(
+        fixture.final_symbols.identity().as_bytes(),
+        &<[u8; 32]>::from(Sha256::digest(fixture.final_symbols.canonical_bytes()))
+    );
+    assert_eq!(
+        staged.identity().as_bytes(),
+        &<[u8; 32]>::from(Sha256::digest(staged.canonical_bytes()))
+    );
+    assert_eq!(
+        hex(fixture.envelope.identity().as_bytes()),
+        "ce28a414534a24a46a0d1b32abd059af6751748ab7adf5ffb592a81af5a9cfbf"
+    );
+    assert_eq!(
+        hex(fixture.final_symbols.identity().as_bytes()),
+        "481cc54741209b26cd37fa43aa45a280f698930bb1443cd53e61601370749bfc"
+    );
+    assert_eq!(
+        hex(staged.identity().as_bytes()),
+        "094118e3859aacaf4a6c18d7388e39ca12a803fe1dd40568100f828a244b654a"
+    );
+}
+
+fn opposite_kind(kind: WorkerInputKindV1) -> WorkerInputKindV1 {
+    match kind {
+        WorkerInputKindV1::LlvmBitcode => WorkerInputKindV1::AmdGpuRelocatable,
+        WorkerInputKindV1::AmdGpuRelocatable => WorkerInputKindV1::LlvmBitcode,
+    }
 }
 
 fn strings(values: &[&str]) -> Vec<String> {
