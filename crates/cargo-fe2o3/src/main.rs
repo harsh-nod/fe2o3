@@ -38,8 +38,8 @@ fn main() -> ExitCode {
         "examples" => example_manifest::command(&rest),
         "clean" => clean_command(&rest),
         "inspect" => report(inspect::command(&rest)),
-        "sanitize" => report(tool_commands::command(tool_commands::Mode::Sanitize, &rest)),
-        "debug" => report(tool_commands::command(tool_commands::Mode::Debug, &rest)),
+        "sanitize" => tool_report(tool_commands::command(tool_commands::Mode::Sanitize, &rest)),
+        "debug" => tool_report(tool_commands::command(tool_commands::Mode::Debug, &rest)),
         "help" | "--help" | "-h" => {
             print_help();
             ExitCode::SUCCESS
@@ -57,6 +57,23 @@ fn report(result: Result<String, String>) -> ExitCode {
         Ok(output) => {
             println!("{output}");
             ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn tool_report(result: Result<tool_commands::CommandReport, String>) -> ExitCode {
+    match result {
+        Ok(report) => {
+            println!("{}", report.output());
+            if report.succeeded() {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            }
         }
         Err(error) => {
             eprintln!("{error}");
@@ -545,7 +562,7 @@ fn is_gfx_target(candidate: &str) -> bool {
 
 fn print_help() {
     eprintln!(
-        "usage: cargo fe2o3 <command>\n\ncommands:\n  doctor              check ROCm/HIP toolchain discovery\n  build               build with the fe2o3 rustc backend\n  run                 run with the fe2o3 rustc backend\n  smoke               run manifest-selected GPU examples\n  examples            validate or query the example regression manifest\n  clean [--dry-run]   preview or remove target/fe2o3 artifacts (removal requires Unix)\n  inspect             inspect bounded artifact or HSACO metadata without execution\n  sanitize            print a ROCgdb precise-memory checker plan without execution\n  debug               print an interactive ROCgdb plan without execution"
+        "usage: cargo fe2o3 <command>\n\ncommands:\n  doctor              check ROCm/HIP toolchain discovery\n  build               build with the fe2o3 rustc backend\n  run                 run with the fe2o3 rustc backend\n  smoke               run manifest-selected GPU examples\n  examples            validate or query the example regression manifest\n  clean [--dry-run]   preview or remove target/fe2o3 artifacts (removal requires Unix)\n  inspect             inspect bounded artifact or HSACO metadata without execution\n  sanitize            plan or execute bounded ROCgdb precise-memory diagnostics\n  debug               plan or execute bounded batch/interactive ROCgdb sessions"
     );
 }
 
