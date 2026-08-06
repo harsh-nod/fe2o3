@@ -176,6 +176,36 @@ its device, validate the payload metadata, and keep any stronger device-bound
 token private. A caller-constructed `TargetIdentity` cannot authorize safe
 loading, ABI matching, or launch.
 
+## Direct-link bundle evidence
+
+`DirectLinkBundleEvidenceV1` is a separate bounded companion envelope. It
+binds the canonical bundle-index identity and, for each finalized native
+payload, the canonical container identity, request, measured worker, measured
+LLVM/LLD toolchain, response, linked output, finalization/inspection, finalized payload, and closed FFI
+contract identities. The linked and finalized output identities are distinct:
+descriptor finalization patches the canonical code-object digest slot. An
+explicit finalization identity binds the descriptor transformation and
+independent inspection between those byte identities. Construction verifies that the finalized payload is a
+digest-valid native executable in the container and that the container's full
+target, payload, and kernel closure appears unchanged in the bundle index.
+
+The record begins with `FE2O3DL\0`, version `1`, and zero flags. Bindings are
+bounded, unique by request, response, and finalized payload identity, and
+ordered by finalized payload identity. Tool names and versions use the same
+bounded identity-text grammar as other artifact records. Decoding rejects
+unknown versions, flags, algorithms, nonzero reserved fields, zero or excessive
+counts, oversized text, duplicate or noncanonical bindings, truncation, and
+trailing bytes. This companion leaves all existing V1 wire encodings unchanged.
+
+Decoded evidence remains untrusted. `validate_against` compares every recorded
+field with caller-derived expectations and recomputes container and bundle
+identities, but returns only `Result<(), _>`. The caller must authenticate the
+complete evidence record under its own policy. Neither an authenticated record
+nor successful matching grants device selection, module loading, symbol lookup,
+ABI compatibility, or kernel launch authority. The explicit
+`grants_load_authority` and `grants_launch_authority` queries therefore always
+return `false`.
+
 ## V1 wire format
 
 `ManifestV1::to_bytes` emits a canonical little-endian binary representation.

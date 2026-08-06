@@ -11,6 +11,9 @@ mod container_decode;
 mod container_encode;
 mod decode;
 mod digest;
+mod direct_link;
+mod direct_link_decode;
+mod direct_link_encode;
 mod encode;
 mod error;
 mod generated_kernel_identity;
@@ -49,6 +52,17 @@ pub use container_encode::{
     PAYLOAD_DESCRIPTOR_BYTES,
 };
 pub use digest::{DigestAlgorithm, DigestMismatch, PayloadDigest};
+pub use direct_link::{
+    DIRECT_LINK_EVIDENCE_DIGEST_ALGORITHM, DirectLinkBindingExpectationV1,
+    DirectLinkBindingSourceV1, DirectLinkBindingV1, DirectLinkBundleEvidenceV1,
+    DirectLinkEvidenceError, DirectLinkToolIdentityV1, DirectLinkTransformationIdentityV1,
+    MAX_DIRECT_LINK_BINDINGS,
+};
+pub use direct_link_decode::DirectLinkDecodeError;
+pub use direct_link_encode::{
+    DIRECT_LINK_EVIDENCE_HEADER_BYTES, DIRECT_LINK_EVIDENCE_MAGIC, DIRECT_LINK_EVIDENCE_VERSION,
+    MAX_DIRECT_LINK_EVIDENCE_BYTES,
+};
 pub use encode::{MANIFEST_MAGIC, MANIFEST_VERSION, MAX_MANIFEST_BYTES};
 pub use error::{DecodeError, ValidationError};
 pub use generated_kernel_identity::{
