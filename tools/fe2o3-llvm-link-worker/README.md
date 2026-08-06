@@ -58,7 +58,9 @@ The repository integration driver requires an absolute build directory that
 does not exist, then performs a Release configuration, native CTests, focused
 Rust tests, and a mixed-input execution through `PinnedWorkerV1`. Cargo, rustc,
 the source commit, and the Rust toolchain manifest are content-pinned. The
-driver accepts success only after machine-readable Cargo/libtest JSON proves
+Cargo and rustc paths must share the declared toolchain directory; Cargo runs
+with only that toolchain's library directory inherited in `LD_LIBRARY_PATH`.
+The driver accepts success only after machine-readable Cargo/libtest JSON proves
 that the exact ignored integration test ran and passed. A missing prerequisite,
 dirty source tree, reused output path, empty evidence stream, or stale HSACO is
 an error. The final line states that this is native link integration rather
