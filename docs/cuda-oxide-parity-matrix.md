@@ -18,7 +18,7 @@ partial, experimental, planned, and N/A rows. The supplemental audit also
 accounts for capabilities demonstrated elsewhere in the repository.
 
 The fe2o3 current-state column is based on commit
-`62e375d8273285514e43ab1678fb24c772133fa4`.
+`ea7ca6e4cce38ebe07083fb18d4bc5165e8eb048`.
 <!-- parity-status:baseline:end -->
 
 At that commit fe2o3 has a HIP runtime, explicit unsafe raw module and launch
@@ -107,9 +107,11 @@ The detailed dependencies and exit criteria are in
   `KernelMarkerV1`; public kernels expose that marker publicly. Reachable helper
   collection, helper-call translation, and multiple kernels are exercised. For
   the exact vecadd signature, `#[kernel(typed)]` emits a public generated host
-  module and a versioned typed registration. The backend/linker association is
-  still a trusted compiler contract, and the default narrow emitter plus opt-in
-  exact fill and vecadd paths are not a general compiler or multi-kernel bundle.
+  module and a V2 typed registration. Full crate/kernel binding IDs are derived
+  independently by the Cargo wrapper, macro, and backend and qualify private
+  host/accessor symbols; a real two-rlib same-name link test rejects silent
+  archive coalescing. The association is still a trusted compiler contract, and
+  the narrow emitters are not a general compiler or multi-kernel bundle.
 - Rows 36-38 and 41-43: one-source builds, AMDGPU LLVM/HSACO sidecars, diagnostic
   dumps, bounded HSACO inspection, project-local cleanup, and the opt-in exact
   fill and vecadd paths exist. The general pipeline, user-facing `inspect`
@@ -131,8 +133,8 @@ The detailed dependencies and exit criteria are in
   profile. `prepare` checks context, equal nonzero lengths, u32 index geometry,
   resource limits, and alias admission while retaining the loaded authority and
   typed buffers. General typed signatures, compiler-derived Rust type/layout
-  identities, multi-kernel modules, and cross-crate artifact identity are not
-  complete, so both rows remain Partial.
+  identities, and multi-kernel modules are not complete, so both rows remain
+  Partial.
 - Row 80: the general `launch!` macro remains an explicit unsafe raw-ABI escape
   hatch with compile-fail coverage. The generated vecadd module instead exposes
   safe `prepare(...).launch(...)`; the example contains no raw parameter pack,
@@ -149,10 +151,11 @@ The detailed dependencies and exit criteria are in
   focused UI tests exist. The typed vecadd backend now emits and embeds a
   canonical container, but its source identity is finalized LLVM IR and its
   Rust type/layout identities are deterministic opaque declarations rather
-  than compiler-derived evidence. Verus proof binding/refinement is not
-  authenticated into that artifact, general generated safe-launch integration
-  is incomplete, and host-object embedding is limited to
-  `x86_64-unknown-linux-gnu`.
+  than compiler-derived evidence. Transaction-held, descriptor-pinned snapshots
+  keep finalized IR and HSACO in one generation even after republishing or
+  pathname replacement. Verus proof binding/refinement is not authenticated
+  into that artifact, general generated safe-launch integration is incomplete,
+  and host-object embedding is limited to `x86_64-unknown-linux-gnu`.
 
 ## Normative 94-row Matrix
 

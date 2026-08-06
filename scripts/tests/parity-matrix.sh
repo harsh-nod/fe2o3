@@ -125,8 +125,8 @@ reset_case
 awk '{
   sub(/cd5ef3941d3347c7f6fcbfc78ef0fa7f4f179d87/,
       "dd5ef3941d3347c7f6fcbfc78ef0fa7f4f179d87")
-  sub(/62e375d8273285514e43ab1678fb24c772133fa4/,
-      "72e375d8273285514e43ab1678fb24c772133fa4")
+  sub(/ea7ca6e4cce38ebe07083fb18d4bc5165e8eb048/,
+      "fa7ca6e4cce38ebe07083fb18d4bc5165e8eb048")
   print
 }' "${TEST_ROOT}/matrix.md" >"${TEST_ROOT}/matrix.md.new"
 replace_file "${TEST_ROOT}/matrix.md"

@@ -78,6 +78,13 @@ Safe ownership of resources used by asynchronous copies is documented in
   `ArtifactContainerV1`, then embeds those immutable bytes in the host link.
   `Kernel::load` authenticates the embedded container against the observed
   context and exact vecadd profile before loading it.
+- Typed V2 registrations carry full SHA-256 crate and kernel binding IDs. The
+  Cargo wrapper derives the crate ID from rustc's crate name and ordered
+  `-C metadata` values; the macro and backend independently derive and validate
+  the kernel ID. Private host functions and artifact accessors use that ID, so
+  same-named kernels in separate rlibs cannot silently resolve to one archive
+  member. Direct compilation without the wrapper fails closed unless source
+  declares an explicit 256-bit fallback namespace.
 - The generated vecadd API safely prepares equal, nonempty `f32` buffers,
   performs context, geometry, and alias admission, and retains all typed
   resources through either synchronous `Prepared::launch` or non-escapable
@@ -140,9 +147,12 @@ example, copied results back, and compared them with CPU results.
   exposes an unsafe compiler boundary: backend/linker association of a marker,
   complete ABI and effects, and executable semantics must be correct before its
   sealed launch can be treated as safe.
-- Compiler artifact publication is transactional and generation-owned. Build
-  attempt and canonical rustc invocation descriptors are versioned and
-  bounded.
+- Compiler artifact publication is transactional and generation-owned. Typed
+  generation results contain bounded immutable IR and HSACO snapshots captured
+  through exact staged file descriptors and validated after publication while
+  the transaction lock is still held. Later publication or pathname
+  replacement cannot mix generations. Build-attempt and canonical rustc
+  invocation descriptors are versioned and bounded.
 - Linux-only rustc and codegen-backend primitives use descriptor-backed procfs
   paths. The backend is copied into a rehashed, immutable sealed memfd and can
   be inherited only by a prepared child command. Neither primitive is connected
@@ -177,9 +187,9 @@ example, copied results back, and compared them with CPU results.
   borrowed or owned generated async APIs, cancellation, and composition are not
   complete.
 - Generated artifact embedding currently supports only the
-  `x86_64-unknown-linux-gnu` host. The private backend/linker marker-to-artifact
-  association remains a trusted compiler contract rather than a general
-  cross-crate authenticated identity scheme.
+  `x86_64-unknown-linux-gnu` host. V2 binding IDs close same-name cross-crate
+  archive aliasing, but marker-to-artifact association remains part of the
+  trusted compiler/linker contract and does not prove executable semantics.
 - `cargo fe2o3 verify` and `build --require-proof` are roadmap commands. The
   current required Verus CI lane is invoked separately and does not prove the
   ordinary Rust function, compiler, ROCm, driver, or machine-code refinement.
