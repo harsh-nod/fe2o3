@@ -279,6 +279,7 @@ dependencies = [
  "fe2o3-hsaco",
  "fe2o3-kernel-descriptor",
  "rmpv",
+ "rustix",
  "sha2",
 ]
 

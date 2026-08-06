@@ -1,0 +1,149 @@
+use std::{
+    env,
+    io::{self, Read, Write},
+    process::{Command, exit},
+    thread,
+    time::Duration,
+};
+
+const WORKER_ID: &str = "fixture-worker-v1";
+const OUTPUT: &[u8] = b"fixture-output";
+const OUTPUT_SHA256: [u8; 32] = [
+    0xda, 0xcd, 0x9e, 0x21, 0xe8, 0x30, 0xa7, 0x63, 0x7c, 0x28, 0xa4, 0x34, 0xe9, 0x18, 0x3e, 0x3f,
+    0x37, 0x83, 0x1c, 0xfb, 0x3b, 0x87, 0xc2, 0x2f, 0xac, 0x6a, 0x89, 0xc6, 0xa9, 0xef, 0xc0, 0xdb,
+];
+
+#[allow(clippy::zombie_processes)] // Mode 8 verifies that the external supervisor owns reaping.
+fn main() {
+    if env::args().nth(1).as_deref() == Some("--descendant") {
+        loop {
+            thread::sleep(Duration::from_secs(60));
+        }
+    }
+
+    let mut prefix = [0_u8; 46];
+    io::stdin().read_exact(&mut prefix).unwrap();
+    let mode = prefix[14];
+    if mode == 2 {
+        loop {
+            thread::sleep(Duration::from_secs(60));
+        }
+    }
+    if mode == 9 {
+        exit(0);
+    }
+
+    let mut request = prefix.to_vec();
+    io::stdin().read_to_end(&mut request).unwrap();
+    match mode {
+        1 => io::stdout()
+            .write_all(&response(&request, WORKER_ID, true, false))
+            .unwrap(),
+        3 => loop {
+            io::stdout().write_all(&[b'x'; 8192]).unwrap()
+        },
+        4 => loop {
+            io::stderr().write_all(&[b'x'; 8192]).unwrap()
+        },
+        5 => io::stdout().write_all(b"not-a-response").unwrap(),
+        6 => io::stdout().write_all(b"F3LRSP01\x01").unwrap(),
+        7 => exit(23),
+        8 => {
+            let child = spawn_descendant();
+            eprintln!("descendant={}", child.id());
+            loop {
+                thread::sleep(Duration::from_secs(60));
+            }
+        }
+        10 => io::stdout()
+            .write_all(&response(&request, WORKER_ID, true, true))
+            .unwrap(),
+        11 => io::stdout()
+            .write_all(&response(&request, "wrong-worker", true, false))
+            .unwrap(),
+        12 => io::stdout()
+            .write_all(&response(&request, WORKER_ID, true, false))
+            .unwrap(),
+        13 => io::stdout()
+            .write_all(&response(&request, WORKER_ID, false, false))
+            .unwrap(),
+        14 => {
+            let mut environment = env::vars().collect::<Vec<_>>();
+            environment.sort();
+            if environment
+                != [("LANG", "C"), ("LC_ALL", "C"), ("TZ", "UTC")]
+                    .map(|(name, value)| (name.to_owned(), value.to_owned()))
+            {
+                exit(70);
+            }
+            io::stdout()
+                .write_all(&response(&request, WORKER_ID, true, false))
+                .unwrap();
+        }
+        15 => {
+            io::stderr().write_all(b"unbound diagnostic").unwrap();
+            io::stdout()
+                .write_all(&response(&request, WORKER_ID, true, false))
+                .unwrap();
+        }
+        16 => {
+            let mut malformed = response(&request, WORKER_ID, true, false);
+            *malformed.last_mut().unwrap() ^= 1;
+            io::stdout().write_all(&malformed).unwrap();
+        }
+        _ => exit(64),
+    }
+}
+
+#[allow(clippy::zombie_processes)]
+fn spawn_descendant() -> std::process::Child {
+    // The supervisor must reap the process tree while this parent is deliberately hung.
+    Command::new("/proc/self/exe")
+        .arg("--descendant")
+        .spawn()
+        .unwrap()
+}
+
+fn response(request: &[u8], worker: &str, with_output: bool, wrong_request: bool) -> Vec<u8> {
+    let request_id: [u8; 32] = request[14..46].try_into().unwrap();
+    let mut request_identity: [u8; 32] = field(request, 10).try_into().unwrap();
+    if wrong_request {
+        request_identity[0] ^= 1;
+    }
+    let mut bytes = b"F3LRSP01".to_vec();
+    push_field(&mut bytes, 1, &request_id);
+    push_field(&mut bytes, 2, &request_identity);
+    push_field(&mut bytes, 3, worker.as_bytes());
+    push_field(&mut bytes, 4, &[if with_output { 9 } else { 6 }]);
+    push_field(&mut bytes, 5, &0_u32.to_le_bytes());
+    if with_output {
+        let mut output = vec![1];
+        output.extend_from_slice(&OUTPUT_SHA256);
+        output.extend_from_slice(&(OUTPUT.len() as u64).to_le_bytes());
+        output.extend_from_slice(OUTPUT);
+        push_field(&mut bytes, 6, &output);
+    } else {
+        push_field(&mut bytes, 6, &[0]);
+    }
+    bytes
+}
+
+fn field(bytes: &[u8], wanted: u16) -> &[u8] {
+    let mut offset = 8;
+    while offset < bytes.len() {
+        let tag = u16::from_le_bytes(bytes[offset..offset + 2].try_into().unwrap());
+        let len = u32::from_le_bytes(bytes[offset + 2..offset + 6].try_into().unwrap()) as usize;
+        offset += 6;
+        if tag == wanted {
+            return &bytes[offset..offset + len];
+        }
+        offset += len;
+    }
+    panic!("missing field {wanted}")
+}
+
+fn push_field(bytes: &mut Vec<u8>, tag: u16, value: &[u8]) {
+    bytes.extend_from_slice(&tag.to_le_bytes());
+    bytes.extend_from_slice(&(value.len() as u32).to_le_bytes());
+    bytes.extend_from_slice(value);
+}

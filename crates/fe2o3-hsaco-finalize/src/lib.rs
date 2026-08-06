@@ -18,6 +18,7 @@ use fe2o3_kernel_descriptor::{
 
 mod link_plan;
 mod request_construction;
+mod worker_executor;
 mod worker_protocol;
 
 pub use link_plan::{
@@ -28,6 +29,12 @@ pub use link_plan::{
 pub use request_construction::{
     LinkInputKindClosureIdentityV1, LinkInputKindClosureV1, LinkSymbolClosureIdentityV1,
     LinkSymbolClosureV1, WorkerRequestConstructionError, construct_worker_request_v1,
+};
+pub use worker_executor::{
+    DEFAULT_WORKER_STDERR_BYTES, DEFAULT_WORKER_TIMEOUT, InertWorkerExecutionV1,
+    MAX_WORKER_EXECUTABLE_BYTES, MAX_WORKER_STDERR_BYTES, MAX_WORKER_TIMEOUT, PinnedWorkerV1,
+    WORKER_ENVIRONMENT_ALLOWLIST_V1, WorkerExecutionError, WorkerExecutionErrorKind,
+    WorkerExecutionLimitsV1, WorkerMeasurementV1, WorkerTerminationV1,
 };
 pub use worker_protocol::{
     MAX_WORKER_DIAGNOSTIC_BYTES, MAX_WORKER_DIAGNOSTICS, MAX_WORKER_OUTPUT_BYTES,
