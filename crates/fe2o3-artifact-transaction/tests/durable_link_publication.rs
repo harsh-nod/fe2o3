@@ -347,6 +347,45 @@ fn crash_retry_requires_the_complete_plan_and_preserves_the_recovered_prefix() {
 }
 
 #[test]
+fn resumed_finalized_callback_without_bytes_is_durably_terminal() {
+    let temp = TestDirectory::new();
+    let output = temp.path.join("output");
+    let bytes = b"resumed finalized bytes";
+    let plan = plan(1, 0x14, 0x44, bytes);
+    let finalized = DurableLinkPublicationFaultPointV1::Journal {
+        stage: DurableJournalStageV1::Finalized,
+        boundary: DurableJournalBoundaryV1::SyncCanonicalName,
+        timing: DurableFaultTimingV1::After,
+    };
+    assert!(matches!(
+        publish_durable_link_v1_with_options(
+            &output,
+            plan,
+            DurableLinkPublicationOptionsV1::inject_crash(finalized),
+            |transaction| complete(transaction, bytes),
+        ),
+        Err(DurableLinkPublicationError::InjectedCrash { point }) if point == finalized
+    ));
+    assert!(
+        recover_durable_link_publication_v1(&output, plan.scope())
+            .unwrap()
+            .is_none()
+    );
+
+    assert!(matches!(
+        publish_durable_link_v1(&output, plan, |_| Ok(())),
+        Err(DurableLinkPublicationError::InvalidDurableRecord { .. })
+    ));
+    assert!(!artifact_path(&output, bytes).exists());
+    assert!(matches!(
+        publish_durable_link_v1(&output, plan, |_| {
+            panic!("missing resumed bytes must terminally reject future retry")
+        }),
+        Err(DurableLinkPublicationError::Protocol(_))
+    ));
+}
+
+#[test]
 fn exclusive_artifact_lock_is_held_through_callback_and_commit() {
     let temp = TestDirectory::new();
     let output = temp.path.join("output");

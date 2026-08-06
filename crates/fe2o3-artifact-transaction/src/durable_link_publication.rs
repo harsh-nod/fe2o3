@@ -804,21 +804,22 @@ where
     };
     let work_result = work(&mut transaction);
     if let Err(error) = work_result {
-        if !error.is_injected_crash_from(transaction.faults) {
-            invalidate_transaction(&mut transaction, InvalidationReasonV1::ExplicitFailure)?;
-        }
-        return Err(error);
+        return fail_after_terminal_invalidation(&mut transaction, error);
     }
     if transaction.phase() != LinkPublicationPhaseV1::Finalized {
         let phase = transaction.phase();
-        invalidate_transaction(&mut transaction, InvalidationReasonV1::ExplicitFailure)?;
-        return Err(DurableLinkPublicationError::IncompleteCallback { phase });
+        return fail_after_terminal_invalidation(
+            &mut transaction,
+            DurableLinkPublicationError::IncompleteCallback { phase },
+        );
     }
 
-    let bytes = transaction
-        .finalized_bytes
-        .clone()
-        .ok_or_else(|| invalid_record("finalized phase omitted immutable bytes"))?;
+    let Some(bytes) = transaction.finalized_bytes.clone() else {
+        return fail_after_terminal_invalidation(
+            &mut transaction,
+            invalid_record("finalized phase omitted immutable bytes"),
+        );
+    };
     let artifact = match publish_artifact(
         transaction.output,
         bytes,
@@ -826,32 +827,42 @@ where
         transaction.faults,
     ) {
         Ok(snapshot) => snapshot,
-        Err(error) => {
-            if !error.is_injected_crash_from(transaction.faults) {
-                invalidate_transaction(&mut transaction, InvalidationReasonV1::ExplicitFailure)?;
-            }
-            return Err(error);
-        }
+        Err(error) => return fail_after_terminal_invalidation(&mut transaction, error),
     };
 
-    let publication_outcome = transaction.record.publish(
-        &mut transaction.catalog,
+    let mut published_record = transaction.record.clone();
+    let mut published_catalog = transaction.catalog.clone();
+    let publication_outcome = match published_record.publish(
+        &mut published_catalog,
         transaction.plan.attempt,
         transaction.plan.finalization,
         transaction.plan.finalized_output,
         transaction.plan.publication,
-    )?;
-    transaction.envelope.published = Some(transaction.record.clone());
-    transaction.envelope.active_plan = None;
-    transaction.envelope.active = None;
-    transaction.envelope.poisoned = false;
-    persist_envelope(
+    ) {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            return fail_after_terminal_invalidation(&mut transaction, error.into());
+        }
+    };
+    let mut published_envelope = transaction.envelope.clone();
+    published_envelope.published = Some(published_record.clone());
+    published_envelope.active_plan = None;
+    published_envelope.active = None;
+    published_envelope.poisoned = false;
+    let published_bytes = match published_envelope.encode() {
+        Ok(bytes) => bytes,
+        Err(error) => return fail_after_terminal_invalidation(&mut transaction, error),
+    };
+    persist_encoded_envelope(
         transaction.output,
         transaction.names,
-        transaction.envelope,
+        &published_bytes,
         DurableJournalStageV1::Published,
         transaction.faults,
     )?;
+    transaction.record = published_record;
+    transaction.catalog = published_catalog;
+    *transaction.envelope = published_envelope;
     Ok(DurableLinkPublicationResultV1 {
         outcome: match publication_outcome {
             PublicationOutcomeV1::Published => DurableLinkPublicationOutcomeV1::Published,
@@ -864,6 +875,19 @@ where
             artifact,
         },
     })
+}
+
+fn fail_after_terminal_invalidation<T>(
+    transaction: &mut DurableLinkPublicationTransactionV1<'_>,
+    original: DurableLinkPublicationError,
+) -> Result<T, DurableLinkPublicationError> {
+    if original.is_injected_crash_from(transaction.faults) {
+        return Err(original);
+    }
+    match invalidate_transaction(transaction, InvalidationReasonV1::ExplicitFailure) {
+        Ok(()) => Err(original),
+        Err(invalidation) => Err(invalidation),
+    }
 }
 
 /// Recovers one scope and returns its last complete immutable publication, if any.
@@ -915,6 +939,16 @@ fn persist_envelope(
     faults: &mut FaultInjector,
 ) -> Result<(), DurableLinkPublicationError> {
     let bytes = envelope.encode()?;
+    persist_encoded_envelope(output, names, &bytes, stage, faults)
+}
+
+fn persist_encoded_envelope(
+    output: &PinnedOutput,
+    names: &DurableNames,
+    bytes: &[u8],
+    stage: DurableJournalStageV1,
+    faults: &mut FaultInjector,
+) -> Result<(), DurableLinkPublicationError> {
     let start = NEXT_REDO_TEMP_ID.fetch_add(MAX_REDO_TEMP_ATTEMPTS, Ordering::Relaxed);
     let mut temporary = None;
     for offset in 0..MAX_REDO_TEMP_ATTEMPTS {
@@ -957,7 +991,7 @@ fn persist_envelope(
         DurableJournalBoundaryV1::WriteRedoTemp,
         DurableFaultTimingV1::Before,
     )?;
-    temporary_file.write_all(&bytes)?;
+    temporary_file.write_all(bytes)?;
     faults.hit_journal(
         stage,
         DurableJournalBoundaryV1::WriteRedoTemp,
