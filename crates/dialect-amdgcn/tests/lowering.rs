@@ -223,6 +223,85 @@ fn fill_module() -> Module {
     module
 }
 
+fn phi_loop_module() -> Module {
+    let slice = global_slice(AccessMode::ReadOnly);
+    let pointer = global_pointer(AccessMode::ReadOnly);
+
+    let mut entry = BasicBlock::new(BlockId(0));
+    entry.operations.push(op(
+        2,
+        pointer.clone(),
+        OperationKind::SliceData { slice: ValueId(0) },
+    ));
+    entry.terminator = Some(Terminator::Branch {
+        target: BlockId(1),
+        arguments: vec![ValueId(1), ValueId(0), ValueId(2)],
+    });
+
+    let mut loop_header = BasicBlock::new(BlockId(1));
+    loop_header.parameters = vec![
+        ValueDef::new(ValueId(10), Type::INDEX),
+        ValueDef::new(ValueId(11), slice.clone()),
+        ValueDef::new(ValueId(12), pointer),
+    ];
+    loop_header.operations = vec![
+        op(
+            13,
+            Type::INDEX,
+            OperationKind::SliceLength { slice: ValueId(11) },
+        ),
+        op(14, Type::INDEX, OperationKind::Constant(Constant::Index(1))),
+        op(
+            15,
+            Type::INDEX,
+            OperationKind::Binary {
+                op: BinaryOp::Add,
+                lhs: ValueId(10),
+                rhs: ValueId(14),
+            },
+        ),
+        op(
+            16,
+            Type::BOOL,
+            OperationKind::Compare {
+                predicate: ComparePredicate::LessThan,
+                lhs: ValueId(15),
+                rhs: ValueId(13),
+            },
+        ),
+    ];
+    loop_header.terminator = Some(Terminator::ConditionalBranch {
+        condition: ValueId(16),
+        then_target: BlockId(1),
+        then_arguments: vec![ValueId(15), ValueId(11), ValueId(12)],
+        else_target: BlockId(2),
+        else_arguments: vec![],
+    });
+
+    let mut exit = BasicBlock::new(BlockId(2));
+    exit.terminator = Some(Terminator::Return { values: vec![] });
+
+    let function = Function::definition(
+        "phi_loop_impl",
+        Signature::new(vec![slice, Type::INDEX], vec![]),
+        vec![ValueId(0), ValueId(1)],
+        vec![entry, loop_header, exit],
+    );
+    let mut kernel = Kernel::new(
+        "phi_loop",
+        "phi_loop_impl",
+        LaunchDomain::D1 {
+            x: LaunchExtent::Dynamic,
+        },
+    );
+    kernel.workgroup_size = Some(WorkgroupSize::new(64, 1, 1));
+
+    let mut module = Module::new("tests::phi_loop");
+    module.functions.push(function);
+    module.kernels.push(kernel);
+    module
+}
+
 fn vecadd_module() -> Module {
     let mut entry = BasicBlock::new(BlockId(0));
     entry.operations = vec![
@@ -453,6 +532,18 @@ fn vecadd_three_slice_abi_and_cfg_match_the_exact_golden() {
     assert_occurrences(&output, "load float", 2);
     assert_occurrences(&output, "store float", 1);
     assert!(output.contains("%v20 = fadd float %v14, %v19"));
+}
+
+#[test]
+fn loop_block_arguments_materialize_as_exact_phi_golden() {
+    let output = lower_kernel_to_llvm_ir(&phi_loop_module(), &KernelId::new("phi_loop")).unwrap();
+    assert_eq!(output, include_str!("fixtures/phi_loop_g1.ll"));
+    assert!(output.contains("%v10 = phi i64 [ %arg1, %bb0 ], [ %v15, %bb1 ]"));
+    assert!(
+        output
+            .contains("%v11.data = phi ptr addrspace(1) [ %arg0.data, %bb0 ], [ %v11.data, %bb1 ]")
+    );
+    assert!(output.contains("%v12 = phi ptr addrspace(1) [ %v2, %bb0 ], [ %v12, %bb1 ]"));
 }
 
 #[test]
@@ -901,23 +992,7 @@ fn excluded_operations_constants_casts_and_comparisons_have_located_errors() {
 }
 
 #[test]
-fn block_arguments_and_switches_are_explicitly_outside_g1() {
-    let mut arguments = fill_module();
-    let blocks = &mut arguments.functions[0].body.as_mut().unwrap().blocks;
-    blocks[1]
-        .parameters
-        .push(ValueDef::new(ValueId(20), Type::F32));
-    let Terminator::ConditionalBranch { then_arguments, .. } =
-        blocks[0].terminator.as_mut().unwrap()
-    else {
-        panic!("conditional branch expected")
-    };
-    then_arguments.push(ValueId(1));
-    assert_eq!(
-        first_code(&arguments, "fill"),
-        LoweringDiagnosticCode::UnsupportedBlockArguments
-    );
-
+fn switches_remain_explicitly_outside_g1() {
     let mut switch = fill_module();
     switch.functions[0].body.as_mut().unwrap().blocks[0].terminator = Some(Terminator::Switch {
         selector: ValueId(2),
@@ -933,6 +1008,171 @@ fn block_arguments_and_switches_are_explicitly_outside_g1() {
         first_code(&switch, "fill"),
         LoweringDiagnosticCode::UnsupportedTerminator
     );
+}
+
+#[test]
+fn unrepresentable_phi_cfgs_fail_closed_with_located_errors() {
+    let mut entry_parameter = fill_module();
+    entry_parameter.functions[0].body.as_mut().unwrap().blocks[0]
+        .parameters
+        .push(ValueDef::new(ValueId(20), Type::F32));
+    let error = lower_kernel_to_llvm_ir(&entry_parameter, &KernelId::new("fill")).unwrap_err();
+    assert_eq!(
+        error.diagnostics()[0].code,
+        LoweringDiagnosticCode::UnsupportedBlockArguments
+    );
+    assert_eq!(error.diagnostics()[0].location.block, Some(BlockId(0)));
+    assert!(error.diagnostics()[0].message.contains("entry-block"));
+
+    let mut predecessorless = fill_module();
+    let mut dead = BasicBlock::new(BlockId(3));
+    dead.parameters.push(ValueDef::new(ValueId(20), Type::F32));
+    dead.terminator = Some(Terminator::Unreachable);
+    predecessorless.functions[0]
+        .body
+        .as_mut()
+        .unwrap()
+        .blocks
+        .push(dead);
+    let error = lower_kernel_to_llvm_ir(&predecessorless, &KernelId::new("fill")).unwrap_err();
+    assert_eq!(
+        error.diagnostics()[0].code,
+        LoweringDiagnosticCode::UnsupportedBlockArguments
+    );
+    assert_eq!(error.diagnostics()[0].location.block, Some(BlockId(3)));
+    assert!(
+        error.diagnostics()[0]
+            .message
+            .contains("without an incoming CFG edge")
+    );
+
+    let mut duplicate_edges = fill_module();
+    let blocks = &mut duplicate_edges.functions[0].body.as_mut().unwrap().blocks;
+    blocks[1]
+        .parameters
+        .push(ValueDef::new(ValueId(20), Type::F32));
+    let Terminator::ConditionalBranch {
+        then_arguments,
+        else_target,
+        else_arguments,
+        ..
+    } = blocks[0].terminator.as_mut().unwrap()
+    else {
+        panic!("conditional branch expected")
+    };
+    then_arguments.push(ValueId(1));
+    *else_target = BlockId(1);
+    else_arguments.push(ValueId(1));
+    let error = lower_kernel_to_llvm_ir(&duplicate_edges, &KernelId::new("fill")).unwrap_err();
+    assert_eq!(
+        error.diagnostics()[0].code,
+        LoweringDiagnosticCode::UnsupportedBlockArguments
+    );
+    assert_eq!(error.diagnostics()[0].location.block, Some(BlockId(1)));
+    assert!(
+        error.diagnostics()[0]
+            .message
+            .contains("multiple edges from bb0")
+    );
+}
+
+#[test]
+fn unsupported_phi_types_and_address_spaces_fail_before_emission() {
+    let mut unsupported_type = fill_module();
+    let blocks = &mut unsupported_type.functions[0].body.as_mut().unwrap().blocks;
+    blocks[0].operations.insert(
+        0,
+        op(
+            20,
+            Type::F64,
+            OperationKind::Constant(Constant::F64Bits(1.0f64.to_bits())),
+        ),
+    );
+    blocks[1]
+        .parameters
+        .push(ValueDef::new(ValueId(21), Type::F64));
+    let Terminator::ConditionalBranch { then_arguments, .. } =
+        blocks[0].terminator.as_mut().unwrap()
+    else {
+        panic!("conditional branch expected")
+    };
+    then_arguments.push(ValueId(20));
+    let error = lower_kernel_to_llvm_ir(&unsupported_type, &KernelId::new("fill")).unwrap_err();
+    assert_eq!(
+        error.diagnostics()[0].code,
+        LoweringDiagnosticCode::UnsupportedType
+    );
+    assert_eq!(error.diagnostics()[0].location.block, Some(BlockId(1)));
+
+    let mut unsupported_address_space = fill_module();
+    let blocks = &mut unsupported_address_space.functions[0]
+        .body
+        .as_mut()
+        .unwrap()
+        .blocks;
+    let pointer = Type::pointer(Type::F32, AddressSpace::Workgroup, AccessMode::ReadWrite);
+    blocks[0].operations.insert(
+        0,
+        op(
+            20,
+            pointer.clone(),
+            OperationKind::Alloca {
+                element: Type::F32,
+                count: None,
+                address_space: AddressSpace::Workgroup,
+                alignment: 4,
+            },
+        ),
+    );
+    blocks[1]
+        .parameters
+        .push(ValueDef::new(ValueId(21), pointer));
+    let Terminator::ConditionalBranch { then_arguments, .. } =
+        blocks[0].terminator.as_mut().unwrap()
+    else {
+        panic!("conditional branch expected")
+    };
+    then_arguments.push(ValueId(20));
+    let error =
+        lower_kernel_to_llvm_ir(&unsupported_address_space, &KernelId::new("fill")).unwrap_err();
+    assert_eq!(
+        error.diagnostics()[0].code,
+        LoweringDiagnosticCode::UnsupportedAddressSpace
+    );
+    assert_eq!(error.diagnostics()[0].location.block, Some(BlockId(1)));
+}
+
+#[test]
+#[ignore = "requires the ROCm LLVM toolchain"]
+fn rocm_compiles_phi_golden_to_an_amdgpu_code_object() {
+    let clang = std::env::var_os("FE2O3_ROCM_CLANG")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/opt/rocm/llvm/bin/clang"));
+    let target_text = std::env::var("FE2O3_TARGET")
+        .expect("FE2O3_TARGET must name an exact canonical AMDGPU target");
+    canonical_test_target(&target_text).unwrap();
+    let directory = TemporaryDirectory::new("g1-phi");
+    let input = directory.join("phi_loop.ll");
+    let output = directory.join("phi_loop.hsaco");
+    let llvm_ir = lower_kernel_to_llvm_ir(&phi_loop_module(), &KernelId::new("phi_loop")).unwrap();
+    assert_eq!(llvm_ir, include_str!("fixtures/phi_loop_g1.ll"));
+    fs::write(&input, llvm_ir).unwrap();
+
+    let result = Command::new(clang)
+        .arg("--target=amdgcn-amd-amdhsa")
+        .arg(format!("-mcpu={target_text}"))
+        .arg("-nogpulib")
+        .arg(&input)
+        .arg("-o")
+        .arg(&output)
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "clang failed:\n{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(fs::metadata(output).unwrap().len() > 64);
 }
 
 #[test]

@@ -288,6 +288,7 @@ pub fn lower_kernel_to_llvm_ir(
     for block in &body.blocks {
         lowerer.validate_block(block)?;
     }
+    lowerer.validate_block_arguments()?;
     lowerer.emit()
 }
 
@@ -456,6 +457,71 @@ impl<'a> FunctionLowerer<'a> {
             }
         }
         for block in &body.blocks {
+            for parameter in &block.parameters {
+                let location =
+                    LoweringLocation::block(self.module, self.kernel, self.function, block.id);
+                match &parameter.ty {
+                    Type::Scalar(scalar) if supported_scalar(*scalar) => {
+                        self.bindings.insert(
+                            parameter.id,
+                            ValueBinding::Value {
+                                llvm_name: value_name(parameter.id),
+                                ty: parameter.ty.clone(),
+                            },
+                        );
+                    }
+                    Type::Pointer(_) => {
+                        validate_global_pointer(&parameter.ty, &location)?;
+                        self.bindings.insert(
+                            parameter.id,
+                            ValueBinding::Value {
+                                llvm_name: value_name(parameter.id),
+                                ty: parameter.ty.clone(),
+                            },
+                        );
+                    }
+                    Type::Slice(slice)
+                        if slice.address_space == KernelAddressSpace::Global
+                            && supported_memory_type(&slice.element) =>
+                    {
+                        self.bindings.insert(
+                            parameter.id,
+                            ValueBinding::Slice {
+                                data_name: format!("{}.data", value_name(parameter.id)),
+                                length_name: format!("{}.len", value_name(parameter.id)),
+                                ty: parameter.ty.clone(),
+                            },
+                        );
+                    }
+                    Type::Slice(slice) => {
+                        let code = if slice.address_space != KernelAddressSpace::Global {
+                            LoweringDiagnosticCode::UnsupportedAddressSpace
+                        } else {
+                            LoweringDiagnosticCode::UnsupportedType
+                        };
+                        return Err(LoweringErrors::one(
+                            location,
+                            code,
+                            format!(
+                                "unsupported block parameter {}: {:?}",
+                                parameter.id, parameter.ty
+                            ),
+                        ));
+                    }
+                    _ => {
+                        return Err(LoweringErrors::one(
+                            location,
+                            LoweringDiagnosticCode::UnsupportedType,
+                            format!(
+                                "unsupported block parameter {}: {:?}",
+                                parameter.id, parameter.ty
+                            ),
+                        ));
+                    }
+                }
+            }
+        }
+        for block in &body.blocks {
             for operation in &block.operations {
                 for result in &operation.results {
                     let llvm_name = match &operation.kind {
@@ -478,14 +544,6 @@ impl<'a> FunctionLowerer<'a> {
     }
 
     fn validate_block(&mut self, block: &BasicBlock) -> Result<(), LoweringErrors> {
-        if !block.parameters.is_empty() {
-            return Err(LoweringErrors::one(
-                LoweringLocation::block(self.module, self.kernel, self.function, block.id),
-                LoweringDiagnosticCode::UnsupportedBlockArguments,
-                "G1 does not lower block parameters",
-            ));
-        }
-
         for (index, operation) in block.operations.iter().enumerate() {
             self.validate_operation(block.id, index, operation)?;
         }
@@ -496,6 +554,52 @@ impl<'a> FunctionLowerer<'a> {
                 .as_ref()
                 .expect("verify_module required it"),
         )
+    }
+
+    fn validate_block_arguments(&self) -> Result<(), LoweringErrors> {
+        let body = self.function.body.as_ref().expect("definition required");
+        let entry = body
+            .blocks
+            .first()
+            .expect("verify_module required an entry block");
+        for block in body
+            .blocks
+            .iter()
+            .filter(|block| !block.parameters.is_empty())
+        {
+            let location =
+                LoweringLocation::block(self.module, self.kernel, self.function, block.id);
+            if block.id == entry.id {
+                return Err(LoweringErrors::one(
+                    location,
+                    LoweringDiagnosticCode::UnsupportedBlockArguments,
+                    "G1 cannot materialize entry-block parameters because the initial entry edge has no SSA arguments",
+                ));
+            }
+
+            let incomings = self.incoming_edges(block.id);
+            if incomings.is_empty() {
+                return Err(LoweringErrors::one(
+                    location,
+                    LoweringDiagnosticCode::UnsupportedBlockArguments,
+                    "G1 cannot materialize block parameters without an incoming CFG edge",
+                ));
+            }
+
+            let mut predecessors = BTreeSet::new();
+            for (predecessor, _) in incomings {
+                if !predecessors.insert(predecessor) {
+                    return Err(LoweringErrors::one(
+                        location,
+                        LoweringDiagnosticCode::UnsupportedBlockArguments,
+                        format!(
+                            "G1 cannot materialize block parameters for multiple edges from {predecessor}; LLVM phi nodes require one incoming value per predecessor"
+                        ),
+                    ));
+                }
+            }
+        }
+        Ok(())
     }
 
     fn validate_operation(
@@ -602,27 +706,47 @@ impl<'a> FunctionLowerer<'a> {
     ) -> Result<(), LoweringErrors> {
         let location = LoweringLocation::block(self.module, self.kernel, self.function, block);
         match terminator {
-            Terminator::Branch { arguments, .. } if arguments.is_empty() => Ok(()),
-            Terminator::ConditionalBranch {
-                then_arguments,
-                else_arguments,
-                ..
-            } if then_arguments.is_empty() && else_arguments.is_empty() => Ok(()),
+            Terminator::Branch { .. } | Terminator::ConditionalBranch { .. } => Ok(()),
             Terminator::Return { values } if values.is_empty() => Ok(()),
             Terminator::Unreachable => Ok(()),
-            Terminator::Branch { .. } | Terminator::ConditionalBranch { .. } => {
-                Err(LoweringErrors::one(
-                    location,
-                    LoweringDiagnosticCode::UnsupportedBlockArguments,
-                    "G1 branches do not accept block arguments",
-                ))
-            }
             Terminator::Switch { .. } | Terminator::Return { .. } => Err(LoweringErrors::one(
                 location,
                 LoweringDiagnosticCode::UnsupportedTerminator,
                 format!("G1 does not lower {terminator:?}"),
             )),
         }
+    }
+
+    fn incoming_edges(&self, target: BlockId) -> Vec<(BlockId, &[ValueId])> {
+        let body = self.function.body.as_ref().expect("definition required");
+        let mut incomings = Vec::new();
+        for block in &body.blocks {
+            match block.terminator.as_ref().expect("verified terminator") {
+                Terminator::Branch {
+                    target: edge_target,
+                    arguments,
+                } if *edge_target == target => incomings.push((block.id, arguments.as_slice())),
+                Terminator::ConditionalBranch {
+                    then_target,
+                    then_arguments,
+                    else_target,
+                    else_arguments,
+                    ..
+                } => {
+                    if *then_target == target {
+                        incomings.push((block.id, then_arguments.as_slice()));
+                    }
+                    if *else_target == target {
+                        incomings.push((block.id, else_arguments.as_slice()));
+                    }
+                }
+                Terminator::Branch { .. }
+                | Terminator::Switch { .. }
+                | Terminator::Return { .. }
+                | Terminator::Unreachable => {}
+            }
+        }
+        incomings
     }
 
     fn value_type(&self, value: ValueId) -> &Type {
@@ -671,6 +795,7 @@ impl<'a> FunctionLowerer<'a> {
         let body = self.function.body.as_ref().expect("definition required");
         for block in &body.blocks {
             writeln!(output, "{}:", block_label(block.id)).unwrap();
+            self.emit_block_parameters(&mut output, block);
             for operation in &block.operations {
                 self.emit_operation(&mut output, operation)?;
             }
@@ -693,6 +818,84 @@ impl<'a> FunctionLowerer<'a> {
         .unwrap();
         writeln!(output, "!0 = !{{i32 {}, i32 1, i32 1}}", self.workgroup_x).unwrap();
         Ok(output)
+    }
+
+    fn emit_block_parameters(&self, output: &mut String, block: &BasicBlock) {
+        let incomings = self.incoming_edges(block.id);
+        for (parameter_index, parameter) in block.parameters.iter().enumerate() {
+            match self
+                .bindings
+                .get(&parameter.id)
+                .expect("validated block parameter")
+            {
+                ValueBinding::Value { llvm_name, ty } => {
+                    let values = incomings
+                        .iter()
+                        .map(|(predecessor, arguments)| {
+                            let (argument, _) = self.value(arguments[parameter_index]);
+                            format!("[ {argument}, %{} ]", block_label(*predecessor))
+                        })
+                        .collect::<Vec<_>>();
+                    writeln!(
+                        output,
+                        "  {llvm_name} = phi {} {}",
+                        llvm_type(ty),
+                        values.join(", ")
+                    )
+                    .unwrap();
+                }
+                ValueBinding::Slice {
+                    data_name,
+                    length_name,
+                    ..
+                } => {
+                    let data_values = incomings
+                        .iter()
+                        .map(|(predecessor, arguments)| {
+                            let ValueBinding::Slice {
+                                data_name: argument,
+                                ..
+                            } = self
+                                .bindings
+                                .get(&arguments[parameter_index])
+                                .expect("verified branch argument")
+                            else {
+                                unreachable!("verify_module checked branch argument types")
+                            };
+                            format!("[ {argument}, %{} ]", block_label(*predecessor))
+                        })
+                        .collect::<Vec<_>>();
+                    let length_values = incomings
+                        .iter()
+                        .map(|(predecessor, arguments)| {
+                            let ValueBinding::Slice {
+                                length_name: argument,
+                                ..
+                            } = self
+                                .bindings
+                                .get(&arguments[parameter_index])
+                                .expect("verified branch argument")
+                            else {
+                                unreachable!("verify_module checked branch argument types")
+                            };
+                            format!("[ {argument}, %{} ]", block_label(*predecessor))
+                        })
+                        .collect::<Vec<_>>();
+                    writeln!(
+                        output,
+                        "  {data_name} = phi ptr addrspace(1) {}",
+                        data_values.join(", ")
+                    )
+                    .unwrap();
+                    writeln!(
+                        output,
+                        "  {length_name} = phi i64 {}",
+                        length_values.join(", ")
+                    )
+                    .unwrap();
+                }
+            }
+        }
     }
 
     fn llvm_parameters(&self) -> Result<Vec<String>, LoweringErrors> {
@@ -1056,7 +1259,10 @@ fn block_label(block: BlockId) -> String {
 fn llvm_type(ty: &Type) -> &'static str {
     match ty {
         Type::Scalar(scalar) => llvm_scalar(*scalar),
-        Type::Pointer(_) => "ptr",
+        Type::Pointer(pointer) if pointer.address_space == KernelAddressSpace::Global => {
+            "ptr addrspace(1)"
+        }
+        Type::Pointer(_) => unreachable!("preflight rejected unsupported address space"),
         Type::Unit | Type::Slice(_) => unreachable!("type is not a first-class G1 LLVM value"),
     }
 }
