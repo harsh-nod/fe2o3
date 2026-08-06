@@ -12,7 +12,7 @@ use rustc_middle::ty::adjustment::PointerCoercion;
 use rustc_middle::ty::{
     EarlyBinder, Instance, InstanceKind, TyCtxt, TyKind, TypeVisitableExt, TypingEnv,
 };
-use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -124,6 +124,7 @@ pub fn dump_device_functions<'tcx>(tcx: TyCtxt<'tcx>, functions: &[CollectedFunc
                 function.logical_name.clone(),
                 tcx.crate_name(def_id.krate).to_string(),
                 tcx.def_path_str(def_id),
+                tcx.symbol_name(function.instance).name.to_string(),
                 mir_stats,
             )
         })
@@ -132,13 +133,14 @@ pub fn dump_device_functions<'tcx>(tcx: TyCtxt<'tcx>, functions: &[CollectedFunc
     rows.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.3.cmp(&b.3)));
 
     eprintln!("\n=== fe2o3 device function collection ===");
-    for (export_name, kind, logical_name, crate_name, path, mir_stats) in rows {
+    for (export_name, kind, logical_name, crate_name, path, identity, mir_stats) in rows {
         eprintln!("  [{kind}] {export_name}");
         if let Some(logical_name) = logical_name.filter(|name| name != &export_name) {
             eprintln!("      logical name: {logical_name}");
         }
         eprintln!("      crate: {crate_name}");
         eprintln!("      path: {path}");
+        eprintln!("      instance: {identity}");
         eprintln!("      MIR:  {mir_stats}");
     }
     eprintln!("========================================\n");
@@ -831,9 +833,7 @@ fn is_fully_monomorphized<'tcx>(tcx: TyCtxt<'tcx>, instance: Instance<'tcx>) -> 
     let generics = tcx.generics_of(instance.def_id());
 
     for arg in instance.args.iter() {
-        if let Some(ty) = arg.as_type()
-            && ty.has_param()
-        {
+        if arg.has_param() || arg.has_escaping_bound_vars() {
             return false;
         }
     }
@@ -843,8 +843,9 @@ fn is_fully_monomorphized<'tcx>(tcx: TyCtxt<'tcx>, instance: Instance<'tcx>) -> 
 
 struct DeviceCollector<'tcx> {
     tcx: TyCtxt<'tcx>,
-    seen: HashSet<String>,
-    used_export_names: HashSet<String>,
+    seen: BTreeSet<String>,
+    call_chains: BTreeMap<String, Vec<String>>,
+    used_export_names: BTreeSet<String>,
     worklist: VecDeque<CollectedFunction<'tcx>>,
     result: Vec<CollectedFunction<'tcx>>,
     verbose: bool,
@@ -854,8 +855,9 @@ impl<'tcx> DeviceCollector<'tcx> {
     fn new(tcx: TyCtxt<'tcx>, verbose: bool) -> Self {
         Self {
             tcx,
-            seen: HashSet::new(),
-            used_export_names: HashSet::new(),
+            seen: BTreeSet::new(),
+            call_chains: BTreeMap::new(),
+            used_export_names: BTreeSet::new(),
             worklist: VecDeque::new(),
             result: Vec::new(),
             verbose,
@@ -871,8 +873,10 @@ impl<'tcx> DeviceCollector<'tcx> {
         kernel_binding: Option<KernelBindingIdV1>,
         typed_layout_identities: Option<[TypeIdentity; 3]>,
     ) {
-        let symbol = self.tcx.symbol_name(instance).name.to_string();
-        if self.seen.insert(symbol) {
+        let identity = self.instance_identity(instance);
+        if self.seen.insert(identity.clone()) {
+            self.call_chains
+                .insert(identity.clone(), vec![self.instance_label(instance)]);
             self.used_export_names.insert(export_name.clone());
             self.worklist.push_back(CollectedFunction {
                 instance,
@@ -890,22 +894,28 @@ impl<'tcx> DeviceCollector<'tcx> {
         while let Some(function) = self.worklist.pop_front() {
             let def_id = function.instance.def_id();
 
-            if self.tcx.is_mir_available(def_id) {
-                let mir = self.tcx.instance_mir(function.instance.def);
-                if self.verbose {
-                    eprintln!(
-                        "[collector] visiting {} ({} basic blocks)",
-                        function.export_name,
-                        mir.basic_blocks.len()
-                    );
-                }
+            if !self.tcx.is_mir_available(def_id) {
+                return Err(self.reachable_error(
+                    &function.instance,
+                    "MIR is unavailable for a collected device function",
+                    None,
+                ));
+            }
 
-                for block in mir.basic_blocks.iter() {
-                    if let Some(terminator) = &block.terminator
-                        && let TerminatorKind::Call { func, .. } = &terminator.kind
-                    {
-                        self.process_call_operand(func, &function.instance)?;
-                    }
+            let mir = self.tcx.instance_mir(function.instance.def);
+            if self.verbose {
+                eprintln!(
+                    "[collector] visiting {} ({} basic blocks)",
+                    function.export_name,
+                    mir.basic_blocks.len()
+                );
+            }
+
+            for block in mir.basic_blocks.iter() {
+                if let Some(terminator) = &block.terminator
+                    && let TerminatorKind::Call { func, .. } = &terminator.kind
+                {
+                    self.process_call_operand(func, &function.instance)?;
                 }
             }
 
@@ -938,11 +948,13 @@ impl<'tcx> DeviceCollector<'tcx> {
                 crate_name,
                 fn_path,
             } => {
-                return Err(CollectError {
-                    message: format!(
-                        "fe2o3 device code reached forbidden crate `{crate_name}` via `{fn_path}`; device-reachable functions must avoid `std`"
+                return Err(self.reachable_error(
+                    caller,
+                    &format!(
+                        "device code reached forbidden crate `{crate_name}`; device-reachable functions must avoid `std`"
                     ),
-                });
+                    Some(fn_path),
+                ));
             }
         }
 
@@ -952,21 +964,40 @@ impl<'tcx> DeviceCollector<'tcx> {
             EarlyBinder::bind(*args),
         );
 
-        let Some(resolved) =
-            Instance::try_resolve(self.tcx, TypingEnv::fully_monomorphized(), *def_id, args)
-                .ok()
-                .flatten()
-        else {
-            return Ok(());
+        let resolved = match Instance::try_resolve(
+            self.tcx,
+            TypingEnv::fully_monomorphized(),
+            *def_id,
+            args,
+        ) {
+            Ok(Some(resolved)) => resolved,
+            Ok(None) => {
+                return Err(self.reachable_error(
+                    caller,
+                    "direct device callee could not be resolved to a concrete rustc instance",
+                    Some(self.tcx.def_path_str(*def_id)),
+                ));
+            }
+            Err(_) => {
+                return Err(self.reachable_error(
+                    caller,
+                    "direct device callee normalization failed",
+                    Some(self.tcx.def_path_str(*def_id)),
+                ));
+            }
         };
 
-        let symbol = self.tcx.symbol_name(resolved).name.to_string();
-        if self.seen.contains(&symbol) {
+        let identity = self.instance_identity(resolved);
+        if self.seen.contains(&identity) {
             return Ok(());
         }
 
         if !is_fully_monomorphized(self.tcx, resolved) {
-            return Ok(());
+            return Err(self.reachable_error(
+                caller,
+                "direct device callee did not resolve to a fully monomorphized instance",
+                Some(self.instance_label(resolved)),
+            ));
         }
 
         if !matches!(resolved.def, InstanceKind::Item(_)) {
@@ -974,13 +1005,11 @@ impl<'tcx> DeviceCollector<'tcx> {
         }
 
         if !self.tcx.is_mir_available(resolved.def_id()) {
-            if self.verbose {
-                eprintln!(
-                    "[collector] skipping no-MIR callee {}",
-                    self.tcx.def_path_str(resolved.def_id())
-                );
-            }
-            return Ok(());
+            return Err(self.reachable_error(
+                caller,
+                "MIR is unavailable for a device-reachable item; compile the dependency with encoded MIR (for example, an inline Rust definition) or keep the call out of device code",
+                Some(self.instance_label(resolved)),
+            ));
         }
 
         if self.is_unreachable_body(resolved.def_id()) {
@@ -1000,7 +1029,10 @@ impl<'tcx> DeviceCollector<'tcx> {
             eprintln!("[collector] callee: {name} -> {export_name}");
         }
 
-        self.seen.insert(symbol);
+        let mut call_chain = self.call_chain(caller);
+        call_chain.push(self.instance_label(resolved));
+        self.call_chains.insert(identity.clone(), call_chain);
+        self.seen.insert(identity.clone());
         self.worklist.push_back(CollectedFunction {
             instance: resolved,
             is_kernel: false,
@@ -1011,6 +1043,44 @@ impl<'tcx> DeviceCollector<'tcx> {
             typed_layout_identities: None,
         });
         Ok(())
+    }
+
+    fn instance_identity(&self, instance: Instance<'tcx>) -> String {
+        self.tcx.symbol_name(instance).name.to_string()
+    }
+
+    fn instance_label(&self, instance: Instance<'tcx>) -> String {
+        format!(
+            "{} [{}]",
+            self.fqdn(instance.def_id()),
+            self.instance_identity(instance)
+        )
+    }
+
+    fn call_chain(&self, instance: &Instance<'tcx>) -> Vec<String> {
+        let identity = self.instance_identity(*instance);
+        self.call_chains
+            .get(&identity)
+            .cloned()
+            .unwrap_or_else(|| vec![self.instance_label(*instance)])
+    }
+
+    fn reachable_error(
+        &self,
+        caller: &Instance<'tcx>,
+        reason: &str,
+        callee: Option<String>,
+    ) -> CollectError {
+        let mut chain = self.call_chain(caller);
+        if let Some(callee) = callee {
+            chain.push(callee);
+        }
+        CollectError {
+            message: format!(
+                "fe2o3 device collection rejected a reachable call: {reason}; reachable call chain: {}",
+                chain.join(" -> ")
+            ),
+        }
     }
 
     fn should_collect_from_crate(&self, def_id: DefId) -> CollectDecision {
