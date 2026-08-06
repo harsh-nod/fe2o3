@@ -1,16 +1,25 @@
-# G7 fixture runner
+# G7 source-evidence runner
+
+The runner uses Rust `nightly-2026-04-03` through `rustup` and requires both
+nested `Cargo.lock` files with `--locked --offline`. Override the executable or
+toolchain explicitly with `FE2O3_RUSTUP` and `FE2O3_RUST_TOOLCHAIN`; an absent
+toolchain is a hard error.
 
 Run `scripts/device-link/run.sh` with one evidence class:
 
-- `cpu` runs the independent CPU oracle against a boundary emulation.
-- `compile` checks the typed-admission crate and Rust device FFI macros. It
-  does not assemble or link the external LLVM IR.
-- `hardware` exits 77 with `UNAVAILABLE` until G5/G6 provide authenticated
-  publication and the typed runtime consumes that authority.
-- `all` requires CPU and compile checks, then preserves the hardware result. It
-  exits 77 while hardware evidence is explicitly unavailable.
+- `cpu-source-model` compares an independent extent-aware CPU oracle with the
+  boundary source model. It is not GPU evidence.
+- `source-check` checks Rust syntax, macro expansion, source contracts, and the
+  canonical external evidence manifest. It does not compile AMDGPU code.
+- `llvm-verify` runs `llvm-as` and `opt -passes=verify` when both are available.
+  Set `FE2O3_LLVM_AS` and `FE2O3_OPT` to explicit executables. Missing tools
+  produce exit 77 and an `UNAVAILABLE` result; verification failures are hard
+  failures.
+- `hardware` exits 77 because no production loading or execution exists.
+- `all` requires CPU and source checks, attempts LLVM verification, and
+  preserves an explicit unavailable status from LLVM or hardware evidence.
 
-The runner does not invoke COMGR, `llvm-link`, `ld.lld`, or another command-line
-linker. A later hardware implementation must consume the supervised direct-LLVM
-artifact and bind its exact target, contract-set identity, payload digest, and
-observed context before loading.
+No mode invokes COMGR or a command-line linker. Every result retains these
+limitations: no compiler-derived closure, no production loader, and no
+hardware execution. Source evidence explicitly grants neither load nor launch
+authority.
