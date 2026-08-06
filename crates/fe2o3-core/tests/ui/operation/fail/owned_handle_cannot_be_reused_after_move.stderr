@@ -1,0 +1,9 @@
+error[E0382]: borrow of moved value: `operation`
+ --> tests/ui/operation/fail/owned_handle_cannot_be_reused_after_move.rs:6:13
+  |
+4 |     let operation = unsafe { OwnedDeviceOperation::submit_unchecked(stream, (), |_| Ok(()))? };
+  |         --------- move occurs because `operation` has type `OwnedDeviceOperation<'_, ()>`, which does not implement the `Copy` trait
+5 |     let moved = operation;
+  |                 --------- value moved here
+6 |     let _ = operation.is_complete();
+  |             ^^^^^^^^^ value borrowed here after move

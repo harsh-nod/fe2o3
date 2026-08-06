@@ -1,0 +1,10 @@
+error[E0382]: borrow of moved value: `output`
+ --> tests/ui/operation/fail/owned_resource_cannot_be_reused_after_forget.rs:6:13
+  |
+3 | fn rejected(stream: &Stream, output: DeviceBuffer<u32>) -> Result<()> {
+  |                              ------ move occurs because `output` has type `DeviceBuffer<u32>`, which does not implement the `Copy` trait
+4 |     let operation = unsafe { OwnedDeviceOperation::submit_unchecked(stream, output, |_| Ok(()))? };
+  |                                                                             ------ value moved here
+5 |     core::mem::forget(operation);
+6 |     let _ = output.len();
+  |             ^^^^^^ value borrowed here after move

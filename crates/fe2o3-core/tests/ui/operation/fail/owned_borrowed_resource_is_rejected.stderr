@@ -1,0 +1,13 @@
+error[E0521]: borrowed data escapes outside of function
+ --> tests/ui/operation/fail/owned_borrowed_resource_is_rejected.rs:5:9
+  |
+3 | fn rejected(stream: &Stream, output: &mut DeviceBuffer<u32>) -> Result<()> {
+  |                              ------  - let's call the lifetime of this reference `'1`
+  |                              |
+  |                              `output` is a reference that is only valid in the function body
+4 |     let _operation = unsafe {
+5 |         OwnedDeviceOperation::submit_unchecked(stream, &mut *output, |_| Ok(()))?
+  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |         |
+  |         `output` escapes the function body here
+  |         argument requires that `'1` must outlive `'static`
