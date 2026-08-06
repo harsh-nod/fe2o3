@@ -432,6 +432,33 @@ int main(int ArgumentCount, char **Arguments) {
   Response MixedSecond = runSuccess(Mixed, {"mixed_entry", "object_helper"});
   require(MixedFirst.LinkedOutput->Bytes == MixedSecond.LinkedOutput->Bytes,
           "identical requests produced different HSACO bytes");
+
+  Request MixedV2 = Mixed;
+  MixedV2.Protocol = ProtocolVersion::V2;
+  MixedV2.WorkerBuildIdentity = FE2O3_WORKER_BUILD_ID;
+  MixedV2.WorkerExecutableDigest.fill(0x51);
+  MixedV2.WorkerExecutableBytes = 4096;
+  MixedV2.CompilerEnvelopeIdentity.fill(0x62);
+  for (const Input &InputValue : Mixed.Inputs) {
+    if (InputValue.Kind == InputKind::LlvmBitcode)
+      MixedV2.CompilerModule = InputValue;
+    else
+      MixedV2.ExternalProviders.push_back(InputValue);
+  }
+  MixedV2.ImportSymbols = {"object_helper"};
+  MixedV2.ExportSymbols = {"mixed_entry"};
+  MixedV2.FinalSymbols = {"mixed_entry", "object_helper"};
+  llvm::sort(MixedV2.FinalSymbols);
+  Response MixedV2Response =
+      runSuccess(MixedV2, {"mixed_entry", "object_helper"});
+  require(MixedV2Response.Protocol == ProtocolVersion::V2,
+          "V2 pipeline response lost its protocol version");
+  require(MixedV2Response.CompilerEnvelopeIdentity ==
+              MixedV2.CompilerEnvelopeIdentity,
+          "V2 pipeline response lost its compiler envelope identity");
+  Request WrongV2Worker = MixedV2;
+  WrongV2Worker.WorkerBuildIdentity = "wrong-worker";
+  requireFailure(WrongV2Worker, Stage::Toolchain);
   if (ArgumentCount >= 2)
     writeOutput(Arguments[1], MixedFirst.LinkedOutput->Bytes);
   if (ArgumentCount == 4) {

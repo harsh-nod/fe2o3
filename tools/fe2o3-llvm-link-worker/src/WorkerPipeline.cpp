@@ -63,12 +63,15 @@ constexpr StringLiteral AmdGpuTriple = "amdgcn-amd-amdhsa";
 
 Response failure(const Request &RequestValue, Stage FailureStage,
                  std::vector<std::string> Diagnostics) {
-  return {RequestValue.RequestId,
-          RequestValue.Identity,
-          WorkerBuildIdentity.str(),
-          FailureStage,
-          canonicalDiagnostics(Diagnostics),
-          std::nullopt};
+  Response Result{RequestValue.RequestId,
+                  RequestValue.Identity,
+                  WorkerBuildIdentity.str(),
+                  FailureStage,
+                  canonicalDiagnostics(Diagnostics),
+                  std::nullopt};
+  Result.Protocol = RequestValue.Protocol;
+  Result.CompilerEnvelopeIdentity = RequestValue.CompilerEnvelopeIdentity;
+  return Result;
 }
 
 Response failure(const Request &RequestValue, Stage FailureStage,
@@ -716,6 +719,11 @@ Response execute(const Request &RequestValue) {
   if (RequestValue.LlvmBuildIdentity != LlvmBuildIdentity)
     return failure(RequestValue, Stage::Toolchain,
                    {"request LLVM identity does not match worker measurement"});
+  if (RequestValue.Protocol == ProtocolVersion::V2 &&
+      RequestValue.WorkerBuildIdentity != WorkerBuildIdentity)
+    return failure(
+        RequestValue, Stage::Toolchain,
+        {"request worker identity does not match worker measurement"});
   if (Error E = validateRequest(RequestValue))
     return failure(RequestValue, Stage::InputValidation, std::move(E));
 
@@ -811,12 +819,15 @@ Response execute(const Request &RequestValue) {
                      {"linked output is missing a required symbol"});
 
   Output ResultOutput{SHA256::hash(*LinkedBytes), std::move(*LinkedBytes)};
-  return {RequestValue.RequestId,
-          RequestValue.Identity,
-          WorkerBuildIdentity.str(),
-          Stage::Complete,
-          canonicalDiagnostics(LinkDiagnostics, Temporary.Path),
-          std::move(ResultOutput)};
+  Response Result{RequestValue.RequestId,
+                  RequestValue.Identity,
+                  WorkerBuildIdentity.str(),
+                  Stage::Complete,
+                  canonicalDiagnostics(LinkDiagnostics, Temporary.Path),
+                  std::move(ResultOutput)};
+  Result.Protocol = RequestValue.Protocol;
+  Result.CompilerEnvelopeIdentity = RequestValue.CompilerEnvelopeIdentity;
+  return Result;
 }
 
 } // namespace fe2o3::worker

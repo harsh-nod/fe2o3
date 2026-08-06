@@ -46,6 +46,15 @@ int writeResponse(Response ResponseValue) {
   return 0;
 }
 
+int v1DecodeFailure(const char *Diagnostic) {
+  return writeResponse({{},
+                        {},
+                        FE2O3_WORKER_BUILD_ID,
+                        Stage::Decode,
+                        {Diagnostic},
+                        std::nullopt});
+}
+
 } // namespace
 
 int main(int ArgumentCount, char **) {
@@ -54,21 +63,27 @@ int main(int ArgumentCount, char **) {
   std::vector<uint8_t> Bytes;
   Bytes.reserve(64 * 1024);
   if (!readBoundedStdin(Bytes)) {
-    return writeResponse({{},
-                          {},
-                          FE2O3_WORKER_BUILD_ID,
-                          Stage::Decode,
-                          {"worker request exceeds byte bound"},
-                          std::nullopt});
+    auto Version = detectRequestProtocol(Bytes);
+    if (!Version || *Version != ProtocolVersion::V1) {
+      if (!Version)
+        llvm::consumeError(Version.takeError());
+      return 65;
+    }
+    return v1DecodeFailure("worker request exceeds byte bound");
   }
-  auto RequestValue = decodeRequest(Bytes);
+  auto Version = detectRequestProtocol(Bytes);
+  if (!Version) {
+    llvm::consumeError(Version.takeError());
+    return 65;
+  }
+  auto RequestValue = decodeAnyRequest(Bytes);
   if (!RequestValue) {
-    return writeResponse({{},
-                          {},
-                          FE2O3_WORKER_BUILD_ID,
-                          Stage::Decode,
-                          {errorToDiagnostic(RequestValue.takeError())},
-                          std::nullopt});
+    if (*Version == ProtocolVersion::V2) {
+      llvm::consumeError(RequestValue.takeError());
+      return 65;
+    }
+    std::string Diagnostic = errorToDiagnostic(RequestValue.takeError());
+    return v1DecodeFailure(Diagnostic.c_str());
   }
   return writeResponse(execute(*RequestValue));
 }

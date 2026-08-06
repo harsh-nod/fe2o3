@@ -21,7 +21,9 @@ inline constexpr size_t MaxSymbolBytes = 256;
 inline constexpr size_t MaxDiagnostics = 64;
 inline constexpr size_t MaxDiagnosticBytes = 1024;
 inline constexpr size_t MaxTotalDiagnosticBytes = 16 * 1024;
+inline constexpr size_t MaxWorkerExecutableBytes = 512 * 1024 * 1024;
 
+enum class ProtocolVersion : uint8_t { V1 = 1, V2 = 2 };
 enum class InputKind : uint8_t { LlvmBitcode = 1, AmdGpuRelocatable = 2 };
 enum class OptimizationLevel : uint8_t { O0 = 0, O1 = 1, O2 = 2, O3 = 3 };
 enum class Stage : uint8_t {
@@ -43,7 +45,7 @@ struct Options {
 };
 
 struct Input {
-  InputKind Kind;
+  InputKind Kind = InputKind::LlvmBitcode;
   std::array<uint8_t, 32> Digest{};
   std::vector<uint8_t> Bytes;
 };
@@ -59,6 +61,16 @@ struct Request {
   std::vector<std::string> RequiredSymbols;
   std::vector<std::string> ExpectedDefinedSymbols;
   uint64_t MaxOutputBytes = 0;
+  ProtocolVersion Protocol = ProtocolVersion::V1;
+  std::string WorkerBuildIdentity;
+  std::array<uint8_t, 32> WorkerExecutableDigest{};
+  uint64_t WorkerExecutableBytes = 0;
+  std::array<uint8_t, 32> CompilerEnvelopeIdentity{};
+  Input CompilerModule;
+  std::vector<Input> ExternalProviders;
+  std::vector<std::string> ImportSymbols;
+  std::vector<std::string> ExportSymbols;
+  std::vector<std::string> FinalSymbols;
 };
 
 struct Output {
@@ -73,9 +85,15 @@ struct Response {
   Stage FailureStage = Stage::Decode;
   std::vector<std::string> Diagnostics;
   std::optional<Output> LinkedOutput;
+  ProtocolVersion Protocol = ProtocolVersion::V1;
+  std::array<uint8_t, 32> CompilerEnvelopeIdentity{};
 };
 
 llvm::Expected<Request> decodeRequest(llvm::ArrayRef<uint8_t> Bytes);
+llvm::Expected<Request> decodeRequestV2(llvm::ArrayRef<uint8_t> Bytes);
+llvm::Expected<Request> decodeAnyRequest(llvm::ArrayRef<uint8_t> Bytes);
+llvm::Expected<ProtocolVersion>
+detectRequestProtocol(llvm::ArrayRef<uint8_t> Bytes);
 llvm::Expected<std::vector<uint8_t>> encodeResponse(Response ResponseValue);
 
 std::vector<std::string>
