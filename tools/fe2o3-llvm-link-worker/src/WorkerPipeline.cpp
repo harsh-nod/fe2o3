@@ -416,7 +416,7 @@ Expected<std::unique_ptr<Module>> linkBitcode(const Request &RequestValue,
       }
       AcceptedLayout = TextModule->getDataLayoutStr().empty() ||
                        TextModule->getDataLayout() == ExpectedLayout;
-      return std::move(TextModule);
+      return TextModule;
     }();
     if (!Parsed)
       return pipelineError(Twine("LLVM module input ") + Twine(I) + ": " +
@@ -596,7 +596,7 @@ Expected<SymbolContract> inspectModuleSymbols(const Input &InputValue,
       Stream.flush();
       return pipelineError(Message);
     }
-    return std::move(TextModule);
+    return TextModule;
   }();
   if (!Parsed)
     return pipelineError(Twine(InputName) + ": " +
