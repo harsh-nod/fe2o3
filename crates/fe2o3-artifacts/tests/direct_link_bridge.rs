@@ -1081,3 +1081,69 @@ fn identical_payload_aliases_in_one_bundle_remain_occurrence_local() {
         })
     );
 }
+
+#[test]
+fn streamed_container_identity_matches_canonical_multi_payload_occurrences() {
+    let first_payload =
+        CodeObjectPayload::from_bytes(DigestAlgorithm::Sha256, b"first payload".to_vec()).unwrap();
+    let second_payload =
+        CodeObjectPayload::from_bytes(DigestAlgorithm::Sha256, b"second payload".to_vec()).unwrap();
+    let first_digest = first_payload.digest();
+    let second_digest = second_payload.digest();
+    let manifest = fe2o3_artifacts::ManifestV1::new(
+        CompilerIdentity::new(text("rustc"), text("1.94.0")),
+        ToolIdentity::new(text("fe2o3"), text("0.1.0")),
+        target_architecture("gfx942"),
+        vec![
+            object_identity(first_digest.bytes(), first_payload.bytes().len() as u64),
+            object_identity(second_digest.bytes(), second_payload.bytes().len() as u64),
+        ],
+        vec![
+            kernel_with_object_digest(0x20, "first", "first.kd", first_digest.bytes(), vec![]),
+            kernel_with_object_digest(0x21, "second", "second.kd", second_digest.bytes(), vec![]),
+        ],
+    )
+    .unwrap();
+    let container = ArtifactContainerV1::new(
+        manifest,
+        DigestAlgorithm::Sha256,
+        vec![second_payload, first_payload],
+    )
+    .unwrap();
+    let bundle = BundleIndexV1::from_containers(std::slice::from_ref(&container)).unwrap();
+    let first_expectation = expectation(first_digest, 0x18);
+    let second_expectation = expectation(second_digest, 0x19);
+    let sources = [
+        DirectLinkBindingSourceV1::new(&container, first_expectation),
+        DirectLinkBindingSourceV1::new(&container, second_expectation),
+    ];
+    let evidence = DirectLinkBundleEvidenceV1::bind(&bundle, &[&container], &sources).unwrap();
+    let validated = evidence
+        .validate_against(&bundle, &[&container], &sources)
+        .unwrap();
+
+    let witnesses = (0..validated.bindings().len())
+        .map(|index| {
+            ManifestClaimDerivedLinkPublicationScopeV1::derive(
+                package_claim(0x54),
+                &validated,
+                index,
+                &container,
+            )
+            .unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(witnesses.len(), 2);
+    assert_eq!(
+        witnesses[0].container_identity(),
+        witnesses[1].container_identity()
+    );
+    assert_ne!(
+        witnesses[0].occurrence_identity(),
+        witnesses[1].occurrence_identity()
+    );
+    assert_ne!(
+        witnesses[0].descriptive_scope_claim().kernel_set(),
+        witnesses[1].descriptive_scope_claim().kernel_set()
+    );
+}
