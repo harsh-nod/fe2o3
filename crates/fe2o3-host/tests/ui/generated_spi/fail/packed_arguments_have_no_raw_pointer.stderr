@@ -1,0 +1,5 @@
+error[E0599]: no method named `as_ptr` found for struct `fe2o3_host::generated_argument_plan::GeneratedPackedArgumentsV1` in the current scope
+ --> tests/ui/generated_spi/fail/packed_arguments_have_no_raw_pointer.rs:6:20
+  |
+6 |     let _ = packed.as_ptr();
+  |                    ^^^^^^ method not found in `fe2o3_host::generated_argument_plan::GeneratedPackedArgumentsV1`
