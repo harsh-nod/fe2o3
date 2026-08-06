@@ -542,6 +542,9 @@ dependencies = [
 [[package]]
 name = "fe2o3-verifier"
 version = "0.1.0"
+dependencies = [
+ "fe2o3-artifacts",
+]
 
 [[package]]
 name = "find-msvc-tools"
