@@ -499,7 +499,7 @@ fn cpp_worker_cross_language_failure_round_trip_when_configured() {
         response.worker_build_identity(),
         request.llvm_build_identity()
     );
-    assert_eq!(response.stage(), WorkerStageV1::BitcodeLink);
+    assert_eq!(response.stage(), WorkerStageV1::InputValidation);
     assert!(response.output().is_none());
     assert!(!response.diagnostics().is_empty());
 }
