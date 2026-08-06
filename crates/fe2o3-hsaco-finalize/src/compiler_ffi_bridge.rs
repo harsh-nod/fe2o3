@@ -18,8 +18,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     ContentIdentityV1, LinkPlanIdentityV1, MAX_LINK_INPUTS, MultiInputLinkPlanV1,
-    WorkerInputKindV1, WorkerProtocolError,
-    worker_protocol::validate_symbols,
+    WorkerInputKindV1, WorkerProtocolError, worker_protocol::validate_symbols,
 };
 
 pub use reserved_fe2o3_symbols::DeviceFfiContractIdV1 as G4FfiContractIdV1;
