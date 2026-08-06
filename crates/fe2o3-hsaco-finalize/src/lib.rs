@@ -67,10 +67,10 @@ pub use request_construction::{
     construct_worker_request_v1, construct_worker_request_v2_from_consumed_handoff,
 };
 pub use worker_executor::{
-    DEFAULT_WORKER_STDERR_BYTES, DEFAULT_WORKER_TIMEOUT, InertWorkerExecutionV1,
-    MAX_WORKER_EXECUTABLE_BYTES, MAX_WORKER_STDERR_BYTES, MAX_WORKER_TIMEOUT, PinnedWorkerV1,
-    WORKER_ENVIRONMENT_ALLOWLIST_V1, WorkerExecutionError, WorkerExecutionErrorKind,
-    WorkerExecutionLimitsV1, WorkerMeasurementV1, WorkerTerminationV1,
+    DEFAULT_WORKER_STDERR_BYTES, DEFAULT_WORKER_TIMEOUT, InertCompilerHandoffExecutionV2,
+    InertWorkerExecutionV1, MAX_WORKER_EXECUTABLE_BYTES, MAX_WORKER_STDERR_BYTES,
+    MAX_WORKER_TIMEOUT, PinnedWorkerV1, WORKER_ENVIRONMENT_ALLOWLIST_V1, WorkerExecutionError,
+    WorkerExecutionErrorKind, WorkerExecutionLimitsV1, WorkerMeasurementV1, WorkerTerminationV1,
 };
 pub use worker_protocol::{
     MAX_WORKER_DIAGNOSTIC_BYTES, MAX_WORKER_DIAGNOSTICS, MAX_WORKER_OUTPUT_BYTES,

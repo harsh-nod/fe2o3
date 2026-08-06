@@ -20,10 +20,11 @@ use std::{error::Error, fmt, path::Path, time::Duration};
 use std::{io, path::PathBuf, process::ExitStatus};
 
 use crate::{
-    ContentIdentityV1, MAX_WORKER_RESPONSE_BYTES, MAX_WORKER_TOOLCHAIN_ID_BYTES,
-    WorkerEvidenceClassV1, WorkerEvidenceClassV2, WorkerProtocolError, WorkerRequestV1,
-    WorkerRequestV2, WorkerResponseV1, WorkerResponseV2,
+    CompilerHandoffWorkerRequestV2, ContentIdentityV1, MAX_WORKER_RESPONSE_BYTES,
+    MAX_WORKER_TOOLCHAIN_ID_BYTES, WorkerEvidenceClassV1, WorkerEvidenceClassV2,
+    WorkerProtocolError, WorkerRequestV1, WorkerRequestV2, WorkerResponseV1, WorkerResponseV2,
 };
+use fe2o3_artifact_transaction::{BuildAttempt, CompilerModuleHandoffIdentityV1};
 
 /// Maximum bytes accepted for a selected native worker executable.
 pub const MAX_WORKER_EXECUTABLE_BYTES: u64 = 512 * 1024 * 1024;
@@ -307,6 +308,51 @@ impl InertWorkerExecutionV1 {
 pub(crate) struct InertWorkerExecutionV2 {
     worker_executable: ContentIdentityV1,
     response: WorkerResponseV2,
+}
+
+/// Verified Worker V2 execution retained with its exact build attempt and one-shot handoff.
+///
+/// The worker response is measured and request-bound, but this remains inert evidence. In
+/// particular, it cannot publish, load, or launch the returned bytes.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InertCompilerHandoffExecutionV2 {
+    attempt: BuildAttempt,
+    handoff_identity: CompilerModuleHandoffIdentityV1,
+    execution: InertWorkerExecutionV2,
+}
+
+impl InertCompilerHandoffExecutionV2 {
+    pub const fn attempt(&self) -> BuildAttempt {
+        self.attempt
+    }
+
+    pub const fn handoff_identity(&self) -> CompilerModuleHandoffIdentityV1 {
+        self.handoff_identity
+    }
+
+    pub const fn worker_executable(&self) -> ContentIdentityV1 {
+        self.execution.worker_executable()
+    }
+
+    pub const fn response(&self) -> &WorkerResponseV2 {
+        self.execution.response()
+    }
+
+    pub const fn evidence_class(&self) -> WorkerEvidenceClassV2 {
+        WorkerEvidenceClassV2::CompilerFfiLink
+    }
+
+    pub const fn grants_publication_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_load_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
+    }
 }
 
 #[allow(dead_code)]
@@ -675,6 +721,20 @@ mod platform {
             Ok(InertWorkerExecutionV2 {
                 worker_executable: self.measurement.executable,
                 response,
+            })
+        }
+
+        /// Executes a Worker V2 request that consumed one exact build-attempt handoff.
+        pub fn execute_compiler_handoff_v2(
+            &self,
+            request: &CompilerHandoffWorkerRequestV2,
+            limits: WorkerExecutionLimitsV1,
+        ) -> Result<InertCompilerHandoffExecutionV2, WorkerExecutionError> {
+            let execution = self.execute_v2(request.sealed_request(), limits)?;
+            Ok(InertCompilerHandoffExecutionV2 {
+                attempt: request.attempt(),
+                handoff_identity: request.handoff_identity(),
+                execution,
             })
         }
     }
@@ -1055,6 +1115,16 @@ impl PinnedWorkerV1 {
         _request: &WorkerRequestV1,
         _limits: WorkerExecutionLimitsV1,
     ) -> Result<InertWorkerExecutionV1, WorkerExecutionError> {
+        Err(WorkerExecutionError::plain(
+            WorkerExecutionErrorKind::UnsupportedPlatform,
+        ))
+    }
+
+    pub fn execute_compiler_handoff_v2(
+        &self,
+        _request: &CompilerHandoffWorkerRequestV2,
+        _limits: WorkerExecutionLimitsV1,
+    ) -> Result<InertCompilerHandoffExecutionV2, WorkerExecutionError> {
         Err(WorkerExecutionError::plain(
             WorkerExecutionErrorKind::UnsupportedPlatform,
         ))
