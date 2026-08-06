@@ -53,6 +53,7 @@ version = "0.1.0"
 dependencies = [
  "cap-primitives",
  "fe2o3-rustc-invocation",
+ "reserved-fe2o3-symbols",
  "rustix",
  "serde_json",
  "sha2",

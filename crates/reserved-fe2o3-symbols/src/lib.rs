@@ -57,6 +57,11 @@ const BINDING_ID_HEX_BYTES: usize = BINDING_ID_BYTES * 2;
 pub struct CrateBindingIdV1([u8; BINDING_ID_BYTES]);
 
 impl CrateBindingIdV1 {
+    /// Constructs an identity from exact digest bytes.
+    pub const fn from_bytes(bytes: [u8; BINDING_ID_BYTES]) -> Self {
+        Self(bytes)
+    }
+
     /// Returns the exact digest bytes.
     pub const fn as_bytes(self) -> [u8; BINDING_ID_BYTES] {
         self.0
@@ -78,6 +83,11 @@ impl CrateBindingIdV1 {
 pub struct KernelBindingIdV1([u8; BINDING_ID_BYTES]);
 
 impl KernelBindingIdV1 {
+    /// Constructs an identity from exact digest bytes.
+    pub const fn from_bytes(bytes: [u8; BINDING_ID_BYTES]) -> Self {
+        Self(bytes)
+    }
+
     /// Returns the exact digest bytes.
     pub const fn as_bytes(self) -> [u8; BINDING_ID_BYTES] {
         self.0

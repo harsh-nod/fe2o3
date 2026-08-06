@@ -97,7 +97,7 @@ static __fe2o3_kernel_registration_unknown_registration_version: (
     fn(),
 ) = (
     KERNEL_REGISTRATION_MAGIC,
-    2,
+    3,
     KERNEL_REGISTRATION_KIND_KERNEL,
     "unknown_registration_version",
     "unknown_registration_version",

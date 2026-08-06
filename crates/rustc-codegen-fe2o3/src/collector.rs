@@ -1,3 +1,7 @@
+use reserved_fe2o3_symbols::{
+    CrateBindingIdV1, KernelBindingIdV1, TYPED_VECADD_F32_PROFILE_TAG_V1,
+    derive_crate_binding_id_v1, derive_kernel_binding_id_v1, host_kernel_symbol_v1,
+};
 use rustc_hir::ItemKind;
 use rustc_hir::def_id::{DefId, LOCAL_CRATE};
 use rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags;
@@ -24,6 +28,8 @@ pub struct CollectedFunction<'tcx> {
     pub(crate) logical_name: Option<String>,
     /// Present only when the registration selects a versioned typed profile.
     pub(crate) typed_profile: Option<TypedKernelProfile>,
+    /// Present only for a V2 typed registration validated by the backend.
+    pub(crate) kernel_binding: Option<KernelBindingIdV1>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -70,7 +76,13 @@ pub fn collect_device_functions<'tcx>(
         if verbose {
             eprintln!("[collector] root kernel: {raw_name} -> {export_name}");
         }
-        collector.add_root(instance, logical_name, export_name, root.typed_profile);
+        collector.add_root(
+            instance,
+            logical_name,
+            export_name,
+            root.typed_profile,
+            root.kernel_binding,
+        );
     }
 
     collector.collect()
@@ -83,6 +95,7 @@ pub fn dump_device_functions<'tcx>(tcx: TyCtxt<'tcx>, functions: &[CollectedFunc
             let def_id = function.instance.def_id();
             debug_assert_eq!(function.is_kernel, function.logical_name.is_some());
             debug_assert!(function.is_kernel || function.typed_profile.is_none());
+            debug_assert!(function.is_kernel || function.kernel_binding.is_none());
             let mir_stats = if tcx.is_mir_available(def_id) {
                 let mir = tcx.instance_mir(function.instance.def);
                 format!(
@@ -133,6 +146,8 @@ struct RegistrationRecord<T> {
     kind: u16,
     logical_name: String,
     export_name: String,
+    crate_binding: Option<CrateBindingIdV1>,
+    kernel_binding: Option<KernelBindingIdV1>,
     target_symbol: String,
     target_identity: String,
     target: T,
@@ -144,6 +159,7 @@ struct KernelRoot<T> {
     logical_name: String,
     export_name: String,
     typed_profile: Option<TypedKernelProfile>,
+    kernel_binding: Option<KernelBindingIdV1>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -240,7 +256,19 @@ fn kernel_roots<'tcx>(
         )?);
     }
 
-    validate_registration_records(records)
+    validate_registration_records(records, session_crate_binding(tcx))
+}
+
+fn session_crate_binding(tcx: TyCtxt<'_>) -> Option<CrateBindingIdV1> {
+    let metadata = &tcx.sess.opts.cg.metadata;
+    if metadata.is_empty() {
+        return None;
+    }
+    let crate_name = tcx.crate_name(LOCAL_CRATE);
+    Some(derive_crate_binding_id_v1(
+        crate_name.as_str(),
+        metadata.iter().map(String::as_str),
+    ))
 }
 
 fn registration_candidates<'tcx>(
@@ -275,21 +303,30 @@ fn decode_registration_static<'tcx>(
     let TyKind::Tuple(fields) = registration_ty.kind() else {
         return Err(RegistrationError::new(
             registration_path,
-            "V1 registration must use the exact tuple type",
+            "registration must use an exact V1 or V2 tuple type",
         ));
     };
 
-    if fields.len() != reserved_fe2o3_symbols::KERNEL_REGISTRATION_V1_FIELD_COUNT
-        || fields[0] != tcx.types.u64
-        || fields[1] != tcx.types.u16
-        || fields[2] != tcx.types.u16
-        || !is_shared_str(fields[3])
-        || !is_shared_str(fields[4])
-        || !matches!(fields[5].kind(), TyKind::FnPtr(..))
-    {
+    let is_v1 = fields.len() == reserved_fe2o3_symbols::KERNEL_REGISTRATION_V1_FIELD_COUNT
+        && fields[0] == tcx.types.u64
+        && fields[1] == tcx.types.u16
+        && fields[2] == tcx.types.u16
+        && is_shared_str(fields[3])
+        && is_shared_str(fields[4])
+        && matches!(fields[5].kind(), TyKind::FnPtr(..));
+    let is_v2 = fields.len() == reserved_fe2o3_symbols::KERNEL_REGISTRATION_V2_FIELD_COUNT
+        && fields[0] == tcx.types.u64
+        && fields[1] == tcx.types.u16
+        && fields[2] == tcx.types.u16
+        && is_shared_str(fields[3])
+        && is_shared_str(fields[4])
+        && is_shared_str(fields[5])
+        && is_shared_str(fields[6])
+        && matches!(fields[7].kind(), TyKind::FnPtr(..));
+    if !is_v1 && !is_v2 {
         return Err(RegistrationError::new(
             registration_path,
-            "V1 registration type must be `(u64, u16, u16, &str, &str, fn pointer)`",
+            "registration type must be V1 `(u64, u16, u16, &str, &str, fn pointer)` or V2 `(u64, u16, u16, &str, &str, &str, &str, fn pointer)`",
         ));
     }
 
@@ -306,7 +343,7 @@ fn decode_registration_static<'tcx>(
             if aggregate.replace(fields).is_some() {
                 return Err(RegistrationError::new(
                     registration_path,
-                    "V1 registration initializer must contain exactly one tuple value",
+                    "registration initializer must contain exactly one tuple value",
                 ));
             }
         }
@@ -314,13 +351,18 @@ fn decode_registration_static<'tcx>(
     let fields = aggregate.ok_or_else(|| {
         RegistrationError::new(
             registration_path.clone(),
-            "V1 registration initializer does not contain the required tuple value",
+            "registration initializer does not contain the required tuple value",
         )
     })?;
-    if fields.len() != reserved_fe2o3_symbols::KERNEL_REGISTRATION_V1_FIELD_COUNT {
+    let expected_fields = if is_v2 {
+        reserved_fe2o3_symbols::KERNEL_REGISTRATION_V2_FIELD_COUNT
+    } else {
+        reserved_fe2o3_symbols::KERNEL_REGISTRATION_V1_FIELD_COUNT
+    };
+    if fields.len() != expected_fields {
         return Err(RegistrationError::new(
             registration_path,
-            "V1 registration initializer has the wrong field count",
+            "registration initializer has the wrong field count",
         ));
     }
     let fields = fields.iter().collect::<Vec<_>>();
@@ -331,7 +373,30 @@ fn decode_registration_static<'tcx>(
     let kind = registration_integer(tcx, fields[2], tcx.types.u16, "kind", &registration_path)?;
     let logical_name = registration_string(tcx, fields[3], "logical name", &registration_path)?;
     let export_name = registration_string(tcx, fields[4], "export name", &registration_path)?;
-    let target = registration_target(tcx, body, fields[5], &registration_path)?;
+    let crate_binding = if is_v2 {
+        let value = registration_string(tcx, fields[5], "crate binding", &registration_path)?;
+        Some(CrateBindingIdV1::from_hex(&value).map_err(|error| {
+            RegistrationError::new(
+                &registration_path,
+                format!("invalid crate binding: {error}"),
+            )
+        })?)
+    } else {
+        None
+    };
+    let kernel_binding = if is_v2 {
+        let value = registration_string(tcx, fields[6], "kernel binding", &registration_path)?;
+        Some(KernelBindingIdV1::from_hex(&value).map_err(|error| {
+            RegistrationError::new(
+                &registration_path,
+                format!("invalid kernel binding: {error}"),
+            )
+        })?)
+    } else {
+        None
+    };
+    let target_index = if is_v2 { 7 } else { 5 };
+    let target = registration_target(tcx, body, fields[target_index], &registration_path)?;
     let target_symbol = tcx.symbol_name(target).name.to_string();
     let target_identity = tcx.def_path_str(target.def_id());
     let Some(cgu_targets) = functions_by_symbol.get(&target_symbol) else {
@@ -365,6 +430,18 @@ fn decode_registration_static<'tcx>(
         .map_err(|_| RegistrationError::new(&registration_path, "version does not fit u16"))?;
     let kind = u16::try_from(kind)
         .map_err(|_| RegistrationError::new(&registration_path, "kind does not fit u16"))?;
+    if version == reserved_fe2o3_symbols::KERNEL_REGISTRATION_VERSION_V1 && !is_v1 {
+        return Err(RegistrationError::new(
+            &registration_path,
+            "registration version 1 requires the exact V1 tuple type",
+        ));
+    }
+    if version == reserved_fe2o3_symbols::KERNEL_REGISTRATION_VERSION_V2 && !is_v2 {
+        return Err(RegistrationError::new(
+            &registration_path,
+            "registration version 2 requires the exact V2 tuple type",
+        ));
+    }
 
     Ok(RegistrationRecord {
         registration_path,
@@ -374,6 +451,8 @@ fn decode_registration_static<'tcx>(
         kind,
         logical_name,
         export_name,
+        crate_binding,
+        kernel_binding,
         target_symbol,
         target_identity,
         target,
@@ -461,14 +540,14 @@ fn registration_target<'tcx>(
         Operand::Constant(_) | Operand::RuntimeChecks(_) => {
             return Err(RegistrationError::new(
                 registration_path,
-                "V1 target field must directly use a reified function pointer",
+                "registration target field must directly use a reified function pointer",
             ));
         }
     };
     let Some(target_local) = place.as_local() else {
         return Err(RegistrationError::new(
             registration_path,
-            "V1 target field must use an unprojected function-pointer local",
+            "registration target field must use an unprojected function-pointer local",
         ));
     };
 
@@ -489,13 +568,13 @@ fn registration_target<'tcx>(
             let Operand::Constant(source) = source else {
                 return Err(RegistrationError::new(
                     registration_path,
-                    "V1 target coercion must directly name a function item",
+                    "registration target coercion must directly name a function item",
                 ));
             };
             let TyKind::FnDef(def_id, args) = source.const_.ty().kind() else {
                 return Err(RegistrationError::new(
                     registration_path,
-                    "V1 target coercion does not reference a function item",
+                    "registration target coercion does not reference a function item",
                 ));
             };
             let resolved =
@@ -505,13 +584,13 @@ fn registration_target<'tcx>(
                     .ok_or_else(|| {
                         RegistrationError::new(
                             registration_path,
-                            "V1 target function could not be resolved",
+                            "registration target function could not be resolved",
                         )
                     })?;
             if target.replace(resolved).is_some() {
                 return Err(RegistrationError::new(
                     registration_path,
-                    "V1 target local has multiple function definitions",
+                    "registration target local has multiple function definitions",
                 ));
             }
         }
@@ -520,7 +599,7 @@ fn registration_target<'tcx>(
     target.ok_or_else(|| {
         RegistrationError::new(
             registration_path,
-            "V1 target function association is missing",
+            "registration target function association is missing",
         )
     })
 }
@@ -531,6 +610,7 @@ fn is_shared_str(ty: rustc_middle::ty::Ty<'_>) -> bool {
 
 fn validate_registration_records<T: Copy>(
     mut records: Vec<RegistrationRecord<T>>,
+    expected_crate_binding: Option<CrateBindingIdV1>,
 ) -> Result<Vec<KernelRoot<T>>, RegistrationError> {
     records.sort_by(|lhs, rhs| lhs.registration_path.cmp(&rhs.registration_path));
 
@@ -543,23 +623,39 @@ fn validate_registration_records<T: Copy>(
         let error = |reason| RegistrationError::new(record.registration_path.clone(), reason);
         if record.magic != reserved_fe2o3_symbols::KERNEL_REGISTRATION_MAGIC {
             return Err(error(format!(
-                "magic {:#018x} does not match V1 magic {:#018x}",
+                "magic {:#018x} does not match registration magic {:#018x}",
                 record.magic,
                 reserved_fe2o3_symbols::KERNEL_REGISTRATION_MAGIC
             )));
         }
-        if record.version != reserved_fe2o3_symbols::KERNEL_REGISTRATION_VERSION_V1 {
-            return Err(error(format!(
-                "unknown registration version {}",
-                record.version
-            )));
-        }
-        let typed_profile = match record.kind {
-            reserved_fe2o3_symbols::KERNEL_REGISTRATION_KIND_KERNEL => None,
-            reserved_fe2o3_symbols::KERNEL_REGISTRATION_KIND_TYPED_VECADD_V1 => {
-                Some(TypedKernelProfile::VecAddV1)
+        let typed_profile = match (record.version, record.kind) {
+            (
+                reserved_fe2o3_symbols::KERNEL_REGISTRATION_VERSION_V1,
+                reserved_fe2o3_symbols::KERNEL_REGISTRATION_KIND_KERNEL,
+            ) => None,
+            (
+                reserved_fe2o3_symbols::KERNEL_REGISTRATION_VERSION_V2,
+                reserved_fe2o3_symbols::KERNEL_REGISTRATION_KIND_TYPED_VECADD_V1,
+            ) => Some(TypedKernelProfile::VecAddV1),
+            (reserved_fe2o3_symbols::KERNEL_REGISTRATION_VERSION_V1, kind)
+                if kind == reserved_fe2o3_symbols::KERNEL_REGISTRATION_KIND_TYPED_VECADD_V1 =>
+            {
+                return Err(error("typed registrations require version 2".to_owned()));
             }
-            _ => return Err(error(format!("unknown registration kind {}", record.kind))),
+            (reserved_fe2o3_symbols::KERNEL_REGISTRATION_VERSION_V2, kind)
+                if kind == reserved_fe2o3_symbols::KERNEL_REGISTRATION_KIND_KERNEL =>
+            {
+                return Err(error(
+                    "ordinary registrations must remain version 1".to_owned(),
+                ));
+            }
+            (version, _)
+                if version != reserved_fe2o3_symbols::KERNEL_REGISTRATION_VERSION_V1
+                    && version != reserved_fe2o3_symbols::KERNEL_REGISTRATION_VERSION_V2 =>
+            {
+                return Err(error(format!("unknown registration version {version}")));
+            }
+            (_, kind) => return Err(error(format!("unknown registration kind {kind}"))),
         };
         if record.logical_name.is_empty() {
             return Err(error("logical name must not be empty".to_string()));
@@ -580,11 +676,56 @@ fn validate_registration_records<T: Copy>(
             )));
         }
 
-        let expected_target_symbol = format!(
-            "{}{}",
-            reserved_fe2o3_symbols::KERNEL_PREFIX,
-            record.export_name
-        );
+        let kernel_binding = match typed_profile {
+            Some(TypedKernelProfile::VecAddV1) => {
+                let crate_binding = record
+                    .crate_binding
+                    .ok_or_else(|| error("V2 registration has no crate binding".to_owned()))?;
+                if let Some(expected) = expected_crate_binding
+                    && crate_binding != expected
+                {
+                    return Err(error(format!(
+                        "crate binding {} disagrees with rustc session binding {}",
+                        crate_binding.to_hex(),
+                        expected.to_hex()
+                    )));
+                }
+                let declared = record
+                    .kernel_binding
+                    .ok_or_else(|| error("V2 registration has no kernel binding".to_owned()))?;
+                let expected = derive_kernel_binding_id_v1(
+                    crate_binding,
+                    TYPED_VECADD_F32_PROFILE_TAG_V1,
+                    &record.logical_name,
+                    &record.export_name,
+                );
+                if declared != expected {
+                    return Err(error(format!(
+                        "kernel binding {} disagrees with derived binding {}",
+                        declared.to_hex(),
+                        expected.to_hex()
+                    )));
+                }
+                Some(declared)
+            }
+            None => {
+                if record.crate_binding.is_some() || record.kernel_binding.is_some() {
+                    return Err(error(
+                        "V1 registration unexpectedly carries binding IDs".to_owned(),
+                    ));
+                }
+                None
+            }
+        };
+
+        let expected_target_symbol = match kernel_binding {
+            Some(binding) => host_kernel_symbol_v1(binding),
+            None => format!(
+                "{}{}",
+                reserved_fe2o3_symbols::KERNEL_PREFIX,
+                record.export_name
+            ),
+        };
         if record.target_symbol != expected_target_symbol {
             return Err(error(format!(
                 "target symbol `{}` is inconsistent with export name `{}`",
@@ -616,6 +757,7 @@ fn validate_registration_records<T: Copy>(
             logical_name: record.logical_name,
             export_name: record.export_name,
             typed_profile,
+            kernel_binding,
         });
     }
 
@@ -687,6 +829,7 @@ impl<'tcx> DeviceCollector<'tcx> {
         logical_name: String,
         export_name: String,
         typed_profile: Option<TypedKernelProfile>,
+        kernel_binding: Option<KernelBindingIdV1>,
     ) {
         let symbol = self.tcx.symbol_name(instance).name.to_string();
         if self.seen.insert(symbol) {
@@ -697,6 +840,7 @@ impl<'tcx> DeviceCollector<'tcx> {
                 export_name,
                 logical_name: Some(logical_name),
                 typed_profile,
+                kernel_binding,
             });
         }
     }
@@ -822,6 +966,7 @@ impl<'tcx> DeviceCollector<'tcx> {
             export_name,
             logical_name: None,
             typed_profile: None,
+            kernel_binding: None,
         });
         Ok(())
     }
@@ -941,11 +1086,22 @@ fn sanitize_symbol_name(name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{RegistrationRecord, TypedKernelProfile, validate_registration_records};
+    use super::{
+        KernelRoot, RegistrationError, RegistrationRecord, TypedKernelProfile,
+        validate_registration_records as validate_records,
+    };
     use reserved_fe2o3_symbols::{
         KERNEL_PREFIX, KERNEL_REGISTRATION_KIND_KERNEL, KERNEL_REGISTRATION_KIND_TYPED_VECADD_V1,
         KERNEL_REGISTRATION_MAGIC, KERNEL_REGISTRATION_PREFIX, KERNEL_REGISTRATION_VERSION_V1,
+        KERNEL_REGISTRATION_VERSION_V2, TYPED_VECADD_F32_PROFILE_TAG_V1,
+        derive_crate_binding_id_v1, derive_kernel_binding_id_v1, host_kernel_symbol_v1,
     };
+
+    fn validate_registration_records<T: Copy>(
+        records: Vec<RegistrationRecord<T>>,
+    ) -> Result<Vec<KernelRoot<T>>, RegistrationError> {
+        validate_records(records, None)
+    }
 
     fn registration(
         path: &str,
@@ -961,10 +1117,34 @@ mod tests {
             kind: KERNEL_REGISTRATION_KIND_KERNEL,
             logical_name: logical_name.to_string(),
             export_name: export_name.to_string(),
+            crate_binding: None,
+            kernel_binding: None,
             target_symbol: format!("{KERNEL_PREFIX}{export_name}"),
             target_identity: format!("target-{target}"),
             target,
         }
+    }
+
+    fn typed_registration(
+        path: &str,
+        logical_name: &str,
+        export_name: &str,
+        target: u8,
+    ) -> RegistrationRecord<u8> {
+        let mut registration = registration(path, logical_name, export_name, target);
+        let crate_binding = derive_crate_binding_id_v1("fixture", ["metadata"]);
+        let kernel_binding = derive_kernel_binding_id_v1(
+            crate_binding,
+            TYPED_VECADD_F32_PROFILE_TAG_V1,
+            logical_name,
+            export_name,
+        );
+        registration.version = KERNEL_REGISTRATION_VERSION_V2;
+        registration.kind = KERNEL_REGISTRATION_KIND_TYPED_VECADD_V1;
+        registration.crate_binding = Some(crate_binding);
+        registration.kernel_binding = Some(kernel_binding);
+        registration.target_symbol = host_kernel_symbol_v1(kernel_binding);
+        registration
     }
 
     #[test]
@@ -986,14 +1166,12 @@ mod tests {
 
     #[test]
     fn typed_vecadd_registration_carries_its_profile_into_the_kernel_root() {
-        let mut typed = registration(
+        let typed = typed_registration(
             "crate::__fe2o3_kernel_registration_vecadd",
             "vecadd",
             "vecadd",
             7,
         );
-        typed.kind = KERNEL_REGISTRATION_KIND_TYPED_VECADD_V1;
-
         let roots = validate_registration_records(vec![typed]).unwrap();
 
         assert_eq!(roots.len(), 1);
@@ -1001,6 +1179,40 @@ mod tests {
         assert_eq!(roots[0].logical_name, "vecadd");
         assert_eq!(roots[0].export_name, "vecadd");
         assert_eq!(roots[0].typed_profile, Some(TypedKernelProfile::VecAddV1));
+        assert!(roots[0].kernel_binding.is_some());
+    }
+
+    #[test]
+    fn typed_registration_identity_and_host_symbol_fail_closed() {
+        let typed = typed_registration(
+            "crate::__fe2o3_kernel_registration_vecadd",
+            "vecadd",
+            "vecadd",
+            7,
+        );
+        let wrong_crate = derive_crate_binding_id_v1("other", ["metadata"]);
+        let error = validate_records(vec![typed.clone()], Some(wrong_crate)).unwrap_err();
+        assert!(
+            error
+                .reason
+                .contains("disagrees with rustc session binding")
+        );
+
+        let mut wrong_kernel = typed.clone();
+        wrong_kernel.kernel_binding = Some(derive_kernel_binding_id_v1(
+            wrong_kernel.crate_binding.unwrap(),
+            TYPED_VECADD_F32_PROFILE_TAG_V1,
+            "different",
+            "different",
+        ));
+        let error = validate_registration_records(vec![wrong_kernel]).unwrap_err();
+        assert!(error.reason.contains("disagrees with derived binding"));
+
+        let mut logical_host_symbol = typed;
+        logical_host_symbol.target_symbol = format!("{KERNEL_PREFIX}vecadd");
+        let error = validate_registration_records(vec![logical_host_symbol]).unwrap_err();
+        assert!(error.reason.contains("target symbol"));
+        assert!(error.reason.contains("inconsistent with export name"));
     }
 
     #[test]
@@ -1019,11 +1231,11 @@ mod tests {
             validate_registration_records(vec![malformed])
                 .unwrap_err()
                 .reason
-                .contains("does not match V1 magic")
+                .contains("does not match registration magic")
         );
 
         let mut unknown_version = base.clone();
-        unknown_version.version = KERNEL_REGISTRATION_VERSION_V1 + 1;
+        unknown_version.version = KERNEL_REGISTRATION_VERSION_V2 + 1;
         assert!(
             validate_registration_records(vec![unknown_version])
                 .unwrap_err()
@@ -1078,13 +1290,12 @@ mod tests {
         .unwrap_err();
         assert!(export_error.reason.contains("duplicate export name `same`"));
 
-        let mut typed_duplicate = registration(
+        let typed_duplicate = typed_registration(
             "crate::b::__fe2o3_kernel_registration_same",
             "same",
             "typed",
             2,
         );
-        typed_duplicate.kind = KERNEL_REGISTRATION_KIND_TYPED_VECADD_V1;
         let cross_kind_error = validate_registration_records(vec![
             registration(
                 "crate::a::__fe2o3_kernel_registration_same",

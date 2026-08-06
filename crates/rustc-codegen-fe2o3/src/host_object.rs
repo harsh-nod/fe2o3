@@ -4,6 +4,9 @@
 )]
 
 use crate::{RocmToolchain, require_tool};
+use reserved_fe2o3_symbols::{
+    KernelBindingIdV1, artifact_length_symbol_v1, artifact_pointer_symbol_v1,
+};
 use rustc_codegen_ssa::{CompiledModule, CompiledModules, ModuleKind};
 use std::fmt;
 use std::fs;
@@ -16,8 +19,6 @@ const ARTIFACT_ID_HEX_BYTES: usize = 64;
 const MAX_PAYLOAD_BYTES: usize = 4 * 1024 * 1024;
 const MAX_OBJECT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_HOST_OBJECTS: usize = 256;
-const MAX_SYMBOL_STEM_BYTES: usize = 128;
-const SYMBOL_PREFIX: &str = "__fe2o3_kernel_artifact_";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GeneratedHostObject {
@@ -167,20 +168,13 @@ pub(crate) fn generate_host_object(
     host_triple: &str,
     output_path: &Path,
     artifact_id: &str,
-    symbol_stem: &str,
+    kernel_binding: KernelBindingIdV1,
     payload: &[u8],
 ) -> Result<GeneratedHostObject, HostObjectError> {
-    validate_request(
-        toolchain,
-        host_triple,
-        output_path,
-        artifact_id,
-        symbol_stem,
-        payload,
-    )?;
+    validate_request(toolchain, host_triple, output_path, artifact_id, payload)?;
 
-    let pointer_symbol = format!("{SYMBOL_PREFIX}{symbol_stem}_ptr");
-    let length_symbol = format!("{SYMBOL_PREFIX}{symbol_stem}_len");
+    let pointer_symbol = artifact_pointer_symbol_v1(kernel_binding);
+    let length_symbol = artifact_length_symbol_v1(kernel_binding);
     let module_name = format!("fe2o3-host-object-{artifact_id}");
     let assembly = render_assembly(artifact_id, &pointer_symbol, &length_symbol, payload);
 
@@ -248,7 +242,6 @@ fn validate_request(
     host_triple: &str,
     output_path: &Path,
     artifact_id: &str,
-    symbol_stem: &str,
     payload: &[u8],
 ) -> Result<(), HostObjectError> {
     if host_triple != SUPPORTED_HOST_TRIPLE {
@@ -263,9 +256,6 @@ fn validate_request(
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     {
         return Err(HostObjectError::InvalidArtifactId(artifact_id.to_owned()));
-    }
-    if !valid_symbol_stem(symbol_stem) {
-        return Err(HostObjectError::InvalidSymbolStem(symbol_stem.to_owned()));
     }
     if payload.is_empty() {
         return Err(HostObjectError::EmptyPayload);
@@ -292,18 +282,6 @@ fn validate_request(
         return Err(HostObjectError::OutputExists(output_path.to_path_buf()));
     }
     Ok(())
-}
-
-fn valid_symbol_stem(symbol_stem: &str) -> bool {
-    if symbol_stem.is_empty() || symbol_stem.len() > MAX_SYMBOL_STEM_BYTES {
-        return false;
-    }
-    let mut bytes = symbol_stem.bytes();
-    let Some(first) = bytes.next() else {
-        return false;
-    };
-    (first.is_ascii_alphabetic() || first == b'_')
-        && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
 }
 
 fn render_assembly(
@@ -410,7 +388,6 @@ pub(crate) enum HostObjectError {
     UnsupportedHost(String),
     MissingTool(PathBuf),
     InvalidArtifactId(String),
-    InvalidSymbolStem(String),
     EmptyPayload,
     PayloadTooLarge(usize),
     InvalidOutputPath(PathBuf),
@@ -459,10 +436,6 @@ impl fmt::Display for HostObjectError {
             Self::InvalidArtifactId(id) => write!(
                 formatter,
                 "host-object artifact ID must be exactly 64 lowercase hexadecimal bytes; found {id:?}"
-            ),
-            Self::InvalidSymbolStem(stem) => write!(
-                formatter,
-                "host-object symbol stem must be 1 to {MAX_SYMBOL_STEM_BYTES} ASCII identifier bytes; found {stem:?}"
             ),
             Self::EmptyPayload => formatter.write_str("host-object payload must not be empty"),
             Self::PayloadTooLarge(length) => write!(
@@ -549,7 +522,7 @@ mod tests {
 
     const ID: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     const OTHER_ID: &str = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
-    const SYMBOL_STEM: &str = "vecadd_gpu";
+    const KERNEL_BINDING: KernelBindingIdV1 = KernelBindingIdV1::from_bytes([0x42; 32]);
     const PAYLOAD: &[u8] = b"fe2o3 synthetic host object payload\0\xff";
     static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
 
@@ -596,7 +569,7 @@ mod tests {
             SUPPORTED_HOST_TRIPLE,
             &first_dir.0.join("fixture.o"),
             ID,
-            SYMBOL_STEM,
+            KERNEL_BINDING,
             PAYLOAD,
         )
         .expect("generate first object");
@@ -605,7 +578,7 @@ mod tests {
             SUPPORTED_HOST_TRIPLE,
             &second_dir.0.join("fixture.o"),
             ID,
-            SYMBOL_STEM,
+            KERNEL_BINDING,
             PAYLOAD,
         )
         .expect("generate second object");
@@ -613,11 +586,11 @@ mod tests {
         assert_eq!(first.exact_object, second.exact_object);
         assert_eq!(
             first.pointer_symbol(),
-            format!("{SYMBOL_PREFIX}{SYMBOL_STEM}_ptr")
+            artifact_pointer_symbol_v1(KERNEL_BINDING)
         );
         assert_eq!(
             first.length_symbol(),
-            format!("{SYMBOL_PREFIX}{SYMBOL_STEM}_len")
+            artifact_length_symbol_v1(KERNEL_BINDING)
         );
         first.validate_unchanged().expect("object remains exact");
     }
@@ -632,7 +605,7 @@ mod tests {
             SUPPORTED_HOST_TRIPLE,
             &directory.0.join("fixture.o"),
             ID,
-            SYMBOL_STEM,
+            KERNEL_BINDING,
             PAYLOAD,
         )
         .expect("generate object");
@@ -713,62 +686,14 @@ fn main() {{
                 "aarch64-unknown-linux-gnu",
                 &output,
                 ID,
-                SYMBOL_STEM,
                 PAYLOAD
             ),
             Err(HostObjectError::UnsupportedHost(_))
         ));
         assert!(matches!(
-            validate_request(
-                &toolchain,
-                SUPPORTED_HOST_TRIPLE,
-                &output,
-                ID,
-                SYMBOL_STEM,
-                PAYLOAD
-            ),
+            validate_request(&toolchain, SUPPORTED_HOST_TRIPLE, &output, ID, PAYLOAD),
             Err(HostObjectError::MissingTool(_))
         ));
-    }
-
-    #[test]
-    fn rejects_invalid_symbol_stems() {
-        let directory = TestDir::new();
-        let toolchain = HostObjectToolchain::for_test(PathBuf::from("/bin/true"));
-        let output = directory.0.join("fixture.o");
-        let too_long = "a".repeat(MAX_SYMBOL_STEM_BYTES + 1);
-
-        for invalid in [
-            "",
-            "0kernel",
-            "kernel-name",
-            "kernel.name",
-            "kern\u{e9}l",
-            &too_long,
-        ] {
-            assert!(matches!(
-                validate_request(
-                    &toolchain,
-                    SUPPORTED_HOST_TRIPLE,
-                    &output,
-                    ID,
-                    invalid,
-                    PAYLOAD
-                ),
-                Err(HostObjectError::InvalidSymbolStem(stem)) if stem == invalid
-            ));
-        }
-        for valid in ["a", "_kernel", "VecAdd_012"] {
-            validate_request(
-                &toolchain,
-                SUPPORTED_HOST_TRIPLE,
-                &output,
-                ID,
-                valid,
-                PAYLOAD,
-            )
-            .expect("valid ASCII identifier stem");
-        }
     }
 
     #[test]
@@ -778,14 +703,7 @@ fn main() {{
         let output = directory.0.join("fixture.o");
 
         assert!(matches!(
-            validate_request(
-                &toolchain,
-                SUPPORTED_HOST_TRIPLE,
-                &output,
-                ID,
-                SYMBOL_STEM,
-                &[]
-            ),
+            validate_request(&toolchain, SUPPORTED_HOST_TRIPLE, &output, ID, &[]),
             Err(HostObjectError::EmptyPayload)
         ));
         let oversized = vec![0; MAX_PAYLOAD_BYTES + 1];
@@ -795,7 +713,6 @@ fn main() {{
                 SUPPORTED_HOST_TRIPLE,
                 &output,
                 ID,
-                SYMBOL_STEM,
                 &oversized
             ),
             Err(HostObjectError::PayloadTooLarge(length))
@@ -816,7 +733,6 @@ fn main() {{
                 SUPPORTED_HOST_TRIPLE,
                 &output,
                 ID,
-                SYMBOL_STEM,
                 PAYLOAD
             ),
             Err(HostObjectError::OutputExists(path)) if path == output
@@ -842,7 +758,7 @@ fn main() {{
             SUPPORTED_HOST_TRIPLE,
             &output,
             ID,
-            SYMBOL_STEM,
+            KERNEL_BINDING,
             PAYLOAD,
         )
         .expect_err("failing tool must reject host object generation");
@@ -858,7 +774,7 @@ fn main() {{
                 SUPPORTED_HOST_TRIPLE,
                 &output,
                 ID,
-                SYMBOL_STEM,
+                KERNEL_BINDING,
                 PAYLOAD
             ),
             Err(HostObjectError::ToolFailed { .. })
@@ -876,7 +792,7 @@ fn main() {{
             SUPPORTED_HOST_TRIPLE,
             &directory.0.join("fixture.o"),
             ID,
-            SYMBOL_STEM,
+            KERNEL_BINDING,
             PAYLOAD,
         )
         .expect("generate object");
@@ -902,7 +818,7 @@ fn main() {{
             SUPPORTED_HOST_TRIPLE,
             &first_dir.0.join("fixture.o"),
             ID,
-            SYMBOL_STEM,
+            KERNEL_BINDING,
             PAYLOAD,
         )
         .expect("generate first object");
@@ -911,7 +827,7 @@ fn main() {{
             SUPPORTED_HOST_TRIPLE,
             &second_dir.0.join("fixture.o"),
             OTHER_ID,
-            SYMBOL_STEM,
+            KERNEL_BINDING,
             b"different synthetic payload",
         )
         .expect("generate second object");
@@ -934,7 +850,7 @@ fn main() {{
             SUPPORTED_HOST_TRIPLE,
             &first_dir.0.join("fixture-again.o"),
             ID,
-            SYMBOL_STEM,
+            KERNEL_BINDING,
             PAYLOAD,
         )
         .expect("generate alternate path");
@@ -954,7 +870,7 @@ fn main() {{
             SUPPORTED_HOST_TRIPLE,
             &directory.0.join("fixture.o"),
             ID,
-            SYMBOL_STEM,
+            KERNEL_BINDING,
             PAYLOAD,
         )
         .expect("generate object");

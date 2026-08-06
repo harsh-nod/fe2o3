@@ -1,3 +1,4 @@
+mod binding_wrapper;
 mod clean;
 mod example_manifest;
 
@@ -9,8 +10,19 @@ const TARGET_ENV: &str = "FE2O3_TARGET";
 const BACKEND_ENV: &str = "FE2O3_BACKEND";
 const HSACO_DIR_ENV: &str = "FE2O3_HSACO_DIR";
 const DEFAULT_TARGET: &str = "gfx1100";
+const BINDING_WRAPPER_MODE_ENV: &str = "FE2O3_BINDING_WRAPPER_MODE_V1";
 
 fn main() -> ExitCode {
+    if env::var_os(BINDING_WRAPPER_MODE_ENV).is_some() {
+        return match binding_wrapper::run(env::args_os().skip(1).collect()) {
+            Ok(status) => ExitCode::from(binding_wrapper::exit_code(status)),
+            Err(error) => {
+                eprintln!("cargo-fe2o3 binding wrapper: {error}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+
     let mut invocation = normalize_invocation(env::args().skip(1).collect());
     let mut args = invocation.drain(..);
     let command = args.next().unwrap_or_else(|| "help".to_string());
@@ -174,6 +186,7 @@ struct BackendRunContext {
     backend: PathBuf,
     artifact_dir: PathBuf,
     rustflags: String,
+    binding_wrapper: PathBuf,
 }
 
 impl BackendRunContext {
@@ -192,6 +205,8 @@ impl BackendRunContext {
             format!("-Zcodegen-backend={}", backend.display()),
             "-Zmir-enable-passes=-JumpThreading".to_string(),
         ]);
+        let binding_wrapper = env::current_exe()
+            .map_err(|error| format!("failed to locate cargo-fe2o3 executable: {error}"))?;
 
         Ok(Self {
             target,
@@ -199,6 +214,7 @@ impl BackendRunContext {
             backend,
             artifact_dir,
             rustflags,
+            binding_wrapper,
         })
     }
 }
@@ -208,6 +224,7 @@ fn run_cargo_with_backend(
     command: &str,
     args: &[String],
 ) -> Result<(), String> {
+    reject_preexisting_rustc_wrappers()?;
     eprintln!(
         "cargo fe2o3 {command}: using backend {} for target {}",
         context.backend.display(),
@@ -221,6 +238,8 @@ fn run_cargo_with_backend(
         .env(HSACO_DIR_ENV, &context.artifact_dir)
         .env(TARGET_ENV, &context.target)
         .env("FE2O3_HOST_PASSTHROUGH", "0")
+        .env("RUSTC_WORKSPACE_WRAPPER", &context.binding_wrapper)
+        .env(BINDING_WRAPPER_MODE_ENV, "1")
         .status();
 
     match status {
@@ -228,6 +247,17 @@ fn run_cargo_with_backend(
         Ok(status) => Err(format!("cargo {command} failed with status {status}")),
         Err(error) => Err(format!("failed to run cargo: {error}")),
     }
+}
+
+fn reject_preexisting_rustc_wrappers() -> Result<(), String> {
+    for variable in ["RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER"] {
+        if let Some(value) = env::var_os(variable) {
+            return Err(format!(
+                "cargo fe2o3 cannot compose its binding-identity wrapper with preexisting {variable}={value:?}"
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn clean_explicit_packages(workspace_root: &Path, args: &[String]) -> Result<(), String> {

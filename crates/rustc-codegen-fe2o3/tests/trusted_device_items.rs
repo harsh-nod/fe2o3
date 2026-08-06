@@ -39,7 +39,7 @@ const REGISTRATION_REJECTED_CASES: &[(&str, &str)] = &[
     ("malformed-registration", "does not match V1 magic"),
     (
         "unknown-registration-version",
-        "unknown registration version 2",
+        "unknown registration version 3",
     ),
     (
         "duplicate-logical-name",

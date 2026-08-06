@@ -72,6 +72,7 @@ struct TypedKernelRootV1 {
     logical_name: String,
     export_name: String,
     profile: collector::TypedKernelProfile,
+    kernel_binding: reserved_fe2o3_symbols::KernelBindingIdV1,
 }
 
 #[derive(Debug, Default)]
@@ -482,10 +483,17 @@ fn typed_roots_from_collection(
                         reason: "typed kernel root has no logical name",
                     }
                 })?;
+                let kernel_binding = function.kernel_binding.ok_or_else(|| {
+                    TypedVerticalError::InvalidCollectedRoot {
+                        export_name: function.export_name.clone(),
+                        reason: "typed kernel root has no validated kernel binding",
+                    }
+                })?;
                 Ok(TypedKernelRootV1 {
                     logical_name,
                     export_name: function.export_name.clone(),
                     profile,
+                    kernel_binding,
                 })
             })
         })
@@ -533,7 +541,7 @@ fn generate_typed_host_objects(
             host_triple,
             &object_path,
             generated.artifact_id(),
-            &root.logical_name,
+            root.kernel_binding,
             generated.container(),
         )
         .map_err(TypedVerticalError::HostObject)?;
@@ -1128,10 +1136,18 @@ mod tests {
     }
 
     fn typed_root(logical_name: &str, export_name: &str) -> TypedKernelRootV1 {
+        let crate_binding =
+            reserved_fe2o3_symbols::derive_crate_binding_id_v1("fixture", ["metadata"]);
         TypedKernelRootV1 {
             logical_name: logical_name.to_owned(),
             export_name: export_name.to_owned(),
             profile: TypedKernelProfile::VecAddV1,
+            kernel_binding: reserved_fe2o3_symbols::derive_kernel_binding_id_v1(
+                crate_binding,
+                reserved_fe2o3_symbols::TYPED_VECADD_F32_PROFILE_TAG_V1,
+                logical_name,
+                export_name,
+            ),
         }
     }
 
