@@ -19,6 +19,8 @@ const MAX_G1_WORKGROUP_SIZE: u32 = 1024;
 const MAX_COMPILER_MODULE_GRAPH_FUNCTIONS: usize = 1_024;
 const MAX_COMPILER_MODULE_GRAPH_KERNELS: usize = 256;
 const MAX_COMPILER_MODULE_CALL_EDGES: usize = 131_072;
+/// Maximum textual LLVM bytes returned by compiler-module construction.
+pub const MAX_COMPILER_MODULE_TEXT_BYTES: usize = 16 * 1024 * 1024;
 
 /// Stable rejection categories for the first target-neutral AMDGPU lowering slice.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -504,7 +506,7 @@ pub fn lower_compiler_module_to_llvm_ir(module: &Module) -> Result<String, Lower
         helper_lowerers.push(lowerer);
     }
 
-    emit_compiler_module(&kernel_lowerers, &helper_lowerers, &declarations)
+    emit_compiler_module(module, &kernel_lowerers, &helper_lowerers, &declarations)
 }
 
 fn reserve_emitted_symbol(
@@ -969,6 +971,7 @@ struct IntrinsicDeclaration {
 }
 
 fn emit_compiler_module(
+    module: &Module,
     kernels: &[FunctionLowerer<'_>],
     helpers: &[FunctionLowerer<'_>],
     declarations: &[&Function],
@@ -983,7 +986,7 @@ fn emit_compiler_module(
     let readnone_attribute = has_readnone.then_some(kernels.len());
     let convergent_attribute = has_convergent.then_some(kernels.len() + usize::from(has_readnone));
 
-    let mut output = String::new();
+    let mut output = CapacityLimitedText::new(MAX_COMPILER_MODULE_TEXT_BYTES);
     writeln!(output, "target triple = \"{AMDGPU_TRIPLE}\"\n").unwrap();
 
     let mut has_lds = false;
@@ -1055,7 +1058,51 @@ fn emit_compiler_module(
             .expect("compiler-module kernel requires a workgroup size");
         writeln!(output, "!{index} = !{{i32 {workgroup_x}, i32 1, i32 1}}").unwrap();
     }
-    Ok(output)
+    output.finish(module)
+}
+
+struct CapacityLimitedText {
+    output: String,
+    attempted_bytes: usize,
+    max_bytes: usize,
+    overflowed: bool,
+}
+
+impl CapacityLimitedText {
+    fn new(max_bytes: usize) -> Self {
+        Self {
+            output: String::with_capacity(max_bytes),
+            attempted_bytes: 0,
+            max_bytes,
+            overflowed: false,
+        }
+    }
+
+    fn finish(self, module: &Module) -> Result<String, LoweringErrors> {
+        if self.overflowed {
+            return Err(LoweringErrors::one(
+                LoweringLocation::module(module),
+                LoweringDiagnosticCode::ResourceLimit,
+                format!(
+                    "compiler-module textual LLVM attempted {} bytes; maximum is {}",
+                    self.attempted_bytes, self.max_bytes
+                ),
+            ));
+        }
+        Ok(self.output)
+    }
+}
+
+impl fmt::Write for CapacityLimitedText {
+    fn write_str(&mut self, text: &str) -> fmt::Result {
+        self.attempted_bytes = self.attempted_bytes.saturating_add(text.len());
+        if self.overflowed || self.attempted_bytes > self.max_bytes {
+            self.overflowed = true;
+            return Ok(());
+        }
+        self.output.push_str(text);
+        Ok(())
+    }
 }
 
 fn collect_intrinsic_declarations<'a>(
@@ -1982,7 +2029,7 @@ impl<'a> FunctionLowerer<'a> {
 
     fn emit_compiler_module_definition(
         &self,
-        output: &mut String,
+        output: &mut dyn fmt::Write,
         kernel_attribute: Option<usize>,
         kernel_metadata: Option<usize>,
     ) -> Result<(), LoweringErrors> {
@@ -2018,7 +2065,7 @@ impl<'a> FunctionLowerer<'a> {
         Ok(())
     }
 
-    fn emit_body(&self, output: &mut String) -> Result<(), LoweringErrors> {
+    fn emit_body(&self, output: &mut dyn fmt::Write) -> Result<(), LoweringErrors> {
         let body = self.function.body.as_ref().expect("definition required");
         for block in &body.blocks {
             writeln!(output, "{}:", block_label(block.id)).unwrap();
@@ -2054,7 +2101,7 @@ impl<'a> FunctionLowerer<'a> {
             })
     }
 
-    fn emit_workgroup_memory_declarations(&self, output: &mut String) -> bool {
+    fn emit_workgroup_memory_declarations(&self, output: &mut dyn fmt::Write) -> bool {
         let mut emitted = false;
         let body = self.function.body.as_ref().expect("definition required");
         for operation in body.blocks.iter().flat_map(|block| &block.operations) {
@@ -2087,7 +2134,7 @@ impl<'a> FunctionLowerer<'a> {
         emitted
     }
 
-    fn emit_block_parameters(&self, output: &mut String, block: &BasicBlock) {
+    fn emit_block_parameters(&self, output: &mut dyn fmt::Write, block: &BasicBlock) {
         let incomings = self.incoming_edges(block.id);
         for (parameter_index, parameter) in block.parameters.iter().enumerate() {
             match self
@@ -2190,7 +2237,7 @@ impl<'a> FunctionLowerer<'a> {
 
     fn emit_operation(
         &self,
-        output: &mut String,
+        output: &mut dyn fmt::Write,
         operation: &Operation,
     ) -> Result<(), LoweringErrors> {
         let result_name = operation
@@ -2472,7 +2519,7 @@ impl<'a> FunctionLowerer<'a> {
         Ok(())
     }
 
-    fn emit_wave(&self, output: &mut String, result: &str, wave: &WaveOperation) {
+    fn emit_wave(&self, output: &mut dyn fmt::Write, result: &str, wave: &WaveOperation) {
         match wave.kind {
             WaveOperationKind::LaneId => self.emit_lane_id(output, result, wave.width),
             WaveOperationKind::Ballot { predicate } => {
@@ -2544,7 +2591,7 @@ impl<'a> FunctionLowerer<'a> {
         }
     }
 
-    fn emit_lane_id(&self, output: &mut String, result: &str, width: WaveWidth) {
+    fn emit_lane_id(&self, output: &mut dyn fmt::Write, result: &str, width: WaveWidth) {
         writeln!(
             output,
             "  {result}.lo = call i32 @{}(i32 -1, i32 0)",
@@ -2612,7 +2659,7 @@ impl<'a> FunctionLowerer<'a> {
         Ok(())
     }
 
-    fn emit_atomic(&self, output: &mut String, operation: &Operation, atomic: &Atomic) {
+    fn emit_atomic(&self, output: &mut dyn fmt::Write, operation: &Operation, atomic: &Atomic) {
         let (pointer_name, pointer_ty) = self.value(atomic.pointer);
         let Type::Pointer(pointer_ty) = pointer_ty else {
             unreachable!("atomic preflight required a pointer")
@@ -2714,7 +2761,7 @@ impl<'a> FunctionLowerer<'a> {
         }
     }
 
-    fn emit_terminator(&self, output: &mut String, terminator: &Terminator) {
+    fn emit_terminator(&self, output: &mut dyn fmt::Write, terminator: &Terminator) {
         match terminator {
             Terminator::Branch { target, .. } => {
                 writeln!(output, "  br label %{}", block_label(*target)).unwrap();
@@ -2918,7 +2965,7 @@ fn lds_symbol(kernel: &Kernel, value: ValueId) -> String {
 }
 
 fn emit_fence(
-    output: &mut String,
+    output: &mut dyn fmt::Write,
     scope: fe2o3_kernel_ir::SynchronizationScope,
     ordering: MemoryOrdering,
 ) {

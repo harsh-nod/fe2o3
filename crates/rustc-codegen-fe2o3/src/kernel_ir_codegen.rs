@@ -9,8 +9,9 @@ use crate::amdgpu_llvm::{EmitError, PreparedDeviceKernel};
 use crate::trusted_device_items::TrustedDeviceItem;
 use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, BasicBlock, BinaryOp, BlockId, ComparePredicate, Constant,
-    FunctionBody, IntrinsicOperation, KernelId, MemoryAccess, Module, Operation, OperationKind,
-    TargetCapability, Terminator, Type, ValueDef, ValueId, WorkgroupSize, verify_module,
+    FunctionBody, FunctionRole, IntrinsicOperation, KernelId, MemoryAccess, Module, Operation,
+    OperationKind, TargetCapability, Terminator, Type, ValueDef, ValueId, WorkgroupSize,
+    verify_module,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -34,7 +35,6 @@ const MAX_COMPILER_MODULE_CALL_ARGUMENTS: usize = 64;
 const MAX_COMPILER_MODULE_CFG_ARGUMENTS: usize = 65_536;
 const MAX_COMPILER_MODULE_SWITCH_CASES: usize = 65_536;
 const MAX_COMPILER_MODULE_TYPE_DEPTH: usize = 8;
-const MAX_COMPILER_MODULE_TEXT_BYTES: usize = 16 * 1024 * 1024;
 
 /// One inert, deterministic textual LLVM AMDGPU module.
 ///
@@ -46,6 +46,8 @@ pub(crate) struct InertCompilerModuleTextV1 {
     llvm_ir: String,
     kernel_entries: Vec<String>,
     device_definitions: Vec<String>,
+    internal_helpers: Vec<String>,
+    device_ffi_exports: Vec<String>,
     external_declarations: Vec<String>,
 }
 
@@ -61,6 +63,14 @@ impl InertCompilerModuleTextV1 {
 
     pub(crate) fn device_definitions(&self) -> &[String] {
         &self.device_definitions
+    }
+
+    pub(crate) fn internal_helpers(&self) -> &[String] {
+        &self.internal_helpers
+    }
+
+    pub(crate) fn device_ffi_exports(&self) -> &[String] {
+        &self.device_ffi_exports
     }
 
     pub(crate) fn external_declarations(&self) -> &[String] {
@@ -97,7 +107,7 @@ impl std::error::Error for CompilerModuleConstructionError {}
 ///
 /// Structural bounds are checked before kernel-IR verification. The dialect lowerer then
 /// preflights every kernel, helper, declaration, call, attribute, and metadata record before its
-/// private emission pass. An error returns no partially constructed module.
+/// private capacity-limited emission pass. An error returns no partially constructed module.
 #[allow(dead_code)]
 pub(crate) fn construct_inert_compiler_module_text_v1(
     module: &Module,
@@ -105,17 +115,7 @@ pub(crate) fn construct_inert_compiler_module_text_v1(
     enforce_compiler_module_bounds(module)?;
     let llvm_ir = dialect_amdgcn::lower_compiler_module_to_llvm_ir(module)
         .map_err(CompilerModuleConstructionError::Lowering)?;
-    check_compiler_module_limit(
-        "compiler-module textual LLVM bytes",
-        llvm_ir.len(),
-        MAX_COMPILER_MODULE_TEXT_BYTES,
-    )?;
 
-    let entry_functions = module
-        .kernels
-        .iter()
-        .map(|kernel| &kernel.entry)
-        .collect::<BTreeSet<_>>();
     let mut kernel_entries = module
         .kernels
         .iter()
@@ -124,23 +124,44 @@ pub(crate) fn construct_inert_compiler_module_text_v1(
     let mut device_definitions = module
         .functions
         .iter()
-        .filter(|function| function.body.is_some() && !entry_functions.contains(&function.id))
+        .filter(|function| {
+            matches!(
+                function.role,
+                FunctionRole::InternalHelper | FunctionRole::DeviceFfiExport
+            )
+        })
+        .map(|function| function.id.as_str().to_string())
+        .collect::<Vec<_>>();
+    let mut internal_helpers = module
+        .functions
+        .iter()
+        .filter(|function| function.role == FunctionRole::InternalHelper)
+        .map(|function| function.id.as_str().to_string())
+        .collect::<Vec<_>>();
+    let mut device_ffi_exports = module
+        .functions
+        .iter()
+        .filter(|function| function.role == FunctionRole::DeviceFfiExport)
         .map(|function| function.id.as_str().to_string())
         .collect::<Vec<_>>();
     let mut external_declarations = module
         .functions
         .iter()
-        .filter(|function| function.body.is_none() && !entry_functions.contains(&function.id))
+        .filter(|function| function.role == FunctionRole::ExternalImport)
         .map(|function| function.id.as_str().to_string())
         .collect::<Vec<_>>();
     kernel_entries.sort();
     device_definitions.sort();
+    internal_helpers.sort();
+    device_ffi_exports.sort();
     external_declarations.sort();
 
     Ok(InertCompilerModuleTextV1 {
         llvm_ir,
         kernel_entries,
         device_definitions,
+        internal_helpers,
+        device_ffi_exports,
         external_declarations,
     })
 }
@@ -1982,12 +2003,17 @@ mod tests {
 
         let mut helper_block = BasicBlock::new(BlockId(0));
         helper_block.terminator = Some(Terminator::Return { values: vec![] });
-        let helper = Function::definition(
+        let mut helper = Function::device_ffi_export(
             "visible_helper",
             Signature::new(vec![], vec![]),
             vec![],
             vec![helper_block],
         );
+        helper
+            .required_capabilities
+            .insert(TargetCapability::WaveWidth(
+                fe2o3_kernel_ir::WaveWidth::Wave64,
+            ));
         let declaration = Function::declaration("external_import", Signature::new(vec![], vec![]));
 
         let mut kernel = fe2o3_kernel_ir::Kernel::new(
@@ -1998,6 +2024,11 @@ mod tests {
             },
         );
         kernel.workgroup_size = Some(WorkgroupSize::new(64, 1, 1));
+        kernel
+            .required_capabilities
+            .insert(TargetCapability::WaveWidth(
+                fe2o3_kernel_ir::WaveWidth::Wave64,
+            ));
 
         let mut module = Module::new("tests::inert_compiler_module");
         module.functions = vec![helper, entry, declaration];
@@ -2014,6 +2045,8 @@ mod tests {
         assert_eq!(first, second);
         assert_eq!(first.kernel_entries(), &["entry"]);
         assert_eq!(first.device_definitions(), &["visible_helper"]);
+        assert!(first.internal_helpers().is_empty());
+        assert_eq!(first.device_ffi_exports(), &["visible_helper"]);
         assert_eq!(first.external_declarations(), &["external_import"]);
         assert!(first.llvm_ir().contains("define amdgpu_kernel void @entry"));
         assert!(first.llvm_ir().contains("define void @visible_helper"));
@@ -2111,5 +2144,66 @@ mod tests {
             result,
             Err(CompilerModuleConstructionError::Lowering(_))
         ));
+    }
+
+    #[test]
+    fn count_valid_twenty_megabyte_module_is_rejected_without_partial_text() {
+        const CALLS: usize = 25_000;
+        let parameter_type = Type::Scalar(fe2o3_kernel_ir::ScalarType::I32);
+        let parameter_types = vec![parameter_type; MAX_COMPILER_MODULE_PARAMETERS];
+        let parameter_values = (0..MAX_COMPILER_MODULE_PARAMETERS)
+            .map(|index| ValueId(index as u32))
+            .collect::<Vec<_>>();
+        let import_name = "x".repeat(240);
+        let call_arguments = parameter_values.clone();
+        let mut block = BasicBlock::new(BlockId(0));
+        block.operations = (0..CALLS)
+            .map(|_| {
+                Operation::new(
+                    vec![],
+                    OperationKind::Call {
+                        callee: import_name.clone().into(),
+                        arguments: call_arguments.clone(),
+                    },
+                )
+            })
+            .collect();
+        block.terminator = Some(Terminator::Return { values: vec![] });
+        let entry = Function::kernel_entry(
+            "large_entry",
+            Signature::new(parameter_types.clone(), vec![]),
+            parameter_values,
+            vec![block],
+        );
+        let import =
+            Function::external_import(import_name.clone(), Signature::new(parameter_types, vec![]));
+        let mut kernel = fe2o3_kernel_ir::Kernel::new(
+            "large_kernel",
+            "large_entry",
+            LaunchDomain::D1 {
+                x: LaunchExtent::Dynamic,
+            },
+        );
+        kernel.workgroup_size = Some(WorkgroupSize::new(64, 1, 1));
+        kernel
+            .required_capabilities
+            .insert(TargetCapability::WaveWidth(
+                fe2o3_kernel_ir::WaveWidth::Wave64,
+            ));
+        let mut module = Module::new("tests::twenty_megabyte_adversary");
+        module.functions = vec![entry, import];
+        module.kernels.push(kernel);
+
+        let conservative_text_bytes =
+            CALLS * (import_name.len() + MAX_COMPILER_MODULE_PARAMETERS * "i32 %arg00, ".len());
+        assert!(conservative_text_bytes > 20 * 1024 * 1024);
+        enforce_compiler_module_bounds(&module).expect("adversary is structurally count-valid");
+        let error = construct_inert_compiler_module_text_v1(&module).unwrap_err();
+        let CompilerModuleConstructionError::Lowering(error) = error else {
+            panic!("text limit must be enforced by the capacity-limited lowerer")
+        };
+        assert!(error.contains(dialect_amdgcn::LoweringDiagnosticCode::ResourceLimit));
+        assert!(error.to_string().contains("textual LLVM attempted"));
+        assert!(error.to_string().contains("maximum is 16777216"));
     }
 }
