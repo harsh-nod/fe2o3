@@ -127,7 +127,7 @@ fn run_backend(source: &Path, backend: &Path, output: &Path, externs: &[(&str, &
 }
 
 #[test]
-fn reviewed_export_survives_cross_crate_metadata() {
+fn marker_bytes_survive_cross_crate_metadata_without_granting_authority() {
     let workspace = workspace();
     let fixtures = workspace.join("crates/rustc-codegen-fe2o3/tests/fixtures/device-ffi");
     let output = TestOutputDir::new(&workspace, "cross-crate-metadata");
@@ -181,7 +181,7 @@ fn reviewed_export_survives_cross_crate_metadata() {
 
 #[test]
 #[ignore = "runs the configured rustc codegen backend"]
-fn reachable_cross_crate_import_is_retained_in_the_closed_device_graph() {
+fn upstream_registration_does_not_authenticate_a_metadata_marker() {
     let workspace = workspace();
     let fixtures = workspace.join("crates/rustc-codegen-fe2o3/tests/fixtures/device-ffi");
     let output = TestOutputDir::new(&workspace, "reachable-import");
@@ -211,15 +211,78 @@ fn reachable_cross_crate_import_is_retained_in_the_closed_device_graph() {
     );
     let stderr = String::from_utf8_lossy(&compile.stderr);
     assert!(
-        stderr.contains("external device import:")
-            && stderr.contains("cross_crate_external_add_v1"),
-        "reachable import was not observed\n{stderr}"
+        !compile.status.success(),
+        "upstream marker was accepted as producer evidence"
     );
     assert!(
-        stderr.contains("closed device FFI: 1 imports, 0 exports, target gfx1100, code object v5"),
-        "closed FFI summary was not emitted\n{stderr}"
+        stderr.contains("FE2O3-FFI-AUTH001")
+            && stderr.contains("ffi_import::cross_crate_external_add")
+            && stderr.contains("assertion-only"),
+        "missing stable unauthenticated-upstream diagnostic\n{stderr}"
     );
-    assert!(!stderr.contains("host-only or unreachable"), "{stderr}");
+    assert_no_ice("upstream marker", &stderr);
+}
+
+#[test]
+#[ignore = "runs the configured rustc codegen backend"]
+fn locally_registered_import_survives_final_dynamic_revalidation() {
+    let workspace = workspace();
+    let output = TestOutputDir::new(&workspace, "local-dynamic-import");
+    let backend = build_backend(&workspace);
+    let (contract, marker) = marker(
+        reserved_fe2o3_symbols::DEVICE_FFI_DIRECTION_IMPORT_V1,
+        "local_external_add_v1",
+        "4545454545454545454545454545454545454545454545454545454545454545",
+    );
+    let source = local_import_app(&contract.to_hex(), &marker, true);
+    let source_path = output.0.join("local-import.rs");
+    std::fs::write(&source_path, source).expect("write local import fixture");
+
+    let compile = run_backend(&source_path, &backend, &output.0, &[]);
+    let stderr = String::from_utf8_lossy(&compile.stderr);
+    assert!(
+        stderr.contains("external device import:")
+            && stderr.contains("local_external_add_v1")
+            && stderr.contains("validated local device FFI evidence: 1 imports, 0 exports"),
+        "final closure omitted the locally authenticated import\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("FE2O3-FFI-")
+            && !stderr.contains("host-only or unreachable")
+            && stderr.contains("validated frontend record"),
+        "locally authenticated import did not clear the G4 collection frontier\n{stderr}"
+    );
+    assert_no_ice("local dynamic import", &stderr);
+}
+
+#[test]
+#[ignore = "runs adversarial rustc codegen backend probes"]
+fn dynamically_discovered_local_import_requires_registration() {
+    let workspace = workspace();
+    let output = TestOutputDir::new(&workspace, "missing-local-registration");
+    let backend = build_backend(&workspace);
+    let (contract, marker) = marker(
+        reserved_fe2o3_symbols::DEVICE_FFI_DIRECTION_IMPORT_V1,
+        "local_external_add_v1",
+        "4545454545454545454545454545454545454545454545454545454545454545",
+    );
+    let source = local_import_app(&contract.to_hex(), &marker, false);
+    let source_path = output.0.join("missing-registration.rs");
+    std::fs::write(&source_path, source).expect("write missing-registration fixture");
+
+    let compile = run_backend(&source_path, &backend, &output.0, &[]);
+    let stderr = String::from_utf8_lossy(&compile.stderr);
+    assert!(
+        !compile.status.success(),
+        "unregistered local import was accepted"
+    );
+    assert!(
+        stderr.contains("FE2O3-FFI-REG013")
+            && stderr.contains("missing=Some")
+            && stderr.contains(&contract.to_hex()),
+        "missing final registration-set diagnostic\n{stderr}"
+    );
+    assert_no_ice("missing local registration", &stderr);
 }
 
 #[test]
@@ -256,7 +319,7 @@ fn host_only_import_is_rejected_with_source_ownership() {
 
 #[test]
 #[ignore = "runs the configured rustc codegen backend"]
-fn generic_cross_crate_export_is_rejected_at_its_concrete_instance() {
+fn generic_upstream_marker_is_rejected_before_becoming_authority() {
     let workspace = workspace();
     let fixtures = workspace.join("crates/rustc-codegen-fe2o3/tests/fixtures/device-ffi");
     let output = TestOutputDir::new(&workspace, "generic-export");
@@ -299,15 +362,15 @@ fn generic_cross_crate_export_is_rejected_at_its_concrete_instance() {
     assert!(!compile.status.success(), "generic FFI export was accepted");
     assert!(
         stderr.contains("ffi_export::cross_crate_device_helper")
-            && stderr.contains("is generic")
-            && stderr.contains("concrete nongeneric identity"),
-        "missing stable generic diagnostic\n{stderr}"
+            && stderr.contains("FE2O3-FFI-AUTH001")
+            && stderr.contains("assertion-only"),
+        "missing stable upstream-authority diagnostic\n{stderr}"
     );
 }
 
 #[test]
 #[ignore = "runs the configured rustc codegen backend"]
-fn duplicate_cross_crate_providers_report_both_source_owners() {
+fn cross_crate_providers_cannot_supply_v1_authority_through_doc_markers() {
     let workspace = workspace();
     let output = TestOutputDir::new(&workspace, "duplicate-providers");
     let backend = build_backend(&workspace);
@@ -363,10 +426,10 @@ static __fe2o3_kernel_registration_duplicate_providers: (
         "duplicate providers were accepted"
     );
     assert!(
-        stderr.contains("duplicate device FFI contract")
-            && stderr.contains("provider_a::cross_crate_device_helper")
-            && stderr.contains("provider_b::cross_crate_device_helper"),
-        "missing stable duplicate-provider ownership diagnostic\n{stderr}"
+        stderr.contains("FE2O3-FFI-AUTH001")
+            && stderr.contains("cross_crate_device_helper")
+            && stderr.contains("assertion-only"),
+        "missing stable unauthenticated-provider diagnostic\n{stderr}"
     );
 }
 
@@ -445,6 +508,17 @@ fn registration_initializer_is_exactly_bound_to_its_marker_function() {
             "registration_v1_fixture",
             &format!("registration_v1_{}", contract.to_hex()),
         );
+    let swapped_id = "abababababababababababababababababababababababababababababababab";
+    let swapped_registration = valid
+        .replace(
+            &format!("registration_v1_{}", contract.to_hex()),
+            &format!("registration_v1_{swapped_id}"),
+        )
+        .replacen(
+            &format!("    \"{}\",", contract.to_hex()),
+            &format!("    \"{swapped_id}\","),
+            1,
+        );
     let cases = [
         (
             "wrong-magic",
@@ -468,6 +542,7 @@ fn registration_initializer_is_exactly_bound_to_its_marker_function() {
             ),
             "FE2O3-FFI-REG009",
         ),
+        ("swapped-id", swapped_registration, "FE2O3-FFI-REG014"),
     ];
 
     for (label, source, diagnostic) in cases {
@@ -545,7 +620,46 @@ fn function_pointer_calls_to_device_imports_fail_closed() {
 
 #[test]
 #[ignore = "runs adversarial rustc codegen backend probes"]
-fn same_name_crate_versions_do_not_collapse_provider_identity() {
+fn unsupported_executable_mir_edges_fail_closed() {
+    let workspace = workspace();
+    let output = TestOutputDir::new(&workspace, "unsupported-mir-edges");
+    let backend = build_backend(&workspace);
+    let cases = [
+        (
+            "tail-call",
+            tail_call_app(),
+            "FE2O3-FFI-EDGE001",
+            "tailcall",
+        ),
+        ("drop", drop_edge_app(), "FE2O3-FFI-EDGE001", "drop("),
+        ("assert", assert_edge_app(), "FE2O3-FFI-EDGE001", "assert("),
+        (
+            "dynamic-dispatch",
+            dynamic_dispatch_app(),
+            "FE2O3-FFI-CALL003",
+            "Virtual(",
+        ),
+    ];
+
+    for (label, source, diagnostic, detail) in cases {
+        let case_output = output.0.join(label);
+        std::fs::create_dir_all(&case_output).expect("create MIR-edge case directory");
+        let source_path = case_output.join("app.rs");
+        std::fs::write(&source_path, source).expect("write MIR-edge fixture");
+        let compile = run_backend(&source_path, &backend, &case_output, &[]);
+        let stderr = String::from_utf8_lossy(&compile.stderr);
+        assert!(!compile.status.success(), "{label} edge was accepted");
+        assert!(
+            stderr.contains(diagnostic) && stderr.contains(detail),
+            "{label} omitted stable edge diagnostic {diagnostic}/{detail}\n{stderr}"
+        );
+        assert_no_ice(label, &stderr);
+    }
+}
+
+#[test]
+#[ignore = "runs adversarial rustc codegen backend probes"]
+fn same_name_crate_versions_remain_unauthenticated_under_v1() {
     let workspace = workspace();
     let output = TestOutputDir::new(&workspace, "same-name-provider-versions");
     let backend = build_backend(&workspace);
@@ -582,16 +696,13 @@ fn same_name_crate_versions_do_not_collapse_provider_identity() {
     let stderr = String::from_utf8_lossy(&compile.stderr);
     assert!(
         !compile.status.success(),
-        "same-name providers were collapsed"
+        "same-name upstream markers were accepted"
     );
     assert!(
-        stderr.contains("duplicate device FFI contract")
-            && stderr
-                .matches("same_provider::cross_crate_device_helper")
-                .count()
-                >= 2
-            && stderr.matches("def-path-hash=").count() >= 2,
-        "same-name crate versions lacked distinct stable ownership\n{stderr}"
+        stderr.contains("FE2O3-FFI-AUTH001")
+            && stderr.contains("same_provider::cross_crate_device_helper")
+            && stderr.contains("assertion-only"),
+        "same-name crate marker escaped the V1 authority boundary\n{stderr}"
     );
     assert_no_ice("same-name providers", &stderr);
 }
@@ -689,4 +800,165 @@ static __fe2o3_kernel_registration_duplicate_providers: (
     "duplicate_providers", fe2o3_kernel_duplicate_providers,
 );
 "#
+}
+
+fn local_import_app(contract: &str, marker: &str, include_registration: bool) -> String {
+    let registration = if include_registration {
+        format!(
+            r#"
+#[used]
+static __fe2o3_device_ffi_registration_v1_{contract}: (
+    u64, u16, u16, &'static str, &'static str, &'static str, u16,
+    &'static str, &'static str, &'static str, &'static str,
+    unsafe extern "C" fn(u32) -> u32,
+) = (
+    0x4946_4633_4f32_4546, 1, 1, "{contract}", "local_external_add_v1",
+    "C", 5, "gfx1100", "C(u32[size=4,align=4])->u32[size=4,align=4]",
+    "none", "4545454545454545454545454545454545454545454545454545454545454545",
+    local_external_add,
+);
+"#
+        )
+    } else {
+        String::new()
+    };
+    format!(
+        r#"
+unsafe extern "C" {{
+    #[doc = "{marker}"]
+    #[link_name = "local_external_add_v1"]
+    fn local_external_add(value: u32) -> u32;
+}}
+{registration}
+#[unsafe(no_mangle)]
+pub fn fe2o3_kernel_local_import() {{
+    let _ = unsafe {{ local_external_add(7) }};
+}}
+
+#[used]
+static __fe2o3_kernel_registration_local_import: (
+    u64, u16, u16, &'static str, &'static str, fn(),
+) = (
+    0x4e52_4b33_4f32_4546, 1, 1, "local_import",
+    "local_import", fe2o3_kernel_local_import,
+);
+"#
+    )
+}
+
+fn tail_call_app() -> String {
+    r#"
+#![feature(explicit_tail_calls)]
+
+#[inline(never)]
+fn tail_target() {}
+
+#[unsafe(no_mangle)]
+pub fn fe2o3_kernel_tail_call() {
+    become tail_target()
+}
+
+#[used]
+static __fe2o3_kernel_registration_tail_call: (
+    u64, u16, u16, &'static str, &'static str, fn(),
+) = (
+    0x4e52_4b33_4f32_4546, 1, 1, "tail_call",
+    "tail_call", fe2o3_kernel_tail_call,
+);
+"#
+    .to_owned()
+}
+
+fn drop_edge_app() -> String {
+    r#"
+struct NeedsDrop(u32);
+
+impl Drop for NeedsDrop {
+    #[inline(never)]
+    fn drop(&mut self) {
+        self.0 = self.0.wrapping_add(1);
+    }
+}
+
+#[unsafe(no_mangle)]
+pub fn fe2o3_kernel_drop_edge() {
+    let value = NeedsDrop(1);
+    core::hint::black_box(&value);
+}
+
+#[used]
+static __fe2o3_kernel_registration_drop_edge: (
+    u64, u16, u16, &'static str, &'static str, fn(),
+) = (
+    0x4e52_4b33_4f32_4546, 1, 1, "drop_edge",
+    "drop_edge", fe2o3_kernel_drop_edge,
+);
+"#
+    .to_owned()
+}
+
+fn dynamic_dispatch_app() -> String {
+    r#"
+trait DeviceOp {
+    fn apply(&self, value: u32) -> u32;
+}
+
+struct AddOne;
+
+impl DeviceOp for AddOne {
+    fn apply(&self, value: u32) -> u32 {
+        value.wrapping_add(1)
+    }
+}
+
+#[inline(never)]
+fn invoke(op: &dyn DeviceOp, value: u32) -> u32 {
+    op.apply(value)
+}
+
+#[unsafe(no_mangle)]
+pub fn fe2o3_kernel_dynamic_dispatch() {
+    let operation = AddOne;
+    let _ = invoke(&operation, 7);
+}
+
+#[used]
+static __fe2o3_kernel_registration_dynamic_dispatch: (
+    u64, u16, u16, &'static str, &'static str, fn(),
+) = (
+    0x4e52_4b33_4f32_4546, 1, 1, "dynamic_dispatch",
+    "dynamic_dispatch", fe2o3_kernel_dynamic_dispatch,
+);
+"#
+    .to_owned()
+}
+
+fn assert_edge_app() -> String {
+    r#"
+#[inline(never)]
+fn indexed(values: &[u32; 2], index: usize) -> u32 {
+    values[index]
+}
+
+#[inline(never)]
+fn runtime_index() -> usize {
+    0
+}
+
+#[unsafe(no_mangle)]
+pub fn fe2o3_kernel_assert_edge() {
+    let values = [1, 2];
+    let index = runtime_index();
+    let _ = indexed(&values, index);
+}
+
+#[used]
+static __fe2o3_kernel_registration_assert_edge: (
+    u64, u16, u16, &'static str, &'static str, fn(),
+) = (
+    0x4e52_4b33_4f32_4546, 1, 1, "assert_edge",
+    "assert_edge", fe2o3_kernel_assert_edge,
+);
+"#
+    .to_owned()
 }

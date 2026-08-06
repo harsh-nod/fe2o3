@@ -7,7 +7,9 @@ use rustc_hir::ItemKind;
 use rustc_hir::def_id::{DefId, LOCAL_CRATE};
 use rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags;
 use rustc_middle::mir::mono::{CodegenUnit, MonoItem};
-use rustc_middle::mir::{AggregateKind, CastKind, Operand, RETURN_PLACE, Rvalue, TerminatorKind};
+use rustc_middle::mir::{
+    AggregateKind, CastKind, Operand, RETURN_PLACE, Rvalue, TerminatorKind, UnwindAction,
+};
 use rustc_middle::ty::adjustment::PointerCoercion;
 use rustc_middle::ty::{
     EarlyBinder, Instance, InstanceKind, TyCtxt, TyKind, TypeVisitableExt, TypingEnv,
@@ -991,17 +993,16 @@ impl<'tcx> DeviceCollector<'tcx> {
             }
 
             for block in mir.basic_blocks.iter() {
-                if let Some(terminator) = &block.terminator
-                    && let TerminatorKind::Call { func, .. } = &terminator.kind
-                {
-                    self.process_call_operand(func, &function.instance)?;
+                if let Some(terminator) = &block.terminator {
+                    self.process_terminator(&terminator.kind, &function.instance)?;
                 }
             }
 
             self.result.push(function);
         }
 
-        let device_ffi = crate::device_ffi::close_declarations(
+        let device_ffi = crate::device_ffi::validate_local_closure(
+            self.tcx,
             &mut self.ffi_declarations,
             &self.reachable_ffi_imports,
         )
@@ -1010,11 +1011,15 @@ impl<'tcx> DeviceCollector<'tcx> {
         })?;
         if self.verbose && !device_ffi.is_empty() {
             eprintln!(
-                "[collector] closed device FFI: {} imports, {} exports, target {}, code object v{}",
+                "[collector] validated local device FFI evidence: {} imports, {} exports, target {}, asserted code object v{}",
                 device_ffi.imports.len(),
                 device_ffi.exports.len(),
                 device_ffi.target.as_deref().unwrap_or("<none>"),
-                device_ffi.code_object_version.unwrap_or_default(),
+                device_ffi
+                    .code_object_version_assertion
+                    .as_ref()
+                    .map(|version| *version.asserted_for_consistency_check())
+                    .unwrap_or_default(),
             );
         }
 
@@ -1022,6 +1027,36 @@ impl<'tcx> DeviceCollector<'tcx> {
             functions: self.result,
             device_ffi,
         })
+    }
+
+    fn process_terminator(
+        &mut self,
+        terminator: &TerminatorKind<'tcx>,
+        caller: &Instance<'tcx>,
+    ) -> Result<(), CollectError> {
+        match terminator {
+            TerminatorKind::Call { func, unwind, .. } => {
+                if !matches!(unwind, UnwindAction::Unreachable) {
+                    return Err(self.reachable_error(
+                        caller,
+                        &format!(
+                            "[FE2O3-FFI-EDGE002] direct call has an untraversed unwind edge `{unwind:?}`"
+                        ),
+                        None,
+                    ));
+                }
+                self.process_call_operand(func, caller)
+            }
+            TerminatorKind::Goto { .. }
+            | TerminatorKind::SwitchInt { .. }
+            | TerminatorKind::Return
+            | TerminatorKind::Unreachable => Ok(()),
+            unsupported => Err(self.reachable_error(
+                caller,
+                &format!("[FE2O3-FFI-EDGE001] unsupported executable MIR edge `{unsupported:?}`"),
+                None,
+            )),
+        }
     }
 
     fn process_call_operand(
@@ -1053,7 +1088,7 @@ impl<'tcx> DeviceCollector<'tcx> {
             TypingEnv::fully_monomorphized(),
             EarlyBinder::bind(*args),
         );
-        let marked_contract = crate::device_ffi::contract_for_def(self.tcx, *def_id)
+        let marked_contract = crate::device_ffi::contract_assertion_for_def(self.tcx, *def_id)
             .map_err(|error| self.reachable_error(caller, &error.to_string(), None))?;
         if marked_contract.is_some() {
             let instance = Instance::try_resolve(
@@ -1101,6 +1136,8 @@ impl<'tcx> DeviceCollector<'tcx> {
                     ));
                 }
             } else {
+                crate::device_ffi::enforce_contract_bound(self.ffi_declarations.len() + 1)
+                    .map_err(|error| self.reachable_error(caller, &error.to_string(), None))?;
                 self.ffi_declarations.push(declaration);
             }
             if contract.direction == crate::device_ffi::DeviceFfiDirection::Import {
@@ -1173,7 +1210,14 @@ impl<'tcx> DeviceCollector<'tcx> {
         }
 
         if !matches!(resolved.def, InstanceKind::Item(_)) {
-            return Ok(());
+            return Err(self.reachable_error(
+                caller,
+                &format!(
+                    "[FE2O3-FFI-CALL003] rustc-generated callable instance `{:?}` is not traversable under the V1 device graph policy",
+                    resolved.def
+                ),
+                Some(self.instance_label(resolved)),
+            ));
         }
 
         // Exact diagnostic-item identity is the compiler lowering boundary.

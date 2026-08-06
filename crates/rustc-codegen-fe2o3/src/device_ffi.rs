@@ -12,7 +12,7 @@ use rustc_hir::def_id::DefId;
 use rustc_hir::{Expr, ExprKind, ItemKind, Safety};
 use rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags;
 use rustc_middle::mir::mono::{CodegenUnit, MonoItem};
-use rustc_middle::mir::{Operand, Rvalue, TerminatorKind};
+use rustc_middle::mir::{Operand, Rvalue, TerminatorKind, UnwindAction};
 use rustc_middle::ty::{
     EarlyBinder, FloatTy, Instance, IntTy, Ty, TyCtxt, TyKind, TypeVisitableExt, TypingEnv, UintTy,
 };
@@ -54,10 +54,28 @@ pub(crate) struct DeviceFfiContract {
     pub(crate) direction: DeviceFfiDirection,
     pub(crate) symbol: String,
     pub(crate) target: String,
-    pub(crate) code_object_version: u16,
+    pub(crate) code_object_version_assertion: AssertionOnly<u16>,
     pub(crate) physical_abi: String,
-    pub(crate) effects: String,
-    pub(crate) semantic_identity: String,
+    pub(crate) effects_assertion: AssertionOnly<String>,
+    pub(crate) semantic_identity_assertion: AssertionOnly<String>,
+}
+
+/// A declaration claim that the compiler has checked only for canonical form
+/// and local-registration consistency, not independently derived.
+///
+/// G1 request construction must not consume this value as evidence. A future
+/// bridge must bind it to authenticated producer artifacts and linker facts.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) struct AssertionOnly<T>(T);
+
+impl<T> AssertionOnly<T> {
+    fn new(value: T) -> Self {
+        Self(value)
+    }
+
+    pub(crate) fn asserted_for_consistency_check(&self) -> &T {
+        &self.0
+    }
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -106,18 +124,26 @@ pub(crate) enum DeviceFfiLinkRole {
 pub(crate) struct ClosedDeviceFfiContract {
     pub(crate) contract: DeviceFfiContract,
     pub(crate) owner: DeviceFfiSourceOwner,
-    pub(crate) link_role: DeviceFfiLinkRole,
+    /// Expected role asserted from declaration direction, not a bound linker input role.
+    pub(crate) link_role_assertion: AssertionOnly<DeviceFfiLinkRole>,
 }
 
-/// Inert compiler evidence for the final device FFI graph.
+/// Inert, locally authenticated compiler evidence after device graph traversal.
 ///
 /// This private value does not construct a G1 link request. A later bridge must
 /// bind external provider artifact identities and exact bitcode/object kinds
 /// before translating it into plan-bound symbol and input-kind closures.
+/// Code-object version, effects, semantic identity, and expected link roles are
+/// declaration assertions, represented by [`AssertionOnly`], not derived facts.
+///
+/// Known V1 incompleteness: rustc metadata preserves upstream doc markers but
+/// does not authenticate the producer registration static. Upstream assertions
+/// are therefore rejected with `AUTH001`; authenticated cross-crate closure
+/// requires a future producer-evidence transport and verification protocol.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct DeviceFfiClosure {
     pub(crate) target: Option<String>,
-    pub(crate) code_object_version: Option<u16>,
+    pub(crate) code_object_version_assertion: Option<AssertionOnly<u16>>,
     pub(crate) imports: Vec<ClosedDeviceFfiContract>,
     pub(crate) exports: Vec<ClosedDeviceFfiContract>,
 }
@@ -213,11 +239,7 @@ pub(crate) fn collect_declarations<'tcx>(
         }
         if let Some(contract) = contract_for_instance(tcx, instance, &expected_target)? {
             declarations.push(collected_declaration(tcx, instance, contract));
-            if declarations.len() > MAX_DEVICE_FFI_CONTRACTS {
-                return Err(DeviceFfiError::new(format!(
-                    "more than {MAX_DEVICE_FFI_CONTRACTS} declarations were collected"
-                )));
-            }
+            enforce_contract_bound(declarations.len())?;
         }
     }
 
@@ -324,7 +346,7 @@ fn local_registrations<'tcx>(
                         ),
                     )
                 })?;
-        let contract = contract_for_def(tcx, instance.def_id())?.ok_or_else(|| {
+        let contract = contract_assertion_for_def(tcx, instance.def_id())?.ok_or_else(|| {
             DeviceFfiError::coded(
                 "REG009",
                 format!(
@@ -333,6 +355,16 @@ fn local_registrations<'tcx>(
                 ),
             )
         })?;
+        if id != contract.id {
+            return Err(DeviceFfiError::coded(
+                "REG014",
+                format!(
+                    "registration `{path}` identity {} does not match pointed function contract {}",
+                    id.to_hex(),
+                    contract.id.to_hex()
+                ),
+            ));
+        }
         validate_registration_initializer(&path, fields, id, &contract)?;
         registrations.push(LocalDeviceFfiRegistration { id, instance, path });
     }
@@ -410,16 +442,27 @@ fn validate_registration_initializer(
         path,
         "code-object version",
         &fields[6],
-        u128::from(contract.code_object_version),
+        u128::from(
+            *contract
+                .code_object_version_assertion
+                .asserted_for_consistency_check(),
+        ),
     )?;
     expect_registration_string(path, "target", &fields[7], &contract.target)?;
     expect_registration_string(path, "physical ABI", &fields[8], &contract.physical_abi)?;
-    expect_registration_string(path, "effects", &fields[9], &contract.effects)?;
+    expect_registration_string(
+        path,
+        "effects",
+        &fields[9],
+        contract.effects_assertion.asserted_for_consistency_check(),
+    )?;
     expect_registration_string(
         path,
         "semantic identity",
         &fields[10],
-        &contract.semantic_identity,
+        contract
+            .semantic_identity_assertion
+            .asserted_for_consistency_check(),
     )
 }
 
@@ -547,13 +590,25 @@ pub(crate) fn contract_for_instance<'tcx>(
     expected_target: &str,
 ) -> Result<Option<DeviceFfiContract>, DeviceFfiError> {
     let def_id = instance.def_id();
-    let Some(contract) = contract_for_def(tcx, def_id)? else {
+    let Some(contract) = contract_assertion_for_def(tcx, def_id)? else {
         return Ok(None);
     };
+    if !def_id.is_local() {
+        return Err(DeviceFfiError::coded(
+            "AUTH001",
+            format!(
+                "upstream marker on `{}` is assertion-only and has no authenticated V1 producer registration evidence",
+                tcx.def_path_str(def_id)
+            ),
+        ));
+    }
     validate_contract_for_instance(tcx, instance, expected_target, contract).map(Some)
 }
 
-pub(crate) fn contract_for_def(
+/// Parses a source marker assertion without granting it producer authority.
+/// Callers constructing local evidence must additionally validate the exact
+/// registration static; upstream assertions cannot become V1 closure entries.
+pub(crate) fn contract_assertion_for_def(
     tcx: TyCtxt<'_>,
     def_id: DefId,
 ) -> Result<Option<DeviceFfiContract>, DeviceFfiError> {
@@ -651,7 +706,7 @@ fn validate_export_body<'tcx>(
     let mut seen = BTreeSet::new();
 
     while let Some(instance) = pending.pop() {
-        let identity = tcx.symbol_name(instance).name.to_string();
+        let identity = stable_instance_identity(tcx, instance);
         if !seen.insert(identity) {
             continue;
         }
@@ -661,7 +716,14 @@ fn validate_export_body<'tcx>(
             ));
         }
         if !tcx.is_mir_available(instance.def_id()) {
-            continue;
+            return Err(DeviceFfiError::coded(
+                "EDGE004",
+                format!(
+                    "device export `{}` reaches `{}` without traversable MIR",
+                    tcx.def_path_str(root.def_id()),
+                    tcx.def_path_str(instance.def_id())
+                ),
+            ));
         }
         let body = tcx.instance_mir(instance.def);
         if instance.def_id().is_local()
@@ -700,7 +762,16 @@ fn validate_export_body<'tcx>(
                         tcx.def_path_str(instance.def_id())
                     )));
                 }
-                TerminatorKind::Call { func, .. } => {
+                TerminatorKind::Call { func, unwind, .. } => {
+                    if !matches!(unwind, UnwindAction::Unreachable) {
+                        return Err(DeviceFfiError::coded(
+                            "EDGE002",
+                            format!(
+                                "device export `{}` contains an untraversed call unwind edge `{unwind:?}`",
+                                tcx.def_path_str(instance.def_id())
+                            ),
+                        ));
+                    }
                     let Operand::Constant(constant) = func else {
                         return Err(DeviceFfiError::new(format!(
                             "device export `{}` contains an indirect call",
@@ -757,6 +828,14 @@ fn validate_export_body<'tcx>(
                         .first()
                         .is_some_and(|contract| contract.direction == DeviceFfiDirection::Import)
                     {
+                        if !resolved.def_id().is_local() {
+                            return Err(DeviceFfiError::coded(
+                                "AUTH001",
+                                format!(
+                                    "upstream marker on `{path}` is assertion-only and has no authenticated V1 producer registration evidence"
+                                ),
+                            ));
+                        }
                         continue;
                     }
                     if resolved.args.has_param() || resolved.args.has_escaping_bound_vars() {
@@ -766,7 +845,19 @@ fn validate_export_body<'tcx>(
                     }
                     pending.push(resolved);
                 }
-                _ => {}
+                TerminatorKind::Goto { .. }
+                | TerminatorKind::SwitchInt { .. }
+                | TerminatorKind::Return
+                | TerminatorKind::Unreachable => {}
+                unsupported => {
+                    return Err(DeviceFfiError::coded(
+                        "EDGE001",
+                        format!(
+                            "device export `{}` contains unsupported executable MIR edge `{unsupported:?}`",
+                            tcx.def_path_str(instance.def_id())
+                        ),
+                    ));
+                }
             }
         }
     }
@@ -957,10 +1048,10 @@ fn parse_marker(marker: &str) -> Result<DeviceFfiContract, DeviceFfiError> {
         direction,
         symbol: fields[2].to_owned(),
         target: fields[5].to_owned(),
-        code_object_version,
+        code_object_version_assertion: AssertionOnly::new(code_object_version),
         physical_abi: fields[6].to_owned(),
-        effects: fields[7].to_owned(),
-        semantic_identity: fields[8].to_owned(),
+        effects_assertion: AssertionOnly::new(fields[7].to_owned()),
+        semantic_identity_assertion: AssertionOnly::new(fields[8].to_owned()),
     })
 }
 
@@ -980,10 +1071,10 @@ fn validate_contract_set<'tcx>(
         .map(|declaration| ClosedDeviceFfiContract {
             contract: declaration.contract.clone(),
             owner: declaration.owner.clone(),
-            link_role: match declaration.contract.direction {
+            link_role_assertion: AssertionOnly::new(match declaration.contract.direction {
                 DeviceFfiDirection::Import => DeviceFfiLinkRole::RequiresExternalDefinition,
                 DeviceFfiDirection::Export => DeviceFfiLinkRole::DefinesInRustLlvmBitcode,
-            },
+            }),
         })
         .collect::<Vec<_>>();
     validate_source_bindings(&closed)?;
@@ -1027,15 +1118,23 @@ fn validate_contract_values<'a>(
                 previous.direction, contract.direction, contract.symbol
             )));
         }
-        if let Some(previous) = semantics.insert(&contract.semantic_identity, contract)
-            && (previous.symbol != contract.symbol
-                || previous.direction != contract.direction
-                || previous.physical_abi != contract.physical_abi
-                || previous.effects != contract.effects)
+        if let Some(previous) = semantics.insert(
+            contract
+                .semantic_identity_assertion
+                .asserted_for_consistency_check(),
+            contract,
+        ) && (previous.symbol != contract.symbol
+            || previous.direction != contract.direction
+            || previous.physical_abi != contract.physical_abi
+            || previous.effects_assertion != contract.effects_assertion)
         {
             return Err(DeviceFfiError::new(format!(
                 "semantic identity `{}` is claimed by incompatible symbols `{}` and `{}`",
-                contract.semantic_identity, previous.symbol, contract.symbol
+                contract
+                    .semantic_identity_assertion
+                    .asserted_for_consistency_check(),
+                previous.symbol,
+                contract.symbol
             )));
         }
         if let Some(previous) = target.replace(contract.target.as_str())
@@ -1046,22 +1145,29 @@ fn validate_contract_values<'a>(
                 contract.target
             )));
         }
-        if let Some(previous) = code_object_version.replace(contract.code_object_version)
-            && previous != contract.code_object_version
+        let asserted_code_object_version = *contract
+            .code_object_version_assertion
+            .asserted_for_consistency_check();
+        if let Some(previous) = code_object_version.replace(asserted_code_object_version)
+            && previous != asserted_code_object_version
         {
             return Err(DeviceFfiError::new(format!(
                 "device FFI closure mixes code-object versions `{previous}` and `{}`",
-                contract.code_object_version
+                asserted_code_object_version
             )));
         }
     }
     Ok(())
 }
 
-pub(crate) fn close_declarations<'tcx>(
+pub(crate) fn validate_local_closure<'tcx>(
+    tcx: TyCtxt<'tcx>,
     declarations: &mut Vec<CollectedDeviceFfi<'tcx>>,
     reachable_imports: &BTreeSet<DeviceFfiContractIdV1>,
 ) -> Result<DeviceFfiClosure, DeviceFfiError> {
+    enforce_contract_bound(declarations.len())?;
+    let local_registrations = local_registrations(tcx)?;
+    validate_local_registration_set(declarations, &local_registrations)?;
     validate_contract_set(declarations)?;
     close_contracts(
         declarations
@@ -1069,10 +1175,10 @@ pub(crate) fn close_declarations<'tcx>(
             .map(|declaration| ClosedDeviceFfiContract {
                 contract: declaration.contract.clone(),
                 owner: declaration.owner.clone(),
-                link_role: match declaration.contract.direction {
+                link_role_assertion: AssertionOnly::new(match declaration.contract.direction {
                     DeviceFfiDirection::Import => DeviceFfiLinkRole::RequiresExternalDefinition,
                     DeviceFfiDirection::Export => DeviceFfiLinkRole::DefinesInRustLlvmBitcode,
-                },
+                }),
             })
             .collect(),
         reachable_imports,
@@ -1083,6 +1189,9 @@ fn close_contracts(
     declarations: Vec<ClosedDeviceFfiContract>,
     reachable_imports: &BTreeSet<DeviceFfiContractIdV1>,
 ) -> Result<DeviceFfiClosure, DeviceFfiError> {
+    // Structural consistency only. Compiler callers must establish source
+    // authority in `validate_local_closure` before entering this helper.
+    enforce_contract_bound(declarations.len())?;
     validate_source_bindings(&declarations)?;
     validate_contract_values(declarations.iter().map(|entry| &entry.contract))?;
 
@@ -1091,10 +1200,18 @@ fn close_contracts(
             DeviceFfiDirection::Import => DeviceFfiLinkRole::RequiresExternalDefinition,
             DeviceFfiDirection::Export => DeviceFfiLinkRole::DefinesInRustLlvmBitcode,
         };
-        if declaration.link_role != expected_role {
+        if declaration
+            .link_role_assertion
+            .asserted_for_consistency_check()
+            != &expected_role
+        {
             return Err(DeviceFfiError::new(format!(
                 "device FFI `{}` has link role {:?} incompatible with direction {:?}",
-                declaration.contract.symbol, declaration.link_role, declaration.contract.direction,
+                declaration.contract.symbol,
+                declaration
+                    .link_role_assertion
+                    .asserted_for_consistency_check(),
+                declaration.contract.direction,
             )));
         }
     }
@@ -1141,10 +1258,23 @@ fn close_contracts(
     let first = imports.first().or_else(|| exports.first());
     Ok(DeviceFfiClosure {
         target: first.map(|entry| entry.contract.target.clone()),
-        code_object_version: first.map(|entry| entry.contract.code_object_version),
+        code_object_version_assertion: first
+            .map(|entry| entry.contract.code_object_version_assertion),
         imports,
         exports,
     })
+}
+
+pub(crate) fn enforce_contract_bound(count: usize) -> Result<(), DeviceFfiError> {
+    if count > MAX_DEVICE_FFI_CONTRACTS {
+        return Err(DeviceFfiError::coded(
+            "BOUND001",
+            format!(
+                "device FFI closure contains {count} contracts; maximum is {MAX_DEVICE_FFI_CONTRACTS}"
+            ),
+        ));
+    }
+    Ok(())
 }
 
 fn validate_source_bindings(
@@ -1351,10 +1481,10 @@ mod tests {
             direction,
             symbol: symbol.to_owned(),
             target: target.to_owned(),
-            code_object_version,
+            code_object_version_assertion: AssertionOnly::new(code_object_version),
             physical_abi: physical_abi.to_owned(),
-            effects: effects.to_owned(),
-            semantic_identity,
+            effects_assertion: AssertionOnly::new(effects.to_owned()),
+            semantic_identity_assertion: AssertionOnly::new(semantic_identity),
         }
     }
 
@@ -1363,10 +1493,10 @@ mod tests {
         crate_name: &str,
         item_name: &str,
     ) -> ClosedDeviceFfiContract {
-        let link_role = match contract.direction {
+        let link_role_assertion = AssertionOnly::new(match contract.direction {
             DeviceFfiDirection::Import => DeviceFfiLinkRole::RequiresExternalDefinition,
             DeviceFfiDirection::Export => DeviceFfiLinkRole::DefinesInRustLlvmBitcode,
-        };
+        });
         ClosedDeviceFfiContract {
             owner: DeviceFfiSourceOwner {
                 crate_name: crate_name.to_owned(),
@@ -1375,7 +1505,7 @@ mod tests {
                 concrete_instance_symbol: format!("_R_{crate_name}_{item_name}"),
             },
             contract,
-            link_role,
+            link_role_assertion,
         }
     }
 
@@ -1475,7 +1605,7 @@ mod tests {
     }
 
     #[test]
-    fn closure_is_canonical_and_preserves_cross_crate_ownership() {
+    fn abstract_contract_set_is_canonical_and_preserves_source_ownership() {
         let import = closed(
             contract(
                 DeviceFfiDirection::Import,
@@ -1526,18 +1656,52 @@ mod tests {
 
         assert_eq!(first, reordered);
         assert_eq!(first.target.as_deref(), Some("gfx942"));
-        assert_eq!(first.code_object_version, Some(5));
+        assert_eq!(
+            first
+                .code_object_version_assertion
+                .as_ref()
+                .map(AssertionOnly::asserted_for_consistency_check),
+            Some(&5)
+        );
         assert_eq!(first.imports[0].owner.crate_name, "consumer");
         assert_eq!(
-            first.imports[0].link_role,
-            DeviceFfiLinkRole::RequiresExternalDefinition
+            first.imports[0]
+                .link_role_assertion
+                .asserted_for_consistency_check(),
+            &DeviceFfiLinkRole::RequiresExternalDefinition
         );
         assert_eq!(first.exports[0].owner.crate_name, "provider_a");
         assert_eq!(
-            first.exports[0].link_role,
-            DeviceFfiLinkRole::DefinesInRustLlvmBitcode
+            first.exports[0]
+                .link_role_assertion
+                .asserted_for_consistency_check(),
+            &DeviceFfiLinkRole::DefinesInRustLlvmBitcode
         );
         assert_eq!(first.exports[1].owner.crate_name, "provider_b");
+    }
+
+    #[test]
+    fn final_closure_reapplies_the_contract_count_bound() {
+        let declaration = closed(
+            contract(
+                DeviceFfiDirection::Export,
+                "bounded_export",
+                "gfx942",
+                5,
+                "C()->unit[size=0,align=1]",
+                "none",
+                0x44,
+            ),
+            "provider",
+            "bounded_export",
+        );
+        let error = close_contracts(
+            vec![declaration; MAX_DEVICE_FFI_CONTRACTS + 1],
+            &BTreeSet::new(),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("FE2O3-FFI-BOUND001"));
+        assert!(error.to_string().contains("129 contracts; maximum is 128"));
     }
 
     #[test]
@@ -1623,7 +1787,7 @@ mod tests {
             "none",
             0x22,
         );
-        spoofed.semantic_identity = base.semantic_identity.clone();
+        spoofed.semantic_identity_assertion = base.semantic_identity_assertion.clone();
         assert!(
             validate_contract_values([&base, &spoofed])
                 .unwrap_err()
@@ -1720,7 +1884,8 @@ mod tests {
             "consumer",
             "external_add",
         );
-        swapped.link_role = DeviceFfiLinkRole::DefinesInRustLlvmBitcode;
+        swapped.link_role_assertion =
+            AssertionOnly::new(DeviceFfiLinkRole::DefinesInRustLlvmBitcode);
         let reachable = BTreeSet::from([swapped.contract.id]);
         assert!(
             close_contracts(vec![swapped], &reachable)
@@ -1731,7 +1896,7 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_cross_crate_providers_fail_with_stable_ownership() {
+    fn duplicate_abstract_providers_fail_with_stable_ownership() {
         let first = closed(
             contract(
                 DeviceFfiDirection::Export,
