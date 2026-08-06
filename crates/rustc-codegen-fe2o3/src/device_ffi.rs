@@ -1,11 +1,11 @@
 //! Compiler-side validation for explicit device FFI declarations.
 
 use reserved_fe2o3_symbols::{
-    DEVICE_FFI_DIRECTION_EXPORT_V1, DEVICE_FFI_DIRECTION_IMPORT_V1, DEVICE_FFI_MARKER_PREFIX_V1,
-    DeviceFfiContractFieldsV1, DeviceFfiContractIdV1, DeviceFfiDirectionV1,
-    MAX_DEVICE_FFI_ARGUMENTS_V1, MAX_DEVICE_FFI_TARGET_BYTES_V1, derive_device_ffi_contract_id_v1,
-    parse_device_ffi_direction_v1, parse_device_ffi_effects_v1, parse_device_ffi_physical_abi_v1,
-    validate_device_ffi_effect_abi_v1, validate_device_ffi_symbol_v1,
+    DEVICE_FFI_MARKER_PREFIX_V1, DeviceFfiContractFieldsV1, DeviceFfiContractIdV1,
+    DeviceFfiDirectionV1, MAX_DEVICE_FFI_ARGUMENTS_V1, MAX_DEVICE_FFI_TARGET_BYTES_V1,
+    derive_device_ffi_contract_id_v1, parse_device_ffi_direction_v1, parse_device_ffi_effects_v1,
+    parse_device_ffi_physical_abi_v1, validate_device_ffi_effect_abi_v1,
+    validate_device_ffi_symbol_v1,
 };
 use rustc_abi::ExternAbi;
 use rustc_ast::LitKind;
@@ -1356,6 +1356,9 @@ fn validate_hex_identity(value: &str, field: &str) -> Result<(), DeviceFfiError>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use reserved_fe2o3_symbols::{
+        DEVICE_FFI_DIRECTION_EXPORT_V1, DEVICE_FFI_DIRECTION_IMPORT_V1,
+    };
 
     fn marker(direction: u16, symbol: &str, abi: &str) -> String {
         let fields = DeviceFfiContractFieldsV1 {
