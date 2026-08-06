@@ -6,6 +6,8 @@ extern crate rustc_codegen_ssa;
 extern crate rustc_data_structures;
 extern crate rustc_driver;
 extern crate rustc_hir;
+#[cfg(test)]
+extern crate rustc_interface;
 extern crate rustc_metadata;
 extern crate rustc_middle;
 extern crate rustc_session;
@@ -20,6 +22,8 @@ mod mir_import;
 mod record_lowering;
 #[allow(dead_code)]
 mod rust_type_layout;
+#[allow(dead_code)]
+mod rust_type_layout_general;
 mod trusted_device_items;
 mod typed_artifact;
 
