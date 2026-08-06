@@ -4,6 +4,7 @@
 use fe2o3_contracts::{IdentityWriteIndex, LaunchDomain1d, ThreadInDomain1d};
 
 include!("vecadd_body.rs");
+include!("elementwise_bodies.rs");
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum VecAddError {
@@ -14,6 +15,118 @@ pub enum VecAddError {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FillError {
     DomainLengthMismatch,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ElementwiseError {
+    DomainLengthMismatch,
+    GatherIndexOutOfBounds,
+}
+
+fn identity_source(thread: usize) -> usize {
+    thread
+}
+
+fn exact_affine(value: i16, scale: i16, bias: i32) -> i64 {
+    i64::from(value) * i64::from(scale) + i64::from(bias)
+}
+
+fn selected_source(indices: &[usize], thread: usize) -> usize {
+    indices[thread]
+}
+
+/// Executes one identity-indexed copy write.
+pub fn copy_thread(
+    thread: usize,
+    input: &[i64],
+    output: &mut [i64],
+) -> Result<(), ElementwiseError> {
+    copy_kernel_body!(
+        thread,
+        identity_source,
+        input,
+        output,
+        ElementwiseError::DomainLengthMismatch
+    )
+}
+
+/// Copies all input elements through the shared per-thread body.
+pub fn copy(input: &[i64], output: &mut [i64]) -> Result<(), ElementwiseError> {
+    if input.len() != output.len() {
+        return Err(ElementwiseError::DomainLengthMismatch);
+    }
+    for thread in 0..output.len() {
+        copy_thread(thread, input, output)?;
+    }
+    Ok(())
+}
+
+/// Executes one exact affine map, widening before every arithmetic operation.
+pub fn affine_map_thread(
+    thread: usize,
+    input: &[i16],
+    output: &mut [i64],
+    scale: i16,
+    bias: i32,
+) -> Result<(), ElementwiseError> {
+    affine_map_kernel_body!(
+        thread,
+        exact_affine,
+        input,
+        output,
+        scale,
+        bias,
+        ElementwiseError::DomainLengthMismatch
+    )
+}
+
+/// Maps every input element to `value * scale + bias` exactly in `i64`.
+pub fn affine_map(
+    input: &[i16],
+    output: &mut [i64],
+    scale: i16,
+    bias: i32,
+) -> Result<(), ElementwiseError> {
+    if input.len() != output.len() {
+        return Err(ElementwiseError::DomainLengthMismatch);
+    }
+    for thread in 0..output.len() {
+        affine_map_thread(thread, input, output, scale, bias)?;
+    }
+    Ok(())
+}
+
+/// Executes one bounds-checked gather write.
+pub fn gather_thread(
+    thread: usize,
+    input: &[i64],
+    indices: &[usize],
+    output: &mut [i64],
+) -> Result<(), ElementwiseError> {
+    gather_kernel_body!(
+        thread,
+        selected_source,
+        input,
+        indices,
+        output,
+        ElementwiseError::DomainLengthMismatch,
+        ElementwiseError::GatherIndexOutOfBounds
+    )
+}
+
+/// Gathers every requested input element through the shared per-thread body.
+pub fn gather(
+    input: &[i64],
+    indices: &[usize],
+    output: &mut [i64],
+) -> Result<(), ElementwiseError> {
+    if indices.len() != output.len() {
+        return Err(ElementwiseError::DomainLengthMismatch);
+    }
+    for thread in 0..output.len() {
+        gather_thread(thread, input, indices, output)?;
+    }
+    Ok(())
 }
 
 /// Executes the work assigned to one logical thread.
@@ -96,6 +209,87 @@ mod tests {
         assert!(real_body.contains("*out = $add!($a[i], $b[i])"));
         assert!(real_kernel.contains("macro_rules! production_f32_add"));
         assert!(real_kernel.contains("$lhs + $rhs"));
+    }
+
+    #[test]
+    fn elementwise_verus_harnesses_expand_the_shared_bodies() {
+        let positive = include_str!("../verus/elementwise.rs");
+        let bodies = include_str!("elementwise_bodies.rs");
+
+        assert!(positive.contains("include!(\"../src/elementwise_bodies.rs\")"));
+        for (declaration, invocation) in [
+            ("macro_rules! copy_kernel_body", "copy_kernel_body!"),
+            (
+                "macro_rules! affine_map_kernel_body",
+                "affine_map_kernel_body!",
+            ),
+            ("macro_rules! gather_kernel_body", "gather_kernel_body!"),
+        ] {
+            assert!(bodies.contains(declaration));
+            assert!(positive.contains(invocation));
+        }
+
+        for fixture in [
+            include_str!("../verus/negative/copy_wrong_source.rs"),
+            include_str!("../verus/negative/affine_wrong_bias.rs"),
+            include_str!("../verus/negative/gather_wrong_index.rs"),
+        ] {
+            assert!(fixture.contains("include!(\"../../src/elementwise_bodies.rs\")"));
+        }
+    }
+
+    #[test]
+    fn copy_executes_identity_writes_and_rejects_shape_mismatches() {
+        let mut output = [0; 4];
+        assert_eq!(copy(&[7, -2, 11, 19], &mut output), Ok(()));
+        assert_eq!(output, [7, -2, 11, 19]);
+
+        assert_eq!(
+            copy(&[1, 2], &mut output),
+            Err(ElementwiseError::DomainLengthMismatch)
+        );
+        assert_eq!(
+            copy_thread(4, &[1, 2, 3, 4], &mut output),
+            Err(ElementwiseError::DomainLengthMismatch)
+        );
+    }
+
+    #[test]
+    fn affine_map_is_exact_for_extreme_inputs() {
+        let input = [i16::MIN, -1, 0, i16::MAX];
+        let mut output = [0; 4];
+        assert_eq!(affine_map(&input, &mut output, i16::MIN, i32::MAX), Ok(()));
+        assert_eq!(
+            output,
+            input.map(|value| { i64::from(value) * i64::from(i16::MIN) + i64::from(i32::MAX) })
+        );
+
+        assert_eq!(
+            affine_map(&input[..3], &mut output, 2, -1),
+            Err(ElementwiseError::DomainLengthMismatch)
+        );
+    }
+
+    #[test]
+    fn gather_checks_every_selected_input_index_before_writing() {
+        let input = [10, 20, 30, 40];
+        let mut output = [0; 3];
+        assert_eq!(gather(&input, &[3, 0, 2], &mut output), Ok(()));
+        assert_eq!(output, [40, 10, 30]);
+
+        output = [9; 3];
+        assert_eq!(
+            gather(&input, &[3, 4, 2], &mut output),
+            Err(ElementwiseError::GatherIndexOutOfBounds)
+        );
+        assert_eq!(output, [40, 9, 9]);
+
+        output = [8; 3];
+        assert_eq!(
+            gather(&input, &[0, 1], &mut output),
+            Err(ElementwiseError::DomainLengthMismatch)
+        );
+        assert_eq!(output, [8; 3]);
     }
 
     #[test]

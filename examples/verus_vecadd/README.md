@@ -1,4 +1,4 @@
-# Verus vecadd and fill source models
+# Verus vecadd, fill, copy, map, and gather source models
 
 The primary milestone in this directory verifies the executable body of the
 real `f32` `#[kernel]` in `examples/vecadd`. The operation, index extraction,
@@ -60,6 +60,29 @@ representability, disjoint writes, frame behavior, and its launch-level fill
 postcondition. Its `hardware_thread_id` model is the one existing
 `#[verifier::external_body]`; the real vecadd source model does not call it.
 
+## Copy, affine-map, and gather pairs
+
+`src/elementwise_bodies.rs` contains three more single-source executable
+fragments. Ordinary Rust expands them through `src/lib.rs`, and
+`verus/elementwise.rs` expands the same macros through verified adapters:
+
+- copy proves an identity read, identity write, and exact frame update;
+- affine-map proves `value * scale + bias` and its exact frame update; and
+- gather proves the selected input index is in bounds before an identity write.
+
+The affine source intentionally accepts `i16` values and scale, an `i32` bias,
+and writes `i64`. Widening makes the mathematical integer operation total and
+exact for every value in those input types, without an overflow premise. This
+is not an IEEE floating-point theorem: it says nothing about `f32`/`f64`
+rounding, NaNs, infinities, signed zero, fused operations, or target contraction.
+The real vecadd `f32` adapter therefore remains opaque to functional proofs.
+
+Each positive elementwise theorem has exactly one paired mutation under
+`verus/negative/`: copy reads element zero, affine-map adds one to the bias,
+and gather reads element zero. The runner requires each mutated theorem to
+reach Verus, emit one primary proof error, and fail at its exact postcondition;
+a parser error or an unrelated failure does not count as a successful negative.
+
 ## Running the checks
 
 Run the ordinary Rust tests with:
@@ -69,11 +92,23 @@ cargo +stable test --manifest-path examples/verus_vecadd/Cargo.toml
 cargo test -p fe2o3-vecadd
 ```
 
-Run both positive Verus harnesses and all twelve expected proof rejections with:
+Run all three positive Verus harnesses and all fifteen expected proof
+rejections with:
 
 ```text
 VERUS=/absolute/path/to/verus examples/verus_vecadd/run-verus.sh --require
 ```
+
+Source sharing and positive/negative pairing can be checked without Verus:
+
+```text
+examples/verus_vecadd/run-verus.sh --source-only
+```
+
+Without `--require`, the runner always performs those source-shape checks and
+then reports a Verus skip when the executable is unavailable. Ordinary Rust
+tests remain a separate command and exercise successful results, mismatched
+domains, gather bounds failures, and extreme affine inputs.
 
 The real-kernel negative mutations independently reject an input read moved
 ahead of the output guard, a real shared-body expansion through a constant-zero

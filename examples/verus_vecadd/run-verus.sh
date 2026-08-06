@@ -3,13 +3,61 @@ set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 require_verus=0
-if [ "${1:-}" = "--require" ]; then
-    require_verus=1
+source_only=0
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --require) require_verus=1 ;;
+        --source-only) source_only=1 ;;
+        *)
+            printf 'usage: %s [--require] [--source-only]\n' "$0" >&2
+            exit 2
+            ;;
+    esac
     shift
+done
+
+source_failures=0
+require_source() {
+    file=$1
+    needle=$2
+    if ! grep -Fq "$needle" "$file"; then
+        printf 'FAIL:  %s is missing source-shape marker %s\n' "$file" "$needle" >&2
+        source_failures=$((source_failures + 1))
+    fi
+}
+
+shared_body="$script_dir/src/elementwise_bodies.rs"
+positive="$script_dir/verus/elementwise.rs"
+require_source "$positive" 'include!("../src/elementwise_bodies.rs")'
+require_source "$shared_body" 'macro_rules! copy_kernel_body'
+require_source "$shared_body" 'macro_rules! affine_map_kernel_body'
+require_source "$shared_body" 'macro_rules! gather_kernel_body'
+
+for fixture in \
+    "$script_dir/verus/negative/copy_wrong_source.rs" \
+    "$script_dir/verus/negative/affine_wrong_bias.rs" \
+    "$script_dir/verus/negative/gather_wrong_index.rs"
+do
+    require_source "$fixture" 'include!("../../src/elementwise_bodies.rs")'
+done
+require_source "$positive" 'pub fn verified_copy_thread'
+require_source "$positive" 'pub fn verified_affine_map_thread'
+require_source "$positive" 'pub fn verified_gather_thread'
+require_source "$script_dir/verus/negative/copy_wrong_source.rs" \
+    'pub fn mutated_copy_source'
+require_source "$script_dir/verus/negative/affine_wrong_bias.rs" \
+    'pub fn mutated_affine'
+require_source "$script_dir/verus/negative/gather_wrong_index.rs" \
+    'pub fn mutated_gather_source'
+
+if [ "$source_failures" -ne 0 ]; then
+    printf 'Source-shape checks failed: %s missing marker(s)\n' "$source_failures" >&2
+    exit 1
 fi
-if [ "$#" -ne 0 ]; then
-    printf 'usage: %s [--require]\n' "$0" >&2
-    exit 2
+printf 'PASS:  shared copy, affine-map, and gather source shapes are paired\n'
+
+if [ "$source_only" -eq 1 ]; then
+    exit 0
 fi
 
 verus_bin=${VERUS:-verus}
@@ -126,6 +174,7 @@ run_rejected_exact() {
 
 run_pass vecadd "$script_dir/verus/vecadd.rs"
 run_pass fill "$script_dir/verus/fill.rs"
+run_pass elementwise "$script_dir/verus/elementwise.rs"
 run_rejected fill_missing_bounds \
     "$script_dir/verus/negative/fill_missing_bounds.rs" \
     'mutated_fill_index_is_in_bounds' \
@@ -177,9 +226,24 @@ run_rejected_exact real_kernel_output_alias \
     'rejects_real_output_input_alias' \
     'error: precondition not satisfied' \
     'real_vecadd_source_evidence_is_valid('
+run_rejected_exact copy_wrong_source \
+    "$script_dir/verus/negative/copy_wrong_source.rs" \
+    'mutated_copy_claims_identity_source' \
+    'error: postcondition not satisfied' \
+    'final(output)@ == old(output)@.update'
+run_rejected_exact affine_wrong_bias \
+    "$script_dir/verus/negative/affine_wrong_bias.rs" \
+    'mutated_affine_claims_requested_bias' \
+    'error: postcondition not satisfied' \
+    'final(output)@ == old(output)@.update'
+run_rejected_exact gather_wrong_index \
+    "$script_dir/verus/negative/gather_wrong_index.rs" \
+    'mutated_gather_claims_selected_index' \
+    'error: postcondition not satisfied' \
+    'final(output)@ == old(output)@.update'
 
 if [ "$failures" -ne 0 ]; then
     printf 'Verus fixture run failed: %s unexpected result(s)\n' "$failures" >&2
     exit 1
 fi
-printf 'Verus fixture run passed: 2 proof harnesses, 12 expected rejections\n'
+printf 'Verus fixture run passed: 3 proof harnesses, 15 expected rejections\n'
