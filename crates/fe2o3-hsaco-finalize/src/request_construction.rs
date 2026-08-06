@@ -13,10 +13,10 @@ use fe2o3_compiler_ffi::{
 };
 
 use crate::{
-    ContentIdentityV1, LinkPlanIdentityV1, MultiInputLinkPlanV1, StagedCompilerFfiEnvelopeV1,
-    WorkerInputKindV1, WorkerInputV1, WorkerMeasurementV1, WorkerOptimizationLevelV1,
-    WorkerOptionsV1, WorkerOutputConstraintsV1, WorkerProtocolError, WorkerRequestV1,
-    WorkerRequestV2,
+    ContentIdentityV1, LinkOptionV1, LinkPlanIdentityV1, MultiInputLinkPlanV1,
+    StagedCompilerFfiEnvelopeV1, WorkerInputKindV1, WorkerInputV1, WorkerMeasurementV1,
+    WorkerOptimizationLevelV1, WorkerOptionsV1, WorkerOutputConstraintsV1, WorkerProtocolError,
+    WorkerRequestV1, WorkerRequestV2,
     worker_protocol::validate_symbols,
     worker_protocol_v2::{SealedWorkerRequestV2Parts, WorkerCompilerFfiEnvelopeIdentityV2},
 };
@@ -744,12 +744,18 @@ fn validate_inputs(
 fn decode_plan_options(
     plan: &MultiInputLinkPlanV1,
 ) -> Result<(CodeObjectVersion, WorkerOptionsV1), WorkerRequestConstructionError> {
+    decode_link_options(plan.options())
+}
+
+pub(crate) fn decode_link_options(
+    options: &[LinkOptionV1],
+) -> Result<(CodeObjectVersion, WorkerOptionsV1), WorkerRequestConstructionError> {
     let mut code_object_version = None;
     let mut optimization = WorkerOptimizationLevelV1::O0;
     let mut strip_debug = false;
     let mut verify_each = false;
 
-    for option in plan.options() {
+    for option in options {
         match option.name() {
             "code-object-version" => {
                 code_object_version = Some(match option.value() {

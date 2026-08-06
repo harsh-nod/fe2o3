@@ -18,6 +18,7 @@ use fe2o3_kernel_descriptor::{
 
 mod compiler_ffi_bridge;
 mod compiler_ffi_observation;
+mod first_build_worker_v2;
 mod link_plan;
 mod request_construction;
 mod worker_executor;
@@ -55,6 +56,10 @@ pub use fe2o3_compiler_ffi::{
     MAX_COMPILER_FFI_AGGREGATE_TEXT_BYTES_V1, MAX_COMPILER_FFI_CONTRACTS_V1,
     MAX_COMPILER_FFI_CRATE_LABEL_BYTES_V1, MAX_COMPILER_FFI_ENVELOPE_BYTES_V1,
     MAX_COMPILER_FFI_INSTANCE_SYMBOL_BYTES_V1, MAX_COMPILER_FFI_ITEM_PATH_BYTES_V1,
+};
+pub use first_build_worker_v2::{
+    FirstBuildWorkerV2Error, FirstBuildWorkerV2IdentityV1, InertFirstBuildWorkerV2EvidenceV1,
+    execute_reproducible_first_build_worker_v2,
 };
 pub use link_plan::{
     ContentIdentityV1, LinkInputV1, LinkOptionV1, LinkOutputV1, LinkPlanError, LinkPlanIdentityV1,
