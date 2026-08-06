@@ -267,6 +267,41 @@ class PolicyStateTests(unittest.TestCase):
                     self.assertEqual(retry.outcome, expected)
                     self.assertFalse((root / policy_state.TEMP_FILE).exists())
 
+    def test_fault_recovery_is_idempotent_for_policy_advance(self) -> None:
+        for point in policy_state.FAULT_POINTS:
+            with self.subTest(point=point):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    os.chmod(root, 0o700)
+                    with policy_state.LocalPolicyStateStoreV1(root) as store:
+                        store.pin_policy(POLICY_7, 7)
+
+                    def inject(actual: str) -> None:
+                        if actual == point:
+                            raise InjectedCrash(point)
+
+                    with policy_state.LocalPolicyStateStoreV1(
+                        root, fault_injector=inject
+                    ) as store:
+                        with self.assertRaises(InjectedCrash):
+                            store.pin_policy(POLICY_8, 8)
+                    with policy_state.LocalPolicyStateStoreV1(root) as recovered:
+                        retry = recovered.pin_policy(POLICY_8, 8)
+                    expected = (
+                        "advanced"
+                        if point
+                        in {
+                            "before-write",
+                            "after-write",
+                            "before-file-fsync",
+                            "after-file-fsync",
+                            "before-rename",
+                        }
+                        else "already-pinned"
+                    )
+                    self.assertEqual(retry.outcome, expected)
+                    self.assertFalse((root / policy_state.TEMP_FILE).exists())
+
     def test_short_writes_are_completed(self) -> None:
         real_write = os.write
 
@@ -325,6 +360,54 @@ class PolicyStateTests(unittest.TestCase):
         os.chmod(self.root, 0o755)
         with self.assertRaisesRegex(EvidenceError, "must be private"):
             self.store()
+
+    def test_directory_made_nonprivate_after_open_is_rejected(self) -> None:
+        store = self.store()
+        os.chmod(self.root, 0o755)
+        try:
+            with self.assertRaisesRegex(EvidenceError, "must be private"):
+                store.observe()
+        finally:
+            store.close()
+
+    def test_state_pathname_swap_during_read_is_rejected(self) -> None:
+        self.initialize()
+        original_read = os.read
+        swapped = False
+
+        def swap_after_read(descriptor: int, count: int) -> bytes:
+            nonlocal swapped
+            data = original_read(descriptor, count)
+            if data and not swapped:
+                swapped = True
+                os.rename(self.state_path(), self.root / "old-state")
+                self.state_path().write_bytes(data)
+                os.chmod(self.state_path(), 0o600)
+            return data
+
+        with mock.patch.object(policy_state.os, "read", side_effect=swap_after_read):
+            with (
+                self.store() as store,
+                self.assertRaisesRegex(EvidenceError, "changed|substituted"),
+            ):
+                store.observe()
+
+    def test_temp_pathname_swap_before_rename_is_rejected(self) -> None:
+        swapped = False
+
+        def swap_temp(point: str) -> None:
+            nonlocal swapped
+            if point == "after-file-fsync" and not swapped:
+                swapped = True
+                os.rename(self.temp_path(), self.root / "old-temp")
+                self.temp_path().write_bytes(b"substitute")
+                os.chmod(self.temp_path(), 0o600)
+
+        with (
+            self.store(swap_temp) as store,
+            self.assertRaisesRegex(EvidenceError, "substituted"),
+        ):
+            store.pin_policy(POLICY_7, 7)
 
     def test_state_symlink_hardlink_fifo_socket_and_device_are_rejected(self) -> None:
         variants = ("symlink", "hardlink", "fifo", "socket", "device")

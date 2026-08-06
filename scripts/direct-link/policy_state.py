@@ -426,6 +426,7 @@ class LocalPolicyStateStoreV1:
     def _locked(self) -> Iterator[None]:
         if self._closed:
             raise EvidenceError("policy state store is closed")
+        _require_private_directory_descriptor(self._directory)
         descriptor = _open_lock(self._directory)
         try:
             try:
@@ -591,17 +592,19 @@ def _open_private_directory(path: Path) -> int:
                 ) from error
             os.close(descriptor)
             descriptor = next_descriptor
-        metadata = os.fstat(descriptor)
-        if not stat.S_ISDIR(metadata.st_mode):
-            raise EvidenceError("policy state path is not a directory")
-        if metadata.st_uid != os.geteuid() or stat.S_IMODE(metadata.st_mode) & 0o077:
-            raise EvidenceError(
-                "policy state directory must be private and owned by euid"
-            )
+        _require_private_directory_descriptor(descriptor)
         return descriptor
     except Exception:
         os.close(descriptor)
         raise
+
+
+def _require_private_directory_descriptor(descriptor: int) -> None:
+    metadata = os.fstat(descriptor)
+    if not stat.S_ISDIR(metadata.st_mode):
+        raise EvidenceError("policy state path is not a directory")
+    if metadata.st_uid != os.geteuid() or stat.S_IMODE(metadata.st_mode) & 0o077:
+        raise EvidenceError("policy state directory must be private and owned by euid")
 
 
 def _require_private_regular_metadata(metadata: os.stat_result, name: str) -> None:
@@ -640,7 +643,7 @@ def _open_lock(directory: int) -> int:
     try:
         descriptor = os.open(LOCK_FILE, flags, 0o600, dir_fd=directory)
     except OSError as error:
-        if error.errno in (errno.ELOOP, errno.ENXIO, errno.ENODEV, errno.ENXIO):
+        if error.errno in (errno.ELOOP, errno.ENXIO, errno.ENODEV):
             raise EvidenceError(
                 "policy state lock is not a safe regular file"
             ) from error
