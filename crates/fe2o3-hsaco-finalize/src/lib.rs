@@ -17,11 +17,21 @@ use fe2o3_kernel_descriptor::{
 };
 
 mod link_plan;
+mod worker_protocol;
 
 pub use link_plan::{
     ContentIdentityV1, LinkInputV1, LinkOptionV1, LinkOutputV1, LinkPlanError, LinkPlanIdentityV1,
     MAX_LINK_INPUTS, MAX_LINK_OPTION_NAME_BYTES, MAX_LINK_OPTION_VALUE_BYTES, MAX_LINK_OPTIONS,
     MAX_LINK_PROVENANCE_EDGES, MAX_LINK_PROVENANCE_NODES, MultiInputLinkPlanV1, ProvenanceNodeV1,
+};
+pub use worker_protocol::{
+    MAX_WORKER_DIAGNOSTIC_BYTES, MAX_WORKER_DIAGNOSTICS, MAX_WORKER_OUTPUT_BYTES,
+    MAX_WORKER_REQUEST_BYTES, MAX_WORKER_RESPONSE_BYTES, MAX_WORKER_SYMBOL_BYTES,
+    MAX_WORKER_SYMBOLS, MAX_WORKER_TARGET_BYTES, MAX_WORKER_TOOLCHAIN_ID_BYTES,
+    MAX_WORKER_TOTAL_DIAGNOSTIC_BYTES, MAX_WORKER_TOTAL_INPUT_BYTES, WORKER_REQUEST_MAGIC_V1,
+    WORKER_RESPONSE_MAGIC_V1, WorkerInputKindV1, WorkerInputV1, WorkerOptimizationLevelV1,
+    WorkerOptionsV1, WorkerOutputConstraintsV1, WorkerOutputV1, WorkerProtocolError,
+    WorkerRequestV1, WorkerResponseV1, WorkerStageV1,
 };
 
 /// The only ELF section name recognized for a canonical V1 descriptor table.
