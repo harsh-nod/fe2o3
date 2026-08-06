@@ -39,7 +39,7 @@ step before packaging. That responsibility intentionally remains outside `rustc-
 
 ## Multi-input native link plans
 
-`MultiInputLinkPlanV1` is a separate, COMGR-independent description of a reproducible native link.
+`MultiInputLinkPlanV1` is a linker-independent description of a reproducible native link.
 It binds a canonical concrete AMD target to one or more SHA-256-addressed AMDGPU relocatable inputs,
 bounded structured options, an expected executable HSACO identity, and a complete provenance DAG.
 Inputs, options, nodes, and parent edges have one canonical order. Duplicate inputs, conflicting
@@ -48,9 +48,9 @@ cycles, orphan nodes, and incomplete output-to-input closure fail closed. The ou
 parents must be exactly the complete input set.
 
 The plan has a domain-separated stable identity and canonical byte representation. It can verify a
-candidate output's expected digest and size without loading COMGR. An execution adapter remains
+candidate output's expected digest and size without executing a linker. A direct LLVM/LLD worker remains
 responsible for mapping each supported option through a structured API, preserving the canonical
 input order, inspecting the produced AMDGPU object, and independently finalizing its embedded
-descriptor table. A plan does not prove that COMGR ran, that an option is supported, that the bytes
+descriptor table. A plan does not prove that LLVM/LLD ran, that an option is supported, that the bytes
 are valid AMDGPU ELF, or that any device can load or launch them. The existing single-HSACO
 inspection and finalization functions are unchanged.

@@ -324,9 +324,15 @@ libraries:
 - matrix capabilities to target-gated MFMA/WMMA operations;
 - kernels and metadata to HSA code objects.
 
-ROCm clang/lld remains the bootstrap finalizer. A COMGR-based in-process
-finalizer can be added later behind the same interface. Textual LLVM emission
-may remain as an inspection format but is not the semantic IR boundary.
+ROCm clang/lld remains the bootstrap finalizer. The production link path uses
+an out-of-process, pinned fe2o3 worker that calls LLVM module-linking,
+optimization, target-machine, and LLD library APIs directly. The worker keeps
+ROCm LLVM out of rustc's process, where rustc's independently built LLVM is
+already loaded. Requests are bounded canonical records with exact input,
+target, option, symbol-resolution, toolchain, and output identities; they do
+not contain shell commands, arbitrary linker flags, or implicit library search
+paths. COMGR is not part of this architecture. Textual LLVM emission may remain
+as an inspection format but is not the semantic IR boundary.
 
 ## Migration from Current fe2o3
 

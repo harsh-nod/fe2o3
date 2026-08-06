@@ -104,7 +104,7 @@ impl LinkOutputV1 {
 /// One non-repeating, canonical linker option.
 ///
 /// This is data, not a shell argument. An execution adapter must map supported
-/// names to a structured COMGR API and reject unknown names.
+/// names to the direct LLVM/LLD worker API and reject unknown names.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct LinkOptionV1 {
     name: String,
@@ -170,7 +170,7 @@ impl LinkPlanIdentityV1 {
 ///
 /// All collections are required to be canonical on construction. The
 /// `canonicalized` constructor is provided for callers that start with sets.
-/// This value is descriptive and grants no compiler, COMGR, load, or launch
+/// This value is descriptive and grants no compiler, linker, load, or launch
 /// authority.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MultiInputLinkPlanV1 {

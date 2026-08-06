@@ -222,9 +222,9 @@ turn the foundations below into end-to-end features.
 - G6/G7 foundations include canonical multi-input AMDGPU link plans, raw HIP
   cooperative-launch and peer-access bindings, and a V2 kernel descriptor that
   binds wave width, LDS limits, cooperative launch, synchronization, and atomic
-  scope requirements to target capabilities. There is no COMGR link executor,
-  high-level cooperative/peer safety layer, occupancy admission, or observed
-  device binding for those records yet.
+  scope requirements to target capabilities. There is no direct LLVM/LLD link
+  worker, high-level cooperative/peer safety layer, occupancy admission, or
+  observed device binding for those records yet.
 - G8 adds a deterministic bounded kernel-case generator, wrapping `i32` CPU
   evaluator, canonical codec, mismatch reporting, and reducer. `cargo fe2o3
   inspect` performs bounded read-only decoding. `sanitize` and `debug` produce
@@ -268,7 +268,7 @@ turn the foundations below into end-to-end features.
   Rustc-descendant descriptor lifetime, dynamic loading, transitive shared
   libraries, and non-Linux execution remain unresolved.
 - General Rust language support, frontend-to-layout integration, scoped atomic
-  lowering, wave operations and collectives, COMGR device linking, safe
+  lowering, wave operations and collectives, direct LLVM device linking, safe
   cooperative/peer runtime APIs, executable sanitizer/debugger integration,
   GPU-backed differential testing, and authenticated Verus refinement remain
   parity work. LDS, fences, and barriers exist only in the experimental Kernel

@@ -328,7 +328,10 @@ G5 passes when:
 
 ### Objectives
 
-- Add AMDGPU bitcode/relocatable device linking and bidirectional device FFI.
+- Add AMDGPU bitcode/relocatable device linking through a pinned worker that
+  calls LLVM and LLD library APIs directly, plus bidirectional device FFI.
+- Keep the LLVM worker out of rustc's process, use one exact LLVM build for
+  parse/link/optimize/codegen/native link, and do not use COMGR.
 - Support standalone device exports and external libraries through reviewed ABI
   and effect contracts.
 - Add cooperative grid launch where HIP and hardware support it.

@@ -132,7 +132,8 @@ The detailed dependencies and exit criteria are in
   general pipeline and complete external-project orchestration do not.
 - Row 39: a bounded canonical multi-input native-link plan binds ordered input
   digests, structured options, one concrete AMD target, an expected output, and
-  a complete provenance DAG. There is no COMGR adapter or executed device link.
+  a complete provenance DAG. There is no direct LLVM/LLD worker or executed
+  device link.
 - Rows 44 and 45: `cargo fe2o3 sanitize` and `debug` discover ROCgdb and produce
   normalized argument-vector plans. They do not execute the tool. Precise
   memory mode improves fault location but does not detect data races,
@@ -260,7 +261,7 @@ The detailed dependencies and exit criteria are in
 
 | ID | cuda-oxide feature | Baseline | Class | fe2o3 now | AMD/fe2o3 acceptance target | Gate |
 |:--|:--|:--|:--|:--|:--|:--|
-| 27 | Bi-directional LTOIR Support | Full | AMD-equivalent | Missing | Rust calls AMDGPU bitcode/device objects and external device code calls exported Rust functions through a versioned COMGR/lld link contract | G6 |
+| 27 | Bi-directional LTOIR Support | Full | AMD-equivalent | Missing | Rust calls AMDGPU bitcode/device objects and external device code calls exported Rust functions through a versioned direct LLVM/LLD link contract | G6 |
 | 28 | Device FFI (`extern "C"`) | Full | AMD-equivalent | Missing | Typed declarations preserve AMDGPU ABI, convergence/effect attributes, layouts, symbols, and diagnostics | G6 |
 | 29 | MathDx FFI (cuFFTDx / cuBLASDx) | Full | AMD-equivalent | Missing | Demonstrate equivalent in-kernel FFT and matrix-library integration where ROCm supplies device-callable artifacts; unsupported targets report the gap | G6 |
 | 30 | Tile interop | Experimental | AMD-equivalent | Missing | AMD tile/SIMT kernels share allocations and HIP streams between kernels; intra-kernel interop remains experimental unless a stable AMD contract exists | G6 |
