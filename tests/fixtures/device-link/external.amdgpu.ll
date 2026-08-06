@@ -4,7 +4,7 @@
 
 target triple = "amdgcn-amd-amdhsa"
 
-declare i32 @rust_accumulate_v1(i32, i32)
+declare i32 @rust_accumulate_v1(i32, i32) #0
 
 define protected i32 @external_scale_bias_v1(i32 %value, i32 %lane) #0 {
 entry:
@@ -14,7 +14,7 @@ entry:
   ret i32 %result
 }
 
-attributes #0 = { nounwind "target-cpu"="gfx942" "target-features"="+sramecc,-xnack" }
+attributes #0 = { memory(none) nounwind "target-cpu"="gfx942" "target-features"="+sramecc,-xnack" }
 
 !llvm.module.flags = !{!0, !1, !2}
 !0 = !{i32 1, !"amdhsa_code_object_version", i32 500}

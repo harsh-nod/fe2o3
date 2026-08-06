@@ -34,10 +34,11 @@ unsafe extern "C" {
 pub fn bidirectional_device_ffi(input: &[u32], mut output: DisjointSlice<u32>) {
     let index = thread::index_1d();
     let lane = index.get();
-    if let Some(destination) = output.get_mut(index) {
-        let value = input[lane];
+    if let Some(value) = input.get(lane)
+        && let Some(destination) = output.get_mut(index)
+    {
         // SAFETY: the direct-link contract binds the exact symbol, target,
         // physical ABI, effects, and semantic identity used by this fixture.
-        *destination = unsafe { external_scale_bias(value, lane as u32) };
+        *destination = unsafe { external_scale_bias(*value, lane as u32) };
     }
 }

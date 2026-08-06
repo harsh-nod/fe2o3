@@ -11,3 +11,5 @@ publish = false
 fe2o3-amd-target = { path = "../../crates/fe2o3-amd-target" }
 fe2o3-artifacts = { path = "../../crates/fe2o3-artifacts" }
 fe2o3-kernel-descriptor = { path = "../../crates/fe2o3-kernel-descriptor" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

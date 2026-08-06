@@ -1,3 +1,1 @@
 target/
-examples/device-link-ffi/Cargo.lock
-tests/fixtures/device-link/rust-device/Cargo.lock
