@@ -11,6 +11,39 @@ The gates below are intentionally narrower than the repository-wide G1-G8
 roadmap. They describe one end-to-end milestone and do not replace the broader
 CUDA-Oxide parity gates in `implementation-roadmap-v2.md`.
 
+## Implemented gfx942 Vertical Slice
+
+As of commit `603a63768086802f4a3cd00771dde3923ccc7d72`, the opt-in
+`kernel-ir-worker-v2` path implements a bounded G1-G5 vertical slice for one
+real Rust source fixture:
+
+- rustc emits an attempt-scoped textual LLVM handoff and an exact symbol-role
+  manifest, using rustc source-owner identity to accept device FFI imports;
+- Cargo consumes that manifest, constructs the closed request, and requires
+  byte-identical output from GenericLink and Worker V2 executions;
+- the measured out-of-process worker uses LLVM and LLD library APIs directly to
+  parse, link, optimize, emit AMDGPU code, and link the `gfx942` HSACO; neither
+  COMGR nor command-line linking is used;
+- Cargo independently checks the raw HSACO target, exports, descriptors, and
+  AMDHSA metadata before deriving an immutable publication plan from the
+  retained evidence; and
+- the artifact transaction durably publishes the exact bytes and an
+  attempt-bound provenance receipt, with adversarial substitution,
+  crash-boundary, redo, and generation-isolation tests.
+
+This is not completion of G5 or the end-to-end milestone. Exact retry after a
+consumed compiler handoff is retained only in the same Cargo process; a durable
+restart intent is not yet persisted. The rustc/compiler executable and its
+origin are not authenticated. Verus results are neither authenticated nor
+bound to the emitted code. Canonical descriptor-table finalization, G6 bundle
+binding, G7 HSA loading, and kernel launch are not connected to this path and
+gain no authority from its publication receipt.
+
+The generic and adversarial suites pass, but successful hardware evidence is
+still pending. On the MI300X `gfx942` lane, the release worker currently aborts
+with stack smashing while returning from `emitObject`; therefore this document
+does not claim a successful hardware link, load, or launch for Worker V2.
+
 ## Program Invariants
 
 1. The rustc process never loads the native link worker or LLVM libraries.

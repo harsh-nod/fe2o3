@@ -24,6 +24,22 @@ The fe2o3 current-state column is based on commit
 `37eee8f15b985190449ece7a93f4ab386aa3cb18`.
 <!-- parity-status:baseline:end -->
 
+Post-snapshot update: commit
+`603a63768086802f4a3cd00771dde3923ccc7d72` extends the bounded `gfx942`
+Worker V2 vertical slice without changing any row to Complete. One real Rust
+source fixture now reaches an exact compiler symbol-role handoff, two
+byte-identical direct LLVM/LLD worker executions, independent raw-HSACO
+inspection, and attempt-scoped durable publication with a provenance receipt.
+The worker calls LLVM and LLD library APIs directly and does not use COMGR or
+command-line linking. This evidence remains source/unit and negative-test
+evidence: compiler origin and Verus results are unauthenticated, canonical
+artifact finalization and bundle binding are absent, and no HSA load or launch
+authority is granted. Hardware success is not recorded because the release
+worker currently terminates with a stack-smashing failure while returning from
+`emitObject` on the MI300X `gfx942` lane. The generated dashboard remains the
+older pinned evidence snapshot until that hardware blocker and its evidence
+gate are resolved.
+
 At that commit fe2o3 has a HIP runtime, explicit unsafe raw module and launch
 paths, versioned kernel registration, reachable MIR collection, bounded rustc
 frontend and general layout records, a canonical target-neutral kernel IR and
@@ -144,9 +160,16 @@ The detailed dependencies and exit criteria are in
   import/export direction, exact symbols, physical scalar/pointer ABI,
   address spaces, effects, target, code-object version, and semantic identity.
   A standalone worker implements canonical Rust/C++ request/response codecs,
-  LLVM bitcode linking, AMDGPU `TargetMachine` emission, and in-process LLD.
-  The worker is not connected to artifact publication, and no successful link
-  has been validated with one consistent pinned ROCm LLVM development build.
+  LLVM bitcode linking, AMDGPU `TargetMachine` emission, and in-process LLD,
+  with no COMGR or command-line linker dependency. In the post-snapshot
+  `gfx942` Worker V2 slice, Cargo consumes an exact compiler-produced
+  symbol-role manifest, requires byte-identical output from two worker
+  executions, independently inspects the raw HSACO, and durably publishes it
+  under the originating build attempt with a provenance receipt. The compiler
+  and its origin are not authenticated, Verus evidence is not authenticated or
+  executable-bound, canonical artifact finalization and bundle binding are not
+  run, and HSA load/launch remain absent. Hardware success is still pending due
+  to the release-worker `emitObject` stack-smashing failure on MI300X.
 - Rows 44 and 45: `cargo fe2o3 sanitize` and `debug` retain plan-only mode and
   can execute an exact descriptor-pinned native ROCgdb binary with bounded
   output, timeout, process cleanup, an environment allowlist, and diagnostic

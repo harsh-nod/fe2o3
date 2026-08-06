@@ -236,10 +236,19 @@ turn the foundations below into end-to-end features.
   retain exact contexts, streams, and cleanup ownership. The opt-in
   `kernel-ir-worker-v2` flow now carries one real Rust source module through
   rustc collection, verified kernel IR, an attempt-scoped textual LLVM handoff,
-  Cargo wrapper consumption, and byte-identical GenericLink/V2 execution in a
-  measured direct LLVM/LLD worker on gfx942. The resulting evidence is inert:
-  no authenticated artifact publication, HSACO admission, load, launch, or
-  compiler-refinement proof is granted.
+  exact compiler-produced symbol-role manifests, Cargo wrapper consumption,
+  and byte-identical GenericLink/V2 execution in a measured direct LLVM/LLD
+  worker for `gfx942`. This path uses LLVM and LLD library APIs directly; it
+  does not use COMGR or command-line linking. Cargo independently admits the
+  returned raw HSACO, derives publication only from retained inspection
+  evidence, and durably publishes it with an attempt-bound provenance receipt.
+  The durable transaction has adversarial and crash-boundary coverage, while
+  exact retry after the handoff has been consumed is currently limited to the
+  same Cargo process. Compiler identity and origin are not authenticated, no
+  Verus proof is authenticated or bound to the executable, canonical artifact
+  finalization is not performed, and the output grants no HSA load or launch
+  authority. A release-worker `emitObject` stack-smashing failure on the MI300X
+  still blocks successful `gfx942` hardware validation of this vertical slice.
 - G8 adds deterministic model generation/reduction and a bounded conformance
   harness that executes fill, vecadd, and affine kernels against an independent
   HIP/CPU oracle. `cargo fe2o3 inspect` performs bounded read-only decoding.
