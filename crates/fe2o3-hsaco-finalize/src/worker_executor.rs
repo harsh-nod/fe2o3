@@ -21,7 +21,7 @@ use std::{io, path::PathBuf, process::ExitStatus};
 
 use crate::{
     ContentIdentityV1, MAX_WORKER_RESPONSE_BYTES, MAX_WORKER_TOOLCHAIN_ID_BYTES,
-    WorkerProtocolError, WorkerRequestV1, WorkerResponseV1,
+    WorkerEvidenceClassV1, WorkerProtocolError, WorkerRequestV1, WorkerResponseV1,
 };
 
 /// Maximum bytes accepted for a selected native worker executable.
@@ -280,6 +280,11 @@ impl InertWorkerExecutionV1 {
 
     pub const fn response(&self) -> &WorkerResponseV1 {
         &self.response
+    }
+
+    /// Classifies the retained response as generic link evidence.
+    pub const fn evidence_class(&self) -> WorkerEvidenceClassV1 {
+        WorkerEvidenceClassV1::GenericLink
     }
 
     pub const fn grants_publication_authority(&self) -> bool {

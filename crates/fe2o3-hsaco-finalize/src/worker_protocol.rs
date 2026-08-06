@@ -25,6 +25,16 @@ pub const MAX_WORKER_TOTAL_DIAGNOSTIC_BYTES: usize = 16 * 1024;
 pub const MAX_WORKER_RESPONSE_BYTES: usize =
     MAX_WORKER_OUTPUT_BYTES + MAX_WORKER_TOTAL_DIAGNOSTIC_BYTES + 4096;
 
+/// Permanent evidence classification for the Worker V1 wire domain.
+///
+/// Worker V1 has no field for an opaque FFI closure identity. Every request,
+/// response, and output in this protocol is therefore generic link evidence,
+/// including values independently constructed with FFI-like symbol strings.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum WorkerEvidenceClassV1 {
+    GenericLink,
+}
+
 const REQUEST_DOMAIN_V1: &[u8] = b"FE2O3/DIRECT-LLVM-WORKER-REQUEST/V1\0";
 const REQUEST_FIELD_COUNT: u16 = 10;
 const RESPONSE_FIELD_COUNT: u16 = 6;
@@ -322,6 +332,11 @@ impl WorkerRequestV1 {
         &self.output
     }
 
+    /// Classifies this request without granting artifact or FFI provenance.
+    pub const fn evidence_class(&self) -> WorkerEvidenceClassV1 {
+        WorkerEvidenceClassV1::GenericLink
+    }
+
     pub const fn grants_link_authority(&self) -> bool {
         false
     }
@@ -389,6 +404,11 @@ impl WorkerOutputV1 {
 
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
+    }
+
+    /// Classifies this output independently of its byte contents.
+    pub const fn evidence_class(&self) -> WorkerEvidenceClassV1 {
+        WorkerEvidenceClassV1::GenericLink
     }
 }
 
@@ -535,6 +555,11 @@ impl WorkerResponseV1 {
 
     pub fn binds_request(&self, request: &WorkerRequestV1) -> bool {
         self.request_id == request.request_id && self.request_identity == request.identity
+    }
+
+    /// Classifies this response independently of success or output contents.
+    pub const fn evidence_class(&self) -> WorkerEvidenceClassV1 {
+        WorkerEvidenceClassV1::GenericLink
     }
 
     pub const fn grants_load_authority(&self) -> bool {

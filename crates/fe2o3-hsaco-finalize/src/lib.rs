@@ -36,8 +36,8 @@ pub use compiler_ffi_bridge::{
     MAX_G4_FFI_ITEM_LABEL_BYTES_V1, MAX_G4_FFI_SYMBOL_CLAIMS_V1, MAX_G4_KERNEL_CLAIMS_V1,
     MAX_G4_RUST_DEFINITION_CLAIMS_V1, MAX_STAGED_FFI_LINK_PLAN_BYTES_V1,
     StagedFfiExecutionBlockerV1, StagedFfiLinkError, StagedFfiLinkPlanIdentityV1,
-    StagedFfiLinkPlanV1, UnauthenticatedProducerClaimIdentityV1, UnauthenticatedProducerClaimV1,
-    stage_g4_ffi_link_plan_v1,
+    StagedFfiLinkPlanInspectionV1, StagedFfiLinkPlanV1, UnauthenticatedProducerClaimIdentityV1,
+    UnauthenticatedProducerClaimV1, stage_g4_ffi_link_plan_v1,
 };
 pub use link_plan::{
     ContentIdentityV1, LinkInputV1, LinkOptionV1, LinkOutputV1, LinkPlanError, LinkPlanIdentityV1,
@@ -59,9 +59,9 @@ pub use worker_protocol::{
     MAX_WORKER_REQUEST_BYTES, MAX_WORKER_RESPONSE_BYTES, MAX_WORKER_SYMBOL_BYTES,
     MAX_WORKER_SYMBOLS, MAX_WORKER_TARGET_BYTES, MAX_WORKER_TOOLCHAIN_ID_BYTES,
     MAX_WORKER_TOTAL_DIAGNOSTIC_BYTES, MAX_WORKER_TOTAL_INPUT_BYTES, WORKER_REQUEST_MAGIC_V1,
-    WORKER_RESPONSE_MAGIC_V1, WorkerInputKindV1, WorkerInputV1, WorkerOptimizationLevelV1,
-    WorkerOptionsV1, WorkerOutputConstraintsV1, WorkerOutputV1, WorkerProtocolError,
-    WorkerRequestV1, WorkerResponseV1, WorkerStageV1,
+    WORKER_RESPONSE_MAGIC_V1, WorkerEvidenceClassV1, WorkerInputKindV1, WorkerInputV1,
+    WorkerOptimizationLevelV1, WorkerOptionsV1, WorkerOutputConstraintsV1, WorkerOutputV1,
+    WorkerProtocolError, WorkerRequestV1, WorkerResponseV1, WorkerStageV1,
 };
 
 /// The only ELF section name recognized for a canonical V1 descriptor table.

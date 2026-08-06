@@ -7,9 +7,9 @@ use std::{
 use fe2o3_hsaco_finalize::{
     ContentIdentityV1, MAX_WORKER_DIAGNOSTIC_BYTES, MAX_WORKER_DIAGNOSTICS,
     MAX_WORKER_OUTPUT_BYTES, MAX_WORKER_SYMBOL_BYTES, MAX_WORKER_SYMBOLS,
-    MAX_WORKER_TOOLCHAIN_ID_BYTES, WorkerInputKindV1, WorkerInputV1, WorkerOptimizationLevelV1,
-    WorkerOptionsV1, WorkerOutputConstraintsV1, WorkerOutputV1, WorkerProtocolError,
-    WorkerRequestV1, WorkerResponseV1, WorkerStageV1,
+    MAX_WORKER_TOOLCHAIN_ID_BYTES, WorkerEvidenceClassV1, WorkerInputKindV1, WorkerInputV1,
+    WorkerOptimizationLevelV1, WorkerOptionsV1, WorkerOutputConstraintsV1, WorkerOutputV1,
+    WorkerProtocolError, WorkerRequestV1, WorkerResponseV1, WorkerStageV1,
 };
 use fe2o3_kernel_descriptor::{CodeObjectVersion, DeviceTargetV1};
 use sha2::{Digest, Sha256};
@@ -56,9 +56,39 @@ fn request_round_trip_has_stable_golden_wire() {
     );
     assert!(decoded.options().strip_debug());
     assert!(decoded.options().verify_each());
+    assert_eq!(decoded.evidence_class(), WorkerEvidenceClassV1::GenericLink);
     assert!(!decoded.grants_link_authority());
     assert!(!decoded.grants_load_authority());
     assert!(!decoded.grants_launch_authority());
+}
+
+#[test]
+fn independently_constructed_ffi_like_claims_remain_generic_link_evidence() {
+    let base = sample_request();
+    let request = WorkerRequestV1::new(
+        [0x6b; 32],
+        base.llvm_build_identity(),
+        base.target(),
+        base.code_object_version(),
+        base.options(),
+        base.inputs().to_vec(),
+        vec!["external_device_add".to_owned()],
+        vec!["external_device_add".to_owned()],
+        WorkerOutputConstraintsV1::new(base.output_constraints().max_bytes()).unwrap(),
+    )
+    .unwrap();
+    let output = WorkerOutputV1::new(b"FFI-like bytes without FFI provenance".to_vec()).unwrap();
+    let response = WorkerResponseV1::success(&request, "worker", vec![], output).unwrap();
+
+    assert_eq!(request.evidence_class(), WorkerEvidenceClassV1::GenericLink);
+    assert_eq!(
+        response.evidence_class(),
+        WorkerEvidenceClassV1::GenericLink
+    );
+    assert_eq!(
+        response.output().unwrap().evidence_class(),
+        WorkerEvidenceClassV1::GenericLink
+    );
 }
 
 #[test]
@@ -246,6 +276,11 @@ fn response_round_trip_binds_request_measurement_and_output() {
     assert_eq!(decoded, response);
     assert!(decoded.binds_request(&request));
     assert_eq!(decoded.stage(), WorkerStageV1::Complete);
+    assert_eq!(decoded.evidence_class(), WorkerEvidenceClassV1::GenericLink);
+    assert_eq!(
+        decoded.output().unwrap().evidence_class(),
+        WorkerEvidenceClassV1::GenericLink
+    );
     assert_eq!(
         decoded.output().unwrap().bytes(),
         b"\x7fELF deterministic hsaco"
@@ -271,6 +306,10 @@ fn response_round_trip_binds_request_measurement_and_output() {
     let decoded_failure = WorkerResponseV1::decode(failure.canonical_bytes()).unwrap();
     assert!(decoded_failure.binds_request(&request));
     assert!(decoded_failure.output().is_none());
+    assert_eq!(
+        decoded_failure.evidence_class(),
+        WorkerEvidenceClassV1::GenericLink
+    );
 }
 
 #[test]

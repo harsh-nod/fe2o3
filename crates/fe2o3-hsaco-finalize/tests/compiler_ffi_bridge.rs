@@ -1,8 +1,8 @@
 use fe2o3_hsaco_finalize::{
     ContentIdentityV1, ExpectedFinalDefinedSymbolsClaimV1, FfiClaimOriginV1, FfiPlanInputClaimV1,
     FfiPlanInputRoleClaimV1, FfiSymbolProviderBindingClaimV1, FinalSymbolEvidenceSourceClaimV1,
-    G4DeclarationOwnerClaimV1, G4DeclaredContractClaimsV1, G4FfiClaimEnvelopeV1,
-    G4FfiDirectionClaimV1, G4FfiSymbolClaimFieldV1, G4FfiSymbolClaimV1,
+    G4DeclarationOwnerClaimV1, G4DeclaredContractClaimsV1, G4FfiClaimEnvelopeAdapterV1,
+    G4FfiClaimEnvelopeV1, G4FfiDirectionClaimV1, G4FfiSymbolClaimFieldV1, G4FfiSymbolClaimV1,
     G4SymbolProviderClassClaimV1, InputSymbolEvidenceCoverageClaimV1, LinkInputV1, LinkOptionV1,
     LinkOutputV1, MAX_G4_FFI_AGGREGATE_TEXT_BYTES_V1, MAX_G4_FFI_SYMBOL_CLAIMS_V1,
     MAX_G4_KERNEL_CLAIMS_V1, MAX_G4_RUST_DEFINITION_CLAIMS_V1, MultiInputLinkPlanV1,
@@ -29,6 +29,18 @@ struct Fixture {
     compiler_module: ContentIdentityV1,
     external_input: ContentIdentityV1,
     support_input: ContentIdentityV1,
+}
+
+struct TestOnlyG4CompatibleAdapter {
+    envelope: G4FfiClaimEnvelopeV1,
+}
+
+impl G4FfiClaimEnvelopeAdapterV1 for TestOnlyG4CompatibleAdapter {
+    fn assertion_only_g4_ffi_claim_envelope_v1(
+        &self,
+    ) -> Result<G4FfiClaimEnvelopeV1, StagedFfiLinkError> {
+        Ok(self.envelope.clone())
+    }
 }
 
 fn target() -> DeviceTargetV1 {
@@ -269,31 +281,37 @@ fn stage(fixture: &Fixture) -> StagedFfiLinkPlanV1 {
 }
 
 #[test]
+fn adapter_contract_accepts_real_g4_compatible_contract_fields_without_attesting_them() {
+    let fixture = fixture();
+    let adapter = TestOnlyG4CompatibleAdapter {
+        envelope: fixture.envelope.clone(),
+    };
+    let adapted = adapter.assertion_only_g4_ffi_claim_envelope_v1().unwrap();
+
+    assert_eq!(adapted.identity(), fixture.envelope.identity());
+    assert_eq!(adapted.symbols()[0].physical_abi(), IMPORT_ABI);
+    assert_eq!(adapted.symbols()[1].physical_abi(), EXPORT_ABI);
+    assert_eq!(adapted.claim_origin(), FfiClaimOriginV1::G4AssertionOnly);
+    assert!(!adapted.is_actual_compiler_integration());
+}
+
+#[test]
 fn complete_ffi_identity_is_staged_but_never_decomposed_into_worker_v1() {
     let fixture = fixture();
     let staged = stage(&fixture);
+    let inspection = staged.inspection();
 
-    assert_eq!(staged.plan_identity(), fixture.plan.identity());
+    assert_ne!(staged.identity().as_bytes(), &[0; 32]);
+    assert_eq!(inspection.input_claim_count(), fixture.inputs.len());
     assert_eq!(
-        staged.g4_claim_envelope_identity(),
-        fixture.envelope.identity()
+        inspection.provider_binding_claim_count(),
+        fixture.providers.len()
     );
-    assert_eq!(staged.input_claims(), fixture.inputs);
-    assert_eq!(staged.provider_binding_claims(), fixture.providers);
+    assert!(inspection.has_expected_final_defined_symbols_claim());
     assert_eq!(
-        staged.final_symbols_claim().unwrap(),
-        &fixture.final_symbols
-    );
-    assert_eq!(
-        staged.execution_blocker(),
+        inspection.execution_blocker(),
         StagedFfiExecutionBlockerV1::WorkerProtocolV1CannotBindCompleteFfiIdentity
     );
-    assert!(!staged.can_construct_worker_request_v1());
-    assert!(!staged.can_bind_worker_response_v1());
-    assert!(!staged.compiler_module_claim_is_authenticated());
-    assert!(!staged.grants_link_authority());
-    assert!(!staged.grants_load_authority());
-    assert!(!staged.grants_launch_authority());
 }
 
 #[test]
@@ -308,12 +326,12 @@ fn missing_final_symbol_evidence_remains_explicitly_nonexecutable() {
     )
     .unwrap();
 
-    assert!(staged.final_symbols_claim().is_none());
+    let inspection = staged.inspection();
+    assert!(!inspection.has_expected_final_defined_symbols_claim());
     assert_eq!(
-        staged.execution_blocker(),
+        inspection.execution_blocker(),
         StagedFfiExecutionBlockerV1::MissingExpectedFinalDefinedSymbolsClaim
     );
-    assert!(!staged.can_construct_worker_request_v1());
 }
 
 #[test]
@@ -388,7 +406,7 @@ fn neutral_compiler_module_claim_does_not_imply_llvm_bitcode_or_actual_emission(
         .unwrap();
     assert_eq!(module.role(), FfiPlanInputRoleClaimV1::CompilerModule);
     assert_eq!(module.kind(), WorkerInputKindV1::AmdGpuRelocatable);
-    assert!(!stage(&fixture).compiler_module_claim_is_authenticated());
+    assert!(!module.producer().is_authenticated());
 }
 
 #[test]
@@ -454,7 +472,7 @@ fn import_only_and_kernel_only_claims_still_require_one_compiler_module() {
     let staged =
         stage_g4_ffi_link_plan_v1(&kernel_plan, &kernel_only, kernel_inputs, vec![], None).unwrap();
     assert_eq!(
-        staged.execution_blocker(),
+        staged.inspection().execution_blocker(),
         StagedFfiExecutionBlockerV1::MissingExpectedFinalDefinedSymbolsClaim
     );
 }
@@ -533,7 +551,11 @@ fn compiler_required_symbols_are_not_final_defined_symbol_expectations() {
         None,
     )
     .unwrap();
-    assert!(staged_without_final.final_symbols_claim().is_none());
+    assert!(
+        !staged_without_final
+            .inspection()
+            .has_expected_final_defined_symbols_claim()
+    );
 
     let incomplete =
         final_symbols_claim(strings(&["external_add", "rust_helper"]), &fixture.inputs);
@@ -1085,11 +1107,6 @@ fn canonical_staging_bytes_have_stable_golden_identities() {
             .canonical_bytes()
             .starts_with(b"FE2O3/EXPECTED-FINAL-DEFINED-SYMBOLS-CLAIM/V1\0")
     );
-    assert!(
-        staged
-            .canonical_bytes()
-            .starts_with(b"FE2O3/STAGED-FFI-LINK-PLAN/V1\0")
-    );
     assert_eq!(
         fixture.envelope.identity().as_bytes(),
         &<[u8; 32]>::from(Sha256::digest(fixture.envelope.canonical_bytes()))
@@ -1097,10 +1114,6 @@ fn canonical_staging_bytes_have_stable_golden_identities() {
     assert_eq!(
         fixture.final_symbols.identity().as_bytes(),
         &<[u8; 32]>::from(Sha256::digest(fixture.final_symbols.canonical_bytes()))
-    );
-    assert_eq!(
-        staged.identity().as_bytes(),
-        &<[u8; 32]>::from(Sha256::digest(staged.canonical_bytes()))
     );
     assert_eq!(
         hex(fixture.envelope.identity().as_bytes()),

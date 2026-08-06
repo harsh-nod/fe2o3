@@ -17,8 +17,8 @@ use reserved_fe2o3_symbols::{
 use sha2::{Digest, Sha256};
 
 use crate::{
-    ContentIdentityV1, LinkPlanIdentityV1, MAX_LINK_INPUTS, MultiInputLinkPlanV1,
-    WorkerInputKindV1, WorkerProtocolError, worker_protocol::validate_symbols,
+    ContentIdentityV1, MAX_LINK_INPUTS, MultiInputLinkPlanV1, WorkerInputKindV1,
+    WorkerProtocolError, worker_protocol::validate_symbols,
 };
 
 pub use reserved_fe2o3_symbols::DeviceFfiContractIdV1 as G4FfiContractIdV1;
@@ -43,7 +43,7 @@ pub const MAX_FFI_PRODUCER_NAME_BYTES_V1: usize = 128;
 pub const MAX_FFI_PRODUCER_VERSION_BYTES_V1: usize = 256;
 /// Maximum canonical bytes retained by an assertion-only G4 envelope.
 pub const MAX_G4_FFI_ENVELOPE_BYTES_V1: usize = 512 * 1024;
-/// Maximum canonical bytes retained by one staged plan.
+/// Maximum canonical bytes accepted while deriving one staged-plan identity.
 pub const MAX_STAGED_FFI_LINK_PLAN_BYTES_V1: usize = 1024 * 1024;
 
 const DECLARATION_OWNER_DOMAIN_V1: &[u8] = b"FE2O3/G4-FFI-DECLARATION-OWNER-CLAIM/V1\0";
@@ -840,77 +840,51 @@ pub enum StagedFfiExecutionBlockerV1 {
     WorkerProtocolV1CannotBindCompleteFfiIdentity,
 }
 
+/// Non-authoritative summary that contains no generic request-construction inputs.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StagedFfiLinkPlanInspectionV1 {
+    input_claim_count: usize,
+    provider_binding_claim_count: usize,
+    has_expected_final_defined_symbols_claim: bool,
+    execution_blocker: StagedFfiExecutionBlockerV1,
+}
+
+impl StagedFfiLinkPlanInspectionV1 {
+    pub const fn input_claim_count(self) -> usize {
+        self.input_claim_count
+    }
+
+    pub const fn provider_binding_claim_count(self) -> usize {
+        self.provider_binding_claim_count
+    }
+
+    pub const fn has_expected_final_defined_symbols_claim(self) -> bool {
+        self.has_expected_final_defined_symbols_claim
+    }
+
+    pub const fn execution_blocker(self) -> StagedFfiExecutionBlockerV1 {
+        self.execution_blocker
+    }
+}
+
 /// Opaque, assertion-only staging record that cannot construct a worker request.
+///
+/// Its complete identity is the only provenance-bearing value exposed. The
+/// inspection summary contains counts and blocker state only; it cannot be
+/// converted into generic symbol or input-kind closures.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StagedFfiLinkPlanV1 {
-    plan_identity: LinkPlanIdentityV1,
-    g4_claim_envelope_identity: G4FfiClaimEnvelopeIdentityV1,
-    input_claims: Vec<FfiPlanInputClaimV1>,
-    provider_binding_claims: Vec<FfiSymbolProviderBindingClaimV1>,
-    final_symbols_claim: Option<ExpectedFinalDefinedSymbolsClaimV1>,
-    canonical_bytes: Vec<u8>,
     identity: StagedFfiLinkPlanIdentityV1,
+    inspection: StagedFfiLinkPlanInspectionV1,
 }
 
 impl StagedFfiLinkPlanV1 {
-    pub const fn plan_identity(&self) -> LinkPlanIdentityV1 {
-        self.plan_identity
-    }
-
-    pub const fn g4_claim_envelope_identity(&self) -> G4FfiClaimEnvelopeIdentityV1 {
-        self.g4_claim_envelope_identity
-    }
-
-    pub fn input_claims(&self) -> &[FfiPlanInputClaimV1] {
-        &self.input_claims
-    }
-
-    pub fn provider_binding_claims(&self) -> &[FfiSymbolProviderBindingClaimV1] {
-        &self.provider_binding_claims
-    }
-
-    pub const fn final_symbols_claim(&self) -> Option<&ExpectedFinalDefinedSymbolsClaimV1> {
-        self.final_symbols_claim.as_ref()
-    }
-
-    pub fn canonical_bytes(&self) -> &[u8] {
-        &self.canonical_bytes
-    }
-
     pub const fn identity(&self) -> StagedFfiLinkPlanIdentityV1 {
         self.identity
     }
 
-    pub const fn execution_blocker(&self) -> StagedFfiExecutionBlockerV1 {
-        if self.final_symbols_claim.is_none() {
-            StagedFfiExecutionBlockerV1::MissingExpectedFinalDefinedSymbolsClaim
-        } else {
-            StagedFfiExecutionBlockerV1::WorkerProtocolV1CannotBindCompleteFfiIdentity
-        }
-    }
-
-    pub const fn can_construct_worker_request_v1(&self) -> bool {
-        false
-    }
-
-    pub const fn can_bind_worker_response_v1(&self) -> bool {
-        false
-    }
-
-    pub const fn compiler_module_claim_is_authenticated(&self) -> bool {
-        false
-    }
-
-    pub const fn grants_link_authority(&self) -> bool {
-        false
-    }
-
-    pub const fn grants_load_authority(&self) -> bool {
-        false
-    }
-
-    pub const fn grants_launch_authority(&self) -> bool {
-        false
+    pub const fn inspection(&self) -> StagedFfiLinkPlanInspectionV1 {
+        self.inspection
     }
 }
 
@@ -949,14 +923,19 @@ pub fn stage_g4_ffi_link_plan_v1(
         return Err(StagedFfiLinkError::StagedPlanByteBoundExceeded);
     }
     let identity = StagedFfiLinkPlanIdentityV1(Sha256::digest(&canonical_bytes).into());
+    let has_expected_final_defined_symbols_claim = final_symbols_claim.is_some();
     Ok(StagedFfiLinkPlanV1 {
-        plan_identity: plan.identity(),
-        g4_claim_envelope_identity: envelope.identity,
-        input_claims,
-        provider_binding_claims,
-        final_symbols_claim,
-        canonical_bytes,
         identity,
+        inspection: StagedFfiLinkPlanInspectionV1 {
+            input_claim_count: input_claims.len(),
+            provider_binding_claim_count: provider_binding_claims.len(),
+            has_expected_final_defined_symbols_claim,
+            execution_blocker: if has_expected_final_defined_symbols_claim {
+                StagedFfiExecutionBlockerV1::WorkerProtocolV1CannotBindCompleteFfiIdentity
+            } else {
+                StagedFfiExecutionBlockerV1::MissingExpectedFinalDefinedSymbolsClaim
+            },
+        },
     })
 }
 
