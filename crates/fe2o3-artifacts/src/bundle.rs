@@ -1,8 +1,8 @@
 use std::fmt;
 
 use crate::{
-    ArtifactContainerV1, CodeObjectFormat, DigestAlgorithm, DigestBytes, MAX_CODE_OBJECT_BYTES,
-    ManifestV1, Name, TargetIdentity,
+    ArtifactContainerV1, Capability, CodeObjectFormat, DigestAlgorithm, DigestBytes,
+    MAX_CODE_OBJECT_BYTES, ManifestV1, Name, TargetIdentity,
 };
 
 pub const MAX_BUNDLE_TARGET_ASSOCIATIONS: usize = 128;
@@ -237,6 +237,7 @@ impl BundleIndexV1 {
         let mut target_associations = Vec::with_capacity(containers.len());
         let mut payloads = Vec::new();
         let mut kernels = Vec::new();
+        let mut logical_names = Vec::new();
 
         for container in containers {
             let manifest = container.manifest();
@@ -253,6 +254,7 @@ impl BundleIndexV1 {
                 .expect("validated container payload length must satisfy bundle bounds")
             }));
             for kernel in manifest.kernels() {
+                logical_names.push(kernel.name());
                 kernels.push(BundleKernelIndexEntryV1::new(
                     kernel.kernel_id(),
                     kernel.symbol().clone(),
@@ -262,8 +264,94 @@ impl BundleIndexV1 {
             }
         }
 
+        logical_names.sort_unstable();
+        reject_duplicate_values(&logical_names, "bundle kernel logical name")?;
         deduplicate_identical_payloads(&mut payloads)?;
         Self::new(target_associations, payloads, kernels)
+    }
+
+    /// Selects one descriptive kernel reference under an exact declared profile.
+    ///
+    /// `kernel_id` is the stable logical identity. Requiring its export symbol as
+    /// well prevents a caller from silently accepting a renamed entry. The
+    /// payload profile is set-like: order is ignored, while digest membership,
+    /// format, and byte length must match exactly. Candidate target capabilities
+    /// may be a superset of the indexed target declaration.
+    ///
+    /// This only returns index metadata. It does not authenticate or return
+    /// payload bytes, inspect a device, or grant load or launch authority.
+    pub fn select_kernel_reference(
+        &self,
+        kernel_id: DigestBytes,
+        expected_export_symbol: &Name,
+        expected_payload_profile: &[BundlePayloadReferenceV1],
+        candidate_target: &TargetIdentity,
+    ) -> Result<&BundleKernelIndexEntryV1, BundleValidationError> {
+        require_count(
+            expected_payload_profile.len(),
+            "selection payload profile",
+            MAX_KERNEL_PAYLOAD_REFERENCES,
+        )?;
+
+        let mut expected_payload_profile = expected_payload_profile.to_vec();
+        expected_payload_profile.sort_unstable_by_key(BundlePayloadReferenceV1::digest);
+        reject_duplicate_by(
+            &expected_payload_profile,
+            BundlePayloadReferenceV1::digest,
+            "selection payload digest",
+        )?;
+
+        let kernel = self
+            .kernels
+            .binary_search_by_key(&kernel_id, BundleKernelIndexEntryV1::kernel_id)
+            .ok()
+            .map(|index| &self.kernels[index])
+            .ok_or(BundleValidationError::UnknownKernel(kernel_id))?;
+        if kernel.symbol() != expected_export_symbol {
+            return Err(BundleValidationError::ExportSymbolMismatch { kernel_id });
+        }
+
+        if !kernel
+            .payload_digests()
+            .iter()
+            .copied()
+            .eq(expected_payload_profile
+                .iter()
+                .map(BundlePayloadReferenceV1::digest))
+        {
+            return Err(BundleValidationError::PayloadMembershipMismatch { kernel_id });
+        }
+
+        for expected in &expected_payload_profile {
+            let indexed = self
+                .payloads
+                .binary_search_by_key(&expected.digest(), BundlePayloadReferenceV1::digest)
+                .ok()
+                .map(|index| &self.payloads[index])
+                .expect("validated kernel references must resolve to bundle payloads");
+            if indexed.format() != expected.format() || indexed.byte_len() != expected.byte_len() {
+                return Err(BundleValidationError::PayloadProfileMismatch(
+                    expected.digest(),
+                ));
+            }
+        }
+
+        let association = self
+            .target_associations
+            .binary_search_by_key(
+                &kernel.manifest_digest(),
+                BundleTargetAssociationV1::manifest_digest,
+            )
+            .ok()
+            .map(|index| &self.target_associations[index])
+            .expect("validated kernel references must resolve to a target association");
+        check_target_profile(
+            association.manifest_digest(),
+            association.target(),
+            candidate_target,
+        )?;
+
+        Ok(kernel)
     }
 
     pub fn target_associations(&self) -> &[BundleTargetAssociationV1] {
@@ -282,13 +370,39 @@ impl BundleIndexV1 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum BundleValidationError {
-    EmptyCollection { field: &'static str },
-    TooMany { field: &'static str, max: usize },
-    Duplicate { field: &'static str },
-    InvalidPayloadLength { digest: DigestBytes, max: usize },
+    EmptyCollection {
+        field: &'static str,
+    },
+    TooMany {
+        field: &'static str,
+        max: usize,
+    },
+    Duplicate {
+        field: &'static str,
+    },
+    InvalidPayloadLength {
+        digest: DigestBytes,
+        max: usize,
+    },
     ConflictingPayload(DigestBytes),
     MissingTargetAssociation(DigestBytes),
     MissingPayload(DigestBytes),
+    UnknownKernel(DigestBytes),
+    ExportSymbolMismatch {
+        kernel_id: DigestBytes,
+    },
+    PayloadMembershipMismatch {
+        kernel_id: DigestBytes,
+    },
+    PayloadProfileMismatch(DigestBytes),
+    TargetProfileMismatch {
+        manifest_digest: DigestBytes,
+        field: &'static str,
+    },
+    MissingTargetCapability {
+        manifest_digest: DigestBytes,
+        capability: Capability,
+    },
 }
 
 impl fmt::Display for BundleValidationError {
@@ -315,6 +429,28 @@ impl fmt::Display for BundleValidationError {
                     "bundle kernel references unknown payload {digest:?}"
                 )
             }
+            Self::UnknownKernel(_) => write!(formatter, "bundle does not contain the kernel"),
+            Self::ExportSymbolMismatch { .. } => {
+                write!(formatter, "bundle kernel export symbol does not match")
+            }
+            Self::PayloadMembershipMismatch { .. } => {
+                write!(formatter, "bundle kernel payload membership does not match")
+            }
+            Self::PayloadProfileMismatch(digest) => write!(
+                formatter,
+                "bundle payload {digest:?} format or byte length does not match"
+            ),
+            Self::TargetProfileMismatch { field, .. } => {
+                write!(
+                    formatter,
+                    "candidate target {field} does not match bundle target"
+                )
+            }
+            Self::MissingTargetCapability { capability, .. } => write!(
+                formatter,
+                "candidate target lacks bundle capability {}",
+                capability.name()
+            ),
         }
     }
 }
@@ -362,6 +498,57 @@ fn reject_duplicate_symbols(
     } else {
         Ok(())
     }
+}
+
+fn reject_duplicate_values<T: Eq>(
+    values: &[T],
+    field: &'static str,
+) -> Result<(), BundleValidationError> {
+    if values.windows(2).any(|pair| pair[0] == pair[1]) {
+        Err(BundleValidationError::Duplicate { field })
+    } else {
+        Ok(())
+    }
+}
+
+fn check_target_profile(
+    manifest_digest: DigestBytes,
+    required: &TargetIdentity,
+    candidate: &TargetIdentity,
+) -> Result<(), BundleValidationError> {
+    if required.triple() != candidate.triple() {
+        return Err(BundleValidationError::TargetProfileMismatch {
+            manifest_digest,
+            field: "triple",
+        });
+    }
+    if required.architecture() != candidate.architecture() {
+        return Err(BundleValidationError::TargetProfileMismatch {
+            manifest_digest,
+            field: "architecture",
+        });
+    }
+    if required.pointer_width() != candidate.pointer_width() {
+        return Err(BundleValidationError::TargetProfileMismatch {
+            manifest_digest,
+            field: "pointer width",
+        });
+    }
+    if required.endianness() != candidate.endianness() {
+        return Err(BundleValidationError::TargetProfileMismatch {
+            manifest_digest,
+            field: "endianness",
+        });
+    }
+    for capability in required.capabilities() {
+        if candidate.capabilities().binary_search(capability).is_err() {
+            return Err(BundleValidationError::MissingTargetCapability {
+                manifest_digest,
+                capability: *capability,
+            });
+        }
+    }
+    Ok(())
 }
 
 fn deduplicate_identical_payloads(
