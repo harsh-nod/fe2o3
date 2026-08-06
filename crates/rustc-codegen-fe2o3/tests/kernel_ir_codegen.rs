@@ -182,7 +182,7 @@ static __fe2o3_device_ffi_registration_v1_{contract}: (
     local_device_add,
 );
 
-#[unsafe(no_mangle)]
+#[unsafe(export_name = "fe2o3_kernel_worker_v2_kernel")]
 pub fn worker_v2_kernel() {{}}
 
 #[used]
