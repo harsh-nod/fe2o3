@@ -26,6 +26,15 @@ require_source() {
     fi
 }
 
+forbid_source() {
+    file=$1
+    needle=$2
+    if grep -Fq "$needle" "$file"; then
+        printf 'FAIL:  %s contains forbidden proof shortcut %s\n' "$file" "$needle" >&2
+        source_failures=$((source_failures + 1))
+    fi
+}
+
 shared_body="$script_dir/src/elementwise_bodies.rs"
 positive="$script_dir/verus/elementwise.rs"
 require_source "$positive" 'include!("../src/elementwise_bodies.rs")'
@@ -50,11 +59,31 @@ require_source "$script_dir/verus/negative/affine_wrong_bias.rs" \
 require_source "$script_dir/verus/negative/gather_wrong_index.rs" \
     'pub fn mutated_gather_source'
 
+wave_lds="$script_dir/verus/wave_lds.rs"
+require_source "$wave_lds" 'include!("vecadd.rs")'
+require_source "$wave_lds" 'pub proof fn active_values_determine_reduction'
+require_source "$wave_lds" 'pub proof fn distinct_active_lanes_have_disjoint_scan_outputs'
+require_source "$wave_lds" 'pub proof fn owned_lds_write_is_in_bounds_and_framed'
+require_source "$wave_lds" 'pub proof fn distinct_threads_have_disjoint_lds_writes'
+require_source "$wave_lds" 'pub proof fn convergent_barrier_enables_shared_lds_read'
+forbid_source "$wave_lds" 'admit('
+forbid_source "$wave_lds" 'assume(false'
+forbid_source "$wave_lds" '#[verifier::external_body]'
+
+require_source "$script_dir/verus/negative/wave_inactive_lane_contributes.rs" \
+    'mutated_inactive_lane_contributes'
+require_source "$script_dir/verus/negative/lds_duplicate_writer.rs" \
+    'mutated_duplicate_lds_writers_are_race_free'
+require_source "$script_dir/verus/negative/lds_read_before_barrier.rs" \
+    'mutated_read_before_barrier_is_legal'
+require_source "$script_dir/verus/negative/lds_out_of_bounds_read.rs" \
+    'mutated_unbounded_lds_read_is_in_bounds'
+
 if [ "$source_failures" -ne 0 ]; then
     printf 'Source-shape checks failed: %s missing marker(s)\n' "$source_failures" >&2
     exit 1
 fi
-printf 'PASS:  shared copy, affine-map, and gather source shapes are paired\n'
+printf 'PASS:  shared-body, active-wave, and LDS proof source shapes are paired\n'
 
 if [ "$source_only" -eq 1 ]; then
     exit 0
@@ -80,20 +109,60 @@ if [ -z "$verus_path" ]; then
     exit 0
 fi
 
+timeout_path=$(command -v timeout 2>/dev/null || true)
+if [ -z "$timeout_path" ]; then
+    printf 'FAIL:  timeout is required to bound each Verus invocation\n' >&2
+    exit 1
+fi
+
+verus_timeout_seconds=${VERUS_TIMEOUT_SECONDS:-60}
+case "$verus_timeout_seconds" in
+    ''|*[!0-9]*)
+        printf 'FAIL:  VERUS_TIMEOUT_SECONDS must be an integer from 1 through 300\n' >&2
+        exit 2
+        ;;
+esac
+if [ "$verus_timeout_seconds" -lt 1 ] || [ "$verus_timeout_seconds" -gt 300 ]; then
+    printf 'FAIL:  VERUS_TIMEOUT_SECONDS must be an integer from 1 through 300\n' >&2
+    exit 2
+fi
+
 tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/fe2o3-verus-fill.XXXXXX")
 trap 'rm -rf "$tmp_dir"' EXIT HUP INT TERM
 
 failures=0
+run_verus() {
+    file=$1
+    "$timeout_path" --foreground --signal=TERM --kill-after=5 \
+        "$verus_timeout_seconds" \
+        "$verus_path" --crate-type lib --triggers-mode silent "$file"
+}
+
+record_timeout() {
+    name=$1
+    status=$2
+    if [ "$status" -eq 124 ] || [ "$status" -eq 137 ]; then
+        printf 'FAIL:  %s exceeded the %ss Verus time limit\n' \
+            "$name" "$verus_timeout_seconds" >&2
+        failures=$((failures + 1))
+        return 0
+    fi
+    return 1
+}
+
 run_pass() {
     name=$1
     file=$2
     log="$tmp_dir/$name.log"
-    if "$verus_path" --crate-type lib --triggers-mode silent "$file" >"$log" 2>&1; then
+    if run_verus "$file" >"$log" 2>&1; then
         printf 'PASS:  %s verified\n' "$name"
     else
-        printf 'FAIL:  %s was expected to verify\n' "$name" >&2
-        cat "$log" >&2
-        failures=$((failures + 1))
+        status=$?
+        if ! record_timeout "$name" "$status"; then
+            printf 'FAIL:  %s was expected to verify\n' "$name" >&2
+            cat "$log" >&2
+            failures=$((failures + 1))
+        fi
     fi
 }
 
@@ -103,9 +172,15 @@ run_rejected() {
     marker=$3
     diagnostic=$4
     log="$tmp_dir/$name.log"
-    if "$verus_path" --crate-type lib --triggers-mode silent "$file" >"$log" 2>&1; then
+    if run_verus "$file" >"$log" 2>&1; then
         printf 'FAIL:  %s unexpectedly verified\n' "$name" >&2
         failures=$((failures + 1))
+        return
+    else
+        status=$?
+    fi
+    if record_timeout "$name" "$status"; then
+        return
     elif ! grep -Fq "$marker" "$log"; then
         printf 'FAIL:  %s failed without marker %s\n' "$name" "$marker" >&2
         cat "$log" >&2
@@ -126,9 +201,14 @@ run_rejected_exact() {
     diagnostic=$4
     failed_clause=$5
     log="$tmp_dir/$name.log"
-    if "$verus_path" --crate-type lib --triggers-mode silent "$file" >"$log" 2>&1; then
+    if run_verus "$file" >"$log" 2>&1; then
         printf 'FAIL:  %s unexpectedly verified\n' "$name" >&2
         failures=$((failures + 1))
+        return
+    else
+        status=$?
+    fi
+    if record_timeout "$name" "$status"; then
         return
     fi
 
@@ -175,6 +255,7 @@ run_rejected_exact() {
 run_pass vecadd "$script_dir/verus/vecadd.rs"
 run_pass fill "$script_dir/verus/fill.rs"
 run_pass elementwise "$script_dir/verus/elementwise.rs"
+run_pass wave_lds "$script_dir/verus/wave_lds.rs"
 run_rejected fill_missing_bounds \
     "$script_dir/verus/negative/fill_missing_bounds.rs" \
     'mutated_fill_index_is_in_bounds' \
@@ -241,9 +322,25 @@ run_rejected_exact gather_wrong_index \
     'mutated_gather_claims_selected_index' \
     'error: postcondition not satisfied' \
     'final(output)@ == old(output)@.update'
+run_rejected wave_inactive_lane_contributes \
+    "$script_dir/verus/negative/wave_inactive_lane_contributes.rs" \
+    'mutated_inactive_lane_contributes' \
+    'postcondition.*not satisfied|postcondition failure'
+run_rejected lds_duplicate_writer \
+    "$script_dir/verus/negative/lds_duplicate_writer.rs" \
+    'mutated_duplicate_lds_writers_are_race_free' \
+    'postcondition.*not satisfied|postcondition failure'
+run_rejected lds_read_before_barrier \
+    "$script_dir/verus/negative/lds_read_before_barrier.rs" \
+    'mutated_read_before_barrier_is_legal' \
+    'postcondition.*not satisfied|postcondition failure'
+run_rejected lds_out_of_bounds_read \
+    "$script_dir/verus/negative/lds_out_of_bounds_read.rs" \
+    'mutated_unbounded_lds_read_is_in_bounds' \
+    'postcondition.*not satisfied|postcondition failure'
 
 if [ "$failures" -ne 0 ]; then
     printf 'Verus fixture run failed: %s unexpected result(s)\n' "$failures" >&2
     exit 1
 fi
-printf 'Verus fixture run passed: 3 proof harnesses, 15 expected rejections\n'
+printf 'Verus fixture run passed: 4 proof harnesses, 19 expected rejections\n'

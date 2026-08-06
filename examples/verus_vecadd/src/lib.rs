@@ -239,6 +239,48 @@ mod tests {
     }
 
     #[test]
+    fn wave_and_lds_proofs_extend_the_branded_permission_model() {
+        let positive = include_str!("../verus/wave_lds.rs");
+        for marker in [
+            "include!(\"vecadd.rs\")",
+            "active_values_determine_reduction",
+            "distinct_active_lanes_have_disjoint_scan_outputs",
+            "owned_lds_write_is_in_bounds_and_framed",
+            "distinct_threads_have_disjoint_lds_writes",
+            "convergent_barrier_enables_shared_lds_read",
+        ] {
+            assert!(positive.contains(marker), "missing proof marker {marker}");
+        }
+        for shortcut in ["admit(", "assume(false", "#[verifier::external_body]"] {
+            assert!(
+                !positive.contains(shortcut),
+                "wave/LDS proof contains forbidden shortcut {shortcut}"
+            );
+        }
+
+        for (fixture, marker) in [
+            (
+                include_str!("../verus/negative/wave_inactive_lane_contributes.rs"),
+                "mutated_inactive_lane_contributes",
+            ),
+            (
+                include_str!("../verus/negative/lds_duplicate_writer.rs"),
+                "mutated_duplicate_lds_writers_are_race_free",
+            ),
+            (
+                include_str!("../verus/negative/lds_read_before_barrier.rs"),
+                "mutated_read_before_barrier_is_legal",
+            ),
+            (
+                include_str!("../verus/negative/lds_out_of_bounds_read.rs"),
+                "mutated_unbounded_lds_read_is_in_bounds",
+            ),
+        ] {
+            assert!(fixture.contains(marker), "missing mutation marker {marker}");
+        }
+    }
+
+    #[test]
     fn copy_executes_identity_writes_and_rejects_shape_mismatches() {
         let mut output = [0; 4];
         assert_eq!(copy(&[7, -2, 11, 19], &mut output), Ok(()));
