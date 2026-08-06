@@ -1,5 +1,6 @@
 #![feature(rustc_private)]
 
+extern crate rustc_abi;
 extern crate rustc_codegen_llvm;
 extern crate rustc_codegen_ssa;
 extern crate rustc_data_structures;
@@ -17,6 +18,8 @@ mod kernel_ir_codegen;
 mod kernel_ir_lowering;
 mod mir_import;
 mod record_lowering;
+#[allow(dead_code)]
+mod rust_type_layout;
 mod trusted_device_items;
 mod typed_artifact;
 
