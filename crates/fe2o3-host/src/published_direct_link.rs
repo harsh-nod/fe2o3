@@ -146,6 +146,33 @@ impl ValidatedPublishedDirectLinkSelectionV1 {
         selected: SelectedNativeKernel<'_>,
         observed: &ObservedContext,
     ) -> Result<(), PublishedDirectLinkAdmissionError> {
+        let current = self
+            .acquire_current_token()
+            .map_err(PublishedDirectLinkAdmissionError::current_publication)?;
+        self.revalidate_with_current_token(
+            &current,
+            validated_bundle,
+            bridge,
+            container,
+            selected,
+            observed,
+        )
+    }
+
+    /// Revalidates with an already-held currentness token without reacquiring its lock.
+    #[allow(clippy::too_many_arguments)]
+    pub fn revalidate_with_current_token(
+        &self,
+        current: &ManifestClaimDirectLinkCurrentPublicationTokenV1,
+        validated_bundle: &ValidatedDirectLinkBundleEvidenceV1<'_>,
+        bridge: &ManifestClaimDirectLinkPublicationBridgeV1,
+        container: &ArtifactContainerV1,
+        selected: SelectedNativeKernel<'_>,
+        observed: &ObservedContext,
+    ) -> Result<(), PublishedDirectLinkAdmissionError> {
+        self.current_lease
+            .validate_current_token(current)
+            .map_err(PublishedDirectLinkAdmissionError::current_publication)?;
         if bridge != &self.bridge {
             return Err(PublishedDirectLinkAdmissionError::BridgeSubstitution);
         }
@@ -156,10 +183,6 @@ impl ValidatedPublishedDirectLinkSelectionV1 {
             return Err(PublishedDirectLinkAdmissionError::BridgeSubstitution);
         }
         let published = self.current_lease.published();
-        let _current = self
-            .current_lease
-            .acquire_current_token()
-            .map_err(PublishedDirectLinkAdmissionError::current_publication)?;
 
         let (binding_index, container_identity, finalized_payload_identity) =
             validate_direct_link_inputs(
@@ -187,7 +210,7 @@ impl ValidatedPublishedDirectLinkSelectionV1 {
             .map_err(PublishedDirectLinkAdmissionError::ArtifactRevalidation)
     }
 
-    pub const fn published(&self) -> PublishedLinkArtifactV1 {
+    pub fn published(&self) -> PublishedLinkArtifactV1 {
         self.current_lease.published()
     }
 
@@ -218,9 +241,15 @@ impl ValidatedPublishedDirectLinkSelectionV1 {
 
     pub(crate) fn acquire_current_token(
         &self,
-    ) -> Result<ManifestClaimDirectLinkCurrentPublicationTokenV1<'_>, DurableLinkPublicationError>
-    {
+    ) -> Result<ManifestClaimDirectLinkCurrentPublicationTokenV1, DurableLinkPublicationError> {
         self.current_lease.acquire_current_token()
+    }
+
+    pub(crate) fn validate_current_token(
+        &self,
+        current: &ManifestClaimDirectLinkCurrentPublicationTokenV1,
+    ) -> Result<(), DurableLinkPublicationError> {
+        self.current_lease.validate_current_token(current)
     }
 
     /// Admission retains a locally validated exact-file-handle lease.
@@ -365,6 +394,7 @@ fn unique_binding_index(
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum PublishedDirectLinkAdmissionError {
+    Busy,
     EvidenceBridgeMismatch,
     PublicationBridge(DirectLinkBridgeError),
     ContainerIdentityMismatch,
@@ -383,6 +413,7 @@ pub enum PublishedDirectLinkAdmissionError {
 impl fmt::Display for PublishedDirectLinkAdmissionError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Busy => formatter.write_str("durable publication lock is busy"),
             Self::EvidenceBridgeMismatch => {
                 formatter.write_str("validated G6 evidence does not own the publication bridge")
             }
@@ -428,6 +459,7 @@ impl std::error::Error for PublishedDirectLinkAdmissionError {
             Self::ArtifactSelection(error) => Some(error),
             Self::ArtifactRevalidation(error) => Some(error),
             Self::EvidenceBridgeMismatch
+            | Self::Busy
             | Self::ContainerIdentityMismatch
             | Self::SelectedKernelContainerMismatch
             | Self::FinalizedPayloadMismatch
@@ -443,8 +475,11 @@ impl std::error::Error for PublishedDirectLinkAdmissionError {
 
 impl PublishedDirectLinkAdmissionError {
     fn current_publication(error: DurableLinkPublicationError) -> Self {
-        Self::CurrentPublication {
-            reason: error.to_string(),
+        match error {
+            DurableLinkPublicationError::Busy => Self::Busy,
+            error => Self::CurrentPublication {
+                reason: error.to_string(),
+            },
         }
     }
 }
@@ -482,12 +517,30 @@ mod tests {
     use rmpv::{Value, encode::write_value};
     use std::fs;
     use std::path::PathBuf;
+    use std::process::{Child, Command, ExitStatus, Stdio};
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::thread;
+    use std::time::{Duration, Instant};
 
     const ELF_HEADER_BYTES: usize = 64;
     const SECTION_HEADER_BYTES: usize = 64;
 
     static NEXT_PUBLICATION_DIRECTORY: AtomicU64 = AtomicU64::new(1);
+
+    fn wait_for_child(mut child: Child, timeout: Duration) -> ExitStatus {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                return status;
+            }
+            if Instant::now() >= deadline {
+                child.kill().unwrap();
+                let _ = child.wait();
+                panic!("token-aware host child exceeded {timeout:?}");
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
 
     struct TestPublicationDirectory {
         path: PathBuf,
@@ -2031,6 +2084,86 @@ mod tests {
             "primary_kernel"
         );
         assert!(!inspected.grants_load_authority());
+    }
+
+    #[test]
+    fn token_aware_revalidation_child() {
+        if std::env::var_os("FE2O3_TOKEN_AWARE_REVALIDATION_CHILD").is_none() {
+            return;
+        }
+        let hsaco = test_hsaco("gfx1151", 0);
+        let fixture = make_hsaco_fixture(51, hsaco.bytes, "gfx1151", "primary_kernel", false, 0);
+        let prepared = prepare_hsaco_admission(&fixture, 51, "gfx1151");
+        let current = prepared.admission.acquire_current_token().unwrap();
+        assert_eq!(
+            prepared.admission.revalidate(
+                &prepared.validated,
+                &prepared.bridge,
+                &fixture.container,
+                prepared.selected,
+                &prepared.observed,
+            ),
+            Err(PublishedDirectLinkAdmissionError::Busy)
+        );
+        assert_eq!(
+            prepared.admission.revalidate_with_current_token(
+                &current,
+                &prepared.validated,
+                &prepared.bridge,
+                &fixture.container,
+                prepared.selected,
+                &prepared.observed,
+            ),
+            Ok(())
+        );
+        let HsacoAdmission {
+            _publication_directory,
+            validated,
+            bridge,
+            selected,
+            observed,
+            admission,
+        } = prepared;
+        let inspected = InspectedPublishedDirectLinkPhysicalLayoutV1::inspect_with_current_token(
+            admission, &current,
+        )
+        .unwrap();
+        assert_eq!(
+            inspected.revalidate_with_current_token(
+                &current,
+                &validated,
+                &bridge,
+                &fixture.container,
+                selected,
+                &observed,
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            inspected.revalidate(&validated, &bridge, &fixture.container, selected, &observed,),
+            Err(PublishedPhysicalLayoutInspectionError::Busy)
+        );
+        drop(current);
+        assert_eq!(
+            inspected.revalidate(&validated, &bridge, &fixture.container, selected, &observed,),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn token_aware_revalidation_never_self_deadlocks() {
+        let child = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "published_direct_link::tests::token_aware_revalidation_child",
+            ])
+            .env("FE2O3_TOKEN_AWARE_REVALIDATION_CHILD", "1")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        assert!(wait_for_child(child, Duration::from_secs(5)).success());
     }
 
     #[test]

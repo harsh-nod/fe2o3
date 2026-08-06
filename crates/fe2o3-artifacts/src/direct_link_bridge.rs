@@ -501,7 +501,7 @@ impl fmt::Debug for ManifestClaimDirectLinkCurrentPublicationLeaseV1 {
 }
 
 impl ManifestClaimDirectLinkCurrentPublicationLeaseV1 {
-    pub const fn published(&self) -> PublishedLinkArtifactV1 {
+    pub fn published(&self) -> PublishedLinkArtifactV1 {
         self.lease.published()
     }
 
@@ -521,11 +521,18 @@ impl ManifestClaimDirectLinkCurrentPublicationLeaseV1 {
     /// Revalidates currentness and retains the cooperative lock in the returned inert token.
     pub fn acquire_current_token(
         &self,
-    ) -> Result<ManifestClaimDirectLinkCurrentPublicationTokenV1<'_>, DurableLinkPublicationError>
-    {
+    ) -> Result<ManifestClaimDirectLinkCurrentPublicationTokenV1, DurableLinkPublicationError> {
         Ok(ManifestClaimDirectLinkCurrentPublicationTokenV1 {
             token: self.lease.acquire_current_token()?,
         })
+    }
+
+    /// Validates an already-held token without acquiring the cooperative lock again.
+    pub fn validate_current_token(
+        &self,
+        token: &ManifestClaimDirectLinkCurrentPublicationTokenV1,
+    ) -> Result<(), DurableLinkPublicationError> {
+        self.lease.validate_current_token(&token.token)
     }
 
     pub const fn grants_load_authority(&self) -> bool {
@@ -538,11 +545,11 @@ impl ManifestClaimDirectLinkCurrentPublicationLeaseV1 {
 }
 
 /// Locked currentness token for one manifest-claim-derived exact-file lease.
-pub struct ManifestClaimDirectLinkCurrentPublicationTokenV1<'lease> {
-    token: DurableCurrentLinkPublicationTokenV1<'lease>,
+pub struct ManifestClaimDirectLinkCurrentPublicationTokenV1 {
+    token: DurableCurrentLinkPublicationTokenV1,
 }
 
-impl fmt::Debug for ManifestClaimDirectLinkCurrentPublicationTokenV1<'_> {
+impl fmt::Debug for ManifestClaimDirectLinkCurrentPublicationTokenV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("ManifestClaimDirectLinkCurrentPublicationTokenV1")
@@ -551,7 +558,7 @@ impl fmt::Debug for ManifestClaimDirectLinkCurrentPublicationTokenV1<'_> {
     }
 }
 
-impl ManifestClaimDirectLinkCurrentPublicationTokenV1<'_> {
+impl ManifestClaimDirectLinkCurrentPublicationTokenV1 {
     pub fn exact_artifact_bytes(&self) -> &[u8] {
         self.token.exact_artifact_bytes()
     }
@@ -586,7 +593,7 @@ impl ManifestClaimDirectLinkDurablePublicationResultV1 {
         self.outcome
     }
 
-    pub const fn snapshot(&self) -> &DurableLinkPublicationSnapshotV1 {
+    pub fn snapshot(&self) -> &DurableLinkPublicationSnapshotV1 {
         self.lease.lease.snapshot()
     }
 

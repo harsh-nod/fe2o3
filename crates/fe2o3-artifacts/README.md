@@ -334,7 +334,12 @@ new currentness-token issuance for an older successful lease. An already-issued
 lease still owns an immutable snapshot, but a future loader must obtain a fresh
 non-clone currentness token. That token revalidates the retained record and
 artifact descriptors, exact names, inode/device pairs, bytes, digest, length,
-and output-directory identity while holding the cooperative lock.
+and output-directory identity while holding the cooperative lock. Token
+acquisition uses nonblocking exclusive locking and returns the stable `Busy`
+error when another token or publication operation owns the lock. G7 inspection
+and revalidation provide token-aware entry points that validate an already-held
+token without recursively acquiring the lock; compatibility entry points
+acquire exactly one token per operation.
 
 Durable V1 requires an already existing output directory whose parent topology
 was durably provisioned by the caller. It writes and syncs journal bytes under

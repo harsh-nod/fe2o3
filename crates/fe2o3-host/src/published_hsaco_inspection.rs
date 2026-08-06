@@ -278,19 +278,25 @@ impl InspectedPublishedDirectLinkPhysicalLayoutV1 {
     pub fn inspect(
         admission: ValidatedPublishedDirectLinkSelectionV1,
     ) -> Result<Self, PublishedPhysicalLayoutInspectionError> {
-        let (inspected, selected_kernel_index, kernels) = {
-            let current = admission.acquire_current_token().map_err(|error| {
-                PublishedPhysicalLayoutInspectionError::CurrentPublication {
-                    reason: error.to_string(),
-                }
-            })?;
-            let exact_selected_payload_bytes = current.exact_artifact_bytes();
-            validate_payload_occurrence(&admission, exact_selected_payload_bytes)?;
-            let inspected = inspect_and_bind_kernel_descriptors(exact_selected_payload_bytes)
-                .map_err(PublishedPhysicalLayoutInspectionError::Inspection)?;
-            let (selected_kernel_index, kernels) = validate_inspection(&admission, &inspected)?;
-            (inspected, selected_kernel_index, kernels)
-        };
+        let current = admission
+            .acquire_current_token()
+            .map_err(PublishedPhysicalLayoutInspectionError::current_publication)?;
+        Self::inspect_with_current_token(admission, &current)
+    }
+
+    /// Inspects with an already-held currentness token without reacquiring its lock.
+    pub fn inspect_with_current_token(
+        admission: ValidatedPublishedDirectLinkSelectionV1,
+        current: &ManifestClaimDirectLinkCurrentPublicationTokenV1,
+    ) -> Result<Self, PublishedPhysicalLayoutInspectionError> {
+        admission
+            .validate_current_token(current)
+            .map_err(PublishedPhysicalLayoutInspectionError::current_publication)?;
+        let exact_selected_payload_bytes = current.exact_artifact_bytes();
+        validate_payload_occurrence(&admission, exact_selected_payload_bytes)?;
+        let inspected = inspect_and_bind_kernel_descriptors(exact_selected_payload_bytes)
+            .map_err(PublishedPhysicalLayoutInspectionError::Inspection)?;
+        let (selected_kernel_index, kernels) = validate_inspection(&admission, &inspected)?;
 
         Ok(Self {
             admission,
@@ -310,8 +316,40 @@ impl InspectedPublishedDirectLinkPhysicalLayoutV1 {
         selected: SelectedNativeKernel<'_>,
         observed: &ObservedContext,
     ) -> Result<(), PublishedPhysicalLayoutInspectionError> {
+        let current = self
+            .admission
+            .acquire_current_token()
+            .map_err(PublishedPhysicalLayoutInspectionError::current_publication)?;
+        self.revalidate_with_current_token(
+            &current,
+            validated_bundle,
+            bridge,
+            container,
+            selected,
+            observed,
+        )
+    }
+
+    /// Revalidates with an already-held currentness token without reacquiring its lock.
+    #[allow(clippy::too_many_arguments)]
+    pub fn revalidate_with_current_token(
+        &self,
+        current: &ManifestClaimDirectLinkCurrentPublicationTokenV1,
+        validated_bundle: &ValidatedDirectLinkBundleEvidenceV1<'_>,
+        bridge: &ManifestClaimDirectLinkPublicationBridgeV1,
+        container: &ArtifactContainerV1,
+        selected: SelectedNativeKernel<'_>,
+        observed: &ObservedContext,
+    ) -> Result<(), PublishedPhysicalLayoutInspectionError> {
         self.admission
-            .revalidate(validated_bundle, bridge, container, selected, observed)
+            .revalidate_with_current_token(
+                current,
+                validated_bundle,
+                bridge,
+                container,
+                selected,
+                observed,
+            )
             .map_err(PublishedPhysicalLayoutInspectionError::AdmissionRevalidation)
     }
 
@@ -339,14 +377,12 @@ impl InspectedPublishedDirectLinkPhysicalLayoutV1 {
     pub fn acquire_current_publication_token(
         &self,
     ) -> Result<
-        ManifestClaimDirectLinkCurrentPublicationTokenV1<'_>,
+        ManifestClaimDirectLinkCurrentPublicationTokenV1,
         PublishedPhysicalLayoutInspectionError,
     > {
-        self.admission.acquire_current_token().map_err(|error| {
-            PublishedPhysicalLayoutInspectionError::CurrentPublication {
-                reason: error.to_string(),
-            }
-        })
+        self.admission
+            .acquire_current_token()
+            .map_err(PublishedPhysicalLayoutInspectionError::current_publication)
     }
 
     pub const fn authenticates_filesystem_artifact(&self) -> bool {
@@ -751,6 +787,7 @@ fn physical_mismatch<T>(
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum PublishedPhysicalLayoutInspectionError {
+    Busy,
     PayloadOccurrenceMismatch,
     PayloadLengthMismatch,
     PayloadDigestMismatch,
@@ -773,6 +810,7 @@ pub enum PublishedPhysicalLayoutInspectionError {
 impl fmt::Display for PublishedPhysicalLayoutInspectionError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Busy => formatter.write_str("durable publication lock is busy"),
             Self::PayloadOccurrenceMismatch => {
                 formatter.write_str("admitted finalized payload occurrence is inconsistent")
             }
@@ -819,6 +857,7 @@ impl std::error::Error for PublishedPhysicalLayoutInspectionError {
             Self::InvalidManifestTarget(error) => Some(error),
             Self::AdmissionRevalidation(error) => Some(error),
             Self::PayloadOccurrenceMismatch
+            | Self::Busy
             | Self::PayloadLengthMismatch
             | Self::PayloadDigestMismatch
             | Self::PayloadSubstitution
@@ -827,6 +866,17 @@ impl std::error::Error for PublishedPhysicalLayoutInspectionError {
             | Self::KernelSetMismatch
             | Self::SelectedKernelMismatch
             | Self::PhysicalLayoutMismatch { .. } => None,
+        }
+    }
+}
+
+impl PublishedPhysicalLayoutInspectionError {
+    fn current_publication(error: fe2o3_artifact_transaction::DurableLinkPublicationError) -> Self {
+        match error {
+            fe2o3_artifact_transaction::DurableLinkPublicationError::Busy => Self::Busy,
+            error => Self::CurrentPublication {
+                reason: error.to_string(),
+            },
         }
     }
 }

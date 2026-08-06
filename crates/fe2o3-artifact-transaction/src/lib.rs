@@ -2568,6 +2568,20 @@ impl PinnedOutput {
     }
 
     fn lock(&self) -> Result<OutputLock, EmitError> {
+        self.lock_with(FlockOperation::LockExclusive)
+            .and_then(|lock| {
+                lock.ok_or_else(|| EmitError::InvalidArtifactDestination {
+                    path: self.display_path.join(LOCK_FILE),
+                    reason: "blocking lock unexpectedly reported contention".to_string(),
+                })
+            })
+    }
+
+    fn try_lock(&self) -> Result<Option<OutputLock>, EmitError> {
+        self.lock_with(FlockOperation::NonBlockingLockExclusive)
+    }
+
+    fn lock_with(&self, operation: FlockOperation) -> Result<Option<OutputLock>, EmitError> {
         let fd = openat(
             &self.fd,
             LOCK_FILE,
@@ -2605,7 +2619,14 @@ impl PinnedOutput {
         let stat = fstat(&fd).map_err(std::io::Error::from)?;
         validate_lock(&stat)?;
         validate_path_identity(&stat)?;
-        flock(&fd, FlockOperation::LockExclusive).map_err(std::io::Error::from)?;
+        if let Err(error) = flock(&fd, operation) {
+            if operation == FlockOperation::NonBlockingLockExclusive
+                && (error == rustix::io::Errno::AGAIN || error == rustix::io::Errno::WOULDBLOCK)
+            {
+                return Ok(None);
+            }
+            return Err(std::io::Error::from(error).into());
+        }
         let locked_stat = fstat(&fd).map_err(std::io::Error::from)?;
         if let Err(error) =
             validate_lock(&locked_stat).and_then(|()| validate_path_identity(&locked_stat))
@@ -2613,7 +2634,7 @@ impl PinnedOutput {
             let _ = flock(&fd, FlockOperation::Unlock);
             return Err(error);
         }
-        Ok(OutputLock { _fd: fd })
+        Ok(Some(OutputLock { _fd: fd }))
     }
 }
 

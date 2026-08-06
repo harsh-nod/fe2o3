@@ -308,7 +308,7 @@ impl DurableLinkPublicationResultV1 {
         self.outcome
     }
 
-    pub const fn snapshot(&self) -> &DurableLinkPublicationSnapshotV1 {
+    pub fn snapshot(&self) -> &DurableLinkPublicationSnapshotV1 {
         self.lease.snapshot()
     }
 
@@ -361,6 +361,10 @@ impl DurableFileIdentityV1 {
 /// }
 /// ```
 pub struct DurableCurrentLinkPublicationLeaseV1 {
+    binding: Arc<DurableCurrentLinkPublicationBindingV1>,
+}
+
+struct DurableCurrentLinkPublicationBindingV1 {
     output: PinnedOutput,
     record_file: fs::File,
     artifact_file: fs::File,
@@ -376,31 +380,32 @@ pub struct DurableCurrentLinkPublicationLeaseV1 {
 
 impl fmt::Debug for DurableCurrentLinkPublicationLeaseV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let binding = &self.binding;
         formatter
             .debug_struct("DurableCurrentLinkPublicationLeaseV1")
-            .field("generation", &self.published.attempt().generation())
-            .field("record_identity", &self.record_identity)
-            .field("artifact_identity", &self.artifact_identity)
-            .field("artifact_length", &self.artifact_length)
-            .field("artifact_digest", &self.artifact_digest)
+            .field("generation", &binding.published.attempt().generation())
+            .field("record_identity", &binding.record_identity)
+            .field("artifact_identity", &binding.artifact_identity)
+            .field("artifact_length", &binding.artifact_length)
+            .field("artifact_digest", &binding.artifact_digest)
             .finish_non_exhaustive()
     }
 }
 
 impl DurableCurrentLinkPublicationLeaseV1 {
     /// Returns the exact inert publication identity chain bound to this lease.
-    pub const fn published(&self) -> super::PublishedLinkArtifactV1 {
-        self.published
+    pub fn published(&self) -> super::PublishedLinkArtifactV1 {
+        self.binding.published
     }
 
     /// Returns the immutable bytes captured from the retained artifact descriptor at issuance.
-    pub const fn snapshot(&self) -> &DurableLinkPublicationSnapshotV1 {
-        &self.snapshot
+    pub fn snapshot(&self) -> &DurableLinkPublicationSnapshotV1 {
+        &self.binding.snapshot
     }
 
     /// Borrows the exact descriptor-derived bytes for parsing without reopening a path.
     pub fn exact_artifact_bytes(&self) -> &[u8] {
-        self.snapshot.artifact().bytes()
+        self.binding.snapshot.artifact().bytes()
     }
 
     /// Revalidates this lease as the current canonical generation under the cooperative lock.
@@ -410,29 +415,50 @@ impl DurableCurrentLinkPublicationLeaseV1 {
     /// immutable snapshot and may have become stale.
     pub fn acquire_current_token(
         &self,
-    ) -> Result<DurableCurrentLinkPublicationTokenV1<'_>, DurableLinkPublicationError> {
-        let lock = self.output.lock()?;
-        self.output.verify_path_identity()?;
-        let names = DurableNames::new(self.published.scope());
-        let mut envelope = recover_envelope(&self.output, &names, self.published.scope())?;
-        recover_incomplete(&self.output, &names, &mut envelope)?;
+    ) -> Result<DurableCurrentLinkPublicationTokenV1, DurableLinkPublicationError> {
+        let binding = &self.binding;
+        let lock = binding
+            .output
+            .try_lock()?
+            .ok_or(DurableLinkPublicationError::Busy)?;
+        binding.output.verify_path_identity()?;
+        let names = DurableNames::new(binding.published.scope());
+        let mut envelope = recover_envelope(&binding.output, &names, binding.published.scope())?;
+        recover_incomplete(&binding.output, &names, &mut envelope)?;
         verify_or_invalidate_published(
-            &self.output,
+            &binding.output,
             &names,
             &mut envelope,
             &mut FaultInjector::new(None),
         )?;
         require_current_publication(
             &envelope,
-            self.published.attempt().generation(),
-            self.plan_commitment,
-            self.published,
+            binding.published.attempt().generation(),
+            binding.plan_commitment,
+            binding.published,
         )?;
-        validate_retained_lease_files(self, &names)?;
+        validate_retained_lease_files(binding, &names)?;
         Ok(DurableCurrentLinkPublicationTokenV1 {
-            lease: self,
+            binding: Arc::clone(binding),
             _lock: lock,
         })
+    }
+
+    /// Checks that `token` is the still-locked currentness proof issued for this exact lease.
+    ///
+    /// This performs no lock acquisition. It is intended for later stages that already hold a
+    /// token and must avoid recursive lock acquisition.
+    pub fn validate_current_token(
+        &self,
+        token: &DurableCurrentLinkPublicationTokenV1,
+    ) -> Result<(), DurableLinkPublicationError> {
+        if Arc::ptr_eq(&self.binding, &token.binding) {
+            Ok(())
+        } else {
+            Err(current_publication_error(
+                "currentness token belongs to a different publication lease",
+            ))
+        }
     }
 
     /// A lease authenticates an exact local descriptor snapshot, but does not grant loading.
@@ -446,29 +472,39 @@ impl DurableCurrentLinkPublicationLeaseV1 {
     }
 }
 
-/// Borrowed proof that one lease remained current while the cooperative publication lock is held.
+/// Proof that one lease remained current while the cooperative publication lock is held.
 ///
-/// This token is non-clone and cannot outlive its lease. It deliberately grants no module-loading
-/// or launch authority; later stages must require it so stale immutable snapshots cannot be used as
-/// current publications.
-pub struct DurableCurrentLinkPublicationTokenV1<'lease> {
-    lease: &'lease DurableCurrentLinkPublicationLeaseV1,
+/// This token is non-clone and retains the lease binding and descriptors independently. It
+/// deliberately grants no module-loading or launch authority; later stages must require it so
+/// stale immutable snapshots cannot be used as current publications.
+///
+/// ```compile_fail
+/// use fe2o3_artifact_transaction::DurableCurrentLinkPublicationTokenV1;
+///
+/// fn cannot_clone(
+///     token: DurableCurrentLinkPublicationTokenV1,
+/// ) -> (DurableCurrentLinkPublicationTokenV1, DurableCurrentLinkPublicationTokenV1) {
+///     (token.clone(), token)
+/// }
+/// ```
+pub struct DurableCurrentLinkPublicationTokenV1 {
+    binding: Arc<DurableCurrentLinkPublicationBindingV1>,
     _lock: super::OutputLock,
 }
 
-impl fmt::Debug for DurableCurrentLinkPublicationTokenV1<'_> {
+impl fmt::Debug for DurableCurrentLinkPublicationTokenV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("DurableCurrentLinkPublicationTokenV1")
-            .field("generation", &self.lease.published.attempt().generation())
+            .field("generation", &self.binding.published.attempt().generation())
             .finish_non_exhaustive()
     }
 }
 
-impl DurableCurrentLinkPublicationTokenV1<'_> {
+impl DurableCurrentLinkPublicationTokenV1 {
     /// Borrows the immutable descriptor-derived artifact bytes while currentness is locked.
     pub fn exact_artifact_bytes(&self) -> &[u8] {
-        self.lease.exact_artifact_bytes()
+        self.binding.snapshot.artifact().bytes()
     }
 
     pub const fn grants_load_authority(&self) -> bool {
@@ -484,6 +520,8 @@ impl DurableCurrentLinkPublicationTokenV1<'_> {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum DurableLinkPublicationError {
+    /// Another thread or process currently owns the cooperative publication lock.
+    Busy,
     Filesystem(EmitError),
     Protocol(LinkPublicationCodecError),
     InvalidDurableRecord {
@@ -534,6 +572,7 @@ impl DurableLinkPublicationError {
 impl fmt::Display for DurableLinkPublicationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Busy => formatter.write_str("durable publication lock is busy"),
             Self::Filesystem(error) => {
                 write!(formatter, "durable publication filesystem failure: {error}")
             }
@@ -1775,17 +1814,19 @@ fn mint_current_publication_lease(
         ),
     };
     Ok(DurableCurrentLinkPublicationLeaseV1 {
-        output,
-        record_file: opened_record.file,
-        artifact_file: opened_artifact.file,
-        record_identity: DurableFileIdentityV1::from_stat(&opened_record.stat),
-        artifact_identity: DurableFileIdentityV1::from_stat(&opened_artifact.stat),
-        record_bytes: opened_record.bytes,
-        artifact_length: opened_artifact.bytes.len(),
-        artifact_digest: plan.finalized_output,
-        plan_commitment: plan.identity(),
-        published,
-        snapshot,
+        binding: Arc::new(DurableCurrentLinkPublicationBindingV1 {
+            output,
+            record_file: opened_record.file,
+            artifact_file: opened_artifact.file,
+            record_identity: DurableFileIdentityV1::from_stat(&opened_record.stat),
+            artifact_identity: DurableFileIdentityV1::from_stat(&opened_artifact.stat),
+            record_bytes: opened_record.bytes,
+            artifact_length: opened_artifact.bytes.len(),
+            artifact_digest: plan.finalized_output,
+            plan_commitment: plan.identity(),
+            published,
+            snapshot,
+        }),
     })
 }
 
@@ -1825,7 +1866,7 @@ fn require_current_publication(
 }
 
 fn validate_retained_lease_files(
-    lease: &DurableCurrentLinkPublicationLeaseV1,
+    lease: &DurableCurrentLinkPublicationBindingV1,
     names: &DurableNames,
 ) -> Result<(), DurableLinkPublicationError> {
     validate_open_file(

@@ -12,10 +12,12 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const RECORD_PREFIX: &str = ".fe2o3-link-publication-v1-";
 const RECORD_SUFFIX: &str = ".record";
@@ -136,6 +138,29 @@ fn managed_entries(output: &Path, prefix: &str) -> Vec<PathBuf> {
         .collect::<Vec<_>>();
     entries.sort();
     entries
+}
+
+fn wait_for_child(mut child: Child, timeout: Duration) -> ExitStatus {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            return status;
+        }
+        if Instant::now() >= deadline {
+            child.kill().unwrap();
+            let _ = child.wait();
+            panic!("lock regression child exceeded {timeout:?}");
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn wait_for_path(path: &Path, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    while !path.exists() {
+        assert!(Instant::now() < deadline, "timed out waiting for {path:?}");
+        thread::sleep(Duration::from_millis(10));
+    }
 }
 
 fn canonical_record(output: &Path) -> PathBuf {
@@ -1094,6 +1119,137 @@ fn current_lease_retains_exact_descriptor_snapshot_and_revalidates_under_lock() 
     assert_eq!(token.exact_artifact_bytes(), bytes);
     assert!(!token.grants_load_authority());
     assert!(!token.grants_launch_authority());
+}
+
+#[test]
+fn recursive_current_token_child() {
+    if std::env::var_os("FE2O3_RECURSIVE_CURRENT_TOKEN_CHILD").is_none() {
+        return;
+    }
+    let temp = TestDirectory::new();
+    let output = temp.path.join("output");
+    let bytes = b"recursive current token payload";
+    let lease = publish(&output, plan(1, 0x7c, 0xdc, bytes), bytes)
+        .unwrap()
+        .into_current_lease();
+    let _current = lease.acquire_current_token().unwrap();
+    assert!(matches!(
+        lease.acquire_current_token(),
+        Err(DurableLinkPublicationError::Busy)
+    ));
+}
+
+#[test]
+fn recursive_current_token_returns_busy_before_timeout() {
+    let child = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "recursive_current_token_child"])
+        .env("FE2O3_RECURSIVE_CURRENT_TOKEN_CHILD", "1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    assert!(wait_for_child(child, Duration::from_secs(5)).success());
+}
+
+#[test]
+fn thread_current_token_contention_returns_busy() {
+    let temp = TestDirectory::new();
+    let output = temp.path.join("output");
+    let bytes = b"thread current token contention payload";
+    let lease = Arc::new(
+        publish(&output, plan(1, 0x7d, 0xdd, bytes), bytes)
+            .unwrap()
+            .into_current_lease(),
+    );
+    let current = lease.acquire_current_token().unwrap();
+    let contender = Arc::clone(&lease);
+    let (result_tx, result_rx) = mpsc::channel();
+    let handle = thread::spawn(move || {
+        result_tx
+            .send(matches!(
+                contender.acquire_current_token(),
+                Err(DurableLinkPublicationError::Busy)
+            ))
+            .unwrap();
+    });
+    assert!(result_rx.recv_timeout(Duration::from_secs(2)).unwrap());
+    handle.join().unwrap();
+    drop(current);
+    assert!(lease.acquire_current_token().is_ok());
+}
+
+#[test]
+fn current_token_is_bound_to_exact_lease() {
+    let first = TestDirectory::new();
+    let second = TestDirectory::new();
+    let bytes = b"exact token lease binding payload";
+    let first_lease = publish(
+        &first.path.join("output"),
+        plan(1, 0x7f, 0xdf, bytes),
+        bytes,
+    )
+    .unwrap()
+    .into_current_lease();
+    let second_lease = publish(
+        &second.path.join("output"),
+        plan(1, 0x80, 0xe0, bytes),
+        bytes,
+    )
+    .unwrap()
+    .into_current_lease();
+    let current = first_lease.acquire_current_token().unwrap();
+    assert!(matches!(
+        second_lease.validate_current_token(&current),
+        Err(DurableLinkPublicationError::CurrentPublication { .. })
+    ));
+}
+
+#[test]
+fn process_current_token_contender_child() {
+    let Some(output) = std::env::var_os("FE2O3_PROCESS_CONTENDER_OUTPUT") else {
+        return;
+    };
+    let ready = PathBuf::from(std::env::var_os("FE2O3_PROCESS_CONTENDER_READY").unwrap());
+    let go = PathBuf::from(std::env::var_os("FE2O3_PROCESS_CONTENDER_GO").unwrap());
+    let bytes = b"process current token contention payload";
+    let lease = publish(Path::new(&output), plan(1, 0x7e, 0xde, bytes), bytes)
+        .unwrap()
+        .into_current_lease();
+    fs::write(&ready, b"ready").unwrap();
+    wait_for_path(&go, Duration::from_secs(5));
+    assert!(matches!(
+        lease.acquire_current_token(),
+        Err(DurableLinkPublicationError::Busy)
+    ));
+}
+
+#[test]
+fn process_current_token_contention_returns_busy() {
+    let temp = TestDirectory::new();
+    let output = temp.path.join("output");
+    let ready = temp.path.join("contender-ready");
+    let go = temp.path.join("contender-go");
+    let bytes = b"process current token contention payload";
+    let lease = publish(&output, plan(1, 0x7e, 0xde, bytes), bytes)
+        .unwrap()
+        .into_current_lease();
+    let child = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "process_current_token_contender_child"])
+        .env("FE2O3_PROCESS_CONTENDER_OUTPUT", &output)
+        .env("FE2O3_PROCESS_CONTENDER_READY", &ready)
+        .env("FE2O3_PROCESS_CONTENDER_GO", &go)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    wait_for_path(&ready, Duration::from_secs(5));
+    let current = lease.acquire_current_token().unwrap();
+    fs::write(&go, b"go").unwrap();
+    assert!(wait_for_child(child, Duration::from_secs(5)).success());
+    drop(current);
+    assert!(lease.acquire_current_token().is_ok());
 }
 
 #[test]
