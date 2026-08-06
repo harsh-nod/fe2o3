@@ -114,9 +114,35 @@ authority. The local `/home/harsh/llvm-project/build` tree is an LLVM 24
 development CMake package with a separately reporting `llvm-config`; it is not
 the installed ROCm LLVM 22 toolchain and can validate source/API mechanics only.
 
-The opt-in rustc `kernel-ir-worker-v2` path also supplies textual LLVM IR from
-one consumed compiler handoff. `cargo-fe2o3` first obtains GenericLink V1 output,
-then requires a compiler-FFI-aware V2 request against the same pinned worker to
-produce byte-identical output. The current gfx942 source integration stops at
-that inert evidence identity; it intentionally has no authenticated publication
-adapter and does not load or launch the linked bytes.
+The opt-in rustc `kernel-ir-worker-v2` path is connected through durable
+publication. rustc publishes one attempt-scoped compiler handoff containing the
+exact textual LLVM module, compiler FFI envelope, and compiler-derived
+symbol-role manifest. `cargo-fe2o3` consumes that handoff once, executes a
+GenericLink candidate and a compiler-FFI-aware V2 request with the same exact
+module, providers, options, target, and measured worker, and requires the two
+executions to produce byte-identical output. The worker performs both links
+through LLVM and LLD library APIs directly; this path uses neither COMGR nor
+command-line linking.
+
+Cargo then independently admits the exact raw HSACO against the retained
+target, code-object version, symbol roles, descriptors, and launch metadata.
+`PreparedWorkerV2HsacoPublicationV1` derives a private publication plan from
+that retained evidence, and the artifact transaction durably publishes the
+exact admitted bytes and provenance receipt for the same managed build attempt
+before completing the attempt. The worker response and the intermediate
+evidence remain non-authoritative by themselves.
+
+This flow does not authenticate the compiler or its origin, authenticate or
+bind Verus verification, run canonical `.fe2o3.kd.v1` descriptor finalization,
+or grant HSA load or kernel-launch authority. Exact retry is supported while
+the prepared publication intent remains in the same Cargo process, but restart
+recovery after the compiler handoff has been consumed remains incomplete.
+
+On `mi300x`, the ignored Debug-worker integration tests
+`worker_v2_real_source_publishes_inspected_gfx942_hsaco` and
+`worker_v2_real_source_links_an_external_bitcode_provider` pass for
+`gfx942:xnack-`. They cover real-source handoff consumption, direct LLVM/LLD
+linking, reproducibility, independent raw-HSACO admission, and durable
+publication, including a closed external bitcode-provider import. They do not
+load or launch the published HSACO, and no optimized Release-worker result is
+claimed.

@@ -55,7 +55,7 @@ descriptor table. A plan does not prove that LLVM/LLD ran, that an option is sup
 are valid AMDGPU ELF, or that any device can load or launch them. The existing single-HSACO
 inspection and finalization functions are unchanged.
 
-## Staged compiler FFI claims
+## Compiler FFI claims and handoff
 
 `rustc-codegen-fe2o3` now constructs a real `CompilerFfiEnvelopeV1` from its private successful
 `CollectionResult` and `DeviceFfiClosure`. The LLVM-free neutral type lives in
@@ -68,8 +68,10 @@ input kind, expected final symbol, bitcode, or Worker V1 claim.
 surface exposes only a domain-separated staged identity and target/version/count/blocker inspection.
 It cannot reveal contract or generic linker closures and cannot create or bind Worker V1 evidence.
 Because the neutral envelope has public constructors, staging does not authenticate rustc origin.
-The explicit blocker is the absence of one exact compiler module artifact and a Worker V2 request
-and response that bind the complete envelope identity.
+The live managed Worker V2 path does not upgrade this caller-constructible staging surface. Instead,
+rustc publishes an attempt-scoped `CompilerModuleHandoffV2` containing the exact textual LLVM module,
+the complete envelope, and a compiler-derived symbol-role manifest. `cargo-fe2o3` consumes that
+handoff exactly once for the matching producer and build attempt.
 
 The older `G4FfiClaimEnvelopeV1` path below remains caller-constructible assertion-only plan
 scaffolding. It is not the real rustc observation and cannot upgrade generic Worker V1 evidence.
@@ -108,17 +110,36 @@ generic evidence can never satisfy an FFI-bound evidence API. A caller can indep
 generic request with similar inputs and symbol strings, but that request and its output carry zero
 FFI provenance. Its API and wire bytes are unchanged, and no V1-to-V2 conversion exists.
 
-Worker Protocol V2 is a separate framing domain, but it is deliberately unconnected from the public
-finalizer API. This baseline has no compiler-owned observation that inseparably retains both the
-validated envelope and the emitted module. A caller-created neutral envelope and caller-provided
-module bytes cannot establish compiler provenance, so the exact-module witness, V2 request
-construction, and supervised V2 execution are crate-private. Safe downstream callers cannot mint
-the complete capability input, construct V2, or execute it.
+## Worker V2 raw-HSACO publication
 
-The dormant construction path derives exact import and export symbols from the retained envelope's
-validated contracts; it does not accept independent directional lists. It also binds the pinned
+Worker Protocol V2 is a separate framing domain connected to the managed Cargo build flow. After
+consuming the compiler handoff, `execute_reproducible_first_build_worker_v2` derives exact import,
+export, kernel-entry, kernel-descriptor, helper, and unresolved-import roles from the retained
+manifest rather than accepting an operator-supplied final-symbol list. It binds the pinned
 executable, worker and LLVM build identities, target, code-object version, structured options,
-complete envelope identity, distinct compiler module, every external provider, final symbol
-closure, and output bound. V2 responses decode only against their originating request. All V2
-values remain inert and grant no publication, loading, or launch authority. Connecting this path
-requires a future compiler-owned envelope-plus-module observation, not another neutral adapter.
+complete envelope identity, compiler module, every external provider, final symbol closure, and
+output bound. A GenericLink candidate establishes the first-build output identity; success requires
+the V2 execution to reproduce those bytes exactly. Both executions use the supervised direct
+LLVM/LLD worker and no COMGR path.
+
+`inspect_worker_v2_raw_hsaco_v1` then consumes the sealed reproducibility evidence and independently
+checks the exact raw HSACO against its retained lineage, target, code-object version, symbol-role
+manifest, defined-symbol closure, descriptors, and `gfx942` launch metadata. It accepts no caller
+replacement for those policies. This admission is deliberately distinct from canonical
+`.fe2o3.kd.v1` descriptor-table finalization, which does not run on the Worker V2 publication path.
+
+`prepare_worker_v2_hsaco_publication_v1` consumes the admitted evidence and returns the typed
+`PreparedWorkerV2HsacoPublicationV1` bridge. Its durable plan and upstream evidence identity remain
+private. `publish_prepared_worker_v2_hsaco_v1` uses that bridge with the matching producer and live
+attempt registry to publish the exact admitted bytes and an attempt-scoped durable provenance
+receipt; `cargo-fe2o3` then completes the same build attempt. The prepared value supports exact
+in-process reconciliation, but enough intent is not yet persisted to recover in a new process after
+the compiler handoff has already been consumed.
+
+Neither the handoff, reproducibility evidence, raw-HSACO admission, typed bridge, nor publication
+receipt authenticates the compiler or its origin, authenticates or binds Verus verification, grants
+HSA loading authority, or grants kernel-launch authority. On `mi300x`, the ignored
+`worker_v2_real_source_publishes_inspected_gfx942_hsaco` and
+`worker_v2_real_source_links_an_external_bitcode_provider` tests pass with an unoptimized Debug
+worker for `gfx942:xnack-`, through durable publication. Those tests do not load or launch the HSACO,
+and no optimized Release-worker result is claimed.
