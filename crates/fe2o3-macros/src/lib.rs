@@ -322,6 +322,10 @@ fn expand_kernel_with_imports(
                     unsafe impl __fe2o3_kernel_host::__generated::CompilerGeneratedKernelContractV1
                         for super::#type_marker_ident
                     {
+                        const PROFILE:
+                            __fe2o3_kernel_host::__generated::CompilerGeneratedKernelProfileV1 =
+                            __fe2o3_kernel_host::__generated::CompilerGeneratedKernelProfileV1::TypedVecAddF32V1;
+
                         fn artifact_container_bytes() -> &'static [u8] {
                             let start_pointer =
                                 __fe2o3_kernel_sysroot_core::ptr::addr_of!(
@@ -842,6 +846,9 @@ mod tests {
         assert!(expansion.contains("extern crate gpu_host as __fe2o3_kernel_host"));
         assert!(expansion.contains(
             "unsafe impl __fe2o3_kernel_host :: __generated :: CompilerGeneratedKernelContractV1"
+        ));
+        assert!(expansion.contains(
+            "const PROFILE : __fe2o3_kernel_host :: __generated :: CompilerGeneratedKernelProfileV1 = __fe2o3_kernel_host :: __generated :: CompilerGeneratedKernelProfileV1 :: TypedVecAddF32V1"
         ));
         assert!(expansion.contains("fn artifact_container_bytes () -> & 'static [u8]"));
         assert!(expansion.contains("checked_sub"));

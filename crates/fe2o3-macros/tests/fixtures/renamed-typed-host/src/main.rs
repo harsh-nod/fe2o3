@@ -10,6 +10,10 @@ fn assert_contract<T: gpu_host::__generated::CompilerGeneratedKernelContractV1>(
 fn main() {
     assert_contract::<__fe2o3_kernel_marker_renamed_typed>();
     assert_eq!(
+        <__fe2o3_kernel_marker_renamed_typed as gpu_host::__generated::CompilerGeneratedKernelContractV1>::PROFILE,
+        gpu_host::__generated::CompilerGeneratedKernelProfileV1::TypedVecAddF32V1
+    );
+    assert_eq!(
         <__fe2o3_kernel_marker_renamed_typed as gpu_device::KernelMarkerV1>::REGISTRATION.2,
         2
     );
