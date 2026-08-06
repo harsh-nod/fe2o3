@@ -389,7 +389,9 @@ impl LinkPublicationRecordV1 {
         finalized_output: FinalizedOutputIdentityV1,
         publication: AtomicPublicationIdentityV1,
     ) -> Result<PublicationOutcomeV1, LinkPublicationCodecError> {
-        catalog.authorize(self, attempt)?;
+        if self.attempt != attempt {
+            return Err(LinkPublicationCodecError::AttemptMismatch);
+        }
         check_identity(
             self.evidence.finalization == Some(finalization),
             IdentityKindV1::Finalization,
@@ -411,6 +413,7 @@ impl LinkPublicationRecordV1 {
             return Ok(PublicationOutcomeV1::AlreadyPublished);
         }
 
+        catalog.authorize(self, attempt)?;
         self.expect_active(LinkPublicationPhaseV1::Finalized)?;
         let mut next_record = self.clone();
         next_record.evidence.publication = Some(publication);
@@ -462,7 +465,7 @@ impl LinkPublicationRecordV1 {
 
         let mut next_catalog = catalog.clone();
         next_catalog.remove_owned(self);
-        next_catalog.deactivate(self.scope, self.attempt, self.evidence.request);
+        next_catalog.deactivate_owned(self);
         self.state = LinkPublicationStateV1::Invalidated {
             prior_phase,
             reason,
@@ -483,19 +486,19 @@ impl LinkPublicationRecordV1 {
         self.validate()?;
         if matches!(self.state, LinkPublicationStateV1::Invalidated { .. }) {
             catalog.remove_owned(self);
-            catalog.deactivate(self.scope, self.attempt, self.evidence.request);
+            catalog.deactivate_owned(self);
             return Ok(RecoveryOutcomeV1::AlreadyInvalidated);
         }
 
         if self.state == LinkPublicationStateV1::Active(LinkPublicationPhaseV1::Published) {
             let expected = self.published_artifact()?;
             if catalog.published(&self.scope) == Some(&expected) {
-                catalog.deactivate(self.scope, self.attempt, self.evidence.request);
+                catalog.deactivate_owned(self);
                 return Ok(RecoveryOutcomeV1::PublicationConfirmed);
             }
             if catalog.is_current(self.scope, self.attempt, self.evidence.request) {
                 catalog.remove_owned(self);
-                catalog.deactivate(self.scope, self.attempt, self.evidence.request);
+                catalog.deactivate_owned(self);
                 self.state = LinkPublicationStateV1::Invalidated {
                     prior_phase: LinkPublicationPhaseV1::Published,
                     reason: InvalidationReasonV1::CorruptPublication,
@@ -517,7 +520,7 @@ impl LinkPublicationRecordV1 {
         match self.state {
             LinkPublicationStateV1::Active(prior_phase) => {
                 catalog.remove_owned(self);
-                catalog.deactivate(self.scope, self.attempt, self.evidence.request);
+                catalog.deactivate_owned(self);
                 self.state = LinkPublicationStateV1::Invalidated {
                     prior_phase,
                     reason: InvalidationReasonV1::CrashRecovery,
@@ -907,6 +910,17 @@ impl LinkPublicationCatalogV1 {
         {
             self.active.remove(&scope);
         }
+    }
+
+    fn deactivate_owned(&mut self, record: &LinkPublicationRecordV1) {
+        if self.published.get(&record.scope).is_some_and(|published| {
+            published.attempt == record.attempt
+                && published.request == record.evidence.request
+                && record.published_artifact().ok().as_ref() != Some(published)
+        }) {
+            return;
+        }
+        self.deactivate(record.scope, record.attempt, record.evidence.request);
     }
 }
 

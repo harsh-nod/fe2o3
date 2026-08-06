@@ -6,6 +6,7 @@ use fe2o3_artifact_transaction::{
     LinkPublicationStateV1, LinkedOutputIdentityV1, PackageIdentityV1, PinnedWorkerIdentityV1,
     PublicationOutcomeV1, RecoveryOutcomeV1, TargetIdentityV1, ValidatedResponseIdentityV1,
 };
+use sha2::{Digest, Sha256};
 
 #[derive(Clone, Copy)]
 struct Identities {
@@ -148,6 +149,96 @@ fn every_ordered_state_has_a_canonical_restart_record() {
             Ok(expected)
         );
     }
+}
+
+#[test]
+fn active_and_invalidated_phase_records_have_a_stable_golden_transcript() {
+    let mut catalog = LinkPublicationCatalogV1::default();
+    let attempt = attempt(17, 17);
+    let scope = scope(17);
+    let ids = identities(180);
+    let mut record = catalog.begin(attempt, scope, ids.request).unwrap();
+    let mut active = vec![record.clone()];
+    record
+        .record_pinned_worker(&catalog, attempt, ids.request, ids.worker)
+        .unwrap();
+    active.push(record.clone());
+    record
+        .record_validated_response(
+            &catalog,
+            attempt,
+            ids.request,
+            ids.worker,
+            ids.response,
+            ids.linked_output,
+        )
+        .unwrap();
+    active.push(record.clone());
+    record
+        .record_finalization(
+            &catalog,
+            attempt,
+            ids.response,
+            ids.linked_output,
+            ids.finalization,
+            ids.finalized_output,
+        )
+        .unwrap();
+    active.push(record.clone());
+    let active_catalog = catalog.clone();
+    record
+        .publish(
+            &mut catalog,
+            attempt,
+            ids.finalization,
+            ids.finalized_output,
+            ids.publication,
+        )
+        .unwrap();
+    active.push(record.clone());
+
+    let mut invalidated = Vec::new();
+    for mut record in active.iter().take(4).cloned() {
+        let mut phase_catalog = active_catalog.clone();
+        record
+            .invalidate(
+                &mut phase_catalog,
+                attempt,
+                InvalidationReasonV1::ExplicitFailure,
+            )
+            .unwrap();
+        invalidated.push(record);
+    }
+    let mut published_without_catalog = record;
+    assert_eq!(
+        published_without_catalog.recover(&mut LinkPublicationCatalogV1::default()),
+        Ok(RecoveryOutcomeV1::InvalidatedStaleAttempt)
+    );
+    invalidated.push(published_without_catalog);
+
+    let records = active.iter().chain(&invalidated).collect::<Vec<_>>();
+    let encoded = records
+        .iter()
+        .map(|record| record.encode_canonical().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        encoded.iter().map(Vec::len).collect::<Vec<_>>(),
+        vec![214, 247, 313, 379, 412, 216, 249, 315, 381, 414]
+    );
+    let mut transcript = b"fe2o3.link-publication.golden-phases.v1\0".to_vec();
+    for bytes in encoded {
+        transcript.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+        transcript.extend_from_slice(&bytes);
+    }
+    let digest: [u8; 32] = Sha256::digest(transcript).into();
+    assert_eq!(
+        digest,
+        [
+            0x16, 0xce, 0x37, 0x36, 0xd8, 0x2e, 0x91, 0x30, 0xbb, 0x32, 0xe4, 0x93, 0x3e, 0x68,
+            0x6f, 0x16, 0xd6, 0x16, 0x33, 0xd0, 0x70, 0x73, 0x74, 0x59, 0x8a, 0x3d, 0xdd, 0xd1,
+            0x03, 0x0a, 0xa4, 0x32,
+        ]
+    );
 }
 
 #[test]
@@ -430,6 +521,17 @@ fn published_restart_requires_exact_catalog_identity() {
         restarted.recover(&mut catalog),
         Ok(RecoveryOutcomeV1::PublicationConfirmed)
     );
+    assert_eq!(catalog.active_attempt(&scope), None);
+    assert_eq!(
+        restarted.publish(
+            &mut catalog,
+            attempt,
+            ids.finalization,
+            ids.finalized_output,
+            ids.publication,
+        ),
+        Ok(PublicationOutcomeV1::AlreadyPublished)
+    );
     assert_eq!(
         restarted.recover(&mut catalog),
         Ok(RecoveryOutcomeV1::PublicationConfirmed)
@@ -519,12 +621,25 @@ fn same_attempt_request_but_different_publication_cannot_claim_catalog_ownership
     let mut conflicting = publish(&mut conflicting_catalog, attempt, scope, conflicting_ids);
     assert_eq!(conflicting.request(), valid_ids.request);
 
+    let before_replay = valid_catalog.clone();
+    assert_eq!(
+        conflicting.publish(
+            &mut valid_catalog,
+            attempt,
+            conflicting_ids.finalization,
+            conflicting_ids.finalized_output,
+            conflicting_ids.publication,
+        ),
+        Err(LinkPublicationCodecError::CatalogMismatch)
+    );
+    assert_eq!(valid_catalog, before_replay);
+
     assert_eq!(
         conflicting.recover(&mut valid_catalog),
         Ok(RecoveryOutcomeV1::InvalidatedCorruptPublication)
     );
     assert_eq!(valid_catalog.published(&scope), Some(&valid_artifact));
-    assert!(valid_catalog.active_attempt(&scope).is_none());
+    assert_eq!(valid_catalog.active_attempt(&scope), Some(attempt));
 }
 
 #[test]

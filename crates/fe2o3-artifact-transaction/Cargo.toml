@@ -9,3 +9,6 @@ description = "Transactional compiler artifact publication for fe2o3."
 
 [dependencies]
 rustix.workspace = true
+
+[dev-dependencies]
+sha2 = { version = "0.11.0", default-features = false }
