@@ -13,7 +13,10 @@ use rustc_hir::def_id::DefId;
 use rustc_hir::{Expr, ExprKind, ItemKind, Safety};
 use rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags;
 use rustc_middle::mir::mono::{CodegenUnit, MonoItem};
-use rustc_middle::mir::{Operand, Rvalue, TerminatorKind, UnwindAction};
+use rustc_middle::mir::visit::Visitor;
+use rustc_middle::mir::{
+    Body, ConstOperand, Location, Operand, Rvalue, TerminatorKind, UnwindAction,
+};
 use rustc_middle::ty::{
     EarlyBinder, FloatTy, Instance, IntTy, Ty, TyCtxt, TyKind, TypeVisitableExt, TypingEnv, UintTy,
 };
@@ -716,15 +719,11 @@ fn validate_export_body<'tcx>(
             ));
         }
         let body = tcx.instance_mir(instance.def);
-        if instance.def_id().is_local()
-            && body
-                .local_decls
-                .iter()
-                .any(|declaration| declaration.is_ref_to_static())
-        {
+        if let Some(static_def_id) = referenced_static(tcx, body) {
             return Err(DeviceFfiError::new(format!(
-                "device export `{}` reaches a static requiring unsupported relocation handling",
-                tcx.def_path_str(instance.def_id())
+                "device export `{}` reaches static `{}` requiring unsupported relocation handling",
+                tcx.def_path_str(instance.def_id()),
+                tcx.def_path_str(static_def_id),
             )));
         }
         for block in body.basic_blocks.iter() {
@@ -855,6 +854,28 @@ fn validate_export_body<'tcx>(
         }
     }
     Ok(())
+}
+
+fn referenced_static<'tcx>(tcx: TyCtxt<'tcx>, body: &Body<'tcx>) -> Option<DefId> {
+    struct StaticReferenceVisitor<'tcx> {
+        tcx: TyCtxt<'tcx>,
+        referenced: Option<DefId>,
+    }
+
+    impl<'tcx> Visitor<'tcx> for StaticReferenceVisitor<'tcx> {
+        fn visit_const_operand(&mut self, constant: &ConstOperand<'tcx>, _location: Location) {
+            if self.referenced.is_none() {
+                self.referenced = constant.check_static_ptr(self.tcx);
+            }
+        }
+    }
+
+    let mut visitor = StaticReferenceVisitor {
+        tcx,
+        referenced: None,
+    };
+    visitor.visit_body(body);
+    visitor.referenced
 }
 
 fn validate_rustc_signature<'tcx>(

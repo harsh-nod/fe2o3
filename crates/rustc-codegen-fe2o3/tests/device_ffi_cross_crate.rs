@@ -263,6 +263,72 @@ fn locally_registered_import_survives_final_dynamic_revalidation() {
 }
 
 #[test]
+#[ignore = "runs the configured rustc codegen backend"]
+fn locally_registered_export_is_validated_without_ice() {
+    let workspace = workspace();
+    let output = TestOutputDir::new(&workspace, "local-export");
+    let backend = build_backend(&workspace);
+    let (contract, marker) = marker(
+        reserved_fe2o3_symbols::DEVICE_FFI_DIRECTION_EXPORT_V1,
+        "local_device_add_v1",
+        "4646464646464646464646464646464646464646464646464646464646464646",
+    );
+    let source = local_export_app(&contract.to_hex(), &marker);
+    let source_path = output.0.join("local-export.rs");
+    std::fs::write(&source_path, source).expect("write local export fixture");
+
+    let compile = run_backend(&source_path, &backend, &output.0, &[]);
+    let stderr = String::from_utf8_lossy(&compile.stderr);
+    assert!(
+        stderr.contains("validated local device FFI evidence: 0 imports, 1 exports")
+            && stderr.contains("collected compiler FFI envelope")
+            && stderr
+                .contains("0 import(s), 1 export(s), 1 compiler-module definition requirement(s)")
+            && stderr.contains("validated frontend record"),
+        "local export did not reach the validated frontend record\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("invalid fe2o3 device FFI contract"),
+        "local export failed device FFI validation\n{stderr}"
+    );
+    assert_no_ice("local export", &stderr);
+}
+
+#[test]
+#[ignore = "runs the configured rustc codegen backend"]
+fn local_export_referencing_static_fails_closed_without_ice() {
+    let workspace = workspace();
+    let output = TestOutputDir::new(&workspace, "local-export-static");
+    let backend = build_backend(&workspace);
+    let (contract, marker) = marker(
+        reserved_fe2o3_symbols::DEVICE_FFI_DIRECTION_EXPORT_V1,
+        "local_device_add_v1",
+        "4646464646464646464646464646464646464646464646464646464646464646",
+    );
+    let source = format!(
+        "static DEVICE_OFFSET: u32 = 1;\n{}",
+        local_export_app(&contract.to_hex(), &marker)
+            .replace("value.wrapping_add(1)", "value.wrapping_add(DEVICE_OFFSET)")
+    );
+    let source_path = output.0.join("local-export-static.rs");
+    std::fs::write(&source_path, source).expect("write static export fixture");
+
+    let compile = run_backend(&source_path, &backend, &output.0, &[]);
+    let stderr = String::from_utf8_lossy(&compile.stderr);
+    assert!(
+        !compile.status.success(),
+        "static-backed export was accepted"
+    );
+    assert!(
+        stderr.contains("device export `local_device_add`")
+            && stderr.contains("reaches static `DEVICE_OFFSET`")
+            && stderr.contains("unsupported relocation handling"),
+        "missing stable static-reference diagnostic\n{stderr}"
+    );
+    assert_no_ice("static-backed local export", &stderr);
+}
+
+#[test]
 #[ignore = "runs adversarial rustc codegen backend probes"]
 fn dynamically_discovered_local_import_requires_registration() {
     let workspace = workspace();
@@ -927,6 +993,44 @@ static __fe2o3_kernel_registration_local_import: (
 ) = (
     0x4e52_4b33_4f32_4546, 1, 1, "local_import",
     "local_import", fe2o3_kernel_local_import,
+);
+"#
+    )
+}
+
+fn local_export_app(contract: &str, marker: &str) -> String {
+    format!(
+        r#"
+#[inline(always)]
+#[doc = "{marker}"]
+#[unsafe(export_name = "local_device_add_v1")]
+pub unsafe extern "C" fn local_device_add(value: u32) -> u32 {{
+    value.wrapping_add(1)
+}}
+
+#[used]
+static __fe2o3_device_ffi_registration_v1_{contract}: (
+    u64, u16, u16, &'static str, &'static str, &'static str, u16,
+    &'static str, &'static str, &'static str, &'static str,
+    unsafe extern "C" fn(u32) -> u32,
+) = (
+    0x4946_4633_4f32_4546, 1, 2, "{contract}", "local_device_add_v1",
+    "C", 5, "gfx1100", "C(u32[size=4,align=4])->u32[size=4,align=4]",
+    "none", "4646464646464646464646464646464646464646464646464646464646464646",
+    local_device_add,
+);
+
+#[unsafe(no_mangle)]
+pub fn fe2o3_kernel_local_export() {{
+    let _ = unsafe {{ local_device_add(7) }};
+}}
+
+#[used]
+static __fe2o3_kernel_registration_local_export: (
+    u64, u16, u16, &'static str, &'static str, fn(),
+) = (
+    0x4e52_4b33_4f32_4546, 1, 1, "local_export",
+    "local_export", fe2o3_kernel_local_export,
 );
 "#
     )
