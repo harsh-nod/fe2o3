@@ -402,8 +402,17 @@ fn normal_failure_is_invalidated_and_preserves_prior_publication() {
             .record()
     );
     assert_eq!(current.artifact().bytes(), old_bytes);
+    assert!(matches!(
+        publish_durable_link_v1(&output, new_plan, |_| {
+            panic!("an explicitly failed attempt must never run again")
+        }),
+        Err(DurableLinkPublicationError::Protocol(_))
+    ));
+    let replacement_plan = plan(3, 0x41, 0xa1, new_bytes);
     assert_eq!(
-        publish(&output, new_plan, new_bytes).unwrap().outcome(),
+        publish(&output, replacement_plan, new_bytes)
+            .unwrap()
+            .outcome(),
         DurableLinkPublicationOutcomeV1::Published
     );
 }
@@ -470,6 +479,50 @@ fn stale_valid_redo_cannot_replace_a_newer_canonical_publication() {
         managed_entries(&output, ".fe2o3-link-quarantine-v1-").len(),
         1
     );
+}
+
+#[test]
+fn conflicting_same_generation_redo_never_replaces_canonical_active_state() {
+    let canonical_temp = TestDirectory::new();
+    let conflicting_temp = TestDirectory::new();
+    let canonical_output = canonical_temp.path.join("output");
+    let conflicting_output = conflicting_temp.path.join("output");
+    let bytes = b"same generation conflict";
+    let canonical_plan = plan(1, 0x53, 0xb3, bytes);
+    let conflicting_plan = plan(1, 0x53, 0xc3, bytes);
+    let point = DurableLinkPublicationFaultPointV1::Journal {
+        stage: DurableJournalStageV1::Planned,
+        boundary: DurableJournalBoundaryV1::SyncCanonicalName,
+    };
+
+    for (output, plan) in [
+        (&canonical_output, canonical_plan),
+        (&conflicting_output, conflicting_plan),
+    ] {
+        assert!(matches!(
+            publish_durable_link_v1_with_options(
+                output,
+                plan,
+                DurableLinkPublicationOptionsV1::inject_crash(point),
+                |_| panic!("planned-record fault occurs before work"),
+            ),
+            Err(DurableLinkPublicationError::InjectedCrash { point: actual }) if actual == point
+        ));
+    }
+
+    let canonical = canonical_record(&canonical_output);
+    let canonical_bytes = fs::read(&canonical).unwrap();
+    let conflicting_bytes = fs::read(canonical_record(&conflicting_output)).unwrap();
+    let redo = PathBuf::from(format!("{}.redo", canonical.display()));
+    fs::write(&redo, conflicting_bytes).unwrap();
+    fs::set_permissions(&redo, fs::Permissions::from_mode(0o600)).unwrap();
+
+    assert!(matches!(
+        recover_durable_link_publication_v1(&canonical_output, canonical_plan.scope()),
+        Err(DurableLinkPublicationError::ConflictingRedo { .. })
+    ));
+    assert_eq!(fs::read(&canonical).unwrap(), canonical_bytes);
+    assert!(redo.exists());
 }
 
 #[test]

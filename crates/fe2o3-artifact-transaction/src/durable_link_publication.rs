@@ -264,6 +264,9 @@ pub enum DurableLinkPublicationError {
     InvalidDurableRecord {
         reason: String,
     },
+    ConflictingRedo {
+        reason: String,
+    },
     UnsafeManagedEntry {
         entry: String,
         reason: String,
@@ -311,6 +314,9 @@ impl fmt::Display for DurableLinkPublicationError {
             }
             Self::InvalidDurableRecord { reason } => {
                 write!(formatter, "invalid durable publication record: {reason}")
+            }
+            Self::ConflictingRedo { reason } => {
+                write!(formatter, "conflicting durable publication redo: {reason}")
             }
             Self::UnsafeManagedEntry { entry, reason } => {
                 write!(formatter, "unsafe managed entry {entry}: {reason}")
@@ -637,17 +643,17 @@ where
             ));
         }
     }
-    let exact_retry = envelope
+    let crash_retry = envelope
         .active
         .as_ref()
-        .is_some_and(|record| record_prefix_matches_plan(record, plan));
-    if envelope.poisoned && plan.attempt.generation() <= envelope.generation_floor && !exact_retry {
+        .is_some_and(|record| crash_retry_matches_plan(record, plan));
+    if envelope.poisoned && plan.attempt.generation() <= envelope.generation_floor && !crash_retry {
         return Err(invalid_record(
             "corruption tombstone requires a newer build generation",
         ));
     }
     if plan.attempt.generation() < envelope.generation_floor
-        || (plan.attempt.generation() == envelope.generation_floor && !exact_retry)
+        || (plan.attempt.generation() == envelope.generation_floor && !crash_retry)
     {
         return Err(DurableLinkPublicationError::Protocol(
             LinkPublicationCodecError::StaleAttempt,
@@ -821,11 +827,20 @@ fn recover_envelope(
         match DurableEnvelopeV1::decode(&redo, scope) {
             Ok(redo_envelope) => {
                 match read_envelope(output, &names.record, scope) {
-                    Ok(Some(canonical)) if redo_precedes(&canonical, &redo_envelope) => {
-                        quarantine_entry(output, &names.redo)?;
-                        return Ok(canonical);
-                    }
-                    Ok(_) => {}
+                    Ok(Some(canonical)) => match classify_redo(&canonical, &redo_envelope) {
+                        RedoDisposition::Replay => {}
+                        RedoDisposition::Stale => {
+                            quarantine_entry(output, &names.redo)?;
+                            return Ok(canonical);
+                        }
+                        RedoDisposition::Conflict => {
+                            return Err(DurableLinkPublicationError::ConflictingRedo {
+                                reason: "same-generation redo is not a forward transition from canonical state"
+                                    .to_string(),
+                            });
+                        }
+                    },
+                    Ok(None) => {}
                     Err(_) => quarantine_entry(output, &names.record)?,
                 }
                 renameat(&output.fd, &names.redo, &output.fd, &names.record)
@@ -1293,11 +1308,17 @@ fn record_matches_plan(
         && record.state() == LinkPublicationStateV1::Active(LinkPublicationPhaseV1::Published)
 }
 
-fn record_prefix_matches_plan(
+fn crash_retry_matches_plan(
     record: &LinkPublicationRecordV1,
     plan: DurableLinkPublicationPlanV1,
 ) -> bool {
-    record.attempt() == plan.attempt
+    matches!(
+        record.state(),
+        LinkPublicationStateV1::Invalidated {
+            reason: InvalidationReasonV1::CrashRecovery,
+            ..
+        }
+    ) && record.attempt() == plan.attempt
         && record.scope() == plan.scope
         && record.request() == plan.request
         && record
@@ -1320,26 +1341,99 @@ fn record_prefix_matches_plan(
             .is_none_or(|identity| identity == plan.publication)
 }
 
-fn redo_precedes(canonical: &DurableEnvelopeV1, redo: &DurableEnvelopeV1) -> bool {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RedoDisposition {
+    Replay,
+    Stale,
+    Conflict,
+}
+
+fn classify_redo(canonical: &DurableEnvelopeV1, redo: &DurableEnvelopeV1) -> RedoDisposition {
     if redo.generation_floor != canonical.generation_floor {
-        return redo.generation_floor < canonical.generation_floor;
+        return if redo.generation_floor < canonical.generation_floor {
+            RedoDisposition::Stale
+        } else {
+            RedoDisposition::Replay
+        };
+    }
+    if redo == canonical {
+        return RedoDisposition::Replay;
     }
     if let Some(published) = canonical.published.as_ref()
         && published.attempt().generation() == canonical.generation_floor
         && redo.published.as_ref() != Some(published)
     {
-        return true;
-    }
-    match (canonical.active.as_ref(), redo.active.as_ref()) {
-        (Some(current), Some(candidate))
-            if records_have_same_prefix(current, candidate)
-                && matches!(current.state(), LinkPublicationStateV1::Active(_))
-                && matches!(candidate.state(), LinkPublicationStateV1::Active(_)) =>
+        return if redo
+            .active
+            .as_ref()
+            .is_some_and(|candidate| records_have_same_prefix(published, candidate))
         {
-            phase_number(evidence_phase(candidate.state()))
-                < phase_number(evidence_phase(current.state()))
+            RedoDisposition::Stale
+        } else {
+            RedoDisposition::Conflict
+        };
+    }
+
+    if canonical.published == redo.published {
+        return classify_active_redo(canonical.active.as_ref(), redo.active.as_ref());
+    }
+
+    match (canonical.active.as_ref(), redo.published.as_ref()) {
+        (Some(current), Some(candidate))
+            if redo.active.is_none()
+                && candidate.attempt().generation() == redo.generation_floor
+                && records_have_same_prefix(current, candidate)
+                && candidate.state()
+                    == LinkPublicationStateV1::Active(LinkPublicationPhaseV1::Published) =>
+        {
+            RedoDisposition::Replay
         }
-        _ => false,
+        _ => RedoDisposition::Conflict,
+    }
+}
+
+fn classify_active_redo(
+    canonical: Option<&LinkPublicationRecordV1>,
+    redo: Option<&LinkPublicationRecordV1>,
+) -> RedoDisposition {
+    match (canonical, redo) {
+        (None, Some(candidate))
+            if candidate.state()
+                == LinkPublicationStateV1::Active(LinkPublicationPhaseV1::RequestBound) =>
+        {
+            RedoDisposition::Replay
+        }
+        (None, None) => RedoDisposition::Replay,
+        (Some(_), None) => RedoDisposition::Conflict,
+        (Some(current), Some(candidate)) => {
+            if !records_have_same_prefix(current, candidate) {
+                return RedoDisposition::Conflict;
+            }
+            match (current.state(), candidate.state()) {
+                (LinkPublicationStateV1::Active(current), LinkPublicationStateV1::Active(next)) => {
+                    if phase_number(next) < phase_number(current) {
+                        RedoDisposition::Stale
+                    } else {
+                        RedoDisposition::Replay
+                    }
+                }
+                (
+                    LinkPublicationStateV1::Active(current),
+                    LinkPublicationStateV1::Invalidated {
+                        prior_phase: next, ..
+                    },
+                ) if phase_number(next) >= phase_number(current) => RedoDisposition::Replay,
+                (
+                    LinkPublicationStateV1::Invalidated {
+                        reason: InvalidationReasonV1::CrashRecovery,
+                        ..
+                    },
+                    LinkPublicationStateV1::Active(LinkPublicationPhaseV1::RequestBound),
+                ) => RedoDisposition::Replay,
+                _ => RedoDisposition::Conflict,
+            }
+        }
+        (None, Some(_)) => RedoDisposition::Conflict,
     }
 }
 
