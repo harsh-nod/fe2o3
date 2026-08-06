@@ -34,7 +34,7 @@ pub(crate) fn publish_worker_v2_compiler_module(
 ) -> Result<CompilerModuleHandoffReceiptV1, WorkerV2ProducerError> {
     let attempt = attempt.ok_or(WorkerV2ProducerError::MissingBuildAttempt)?;
     let envelope = envelope.ok_or(WorkerV2ProducerError::MissingCompilerFfiEnvelope)?;
-    let module = bind_g1_launch_contract(module);
+    let module = bind_g1_launch_contract(module)?;
     let module = bind_exact_target_wave_mode(envelope, &module)?;
     let compiler_module = construct_inert_compiler_module_text_v1(&module)
         .map_err(WorkerV2ProducerError::CompilerModule)?;
@@ -53,16 +53,23 @@ pub(crate) fn publish_worker_v2_compiler_module(
         .map_err(WorkerV2ProducerError::Publication)
 }
 
-fn bind_g1_launch_contract(module: &Module) -> Module {
+fn bind_g1_launch_contract(module: &Module) -> Result<Module, WorkerV2ProducerError> {
+    let required = WorkgroupSize::new(G1_WORKGROUP_X, 1, 1);
     let mut bound = module.clone();
     for kernel in &mut bound.kernels {
-        // G1's host adapter launches 256 threads. Preserve explicit Kernel IR metadata so a
-        // later source-level launch contract can replace this compatibility binding per kernel.
-        kernel
-            .workgroup_size
-            .get_or_insert(WorkgroupSize::new(G1_WORKGROUP_X, 1, 1));
+        match kernel.workgroup_size {
+            None => kernel.workgroup_size = Some(required),
+            Some(declared) if declared == required => {}
+            Some(declared) => {
+                return Err(WorkerV2ProducerError::ConflictingWorkgroupSize {
+                    kernel: kernel.id.as_str().to_owned(),
+                    declared,
+                    required,
+                });
+            }
+        }
     }
-    bound
+    Ok(bound)
 }
 
 fn bind_exact_target_wave_mode(
@@ -163,7 +170,15 @@ pub(crate) enum WorkerV2ProducerError {
     MissingExternalDeclaration(String),
     MissingCompilerDefinition(String),
     TargetCapabilities(CapabilityDerivationError),
-    UnsupportedWaveMode { target: String, width: WaveWidth },
+    UnsupportedWaveMode {
+        target: String,
+        width: WaveWidth,
+    },
+    ConflictingWorkgroupSize {
+        kernel: String,
+        declared: WorkgroupSize,
+        required: WorkgroupSize,
+    },
     CompilerModule(CompilerModuleConstructionError),
     Handoff(CompilerModuleHandoffErrorV1),
     Publication(HandoffPublicationErrorV1),
@@ -195,6 +210,15 @@ impl fmt::Display for WorkerV2ProducerError {
             Self::UnsupportedWaveMode { target, width } => write!(
                 formatter,
                 "compiler module requires {width:?}, which target {target} does not support"
+            ),
+            Self::ConflictingWorkgroupSize {
+                kernel,
+                declared,
+                required,
+            } => write!(
+                formatter,
+                "kernel {kernel:?} declares workgroup size ({}, {}, {}), but the Worker V2 G1 profile requires ({}, {}, {})",
+                declared.x, declared.y, declared.z, required.x, required.y, required.z
             ),
             Self::CompilerModule(error) => {
                 write!(
@@ -229,7 +253,8 @@ impl Error for WorkerV2ProducerError {
             | Self::MissingCompilerFfiEnvelope
             | Self::MissingExternalDeclaration(_)
             | Self::MissingCompilerDefinition(_)
-            | Self::UnsupportedWaveMode { .. } => None,
+            | Self::UnsupportedWaveMode { .. }
+            | Self::ConflictingWorkgroupSize { .. } => None,
         }
     }
 }
@@ -409,7 +434,7 @@ mod tests {
                 x: LaunchExtent::Dynamic,
             },
         );
-        kernel.workgroup_size = Some(WorkgroupSize::new(64, 1, 1));
+        kernel.workgroup_size = Some(WorkgroupSize::new(G1_WORKGROUP_X, 1, 1));
 
         let mut module = Module::new("tests::worker_v2_producer");
         module.functions = vec![entry, export, import];
@@ -532,11 +557,11 @@ mod tests {
     }
 
     #[test]
-    fn binds_only_missing_workgroup_sizes_to_the_g1_launch_contract() {
+    fn binds_missing_and_accepts_exact_g1_workgroup_sizes() {
         let explicit = complete_module();
         assert_eq!(
-            bind_g1_launch_contract(&explicit).kernels[0].workgroup_size,
-            Some(WorkgroupSize::new(64, 1, 1))
+            bind_g1_launch_contract(&explicit).unwrap().kernels[0].workgroup_size,
+            Some(WorkgroupSize::new(G1_WORKGROUP_X, 1, 1))
         );
 
         let directory = TestDirectory::new();
@@ -560,6 +585,38 @@ mod tests {
         let text = std::str::from_utf8(handoff.module_bytes()).unwrap();
         assert!(text.contains("\"amdgpu-flat-work-group-size\"=\"256,256\""));
         assert!(text.contains("!reqd_work_group_size"));
+    }
+
+    #[test]
+    fn rejects_a_conflicting_workgroup_size_without_publishing() {
+        let directory = TestDirectory::new();
+        let producer = producer();
+        let attempt = begin_attempt(&directory.0, &producer);
+        let envelope = envelope();
+        let mut module = complete_module();
+        module.kernels[0].workgroup_size = Some(WorkgroupSize::new(64, 1, 1));
+
+        let error = publish_worker_v2_compiler_module(
+            &directory.0,
+            &producer,
+            Some(attempt),
+            Some(&envelope),
+            &module,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            WorkerV2ProducerError::ConflictingWorkgroupSize {
+                kernel,
+                declared: WorkgroupSize { x: 64, y: 1, z: 1 },
+                required: WorkgroupSize { x: 256, y: 1, z: 1 },
+            } if kernel == "entry"
+        ));
+        assert!(matches!(
+            consume_compiler_module_handoff_v1(&directory.0, &producer, attempt),
+            Err(PublicationError::NotPublished)
+        ));
     }
 
     #[test]
