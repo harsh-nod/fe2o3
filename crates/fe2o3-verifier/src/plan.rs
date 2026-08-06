@@ -116,6 +116,10 @@ pub struct InvocationPlan {
     request: ProofRequestV1,
     tools: ExecutionTools,
     command: CommandSpec,
+    verifier_program: String,
+    solver_program: String,
+    request_file: String,
+    result_file: String,
     request_bytes: Vec<u8>,
     timeout_seconds: u32,
 }
@@ -131,6 +135,22 @@ impl InvocationPlan {
 
     pub const fn command(&self) -> &CommandSpec {
         &self.command
+    }
+
+    pub fn request_file(&self) -> &str {
+        &self.request_file
+    }
+
+    pub fn verifier_program(&self) -> &str {
+        &self.verifier_program
+    }
+
+    pub fn solver_program(&self) -> &str {
+        &self.solver_program
+    }
+
+    pub fn result_file(&self) -> &str {
+        &self.result_file
     }
 
     pub fn request_bytes(&self) -> &[u8] {
@@ -195,13 +215,13 @@ pub fn build_invocation_plan(
         program: paths.recorder_program,
         arguments: vec![
             "--request".to_owned(),
-            paths.request_file,
+            paths.request_file.clone(),
             "--result".to_owned(),
-            paths.result_file,
+            paths.result_file.clone(),
             "--verifier".to_owned(),
-            paths.verifier_program,
+            paths.verifier_program.clone(),
             "--solver".to_owned(),
-            paths.solver_program,
+            paths.solver_program.clone(),
             "--timeout-seconds".to_owned(),
             timeout_seconds.to_string(),
         ],
@@ -211,6 +231,10 @@ pub fn build_invocation_plan(
         request,
         tools: measured_tools,
         command,
+        verifier_program: paths.verifier_program,
+        solver_program: paths.solver_program,
+        request_file: paths.request_file,
+        result_file: paths.result_file,
         request_bytes,
         timeout_seconds,
     })

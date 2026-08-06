@@ -1,14 +1,19 @@
 //! Bounded planning and result records for an external GPU-kernel verifier.
 //!
-//! This crate never executes a process. It constructs an argv vector and a
-//! canonical request document, then validates the bounded output of a separate
-//! evidence recorder. Tool measurements are caller-supplied evidence, not
-//! measurements performed or authenticated by this crate.
+//! This crate constructs a canonical request and can execute a separately
+//! measured evidence recorder through a bounded, shell-free process boundary.
+//! Tool measurements remain caller-supplied evidence, not measurements
+//! performed or authenticated by this crate.
 
+mod executor;
 mod model;
 mod plan;
 mod result;
 
+pub use executor::{
+    ExecutionError, ExecutionErrorKind, ExecutionLimits, ExecutionPath, ExecutionStage,
+    ExecutionSuccess, MAX_CAPTURE_BYTES, OutputStream, ProcessOutput, execute_recorder,
+};
 pub use model::{
     AxiomPolicy, Configuration, ConfigurationEntry, CorrelationId, Digest, ExecutionTools,
     MAX_CONFIGURATION_ENTRIES, MAX_PROPERTIES, MAX_TEXT_BYTES, MAX_TRUSTED_ITEMS,

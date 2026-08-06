@@ -10,3 +10,8 @@ publish = false
 
 [lib]
 name = "fe2o3_verifier"
+
+[[bin]]
+name = "fe2o3-verifier-test-recorder"
+path = "tests/support/recorder.rs"
+test = false
