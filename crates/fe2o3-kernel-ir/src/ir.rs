@@ -742,6 +742,13 @@ pub enum Terminator {
         default_target: BlockId,
         default_arguments: Vec<ValueId>,
     },
+    /// A V2 integer switch with typed, strictly increasing case constants.
+    IntegerSwitch {
+        selector: ValueId,
+        cases: Vec<IntegerSwitchCase>,
+        default_target: BlockId,
+        default_arguments: Vec<ValueId>,
+    },
     Return {
         values: Vec<ValueId>,
     },
@@ -776,6 +783,19 @@ impl Terminator {
                 operands.extend(default_arguments);
                 operands
             }
+            Self::IntegerSwitch {
+                selector,
+                cases,
+                default_arguments,
+                ..
+            } => {
+                let mut operands = vec![*selector];
+                for case in cases {
+                    operands.extend(&case.arguments);
+                }
+                operands.extend(default_arguments);
+                operands
+            }
             Self::Return { values } => values.clone(),
             Self::Unreachable => Vec::new(),
         }
@@ -798,6 +818,15 @@ impl Terminator {
                 .map(|case| case.target)
                 .chain([*default_target])
                 .collect(),
+            Self::IntegerSwitch {
+                cases,
+                default_target,
+                ..
+            } => cases
+                .iter()
+                .map(|case| case.target)
+                .chain([*default_target])
+                .collect(),
             Self::Return { .. } | Self::Unreachable => Vec::new(),
         }
     }
@@ -806,6 +835,14 @@ impl Terminator {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SwitchCase {
     pub value: u64,
+    pub target: BlockId,
+    pub arguments: Vec<ValueId>,
+}
+
+/// One typed case of a V2 [`Terminator::IntegerSwitch`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct IntegerSwitchCase {
+    pub value: Constant,
     pub target: BlockId,
     pub arguments: Vec<ValueId>,
 }

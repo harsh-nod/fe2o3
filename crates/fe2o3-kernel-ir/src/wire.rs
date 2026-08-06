@@ -5,11 +5,11 @@ use std::str;
 use crate::{
     AccessMode, AddressSpace, Atomic, AtomicKind, Axis, Barrier, BarrierSemantics, BasicBlock,
     BinaryOp, BlockId, CastKind, ComparePredicate, Constant, Convergence, Fence, Function,
-    FunctionBody, FunctionId, IndexKind, IntrinsicKind, IntrinsicOperation, Kernel, KernelId,
-    LaunchDomain, LaunchExtent, MemoryAccess, MemoryOrdering, Module, ModuleId, Operation,
-    OperationKind, PointerType, ScalarType, Signature, SliceType, SwitchCase, SynchronizationScope,
-    TargetCapability, Terminator, Type, UnaryOp, ValueDef, ValueId, WaveWidth, WorkgroupBarrier,
-    WorkgroupMemory, WorkgroupMemoryExtent, WorkgroupSize,
+    FunctionBody, FunctionId, IndexKind, IntegerSwitchCase, IntrinsicKind, IntrinsicOperation,
+    Kernel, KernelId, LaunchDomain, LaunchExtent, MemoryAccess, MemoryOrdering, Module, ModuleId,
+    Operation, OperationKind, PointerType, ScalarType, Signature, SliceType, SwitchCase,
+    SynchronizationScope, TargetCapability, Terminator, Type, UnaryOp, ValueDef, ValueId,
+    WaveWidth, WorkgroupBarrier, WorkgroupMemory, WorkgroupMemoryExtent, WorkgroupSize,
 };
 
 /// Fixed magic at the start of every canonical kernel IR module.
@@ -44,6 +44,8 @@ pub const MAX_OPERATION_RESULTS_V1: usize = 65_536;
 pub const MAX_VALUE_ARGUMENTS_V1: usize = 65_536;
 /// Maximum cases in one switch terminator.
 pub const MAX_SWITCH_CASES_V1: usize = 65_536;
+/// Maximum cases in one typed V2 integer switch terminator.
+pub const MAX_INTEGER_SWITCH_CASES_V2: usize = 65_536;
 /// Maximum nested pointer/slice type depth.
 pub const MAX_TYPE_DEPTH_V1: usize = 64;
 
@@ -71,6 +73,9 @@ pub enum KernelIrEncodeError {
         version: u16,
         feature: &'static str,
     },
+    NonCanonical {
+        field: &'static str,
+    },
 }
 
 impl fmt::Display for KernelIrEncodeError {
@@ -92,6 +97,9 @@ impl fmt::Display for KernelIrEncodeError {
                     formatter,
                     "{feature} is not representable in kernel IR V{version}"
                 )
+            }
+            Self::NonCanonical { field } => {
+                write!(formatter, "{field} is not in canonical order")
             }
         }
     }
@@ -1181,6 +1189,49 @@ fn encode_terminator(
                 MAX_VALUE_ARGUMENTS_V1,
             )?;
         }
+        Terminator::IntegerSwitch {
+            selector,
+            cases,
+            default_target,
+            default_arguments,
+        } => {
+            require_v2(writer, "typed integer switch terminator")?;
+            check_limit(
+                "integer switch cases",
+                cases.len(),
+                MAX_INTEGER_SWITCH_CASES_V2,
+            )?;
+            if cases.windows(2).any(|pair| pair[0].value >= pair[1].value) {
+                return Err(KernelIrEncodeError::NonCanonical {
+                    field: "integer switch cases",
+                });
+            }
+
+            writer.u8(6)?;
+            writer.u32(selector.0)?;
+            writer.count(
+                "integer switch cases",
+                cases.len(),
+                MAX_INTEGER_SWITCH_CASES_V2,
+            )?;
+            for case in cases {
+                encode_constant(writer, &case.value)?;
+                writer.u32(case.target.0)?;
+                encode_values(
+                    writer,
+                    "integer switch case arguments",
+                    &case.arguments,
+                    MAX_VALUE_ARGUMENTS_V1,
+                )?;
+            }
+            writer.u32(default_target.0)?;
+            encode_values(
+                writer,
+                "integer switch default arguments",
+                default_arguments,
+                MAX_VALUE_ARGUMENTS_V1,
+            )?;
+        }
         Terminator::Return { values } => {
             writer.u8(4)?;
             encode_values(writer, "return values", values, MAX_VALUE_ARGUMENTS_V1)?;
@@ -1241,6 +1292,36 @@ fn decode_terminator(reader: &mut Reader<'_>) -> Result<Terminator, KernelIrDeco
             values: decode_values(reader, "return values", MAX_VALUE_ARGUMENTS_V1)?,
         },
         5 => Terminator::Unreachable,
+        6 if reader.version >= KERNEL_IR_VERSION_V2 => {
+            let selector = ValueId(reader.u32()?);
+            let case_count = reader.count("integer switch cases", MAX_INTEGER_SWITCH_CASES_V2)?;
+            let mut cases: Vec<IntegerSwitchCase> = Vec::with_capacity(case_count);
+            for _ in 0..case_count {
+                let value = decode_constant(reader)?;
+                if cases.last().is_some_and(|previous| previous.value >= value) {
+                    return Err(KernelIrDecodeError::NonCanonical);
+                }
+                cases.push(IntegerSwitchCase {
+                    value,
+                    target: BlockId(reader.u32()?),
+                    arguments: decode_values(
+                        reader,
+                        "integer switch case arguments",
+                        MAX_VALUE_ARGUMENTS_V1,
+                    )?,
+                });
+            }
+            Terminator::IntegerSwitch {
+                selector,
+                cases,
+                default_target: BlockId(reader.u32()?),
+                default_arguments: decode_values(
+                    reader,
+                    "integer switch default arguments",
+                    MAX_VALUE_ARGUMENTS_V1,
+                )?,
+            }
+        }
         tag => {
             return Err(KernelIrDecodeError::UnknownTag {
                 kind: "terminator",

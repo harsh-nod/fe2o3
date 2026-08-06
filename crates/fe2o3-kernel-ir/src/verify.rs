@@ -31,6 +31,7 @@ pub enum DiagnosticCode {
     BranchArgumentCount,
     BranchArgumentType,
     DuplicateSwitchCase,
+    UnsortedSwitchCase,
     UndefinedValue,
     NonDominatingUse,
     UnknownCallee,
@@ -1291,6 +1292,66 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
                             location.clone(),
                             DiagnosticCode::DuplicateSwitchCase,
                             format!("switch case {} appears more than once", case.value),
+                        );
+                    }
+                    self.verify_edge(case.target, &case.arguments, location.clone());
+                }
+                self.verify_edge(*default_target, default_arguments, location);
+            }
+            Terminator::IntegerSwitch {
+                selector,
+                cases,
+                default_target,
+                default_arguments,
+            } => {
+                let selector_ty = self.ty(*selector).cloned();
+                self.expect_integer(*selector, location.clone());
+                let mut previous: Option<&crate::Constant> = None;
+                for case in cases {
+                    if let Some(previous) = previous {
+                        match previous.cmp(&case.value) {
+                            std::cmp::Ordering::Equal => self.emit(
+                                location.clone(),
+                                DiagnosticCode::DuplicateSwitchCase,
+                                format!(
+                                    "integer switch case {:?} appears more than once",
+                                    case.value
+                                ),
+                            ),
+                            std::cmp::Ordering::Greater => self.emit(
+                                location.clone(),
+                                DiagnosticCode::UnsortedSwitchCase,
+                                format!(
+                                    "integer switch case {:?} is not greater than previous case {previous:?}",
+                                    case.value
+                                ),
+                            ),
+                            std::cmp::Ordering::Less => {}
+                        }
+                    }
+                    previous = Some(&case.value);
+
+                    let case_ty = case.value.ty();
+                    if !case_ty.as_scalar().is_some_and(ScalarType::is_integer) {
+                        self.emit(
+                            location.clone(),
+                            DiagnosticCode::InvalidOperandType,
+                            format!(
+                                "integer switch case {:?} must have integer or index type",
+                                case.value
+                            ),
+                        );
+                    }
+                    if let Some(selector_ty) = selector_ty.as_ref()
+                        && selector_ty != &case_ty
+                    {
+                        self.emit(
+                            location.clone(),
+                            DiagnosticCode::TypeMismatch,
+                            format!(
+                                "integer switch case {:?} has type {case_ty:?}, expected selector type {selector_ty:?}",
+                                case.value
+                            ),
                         );
                     }
                     self.verify_edge(case.target, &case.arguments, location.clone());

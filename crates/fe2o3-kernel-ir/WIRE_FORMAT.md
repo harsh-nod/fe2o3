@@ -231,10 +231,20 @@ Ordering tags follow declaration order from `Relaxed=1` through
 | 3 | `Switch` | `ValueId selector, vec<SwitchCase> cases, BlockId default_target, vec<ValueId> default_arguments` |
 | 4 | `Return` | `vec<ValueId> values` |
 | 5 | `Unreachable` | none |
+| 6 (V2) | `IntegerSwitch` | `ValueId selector, vec<IntegerSwitchCase> cases, BlockId default_target, vec<ValueId> default_arguments` |
 
 `SwitchCase` is `u64 value || BlockId target || vec<ValueId> arguments`.
-Case order is preserved; uniqueness and selector compatibility are semantic
-verification concerns.
+This legacy V1 record remains unchanged. Its case order is preserved;
+uniqueness and selector compatibility are semantic verification concerns.
+
+`IntegerSwitchCase` is
+`Constant value || BlockId target || vec<ValueId> arguments`. Cases must be
+strictly increasing under `Constant` ordering. The V2 encoder rejects duplicate
+or out-of-order cases, and the V2 decoder rejects such bytes as noncanonical.
+Semantic verification additionally requires an integer or index selector,
+integer or index constants whose exact type matches the selector, valid case
+destinations, a valid mandatory default destination, and type-correct edge
+arguments.
 
 ## Target Capabilities
 
@@ -267,7 +277,7 @@ verification concerns.
 | Parameters or operations per block | 65536 each |
 | Results per operation | 65536 |
 | Any value-argument list | 65536 |
-| Switch cases | 65536 |
+| Legacy or typed integer switch cases | 65536 |
 | Nested pointer/slice depth | 64 |
 | Barrier address spaces | 5 |
 
@@ -285,5 +295,5 @@ Existing tags and field meanings must never be changed. V2 is additive: V1
 encoders reject V2-only model nodes, the V1 decoder rejects V2 headers, and the
 V2 decoder accepts both versions while enforcing the tags legal for the actual
 header version. The frozen V1 golden fixture is `tests/fixtures/full_v1.hex`;
-the independent V2 synchronization fixture is
-`tests/fixtures/g4_sync_v2.hex`.
+the independent V2 fixtures are `tests/fixtures/g4_sync_v2.hex` and
+`tests/fixtures/integer_switch_v2.hex`.
