@@ -406,7 +406,9 @@ fn join_values(
 fn discriminator(terminator: &Terminator) -> Option<ValueId> {
     match terminator {
         Terminator::ConditionalBranch { condition, .. } => Some(*condition),
-        Terminator::Switch { selector, .. } => Some(*selector),
+        Terminator::Switch { selector, .. } | Terminator::IntegerSwitch { selector, .. } => {
+            Some(*selector)
+        }
         Terminator::Branch { .. } | Terminator::Return { .. } | Terminator::Unreachable => None,
     }
 }
@@ -483,6 +485,16 @@ fn terminator_edges(terminator: &Terminator) -> Vec<(BlockId, Vec<ValueId>)> {
             (*else_target, else_arguments.clone()),
         ],
         Terminator::Switch {
+            cases,
+            default_target,
+            default_arguments,
+            ..
+        } => cases
+            .iter()
+            .map(|case| (case.target, case.arguments.clone()))
+            .chain([(*default_target, default_arguments.clone())])
+            .collect(),
+        Terminator::IntegerSwitch {
             cases,
             default_target,
             default_arguments,

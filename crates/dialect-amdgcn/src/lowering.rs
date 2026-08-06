@@ -771,7 +771,9 @@ impl<'a> FunctionLowerer<'a> {
             Terminator::Branch { .. } | Terminator::ConditionalBranch { .. } => Ok(()),
             Terminator::Return { values } if values.is_empty() => Ok(()),
             Terminator::Unreachable => Ok(()),
-            Terminator::Switch { .. } | Terminator::Return { .. } => Err(LoweringErrors::one(
+            Terminator::Switch { .. }
+            | Terminator::IntegerSwitch { .. }
+            | Terminator::Return { .. } => Err(LoweringErrors::one(
                 location,
                 LoweringDiagnosticCode::UnsupportedTerminator,
                 format!("G1 does not lower {terminator:?}"),
@@ -804,6 +806,7 @@ impl<'a> FunctionLowerer<'a> {
                 }
                 Terminator::Branch { .. }
                 | Terminator::Switch { .. }
+                | Terminator::IntegerSwitch { .. }
                 | Terminator::Return { .. }
                 | Terminator::Unreachable => {}
             }
