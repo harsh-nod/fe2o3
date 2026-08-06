@@ -4,6 +4,11 @@ This crate defines the bounded, canonical `DeviceDescriptorTableV1` byte
 schema. A table describes every fe2o3 kernel in one AMDHSA code object. It is
 portable build evidence, not launch authority.
 
+`DeviceDescriptorTableV2` is a versioned extension that embeds the complete
+canonical V1 bytes unchanged and appends one target-requirement record for
+every V1 kernel. V1 encoding, decoding, and digests remain byte-for-byte
+stable.
+
 Decoding proves only that bytes are a canonical, internally consistent V1
 table. The decoder treats every field as attacker-controlled. In particular,
 the compiler identity, source and executable-IR evidence, Rust type identity,
@@ -27,6 +32,51 @@ manifest, table, and executable entry can grant that selector authority.
 
 The table contains device information only. Host targets and host layouts will
 belong to a separate host-binding schema.
+
+## V2 target requirements
+
+V2 binds each kernel ID to declared static and maximum dynamic LDS bytes, one
+exact wavefront width, a cooperative-launch flag, closed synchronization bits,
+and closed atomic-scope bits. The synchronization bits cover wave and
+workgroup barriers plus workgroup, device, and system fences. Atomic bits cover
+workgroup, device, and system scopes. Unknown bits and tags are rejected.
+
+Construction and decoding derive `AmdTargetCapabilities` from the V1 target
+and reject an unsupported wave width, excessive maximum LDS allocation, or an
+unsupported atomic/fence scope. The duplicated LDS values must exactly match
+the V1 launch constraints. Requirements must also agree with the broad V1
+capability declarations: exact waves require AMD-wave, barriers require their
+subgroup or workgroup-memory capability, and atomics/fences require atomics.
+There must be exactly one canonically ordered requirements record per kernel;
+duplicates, missing records, and dangling kernel IDs fail closed.
+
+These checks compare declarations with a processor model. They do not observe
+hardware or prove executable behavior. Cooperative launch always requires a
+HIP device-attribute and occupancy check. System-scope atomics and fences also
+require evidence that the actual allocation and mapping are eligible. The host
+must still authenticate the descriptor against the loaded code object and the
+observed device before launch.
+
+The V2 fixed header is:
+
+```text
+offset  size  field
+0       8     magic = "FE2O3KD\0"
+8       2     version = 2
+10      2     flags = 0
+12      4     total byte length
+16      4     embedded canonical V1 byte length
+20      2     target-requirement count
+22      2     reserved = 0
+24      n     complete canonical V1 table
+```
+
+Each following 48-byte record contains `kernel_id[32]`, static and maximum
+dynamic LDS as `u32`, exact wave tag (`1` wave32, `2` wave64), cooperative tag
+(`0` or `1`), synchronization bits `u16`, atomic bits `u16`, and a zero
+`reserved:u16`. The embedded canonical code-object digest begins at the outer
+offset `CANONICAL_CODE_OBJECT_DIGEST_OFFSET_V2` (40). The complete V2 table
+shares the 256 KiB table bound.
 
 ## Canonical code-object digest
 

@@ -15,6 +15,7 @@ pub enum ValidationError {
     DanglingReference { field: &'static str },
     UnreachableRecord { field: &'static str },
     IdentityMismatch { field: &'static str },
+    TargetMismatch { field: &'static str },
     Overflow { field: &'static str },
     EncodedTableTooLarge { max: usize },
 }
@@ -36,6 +37,9 @@ impl fmt::Display for ValidationError {
             Self::DanglingReference { field } => write!(f, "dangling {field} reference"),
             Self::UnreachableRecord { field } => write!(f, "unreachable {field} record"),
             Self::IdentityMismatch { field } => write!(f, "{field} identity does not match"),
+            Self::TargetMismatch { field } => {
+                write!(f, "{field} is not supported by the declared target")
+            }
             Self::Overflow { field } => write!(f, "{field} overflows its representation"),
             Self::EncodedTableTooLarge { max } => {
                 write!(f, "encoded descriptor table exceeds {max} bytes")
