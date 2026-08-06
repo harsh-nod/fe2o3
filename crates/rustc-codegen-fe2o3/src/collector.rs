@@ -994,7 +994,11 @@ impl<'tcx> DeviceCollector<'tcx> {
 
             for block in mir.basic_blocks.iter() {
                 if let Some(terminator) = &block.terminator {
-                    self.process_terminator(&terminator.kind, &function.instance)?;
+                    self.process_terminator(
+                        &terminator.kind,
+                        &function.instance,
+                        function.is_kernel,
+                    )?;
                 }
             }
 
@@ -1033,10 +1037,14 @@ impl<'tcx> DeviceCollector<'tcx> {
         &mut self,
         terminator: &TerminatorKind<'tcx>,
         caller: &Instance<'tcx>,
+        is_kernel_root: bool,
     ) -> Result<(), CollectError> {
         match terminator {
             TerminatorKind::Call { func, unwind, .. } => {
-                if !matches!(unwind, UnwindAction::Unreachable) {
+                // `Continue` has no executable cleanup target to traverse. Its
+                // no-unwind obligation is discharged by walking the resolved
+                // direct callee below and rejecting panic/unwind MIR there.
+                if !matches!(unwind, UnwindAction::Continue | UnwindAction::Unreachable) {
                     return Err(self.reachable_error(
                         caller,
                         &format!(
@@ -1046,6 +1054,17 @@ impl<'tcx> DeviceCollector<'tcx> {
                     ));
                 }
                 self.process_call_operand(func, caller)
+            }
+            TerminatorKind::Assert { unwind, .. }
+                if is_kernel_root
+                    && matches!(unwind, UnwindAction::Continue | UnwindAction::Unreachable) =>
+            {
+                // Root-kernel assertions are preserved by MIR import and
+                // lowered to explicit kernel-IR failure edges. This G4
+                // traversal grants no claim that later verification or launch
+                // admission discharges them. Helper and FFI-export assertions
+                // remain outside the closed graph.
+                Ok(())
             }
             TerminatorKind::Goto { .. }
             | TerminatorKind::SwitchInt { .. }

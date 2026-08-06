@@ -658,6 +658,85 @@ fn unsupported_executable_mir_edges_fail_closed() {
 }
 
 #[test]
+#[ignore = "runs the configured rustc codegen backend"]
+fn ordinary_direct_call_continue_edges_are_closed_by_traversing_the_callee() {
+    let workspace = workspace();
+    let output = TestOutputDir::new(&workspace, "direct-call-continue");
+    let backend = build_backend(&workspace);
+    let source = r#"
+#[inline(never)]
+fn add_one(value: f32) -> f32 {
+    value + 1.0
+}
+
+#[unsafe(no_mangle)]
+pub fn fe2o3_kernel_direct_call_continue() {
+    let _ = add_one(7.0);
+}
+
+#[used]
+static __fe2o3_kernel_registration_direct_call_continue: (
+    u64, u16, u16, &'static str, &'static str, fn(),
+) = (
+    0x4e52_4b33_4f32_4546, 1, 1, "direct_call_continue",
+    "direct_call_continue", fe2o3_kernel_direct_call_continue,
+);
+"#;
+    let source_path = output.0.join("app.rs");
+    std::fs::write(&source_path, source).expect("write direct-call fixture");
+
+    let compile = run_backend(&source_path, &backend, &output.0, &[]);
+    let stderr = String::from_utf8_lossy(&compile.stderr);
+    assert!(
+        !stderr.contains("FE2O3-FFI-EDGE002")
+            && stderr.contains("add_one")
+            && stderr.contains("validated frontend record"),
+        "ordinary direct call was not closed by callee traversal\n{stderr}"
+    );
+    assert_no_ice("direct call Continue", &stderr);
+}
+
+#[test]
+#[ignore = "runs the configured rustc codegen backend"]
+fn root_kernel_bounds_checks_remain_in_the_modeled_ir() {
+    let workspace = workspace();
+    let output = TestOutputDir::new(&workspace, "root-bounds-check");
+    let backend = build_backend(&workspace);
+    let source = r#"
+#[inline(never)]
+fn runtime_index() -> usize {
+    0
+}
+
+#[unsafe(no_mangle)]
+pub fn fe2o3_kernel_root_bounds_check() {
+    let values = [1_u32, 2];
+    let _ = values[runtime_index()];
+}
+
+#[used]
+static __fe2o3_kernel_registration_root_bounds_check: (
+    u64, u16, u16, &'static str, &'static str, fn(),
+) = (
+    0x4e52_4b33_4f32_4546, 1, 1, "root_bounds_check",
+    "root_bounds_check", fe2o3_kernel_root_bounds_check,
+);
+"#;
+    let source_path = output.0.join("app.rs");
+    std::fs::write(&source_path, source).expect("write root-bounds-check fixture");
+
+    let compile = run_backend(&source_path, &backend, &output.0, &[]);
+    let stderr = String::from_utf8_lossy(&compile.stderr);
+    assert!(
+        !stderr.contains("FE2O3-FFI-EDGE001")
+            && !stderr.contains("FE2O3-FFI-EDGE002")
+            && stderr.contains("validated frontend record"),
+        "root bounds check did not reach the modeled IR path\n{stderr}"
+    );
+    assert_no_ice("root bounds check", &stderr);
+}
+
+#[test]
 #[ignore = "runs adversarial rustc codegen backend probes"]
 fn same_name_crate_versions_remain_unauthenticated_under_v1() {
     let workspace = workspace();

@@ -763,7 +763,10 @@ fn validate_export_body<'tcx>(
                     )));
                 }
                 TerminatorKind::Call { func, unwind, .. } => {
-                    if !matches!(unwind, UnwindAction::Unreachable) {
+                    // `Continue` propagates rather than naming an executable
+                    // cleanup block. The resolved callee is added to the
+                    // closed traversal below, where panic/unwind MIR fails.
+                    if !matches!(unwind, UnwindAction::Continue | UnwindAction::Unreachable) {
                         return Err(DeviceFfiError::coded(
                             "EDGE002",
                             format!(
