@@ -30,10 +30,20 @@
 //! diagnostics only, so later publication at the same names cannot change an earlier result.
 
 mod attempt;
+mod durable_link_publication;
 mod link_publication;
 
 pub use attempt::{AttemptCodecError, BuildAttempt, BuildInvocation, BuildSession};
 use attempt::{AttemptPhase, AttemptRegistry, MAX_ATTEMPT_BYTES, StartAttemptOutcome};
+pub use durable_link_publication::{
+    DurableJournalBoundaryV1, DurableJournalStageV1, DurableLinkPublicationError,
+    DurableLinkPublicationFaultPointV1, DurableLinkPublicationOptionsV1,
+    DurableLinkPublicationOutcomeV1, DurableLinkPublicationPlanV1, DurableLinkPublicationResultV1,
+    DurableLinkPublicationSnapshotV1, DurableLinkPublicationTransactionV1,
+    MAX_DURABLE_FINALIZED_ARTIFACT_BYTES, MAX_DURABLE_LINK_PUBLICATION_RECORD_BYTES,
+    publish_durable_link_v1, publish_durable_link_v1_with_options,
+    recover_durable_link_publication_v1,
+};
 pub use link_publication::{
     AtomicPublicationIdentityV1, CanonicalLinkRequestIdentityV1, FinalizationIdentityV1,
     FinalizedOutputIdentityV1, IdentityKindV1, InvalidationReasonV1, KernelSetIdentityV1,

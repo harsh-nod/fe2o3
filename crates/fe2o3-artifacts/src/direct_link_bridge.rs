@@ -2,9 +2,10 @@ use std::fmt;
 
 use fe2o3_artifact_transaction::{
     AtomicPublicationIdentityV1, BuildAttempt, CanonicalLinkRequestIdentityV1,
-    FinalizationIdentityV1, FinalizedOutputIdentityV1, KernelSetIdentityV1, LinkPublicationScopeV1,
-    LinkedOutputIdentityV1, PackageIdentityV1, PinnedWorkerIdentityV1, PublishedLinkArtifactV1,
-    TargetIdentityV1, ValidatedResponseIdentityV1,
+    DurableLinkPublicationPlanV1, FinalizationIdentityV1, FinalizedOutputIdentityV1,
+    KernelSetIdentityV1, LinkPublicationScopeV1, LinkedOutputIdentityV1, PackageIdentityV1,
+    PinnedWorkerIdentityV1, PublishedLinkArtifactV1, TargetIdentityV1,
+    ValidatedResponseIdentityV1,
 };
 use sha2::{Digest as _, Sha256};
 
@@ -374,6 +375,24 @@ pub struct ManifestClaimDirectLinkDurablePlanHandoffV1 {
 }
 
 impl ManifestClaimDirectLinkDurablePlanHandoffV1 {
+    /// Returns the complete expected chain consumed by the durable G5 filesystem adapter.
+    ///
+    /// Keeping this conversion on the opaque handoff prevents legacy bridges and
+    /// provenance-erasing diagnostic scope claims from entering the validated adapter path.
+    pub fn durable_publication_plan(&self) -> DurableLinkPublicationPlanV1 {
+        DurableLinkPublicationPlanV1::new(
+            self.attempt,
+            self._scope_claim,
+            self.request,
+            self.worker,
+            self.response,
+            self.linked_output,
+            self.finalization,
+            self.finalized_output,
+            self.publication,
+        )
+    }
+
     pub const fn attempt(&self) -> BuildAttempt {
         self.attempt
     }
