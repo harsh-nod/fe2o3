@@ -14,11 +14,23 @@ use reserved_fe2o3_symbols::{
 use sha2::{Digest, Sha256};
 
 mod module_handoff;
+mod module_handoff_v2;
+mod symbol_manifest;
 
 pub use module_handoff::{
     CompilerModuleHandoffErrorV1, CompilerModuleHandoffPartsV1, CompilerModuleHandoffV1,
     CompilerModuleIdentityV1, CompilerModuleKindV1, CompilerModulePayloadV1,
     MAX_COMPILER_MODULE_BYTES_V1, MAX_COMPILER_MODULE_HANDOFF_BYTES_V1,
+};
+pub use module_handoff_v2::{
+    CompilerModuleHandoffErrorV2, CompilerModuleHandoffIdentityV2, CompilerModuleHandoffPartsV2,
+    CompilerModuleHandoffV2, MAX_COMPILER_MODULE_HANDOFF_BYTES_V2,
+};
+pub use symbol_manifest::{
+    CompilerModuleSymbolManifestErrorV1, CompilerModuleSymbolManifestIdentityV1,
+    CompilerModuleSymbolManifestV1, CompilerModuleSymbolRoleV1,
+    MAX_COMPILER_MODULE_SYMBOL_BYTES_V1, MAX_COMPILER_MODULE_SYMBOL_MANIFEST_BYTES_V1,
+    MAX_COMPILER_MODULE_SYMBOLS_V1,
 };
 
 /// Maximum complete import/export contracts in one compiler observation.

@@ -27,6 +27,17 @@ authenticate its producer or grant compiler, link, load, or launch authority.
 opaque owned components, allowing finalization to reuse both without interpreting wire offsets or
 reconstructing envelope fields. The decomposition does not change that authority classification.
 
+`CompilerModuleSymbolManifestV1` adds a bounded, canonical classification of kernel entries,
+kernel descriptor symbols, device FFI exports, internal helpers, and unresolved external imports.
+Entries use a fixed role order followed by bytewise symbol order. Construction and strict decoding
+reject empty or NUL-bearing names, oversized fields, duplicate names, cross-role overlap,
+noncanonical order, truncation, and trailing bytes. `CompilerModuleHandoffV2` embeds the exact
+manifest identity and bytes in a separate wire domain, cross-checks its import and export roles
+against the FFI envelope, and commits the complete encoding under a V2 handoff identity. V1 bytes
+and decoding are unchanged. These values preserve compiler-supplied observations for an external
+authenticated transaction; their public constructors do not themselves authenticate compiler
+origin or confer execution authority.
+
 The finished envelope exposes only a borrowed opaque directional-symbol projection over its
 retained validated contracts. The projection preserves canonical order and cannot be constructed,
 mutated, or kept independently of its envelope. It exposes no complete contract list, provider

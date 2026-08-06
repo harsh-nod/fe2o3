@@ -57,7 +57,7 @@ impl CompilerModuleIdentityV1 {
         self.byte_len == bytes.len() as u64 && self.sha256 == actual
     }
 
-    fn calculate(bytes: &[u8]) -> Self {
+    pub(super) fn calculate(bytes: &[u8]) -> Self {
         Self {
             sha256: Sha256::digest(bytes).into(),
             byte_len: bytes.len() as u64,
@@ -116,6 +116,19 @@ impl fmt::Debug for CompilerModulePayloadV1 {
 }
 
 impl CompilerModulePayloadV1 {
+    pub(super) fn from_validated(
+        kind: CompilerModuleKindV1,
+        identity: CompilerModuleIdentityV1,
+        bytes: Vec<u8>,
+    ) -> Self {
+        debug_assert!(identity.matches(&bytes));
+        Self {
+            kind,
+            identity,
+            bytes,
+        }
+    }
+
     pub const fn kind(&self) -> CompilerModuleKindV1 {
         self.kind
     }
@@ -506,7 +519,7 @@ impl Error for CompilerModuleHandoffErrorV1 {
     }
 }
 
-fn validate_module_bytes(
+pub(super) fn validate_module_bytes(
     kind: CompilerModuleKindV1,
     bytes: &[u8],
 ) -> Result<(), CompilerModuleHandoffErrorV1> {
@@ -522,7 +535,9 @@ fn validate_module_bytes(
     Ok(())
 }
 
-fn decode_module_kind(value: u8) -> Result<CompilerModuleKindV1, CompilerModuleHandoffErrorV1> {
+pub(super) fn decode_module_kind(
+    value: u8,
+) -> Result<CompilerModuleKindV1, CompilerModuleHandoffErrorV1> {
     match value {
         1 => Ok(CompilerModuleKindV1::LlvmTextIr),
         2 => Ok(CompilerModuleKindV1::LlvmBitcode),
@@ -530,7 +545,7 @@ fn decode_module_kind(value: u8) -> Result<CompilerModuleKindV1, CompilerModuleH
     }
 }
 
-fn decode_code_object_version(
+pub(super) fn decode_code_object_version(
     value: u8,
 ) -> Result<CodeObjectVersion, CompilerModuleHandoffErrorV1> {
     match value {
@@ -541,7 +556,9 @@ fn decode_code_object_version(
     }
 }
 
-fn decode_envelope(bytes: &[u8]) -> Result<CompilerFfiEnvelopeV1, CompilerModuleHandoffErrorV1> {
+pub(super) fn decode_envelope(
+    bytes: &[u8],
+) -> Result<CompilerFfiEnvelopeV1, CompilerModuleHandoffErrorV1> {
     if bytes.len() > MAX_COMPILER_FFI_ENVELOPE_BYTES_V1 {
         return Err(CompilerModuleHandoffErrorV1::EnvelopeByteBoundExceeded);
     }
@@ -656,13 +673,13 @@ fn push_u32(bytes: &mut Vec<u8>, value: usize) -> Result<(), CompilerModuleHando
     Ok(())
 }
 
-struct Cursor<'a> {
+pub(super) struct Cursor<'a> {
     bytes: &'a [u8],
     position: usize,
 }
 
 impl<'a> Cursor<'a> {
-    const fn new(bytes: &'a [u8]) -> Self {
+    pub(super) const fn new(bytes: &'a [u8]) -> Self {
         Self { bytes, position: 0 }
     }
 
@@ -670,7 +687,7 @@ impl<'a> Cursor<'a> {
         self.bytes.len() - self.position
     }
 
-    fn take(&mut self, count: usize) -> Result<&'a [u8], CompilerModuleHandoffErrorV1> {
+    pub(super) fn take(&mut self, count: usize) -> Result<&'a [u8], CompilerModuleHandoffErrorV1> {
         let end = self
             .position
             .checked_add(count)
@@ -683,25 +700,27 @@ impl<'a> Cursor<'a> {
         Ok(value)
     }
 
-    fn fixed<const N: usize>(&mut self) -> Result<[u8; N], CompilerModuleHandoffErrorV1> {
+    pub(super) fn fixed<const N: usize>(
+        &mut self,
+    ) -> Result<[u8; N], CompilerModuleHandoffErrorV1> {
         self.take(N)?
             .try_into()
             .map_err(|_| CompilerModuleHandoffErrorV1::Truncated)
     }
 
-    fn byte(&mut self) -> Result<u8, CompilerModuleHandoffErrorV1> {
+    pub(super) fn byte(&mut self) -> Result<u8, CompilerModuleHandoffErrorV1> {
         Ok(self.take(1)?[0])
     }
 
-    fn u32_as_usize(&mut self) -> Result<usize, CompilerModuleHandoffErrorV1> {
+    pub(super) fn u32_as_usize(&mut self) -> Result<usize, CompilerModuleHandoffErrorV1> {
         Ok(u32::from_le_bytes(self.fixed::<4>()?) as usize)
     }
 
-    fn u64(&mut self) -> Result<u64, CompilerModuleHandoffErrorV1> {
+    pub(super) fn u64(&mut self) -> Result<u64, CompilerModuleHandoffErrorV1> {
         Ok(u64::from_le_bytes(self.fixed::<8>()?))
     }
 
-    fn text(&mut self, max: usize) -> Result<&'a str, CompilerModuleHandoffErrorV1> {
+    pub(super) fn text(&mut self, max: usize) -> Result<&'a str, CompilerModuleHandoffErrorV1> {
         let len = self.u32_as_usize()?;
         if len == 0 || len > max {
             return Err(CompilerModuleHandoffErrorV1::TextByteBoundExceeded);
@@ -709,7 +728,7 @@ impl<'a> Cursor<'a> {
         str::from_utf8(self.take(len)?).map_err(|_| CompilerModuleHandoffErrorV1::InvalidUtf8)
     }
 
-    fn finish(self) -> Result<(), CompilerModuleHandoffErrorV1> {
+    pub(super) fn finish(self) -> Result<(), CompilerModuleHandoffErrorV1> {
         if self.position == self.bytes.len() {
             Ok(())
         } else {
