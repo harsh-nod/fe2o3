@@ -16,6 +16,7 @@ extern crate rustc_span;
 
 mod amdgpu_llvm;
 mod collector;
+mod compiler_ffi_adapter;
 mod device_ffi;
 mod frontend_record_bridge;
 mod host_object;
@@ -306,6 +307,18 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                                 reason: error.to_string(),
                             },
                         )?;
+                        if self.config.verbose
+                            && let Some(envelope) = &collection.compiler_ffi_observation
+                        {
+                            let inspection = envelope.inspection();
+                            eprintln!(
+                                "[rustc-codegen-fe2o3] collected compiler FFI envelope {}: {} import(s), {} export(s), {} compiler-module definition requirement(s)",
+                                envelope.identity().to_hex(),
+                                inspection.import_count(),
+                                inspection.export_count(),
+                                inspection.requires_compiler_module_definition_count(),
+                            );
+                        }
                         let frontend_record =
                             frontend_record_bridge::extract_frontend_record_v1(tcx, &collection)
                                 .map_err(|error| amdgpu_llvm::EmitError::Preflight {

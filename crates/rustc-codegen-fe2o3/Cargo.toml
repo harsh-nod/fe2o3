@@ -13,6 +13,7 @@ dialect-amdgcn.workspace = true
 dialect-mir.workspace = true
 fe2o3-artifacts.workspace = true
 fe2o3-artifact-transaction.workspace = true
+fe2o3-compiler-ffi.workspace = true
 fe2o3-hsaco.workspace = true
 fe2o3-kernel-ir.workspace = true
 fe2o3-rustc-front.workspace = true

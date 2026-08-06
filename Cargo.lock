@@ -753,6 +753,7 @@ dependencies = [
  "dialect-mir",
  "fe2o3-artifact-transaction",
  "fe2o3-artifacts",
+ "fe2o3-compiler-ffi",
  "fe2o3-hsaco",
  "fe2o3-kernel-ir",
  "fe2o3-rustc-front",

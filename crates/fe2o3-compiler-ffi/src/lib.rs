@@ -3,7 +3,7 @@
 
 use std::{error::Error, fmt};
 
-use fe2o3_kernel_descriptor::{CodeObjectVersion, DeviceTargetV1};
+pub use fe2o3_kernel_descriptor::{CodeObjectVersion, DeviceTargetV1};
 use reserved_fe2o3_symbols::{
     DEVICE_FFI_DIRECTION_EXPORT_V1, DEVICE_FFI_DIRECTION_IMPORT_V1, DeviceFfiContractFieldsV1,
     DeviceFfiContractIdV1, DeviceFfiDirectionV1, DeviceFfiGrammarError,

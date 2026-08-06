@@ -109,9 +109,10 @@ pub(crate) struct ClosedDeviceFfiContract {
 
 /// Inert, locally authenticated compiler evidence after device graph traversal.
 ///
-/// This private value does not construct a G1 link request. A later bridge must
-/// bind external provider artifact identities and exact compiler-module and
-/// external-provider input kinds before any future protocol integration.
+/// This private value is copied into an authority-free
+/// `fe2o3-compiler-ffi` envelope after collection succeeds. That adapter does
+/// not construct a G1 request; later wiring must still bind external provider
+/// artifacts and an exact compiler module through a closure-aware protocol.
 /// Code-object version, effects, semantic identity, and expected link roles are
 /// declaration assertions, represented by [`AssertionOnly`], not derived facts.
 ///
@@ -1933,6 +1934,80 @@ mod tests {
                 && error.reason.contains("provider_b::same_logical_name"),
             "unexpected duplicate-provider diagnostic: {error}"
         );
+    }
+
+    #[test]
+    fn closed_graph_adapts_to_one_complete_neutral_envelope() {
+        let import = closed(
+            contract(
+                DeviceFfiDirection::Import,
+                "external_add",
+                "gfx942",
+                5,
+                "C(mut_ptr<global,u32>[size=8,align=8,as=global])->unit[size=0,align=1]",
+                "read_global",
+                0x11,
+            ),
+            "consumer",
+            "external_add",
+        );
+        let export = closed(
+            contract(
+                DeviceFfiDirection::Export,
+                "rust_helper",
+                "gfx942",
+                5,
+                "C(u32[size=4,align=4])->u32[size=4,align=4]",
+                "none",
+                0x22,
+            ),
+            "provider",
+            "rust_helper",
+        );
+        let closure = close_contracts(
+            vec![export, import.clone()],
+            &BTreeSet::from([import.contract.id]),
+        )
+        .unwrap();
+        let envelope = crate::compiler_ffi_adapter::adapt_closure_v1(&closure, |symbol| {
+            symbol == "rust_helper"
+        })
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(envelope.target().to_string(), "gfx942");
+        assert_eq!(
+            envelope.code_object_version(),
+            fe2o3_compiler_ffi::CodeObjectVersion::V5
+        );
+        assert_eq!(envelope.inspection().import_count(), 1);
+        assert_eq!(envelope.inspection().export_count(), 1);
+        assert_eq!(
+            envelope.identity().to_hex(),
+            "5c7007cfa776e4a5a5838cb2dd6e055b1bc4a67a05486a1df65fb408c6541165"
+        );
+        assert!(!envelope.grants_link_authority());
+
+        assert!(matches!(
+            crate::compiler_ffi_adapter::adapt_closure_v1(&closure, |_| false),
+            Err(
+                crate::compiler_ffi_adapter::CompilerFfiAdapterError::ExportMissingFromCollection(
+                    symbol
+                )
+            ) if symbol == "rust_helper"
+        ));
+
+        let mut malformed = closure;
+        malformed.exports[0].contract.semantic_identity_assertion =
+            AssertionOnly::new("AA".repeat(32));
+        assert!(matches!(
+            crate::compiler_ffi_adapter::adapt_closure_v1(&malformed, |_| true),
+            Err(
+                crate::compiler_ffi_adapter::CompilerFfiAdapterError::InvalidSemanticIdentity(
+                    symbol
+                )
+            ) if symbol == "rust_helper"
+        ));
     }
 
     #[test]

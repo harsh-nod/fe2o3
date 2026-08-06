@@ -220,6 +220,10 @@ fn upstream_registration_does_not_authenticate_a_metadata_marker() {
             && stderr.contains("assertion-only"),
         "missing stable unauthenticated-upstream diagnostic\n{stderr}"
     );
+    assert!(
+        !stderr.contains("collected compiler FFI envelope"),
+        "rejected upstream claims reached the compiler envelope adapter\n{stderr}"
+    );
     assert_no_ice("upstream marker", &stderr);
 }
 
@@ -243,7 +247,10 @@ fn locally_registered_import_survives_final_dynamic_revalidation() {
     assert!(
         stderr.contains("external device import:")
             && stderr.contains("local_external_add_v1")
-            && stderr.contains("validated local device FFI evidence: 1 imports, 0 exports"),
+            && stderr.contains("validated local device FFI evidence: 1 imports, 0 exports")
+            && stderr.contains("collected compiler FFI envelope")
+            && stderr
+                .contains("1 import(s), 0 export(s), 0 compiler-module definition requirement(s)"),
         "final closure omitted the locally authenticated import\n{stderr}"
     );
     assert!(

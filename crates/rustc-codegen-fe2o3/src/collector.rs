@@ -40,9 +40,11 @@ pub struct CollectedFunction<'tcx> {
 #[derive(Clone, Debug, Default)]
 pub struct CollectionResult<'tcx> {
     pub functions: Vec<CollectedFunction<'tcx>>,
-    // Inert until a later bridge binds provider artifacts and G1 input kinds.
+    // Private source state retained for compiler-envelope construction.
     #[allow(dead_code)]
     pub(crate) device_ffi: crate::device_ffi::DeviceFfiClosure,
+    /// Inert canonical observation produced from the successfully closed graph.
+    pub(crate) compiler_ffi_observation: Option<fe2o3_compiler_ffi::CompilerFfiEnvelopeV1>,
 }
 
 #[derive(Debug)]
@@ -1027,10 +1029,18 @@ impl<'tcx> DeviceCollector<'tcx> {
             );
         }
 
-        Ok(CollectionResult {
+        let mut collection = CollectionResult {
             functions: self.result,
             device_ffi,
-        })
+            compiler_ffi_observation: None,
+        };
+        collection.compiler_ffi_observation =
+            crate::compiler_ffi_adapter::adapt_collection_v1(&collection).map_err(|error| {
+                CollectError {
+                    message: format!("compiler FFI envelope construction failed: {error}"),
+                }
+            })?;
+        Ok(collection)
     }
 
     fn process_terminator(
