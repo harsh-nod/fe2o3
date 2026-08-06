@@ -186,7 +186,7 @@ static __fe2o3_device_ffi_registration_v1_{contract}: (
 pub fn worker_v2_kernel() {{}}
 
 #[used]
-static __fe2o3_kernel_registration_worker_v2: (
+static __fe2o3_kernel_registration_worker_v2_kernel: (
     u64, u16, u16, &'static str, &'static str, fn(),
 ) = (
     0x4e52_4b33_4f32_4546, 1, 1, "worker_v2_kernel",
