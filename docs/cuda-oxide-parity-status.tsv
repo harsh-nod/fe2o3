@@ -1,18 +1,18 @@
 schema_version	1
 cuda_oxide_commit	cd5ef3941d3347c7f6fcbfc78ef0fa7f4f179d87
 cuda_oxide_date	2026-08-05
-fe2o3_commit	5435164fe6c7ad692d845275b8288bafca53f40d
+fe2o3_commit	576cb56fa4979b125c10c4e03681972b0f8844ad
 kind	id	status
 normative	01	Missing
-normative	02	Missing
-normative	03	Missing
+normative	02	Partial
+normative	03	Partial
 normative	04	Missing
 normative	05	Missing
 normative	06	Missing
 normative	07	Missing
-normative	08	Missing
-normative	09	Missing
-normative	10	Missing
+normative	08	Partial
+normative	09	Partial
+normative	10	Partial
 normative	11	Missing
 normative	12	Partial
 normative	13	Missing
@@ -41,13 +41,13 @@ normative	35	Partial
 normative	36	Partial
 normative	37	Partial
 normative	38	Partial
-normative	39	Missing
+normative	39	Partial
 normative	40	Missing
 normative	41	Partial
 normative	42	Partial
 normative	43	Partial
-normative	44	Missing
-normative	45	Missing
+normative	44	Partial
+normative	45	Partial
 normative	46	Missing
 normative	47	Missing
 normative	48	Partial
@@ -55,28 +55,28 @@ normative	49	Partial
 normative	50	Missing
 normative	51	Missing
 normative	52	Missing
-normative	53	Missing
-normative	54	Missing
-normative	55	Missing
+normative	53	Partial
+normative	54	Partial
+normative	55	Partial
 normative	56	Missing
-normative	57	Missing
-normative	58	Missing
+normative	57	Partial
+normative	58	Partial
 normative	59	N/A
 normative	60	Partial
-normative	61	Missing
+normative	61	Partial
 normative	62	Missing
 normative	63	N/A
-normative	64	Missing
+normative	64	Partial
 normative	65	Missing
 normative	66	Missing
-normative	67	Missing
+normative	67	Partial
 normative	68	Missing
 normative	69	Missing
 normative	70	Missing
 normative	71	Missing
 normative	72	Missing
 normative	73	Missing
-normative	74	Missing
+normative	74	Partial
 normative	75	Missing
 normative	76	Missing
 normative	77	Missing
@@ -102,11 +102,11 @@ supplemental	S02	Partial
 supplemental	S03	Partial
 supplemental	S04	Partial
 supplemental	S05	Partial
-supplemental	S06	Missing
+supplemental	S06	Partial
 supplemental	S07	Missing
 supplemental	S08	Missing
 supplemental	S09	Missing
-supplemental	S10	Missing
+supplemental	S10	Partial
 supplemental	S11	Missing
 supplemental	S12	Missing
 supplemental	S13	Missing

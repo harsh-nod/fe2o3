@@ -18,18 +18,21 @@ partial, experimental, planned, and N/A rows. The supplemental audit also
 accounts for capabilities demonstrated elsewhere in the repository.
 
 The fe2o3 current-state column is based on commit
-`5435164fe6c7ad692d845275b8288bafca53f40d`.
+`576cb56fa4979b125c10c4e03681972b0f8844ad`.
 <!-- parity-status:baseline:end -->
 
 At that commit fe2o3 has a HIP runtime, explicit unsafe raw module and launch
-paths, versioned kernel registration, reachable MIR collection, a canonical
-target-neutral kernel IR and verifier, opt-in end-to-end verified-IR AMDGPU fill
-and exact three-slice vecadd paths, a default narrow elementwise `f32`/`f64`
+paths, versioned kernel registration, reachable MIR collection, bounded rustc
+frontend and general layout records, a canonical target-neutral kernel IR and
+verifier, reducible-CFG analysis, block-argument lowering, opt-in end-to-end
+verified-IR AMDGPU fill and exact three-slice vecadd paths, experimental LDS,
+fence, and workgroup-barrier lowering, a default narrow elementwise `f32`/`f64`
 LLVM/HSACO emitter, fail-closed formal affine memory/race obligations for
-modeled effects, artifact and proof schemas, generated `KernelMarkerV1` types,
-exact loaded module/function authority, host argument-alias admission, bounded
-HSACO inspection/finalization, event-backed asynchronous transfer lifetimes,
-transactional artifact publication, and Verus vecadd and fill harnesses.
+modeled effects, artifact and proof schemas, a multi-kernel bundle index,
+generated `KernelMarkerV1` types, exact loaded module/function authority, host
+argument-alias admission, bounded HSACO inspection/finalization, event-backed
+asynchronous transfer lifetimes, transactional artifact publication, bounded
+Verus driver records, and paired Verus elementwise harnesses.
 `#[kernel(typed)]` additionally connects one exact
 `pub fn(&[f32], &[f32], DisjointSlice<f32>)` profile to a backend-generated,
 canonical embedded artifact and safe load, prepare, synchronous launch, and
@@ -68,8 +71,8 @@ pass.
 <!-- parity-status:counts:start -->
 | Scope | Complete | Partial | Missing | N/A | Total |
 |:--|--:|--:|--:|--:|--:|
-| Normative | 0 | 21 | 61 | 12 | 94 |
-| Supplemental | 0 | 7 | 8 | 0 | 15 |
+| Normative | 0 | 38 | 44 | 12 | 94 |
+| Supplemental | 0 | 9 | 6 | 0 | 15 |
 <!-- parity-status:counts:end -->
 
 An IR type, schema, parser, or isolated proof is classified as **Partial** only
@@ -95,6 +98,13 @@ The detailed dependencies and exit criteria are in
 
 ## Evidence Behind Current Partial Status
 
+- Rows 02, 03, and 08-10: a rustc-private bounded extractor records fully
+  monomorphized scalar, pointer, array, tuple, struct, direct-enum, and
+  niche-enum layouts, including ABI representation, field offsets, variants,
+  valid ranges, alignment, stride, and padding. A target-neutral semantic type
+  model independently validates and canonicalizes the same shape families.
+  Neither path is connected to host packing, artifact identity, constants, or
+  general device codegen, so these rows remain Partial.
 - Rows 12, 17, 20, 24, and 25: the manifest ABI model and canonical
   target-neutral kernel IR represent part of the required type, control-flow,
   arithmetic, and cast semantics. Structured MIR lowering covers a tested
@@ -117,9 +127,17 @@ The detailed dependencies and exit criteria are in
   is still a trusted compiler contract, and the narrow emitters are not a
   general compiler or multi-kernel bundle.
 - Rows 36-38 and 41-43: one-source builds, AMDGPU LLVM/HSACO sidecars, diagnostic
-  dumps, bounded HSACO inspection, project-local cleanup, and the opt-in exact
-  fill and vecadd paths exist. The general pipeline, user-facing `inspect`
-  command, and external-project orchestration do not.
+  dumps, bounded HSACO inspection, a read-only `cargo fe2o3 inspect` command,
+  project-local cleanup, and the opt-in exact fill and vecadd paths exist. The
+  general pipeline and complete external-project orchestration do not.
+- Row 39: a bounded canonical multi-input native-link plan binds ordered input
+  digests, structured options, one concrete AMD target, an expected output, and
+  a complete provenance DAG. There is no COMGR adapter or executed device link.
+- Rows 44 and 45: `cargo fe2o3 sanitize` and `debug` discover ROCgdb and produce
+  normalized argument-vector plans. They do not execute the tool. Precise
+  memory mode improves fault location but does not detect data races,
+  uninitialized memory, or synchronization defects; source-debug metadata and
+  aggregate inspection remain unvalidated.
 - Rows 48, 49, and 60: one-dimensional `DisjointSlice` and `ThreadIndex` APIs,
   target-neutral launch-axis verification, and observed target/capability facts
   exist. Kernel IR derives formal affine regions, bounds, runtime-alias, and
@@ -127,6 +145,18 @@ The detailed dependencies and exit criteria are in
   unsupported effects. The exact generated vecadd adapter authenticates its
   fixed launch contract and maps three runtime allocations to it; general
   launch extents and parameter/allocation mappings remain unauthenticated.
+- Rows 53-55, 57, 58, 61, 64, and 67: canonical Kernel IR now models scoped
+  atomic operations, static and dynamic workgroup memory, scoped fences, and
+  convergence-bearing workgroup barriers. AMD lowering emits LDS, fences, and
+  workgroup barriers and has compiled into real `gfx1151` and `gfx942` code
+  objects. Target capability records and branded 3D invocation/wave-lane
+  witnesses preserve exact wave width. Atomic lowering, ordinary Rust frontend
+  integration, dynamic-LDS launch-byte admission, executable wave IDs, and GPU
+  semantic tests are still absent.
+- Row 74 and supplemental row S06: raw HIP declarations expose cooperative
+  launch and peer-access queries/operations, and V2 descriptors can declare
+  cooperative requirements. No safe high-level authority, occupancy proof,
+  topology/lifetime model, or observed-device admission consumes them yet.
 - Rows 78 and 79: for the exact public
   `fn(&[f32], &[f32], DisjointSlice<f32>)` profile, `#[kernel(typed)]`
   generates the public `<kernel>_gpu` module with `Kernel` and `Prepared`
@@ -167,6 +197,11 @@ The detailed dependencies and exit criteria are in
   proof binding/refinement is not authenticated into the artifact, general
   generated safe-launch integration is incomplete, and host-object embedding
   is limited to `x86_64-unknown-linux-gnu`.
+- Supplemental row S10: a standalone deterministic engine generates bounded
+  scalar kernel cases from exact seeds, evaluates wrapping `i32` CPU semantics,
+  encodes canonical reproducers, reports mismatches, and reduces them. It does
+  not invoke the compiler or GPU, so it is infrastructure rather than a
+  differential codegen result.
 
 ## Normative 94-row Matrix
 
@@ -175,8 +210,8 @@ The detailed dependencies and exit criteria are in
 | ID | cuda-oxide feature | Baseline | Class | fe2o3 now | AMD/fe2o3 acceptance target | Gate |
 |:--|:--|:--|:--|:--|:--|:--|
 | 01 | HMM / Unified Memory Management | Full | AMD-equivalent | Missing | Fine-grained host/device shared allocations with capability checks; reference captures retain host lifetime and fail when the platform cannot provide coherent access | G3, G6 |
-| 02 | Unified Struct ABI without `#[repr(C)]` | Full | Exact | Missing | Host and device use rustc-reported `repr(Rust)` layout, including padding and reordered fields | G2, G3 |
-| 03 | Dynamic Layout Matching | Full | Exact | Missing | Layout importer records field offset order, size, alignment, variants, and explicit padding; ABI tests compare host and device views | G2 |
+| 02 | Unified Struct ABI without `#[repr(C)]` | Full | Exact | Partial | Host and device use rustc-reported `repr(Rust)` layout, including padding and reordered fields | G2, G3 |
+| 03 | Dynamic Layout Matching | Full | Exact | Partial | Layout importer records field offset order, size, alignment, variants, and explicit padding; ABI tests compare host and device views | G2 |
 | 04 | Pointer Distance (`offset_from`) | Full | Exact | Missing | Signed/unsigned element and byte distances use pointee layout, provenance checks, and reject zero-sized pointees where Rust requires it | G2 |
 | 05 | Volatile Load/Store | Full | Exact | Missing | Volatile survives import, optimization, LLVM export, and AMD instruction selection; mem2reg never promotes it | G2 |
 | 06 | Bulk Copy (`copy_nonoverlapping`) | Full | Exact | Missing | Element counts scale by rustc layout, address spaces are preserved, overlap is an unsafe precondition, and LLVM/AMDGPU output is tested | G2 |
@@ -186,9 +221,9 @@ The detailed dependencies and exit criteria are in
 | ID | cuda-oxide feature | Baseline | Class | fe2o3 now | AMD/fe2o3 acceptance target | Gate |
 |:--|:--|:--|:--|:--|:--|:--|
 | 07 | Generics and Monomorphization | Full | Exact | Missing | Generic and const-generic kernels/helpers are collected at final use sites with deterministic symbols and cross-crate tests | G1, G2 |
-| 08 | Enums (`Option`, `Result`, custom) | Full | Exact | Missing | Direct and niche layouts, discriminants, payloads, matches, and supported enum constants follow rustc layout | G2 |
-| 09 | Struct Construction and Field Access | Full | Exact | Missing | Literals, projections, by-value parameters/returns, nested structs, and padding pass layout-differential tests | G2 |
-| 10 | Array Types (`[T; N]`) | Full | Exact | Missing | Construction, constants, nested arrays, runtime/constant indexing, mutation, and padded element stride work | G2 |
+| 08 | Enums (`Option`, `Result`, custom) | Full | Exact | Partial | Direct and niche layouts, discriminants, payloads, matches, and supported enum constants follow rustc layout | G2 |
+| 09 | Struct Construction and Field Access | Full | Exact | Partial | Literals, projections, by-value parameters/returns, nested structs, and padding pass layout-differential tests | G2 |
+| 10 | Array Types (`[T; N]`) | Full | Exact | Partial | Construction, constants, nested arrays, runtime/constant indexing, mutation, and padded element stride work | G2 |
 | 11 | `CuSimd<T, N>` SIMD Type | Full | Exact | Missing | Neutral `GpuSimd<T, N>` offers equivalent lane construction/access and lowers legally on AMD targets | G2, G4 |
 | 12 | ABI Scalarization | Full | Exact | Partial | Slices, references, closures, structs, and scalar fields are packed from the manifest and reconstructed exactly; no handwritten safe packing | G2, G3 |
 
@@ -247,13 +282,13 @@ The detailed dependencies and exit criteria are in
 | 36 | Unified Single-Source Compilation | Full | Exact | Partial | One Cargo command drives Verus when requested, normal host rustc, and device extraction from one executable source | G1, G3, G5 |
 | 37 | PTX Output | Full | AMD-equivalent | Partial | General pipeline emits target-correct HSACO for the declared AMD target set; elementwise recognition is not the default path | G1 |
 | 38 | NVVM IR Output | Full | AMD-equivalent | Partial | Emit inspectable, validated AMDGPU LLVM IR/bitcode with target and code-object policy recorded | G1, G6 |
-| 39 | LTOIR Linking | Full | AMD-equivalent | Missing | Link AMDGPU bitcode/relocatable device artifacts with deterministic provenance and option records | G6 |
+| 39 | LTOIR Linking | Full | AMD-equivalent | Partial | Link AMDGPU bitcode/relocatable device artifacts with deterministic provenance and option records | G6 |
 | 40 | Float Math Intrinsics (libdevice) | Full | AMD-equivalent | Missing | Rust float methods map to OCML/OCKL or LLVM intrinsics with target, precision, denormal, and contraction policy tests | G4 |
 | 41 | Pipeline Inspection | Full | Exact | Partial | `cargo fe2o3 pipeline` shows imported MIR, post-SSA IR, `gpu.*`, lowered LLVM IR, and artifact metadata | G1 |
 | 42 | PTX Inspect | Full | AMD-equivalent | Partial | `cargo fe2o3 inspect` prints AMDGPU LLVM, disassembly/metadata, or selected bundle payload without executing | G1, G3 |
 | 43 | Local Clean | Full | Exact | Partial | `cargo fe2o3 clean` safely removes only `target/fe2o3`; pinned cuda-oxide removes the full project target directory, and complete external-project build orchestration remains pending | G0 |
-| 44 | Compute Sanitizer Wrapper | Full | AMD-equivalent | Missing | `cargo fe2o3 sanitize` invokes supported ROCm GPU sanitizers/checkers and clearly reports unavailable tools or checks | G8 |
-| 45 | cuda-gdb Source Debugging | Full | AMD-equivalent | Missing | Debug build and `cargo fe2o3 debug` launch ROCgdb with kernel source locations | G8 |
+| 44 | Compute Sanitizer Wrapper | Full | AMD-equivalent | Partial | `cargo fe2o3 sanitize` invokes supported ROCm GPU sanitizers/checkers and clearly reports unavailable tools or checks | G8 |
+| 45 | cuda-gdb Source Debugging | Full | AMD-equivalent | Partial | Debug build and `cargo fe2o3 debug` launch ROCgdb with kernel source locations | G8 |
 | 46 | cuda-gdb Local / Argument Inspection | Partial | AMD-equivalent | Missing | Match the pinned baseline's scalar, pointer/reference, struct, tuple, and array inspection scope in ROCgdb, with known gaps listed | G8 |
 | 47 | `ptx_asm!` Macro | Partial | AMD-equivalent | Missing | `amdgpu_asm!` supports typed operands, outputs, clobbers, side-effect/convergence options, and baseline-equivalent limits where LLVM permits | G6 |
 
@@ -271,17 +306,17 @@ The detailed dependencies and exit criteria are in
 
 | ID | cuda-oxide feature | Baseline | Class | fe2o3 now | AMD/fe2o3 acceptance target | Gate |
 |:--|:--|:--|:--|:--|:--|:--|
-| 53 | Device-Scope Atomics | Full | Exact | Missing | Integer and supported float RMW operations implement all Rust orderings at device/agent scope | G4, G7 |
-| 54 | Block-Scope Atomics | Full | Exact | Missing | Workgroup-scope atomics use the correct AMD synchronization scope and reject unsupported operations/types | G4, G7 |
-| 55 | System-Scope Atomics | Full | Exact | Missing | System-scope atomics operate only on eligible coherent allocations and preserve CPU/GPU ordering | G4, G6, G7 |
+| 53 | Device-Scope Atomics | Full | Exact | Partial | Integer and supported float RMW operations implement all Rust orderings at device/agent scope | G4, G7 |
+| 54 | Block-Scope Atomics | Full | Exact | Partial | Workgroup-scope atomics use the correct AMD synchronization scope and reject unsupported operations/types | G4, G7 |
+| 55 | System-Scope Atomics | Full | Exact | Partial | System-scope atomics operate only on eligible coherent allocations and preserve CPU/GPU ordering | G4, G6, G7 |
 | 56 | `core::sync::atomic` Support | Full | Exact | Missing | Standard Rust atomics lower with documented default scope and complete ordering tests | G4 |
 
 ### Runtime Library: Shared Memory
 
 | ID | cuda-oxide feature | Baseline | Class | fe2o3 now | AMD/fe2o3 acceptance target | Gate |
 |:--|:--|:--|:--|:--|:--|:--|
-| 57 | Static Shared Memory | Full | Exact | Missing | Const-sized aligned workgroup arrays lower to LDS with per-kernel accounting and initialization tracking | G4, G7 |
-| 58 | Dynamic Shared Memory | Full | Exact | Missing | Launch-sized aligned LDS views are bounded by `PreparedLaunch` resource metadata | G3, G4, G7 |
+| 57 | Static Shared Memory | Full | Exact | Partial | Const-sized aligned workgroup arrays lower to LDS with per-kernel accounting and initialization tracking | G4, G7 |
+| 58 | Dynamic Shared Memory | Full | Exact | Partial | Launch-sized aligned LDS views are bounded by `PreparedLaunch` resource metadata | G3, G4, G7 |
 | 59 | Distributed Shared Memory (DSMEM) | Full | N/A | N/A | No cross-workgroup LDS address mapping is promised; targets without a proven semantic equivalent reject the capability | G6 |
 
 ### Runtime Library: Thread and Synchronization
@@ -289,10 +324,10 @@ The detailed dependencies and exit criteria are in
 | ID | cuda-oxide feature | Baseline | Class | fe2o3 now | AMD/fe2o3 acceptance target | Gate |
 |:--|:--|:--|:--|:--|:--|:--|
 | 60 | Thread/Block/Grid Intrinsics | Full | Exact | Partial | Complete 3D workitem/workgroup IDs and dimensions plus branded linear/tiled indexes, with rank validation and runtime 2D row width bound to the indexed slice | G1, G4, G5 |
-| 61 | Block Synchronization | Full | Exact | Missing | Workgroup barrier lowers correctly and carries convergence, scope, and memory semantics through IR | G4, G7 |
+| 61 | Block Synchronization | Full | Exact | Partial | Workgroup barrier lowers correctly and carries convergence, scope, and memory semantics through IR | G4, G7 |
 | 62 | Async Barriers (mbarrier) | Full | AMD-equivalent | Missing | Target-gated AMD split/named barrier abstraction exposes only semantics supported by the selected architecture | G6, G7 |
 | 63 | Cluster Synchronization | Full | N/A | N/A | No CUDA thread-block-cluster promise; reject cluster-only kernels unless a future AMD target adds a modeled equivalent | G6 |
-| 64 | Fence Operations | Full | AMD-equivalent | Missing | Provide scoped AMD fences and supported wait/sleep operations; CUDA proxy-only semantics are omitted or rejected | G4, G6 |
+| 64 | Fence Operations | Full | AMD-equivalent | Partial | Provide scoped AMD fences and supported wait/sleep operations; CUDA proxy-only semantics are omitted or rejected | G4, G6 |
 
 ### Runtime Library: Warp and Cooperative Groups
 
@@ -300,14 +335,14 @@ The detailed dependencies and exit criteria are in
 |:--|:--|:--|:--|:--|:--|:--|
 | 65 | Warp Shuffle Operations | Full | AMD-equivalent | Missing | Wave shuffle/permutation operations support declared types and explicit wave32/wave64 width/active-lane contracts | G4, G7 |
 | 66 | Warp Vote Operations | Full | AMD-equivalent | Missing | Wave all/any/ballot return width-correct masks and define inactive-lane behavior | G4, G7 |
-| 67 | Lane/Warp ID | Full | AMD-equivalent | Missing | `lane_id` and wave ID use AMD semantics; no fixed width of 32 is assumed by portable code | G4 |
+| 67 | Lane/Warp ID | Full | AMD-equivalent | Partial | `lane_id` and wave ID use AMD semantics; no fixed width of 32 is assumed by portable code | G4 |
 | 68 | Typed Group Handles | Full | AMD-equivalent | Missing | Provide `Grid`, `Workgroup`, `SubgroupTile<N>`, and active-lane groups; unsupported CUDA `Cluster` behavior is unavailable | G4, G6 |
 | 69 | Group Universal API | Full | Exact | Missing | Every supported group has typed `size`, `thread_rank`, and legal synchronization behavior | G4 |
 | 70 | Warp Tile Partitioning | Full | AMD-equivalent | Missing | Wave tiles are valid only for supported divisors and wave widths, with active-lane and convergence contracts | G4, G7 |
 | 71 | Warp Collectives | Full | AMD-equivalent | Missing | Ballot, vote, shuffle, match, and active-mask operations cover baseline types with wave-width-correct semantics | G4, G7 |
 | 72 | Warp Reductions / Scans | Full | AMD-equivalent | Missing | Wave reductions/scans cover the pinned operation/type matrix across supported widths | G4, G7 |
 | 73 | Block Reductions / Scans | Full | Exact | Missing | Workgroup collectives use LDS and barriers, support the baseline operation/type matrix, and work across wave widths | G4, G7 |
-| 74 | Cooperative Kernel Launch | Full | AMD-equivalent | Missing | HIP cooperative launch and grid synchronization are capability-checked, occupancy-safe, and encoded in the launch contract | G6, G7 |
+| 74 | Cooperative Kernel Launch | Full | AMD-equivalent | Partial | HIP cooperative launch and grid synchronization are capability-checked, occupancy-safe, and encoded in the launch contract | G6, G7 |
 
 ### Runtime Library: Debug
 
@@ -362,18 +397,18 @@ for a credible parity release even though they are not separate appendix rows.
 | S03 | Typed async `DeviceOperation` model | Exact | Partial | Lazy borrowed/owned operations, stream policy, events, cancellation-safe reclamation, and composition | G3 |
 | S04 | `DeviceCopy` derive and manifest-gated device types | Exact | Partial | Host byte-transfer types have compile-pass/fail bit-validity and padding checks; safe device interpretation additionally requires manifest-derived type/ABI identity, provenance, and capabilities | G3 |
 | S05 | Pinned host buffers and events | Exact | Partial | RAII pinned memory, explicit unsafe async-copy lifetimes, timing, and ordering events | G3 |
-| S06 | VMM, peer access, and multi-device memory | AMD-equivalent | Missing | HIP/HSA-supported virtual/peer memory has context, lifetime, topology, and capability checks | G6 |
+| S06 | VMM, peer access, and multi-device memory | AMD-equivalent | Partial | HIP/HSA-supported virtual/peer memory has context, lifetime, topology, and capability checks | G6 |
 | S07 | Device constants, statics, and relocations | Exact | Missing | Layout-aware constants/globals preserve supported pointer relocations and reject unsupported provenance | G2, G6 |
 | S08 | Kernel families and compile-time policies | Exact | Missing | Tuned monomorphized variants share a typed logical interface and carry policy identity in the bundle | G2, G3 |
 | S09 | Source debug metadata | Exact | Missing | Spans, functions, arguments, locals, and aggregate layouts survive supported optimization/debug modes | G2, G8 |
-| S10 | Differential MIR/codegen fuzzer | Exact | Missing | Generated accepted programs compare CPU reference behavior and AMD execution; reducer preserves failures | G8 |
+| S10 | Differential MIR/codegen fuzzer | Exact | Partial | Generated accepted programs compare CPU reference behavior and AMD execution; reducer preserves failures | G8 |
 | S11 | Half/BF16 types and conversions | Exact | Missing | Scalar and packed formats, conversions, arithmetic, constants, ABI, and edge cases are tested | G2, G4 |
 | S12 | Tensor/matrix instructions | AMD-equivalent | Missing | Capability-gated MFMA/WMMA abstractions cover supported shapes/types with ISA and numerical tests | G6 |
 | S13 | LDS swizzles and matrix load/store helpers | AMD-equivalent | Missing | AMD-native layouts expose bank/alignment contracts and compose with proof-aware views | G6, G7 |
 | S14 | Target auto-detection and override | AMD-equivalent | Partial | Detect AMD architecture and features, accept explicit override, and record the resolved target in every payload | G0, G3 |
 | S15 | Compile-fail safety suite | Exact | Partial | UI tests cover launch brands, rank, index spaces, witness transfer, async lifetime, barrier lifecycle, and unsafe transitions | G0, G3, G5 |
 
-The current Verus lane has two positive harnesses and twelve
+The current Verus lane has three positive harnesses and fifteen
 expected-rejection mutation fixtures. The production vecadd and Verus expand
 the same control/index/guarded-memory/write body, but use different arithmetic
 adapters. The Verus adapter is a total model operation; it does not refine

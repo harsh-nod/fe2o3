@@ -36,15 +36,18 @@ boundaries:
 - Device surface: `fe2o3-device`, `fe2o3-macros`,
   `reserved-fe2o3-symbols`, and `fe2o3-contracts`.
 - Compiler: `rustc-codegen-fe2o3`, `fe2o3-kernel-ir`,
-  `fe2o3-kernel-analysis`, `dialect-mir`, and `dialect-amdgcn`.
+  `fe2o3-kernel-analysis`, `fe2o3-rustc-front`, `dialect-mir`, and
+  `dialect-amdgcn`.
 - Artifact model: `fe2o3-artifacts`, `fe2o3-kernel-descriptor`, `fe2o3-hsaco`,
   `fe2o3-hsaco-finalize`, and `fe2o3-artifact-transaction`.
 - Runtime: `fe2o3-core`, `fe2o3-completion`, `fe2o3-host`, and
   `fe2o3-hip-sys`.
 - Build coordination: `cargo-fe2o3`, `fe2o3-rustc-invocation`, and the
   `fe2o3-rustc-wrapper` binary.
-- Verification spike: `examples/verus_vecadd` plus the proof identities and
-  records in `fe2o3-contracts` and `fe2o3-artifacts`.
+- Verification: `fe2o3-contracts`, the bounded `fe2o3-verifier` driver model,
+  `examples/verus_vecadd`, and proof records in `fe2o3-artifacts`.
+- Test and release evidence: `fe2o3-differential`, the Cargo inspection/tool
+  commands, and `scripts/parity-evidence.sh`.
 
 Safe buffer element types and their limits are documented in the
 [device memory safety contract](docs/device-memory-safety.md). `DeviceCopy`
@@ -124,9 +127,11 @@ Safe ownership of resources used by asynchronous copies is documented in
 - `DeviceCopy` and its derive macro restrict safe byte transfers to supported
   layouts and have compile-pass/compile-fail coverage.
 
-The recorded hardware run used a `gfx1201` AMD Radeon AI PRO R9700 with TheRock
-ROCm `7.13.0a20260509`. The smoke suite generated HSACO, launched every current
-example, copied results back, and compared them with CPU results.
+Hardware smoke coverage includes a local `gfx1151` Radeon 8060S and a remote
+`gfx942` MI300X. On both targets the suite generated and inspected real HSACO,
+launched every runnable example, copied results back, and compared them with
+CPU results. These runs cover the current narrow executable paths; they do not
+turn the foundations below into end-to-end features.
 
 ### Implemented foundations
 
@@ -145,12 +150,36 @@ example, copied results back, and compared them with CPU results.
   granting authority. Even a complete result is conditional on an explicit
   launch extent; the extent and mappings from formal parameters to runtime
   allocations remain unauthenticated and grant no proof or launch authority.
+- A bounded standalone rustc-front record now models canonical collected
+  function signatures, source locations, and CFG edges. Reducible-CFG analysis
+  and block-argument-to-LLVM-phi lowering are implemented and tested, including
+  loop-shaped Kernel IR. The record is not yet emitted by rustc or consumed by
+  the production backend, and general Rust MIR operations are still absent.
+- The G2 type foundation records validated semantic scalars, pointers,
+  references, slices, tuples, arrays, structs, direct and niche enums, padding,
+  and rustc ABI facts. A bounded rustc-private extractor obtains those facts
+  for fully monomorphized types. It is not connected to artifact identity,
+  generated host packing, constant extraction, or general device lowering.
+  Dedicated fixtures make the current generic, const-generic, aggregate,
+  integer-match, loop, and cross-crate collection/lowering frontiers explicit.
 - Versioned artifact manifests, ABI layouts, launch contracts, bounded
   containers, payload digests, native-kernel selection, and proof records have
   canonical encoders, decoders, and adversarial tests.
+- G3 adds a canonical multi-kernel bundle index, validated compiler-generated
+  argument-packing plans, and explicit asynchronous operation lifecycle
+  records. These are bounded data and typestate foundations; no general
+  manifest-to-host-code generator or composable cancellation API consumes all
+  of them yet.
 - Canonical AMD target IDs, HIP-observed device properties, HSACO metadata and
   descriptor inspection, kernel-descriptor binding, and bounded post-link
   finalization are implemented as separate validation layers.
+- The G4 model includes capability tables for supported AMD targets, branded
+  3D invocation and wave-lane witnesses, canonical Kernel IR for static and
+  dynamic LDS, scoped atomics, fences, and convergence-bearing workgroup
+  barriers. The experimental AMD lowering emits LDS, fences, and workgroup
+  barriers and has produced real `gfx1151` and `gfx942` code objects. Scoped
+  atomic lowering, dynamic-LDS launch-byte plumbing, wave collectives, and
+  general source-to-IR integration remain fail-closed gaps.
 - `fe2o3-host` has a `PreparedLaunch<K>` geometry/resource checker and a
   `LoadedKernel<K>` authority that owns the exact HIP module and function and
   can bind only matching prepared launches. Argument admission reserves
@@ -176,13 +205,31 @@ example, copied results back, and compared them with CPU results.
   under documented assumptions. The exact control, index, guarded memory
   access, and write body of the production `f32` vecadd kernel is mechanically
   shared with Verus through explicit thread and arithmetic adapters. Two
-  positive harnesses and twelve expected-rejection mutations run in the
+  three positive harnesses and fifteen expected-rejection mutations run in the
   required proof lane; the three real-body mutations additionally require one
   exact primary diagnostic and failed source clause. Verus uses a total model
   arithmetic adapter and does not prove that production IEEE `f32` addition,
   compiler output, HSACO, or GPU execution refines that model. Proof-record
   matching rejects incomplete or mismatched identities, but the records remain
   synthetic evidence rather than authenticated compiler-refinement evidence.
+- The G5 contracts now describe bounded independent-thread reads and writes,
+  allocation provenance, bounds, injective writes, and deterministic proof
+  obligations. Paired copy, gather, and affine elementwise bodies have positive
+  and negative Verus harnesses. `fe2o3-verifier` canonicalizes bounded tool,
+  policy, invocation, and result records, but deliberately has no process
+  executor, Verus adapter, binary measurement, proof-record conversion, or
+  runtime authority.
+- G6/G7 foundations include canonical multi-input AMDGPU link plans, raw HIP
+  cooperative-launch and peer-access bindings, and a V2 kernel descriptor that
+  binds wave width, LDS limits, cooperative launch, synchronization, and atomic
+  scope requirements to target capabilities. There is no COMGR link executor,
+  high-level cooperative/peer safety layer, occupancy admission, or observed
+  device binding for those records yet.
+- G8 adds a deterministic bounded kernel-case generator, wrapping `i32` CPU
+  evaluator, canonical codec, mismatch reporting, and reducer. `cargo fe2o3
+  inspect` performs bounded read-only decoding. `sanitize` and `debug` produce
+  normalized ROCgdb plans only; they do not execute ROCgdb, and precise-memory
+  mode is not a race, initialization, or synchronization checker.
 
 ### Not yet integrated
 
@@ -220,9 +267,12 @@ example, copied results back, and compared them with CPU results.
   and sealed backend primitives are composed with the validated invocation.
   Rustc-descendant descriptor lifetime, dynamic loading, transitive shared
   libraries, and non-Linux execution remain unresolved.
-- General Rust language support, LDS, atomics and barriers in emitted kernels,
-  wave operations, device linking, sanitizer/debugger integration, and
-  multi-device memory remain parity work.
+- General Rust language support, frontend-to-layout integration, scoped atomic
+  lowering, wave operations and collectives, COMGR device linking, safe
+  cooperative/peer runtime APIs, executable sanitizer/debugger integration,
+  GPU-backed differential testing, and authenticated Verus refinement remain
+  parity work. LDS, fences, and barriers exist only in the experimental Kernel
+  IR path and are not yet available from ordinary Rust kernels.
 
 The current comparison with cuda-oxide is tracked in the
 [parity matrix](docs/cuda-oxide-parity-matrix.md). fe2o3 is not yet at parity.
@@ -239,6 +289,17 @@ Run diagnostics:
 ```bash
 cargo run -p cargo-fe2o3 -- doctor
 ```
+
+Inspect a bounded fe2o3 artifact without loading it, or print a normalized
+ROCgdb execution plan:
+
+```bash
+cargo run -p cargo-fe2o3 -- inspect target/fe2o3/kernel.hsaco
+cargo run -p cargo-fe2o3 -- sanitize -- ./target/debug/application
+cargo run -p cargo-fe2o3 -- debug -- ./target/debug/application
+```
+
+The sanitizer and debugger commands are plan-only foundations in this release.
 
 Preview or remove only fe2o3-generated artifacts under `target/fe2o3`:
 
@@ -289,6 +350,17 @@ FE2O3_ALLOW_GPU_SMOKE=1 FE2O3_TARGET=gfx1151 scripts/ci-local.sh hardware-smoke
 ```
 
 The ROCm and hardware lanes require a matching AMD GPU and ROCm installation.
+The release-evidence collector requires a complete archive-relative row-link
+map and records Git, rustc, LLVM, ROCm, driver, target, and stable lane
+identities without changing matrix status:
+
+```bash
+scripts/parity-evidence.sh collect \
+  --rows rows.tsv --hardware-lane mi300x-gfx942-release > evidence.tsv
+scripts/parity-evidence.sh validate evidence.tsv
+scripts/tests/parity-evidence.sh
+```
+
 To build or run one package directly:
 
 ```bash
