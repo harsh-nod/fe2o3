@@ -18,6 +18,7 @@ mod kernel_ir_lowering;
 mod mir_import;
 mod record_lowering;
 mod trusted_device_items;
+mod typed_artifact;
 
 use fe2o3_artifact_transaction as artifact_transaction;
 use rustc_codegen_ssa::traits::CodegenBackend;
@@ -33,8 +34,18 @@ use std::any::Any;
 use std::env;
 use std::ffi::OsStr;
 use std::fmt;
+use std::fs::{self, File};
+use std::io::Read;
+use std::os::unix::fs::{DirBuilderExt, MetadataExt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+const MAX_FINALIZED_LLVM_IR_BYTES: usize = 16 * 1024 * 1024;
+const MAX_FINALIZED_HSACO_BYTES: usize = 4 * 1024 * 1024;
+const TEMP_DIRECTORY_ATTEMPTS: usize = 64;
+static NEXT_HOST_OBJECT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
 pub const TARGET_ENV: &str = "FE2O3_TARGET";
 pub const BACKEND_ENV: &str = "FE2O3_BACKEND";
@@ -48,11 +59,82 @@ pub const HSACO_DIR_ENV: &str = "FE2O3_HSACO_DIR";
 pub struct Fe2o3CodegenBackend {
     config: BackendConfig,
     llvm_backend: Box<dyn CodegenBackend>,
+    pending_host_objects: Mutex<Vec<TemporaryHostObjects>>,
 }
 
 struct OngoingFe2o3Codegen {
     llvm_codegen: Box<dyn Any>,
     host_objects: host_object::GeneratedHostObjects,
+    temporary_host_objects: TemporaryHostObjects,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct TypedKernelRootV1 {
+    logical_name: String,
+    export_name: String,
+    profile: collector::TypedKernelProfile,
+}
+
+#[derive(Debug, Default)]
+struct TemporaryHostObjects {
+    entries: Vec<TemporaryHostObject>,
+}
+
+#[derive(Debug)]
+struct TemporaryHostObject {
+    directory: PathBuf,
+    object: PathBuf,
+}
+
+impl TemporaryHostObjects {
+    fn reserve(&mut self, parent: &Path, artifact_id: &str) -> Result<PathBuf, TypedVerticalError> {
+        let artifact_prefix = artifact_id
+            .get(..16)
+            .ok_or_else(|| TypedVerticalError::InvalidArtifactId(artifact_id.to_owned()))?;
+        for _ in 0..TEMP_DIRECTORY_ATTEMPTS {
+            let sequence = NEXT_HOST_OBJECT_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+            let directory = parent.join(format!(
+                ".fe2o3-host-object-{}-{sequence}-{}",
+                std::process::id(),
+                artifact_prefix
+            ));
+            let mut builder = fs::DirBuilder::new();
+            builder.mode(0o700);
+            match builder.create(&directory) {
+                Ok(()) => {
+                    let object = directory.join("artifact.o");
+                    self.entries.push(TemporaryHostObject {
+                        directory,
+                        object: object.clone(),
+                    });
+                    return Ok(object);
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(source) => {
+                    return Err(TypedVerticalError::TemporaryDirectory {
+                        path: directory,
+                        source,
+                    });
+                }
+            }
+        }
+        Err(TypedVerticalError::TemporaryDirectoryExhausted(
+            parent.to_path_buf(),
+        ))
+    }
+
+    fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
+impl Drop for TemporaryHostObjects {
+    fn drop(&mut self) {
+        for entry in self.entries.iter().rev() {
+            let _ = fs::remove_file(&entry.object);
+            let _ = fs::remove_dir(&entry.directory);
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -186,9 +268,12 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                 );
             }
 
+            let mut generated_host_objects = host_object::GeneratedHostObjects::default();
+            let mut temporary_host_objects = TemporaryHostObjects::default();
             if kernel_count > 0 {
                 let output_dir = output_dir.expect("kernel output was required above");
                 let codegen_pipeline = self.config.codegen_pipeline.clone();
+                let mut typed_roots = Vec::new();
                 match amdgpu_llvm::emit_collection_after_preflight(
                     &producer,
                     output_dir,
@@ -204,6 +289,11 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                                 reason: error.to_string(),
                             }
                         })?;
+                        typed_roots = typed_roots_from_collection(&collection.functions).map_err(
+                            |error| amdgpu_llvm::EmitError::Preflight {
+                                reason: error.to_string(),
+                            },
+                        )?;
                         collector::dump_device_functions(tcx, &collection.functions);
                         let mir_module = mir_import::import_collection(tcx, &collection);
                         match codegen_pipeline.resolve()? {
@@ -264,7 +354,22 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                     },
                 ) {
                     Ok(artifacts) => {
-                        for artifact in artifacts {
+                        match generate_typed_host_objects(
+                            &typed_roots,
+                            &artifacts,
+                            output_dir,
+                            &self.config.target,
+                            tcx.sess.target.llvm_target.as_ref(),
+                        ) {
+                            Ok((objects, temporary)) => {
+                                generated_host_objects = objects;
+                                temporary_host_objects = temporary;
+                            }
+                            Err(error) => tcx.dcx().fatal(format!(
+                                "[rustc-codegen-fe2o3] typed artifact binding failed: {error}"
+                            )),
+                        }
+                        for artifact in &artifacts {
                             eprintln!(
                                 "[rustc-codegen-fe2o3] emitted {}: LLVM IR {}, HSACO {}",
                                 artifact.kernel_name,
@@ -298,7 +403,8 @@ impl CodegenBackend for Fe2o3CodegenBackend {
             let llvm_codegen = self.llvm_backend.codegen_crate(tcx, crate_info);
             Box::new(OngoingFe2o3Codegen {
                 llvm_codegen,
-                host_objects: host_object::GeneratedHostObjects::default(),
+                host_objects: generated_host_objects,
+                temporary_host_objects,
             }) as Box<dyn Any>
         })
     }
@@ -315,16 +421,25 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                 "[rustc-codegen-fe2o3] internal error: ongoing codegen state had the wrong type",
             ),
         };
+        let OngoingFe2o3Codegen {
+            llvm_codegen,
+            host_objects,
+            temporary_host_objects,
+        } = ongoing_codegen;
         let (mut compiled_modules, work_products) =
-            self.llvm_backend
-                .join_codegen(ongoing_codegen.llvm_codegen, sess, outputs);
-        if let Err(error) = ongoing_codegen
-            .host_objects
-            .append_to(&mut compiled_modules)
-        {
+            self.llvm_backend.join_codegen(llvm_codegen, sess, outputs);
+        if let Err(error) = host_objects.append_to(&mut compiled_modules) {
             sess.dcx().fatal(format!(
                 "[rustc-codegen-fe2o3] generated host-object injection failed: {error}"
             ));
+        }
+        if !temporary_host_objects.is_empty() {
+            match self.pending_host_objects.lock() {
+                Ok(mut pending) => pending.push(temporary_host_objects),
+                Err(_) => sess.dcx().fatal(
+                    "[rustc-codegen-fe2o3] generated host-object lifetime state was poisoned",
+                ),
+            }
         }
         (compiled_modules, work_products)
     }
@@ -337,8 +452,373 @@ impl CodegenBackend for Fe2o3CodegenBackend {
         metadata: EncodedMetadata,
         outputs: &OutputFilenames,
     ) {
+        let temporary_host_objects = match self.pending_host_objects.lock() {
+            Ok(mut pending) => std::mem::take(&mut *pending),
+            Err(_) => sess
+                .dcx()
+                .fatal("[rustc-codegen-fe2o3] generated host-object lifetime state was poisoned"),
+        };
         self.llvm_backend
             .link(sess, compiled_modules, crate_info, metadata, outputs);
+        drop(temporary_host_objects);
+    }
+}
+
+fn typed_roots_from_collection(
+    functions: &[collector::CollectedFunction<'_>],
+) -> Result<Vec<TypedKernelRootV1>, TypedVerticalError> {
+    functions
+        .iter()
+        .filter_map(|function| {
+            function.typed_profile.map(|profile| {
+                if !function.is_kernel {
+                    return Err(TypedVerticalError::InvalidCollectedRoot {
+                        export_name: function.export_name.clone(),
+                        reason: "typed profile is attached to a non-root device function",
+                    });
+                }
+                let logical_name = function.logical_name.clone().ok_or_else(|| {
+                    TypedVerticalError::InvalidCollectedRoot {
+                        export_name: function.export_name.clone(),
+                        reason: "typed kernel root has no logical name",
+                    }
+                })?;
+                Ok(TypedKernelRootV1 {
+                    logical_name,
+                    export_name: function.export_name.clone(),
+                    profile,
+                })
+            })
+        })
+        .collect()
+}
+
+fn generate_typed_host_objects(
+    roots: &[TypedKernelRootV1],
+    artifacts: &[amdgpu_llvm::DeviceArtifact],
+    output_dir: &Path,
+    target: &AmdGpuTarget,
+    host_triple: &str,
+) -> Result<(host_object::GeneratedHostObjects, TemporaryHostObjects), TypedVerticalError> {
+    let mut objects = host_object::GeneratedHostObjects::default();
+    let mut temporary = TemporaryHostObjects::default();
+    if roots.is_empty() {
+        return Ok((objects, temporary));
+    }
+
+    let artifact_indexes = match_typed_artifacts(roots, artifacts)?;
+    let rocm = RocmToolchain::detect().map_err(TypedVerticalError::Toolchain)?;
+    let toolchain = host_object::HostObjectToolchain::from_rocm(&rocm)
+        .map_err(TypedVerticalError::HostObject)?;
+
+    for (root, artifact_index) in roots.iter().zip(artifact_indexes) {
+        let artifact = &artifacts[artifact_index];
+        let llvm_ir = read_finalized_artifact(
+            &artifact.llvm_ir_path,
+            "LLVM IR",
+            MAX_FINALIZED_LLVM_IR_BYTES,
+        )?;
+        let hsaco =
+            read_finalized_artifact(&artifact.hsaco_path, "HSACO", MAX_FINALIZED_HSACO_BYTES)?;
+        let generated = match root.profile {
+            collector::TypedKernelProfile::VecAddV1 => {
+                typed_artifact::build_typed_vecadd_artifact_v1(
+                    &root.logical_name,
+                    &root.export_name,
+                    target,
+                    &llvm_ir,
+                    hsaco,
+                )
+                .map_err(TypedVerticalError::Artifact)?
+            }
+        };
+        let object_path = temporary.reserve(output_dir, generated.artifact_id())?;
+        let object = host_object::generate_host_object(
+            &toolchain,
+            host_triple,
+            &object_path,
+            generated.artifact_id(),
+            &root.logical_name,
+            generated.container(),
+        )
+        .map_err(TypedVerticalError::HostObject)?;
+        objects
+            .register(object)
+            .map_err(TypedVerticalError::HostObject)?;
+    }
+
+    Ok((objects, temporary))
+}
+
+fn match_typed_artifacts(
+    roots: &[TypedKernelRootV1],
+    artifacts: &[amdgpu_llvm::DeviceArtifact],
+) -> Result<Vec<usize>, TypedVerticalError> {
+    let mut artifacts_by_name = std::collections::BTreeMap::new();
+    for (index, artifact) in artifacts.iter().enumerate() {
+        if artifacts_by_name
+            .insert(artifact.kernel_name.as_str(), index)
+            .is_some()
+        {
+            return Err(TypedVerticalError::DuplicatePublishedArtifact(
+                artifact.kernel_name.clone(),
+            ));
+        }
+    }
+
+    let mut logical_names = std::collections::BTreeSet::new();
+    let mut export_names = std::collections::BTreeSet::new();
+    let mut matches = Vec::with_capacity(roots.len());
+    for root in roots {
+        if !valid_ascii_symbol_stem(&root.logical_name) {
+            return Err(TypedVerticalError::InvalidSymbolName(
+                root.logical_name.clone(),
+            ));
+        }
+        if !valid_ascii_symbol_stem(&root.export_name) {
+            return Err(TypedVerticalError::InvalidSymbolName(
+                root.export_name.clone(),
+            ));
+        }
+        if !logical_names.insert(root.logical_name.as_str()) {
+            return Err(TypedVerticalError::DuplicateLogicalName(
+                root.logical_name.clone(),
+            ));
+        }
+        if !export_names.insert(root.export_name.as_str()) {
+            return Err(TypedVerticalError::DuplicateExportName(
+                root.export_name.clone(),
+            ));
+        }
+        let index = artifacts_by_name
+            .get(root.export_name.as_str())
+            .copied()
+            .ok_or_else(|| TypedVerticalError::MissingPublishedArtifact {
+                logical_name: root.logical_name.clone(),
+                export_name: root.export_name.clone(),
+            })?;
+        matches.push(index);
+    }
+    Ok(matches)
+}
+
+fn valid_ascii_symbol_stem(name: &str) -> bool {
+    let mut bytes = name.bytes();
+    let Some(first) = bytes.next() else {
+        return false;
+    };
+    name.len() <= 128
+        && (first.is_ascii_alphabetic() || first == b'_')
+        && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+}
+
+fn read_finalized_artifact(
+    path: &Path,
+    kind: &'static str,
+    maximum: usize,
+) -> Result<Vec<u8>, TypedVerticalError> {
+    let published = fs::symlink_metadata(path).map_err(|source| TypedVerticalError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    if !published.file_type().is_file() {
+        return Err(TypedVerticalError::NotRegularFinalizedArtifact {
+            kind,
+            path: path.to_path_buf(),
+        });
+    }
+    let expected = usize::try_from(published.len()).unwrap_or(usize::MAX);
+    if expected == 0 || expected > maximum {
+        return Err(TypedVerticalError::InvalidFinalizedArtifactSize {
+            kind,
+            path: path.to_path_buf(),
+            actual: expected,
+            maximum,
+        });
+    }
+
+    let mut file = File::open(path).map_err(|source| TypedVerticalError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let opened = file.metadata().map_err(|source| TypedVerticalError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    if !same_finalized_file(&published, &opened) {
+        return Err(TypedVerticalError::FinalizedArtifactChanged(
+            path.to_path_buf(),
+        ));
+    }
+
+    let mut bytes = Vec::with_capacity(expected);
+    file.by_ref()
+        .take((maximum as u64) + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|source| TypedVerticalError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    let completed = file.metadata().map_err(|source| TypedVerticalError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    if bytes.len() != expected || !same_finalized_file(&opened, &completed) {
+        return Err(TypedVerticalError::FinalizedArtifactChanged(
+            path.to_path_buf(),
+        ));
+    }
+    Ok(bytes)
+}
+
+fn same_finalized_file(first: &fs::Metadata, second: &fs::Metadata) -> bool {
+    first.file_type().is_file()
+        && second.file_type().is_file()
+        && first.dev() == second.dev()
+        && first.ino() == second.ino()
+        && first.len() == second.len()
+        && first.mtime() == second.mtime()
+        && first.mtime_nsec() == second.mtime_nsec()
+        && first.ctime() == second.ctime()
+        && first.ctime_nsec() == second.ctime_nsec()
+}
+
+#[derive(Debug)]
+enum TypedVerticalError {
+    InvalidCollectedRoot {
+        export_name: String,
+        reason: &'static str,
+    },
+    DuplicatePublishedArtifact(String),
+    DuplicateLogicalName(String),
+    DuplicateExportName(String),
+    MissingPublishedArtifact {
+        logical_name: String,
+        export_name: String,
+    },
+    InvalidSymbolName(String),
+    InvalidArtifactId(String),
+    NotRegularFinalizedArtifact {
+        kind: &'static str,
+        path: PathBuf,
+    },
+    InvalidFinalizedArtifactSize {
+        kind: &'static str,
+        path: PathBuf,
+        actual: usize,
+        maximum: usize,
+    },
+    FinalizedArtifactChanged(PathBuf),
+    TemporaryDirectory {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    TemporaryDirectoryExhausted(PathBuf),
+    Toolchain(ToolchainError),
+    Artifact(typed_artifact::TypedArtifactError),
+    HostObject(host_object::HostObjectError),
+    Io {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+}
+
+impl fmt::Display for TypedVerticalError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidCollectedRoot {
+                export_name,
+                reason,
+            } => write!(formatter, "invalid typed root `{export_name}`: {reason}"),
+            Self::DuplicatePublishedArtifact(name) => {
+                write!(formatter, "published artifact name `{name}` is duplicated")
+            }
+            Self::DuplicateLogicalName(name) => {
+                write!(
+                    formatter,
+                    "typed kernel logical name `{name}` is duplicated"
+                )
+            }
+            Self::DuplicateExportName(name) => {
+                write!(formatter, "typed kernel export name `{name}` is duplicated")
+            }
+            Self::MissingPublishedArtifact {
+                logical_name,
+                export_name,
+            } => write!(
+                formatter,
+                "typed kernel `{logical_name}` has no finalized artifact named `{export_name}`"
+            ),
+            Self::InvalidSymbolName(name) => write!(
+                formatter,
+                "typed kernel name `{name}` is not a bounded ASCII linker symbol stem"
+            ),
+            Self::InvalidArtifactId(id) => {
+                write!(formatter, "typed artifact has an invalid content ID `{id}`")
+            }
+            Self::NotRegularFinalizedArtifact { kind, path } => write!(
+                formatter,
+                "finalized {kind} is not a regular file: {}",
+                path.display()
+            ),
+            Self::InvalidFinalizedArtifactSize {
+                kind,
+                path,
+                actual,
+                maximum,
+            } => write!(
+                formatter,
+                "finalized {kind} {} has invalid size {actual}; maximum is {maximum}",
+                path.display()
+            ),
+            Self::FinalizedArtifactChanged(path) => write!(
+                formatter,
+                "finalized artifact changed while it was read: {}",
+                path.display()
+            ),
+            Self::TemporaryDirectory { path, source } => write!(
+                formatter,
+                "failed to create private host-object directory {}: {source}",
+                path.display()
+            ),
+            Self::TemporaryDirectoryExhausted(path) => write!(
+                formatter,
+                "could not reserve a unique host-object directory below {}",
+                path.display()
+            ),
+            Self::Toolchain(error) => write!(formatter, "{error}"),
+            Self::Artifact(error) => write!(formatter, "{error}"),
+            Self::HostObject(error) => write!(formatter, "{error}"),
+            Self::Io { path, source } => {
+                write!(
+                    formatter,
+                    "artifact I/O failed for {}: {source}",
+                    path.display()
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for TypedVerticalError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::TemporaryDirectory { source, .. } | Self::Io { source, .. } => Some(source),
+            Self::Toolchain(error) => Some(error),
+            Self::Artifact(error) => Some(error),
+            Self::HostObject(error) => Some(error),
+            Self::InvalidCollectedRoot { .. }
+            | Self::DuplicatePublishedArtifact(_)
+            | Self::DuplicateLogicalName(_)
+            | Self::DuplicateExportName(_)
+            | Self::MissingPublishedArtifact { .. }
+            | Self::InvalidSymbolName(_)
+            | Self::InvalidArtifactId(_)
+            | Self::NotRegularFinalizedArtifact { .. }
+            | Self::InvalidFinalizedArtifactSize { .. }
+            | Self::FinalizedArtifactChanged(_)
+            | Self::TemporaryDirectoryExhausted(_) => None,
+        }
     }
 }
 
@@ -350,6 +830,7 @@ pub fn __rustc_codegen_backend() -> Box<dyn CodegenBackend> {
     Box::new(Fe2o3CodegenBackend {
         config,
         llvm_backend,
+        pending_host_objects: Mutex::new(Vec::new()),
     })
 }
 
@@ -697,11 +1178,57 @@ fn optional_tool(llvm_bin: &Path, name: &str) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{
-        AmdGpuTarget, BackendConfig, CodegenPipeline, PipelineSelection, managed_artifact_output,
+        AmdGpuTarget, BackendConfig, CodegenPipeline, PipelineSelection, TemporaryHostObjects,
+        TypedKernelRootV1, TypedVerticalError, generate_typed_host_objects,
+        managed_artifact_output, match_typed_artifacts, read_finalized_artifact,
         run_optional_kernel_ir_analysis, validate_hsaco_metadata_text,
     };
+    use crate::amdgpu_llvm::DeviceArtifact;
+    use crate::collector::TypedKernelProfile;
+    use rustc_codegen_ssa::CompiledModules;
     use std::ffi::OsStr;
+    use std::fs;
+    use std::os::unix::fs::symlink;
     use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(0);
+
+    struct TestDirectory(PathBuf);
+
+    impl TestDirectory {
+        fn new() -> Self {
+            let sequence = NEXT_TEST_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "fe2o3-typed-vertical-test-{}-{sequence}",
+                std::process::id()
+            ));
+            fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for TestDirectory {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn typed_root(logical_name: &str, export_name: &str) -> TypedKernelRootV1 {
+        TypedKernelRootV1 {
+            logical_name: logical_name.to_owned(),
+            export_name: export_name.to_owned(),
+            profile: TypedKernelProfile::VecAddV1,
+        }
+    }
+
+    fn published_artifact(name: &str) -> DeviceArtifact {
+        DeviceArtifact {
+            kernel_name: name.to_owned(),
+            llvm_ir_path: PathBuf::from(format!("{name}.ll")),
+            hsaco_path: PathBuf::from(format!("{name}.hsaco")),
+        }
+    }
 
     #[test]
     fn kernels_require_an_explicit_managed_artifact_directory() {
@@ -717,6 +1244,130 @@ mod tests {
             managed_artifact_output(&config, 1),
             Ok(Some(Path::new("target/fe2o3")))
         );
+    }
+
+    #[test]
+    fn ordinary_kernels_leave_generated_host_objects_empty() {
+        let artifacts = [published_artifact("ordinary")];
+        let (objects, temporary) = generate_typed_host_objects(
+            &[],
+            &artifacts,
+            Path::new("/not-consulted"),
+            &AmdGpuTarget::new("gfx942"),
+            "unsupported-host-is-not-consulted",
+        )
+        .expect("ordinary kernels do not enter typed artifact generation");
+        assert!(temporary.is_empty());
+
+        let mut modules = CompiledModules {
+            modules: Vec::new(),
+            allocator_module: None,
+        };
+        objects.append_to(&mut modules).unwrap();
+        assert!(modules.modules.is_empty());
+    }
+
+    #[test]
+    fn typed_roots_match_finalized_artifacts_by_export_name() {
+        let roots = [typed_root("add", "vecadd"), typed_root("sum", "vector_sum")];
+        let artifacts = [
+            published_artifact("ordinary"),
+            published_artifact("vector_sum"),
+            published_artifact("vecadd"),
+        ];
+
+        assert_eq!(match_typed_artifacts(&roots, &artifacts).unwrap(), [2, 1]);
+    }
+
+    #[test]
+    fn typed_artifact_matching_rejects_missing_duplicates_and_invalid_symbols() {
+        let missing = match_typed_artifacts(
+            &[typed_root("vecadd", "vecadd")],
+            &[published_artifact("other")],
+        );
+        assert!(matches!(
+            missing,
+            Err(TypedVerticalError::MissingPublishedArtifact { .. })
+        ));
+
+        let duplicate_artifacts = match_typed_artifacts(
+            &[typed_root("vecadd", "vecadd")],
+            &[published_artifact("vecadd"), published_artifact("vecadd")],
+        );
+        assert!(matches!(
+            duplicate_artifacts,
+            Err(TypedVerticalError::DuplicatePublishedArtifact(name)) if name == "vecadd"
+        ));
+
+        let duplicate_logical = match_typed_artifacts(
+            &[
+                typed_root("vecadd", "first"),
+                typed_root("vecadd", "second"),
+            ],
+            &[published_artifact("first"), published_artifact("second")],
+        );
+        assert!(matches!(
+            duplicate_logical,
+            Err(TypedVerticalError::DuplicateLogicalName(name)) if name == "vecadd"
+        ));
+
+        let invalid = match_typed_artifacts(
+            &[typed_root("not-ascii-linker-safe", "vecadd")],
+            &[published_artifact("vecadd")],
+        );
+        assert!(matches!(
+            invalid,
+            Err(TypedVerticalError::InvalidSymbolName(name)) if name == "not-ascii-linker-safe"
+        ));
+    }
+
+    #[test]
+    fn finalized_artifact_reads_are_exact_bounded_and_regular() {
+        let directory = TestDirectory::new();
+        let artifact = directory.0.join("vecadd.ll");
+        fs::write(&artifact, b"finalized-ir").unwrap();
+        assert_eq!(
+            read_finalized_artifact(&artifact, "LLVM IR", 64).unwrap(),
+            b"finalized-ir"
+        );
+
+        let empty = directory.0.join("empty.ll");
+        fs::write(&empty, b"").unwrap();
+        assert!(matches!(
+            read_finalized_artifact(&empty, "LLVM IR", 64),
+            Err(TypedVerticalError::InvalidFinalizedArtifactSize { actual: 0, .. })
+        ));
+        assert!(matches!(
+            read_finalized_artifact(&artifact, "LLVM IR", 4),
+            Err(TypedVerticalError::InvalidFinalizedArtifactSize {
+                actual: 12,
+                maximum: 4,
+                ..
+            })
+        ));
+
+        let alias = directory.0.join("alias.ll");
+        symlink(&artifact, &alias).unwrap();
+        assert!(matches!(
+            read_finalized_artifact(&alias, "LLVM IR", 64),
+            Err(TypedVerticalError::NotRegularFinalizedArtifact { .. })
+        ));
+    }
+
+    #[test]
+    fn temporary_host_objects_survive_until_their_owner_drops() {
+        const ARTIFACT_ID: &str =
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let directory = TestDirectory::new();
+        let mut temporary = TemporaryHostObjects::default();
+        let object = temporary.reserve(&directory.0, ARTIFACT_ID).unwrap();
+        let object_directory = object.parent().unwrap().to_path_buf();
+        fs::write(&object, b"host-object").unwrap();
+        assert!(object.is_file());
+
+        drop(temporary);
+        assert!(!object.exists());
+        assert!(!object_directory.exists());
     }
 
     #[test]
