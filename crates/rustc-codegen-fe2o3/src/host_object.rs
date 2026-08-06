@@ -544,6 +544,7 @@ impl std::error::Error for HostObjectError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     const ID: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -826,8 +827,31 @@ fn main() {{
     fn rejects_failed_tool_without_retaining_partial_output() {
         let directory = TestDir::new();
         let output = directory.0.join("fixture.o");
-        let toolchain = HostObjectToolchain::for_test(PathBuf::from("/bin/false"));
+        let fake_tool = directory.0.join("failing-llvm-mc");
+        fs::write(
+            &fake_tool,
+            b"#!/bin/sh\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = -o ]; then\n    shift\n    printf partial > \"$1\"\n  fi\n  shift\ndone\ncat >/dev/null\nprintf 'synthetic failure\\n' >&2\nexit 7\n",
+        )
+        .expect("write deterministic failing tool");
+        fs::set_permissions(&fake_tool, fs::Permissions::from_mode(0o700))
+            .expect("make failing tool executable");
+        let toolchain = HostObjectToolchain::for_test(fake_tool);
 
+        let error = generate_host_object(
+            &toolchain,
+            SUPPORTED_HOST_TRIPLE,
+            &output,
+            ID,
+            SYMBOL_STEM,
+            PAYLOAD,
+        )
+        .expect_err("failing tool must reject host object generation");
+        assert!(matches!(
+            error,
+            HostObjectError::ToolFailed { ref status, ref stderr, .. }
+                if status.contains('7') && stderr == "synthetic failure"
+        ));
+        assert!(!output.exists());
         assert!(matches!(
             generate_host_object(
                 &toolchain,
