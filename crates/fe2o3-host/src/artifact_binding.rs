@@ -8,7 +8,7 @@ use fe2o3_artifacts::{
     BlockSize, Capability, CodeObjectIdentity, ContainerDecodeError, DeclaredRustLayoutIdentity,
     DeclaredRustTypeIdentity, DigestAlgorithm, DigestBytes, Endianness, HostLaunchAbi,
     HostLaunchAbiError, KernelSelectionError, LaunchContract, Mutability, Name, PayloadDigest,
-    PointerWidth, SelectedNativeKernel, TypeIdentity, TargetIdentity,
+    PointerWidth, SelectedNativeKernel, TargetIdentity, TypeIdentity,
 };
 use fe2o3_device::KernelMarkerV1;
 use fe2o3_kernel_descriptor::ValidationError as DescriptorValidationError;

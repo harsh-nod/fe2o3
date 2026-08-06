@@ -22,13 +22,13 @@ pub use artifact_binding::{
     CompilerGeneratedKernelProfileV1, GeneratedArtifactAuthenticationError,
     GeneratedKernelBindingV1, GeneratedKernelProfileError, GeneratedMarkerBindingError,
 };
+pub use fe2o3_core::{KernelParams, LaunchConfig};
+pub use fe2o3_kernel_descriptor::{BlockSizeV1, DimensionsV1, KernelId, LaunchConstraintsV1};
 #[doc(hidden)]
 pub use generated_vecadd::{
     GeneratedVecAddKernelV1, GeneratedVecAddLoadError, GeneratedVecAddPrepareError,
     GeneratedVecAddPreparedV1, GeneratedVecAddProfileError,
 };
-pub use fe2o3_core::{KernelParams, LaunchConfig};
-pub use fe2o3_kernel_descriptor::{BlockSizeV1, DimensionsV1, KernelId, LaunchConstraintsV1};
 #[doc(hidden)]
 pub use loaded_kernel::{GeneratedAdmittedLaunch, LoadedKernelLoadError};
 pub use loaded_kernel::{
