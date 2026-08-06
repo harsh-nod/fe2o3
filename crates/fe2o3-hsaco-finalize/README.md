@@ -63,7 +63,8 @@ values entering this crate are labeled assertion-only caller claims; G4 wording 
 compiler attestations. Each symbol retains its authoritative `reserved-fe2o3-symbols` contract ID,
 direction, exact physical ABI grammar, target, code-object version, effects, semantic identity,
 declaration owner, and provider-class claim. Declaration ownership is separate from unauthenticated
-artifact producer metadata.
+artifact producer metadata. Symbol, physical-ABI, effects, and effect-to-pointer compatibility use
+the same typed V1 parser as `rustc-codegen-fe2o3`, exported by `reserved-fe2o3-symbols`.
 
 Compiler-required symbols are deliberately distinct from exact expected final defined symbols. The
 latter remain absent unless the caller supplies `ExpectedFinalDefinedSymbolsClaimV1` with exact
@@ -77,12 +78,17 @@ evidence. Rust definitions or kernels require exactly one neutral `CompilerModul
 role does not imply LLVM bitcode, and current rustc output does not provide the required exact module:
 the backend still emits per-kernel textual IR and omits non-kernel exports.
 
-Successful staging returns only `StagedFfiLinkPlanV1`. It does not expose generic
-`LinkSymbolClosureV1` or `LinkInputKindClosureV1` projections and cannot call
-`construct_worker_request_v1`. Worker request V1 has no field for the complete staged FFI identity,
-so a V1 response could not distinguish changes to ABI, owner, provider, producer, effects, or
-semantics. A closure-aware worker protocol revision and response evidence binding are required before
-this path can execute. Staging grants no link, load, or launch authority.
+Successful staging returns only `StagedFfiLinkPlanV1`. Its public surface exposes the complete staged
+identity and a non-authoritative count/blocker summary. Raw plan, input, provider, symbol-evidence,
+canonical-byte, and reduced-closure fields are inaccessible. It cannot call
+`construct_worker_request_v1` or consume a Worker V1 output.
+
+Every `WorkerRequestV1`, `WorkerResponseV1`, and `WorkerOutputV1` is permanently classified as
+`WorkerEvidenceClassV1::GenericLink`. Worker V1 has no field for the complete staged FFI identity, so
+generic evidence can never satisfy an FFI-bound evidence API. A caller can independently construct a
+generic request with similar inputs and symbol strings, but that request and its output carry zero
+FFI provenance. No conversion exists in either direction. A closure-aware worker protocol revision
+and response evidence binding are required before this path can execute.
 
 The separate rustc-side work must expose an assertion-only adapter over `CollectionResult`, emit one
 exact compiler module containing kernels, reachable helpers, and non-kernel FFI exports, measure that

@@ -1,0 +1,35 @@
+error[E0599]: no method named `input_kind_closure` found for reference `&StagedFfiLinkPlanV1` in the current scope
+ --> tests/ui/compiler_ffi/reduced_closures_are_inaccessible.rs:6:45
+  |
+6 |     let _: &LinkInputKindClosureV1 = staged.input_kind_closure();
+  |                                             ^^^^^^^^^^^^^^^^^^ method not found in `&StagedFfiLinkPlanV1`
+
+error[E0599]: no method named `symbol_closure` found for reference `&StagedFfiLinkPlanV1` in the current scope
+ --> tests/ui/compiler_ffi/reduced_closures_are_inaccessible.rs:7:42
+  |
+7 |     let _: &LinkSymbolClosureV1 = staged.symbol_closure();
+  |                                          ^^^^^^^^^^^^^^ method not found in `&StagedFfiLinkPlanV1`
+
+error[E0599]: no method named `input_claims` found for reference `&StagedFfiLinkPlanV1` in the current scope
+ --> tests/ui/compiler_ffi/reduced_closures_are_inaccessible.rs:8:20
+  |
+8 |     let _ = staged.input_claims();
+  |                    ^^^^^^^^^^^^ method not found in `&StagedFfiLinkPlanV1`
+
+error[E0599]: no method named `provider_binding_claims` found for reference `&StagedFfiLinkPlanV1` in the current scope
+ --> tests/ui/compiler_ffi/reduced_closures_are_inaccessible.rs:9:20
+  |
+9 |     let _ = staged.provider_binding_claims();
+  |                    ^^^^^^^^^^^^^^^^^^^^^^^ method not found in `&StagedFfiLinkPlanV1`
+
+error[E0599]: no method named `final_symbols_claim` found for reference `&StagedFfiLinkPlanV1` in the current scope
+  --> tests/ui/compiler_ffi/reduced_closures_are_inaccessible.rs:10:20
+   |
+10 |     let _ = staged.final_symbols_claim();
+   |                    ^^^^^^^^^^^^^^^^^^^ method not found in `&StagedFfiLinkPlanV1`
+
+error[E0599]: no method named `bind_worker_output_v1` found for reference `&StagedFfiLinkPlanV1` in the current scope
+  --> tests/ui/compiler_ffi/reduced_closures_are_inaccessible.rs:11:20
+   |
+11 |     let _ = staged.bind_worker_output_v1(output);
+   |                    ^^^^^^^^^^^^^^^^^^^^^ method not found in `&StagedFfiLinkPlanV1`

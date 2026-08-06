@@ -285,6 +285,7 @@ dependencies = [
  "rmpv",
  "rustix",
  "sha2",
+ "trybuild",
 ]
 
 [[package]]
