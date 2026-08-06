@@ -7,15 +7,18 @@ use fe2o3_artifact_transaction::{
     PackageIdentityV1, PublicationOutcomeV1, TargetIdentityV1,
 };
 use fe2o3_artifacts::{
-    ArtifactContainerV1, BundleIndexV1, CodeObjectPayload, CompilerIdentity, DigestAlgorithm,
+    ArtifactContainerV1, ArtifactDerivedLinkPublicationScopeV1, BundleIndexV1, Capability,
+    CodeObjectFormat, CodeObjectIdentity, CodeObjectPayload, CompilerIdentity, DigestAlgorithm,
     DirectLinkBindingExpectationV1, DirectLinkBindingSourceV1, DirectLinkBridgeError,
-    DirectLinkBridgeIdentityKindV1, DirectLinkBundleEvidenceV1, DirectLinkFfiClosureIdentityV1,
-    DirectLinkFinalizationIdentityV1, DirectLinkFinalizedPayloadIdentityV1,
-    DirectLinkLinkedOutputIdentityV1, DirectLinkPublicationBridgeV1, DirectLinkRequestIdentityV1,
-    DirectLinkResponseIdentityV1, DirectLinkToolchainConfigurationIdentityV1,
-    DirectLinkToolchainExecutableIdentityV1, DirectLinkToolchainIdentityV1,
-    DirectLinkTransformationIdentityV1, DirectLinkWorkerConfigurationIdentityV1,
-    DirectLinkWorkerExecutableIdentityV1, DirectLinkWorkerIdentityV1, PayloadDigest, PointerWidth,
+    DirectLinkBridgeIdentityKindV1, DirectLinkBundleEvidenceV1, DirectLinkDerivedScopeFieldV1,
+    DirectLinkFfiClosureIdentityV1, DirectLinkFinalizationIdentityV1,
+    DirectLinkFinalizedPayloadIdentityV1, DirectLinkLinkedOutputIdentityV1,
+    DirectLinkPublicationBridgeV1, DirectLinkPublicationScopeProvenanceV1,
+    DirectLinkRequestIdentityV1, DirectLinkResponseIdentityV1,
+    DirectLinkToolchainConfigurationIdentityV1, DirectLinkToolchainExecutableIdentityV1,
+    DirectLinkToolchainIdentityV1, DirectLinkTransformationIdentityV1,
+    DirectLinkWorkerConfigurationIdentityV1, DirectLinkWorkerExecutableIdentityV1,
+    DirectLinkWorkerIdentityV1, Endianness, PayloadDigest, PointerWidth, TargetIdentity,
     ToolIdentity,
 };
 
@@ -82,25 +85,40 @@ impl EvidenceFixture {
 }
 
 fn evidence(ffi_seed: u8) -> EvidenceFixture {
-    let payload =
-        CodeObjectPayload::from_bytes(DigestAlgorithm::Sha256, b"bridge native payload".to_vec())
-            .unwrap();
-    let payload_identity = payload.digest();
-    let manifest = fe2o3_artifacts::ManifestV1::new(
-        CompilerIdentity::new(text("rustc"), text("1.94.0")),
-        ToolIdentity::new(text("fe2o3"), text("0.1.0")),
+    evidence_variant(
+        b"bridge native payload",
+        "1.94.0",
         target(PointerWidth::Bits64, vec![]),
+        &[(0x20, "bridge_kernel", "bridge_kernel.kd")],
+        ffi_seed,
+    )
+}
+
+fn evidence_variant(
+    payload_bytes: &[u8],
+    compiler_version: &str,
+    target: TargetIdentity,
+    kernels: &[(u8, &str, &str)],
+    ffi_seed: u8,
+) -> EvidenceFixture {
+    let payload =
+        CodeObjectPayload::from_bytes(DigestAlgorithm::Sha256, payload_bytes.to_vec()).unwrap();
+    let payload_identity = payload.digest();
+    let kernels = kernels
+        .iter()
+        .map(|(id, name, symbol)| {
+            kernel_with_object_digest(*id, name, symbol, payload_identity.bytes(), vec![])
+        })
+        .collect();
+    let manifest = fe2o3_artifacts::ManifestV1::new(
+        CompilerIdentity::new(text("rustc"), text(compiler_version)),
+        ToolIdentity::new(text("fe2o3"), text("0.1.0")),
+        target,
         vec![object_identity(
             payload_identity.bytes(),
             payload.bytes().len() as u64,
         )],
-        vec![kernel_with_object_digest(
-            0x20,
-            "bridge_kernel",
-            "bridge_kernel.kd",
-            payload_identity.bytes(),
-            vec![],
-        )],
+        kernels,
     )
     .unwrap();
     let container =
@@ -115,6 +133,21 @@ fn evidence(ffi_seed: u8) -> EvidenceFixture {
         expectation,
         evidence,
     }
+}
+
+fn package(seed: u8) -> PackageIdentityV1 {
+    PackageIdentityV1::from_bytes([seed; 32])
+}
+
+fn target_architecture(architecture: &str) -> TargetIdentity {
+    TargetIdentity::new(
+        text("amdgcn-amd-amdhsa"),
+        text(architecture),
+        PointerWidth::Bits64,
+        Endianness::Little,
+        vec![Capability::AmdWave],
+    )
+    .unwrap()
 }
 
 fn publish_bridge(
@@ -280,5 +313,380 @@ fn bridge_rejects_unvalidated_inputs_and_out_of_range_binding_selection() {
             .evidence
             .validate_against(&fixture.bundle, &[&fixture.container], &changed_sources),
         Err(fe2o3_artifacts::DirectLinkEvidenceError::ExpectationMismatch)
+    );
+}
+
+#[test]
+fn artifact_derived_scope_drives_the_complete_g5_chain() {
+    let fixture = evidence(0x18);
+    let validated = fixture.validated();
+    let derived = ArtifactDerivedLinkPublicationScopeV1::derive(
+        package(0x42),
+        &validated,
+        0,
+        &fixture.container,
+    )
+    .unwrap();
+
+    assert_eq!(derived.binding_index(), 0);
+    assert_eq!(derived.scope().package(), package(0x42));
+    assert_eq!(
+        derived.container_identity(),
+        validated.bindings()[0].container_identity()
+    );
+    assert_eq!(
+        derived.finalized_payload_identity(),
+        fixture.expectation.finalized_payload_identity()
+    );
+    assert!(!derived.grants_load_authority());
+    assert!(!derived.grants_launch_authority());
+
+    let bridge = DirectLinkPublicationBridgeV1::prepare_with_derived_scope(
+        attempt(20, 0x43),
+        derived,
+        &validated,
+        0,
+    )
+    .unwrap();
+    assert_eq!(
+        bridge.scope_provenance(),
+        DirectLinkPublicationScopeProvenanceV1::ArtifactDerivedV1
+    );
+    assert_eq!(bridge.validate_published(publish_bridge(&bridge)), Ok(()));
+    assert!(!bridge.grants_load_authority());
+    assert!(!bridge.grants_launch_authority());
+    let weaker_same_scope = DirectLinkPublicationBridgeV1::prepare_with_trusted_scope(
+        bridge.attempt(),
+        bridge.publication_scope(),
+        &validated,
+        0,
+    )
+    .unwrap();
+    assert_ne!(
+        bridge.publication_identity(),
+        weaker_same_scope.publication_identity()
+    );
+
+    assert_eq!(
+        *bridge.publication_scope().target().as_bytes(),
+        [
+            0x13, 0x12, 0x2c, 0x01, 0xe3, 0x28, 0x20, 0x06, 0x75, 0xdf, 0x7a, 0xfb, 0x80, 0x28,
+            0x72, 0x66, 0x4a, 0x45, 0xf8, 0xbc, 0x69, 0xfa, 0x8d, 0x02, 0xfb, 0xf1, 0xf5, 0x13,
+            0x09, 0xfc, 0x15, 0x13,
+        ]
+    );
+    assert_eq!(
+        *bridge.publication_scope().kernel_set().as_bytes(),
+        [
+            0x91, 0x5a, 0x54, 0x7b, 0xe1, 0xc8, 0xd5, 0xc8, 0x74, 0x9b, 0x21, 0xf9, 0x34, 0xef,
+            0x02, 0x89, 0x3a, 0xf8, 0x7b, 0x19, 0x49, 0x9a, 0x20, 0x55, 0x64, 0x1a, 0x01, 0xe1,
+            0x74, 0x54, 0x99, 0xa4,
+        ]
+    );
+    assert_eq!(
+        *bridge.publication_identity().as_bytes(),
+        [
+            0xed, 0xdd, 0xdc, 0xa9, 0x3c, 0xd4, 0x9d, 0x61, 0x92, 0x71, 0x74, 0x95, 0xf9, 0x78,
+            0x1d, 0xa5, 0xab, 0x96, 0xb8, 0xe0, 0xe4, 0xd5, 0x8c, 0x6b, 0x9e, 0x07, 0xd8, 0x53,
+            0x87, 0xcc, 0x98, 0x49,
+        ]
+    );
+}
+
+#[test]
+fn trusted_scope_constructor_is_explicitly_the_weaker_compatibility_path() {
+    let fixture = evidence(0x18);
+    let validated = fixture.validated();
+    let bridge = DirectLinkPublicationBridgeV1::prepare_with_trusted_scope(
+        attempt(21, 0x44),
+        scope(0x45),
+        &validated,
+        0,
+    )
+    .unwrap();
+
+    assert_eq!(
+        bridge.scope_provenance(),
+        DirectLinkPublicationScopeProvenanceV1::TrustedExternalPolicy
+    );
+    assert_eq!(bridge.publication_scope(), bridge.trusted_scope());
+}
+
+#[test]
+fn derived_scope_rejects_container_and_binding_substitution() {
+    let original = evidence(0x18);
+    let changed_container = evidence_variant(
+        b"bridge native payload",
+        "1.94.1",
+        target(PointerWidth::Bits64, vec![]),
+        &[(0x20, "bridge_kernel", "bridge_kernel.kd")],
+        0x18,
+    );
+    let original_validated = original.validated();
+    assert_eq!(
+        ArtifactDerivedLinkPublicationScopeV1::derive(
+            package(0x46),
+            &original_validated,
+            0,
+            &changed_container.container,
+        ),
+        Err(DirectLinkBridgeError::DerivedScopeMismatch {
+            field: DirectLinkDerivedScopeFieldV1::ContainerIdentity,
+        })
+    );
+
+    let witness = ArtifactDerivedLinkPublicationScopeV1::derive(
+        package(0x46),
+        &original_validated,
+        0,
+        &original.container,
+    )
+    .unwrap();
+    let changed_validated = changed_container.validated();
+    assert_eq!(
+        DirectLinkPublicationBridgeV1::prepare_with_derived_scope(
+            attempt(22, 0x47),
+            witness,
+            &changed_validated,
+            0,
+        ),
+        Err(DirectLinkBridgeError::DerivedScopeMismatch {
+            field: DirectLinkDerivedScopeFieldV1::Binding,
+        })
+    );
+}
+
+#[test]
+fn derived_scope_rejects_binding_index_substitution() {
+    let first = evidence_variant(
+        b"first native payload",
+        "1.94.0",
+        target(PointerWidth::Bits64, vec![]),
+        &[(0x20, "first_kernel", "first_kernel.kd")],
+        0x18,
+    );
+    let second = evidence_variant(
+        b"second native payload",
+        "1.94.0",
+        target(PointerWidth::Bits64, vec![]),
+        &[(0x21, "second_kernel", "second_kernel.kd")],
+        0x19,
+    );
+    let first_expectation = first.expectation;
+    let second_expectation = second.expectation;
+    let containers = vec![first.container, second.container];
+    let bundle = BundleIndexV1::from_containers(&containers).unwrap();
+    let container_refs = [&containers[0], &containers[1]];
+    let sources = [
+        DirectLinkBindingSourceV1::new(&containers[0], first_expectation.clone()),
+        DirectLinkBindingSourceV1::new(&containers[1], second_expectation.clone()),
+    ];
+    let evidence = DirectLinkBundleEvidenceV1::bind(&bundle, &container_refs, &sources).unwrap();
+    let validated = evidence
+        .validate_against(&bundle, &container_refs, &sources)
+        .unwrap();
+    let first_payload = first_expectation.finalized_payload_identity();
+    let first_index = validated
+        .bindings()
+        .iter()
+        .position(|binding| binding.expectation().finalized_payload_identity() == first_payload)
+        .unwrap();
+    let other_index = 1 - first_index;
+    let witness = ArtifactDerivedLinkPublicationScopeV1::derive(
+        package(0x48),
+        &validated,
+        first_index,
+        &containers[0],
+    )
+    .unwrap();
+
+    assert_eq!(
+        DirectLinkPublicationBridgeV1::prepare_with_derived_scope(
+            attempt(23, 0x49),
+            witness,
+            &validated,
+            other_index,
+        ),
+        Err(DirectLinkBridgeError::DerivedScopeMismatch {
+            field: DirectLinkDerivedScopeFieldV1::BindingIndex,
+        })
+    );
+}
+
+#[test]
+fn derived_scope_rejects_a_different_bundle_around_the_same_binding() {
+    let native = evidence(0x18);
+    let native_validated = native.validated();
+    let witness = ArtifactDerivedLinkPublicationScopeV1::derive(
+        package(0x4c),
+        &native_validated,
+        0,
+        &native.container,
+    )
+    .unwrap();
+    let native_binding = native_validated.bindings()[0].clone();
+    drop(native_validated);
+
+    let relocatable_payload =
+        CodeObjectPayload::from_bytes(DigestAlgorithm::Sha256, b"relocatable payload".to_vec())
+            .unwrap();
+    let relocatable_digest = relocatable_payload.digest();
+    let relocatable_manifest = fe2o3_artifacts::ManifestV1::new(
+        CompilerIdentity::new(text("rustc"), text("1.94.0")),
+        ToolIdentity::new(text("fe2o3"), text("0.1.0")),
+        target(PointerWidth::Bits64, vec![]),
+        vec![
+            CodeObjectIdentity::new(
+                relocatable_digest.bytes(),
+                CodeObjectFormat::RelocatableObject,
+                relocatable_payload.bytes().len() as u64,
+            )
+            .unwrap(),
+        ],
+        vec![kernel_with_object_digest(
+            0x30,
+            "relocatable_kernel",
+            "relocatable_kernel.kd",
+            relocatable_digest.bytes(),
+            vec![],
+        )],
+    )
+    .unwrap();
+    let relocatable = ArtifactContainerV1::new(
+        relocatable_manifest,
+        DigestAlgorithm::Sha256,
+        vec![relocatable_payload],
+    )
+    .unwrap();
+    let native_expectation = native.expectation;
+    let containers = vec![native.container, relocatable];
+    let bundle = BundleIndexV1::from_containers(&containers).unwrap();
+    let container_refs = [&containers[0], &containers[1]];
+    let sources = [DirectLinkBindingSourceV1::new(
+        &containers[0],
+        native_expectation,
+    )];
+    let evidence = DirectLinkBundleEvidenceV1::bind(&bundle, &container_refs, &sources).unwrap();
+    let validated = evidence
+        .validate_against(&bundle, &container_refs, &sources)
+        .unwrap();
+
+    assert_eq!(validated.bindings()[0], native_binding);
+    assert_eq!(
+        DirectLinkPublicationBridgeV1::prepare_with_derived_scope(
+            attempt(24, 0x4d),
+            witness,
+            &validated,
+            0,
+        ),
+        Err(DirectLinkBridgeError::DerivedScopeMismatch {
+            field: DirectLinkDerivedScopeFieldV1::BundleEvidence,
+        })
+    );
+}
+
+#[test]
+fn target_payload_alias_kernel_and_container_facts_change_derived_scope() {
+    let base = evidence_variant(
+        b"scope payload A",
+        "1.94.0",
+        target_architecture("gfx942"),
+        &[(0x20, "base", "base.kd")],
+        0x18,
+    );
+    let changed_target = evidence_variant(
+        b"scope payload A",
+        "1.94.0",
+        target_architecture("gfx950"),
+        &[(0x20, "base", "base.kd")],
+        0x18,
+    );
+    let changed_payload = evidence_variant(
+        b"scope payload B",
+        "1.94.0",
+        target_architecture("gfx942"),
+        &[(0x20, "base", "base.kd")],
+        0x18,
+    );
+    let alias_kernel = evidence_variant(
+        b"scope payload A",
+        "1.94.0",
+        target_architecture("gfx942"),
+        &[(0x20, "base", "base.kd"), (0x21, "alias", "alias.kd")],
+        0x18,
+    );
+    let changed_producer_fact = evidence_variant(
+        b"scope payload A",
+        "1.94.1",
+        target_architecture("gfx942"),
+        &[(0x20, "base", "base.kd")],
+        0x18,
+    );
+
+    let derive = |fixture: &EvidenceFixture| {
+        let validated = fixture.validated();
+        ArtifactDerivedLinkPublicationScopeV1::derive(
+            package(0x4a),
+            &validated,
+            0,
+            &fixture.container,
+        )
+        .unwrap()
+        .scope()
+    };
+    let base_scope = derive(&base);
+    let target_scope = derive(&changed_target);
+    let payload_scope = derive(&changed_payload);
+    let alias_scope = derive(&alias_kernel);
+    let producer_scope = derive(&changed_producer_fact);
+
+    assert_ne!(base_scope.target(), target_scope.target());
+    assert_ne!(base_scope.kernel_set(), target_scope.kernel_set());
+    assert_eq!(base_scope.target(), payload_scope.target());
+    assert_ne!(base_scope.kernel_set(), payload_scope.kernel_set());
+    assert_eq!(base_scope.target(), alias_scope.target());
+    assert_ne!(base_scope.kernel_set(), alias_scope.kernel_set());
+    assert_eq!(base_scope.target(), producer_scope.target());
+    assert_ne!(base_scope.kernel_set(), producer_scope.kernel_set());
+}
+
+#[test]
+fn kernel_input_permutation_has_one_canonical_derived_scope() {
+    let forward = evidence_variant(
+        b"permutation payload",
+        "1.94.0",
+        target_architecture("gfx942"),
+        &[(0x20, "alpha", "alpha.kd"), (0x21, "beta", "beta.kd")],
+        0x18,
+    );
+    let reversed = evidence_variant(
+        b"permutation payload",
+        "1.94.0",
+        target_architecture("gfx942"),
+        &[(0x21, "beta", "beta.kd"), (0x20, "alpha", "alpha.kd")],
+        0x18,
+    );
+    assert_eq!(forward.container.to_bytes(), reversed.container.to_bytes());
+
+    let forward_validated = forward.validated();
+    let reversed_validated = reversed.validated();
+    let forward_scope = ArtifactDerivedLinkPublicationScopeV1::derive(
+        package(0x4b),
+        &forward_validated,
+        0,
+        &forward.container,
+    )
+    .unwrap();
+    let reversed_scope = ArtifactDerivedLinkPublicationScopeV1::derive(
+        package(0x4b),
+        &reversed_validated,
+        0,
+        &reversed.container,
+    )
+    .unwrap();
+    assert_eq!(forward_scope.scope(), reversed_scope.scope());
+    assert_eq!(
+        forward_scope.container_identity(),
+        reversed_scope.container_identity()
     );
 }
