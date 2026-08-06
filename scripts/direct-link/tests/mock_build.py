@@ -28,11 +28,16 @@ def main() -> int:
             "timeout",
             "descendant",
             "mutate-source",
+            "mutate-source-restore",
+            "symlink-intermediate",
+            "swap-executable",
         ),
         default="stable",
     )
     parser.add_argument("--marker", type=Path)
     parser.add_argument("--child-marker", type=Path)
+    parser.add_argument("--escape-root", type=Path)
+    parser.add_argument("--swap-executable", type=Path)
     parser.add_argument("--require-clean-env", action="store_true")
     args = parser.parse_args()
 
@@ -55,10 +60,21 @@ def main() -> int:
         return 0
     if args.mode == "missing":
         return 0
-    if args.mode == "mutate-source":
-        Path(__file__).with_name("source-mutation.txt").write_text(
-            "mutated", encoding="ascii"
+    if args.mode in ("mutate-source", "mutate-source-restore"):
+        payload_path = Path(__file__).with_name("payload.txt")
+        original = payload_path.read_bytes()
+        original_stat = payload_path.stat()
+        payload_path.write_bytes(b"X" * len(original))
+        if args.mode == "mutate-source-restore":
+            payload_path.write_bytes(original)
+        os.utime(
+            payload_path,
+            ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns),
         )
+    if args.mode == "swap-executable":
+        if args.swap_executable is None:
+            return 23
+        args.swap_executable.write_bytes(b"swapped executable")
     if args.mode == "descendant":
         if args.marker is None:
             return 22
@@ -72,6 +88,14 @@ def main() -> int:
         chunk = b"x" * (64 * 1024)
         for _ in range(20):
             os.write(sys.stdout.fileno(), chunk)
+    if args.mode == "symlink-intermediate":
+        if args.escape_root is None:
+            return 24
+        args.escape_root.mkdir(parents=True, exist_ok=True)
+        args.linked.parent.symlink_to(args.escape_root, target_is_directory=True)
+        args.linked.write_bytes(b"escaped linked artifact")
+        args.final.write_bytes(b"escaped final artifact")
+        return 0
 
     if args.mode == "large":
         linked_payload = b"L" * (2 * 1024 * 1024)

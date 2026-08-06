@@ -53,8 +53,21 @@ class EvidenceCliTests(unittest.TestCase):
         self, status: str, reason: str
     ) -> reproduce.ReproducibilityResult:
         command = reproduce.canonical_json(
-            [PYTHON, "{source_dir}/build.py"], "canonical_argv"
+            [
+                PYTHON,
+                "{source_dir}/build.py",
+                "--output",
+                "{build_dir}/out",
+                "--target",
+                "{target}",
+            ],
+            "canonical_argv",
         )
+        command_values = reproduce.decode_argv(command)
+        first_source = Path("/tmp/fe2o3-first/source")
+        first_build = Path("/tmp/fe2o3-first/build")
+        second_source = Path("/tmp/fe2o3-second/source")
+        second_build = Path("/tmp/fe2o3-second/build")
         environment = reproduce.canonical_json(
             {"LANG": "C", "LC_ALL": "C", "PATH": "/usr/bin:/bin"},
             "environment",
@@ -72,12 +85,31 @@ class EvidenceCliTests(unittest.TestCase):
             source_tree_identity=typed_identity(
                 reproduce.SOURCE_TREE_DOMAIN, b"source tree"
             ),
+            source_snapshot_identity=typed_identity(
+                reproduce.SOURCE_SNAPSHOT_DOMAIN, b"checked out source bytes"
+            ),
             git_executable_identity=typed_identity(
                 reproduce.GIT_EXECUTABLE_DOMAIN, b"git executable"
             ),
             canonical_argv=command,
             canonical_argv_identity=typed_identity(
                 reproduce.ARGV_DOMAIN, command.encode("ascii")
+            ),
+            first_source_dir=str(first_source),
+            first_build_dir=str(first_build),
+            first_expanded_argv=reproduce.canonical_json(
+                reproduce.expanded_command(
+                    command_values, first_build, first_source, TARGET
+                ),
+                "first_expanded_argv",
+            ),
+            second_source_dir=str(second_source),
+            second_build_dir=str(second_build),
+            second_expanded_argv=reproduce.canonical_json(
+                reproduce.expanded_command(
+                    command_values, second_build, second_source, TARGET
+                ),
+                "second_expanded_argv",
             ),
             build_executable_identity=typed_identity(
                 reproduce.EXECUTABLE_DOMAIN, b"build executable"
@@ -135,9 +167,15 @@ class EvidenceCliTests(unittest.TestCase):
     def test_collection_is_canonical_but_fail_closed(self) -> None:
         path = self.collect_record()
         record = evidence.parse_record(path)
-        self.assertEqual(record.scalars["schema_version"], "2")
+        self.assertEqual(record.scalars["schema_version"], "3")
         self.assertEqual(record.scalars["release_gate"], "blocked")
-        self.assertEqual(record.suites["clean-build-reproducibility"].status, "pass")
+        self.assertEqual(
+            record.suites["clean-build-reproducibility"].status, "unavailable"
+        )
+        self.assertEqual(
+            record.suites["clean-build-reproducibility"].reason,
+            "unauthenticated-reproducibility",
+        )
         for name in (
             "compile",
             "direct-llvm-link",
@@ -178,9 +216,13 @@ class EvidenceCliTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 2)
         self.assertIn(b"unrecognized arguments", completed.stderr)
 
-    def test_forged_compile_and_hardware_provenance_are_rejected(self) -> None:
+    def test_forged_suite_passes_are_rejected(self) -> None:
         record = evidence.parse_record(self.collect_record())
-        for suite_name in ("compile", "hardware-execution"):
+        for suite_name in (
+            "clean-build-reproducibility",
+            "compile",
+            "hardware-execution",
+        ):
             with self.subTest(suite=suite_name):
                 suites = dict(record.suites)
                 original = suites[suite_name]

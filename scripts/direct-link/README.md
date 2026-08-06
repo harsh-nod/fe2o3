@@ -1,60 +1,57 @@
-# Direct LLVM link release evidence
+# Direct LLVM link evidence
 
 These tools produce inert, canonical evidence. They do not publish an artifact,
-authorize module loading, grant kernel launch authority, or prove that a claim
-was produced by trusted CI.
+authorize module loading, grant kernel launch authority, or prove that a record
+came from trusted CI.
 
-## Fail-closed release gate
+## Trust boundary
 
-V2 separates structural inspection from release validation:
+Reproducibility V3 has two inspection commands:
 
-- `inspect` verifies bounds, canonical encoding, typed identities, and record
-  integrity. It returns success for structurally valid pass, fail, or blocked
-  records.
-- `validate` verifies the caller's pinned expectations and returns success only
-  for a passing gate. A valid blocked or failed record returns nonzero.
+- `inspect` verifies bounds, canonical encoding, typed identities, expanded argv,
+  and record integrity. A structurally valid record may describe a local match,
+  failure, or unavailable run.
+- `validate` additionally compares independently supplied expected identities,
+  but always returns nonzero with
+  `missing-authenticated-upstream-attestations`. An internally consistent record
+  is forgeable and cannot become a release pass merely by matching CLI values.
 
-`evidence.py collect` no longer accepts caller-supplied suite pass statuses. It
-consumes a V2 clean-build runner record for reproducibility. Compile, direct-link,
-hardware, and static suites remain unavailable until canonical G2/G5/G6/G7 and
-static-runner record parsers are connected. Therefore the aggregate release gate
-is truthfully blocked even when reproducibility passes.
+The former release-like matrix command is now `inspect-matrix`. It checks the
+shape and consistency of the three target observations but grants no release
+authority.
 
-A future hardware pass must consume a canonical runner record that binds the
-exact commit, link request, finalized artifact, target, observed GPU and driver,
-test executable and argv, oracle, and execution outcome. A digest-shaped string
-or CLI status is insufficient.
+`reproduce.py run` returning zero means only that this invocation observed equal
+linked and finalized bytes in its two builds. The aggregate `evidence.py` gate
+remains blocked until it consumes canonical G2 execution, G5/G6 publication and
+bundle, G7 hardware, and static-runner attestations.
 
-## Reproducibility V2
+Every V3 record carries `trust_level=unauthenticated-local-observation`. The
+aggregate envelope records even a matching local reproducibility observation as
+`unavailable:unauthenticated-reproducibility`, never as a passing release suite.
+
+## Reproducibility V3
 
 `reproduce.py run`:
 
 1. resolves an exact Git commit and hashes its canonical `git ls-tree` snapshot;
-2. creates two independent local clones and detached checkouts of that commit;
-3. verifies each checkout is clean before and after its build;
-4. executes an absolute build executable directly, without a shell, in two new
-   build directories;
-5. binds canonical argv, executable bytes, a fixed environment, Git executable,
-   LLVM/toolchain identity, worker identity, request identity, and target; and
-6. measures both the linked and finalized artifacts under distinct identity
-   domains.
+2. rejects Git submodules because their checked-out content is not yet bound;
+3. creates two independent local clones and detached checkouts with system and
+   global Git configuration, attributes, hooks, and filter drivers disabled;
+4. hashes the actual checked-out tracked file bytes and symlink targets, and
+   retains per-checkout inode, mode, size, mtime, and ctime guards for the
+   post-build check;
+5. requires `{source_dir}`, `{build_dir}`, and `{target}` placeholders and records
+   the canonical template plus both fully expanded argv vectors;
+6. copies the measured build executable into a sealed Linux `memfd` and executes
+   those pinned bytes through `/proc/self/fd`; there is no unpinned fallback;
+7. captures stdout and stderr through bounded parent-owned pipes and kills the
+   original process group after success, failure, overflow, or timeout; and
+8. measures linked and finalized artifacts relative to an already-open build
+   directory, traversing every component with `O_NOFOLLOW`.
 
-Identity hashes include a versioned magic value, the length-delimited identity
-domain, the payload length, and the payload. Files are opened once with symlink
-following disabled and rejected if their device, inode, size, modification time,
-or change time changes during measurement.
-
-Stdout and stderr are captured through bounded parent-owned pipes. The log bound
-does not limit object or HSACO sizes. The runner creates a process group and kills
-that group after every outcome, including normal parent exit and timeout. It does
-not contain a hostile process that creates a new session or escapes into another
-process group; production gating needs the G2 supervisor plus OS containment,
-such as a delegated cgroup, for that threat model.
-
-The executable and artifacts are measured evidence, not same-descriptor runtime
-authority. A later publisher or loader must consume the typed G5/G6 bundle and
-load the exact admitted bytes. LLVM/toolchain, worker, and request identities are
-bound assertions until their canonical upstream records are parsed.
+Identity hashes contain a versioned magic value, length-delimited identity
+domain, payload length, and payload. File measurements reject changes to device,
+inode, size, mtime, or ctime while the descriptor is being read.
 
 Example:
 
@@ -75,30 +72,33 @@ python3 scripts/direct-link/reproduce.py run \
      --target '{target}' > repro-gfx942.tsv
 ```
 
-The former existing-file `compare` command was removed because comparing two
-caller-selected paths cannot satisfy clean-build release gating.
+## Aggregate evidence
 
-## Evidence collection
+`evidence.py collect` does not accept caller-supplied suite pass statuses. It
+consumes the V3 local reproducibility observation and exact release files. The
+other suites remain unavailable, so collection emits a canonical blocked record
+and returns nonzero.
 
-Collection consumes the exact release files and the V2 reproducibility result:
+A future hardware pass must bind the exact commit, link request, finalized
+artifact, target, observed GPU and driver, test executable and argv, oracle, and
+execution outcome. A digest-shaped string is insufficient.
 
-```console
-python3 scripts/direct-link/evidence.py collect \
-  --git-commit "$COMMIT" \
-  --target gfx942 \
-  --worker-executable "$WORKER" \
-  --worker-identity "$WORKER_ID" \
-  --llvm-toolchain-identity "$LLVM_TOOLCHAIN_ID" \
-  --request-identity "$REQUEST_ID" \
-  --linked-artifact "$LINKED_HSACO" \
-  --final-artifact "$FINAL_HSACO" \
-  --repro-result repro-gfx942.tsv > evidence.tsv
-```
+## Remaining limits
 
-This currently returns nonzero with a canonical blocked record. That is expected
-until the remaining typed provenance consumers exist.
+- Process-group cleanup cannot contain a hostile child that calls `setsid`, joins
+  another process group, or escapes an external cgroup. Production runs need the
+  G2 supervisor plus OS containment.
+- Only the top-level build executable is pinned. Compilers, linkers, interpreters,
+  shared libraries, and other subprocesses it loads remain assertions until the
+  complete toolchain closure is pinned and attested.
+- Artifact descriptors are closed after measurement. Same-byte publication and
+  runtime loading still require the G5/G6 transaction and bundle path.
+- Records are not signed and are not trusted-runner attestations. `validate`
+  therefore remains blocked even for an internally consistent matching record.
+- Linux sealed `memfd` execution and procfs are required. Unsupported hosts fail
+  closed instead of running an unpinned executable.
 
-Run the CPU-only hardening tests with:
+Run the CPU-only hardening suite with:
 
 ```console
 python3 -m unittest discover -s scripts/direct-link/tests -v

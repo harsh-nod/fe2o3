@@ -134,6 +134,74 @@ def _open_regular(path: Path) -> int:
     return descriptor
 
 
+def open_directory(path: Path) -> int:
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_DIRECTORY", 0)
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as error:
+        raise EvidenceError(f"cannot pin directory {path}: {error.strerror}") from error
+    if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+        os.close(descriptor)
+        raise EvidenceError(f"input is not a directory: {path}")
+    return descriptor
+
+
+def relative_parts(path: Path) -> tuple[str, ...]:
+    parts = path.parts
+    if (
+        path.is_absolute()
+        or not parts
+        or any(part in ("", ".", "..") for part in parts)
+    ):
+        raise EvidenceError("descriptor-relative path is empty, absolute, or traverses")
+    return parts
+
+
+def open_parent_beneath(root_descriptor: int, path: Path) -> tuple[int, str]:
+    parts = relative_parts(path)
+    current = os.dup(root_descriptor)
+    directory_flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    try:
+        for component in parts[:-1]:
+            try:
+                next_descriptor = os.open(component, directory_flags, dir_fd=current)
+            except OSError as error:
+                raise EvidenceError(
+                    f"path component is not a no-follow directory: {component}"
+                ) from error
+            os.close(current)
+            current = next_descriptor
+        return current, parts[-1]
+    except Exception:
+        os.close(current)
+        raise
+
+
+def open_regular_beneath(root_descriptor: int, path: Path) -> int:
+    parent, name = open_parent_beneath(root_descriptor, path)
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        try:
+            descriptor = os.open(name, flags, dir_fd=parent)
+        except OSError as error:
+            raise EvidenceError(
+                f"cannot open descriptor-relative regular file {path}: {error.strerror}"
+            ) from error
+    finally:
+        os.close(parent)
+    if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+        os.close(descriptor)
+        raise EvidenceError(f"descriptor-relative input is not a regular file: {path}")
+    return descriptor
+
+
 def read_regular_file(path: Path, maximum: int = MAX_RECORD_BYTES) -> bytes:
     descriptor = _open_regular(path)
     try:
@@ -164,32 +232,43 @@ def read_regular_file(path: Path, maximum: int = MAX_RECORD_BYTES) -> bytes:
 def typed_file_identity(domain: str, path: Path) -> str:
     descriptor = _open_regular(path)
     try:
-        before = os.fstat(descriptor)
-        if before.st_size > MAX_HASHED_FILE_BYTES:
-            raise EvidenceError(
-                f"hashed input exceeds the {MAX_HASHED_FILE_BYTES}-byte bound: {path}"
-            )
-        digest = hashlib.sha256()
-        digest.update(identity_prefix(domain, before.st_size))
-        total = 0
-        while True:
-            chunk = os.read(descriptor, 1024 * 1024)
-            if not chunk:
-                break
-            total += len(chunk)
-            if total > MAX_HASHED_FILE_BYTES:
-                raise EvidenceError(
-                    f"hashed input exceeds the {MAX_HASHED_FILE_BYTES}-byte bound: {path}"
-                )
-            digest.update(chunk)
-        after = os.fstat(descriptor)
-        if total != before.st_size or metadata_snapshot(before) != metadata_snapshot(
-            after
-        ):
-            raise EvidenceError(f"hashed input changed while being measured: {path}")
-        return f"{domain}-sha256-{digest.hexdigest()}"
+        return typed_descriptor_identity(domain, descriptor, str(path))
     finally:
         os.close(descriptor)
+
+
+def typed_file_identity_beneath(domain: str, root_descriptor: int, path: Path) -> str:
+    descriptor = open_regular_beneath(root_descriptor, path)
+    try:
+        return typed_descriptor_identity(domain, descriptor, str(path))
+    finally:
+        os.close(descriptor)
+
+
+def typed_descriptor_identity(domain: str, descriptor: int, name: str) -> str:
+    before = os.fstat(descriptor)
+    if before.st_size > MAX_HASHED_FILE_BYTES:
+        raise EvidenceError(
+            f"hashed input exceeds the {MAX_HASHED_FILE_BYTES}-byte bound: {name}"
+        )
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    digest = hashlib.sha256()
+    digest.update(identity_prefix(domain, before.st_size))
+    total = 0
+    while True:
+        chunk = os.read(descriptor, 1024 * 1024)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > MAX_HASHED_FILE_BYTES:
+            raise EvidenceError(
+                f"hashed input exceeds the {MAX_HASHED_FILE_BYTES}-byte bound: {name}"
+            )
+        digest.update(chunk)
+    after = os.fstat(descriptor)
+    if total != before.st_size or metadata_snapshot(before) != metadata_snapshot(after):
+        raise EvidenceError(f"hashed input changed while being measured: {name}")
+    return f"{domain}-sha256-{digest.hexdigest()}"
 
 
 def decode_canonical_text(data: bytes, name: str) -> list[str]:

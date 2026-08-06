@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Collect fail-closed V2 evidence for the direct LLVM link release gate."""
+"""Collect fail-closed V3 evidence for the direct LLVM link release gate."""
 
 from __future__ import annotations
 
@@ -29,8 +29,8 @@ from reproduce import (
     parse_result,
 )
 
-SCHEMA_VERSION = "2"
-RECORD_DOMAIN = "fe2o3-direct-link-evidence-v2"
+SCHEMA_VERSION = "3"
+RECORD_DOMAIN = "fe2o3-direct-link-evidence-v3"
 WORKER_EXECUTABLE_DOMAIN = "fe2o3-worker-executable-v1"
 SCALAR_FIELDS = (
     "schema_version",
@@ -116,7 +116,7 @@ def validate_record(record: EvidenceRecord) -> None:
 
     scalars = record.scalars
     if scalars["schema_version"] != SCHEMA_VERSION:
-        raise EvidenceError("schema_version must be exactly 2")
+        raise EvidenceError("schema_version must be exactly 3")
     require_commit(scalars["git_commit"])
     require_target(scalars["target"])
     for field, domain in (
@@ -139,14 +139,8 @@ def validate_record(record: EvidenceRecord) -> None:
         if suite.status == "pass":
             if suite.reason != "-":
                 raise EvidenceError(f"passing suite {name} must use reason '-'")
-            if name != "clean-build-reproducibility":
-                raise EvidenceError(
-                    f"suite {name} cannot pass until its typed provenance parser exists"
-                )
-            require_typed_identity(
-                suite.provenance_identity,
-                REPRO_RECORD_DOMAIN,
-                "reproducibility provenance",
+            raise EvidenceError(
+                f"suite {name} cannot pass until its authenticated provenance parser exists"
             )
         else:
             require_reason(suite.reason)
@@ -160,13 +154,7 @@ def validate_record(record: EvidenceRecord) -> None:
 
     reproduction = record.suites["clean-build-reproducibility"]
     if reproduction.provenance_identity != scalars["reproducibility_identity"]:
-        raise EvidenceError("reproducibility suite does not bind its V2 record")
-    hardware = record.suites["hardware-execution"]
-    if hardware.status == "pass":
-        raise EvidenceError(
-            "hardware pass requires the unavailable typed G7 execution parser"
-        )
-
+        raise EvidenceError("reproducibility suite does not bind its V3 record")
     expected_gate = derive_release_gate(record.suites)
     if scalars["release_gate"] != expected_gate:
         raise EvidenceError(
@@ -280,12 +268,17 @@ def build_record(args: argparse.Namespace) -> EvidenceRecord:
         final_artifact,
     )
 
+    reproduction_status = reproduction.status
+    reproduction_reason = reproduction.reason
+    if reproduction_status == "pass":
+        reproduction_status = "unavailable"
+        reproduction_reason = "unauthenticated-reproducibility"
     suites = {
         "clean-build-reproducibility": SuiteOutcome(
             "clean-build-reproducibility",
             "reproducibility",
-            reproduction.status,
-            reproduction.reason,
+            reproduction_status,
+            reproduction_reason,
             reproduction.identity(),
         ),
         "compile": SuiteOutcome(
