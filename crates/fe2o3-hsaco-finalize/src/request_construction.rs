@@ -5,6 +5,13 @@ use std::fmt;
 use fe2o3_kernel_descriptor::{CodeObjectVersion, DeviceTargetV1};
 use sha2::{Digest, Sha256};
 
+use fe2o3_artifact_transaction::{
+    BuildAttempt, CompilerModuleHandoffIdentityV1, ConsumedCompilerModuleHandoffV1,
+};
+use fe2o3_compiler_ffi::{
+    CompilerModuleHandoffErrorV1, CompilerModuleHandoffV1, CompilerModuleKindV1,
+};
+
 use crate::{
     ContentIdentityV1, LinkPlanIdentityV1, MultiInputLinkPlanV1, StagedCompilerFfiEnvelopeV1,
     WorkerInputKindV1, WorkerInputV1, WorkerMeasurementV1, WorkerOptimizationLevelV1,
@@ -399,9 +406,99 @@ pub(crate) fn construct_worker_request_v2(
     .map_err(WorkerRequestConstructionError::WorkerProtocol)
 }
 
+/// A Worker V2 request whose compiler module crossed one exact build-attempt handoff.
+///
+/// This value has no public constructor. It retains the attempt and complete handoff identity so
+/// later evidence cannot accidentally bind the sealed request to a different build generation.
+/// It remains inert and grants no publication, loading, or launch authority.
+#[derive(Debug, Eq, PartialEq)]
+pub struct CompilerHandoffWorkerRequestV2 {
+    attempt: BuildAttempt,
+    handoff_identity: CompilerModuleHandoffIdentityV1,
+    request: WorkerRequestV2,
+}
+
+impl CompilerHandoffWorkerRequestV2 {
+    pub const fn attempt(&self) -> BuildAttempt {
+        self.attempt
+    }
+
+    pub const fn handoff_identity(&self) -> CompilerModuleHandoffIdentityV1 {
+        self.handoff_identity
+    }
+
+    pub const fn sealed_request(&self) -> &WorkerRequestV2 {
+        &self.request
+    }
+
+    pub const fn grants_publication_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_load_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
+    }
+}
+
+/// Constructs the only public Worker V2 request from a consumed, attempt-scoped handoff.
+///
+/// The complete canonical handoff is decoded again after one-shot consumption. Target,
+/// code-object version, envelope, module kind, exact module bytes, plan inputs, worker
+/// measurement, final symbol closure, and output bound must all agree. A decode or construction
+/// failure consumes no lesser authority: the on-disk tombstone prevents replay.
+pub fn construct_worker_request_v2_from_consumed_handoff(
+    plan: &MultiInputLinkPlanV1,
+    measurement: &WorkerMeasurementV1,
+    consumed: ConsumedCompilerModuleHandoffV1,
+    external_providers: Vec<WorkerInputV1>,
+    input_kinds: &LinkInputKindClosureV1,
+    final_symbols: &[String],
+    output: WorkerOutputConstraintsV1,
+) -> Result<CompilerHandoffWorkerRequestV2, WorkerRequestConstructionError> {
+    let attempt = consumed.attempt();
+    let handoff_identity = consumed.identity();
+    let handoff = CompilerModuleHandoffV1::decode(consumed.bytes())
+        .map_err(WorkerRequestConstructionError::CompilerModuleHandoff)?;
+    let parts = handoff.into_parts();
+    let target = parts.target();
+    let code_object_version = parts.code_object_version();
+    let (envelope, module) = parts.into_envelope_and_module();
+    let kind = match module.kind() {
+        CompilerModuleKindV1::LlvmTextIr => WorkerInputKindV1::LlvmTextIr,
+        CompilerModuleKindV1::LlvmBitcode => WorkerInputKindV1::LlvmBitcode,
+    };
+    let compiler_module = stage_exact_compiler_module_artifact_v1(kind, module.into_bytes())
+        .map_err(WorkerRequestConstructionError::WorkerProtocol)?;
+    let staged_envelope = crate::stage_compiler_ffi_envelope_v1(envelope);
+    let (_, options) = decode_plan_options(plan)?;
+    let request = construct_worker_request_v2(
+        plan,
+        measurement,
+        target,
+        code_object_version,
+        options,
+        staged_envelope,
+        compiler_module,
+        external_providers,
+        input_kinds,
+        final_symbols,
+        output,
+    )?;
+    Ok(CompilerHandoffWorkerRequestV2 {
+        attempt,
+        handoff_identity,
+        request,
+    })
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum WorkerRequestConstructionError {
+    CompilerModuleHandoff(CompilerModuleHandoffErrorV1),
     EmptySymbolClosure,
     InvalidRequiredSymbols(WorkerProtocolError),
     InvalidImportSymbols(WorkerProtocolError),
@@ -466,6 +563,12 @@ pub enum WorkerRequestConstructionError {
 impl fmt::Display for WorkerRequestConstructionError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::CompilerModuleHandoff(error) => {
+                write!(
+                    formatter,
+                    "invalid consumed compiler-module handoff: {error}"
+                )
+            }
             Self::EmptySymbolClosure => formatter.write_str("device link symbol closure is empty"),
             Self::InvalidRequiredSymbols(error) => {
                 write!(formatter, "invalid required-symbol set: {error}")
@@ -576,7 +679,19 @@ impl fmt::Display for WorkerRequestConstructionError {
     }
 }
 
-impl std::error::Error for WorkerRequestConstructionError {}
+impl std::error::Error for WorkerRequestConstructionError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::CompilerModuleHandoff(error) => Some(error),
+            Self::WorkerProtocol(error)
+            | Self::InvalidRequiredSymbols(error)
+            | Self::InvalidImportSymbols(error)
+            | Self::InvalidExportSymbols(error)
+            | Self::InvalidFinalSymbols(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 
 fn validate_inputs(
     plan: &MultiInputLinkPlanV1,
@@ -831,14 +946,24 @@ const fn code_object_version_byte(version: CodeObjectVersion) -> u8 {
 mod v2_tests {
     use super::*;
     use crate::{LinkInputV1, LinkOptionV1, LinkOutputV1, ProvenanceNodeV1};
+    use fe2o3_artifact_transaction::{
+        BuildInvocation, BuildSession, ProducerIdentity, begin_build_attempt,
+        consume_compiler_module_handoff_v1, publish_compiler_module_handoff_v1,
+    };
     use fe2o3_compiler_ffi::{
         CodeObjectVersion as CompilerCodeObjectVersion, CompilerFfiContractV1,
-        CompilerFfiEnvelopeBuilderV1, CompilerFfiLinkRoleV1, CompilerFfiSourceOwnerV1,
+        CompilerFfiEnvelopeBuilderV1, CompilerFfiEnvelopeV1, CompilerFfiLinkRoleV1,
+        CompilerFfiSourceOwnerV1, CompilerModuleHandoffV1, CompilerModuleKindV1,
         DeviceTargetV1 as CompilerDeviceTargetV1,
     };
     use reserved_fe2o3_symbols::{
         DEVICE_FFI_DIRECTION_EXPORT_V1, DEVICE_FFI_DIRECTION_IMPORT_V1, DeviceFfiContractFieldsV1,
         DeviceFfiDirectionV1, derive_device_ffi_contract_id_v1,
+    };
+    use std::{
+        fs,
+        path::PathBuf,
+        sync::atomic::{AtomicU64, Ordering},
     };
 
     const ABI: &str = "C(u32[size=4,align=4])->u32[size=4,align=4]";
@@ -906,7 +1031,7 @@ mod v2_tests {
         }
     }
 
-    fn envelope(import_symbol: &str) -> StagedCompilerFfiEnvelopeV1 {
+    fn compiler_envelope(import_symbol: &str) -> CompilerFfiEnvelopeV1 {
         let compiler_target = CompilerDeviceTargetV1::parse("gfx942:xnack-").unwrap();
         let mut builder =
             CompilerFfiEnvelopeBuilderV1::new(compiler_target, CompilerCodeObjectVersion::V6, 2)
@@ -927,7 +1052,11 @@ mod v2_tests {
                 0x42,
             ))
             .unwrap();
-        crate::stage_compiler_ffi_envelope_v1(builder.finish().unwrap())
+        builder.finish().unwrap()
+    }
+
+    fn envelope(import_symbol: &str) -> StagedCompilerFfiEnvelopeV1 {
+        crate::stage_compiler_ffi_envelope_v1(compiler_envelope(import_symbol))
     }
 
     fn contract(
@@ -987,6 +1116,81 @@ mod v2_tests {
             .into_iter()
             .map(str::to_owned)
             .collect()
+    }
+
+    struct TestDirectory(PathBuf);
+
+    impl TestDirectory {
+        fn new() -> Self {
+            static NEXT: AtomicU64 = AtomicU64::new(1);
+            let path = std::env::temp_dir().join(format!(
+                "fe2o3-finalizer-consumed-handoff-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for TestDirectory {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn public_v2_construction_requires_and_retains_consumed_attempt_handoff() {
+        let fixture = fixture();
+        let directory = TestDirectory::new();
+        let producer =
+            ProducerIdentity::from_codegen("ffi_crate", Some(std::path::Path::new("src/lib.rs")))
+                .unwrap();
+        let attempt = begin_build_attempt(
+            &directory.0,
+            &producer,
+            BuildInvocation::from_bytes([0x71; 32]),
+            BuildSession::from_bytes([0x72; 16]),
+        )
+        .unwrap();
+        let handoff = CompilerModuleHandoffV1::new(
+            CompilerModuleKindV1::LlvmBitcode,
+            CompilerDeviceTargetV1::parse("gfx942:xnack-").unwrap(),
+            CompilerCodeObjectVersion::V6,
+            compiler_envelope("external_add"),
+            MODULE,
+        )
+        .unwrap();
+        let receipt = publish_compiler_module_handoff_v1(
+            &directory.0,
+            &producer,
+            attempt,
+            handoff.canonical_bytes(),
+        )
+        .unwrap();
+        let consumed =
+            consume_compiler_module_handoff_v1(&directory.0, &producer, attempt).unwrap();
+        let request = construct_worker_request_v2_from_consumed_handoff(
+            &fixture.plan,
+            &measurement(),
+            consumed,
+            vec![fixture.provider.clone()],
+            &fixture.kinds,
+            &final_symbols(),
+            fixture.output,
+        )
+        .unwrap();
+
+        assert_eq!(request.attempt(), attempt);
+        assert_eq!(request.handoff_identity(), receipt.identity());
+        assert_eq!(request.sealed_request().compiler_module().bytes(), MODULE);
+        assert_eq!(
+            request.sealed_request().external_providers(),
+            &[fixture.provider]
+        );
+        assert!(!request.grants_publication_authority());
+        assert!(!request.grants_load_authority());
+        assert!(!request.grants_launch_authority());
     }
 
     #[test]

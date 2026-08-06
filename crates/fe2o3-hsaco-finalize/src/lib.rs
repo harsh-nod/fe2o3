@@ -62,8 +62,9 @@ pub use link_plan::{
     MAX_LINK_PROVENANCE_EDGES, MAX_LINK_PROVENANCE_NODES, MultiInputLinkPlanV1, ProvenanceNodeV1,
 };
 pub use request_construction::{
-    LinkInputKindClosureIdentityV1, LinkInputKindClosureV1, LinkSymbolClosureIdentityV1,
-    LinkSymbolClosureV1, WorkerRequestConstructionError, construct_worker_request_v1,
+    CompilerHandoffWorkerRequestV2, LinkInputKindClosureIdentityV1, LinkInputKindClosureV1,
+    LinkSymbolClosureIdentityV1, LinkSymbolClosureV1, WorkerRequestConstructionError,
+    construct_worker_request_v1, construct_worker_request_v2_from_consumed_handoff,
 };
 pub use worker_executor::{
     DEFAULT_WORKER_STDERR_BYTES, DEFAULT_WORKER_TIMEOUT, InertWorkerExecutionV1,
