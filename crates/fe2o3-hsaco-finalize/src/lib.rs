@@ -16,11 +16,24 @@ use fe2o3_kernel_descriptor::{
     decode_device_descriptor_table_v1,
 };
 
+mod compiler_ffi_bridge;
 mod link_plan;
 mod request_construction;
 mod worker_executor;
 mod worker_protocol;
 
+pub use compiler_ffi_bridge::{
+    CompilerFfiBridgeError, CompilerFfiClosureIdentityV1, CompilerFfiClosureV1,
+    CompilerFfiContractIdentityV1, CompilerFfiDeclaredClaimsV1, CompilerFfiDefinitionV1,
+    CompilerFfiDirectionV1, CompilerFfiFieldOriginV1, CompilerFfiPlanInputBindingV1,
+    CompilerFfiPlanInputRoleV1, CompilerFfiProviderBindingV1, CompilerFfiSourceOwnerIdentityV1,
+    CompilerFfiSourceOwnerV1, CompilerFfiSymbolFieldV1, CompilerFfiSymbolV1,
+    MAX_COMPILER_FFI_CLOSURE_BYTES_V1, MAX_COMPILER_FFI_CRATE_NAME_BYTES_V1,
+    MAX_COMPILER_FFI_EFFECT_BYTES_V1, MAX_COMPILER_FFI_INSTANCE_SYMBOL_BYTES_V1,
+    MAX_COMPILER_FFI_ITEM_PATH_BYTES_V1, MAX_COMPILER_FFI_PHYSICAL_ABI_BYTES_V1,
+    MAX_COMPILER_FFI_SYMBOLS_V1, PlanBoundCompilerFfiClosureIdentityV1,
+    PlanBoundCompilerFfiClosureV1, bind_compiler_ffi_closure_v1,
+};
 pub use link_plan::{
     ContentIdentityV1, LinkInputV1, LinkOptionV1, LinkOutputV1, LinkPlanError, LinkPlanIdentityV1,
     MAX_LINK_INPUTS, MAX_LINK_OPTION_NAME_BYTES, MAX_LINK_OPTION_VALUE_BYTES, MAX_LINK_OPTIONS,
