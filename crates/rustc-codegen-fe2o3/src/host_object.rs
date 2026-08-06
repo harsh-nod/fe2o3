@@ -16,14 +16,15 @@ const ARTIFACT_ID_HEX_BYTES: usize = 64;
 const MAX_PAYLOAD_BYTES: usize = 4 * 1024 * 1024;
 const MAX_OBJECT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_HOST_OBJECTS: usize = 256;
-const SYMBOL_PREFIX: &str = "__fe2o3_host_object_";
+const MAX_SYMBOL_STEM_BYTES: usize = 128;
+const SYMBOL_PREFIX: &str = "__fe2o3_kernel_artifact_";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GeneratedHostObject {
     module_name: String,
     path: PathBuf,
-    start_symbol: String,
-    end_symbol: String,
+    pointer_symbol: String,
+    length_symbol: String,
     exact_object: Box<[u8]>,
 }
 
@@ -36,12 +37,12 @@ impl GeneratedHostObject {
         &self.module_name
     }
 
-    pub(crate) fn start_symbol(&self) -> &str {
-        &self.start_symbol
+    pub(crate) fn pointer_symbol(&self) -> &str {
+        &self.pointer_symbol
     }
 
-    pub(crate) fn end_symbol(&self) -> &str {
-        &self.end_symbol
+    pub(crate) fn length_symbol(&self) -> &str {
+        &self.length_symbol
     }
 
     pub(crate) fn validate_unchanged(&self) -> Result<(), HostObjectError> {
@@ -72,8 +73,8 @@ impl GeneratedHostObjects {
             }
             if symbols_collide(existing, &object) {
                 return Err(HostObjectError::SymbolCollision {
-                    first: existing.start_symbol().to_owned(),
-                    second: object.start_symbol().to_owned(),
+                    first: existing.pointer_symbol().to_owned(),
+                    second: object.pointer_symbol().to_owned(),
                 });
             }
             if existing.module_name() == object.module_name() {
@@ -134,10 +135,10 @@ impl GeneratedHostObjects {
 }
 
 fn symbols_collide(first: &GeneratedHostObject, second: &GeneratedHostObject) -> bool {
-    [first.start_symbol(), first.end_symbol()]
+    [first.pointer_symbol(), first.length_symbol()]
         .into_iter()
         .any(|first_symbol| {
-            [second.start_symbol(), second.end_symbol()]
+            [second.pointer_symbol(), second.length_symbol()]
                 .into_iter()
                 .any(|second_symbol| first_symbol == second_symbol)
         })
@@ -166,14 +167,22 @@ pub(crate) fn generate_host_object(
     host_triple: &str,
     output_path: &Path,
     artifact_id: &str,
+    symbol_stem: &str,
     payload: &[u8],
 ) -> Result<GeneratedHostObject, HostObjectError> {
-    validate_request(toolchain, host_triple, output_path, artifact_id, payload)?;
+    validate_request(
+        toolchain,
+        host_triple,
+        output_path,
+        artifact_id,
+        symbol_stem,
+        payload,
+    )?;
 
-    let start_symbol = format!("{SYMBOL_PREFIX}{artifact_id}_start");
-    let end_symbol = format!("{SYMBOL_PREFIX}{artifact_id}_end");
+    let pointer_symbol = format!("{SYMBOL_PREFIX}{symbol_stem}_ptr");
+    let length_symbol = format!("{SYMBOL_PREFIX}{symbol_stem}_len");
     let module_name = format!("fe2o3-host-object-{artifact_id}");
-    let assembly = render_assembly(artifact_id, &start_symbol, &end_symbol, payload);
+    let assembly = render_assembly(artifact_id, &pointer_symbol, &length_symbol, payload);
 
     let mut child = Command::new(&toolchain.llvm_mc)
         .args(["-triple=x86_64-unknown-linux-gnu", "-filetype=obj", "-o"])
@@ -228,8 +237,8 @@ pub(crate) fn generate_host_object(
     Ok(GeneratedHostObject {
         module_name,
         path: output_path.to_path_buf(),
-        start_symbol,
-        end_symbol,
+        pointer_symbol,
+        length_symbol,
         exact_object,
     })
 }
@@ -239,6 +248,7 @@ fn validate_request(
     host_triple: &str,
     output_path: &Path,
     artifact_id: &str,
+    symbol_stem: &str,
     payload: &[u8],
 ) -> Result<(), HostObjectError> {
     if host_triple != SUPPORTED_HOST_TRIPLE {
@@ -253,6 +263,9 @@ fn validate_request(
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     {
         return Err(HostObjectError::InvalidArtifactId(artifact_id.to_owned()));
+    }
+    if !valid_symbol_stem(symbol_stem) {
+        return Err(HostObjectError::InvalidSymbolStem(symbol_stem.to_owned()));
     }
     if payload.is_empty() {
         return Err(HostObjectError::EmptyPayload);
@@ -281,19 +294,29 @@ fn validate_request(
     Ok(())
 }
 
+fn valid_symbol_stem(symbol_stem: &str) -> bool {
+    if symbol_stem.is_empty() || symbol_stem.len() > MAX_SYMBOL_STEM_BYTES {
+        return false;
+    }
+    let mut bytes = symbol_stem.bytes();
+    let Some(first) = bytes.next() else {
+        return false;
+    };
+    (first.is_ascii_alphabetic() || first == b'_')
+        && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+}
+
 fn render_assembly(
     artifact_id: &str,
-    start_symbol: &str,
-    end_symbol: &str,
+    pointer_symbol: &str,
+    length_symbol: &str,
     payload: &[u8],
 ) -> String {
     let mut assembly = format!(
         ".section .rodata.fe2o3.{artifact_id},\"a\",@progbits\n\
          .p2align 4\n\
-         .globl {start_symbol}\n\
-         .hidden {start_symbol}\n\
-         .type {start_symbol},@object\n\
-         {start_symbol}:\n"
+         .type .Lfe2o3_artifact_data_{artifact_id},@object\n\
+         .Lfe2o3_artifact_data_{artifact_id}:\n"
     );
     for chunk in payload.chunks(16) {
         assembly.push_str(".byte ");
@@ -309,13 +332,26 @@ fn render_assembly(
     use fmt::Write as _;
     write!(
         assembly,
-        ".globl {end_symbol}\n\
-         .hidden {end_symbol}\n\
-         .type {end_symbol},@object\n\
-         {end_symbol}:\n\
-         .size {start_symbol}, {end_symbol}-{start_symbol}\n\
-         .size {end_symbol}, 0\n\
-         .section .note.GNU-stack,\"\",@progbits\n"
+        ".size .Lfe2o3_artifact_data_{artifact_id}, {payload_length}\n\
+         .section .text.fe2o3.{artifact_id},\"ax\",@progbits\n\
+         .p2align 4\n\
+         .globl {pointer_symbol}\n\
+         .hidden {pointer_symbol}\n\
+         .type {pointer_symbol},@function\n\
+         {pointer_symbol}:\n\
+         leaq .Lfe2o3_artifact_data_{artifact_id}(%rip), %rax\n\
+         retq\n\
+         .size {pointer_symbol}, .-{pointer_symbol}\n\
+         .p2align 4\n\
+         .globl {length_symbol}\n\
+         .hidden {length_symbol}\n\
+         .type {length_symbol},@function\n\
+         {length_symbol}:\n\
+         movl ${payload_length}, %eax\n\
+         retq\n\
+         .size {length_symbol}, .-{length_symbol}\n\
+         .section .note.GNU-stack,\"\",@progbits\n",
+        payload_length = payload.len(),
     )
     .expect("writing to String cannot fail");
     assembly
@@ -374,6 +410,7 @@ pub(crate) enum HostObjectError {
     UnsupportedHost(String),
     MissingTool(PathBuf),
     InvalidArtifactId(String),
+    InvalidSymbolStem(String),
     EmptyPayload,
     PayloadTooLarge(usize),
     InvalidOutputPath(PathBuf),
@@ -422,6 +459,10 @@ impl fmt::Display for HostObjectError {
             Self::InvalidArtifactId(id) => write!(
                 formatter,
                 "host-object artifact ID must be exactly 64 lowercase hexadecimal bytes; found {id:?}"
+            ),
+            Self::InvalidSymbolStem(stem) => write!(
+                formatter,
+                "host-object symbol stem must be 1 to {MAX_SYMBOL_STEM_BYTES} ASCII identifier bytes; found {stem:?}"
             ),
             Self::EmptyPayload => formatter.write_str("host-object payload must not be empty"),
             Self::PayloadTooLarge(length) => write!(
@@ -506,6 +547,8 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     const ID: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    const OTHER_ID: &str = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+    const SYMBOL_STEM: &str = "vecadd_gpu";
     const PAYLOAD: &[u8] = b"fe2o3 synthetic host object payload\0\xff";
     static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
 
@@ -552,6 +595,7 @@ mod tests {
             SUPPORTED_HOST_TRIPLE,
             &first_dir.0.join("fixture.o"),
             ID,
+            SYMBOL_STEM,
             PAYLOAD,
         )
         .expect("generate first object");
@@ -560,19 +604,26 @@ mod tests {
             SUPPORTED_HOST_TRIPLE,
             &second_dir.0.join("fixture.o"),
             ID,
+            SYMBOL_STEM,
             PAYLOAD,
         )
         .expect("generate second object");
 
         assert_eq!(first.exact_object, second.exact_object);
-        assert_eq!(first.start_symbol(), format!("{SYMBOL_PREFIX}{ID}_start"));
-        assert_eq!(first.end_symbol(), format!("{SYMBOL_PREFIX}{ID}_end"));
+        assert_eq!(
+            first.pointer_symbol(),
+            format!("{SYMBOL_PREFIX}{SYMBOL_STEM}_ptr")
+        );
+        assert_eq!(
+            first.length_symbol(),
+            format!("{SYMBOL_PREFIX}{SYMBOL_STEM}_len")
+        );
         first.validate_unchanged().expect("object remains exact");
     }
 
     #[test]
     #[ignore = "requires the configured ROCm LLVM toolchain"]
-    fn linked_symbols_bracket_exact_payload() {
+    fn linked_accessors_return_exact_payload() {
         let toolchain = test_toolchain();
         let directory = TestDir::new();
         let object = generate_host_object(
@@ -580,6 +631,7 @@ mod tests {
             SUPPORTED_HOST_TRIPLE,
             &directory.0.join("fixture.o"),
             ID,
+            SYMBOL_STEM,
             PAYLOAD,
         )
         .expect("generate object");
@@ -604,22 +656,22 @@ mod tests {
         let source = format!(
             r#"
 unsafe extern "C" {{
-    #[link_name = "{start}"]
-    static START: u8;
-    #[link_name = "{end}"]
-    static END: u8;
+    #[link_name = "{pointer}"]
+    fn artifact_pointer() -> *const u8;
+    #[link_name = "{length}"]
+    fn artifact_length() -> usize;
 }}
 
 fn main() {{
-    let start = core::ptr::addr_of!(START);
-    let end = core::ptr::addr_of!(END);
-    let length = end.addr().checked_sub(start.addr()).expect("ordered symbols");
-    let bytes = unsafe {{ core::slice::from_raw_parts(start, length) }};
+    let pointer = unsafe {{ artifact_pointer() }};
+    let length = unsafe {{ artifact_length() }};
+    assert!(!pointer.is_null());
+    let bytes = unsafe {{ core::slice::from_raw_parts(pointer, length) }};
     assert_eq!(bytes, &[{expected}]);
 }}
 "#,
-            start = object.start_symbol(),
-            end = object.end_symbol(),
+            pointer = object.pointer_symbol(),
+            length = object.length_symbol(),
         );
         let source_path = directory.0.join("consumer.rs");
         let executable_path = directory.0.join("consumer");
@@ -660,13 +712,113 @@ fn main() {{
                 "aarch64-unknown-linux-gnu",
                 &output,
                 ID,
+                SYMBOL_STEM,
                 PAYLOAD
             ),
             Err(HostObjectError::UnsupportedHost(_))
         ));
         assert!(matches!(
-            validate_request(&toolchain, SUPPORTED_HOST_TRIPLE, &output, ID, PAYLOAD),
+            validate_request(
+                &toolchain,
+                SUPPORTED_HOST_TRIPLE,
+                &output,
+                ID,
+                SYMBOL_STEM,
+                PAYLOAD
+            ),
             Err(HostObjectError::MissingTool(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_invalid_symbol_stems() {
+        let directory = TestDir::new();
+        let toolchain = HostObjectToolchain::for_test(PathBuf::from("/bin/true"));
+        let output = directory.0.join("fixture.o");
+        let too_long = "a".repeat(MAX_SYMBOL_STEM_BYTES + 1);
+
+        for invalid in [
+            "",
+            "0kernel",
+            "kernel-name",
+            "kernel.name",
+            "kern\u{e9}l",
+            &too_long,
+        ] {
+            assert!(matches!(
+                validate_request(
+                    &toolchain,
+                    SUPPORTED_HOST_TRIPLE,
+                    &output,
+                    ID,
+                    invalid,
+                    PAYLOAD
+                ),
+                Err(HostObjectError::InvalidSymbolStem(stem)) if stem == invalid
+            ));
+        }
+        for valid in ["a", "_kernel", "VecAdd_012"] {
+            validate_request(
+                &toolchain,
+                SUPPORTED_HOST_TRIPLE,
+                &output,
+                ID,
+                valid,
+                PAYLOAD,
+            )
+            .expect("valid ASCII identifier stem");
+        }
+    }
+
+    #[test]
+    fn rejects_zero_and_oversized_payloads() {
+        let directory = TestDir::new();
+        let toolchain = HostObjectToolchain::for_test(PathBuf::from("/bin/true"));
+        let output = directory.0.join("fixture.o");
+
+        assert!(matches!(
+            validate_request(
+                &toolchain,
+                SUPPORTED_HOST_TRIPLE,
+                &output,
+                ID,
+                SYMBOL_STEM,
+                &[]
+            ),
+            Err(HostObjectError::EmptyPayload)
+        ));
+        let oversized = vec![0; MAX_PAYLOAD_BYTES + 1];
+        assert!(matches!(
+            validate_request(
+                &toolchain,
+                SUPPORTED_HOST_TRIPLE,
+                &output,
+                ID,
+                SYMBOL_STEM,
+                &oversized
+            ),
+            Err(HostObjectError::PayloadTooLarge(length))
+                if length == MAX_PAYLOAD_BYTES + 1
+        ));
+    }
+
+    #[test]
+    fn refuses_to_overwrite_output() {
+        let directory = TestDir::new();
+        let toolchain = HostObjectToolchain::for_test(PathBuf::from("/bin/true"));
+        let output = directory.0.join("fixture.o");
+        fs::write(&output, b"existing object").expect("write occupied output");
+
+        assert!(matches!(
+            validate_request(
+                &toolchain,
+                SUPPORTED_HOST_TRIPLE,
+                &output,
+                ID,
+                SYMBOL_STEM,
+                PAYLOAD
+            ),
+            Err(HostObjectError::OutputExists(path)) if path == output
         ));
     }
 
@@ -677,7 +829,14 @@ fn main() {{
         let toolchain = HostObjectToolchain::for_test(PathBuf::from("/bin/false"));
 
         assert!(matches!(
-            generate_host_object(&toolchain, SUPPORTED_HOST_TRIPLE, &output, ID, PAYLOAD),
+            generate_host_object(
+                &toolchain,
+                SUPPORTED_HOST_TRIPLE,
+                &output,
+                ID,
+                SYMBOL_STEM,
+                PAYLOAD
+            ),
             Err(HostObjectError::ToolFailed { .. })
         ));
         assert!(!output.exists());
@@ -693,6 +852,7 @@ fn main() {{
             SUPPORTED_HOST_TRIPLE,
             &directory.0.join("fixture.o"),
             ID,
+            SYMBOL_STEM,
             PAYLOAD,
         )
         .expect("generate object");
@@ -709,7 +869,7 @@ fn main() {{
 
     #[test]
     #[ignore = "requires the configured ROCm LLVM toolchain"]
-    fn rejects_duplicate_paths_and_symbol_ranges() {
+    fn rejects_duplicate_paths_and_accessors() {
         let toolchain = test_toolchain();
         let first_dir = TestDir::new();
         let second_dir = TestDir::new();
@@ -718,6 +878,7 @@ fn main() {{
             SUPPORTED_HOST_TRIPLE,
             &first_dir.0.join("fixture.o"),
             ID,
+            SYMBOL_STEM,
             PAYLOAD,
         )
         .expect("generate first object");
@@ -725,7 +886,8 @@ fn main() {{
             &toolchain,
             SUPPORTED_HOST_TRIPLE,
             &second_dir.0.join("fixture.o"),
-            ID,
+            OTHER_ID,
+            SYMBOL_STEM,
             b"different synthetic payload",
         )
         .expect("generate second object");
@@ -748,6 +910,7 @@ fn main() {{
             SUPPORTED_HOST_TRIPLE,
             &first_dir.0.join("fixture-again.o"),
             ID,
+            SYMBOL_STEM,
             PAYLOAD,
         )
         .expect("generate alternate path");
@@ -767,6 +930,7 @@ fn main() {{
             SUPPORTED_HOST_TRIPLE,
             &directory.0.join("fixture.o"),
             ID,
+            SYMBOL_STEM,
             PAYLOAD,
         )
         .expect("generate object");
