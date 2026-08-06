@@ -137,6 +137,61 @@ This primitive is not imported by `reproduce.py` or `evidence.py`. There are no
 trusted G2, G5, G6, G7, or static-runner attestation producers yet, so the
 default release gate remains blocked.
 
+## Local policy and replay state V1
+
+`policy_state.py` provides an inert local state primitive for a future trusted
+attestation consumer. It is not imported by `attestation.py`, `reproduce.py`,
+or `evidence.py`, and it is not connected to the release gate. Its
+`LocalPolicyStateObservationV1` result is ordinary forgeable Python data. It
+does not prove that an operation ran and grants no release, publication, load,
+or launch authority.
+
+The state stores one pinned trust-policy identity and positive epoch plus at
+most 512 consumed `(campaign_nonce, build_context_identity)` pairs. Policy
+epochs may only increase. Repeating the exact identity and epoch is
+idempotent; changing the identity at the same epoch, lowering the epoch, or
+raising the epoch without a new identity fails closed. Replay consumption
+requires the exact current policy pin. Repeating the exact nonce/context pair
+is idempotent without changing the generation; reusing either member with a
+different partner is rejected. The ledger never evicts entries automatically.
+It fails closed at its cardinality bound.
+
+The record is bounded, versioned, newline-terminated canonical ASCII JSON with
+exact fields, canonical ordering, typed policy and build-context identities,
+and a domain-separated SHA-256 integrity checksum. The checksum detects
+accidental corruption and malformed transitions. It is **not authentication**
+and does not protect state from a malicious process running as the same user.
+
+The caller must create an absolute state-directory path owned by the effective
+user with no group or other permissions. Every path component is opened with
+`O_NOFOLLOW`; subsequent operations remain relative to the pinned directory
+descriptor. State, temp, and lock files must be regular, owned by the effective
+user, mode `0600`, and have exactly one hard link. Symlinks, hardlinks, FIFOs,
+devices, sockets, pathname substitution, malformed or noncanonical records,
+truncation, trailing bytes, and oversized files are rejected. A nonblocking
+exclusive `flock` serializes cooperating processes.
+
+Updates write one fixed-name, exclusively created temp file, fsync the complete
+file, atomically rename it over the state snapshot, and fsync the state
+directory. Recovery under the lock discards only a private, single-link regular
+temp file and fsyncs the directory before reading the current snapshot. A crash
+at any before/after write, file-fsync, rename, or directory-fsync boundary
+therefore recovers as either the complete old state or complete new state; an
+exact retry is safe in both cases. The deterministic fault suite covers every
+one of those boundaries for initial policy pinning and nonce consumption.
+
+This design assumes cooperating processes honor the advisory lock, the local
+filesystem truthfully implements regular-file `fsync`, atomic same-directory
+rename, and directory `fsync`, and the OS enforces descriptor and ownership
+checks. It does not claim correctness on network or unusual filesystems with
+weaker durability semantics. Same-user mutation, filesystem rollback, disk
+replacement, kernel compromise, and physical power-cut behavior beyond those
+documented local-filesystem guarantees remain outside this slice's threat
+model. A future authority-bearing consumer still needs a separately protected
+durable policy pin, trusted clock and host, authenticated producer chain, and a
+same-control-flow connection from signature verification through nonce
+consumption to the release decision.
+
 `reproduce.py run` returning zero means only that this invocation observed equal
 linked and finalized bytes in its two builds. The aggregate `evidence.py` gate
 remains blocked until it consumes canonical G2 execution, G5/G6 publication and
