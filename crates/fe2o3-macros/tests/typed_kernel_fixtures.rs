@@ -55,6 +55,12 @@ fn typed_kernel_compile_fail_diagnostics_are_stable() {
                 "#[kernel(typed)] argument 3 must have exact type `DisjointSlice<f32>`",
             ],
         ),
+        (
+            "invalid_symbol_stems",
+            &[
+                "#[kernel(typed)] kernel name must be 1 to 128 ASCII identifier bytes for backend artifact symbols",
+            ],
+        ),
     ];
 
     for (bin, expected_diagnostics) in cases {

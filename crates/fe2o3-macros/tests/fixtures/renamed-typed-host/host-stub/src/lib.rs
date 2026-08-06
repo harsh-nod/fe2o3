@@ -14,4 +14,24 @@ pub mod __generated {
 
         fn artifact_container_bytes() -> &'static [u8];
     }
+
+    pub struct GeneratedVecAddKernelV1<K: CompilerGeneratedKernelContractV1>(
+        core::marker::PhantomData<K>,
+    );
+
+    pub struct GeneratedVecAddPreparedV1<'loaded, 'allocation, K: CompilerGeneratedKernelContractV1>(
+        core::marker::PhantomData<(&'loaded K, &'allocation K)>,
+    );
+
+    /// Minimal fixture copy of the host accessor shim.
+    ///
+    /// # Safety
+    ///
+    /// The pointer and length must describe one immutable static allocation.
+    pub unsafe fn artifact_bytes_from_backend_v1(
+        _pointer: *const u8,
+        _length: usize,
+    ) -> &'static [u8] {
+        &[]
+    }
 }
