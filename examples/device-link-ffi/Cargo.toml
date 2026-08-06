@@ -1,0 +1,13 @@
+[package]
+name = "fe2o3-device-link-ffi"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0 OR MIT"
+publish = false
+
+[workspace]
+
+[dependencies]
+fe2o3-amd-target = { path = "../../crates/fe2o3-amd-target" }
+fe2o3-artifacts = { path = "../../crates/fe2o3-artifacts" }
+fe2o3-kernel-descriptor = { path = "../../crates/fe2o3-kernel-descriptor" }
