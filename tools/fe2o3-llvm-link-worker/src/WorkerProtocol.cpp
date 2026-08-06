@@ -262,6 +262,8 @@ Expected<Input> decodeInput(Cursor &InputBytes, size_t &Total,
     Kind = InputKind::LlvmBitcode;
   else if (*KindOrError == static_cast<uint8_t>(InputKind::AmdGpuRelocatable))
     Kind = InputKind::AmdGpuRelocatable;
+  else if (*KindOrError == static_cast<uint8_t>(InputKind::LlvmTextIr))
+    Kind = InputKind::LlvmTextIr;
   else
     return protocolError("unknown worker input kind");
   auto DigestBytes = InputBytes.take(32);

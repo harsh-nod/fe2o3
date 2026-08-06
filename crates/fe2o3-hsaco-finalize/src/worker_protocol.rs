@@ -44,6 +44,7 @@ const RESPONSE_FIELD_COUNT: u16 = 6;
 pub enum WorkerInputKindV1 {
     LlvmBitcode = 1,
     AmdGpuRelocatable = 2,
+    LlvmTextIr = 3,
 }
 
 impl WorkerInputKindV1 {
@@ -51,6 +52,7 @@ impl WorkerInputKindV1 {
         match value {
             1 => Ok(Self::LlvmBitcode),
             2 => Ok(Self::AmdGpuRelocatable),
+            3 => Ok(Self::LlvmTextIr),
             _ => Err(WorkerProtocolError::UnknownEnum("input kind")),
         }
     }

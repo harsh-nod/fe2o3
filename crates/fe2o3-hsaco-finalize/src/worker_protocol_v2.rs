@@ -759,6 +759,7 @@ fn decode_input_kind(value: u8) -> Result<WorkerInputKindV1, WorkerProtocolError
     match value {
         1 => Ok(WorkerInputKindV1::LlvmBitcode),
         2 => Ok(WorkerInputKindV1::AmdGpuRelocatable),
+        3 => Ok(WorkerInputKindV1::LlvmTextIr),
         _ => Err(WorkerProtocolError::UnknownEnum("input kind")),
     }
 }

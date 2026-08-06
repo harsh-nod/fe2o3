@@ -1215,6 +1215,7 @@ fn opposite_kind(kind: WorkerInputKindV1) -> WorkerInputKindV1 {
     match kind {
         WorkerInputKindV1::LlvmBitcode => WorkerInputKindV1::AmdGpuRelocatable,
         WorkerInputKindV1::AmdGpuRelocatable => WorkerInputKindV1::LlvmBitcode,
+        WorkerInputKindV1::LlvmTextIr => WorkerInputKindV1::LlvmBitcode,
     }
 }
 

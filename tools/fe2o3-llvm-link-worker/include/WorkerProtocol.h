@@ -24,7 +24,11 @@ inline constexpr size_t MaxTotalDiagnosticBytes = 16 * 1024;
 inline constexpr size_t MaxWorkerExecutableBytes = 512 * 1024 * 1024;
 
 enum class ProtocolVersion : uint8_t { V1 = 1, V2 = 2 };
-enum class InputKind : uint8_t { LlvmBitcode = 1, AmdGpuRelocatable = 2 };
+enum class InputKind : uint8_t {
+  LlvmBitcode = 1,
+  AmdGpuRelocatable = 2,
+  LlvmTextIr = 3,
+};
 enum class OptimizationLevel : uint8_t { O0 = 0, O1 = 1, O2 = 2, O3 = 3 };
 enum class Stage : uint8_t {
   Decode = 1,

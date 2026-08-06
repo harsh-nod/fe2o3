@@ -5,6 +5,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/AsmParser/Parser.h"
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/BinaryFormat/Magic.h"
 #include "llvm/Bitcode/BitcodeReader.h"
@@ -173,6 +174,12 @@ Error validateRequest(const Request &RequestValue) {
     case InputKind::AmdGpuRelocatable:
       Expected = file_magic::elf_relocatable;
       break;
+    case InputKind::LlvmTextIr:
+      if (llvm::any_of(InputValue.Bytes,
+                       [](uint8_t Byte) { return Byte == 0 || Byte > 0x7f; }))
+        return pipelineError(Twine("input ") + Twine(I) +
+                             " has noncanonical textual LLVM IR bytes");
+      continue;
     default:
       return pipelineError(Twine("input ") + Twine(I) +
                            " has an unsupported input kind");
@@ -370,7 +377,8 @@ Expected<std::unique_ptr<Module>> linkBitcode(const Request &RequestValue,
   std::unique_ptr<Module> Linked;
   for (size_t I = 0; I < RequestValue.Inputs.size(); ++I) {
     const Input &InputValue = RequestValue.Inputs[I];
-    if (InputValue.Kind != InputKind::LlvmBitcode)
+    if (InputValue.Kind != InputKind::LlvmBitcode &&
+        InputValue.Kind != InputKind::LlvmTextIr)
       continue;
     StringRef Bytes(reinterpret_cast<const char *>(InputValue.Bytes.data()),
                     InputValue.Bytes.size());
@@ -391,34 +399,52 @@ Expected<std::unique_ptr<Module>> linkBitcode(const Request &RequestValue,
       return std::optional<std::string>(
           ExpectedLayout.getStringRepresentation());
     });
-    auto Parsed = parseBitcodeFile(MemoryBufferRef(Bytes, InputName), Context,
-                                   std::move(Callbacks));
+    Expected<std::unique_ptr<Module>> Parsed =
+        [&]() -> Expected<std::unique_ptr<Module>> {
+      if (InputValue.Kind == InputKind::LlvmBitcode)
+        return parseBitcodeFile(MemoryBufferRef(Bytes, InputName), Context,
+                                std::move(Callbacks));
+      SMDiagnostic Diagnostic;
+      auto TextModule = parseAssemblyString(Bytes, Diagnostic, Context);
+      if (!TextModule) {
+        std::string Message;
+        raw_string_ostream Stream(Message);
+        Diagnostic.print("fe2o3-llvm-link-worker", Stream, false, false);
+        Stream.flush();
+        return pipelineError(Twine("textual LLVM IR input ") + Twine(I) + ": " +
+                             Message);
+      }
+      AcceptedLayout = TextModule->getDataLayoutStr().empty() ||
+                       TextModule->getDataLayout() == ExpectedLayout;
+      return std::move(TextModule);
+    }();
     if (!Parsed)
-      return pipelineError(Twine("bitcode input ") + Twine(I) + ": " +
+      return pipelineError(Twine("LLVM module input ") + Twine(I) + ": " +
                            errorToDiagnostic(Parsed.takeError()));
     if (!AcceptedLayout)
-      return pipelineError("bitcode data layout does not match target machine");
+      return pipelineError(
+          "LLVM module data layout does not match target machine");
     if (Error E = setAndCheckModuleContract(**Parsed, RequestValue, Machine))
       return E;
     if (RequestValue.LinkOptions.VerifyEach) {
       BoundedRawStream Stream(MaxDiagnosticBytes);
       if (verifyModule(**Parsed, &Stream)) {
         Stream.flush();
-        return pipelineError(Twine("input bitcode verification failed: ") +
+        return pipelineError(Twine("input LLVM module verification failed: ") +
                              Stream.str());
       }
     }
     if (!Linked) {
       Linked = std::move(*Parsed);
     } else if (Linker::linkModules(*Linked, std::move(*Parsed))) {
-      return pipelineError("LLVM bitcode linking failed");
+      return pipelineError("LLVM module linking failed");
     }
   }
   if (Linked) {
     BoundedRawStream Stream(MaxDiagnosticBytes);
     if (verifyModule(*Linked, &Stream)) {
       Stream.flush();
-      return pipelineError(Twine("linked bitcode verification failed: ") +
+      return pipelineError(Twine("linked LLVM module verification failed: ") +
                            Stream.str());
     }
   }
@@ -552,12 +578,26 @@ Expected<ElfContract> inspectRelocatable(ArrayRef<uint8_t> Bytes) {
   return Result;
 }
 
-Expected<SymbolContract> inspectBitcodeSymbols(const Input &InputValue,
-                                               StringRef InputName) {
+Expected<SymbolContract> inspectModuleSymbols(const Input &InputValue,
+                                              StringRef InputName) {
   StringRef Bytes(reinterpret_cast<const char *>(InputValue.Bytes.data()),
                   InputValue.Bytes.size());
   LLVMContext Context;
-  auto Parsed = parseBitcodeFile(MemoryBufferRef(Bytes, InputName), Context);
+  Expected<std::unique_ptr<Module>> Parsed =
+      [&]() -> Expected<std::unique_ptr<Module>> {
+    if (InputValue.Kind == InputKind::LlvmBitcode)
+      return parseBitcodeFile(MemoryBufferRef(Bytes, InputName), Context);
+    SMDiagnostic Diagnostic;
+    auto TextModule = parseAssemblyString(Bytes, Diagnostic, Context);
+    if (!TextModule) {
+      std::string Message;
+      raw_string_ostream Stream(Message);
+      Diagnostic.print("fe2o3-llvm-link-worker", Stream, false, false);
+      Stream.flush();
+      return pipelineError(Message);
+    }
+    return std::move(TextModule);
+  }();
   if (!Parsed)
     return pipelineError(Twine(InputName) + ": " +
                          errorToDiagnostic(Parsed.takeError()));
@@ -582,8 +622,9 @@ Expected<SymbolContract> inspectBitcodeSymbols(const Input &InputValue,
 
 Expected<SymbolContract> inspectInputSymbols(const Input &InputValue,
                                              StringRef InputName) {
-  if (InputValue.Kind == InputKind::LlvmBitcode)
-    return inspectBitcodeSymbols(InputValue, InputName);
+  if (InputValue.Kind == InputKind::LlvmBitcode ||
+      InputValue.Kind == InputKind::LlvmTextIr)
+    return inspectModuleSymbols(InputValue, InputName);
   auto Elf = inspectRelocatable(InputValue.Bytes);
   if (!Elf)
     return Elf.takeError();

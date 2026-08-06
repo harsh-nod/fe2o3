@@ -200,6 +200,19 @@ std::vector<uint8_t> makeBitcode(StringRef ModuleName, StringRef Definition,
   return std::vector<uint8_t>(Buffer.begin(), Buffer.end());
 }
 
+std::vector<uint8_t> makeTextIr(StringRef ModuleName, StringRef Definition,
+                                std::optional<StringRef> Callee,
+                                const FixtureOptions &Options = {}) {
+  LLVMContext Context;
+  std::unique_ptr<Module> ModuleValue =
+      makeModule(Context, ModuleName, Definition, Callee, Options);
+  std::string Buffer;
+  raw_string_ostream Stream(Buffer);
+  ModuleValue->print(Stream, nullptr);
+  Stream.flush();
+  return std::vector<uint8_t>(Buffer.begin(), Buffer.end());
+}
+
 std::vector<uint8_t> makeObject(StringRef ModuleName, StringRef Definition,
                                 std::optional<StringRef> Callee,
                                 const FixtureOptions &Options = {}) {
@@ -399,6 +412,20 @@ int main(int ArgumentCount, char **Arguments) {
       {"bc_entry", "bc_helper"});
   runSuccess(BitcodePair, {"bc_entry", "bc_helper"});
 
+  Request TextPair = makeRequest(
+      {makeInput(InputKind::LlvmTextIr,
+                 makeTextIr("text-entry", "text_entry", "text_helper")),
+       makeInput(InputKind::LlvmBitcode,
+                 makeBitcode("text-helper", "text_helper", std::nullopt))},
+      {"text_entry", "text_helper"});
+  runSuccess(TextPair, {"text_entry", "text_helper"});
+
+  Request InvalidText = makeRequest(
+      {makeInput(InputKind::LlvmTextIr,
+                 std::vector<uint8_t>{'n', 'o', 't', ' ', 'i', 'r'})},
+      {});
+  requireFailure(InvalidText, Stage::BitcodeLink);
+
   Request AbsentLayout = makeRequest(
       {makeInput(InputKind::LlvmBitcode,
                  makeBitcode("absent-layout", "absent_layout", std::nullopt,
@@ -468,6 +495,12 @@ int main(int ArgumentCount, char **Arguments) {
   require(MixedV2Response.CompilerEnvelopeIdentity ==
               MixedV2.CompilerEnvelopeIdentity,
           "V2 pipeline response lost its compiler envelope identity");
+
+  Request TextV2 = makeV2Request(
+      makeInput(InputKind::LlvmTextIr,
+                makeTextIr("text-v2", "text_v2_entry", std::nullopt)),
+      {}, {}, {"text_v2_entry"}, {"text_v2_entry"});
+  runSuccess(TextV2, {"text_v2_entry"});
   Request WrongV2Worker = MixedV2;
   WrongV2Worker.WorkerBuildIdentity = "wrong-worker";
   requireFailure(WrongV2Worker, Stage::Toolchain);

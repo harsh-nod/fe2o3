@@ -452,6 +452,7 @@ fn input_kind_swap_fails_against_the_plan_bound_kind_closure() {
     let replacement_kind = match changed_kind[0].kind() {
         WorkerInputKindV1::LlvmBitcode => WorkerInputKindV1::AmdGpuRelocatable,
         WorkerInputKindV1::AmdGpuRelocatable => WorkerInputKindV1::LlvmBitcode,
+        WorkerInputKindV1::LlvmTextIr => WorkerInputKindV1::LlvmBitcode,
     };
     changed_kind[0] = WorkerInputV1::from_declared(
         replacement_kind,

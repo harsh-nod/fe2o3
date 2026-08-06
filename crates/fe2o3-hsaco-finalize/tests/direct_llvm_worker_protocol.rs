@@ -63,6 +63,30 @@ fn request_round_trip_has_stable_golden_wire() {
 }
 
 #[test]
+fn textual_llvm_ir_input_kind_round_trips_without_changing_v1_goldens() {
+    let input = WorkerInputV1::new(
+        WorkerInputKindV1::LlvmTextIr,
+        b"target triple = \"amdgcn-amd-amdhsa\"\n".to_vec(),
+    )
+    .unwrap();
+    let request = WorkerRequestV1::new(
+        [0x6c; 32],
+        "llvm-text-worker",
+        DeviceTargetV1::parse("gfx942:xnack-").unwrap(),
+        CodeObjectVersion::V6,
+        WorkerOptionsV1::new(WorkerOptimizationLevelV1::O0, false, true),
+        vec![input],
+        vec![],
+        vec![],
+        WorkerOutputConstraintsV1::new(4096).unwrap(),
+    )
+    .unwrap();
+    let decoded = WorkerRequestV1::decode(request.canonical_bytes()).unwrap();
+    assert_eq!(decoded, request);
+    assert_eq!(decoded.inputs()[0].kind(), WorkerInputKindV1::LlvmTextIr);
+}
+
+#[test]
 fn independently_constructed_ffi_like_claims_remain_generic_link_evidence() {
     let base = sample_request();
     let request = WorkerRequestV1::new(
