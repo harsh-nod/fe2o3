@@ -199,6 +199,29 @@ if [[ ! -x $worker || ! -f $worker_build_id_file ]]; then
 fi
 worker_build_id=$(<"$worker_build_id_file")
 
+FE2O3_LLVM_LINK_WORKER="$worker" \
+FE2O3_LLVM_LINK_WORKER_BUILD_ID="$worker_build_id" \
+FE2O3_LLVM_BUILD_ID="$build_id" \
+RUSTC="$rustc_bin" \
+LD_LIBRARY_PATH="$toolchain_lib" \
+  "$cargo_bin" test --manifest-path "$repo_root/Cargo.toml" \
+    -p fe2o3-hsaco-finalize --locked \
+    --test direct_llvm_worker_protocol \
+    cpp_worker_cross_language_failure_round_trip_when_configured -- --exact
+
+FE2O3_LLVM_LINK_WORKER="$worker" \
+FE2O3_LLVM_LINK_WORKER_BUILD_ID="$worker_build_id" \
+FE2O3_LLVM_BUILD_ID="$build_id" \
+FE2O3_LLVM_V2_MODULE="$bitcode" \
+FE2O3_LLVM_V2_PROVIDER="$object" \
+FE2O3_LLVM_V2_EXPECTED_OUTPUT="$native_hsaco" \
+RUSTC="$rustc_bin" \
+LD_LIBRARY_PATH="$toolchain_lib" \
+  "$cargo_bin" test --manifest-path "$repo_root/Cargo.toml" \
+    -p fe2o3-hsaco-finalize --locked --lib \
+    worker_executor::configured_v2_tests::configured_cpp_worker_v2_round_trip \
+    -- --ignored --exact
+
 LD_LIBRARY_PATH="$toolchain_lib" RUSTC="$rustc_bin" \
   "$cargo_bin" test --manifest-path "$repo_root/Cargo.toml" \
   -p fe2o3-hsaco-finalize --locked --tests

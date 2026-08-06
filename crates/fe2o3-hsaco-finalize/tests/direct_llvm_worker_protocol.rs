@@ -443,11 +443,13 @@ fn cpp_worker_cross_language_failure_round_trip_when_configured() {
     let Ok(worker) = std::env::var("FE2O3_LLVM_LINK_WORKER") else {
         return;
     };
-    let build_identity = std::env::var("FE2O3_LLVM_LINK_WORKER_BUILD_ID")
+    let worker_build_identity = std::env::var("FE2O3_LLVM_LINK_WORKER_BUILD_ID")
         .expect("worker path requires its exact measured build identity");
+    let llvm_build_identity = std::env::var("FE2O3_LLVM_BUILD_ID")
+        .expect("worker path requires its exact LLVM build identity");
     let request = WorkerRequestV1::new(
         [0x81; 32],
-        build_identity,
+        llvm_build_identity,
         DeviceTargetV1::parse("gfx942:xnack-").unwrap(),
         CodeObjectVersion::V6,
         WorkerOptionsV1::new(WorkerOptimizationLevelV1::O2, true, true),
@@ -492,6 +494,7 @@ fn cpp_worker_cross_language_failure_round_trip_when_configured() {
             .worker_build_identity()
             .starts_with("fe2o3-worker-v1-sha256-")
     );
+    assert_eq!(response.worker_build_identity(), worker_build_identity);
     assert_ne!(
         response.worker_build_identity(),
         request.llvm_build_identity()
