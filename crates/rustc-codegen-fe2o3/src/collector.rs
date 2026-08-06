@@ -38,7 +38,7 @@ pub struct CollectedFunction<'tcx> {
 #[derive(Clone, Debug, Default)]
 pub struct CollectionResult<'tcx> {
     pub functions: Vec<CollectedFunction<'tcx>>,
-    // Consumed by the direct-link integration after the G4 collection gate.
+    // Inert until a later bridge binds provider artifacts and G1 input kinds.
     #[allow(dead_code)]
     pub(crate) device_ffi: crate::device_ffi::DeviceFfiClosure,
 }
@@ -873,8 +873,8 @@ fn is_fully_monomorphized<'tcx>(tcx: TyCtxt<'tcx>, instance: Instance<'tcx>) -> 
 
 struct DeviceCollector<'tcx> {
     tcx: TyCtxt<'tcx>,
-    seen: BTreeSet<String>,
-    call_chains: BTreeMap<String, Vec<String>>,
+    seen: BTreeSet<crate::device_ffi::DeviceFfiInstanceIdentity>,
+    call_chains: BTreeMap<crate::device_ffi::DeviceFfiInstanceIdentity, Vec<String>>,
     used_export_names: BTreeSet<String>,
     worklist: VecDeque<CollectedFunction<'tcx>>,
     result: Vec<CollectedFunction<'tcx>>,
@@ -1030,12 +1030,22 @@ impl<'tcx> DeviceCollector<'tcx> {
         caller: &Instance<'tcx>,
     ) -> Result<(), CollectError> {
         let Operand::Constant(const_op) = func else {
-            return Ok(());
+            return Err(self.reachable_error(
+                caller,
+                "[FE2O3-FFI-CALL001] indirect function-pointer calls are not permitted in the closed device graph",
+                None,
+            ));
         };
 
         let ty = const_op.const_.ty();
         let TyKind::FnDef(def_id, args) = ty.kind() else {
-            return Ok(());
+            return Err(self.reachable_error(
+                caller,
+                &format!(
+                    "[FE2O3-FFI-CALL002] device call operand has non-function-definition type `{ty}`"
+                ),
+                None,
+            ));
         };
 
         let normalized_args = self.tcx.instantiate_and_normalize_erasing_regions(
@@ -1078,11 +1088,11 @@ impl<'tcx> DeviceCollector<'tcx> {
                     })?;
             let declaration =
                 crate::device_ffi::collected_declaration(self.tcx, instance, contract.clone());
-            if let Some(existing) = self
-                .ffi_declarations
-                .iter()
-                .find(|entry| entry.owner.item_path == declaration.owner.item_path)
-            {
+            if let Some(existing) = self.ffi_declarations.iter().find(|entry| {
+                entry.owner.def_path_hash == declaration.owner.def_path_hash
+                    && entry.owner.concrete_instance_symbol
+                        == declaration.owner.concrete_instance_symbol
+            }) {
                 if existing.contract != contract {
                     return Err(self.reachable_error(
                         caller,
@@ -1222,15 +1232,18 @@ impl<'tcx> DeviceCollector<'tcx> {
         Ok(())
     }
 
-    fn instance_identity(&self, instance: Instance<'tcx>) -> String {
-        self.tcx.symbol_name(instance).name.to_string()
+    fn instance_identity(
+        &self,
+        instance: Instance<'tcx>,
+    ) -> crate::device_ffi::DeviceFfiInstanceIdentity {
+        crate::device_ffi::stable_instance_identity(self.tcx, instance)
     }
 
     fn instance_label(&self, instance: Instance<'tcx>) -> String {
         format!(
             "{} [{}]",
             self.fqdn(instance.def_id()),
-            self.instance_identity(instance)
+            self.tcx.symbol_name(instance).name
         )
     }
 

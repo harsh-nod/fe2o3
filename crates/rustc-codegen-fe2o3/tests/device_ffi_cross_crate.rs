@@ -60,7 +60,17 @@ fn marker(
 }
 
 fn compile_rlib(source: &Path, crate_name: &str, output: &Path) {
-    let compile = Command::new("rustc")
+    compile_rlib_with_metadata(source, crate_name, None, output);
+}
+
+fn compile_rlib_with_metadata(
+    source: &Path,
+    crate_name: &str,
+    metadata: Option<&str>,
+    output: &Path,
+) {
+    let mut command = Command::new("rustc");
+    command
         .arg(source)
         .args([
             "--edition=2024",
@@ -70,7 +80,11 @@ fn compile_rlib(source: &Path, crate_name: &str, output: &Path) {
         ])
         .arg(crate_name)
         .arg("-o")
-        .arg(output)
+        .arg(output);
+    if let Some(metadata) = metadata {
+        command.arg(format!("-Cmetadata={metadata}"));
+    }
+    let compile = command
         .output()
         .unwrap_or_else(|error| panic!("compile {crate_name}: {error}"));
     require_success(crate_name, &compile);
@@ -354,4 +368,325 @@ static __fe2o3_kernel_registration_duplicate_providers: (
             && stderr.contains("provider_b::cross_crate_device_helper"),
         "missing stable duplicate-provider ownership diagnostic\n{stderr}"
     );
+}
+
+#[test]
+#[ignore = "runs adversarial rustc codegen backend probes"]
+fn reserved_registration_prefix_items_fail_without_ice() {
+    let workspace = workspace();
+    let output = TestOutputDir::new(&workspace, "reserved-prefix-kinds");
+    let backend = build_backend(&workspace);
+    let prefix = reserved_fe2o3_symbols::DEVICE_FFI_REGISTRATION_PREFIX_V1;
+    let valid_suffix = "1111111111111111111111111111111111111111111111111111111111111111";
+    let cases = [
+        (
+            "struct",
+            format!("pub struct {prefix}spoof;"),
+            "FE2O3-FFI-REG001",
+        ),
+        (
+            "function",
+            format!("pub fn {prefix}spoof() {{}}"),
+            "FE2O3-FFI-REG001",
+        ),
+        (
+            "module",
+            format!("pub mod {prefix}spoof {{}}"),
+            "FE2O3-FFI-REG001",
+        ),
+        (
+            "const",
+            format!("pub const {prefix}spoof: u32 = 0;"),
+            "FE2O3-FFI-REG001",
+        ),
+        (
+            "malformed-static",
+            format!("#[used]\nstatic {prefix}{valid_suffix}: u32 = 0;"),
+            "FE2O3-FFI-REG010",
+        ),
+        (
+            "mutable-static",
+            format!("#[used]\nstatic mut {prefix}{valid_suffix}: u32 = 0;"),
+            "FE2O3-FFI-REG002",
+        ),
+    ];
+
+    for (label, source, diagnostic) in cases {
+        let case_output = output.0.join(label);
+        std::fs::create_dir_all(&case_output).expect("create adversarial case directory");
+        let source_path = case_output.join("probe.rs");
+        std::fs::write(&source_path, source).expect("write reserved-prefix probe");
+        let compile = run_backend(&source_path, &backend, &case_output, &[]);
+        let stderr = String::from_utf8_lossy(&compile.stderr);
+        assert!(!compile.status.success(), "{label} probe was accepted");
+        assert!(
+            stderr.contains(diagnostic),
+            "{label} omitted stable diagnostic {diagnostic}\n{stderr}"
+        );
+        assert_no_ice(label, &stderr);
+    }
+}
+
+#[test]
+#[ignore = "runs adversarial rustc codegen backend probes"]
+fn registration_initializer_is_exactly_bound_to_its_marker_function() {
+    let workspace = workspace();
+    let output = TestOutputDir::new(&workspace, "registration-initializer");
+    let backend = build_backend(&workspace);
+    let (contract, marker) = marker(
+        reserved_fe2o3_symbols::DEVICE_FFI_DIRECTION_IMPORT_V1,
+        "cross_crate_external_add_v1",
+        "4444444444444444444444444444444444444444444444444444444444444444",
+    );
+    let valid = include_str!("fixtures/device-ffi/import-lib.rs")
+        .replace("__MARKER__", &marker)
+        .replace("__CONTRACT__", &contract.to_hex())
+        .replace(
+            "registration_v1_fixture",
+            &format!("registration_v1_{}", contract.to_hex()),
+        );
+    let cases = [
+        (
+            "wrong-magic",
+            valid.replacen("0x4946_4633_4f32_4546", "0", 1),
+            "FE2O3-FFI-REG011",
+        ),
+        (
+            "function-cast",
+            valid.replacen(
+                "    cross_crate_external_add,",
+                "    cross_crate_external_add as unsafe extern \"C\" fn(u32) -> u32,",
+                1,
+            ),
+            "FE2O3-FFI-REG007",
+        ),
+        (
+            "unmarked-function",
+            format!(
+                "unsafe extern \"C\" {{ fn unrelated(value: u32) -> u32; }}\n{}",
+                valid.replacen("    cross_crate_external_add,", "    unrelated,", 1)
+            ),
+            "FE2O3-FFI-REG009",
+        ),
+    ];
+
+    for (label, source, diagnostic) in cases {
+        let case_output = output.0.join(label);
+        std::fs::create_dir_all(&case_output).expect("create registration case directory");
+        let source_path = case_output.join("probe.rs");
+        std::fs::write(&source_path, source).expect("write registration probe");
+        let compile = run_backend(&source_path, &backend, &case_output, &[]);
+        let stderr = String::from_utf8_lossy(&compile.stderr);
+        assert!(!compile.status.success(), "{label} probe was accepted");
+        assert!(
+            stderr.contains(diagnostic),
+            "{label} omitted stable diagnostic {diagnostic}\n{stderr}"
+        );
+        assert_no_ice(label, &stderr);
+    }
+}
+
+#[test]
+#[ignore = "runs adversarial rustc codegen backend probes"]
+fn function_pointer_calls_to_device_imports_fail_closed() {
+    let workspace = workspace();
+    let output = TestOutputDir::new(&workspace, "indirect-import");
+    let backend = build_backend(&workspace);
+    let (contract, marker) = marker(
+        reserved_fe2o3_symbols::DEVICE_FFI_DIRECTION_IMPORT_V1,
+        "cross_crate_external_add_v1",
+        "4444444444444444444444444444444444444444444444444444444444444444",
+    );
+    let import_source = include_str!("fixtures/device-ffi/import-lib.rs")
+        .replace("__MARKER__", &marker)
+        .replace("__CONTRACT__", &contract.to_hex())
+        .replace(
+            "registration_v1_fixture",
+            &format!("registration_v1_{}", contract.to_hex()),
+        );
+    let import_path = output.0.join("import.rs");
+    std::fs::write(&import_path, import_source).expect("write import provider");
+    let rlib = output.0.join("libffi_import.rlib");
+    compile_rlib(&import_path, "ffi_import", &rlib);
+
+    let kernel_case = indirect_import_app(false);
+    let helper_case = indirect_import_app(true);
+    let constant_case = constant_import_app();
+    for (label, source, diagnostic) in [
+        ("kernel", kernel_case, "FE2O3-FFI-CALL001"),
+        ("helper", helper_case, "FE2O3-FFI-CALL001"),
+        ("constant", constant_case, "FE2O3-FFI-CALL002"),
+    ] {
+        let case_output = output.0.join(label);
+        std::fs::create_dir_all(&case_output).expect("create indirect-call directory");
+        let source_path = case_output.join("app.rs");
+        std::fs::write(&source_path, source).expect("write indirect-call app");
+        let compile = run_backend(
+            &source_path,
+            &backend,
+            &case_output,
+            &[("ffi_import", &rlib)],
+        );
+        let stderr = String::from_utf8_lossy(&compile.stderr);
+        assert!(
+            !compile.status.success(),
+            "{label} indirect call was accepted"
+        );
+        assert!(
+            stderr.contains(diagnostic),
+            "{label} omitted stable indirect-call diagnostic\n{stderr}"
+        );
+        if label == "helper" {
+            assert!(stderr.contains("call_import_indirect"), "{stderr}");
+        }
+        assert_no_ice(label, &stderr);
+    }
+}
+
+#[test]
+#[ignore = "runs adversarial rustc codegen backend probes"]
+fn same_name_crate_versions_do_not_collapse_provider_identity() {
+    let workspace = workspace();
+    let output = TestOutputDir::new(&workspace, "same-name-provider-versions");
+    let backend = build_backend(&workspace);
+    let (contract, marker) = marker(
+        reserved_fe2o3_symbols::DEVICE_FFI_DIRECTION_EXPORT_V1,
+        "cross_crate_device_helper_v1",
+        "3333333333333333333333333333333333333333333333333333333333333333",
+    );
+    let source = include_str!("fixtures/device-ffi/export-lib.rs")
+        .replace("__MARKER__", &marker)
+        .replace("__CONTRACT__", &contract.to_hex())
+        .replace(
+            "registration_v1_fixture",
+            &format!("registration_v1_{}", contract.to_hex()),
+        );
+    let first_source = output.0.join("first.rs");
+    let second_source = output.0.join("second.rs");
+    std::fs::write(&first_source, &source).expect("write first same-name provider");
+    std::fs::write(&second_source, source).expect("write second same-name provider");
+    let first = output.0.join("libsame_provider_a.rlib");
+    let second = output.0.join("libsame_provider_b.rlib");
+    compile_rlib_with_metadata(&first_source, "same_provider", Some("version-a"), &first);
+    compile_rlib_with_metadata(&second_source, "same_provider", Some("version-b"), &second);
+    let app = duplicate_provider_app();
+    let app_path = output.0.join("app.rs");
+    std::fs::write(&app_path, app).expect("write same-name provider app");
+
+    let compile = run_backend(
+        &app_path,
+        &backend,
+        &output.0,
+        &[("provider_a", &first), ("provider_b", &second)],
+    );
+    let stderr = String::from_utf8_lossy(&compile.stderr);
+    assert!(
+        !compile.status.success(),
+        "same-name providers were collapsed"
+    );
+    assert!(
+        stderr.contains("duplicate device FFI contract")
+            && stderr
+                .matches("same_provider::cross_crate_device_helper")
+                .count()
+                >= 2
+            && stderr.matches("def-path-hash=").count() >= 2,
+        "same-name crate versions lacked distinct stable ownership\n{stderr}"
+    );
+    assert_no_ice("same-name providers", &stderr);
+}
+
+fn assert_no_ice(label: &str, stderr: &str) {
+    for signature in [
+        "compiler unexpectedly panicked",
+        "query stack during panic",
+        "do not use `optimized_mir` for constants",
+        "rustc-ice-",
+    ] {
+        assert!(
+            !stderr.contains(signature),
+            "{label} triggered ICE signature `{signature}`\n{stderr}"
+        );
+    }
+}
+
+fn indirect_import_app(helper: bool) -> String {
+    let call = if helper {
+        "unsafe { call_import_indirect(7) }"
+    } else {
+        r#"unsafe {
+        let function: unsafe extern "C" fn(u32) -> u32 =
+            ffi_import::cross_crate_external_add;
+        function(7)
+    }"#
+    };
+    let helper = if helper {
+        r#"
+#[inline(always)]
+unsafe fn call_import_indirect(value: u32) -> u32 {
+    let function: unsafe extern "C" fn(u32) -> u32 =
+        ffi_import::cross_crate_external_add;
+    unsafe { function(value) }
+}
+"#
+    } else {
+        ""
+    };
+    format!(
+        r#"
+{helper}
+#[unsafe(no_mangle)]
+pub fn fe2o3_kernel_indirect_import() {{
+    let _ = {call};
+}}
+
+#[used]
+static __fe2o3_kernel_registration_indirect_import: (
+    u64, u16, u16, &'static str, &'static str, fn(),
+) = (
+    0x4e52_4b33_4f32_4546, 1, 1, "indirect_import",
+    "indirect_import", fe2o3_kernel_indirect_import,
+);
+"#
+    )
+}
+
+fn constant_import_app() -> String {
+    r#"
+const IMPORT: unsafe extern "C" fn(u32) -> u32 = ffi_import::cross_crate_external_add;
+
+#[unsafe(no_mangle)]
+pub fn fe2o3_kernel_constant_import() {
+    let _ = unsafe { IMPORT(7) };
+}
+
+#[used]
+static __fe2o3_kernel_registration_constant_import: (
+    u64, u16, u16, &'static str, &'static str, fn(),
+) = (
+    0x4e52_4b33_4f32_4546, 1, 1, "constant_import",
+    "constant_import", fe2o3_kernel_constant_import,
+);
+"#
+    .to_owned()
+}
+
+fn duplicate_provider_app() -> &'static str {
+    r#"
+#[unsafe(no_mangle)]
+pub fn fe2o3_kernel_duplicate_providers() {
+    unsafe {
+        let _ = provider_a::cross_crate_device_helper(1);
+        let _ = provider_b::cross_crate_device_helper(2);
+    }
+}
+
+#[used]
+static __fe2o3_kernel_registration_duplicate_providers: (
+    u64, u16, u16, &'static str, &'static str, fn(),
+) = (
+    0x4e52_4b33_4f32_4546, 1, 1, "duplicate_providers",
+    "duplicate_providers", fe2o3_kernel_duplicate_providers,
+);
+"#
 }

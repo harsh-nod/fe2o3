@@ -7,8 +7,9 @@ use reserved_fe2o3_symbols::{
     MAX_DEVICE_FFI_TARGET_BYTES_V1, derive_device_ffi_contract_id_v1,
 };
 use rustc_abi::ExternAbi;
+use rustc_ast::LitKind;
 use rustc_hir::def_id::DefId;
-use rustc_hir::{ItemKind, Safety};
+use rustc_hir::{Expr, ExprKind, ItemKind, Safety};
 use rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags;
 use rustc_middle::mir::mono::{CodegenUnit, MonoItem};
 use rustc_middle::mir::{Operand, Rvalue, TerminatorKind};
@@ -63,13 +64,34 @@ pub(crate) struct DeviceFfiContract {
 pub(crate) struct DeviceFfiSourceOwner {
     pub(crate) crate_name: String,
     pub(crate) item_path: String,
-    pub(crate) instance_identity: String,
+    pub(crate) def_path_hash: [u8; 16],
+    pub(crate) concrete_instance_symbol: String,
 }
 
 impl DeviceFfiSourceOwner {
-    fn label(&self) -> &str {
-        &self.item_path
+    fn label(&self) -> String {
+        format!(
+            "{} [def-path-hash={}]",
+            self.item_path,
+            lower_hex(&self.def_path_hash)
+        )
     }
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) struct DeviceFfiInstanceIdentity {
+    def_path_hash: [u8; 16],
+    concrete_instance_symbol: String,
+}
+
+fn lower_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push(char::from(HEX[usize::from(byte >> 4)]));
+        output.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    output
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -87,6 +109,11 @@ pub(crate) struct ClosedDeviceFfiContract {
     pub(crate) link_role: DeviceFfiLinkRole,
 }
 
+/// Inert compiler evidence for the final device FFI graph.
+///
+/// This private value does not construct a G1 link request. A later bridge must
+/// bind external provider artifact identities and exact bitcode/object kinds
+/// before translating it into plan-bound symbol and input-kind closures.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct DeviceFfiClosure {
     pub(crate) target: Option<String>,
@@ -118,6 +145,10 @@ impl DeviceFfiError {
         Self {
             reason: reason.into(),
         }
+    }
+
+    fn coded(code: &'static str, reason: impl Into<String>) -> Self {
+        Self::new(format!("[FE2O3-FFI-{code}] {}", reason.into()))
     }
 }
 
@@ -169,16 +200,14 @@ pub(crate) fn collect_declarations<'tcx>(
         .unwrap_or_else(|| "gfx1100".to_owned());
     let mut declarations = Vec::new();
     let mut seen_instances = BTreeSet::new();
+    let local_registrations = local_registrations(tcx)?;
 
-    for instance in local_registration_instances(tcx)?
-        .into_iter()
+    for instance in local_registrations
+        .iter()
+        .map(|registration| registration.instance)
         .chain(cgu_instances(cgus))
     {
-        let identity = format!(
-            "{}|{}",
-            tcx.def_path_str(instance.def_id()),
-            tcx.symbol_name(instance).name
-        );
+        let identity = stable_instance_identity(tcx, instance);
         if !seen_instances.insert(identity) {
             continue;
         }
@@ -192,81 +221,259 @@ pub(crate) fn collect_declarations<'tcx>(
         }
     }
 
-    validate_local_registrations(tcx, &declarations)?;
+    validate_local_registration_set(&declarations, &local_registrations)?;
     validate_contract_set(&mut declarations)?;
     Ok(declarations)
 }
 
-fn local_registration_instances<'tcx>(
+#[derive(Clone, Debug)]
+struct LocalDeviceFfiRegistration<'tcx> {
+    id: DeviceFfiContractIdV1,
+    instance: Instance<'tcx>,
+    path: String,
+}
+
+fn local_registrations<'tcx>(
     tcx: TyCtxt<'tcx>,
-) -> Result<Vec<Instance<'tcx>>, DeviceFfiError> {
-    let mut instances = Vec::new();
+) -> Result<Vec<LocalDeviceFfiRegistration<'tcx>>, DeviceFfiError> {
+    let mut registrations = Vec::new();
     for item_id in tcx.hir_free_items() {
         let item = tcx.hir_item(item_id);
         let def_id = item.owner_id.def_id;
         let path = tcx.def_path_str(def_id.to_def_id());
         let item_name = path.rsplit("::").next().unwrap_or(&path);
-        if !item_name.starts_with(reserved_fe2o3_symbols::DEVICE_FFI_REGISTRATION_PREFIX_V1) {
+        let Some(contract_hex) =
+            item_name.strip_prefix(reserved_fe2o3_symbols::DEVICE_FFI_REGISTRATION_PREFIX_V1)
+        else {
             continue;
+        };
+        let ItemKind::Static(_, _, _, _) = item.kind else {
+            return Err(DeviceFfiError::coded(
+                "REG001",
+                format!("reserved registration `{path}` is not a static"),
+            ));
+        };
+        if tcx.is_mutable_static(def_id.to_def_id()) {
+            return Err(DeviceFfiError::coded(
+                "REG002",
+                format!("registration `{path}` must be immutable"),
+            ));
         }
-        let body = tcx.mir_for_ctfe(def_id.to_def_id());
-        for block in body.basic_blocks.iter() {
-            for statement in &block.statements {
-                let Some((_, value)) = statement.kind.as_assign() else {
-                    continue;
-                };
-                let operands = match value {
-                    Rvalue::Use(operand) | Rvalue::Cast(_, operand, _) => {
-                        vec![operand]
-                    }
-                    Rvalue::Aggregate(_, operands) => operands.iter().collect(),
-                    _ => Vec::new(),
-                };
-                for operand in operands {
-                    let Operand::Constant(constant) = operand else {
-                        continue;
-                    };
-                    let TyKind::FnDef(function, args) = constant.const_.ty().kind() else {
-                        continue;
-                    };
-                    let instance = Instance::try_resolve(
-                        tcx,
-                        TypingEnv::fully_monomorphized(),
-                        *function,
-                        args,
+        let flags = tcx.codegen_fn_attrs(def_id).flags;
+        if !flags.intersects(CodegenFnAttrFlags::USED_COMPILER | CodegenFnAttrFlags::USED_LINKER) {
+            return Err(DeviceFfiError::coded(
+                "REG003",
+                format!("registration `{path}` must carry #[used]"),
+            ));
+        }
+        validate_registration_type(tcx, def_id, &path)?;
+        let body = tcx.hir_maybe_body_owned_by(def_id).ok_or_else(|| {
+            DeviceFfiError::coded(
+                "REG004",
+                format!("registration `{path}` has no available initializer body"),
+            )
+        })?;
+        let ExprKind::Tup(fields) = body.value.kind else {
+            return Err(DeviceFfiError::coded(
+                "REG005",
+                format!("registration `{path}` initializer is not the exact V1 tuple"),
+            ));
+        };
+        if fields.len() != reserved_fe2o3_symbols::DEVICE_FFI_REGISTRATION_V1_FIELD_COUNT {
+            return Err(DeviceFfiError::coded(
+                "REG005",
+                format!("registration `{path}` initializer is not the exact V1 tuple"),
+            ));
+        }
+
+        let id = DeviceFfiContractIdV1::from_hex(contract_hex).map_err(|error| {
+            DeviceFfiError::coded(
+                "REG006",
+                format!("registration `{path}` has invalid identity: {error}"),
+            )
+        })?;
+        let function_expression = &fields[11];
+        if !matches!(function_expression.kind, ExprKind::Path(_)) {
+            return Err(DeviceFfiError::coded(
+                "REG007",
+                format!(
+                    "registration `{path}` must end in one direct function item and no cast or wrapper"
+                ),
+            ));
+        }
+        let function_ty = tcx.typeck(def_id).expr_ty(function_expression);
+        let TyKind::FnDef(function, args) = function_ty.kind() else {
+            return Err(DeviceFfiError::coded(
+                "REG007",
+                format!("registration `{path}` does not bind an exact function definition"),
+            ));
+        };
+        let instance =
+            Instance::try_resolve(tcx, TypingEnv::fully_monomorphized(), *function, args)
+                .map_err(|_| {
+                    DeviceFfiError::coded(
+                        "REG008",
+                        format!("registration `{path}` function normalization failed"),
                     )
-                    .map_err(|_| {
-                        DeviceFfiError::new(format!(
-                            "registration `{path}` function normalization failed"
-                        ))
-                    })?
-                    .ok_or_else(|| {
-                        DeviceFfiError::new(format!(
+                })?
+                .ok_or_else(|| {
+                    DeviceFfiError::coded(
+                        "REG008",
+                        format!(
                             "registration `{path}` function did not resolve to a concrete instance"
-                        ))
-                    })?;
-                    if contract_for_def(tcx, instance.def_id())?.is_some() {
-                        instances.push(instance);
-                    }
-                }
-            }
-        }
+                        ),
+                    )
+                })?;
+        let contract = contract_for_def(tcx, instance.def_id())?.ok_or_else(|| {
+            DeviceFfiError::coded(
+                "REG009",
+                format!(
+                    "registration `{path}` function `{}` has no device FFI marker",
+                    tcx.def_path_str(instance.def_id())
+                ),
+            )
+        })?;
+        validate_registration_initializer(&path, fields, id, &contract)?;
+        registrations.push(LocalDeviceFfiRegistration { id, instance, path });
     }
-    instances.sort_by_key(|instance| {
-        format!(
-            "{}|{}",
-            tcx.def_path_str(instance.def_id()),
-            tcx.symbol_name(*instance).name
-        )
+    registrations.sort_by(|lhs, rhs| {
+        lhs.id.cmp(&rhs.id).then_with(|| {
+            stable_instance_identity(tcx, lhs.instance)
+                .cmp(&stable_instance_identity(tcx, rhs.instance))
+        })
     });
-    instances.dedup_by_key(|instance| {
-        format!(
-            "{}|{}",
-            tcx.def_path_str(instance.def_id()),
-            tcx.symbol_name(*instance).name
-        )
-    });
-    Ok(instances)
+    Ok(registrations)
+}
+
+fn validate_registration_type(
+    tcx: TyCtxt<'_>,
+    def_id: rustc_hir::def_id::LocalDefId,
+    path: &str,
+) -> Result<(), DeviceFfiError> {
+    let ty = tcx.type_of(def_id).instantiate_identity();
+    let TyKind::Tuple(fields) = ty.kind() else {
+        return Err(DeviceFfiError::coded(
+            "REG010",
+            format!("registration `{path}` must use the exact V1 tuple type"),
+        ));
+    };
+    let valid = fields.len() == reserved_fe2o3_symbols::DEVICE_FFI_REGISTRATION_V1_FIELD_COUNT
+        && fields[0] == tcx.types.u64
+        && fields[1] == tcx.types.u16
+        && fields[2] == tcx.types.u16
+        && is_shared_str(fields[3])
+        && is_shared_str(fields[4])
+        && is_shared_str(fields[5])
+        && fields[6] == tcx.types.u16
+        && is_shared_str(fields[7])
+        && is_shared_str(fields[8])
+        && is_shared_str(fields[9])
+        && is_shared_str(fields[10])
+        && matches!(fields[11].kind(), TyKind::FnPtr(..));
+    if !valid {
+        return Err(DeviceFfiError::coded(
+            "REG010",
+            format!("registration `{path}` must use the exact V1 tuple type"),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_registration_initializer(
+    path: &str,
+    fields: &[Expr<'_>],
+    id: DeviceFfiContractIdV1,
+    contract: &DeviceFfiContract,
+) -> Result<(), DeviceFfiError> {
+    expect_registration_integer(
+        path,
+        "magic",
+        &fields[0],
+        u128::from(reserved_fe2o3_symbols::DEVICE_FFI_REGISTRATION_MAGIC_V1),
+    )?;
+    expect_registration_integer(
+        path,
+        "version",
+        &fields[1],
+        u128::from(reserved_fe2o3_symbols::DEVICE_FFI_REGISTRATION_VERSION_V1),
+    )?;
+    expect_registration_integer(
+        path,
+        "direction",
+        &fields[2],
+        u128::from(contract.direction.tag()),
+    )?;
+    expect_registration_string(path, "contract identity", &fields[3], &id.to_hex())?;
+    expect_registration_string(path, "symbol", &fields[4], &contract.symbol)?;
+    expect_registration_string(path, "calling convention", &fields[5], "C")?;
+    expect_registration_integer(
+        path,
+        "code-object version",
+        &fields[6],
+        u128::from(contract.code_object_version),
+    )?;
+    expect_registration_string(path, "target", &fields[7], &contract.target)?;
+    expect_registration_string(path, "physical ABI", &fields[8], &contract.physical_abi)?;
+    expect_registration_string(path, "effects", &fields[9], &contract.effects)?;
+    expect_registration_string(
+        path,
+        "semantic identity",
+        &fields[10],
+        &contract.semantic_identity,
+    )
+}
+
+fn expect_registration_integer(
+    path: &str,
+    field: &str,
+    expression: &Expr<'_>,
+    expected: u128,
+) -> Result<(), DeviceFfiError> {
+    let ExprKind::Lit(literal) = expression.kind else {
+        return Err(registration_field_mismatch(path, field));
+    };
+    let LitKind::Int(observed, _) = literal.node else {
+        return Err(registration_field_mismatch(path, field));
+    };
+    if observed != expected {
+        return Err(registration_field_mismatch(path, field));
+    }
+    Ok(())
+}
+
+fn expect_registration_string(
+    path: &str,
+    field: &str,
+    expression: &Expr<'_>,
+    expected: &str,
+) -> Result<(), DeviceFfiError> {
+    let ExprKind::Lit(literal) = expression.kind else {
+        return Err(registration_field_mismatch(path, field));
+    };
+    let LitKind::Str(observed, _) = literal.node else {
+        return Err(registration_field_mismatch(path, field));
+    };
+    if observed.as_str() != expected {
+        return Err(registration_field_mismatch(path, field));
+    }
+    Ok(())
+}
+
+fn registration_field_mismatch(path: &str, field: &str) -> DeviceFfiError {
+    DeviceFfiError::coded(
+        "REG011",
+        format!("registration `{path}` initializer {field} does not match its function marker"),
+    )
+}
+
+pub(crate) fn stable_instance_identity<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+) -> DeviceFfiInstanceIdentity {
+    DeviceFfiInstanceIdentity {
+        def_path_hash: tcx.def_path_hash(instance.def_id()).0.to_le_bytes(),
+        concrete_instance_symbol: tcx.symbol_name(instance).name.to_string(),
+    }
 }
 
 pub(crate) fn collected_declaration<'tcx>(
@@ -288,14 +495,15 @@ pub(crate) fn collected_declaration<'tcx>(
         owner: DeviceFfiSourceOwner {
             crate_name,
             item_path,
-            instance_identity: tcx.symbol_name(instance).name.to_string(),
+            def_path_hash: tcx.def_path_hash(def_id).0.to_le_bytes(),
+            concrete_instance_symbol: tcx.symbol_name(instance).name.to_string(),
         },
     }
 }
 
-fn validate_local_registrations<'tcx>(
-    tcx: TyCtxt<'tcx>,
+fn validate_local_registration_set<'tcx>(
     declarations: &[CollectedDeviceFfi<'tcx>],
+    registrations: &[LocalDeviceFfiRegistration<'tcx>],
 ) -> Result<(), DeviceFfiError> {
     let expected = declarations
         .iter()
@@ -303,76 +511,28 @@ fn validate_local_registrations<'tcx>(
         .map(|declaration| declaration.contract.id)
         .collect::<BTreeSet<_>>();
     let mut observed = BTreeSet::new();
-
-    for item_id in tcx.hir_free_items() {
-        let item = tcx.hir_item(item_id);
-        let def_id = item.owner_id.def_id;
-        let path = tcx.def_path_str(def_id.to_def_id());
-        let item_name = path.rsplit("::").next().unwrap_or(&path);
-        let Some(contract_hex) =
-            item_name.strip_prefix(reserved_fe2o3_symbols::DEVICE_FFI_REGISTRATION_PREFIX_V1)
-        else {
-            continue;
-        };
-        let id = DeviceFfiContractIdV1::from_hex(contract_hex).map_err(|error| {
-            DeviceFfiError::new(format!(
-                "registration `{path}` has invalid identity: {error}"
-            ))
-        })?;
-        if !matches!(item.kind, ItemKind::Static(..)) {
-            return Err(DeviceFfiError::new(format!(
-                "reserved registration `{path}` is not a static"
-            )));
-        }
-        if tcx.is_mutable_static(def_id.to_def_id()) {
-            return Err(DeviceFfiError::new(format!(
-                "registration `{path}` must be immutable"
-            )));
-        }
-        let flags = tcx.codegen_fn_attrs(def_id).flags;
-        if !flags.intersects(CodegenFnAttrFlags::USED_COMPILER | CodegenFnAttrFlags::USED_LINKER) {
-            return Err(DeviceFfiError::new(format!(
-                "registration `{path}` must carry #[used]"
-            )));
-        }
-        let ty = tcx.type_of(def_id).instantiate_identity();
-        let TyKind::Tuple(fields) = ty.kind() else {
-            return Err(DeviceFfiError::new(format!(
-                "registration `{path}` must use the exact V1 tuple"
-            )));
-        };
-        let valid = fields.len() == reserved_fe2o3_symbols::DEVICE_FFI_REGISTRATION_V1_FIELD_COUNT
-            && fields[0] == tcx.types.u64
-            && fields[1] == tcx.types.u16
-            && fields[2] == tcx.types.u16
-            && is_shared_str(fields[3])
-            && is_shared_str(fields[4])
-            && is_shared_str(fields[5])
-            && fields[6] == tcx.types.u16
-            && is_shared_str(fields[7])
-            && is_shared_str(fields[8])
-            && is_shared_str(fields[9])
-            && is_shared_str(fields[10])
-            && matches!(fields[11].kind(), TyKind::FnPtr(..));
-        if !valid {
-            return Err(DeviceFfiError::new(format!(
-                "registration `{path}` does not use the exact V1 tuple"
-            )));
-        }
-        if !observed.insert(id) {
-            return Err(DeviceFfiError::new(format!(
-                "duplicate local registration identity {}",
-                id.to_hex()
-            )));
+    for registration in registrations {
+        if !observed.insert(registration.id) {
+            return Err(DeviceFfiError::coded(
+                "REG012",
+                format!(
+                    "duplicate local registration identity {} at `{}`",
+                    registration.id.to_hex(),
+                    registration.path
+                ),
+            ));
         }
     }
 
     if observed != expected {
         let missing = expected.difference(&observed).next().map(|id| id.to_hex());
         let orphan = observed.difference(&expected).next().map(|id| id.to_hex());
-        return Err(DeviceFfiError::new(format!(
-            "local registration set does not match compiler markers (missing={missing:?}, orphan={orphan:?})"
-        )));
+        return Err(DeviceFfiError::coded(
+            "REG013",
+            format!(
+                "local registration set does not match compiler markers (missing={missing:?}, orphan={orphan:?})"
+            ),
+        ));
     }
     Ok(())
 }
@@ -1013,18 +1173,19 @@ fn validate_source_bindings(
                 declaration.contract.direction,
             )));
         }
-        if let Some(previous) = instance_owners.insert(
-            declaration.owner.instance_identity.as_str(),
-            declaration.owner.label(),
-        ) {
+        let instance_key = (
+            declaration.owner.def_path_hash,
+            declaration.owner.concrete_instance_symbol.as_str(),
+        );
+        if let Some(previous) = instance_owners.insert(instance_key, declaration.owner.label()) {
             return Err(DeviceFfiError::new(format!(
                 "device FFI instance `{}` is attributed to both `{previous}` and `{}`",
-                declaration.owner.instance_identity,
+                declaration.owner.concrete_instance_symbol,
                 declaration.owner.label(),
             )));
         }
         if let Some(previous) =
-            source_items.insert(declaration.owner.label(), declaration.contract.id)
+            source_items.insert(declaration.owner.def_path_hash, declaration.contract.id)
         {
             return Err(DeviceFfiError::new(format!(
                 "source item `{}` owns multiple device FFI contracts {} and {}",
@@ -1210,11 +1371,20 @@ mod tests {
             owner: DeviceFfiSourceOwner {
                 crate_name: crate_name.to_owned(),
                 item_path: format!("{crate_name}::{item_name}"),
-                instance_identity: format!("_R_{crate_name}_{item_name}"),
+                def_path_hash: fake_def_path_hash(crate_name, item_name),
+                concrete_instance_symbol: format!("_R_{crate_name}_{item_name}"),
             },
             contract,
             link_role,
         }
+    }
+
+    fn fake_def_path_hash(crate_name: &str, item_name: &str) -> [u8; 16] {
+        let mut hash = [0_u8; 16];
+        for (index, byte) in crate_name.bytes().chain(item_name.bytes()).enumerate() {
+            hash[index % hash.len()] ^= byte;
+        }
+        hash
     }
 
     #[test]
