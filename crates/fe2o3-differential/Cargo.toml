@@ -1,0 +1,20 @@
+[package]
+name = "fe2o3-differential"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/fe2o3-gpu/fe2o3"
+description = "Deterministic differential-test case generation and reduction for fe2o3"
+publish = false
+
+[lib]
+name = "fe2o3_differential"
+
+# This crate remains standalone until its case and result records are bound to
+# an authenticated compiler/runtime test pipeline.
+[workspace]
+resolver = "2"
+
+[lints.rust]
+unsafe_code = "forbid"
