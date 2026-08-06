@@ -5,9 +5,10 @@ normalizes proof configuration, requested properties, trusted items, measured
 tool identities, canonical request bytes, and process arguments. It also parses
 a strict result envelope emitted by a future evidence recorder.
 
-The crate does not launch Verus, a solver, or a shell. `CommandSpec` keeps the
-program and each argument separate so an executor can use a process API without
-shell interpretation. Unit tests use only in-memory records.
+The crate does not invoke a shell. `CommandSpec` keeps the program and each
+argument separate, and the bounded executor launches only the planned recorder
+with an empty environment, null stdin, and fixed working directory. Tests use a
+fixture recorder and do not require Verus or a solver installation.
 
 ## Trust boundary
 
@@ -28,8 +29,10 @@ shell interpretation. Unit tests use only in-memory records.
 
 ## Current limitations
 
-There is no process executor, Verus adapter, binary measurement implementation,
+There is no reviewed Verus adapter, binary measurement implementation,
 proof-record conversion, signature verification, or GPU runtime integration.
-The v1 result model deliberately mirrors the existing artifact outcomes and
-properties, but compatibility remains conceptual until an explicit conversion
-is implemented and reviewed.
+Tool identities remain caller-supplied. A timeout kills and reaps the direct
+recorder child, but does not yet establish a process group or forcibly terminate
+arbitrary descendants. The v1 result model deliberately mirrors the existing
+artifact outcomes and properties, but compatibility remains conceptual until
+an explicit conversion is implemented and reviewed.
