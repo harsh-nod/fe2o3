@@ -11,6 +11,7 @@ members = [
     "crates/fe2o3-core",
     "crates/fe2o3-core/tests/renamed-dependency",
     "crates/fe2o3-device",
+    "crates/fe2o3-differential",
     "crates/fe2o3-hip-sys",
     "crates/fe2o3-hsaco",
     "crates/fe2o3-hsaco-finalize",
@@ -75,6 +76,7 @@ fe2o3-artifacts = { path = "crates/fe2o3-artifacts" }
 fe2o3-contracts = { path = "crates/fe2o3-contracts" }
 fe2o3-core = { path = "crates/fe2o3-core" }
 fe2o3-device = { path = "crates/fe2o3-device" }
+fe2o3-differential = { path = "crates/fe2o3-differential" }
 fe2o3-hip-sys = { path = "crates/fe2o3-hip-sys" }
 fe2o3-hsaco = { path = "crates/fe2o3-hsaco" }
 fe2o3-hsaco-finalize = { path = "crates/fe2o3-hsaco-finalize" }

@@ -11,10 +11,5 @@ publish = false
 [lib]
 name = "fe2o3_differential"
 
-# This crate remains standalone until its case and result records are bound to
-# an authenticated compiler/runtime test pipeline.
-[workspace]
-resolver = "2"
-
 [lints.rust]
 unsafe_code = "forbid"
