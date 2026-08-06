@@ -4,8 +4,9 @@ use crate::{
 };
 use fe2o3_amd_target::{AmdTargetId, ParseAmdTargetIdError};
 use fe2o3_artifacts::{
-    AbiLayout, BlockSize, Capability, CodeObjectIdentity, DigestBytes, Endianness, HostLaunchAbi,
-    HostLaunchAbiError, LaunchContract, Name, PayloadDigest, PointerWidth, SelectedNativeKernel,
+    AbiLayout, ArtifactContainerV1, BlockSize, Capability, CodeObjectIdentity,
+    ContainerDecodeError, DigestBytes, Endianness, HostLaunchAbi, HostLaunchAbiError,
+    KernelSelectionError, LaunchContract, Name, PayloadDigest, PointerWidth, SelectedNativeKernel,
     TargetIdentity,
 };
 use fe2o3_device::KernelMarkerV1;
@@ -248,6 +249,161 @@ impl ValidatedArtifactSelectionV1 {
             payload: self.payload.clone(),
             context: self.context.clone(),
             brand,
+        }
+    }
+}
+
+/// Trusted backend contract for one compiler-generated kernel artifact.
+///
+/// This trait is an implementation boundary for generated code, not an
+/// application extension point. Authentication always decodes the bytes
+/// returned by [`CompilerGeneratedKernelContractV1::artifact_container_bytes`]
+/// and never accepts a caller-selected container.
+///
+/// # Safety
+///
+/// The implementation must be emitted by the trusted compiler backend and
+/// return the exact, immutable canonical [`ArtifactContainerV1`] bytes that the
+/// backend produced and embedded for `Self`. Those bytes must contain exactly
+/// one entry denoted by the marker's logical and export names, and that entry's
+/// identity, complete physical host ABI, declared effects, launch contract,
+/// and executable behavior must all describe `Self::FUNCTION` exactly.
+///
+/// Every executable memory effect, including effects selected or sized by
+/// scalar arguments, must be represented by the generated adapter's admission
+/// contract. Loading, unloading, and all module initialization or finalization
+/// behavior must also be safe under the generated contract. This host layer
+/// does not inspect init/fini entries; the implementation must establish that
+/// they are absent or that their complete semantics satisfy these obligations.
+/// A false implementation can make safe code load arbitrary native code.
+#[doc(hidden)]
+pub unsafe trait CompilerGeneratedKernelContractV1: KernelMarkerV1 {
+    /// Returns the exact canonical artifact container embedded by the backend.
+    fn artifact_container_bytes() -> &'static [u8];
+}
+
+/// Authenticated compiler-generated artifact for exactly one kernel marker.
+///
+/// Fields are private so callers cannot replace the validated selection or its
+/// marker binding. Construct this token with [`Self::authenticate`].
+#[doc(hidden)]
+pub struct AuthenticatedKernelArtifactV1<K: CompilerGeneratedKernelContractV1> {
+    validated: ValidatedArtifactSelectionV1,
+    binding: GeneratedKernelBindingV1<K>,
+}
+
+impl<K: CompilerGeneratedKernelContractV1> fmt::Debug for AuthenticatedKernelArtifactV1<K> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AuthenticatedKernelArtifactV1")
+            .field("identity", self.validated.identity())
+            .finish_non_exhaustive()
+    }
+}
+
+impl<K: CompilerGeneratedKernelContractV1> AuthenticatedKernelArtifactV1<K> {
+    /// Authenticates the exact artifact bytes embedded for `K` against one
+    /// observed context.
+    ///
+    /// The byte source is fixed by `K`; this API intentionally has no
+    /// caller-supplied bytes parameter. It decodes the complete container,
+    /// requires exactly one kernel with both marker names, selects that entry,
+    /// and applies the existing target, host-ABI, launch, and payload checks.
+    pub fn authenticate(
+        observed: &ObservedContext,
+    ) -> Result<Self, GeneratedArtifactAuthenticationError> {
+        let container = ArtifactContainerV1::from_bytes(K::artifact_container_bytes())
+            .map_err(GeneratedArtifactAuthenticationError::Decode)?;
+
+        let mut matching = container.manifest().kernels().iter().filter(|kernel| {
+            kernel.name().as_str() == K::LOGICAL_NAME
+                && kernel.symbol().as_str() == K::EXPORT_NAME
+        });
+        let kernel = matching
+            .next()
+            .ok_or(GeneratedArtifactAuthenticationError::MatchingKernelNotFound)?;
+        if matching.next().is_some() {
+            return Err(GeneratedArtifactAuthenticationError::MultipleMatchingKernels);
+        }
+
+        let selected = container
+            .select_native_kernel(kernel.kernel_id())
+            .map_err(GeneratedArtifactAuthenticationError::Selection)?;
+        let validated = ValidatedArtifactSelectionV1::validate(selected, observed)
+            .map_err(GeneratedArtifactAuthenticationError::Binding)?;
+
+        // SAFETY: `CompilerGeneratedKernelContractV1` requires the trusted
+        // backend to establish the exact marker, identity, complete ABI,
+        // effects, init/fini behavior, and executable provenance association.
+        // The exact-name cardinality and structural artifact checks above
+        // independently reject accidental selection or corruption.
+        let binding = unsafe { validated.bind_generated_marker::<K>() }
+            .map_err(GeneratedArtifactAuthenticationError::Marker)?;
+
+        Ok(Self { validated, binding })
+    }
+
+    pub fn identity(&self) -> &ArtifactKernelIdentityV1 {
+        self.validated.identity()
+    }
+
+    /// Consumes this authenticated token and safely loads its exact embedded
+    /// payload into `context`.
+    pub fn load(
+        self,
+        context: &Arc<fe2o3_core::GpuContext>,
+    ) -> Result<LoadedKernel<K>, crate::loaded_kernel::LoadedKernelLoadError> {
+        let Self { validated, binding } = self;
+        let binding = binding.into_inner();
+
+        // SAFETY: the unsafe generated contract authenticates the exact
+        // embedded executable and establishes its marker, complete ABI,
+        // effects, and load/unload behavior. `authenticate` decoded only those
+        // bytes, selected exactly one matching entry, and applied the existing
+        // target/ABI/payload checks. The private token fields preserve that
+        // association until this consuming call; the internal loader rechecks
+        // selection and exact context identity before invoking HIP.
+        unsafe { binding.load(&validated, &validated.context, context) }
+    }
+}
+
+/// Failure while authenticating a trusted backend's embedded artifact bytes.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum GeneratedArtifactAuthenticationError {
+    Decode(ContainerDecodeError),
+    MatchingKernelNotFound,
+    MultipleMatchingKernels,
+    Selection(KernelSelectionError),
+    Binding(ArtifactBindingError),
+    Marker(GeneratedMarkerBindingError),
+}
+
+impl fmt::Display for GeneratedArtifactAuthenticationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Decode(error) => write!(formatter, "invalid embedded artifact: {error}"),
+            Self::MatchingKernelNotFound => formatter.write_str(
+                "embedded artifact has no kernel matching the generated marker names",
+            ),
+            Self::MultipleMatchingKernels => formatter.write_str(
+                "embedded artifact has multiple kernels matching the generated marker names",
+            ),
+            Self::Selection(error) => error.fmt(formatter),
+            Self::Binding(error) => error.fmt(formatter),
+            Self::Marker(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for GeneratedArtifactAuthenticationError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Decode(error) => Some(error),
+            Self::Selection(error) => Some(error),
+            Self::Binding(error) => Some(error),
+            Self::Marker(error) => Some(error),
+            Self::MatchingKernelNotFound | Self::MultipleMatchingKernels => None,
         }
     }
 }

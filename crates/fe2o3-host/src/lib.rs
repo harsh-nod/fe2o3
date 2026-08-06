@@ -16,7 +16,10 @@ pub use artifact_binding::{
     ArtifactLaunchContractError, ArtifactRevalidationError, ValidatedArtifactSelectionV1,
 };
 #[doc(hidden)]
-pub use artifact_binding::{GeneratedKernelBindingV1, GeneratedMarkerBindingError};
+pub use artifact_binding::{
+    AuthenticatedKernelArtifactV1, CompilerGeneratedKernelContractV1,
+    GeneratedArtifactAuthenticationError, GeneratedKernelBindingV1, GeneratedMarkerBindingError,
+};
 pub use fe2o3_core::{KernelParams, LaunchConfig};
 pub use fe2o3_kernel_descriptor::{BlockSizeV1, DimensionsV1, KernelId, LaunchConstraintsV1};
 #[doc(hidden)]
