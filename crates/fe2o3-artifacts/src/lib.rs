@@ -3,6 +3,9 @@
 
 mod abi;
 mod binding;
+mod bundle;
+mod bundle_decode;
+mod bundle_encode;
 mod container;
 mod container_decode;
 mod container_encode;
@@ -29,6 +32,13 @@ pub use binding::{
     MatchedProofEvidenceV1, PROOF_IDENTITY_VERSION, ProofMatchError, ProofMatchPolicy,
     ProofTargetError, V1_REQUIRED_PROPERTIES,
 };
+pub use bundle::{
+    BUNDLE_INDEX_DIGEST_ALGORITHM, BundleIndexV1, BundleKernelIndexEntryV1,
+    BundlePayloadReferenceV1, BundleTargetAssociationV1, BundleValidationError, MAX_BUNDLE_KERNELS,
+    MAX_BUNDLE_PAYLOAD_REFERENCES, MAX_BUNDLE_TARGET_ASSOCIATIONS, MAX_KERNEL_PAYLOAD_REFERENCES,
+};
+pub use bundle_decode::BundleDecodeError;
+pub use bundle_encode::{BUNDLE_INDEX_MAGIC, BUNDLE_INDEX_VERSION, MAX_BUNDLE_INDEX_BYTES};
 pub use container::{
     ArtifactContainerV1, CodeObjectPayload, ContainerValidationError, MAX_CODE_OBJECT_BYTES,
     MAX_EMBEDDED_PAYLOAD_BYTES,
