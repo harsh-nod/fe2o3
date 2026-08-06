@@ -45,10 +45,26 @@ libraries and covers bitcode plus bitcode, bitcode plus AMDGPU relocatable, and
 multiple AMDGPU relocatables. It also checks deterministic output and rejects
 kind, target, code-object, import, definition, and export mismatches. Supplying
 an optional path writes the successful mixed-input HSACO for independent
-inspection:
+inspection. Two additional paths also export the exact bitcode and relocatable
+inputs used for that link:
 
 ```sh
 build/llvm-link-worker/fe2o3-worker-pipeline-tests /tmp/fe2o3-mixed.hsaco
+build/llvm-link-worker/fe2o3-worker-pipeline-tests \
+  /tmp/fe2o3-mixed.hsaco /tmp/fe2o3-mixed.bc /tmp/fe2o3-mixed.o
+```
+
+The repository integration driver performs a clean Release configuration,
+native CTests, focused Rust tests, and a mixed-input execution through
+`PinnedWorkerV1`. All package and build identities are explicit arguments; a
+missing prerequisite is an error. The final line states that this is native
+link integration rather than a GPU dispatch test:
+
+```sh
+scripts/test-direct-llvm-worker.sh build/llvm-link-worker \
+  /opt/rocm/lib/llvm/lib/cmake/llvm \
+  /opt/rocm/lib/llvm/lib/cmake/lld \
+  22.0.0git /tmp/fe2o3-rocm-llvm-build-id.txt gfx942
 ```
 
 The worker response is descriptive evidence. It grants no loading or launch

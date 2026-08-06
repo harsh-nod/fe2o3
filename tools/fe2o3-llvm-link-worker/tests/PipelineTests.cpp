@@ -358,8 +358,9 @@ void testLldExitPolicy(int ExitCode) {
 } // namespace
 
 int main(int ArgumentCount, char **Arguments) {
-  require(ArgumentCount == 1 || ArgumentCount == 2,
-          "usage: fe2o3-worker-pipeline-tests [OUTPUT.hsaco]");
+  require(ArgumentCount == 1 || ArgumentCount == 2 || ArgumentCount == 4,
+          "usage: fe2o3-worker-pipeline-tests "
+          "[OUTPUT.hsaco [INPUT.bc INPUT.o]]");
 
   fe2o3::worker::detail::enforceReusableLldResult({0, true});
   fe2o3::worker::detail::enforceReusableLldResult({1, true});
@@ -431,8 +432,12 @@ int main(int ArgumentCount, char **Arguments) {
   Response MixedSecond = runSuccess(Mixed, {"mixed_entry", "object_helper"});
   require(MixedFirst.LinkedOutput->Bytes == MixedSecond.LinkedOutput->Bytes,
           "identical requests produced different HSACO bytes");
-  if (ArgumentCount == 2)
+  if (ArgumentCount >= 2)
     writeOutput(Arguments[1], MixedFirst.LinkedOutput->Bytes);
+  if (ArgumentCount == 4) {
+    writeOutput(Arguments[2], MixedBitcode);
+    writeOutput(Arguments[3], MixedObject);
+  }
 
   Request ObjectPair = makeRequest(
       {makeInput(InputKind::AmdGpuRelocatable,
