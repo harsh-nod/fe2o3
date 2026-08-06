@@ -69,6 +69,20 @@ Safe ownership of resources used by asynchronous copies is documented in
   registration. The marker does not authenticate an executable or establish
   its full packed ABI and semantics; generated binding remains an unsafe
   compiler/runtime boundary.
+- `#[kernel(typed)]` implements one exact generated profile for a public, safe,
+  non-generic unit function with signature
+  `pub fn(&[f32], &[f32], DisjointSlice<f32>)`. It emits
+  `<kernel>_gpu::{Kernel, Prepared}`. The backend packages the finalized LLVM IR
+  identity, native HSACO payload, target, exact 48-byte read/read/write slice
+  ABI, and fixed one-dimensional launch contract into a canonical
+  `ArtifactContainerV1`, then embeds those immutable bytes in the host link.
+  `Kernel::load` authenticates the embedded container against the observed
+  context and exact vecadd profile before loading it.
+- The generated vecadd API safely prepares equal, nonempty `f32` buffers,
+  performs context, geometry, and alias admission, and retains all typed
+  resources through either synchronous `Prepared::launch` or non-escapable
+  `Prepared::launch_scoped`. The vecadd example uses only this generated API; it
+  contains no artifact pathname, raw parameter pack, or unsafe user launch.
 - The default `legacy-v1` AMDGPU emitter supports the repository's `f32`/`f64`
   elementwise examples. It recognizes scalar float arguments and literals,
   read-only slice loads, `DisjointSlice<T>` or indexed mutable-slice stores,
@@ -121,14 +135,11 @@ example, copied results back, and compared them with CPU results.
   `LoadedKernel<K>` authority that owns the exact HIP module and function and
   can bind only matching prepared launches. Argument admission reserves
   context-scoped allocation ranges and rejects overlapping mutable or
-  mutable/shared aliases. A doc-hidden generated-code SPI can unsafely bind a
-  generated marker, load it, construct read-only and writable typed device-slice
-  capabilities, and seal one exact admission, argument pack, and capability
-  pack into `GeneratedAdmittedLaunch`. Its safe scoped launch retains the typed
-  buffer borrows, alias reservation, loaded authority, and packed parameters
-  until HIP completion or a stronger stream-quiescence fallback. Marker and
-  executable authenticity, the complete ABI/effect association, and assembly
-  of the sealed launch remain explicit unsafe obligations.
+  mutable/shared aliases. The exact generated vecadd adapter assembles these
+  pieces behind its safe API. The general doc-hidden generated-code SPI still
+  exposes an unsafe compiler boundary: backend/linker association of a marker,
+  complete ABI and effects, and executable semantics must be correct before its
+  sealed launch can be treated as safe.
 - Compiler artifact publication is transactional and generation-owned. Build
   attempt and canonical rustc invocation descriptors are versioned and
   bounded.
@@ -155,15 +166,25 @@ example, copied results back, and compared them with CPU results.
 - General MIR to kernel IR to AMDGPU lowering is not complete; `kernel-ir-v1`
   accepts only the exact fill and vecadd shapes, and the elementwise recognizer
   remains the default emitter.
-- Artifact manifests, descriptor finalization, observed targets, and proof
-  records do not yet produce a compiler-generated, user-facing typed module,
-  loader, or launch API. The doc-hidden unsafe generated-code SPI and sealed
-  `GeneratedAdmittedLaunch` are implementation foundations, not a safe
-  authenticated artifact load: marker/executable authenticity and the complete
-  ABI and executable-effect association still enter through unsafe code.
+- The generated typed path supports only
+  `pub fn(&[f32], &[f32], DisjointSlice<f32>)`; general typed signatures,
+  multi-profile module generation, and compiler-derived Rust type and layout
+  identities are not implemented. The vecadd container uses exact fixed ABI
+  declarations and deterministic opaque type/layout identities rather than
+  layout evidence imported from rustc.
+- The generated vecadd API has synchronous launch and a scoped asynchronous
+  callback that cannot return the in-flight operation. Generalized returnable
+  borrowed or owned generated async APIs, cancellation, and composition are not
+  complete.
+- Generated artifact embedding currently supports only the
+  `x86_64-unknown-linux-gnu` host. The private backend/linker marker-to-artifact
+  association remains a trusted compiler contract rather than a general
+  cross-crate authenticated identity scheme.
 - `cargo fe2o3 verify` and `build --require-proof` are roadmap commands. The
   current required Verus CI lane is invoked separately and does not prove the
   ordinary Rust function, compiler, ROCm, driver, or machine-code refinement.
+  Verus proof identity/refinement is not authenticated into the generated
+  vecadd artifact or required by its safe loader and launch API.
 - The fail-closed rustc wrapper classifies and preserves approved bootstrap
   invocations, but compile execution remains disabled until the pinned rustc
   and sealed backend primitives are composed with the validated invocation.

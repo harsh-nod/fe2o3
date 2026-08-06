@@ -18,7 +18,7 @@ partial, experimental, planned, and N/A rows. The supplemental audit also
 accounts for capabilities demonstrated elsewhere in the repository.
 
 The fe2o3 current-state column is based on commit
-`cecf0e1e86ef0dfaef3b9c9261bb9006abb62520`.
+`62e375d8273285514e43ab1678fb24c772133fa4`.
 <!-- parity-status:baseline:end -->
 
 At that commit fe2o3 has a HIP runtime, explicit unsafe raw module and launch
@@ -27,13 +27,15 @@ target-neutral kernel IR and verifier, opt-in end-to-end verified-IR AMDGPU fill
 and exact three-slice vecadd paths, a default narrow elementwise `f32`/`f64`
 LLVM/HSACO emitter, fail-closed formal affine memory/race obligations for
 modeled effects, artifact and proof schemas, generated `KernelMarkerV1` types,
-exact loaded module/function authority, host argument-alias admission, a
-doc-hidden unsafe generated binding/loading/assembly SPI with sealed scoped
-launches, bounded HSACO inspection/finalization, event-backed asynchronous
-transfer lifetimes, transactional artifact publication, and Verus vecadd and
-fill harnesses. These foundations are not yet connected into a general
-compiler, compiler-generated user-facing typed loader/launch API, authenticated
-proof-carrying artifact, or proof-requiring build.
+exact loaded module/function authority, host argument-alias admission, bounded
+HSACO inspection/finalization, event-backed asynchronous transfer lifetimes,
+transactional artifact publication, and Verus vecadd and fill harnesses.
+`#[kernel(typed)]` additionally connects one exact
+`pub fn(&[f32], &[f32], DisjointSlice<f32>)` profile to a backend-generated,
+canonical embedded artifact and safe load, prepare, synchronous launch, and
+non-escapable scoped launch API. This narrow vertical is not a general compiler,
+general typed module system, authenticated proof-carrying artifact, or
+proof-requiring build.
 
 This matrix compares capabilities and observable semantics, not identical
 vendor syntax. It is not a claim that either project is production-ready.
@@ -64,7 +66,7 @@ pass.
 <!-- parity-status:counts:start -->
 | Scope | Complete | Partial | Missing | N/A | Total |
 |:--|--:|--:|--:|--:|--:|
-| Normative | 0 | 19 | 63 | 12 | 94 |
+| Normative | 0 | 21 | 61 | 12 | 94 |
 | Supplemental | 0 | 7 | 8 | 0 | 15 |
 <!-- parity-status:counts:end -->
 
@@ -97,16 +99,17 @@ The detailed dependencies and exit criteria are in
   vecadd-shaped subset. The opt-in `kernel-ir-v1` backend now takes the exact
   fill and three-slice vecadd kernels through translation, verification,
   legalization, G1 AMD lowering, transactional publication, and hardware
-  execution, but compiler-generated host packing and general AMDGPU lowering
-  are absent.
+  execution. Compiler-generated host packing exists only for the exact typed
+  vecadd profile; general Rust signatures and general AMDGPU lowering are
+  absent.
 - Rows 32, 33, and 35: `#[kernel]` emits strict V1 registration metadata tied to
   a direct function pointer and a deterministic, doc-hidden typed
   `KernelMarkerV1`; public kernels expose that marker publicly. Reachable helper
-  collection, helper-call translation, and multiple kernels are exercised.
-  This compiler contract authenticates neither the marker/executable
-  association nor full ABI semantics. The default narrow emitter and opt-in
-  exact fill and vecadd paths reach executable code objects, but neither is a
-  general compiler.
+  collection, helper-call translation, and multiple kernels are exercised. For
+  the exact vecadd signature, `#[kernel(typed)]` emits a public generated host
+  module and a versioned typed registration. The backend/linker association is
+  still a trusted compiler contract, and the default narrow emitter plus opt-in
+  exact fill and vecadd paths are not a general compiler or multi-kernel bundle.
 - Rows 36-38 and 41-43: one-source builds, AMDGPU LLVM/HSACO sidecars, diagnostic
   dumps, bounded HSACO inspection, project-local cleanup, and the opt-in exact
   fill and vecadd paths exist. The general pipeline, user-facing `inspect`
@@ -115,33 +118,41 @@ The detailed dependencies and exit criteria are in
   target-neutral launch-axis verification, and observed target/capability facts
   exist. Kernel IR derives formal affine regions, bounds, runtime-alias, and
   inter-invocation race obligations for modeled effects and fails closed on
-  unsupported effects. The launch extent and runtime parameter/allocation
-  mappings remain unauthenticated, and the device APIs are not yet branded to a
-  physical launch.
-- Row 79: `PreparedLaunch<K>` checks kernel, context, device, geometry,
-  resources, and observed limits. `LoadedKernel<K>` owns the exact HIP module
-  and function and accepts only a matching prepared authority. Host argument
-  admission also reserves context-scoped ranges and rejects mutable aliasing,
-  while generated read/write capabilities derive admission and packing from the
-  same typed buffer borrows. The doc-hidden unsafe SPI seals one admission,
-  parameter pack, and capability pack in `GeneratedAdmittedLaunch`; its scoped
-  operation retains those borrows and reservations through quiescence.
-  Structural validation still cannot authenticate executable semantics or the
-  complete ABI/effect association, assembly remains unsafe, and no generated
-  user-facing `#[launch_contract]`, typed loader, or typed launch API exists.
-- Row 80: the current `launch!` macro is an explicit unsafe raw-ABI escape hatch
-  with compile-fail coverage. The sealed generated-code SPI has a safe scoped
-  launch only after unsafe association and assembly; it is not a user-facing
-  macro generated from an authenticated artifact contract.
-- Row 81 and supplemental row S03: scoped generated launch retains typed
-  resource borrows, loaded authority, alias admission, and packed parameters
-  through event completion or stronger stream quiescence. There is still no
-  compiler-generated user-facing typed asynchronous API or safe authenticated
-  artifact load, so row 81 remains Missing and S03 remains Partial.
+  unsupported effects. The exact generated vecadd adapter authenticates its
+  fixed launch contract and maps three runtime allocations to it; general
+  launch extents and parameter/allocation mappings remain unauthenticated.
+- Rows 78 and 79: for the exact public
+  `fn(&[f32], &[f32], DisjointSlice<f32>)` profile, `#[kernel(typed)]`
+  generates the public `<kernel>_gpu` module with `Kernel` and `Prepared`
+  aliases. The backend embeds one
+  canonical container holding the native payload, target, exact physical ABI,
+  read/read/write effects, and one-dimensional launch contract. `Kernel::load`
+  authenticates those embedded bytes against the observed context and exact
+  profile. `prepare` checks context, equal nonzero lengths, u32 index geometry,
+  resource limits, and alias admission while retaining the loaded authority and
+  typed buffers. General typed signatures, compiler-derived Rust type/layout
+  identities, multi-kernel modules, and cross-crate artifact identity are not
+  complete, so both rows remain Partial.
+- Row 80: the general `launch!` macro remains an explicit unsafe raw-ABI escape
+  hatch with compile-fail coverage. The generated vecadd module instead exposes
+  safe `prepare(...).launch(...)`; the example contains no raw parameter pack,
+  artifact pathname, or unsafe user launch. This is one fixed profile, not a
+  general generated launch macro, so the row remains Partial.
+- Row 81 and supplemental row S03: the generated vecadd `launch_scoped` API
+  retains typed resource borrows, loaded authority, alias admission, and packed
+  parameters through event completion or stronger stream quiescence. Its
+  higher-ranked callback cannot return the in-flight operation. Generalized
+  returnable borrowed or owned generated async operations, cancellation, and
+  composition are incomplete, so both rows remain Partial.
 - Supplemental rows S01-S05, S14, and S15: the corresponding bounded models,
   parsers, lifetime types, target query, exact proof-evidence matching, and
-  focused UI tests exist. Publication, compiler-refinement authentication, and
-  generated safe-launch integration remain incomplete.
+  focused UI tests exist. The typed vecadd backend now emits and embeds a
+  canonical container, but its source identity is finalized LLVM IR and its
+  Rust type/layout identities are deterministic opaque declarations rather
+  than compiler-derived evidence. Verus proof binding/refinement is not
+  authenticated into that artifact, general generated safe-launch integration
+  is incomplete, and host-object embedding is limited to
+  `x86_64-unknown-linux-gnu`.
 
 ## Normative 94-row Matrix
 
@@ -296,10 +307,10 @@ The detailed dependencies and exit criteria are in
 
 | ID | cuda-oxide feature | Baseline | Class | fe2o3 now | AMD/fe2o3 acceptance target | Gate |
 |:--|:--|:--|:--|:--|:--|:--|
-| 78 | `#[cuda_module]` Typed Launch | Full | Exact | Missing | A neutral module macro embeds bundles and generates typed sync/async methods from manifest entries | G3 |
+| 78 | `#[cuda_module]` Typed Launch | Full | Exact | Partial | A neutral module macro embeds bundles and generates typed sync/async methods from manifest entries | G3 |
 | 79 | `#[launch_contract]` / `PreparedLaunch<K>` | Full | Exact | Partial | Contracts check rank, exact/bounded block shape, resources, capabilities, context, and kernel identity | G0, G3, G5 |
 | 80 | `cuda_launch!` Macro | Full | Exact | Partial | `launch!` is explicitly unsafe for runtime-loaded raw functions and exposes complete obligations | G0, G3 |
-| 81 | `cuda_launch_async!` Macro | Full | Exact | Missing | Raw lazy launch is unsafe; typed operations retain borrowed/owned resources through completion and cancellation | G3 |
+| 81 | `cuda_launch_async!` Macro | Full | Exact | Partial | Raw lazy launch is unsafe; typed operations retain borrowed/owned resources through completion and cancellation | G3 |
 | 82 | `#[launch_bounds]` | Full | AMD-equivalent | Missing | Emit and validate AMD flat workgroup-size/occupancy metadata with architecture-specific limits | G4 |
 | 83 | `#[cluster_launch]` | Full | N/A | N/A | CUDA cluster dimensions are not accepted as portable AMD launch metadata | G6 |
 
