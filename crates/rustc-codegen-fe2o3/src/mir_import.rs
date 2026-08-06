@@ -442,10 +442,11 @@ impl MirModule {
         ];
 
         for function in &self.functions {
+            // `kind` is a V1 compatibility field consumed by record_lowering.
+            // The closed role remains authoritative on `MirFunction::kind`.
             let kind = match function.kind {
-                MirFunctionKind::KernelEntry => "kernel-entry",
-                MirFunctionKind::InternalHelper => "internal-helper",
-                MirFunctionKind::DeviceFfiExport => "device-ffi-export",
+                MirFunctionKind::KernelEntry => "kernel",
+                MirFunctionKind::InternalHelper | MirFunctionKind::DeviceFfiExport => "device",
             };
             records.push(
                 MirOpRecord::new(MirOp::Func)
@@ -1496,6 +1497,7 @@ mod tests {
 
         assert_eq!(records[0].op, MirOp::Module);
         assert_eq!(records[1].op, MirOp::Func);
+        assert_eq!(record_string(&records[1], "kind"), Some("kernel"));
         assert_eq!(records[2].op, MirOp::Arg);
         assert_eq!(records[3].op, MirOp::Block);
         assert_eq!(records[4].op, MirOp::Assign);
