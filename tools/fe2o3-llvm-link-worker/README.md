@@ -25,7 +25,7 @@ cmake --build build/llvm-link-worker
 ctest --test-dir build/llvm-link-worker --output-on-failure
 ```
 
-CMake prints a `fe2o3-worker-v2-sha256-*` response measurement derived from
+CMake prints a `fe2o3-worker-v1-sha256-*` response measurement derived from
 the worker sources, LLVM version/build ID, C++ compiler identity, language
 level, and fixed exception/RTTI settings. The request names the raw LLVM build
 ID; V2 additionally names the expected worker measurement and pinned executable
