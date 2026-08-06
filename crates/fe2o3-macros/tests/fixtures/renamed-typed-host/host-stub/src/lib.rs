@@ -11,6 +11,7 @@ pub mod __generated {
     /// Implementors must return the exact compiler-generated artifact for `Self`.
     pub unsafe trait CompilerGeneratedKernelContractV1 {
         const PROFILE: CompilerGeneratedKernelProfileV1;
+        const KERNEL_BINDING_ID_V1: [u8; 32];
 
         fn artifact_container_bytes() -> &'static [u8];
     }

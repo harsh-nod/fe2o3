@@ -285,6 +285,9 @@ pub unsafe trait CompilerGeneratedKernelContractV1: KernelMarkerV1 {
     /// Versioned host ABI and memory-effect profile expected by generated code.
     const PROFILE: CompilerGeneratedKernelProfileV1;
 
+    /// Full backend-validated identity used by private host linker symbols.
+    const KERNEL_BINDING_ID_V1: [u8; 32];
+
     /// Returns the exact canonical artifact container embedded by the backend.
     fn artifact_container_bytes() -> &'static [u8];
 }

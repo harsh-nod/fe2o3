@@ -33,6 +33,7 @@ macro_rules! marker {
         unsafe impl CompilerGeneratedKernelContractV1 for $marker {
             const PROFILE: CompilerGeneratedKernelProfileV1 =
                 CompilerGeneratedKernelProfileV1::TypedVecAddF32V1;
+            const KERNEL_BINDING_ID_V1: [u8; 32] = [0x42; 32];
 
             fn artifact_container_bytes() -> &'static [u8] {
                 static BYTES: OnceLock<Vec<u8>> = OnceLock::new();

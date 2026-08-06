@@ -40,7 +40,13 @@ fn typed_kernel_compile_fail_diagnostics_are_stable() {
     let cases: &[(&str, &[&str])] = &[
         (
             "invalid_attribute",
-            &["#[kernel] accepts only #[kernel] or #[kernel(typed)]"],
+            &["#[kernel] accepts only #[kernel], #[kernel(typed)]"],
+        ),
+        (
+            "missing_namespace",
+            &[
+                "#[kernel(typed)] requires the cargo-fe2o3 rustc wrapper or an explicit 256-bit namespace",
+            ],
         ),
         (
             "invalid_signatures",

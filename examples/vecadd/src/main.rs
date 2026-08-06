@@ -7,7 +7,10 @@ macro_rules! production_f32_add {
     ($lhs:expr, $rhs:expr) => {{ $lhs + $rhs }};
 }
 
-#[kernel(typed)]
+#[kernel(
+    typed,
+    namespace = "7c0e8b256bc76d2d17529f43ca8e2ee3480c40dfd019491bd4fb1fc22c4f5f2d"
+)]
 pub fn vecadd(a: &[f32], b: &[f32], mut c: DisjointSlice<f32>) {
     vecadd_kernel_body!(thread, (), production_f32_add, a, b, c);
 }
@@ -87,7 +90,9 @@ mod tests {
             .expect("example has production source");
 
         for required in [
-            "#[kernel(typed)]",
+            "#[kernel(",
+            "typed,",
+            "namespace =",
             "vecadd_gpu::Kernel::load(&context)",
             ".prepare(&a_dev, &b_dev, &mut c_dev)",
             ".launch(&stream)",

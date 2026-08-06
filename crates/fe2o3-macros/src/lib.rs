@@ -1,14 +1,18 @@
+#![feature(proc_macro_tracked_env)]
+
 use proc_macro::TokenStream;
 use proc_macro_crate::{FoundCrate, crate_name};
 use quote::{format_ident, quote};
 use reserved_fe2o3_symbols::{
-    KERNEL_PREFIX, KERNEL_REGISTRATION_KIND_KERNEL, KERNEL_REGISTRATION_KIND_TYPED_VECADD_V1,
-    KERNEL_REGISTRATION_MAGIC, KERNEL_REGISTRATION_PREFIX, KERNEL_REGISTRATION_VERSION_V1,
-    RESERVED_ROOT,
+    CRATE_BINDING_ID_ENV_V1, CrateBindingIdV1, KERNEL_PREFIX, KERNEL_REGISTRATION_KIND_KERNEL,
+    KERNEL_REGISTRATION_KIND_TYPED_VECADD_V1, KERNEL_REGISTRATION_MAGIC,
+    KERNEL_REGISTRATION_PREFIX, KERNEL_REGISTRATION_VERSION_V1, KERNEL_REGISTRATION_VERSION_V2,
+    RESERVED_ROOT, TYPED_VECADD_F32_PROFILE_TAG_V1, artifact_length_symbol_v1,
+    artifact_pointer_symbol_v1, derive_kernel_binding_id_v1, host_kernel_symbol_v1,
 };
 use syn::{
-    Data, DeriveInput, FnArg, GenericArgument, ItemFn, Meta, Pat, PathArguments, ReturnType, Type,
-    Visibility, parse_macro_input,
+    Data, DeriveInput, Expr, FnArg, GenericArgument, ItemFn, Lit, Meta, Pat, PathArguments,
+    ReturnType, Token, Type, Visibility, parse::Parser, parse_macro_input, punctuated::Punctuated,
 };
 
 #[proc_macro_derive(DeviceCopy)]
@@ -186,14 +190,14 @@ fn validate_device_copy_repr(attrs: &[syn::Attribute]) -> syn::Result<DeviceCopy
 
 #[proc_macro_attribute]
 pub fn kernel(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let mode = match parse_kernel_mode(attr.into()) {
-        Ok(mode) => mode,
+    let options = match parse_kernel_options(attr.into()) {
+        Ok(options) => options,
         Err(error) => return error.to_compile_error().into(),
     };
 
     let input = parse_macro_input!(item as ItemFn);
 
-    expand_kernel(input, mode)
+    expand_kernel(input, options)
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }
@@ -204,40 +208,124 @@ enum KernelMode {
     Typed,
 }
 
-const MAX_TYPED_KERNEL_SYMBOL_STEM_BYTES: usize = 128;
-
-fn parse_kernel_mode(attr: proc_macro2::TokenStream) -> syn::Result<KernelMode> {
-    if attr.is_empty() {
-        return Ok(KernelMode::Basic);
-    }
-
-    if let Ok(argument) = syn::parse2::<syn::Ident>(attr.clone())
-        && argument == "typed"
-    {
-        return Ok(KernelMode::Typed);
-    }
-
-    Err(syn::Error::new_spanned(
-        attr,
-        "#[kernel] accepts only #[kernel] or #[kernel(typed)]",
-    ))
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct KernelOptions {
+    mode: KernelMode,
+    explicit_namespace: Option<CrateBindingIdV1>,
 }
 
-fn expand_kernel(input: ItemFn, mode: KernelMode) -> syn::Result<proc_macro2::TokenStream> {
-    if mode == KernelMode::Typed {
+const MAX_TYPED_KERNEL_SYMBOL_STEM_BYTES: usize = 128;
+
+fn parse_kernel_options(attr: proc_macro2::TokenStream) -> syn::Result<KernelOptions> {
+    if attr.is_empty() {
+        return Ok(KernelOptions {
+            mode: KernelMode::Basic,
+            explicit_namespace: None,
+        });
+    }
+
+    let arguments = Punctuated::<Meta, Token![,]>::parse_terminated.parse2(attr.clone())?;
+    let mut typed = false;
+    let mut explicit_namespace = None;
+    for argument in arguments {
+        match argument {
+            Meta::Path(path) if path.is_ident("typed") && !typed => typed = true,
+            Meta::NameValue(value) if value.path.is_ident("namespace") => {
+                if explicit_namespace.is_some() {
+                    return Err(syn::Error::new_spanned(
+                        value,
+                        "#[kernel(typed)] accepts at most one explicit namespace",
+                    ));
+                }
+                let Expr::Lit(literal) = &value.value else {
+                    return Err(syn::Error::new_spanned(
+                        value,
+                        "#[kernel(typed)] namespace must be a 64-byte lowercase hexadecimal string literal",
+                    ));
+                };
+                let Lit::Str(literal) = &literal.lit else {
+                    return Err(syn::Error::new_spanned(
+                        value,
+                        "#[kernel(typed)] namespace must be a 64-byte lowercase hexadecimal string literal",
+                    ));
+                };
+                explicit_namespace = Some(
+                    CrateBindingIdV1::from_hex(&literal.value())
+                        .map_err(|error| syn::Error::new_spanned(literal, error))?,
+                );
+            }
+            _ => {
+                return Err(syn::Error::new_spanned(
+                    argument,
+                    "#[kernel] accepts only #[kernel], #[kernel(typed)], or #[kernel(typed, namespace = \"<64 lowercase hex bytes>\")]",
+                ));
+            }
+        }
+    }
+
+    if !typed {
+        return Err(syn::Error::new_spanned(
+            attr,
+            "#[kernel] accepts only #[kernel], #[kernel(typed)], or #[kernel(typed, namespace = \"<64 lowercase hex bytes>\")]",
+        ));
+    }
+
+    Ok(KernelOptions {
+        mode: KernelMode::Typed,
+        explicit_namespace,
+    })
+}
+
+fn expand_kernel(input: ItemFn, options: KernelOptions) -> syn::Result<proc_macro2::TokenStream> {
+    if options.mode == KernelMode::Typed {
         validate_typed_kernel_signature(&input)?;
         validate_typed_kernel_symbol_stem(&input.sig.ident)?;
     }
     validate_kernel_signature(&input)?;
 
+    let crate_binding = if options.mode == KernelMode::Typed {
+        Some(resolve_crate_binding(options.explicit_namespace)?)
+    } else {
+        None
+    };
+
     let device_import = fe2o3_device_import()?;
-    let host_import = if mode == KernelMode::Typed {
+    let host_import = if options.mode == KernelMode::Typed {
         Some(fe2o3_host_import()?)
     } else {
         None
     };
 
-    expand_kernel_with_imports(input, mode, &device_import, host_import.as_ref())
+    expand_kernel_with_imports(
+        input,
+        options.mode,
+        &device_import,
+        host_import.as_ref(),
+        crate_binding,
+    )
+}
+
+fn resolve_crate_binding(
+    explicit_namespace: Option<CrateBindingIdV1>,
+) -> syn::Result<CrateBindingIdV1> {
+    match proc_macro::tracked::env_var(CRATE_BINDING_ID_ENV_V1) {
+        Ok(value) => CrateBindingIdV1::from_hex(&value).map_err(|error| {
+            syn::Error::new(
+                proc_macro2::Span::call_site(),
+                format!("invalid {CRATE_BINDING_ID_ENV_V1}: {error}"),
+            )
+        }),
+        Err(std::env::VarError::NotPresent) => explicit_namespace.ok_or_else(|| {
+            syn::Error::new(
+                proc_macro2::Span::call_site(),
+                "#[kernel(typed)] requires the cargo-fe2o3 rustc wrapper or an explicit 256-bit namespace",
+            )
+        }),
+        Err(std::env::VarError::NotUnicode(_)) => Err(syn::Error::new(
+            proc_macro2::Span::call_site(),
+            format!("{CRATE_BINDING_ID_ENV_V1} is not valid UTF-8"),
+        )),
+    }
 }
 
 #[cfg(test)]
@@ -245,7 +333,7 @@ fn expand_kernel_with_device_import(
     input: ItemFn,
     device_import: &proc_macro2::TokenStream,
 ) -> syn::Result<proc_macro2::TokenStream> {
-    expand_kernel_with_imports(input, KernelMode::Basic, device_import, None)
+    expand_kernel_with_imports(input, KernelMode::Basic, device_import, None, None)
 }
 
 fn expand_kernel_with_imports(
@@ -253,6 +341,7 @@ fn expand_kernel_with_imports(
     mode: KernelMode,
     device_import: &proc_macro2::TokenStream,
     host_import: Option<&proc_macro2::TokenStream>,
+    crate_binding: Option<CrateBindingIdV1>,
 ) -> syn::Result<proc_macro2::TokenStream> {
     if mode == KernelMode::Typed {
         validate_typed_kernel_signature(&input)?;
@@ -270,7 +359,18 @@ fn expand_kernel_with_imports(
         ));
     }
 
-    let internal_ident = format_ident!("{KERNEL_PREFIX}{original_name}");
+    let kernel_binding = crate_binding.map(|crate_binding| {
+        derive_kernel_binding_id_v1(
+            crate_binding,
+            TYPED_VECADD_F32_PROFILE_TAG_V1,
+            &original_name,
+            &original_name,
+        )
+    });
+    let internal_ident = match kernel_binding {
+        Some(binding) => format_ident!("__fe2o3_host_kernel_v1_{}", binding.to_hex()),
+        None => format_ident!("{KERNEL_PREFIX}{original_name}"),
+    };
     let name_marker_ident = format_ident!("__fe2o3_kernel_name_{original_name}");
     let type_marker_ident = format_ident!("__fe2o3_kernel_marker_{original_name}");
     let registration_ident = format_ident!("{KERNEL_REGISTRATION_PREFIX}{original_name}");
@@ -296,11 +396,61 @@ fn expand_kernel_with_imports(
     let function_pointer = quote!(#safety #abi fn(#(#argument_types),*) #output);
     input.sig.ident = internal_ident.clone();
 
-    let typed_module = if mode == KernelMode::Typed {
+    let (registration_type, registration_value) = match (mode, crate_binding, kernel_binding) {
+        (KernelMode::Basic, None, None) => (
+            quote!((u64, u16, u16, &'static str, &'static str, #function_pointer)),
+            quote!((
+                #KERNEL_REGISTRATION_MAGIC,
+                #KERNEL_REGISTRATION_VERSION_V1,
+                #registration_kind,
+                #marker_value,
+                #export_value,
+                #internal_ident,
+            )),
+        ),
+        (KernelMode::Typed, Some(crate_binding), Some(kernel_binding)) => {
+            let crate_binding = syn::LitStr::new(&crate_binding.to_hex(), original_ident.span());
+            let kernel_binding = syn::LitStr::new(&kernel_binding.to_hex(), original_ident.span());
+            (
+                quote!((
+                    u64,
+                    u16,
+                    u16,
+                    &'static str,
+                    &'static str,
+                    &'static str,
+                    &'static str,
+                    #function_pointer,
+                )),
+                quote!((
+                    #KERNEL_REGISTRATION_MAGIC,
+                    #KERNEL_REGISTRATION_VERSION_V2,
+                    #registration_kind,
+                    #marker_value,
+                    #export_value,
+                    #crate_binding,
+                    #kernel_binding,
+                    #internal_ident,
+                )),
+            )
+        }
+        _ => unreachable!("kernel mode and binding identity must agree"),
+    };
+    let export_attribute = match kernel_binding {
+        Some(binding) => {
+            let symbol = syn::LitStr::new(&host_kernel_symbol_v1(binding), original_ident.span());
+            quote!(#[unsafe(export_name = #symbol)])
+        }
+        None => quote!(#[unsafe(no_mangle)]),
+    };
+
+    let typed_module = if let Some(kernel_binding) = kernel_binding {
         let host_import = host_import.expect("typed expansion requires a host import");
         let module_ident = format_ident!("{original_name}_gpu");
-        let artifact_pointer_ident = format_ident!("__fe2o3_kernel_artifact_{original_name}_ptr");
-        let artifact_length_ident = format_ident!("__fe2o3_kernel_artifact_{original_name}_len");
+        let artifact_pointer_ident =
+            format_ident!("{}", artifact_pointer_symbol_v1(kernel_binding));
+        let artifact_length_ident = format_ident!("{}", artifact_length_symbol_v1(kernel_binding));
+        let binding_bytes = kernel_binding.as_bytes().into_iter();
 
         quote! {
             pub mod #module_ident {
@@ -332,6 +482,8 @@ fn expand_kernel_with_imports(
                             __fe2o3_kernel_host::__generated::CompilerGeneratedKernelProfileV1 =
                             __fe2o3_kernel_host::__generated::CompilerGeneratedKernelProfileV1::TypedVecAddF32V1;
 
+                        const KERNEL_BINDING_ID_V1: [u8; 32] = [#(#binding_bytes),*];
+
                         fn artifact_container_bytes() -> &'static [u8] {
                             // SAFETY: the generated unsafe trait implementation relies
                             // on the backend/linker contract that this accessor pair
@@ -354,7 +506,7 @@ fn expand_kernel_with_imports(
     Ok(quote! {
         #[doc(hidden)]
         #[allow(non_snake_case)]
-        #[unsafe(no_mangle)]
+        #export_attribute
         #input
 
         #[doc(hidden)]
@@ -368,21 +520,7 @@ fn expand_kernel_with_imports(
         #[doc(hidden)]
         #[allow(non_upper_case_globals)]
         #[used]
-        static #registration_ident: (
-            u64,
-            u16,
-            u16,
-            &'static str,
-            &'static str,
-            #function_pointer,
-        ) = (
-            #KERNEL_REGISTRATION_MAGIC,
-            #KERNEL_REGISTRATION_VERSION_V1,
-            #registration_kind,
-            #marker_value,
-            #export_value,
-            #internal_ident,
-        );
+        static #registration_ident: #registration_type = #registration_value;
 
         const _: () = {
             #device_import
@@ -391,14 +529,7 @@ fn expand_kernel_with_imports(
             // parsed function and the same collector-visible registration.
             unsafe impl __fe2o3_kernel_device::KernelMarkerV1 for #type_marker_ident {
                 type Function = #function_pointer;
-                type Registration = (
-                    u64,
-                    u16,
-                    u16,
-                    &'static str,
-                    &'static str,
-                    #function_pointer,
-                );
+                type Registration = #registration_type;
 
                 const LOGICAL_NAME: &'static str = #marker_value;
                 const EXPORT_NAME: &'static str = #export_value;
@@ -699,11 +830,16 @@ fn validate_kernel_signature(input: &ItemFn) -> syn::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        KernelMode, core_import_for, device_import_for, expand_device_copy_with_core_import,
-        expand_kernel_with_device_import, expand_kernel_with_imports, host_import_for,
-        parse_kernel_mode, validate_typed_kernel_signature, validate_typed_kernel_symbol_stem,
+        KernelMode, KernelOptions, core_import_for, device_import_for,
+        expand_device_copy_with_core_import, expand_kernel_with_device_import,
+        expand_kernel_with_imports, host_import_for, parse_kernel_options,
+        validate_typed_kernel_signature, validate_typed_kernel_symbol_stem,
     };
     use proc_macro_crate::FoundCrate;
+    use reserved_fe2o3_symbols::{
+        TYPED_VECADD_F32_PROFILE_TAG_V1, artifact_length_symbol_v1, artifact_pointer_symbol_v1,
+        derive_crate_binding_id_v1, derive_kernel_binding_id_v1, host_kernel_symbol_v1,
+    };
     use syn::{ItemFn, parse_quote};
 
     #[test]
@@ -803,24 +939,45 @@ mod tests {
     #[test]
     fn kernel_mode_accepts_only_empty_or_typed() {
         assert_eq!(
-            parse_kernel_mode(quote::quote!()).unwrap(),
-            KernelMode::Basic
+            parse_kernel_options(quote::quote!()).unwrap(),
+            KernelOptions {
+                mode: KernelMode::Basic,
+                explicit_namespace: None,
+            }
         );
         assert_eq!(
-            parse_kernel_mode(quote::quote!(typed)).unwrap(),
-            KernelMode::Typed
+            parse_kernel_options(quote::quote!(typed)).unwrap(),
+            KernelOptions {
+                mode: KernelMode::Typed,
+                explicit_namespace: None,
+            }
         );
 
-        for rejected in [
-            quote::quote!(other),
-            quote::quote!(typed,),
-            quote::quote!(typed = true),
-        ] {
-            assert_eq!(
-                parse_kernel_mode(rejected).unwrap_err().to_string(),
-                "#[kernel] accepts only #[kernel] or #[kernel(typed)]"
+        let explicit = parse_kernel_options(quote::quote!(
+            typed,
+            namespace = "0000000000000000000000000000000000000000000000000000000000000001"
+        ))
+        .unwrap();
+        assert_eq!(explicit.mode, KernelMode::Typed);
+        assert_eq!(
+            explicit.explicit_namespace.unwrap().to_hex(),
+            "0000000000000000000000000000000000000000000000000000000000000001"
+        );
+
+        for rejected in [quote::quote!(other), quote::quote!(typed = true)] {
+            assert!(
+                parse_kernel_options(rejected)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("#[kernel] accepts only")
             );
         }
+        assert!(
+            parse_kernel_options(quote::quote!(typed, namespace = "not-a-binding"))
+                .unwrap_err()
+                .to_string()
+                .contains("64 lowercase hexadecimal")
+        );
     }
 
     #[test]
@@ -832,21 +989,38 @@ mod tests {
         };
         let device_import = device_import_for(FoundCrate::Name("gpu_device".to_string()));
         let host_import = host_import_for(FoundCrate::Name("gpu_host".to_string()));
+        let crate_binding = derive_crate_binding_id_v1("fixture", ["metadata"]);
+        let kernel_binding = derive_kernel_binding_id_v1(
+            crate_binding,
+            TYPED_VECADD_F32_PROFILE_TAG_V1,
+            "vecadd",
+            "vecadd",
+        );
 
         let expansion = expand_kernel_with_imports(
             input,
             KernelMode::Typed,
             &device_import,
             Some(&host_import),
+            Some(crate_binding),
         )
         .unwrap()
         .to_string();
 
         assert!(expansion.contains("pub mod vecadd_gpu"));
-        assert!(expansion.contains("1u16 , 2u16"));
+        assert!(expansion.contains("2u16 , 2u16"));
         assert!(!expansion.contains("1u16 , 1u16"));
-        assert!(expansion.contains("fn __fe2o3_kernel_artifact_vecadd_ptr () -> * const u8"));
-        assert!(expansion.contains("fn __fe2o3_kernel_artifact_vecadd_len () -> usize"));
+        assert!(expansion.contains(&format!(
+            "fn {} () -> * const u8",
+            artifact_pointer_symbol_v1(kernel_binding)
+        )));
+        assert!(expansion.contains(&format!(
+            "fn {} () -> usize",
+            artifact_length_symbol_v1(kernel_binding)
+        )));
+        assert!(expansion.contains(&host_kernel_symbol_v1(kernel_binding)));
+        assert!(expansion.contains(&crate_binding.to_hex()));
+        assert!(expansion.contains(&kernel_binding.to_hex()));
         assert!(expansion.contains("extern crate gpu_host as __fe2o3_kernel_host"));
         assert!(expansion.contains(
             "pub type Kernel = __fe2o3_kernel_host :: __generated :: GeneratedVecAddKernelV1"
@@ -860,6 +1034,7 @@ mod tests {
         assert!(expansion.contains(
             "const PROFILE : __fe2o3_kernel_host :: __generated :: CompilerGeneratedKernelProfileV1 = __fe2o3_kernel_host :: __generated :: CompilerGeneratedKernelProfileV1 :: TypedVecAddF32V1"
         ));
+        assert!(expansion.contains("const KERNEL_BINDING_ID_V1 : [u8 ; 32]"));
         assert!(expansion.contains("fn artifact_container_bytes () -> & 'static [u8]"));
         assert!(
             expansion

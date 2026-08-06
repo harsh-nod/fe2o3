@@ -18,6 +18,7 @@ unsafe impl KernelMarkerV1 for Marker {
 impl CompilerGeneratedKernelContractV1 for Marker {
     const PROFILE: CompilerGeneratedKernelProfileV1 =
         CompilerGeneratedKernelProfileV1::TypedVecAddF32V1;
+    const KERNEL_BINDING_ID_V1: [u8; 32] = [0x42; 32];
 
     fn artifact_container_bytes() -> &'static [u8] {
         &[]
