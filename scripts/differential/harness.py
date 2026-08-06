@@ -27,6 +27,7 @@ from compare import ComparisonError, compare_cases, parse_results  # noqa: E402
 
 SCHEMA = "fe2o3.differential.conformance.v1"
 MAX_COMMAND_OUTPUT = 64 * 1024
+MAX_GPU_IDENTITY_OUTPUT = 256 * 1024
 DEFAULT_ARTIFACT_MAX = 512 * 1024
 MIN_ARTIFACT_MAX = 16 * 1024
 MAX_ARTIFACT_MAX = 1024 * 1024
@@ -311,8 +312,15 @@ def _checked_phase(
     cwd: Path,
     env: Mapping[str, str] | None,
     timeout_seconds: float,
+    output_limit: int = MAX_COMMAND_OUTPUT,
 ) -> CommandResult:
-    result = run_command(argv, cwd=cwd, env=env, timeout_seconds=timeout_seconds)
+    result = run_command(
+        argv,
+        cwd=cwd,
+        env=env,
+        timeout_seconds=timeout_seconds,
+        output_limit=output_limit,
+    )
     phases.append(command_phase(len(phases) + 1, name, result))
     if result.stdout.truncated or result.stderr.truncated:
         raise HarnessError(f"phase {name} exceeded bounded command output")
@@ -427,6 +435,7 @@ def _gpu_identity(
         cwd=REPO_ROOT,
         env=os.environ,
         timeout_seconds=60,
+        output_limit=MAX_GPU_IDENTITY_OUTPUT,
     )
     text = result.stdout.data.decode("utf-8", "backslashreplace")
     assert settings.target is not None

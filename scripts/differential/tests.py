@@ -96,6 +96,58 @@ class HarnessTests(unittest.TestCase):
             self.assertEqual(failure.returncode, 7)
             self.assertEqual(failure.stderr.data, b"failure")
 
+    def test_gpu_identity_output_has_a_larger_bounded_cap(self) -> None:
+        payload_size = harness.MAX_COMMAND_OUTPUT + 1
+        command = [
+            sys.executable,
+            "-c",
+            f"import sys; sys.stdout.buffer.write(b'x' * {payload_size})",
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            cwd = Path(directory)
+            default = harness.run_command(
+                command,
+                cwd=cwd,
+                timeout_seconds=2,
+            )
+            self.assertTrue(default.stdout.truncated)
+
+            phases: list[dict[str, object]] = []
+            identity = harness._checked_phase(
+                phases,
+                "gpu-identity",
+                command,
+                cwd=cwd,
+                env=None,
+                timeout_seconds=2,
+                output_limit=harness.MAX_GPU_IDENTITY_OUTPUT,
+            )
+            self.assertFalse(identity.stdout.truncated)
+            self.assertEqual(identity.stdout.byte_count, payload_size)
+            stdout_record = phases[0]["stdout"]
+            self.assertIsInstance(stdout_record, dict)
+            assert isinstance(stdout_record, dict)
+            self.assertEqual(stdout_record["bytes"], payload_size)
+
+            oversized_command = [
+                sys.executable,
+                "-c",
+                "import sys; sys.stdout.buffer.write(b'x' * "
+                f"{harness.MAX_GPU_IDENTITY_OUTPUT + 1})",
+            ]
+            with self.assertRaisesRegex(
+                harness.HarnessError, "exceeded bounded command output"
+            ):
+                harness._checked_phase(
+                    [],
+                    "gpu-identity",
+                    oversized_command,
+                    cwd=cwd,
+                    env=None,
+                    timeout_seconds=2,
+                    output_limit=harness.MAX_GPU_IDENTITY_OUTPUT,
+                )
+
     def test_artifact_is_canonical_and_bounded(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "artifact.json"
