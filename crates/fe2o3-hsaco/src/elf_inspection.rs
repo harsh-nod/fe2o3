@@ -108,7 +108,8 @@ fn scan_notes<'data>(
         if let Some(existing) = metadata {
             let same_physical_descriptor = existing.descriptor_offset == descriptor_offset
                 && existing.descriptor.len() == candidate.descriptor.len();
-            if !same_physical_descriptor {
+            let same_descriptor_bytes = existing.descriptor == candidate.descriptor;
+            if !same_physical_descriptor && !same_descriptor_bytes {
                 return Err(InspectionError::DuplicateMetadataNote);
             }
         } else {
