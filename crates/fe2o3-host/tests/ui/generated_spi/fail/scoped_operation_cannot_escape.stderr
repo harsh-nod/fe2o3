@@ -1,0 +1,8 @@
+error: lifetime may not live long enough
+  --> tests/ui/generated_spi/fail/scoped_operation_cannot_escape.rs:10:56
+   |
+10 |     paired.launch_generated_scoped(stream, |operation| operation)
+   |                                             ---------- ^^^^^^^^^ returning this value requires that `'1` must outlive `'2`
+   |                                             |        |
+   |                                             |        return type of closure is &'2 BorrowedDeviceOperation<'_, '_>
+   |                                             has type `&'1 BorrowedDeviceOperation<'_, '_>`

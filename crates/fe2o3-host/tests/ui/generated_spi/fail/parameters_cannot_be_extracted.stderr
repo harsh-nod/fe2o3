@@ -1,0 +1,5 @@
+error[E0616]: field `params` of struct `fe2o3_host::GeneratedAdmittedLaunch` is private
+ --> tests/ui/generated_spi/fail/parameters_cannot_be_extracted.rs:8:12
+  |
+8 |     paired.params
+  |            ^^^^^^ private field
