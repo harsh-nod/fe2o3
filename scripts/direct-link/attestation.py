@@ -602,14 +602,19 @@ class TrustPolicyV1:
         return typed_identity(POLICY_DOMAIN, self.canonical_bytes())
 
     def binding(
-        self, role: str, signer_identity: str, issued_at: int
+        self,
+        role: str,
+        signer_identity: str,
+        issued_at: int,
+        expires_at: int,
     ) -> SignerBindingV1:
         matches = tuple(
             binding
             for binding in self.signers
             if binding.role == role
             and binding.signer_identity == signer_identity
-            and binding.valid_from <= issued_at < binding.valid_until
+            and binding.valid_from <= issued_at
+            and expires_at <= binding.valid_until
         )
         if len(matches) != 1:
             raise EvidenceError(
@@ -668,6 +673,22 @@ def _write_all(descriptor: int, data: bytes) -> None:
         view = view[written:]
 
 
+def _duplicate_above_standard_streams(descriptor: int) -> int:
+    if not hasattr(fcntl, "F_DUPFD_CLOEXEC"):
+        raise EvidenceError("close-on-exec descriptor duplication is unavailable")
+    try:
+        duplicate = fcntl.fcntl(descriptor, fcntl.F_DUPFD_CLOEXEC, 3)
+    except OSError as error:
+        raise EvidenceError(
+            "cannot move sealed descriptor above standard streams"
+        ) from error
+    if duplicate < 3:
+        os.close(duplicate)
+        raise EvidenceError("sealed descriptor aliases a standard stream")
+    os.close(descriptor)
+    return duplicate
+
+
 def _read_bounded_regular(path: Path, maximum: int, name: str) -> bytes:
     flags = (
         os.O_RDONLY
@@ -719,6 +740,7 @@ def _seal_bytes(name: str, data: bytes, mode: int = 0o400) -> _SealedInput:
         descriptor = os.memfd_create(
             name, os.MFD_ALLOW_SEALING | getattr(os, "MFD_CLOEXEC", 0)
         )
+        descriptor = _duplicate_above_standard_streams(descriptor)
         _write_all(descriptor, data)
         os.fchmod(descriptor, mode)
         seals = (
@@ -774,6 +796,7 @@ def _pin_verifier(expected_identity: str) -> _PinnedVerifier:
             "fe2o3-ssh-keygen",
             os.MFD_ALLOW_SEALING | getattr(os, "MFD_CLOEXEC", 0),
         )
+        pinned = _duplicate_above_standard_streams(pinned)
         remaining = before.st_size
         while remaining:
             chunk = os.read(source, min(1024 * 1024, remaining))
@@ -1030,7 +1053,7 @@ def _invoke_verifier(
             sealed.close()
 
 
-def verify_signed_attestation(
+def _verify_signed_attestation(
     *,
     policy_path: Path,
     expected_policy_identity: str,
@@ -1043,7 +1066,7 @@ def verify_signed_attestation(
     expected_policy_epoch: int,
     expected_campaign_nonce: str,
     expected_subjects: Mapping[str, str],
-    now: int | None = None,
+    _now: int | None = None,
     timeout: int = 10,
 ) -> VerifiedAttestationObservationV1:
     expected_policy_identity = require_string(
@@ -1063,7 +1086,7 @@ def verify_signed_attestation(
     if isinstance(timeout, bool) or not 1 <= timeout <= MAX_VERIFIER_TIMEOUT_SECONDS:
         raise EvidenceError("verifier timeout must be between 1 and 30 seconds")
     current_time = (
-        int(time.time()) if now is None else require_unix_timestamp(now, "now")
+        int(time.time()) if _now is None else require_unix_timestamp(_now, "_now")
     )
 
     if not isinstance(expected_subjects, Mapping):
@@ -1130,7 +1153,12 @@ def verify_signed_attestation(
     if payload.build_context_identity != expected_context:
         raise EvidenceError("attestation build context does not match expected inputs")
 
-    binding = policy.binding(role, signer_identity, payload.issued_at)
+    binding = policy.binding(
+        role,
+        signer_identity,
+        payload.issued_at,
+        payload.expires_at,
+    )
     signature = _signature_bytes(signature_path)
     verifier = _pin_verifier(policy.verifier_identity)
     try:
@@ -1143,6 +1171,37 @@ def verify_signed_attestation(
         verifier_identity=policy.verifier_identity,
         key_identity=binding.key_identity,
         payload=payload,
+    )
+
+
+def verify_signed_attestation(
+    *,
+    policy_path: Path,
+    expected_policy_identity: str,
+    payload_path: Path,
+    signature_path: Path,
+    expected_role: str,
+    expected_signer_identity: str,
+    expected_source_commit: str,
+    expected_target: str,
+    expected_policy_epoch: int,
+    expected_campaign_nonce: str,
+    expected_subjects: Mapping[str, str],
+    timeout: int = 10,
+) -> VerifiedAttestationObservationV1:
+    return _verify_signed_attestation(
+        policy_path=policy_path,
+        expected_policy_identity=expected_policy_identity,
+        payload_path=payload_path,
+        signature_path=signature_path,
+        expected_role=expected_role,
+        expected_signer_identity=expected_signer_identity,
+        expected_source_commit=expected_source_commit,
+        expected_target=expected_target,
+        expected_policy_epoch=expected_policy_epoch,
+        expected_campaign_nonce=expected_campaign_nonce,
+        expected_subjects=expected_subjects,
+        timeout=timeout,
     )
 
 
@@ -1169,12 +1228,26 @@ def _timeout_argument(value: str) -> int:
     return result
 
 
+class _BoundedSubjectAction(argparse.Action):
+    def __call__(
+        self,
+        parser: argparse.ArgumentParser,
+        namespace: argparse.Namespace,
+        values: tuple[str, str],
+        option_string: str | None = None,
+    ) -> None:
+        del option_string
+        current: list[tuple[str, str]] = getattr(namespace, self.dest, None) or []
+        if len(current) >= MAX_SUBJECTS:
+            parser.error(f"--expect-subject accepts at most {MAX_SUBJECTS} values")
+        name, _ = values
+        if any(existing_name == name for existing_name, _ in current):
+            parser.error("--expect-subject contains a duplicate subject name")
+        setattr(namespace, self.dest, [*current, values])
+
+
 def _verify_command(args: argparse.Namespace) -> int:
-    subjects: dict[str, str] = {}
-    for name, identity in args.expect_subject:
-        if name in subjects:
-            raise EvidenceError(f"duplicate expected subject: {name}")
-        subjects[name] = identity
+    subjects = dict(args.expect_subject)
     observation = verify_signed_attestation(
         policy_path=args.policy,
         expected_policy_identity=args.expect_policy_identity,
@@ -1187,7 +1260,6 @@ def _verify_command(args: argparse.Namespace) -> int:
         expected_policy_epoch=args.expect_policy_epoch,
         expected_campaign_nonce=args.expect_campaign_nonce,
         expected_subjects=subjects,
-        now=args.now,
         timeout=args.timeout,
     )
     print(
@@ -1234,9 +1306,11 @@ def build_parser() -> argparse.ArgumentParser:
     verify.add_argument("--expect-policy-epoch", required=True, type=int)
     verify.add_argument("--expect-campaign-nonce", required=True)
     verify.add_argument(
-        "--expect-subject", required=True, action="append", type=_subject_argument
+        "--expect-subject",
+        required=True,
+        action=_BoundedSubjectAction,
+        type=_subject_argument,
     )
-    verify.add_argument("--now", type=int)
     verify.add_argument("--timeout", type=_timeout_argument, default=10)
     verify.set_defaults(handler=_verify_command)
     return parser

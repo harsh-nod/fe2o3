@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import inspect
 import os
 import socket
 import subprocess
@@ -21,7 +22,7 @@ from common import EvidenceError, typed_identity  # noqa: E402
 
 COMMIT = "34" * 20
 TARGET = "gfx942:sramecc+:xnack-"
-ISSUED_AT = 1_800_000_000
+ISSUED_AT = int(time.time()) - 30
 EXPIRES_AT = ISSUED_AT + 3600
 POLICY_EPOCH = 7
 CAMPAIGN_NONCE = "release-campaign-42"
@@ -221,11 +222,11 @@ class AttestationTests(unittest.TestCase):
             "expected_policy_epoch": POLICY_EPOCH,
             "expected_campaign_nonce": CAMPAIGN_NONCE,
             "expected_subjects": self.subjects,
-            "now": ISSUED_AT + 1,
+            "_now": ISSUED_AT + 1,
             "timeout": 5,
         }
         arguments.update(overrides)
-        return attestation.verify_signed_attestation(**arguments)  # type: ignore[arg-type]
+        return attestation._verify_signed_attestation(**arguments)  # type: ignore[arg-type]
 
     def rewrite_payload_object(self, value: dict[str, object]) -> None:
         self.payload_path.write_bytes(attestation.canonical_json_bytes(value))
@@ -243,6 +244,37 @@ class AttestationTests(unittest.TestCase):
     def install_policy(self, policy: attestation.TrustPolicyV1) -> None:
         self.policy = policy
         self.policy_path.write_bytes(policy.canonical_bytes())
+
+    def cli_arguments(self, subjects: list[tuple[str, str]] | None = None) -> list[str]:
+        arguments = [
+            sys.executable,
+            str(SCRIPT_DIR / "attestation.py"),
+            "verify",
+            "--policy",
+            str(self.policy_path),
+            "--expect-policy-identity",
+            self.policy.identity(),
+            "--payload",
+            str(self.payload_path),
+            "--signature",
+            str(self.signature_path),
+            "--expect-role",
+            "g2-worker",
+            "--expect-signer",
+            SIGNER,
+            "--expect-source-commit",
+            COMMIT,
+            "--expect-target",
+            TARGET,
+            "--expect-policy-epoch",
+            str(POLICY_EPOCH),
+            "--expect-campaign-nonce",
+            CAMPAIGN_NONCE,
+        ]
+        selected = list(self.subjects.items()) if subjects is None else subjects
+        for name, value in selected:
+            arguments.extend(("--expect-subject", f"{name}={value}"))
+        return arguments
 
     def test_verifies_real_ed25519_signature_with_pinned_ssh_keygen(self) -> None:
         observation = self.verify()
@@ -269,40 +301,47 @@ class AttestationTests(unittest.TestCase):
         self.assertFalse(hasattr(forged, "authorize"))
 
     def test_cli_verifies_authenticated_observation(self) -> None:
-        arguments = [
-            sys.executable,
-            str(SCRIPT_DIR / "attestation.py"),
-            "verify",
-            "--policy",
-            str(self.policy_path),
-            "--expect-policy-identity",
-            self.policy.identity(),
-            "--payload",
-            str(self.payload_path),
-            "--signature",
-            str(self.signature_path),
-            "--expect-role",
-            "g2-worker",
-            "--expect-signer",
-            SIGNER,
-            "--expect-source-commit",
-            COMMIT,
-            "--expect-target",
-            TARGET,
-            "--expect-policy-epoch",
-            str(POLICY_EPOCH),
-            "--expect-campaign-nonce",
-            CAMPAIGN_NONCE,
-            "--now",
-            str(ISSUED_AT + 1),
-        ]
-        for name, value in self.subjects.items():
-            arguments.extend(("--expect-subject", f"{name}={value}"))
         result = subprocess.run(
-            arguments, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False
+            self.cli_arguments(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr.decode())
         self.assertIn(b"authenticated direct-link observation", result.stdout)
+
+    def test_cli_rejects_public_now_override(self) -> None:
+        result = subprocess.run(
+            [*self.cli_arguments(), "--now", str(ISSUED_AT + 1)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(b"unrecognized arguments: --now", result.stderr)
+        self.assertNotIn(
+            "_now", inspect.signature(attestation.verify_signed_attestation).parameters
+        )
+        self.assertIn(
+            "_now", inspect.signature(attestation._verify_signed_attestation).parameters
+        )
+
+    def test_cli_bounds_subject_collection_during_argparse(self) -> None:
+        subjects = [
+            (
+                f"subject{index}",
+                typed_identity("fe2o3-cli-subject-v1", str(index).encode("ascii")),
+            )
+            for index in range(attestation.MAX_SUBJECTS + 1)
+        ]
+        result = subprocess.run(
+            self.cli_arguments(subjects),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(b"accepts at most 16 values", result.stderr)
 
     def test_build_context_changes_for_every_bound_input(self) -> None:
         baseline = self.payload.build_context_identity
@@ -386,6 +425,57 @@ class AttestationTests(unittest.TestCase):
             observation.key_identity,
             attestation.public_key_identity(self.other_public_key),
         )
+
+    def test_key_validity_accepts_exact_lifetime_boundaries(self) -> None:
+        policy = self.make_policy(
+            signers=(
+                self.make_binding(
+                    valid_from=ISSUED_AT,
+                    valid_until=EXPIRES_AT,
+                ),
+            )
+        )
+        payload = self.make_payload(policy=policy)
+        self.install_policy(policy)
+        self.install_payload(payload)
+        self.verify(expected_policy_identity=policy.identity())
+
+    def test_rejects_attestation_expiring_after_key_retirement(self) -> None:
+        retirement = EXPIRES_AT - 1
+        policy = self.make_policy(signers=(self.make_binding(valid_until=retirement),))
+        payload = self.make_payload(policy=policy)
+        self.install_policy(policy)
+        self.install_payload(payload)
+        with self.assertRaisesRegex(EvidenceError, "no exact role/signer/key"):
+            self.verify(expected_policy_identity=policy.identity())
+
+    def test_rejects_post_retirement_issue_time(self) -> None:
+        retirement = ISSUED_AT
+        policy = self.make_policy(signers=(self.make_binding(valid_until=retirement),))
+        payload = self.make_payload(policy=policy)
+        self.install_policy(policy)
+        self.install_payload(payload)
+        with self.assertRaisesRegex(EvidenceError, "no exact role/signer/key"):
+            self.verify(expected_policy_identity=policy.identity())
+
+    def test_rejects_backdated_lifetime_crossing_key_retirement(self) -> None:
+        retirement = ISSUED_AT + 60
+        policy = self.make_policy(
+            signers=(
+                self.make_binding(
+                    valid_from=ISSUED_AT - 60,
+                    valid_until=retirement,
+                ),
+            )
+        )
+        payload = self.make_payload(
+            policy=policy,
+            expires_at=retirement + 1,
+        )
+        self.install_policy(policy)
+        self.install_payload(payload)
+        with self.assertRaisesRegex(EvidenceError, "no exact role/signer/key"):
+            self.verify(expected_policy_identity=policy.identity())
 
     def test_rejects_overlapping_keys_for_same_role_and_signer(self) -> None:
         policy = self.make_policy(
@@ -505,14 +595,14 @@ class AttestationTests(unittest.TestCase):
 
     def test_rejects_expired_attestation(self) -> None:
         with self.assertRaisesRegex(EvidenceError, "expired"):
-            self.verify(now=EXPIRES_AT)
+            self.verify(_now=EXPIRES_AT)
 
     def test_rejects_attestation_too_far_in_future(self) -> None:
         with self.assertRaisesRegex(EvidenceError, "future"):
-            self.verify(now=ISSUED_AT - attestation.MAX_CLOCK_SKEW_SECONDS - 1)
+            self.verify(_now=ISSUED_AT - attestation.MAX_CLOCK_SKEW_SECONDS - 1)
 
     def test_accepts_maximum_clock_skew_boundary(self) -> None:
-        self.verify(now=ISSUED_AT - attestation.MAX_CLOCK_SKEW_SECONDS)
+        self.verify(_now=ISSUED_AT - attestation.MAX_CLOCK_SKEW_SECONDS)
 
     def test_rejects_lifetime_over_seven_days(self) -> None:
         value = self.payload.as_object()
@@ -742,7 +832,15 @@ class AttestationTests(unittest.TestCase):
         self,
     ) -> None:
         real_popen = subprocess.Popen
+        real_fcntl = attestation.fcntl.fcntl
         inspected: list[dict[str, object]] = []
+        fcntl_commands: list[int] = []
+
+        def recording_fcntl(
+            descriptor: int, command: int, *arguments: object
+        ) -> object:
+            fcntl_commands.append(command)
+            return real_fcntl(descriptor, command, *arguments)
 
         def inspecting_popen(
             *args: object, **kwargs: object
@@ -757,6 +855,7 @@ class AttestationTests(unittest.TestCase):
                 | attestation.fcntl.F_SEAL_SEAL
             )
             for descriptor in pass_fds:
+                self.assertGreaterEqual(descriptor, 3)
                 self.assertEqual(
                     attestation.fcntl.fcntl(descriptor, attestation.fcntl.F_GET_SEALS)
                     & seals,
@@ -770,6 +869,7 @@ class AttestationTests(unittest.TestCase):
             mock.patch.object(
                 attestation.subprocess, "Popen", side_effect=inspecting_popen
             ),
+            mock.patch.object(attestation.fcntl, "fcntl", side_effect=recording_fcntl),
             mock.patch.dict(os.environ, {"TMPDIR": str(hostile_tmp)}),
         ):
             self.verify()
@@ -794,6 +894,72 @@ class AttestationTests(unittest.TestCase):
         signature_path = argv[argv.index("-s") + 1]
         self.assertRegex(allowed_path, r"^/proc/self/fd/[0-9]+$")
         self.assertRegex(signature_path, r"^/proc/self/fd/[0-9]+$")
+        self.assertEqual(
+            fcntl_commands.count(attestation.fcntl.F_DUPFD_CLOEXEC),
+            4,
+        )
+
+    def test_verification_with_each_standard_descriptor_closed(self) -> None:
+        helper = """
+import json
+import os
+import sys
+from pathlib import Path
+
+sys.path.insert(0, sys.argv[1])
+import attestation
+
+os.close(int(sys.argv[2]))
+observation = attestation.verify_signed_attestation(
+    policy_path=Path(sys.argv[3]),
+    expected_policy_identity=sys.argv[4],
+    payload_path=Path(sys.argv[5]),
+    signature_path=Path(sys.argv[6]),
+    expected_role="g2-worker",
+    expected_signer_identity=sys.argv[7],
+    expected_source_commit=sys.argv[8],
+    expected_target=sys.argv[9],
+    expected_policy_epoch=int(sys.argv[10]),
+    expected_campaign_nonce=sys.argv[11],
+    expected_subjects=json.loads(sys.argv[12]),
+    timeout=5,
+)
+assert observation.payload.role == "g2-worker"
+os._exit(0)
+"""
+        for descriptor in (0, 1, 2):
+            with self.subTest(descriptor=descriptor):
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        "-c",
+                        helper,
+                        str(SCRIPT_DIR),
+                        str(descriptor),
+                        str(self.policy_path),
+                        self.policy.identity(),
+                        str(self.payload_path),
+                        str(self.signature_path),
+                        SIGNER,
+                        COMMIT,
+                        TARGET,
+                        str(POLICY_EPOCH),
+                        CAMPAIGN_NONCE,
+                        json.dumps(
+                            self.subjects, separators=(",", ":"), sort_keys=True
+                        ),
+                    ],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=False,
+                    timeout=15,
+                )
+                self.assertEqual(
+                    result.returncode,
+                    0,
+                    result.stderr.decode(errors="replace"),
+                )
 
     def run_supervised_shell(
         self, command: str, *, timeout: int, output_limit: int

@@ -65,20 +65,24 @@ Each `(role, subject)` also has an exact identity domain:
 The trust policy is also canonical JSON. It has a positive, bounded policy epoch.
 Each entry maps one exact `(role, signer identity, validity interval)` to one
 comment-free Ed25519 public key and its derived key identity. Multiple keys may
-support rotation for one role/signer only when their half-open validity windows
-do not overlap. The key selected for verification must be active at the signed
-`issued_at` time. The policy pins both the literal verifier path
-`/usr/bin/ssh-keygen` and the typed digest of the verifier bytes.
+support rotation for one role/signer only when their validity bounds do not
+overlap internally. A selected key must contain the attestation's entire closed
+lifetime: `valid_from <= issued_at` and `expires_at <= valid_until`. An
+attestation may expire exactly at `valid_until`, but issuing at or after that
+boundary is impossible because `expires_at` must be later than `issued_at`.
+Backdating `issued_at` cannot extend use beyond key retirement. The policy pins
+both the literal verifier path `/usr/bin/ssh-keygen` and the typed digest of the
+verifier bytes.
 
 The caller must supply the expected policy identity and epoch from a separate
 trusted configuration; computing an identity from an untrusted policy does not
 pin that policy. Rotation creates a new policy with a strictly larger epoch and
 requires an out-of-band pin update. Revocation removes the key, increments the
 epoch, and requires callers to stop accepting the old policy identity. There is
-no network revocation lookup or implicit rollback protection. A key reaching
-`valid_until` prevents later issue times but does not invalidate an attestation
-issued earlier; payload expiration and current accepted policy determine its
-remaining usability.
+no network revocation lookup or implicit rollback protection. An attestation
+issued earlier remains usable only until the earlier of its signed expiration
+and the selected key's `valid_until`, which verification requires to be the
+attestation expiration or later.
 
 Verification additionally requires caller-supplied expected values for the
 role, signer, source commit, target, policy epoch, campaign nonce, and every
@@ -96,9 +100,11 @@ executes those bytes through `/proc/self/fd`. `ssh-keygen -Y verify` runs withou
 a shell, with a fixed environment and a timeout. The allowed-signers content,
 signature, and payload are sealed `memfd` objects passed as exact
 `/proc/self/fd` paths and descriptors; verification creates no temporary paths
-and does not consult `TMPDIR`. Stdout and stderr are drained nonblockingly under
-one aggregate bound, and the verifier process group is killed immediately on
-overflow or timeout.
+and does not consult `TMPDIR`. Every sealed descriptor is moved above stdin,
+stdout, and stderr with `F_DUPFD_CLOEXEC` before a procfs path is formed, so a
+closed standard stream cannot alias a security-sensitive descriptor. Stdout and
+stderr are drained nonblockingly under one aggregate bound, and the verifier
+process group is killed immediately on overflow or timeout.
 
 Useful policy setup commands are:
 
@@ -115,6 +121,10 @@ ssh-keygen -Y sign \
 `--expect-signer`, `--expect-source-commit`, `--expect-target`,
 `--expect-policy-epoch`, `--expect-campaign-nonce`, and one
 `--expect-subject name=typed-identity` for every subject in that role.
+The public CLI and `verify_signed_attestation` entry point always use the
+verifier host clock; neither exposes a clock override. Only the private test
+mechanism accepts an injected time. The CLI argparse action rejects more than
+16 subject options before an unbounded collection can be built.
 
 Success returns `VerifiedAttestationObservationV1`, which is intentionally
 forgeable descriptive Python data with no publication, load, launch, or durable
