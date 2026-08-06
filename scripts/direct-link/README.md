@@ -137,30 +137,56 @@ This primitive is not imported by `reproduce.py` or `evidence.py`. There are no
 trusted G2, G5, G6, G7, or static-runner attestation producers yet, so the
 default release gate remains blocked.
 
-## Local policy and replay state V1
+## Local policy and replay state V2
 
 `policy_state.py` provides an inert local state primitive for a future trusted
 attestation consumer. It is not imported by `attestation.py`, `reproduce.py`,
 or `evidence.py`, and it is not connected to the release gate. Its
-`LocalPolicyStateObservationV1` result is ordinary forgeable Python data. It
-does not prove that an operation ran and grants no release, publication, load,
-or launch authority.
+observation types are ordinary forgeable Python data. They do not prove that an
+operation ran and grant no release, publication, load, or launch authority.
 
-The state stores one pinned trust-policy identity and positive epoch plus at
-most 512 consumed `(campaign_nonce, build_context_identity)` pairs. Policy
-epochs may only increase. Repeating the exact identity and epoch is
-idempotent; changing the identity at the same epoch, lowering the epoch, or
-raising the epoch without a new identity fails closed. Replay consumption
-requires the exact current policy pin. Repeating the exact nonce/context pair
-is idempotent without changing the generation; reusing either member with a
-different partner is rejected. The ledger never evicts entries automatically.
-It fails closed at its cardinality bound.
+One `ReleaseContextIdentityV1` binds the source commit, AMDGPU target, campaign
+nonce, policy identity and epoch, and exactly one canonically sorted binding for
+each required role: `g2-worker`, `g5-publication`, `g6-bundle`,
+`g7-hardware-runner`, and `g7-static-runner`. Every role binding includes its
+attestation build-context identity, signer identity, and complete attestation
+payload identity. Missing, duplicate, extra, or permuted roles are rejected.
+Changing any top-level field or any role binding changes the domain-separated
+aggregate identity. A campaign is consumed only through this one complete
+aggregate; it is never consumed independently per role.
+
+Each operation uses an `OperationAttemptIdentityV1` derived canonically from the
+aggregate identity and a bounded attempt nonce. Fresh `consume_once` first
+commits that exact attempt as `pending_consumption`, then commits the aggregate
+to the completed ledger. A fresh call rejects an aggregate that is pending or
+complete, including a call with the original attempt. It never converts replay
+into a normal success-shaped result.
+
+Crash handling uses the separate `resume_consumption` API. It accepts only the
+same aggregate and attempt identity stored in the pending or completed record.
+It either completes the pending transition or returns the distinct
+`ConsumptionRecoveryObservationV1` stating that the exact completion was
+already observed. A new attempt, cross-campaign aggregate, cross-role
+substitution, or partially matching retry fails closed. A crash before the
+pending record's rename leaves no registered attempt; recovery rejects it and
+the same attempt may be submitted as a genuinely fresh operation.
+
+The state stores one monotonic trust-policy pin, at most 512 aggregate
+consumptions, and at most one pending attempt. Policy epochs may only increase,
+and policy changes are forbidden while an attempt is pending. Every legal
+initialization, policy advance, plan, and completion transition increments the
+generation exactly once. Canonical state additionally requires at least
+`1 + 2 * completed_consumptions + pending_consumption` generations, which is
+stronger than `generation >= 1 + len(consumptions)`. Impossible but
+checksum-valid state relationships are rejected. The ledger never evicts
+entries and fails closed at its bound.
 
 The record is bounded, versioned, newline-terminated canonical ASCII JSON with
-exact fields, canonical ordering, typed policy and build-context identities,
-and a domain-separated SHA-256 integrity checksum. The checksum detects
-accidental corruption and malformed transitions. It is **not authentication**
-and does not protect state from a malicious process running as the same user.
+exact fields, canonical ordering, typed identities, and a domain-separated
+SHA-256 integrity checksum. V1 pair-ledger files are not silently accepted or
+migrated. The checksum detects accidental corruption and malformed
+transitions. It is **not authentication** and does not protect state from a
+malicious process running as the same user.
 
 The caller must create an absolute state-directory path owned by the effective
 user with no group or other permissions. Every path component is opened with
@@ -177,8 +203,9 @@ directory. Recovery under the lock discards only a private, single-link regular
 temp file and fsyncs the directory before reading the current snapshot. A crash
 at any before/after write, file-fsync, rename, or directory-fsync boundary
 therefore recovers as either the complete old state or complete new state; an
-exact retry is safe in both cases. The deterministic fault suite covers every
-one of those boundaries for initial policy pinning and nonce consumption.
+exact attempt-aware recovery is safe in both cases. The deterministic fault
+suite covers every boundary for policy pinning, policy advance, pending-plan,
+fresh completion, and resumed completion transitions.
 
 This design assumes cooperating processes honor the advisory lock, the local
 filesystem truthfully implements regular-file `fsync`, atomic same-directory
