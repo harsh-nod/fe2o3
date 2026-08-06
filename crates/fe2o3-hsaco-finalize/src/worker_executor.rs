@@ -1146,15 +1146,145 @@ impl PinnedWorkerV1 {
 mod configured_v2_tests {
     use super::*;
     use crate::{
-        WorkerCompilerFfiEnvelopeIdentityV2, WorkerInputKindV1, WorkerInputV1,
-        WorkerOptimizationLevelV1, WorkerOptionsV1, WorkerOutputConstraintsV1,
-        worker_protocol_v2::SealedWorkerRequestV2Parts,
+        LinkInputKindClosureV1, LinkInputV1, LinkOptionV1, LinkOutputV1, MultiInputLinkPlanV1,
+        ProvenanceNodeV1, WorkerInputKindV1, WorkerInputV1, WorkerOutputConstraintsV1,
+        construct_worker_request_v2_from_consumed_handoff,
     };
-    use fe2o3_kernel_descriptor::{CodeObjectVersion, DeviceTargetV1};
-    use std::fs;
+    use fe2o3_artifact_transaction::{
+        BuildInvocation, BuildSession, ProducerIdentity, begin_build_attempt,
+        consume_compiler_module_handoff_v1, publish_compiler_module_handoff_v1,
+    };
+    use fe2o3_compiler_ffi::{
+        CodeObjectVersion as CompilerCodeObjectVersion, CompilerFfiContractV1,
+        CompilerFfiEnvelopeBuilderV1, CompilerFfiLinkRoleV1, CompilerFfiSourceOwnerV1,
+        CompilerModuleHandoffV1, CompilerModuleKindV1, DeviceTargetV1 as CompilerDeviceTargetV1,
+    };
+    use fe2o3_kernel_descriptor::DeviceTargetV1;
+    use reserved_fe2o3_symbols::{
+        DEVICE_FFI_DIRECTION_EXPORT_V1, DEVICE_FFI_DIRECTION_IMPORT_V1, DeviceFfiContractFieldsV1,
+        DeviceFfiDirectionV1, derive_device_ffi_contract_id_v1,
+    };
+    use std::{
+        fs,
+        path::PathBuf,
+        sync::atomic::{AtomicU64, Ordering},
+    };
+
+    const TARGET: &str = "gfx942";
+    const ABI: &str = "C(u32[size=4,align=4])->u32[size=4,align=4]";
 
     fn required_env(name: &str) -> String {
         std::env::var(name).unwrap_or_else(|_| panic!("missing configured test variable {name}"))
+    }
+
+    struct TestDirectory(PathBuf);
+
+    impl TestDirectory {
+        fn new() -> Self {
+            static NEXT: AtomicU64 = AtomicU64::new(1);
+            let path = std::env::temp_dir().join(format!(
+                "fe2o3-native-v2-handoff-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for TestDirectory {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn ffi_contract(
+        symbol: &str,
+        direction: DeviceFfiDirectionV1,
+        role: CompilerFfiLinkRoleV1,
+        semantic_byte: u8,
+    ) -> CompilerFfiContractV1 {
+        let semantic_identity = [semantic_byte; 32];
+        let semantic_text = semantic_identity
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let direction_tag = match direction {
+            DeviceFfiDirectionV1::Import => DEVICE_FFI_DIRECTION_IMPORT_V1,
+            DeviceFfiDirectionV1::Export => DEVICE_FFI_DIRECTION_EXPORT_V1,
+        };
+        let fields = DeviceFfiContractFieldsV1 {
+            direction: direction_tag,
+            symbol,
+            calling_convention: "C",
+            code_object_version: 5,
+            target: TARGET,
+            physical_abi: ABI,
+            effects: "none",
+            semantic_identity: &semantic_text,
+        };
+        CompilerFfiContractV1::new(
+            derive_device_ffi_contract_id_v1(fields),
+            direction,
+            role,
+            CompilerDeviceTargetV1::parse(TARGET).unwrap(),
+            CompilerCodeObjectVersion::V5,
+            CompilerFfiSourceOwnerV1::new(
+                "native_fixture",
+                &format!("native_fixture::{symbol}"),
+                [semantic_byte; 16],
+                &format!("_RINvNtCs1234_14native_fixture{symbol}"),
+            )
+            .unwrap(),
+            symbol,
+            ABI,
+            "none",
+            semantic_identity,
+        )
+        .unwrap()
+    }
+
+    fn link_plan(
+        compiler_module: &WorkerInputV1,
+        external_provider: &WorkerInputV1,
+        expected_output: &[u8],
+    ) -> (MultiInputLinkPlanV1, LinkInputKindClosureV1) {
+        let target = DeviceTargetV1::parse(TARGET).unwrap();
+        let mut inputs = [compiler_module.clone(), external_provider.clone()];
+        inputs.sort_by_key(|input| (input.identity(), input.kind()));
+        let link_inputs = inputs
+            .iter()
+            .map(|input| LinkInputV1::new(input.identity(), target))
+            .collect::<Vec<_>>();
+        let output_identity = ContentIdentityV1::calculate(expected_output);
+        let mut provenance = link_inputs
+            .iter()
+            .map(|input| ProvenanceNodeV1::new(input.identity(), vec![]).unwrap())
+            .collect::<Vec<_>>();
+        provenance.push(
+            ProvenanceNodeV1::new(
+                output_identity,
+                link_inputs.iter().map(|input| input.identity()).collect(),
+            )
+            .unwrap(),
+        );
+        let plan = MultiInputLinkPlanV1::canonicalized(
+            target,
+            link_inputs,
+            vec![
+                LinkOptionV1::new("code-object-version", "5").unwrap(),
+                LinkOptionV1::new("opt-level", "3").unwrap(),
+                LinkOptionV1::new("strip-debug", "true").unwrap(),
+                LinkOptionV1::new("verify-each", "true").unwrap(),
+            ],
+            LinkOutputV1::new(output_identity, target),
+            provenance,
+        )
+        .unwrap();
+        let kinds =
+            LinkInputKindClosureV1::new(&plan, inputs.iter().map(|input| input.kind()).collect())
+                .unwrap();
+        (plan, kinds)
     }
 
     #[test]
@@ -1169,35 +1299,87 @@ mod configured_v2_tests {
         )
         .unwrap();
         let pinned = PinnedWorkerV1::open(worker_path, measurement).unwrap();
-        let compiler_module = WorkerInputV1::new(
-            WorkerInputKindV1::LlvmBitcode,
-            fs::read(required_env("FE2O3_LLVM_V2_MODULE")).unwrap(),
-        )
-        .unwrap();
+        let module_bytes = fs::read(required_env("FE2O3_LLVM_V2_MODULE")).unwrap();
+        let compiler_module =
+            WorkerInputV1::new(WorkerInputKindV1::LlvmBitcode, module_bytes.clone()).unwrap();
         let external_provider = WorkerInputV1::new(
             WorkerInputKindV1::AmdGpuRelocatable,
             fs::read(required_env("FE2O3_LLVM_V2_PROVIDER")).unwrap(),
         )
         .unwrap();
-        let request = WorkerRequestV2::from_sealed_parts(SealedWorkerRequestV2Parts {
-            request_id: [0x91; 32],
-            llvm_build_identity: pinned.measurement().llvm_build_identity().to_owned(),
-            worker_build_identity: pinned.measurement().worker_build_identity().to_owned(),
-            worker_executable: pinned.measurement().executable(),
-            target: DeviceTargetV1::parse("gfx942").unwrap(),
-            code_object_version: CodeObjectVersion::V5,
-            options: WorkerOptionsV1::new(WorkerOptimizationLevelV1::O3, true, true),
-            compiler_envelope: WorkerCompilerFfiEnvelopeIdentityV2::from_test_bytes([0x62; 32]),
-            compiler_module,
-            external_providers: vec![external_provider],
-            import_symbols: vec!["object_helper".to_owned()],
-            export_symbols: vec!["mixed_entry".to_owned()],
-            final_symbols: vec!["mixed_entry".to_owned(), "object_helper".to_owned()],
-            output: WorkerOutputConstraintsV1::new(4 * 1024 * 1024).unwrap(),
-        })
+        let expected_output = fs::read(required_env("FE2O3_LLVM_V2_EXPECTED_OUTPUT")).unwrap();
+        let (plan, input_kinds) = link_plan(&compiler_module, &external_provider, &expected_output);
+
+        let mut envelope = CompilerFfiEnvelopeBuilderV1::new(
+            CompilerDeviceTargetV1::parse(TARGET).unwrap(),
+            CompilerCodeObjectVersion::V5,
+            2,
+        )
         .unwrap();
+        envelope
+            .push(ffi_contract(
+                "object_helper",
+                DeviceFfiDirectionV1::Import,
+                CompilerFfiLinkRoleV1::RequiresExternalDefinition,
+                0x41,
+            ))
+            .unwrap();
+        envelope
+            .push(ffi_contract(
+                "mixed_entry",
+                DeviceFfiDirectionV1::Export,
+                CompilerFfiLinkRoleV1::RequiresCompilerModuleDefinition,
+                0x42,
+            ))
+            .unwrap();
+        let handoff = CompilerModuleHandoffV1::new(
+            CompilerModuleKindV1::LlvmBitcode,
+            CompilerDeviceTargetV1::parse(TARGET).unwrap(),
+            CompilerCodeObjectVersion::V5,
+            envelope.finish().unwrap(),
+            &module_bytes,
+        )
+        .unwrap();
+        let directory = TestDirectory::new();
+        let producer = ProducerIdentity::from_codegen(
+            "native_fixture",
+            Some(std::path::Path::new("src/lib.rs")),
+        )
+        .unwrap();
+        let attempt = begin_build_attempt(
+            &directory.0,
+            &producer,
+            BuildInvocation::from_bytes([0x91; 32]),
+            BuildSession::from_bytes([0x92; 16]),
+        )
+        .unwrap();
+        let receipt = publish_compiler_module_handoff_v1(
+            &directory.0,
+            &producer,
+            attempt,
+            handoff.canonical_bytes(),
+        )
+        .unwrap();
+        let consumed =
+            consume_compiler_module_handoff_v1(&directory.0, &producer, attempt).unwrap();
+        let request = construct_worker_request_v2_from_consumed_handoff(
+            &plan,
+            pinned.measurement(),
+            consumed,
+            vec![external_provider],
+            &input_kinds,
+            &["mixed_entry".to_owned(), "object_helper".to_owned()],
+            WorkerOutputConstraintsV1::new(expected_output.len() as u64).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(request.attempt(), attempt);
+        assert_eq!(request.handoff_identity(), receipt.identity());
+        assert!(!request.grants_publication_authority());
+        assert!(!request.grants_load_authority());
+        assert!(!request.grants_launch_authority());
+
         let execution = pinned
-            .execute_v2(
+            .execute_compiler_handoff_v2(
                 &request,
                 WorkerExecutionLimitsV1::new(
                     Duration::from_secs(120),
@@ -1208,11 +1390,10 @@ mod configured_v2_tests {
             )
             .unwrap();
         let output = execution.response().output().unwrap();
-        assert_eq!(
-            output.bytes(),
-            fs::read(required_env("FE2O3_LLVM_V2_EXPECTED_OUTPUT")).unwrap()
-        );
-        assert!(execution.response().binds_request(&request));
+        assert_eq!(output.bytes(), expected_output);
+        assert!(execution.response().binds_request(request.sealed_request()));
+        assert_eq!(execution.attempt(), attempt);
+        assert_eq!(execution.handoff_identity(), receipt.identity());
         assert_eq!(
             execution.evidence_class(),
             WorkerEvidenceClassV2::CompilerFfiLink
