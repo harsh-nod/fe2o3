@@ -488,7 +488,8 @@ impl PublishedDirectLinkAdmissionError {
 mod tests {
     use super::*;
     use crate::{
-        InspectedPublishedDirectLinkPhysicalLayoutV1, PhysicalMetadataValueV1,
+        InspectedPublishedDirectLinkPhysicalLayoutV1, MissingPublishedDirectLinkLoadPrerequisiteV1,
+        PhysicalMetadataValueV1, PublishedLoadAdmissionError,
         PublishedPhysicalLayoutInspectionError,
     };
     use fe2o3_artifact_transaction::{BuildAttempt, PackageIdentityV1};
@@ -1983,6 +1984,194 @@ mod tests {
                 &admission.observed,
             ),
             Ok(())
+        );
+    }
+
+    #[test]
+    fn exact_inspection_pins_pending_load_identity_without_granting_authority() {
+        let hsaco = test_hsaco("gfx1151", 0);
+        let fixture = make_hsaco_fixture(52, hsaco.bytes, "gfx1151", "primary_kernel", false, 0);
+        let prepared = prepare_hsaco_admission(&fixture, 52, "gfx1151");
+        let expected_identity = prepared.admission.artifact_selection().identity().clone();
+        let expected_container = prepared.admission.container_identity();
+        let expected_payload = prepared.admission.finalized_payload_identity();
+        let inspected =
+            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(prepared.admission).unwrap();
+        let pending = inspected.into_pending_load_admission().unwrap();
+
+        assert_eq!(pending.generation(), 52);
+        assert_eq!(pending.published().attempt().generation(), 52);
+        assert_eq!(pending.container_identity(), expected_container);
+        assert_eq!(pending.finalized_payload_identity(), expected_payload);
+        assert_eq!(pending.artifact_identity(), &expected_identity);
+        assert_eq!(pending.target().to_string(), "gfx1151");
+        assert_eq!(pending.code_object_version(), CodeObjectVersion::V6);
+        assert_eq!(pending.kernel_symbol(), "primary_kernel");
+        assert_eq!(pending.abi(), expected_identity.abi());
+        assert_eq!(
+            pending.missing_prerequisites(),
+            &[
+                MissingPublishedDirectLinkLoadPrerequisiteV1::AuthenticatedCompilerProducerChain,
+                MissingPublishedDirectLinkLoadPrerequisiteV1::
+                    AuthenticatedRustMarkerAbiAndEffectsBinding,
+                MissingPublishedDirectLinkLoadPrerequisiteV1::
+                    AuthenticatedExecutableLoadUnloadContract,
+            ]
+        );
+        assert!(!pending.grants_load_authority());
+        assert!(!pending.grants_launch_authority());
+
+        let current = pending.acquire_currentness().unwrap();
+        assert_eq!(current.admission().artifact_identity(), &expected_identity);
+        assert!(!current.grants_load_authority());
+        assert!(!current.grants_launch_authority());
+    }
+
+    #[test]
+    fn pending_load_admission_rejects_a_stale_publication() {
+        let hsaco = test_hsaco("gfx1151", 0);
+        let fixture = make_hsaco_fixture(53, hsaco.bytes, "gfx1151", "primary_kernel", false, 0);
+        let validated = fixture.validated();
+        let selected = fixture
+            .container
+            .select_native_kernel(fixture.primary_kernel)
+            .unwrap();
+        let observed = make_observed_for(53, "gfx1151");
+        let directory = TestPublicationDirectory::new();
+        let first_bridge = make_bridge(&fixture, &validated, 0, 1, 53);
+        let first_lease = publish(&directory, &first_bridge, selected.payload());
+        let admission = ValidatedPublishedDirectLinkSelectionV1::validate(
+            &validated,
+            &first_bridge,
+            first_lease,
+            &fixture.container,
+            selected,
+            &observed,
+        )
+        .unwrap();
+        let pending = InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(admission)
+            .unwrap()
+            .into_pending_load_admission()
+            .unwrap();
+
+        let second_bridge = make_bridge(&fixture, &validated, 0, 2, 53);
+        let second_lease = publish(&directory, &second_bridge, selected.payload());
+        assert!(second_lease.acquire_current_token().is_ok());
+        assert!(matches!(
+            pending.acquire_currentness(),
+            Err(PublishedLoadAdmissionError::Inspection(
+                PublishedPhysicalLayoutInspectionError::CurrentPublication { .. }
+            ))
+        ));
+    }
+
+    #[test]
+    fn pending_load_admission_rejects_post_inspection_artifact_mutation() {
+        let hsaco = test_hsaco("gfx1151", 0);
+        let fixture = make_hsaco_fixture(
+            54,
+            hsaco.bytes.clone(),
+            "gfx1151",
+            "primary_kernel",
+            false,
+            0,
+        );
+        let prepared = prepare_hsaco_admission(&fixture, 54, "gfx1151");
+        let directory = prepared._publication_directory.path.clone();
+        let pending = InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(prepared.admission)
+            .unwrap()
+            .into_pending_load_admission()
+            .unwrap();
+
+        let mut substitute = hsaco.bytes;
+        substitute[0] ^= 0xff;
+        let artifact = fs::read_dir(directory)
+            .unwrap()
+            .map(Result::unwrap)
+            .find(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".fe2o3-link-artifact-v1-")
+            })
+            .unwrap()
+            .path();
+        fs::write(artifact, substitute).unwrap();
+
+        assert!(matches!(
+            pending.acquire_currentness(),
+            Err(PublishedLoadAdmissionError::Inspection(
+                PublishedPhysicalLayoutInspectionError::CurrentPublication { .. }
+            ))
+        ));
+    }
+
+    #[test]
+    fn target_cov_symbol_and_physical_abi_mismatches_never_reach_pending_load_state() {
+        let target_hsaco = test_hsaco("gfx1100", 0);
+        let target_fixture = make_hsaco_fixture(
+            55,
+            target_hsaco.bytes,
+            "gfx1151",
+            "primary_kernel",
+            false,
+            0,
+        );
+        let target_admission = prepare_hsaco_admission(&target_fixture, 55, "gfx1151");
+        assert_eq!(
+            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(target_admission.admission)
+                .unwrap_err(),
+            PublishedPhysicalLayoutInspectionError::TargetMismatch
+        );
+
+        let mut cov_hsaco = test_hsaco("gfx1151", 0);
+        cov_hsaco.bytes[8] = 7;
+        let cov_fixture =
+            make_hsaco_fixture(56, cov_hsaco.bytes, "gfx1151", "primary_kernel", false, 0);
+        let cov_admission = prepare_hsaco_admission(&cov_fixture, 56, "gfx1151");
+        assert_eq!(
+            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(cov_admission.admission)
+                .unwrap_err(),
+            PublishedPhysicalLayoutInspectionError::Inspection(KernelBindingError::Inspection(
+                InspectionError::UnsupportedCodeObjectVersion,
+            ))
+        );
+
+        let symbol_hsaco = test_hsaco("gfx1151", 0);
+        let symbol_fixture = make_hsaco_fixture(
+            57,
+            symbol_hsaco.bytes,
+            "gfx1151",
+            "substituted_symbol",
+            false,
+            0,
+        );
+        let symbol_admission = prepare_hsaco_admission(&symbol_fixture, 57, "gfx1151");
+        assert_eq!(
+            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(symbol_admission.admission)
+                .unwrap_err(),
+            PublishedPhysicalLayoutInspectionError::KernelSetMismatch
+        );
+
+        let abi_hsaco = physical_arguments_hsaco(None, [None; 3], false);
+        let base_abi = physical_test_abi(false);
+        let mismatched_abi =
+            AbiLayout::new(40, 8, PointerWidth::Bits64, base_abi.fields().to_vec()).unwrap();
+        let abi_fixture = make_single_hsaco_fixture(
+            58,
+            abi_hsaco.bytes,
+            "gfx1151",
+            mismatched_abi,
+            physical_test_launch(0),
+        );
+        let abi_admission = prepare_hsaco_admission(&abi_fixture, 58, "gfx1151");
+        assert_eq!(
+            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(abi_admission.admission)
+                .unwrap_err(),
+            PublishedPhysicalLayoutInspectionError::PhysicalLayoutMismatch {
+                export_symbol: "primary_kernel".to_owned(),
+                field: "explicit kernarg size",
+            }
         );
     }
 

@@ -1,10 +1,12 @@
 use crate::published_direct_link::{
     PublishedPayloadKernelV1, ValidatedPublishedDirectLinkSelectionV1,
 };
-use crate::{ObservedContext, PublishedDirectLinkAdmissionError};
+use crate::{ArtifactKernelIdentityV1, ObservedContext, PublishedDirectLinkAdmissionError};
 use fe2o3_amd_target::{AmdTargetId, ParseAmdTargetIdError};
+use fe2o3_artifact_transaction::PublishedLinkArtifactV1;
 use fe2o3_artifacts::{
-    AbiKind, AddressSpace, ArtifactContainerV1, BlockSize,
+    AbiKind, AbiLayout, AddressSpace, ArtifactContainerV1, BlockSize,
+    DirectLinkContainerIdentityV1, DirectLinkFinalizedPayloadIdentityV1,
     ManifestClaimDirectLinkCurrentPublicationTokenV1, ManifestClaimDirectLinkPublicationBridgeV1,
     SelectedNativeKernel, ValidatedDirectLinkBundleEvidenceV1,
 };
@@ -411,6 +413,291 @@ impl InspectedPublishedDirectLinkPhysicalLayoutV1 {
 
     pub const fn grants_launch_authority(&self) -> bool {
         false
+    }
+
+    /// Pins every structurally available load identity while preserving the missing trust boundary.
+    ///
+    /// This transition obtains a fresh current-publication token and rechecks the retained exact
+    /// artifact bytes before issuing the pending value. The result is deliberately not a loaded
+    /// kernel and has no load operation: physical inspection and manifest agreement do not
+    /// authenticate the compiler producer chain, Rust marker/ABI/effect binding, or executable
+    /// load/unload behavior.
+    pub fn into_pending_load_admission(
+        self,
+    ) -> Result<PendingPublishedDirectLinkLoadAdmissionV1, PublishedLoadAdmissionError> {
+        let current = self
+            .acquire_current_publication_token()
+            .map_err(PublishedLoadAdmissionError::Inspection)?;
+        validate_payload_occurrence(&self.admission, current.exact_artifact_bytes())
+            .map_err(PublishedLoadAdmissionError::Inspection)?;
+        validate_pending_load_identity(&self)?;
+
+        let published = self.admission.published();
+        let generation = published.attempt().generation();
+        let container_identity = self.admission.container_identity();
+        let finalized_payload_identity = self.admission.finalized_payload_identity();
+        let artifact_identity = self.admission.artifact_selection().identity().clone();
+        let target = self.target();
+        let code_object_version = self.code_object_version();
+        let kernel_symbol = self.selected_kernel().export_symbol().into();
+        let abi = artifact_identity.abi().clone();
+        drop(current);
+
+        Ok(PendingPublishedDirectLinkLoadAdmissionV1 {
+            inspection: self,
+            published,
+            generation,
+            container_identity,
+            finalized_payload_identity,
+            artifact_identity,
+            target,
+            code_object_version,
+            kernel_symbol,
+            abi,
+        })
+    }
+}
+
+/// A structurally complete, current-publication-bound candidate for typed loading.
+///
+/// The type name is intentional: this is the strongest sound host-side state available before an
+/// authenticated compiler producer chain is connected to direct-link publication. It owns the
+/// exact inspected publication and pins the complete publication and kernel identity needed by the
+/// existing [`crate::LoadedKernel`] path. It has no public constructor, is neither `Clone` nor
+/// `Copy`, and exposes no load or launch operation.
+///
+/// A future loading transition must consume this value together with all values returned by
+/// [`Self::missing_prerequisites`] and must hold a fresh
+/// [`CurrentPendingPublishedDirectLinkLoadAdmissionV1`] through HIP module loading.
+pub struct PendingPublishedDirectLinkLoadAdmissionV1 {
+    inspection: InspectedPublishedDirectLinkPhysicalLayoutV1,
+    published: PublishedLinkArtifactV1,
+    generation: u64,
+    container_identity: DirectLinkContainerIdentityV1,
+    finalized_payload_identity: DirectLinkFinalizedPayloadIdentityV1,
+    artifact_identity: ArtifactKernelIdentityV1,
+    target: AmdTargetId,
+    code_object_version: CodeObjectVersion,
+    kernel_symbol: Box<str>,
+    abi: AbiLayout,
+}
+
+impl fmt::Debug for PendingPublishedDirectLinkLoadAdmissionV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PendingPublishedDirectLinkLoadAdmissionV1")
+            .field("published", &self.published)
+            .field("generation", &self.generation)
+            .field("container_identity", &self.container_identity)
+            .field(
+                "finalized_payload_identity",
+                &self.finalized_payload_identity,
+            )
+            .field("artifact_identity", &self.artifact_identity)
+            .field("target", &self.target)
+            .field("code_object_version", &self.code_object_version)
+            .field("kernel_symbol", &self.kernel_symbol)
+            .field("abi", &self.abi)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PendingPublishedDirectLinkLoadAdmissionV1 {
+    pub const fn published(&self) -> PublishedLinkArtifactV1 {
+        self.published
+    }
+
+    pub const fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    pub const fn container_identity(&self) -> DirectLinkContainerIdentityV1 {
+        self.container_identity
+    }
+
+    pub const fn finalized_payload_identity(&self) -> DirectLinkFinalizedPayloadIdentityV1 {
+        self.finalized_payload_identity
+    }
+
+    pub const fn artifact_identity(&self) -> &ArtifactKernelIdentityV1 {
+        &self.artifact_identity
+    }
+
+    pub const fn target(&self) -> AmdTargetId {
+        self.target
+    }
+
+    pub const fn code_object_version(&self) -> CodeObjectVersion {
+        self.code_object_version
+    }
+
+    pub fn kernel_symbol(&self) -> &str {
+        &self.kernel_symbol
+    }
+
+    /// Returns the complete manifest ABI claim pinned by physical inspection.
+    ///
+    /// This value includes declared Rust type/layout identities but does not authenticate them.
+    pub const fn abi(&self) -> &AbiLayout {
+        &self.abi
+    }
+
+    /// Returns every trust witness still required before this candidate may load.
+    pub const fn missing_prerequisites(
+        &self,
+    ) -> &'static [MissingPublishedDirectLinkLoadPrerequisiteV1] {
+        &MISSING_PUBLISHED_DIRECT_LINK_LOAD_PREREQUISITES_V1
+    }
+
+    /// Revalidates the publication and keeps its cooperative lock held in the returned guard.
+    ///
+    /// A future loader must retain this guard until HIP has consumed the exact bytes. Dropping the
+    /// guard releases the currentness proof, so merely calling this method and discarding its result
+    /// cannot authorize a later load.
+    pub fn acquire_currentness(
+        &self,
+    ) -> Result<CurrentPendingPublishedDirectLinkLoadAdmissionV1<'_>, PublishedLoadAdmissionError>
+    {
+        let current = self
+            .inspection
+            .acquire_current_publication_token()
+            .map_err(PublishedLoadAdmissionError::Inspection)?;
+        validate_payload_occurrence(&self.inspection.admission, current.exact_artifact_bytes())
+            .map_err(PublishedLoadAdmissionError::Inspection)?;
+        self.validate_pinned_identity()?;
+        Ok(CurrentPendingPublishedDirectLinkLoadAdmissionV1 {
+            admission: self,
+            _current: current,
+        })
+    }
+
+    pub const fn grants_load_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
+    }
+
+    fn validate_pinned_identity(&self) -> Result<(), PublishedLoadAdmissionError> {
+        validate_pending_load_identity(&self.inspection)?;
+        let current_identity = self.inspection.admission.artifact_selection().identity();
+        if self.published != self.inspection.admission.published()
+            || self.generation != self.published.attempt().generation()
+            || self.container_identity != self.inspection.admission.container_identity()
+            || self.finalized_payload_identity
+                != self.inspection.admission.finalized_payload_identity()
+            || self.artifact_identity != *current_identity
+            || self.target != self.inspection.target()
+            || self.code_object_version != self.inspection.code_object_version()
+            || self.kernel_symbol != self.inspection.selected_kernel().export_symbol()
+            || self.abi != *current_identity.abi()
+        {
+            return Err(PublishedLoadAdmissionError::PinnedIdentityMismatch);
+        }
+        Ok(())
+    }
+}
+
+/// Currentness proof for one exact pending admission while the publication lock is held.
+///
+/// This guard is intentionally non-clone and remains non-authorizing because the producer, typed
+/// ABI/effect, and executable lifecycle witnesses are still absent.
+pub struct CurrentPendingPublishedDirectLinkLoadAdmissionV1<'admission> {
+    admission: &'admission PendingPublishedDirectLinkLoadAdmissionV1,
+    _current: ManifestClaimDirectLinkCurrentPublicationTokenV1,
+}
+
+impl fmt::Debug for CurrentPendingPublishedDirectLinkLoadAdmissionV1<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CurrentPendingPublishedDirectLinkLoadAdmissionV1")
+            .field("generation", &self.admission.generation)
+            .field("artifact_identity", &self.admission.artifact_identity)
+            .finish_non_exhaustive()
+    }
+}
+
+impl CurrentPendingPublishedDirectLinkLoadAdmissionV1<'_> {
+    pub const fn admission(&self) -> &PendingPublishedDirectLinkLoadAdmissionV1 {
+        self.admission
+    }
+
+    pub const fn grants_load_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
+    }
+}
+
+/// Trust evidence absent from structural direct-link publication and physical inspection.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum MissingPublishedDirectLinkLoadPrerequisiteV1 {
+    AuthenticatedCompilerProducerChain,
+    AuthenticatedRustMarkerAbiAndEffectsBinding,
+    AuthenticatedExecutableLoadUnloadContract,
+}
+
+const MISSING_PUBLISHED_DIRECT_LINK_LOAD_PREREQUISITES_V1:
+    [MissingPublishedDirectLinkLoadPrerequisiteV1; 3] = [
+    MissingPublishedDirectLinkLoadPrerequisiteV1::AuthenticatedCompilerProducerChain,
+    MissingPublishedDirectLinkLoadPrerequisiteV1::AuthenticatedRustMarkerAbiAndEffectsBinding,
+    MissingPublishedDirectLinkLoadPrerequisiteV1::AuthenticatedExecutableLoadUnloadContract,
+];
+
+fn validate_pending_load_identity(
+    inspection: &InspectedPublishedDirectLinkPhysicalLayoutV1,
+) -> Result<(), PublishedLoadAdmissionError> {
+    let identity = inspection.admission.artifact_selection().identity();
+    let declared_target = AmdTargetId::parse(identity.target().architecture().as_str())
+        .map_err(|_| PublishedLoadAdmissionError::PinnedIdentityMismatch)?;
+    let selected = inspection.selected_kernel();
+    let selected_manifest = inspection
+        .admission
+        .payload_kernel_set()
+        .iter()
+        .find(|kernel| kernel.symbol().as_str() == selected.export_symbol())
+        .ok_or(PublishedLoadAdmissionError::PinnedIdentityMismatch)?;
+
+    if inspection.target() != declared_target
+        || selected.export_symbol() != identity.symbol().as_str()
+        || selected_manifest.abi() != identity.abi()
+    {
+        return Err(PublishedLoadAdmissionError::PinnedIdentityMismatch);
+    }
+    match inspection.code_object_version() {
+        CodeObjectVersion::V4 | CodeObjectVersion::V5 | CodeObjectVersion::V6 => Ok(()),
+    }
+}
+
+/// Failure to create or freshly revalidate a pending published load admission.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum PublishedLoadAdmissionError {
+    Inspection(PublishedPhysicalLayoutInspectionError),
+    PinnedIdentityMismatch,
+}
+
+impl fmt::Display for PublishedLoadAdmissionError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Inspection(error) => error.fmt(formatter),
+            Self::PinnedIdentityMismatch => formatter.write_str(
+                "pending load admission identity differs from its inspected publication",
+            ),
+        }
+    }
+}
+
+impl std::error::Error for PublishedLoadAdmissionError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Inspection(error) => Some(error),
+            Self::PinnedIdentityMismatch => None,
+        }
     }
 }
 

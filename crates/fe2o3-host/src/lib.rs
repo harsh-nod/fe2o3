@@ -58,9 +58,12 @@ pub use published_direct_link::{
     PublishedDirectLinkAdmissionError, ValidatedPublishedDirectLinkSelectionV1,
 };
 pub use published_hsaco_inspection::{
-    AMDHSA_KERNEL_IDENTITY_RULE_V1, InspectedPublishedDirectLinkPhysicalLayoutV1,
-    PhysicalMetadataValueV1, PublishedKernelPhysicalLayoutV1, PublishedPhysicalArgumentLayoutV1,
-    PublishedPhysicalLaunchLayoutV1, PublishedPhysicalLayoutInspectionError,
+    AMDHSA_KERNEL_IDENTITY_RULE_V1, CurrentPendingPublishedDirectLinkLoadAdmissionV1,
+    InspectedPublishedDirectLinkPhysicalLayoutV1, MissingPublishedDirectLinkLoadPrerequisiteV1,
+    PendingPublishedDirectLinkLoadAdmissionV1, PhysicalMetadataValueV1,
+    PublishedKernelPhysicalLayoutV1, PublishedLoadAdmissionError,
+    PublishedPhysicalArgumentLayoutV1, PublishedPhysicalLaunchLayoutV1,
+    PublishedPhysicalLayoutInspectionError,
 };
 
 /// Compiler-generated host bindings. This is an unstable implementation SPI,
