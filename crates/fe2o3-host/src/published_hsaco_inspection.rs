@@ -590,7 +590,7 @@ impl PendingPublishedDirectLinkLoadAdmissionV1 {
             || self.artifact_identity != *current_identity
             || self.target != self.inspection.target()
             || self.code_object_version != self.inspection.code_object_version()
-            || self.kernel_symbol != self.inspection.selected_kernel().export_symbol()
+            || self.kernel_symbol.as_ref() != self.inspection.selected_kernel().export_symbol()
             || self.abi != *current_identity.abi()
         {
             return Err(PublishedLoadAdmissionError::PinnedIdentityMismatch);
