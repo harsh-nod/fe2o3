@@ -100,7 +100,7 @@ impl WorkerV2TestConfig {
         let workspace = workspace.to_str().expect("UTF-8 workspace path");
         let source = source.to_str().expect("UTF-8 source path");
         let json = format!(
-            "{{\"candidate_output_max_bytes\":4194304,\"final_symbols\":[\"local_device_add_v1\",\"worker_v2_kernel\"],\"format\":\"fe2o3-worker-v2-config-v1\",\"limits\":{{\"stderr_bytes\":65536,\"stdout_bytes\":8388608,\"timeout_ms\":30000}},\"link_options\":[{{\"name\":\"code-object-version\",\"value\":\"5\"}},{{\"name\":\"opt-level\",\"value\":\"2\"}},{{\"name\":\"strip-debug\",\"value\":\"true\"}},{{\"name\":\"verify-each\",\"value\":\"true\"}}],\"providers\":[],\"units\":[{{\"crate_name\":\"worker_v2_source\",\"source\":{source:?},\"working_directory\":{workspace:?}}}],\"worker\":{{\"byte_len\":{},\"llvm_build_identity\":{llvm_build_identity:?},\"path\":{worker:?},\"sha256\":\"{hex}\",\"worker_build_identity\":{worker_build_identity:?}}}}}",
+            "{{\"candidate_output_max_bytes\":4194304,\"final_symbols\":[\"local_device_identity_v1\",\"worker_v2_kernel\"],\"format\":\"fe2o3-worker-v2-config-v1\",\"limits\":{{\"stderr_bytes\":65536,\"stdout_bytes\":8388608,\"timeout_ms\":30000}},\"link_options\":[{{\"name\":\"code-object-version\",\"value\":\"5\"}},{{\"name\":\"opt-level\",\"value\":\"2\"}},{{\"name\":\"strip-debug\",\"value\":\"true\"}},{{\"name\":\"verify-each\",\"value\":\"true\"}}],\"providers\":[],\"units\":[{{\"crate_name\":\"worker_v2_source\",\"source\":{source:?},\"working_directory\":{workspace:?}}}],\"worker\":{{\"byte_len\":{},\"llvm_build_identity\":{llvm_build_identity:?},\"path\":{worker:?},\"sha256\":\"{hex}\",\"worker_build_identity\":{worker_build_identity:?}}}}}",
             bytes.len()
         );
         std::fs::write(&path, json).expect("write native Worker V2 source config");
@@ -151,7 +151,7 @@ fn build_codegen_backend(workspace: &Path) -> PathBuf {
 fn worker_v2_source() -> String {
     let fields = reserved_fe2o3_symbols::DeviceFfiContractFieldsV1 {
         direction: reserved_fe2o3_symbols::DEVICE_FFI_DIRECTION_EXPORT_V1,
-        symbol: "local_device_add_v1",
+        symbol: "local_device_identity_v1",
         calling_convention: "C",
         code_object_version: 5,
         target: "gfx942:xnack-",
@@ -163,11 +163,10 @@ fn worker_v2_source() -> String {
     let marker = reserved_fe2o3_symbols::device_ffi_marker_v1(contract, fields);
     format!(
         r#"
-#[inline(always)]
 #[doc = "{marker}"]
-#[unsafe(export_name = "local_device_add_v1")]
-pub unsafe extern "C" fn local_device_add(value: u32) -> u32 {{
-    value.wrapping_add(1)
+#[unsafe(export_name = "local_device_identity_v1")]
+pub unsafe extern "C" fn local_device_identity(value: u32) -> u32 {{
+    value
 }}
 
 #[used]
@@ -176,10 +175,10 @@ static __fe2o3_device_ffi_registration_v1_{contract}: (
     &'static str, &'static str, &'static str, &'static str,
     unsafe extern "C" fn(u32) -> u32,
 ) = (
-    0x4946_4633_4f32_4546, 1, 2, "{contract}", "local_device_add_v1",
+    0x4946_4633_4f32_4546, 1, 2, "{contract}", "local_device_identity_v1",
     "C", 5, "gfx942:xnack-", "C(u32[size=4,align=4])->u32[size=4,align=4]",
     "none", "5656565656565656565656565656565656565656565656565656565656565656",
-    local_device_add,
+    local_device_identity,
 );
 
 #[unsafe(export_name = "fe2o3_kernel_worker_v2_kernel")]
