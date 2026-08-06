@@ -5,7 +5,10 @@ use reserved_fe2o3_symbols::{
     KERNEL_PREFIX, KERNEL_REGISTRATION_KIND_KERNEL, KERNEL_REGISTRATION_MAGIC,
     KERNEL_REGISTRATION_PREFIX, KERNEL_REGISTRATION_VERSION_V1, RESERVED_ROOT,
 };
-use syn::{Data, DeriveInput, FnArg, ItemFn, Meta, ReturnType, Type, parse_macro_input};
+use syn::{
+    Data, DeriveInput, FnArg, GenericArgument, ItemFn, Meta, Pat, PathArguments, ReturnType, Type,
+    Visibility, parse_macro_input,
+};
 
 #[proc_macro_derive(DeviceCopy)]
 pub fn derive_device_copy(item: TokenStream) -> TokenStream {
@@ -182,31 +185,75 @@ fn validate_device_copy_repr(attrs: &[syn::Attribute]) -> syn::Result<DeviceCopy
 
 #[proc_macro_attribute]
 pub fn kernel(attr: TokenStream, item: TokenStream) -> TokenStream {
-    if !attr.is_empty() {
-        return syn::Error::new(
-            proc_macro2::Span::call_site(),
-            "#[kernel] does not accept arguments yet",
-        )
-        .to_compile_error()
-        .into();
-    }
+    let mode = match parse_kernel_mode(attr.into()) {
+        Ok(mode) => mode,
+        Err(error) => return error.to_compile_error().into(),
+    };
 
     let input = parse_macro_input!(item as ItemFn);
 
-    expand_kernel(input)
+    expand_kernel(input, mode)
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }
 
-fn expand_kernel(input: ItemFn) -> syn::Result<proc_macro2::TokenStream> {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum KernelMode {
+    Basic,
+    Typed,
+}
+
+fn parse_kernel_mode(attr: proc_macro2::TokenStream) -> syn::Result<KernelMode> {
+    if attr.is_empty() {
+        return Ok(KernelMode::Basic);
+    }
+
+    if let Ok(argument) = syn::parse2::<syn::Ident>(attr.clone())
+        && argument == "typed"
+    {
+        return Ok(KernelMode::Typed);
+    }
+
+    Err(syn::Error::new_spanned(
+        attr,
+        "#[kernel] accepts only #[kernel] or #[kernel(typed)]",
+    ))
+}
+
+fn expand_kernel(input: ItemFn, mode: KernelMode) -> syn::Result<proc_macro2::TokenStream> {
+    if mode == KernelMode::Typed {
+        validate_typed_kernel_signature(&input)?;
+    }
+    validate_kernel_signature(&input)?;
+
     let device_import = fe2o3_device_import()?;
-    expand_kernel_with_device_import(input, &device_import)
+    let host_import = if mode == KernelMode::Typed {
+        Some(fe2o3_host_import()?)
+    } else {
+        None
+    };
+
+    expand_kernel_with_imports(input, mode, &device_import, host_import.as_ref())
 }
 
 fn expand_kernel_with_device_import(
-    mut input: ItemFn,
+    input: ItemFn,
     device_import: &proc_macro2::TokenStream,
 ) -> syn::Result<proc_macro2::TokenStream> {
+    expand_kernel_with_imports(input, KernelMode::Basic, device_import, None)
+}
+
+fn expand_kernel_with_imports(
+    mut input: ItemFn,
+    mode: KernelMode,
+    device_import: &proc_macro2::TokenStream,
+    host_import: Option<&proc_macro2::TokenStream>,
+) -> syn::Result<proc_macro2::TokenStream> {
+    if mode == KernelMode::Typed {
+        validate_typed_kernel_signature(&input)?;
+    }
+    validate_kernel_signature(&input)?;
+
     let original_ident = input.sig.ident.clone();
     let original_name = original_ident.to_string();
 
@@ -216,8 +263,6 @@ fn expand_kernel_with_device_import(
             format!("function names starting with `{RESERVED_ROOT}` are reserved by fe2o3"),
         ));
     }
-
-    validate_kernel_signature(&input)?;
 
     let internal_ident = format_ident!("{KERNEL_PREFIX}{original_name}");
     let name_marker_ident = format_ident!("__fe2o3_kernel_name_{original_name}");
@@ -240,6 +285,78 @@ fn expand_kernel_with_device_import(
     let output = input.sig.output.clone();
     let function_pointer = quote!(#safety #abi fn(#(#argument_types),*) #output);
     input.sig.ident = internal_ident.clone();
+
+    let typed_module = if mode == KernelMode::Typed {
+        let host_import = host_import.expect("typed expansion requires a host import");
+        let module_ident = format_ident!("{original_name}_gpu");
+        let artifact_start_symbol = syn::LitStr::new(
+            &format!("__fe2o3_kernel_artifact_{original_name}_start"),
+            original_ident.span(),
+        );
+        let artifact_end_symbol = syn::LitStr::new(
+            &format!("__fe2o3_kernel_artifact_{original_name}_end"),
+            original_ident.span(),
+        );
+
+        quote! {
+            pub mod #module_ident {
+                unsafe extern "C" {
+                    #[link_name = #artifact_start_symbol]
+                    static __FE2O3_ARTIFACT_START: u8;
+                    #[link_name = #artifact_end_symbol]
+                    static __FE2O3_ARTIFACT_END: u8;
+                }
+
+                const _: () = {
+                    extern crate core as __fe2o3_kernel_sysroot_core;
+                    #host_import
+
+                    // SAFETY: the fe2o3 backend owns these reserved symbols and
+                    // binds them to the artifact for this exact generated marker.
+                    unsafe impl __fe2o3_kernel_host::__generated::CompilerGeneratedKernelContractV1
+                        for super::#type_marker_ident
+                    {
+                        fn artifact_bytes() -> &'static [u8] {
+                            let start_pointer =
+                                __fe2o3_kernel_sysroot_core::ptr::addr_of!(
+                                    __FE2O3_ARTIFACT_START
+                                );
+                            let end_pointer =
+                                __fe2o3_kernel_sysroot_core::ptr::addr_of!(
+                                    __FE2O3_ARTIFACT_END
+                                );
+                            let start_address = start_pointer.addr();
+                            let end_address = end_pointer.addr();
+                            let __fe2o3_kernel_sysroot_core::option::Option::Some(length) =
+                                end_address.checked_sub(start_address)
+                            else {
+                                return &[];
+                            };
+
+                            if length == 0
+                                || length
+                                    > __fe2o3_kernel_sysroot_core::primitive::isize::MAX as usize
+                            {
+                                return &[];
+                            }
+
+                            // SAFETY: the generated unsafe trait implementation
+                            // relies on the backend/linker contract that the ordered
+                            // symbols bound one contiguous immutable artifact.
+                            unsafe {
+                                __fe2o3_kernel_sysroot_core::slice::from_raw_parts(
+                                    start_pointer,
+                                    length,
+                                )
+                            }
+                        }
+                    }
+                };
+            }
+        }
+    } else {
+        quote! {}
+    };
 
     Ok(quote! {
         #[doc(hidden)]
@@ -296,6 +413,8 @@ fn expand_kernel_with_device_import(
                 const REGISTRATION: &'static Self::Registration = &#registration_ident;
             }
         };
+
+        #typed_module
     })
 }
 
@@ -320,6 +439,180 @@ fn device_import_for(found: FoundCrate) -> proc_macro2::TokenStream {
             quote!(extern crate #ident as __fe2o3_kernel_device;)
         }
     }
+}
+
+fn fe2o3_host_import() -> syn::Result<proc_macro2::TokenStream> {
+    let found = crate_name("fe2o3-host").map_err(|error| {
+        syn::Error::new(
+            proc_macro2::Span::call_site(),
+            format!("#[kernel(typed)] could not resolve the fe2o3-host crate: {error}"),
+        )
+    })?;
+
+    Ok(host_import_for(found))
+}
+
+fn host_import_for(found: FoundCrate) -> proc_macro2::TokenStream {
+    match found {
+        FoundCrate::Itself => quote!(
+            extern crate self as __fe2o3_kernel_host;
+        ),
+        FoundCrate::Name(name) => {
+            let ident = format_ident!("{name}");
+            quote!(extern crate #ident as __fe2o3_kernel_host;)
+        }
+    }
+}
+
+fn validate_typed_kernel_signature(input: &ItemFn) -> syn::Result<()> {
+    let signature = &input.sig;
+    let required_signature =
+        "#[kernel(typed)] requires `pub fn(&[f32], &[f32], DisjointSlice<f32>)`";
+
+    if !matches!(input.vis, Visibility::Public(_)) {
+        return Err(syn::Error::new_spanned(
+            &input.vis,
+            "#[kernel(typed)] requires a public kernel function",
+        ));
+    }
+    if signature.unsafety.is_some() {
+        return Err(syn::Error::new_spanned(
+            signature.unsafety,
+            "#[kernel(typed)] requires a safe kernel function",
+        ));
+    }
+    if signature.constness.is_some() || signature.asyncness.is_some() || signature.abi.is_some() {
+        return Err(syn::Error::new_spanned(
+            signature,
+            "#[kernel(typed)] requires a non-const synchronous Rust function",
+        ));
+    }
+    if signature.variadic.is_some() {
+        return Err(syn::Error::new_spanned(
+            &signature.variadic,
+            required_signature,
+        ));
+    }
+    if !signature.generics.params.is_empty() || signature.generics.where_clause.is_some() {
+        return Err(syn::Error::new_spanned(
+            &signature.generics,
+            "#[kernel(typed)] does not support generic kernel functions",
+        ));
+    }
+    if !is_unit_return(&signature.output) {
+        return Err(syn::Error::new_spanned(
+            &signature.output,
+            "#[kernel(typed)] requires the unit return type",
+        ));
+    }
+    if signature.inputs.len() != 3 {
+        return Err(syn::Error::new_spanned(
+            &signature.inputs,
+            required_signature,
+        ));
+    }
+
+    let arguments = signature.inputs.iter().collect::<Vec<_>>();
+    validate_typed_argument(arguments[0], 1, is_shared_f32_slice)?;
+    validate_typed_argument(arguments[1], 2, is_shared_f32_slice)?;
+    validate_typed_argument(arguments[2], 3, is_disjoint_f32_slice)?;
+
+    Ok(())
+}
+
+fn validate_typed_argument(
+    argument: &FnArg,
+    position: usize,
+    type_matches: fn(&Type) -> bool,
+) -> syn::Result<()> {
+    let FnArg::Typed(argument) = argument else {
+        return Err(syn::Error::new_spanned(
+            argument,
+            "#[kernel(typed)] does not support methods",
+        ));
+    };
+
+    let Pat::Ident(pattern) = argument.pat.as_ref() else {
+        return Err(syn::Error::new_spanned(
+            &argument.pat,
+            format!("#[kernel(typed)] argument {position} must use an identifier pattern"),
+        ));
+    };
+    if pattern.by_ref.is_some() || pattern.subpat.is_some() {
+        return Err(syn::Error::new_spanned(
+            pattern,
+            format!("#[kernel(typed)] argument {position} must use an identifier pattern"),
+        ));
+    }
+
+    if !type_matches(&argument.ty) {
+        let required_type = if position < 3 {
+            "&[f32]"
+        } else {
+            "DisjointSlice<f32>"
+        };
+        return Err(syn::Error::new_spanned(
+            &argument.ty,
+            format!("#[kernel(typed)] argument {position} must have exact type `{required_type}`"),
+        ));
+    }
+
+    Ok(())
+}
+
+fn is_unit_return(output: &ReturnType) -> bool {
+    match output {
+        ReturnType::Default => true,
+        ReturnType::Type(_, output) => {
+            matches!(output.as_ref(), Type::Tuple(tuple) if tuple.elems.is_empty())
+        }
+    }
+}
+
+fn is_shared_f32_slice(ty: &Type) -> bool {
+    let Type::Reference(reference) = ty else {
+        return false;
+    };
+    if reference.lifetime.is_some() || reference.mutability.is_some() {
+        return false;
+    }
+    let Type::Slice(slice) = reference.elem.as_ref() else {
+        return false;
+    };
+
+    is_exact_f32(&slice.elem)
+}
+
+fn is_disjoint_f32_slice(ty: &Type) -> bool {
+    let Type::Path(path) = ty else {
+        return false;
+    };
+    if path.qself.is_some() || path.path.leading_colon.is_some() || path.path.segments.len() != 1 {
+        return false;
+    }
+    let segment = &path.path.segments[0];
+    if segment.ident != "DisjointSlice" {
+        return false;
+    }
+    let PathArguments::AngleBracketed(arguments) = &segment.arguments else {
+        return false;
+    };
+    if arguments.colon2_token.is_some() || arguments.args.len() != 1 {
+        return false;
+    }
+
+    matches!(arguments.args.first(), Some(GenericArgument::Type(ty)) if is_exact_f32(ty))
+}
+
+fn is_exact_f32(ty: &Type) -> bool {
+    let Type::Path(path) = ty else {
+        return false;
+    };
+    path.qself.is_none()
+        && path.path.leading_colon.is_none()
+        && path.path.segments.len() == 1
+        && path.path.segments[0].ident == "f32"
+        && matches!(path.path.segments[0].arguments, PathArguments::None)
 }
 
 fn validate_kernel_signature(input: &ItemFn) -> syn::Result<()> {
@@ -392,8 +685,9 @@ fn validate_kernel_signature(input: &ItemFn) -> syn::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        core_import_for, device_import_for, expand_device_copy_with_core_import,
-        expand_kernel_with_device_import,
+        KernelMode, core_import_for, device_import_for, expand_device_copy_with_core_import,
+        expand_kernel_with_device_import, expand_kernel_with_imports, host_import_for,
+        parse_kernel_mode, validate_typed_kernel_signature,
     };
     use proc_macro_crate::FoundCrate;
     use syn::{ItemFn, parse_quote};
@@ -489,6 +783,143 @@ mod tests {
             device_import_for(FoundCrate::Itself).to_string(),
             "extern crate self as __fe2o3_kernel_device ;"
         );
+    }
+
+    #[test]
+    fn kernel_mode_accepts_only_empty_or_typed() {
+        assert_eq!(
+            parse_kernel_mode(quote::quote!()).unwrap(),
+            KernelMode::Basic
+        );
+        assert_eq!(
+            parse_kernel_mode(quote::quote!(typed)).unwrap(),
+            KernelMode::Typed
+        );
+
+        for rejected in [
+            quote::quote!(other),
+            quote::quote!(typed,),
+            quote::quote!(typed = true),
+        ] {
+            assert_eq!(
+                parse_kernel_mode(rejected).unwrap_err().to_string(),
+                "#[kernel] accepts only #[kernel] or #[kernel(typed)]"
+            );
+        }
+    }
+
+    #[test]
+    fn typed_kernel_emits_guarded_embedded_artifact_contract() {
+        let input = parse_quote! {
+            pub fn vecadd(a: &[f32], b: &[f32], mut c: DisjointSlice<f32>) {
+                let _ = (a, b, &mut c);
+            }
+        };
+        let device_import = device_import_for(FoundCrate::Name("gpu_device".to_string()));
+        let host_import = host_import_for(FoundCrate::Name("gpu_host".to_string()));
+
+        let expansion = expand_kernel_with_imports(
+            input,
+            KernelMode::Typed,
+            &device_import,
+            Some(&host_import),
+        )
+        .unwrap()
+        .to_string();
+
+        assert!(expansion.contains("pub mod vecadd_gpu"));
+        assert!(expansion.contains("__fe2o3_kernel_artifact_vecadd_start"));
+        assert!(expansion.contains("__fe2o3_kernel_artifact_vecadd_end"));
+        assert!(expansion.contains("extern crate gpu_host as __fe2o3_kernel_host"));
+        assert!(expansion.contains(
+            "unsafe impl __fe2o3_kernel_host :: __generated :: CompilerGeneratedKernelContractV1"
+        ));
+        assert!(expansion.contains("fn artifact_bytes () -> & 'static [u8]"));
+        assert!(expansion.contains("checked_sub"));
+        assert!(expansion.contains("length == 0"));
+        assert!(expansion.contains("primitive :: isize :: MAX"));
+        assert!(expansion.contains("slice :: from_raw_parts"));
+        assert!(!expansion.contains("KernelParams"));
+        assert!(!expansion.contains("launch_unchecked"));
+    }
+
+    #[test]
+    fn typed_kernel_requires_the_exact_vecadd_profile() {
+        let cases: Vec<(ItemFn, &str)> = vec![
+            (
+                parse_quote!(
+                    fn private(a: &[f32], b: &[f32], c: DisjointSlice<f32>) {}
+                ),
+                "#[kernel(typed)] requires a public kernel function",
+            ),
+            (
+                parse_quote!(
+                    pub unsafe fn unsafe_kernel(a: &[f32], b: &[f32], c: DisjointSlice<f32>) {}
+                ),
+                "#[kernel(typed)] requires a safe kernel function",
+            ),
+            (
+                parse_quote!(
+                    pub fn generic<T>(a: &[f32], b: &[f32], c: DisjointSlice<f32>) {}
+                ),
+                "#[kernel(typed)] does not support generic kernel functions",
+            ),
+            (
+                parse_quote!(
+                    pub fn result(a: &[f32], b: &[f32], c: DisjointSlice<f32>) -> Result<(), ()> {
+                        Ok(())
+                    }
+                ),
+                "#[kernel(typed)] requires the unit return type",
+            ),
+            (
+                parse_quote!(
+                    pub fn count(a: &[f32], b: &[f32]) {}
+                ),
+                "#[kernel(typed)] requires `pub fn(&[f32], &[f32], DisjointSlice<f32>)`",
+            ),
+            (
+                parse_quote!(
+                    pub fn alias(a: &Floats, b: &[f32], c: DisjointSlice<f32>) {}
+                ),
+                "#[kernel(typed)] argument 1 must have exact type `&[f32]`",
+            ),
+            (
+                parse_quote!(
+                    pub fn element(a: &[u32], b: &[f32], c: DisjointSlice<f32>) {}
+                ),
+                "#[kernel(typed)] argument 1 must have exact type `&[f32]`",
+            ),
+            (
+                parse_quote!(
+                    pub fn order(a: &[f32], b: DisjointSlice<f32>, c: &[f32]) {}
+                ),
+                "#[kernel(typed)] argument 2 must have exact type `&[f32]`",
+            ),
+            (
+                parse_quote!(
+                    pub fn raw(a: *const f32, b: &[f32], c: DisjointSlice<f32>) {}
+                ),
+                "#[kernel(typed)] argument 1 must have exact type `&[f32]`",
+            ),
+            (
+                parse_quote!(
+                    pub fn output(a: &[f32], b: &[f32], c: DisjointSlice<u32>) {}
+                ),
+                "#[kernel(typed)] argument 3 must have exact type `DisjointSlice<f32>`",
+            ),
+        ];
+
+        for (input, expected) in cases {
+            assert_eq!(
+                validate_typed_kernel_signature(&input)
+                    .unwrap_err()
+                    .to_string(),
+                expected,
+                "unexpected diagnostic for {}",
+                input.sig.ident,
+            );
+        }
     }
 
     #[test]
