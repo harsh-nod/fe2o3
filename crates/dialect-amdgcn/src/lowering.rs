@@ -395,6 +395,30 @@ pub fn lower_compiler_module_to_llvm_ir(module: &Module) -> Result<String, Lower
             LoweringLocation::kernel(module, kernel),
         )?;
     }
+    for kernel in &kernels {
+        let entry = module
+            .function(&kernel.entry)
+            .expect("verify_module established the kernel entry");
+        let body = entry.body.as_ref().expect("verified kernel entry body");
+        for block in &body.blocks {
+            for (operation_index, operation) in block.operations.iter().enumerate() {
+                if !matches!(&operation.kind, OperationKind::WorkgroupMemory(_)) {
+                    continue;
+                }
+                let result = operation
+                    .results
+                    .first()
+                    .expect("verify_module established the LDS result");
+                let emitted = lds_symbol(kernel, result.id);
+                reserve_emitted_symbol(
+                    &mut emitted_symbols,
+                    emitted.strip_prefix('@').expect("LDS symbols start with @"),
+                    format!("kernel {} LDS value {}", kernel.id, result.id),
+                    LoweringLocation::operation(module, kernel, entry, block.id, operation_index),
+                )?;
+            }
+        }
+    }
 
     let mut call_symbols = BTreeMap::<FunctionId, String>::new();
     let mut declarations = Vec::new();

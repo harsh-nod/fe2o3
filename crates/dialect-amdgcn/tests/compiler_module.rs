@@ -2,7 +2,8 @@ use dialect_amdgcn::{LoweringDiagnosticCode, lower_compiler_module_to_llvm_ir};
 use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, BasicBlock, BinaryOp, BlockId, Function, FunctionId,
     IntrinsicOperation, Kernel, LaunchDomain, LaunchExtent, Module, Operation, OperationKind,
-    Signature, Terminator, Type, ValueDef, ValueId, WorkgroupSize,
+    Signature, Terminator, Type, ValueDef, ValueId, WorkgroupMemory, WorkgroupMemoryExtent,
+    WorkgroupSize,
 };
 
 fn returning_block(operations: Vec<Operation>, values: Vec<ValueId>) -> BasicBlock {
@@ -211,6 +212,42 @@ fn missing_kernels_and_output_namespace_collisions_fail_closed() {
     collision.kernels[0].id = "scale".into();
     let error = lower_compiler_module_to_llvm_ir(&collision).unwrap_err();
     assert!(error.contains(LoweringDiagnosticCode::ConflictingSymbol));
+}
+
+#[test]
+fn generated_lds_symbols_share_the_module_collision_domain() {
+    let mut module = compiler_module();
+    let alpha = module
+        .functions
+        .iter_mut()
+        .find(|function| function.id.as_str() == "alpha_entry")
+        .unwrap();
+    alpha.body.as_mut().unwrap().blocks[0].operations.insert(
+        0,
+        Operation::effect_free(
+            ValueDef::new(
+                ValueId(40),
+                Type::pointer(
+                    Type::Scalar(fe2o3_kernel_ir::ScalarType::I32),
+                    AddressSpace::Workgroup,
+                    AccessMode::ReadWrite,
+                ),
+            ),
+            OperationKind::WorkgroupMemory(WorkgroupMemory {
+                element: Type::Scalar(fe2o3_kernel_ir::ScalarType::I32),
+                extent: WorkgroupMemoryExtent::Static(1),
+                alignment: 4,
+            }),
+        ),
+    );
+    module.functions.push(Function::declaration(
+        "__fe2o3_lds_alpha_kernel_40",
+        Signature::new(vec![], vec![]),
+    ));
+
+    let error = lower_compiler_module_to_llvm_ir(&module).unwrap_err();
+    assert!(error.contains(LoweringDiagnosticCode::ConflictingSymbol));
+    assert!(error.to_string().contains("LDS value %40"));
 }
 
 #[test]
