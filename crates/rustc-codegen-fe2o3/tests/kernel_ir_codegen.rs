@@ -2,6 +2,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
+use fe2o3_artifacts::DigestAlgorithm;
+
 const PIPELINE_ENV: &str = "FE2O3_CODEGEN_PIPELINE";
 
 fn backend_test_lock() -> MutexGuard<'static, ()> {
@@ -19,6 +21,16 @@ fn workspace() -> PathBuf {
 }
 
 fn backend(workspace: &Path, command: &str, package: &str, pipeline: Option<&str>) -> Output {
+    backend_with_worker_config(workspace, command, package, pipeline, None)
+}
+
+fn backend_with_worker_config(
+    workspace: &Path,
+    command: &str,
+    package: &str,
+    pipeline: Option<&str>,
+    worker_config: Option<&Path>,
+) -> Output {
     let mut process = Command::new(env!("CARGO"));
     process
         .current_dir(workspace)
@@ -36,7 +48,43 @@ fn backend(workspace: &Path, command: &str, package: &str, pipeline: Option<&str
     if let Some(pipeline) = pipeline {
         process.env(PIPELINE_ENV, pipeline);
     }
+    if let Some(worker_config) = worker_config {
+        process.env("FE2O3_WORKER_V2_CONFIG_V1", worker_config);
+    }
     process.output().expect("run cargo-fe2o3")
+}
+
+struct WorkerV2TestConfig(PathBuf);
+
+impl WorkerV2TestConfig {
+    fn missing_envelope(workspace: &Path) -> Self {
+        let worker = std::env::current_exe().expect("current test executable");
+        let bytes = std::fs::read(&worker).expect("read current test executable");
+        let digest = DigestAlgorithm::Sha256.calculate(&bytes).bytes();
+        let hex = digest
+            .as_bytes()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let path = workspace.join(format!(
+            "target/worker-v2-missing-envelope-{}.json",
+            std::process::id()
+        ));
+        let worker = worker.to_str().expect("UTF-8 worker path");
+        let workspace = workspace.to_str().expect("UTF-8 workspace path");
+        let json = format!(
+            "{{\"candidate_output_max_bytes\":4194304,\"final_symbols\":[\"fill\"],\"format\":\"fe2o3-worker-v2-config-v1\",\"limits\":{{\"stderr_bytes\":65536,\"stdout_bytes\":8388608,\"timeout_ms\":30000}},\"link_options\":[{{\"name\":\"code-object-version\",\"value\":\"5\"}},{{\"name\":\"opt-level\",\"value\":\"2\"}},{{\"name\":\"strip-debug\",\"value\":\"true\"}},{{\"name\":\"verify-each\",\"value\":\"true\"}}],\"providers\":[],\"units\":[{{\"crate_name\":\"fe2o3_fill\",\"source\":\"examples/fill/src/main.rs\",\"working_directory\":{workspace:?}}}],\"worker\":{{\"byte_len\":{},\"llvm_build_identity\":\"test-only-unreached-llvm\",\"path\":{worker:?},\"sha256\":\"{hex}\",\"worker_build_identity\":\"test-only-unreached-worker\"}}}}",
+            bytes.len()
+        );
+        std::fs::write(&path, json).expect("write Worker V2 test config");
+        Self(path)
+    }
+}
+
+impl Drop for WorkerV2TestConfig {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
 }
 
 fn artifact_paths(workspace: &Path, kernel: &str) -> [PathBuf; 3] {
@@ -251,12 +299,14 @@ fn worker_v2_rejects_a_missing_envelope_without_touching_legacy_artifacts() {
     let workspace = workspace();
     let fill_artifacts = artifact_paths(&workspace, "fill");
     preseed(&fill_artifacts);
+    let config = WorkerV2TestConfig::missing_envelope(&workspace);
 
-    let output = backend(
+    let output = backend_with_worker_config(
         &workspace,
         "build",
         "fe2o3-fill",
         Some("kernel-ir-worker-v2"),
+        Some(&config.0),
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
 
