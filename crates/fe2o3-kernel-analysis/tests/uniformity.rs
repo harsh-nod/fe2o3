@@ -1,9 +1,10 @@
 use fe2o3_kernel_analysis::{Diagnostic, UnsupportedReason, Variation, analyze_function};
 use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, Axis, Barrier, BarrierSemantics, BasicBlock, BlockId,
-    ComparePredicate, Constant, Function, FunctionId, IndexKind, IntrinsicKind, IntrinsicOperation,
-    MemoryAccess, MemoryOrdering, Operation, OperationKind, Signature, SynchronizationScope,
-    Terminator, Type, ValueDef, ValueId,
+    ComparePredicate, Constant, Convergence, Function, FunctionId, IndexKind, IntrinsicKind,
+    IntrinsicOperation, MemoryAccess, MemoryOrdering, Operation, OperationKind, Signature,
+    SynchronizationScope, Terminator, Type, ValueDef, ValueId, WorkgroupBarrier, WorkgroupMemory,
+    WorkgroupMemoryExtent,
 };
 
 fn function(parameters: Vec<ValueId>, blocks: Vec<BasicBlock>) -> Function {
@@ -50,6 +51,20 @@ fn workgroup_barrier() -> Operation {
                 MemoryOrdering::AcquireRelease,
                 [AddressSpace::Workgroup],
             ),
+        }),
+    )
+}
+
+fn explicit_workgroup_barrier() -> Operation {
+    Operation::new(
+        vec![],
+        OperationKind::WorkgroupBarrier(WorkgroupBarrier {
+            memory_scope: SynchronizationScope::Workgroup,
+            semantics: BarrierSemantics::new(
+                MemoryOrdering::AcquireRelease,
+                [AddressSpace::Workgroup],
+            ),
+            convergence: Convergence::uniform(SynchronizationScope::Workgroup),
         }),
     )
 }
@@ -230,7 +245,9 @@ fn thread_varying_branch_rejects_workgroup_barrier() {
         else_arguments: vec![],
     });
     let mut then_block = BasicBlock::new(BlockId(1));
-    then_block.operations.push(workgroup_barrier());
+    then_block
+        .operations
+        .extend([workgroup_barrier(), explicit_workgroup_barrier()]);
     then_block.terminator = Some(Terminator::Branch {
         target: BlockId(2),
         arguments: vec![],
@@ -241,13 +258,41 @@ fn thread_varying_branch_rejects_workgroup_barrier() {
     assert_eq!(report.block_control(BlockId(1)), Variation::Varying);
     assert_eq!(
         report.diagnostics(),
-        &[Diagnostic::DivergentBarrier {
-            block: BlockId(1),
-            operation_index: 0,
-            execution_scope: SynchronizationScope::Workgroup,
-            control: Variation::Varying,
-        }]
+        &[
+            Diagnostic::DivergentBarrier {
+                block: BlockId(1),
+                operation_index: 0,
+                execution_scope: SynchronizationScope::Workgroup,
+                control: Variation::Varying,
+            },
+            Diagnostic::DivergentBarrier {
+                block: BlockId(1),
+                operation_index: 1,
+                execution_scope: SynchronizationScope::Workgroup,
+                control: Variation::Varying,
+            },
+        ]
     );
+}
+
+#[test]
+fn explicit_lds_pointer_is_workgroup_uniform() {
+    let mut entry = returning(0);
+    entry.operations.push(Operation::effect_free(
+        ValueDef::new(
+            ValueId(0),
+            Type::pointer(Type::F32, AddressSpace::Workgroup, AccessMode::ReadWrite),
+        ),
+        OperationKind::WorkgroupMemory(WorkgroupMemory {
+            element: Type::F32,
+            extent: WorkgroupMemoryExtent::Static(64),
+            alignment: 4,
+        }),
+    ));
+
+    let report = analyze_function(&function(vec![], vec![entry]));
+    assert_eq!(report.value(ValueId(0)), Variation::WorkgroupUniform);
+    assert!(report.diagnostics().is_empty());
 }
 
 #[test]

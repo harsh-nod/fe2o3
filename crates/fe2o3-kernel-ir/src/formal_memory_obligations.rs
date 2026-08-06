@@ -511,7 +511,10 @@ pub fn derive_kernel_memory_obligations(
                 }
                 OperationKind::Alloca { .. }
                 | OperationKind::Barrier(_)
-                | OperationKind::Atomic(_) => {
+                | OperationKind::Atomic(_)
+                | OperationKind::Fence(_)
+                | OperationKind::WorkgroupBarrier(_)
+                | OperationKind::WorkgroupMemory(_) => {
                     reasons
                         .insert(FormalMemoryIncompleteReason::UnsupportedMemoryEffect { location });
                 }

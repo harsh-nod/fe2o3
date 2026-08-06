@@ -15,6 +15,14 @@ CUDA, or a serialization framework.
   lowering do not need to infer target-sensitive facts.
 - Barriers and atomics carry explicit scope and ordering information. Their
   memory effects are queryable without inspecting a target backend.
+- `Fence` separates memory ordering from execution synchronization.
+  `WorkgroupBarrier` additionally requires a uniform-workgroup convergence
+  claim. The verifier checks the claim's scope; uniformity analysis or a proof
+  artifact must establish that the claim is true.
+- `WorkgroupMemory` distinguishes fixed element counts from the one dynamic LDS
+  base allowed in a function. The legacy `Alloca` form remains representable.
+- `WaveWidth` expresses an exact wave32 or wave64 lowering requirement without
+  overloading target-neutral subgroup sizes.
 - Source-level logical launch queries use typed `IntrinsicOperation` nodes.
   Each node carries an explicit result type, while `IntrinsicKind` owns the
   canonical type, memory effects, and required target capabilities.
@@ -41,8 +49,8 @@ enter this IR.
 
 Global memory semantics continue to use the existing typed `Load` and `Store`
 operations. Their effect summaries report `Read(Global)` and `Write(Global)`
-respectively. This change does not add intrinsic forms of memory access or
-extend barrier and atomic semantics.
+respectively. Synchronization and LDS use dedicated operations rather than
+intrinsic forms of memory access.
 
 ## Verification Boundary
 
@@ -58,7 +66,15 @@ axes outside the declared launch domain. Callers that know a target's
 capability set can use `verify_module_with_capabilities` to reject unsupported
 requirements.
 
-The verifier does not prove bounds, race freedom, barrier convergence,
+Synchronization verification rejects relaxed fences/barriers, private or
+constant synchronization, scopes that cannot observe the selected address
+space, malformed atomic orderings and operands, unsupported atomic widths,
+multiple dynamic LDS bases, and inconsistent wave-width requirements. Target
+atomic capabilities are subsuming: support at a wider legal scope authorizes a
+narrower requested scope with the same width and address space.
+
+The verifier does not prove bounds, race freedom, the truth of a barrier's
+convergence claim,
 functional correctness, or target support. Those require later analyses and
 Verus proof artifacts. Keeping those concerns separate lets this verifier
 remain deterministic, fast, and usable after every transformation pass.
@@ -72,14 +88,17 @@ never be represented as unstructured strings in this core IR.
 
 ## Canonical Wire Format
 
-`Module` has a bounded deterministic V1 binary representation documented in
+`Module` has bounded deterministic V1 and V2 binary representations documented in
 [`WIRE_FORMAT.md`](WIRE_FORMAT.md). The format covers every stored IR node,
 operation, terminator, type, capability, and enum variant currently reachable
 from `Module`. Derived query results such as `IntrinsicMetadata`,
 `MemoryEffect`, and `MemoryEffectSummary` are intentionally recomputed rather
 than serialized.
 
-Wire decoding is a parser boundary, not a semantic trust decision. A decoded
+V1 remains byte-for-byte frozen. V2 adds tags for fences, convergent workgroup
+barriers, explicit workgroup memory, and exact wave widths. Its decoder accepts
+both versions so readers can migrate before writers. Wire decoding is a parser
+boundary, not a semantic trust decision. A decoded
 module can still contain undefined SSA values, invalid types, missing
 terminators, bad barriers, or other frontend errors. Every consumer must run
 `verify_module` or `verify_module_with_capabilities` before lowering or

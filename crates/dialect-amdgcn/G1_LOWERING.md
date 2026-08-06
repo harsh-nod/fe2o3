@@ -15,6 +15,10 @@ G1 accepts:
   and optional volatile memory access;
 - conditional and ordinary branches, including scalar, global-pointer, and
   global-slice block arguments materialized as LLVM phi nodes;
+- global and workgroup pointer memory access, explicit static or dynamic LDS,
+  scoped fences, and convergence-bearing workgroup barriers;
+- workgroup-memory/barrier capabilities and exact wave32 or wave64 function
+  attributes;
 - void return and unreachable.
 
 The global index is computed in `i64` from AMDGPU workitem and workgroup IDs
@@ -22,9 +26,15 @@ using the declared workgroup X size. The total launch extent remains a host
 launch contract and is intentionally absent from the LLVM IR. G1 does not add
 `inbounds` to GEPs because the source IR does not carry that assertion.
 
+Workgroup barriers lower to release/acquire fences around the convergent
+`llvm.amdgcn.s.barrier` intrinsic. A selected address-space subset may lower to
+a conservatively stronger LLVM fence because LLVM fences do not carry the
+Kernel IR address-space set.
+
 G1 rejects declarations, non-void entries, 2D/3D domains, missing or oversized
-workgroup sizes, capabilities, unsafe unquoted symbols, entry or predecessorless
-block arguments, duplicate edges into a block with arguments, non-global
-memory, unsupported scalar types, and every operation not explicitly listed
-above. It does not select a GPU processor, invoke LLVM, produce an artifact, or
-grant launch authority.
+workgroup sizes, unsupported capabilities, unsafe unquoted symbols, entry or
+predecessorless block arguments, duplicate edges into a block with arguments,
+private/constant/generic memory, unsupported scalar types, legacy barriers
+without convergence evidence, scoped atomics, ambiguous workgroup `Alloca`,
+and every operation not explicitly listed above. It does not select a GPU
+processor, invoke LLVM, produce an artifact, or grant launch authority.

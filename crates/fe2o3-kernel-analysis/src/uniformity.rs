@@ -324,7 +324,11 @@ impl<'a> Analyzer<'a> {
                 };
                 allocation.join(join_values(count.iter().copied(), &self.report.values))
             }
-            OperationKind::Store { .. } | OperationKind::Barrier(_) => Variation::Varying,
+            OperationKind::WorkgroupMemory(_) => Variation::WorkgroupUniform,
+            OperationKind::Store { .. }
+            | OperationKind::Barrier(_)
+            | OperationKind::Fence(_)
+            | OperationKind::WorkgroupBarrier(_) => Variation::Varying,
             OperationKind::Unary { .. }
             | OperationKind::Binary { .. }
             | OperationKind::Compare { .. }
@@ -350,14 +354,18 @@ impl<'a> Analyzer<'a> {
                 .copied()
                 .unwrap_or(Variation::Varying);
             for (operation_index, operation) in block.operations.iter().enumerate() {
-                let OperationKind::Barrier(barrier) = &operation.kind else {
-                    continue;
+                let execution_scope = match &operation.kind {
+                    OperationKind::Barrier(barrier) => barrier.execution_scope,
+                    OperationKind::WorkgroupBarrier(_) => {
+                        fe2o3_kernel_ir::SynchronizationScope::Workgroup
+                    }
+                    _ => continue,
                 };
-                if !control.is_uniform_for(barrier.execution_scope) {
+                if !control.is_uniform_for(execution_scope) {
                     self.report.diagnostics.push(Diagnostic::DivergentBarrier {
                         block: block.id,
                         operation_index,
-                        execution_scope: barrier.execution_scope,
+                        execution_scope,
                         control,
                     });
                 }

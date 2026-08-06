@@ -513,6 +513,189 @@ fn first_code(module: &Module, kernel: &str) -> LoweringDiagnosticCode {
         .code
 }
 
+fn g4_synchronization_module() -> Module {
+    let mut module = fill_module();
+    module.required_capabilities.extend([
+        TargetCapability::WorkgroupMemory,
+        TargetCapability::DynamicWorkgroupMemory,
+        TargetCapability::WorkgroupBarrier,
+        TargetCapability::WaveWidth(WaveWidth::Wave64),
+    ]);
+    let operations = &mut module.functions[0].body.as_mut().unwrap().blocks[0].operations;
+    operations.splice(
+        0..0,
+        [
+            op(
+                30,
+                Type::pointer(
+                    Type::Scalar(ScalarType::U32),
+                    AddressSpace::Workgroup,
+                    AccessMode::ReadWrite,
+                ),
+                OperationKind::WorkgroupMemory(WorkgroupMemory {
+                    element: Type::Scalar(ScalarType::U32),
+                    extent: WorkgroupMemoryExtent::Static(64),
+                    alignment: 16,
+                }),
+            ),
+            op(
+                31,
+                Type::pointer(Type::F32, AddressSpace::Workgroup, AccessMode::ReadWrite),
+                OperationKind::WorkgroupMemory(WorkgroupMemory {
+                    element: Type::F32,
+                    extent: WorkgroupMemoryExtent::Dynamic,
+                    alignment: 16,
+                }),
+            ),
+            op(
+                32,
+                Type::Scalar(ScalarType::U32),
+                OperationKind::Constant(Constant::U32(7)),
+            ),
+            Operation::new(
+                vec![],
+                OperationKind::Store {
+                    pointer: ValueId(30),
+                    value: ValueId(32),
+                    access: MemoryAccess::new(AddressSpace::Workgroup, 4),
+                },
+            ),
+            Operation::new(
+                vec![],
+                OperationKind::Fence(Fence {
+                    memory_scope: SynchronizationScope::Device,
+                    semantics: BarrierSemantics::new(
+                        MemoryOrdering::Release,
+                        [AddressSpace::Global],
+                    ),
+                }),
+            ),
+            Operation::new(
+                vec![],
+                OperationKind::WorkgroupBarrier(WorkgroupBarrier {
+                    memory_scope: SynchronizationScope::Workgroup,
+                    semantics: BarrierSemantics::new(
+                        MemoryOrdering::AcquireRelease,
+                        [AddressSpace::Workgroup],
+                    ),
+                    convergence: Convergence::uniform(SynchronizationScope::Workgroup),
+                }),
+            ),
+        ],
+    );
+    module
+}
+
+#[test]
+fn lowers_fences_convergent_barriers_static_dynamic_lds_and_wave_width() {
+    let llvm =
+        lower_kernel_to_llvm_ir(&g4_synchronization_module(), &KernelId::new("fill")).unwrap();
+
+    for expected in [
+        "@__fe2o3_lds_fill_30 = internal addrspace(3) global [64 x i32] undef, align 16",
+        "@__fe2o3_lds_fill_31 = external addrspace(3) global [0 x float], align 16",
+        "%v30 = getelementptr [64 x i32], ptr addrspace(3) @__fe2o3_lds_fill_30, i32 0, i32 0",
+        "store i32 7, ptr addrspace(3) %v30, align 4",
+        "fence syncscope(\"agent\") release",
+        "fence syncscope(\"workgroup\") release",
+        "call void @llvm.amdgcn.s.barrier()",
+        "fence syncscope(\"workgroup\") acquire",
+        "attributes #2 = { convergent nounwind }",
+        "\"target-features\"=\"-wavefrontsize32,+wavefrontsize64\"",
+    ] {
+        assert!(llvm.contains(expected), "missing {expected:?} in:\n{llvm}");
+    }
+}
+
+#[test]
+fn synchronization_and_lds_lowering_fail_closed_with_specific_diagnostics() {
+    let mut atomic = fill_module();
+    atomic.functions[0].body.as_mut().unwrap().blocks[1]
+        .operations
+        .push(op(
+            30,
+            Type::F32,
+            OperationKind::Atomic(Atomic {
+                kind: AtomicKind::Add,
+                pointer: ValueId(5),
+                value: Some(ValueId(1)),
+                compare: None,
+                access: MemoryAccess::new(AddressSpace::Global, 4),
+                scope: SynchronizationScope::Device,
+                ordering: MemoryOrdering::Relaxed,
+                failure_ordering: None,
+            }),
+        ));
+    assert_eq!(
+        first_code(&atomic, "fill"),
+        LoweringDiagnosticCode::UnsupportedAtomic
+    );
+
+    let mut legacy_barrier = fill_module();
+    legacy_barrier.functions[0].body.as_mut().unwrap().blocks[0]
+        .operations
+        .insert(
+            0,
+            Operation::new(
+                vec![],
+                OperationKind::Barrier(Barrier {
+                    execution_scope: SynchronizationScope::Workgroup,
+                    memory_scope: SynchronizationScope::Workgroup,
+                    semantics: BarrierSemantics::new(
+                        MemoryOrdering::AcquireRelease,
+                        [AddressSpace::Workgroup],
+                    ),
+                }),
+            ),
+        );
+    assert_eq!(
+        first_code(&legacy_barrier, "fill"),
+        LoweringDiagnosticCode::UnsupportedBarrier
+    );
+
+    let mut ambiguous_lds = fill_module();
+    ambiguous_lds.functions[0].body.as_mut().unwrap().blocks[0]
+        .operations
+        .insert(
+            0,
+            op(
+                30,
+                Type::pointer(Type::F32, AddressSpace::Workgroup, AccessMode::ReadWrite),
+                OperationKind::Alloca {
+                    element: Type::F32,
+                    count: None,
+                    address_space: AddressSpace::Workgroup,
+                    alignment: 4,
+                },
+            ),
+        );
+    assert_eq!(
+        first_code(&ambiguous_lds, "fill"),
+        LoweringDiagnosticCode::UnsupportedWorkgroupMemory
+    );
+
+    let mut invalid_fence = fill_module();
+    invalid_fence.functions[0].body.as_mut().unwrap().blocks[0]
+        .operations
+        .insert(
+            0,
+            Operation::new(
+                vec![],
+                OperationKind::Fence(Fence {
+                    memory_scope: SynchronizationScope::Device,
+                    semantics: BarrierSemantics::new(
+                        MemoryOrdering::Relaxed,
+                        [AddressSpace::Global],
+                    ),
+                }),
+            ),
+        );
+    assert_eq!(
+        first_code(&invalid_fence, "fill"),
+        LoweringDiagnosticCode::InputVerification(DiagnosticCode::InvalidFence)
+    );
+}
+
 #[test]
 fn dynamic_1d_fill_matches_the_exact_golden() {
     let output = lower_kernel_to_llvm_ir(&fill_module(), &KernelId::new("fill")).unwrap();
@@ -1110,7 +1293,7 @@ fn unsupported_phi_types_and_address_spaces_fail_before_emission() {
         .as_mut()
         .unwrap()
         .blocks;
-    let pointer = Type::pointer(Type::F32, AddressSpace::Workgroup, AccessMode::ReadWrite);
+    let pointer = Type::pointer(Type::F32, AddressSpace::Private, AccessMode::ReadWrite);
     blocks[0].operations.insert(
         0,
         op(
@@ -1119,7 +1302,7 @@ fn unsupported_phi_types_and_address_spaces_fail_before_emission() {
             OperationKind::Alloca {
                 element: Type::F32,
                 count: None,
-                address_space: AddressSpace::Workgroup,
+                address_space: AddressSpace::Private,
                 alignment: 4,
             },
         ),
@@ -1156,6 +1339,39 @@ fn rocm_compiles_phi_golden_to_an_amdgpu_code_object() {
     let output = directory.join("phi_loop.hsaco");
     let llvm_ir = lower_kernel_to_llvm_ir(&phi_loop_module(), &KernelId::new("phi_loop")).unwrap();
     assert_eq!(llvm_ir, include_str!("fixtures/phi_loop_g1.ll"));
+    fs::write(&input, llvm_ir).unwrap();
+
+    let result = Command::new(clang)
+        .arg("--target=amdgcn-amd-amdhsa")
+        .arg(format!("-mcpu={target_text}"))
+        .arg("-nogpulib")
+        .arg(&input)
+        .arg("-o")
+        .arg(&output)
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "clang failed:\n{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(fs::metadata(output).unwrap().len() > 64);
+}
+
+#[test]
+#[ignore = "requires the ROCm LLVM toolchain"]
+fn rocm_compiles_g4_synchronization_and_lds() {
+    let clang = std::env::var_os("FE2O3_ROCM_CLANG")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/opt/rocm/llvm/bin/clang"));
+    let target_text = std::env::var("FE2O3_TARGET")
+        .expect("FE2O3_TARGET must name an exact canonical AMDGPU target");
+    canonical_test_target(&target_text).unwrap();
+    let directory = TemporaryDirectory::new("g4-sync-lds");
+    let input = directory.join("g4_sync_lds.ll");
+    let output = directory.join("g4_sync_lds.hsaco");
+    let llvm_ir =
+        lower_kernel_to_llvm_ir(&g4_synchronization_module(), &KernelId::new("fill")).unwrap();
     fs::write(&input, llvm_ir).unwrap();
 
     let result = Command::new(clang)

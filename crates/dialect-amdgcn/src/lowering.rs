@@ -6,9 +6,9 @@ use std::fmt::Write as _;
 use fe2o3_kernel_ir::{
     AddressSpace as KernelAddressSpace, Axis, BasicBlock, BinaryOp, BlockId, CastKind,
     ComparePredicate, Constant, DiagnosticCode as VerificationDiagnosticCode, Function, FunctionId,
-    IndexKind, IntrinsicKind, Kernel, KernelId, LaunchDomain, LaunchExtent, Module, ModuleId,
-    Operation, OperationKind, ScalarType, TargetCapability, Terminator, Type, ValueId,
-    VerificationErrors, WorkgroupSize, verify_module,
+    IndexKind, IntrinsicKind, Kernel, KernelId, LaunchDomain, LaunchExtent, MemoryOrdering, Module,
+    ModuleId, Operation, OperationKind, ScalarType, TargetCapability, Terminator, Type, ValueId,
+    VerificationErrors, WaveWidth, WorkgroupMemoryExtent, WorkgroupSize, verify_module,
 };
 
 use crate::{AMDGPU_TRIPLE, AmdgcnIntrinsic, Dim};
@@ -33,6 +33,9 @@ pub enum LoweringDiagnosticCode {
     UnsupportedAddressSpace,
     UnsupportedBlockArguments,
     UnsupportedOperation,
+    UnsupportedAtomic,
+    UnsupportedBarrier,
+    UnsupportedWorkgroupMemory,
     UnsupportedCast,
     UnsupportedConstant,
     UnsupportedTerminator,
@@ -245,12 +248,12 @@ pub fn lower_kernel_to_llvm_ir(
         ));
     }
 
-    reject_capabilities(
+    let module_wave = validate_capabilities(
         LoweringLocation::module(module),
         &module.required_capabilities,
         "module",
     )?;
-    reject_capabilities(
+    let kernel_wave = validate_capabilities(
         LoweringLocation::kernel(module, kernel),
         &kernel.required_capabilities,
         "kernel",
@@ -270,11 +273,23 @@ pub fn lower_kernel_to_llvm_ir(
         )
     })?;
 
-    reject_capabilities(
+    let function_wave = validate_capabilities(
         LoweringLocation::function(module, kernel, entry),
         &entry.required_capabilities,
         "entry function",
     )?;
+    let wave_widths = [module_wave, kernel_wave, function_wave]
+        .into_iter()
+        .flatten()
+        .collect::<BTreeSet<_>>();
+    if wave_widths.len() > 1 {
+        return Err(LoweringErrors::one(
+            LoweringLocation::function(module, kernel, entry),
+            LoweringDiagnosticCode::UnsupportedCapability,
+            format!("conflicting exact wave-width requirements: {wave_widths:?}"),
+        ));
+    }
+    let wave_width = wave_widths.first().copied();
     if !entry.signature.results.is_empty() {
         return Err(LoweringErrors::one(
             LoweringLocation::function(module, kernel, entry),
@@ -283,7 +298,7 @@ pub fn lower_kernel_to_llvm_ir(
         ));
     }
 
-    let mut lowerer = FunctionLowerer::new(module, kernel, entry, workgroup_size.x);
+    let mut lowerer = FunctionLowerer::new(module, kernel, entry, workgroup_size.x, wave_width);
     lowerer.validate_parameters()?;
     for block in &body.blocks {
         lowerer.validate_block(block)?;
@@ -301,19 +316,28 @@ fn is_safe_symbol(symbol: &str) -> bool {
         && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
 }
 
-fn reject_capabilities(
+fn validate_capabilities(
     location: LoweringLocation,
     capabilities: &BTreeSet<TargetCapability>,
     owner: &str,
-) -> Result<(), LoweringErrors> {
-    let Some(capability) = capabilities.first() else {
-        return Ok(());
-    };
-    Err(LoweringErrors::one(
-        location,
-        LoweringDiagnosticCode::UnsupportedCapability,
-        format!("G1 does not lower {owner} capability {capability:?}"),
-    ))
+) -> Result<Option<WaveWidth>, LoweringErrors> {
+    let mut wave_width = None;
+    for capability in capabilities {
+        match capability {
+            TargetCapability::WorkgroupMemory
+            | TargetCapability::WorkgroupBarrier
+            | TargetCapability::DynamicWorkgroupMemory => {}
+            TargetCapability::WaveWidth(width) => wave_width = Some(*width),
+            _ => {
+                return Err(LoweringErrors::one(
+                    location,
+                    LoweringDiagnosticCode::UnsupportedCapability,
+                    format!("G1 does not lower {owner} capability {capability:?}"),
+                ));
+            }
+        }
+    }
+    Ok(wave_width)
 }
 
 fn validate_launch(module: &Module, kernel: &Kernel) -> Result<WorkgroupSize, LoweringErrors> {
@@ -376,6 +400,7 @@ struct FunctionLowerer<'a> {
     kernel: &'a Kernel,
     function: &'a Function,
     workgroup_x: u32,
+    wave_width: Option<WaveWidth>,
     bindings: BTreeMap<ValueId, ValueBinding>,
 }
 
@@ -385,12 +410,14 @@ impl<'a> FunctionLowerer<'a> {
         kernel: &'a Kernel,
         function: &'a Function,
         workgroup_x: u32,
+        wave_width: Option<WaveWidth>,
     ) -> Self {
         Self {
             module,
             kernel,
             function,
             workgroup_x,
+            wave_width,
             bindings: BTreeMap::new(),
         }
     }
@@ -471,7 +498,7 @@ impl<'a> FunctionLowerer<'a> {
                         );
                     }
                     Type::Pointer(_) => {
-                        validate_global_pointer(&parameter.ty, &location)?;
+                        validate_pointer(&parameter.ty, &location)?;
                         self.bindings.insert(
                             parameter.id,
                             ValueBinding::Value {
@@ -672,7 +699,7 @@ impl<'a> FunctionLowerer<'a> {
                 };
             }
             OperationKind::GetElementPointer { base, .. } => {
-                validate_global_pointer(self.value_type(*base), &location)?;
+                validate_pointer(self.value_type(*base), &location)?;
             }
             OperationKind::Load { pointer, access } => {
                 validate_memory_access(self.value_type(*pointer), access.address_space, &location)?;
@@ -682,13 +709,48 @@ impl<'a> FunctionLowerer<'a> {
             } => {
                 validate_memory_access(self.value_type(*pointer), access.address_space, &location)?;
             }
+            OperationKind::Fence(_) | OperationKind::WorkgroupBarrier(_) => {}
+            OperationKind::WorkgroupMemory(memory) => {
+                if !supported_memory_type(&memory.element) {
+                    return Err(LoweringErrors::one(
+                        location,
+                        LoweringDiagnosticCode::UnsupportedWorkgroupMemory,
+                        format!(
+                            "AMDGPU LDS lowering does not support element type {:?}",
+                            memory.element
+                        ),
+                    ));
+                }
+            }
+            OperationKind::Atomic(_) => {
+                return Err(LoweringErrors::one(
+                    location,
+                    LoweringDiagnosticCode::UnsupportedAtomic,
+                    "scoped atomic lowering is not implemented",
+                ));
+            }
+            OperationKind::Barrier(_) => {
+                return Err(LoweringErrors::one(
+                    location,
+                    LoweringDiagnosticCode::UnsupportedBarrier,
+                    "legacy barriers lack the convergence evidence required by AMDGPU lowering",
+                ));
+            }
+            OperationKind::Alloca {
+                address_space: KernelAddressSpace::Workgroup,
+                ..
+            } => {
+                return Err(LoweringErrors::one(
+                    location,
+                    LoweringDiagnosticCode::UnsupportedWorkgroupMemory,
+                    "workgroup Alloca is ambiguous; use explicit WorkgroupMemory",
+                ));
+            }
             OperationKind::Intrinsic(_)
             | OperationKind::Unary { .. }
             | OperationKind::Select { .. }
             | OperationKind::Call { .. }
-            | OperationKind::Alloca { .. }
-            | OperationKind::Barrier(_)
-            | OperationKind::Atomic(_) => {
+            | OperationKind::Alloca { .. } => {
                 return Err(LoweringErrors::one(
                     location,
                     LoweringDiagnosticCode::UnsupportedOperation,
@@ -769,6 +831,10 @@ impl<'a> FunctionLowerer<'a> {
     fn emit(&self) -> Result<String, LoweringErrors> {
         let mut output = String::new();
         writeln!(output, "target triple = \"{AMDGPU_TRIPLE}\"\n").unwrap();
+        let has_workgroup_barrier = self.has_workgroup_barrier();
+        if self.emit_workgroup_memory_declarations(&mut output) {
+            writeln!(output).unwrap();
+        }
         writeln!(
             output,
             "declare i32 @{}() #1",
@@ -777,10 +843,19 @@ impl<'a> FunctionLowerer<'a> {
         .unwrap();
         writeln!(
             output,
-            "declare i32 @{}() #1\n",
+            "declare i32 @{}() #1",
             AmdgcnIntrinsic::WorkGroupId(Dim::X).llvm_name()
         )
         .unwrap();
+        if has_workgroup_barrier {
+            writeln!(
+                output,
+                "declare void @{}() #2",
+                AmdgcnIntrinsic::SBarrier.llvm_name()
+            )
+            .unwrap();
+        }
+        writeln!(output).unwrap();
 
         write!(
             output,
@@ -805,19 +880,65 @@ impl<'a> FunctionLowerer<'a> {
             );
         }
         writeln!(output, "}}\n").unwrap();
+        let wave_attribute = self.wave_width.map_or("", |width| match width {
+            WaveWidth::Wave32 => " \"target-features\"=\"+wavefrontsize32,-wavefrontsize64\"",
+            WaveWidth::Wave64 => " \"target-features\"=\"-wavefrontsize32,+wavefrontsize64\"",
+        });
         writeln!(
             output,
-            "attributes #0 = {{ nounwind \"amdgpu-flat-work-group-size\"=\"{0},{0}\" }}",
+            "attributes #0 = {{ nounwind \"amdgpu-flat-work-group-size\"=\"{0},{0}\"{wave_attribute} }}",
             self.workgroup_x
         )
         .unwrap();
         writeln!(
             output,
-            "attributes #1 = {{ nounwind readnone speculatable willreturn }}\n"
+            "attributes #1 = {{ nounwind readnone speculatable willreturn }}"
         )
         .unwrap();
+        if has_workgroup_barrier {
+            writeln!(output, "attributes #2 = {{ convergent nounwind }}").unwrap();
+        }
+        writeln!(output).unwrap();
         writeln!(output, "!0 = !{{i32 {}, i32 1, i32 1}}", self.workgroup_x).unwrap();
         Ok(output)
+    }
+
+    fn has_workgroup_barrier(&self) -> bool {
+        self.function
+            .body
+            .iter()
+            .flat_map(|body| &body.blocks)
+            .flat_map(|block| &block.operations)
+            .any(|operation| matches!(&operation.kind, OperationKind::WorkgroupBarrier(_)))
+    }
+
+    fn emit_workgroup_memory_declarations(&self, output: &mut String) -> bool {
+        let mut emitted = false;
+        let body = self.function.body.as_ref().expect("definition required");
+        for operation in body.blocks.iter().flat_map(|block| &block.operations) {
+            let OperationKind::WorkgroupMemory(memory) = &operation.kind else {
+                continue;
+            };
+            emitted = true;
+            let result = operation.results.first().expect("verified LDS result");
+            let symbol = lds_symbol(self.kernel, result.id);
+            let element = llvm_type(&memory.element);
+            match memory.extent {
+                WorkgroupMemoryExtent::Static(elements) => writeln!(
+                    output,
+                    "{symbol} = internal addrspace(3) global [{elements} x {element}] undef, align {}",
+                    memory.alignment
+                )
+                .unwrap(),
+                WorkgroupMemoryExtent::Dynamic => writeln!(
+                    output,
+                    "{symbol} = external addrspace(3) global [0 x {element}], align {}",
+                    memory.alignment
+                )
+                .unwrap(),
+            }
+        }
+        emitted
     }
 
     fn emit_block_parameters(&self, output: &mut String, block: &BasicBlock) {
@@ -1040,11 +1161,13 @@ impl<'a> FunctionLowerer<'a> {
                 let Type::Pointer(pointer) = base_ty else {
                     unreachable!()
                 };
+                let address_space = llvm_address_space(pointer.address_space);
                 writeln!(
                     output,
-                    "  {} = getelementptr {}, ptr addrspace(1) {}, {} {}",
+                    "  {} = getelementptr {}, ptr addrspace({}) {}, {} {}",
                     result_name.expect("validated result"),
                     llvm_type(&pointer.pointee),
+                    address_space,
                     base_name,
                     llvm_type(offset_ty),
                     offset_name
@@ -1056,13 +1179,15 @@ impl<'a> FunctionLowerer<'a> {
                 let Type::Pointer(pointer_ty) = pointer_ty else {
                     unreachable!()
                 };
+                let address_space = llvm_address_space(pointer_ty.address_space);
                 let volatile = if access.volatile { " volatile" } else { "" };
                 writeln!(
                     output,
-                    "  {} = load{} {}, ptr addrspace(1) {}, align {}",
+                    "  {} = load{} {}, ptr addrspace({}) {}, align {}",
                     result_name.expect("validated result"),
                     volatile,
                     llvm_type(&pointer_ty.pointee),
+                    address_space,
                     pointer_name,
                     access.alignment
                 )
@@ -1078,15 +1203,73 @@ impl<'a> FunctionLowerer<'a> {
                 let Type::Pointer(pointer_ty) = pointer_ty else {
                     unreachable!()
                 };
+                let address_space = llvm_address_space(pointer_ty.address_space);
                 let volatile = if access.volatile { " volatile" } else { "" };
                 writeln!(
                     output,
-                    "  store{} {} {}, ptr addrspace(1) {}, align {}",
+                    "  store{} {} {}, ptr addrspace({}) {}, align {}",
                     volatile,
                     llvm_type(&pointer_ty.pointee),
                     value_name,
+                    address_space,
                     pointer_name,
                     access.alignment
+                )
+                .unwrap();
+            }
+            OperationKind::Fence(fence) => {
+                emit_fence(output, fence.memory_scope, fence.semantics.ordering);
+            }
+            OperationKind::WorkgroupBarrier(barrier) => {
+                match barrier.semantics.ordering {
+                    MemoryOrdering::Acquire => {}
+                    MemoryOrdering::Release | MemoryOrdering::AcquireRelease => {
+                        emit_fence(output, barrier.memory_scope, MemoryOrdering::Release);
+                    }
+                    MemoryOrdering::SequentiallyConsistent => {
+                        emit_fence(
+                            output,
+                            barrier.memory_scope,
+                            MemoryOrdering::SequentiallyConsistent,
+                        );
+                    }
+                    MemoryOrdering::Relaxed => {
+                        unreachable!("kernel IR verification rejected a relaxed barrier")
+                    }
+                }
+                writeln!(
+                    output,
+                    "  call void @{}()",
+                    AmdgcnIntrinsic::SBarrier.llvm_name()
+                )
+                .unwrap();
+                match barrier.semantics.ordering {
+                    MemoryOrdering::Release => {}
+                    MemoryOrdering::Acquire | MemoryOrdering::AcquireRelease => {
+                        emit_fence(output, barrier.memory_scope, MemoryOrdering::Acquire);
+                    }
+                    MemoryOrdering::SequentiallyConsistent => {
+                        emit_fence(
+                            output,
+                            barrier.memory_scope,
+                            MemoryOrdering::SequentiallyConsistent,
+                        );
+                    }
+                    MemoryOrdering::Relaxed => unreachable!(),
+                }
+            }
+            OperationKind::WorkgroupMemory(memory) => {
+                let result = operation.results.first().expect("verified LDS result");
+                let result_name = result_name.expect("verified LDS result name");
+                let elements = match memory.extent {
+                    WorkgroupMemoryExtent::Static(elements) => elements,
+                    WorkgroupMemoryExtent::Dynamic => 0,
+                };
+                let element = llvm_type(&memory.element);
+                writeln!(
+                    output,
+                    "  {result_name} = getelementptr [{elements} x {element}], ptr addrspace(3) {}, i32 0, i32 0",
+                    lds_symbol(self.kernel, result.id)
                 )
                 .unwrap();
             }
@@ -1152,16 +1335,19 @@ fn supported_binary(op: BinaryOp, ty: &Type) -> bool {
             .is_some_and(|scalar| supported_integer(scalar) || scalar == ScalarType::F32)
 }
 
-fn validate_global_pointer(ty: &Type, location: &LoweringLocation) -> Result<(), LoweringErrors> {
+fn validate_pointer(ty: &Type, location: &LoweringLocation) -> Result<(), LoweringErrors> {
     let Type::Pointer(pointer) = ty else {
         unreachable!("verify_module checked GEP base")
     };
-    if pointer.address_space != KernelAddressSpace::Global {
+    if !matches!(
+        pointer.address_space,
+        KernelAddressSpace::Global | KernelAddressSpace::Workgroup
+    ) {
         return Err(LoweringErrors::one(
             location.clone(),
             LoweringDiagnosticCode::UnsupportedAddressSpace,
             format!(
-                "G1 supports only global pointers, found {:?}",
+                "G1 supports only global or workgroup pointers, found {:?}",
                 pointer.address_space
             ),
         ));
@@ -1170,7 +1356,7 @@ fn validate_global_pointer(ty: &Type, location: &LoweringLocation) -> Result<(),
         return Err(LoweringErrors::one(
             location.clone(),
             LoweringDiagnosticCode::UnsupportedType,
-            format!("unsupported global pointee type {:?}", pointer.pointee),
+            format!("unsupported memory pointee type {:?}", pointer.pointee),
         ));
     }
     Ok(())
@@ -1181,12 +1367,18 @@ fn validate_memory_access(
     access_space: KernelAddressSpace,
     location: &LoweringLocation,
 ) -> Result<(), LoweringErrors> {
-    validate_global_pointer(pointer, location)?;
-    if access_space != KernelAddressSpace::Global {
+    validate_pointer(pointer, location)?;
+    let Type::Pointer(pointer) = pointer else {
+        unreachable!("validate_pointer required a pointer")
+    };
+    if access_space != pointer.address_space {
         return Err(LoweringErrors::one(
             location.clone(),
             LoweringDiagnosticCode::UnsupportedAddressSpace,
-            format!("G1 cannot lower {access_space:?} memory access"),
+            format!(
+                "memory access names {access_space:?} but pointer uses {:?}",
+                pointer.address_space
+            ),
         ));
     }
     Ok(())
@@ -1252,6 +1444,41 @@ fn value_name(value: ValueId) -> String {
     format!("%v{}", value.0)
 }
 
+fn lds_symbol(kernel: &Kernel, value: ValueId) -> String {
+    format!("@__fe2o3_lds_{}_{}", kernel.id.as_str(), value.0)
+}
+
+fn emit_fence(
+    output: &mut String,
+    scope: fe2o3_kernel_ir::SynchronizationScope,
+    ordering: MemoryOrdering,
+) {
+    let ordering = match ordering {
+        MemoryOrdering::Acquire => "acquire",
+        MemoryOrdering::Release => "release",
+        MemoryOrdering::AcquireRelease => "acq_rel",
+        MemoryOrdering::SequentiallyConsistent => "seq_cst",
+        MemoryOrdering::Relaxed => unreachable!("verification rejected a relaxed fence"),
+    };
+    match scope {
+        fe2o3_kernel_ir::SynchronizationScope::Subgroup => {
+            writeln!(output, "  fence syncscope(\"wavefront\") {ordering}").unwrap();
+        }
+        fe2o3_kernel_ir::SynchronizationScope::Workgroup => {
+            writeln!(output, "  fence syncscope(\"workgroup\") {ordering}").unwrap();
+        }
+        fe2o3_kernel_ir::SynchronizationScope::Device => {
+            writeln!(output, "  fence syncscope(\"agent\") {ordering}").unwrap();
+        }
+        fe2o3_kernel_ir::SynchronizationScope::System => {
+            writeln!(output, "  fence {ordering}").unwrap();
+        }
+        fe2o3_kernel_ir::SynchronizationScope::Invocation => {
+            unreachable!("verification rejected invocation-scoped synchronization")
+        }
+    }
+}
+
 fn block_label(block: BlockId) -> String {
     format!("bb{}", block.0)
 }
@@ -1262,8 +1489,19 @@ fn llvm_type(ty: &Type) -> &'static str {
         Type::Pointer(pointer) if pointer.address_space == KernelAddressSpace::Global => {
             "ptr addrspace(1)"
         }
+        Type::Pointer(pointer) if pointer.address_space == KernelAddressSpace::Workgroup => {
+            "ptr addrspace(3)"
+        }
         Type::Pointer(_) => unreachable!("preflight rejected unsupported address space"),
         Type::Unit | Type::Slice(_) => unreachable!("type is not a first-class G1 LLVM value"),
+    }
+}
+
+fn llvm_address_space(address_space: KernelAddressSpace) -> u32 {
+    match address_space {
+        KernelAddressSpace::Global => 1,
+        KernelAddressSpace::Workgroup => 3,
+        _ => unreachable!("preflight rejected unsupported address space"),
     }
 }
 

@@ -4,9 +4,11 @@
 //! Frontends construct this IR, target-independent passes verify and transform
 //! it, and target backends lower it to their native representation.
 //!
-//! [`encode_module_v1`] and [`decode_module_v1`] provide a bounded canonical
-//! wire representation. Decoding establishes wire well-formedness only;
-//! consumers must call [`verify_module`] before relying on semantic invariants.
+//! [`encode_module_v1`] and [`decode_module_v1`] preserve the original bounded
+//! canonical wire representation. [`encode_module_v2`] adds synchronization,
+//! LDS, and exact wave-width records; [`decode_module_v2`] accepts canonical V1
+//! and V2 bytes. Decoding establishes wire well-formedness only; consumers must
+//! call [`verify_module`] before relying on semantic invariants.
 
 mod effect_extraction;
 mod formal_memory_obligations;

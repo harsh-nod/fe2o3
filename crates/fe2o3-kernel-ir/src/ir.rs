@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use crate::{
@@ -144,12 +144,53 @@ impl Function {
 
     /// Capabilities implied by operations in this function body.
     pub fn derived_capabilities(&self) -> BTreeSet<TargetCapability> {
-        self.body
+        let Some(body) = &self.body else {
+            return BTreeSet::new();
+        };
+        let mut value_types = body
+            .parameters
             .iter()
-            .flat_map(|body| &body.blocks)
-            .flat_map(|block| &block.operations)
-            .flat_map(Operation::required_capabilities)
-            .collect()
+            .copied()
+            .zip(self.signature.parameters.iter().cloned())
+            .collect::<BTreeMap<_, _>>();
+        for block in &body.blocks {
+            value_types.extend(
+                block
+                    .parameters
+                    .iter()
+                    .map(|parameter| (parameter.id, parameter.ty.clone())),
+            );
+            value_types.extend(
+                block
+                    .operations
+                    .iter()
+                    .flat_map(|operation| &operation.results)
+                    .map(|result| (result.id, result.ty.clone())),
+            );
+        }
+
+        let mut capabilities = BTreeSet::new();
+        for operation in body.blocks.iter().flat_map(|block| &block.operations) {
+            capabilities.extend(operation.required_capabilities());
+            let OperationKind::Atomic(atomic) = &operation.kind else {
+                continue;
+            };
+            let Some(Type::Pointer(pointer)) = value_types.get(&atomic.pointer) else {
+                continue;
+            };
+            let Some(width_bits) = pointer.pointee.as_scalar().and_then(ScalarType::bit_width)
+            else {
+                continue;
+            };
+            if matches!(width_bits, 8 | 16 | 32 | 64) {
+                capabilities.insert(TargetCapability::Atomic {
+                    width_bits,
+                    address_space: atomic.access.address_space,
+                    max_scope: atomic.scope,
+                });
+            }
+        }
+        capabilities
     }
 }
 
@@ -256,6 +297,21 @@ impl Operation {
                 memory_scope: barrier.memory_scope,
                 address_spaces: barrier.semantics.address_spaces.clone(),
             }],
+            OperationKind::Fence(fence) => vec![MemoryEffect::Fence {
+                memory_scope: fence.memory_scope,
+                ordering: fence.semantics.ordering,
+                address_spaces: fence.semantics.address_spaces.clone(),
+            }],
+            OperationKind::WorkgroupBarrier(barrier) => {
+                vec![MemoryEffect::Synchronize {
+                    execution_scope: SynchronizationScope::Workgroup,
+                    memory_scope: barrier.memory_scope,
+                    address_spaces: barrier.semantics.address_spaces.clone(),
+                }]
+            }
+            OperationKind::WorkgroupMemory(_) => {
+                vec![MemoryEffect::Allocate(AddressSpace::Workgroup)]
+            }
             _ => Vec::new(),
         }
     }
@@ -267,6 +323,37 @@ impl Operation {
     pub fn required_capabilities(&self) -> BTreeSet<TargetCapability> {
         match &self.kind {
             OperationKind::Intrinsic(intrinsic) => intrinsic.metadata().required_capabilities,
+            OperationKind::Alloca {
+                count,
+                address_space: AddressSpace::Workgroup,
+                ..
+            } => {
+                let mut capabilities = BTreeSet::from([TargetCapability::WorkgroupMemory]);
+                if count.is_some() {
+                    capabilities.insert(TargetCapability::DynamicWorkgroupMemory);
+                }
+                capabilities
+            }
+            OperationKind::Barrier(barrier) => match barrier.execution_scope {
+                SynchronizationScope::Subgroup => BTreeSet::from([TargetCapability::Subgroups]),
+                SynchronizationScope::Workgroup => {
+                    BTreeSet::from([TargetCapability::WorkgroupBarrier])
+                }
+                _ => BTreeSet::new(),
+            },
+            OperationKind::Fence(fence) if fence.memory_scope == SynchronizationScope::Subgroup => {
+                BTreeSet::from([TargetCapability::Subgroups])
+            }
+            OperationKind::WorkgroupBarrier(_) => {
+                BTreeSet::from([TargetCapability::WorkgroupBarrier])
+            }
+            OperationKind::WorkgroupMemory(memory) => {
+                let mut capabilities = BTreeSet::from([TargetCapability::WorkgroupMemory]);
+                if memory.extent == WorkgroupMemoryExtent::Dynamic {
+                    capabilities.insert(TargetCapability::DynamicWorkgroupMemory);
+                }
+                capabilities
+            }
             _ => BTreeSet::new(),
         }
     }
@@ -331,12 +418,23 @@ pub enum OperationKind {
     },
     Barrier(Barrier),
     Atomic(Atomic),
+    /// A memory-ordering fence without execution synchronization.
+    Fence(Fence),
+    /// An execution and memory barrier reached uniformly by a workgroup.
+    WorkgroupBarrier(WorkgroupBarrier),
+    /// A statically or dynamically sized workgroup-memory declaration.
+    WorkgroupMemory(WorkgroupMemory),
 }
 
 impl OperationKind {
     pub fn operands(&self) -> Vec<ValueId> {
         match self {
-            Self::Constant(_) | Self::Intrinsic(_) | Self::Barrier(_) => Vec::new(),
+            Self::Constant(_)
+            | Self::Intrinsic(_)
+            | Self::Barrier(_)
+            | Self::Fence(_)
+            | Self::WorkgroupBarrier(_)
+            | Self::WorkgroupMemory(_) => Vec::new(),
             Self::Unary { operand, .. } => vec![*operand],
             Self::Binary { lhs, rhs, .. } | Self::Compare { lhs, rhs, .. } => vec![*lhs, *rhs],
             Self::Cast { value, .. } => vec![*value],
@@ -535,6 +633,58 @@ pub struct Barrier {
     pub semantics: BarrierSemantics,
 }
 
+/// Frontend evidence that a convergent operation is reached uniformly.
+///
+/// The core verifier checks that the claimed scope matches the operation.
+/// Establishing that the claim is true is the responsibility of uniformity
+/// analysis or a proof artifact.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum Convergence {
+    Uniform { scope: SynchronizationScope },
+}
+
+impl Convergence {
+    pub const fn uniform(scope: SynchronizationScope) -> Self {
+        Self::Uniform { scope }
+    }
+
+    pub const fn scope(self) -> SynchronizationScope {
+        match self {
+            Self::Uniform { scope } => scope,
+        }
+    }
+}
+
+/// A scoped memory fence. Unlike a barrier, this does not synchronize which
+/// invocations execute the operation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Fence {
+    pub memory_scope: SynchronizationScope,
+    pub semantics: BarrierSemantics,
+}
+
+/// A workgroup execution barrier carrying an explicit convergence claim.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WorkgroupBarrier {
+    pub memory_scope: SynchronizationScope,
+    pub semantics: BarrierSemantics,
+    pub convergence: Convergence,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum WorkgroupMemoryExtent {
+    Static(u32),
+    Dynamic,
+}
+
+/// One explicit LDS allocation visible to all invocations in a workgroup.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WorkgroupMemory {
+    pub element: Type,
+    pub extent: WorkgroupMemoryExtent,
+    pub alignment: u32,
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum AtomicKind {
     Load,
@@ -673,6 +823,11 @@ pub enum MemoryEffect {
     Synchronize {
         execution_scope: SynchronizationScope,
         memory_scope: SynchronizationScope,
+        address_spaces: BTreeSet<AddressSpace>,
+    },
+    Fence {
+        memory_scope: SynchronizationScope,
+        ordering: MemoryOrdering,
         address_spaces: BTreeSet<AddressSpace>,
     },
 }

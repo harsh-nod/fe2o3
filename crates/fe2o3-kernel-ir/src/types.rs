@@ -246,6 +246,26 @@ pub enum MemoryOrdering {
     SequentiallyConsistent,
 }
 
+/// A physical AMD-style wave width required by a kernel or helper.
+///
+/// This is deliberately narrower than [`TargetCapability::SubgroupSize`]:
+/// target-neutral subgroup algorithms may use the latter, while lowering
+/// that depends on an exact wave32 or wave64 execution mode uses this type.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum WaveWidth {
+    Wave32,
+    Wave64,
+}
+
+impl WaveWidth {
+    pub const fn lanes(self) -> u32 {
+        match self {
+            Self::Wave32 => 32,
+            Self::Wave64 => 64,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct BarrierSemantics {
     pub ordering: MemoryOrdering,
@@ -286,4 +306,6 @@ pub enum TargetCapability {
         namespace: String,
         name: String,
     },
+    /// Requires the target to execute this code with an exact wave width.
+    WaveWidth(WaveWidth),
 }

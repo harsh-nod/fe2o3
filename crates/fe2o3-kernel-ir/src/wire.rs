@@ -4,17 +4,20 @@ use std::str;
 
 use crate::{
     AccessMode, AddressSpace, Atomic, AtomicKind, Axis, Barrier, BarrierSemantics, BasicBlock,
-    BinaryOp, BlockId, CastKind, ComparePredicate, Constant, Function, FunctionBody, FunctionId,
-    IndexKind, IntrinsicKind, IntrinsicOperation, Kernel, KernelId, LaunchDomain, LaunchExtent,
-    MemoryAccess, MemoryOrdering, Module, ModuleId, Operation, OperationKind, PointerType,
-    ScalarType, Signature, SliceType, SwitchCase, SynchronizationScope, TargetCapability,
-    Terminator, Type, UnaryOp, ValueDef, ValueId, WorkgroupSize,
+    BinaryOp, BlockId, CastKind, ComparePredicate, Constant, Convergence, Fence, Function,
+    FunctionBody, FunctionId, IndexKind, IntrinsicKind, IntrinsicOperation, Kernel, KernelId,
+    LaunchDomain, LaunchExtent, MemoryAccess, MemoryOrdering, Module, ModuleId, Operation,
+    OperationKind, PointerType, ScalarType, Signature, SliceType, SwitchCase, SynchronizationScope,
+    TargetCapability, Terminator, Type, UnaryOp, ValueDef, ValueId, WaveWidth, WorkgroupBarrier,
+    WorkgroupMemory, WorkgroupMemoryExtent, WorkgroupSize,
 };
 
-/// Fixed magic at the start of every canonical kernel IR V1 module.
+/// Fixed magic at the start of every canonical kernel IR module.
 pub const KERNEL_IR_MAGIC_V1: [u8; 8] = *b"FE2O3KI\0";
-/// The only kernel IR wire version implemented by this crate.
+/// The original frozen kernel IR wire version.
 pub const KERNEL_IR_VERSION_V1: u16 = 1;
+/// Additive synchronization, LDS, and wave-capability wire version.
+pub const KERNEL_IR_VERSION_V2: u16 = 2;
 /// Maximum size of one encoded kernel IR module.
 pub const MAX_MODULE_BYTES_V1: usize = 16 * 1024 * 1024;
 /// Maximum UTF-8 byte length of any identifier or extension component.
@@ -64,6 +67,10 @@ pub enum KernelIrEncodeError {
     Overflow {
         field: &'static str,
     },
+    UnsupportedInVersion {
+        version: u16,
+        feature: &'static str,
+    },
 }
 
 impl fmt::Display for KernelIrEncodeError {
@@ -80,13 +87,19 @@ impl fmt::Display for KernelIrEncodeError {
                 write!(formatter, "kernel IR type nesting exceeds {max}")
             }
             Self::Overflow { field } => write!(formatter, "{field} does not fit its wire field"),
+            Self::UnsupportedInVersion { version, feature } => {
+                write!(
+                    formatter,
+                    "{feature} is not representable in kernel IR V{version}"
+                )
+            }
         }
     }
 }
 
 impl std::error::Error for KernelIrEncodeError {}
 
-/// A bounded kernel IR V1 decoding failure.
+/// A bounded kernel IR decoding failure.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum KernelIrDecodeError {
     TooLarge {
@@ -170,9 +183,18 @@ impl From<KernelIrEncodeError> for KernelIrDecodeError {
 /// Sets are emitted in their `BTreeSet` order. This function enforces wire
 /// resource bounds but does not call [`crate::verify_module`].
 pub fn encode_module_v1(module: &Module) -> Result<Vec<u8>, KernelIrEncodeError> {
-    let mut writer = Writer::new();
+    encode_module(module, KERNEL_IR_VERSION_V1)
+}
+
+/// Encodes a module in the bounded canonical kernel IR V2 wire format.
+pub fn encode_module_v2(module: &Module) -> Result<Vec<u8>, KernelIrEncodeError> {
+    encode_module(module, KERNEL_IR_VERSION_V2)
+}
+
+fn encode_module(module: &Module, version: u16) -> Result<Vec<u8>, KernelIrEncodeError> {
+    let mut writer = Writer::new(version);
     writer.bytes(&KERNEL_IR_MAGIC_V1)?;
-    writer.u16(KERNEL_IR_VERSION_V1)?;
+    writer.u16(version)?;
     writer.u16(0)?;
     writer.u32(0)?;
     writer.u32(0)?;
@@ -203,6 +225,22 @@ pub fn encode_module_v1(module: &Module) -> Result<Vec<u8>, KernelIrEncodeError>
 /// Decoding only establishes wire well-formedness; callers must separately
 /// invoke [`crate::verify_module`] before trusting semantic IR invariants.
 pub fn decode_module_v1(bytes: &[u8]) -> Result<Module, KernelIrDecodeError> {
+    decode_module(bytes, KERNEL_IR_VERSION_V1, false)
+}
+
+/// Decodes canonical V1 or V2 bytes using the latest bounded reader.
+///
+/// Accepting V1 here is intentional: consumers can migrate to the V2 reader
+/// before producers begin emitting the additive V2 operation set.
+pub fn decode_module_v2(bytes: &[u8]) -> Result<Module, KernelIrDecodeError> {
+    decode_module(bytes, KERNEL_IR_VERSION_V2, true)
+}
+
+fn decode_module(
+    bytes: &[u8],
+    maximum_version: u16,
+    accept_older: bool,
+) -> Result<Module, KernelIrDecodeError> {
     if bytes.len() > MAX_MODULE_BYTES_V1 {
         return Err(KernelIrDecodeError::TooLarge {
             max: MAX_MODULE_BYTES_V1,
@@ -213,9 +251,10 @@ pub fn decode_module_v1(bytes: &[u8]) -> Result<Module, KernelIrDecodeError> {
         return Err(KernelIrDecodeError::InvalidMagic);
     }
     let version = reader.u16()?;
-    if version != KERNEL_IR_VERSION_V1 {
+    if version > maximum_version || (!accept_older && version != maximum_version) || version == 0 {
         return Err(KernelIrDecodeError::UnknownVersion(version));
     }
+    reader.version = version;
     let flags = reader.u16()?;
     if flags != 0 {
         return Err(KernelIrDecodeError::UnsupportedFlags(flags));
@@ -255,7 +294,7 @@ pub fn decode_module_v1(bytes: &[u8]) -> Result<Module, KernelIrDecodeError> {
         kernels,
         required_capabilities,
     };
-    if encode_module_v1(&module)? != bytes {
+    if encode_module(&module, version)? != bytes {
         return Err(KernelIrDecodeError::NonCanonical);
     }
     Ok(module)
@@ -568,6 +607,21 @@ fn encode_operation_kind(
             writer.u8(16)?;
             encode_atomic(writer, atomic)?;
         }
+        OperationKind::Fence(fence) => {
+            require_v2(writer, "memory fence")?;
+            writer.u8(17)?;
+            encode_fence(writer, fence)?;
+        }
+        OperationKind::WorkgroupBarrier(barrier) => {
+            require_v2(writer, "convergent workgroup barrier")?;
+            writer.u8(18)?;
+            encode_workgroup_barrier(writer, barrier)?;
+        }
+        OperationKind::WorkgroupMemory(memory) => {
+            require_v2(writer, "explicit workgroup memory")?;
+            writer.u8(19)?;
+            encode_workgroup_memory(writer, memory)?;
+        }
     }
     Ok(())
 }
@@ -631,6 +685,13 @@ fn decode_operation_kind(reader: &mut Reader<'_>) -> Result<OperationKind, Kerne
         },
         15 => OperationKind::Barrier(decode_barrier(reader)?),
         16 => OperationKind::Atomic(decode_atomic(reader)?),
+        17 if reader.version >= KERNEL_IR_VERSION_V2 => OperationKind::Fence(decode_fence(reader)?),
+        18 if reader.version >= KERNEL_IR_VERSION_V2 => {
+            OperationKind::WorkgroupBarrier(decode_workgroup_barrier(reader)?)
+        }
+        19 if reader.version >= KERNEL_IR_VERSION_V2 => {
+            OperationKind::WorkgroupMemory(decode_workgroup_memory(reader)?)
+        }
         tag => {
             return Err(KernelIrDecodeError::UnknownTag {
                 kind: "operation",
@@ -914,6 +975,112 @@ fn decode_barrier(reader: &mut Reader<'_>) -> Result<Barrier, KernelIrDecodeErro
     })
 }
 
+fn encode_fence(writer: &mut Writer, fence: &Fence) -> Result<(), KernelIrEncodeError> {
+    writer.u8(scope_tag(fence.memory_scope))?;
+    encode_barrier_semantics(writer, &fence.semantics)
+}
+
+fn decode_fence(reader: &mut Reader<'_>) -> Result<Fence, KernelIrDecodeError> {
+    Ok(Fence {
+        memory_scope: decode_scope(reader.u8()?)?,
+        semantics: decode_barrier_semantics(reader)?,
+    })
+}
+
+fn encode_workgroup_barrier(
+    writer: &mut Writer,
+    barrier: &WorkgroupBarrier,
+) -> Result<(), KernelIrEncodeError> {
+    writer.u8(scope_tag(barrier.memory_scope))?;
+    encode_barrier_semantics(writer, &barrier.semantics)?;
+    encode_convergence(writer, barrier.convergence)
+}
+
+fn decode_workgroup_barrier(
+    reader: &mut Reader<'_>,
+) -> Result<WorkgroupBarrier, KernelIrDecodeError> {
+    Ok(WorkgroupBarrier {
+        memory_scope: decode_scope(reader.u8()?)?,
+        semantics: decode_barrier_semantics(reader)?,
+        convergence: decode_convergence(reader)?,
+    })
+}
+
+fn encode_convergence(
+    writer: &mut Writer,
+    convergence: Convergence,
+) -> Result<(), KernelIrEncodeError> {
+    match convergence {
+        Convergence::Uniform { scope } => {
+            writer.u8(1)?;
+            writer.u8(scope_tag(scope))
+        }
+    }
+}
+
+fn decode_convergence(reader: &mut Reader<'_>) -> Result<Convergence, KernelIrDecodeError> {
+    match reader.u8()? {
+        1 => Ok(Convergence::uniform(decode_scope(reader.u8()?)?)),
+        tag => Err(KernelIrDecodeError::UnknownTag {
+            kind: "convergence",
+            tag,
+        }),
+    }
+}
+
+fn encode_workgroup_memory(
+    writer: &mut Writer,
+    memory: &WorkgroupMemory,
+) -> Result<(), KernelIrEncodeError> {
+    encode_type(writer, &memory.element, 0)?;
+    match memory.extent {
+        WorkgroupMemoryExtent::Static(elements) => {
+            writer.u8(1)?;
+            writer.u32(elements)?;
+        }
+        WorkgroupMemoryExtent::Dynamic => writer.u8(2)?,
+    }
+    writer.u32(memory.alignment)
+}
+
+fn decode_workgroup_memory(
+    reader: &mut Reader<'_>,
+) -> Result<WorkgroupMemory, KernelIrDecodeError> {
+    let element = decode_type(reader, 0)?;
+    let extent = match reader.u8()? {
+        1 => WorkgroupMemoryExtent::Static(reader.u32()?),
+        2 => WorkgroupMemoryExtent::Dynamic,
+        tag => {
+            return Err(KernelIrDecodeError::UnknownTag {
+                kind: "workgroup memory extent",
+                tag,
+            });
+        }
+    };
+    Ok(WorkgroupMemory {
+        element,
+        extent,
+        alignment: reader.u32()?,
+    })
+}
+
+fn encode_barrier_semantics(
+    writer: &mut Writer,
+    semantics: &BarrierSemantics,
+) -> Result<(), KernelIrEncodeError> {
+    writer.u8(ordering_tag(semantics.ordering))?;
+    encode_address_spaces(writer, &semantics.address_spaces)
+}
+
+fn decode_barrier_semantics(
+    reader: &mut Reader<'_>,
+) -> Result<BarrierSemantics, KernelIrDecodeError> {
+    Ok(BarrierSemantics {
+        ordering: decode_ordering(reader.u8()?)?,
+        address_spaces: decode_address_spaces(reader)?,
+    })
+}
+
 fn encode_atomic(writer: &mut Writer, atomic: &Atomic) -> Result<(), KernelIrEncodeError> {
     writer.u8(atomic_kind_tag(atomic.kind))?;
     writer.u32(atomic.pointer.0)?;
@@ -1188,6 +1355,11 @@ fn encode_capabilities(
                 writer.text("capability extension namespace", namespace)?;
                 writer.text("capability extension name", name)?;
             }
+            TargetCapability::WaveWidth(width) => {
+                require_v2(writer, "exact wave-width capability")?;
+                writer.u8(12)?;
+                writer.u8(wave_width_tag(*width))?;
+            }
         }
     }
     Ok(())
@@ -1219,6 +1391,9 @@ fn decode_capabilities(
                 namespace: reader.text("capability extension namespace")?,
                 name: reader.text("capability extension name")?,
             },
+            12 if reader.version >= KERNEL_IR_VERSION_V2 => {
+                TargetCapability::WaveWidth(decode_wave_width(reader.u8()?)?)
+            }
             tag => {
                 return Err(KernelIrDecodeError::UnknownTag {
                     kind: "target capability",
@@ -1328,6 +1503,10 @@ enum_codec!(ordering_tag, decode_ordering, MemoryOrdering, "memory ordering", {
     MemoryOrdering::AcquireRelease => 4,
     MemoryOrdering::SequentiallyConsistent => 5,
 });
+enum_codec!(wave_width_tag, decode_wave_width, WaveWidth, "wave width", {
+    WaveWidth::Wave32 => 1,
+    WaveWidth::Wave64 => 2,
+});
 enum_codec!(index_kind_tag, decode_index_kind, IndexKind, "index kind", {
     IndexKind::Global => 1,
     IndexKind::Workgroup => 2,
@@ -1383,13 +1562,28 @@ enum_codec!(atomic_kind_tag, decode_atomic_kind, AtomicKind, "atomic kind", {
     AtomicKind::BitXor => 11,
 });
 
+fn require_v2(writer: &Writer, feature: &'static str) -> Result<(), KernelIrEncodeError> {
+    if writer.version >= KERNEL_IR_VERSION_V2 {
+        Ok(())
+    } else {
+        Err(KernelIrEncodeError::UnsupportedInVersion {
+            version: writer.version,
+            feature,
+        })
+    }
+}
+
 struct Writer {
     bytes: Vec<u8>,
+    version: u16,
 }
 
 impl Writer {
-    fn new() -> Self {
-        Self { bytes: Vec::new() }
+    fn new(version: u16) -> Self {
+        Self {
+            bytes: Vec::new(),
+            version,
+        }
     }
 
     fn finish(self) -> Vec<u8> {
@@ -1457,11 +1651,16 @@ fn check_limit(field: &'static str, actual: usize, max: usize) -> Result<(), Ker
 struct Reader<'a> {
     bytes: &'a [u8],
     offset: usize,
+    version: u16,
 }
 
 impl<'a> Reader<'a> {
     fn new(bytes: &'a [u8]) -> Self {
-        Self { bytes, offset: 0 }
+        Self {
+            bytes,
+            offset: 0,
+            version: 0,
+        }
     }
 
     fn take(&mut self, length: usize) -> Result<&'a [u8], KernelIrDecodeError> {

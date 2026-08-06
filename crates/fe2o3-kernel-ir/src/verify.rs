@@ -4,9 +4,10 @@ use std::fmt;
 
 use crate::{
     AccessMode, AddressSpace, Atomic, AtomicKind, Barrier, BasicBlock, BinaryOp, BlockId,
-    ComparePredicate, Function, FunctionId, Kernel, KernelId, LaunchExtent, MemoryOrdering, Module,
-    ModuleId, Operation, OperationKind, ScalarType, SynchronizationScope, TargetCapability,
-    Terminator, Type, UnaryOp, ValueId, pointer_for,
+    ComparePredicate, Fence, Function, FunctionId, Kernel, KernelId, LaunchExtent, MemoryOrdering,
+    Module, ModuleId, Operation, OperationKind, ScalarType, SynchronizationScope, TargetCapability,
+    Terminator, Type, UnaryOp, ValueId, WorkgroupBarrier, WorkgroupMemory, WorkgroupMemoryExtent,
+    pointer_for,
 };
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -40,6 +41,9 @@ pub enum DiagnosticCode {
     InvalidAlignment,
     InvalidBarrier,
     InvalidAtomic,
+    InvalidFence,
+    InvalidConvergence,
+    InvalidWorkgroupMemory,
     InvalidTerminator,
 }
 
@@ -213,6 +217,10 @@ impl<'module> ModuleVerifier<'module> {
                 DiagnosticCode::InvalidIdentity,
                 "module identity must not be empty",
             );
+        }
+
+        if let Some(supported) = self.supported_capabilities.clone() {
+            self.verify_capabilities(&supported, DiagnosticLocation::module(self.module));
         }
 
         self.verify_capabilities(
@@ -405,6 +413,35 @@ impl<'module> ModuleVerifier<'module> {
         capabilities: &BTreeSet<TargetCapability>,
         location: DiagnosticLocation,
     ) {
+        let wave_widths = capabilities
+            .iter()
+            .filter_map(|capability| match capability {
+                TargetCapability::WaveWidth(width) => Some(*width),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        if wave_widths.len() > 1 {
+            self.emit(
+                location.clone(),
+                DiagnosticCode::InvalidCapability,
+                format!("conflicting exact wave-width requirements: {wave_widths:?}"),
+            );
+        }
+        if let Some(wave_width) = wave_widths.first()
+            && capabilities.iter().any(|capability| {
+                matches!(capability, TargetCapability::SubgroupSize(size) if *size != wave_width.lanes())
+            })
+        {
+            self.emit(
+                location.clone(),
+                DiagnosticCode::InvalidCapability,
+                format!(
+                    "wave width {} conflicts with the declared subgroup size",
+                    wave_width.lanes()
+                ),
+            );
+        }
+
         for capability in capabilities {
             let invalid = match capability {
                 TargetCapability::SubgroupSize(size) => *size == 0 || !size.is_power_of_two(),
@@ -413,13 +450,14 @@ impl<'module> ModuleVerifier<'module> {
                     address_space,
                     max_scope,
                 } => {
-                    *width_bits == 0
-                        || !width_bits.is_power_of_two()
+                    !matches!(*width_bits, 8 | 16 | 32 | 64)
                         || !matches!(
                             address_space,
                             AddressSpace::Workgroup | AddressSpace::Global | AddressSpace::Generic
                         )
                         || *max_scope == SynchronizationScope::Invocation
+                        || (*address_space == AddressSpace::Workgroup
+                            && max_scope.rank() > SynchronizationScope::Workgroup.rank())
                 }
                 TargetCapability::Extension { namespace, name } => {
                     namespace.is_empty() || name.is_empty()
@@ -435,7 +473,7 @@ impl<'module> ModuleVerifier<'module> {
             } else if self
                 .supported_capabilities
                 .as_ref()
-                .is_some_and(|supported| !supported.contains(capability))
+                .is_some_and(|supported| !capability_is_supported(capability, supported))
             {
                 self.emit(
                     location.clone(),
@@ -482,6 +520,7 @@ struct FunctionVerifier<'a, 'module> {
     definitions: BTreeMap<ValueId, DefInfo>,
     blocks: BTreeMap<BlockId, &'module BasicBlock>,
     dominators: BTreeMap<BlockId, BTreeSet<BlockId>>,
+    dynamic_workgroup_memory_declarations: usize,
 }
 
 impl<'a, 'module> FunctionVerifier<'a, 'module> {
@@ -501,6 +540,7 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
             definitions: BTreeMap::new(),
             blocks: BTreeMap::new(),
             dominators: BTreeMap::new(),
+            dynamic_workgroup_memory_declarations: 0,
         }
     }
 
@@ -637,7 +677,7 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
     fn verify_operation(&mut self, operation: &Operation, location: DiagnosticLocation) {
         if let Some(supported) = self.supported_capabilities {
             for capability in operation.required_capabilities() {
-                if !supported.contains(&capability) {
+                if !capability_is_supported(&capability, supported) {
                     self.emit(
                         location.clone(),
                         DiagnosticCode::UnsupportedCapability,
@@ -837,6 +877,17 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
                 self.verify_barrier(barrier, location);
             }
             OperationKind::Atomic(atomic) => self.verify_atomic(operation, atomic, location),
+            OperationKind::Fence(fence) => {
+                self.expect_results(operation, &[], location.clone());
+                self.verify_fence(fence, location);
+            }
+            OperationKind::WorkgroupBarrier(barrier) => {
+                self.expect_results(operation, &[], location.clone());
+                self.verify_workgroup_barrier(barrier, location);
+            }
+            OperationKind::WorkgroupMemory(memory) => {
+                self.verify_workgroup_memory(operation, memory, location);
+            }
         }
     }
 
@@ -958,20 +1009,103 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
             SynchronizationScope::Subgroup | SynchronizationScope::Workgroup
         );
         let invalid_memory_scope = barrier.memory_scope.rank() < barrier.execution_scope.rank();
-        let invalid_ordering = barrier.semantics.ordering == MemoryOrdering::Relaxed;
-        let invalid_spaces = barrier.semantics.address_spaces.is_empty()
-            || barrier
-                .semantics
-                .address_spaces
-                .iter()
-                .any(|space| matches!(space, AddressSpace::Private | AddressSpace::Constant));
-        if invalid_execution_scope || invalid_memory_scope || invalid_ordering || invalid_spaces {
+        let invalid_semantics = !valid_synchronization_semantics(
+            barrier.memory_scope,
+            barrier.semantics.ordering,
+            &barrier.semantics.address_spaces,
+        );
+        if invalid_execution_scope || invalid_memory_scope || invalid_semantics {
             self.emit(
                 location,
                 DiagnosticCode::InvalidBarrier,
-                "barrier requires subgroup/workgroup execution, a non-narrower memory scope, non-relaxed ordering, and shared writable memory",
+                "barrier requires subgroup/workgroup execution, a non-narrower legal memory scope, non-relaxed ordering, and shared writable memory",
             );
         }
+    }
+
+    fn verify_fence(&mut self, fence: &Fence, location: DiagnosticLocation) {
+        if fence.memory_scope == SynchronizationScope::Invocation
+            || !valid_synchronization_semantics(
+                fence.memory_scope,
+                fence.semantics.ordering,
+                &fence.semantics.address_spaces,
+            )
+        {
+            self.emit(
+                location,
+                DiagnosticCode::InvalidFence,
+                "fence requires a scope wider than invocation, non-relaxed ordering, and memory visible at that scope",
+            );
+        }
+    }
+
+    fn verify_workgroup_barrier(
+        &mut self,
+        barrier: &WorkgroupBarrier,
+        location: DiagnosticLocation,
+    ) {
+        if barrier.convergence.scope() != SynchronizationScope::Workgroup {
+            self.emit(
+                location.clone(),
+                DiagnosticCode::InvalidConvergence,
+                "workgroup barrier requires a uniform workgroup convergence claim",
+            );
+        }
+        if barrier.memory_scope.rank() < SynchronizationScope::Workgroup.rank()
+            || !valid_synchronization_semantics(
+                barrier.memory_scope,
+                barrier.semantics.ordering,
+                &barrier.semantics.address_spaces,
+            )
+        {
+            self.emit(
+                location,
+                DiagnosticCode::InvalidBarrier,
+                "workgroup barrier requires workgroup-or-wider legal memory semantics",
+            );
+        }
+    }
+
+    fn verify_workgroup_memory(
+        &mut self,
+        operation: &Operation,
+        memory: &WorkgroupMemory,
+        location: DiagnosticLocation,
+    ) {
+        if !memory.element.is_storable() {
+            self.emit(
+                location.clone(),
+                DiagnosticCode::InvalidWorkgroupMemory,
+                "workgroup memory element type must be storable",
+            );
+        }
+        if matches!(memory.extent, WorkgroupMemoryExtent::Static(0)) {
+            self.emit(
+                location.clone(),
+                DiagnosticCode::InvalidWorkgroupMemory,
+                "static workgroup memory extent must be non-zero",
+            );
+        }
+        if memory.extent == WorkgroupMemoryExtent::Dynamic {
+            self.dynamic_workgroup_memory_declarations += 1;
+            if self.dynamic_workgroup_memory_declarations > 1 {
+                self.emit(
+                    location.clone(),
+                    DiagnosticCode::InvalidWorkgroupMemory,
+                    "a function may declare at most one dynamic workgroup-memory base",
+                );
+            }
+        }
+        self.verify_alignment(memory.alignment, location.clone());
+        self.expect_results(
+            operation,
+            &[pointer_for(
+                memory.element.clone(),
+                AddressSpace::Workgroup,
+                AccessMode::ReadWrite,
+            )],
+            location,
+        );
     }
 
     fn verify_atomic(
@@ -986,11 +1120,14 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
             atomic.access.address_space,
             AddressSpace::Workgroup | AddressSpace::Global | AddressSpace::Generic
         );
-        if !valid_space || atomic.scope == SynchronizationScope::Invocation {
+        if !valid_space
+            || atomic.scope == SynchronizationScope::Invocation
+            || !scope_can_observe_address_space(atomic.scope, atomic.access.address_space)
+        {
             self.emit(
                 location.clone(),
                 DiagnosticCode::InvalidAtomic,
-                "atomics require workgroup/global/generic memory and a scope wider than invocation",
+                "atomic scope cannot observe the selected address space",
             );
         }
 
@@ -1006,14 +1143,58 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
             return;
         };
 
-        if let Some(width) = scalar.bit_width()
-            && (atomic.access.alignment * 8) < u32::from(width)
-        {
+        let Some(width) = scalar.bit_width() else {
+            self.emit(
+                location.clone(),
+                DiagnosticCode::InvalidAtomic,
+                "atomic pointee must have a fixed physical width",
+            );
+            return;
+        };
+
+        if atomic.access.alignment < u32::from(width.div_ceil(8)) {
             self.emit(
                 location.clone(),
                 DiagnosticCode::InvalidAtomic,
                 "atomic alignment is smaller than the scalar width",
             );
+        }
+
+        let scalar_class_is_valid = scalar != ScalarType::Bool
+            && scalar != ScalarType::Index
+            && match atomic.kind {
+                AtomicKind::Min
+                | AtomicKind::Max
+                | AtomicKind::BitAnd
+                | AtomicKind::BitOr
+                | AtomicKind::BitXor => scalar.is_integer(),
+                _ => scalar.is_integer() || scalar.is_float(),
+            };
+        if !scalar_class_is_valid {
+            self.emit(
+                location.clone(),
+                DiagnosticCode::InvalidAtomic,
+                format!("{:?} does not support {scalar:?}", atomic.kind),
+            );
+        }
+
+        if valid_space
+            && atomic.scope != SynchronizationScope::Invocation
+            && scope_can_observe_address_space(atomic.scope, atomic.access.address_space)
+            && let Some(supported) = self.supported_capabilities
+        {
+            let required = TargetCapability::Atomic {
+                width_bits: width,
+                address_space: atomic.access.address_space,
+                max_scope: atomic.scope,
+            };
+            if !capability_is_supported(&required, supported) {
+                self.emit(
+                    location.clone(),
+                    DiagnosticCode::UnsupportedCapability,
+                    format!("target does not support required capability {required:?}"),
+                );
+            }
         }
 
         let expected_results: Vec<Type> = match atomic.kind {
@@ -1064,22 +1245,6 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
                 location.clone(),
                 DiagnosticCode::InvalidAtomic,
                 format!("malformed {:?} operands or orderings", atomic.kind),
-            );
-        }
-
-        if matches!(
-            atomic.kind,
-            AtomicKind::Min
-                | AtomicKind::Max
-                | AtomicKind::BitAnd
-                | AtomicKind::BitOr
-                | AtomicKind::BitXor
-        ) && !scalar.is_integer()
-        {
-            self.emit(
-                location.clone(),
-                DiagnosticCode::InvalidAtomic,
-                format!("{:?} requires an integer pointee", atomic.kind),
             );
         }
 
@@ -1389,5 +1554,56 @@ fn valid_failure_ordering(success: MemoryOrdering, failure: MemoryOrdering) -> b
                 | MemoryOrdering::Acquire
                 | MemoryOrdering::SequentiallyConsistent
         ),
+    }
+}
+
+fn valid_synchronization_semantics(
+    scope: SynchronizationScope,
+    ordering: MemoryOrdering,
+    address_spaces: &BTreeSet<AddressSpace>,
+) -> bool {
+    ordering != MemoryOrdering::Relaxed
+        && !address_spaces.is_empty()
+        && address_spaces
+            .iter()
+            .all(|address_space| scope_can_observe_address_space(scope, *address_space))
+}
+
+fn scope_can_observe_address_space(
+    scope: SynchronizationScope,
+    address_space: AddressSpace,
+) -> bool {
+    match address_space {
+        AddressSpace::Workgroup => matches!(
+            scope,
+            SynchronizationScope::Subgroup | SynchronizationScope::Workgroup
+        ),
+        AddressSpace::Global | AddressSpace::Generic => scope != SynchronizationScope::Invocation,
+        AddressSpace::Private | AddressSpace::Constant => false,
+    }
+}
+
+fn capability_is_supported(
+    required: &TargetCapability,
+    supported: &BTreeSet<TargetCapability>,
+) -> bool {
+    match required {
+        TargetCapability::Atomic {
+            width_bits,
+            address_space,
+            max_scope,
+        } => supported.iter().any(|capability| {
+            matches!(
+                capability,
+                TargetCapability::Atomic {
+                    width_bits: supported_width,
+                    address_space: supported_space,
+                    max_scope: supported_scope,
+                } if supported_width == width_bits
+                    && supported_space == address_space
+                    && supported_scope.rank() >= max_scope.rank()
+            )
+        }),
+        _ => supported.contains(required),
     }
 }

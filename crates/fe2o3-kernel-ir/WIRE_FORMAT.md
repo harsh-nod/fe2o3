@@ -1,7 +1,8 @@
-# Kernel IR Wire Format V1
+# Kernel IR Wire Formats V1 and V2
 
-This document freezes the canonical binary representation produced by
-`encode_module_v1` and accepted by `decode_module_v1`.
+This document freezes the canonical binary representations produced by
+`encode_module_v1` and `encode_module_v2`. `decode_module_v1` accepts only V1;
+`decode_module_v2` accepts canonical V1 and V2 bytes for migration safety.
 
 ## Trust Boundary
 
@@ -41,7 +42,7 @@ The 20-byte header is:
 
 ```text
 byte[8] magic = "FE2O3KI\0"
-u16     version = 1
+u16     version = 1 or 2
 u16     flags = 0
 u32     total_length_including_header
 u32     reserved = 0
@@ -145,6 +146,9 @@ and `Generic=5`. Access-mode tags are `ReadOnly=1` and `ReadWrite=2`.
 | 14 | `Store` | `ValueId pointer, ValueId value, MemoryAccess` |
 | 15 | `Barrier` | `Barrier` |
 | 16 | `Atomic` | `Atomic` |
+| 17 (V2) | `Fence` | `Fence` |
+| 18 (V2) | `WorkgroupBarrier` | `WorkgroupBarrier` |
+| 19 (V2) | `WorkgroupMemory` | `WorkgroupMemory` |
 
 `MemoryAccess` is `u8 address_space || u32 alignment || u8 volatile_boolean`.
 
@@ -185,6 +189,34 @@ u8              ordering
 option<u8>      failure_ordering
 ```
 
+The V2-only records are:
+
+```text
+Fence =
+    u8                memory_scope
+    u8                memory_ordering
+    set<AddressSpace> address_spaces
+
+WorkgroupBarrier =
+    u8                memory_scope
+    u8                memory_ordering
+    set<AddressSpace> address_spaces
+    Convergence       convergence
+
+Convergence =
+    u8(tag = 1, Uniform)
+    u8(scope)
+
+WorkgroupMemory =
+    Type element
+    WorkgroupMemoryExtent extent
+    u32 alignment
+
+WorkgroupMemoryExtent =
+    u8(tag = 1, Static) || u32(elements)
+  | u8(tag = 2, Dynamic)
+```
+
 Atomic-kind tags follow declaration order from `Load=1` through `BitXor=11`.
 Scope tags follow declaration order from `Invocation=1` through `System=5`.
 Ordering tags follow declaration order from `Relaxed=1` through
@@ -219,6 +251,7 @@ verification concerns.
 | 9 | `Atomic` | `u16 width_bits, u8 address_space, u8 max_scope` |
 | 10 | `DynamicWorkgroupMemory` | none |
 | 11 | `Extension` | `text namespace, text name` |
+| 12 (V2) | `WaveWidth` | `u8 width`, where `Wave32=1`, `Wave64=2` |
 
 ## Resource Bounds
 
@@ -248,7 +281,9 @@ members, and out-of-order set members are rejected. Decoding must consume the
 entire declared input, and re-encoding the decoded model must reproduce every
 byte exactly.
 
-Existing tags and field meanings must never be changed. A model change that
-cannot be represented without ambiguity requires a new wire version, new
-entry points, and an independent golden fixture. The V1 golden fixture is
-`tests/fixtures/full_v1.hex`.
+Existing tags and field meanings must never be changed. V2 is additive: V1
+encoders reject V2-only model nodes, the V1 decoder rejects V2 headers, and the
+V2 decoder accepts both versions while enforcing the tags legal for the actual
+header version. The frozen V1 golden fixture is `tests/fixtures/full_v1.hex`;
+the independent V2 synchronization fixture is
+`tests/fixtures/g4_sync_v2.hex`.
