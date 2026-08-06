@@ -5,6 +5,13 @@
 //! This crate deliberately has no HIP dependency so failure and cleanup policy
 //! can be exercised on CPU-only CI runners.
 
+mod lifecycle;
+
+pub use lifecycle::{
+    CancelRequestError, NotificationError, OperationLifecycle, OperationState, ReclaimError,
+    TerminalState, TransitionError,
+};
+
 /// A backend operation or completion failure.
 #[derive(Debug, Eq, PartialEq)]
 pub enum CompletionError<O, S> {
@@ -190,6 +197,10 @@ impl<R> Retained<R> {
 
     fn take(&mut self) -> R {
         self.0.take().expect("retained resources are present")
+    }
+
+    fn try_take(&mut self) -> Option<R> {
+        self.0.take()
     }
 
     fn get(&self) -> &R {
