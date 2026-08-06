@@ -41,7 +41,7 @@ const REJECTED_CASES: &[(&str, &str, &str)] = &[
 ];
 
 const REGISTRATION_REJECTED_CASES: &[(&str, &str)] = &[
-    ("malformed-registration", "does not match V1 magic"),
+    ("malformed-registration", "does not match registration magic"),
     (
         "unknown-registration-version",
         "unknown registration version 3",
@@ -60,7 +60,7 @@ fn backend_test_lock() -> MutexGuard<'static, ()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
         .lock()
-        .expect("backend test lock")
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 fn workspace() -> PathBuf {
