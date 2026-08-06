@@ -1,10 +1,14 @@
 use crate::artifact_binding::{ArtifactKernelBrandV1, GeneratedKernelBindingV1};
 use crate::{
-    ArgumentAdmittedLaunch, ArtifactKernelIdentityV1, DeviceIdentity, KernelBrand, KernelParams,
-    LaunchConfig, ObservedContext, PrepareLaunchError, PreparedGeometry, PreparedLaunch,
-    PreparedResources, UntrustedLaunchRequest, ValidatedArtifactSelectionV1,
+    ArgumentAdmittedLaunch, ArtifactKernelIdentityV1, CooperativeAdmissionError,
+    CooperativeLaunchAdmission, DeviceIdentity, KernelBrand, KernelParams, LaunchConfig,
+    ObservedContext, PrepareLaunchError, PreparedGeometry, PreparedLaunch, PreparedResources,
+    UntrustedLaunchRequest, ValidatedArtifactSelectionV1,
 };
-use fe2o3_core::{BorrowedDeviceOperation, GpuContext, GpuFunction, GpuModule, Stream};
+use fe2o3_core::{
+    BorrowedDeviceOperation, CooperativeLaunchCapability, GpuContext, GpuFunction, GpuModule,
+    Stream,
+};
 use fe2o3_device::KernelMarkerV1;
 use std::fmt;
 use std::sync::Arc;
@@ -316,6 +320,44 @@ impl<K> LoadedPreparedLaunch<'_, K> {
         // marker, artifact identity, and launch geometry were checked here.
         unsafe {
             fe2o3_core::launch_kernel_on_stream(self.loaded.function(), config, stream, params)
+        }
+        .map_err(LoadedLaunchError::Hip)
+    }
+}
+
+impl<'loaded, K> LoadedPreparedLaunch<'loaded, K> {
+    /// Consumes this ordinary-launch state and binds it to a single-device
+    /// cooperative launch on one exact stream.
+    pub fn admit_cooperative<'stream>(
+        self,
+        capability: CooperativeLaunchCapability,
+        stream: &'stream Stream,
+    ) -> Result<CooperativeLaunchAdmission<'loaded, 'stream, K>, CooperativeAdmissionError> {
+        let stream_matches = validate_launch_stream(&self.loaded.context, stream).is_ok();
+        let capability_matches = capability.is_for_context(stream.context());
+        let residency = crate::cooperative_launch::validate_admission(
+            stream_matches,
+            capability_matches,
+            self.geometry().grid().product(),
+        )?;
+        Ok(CooperativeLaunchAdmission::new(
+            self, stream, capability, residency,
+        ))
+    }
+
+    pub(crate) unsafe fn launch_cooperative_raw_impl(
+        self,
+        stream: &Stream,
+        params: &mut KernelParams,
+    ) -> Result<(), LoadedLaunchError> {
+        let config = self.launch_config();
+        unsafe {
+            fe2o3_core::launch_cooperative_kernel_on_stream(
+                self.loaded.function(),
+                config,
+                stream,
+                params,
+            )
         }
         .map_err(LoadedLaunchError::Hip)
     }

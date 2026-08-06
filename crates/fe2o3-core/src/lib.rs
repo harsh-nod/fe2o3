@@ -1,4 +1,5 @@
 mod context;
+mod cooperative;
 mod device_copy;
 mod device_target;
 mod error;
@@ -7,10 +8,14 @@ mod launch;
 mod memory;
 mod module;
 mod operation;
+mod peer_access;
 mod pinned_memory;
 mod stream;
 
 pub use context::GpuContext;
+pub use cooperative::{
+    CooperativeCapabilityError, CooperativeLaunchCapability, launch_cooperative_kernel_on_stream,
+};
 pub use device_copy::DeviceCopy;
 pub use device_target::ObservedDeviceTarget;
 pub use error::{Error, HipError, Result, check};
@@ -20,5 +25,9 @@ pub use launch::{DevicePtr, KernelParams, LaunchConfig, launch_kernel_on_stream}
 pub use memory::DeviceBuffer;
 pub use module::{GpuFunction, GpuModule};
 pub use operation::{BorrowedDeviceOperation, OwnedDeviceOperation};
+pub use peer_access::{
+    PeerAccess, PeerAccessCapability, PeerAccessCleanupError, PeerAccessCleanupOutcome,
+    PeerAccessDirection, PeerAccessEnableError, PeerAccessObservationError,
+};
 pub use pinned_memory::PinnedHostBuffer;
 pub use stream::Stream;

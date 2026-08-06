@@ -48,4 +48,9 @@ impl GpuContext {
     pub fn create_stream(self: &Arc<Self>) -> Result<Stream> {
         Stream::create(self.clone())
     }
+
+    #[cfg(test)]
+    pub(crate) const fn for_test(device_id: i32) -> Self {
+        Self { device_id }
+    }
 }

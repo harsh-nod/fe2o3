@@ -1,0 +1,8 @@
+error: lifetime may not live long enough
+ --> tests/ui/cooperative_launch/admission_cannot_outlive_stream.rs:9:5
+  |
+7 |     stream: &Stream,
+  |             - let's call the lifetime of this reference `'1`
+8 | ) -> CooperativeLaunchAdmission<'loaded, 'static, K> {
+9 |     launch.admit_cooperative(capability, stream).unwrap()
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ returning this value requires that `'1` must outlive `'static`

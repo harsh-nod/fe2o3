@@ -1,0 +1,5 @@
+error[E0599]: no method named `clone` found for struct `PeerAccess` in the current scope
+ --> tests/ui/cooperative_peer/peer_access_is_linear.rs:4:24
+  |
+4 |     let _copy = access.clone();
+  |                        ^^^^^ method not found in `PeerAccess`

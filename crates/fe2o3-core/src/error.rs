@@ -15,6 +15,11 @@ impl HipError {
         self.code
     }
 
+    #[doc(hidden)]
+    pub const fn is_cooperative_launch_too_large(self) -> bool {
+        self.code == fe2o3_hip_sys::HIP_ERROR_COOPERATIVE_LAUNCH_TOO_LARGE
+    }
+
     pub fn name(self) -> String {
         let ptr = unsafe { fe2o3_hip_sys::hipGetErrorString(self.code) };
         if ptr.is_null() {

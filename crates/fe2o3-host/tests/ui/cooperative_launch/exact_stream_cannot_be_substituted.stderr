@@ -1,0 +1,16 @@
+error[E0061]: this method takes 1 argument but 2 arguments were supplied
+ --> tests/ui/cooperative_launch/exact_stream_cannot_be_substituted.rs:9:32
+  |
+9 |     let _ = unsafe { admission.launch_raw(other_stream, params) };
+  |                                ^^^^^^^^^^ ------------ unexpected argument #1 of type `&Stream`
+  |
+note: method defined here
+ --> src/cooperative_launch.rs
+  |
+  |     pub unsafe fn launch_raw(
+  |                   ^^^^^^^^^^
+help: remove the extra argument
+  |
+9 -     let _ = unsafe { admission.launch_raw(other_stream, params) };
+9 +     let _ = unsafe { admission.launch_raw(params) };
+  |

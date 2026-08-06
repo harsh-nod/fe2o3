@@ -1,5 +1,6 @@
 mod argument_alias;
 mod artifact_binding;
+mod cooperative_launch;
 mod generated_argument_plan;
 mod generated_vecadd;
 mod loaded_kernel;
@@ -22,6 +23,10 @@ pub use artifact_binding::{
     AuthenticatedKernelArtifactV1, CompilerGeneratedKernelContractV1,
     CompilerGeneratedKernelProfileV1, GeneratedArtifactAuthenticationError,
     GeneratedKernelBindingV1, GeneratedKernelProfileError, GeneratedMarkerBindingError,
+};
+pub use cooperative_launch::{
+    CooperativeAdmissionError, CooperativeLaunchAdmission, CooperativeLaunchError,
+    CooperativeResidencyAdmission,
 };
 pub use fe2o3_core::{KernelParams, LaunchConfig};
 pub use fe2o3_kernel_descriptor::{BlockSizeV1, DimensionsV1, KernelId, LaunchConstraintsV1};
