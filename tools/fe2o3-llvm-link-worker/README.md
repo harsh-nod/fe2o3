@@ -54,19 +54,36 @@ build/llvm-link-worker/fe2o3-worker-pipeline-tests \
   /tmp/fe2o3-mixed.hsaco /tmp/fe2o3-mixed.bc /tmp/fe2o3-mixed.o
 ```
 
-The repository integration driver performs a clean Release configuration,
-native CTests, focused Rust tests, and a mixed-input execution through
-`PinnedWorkerV1`. All package and build identities are explicit arguments; a
-missing prerequisite is an error. The final line states that this is native
-link integration rather than a GPU dispatch test:
+The repository integration driver requires an absolute build directory that
+does not exist, then performs a Release configuration, native CTests, focused
+Rust tests, and a mixed-input execution through `PinnedWorkerV1`. Cargo, rustc,
+the source commit, and the Rust toolchain manifest are content-pinned. The
+driver accepts success only after machine-readable Cargo/libtest JSON proves
+that the exact ignored integration test ran and passed. A missing prerequisite,
+dirty source tree, reused output path, empty evidence stream, or stale HSACO is
+an error. The final line states that this is native link integration rather
+than a GPU dispatch test:
 
 ```sh
-scripts/test-direct-llvm-worker.sh build/llvm-link-worker \
+toolchain=nightly-2026-04-03
+toolchain_root="$HOME/.rustup/toolchains/${toolchain}-x86_64-unknown-linux-gnu"
+cargo_bin="$toolchain_root/bin/cargo"
+rustc_bin="$toolchain_root/bin/rustc"
+scripts/test-direct-llvm-worker.sh /tmp/fe2o3-llvm-link-worker-fresh \
   /opt/rocm/lib/llvm/lib/cmake/llvm \
   /opt/rocm/lib/llvm/lib/cmake/lld \
   22.0.0git /tmp/fe2o3-rocm-llvm-build-id.txt gfx942 \
-  "$HOME/.cargo/bin/cargo" nightly-2026-04-03
+  "$cargo_bin" "$(sha256sum "$cargo_bin" | cut -d' ' -f1)" \
+  "$rustc_bin" "$(sha256sum "$rustc_bin" | cut -d' ' -f1)" \
+  "$toolchain" "$(sha256sum rust-toolchain.toml | cut -d' ' -f1)" \
+  "$(git rev-parse HEAD)"
 ```
+
+The successful request is constructed from a `MultiInputLinkPlanV1` whose
+expected output is the freshly generated deterministic native fixture. This is
+a two-stage test fixture arrangement: it exercises plan-bound execution and
+exact output verification, but it is not a first-build production API for an
+output identity that is not known yet.
 
 The worker response is descriptive evidence. It grants no loading or launch
 authority. The local `/home/harsh/llvm-project/build` tree is an LLVM 24
