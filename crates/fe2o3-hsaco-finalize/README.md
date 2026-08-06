@@ -108,16 +108,17 @@ generic evidence can never satisfy an FFI-bound evidence API. A caller can indep
 generic request with similar inputs and symbol strings, but that request and its output carry zero
 FFI provenance. Its API and wire bytes are unchanged, and no V1-to-V2 conversion exists.
 
-Worker Protocol V2 is a separate sealed domain. `construct_worker_request_v2` consumes the opaque
-staged compiler envelope plus an `ExactCompilerModuleArtifactV1` whose identity is calculated from
-the retained bytes, never accepted as a raw digest. It binds the pinned executable, worker and LLVM
-build identities, target, code-object version, structured options, complete compiler-envelope
-identity, distinct compiler module, every external provider, import/export/final symbol closures,
-and output bound. V2 requests cannot be publicly decoded or directly constructed. V2 responses and
-outputs are decoded only against the originating sealed request and are classified as
-`WorkerEvidenceClassV2::CompilerFfiLink`.
+Worker Protocol V2 is a separate framing domain, but it is deliberately unconnected from the public
+finalizer API. This baseline has no compiler-owned observation that inseparably retains both the
+validated envelope and the emitted module. A caller-created neutral envelope and caller-provided
+module bytes cannot establish compiler provenance, so the exact-module witness, V2 request
+construction, and supervised V2 execution are crate-private. Safe downstream callers cannot mint
+the complete capability input, construct V2, or execute it.
 
-The neutral exact-module witness is a temporary adapter because the G3 compiler-module artifact type
-is not present on this baseline. It proves byte/kind consistency, not compiler origin. V2 request,
-response, output, and supervised execution values remain inert and grant no publication, loading,
-or launch authority.
+The dormant construction path derives exact import and export symbols from the retained envelope's
+validated contracts; it does not accept independent directional lists. It also binds the pinned
+executable, worker and LLVM build identities, target, code-object version, structured options,
+complete envelope identity, distinct compiler module, every external provider, final symbol
+closure, and output bound. V2 responses decode only against their originating request. All V2
+values remain inert and grant no publication, loading, or launch authority. Connecting this path
+requires a future compiler-owned envelope-plus-module observation, not another neutral adapter.

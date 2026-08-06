@@ -42,8 +42,11 @@ The native pipeline validates each input's actual file kind, AMDHSA OS ABI,
 processor flags, and code-object ABI before linking. It rejects duplicate
 strong definitions and unresolved non-weak imports, preserves requested LLVM
 exports through optimization, and accepts output only when its public dynamic
-symbols exactly match the request. LLVM verification and LLD diagnostics are
-bounded before they enter the response.
+symbols exactly match the request. Before aggregate linking, V2 additionally
+requires each declared export to be a public compiler-module definition and
+each declared import to be unresolved by that module and defined by an
+external provider. LLVM verification and LLD diagnostics are bounded before
+they enter the response.
 
 `fe2o3-worker-pipeline-tests` builds real fixtures through the configured LLVM
 libraries and covers bitcode plus bitcode, bitcode plus AMDGPU relocatable, and
