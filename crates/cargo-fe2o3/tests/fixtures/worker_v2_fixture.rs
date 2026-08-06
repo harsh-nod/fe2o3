@@ -9,7 +9,8 @@ use fe2o3_artifact_transaction::{
 };
 use fe2o3_compiler_ffi::{
     CodeObjectVersion, CompilerFfiContractV1, CompilerFfiEnvelopeBuilderV1, CompilerFfiLinkRoleV1,
-    CompilerFfiSourceOwnerV1, CompilerModuleHandoffV1, CompilerModuleKindV1, DeviceTargetV1,
+    CompilerFfiSourceOwnerV1, CompilerModuleHandoffV2, CompilerModuleKindV1,
+    CompilerModuleSymbolManifestV1, CompilerModuleSymbolRoleV1, DeviceTargetV1,
 };
 use reserved_fe2o3_symbols::{
     DEVICE_FFI_DIRECTION_EXPORT_V1, DeviceFfiContractFieldsV1, DeviceFfiDirectionV1,
@@ -49,7 +50,7 @@ fn fake_rustc(mode: &str) {
         }
         return;
     }
-    assert_eq!(mode, "publish");
+    assert!(matches!(mode, "publish" | "publish-mismatch"));
 
     let output_dir = env::var_os("FE2O3_HSACO_DIR").unwrap();
     let source = env::var_os("FE2O3_FIXTURE_SOURCE").unwrap();
@@ -57,7 +58,7 @@ fn fake_rustc(mode: &str) {
         BuildAttempt::from_env_value(&env::var("FE2O3_BUILD_ATTEMPT_V1").unwrap()).unwrap();
     let producer =
         ProducerIdentity::from_codegen("workflow_fixture", Some(Path::new(&source))).unwrap();
-    let handoff = canonical_handoff();
+    let handoff = canonical_handoff(mode == "publish-mismatch");
     publish_compiler_module_handoff_v1(
         Path::new(&output_dir),
         &producer,
@@ -67,7 +68,7 @@ fn fake_rustc(mode: &str) {
     .unwrap();
 }
 
-fn canonical_handoff() -> CompilerModuleHandoffV1 {
+fn canonical_handoff(mismatch: bool) -> CompilerModuleHandoffV2 {
     let target = DeviceTargetV1::parse("gfx942:xnack-").unwrap();
     let semantic_identity = [0x53; 32];
     let semantic_text = semantic_identity
@@ -76,9 +77,9 @@ fn canonical_handoff() -> CompilerModuleHandoffV1 {
         .collect::<String>();
     let contract_id = derive_device_ffi_contract_id_v1(DeviceFfiContractFieldsV1 {
         direction: DEVICE_FFI_DIRECTION_EXPORT_V1,
-        symbol: "workflow_kernel",
+        symbol: "workflow_export",
         calling_convention: "C",
-        code_object_version: 6,
+        code_object_version: 5,
         target: "gfx942:xnack-",
         physical_abi: ABI,
         effects: "none",
@@ -89,28 +90,54 @@ fn canonical_handoff() -> CompilerModuleHandoffV1 {
         DeviceFfiDirectionV1::Export,
         CompilerFfiLinkRoleV1::RequiresCompilerModuleDefinition,
         target,
-        CodeObjectVersion::V6,
+        CodeObjectVersion::V5,
         CompilerFfiSourceOwnerV1::new(
             "workflow_fixture",
-            "workflow_fixture::workflow_kernel",
+            "workflow_fixture::workflow_export",
             [0x35; 16],
-            "_RINvNtCs1234_16workflow_fixture15workflow_kernel",
+            "_RINvNtCs1234_16workflow_fixture15workflow_export",
         )
         .unwrap(),
-        "workflow_kernel",
+        "workflow_export",
         ABI,
         "none",
         semantic_identity,
     )
     .unwrap();
-    let mut envelope = CompilerFfiEnvelopeBuilderV1::new(target, CodeObjectVersion::V6, 1).unwrap();
+    let mut envelope = CompilerFfiEnvelopeBuilderV1::new(target, CodeObjectVersion::V5, 1).unwrap();
     envelope.push(contract).unwrap();
-    CompilerModuleHandoffV1::new(
+    let mut entries = vec![
+        (
+            CompilerModuleSymbolRoleV1::KernelEntry,
+            "workflow_kernel".to_owned(),
+        ),
+        (
+            CompilerModuleSymbolRoleV1::KernelDescriptor,
+            "workflow_kernel.kd".to_owned(),
+        ),
+        (
+            CompilerModuleSymbolRoleV1::DeviceFfiExport,
+            "workflow_export".to_owned(),
+        ),
+    ];
+    if mismatch {
+        entries.push((
+            CompilerModuleSymbolRoleV1::KernelEntry,
+            "workflow_mismatch".to_owned(),
+        ));
+        entries.push((
+            CompilerModuleSymbolRoleV1::KernelDescriptor,
+            "workflow_mismatch.kd".to_owned(),
+        ));
+    }
+    entries.sort();
+    CompilerModuleHandoffV2::new(
         CompilerModuleKindV1::LlvmTextIr,
         target,
-        CodeObjectVersion::V6,
+        CodeObjectVersion::V5,
         envelope.finish().unwrap(),
-        b"define amdgpu_kernel void @workflow_kernel() { ret void }\n",
+        CompilerModuleSymbolManifestV1::new(entries).unwrap(),
+        b"define amdgpu_kernel void @workflow_kernel() { ret void }\ndefine i32 @workflow_export(i32 %value) { ret i32 %value }\n",
     )
     .unwrap()
 }

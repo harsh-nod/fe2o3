@@ -179,10 +179,7 @@ define i32 @kernel_export(i32 %value) { ret i32 %value }\n";
             CompilerModuleSymbolRoleV1::KernelDescriptor,
             "kernel_main.kd",
         ),
-        (
-            CompilerModuleSymbolRoleV1::DeviceFfiExport,
-            "kernel_export",
-        ),
+        (CompilerModuleSymbolRoleV1::DeviceFfiExport, "kernel_export"),
     ])
     .unwrap();
     let handoff = CompilerModuleHandoffV2::new(

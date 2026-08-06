@@ -5,8 +5,13 @@ use std::path::PathBuf;
 use std::process::{Command, ExitStatus};
 
 use fe2o3_artifact_transaction::{
-    BuildAttempt, BuildInvocation, BuildSession, EmitError, ProducerIdentity, begin_build_attempt,
-    consume_compiler_module_handoff_v1, fail_build_attempt, finish_build_attempt,
+    AttemptScopedHsacoPublicationErrorV1, BuildAttempt, BuildInvocation, BuildSession, EmitError,
+    ProducerIdentity, begin_build_attempt, consume_compiler_module_handoff_v1, fail_build_attempt,
+    finish_build_attempt,
+};
+use fe2o3_hsaco_finalize::{
+    WorkerV2HsacoPublicationError, inspect_worker_v2_raw_hsaco_v1,
+    prepare_worker_v2_hsaco_publication_v1, publish_prepared_worker_v2_hsaco_v1,
 };
 use fe2o3_rustc_invocation::{
     RustcArgsErrorV2, RustcCompileInvocationV2, RustcInvocationV2, classify_rustc_invocation_v2,
@@ -42,10 +47,6 @@ pub(crate) enum BindingWrapperError {
     Artifact(EmitError),
     ManagedCompletion {
         primary: String,
-        cleanup: Option<EmitError>,
-    },
-    InertWorkerV2PublicationBoundary {
-        evidence_identity: [u8; 32],
         cleanup: Option<EmitError>,
     },
     AttemptTermination {
@@ -97,23 +98,6 @@ impl fmt::Display for BindingWrapperError {
                 }
                 Ok(())
             }
-            Self::InertWorkerV2PublicationBoundary {
-                evidence_identity,
-                cleanup,
-            } => {
-                write!(
-                    formatter,
-                    "Worker V2 produced inert evidence identity sha256:{}, but no authenticated publication adapter can consume that evidence; refusing attempt completion",
-                    encode_hex(evidence_identity)
-                )?;
-                if let Some(cleanup) = cleanup {
-                    write!(
-                        formatter,
-                        "; build-attempt invalidation also failed: {cleanup}"
-                    )?;
-                }
-                Ok(())
-            }
             Self::AttemptTermination {
                 rustc_status,
                 cleanup,
@@ -138,9 +122,6 @@ impl Error for BindingWrapperError {
             Self::WorkerV2Configuration(error) => Some(error),
             Self::Artifact(error) => Some(error),
             Self::ManagedCompletion { cleanup, .. } => cleanup
-                .as_ref()
-                .map(|error| error as &(dyn Error + 'static)),
-            Self::InertWorkerV2PublicationBoundary { cleanup, .. } => cleanup
                 .as_ref()
                 .map(|error| error as &(dyn Error + 'static)),
             Self::AttemptTermination { cleanup, .. } => Some(cleanup),
@@ -276,8 +257,8 @@ fn prepare_managed_attempt(
 
 fn complete_managed_attempt(managed: ManagedAttempt) -> Result<(), BindingWrapperError> {
     enum CompletionFailure {
-        Operation(String),
-        PublicationBoundary([u8; 32]),
+        Uncommitted(String),
+        PreserveAttempt(String),
     }
 
     let completion = (|| -> Result<(), CompletionFailure> {
@@ -288,43 +269,102 @@ fn complete_managed_attempt(managed: ManagedAttempt) -> Result<(), BindingWrappe
                 managed.attempt,
             )
             .map_err(|error| {
-                CompletionFailure::Operation(format!(
+                CompletionFailure::Uncommitted(format!(
                     "compiler-module handoff consumption failed: {error}"
                 ))
             })?;
             let evidence = worker_v2.execute(consumed).map_err(|error| {
-                CompletionFailure::Operation(format!(
+                CompletionFailure::Uncommitted(format!(
                     "reproducible Worker V2 execution failed: {error}"
                 ))
             })?;
             debug_assert_eq!(evidence.attempt(), managed.attempt);
-            return Err(CompletionFailure::PublicationBoundary(
-                *evidence.identity().as_bytes(),
-            ));
+            let inspected = inspect_worker_v2_raw_hsaco_v1(evidence).map_err(|error| {
+                CompletionFailure::Uncommitted(format!(
+                    "independent Worker V2 HSACO inspection failed: {error}"
+                ))
+            })?;
+            let prepared = prepare_worker_v2_hsaco_publication_v1(&managed.producer, inspected)
+                .map_err(|error| {
+                    CompletionFailure::Uncommitted(format!(
+                        "Worker V2 HSACO publication preparation failed: {error}"
+                    ))
+                })?;
+
+            const MAX_EXACT_RECONCILIATION_ATTEMPTS: usize = 3;
+            let mut attempts = 0;
+            loop {
+                attempts += 1;
+                match publish_prepared_worker_v2_hsaco_v1(
+                    &managed.output_dir,
+                    &managed.producer,
+                    &prepared,
+                ) {
+                    Ok(_) => break,
+                    Err(WorkerV2HsacoPublicationError::Publication(
+                        AttemptScopedHsacoPublicationErrorV1::ReceiptAlreadyPersisted { .. },
+                    )) => break,
+                    Err(WorkerV2HsacoPublicationError::Publication(
+                        AttemptScopedHsacoPublicationErrorV1::PublicationInterrupted(_)
+                        | AttemptScopedHsacoPublicationErrorV1::PublicationCommittedWithoutReceipt {
+                            ..
+                        },
+                    )) if attempts < MAX_EXACT_RECONCILIATION_ATTEMPTS => {
+                        continue;
+                    }
+                    Err(error @ WorkerV2HsacoPublicationError::Publication(
+                        AttemptScopedHsacoPublicationErrorV1::PublicationInterrupted(_)
+                        | AttemptScopedHsacoPublicationErrorV1::PublicationCommittedWithoutReceipt {
+                            ..
+                        },
+                    )) => {
+                        return Err(CompletionFailure::PreserveAttempt(format!(
+                            "Worker V2 HSACO publication requires exact reconciliation after {attempts} attempts: {error}"
+                        )));
+                    }
+                    Err(error) => {
+                        return Err(CompletionFailure::Uncommitted(format!(
+                            "Worker V2 HSACO publication failed: {error}"
+                        )));
+                    }
+                }
+            }
+
+            for completion_attempt in 1..=MAX_EXACT_RECONCILIATION_ATTEMPTS {
+                match finish_build_attempt(&managed.output_dir, &managed.producer, managed.attempt)
+                {
+                    Ok(()) => return Ok(()),
+                    Err(error) if completion_attempt < MAX_EXACT_RECONCILIATION_ATTEMPTS => {
+                        let _ = error;
+                    }
+                    Err(error) => {
+                        return Err(CompletionFailure::PreserveAttempt(format!(
+                            "published Worker V2 HSACO, but build-attempt completion failed after {completion_attempt} attempts: {error}"
+                        )));
+                    }
+                }
+            }
+            unreachable!("completion retry loop always returns")
         }
         finish_build_attempt(&managed.output_dir, &managed.producer, managed.attempt).map_err(
             |error| {
-                CompletionFailure::Operation(format!("build-attempt completion failed: {error}"))
+                CompletionFailure::Uncommitted(format!("build-attempt completion failed: {error}"))
             },
         )
     })();
 
     match completion {
         Ok(()) => Ok(()),
-        Err(failure) => {
+        Err(CompletionFailure::Uncommitted(primary)) => {
             let cleanup =
                 fail_build_attempt(&managed.output_dir, &managed.producer, managed.attempt).err();
-            match failure {
-                CompletionFailure::Operation(primary) => {
-                    Err(BindingWrapperError::ManagedCompletion { primary, cleanup })
-                }
-                CompletionFailure::PublicationBoundary(evidence_identity) => {
-                    Err(BindingWrapperError::InertWorkerV2PublicationBoundary {
-                        evidence_identity,
-                        cleanup,
-                    })
-                }
-            }
+            Err(BindingWrapperError::ManagedCompletion { primary, cleanup })
+        }
+        Err(CompletionFailure::PreserveAttempt(primary)) => {
+            Err(BindingWrapperError::ManagedCompletion {
+                primary,
+                cleanup: None,
+            })
         }
     }
 }
@@ -368,10 +408,6 @@ fn derive_build_invocation_with_config_identity(
         digest.update(worker_v2_identity.as_bytes());
     }
     BuildInvocation::from_bytes(digest.finalize().into())
-}
-
-fn encode_hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 fn hash_os(digest: &mut Sha256, value: &OsStr) {

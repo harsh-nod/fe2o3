@@ -39,11 +39,7 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-fn write_config(
-    directory: &TestDirectory,
-    final_symbols: &[&str],
-    selects_invocation: bool,
-) -> PathBuf {
+fn write_config(directory: &TestDirectory, selects_invocation: bool) -> PathBuf {
     let worker_bytes = fs::read(fixture()).unwrap();
     let selected_source = if selects_invocation {
         directory.0.join("workflow_fixture.rs")
@@ -52,15 +48,14 @@ fn write_config(
     };
     let value = json!({
         "candidate_output_max_bytes": 4096,
-        "final_symbols": final_symbols,
-        "format": "fe2o3-worker-v2-config-v1",
+        "format": "fe2o3-worker-v2-config-v2",
         "limits": {
             "stderr_bytes": 1024,
             "stdout_bytes": 16384,
             "timeout_ms": 2000
         },
         "link_options": [
-            {"name": "code-object-version", "value": "6"},
+            {"name": "code-object-version", "value": "5"},
             {"name": "opt-level", "value": "2"},
             {"name": "strip-debug", "value": "true"},
             {"name": "verify-each", "value": "true"}
@@ -107,7 +102,7 @@ fn run_wrapper(directory: &TestDirectory, config: Option<&Path>, rustc_mode: &st
         .arg(&source)
         .arg("-Cmetadata=worker-v2-test");
     if let Some(config) = config {
-        command.env("FE2O3_WORKER_V2_CONFIG_V1", config);
+        command.env("FE2O3_WORKER_V2_CONFIG_V2", config);
     }
     command.output().unwrap()
 }
@@ -117,33 +112,41 @@ fn stderr(output: &Output) -> String {
 }
 
 #[test]
-fn consumes_and_executes_before_the_unimplemented_publication_boundary() {
+fn invalid_worker_output_fails_independent_hsaco_inspection_without_publication() {
     let directory = TestDirectory::new();
-    let config = write_config(&directory, &["workflow_kernel"], true);
+    let config = write_config(&directory, true);
     let output = run_wrapper(&directory, Some(&config), "publish");
 
     assert!(!output.status.success());
     assert!(directory.0.join("spawned").exists());
     let stderr = stderr(&output);
     assert!(
-        stderr.contains("Worker V2 produced inert evidence identity sha256:"),
+        stderr.contains("independent Worker V2 HSACO inspection failed")
+            && stderr.contains("invalid ELF"),
         "{stderr}"
     );
-    let identity = stderr
-        .split("inert evidence identity sha256:")
-        .nth(1)
-        .and_then(|suffix| suffix.get(..64))
-        .expect("publication-boundary diagnostic carries an evidence identity");
-    assert!(identity.bytes().all(|byte| byte.is_ascii_hexdigit()));
-    assert_ne!(identity, "00".repeat(32));
-    assert!(stderr.contains("no authenticated publication adapter"));
     assert!(!stderr.contains("without an authorized device backend"));
+    let artifact_dir = directory.0.join("artifacts");
+    assert!(fs::read_dir(&artifact_dir).unwrap().all(|entry| {
+        let name = entry.unwrap().file_name();
+        let name = name.to_string_lossy();
+        !name.starts_with(".fe2o3-link-artifact-v1-")
+            && !name.starts_with(".fe2o3-link-publication-v1-")
+    }));
+
+    fs::remove_file(directory.0.join("spawned")).unwrap();
+    let retry = run_wrapper(&directory, Some(&config), "publish");
+    assert!(!retry.status.success());
+    assert!(
+        !directory.0.join("spawned").exists(),
+        "an admission-rejected attempt must remain terminal"
+    );
 }
 
 #[test]
 fn missing_handoff_fails_and_makes_the_attempt_terminal() {
     let directory = TestDirectory::new();
-    let config = write_config(&directory, &["workflow_kernel"], true);
+    let config = write_config(&directory, true);
     let first = run_wrapper(&directory, Some(&config), "no-handoff");
     assert!(!first.status.success());
     assert!(
@@ -164,8 +167,8 @@ fn missing_handoff_fails_and_makes_the_attempt_terminal() {
 #[test]
 fn worker_mismatch_invalidates_the_attempt_before_completion() {
     let directory = TestDirectory::new();
-    let config = write_config(&directory, &["workflow_kernel", "workflow_mismatch"], true);
-    let output = run_wrapper(&directory, Some(&config), "publish");
+    let config = write_config(&directory, true);
+    let output = run_wrapper(&directory, Some(&config), "publish-mismatch");
 
     assert!(!output.status.success());
     let stderr = stderr(&output);
@@ -180,13 +183,13 @@ fn missing_or_mismeasured_configuration_prevents_rustc_spawn() {
     assert!(!missing.status.success());
     assert!(!missing_directory.0.join("spawned").exists());
     assert!(
-        stderr(&missing).contains("requires FE2O3_WORKER_V2_CONFIG_V1"),
+        stderr(&missing).contains("requires FE2O3_WORKER_V2_CONFIG_V2"),
         "{}",
         stderr(&missing)
     );
 
     let mismatched_directory = TestDirectory::new();
-    let config = write_config(&mismatched_directory, &["workflow_kernel"], true);
+    let config = write_config(&mismatched_directory, true);
     let mut value: Value = serde_json::from_slice(&fs::read(&config).unwrap()).unwrap();
     value["worker"]["sha256"] = Value::String("00".repeat(32));
     fs::write(&config, serde_json::to_vec(&value).unwrap()).unwrap();
@@ -203,7 +206,7 @@ fn missing_or_mismeasured_configuration_prevents_rustc_spawn() {
 #[test]
 fn unselected_host_units_run_without_attempts_but_device_production_still_fails_closed() {
     let host_directory = TestDirectory::new();
-    let host_config = write_config(&host_directory, &["workflow_kernel"], false);
+    let host_config = write_config(&host_directory, false);
     let host = run_wrapper(&host_directory, Some(&host_config), "no-handoff");
     assert!(host.status.success(), "{}", stderr(&host));
     assert_eq!(
@@ -212,7 +215,7 @@ fn unselected_host_units_run_without_attempts_but_device_production_still_fails_
     );
 
     let device_directory = TestDirectory::new();
-    let device_config = write_config(&device_directory, &["workflow_kernel"], false);
+    let device_config = write_config(&device_directory, false);
     let device = run_wrapper(
         &device_directory,
         Some(&device_config),

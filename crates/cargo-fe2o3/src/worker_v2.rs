@@ -10,24 +10,22 @@ use std::time::Duration;
 use fe2o3_artifact_transaction::ConsumedCompilerModuleHandoffV1;
 use fe2o3_hsaco_finalize::{
     ContentIdentityV1, FirstBuildWorkerV2Error, InertFirstBuildWorkerV2EvidenceV1, LinkOptionV1,
-    LinkPlanError, MAX_LINK_INPUTS, MAX_WORKER_SYMBOL_BYTES, MAX_WORKER_SYMBOLS, PinnedWorkerV1,
-    WorkerExecutionError, WorkerExecutionLimitsV1, WorkerInputKindV1, WorkerInputV1,
-    WorkerMeasurementV1, WorkerOutputConstraintsV1, WorkerProtocolError,
-    execute_reproducible_first_build_worker_v2,
+    LinkPlanError, MAX_LINK_INPUTS, PinnedWorkerV1, WorkerExecutionError, WorkerExecutionLimitsV1,
+    WorkerInputKindV1, WorkerInputV1, WorkerMeasurementV1, WorkerOutputConstraintsV1,
+    WorkerProtocolError, execute_reproducible_first_build_worker_v2,
 };
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
 pub(crate) const CODEGEN_PIPELINE_ENV: &str = "FE2O3_CODEGEN_PIPELINE";
-pub(crate) const WORKER_V2_CONFIG_ENV: &str = "FE2O3_WORKER_V2_CONFIG_V1";
+pub(crate) const WORKER_V2_CONFIG_ENV: &str = "FE2O3_WORKER_V2_CONFIG_V2";
 const WORKER_V2_PIPELINE: &str = "kernel-ir-worker-v2";
-const CONFIG_FORMAT: &str = "fe2o3-worker-v2-config-v1";
+const CONFIG_FORMAT: &str = "fe2o3-worker-v2-config-v2";
 const MAX_CONFIG_BYTES: usize = 1024 * 1024;
 const MAX_CONFIG_PATH_BYTES: usize = 4096;
 
 const ROOT_KEYS: &[&str] = &[
     "candidate_output_max_bytes",
-    "final_symbols",
     "format",
     "limits",
     "link_options",
@@ -78,7 +76,6 @@ pub(crate) struct PreparedWorkerV2Config {
     identity: WorkerV2ConfigIdentity,
     worker: PinnedWorkerV1,
     providers: Vec<WorkerInputV1>,
-    final_symbols: Vec<String>,
     link_options: Vec<LinkOptionV1>,
     candidate_output: WorkerOutputConstraintsV1,
     limits: WorkerExecutionLimitsV1,
@@ -130,8 +127,6 @@ impl PreparedWorkerV2Config {
 
         let worker = prepare_worker(required_value(root, "worker", "configuration")?)?;
         let providers = prepare_providers(required_value(root, "providers", "configuration")?)?;
-        let final_symbols =
-            parse_final_symbols(required_value(root, "final_symbols", "configuration")?)?;
         let link_options =
             parse_link_options(required_value(root, "link_options", "configuration")?)?;
         let candidate_output = WorkerOutputConstraintsV1::new(required_u64(
@@ -147,7 +142,6 @@ impl PreparedWorkerV2Config {
             identity: WorkerV2ConfigIdentity(Sha256::digest(&bytes).into()),
             worker,
             providers,
-            final_symbols,
             link_options,
             candidate_output,
             limits,
@@ -189,7 +183,6 @@ impl PreparedWorkerV2Config {
             consumed,
             &self.worker,
             self.providers.clone(),
-            self.final_symbols.clone(),
             self.link_options.clone(),
             self.candidate_output.clone(),
             self.limits,
@@ -312,38 +305,6 @@ fn prepare_providers(value: &Value) -> Result<Vec<WorkerInputV1>, WorkerV2Config
         );
     }
     Ok(providers)
-}
-
-fn parse_final_symbols(value: &Value) -> Result<Vec<String>, WorkerV2ConfigError> {
-    let values = value
-        .as_array()
-        .ok_or_else(|| WorkerV2ConfigError::Invalid("final_symbols must be an array".to_owned()))?;
-    if values.is_empty() || values.len() > MAX_WORKER_SYMBOLS {
-        return Err(WorkerV2ConfigError::Invalid(format!(
-            "final_symbols must contain 1..={MAX_WORKER_SYMBOLS} entries"
-        )));
-    }
-    let mut symbols: Vec<String> = Vec::with_capacity(values.len());
-    for (index, value) in values.iter().enumerate() {
-        let symbol = value.as_str().ok_or_else(|| {
-            WorkerV2ConfigError::Invalid(format!("final_symbols[{index}] must be a string"))
-        })?;
-        if !valid_symbol(symbol) {
-            return Err(WorkerV2ConfigError::Invalid(format!(
-                "final_symbols[{index}] is not a valid Worker V2 symbol"
-            )));
-        }
-        if symbols
-            .last()
-            .is_some_and(|previous| previous.as_str() >= symbol)
-        {
-            return Err(WorkerV2ConfigError::Invalid(
-                "final_symbols must be strictly lexicographically ordered".to_owned(),
-            ));
-        }
-        symbols.push(symbol.to_owned());
-    }
-    Ok(symbols)
 }
 
 fn parse_link_options(value: &Value) -> Result<Vec<LinkOptionV1>, WorkerV2ConfigError> {
@@ -561,17 +522,6 @@ fn hex_value(byte: u8) -> u8 {
     }
 }
 
-fn valid_symbol(symbol: &str) -> bool {
-    !symbol.is_empty()
-        && symbol.len() <= MAX_WORKER_SYMBOL_BYTES
-        && symbol.is_ascii()
-        && !symbol.bytes().any(|byte| {
-            byte.is_ascii_control()
-                || byte.is_ascii_whitespace()
-                || matches!(byte, b'/' | b'\\' | b'\'' | b'\"')
-        })
-}
-
 fn valid_selector_text(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= MAX_CONFIG_PATH_BYTES
@@ -620,7 +570,6 @@ mod tests {
         let worker_identity = ContentIdentityV1::calculate(&worker_bytes);
         let value = json!({
             "candidate_output_max_bytes": 4096,
-            "final_symbols": ["kernel"],
             "format": CONFIG_FORMAT,
             "limits": {
                 "stderr_bytes": 1024,
@@ -682,7 +631,6 @@ mod tests {
         let second = PreparedWorkerV2Config::from_manifest(&path).unwrap();
         assert_eq!(first.identity(), second.identity());
         assert_eq!(first.providers.len(), 1);
-        assert_eq!(first.final_symbols, ["kernel"]);
         assert_eq!(first.link_options.len(), 4);
         assert!(first.selects("kernel", Path::new("src/lib.rs"), &directory.0));
         assert!(!first.selects("host", Path::new("src/lib.rs"), &directory.0));
@@ -735,17 +683,8 @@ mod tests {
     }
 
     #[test]
-    fn rejects_noncanonical_symbols_options_and_paths() {
+    fn rejects_noncanonical_options_and_paths() {
         let directory = TestDirectory::new();
-        let path = manifest(&directory);
-        let mut value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-        value["final_symbols"] = json!(["z", "a"]);
-        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
-        assert!(matches!(
-            PreparedWorkerV2Config::from_manifest(&path),
-            Err(WorkerV2ConfigError::Invalid(_))
-        ));
-
         let path = manifest(&directory);
         let mut value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         value["link_options"][0]["name"] = Value::String("opt-level".to_owned());
