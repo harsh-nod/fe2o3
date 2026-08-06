@@ -11,8 +11,8 @@ use std::{collections::BTreeMap, fmt};
 use fe2o3_kernel_descriptor::{CodeObjectVersion, DeviceTargetV1};
 use reserved_fe2o3_symbols::{
     DEVICE_FFI_DIRECTION_EXPORT_V1, DEVICE_FFI_DIRECTION_IMPORT_V1, DeviceFfiContractFieldsV1,
-    DeviceFfiContractIdV1, MAX_DEVICE_FFI_EFFECT_BYTES_V1, MAX_DEVICE_FFI_PHYSICAL_ABI_BYTES_V1,
-    MAX_DEVICE_FFI_SYMBOL_BYTES_V1, derive_device_ffi_contract_id_v1,
+    DeviceFfiContractIdV1, DeviceFfiGrammarError, derive_device_ffi_contract_id_v1,
+    parse_device_ffi_effects_v1, validate_device_ffi_contract_grammar_v1,
 };
 use sha2::{Digest, Sha256};
 
@@ -288,7 +288,7 @@ impl G4DeclaredContractClaimsV1 {
         semantic_identity: [u8; 32],
     ) -> Result<Self, StagedFfiLinkError> {
         let effects = effects.into();
-        validate_effects(&effects)?;
+        parse_device_ffi_effects_v1(&effects).map_err(map_device_ffi_grammar_error)?;
         if semantic_identity == [0; 32] {
             return Err(StagedFfiLinkError::ReservedIdentity(
                 "semantic identity claim",
@@ -355,10 +355,9 @@ impl G4FfiSymbolClaimV1 {
         declared: G4DeclaredContractClaimsV1,
     ) -> Result<Self, StagedFfiLinkError> {
         let symbol = symbol.into();
-        validate_ffi_symbol(&symbol)?;
         let physical_abi = physical_abi.into();
-        validate_physical_abi(&physical_abi)?;
-        validate_effect_abi_compatibility(&declared.effects, &physical_abi)?;
+        validate_device_ffi_contract_grammar_v1(&symbol, &physical_abi, &declared.effects)
+            .map_err(map_device_ffi_grammar_error)?;
         let expected_provider = match direction {
             G4FfiDirectionClaimV1::Import => G4SymbolProviderClassClaimV1::ExternalPlanInput,
             G4FfiDirectionClaimV1::Export => G4SymbolProviderClassClaimV1::CompilerModuleInput,
@@ -1493,155 +1492,19 @@ fn plan_code_object_version(
     }
 }
 
-fn validate_ffi_symbol(symbol: &str) -> Result<(), StagedFfiLinkError> {
-    let mut bytes = symbol.bytes();
-    let valid = !symbol.is_empty()
-        && symbol.len() <= MAX_DEVICE_FFI_SYMBOL_BYTES_V1
-        && bytes
-            .next()
-            .is_some_and(|byte| byte.is_ascii_alphabetic() || matches!(byte, b'_' | b'.' | b'$'))
-        && bytes.all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'$' | b'@' | b'-')
-        });
-    if valid {
-        Ok(())
-    } else {
-        Err(StagedFfiLinkError::InvalidFfiSymbol)
-    }
-}
-
-fn validate_physical_abi(abi: &str) -> Result<(), StagedFfiLinkError> {
-    if abi.is_empty() || abi.len() > MAX_DEVICE_FFI_PHYSICAL_ABI_BYTES_V1 {
-        return Err(StagedFfiLinkError::InvalidPhysicalAbi);
-    }
-    let mut rest = abi
-        .strip_prefix("C(")
-        .ok_or(StagedFfiLinkError::InvalidPhysicalAbi)?;
-    let mut arguments = 0;
-    if let Some(after) = rest.strip_prefix(")->") {
-        rest = after;
-    } else {
-        loop {
-            rest = consume_abi_type(rest).ok_or(StagedFfiLinkError::InvalidPhysicalAbi)?;
-            arguments += 1;
-            if arguments > 32 {
-                return Err(StagedFfiLinkError::TooManyPhysicalAbiArguments);
-            }
-            if let Some(after) = rest.strip_prefix(',') {
-                rest = after;
-                continue;
-            }
-            rest = rest
-                .strip_prefix(")->")
-                .ok_or(StagedFfiLinkError::InvalidPhysicalAbi)?;
-            break;
+fn map_device_ffi_grammar_error(error: DeviceFfiGrammarError) -> StagedFfiLinkError {
+    match error {
+        DeviceFfiGrammarError::InvalidSymbol => StagedFfiLinkError::InvalidFfiSymbol,
+        DeviceFfiGrammarError::InvalidPhysicalAbi => StagedFfiLinkError::InvalidPhysicalAbi,
+        DeviceFfiGrammarError::TooManyPhysicalAbiArguments => {
+            StagedFfiLinkError::TooManyPhysicalAbiArguments
         }
-    }
-    if rest == "unit[size=0,align=1]" || consume_abi_type(rest) == Some("") {
-        Ok(())
-    } else {
-        Err(StagedFfiLinkError::InvalidPhysicalAbi)
-    }
-}
-
-fn consume_abi_type(input: &str) -> Option<&str> {
-    for (name, size) in [
-        ("i8", 1),
-        ("u8", 1),
-        ("i16", 2),
-        ("u16", 2),
-        ("i32", 4),
-        ("u32", 4),
-        ("i64", 8),
-        ("u64", 8),
-        ("f32", 4),
-        ("f64", 8),
-    ] {
-        let spelling = format!("{name}[size={size},align={size}]");
-        if let Some(rest) = input.strip_prefix(&spelling) {
-            return Some(rest);
+        DeviceFfiGrammarError::InvalidEffects => StagedFfiLinkError::InvalidEffects,
+        DeviceFfiGrammarError::EffectAbiMismatch(effect) => {
+            StagedFfiLinkError::EffectAbiMismatch(effect.as_str().to_owned())
         }
+        _ => StagedFfiLinkError::InvalidPhysicalAbi,
     }
-    let (mutable, rest) = if let Some(rest) = input.strip_prefix("const_ptr<") {
-        (false, rest)
-    } else if let Some(rest) = input.strip_prefix("mut_ptr<") {
-        (true, rest)
-    } else {
-        return None;
-    };
-    for address_space in ["constant", "global", "private", "workgroup"] {
-        if mutable && address_space == "constant" {
-            continue;
-        }
-        let Some(rest) = rest.strip_prefix(address_space) else {
-            continue;
-        };
-        let Some(rest) = rest.strip_prefix(',') else {
-            continue;
-        };
-        for scalar in [
-            "i8", "u8", "i16", "u16", "i32", "u32", "i64", "u64", "f32", "f64",
-        ] {
-            let suffix = format!(">[size=8,align=8,as={address_space}]");
-            if let Some(rest) = rest
-                .strip_prefix(scalar)
-                .and_then(|rest| rest.strip_prefix(&suffix))
-            {
-                return Some(rest);
-            }
-        }
-    }
-    None
-}
-
-fn validate_effects(effects: &str) -> Result<(), StagedFfiLinkError> {
-    if effects.is_empty() || effects.len() > MAX_DEVICE_FFI_EFFECT_BYTES_V1 {
-        return Err(StagedFfiLinkError::InvalidEffects);
-    }
-    if effects == "none" {
-        return Ok(());
-    }
-    let mut previous = None;
-    for effect in effects.split(',') {
-        if !matches!(
-            effect,
-            "atomic_global"
-                | "atomic_workgroup"
-                | "barrier_workgroup"
-                | "read_constant"
-                | "read_global"
-                | "read_private"
-                | "read_workgroup"
-                | "write_global"
-                | "write_private"
-                | "write_workgroup"
-        ) || previous.is_some_and(|previous: &str| previous >= effect)
-        {
-            return Err(StagedFfiLinkError::InvalidEffects);
-        }
-        previous = Some(effect);
-    }
-    Ok(())
-}
-
-fn validate_effect_abi_compatibility(effects: &str, abi: &str) -> Result<(), StagedFfiLinkError> {
-    for effect in effects.split(',').filter(|effect| *effect != "none") {
-        let required = match effect {
-            "read_constant" => "const_ptr<constant,",
-            "read_global" => "ptr<global,",
-            "read_private" => "ptr<private,",
-            "read_workgroup" => "ptr<workgroup,",
-            "write_global" | "atomic_global" => "mut_ptr<global,",
-            "write_private" => "mut_ptr<private,",
-            "write_workgroup" | "atomic_workgroup" => "mut_ptr<workgroup,",
-            "barrier_workgroup" => continue,
-            _ => return Err(StagedFfiLinkError::InvalidEffects),
-        };
-        if !abi.contains(required) {
-            return Err(StagedFfiLinkError::EffectAbiMismatch(effect.to_owned()));
-        }
-    }
-    Ok(())
 }
 
 fn validate_text(

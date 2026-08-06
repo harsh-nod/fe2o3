@@ -57,6 +57,7 @@ pub const MAX_DEVICE_FFI_SYMBOL_BYTES_V1: usize = 128;
 pub const MAX_DEVICE_FFI_TARGET_BYTES_V1: usize = 128;
 pub const MAX_DEVICE_FFI_PHYSICAL_ABI_BYTES_V1: usize = 2_048;
 pub const MAX_DEVICE_FFI_EFFECT_BYTES_V1: usize = 256;
+pub const MAX_DEVICE_FFI_ARGUMENTS_V1: usize = 32;
 
 const DEVICE_FFI_CONTRACT_DOMAIN_V1: &[u8] = b"fe2o3.device-ffi-contract.v1\0";
 
@@ -161,6 +162,458 @@ pub struct DeviceFfiContractFieldsV1<'a> {
     pub physical_abi: &'a str,
     pub effects: &'a str,
     pub semantic_identity: &'a str,
+}
+
+/// Canonical scalar types allowed in a V1 device FFI physical ABI.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum DeviceFfiScalarTypeV1 {
+    I8,
+    U8,
+    I16,
+    U16,
+    I32,
+    U32,
+    I64,
+    U64,
+    F32,
+    F64,
+}
+
+/// Canonical AMDGPU address spaces allowed in a V1 device FFI pointer.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum DeviceFfiAddressSpaceV1 {
+    Constant,
+    Global,
+    Private,
+    Workgroup,
+}
+
+/// Constness carried by a V1 device FFI pointer wrapper.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum DeviceFfiPointerAccessV1 {
+    Const,
+    Mut,
+}
+
+/// Parsed canonical V1 device pointer ABI component.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct DeviceFfiPointerTypeV1 {
+    access: DeviceFfiPointerAccessV1,
+    address_space: DeviceFfiAddressSpaceV1,
+    element: DeviceFfiScalarTypeV1,
+}
+
+impl DeviceFfiPointerTypeV1 {
+    pub const fn access(self) -> DeviceFfiPointerAccessV1 {
+        self.access
+    }
+
+    pub const fn address_space(self) -> DeviceFfiAddressSpaceV1 {
+        self.address_space
+    }
+
+    pub const fn element(self) -> DeviceFfiScalarTypeV1 {
+        self.element
+    }
+}
+
+/// Parsed canonical physical component in a V1 device FFI ABI.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum DeviceFfiPhysicalTypeV1 {
+    Scalar(DeviceFfiScalarTypeV1),
+    Pointer(DeviceFfiPointerTypeV1),
+}
+
+/// Parsed canonical return component in a V1 device FFI ABI.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum DeviceFfiPhysicalResultV1 {
+    Unit,
+    Value(DeviceFfiPhysicalTypeV1),
+}
+
+/// Parsed, bounded canonical V1 device FFI physical ABI.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DeviceFfiPhysicalAbiV1 {
+    arguments: Vec<DeviceFfiPhysicalTypeV1>,
+    result: DeviceFfiPhysicalResultV1,
+}
+
+impl DeviceFfiPhysicalAbiV1 {
+    pub fn arguments(&self) -> &[DeviceFfiPhysicalTypeV1] {
+        &self.arguments
+    }
+
+    pub const fn result(&self) -> DeviceFfiPhysicalResultV1 {
+        self.result
+    }
+}
+
+/// Canonical declared effects allowed in a V1 device FFI contract.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum DeviceFfiEffectV1 {
+    AtomicGlobal,
+    AtomicWorkgroup,
+    BarrierWorkgroup,
+    ReadConstant,
+    ReadGlobal,
+    ReadPrivate,
+    ReadWorkgroup,
+    WriteGlobal,
+    WritePrivate,
+    WriteWorkgroup,
+}
+
+impl DeviceFfiEffectV1 {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::AtomicGlobal => "atomic_global",
+            Self::AtomicWorkgroup => "atomic_workgroup",
+            Self::BarrierWorkgroup => "barrier_workgroup",
+            Self::ReadConstant => "read_constant",
+            Self::ReadGlobal => "read_global",
+            Self::ReadPrivate => "read_private",
+            Self::ReadWorkgroup => "read_workgroup",
+            Self::WriteGlobal => "write_global",
+            Self::WritePrivate => "write_private",
+            Self::WriteWorkgroup => "write_workgroup",
+        }
+    }
+}
+
+/// Parsed, sorted canonical V1 device FFI effects. An empty slice represents `none`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DeviceFfiEffectsV1 {
+    effects: Vec<DeviceFfiEffectV1>,
+}
+
+impl DeviceFfiEffectsV1 {
+    pub fn effects(&self) -> &[DeviceFfiEffectV1] {
+        &self.effects
+    }
+
+    pub fn is_none(&self) -> bool {
+        self.effects.is_empty()
+    }
+}
+
+/// Shared parsed grammar retained after validating one contract's coupled fields.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ValidatedDeviceFfiContractGrammarV1 {
+    physical_abi: DeviceFfiPhysicalAbiV1,
+    effects: DeviceFfiEffectsV1,
+}
+
+impl ValidatedDeviceFfiContractGrammarV1 {
+    pub const fn physical_abi(&self) -> &DeviceFfiPhysicalAbiV1 {
+        &self.physical_abi
+    }
+
+    pub const fn effects(&self) -> &DeviceFfiEffectsV1 {
+        &self.effects
+    }
+}
+
+/// Failure to parse the shared canonical V1 device FFI grammar.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum DeviceFfiGrammarError {
+    InvalidSymbol,
+    InvalidPhysicalAbi,
+    TooManyPhysicalAbiArguments,
+    InvalidEffects,
+    EffectAbiMismatch(DeviceFfiEffectV1),
+}
+
+impl fmt::Display for DeviceFfiGrammarError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidSymbol => formatter.write_str("invalid external symbol"),
+            Self::InvalidPhysicalAbi => {
+                formatter.write_str("physical ABI is empty, oversized, or noncanonical")
+            }
+            Self::TooManyPhysicalAbiArguments => formatter.write_str("too many physical arguments"),
+            Self::InvalidEffects => {
+                formatter.write_str("effects are empty, oversized, or noncanonical")
+            }
+            Self::EffectAbiMismatch(effect) => write!(
+                formatter,
+                "effect `{}` has no compatible physical pointer argument",
+                effect.as_str()
+            ),
+        }
+    }
+}
+
+impl Error for DeviceFfiGrammarError {}
+
+/// Validates the exact canonical grammar for an external FFI symbol.
+pub fn validate_device_ffi_symbol_v1(symbol: &str) -> Result<(), DeviceFfiGrammarError> {
+    let mut bytes = symbol.bytes();
+    let valid = !symbol.is_empty()
+        && symbol.len() <= MAX_DEVICE_FFI_SYMBOL_BYTES_V1
+        && bytes
+            .next()
+            .is_some_and(|byte| byte.is_ascii_alphabetic() || matches!(byte, b'_' | b'.' | b'$'))
+        && bytes.all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'$' | b'@' | b'-')
+        });
+    if valid {
+        Ok(())
+    } else {
+        Err(DeviceFfiGrammarError::InvalidSymbol)
+    }
+}
+
+/// Parses the exact canonical V1 physical ABI grammar.
+pub fn parse_device_ffi_physical_abi_v1(
+    abi: &str,
+) -> Result<DeviceFfiPhysicalAbiV1, DeviceFfiGrammarError> {
+    if abi.is_empty() || abi.len() > MAX_DEVICE_FFI_PHYSICAL_ABI_BYTES_V1 {
+        return Err(DeviceFfiGrammarError::InvalidPhysicalAbi);
+    }
+    let mut rest = abi
+        .strip_prefix("C(")
+        .ok_or(DeviceFfiGrammarError::InvalidPhysicalAbi)?;
+    let mut arguments = Vec::new();
+    if let Some(after) = rest.strip_prefix(")->") {
+        rest = after;
+    } else {
+        loop {
+            let (argument, after) = consume_device_ffi_physical_type_v1(rest)
+                .ok_or(DeviceFfiGrammarError::InvalidPhysicalAbi)?;
+            arguments.push(argument);
+            if arguments.len() > MAX_DEVICE_FFI_ARGUMENTS_V1 {
+                return Err(DeviceFfiGrammarError::TooManyPhysicalAbiArguments);
+            }
+            if let Some(after) = after.strip_prefix(',') {
+                rest = after;
+                continue;
+            }
+            rest = after
+                .strip_prefix(")->")
+                .ok_or(DeviceFfiGrammarError::InvalidPhysicalAbi)?;
+            break;
+        }
+    }
+    let result = if rest == "unit[size=0,align=1]" {
+        DeviceFfiPhysicalResultV1::Unit
+    } else {
+        let (result, trailing) = consume_device_ffi_physical_type_v1(rest)
+            .ok_or(DeviceFfiGrammarError::InvalidPhysicalAbi)?;
+        if !trailing.is_empty() {
+            return Err(DeviceFfiGrammarError::InvalidPhysicalAbi);
+        }
+        DeviceFfiPhysicalResultV1::Value(result)
+    };
+    Ok(DeviceFfiPhysicalAbiV1 { arguments, result })
+}
+
+/// Parses the exact sorted canonical V1 effect grammar.
+pub fn parse_device_ffi_effects_v1(
+    effects: &str,
+) -> Result<DeviceFfiEffectsV1, DeviceFfiGrammarError> {
+    if effects.is_empty() || effects.len() > MAX_DEVICE_FFI_EFFECT_BYTES_V1 {
+        return Err(DeviceFfiGrammarError::InvalidEffects);
+    }
+    if effects == "none" {
+        return Ok(DeviceFfiEffectsV1 {
+            effects: Vec::new(),
+        });
+    }
+    let mut parsed = Vec::new();
+    let mut previous = None;
+    for spelling in effects.split(',') {
+        let effect =
+            parse_device_ffi_effect_v1(spelling).ok_or(DeviceFfiGrammarError::InvalidEffects)?;
+        if previous.is_some_and(|previous: &str| previous >= spelling) {
+            return Err(DeviceFfiGrammarError::InvalidEffects);
+        }
+        parsed.push(effect);
+        previous = Some(spelling);
+    }
+    Ok(DeviceFfiEffectsV1 { effects: parsed })
+}
+
+/// Checks declared effects against parsed pointer arguments in the physical ABI.
+pub fn validate_device_ffi_effect_abi_v1(
+    effects: &DeviceFfiEffectsV1,
+    abi: &DeviceFfiPhysicalAbiV1,
+) -> Result<(), DeviceFfiGrammarError> {
+    for effect in &effects.effects {
+        let requirement = match effect {
+            DeviceFfiEffectV1::AtomicGlobal | DeviceFfiEffectV1::WriteGlobal => Some((
+                DeviceFfiAddressSpaceV1::Global,
+                DeviceFfiPointerAccessV1::Mut,
+            )),
+            DeviceFfiEffectV1::AtomicWorkgroup | DeviceFfiEffectV1::WriteWorkgroup => Some((
+                DeviceFfiAddressSpaceV1::Workgroup,
+                DeviceFfiPointerAccessV1::Mut,
+            )),
+            DeviceFfiEffectV1::WritePrivate => Some((
+                DeviceFfiAddressSpaceV1::Private,
+                DeviceFfiPointerAccessV1::Mut,
+            )),
+            DeviceFfiEffectV1::ReadConstant => Some((
+                DeviceFfiAddressSpaceV1::Constant,
+                DeviceFfiPointerAccessV1::Const,
+            )),
+            DeviceFfiEffectV1::ReadGlobal => Some((
+                DeviceFfiAddressSpaceV1::Global,
+                DeviceFfiPointerAccessV1::Const,
+            )),
+            DeviceFfiEffectV1::ReadPrivate => Some((
+                DeviceFfiAddressSpaceV1::Private,
+                DeviceFfiPointerAccessV1::Const,
+            )),
+            DeviceFfiEffectV1::ReadWorkgroup => Some((
+                DeviceFfiAddressSpaceV1::Workgroup,
+                DeviceFfiPointerAccessV1::Const,
+            )),
+            DeviceFfiEffectV1::BarrierWorkgroup => None,
+        };
+        let Some((address_space, minimum_access)) = requirement else {
+            continue;
+        };
+        let compatible = abi.arguments.iter().any(|argument| {
+            let DeviceFfiPhysicalTypeV1::Pointer(pointer) = argument else {
+                return false;
+            };
+            pointer.address_space == address_space
+                && (minimum_access == DeviceFfiPointerAccessV1::Const
+                    || pointer.access == DeviceFfiPointerAccessV1::Mut)
+        });
+        if !compatible {
+            return Err(DeviceFfiGrammarError::EffectAbiMismatch(*effect));
+        }
+    }
+    Ok(())
+}
+
+/// Validates and parses the coupled symbol, physical-ABI, effects, and effect-ABI grammar.
+pub fn validate_device_ffi_contract_grammar_v1(
+    symbol: &str,
+    physical_abi: &str,
+    effects: &str,
+) -> Result<ValidatedDeviceFfiContractGrammarV1, DeviceFfiGrammarError> {
+    validate_device_ffi_symbol_v1(symbol)?;
+    let physical_abi = parse_device_ffi_physical_abi_v1(physical_abi)?;
+    let effects = parse_device_ffi_effects_v1(effects)?;
+    validate_device_ffi_effect_abi_v1(&effects, &physical_abi)?;
+    Ok(ValidatedDeviceFfiContractGrammarV1 {
+        physical_abi,
+        effects,
+    })
+}
+
+fn consume_device_ffi_physical_type_v1(input: &str) -> Option<(DeviceFfiPhysicalTypeV1, &str)> {
+    if let Some((scalar, rest)) = consume_device_ffi_scalar_layout_v1(input) {
+        return Some((DeviceFfiPhysicalTypeV1::Scalar(scalar), rest));
+    }
+
+    let (access, rest) = if let Some(rest) = input.strip_prefix("const_ptr<") {
+        (DeviceFfiPointerAccessV1::Const, rest)
+    } else if let Some(rest) = input.strip_prefix("mut_ptr<") {
+        (DeviceFfiPointerAccessV1::Mut, rest)
+    } else {
+        return None;
+    };
+    let (address_space, rest, suffix) = if let Some(rest) = rest.strip_prefix("constant,") {
+        (
+            DeviceFfiAddressSpaceV1::Constant,
+            rest,
+            ">[size=8,align=8,as=constant]",
+        )
+    } else if let Some(rest) = rest.strip_prefix("global,") {
+        (
+            DeviceFfiAddressSpaceV1::Global,
+            rest,
+            ">[size=8,align=8,as=global]",
+        )
+    } else if let Some(rest) = rest.strip_prefix("private,") {
+        (
+            DeviceFfiAddressSpaceV1::Private,
+            rest,
+            ">[size=8,align=8,as=private]",
+        )
+    } else if let Some(rest) = rest.strip_prefix("workgroup,") {
+        (
+            DeviceFfiAddressSpaceV1::Workgroup,
+            rest,
+            ">[size=8,align=8,as=workgroup]",
+        )
+    } else {
+        return None;
+    };
+    if access == DeviceFfiPointerAccessV1::Mut && address_space == DeviceFfiAddressSpaceV1::Constant
+    {
+        return None;
+    }
+    let (element, rest) = consume_device_ffi_scalar_name_v1(rest)?;
+    let rest = rest.strip_prefix(suffix)?;
+    Some((
+        DeviceFfiPhysicalTypeV1::Pointer(DeviceFfiPointerTypeV1 {
+            access,
+            address_space,
+            element,
+        }),
+        rest,
+    ))
+}
+
+fn consume_device_ffi_scalar_layout_v1(input: &str) -> Option<(DeviceFfiScalarTypeV1, &str)> {
+    for (spelling, scalar) in [
+        ("i8[size=1,align=1]", DeviceFfiScalarTypeV1::I8),
+        ("u8[size=1,align=1]", DeviceFfiScalarTypeV1::U8),
+        ("i16[size=2,align=2]", DeviceFfiScalarTypeV1::I16),
+        ("u16[size=2,align=2]", DeviceFfiScalarTypeV1::U16),
+        ("i32[size=4,align=4]", DeviceFfiScalarTypeV1::I32),
+        ("u32[size=4,align=4]", DeviceFfiScalarTypeV1::U32),
+        ("i64[size=8,align=8]", DeviceFfiScalarTypeV1::I64),
+        ("u64[size=8,align=8]", DeviceFfiScalarTypeV1::U64),
+        ("f32[size=4,align=4]", DeviceFfiScalarTypeV1::F32),
+        ("f64[size=8,align=8]", DeviceFfiScalarTypeV1::F64),
+    ] {
+        if let Some(rest) = input.strip_prefix(spelling) {
+            return Some((scalar, rest));
+        }
+    }
+    None
+}
+
+fn consume_device_ffi_scalar_name_v1(input: &str) -> Option<(DeviceFfiScalarTypeV1, &str)> {
+    for (spelling, scalar) in [
+        ("i8", DeviceFfiScalarTypeV1::I8),
+        ("u8", DeviceFfiScalarTypeV1::U8),
+        ("i16", DeviceFfiScalarTypeV1::I16),
+        ("u16", DeviceFfiScalarTypeV1::U16),
+        ("i32", DeviceFfiScalarTypeV1::I32),
+        ("u32", DeviceFfiScalarTypeV1::U32),
+        ("i64", DeviceFfiScalarTypeV1::I64),
+        ("u64", DeviceFfiScalarTypeV1::U64),
+        ("f32", DeviceFfiScalarTypeV1::F32),
+        ("f64", DeviceFfiScalarTypeV1::F64),
+    ] {
+        if let Some(rest) = input.strip_prefix(spelling) {
+            return Some((scalar, rest));
+        }
+    }
+    None
+}
+
+fn parse_device_ffi_effect_v1(spelling: &str) -> Option<DeviceFfiEffectV1> {
+    match spelling {
+        "atomic_global" => Some(DeviceFfiEffectV1::AtomicGlobal),
+        "atomic_workgroup" => Some(DeviceFfiEffectV1::AtomicWorkgroup),
+        "barrier_workgroup" => Some(DeviceFfiEffectV1::BarrierWorkgroup),
+        "read_constant" => Some(DeviceFfiEffectV1::ReadConstant),
+        "read_global" => Some(DeviceFfiEffectV1::ReadGlobal),
+        "read_private" => Some(DeviceFfiEffectV1::ReadPrivate),
+        "read_workgroup" => Some(DeviceFfiEffectV1::ReadWorkgroup),
+        "write_global" => Some(DeviceFfiEffectV1::WriteGlobal),
+        "write_private" => Some(DeviceFfiEffectV1::WritePrivate),
+        "write_workgroup" => Some(DeviceFfiEffectV1::WriteWorkgroup),
+        _ => None,
+    }
 }
 
 /// Derives the collision-resistant identity for one canonical FFI declaration.
@@ -409,6 +862,10 @@ mod tests {
             semantic_identity: "1111111111111111111111111111111111111111111111111111111111111111",
         };
         let id = derive_device_ffi_contract_id_v1(fields);
+        assert_eq!(
+            id.to_hex(),
+            "7e5c3173ef0a8ba24dba7e993872bfd8053cbf1db1ff221c57c48b49e7824da4"
+        );
         let marker = device_ffi_marker_v1(id, fields);
         assert!(marker.starts_with("__fe2o3_device_ffi_v1|2|"));
         assert!(marker.contains(&id.to_hex()));
@@ -419,5 +876,122 @@ mod tests {
         });
         assert_ne!(id, changed);
         assert_eq!(DeviceFfiContractIdV1::from_hex(&id.to_hex()).unwrap(), id);
+    }
+
+    #[test]
+    fn shared_device_ffi_grammar_parses_real_g4_compatible_fields() {
+        let abi = concat!(
+            "C(const_ptr<constant,u32>[size=8,align=8,as=constant],",
+            "mut_ptr<global,f32>[size=8,align=8,as=global])->",
+            "u64[size=8,align=8]"
+        );
+        let parsed = validate_device_ffi_contract_grammar_v1(
+            "external_mix.v1",
+            abi,
+            "atomic_global,read_constant,read_global,write_global",
+        )
+        .unwrap();
+
+        assert_eq!(parsed.physical_abi().arguments().len(), 2);
+        assert_eq!(
+            parsed.physical_abi().result(),
+            DeviceFfiPhysicalResultV1::Value(DeviceFfiPhysicalTypeV1::Scalar(
+                DeviceFfiScalarTypeV1::U64
+            ))
+        );
+        assert_eq!(parsed.effects().effects().len(), 4);
+        assert!(!parsed.effects().is_none());
+    }
+
+    #[test]
+    fn shared_device_ffi_grammar_rejects_noncanonical_spellings() {
+        for symbol in ["", "9bad", "bad symbol", "x\n", &"x".repeat(129)] {
+            assert_eq!(
+                validate_device_ffi_symbol_v1(symbol),
+                Err(DeviceFfiGrammarError::InvalidSymbol),
+                "{symbol:?}"
+            );
+        }
+
+        for abi in [
+            "",
+            "C( )->unit[size=0,align=1]",
+            "C(u32[size=4,align=8])->unit[size=0,align=1]",
+            "C(mut_ptr<constant,u32>[size=8,align=8,as=constant])->unit[size=0,align=1]",
+            "C(ptr<global,u32>[size=8,align=8,as=global])->unit[size=0,align=1]",
+            "C()->void",
+            "C()->unit[size=0,align=1]trailing",
+        ] {
+            assert_eq!(
+                parse_device_ffi_physical_abi_v1(abi),
+                Err(DeviceFfiGrammarError::InvalidPhysicalAbi),
+                "{abi}"
+            );
+        }
+
+        for effects in [
+            "",
+            "None",
+            "read_global,atomic_global",
+            "read_global,read_global",
+            "read-global",
+            "none,read_global",
+        ] {
+            assert_eq!(
+                parse_device_ffi_effects_v1(effects),
+                Err(DeviceFfiGrammarError::InvalidEffects),
+                "{effects}"
+            );
+        }
+    }
+
+    #[test]
+    fn effect_abi_requires_compatible_pointer_arguments_not_return_values() {
+        let global_const = concat!(
+            "C(const_ptr<global,u32>[size=8,align=8,as=global])->",
+            "unit[size=0,align=1]"
+        );
+        assert!(
+            validate_device_ffi_contract_grammar_v1("reader", global_const, "read_global").is_ok()
+        );
+        assert_eq!(
+            validate_device_ffi_contract_grammar_v1("writer", global_const, "write_global"),
+            Err(DeviceFfiGrammarError::EffectAbiMismatch(
+                DeviceFfiEffectV1::WriteGlobal
+            ))
+        );
+
+        let pointer_result_only = "C()->const_ptr<global,u32>[size=8,align=8,as=global]";
+        assert_eq!(
+            validate_device_ffi_contract_grammar_v1(
+                "return_only",
+                pointer_result_only,
+                "read_global"
+            ),
+            Err(DeviceFfiGrammarError::EffectAbiMismatch(
+                DeviceFfiEffectV1::ReadGlobal
+            ))
+        );
+    }
+
+    #[test]
+    fn physical_abi_argument_bound_is_shared_and_exact() {
+        let argument = "u32[size=4,align=4]";
+        let at_bound = format!(
+            "C({})->unit[size=0,align=1]",
+            vec![argument; MAX_DEVICE_FFI_ARGUMENTS_V1].join(",")
+        );
+        assert_eq!(
+            parse_device_ffi_physical_abi_v1(&at_bound)
+                .unwrap()
+                .arguments()
+                .len(),
+            MAX_DEVICE_FFI_ARGUMENTS_V1
+        );
+        let over_bound = format!("C({argument},{}", &at_bound[2..]);
+        assert_eq!(
+            parse_device_ffi_physical_abi_v1(&over_bound),
+            Err(DeviceFfiGrammarError::TooManyPhysicalAbiArguments)
+        );
     }
 }

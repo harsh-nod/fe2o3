@@ -2,9 +2,10 @@
 
 use reserved_fe2o3_symbols::{
     DEVICE_FFI_DIRECTION_EXPORT_V1, DEVICE_FFI_DIRECTION_IMPORT_V1, DEVICE_FFI_MARKER_PREFIX_V1,
-    DeviceFfiContractFieldsV1, DeviceFfiContractIdV1, MAX_DEVICE_FFI_EFFECT_BYTES_V1,
-    MAX_DEVICE_FFI_PHYSICAL_ABI_BYTES_V1, MAX_DEVICE_FFI_SYMBOL_BYTES_V1,
-    MAX_DEVICE_FFI_TARGET_BYTES_V1, derive_device_ffi_contract_id_v1,
+    DeviceFfiContractFieldsV1, DeviceFfiContractIdV1, MAX_DEVICE_FFI_ARGUMENTS_V1,
+    MAX_DEVICE_FFI_TARGET_BYTES_V1, derive_device_ffi_contract_id_v1, parse_device_ffi_effects_v1,
+    parse_device_ffi_physical_abi_v1, validate_device_ffi_effect_abi_v1,
+    validate_device_ffi_symbol_v1,
 };
 use rustc_abi::ExternAbi;
 use rustc_ast::LitKind;
@@ -21,7 +22,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 const MAX_DEVICE_FFI_CONTRACTS: usize = 128;
-const MAX_DEVICE_FFI_ARGUMENTS: usize = 32;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) enum DeviceFfiDirection {
@@ -885,7 +885,7 @@ fn validate_rustc_signature<'tcx>(
             tcx.def_path_str(instance.def_id())
         )));
     }
-    if signature.inputs().len() > MAX_DEVICE_FFI_ARGUMENTS {
+    if signature.inputs().len() > MAX_DEVICE_FFI_ARGUMENTS_V1 {
         return Err(DeviceFfiError::new("too many physical arguments"));
     }
     let mut physical = String::from("C(");
@@ -1011,7 +1011,8 @@ fn parse_marker(marker: &str) -> Result<DeviceFfiContract, DeviceFfiError> {
     let direction = DeviceFfiDirection::from_tag(direction_tag)?;
     let id = DeviceFfiContractIdV1::from_hex(fields[1])
         .map_err(|error| DeviceFfiError::new(format!("invalid contract identity: {error}")))?;
-    validate_symbol(fields[2])?;
+    validate_device_ffi_symbol_v1(fields[2])
+        .map_err(|error| DeviceFfiError::new(error.to_string()))?;
     if fields[3] != "C" {
         return Err(DeviceFfiError::new("calling convention must be exactly C"));
     }
@@ -1022,10 +1023,10 @@ fn parse_marker(marker: &str) -> Result<DeviceFfiContract, DeviceFfiError> {
         return Err(DeviceFfiError::new("unsupported code-object version"));
     }
     validate_target(fields[5])?;
-    if fields[6].is_empty() || fields[6].len() > MAX_DEVICE_FFI_PHYSICAL_ABI_BYTES_V1 {
-        return Err(DeviceFfiError::new("physical ABI is empty or oversized"));
-    }
-    validate_effects(fields[7])?;
+    let physical_abi = parse_device_ffi_physical_abi_v1(fields[6])
+        .map_err(|error| DeviceFfiError::new(error.to_string()))?;
+    let effects = parse_device_ffi_effects_v1(fields[7])
+        .map_err(|error| DeviceFfiError::new(error.to_string()))?;
     validate_hex_identity(fields[8], "semantic identity")?;
     let canonical_fields = DeviceFfiContractFieldsV1 {
         direction: direction.tag(),
@@ -1045,7 +1046,8 @@ fn parse_marker(marker: &str) -> Result<DeviceFfiContract, DeviceFfiError> {
             derived.to_hex()
         )));
     }
-    validate_effect_abi_compatibility(fields[7], fields[6])?;
+    validate_device_ffi_effect_abi_v1(&effects, &physical_abi)
+        .map_err(|error| DeviceFfiError::new(error.to_string()))?;
     Ok(DeviceFfiContract {
         id,
         direction,
@@ -1331,22 +1333,6 @@ fn validate_source_bindings(
     Ok(())
 }
 
-fn validate_symbol(symbol: &str) -> Result<(), DeviceFfiError> {
-    let mut bytes = symbol.bytes();
-    let valid = symbol.len() <= MAX_DEVICE_FFI_SYMBOL_BYTES_V1
-        && bytes
-            .next()
-            .is_some_and(|byte| byte.is_ascii_alphabetic() || matches!(byte, b'_' | b'.' | b'$'))
-        && bytes.all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'$' | b'@' | b'-')
-        });
-    if valid {
-        Ok(())
-    } else {
-        Err(DeviceFfiError::new("invalid external symbol"))
-    }
-}
-
 fn validate_target(target: &str) -> Result<(), DeviceFfiError> {
     if target.len() > MAX_DEVICE_FFI_TARGET_BYTES_V1 {
         return Err(DeviceFfiError::new("target is oversized"));
@@ -1375,36 +1361,6 @@ fn validate_target(target: &str) -> Result<(), DeviceFfiError> {
     Ok(())
 }
 
-fn validate_effects(effects: &str) -> Result<(), DeviceFfiError> {
-    if effects.len() > MAX_DEVICE_FFI_EFFECT_BYTES_V1 {
-        return Err(DeviceFfiError::new("effects are oversized"));
-    }
-    if effects == "none" {
-        return Ok(());
-    }
-    let mut previous = None;
-    for effect in effects.split(',') {
-        if !matches!(
-            effect,
-            "atomic_global"
-                | "atomic_workgroup"
-                | "barrier_workgroup"
-                | "read_constant"
-                | "read_global"
-                | "read_private"
-                | "read_workgroup"
-                | "write_global"
-                | "write_private"
-                | "write_workgroup"
-        ) || previous.is_some_and(|previous: &str| previous >= effect)
-        {
-            return Err(DeviceFfiError::new("effects are not canonical"));
-        }
-        previous = Some(effect);
-    }
-    Ok(())
-}
-
 fn validate_hex_identity(value: &str, field: &str) -> Result<(), DeviceFfiError> {
     if value.len() == 64
         && value
@@ -1416,28 +1372,6 @@ fn validate_hex_identity(value: &str, field: &str) -> Result<(), DeviceFfiError>
     } else {
         Err(DeviceFfiError::new(format!("invalid {field}")))
     }
-}
-
-fn validate_effect_abi_compatibility(effects: &str, abi: &str) -> Result<(), DeviceFfiError> {
-    for effect in effects.split(',').filter(|effect| *effect != "none") {
-        let required = match effect {
-            "read_constant" => "const_ptr<constant,",
-            "read_global" => "ptr<global,",
-            "read_private" => "ptr<private,",
-            "read_workgroup" => "ptr<workgroup,",
-            "write_global" | "atomic_global" => "mut_ptr<global,",
-            "write_private" => "mut_ptr<private,",
-            "write_workgroup" | "atomic_workgroup" => "mut_ptr<workgroup,",
-            "barrier_workgroup" => continue,
-            _ => unreachable!("effect grammar was validated"),
-        };
-        if !abi.contains(required) {
-            return Err(DeviceFfiError::new(format!(
-                "effect `{effect}` has no compatible physical pointer argument"
-            )));
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]
