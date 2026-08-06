@@ -297,6 +297,7 @@ dependencies = [
  "fe2o3-compiler-ffi",
  "fe2o3-hsaco",
  "fe2o3-kernel-descriptor",
+ "object",
  "reserved-fe2o3-symbols",
  "rmpv",
  "rustix",
