@@ -2,8 +2,8 @@ use dialect_amdgcn::{LoweringDiagnosticCode, lower_compiler_module_to_llvm_ir};
 use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, BasicBlock, BinaryOp, BlockId, Function, FunctionId,
     IntrinsicOperation, Kernel, LaunchDomain, LaunchExtent, Module, Operation, OperationKind,
-    Signature, Terminator, Type, ValueDef, ValueId, WorkgroupMemory, WorkgroupMemoryExtent,
-    WorkgroupSize,
+    Signature, TargetCapability, Terminator, Type, ValueDef, ValueId, WaveWidth, WorkgroupMemory,
+    WorkgroupMemoryExtent, WorkgroupSize,
 };
 
 fn returning_block(operations: Vec<Operation>, values: Vec<ValueId>) -> BasicBlock {
@@ -24,6 +24,49 @@ fn call(result: u32, callee: &str, argument: u32) -> Operation {
             arguments: vec![ValueId(argument)],
         },
     )
+}
+
+fn void_call(callee: &str) -> Operation {
+    Operation::new(
+        vec![],
+        OperationKind::Call {
+            callee: FunctionId::new(callee),
+            arguments: vec![],
+        },
+    )
+}
+
+fn void_helper(id: &str, callees: &[&str]) -> Function {
+    Function::internal_helper(
+        id,
+        Signature::new(vec![], vec![]),
+        vec![],
+        vec![returning_block(
+            callees.iter().map(|callee| void_call(callee)).collect(),
+            vec![],
+        )],
+    )
+}
+
+fn void_entry(id: &str, callees: &[&str]) -> Function {
+    Function::kernel_entry(
+        id,
+        Signature::new(vec![], vec![]),
+        vec![],
+        vec![returning_block(
+            callees.iter().map(|callee| void_call(callee)).collect(),
+            vec![],
+        )],
+    )
+}
+
+fn wave_kernel(id: &str, entry: &str, width: WaveWidth) -> Kernel {
+    let mut kernel = kernel(id, entry, 64);
+    kernel.required_capabilities.clear();
+    kernel
+        .required_capabilities
+        .insert(TargetCapability::WaveWidth(width));
+    kernel
 }
 
 fn kernel_entry(id: &str, callees: &[&str]) -> Function {
@@ -55,6 +98,11 @@ fn kernel(id: &str, entry: &str, workgroup_x: u32) -> Kernel {
         },
     );
     kernel.workgroup_size = Some(WorkgroupSize::new(workgroup_x, 1, 1));
+    kernel
+        .required_capabilities
+        .insert(fe2o3_kernel_ir::TargetCapability::WaveWidth(
+            fe2o3_kernel_ir::WaveWidth::Wave64,
+        ));
     kernel
 }
 
@@ -154,17 +202,23 @@ fn pointer_declarations_and_visible_definitions_preserve_physical_types() {
         "consume_pointer",
         Signature::new(vec![pointer.clone()], vec![]),
     ));
-    module.functions.push(Function::definition(
+    let mut identity = Function::definition(
         "identity_pointer",
         Signature::new(vec![pointer.clone()], vec![pointer]),
         vec![ValueId(0)],
         vec![returning_block(vec![], vec![ValueId(0)])],
-    ));
+    );
+    identity
+        .required_capabilities
+        .insert(fe2o3_kernel_ir::TargetCapability::WaveWidth(
+            fe2o3_kernel_ir::WaveWidth::Wave64,
+        ));
+    module.functions.push(identity);
 
     let llvm = lower_compiler_module_to_llvm_ir(&module).unwrap();
     assert!(llvm.contains("declare void @consume_pointer(ptr addrspace(1))"));
     assert!(llvm.contains(
-        "define internal ptr addrspace(1) @identity_pointer(ptr addrspace(1) %arg0) nounwind"
+        "define internal ptr addrspace(1) @identity_pointer(ptr addrspace(1) %arg0) nounwind \"target-features\"=\"-wavefrontsize32,+wavefrontsize64\""
     ));
     assert!(llvm.contains("ret ptr addrspace(1) %arg0"));
 }
@@ -366,4 +420,143 @@ fn unsafe_import_names_and_multi_value_results_are_rejected() {
     ));
     let error = lower_compiler_module_to_llvm_ir(&multiple).unwrap_err();
     assert!(error.contains(LoweringDiagnosticCode::UnsupportedResults));
+}
+
+#[test]
+fn mixed_wave_kernels_cannot_share_a_direct_helper() {
+    let mut module = Module::new("tests::mixed_direct");
+    module.functions = vec![
+        void_entry("wave32_entry", &["shared"]),
+        void_entry("wave64_entry", &["shared"]),
+        void_helper("shared", &[]),
+    ];
+    module.kernels = vec![
+        wave_kernel("wave32_kernel", "wave32_entry", WaveWidth::Wave32),
+        wave_kernel("wave64_kernel", "wave64_entry", WaveWidth::Wave64),
+    ];
+
+    let error = lower_compiler_module_to_llvm_ir(&module).unwrap_err();
+    assert!(error.contains(LoweringDiagnosticCode::IncompatibleWaveCallGraph));
+    assert!(error.to_string().contains("helper SCC [shared]"));
+    assert!(error.to_string().contains("Wave32"));
+    assert!(error.to_string().contains("Wave64"));
+}
+
+#[test]
+fn mixed_wave_kernels_cannot_enter_different_nodes_of_one_recursive_scc() {
+    let mut module = Module::new("tests::mixed_recursive");
+    module.functions = vec![
+        void_entry("wave32_entry", &["recursive_a"]),
+        void_entry("wave64_entry", &["recursive_b"]),
+        void_helper("recursive_a", &["recursive_b"]),
+        void_helper("recursive_b", &["recursive_a"]),
+    ];
+    module.kernels = vec![
+        wave_kernel("wave32_kernel", "wave32_entry", WaveWidth::Wave32),
+        wave_kernel("wave64_kernel", "wave64_entry", WaveWidth::Wave64),
+    ];
+
+    let first = lower_compiler_module_to_llvm_ir(&module).unwrap_err();
+    let second = lower_compiler_module_to_llvm_ir(&module).unwrap_err();
+    assert_eq!(first, second);
+    assert!(first.contains(LoweringDiagnosticCode::IncompatibleWaveCallGraph));
+    assert!(first.to_string().contains("recursive_a, recursive_b"));
+}
+
+#[test]
+fn inherited_wave_mode_reaches_branch_phi_helpers_and_recursive_sccs() {
+    let i32_type = Type::Scalar(fe2o3_kernel_ir::ScalarType::I32);
+    let mut entry = BasicBlock::new(BlockId(0));
+    entry.operations = vec![
+        Operation::effect_free(
+            ValueDef::new(ValueId(1), i32_type.clone()),
+            OperationKind::Constant(fe2o3_kernel_ir::Constant::I32(11)),
+        ),
+        Operation::effect_free(
+            ValueDef::new(ValueId(2), i32_type.clone()),
+            OperationKind::Constant(fe2o3_kernel_ir::Constant::I32(22)),
+        ),
+    ];
+    entry.terminator = Some(Terminator::ConditionalBranch {
+        condition: ValueId(0),
+        then_target: BlockId(1),
+        then_arguments: vec![],
+        else_target: BlockId(2),
+        else_arguments: vec![],
+    });
+    let mut then_block = BasicBlock::new(BlockId(1));
+    then_block.terminator = Some(Terminator::Branch {
+        target: BlockId(3),
+        arguments: vec![ValueId(1)],
+    });
+    let mut else_block = BasicBlock::new(BlockId(2));
+    else_block.terminator = Some(Terminator::Branch {
+        target: BlockId(3),
+        arguments: vec![ValueId(2)],
+    });
+    let mut merge = BasicBlock::new(BlockId(3));
+    merge
+        .parameters
+        .push(ValueDef::new(ValueId(3), i32_type.clone()));
+    merge.terminator = Some(Terminator::Return {
+        values: vec![ValueId(3)],
+    });
+    let branching = Function::internal_helper(
+        "branching",
+        Signature::new(vec![Type::BOOL], vec![i32_type]),
+        vec![ValueId(0)],
+        vec![entry, then_block, else_block, merge],
+    );
+    let entry = Function::kernel_entry(
+        "entry",
+        Signature::new(vec![Type::BOOL], vec![]),
+        vec![ValueId(0)],
+        vec![returning_block(
+            vec![call(1, "branching", 0), void_call("recursive_a")],
+            vec![],
+        )],
+    );
+    let mut module = Module::new("tests::effective_wave");
+    module.functions = vec![
+        entry,
+        branching,
+        void_helper("recursive_a", &["recursive_b"]),
+        void_helper("recursive_b", &["recursive_a"]),
+    ];
+    module.kernels = vec![wave_kernel("kernel", "entry", WaveWidth::Wave32)];
+
+    let llvm = lower_compiler_module_to_llvm_ir(&module).unwrap();
+    let wave32 = "\"target-features\"=\"+wavefrontsize32,-wavefrontsize64\"";
+    assert!(llvm.contains(&format!(
+        "define internal i32 @branching(i1 %arg0) nounwind {wave32}"
+    )));
+    assert!(llvm.contains(&format!(
+        "define internal void @recursive_a() nounwind {wave32}"
+    )));
+    assert!(llvm.contains(&format!(
+        "define internal void @recursive_b() nounwind {wave32}"
+    )));
+    assert!(llvm.contains("%v3 = phi i32 [ 11, %bb1 ], [ 22, %bb2 ]"));
+    assert!(llvm.contains(&format!(
+        "attributes #0 = {{ nounwind \"amdgpu-flat-work-group-size\"=\"64,64\" {wave32} }}"
+    )));
+}
+
+#[test]
+fn unreachable_helper_roots_require_an_explicit_mode() {
+    let mut module = Module::new("tests::unreachable_helper");
+    module.functions = vec![void_entry("entry", &[]), void_helper("orphan", &[])];
+    module.kernels = vec![wave_kernel("kernel", "entry", WaveWidth::Wave64)];
+
+    let error = lower_compiler_module_to_llvm_ir(&module).unwrap_err();
+    assert!(error.contains(LoweringDiagnosticCode::MissingWaveWidth));
+    assert!(error.to_string().contains("helper SCC [orphan]"));
+
+    module.functions[1]
+        .required_capabilities
+        .insert(TargetCapability::WaveWidth(WaveWidth::Wave64));
+    let llvm = lower_compiler_module_to_llvm_ir(&module).unwrap();
+    assert!(llvm.contains(
+        "define internal void @orphan() nounwind \"target-features\"=\"-wavefrontsize32,+wavefrontsize64\""
+    ));
 }

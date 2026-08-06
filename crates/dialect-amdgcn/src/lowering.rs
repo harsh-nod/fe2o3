@@ -16,6 +16,9 @@ use fe2o3_kernel_ir::{
 use crate::{AMDGPU_TRIPLE, AmdgcnIntrinsic, Dim};
 
 const MAX_G1_WORKGROUP_SIZE: u32 = 1024;
+const MAX_COMPILER_MODULE_GRAPH_FUNCTIONS: usize = 1_024;
+const MAX_COMPILER_MODULE_GRAPH_KERNELS: usize = 256;
+const MAX_COMPILER_MODULE_CALL_EDGES: usize = 131_072;
 
 /// Stable rejection categories for the first target-neutral AMDGPU lowering slice.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -24,6 +27,9 @@ pub enum LoweringDiagnosticCode {
     MissingKernel,
     AmbiguousKernel,
     ConflictingSymbol,
+    ResourceLimit,
+    IncompatibleWaveCallGraph,
+    MissingWaveWidth,
     UnsafeSymbolName,
     UnsupportedLaunchDomain,
     MissingWorkgroupSize,
@@ -463,26 +469,16 @@ pub fn lower_compiler_module_to_llvm_ir(module: &Module) -> Result<String, Lower
         }
     }
 
+    let wave_plan =
+        infer_effective_wave_widths(module, module_wave, &kernels, &helper_definitions)?;
+
     let mut kernel_lowerers = Vec::with_capacity(kernels.len());
     for kernel in &kernels {
         let workgroup_size = validate_launch(module, kernel)?;
         let entry = module
             .function(&kernel.entry)
             .expect("verify_module established the kernel entry");
-        let kernel_wave = validate_capabilities(
-            LoweringLocation::kernel(module, kernel),
-            &kernel.required_capabilities,
-            "kernel",
-        )?;
-        let function_wave = validate_capabilities(
-            LoweringLocation::function(module, kernel, entry),
-            &entry.required_capabilities,
-            "entry function",
-        )?;
-        let wave_width = unique_wave_width(
-            LoweringLocation::function(module, kernel, entry),
-            [module_wave, kernel_wave, function_wave],
-        )?;
+        let wave_width = wave_plan.kernels[&kernel.id];
         let mut lowerer = FunctionLowerer::compiler_module_kernel(
             module,
             kernel,
@@ -497,15 +493,7 @@ pub fn lower_compiler_module_to_llvm_ir(module: &Module) -> Result<String, Lower
 
     let mut helper_lowerers = Vec::with_capacity(helper_definitions.len());
     for function in helper_definitions {
-        let function_wave = validate_capabilities(
-            LoweringLocation::device_function(module, function),
-            &function.required_capabilities,
-            "device function",
-        )?;
-        let wave_width = unique_wave_width(
-            LoweringLocation::device_function(module, function),
-            [module_wave, function_wave, None],
-        )?;
+        let wave_width = wave_plan.helpers[&function.id];
         let mut lowerer = FunctionLowerer::compiler_module_device_function(
             module,
             function,
@@ -586,6 +574,376 @@ fn unique_wave_width(
         ));
     }
     Ok(widths.first().copied())
+}
+
+struct EffectiveWavePlan {
+    kernels: BTreeMap<KernelId, Option<WaveWidth>>,
+    helpers: BTreeMap<FunctionId, Option<WaveWidth>>,
+}
+
+fn infer_effective_wave_widths(
+    module: &Module,
+    module_wave: Option<WaveWidth>,
+    kernels: &[&Kernel],
+    helpers: &[&Function],
+) -> Result<EffectiveWavePlan, LoweringErrors> {
+    enforce_call_graph_limit(
+        module,
+        "compiler-module graph functions",
+        module.functions.len(),
+        MAX_COMPILER_MODULE_GRAPH_FUNCTIONS,
+    )?;
+    enforce_call_graph_limit(
+        module,
+        "compiler-module graph kernels",
+        kernels.len(),
+        MAX_COMPILER_MODULE_GRAPH_KERNELS,
+    )?;
+
+    let helper_indices = helpers
+        .iter()
+        .enumerate()
+        .map(|(index, function)| (function.id.clone(), index))
+        .collect::<BTreeMap<_, _>>();
+    let mut edge_count = 0usize;
+    let mut adjacency = Vec::with_capacity(helpers.len());
+    for function in helpers {
+        adjacency.push(helper_callees(
+            module,
+            function,
+            &helper_indices,
+            &mut edge_count,
+        )?);
+    }
+
+    let (component_of, components) = strongly_connected_components(&adjacency);
+    let mut component_edges = vec![BTreeSet::new(); components.len()];
+    for (caller, callees) in adjacency.iter().enumerate() {
+        for callee in callees {
+            let source = component_of[caller];
+            let target = component_of[*callee];
+            if source != target {
+                component_edges[source].insert(target);
+            }
+        }
+    }
+
+    let mut component_claims = vec![BTreeSet::new(); components.len()];
+    for (index, function) in helpers.iter().enumerate() {
+        let function_wave = validate_capabilities(
+            LoweringLocation::device_function(module, function),
+            &function.required_capabilities,
+            "device function",
+        )?;
+        component_claims[component_of[index]]
+            .extend([module_wave, function_wave].into_iter().flatten());
+    }
+    for (component, claims) in component_claims.iter().enumerate() {
+        reject_mixed_component_modes(module, helpers, &components[component], claims)?;
+    }
+
+    let mut assignments = vec![BTreeSet::new(); components.len()];
+    let mut kernel_reachable = vec![false; components.len()];
+    let mut kernel_modes = BTreeMap::new();
+    for kernel in kernels {
+        let entry = module
+            .function(&kernel.entry)
+            .expect("verified kernel entry");
+        let kernel_wave = validate_capabilities(
+            LoweringLocation::kernel(module, kernel),
+            &kernel.required_capabilities,
+            "kernel",
+        )?;
+        let entry_wave = validate_capabilities(
+            LoweringLocation::function(module, kernel, entry),
+            &entry.required_capabilities,
+            "entry function",
+        )?;
+        let root_wave = unique_wave_width(
+            LoweringLocation::function(module, kernel, entry),
+            [module_wave, kernel_wave, entry_wave],
+        )?;
+        let direct = helper_callees(module, entry, &helper_indices, &mut edge_count)?
+            .into_iter()
+            .map(|helper| component_of[helper]);
+        let reachable = reachable_components(direct, &component_edges);
+        let mut modes = root_wave.into_iter().collect::<BTreeSet<_>>();
+        for component in &reachable {
+            kernel_reachable[*component] = true;
+            modes.extend(component_claims[*component].iter().copied());
+        }
+        if modes.len() > 1 {
+            return Err(LoweringErrors::one(
+                LoweringLocation::kernel(module, kernel),
+                LoweringDiagnosticCode::IncompatibleWaveCallGraph,
+                format!(
+                    "kernel {} reaches helper SCCs with incompatible exact wave modes {modes:?}",
+                    kernel.id
+                ),
+            ));
+        }
+        if !reachable.is_empty() && modes.is_empty() {
+            return Err(LoweringErrors::one(
+                LoweringLocation::kernel(module, kernel),
+                LoweringDiagnosticCode::MissingWaveWidth,
+                format!(
+                    "kernel {} reaches helpers but neither the kernel closure nor module declares an exact wave mode",
+                    kernel.id
+                ),
+            ));
+        }
+        let mode = modes.first().copied();
+        if let Some(mode) = mode {
+            for component in reachable {
+                assignments[component].insert(mode);
+            }
+        }
+        kernel_modes.insert(kernel.id.clone(), mode);
+    }
+
+    for (component, modes) in assignments.iter().enumerate() {
+        if modes.len() > 1 {
+            return Err(mixed_assignment_error(
+                module,
+                helpers,
+                &components[component],
+                modes,
+            ));
+        }
+    }
+
+    let mut unreachable_indegree = vec![0usize; components.len()];
+    for (source, targets) in component_edges.iter().enumerate() {
+        if kernel_reachable[source] {
+            continue;
+        }
+        for target in targets {
+            if !kernel_reachable[*target] {
+                unreachable_indegree[*target] += 1;
+            }
+        }
+    }
+    let mut non_kernel_roots = (0..components.len())
+        .filter(|component| {
+            !kernel_reachable[*component]
+                && (unreachable_indegree[*component] == 0
+                    || components[*component]
+                        .iter()
+                        .any(|helper| helpers[*helper].role == FunctionRole::DeviceFfiExport))
+        })
+        .collect::<BTreeSet<_>>();
+    while let Some(root) = non_kernel_roots.pop_first() {
+        if component_claims[root].is_empty() {
+            let function = helpers[components[root][0]];
+            return Err(LoweringErrors::one(
+                LoweringLocation::device_function(module, function),
+                LoweringDiagnosticCode::MissingWaveWidth,
+                format!(
+                    "non-kernel-reachable helper SCC [{}] requires an explicit exact wave mode",
+                    component_names(helpers, &components[root])
+                ),
+            ));
+        }
+        let reachable = reachable_components([root], &component_edges);
+        let mut modes = BTreeSet::new();
+        for component in &reachable {
+            modes.extend(component_claims[*component].iter().copied());
+            modes.extend(assignments[*component].iter().copied());
+        }
+        if modes.len() > 1 {
+            return Err(mixed_assignment_error(
+                module,
+                helpers,
+                &components[root],
+                &modes,
+            ));
+        }
+        let mode = *modes.first().expect("root has an explicit wave mode");
+        for component in reachable {
+            assignments[component].insert(mode);
+        }
+    }
+
+    let mut helper_modes = BTreeMap::new();
+    for (index, function) in helpers.iter().enumerate() {
+        let component = component_of[index];
+        let mut modes = component_claims[component].clone();
+        modes.extend(assignments[component].iter().copied());
+        if modes.len() > 1 {
+            return Err(mixed_assignment_error(
+                module,
+                helpers,
+                &components[component],
+                &modes,
+            ));
+        }
+        let mode = modes.first().copied().ok_or_else(|| {
+            LoweringErrors::one(
+                LoweringLocation::device_function(module, function),
+                LoweringDiagnosticCode::MissingWaveWidth,
+                "helper has no effective exact wave mode after bounded call-graph propagation",
+            )
+        })?;
+        helper_modes.insert(function.id.clone(), Some(mode));
+    }
+
+    Ok(EffectiveWavePlan {
+        kernels: kernel_modes,
+        helpers: helper_modes,
+    })
+}
+
+fn helper_callees(
+    module: &Module,
+    function: &Function,
+    helper_indices: &BTreeMap<FunctionId, usize>,
+    edge_count: &mut usize,
+) -> Result<Vec<usize>, LoweringErrors> {
+    let mut callees = BTreeSet::new();
+    let body = function.body.as_ref().expect("definition required");
+    for operation in body.blocks.iter().flat_map(|block| &block.operations) {
+        let OperationKind::Call { callee, .. } = &operation.kind else {
+            continue;
+        };
+        *edge_count = edge_count.saturating_add(1);
+        enforce_call_graph_limit(
+            module,
+            "compiler-module call edges",
+            *edge_count,
+            MAX_COMPILER_MODULE_CALL_EDGES,
+        )?;
+        if let Some(index) = helper_indices.get(callee) {
+            callees.insert(*index);
+        }
+    }
+    Ok(callees.into_iter().collect())
+}
+
+fn enforce_call_graph_limit(
+    module: &Module,
+    field: &'static str,
+    actual: usize,
+    max: usize,
+) -> Result<(), LoweringErrors> {
+    if actual <= max {
+        return Ok(());
+    }
+    Err(LoweringErrors::one(
+        LoweringLocation::module(module),
+        LoweringDiagnosticCode::ResourceLimit,
+        format!("{field} count {actual} exceeds limit {max}"),
+    ))
+}
+
+fn strongly_connected_components(adjacency: &[Vec<usize>]) -> (Vec<usize>, Vec<Vec<usize>>) {
+    let mut reverse = vec![Vec::new(); adjacency.len()];
+    for (source, targets) in adjacency.iter().enumerate() {
+        for target in targets {
+            reverse[*target].push(source);
+        }
+    }
+    for targets in &mut reverse {
+        targets.sort_unstable();
+    }
+
+    let mut visited = vec![false; adjacency.len()];
+    let mut finished = Vec::with_capacity(adjacency.len());
+    for start in 0..adjacency.len() {
+        if visited[start] {
+            continue;
+        }
+        visited[start] = true;
+        let mut stack = vec![(start, 0usize)];
+        while let Some((node, next)) = stack.last_mut() {
+            if *next < adjacency[*node].len() {
+                let target = adjacency[*node][*next];
+                *next += 1;
+                if !visited[target] {
+                    visited[target] = true;
+                    stack.push((target, 0));
+                }
+            } else {
+                finished.push(*node);
+                stack.pop();
+            }
+        }
+    }
+
+    let mut component_of = vec![usize::MAX; adjacency.len()];
+    let mut components = Vec::new();
+    for start in finished.into_iter().rev() {
+        if component_of[start] != usize::MAX {
+            continue;
+        }
+        let component = components.len();
+        let mut members = Vec::new();
+        let mut stack = vec![start];
+        component_of[start] = component;
+        while let Some(node) = stack.pop() {
+            members.push(node);
+            for predecessor in reverse[node].iter().rev() {
+                if component_of[*predecessor] == usize::MAX {
+                    component_of[*predecessor] = component;
+                    stack.push(*predecessor);
+                }
+            }
+        }
+        members.sort_unstable();
+        components.push(members);
+    }
+    (component_of, components)
+}
+
+fn reachable_components(
+    roots: impl IntoIterator<Item = usize>,
+    edges: &[BTreeSet<usize>],
+) -> BTreeSet<usize> {
+    let mut reachable = BTreeSet::new();
+    let mut pending = roots.into_iter().collect::<Vec<_>>();
+    while let Some(component) = pending.pop() {
+        if !reachable.insert(component) {
+            continue;
+        }
+        pending.extend(edges[component].iter().rev().copied());
+    }
+    reachable
+}
+
+fn reject_mixed_component_modes(
+    module: &Module,
+    helpers: &[&Function],
+    component: &[usize],
+    modes: &BTreeSet<WaveWidth>,
+) -> Result<(), LoweringErrors> {
+    if modes.len() <= 1 {
+        return Ok(());
+    }
+    Err(mixed_assignment_error(module, helpers, component, modes))
+}
+
+fn mixed_assignment_error(
+    module: &Module,
+    helpers: &[&Function],
+    component: &[usize],
+    modes: &BTreeSet<WaveWidth>,
+) -> LoweringErrors {
+    let function = helpers[component[0]];
+    LoweringErrors::one(
+        LoweringLocation::device_function(module, function),
+        LoweringDiagnosticCode::IncompatibleWaveCallGraph,
+        format!(
+            "helper SCC [{}] is reachable with incompatible exact wave modes {modes:?}",
+            component_names(helpers, component)
+        ),
+    )
+}
+
+fn component_names(helpers: &[&Function], component: &[usize]) -> String {
+    component
+        .iter()
+        .map(|index| helpers[*index].id.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn preflight_function(lowerer: &mut FunctionLowerer<'_>) -> Result<(), LoweringErrors> {
