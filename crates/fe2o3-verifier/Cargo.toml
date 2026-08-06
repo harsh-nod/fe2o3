@@ -1,0 +1,17 @@
+[package]
+name = "fe2o3-verifier"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/fe2o3-gpu/fe2o3"
+description = "Bounded, deterministic verifier-driver records for fe2o3"
+publish = false
+
+[lib]
+name = "fe2o3_verifier"
+
+# This crate is intentionally developed independently until its artifact API is
+# integrated into the repository workspace.
+[workspace]
+resolver = "2"
