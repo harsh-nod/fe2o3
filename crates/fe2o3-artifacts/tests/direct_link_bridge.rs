@@ -3,8 +3,10 @@ mod common;
 
 use common::{digest, kernel_with_object_digest, object_identity, target, text};
 use fe2o3_artifact_transaction::{
-    BuildAttempt, KernelSetIdentityV1, LinkPublicationCatalogV1, LinkPublicationScopeV1,
-    PackageIdentityV1, PublicationOutcomeV1, TargetIdentityV1,
+    BuildAttempt, DurableLinkPublicationOutcomeV1, KernelSetIdentityV1, LinkPublicationCatalogV1,
+    LinkPublicationPhaseV1, LinkPublicationScopeV1, LinkPublicationStateV1, PackageIdentityV1,
+    PublicationOutcomeV1, TargetIdentityV1, publish_durable_link_v1,
+    recover_durable_link_publication_v1,
 };
 use fe2o3_artifacts::{
     AbiLayout, ArtifactContainerV1, BundleIndexV1, CallerClaimedPackageIdentityV1, Capability,
@@ -23,6 +25,31 @@ use fe2o3_artifacts::{
     ManifestClaimDirectLinkPublicationBridgeV1, PayloadDigest, PointerWidth, TargetIdentity,
     ToolIdentity,
 };
+use std::fs;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(1);
+
+struct TestDirectory(PathBuf);
+
+impl TestDirectory {
+    fn new() -> Self {
+        let path = std::env::temp_dir().join(format!(
+            "fe2o3-direct-link-bridge-{}-{}",
+            std::process::id(),
+            NEXT_TEST_DIRECTORY.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir(&path).unwrap();
+        Self(path)
+    }
+}
+
+impl Drop for TestDirectory {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
 
 fn tagged(seed: u8) -> PayloadDigest {
     PayloadDigest::new(DigestAlgorithm::Sha256, digest(seed))
@@ -385,6 +412,73 @@ fn typed_bridge_drives_and_validates_the_complete_g5_chain() {
     );
     assert!(!bridge.grants_load_authority());
     assert!(!bridge.grants_launch_authority());
+}
+
+#[test]
+fn validated_bridge_plan_publishes_and_recovers_inert_durable_bytes() {
+    const PAYLOAD: &[u8] = b"bridge native payload";
+
+    let fixture = evidence(0x18);
+    let validated = fixture.validated();
+    let bridge = DirectLinkPublicationBridgeV1::prepare_with_trusted_scope(
+        attempt(13, 10),
+        scope(11),
+        &validated,
+        0,
+    )
+    .unwrap();
+    let durable = bridge.durable_publication_plan();
+    let temp = TestDirectory::new();
+    let output = temp.0.join("output");
+    fs::create_dir(&output).unwrap();
+
+    let result = publish_durable_link_v1(&output, durable, |transaction| {
+        transaction.record_worker_pinned()?;
+        transaction.record_response_validated()?;
+        transaction.record_finalized(PAYLOAD)
+    })
+    .unwrap();
+    assert_eq!(result.outcome(), DurableLinkPublicationOutcomeV1::Published);
+    let snapshot = result.snapshot();
+    assert_eq!(snapshot.artifact().bytes(), PAYLOAD);
+    assert_eq!(snapshot.record().attempt(), bridge.attempt());
+    assert_eq!(snapshot.record().scope(), bridge.trusted_scope());
+    assert_eq!(snapshot.record().request(), bridge.request_identity());
+    assert_eq!(snapshot.record().worker(), Some(bridge.worker_identity()));
+    assert_eq!(
+        snapshot.record().response(),
+        Some(bridge.response_identity())
+    );
+    assert_eq!(
+        snapshot.record().linked_output(),
+        Some(bridge.linked_output_identity())
+    );
+    assert_eq!(
+        snapshot.record().finalization(),
+        Some(bridge.finalization_identity())
+    );
+    assert_eq!(
+        snapshot.record().finalized_output(),
+        Some(bridge.finalized_output_identity())
+    );
+    assert_eq!(
+        snapshot.record().publication(),
+        Some(bridge.publication_identity())
+    );
+    assert_eq!(
+        snapshot.record().state(),
+        LinkPublicationStateV1::Active(LinkPublicationPhaseV1::Published)
+    );
+    assert!(!snapshot.grants_load_authority());
+    assert!(!snapshot.grants_launch_authority());
+
+    let recovered = recover_durable_link_publication_v1(&output, bridge.trusted_scope())
+        .unwrap()
+        .unwrap();
+    assert_eq!(recovered.record(), snapshot.record());
+    assert_eq!(recovered.artifact().bytes(), PAYLOAD);
+    assert!(!recovered.grants_load_authority());
+    assert!(!recovered.grants_launch_authority());
 }
 
 #[test]
