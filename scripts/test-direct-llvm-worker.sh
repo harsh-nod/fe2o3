@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -ne 6 ]]; then
-  printf 'usage: %s BUILD_DIR LLVM_DIR LLD_DIR LLVM_VERSION BUILD_ID_FILE TARGET\n' "$0" >&2
+if [[ $# -ne 8 ]]; then
+  printf 'usage: %s BUILD_DIR LLVM_DIR LLD_DIR LLVM_VERSION BUILD_ID_FILE TARGET CARGO RUST_TOOLCHAIN\n' "$0" >&2
   exit 64
 fi
 
@@ -13,6 +13,8 @@ lld_dir=$3
 llvm_version=$4
 build_id_file=$5
 target=$6
+cargo_bin=$7
+rust_toolchain=$8
 
 if [[ $build_dir != /* ]]; then
   build_dir="$repo_root/$build_dir"
@@ -21,12 +23,21 @@ if [[ $target != gfx942 ]]; then
   printf 'error: the exported mixed-input fixture is pinned to gfx942, got %s\n' "$target" >&2
   exit 65
 fi
-for command in cmake ctest cargo; do
+for command in cmake ctest; do
   if ! command -v "$command" >/dev/null 2>&1; then
     printf 'error: required command is unavailable: %s\n' "$command" >&2
     exit 69
   fi
 done
+if [[ ! -x $cargo_bin ]]; then
+  printf 'error: pinned Cargo executable is unavailable: %s\n' "$cargo_bin" >&2
+  exit 69
+fi
+if [[ -z $rust_toolchain ]]; then
+  printf 'error: pinned Rust toolchain is empty\n' >&2
+  exit 65
+fi
+"$cargo_bin" "+$rust_toolchain" --version
 for path in "$llvm_dir/LLVMConfig.cmake" "$lld_dir/LLDConfig.cmake" "$build_id_file"; do
   if [[ ! -f $path ]]; then
     printf 'error: required pinned input is unavailable: %s\n' "$path" >&2
@@ -63,7 +74,7 @@ if [[ ! -x $worker || ! -f $worker_build_id_file ]]; then
 fi
 worker_build_id=$(<"$worker_build_id_file")
 
-cargo test --manifest-path "$repo_root/Cargo.toml" \
+"$cargo_bin" "+$rust_toolchain" test --manifest-path "$repo_root/Cargo.toml" \
   -p fe2o3-hsaco-finalize --locked
 FE2O3_DIRECT_LLVM_WORKER="$worker" \
 FE2O3_DIRECT_LLVM_WORKER_BUILD_ID="$worker_build_id" \
@@ -72,7 +83,7 @@ FE2O3_DIRECT_LLVM_BITCODE="$bitcode" \
 FE2O3_DIRECT_LLVM_OBJECT="$object" \
 FE2O3_DIRECT_LLVM_OUTPUT="$rust_hsaco" \
 FE2O3_DIRECT_LLVM_TARGET="$target" \
-  cargo test --manifest-path "$repo_root/Cargo.toml" \
+  "$cargo_bin" "+$rust_toolchain" test --manifest-path "$repo_root/Cargo.toml" \
     -p fe2o3-hsaco-finalize --locked \
     --test direct_llvm_worker_integration -- \
     --ignored --exact real_worker_links_mixed_inputs_through_pinned_supervision --nocapture
