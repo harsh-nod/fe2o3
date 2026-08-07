@@ -60,6 +60,72 @@ fn generated_arguments_retain_source_borrows() {
 }
 
 #[test]
+fn exact_alpha_zeta_generated_adapter_compiles_downstream() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let manifest = manifest_dir.join("tests/fixtures/alpha-zeta-adapter/Cargo.toml");
+    let target_dir = manifest_dir.join("../../target/alpha-zeta-adapter-test");
+    let output = cargo_check(&manifest, &target_dir, Some("pass"));
+
+    assert!(
+        output.status.success(),
+        "alpha/zeta generated adapter fixture failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn exact_alpha_zeta_generated_adapter_rejects_unsafe_escape_hatches() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let manifest = manifest_dir.join("tests/fixtures/alpha-zeta-adapter/Cargo.toml");
+    let target_dir = manifest_dir.join("../../target/alpha-zeta-adapter-test");
+    let cases: &[(&str, &[&str])] = &[
+        (
+            "wrong_role",
+            &[
+                "error[E0277]",
+                "zeta_gpu::Arguments<'static>",
+                "unsatisfied trait bound",
+                "is not implemented",
+            ],
+        ),
+        (
+            "wrong_signature",
+            &[
+                "error[E0277]",
+                "alpha_gpu::Arguments<'static>",
+                "unsatisfied trait bound",
+                "is not implemented",
+            ],
+        ),
+        (
+            "wrong_mutability",
+            &[
+                "error[E0277]",
+                "alpha_gpu::Arguments<'static>",
+                "unsatisfied trait bound",
+                "is not implemented",
+            ],
+        ),
+        ("lifetime_escape", &["lifetime may not live long enough"]),
+        ("private_fields", &["private"]),
+        ("non_clone", &["no method named `clone`"]),
+        ("raw_pointer_escape", &["field `input`"]),
+    ];
+
+    for (bin, expected_diagnostics) in cases {
+        let output = cargo_check(&manifest, &target_dir, Some(bin));
+        assert!(!output.status.success(), "{bin} unexpectedly compiled");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        for expected_diagnostic in *expected_diagnostics {
+            assert!(
+                stderr.contains(expected_diagnostic),
+                "{bin} omitted diagnostic `{expected_diagnostic}`:\n{stderr}"
+            );
+        }
+    }
+}
+
+#[test]
 fn typed_kernel_compile_fail_diagnostics_are_stable() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let manifest = manifest_dir.join("tests/fixtures/typed-invalid/Cargo.toml");

@@ -1088,9 +1088,15 @@ fn expand_general_typed_kernel_with_imports(
         &original_name,
     );
     let model = model_general_typed_signature_v1(&input, &options, kernel_binding.as_bytes())?;
-    let generated_host_arguments = generated_general_typed_arguments_v1(&input, &model.arguments);
     let generated_host_contract =
         GeneratedHostContractIdV3::from_bytes(*model.generated_host_contract_identity.as_bytes());
+    let generated_host_arguments = generated_general_typed_arguments_v1(&input, &model.arguments);
+    let generated_alpha_zeta_cov6_adapter = generated_alpha_zeta_cov6_adapter_v1(
+        &input,
+        &model,
+        kernel_binding.as_bytes(),
+        generated_host_contract.as_bytes(),
+    )?;
     let control_flow_contract =
         analyze_kernel_control_flow_v1(&input, options.control_flow.as_ref())?;
 
@@ -1220,6 +1226,7 @@ fn expand_general_typed_kernel_with_imports(
             pub type Marker = super::#type_marker_ident;
 
             #generated_host_arguments
+            #generated_alpha_zeta_cov6_adapter
 
             const _: () = {
                 // SAFETY: the associated constants are only a lexical
@@ -1686,6 +1693,299 @@ fn generated_general_typed_arguments_v1(
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AlphaZetaCov6MacroRoleV1 {
+    Alpha,
+    Zeta,
+}
+
+impl AlphaZetaCov6MacroRoleV1 {
+    const fn argument_names(self) -> &'static [&'static str] {
+        match self {
+            Self::Alpha => &["scale", "input", "output"],
+            Self::Zeta => &["a", "b", "bias", "output"],
+        }
+    }
+}
+
+fn exact_alpha_zeta_cov6_role_v1(
+    input: &ItemFn,
+    arguments: &[GeneralTypedArgumentKindV1],
+) -> Option<AlphaZetaCov6MacroRoleV1> {
+    let names = input
+        .sig
+        .inputs
+        .iter()
+        .map(|argument| match argument {
+            FnArg::Typed(argument) => match argument.pat.as_ref() {
+                Pat::Ident(pattern) => pattern.ident.to_string(),
+                _ => unreachable!("general typed validation requires identifier patterns"),
+            },
+            FnArg::Receiver(_) => unreachable!("general typed validation rejects receivers"),
+        })
+        .collect::<Vec<_>>();
+
+    match (
+        input.sig.ident.to_string().as_str(),
+        names.as_slice(),
+        arguments,
+    ) {
+        (
+            "alpha",
+            [scale, input, output],
+            [
+                GeneralTypedArgumentKindV1::Scalar(GeneralTypedScalarV1::F32),
+                GeneralTypedArgumentKindV1::SharedSlice(GeneralTypedScalarV1::F32),
+                GeneralTypedArgumentKindV1::ExclusiveSlice(GeneralTypedScalarV1::F32),
+            ],
+        ) if scale == "scale" && input == "input" && output == "output" => {
+            Some(AlphaZetaCov6MacroRoleV1::Alpha)
+        }
+        (
+            "zeta",
+            [a, b, bias, output],
+            [
+                GeneralTypedArgumentKindV1::SharedSlice(GeneralTypedScalarV1::F32),
+                GeneralTypedArgumentKindV1::SharedSlice(GeneralTypedScalarV1::F32),
+                GeneralTypedArgumentKindV1::Scalar(GeneralTypedScalarV1::F32),
+                GeneralTypedArgumentKindV1::ExclusiveSlice(GeneralTypedScalarV1::F32),
+            ],
+        ) if a == "a" && b == "b" && bias == "bias" && output == "output" => {
+            Some(AlphaZetaCov6MacroRoleV1::Zeta)
+        }
+        _ => None,
+    }
+}
+
+fn generated_alpha_zeta_cov6_adapter_v1(
+    input: &ItemFn,
+    model: &GeneralTypedSignatureModelV1,
+    kernel_binding: [u8; 32],
+    generated_host_contract: [u8; 32],
+) -> syn::Result<proc_macro2::TokenStream> {
+    let Some(role) = exact_alpha_zeta_cov6_role_v1(input, &model.arguments) else {
+        return Ok(quote! {});
+    };
+    let role = match role {
+        AlphaZetaCov6MacroRoleV1::Alpha => {
+            quote!(__fe2o3_kernel_host::__generated::AlphaZetaCov6KernelRoleV1::Alpha)
+        }
+        AlphaZetaCov6MacroRoleV1::Zeta => {
+            quote!(__fe2o3_kernel_host::__generated::AlphaZetaCov6KernelRoleV1::Zeta)
+        }
+    };
+    let kernel_binding_identity = kernel_binding;
+    let generated_host_contract_identity = generated_host_contract;
+    let layout = generated_alpha_zeta_cov6_layout_v1(model);
+    let (scalar_inputs, slice_arguments) =
+        match exact_alpha_zeta_cov6_role_v1(input, &model.arguments)
+            .expect("role was checked above")
+        {
+            AlphaZetaCov6MacroRoleV1::Alpha => (
+                quote!(vec![plan.scalar_f32(0, self.scale)?]),
+                quote!(vec![
+                    self.input.bind_argument_pair(plan, 1)?,
+                    self.output.bind_argument_pair(plan, 2)?,
+                ]),
+            ),
+            AlphaZetaCov6MacroRoleV1::Zeta => (
+                quote!(vec![plan.scalar_f32(2, self.bias)?]),
+                quote!(vec![
+                    self.a.bind_argument_pair(plan, 0)?,
+                    self.b.bind_argument_pair(plan, 1)?,
+                    self.output.bind_argument_pair(plan, 3)?,
+                ]),
+            ),
+        };
+
+    Ok(quote! {
+        // SAFETY: this implementation is emitted only for the exact source
+        // role, names, scalar types, slice effects, ABI, and launch contract
+        // checked above. Every slice input/access pair comes from the retained
+        // capability stored in this non-cloneable `Arguments` value.
+        unsafe impl<'allocation>
+            __fe2o3_kernel_host::__generated::CompilerGeneratedAlphaZetaCov6ArgumentsV1<
+                'allocation,
+                Marker,
+            > for Arguments<'allocation>
+        {
+            fn dispatch_identity_v1(
+            ) -> __fe2o3_kernel_host::__generated::AlphaZetaCov6DispatchIdentityV1 {
+                __fe2o3_kernel_host::__generated::AlphaZetaCov6DispatchIdentityV1::new(
+                    #role,
+                    __fe2o3_kernel_host::KernelId::from_bytes([
+                        #(#kernel_binding_identity),*
+                    ]),
+                    [#(#kernel_binding_identity),*],
+                    [#(#generated_host_contract_identity),*],
+                )
+            }
+
+            fn generated_argument_layout_v1() -> Result<
+                __fe2o3_kernel_host::__generated::CompilerGeneratedArgumentLayoutV1,
+                __fe2o3_kernel_host::__generated::GeneratedArgumentLayoutError,
+            > {
+                #layout
+            }
+
+            fn bind_arguments_v1(
+                &self,
+                plan: &__fe2o3_kernel_host::__generated::GeneratedArgumentPackingPlanV1,
+            ) -> Result<
+                __fe2o3_kernel_host::__generated::GeneratedAlphaZetaCov6ArgumentBindingV1<
+                    'allocation,
+                >,
+                __fe2o3_kernel_host::__generated::GeneratedArgumentPackError,
+            > {
+                let scalar_inputs = #scalar_inputs;
+                let slice_arguments = #slice_arguments;
+                // SAFETY: the generated vectors contain every exact source
+                // scalar and capability-derived slice pair once at its source
+                // index. `self` retains all capabilities through completion.
+                Ok(unsafe {
+                    __fe2o3_kernel_host::__generated::GeneratedAlphaZetaCov6ArgumentBindingV1::
+                        from_compiler_generated_parts_v1(scalar_inputs, slice_arguments)
+                })
+            }
+        }
+
+        impl<'allocation> Arguments<'allocation> {
+            /// Safely prepares this exact generated alpha/zeta COV6 invocation.
+            #[allow(clippy::type_complexity)]
+            pub fn prepare<'loaded, P, A, Authenticator>(
+                self,
+                executable: &'loaded mut __fe2o3_kernel_host::LoadedHsaExecutableV1<P, A>,
+                observed: &__fe2o3_kernel_host::ObservedContext,
+                authenticator: &mut Authenticator,
+            ) -> __fe2o3_kernel_host::__generated::GeneratedAlphaZetaCov6PrepareResultV1<
+                'loaded,
+                'allocation,
+                P,
+                Marker,
+                A,
+                Self,
+                Authenticator::Error,
+            >
+            where
+                A: __fe2o3_kernel_host::ReviewedHsaImplicitKernargAdapterV1,
+                Authenticator:
+                    __fe2o3_kernel_host::WorkerV2PrerequisiteAuthenticatorV1<Marker>,
+            {
+                executable.prepare_generated_alpha_zeta_cov6_selected_kernel_v1::<
+                    Marker,
+                    Authenticator,
+                    Self,
+                >(observed, authenticator, self)
+            }
+        }
+    })
+}
+
+fn generated_alpha_zeta_cov6_layout_v1(
+    model: &GeneralTypedSignatureModelV1,
+) -> proc_macro2::TokenStream {
+    let fields = model
+        .arguments
+        .iter()
+        .zip(model.abi.fields())
+        .map(|(kind, field)| {
+            generated_alpha_zeta_cov6_field_v1(field.name().as_str(), *kind, field)
+        })
+        .collect::<Vec<_>>();
+    let size = model.abi.size();
+    let alignment = model.abi.alignment();
+
+    quote! {
+        __fe2o3_kernel_host::__generated::CompilerGeneratedArgumentLayoutV1::new(
+            #size,
+            #alignment,
+            __fe2o3_kernel_host::__generated::PointerWidth::Bits64,
+            vec![#(#fields),*],
+        )
+    }
+}
+
+fn generated_alpha_zeta_cov6_field_v1(
+    source_name: &str,
+    kind: GeneralTypedArgumentKindV1,
+    field: &AbiField,
+) -> proc_macro2::TokenStream {
+    let offset = field.offset();
+    let size = field.size();
+    let alignment = field.alignment();
+    let (abi_kind, mutability, access, address_space, type_identity, ownership, alias_class) =
+        match kind {
+            GeneralTypedArgumentKindV1::Scalar(GeneralTypedScalarV1::F32) => (
+                quote!(__fe2o3_kernel_host::__generated::AbiKind::Scalar(
+                    __fe2o3_kernel_host::__generated::ScalarType::F32
+                )),
+                quote!(__fe2o3_kernel_host::__generated::Mutability::Immutable),
+                quote!(__fe2o3_kernel_host::__generated::Access::ByValue),
+                quote!(__fe2o3_kernel_host::__generated::AddressSpace::Value),
+                quote!(
+                <f32 as __fe2o3_kernel_host::__generated::GeneratedDeviceScalarV1>::
+                    scalar_type_identity_v1(
+                        __fe2o3_kernel_host::__generated::PointerWidth::Bits64,
+                    )
+            ),
+                quote!(__fe2o3_kernel_host::__generated::ArgumentOwnership::ByValue),
+                quote!(__fe2o3_kernel_host::__generated::AliasClass::Value),
+            ),
+            GeneralTypedArgumentKindV1::SharedSlice(GeneralTypedScalarV1::F32) => (
+                quote!(__fe2o3_kernel_host::__generated::AbiKind::Slice {
+                    element_size: 4,
+                    element_alignment: 4,
+                }),
+                quote!(__fe2o3_kernel_host::__generated::Mutability::Immutable),
+                quote!(__fe2o3_kernel_host::__generated::Access::ReadOnly),
+                quote!(__fe2o3_kernel_host::__generated::AddressSpace::Global),
+                quote!(
+                <f32 as __fe2o3_kernel_host::__generated::GeneratedDeviceScalarV1>::
+                    shared_slice_type_identity_v1(
+                        __fe2o3_kernel_host::__generated::PointerWidth::Bits64,
+                    )
+            ),
+                quote!(__fe2o3_kernel_host::__generated::ArgumentOwnership::SharedBorrow),
+                quote!(__fe2o3_kernel_host::__generated::AliasClass::SharedReadOnly),
+            ),
+            GeneralTypedArgumentKindV1::ExclusiveSlice(GeneralTypedScalarV1::F32) => (
+                quote!(__fe2o3_kernel_host::__generated::AbiKind::Slice {
+                    element_size: 4,
+                    element_alignment: 4,
+                }),
+                quote!(__fe2o3_kernel_host::__generated::Mutability::Mutable),
+                quote!(__fe2o3_kernel_host::__generated::Access::ReadWrite),
+                quote!(__fe2o3_kernel_host::__generated::AddressSpace::Global),
+                quote!(
+                <f32 as __fe2o3_kernel_host::__generated::GeneratedDeviceScalarV1>::
+                    disjoint_slice_type_identity_v1(
+                        __fe2o3_kernel_host::__generated::PointerWidth::Bits64,
+                    )
+            ),
+                quote!(__fe2o3_kernel_host::__generated::ArgumentOwnership::UniqueBorrow),
+                quote!(__fe2o3_kernel_host::__generated::AliasClass::Exclusive),
+            ),
+            _ => unreachable!("exact alpha/zeta recognition permits only f32 fields"),
+        };
+
+    quote! {
+        __fe2o3_kernel_host::__generated::AbiField::new(
+            __fe2o3_kernel_host::__generated::Name::new(#source_name)
+                .expect("generated alpha/zeta argument name is valid"),
+            #offset,
+            #size,
+            #alignment,
+            #abi_kind,
+            #mutability,
+            #access,
+            #address_space,
+            #type_identity,
+            #ownership,
+            #alias_class,
+        ).expect("generated alpha/zeta ABI field is valid")
+    }
+}
+
 #[allow(dead_code)]
 fn model_general_typed_signature_v1(
     input: &ItemFn,
@@ -1702,7 +2002,9 @@ fn model_general_typed_signature_v1(
         .enumerate()
         .map(|(index, argument)| parse_general_typed_argument_v1(argument, index + 1))
         .collect::<syn::Result<Vec<_>>>()?;
-    let abi = general_typed_abi_v1(&arguments, &input.sig)?;
+    let exact_argument_names = exact_alpha_zeta_cov6_role_v1(input, &arguments)
+        .map(AlphaZetaCov6MacroRoleV1::argument_names);
+    let abi = general_typed_abi_v1(&arguments, exact_argument_names, &input.sig)?;
     let launch = general_typed_launch_v1(options.launch.as_ref(), &input.sig)?;
     let logical_name = input.sig.ident.to_string();
     let generated_host_contract_identity = derive_generated_host_contract_identity_v1(
@@ -1903,6 +2205,7 @@ fn is_index_1d_v1(ty: &Type) -> bool {
 
 fn general_typed_abi_v1(
     arguments: &[GeneralTypedArgumentKindV1],
+    exact_argument_names: Option<&[&str]>,
     span: impl quote::ToTokens,
 ) -> syn::Result<AbiLayout> {
     let mut offset = 0_u64;
@@ -1921,7 +2224,13 @@ fn general_typed_abi_v1(
             syn::Error::new_spanned(&span, "general typed V1 argument layout overflows")
         })?;
         fields.push(
-            general_typed_abi_field_v1(index, offset, argument).map_err(|error| {
+            general_typed_abi_field_v1(
+                exact_argument_names
+                    .map_or_else(|| format!("arg{index}"), |names| names[index].to_owned()),
+                offset,
+                argument,
+            )
+            .map_err(|error| {
                 syn::Error::new_spanned(&span, format!("invalid general typed V1 ABI: {error}"))
             })?,
         );
@@ -1939,11 +2248,11 @@ fn general_typed_abi_v1(
 }
 
 fn general_typed_abi_field_v1(
-    index: usize,
+    name: String,
     offset: u64,
     argument: GeneralTypedArgumentKindV1,
 ) -> Result<AbiField, fe2o3_artifacts::ValidationError> {
-    let name = Name::new(format!("arg{index}"))?;
+    let name = Name::new(name)?;
     let (size, alignment, kind, mutability, access, address_space, ownership, alias_class) =
         match argument {
             GeneralTypedArgumentKindV1::Scalar(scalar) => {
@@ -3842,6 +4151,49 @@ mod tests {
             (expansion, binding, contract)
         };
 
+        let alpha_model = model_general_typed_signature_v1(
+            &alpha,
+            &options,
+            derive_kernel_binding_id_v1(
+                crate_binding,
+                MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
+                "alpha",
+                "alpha",
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        let zeta_model = model_general_typed_signature_v1(
+            &zeta,
+            &options,
+            derive_kernel_binding_id_v1(
+                crate_binding,
+                MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
+                "zeta",
+                "zeta",
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        assert_eq!(
+            alpha_model
+                .abi
+                .fields()
+                .iter()
+                .map(|field| field.name().as_str())
+                .collect::<Vec<_>>(),
+            ["scale", "input", "output"]
+        );
+        assert_eq!(
+            zeta_model
+                .abi
+                .fields()
+                .iter()
+                .map(|field| field.name().as_str())
+                .collect::<Vec<_>>(),
+            ["a", "b", "bias", "output"]
+        );
+
         let (alpha_expansion, alpha_binding, alpha_contract) = expand(alpha.clone(), crate_binding);
         let (zeta_expansion, zeta_binding, zeta_contract) = expand(zeta, crate_binding);
         for (name, expansion, binding, contract) in [
@@ -3910,6 +4262,15 @@ mod tests {
             assert!(expansion.contains("fn semantic_witness_v1"));
             assert!(expansion.contains("semantic_witness_from_backend_v1"));
             assert!(expansion.contains("ValidatedCompilerGeneratedSemanticWitnessV1"));
+            assert!(expansion.contains("CompilerGeneratedAlphaZetaCov6ArgumentsV1"));
+            assert!(expansion.contains("AlphaZetaCov6DispatchIdentityV1 :: new"));
+            assert!(expansion.contains("CompilerGeneratedArgumentLayoutV1 :: new"));
+            assert!(expansion.contains("from_compiler_generated_parts_v1"));
+            assert!(expansion.contains("pub fn prepare"));
+            assert!(expansion.contains("prepare_generated_alpha_zeta_cov6_selected_kernel_v1"));
+            assert!(expansion.contains("GeneratedAlphaZetaCov6PrepareResultV1"));
+            assert!(!expansion.contains("plan . slice"));
+            assert!(!expansion.contains("from_raw"));
             assert!(!expansion.contains("CompilerGeneratedKernelContractV1"));
             assert!(!expansion.contains("artifact_container_bytes"));
             assert!(!expansion.contains("__fe2o3_artifact_v1_"));
@@ -3923,6 +4284,29 @@ mod tests {
                     .bytes()
                     .all(|byte| { byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte) })
             );
+            match name {
+                "alpha" => {
+                    assert!(expansion.contains("AlphaZetaCov6KernelRoleV1 :: Alpha"));
+                    assert!(expansion.contains("Name :: new (\"scale\")"));
+                    assert!(expansion.contains("Name :: new (\"input\")"));
+                    assert!(expansion.contains("Name :: new (\"output\")"));
+                    assert!(expansion.contains("scalar_f32 (0 , self . scale)"));
+                    assert!(expansion.contains("self . input . bind_argument_pair (plan , 1)"));
+                    assert!(expansion.contains("self . output . bind_argument_pair (plan , 2)"));
+                }
+                "zeta" => {
+                    assert!(expansion.contains("AlphaZetaCov6KernelRoleV1 :: Zeta"));
+                    assert!(expansion.contains("Name :: new (\"a\")"));
+                    assert!(expansion.contains("Name :: new (\"b\")"));
+                    assert!(expansion.contains("Name :: new (\"bias\")"));
+                    assert!(expansion.contains("Name :: new (\"output\")"));
+                    assert!(expansion.contains("scalar_f32 (2 , self . bias)"));
+                    assert!(expansion.contains("self . a . bind_argument_pair (plan , 0)"));
+                    assert!(expansion.contains("self . b . bind_argument_pair (plan , 1)"));
+                    assert!(expansion.contains("self . output . bind_argument_pair (plan , 3)"));
+                }
+                _ => unreachable!(),
+            }
         }
 
         assert_ne!(alpha_binding, zeta_binding);
@@ -3931,17 +4315,23 @@ mod tests {
         let changed_signature: ItemFn = parse_quote! {
             pub fn alpha(scale: f64, input: &[f32], output: DisjointSlice<f32>) {}
         };
-        let (_, changed_signature_binding, changed_signature_contract) =
+        let (changed_signature_expansion, changed_signature_binding, changed_signature_contract) =
             expand(changed_signature, crate_binding);
         assert_eq!(alpha_binding, changed_signature_binding);
         assert_ne!(alpha_contract, changed_signature_contract);
+        let changed_signature_expansion = changed_signature_expansion.to_string();
+        assert!(!changed_signature_expansion.contains("CompilerGeneratedAlphaZetaCov6ArgumentsV1"));
+        assert!(!changed_signature_expansion.contains("pub fn prepare"));
 
         let renamed: ItemFn = parse_quote! {
             pub fn renamed(scale: f32, input: &[f32], output: DisjointSlice<f32>) {}
         };
-        let (_, renamed_binding, renamed_contract) = expand(renamed, crate_binding);
+        let (renamed_expansion, renamed_binding, renamed_contract) = expand(renamed, crate_binding);
         assert_ne!(alpha_binding, renamed_binding);
         assert_ne!(alpha_contract, renamed_contract);
+        let renamed_expansion = renamed_expansion.to_string();
+        assert!(!renamed_expansion.contains("CompilerGeneratedAlphaZetaCov6ArgumentsV1"));
+        assert!(!renamed_expansion.contains("pub fn prepare"));
 
         let other_crate_binding = derive_crate_binding_id_v1("fixture", ["other-binding"]);
         let (_, rebound_binding, rebound_contract) = expand(alpha, other_crate_binding);
