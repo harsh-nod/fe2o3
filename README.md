@@ -172,7 +172,13 @@ turn the foundations below into end-to-end features.
   roots remain unsupported.
 - Versioned artifact manifests, ABI layouts, launch contracts, bounded
   containers, payload digests, native-kernel selection, and proof records have
-  canonical encoders, decoders, and adversarial tests.
+  canonical encoders, decoders, and adversarial tests. The bounded
+  `Gfx942TwoKernelBundleV1` profile admits exactly two canonically ordered
+  kernels backed by one digest-validated native payload and requires a separate
+  proof binding for each kernel. Duplicate proof keys, shared-payload
+  substitution, stale ABI/effect/launch identities, and cross-kernel proof
+  swaps fail closed. These proof records remain descriptive evidence and grant
+  neither load nor launch authority.
 - G3 adds a canonical multi-kernel bundle index, validated compiler-generated
   argument-packing plans, and explicit asynchronous operation lifecycle
   records. These are bounded data and typestate foundations; no general
@@ -200,6 +206,18 @@ turn the foundations below into end-to-end features.
   exposes an unsafe compiler boundary: backend/linker association of a marker,
   complete ABI and effects, and executable semantics must be correct before its
   sealed launch can be treated as safe.
+- The bounded Worker V2 host path can admit every manifest kernel that shares
+  one exact finalized payload and select two distinct compiler-generated marker
+  types from that admitted executable identity. Selection rechecks marker,
+  binding, target, ABI/effects, physical-layout, and executable identities and
+  retains a borrow of the admitted bundle. The reviewed HSA lifecycle can load
+  one code object and resolve a fixed set of distinct symbols into a non-clone
+  kernel set that borrows the executable; duplicate requests and native symbol,
+  kernel-object, or derived-identity aliases are rejected, and safe Rust cannot
+  unload the executable while the set is live. These are typed admission,
+  symbol-resolution, and lifetime foundations. They do not derive general
+  kernarg packing or authorize launching either selected Worker V2 kernel; HSA
+  dispatch remains restricted to the separately reviewed exact vecadd ABI.
 - Compiler artifact publication is transactional and generation-owned. Typed
   generation results contain bounded immutable IR and HSACO snapshots captured
   through exact staged file descriptors and validated after publication while
@@ -240,28 +258,33 @@ turn the foundations below into end-to-end features.
   compiler validation bind import/export symbols, physical ABI, address spaces,
   effects, target, and code-object version. Cooperative and peer capabilities
   retain exact contexts, streams, and cleanup ownership. The opt-in
-  `kernel-ir-worker-v2` flow now carries one real Rust source module through
-  rustc collection, verified kernel IR, an attempt-scoped textual LLVM handoff,
-  exact compiler-produced symbol-role manifests, Cargo wrapper consumption,
-  and byte-identical GenericLink/V2 execution in a measured direct LLVM/LLD
-  worker for `gfx942`. This path uses LLVM and LLD library APIs directly; it
-  does not use COMGR or command-line linking. Cargo independently admits the
-  returned raw HSACO, derives publication only from retained inspection
-  evidence, and durably publishes it with an attempt-bound provenance receipt.
-  The durable transaction has adversarial and crash-boundary coverage, while
-  exact retry after the handoff has been consumed is currently limited to the
-  same Cargo process. Compiler identity and origin are not authenticated, no
-  Verus proof is authenticated or bound to the executable, canonical artifact
-  finalization is not performed, and the output grants no HSA load or launch
-  authority. On the MI300X `gfx942` lane, both ignored Worker V2 integration
-  tests pass with an unoptimized Debug worker: the direct real-source kernel
-  and the real-source kernel linked against an external LLVM bitcode provider.
-  Commit `8f81306` fixed the earlier mixed-header failure by propagating the
-  pinned LLVM include path and major-version guard to every worker-protocol
-  consumer; `10a1fc8` additionally binds target-machine features, ELF flags,
-  and AMDHSA target metadata to the exact requested `gfx942` feature set. This
-  is compile, inspection, and durable-publication evidence on that host, not an
-  HSA kernel load/launch result, and an optimized Release worker is not covered.
+  `kernel-ir-worker-v2` flow now carries a real Cargo crate containing two Rust
+  kernel roots and one shared internal helper through rustc collection,
+  canonical helper-call resolution, verified kernel IR, an attempt-scoped
+  textual LLVM handoff, exact compiler-produced symbol-role manifests, Cargo
+  wrapper consumption, and byte-identical GenericLink/V2 execution in a
+  measured direct LLVM/LLD worker for `gfx942`. Internal calls resolve by their
+  canonical Rust source identity to one collected helper definition and its
+  exact predeclared signature and export symbol; ambiguous, uncollected, or
+  signature-incompatible callees fail closed. The worker links both kernels and
+  the helper into one HSACO using LLVM and LLD library APIs directly, without
+  COMGR or command-line linking. Cargo independently checks the exact two-kernel
+  symbol set and the returned raw HSACO, derives publication only from retained
+  inspection evidence, and durably publishes it with an attempt-bound
+  provenance receipt. The durable transaction has adversarial and
+  crash-boundary coverage, while exact retry after the handoff has been
+  consumed is currently limited to the same Cargo process.
+
+  Compiler identity and origin are not authenticated, no Verus result or
+  compiler/machine-code refinement proof is authenticated and bound to this
+  executable, and the publication receipt grants no HSA load or launch
+  authority. On the MI300X `gfx942` lane, the ignored real-Cargo two-kernel and
+  one-helper Worker V2 publication test passes with an unoptimized Debug worker,
+  alongside the earlier direct-source and external-bitcode-provider publication
+  tests. A separate live HIP/HSA observation confirms one exact `gfx942` device
+  correlation. This is compile, link, inspection, durable-publication, and
+  device-observation evidence, not evidence that either new kernel was loaded
+  or launched through HSA; an optimized Release worker is not covered.
 - G8 adds deterministic model generation/reduction and a bounded conformance
   harness that executes fill, vecadd, and affine kernels against an independent
   HIP/CPU oracle. `cargo fe2o3 inspect` performs bounded read-only decoding.
@@ -274,12 +297,17 @@ turn the foundations below into end-to-end features.
 - General MIR to kernel IR to AMDGPU lowering is not complete; `kernel-ir-v1`
   accepts only the exact fill and vecadd shapes, and the elementwise recognizer
   remains the default emitter.
-- The generated typed path supports only
+- The generated executable typed path supports only
   `pub fn(&[f32], &[f32], DisjointSlice<f32>)`; general typed signatures,
-  arbitrary rustc layouts, aggregate arguments, multi-profile module
-  generation, and multi-kernel bundles are not implemented. Canonical
-  rustc-derived evidence currently covers only the fixed two shared slices and
-  one `DisjointSlice<f32, Index1D>` profile on 64-bit targets.
+  arbitrary rustc layouts, aggregate arguments, and multi-profile generated
+  modules are not implemented. Worker V2 can publish two no-argument test
+  kernels that share one helper in one `gfx942` HSACO, and bounded artifact,
+  host-selection, and HSA symbol-set foundations model that shape. Those layers
+  are not yet composed into generated bindings: no general manifest-to-host
+  generator derives kernarg types and offsets, no generic packer consumes that
+  manifest, and the two Worker V2 kernels are not dispatched. Canonical
+  rustc-derived executable ABI evidence currently covers only the fixed two
+  shared slices and one `DisjointSlice<f32, Index1D>` profile on 64-bit targets.
 - The generated contract identity authenticates compiler declarations and the
   exact payload bytes; it does not inspect machine code to prove that declared
   read/read/write effects match every executable memory access. The fixed

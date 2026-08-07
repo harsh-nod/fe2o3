@@ -1,6 +1,8 @@
 # Direct LLVM and Device FFI Milestone
 
-Status: active implementation plan.
+Status: active; bounded `gfx942` multi-kernel publication and inert runtime
+authority foundations are implemented through commit
+`90b6fe31cbb1d89b82755f194ac7950c4eef4756`.
 
 This milestone connects the existing direct LLVM/LLD worker and device FFI
 contracts to the artifact transaction, bundle, and runtime paths. Its end state
@@ -13,39 +15,70 @@ CUDA-Oxide parity gates in `implementation-roadmap-v2.md`.
 
 ## Implemented gfx942 Vertical Slice
 
-As of commit `603a63768086802f4a3cd00771dde3923ccc7d72`, the opt-in
-`kernel-ir-worker-v2` path implements a bounded G1-G5 vertical slice for one
-real Rust source fixture:
+As of commit `90b6fe31cbb1d89b82755f194ac7950c4eef4756`, the opt-in
+`kernel-ir-worker-v2` path implements a bounded G1-G5 publication slice for a
+real Cargo crate with two Rust kernel roots and one shared internal helper:
 
-- rustc emits an attempt-scoped textual LLVM handoff and an exact symbol-role
-  manifest, using rustc source-owner identity to accept device FFI imports;
+- the external `cargo fe2o3 build` path loads the sealed backend, and rustc
+  collects both kernel roots plus the shared helper exactly once;
+- helper calls resolve from the canonical Rust source identity to one collected
+  internal definition, exact predeclared signature, and canonical export
+  symbol; ambiguous, uncollected, duplicate, or signature-incompatible helper
+  contracts fail closed independently of function order;
+- rustc emits verified Kernel IR, an attempt-scoped textual LLVM handoff, and an
+  exact symbol-role manifest, using rustc source-owner identity to accept device
+  FFI imports;
 - Cargo consumes that manifest, constructs the closed request, and requires
   byte-identical output from GenericLink and Worker V2 executions;
 - the measured out-of-process worker uses LLVM and LLD library APIs directly to
-  parse, link, optimize, emit AMDGPU code, and link the `gfx942` HSACO; neither
-  COMGR nor command-line linking is used;
-- Cargo independently checks the raw HSACO target, exports, descriptors, and
-  AMDHSA metadata before deriving an immutable publication plan from the
-  retained evidence; and
+  parse, link, optimize, emit AMDGPU code, and link both kernels and their helper
+  into one `gfx942` HSACO; neither COMGR nor command-line linking is used;
+- Cargo independently checks the raw HSACO target, exact two-kernel export set,
+  descriptors, and AMDHSA metadata before deriving an immutable publication
+  plan from the retained evidence; and
 - the artifact transaction durably publishes the exact bytes and an
   attempt-bound provenance receipt, with adversarial substitution,
   crash-boundary, redo, and generation-isolation tests.
 
-This is not completion of G5 or the end-to-end milestone. Exact retry after a
-consumed compiler handoff is retained only in the same Cargo process; a durable
-restart intent is not yet persisted. The rustc/compiler executable and its
-origin are not authenticated. Verus results are neither authenticated nor
-bound to the emitted code. Canonical descriptor-table finalization, G6 bundle
-binding, G7 HSA loading, and kernel launch are not connected to this path and
-gain no authority from its publication receipt.
+The same snapshot adds independently tested foundations around that publication:
 
-The generic and adversarial suites pass. On the MI300X `gfx942` lane, both
-ignored Worker V2 integration tests also pass with an unoptimized Debug worker:
+- `Gfx942TwoKernelBundleV1` binds exactly two canonically ordered kernel entries
+  to one digest-validated native payload and one exact proof record per kernel;
+  duplicate proof keys, stale contracts, payload substitutions, and
+  cross-kernel proof swaps are rejected;
+- `MultiKernelProofAdmissionV1` admits each request only against its own kernel,
+  source, contract, authenticated-proof, and shared finalized-executable
+  identities, while explicitly granting no load or launch authority;
+- the Worker V2 host admission path revalidates every kernel sharing the exact
+  finalized payload and can select two distinct compiler-generated marker types
+  while retaining the admitted bundle and rejecting marker, ABI/effect, target,
+  physical-layout, or executable substitutions; and
+- the reviewed HSA lifecycle can load one code object and resolve a fixed set of
+  distinct symbols into a non-clone kernel set that borrows the executable.
+  Duplicate requests and native symbol, kernel-object, or derived-identity
+  aliases fail closed, and the executable cannot be safely unloaded while the
+  set remains live.
+
+These foundations are not yet composed into one authority-producing pipeline.
+Exact retry after a consumed compiler handoff is retained only in the same
+Cargo process; a durable restart intent is not yet persisted. The
+rustc/compiler executable and its origin are not authenticated. No Verus result
+or compiler/machine-code refinement proof is authenticated and bound to the
+emitted code. Generic manifest-derived host bindings, kernarg packing, and
+dispatch are absent, and the two Worker V2 kernels have not been launched.
+The HSA dispatch adapter remains restricted to the separately reviewed exact
+vecadd ABI; no load or launch authority follows from the Worker V2 publication
+receipt or the descriptive proof records.
+
+The generic and adversarial suites pass. On the MI300X `gfx942` lane, three
+ignored Worker V2 integration tests pass with an unoptimized Debug worker:
 `worker_v2_real_source_publishes_inspected_gfx942_hsaco` and
-`worker_v2_real_source_links_an_external_bitcode_provider`. Together they cover
-the direct real-source path and the closed external LLVM bitcode-provider path
-through reproducible worker execution, independent inspection, and durable
-publication.
+`worker_v2_real_source_links_an_external_bitcode_provider`, plus
+`worker_v2_real_source_publishes_two_kernels_with_one_shared_helper`. Together
+they cover the direct real-source path, the closed external LLVM
+bitcode-provider path, and real-Cargo publication of an exact two-kernel symbol
+set with one canonically collected and lowered helper. A separate live
+HIP/HSA observation confirms one exact `gfx942` MI300X device correlation.
 
 Commit `8f81306` fixed the earlier `emitObject` failure by making the measured
 LLVM include directories and pinned major-version definition public usage
@@ -55,9 +88,11 @@ Commit `10a1fc8` propagates the exact requested target features into AMDGPU
 `TargetMachine` creation and checks their ELF flags and AMDHSA metadata.
 
 This successful evidence is limited to the named MI300X host and unoptimized
-Debug worker. These integration tests compile, inspect, and publish `gfx942`
-HSACO but do not load or execute it through HSA; no optimized Release-worker or
-kernel-launch result is claimed.
+Debug worker. These integration tests compile, link, inspect, and publish
+`gfx942` HSACO, and the runtime observation correlates the HIP and HSA views of
+the device. They do not load or execute either new kernel through HSA; no
+optimized Release-worker, generic dispatch, two-kernel execution, Verus proof,
+or compiler/refinement result is claimed.
 
 ## Program Invariants
 
@@ -188,6 +223,14 @@ Exit gate:
 
 Primary ownership: runtime integration plus dedicated FFI examples and hardware
 tests.
+
+Current boundary: typed selection and a linear two-symbol HSA lifecycle are
+implemented as inert foundations. This gate still requires manifest-derived
+host types and kernarg packing, composition with authenticated Worker V2 bundle
+admission, and hardware execution. Completion requires two kernels with
+different nontrivial signatures to execute from one shared HSACO against
+independent CPU oracles; the current zero-argument two-kernel publication
+fixture does not satisfy that gate.
 
 ## G8: Reproducibility, Evidence, and Release Gate
 
