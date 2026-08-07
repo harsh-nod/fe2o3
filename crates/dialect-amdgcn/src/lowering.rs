@@ -511,6 +511,9 @@ fn lower_compiler_module_to_llvm_ir_for_target(
         if entries.contains_key(&function.id) {
             continue;
         }
+        if FloatOperation::from_intrinsic_id(&function.id).is_some() {
+            continue;
+        }
         let location = LoweringLocation::device_function(module, function);
         if !is_safe_symbol(function.id.as_str()) {
             return Err(LoweringErrors::one(
@@ -1222,10 +1225,13 @@ impl FloatRequirements {
         for lowerer in lowerers {
             let body = lowerer.function.body.as_ref().expect("definition required");
             for operation in body.blocks.iter().flat_map(|block| &block.operations) {
-                let OperationKind::Float(float) = &operation.kind else {
+                let OperationKind::Call { callee, arguments } = &operation.kind else {
                     continue;
                 };
-                match float {
+                let Some(float) = FloatOperation::from_intrinsic_call(callee, arguments) else {
+                    continue;
+                };
+                match &float {
                     FloatOperation::Convert { kind, .. } => {
                         requirements.conversions.insert(*kind);
                     }
@@ -1992,20 +1998,21 @@ fn is_safe_symbol(symbol: &str) -> bool {
 }
 
 fn is_reserved_float_support_symbol(symbol: &str) -> bool {
-    matches!(
-        symbol,
-        "__fe2o3_f16_to_f32_v1"
-            | "__fe2o3_f32_to_f16_rne_v1"
-            | "__fe2o3_bf16_to_f32_v1"
-            | "__fe2o3_f32_to_bf16_rne_v1"
-            | "__ocml_sin_f32"
-            | "__ocml_cos_f32"
-            | "__ocml_exp_f32"
-            | "__ocml_exp2_f32"
-            | "__ocml_log_f32"
-            | "__ocml_log2_f32"
-            | "__ocml_log10_f32"
-    )
+    symbol.starts_with("__fe2o3_ir_float_v1_")
+        || matches!(
+            symbol,
+            "__fe2o3_f16_to_f32_v1"
+                | "__fe2o3_f32_to_f16_rne_v1"
+                | "__fe2o3_bf16_to_f32_v1"
+                | "__fe2o3_f32_to_bf16_rne_v1"
+                | "__ocml_sin_f32"
+                | "__ocml_cos_f32"
+                | "__ocml_exp_f32"
+                | "__ocml_exp2_f32"
+                | "__ocml_log_f32"
+                | "__ocml_log2_f32"
+                | "__ocml_log10_f32"
+        )
 }
 
 fn validate_capabilities(
@@ -2214,13 +2221,19 @@ impl<'a> FunctionLowerer<'a> {
         operation: &Operation,
         location: &LoweringLocation,
     ) -> Result<(), LoweringErrors> {
-        if !matches!(
-            operation.kind,
-            OperationKind::Fence(_)
-                | OperationKind::WorkgroupBarrier(_)
-                | OperationKind::WorkgroupMemory(_)
-                | OperationKind::Float(_)
-        ) {
+        let is_float = matches!(
+            &operation.kind,
+            OperationKind::Call { callee, arguments }
+                if FloatOperation::from_intrinsic_call(callee, arguments).is_some()
+        );
+        if !is_float
+            && !matches!(
+                operation.kind,
+                OperationKind::Fence(_)
+                    | OperationKind::WorkgroupBarrier(_)
+                    | OperationKind::WorkgroupMemory(_)
+            )
+        {
             return Ok(());
         }
         for required in operation
@@ -2667,7 +2680,6 @@ impl<'a> FunctionLowerer<'a> {
                 }
             }
             OperationKind::Wave(wave) => self.validate_wave(wave, &location)?,
-            OperationKind::Float(float) => self.validate_float(float, &location)?,
             OperationKind::Atomic(atomic) => self.validate_atomic(atomic, &location)?,
             OperationKind::Barrier(_) => {
                 return Err(LoweringErrors::one(
@@ -2686,13 +2698,22 @@ impl<'a> FunctionLowerer<'a> {
                     "workgroup Alloca is ambiguous; use explicit WorkgroupMemory",
                 ));
             }
-            OperationKind::Call { callee, arguments } if self.call_symbols.is_some() => {
-                self.validate_call(callee, arguments, operation, &location)?;
+            OperationKind::Call { callee, arguments } => {
+                if let Some(float) = FloatOperation::from_intrinsic_call(callee, arguments) {
+                    self.validate_float(&float, &location)?;
+                } else if self.call_symbols.is_some() {
+                    self.validate_call(callee, arguments, operation, &location)?;
+                } else {
+                    return Err(LoweringErrors::one(
+                        location,
+                        LoweringDiagnosticCode::UnsupportedOperation,
+                        format!("G1 does not lower {:?}", operation.kind),
+                    ));
+                }
             }
             OperationKind::Intrinsic(_)
             | OperationKind::Unary { .. }
             | OperationKind::Select { .. }
-            | OperationKind::Call { .. }
             | OperationKind::Alloca { .. } => {
                 return Err(LoweringErrors::one(
                     location,
@@ -3369,6 +3390,14 @@ impl<'a> FunctionLowerer<'a> {
                 .unwrap();
             }
             OperationKind::Call { callee, arguments } => {
+                if let Some(float) = FloatOperation::from_intrinsic_call(callee, arguments) {
+                    self.emit_float(
+                        output,
+                        result_name.as_deref().expect("verified float result"),
+                        &float,
+                    );
+                    return Ok(());
+                }
                 let callee_function = self
                     .module
                     .function(callee)
@@ -3466,13 +3495,6 @@ impl<'a> FunctionLowerer<'a> {
                     output,
                     result_name.as_deref().expect("verified wave result"),
                     wave,
-                );
-            }
-            OperationKind::Float(float) => {
-                self.emit_float(
-                    output,
-                    result_name.as_deref().expect("verified float result"),
-                    float,
                 );
             }
             _ => unreachable!("preflight rejected unsupported operation"),

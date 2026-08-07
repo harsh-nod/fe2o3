@@ -43,10 +43,10 @@ fn math_kernel(
         .map(|index| ValueId(index as u32))
         .collect::<Vec<_>>();
     let mut block = BasicBlock::new(BlockId(0));
-    block.operations.push(Operation::effect_free(
-        ValueDef::new(ValueId(parameters.len() as u32), result),
-        OperationKind::Float(float),
-    ));
+    let declaration = float.declaration();
+    let mut operation = float.operation(ValueId(parameters.len() as u32));
+    operation.results[0].ty = result;
+    block.operations.push(operation);
     block.terminator = Some(Terminator::Return { values: vec![] });
     let mut function = Function::kernel_entry(
         "math_impl",
@@ -65,6 +65,7 @@ fn math_kernel(
     kernel.workgroup_size = Some(WorkgroupSize::new(64, 1, 1));
     let mut module = Module::new("tests::gfx942_math");
     module.functions.push(function);
+    module.functions.push(declaration);
     module.kernels.push(kernel);
     module
 }
@@ -143,22 +144,16 @@ fn baseline_missing_capability_and_mutated_contracts_fail_closed() {
             .contains(LoweringDiagnosticCode::UnsupportedCapability)
     );
 
-    let mut mutated = math_kernel(
+    let mutated = math_kernel(
         vec![Type::F32],
         Type::F32,
         FloatOperation::F32Math {
             function: F32MathFunction::Sin,
-            implementation: F32MathImplementation::OcmlAbiV1,
+            implementation: F32MathImplementation::ConstrainedLlvm,
             arguments: vec![ValueId(0)],
         },
         [],
     );
-    let OperationKind::Float(FloatOperation::F32Math { implementation, .. }) =
-        &mut mutated.functions[0].body.as_mut().unwrap().blocks[0].operations[0].kind
-    else {
-        unreachable!()
-    };
-    *implementation = F32MathImplementation::ConstrainedLlvm;
     assert!(matches!(
         lower_kernel_to_gfx942_llvm_ir(&mutated, &"math_kernel".into()),
         Err(error) if error.contains(LoweringDiagnosticCode::InputVerification(

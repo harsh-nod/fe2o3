@@ -6,10 +6,10 @@ fn module_with_operation(parameters: Vec<Type>, result: Type, float: FloatOperat
         .collect::<Vec<_>>();
     let result_id = ValueId(parameters.len() as u32);
     let mut block = BasicBlock::new(BlockId(0));
-    block.operations.push(Operation::effect_free(
-        ValueDef::new(result_id, result.clone()),
-        OperationKind::Float(float),
-    ));
+    let declaration = float.declaration();
+    let mut operation = float.operation(result_id);
+    operation.results[0].ty = result.clone();
+    block.operations.push(operation);
     block.terminator = Some(Terminator::Return {
         values: vec![result_id],
     });
@@ -21,6 +21,7 @@ fn module_with_operation(parameters: Vec<Type>, result: Type, float: FloatOperat
     );
     let mut module = Module::new("tests::float");
     module.functions.push(function);
+    module.functions.push(declaration);
     module
 }
 
@@ -196,36 +197,23 @@ fn float_capabilities_are_derived() {
 }
 
 #[test]
-fn v3_wire_round_trips_and_older_writers_reject() {
+fn frozen_wire_round_trips_canonical_float_intrinsic_calls() {
     let module = f32_math(F32MathFunction::Sin);
-    assert!(matches!(
-        encode_module_v1(&module),
-        Err(KernelIrEncodeError::UnsupportedInVersion { version: 1, .. })
-    ));
-    assert!(matches!(
-        encode_module_v2(&module),
-        Err(KernelIrEncodeError::UnsupportedInVersion { version: 2, .. })
-    ));
-
-    let bytes = encode_module_v3(&module).unwrap();
-    assert_eq!(&bytes[8..10], &KERNEL_IR_VERSION_V3.to_le_bytes());
-    assert_eq!(decode_module_v3(&bytes).unwrap(), module);
+    let bytes = encode_module_v2(&module).unwrap();
+    assert_eq!(&bytes[8..10], &KERNEL_IR_VERSION_V2.to_le_bytes());
+    assert_eq!(decode_module_v2(&bytes).unwrap(), module);
     assert_eq!(
-        encode_module_v3(&decode_module_v3(&bytes).unwrap()).unwrap(),
+        encode_module_v2(&decode_module_v2(&bytes).unwrap()).unwrap(),
         bytes
     );
-    assert!(matches!(
-        decode_module_v2(&bytes),
-        Err(KernelIrDecodeError::UnknownVersion(3))
-    ));
     for length in 0..bytes.len() {
-        assert!(decode_module_v3(&bytes[..length]).is_err());
+        assert!(decode_module_v2(&bytes[..length]).is_err());
     }
 }
 
 #[test]
-fn v3_wire_rejects_mutated_float_tags() {
-    let module = module_with_operation(
+fn reserved_float_declarations_reject_mutation() {
+    let mut module = module_with_operation(
         vec![Type::Scalar(ScalarType::F16)],
         Type::F32,
         FloatOperation::Convert {
@@ -233,35 +221,15 @@ fn v3_wire_rejects_mutated_float_tags() {
             value: ValueId(0),
         },
     );
-    let bytes = encode_module_v3(&module).unwrap();
-    let needle = [21, 1, 1, 0, 0, 0, 0];
-    let matches = bytes
-        .windows(needle.len())
-        .enumerate()
-        .filter(|(_, window)| *window == needle)
-        .map(|(offset, _)| offset)
-        .collect::<Vec<_>>();
-    let [offset] = matches.as_slice() else {
-        panic!("expected one canonical float operation, found {matches:?}")
-    };
-
-    let mut operation = bytes.clone();
-    operation[*offset + 1] = 0xff;
-    assert!(matches!(
-        decode_module_v3(&operation),
-        Err(KernelIrDecodeError::UnknownTag {
-            kind: "floating-point operation",
-            tag: 0xff
-        })
-    ));
-
-    let mut conversion = bytes;
-    conversion[*offset + 2] = 0xff;
-    assert!(matches!(
-        decode_module_v3(&conversion),
-        Err(KernelIrDecodeError::UnknownTag {
-            kind: "float conversion",
-            tag: 0xff
-        })
-    ));
+    let declaration = module
+        .functions
+        .iter_mut()
+        .find(|function| FloatOperation::from_intrinsic_id(&function.id).is_some())
+        .unwrap();
+    declaration.signature.results[0] = Type::F64;
+    assert!(
+        verify_module(&module)
+            .unwrap_err()
+            .contains(DiagnosticCode::InvalidFloatOperation)
+    );
 }

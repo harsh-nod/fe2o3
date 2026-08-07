@@ -4,14 +4,13 @@ use std::str;
 
 use crate::{
     AccessMode, AddressSpace, Atomic, AtomicKind, Axis, Barrier, BarrierSemantics, BasicBlock,
-    BinaryOp, BlockId, CastKind, ComparePredicate, Constant, Convergence, F32MathFunction,
-    F32MathImplementation, Fence, FloatConversionKind, FloatOperation, Function, FunctionBody,
-    FunctionId, FunctionRole, IndexKind, IntegerSwitchCase, IntrinsicKind, IntrinsicOperation,
-    Kernel, KernelId, LaunchDomain, LaunchExtent, MemoryAccess, MemoryOrdering, Module, ModuleId,
-    NarrowFloatFormat, Operation, OperationKind, PointerType, ScalarType, Signature, SliceType,
+    BinaryOp, BlockId, CastKind, ComparePredicate, Constant, Convergence, Fence, Function,
+    FunctionBody, FunctionId, FunctionRole, IndexKind, IntegerSwitchCase, IntrinsicKind,
+    IntrinsicOperation, Kernel, KernelId, LaunchDomain, LaunchExtent, MemoryAccess, MemoryOrdering,
+    Module, ModuleId, Operation, OperationKind, PointerType, ScalarType, Signature, SliceType,
     SwitchCase, SynchronizationScope, TargetCapability, Terminator, Type, UnaryOp, ValueDef,
-    ValueId, WaveOperation, WaveOperationKind, WaveWidth, WidenedFloatBinaryOp, WorkgroupBarrier,
-    WorkgroupMemory, WorkgroupMemoryExtent, WorkgroupSize,
+    ValueId, WaveOperation, WaveOperationKind, WaveWidth, WorkgroupBarrier, WorkgroupMemory,
+    WorkgroupMemoryExtent, WorkgroupSize,
 };
 
 /// Fixed magic at the start of every canonical kernel IR module.
@@ -20,8 +19,6 @@ pub const KERNEL_IR_MAGIC_V1: [u8; 8] = *b"FE2O3KI\0";
 pub const KERNEL_IR_VERSION_V1: u16 = 1;
 /// Additive synchronization, LDS, and wave-capability wire version.
 pub const KERNEL_IR_VERSION_V2: u16 = 2;
-/// Additive exact floating-point contract wire version.
-pub const KERNEL_IR_VERSION_V3: u16 = 3;
 /// Maximum size of one encoded kernel IR module.
 pub const MAX_MODULE_BYTES_V1: usize = 16 * 1024 * 1024;
 /// Maximum UTF-8 byte length of any identifier or extension component.
@@ -203,11 +200,6 @@ pub fn encode_module_v2(module: &Module) -> Result<Vec<u8>, KernelIrEncodeError>
     encode_module(module, KERNEL_IR_VERSION_V2)
 }
 
-/// Encodes a module in the bounded canonical kernel IR V3 wire format.
-pub fn encode_module_v3(module: &Module) -> Result<Vec<u8>, KernelIrEncodeError> {
-    encode_module(module, KERNEL_IR_VERSION_V3)
-}
-
 fn encode_module(module: &Module, version: u16) -> Result<Vec<u8>, KernelIrEncodeError> {
     let mut writer = Writer::new(version);
     writer.bytes(&KERNEL_IR_MAGIC_V1)?;
@@ -252,11 +244,6 @@ pub fn decode_module_v1(bytes: &[u8]) -> Result<Module, KernelIrDecodeError> {
 /// before producers begin emitting the additive V2 operation set.
 pub fn decode_module_v2(bytes: &[u8]) -> Result<Module, KernelIrDecodeError> {
     decode_module(bytes, KERNEL_IR_VERSION_V2, true)
-}
-
-/// Decodes canonical V1, V2, or V3 bytes using the latest bounded reader.
-pub fn decode_module_v3(bytes: &[u8]) -> Result<Module, KernelIrDecodeError> {
-    decode_module(bytes, KERNEL_IR_VERSION_V3, true)
 }
 
 fn decode_module(
@@ -705,11 +692,6 @@ fn encode_operation_kind(
             writer.u8(20)?;
             encode_wave_operation(writer, wave)?;
         }
-        OperationKind::Float(float) => {
-            require_v3(writer, "exact floating-point operation")?;
-            writer.u8(21)?;
-            encode_float_operation(writer, float)?;
-        }
     }
     Ok(())
 }
@@ -782,9 +764,6 @@ fn decode_operation_kind(reader: &mut Reader<'_>) -> Result<OperationKind, Kerne
         }
         20 if reader.version >= KERNEL_IR_VERSION_V2 => {
             OperationKind::Wave(decode_wave_operation(reader)?)
-        }
-        21 if reader.version >= KERNEL_IR_VERSION_V3 => {
-            OperationKind::Float(decode_float_operation(reader)?)
         }
         tag => {
             return Err(KernelIrDecodeError::UnknownTag {
@@ -1224,87 +1203,6 @@ fn decode_wave_operation(reader: &mut Reader<'_>) -> Result<WaveOperation, Kerne
         width,
         active_lanes,
         convergence,
-    })
-}
-
-fn encode_float_operation(
-    writer: &mut Writer,
-    float: &FloatOperation,
-) -> Result<(), KernelIrEncodeError> {
-    match float {
-        FloatOperation::Convert { kind, value } => {
-            writer.u8(1)?;
-            writer.u8(float_conversion_tag(*kind))?;
-            writer.u32(value.0)
-        }
-        FloatOperation::WidenedBinary {
-            format,
-            op,
-            lhs,
-            rhs,
-        } => {
-            writer.u8(2)?;
-            writer.u8(narrow_float_format_tag(*format))?;
-            writer.u8(widened_float_binary_op_tag(*op))?;
-            writer.u32(lhs.0)?;
-            writer.u32(rhs.0)
-        }
-        FloatOperation::F32Math {
-            function,
-            implementation,
-            arguments,
-        } => {
-            writer.u8(3)?;
-            writer.u8(f32_math_function_tag(*function))?;
-            writer.u8(f32_math_implementation_tag(*implementation))?;
-            encode_values(
-                writer,
-                "floating-point arguments",
-                arguments,
-                MAX_VALUE_ARGUMENTS_V1,
-            )
-        }
-        FloatOperation::Bf16x2FusedMultiplyAdd {
-            value,
-            multiplier,
-            addend,
-        } => {
-            writer.u8(4)?;
-            writer.u32(value.0)?;
-            writer.u32(multiplier.0)?;
-            writer.u32(addend.0)
-        }
-    }
-}
-
-fn decode_float_operation(reader: &mut Reader<'_>) -> Result<FloatOperation, KernelIrDecodeError> {
-    Ok(match reader.u8()? {
-        1 => FloatOperation::Convert {
-            kind: decode_float_conversion(reader.u8()?)?,
-            value: ValueId(reader.u32()?),
-        },
-        2 => FloatOperation::WidenedBinary {
-            format: decode_narrow_float_format(reader.u8()?)?,
-            op: decode_widened_float_binary_op(reader.u8()?)?,
-            lhs: ValueId(reader.u32()?),
-            rhs: ValueId(reader.u32()?),
-        },
-        3 => FloatOperation::F32Math {
-            function: decode_f32_math_function(reader.u8()?)?,
-            implementation: decode_f32_math_implementation(reader.u8()?)?,
-            arguments: decode_values(reader, "floating-point arguments", MAX_VALUE_ARGUMENTS_V1)?,
-        },
-        4 => FloatOperation::Bf16x2FusedMultiplyAdd {
-            value: ValueId(reader.u32()?),
-            multiplier: ValueId(reader.u32()?),
-            addend: ValueId(reader.u32()?),
-        },
-        tag => {
-            return Err(KernelIrDecodeError::UnknownTag {
-                kind: "floating-point operation",
-                tag,
-            });
-        }
     })
 }
 
@@ -1878,55 +1776,9 @@ enum_codec!(atomic_kind_tag, decode_atomic_kind, AtomicKind, "atomic kind", {
     AtomicKind::BitOr => 10,
     AtomicKind::BitXor => 11,
 });
-enum_codec!(float_conversion_tag, decode_float_conversion, FloatConversionKind, "float conversion", {
-    FloatConversionKind::F16ToF32 => 1,
-    FloatConversionKind::F32ToF16RoundTiesEven => 2,
-    FloatConversionKind::Bf16ToF32 => 3,
-    FloatConversionKind::F32ToBf16RoundTiesEven => 4,
-});
-enum_codec!(narrow_float_format_tag, decode_narrow_float_format, NarrowFloatFormat, "narrow float format", {
-    NarrowFloatFormat::F16 => 1,
-    NarrowFloatFormat::Bf16 => 2,
-});
-enum_codec!(widened_float_binary_op_tag, decode_widened_float_binary_op, WidenedFloatBinaryOp, "widened float binary operation", {
-    WidenedFloatBinaryOp::Add => 1,
-    WidenedFloatBinaryOp::Subtract => 2,
-    WidenedFloatBinaryOp::Multiply => 3,
-    WidenedFloatBinaryOp::Divide => 4,
-});
-enum_codec!(f32_math_function_tag, decode_f32_math_function, F32MathFunction, "f32 math function", {
-    F32MathFunction::Sqrt => 1,
-    F32MathFunction::FusedMultiplyAdd => 2,
-    F32MathFunction::Floor => 3,
-    F32MathFunction::Ceil => 4,
-    F32MathFunction::Truncate => 5,
-    F32MathFunction::RoundTiesEven => 6,
-    F32MathFunction::Sin => 7,
-    F32MathFunction::Cos => 8,
-    F32MathFunction::Exp => 9,
-    F32MathFunction::Exp2 => 10,
-    F32MathFunction::Ln => 11,
-    F32MathFunction::Log2 => 12,
-    F32MathFunction::Log10 => 13,
-});
-enum_codec!(f32_math_implementation_tag, decode_f32_math_implementation, F32MathImplementation, "f32 math implementation", {
-    F32MathImplementation::ConstrainedLlvm => 1,
-    F32MathImplementation::OcmlAbiV1 => 2,
-});
 
 fn require_v2(writer: &Writer, feature: &'static str) -> Result<(), KernelIrEncodeError> {
     if writer.version >= KERNEL_IR_VERSION_V2 {
-        Ok(())
-    } else {
-        Err(KernelIrEncodeError::UnsupportedInVersion {
-            version: writer.version,
-            feature,
-        })
-    }
-}
-
-fn require_v3(writer: &Writer, feature: &'static str) -> Result<(), KernelIrEncodeError> {
-    if writer.version >= KERNEL_IR_VERSION_V3 {
         Ok(())
     } else {
         Err(KernelIrEncodeError::UnsupportedInVersion {

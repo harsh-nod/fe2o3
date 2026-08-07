@@ -4,11 +4,10 @@ use std::fmt;
 
 use crate::{
     AccessMode, AddressSpace, Atomic, AtomicKind, Barrier, BasicBlock, BinaryOp, BlockId,
-    ComparePredicate, Fence, FloatConversionKind, FloatOperation, Function, FunctionId,
-    FunctionRole, Kernel, KernelId, LaunchExtent, MemoryOrdering, Module, ModuleId, Operation,
-    OperationKind, ScalarType, SynchronizationScope, TargetCapability, Terminator, Type, UnaryOp,
-    ValueId, WaveOperation, WaveOperationKind, WorkgroupBarrier, WorkgroupMemory,
-    WorkgroupMemoryExtent, pointer_for,
+    ComparePredicate, Fence, FloatOperation, Function, FunctionId, FunctionRole, Kernel, KernelId,
+    LaunchExtent, MemoryOrdering, Module, ModuleId, Operation, OperationKind, ScalarType,
+    SynchronizationScope, TargetCapability, Terminator, Type, UnaryOp, ValueId, WaveOperation,
+    WaveOperationKind, WorkgroupBarrier, WorkgroupMemory, WorkgroupMemoryExtent, pointer_for,
 };
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -301,6 +300,26 @@ impl<'module> ModuleVerifier<'module> {
     fn verify_function(&mut self, function: &Function) {
         let location = DiagnosticLocation::function(self.module, function);
         self.verify_capabilities(&function.required_capabilities, location.clone());
+
+        if function.id.as_str().starts_with("__fe2o3_ir_float_v1_") {
+            let valid = FloatOperation::from_intrinsic_id(&function.id).is_some_and(|float| {
+                let expected = float.declaration();
+                function.role == expected.role
+                    && function.body.is_none()
+                    && function.signature == expected.signature
+                    && function.required_capabilities == expected.required_capabilities
+            });
+            if !valid {
+                self.emit(
+                    location.clone(),
+                    DiagnosticCode::InvalidFloatOperation,
+                    format!(
+                        "reserved float intrinsic {} must have its exact canonical declaration",
+                        function.id
+                    ),
+                );
+            }
+        }
 
         let role_requires_body = function.role != FunctionRole::ExternalImport;
         if role_requires_body != function.body.is_some() {
@@ -838,6 +857,17 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
                 self.expect_results(operation, &[true_ty], location);
             }
             OperationKind::Call { callee, arguments } => {
+                if callee.as_str().starts_with("__fe2o3_ir_float_v1_")
+                    && FloatOperation::from_intrinsic_call(callee, arguments).is_none()
+                {
+                    self.emit(
+                        location.clone(),
+                        DiagnosticCode::InvalidFloatOperation,
+                        format!(
+                            "reserved float intrinsic call {callee} must use its exact canonical contract"
+                        ),
+                    );
+                }
                 let Some(callee) = self.functions.get(callee).copied() else {
                     self.emit(
                         location,
@@ -954,81 +984,6 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
                 self.verify_workgroup_memory(operation, memory, location);
             }
             OperationKind::Wave(wave) => self.verify_wave(operation, wave, location),
-            OperationKind::Float(float) => self.verify_float(operation, float, location),
-        }
-    }
-
-    fn verify_float(
-        &mut self,
-        operation: &Operation,
-        float: &FloatOperation,
-        location: DiagnosticLocation,
-    ) {
-        match float {
-            FloatOperation::Convert { kind, value } => {
-                let (operand, result) = match kind {
-                    FloatConversionKind::F16ToF32 => (Type::Scalar(ScalarType::F16), Type::F32),
-                    FloatConversionKind::F32ToF16RoundTiesEven => {
-                        (Type::F32, Type::Scalar(ScalarType::F16))
-                    }
-                    FloatConversionKind::Bf16ToF32 => (Type::Scalar(ScalarType::Bf16), Type::F32),
-                    FloatConversionKind::F32ToBf16RoundTiesEven => {
-                        (Type::F32, Type::Scalar(ScalarType::Bf16))
-                    }
-                };
-                self.expect_type(*value, &operand, location.clone());
-                self.expect_results(operation, &[result], location);
-            }
-            FloatOperation::WidenedBinary {
-                format, lhs, rhs, ..
-            } => {
-                let ty = format.ty();
-                self.expect_type(*lhs, &ty, location.clone());
-                self.expect_type(*rhs, &ty, location.clone());
-                self.expect_results(operation, &[ty], location);
-            }
-            FloatOperation::F32Math {
-                function,
-                implementation,
-                arguments,
-            } => {
-                if function.required_implementation() != *implementation {
-                    self.emit(
-                        location.clone(),
-                        DiagnosticCode::InvalidFloatOperation,
-                        format!(
-                            "{function:?} requires {:?}, found {implementation:?}",
-                            function.required_implementation()
-                        ),
-                    );
-                }
-                if arguments.len() != function.arity() {
-                    self.emit(
-                        location.clone(),
-                        DiagnosticCode::InvalidFloatOperation,
-                        format!(
-                            "{function:?} requires {} argument(s), found {}",
-                            function.arity(),
-                            arguments.len()
-                        ),
-                    );
-                }
-                for argument in arguments {
-                    self.expect_type(*argument, &Type::F32, location.clone());
-                }
-                self.expect_results(operation, &[Type::F32], location);
-            }
-            FloatOperation::Bf16x2FusedMultiplyAdd {
-                value,
-                multiplier,
-                addend,
-            } => {
-                let packed = Type::Scalar(ScalarType::U32);
-                self.expect_type(*value, &packed, location.clone());
-                self.expect_type(*multiplier, &packed, location.clone());
-                self.expect_type(*addend, &packed, location.clone());
-                self.expect_results(operation, &[packed], location);
-            }
         }
     }
 
