@@ -16,17 +16,19 @@
 //! and MIR blocks must appear in definition-before-use order. Every other
 //! construct produces a located diagnostic rather than a partial module.
 
+use crate::AmdGpuTarget;
 use crate::mir_import::{
     MirBinaryOp, MirBlock, MirCallee, MirConstant, MirFunction, MirFunctionKind, MirModule,
     MirOperandRef, MirPlaceRef, MirProjectionElem, MirRvalueKind, MirSourceLocation, MirStatement,
     MirStatementKind, MirTerminator, MirTerminatorKind, MirTypeShape, MirUnaryOp,
 };
 use crate::trusted_device_items::TrustedDeviceItem;
+use dialect_amdgcn::{DeviceMathDiagnosticItem, recognized_device_math_operation};
 use fe2o3_kernel_ir::{
-    AccessMode, AddressSpace, BasicBlock, BinaryOp, BlockId, ComparePredicate, Constant, Function,
-    FunctionId, Kernel, LaunchDomain, LaunchExtent, MemoryAccess, Module, Operation, OperationKind,
-    ScalarType, Signature, SwitchCase, Terminator, Type, ValueDef, ValueId, WorkgroupSize,
-    verify_module,
+    AccessMode, AddressSpace, BasicBlock, BinaryOp, BlockId, ComparePredicate, Constant,
+    FloatOperation, Function, FunctionId, Kernel, LaunchDomain, LaunchExtent, MemoryAccess, Module,
+    Operation, OperationKind, ScalarType, Signature, SwitchCase, Terminator, Type, ValueDef,
+    ValueId, WorkgroupSize, verify_module,
 };
 use reserved_fe2o3_symbols::{
     DeviceFfiAddressSpaceV1, DeviceFfiPhysicalResultV1, DeviceFfiPhysicalTypeV1,
@@ -182,7 +184,26 @@ impl fmt::Display for TranslationErrors {
 
 impl Error for TranslationErrors {}
 
+#[cfg(test)]
 pub fn translate_and_verify(mir: &MirModule) -> Result<Module, TranslationErrors> {
+    translate_and_verify_with_float_target(mir, None)
+}
+
+pub(crate) fn translate_and_verify_for_target(
+    mir: &MirModule,
+    target: &AmdGpuTarget,
+) -> Result<Module, TranslationErrors> {
+    let float_target = (target.as_str() == "gfx942").then_some(Gfx942FloatTarget);
+    translate_and_verify_with_float_target(mir, float_target)
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Gfx942FloatTarget;
+
+fn translate_and_verify_with_float_target(
+    mir: &MirModule,
+    float_target: Option<Gfx942FloatTarget>,
+) -> Result<Module, TranslationErrors> {
     let mut functions = mir.functions.iter().collect::<Vec<_>>();
     functions.sort_by(|lhs, rhs| {
         (&lhs.export_name, &lhs.rust_path).cmp(&(&rhs.export_name, &rhs.rust_path))
@@ -222,7 +243,7 @@ pub fn translate_and_verify(mir: &MirModule) -> Result<Module, TranslationErrors
             continue;
         }
 
-        match FunctionLowerer::new(function, &mut declarations).lower() {
+        match FunctionLowerer::new(function, &mut declarations, float_target).lower() {
             Ok(definition) => {
                 if function.kind == MirFunctionKind::KernelEntry {
                     kernel_entries.push((
@@ -252,11 +273,25 @@ pub fn translate_and_verify(mir: &MirModule) -> Result<Module, TranslationErrors
         declarations
             .into_iter()
             .filter(|(identity, _)| !definition_ids.contains(identity))
-            .map(|(identity, signature)| Function::declaration(identity, signature)),
+            .map(|(identity, signature)| {
+                let id = FunctionId::new(identity.clone());
+                if let Some(float) = FloatOperation::from_intrinsic_id(&id) {
+                    let declaration = float.declaration();
+                    debug_assert_eq!(declaration.signature, signature);
+                    declaration
+                } else {
+                    Function::declaration(identity, signature)
+                }
+            }),
     );
 
     let mut module = Module::new(MODULE_ID);
     module.functions = definitions;
+    module.required_capabilities = module
+        .functions
+        .iter()
+        .flat_map(|function| function.required_capabilities.iter().cloned())
+        .collect();
     module.kernels = kernel_entries
         .into_iter()
         .map(|(kernel, entry, workgroup_size)| {
@@ -366,6 +401,7 @@ fn diagnostic(
 #[derive(Clone, Copy, Debug)]
 enum LocalBinding {
     Value(ValueId),
+    DeviceMathCapability,
     OptionPointer {
         discriminant: ValueId,
         payload: ValueId,
@@ -380,12 +416,14 @@ struct FunctionLowerer<'function, 'declarations> {
     return_type: Option<Type>,
     next_value: u32,
     trap_block: Option<BlockId>,
+    float_target: Option<Gfx942FloatTarget>,
 }
 
 impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
     fn new(
         function: &'function MirFunction,
         declarations: &'declarations mut BTreeMap<String, Signature>,
+        float_target: Option<Gfx942FloatTarget>,
     ) -> Self {
         Self {
             function,
@@ -395,6 +433,7 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
             return_type: None,
             next_value: 0,
             trap_block: None,
+            float_target,
         }
     }
 
@@ -470,26 +509,27 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
         }
         let result_types = match (&self.function.kind, &return_local.ty.shape) {
             (_, MirTypeShape::Unit) => Vec::new(),
-            (
-                MirFunctionKind::InternalHelper | MirFunctionKind::DeviceFfiExport,
-                MirTypeShape::U32,
-            ) => vec![Type::Scalar(ScalarType::U32)],
+            (MirFunctionKind::InternalHelper | MirFunctionKind::DeviceFfiExport, shape) => {
+                lower_scalar_type(shape).map_or_else(
+                    || {
+                        Err(diagnostic(
+                            TranslationDiagnosticCode::UnsupportedType,
+                            TranslationLocation::function(self.function),
+                            format!(
+                                "device definition return type `{}` is not supported",
+                                return_local.ty.rust
+                            ),
+                        ))
+                    },
+                    |ty| Ok(vec![ty]),
+                )?
+            }
             (MirFunctionKind::KernelEntry, _) => {
                 return Err(diagnostic(
                     TranslationDiagnosticCode::UnsupportedType,
                     TranslationLocation::function(self.function),
                     format!(
                         "kernel entry return type `{}` is not supported",
-                        return_local.ty.rust
-                    ),
-                ));
-            }
-            _ => {
-                return Err(diagnostic(
-                    TranslationDiagnosticCode::UnsupportedType,
-                    TranslationLocation::function(self.function),
-                    format!(
-                        "device definition return type `{}` is not supported; only `()` and `u32` are accepted",
                         return_local.ty.rust
                     ),
                 ));
@@ -649,6 +689,16 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                         location,
                         "projected reference rvalues are not supported",
                     ));
+                }
+                if matches!(
+                    self.locals.get(&place.local),
+                    Some(LocalBinding::DeviceMathCapability)
+                ) {
+                    return self.bind_local(
+                        destination.local,
+                        LocalBinding::DeviceMathCapability,
+                        location,
+                    );
                 }
                 let value = self.plain_local(place.local, &location)?;
                 self.bind_plain_destination(destination, value, location)
@@ -917,6 +967,18 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
             ));
         }
 
+        if let Some(TrustedDeviceItem::DeviceMath(math)) = callee.trusted_item() {
+            return self.lower_device_math_call(
+                callee,
+                math,
+                target,
+                destination,
+                operands,
+                block,
+                location,
+            );
+        }
+
         let arguments = operands
             .iter()
             .map(|operand| self.lower_operand(operand, block, &location))
@@ -1040,15 +1102,18 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                         ),
                     ));
                 }
-                Some(TrustedDeviceItem::DeviceValue(_) | TrustedDeviceItem::DeviceMath(_)) => {
+                Some(TrustedDeviceItem::DeviceValue(_)) => {
                     return Err(diagnostic(
                         TranslationDiagnosticCode::UnsupportedCall,
                         location,
                         format!(
-                            "trusted half/math item `{}` has not entered target-specific lowering",
+                            "trusted half value item `{}` is a type, not a callable helper",
                             callee.identity()
                         ),
                     ));
+                }
+                Some(TrustedDeviceItem::DeviceMath(_)) => {
+                    unreachable!("device math calls are handled before ordinary argument lowering")
                 }
                 None => {
                     return Err(diagnostic(
@@ -1117,13 +1182,206 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn lower_device_math_call(
+        &mut self,
+        callee: &MirCallee,
+        item: DeviceMathDiagnosticItem,
+        target: usize,
+        destination: &MirPlaceRef,
+        operands: &[MirOperandRef],
+        block: &mut BasicBlock,
+        location: TranslationLocation,
+    ) -> Result<Terminator, TranslationDiagnostic> {
+        if self.float_target.is_none() {
+            return Err(diagnostic(
+                TranslationDiagnosticCode::UnsupportedCall,
+                location,
+                format!(
+                    "trusted device math item `{}` requires the exact gfx942 floating-point profile",
+                    callee.identity()
+                ),
+            ));
+        }
+
+        if item == DeviceMathDiagnosticItem::Context {
+            return Err(diagnostic(
+                TranslationDiagnosticCode::UnsupportedCall,
+                location,
+                "DeviceMath is a capability type, not a callable operation",
+            ));
+        }
+
+        if item == DeviceMathDiagnosticItem::ContextFromCompiler {
+            if !operands.is_empty() {
+                return Err(self.call_arity(callee, 0, operands.len(), location));
+            }
+            self.require_destination_shape(destination, &MirTypeShape::DeviceMath, &location)?;
+            self.bind_local(
+                destination.local,
+                LocalBinding::DeviceMathCapability,
+                location.clone(),
+            )?;
+            return Ok(Terminator::Branch {
+                target: self.block_id(target, location)?,
+                arguments: Vec::new(),
+            });
+        }
+
+        let Some((receiver, numerical)) = operands.split_first() else {
+            return Err(self.call_arity(callee, 1, 0, location));
+        };
+        self.require_device_math_receiver(receiver, &location)?;
+        let arguments = numerical
+            .iter()
+            .map(|operand| self.lower_operand(operand, block, &location))
+            .collect::<Result<Vec<_>, _>>()?;
+        let float = recognized_device_math_operation(item, &arguments).map_err(|error| {
+            diagnostic(
+                TranslationDiagnosticCode::UnsupportedCall,
+                location.clone(),
+                format!(
+                    "trusted device math call `{}` has an invalid semantic shape: {error:?}",
+                    callee.identity()
+                ),
+            )
+        })?;
+        self.require_float_argument_types(&float, &location)?;
+        self.require_destination_type(destination, &float.result_type(), &location)?;
+
+        let declaration = float.declaration();
+        self.register_declaration_identity(
+            declaration.id.as_str(),
+            declaration.signature.clone(),
+            &location,
+        )?;
+        let result = self.fresh_value(float.result_type(), &location)?;
+        block.operations.push(float.operation(result.id));
+        self.bind_local(
+            destination.local,
+            LocalBinding::Value(result.id),
+            location.clone(),
+        )?;
+        Ok(Terminator::Branch {
+            target: self.block_id(target, location)?,
+            arguments: Vec::new(),
+        })
+    }
+
+    fn require_device_math_receiver(
+        &self,
+        operand: &MirOperandRef,
+        location: &TranslationLocation,
+    ) -> Result<(), TranslationDiagnostic> {
+        let MirOperandRef::Place(place) = operand else {
+            return Err(diagnostic(
+                TranslationDiagnosticCode::UnsupportedType,
+                location.clone(),
+                "DeviceMath receiver must be an authenticated local capability",
+            ));
+        };
+        if !place.projection.is_empty()
+            || !matches!(
+                self.locals.get(&place.local),
+                Some(LocalBinding::DeviceMathCapability)
+            )
+        {
+            return Err(diagnostic(
+                TranslationDiagnosticCode::UnsupportedType,
+                location.clone(),
+                "DeviceMath receiver did not originate from the authenticated compiler constructor",
+            ));
+        }
+        Ok(())
+    }
+
+    fn require_float_argument_types(
+        &self,
+        float: &FloatOperation,
+        location: &TranslationLocation,
+    ) -> Result<(), TranslationDiagnostic> {
+        let actual = float
+            .operands()
+            .into_iter()
+            .map(|value| self.value_type(value, location).cloned())
+            .collect::<Result<Vec<_>, _>>()?;
+        let expected = float.parameter_types();
+        if actual != expected {
+            return Err(diagnostic(
+                TranslationDiagnosticCode::UnsupportedType,
+                location.clone(),
+                format!("device math arguments must lower to {expected:?}; found {actual:?}"),
+            ));
+        }
+        Ok(())
+    }
+
+    fn require_destination_shape(
+        &self,
+        destination: &MirPlaceRef,
+        expected: &MirTypeShape,
+        location: &TranslationLocation,
+    ) -> Result<(), TranslationDiagnostic> {
+        let actual = self.local_shape(destination.local, location)?;
+        if actual != expected {
+            return Err(diagnostic(
+                TranslationDiagnosticCode::UnsupportedType,
+                location.clone(),
+                format!(
+                    "call destination local{} must have imported type {expected:?}; found {actual:?}",
+                    destination.local
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    fn require_destination_type(
+        &self,
+        destination: &MirPlaceRef,
+        expected: &Type,
+        location: &TranslationLocation,
+    ) -> Result<(), TranslationDiagnostic> {
+        let actual = lower_parameter_type(self.local_shape(destination.local, location)?)
+            .ok_or_else(|| {
+                diagnostic(
+                    TranslationDiagnosticCode::UnsupportedType,
+                    location.clone(),
+                    format!(
+                        "call destination local{} has no supported kernel IR type",
+                        destination.local
+                    ),
+                )
+            })?;
+        if &actual != expected {
+            return Err(diagnostic(
+                TranslationDiagnosticCode::UnsupportedType,
+                location.clone(),
+                format!(
+                    "call destination local{} must lower to {expected:?}; found {actual:?}",
+                    destination.local
+                ),
+            ));
+        }
+        Ok(())
+    }
+
     fn register_declaration(
         &mut self,
         callee: &MirCallee,
         signature: Signature,
         location: &TranslationLocation,
     ) -> Result<(), TranslationDiagnostic> {
-        if let Some(previous) = self.declarations.get(callee.identity())
+        self.register_declaration_identity(callee.identity(), signature, location)
+    }
+
+    fn register_declaration_identity(
+        &mut self,
+        identity: &str,
+        signature: Signature,
+        location: &TranslationLocation,
+    ) -> Result<(), TranslationDiagnostic> {
+        if let Some(previous) = self.declarations.get(identity)
             && previous != &signature
         {
             return Err(diagnostic(
@@ -1131,12 +1389,12 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                 location.clone(),
                 format!(
                     "callee `{}` was imported with inconsistent signatures",
-                    callee.identity()
+                    identity
                 ),
             ));
         }
         self.declarations
-            .entry(callee.identity().to_string())
+            .entry(identity.to_string())
             .or_insert(signature);
         Ok(())
     }
@@ -1221,14 +1479,16 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
         match place.projection.as_slice() {
             [] => match self.locals.get(&place.local).copied() {
                 Some(LocalBinding::Value(value)) => Ok(value),
-                Some(LocalBinding::OptionPointer { .. }) => Err(diagnostic(
-                    TranslationDiagnosticCode::UnsupportedType,
-                    location.clone(),
-                    format!(
-                        "local{} is a Rust aggregate, not one kernel IR value",
-                        place.local
-                    ),
-                )),
+                Some(LocalBinding::OptionPointer { .. } | LocalBinding::DeviceMathCapability) => {
+                    Err(diagnostic(
+                        TranslationDiagnosticCode::UnsupportedType,
+                        location.clone(),
+                        format!(
+                            "local{} is a Rust aggregate, not one kernel IR value",
+                            place.local
+                        ),
+                    ))
+                }
                 None => Err(self.undefined_local(place.local, location.clone())),
             },
             [
@@ -1236,11 +1496,13 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                 MirProjectionElem::Field(0),
             ] => match self.locals.get(&place.local).copied() {
                 Some(LocalBinding::OptionPointer { payload, .. }) => Ok(payload),
-                Some(LocalBinding::Value(_)) => Err(diagnostic(
-                    TranslationDiagnosticCode::UnsupportedType,
-                    location.clone(),
-                    format!("local{} is not a translated Option pointer", place.local),
-                )),
+                Some(LocalBinding::Value(_) | LocalBinding::DeviceMathCapability) => {
+                    Err(diagnostic(
+                        TranslationDiagnosticCode::UnsupportedType,
+                        location.clone(),
+                        format!("local{} is not a translated Option pointer", place.local),
+                    ))
+                }
                 None => Err(self.undefined_local(place.local, location.clone())),
             },
             [MirProjectionElem::Deref, MirProjectionElem::Index { local }] => {
@@ -1467,13 +1729,34 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
     ) -> Result<ValueId, TranslationDiagnostic> {
         match self.locals.get(&local).copied() {
             Some(LocalBinding::Value(value)) => Ok(value),
-            Some(LocalBinding::OptionPointer { .. }) => Err(diagnostic(
-                TranslationDiagnosticCode::UnsupportedType,
-                location.clone(),
-                format!("local{local} is a Rust aggregate, not one kernel IR value"),
-            )),
+            Some(LocalBinding::OptionPointer { .. } | LocalBinding::DeviceMathCapability) => {
+                Err(diagnostic(
+                    TranslationDiagnosticCode::UnsupportedType,
+                    location.clone(),
+                    format!("local{local} is a Rust aggregate, not one kernel IR value"),
+                ))
+            }
             None => Err(self.undefined_local(local, location.clone())),
         }
+    }
+
+    fn local_shape(
+        &self,
+        local: usize,
+        location: &TranslationLocation,
+    ) -> Result<&MirTypeShape, TranslationDiagnostic> {
+        self.function
+            .locals
+            .iter()
+            .find(|candidate| candidate.index == local)
+            .map(|candidate| &candidate.ty.shape)
+            .ok_or_else(|| {
+                diagnostic(
+                    TranslationDiagnosticCode::MalformedMir,
+                    location.clone(),
+                    format!("local{local} has no imported type"),
+                )
+            })
     }
 
     fn value_type(
@@ -1518,14 +1801,10 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
 }
 
 fn lower_parameter_type(shape: &MirTypeShape) -> Option<Type> {
+    if let Some(scalar) = lower_scalar_type(shape) {
+        return Some(scalar);
+    }
     match shape {
-        MirTypeShape::Bool => Some(Type::BOOL),
-        MirTypeShape::I32 => Some(Type::Scalar(ScalarType::I32)),
-        MirTypeShape::U32 => Some(Type::Scalar(ScalarType::U32)),
-        MirTypeShape::I64 | MirTypeShape::ISize => Some(Type::Scalar(ScalarType::I64)),
-        MirTypeShape::USize => Some(Type::INDEX),
-        MirTypeShape::F32 => Some(Type::F32),
-        MirTypeShape::F64 => Some(Type::F64),
         MirTypeShape::Slice { element, mutable } => Some(Type::slice(
             lower_element_type(element)?,
             AddressSpace::Global,
@@ -1540,6 +1819,21 @@ fn lower_parameter_type(shape: &MirTypeShape) -> Option<Type> {
             AddressSpace::Global,
             AccessMode::ReadWrite,
         )),
+        _ => None,
+    }
+}
+
+fn lower_scalar_type(shape: &MirTypeShape) -> Option<Type> {
+    match shape {
+        MirTypeShape::Bool => Some(Type::BOOL),
+        MirTypeShape::I32 => Some(Type::Scalar(ScalarType::I32)),
+        MirTypeShape::U32 | MirTypeShape::Bf16x2 => Some(Type::Scalar(ScalarType::U32)),
+        MirTypeShape::I64 | MirTypeShape::ISize => Some(Type::Scalar(ScalarType::I64)),
+        MirTypeShape::USize => Some(Type::INDEX),
+        MirTypeShape::F16 => Some(Type::Scalar(ScalarType::F16)),
+        MirTypeShape::Bf16 => Some(Type::Scalar(ScalarType::Bf16)),
+        MirTypeShape::F32 => Some(Type::F32),
+        MirTypeShape::F64 => Some(Type::F64),
         _ => None,
     }
 }
@@ -1791,21 +2085,102 @@ mod tests {
     }
 
     #[test]
-    fn device_definition_rejects_non_u32_scalar_return() {
+    fn device_definition_rejects_non_value_return() {
         let mut function = u32_definition("bad_export", MirFunctionKind::DeviceFfiExport, false);
-        function.locals[0] = local(0, MirLocalRole::Return, MirTypeShape::F32);
+        function.locals[0] = local(0, MirLocalRole::Return, MirTypeShape::DeviceMath);
 
         let errors = translate_and_verify(&MirModule {
             functions: vec![function],
         })
-        .expect_err("f32 result must be rejected");
+        .expect_err("capability result must be rejected");
 
         assert!(errors.contains(TranslationDiagnosticCode::UnsupportedType));
         assert!(errors.diagnostics().iter().any(|diagnostic| {
-            diagnostic
-                .message
-                .contains("only `()` and `u32` are accepted")
+            diagnostic.message.contains("return type")
+                && diagnostic.message.contains("is not supported")
         }));
+    }
+
+    #[test]
+    fn authenticated_device_math_becomes_canonical_gfx942_float_ir() {
+        let fixture = device_math_fixture(
+            DeviceMathDiagnosticItem::F32(fe2o3_kernel_ir::F32MathFunction::Sqrt),
+            vec![f32_constant(4.0)],
+            MirTypeShape::F32,
+            true,
+        );
+        let module = translate_and_verify_for_target(&fixture, &AmdGpuTarget::new("gfx942"))
+            .expect("strict gfx942 math must lower");
+
+        assert!(
+            module
+                .functions
+                .iter()
+                .any(|function| function.id.as_str() == "__fe2o3_ir_float_v1_sqrt_f32")
+        );
+        let body = module
+            .functions
+            .iter()
+            .find(|function| function.role == fe2o3_kernel_ir::FunctionRole::KernelEntry)
+            .and_then(|function| function.body.as_ref())
+            .expect("kernel body");
+        assert!(
+            body.blocks
+                .iter()
+                .flat_map(|block| &block.operations)
+                .any(|operation| matches!(
+                    &operation.kind,
+                    OperationKind::Call { callee, .. }
+                        if callee.as_str() == "__fe2o3_ir_float_v1_sqrt_f32"
+                ))
+        );
+        assert!(module.required_capabilities.is_empty());
+        verify_module(&module).expect("canonical math module");
+    }
+
+    #[test]
+    fn device_math_requires_gfx942_constructor_provenance_and_exact_types() {
+        let strict = device_math_fixture(
+            DeviceMathDiagnosticItem::F32(fe2o3_kernel_ir::F32MathFunction::Sqrt),
+            vec![f32_constant(4.0)],
+            MirTypeShape::F32,
+            true,
+        );
+        let wrong_target =
+            translate_and_verify_for_target(&strict, &AmdGpuTarget::new("gfx1100")).unwrap_err();
+        assert!(wrong_target.to_string().contains("exact gfx942"));
+
+        let unproven = device_math_fixture(
+            DeviceMathDiagnosticItem::F32(fe2o3_kernel_ir::F32MathFunction::Sqrt),
+            vec![f32_constant(4.0)],
+            MirTypeShape::F32,
+            false,
+        );
+        let unproven =
+            translate_and_verify_for_target(&unproven, &AmdGpuTarget::new("gfx942")).unwrap_err();
+        assert!(unproven.to_string().contains("did not originate"));
+
+        let wrong_type = device_math_fixture(
+            DeviceMathDiagnosticItem::F32(fe2o3_kernel_ir::F32MathFunction::Sqrt),
+            vec![MirOperandRef::Constant {
+                ty: MirImportedType {
+                    kind: MirType::I32,
+                    rust: "u32".to_string(),
+                    shape: MirTypeShape::U32,
+                },
+                literal: MirConstant::U32(4),
+                value: "4_u32".to_string(),
+            }],
+            MirTypeShape::F32,
+            true,
+        );
+        let wrong_type =
+            translate_and_verify_for_target(&wrong_type, &AmdGpuTarget::new("gfx942")).unwrap_err();
+        assert!(
+            wrong_type
+                .to_string()
+                .contains("must lower to [Scalar(F32)]")
+        );
     }
 
     #[test]
@@ -2210,6 +2585,95 @@ mod tests {
                 .map(|source| source.file.as_str()),
             Some("tests/scalar.rs")
         );
+    }
+
+    fn device_math_fixture(
+        item: DeviceMathDiagnosticItem,
+        numerical_operands: Vec<MirOperandRef>,
+        result_shape: MirTypeShape,
+        construct_capability: bool,
+    ) -> MirModule {
+        let mut blocks = Vec::new();
+        if construct_capability {
+            blocks.push(MirBlock {
+                index: 0,
+                statements: Vec::new(),
+                terminator: Some(terminator(MirTerminatorKind::Call {
+                    callee: Some(MirCallee::trusted_for_test(TrustedDeviceItem::DeviceMath(
+                        DeviceMathDiagnosticItem::ContextFromCompiler,
+                    ))),
+                    target: Some(1),
+                    destination: Some(place(1)),
+                    operands: Vec::new(),
+                })),
+            });
+        } else {
+            blocks.push(MirBlock {
+                index: 0,
+                statements: Vec::new(),
+                terminator: Some(terminator(MirTerminatorKind::Goto { target: 1 })),
+            });
+        }
+        blocks.push(MirBlock {
+            index: 1,
+            statements: if construct_capability {
+                vec![assign(0, 2, vec![operand(1)], MirRvalueKind::Ref)]
+            } else {
+                Vec::new()
+            },
+            terminator: Some(terminator(MirTerminatorKind::Call {
+                callee: Some(MirCallee::trusted_for_test(TrustedDeviceItem::DeviceMath(
+                    item,
+                ))),
+                target: Some(2),
+                destination: Some(place(3)),
+                operands: std::iter::once(operand(2))
+                    .chain(numerical_operands)
+                    .collect(),
+            })),
+        });
+        blocks.push(MirBlock {
+            index: 2,
+            statements: Vec::new(),
+            terminator: Some(terminator(MirTerminatorKind::Return)),
+        });
+
+        MirModule {
+            functions: vec![MirFunction {
+                export_name: "strict_math".to_string(),
+                rust_path: "tests::strict_math".to_string(),
+                kind: MirFunctionKind::KernelEntry,
+                frontend_contract: None,
+                arg_count: 0,
+                local_count: 4,
+                locals: vec![
+                    local(0, MirLocalRole::Return, MirTypeShape::Unit),
+                    local(1, MirLocalRole::Temp, MirTypeShape::DeviceMath),
+                    local(
+                        2,
+                        MirLocalRole::Temp,
+                        MirTypeShape::Reference {
+                            pointee: Box::new(MirTypeShape::DeviceMath),
+                            mutable: false,
+                        },
+                    ),
+                    local(3, MirLocalRole::Temp, result_shape),
+                ],
+                blocks,
+            }],
+        }
+    }
+
+    fn f32_constant(value: f32) -> MirOperandRef {
+        MirOperandRef::Constant {
+            ty: MirImportedType {
+                kind: MirType::F32,
+                rust: "f32".to_string(),
+                shape: MirTypeShape::F32,
+            },
+            literal: MirConstant::F32Bits(value.to_bits()),
+            value: format!("{value:?}_f32"),
+        }
     }
 
     fn scalar_fixture() -> MirModule {

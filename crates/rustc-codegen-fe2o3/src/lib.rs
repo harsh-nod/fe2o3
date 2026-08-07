@@ -432,7 +432,10 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                                 )
                             },
                         )?;
-                        let module = kernel_ir_lowering::translate_and_verify(&mir_module)
+                        let module = kernel_ir_lowering::translate_and_verify_for_target(
+                            &mir_module,
+                            &self.config.target,
+                        )
                             .map_err(|errors| {
                                 format!(
                                     "{CODEGEN_PIPELINE_ENV}=kernel-ir-worker-v2 compiler-module MIR translation failed: {errors}"
@@ -528,7 +531,12 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             CodegenPipeline::LegacyV1 => {
                                 match run_optional_kernel_ir_analysis(
                                     self.config.verify_kernel_ir,
-                                    || kernel_ir_lowering::translate_and_verify(&mir_module),
+                                    || {
+                                        kernel_ir_lowering::translate_and_verify_for_target(
+                                            &mir_module,
+                                            &self.config.target,
+                                        )
+                                    },
                                 ) {
                                     Ok(Some(module)) => eprintln!(
                                         "[rustc-codegen-fe2o3] verified MIR kernel IR analysis: {} kernel(s), {} function(s)",
@@ -556,7 +564,10 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                                 )
                             }
                             CodegenPipeline::KernelIrV1 => {
-                                let module = kernel_ir_lowering::translate_and_verify(&mir_module)
+                                let module = kernel_ir_lowering::translate_and_verify_for_target(
+                                    &mir_module,
+                                    &self.config.target,
+                                )
                                     .map_err(|errors| amdgpu_llvm::EmitError::Preflight {
                                         reason: format!(
                                             "{CODEGEN_PIPELINE_ENV}=kernel-ir-v1 MIR translation failed: {errors}"
