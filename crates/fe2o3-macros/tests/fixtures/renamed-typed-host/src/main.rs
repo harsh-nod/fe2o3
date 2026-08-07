@@ -25,10 +25,23 @@ fn assert_safe_aliases(
 ) {
 }
 
+fn assert_general_arguments<'allocation>(
+    observed: &gpu_host::__generated::ObservedContext,
+    input: &'allocation gpu_host::__generated::DeviceBuffer<f32>,
+    output: &'allocation mut gpu_host::__generated::DeviceBuffer<f32>,
+) {
+    let input = gpu_host::__generated::GeneratedReadDeviceSlice::new(observed, input).unwrap();
+    let output =
+        gpu_host::__generated::GeneratedReadWriteDeviceSlice::new(observed, output).unwrap();
+    let _arguments: renamed_general_gpu::Arguments<'allocation> =
+        renamed_general_gpu::Arguments::new(2.0_f32, input, output);
+}
+
 fn main() {
     assert_contract::<__fe2o3_kernel_marker_renamed_typed>();
     assert_expectation::<renamed_general_gpu::Marker>();
     assert_safe_aliases(None, None);
+    let _ = assert_general_arguments;
     assert_eq!(
         <__fe2o3_kernel_marker_renamed_typed as gpu_host::__generated::CompilerGeneratedKernelContractV1>::PROFILE,
         gpu_host::__generated::CompilerGeneratedKernelProfileV1::TypedVecAddF32RustcLayoutV2

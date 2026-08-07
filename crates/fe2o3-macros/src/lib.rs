@@ -1088,6 +1088,7 @@ fn expand_general_typed_kernel_with_imports(
         &original_name,
     );
     let model = model_general_typed_signature_v1(&input, &options, kernel_binding.as_bytes())?;
+    let generated_host_arguments = generated_general_typed_arguments_v1(&input, &model.arguments);
     let generated_host_contract =
         GeneratedHostContractIdV3::from_bytes(*model.generated_host_contract_identity.as_bytes());
     let control_flow_contract =
@@ -1217,6 +1218,8 @@ fn expand_general_typed_kernel_with_imports(
             #host_import
 
             pub type Marker = super::#type_marker_ident;
+
+            #generated_host_arguments
 
             const _: () = {
                 // SAFETY: the associated constants are only a lexical
@@ -1556,6 +1559,21 @@ impl GeneralTypedScalarV1 {
             Self::F64 => RustScalarElementTypeV1::F64,
         }
     }
+
+    fn rust_type_tokens(self) -> proc_macro2::TokenStream {
+        match self {
+            Self::I8 => quote!(i8),
+            Self::U8 => quote!(u8),
+            Self::I16 => quote!(i16),
+            Self::U16 => quote!(u16),
+            Self::I32 => quote!(i32),
+            Self::U32 => quote!(u32),
+            Self::I64 => quote!(i64),
+            Self::U64 => quote!(u64),
+            Self::F32 => quote!(f32),
+            Self::F64 => quote!(f64),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1572,6 +1590,100 @@ struct GeneralTypedSignatureModelV1 {
     abi: AbiLayout,
     launch: LaunchContract,
     generated_host_contract_identity: DigestBytes,
+}
+
+fn generated_general_typed_arguments_v1(
+    input: &ItemFn,
+    arguments: &[GeneralTypedArgumentKindV1],
+) -> proc_macro2::TokenStream {
+    debug_assert_eq!(input.sig.inputs.len(), arguments.len());
+    let fields = input
+        .sig
+        .inputs
+        .iter()
+        .map(|argument| match argument {
+            FnArg::Typed(argument) => match argument.pat.as_ref() {
+                Pat::Ident(pattern) => pattern.ident.clone(),
+                _ => unreachable!("general typed argument validation requires identifier patterns"),
+            },
+            FnArg::Receiver(_) => {
+                unreachable!("general typed argument validation rejects receivers")
+            }
+        })
+        .collect::<Vec<_>>();
+    let field_types = arguments
+        .iter()
+        .map(|argument| match argument {
+            GeneralTypedArgumentKindV1::Scalar(scalar) => scalar.rust_type_tokens(),
+            GeneralTypedArgumentKindV1::SharedSlice(scalar) => {
+                let scalar = scalar.rust_type_tokens();
+                quote!(
+                    __fe2o3_kernel_host::__generated::GeneratedReadDeviceSlice<
+                        'allocation,
+                        #scalar
+                    >
+                )
+            }
+            GeneralTypedArgumentKindV1::ExclusiveSlice(scalar) => {
+                let scalar = scalar.rust_type_tokens();
+                quote!(
+                    __fe2o3_kernel_host::__generated::GeneratedReadWriteDeviceSlice<
+                        'allocation,
+                        #scalar
+                    >
+                )
+            }
+        })
+        .collect::<Vec<_>>();
+    let retains_borrows = arguments.iter().any(|argument| {
+        matches!(
+            argument,
+            GeneralTypedArgumentKindV1::SharedSlice(_)
+                | GeneralTypedArgumentKindV1::ExclusiveSlice(_)
+        )
+    });
+
+    if retains_borrows {
+        quote! {
+            /// Opaque host arguments for this exact kernel signature.
+            ///
+            /// This value only retains typed values and device-buffer borrows;
+            /// it does not pack arguments, authorize a launch, or launch a kernel.
+            #[must_use = "generated arguments retain device-buffer borrows but do not launch a kernel"]
+            #[allow(dead_code)]
+            pub struct Arguments<'allocation> {
+                #(#fields: #field_types,)*
+            }
+
+            impl<'allocation> Arguments<'allocation> {
+                /// Retains the typed host capabilities for this kernel signature.
+                #[allow(clippy::too_many_arguments)]
+                pub fn new(#(#fields: #field_types),*) -> Self {
+                    Self { #(#fields),* }
+                }
+            }
+        }
+    } else {
+        quote! {
+            /// Opaque host arguments for this exact kernel signature.
+            ///
+            /// This value only retains typed values; it does not pack arguments,
+            /// authorize a launch, or launch a kernel.
+            #[must_use = "generated arguments are inert and do not launch a kernel"]
+            #[allow(dead_code)]
+            pub struct Arguments {
+                #(#fields: #field_types,)*
+            }
+
+            impl Arguments {
+                /// Retains the typed host values for this kernel signature.
+                #[allow(clippy::too_many_arguments)]
+                pub fn new(#(#fields: #field_types),*) -> Self {
+                    Self { #(#fields),* }
+                }
+            }
+        }
+    }
 }
 
 #[allow(dead_code)]
@@ -2846,8 +2958,9 @@ mod tests {
         KernelOptions, canonical_device_ffi_signature, core_import_for, device_ffi_contract,
         device_import_for, expand_device_copy_with_core_import, expand_device_export_with_import,
         expand_device_import_with_import, expand_kernel_with_device_import,
-        expand_kernel_with_imports, expand_legacy_kernel_with_imports, host_import_for,
-        model_general_typed_signature_v1, parse_device_ffi_options, parse_kernel_options,
+        expand_kernel_with_imports, expand_legacy_kernel_with_imports,
+        generated_general_typed_arguments_v1, host_import_for, model_general_typed_signature_v1,
+        parse_device_ffi_options, parse_kernel_options,
         validate_generated_device_ffi_contract_grammar, validate_kernel_assembly_boundary,
         validate_typed_kernel_profile_v1, validate_typed_kernel_signature,
         validate_typed_kernel_symbol_stem,
@@ -2867,7 +2980,7 @@ mod tests {
         derive_kernel_binding_id_v1, host_kernel_symbol_v1, semantic_witness_length_symbol_v1,
         semantic_witness_pointer_symbol_v1,
     };
-    use syn::{Expr, Item, ItemFn, ItemForeignMod, Type, parse_quote};
+    use syn::{Expr, FnArg, Item, ItemFn, ItemForeignMod, Type, Visibility, parse_quote};
 
     fn hex(bytes: &[u8]) -> String {
         bytes.iter().map(|byte| format!("{byte:02x}")).collect()
@@ -3553,7 +3666,134 @@ mod tests {
         assert!(selected.contains("artifact_container_bytes"));
         assert!(selected.contains("pub type Kernel"));
         assert!(selected.contains("pub type Prepared"));
+        assert!(!selected.contains("pub struct Arguments"));
         assert!(!selected.contains(TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3));
+    }
+
+    #[test]
+    fn general_typed_host_arguments_exactly_follow_the_validated_signature() {
+        let mixed: ItemFn = parse_quote! {
+            pub fn mixed(
+                scale: f64,
+                input: &[u16],
+                output: DisjointSlice<i32, Index1D>,
+            ) {}
+        };
+        let options = parse_kernel_options(quote!(typed)).unwrap();
+        let model = model_general_typed_signature_v1(&mixed, &options, [0x31; 32]).unwrap();
+        let generated = generated_general_typed_arguments_v1(&mixed, &model.arguments);
+        let generated_text = generated.to_string();
+        assert!(!generated_text.contains("* const"));
+        assert!(!generated_text.contains("* mut"));
+        assert!(!generated_text.contains("from_raw"));
+        let file: syn::File = syn::parse2(generated).unwrap();
+        let arguments = file
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Struct(item) if item.ident == "Arguments" => Some(item),
+                _ => None,
+            })
+            .expect("generated Arguments struct");
+        assert!(matches!(arguments.vis, Visibility::Public(_)));
+        assert_eq!(arguments.generics.params.len(), 1);
+        let fields = arguments.fields.iter().collect::<Vec<_>>();
+        assert_eq!(fields.len(), 3);
+        assert!(
+            fields
+                .iter()
+                .all(|field| matches!(field.vis, Visibility::Inherited))
+        );
+        assert_eq!(fields[0].ident.as_ref().unwrap(), "scale");
+        assert_eq!(fields[0].ty.to_token_stream().to_string(), "f64");
+        assert_eq!(fields[1].ident.as_ref().unwrap(), "input");
+        assert_eq!(
+            fields[1].ty.to_token_stream().to_string(),
+            "__fe2o3_kernel_host :: __generated :: GeneratedReadDeviceSlice < 'allocation , u16 >"
+        );
+        assert_eq!(fields[2].ident.as_ref().unwrap(), "output");
+        assert_eq!(
+            fields[2].ty.to_token_stream().to_string(),
+            "__fe2o3_kernel_host :: __generated :: GeneratedReadWriteDeviceSlice < 'allocation , i32 >"
+        );
+
+        let constructor = file
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Impl(item) => item.items.iter().find_map(|item| match item {
+                    syn::ImplItem::Fn(function) if function.sig.ident == "new" => Some(function),
+                    _ => None,
+                }),
+                _ => None,
+            })
+            .expect("generated Arguments::new constructor");
+        assert!(matches!(constructor.vis, Visibility::Public(_)));
+        let constructor_types = constructor
+            .sig
+            .inputs
+            .iter()
+            .filter_map(|argument| match argument {
+                FnArg::Typed(argument) => Some(argument.ty.to_token_stream().to_string()),
+                FnArg::Receiver(_) => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            constructor_types,
+            fields
+                .iter()
+                .map(|field| field.ty.to_token_stream().to_string())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            file.items
+                .iter()
+                .filter_map(|item| match item {
+                    Item::Impl(item) => Some(&item.items),
+                    _ => None,
+                })
+                .flatten()
+                .filter(|item| matches!(item, syn::ImplItem::Fn(_)))
+                .count(),
+            1
+        );
+
+        let scalars: ItemFn = parse_quote! {
+            pub fn scalars(
+                i8_value: i8,
+                u8_value: u8,
+                i16_value: i16,
+                u16_value: u16,
+                i32_value: i32,
+                u32_value: u32,
+                i64_value: i64,
+                u64_value: u64,
+                f32_value: f32,
+                f64_value: f64,
+            ) {}
+        };
+        let model = model_general_typed_signature_v1(&scalars, &options, [0x32; 32]).unwrap();
+        let generated = generated_general_typed_arguments_v1(&scalars, &model.arguments);
+        let file: syn::File = syn::parse2(generated).unwrap();
+        let arguments = file
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Struct(item) if item.ident == "Arguments" => Some(item),
+                _ => None,
+            })
+            .expect("scalar-only Arguments struct");
+        assert!(arguments.generics.params.is_empty());
+        assert_eq!(
+            arguments
+                .fields
+                .iter()
+                .map(|field| field.ty.to_token_stream().to_string())
+                .collect::<Vec<_>>(),
+            [
+                "i8", "u8", "i16", "u16", "i32", "u32", "i64", "u64", "f32", "f64"
+            ]
+        );
     }
 
     #[test]
@@ -3652,6 +3892,8 @@ mod tests {
             assert!(expansion.contains(&format!(
                 "pub type Marker = super :: __fe2o3_kernel_marker_{name}"
             )));
+            assert!(expansion.contains("pub struct Arguments < 'allocation >"));
+            assert!(expansion.contains("pub fn new"));
             assert!(expansion.contains("CompilerGeneratedKernelExpectationV1"));
             assert!(expansion.contains("ManifestDerivedScalarSliceV1"));
             assert!(expansion.contains(&binding.to_hex()));

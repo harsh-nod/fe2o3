@@ -23,13 +23,40 @@ fn typed_kernel_resolves_renamed_host_dependency() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let manifest = manifest_dir.join("tests/fixtures/renamed-typed-host/Cargo.toml");
     let target_dir = manifest_dir.join("../../target/renamed-typed-host-test");
-    let output = cargo_check(&manifest, &target_dir, None);
+    let output = cargo_check(&manifest, &target_dir, Some("renamed-typed-host-fixture"));
 
     assert!(
         output.status.success(),
         "renamed typed-host fixture failed:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+#[test]
+fn generated_arguments_retain_source_borrows() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let manifest = manifest_dir.join("tests/fixtures/renamed-typed-host/Cargo.toml");
+    let target_dir = manifest_dir.join("../../target/renamed-typed-host-test");
+    let cases: &[(&str, &str)] = &[
+        (
+            "arguments_lifetime_escape",
+            "lifetime may not live long enough",
+        ),
+        (
+            "arguments_mutable_alias",
+            "cannot borrow `*output` as mutable more than once at a time",
+        ),
+    ];
+
+    for (bin, expected_diagnostic) in cases {
+        let output = cargo_check(&manifest, &target_dir, Some(bin));
+        assert!(!output.status.success(), "{bin} unexpectedly compiled");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(expected_diagnostic),
+            "{bin} omitted diagnostic `{expected_diagnostic}`:\n{stderr}"
+        );
+    }
 }
 
 #[test]

@@ -1,4 +1,6 @@
 pub mod __generated {
+    use core::marker::PhantomData;
+
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub enum CompilerGeneratedKernelProfileV1 {
         TypedVecAddF32RustcLayoutV2,
@@ -50,6 +52,39 @@ pub mod __generated {
     pub struct GeneratedVecAddPreparedV1<'loaded, 'allocation, K: CompilerGeneratedKernelContractV1>(
         core::marker::PhantomData<(&'loaded K, &'allocation K)>,
     );
+
+    pub struct ObservedContext;
+
+    pub struct DeviceBuffer<T>(PhantomData<T>);
+
+    #[derive(Debug)]
+    pub struct RegionError;
+
+    pub struct GeneratedReadDeviceSlice<'allocation, T> {
+        _buffer: &'allocation DeviceBuffer<T>,
+    }
+
+    impl<'allocation, T> GeneratedReadDeviceSlice<'allocation, T> {
+        pub fn new(
+            _observed: &ObservedContext,
+            buffer: &'allocation DeviceBuffer<T>,
+        ) -> Result<Self, RegionError> {
+            Ok(Self { _buffer: buffer })
+        }
+    }
+
+    pub struct GeneratedReadWriteDeviceSlice<'allocation, T> {
+        _buffer: &'allocation mut DeviceBuffer<T>,
+    }
+
+    impl<'allocation, T> GeneratedReadWriteDeviceSlice<'allocation, T> {
+        pub fn new(
+            _observed: &ObservedContext,
+            buffer: &'allocation mut DeviceBuffer<T>,
+        ) -> Result<Self, RegionError> {
+            Ok(Self { _buffer: buffer })
+        }
+    }
 
     /// Minimal fixture copy of the host accessor shim.
     ///
