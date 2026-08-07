@@ -32,7 +32,7 @@ jobs:
       - name: Cache Cargo artifacts
         uses: Swatinem/rust-cache@v2
 
-      - name: Validate without ROCm or GPU hardware
+      - name: Validate with isolated codegen-backend tests
         run: scripts/ci-local.sh generic
 
       - name: Upload failure logs

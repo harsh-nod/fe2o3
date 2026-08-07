@@ -19,6 +19,37 @@ is the authoritative package selection for ordinary Rust checks, ROCm
 compilation, and GPU smoke. `verus-vecadd` remains ordinary-rustc-only and is
 never selected for ROCm compilation or GPU execution.
 
+The generic test subset runs `rustc-codegen-fe2o3` in a dedicated Cargo process.
+The command-plan regression in `scripts/tests/ci-local-test-gate.sh` enforces
+that separation in every generic CI run.
+
+## Comprehensive workspace tests
+
+Run every workspace test target with the repository gate:
+
+```text
+scripts/ci-local.sh workspace-test
+```
+
+This is equivalent to the following required process boundary:
+
+```text
+cargo test --locked --workspace --all-targets --exclude rustc-codegen-fe2o3
+cargo test --locked -p rustc-codegen-fe2o3 --all-targets
+```
+
+`rustc-codegen-fe2o3` has `crate-type = ["rlib", "dylib"]`. A single Cargo
+workspace test process can build more than one backend variant while integration
+tests link the unversioned `librustc_codegen_fe2o3.so`. A later variant can
+replace that file and leave an integration-test binary expecting Rust symbols
+from the earlier variant. The failure then appears as an undefined dynamic
+symbol even though the test passes by itself. Keeping the backend package in a
+separate Cargo process prevents the artifact collision without changing compiler
+or crate behavior.
+
+The comprehensive lane may link ROCm libraries through workspace packages. It
+does not opt in to ignored GPU execution tests.
+
 ## Verus proof coverage
 
 Run the two positive vecadd and fill proof harnesses plus all twelve

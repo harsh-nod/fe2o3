@@ -391,12 +391,18 @@ Run the repository validation lanes:
 
 ```bash
 scripts/ci-local.sh generic
+scripts/ci-local.sh workspace-test
 VERUS=/absolute/path/to/verus scripts/ci-local.sh verus
 FE2O3_TARGET=gfx1151 scripts/ci-local.sh rocm-compile
 FE2O3_ALLOW_GPU_SMOKE=1 FE2O3_TARGET=gfx1151 scripts/ci-local.sh hardware-smoke
 ```
 
-The ROCm and hardware lanes require a matching AMD GPU and ROCm installation.
+`workspace-test` is the comprehensive local test gate. It runs all workspace
+test targets except `rustc-codegen-fe2o3`, then tests that package in a separate
+Cargo process. Do not replace it with one `cargo test --workspace --all-targets`
+invocation; the codegen backend's `rlib` and unversioned `dylib` outputs can
+collide across build variants. This lane can link ROCm libraries. The ROCm and
+hardware lanes require a matching AMD GPU and ROCm installation.
 The release-evidence collector requires a complete archive-relative row-link
 map and records Git, rustc, LLVM, ROCm, driver, target, and stable lane
 identities without changing matrix status:
