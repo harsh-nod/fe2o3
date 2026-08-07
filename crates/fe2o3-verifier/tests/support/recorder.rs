@@ -151,6 +151,9 @@ fn authenticated_execution(arguments: &[String]) {
     if hex_digest(&request) != arguments[18] {
         process::exit(88);
     }
+    // Keep this independent check: authenticated tests must prove the exact
+    // sealed recorder image was executed. In debug builds this image is about
+    // 17 MiB, so the SHA-256 pass consumes substantial CPU under contention.
     let executable = fs::read("/proc/self/exe").unwrap();
     let executable_digest = hex_digest(&executable);
     if [&arguments[20], &arguments[22], &arguments[24]]

@@ -1,4 +1,5 @@
 use std::fs;
+use std::sync::Mutex;
 
 use fe2o3_artifacts::{
     AbiLayout, BlockSize, Capability, CodeObjectFormat, CodeObjectIdentity, CompilerIdentity,
@@ -340,6 +341,14 @@ fn make_verifier_policy(tools: ExecutionTools, max_timeout_seconds: u32) -> Veri
 fn measured_execution(
     target: ArtifactTarget,
 ) -> (AuthenticatedVerusExecutionEvidenceV1, VerifierPolicy) {
+    static MEASURED_EXECUTION: Mutex<()> = Mutex::new(());
+
+    // The debug recorder is roughly 17 MiB and deliberately self-hashes before
+    // producing evidence. Its wall-clock runtime is scheduler-sensitive under
+    // concurrent test load, so success fixtures serialize that expensive work
+    // and use the policy's existing 10-second ceiling. Focused one-second
+    // timeout coverage remains in the executor tests.
+    let _execution = MEASURED_EXECUTION.lock().unwrap();
     let tools = execution_tools();
     let verifier_policy = make_verifier_policy(tools, 10);
     let request = ProofRequestV1::new(
@@ -360,7 +369,7 @@ fn measured_execution(
     let evidence = execute_authenticated_verus(
         request,
         programs,
-        2,
+        verifier_policy.max_timeout_seconds(),
         &verifier_policy,
         ExecutionLimits::default(),
     )
