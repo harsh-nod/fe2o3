@@ -9,6 +9,7 @@
 mod graph;
 #[allow(unsafe_code)]
 mod lifecycle;
+mod wire;
 
 pub use graph::{
     CancellationCodeV1, CompletionAuthorityV1, CompletionGraphErrorV1, CompletionGraphV1,
@@ -23,6 +24,10 @@ pub use lifecycle::{
     MAX_QUARANTINED_OPERATIONS, NotificationError, OperationLifecycle, OperationState,
     PoisonedLifecycle, QuarantineCapacityError, QuarantineTicket, ReclaimError, RetentionOutcome,
     SynchronizedLifecycleError, TerminalState, TransitionError,
+};
+pub use wire::{
+    COMPLETION_GRAPH_WIRE_DOMAIN_V1, CompletionGraphDecodeErrorV1, CompletionGraphIdentityV1,
+    MAX_COMPLETION_GRAPH_BYTES_V1,
 };
 
 /// A backend operation or completion failure.

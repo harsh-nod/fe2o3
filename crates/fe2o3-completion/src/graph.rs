@@ -2,6 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
 
+use crate::wire::CompletionGraphIdentityV1;
+
 /// Size of each opaque backend identity used by completion graph V1.
 pub const COMPLETION_IDENTITY_BYTES_V1: usize = 32;
 /// Maximum number of streams represented by one completion graph.
@@ -599,6 +601,10 @@ impl CompletionAuthorityV1 {
         &self.graph
     }
 
+    pub fn graph_identity(&self) -> CompletionGraphIdentityV1 {
+        self.graph.identity()
+    }
+
     pub fn state(
         &self,
         node: CompletionNodeIdV1,
@@ -757,6 +763,7 @@ impl CompletionAuthorityV1 {
         if !self.is_terminal() {
             return Err(Box::new(self));
         }
+        let graph_identity = self.graph.identity();
         let entries = self
             .graph
             .nodes
@@ -767,7 +774,10 @@ impl CompletionAuthorityV1 {
                 state,
             })
             .collect();
-        Ok(CompletionReportV1 { entries })
+        Ok(CompletionReportV1 {
+            graph_identity,
+            entries,
+        })
     }
 
     pub const fn authenticates_backend_observations(&self) -> bool {
@@ -862,10 +872,15 @@ impl CompletionReportEntryV1 {
 /// Descriptive terminal outcome of every node in one consumed authority.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CompletionReportV1 {
+    graph_identity: CompletionGraphIdentityV1,
     entries: Vec<CompletionReportEntryV1>,
 }
 
 impl CompletionReportV1 {
+    pub const fn graph_identity(&self) -> CompletionGraphIdentityV1 {
+        self.graph_identity
+    }
+
     pub fn entries(&self) -> &[CompletionReportEntryV1] {
         &self.entries
     }

@@ -1,7 +1,9 @@
 use fe2o3_completion::{
-    CancellationCodeV1, CompletionGraphErrorV1, CompletionGraphV1, CompletionNodeIdV1,
-    CompletionNodeStateV1, CompletionNodeV1, CompletionTransitionErrorV1, ContextIdentityV1,
-    DeviceIdentityV1, EventIdentityV1, FailureCodeV1, FutureIdentityV1, StreamIdentityV1,
+    COMPLETION_GRAPH_WIRE_DOMAIN_V1, CancellationCodeV1, CompletionGraphDecodeErrorV1,
+    CompletionGraphErrorV1, CompletionGraphV1, CompletionNodeIdV1, CompletionNodeStateV1,
+    CompletionNodeV1, CompletionTransitionErrorV1, ContextIdentityV1, DeviceIdentityV1,
+    EventIdentityV1, FailureCodeV1, FutureIdentityV1, MAX_COMPLETION_GRAPH_BYTES_V1,
+    MAX_COMPLETION_GRAPH_STREAMS_V1, StreamIdentityV1,
 };
 
 fn bytes(value: u8) -> [u8; 32] {
@@ -463,4 +465,238 @@ fn illegal_transitions_fail_closed_without_state_changes() {
         Err(CompletionTransitionErrorV1::UnknownNode(node(99)))
     );
     assert!(authority.try_into_report().is_err());
+}
+
+#[test]
+fn canonical_wire_round_trips_and_binds_the_terminal_report() {
+    let graph = fixture();
+    let canonical = graph.canonical_bytes();
+    let identity = graph.identity();
+    assert_eq!(
+        canonical.len(),
+        COMPLETION_GRAPH_WIRE_DOMAIN_V1.len() + 80 + 2 * 32 + 5 * 80
+    );
+    assert_eq!(identity.byte_len(), canonical.len() as u64);
+    assert!(identity.matches_canonical_bytes(&canonical));
+
+    let decoded = CompletionGraphV1::decode_canonical(&canonical).unwrap();
+    assert_eq!(decoded.canonical_bytes(), canonical);
+    assert_eq!(decoded.identity(), identity);
+
+    let expected_identity = identity;
+    let mut authority = decoded.into_completion_authority();
+    for id in [node(1), node(2), node(3), node(4), node(5)] {
+        if authority.state(id).unwrap() == CompletionNodeStateV1::Ready {
+            // SAFETY: This model-only test stands in for exact quiescent completion.
+            unsafe { authority.mark_succeeded(id) }.unwrap();
+        }
+    }
+    let report = authority.try_into_report().unwrap();
+    assert_eq!(report.graph_identity(), expected_identity);
+}
+
+#[test]
+fn canonical_wire_and_identity_ignore_constructor_permutation() {
+    let canonical = fixture().canonical_bytes();
+    let identity = fixture().identity();
+    let (context, mut streams, mut nodes) = fixture_parts();
+    streams.reverse();
+    nodes.rotate_left(2);
+    let permuted = CompletionGraphV1::new(context, streams, nodes).unwrap();
+    assert_eq!(permuted.canonical_bytes(), canonical);
+    assert_eq!(permuted.identity(), identity);
+}
+
+#[test]
+fn graph_identity_is_domain_separated_and_mutation_sensitive() {
+    let graph = fixture();
+    let canonical = graph.canonical_bytes();
+    let identity = graph.identity();
+    assert_eq!(
+        hex(identity.sha256()),
+        "e35b4157ebae5535295305e926a2147ecfb6ff12224a9a85d36e0ca9b18a9fbb"
+    );
+
+    let node_start = wire_node_start(2);
+    let mut mutated = canonical;
+    mutated[node_start + 44] ^= 1;
+    let changed = CompletionGraphV1::decode_canonical(&mutated).unwrap();
+    assert_ne!(changed.identity(), identity);
+    assert!(!identity.matches_canonical_bytes(&mutated));
+}
+
+#[test]
+fn decoder_rejects_every_truncation_and_trailing_bytes() {
+    let canonical = fixture().canonical_bytes();
+    for length in 0..canonical.len() {
+        assert!(
+            CompletionGraphV1::decode_canonical(&canonical[..length]).is_err(),
+            "accepted truncation at {length}"
+        );
+    }
+    let mut trailing = canonical;
+    trailing.push(0);
+    assert!(matches!(
+        CompletionGraphV1::decode_canonical(&trailing),
+        Err(CompletionGraphDecodeErrorV1::DeclaredLengthMismatch { .. })
+    ));
+}
+
+#[test]
+fn decoder_rejects_header_and_allocation_attacks_before_graph_construction() {
+    let canonical = fixture().canonical_bytes();
+    let domain_len = COMPLETION_GRAPH_WIRE_DOMAIN_V1.len();
+
+    let mut bad_domain = canonical.clone();
+    bad_domain[0] ^= 1;
+    assert_eq!(
+        CompletionGraphV1::decode_canonical(&bad_domain).unwrap_err(),
+        CompletionGraphDecodeErrorV1::InvalidDomain
+    );
+
+    let mut bad_length = canonical.clone();
+    write_u32(&mut bad_length, domain_len, canonical.len() as u32 + 1);
+    assert!(matches!(
+        CompletionGraphV1::decode_canonical(&bad_length),
+        Err(CompletionGraphDecodeErrorV1::DeclaredLengthMismatch { .. })
+    ));
+
+    let mut flags = canonical.clone();
+    write_u32(&mut flags, domain_len + 4, 1);
+    assert_eq!(
+        CompletionGraphV1::decode_canonical(&flags).unwrap_err(),
+        CompletionGraphDecodeErrorV1::UnsupportedFlags(1)
+    );
+
+    let mut stream_count = canonical;
+    write_u32(
+        &mut stream_count,
+        domain_len + 72,
+        MAX_COMPLETION_GRAPH_STREAMS_V1 as u32 + 1,
+    );
+    assert!(matches!(
+        CompletionGraphV1::decode_canonical(&stream_count),
+        Err(CompletionGraphDecodeErrorV1::CountBoundExceeded {
+            field: "stream",
+            ..
+        })
+    ));
+
+    let oversized = vec![0; MAX_COMPLETION_GRAPH_BYTES_V1 + 1];
+    assert_eq!(
+        CompletionGraphV1::decode_canonical(&oversized).unwrap_err(),
+        CompletionGraphDecodeErrorV1::TooLarge {
+            actual: MAX_COMPLETION_GRAPH_BYTES_V1 + 1,
+            maximum: MAX_COMPLETION_GRAPH_BYTES_V1,
+        }
+    );
+}
+
+#[test]
+fn decoder_rejects_invalid_tags_reserved_fields_and_zero_node_ids() {
+    let canonical = fixture().canonical_bytes();
+    let node_start = wire_node_start(2);
+
+    let mut zero_node = canonical.clone();
+    write_u32(&mut zero_node, node_start, 0);
+    assert!(matches!(
+        CompletionGraphV1::decode_canonical(&zero_node),
+        Err(CompletionGraphDecodeErrorV1::InvalidNodeId {
+            field: "node identity"
+        })
+    ));
+
+    let mut bad_kind = canonical.clone();
+    bad_kind[node_start + 4] = 99;
+    assert!(matches!(
+        CompletionGraphV1::decode_canonical(&bad_kind),
+        Err(CompletionGraphDecodeErrorV1::InvalidTag {
+            field: "node kind",
+            actual: 99,
+        })
+    ));
+
+    let mut bad_predecessor_tag = canonical.clone();
+    bad_predecessor_tag[node_start + 5] = 2;
+    assert!(matches!(
+        CompletionGraphV1::decode_canonical(&bad_predecessor_tag),
+        Err(CompletionGraphDecodeErrorV1::InvalidTag {
+            field: "stream predecessor",
+            actual: 2,
+        })
+    ));
+
+    let mut flags = canonical.clone();
+    flags[node_start + 6] = 1;
+    assert!(matches!(
+        CompletionGraphV1::decode_canonical(&flags),
+        Err(CompletionGraphDecodeErrorV1::NonzeroReserved {
+            field: "node flags"
+        })
+    ));
+
+    let mut absent_predecessor = canonical.clone();
+    write_u32(&mut absent_predecessor, node_start + 8, 1);
+    assert!(matches!(
+        CompletionGraphV1::decode_canonical(&absent_predecessor),
+        Err(CompletionGraphDecodeErrorV1::NonzeroReserved {
+            field: "absent stream predecessor"
+        })
+    ));
+
+    let mut future_record = canonical;
+    write_u32(&mut future_record, node_start + 76, 1);
+    assert!(matches!(
+        CompletionGraphV1::decode_canonical(&future_record),
+        Err(CompletionGraphDecodeErrorV1::NonzeroReserved {
+            field: "non-wait event record"
+        })
+    ));
+}
+
+#[test]
+fn decoder_rejects_noncanonical_order_and_mutated_event_edges() {
+    let canonical = fixture().canonical_bytes();
+    let stream_start = COMPLETION_GRAPH_WIRE_DOMAIN_V1.len() + 80;
+    let node_start = wire_node_start(2);
+
+    let mut reordered_streams = canonical.clone();
+    swap_ranges(&mut reordered_streams, stream_start, stream_start + 32, 32);
+    assert_eq!(
+        CompletionGraphV1::decode_canonical(&reordered_streams).unwrap_err(),
+        CompletionGraphDecodeErrorV1::NonCanonical
+    );
+
+    let mut reordered_nodes = canonical.clone();
+    swap_ranges(&mut reordered_nodes, node_start, node_start + 80, 80);
+    assert_eq!(
+        CompletionGraphV1::decode_canonical(&reordered_nodes).unwrap_err(),
+        CompletionGraphDecodeErrorV1::NonCanonical
+    );
+
+    let mut substituted_record = canonical;
+    write_u32(&mut substituted_record, node_start + 3 * 80 + 76, 1);
+    assert!(matches!(
+        CompletionGraphV1::decode_canonical(&substituted_record),
+        Err(CompletionGraphDecodeErrorV1::InvalidGraph(error))
+            if matches!(*error, CompletionGraphErrorV1::EventRecordMismatch { .. })
+    ));
+}
+
+fn wire_node_start(stream_count: usize) -> usize {
+    COMPLETION_GRAPH_WIRE_DOMAIN_V1.len() + 80 + stream_count * 32
+}
+
+fn write_u32(bytes: &mut [u8], offset: usize, value: u32) {
+    bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+}
+
+fn swap_ranges(bytes: &mut [u8], first: usize, second: usize, length: usize) {
+    for index in 0..length {
+        bytes.swap(first + index, second + index);
+    }
+}
+
+fn hex(bytes: [u8; 32]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
