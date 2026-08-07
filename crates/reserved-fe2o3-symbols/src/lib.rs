@@ -81,8 +81,15 @@ pub const CRATE_BINDING_ID_ENV_V1: &str = "FE2O3_CRATE_BINDING_ID_V1";
 pub const TYPED_VECADD_F32_PROFILE_TAG_V1: &str = "typed-vecadd-f32-v1";
 /// Stable profile tag for rustc-derived typed vecadd ABI evidence.
 pub const TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2: &str = "typed-vecadd-f32-rustc-layout-v2";
-/// Stable profile tag for general typed kernels with rustc-derived layout evidence.
-pub const TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3: &str = "typed-general-rustc-layout-v3";
+/// Stable semantic profile for bounded scalar/slice kernel contracts.
+///
+/// The profile remains V1 even when transported by a V3 kernel registration:
+/// registration wire versions and semantic contract versions are independent.
+pub const MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1: &str =
+    "fe2o3.manifest-derived-scalar-slice.v1";
+/// Profile carried by a general typed V3 registration.
+pub const TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3: &str =
+    MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1;
 
 const CRATE_BINDING_DOMAIN_V1: &[u8] = b"fe2o3.crate-binding.v1\0";
 const KERNEL_BINDING_DOMAIN_V1: &[u8] = b"fe2o3.kernel-binding.v1\0";
@@ -857,7 +864,7 @@ mod tests {
         assert_eq!(KERNEL_REGISTRATION_V3_FIELD_COUNT, 10);
         assert_eq!(
             TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3,
-            "typed-general-rustc-layout-v3"
+            MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1
         );
     }
 

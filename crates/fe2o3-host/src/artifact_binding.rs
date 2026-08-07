@@ -16,7 +16,9 @@ use fe2o3_artifacts::{
 };
 use fe2o3_device::{DisjointSlice, Index1D, KernelMarkerV1};
 use fe2o3_kernel_descriptor::ValidationError as DescriptorValidationError;
-use reserved_fe2o3_symbols::TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2;
+use reserved_fe2o3_symbols::{
+    MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1, TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2,
+};
 use std::fmt;
 use std::sync::Arc;
 
@@ -27,8 +29,6 @@ pub const ARTIFACT_KERNEL_IDENTITY_VERSION: u16 = 1;
 
 const TYPE_ID_DOMAIN: &[u8] = b"fe2o3.rust-type.v1\0";
 const LAYOUT_ID_DOMAIN: &[u8] = b"fe2o3.rust-layout.v1\0";
-const MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1: &str = "fe2o3.manifest-derived-scalar-slice.v1";
-
 /// Exact, owned identity of one validated native-kernel selection.
 ///
 /// Values can only be obtained from [`ValidatedArtifactSelectionV1`]. Equality
