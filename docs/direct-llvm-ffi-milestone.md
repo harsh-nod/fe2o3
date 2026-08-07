@@ -1,8 +1,8 @@
 # Direct LLVM and Device FFI Milestone
 
-Status: active; bounded `gfx942` multi-kernel publication, canonical COV6
-recovery, and inert runtime authority foundations are implemented through
-commit `ceb0e4675173866a50fb737108e6a9b04827691d`.
+Status: active; the bounded alpha/zeta `gfx942` compiler-to-HSACO vertical
+slice and raw MI300X execution are implemented through commit
+`daf0b459ced07a25376670c83b1474eaebcd1a68`.
 
 This milestone connects the existing direct LLVM/LLD worker and device FFI
 contracts to the artifact transaction, bundle, and runtime paths. Its end state
@@ -15,19 +15,30 @@ CUDA-Oxide parity gates in `implementation-roadmap-v2.md`.
 
 ## Implemented gfx942 Vertical Slice
 
-As of commit `ceb0e4675173866a50fb737108e6a9b04827691d`, the opt-in
+As of commit `daf0b459ced07a25376670c83b1474eaebcd1a68`, the opt-in
 `kernel-ir-worker-v2` path implements a bounded G1-G5 publication slice for a
-real Cargo crate with two Rust kernel roots and one shared internal helper:
+real Cargo crate with the non-empty alpha and zeta General-V3 kernel profiles:
 
-- the external `cargo fe2o3 build` path loads the sealed backend, and rustc
-  collects both kernel roots plus the shared helper exactly once;
-- helper calls resolve from the canonical Rust source identity to one collected
-  internal definition, exact predeclared signature, and canonical export
-  symbol; ambiguous, uncollected, duplicate, or signature-incompatible helper
-  contracts fail closed independently of function order;
+- the external `cargo fe2o3 build` path loads the sealed backend and rustc
+  collects both alpha/zeta kernel roots. A separate two-root Worker V2 fixture
+  also collects one shared helper exactly once; helper calls resolve from the
+  canonical Rust source identity to one collected internal definition, exact
+  predeclared signature, and canonical export symbol, while ambiguous,
+  uncollected, duplicate, or signature-incompatible contracts fail closed;
 - rustc emits verified Kernel IR, an attempt-scoped textual LLVM handoff, and an
   exact symbol-role manifest, using rustc source-owner identity to accept device
   FFI imports;
+- rustc lowers the exact alpha/zeta source forms through typed Kernel IR. The
+  accepted forms require trusted thread-index provenance, a bounds-checked
+  `DisjointSlice::get_mut` `Some` edge that dominates every payload use, strict
+  `gfx942` floating-point policy, and the exact one-dimensional 256-thread
+  launch contract. Lookalike calls, escaped payloads, merged or false bounds
+  edges, wrong targets, and relaxed floating-point pipelines fail closed;
+- macro and rustc reconstruction authenticate the logical name and export name
+  before assigning the source roles `scale`, `input`, `output`, `a`, `b`, and
+  `bias`. Exact role names, ABI layout, effects, crate/kernel binding, and host
+  contract identity agree independently; renamed or signature-lookalike roots
+  retain positional `argN` fields and cannot acquire the alpha/zeta adapter;
 - Cargo consumes that manifest, constructs the closed request, and requires
   byte-identical output from GenericLink and Worker V2 executions;
 - the measured out-of-process worker uses LLVM and LLD library APIs directly to
@@ -35,8 +46,10 @@ real Cargo crate with two Rust kernel roots and one shared internal helper:
   into one `gfx942` HSACO; neither COMGR nor command-line linking is used;
 - Cargo independently checks the raw HSACO target, exact two-kernel export set,
   descriptors, and AMDHSA metadata. Descriptor-free COV5 retains raw
-  compatibility while descriptor-bearing COV6 is canonically finalized from
-  the retained evidence before publication; and
+  compatibility while descriptor-bearing COV6 reconciles explicit and complete
+  kernarg sizes. After optimization, the direct LLVM worker removes
+  `amdgpu-no-implicitarg-ptr` and restores the canonical 256-byte COV6 implicit
+  block so metadata, native descriptors, and host admission agree; and
 - the artifact transaction durably publishes the exact admitted raw or
   finalized bytes and an attempt-bound provenance receipt, with adversarial
   substitution, legacy-marker migration, raw/finalized process crash recovery,
@@ -61,21 +74,43 @@ The same snapshot adds independently tested foundations around that publication:
   aliases fail closed, and the executable cannot be safely unloaded while the
   set remains live.
 
-These foundations are not yet composed into one authority-producing pipeline.
+The same source checkpoint also generates exact alpha/zeta host adapters from
+the independently modeled signatures. Each adapter owns its signature-specific
+`Arguments`, source-index capabilities, layout, dispatch identity, safe
+`prepare` entry point, and linear prepared value. Host preparation validates
+the semantic witness, selected artifact entry, exact ABI/effects, checked
+allocation-relative regions, alias admission, geometry, physical COV6 layout,
+and hidden-argument initialization before its synchronous `dispatch` method can
+enter the reviewed HSA boundary.
+
+The production authority foundations are implemented, but the alpha/zeta Cargo
+path does not yet compose all of them.
 The artifact transaction persists and recovers exact Worker V2 raw or finalized
 publication state across process restart. Recovery validates the journal,
 publication kind, plan, upstream identity, route/admission, backend receipt,
 and completed attempt before clearing durable state; V1 raw markers migrate to
-the V2 format. The rustc/compiler executable and its origin are not
-authenticated. No Verus result or compiler/machine-code refinement proof is
-authenticated and bound to the emitted code. General V3 argument-packing and
-semantic-witness consumer foundations exist separately, but the backend witness
-emitter, generated alpha/zeta wrappers, production two-kernel container, and
-composed dispatch path are absent. The two Worker V2 kernels have not been
-launched.
-The HSA dispatch adapter remains restricted to the separately reviewed exact
-vecadd ABI; no load or launch authority follows from the Worker V2 publication
-receipt or the descriptive proof records.
+the V2 format. Finalized-bundle admission consumes the sealed preparation and
+durable publication, retains and revalidates the exact currentness lease, and
+independently checks the concrete container, selected entry, payload, target,
+physical ABI, and launch constraints. The authenticated load state machine and
+reviewed `fe2o3-hsa-runtime` adapter then retain currentness, executable, symbol,
+queue, kernarg, and completion lifetimes. These are existing production-facing
+host/runtime mechanisms, not missing designs.
+
+General V3 also has checked buffer views, typed binding/packing, generated
+alpha/zeta `Arguments`, safe preparation and dispatch SPI, and a rustc backend
+emitter for binding-derived semantic-witness host objects. The Worker V2
+integration builds both roots, links and validates both witnesses, publishes
+one inspected COV6 HSACO, and can export those exact bytes for the hardware
+test. The remaining composition gaps are narrower: Cargo's Worker V2
+artifact-container adapter is still inert and compiled only for tests, and no
+production implementation of `WorkerV2PrerequisiteAuthenticatorV1` authenticates
+the compiler, verifier, ABI, and executable-effect prerequisites required by
+the load state machine. The hardware harness therefore accepts the exported
+HSACO and digest through an opt-in test boundary and calls the reviewed raw
+unsafe HSA adapter directly instead of the generated alpha/zeta safe SPI. This
+does not establish production safe dispatch. No Verus result or machine-code
+effect/refinement evidence is yet authenticated and bound to the emitted code.
 
 The generic and adversarial suites pass. On the MI300X `gfx942` lane, three
 ignored Worker V2 integration tests pass with an unoptimized Debug worker:
@@ -87,6 +122,10 @@ bitcode-provider path, and real-Cargo publication of an exact two-kernel symbol
 set with one canonically collected and lowered helper. A separate live
 HIP/HSA observation confirms one exact `gfx942` MI300X device correlation.
 
+A fresh current native Worker V2 build on `mi300x` also passes all three CTests.
+This confirms the native LLVM/LLD protocol and bounded COV6 test boundary only;
+it does not load or execute alpha or zeta and is not an archived parity result.
+
 Commit `8f81306` fixed the earlier `emitObject` failure by making the measured
 LLVM include directories and pinned major-version definition public usage
 requirements of the worker protocol library. Every protocol consumer therefore
@@ -94,19 +133,79 @@ uses the same pinned LLVM headers, with a compile-time major-version check.
 Commit `10a1fc8` propagates the exact requested target features into AMDGPU
 `TargetMachine` creation and checks their ELF flags and AMDHSA metadata.
 
-This successful evidence is limited to the named MI300X host and unoptimized
-Debug worker. These integration tests compile, link, inspect, and publish
-`gfx942` HSACO, and the runtime observation correlates the HIP and HSA views of
-the device. They do not load or execute either new kernel through HSA; no
-optimized Release-worker, generic dispatch, two-kernel execution, Verus proof,
-or compiler/refinement result is claimed.
+This older evidence is limited to the named MI300X host and unoptimized Debug
+worker. Those integration tests compile, link, inspect, and publish `gfx942`
+HSACO, and the runtime observation correlates the HIP and HSA views of the
+device. They do not establish Verus proof, compiler refinement, or production
+runtime authority.
 
-Native worker CTests at `ceb0e46` additionally link a descriptor-bearing COV6
+Native worker CTests additionally link a descriptor-bearing COV6
 request with two entries and one shared helper, preserve both metadata entries
 and both `.kd` symbols, require AMDHSA ELF ABI version 4, and reject mismatched
 descriptor metadata. This is a native LLVM/LLD boundary test, not archived
-MI300X execution evidence. Canonical `.fe2o3.kd.v1` authentication and
-`ArtifactContainerV1` construction remain downstream.
+MI300X execution evidence. Canonical `.fe2o3.kd.v1` authentication is
+implemented downstream. Exposing the Cargo Worker V2 artifact-container
+adapter outside tests remains open.
+
+Commits `d3d23fc` and `0e7d46e` close the two COV6 convention failures: the
+finalizer accepts AMDHSA metadata that reports the explicit prefix while the
+compiler descriptor commits the complete kernarg, and the worker canonicalizes
+the post-optimization implicit ABI back to the complete 256-byte block. Commits
+`f49b252` through `4acbcc5` add the bounded typed lowering, guards, exact named
+ABI identity, generated host adapters, and authenticated logical/export role
+selection. Commit `daf0b459` exercises those pieces in one genuine Worker V2
+build, validates both backend witnesses, requires the exact alpha/zeta COV6
+kernel set, and exports the newly created artifact without overwriting an
+existing evidence file.
+
+That exported `gfx942` COV6 HSACO has SHA-256
+`3a916cdabca05ac74d340889aab2067221d6d1252a7cde13e61c1786252565c4`.
+On the MI300X host, the opt-in raw hardware harness loaded one executable,
+resolved alpha and zeta, and ran both kernels for lengths `1`, `255`, `256`,
+`257`, and `1023`. Every case matched its independent CPU oracle and preserved
+prefix/suffix canaries. This is valuable compiler, linker, ABI, and hardware
+evidence for the exact digest and `gfx942` target. Because the harness injects
+an external digest-pinned HSACO and invokes reviewed raw unsafe dispatch, it
+bypasses the existing finalized-bundle/currentness/load state machine and
+generated safe SPI. It is not evidence of production safe dispatch or
+CUDA-Oxide parity. Complete remains `0`.
+
+## Ordered Next Milestones
+
+1. **Production Cargo adapter, prerequisite authenticator, and safe-SPI
+   exercise.** Promote the inert/test-only Cargo Worker V2 artifact-container
+   adapter into a production producer without weakening its deterministic
+   descriptor and receipt checks. Implement a production
+   `WorkerV2PrerequisiteAuthenticatorV1` that authenticates the compiler,
+   verifier, ABI/effect, and executable prerequisites. Feed both into the
+   existing finalized-bundle admission, currentness lease, authenticated load
+   state machine, generated alpha/zeta `prepare`/`dispatch` SPI, and reviewed
+   runtime adapter. Remove the external-HSACO handoff from this test lane and
+   rerun the MI300X matrix; stale leases, substitutions, and authenticator
+   mutations must continue to fail closed.
+2. **Machine-code effect validation tied to evidence.** Analyze the finalized
+   alpha/zeta payload and its closed call graph with a bounded, versioned
+   validator. Bind the accepted global loads/stores, address derivations,
+   descriptor/effect identities, analyzer/toolchain identity, and exact payload
+   digest into machine-code evidence consumed by admission. Unknown calls,
+   indirect memory effects, effect expansion, or any byte substitution fail
+   closed. Hardware success remains separate evidence.
+3. **Verus proofs and proof-artifact binding.** Prove bounds, address overflow
+   freedom, injective writes/race freedom, and alpha/zeta functional results.
+   Bind source, crate/kernel identity, ABI/effects, launch contract, Verus and
+   solver identities, proof result, machine-code evidence, and finalized
+   payload into the artifact. Negative source/proof mutations and stale proof
+   replay must be rejected.
+4. **Split mutable views.** Add a safe partition operation that can produce two
+   simultaneous non-overlapping mutable views of one allocation while retaining
+   parent allocation identity and exact byte regions. Cover overlap, overflow,
+   lifetime escape, rejoin/drop order, packing, and in-flight alias rejection,
+   then execute a same-allocation multi-view kernel on MI300X.
+5. **Feature and architecture breadth.** Generalize the exact vertical slice
+   only after the preceding authority and evidence gates: more signatures and
+   control flow, aggregates, async/runtime features, core AMD operations, then
+   `gfx1151` and `gfx950` compile/hardware lanes. Each addition needs explicit
+   capability gating and its own negative, differential, and hardware evidence.
 
 ## Program Invariants
 
@@ -238,13 +337,21 @@ Exit gate:
 Primary ownership: runtime integration plus dedicated FFI examples and hardware
 tests.
 
-Current boundary: typed selection and a linear two-symbol HSA lifecycle are
-implemented as inert foundations. This gate still requires manifest-derived
-host types and kernarg packing, composition with authenticated Worker V2 bundle
-admission, and hardware execution. Completion requires two kernels with
-different nontrivial signatures to execute from one shared HSACO against
-independent CPU oracles; the current zero-argument two-kernel publication
-fixture does not satisfy that gate.
+Current boundary: typed selection, generated exact alpha/zeta packing and
+preparation, a linear two-symbol HSA lifecycle, and raw synchronous dispatch are
+implemented. General V3 has emitted semantic witnesses, checked buffer views,
+and signature-specific `Arguments` whose slice capabilities retain exact
+allocation-relative regions. Both kernels execute from one shared HSACO against
+independent CPU oracles on MI300X.
+
+Finalized Worker V2 bundle admission, currentness leases, the authenticated
+load state machine, generated alpha/zeta safe dispatch SPI, and the reviewed
+runtime adapter already exist. This gate still requires the Cargo adapter to be
+available outside tests, a production `WorkerV2PrerequisiteAuthenticatorV1`,
+and MI300X execution through that generated safe path. The current raw harness's
+external digest pin and reviewed unsafe call do not exercise it. Bidirectional
+external-device FFI, `gfx1151`, machine-code effect evidence, and Verus
+refinement also remain open.
 
 ## G8: Reproducibility, Evidence, and Release Gate
 

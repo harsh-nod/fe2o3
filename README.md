@@ -207,19 +207,45 @@ turn the foundations below into end-to-end features.
   association of a marker, complete ABI and effects, and executable semantics
   must be correct before its sealed launch can be treated as safe. General V3
   adds the separate fail-closed semantic-witness requirement described below.
+- `DeviceBuffer::view` and `view_mut` produce checked, borrow-typed contiguous
+  regions while retaining the parent allocation identity, context, base address,
+  full extent, and selected region. Range, size, address, and null-allocation
+  failures are explicit; exclusive views are non-clone and keep the parent
+  mutably borrowed. These views are a host provenance foundation, not launch
+  authority.
 - The bounded general typed V3 foundation accepts by-value `i8`/`u8` through
   `i64`/`u64`, `f32`/`f64`, shared slices, and genuine trusted
   `DisjointSlice<T, Index1D>` arguments. The macro emits an expectation-only V3
   registration while rustc independently reconstructs semantic types, layouts,
-  effects, and physical ABI. The alpha and zeta descriptor fixtures have
-  explicit/complete COV6 kernarg sizes `40/296` and `56/312`. Host binding uses
-  canonical scalar identities and lifetime-branded packed arguments that retain
-  allocation borrows. General V3 authority additionally requires a bounded,
-  identity-bound backend semantic witness. The witness schema, reserved
-  accessors, parser, and rejection tests exist, but the rustc backend does not
-  yet emit the witness host object, so this foundation cannot yet produce a
-  linkable safe V3 application. The exact vecadd V2 token stream and generated
-  API remain the executable compatibility profile.
+  effects, physical ABI, and backend semantic witnesses. Exact single-source
+  typed Rust kernels named `alpha` and `zeta` form the first General-V3 vertical
+  slice. Their source roles and argument names are authenticated as part of the
+  ABI identity rather than inferred positionally: alpha binds
+  `scale/input/output`, and zeta binds `a/b/bias/output`. The corresponding
+  descriptors have explicit/complete COV6 kernarg sizes `40/296` and `56/312`.
+  Exact role, name, signature, mutability, or layout substitutions fail closed.
+
+  The macro generates signature-specific `Arguments` and exact alpha/zeta host
+  adapters from that same typed source model. The adapters retain allocation
+  borrows, reconstruct the named ABI, validate the selected Worker V2 entry,
+  pack the explicit prefix, admit aliases and geometry, allocate the complete
+  aligned COV6 kernarg, initialize the implicit region, and expose synchronous
+  preparation/dispatch. Other General-V3 signatures still receive inert
+  `Arguments` only. This generated path is implemented, but it is not yet a
+  usable production authority path. Durable Worker V2 publication,
+  finalized-bundle host admission, a currentness lease, the authenticated load
+  state machine, and the reviewed `fe2o3-hsa-runtime` adapter exist. The missing
+  bridge is a production implementation of
+  `WorkerV2PrerequisiteAuthenticatorV1`: only test/fake implementations can
+  currently promote compiler, Verus/proof, and effect evidence into the
+  generated safe preparation path.
+
+  The rustc path recognizes only the exact alpha/zeta MIR shapes and lowers
+  their trusted thread index, `Option`-guarded `DisjointSlice::get_mut`, slice
+  loads, multiply/add operations, bounds control flow, and 256-thread launch
+  contract through canonical Kernel IR. Unsupported targets, float policy,
+  names, signatures, branches, or payload provenance fail closed. This is an
+  exact lowering profile, not general Rust GPU lowering.
 - The bounded Worker V2 host path can admit every manifest kernel that shares
   one exact finalized payload and select two distinct compiler-generated marker
   types from that admitted executable identity. Selection rechecks marker,
@@ -229,9 +255,11 @@ turn the foundations below into end-to-end features.
   kernel set that borrows the executable; duplicate requests and native symbol,
   kernel-object, or derived-identity aliases are rejected, and safe Rust cannot
   unload the executable while the set is live. These are typed admission,
-  symbol-resolution, and lifetime foundations. They do not derive general
-  kernarg packing or authorize launching either selected Worker V2 kernel; HSA
-  dispatch remains restricted to the separately reviewed exact vecadd ABI.
+  symbol-resolution, and lifetime foundations. Exact alpha/zeta generated
+  adapters add named-ABI packing and synchronous safe dispatch on top of this
+  state machine. General kernarg derivation remains absent, and the exact
+  adapters cannot enter their production safe path until a production
+  `WorkerV2PrerequisiteAuthenticatorV1` promotes the required evidence.
 - Compiler artifact publication is transactional and generation-owned. Typed
   generation results contain bounded immutable IR and HSACO snapshots captured
   through exact staged file descriptors and validated after publication while
@@ -298,16 +326,36 @@ turn the foundations below into end-to-end features.
   worker does not authenticate `.fe2o3.kd.v1` or construct an
   `ArtifactContainerV1`; those remain downstream responsibilities.
 
+  For this exact profile, the worker canonicalizes every COV5/COV6 kernel to
+  the complete 256-byte implicit-argument contract after optimization. The
+  finalizer accepts the AMDHSA metadata's explicit-prefix size only for the
+  authenticated General-V3 `gfx942:xnack-` COV6 producer and reconciles it with
+  the descriptor's complete size. All other size or profile mismatches remain
+  rejected.
+
+  At commit `daf0b459ced07a25376670c83b1474eaebcd1a68`, the ignored native
+  integration test builds the exact alpha/zeta Rust fixture, lowers both MIR
+  bodies through Kernel IR, validates both backend witnesses, links with the
+  direct LLVM Worker V2, independently inspects and canonically finalizes one
+  two-entry COV6 artifact, and exports exact bytes with SHA-256
+  `3a916cdabca05ac74d340889aab2067221d6d1252a7cde13e61c1786252565c4`.
+  A feature-gated MI300X HSA run then loaded that digest-pinned artifact once on
+  `gfx942:xnack-`, resolved distinct raw `alpha` and `zeta` symbols, ran both
+  kernels for lengths `1`, `255`, `256`, `257`, and `1023`, checked independent
+  CPU oracles and prefix/suffix canaries, and unloaded the executable once.
+  The hardware harness deliberately uses the reviewed unsafe raw HSA boundary;
+  it is evidence for the generated artifact's code, ABI, and behavior, not an
+  execution of the production generated adapter or a general safety proof.
+
   Compiler identity and origin are not authenticated, no Verus result or
   compiler/machine-code refinement proof is authenticated and bound to this
   executable, and the publication receipt grants no HSA load or launch
-  authority. On the MI300X `gfx942` lane, the ignored real-Cargo two-kernel and
-  one-helper Worker V2 publication test passes with an unoptimized Debug worker,
-  alongside the earlier direct-source and external-bitcode-provider publication
-  tests. A separate live HIP/HSA observation confirms one exact `gfx942` device
-  correlation. This is compile, link, inspection, durable-publication, and
-  device-observation evidence, not evidence that either new kernel was loaded
-  or launched through HSA; an optimized Release worker is not covered.
+  authority. On the MI300X `gfx942:xnack-` lane, the ignored real-Cargo
+  alpha/zeta Worker V2 publication test and the digest-pinned raw HSA hardware
+  test pass alongside the earlier direct-source and external-bitcode-provider
+  publication tests. The hardware test does not call the generated alpha/zeta
+  safe SPI, and no production prerequisite authenticator can yet authorize that
+  SPI from authenticated compiler/proof/effect evidence.
 - G8 adds deterministic model generation/reduction and a bounded conformance
   harness that executes fill, vecadd, and affine kernels against an independent
   HIP/CPU oracle. `cargo fe2o3 inspect` performs bounded read-only decoding.
@@ -317,21 +365,35 @@ turn the foundations below into end-to-end features.
 
 ### Not yet integrated
 
-- General MIR to kernel IR to AMDGPU lowering is not complete; `kernel-ir-v1`
-  accepts only the exact fill and vecadd shapes, and the elementwise recognizer
-  remains the default emitter.
-- The only generated executable typed path remains
-  `pub fn(&[f32], &[f32], DisjointSlice<f32>)` under the exact vecadd V2
-  compatibility profile. General V3 lexical registration, rustc-semantic
+- General MIR to kernel IR to AMDGPU lowering is not complete. `kernel-ir-v1`
+  accepts the exact fill and vecadd shapes, and `kernel-ir-worker-v2` additionally
+  accepts only the exact alpha/zeta General-V3 shapes on `gfx942:xnack-`; the
+  elementwise recognizer remains the default emitter.
+- General V3 lexical registration, rustc-semantic
   scalar/shared-slice/`DisjointSlice` reconstruction, variable COV6 descriptor
-  generation, safe value binding, lifetime-retaining packing, and the backend
-  witness contract are implemented as source/unit foundations. They are not yet
-  composed into a generated application: the backend witness host-object
-  emitter, per-kernel alpha/zeta `Arguments` and `Prepared` wrappers, production
-  two-entry container, and safe two-kernel load/dispatch path are absent.
+  generation, safe value binding, checked buffer regions, lifetime-retaining
+  packing primitives, backend witness emission, and signature-specific
+  `Arguments` are implemented as source/unit foundations. At `d509ca5`, their
+  generated slice capabilities can consume checked shared/exclusive subregions,
+  retain allocation-relative region identity, and feed the existing alias and
+  packing foundations. Exact alpha/zeta `Arguments` now have macro-emitted
+  preparation/dispatch adapters; other signatures remain inert.
   Aggregates, return values, and arbitrary rustc layouts also remain outside V3.
-  The current Worker V2 application fixture still publishes two zero-argument
-  test kernels with one helper; neither kernel is dispatched.
+  Cargo can assemble an inert descriptor-bound
+  `ArtifactContainerV1` candidate from exact Worker V2 publication evidence.
+  The result deliberately grants no current-publication, load, or launch
+  authority. This Cargo adapter remains test-only/inert even though durable
+  publication, finalized-bundle admission, currentness leasing, authenticated
+  loading, generated alpha/zeta safe dispatch, and the reviewed HSA runtime
+  adapter exist elsewhere. The production composition stops at
+  `WorkerV2PrerequisiteAuthenticatorV1`: only fake/test implementations exist,
+  so compiler, Verus/proof, and machine-effect evidence cannot yet be
+  authentically promoted into safe dispatch. The current hardware test instead
+  uses reviewed raw unsafe packing.
+- Checked mutable views preserve provenance and exclusive borrowing, but the
+  API does not yet construct multiple simultaneously live disjoint mutable
+  subviews of one allocation with a mechanical split proof. The mutable
+  split-view obligation therefore remains open.
 - The generated contract identity authenticates compiler declarations and the
   exact payload bytes; it does not inspect machine code to prove that declared
   read/read/write effects match every executable memory access. The fixed
@@ -351,7 +413,9 @@ turn the foundations below into end-to-end features.
   current required Verus CI lane is invoked separately and does not prove the
   ordinary Rust function, compiler, ROCm, driver, or machine-code refinement.
   Verus proof identity/refinement is not authenticated into the generated
-  vecadd artifact or required by its safe loader and launch API.
+  vecadd artifact or required by its safe loader and launch API. The exact
+  alpha/zeta bodies have no mechanical Verus proofs and no authenticated
+  source-to-Kernel-IR-to-machine-code refinement.
 - The fail-closed rustc wrapper classifies and preserves approved bootstrap
   invocations, and the external Cargo path now composes compile-shaped managed
   invocations with the descriptor-pinned rustc executable and sealed backend
@@ -362,7 +426,9 @@ turn the foundations below into end-to-end features.
   and wave collective support, production direct-link integration, general
   device FFI, occupancy-complete cooperative launch, multi-device memory
   semantics, full sanitizer/debugger coverage, broad differential fuzzing, and
-  authenticated Verus refinement remain parity work. LDS, atomics, waves,
+  authenticated Verus refinement remain parity work. The alpha/zeta hardware
+  result covers only MI300X `gfx942:xnack-`; architecture-family breadth is
+  absent. LDS, atomics, waves,
   fences, and barriers exist only in bounded experimental paths and are not yet
   generally available from ordinary Rust kernels.
 

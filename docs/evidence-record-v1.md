@@ -158,6 +158,79 @@ scripts/run-parity-snapshot.sh run \
   --vecadd-hsaco artifacts/gfx942-vecadd.hsaco
 ```
 
+The alpha/zeta vertical slice landed through
+`daf0b459ced07a25376670c83b1474eaebcd1a68` is not yet a shard in this static
+snapshot plan. The following commands reproduce the measured Worker V2 build
+and export on a ROCm 7.2.4 system. The worker measurement is derived by CMake
+from its pinned LLVM/LLD configuration and worker sources, not from the output
+binary alone:
+
+```bash
+cmake -S tools/fe2o3-llvm-link-worker -B /absolute/path/to/worker-build \
+  -DLLVM_DIR=/opt/rocm-7.2.4/lib/llvm/lib/cmake/llvm \
+  -DLLD_DIR=/opt/rocm-7.2.4/lib/llvm/lib/cmake/lld \
+  -DFE2O3_PINNED_LLVM_VERSION=22.0.0git \
+  -DFE2O3_LLVM_BUILD_ID_FILE=/opt/rocm/.info/version \
+  -DFE2O3_EXPECTED_LLVM_BUILD_ID=7.2.4 \
+  -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build /absolute/path/to/worker-build --parallel
+ctest --test-dir /absolute/path/to/worker-build --output-on-failure
+cat /absolute/path/to/worker-build/fe2o3-worker-build-id.txt
+
+test ! -e /absolute/path/to/alpha-zeta-cov6.hsaco
+FE2O3_LLVM_LINK_WORKER=/absolute/path/to/worker-build/fe2o3-llvm-link-worker \
+FE2O3_LLVM_LINK_WORKER_BUILD_ID=fe2o3-worker-v1-sha256-234d22f9fb347c86495e7156e53ef8eab55e939d6514973a6df373aee12f77a9 \
+FE2O3_LLVM_BUILD_ID=7.2.4 \
+FE2O3_GFX942_ALPHA_ZETA_OUTPUT=/absolute/path/to/alpha-zeta-cov6.hsaco \
+cargo +nightly-2026-04-03 test --locked -p rustc-codegen-fe2o3 \
+  --test kernel_ir_codegen \
+  worker_v2_general_v3_alpha_zeta_build_links_and_validate_backend_witnesses \
+  -- --ignored --exact --nocapture
+sha256sum /absolute/path/to/alpha-zeta-cov6.hsaco
+/opt/rocm/llvm/bin/llvm-readelf --notes \
+  /absolute/path/to/alpha-zeta-cov6.hsaco
+```
+
+The observed worker identity was
+`fe2o3-worker-v1-sha256-234d22f9fb347c86495e7156e53ef8eab55e939d6514973a6df373aee12f77a9`.
+The exported COV6 HSACO SHA-256 was
+`3a916cdabca05ac74d340889aab2067221d6d1252a7cde13e61c1786252565c4`.
+Its AMDHSA metadata reported complete kernarg sizes of `296` bytes for `alpha`
+and `312` bytes for `zeta`, including each 256-byte COV6 implicit suffix. This
+confirms that the earlier explicit-versus-complete kernarg mismatch is fixed.
+
+The same digest-pinned artifact was then executed on an AMD Instinct MI300X,
+`gfx942:xnack-`, with ROCm 7.2.4:
+
+```bash
+FE2O3_RUN_GFX942_TWO_KERNEL=1 \
+FE2O3_GFX942_ALPHA_ZETA_HSACO=/absolute/path/to/alpha-zeta-cov6.hsaco \
+FE2O3_GFX942_ALPHA_ZETA_SHA256=3a916cdabca05ac74d340889aab2067221d6d1252a7cde13e61c1786252565c4 \
+cargo +nightly-2026-04-03 test --locked -p fe2o3-hsa-runtime \
+  --features hardware-test-hooks --test gfx942_two_kernel_hardware \
+  gfx942_cov6_alpha_then_zeta_one_executable \
+  -- --ignored --exact --nocapture
+```
+
+That run passed independent CPU-oracle and canary checks at lengths `1`, `255`,
+`256`, `257`, and `1023`. It calls the reviewed raw unsafe packing path, not the
+landed generated alpha/zeta safe dispatch SPI, and it was not captured by the
+clean detached-checkout V1 snapshot runner. It is therefore an observed raw
+hardware result, not a dashboard `remote-hardware` strength or a parity row
+promotion.
+
+Durable Worker V2 publication, finalized-bundle host admission, currentness
+leases, the authenticated HSA load state machine, generated alpha/zeta safe
+dispatch SPI, and the reviewed `fe2o3-hsa-runtime` adapter are production code.
+The blocking trust gap is the absence of a production implementation of
+`WorkerV2PrerequisiteAuthenticatorV1`; current implementations are tests/fakes,
+so compiler, Verus, proof, ABI, and effect evidence cannot yet be authentically
+promoted into safe load/launch authority. In addition, the `cargo-fe2o3`
+artifact-container adapter remains test-only and inert even though the durable
+publication and host-admission infrastructure exists elsewhere. Neither that
+adapter nor the raw hardware observation may be used to restamp a declaration
+without an updated shard and archived clean-checkout result record.
+
 Snapshot orchestration creates result evidence only. It does not update a row
 link, restamp a declaration, promote a parity status, regenerate the matrix or
 dashboard, or turn a compile observation into a hardware-execution claim.

@@ -105,21 +105,31 @@ must also run the contract's generated-expectation, packing, alias, artifact,
 proof, HSA identity, hidden-kernarg, queue, and lifetime rejection suite.
 Compilation or symbol resolution alone does not pass this gate.
 
-## `ceb0e46` general V3 and Worker V2 source/unit checkpoint
+## `daf0b45` alpha/zeta Worker V2 vertical slice
 
 The following commands exercise the implementation landed through
-`ceb0e4675173866a50fb737108e6a9b04827691d`. They are source/unit,
-compile-fail, process-recovery, and native-link boundary checks; none is an
-alpha/zeta GPU execution result:
+`daf0b459ced07a25376670c83b1474eaebcd1a68`. They cover source/unit,
+compile-fail, process-recovery, native-link, and raw-hardware boundaries. The
+hardware result is recorded separately below because it is not produced by the
+ordinary commands in this first block:
 
 ```text
+cargo test --locked -p fe2o3-core --all-targets
+cargo test --locked -p fe2o3-core --test device_buffer_view_ui
 cargo test --locked -p fe2o3-macros --all-targets
+cargo test --locked -p fe2o3-macros --test typed_kernel_fixtures
 cargo test --locked -p fe2o3-host --all-targets --all-features
+cargo test --locked -p fe2o3-host --test generated_spi_ui
+cargo test --locked -p fe2o3-host generated_alpha_zeta_cov6::tests
 cargo test --locked -p rustc-codegen-fe2o3 --lib
 cargo test --locked -p rustc-codegen-fe2o3 --test general_two_kernel_import
+cargo test --locked -p fe2o3-hsa-runtime --test gfx942_two_kernel_hardware
+cargo test --locked -p fe2o3-hsa-runtime --features hardware-test-hooks \
+  --test gfx942_two_kernel_hardware --no-run
 cargo test --locked -p cargo-fe2o3 --test worker_v2_vertical_slice
 cargo test --locked -p cargo-fe2o3 --test worker_v2_vertical_slice \
   --features worker-v2-fault-injection-test-only
+cargo test --locked -p cargo-fe2o3 worker_v2_artifact_container::tests
 cargo test --locked -p fe2o3-hsaco-finalize --all-targets --all-features
 cargo test --locked -p fe2o3-artifact-transaction --all-targets --all-features
 scripts/tests/run-parity-snapshot.sh
@@ -133,7 +143,44 @@ but do not require a GPU. Their COV6 case verifies protocol version 6, LLVM
 module flag 600, AMDHSA ELF ABI version 4, two metadata entries, both `.kd`
 symbols, one shared helper, deterministic producer-order output, and
 fail-closed descriptor mismatch handling. `.fe2o3.kd.v1` authentication and
-`ArtifactContainerV1` construction are downstream and are not worker claims.
+production `ArtifactContainerV1` publication are downstream and are not worker
+claims. A Release worker built on `mi300x` passes all three CTests and reports
+this measured identity:
+
+```text
+fe2o3-worker-v1-sha256-234d22f9fb347c86495e7156e53ef8eab55e939d6514973a6df373aee12f77a9
+```
+
+The exact reproducible CMake invocation and trust boundary are in
+[Evidence Record V1](evidence-record-v1.md). The native CTest observation is
+not itself GPU execution or an archived result record.
+
+The backend-witness link integration requires the same pinned Worker V2
+environment used by the publication tests:
+
+```text
+FE2O3_LLVM_LINK_WORKER=/absolute/path/to/fe2o3-llvm-link-worker \
+FE2O3_LLVM_LINK_WORKER_BUILD_ID=fe2o3-worker-v1-sha256-234d22f9fb347c86495e7156e53ef8eab55e939d6514973a6df373aee12f77a9 \
+FE2O3_LLVM_BUILD_ID=7.2.4 \
+FE2O3_GFX942_ALPHA_ZETA_OUTPUT=/absolute/path/to/alpha-zeta-cov6.hsaco \
+cargo test --locked -p rustc-codegen-fe2o3 \
+  --test kernel_ir_codegen \
+  worker_v2_general_v3_alpha_zeta_build_links_and_validate_backend_witnesses \
+  -- --ignored --exact --nocapture
+sha256sum /absolute/path/to/alpha-zeta-cov6.hsaco
+/opt/rocm/llvm/bin/llvm-readelf --notes \
+  /absolute/path/to/alpha-zeta-cov6.hsaco
+```
+
+This command builds the genuine Rust `alpha` and `zeta` kernels through the
+sealed Worker V2 path, links and validates both private backend witnesses,
+publishes one COV6 HSACO, and optionally exports it with create-new semantics.
+The measured output SHA-256 is
+`3a916cdabca05ac74d340889aab2067221d6d1252a7cde13e61c1786252565c4`.
+Independent note inspection reports complete COV6 kernarg sizes of `296` bytes
+for `alpha` and `312` bytes for `zeta`; their explicit prefixes are `40` and
+`56` bytes respectively. The prior explicit-versus-complete finalization
+mismatch is fixed.
 
 Strict lint coverage for the Rust portions is:
 
@@ -144,14 +191,45 @@ cargo clippy --locked -p rustc-codegen-fe2o3 --all-targets --all-features -- -D 
 cargo clippy --locked -p cargo-fe2o3 --all-targets --all-features -- -D warnings
 ```
 
-The source/unit checkpoint covers V3 registration and rustc-semantic descriptor
-fixtures, lifetime-retaining packing, semantic-witness parsing and rejection,
-canonical COV6 publication, legacy migration, and restart recovery. It does not
-cover a backend-emitted witness object, generated alpha/zeta wrappers,
-production two-kernel container/load/dispatch, or Verus. The remote MI300X
-evidence documented above remains compile/inspection/publication evidence for
-the older zero-argument Worker V2 fixture. No alpha/zeta hardware execution is
-claimed.
+The landed production infrastructure includes durable Worker V2 publication,
+strict finalized-bundle host admission, currentness-lease revalidation, the
+authenticated HSA load/resolve/dispatch/unload state machine, macro-generated
+alpha/zeta argument and preparation adapters, generated safe dispatch SPI, and
+the reviewed `fe2o3-hsa-runtime` lifecycle and implicit-kernarg adapters. Unit,
+mutation, and UI tests cover the state transitions, retained borrows, packing,
+alias admission, currentness, identity substitution, and terminal completion.
+
+The production trust chain still stops at
+`WorkerV2PrerequisiteAuthenticatorV1`. The trait defines the reviewed boundary
+for compiler, Verus, proof, Rust ABI, and executable-effect evidence, but the
+repository has only test/fake implementations. Therefore the production safe
+path cannot yet authentically promote those prerequisites into load/launch
+authority. Separately, the `cargo-fe2o3` two-entry artifact-container adapter is
+still `cfg(test)`, inert, and not wired into the production publication and host
+admission infrastructure that already exists in other crates.
+
+The raw alpha/zeta hardware harness has CPU/unit tests for exact `40`/`56` byte
+packing, equal-length rejection, boundary grids, independent oracles, and canary
+corruption. Its feature-gated ignored test was invoked on an AMD Instinct
+MI300X, `gfx942:xnack-`, with ROCm 7.2.4 as follows:
+
+```text
+FE2O3_RUN_GFX942_TWO_KERNEL=1 \
+FE2O3_GFX942_ALPHA_ZETA_HSACO=/absolute/path/to/alpha-zeta-cov6.hsaco \
+FE2O3_GFX942_ALPHA_ZETA_SHA256=3a916cdabca05ac74d340889aab2067221d6d1252a7cde13e61c1786252565c4 \
+cargo test --locked -p fe2o3-hsa-runtime --features hardware-test-hooks \
+  --test gfx942_two_kernel_hardware \
+  gfx942_cov6_alpha_then_zeta_one_executable \
+  -- --ignored --exact --nocapture
+```
+
+The digest-pinned run passed at lengths `1`, `255`, `256`, `257`, and `1023`,
+including independent CPU-oracle and prefix/suffix canary checks. This is real
+alpha/zeta raw-path GPU execution, but the harness manually packs arguments and
+calls the reviewed unsafe HSA adapter directly. It is not an end-to-end hardware
+test of the generated alpha/zeta safe path, and it was not archived by the V1
+snapshot runner. It therefore does not promote a parity row or dashboard
+hardware-evidence strength.
 
 ## Verus proof coverage
 
