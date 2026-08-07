@@ -329,9 +329,10 @@ turn the foundations below into end-to-end features.
   Verus proof identity/refinement is not authenticated into the generated
   vecadd artifact or required by its safe loader and launch API.
 - The fail-closed rustc wrapper classifies and preserves approved bootstrap
-  invocations, but compile execution remains disabled until the pinned rustc
-  and sealed backend primitives are composed with the validated invocation.
-  Rustc-descendant descriptor lifetime, dynamic loading, transitive shared
+  invocations, and the external Cargo path now composes compile-shaped managed
+  invocations with the descriptor-pinned rustc executable and sealed backend
+  snapshot. The selected executable is still not authenticated as rustc;
+  rustc-descendant descriptor lifetime, dynamic loading, transitive shared
   libraries, and non-Linux execution remain unresolved.
 - General Rust language support, frontend-to-layout integration, broad atomic
   and wave collective support, production direct-link integration, general

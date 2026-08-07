@@ -60,12 +60,14 @@ The same snapshot adds independently tested foundations around that publication:
   set remains live.
 
 These foundations are not yet composed into one authority-producing pipeline.
-Exact retry after a consumed compiler handoff is retained only in the same
-Cargo process; a durable restart intent is not yet persisted. The
-rustc/compiler executable and its origin are not authenticated. No Verus result
-or compiler/machine-code refinement proof is authenticated and bound to the
-emitted code. Generic manifest-derived host bindings, kernarg packing, and
-dispatch are absent, and the two Worker V2 kernels have not been launched.
+The artifact transaction persists and recovers an exact Worker V2 publication
+intent across restart, with crash-boundary and substitution coverage. Reusing a
+consumed compiler handoff to recompute the direct-link result remains limited
+to the same Cargo process. The rustc/compiler executable and its origin are not
+authenticated. No Verus result or compiler/machine-code refinement proof is
+authenticated and bound to the emitted code. Generic manifest-derived host
+bindings, kernarg packing, and dispatch are absent, and the two Worker V2
+kernels have not been launched.
 The HSA dispatch adapter remains restricted to the separately reviewed exact
 vecadd ABI; no load or launch authority follows from the Worker V2 publication
 receipt or the descriptive proof records.
