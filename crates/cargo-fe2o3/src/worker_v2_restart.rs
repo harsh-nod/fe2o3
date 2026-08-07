@@ -192,7 +192,7 @@ pub(crate) struct PersistedAdmittedWorkerV2IntentV1 {
 
 #[derive(Debug)]
 pub(crate) enum PreparedWorkerV2PublicationV1 {
-    Raw(PreparedWorkerV2HsacoPublicationV1),
+    Raw(Box<PreparedWorkerV2HsacoPublicationV1>),
     Finalized(Box<PreparedFinalizedWorkerV2HsacoPublicationV1>),
 }
 
@@ -232,7 +232,11 @@ pub(crate) fn persist_admitted_worker_v2_intent_v1(
             let (plan, upstream) = derive_publication_plan_v1(producer, &inspected);
             let prepared = prepare_worker_v2_hsaco_publication_v1(producer, inspected)
                 .map_err(RestartIntentErrorV1::Preparation)?;
-            (plan, upstream, PreparedWorkerV2PublicationV1::Raw(prepared))
+            (
+                plan,
+                upstream,
+                PreparedWorkerV2PublicationV1::Raw(Box::new(prepared)),
+            )
         }
         WorkerV2PublicationKindV1::Finalized => {
             let seed = derive_finalized_publication_plan_seed_v1(producer, &inspected);
