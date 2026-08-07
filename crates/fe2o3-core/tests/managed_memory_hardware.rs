@@ -26,11 +26,17 @@ fn managed_allocation_advice_and_prefetch_round_trip() -> Result<(), Box<dyn std
     let stream = context.default_stream();
     let device = ManagedMemoryLocation::device(topology);
     allocation.prefetch_to_device(&stream, topology)?;
-    assert_eq!(allocation.query_last_prefetch_location(device)?.location(), device);
+    assert_eq!(
+        allocation.query_last_prefetch_location(device)?.location(),
+        device
+    );
 
     let host = ManagedMemoryLocation::host();
     allocation.prefetch_to_host(&stream)?;
-    assert_eq!(allocation.query_last_prefetch_location(host)?.location(), host);
+    assert_eq!(
+        allocation.query_last_prefetch_location(host)?.location(),
+        host
+    );
 
     assert_eq!(allocation.reclaim()?.identity(), identity);
     Ok(())
