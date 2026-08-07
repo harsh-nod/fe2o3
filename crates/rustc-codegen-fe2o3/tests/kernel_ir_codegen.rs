@@ -821,7 +821,7 @@ fn worker_v2_real_source_publishes_two_kernels_with_one_shared_helper() {
     );
     assert_eq!(
         stderr
-            .matches("[internal-helper] worker_v2_shared_helper")
+            .matches("[internal-helper] worker_v2_source__shared_helper")
             .count(),
         1,
         "shared helper was not collected exactly once:\n{stderr}"
