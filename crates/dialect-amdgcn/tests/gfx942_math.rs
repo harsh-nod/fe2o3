@@ -97,6 +97,81 @@ fn f16_divide_module() -> Module {
     )
 }
 
+fn two_kernel_ocml_module() -> Module {
+    let shared_helper = Function::internal_helper(
+        "shared_math_helper",
+        Signature::new(vec![Type::F32], vec![Type::F32]),
+        vec![ValueId(0)],
+        vec![BasicBlock {
+            id: BlockId(0),
+            parameters: vec![],
+            operations: vec![],
+            terminator: Some(Terminator::Return {
+                values: vec![ValueId(0)],
+            }),
+        }],
+    );
+    let shared_call = |result| {
+        Operation::effect_free(
+            ValueDef::new(ValueId(result), Type::F32),
+            OperationKind::Call {
+                callee: "shared_math_helper".into(),
+                arguments: vec![ValueId(0)],
+            },
+        )
+    };
+
+    let sin = FloatOperation::F32Math {
+        function: F32MathFunction::Sin,
+        implementation: F32MathImplementation::OcmlAbiV1,
+        arguments: vec![ValueId(1)],
+    };
+    let mut math_block = BasicBlock::new(BlockId(0));
+    math_block.operations = vec![shared_call(1), sin.operation(ValueId(2))];
+    math_block.terminator = Some(Terminator::Return { values: vec![] });
+    let math_entry = Function::kernel_entry(
+        "z_math_entry",
+        Signature::new(vec![Type::F32], vec![]),
+        vec![ValueId(0)],
+        vec![math_block],
+    );
+
+    let mut plain_block = BasicBlock::new(BlockId(0));
+    plain_block.operations = vec![shared_call(1)];
+    plain_block.terminator = Some(Terminator::Return { values: vec![] });
+    let plain_entry = Function::kernel_entry(
+        "a_plain_entry",
+        Signature::new(vec![Type::F32], vec![]),
+        vec![ValueId(0)],
+        vec![plain_block],
+    );
+
+    let mut math_kernel = Kernel::new(
+        "math_kernel",
+        "z_math_entry",
+        LaunchDomain::D1 {
+            x: LaunchExtent::Dynamic,
+        },
+    );
+    math_kernel.workgroup_size = Some(WorkgroupSize::new(64, 1, 1));
+    let mut plain_kernel = Kernel::new(
+        "plain_kernel",
+        "a_plain_entry",
+        LaunchDomain::D1 {
+            x: LaunchExtent::Dynamic,
+        },
+    );
+    plain_kernel.workgroup_size = Some(WorkgroupSize::new(128, 1, 1));
+
+    let mut module = Module::new("tests::gfx942_two_kernel_ocml");
+    module
+        .required_capabilities
+        .insert(TargetCapability::WaveWidth(WaveWidth::Wave64));
+    module.functions = vec![math_entry, sin.declaration(), plain_entry, shared_helper];
+    module.kernels = vec![plain_kernel, math_kernel];
+    module
+}
+
 #[test]
 fn packed_bf16_fma_has_exact_gfx942_golden_ir() {
     let llvm =
@@ -215,6 +290,79 @@ fn compiler_module_path_preserves_the_gfx942_float_contract() {
         lower_compiler_module_to_llvm_ir(&module)
             .unwrap_err()
             .contains(LoweringDiagnosticCode::UnsupportedCapability)
+    );
+}
+
+#[test]
+fn two_kernel_shared_helper_and_ocml_module_has_exact_golden_ir() {
+    let llvm = lower_compiler_module_to_gfx942_llvm_ir(&two_kernel_ocml_module()).unwrap();
+    assert_eq!(llvm, include_str!("fixtures/gfx942_two_kernel_ocml.ll"));
+    assert_eq!(
+        llvm.matches("define amdgpu_kernel void @math_kernel")
+            .count(),
+        1
+    );
+    assert_eq!(
+        llvm.matches("define amdgpu_kernel void @plain_kernel")
+            .count(),
+        1
+    );
+    assert_eq!(
+        llvm.matches("define internal float @shared_math_helper")
+            .count(),
+        1
+    );
+    assert_eq!(llvm.matches("call float @shared_math_helper").count(), 2);
+    assert_eq!(llvm.matches("declare float @__ocml_sin_f32").count(), 1);
+    assert_eq!(llvm.matches("call float @__ocml_sin_f32").count(), 1);
+    assert!(!llvm.contains("__fe2o3_ir_float_v1_sin_f32"));
+}
+
+#[test]
+fn two_kernel_gfx942_module_is_independent_of_input_order() {
+    let baseline = lower_compiler_module_to_gfx942_llvm_ir(&two_kernel_ocml_module()).unwrap();
+    let mut reordered = two_kernel_ocml_module();
+    reordered.functions.reverse();
+    reordered.kernels.reverse();
+    assert_eq!(
+        lower_compiler_module_to_gfx942_llvm_ir(&reordered).unwrap(),
+        baseline
+    );
+}
+
+#[test]
+fn two_kernel_gfx942_module_rejects_duplicate_and_reserved_symbols() {
+    let mut duplicate = two_kernel_ocml_module();
+    duplicate.functions.push(
+        duplicate
+            .functions
+            .iter()
+            .find(|function| function.id.as_str() == "shared_math_helper")
+            .unwrap()
+            .clone(),
+    );
+    assert!(
+        lower_compiler_module_to_gfx942_llvm_ir(&duplicate)
+            .unwrap_err()
+            .contains(LoweringDiagnosticCode::InputVerification(
+                DiagnosticCode::DuplicateFunction,
+            ))
+    );
+
+    let mut reserved = two_kernel_ocml_module();
+    reserved.kernels[0].id = "__ocml_sin_f32".into();
+    assert!(
+        lower_compiler_module_to_gfx942_llvm_ir(&reserved)
+            .unwrap_err()
+            .contains(LoweringDiagnosticCode::ConflictingSymbol)
+    );
+
+    let mut collision = two_kernel_ocml_module();
+    collision.kernels[0].id = "shared_math_helper".into();
+    assert!(
+        lower_compiler_module_to_gfx942_llvm_ir(&collision)
+            .unwrap_err()
+            .contains(LoweringDiagnosticCode::ConflictingSymbol)
     );
 }
 
