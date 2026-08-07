@@ -153,14 +153,15 @@ pathname itself is not an authenticated storage identity.
 
 The namespace and chained state identities detect accidental substitution and
 bind receipts to one ledger history, but they are not an external monotonic
-counter or keyed storage authenticator. Restoring an older complete directory
-snapshot can therefore restore older replay state. Preventing rollback by an
-administrator, malicious same-UID process, VM snapshot, or storage layer
-requires an external monotonic/version anchor, such as trusted hardware or a
-remote append-only service, checked against the ledger namespace, generation,
-and state identity. No distributed or network-filesystem locking claim is made;
-a compromised kernel is also outside this local trust boundary. The V1 ledger
-is bounded to 65,536 consumed executions and fails closed at capacity.
+counter or keyed storage authenticator. Restoring an older `ledger.state` file
+or a complete directory snapshot can therefore restore older replay state.
+Preventing rollback by an administrator, malicious same-UID process, VM
+snapshot, or storage layer requires an external monotonic/version anchor, such
+as trusted hardware or a remote append-only service, checked against the ledger
+namespace, generation, and state identity. No distributed or network-filesystem
+locking claim is made; a compromised kernel is also outside this local trust
+boundary. The V1 ledger is bounded to 65,536 consumed executions and fails
+closed at capacity.
 
 A timeout kills and reaps the direct recorder child, but does not yet establish
 a process group or forcibly terminate arbitrary descendants. The existing
