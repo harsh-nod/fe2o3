@@ -12,6 +12,7 @@ mod authenticated_proof_binding;
 mod control_flow_binding;
 mod executor;
 mod model;
+mod persistent_freshness;
 mod plan;
 mod result;
 
@@ -52,6 +53,14 @@ pub use model::{
     MAX_CONFIGURATION_ENTRIES, MAX_PROPERTIES, MAX_TEXT_BYTES, MAX_TRUSTED_ITEMS,
     MeasuredToolIdentity, ModelError, ProofOutcome, ProofProperty, ProofRequestV1,
     ProofTargetIdentity, Text, TrustedItem, VerificationModelIdentity,
+};
+pub use persistent_freshness::{
+    MAX_PERSISTENT_FRESHNESS_ENTRIES_V1, MAX_PERSISTENT_FRESHNESS_STATE_BYTES_V1,
+    PERSISTENT_FRESHNESS_INTENT_MAGIC_V1, PERSISTENT_FRESHNESS_STATE_MAGIC_V1,
+    PERSISTENT_FRESHNESS_VERSION_V1, PersistentFreshnessIdentityFieldV1,
+    PersistentFreshnessIdentityV1, PersistentFreshnessIntentInspectionV1,
+    PersistentFreshnessRecordErrorV1, PersistentFreshnessStateInspectionV1,
+    inspect_persistent_freshness_intent_v1, inspect_persistent_freshness_state_v1,
 };
 pub use plan::{
     CommandSpec, InvocationPaths, InvocationPlan, MAX_PATH_BYTES, MAX_TIMEOUT_SECONDS, PlanError,
