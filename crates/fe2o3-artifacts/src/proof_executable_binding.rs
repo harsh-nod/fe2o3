@@ -9,7 +9,8 @@ use crate::{
     AbiKind, AbiLayout, AliasClass, ArgumentOwnership, BlockSize, CodeObjectFormat,
     DigestAlgorithm, DigestBytes, LaunchContract, ManifestV1, MatchedProofEvidenceV1,
     MeasuredToolIdentity, PayloadDigest, ProofExecutionIdentity, ProofOutcome, ProofRecordV1,
-    ProofTargetError, TargetIdentity, V1_REQUIRED_PROPERTIES,
+    ProofTargetError, ProofTargetIdentity, SourceContractIdentity, TargetIdentity,
+    V1_REQUIRED_PROPERTIES,
 };
 
 /// Domain and schema version for proof-to-executable binding identities.
@@ -41,7 +42,7 @@ impl ExecutableCodeObjectVersionV1 {
 /// cannot be accidentally collapsed into an interchangeable untyped digest.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProofExecutableSemanticIdentityV1 {
-    kernel_semantic_identity: PayloadDigest,
+    proof_target: ProofTargetIdentity,
     finalized_code_object_digest: PayloadDigest,
     target: TargetIdentity,
     code_object_version: ExecutableCodeObjectVersionV1,
@@ -50,8 +51,16 @@ pub struct ProofExecutableSemanticIdentityV1 {
 }
 
 impl ProofExecutableSemanticIdentityV1 {
+    pub const fn proof_target(&self) -> ProofTargetIdentity {
+        self.proof_target
+    }
+
     pub const fn kernel_semantic_identity(&self) -> PayloadDigest {
-        self.kernel_semantic_identity
+        self.proof_target.artifact().executable_digest()
+    }
+
+    pub const fn source_contracts(&self) -> SourceContractIdentity {
+        self.proof_target.source_contracts()
     }
 
     pub const fn finalized_code_object_digest(&self) -> PayloadDigest {
@@ -143,11 +152,6 @@ impl ProofExecutableBindingV1 {
         let expected_executable = &self.executable;
         let actual_executable = &actual.executable;
         require_equal(
-            expected_executable.kernel_semantic_identity,
-            actual_executable.kernel_semantic_identity,
-            "kernel semantic identity",
-        )?;
-        require_equal(
             expected_executable.finalized_code_object_digest,
             actual_executable.finalized_code_object_digest,
             "finalized code-object digest",
@@ -178,6 +182,10 @@ impl ProofExecutableBindingV1 {
             &self.tool_policy.artifact_producer,
             &actual.tool_policy.artifact_producer,
             "artifact-producer identity",
+        )?;
+        validate_proof_target(
+            expected_executable.proof_target,
+            actual_executable.proof_target,
         )?;
         require_equal(
             &self.tool_policy.proof_execution,
@@ -280,7 +288,7 @@ impl MatchedProofEvidenceV1 {
         }
 
         let executable = ProofExecutableSemanticIdentityV1 {
-            kernel_semantic_identity: artifact.executable_digest(),
+            proof_target: target,
             finalized_code_object_digest,
             target: manifest.target().clone(),
             code_object_version,
@@ -367,6 +375,91 @@ fn require_equal<T: PartialEq>(
     }
 }
 
+fn validate_proof_target(
+    expected: ProofTargetIdentity,
+    actual: ProofTargetIdentity,
+) -> Result<(), ProofExecutableBindingError> {
+    let expected_artifact = expected.artifact();
+    let actual_artifact = actual.artifact();
+    for (field, expected, actual) in [
+        (
+            "kernel identity",
+            expected_artifact.kernel_id(),
+            actual_artifact.kernel_id(),
+        ),
+        (
+            "kernel instance identity",
+            expected_artifact.instance_digest(),
+            actual_artifact.instance_digest(),
+        ),
+        (
+            "source-tree identity",
+            expected_artifact.source_tree_digest(),
+            actual_artifact.source_tree_digest(),
+        ),
+        (
+            "crate-graph identity",
+            expected_artifact.crate_graph_digest(),
+            actual_artifact.crate_graph_digest(),
+        ),
+        (
+            "kernel semantic identity",
+            expected_artifact.executable_digest(),
+            actual_artifact.executable_digest(),
+        ),
+        (
+            "compiler/source environment identity",
+            expected_artifact.environment_digest(),
+            actual_artifact.environment_digest(),
+        ),
+        (
+            "artifact-selection identity",
+            expected_artifact.artifact_selection_digest(),
+            actual_artifact.artifact_selection_digest(),
+        ),
+        (
+            "artifact-contract identity",
+            expected_artifact.artifact_contract_digest(),
+            actual_artifact.artifact_contract_digest(),
+        ),
+    ] {
+        require_equal(expected, actual, field)?;
+    }
+
+    let expected_contracts = expected.source_contracts();
+    let actual_contracts = actual.source_contracts();
+    for (field, expected, actual) in [
+        (
+            "memory-contract identity",
+            expected_contracts.memory_digest(),
+            actual_contracts.memory_digest(),
+        ),
+        (
+            "effects-contract identity",
+            expected_contracts.effects_digest(),
+            actual_contracts.effects_digest(),
+        ),
+        (
+            "type-layout identity",
+            expected_contracts.type_layout_digest(),
+            actual_contracts.type_layout_digest(),
+        ),
+        (
+            "capability-semantics identity",
+            expected_contracts.capability_semantics_digest(),
+            actual_contracts.capability_semantics_digest(),
+        ),
+        (
+            "functional-specification identity",
+            expected_contracts.functional_specification_digest(),
+            actual_contracts.functional_specification_digest(),
+        ),
+    ] {
+        require_equal(expected, actual, field)?;
+    }
+    Ok(())
+}
+
 fn proof_policy_identity(record: &ProofRecordV1, algorithm: DigestAlgorithm) -> PayloadDigest {
     let canonical_policy = ProofRecordV1::new(
         record.target(),
@@ -392,7 +485,7 @@ fn binding_identity_bytes(
 ) -> Vec<u8> {
     let mut writer = BindingIdentityWriter::new();
     writer.payload_digest(proof_record_digest);
-    writer.payload_digest(executable.kernel_semantic_identity);
+    writer.proof_target(executable.proof_target);
     writer.payload_digest(executable.finalized_code_object_digest);
     writer.target(&executable.target);
     writer.u8(executable.code_object_version.number());
@@ -464,6 +557,32 @@ impl BindingIdentityWriter {
         self.measured_tool(value.solver());
         self.measured_tool(value.evidence_recorder());
         self.payload_digest(value.invocation_digest());
+    }
+
+    fn proof_target(&mut self, value: ProofTargetIdentity) {
+        let artifact = value.artifact();
+        for digest in [
+            artifact.kernel_id(),
+            artifact.instance_digest(),
+            artifact.source_tree_digest(),
+            artifact.crate_graph_digest(),
+            artifact.executable_digest(),
+            artifact.environment_digest(),
+            artifact.artifact_selection_digest(),
+            artifact.artifact_contract_digest(),
+        ] {
+            self.payload_digest(digest);
+        }
+        let contracts = value.source_contracts();
+        for digest in [
+            contracts.memory_digest(),
+            contracts.effects_digest(),
+            contracts.type_layout_digest(),
+            contracts.capability_semantics_digest(),
+            contracts.functional_specification_digest(),
+        ] {
+            self.payload_digest(digest);
+        }
     }
 
     fn target(&mut self, value: &TargetIdentity) {

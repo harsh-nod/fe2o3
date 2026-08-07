@@ -55,6 +55,9 @@ struct Fixture {
     configuration: Vec<ConfigurationEntry>,
     trusted_items: Vec<TrustedItem>,
     code_object_version: ExecutableCodeObjectVersionV1,
+    instance_digest: PayloadDigest,
+    crate_graph_digest: PayloadDigest,
+    source_contracts: SourceContractIdentity,
 }
 
 impl Fixture {
@@ -67,6 +70,9 @@ impl Fixture {
             configuration: vec![ConfigurationEntry::new(name("feature_checked"), text("on"))],
             trusted_items: vec![],
             code_object_version: ExecutableCodeObjectVersionV1::V5,
+            instance_digest: sha(0x40),
+            crate_graph_digest: sha(0x41),
+            source_contracts: source_contracts(),
         }
     }
 
@@ -83,12 +89,12 @@ impl Fixture {
         self.manifest
             .proof_target(
                 tagged(kernel.kernel_id()),
-                sha(0x40),
+                self.instance_digest,
                 tagged(kernel.source_digest()),
-                sha(0x41),
+                self.crate_graph_digest,
                 tagged(kernel.executable_digest()),
                 self.finalized_digest(),
-                source_contracts(),
+                self.source_contracts,
                 &self.compiler,
                 &self.producer,
                 DigestAlgorithm::Sha256,
@@ -144,6 +150,8 @@ fn exact_matched_proof_binds_every_executable_and_policy_axis_without_authority(
         binding.executable().kernel_semantic_identity(),
         tagged(kernel.executable_digest())
     );
+    assert_eq!(binding.executable().proof_target(), fixture.target());
+    assert_eq!(binding.executable().source_contracts(), source_contracts());
     assert_eq!(
         binding.executable().finalized_code_object_digest(),
         fixture.finalized_digest()
@@ -170,6 +178,78 @@ fn exact_matched_proof_binds_every_executable_and_policy_axis_without_authority(
     binding.validate_against(&fixture.binding()).unwrap();
     assert!(!binding.grants_load_authority());
     assert!(!binding.grants_launch_authority());
+}
+
+#[test]
+fn source_and_effect_identity_substitutions_fail_closed() {
+    let base = Fixture::base();
+    let expected = base.binding();
+
+    let mut changed = base.clone();
+    changed.instance_digest = sha(0xc0);
+    assert_axis_mismatch(&expected, &changed.binding(), "kernel instance identity");
+
+    let mut changed = base.clone();
+    changed.crate_graph_digest = sha(0xc1);
+    assert_axis_mismatch(&expected, &changed.binding(), "crate-graph identity");
+
+    let contracts = base.source_contracts;
+    for (source_contracts, field) in [
+        (
+            SourceContractIdentity::new(
+                sha(0xc2),
+                contracts.effects_digest(),
+                contracts.type_layout_digest(),
+                contracts.capability_semantics_digest(),
+                contracts.functional_specification_digest(),
+            ),
+            "memory-contract identity",
+        ),
+        (
+            SourceContractIdentity::new(
+                contracts.memory_digest(),
+                sha(0xc3),
+                contracts.type_layout_digest(),
+                contracts.capability_semantics_digest(),
+                contracts.functional_specification_digest(),
+            ),
+            "effects-contract identity",
+        ),
+        (
+            SourceContractIdentity::new(
+                contracts.memory_digest(),
+                contracts.effects_digest(),
+                sha(0xc4),
+                contracts.capability_semantics_digest(),
+                contracts.functional_specification_digest(),
+            ),
+            "type-layout identity",
+        ),
+        (
+            SourceContractIdentity::new(
+                contracts.memory_digest(),
+                contracts.effects_digest(),
+                contracts.type_layout_digest(),
+                sha(0xc5),
+                contracts.functional_specification_digest(),
+            ),
+            "capability-semantics identity",
+        ),
+        (
+            SourceContractIdentity::new(
+                contracts.memory_digest(),
+                contracts.effects_digest(),
+                contracts.type_layout_digest(),
+                contracts.capability_semantics_digest(),
+                sha(0xc6),
+            ),
+            "functional-specification identity",
+        ),
+    ] {
+        let mut changed = base.clone();
+        changed.source_contracts = source_contracts;
+        assert_axis_mismatch(&expected, &changed.binding(), field);
+    }
 }
 
 #[test]
