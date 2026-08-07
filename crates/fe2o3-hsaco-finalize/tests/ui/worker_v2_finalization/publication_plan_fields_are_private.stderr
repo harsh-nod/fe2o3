@@ -1,0 +1,23 @@
+error[E0616]: field `finalized` of struct `PreparedFinalizedWorkerV2HsacoPublicationV1` is private
+ --> tests/ui/worker_v2_finalization/publication_plan_fields_are_private.rs:4:23
+  |
+4 |     let _ = &prepared.finalized;
+  |                       ^^^^^^^^^ private field
+
+error[E0616]: field `producer_package` of struct `PreparedFinalizedWorkerV2HsacoPublicationV1` is private
+ --> tests/ui/worker_v2_finalization/publication_plan_fields_are_private.rs:5:22
+  |
+5 |     let _ = prepared.producer_package;
+  |                      ^^^^^^^^^^^^^^^^ private field
+
+error[E0616]: field `plan` of struct `PreparedFinalizedWorkerV2HsacoPublicationV1` is private
+ --> tests/ui/worker_v2_finalization/publication_plan_fields_are_private.rs:6:22
+  |
+6 |     let _ = prepared.plan;
+  |                      ^^^^ private field
+
+error[E0616]: field `upstream` of struct `PreparedFinalizedWorkerV2HsacoPublicationV1` is private
+ --> tests/ui/worker_v2_finalization/publication_plan_fields_are_private.rs:7:22
+  |
+7 |     let _ = prepared.upstream;
+  |                      ^^^^^^^^ private field

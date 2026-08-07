@@ -168,6 +168,10 @@ impl PreparedFinalizedWorkerV2HsacoV1 {
         self.finalized.as_bytes()
     }
 
+    pub(crate) const fn raw_inspection(&self) -> &InspectedRawWorkerV2HsacoV1 {
+        &self.raw
+    }
+
     pub const fn canonical_descriptor_finalization_ran(&self) -> bool {
         true
     }

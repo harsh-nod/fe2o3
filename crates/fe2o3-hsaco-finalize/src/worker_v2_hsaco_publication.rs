@@ -1,10 +1,8 @@
-//! Typed publication bridge for independently inspected raw Worker V2 HSACO.
+//! Typed publication bridges for independently inspected Worker V2 HSACO.
 //!
-//! This bridge derives a complete durable publication plan from retained inspection evidence. It
-//! publishes the exact inspected raw HSACO bytes; canonical `.fe2o3.kd.v1` finalization does not
-//! run here. Neither preparation nor publication authenticates compiler origin, grants loading or
-//! launch authority, or proves Verus verification. The prepared object supports exact in-process
-//! retries only. Persisting enough evidence for process-restart recovery is a separate protocol.
+//! The compatibility bridge publishes exact inspected raw bytes. The finalized bridge consumes
+//! canonical finalization evidence and publishes only those exact finalized bytes. Neither bridge
+//! authenticates compiler origin, grants loading or launch authority, or proves Verus verification.
 
 use std::{error::Error, fmt, path::Path};
 
@@ -20,7 +18,7 @@ use fe2o3_artifact_transaction::{
 use fe2o3_kernel_descriptor::CodeObjectVersion;
 use sha2::{Digest, Sha256};
 
-use crate::InspectedRawWorkerV2HsacoV1;
+use crate::{InspectedRawWorkerV2HsacoV1, PreparedFinalizedWorkerV2HsacoV1};
 
 const KERNEL_SET_IDENTITY_DOMAIN_V1: &[u8] = b"FE2O3/WORKER-V2-PUBLICATION-KERNEL-SET/V1\0";
 const TARGET_IDENTITY_DOMAIN_V1: &[u8] = b"FE2O3/WORKER-V2-PUBLICATION-TARGET/V1\0";
@@ -29,6 +27,22 @@ const WORKER_IDENTITY_DOMAIN_V1: &[u8] = b"FE2O3/WORKER-V2-PUBLICATION-WORKER/V1
 const RESPONSE_IDENTITY_DOMAIN_V1: &[u8] = b"FE2O3/WORKER-V2-PUBLICATION-RESPONSE/V1\0";
 const RAW_INSPECTION_IDENTITY_DOMAIN_V1: &[u8] = b"FE2O3/WORKER-V2-PUBLICATION-RAW-INSPECTION/V1\0";
 const ATOMIC_PUBLICATION_IDENTITY_DOMAIN_V1: &[u8] = b"FE2O3/WORKER-V2-ATOMIC-PUBLICATION/V1\0";
+const FINALIZED_KERNEL_SET_IDENTITY_DOMAIN_V1: &[u8] =
+    b"FE2O3/WORKER-V2-FINALIZED-PUBLICATION-KERNEL-SET/V1\0";
+const FINALIZED_TARGET_IDENTITY_DOMAIN_V1: &[u8] =
+    b"FE2O3/WORKER-V2-FINALIZED-PUBLICATION-TARGET/V1\0";
+const FINALIZED_REQUEST_IDENTITY_DOMAIN_V1: &[u8] =
+    b"FE2O3/WORKER-V2-FINALIZED-PUBLICATION-REQUEST/V1\0";
+const FINALIZED_WORKER_IDENTITY_DOMAIN_V1: &[u8] =
+    b"FE2O3/WORKER-V2-FINALIZED-PUBLICATION-WORKER/V1\0";
+const FINALIZED_RESPONSE_IDENTITY_DOMAIN_V1: &[u8] =
+    b"FE2O3/WORKER-V2-FINALIZED-PUBLICATION-RESPONSE/V1\0";
+const CANONICAL_FINALIZATION_IDENTITY_DOMAIN_V1: &[u8] =
+    b"FE2O3/WORKER-V2-FINALIZED-PUBLICATION-FINALIZATION/V1\0";
+const FINALIZED_ATOMIC_PUBLICATION_IDENTITY_DOMAIN_V1: &[u8] =
+    b"FE2O3/WORKER-V2-FINALIZED-ATOMIC-PUBLICATION/V1\0";
+const FINALIZED_UPSTREAM_IDENTITY_DOMAIN_V1: &[u8] =
+    b"FE2O3/WORKER-V2-FINALIZED-PUBLICATION-UPSTREAM/V1\0";
 
 /// A complete, internally derived publication intent for exact inspected Worker V2 bytes.
 ///
@@ -41,6 +55,64 @@ pub struct PreparedWorkerV2HsacoPublicationV1 {
     producer_package: PackageIdentityV1,
     plan: DurableLinkPublicationPlanV1,
     upstream: UpstreamCodeObjectEvidenceIdentityV1,
+}
+
+/// Complete durable intent for exact canonically finalized Worker V2 bytes.
+///
+/// This value owns the finalization evidence, including its raw inspection lineage. It is not
+/// cloneable and exposes neither the durable plan nor replaceable byte fields.
+#[derive(Debug)]
+pub struct PreparedFinalizedWorkerV2HsacoPublicationV1 {
+    finalized: PreparedFinalizedWorkerV2HsacoV1,
+    producer_package: PackageIdentityV1,
+    plan: DurableLinkPublicationPlanV1,
+    upstream: UpstreamCodeObjectEvidenceIdentityV1,
+}
+
+impl PreparedFinalizedWorkerV2HsacoPublicationV1 {
+    pub const fn attempt(&self) -> BuildAttempt {
+        self.finalized.attempt()
+    }
+
+    pub fn exact_finalized_bytes(&self) -> &[u8] {
+        self.finalized.exact_finalized_bytes()
+    }
+
+    pub const fn raw_inspection_identity(&self) -> crate::InspectedRawWorkerV2HsacoIdentityV1 {
+        self.finalized.raw_inspection_identity()
+    }
+
+    pub const fn canonical_finalization_identity(&self) -> crate::FinalizedWorkerV2HsacoIdentityV1 {
+        self.finalized.identity()
+    }
+
+    pub const fn raw_output_identity(&self) -> crate::ContentIdentityV1 {
+        self.finalized.raw_output_identity()
+    }
+
+    pub const fn finalized_output_identity(&self) -> crate::ContentIdentityV1 {
+        self.finalized.finalized_output_identity()
+    }
+
+    pub const fn authenticates_compiler_origin(&self) -> bool {
+        false
+    }
+
+    pub const fn proves_verus_verification(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_publication_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_load_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
+    }
 }
 
 impl PreparedWorkerV2HsacoPublicationV1 {
@@ -81,6 +153,10 @@ impl PreparedWorkerV2HsacoPublicationV1 {
 pub enum WorkerV2HsacoPublicationError {
     /// Retained bytes no longer match the output identity admitted upstream.
     OutputIdentityMismatch,
+    /// Retained raw lineage no longer matches the linked worker output.
+    RawOutputIdentityMismatch,
+    /// Retained finalized bytes no longer match canonical finalization evidence.
+    FinalizedOutputIdentityMismatch,
     /// Publication supplied a different producer from the one bound during preparation.
     ProducerIdentityMismatch,
     /// The attempt-scoped durable publication protocol rejected the operation.
@@ -92,6 +168,11 @@ impl fmt::Display for WorkerV2HsacoPublicationError {
         match self {
             Self::OutputIdentityMismatch => formatter.write_str(
                 "retained raw HSACO bytes do not match the admitted linked-output identity",
+            ),
+            Self::RawOutputIdentityMismatch => formatter
+                .write_str("retained raw HSACO lineage does not match the linked-output identity"),
+            Self::FinalizedOutputIdentityMismatch => formatter.write_str(
+                "retained finalized HSACO bytes do not match canonical finalization evidence",
             ),
             Self::ProducerIdentityMismatch => formatter.write_str(
                 "publication producer does not match the producer bound during preparation",
@@ -249,6 +330,138 @@ pub fn prepare_worker_v2_hsaco_publication_v1(
     })
 }
 
+/// Consumes canonical finalization evidence and derives a durable exact-byte publication plan.
+///
+/// The raw worker output remains the linked-output identity. The canonical bytes have a distinct
+/// finalized-output identity, while the finalization and upstream identities bind both stages.
+pub fn prepare_finalized_worker_v2_hsaco_publication_v1(
+    producer: &ProducerIdentity,
+    finalized: PreparedFinalizedWorkerV2HsacoV1,
+) -> Result<PreparedFinalizedWorkerV2HsacoPublicationV1, WorkerV2HsacoPublicationError> {
+    let raw = finalized.raw_inspection();
+    if !finalized.raw_output_identity().matches(raw.exact_bytes()) {
+        return Err(WorkerV2HsacoPublicationError::RawOutputIdentityMismatch);
+    }
+    let exact_bytes = finalized.exact_finalized_bytes();
+    if !finalized.finalized_output_identity().matches(exact_bytes) {
+        return Err(WorkerV2HsacoPublicationError::FinalizedOutputIdentityMismatch);
+    }
+
+    let producer_package = producer_package_identity_v1(producer);
+    let finalization = hash_identity(CANONICAL_FINALIZATION_IDENTITY_DOMAIN_V1, |digest| {
+        digest.update(raw.identity().as_bytes());
+        digest.update(finalized.identity().as_bytes());
+        digest.update(finalized.canonical_digest().as_bytes());
+        hash_content_identity(digest, finalized.raw_output_identity());
+        hash_content_identity(digest, finalized.finalized_output_identity());
+    });
+    let finalization = FinalizationIdentityV1::from_bytes(finalization);
+
+    let manifest = raw.policy().symbol_manifest().identity();
+    let compiler_envelope = raw.compiler_envelope_identity();
+    let kernel_set = hash_identity(FINALIZED_KERNEL_SET_IDENTITY_DOMAIN_V1, |digest| {
+        digest.update(manifest.sha256());
+        digest.update(manifest.byte_len().to_le_bytes());
+        digest.update(compiler_envelope.as_bytes());
+    });
+    let kernel_set = KernelSetIdentityV1::from_bytes(kernel_set);
+
+    let launch = raw.policy().launch();
+    let target_text = raw.target().to_string();
+    let target = hash_identity(FINALIZED_TARGET_IDENTITY_DOMAIN_V1, |digest| {
+        update_length_prefixed(digest, target_text.as_bytes());
+        digest.update([code_object_version_tag(raw.code_object_version())]);
+        for axis in launch.required_workgroup_size() {
+            digest.update(axis.to_le_bytes());
+        }
+        digest.update(launch.max_flat_workgroup_size().to_le_bytes());
+        digest.update(launch.wavefront_size().to_le_bytes());
+    });
+    let target = TargetIdentityV1::from_bytes(target);
+    let scope = LinkPublicationScopeV1::new(producer_package, kernel_set, target);
+
+    let source = raw.source_evidence_identity();
+    let request = hash_identity(FINALIZED_REQUEST_IDENTITY_DOMAIN_V1, |digest| {
+        digest.update(raw.sealed_request_id());
+        digest.update(raw.sealed_request_identity());
+        digest.update(raw.handoff_identity().as_bytes());
+        digest.update(manifest.sha256());
+        digest.update(manifest.byte_len().to_le_bytes());
+        digest.update(raw.link_plan_identity().as_bytes());
+        digest.update(raw.policy().compiler_envelope_identity().as_bytes());
+        digest.update(raw.policy().identity().as_bytes());
+        digest.update(source.as_bytes());
+        digest.update(raw.worker_measurement().executable().sha256());
+        digest.update(
+            raw.worker_measurement()
+                .executable()
+                .byte_len()
+                .to_le_bytes(),
+        );
+    });
+    let request = CanonicalLinkRequestIdentityV1::from_bytes(request);
+
+    let measurement = raw.worker_measurement();
+    let executable = measurement.executable();
+    let worker = hash_identity(FINALIZED_WORKER_IDENTITY_DOMAIN_V1, |digest| {
+        digest.update(executable.sha256());
+        digest.update(executable.byte_len().to_le_bytes());
+        update_length_prefixed(digest, measurement.worker_build_identity().as_bytes());
+        update_length_prefixed(digest, measurement.llvm_build_identity().as_bytes());
+    });
+    let worker = PinnedWorkerIdentityV1::from_bytes(worker);
+
+    let response = hash_identity(FINALIZED_RESPONSE_IDENTITY_DOMAIN_V1, |digest| {
+        digest.update(raw.response_identity().as_bytes());
+    });
+    let response = ValidatedResponseIdentityV1::from_bytes(response);
+    let linked_output =
+        LinkedOutputIdentityV1::from_bytes(*finalized.raw_output_identity().sha256());
+    let finalized_output =
+        FinalizedOutputIdentityV1::from_bytes(*finalized.finalized_output_identity().sha256());
+    let attempt = finalized.attempt();
+    let publication = hash_identity(FINALIZED_ATOMIC_PUBLICATION_IDENTITY_DOMAIN_V1, |digest| {
+        digest.update(attempt.generation().to_le_bytes());
+        digest.update(attempt.session().as_bytes());
+        digest.update(attempt.invocation().as_bytes());
+        digest.update(producer_package.as_bytes());
+        digest.update(kernel_set.as_bytes());
+        digest.update(target.as_bytes());
+        digest.update(request.as_bytes());
+        digest.update(worker.as_bytes());
+        digest.update(response.as_bytes());
+        digest.update(linked_output.as_bytes());
+        digest.update(finalization.as_bytes());
+        digest.update(finalized_output.as_bytes());
+        digest.update(raw.identity().as_bytes());
+        digest.update(finalized.identity().as_bytes());
+    });
+    let publication = AtomicPublicationIdentityV1::from_bytes(publication);
+    let plan = DurableLinkPublicationPlanV1::new(
+        attempt,
+        scope,
+        request,
+        worker,
+        response,
+        linked_output,
+        finalization,
+        finalized_output,
+        publication,
+    );
+    let upstream = hash_identity(FINALIZED_UPSTREAM_IDENTITY_DOMAIN_V1, |digest| {
+        digest.update(raw.identity().as_bytes());
+        digest.update(finalized.identity().as_bytes());
+        digest.update(finalization.as_bytes());
+    });
+
+    Ok(PreparedFinalizedWorkerV2HsacoPublicationV1 {
+        finalized,
+        producer_package,
+        plan,
+        upstream: UpstreamCodeObjectEvidenceIdentityV1::from_bytes(upstream),
+    })
+}
+
 /// Publishes the exact inspected raw HSACO bytes for the prepared managed attempt.
 ///
 /// The prepared object is borrowed so callers can retry the exact in-memory intent after a
@@ -284,6 +497,47 @@ pub fn publish_prepared_worker_v2_hsaco_v1(
     .map_err(Into::into)
 }
 
+/// Publishes only the exact canonical bytes retained by the finalized prepared intent.
+pub fn publish_prepared_finalized_worker_v2_hsaco_v1(
+    output_dir: &Path,
+    producer: &ProducerIdentity,
+    prepared: &PreparedFinalizedWorkerV2HsacoPublicationV1,
+) -> Result<AttemptScopedHsacoPublicationResultV1, WorkerV2HsacoPublicationError> {
+    if producer_package_identity_v1(producer) != prepared.producer_package {
+        return Err(WorkerV2HsacoPublicationError::ProducerIdentityMismatch);
+    }
+    let raw = prepared.finalized.raw_inspection();
+    if !prepared
+        .finalized
+        .raw_output_identity()
+        .matches(raw.exact_bytes())
+        || prepared.plan.linked_output().as_bytes()
+            != prepared.finalized.raw_output_identity().sha256()
+    {
+        return Err(WorkerV2HsacoPublicationError::RawOutputIdentityMismatch);
+    }
+    let exact_bytes = prepared.finalized.exact_finalized_bytes();
+    let output_digest: [u8; 32] = Sha256::digest(exact_bytes).into();
+    if !prepared
+        .finalized
+        .finalized_output_identity()
+        .matches(exact_bytes)
+        || &output_digest != prepared.plan.finalized_output().as_bytes()
+    {
+        return Err(WorkerV2HsacoPublicationError::FinalizedOutputIdentityMismatch);
+    }
+
+    publish_exact_hsaco_evidence_for_attempt_v1(
+        output_dir,
+        producer,
+        prepared.finalized.attempt(),
+        prepared.plan,
+        prepared.upstream,
+        exact_bytes,
+    )
+    .map_err(Into::into)
+}
+
 fn hash_identity(domain: &[u8], update: impl FnOnce(&mut Sha256)) -> [u8; 32] {
     let mut digest = Sha256::new();
     digest.update(domain);
@@ -294,6 +548,11 @@ fn hash_identity(domain: &[u8], update: impl FnOnce(&mut Sha256)) -> [u8; 32] {
 fn update_length_prefixed(digest: &mut Sha256, bytes: &[u8]) {
     digest.update((bytes.len() as u64).to_le_bytes());
     digest.update(bytes);
+}
+
+fn hash_content_identity(digest: &mut Sha256, identity: crate::ContentIdentityV1) {
+    digest.update(identity.sha256());
+    digest.update(identity.byte_len().to_le_bytes());
 }
 
 const fn code_object_version_tag(version: CodeObjectVersion) -> u8 {

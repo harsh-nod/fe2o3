@@ -20,7 +20,14 @@ use fe2o3_compiler_ffi::{
 use fe2o3_hsaco_finalize::{
     ContentIdentityV1, LinkOptionV1, PinnedWorkerV1, WorkerExecutionLimitsV1, WorkerMeasurementV1,
     WorkerOutputConstraintsV1, execute_reproducible_first_build_worker_v2,
-    inspect_worker_v2_raw_hsaco_v1,
+    finalize_inspected_worker_v2_hsaco_v1, inspect_worker_v2_raw_hsaco_v1,
+};
+use fe2o3_kernel_descriptor::{
+    BlockSizeV1, BuildEvidenceV1, CanonicalCodeObjectDigest, CodeObjectVersion, CompilerIdentityV1,
+    DeviceDescriptorTableV1, DeviceLayoutDescriptorV1, DeviceLayoutRecordV1, DeviceTargetV1,
+    DimensionsV1, EvidenceDigest, EvidenceIdentity, KernelAbiLayoutV1, KernelDescriptorV1,
+    KernelId, LaunchConstraintsV1, LogicalArgumentV1, ProducerIdentityV1, ScalarTypeV1,
+    SourceTypeDescriptorV1, SourceTypeRecordV1, Text, ValidName, encode_device_descriptor_table_v1,
 };
 use reserved_fe2o3_symbols::{
     DEVICE_FFI_DIRECTION_EXPORT_V1, DeviceFfiContractFieldsV1, DeviceFfiDirectionV1,
@@ -92,7 +99,6 @@ fn typed_bridge_publishes_exact_inspected_bytes_and_recovers_exact_retry() {
     assert!(!prepared.grants_publication_authority());
     assert!(!prepared.grants_load_authority());
     assert!(!prepared.grants_launch_authority());
-
     let published = fe2o3_hsaco_finalize::publish_prepared_worker_v2_hsaco_v1(
         &directory.0,
         &producer,
@@ -122,6 +128,292 @@ fn typed_bridge_publishes_exact_inspected_bytes_and_recovers_exact_retry() {
         ))
     ));
     fe2o3_artifact_transaction::finish_build_attempt(&directory.0, &producer, attempt).unwrap();
+}
+
+#[test]
+fn finalized_bridge_publishes_only_canonical_bytes_and_retries_exact_plan() {
+    let directory = TestDirectory::new();
+    let producer = publication_producer("tests/finalized-typed-bridge.rs");
+    let table = publication_descriptor_table("gfx942", "vecadd", "vecadd.kd");
+    let fixture = fixture_with_descriptor_table(FixtureOptions::valid(), Some(&table));
+    let raw_bytes = fixture.bytes.clone();
+    let evidence = publication_evidence(
+        &directory,
+        &producer,
+        raw_bytes.clone(),
+        "vecadd",
+        "vecadd.kd",
+        "gfx942",
+        0x53,
+        "fixture-llvm-v1",
+    );
+    let finalized =
+        finalize_inspected_worker_v2_hsaco_v1(inspect_worker_v2_raw_hsaco_v1(evidence).unwrap())
+            .unwrap();
+    let raw_identity = finalized.raw_inspection_identity();
+    let finalization_identity = finalized.identity();
+    let prepared = fe2o3_hsaco_finalize::prepare_finalized_worker_v2_hsaco_publication_v1(
+        &producer, finalized,
+    )
+    .unwrap();
+
+    assert_eq!(prepared.raw_inspection_identity(), raw_identity);
+    assert_eq!(
+        prepared.canonical_finalization_identity(),
+        finalization_identity
+    );
+    assert!(prepared.raw_output_identity().matches(&raw_bytes));
+    assert!(
+        prepared
+            .finalized_output_identity()
+            .matches(prepared.exact_finalized_bytes())
+    );
+    assert_ne!(prepared.exact_finalized_bytes(), raw_bytes);
+    assert!(!prepared.authenticates_compiler_origin());
+    assert!(!prepared.proves_verus_verification());
+    assert!(!prepared.grants_publication_authority());
+    assert!(!prepared.grants_load_authority());
+    assert!(!prepared.grants_launch_authority());
+    let other_producer = publication_producer("tests/finalized-producer-swap.rs");
+    assert!(matches!(
+        fe2o3_hsaco_finalize::publish_prepared_finalized_worker_v2_hsaco_v1(
+            &directory.0,
+            &other_producer,
+            &prepared,
+        ),
+        Err(fe2o3_hsaco_finalize::WorkerV2HsacoPublicationError::ProducerIdentityMismatch)
+    ));
+
+    let published = fe2o3_hsaco_finalize::publish_prepared_finalized_worker_v2_hsaco_v1(
+        &directory.0,
+        &producer,
+        &prepared,
+    )
+    .unwrap();
+    assert_eq!(
+        published.snapshot().artifact().bytes(),
+        prepared.exact_finalized_bytes()
+    );
+    assert_ne!(published.snapshot().artifact().bytes(), raw_bytes);
+    assert_ne!(
+        published.receipt().upstream_evidence_identity(),
+        *raw_identity.as_bytes()
+    );
+    assert!(matches!(
+        fe2o3_hsaco_finalize::publish_prepared_finalized_worker_v2_hsaco_v1(
+            &directory.0,
+            &producer,
+            &prepared,
+        ),
+        Err(fe2o3_hsaco_finalize::WorkerV2HsacoPublicationError::Publication(
+            fe2o3_artifact_transaction::AttemptScopedHsacoPublicationErrorV1::ReceiptAlreadyPersisted { .. }
+        ))
+    ));
+    fe2o3_artifact_transaction::finish_build_attempt(&directory.0, &producer, prepared.attempt())
+        .unwrap();
+}
+
+#[test]
+fn raw_and_finalized_publication_have_domain_separated_receipts() {
+    let raw_directory = TestDirectory::new();
+    let finalized_directory = TestDirectory::new();
+    let producer = publication_producer("tests/raw-final-domain-separation.rs");
+    let table = publication_descriptor_table("gfx942", "vecadd", "vecadd.kd");
+    let fixture = fixture_with_descriptor_table(FixtureOptions::valid(), Some(&table));
+
+    let raw_evidence = publication_evidence(
+        &raw_directory,
+        &producer,
+        fixture.bytes.clone(),
+        "vecadd",
+        "vecadd.kd",
+        "gfx942",
+        0x53,
+        "fixture-llvm-v1",
+    );
+    let raw_prepared = fe2o3_hsaco_finalize::prepare_worker_v2_hsaco_publication_v1(
+        &producer,
+        inspect_worker_v2_raw_hsaco_v1(raw_evidence).unwrap(),
+    )
+    .unwrap();
+    let raw_published = fe2o3_hsaco_finalize::publish_prepared_worker_v2_hsaco_v1(
+        &raw_directory.0,
+        &producer,
+        &raw_prepared,
+    )
+    .unwrap();
+
+    let finalized_evidence = publication_evidence(
+        &finalized_directory,
+        &producer,
+        fixture.bytes.clone(),
+        "vecadd",
+        "vecadd.kd",
+        "gfx942",
+        0x53,
+        "fixture-llvm-v1",
+    );
+    let finalized = finalize_inspected_worker_v2_hsaco_v1(
+        inspect_worker_v2_raw_hsaco_v1(finalized_evidence).unwrap(),
+    )
+    .unwrap();
+    let finalized_prepared =
+        fe2o3_hsaco_finalize::prepare_finalized_worker_v2_hsaco_publication_v1(
+            &producer, finalized,
+        )
+        .unwrap();
+    let finalized_published = fe2o3_hsaco_finalize::publish_prepared_finalized_worker_v2_hsaco_v1(
+        &finalized_directory.0,
+        &producer,
+        &finalized_prepared,
+    )
+    .unwrap();
+
+    let raw_record = raw_published.snapshot().record();
+    let finalized_record = finalized_published.snapshot().record();
+    assert_eq!(raw_record.linked_output(), finalized_record.linked_output());
+    assert_ne!(
+        raw_record.scope().kernel_set(),
+        finalized_record.scope().kernel_set()
+    );
+    assert_ne!(
+        raw_record.scope().target(),
+        finalized_record.scope().target()
+    );
+    assert_ne!(raw_record.request(), finalized_record.request());
+    assert_ne!(raw_record.worker(), finalized_record.worker());
+    assert_ne!(raw_record.response(), finalized_record.response());
+    assert_ne!(raw_record.finalization(), finalized_record.finalization());
+    assert_ne!(
+        raw_record.finalized_output(),
+        finalized_record.finalized_output()
+    );
+    assert_ne!(raw_record.publication(), finalized_record.publication());
+    assert_ne!(raw_published.receipt(), finalized_published.receipt());
+    assert_ne!(
+        raw_published.receipt().plan_commitment(),
+        finalized_published.receipt().plan_commitment()
+    );
+
+    fe2o3_artifact_transaction::finish_build_attempt(
+        &raw_directory.0,
+        &producer,
+        raw_prepared.attempt(),
+    )
+    .unwrap();
+    fe2o3_artifact_transaction::finish_build_attempt(
+        &finalized_directory.0,
+        &producer,
+        finalized_prepared.attempt(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn finalized_plan_binds_kernel_target_worker_attempt_and_producer() {
+    let base = publish_finalized_identities(
+        "tests/finalized-lineage.rs",
+        FixtureOptions::valid(),
+        "vecadd",
+        "vecadd.kd",
+        "gfx942",
+        0x53,
+        "fixture-llvm-v1",
+        0xb1,
+        0xb2,
+    );
+    let kernel = publish_finalized_identities(
+        "tests/finalized-lineage.rs",
+        FixtureOptions {
+            entry: "vecsub",
+            descriptor: "vecsub.kd",
+            ..FixtureOptions::valid()
+        },
+        "vecsub",
+        "vecsub.kd",
+        "gfx942",
+        0x53,
+        "fixture-llvm-v1",
+        0xb1,
+        0xb2,
+    );
+    assert_ne!(base.kernel_set, kernel.kernel_set);
+    assert_ne!(base.publication, kernel.publication);
+
+    let target = publish_finalized_identities(
+        "tests/finalized-lineage.rs",
+        FixtureOptions {
+            target: "gfx942:xnack-",
+            ..FixtureOptions::valid()
+        },
+        "vecadd",
+        "vecadd.kd",
+        "gfx942:xnack-",
+        0x53,
+        "fixture-llvm-v1",
+        0xb1,
+        0xb2,
+    );
+    assert_ne!(base.target, target.target);
+    assert_ne!(base.publication, target.publication);
+
+    let worker = publish_finalized_identities(
+        "tests/finalized-lineage.rs",
+        FixtureOptions::valid(),
+        "vecadd",
+        "vecadd.kd",
+        "gfx942",
+        0x53,
+        "fixture-llvm-v2",
+        0xb1,
+        0xb2,
+    );
+    assert_ne!(base.worker, worker.worker);
+    assert_ne!(base.publication, worker.publication);
+
+    let attempt = publish_finalized_identities(
+        "tests/finalized-lineage.rs",
+        FixtureOptions::valid(),
+        "vecadd",
+        "vecadd.kd",
+        "gfx942",
+        0x53,
+        "fixture-llvm-v1",
+        0xc1,
+        0xc2,
+    );
+    assert_ne!(base.publication, attempt.publication);
+
+    let producer = publish_finalized_identities(
+        "tests/finalized-other-producer.rs",
+        FixtureOptions::valid(),
+        "vecadd",
+        "vecadd.kd",
+        "gfx942",
+        0x53,
+        "fixture-llvm-v1",
+        0xb1,
+        0xb2,
+    );
+    assert_ne!(base.package, producer.package);
+    assert_ne!(base.publication, producer.publication);
+
+    let changed_bytes = publish_finalized_identities_with_output_mutation(
+        "tests/finalized-lineage.rs",
+        FixtureOptions::valid(),
+        "vecadd",
+        "vecadd.kd",
+        "gfx942",
+        0x53,
+        "fixture-llvm-v1",
+        0xb1,
+        0xb2,
+    );
+    assert_ne!(base.linked_output, changed_bytes.linked_output);
+    assert_ne!(base.finalization, changed_bytes.finalization);
+    assert_ne!(base.finalized_output, changed_bytes.finalized_output);
+    assert_ne!(base.upstream, changed_bytes.upstream);
+    assert_ne!(base.publication, changed_bytes.publication);
 }
 
 #[test]
@@ -398,6 +690,123 @@ fn publish_identities(
     identities
 }
 
+#[allow(clippy::too_many_arguments)]
+fn publish_finalized_identities(
+    source: &str,
+    options: FixtureOptions<'_>,
+    manifest_entry: &str,
+    manifest_descriptor: &str,
+    compiler_target: &str,
+    semantic_seed: u8,
+    llvm_identity: &str,
+    invocation_seed: u8,
+    session_seed: u8,
+) -> PublishedIdentities {
+    publish_finalized_identities_inner(
+        source,
+        options,
+        manifest_entry,
+        manifest_descriptor,
+        compiler_target,
+        semantic_seed,
+        llvm_identity,
+        invocation_seed,
+        session_seed,
+        false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn publish_finalized_identities_with_output_mutation(
+    source: &str,
+    options: FixtureOptions<'_>,
+    manifest_entry: &str,
+    manifest_descriptor: &str,
+    compiler_target: &str,
+    semantic_seed: u8,
+    llvm_identity: &str,
+    invocation_seed: u8,
+    session_seed: u8,
+) -> PublishedIdentities {
+    publish_finalized_identities_inner(
+        source,
+        options,
+        manifest_entry,
+        manifest_descriptor,
+        compiler_target,
+        semantic_seed,
+        llvm_identity,
+        invocation_seed,
+        session_seed,
+        true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn publish_finalized_identities_inner(
+    source: &str,
+    options: FixtureOptions<'_>,
+    manifest_entry: &str,
+    manifest_descriptor: &str,
+    compiler_target: &str,
+    semantic_seed: u8,
+    llvm_identity: &str,
+    invocation_seed: u8,
+    session_seed: u8,
+    mutate_output: bool,
+) -> PublishedIdentities {
+    let directory = TestDirectory::new();
+    let producer = publication_producer(source);
+    let table = publication_descriptor_table(compiler_target, manifest_entry, manifest_descriptor);
+    let mut fixture = fixture_with_descriptor_table(options, Some(&table));
+    if mutate_output {
+        fixture.bytes[fixture.text_offset] ^= 1;
+    }
+    let evidence = publication_evidence_with_attempt(
+        &directory,
+        &producer,
+        fixture.bytes,
+        manifest_entry,
+        manifest_descriptor,
+        compiler_target,
+        semantic_seed,
+        llvm_identity,
+        invocation_seed,
+        session_seed,
+    );
+    let finalized =
+        finalize_inspected_worker_v2_hsaco_v1(inspect_worker_v2_raw_hsaco_v1(evidence).unwrap())
+            .unwrap();
+    let prepared = fe2o3_hsaco_finalize::prepare_finalized_worker_v2_hsaco_publication_v1(
+        &producer, finalized,
+    )
+    .unwrap();
+    let published = fe2o3_hsaco_finalize::publish_prepared_finalized_worker_v2_hsaco_v1(
+        &directory.0,
+        &producer,
+        &prepared,
+    )
+    .unwrap();
+    let record = published.snapshot().record();
+    let scope = record.scope();
+    let identities = PublishedIdentities {
+        package: *scope.package().as_bytes(),
+        kernel_set: *scope.kernel_set().as_bytes(),
+        target: *scope.target().as_bytes(),
+        request: *record.request().as_bytes(),
+        worker: *record.worker().unwrap().as_bytes(),
+        response: *record.response().unwrap().as_bytes(),
+        linked_output: *record.linked_output().unwrap().as_bytes(),
+        finalization: *record.finalization().unwrap().as_bytes(),
+        finalized_output: *record.finalized_output().unwrap().as_bytes(),
+        publication: *record.publication().unwrap().as_bytes(),
+        upstream: published.receipt().upstream_evidence_identity(),
+    };
+    fe2o3_artifact_transaction::finish_build_attempt(&directory.0, &producer, prepared.attempt())
+        .unwrap();
+    identities
+}
+
 fn publication_producer(source: &str) -> ProducerIdentity {
     ProducerIdentity::from_codegen(
         "worker_v2_hsaco_publication_fixture",
@@ -442,11 +851,68 @@ fn publication_evidence_with_link_option(
     llvm_identity: &str,
     link_option: Option<&str>,
 ) -> fe2o3_hsaco_finalize::InertFirstBuildWorkerV2EvidenceV1 {
+    publication_evidence_with_link_option_and_attempt(
+        directory,
+        producer,
+        bytes,
+        manifest_entry,
+        manifest_descriptor,
+        target,
+        semantic_seed,
+        llvm_identity,
+        link_option,
+        0xb1,
+        0xb2,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn publication_evidence_with_attempt(
+    directory: &TestDirectory,
+    producer: &ProducerIdentity,
+    bytes: Vec<u8>,
+    manifest_entry: &str,
+    manifest_descriptor: &str,
+    target: &str,
+    semantic_seed: u8,
+    llvm_identity: &str,
+    invocation_seed: u8,
+    session_seed: u8,
+) -> fe2o3_hsaco_finalize::InertFirstBuildWorkerV2EvidenceV1 {
+    publication_evidence_with_link_option_and_attempt(
+        directory,
+        producer,
+        bytes,
+        manifest_entry,
+        manifest_descriptor,
+        target,
+        semantic_seed,
+        llvm_identity,
+        None,
+        invocation_seed,
+        session_seed,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn publication_evidence_with_link_option_and_attempt(
+    directory: &TestDirectory,
+    producer: &ProducerIdentity,
+    bytes: Vec<u8>,
+    manifest_entry: &str,
+    manifest_descriptor: &str,
+    target: &str,
+    semantic_seed: u8,
+    llvm_identity: &str,
+    link_option: Option<&str>,
+    invocation_seed: u8,
+    session_seed: u8,
+) -> fe2o3_hsaco_finalize::InertFirstBuildWorkerV2EvidenceV1 {
     let attempt = begin_build_attempt(
         &directory.0,
         producer,
-        BuildInvocation::from_bytes([0xb1; 32]),
-        BuildSession::from_bytes([0xb2; 16]),
+        BuildInvocation::from_bytes([invocation_seed; 32]),
+        BuildSession::from_bytes([session_seed; 16]),
     )
     .unwrap();
     let handoff = publication_compiler_handoff(
@@ -468,6 +934,70 @@ fn publication_evidence_with_link_option(
         WorkerExecutionLimitsV1::new(Duration::from_secs(2), 16 * 1024, 64 * 1024).unwrap(),
     )
     .unwrap()
+}
+
+fn publication_descriptor_table(target: &str, entry: &str, descriptor: &str) -> Vec<u8> {
+    let source = SourceTypeRecordV1::new(SourceTypeDescriptorV1::shared_slice(ScalarTypeV1::F32));
+    let layout =
+        DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::shared_slice(ScalarTypeV1::F32));
+    let kernel = KernelDescriptorV1::new(
+        KernelId::from_bytes([0x61; 32]),
+        publication_name(entry),
+        publication_name(entry),
+        publication_name(descriptor),
+        publication_build_evidence(0x62, 0x63),
+        publication_build_evidence(0x64, 0x65),
+        Vec::new(),
+        KernelAbiLayoutV1::new(16, 272, 8).unwrap(),
+        LaunchConstraintsV1::new(
+            1,
+            BlockSizeV1::Exact(DimensionsV1::new(256, 1, 1).unwrap()),
+            DimensionsV1::new(u32::MAX, 1, 1).unwrap(),
+            256,
+            0,
+            64 * 1024,
+        )
+        .unwrap(),
+        vec![
+            LogicalArgumentV1::shared_slice(0, publication_name("values"), &source, &layout, 0)
+                .unwrap(),
+        ],
+    )
+    .unwrap();
+    let table = DeviceDescriptorTableV1::new(
+        CanonicalCodeObjectDigest::from_bytes([0; 32]),
+        CodeObjectVersion::V6,
+        CompilerIdentityV1::new(
+            publication_text("rustc"),
+            publication_text("unauthenticated-test"),
+            [0x66; 20],
+        ),
+        ProducerIdentityV1::new(
+            publication_text("fe2o3-test"),
+            publication_text("unauthenticated-test"),
+        ),
+        DeviceTargetV1::parse(target).unwrap(),
+        vec![source],
+        vec![layout],
+        vec![kernel],
+    )
+    .unwrap();
+    encode_device_descriptor_table_v1(&table).unwrap()
+}
+
+fn publication_name(value: &str) -> ValidName {
+    ValidName::new(value).unwrap()
+}
+
+fn publication_text(value: &str) -> Text {
+    Text::new(value).unwrap()
+}
+
+fn publication_build_evidence(identity: u8, digest: u8) -> BuildEvidenceV1 {
+    BuildEvidenceV1::new(
+        EvidenceIdentity::from_opaque_bytes([identity; 32]),
+        EvidenceDigest::from_sha256_bytes([digest; 32]),
+    )
 }
 
 fn publication_pinned_worker(llvm_identity: &str) -> PinnedWorkerV1 {

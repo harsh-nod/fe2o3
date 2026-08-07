@@ -105,8 +105,10 @@ pub use worker_v2_hsaco_finalization::{
     WorkerV2HsacoFinalizationError, finalize_inspected_worker_v2_hsaco_v1,
 };
 pub use worker_v2_hsaco_publication::{
-    PreparedWorkerV2HsacoPublicationV1, WorkerV2HsacoPublicationError,
-    prepare_worker_v2_hsaco_publication_v1, publish_prepared_worker_v2_hsaco_v1,
+    PreparedFinalizedWorkerV2HsacoPublicationV1, PreparedWorkerV2HsacoPublicationV1,
+    WorkerV2HsacoPublicationError, prepare_finalized_worker_v2_hsaco_publication_v1,
+    prepare_worker_v2_hsaco_publication_v1, publish_prepared_finalized_worker_v2_hsaco_v1,
+    publish_prepared_worker_v2_hsaco_v1,
 };
 
 /// The only ELF section name recognized for a canonical V1 descriptor table.
