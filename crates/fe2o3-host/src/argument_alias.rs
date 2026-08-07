@@ -1,4 +1,10 @@
-use crate::ObservedContext;
+use crate::{
+    ObservedContext,
+    generated_argument_plan::{
+        GeneratedArgumentInputV1, GeneratedArgumentPackError, GeneratedArgumentPackingPlanV1,
+        GeneratedDeviceScalarV1,
+    },
+};
 use fe2o3_core::{DeviceBuffer, DeviceCopy, KernelParams};
 use std::collections::HashMap;
 use std::fmt;
@@ -269,6 +275,22 @@ impl<'allocation, T: DeviceCopy> GeneratedReadDeviceSlice<'allocation, T> {
         self.buffer.is_empty()
     }
 
+    /// Binds this retained shared slice to one exact generated argument plan.
+    pub fn bind_argument(
+        &self,
+        plan: &GeneratedArgumentPackingPlanV1,
+        argument_index: usize,
+    ) -> Result<GeneratedArgumentInputV1, GeneratedArgumentPackError>
+    where
+        T: GeneratedDeviceScalarV1,
+    {
+        plan.bind_generated_read_slice_v1::<T>(
+            argument_index,
+            self.buffer.as_device_ptr().as_raw().addr(),
+            self.buffer.len(),
+        )
+    }
+
     pub(crate) fn device_pointer(&self) -> *const () {
         self.buffer.as_device_ptr().as_raw().cast_const().cast()
     }
@@ -317,6 +339,59 @@ impl<'allocation, T: DeviceCopy> GeneratedWriteDeviceSlice<'allocation, T> {
 
     pub(crate) fn device_pointer(&self) -> *const () {
         self.buffer.as_device_ptr().as_raw().cast_const().cast()
+    }
+}
+
+/// Generated initialized read-write capability for one complete typed buffer.
+///
+/// This doc-hidden SPI owns the actual exclusive buffer borrow. Its admission
+/// access is distinct from write-only output and its safe packing helper binds
+/// the same retained pointer and length to an exact canonical `DisjointSlice`
+/// argument.
+#[doc(hidden)]
+pub struct GeneratedReadWriteDeviceSlice<'allocation, T: DeviceCopy> {
+    buffer: &'allocation mut DeviceBuffer<T>,
+    metadata: GeneratedDeviceSliceMetadata,
+}
+
+impl<'allocation, T: DeviceCopy> GeneratedReadWriteDeviceSlice<'allocation, T> {
+    pub fn new(
+        observed: &ObservedContext,
+        buffer: &'allocation mut DeviceBuffer<T>,
+    ) -> Result<Self, RegionError> {
+        let metadata = GeneratedDeviceSliceMetadata::from_buffer(observed, buffer)?;
+        Ok(Self { buffer, metadata })
+    }
+
+    pub fn argument_access(&self) -> ArgumentAccess<'allocation> {
+        ArgumentAccess::new(
+            self.metadata.whole_region(),
+            ArgumentAccessMode::ExclusiveReadWrite,
+        )
+    }
+
+    pub fn len(&self) -> usize {
+        self.buffer.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.buffer.is_empty()
+    }
+
+    /// Binds this retained exclusive slice to one exact generated argument plan.
+    pub fn bind_argument(
+        &self,
+        plan: &GeneratedArgumentPackingPlanV1,
+        argument_index: usize,
+    ) -> Result<GeneratedArgumentInputV1, GeneratedArgumentPackError>
+    where
+        T: GeneratedDeviceScalarV1,
+    {
+        plan.bind_generated_read_write_slice_v1::<T>(
+            argument_index,
+            self.buffer.as_device_ptr().as_raw().addr(),
+            self.buffer.len(),
+        )
     }
 }
 
@@ -436,6 +511,7 @@ impl std::error::Error for InvalidAtomicOrdering {}
 pub enum ArgumentAccessMode {
     SharedRead,
     ExclusiveWrite,
+    ExclusiveReadWrite,
     Atomic(AtomicAccess),
 }
 
@@ -892,6 +968,10 @@ mod tests {
         ArgumentAccess::new(region, ArgumentAccessMode::ExclusiveWrite)
     }
 
+    fn read_write(region: CheckedByteRegion<'_>) -> ArgumentAccess<'_> {
+        ArgumentAccess::new(region, ArgumentAccessMode::ExclusiveReadWrite)
+    }
+
     fn atomic(region: CheckedByteRegion<'_>) -> ArgumentAccess<'_> {
         atomic_at_scope(region, AtomicScope::Device)
     }
@@ -1004,6 +1084,41 @@ mod tests {
                     read(allocation.region(0, 24).unwrap()),
                     read(allocation.region(8, 24).unwrap()),
                     write(allocation.region(4, 0).unwrap()),
+                ],
+                &[],
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn read_write_is_exclusive_against_reads_writes_and_other_read_write_accesses() {
+        let context = context(1);
+        let owner = ();
+        // SAFETY: see `allocation`.
+        let allocation = unsafe { allocation(&context, &owner, 0x1000, 32) };
+        let validator = ArgumentAliasValidator::new();
+
+        for second in [
+            read(allocation.region(0, 32).unwrap()),
+            write(allocation.region(0, 32).unwrap()),
+            read_write(allocation.region(0, 32).unwrap()),
+        ] {
+            assert!(matches!(
+                validator.admit(
+                    &context,
+                    [read_write(allocation.region(0, 32).unwrap()), second],
+                    &[],
+                ),
+                Err(AliasAdmissionError::Conflict { .. })
+            ));
+        }
+
+        validator
+            .admit(
+                &context,
+                [
+                    read_write(allocation.region(0, 16).unwrap()),
+                    read_write(allocation.region(16, 16).unwrap()),
                 ],
                 &[],
             )
@@ -1198,6 +1313,16 @@ mod tests {
         assert_eq!(
             validator
                 .admit(&first_context, [read(second.region(0, 8).unwrap())], &[],)
+                .unwrap_err(),
+            AliasAdmissionError::ArgumentContextMismatch { argument_index: 0 }
+        );
+        assert_eq!(
+            validator
+                .admit(
+                    &first_context,
+                    [read_write(second.region(0, 8).unwrap())],
+                    &[],
+                )
                 .unwrap_err(),
             AliasAdmissionError::ArgumentContextMismatch { argument_index: 0 }
         );

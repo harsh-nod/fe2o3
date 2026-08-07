@@ -1,0 +1,65 @@
+error[E0277]: the trait bound `bool: fe2o3_host::GeneratedDeviceScalarV1` is not satisfied
+ --> tests/ui/generated_spi/fail/unsupported_generated_scalar_types.rs:6:32
+  |
+6 |     require_generated_scalar::<bool>();
+  |                                ^^^^ the trait `fe2o3_host::GeneratedDeviceScalarV1` is not implemented for `bool`
+  |
+  = help: the following other types implement trait `fe2o3_host::GeneratedDeviceScalarV1`:
+            f32
+            f64
+            i16
+            i32
+            i64
+            i8
+            u16
+            u32
+          and $N others
+note: required by a bound in `require_generated_scalar`
+ --> tests/ui/generated_spi/fail/unsupported_generated_scalar_types.rs:3:32
+  |
+3 | fn require_generated_scalar<T: GeneratedDeviceScalarV1>() {}
+  |                                ^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `require_generated_scalar`
+
+error[E0277]: the trait bound `usize: fe2o3_host::GeneratedDeviceScalarV1` is not satisfied
+ --> tests/ui/generated_spi/fail/unsupported_generated_scalar_types.rs:7:32
+  |
+7 |     require_generated_scalar::<usize>();
+  |                                ^^^^^ the trait `fe2o3_host::GeneratedDeviceScalarV1` is not implemented for `usize`
+  |
+  = help: the following other types implement trait `fe2o3_host::GeneratedDeviceScalarV1`:
+            f32
+            f64
+            i16
+            i32
+            i64
+            i8
+            u16
+            u32
+          and $N others
+note: required by a bound in `require_generated_scalar`
+ --> tests/ui/generated_spi/fail/unsupported_generated_scalar_types.rs:3:32
+  |
+3 | fn require_generated_scalar<T: GeneratedDeviceScalarV1>() {}
+  |                                ^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `require_generated_scalar`
+
+error[E0277]: the trait bound `[u32; 2]: fe2o3_host::GeneratedDeviceScalarV1` is not satisfied
+ --> tests/ui/generated_spi/fail/unsupported_generated_scalar_types.rs:8:32
+  |
+8 |     require_generated_scalar::<[u32; 2]>();
+  |                                ^^^^^^^^ the trait `fe2o3_host::GeneratedDeviceScalarV1` is not implemented for `[u32; 2]`
+  |
+  = help: the following other types implement trait `fe2o3_host::GeneratedDeviceScalarV1`:
+            f32
+            f64
+            i16
+            i32
+            i64
+            i8
+            u16
+            u32
+          and $N others
+note: required by a bound in `require_generated_scalar`
+ --> tests/ui/generated_spi/fail/unsupported_generated_scalar_types.rs:3:32
+  |
+3 | fn require_generated_scalar<T: GeneratedDeviceScalarV1>() {}
+  |                                ^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `require_generated_scalar`

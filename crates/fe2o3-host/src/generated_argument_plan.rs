@@ -1,9 +1,167 @@
 use crate::{AuthenticatedKernelArtifactV1, CompilerGeneratedKernelContractV1, KernelId};
 use fe2o3_artifacts::{
-    AbiField, AbiKind, AbiLayout, Access, AddressSpace, MAX_ABI_BYTES, PointerWidth, ScalarType,
-    ValidationError,
+    AbiField, AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership,
+    MAX_ABI_BYTES, Mutability, PointerWidth, RustDisjointIndexSpaceV1, RustLayoutEvidenceV1,
+    RustPhysicalComponentKindV1, RustPhysicalComponentV1, RustPointerMutabilityV1,
+    RustScalarElementTypeV1, RustSourceTypeShapeV1, RustTypeEvidenceV1, RustcAbiClassV1,
+    ScalarType, TypeIdentity, ValidationError,
 };
+use fe2o3_core::DeviceCopy;
 use std::{fmt, sync::Arc};
+
+mod generated_device_scalar_seal {
+    pub trait Sealed {}
+}
+
+/// Primitive scalar accepted by compiler-generated general V1 host adapters.
+///
+/// This trait is sealed: application types cannot claim primitive ABI or Rust
+/// layout identities. Its methods derive identities from the shared canonical
+/// `RustLayoutEvidenceV1` schema rather than from byte width alone.
+#[doc(hidden)]
+pub trait GeneratedDeviceScalarV1: generated_device_scalar_seal::Sealed + DeviceCopy {
+    #[doc(hidden)]
+    const ABI_SCALAR_TYPE: ScalarType;
+    #[doc(hidden)]
+    const RUST_SCALAR_TYPE: RustScalarElementTypeV1;
+
+    #[doc(hidden)]
+    fn encode_le_bytes_v1(self) -> ([u8; 8], u8);
+
+    #[doc(hidden)]
+    fn scalar_type_identity_v1(pointer_width: PointerWidth) -> TypeIdentity {
+        canonical_scalar_layout_v1(Self::RUST_SCALAR_TYPE, pointer_width).type_identity()
+    }
+
+    #[doc(hidden)]
+    fn shared_slice_type_identity_v1(pointer_width: PointerWidth) -> TypeIdentity {
+        canonical_slice_layout_v1(Self::RUST_SCALAR_TYPE, pointer_width, false).type_identity()
+    }
+
+    #[doc(hidden)]
+    fn disjoint_slice_type_identity_v1(pointer_width: PointerWidth) -> TypeIdentity {
+        canonical_slice_layout_v1(Self::RUST_SCALAR_TYPE, pointer_width, true).type_identity()
+    }
+}
+
+macro_rules! impl_generated_device_integer_scalar_v1 {
+    ($(($rust:ty, $abi:ident, $element:ident)),+ $(,)?) => {
+        $(
+            impl generated_device_scalar_seal::Sealed for $rust {}
+
+            impl GeneratedDeviceScalarV1 for $rust {
+                const ABI_SCALAR_TYPE: ScalarType = ScalarType::$abi;
+                const RUST_SCALAR_TYPE: RustScalarElementTypeV1 =
+                    RustScalarElementTypeV1::$element;
+
+                fn encode_le_bytes_v1(self) -> ([u8; 8], u8) {
+                    let encoded = self.to_le_bytes();
+                    let mut bytes = [0_u8; 8];
+                    bytes[..encoded.len()].copy_from_slice(&encoded);
+                    (bytes, encoded.len() as u8)
+                }
+            }
+        )+
+    };
+}
+
+macro_rules! impl_generated_device_float_scalar_v1 {
+    ($(($rust:ty, $bits:ty, $abi:ident, $element:ident)),+ $(,)?) => {
+        $(
+            impl generated_device_scalar_seal::Sealed for $rust {}
+
+            impl GeneratedDeviceScalarV1 for $rust {
+                const ABI_SCALAR_TYPE: ScalarType = ScalarType::$abi;
+                const RUST_SCALAR_TYPE: RustScalarElementTypeV1 =
+                    RustScalarElementTypeV1::$element;
+
+                fn encode_le_bytes_v1(self) -> ([u8; 8], u8) {
+                    let encoded: [u8; size_of::<$bits>()] = self.to_bits().to_le_bytes();
+                    let mut bytes = [0_u8; 8];
+                    bytes[..encoded.len()].copy_from_slice(&encoded);
+                    (bytes, encoded.len() as u8)
+                }
+            }
+        )+
+    };
+}
+
+impl_generated_device_integer_scalar_v1!(
+    (i8, I8, I8),
+    (u8, U8, U8),
+    (i16, I16, I16),
+    (u16, U16, U16),
+    (i32, I32, I32),
+    (u32, U32, U32),
+    (i64, I64, I64),
+    (u64, U64, U64),
+);
+impl_generated_device_float_scalar_v1!((f32, u32, F32, F32), (f64, u64, F64, F64));
+
+fn canonical_scalar_layout_v1(
+    scalar: RustScalarElementTypeV1,
+    pointer_width: PointerWidth,
+) -> RustLayoutEvidenceV1 {
+    let size = scalar.size_bytes();
+    let alignment = u32::try_from(size).expect("supported scalar alignment fits u32");
+    RustLayoutEvidenceV1::new(
+        RustTypeEvidenceV1::new(RustSourceTypeShapeV1::scalar(scalar)),
+        RustcAbiClassV1::Scalar,
+        pointer_width,
+        size,
+        alignment,
+        vec![
+            RustPhysicalComponentV1::new(
+                0,
+                size,
+                alignment,
+                RustPhysicalComponentKindV1::Scalar { scalar },
+            )
+            .expect("supported scalar component is canonical"),
+        ],
+    )
+    .expect("supported scalar layout is canonical")
+}
+
+fn canonical_slice_layout_v1(
+    element: RustScalarElementTypeV1,
+    pointer_width: PointerWidth,
+    disjoint: bool,
+) -> RustLayoutEvidenceV1 {
+    let width = pointer_width.bytes();
+    let alignment = u32::try_from(width).expect("pointer width fits u32");
+    let source_type = if disjoint {
+        RustSourceTypeShapeV1::disjoint_slice(element, RustDisjointIndexSpaceV1::Index1D)
+    } else {
+        RustSourceTypeShapeV1::shared_slice(element)
+    };
+    let pointer = RustPhysicalComponentV1::new(
+        0,
+        width,
+        alignment,
+        RustPhysicalComponentKindV1::Pointer {
+            mutability: if disjoint {
+                RustPointerMutabilityV1::Mut
+            } else {
+                RustPointerMutabilityV1::Const
+            },
+            pointee: element,
+        },
+    )
+    .expect("supported slice pointer component is canonical");
+    let length =
+        RustPhysicalComponentV1::new(width, width, alignment, RustPhysicalComponentKindV1::Usize)
+            .expect("supported slice length component is canonical");
+    RustLayoutEvidenceV1::new(
+        RustTypeEvidenceV1::new(source_type),
+        RustcAbiClassV1::ScalarPair,
+        pointer_width,
+        width * 2,
+        alignment,
+        vec![pointer, length],
+    )
+    .expect("supported slice layout is canonical")
+}
 
 /// Compiler-generated expectation for one complete logical kernel ABI.
 ///
@@ -212,6 +370,36 @@ impl GeneratedArgumentPackingPlanV1 {
         self.components.get(index).copied()
     }
 
+    /// Binds a supported primitive to its exact canonical Rust argument type.
+    pub fn scalar<T: GeneratedDeviceScalarV1>(
+        &self,
+        argument_index: usize,
+        value: T,
+    ) -> Result<GeneratedArgumentInputV1, GeneratedArgumentPackError> {
+        let expected = GeneratedFieldExpectationV1 {
+            kind: AbiKind::Scalar(T::ABI_SCALAR_TYPE),
+            size: T::RUST_SCALAR_TYPE.size_bytes(),
+            alignment: u32::try_from(T::RUST_SCALAR_TYPE.size_bytes())
+                .expect("supported scalar alignment fits u32"),
+            type_identity: T::scalar_type_identity_v1(self.pointer_width),
+            mutability: Mutability::Immutable,
+            access: Access::ByValue,
+            address_space: AddressSpace::Value,
+            ownership: ArgumentOwnership::ByValue,
+            alias_class: AliasClass::Value,
+        };
+        validate_generated_field_v1(self, argument_index, expected)?;
+        let (bytes, byte_length) = value.encode_le_bytes_v1();
+        self.bind_input(
+            argument_index,
+            GeneratedArgumentValueV1::Scalar {
+                scalar_type: T::ABI_SCALAR_TYPE,
+                bytes,
+                byte_length,
+            },
+        )
+    }
+
     pub fn scalar_i8(
         &self,
         argument_index: usize,
@@ -354,6 +542,103 @@ impl GeneratedArgumentPackingPlanV1 {
         )
     }
 
+    pub(crate) fn bind_generated_read_slice_v1<T: GeneratedDeviceScalarV1>(
+        &self,
+        argument_index: usize,
+        address: usize,
+        length: usize,
+    ) -> Result<GeneratedArgumentInputV1, GeneratedArgumentPackError> {
+        self.bind_generated_slice_v1::<T>(
+            argument_index,
+            address,
+            length,
+            GeneratedSliceEffectV1::SharedRead,
+        )
+    }
+
+    pub(crate) fn bind_generated_read_write_slice_v1<T: GeneratedDeviceScalarV1>(
+        &self,
+        argument_index: usize,
+        address: usize,
+        length: usize,
+    ) -> Result<GeneratedArgumentInputV1, GeneratedArgumentPackError> {
+        self.bind_generated_slice_v1::<T>(
+            argument_index,
+            address,
+            length,
+            GeneratedSliceEffectV1::ExclusiveReadWrite,
+        )
+    }
+
+    fn bind_generated_slice_v1<T: GeneratedDeviceScalarV1>(
+        &self,
+        argument_index: usize,
+        address: usize,
+        length: usize,
+        effect: GeneratedSliceEffectV1,
+    ) -> Result<GeneratedArgumentInputV1, GeneratedArgumentPackError> {
+        let width = self.pointer_width.bytes();
+        let (type_identity, mutability, access, ownership, alias_class) = match effect {
+            GeneratedSliceEffectV1::SharedRead => (
+                T::shared_slice_type_identity_v1(self.pointer_width),
+                Mutability::Immutable,
+                Access::ReadOnly,
+                ArgumentOwnership::SharedBorrow,
+                AliasClass::SharedReadOnly,
+            ),
+            GeneratedSliceEffectV1::ExclusiveReadWrite => (
+                T::disjoint_slice_type_identity_v1(self.pointer_width),
+                Mutability::Mutable,
+                Access::ReadWrite,
+                ArgumentOwnership::UniqueBorrow,
+                AliasClass::Exclusive,
+            ),
+        };
+        let expected = GeneratedFieldExpectationV1 {
+            kind: AbiKind::Slice {
+                element_size: T::RUST_SCALAR_TYPE.size_bytes(),
+                element_alignment: u32::try_from(T::RUST_SCALAR_TYPE.size_bytes())
+                    .expect("supported scalar alignment fits u32"),
+            },
+            size: width * 2,
+            alignment: u32::try_from(width).expect("pointer width fits u32"),
+            type_identity,
+            mutability,
+            access,
+            address_space: AddressSpace::Global,
+            ownership,
+            alias_class,
+        };
+        validate_generated_field_v1(self, argument_index, expected)?;
+
+        let address = u64::try_from(address).map_err(|_| {
+            GeneratedArgumentPackError::IntegerWidthOverflow {
+                argument_index,
+                component: GeneratedPackingComponentKindV1::SlicePointer,
+                value: u64::MAX,
+                pointer_width: self.pointer_width,
+            }
+        })?;
+        let length = u64::try_from(length).map_err(|_| {
+            GeneratedArgumentPackError::IntegerWidthOverflow {
+                argument_index,
+                component: GeneratedPackingComponentKindV1::SliceLength,
+                value: u64::MAX,
+                pointer_width: self.pointer_width,
+            }
+        })?;
+        self.bind_input(
+            argument_index,
+            GeneratedArgumentValueV1::Slice {
+                address,
+                length,
+                pointer_width: self.pointer_width,
+                address_space: AddressSpace::Global,
+                access,
+            },
+        )
+    }
+
     /// Packs a complete set of generated inputs into exact manifest offsets.
     ///
     /// Input order is irrelevant. Every logical manifest argument must appear
@@ -407,6 +692,86 @@ impl GeneratedArgumentPackingPlanV1 {
         validate_input(self, &input)?;
         Ok(input)
     }
+}
+
+#[derive(Clone, Copy)]
+enum GeneratedSliceEffectV1 {
+    SharedRead,
+    ExclusiveReadWrite,
+}
+
+#[derive(Clone, Copy)]
+struct GeneratedFieldExpectationV1 {
+    kind: AbiKind,
+    size: u64,
+    alignment: u32,
+    type_identity: TypeIdentity,
+    mutability: Mutability,
+    access: Access,
+    address_space: AddressSpace,
+    ownership: ArgumentOwnership,
+    alias_class: AliasClass,
+}
+
+fn validate_generated_field_v1(
+    plan: &GeneratedArgumentPackingPlanV1,
+    argument_index: usize,
+    expected: GeneratedFieldExpectationV1,
+) -> Result<(), GeneratedArgumentPackError> {
+    let field = plan.fields.get(argument_index).ok_or(
+        GeneratedArgumentPackError::ArgumentIndexOutOfBounds {
+            argument_index,
+            argument_count: plan.fields.len(),
+        },
+    )?;
+    let properties = [
+        (
+            field.type_identity() == expected.type_identity,
+            GeneratedArgumentFieldProperty::TypeIdentity,
+        ),
+        (
+            field.kind() == expected.kind,
+            GeneratedArgumentFieldProperty::Kind,
+        ),
+        (
+            field.size() == expected.size,
+            GeneratedArgumentFieldProperty::Size,
+        ),
+        (
+            field.alignment() == expected.alignment,
+            GeneratedArgumentFieldProperty::Alignment,
+        ),
+        (
+            field.mutability() == expected.mutability,
+            GeneratedArgumentFieldProperty::Mutability,
+        ),
+        (
+            field.access() == expected.access,
+            GeneratedArgumentFieldProperty::Access,
+        ),
+        (
+            field.address_space() == expected.address_space,
+            GeneratedArgumentFieldProperty::AddressSpace,
+        ),
+        (
+            field.ownership() == expected.ownership,
+            GeneratedArgumentFieldProperty::Ownership,
+        ),
+        (
+            field.alias_class() == expected.alias_class,
+            GeneratedArgumentFieldProperty::AliasClass,
+        ),
+    ];
+    if let Some(property) = properties
+        .into_iter()
+        .find_map(|(matches, property)| (!matches).then_some(property))
+    {
+        return Err(GeneratedArgumentPackError::FieldMismatch {
+            argument_index,
+            property,
+        });
+    }
+    Ok(())
 }
 
 impl<K: CompilerGeneratedKernelContractV1> AuthenticatedKernelArtifactV1<K> {
@@ -586,6 +951,10 @@ pub enum GeneratedArgumentPackError {
     MissingArgument {
         argument_index: usize,
     },
+    FieldMismatch {
+        argument_index: usize,
+        property: GeneratedArgumentFieldProperty,
+    },
     KindMismatch {
         argument_index: usize,
         expected: &'static str,
@@ -681,6 +1050,13 @@ impl fmt::Display for GeneratedArgumentPackError {
             Self::MissingArgument { argument_index } => {
                 write!(formatter, "argument {argument_index} was not provided")
             }
+            Self::FieldMismatch {
+                argument_index,
+                property,
+            } => write!(
+                formatter,
+                "argument {argument_index} does not match its canonical generated {property}"
+            ),
             Self::KindMismatch {
                 argument_index,
                 expected,
@@ -1387,7 +1763,8 @@ mod tests {
     use super::{
         CompilerGeneratedArgumentLayoutV1, GeneratedArgumentFieldProperty,
         GeneratedArgumentLayoutError, GeneratedArgumentPackError, GeneratedArgumentPackingError,
-        GeneratedArgumentValueV1, GeneratedPackingComponentKindV1, validate_argument_packing,
+        GeneratedArgumentValueV1, GeneratedDeviceScalarV1, GeneratedPackingComponentKindV1,
+        validate_argument_packing,
     };
     use crate::KernelId;
     use fe2o3_artifacts::{
@@ -1430,6 +1807,64 @@ mod tests {
             identity(seed),
             ArgumentOwnership::ByValue,
             AliasClass::Value,
+        )
+        .unwrap()
+    }
+
+    fn canonical_scalar<T: GeneratedDeviceScalarV1>(name: &str) -> AbiField {
+        let size = T::RUST_SCALAR_TYPE.size_bytes();
+        AbiField::new(
+            Name::new(name).unwrap(),
+            0,
+            size,
+            u32::try_from(size).unwrap(),
+            AbiKind::Scalar(T::ABI_SCALAR_TYPE),
+            Mutability::Immutable,
+            Access::ByValue,
+            AddressSpace::Value,
+            T::scalar_type_identity_v1(PointerWidth::Bits64),
+            ArgumentOwnership::ByValue,
+            AliasClass::Value,
+        )
+        .unwrap()
+    }
+
+    fn canonical_slice<T: GeneratedDeviceScalarV1>(
+        name: &str,
+        read_write: bool,
+        access: Access,
+    ) -> AbiField {
+        AbiField::new(
+            Name::new(name).unwrap(),
+            0,
+            16,
+            8,
+            AbiKind::Slice {
+                element_size: T::RUST_SCALAR_TYPE.size_bytes(),
+                element_alignment: u32::try_from(T::RUST_SCALAR_TYPE.size_bytes()).unwrap(),
+            },
+            if read_write {
+                Mutability::Mutable
+            } else {
+                Mutability::Immutable
+            },
+            access,
+            AddressSpace::Global,
+            if read_write {
+                T::disjoint_slice_type_identity_v1(PointerWidth::Bits64)
+            } else {
+                T::shared_slice_type_identity_v1(PointerWidth::Bits64)
+            },
+            if read_write {
+                ArgumentOwnership::UniqueBorrow
+            } else {
+                ArgumentOwnership::SharedBorrow
+            },
+            if read_write {
+                AliasClass::Exclusive
+            } else {
+                AliasClass::SharedReadOnly
+            },
         )
         .unwrap()
     }
@@ -1752,6 +2187,209 @@ mod tests {
         assert!(!packed.is_empty());
         assert_eq!(packed.bytes(), expected);
         assert_eq!(&packed.bytes()[20..24], &[0; 4]);
+    }
+
+    fn assert_type_safe_scalar<T: GeneratedDeviceScalarV1>(value: T) {
+        let field = canonical_scalar::<T>("value");
+        let size = field.size();
+        let alignment = field.alignment();
+        let manifest = layout(vec![field.clone()], size, alignment);
+        let plan = validate(&manifest, &generated(vec![field], size, alignment)).unwrap();
+        let packed = plan.pack([plan.scalar(0, value).unwrap()]).unwrap();
+        let (expected, length) = value.encode_le_bytes_v1();
+        assert_eq!(packed.bytes(), &expected[..usize::from(length)]);
+    }
+
+    #[test]
+    fn type_safe_scalar_binding_supports_exactly_the_v1_primitives() {
+        assert_type_safe_scalar::<i8>(-2);
+        assert_type_safe_scalar::<u8>(0x88);
+        assert_type_safe_scalar::<i16>(-0x102);
+        assert_type_safe_scalar::<u16>(0x8877);
+        assert_type_safe_scalar::<i32>(-0x102_0304);
+        assert_type_safe_scalar::<u32>(0x8877_6655);
+        assert_type_safe_scalar::<i64>(-0x0102_0304_0506_0708);
+        assert_type_safe_scalar::<u64>(0x8877_6655_4433_2211);
+        assert_type_safe_scalar::<f32>(-2.5);
+        assert_type_safe_scalar::<f64>(-13.5);
+    }
+
+    #[test]
+    fn type_safe_binding_rejects_same_size_scalar_and_slice_substitutions() {
+        let scalar_field = canonical_scalar::<f32>("value");
+        let scalar_manifest = layout(vec![scalar_field.clone()], 4, 4);
+        let scalar_plan = validate(&scalar_manifest, &generated(vec![scalar_field], 4, 4)).unwrap();
+        assert_eq!(
+            scalar_plan.scalar::<u32>(0, 1).unwrap_err(),
+            GeneratedArgumentPackError::FieldMismatch {
+                argument_index: 0,
+                property: GeneratedArgumentFieldProperty::TypeIdentity,
+            }
+        );
+
+        let slice_field = canonical_slice::<f32>("values", false, Access::ReadOnly);
+        let slice_manifest = layout(vec![slice_field.clone()], 16, 8);
+        let slice_plan = validate(&slice_manifest, &generated(vec![slice_field], 16, 8)).unwrap();
+        assert_eq!(
+            slice_plan
+                .bind_generated_read_slice_v1::<u32>(0, 0x1000, 4)
+                .unwrap_err(),
+            GeneratedArgumentPackError::FieldMismatch {
+                argument_index: 0,
+                property: GeneratedArgumentFieldProperty::TypeIdentity,
+            }
+        );
+    }
+
+    #[test]
+    fn safe_slice_binding_checks_canonical_effects_and_seals_values_to_the_plan() {
+        let shared = canonical_slice::<f32>("input", false, Access::ReadOnly);
+        let shared_manifest = layout(vec![shared.clone()], 16, 8);
+        let shared_plan = validate(&shared_manifest, &generated(vec![shared], 16, 8)).unwrap();
+        let input = shared_plan
+            .bind_generated_read_slice_v1::<f32>(0, 0x1234, 7)
+            .unwrap();
+        assert_eq!(
+            shared_plan.pack([input.clone()]).unwrap().bytes(),
+            [0x1234_u64.to_le_bytes(), 7_u64.to_le_bytes()].concat()
+        );
+
+        let independent_shared = validate(
+            &shared_manifest,
+            &CompilerGeneratedArgumentLayoutV1::new(
+                16,
+                8,
+                PointerWidth::Bits64,
+                shared_manifest.fields().to_vec(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            independent_shared.pack([input]).unwrap_err(),
+            GeneratedArgumentPackError::SourcePlanMismatch { argument_index: 0 }
+        );
+
+        let write_only = canonical_slice::<f32>("state", true, Access::WriteOnly);
+        let write_only_manifest = layout(vec![write_only.clone()], 16, 8);
+        let write_only_plan =
+            validate(&write_only_manifest, &generated(vec![write_only], 16, 8)).unwrap();
+        assert_eq!(
+            write_only_plan
+                .bind_generated_read_write_slice_v1::<f32>(0, 0x2000, 8)
+                .unwrap_err(),
+            GeneratedArgumentPackError::FieldMismatch {
+                argument_index: 0,
+                property: GeneratedArgumentFieldProperty::Access,
+            }
+        );
+
+        let read_write = canonical_slice::<f32>("state", true, Access::ReadWrite);
+        let read_write_manifest = layout(vec![read_write.clone()], 16, 8);
+        let read_write_plan =
+            validate(&read_write_manifest, &generated(vec![read_write], 16, 8)).unwrap();
+        assert!(
+            read_write_plan
+                .bind_generated_read_write_slice_v1::<f32>(0, 0x2000, 8)
+                .is_ok()
+        );
+    }
+
+    fn assert_read_slice_field_mismatch(field: AbiField, property: GeneratedArgumentFieldProperty) {
+        let manifest = layout(vec![field.clone()], 16, 8);
+        let plan = validate(&manifest, &generated(vec![field], 16, 8)).unwrap();
+        assert_eq!(
+            plan.bind_generated_read_slice_v1::<f32>(0, 0x1000, 4)
+                .unwrap_err(),
+            GeneratedArgumentPackError::FieldMismatch {
+                argument_index: 0,
+                property,
+            }
+        );
+    }
+
+    #[test]
+    fn safe_slice_binding_checks_element_address_ownership_and_alias_facts() {
+        let identity =
+            <f32 as GeneratedDeviceScalarV1>::shared_slice_type_identity_v1(PointerWidth::Bits64);
+        let field = |kind, address_space, ownership, alias_class| {
+            AbiField::new(
+                Name::new("input").unwrap(),
+                0,
+                16,
+                8,
+                kind,
+                Mutability::Immutable,
+                Access::ReadOnly,
+                address_space,
+                identity,
+                ownership,
+                alias_class,
+            )
+            .unwrap()
+        };
+        let f32_slice = AbiKind::Slice {
+            element_size: 4,
+            element_alignment: 4,
+        };
+
+        assert_read_slice_field_mismatch(
+            field(
+                AbiKind::Slice {
+                    element_size: 8,
+                    element_alignment: 8,
+                },
+                AddressSpace::Global,
+                ArgumentOwnership::SharedBorrow,
+                AliasClass::SharedReadOnly,
+            ),
+            GeneratedArgumentFieldProperty::Kind,
+        );
+        assert_read_slice_field_mismatch(
+            field(
+                f32_slice,
+                AddressSpace::Generic,
+                ArgumentOwnership::SharedBorrow,
+                AliasClass::SharedReadOnly,
+            ),
+            GeneratedArgumentFieldProperty::AddressSpace,
+        );
+        assert_read_slice_field_mismatch(
+            field(
+                f32_slice,
+                AddressSpace::Global,
+                ArgumentOwnership::SharedBorrow,
+                AliasClass::SharedAtomic,
+            ),
+            GeneratedArgumentFieldProperty::AliasClass,
+        );
+
+        let read_write_identity =
+            <f32 as GeneratedDeviceScalarV1>::disjoint_slice_type_identity_v1(PointerWidth::Bits64);
+        let raw_pointer_field = AbiField::new(
+            Name::new("state").unwrap(),
+            0,
+            16,
+            8,
+            f32_slice,
+            Mutability::Mutable,
+            Access::ReadWrite,
+            AddressSpace::Global,
+            read_write_identity,
+            ArgumentOwnership::RawPointer,
+            AliasClass::Unrestricted,
+        )
+        .unwrap();
+        let manifest = layout(vec![raw_pointer_field.clone()], 16, 8);
+        let plan = validate(&manifest, &generated(vec![raw_pointer_field], 16, 8)).unwrap();
+        assert_eq!(
+            plan.bind_generated_read_write_slice_v1::<f32>(0, 0x2000, 4)
+                .unwrap_err(),
+            GeneratedArgumentPackError::FieldMismatch {
+                argument_index: 0,
+                property: GeneratedArgumentFieldProperty::Ownership,
+            }
+        );
     }
 
     #[test]

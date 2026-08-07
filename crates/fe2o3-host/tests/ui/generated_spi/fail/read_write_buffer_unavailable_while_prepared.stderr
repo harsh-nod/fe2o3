@@ -1,0 +1,10 @@
+error[E0502]: cannot borrow `*state` as immutable because it is also borrowed as mutable
+  --> tests/ui/generated_spi/fail/read_write_buffer_unavailable_while_prepared.rs:15:13
+   |
+11 |     let state_capability = GeneratedReadWriteDeviceSlice::new(observed, state)?;
+   |                                                                         ----- mutable borrow occurs here
+...
+15 |     let _ = state.to_host_vec(stream)?;
+   |             ^^^^^ immutable borrow occurs here
+16 |     drop(prepared_scope);
+   |          -------------- mutable borrow later used here

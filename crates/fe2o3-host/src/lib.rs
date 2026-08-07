@@ -26,7 +26,9 @@ pub use argument_alias::{
     InvalidAtomicOrdering, RegionError,
 };
 #[doc(hidden)]
-pub use argument_alias::{GeneratedReadDeviceSlice, GeneratedWriteDeviceSlice};
+pub use argument_alias::{
+    GeneratedReadDeviceSlice, GeneratedReadWriteDeviceSlice, GeneratedWriteDeviceSlice,
+};
 pub use artifact_binding::{
     ARTIFACT_KERNEL_IDENTITY_VERSION, ArtifactBindingError, ArtifactKernelIdentityV1,
     ArtifactLaunchContractError, ArtifactRevalidationError, ValidatedArtifactSelectionV1,
@@ -47,8 +49,9 @@ pub use fe2o3_kernel_descriptor::{BlockSizeV1, DimensionsV1, KernelId, LaunchCon
 #[doc(hidden)]
 pub use generated_argument_plan::{
     CompilerGeneratedArgumentLayoutV1, GeneratedArgumentFieldProperty,
-    GeneratedArgumentLayoutError, GeneratedArgumentPackingError, GeneratedArgumentPackingPlanV1,
-    GeneratedPackingComponentKindV1, GeneratedPackingComponentV1,
+    GeneratedArgumentLayoutError, GeneratedArgumentPackError, GeneratedArgumentPackingError,
+    GeneratedArgumentPackingPlanV1, GeneratedDeviceScalarV1, GeneratedPackingComponentKindV1,
+    GeneratedPackingComponentV1,
 };
 #[doc(hidden)]
 pub use generated_vecadd::{
@@ -113,12 +116,13 @@ pub mod __generated {
         AuthenticatedKernelArtifactV1, CompilerGeneratedArgumentLayoutV1,
         CompilerGeneratedKernelContractV1, CompilerGeneratedKernelExpectationV1,
         CompilerGeneratedKernelProfileV1, GeneratedAdmittedLaunch, GeneratedArgumentFieldProperty,
-        GeneratedArgumentLayoutError, GeneratedArgumentPackingError,
+        GeneratedArgumentLayoutError, GeneratedArgumentPackError, GeneratedArgumentPackingError,
         GeneratedArgumentPackingPlanV1, GeneratedArtifactAuthenticationError,
-        GeneratedKernelBindingV1, GeneratedKernelProfileError, GeneratedMarkerBindingError,
-        GeneratedPackingComponentKindV1, GeneratedPackingComponentV1, GeneratedReadDeviceSlice,
-        GeneratedVecAddKernelV1, GeneratedVecAddLoadError, GeneratedVecAddPrepareError,
-        GeneratedVecAddPreparedV1, GeneratedVecAddProfileError, GeneratedWorkerV2VecAddBindError,
+        GeneratedDeviceScalarV1, GeneratedKernelBindingV1, GeneratedKernelProfileError,
+        GeneratedMarkerBindingError, GeneratedPackingComponentKindV1, GeneratedPackingComponentV1,
+        GeneratedReadDeviceSlice, GeneratedReadWriteDeviceSlice, GeneratedVecAddKernelV1,
+        GeneratedVecAddLoadError, GeneratedVecAddPrepareError, GeneratedVecAddPreparedV1,
+        GeneratedVecAddProfileError, GeneratedWorkerV2VecAddBindError,
         GeneratedWorkerV2VecAddCompletionV1, GeneratedWorkerV2VecAddExecutorV1,
         GeneratedWorkerV2VecAddPrepareError, GeneratedWorkerV2VecAddPreparedV1,
         GeneratedWriteDeviceSlice, LoadedKernelLoadError,
