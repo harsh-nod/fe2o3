@@ -1,6 +1,6 @@
 use crate::{
     AdmittedFinalizedWorkerV2BundleV1, AdmittedWorkerV2TypedKernelV1, ArtifactKernelIdentityV1,
-    CompilerGeneratedKernelContractV1, DeviceIdentity, FinalizedWorkerV2BundleAdmissionError,
+    CompilerGeneratedKernelExpectationV1, DeviceIdentity, FinalizedWorkerV2BundleAdmissionError,
     PhysicalMetadataValueV1, PublishedKernelPhysicalLayoutV1, PublishedPhysicalLaunchLayoutV1,
     WorkerV2TypedKernelSelectionError,
 };
@@ -202,7 +202,7 @@ impl<K> WorkerV2PrerequisiteRequestV1<'_, K> {
     }
 }
 
-impl<K: CompilerGeneratedKernelContractV1> WorkerV2PrerequisiteRequestV1<'_, K> {
+impl<K: CompilerGeneratedKernelExpectationV1> WorkerV2PrerequisiteRequestV1<'_, K> {
     pub const fn marker_logical_name(&self) -> &'static str {
         K::LOGICAL_NAME
     }
@@ -225,7 +225,7 @@ impl<K: CompilerGeneratedKernelContractV1> WorkerV2PrerequisiteRequestV1<'_, K> 
 /// the request, and establish that `K` is the exact Rust marker whose complete
 /// ABI and executable memory effects are represented. A false implementation
 /// can authorize native code loading and dispatch from safe generated code.
-pub unsafe trait WorkerV2PrerequisiteAuthenticatorV1<K: CompilerGeneratedKernelContractV1> {
+pub unsafe trait WorkerV2PrerequisiteAuthenticatorV1<K: CompilerGeneratedKernelExpectationV1> {
     type Error;
 
     /// Authenticates all non-runtime prerequisites for one exact admission.
@@ -260,7 +260,7 @@ impl<K> fmt::Debug for AuthenticatedWorkerV2ExecutableV1<K> {
     }
 }
 
-impl<K: CompilerGeneratedKernelContractV1> AuthenticatedWorkerV2ExecutableV1<K> {
+impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV2ExecutableV1<K> {
     pub fn authenticate<A: WorkerV2PrerequisiteAuthenticatorV1<K>>(
         admission: AdmittedFinalizedWorkerV2BundleV1,
         authenticator: &mut A,
@@ -364,7 +364,7 @@ fn validate_required_profile(
     Ok(())
 }
 
-fn validate_prerequisites<K: CompilerGeneratedKernelContractV1>(
+fn validate_prerequisites<K: CompilerGeneratedKernelExpectationV1>(
     request: &WorkerV2PrerequisiteRequestV1<'_, K>,
     actual: &WorkerV2PrerequisiteDecisionV1,
 ) -> Result<(), WorkerV2PrerequisiteError> {
@@ -1336,7 +1336,7 @@ impl<K, A: ReviewedHsaExecutableLifecycleAdapterV1> LoadedHsaExecutableV1<K, A> 
     /// compiler/Verus prerequisite decision. Consequently it has no dispatch
     /// operation and cannot be converted into the existing vecadd executor.
     #[doc(hidden)]
-    pub fn select_typed_kernel<S: CompilerGeneratedKernelContractV1>(
+    pub fn select_typed_kernel<S: CompilerGeneratedKernelExpectationV1>(
         &self,
     ) -> Result<InertLoadedWorkerV2KernelSelectionV1<'_, S>, WorkerV2TypedKernelSelectionError>
     {
@@ -1443,7 +1443,7 @@ impl<K> InertLoadedWorkerV2KernelSelectionV1<'_, K> {
     }
 }
 
-impl<K: CompilerGeneratedKernelContractV1> InertLoadedWorkerV2KernelSelectionV1<'_, K> {
+impl<K: CompilerGeneratedKernelExpectationV1> InertLoadedWorkerV2KernelSelectionV1<'_, K> {
     /// Consumes this loaded-executable selection and authenticates the exact
     /// selected marker's compiler, Verus, ABI, and effect prerequisites.
     ///
@@ -1516,7 +1516,7 @@ impl<K> fmt::Debug for AuthenticatedLoadedWorkerV2KernelSelectionV1<K> {
     }
 }
 
-impl<K: CompilerGeneratedKernelContractV1> AuthenticatedLoadedWorkerV2KernelSelectionV1<K> {
+impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedLoadedWorkerV2KernelSelectionV1<K> {
     pub const fn requires_prerequisite_authentication(&self) -> bool {
         false
     }
@@ -2571,7 +2571,9 @@ mod tests {
     use crate::worker_v2_bundle_admission::tests::{
         TestDirectory, admitted_for_lifecycle_test, admitted_two_kernel_for_lifecycle_test,
     };
-    use crate::{CompilerGeneratedKernelProfileV1, ObservedContext};
+    use crate::{
+        CompilerGeneratedKernelContractV1, CompilerGeneratedKernelProfileV1, ObservedContext,
+    };
     use fe2o3_device::KernelMarkerV1;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -2603,6 +2605,24 @@ mod tests {
         }
     }
 
+    struct ExpectationOnlyPrimaryKernel;
+
+    unsafe impl KernelMarkerV1 for ExpectationOnlyPrimaryKernel {
+        type Function = fn();
+        type Registration = (u16, &'static str, &'static str, fn());
+
+        const LOGICAL_NAME: &'static str = "logical_primary";
+        const EXPORT_NAME: &'static str = "primary_kernel";
+        const FUNCTION: Self::Function = test_kernel;
+        const REGISTRATION: &'static Self::Registration = &TEST_REGISTRATION;
+    }
+
+    unsafe impl CompilerGeneratedKernelExpectationV1 for ExpectationOnlyPrimaryKernel {
+        const PROFILE: CompilerGeneratedKernelProfileV1 =
+            CompilerGeneratedKernelProfileV1::TypedVecAddF32RustcLayoutV2;
+        const KERNEL_BINDING_ID_V1: [u8; 32] = [0x4b; 32];
+    }
+
     struct SecondTestKernel;
 
     unsafe impl KernelMarkerV1 for SecondTestKernel {
@@ -2616,14 +2636,10 @@ mod tests {
             &(1, "logical_second", "second_kernel", test_kernel);
     }
 
-    unsafe impl CompilerGeneratedKernelContractV1 for SecondTestKernel {
+    unsafe impl CompilerGeneratedKernelExpectationV1 for SecondTestKernel {
         const PROFILE: CompilerGeneratedKernelProfileV1 =
             CompilerGeneratedKernelProfileV1::TypedVecAddF32RustcLayoutV2;
         const KERNEL_BINDING_ID_V1: [u8; 32] = [0x5b; 32];
-
-        fn artifact_container_bytes() -> &'static [u8] {
-            &[]
-        }
     }
 
     fn digest(seed: u8) -> PayloadDigest {
@@ -2654,7 +2670,7 @@ mod tests {
         }
     }
 
-    unsafe impl<K: CompilerGeneratedKernelContractV1> WorkerV2PrerequisiteAuthenticatorV1<K>
+    unsafe impl<K: CompilerGeneratedKernelExpectationV1> WorkerV2PrerequisiteAuthenticatorV1<K>
         for FakeAuthenticator
     {
         type Error = &'static str;
@@ -3201,6 +3217,35 @@ mod tests {
         assert_eq!(unloads.load(Ordering::SeqCst), 1);
     }
 
+    fn dispatch_expectation_on_loaded<K: CompilerGeneratedKernelExpectationV1>(
+        loaded: &mut LoadedHsaExecutableV1<TestKernel, FakeHsaAdapter>,
+        geometry: HsaLaunchGeometryV1,
+        kernarg_len: usize,
+        explicit_byte_len: usize,
+        implicit_byte_offset: usize,
+        implicit_byte_len: usize,
+    ) -> Result<HsaCompletedSelectedWorkerV2DispatchV1<K>, HsaGeneratedDispatchError<&'static str>>
+    {
+        let selection = loaded.select_typed_kernel::<K>().unwrap();
+        let authenticated = selection
+            .authenticate(&mut FakeAuthenticator::exact())
+            .unwrap();
+        let resolved = authenticated.resolve(loaded).unwrap();
+        let mut kernarg = AlignedKernarg([0; 304]);
+        kernarg.0[..48].fill(0x5a);
+        // SAFETY: this helper supplies the fixture's exact explicit bytes and
+        // retains its empty synthetic resource set through synchronous return.
+        unsafe {
+            resolved.dispatch_generated_and_wait(
+                geometry,
+                &mut kernarg.0[..kernarg_len],
+                explicit_byte_len,
+                implicit_byte_offset,
+                implicit_byte_len,
+            )
+        }
+    }
+
     fn dispatch_second_kernel(
         seed: u8,
         fault: AdapterFault,
@@ -3215,28 +3260,60 @@ mod tests {
     > {
         let (loaded, unloads, _directory) = load_two_kernels(seed);
         let mut loaded = loaded.unwrap();
-        let selection = loaded.select_typed_kernel::<SecondTestKernel>().unwrap();
-        let authenticated = selection
-            .authenticate(&mut FakeAuthenticator::exact())
-            .unwrap();
-        let resolved = authenticated.resolve(&mut loaded).unwrap();
-        resolved.loaded.adapter.fault = fault;
-        let mut kernarg = AlignedKernarg([0; 304]);
-        kernarg.0[..48].fill(0x5a);
-        // SAFETY: this test supplies the fixture's exact explicit bytes and
-        // retains its empty synthetic resource set through synchronous return.
-        let result = unsafe {
-            resolved.dispatch_generated_and_wait(
-                geometry,
-                &mut kernarg.0[..kernarg_len],
-                explicit_byte_len,
-                implicit_byte_offset,
-                implicit_byte_len,
-            )
-        };
+        loaded.adapter.fault = fault;
+        let result = dispatch_expectation_on_loaded::<SecondTestKernel>(
+            &mut loaded,
+            geometry,
+            kernarg_len,
+            explicit_byte_len,
+            implicit_byte_offset,
+            implicit_byte_len,
+        );
         loaded.unload().unwrap();
         assert_eq!(unloads.load(Ordering::SeqCst), 1);
         result
+    }
+
+    #[test]
+    fn two_expectation_only_markers_dispatch_one_shared_loaded_bundle() {
+        let (loaded, unloads, _directory) = load_two_kernels(0x83);
+        let mut loaded = loaded.unwrap();
+        let geometry = HsaLaunchGeometryV1::new([1, 1, 1], [256, 1, 1], 0);
+
+        let first = dispatch_expectation_on_loaded::<ExpectationOnlyPrimaryKernel>(
+            &mut loaded,
+            geometry,
+            304,
+            48,
+            48,
+            256,
+        )
+        .unwrap();
+        assert_eq!(
+            first.artifact_identity().symbol().as_str(),
+            "primary_kernel"
+        );
+
+        let second = dispatch_expectation_on_loaded::<SecondTestKernel>(
+            &mut loaded,
+            geometry,
+            304,
+            48,
+            48,
+            256,
+        )
+        .unwrap();
+        assert_eq!(
+            second.artifact_identity().symbol().as_str(),
+            "second_kernel"
+        );
+        assert_ne!(
+            first.completed_dispatch().kernel_object(),
+            second.completed_dispatch().kernel_object()
+        );
+
+        loaded.unload().unwrap();
+        assert_eq!(unloads.load(Ordering::SeqCst), 1);
     }
 
     #[test]

@@ -1,0 +1,33 @@
+error[E0277]: the trait bound `Marker: fe2o3_host::CompilerGeneratedKernelContractV1` is not satisfied
+  --> tests/ui/authenticated_artifact/expectation_only_cannot_authenticate_embedded.rs:28:13
+   |
+28 |     let _ = AuthenticatedKernelArtifactV1::<Marker>::authenticate(observed);
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+   |
+help: the trait `fe2o3_host::CompilerGeneratedKernelContractV1` is not implemented for `Marker`
+  --> tests/ui/authenticated_artifact/expectation_only_cannot_authenticate_embedded.rs:9:1
+   |
+ 9 | struct Marker;
+   | ^^^^^^^^^^^^^
+note: required by a bound in `fe2o3_host::AuthenticatedKernelArtifactV1`
+  --> src/artifact_binding.rs
+   |
+   | pub struct AuthenticatedKernelArtifactV1<K: CompilerGeneratedKernelContractV1> {
+   |                                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `AuthenticatedKernelArtifactV1`
+
+error[E0599]: the associated function or constant `authenticate` exists for struct `fe2o3_host::AuthenticatedKernelArtifactV1<Marker>`, but its trait bounds were not satisfied
+  --> tests/ui/authenticated_artifact/expectation_only_cannot_authenticate_embedded.rs:28:54
+   |
+ 9 | struct Marker;
+   | ------------- doesn't satisfy `_: CompilerGeneratedKernelContractV1`
+...
+28 |     let _ = AuthenticatedKernelArtifactV1::<Marker>::authenticate(observed);
+   |                                                      ^^^^^^^^^^^^ associated function or constant cannot be called on `fe2o3_host::AuthenticatedKernelArtifactV1<Marker>` due to unsatisfied trait bounds
+   |
+   = note: the following trait bounds were not satisfied:
+           `Marker: fe2o3_host::CompilerGeneratedKernelContractV1`
+note: the trait `fe2o3_host::CompilerGeneratedKernelContractV1` must be implemented
+  --> src/artifact_binding.rs
+   |
+   | pub unsafe trait CompilerGeneratedKernelContractV1: KernelMarkerV1 {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -34,8 +34,9 @@ pub use artifact_binding::{
 #[doc(hidden)]
 pub use artifact_binding::{
     AuthenticatedKernelArtifactV1, CompilerGeneratedKernelContractV1,
-    CompilerGeneratedKernelProfileV1, GeneratedArtifactAuthenticationError,
-    GeneratedKernelBindingV1, GeneratedKernelProfileError, GeneratedMarkerBindingError,
+    CompilerGeneratedKernelExpectationV1, CompilerGeneratedKernelProfileV1,
+    GeneratedArtifactAuthenticationError, GeneratedKernelBindingV1, GeneratedKernelProfileError,
+    GeneratedMarkerBindingError,
 };
 pub use cooperative_launch::{
     CooperativeAdmissionError, CooperativeLaunchAdmission, CooperativeLaunchError,
@@ -110,14 +111,14 @@ pub use worker_v2_bundle_admission::{
 pub mod __generated {
     pub use crate::{
         AuthenticatedKernelArtifactV1, CompilerGeneratedArgumentLayoutV1,
-        CompilerGeneratedKernelContractV1, CompilerGeneratedKernelProfileV1,
-        GeneratedAdmittedLaunch, GeneratedArgumentFieldProperty, GeneratedArgumentLayoutError,
-        GeneratedArgumentPackingError, GeneratedArgumentPackingPlanV1,
-        GeneratedArtifactAuthenticationError, GeneratedKernelBindingV1,
-        GeneratedKernelProfileError, GeneratedMarkerBindingError, GeneratedPackingComponentKindV1,
-        GeneratedPackingComponentV1, GeneratedReadDeviceSlice, GeneratedVecAddKernelV1,
-        GeneratedVecAddLoadError, GeneratedVecAddPrepareError, GeneratedVecAddPreparedV1,
-        GeneratedVecAddProfileError, GeneratedWorkerV2VecAddBindError,
+        CompilerGeneratedKernelContractV1, CompilerGeneratedKernelExpectationV1,
+        CompilerGeneratedKernelProfileV1, GeneratedAdmittedLaunch, GeneratedArgumentFieldProperty,
+        GeneratedArgumentLayoutError, GeneratedArgumentPackingError,
+        GeneratedArgumentPackingPlanV1, GeneratedArtifactAuthenticationError,
+        GeneratedKernelBindingV1, GeneratedKernelProfileError, GeneratedMarkerBindingError,
+        GeneratedPackingComponentKindV1, GeneratedPackingComponentV1, GeneratedReadDeviceSlice,
+        GeneratedVecAddKernelV1, GeneratedVecAddLoadError, GeneratedVecAddPrepareError,
+        GeneratedVecAddPreparedV1, GeneratedVecAddProfileError, GeneratedWorkerV2VecAddBindError,
         GeneratedWorkerV2VecAddCompletionV1, GeneratedWorkerV2VecAddExecutorV1,
         GeneratedWorkerV2VecAddPrepareError, GeneratedWorkerV2VecAddPreparedV1,
         GeneratedWriteDeviceSlice, LoadedKernelLoadError,

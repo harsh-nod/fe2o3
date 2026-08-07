@@ -1,0 +1,11 @@
+error[E0200]: the trait `fe2o3_host::CompilerGeneratedKernelExpectationV1` requires an `unsafe impl` declaration
+  --> tests/ui/authenticated_artifact/expectation_impl_requires_unsafe.rs:20:1
+   |
+20 | impl CompilerGeneratedKernelExpectationV1 for Marker {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: the trait `fe2o3_host::CompilerGeneratedKernelExpectationV1` enforces invariants that the compiler can't check. Review the trait documentation and make sure this implementation upholds those invariants before adding the `unsafe` keyword
+help: add `unsafe` to this trait implementation
+   |
+20 | unsafe impl CompilerGeneratedKernelExpectationV1 for Marker {
+   | ++++++

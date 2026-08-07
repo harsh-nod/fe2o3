@@ -2,7 +2,7 @@ use crate::artifact_binding::validate_generated_profile;
 use crate::published_direct_link::payload_kernel_set;
 use crate::published_hsaco_inspection::inspect_payload_against_artifact_identity;
 use crate::{
-    ArtifactBindingError, ArtifactKernelIdentityV1, CompilerGeneratedKernelContractV1,
+    ArtifactBindingError, ArtifactKernelIdentityV1, CompilerGeneratedKernelExpectationV1,
     CompilerGeneratedKernelProfileV1, DeviceIdentity, GeneratedKernelProfileError, ObservedContext,
     PublishedKernelPhysicalLayoutV1, PublishedPhysicalLayoutInspectionError,
     ValidatedArtifactSelectionV1,
@@ -203,7 +203,7 @@ impl AdmittedFinalizedWorkerV2BundleV1 {
     /// bind the exact HSA executable object and resolve this symbol through the
     /// reviewed lifecycle adapter.
     #[doc(hidden)]
-    pub fn select_typed_kernel<K: CompilerGeneratedKernelContractV1>(
+    pub fn select_typed_kernel<K: CompilerGeneratedKernelExpectationV1>(
         &self,
     ) -> Result<AdmittedWorkerV2TypedKernelV1<'_, K>, WorkerV2TypedKernelSelectionError> {
         let identity_index = select_typed_kernel_identity::<K>(
@@ -462,7 +462,7 @@ fn validate_complete_identity_set(
     Ok(())
 }
 
-fn select_typed_kernel_identity<K: CompilerGeneratedKernelContractV1>(
+fn select_typed_kernel_identity<K: CompilerGeneratedKernelExpectationV1>(
     identities: &[ArtifactKernelIdentityV1],
     target: &fe2o3_artifacts::TargetIdentity,
     finalized_payload: PayloadDigest,
@@ -883,7 +883,6 @@ pub(crate) mod tests {
     use reserved_fe2o3_symbols::TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2;
     use std::fs;
     use std::path::{Path, PathBuf};
-    use std::sync::OnceLock;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(1);
@@ -1601,27 +1600,13 @@ pub(crate) mod tests {
                 const REGISTRATION: &'static Self::Registration = &();
             }
 
-            // SAFETY: The private fixture emits a canonical single-kernel V2
-            // container for this exact marker. Selection tests never load it.
-            unsafe impl CompilerGeneratedKernelContractV1 for $marker {
+            // SAFETY: The private fixture independently constructs the exact
+            // profile and binding identity for this marker. The admitted
+            // shared bundle supplies artifact transport separately.
+            unsafe impl CompilerGeneratedKernelExpectationV1 for $marker {
                 const PROFILE: CompilerGeneratedKernelProfileV1 =
                     CompilerGeneratedKernelProfileV1::TypedVecAddF32RustcLayoutV2;
                 const KERNEL_BINDING_ID_V1: [u8; 32] = $binding;
-
-                fn artifact_container_bytes() -> &'static [u8] {
-                    static BYTES: OnceLock<Vec<u8>> = OnceLock::new();
-                    BYTES
-                        .get_or_init(|| {
-                            selection_container(
-                                "gfx942",
-                                0xe1,
-                                &[SelectionSpec::new($logical, $export, $binding)],
-                                None,
-                            )
-                            .to_bytes()
-                        })
-                        .as_slice()
-                }
             }
         };
     }

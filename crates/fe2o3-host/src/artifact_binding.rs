@@ -263,7 +263,31 @@ impl ValidatedArtifactSelectionV1 {
     }
 }
 
-/// Trusted backend contract for one compiler-generated kernel artifact.
+/// Trusted backend expectation for one compiler-generated kernel.
+///
+/// This trait binds a marker to the independently generated host ABI, effects,
+/// launch, and kernel-binding expectation used to authenticate a kernel from a
+/// shared artifact. It deliberately carries no artifact bytes: Worker V2
+/// admission supplies and authenticates one shared bundle separately.
+///
+/// # Safety
+///
+/// The implementation must be emitted by the trusted compiler backend. Its
+/// profile and binding identity must describe `Self::FUNCTION` exactly,
+/// including the complete physical host ABI, memory effects, launch contract,
+/// and all behavior relevant to safe loading and dispatch. A false
+/// implementation can authorize dispatch of native code under the wrong Rust
+/// signature or safety contract.
+#[doc(hidden)]
+pub unsafe trait CompilerGeneratedKernelExpectationV1: KernelMarkerV1 {
+    /// Versioned host ABI and memory-effect profile expected by generated code.
+    const PROFILE: CompilerGeneratedKernelProfileV1;
+
+    /// Full backend-validated identity used by private host linker symbols.
+    const KERNEL_BINDING_ID_V1: [u8; 32];
+}
+
+/// Trusted backend contract for one embedded compiler-generated artifact.
 ///
 /// This trait is an implementation boundary for generated code, not an
 /// application extension point. Authentication always decodes the bytes
@@ -296,6 +320,17 @@ pub unsafe trait CompilerGeneratedKernelContractV1: KernelMarkerV1 {
 
     /// Returns the exact canonical artifact container embedded by the backend.
     fn artifact_container_bytes() -> &'static [u8];
+}
+
+// SAFETY: `CompilerGeneratedKernelContractV1` has the same profile and binding
+// obligations and additionally authenticates exact embedded artifact bytes.
+// Forwarding those constants preserves the existing generated API while
+// allowing shared-bundle consumers to require only the narrower expectation.
+unsafe impl<K: CompilerGeneratedKernelContractV1> CompilerGeneratedKernelExpectationV1 for K {
+    const PROFILE: CompilerGeneratedKernelProfileV1 =
+        <K as CompilerGeneratedKernelContractV1>::PROFILE;
+    const KERNEL_BINDING_ID_V1: [u8; 32] =
+        <K as CompilerGeneratedKernelContractV1>::KERNEL_BINDING_ID_V1;
 }
 
 /// Exact generated host contract understood by this runtime version.
@@ -370,8 +405,12 @@ impl<K: CompilerGeneratedKernelContractV1> AuthenticatedKernelArtifactV1<K> {
             .map_err(GeneratedArtifactAuthenticationError::Selection)?;
         let validated = ValidatedArtifactSelectionV1::validate(selected, observed)
             .map_err(GeneratedArtifactAuthenticationError::Binding)?;
-        validate_generated_profile(K::PROFILE, K::KERNEL_BINDING_ID_V1, validated.identity())
-            .map_err(GeneratedArtifactAuthenticationError::Profile)?;
+        validate_generated_profile(
+            <K as CompilerGeneratedKernelContractV1>::PROFILE,
+            <K as CompilerGeneratedKernelContractV1>::KERNEL_BINDING_ID_V1,
+            validated.identity(),
+        )
+        .map_err(GeneratedArtifactAuthenticationError::Profile)?;
 
         // SAFETY: `CompilerGeneratedKernelContractV1` requires the trusted
         // backend to establish the exact marker, identity, complete ABI,

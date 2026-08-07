@@ -97,6 +97,22 @@ marker!(DuplicateMatchMarker, {
     mutate_all(&mut bytes, b"wector_add", b"vector_add");
     bytes
 });
+
+#[test]
+fn embedded_contract_automatically_supplies_shared_bundle_expectation() {
+    fn expectation<K: CompilerGeneratedKernelExpectationV1>()
+    -> (CompilerGeneratedKernelProfileV1, [u8; 32]) {
+        (K::PROFILE, K::KERNEL_BINDING_ID_V1)
+    }
+
+    assert_eq!(
+        expectation::<ValidMarker>(),
+        (
+            CompilerGeneratedKernelProfileV1::TypedVecAddF32V1,
+            [0x42; 32]
+        )
+    );
+}
 marker!(PayloadMutationMarker, {
     let mut bytes = container_bytes(&[(0x11, LOGICAL_NAME, EXPORT_NAME)], "gfx942");
     let last = bytes.last_mut().expect("fixture has a payload");
