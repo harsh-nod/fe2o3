@@ -1104,6 +1104,73 @@ mod tests {
     }
 
     #[test]
+    fn prepared_queue_and_kernarg_cannot_cross_kernel_identities() {
+        let (executable, first) = handles();
+        let mut second = ReviewedHsaKernelV1 {
+            symbol: 16,
+            kernel_object: 17,
+            executable_identity: first.executable_identity,
+            identity: HsaKernelObjectIdentityV1::new([5; 32]).unwrap(),
+            kernarg_segment_size: first.kernarg_segment_size,
+            kernarg_segment_alignment: first.kernarg_segment_alignment,
+            group_segment_size: first.group_segment_size,
+            private_segment_size: first.private_segment_size,
+        };
+        let mut core = make_core(MockApi::default());
+        let mut pending = None;
+        let mut bytes = kernarg();
+        prepare_implicit_kernarg(
+            &mut core,
+            &mut pending,
+            &executable,
+            &first,
+            geometry(),
+            EXPLICIT_BYTES,
+            IMPLICIT_OFFSET,
+            IMPLICIT_BYTES,
+            &mut bytes,
+        )
+        .unwrap();
+
+        assert!(matches!(
+            launch_and_wait(
+                &mut core,
+                &mut pending,
+                &executable,
+                &second,
+                geometry(),
+                &mut bytes,
+            ),
+            Err(HsaRuntimeAdapterError::InvalidExecutableObservation(
+                "dispatch handle, geometry, or kernarg binding"
+            ))
+        ));
+        assert!(pending.is_none());
+        assert_eq!(core.api.log.last(), Some(&"queue_destroy"));
+        assert!(!core.api.log.contains(&"memory_allocate"));
+
+        second.executable_identity = HsaExecutableObjectIdentityV1::new([9; 32]).unwrap();
+        let mut fresh = kernarg();
+        assert!(matches!(
+            prepare_implicit_kernarg(
+                &mut core,
+                &mut pending,
+                &executable,
+                &second,
+                geometry(),
+                EXPLICIT_BYTES,
+                IMPLICIT_OFFSET,
+                IMPLICIT_BYTES,
+                &mut fresh,
+            ),
+            Err(HsaRuntimeAdapterError::InvalidImplicitKernarg(
+                "kernel/executable identity"
+            ))
+        ));
+        assert!(pending.is_none());
+    }
+
+    #[test]
     fn implicit_queue_creation_and_observation_fail_closed() {
         let (executable, kernel) = handles();
         let mut api = MockApi::default();

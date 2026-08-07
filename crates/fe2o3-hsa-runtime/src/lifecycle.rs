@@ -39,10 +39,62 @@ pub struct ReviewedHsaKernelV1 {
     pub(crate) private_segment_size: u32,
 }
 
+/// Linear ownership of a fixed set of distinct kernels from one executable.
+///
+/// The set borrows its executable so that safe Rust cannot unload the native
+/// executable while any retained kernel remains accessible. Resolving a set
+/// authenticates native identities only; it does not establish a typed kernarg
+/// ABI for any kernel.
+pub struct ReviewedHsaKernelSetV1<'executable, const N: usize> {
+    _executable: &'executable ReviewedHsaExecutableV1,
+    kernels: [ReviewedHsaKernelV1; N],
+}
+
+impl<const N: usize> ReviewedHsaKernelSetV1<'_, N> {
+    /// Returns one retained kernel without transferring its linear ownership.
+    pub fn get(&self, index: usize) -> Option<&ReviewedHsaKernelV1> {
+        self.kernels.get(index)
+    }
+
+    /// Returns the number of retained kernels.
+    pub const fn len(&self) -> usize {
+        N
+    }
+
+    /// Returns whether this set has no kernels.
+    pub const fn is_empty(&self) -> bool {
+        N == 0
+    }
+}
+
 impl Drop for ReviewedHsaKernelV1 {
     fn drop(&mut self) {
         // HSA symbols have no destroy operation. This explicit drop boundary
         // still makes the linear kernel token end before executable teardown.
+    }
+}
+
+impl ReviewedHsaRuntimeAdapterV1 {
+    /// Resolves and linearly retains distinct kernel symbols from one executable.
+    ///
+    /// # Safety
+    ///
+    /// `export_symbols` must identify kernels in the authenticated code object
+    /// supplied when `executable` was loaded. This operation authenticates HSA
+    /// symbol and executable identities, but callers must separately establish
+    /// the exact reviewed kernarg ABI before dispatch.
+    pub unsafe fn resolve_kernel_set<'executable, const N: usize>(
+        &mut self,
+        executable: &'executable ReviewedHsaExecutableV1,
+        export_symbols: [&str; N],
+    ) -> Result<
+        (
+            ReviewedHsaKernelSetV1<'executable, N>,
+            [HsaKernelResolutionObservationV1; N],
+        ),
+        HsaRuntimeAdapterError,
+    > {
+        resolve_kernel_set(&mut self.core, executable, export_symbols)
     }
 }
 
@@ -248,6 +300,62 @@ fn resolve_kernel<A: ExecutableApi>(
     ))
 }
 
+fn resolve_kernel_set<'executable, A: ExecutableApi, const N: usize>(
+    core: &mut AdapterCore<A>,
+    executable: &'executable ReviewedHsaExecutableV1,
+    export_symbols: [&str; N],
+) -> Result<
+    (
+        ReviewedHsaKernelSetV1<'executable, N>,
+        [HsaKernelResolutionObservationV1; N],
+    ),
+    HsaRuntimeAdapterError,
+> {
+    if N == 0 {
+        return Err(HsaRuntimeAdapterError::InvalidExecutableObservation(
+            "empty kernel set",
+        ));
+    }
+    for (index, name) in export_symbols.iter().enumerate() {
+        if export_symbols[..index].contains(name) {
+            return Err(HsaRuntimeAdapterError::InvalidExecutableObservation(
+                "duplicate export symbol",
+            ));
+        }
+    }
+
+    let mut kernels = Vec::with_capacity(N);
+    let mut observations = Vec::with_capacity(N);
+    for export_symbol in export_symbols {
+        let (kernel, observation) = resolve_kernel(core, executable, export_symbol)?;
+        if kernels.iter().any(|retained: &ReviewedHsaKernelV1| {
+            retained.symbol == kernel.symbol
+                || retained.kernel_object == kernel.kernel_object
+                || retained.identity == kernel.identity
+        }) {
+            return Err(HsaRuntimeAdapterError::InvalidExecutableObservation(
+                "distinct kernel symbol identities",
+            ));
+        }
+        kernels.push(kernel);
+        observations.push(observation);
+    }
+
+    Ok((
+        ReviewedHsaKernelSetV1 {
+            _executable: executable,
+            kernels: exact_array(kernels),
+        },
+        exact_array(observations),
+    ))
+}
+
+fn exact_array<T, const N: usize>(values: Vec<T>) -> [T; N] {
+    values
+        .try_into()
+        .unwrap_or_else(|_| unreachable!("collected exactly N values"))
+}
+
 fn unload_executable<A: ExecutableApi>(
     core: &mut AdapterCore<A>,
     mut executable: ReviewedHsaExecutableV1,
@@ -395,6 +503,8 @@ mod tests {
         failures: BTreeMap<&'static str, i32>,
         symbol: Option<SymbolFacts>,
         resolved_name: Option<String>,
+        symbols: BTreeMap<String, SymbolFacts>,
+        resolved_names: Vec<String>,
     }
 
     impl MockApi {
@@ -473,7 +583,13 @@ mod tests {
         ) -> Result<SymbolFacts, ApiError> {
             self.call("resolve_symbol")?;
             self.resolved_name = Some(name.to_owned());
-            Ok(self.symbol.clone().unwrap_or_else(valid_symbol))
+            self.resolved_names.push(name.to_owned());
+            Ok(self
+                .symbols
+                .get(name)
+                .cloned()
+                .or_else(|| self.symbol.clone())
+                .unwrap_or_else(valid_symbol))
         }
     }
 
@@ -545,6 +661,74 @@ mod tests {
                 "reader_destroy",
             ]
         );
+    }
+
+    #[test]
+    fn one_executable_retains_two_distinct_kernel_symbols() {
+        let bytes = b"one two-kernel code object";
+        let mut first = valid_symbol();
+        first.name = "first.kd".into();
+        let mut second = valid_symbol();
+        second.handle = 24;
+        second.kernel_object = 25;
+        second.name = "second.kd".into();
+        let mut api = MockApi::default();
+        api.symbols.insert(first.name.clone(), first);
+        api.symbols.insert(second.name.clone(), second);
+        let mut core = make_core(api);
+        let (executable, load) = load_executable(&mut core, bytes, digest(bytes)).unwrap();
+
+        let (kernels, resolutions) =
+            resolve_kernel_set(&mut core, &executable, ["first", "second"]).unwrap();
+
+        assert_eq!(kernels.len(), 2);
+        assert!(!kernels.is_empty());
+        let first = kernels.get(0).unwrap();
+        let second = kernels.get(1).unwrap();
+        assert_eq!(first.executable_identity, load.executable_object());
+        assert_eq!(second.executable_identity, load.executable_object());
+        assert_ne!(first.symbol, second.symbol);
+        assert_ne!(first.kernel_object, second.kernel_object);
+        assert_ne!(first.identity, second.identity);
+        assert_eq!(resolutions[0].export_symbol(), "first");
+        assert_eq!(resolutions[1].export_symbol(), "second");
+        assert_eq!(
+            core.api.resolved_names,
+            ["first.kd".to_owned(), "second.kd".to_owned()]
+        );
+
+        drop(kernels);
+        assert!(unload_executable(&mut core, executable).unwrap().released());
+    }
+
+    #[test]
+    fn kernel_set_rejects_duplicate_requests_and_native_identity_aliases() {
+        let bytes = b"one two-kernel code object";
+        let mut core = make_core(MockApi::default());
+        let (executable, _) = load_executable(&mut core, bytes, digest(bytes)).unwrap();
+        assert!(matches!(
+            resolve_kernel_set(&mut core, &executable, ["vecadd", "vecadd"]),
+            Err(HsaRuntimeAdapterError::InvalidExecutableObservation(
+                "duplicate export symbol"
+            ))
+        ));
+        assert!(core.api.resolved_names.is_empty());
+
+        let mut first = valid_symbol();
+        first.name = "first.kd".into();
+        let mut second = first.clone();
+        second.name = "second.kd".into();
+        core.api.symbols.insert(first.name.clone(), first);
+        core.api.symbols.insert(second.name.clone(), second);
+        assert!(matches!(
+            resolve_kernel_set(&mut core, &executable, ["first", "second"]),
+            Err(HsaRuntimeAdapterError::InvalidExecutableObservation(
+                "distinct kernel symbol identities"
+            ))
+        ));
+        assert_eq!(core.api.resolved_names, ["first.kd", "second.kd"]);
+
+        unload_executable(&mut core, executable).unwrap();
     }
 
     #[test]

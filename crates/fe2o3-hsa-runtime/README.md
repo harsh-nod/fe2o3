@@ -36,6 +36,16 @@ observations and a separate reviewed initializer; this adapter fails closed on
 every other kernarg layout, nonzero dynamic LDS, missing queue binding, or
 binding substitution.
 
+One loaded executable may resolve a fixed, const-generic set of distinct kernel
+symbols. The non-clone set owns each kernel token and borrows the executable,
+so safe Rust must release the whole set before unloading that executable. It
+rejects duplicate requested names and native symbol, kernel-object, or derived
+kernel-identity aliases. This is lifecycle and identity authority only: it does
+not claim that arbitrary resolved kernels have a typed ABI. Dispatch remains
+restricted to the exact vecadd kernarg profile above, and each prepared queue is
+bound to one executable identity, one kernel identity, one geometry, and one
+digest of the complete kernarg bytes.
+
 Dispatch has explicit pre-submit, submitted, and quiesced states. Packet
 publication atomically releases the combined 32-bit AQL header/setup word.
 After publication, completion is polled with nonblocking acquire signal loads,

@@ -1,0 +1,14 @@
+error[E0505]: cannot move out of `executable` because it is borrowed
+  --> tests/ui/authority/executable_cannot_unload_while_kernel_set_is_live.rs:16:77
+   |
+ 8 |     executable: ReviewedHsaExecutableV1,
+   |     ---------- binding `executable` declared here
+...
+12 |             .resolve_kernel_set(&executable, ["first", "second"])
+   |                                 ----------- borrow of `executable` occurs here
+...
+16 |         ReviewedHsaExecutableLifecycleAdapterV1::unload_executable(adapter, executable)
+   |                                                                             ^^^^^^^^^^ move out of `executable` occurs here
+17 |     };
+18 |     let _ = kernels.get(0);
+   |             ------- borrow later used here
