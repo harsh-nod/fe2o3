@@ -1,8 +1,9 @@
-# Kernel IR Wire Formats V1 and V2
+# Kernel IR Wire Formats V1, V2, and V3
 
 This document freezes the canonical binary representations produced by
-`encode_module_v1` and `encode_module_v2`. `decode_module_v1` accepts only V1;
-`decode_module_v2` accepts canonical V1 and V2 bytes for migration safety.
+`encode_module_v1`, `encode_module_v2`, and `encode_module_v3`.
+`decode_module_v1` accepts only V1; each later decoder accepts canonical bytes
+from its version and every earlier version for migration safety.
 
 ## Trust Boundary
 
@@ -42,7 +43,7 @@ The 20-byte header is:
 
 ```text
 byte[8] magic = "FE2O3KI\0"
-u16     version = 1 or 2
+u16     version = 1, 2, or 3
 u16     flags = 0
 u32     total_length_including_header
 u32     reserved = 0
@@ -149,6 +150,8 @@ and `Generic=5`. Access-mode tags are `ReadOnly=1` and `ReadWrite=2`.
 | 17 (V2) | `Fence` | `Fence` |
 | 18 (V2) | `WorkgroupBarrier` | `WorkgroupBarrier` |
 | 19 (V2) | `WorkgroupMemory` | `WorkgroupMemory` |
+| 20 (V2) | `Wave` | `WaveOperation` |
+| 21 (V3) | `Float` | `FloatOperation` |
 
 `MemoryAccess` is `u8 address_space || u32 alignment || u8 volatile_boolean`.
 
@@ -216,6 +219,21 @@ WorkgroupMemoryExtent =
     u8(tag = 1, Static) || u32(elements)
   | u8(tag = 2, Dynamic)
 ```
+
+The V3 `FloatOperation` record is:
+
+```text
+u8(tag = 1, Convert) || u8(conversion) || ValueId
+  | u8(tag = 2, WidenedBinary) || u8(format) || u8(op) || ValueId || ValueId
+  | u8(tag = 3, F32Math) || u8(function) || u8(implementation) || vec<ValueId>
+  | u8(tag = 4, Bf16x2FusedMultiplyAdd) || ValueId || ValueId || ValueId
+```
+
+Conversion tags are `F16ToF32=1`, `F32ToF16RoundTiesEven=2`,
+`Bf16ToF32=3`, and `F32ToBf16RoundTiesEven=4`. Narrow formats are `F16=1`
+and `Bf16=2`; widened binary tags are add through divide in declaration
+order. F32 math function tags are `Sqrt=1` through `Log10=13` in declaration
+order. Implementation tags are `ConstrainedLlvm=1` and `OcmlAbiV1=2`.
 
 Atomic-kind tags follow declaration order from `Load=1` through `BitXor=11`.
 Scope tags follow declaration order from `Invocation=1` through `System=5`.

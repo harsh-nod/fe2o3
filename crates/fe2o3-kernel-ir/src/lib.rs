@@ -6,8 +6,9 @@
 //!
 //! [`encode_module_v1`] and [`decode_module_v1`] preserve the original bounded
 //! canonical wire representation. [`encode_module_v2`] adds synchronization,
-//! LDS, exact wave-width records, and typed canonical integer switches;
-//! [`decode_module_v2`] accepts canonical V1 and V2 bytes. Decoding establishes
+//! LDS, exact wave-width records, and typed canonical integer switches.
+//! [`encode_module_v3`] adds explicit floating-point semantic contracts, and
+//! [`decode_module_v3`] accepts canonical V1, V2, and V3 bytes. Decoding establishes
 //! wire well-formedness only; consumers must call [`verify_module`] before
 //! relying on semantic invariants. V1/V2 reconstruct kernel-entry and import
 //! roles from their legacy records; they reject device-FFI exports because the

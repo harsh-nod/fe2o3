@@ -101,7 +101,7 @@ never be represented as unstructured strings in this core IR.
 
 ## Canonical Wire Format
 
-`Module` has bounded deterministic V1 and V2 binary representations documented in
+`Module` has bounded deterministic V1, V2, and V3 binary representations documented in
 [`WIRE_FORMAT.md`](WIRE_FORMAT.md). The format covers every stored IR node,
 operation, terminator, type, capability, and enum variant currently reachable
 from `Module`. Derived query results such as `IntrinsicMetadata`,
@@ -111,9 +111,11 @@ than serialized.
 V1 remains byte-for-byte frozen. V2 adds tags for fences, convergent workgroup
 barriers, explicit workgroup memory, exact wave widths, and typed integer
 switches. V2 integer-switch cases use typed constants and are strictly
-increasing, making duplicate and reordered case encodings noncanonical. Its
-decoder accepts both versions so readers can migrate before writers. Wire
-decoding is a parser boundary, not a semantic trust decision. A decoded module
+increasing, making duplicate and reordered case encodings noncanonical. The V2
+decoder accepts both earlier versions so readers can migrate before writers.
+V3 adds exact narrow-float conversion and arithmetic contracts, constrained
+F32 operations, strict OCML ABI calls, and packed BF16 FMA. Its decoder accepts
+all three versions. Wire decoding is a parser boundary, not a semantic trust decision. A decoded module
 can still contain undefined SSA values, invalid types, missing terminators, bad
 barriers, or other frontend errors. Every consumer must run `verify_module` or
 `verify_module_with_capabilities` before lowering or executing decoded IR.

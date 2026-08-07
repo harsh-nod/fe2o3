@@ -463,6 +463,7 @@ impl Operation {
                 capabilities
             }
             OperationKind::Wave(wave) => wave.required_capabilities(),
+            OperationKind::Float(float) => float.required_capabilities(),
             _ => BTreeSet::new(),
         }
     }
@@ -544,6 +545,8 @@ pub enum OperationKind {
     WorkgroupMemory(WorkgroupMemory),
     /// A width-bound, convergent operation over one physical AMD-style wave.
     Wave(WaveOperation),
+    /// Floating-point behavior whose rounding and implementation contract is explicit.
+    Float(FloatOperation),
 }
 
 impl OperationKind {
@@ -575,6 +578,162 @@ impl OperationKind {
             Self::Store { pointer, value, .. } => vec![*pointer, *value],
             Self::Atomic(atomic) => atomic.operands(),
             Self::Wave(wave) => wave.operands(),
+            Self::Float(float) => float.operands(),
+        }
+    }
+}
+
+/// One exact conversion between the integer-backed narrow-float values and `f32`.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum FloatConversionKind {
+    F16ToF32,
+    F32ToF16RoundTiesEven,
+    Bf16ToF32,
+    F32ToBf16RoundTiesEven,
+}
+
+/// The integer-backed narrow format used by widened arithmetic.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum NarrowFloatFormat {
+    F16,
+    Bf16,
+}
+
+impl NarrowFloatFormat {
+    pub const fn ty(self) -> Type {
+        match self {
+            Self::F16 => Type::Scalar(ScalarType::F16),
+            Self::Bf16 => Type::Scalar(ScalarType::Bf16),
+        }
+    }
+
+    pub const fn capability(self) -> TargetCapability {
+        match self {
+            Self::F16 => TargetCapability::Float16,
+            Self::Bf16 => TargetCapability::BFloat16,
+        }
+    }
+}
+
+/// Binary arithmetic performed after exact widening to `f32`.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum WidenedFloatBinaryOp {
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
+}
+
+/// Scalar functions exposed by `fe2o3-device::DeviceMath`.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum F32MathFunction {
+    Sqrt,
+    FusedMultiplyAdd,
+    Floor,
+    Ceil,
+    Truncate,
+    RoundTiesEven,
+    Sin,
+    Cos,
+    Exp,
+    Exp2,
+    Ln,
+    Log2,
+    Log10,
+}
+
+impl F32MathFunction {
+    pub const fn arity(self) -> usize {
+        match self {
+            Self::FusedMultiplyAdd => 3,
+            _ => 1,
+        }
+    }
+
+    pub const fn required_implementation(self) -> F32MathImplementation {
+        match self {
+            Self::Sqrt
+            | Self::FusedMultiplyAdd
+            | Self::Floor
+            | Self::Ceil
+            | Self::Truncate
+            | Self::RoundTiesEven => F32MathImplementation::ConstrainedLlvm,
+            Self::Sin
+            | Self::Cos
+            | Self::Exp
+            | Self::Exp2
+            | Self::Ln
+            | Self::Log2
+            | Self::Log10 => F32MathImplementation::OcmlAbiV1,
+        }
+    }
+}
+
+/// The implementation contract that gives an `f32` math operation meaning.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum F32MathImplementation {
+    /// LLVM constrained intrinsics, round-to-nearest-even, ignored exceptions.
+    ConstrainedLlvm,
+    /// The strict `__ocml_*_f32` ABI, with fast/finite/unsafe modes disabled.
+    OcmlAbiV1,
+}
+
+/// A pure floating-point operation with no implicit contraction or target fallback.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum FloatOperation {
+    Convert {
+        kind: FloatConversionKind,
+        value: ValueId,
+    },
+    /// Widen both operands exactly, perform one constrained `f32` operation,
+    /// then narrow once using round-to-nearest, ties-to-even.
+    WidenedBinary {
+        format: NarrowFloatFormat,
+        op: WidenedFloatBinaryOp,
+        lhs: ValueId,
+        rhs: ValueId,
+    },
+    F32Math {
+        function: F32MathFunction,
+        implementation: F32MathImplementation,
+        arguments: Vec<ValueId>,
+    },
+    /// Two independent constrained `f32` FMAs followed by exact BF16 RNE packing.
+    /// Each packed operand and the result use lane zero in bits 0..16.
+    Bf16x2FusedMultiplyAdd {
+        value: ValueId,
+        multiplier: ValueId,
+        addend: ValueId,
+    },
+}
+
+impl FloatOperation {
+    pub fn operands(&self) -> Vec<ValueId> {
+        match self {
+            Self::Convert { value, .. } => vec![*value],
+            Self::WidenedBinary { lhs, rhs, .. } => vec![*lhs, *rhs],
+            Self::F32Math { arguments, .. } => arguments.clone(),
+            Self::Bf16x2FusedMultiplyAdd {
+                value,
+                multiplier,
+                addend,
+            } => vec![*value, *multiplier, *addend],
+        }
+    }
+
+    pub fn required_capabilities(&self) -> BTreeSet<TargetCapability> {
+        match self {
+            Self::Convert { kind, .. } => BTreeSet::from([match kind {
+                FloatConversionKind::F16ToF32 | FloatConversionKind::F32ToF16RoundTiesEven => {
+                    TargetCapability::Float16
+                }
+                FloatConversionKind::Bf16ToF32 | FloatConversionKind::F32ToBf16RoundTiesEven => {
+                    TargetCapability::BFloat16
+                }
+            }]),
+            Self::WidenedBinary { format, .. } => BTreeSet::from([format.capability()]),
+            Self::F32Math { .. } => BTreeSet::new(),
+            Self::Bf16x2FusedMultiplyAdd { .. } => BTreeSet::from([TargetCapability::BFloat16]),
         }
     }
 }
