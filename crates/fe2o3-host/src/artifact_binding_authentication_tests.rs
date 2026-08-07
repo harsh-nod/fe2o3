@@ -308,6 +308,8 @@ fn general_profile_container_bytes(
     abi: AbiLayout,
     launch: LaunchContract,
     kernel_id: DigestBytes,
+    source_digest: DigestBytes,
+    executable_digest: DigestBytes,
 ) -> Vec<u8> {
     let payload =
         CodeObjectPayload::from_bytes(DigestAlgorithm::Sha256, b"general-profile-hsaco".to_vec())
@@ -331,8 +333,8 @@ fn general_profile_container_bytes(
         kernel_id,
         name(LOGICAL_NAME),
         name(EXPORT_NAME),
-        digest(0x61),
-        digest(0x81),
+        source_digest,
+        executable_digest,
         object_digest,
         vec![],
         launch,
@@ -425,18 +427,35 @@ fn general_profile_launch(block_x: u32) -> LaunchContract {
     .unwrap()
 }
 
-fn general_profile_identity(
+fn general_profile_host_contract_identity(
     binding: [u8; 32],
     abi: &AbiLayout,
     launch: &LaunchContract,
+) -> DigestBytes {
+    derive_generated_host_contract_identity_v1(
+        MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
+        binding,
+        LOGICAL_NAME,
+        EXPORT_NAME,
+        abi,
+        launch,
+    )
+}
+
+fn general_profile_final_kernel_identity(
+    binding: [u8; 32],
+    abi: &AbiLayout,
+    launch: &LaunchContract,
+    source_digest: DigestBytes,
+    executable_digest: DigestBytes,
 ) -> DigestBytes {
     derive_generated_kernel_identity_v2(
         MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
         binding,
         LOGICAL_NAME,
         EXPORT_NAME,
-        digest(0x61),
-        digest(0x81),
+        source_digest,
+        executable_digest,
         abi,
         launch,
     )
@@ -447,7 +466,24 @@ fn validated_general_profile_identity(
     launch: LaunchContract,
     kernel_id: DigestBytes,
 ) -> ArtifactKernelIdentityV1 {
-    let bytes = general_profile_container_bytes(abi, launch, kernel_id);
+    validated_general_profile_identity_with_digests(
+        abi,
+        launch,
+        kernel_id,
+        digest(0x61),
+        digest(0x81),
+    )
+}
+
+fn validated_general_profile_identity_with_digests(
+    abi: AbiLayout,
+    launch: LaunchContract,
+    kernel_id: DigestBytes,
+    source_digest: DigestBytes,
+    executable_digest: DigestBytes,
+) -> ArtifactKernelIdentityV1 {
+    let bytes =
+        general_profile_container_bytes(abi, launch, kernel_id, source_digest, executable_digest);
     let container = ArtifactContainerV1::from_bytes(&bytes).unwrap();
     let selected = container.select_native_kernel(kernel_id).unwrap();
     ValidatedArtifactSelectionV1::validate(selected, &context(7, "gfx942"))
@@ -724,12 +760,21 @@ fn authenticates_only_canonical_rustc_layout_evidence_and_bound_identity() {
 fn authenticates_independent_bounded_scalar_slice_contract_identity() {
     let abi = general_profile_abi(ScalarType::U32, Access::WriteOnly);
     let launch = general_profile_launch(256);
-    let generated = general_profile_identity(GENERAL_BINDING, &abi, &launch);
-    let identity = validated_general_profile_identity(abi, launch, generated);
+    let generated_host_contract =
+        general_profile_host_contract_identity(GENERAL_BINDING, &abi, &launch);
+    let final_kernel_identity = general_profile_final_kernel_identity(
+        GENERAL_BINDING,
+        &abi,
+        &launch,
+        digest(0x61),
+        digest(0x81),
+    );
+    assert_ne!(generated_host_contract, final_kernel_identity);
+    let identity = validated_general_profile_identity(abi, launch, final_kernel_identity);
 
     validate_generated_profile(
         CompilerGeneratedKernelProfileV1::ManifestDerivedScalarSliceV1 {
-            generated_contract_identity: *generated.as_bytes(),
+            generated_host_contract_identity: *generated_host_contract.as_bytes(),
         },
         GENERAL_BINDING,
         &identity,
@@ -741,26 +786,34 @@ fn authenticates_independent_bounded_scalar_slice_contract_identity() {
 fn rejects_general_profile_abi_effect_launch_binding_and_contract_identity_mismatches() {
     let expected_abi = general_profile_abi(ScalarType::U32, Access::WriteOnly);
     let expected_launch = general_profile_launch(256);
-    let generated = general_profile_identity(GENERAL_BINDING, &expected_abi, &expected_launch);
+    let generated_host_contract =
+        general_profile_host_contract_identity(GENERAL_BINDING, &expected_abi, &expected_launch);
+    let final_kernel_identity = general_profile_final_kernel_identity(
+        GENERAL_BINDING,
+        &expected_abi,
+        &expected_launch,
+        digest(0x61),
+        digest(0x81),
+    );
     let profile = CompilerGeneratedKernelProfileV1::ManifestDerivedScalarSliceV1 {
-        generated_contract_identity: *generated.as_bytes(),
+        generated_host_contract_identity: *generated_host_contract.as_bytes(),
     };
 
     let cases = [
         validated_general_profile_identity(
             general_profile_abi(ScalarType::F32, Access::WriteOnly),
             expected_launch.clone(),
-            generated,
+            final_kernel_identity,
         ),
         validated_general_profile_identity(
             general_profile_abi(ScalarType::U32, Access::ReadWrite),
             expected_launch.clone(),
-            generated,
+            final_kernel_identity,
         ),
         validated_general_profile_identity(
             expected_abi.clone(),
             general_profile_launch(128),
-            generated,
+            final_kernel_identity,
         ),
     ];
     for identity in cases {
@@ -770,7 +823,8 @@ fn rejects_general_profile_abi_effect_launch_binding_and_contract_identity_misma
         );
     }
 
-    let identity = validated_general_profile_identity(expected_abi, expected_launch, generated);
+    let identity =
+        validated_general_profile_identity(expected_abi, expected_launch, final_kernel_identity);
     assert_eq!(
         validate_generated_profile(profile, [0x74; 32], &identity),
         Err(GeneratedKernelProfileError::GeneratedContractIdentityMismatch)
@@ -778,13 +832,55 @@ fn rejects_general_profile_abi_effect_launch_binding_and_contract_identity_misma
     assert_eq!(
         validate_generated_profile(
             CompilerGeneratedKernelProfileV1::ManifestDerivedScalarSliceV1 {
-                generated_contract_identity: [0xa5; 32],
+                generated_host_contract_identity: [0xa5; 32],
             },
             GENERAL_BINDING,
             &identity,
         ),
         Err(GeneratedKernelProfileError::GeneratedContractIdentityMismatch)
     );
+}
+
+#[test]
+fn general_profile_checks_final_source_executable_and_kernel_identity_separately() {
+    let abi = general_profile_abi(ScalarType::U32, Access::WriteOnly);
+    let launch = general_profile_launch(256);
+    let generated_host_contract =
+        general_profile_host_contract_identity(GENERAL_BINDING, &abi, &launch);
+    let final_kernel_identity = general_profile_final_kernel_identity(
+        GENERAL_BINDING,
+        &abi,
+        &launch,
+        digest(0x61),
+        digest(0x81),
+    );
+    let profile = CompilerGeneratedKernelProfileV1::ManifestDerivedScalarSliceV1 {
+        generated_host_contract_identity: *generated_host_contract.as_bytes(),
+    };
+
+    let cases = [
+        validated_general_profile_identity(abi.clone(), launch.clone(), digest(0xf1)),
+        validated_general_profile_identity_with_digests(
+            abi.clone(),
+            launch.clone(),
+            final_kernel_identity,
+            digest(0x62),
+            digest(0x81),
+        ),
+        validated_general_profile_identity_with_digests(
+            abi,
+            launch,
+            final_kernel_identity,
+            digest(0x61),
+            digest(0x82),
+        ),
+    ];
+    for identity in cases {
+        assert_eq!(
+            validate_generated_profile(profile, GENERAL_BINDING, &identity),
+            Err(GeneratedKernelProfileError::KernelIdentityMismatch)
+        );
+    }
 }
 
 #[test]

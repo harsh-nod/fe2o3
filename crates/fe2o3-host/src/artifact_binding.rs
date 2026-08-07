@@ -11,7 +11,8 @@ use fe2o3_artifacts::{
     PointerWidth, RustDisjointIndexSpaceV1, RustLayoutEvidenceV1, RustPhysicalComponentKindV1,
     RustPhysicalComponentV1, RustPointerMutabilityV1, RustScalarElementTypeV1,
     RustSourceTypeShapeV1, RustTypeEvidenceV1, RustcAbiClassV1, ScalarType, SelectedNativeKernel,
-    TargetIdentity, TypeIdentity, derive_generated_kernel_identity_v2,
+    TargetIdentity, TypeIdentity, derive_generated_host_contract_identity_v1,
+    derive_generated_kernel_identity_v2,
 };
 use fe2o3_device::{DisjointSlice, Index1D, KernelMarkerV1};
 use fe2o3_kernel_descriptor::ValidationError as DescriptorValidationError;
@@ -312,10 +313,12 @@ pub enum CompilerGeneratedKernelProfileV1 {
     ///
     /// The identity is emitted by the compiler from its canonical Rust ABI,
     /// layout, effects, launch, and binding expectation. Authentication
-    /// derives the same identity from the selected artifact and rejects a
-    /// mismatch; the artifact therefore cannot serve as its own expectation.
+    /// derives the same pre-executable identity from the selected artifact and
+    /// rejects a mismatch; the artifact therefore cannot serve as its own
+    /// expectation. Final kernel identity is checked separately after source
+    /// and executable digests exist.
     ManifestDerivedScalarSliceV1 {
-        generated_contract_identity: [u8; 32],
+        generated_host_contract_identity: [u8; 32],
     },
 }
 
@@ -540,10 +543,21 @@ pub(crate) fn validate_generated_profile(
             Ok(())
         }
         CompilerGeneratedKernelProfileV1::ManifestDerivedScalarSliceV1 {
-            generated_contract_identity,
+            generated_host_contract_identity,
         } => {
             validate_manifest_derived_scalar_slice_abi(identity.abi())?;
-            let derived = derive_generated_kernel_identity_v2(
+            let derived_host_contract = derive_generated_host_contract_identity_v1(
+                MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
+                kernel_binding,
+                identity.name().as_str(),
+                identity.symbol().as_str(),
+                identity.abi(),
+                identity.launch(),
+            );
+            if derived_host_contract.as_bytes() != &generated_host_contract_identity {
+                return Err(GeneratedKernelProfileError::GeneratedContractIdentityMismatch);
+            }
+            let expected_kernel_id = derive_generated_kernel_identity_v2(
                 MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
                 kernel_binding,
                 identity.name().as_str(),
@@ -553,10 +567,7 @@ pub(crate) fn validate_generated_profile(
                 identity.abi(),
                 identity.launch(),
             );
-            if derived.as_bytes() != &generated_contract_identity {
-                return Err(GeneratedKernelProfileError::GeneratedContractIdentityMismatch);
-            }
-            if identity.kernel_id().as_bytes() != &generated_contract_identity {
+            if identity.kernel_id().as_bytes() != expected_kernel_id.as_bytes() {
                 return Err(GeneratedKernelProfileError::KernelIdentityMismatch);
             }
             Ok(())

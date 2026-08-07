@@ -85,7 +85,8 @@ pub use direct_link_encode::{
 pub use encode::{MANIFEST_MAGIC, MANIFEST_VERSION, MAX_MANIFEST_BYTES};
 pub use error::{DecodeError, ValidationError};
 pub use generated_kernel_identity::{
-    GENERATED_KERNEL_IDENTITY_DOMAIN_V2, derive_generated_kernel_identity_v2,
+    GENERATED_HOST_CONTRACT_IDENTITY_DOMAIN_V1, GENERATED_KERNEL_IDENTITY_DOMAIN_V2,
+    derive_generated_host_contract_identity_v1, derive_generated_kernel_identity_v2,
 };
 pub use gfx942_bundle::{
     GFX942_TWO_KERNEL_BUNDLE_VERSION_V1, GFX942_TWO_KERNEL_COUNT, Gfx942BundleError,
