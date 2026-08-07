@@ -119,6 +119,8 @@ impl std::error::Error for GeneralTypedExtractError {}
 pub(crate) fn extract_general_typed_kernel_v3<'tcx>(
     tcx: TyCtxt<'tcx>,
     instance: Instance<'tcx>,
+    logical_name: &str,
+    export_name: &str,
 ) -> Result<GeneralTypedKernelContractV3, GeneralTypedExtractError> {
     if !matches!(instance.def, InstanceKind::Item(_)) {
         return Err(GeneralTypedExtractError::new(format!(
@@ -182,8 +184,7 @@ pub(crate) fn extract_general_typed_kernel_v3<'tcx>(
     for (index, ty) in signature.inputs().iter().copied().enumerate() {
         arguments.push(extract_argument(tcx, &layout_cx, ty, trusted_index, index)?);
     }
-    let item_name = tcx.item_name(def_id);
-    let abi = build_abi(item_name.as_str(), &arguments)?;
+    let abi = build_abi(logical_name, export_name, &arguments)?;
     let launch = LaunchContract::new(
         1,
         BlockSize::Exact(
@@ -451,16 +452,21 @@ fn slice_layout<'tcx>(
 }
 
 fn build_abi(
-    item_name: &str,
+    logical_name: &str,
+    export_name: &str,
     arguments: &[GeneralTypedArgumentV3],
 ) -> Result<AbiLayout, GeneralTypedExtractError> {
     let argument_kinds = arguments
         .iter()
         .map(|argument| argument.kind())
         .collect::<Vec<_>>();
-    let exact_names = match item_name {
-        "alpha" if argument_kinds == ALPHA_ARGUMENT_KINDS => Some(ALPHA_ARGUMENT_NAMES.as_slice()),
-        "zeta" if argument_kinds == ZETA_ARGUMENT_KINDS => Some(ZETA_ARGUMENT_NAMES.as_slice()),
+    let exact_names = match (logical_name, export_name) {
+        ("alpha", "alpha") if argument_kinds == ALPHA_ARGUMENT_KINDS => {
+            Some(ALPHA_ARGUMENT_NAMES.as_slice())
+        }
+        ("zeta", "zeta") if argument_kinds == ZETA_ARGUMENT_KINDS => {
+            Some(ZETA_ARGUMENT_NAMES.as_slice())
+        }
         _ => None,
     };
     let mut offset = 0_u64;
@@ -762,7 +768,7 @@ mod tests {
     }
 
     fn identity(name: &str, arguments: &[GeneralTypedArgumentV3]) -> DigestBytes {
-        let abi = build_abi(name, arguments).unwrap();
+        let abi = build_abi(name, name, arguments).unwrap();
         identity_with_abi(name, &abi)
     }
 
@@ -779,7 +785,7 @@ mod tests {
 
     #[test]
     fn alpha_and_zeta_reconstruct_exact_offsets_sizes_and_effects() {
-        let alpha = build_abi("alpha", &alpha_arguments()).unwrap();
+        let alpha = build_abi("alpha", "alpha", &alpha_arguments()).unwrap();
         assert_eq!(alpha.size(), 40);
         assert_eq!(alpha.alignment(), 8);
         assert_eq!(
@@ -800,7 +806,7 @@ mod tests {
         );
         assert_eq!(alpha.fields()[2].access(), Access::ReadWrite);
 
-        let zeta = build_abi("zeta", &zeta_arguments()).unwrap();
+        let zeta = build_abi("zeta", "zeta", &zeta_arguments()).unwrap();
         assert_eq!(zeta.size(), 56);
         assert_eq!(
             zeta.fields()
@@ -823,7 +829,7 @@ mod tests {
     fn host_contract_identity_is_order_and_scalar_sensitive() {
         let alpha = alpha_arguments();
         let alpha_identity = identity("alpha", &alpha);
-        let generic_alpha_abi = build_abi("alpha_lookalike", &alpha).unwrap();
+        let generic_alpha_abi = build_abi("alpha_lookalike", "alpha_lookalike", &alpha).unwrap();
         assert_ne!(
             alpha_identity,
             identity_with_abi("alpha", &generic_alpha_abi),
@@ -831,7 +837,7 @@ mod tests {
         );
         let zeta = zeta_arguments();
         let zeta_identity = identity("zeta", &zeta);
-        let generic_zeta_abi = build_abi("zeta_lookalike", &zeta).unwrap();
+        let generic_zeta_abi = build_abi("zeta_lookalike", "zeta_lookalike", &zeta).unwrap();
         assert_ne!(
             zeta_identity,
             identity_with_abi("zeta", &generic_zeta_abi),
@@ -864,7 +870,8 @@ mod tests {
 
     #[test]
     fn lookalike_general_v3_contracts_keep_positional_names() {
-        let alpha_lookalike = build_abi("alpha_lookalike", &alpha_arguments()).unwrap();
+        let alpha_lookalike =
+            build_abi("alpha_lookalike", "alpha_lookalike", &alpha_arguments()).unwrap();
         assert_eq!(
             alpha_lookalike
                 .fields()
@@ -874,7 +881,8 @@ mod tests {
             ["arg0", "arg1", "arg2"]
         );
 
-        let zeta_lookalike = build_abi("zeta_lookalike", &zeta_arguments()).unwrap();
+        let zeta_lookalike =
+            build_abi("zeta_lookalike", "zeta_lookalike", &zeta_arguments()).unwrap();
         assert_eq!(
             zeta_lookalike
                 .fields()
@@ -888,7 +896,7 @@ mod tests {
         same_abi_shape[0] = argument(GeneralTypedArgumentKindV3::Scalar(
             RustScalarElementTypeV1::U32,
         ));
-        let wrong_alpha_signature = build_abi("alpha", &same_abi_shape).unwrap();
+        let wrong_alpha_signature = build_abi("alpha", "alpha", &same_abi_shape).unwrap();
         assert_eq!(
             wrong_alpha_signature
                 .fields()
@@ -900,7 +908,7 @@ mod tests {
 
         let mut reordered_zeta = zeta_arguments();
         reordered_zeta.swap(0, 2);
-        let wrong_zeta_signature = build_abi("zeta", &reordered_zeta).unwrap();
+        let wrong_zeta_signature = build_abi("zeta", "zeta", &reordered_zeta).unwrap();
         assert_eq!(
             wrong_zeta_signature
                 .fields()
@@ -909,5 +917,17 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["arg0", "arg1", "arg2", "arg3"]
         );
+
+        for (logical_name, export_name) in [("alpha", "renamed"), ("renamed", "alpha")] {
+            let mismatched = build_abi(logical_name, export_name, &alpha_arguments()).unwrap();
+            assert_eq!(
+                mismatched
+                    .fields()
+                    .iter()
+                    .map(|field| field.name().as_str())
+                    .collect::<Vec<_>>(),
+                ["arg0", "arg1", "arg2"]
+            );
+        }
     }
 }

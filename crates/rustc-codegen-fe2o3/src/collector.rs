@@ -525,14 +525,18 @@ fn kernel_roots<'tcx>(
             Some(TypedKernelProfile::GeneralScalarSliceRustcLayoutV3 {
                 generated_host_contract_identity,
             }) => {
-                let contract =
-                    crate::rust_type_layout_v3::extract_general_typed_kernel_v3(tcx, root.target)
-                        .map_err(|error| {
-                        RegistrationError::new(
-                            &registration_path,
-                            format!("general rustc type/layout extraction failed: {error}"),
-                        )
-                    })?;
+                let contract = crate::rust_type_layout_v3::extract_general_typed_kernel_v3(
+                    tcx,
+                    root.target,
+                    &root.logical_name,
+                    &root.export_name,
+                )
+                .map_err(|error| {
+                    RegistrationError::new(
+                        &registration_path,
+                        format!("general rustc type/layout extraction failed: {error}"),
+                    )
+                })?;
                 let kernel_binding = root.kernel_binding.ok_or_else(|| {
                     RegistrationError::new(&registration_path, "V3 root has no kernel binding")
                 })?;
