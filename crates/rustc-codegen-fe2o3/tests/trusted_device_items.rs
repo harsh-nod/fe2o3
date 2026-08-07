@@ -47,7 +47,7 @@ const REGISTRATION_REJECTED_CASES: &[(&str, &str)] = &[
     ),
     (
         "unknown-registration-version",
-        "unknown registration version 3",
+        "registration version 3 requires the exact V3 tuple type",
     ),
     (
         "duplicate-logical-name",
@@ -239,6 +239,27 @@ fn registration_contract_accepts_genuine_metadata_and_rejects_spoofs_and_duplica
     assert!(
         alpha < zeta,
         "registered kernels were not emitted in deterministic order:\n{stderr}"
+    );
+}
+
+#[test]
+#[ignore = "requires the configured ROCm LLVM toolchain"]
+fn general_v3_rejects_local_disjoint_slice_and_index1d_lookalikes() {
+    let _lock = backend_test_lock();
+    let workspace = workspace();
+    let rejected = backend_build_with_args(
+        &workspace,
+        "fe2o3-typed-alias-spoof",
+        &["--features", "general-lookalike"],
+    );
+    let stderr = String::from_utf8_lossy(&rejected.stderr);
+    assert!(
+        !rejected.status.success(),
+        "local general typed lookalikes unexpectedly reached AMDGPU emission"
+    );
+    assert!(
+        stderr.contains("untrusted or unsupported aggregate type"),
+        "local general typed lookalike missed the semantic identity rejection:\n{stderr}"
     );
 }
 

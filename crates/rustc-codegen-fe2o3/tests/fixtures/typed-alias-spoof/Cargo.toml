@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 publish = false
 
+[features]
+general-lookalike = []
+
 [dependencies]
 fe2o3-core.workspace = true
 fe2o3-device.workspace = true

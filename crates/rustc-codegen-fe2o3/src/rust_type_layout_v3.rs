@@ -1,0 +1,810 @@
+//! Compiler-authoritative Rust type/layout facts for the bounded general typed profile.
+
+use std::fmt;
+
+use fe2o3_artifacts::{
+    AbiField, AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership, BlockSize,
+    Dimensions, LaunchContract, MAX_ABI_FIELDS, Mutability, Name, PointerWidth,
+    RustDisjointIndexSpaceV1, RustLayoutEvidenceV1, RustPhysicalComponentKindV1,
+    RustPhysicalComponentV1, RustPointerMutabilityV1, RustScalarElementTypeV1,
+    RustSourceTypeShapeV1, RustTypeEvidenceV1, RustcAbiClassV1, ScalarType, TypeIdentity,
+};
+use rustc_abi::{BackendRepr, ExternAbi, HasDataLayout, Primitive};
+use rustc_hir::def::DefKind;
+use rustc_hir::{Mutability as HirMutability, Safety};
+use rustc_middle::ty::layout::{LayoutCx, LayoutOf};
+use rustc_middle::ty::{
+    FloatTy, Instance, InstanceKind, IntTy, Ty, TyCtxt, TyKind, TypingEnv, UintTy,
+};
+use rustc_span::Symbol;
+
+use crate::trusted_device_items::{self, TrustedDeviceItem};
+
+const INDEX_1D_DIAGNOSTIC_ITEM: &str = "fe2o3_device_thread_index_1d";
+const POINTER_BYTES: u64 = 8;
+const POINTER_ALIGNMENT: u32 = 8;
+const SLICE_BYTES: u64 = 16;
+const WORKGROUP_X: u32 = 256;
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub(crate) enum GeneralTypedArgumentKindV3 {
+    Scalar(RustScalarElementTypeV1),
+    SharedSlice(RustScalarElementTypeV1),
+    DisjointSlice(RustScalarElementTypeV1),
+}
+
+impl GeneralTypedArgumentKindV3 {
+    pub(crate) const fn scalar(self) -> RustScalarElementTypeV1 {
+        match self {
+            Self::Scalar(scalar) | Self::SharedSlice(scalar) | Self::DisjointSlice(scalar) => {
+                scalar
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GeneralTypedArgumentV3 {
+    kind: GeneralTypedArgumentKindV3,
+    layout: RustLayoutEvidenceV1,
+}
+
+impl GeneralTypedArgumentV3 {
+    pub(crate) const fn kind(&self) -> GeneralTypedArgumentKindV3 {
+        self.kind
+    }
+
+    pub(crate) const fn layout(&self) -> &RustLayoutEvidenceV1 {
+        &self.layout
+    }
+
+    pub(crate) fn type_identity(&self) -> TypeIdentity {
+        self.layout.type_identity()
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GeneralTypedKernelContractV3 {
+    arguments: Vec<GeneralTypedArgumentV3>,
+    abi: AbiLayout,
+    launch: LaunchContract,
+}
+
+impl GeneralTypedKernelContractV3 {
+    pub(crate) fn arguments(&self) -> &[GeneralTypedArgumentV3] {
+        &self.arguments
+    }
+
+    pub(crate) const fn abi(&self) -> &AbiLayout {
+        &self.abi
+    }
+
+    pub(crate) const fn launch(&self) -> &LaunchContract {
+        &self.launch
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GeneralTypedExtractError(String);
+
+impl GeneralTypedExtractError {
+    fn new(reason: impl Into<String>) -> Self {
+        Self(reason.into())
+    }
+}
+
+impl fmt::Display for GeneralTypedExtractError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for GeneralTypedExtractError {}
+
+/// Reconstructs the complete general typed contract from rustc semantic and layout facts.
+pub(crate) fn extract_general_typed_kernel_v3<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+) -> Result<GeneralTypedKernelContractV3, GeneralTypedExtractError> {
+    if !matches!(instance.def, InstanceKind::Item(_)) {
+        return Err(GeneralTypedExtractError::new(format!(
+            "expected an ordinary function item, found {:?}",
+            instance.def
+        )));
+    }
+    let def_id = instance.def_id();
+    if tcx.generics_of(def_id).count() != 0 || !instance.args.is_empty() {
+        return Err(GeneralTypedExtractError::new(
+            "general typed kernels must be nongeneric function items",
+        ));
+    }
+
+    let typing_env = TypingEnv::fully_monomorphized();
+    let instance_ty = instance.ty(tcx, typing_env);
+    let (signature_def_id, args) = match *instance_ty.kind() {
+        TyKind::FnDef(signature_def_id, args) if signature_def_id == def_id => {
+            (signature_def_id, args)
+        }
+        _ => {
+            return Err(GeneralTypedExtractError::new(format!(
+                "registered target is not its own function definition: `{instance_ty}`"
+            )));
+        }
+    };
+    let signature = tcx
+        .instantiate_bound_regions_with_erased(tcx.fn_sig(signature_def_id).instantiate(tcx, args));
+    if signature.safety != Safety::Safe {
+        return Err(GeneralTypedExtractError::new(
+            "general typed kernels must be safe functions",
+        ));
+    }
+    if signature.abi != ExternAbi::Rust || signature.c_variadic {
+        return Err(GeneralTypedExtractError::new(
+            "general typed kernels must use the non-variadic Rust ABI",
+        ));
+    }
+    if signature.output() != tcx.types.unit {
+        return Err(GeneralTypedExtractError::new(format!(
+            "general typed kernels must return unit, found `{}`",
+            signature.output()
+        )));
+    }
+    if signature.inputs().is_empty() {
+        return Err(GeneralTypedExtractError::new(
+            "general typed kernels require at least one argument",
+        ));
+    }
+    if signature.inputs().len() > MAX_ABI_FIELDS {
+        return Err(GeneralTypedExtractError::new(format!(
+            "general typed kernel argument count {} exceeds maximum {MAX_ABI_FIELDS}",
+            signature.inputs().len()
+        )));
+    }
+
+    let layout_cx = LayoutCx::new(tcx, typing_env);
+    require_64_bit_target(tcx, &layout_cx)?;
+    let trusted_index = trusted_index1d_type(tcx)?;
+    let mut arguments = Vec::with_capacity(signature.inputs().len());
+    for (index, ty) in signature.inputs().iter().copied().enumerate() {
+        arguments.push(extract_argument(tcx, &layout_cx, ty, trusted_index, index)?);
+    }
+    let abi = build_abi(&arguments)?;
+    let launch = LaunchContract::new(
+        1,
+        BlockSize::Exact(
+            Dimensions::new(WORKGROUP_X, 1, 1)
+                .map_err(|error| GeneralTypedExtractError::new(error.to_string()))?,
+        ),
+        Dimensions::new(u32::MAX, 1, 1)
+            .map_err(|error| GeneralTypedExtractError::new(error.to_string()))?,
+        0,
+        0,
+    )
+    .map_err(|error| GeneralTypedExtractError::new(error.to_string()))?;
+    Ok(GeneralTypedKernelContractV3 {
+        arguments,
+        abi,
+        launch,
+    })
+}
+
+fn extract_argument<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    layout_cx: &LayoutCx<'tcx>,
+    ty: Ty<'tcx>,
+    trusted_index: Ty<'tcx>,
+    index: usize,
+) -> Result<GeneralTypedArgumentV3, GeneralTypedExtractError> {
+    let argument = || format!("argument {}", index + 1);
+    if let Some(scalar) = scalar_type(ty) {
+        let layout = scalar_layout(layout_cx, ty, scalar, &argument())?;
+        return Ok(GeneralTypedArgumentV3 {
+            kind: GeneralTypedArgumentKindV3::Scalar(scalar),
+            layout,
+        });
+    }
+
+    if let TyKind::Ref(_, pointee, HirMutability::Not) = *ty.kind()
+        && let TyKind::Slice(element) = *pointee.kind()
+    {
+        let scalar = scalar_type(element).ok_or_else(|| {
+            GeneralTypedExtractError::new(format!(
+                "{} has unsupported shared-slice element type `{element}`",
+                argument()
+            ))
+        })?;
+        let layout = slice_layout(
+            layout_cx,
+            ty,
+            scalar,
+            false,
+            RustSourceTypeShapeV1::shared_slice(scalar),
+            &argument(),
+        )?;
+        return Ok(GeneralTypedArgumentV3 {
+            kind: GeneralTypedArgumentKindV3::SharedSlice(scalar),
+            layout,
+        });
+    }
+
+    if let TyKind::Adt(definition, args) = *ty.kind() {
+        if trusted_device_items::classify(tcx, definition.did())
+            != Some(TrustedDeviceItem::DisjointSlice)
+        {
+            return Err(GeneralTypedExtractError::new(format!(
+                "{} uses untrusted or unsupported aggregate type `{ty}`",
+                argument()
+            )));
+        }
+        let [Some(element), Some(index_space)] = [
+            args.first().and_then(|arg| arg.as_type()),
+            args.get(1).and_then(|arg| arg.as_type()),
+        ] else {
+            return Err(GeneralTypedExtractError::new(format!(
+                "{} has malformed genuine DisjointSlice arguments",
+                argument()
+            )));
+        };
+        if args.len() != 2 || index_space != trusted_index {
+            return Err(GeneralTypedExtractError::new(format!(
+                "{} must use the genuine Index1D index space",
+                argument()
+            )));
+        }
+        let scalar = scalar_type(element).ok_or_else(|| {
+            GeneralTypedExtractError::new(format!(
+                "{} has unsupported DisjointSlice element type `{element}`",
+                argument()
+            ))
+        })?;
+        let layout = slice_layout(
+            layout_cx,
+            ty,
+            scalar,
+            true,
+            RustSourceTypeShapeV1::disjoint_slice(scalar, RustDisjointIndexSpaceV1::Index1D),
+            &argument(),
+        )?;
+        return Ok(GeneralTypedArgumentV3 {
+            kind: GeneralTypedArgumentKindV3::DisjointSlice(scalar),
+            layout,
+        });
+    }
+
+    Err(GeneralTypedExtractError::new(format!(
+        "{} has unsupported type `{ty}`; only bounded scalars, shared slices, and genuine DisjointSlice values are accepted",
+        argument()
+    )))
+}
+
+fn scalar_type(ty: Ty<'_>) -> Option<RustScalarElementTypeV1> {
+    match *ty.kind() {
+        TyKind::Int(IntTy::I8) => Some(RustScalarElementTypeV1::I8),
+        TyKind::Uint(UintTy::U8) => Some(RustScalarElementTypeV1::U8),
+        TyKind::Int(IntTy::I16) => Some(RustScalarElementTypeV1::I16),
+        TyKind::Uint(UintTy::U16) => Some(RustScalarElementTypeV1::U16),
+        TyKind::Int(IntTy::I32) => Some(RustScalarElementTypeV1::I32),
+        TyKind::Uint(UintTy::U32) => Some(RustScalarElementTypeV1::U32),
+        TyKind::Int(IntTy::I64) => Some(RustScalarElementTypeV1::I64),
+        TyKind::Uint(UintTy::U64) => Some(RustScalarElementTypeV1::U64),
+        TyKind::Float(FloatTy::F32) => Some(RustScalarElementTypeV1::F32),
+        TyKind::Float(FloatTy::F64) => Some(RustScalarElementTypeV1::F64),
+        TyKind::Float(FloatTy::F16 | FloatTy::F128)
+        | TyKind::Int(IntTy::Isize | IntTy::I128)
+        | TyKind::Uint(UintTy::Usize | UintTy::U128) => None,
+        _ => None,
+    }
+}
+
+fn scalar_layout<'tcx>(
+    layout_cx: &LayoutCx<'tcx>,
+    ty: Ty<'tcx>,
+    scalar: RustScalarElementTypeV1,
+    argument: &str,
+) -> Result<RustLayoutEvidenceV1, GeneralTypedExtractError> {
+    let layout = layout_cx.layout_of(ty).map_err(|error| {
+        GeneralTypedExtractError::new(format!("failed to lay out {argument}: {error}"))
+    })?;
+    let BackendRepr::Scalar(component) = layout.backend_repr else {
+        return Err(GeneralTypedExtractError::new(format!(
+            "{argument} does not have rustc scalar ABI"
+        )));
+    };
+    if !primitive_matches(component.primitive(), scalar)
+        || layout.size.bytes() != scalar.size_bytes()
+        || layout.align.abi.bytes() != scalar.size_bytes()
+    {
+        return Err(GeneralTypedExtractError::new(format!(
+            "{argument} scalar layout disagrees with its semantic type"
+        )));
+    }
+    let alignment = u32::try_from(layout.align.abi.bytes())
+        .map_err(|_| GeneralTypedExtractError::new(format!("{argument} alignment exceeds u32")))?;
+    let component = RustPhysicalComponentV1::new(
+        0,
+        layout.size.bytes(),
+        alignment,
+        RustPhysicalComponentKindV1::Scalar { scalar },
+    )
+    .map_err(|error| {
+        GeneralTypedExtractError::new(format!("invalid {argument} evidence: {error}"))
+    })?;
+    RustLayoutEvidenceV1::new(
+        RustTypeEvidenceV1::new(RustSourceTypeShapeV1::scalar(scalar)),
+        RustcAbiClassV1::Scalar,
+        PointerWidth::Bits64,
+        layout.size.bytes(),
+        alignment,
+        vec![component],
+    )
+    .map_err(|error| GeneralTypedExtractError::new(format!("invalid {argument} evidence: {error}")))
+}
+
+fn primitive_matches(primitive: Primitive, scalar: RustScalarElementTypeV1) -> bool {
+    match (primitive, scalar) {
+        (Primitive::Int(integer, true), RustScalarElementTypeV1::I8) => integer.size().bits() == 8,
+        (Primitive::Int(integer, false), RustScalarElementTypeV1::U8) => integer.size().bits() == 8,
+        (Primitive::Int(integer, true), RustScalarElementTypeV1::I16) => {
+            integer.size().bits() == 16
+        }
+        (Primitive::Int(integer, false), RustScalarElementTypeV1::U16) => {
+            integer.size().bits() == 16
+        }
+        (Primitive::Int(integer, true), RustScalarElementTypeV1::I32) => {
+            integer.size().bits() == 32
+        }
+        (Primitive::Int(integer, false), RustScalarElementTypeV1::U32) => {
+            integer.size().bits() == 32
+        }
+        (Primitive::Int(integer, true), RustScalarElementTypeV1::I64) => {
+            integer.size().bits() == 64
+        }
+        (Primitive::Int(integer, false), RustScalarElementTypeV1::U64) => {
+            integer.size().bits() == 64
+        }
+        (Primitive::Float(float), RustScalarElementTypeV1::F32) => float.size().bits() == 32,
+        (Primitive::Float(float), RustScalarElementTypeV1::F64) => float.size().bits() == 64,
+        _ => false,
+    }
+}
+
+fn slice_layout<'tcx>(
+    layout_cx: &LayoutCx<'tcx>,
+    ty: Ty<'tcx>,
+    scalar: RustScalarElementTypeV1,
+    mutable: bool,
+    source_type: RustSourceTypeShapeV1,
+    argument: &str,
+) -> Result<RustLayoutEvidenceV1, GeneralTypedExtractError> {
+    let layout = layout_cx.layout_of(ty).map_err(|error| {
+        GeneralTypedExtractError::new(format!("failed to lay out {argument}: {error}"))
+    })?;
+    let BackendRepr::ScalarPair(pointer, length) = layout.backend_repr else {
+        return Err(GeneralTypedExtractError::new(format!(
+            "{argument} does not have rustc scalar-pair ABI"
+        )));
+    };
+    let pointer_ok = matches!(pointer.primitive(), Primitive::Pointer(address_space) if address_space.0 == 0)
+        && pointer.size(layout_cx).bytes() == POINTER_BYTES
+        && pointer.align(layout_cx).abi.bytes() == u64::from(POINTER_ALIGNMENT);
+    let length_ok = matches!(length.primitive(), Primitive::Int(integer, false) if integer.size().bits() == 64)
+        && length.size(layout_cx).bytes() == POINTER_BYTES
+        && length.align(layout_cx).abi.bytes() == u64::from(POINTER_ALIGNMENT);
+    if !pointer_ok
+        || !length_ok
+        || layout.size.bytes() != SLICE_BYTES
+        || layout.align.abi.bytes() != u64::from(POINTER_ALIGNMENT)
+    {
+        return Err(GeneralTypedExtractError::new(format!(
+            "{argument} does not have the exact 64-bit pointer/usize slice ABI"
+        )));
+    }
+    let pointer_component = RustPhysicalComponentV1::new(
+        0,
+        POINTER_BYTES,
+        POINTER_ALIGNMENT,
+        RustPhysicalComponentKindV1::Pointer {
+            mutability: if mutable {
+                RustPointerMutabilityV1::Mut
+            } else {
+                RustPointerMutabilityV1::Const
+            },
+            pointee: scalar,
+        },
+    )
+    .map_err(|error| {
+        GeneralTypedExtractError::new(format!("invalid {argument} evidence: {error}"))
+    })?;
+    let length_component = RustPhysicalComponentV1::new(
+        POINTER_BYTES,
+        POINTER_BYTES,
+        POINTER_ALIGNMENT,
+        RustPhysicalComponentKindV1::Usize,
+    )
+    .map_err(|error| {
+        GeneralTypedExtractError::new(format!("invalid {argument} evidence: {error}"))
+    })?;
+    RustLayoutEvidenceV1::new(
+        RustTypeEvidenceV1::new(source_type),
+        RustcAbiClassV1::ScalarPair,
+        PointerWidth::Bits64,
+        SLICE_BYTES,
+        POINTER_ALIGNMENT,
+        vec![pointer_component, length_component],
+    )
+    .map_err(|error| GeneralTypedExtractError::new(format!("invalid {argument} evidence: {error}")))
+}
+
+fn build_abi(arguments: &[GeneralTypedArgumentV3]) -> Result<AbiLayout, GeneralTypedExtractError> {
+    let mut offset = 0_u64;
+    let mut layout_alignment = 1_u32;
+    let mut fields = Vec::with_capacity(arguments.len());
+    for (index, argument) in arguments.iter().enumerate() {
+        let (size, alignment) = argument_size_alignment(argument.kind);
+        offset = align_up(offset, alignment)
+            .ok_or_else(|| GeneralTypedExtractError::new("general typed ABI offset overflow"))?;
+        fields.push(build_abi_field(index, offset, argument)?);
+        offset = offset
+            .checked_add(size)
+            .ok_or_else(|| GeneralTypedExtractError::new("general typed ABI size overflow"))?;
+        layout_alignment = layout_alignment.max(alignment);
+    }
+    let size = align_up(offset, layout_alignment)
+        .ok_or_else(|| GeneralTypedExtractError::new("general typed ABI tail padding overflow"))?;
+    AbiLayout::new(size, layout_alignment, PointerWidth::Bits64, fields).map_err(|error| {
+        GeneralTypedExtractError::new(format!("invalid general typed ABI: {error}"))
+    })
+}
+
+fn build_abi_field(
+    index: usize,
+    offset: u64,
+    argument: &GeneralTypedArgumentV3,
+) -> Result<AbiField, GeneralTypedExtractError> {
+    let scalar = argument.kind.scalar();
+    let (size, alignment, kind, mutability, access, address_space, ownership, alias) =
+        match argument.kind {
+            GeneralTypedArgumentKindV3::Scalar(_) => (
+                scalar.size_bytes(),
+                scalar.size_bytes() as u32,
+                AbiKind::Scalar(artifact_scalar(scalar)),
+                Mutability::Immutable,
+                Access::ByValue,
+                AddressSpace::Value,
+                ArgumentOwnership::ByValue,
+                AliasClass::Value,
+            ),
+            GeneralTypedArgumentKindV3::SharedSlice(_) => (
+                SLICE_BYTES,
+                POINTER_ALIGNMENT,
+                AbiKind::Slice {
+                    element_size: scalar.size_bytes(),
+                    element_alignment: scalar.size_bytes() as u32,
+                },
+                Mutability::Immutable,
+                Access::ReadOnly,
+                AddressSpace::Global,
+                ArgumentOwnership::SharedBorrow,
+                AliasClass::SharedReadOnly,
+            ),
+            GeneralTypedArgumentKindV3::DisjointSlice(_) => (
+                SLICE_BYTES,
+                POINTER_ALIGNMENT,
+                AbiKind::Slice {
+                    element_size: scalar.size_bytes(),
+                    element_alignment: scalar.size_bytes() as u32,
+                },
+                Mutability::Mutable,
+                Access::ReadWrite,
+                AddressSpace::Global,
+                ArgumentOwnership::UniqueBorrow,
+                AliasClass::Exclusive,
+            ),
+        };
+    AbiField::new(
+        Name::new(format!("arg{index}"))
+            .map_err(|error| GeneralTypedExtractError::new(error.to_string()))?,
+        offset,
+        size,
+        alignment,
+        kind,
+        mutability,
+        access,
+        address_space,
+        argument.type_identity(),
+        ownership,
+        alias,
+    )
+    .map_err(|error| GeneralTypedExtractError::new(format!("invalid argument {index}: {error}")))
+}
+
+fn artifact_scalar(scalar: RustScalarElementTypeV1) -> ScalarType {
+    match scalar {
+        RustScalarElementTypeV1::I8 => ScalarType::I8,
+        RustScalarElementTypeV1::U8 => ScalarType::U8,
+        RustScalarElementTypeV1::I16 => ScalarType::I16,
+        RustScalarElementTypeV1::U16 => ScalarType::U16,
+        RustScalarElementTypeV1::I32 => ScalarType::I32,
+        RustScalarElementTypeV1::U32 => ScalarType::U32,
+        RustScalarElementTypeV1::I64 => ScalarType::I64,
+        RustScalarElementTypeV1::U64 => ScalarType::U64,
+        RustScalarElementTypeV1::F32 => ScalarType::F32,
+        RustScalarElementTypeV1::F64 => ScalarType::F64,
+        RustScalarElementTypeV1::F16 => unreachable!("general typed V3 rejects f16"),
+        _ => unreachable!("unknown scalar schema is not admitted by general typed V3"),
+    }
+}
+
+fn argument_size_alignment(kind: GeneralTypedArgumentKindV3) -> (u64, u32) {
+    match kind {
+        GeneralTypedArgumentKindV3::Scalar(scalar) => {
+            (scalar.size_bytes(), scalar.size_bytes() as u32)
+        }
+        GeneralTypedArgumentKindV3::SharedSlice(_)
+        | GeneralTypedArgumentKindV3::DisjointSlice(_) => (SLICE_BYTES, POINTER_ALIGNMENT),
+    }
+}
+
+fn align_up(value: u64, alignment: u32) -> Option<u64> {
+    let mask = u64::from(alignment) - 1;
+    value.checked_add(mask).map(|value| value & !mask)
+}
+
+fn require_64_bit_target<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    layout_cx: &LayoutCx<'tcx>,
+) -> Result<(), GeneralTypedExtractError> {
+    if layout_cx.data_layout().pointer_size().bits() != 64 {
+        return Err(GeneralTypedExtractError::new(
+            "general typed V3 requires 64-bit pointers",
+        ));
+    }
+    let usize_layout = layout_cx.layout_of(tcx.types.usize).map_err(|error| {
+        GeneralTypedExtractError::new(format!("failed to lay out usize: {error}"))
+    })?;
+    if usize_layout.size.bytes() != POINTER_BYTES
+        || !matches!(usize_layout.backend_repr, BackendRepr::Scalar(scalar) if matches!(scalar.primitive(), Primitive::Int(integer, false) if integer.size().bits() == 64))
+    {
+        return Err(GeneralTypedExtractError::new(
+            "general typed V3 requires unsigned 64-bit usize",
+        ));
+    }
+    Ok(())
+}
+
+fn trusted_index1d_type<'tcx>(tcx: TyCtxt<'tcx>) -> Result<Ty<'tcx>, GeneralTypedExtractError> {
+    let marker = tcx
+        .get_diagnostic_item(Symbol::intern(INDEX_1D_DIAGNOSTIC_ITEM))
+        .ok_or_else(|| {
+            GeneralTypedExtractError::new(format!(
+                "missing trusted diagnostic item `{INDEX_1D_DIAGNOSTIC_ITEM}`"
+            ))
+        })?;
+    if trusted_device_items::classify(tcx, marker) != Some(TrustedDeviceItem::ThreadIndex1d)
+        || tcx.def_kind(marker) != DefKind::Fn
+    {
+        return Err(GeneralTypedExtractError::new(
+            "Index1D diagnostic item does not resolve to the trusted function",
+        ));
+    }
+    let signature =
+        tcx.instantiate_bound_regions_with_erased(tcx.fn_sig(marker).instantiate_identity());
+    if !signature.inputs().is_empty()
+        || signature.safety != Safety::Safe
+        || signature.abi != ExternAbi::Rust
+        || signature.c_variadic
+    {
+        return Err(GeneralTypedExtractError::new(
+            "trusted Index1D function has an unexpected signature",
+        ));
+    }
+    let TyKind::Adt(thread_index, args) = *signature.output().kind() else {
+        return Err(GeneralTypedExtractError::new(
+            "trusted Index1D function has an unexpected return type",
+        ));
+    };
+    if trusted_device_items::classify(tcx, thread_index.did())
+        != Some(TrustedDeviceItem::ThreadIndex)
+        || args.len() != 1
+    {
+        return Err(GeneralTypedExtractError::new(
+            "trusted Index1D return type is not the trusted ThreadIndex",
+        ));
+    }
+    args.first()
+        .and_then(|arg| arg.as_type())
+        .ok_or_else(|| GeneralTypedExtractError::new("trusted Index1D type argument is missing"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fe2o3_artifacts::{DigestBytes, derive_generated_host_contract_identity_v1};
+    use reserved_fe2o3_symbols::{
+        GeneratedHostContractIdV3, MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
+    };
+
+    fn argument(kind: GeneralTypedArgumentKindV3) -> GeneralTypedArgumentV3 {
+        let scalar = kind.scalar();
+        let (source_type, abi_class, size, alignment, components) = match kind {
+            GeneralTypedArgumentKindV3::Scalar(_) => (
+                RustSourceTypeShapeV1::scalar(scalar),
+                RustcAbiClassV1::Scalar,
+                scalar.size_bytes(),
+                scalar.size_bytes() as u32,
+                vec![
+                    RustPhysicalComponentV1::new(
+                        0,
+                        scalar.size_bytes(),
+                        scalar.size_bytes() as u32,
+                        RustPhysicalComponentKindV1::Scalar { scalar },
+                    )
+                    .unwrap(),
+                ],
+            ),
+            GeneralTypedArgumentKindV3::SharedSlice(_) => (
+                RustSourceTypeShapeV1::shared_slice(scalar),
+                RustcAbiClassV1::ScalarPair,
+                16,
+                8,
+                slice_components(scalar, RustPointerMutabilityV1::Const),
+            ),
+            GeneralTypedArgumentKindV3::DisjointSlice(_) => (
+                RustSourceTypeShapeV1::disjoint_slice(scalar, RustDisjointIndexSpaceV1::Index1D),
+                RustcAbiClassV1::ScalarPair,
+                16,
+                8,
+                slice_components(scalar, RustPointerMutabilityV1::Mut),
+            ),
+        };
+        GeneralTypedArgumentV3 {
+            kind,
+            layout: RustLayoutEvidenceV1::new(
+                RustTypeEvidenceV1::new(source_type),
+                abi_class,
+                PointerWidth::Bits64,
+                size,
+                alignment,
+                components,
+            )
+            .unwrap(),
+        }
+    }
+
+    fn slice_components(
+        scalar: RustScalarElementTypeV1,
+        mutability: RustPointerMutabilityV1,
+    ) -> Vec<RustPhysicalComponentV1> {
+        vec![
+            RustPhysicalComponentV1::new(
+                0,
+                8,
+                8,
+                RustPhysicalComponentKindV1::Pointer {
+                    mutability,
+                    pointee: scalar,
+                },
+            )
+            .unwrap(),
+            RustPhysicalComponentV1::new(8, 8, 8, RustPhysicalComponentKindV1::Usize).unwrap(),
+        ]
+    }
+
+    fn alpha_arguments() -> Vec<GeneralTypedArgumentV3> {
+        vec![
+            argument(GeneralTypedArgumentKindV3::Scalar(
+                RustScalarElementTypeV1::F32,
+            )),
+            argument(GeneralTypedArgumentKindV3::SharedSlice(
+                RustScalarElementTypeV1::F32,
+            )),
+            argument(GeneralTypedArgumentKindV3::DisjointSlice(
+                RustScalarElementTypeV1::F32,
+            )),
+        ]
+    }
+
+    fn launch() -> LaunchContract {
+        LaunchContract::new(
+            1,
+            BlockSize::Exact(Dimensions::new(256, 1, 1).unwrap()),
+            Dimensions::new(u32::MAX, 1, 1).unwrap(),
+            0,
+            0,
+        )
+        .unwrap()
+    }
+
+    fn identity(name: &str, arguments: &[GeneralTypedArgumentV3]) -> DigestBytes {
+        derive_generated_host_contract_identity_v1(
+            MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
+            [0x42; 32],
+            name,
+            name,
+            &build_abi(arguments).unwrap(),
+            &launch(),
+        )
+    }
+
+    fn hex(value: DigestBytes) -> String {
+        value
+            .as_bytes()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    }
+
+    #[test]
+    fn alpha_and_zeta_reconstruct_exact_offsets_sizes_and_effects() {
+        let alpha = build_abi(&alpha_arguments()).unwrap();
+        assert_eq!(alpha.size(), 40);
+        assert_eq!(alpha.alignment(), 8);
+        assert_eq!(
+            alpha
+                .fields()
+                .iter()
+                .map(|field| field.offset())
+                .collect::<Vec<_>>(),
+            [0, 8, 24]
+        );
+        assert_eq!(alpha.fields()[2].access(), Access::ReadWrite);
+
+        let zeta_arguments = vec![
+            argument(GeneralTypedArgumentKindV3::SharedSlice(
+                RustScalarElementTypeV1::F32,
+            )),
+            argument(GeneralTypedArgumentKindV3::SharedSlice(
+                RustScalarElementTypeV1::F32,
+            )),
+            argument(GeneralTypedArgumentKindV3::Scalar(
+                RustScalarElementTypeV1::F32,
+            )),
+            argument(GeneralTypedArgumentKindV3::DisjointSlice(
+                RustScalarElementTypeV1::F32,
+            )),
+        ];
+        let zeta = build_abi(&zeta_arguments).unwrap();
+        assert_eq!(zeta.size(), 56);
+        assert_eq!(
+            zeta.fields()
+                .iter()
+                .map(|field| field.offset())
+                .collect::<Vec<_>>(),
+            [0, 16, 32, 40]
+        );
+        assert_eq!(zeta.fields()[3].access(), Access::ReadWrite);
+    }
+
+    #[test]
+    fn host_contract_identity_is_order_and_scalar_sensitive() {
+        let alpha = alpha_arguments();
+        let alpha_identity = identity("alpha", &alpha);
+        assert_eq!(
+            hex(alpha_identity),
+            "86fdc5fddf770d4e07d7fc4bf6cb677e7acb7afdeb796dd91370f2699e26fd74"
+        );
+        let declared = GeneratedHostContractIdV3::from_bytes(*alpha_identity.as_bytes());
+        assert_eq!(declared.as_bytes(), *alpha_identity.as_bytes());
+        let mut wrong_identity = declared.as_bytes();
+        wrong_identity[31] ^= 1;
+        assert_ne!(wrong_identity, *alpha_identity.as_bytes());
+
+        let mut reordered = alpha.clone();
+        reordered.swap(0, 1);
+        assert_ne!(alpha_identity, identity("alpha", &reordered));
+
+        let mut scalar_mutation = alpha;
+        scalar_mutation[0] = argument(GeneralTypedArgumentKindV3::Scalar(
+            RustScalarElementTypeV1::F64,
+        ));
+        assert_ne!(alpha_identity, identity("alpha", &scalar_mutation));
+
+        let mut layout_mutation = alpha_arguments();
+        layout_mutation[1].layout = argument(GeneralTypedArgumentKindV3::DisjointSlice(
+            RustScalarElementTypeV1::F32,
+        ))
+        .layout;
+        assert_ne!(alpha_identity, identity("alpha", &layout_mutation));
+        assert_ne!(alpha_identity, identity("renamed", &alpha_arguments()));
+    }
+}

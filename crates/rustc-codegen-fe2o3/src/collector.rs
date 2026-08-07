@@ -1,4 +1,4 @@
-use fe2o3_artifacts::TypeIdentity;
+use fe2o3_artifacts::{TypeIdentity, derive_generated_host_contract_identity_v1};
 use fe2o3_kernel_descriptor::MAX_ARGUMENTS_PER_KERNEL;
 use fe2o3_rustc_front::{
     ASSEMBLY_OPERAND_ADDRESS_V1, ASSEMBLY_OPERAND_IMMEDIATE_V1, ASSEMBLY_OPERAND_SGPR_V1,
@@ -9,8 +9,10 @@ use fe2o3_rustc_front::{
     KernelFrontendContractV1, decode_kernel_frontend_contract_v1,
 };
 use reserved_fe2o3_symbols::{
-    CrateBindingIdV1, KernelBindingIdV1, TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2,
-    derive_crate_binding_id_v1, derive_kernel_binding_id_v1, host_kernel_symbol_v1,
+    CrateBindingIdV1, GeneratedHostContractIdV3, KernelBindingIdV1,
+    MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1, TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3,
+    TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2, derive_crate_binding_id_v1,
+    derive_kernel_binding_id_v1, host_kernel_symbol_v1,
 };
 use rustc_ast::InlineAsmOptions;
 use rustc_hir::def_id::{DefId, LOCAL_CRATE};
@@ -31,12 +33,23 @@ use std::fmt;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum TypedKernelProfile {
     VecAddRustcLayoutV2,
+    GeneralScalarSliceRustcLayoutV3 {
+        generated_host_contract_identity: GeneratedHostContractIdV3,
+    },
 }
 
 impl TypedKernelProfile {
-    pub(crate) const fn expected_argument_count(self) -> usize {
+    pub(crate) const fn expected_argument_count(self) -> Option<usize> {
         match self {
-            Self::VecAddRustcLayoutV2 => 3,
+            Self::VecAddRustcLayoutV2 => Some(3),
+            Self::GeneralScalarSliceRustcLayoutV3 { .. } => None,
+        }
+    }
+
+    pub(crate) const fn accepts_argument_count(self, actual: usize) -> bool {
+        match self.expected_argument_count() {
+            Some(expected) => actual == expected,
+            None => actual > 0 && actual <= MAX_ARGUMENTS_PER_KERNEL,
         }
     }
 }
@@ -110,6 +123,9 @@ pub struct CollectedFunction<'tcx> {
     pub(crate) kernel_binding: Option<KernelBindingIdV1>,
     /// rustc-derived identities for each source argument in a typed profile.
     pub(crate) typed_layout_identities: Option<TypedArgumentListV1<TypeIdentity>>,
+    /// Complete rustc-derived contract for a general V3 typed root.
+    pub(crate) general_typed_contract:
+        Option<crate::rust_type_layout_v3::GeneralTypedKernelContractV3>,
     /// Compiler-authenticated source contract for this exact kernel root.
     pub(crate) frontend_contract: Option<AuthenticatedKernelFrontendContractV1>,
 }
@@ -285,6 +301,7 @@ pub fn dump_device_functions<'tcx>(tcx: TyCtxt<'tcx>, functions: &[CollectedFunc
             debug_assert!(function.is_kernel_entry() || function.typed_profile.is_none());
             debug_assert!(function.is_kernel_entry() || function.kernel_binding.is_none());
             debug_assert!(function.is_kernel_entry() || function.typed_layout_identities.is_none());
+            debug_assert!(function.is_kernel_entry() || function.general_typed_contract.is_none());
             debug_assert!(function.is_kernel_entry() || function.frontend_contract.is_none());
             let mir_stats = if tcx.is_mir_available(def_id) {
                 let mir = tcx.instance_mir(function.instance.def);
@@ -302,6 +319,9 @@ pub fn dump_device_functions<'tcx>(tcx: TyCtxt<'tcx>, functions: &[CollectedFunc
                 match function.typed_profile {
                     Some(TypedKernelProfile::VecAddRustcLayoutV2) => {
                         "kernel/typed-vecadd-rustc-layout-v2"
+                    }
+                    Some(TypedKernelProfile::GeneralScalarSliceRustcLayoutV3 { .. }) => {
+                        "kernel/typed-general-rustc-layout-v3"
                     }
                     None => match function.role {
                         CollectedFunctionRole::KernelEntry => "kernel",
@@ -345,6 +365,8 @@ struct RegistrationRecord<T> {
     export_name: String,
     crate_binding: Option<CrateBindingIdV1>,
     kernel_binding: Option<KernelBindingIdV1>,
+    profile_tag: Option<String>,
+    generated_host_contract_identity: Option<GeneratedHostContractIdV3>,
     target_symbol: String,
     target_identity: String,
     target: T,
@@ -358,6 +380,7 @@ struct KernelRoot<T> {
     typed_profile: Option<TypedKernelProfile>,
     kernel_binding: Option<KernelBindingIdV1>,
     typed_layout_identities: Option<TypedArgumentListV1<TypeIdentity>>,
+    general_typed_contract: Option<crate::rust_type_layout_v3::GeneralTypedKernelContractV3>,
     frontend_contract: Option<AuthenticatedKernelFrontendContractV1>,
 }
 
@@ -474,17 +497,18 @@ fn kernel_roots<'tcx>(
     let frontend_records = decode_frontend_contract_registrations(tcx, &functions_by_symbol)?;
     bind_frontend_contract_registrations(tcx, &mut roots, frontend_records)?;
     for root in &mut roots {
-        root.typed_layout_identities = match root.typed_profile {
+        let registration_path = format!(
+            "{}{}",
+            reserved_fe2o3_symbols::KERNEL_REGISTRATION_PREFIX,
+            root.logical_name
+        );
+        match root.typed_profile {
             Some(TypedKernelProfile::VecAddRustcLayoutV2) => {
                 let evidence =
                     crate::rust_type_layout::extract_exact_typed_vecadd_layout(tcx, root.target)
                         .map_err(|error| {
                             RegistrationError::new(
-                                format!(
-                                    "{}{}",
-                                    reserved_fe2o3_symbols::KERNEL_REGISTRATION_PREFIX,
-                                    root.logical_name
-                                ),
+                                &registration_path,
                                 format!("rustc type/layout evidence extraction failed: {error}"),
                             )
                         })?;
@@ -492,21 +516,71 @@ fn kernel_roots<'tcx>(
                     .into_iter()
                     .map(|argument| argument.type_identity())
                     .collect();
-                Some(TypedArgumentListV1::new(identities).map_err(|error| {
-                    RegistrationError::new(
-                        format!(
-                            "{}{}",
-                            reserved_fe2o3_symbols::KERNEL_REGISTRATION_PREFIX,
-                            root.logical_name
-                        ),
-                        error.to_string(),
-                    )
-                })?)
+                root.typed_layout_identities =
+                    Some(TypedArgumentListV1::new(identities).map_err(|error| {
+                        RegistrationError::new(&registration_path, error.to_string())
+                    })?);
+                root.general_typed_contract = None;
             }
-            None => None,
-        };
+            Some(TypedKernelProfile::GeneralScalarSliceRustcLayoutV3 {
+                generated_host_contract_identity,
+            }) => {
+                let contract =
+                    crate::rust_type_layout_v3::extract_general_typed_kernel_v3(tcx, root.target)
+                        .map_err(|error| {
+                        RegistrationError::new(
+                            &registration_path,
+                            format!("general rustc type/layout extraction failed: {error}"),
+                        )
+                    })?;
+                let kernel_binding = root.kernel_binding.ok_or_else(|| {
+                    RegistrationError::new(&registration_path, "V3 root has no kernel binding")
+                })?;
+                let derived = derive_generated_host_contract_identity_v1(
+                    MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
+                    kernel_binding.as_bytes(),
+                    &root.logical_name,
+                    &root.export_name,
+                    contract.abi(),
+                    contract.launch(),
+                );
+                if derived.as_bytes() != &generated_host_contract_identity.as_bytes() {
+                    return Err(RegistrationError::new(
+                        &registration_path,
+                        format!(
+                            "generated host-contract identity {} disagrees with rustc-derived identity {}",
+                            generated_host_contract_identity.to_hex(),
+                            encode_lower_hex(derived.as_bytes())
+                        ),
+                    ));
+                }
+                let identities = contract
+                    .arguments()
+                    .iter()
+                    .map(|argument| argument.type_identity())
+                    .collect();
+                root.typed_layout_identities =
+                    Some(TypedArgumentListV1::new(identities).map_err(|error| {
+                        RegistrationError::new(&registration_path, error.to_string())
+                    })?);
+                root.general_typed_contract = Some(contract);
+            }
+            None => {
+                root.typed_layout_identities = None;
+                root.general_typed_contract = None;
+            }
+        }
     }
     Ok(roots)
+}
+
+fn encode_lower_hex(bytes: &[u8]) -> String {
+    use fmt::Write as _;
+    let mut value = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        write!(value, "{byte:02x}").expect("writing to String cannot fail");
+    }
+    value
 }
 
 fn session_crate_binding(tcx: TyCtxt<'_>) -> Option<CrateBindingIdV1> {
@@ -791,7 +865,7 @@ fn decode_registration_static<'tcx>(
     let TyKind::Tuple(fields) = registration_ty.kind() else {
         return Err(RegistrationError::new(
             registration_path,
-            "registration must use an exact V1 or V2 tuple type",
+            "registration must use an exact V1, V2, or V3 tuple type",
         ));
     };
 
@@ -811,10 +885,21 @@ fn decode_registration_static<'tcx>(
         && is_shared_str(fields[5])
         && is_shared_str(fields[6])
         && matches!(fields[7].kind(), TyKind::FnPtr(..));
-    if !is_v1 && !is_v2 {
+    let is_v3 = fields.len() == reserved_fe2o3_symbols::KERNEL_REGISTRATION_V3_FIELD_COUNT
+        && fields[0] == tcx.types.u64
+        && fields[1] == tcx.types.u16
+        && fields[2] == tcx.types.u16
+        && is_shared_str(fields[3])
+        && is_shared_str(fields[4])
+        && is_shared_str(fields[5])
+        && is_shared_str(fields[6])
+        && is_shared_str(fields[7])
+        && is_shared_str(fields[8])
+        && matches!(fields[9].kind(), TyKind::FnPtr(..));
+    if !is_v1 && !is_v2 && !is_v3 {
         return Err(RegistrationError::new(
             registration_path,
-            "registration type must be V1 `(u64, u16, u16, &str, &str, fn pointer)` or V2 `(u64, u16, u16, &str, &str, &str, &str, fn pointer)`",
+            "registration type must be the exact V1, V2, or 10-field V3 tuple",
         ));
     }
 
@@ -842,7 +927,9 @@ fn decode_registration_static<'tcx>(
             "registration initializer does not contain the required tuple value",
         )
     })?;
-    let expected_fields = if is_v2 {
+    let expected_fields = if is_v3 {
+        reserved_fe2o3_symbols::KERNEL_REGISTRATION_V3_FIELD_COUNT
+    } else if is_v2 {
         reserved_fe2o3_symbols::KERNEL_REGISTRATION_V2_FIELD_COUNT
     } else {
         reserved_fe2o3_symbols::KERNEL_REGISTRATION_V1_FIELD_COUNT
@@ -861,7 +948,7 @@ fn decode_registration_static<'tcx>(
     let kind = registration_integer(tcx, fields[2], tcx.types.u16, "kind", &registration_path)?;
     let logical_name = registration_string(tcx, fields[3], "logical name", &registration_path)?;
     let export_name = registration_string(tcx, fields[4], "export name", &registration_path)?;
-    let crate_binding = if is_v2 {
+    let crate_binding = if is_v2 || is_v3 {
         let value = registration_string(tcx, fields[5], "crate binding", &registration_path)?;
         Some(CrateBindingIdV1::from_hex(&value).map_err(|error| {
             RegistrationError::new(
@@ -872,7 +959,7 @@ fn decode_registration_static<'tcx>(
     } else {
         None
     };
-    let kernel_binding = if is_v2 {
+    let kernel_binding = if is_v2 || is_v3 {
         let value = registration_string(tcx, fields[6], "kernel binding", &registration_path)?;
         Some(KernelBindingIdV1::from_hex(&value).map_err(|error| {
             RegistrationError::new(
@@ -883,7 +970,41 @@ fn decode_registration_static<'tcx>(
     } else {
         None
     };
-    let target_index = if is_v2 { 7 } else { 5 };
+    let profile_tag = if is_v3 {
+        Some(registration_string(
+            tcx,
+            fields[7],
+            "profile tag",
+            &registration_path,
+        )?)
+    } else {
+        None
+    };
+    let generated_host_contract_identity = if is_v3 {
+        let value = registration_string(
+            tcx,
+            fields[8],
+            "generated host-contract identity",
+            &registration_path,
+        )?;
+        Some(
+            GeneratedHostContractIdV3::from_hex(&value).map_err(|error| {
+                RegistrationError::new(
+                    &registration_path,
+                    format!("invalid generated host-contract identity: {error}"),
+                )
+            })?,
+        )
+    } else {
+        None
+    };
+    let target_index = if is_v3 {
+        9
+    } else if is_v2 {
+        7
+    } else {
+        5
+    };
     let target = registration_target(tcx, body, fields[target_index], &registration_path)?;
     let target_symbol = tcx.symbol_name(target).name.to_string();
     let target_identity = tcx.def_path_str(target.def_id());
@@ -930,6 +1051,12 @@ fn decode_registration_static<'tcx>(
             "registration version 2 requires the exact V2 tuple type",
         ));
     }
+    if version == reserved_fe2o3_symbols::KERNEL_REGISTRATION_VERSION_V3 && !is_v3 {
+        return Err(RegistrationError::new(
+            &registration_path,
+            "registration version 3 requires the exact V3 tuple type",
+        ));
+    }
 
     Ok(RegistrationRecord {
         registration_path,
@@ -941,6 +1068,8 @@ fn decode_registration_static<'tcx>(
         export_name,
         crate_binding,
         kernel_binding,
+        profile_tag,
+        generated_host_contract_identity,
         target_symbol,
         target_identity,
         target,
@@ -1212,6 +1341,27 @@ fn validate_registration_records<T: Copy>(
                 reserved_fe2o3_symbols::KERNEL_REGISTRATION_VERSION_V2,
                 reserved_fe2o3_symbols::KERNEL_REGISTRATION_KIND_TYPED_VECADD_LAYOUT_V2,
             ) => Some(TypedKernelProfile::VecAddRustcLayoutV2),
+            (
+                reserved_fe2o3_symbols::KERNEL_REGISTRATION_VERSION_V3,
+                reserved_fe2o3_symbols::KERNEL_REGISTRATION_KIND_TYPED_GENERAL_LAYOUT_V3,
+            ) => {
+                let profile_tag = record
+                    .profile_tag
+                    .as_deref()
+                    .ok_or_else(|| error("V3 registration has no profile tag".to_owned()))?;
+                if profile_tag != TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3 {
+                    return Err(error(format!(
+                        "V3 profile tag `{profile_tag}` is not the canonical general typed profile `{TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3}`"
+                    )));
+                }
+                let generated_host_contract_identity =
+                    record.generated_host_contract_identity.ok_or_else(|| {
+                        error("V3 registration has no generated host-contract identity".to_owned())
+                    })?;
+                Some(TypedKernelProfile::GeneralScalarSliceRustcLayoutV3 {
+                    generated_host_contract_identity,
+                })
+            }
             (reserved_fe2o3_symbols::KERNEL_REGISTRATION_VERSION_V1, kind)
                 if kind
                     == reserved_fe2o3_symbols::KERNEL_REGISTRATION_KIND_TYPED_VECADD_LAYOUT_V2 =>
@@ -1233,9 +1383,24 @@ fn validate_registration_records<T: Copy>(
                     "ordinary registrations must remain version 1".to_owned(),
                 ));
             }
+            (version, kind)
+                if kind
+                    == reserved_fe2o3_symbols::KERNEL_REGISTRATION_KIND_TYPED_GENERAL_LAYOUT_V3
+                    && version != reserved_fe2o3_symbols::KERNEL_REGISTRATION_VERSION_V3 =>
+            {
+                return Err(error(
+                    "general typed registrations require version 3".to_owned(),
+                ));
+            }
+            (reserved_fe2o3_symbols::KERNEL_REGISTRATION_VERSION_V3, _) => {
+                return Err(error(
+                    "version 3 is reserved for the general typed registration kind".to_owned(),
+                ));
+            }
             (version, _)
                 if version != reserved_fe2o3_symbols::KERNEL_REGISTRATION_VERSION_V1
-                    && version != reserved_fe2o3_symbols::KERNEL_REGISTRATION_VERSION_V2 =>
+                    && version != reserved_fe2o3_symbols::KERNEL_REGISTRATION_VERSION_V2
+                    && version != reserved_fe2o3_symbols::KERNEL_REGISTRATION_VERSION_V3 =>
             {
                 return Err(error(format!("unknown registration version {version}")));
             }
@@ -1292,8 +1457,43 @@ fn validate_registration_records<T: Copy>(
                 }
                 Some(declared)
             }
+            Some(TypedKernelProfile::GeneralScalarSliceRustcLayoutV3 { .. }) => {
+                let crate_binding = record
+                    .crate_binding
+                    .ok_or_else(|| error("V3 registration has no crate binding".to_owned()))?;
+                if let Some(expected) = expected_crate_binding
+                    && crate_binding != expected
+                {
+                    return Err(error(format!(
+                        "crate binding {} disagrees with rustc session binding {}",
+                        crate_binding.to_hex(),
+                        expected.to_hex()
+                    )));
+                }
+                let declared = record
+                    .kernel_binding
+                    .ok_or_else(|| error("V3 registration has no kernel binding".to_owned()))?;
+                let expected = derive_kernel_binding_id_v1(
+                    crate_binding,
+                    TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3,
+                    &record.logical_name,
+                    &record.export_name,
+                );
+                if declared != expected {
+                    return Err(error(format!(
+                        "kernel binding {} disagrees with derived binding {}",
+                        declared.to_hex(),
+                        expected.to_hex()
+                    )));
+                }
+                Some(declared)
+            }
             None => {
-                if record.crate_binding.is_some() || record.kernel_binding.is_some() {
+                if record.crate_binding.is_some()
+                    || record.kernel_binding.is_some()
+                    || record.profile_tag.is_some()
+                    || record.generated_host_contract_identity.is_some()
+                {
                     return Err(error(
                         "V1 registration unexpectedly carries binding IDs".to_owned(),
                     ));
@@ -1343,6 +1543,7 @@ fn validate_registration_records<T: Copy>(
             typed_profile,
             kernel_binding,
             typed_layout_identities: None,
+            general_typed_contract: None,
             frontend_contract: None,
         });
     }
@@ -1461,6 +1662,7 @@ impl<'tcx> DeviceCollector<'tcx> {
                 typed_profile: None,
                 kernel_binding: None,
                 typed_layout_identities: None,
+                general_typed_contract: None,
                 frontend_contract: None,
             });
         }
@@ -1475,6 +1677,7 @@ impl<'tcx> DeviceCollector<'tcx> {
             typed_profile,
             kernel_binding,
             typed_layout_identities,
+            general_typed_contract,
             frontend_contract,
         } = root;
         if !self.used_export_names.insert(export_name.clone()) {
@@ -1496,6 +1699,7 @@ impl<'tcx> DeviceCollector<'tcx> {
                 typed_profile,
                 kernel_binding,
                 typed_layout_identities,
+                general_typed_contract,
                 frontend_contract,
             });
         }
@@ -2056,6 +2260,7 @@ impl<'tcx> DeviceCollector<'tcx> {
             typed_profile: None,
             kernel_binding: None,
             typed_layout_identities: None,
+            general_typed_contract: None,
             frontend_contract: None,
         });
         Ok(())
@@ -2331,10 +2536,12 @@ mod tests {
         FrontendUnsafeAssemblyTargetV1, KernelFrontendContractV1,
     };
     use reserved_fe2o3_symbols::{
-        KERNEL_PREFIX, KERNEL_REGISTRATION_KIND_KERNEL,
+        GeneratedHostContractIdV3, KERNEL_PREFIX, KERNEL_REGISTRATION_KIND_KERNEL,
+        KERNEL_REGISTRATION_KIND_TYPED_GENERAL_LAYOUT_V3,
         KERNEL_REGISTRATION_KIND_TYPED_VECADD_LAYOUT_V2, KERNEL_REGISTRATION_KIND_TYPED_VECADD_V1,
         KERNEL_REGISTRATION_MAGIC, KERNEL_REGISTRATION_PREFIX, KERNEL_REGISTRATION_VERSION_V1,
-        KERNEL_REGISTRATION_VERSION_V2, TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2,
+        KERNEL_REGISTRATION_VERSION_V2, KERNEL_REGISTRATION_VERSION_V3, KernelBindingIdV1,
+        TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3, TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2,
         derive_crate_binding_id_v1, derive_kernel_binding_id_v1, host_kernel_symbol_v1,
     };
     use std::collections::BTreeSet;
@@ -2394,6 +2601,8 @@ mod tests {
             export_name: export_name.to_string(),
             crate_binding: None,
             kernel_binding: None,
+            profile_tag: None,
+            generated_host_contract_identity: None,
             target_symbol: format!("{KERNEL_PREFIX}{export_name}"),
             target_identity: format!("target-{target}"),
             target,
@@ -2418,6 +2627,31 @@ mod tests {
         registration.kind = KERNEL_REGISTRATION_KIND_TYPED_VECADD_LAYOUT_V2;
         registration.crate_binding = Some(crate_binding);
         registration.kernel_binding = Some(kernel_binding);
+        registration.target_symbol = host_kernel_symbol_v1(kernel_binding);
+        registration
+    }
+
+    fn general_typed_registration(
+        path: &str,
+        logical_name: &str,
+        export_name: &str,
+        target: u8,
+    ) -> RegistrationRecord<u8> {
+        let mut registration = registration(path, logical_name, export_name, target);
+        let crate_binding = derive_crate_binding_id_v1("fixture", ["metadata"]);
+        let kernel_binding = derive_kernel_binding_id_v1(
+            crate_binding,
+            TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3,
+            logical_name,
+            export_name,
+        );
+        registration.version = KERNEL_REGISTRATION_VERSION_V3;
+        registration.kind = KERNEL_REGISTRATION_KIND_TYPED_GENERAL_LAYOUT_V3;
+        registration.crate_binding = Some(crate_binding);
+        registration.kernel_binding = Some(kernel_binding);
+        registration.profile_tag = Some(TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3.to_owned());
+        registration.generated_host_contract_identity =
+            Some(GeneratedHostContractIdV3::from_bytes([0x63; 32]));
         registration.target_symbol = host_kernel_symbol_v1(kernel_binding);
         registration
     }
@@ -2458,6 +2692,95 @@ mod tests {
             Some(TypedKernelProfile::VecAddRustcLayoutV2)
         );
         assert!(roots[0].kernel_binding.is_some());
+    }
+
+    #[test]
+    fn general_v3_registration_carries_the_complete_profile_identity() {
+        let registration = general_typed_registration(
+            "crate::__fe2o3_kernel_registration_alpha",
+            "alpha",
+            "alpha",
+            3,
+        );
+        let roots = validate_registration_records(vec![registration]).unwrap();
+        assert_eq!(roots.len(), 1);
+        assert_eq!(roots[0].target, 3);
+        assert!(matches!(
+            roots[0].typed_profile,
+            Some(TypedKernelProfile::GeneralScalarSliceRustcLayoutV3 {
+                generated_host_contract_identity,
+            }) if generated_host_contract_identity.as_bytes() == [0x63; 32]
+        ));
+    }
+
+    #[test]
+    fn general_v3_rejects_profile_binding_identity_and_version_mutations() {
+        let registration = general_typed_registration(
+            "crate::__fe2o3_kernel_registration_alpha",
+            "alpha",
+            "alpha",
+            3,
+        );
+
+        let mut wrong_profile = registration.clone();
+        wrong_profile.profile_tag = Some("fe2o3.manifest-derived-scalar-slice.v2".to_owned());
+        assert!(
+            validate_registration_records(vec![wrong_profile])
+                .unwrap_err()
+                .reason
+                .contains("not the canonical general typed profile")
+        );
+
+        let mut wrong_binding = registration.clone();
+        wrong_binding.kernel_binding = Some(KernelBindingIdV1::from_bytes([0x99; 32]));
+        assert!(
+            validate_registration_records(vec![wrong_binding])
+                .unwrap_err()
+                .reason
+                .contains("disagrees with derived binding")
+        );
+
+        let mut old_version = registration.clone();
+        old_version.version = KERNEL_REGISTRATION_VERSION_V2;
+        assert!(
+            validate_registration_records(vec![old_version])
+                .unwrap_err()
+                .reason
+                .contains("require version 3")
+        );
+
+        let mut old_kind = registration;
+        old_kind.kind = KERNEL_REGISTRATION_KIND_TYPED_VECADD_LAYOUT_V2;
+        assert!(
+            validate_registration_records(vec![old_kind])
+                .unwrap_err()
+                .reason
+                .contains("version 3 is reserved")
+        );
+    }
+
+    #[test]
+    fn general_v3_roots_are_ordered_independently_of_registration_discovery() {
+        let zeta = general_typed_registration(
+            "crate::__fe2o3_kernel_registration_zeta",
+            "zeta",
+            "zeta",
+            2,
+        );
+        let alpha = general_typed_registration(
+            "crate::__fe2o3_kernel_registration_alpha",
+            "alpha",
+            "alpha",
+            1,
+        );
+        let roots = validate_registration_records(vec![zeta, alpha]).unwrap();
+        assert_eq!(
+            roots
+                .iter()
+                .map(|root| root.logical_name.as_str())
+                .collect::<Vec<_>>(),
+            ["alpha", "zeta"]
+        );
     }
 
     #[test]
@@ -2590,7 +2913,7 @@ mod tests {
         );
 
         let mut unknown_version = base.clone();
-        unknown_version.version = KERNEL_REGISTRATION_VERSION_V2 + 1;
+        unknown_version.version = KERNEL_REGISTRATION_VERSION_V3 + 1;
         assert!(
             validate_registration_records(vec![unknown_version])
                 .unwrap_err()
@@ -2600,7 +2923,7 @@ mod tests {
 
         for kind in [
             0,
-            KERNEL_REGISTRATION_KIND_TYPED_VECADD_LAYOUT_V2 + 1,
+            KERNEL_REGISTRATION_KIND_TYPED_GENERAL_LAYOUT_V3 + 1,
             u16::MAX,
         ] {
             let mut unknown_kind = base.clone();

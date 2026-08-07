@@ -630,6 +630,7 @@ fn kernel(value: u32) -> u32 {
             typed_profile: None,
             kernel_binding: None,
             typed_layout_identities: None,
+            general_typed_contract: None,
             frontend_contract: None,
         }
     }

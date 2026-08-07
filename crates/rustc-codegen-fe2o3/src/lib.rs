@@ -29,6 +29,7 @@ mod record_lowering;
 mod rust_type_layout;
 #[allow(dead_code)]
 mod rust_type_layout_general;
+mod rust_type_layout_v3;
 pub mod semantic_layout_bridge;
 mod trusted_device_items;
 mod typed_artifact;
@@ -727,6 +728,15 @@ fn typed_roots_from_collection(
                         reason: "typed profile is attached to a non-root device function",
                     });
                 }
+                if matches!(
+                    profile,
+                    collector::TypedKernelProfile::GeneralScalarSliceRustcLayoutV3 { .. }
+                ) {
+                    return Err(TypedVerticalError::InvalidCollectedRoot {
+                        export_name: function.export_name.clone(),
+                        reason: "general typed V3 requires kernel-ir-worker-v2 shared publication",
+                    });
+                }
                 let logical_name = function.logical_name.clone().ok_or_else(|| {
                     TypedVerticalError::InvalidCollectedRoot {
                         export_name: function.export_name.clone(),
@@ -746,7 +756,7 @@ fn typed_roots_from_collection(
                             reason: "typed kernel root has no rustc-derived layout identities",
                         }
                     })?;
-                if type_identities.len() != profile.expected_argument_count() {
+                if !profile.accepts_argument_count(type_identities.len()) {
                     return Err(TypedVerticalError::InvalidCollectedRoot {
                         export_name: function.export_name.clone(),
                         reason: "typed kernel argument count does not match its profile",
@@ -808,6 +818,12 @@ fn generate_typed_host_objects(
                     hsaco.to_vec(),
                 )
                 .map_err(TypedVerticalError::Artifact)?
+            }
+            collector::TypedKernelProfile::GeneralScalarSliceRustcLayoutV3 { .. } => {
+                return Err(TypedVerticalError::InvalidCollectedRoot {
+                    export_name: root.export_name.clone(),
+                    reason: "general typed V3 cannot enter legacy artifact generation",
+                });
             }
         };
         let object_path = temporary.reserve(output_dir, generated.artifact_id())?;
