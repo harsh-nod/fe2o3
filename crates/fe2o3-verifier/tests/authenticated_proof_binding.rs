@@ -493,7 +493,8 @@ fn persistent_binding_rejects_exact_evidence_replay_after_restart() {
     let (evidence, verifier_policy) = measured_execution(target);
     let replay = evidence.clone();
     let policy = binding_policy(manifest, target, &evidence, verifier_policy);
-    let (mut ledger, recovery) = PersistentProofFreshnessLedgerV1::open(&directory.path).unwrap();
+    let (mut ledger, recovery) =
+        PersistentProofFreshnessLedgerV1::create_new(&directory.path).unwrap();
     assert_eq!(recovery, PersistentFreshnessRecoveryV1::Initialized);
 
     let binding =
@@ -504,7 +505,8 @@ fn persistent_binding_rejects_exact_evidence_replay_after_restart() {
     assert!(!binding.grants_launch_authority());
     drop(ledger);
 
-    let (mut reopened, recovery) = PersistentProofFreshnessLedgerV1::open(&directory.path).unwrap();
+    let (mut reopened, recovery) =
+        PersistentProofFreshnessLedgerV1::open_existing(&directory.path).unwrap();
     assert_eq!(recovery, PersistentFreshnessRecoveryV1::Clean);
     assert_eq!(reopened.inspect().unwrap().generation(), 1);
     assert_eq!(

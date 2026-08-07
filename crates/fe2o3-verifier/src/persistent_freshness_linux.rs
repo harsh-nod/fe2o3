@@ -1,6 +1,6 @@
 use super::*;
 
-use std::ffi::{CString, c_char, c_int, c_long, c_uint};
+use std::ffi::{CString, c_char, c_int, c_long, c_uint, c_void};
 use std::fs::{File, Metadata};
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
@@ -81,9 +81,43 @@ pub(super) struct LinuxLedger {
 }
 
 impl LinuxLedger {
-    pub(super) fn open(
+    pub(super) fn create_new(
         path: &Path,
     ) -> Result<(Self, PersistentFreshnessRecoveryV1), PersistentFreshnessLedgerErrorV1> {
+        let ledger = match Self::open_with_lock_flags(path, O_CREAT | O_EXCL) {
+            Err(PersistentFreshnessLedgerErrorV1::Io {
+                kind: io::ErrorKind::AlreadyExists,
+                ..
+            }) => return Err(PersistentFreshnessLedgerErrorV1::LedgerAlreadyExists),
+            result => result?,
+        };
+        {
+            acquire_lock(&ledger.lock)?;
+            let initialized = (|| {
+                ledger.validate_lock_name()?;
+                initialize_new(&ledger)
+            })();
+            release_lock(&ledger.lock);
+            initialized?;
+        }
+        Ok((ledger, PersistentFreshnessRecoveryV1::Initialized))
+    }
+
+    pub(super) fn open_existing(
+        path: &Path,
+    ) -> Result<(Self, PersistentFreshnessRecoveryV1), PersistentFreshnessLedgerErrorV1> {
+        let mut ledger = Self::open_with_lock_flags(path, 0)?;
+        let recovery = {
+            let transaction = ledger.try_begin_exclusive()?;
+            transaction.recovery
+        };
+        Ok((ledger, recovery))
+    }
+
+    fn open_with_lock_flags(
+        path: &Path,
+        creation_flags: u64,
+    ) -> Result<Self, PersistentFreshnessLedgerErrorV1> {
         let directory = open_directory(path)?;
         let metadata = directory.metadata().map_err(|error| {
             io_error(
@@ -106,25 +140,21 @@ impl LinuxLedger {
         let lock = open_relative(
             &directory,
             LOCK_NAME,
-            O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK,
-            0o600,
+            O_RDWR | creation_flags | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK,
+            if creation_flags == 0 { 0 } else { 0o600 },
             PersistentFreshnessLedgerFileV1::Lock,
         )?;
         let lock_snapshot =
             validate_regular_file(&lock, PersistentFreshnessLedgerFileV1::Lock, owner, 0)?;
         sync_directory(&directory)?;
 
-        let mut ledger = Self {
+        let ledger = Self {
             directory,
             lock,
             owner,
             lock_snapshot,
         };
-        let recovery = {
-            let transaction = ledger.try_begin_exclusive()?;
-            transaction.recovery
-        };
-        Ok((ledger, recovery))
+        Ok(ledger)
     }
 
     pub(super) fn try_begin_exclusive(
@@ -168,6 +198,55 @@ impl LinuxLedger {
         }
         Ok(())
     }
+}
+
+fn initialize_new(ledger: &LinuxLedger) -> Result<(), PersistentFreshnessLedgerErrorV1> {
+    for (name, file, max) in [
+        (
+            STATE_NAME,
+            PersistentFreshnessLedgerFileV1::State,
+            MAX_PERSISTENT_FRESHNESS_STATE_BYTES_V1,
+        ),
+        (
+            STATE_TEMPORARY_NAME,
+            PersistentFreshnessLedgerFileV1::StateTemporary,
+            MAX_PERSISTENT_FRESHNESS_STATE_BYTES_V1,
+        ),
+        (
+            INTENT_NAME,
+            PersistentFreshnessLedgerFileV1::Intent,
+            INTENT_BYTES_V1,
+        ),
+        (
+            INTENT_TEMPORARY_NAME,
+            PersistentFreshnessLedgerFileV1::IntentTemporary,
+            INTENT_BYTES_V1,
+        ),
+    ] {
+        if read_optional_file(ledger, name, file, max)?.is_some() {
+            return Err(PersistentFreshnessLedgerErrorV1::LedgerAlreadyExists);
+        }
+    }
+
+    let state = FreshnessStateV1::empty(random_namespace()?);
+    write_new_file(
+        ledger,
+        STATE_TEMPORARY_NAME,
+        PersistentFreshnessLedgerFileV1::StateTemporary,
+        &state
+            .encode()
+            .map_err(|error| PersistentFreshnessLedgerErrorV1::Record {
+                file: PersistentFreshnessLedgerFileV1::State,
+                error,
+            })?,
+    )?;
+    rename_file(
+        ledger,
+        STATE_TEMPORARY_NAME,
+        STATE_NAME,
+        PersistentFreshnessLedgerFileV1::State,
+    )?;
+    sync_directory(&ledger.directory)
 }
 
 pub(super) struct LinuxTransaction<'a> {
@@ -245,6 +324,7 @@ impl LinuxTransaction<'_> {
         self.state = next;
         Ok(PersistentFreshnessReceiptV1 {
             identity,
+            namespace: self.state.namespace,
             generation: self.state.generation,
             state_identity: self.state.identity(),
         })
@@ -294,7 +374,7 @@ fn recover(
         }
         if let Some(bytes) = state_temporary_bytes {
             let state = decode_state(PersistentFreshnessLedgerFileV1::StateTemporary, &bytes)?;
-            if state != FreshnessStateV1::empty() {
+            if state.generation != 0 || !state.entries.is_empty() {
                 return Err(PersistentFreshnessLedgerErrorV1::RecoveryConflict);
             }
             rename_file(
@@ -306,26 +386,7 @@ fn recover(
             sync_directory(&ledger.directory)?;
             return Ok((state, PersistentFreshnessRecoveryV1::Initialized));
         }
-        let state = FreshnessStateV1::empty();
-        write_new_file(
-            ledger,
-            STATE_TEMPORARY_NAME,
-            PersistentFreshnessLedgerFileV1::StateTemporary,
-            &state
-                .encode()
-                .map_err(|error| PersistentFreshnessLedgerErrorV1::Record {
-                    file: PersistentFreshnessLedgerFileV1::State,
-                    error,
-                })?,
-        )?;
-        rename_file(
-            ledger,
-            STATE_TEMPORARY_NAME,
-            STATE_NAME,
-            PersistentFreshnessLedgerFileV1::State,
-        )?;
-        sync_directory(&ledger.directory)?;
-        return Ok((state, PersistentFreshnessRecoveryV1::Initialized));
+        return Err(PersistentFreshnessLedgerErrorV1::MissingState);
     };
 
     let state = decode_state(PersistentFreshnessLedgerFileV1::State, &state_bytes)?;
@@ -718,6 +779,45 @@ fn effective_user_id() -> u32 {
     unsafe { linux_geteuid() }
 }
 
+fn random_namespace() -> Result<Digest, PersistentFreshnessLedgerErrorV1> {
+    let mut bytes = [0_u8; 32];
+    let mut offset = 0;
+    while offset < bytes.len() {
+        // SAFETY: the remaining slice is writable for the exact supplied
+        // length. `getrandom` does not retain the pointer.
+        let result = unsafe {
+            linux_getrandom(
+                bytes[offset..].as_mut_ptr().cast::<c_void>(),
+                bytes.len() - offset,
+                0,
+            )
+        };
+        if result < 0 {
+            let error = io::Error::last_os_error();
+            if error.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(io_error(
+                PersistentFreshnessLedgerOperationV1::Create,
+                PersistentFreshnessLedgerFileV1::State,
+                error,
+            ));
+        }
+        if result == 0 {
+            return Err(io_error(
+                PersistentFreshnessLedgerOperationV1::Create,
+                PersistentFreshnessLedgerFileV1::State,
+                io::Error::new(io::ErrorKind::UnexpectedEof, "getrandom returned no bytes"),
+            ));
+        }
+        offset += result as usize;
+    }
+    if bytes.iter().all(|byte| *byte == 0) {
+        return Err(PersistentFreshnessLedgerErrorV1::ZeroNamespace);
+    }
+    Ok(Digest::from_bytes(bytes))
+}
+
 unsafe extern "C" {
     #[link_name = "syscall"]
     fn linux_syscall(number: c_long, ...) -> c_long;
@@ -738,6 +838,9 @@ unsafe extern "C" {
 
     #[link_name = "geteuid"]
     fn linux_geteuid() -> c_uint;
+
+    #[link_name = "getrandom"]
+    fn linux_getrandom(buffer: *mut c_void, length: usize, flags: c_uint) -> isize;
 }
 
 #[cfg(test)]
@@ -843,12 +946,11 @@ mod tests {
     #[test]
     fn initialization_consumption_and_restart_are_durable() {
         let directory = TestDirectory::new();
-        let (mut ledger, recovery) = LinuxLedger::open(directory.path()).unwrap();
+        let (mut ledger, recovery) = LinuxLedger::create_new(directory.path()).unwrap();
         assert_eq!(recovery, PersistentFreshnessRecoveryV1::Initialized);
-        assert_eq!(
-            ledger.try_begin_exclusive().unwrap().state().generation(),
-            0
-        );
+        let initial = ledger.try_begin_exclusive().unwrap().state();
+        assert_eq!(initial.generation(), 0);
+        assert_ne!(initial.namespace(), digest(0));
 
         let receipt = ledger
             .try_begin_exclusive()
@@ -856,14 +958,14 @@ mod tests {
             .consume(identity(1))
             .unwrap();
         assert_eq!(receipt.generation(), 1);
+        assert_eq!(receipt.namespace(), initial.namespace());
         drop(ledger);
 
-        let (mut reopened, recovery) = LinuxLedger::open(directory.path()).unwrap();
+        let (mut reopened, recovery) = LinuxLedger::open_existing(directory.path()).unwrap();
         assert_eq!(recovery, PersistentFreshnessRecoveryV1::Clean);
-        assert_eq!(
-            reopened.try_begin_exclusive().unwrap().state().generation(),
-            1
-        );
+        let reopened_state = reopened.try_begin_exclusive().unwrap().state();
+        assert_eq!(reopened_state.generation(), 1);
+        assert_eq!(reopened_state.namespace(), initial.namespace());
         assert_eq!(
             reopened.try_begin_exclusive().unwrap().consume(identity(1)),
             Err(PersistentFreshnessLedgerErrorV1::Replay {
@@ -873,20 +975,42 @@ mod tests {
     }
 
     #[test]
+    fn deleted_state_cannot_reinitialize_or_replay() {
+        let directory = TestDirectory::new();
+        let (mut ledger, _) = LinuxLedger::create_new(directory.path()).unwrap();
+        ledger
+            .try_begin_exclusive()
+            .unwrap()
+            .consume(identity(3))
+            .unwrap();
+        drop(ledger);
+        fs::remove_file(directory.file(STATE_NAME)).unwrap();
+
+        assert!(matches!(
+            LinuxLedger::open_existing(directory.path()),
+            Err(PersistentFreshnessLedgerErrorV1::MissingState)
+        ));
+        assert!(matches!(
+            LinuxLedger::create_new(directory.path()),
+            Err(PersistentFreshnessLedgerErrorV1::LedgerAlreadyExists)
+        ));
+    }
+
+    #[test]
     fn crash_recovery_applies_or_finalizes_every_durable_intent() {
         for (write_state, expected) in [
             (false, PersistentFreshnessRecoveryV1::AppliedPendingIntent),
             (true, PersistentFreshnessRecoveryV1::FinalizedPendingIntent),
         ] {
             let directory = TestDirectory::new();
-            let (mut ledger, _) = LinuxLedger::open(directory.path()).unwrap();
+            let (mut ledger, _) = LinuxLedger::create_new(directory.path()).unwrap();
             {
                 let mut transaction = ledger.try_begin_exclusive().unwrap();
                 stage_intent(&mut transaction, identity(4), write_state, true);
             }
             drop(ledger);
 
-            let (mut reopened, recovery) = LinuxLedger::open(directory.path()).unwrap();
+            let (mut reopened, recovery) = LinuxLedger::open_existing(directory.path()).unwrap();
             assert_eq!(recovery, expected);
             assert_eq!(
                 reopened.try_begin_exclusive().unwrap().state().generation(),
@@ -904,14 +1028,14 @@ mod tests {
     #[test]
     fn unpublished_intent_is_validated_then_discarded() {
         let directory = TestDirectory::new();
-        let (mut ledger, _) = LinuxLedger::open(directory.path()).unwrap();
+        let (mut ledger, _) = LinuxLedger::create_new(directory.path()).unwrap();
         {
             let mut transaction = ledger.try_begin_exclusive().unwrap();
             stage_intent(&mut transaction, identity(7), false, false);
         }
         drop(ledger);
 
-        let (mut reopened, recovery) = LinuxLedger::open(directory.path()).unwrap();
+        let (mut reopened, recovery) = LinuxLedger::open_existing(directory.path()).unwrap();
         assert_eq!(
             recovery,
             PersistentFreshnessRecoveryV1::DiscardedUncommittedIntent
@@ -933,40 +1057,40 @@ mod tests {
         let link_parent = TestDirectory::new();
         let link = link_parent.file("linked-ledger");
         symlink(target.path(), &link).unwrap();
-        assert!(LinuxLedger::open(&link).is_err());
+        assert!(LinuxLedger::open_existing(&link).is_err());
 
         let directory = TestDirectory::new();
         fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o770)).unwrap();
         assert!(matches!(
-            LinuxLedger::open(directory.path()),
+            LinuxLedger::open_existing(directory.path()),
             Err(PersistentFreshnessLedgerErrorV1::InsecureDirectoryPermissions)
         ));
 
         let directory = TestDirectory::new();
-        let (ledger, _) = LinuxLedger::open(directory.path()).unwrap();
+        let (ledger, _) = LinuxLedger::create_new(directory.path()).unwrap();
         drop(ledger);
         fs::remove_file(directory.file(STATE_NAME)).unwrap();
         symlink("/etc/passwd", directory.file(STATE_NAME)).unwrap();
-        assert!(LinuxLedger::open(directory.path()).is_err());
+        assert!(LinuxLedger::open_existing(directory.path()).is_err());
 
         let directory = TestDirectory::new();
-        let (ledger, _) = LinuxLedger::open(directory.path()).unwrap();
+        let (ledger, _) = LinuxLedger::create_new(directory.path()).unwrap();
         drop(ledger);
         fs::remove_file(directory.file(STATE_NAME)).unwrap();
         fs::create_dir(directory.file(STATE_NAME)).unwrap();
         assert!(matches!(
-            LinuxLedger::open(directory.path()),
+            LinuxLedger::open_existing(directory.path()),
             Err(PersistentFreshnessLedgerErrorV1::FileNotRegular {
                 file: PersistentFreshnessLedgerFileV1::State,
             })
         ));
 
         let directory = TestDirectory::new();
-        let (ledger, _) = LinuxLedger::open(directory.path()).unwrap();
+        let (ledger, _) = LinuxLedger::create_new(directory.path()).unwrap();
         drop(ledger);
         fs::hard_link(directory.file(STATE_NAME), directory.file("state-alias")).unwrap();
         assert!(matches!(
-            LinuxLedger::open(directory.path()),
+            LinuxLedger::open_existing(directory.path()),
             Err(PersistentFreshnessLedgerErrorV1::FileHasMultipleLinks {
                 file: PersistentFreshnessLedgerFileV1::State,
                 links: 2,
@@ -974,11 +1098,11 @@ mod tests {
         ));
 
         let directory = TestDirectory::new();
-        let (ledger, _) = LinuxLedger::open(directory.path()).unwrap();
+        let (ledger, _) = LinuxLedger::create_new(directory.path()).unwrap();
         drop(ledger);
         fs::hard_link(directory.file(LOCK_NAME), directory.file("lock-alias")).unwrap();
         assert!(matches!(
-            LinuxLedger::open(directory.path()),
+            LinuxLedger::open_existing(directory.path()),
             Err(PersistentFreshnessLedgerErrorV1::FileHasMultipleLinks {
                 file: PersistentFreshnessLedgerFileV1::Lock,
                 links: 2,
@@ -986,7 +1110,7 @@ mod tests {
         ));
 
         let directory = TestDirectory::new();
-        let (ledger, _) = LinuxLedger::open(directory.path()).unwrap();
+        let (ledger, _) = LinuxLedger::create_new(directory.path()).unwrap();
         drop(ledger);
         fs::set_permissions(
             directory.file(STATE_NAME),
@@ -994,7 +1118,7 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(
-            LinuxLedger::open(directory.path()),
+            LinuxLedger::open_existing(directory.path()),
             Err(PersistentFreshnessLedgerErrorV1::FilePermissionsTooBroad {
                 file: PersistentFreshnessLedgerFileV1::State,
             })
@@ -1004,7 +1128,7 @@ mod tests {
     #[test]
     fn retained_lock_descriptor_detects_name_substitution() {
         let directory = TestDirectory::new();
-        let (mut ledger, _) = LinuxLedger::open(directory.path()).unwrap();
+        let (mut ledger, _) = LinuxLedger::create_new(directory.path()).unwrap();
         fs::rename(directory.file(LOCK_NAME), directory.file("old-lock")).unwrap();
         fs::write(directory.file(LOCK_NAME), []).unwrap();
         fs::set_permissions(directory.file(LOCK_NAME), fs::Permissions::from_mode(0o600)).unwrap();
@@ -1017,7 +1141,7 @@ mod tests {
     #[test]
     fn oversized_malformed_trailing_and_ambiguous_recovery_files_are_rejected() {
         let directory = TestDirectory::new();
-        let (ledger, _) = LinuxLedger::open(directory.path()).unwrap();
+        let (ledger, _) = LinuxLedger::create_new(directory.path()).unwrap();
         drop(ledger);
         fs::write(
             directory.file(STATE_NAME),
@@ -1025,7 +1149,7 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(
-            LinuxLedger::open(directory.path()),
+            LinuxLedger::open_existing(directory.path()),
             Err(PersistentFreshnessLedgerErrorV1::FileTooLarge {
                 file: PersistentFreshnessLedgerFileV1::State,
                 ..
@@ -1033,16 +1157,16 @@ mod tests {
         ));
 
         for bytes in [vec![0; 64], {
-            let mut bytes = FreshnessStateV1::empty().encode().unwrap();
+            let mut bytes = FreshnessStateV1::empty(digest(0xf0)).encode().unwrap();
             bytes.push(0);
             bytes
         }] {
             let directory = TestDirectory::new();
-            let (ledger, _) = LinuxLedger::open(directory.path()).unwrap();
+            let (ledger, _) = LinuxLedger::create_new(directory.path()).unwrap();
             drop(ledger);
             fs::write(directory.file(STATE_NAME), bytes).unwrap();
             assert!(matches!(
-                LinuxLedger::open(directory.path()),
+                LinuxLedger::open_existing(directory.path()),
                 Err(PersistentFreshnessLedgerErrorV1::Record {
                     file: PersistentFreshnessLedgerFileV1::State,
                     ..
@@ -1051,7 +1175,7 @@ mod tests {
         }
 
         let directory = TestDirectory::new();
-        let (ledger, _) = LinuxLedger::open(directory.path()).unwrap();
+        let (ledger, _) = LinuxLedger::create_new(directory.path()).unwrap();
         drop(ledger);
         fs::write(directory.file(INTENT_NAME), vec![0; 64]).unwrap();
         fs::set_permissions(
@@ -1060,7 +1184,7 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(
-            LinuxLedger::open(directory.path()),
+            LinuxLedger::open_existing(directory.path()),
             Err(PersistentFreshnessLedgerErrorV1::Record {
                 file: PersistentFreshnessLedgerFileV1::Intent,
                 ..
@@ -1068,11 +1192,11 @@ mod tests {
         ));
 
         let directory = TestDirectory::new();
-        let (ledger, _) = LinuxLedger::open(directory.path()).unwrap();
+        let (ledger, _) = LinuxLedger::create_new(directory.path()).unwrap();
         drop(ledger);
         fs::write(
             directory.file(STATE_TEMPORARY_NAME),
-            FreshnessStateV1::empty().encode().unwrap(),
+            FreshnessStateV1::empty(digest(0xf0)).encode().unwrap(),
         )
         .unwrap();
         fs::set_permissions(
@@ -1081,7 +1205,7 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(
-            LinuxLedger::open(directory.path()),
+            LinuxLedger::open_existing(directory.path()),
             Err(PersistentFreshnessLedgerErrorV1::UnexpectedRecoveryFile {
                 file: PersistentFreshnessLedgerFileV1::StateTemporary,
             })
@@ -1091,7 +1215,7 @@ mod tests {
     #[test]
     fn independently_replayed_transcript_and_result_are_rejected() {
         let directory = TestDirectory::new();
-        let (mut ledger, _) = LinuxLedger::open(directory.path()).unwrap();
+        let (mut ledger, _) = LinuxLedger::create_new(directory.path()).unwrap();
         ledger
             .try_begin_exclusive()
             .unwrap()
@@ -1131,7 +1255,7 @@ mod tests {
     #[ignore]
     fn subprocess_consume_same_identity() {
         let path = std::env::var_os("FE2O3_LEDGER_TEST_DIRECTORY").unwrap();
-        let (mut ledger, _) = match LinuxLedger::open(Path::new(&path)) {
+        let (mut ledger, _) = match LinuxLedger::open_existing(Path::new(&path)) {
             Ok(value) => value,
             Err(PersistentFreshnessLedgerErrorV1::LockBusy) => std::process::exit(22),
             Err(error) => panic!("unexpected child open error: {error}"),
@@ -1150,7 +1274,7 @@ mod tests {
     #[test]
     fn two_processes_cannot_consume_the_same_identity() {
         let directory = TestDirectory::new();
-        let (ledger, _) = LinuxLedger::open(directory.path()).unwrap();
+        let (ledger, _) = LinuxLedger::create_new(directory.path()).unwrap();
         drop(ledger);
         let executable = std::env::current_exe().unwrap();
         let spawn = || {
@@ -1184,7 +1308,7 @@ mod tests {
                 == 1
         );
 
-        let (mut ledger, _) = LinuxLedger::open(directory.path()).unwrap();
+        let (mut ledger, _) = LinuxLedger::open_existing(directory.path()).unwrap();
         assert_eq!(
             ledger.try_begin_exclusive().unwrap().state().generation(),
             1
@@ -1196,7 +1320,7 @@ mod tests {
     fn subprocess_hold_lock() {
         let path = std::env::var_os("FE2O3_LEDGER_TEST_DIRECTORY").unwrap();
         let ready = std::env::var_os("FE2O3_LEDGER_TEST_READY").unwrap();
-        let (mut ledger, _) = LinuxLedger::open(Path::new(&path)).unwrap();
+        let (mut ledger, _) = LinuxLedger::open_existing(Path::new(&path)).unwrap();
         let _transaction = ledger.try_begin_exclusive().unwrap();
         fs::write(ready, b"ready").unwrap();
         thread::sleep(Duration::from_secs(2));
@@ -1206,7 +1330,7 @@ mod tests {
     fn cross_process_lock_contention_fails_closed() {
         let directory = TestDirectory::new();
         let ready = directory.file("ready");
-        let (ledger, _) = LinuxLedger::open(directory.path()).unwrap();
+        let (ledger, _) = LinuxLedger::create_new(directory.path()).unwrap();
         drop(ledger);
         let mut child = Command::new(std::env::current_exe().unwrap())
             .args([
@@ -1228,10 +1352,10 @@ mod tests {
         }
         assert!(ready.exists());
         assert!(matches!(
-            LinuxLedger::open(directory.path()),
+            LinuxLedger::open_existing(directory.path()),
             Err(PersistentFreshnessLedgerErrorV1::LockBusy)
         ));
         assert!(child.wait().unwrap().success());
-        LinuxLedger::open(directory.path()).unwrap();
+        LinuxLedger::open_existing(directory.path()).unwrap();
     }
 }

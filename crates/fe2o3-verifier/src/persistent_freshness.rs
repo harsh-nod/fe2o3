@@ -17,10 +17,10 @@ pub const PERSISTENT_FRESHNESS_INTENT_MAGIC_V1: [u8; 8] = *b"FE2PFTX\0";
 pub const MAX_PERSISTENT_FRESHNESS_ENTRIES_V1: usize = 65_536;
 
 const DIGEST_ALGORITHM_SHA256_V1: u16 = 1;
-const STATE_HEADER_BYTES_V1: usize = 32;
+const STATE_HEADER_BYTES_V1: usize = 64;
 const IDENTITY_BYTES_V1: usize = 96;
 const CHECKSUM_BYTES_V1: usize = 32;
-const INTENT_BYTES_V1: usize = 228;
+const INTENT_BYTES_V1: usize = 260;
 const STATE_CHECKSUM_DOMAIN_V1: [u8; 8] = *b"FE2PFSC\0";
 const STATE_IDENTITY_DOMAIN_V1: [u8; 8] = *b"FE2PFSI\0";
 const INTENT_CHECKSUM_DOMAIN_V1: [u8; 8] = *b"FE2PFTC\0";
@@ -88,12 +88,17 @@ impl PersistentFreshnessIdentityV1 {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PersistentFreshnessStateInspectionV1 {
+    namespace: Digest,
     generation: u64,
     consumed_count: u32,
     state_identity: Digest,
 }
 
 impl PersistentFreshnessStateInspectionV1 {
+    pub const fn namespace(self) -> Digest {
+        self.namespace
+    }
+
     pub const fn generation(self) -> u64 {
         self.generation
     }
@@ -109,6 +114,7 @@ impl PersistentFreshnessStateInspectionV1 {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PersistentFreshnessIntentInspectionV1 {
+    namespace: Digest,
     previous_generation: u64,
     next_generation: u64,
     previous_state_identity: Digest,
@@ -117,6 +123,10 @@ pub struct PersistentFreshnessIntentInspectionV1 {
 }
 
 impl PersistentFreshnessIntentInspectionV1 {
+    pub const fn namespace(self) -> Digest {
+        self.namespace
+    }
+
     pub const fn previous_generation(self) -> u64 {
         self.previous_generation
     }
@@ -150,6 +160,7 @@ pub enum PersistentFreshnessRecoveryV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PersistentFreshnessReceiptV1 {
     identity: PersistentFreshnessIdentityV1,
+    namespace: Digest,
     generation: u64,
     state_identity: Digest,
 }
@@ -161,6 +172,10 @@ impl PersistentFreshnessReceiptV1 {
 
     pub const fn generation(self) -> u64 {
         self.generation
+    }
+
+    pub const fn namespace(self) -> Digest {
+        self.namespace
     }
 
     pub const fn state_identity(self) -> Digest {
@@ -194,12 +209,27 @@ impl fmt::Debug for PersistentProofFreshnessLedgerV1 {
 }
 
 impl PersistentProofFreshnessLedgerV1 {
-    pub fn open(
+    pub fn create_new(
         directory: impl AsRef<Path>,
     ) -> Result<(Self, PersistentFreshnessRecoveryV1), PersistentFreshnessLedgerErrorV1> {
         #[cfg(target_os = "linux")]
         {
-            let (inner, recovery) = linux::LinuxLedger::open(directory.as_ref())?;
+            let (inner, recovery) = linux::LinuxLedger::create_new(directory.as_ref())?;
+            Ok((Self { inner }, recovery))
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = directory;
+            Err(PersistentFreshnessLedgerErrorV1::UnsupportedPlatform)
+        }
+    }
+
+    pub fn open_existing(
+        directory: impl AsRef<Path>,
+    ) -> Result<(Self, PersistentFreshnessRecoveryV1), PersistentFreshnessLedgerErrorV1> {
+        #[cfg(target_os = "linux")]
+        {
+            let (inner, recovery) = linux::LinuxLedger::open_existing(directory.as_ref())?;
             Ok((Self { inner }, recovery))
         }
         #[cfg(not(target_os = "linux"))]
@@ -296,6 +326,7 @@ pub fn inspect_persistent_freshness_state_v1(
 ) -> Result<PersistentFreshnessStateInspectionV1, PersistentFreshnessRecordErrorV1> {
     let state = FreshnessStateV1::decode(bytes)?;
     Ok(PersistentFreshnessStateInspectionV1 {
+        namespace: state.namespace,
         generation: state.generation,
         consumed_count: state.entries.len() as u32,
         state_identity: state.identity(),
@@ -307,6 +338,7 @@ pub fn inspect_persistent_freshness_intent_v1(
 ) -> Result<PersistentFreshnessIntentInspectionV1, PersistentFreshnessRecordErrorV1> {
     let intent = FreshnessIntentV1::decode(bytes)?;
     Ok(PersistentFreshnessIntentInspectionV1 {
+        namespace: intent.namespace,
         previous_generation: intent.previous_generation,
         next_generation: intent.next_generation,
         previous_state_identity: intent.previous_state_identity,
@@ -317,13 +349,15 @@ pub fn inspect_persistent_freshness_intent_v1(
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct FreshnessStateV1 {
+    namespace: Digest,
     generation: u64,
     entries: Vec<PersistentFreshnessIdentityV1>,
 }
 
 impl FreshnessStateV1 {
-    fn empty() -> Self {
+    fn empty(namespace: Digest) -> Self {
         Self {
+            namespace,
             generation: 0,
             entries: Vec::new(),
         }
@@ -331,6 +365,7 @@ impl FreshnessStateV1 {
 
     fn inspection(&self) -> PersistentFreshnessStateInspectionV1 {
         PersistentFreshnessStateInspectionV1 {
+            namespace: self.namespace,
             generation: self.generation,
             consumed_count: self.entries.len() as u32,
             state_identity: self.identity(),
@@ -382,6 +417,7 @@ impl FreshnessStateV1 {
             .expect_err("an exact duplicate must share all independently checked identities");
         entries.insert(insertion, identity);
         Ok(Self {
+            namespace: self.namespace,
             generation: self.generation + 1,
             entries,
         })
@@ -392,6 +428,11 @@ impl FreshnessStateV1 {
     }
 
     fn validate(&self) -> Result<(), PersistentFreshnessRecordErrorV1> {
+        if self.namespace.as_bytes().iter().all(|byte| *byte == 0) {
+            return Err(PersistentFreshnessRecordErrorV1::ZeroRecordIdentity {
+                field: "ledger namespace",
+            });
+        }
         if self.entries.len() > MAX_PERSISTENT_FRESHNESS_ENTRIES_V1 {
             return Err(PersistentFreshnessRecordErrorV1::TooManyEntries {
                 count: self.entries.len() as u64,
@@ -454,6 +495,7 @@ impl FreshnessStateV1 {
         writer.u32(self.entries.len() as u32);
         writer.u16(DIGEST_ALGORITHM_SHA256_V1);
         writer.u16(0);
+        writer.digest(self.namespace);
         for entry in &self.entries {
             writer.identity(*entry);
         }
@@ -479,6 +521,7 @@ impl FreshnessStateV1 {
         let count = reader.count_u32()?;
         require_algorithm(reader.u16()?)?;
         require_zero(reader.u16()?, "state reserved")?;
+        let namespace = reader.digest()?;
         let mut entries = Vec::with_capacity(count);
         for _ in 0..count {
             entries.push(reader.identity()?);
@@ -492,6 +535,7 @@ impl FreshnessStateV1 {
             return Err(PersistentFreshnessRecordErrorV1::ChecksumMismatch);
         }
         let state = Self {
+            namespace,
             generation,
             entries,
         };
@@ -514,6 +558,7 @@ impl FreshnessStateV1 {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct FreshnessIntentV1 {
+    namespace: Digest,
     previous_generation: u64,
     next_generation: u64,
     previous_state_identity: Digest,
@@ -528,6 +573,7 @@ impl FreshnessIntentV1 {
         identity: PersistentFreshnessIdentityV1,
     ) -> Result<Self, PersistentFreshnessRecordErrorV1> {
         let value = Self {
+            namespace: previous.namespace,
             previous_generation: previous.generation,
             next_generation: next.generation,
             previous_state_identity: previous.identity(),
@@ -548,6 +594,7 @@ impl FreshnessIntentV1 {
             });
         }
         for (field, digest) in [
+            ("ledger namespace", self.namespace),
             ("previous state identity", self.previous_state_identity),
             ("next state identity", self.next_state_identity),
         ] {
@@ -569,6 +616,7 @@ impl FreshnessIntentV1 {
         writer.u64(self.next_generation);
         writer.u16(DIGEST_ALGORITHM_SHA256_V1);
         writer.u16(0);
+        writer.digest(self.namespace);
         writer.digest(self.previous_state_identity);
         writer.digest(self.next_state_identity);
         writer.identity(self.identity);
@@ -595,6 +643,7 @@ impl FreshnessIntentV1 {
         let next_generation = reader.u64()?;
         require_algorithm(reader.u16()?)?;
         require_zero(reader.u16()?, "intent reserved")?;
+        let namespace = reader.digest()?;
         let previous_state_identity = reader.digest()?;
         let next_state_identity = reader.digest()?;
         let identity = reader.identity()?;
@@ -607,6 +656,7 @@ impl FreshnessIntentV1 {
             return Err(PersistentFreshnessRecordErrorV1::ChecksumMismatch);
         }
         let intent = Self {
+            namespace,
             previous_generation,
             next_generation,
             previous_state_identity,
@@ -841,6 +891,9 @@ impl PersistentFreshnessLedgerOperationV1 {
 pub enum PersistentFreshnessLedgerErrorV1 {
     UnsupportedPlatform,
     InvalidDirectoryPath,
+    LedgerAlreadyExists,
+    MissingState,
+    ZeroNamespace,
     Io {
         operation: PersistentFreshnessLedgerOperationV1,
         file: PersistentFreshnessLedgerFileV1,
@@ -897,6 +950,11 @@ impl fmt::Display for PersistentFreshnessLedgerErrorV1 {
             Self::InvalidDirectoryPath => {
                 formatter.write_str("persistent freshness directory path is invalid")
             }
+            Self::LedgerAlreadyExists => {
+                formatter.write_str("persistent freshness ledger already exists")
+            }
+            Self::MissingState => formatter.write_str("persistent freshness state is missing"),
+            Self::ZeroNamespace => formatter.write_str("persistent freshness namespace is zero"),
             Self::Io {
                 operation,
                 file,
@@ -1124,6 +1182,7 @@ mod tests {
 
     fn state(entries: Vec<PersistentFreshnessIdentityV1>) -> FreshnessStateV1 {
         FreshnessStateV1 {
+            namespace: digest(0xf0),
             generation: entries.len() as u64,
             entries,
         }
@@ -1133,6 +1192,7 @@ mod tests {
         let previous = state(vec![identity(1)]);
         let next = state(vec![identity(1), identity(4)]);
         FreshnessIntentV1 {
+            namespace: previous.namespace,
             previous_generation: 1,
             next_generation: 2,
             previous_state_identity: previous.identity(),
@@ -1155,6 +1215,7 @@ mod tests {
         assert_eq!(state_bytes.len(), STATE_HEADER_BYTES_V1 + 2 * 96 + 32);
         assert_eq!(FreshnessStateV1::decode(&state_bytes).unwrap(), state);
         let inspected = inspect_persistent_freshness_state_v1(&state_bytes).unwrap();
+        assert_eq!(inspected.namespace(), digest(0xf0));
         assert_eq!(inspected.generation(), 2);
         assert_eq!(inspected.consumed_count(), 2);
         assert_eq!(inspected.state_identity(), state.identity());
@@ -1165,6 +1226,7 @@ mod tests {
         assert_eq!(intent_bytes.len(), INTENT_BYTES_V1);
         assert_eq!(FreshnessIntentV1::decode(&intent_bytes).unwrap(), intent);
         let inspected = inspect_persistent_freshness_intent_v1(&intent_bytes).unwrap();
+        assert_eq!(inspected.namespace(), digest(0xf0));
         assert_eq!(inspected.previous_generation(), 1);
         assert_eq!(inspected.next_generation(), 2);
         assert_eq!(inspected.identity(), identity(4));
@@ -1179,6 +1241,7 @@ mod tests {
             ),
             (intent().encode().unwrap(), |bytes| {
                 FreshnessIntentV1::decode(bytes).map(|_| FreshnessStateV1 {
+                    namespace: digest(0xf0),
                     generation: 0,
                     entries: vec![],
                 })
@@ -1204,10 +1267,20 @@ mod tests {
     #[test]
     fn duplicate_zero_and_noncanonical_state_identities_are_rejected() {
         let original = state(vec![identity(1), identity(4)]).encode().unwrap();
+        let mut zero_namespace = original.clone();
+        zero_namespace[32..64].fill(0);
+        repair_checksum(&mut zero_namespace, STATE_CHECKSUM_DOMAIN_V1);
+        assert_eq!(
+            FreshnessStateV1::decode(&zero_namespace),
+            Err(PersistentFreshnessRecordErrorV1::ZeroRecordIdentity {
+                field: "ledger namespace",
+            })
+        );
+
         for (field, destination_offset, source_offset) in [
-            (PersistentFreshnessIdentityFieldV1::Challenge, 128, 32),
-            (PersistentFreshnessIdentityFieldV1::Transcript, 160, 64),
-            (PersistentFreshnessIdentityFieldV1::Result, 192, 96),
+            (PersistentFreshnessIdentityFieldV1::Challenge, 160, 64),
+            (PersistentFreshnessIdentityFieldV1::Transcript, 192, 96),
+            (PersistentFreshnessIdentityFieldV1::Result, 224, 128),
         ] {
             let mut duplicate = original.clone();
             duplicate.copy_within(source_offset..source_offset + 32, destination_offset);
@@ -1219,9 +1292,9 @@ mod tests {
         }
 
         for (field, offset) in [
-            (PersistentFreshnessIdentityFieldV1::Challenge, 32),
-            (PersistentFreshnessIdentityFieldV1::Transcript, 64),
-            (PersistentFreshnessIdentityFieldV1::Result, 96),
+            (PersistentFreshnessIdentityFieldV1::Challenge, 64),
+            (PersistentFreshnessIdentityFieldV1::Transcript, 96),
+            (PersistentFreshnessIdentityFieldV1::Result, 128),
         ] {
             let mut zero = original.clone();
             zero[offset..offset + 32].fill(0);
@@ -1233,10 +1306,10 @@ mod tests {
         }
 
         let mut reordered = original;
-        let first = reordered[32..128].to_vec();
-        let second = reordered[128..224].to_vec();
-        reordered[32..128].copy_from_slice(&second);
-        reordered[128..224].copy_from_slice(&first);
+        let first = reordered[64..160].to_vec();
+        let second = reordered[160..256].to_vec();
+        reordered[64..160].copy_from_slice(&second);
+        reordered[160..256].copy_from_slice(&first);
         repair_checksum(&mut reordered, STATE_CHECKSUM_DOMAIN_V1);
         assert_eq!(
             FreshnessStateV1::decode(&reordered),
@@ -1298,8 +1371,18 @@ mod tests {
     #[test]
     fn intent_rejects_zero_unknown_and_discontinuous_fields() {
         let original = intent().encode().unwrap();
+        let mut zero_namespace = original.clone();
+        zero_namespace[36..68].fill(0);
+        repair_checksum(&mut zero_namespace, INTENT_CHECKSUM_DOMAIN_V1);
+        assert_eq!(
+            FreshnessIntentV1::decode(&zero_namespace),
+            Err(PersistentFreshnessRecordErrorV1::ZeroRecordIdentity {
+                field: "ledger namespace",
+            })
+        );
+
         let mut zero_state = original.clone();
-        zero_state[36..68].fill(0);
+        zero_state[68..100].fill(0);
         repair_checksum(&mut zero_state, INTENT_CHECKSUM_DOMAIN_V1);
         assert_eq!(
             FreshnessIntentV1::decode(&zero_state),
@@ -1309,7 +1392,7 @@ mod tests {
         );
 
         let mut zero_result = original.clone();
-        zero_result[164..196].fill(0);
+        zero_result[196..228].fill(0);
         repair_checksum(&mut zero_result, INTENT_CHECKSUM_DOMAIN_V1);
         assert_eq!(
             FreshnessIntentV1::decode(&zero_result),
