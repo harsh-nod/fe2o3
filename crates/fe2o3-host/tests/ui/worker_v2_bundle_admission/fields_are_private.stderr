@@ -1,0 +1,5 @@
+error[E0451]: field `current_lease` of struct `AdmittedFinalizedWorkerV2BundleV1` is private
+ --> tests/ui/worker_v2_bundle_admission/fields_are_private.rs:4:45
+  |
+4 |     let AdmittedFinalizedWorkerV2BundleV1 { current_lease, .. } = token;
+  |                                             ^^^^^^^^^^^^^ private field

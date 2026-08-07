@@ -732,25 +732,50 @@ fn validate_inspection(
     inspected: &InspectedKernelBindings,
 ) -> Result<(usize, Box<[PublishedKernelPhysicalLayoutV1]>), PublishedPhysicalLayoutInspectionError>
 {
+    validate_inspection_against(
+        admission.artifact_selection().identity(),
+        admission.payload_kernel_set(),
+        inspected,
+    )
+}
+
+/// Reuses the strict physical inspection policy for another provenance-preserving host bridge.
+pub(crate) fn inspect_payload_against_artifact_identity(
+    exact_payload_bytes: &[u8],
+    identity: &ArtifactKernelIdentityV1,
+    expected: &[PublishedPayloadKernelV1],
+) -> Result<
+    (
+        InspectedKernelBindings,
+        Box<[PublishedKernelPhysicalLayoutV1]>,
+        usize,
+    ),
+    PublishedPhysicalLayoutInspectionError,
+> {
+    let inspected = inspect_and_bind_kernel_descriptors(exact_payload_bytes)
+        .map_err(PublishedPhysicalLayoutInspectionError::Inspection)?;
+    let (selected_kernel_index, kernels) =
+        validate_inspection_against(identity, expected, &inspected)?;
+    Ok((inspected, kernels, selected_kernel_index))
+}
+
+fn validate_inspection_against(
+    identity: &ArtifactKernelIdentityV1,
+    expected: &[PublishedPayloadKernelV1],
+    inspected: &InspectedKernelBindings,
+) -> Result<(usize, Box<[PublishedKernelPhysicalLayoutV1]>), PublishedPhysicalLayoutInspectionError>
+{
     let code_object_version = inspected.inspection().code_object_version();
     match code_object_version {
         CodeObjectVersion::V4 | CodeObjectVersion::V5 | CodeObjectVersion::V6 => {}
     }
 
-    let declared_target = AmdTargetId::parse(
-        admission
-            .artifact_selection()
-            .identity()
-            .target()
-            .architecture()
-            .as_str(),
-    )
-    .map_err(PublishedPhysicalLayoutInspectionError::InvalidManifestTarget)?;
+    let declared_target = AmdTargetId::parse(identity.target().architecture().as_str())
+        .map_err(PublishedPhysicalLayoutInspectionError::InvalidManifestTarget)?;
     if inspected.inspection().target() != declared_target {
         return Err(PublishedPhysicalLayoutInspectionError::TargetMismatch);
     }
 
-    let expected = admission.payload_kernel_set();
     let actual = inspected.inspection().kernels();
     if expected.len() != actual.len() || inspected.bindings().len() != actual.len() {
         return Err(PublishedPhysicalLayoutInspectionError::KernelSetMismatch);
@@ -787,7 +812,7 @@ fn validate_inspection(
         )?);
     }
 
-    let selected_export = admission.artifact_selection().identity().symbol().as_str();
+    let selected_export = identity.symbol().as_str();
     let selected_kernel_index = actual
         .iter()
         .position(|kernel| kernel.name() == selected_export)

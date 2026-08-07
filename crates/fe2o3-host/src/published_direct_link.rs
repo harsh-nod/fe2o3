@@ -278,7 +278,9 @@ impl ValidatedPublishedDirectLinkSelectionV1 {
     }
 }
 
-fn payload_kernel_set(selected: SelectedNativeKernel<'_>) -> Box<[PublishedPayloadKernelV1]> {
+pub(crate) fn payload_kernel_set(
+    selected: SelectedNativeKernel<'_>,
+) -> Box<[PublishedPayloadKernelV1]> {
     selected
         .manifest()
         .kernels()
@@ -485,7 +487,7 @@ impl PublishedDirectLinkAdmissionError {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::{
         InspectedPublishedDirectLinkPhysicalLayoutV1, MissingPublishedDirectLinkLoadPrerequisiteV1,
@@ -565,18 +567,18 @@ mod tests {
         }
     }
 
-    struct Fixture {
-        container: ArtifactContainerV1,
-        bundle: BundleIndexV1,
-        expectations: Vec<DirectLinkBindingExpectationV1>,
-        evidence: DirectLinkBundleEvidenceV1,
-        primary_kernel: DigestBytes,
+    pub(crate) struct Fixture {
+        pub(crate) container: ArtifactContainerV1,
+        pub(crate) bundle: BundleIndexV1,
+        pub(crate) expectations: Vec<DirectLinkBindingExpectationV1>,
+        pub(crate) evidence: DirectLinkBundleEvidenceV1,
+        pub(crate) primary_kernel: DigestBytes,
         alias_kernel: DigestBytes,
         other_payload_kernel: DigestBytes,
     }
 
     impl Fixture {
-        fn validated(&self) -> ValidatedDirectLinkBundleEvidenceV1<'_> {
+        pub(crate) fn validated(&self) -> ValidatedDirectLinkBundleEvidenceV1<'_> {
             let sources = self
                 .expectations
                 .iter()
@@ -621,7 +623,7 @@ mod tests {
         )
     }
 
-    fn physical_test_abi(alternate_semantics: bool) -> AbiLayout {
+    pub(crate) fn physical_test_abi(alternate_semantics: bool) -> AbiLayout {
         let scalar = AbiField::new(
             name("scalar"),
             0,
@@ -986,7 +988,7 @@ mod tests {
         }
     }
 
-    fn make_single_hsaco_fixture(
+    pub(crate) fn make_single_hsaco_fixture(
         seed: u8,
         payload_bytes: Vec<u8>,
         architecture: &str,
@@ -1131,7 +1133,7 @@ mod tests {
         ObservedContext::for_test(identity, 0, "gfx1100", 1024, 65_536)
     }
 
-    fn make_observed_for(identity: usize, architecture: &str) -> ObservedContext {
+    pub(crate) fn make_observed_for(identity: usize, architecture: &str) -> ObservedContext {
         ObservedContext::for_test(identity, 0, architecture, 1024, 65_536)
     }
 
@@ -1177,8 +1179,8 @@ mod tests {
         }
     }
 
-    struct TestHsaco {
-        bytes: Vec<u8>,
+    pub(crate) struct TestHsaco {
+        pub(crate) bytes: Vec<u8>,
         descriptor_offset: usize,
     }
 
@@ -1206,7 +1208,8 @@ mod tests {
         max_workgroups: [Option<u32>; 3],
         dynamic_lds_size: bool,
     ) -> TestHsaco {
-        physical_arguments_hsaco_with_layout(
+        physical_arguments_hsaco_for_target(
+            "gfx1151",
             288,
             8,
             required_workgroup_size,
@@ -1222,6 +1225,25 @@ mod tests {
         max_workgroups: [Option<u32>; 3],
         dynamic_lds_size: bool,
     ) -> TestHsaco {
+        physical_arguments_hsaco_for_target(
+            "gfx1151",
+            kernarg_segment_size,
+            kernarg_segment_alignment,
+            required_workgroup_size,
+            max_workgroups,
+            dynamic_lds_size,
+        )
+    }
+
+    pub(crate) fn physical_arguments_hsaco_for_target(
+        target: &str,
+        kernarg_segment_size: u32,
+        kernarg_segment_alignment: u32,
+        required_workgroup_size: Option<[u32; 3]>,
+        max_workgroups: [Option<u32>; 3],
+        dynamic_lds_size: bool,
+    ) -> TestHsaco {
+        let private_segment_fixed_size: u32 = if target.starts_with("gfx94") { 0 } else { 16 };
         let arguments = vec![
             test_explicit_argument("scalar", 0, 4, "by_value", None, None, None, None),
             test_explicit_argument(
@@ -1247,21 +1269,28 @@ mod tests {
             test_explicit_argument("slice_len", 24, 8, "by_value", None, None, None, None),
         ];
         let metadata = test_metadata(
-            "gfx1151",
-            vec![test_metadata_kernel_with(
+            target,
+            vec![test_metadata_kernel_with_wavefront(
                 "primary_kernel",
                 "primary_kernel.kd",
                 arguments,
                 kernarg_segment_size,
                 kernarg_segment_alignment,
                 0,
-                16,
+                private_segment_fixed_size,
                 required_workgroup_size,
                 max_workgroups,
                 dynamic_lds_size,
+                if target.starts_with("gfx94") { 64 } else { 32 },
             )],
         );
-        binding_hsaco(metadata, "gfx1151", 0, 16, kernarg_segment_size)
+        binding_hsaco(
+            metadata,
+            target,
+            0,
+            private_segment_fixed_size,
+            kernarg_segment_size,
+        )
     }
 
     fn test_metadata(target: &str, kernels: Vec<Value>) -> Value {
@@ -1282,6 +1311,34 @@ mod tests {
     fn test_metadata_kernel_with(
         export_symbol: &str,
         symbol: &str,
+        explicit_arguments: Vec<Value>,
+        kernarg_segment_size: u32,
+        kernarg_segment_alignment: u32,
+        static_shared_memory_bytes: u32,
+        private_segment_fixed_size: u32,
+        required_workgroup_size: Option<[u32; 3]>,
+        max_workgroups: [Option<u32>; 3],
+        dynamic_lds_size: bool,
+    ) -> Value {
+        test_metadata_kernel_with_wavefront(
+            export_symbol,
+            symbol,
+            explicit_arguments,
+            kernarg_segment_size,
+            kernarg_segment_alignment,
+            static_shared_memory_bytes,
+            private_segment_fixed_size,
+            required_workgroup_size,
+            max_workgroups,
+            dynamic_lds_size,
+            32,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn test_metadata_kernel_with_wavefront(
+        export_symbol: &str,
+        symbol: &str,
         mut explicit_arguments: Vec<Value>,
         kernarg_segment_size: u32,
         kernarg_segment_alignment: u32,
@@ -1290,6 +1347,7 @@ mod tests {
         required_workgroup_size: Option<[u32; 3]>,
         max_workgroups: [Option<u32>; 3],
         dynamic_lds_size: bool,
+        wavefront_size: u32,
     ) -> Value {
         let explicit_size = u64::from(kernarg_segment_size) - 256;
         explicit_arguments.extend(test_hidden_arguments(explicit_size));
@@ -1317,15 +1375,20 @@ mod tests {
                 ".private_segment_fixed_size",
                 Value::from(private_segment_fixed_size),
             ),
-            (".wavefront_size", Value::from(32)),
+            (".wavefront_size", Value::from(wavefront_size)),
             (".sgpr_count", Value::from(14)),
-            (".vgpr_count", Value::from(7)),
+            (
+                ".vgpr_count",
+                Value::from(if wavefront_size == 64 { 11 } else { 7 }),
+            ),
             (".agpr_count", Value::from(3)),
-            (".sgpr_spill_count", Value::from(2)),
-            (".vgpr_spill_count", Value::from(4)),
-            (".workgroup_processor_mode", Value::from(1)),
             (".max_flat_workgroup_size", Value::from(1024)),
         ];
+        if wavefront_size == 32 {
+            fields.push((".sgpr_spill_count", Value::from(2)));
+            fields.push((".vgpr_spill_count", Value::from(4)));
+            fields.push((".workgroup_processor_mode", Value::from(1)));
+        }
         if let Some(required) = required_workgroup_size {
             fields.push((
                 ".reqd_workgroup_size",
@@ -1617,10 +1680,23 @@ mod tests {
             DESCRIPTOR_OFFSET + 16,
             i64::try_from(entry_address - descriptor_address).unwrap(),
         );
-        write_test_u32(&mut bytes, DESCRIPTOR_OFFSET + 44, 0x40);
-        write_test_u32(&mut bytes, DESCRIPTOR_OFFSET + 48, 0xe0af_0000);
-        write_test_u32(&mut bytes, DESCRIPTOR_OFFSET + 52, 0x1391);
-        write_test_u16(&mut bytes, DESCRIPTOR_OFFSET + 56, 0x041e);
+        let (rsrc1, rsrc2, rsrc3) = if target.starts_with("gfx94") {
+            (1, 0x00af_0081, 0x1390)
+        } else {
+            (0x40, 0xe0af_0000, 0x1391)
+        };
+        write_test_u32(&mut bytes, DESCRIPTOR_OFFSET + 44, rsrc1);
+        write_test_u32(&mut bytes, DESCRIPTOR_OFFSET + 48, rsrc2);
+        write_test_u32(&mut bytes, DESCRIPTOR_OFFSET + 52, rsrc3);
+        write_test_u16(
+            &mut bytes,
+            DESCRIPTOR_OFFSET + 56,
+            if target.starts_with("gfx94") {
+                0x001e
+            } else {
+                0x041e
+            },
+        );
 
         TestHsaco {
             bytes,
@@ -1632,6 +1708,8 @@ mod tests {
         match target {
             "gfx1100" => 0x41,
             "gfx1151" => 0x4a,
+            "gfx942" => 0x54c,
+            "gfx950" => 0x54f,
             _ => panic!("unsupported host inspection test target {target}"),
         }
     }

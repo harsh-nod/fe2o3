@@ -14,6 +14,7 @@ fe2o3-artifacts.workspace = true
 fe2o3-core.workspace = true
 fe2o3-device.workspace = true
 fe2o3-hsaco.workspace = true
+fe2o3-hsaco-finalize.workspace = true
 fe2o3-kernel-descriptor.workspace = true
 reserved-fe2o3-symbols.workspace = true
 

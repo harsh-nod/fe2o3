@@ -1,0 +1,7 @@
+error[E0277]: the trait bound `LoadedKernel<Kernel>: From<AdmittedFinalizedWorkerV2BundleV1>` is not satisfied
+ --> tests/ui/worker_v2_bundle_admission/cannot_mint_loaded_kernel.rs:6:15
+  |
+6 |     admission.into()
+  |               ^^^^ the trait `From<AdmittedFinalizedWorkerV2BundleV1>` is not implemented for `LoadedKernel<Kernel>`
+  |
+  = note: required for `AdmittedFinalizedWorkerV2BundleV1` to implement `Into<LoadedKernel<Kernel>>`
