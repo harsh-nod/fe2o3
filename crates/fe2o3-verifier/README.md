@@ -25,6 +25,20 @@ challenge check, while policy, input, or executable substitution fails its
 specific digest check. The returned transcript binds the exact bounded stdout,
 stderr, and result bytes and their SHA-256 digests.
 
+`bind_authenticated_proof_executable_v1` is the fail-closed artifact bridge. It
+recomputes the retained invocation, policy, request, payload, and complete
+authenticated-envelope identities; reparses the exact sealed result; matches
+an independent `ProofMatchPolicy`; and constructs the exact
+`ProofExecutableBindingV1`. The resulting identity commits the fresh challenge,
+all three measured executable snapshots, stdout/stderr/result transcripts,
+compiler and source semantics, finalized HSACO digest, target and code-object
+version, ABI, launch contract, effects, and proof policy.
+
+The bridge consumes its challenge and transcript in an
+`AuthenticatedExecutionFreshnessV1` ledger only after every check succeeds.
+Failed attempts leave freshness available for a corrected policy. Reusing the
+same evidence in one ledger is rejected.
+
 ## Trust boundary
 
 - `VerifierPolicy` is the explicit local trust anchor. The authenticated API
@@ -45,6 +59,9 @@ stderr, and result bytes and their SHA-256 digests.
 - `AuthenticatedVerusExecutionEvidenceV1` has private construction and exposes
   descriptive measurements and transcript bytes only. It has no runtime,
   module-load, kernel-launch, or compiler-refinement capability.
+- `AuthenticatedProofExecutableBindingV1` is also evidence only. The legacy
+  conversion and artifact-binding paths remain explicitly descriptive and
+  cannot acquire authority by supplying unmeasured identities.
 
 ## Current limitations
 
@@ -53,6 +70,10 @@ scheme, dynamic-library closure measurement, compiler-refinement proof, or GPU
 runtime authority. Authentication is local and relative to the supplied trusted
 policy. The sealed execution path currently requires Linux `memfd_create`,
 `fcntl` seals, and `/proc/self/fd`.
+
+The freshness ledger is process-local. A production admission service must
+persist consumed challenge and transcript identities transactionally across
+restart before this evidence can participate in a runtime-authority decision.
 
 A timeout kills and reaps the direct recorder child, but does not yet establish
 a process group or forcibly terminate arbitrary descendants. The existing

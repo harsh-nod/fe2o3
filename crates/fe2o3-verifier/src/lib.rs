@@ -8,6 +8,7 @@
 
 mod artifact_record;
 mod authenticated_execution;
+mod authenticated_proof_binding;
 mod executor;
 mod model;
 mod plan;
@@ -22,6 +23,13 @@ pub use authenticated_execution::{
     AuthenticatedResultError, AuthenticatedVerusExecutionEvidenceV1, BoundExecutionPayloadV1,
     DataOperation, ExecutableMeasurementV1, ExecutableOperation, ExecutableRole,
     MAX_EXECUTABLE_BYTES, execute_authenticated_verus,
+};
+pub use authenticated_proof_binding::{
+    AUTHENTICATED_PROOF_EXECUTABLE_BINDING_DOMAIN_V1,
+    AUTHENTICATED_PROOF_EXECUTABLE_BINDING_VERSION_V1, AuthenticatedExecutionFreshnessV1,
+    AuthenticatedPayloadIdentityV1, AuthenticatedProofExecutableBindingError,
+    AuthenticatedProofExecutableBindingV1, AuthenticatedProofExecutablePolicyV1,
+    AuthenticatedProofExecutionIdentityV1, bind_authenticated_proof_executable_v1,
 };
 pub use executor::{
     ExecutionError, ExecutionErrorKind, ExecutionLimits, ExecutionPath, ExecutionStage,

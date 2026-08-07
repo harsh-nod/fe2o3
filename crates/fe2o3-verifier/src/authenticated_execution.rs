@@ -139,6 +139,7 @@ impl BoundExecutionPayloadV1 {
 /// ```
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AuthenticatedVerusExecutionEvidenceV1 {
+    invocation_plan: InvocationPlan,
     challenge: Digest,
     canonical_invocation_digest: Digest,
     policy_digest: Digest,
@@ -154,6 +155,10 @@ pub struct AuthenticatedVerusExecutionEvidenceV1 {
 }
 
 impl AuthenticatedVerusExecutionEvidenceV1 {
+    pub const fn invocation_plan(&self) -> &InvocationPlan {
+        &self.invocation_plan
+    }
+
     pub const fn challenge(&self) -> Digest {
         self.challenge
     }
@@ -212,6 +217,24 @@ impl AuthenticatedVerusExecutionEvidenceV1 {
             self.request_digest,
             [&self.verus, &self.solver, &self.evidence_recorder],
             [&self.stdout, &self.stderr, &self.result_bytes],
+        )
+    }
+
+    pub(crate) fn revalidate_authenticated_result(
+        &self,
+    ) -> Result<ProofResultV1, AuthenticatedExecutionError> {
+        parse_authenticated_result(
+            self.result_bytes.bytes(),
+            &self.invocation_plan,
+            AuthenticatedResultBindings {
+                challenge: self.challenge,
+                invocation_digest: self.canonical_invocation_digest,
+                policy_digest: self.policy_digest,
+                request_digest: self.request_digest,
+                verus_digest: self.verus.identity.executable_digest(),
+                solver_digest: self.solver.identity.executable_digest(),
+                recorder_digest: self.evidence_recorder.identity.executable_digest(),
+            },
         )
     }
 }
@@ -339,6 +362,7 @@ fn execute_authenticated_verus_with_challenge(
     let result = parse_authenticated_result(&result_bytes, &plan, bindings)?;
 
     Ok(build_evidence(EvidenceParts {
+        invocation_plan: plan,
         challenge,
         canonical_invocation_digest: invocation_digest,
         policy_digest,
@@ -353,6 +377,7 @@ fn execute_authenticated_verus_with_challenge(
 }
 
 struct EvidenceParts {
+    invocation_plan: InvocationPlan,
     challenge: Digest,
     canonical_invocation_digest: Digest,
     policy_digest: Digest,
@@ -378,6 +403,7 @@ fn build_evidence(parts: EvidenceParts) -> AuthenticatedVerusExecutionEvidenceV1
         [&stdout, &stderr, &result_bytes],
     );
     AuthenticatedVerusExecutionEvidenceV1 {
+        invocation_plan: parts.invocation_plan,
         challenge: parts.challenge,
         canonical_invocation_digest: parts.canonical_invocation_digest,
         policy_digest: parts.policy_digest,
@@ -1190,5 +1216,29 @@ mod tests {
                 }
             ))
         );
+    }
+
+    #[test]
+    fn every_authenticated_result_truncation_and_trailing_byte_is_rejected() {
+        let plan = plan();
+        let expected = bindings(70);
+        let valid = auth_envelope(expected, &proof_payload());
+        assert!(parse_authenticated_result(&valid, &plan, expected).is_ok());
+
+        for prefix_len in 0..valid.len() {
+            assert!(
+                parse_authenticated_result(&valid[..prefix_len], &plan, expected).is_err(),
+                "truncated prefix of {prefix_len} bytes was accepted"
+            );
+        }
+
+        for trailing in [0_u8, b'\n', b'x', 0xff] {
+            let mut changed = valid.clone();
+            changed.push(trailing);
+            assert!(
+                parse_authenticated_result(&changed, &plan, expected).is_err(),
+                "trailing byte {trailing:#04x} was accepted"
+            );
+        }
     }
 }

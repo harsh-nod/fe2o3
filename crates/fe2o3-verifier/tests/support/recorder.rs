@@ -7,6 +7,9 @@ use std::time::Duration;
 use fe2o3_artifacts::DigestAlgorithm;
 
 const CORRELATION: &str = "32323232323232323232323232323232";
+const COMPLETE_CORRELATION_BYTES: [u8; 16] = [51; 16];
+const COMPLETE_CORRELATION: &str = "33333333333333333333333333333333";
+const COMPLETE_PROPERTIES: &str = "bounds,address-overflow-freedom,memory-safety,initialization,race-freedom,launch-validity,functional-correctness";
 
 fn main() {
     let arguments: Vec<_> = std::env::args().collect();
@@ -159,7 +162,12 @@ fn authenticated_execution(arguments: &[String]) {
 
     io::stdout().write_all(b"authenticated stdout").unwrap();
     io::stderr().write_all(b"authenticated stderr").unwrap();
-    let payload = envelope(CORRELATION, "proved");
+    let complete = request.get(10..26) == Some(COMPLETE_CORRELATION_BYTES.as_slice());
+    let payload = if complete {
+        result_envelope(COMPLETE_CORRELATION, "proved", COMPLETE_PROPERTIES)
+    } else {
+        envelope(CORRELATION, "proved")
+    };
     let result = format!(
         "FE2O3-VERUS-AUTH-RESULT-V1\nchallenge={}\ninvocation={}\npolicy={}\nrequest={}\nverus={}\nsolver={}\nrecorder={}\nresult-bytes={}\n{}",
         arguments[12],
@@ -200,6 +208,10 @@ fn envelope(correlation: &str, outcome: &str) -> Vec<u8> {
     } else {
         ""
     };
+    result_envelope(correlation, outcome, properties)
+}
+
+fn result_envelope(correlation: &str, outcome: &str, properties: &str) -> Vec<u8> {
     format!(
         "FE2O3-VERIFIER-RESULT-V1\ncorrelation={correlation}\noutcome={outcome}\nproperties={properties}\ntrusted=\ndiagnostic-hex=\n"
     )
