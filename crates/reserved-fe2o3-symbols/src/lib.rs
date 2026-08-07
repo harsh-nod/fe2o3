@@ -22,6 +22,7 @@ pub const KERNEL_REGISTRATION_PREFIX: &str = "__fe2o3_kernel_registration_";
 pub const KERNEL_REGISTRATION_MAGIC: u64 = 0x4e52_4b33_4f32_4546;
 pub const KERNEL_REGISTRATION_VERSION_V1: u16 = 1;
 pub const KERNEL_REGISTRATION_VERSION_V2: u16 = 2;
+pub const KERNEL_REGISTRATION_VERSION_V3: u16 = 3;
 /// An ordinary `#[kernel]` registration without a generated typed profile.
 pub const KERNEL_REGISTRATION_KIND_KERNEL: u16 = 1;
 /// A `#[kernel(typed)]` registration using the exact typed vecadd V1 profile.
@@ -29,6 +30,9 @@ pub const KERNEL_REGISTRATION_KIND_TYPED_VECADD_V1: u16 = 2;
 /// A `#[kernel(typed)]` registration whose exact vecadd ABI identities are
 /// derived from canonical rustc type/layout evidence.
 pub const KERNEL_REGISTRATION_KIND_TYPED_VECADD_LAYOUT_V2: u16 = 3;
+/// A general `#[kernel(typed)]` registration whose generated host contract is
+/// derived from canonical rustc type/layout evidence.
+pub const KERNEL_REGISTRATION_KIND_TYPED_GENERAL_LAYOUT_V3: u16 = 4;
 
 /// V1 is an immutable `#[used]` static with this exact tuple shape:
 ///
@@ -40,6 +44,14 @@ pub const KERNEL_REGISTRATION_V1_FIELD_COUNT: usize = 6;
 /// V2 extends V1 with canonical crate and kernel binding IDs before the
 /// function pointer. Typed registrations must use this version.
 pub const KERNEL_REGISTRATION_V2_FIELD_COUNT: usize = 8;
+
+/// V3 extends V2 with a stable profile tag and canonical generated host-contract
+/// identity before the function pointer. Its exact tuple shape is:
+///
+/// `(u64 magic, u16 version, u16 kind, &str logical_name, &str export_name,
+/// &str crate_binding, &str kernel_binding, &str profile_tag,
+/// &str generated_host_contract_identity, fn pointer)`.
+pub const KERNEL_REGISTRATION_V3_FIELD_COUNT: usize = 10;
 
 /// Final-path-segment prefix for device FFI registration statics.
 pub const DEVICE_FFI_REGISTRATION_PREFIX_V1: &str = "__fe2o3_device_ffi_registration_v1_";
@@ -69,6 +81,8 @@ pub const CRATE_BINDING_ID_ENV_V1: &str = "FE2O3_CRATE_BINDING_ID_V1";
 pub const TYPED_VECADD_F32_PROFILE_TAG_V1: &str = "typed-vecadd-f32-v1";
 /// Stable profile tag for rustc-derived typed vecadd ABI evidence.
 pub const TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2: &str = "typed-vecadd-f32-rustc-layout-v2";
+/// Stable profile tag for general typed kernels with rustc-derived layout evidence.
+pub const TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3: &str = "typed-general-rustc-layout-v3";
 
 const CRATE_BINDING_DOMAIN_V1: &[u8] = b"fe2o3.crate-binding.v1\0";
 const KERNEL_BINDING_DOMAIN_V1: &[u8] = b"fe2o3.kernel-binding.v1\0";
@@ -124,6 +138,32 @@ impl KernelBindingIdV1 {
     }
 
     /// Returns the canonical lowercase hexadecimal representation.
+    pub fn to_hex(self) -> String {
+        encode_binding_hex(self.0)
+    }
+}
+
+/// Full SHA-256 identity of a generated V3 host-kernel contract.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct GeneratedHostContractIdV3([u8; BINDING_ID_BYTES]);
+
+impl GeneratedHostContractIdV3 {
+    /// Constructs an identity from exact digest bytes.
+    pub const fn from_bytes(bytes: [u8; BINDING_ID_BYTES]) -> Self {
+        Self(bytes)
+    }
+
+    /// Returns the exact digest bytes.
+    pub const fn as_bytes(self) -> [u8; BINDING_ID_BYTES] {
+        self.0
+    }
+
+    /// Parses the canonical lowercase 64-hex representation.
+    pub fn from_hex(value: &str) -> Result<Self, BindingIdError> {
+        parse_binding_hex(value).map(Self)
+    }
+
+    /// Returns the canonical lowercase 64-hex representation.
     pub fn to_hex(self) -> String {
         encode_binding_hex(self.0)
     }
@@ -795,19 +835,55 @@ mod tests {
     use super::*;
 
     #[test]
-    fn kernel_registration_v1_values_are_stable() {
+    fn kernel_registration_values_are_stable_and_versioned() {
         assert_eq!(KERNEL_REGISTRATION_MAGIC.to_le_bytes(), *b"FE2O3KRN");
         assert_eq!(KERNEL_REGISTRATION_VERSION_V1, 1);
         assert_eq!(KERNEL_REGISTRATION_VERSION_V2, 2);
+        assert_eq!(KERNEL_REGISTRATION_VERSION_V3, 3);
         assert_eq!(KERNEL_REGISTRATION_KIND_KERNEL, 1);
         assert_eq!(KERNEL_REGISTRATION_KIND_TYPED_VECADD_V1, 2);
         assert_eq!(KERNEL_REGISTRATION_KIND_TYPED_VECADD_LAYOUT_V2, 3);
+        assert_eq!(KERNEL_REGISTRATION_KIND_TYPED_GENERAL_LAYOUT_V3, 4);
         assert_ne!(
             KERNEL_REGISTRATION_KIND_TYPED_VECADD_V1,
             KERNEL_REGISTRATION_KIND_TYPED_VECADD_LAYOUT_V2
         );
+        assert_ne!(
+            KERNEL_REGISTRATION_KIND_TYPED_VECADD_LAYOUT_V2,
+            KERNEL_REGISTRATION_KIND_TYPED_GENERAL_LAYOUT_V3
+        );
         assert_eq!(KERNEL_REGISTRATION_V1_FIELD_COUNT, 6);
         assert_eq!(KERNEL_REGISTRATION_V2_FIELD_COUNT, 8);
+        assert_eq!(KERNEL_REGISTRATION_V3_FIELD_COUNT, 10);
+        assert_eq!(
+            TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3,
+            "typed-general-rustc-layout-v3"
+        );
+    }
+
+    #[test]
+    fn generated_host_contract_identity_is_canonical_lowercase_hex() {
+        let bytes = core::array::from_fn(|index| index as u8);
+        let identity = GeneratedHostContractIdV3::from_bytes(bytes);
+        let encoded = identity.to_hex();
+
+        assert_eq!(encoded.len(), 64);
+        assert_eq!(GeneratedHostContractIdV3::from_hex(&encoded), Ok(identity));
+        assert_eq!(identity.as_bytes(), bytes);
+
+        for invalid in [
+            "",
+            "00",
+            "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1",
+            "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f0",
+            "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1G",
+            "000102030405060708090A0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        ] {
+            assert!(
+                GeneratedHostContractIdV3::from_hex(invalid).is_err(),
+                "{invalid}"
+            );
+        }
     }
 
     #[test]
