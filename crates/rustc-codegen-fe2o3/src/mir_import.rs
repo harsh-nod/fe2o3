@@ -34,6 +34,7 @@ pub struct MirFunction {
     pub export_name: String,
     pub rust_path: String,
     pub kind: MirFunctionKind,
+    pub typed_profile: Option<MirKernelProfile>,
     pub arg_count: usize,
     pub local_count: usize,
     pub locals: Vec<MirLocal>,
@@ -46,6 +47,12 @@ pub enum MirFunctionKind {
     KernelEntry,
     InternalHelper,
     DeviceFfiExport,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MirKernelProfile {
+    VecAddRustcLayoutV2,
+    GeneralScalarSliceRustcLayoutV3,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -622,7 +629,10 @@ pub fn import_collection<'tcx>(
                 function.export_name.clone(),
                 rust_path,
                 import_function_kind(function.role),
-                function.frontend_contract.clone(),
+                MirKernelMetadata {
+                    typed_profile: import_kernel_profile(function.typed_profile),
+                    frontend_contract: function.frontend_contract.clone(),
+                },
                 &compiler_ffi_imports,
             ))
         })
@@ -648,6 +658,19 @@ fn import_function_kind(role: crate::collector::CollectedFunctionRole) -> MirFun
             MirFunctionKind::DeviceFfiExport
         }
     }
+}
+
+fn import_kernel_profile(
+    profile: Option<crate::collector::TypedKernelProfile>,
+) -> Option<MirKernelProfile> {
+    profile.map(|profile| match profile {
+        crate::collector::TypedKernelProfile::VecAddRustcLayoutV2 => {
+            MirKernelProfile::VecAddRustcLayoutV2
+        }
+        crate::collector::TypedKernelProfile::GeneralScalarSliceRustcLayoutV3 { .. } => {
+            MirKernelProfile::GeneralScalarSliceRustcLayoutV3
+        }
+    })
 }
 
 impl MirModule {
@@ -903,6 +926,12 @@ impl MirFunction {
                     "{field} `{value:?}` contains control characters"
                 )));
             }
+        }
+        if self.kind != MirFunctionKind::KernelEntry && self.typed_profile.is_some() {
+            return Err(MirImportError::new(format!(
+                "non-kernel function `{}` carries a typed kernel profile",
+                self.rust_path
+            )));
         }
         Ok(())
     }
@@ -1302,13 +1331,18 @@ impl MirTerminatorKind {
     }
 }
 
+struct MirKernelMetadata {
+    typed_profile: Option<MirKernelProfile>,
+    frontend_contract: Option<crate::collector::AuthenticatedKernelFrontendContractV1>,
+}
+
 fn import_body<'tcx>(
     tcx: TyCtxt<'tcx>,
     body: &Body<'tcx>,
     export_name: String,
     rust_path: String,
     kind: MirFunctionKind,
-    frontend_contract: Option<crate::collector::AuthenticatedKernelFrontendContractV1>,
+    kernel_metadata: MirKernelMetadata,
     compiler_ffi_imports: &CompilerFfiImports,
 ) -> MirFunction {
     let blocks = body
@@ -1354,11 +1388,12 @@ fn import_body<'tcx>(
         export_name,
         rust_path,
         kind,
+        typed_profile: kernel_metadata.typed_profile,
         arg_count: body.arg_count,
         local_count: body.local_decls.len(),
         locals,
         blocks,
-        frontend_contract,
+        frontend_contract: kernel_metadata.frontend_contract,
     }
 }
 
@@ -1905,6 +1940,7 @@ mod tests {
                 export_name: "vecadd".to_string(),
                 rust_path: "fe2o3_vecadd::fe2o3_kernel_vecadd".to_string(),
                 kind: MirFunctionKind::KernelEntry,
+                typed_profile: None,
                 frontend_contract: None,
                 arg_count: 3,
                 local_count: 17,
@@ -1961,6 +1997,7 @@ mod tests {
                 export_name: "vecadd".to_string(),
                 rust_path: "fe2o3_vecadd::fe2o3_kernel_vecadd".to_string(),
                 kind: MirFunctionKind::KernelEntry,
+                typed_profile: None,
                 frontend_contract: None,
                 arg_count: 3,
                 local_count: 17,
@@ -2031,6 +2068,7 @@ mod tests {
                 export_name: "copy".to_string(),
                 rust_path: "fe2o3_copy::fe2o3_kernel_copy".to_string(),
                 kind: MirFunctionKind::KernelEntry,
+                typed_profile: None,
                 frontend_contract: None,
                 arg_count: 1,
                 local_count: 3,
@@ -2106,6 +2144,7 @@ mod tests {
                 export_name: "consumer".to_string(),
                 rust_path: "tests::consumer".to_string(),
                 kind: MirFunctionKind::KernelEntry,
+                typed_profile: None,
                 frontend_contract: None,
                 arg_count: 0,
                 local_count: 1,
@@ -2587,6 +2626,7 @@ mod tests {
             export_name: export_name.to_owned(),
             rust_path: rust_path.to_owned(),
             kind,
+            typed_profile: None,
             arg_count: 1,
             local_count: 2,
             locals: Vec::new(),
