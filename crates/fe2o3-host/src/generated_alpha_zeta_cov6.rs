@@ -20,9 +20,11 @@ use crate::{
     WorkerV2TypedKernelSelectionError,
 };
 use fe2o3_artifacts::{
-    AbiField, AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership, BlockSize,
-    Dimensions, LaunchContract, Mutability, Name, PointerWidth, ScalarType,
+    AbiField, AbiKind, Access, AddressSpace, AliasClass, ArgumentOwnership, BlockSize, Mutability,
+    PointerWidth, ScalarType,
 };
+#[cfg(any(test, feature = "hardware-test-hooks"))]
+use fe2o3_artifacts::{AbiLayout, Dimensions, LaunchContract, Name};
 use std::alloc::{Layout, alloc_zeroed, dealloc, handle_alloc_error};
 use std::fmt;
 use std::ptr::NonNull;
