@@ -5,6 +5,7 @@ set -Eeuo pipefail
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 readonly LOG_DIR="${CI_LOG_DIR:-${REPO_ROOT}/target/ci-logs}"
+readonly RUSTC_CODEGEN_TEST_PACKAGE="rustc-codegen-fe2o3"
 
 readonly CPU_TEST_PACKAGES=(
   cargo-fe2o3
@@ -28,7 +29,6 @@ readonly CPU_TEST_PACKAGES=(
   fe2o3-rustc-invocation
   fe2o3-verifier
   reserved-fe2o3-symbols
-  rustc-codegen-fe2o3
 )
 
 usage() {
@@ -40,6 +40,7 @@ Commands:
   format          Check Rust formatting
   check           Check every workspace target, including example binaries
   test            Run unit tests that do not link or load the HIP runtime
+  workspace-test  Run every workspace test target; may require ROCm libraries
   backend         Build the rustc codegen backend dylib
   verus           Run positive and negative Verus proof fixtures; requires Verus
   rocm-compile    Compile every example to host code and HSACO; requires ROCm
@@ -128,6 +129,7 @@ run_tests() {
     fi
   done
   run_step cpu-tests cargo "${cargo_args[@]}"
+  run_rustc_codegen_tests
   # fe2o3-core unit tests link HIP, but its compile-fail doctests do not.
   run_step core-doc-tests cargo test --locked --doc -p fe2o3-core
   run_step device-copy-renamed-dependency \
@@ -136,6 +138,20 @@ run_tests() {
     cargo check --locked -p fe2o3-core --test device_copy_derive_compile
   run_step device-copy-derive-ui \
     cargo test --locked -p fe2o3-core --test device_copy_derive_ui
+}
+
+run_rustc_codegen_tests() {
+  # This package emits both an rlib and an unversioned dylib. Keep its tests in
+  # one Cargo process so another workspace build cannot replace that dylib.
+  run_step rustc-codegen-tests \
+    cargo test --locked -p "${RUSTC_CODEGEN_TEST_PACKAGE}" --all-targets
+}
+
+run_workspace_tests() {
+  run_step workspace-tests \
+    cargo test --locked --workspace --all-targets \
+      --exclude "${RUSTC_CODEGEN_TEST_PACKAGE}"
+  run_rustc_codegen_tests
 }
 
 run_backend_build() {
@@ -160,6 +176,7 @@ run_generic() {
   run_format
   run_check
   run_backend_build
+  run_step ci-local-test-gate bash scripts/tests/ci-local-test-gate.sh
   run_tests
 }
 
@@ -316,6 +333,7 @@ main() {
     format) run_format ;;
     check) run_check ;;
     test) run_tests ;;
+    workspace-test) run_workspace_tests ;;
     backend) run_backend_build ;;
     verus) run_verus ;;
     rocm-compile) run_rocm_compile ;;
