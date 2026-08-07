@@ -202,9 +202,14 @@ struct GeneratedDeviceSliceMetadata {
 pub(super) struct GeneratedArgumentBorrowV1<'allocation>(PhantomData<&'allocation ()>);
 
 impl GeneratedArgumentBorrowV1<'_> {
-    pub(super) const fn new() -> Self {
+    const fn new() -> Self {
         Self(PhantomData)
     }
+}
+
+#[cfg(test)]
+pub(super) const fn generated_argument_borrow_for_test() -> GeneratedArgumentBorrowV1<'static> {
+    GeneratedArgumentBorrowV1::new()
 }
 
 impl GeneratedDeviceSliceMetadata {

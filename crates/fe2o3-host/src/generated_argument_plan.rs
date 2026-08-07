@@ -1779,7 +1779,7 @@ mod tests {
         GeneratedArgumentPackingError, GeneratedArgumentValueV1, GeneratedDeviceScalarV1,
         GeneratedPackingComponentKindV1, validate_argument_packing,
     };
-    use crate::KernelId;
+    use crate::{KernelId, argument_alias::generated_argument_borrow_for_test};
     use fe2o3_artifacts::{
         AbiField, AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership,
         DeclaredRustLayoutIdentity, DeclaredRustTypeIdentity, DigestBytes, Mutability, Name,
@@ -1798,7 +1798,7 @@ mod tests {
     }
 
     fn borrow() -> GeneratedArgumentBorrowV1<'static> {
-        GeneratedArgumentBorrowV1::new()
+        generated_argument_borrow_for_test()
     }
 
     fn scalar(name: &str, offset: u64, alignment: u32, seed: u8) -> AbiField {
@@ -2282,7 +2282,7 @@ mod tests {
         let scalar_manifest = layout(vec![scalar_field.clone()], 4, 4);
         let scalar_plan = validate(&scalar_manifest, &generated(vec![scalar_field], 4, 4)).unwrap();
         assert_eq!(
-            scalar_plan.scalar::<u32>(0, 1).unwrap_err(),
+            scalar_plan.scalar_u32(0, 1).unwrap_err(),
             GeneratedArgumentPackError::FieldMismatch {
                 argument_index: 0,
                 property: GeneratedArgumentFieldProperty::TypeIdentity,
