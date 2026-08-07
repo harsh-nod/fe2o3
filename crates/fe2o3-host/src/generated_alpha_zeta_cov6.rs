@@ -20,8 +20,8 @@ use crate::{
     WorkerV2TypedKernelSelectionError,
 };
 use fe2o3_artifacts::{
-    AbiField, AbiKind, Access, AddressSpace, AliasClass, ArgumentOwnership, BlockSize, Mutability,
-    PointerWidth, ScalarType,
+    AbiField, AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership, BlockSize,
+    Dimensions, LaunchContract, Mutability, Name, PointerWidth, ScalarType,
 };
 use std::alloc::{Layout, alloc_zeroed, dealloc, handle_alloc_error};
 use std::fmt;
@@ -994,6 +994,86 @@ impl std::error::Error for GeneratedAlphaZetaCov6ArgumentError {}
 impl std::error::Error for AlphaZetaCov6ProfileError {}
 impl std::error::Error for GeneratedAlphaZetaCov6GeometryError {}
 impl std::error::Error for GeneratedAlphaZetaCov6PhysicalKernargError {}
+
+#[cfg(any(test, feature = "hardware-test-hooks"))]
+pub(crate) fn alpha_cov6_test_abi() -> AbiLayout {
+    let scalar = AbiField::new(
+        Name::new("scale").unwrap(),
+        0,
+        4,
+        4,
+        AbiKind::Scalar(ScalarType::F32),
+        Mutability::Immutable,
+        Access::ByValue,
+        AddressSpace::Value,
+        <f32 as GeneratedDeviceScalarV1>::scalar_type_identity_v1(PointerWidth::Bits64),
+        ArgumentOwnership::ByValue,
+        AliasClass::Value,
+    )
+    .unwrap();
+    let slice = |name: &str, offset: u64, read_write: bool| {
+        AbiField::new(
+            Name::new(name).unwrap(),
+            offset,
+            16,
+            8,
+            AbiKind::Slice {
+                element_size: 4,
+                element_alignment: 4,
+            },
+            if read_write {
+                Mutability::Mutable
+            } else {
+                Mutability::Immutable
+            },
+            if read_write {
+                Access::ReadWrite
+            } else {
+                Access::ReadOnly
+            },
+            AddressSpace::Global,
+            if read_write {
+                <f32 as GeneratedDeviceScalarV1>::disjoint_slice_type_identity_v1(
+                    PointerWidth::Bits64,
+                )
+            } else {
+                <f32 as GeneratedDeviceScalarV1>::shared_slice_type_identity_v1(
+                    PointerWidth::Bits64,
+                )
+            },
+            if read_write {
+                ArgumentOwnership::UniqueBorrow
+            } else {
+                ArgumentOwnership::SharedBorrow
+            },
+            if read_write {
+                AliasClass::Exclusive
+            } else {
+                AliasClass::SharedReadOnly
+            },
+        )
+        .unwrap()
+    };
+    AbiLayout::new(
+        ALPHA_EXPLICIT_KERNARG_BYTES as u64,
+        8,
+        PointerWidth::Bits64,
+        vec![scalar, slice("input", 8, false), slice("output", 24, true)],
+    )
+    .unwrap()
+}
+
+#[cfg(any(test, feature = "hardware-test-hooks"))]
+pub(crate) fn alpha_cov6_test_launch() -> LaunchContract {
+    LaunchContract::new(
+        1,
+        BlockSize::Exact(Dimensions::new(ALPHA_ZETA_COV6_BLOCK_X, 1, 1).unwrap()),
+        Dimensions::new(u32::MAX, 1, 1).unwrap(),
+        0,
+        0,
+    )
+    .unwrap()
+}
 
 #[cfg(test)]
 pub(crate) mod tests {

@@ -1019,8 +1019,8 @@ pub(crate) mod tests {
 
     fn alpha_cov6_admission_fixture(seed: u8) -> AdmissionFixture {
         let hsaco = alpha_cov6_hsaco_for_target("gfx942");
-        let abi = crate::generated_alpha_zeta_cov6::tests::alpha_test_abi();
-        let launch = crate::generated_alpha_zeta_cov6::tests::alpha_test_launch();
+        let abi = crate::generated_alpha_zeta_cov6::alpha_cov6_test_abi();
+        let launch = crate::generated_alpha_zeta_cov6::alpha_cov6_test_launch();
         let kernel_binding = [0x61; 32];
         let kernel_id = derive_generated_kernel_identity_v2(
             MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
