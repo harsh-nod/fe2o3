@@ -1,4 +1,5 @@
 mod semantic_constant;
+mod semantic_memory;
 mod semantic_type;
 
 pub use semantic_constant::{
@@ -9,6 +10,13 @@ pub use semantic_constant::{
     MirConstantValidationError, MirInitializedMask, MirMemoryIdentity, MirPointerProvenance,
     MirPointerRelocation, MirPointerWidth, MirPromotedIdentity, MirSemanticConstantPool,
     MirStaticIdentity, MirSymbolIdentity,
+};
+pub use semantic_memory::{
+    MAX_MEMORY_OPERATION_WIRE_BYTES, MirCopyNonOverlappingContract, MirElementCount,
+    MirMemoryAccessContract, MirMemoryContractDecodeError, MirMemoryContractValidationError,
+    MirMemoryPermission, MirOperationProvenance, MirOverlapContract, MirPointerDistanceContract,
+    MirPointerDistanceResult, MirPointerDistanceUnit, MirPointerOperandContract,
+    MirProvenanceRegion, MirSemanticMemoryOperation, MirVolatileAccessContract,
 };
 pub use semantic_type::{
     MirAddressSpace, MirAggregateLayout, MirEnumEncoding, MirEnumType, MirField, MirLayout,
@@ -102,6 +110,10 @@ pub enum MirOp {
     SliceLen,
     SlicePtr,
     Gep,
+    PointerDistance,
+    VolatileLoad,
+    VolatileStore,
+    CopyNonOverlapping,
     Other,
 }
 
@@ -142,6 +154,10 @@ impl MirOp {
             Self::SliceLen => "mir.slice_len",
             Self::SlicePtr => "mir.slice_ptr",
             Self::Gep => "mir.gep",
+            Self::PointerDistance => "mir.pointer_distance",
+            Self::VolatileLoad => "mir.volatile_load",
+            Self::VolatileStore => "mir.volatile_store",
+            Self::CopyNonOverlapping => "mir.copy_nonoverlapping",
             Self::Other => "mir.other",
         }
     }
@@ -190,6 +206,10 @@ mod tests {
         assert_eq!(MirOp::Assign.name(), "mir.assign");
         assert_eq!(MirOp::Lt.name(), "mir.lt");
         assert_eq!(MirOp::ThreadIndex1d.name(), "mir.thread_index_1d");
+        assert_eq!(MirOp::PointerDistance.name(), "mir.pointer_distance");
+        assert_eq!(MirOp::VolatileLoad.name(), "mir.volatile_load");
+        assert_eq!(MirOp::VolatileStore.name(), "mir.volatile_store");
+        assert_eq!(MirOp::CopyNonOverlapping.name(), "mir.copy_nonoverlapping");
     }
 
     #[test]
