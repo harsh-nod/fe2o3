@@ -1,9 +1,15 @@
 use std::collections::BTreeSet;
 use std::fmt;
+use std::io;
+use std::path::Path;
 
 use fe2o3_artifacts::DigestAlgorithm;
 
-use crate::Digest;
+use crate::{AuthenticatedProofExecutionIdentityV1, Digest};
+
+#[cfg(target_os = "linux")]
+#[path = "persistent_freshness_linux.rs"]
+mod linux;
 
 pub const PERSISTENT_FRESHNESS_VERSION_V1: u16 = 1;
 pub const PERSISTENT_FRESHNESS_STATE_MAGIC_V1: [u8; 8] = *b"FE2PFLD\0";
@@ -61,6 +67,23 @@ impl PersistentFreshnessIdentityV1 {
         }
         Ok(())
     }
+
+    fn from_authenticated_execution(
+        identity: &AuthenticatedProofExecutionIdentityV1,
+    ) -> Result<Self, PersistentFreshnessLedgerErrorV1> {
+        let value = Self {
+            challenge: identity.challenge(),
+            transcript: identity.transcript_digest(),
+            result: identity.result().digest(),
+        };
+        value
+            .validate()
+            .map_err(|error| PersistentFreshnessLedgerErrorV1::Record {
+                file: PersistentFreshnessLedgerFileV1::State,
+                error,
+            })?;
+        Ok(value)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -115,6 +138,157 @@ impl PersistentFreshnessIntentInspectionV1 {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PersistentFreshnessRecoveryV1 {
+    Initialized,
+    Clean,
+    DiscardedUncommittedIntent,
+    AppliedPendingIntent,
+    FinalizedPendingIntent,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PersistentFreshnessReceiptV1 {
+    identity: PersistentFreshnessIdentityV1,
+    generation: u64,
+    state_identity: Digest,
+}
+
+impl PersistentFreshnessReceiptV1 {
+    pub const fn identity(self) -> PersistentFreshnessIdentityV1 {
+        self.identity
+    }
+
+    pub const fn generation(self) -> u64 {
+        self.generation
+    }
+
+    pub const fn state_identity(self) -> Digest {
+        self.state_identity
+    }
+
+    pub const fn grants_runtime_authority(self) -> bool {
+        false
+    }
+}
+
+/// A Linux persistent replay ledger rooted at one retained directory
+/// descriptor and one retained lock-file descriptor.
+///
+/// Construction is intentionally separate from the process-local
+/// `AuthenticatedExecutionFreshnessV1`. The value is neither `Clone` nor a
+/// source of runtime authority.
+pub struct PersistentProofFreshnessLedgerV1 {
+    #[cfg(target_os = "linux")]
+    inner: linux::LinuxLedger,
+}
+
+impl fmt::Debug for PersistentProofFreshnessLedgerV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PersistentProofFreshnessLedgerV1")
+            .finish_non_exhaustive()
+    }
+}
+
+impl PersistentProofFreshnessLedgerV1 {
+    pub fn open(
+        directory: impl AsRef<Path>,
+    ) -> Result<(Self, PersistentFreshnessRecoveryV1), PersistentFreshnessLedgerErrorV1> {
+        #[cfg(target_os = "linux")]
+        {
+            let (inner, recovery) = linux::LinuxLedger::open(directory.as_ref())?;
+            Ok((Self { inner }, recovery))
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = directory;
+            Err(PersistentFreshnessLedgerErrorV1::UnsupportedPlatform)
+        }
+    }
+
+    pub fn try_begin_exclusive(
+        &mut self,
+    ) -> Result<PersistentProofFreshnessTransactionV1<'_>, PersistentFreshnessLedgerErrorV1> {
+        #[cfg(target_os = "linux")]
+        {
+            Ok(PersistentProofFreshnessTransactionV1 {
+                inner: self.inner.try_begin_exclusive()?,
+            })
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            Err(PersistentFreshnessLedgerErrorV1::UnsupportedPlatform)
+        }
+    }
+
+    pub fn consume_authenticated_execution(
+        &mut self,
+        identity: &AuthenticatedProofExecutionIdentityV1,
+    ) -> Result<PersistentFreshnessReceiptV1, PersistentFreshnessLedgerErrorV1> {
+        self.try_begin_exclusive()?.consume(identity)
+    }
+
+    pub fn inspect(
+        &mut self,
+    ) -> Result<PersistentFreshnessStateInspectionV1, PersistentFreshnessLedgerErrorV1> {
+        Ok(self.try_begin_exclusive()?.state())
+    }
+}
+
+pub struct PersistentProofFreshnessTransactionV1<'a> {
+    #[cfg(target_os = "linux")]
+    inner: linux::LinuxTransaction<'a>,
+}
+
+impl fmt::Debug for PersistentProofFreshnessTransactionV1<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PersistentProofFreshnessTransactionV1")
+            .finish_non_exhaustive()
+    }
+}
+
+impl PersistentProofFreshnessTransactionV1<'_> {
+    pub fn recovery(&self) -> PersistentFreshnessRecoveryV1 {
+        #[cfg(target_os = "linux")]
+        {
+            self.inner.recovery()
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            unreachable!("persistent freshness transactions require Linux")
+        }
+    }
+
+    pub fn state(&self) -> PersistentFreshnessStateInspectionV1 {
+        #[cfg(target_os = "linux")]
+        {
+            self.inner.state()
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            unreachable!("persistent freshness transactions require Linux")
+        }
+    }
+
+    pub fn consume(
+        &mut self,
+        identity: &AuthenticatedProofExecutionIdentityV1,
+    ) -> Result<PersistentFreshnessReceiptV1, PersistentFreshnessLedgerErrorV1> {
+        let identity = PersistentFreshnessIdentityV1::from_authenticated_execution(identity)?;
+        #[cfg(target_os = "linux")]
+        {
+            self.inner.consume(identity)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = identity;
+            Err(PersistentFreshnessLedgerErrorV1::UnsupportedPlatform)
+        }
+    }
+}
+
 pub fn inspect_persistent_freshness_state_v1(
     bytes: &[u8],
 ) -> Result<PersistentFreshnessStateInspectionV1, PersistentFreshnessRecordErrorV1> {
@@ -146,6 +320,75 @@ struct FreshnessStateV1 {
 }
 
 impl FreshnessStateV1 {
+    fn empty() -> Self {
+        Self {
+            generation: 0,
+            entries: Vec::new(),
+        }
+    }
+
+    fn inspection(&self) -> PersistentFreshnessStateInspectionV1 {
+        PersistentFreshnessStateInspectionV1 {
+            generation: self.generation,
+            consumed_count: self.entries.len() as u32,
+            state_identity: self.identity(),
+        }
+    }
+
+    fn with_consumed(
+        &self,
+        identity: PersistentFreshnessIdentityV1,
+    ) -> Result<Self, PersistentFreshnessLedgerErrorV1> {
+        identity
+            .validate()
+            .map_err(|error| PersistentFreshnessLedgerErrorV1::Record {
+                file: PersistentFreshnessLedgerFileV1::State,
+                error,
+            })?;
+        if self.entries.len() == MAX_PERSISTENT_FRESHNESS_ENTRIES_V1 {
+            return Err(PersistentFreshnessLedgerErrorV1::Full {
+                max: MAX_PERSISTENT_FRESHNESS_ENTRIES_V1,
+            });
+        }
+        for (field, replayed) in [
+            (
+                PersistentFreshnessIdentityFieldV1::Challenge,
+                self.entries
+                    .iter()
+                    .any(|entry| entry.challenge == identity.challenge),
+            ),
+            (
+                PersistentFreshnessIdentityFieldV1::Transcript,
+                self.entries
+                    .iter()
+                    .any(|entry| entry.transcript == identity.transcript),
+            ),
+            (
+                PersistentFreshnessIdentityFieldV1::Result,
+                self.entries
+                    .iter()
+                    .any(|entry| entry.result == identity.result),
+            ),
+        ] {
+            if replayed {
+                return Err(PersistentFreshnessLedgerErrorV1::Replay { field });
+            }
+        }
+        let mut entries = self.entries.clone();
+        let insertion = entries
+            .binary_search(&identity)
+            .expect_err("an exact duplicate must share all independently checked identities");
+        entries.insert(insertion, identity);
+        Ok(Self {
+            generation: self.generation + 1,
+            entries,
+        })
+    }
+
+    fn contains(&self, identity: PersistentFreshnessIdentityV1) -> bool {
+        self.entries.binary_search(&identity).is_ok()
+    }
+
     fn validate(&self) -> Result<(), PersistentFreshnessRecordErrorV1> {
         if self.entries.len() > MAX_PERSISTENT_FRESHNESS_ENTRIES_V1 {
             return Err(PersistentFreshnessRecordErrorV1::TooManyEntries {
@@ -277,6 +520,22 @@ struct FreshnessIntentV1 {
 }
 
 impl FreshnessIntentV1 {
+    fn new(
+        previous: &FreshnessStateV1,
+        next: &FreshnessStateV1,
+        identity: PersistentFreshnessIdentityV1,
+    ) -> Result<Self, PersistentFreshnessRecordErrorV1> {
+        let value = Self {
+            previous_generation: previous.generation,
+            next_generation: next.generation,
+            previous_state_identity: previous.identity(),
+            next_state_identity: next.identity(),
+            identity,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
     fn validate(self) -> Result<(), PersistentFreshnessRecordErrorV1> {
         if self.next_generation == 0
             || self.previous_generation.checked_add(1) != Some(self.next_generation)
@@ -520,6 +779,214 @@ impl<'a> Reader<'a> {
 
     fn is_finished(&self) -> bool {
         self.offset == self.bytes.len()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PersistentFreshnessLedgerFileV1 {
+    Directory,
+    Lock,
+    State,
+    StateTemporary,
+    Intent,
+    IntentTemporary,
+}
+
+impl PersistentFreshnessLedgerFileV1 {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Directory => "directory",
+            Self::Lock => "lock file",
+            Self::State => "state file",
+            Self::StateTemporary => "temporary state file",
+            Self::Intent => "intent file",
+            Self::IntentTemporary => "temporary intent file",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PersistentFreshnessLedgerOperationV1 {
+    Open,
+    Inspect,
+    Lock,
+    Read,
+    Create,
+    Write,
+    Sync,
+    Rename,
+    Remove,
+}
+
+impl PersistentFreshnessLedgerOperationV1 {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::Inspect => "inspect",
+            Self::Lock => "lock",
+            Self::Read => "read",
+            Self::Create => "create",
+            Self::Write => "write",
+            Self::Sync => "sync",
+            Self::Rename => "rename",
+            Self::Remove => "remove",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum PersistentFreshnessLedgerErrorV1 {
+    UnsupportedPlatform,
+    InvalidDirectoryPath,
+    Io {
+        operation: PersistentFreshnessLedgerOperationV1,
+        file: PersistentFreshnessLedgerFileV1,
+        kind: io::ErrorKind,
+    },
+    NotDirectory,
+    InsecureDirectoryOwner,
+    InsecureDirectoryPermissions,
+    FileNotRegular {
+        file: PersistentFreshnessLedgerFileV1,
+    },
+    FileHasMultipleLinks {
+        file: PersistentFreshnessLedgerFileV1,
+        links: u64,
+    },
+    FileOwnerMismatch {
+        file: PersistentFreshnessLedgerFileV1,
+    },
+    FilePermissionsTooBroad {
+        file: PersistentFreshnessLedgerFileV1,
+    },
+    FileTooLarge {
+        file: PersistentFreshnessLedgerFileV1,
+        max: usize,
+    },
+    FileChangedDuringRead {
+        file: PersistentFreshnessLedgerFileV1,
+    },
+    LockBusy,
+    LockFileSubstituted,
+    UnexpectedRecoveryFile {
+        file: PersistentFreshnessLedgerFileV1,
+    },
+    AmbiguousRecovery,
+    RecoveryConflict,
+    Record {
+        file: PersistentFreshnessLedgerFileV1,
+        error: PersistentFreshnessRecordErrorV1,
+    },
+    Replay {
+        field: PersistentFreshnessIdentityFieldV1,
+    },
+    Full {
+        max: usize,
+    },
+}
+
+impl fmt::Display for PersistentFreshnessLedgerErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnsupportedPlatform => {
+                formatter.write_str("persistent proof freshness requires Linux")
+            }
+            Self::InvalidDirectoryPath => {
+                formatter.write_str("persistent freshness directory path is invalid")
+            }
+            Self::Io {
+                operation,
+                file,
+                kind,
+            } => write!(
+                formatter,
+                "cannot {} persistent freshness {}: {kind}",
+                operation.as_str(),
+                file.as_str()
+            ),
+            Self::NotDirectory => {
+                formatter.write_str("persistent freshness root is not a directory")
+            }
+            Self::InsecureDirectoryOwner => formatter
+                .write_str("persistent freshness directory is not owned by the effective user"),
+            Self::InsecureDirectoryPermissions => formatter
+                .write_str("persistent freshness directory is writable by group or other users"),
+            Self::FileNotRegular { file } => {
+                write!(
+                    formatter,
+                    "persistent freshness {} is not regular",
+                    file.as_str()
+                )
+            }
+            Self::FileHasMultipleLinks { file, links } => write!(
+                formatter,
+                "persistent freshness {} has {links} hard links",
+                file.as_str()
+            ),
+            Self::FileOwnerMismatch { file } => write!(
+                formatter,
+                "persistent freshness {} owner does not match",
+                file.as_str()
+            ),
+            Self::FilePermissionsTooBroad { file } => write!(
+                formatter,
+                "persistent freshness {} permissions are too broad",
+                file.as_str()
+            ),
+            Self::FileTooLarge { file, max } => write!(
+                formatter,
+                "persistent freshness {} exceeds {max} bytes",
+                file.as_str()
+            ),
+            Self::FileChangedDuringRead { file } => write!(
+                formatter,
+                "persistent freshness {} changed while being read",
+                file.as_str()
+            ),
+            Self::LockBusy => formatter.write_str("persistent freshness ledger is locked"),
+            Self::LockFileSubstituted => {
+                formatter.write_str("persistent freshness lock file was substituted")
+            }
+            Self::UnexpectedRecoveryFile { file } => write!(
+                formatter,
+                "persistent freshness {} has no valid recovery role",
+                file.as_str()
+            ),
+            Self::AmbiguousRecovery => {
+                formatter.write_str("persistent freshness recovery state is ambiguous")
+            }
+            Self::RecoveryConflict => {
+                formatter.write_str("persistent freshness intent conflicts with durable state")
+            }
+            Self::Record { file, error } => {
+                write!(
+                    formatter,
+                    "invalid persistent freshness {}: {error}",
+                    file.as_str()
+                )
+            }
+            Self::Replay { field } => write!(
+                formatter,
+                "persistent freshness {} identity was already consumed",
+                field.as_str()
+            ),
+            Self::Full { max } => {
+                write!(
+                    formatter,
+                    "persistent freshness ledger reached {max} entries"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for PersistentFreshnessLedgerErrorV1 {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Record { error, .. } => Some(error),
+            _ => None,
+        }
     }
 }
 

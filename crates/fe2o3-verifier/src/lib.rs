@@ -59,8 +59,12 @@ pub use persistent_freshness::{
     PERSISTENT_FRESHNESS_INTENT_MAGIC_V1, PERSISTENT_FRESHNESS_STATE_MAGIC_V1,
     PERSISTENT_FRESHNESS_VERSION_V1, PersistentFreshnessIdentityFieldV1,
     PersistentFreshnessIdentityV1, PersistentFreshnessIntentInspectionV1,
-    PersistentFreshnessRecordErrorV1, PersistentFreshnessStateInspectionV1,
-    inspect_persistent_freshness_intent_v1, inspect_persistent_freshness_state_v1,
+    PersistentFreshnessLedgerErrorV1, PersistentFreshnessLedgerFileV1,
+    PersistentFreshnessLedgerOperationV1, PersistentFreshnessReceiptV1,
+    PersistentFreshnessRecordErrorV1, PersistentFreshnessRecoveryV1,
+    PersistentFreshnessStateInspectionV1, PersistentProofFreshnessLedgerV1,
+    PersistentProofFreshnessTransactionV1, inspect_persistent_freshness_intent_v1,
+    inspect_persistent_freshness_state_v1,
 };
 pub use plan::{
     CommandSpec, InvocationPaths, InvocationPlan, MAX_PATH_BYTES, MAX_TIMEOUT_SECONDS, PlanError,
