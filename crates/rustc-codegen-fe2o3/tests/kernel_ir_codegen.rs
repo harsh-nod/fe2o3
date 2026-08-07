@@ -278,7 +278,7 @@ static __fe2o3_device_ffi_registration_v1_{contract}: (
 #[inline(never)]
 #[unsafe(export_name = "worker_v2_shared_helper")]
 pub fn shared_helper(value: u32) -> u32 {{
-    value + 1
+    value
 }}
 
 #[unsafe(export_name = "fe2o3_kernel_{MULTI_KERNEL_ZETA}")]
