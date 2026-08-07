@@ -17,8 +17,9 @@ use reserved_fe2o3_symbols::{
     CRATE_BINDING_ID_ENV_V1, CrateBindingIdV1, KERNEL_PREFIX, KERNEL_REGISTRATION_KIND_KERNEL,
     KERNEL_REGISTRATION_KIND_TYPED_VECADD_LAYOUT_V2, KERNEL_REGISTRATION_MAGIC,
     KERNEL_REGISTRATION_PREFIX, KERNEL_REGISTRATION_VERSION_V1, KERNEL_REGISTRATION_VERSION_V2,
-    RESERVED_ROOT, TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2, artifact_length_symbol_v1,
-    artifact_pointer_symbol_v1, derive_kernel_binding_id_v1, host_kernel_symbol_v1,
+    MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1, RESERVED_ROOT,
+    TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2, artifact_length_symbol_v1, artifact_pointer_symbol_v1,
+    derive_kernel_binding_id_v1, host_kernel_symbol_v1,
 };
 use syn::{
     Data, DeriveInput, Expr, ExprArray, FnArg, ForeignItem, GenericArgument, ItemFn,
@@ -255,7 +256,6 @@ struct KernelOptions {
 const MAX_TYPED_KERNEL_SYMBOL_STEM_BYTES: usize = 128;
 const MAX_WORKGROUP_THREADS_V1: u64 = 1_024;
 const MAX_RESIDENT_WORKGROUPS_PER_COMPUTE_UNIT_V1: u16 = 64;
-const GENERAL_TYPED_PROFILE_TAG_V1: &str = "fe2o3.manifest-derived-scalar-slice.v1";
 const GENERAL_TYPED_DEFAULT_BLOCK_V1: [u32; 3] = [256, 1, 1];
 const GENERAL_TYPED_POINTER_SIZE_V1: u64 = 8;
 const GENERAL_TYPED_POINTER_ALIGNMENT_V1: u32 = 8;
@@ -1293,7 +1293,7 @@ fn model_general_typed_signature_v1(
     let launch = general_typed_launch_v1(options.launch.as_ref(), &input.sig)?;
     let logical_name = input.sig.ident.to_string();
     let generated_host_contract_identity = derive_generated_host_contract_identity_v1(
-        GENERAL_TYPED_PROFILE_TAG_V1,
+        MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
         kernel_binding,
         &logical_name,
         &logical_name,
