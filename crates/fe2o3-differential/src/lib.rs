@@ -6,6 +6,7 @@
 
 mod codec;
 mod conformance;
+mod corpus;
 mod eval;
 mod generate;
 mod model;
@@ -20,6 +21,12 @@ pub use conformance::{
     ReferenceOutcome, ScalarLayout, SemanticCase, SemanticFeature, SemanticMismatch,
     SemanticModelError, SemanticObservation, SemanticSpec, VolatileOperation, VolatileSpec,
     classify_semantic_outcome, evaluate_semantic_case,
+};
+pub use corpus::{
+    CorpusError, MAX_CASES_PER_FEATURE, MAX_SEMANTIC_CANONICAL_BYTES, MAX_SEMANTIC_CORPUS_CASES,
+    SEMANTIC_CORPUS_VERSION_V1, SemanticCorpusConfig, SemanticReplayIdentityV1,
+    encode_semantic_case_v1, generate_semantic_case, generate_semantic_corpus,
+    replay_semantic_case_v1, semantic_replay_identity_v1,
 };
 pub use eval::{
     LaneMismatch, MAX_REPORTED_MISMATCHES, MismatchReport, compare_outputs, evaluate_case,
