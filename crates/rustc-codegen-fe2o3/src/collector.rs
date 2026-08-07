@@ -209,20 +209,13 @@ pub fn collect_device_functions<'tcx>(
     for root in kernel_roots(tcx, cgus).map_err(CollectError::from)? {
         let instance = root.target;
         let raw_name = tcx.def_path_str(instance.def_id());
-        let logical_name = root.logical_name;
-        let export_name = root.export_name;
         if verbose {
-            eprintln!("[collector] root kernel: {raw_name} -> {export_name}");
+            eprintln!(
+                "[collector] root kernel: {raw_name} -> {}",
+                root.export_name
+            );
         }
-        collector.add_root(
-            instance,
-            logical_name,
-            export_name,
-            root.typed_profile,
-            root.kernel_binding,
-            root.typed_layout_identities,
-            root.frontend_contract,
-        )?;
+        collector.add_root(root)?;
     }
 
     collector.collect()
@@ -1406,16 +1399,16 @@ impl<'tcx> DeviceCollector<'tcx> {
         Ok(())
     }
 
-    fn add_root(
-        &mut self,
-        instance: Instance<'tcx>,
-        logical_name: String,
-        export_name: String,
-        typed_profile: Option<TypedKernelProfile>,
-        kernel_binding: Option<KernelBindingIdV1>,
-        typed_layout_identities: Option<[TypeIdentity; 3]>,
-        frontend_contract: Option<AuthenticatedKernelFrontendContractV1>,
-    ) -> Result<(), CollectError> {
+    fn add_root(&mut self, root: KernelRoot<Instance<'tcx>>) -> Result<(), CollectError> {
+        let KernelRoot {
+            target: instance,
+            logical_name,
+            export_name,
+            typed_profile,
+            kernel_binding,
+            typed_layout_identities,
+            frontend_contract,
+        } = root;
         if !self.used_export_names.insert(export_name.clone()) {
             return Err(CollectError {
                 message: format!(
