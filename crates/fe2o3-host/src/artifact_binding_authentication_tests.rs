@@ -4,12 +4,13 @@ use fe2o3_artifacts::{
     AbiField, AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership,
     ArtifactContainerV1, BlockSize, CodeObjectFormat, CodeObjectPayload, CompilerIdentity,
     ContainerValidationError, DigestAlgorithm, Dimensions, IdentityText, KernelEntry, ManifestV1,
-    Mutability, Name, ToolIdentity,
+    Mutability, Name, ScalarType, ToolIdentity,
 };
 use std::sync::OnceLock;
 
 const LOGICAL_NAME: &str = "vector_add";
 const EXPORT_NAME: &str = "vector_add.kd";
+const GENERAL_BINDING: [u8; 32] = [0x73; 32];
 
 fn marker_function() {}
 
@@ -303,6 +304,158 @@ fn rustc_layout_container_bytes(
         .to_bytes()
 }
 
+fn general_profile_container_bytes(
+    abi: AbiLayout,
+    launch: LaunchContract,
+    kernel_id: DigestBytes,
+) -> Vec<u8> {
+    let payload =
+        CodeObjectPayload::from_bytes(DigestAlgorithm::Sha256, b"general-profile-hsaco".to_vec())
+            .unwrap();
+    let object_digest = payload.digest().bytes();
+    let code_object = CodeObjectIdentity::new(
+        object_digest,
+        CodeObjectFormat::NativeExecutable,
+        payload.bytes().len() as u64,
+    )
+    .unwrap();
+    let target = TargetIdentity::new(
+        text(AMDGPU_TRIPLE),
+        text("gfx942"),
+        PointerWidth::Bits64,
+        Endianness::Little,
+        vec![],
+    )
+    .unwrap();
+    let kernel = KernelEntry::new(
+        kernel_id,
+        name(LOGICAL_NAME),
+        name(EXPORT_NAME),
+        digest(0x61),
+        digest(0x81),
+        object_digest,
+        vec![],
+        launch,
+        abi,
+    )
+    .unwrap();
+    let manifest = ManifestV1::new(
+        CompilerIdentity::new(text("rustc"), text("test")),
+        ToolIdentity::new(text("fe2o3"), text("test")),
+        target,
+        vec![code_object],
+        vec![kernel],
+    )
+    .unwrap();
+    ArtifactContainerV1::new(manifest, DigestAlgorithm::Sha256, vec![payload])
+        .unwrap()
+        .to_bytes()
+}
+
+fn general_profile_abi(scalar: ScalarType, output_access: Access) -> AbiLayout {
+    AbiLayout::new(
+        40,
+        8,
+        PointerWidth::Bits64,
+        vec![
+            AbiField::new(
+                name("count"),
+                0,
+                4,
+                4,
+                AbiKind::Scalar(scalar),
+                Mutability::Immutable,
+                Access::ByValue,
+                AddressSpace::Value,
+                generated_type_identity("u32", "u32-size4-align4"),
+                ArgumentOwnership::ByValue,
+                AliasClass::Value,
+            )
+            .unwrap(),
+            AbiField::new(
+                name("input"),
+                8,
+                16,
+                8,
+                AbiKind::Slice {
+                    element_size: 4,
+                    element_alignment: 4,
+                },
+                Mutability::Immutable,
+                Access::ReadOnly,
+                AddressSpace::Global,
+                generated_type_identity("&[f32]", "slice-f32-ptr64-size16-align8"),
+                ArgumentOwnership::SharedBorrow,
+                AliasClass::SharedReadOnly,
+            )
+            .unwrap(),
+            AbiField::new(
+                name("output"),
+                24,
+                16,
+                8,
+                AbiKind::Slice {
+                    element_size: 4,
+                    element_alignment: 4,
+                },
+                Mutability::Mutable,
+                output_access,
+                AddressSpace::Global,
+                generated_type_identity(
+                    "fe2o3_device::DisjointSlice<f32>",
+                    "disjoint-slice-f32-ptr64-size16-align8",
+                ),
+                ArgumentOwnership::UniqueBorrow,
+                AliasClass::Exclusive,
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap()
+}
+
+fn general_profile_launch(block_x: u32) -> LaunchContract {
+    LaunchContract::new(
+        1,
+        BlockSize::Exact(Dimensions::new(block_x, 1, 1).unwrap()),
+        Dimensions::new(65_535, 1, 1).unwrap(),
+        0,
+        0,
+    )
+    .unwrap()
+}
+
+fn general_profile_identity(
+    binding: [u8; 32],
+    abi: &AbiLayout,
+    launch: &LaunchContract,
+) -> DigestBytes {
+    derive_generated_kernel_identity_v2(
+        MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
+        binding,
+        LOGICAL_NAME,
+        EXPORT_NAME,
+        digest(0x61),
+        digest(0x81),
+        abi,
+        launch,
+    )
+}
+
+fn validated_general_profile_identity(
+    abi: AbiLayout,
+    launch: LaunchContract,
+    kernel_id: DigestBytes,
+) -> ArtifactKernelIdentityV1 {
+    let bytes = general_profile_container_bytes(abi, launch, kernel_id);
+    let container = ArtifactContainerV1::from_bytes(&bytes).unwrap();
+    let selected = container.select_native_kernel(kernel_id).unwrap();
+    ValidatedArtifactSelectionV1::validate(selected, &context(7, "gfx942"))
+        .unwrap()
+        .identity()
+        .clone()
+}
+
 fn typed_vecadd_abi(output_access: Access, wrong_type_identity: bool) -> AbiLayout {
     let kind = AbiKind::Slice {
         element_size: 4,
@@ -565,6 +718,73 @@ fn authenticates_only_canonical_rustc_layout_evidence_and_bound_identity() {
             GeneratedKernelProfileError::KernelIdentityMismatch
         ))
     ));
+}
+
+#[test]
+fn authenticates_independent_bounded_scalar_slice_contract_identity() {
+    let abi = general_profile_abi(ScalarType::U32, Access::WriteOnly);
+    let launch = general_profile_launch(256);
+    let generated = general_profile_identity(GENERAL_BINDING, &abi, &launch);
+    let identity = validated_general_profile_identity(abi, launch, generated);
+
+    validate_generated_profile(
+        CompilerGeneratedKernelProfileV1::ManifestDerivedScalarSliceV1 {
+            generated_contract_identity: *generated.as_bytes(),
+        },
+        GENERAL_BINDING,
+        &identity,
+    )
+    .expect("independent generated expectation must match the artifact");
+}
+
+#[test]
+fn rejects_general_profile_abi_effect_launch_binding_and_contract_identity_mismatches() {
+    let expected_abi = general_profile_abi(ScalarType::U32, Access::WriteOnly);
+    let expected_launch = general_profile_launch(256);
+    let generated = general_profile_identity(GENERAL_BINDING, &expected_abi, &expected_launch);
+    let profile = CompilerGeneratedKernelProfileV1::ManifestDerivedScalarSliceV1 {
+        generated_contract_identity: *generated.as_bytes(),
+    };
+
+    let cases = [
+        validated_general_profile_identity(
+            general_profile_abi(ScalarType::F32, Access::WriteOnly),
+            expected_launch.clone(),
+            generated,
+        ),
+        validated_general_profile_identity(
+            general_profile_abi(ScalarType::U32, Access::ReadWrite),
+            expected_launch.clone(),
+            generated,
+        ),
+        validated_general_profile_identity(
+            expected_abi.clone(),
+            general_profile_launch(128),
+            generated,
+        ),
+    ];
+    for identity in cases {
+        assert_eq!(
+            validate_generated_profile(profile, GENERAL_BINDING, &identity),
+            Err(GeneratedKernelProfileError::GeneratedContractIdentityMismatch)
+        );
+    }
+
+    let identity = validated_general_profile_identity(expected_abi, expected_launch, generated);
+    assert_eq!(
+        validate_generated_profile(profile, [0x74; 32], &identity),
+        Err(GeneratedKernelProfileError::GeneratedContractIdentityMismatch)
+    );
+    assert_eq!(
+        validate_generated_profile(
+            CompilerGeneratedKernelProfileV1::ManifestDerivedScalarSliceV1 {
+                generated_contract_identity: [0xa5; 32],
+            },
+            GENERAL_BINDING,
+            &identity,
+        ),
+        Err(GeneratedKernelProfileError::GeneratedContractIdentityMismatch)
+    );
 }
 
 #[test]

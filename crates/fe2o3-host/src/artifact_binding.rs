@@ -10,7 +10,7 @@ use fe2o3_artifacts::{
     HostLaunchAbiError, KernelSelectionError, LaunchContract, Mutability, Name, PayloadDigest,
     PointerWidth, RustDisjointIndexSpaceV1, RustLayoutEvidenceV1, RustPhysicalComponentKindV1,
     RustPhysicalComponentV1, RustPointerMutabilityV1, RustScalarElementTypeV1,
-    RustSourceTypeShapeV1, RustTypeEvidenceV1, RustcAbiClassV1, SelectedNativeKernel,
+    RustSourceTypeShapeV1, RustTypeEvidenceV1, RustcAbiClassV1, ScalarType, SelectedNativeKernel,
     TargetIdentity, TypeIdentity, derive_generated_kernel_identity_v2,
 };
 use fe2o3_device::{DisjointSlice, Index1D, KernelMarkerV1};
@@ -26,6 +26,7 @@ pub const ARTIFACT_KERNEL_IDENTITY_VERSION: u16 = 1;
 
 const TYPE_ID_DOMAIN: &[u8] = b"fe2o3.rust-type.v1\0";
 const LAYOUT_ID_DOMAIN: &[u8] = b"fe2o3.rust-layout.v1\0";
+const MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1: &str = "fe2o3.manifest-derived-scalar-slice.v1";
 
 /// Exact, owned identity of one validated native-kernel selection.
 ///
@@ -306,6 +307,16 @@ pub enum CompilerGeneratedKernelProfileV1 {
     /// The same fixed signature with canonical rustc-derived type/layout
     /// identities independently reconstructed by the host.
     TypedVecAddF32RustcLayoutV2,
+    /// A bounded scalar/slice signature committed to independently by the
+    /// generated adapter.
+    ///
+    /// The identity is emitted by the compiler from its canonical Rust ABI,
+    /// layout, effects, launch, and binding expectation. Authentication
+    /// derives the same identity from the selected artifact and rejects a
+    /// mismatch; the artifact therefore cannot serve as its own expectation.
+    ManifestDerivedScalarSliceV1 {
+        generated_contract_identity: [u8; 32],
+    },
 }
 
 /// Authenticated compiler-generated artifact for exactly one kernel marker.
@@ -444,6 +455,7 @@ impl std::error::Error for GeneratedArtifactAuthenticationError {
 pub enum GeneratedKernelProfileError {
     AbiMismatch,
     LaunchMismatch,
+    GeneratedContractIdentityMismatch,
     KernelIdentityMismatch,
 }
 
@@ -455,6 +467,9 @@ impl fmt::Display for GeneratedKernelProfileError {
             ),
             Self::LaunchMismatch => formatter.write_str(
                 "embedded artifact launch contract does not match the generated kernel profile",
+            ),
+            Self::GeneratedContractIdentityMismatch => formatter.write_str(
+                "embedded artifact does not match the independently generated contract identity",
             ),
             Self::KernelIdentityMismatch => formatter.write_str(
                 "embedded artifact kernel identity does not match the generated binding and contract",
@@ -524,6 +539,96 @@ pub(crate) fn validate_generated_profile(
             }
             Ok(())
         }
+        CompilerGeneratedKernelProfileV1::ManifestDerivedScalarSliceV1 {
+            generated_contract_identity,
+        } => {
+            validate_manifest_derived_scalar_slice_abi(identity.abi())?;
+            let derived = derive_generated_kernel_identity_v2(
+                MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
+                kernel_binding,
+                identity.name().as_str(),
+                identity.symbol().as_str(),
+                identity.source_digest(),
+                identity.executable_digest(),
+                identity.abi(),
+                identity.launch(),
+            );
+            if derived.as_bytes() != &generated_contract_identity {
+                return Err(GeneratedKernelProfileError::GeneratedContractIdentityMismatch);
+            }
+            if identity.kernel_id().as_bytes() != &generated_contract_identity {
+                return Err(GeneratedKernelProfileError::KernelIdentityMismatch);
+            }
+            Ok(())
+        }
+    }
+}
+
+fn validate_manifest_derived_scalar_slice_abi(
+    abi: &AbiLayout,
+) -> Result<(), GeneratedKernelProfileError> {
+    if abi.pointer_width() != PointerWidth::Bits64 || abi.fields().is_empty() {
+        return Err(GeneratedKernelProfileError::AbiMismatch);
+    }
+
+    for field in abi.fields() {
+        match field.kind() {
+            AbiKind::Scalar(scalar) => {
+                let (size, alignment) = scalar_size_alignment(scalar);
+                if field.size() != size
+                    || field.alignment() != alignment
+                    || field.mutability() != Mutability::Immutable
+                    || field.access() != Access::ByValue
+                    || field.address_space() != AddressSpace::Value
+                    || field.ownership() != ArgumentOwnership::ByValue
+                    || field.alias_class() != AliasClass::Value
+                {
+                    return Err(GeneratedKernelProfileError::AbiMismatch);
+                }
+            }
+            AbiKind::Slice {
+                element_size,
+                element_alignment,
+            } => {
+                if field.size() != 16
+                    || field.alignment() != 8
+                    || element_size == 0
+                    || element_alignment == 0
+                    || !element_alignment.is_power_of_two()
+                    || !element_size.is_multiple_of(u64::from(element_alignment))
+                    || field.address_space() != AddressSpace::Global
+                {
+                    return Err(GeneratedKernelProfileError::AbiMismatch);
+                }
+                let shared = field.mutability() == Mutability::Immutable
+                    && field.access() == Access::ReadOnly
+                    && field.ownership() == ArgumentOwnership::SharedBorrow
+                    && field.alias_class() == AliasClass::SharedReadOnly;
+                let exclusive = field.mutability() == Mutability::Mutable
+                    && matches!(
+                        field.access(),
+                        Access::ReadOnly | Access::WriteOnly | Access::ReadWrite
+                    )
+                    && field.ownership() == ArgumentOwnership::UniqueBorrow
+                    && field.alias_class() == AliasClass::Exclusive;
+                if !shared && !exclusive {
+                    return Err(GeneratedKernelProfileError::AbiMismatch);
+                }
+            }
+            AbiKind::Pointer { .. } => {
+                return Err(GeneratedKernelProfileError::AbiMismatch);
+            }
+        }
+    }
+    Ok(())
+}
+
+const fn scalar_size_alignment(scalar: ScalarType) -> (u64, u32) {
+    match scalar {
+        ScalarType::I8 | ScalarType::U8 => (1, 1),
+        ScalarType::I16 | ScalarType::U16 | ScalarType::F16 => (2, 2),
+        ScalarType::I32 | ScalarType::U32 | ScalarType::F32 => (4, 4),
+        ScalarType::I64 | ScalarType::U64 | ScalarType::F64 => (8, 8),
     }
 }
 
