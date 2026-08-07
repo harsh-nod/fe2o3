@@ -6,6 +6,7 @@ mod error;
 mod event;
 mod launch;
 mod memory;
+mod memory_topology;
 mod module;
 mod operation;
 mod peer_access;
@@ -23,6 +24,10 @@ pub use event::{Event, EventOptions};
 pub use fe2o3_macros::DeviceCopy;
 pub use launch::{DevicePtr, KernelParams, LaunchConfig, launch_kernel_on_stream};
 pub use memory::DeviceBuffer;
+pub use memory_topology::{
+    ContextIdentity, MemoryCapabilities, MemoryTopologyObservation, MemoryTopologyObservationError,
+    PhysicalDeviceIdentity,
+};
 pub use module::{GpuFunction, GpuModule};
 pub use operation::{BorrowedDeviceOperation, OwnedDeviceOperation};
 pub use peer_access::{
