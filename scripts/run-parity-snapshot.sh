@@ -10,6 +10,7 @@ readonly EVIDENCE_SCRIPT="${SCRIPT_DIR}/parity-evidence.sh"
 readonly DEFAULT_TIMEOUT_SECONDS=7200
 readonly MAX_TIMEOUT_SECONDS=86400
 readonly MAX_PATH_BYTES=2048
+readonly MAX_ID_BYTES=512
 
 declare -ar CORE_SHARDS=(Q1 Q2 Q3 Q4 Q5 Q6 Q7)
 
@@ -24,6 +25,11 @@ Options:
   --shard NAME             Select one Q1-Q7 shard; repeat to select several
   --gfx942-compile         Add the optional gfx942 compile shard
   --gfx942-hardware        Add the optional gfx942 hardware shard
+  --llvm-link-worker PATH  Pinned direct LLVM Worker V2 executable
+  --llvm-link-worker-build-id ID
+                           Pinned direct LLVM Worker V2 build ID
+  --llvm-build-id ID       Pinned LLVM build ID used by Worker V2
+  --llvm-as PATH           Pinned llvm-as executable used by Worker V2
   --vecadd-hsaco PATH      Archive-relative HSACO for the hardware shard
   --verus PATH             Absolute Verus executable for Q7
   --timeout-seconds N      Per-shard bound, 1..86400 (default: 7200)
@@ -63,6 +69,27 @@ valid_path_value() {
   local value="$1"
   ((${#value} >= 1 && ${#value} <= MAX_PATH_BYTES)) &&
     [[ "${value}" == /* && "${value}" != *$'\n'* && "${value}" != *$'\t'* ]]
+}
+
+valid_id_value() {
+  local value="$1"
+  ((${#value} >= 1 && ${#value} <= MAX_ID_BYTES)) &&
+    [[ "${value}" =~ ^[A-Za-z0-9][A-Za-z0-9._:+/@-]*$ ]]
+}
+
+valid_executable_path() {
+  local value="$1"
+  local segment
+  local -a segments=()
+
+  ((${#value} >= 2 && ${#value} <= 1024)) || return 1
+  [[ "${value}" =~ ^/[A-Za-z0-9._/+:-]+$ ]] || return 1
+  [[ "${value}" != *//* && "${value}" != */ ]] || return 1
+  IFS=/ read -r -a segments <<<"${value}"
+  for segment in "${segments[@]}"; do
+    [[ "${segment}" != . && "${segment}" != .. ]] || return 1
+  done
+  [[ -f "${value}" && -x "${value}" ]]
 }
 
 valid_relative_path() {
@@ -274,6 +301,10 @@ main() {
   local rustup_home="${RUSTUP_HOME:-${recorded_home}/.rustup}"
   local verus=""
   local vecadd_hsaco=""
+  local llvm_link_worker=""
+  local llvm_link_worker_build_id=""
+  local llvm_build_id=""
+  local llvm_as=""
   local explicit_selection=false
   local want_gfx942_compile=false
   local want_gfx942_hardware=false
@@ -298,7 +329,7 @@ main() {
 
   while (($# > 0)); do
     case "$1" in
-      --repo | --archive-root | --timeout-seconds | --path | --home | --cargo-home | --rustup-home | --verus | --vecadd-hsaco | --shard)
+      --repo | --archive-root | --timeout-seconds | --path | --home | --cargo-home | --rustup-home | --verus | --vecadd-hsaco | --llvm-link-worker | --llvm-link-worker-build-id | --llvm-build-id | --llvm-as | --shard)
         (($# >= 2)) || die "$1 requires a value"
         case "$1" in
           --repo) repo="$2" ;;
@@ -310,6 +341,10 @@ main() {
           --rustup-home) rustup_home="$2" ;;
           --verus) verus="$2" ;;
           --vecadd-hsaco) vecadd_hsaco="$2" ;;
+          --llvm-link-worker) llvm_link_worker="$2" ;;
+          --llvm-link-worker-build-id) llvm_link_worker_build_id="$2" ;;
+          --llvm-build-id) llvm_build_id="$2" ;;
+          --llvm-as) llvm_as="$2" ;;
           --shard)
             valid_shard "$2" || die "unknown shard: $2"
             [[ "$2" == Q[1-7] ]] || die '--shard accepts only Q1 through Q7'
@@ -369,6 +404,16 @@ main() {
   if [[ -v 'seen[Q7]' ]]; then
     valid_path_value "${verus}" && [[ -f "${verus}" && -x "${verus}" ]] ||
       die 'Q7 requires --verus with an absolute executable path'
+  fi
+  if [[ -v 'seen[GFX942-COMPILE]' ]]; then
+    valid_executable_path "${llvm_link_worker}" ||
+      die 'the gfx942 compile shard requires --llvm-link-worker with an absolute executable path'
+    valid_id_value "${llvm_link_worker_build_id}" ||
+      die 'the gfx942 compile shard requires a bounded safe --llvm-link-worker-build-id'
+    valid_id_value "${llvm_build_id}" ||
+      die 'the gfx942 compile shard requires a bounded safe --llvm-build-id'
+    valid_executable_path "${llvm_as}" ||
+      die 'the gfx942 compile shard requires --llvm-as with an absolute executable path'
   fi
   if [[ -v 'seen[GFX942-HARDWARE]' ]]; then
     valid_relative_path "${vecadd_hsaco}" ||
@@ -431,6 +476,16 @@ main() {
       [[ "${shard}" != Q7 ]] || printf 'environment\t%s\tVERUS\t%s\n' "${shard}" "$(hex_encode "${verus}")"
       [[ "${shard}" != GFX942-COMPILE && "${shard}" != GFX942-HARDWARE ]] ||
         printf 'environment\t%s\tFE2O3_TARGET\t%s\n' "${shard}" "$(hex_encode gfx942)"
+      if [[ "${shard}" == GFX942-COMPILE ]]; then
+        printf 'environment\t%s\tFE2O3_LLVM_LINK_WORKER\t%s\n' \
+          "${shard}" "$(hex_encode "${llvm_link_worker}")"
+        printf 'environment\t%s\tFE2O3_LLVM_LINK_WORKER_BUILD_ID\t%s\n' \
+          "${shard}" "$(hex_encode "${llvm_link_worker_build_id}")"
+        printf 'environment\t%s\tFE2O3_LLVM_BUILD_ID\t%s\n' \
+          "${shard}" "$(hex_encode "${llvm_build_id}")"
+        printf 'environment\t%s\tFE2O3_LLVM_AS\t%s\n' \
+          "${shard}" "$(hex_encode "${llvm_as}")"
+      fi
       [[ "${shard}" != GFX942-HARDWARE ]] ||
         printf 'environment\t%s\tFE2O3_GFX942_VECADD_HSACO\t%s\n' \
           "${shard}" "$(hex_encode "${hsaco_absolute}")"
@@ -440,6 +495,10 @@ main() {
       shard_uses_cargo "${shard}" && printf 'tool\t%s\tcargo\t%s\n' "${shard}" "${cargo_bin}"
       printf 'tool\t%s\tcommand\t%s\n' "${shard}" "${timeout_bin}"
       [[ "${shard}" != Q7 ]] || printf 'tool\t%s\tverus\t%s\n' "${shard}" "${verus}"
+      if [[ "${shard}" == GFX942-COMPILE ]]; then
+        printf 'tool\t%s\tllvm-link-worker\t%s\n' "${shard}" "${llvm_link_worker}"
+        printf 'tool\t%s\tllvm-as\t%s\n' "${shard}" "${llvm_as}"
+      fi
       for index in "${!outer_argv[@]}"; do
         printf 'argv\t%s\t%04d\t%s\n' \
           "${shard}" "${index}" "$(hex_encode "${outer_argv[${index}]}")"
@@ -470,6 +529,16 @@ main() {
     fi
     if [[ "${shard}" == GFX942-COMPILE || "${shard}" == GFX942-HARDWARE ]]; then
       record_args+=(--env FE2O3_TARGET=gfx942)
+    fi
+    if [[ "${shard}" == GFX942-COMPILE ]]; then
+      record_args+=(
+        --env "FE2O3_LLVM_LINK_WORKER=${llvm_link_worker}"
+        --env "FE2O3_LLVM_LINK_WORKER_BUILD_ID=${llvm_link_worker_build_id}"
+        --env "FE2O3_LLVM_BUILD_ID=${llvm_build_id}"
+        --env "FE2O3_LLVM_AS=${llvm_as}"
+        --tool "llvm-link-worker=${llvm_link_worker}"
+        --tool "llvm-as=${llvm_as}"
+      )
     fi
     if [[ "${shard}" == GFX942-HARDWARE ]]; then
       record_args+=(
