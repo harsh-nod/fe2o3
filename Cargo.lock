@@ -59,6 +59,7 @@ dependencies = [
  "fe2o3-hsaco-finalize",
  "fe2o3-rustc-invocation",
  "reserved-fe2o3-symbols",
+ "rmpv",
  "rustix",
  "serde_json",
  "sha2",

@@ -18,12 +18,20 @@ use reserved_fe2o3_symbols::{
 };
 use sha2::{Digest, Sha256};
 
+#[allow(dead_code)]
+#[path = "../../src/worker_v2_restart.rs"]
+mod restart_support;
+
 const WORKER_ID: &str = "cargo-fe2o3-fixture-worker-v1";
 const OUTPUT: &[u8] = b"cargo-fe2o3-fixture-output";
 const MISMATCH_OUTPUT: &[u8] = b"cargo-fe2o3-fixture-outpuu";
 const ABI: &str = "C(u32[size=4,align=4])->u32[size=4,align=4]";
 
 fn main() {
+    if env::args().nth(1).as_deref() == Some("--stage-restart") {
+        stage_restart();
+        return;
+    }
     if let Ok(mode) = env::var("FE2O3_FIXTURE_RUSTC_MODE") {
         fake_rustc(&mode);
         return;
@@ -50,7 +58,10 @@ fn fake_rustc(mode: &str) {
         }
         return;
     }
-    assert!(matches!(mode, "publish" | "publish-mismatch"));
+    assert!(matches!(
+        mode,
+        "publish" | "publish-valid" | "publish-mismatch" | "stop-after-handoff"
+    ));
 
     let output_dir = env::var_os("FE2O3_HSACO_DIR").unwrap();
     let source = env::var_os("FE2O3_FIXTURE_SOURCE").unwrap();
@@ -66,6 +77,69 @@ fn fake_rustc(mode: &str) {
         handoff.canonical_bytes(),
     )
     .unwrap();
+    if mode == "stop-after-handoff" {
+        fs::write(
+            env::var_os("FE2O3_FIXTURE_HANDOFF_MARKER").unwrap(),
+            b"ready",
+        )
+        .unwrap();
+        rustix::process::kill_process(
+            rustix::process::getppid().unwrap(),
+            rustix::process::Signal::STOP,
+        )
+        .unwrap();
+    }
+}
+
+fn stage_restart() {
+    use fe2o3_artifact_transaction::{
+        AtomicPublicationIdentityV1, BuildAttempt, CanonicalLinkRequestIdentityV1,
+        DurableLinkPublicationPlanV1, FinalizationIdentityV1, FinalizedOutputIdentityV1,
+        KernelSetIdentityV1, LinkPublicationScopeV1, LinkedOutputIdentityV1, PackageIdentityV1,
+        PinnedWorkerIdentityV1, TargetIdentityV1, UpstreamCodeObjectEvidenceIdentityV1,
+        ValidatedResponseIdentityV1, consume_compiler_module_handoff_v1,
+        persist_worker_v2_publication_intent_v1,
+    };
+
+    let arguments = env::args_os().collect::<Vec<_>>();
+    let output_dir = Path::new(&arguments[2]);
+    let source = Path::new(&arguments[3]);
+    let attempt = BuildAttempt::from_env_value(arguments[4].to_str().unwrap()).unwrap();
+    let producer = ProducerIdentity::from_codegen("workflow_fixture", Some(source)).unwrap();
+    consume_compiler_module_handoff_v1(output_dir, &producer, attempt).unwrap();
+
+    let output = b"restart-recovered-inert-worker-v2-output";
+    let output_identity: [u8; 32] = Sha256::digest(output).into();
+    let plan = DurableLinkPublicationPlanV1::new(
+        attempt,
+        LinkPublicationScopeV1::new(
+            PackageIdentityV1::from_bytes([0x71; 32]),
+            KernelSetIdentityV1::from_bytes([0x72; 32]),
+            TargetIdentityV1::from_bytes([0x73; 32]),
+        ),
+        CanonicalLinkRequestIdentityV1::from_bytes([0x74; 32]),
+        PinnedWorkerIdentityV1::from_bytes([0x75; 32]),
+        ValidatedResponseIdentityV1::from_bytes([0x76; 32]),
+        LinkedOutputIdentityV1::from_bytes(output_identity),
+        FinalizationIdentityV1::from_bytes([0x77; 32]),
+        FinalizedOutputIdentityV1::from_bytes(output_identity),
+        AtomicPublicationIdentityV1::from_bytes([0x78; 32]),
+    );
+    let upstream = UpstreamCodeObjectEvidenceIdentityV1::from_bytes([0x79; 32]);
+    let store = restart_support::WorkerV2ResumeStoreV1::open(output_dir, &producer).unwrap();
+    store
+        .persist_pending(
+            attempt,
+            restart_support::restart_admission_commitment_v1(plan, upstream, output),
+        )
+        .unwrap();
+    let intent = persist_worker_v2_publication_intent_v1(
+        output_dir, &producer, attempt, plan, upstream, output,
+    )
+    .unwrap();
+    store
+        .persist_ready(attempt, intent.record().identity())
+        .unwrap();
 }
 
 fn canonical_handoff(mismatch: bool) -> CompilerModuleHandoffV2 {
@@ -77,7 +151,7 @@ fn canonical_handoff(mismatch: bool) -> CompilerModuleHandoffV2 {
         .collect::<String>();
     let contract_id = derive_device_ffi_contract_id_v1(DeviceFfiContractFieldsV1 {
         direction: DEVICE_FFI_DIRECTION_EXPORT_V1,
-        symbol: "workflow_export",
+        symbol: "ffi_export",
         calling_convention: "C",
         code_object_version: 5,
         target: "gfx942:xnack-",
@@ -93,12 +167,12 @@ fn canonical_handoff(mismatch: bool) -> CompilerModuleHandoffV2 {
         CodeObjectVersion::V5,
         CompilerFfiSourceOwnerV1::new(
             "workflow_fixture",
-            "workflow_fixture::workflow_export",
+            "workflow_fixture::ffi_export",
             [0x35; 16],
-            "_RINvNtCs1234_16workflow_fixture15workflow_export",
+            "_RINvNtCs1234_16workflow_fixture10ffi_export",
         )
         .unwrap(),
-        "workflow_export",
+        "ffi_export",
         ABI,
         "none",
         semantic_identity,
@@ -117,7 +191,7 @@ fn canonical_handoff(mismatch: bool) -> CompilerModuleHandoffV2 {
         ),
         (
             CompilerModuleSymbolRoleV1::DeviceFfiExport,
-            "workflow_export".to_owned(),
+            "ffi_export".to_owned(),
         ),
     ];
     if mismatch {
@@ -137,7 +211,7 @@ fn canonical_handoff(mismatch: bool) -> CompilerModuleHandoffV2 {
         CodeObjectVersion::V5,
         envelope.finish().unwrap(),
         CompilerModuleSymbolManifestV1::new(entries).unwrap(),
-        b"define amdgpu_kernel void @workflow_kernel() { ret void }\ndefine i32 @workflow_export(i32 %value) { ret i32 %value }\n",
+        b"define amdgpu_kernel void @workflow_kernel() { ret void }\ndefine i32 @ffi_export(i32 %value) { ret i32 %value }\n",
     )
     .unwrap()
 }
@@ -149,13 +223,40 @@ fn worker() {
     io::stdin().read_to_end(&mut request).unwrap();
     let is_v2 = &request[..8] == b"F3LREQ02";
     let output = if is_v2 && contains(&request, b"workflow_mismatch") {
-        MISMATCH_OUTPUT
+        MISMATCH_OUTPUT.to_vec()
+    } else if let Some(input) = elf_input_payload(field(&request, if is_v2 { 10 } else { 6 })) {
+        linked_elf(input)
     } else {
-        OUTPUT
+        OUTPUT.to_vec()
     };
     io::stdout()
-        .write_all(&response(&request, is_v2, output))
+        .write_all(&response(&request, is_v2, &output))
         .unwrap();
+}
+
+fn linked_elf(input: &[u8]) -> Vec<u8> {
+    let mut output = input.to_vec();
+    let text = output
+        .windows(16)
+        .position(|window| window == [0xbf; 16])
+        .expect("synthetic provider has a text body");
+    output[text] ^= 1;
+    output
+}
+
+fn elf_input_payload(mut inputs: &[u8]) -> Option<&[u8]> {
+    let count = u32::from_le_bytes(inputs.get(..4)?.try_into().ok()?);
+    inputs = inputs.get(4..)?;
+    for _ in 0..count {
+        let length = u64::from_le_bytes(inputs.get(33..41)?.try_into().ok()?);
+        let length = usize::try_from(length).ok()?;
+        let payload = inputs.get(41..41_usize.checked_add(length)?)?;
+        if payload.starts_with(b"\x7fELF") {
+            return Some(payload);
+        }
+        inputs = inputs.get(41_usize.checked_add(length)?..)?;
+    }
+    None
 }
 
 fn response(request: &[u8], is_v2: bool, output_bytes: &[u8]) -> Vec<u8> {
