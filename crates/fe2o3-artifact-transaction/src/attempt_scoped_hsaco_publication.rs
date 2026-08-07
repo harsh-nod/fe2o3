@@ -74,6 +74,38 @@ pub struct AttemptScopedHsacoPublicationResultV1 {
     receipt: BackendPublicationReceiptV1,
 }
 
+/// Failure while matching a backend publication receipt to its typed producer and exact plan.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum BackendPublicationReceiptValidationErrorV1 {
+    PlanAttemptMismatch,
+    AttemptIdentityMismatch,
+    ProducerIdentityMismatch,
+    ScopeIdentityMismatch,
+    PlanCommitmentMismatch,
+    UpstreamEvidenceIdentityMismatch,
+    FinalizedOutputIdentityMismatch,
+    PublicationIdentityMismatch,
+}
+
+impl fmt::Display for BackendPublicationReceiptValidationErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let field = match self {
+            Self::PlanAttemptMismatch => "publication plan attempt",
+            Self::AttemptIdentityMismatch => "receipt attempt identity",
+            Self::ProducerIdentityMismatch => "receipt producer identity",
+            Self::ScopeIdentityMismatch => "receipt scope identity",
+            Self::PlanCommitmentMismatch => "receipt plan commitment",
+            Self::UpstreamEvidenceIdentityMismatch => "receipt upstream evidence identity",
+            Self::FinalizedOutputIdentityMismatch => "receipt finalized output identity",
+            Self::PublicationIdentityMismatch => "receipt publication identity",
+        };
+        write!(formatter, "backend publication {field} does not match")
+    }
+}
+
+impl std::error::Error for BackendPublicationReceiptValidationErrorV1 {}
+
 impl AttemptScopedHsacoPublicationResultV1 {
     pub const fn outcome(&self) -> AttemptScopedHsacoPublicationOutcomeV1 {
         self.outcome
@@ -94,6 +126,59 @@ impl AttemptScopedHsacoPublicationResultV1 {
     pub fn into_current_lease(self) -> DurableCurrentLinkPublicationLeaseV1 {
         self.publication.into_current_lease()
     }
+}
+
+/// Validates every receipt field against a typed producer and complete publication plan.
+///
+/// This establishes coordination lineage only. It does not authenticate the producer, upstream
+/// evidence, artifact semantics, or current publication state, and grants no load or launch
+/// authority.
+pub fn validate_backend_publication_receipt_v1(
+    producer: &ProducerIdentity,
+    attempt: BuildAttempt,
+    plan: DurableLinkPublicationPlanV1,
+    upstream_evidence: UpstreamCodeObjectEvidenceIdentityV1,
+    receipt: BackendPublicationReceiptV1,
+) -> Result<(), BackendPublicationReceiptValidationErrorV1> {
+    if plan.attempt() != attempt {
+        return Err(BackendPublicationReceiptValidationErrorV1::PlanAttemptMismatch);
+    }
+    let expected = publication_receipt(producer, attempt, plan, upstream_evidence);
+    for (matches, error) in [
+        (
+            receipt.attempt_identity() == expected.attempt_identity(),
+            BackendPublicationReceiptValidationErrorV1::AttemptIdentityMismatch,
+        ),
+        (
+            receipt.producer_identity() == expected.producer_identity(),
+            BackendPublicationReceiptValidationErrorV1::ProducerIdentityMismatch,
+        ),
+        (
+            receipt.scope_identity() == expected.scope_identity(),
+            BackendPublicationReceiptValidationErrorV1::ScopeIdentityMismatch,
+        ),
+        (
+            receipt.plan_commitment() == expected.plan_commitment(),
+            BackendPublicationReceiptValidationErrorV1::PlanCommitmentMismatch,
+        ),
+        (
+            receipt.upstream_evidence_identity() == expected.upstream_evidence_identity(),
+            BackendPublicationReceiptValidationErrorV1::UpstreamEvidenceIdentityMismatch,
+        ),
+        (
+            receipt.finalized_output_identity() == expected.finalized_output_identity(),
+            BackendPublicationReceiptValidationErrorV1::FinalizedOutputIdentityMismatch,
+        ),
+        (
+            receipt.publication_identity() == expected.publication_identity(),
+            BackendPublicationReceiptValidationErrorV1::PublicationIdentityMismatch,
+        ),
+    ] {
+        if !matches {
+            return Err(error);
+        }
+    }
+    Ok(())
 }
 
 /// Durable receipt state retained for an exact build attempt.

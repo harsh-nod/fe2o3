@@ -5,18 +5,18 @@
 //! fields beside the canonical container. It does not publish the container and cannot prove that
 //! its immutable publication snapshot is still current after assembly.
 
-#![allow(dead_code)] // The prepared plan stays inert until publication can reacquire a current lease.
-
 use std::fmt;
 
 use fe2o3_artifact_transaction::{
-    AttemptScopedHsacoPublicationOutcomeV1, BackendPublicationReceiptV1, BuildAttempt,
-    DurableLinkPublicationPlanV1, LinkPublicationScopeV1, UpstreamCodeObjectEvidenceIdentityV1,
+    AttemptScopedHsacoPublicationOutcomeV1, AttemptScopedHsacoPublicationResultV1,
+    BackendPublicationReceiptValidationErrorV1, BuildAttempt, DurableLinkPublicationPlanV1,
+    ProducerIdentity, UpstreamCodeObjectEvidenceIdentityV1,
+    validate_backend_publication_receipt_v1,
 };
 use fe2o3_artifacts::{
     AbiField, AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership,
-    ArtifactContainerV1, BlockSize, CodeObjectFormat, CodeObjectIdentity, CodeObjectPayload,
-    CompilerIdentity, ContainerValidationError, DeclaredRustLayoutIdentity,
+    ArtifactContainerV1, BlockSize, Capability, CodeObjectFormat, CodeObjectIdentity,
+    CodeObjectPayload, CompilerIdentity, ContainerValidationError, DeclaredRustLayoutIdentity,
     DeclaredRustTypeIdentity, DigestAlgorithm, DigestBytes, Dimensions, Endianness, IdentityText,
     KernelEntry, LaunchContract, ManifestV1, Mutability, Name, PointerWidth, ScalarType,
     ToolIdentity, TypeIdentity, ValidationError,
@@ -25,14 +25,12 @@ use fe2o3_hsaco::{
     ArgumentAccess, ArgumentAddressSpace, CodeObjectVersion, ExplicitValueKind, InspectedKernel,
 };
 use fe2o3_hsaco_finalize::{FinalizationError, inspect_finalized};
+use fe2o3_kernel_descriptor::{AccessMode, AliasSemantics, CapabilityV1, OwnershipSemantics};
 use sha2::{Digest, Sha256};
 
 const TARGET: &str = "gfx942:xnack-";
 const TARGET_TRIPLE: &str = "amdgcn-amd-amdhsa";
 const REQUIRED_KERNELS: [&str; 2] = ["alpha", "zeta"];
-const ATTEMPT_IDENTITY_DOMAIN: &[u8] = b"fe2o3.backend-receipt.attempt.v1\0";
-const SCOPE_IDENTITY_DOMAIN: &[u8] = b"fe2o3.backend-receipt.scope.v1\0";
-const PLAN_IDENTITY_DOMAIN: &[u8] = b"fe2o3.durable-link.complete-plan.v1\0";
 const RUST_TYPE_DOMAIN: &[u8] = b"FE2O3/RUST-TYPE/V1\0";
 const DEVICE_LAYOUT_DOMAIN: &[u8] = b"FE2O3/DEVICE-LAYOUT/V1\0";
 
@@ -45,32 +43,6 @@ pub(crate) struct WorkerV2DescriptorKernelLineageV1 {
     descriptor_symbol: String,
     source_evidence_identity: [u8; 32],
     executable_evidence_identity: [u8; 32],
-}
-
-impl WorkerV2DescriptorKernelLineageV1 {
-    pub(crate) const fn kernel_id(&self) -> DigestBytes {
-        self.kernel_id
-    }
-
-    pub(crate) fn logical_name(&self) -> &str {
-        &self.logical_name
-    }
-
-    pub(crate) fn entry_name(&self) -> &str {
-        &self.entry_name
-    }
-
-    pub(crate) fn descriptor_symbol(&self) -> &str {
-        &self.descriptor_symbol
-    }
-
-    pub(crate) const fn source_evidence_identity(&self) -> [u8; 32] {
-        self.source_evidence_identity
-    }
-
-    pub(crate) const fn executable_evidence_identity(&self) -> [u8; 32] {
-        self.executable_evidence_identity
-    }
 }
 
 /// Inert result of assembling the two-entry container from one finalized publication snapshot.
@@ -93,77 +65,10 @@ pub(crate) struct PreparedWorkerV2ArtifactContainerV1 {
     descriptors: [WorkerV2DescriptorKernelLineageV1; 2],
 }
 
-impl PreparedWorkerV2ArtifactContainerV1 {
-    pub(crate) const fn container(&self) -> &ArtifactContainerV1 {
-        &self.container
-    }
-
-    pub(crate) fn to_container_bytes(&self) -> Vec<u8> {
-        self.container.to_bytes()
-    }
-
-    pub(crate) const fn attempt(&self) -> BuildAttempt {
-        self.attempt
-    }
-
-    pub(crate) const fn outcome(&self) -> AttemptScopedHsacoPublicationOutcomeV1 {
-        self.outcome
-    }
-
-    pub(crate) const fn raw_output_digest(&self) -> [u8; 32] {
-        self.raw_output_digest
-    }
-
-    pub(crate) const fn finalized_output_digest(&self) -> [u8; 32] {
-        self.finalized_output_digest
-    }
-
-    pub(crate) const fn canonical_code_object_digest(&self) -> [u8; 32] {
-        self.canonical_code_object_digest
-    }
-
-    pub(crate) const fn finalization_identity(&self) -> [u8; 32] {
-        self.finalization_identity
-    }
-
-    pub(crate) const fn publication_identity(&self) -> [u8; 32] {
-        self.publication_identity
-    }
-
-    pub(crate) const fn upstream_evidence_identity(&self) -> [u8; 32] {
-        self.upstream_evidence_identity
-    }
-
-    pub(crate) const fn producer_receipt_identity(&self) -> [u8; 32] {
-        self.producer_receipt_identity
-    }
-
-    pub(crate) const fn compiler_commit(&self) -> [u8; 20] {
-        self.compiler_commit
-    }
-
-    pub(crate) fn descriptors(&self) -> &[WorkerV2DescriptorKernelLineageV1; 2] {
-        &self.descriptors
-    }
-
-    pub(crate) const fn grants_current_publication_authority(&self) -> bool {
-        false
-    }
-
-    pub(crate) const fn grants_load_authority(&self) -> bool {
-        false
-    }
-
-    pub(crate) const fn grants_launch_authority(&self) -> bool {
-        false
-    }
-}
-
 #[derive(Debug)]
 #[non_exhaustive]
 pub(crate) enum WorkerV2ArtifactContainerAssemblyErrorV1 {
-    StaleAttempt,
-    ReceiptSubstitution(&'static str),
+    Receipt(BackendPublicationReceiptValidationErrorV1),
     FinalizedDigestMismatch,
     FinalizedHsaco(FinalizationError),
     CodeObjectVersion,
@@ -179,12 +84,7 @@ pub(crate) enum WorkerV2ArtifactContainerAssemblyErrorV1 {
 impl fmt::Display for WorkerV2ArtifactContainerAssemblyErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::StaleAttempt => formatter
-                .write_str("Worker V2 artifact assembly rejected a stale publication attempt"),
-            Self::ReceiptSubstitution(field) => write!(
-                formatter,
-                "Worker V2 publication receipt substituted {field}"
-            ),
+            Self::Receipt(error) => error.fmt(formatter),
             Self::FinalizedDigestMismatch => formatter
                 .write_str("finalized Worker V2 payload does not match its publication digest"),
             Self::FinalizedHsaco(error) => {
@@ -221,6 +121,7 @@ impl fmt::Display for WorkerV2ArtifactContainerAssemblyErrorV1 {
 impl std::error::Error for WorkerV2ArtifactContainerAssemblyErrorV1 {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::Receipt(error) => Some(error),
             Self::FinalizedHsaco(error) => Some(error),
             Self::ArtifactModel(error) => Some(error),
             Self::Container(error) => Some(error),
@@ -249,6 +150,7 @@ struct DescriptorKernelAssemblyV1 {
     source_evidence_identity: [u8; 32],
     executable_digest: [u8; 32],
     executable_evidence_identity: [u8; 32],
+    capabilities: Vec<Capability>,
     explicit_size: u32,
     kernarg_size: u32,
     kernarg_alignment: u32,
@@ -276,7 +178,7 @@ struct DescriptorFieldAssemblyV1 {
 enum FrozenFieldKindV1 {
     F32,
     SharedF32,
-    WriteOnlyDisjointF32,
+    ReadWriteDisjointF32,
 }
 
 impl FrozenFieldKindV1 {
@@ -284,28 +186,28 @@ impl FrozenFieldKindV1 {
         match self {
             Self::F32 => 1,
             Self::SharedF32 => 2,
-            Self::WriteOnlyDisjointF32 => 3,
+            Self::ReadWriteDisjointF32 => 3,
         }
     }
 
     const fn size(self) -> u16 {
         match self {
             Self::F32 => 4,
-            Self::SharedF32 | Self::WriteOnlyDisjointF32 => 16,
+            Self::SharedF32 | Self::ReadWriteDisjointF32 => 16,
         }
     }
 
     const fn alignment(self) -> u16 {
         match self {
             Self::F32 => 4,
-            Self::SharedF32 | Self::WriteOnlyDisjointF32 => 8,
+            Self::SharedF32 | Self::ReadWriteDisjointF32 => 8,
         }
     }
 
     const fn kind(self) -> AbiKind {
         match self {
             Self::F32 => AbiKind::Scalar(ScalarType::F32),
-            Self::SharedF32 | Self::WriteOnlyDisjointF32 => AbiKind::Slice {
+            Self::SharedF32 | Self::ReadWriteDisjointF32 => AbiKind::Slice {
                 element_size: 4,
                 element_alignment: 4,
             },
@@ -316,13 +218,13 @@ impl FrozenFieldKindV1 {
         match self {
             Self::F32 => Access::ByValue,
             Self::SharedF32 => Access::ReadOnly,
-            Self::WriteOnlyDisjointF32 => Access::WriteOnly,
+            Self::ReadWriteDisjointF32 => Access::ReadWrite,
         }
     }
 
     const fn mutability(self) -> Mutability {
         match self {
-            Self::WriteOnlyDisjointF32 => Mutability::Mutable,
+            Self::ReadWriteDisjointF32 => Mutability::Mutable,
             Self::F32 | Self::SharedF32 => Mutability::Immutable,
         }
     }
@@ -331,7 +233,7 @@ impl FrozenFieldKindV1 {
         match self {
             Self::F32 => ArgumentOwnership::ByValue,
             Self::SharedF32 => ArgumentOwnership::SharedBorrow,
-            Self::WriteOnlyDisjointF32 => ArgumentOwnership::UniqueBorrow,
+            Self::ReadWriteDisjointF32 => ArgumentOwnership::UniqueBorrow,
         }
     }
 
@@ -339,7 +241,31 @@ impl FrozenFieldKindV1 {
         match self {
             Self::F32 => AliasClass::Value,
             Self::SharedF32 => AliasClass::SharedReadOnly,
-            Self::WriteOnlyDisjointF32 => AliasClass::Exclusive,
+            Self::ReadWriteDisjointF32 => AliasClass::Exclusive,
+        }
+    }
+
+    const fn descriptor_ownership(self) -> OwnershipSemantics {
+        match self {
+            Self::F32 => OwnershipSemantics::ByValue,
+            Self::SharedF32 => OwnershipSemantics::SharedBorrow,
+            Self::ReadWriteDisjointF32 => OwnershipSemantics::UniqueBorrow,
+        }
+    }
+
+    const fn descriptor_access(self) -> AccessMode {
+        match self {
+            Self::F32 => AccessMode::ByValue,
+            Self::SharedF32 => AccessMode::ReadOnly,
+            Self::ReadWriteDisjointF32 => AccessMode::ReadWrite,
+        }
+    }
+
+    const fn descriptor_alias(self) -> AliasSemantics {
+        match self {
+            Self::F32 => AliasSemantics::Value,
+            Self::SharedF32 => AliasSemantics::SharedReadOnly,
+            Self::ReadWriteDisjointF32 => AliasSemantics::Exclusive,
         }
     }
 
@@ -383,7 +309,7 @@ const ALPHA_FIELDS: [FrozenFieldV1; 3] = [
     FrozenFieldV1 {
         name: "output",
         offset: 24,
-        kind: FrozenFieldKindV1::WriteOnlyDisjointF32,
+        kind: FrozenFieldKindV1::ReadWriteDisjointF32,
     },
 ];
 
@@ -406,78 +332,29 @@ const ZETA_FIELDS: [FrozenFieldV1; 4] = [
     FrozenFieldV1 {
         name: "output",
         offset: 40,
-        kind: FrozenFieldKindV1::WriteOnlyDisjointF32,
+        kind: FrozenFieldKindV1::ReadWriteDisjointF32,
     },
 ];
 
-/// Prepares one deterministic two-entry container from exact finalized Worker V2 bytes.
+/// Prepares one deterministic two-entry container from typed Worker V2 publication evidence.
 ///
-/// The caller must still retain or reacquire a durable current-publication lease before using the
-/// result in a loader. The current artifact-transaction API cannot reacquire such a lease after a
-/// receipt-only restart reconciliation, so this adapter intentionally returns inert evidence.
-#[allow(clippy::too_many_arguments)]
+/// This test-only adapter deliberately has no container or serialization accessor. A production
+/// caller must first define a durable envelope that binds all retained lineage to the container and
+/// carries the publication lease into host admission.
 pub(crate) fn prepare_worker_v2_artifact_container_v1(
-    expected_attempt: BuildAttempt,
-    expected_producer_receipt_identity: [u8; 32],
+    producer: &ProducerIdentity,
     plan: DurableLinkPublicationPlanV1,
     upstream: UpstreamCodeObjectEvidenceIdentityV1,
-    receipt: BackendPublicationReceiptV1,
-    outcome: AttemptScopedHsacoPublicationOutcomeV1,
-    exact_finalized_hsaco: &[u8],
+    publication: &AttemptScopedHsacoPublicationResultV1,
 ) -> Result<PreparedWorkerV2ArtifactContainerV1, WorkerV2ArtifactContainerAssemblyErrorV1> {
-    prepare_worker_v2_artifact_container_from_receipt_v1(
-        expected_attempt,
-        expected_producer_receipt_identity,
-        plan,
-        upstream,
-        ReceiptFieldsV1::from(receipt),
-        outcome,
-        exact_finalized_hsaco,
-    )
-}
-
-#[derive(Clone, Copy)]
-struct ReceiptFieldsV1 {
-    attempt: [u8; 32],
-    producer: [u8; 32],
-    scope: [u8; 32],
-    plan: [u8; 32],
-    upstream: [u8; 32],
-    finalized: [u8; 32],
-    publication: [u8; 32],
-}
-
-impl From<BackendPublicationReceiptV1> for ReceiptFieldsV1 {
-    fn from(receipt: BackendPublicationReceiptV1) -> Self {
-        Self {
-            attempt: receipt.attempt_identity(),
-            producer: receipt.producer_identity(),
-            scope: receipt.scope_identity(),
-            plan: receipt.plan_commitment(),
-            upstream: receipt.upstream_evidence_identity(),
-            finalized: receipt.finalized_output_identity(),
-            publication: receipt.publication_identity(),
-        }
+    let receipt = publication.receipt();
+    validate_backend_publication_receipt_v1(producer, plan.attempt(), plan, upstream, receipt)
+        .map_err(WorkerV2ArtifactContainerAssemblyErrorV1::Receipt)?;
+    let exact_finalized_hsaco = publication.snapshot().artifact().bytes();
+    let measured: [u8; 32] = Sha256::digest(exact_finalized_hsaco).into();
+    if measured != receipt.finalized_output_identity() {
+        return Err(WorkerV2ArtifactContainerAssemblyErrorV1::FinalizedDigestMismatch);
     }
-}
-
-fn prepare_worker_v2_artifact_container_from_receipt_v1(
-    expected_attempt: BuildAttempt,
-    expected_producer_receipt_identity: [u8; 32],
-    plan: DurableLinkPublicationPlanV1,
-    upstream: UpstreamCodeObjectEvidenceIdentityV1,
-    receipt: ReceiptFieldsV1,
-    outcome: AttemptScopedHsacoPublicationOutcomeV1,
-    exact_finalized_hsaco: &[u8],
-) -> Result<PreparedWorkerV2ArtifactContainerV1, WorkerV2ArtifactContainerAssemblyErrorV1> {
-    validate_lineage(
-        expected_attempt,
-        expected_producer_receipt_identity,
-        plan,
-        upstream,
-        receipt,
-        exact_finalized_hsaco,
-    )?;
     let inspection = inspect_finalized(exact_finalized_hsaco)
         .map_err(WorkerV2ArtifactContainerAssemblyErrorV1::FinalizedHsaco)?;
     let hsaco = inspection.hsaco();
@@ -502,7 +379,7 @@ fn prepare_worker_v2_artifact_container_from_receipt_v1(
         };
         if descriptor.logical_name().as_str() != entry
             || descriptor.descriptor_symbol().as_str() != format!("{entry}.kd")
-            || !descriptor.capabilities().is_empty()
+            || descriptor.capabilities() != [CapabilityV1::AmdWave]
             || descriptor.arguments().len() != fields.len()
         {
             return Err(WorkerV2ArtifactContainerAssemblyErrorV1::DescriptorModel(
@@ -526,6 +403,9 @@ fn prepare_worker_v2_artifact_container_from_receipt_v1(
                 || argument.name().as_str() != expected.name
                 || argument.source_type().as_bytes() != &expected.kind.rust_type_identity()
                 || argument.device_layout().as_bytes() != &expected.kind.layout_identity()
+                || argument.ownership() != expected.kind.descriptor_ownership()
+                || argument.access() != expected.kind.descriptor_access()
+                || argument.alias() != expected.kind.descriptor_alias()
                 || components
                     .iter()
                     .map(|(_, offset, size, alignment)| (*offset, *size, *alignment))
@@ -573,6 +453,12 @@ fn prepare_worker_v2_artifact_container_from_receipt_v1(
                 .executable_ir_evidence()
                 .identity()
                 .as_bytes(),
+            capabilities: descriptor
+                .capabilities()
+                .iter()
+                .copied()
+                .map(manifest_capability)
+                .collect::<Result<Vec<_>, _>>()?,
             explicit_size: layout.explicit_argument_size(),
             kernarg_size: layout.kernarg_segment_size(),
             kernarg_alignment: layout.kernarg_segment_alignment(),
@@ -596,15 +482,15 @@ fn prepare_worker_v2_artifact_container_from_receipt_v1(
 
     Ok(PreparedWorkerV2ArtifactContainerV1 {
         container,
-        attempt: expected_attempt,
-        outcome,
+        attempt: plan.attempt(),
+        outcome: publication.outcome(),
         raw_output_digest: *plan.linked_output().as_bytes(),
-        finalized_output_digest: receipt.finalized,
+        finalized_output_digest: receipt.finalized_output_identity(),
         canonical_code_object_digest: *inspection.digest().as_bytes(),
         finalization_identity: *plan.finalization().as_bytes(),
-        publication_identity: receipt.publication,
-        upstream_evidence_identity: receipt.upstream,
-        producer_receipt_identity: receipt.producer,
+        publication_identity: receipt.publication_identity(),
+        upstream_evidence_identity: receipt.upstream_evidence_identity(),
+        producer_receipt_identity: receipt.producer_identity(),
         compiler_commit: table.compiler_commit,
         descriptors,
     })
@@ -613,7 +499,7 @@ fn prepare_worker_v2_artifact_container_from_receipt_v1(
 fn expected_components(field: FrozenFieldV1) -> Vec<(u32, u16, u16)> {
     match field.kind {
         FrozenFieldKindV1::F32 => vec![(field.offset, 4, 4)],
-        FrozenFieldKindV1::SharedF32 | FrozenFieldKindV1::WriteOnlyDisjointF32 => {
+        FrozenFieldKindV1::SharedF32 | FrozenFieldKindV1::ReadWriteDisjointF32 => {
             vec![(field.offset, 8, 8), (field.offset + 8, 8, 8)]
         }
     }
@@ -623,9 +509,19 @@ fn validate_physical_profile(
     kernel: &InspectedKernel,
     fields: &[FrozenFieldV1],
 ) -> Result<(), WorkerV2ArtifactContainerAssemblyErrorV1> {
+    let explicit_size = fields
+        .iter()
+        .map(|field| u64::from(field.offset) + u64::from(field.kind.size()))
+        .max()
+        .unwrap_or(0);
     if kernel.required_workgroup_size() != Some([256, 1, 1])
         || kernel.max_flat_workgroup_size() != 256
         || kernel.group_segment_fixed_size() != 0
+        || kernel.private_segment_fixed_size() != 0
+        || kernel.kernarg_segment_size() != explicit_size + 256
+        || kernel.kernarg_segment_alignment() != 8
+        || kernel.wavefront_size() != 64
+        || kernel.uses_dynamic_stack()
     {
         return Err(WorkerV2ArtifactContainerAssemblyErrorV1::DescriptorModel(
             "physical launch metadata differs from the frozen alpha/zeta profile",
@@ -641,7 +537,7 @@ fn validate_physical_profile(
                 None,
                 None,
             )],
-            FrozenFieldKindV1::SharedF32 | FrozenFieldKindV1::WriteOnlyDisjointF32 => vec![
+            FrozenFieldKindV1::SharedF32 | FrozenFieldKindV1::ReadWriteDisjointF32 => vec![
                 (
                     u64::from(field.offset),
                     8,
@@ -649,7 +545,7 @@ fn validate_physical_profile(
                     Some(ArgumentAddressSpace::Global),
                     Some(match field.kind {
                         FrozenFieldKindV1::SharedF32 => ArgumentAccess::ReadOnly,
-                        FrozenFieldKindV1::WriteOnlyDisjointF32 => ArgumentAccess::WriteOnly,
+                        FrozenFieldKindV1::ReadWriteDisjointF32 => ArgumentAccess::ReadWrite,
                         FrozenFieldKindV1::F32 => unreachable!(),
                     }),
                 ),
@@ -675,11 +571,11 @@ fn validate_physical_profile(
             || argument.size() != size
             || argument.value_kind() != kind
             || argument.address_space() != address_space
+            || argument.access() != access
             || access.is_some_and(|expected| {
-                argument.access().is_some_and(|actual| actual != expected)
-                    || argument
-                        .actual_access()
-                        .is_some_and(|actual| actual != expected)
+                argument
+                    .actual_access()
+                    .is_some_and(|actual| actual != expected)
             })
         {
             return Err(WorkerV2ArtifactContainerAssemblyErrorV1::DescriptorModel(
@@ -688,60 +584,6 @@ fn validate_physical_profile(
         }
     }
     Ok(())
-}
-
-fn validate_lineage(
-    expected_attempt: BuildAttempt,
-    expected_producer_receipt_identity: [u8; 32],
-    plan: DurableLinkPublicationPlanV1,
-    upstream: UpstreamCodeObjectEvidenceIdentityV1,
-    receipt: ReceiptFieldsV1,
-    exact_finalized_hsaco: &[u8],
-) -> Result<(), WorkerV2ArtifactContainerAssemblyErrorV1> {
-    if plan.attempt() != expected_attempt {
-        return Err(WorkerV2ArtifactContainerAssemblyErrorV1::StaleAttempt);
-    }
-    require_receipt(
-        receipt.attempt == attempt_identity(expected_attempt),
-        "attempt identity",
-    )?;
-    require_receipt(
-        receipt.producer == expected_producer_receipt_identity,
-        "producer identity",
-    )?;
-    require_receipt(
-        receipt.scope == scope_identity(plan.scope()),
-        "scope identity",
-    )?;
-    require_receipt(receipt.plan == plan_identity(plan), "plan commitment")?;
-    require_receipt(
-        receipt.upstream == upstream.as_bytes(),
-        "upstream evidence identity",
-    )?;
-    require_receipt(
-        receipt.finalized == *plan.finalized_output().as_bytes(),
-        "finalized output identity",
-    )?;
-    require_receipt(
-        receipt.publication == *plan.publication().as_bytes(),
-        "publication identity",
-    )?;
-    let measured: [u8; 32] = Sha256::digest(exact_finalized_hsaco).into();
-    if measured != receipt.finalized {
-        return Err(WorkerV2ArtifactContainerAssemblyErrorV1::FinalizedDigestMismatch);
-    }
-    Ok(())
-}
-
-fn require_receipt(
-    condition: bool,
-    field: &'static str,
-) -> Result<(), WorkerV2ArtifactContainerAssemblyErrorV1> {
-    if condition {
-        Ok(())
-    } else {
-        Err(WorkerV2ArtifactContainerAssemblyErrorV1::ReceiptSubstitution(field))
-    }
 }
 
 fn validate_profile(
@@ -759,7 +601,47 @@ fn validate_profile(
     if names != REQUIRED_KERNELS {
         return Err(WorkerV2ArtifactContainerAssemblyErrorV1::KernelSet);
     }
-    reject_duplicate_kernel_fields(&table.kernels)
+    reject_duplicate_kernel_fields(&table.kernels)?;
+    for kernel in &table.kernels {
+        validate_assembled_kernel_profile(kernel)?;
+    }
+    Ok(())
+}
+
+fn validate_assembled_kernel_profile(
+    kernel: &DescriptorKernelAssemblyV1,
+) -> Result<(), WorkerV2ArtifactContainerAssemblyErrorV1> {
+    let expected = match kernel.entry_name.as_str() {
+        "alpha" => ALPHA_FIELDS.as_slice(),
+        "zeta" => ZETA_FIELDS.as_slice(),
+        _ => return Err(WorkerV2ArtifactContainerAssemblyErrorV1::KernelSet),
+    };
+    if kernel.logical_name != kernel.entry_name
+        || kernel.descriptor_symbol != format!("{}.kd", kernel.entry_name)
+        || kernel.capabilities != [Capability::AmdWave]
+        || kernel.fields.len() != expected.len()
+    {
+        return Err(WorkerV2ArtifactContainerAssemblyErrorV1::DescriptorModel(
+            "assembled kernel identity, capabilities, or argument count differs from the frozen alpha/zeta profile",
+        ));
+    }
+    for (field, expected) in kernel.fields.iter().zip(expected) {
+        if field.name != expected.name
+            || field.offset != expected.offset
+            || field.kind != expected.kind.kind()
+            || field.access != expected.kind.access()
+            || field.mutability != expected.kind.mutability()
+            || field.ownership != expected.kind.ownership()
+            || field.alias != expected.kind.alias()
+            || field.rust_type != expected.kind.rust_type_identity()
+            || field.layout != expected.kind.layout_identity()
+        {
+            return Err(WorkerV2ArtifactContainerAssemblyErrorV1::DescriptorModel(
+                "assembled argument semantics differ from the frozen alpha/zeta profile",
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn build_container(
@@ -784,6 +666,13 @@ fn build_container(
         .iter()
         .map(|descriptor| kernel_entry(descriptor, payload_digest))
         .collect::<Result<Vec<_>, _>>()?;
+    let mut target_capabilities = table
+        .kernels
+        .iter()
+        .flat_map(|kernel| kernel.capabilities.iter().copied())
+        .collect::<Vec<_>>();
+    target_capabilities.sort_unstable();
+    target_capabilities.dedup();
     let manifest = ManifestV1::new(
         CompilerIdentity::new(text(&table.compiler_name)?, text(&table.compiler_release)?),
         ToolIdentity::new(text(&table.producer_name)?, text(&table.producer_version)?),
@@ -792,7 +681,7 @@ fn build_container(
             text(TARGET)?,
             PointerWidth::Bits64,
             Endianness::Little,
-            vec![],
+            target_capabilities,
         )
         .map_err(WorkerV2ArtifactContainerAssemblyErrorV1::ArtifactModel)?,
         vec![code_object],
@@ -807,7 +696,7 @@ fn build_container(
         .iter()
         .map(descriptor_lineage)
         .collect::<Vec<_>>();
-    descriptors.sort_unstable_by_key(WorkerV2DescriptorKernelLineageV1::kernel_id);
+    descriptors.sort_unstable_by_key(|descriptor| descriptor.kernel_id);
     let descriptors = descriptors
         .try_into()
         .map_err(|_| WorkerV2ArtifactContainerAssemblyErrorV1::KernelCount)?;
@@ -899,7 +788,7 @@ fn kernel_entry(
         DigestBytes::from_bytes(descriptor.source_digest),
         DigestBytes::from_bytes(descriptor.executable_digest),
         payload_digest,
-        vec![],
+        descriptor.capabilities.clone(),
         launch,
         abi,
     )
@@ -961,6 +850,17 @@ fn descriptor_lineage(
     }
 }
 
+fn manifest_capability(
+    capability: CapabilityV1,
+) -> Result<Capability, WorkerV2ArtifactContainerAssemblyErrorV1> {
+    match capability {
+        CapabilityV1::AmdWave => Ok(Capability::AmdWave),
+        _ => Err(WorkerV2ArtifactContainerAssemblyErrorV1::DescriptorModel(
+            "kernel capability differs from the frozen alpha/zeta profile",
+        )),
+    }
+}
+
 fn text(value: &str) -> Result<IdentityText, WorkerV2ArtifactContainerAssemblyErrorV1> {
     IdentityText::new(value).map_err(WorkerV2ArtifactContainerAssemblyErrorV1::ArtifactModel)
 }
@@ -970,69 +870,66 @@ fn name(value: &str) -> Result<Name, WorkerV2ArtifactContainerAssemblyErrorV1> {
 }
 
 fn descriptor_identity(domain: &[u8], descriptor: &[u8]) -> [u8; 32] {
-    hash_identity(domain, |digest| {
-        digest.update((descriptor.len() as u64).to_le_bytes());
-        digest.update(descriptor);
-    })
-}
-
-fn attempt_identity(attempt: BuildAttempt) -> [u8; 32] {
-    hash_identity(ATTEMPT_IDENTITY_DOMAIN, |digest| {
-        digest.update(attempt.generation().to_le_bytes());
-        digest.update(attempt.session().as_bytes());
-        digest.update(attempt.invocation().as_bytes());
-    })
-}
-
-fn scope_identity(scope: LinkPublicationScopeV1) -> [u8; 32] {
-    hash_identity(SCOPE_IDENTITY_DOMAIN, |digest| {
-        digest.update(scope.package().as_bytes());
-        digest.update(scope.kernel_set().as_bytes());
-        digest.update(scope.target().as_bytes());
-    })
-}
-
-fn plan_identity(plan: DurableLinkPublicationPlanV1) -> [u8; 32] {
-    hash_identity(PLAN_IDENTITY_DOMAIN, |digest| {
-        let attempt = plan.attempt();
-        digest.update(attempt.generation().to_le_bytes());
-        digest.update(attempt.session().as_bytes());
-        digest.update(attempt.invocation().as_bytes());
-        let scope = plan.scope();
-        digest.update(scope.package().as_bytes());
-        digest.update(scope.kernel_set().as_bytes());
-        digest.update(scope.target().as_bytes());
-        digest.update(plan.request().as_bytes());
-        digest.update(plan.worker().as_bytes());
-        digest.update(plan.response().as_bytes());
-        digest.update(plan.linked_output().as_bytes());
-        digest.update(plan.finalization().as_bytes());
-        digest.update(plan.finalized_output().as_bytes());
-        digest.update(plan.publication().as_bytes());
-    })
-}
-
-fn hash_identity(domain: &[u8], update: impl FnOnce(&mut Sha256)) -> [u8; 32] {
     let mut digest = Sha256::new();
     digest.update(domain);
-    update(&mut digest);
+    digest.update((descriptor.len() as u64).to_le_bytes());
+    digest.update(descriptor);
     digest.finalize().into()
 }
 
 #[cfg(test)]
+#[path = "worker_v2_artifact_container_test_fixture.rs"]
+mod test_fixture;
+
+#[cfg(test)]
 mod tests {
+    use super::test_fixture::{ProfileMutation, alpha_zeta_fixture};
     use super::*;
     use fe2o3_artifact_transaction::{
-        AtomicPublicationIdentityV1, BuildSession, CanonicalLinkRequestIdentityV1,
+        AtomicPublicationIdentityV1, BuildInvocation, BuildSession, CanonicalLinkRequestIdentityV1,
         FinalizationIdentityV1, FinalizedOutputIdentityV1, KernelSetIdentityV1,
-        LinkedOutputIdentityV1, PackageIdentityV1, PinnedWorkerIdentityV1, TargetIdentityV1,
-        ValidatedResponseIdentityV1,
+        LinkPublicationScopeV1, LinkedOutputIdentityV1, PackageIdentityV1, PinnedWorkerIdentityV1,
+        TargetIdentityV1, ValidatedResponseIdentityV1, begin_build_attempt,
+        publish_exact_hsaco_evidence_for_attempt_v1,
     };
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicU64, Ordering};
 
-    fn attempt(generation: u64) -> BuildAttempt {
-        let session = format!("{generation:032x}");
-        let invocation = format!("{:064x}", generation + 1);
-        BuildAttempt::from_env_value(&format!("{generation}:{session}:{invocation}")).unwrap()
+    static NEXT_TEST: AtomicU64 = AtomicU64::new(1);
+
+    struct TestDirectory(PathBuf);
+
+    impl TestDirectory {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "cargo-fe2o3-artifact-container-{}-{}",
+                std::process::id(),
+                NEXT_TEST.fetch_add(1, Ordering::Relaxed)
+            ));
+            fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for TestDirectory {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn producer(name: &str, source: &str) -> ProducerIdentity {
+        ProducerIdentity::from_codegen(name, Some(Path::new(source))).unwrap()
+    }
+
+    fn begin(directory: &TestDirectory, producer: &ProducerIdentity, seed: u8) -> BuildAttempt {
+        begin_build_attempt(
+            &directory.0,
+            producer,
+            BuildInvocation::from_bytes([seed; 32]),
+            BuildSession::from_bytes([seed.wrapping_add(1); 16]),
+        )
+        .unwrap()
     }
 
     fn plan(attempt: BuildAttempt, finalized: [u8; 32], seed: u8) -> DurableLinkPublicationPlanV1 {
@@ -1051,21 +948,6 @@ mod tests {
             FinalizedOutputIdentityV1::from_bytes(finalized),
             AtomicPublicationIdentityV1::from_bytes([seed.wrapping_add(8); 32]),
         )
-    }
-
-    fn receipt_fields(
-        plan: DurableLinkPublicationPlanV1,
-        upstream: UpstreamCodeObjectEvidenceIdentityV1,
-    ) -> ReceiptFieldsV1 {
-        ReceiptFieldsV1 {
-            attempt: attempt_identity(plan.attempt()),
-            producer: [0xa0; 32],
-            scope: scope_identity(plan.scope()),
-            plan: plan_identity(plan),
-            upstream: upstream.as_bytes(),
-            finalized: *plan.finalized_output().as_bytes(),
-            publication: *plan.publication().as_bytes(),
-        }
     }
 
     fn field(spec: FrozenFieldV1) -> DescriptorFieldAssemblyV1 {
@@ -1097,6 +979,7 @@ mod tests {
             source_evidence_identity: [id.wrapping_add(2); 32],
             executable_digest: [id.wrapping_add(3); 32],
             executable_evidence_identity: [id.wrapping_add(4); 32],
+            capabilities: vec![Capability::AmdWave],
             explicit_size,
             kernarg_size: explicit_size + 256,
             kernarg_alignment: 8,
@@ -1138,6 +1021,26 @@ mod tests {
         assert_eq!(forward.payloads().len(), 1);
         assert_eq!(forward.manifest().code_objects().len(), 1);
         assert_eq!(forward.manifest().kernels().len(), 2);
+        assert_eq!(
+            forward.manifest().target().capabilities(),
+            &[Capability::AmdWave]
+        );
+        assert!(
+            forward
+                .manifest()
+                .kernels()
+                .iter()
+                .all(|kernel| kernel.required_capabilities() == [Capability::AmdWave])
+        );
+        assert!(
+            forward.manifest().kernels().iter().all(|kernel| kernel
+                .abi()
+                .fields()
+                .last()
+                .unwrap()
+                .access()
+                == Access::ReadWrite)
+        );
         assert_eq!(
             forward
                 .manifest()
@@ -1184,65 +1087,214 @@ mod tests {
     }
 
     #[test]
-    fn stale_attempt_and_every_public_receipt_binding_fail_closed() {
-        let bytes = vec![0x66; 96];
-        let finalized: [u8; 32] = Sha256::digest(&bytes).into();
-        let current_attempt = attempt(7);
-        let plan = plan(current_attempt, finalized, 0x41);
+    fn typed_publication_path_binds_producer_plan_outcome_and_snapshot_bytes() {
+        let directory = TestDirectory::new();
+        let publisher = producer("alpha_zeta", "/workspace/alpha_zeta.rs");
+        let attempt = begin(&directory, &publisher, 0x31);
+        let bytes = b"not an hsaco";
+        let finalized: [u8; 32] = Sha256::digest(bytes).into();
+        let plan = plan(attempt, finalized, 0x41);
         let upstream = UpstreamCodeObjectEvidenceIdentityV1::from_bytes([0x51; 32]);
-        let valid = receipt_fields(plan, upstream);
+        let publication = publish_exact_hsaco_evidence_for_attempt_v1(
+            &directory.0,
+            &publisher,
+            attempt,
+            plan,
+            upstream,
+            bytes,
+        )
+        .unwrap();
 
         assert!(matches!(
-            validate_lineage(attempt(8), valid.producer, plan, upstream, valid, &bytes),
-            Err(WorkerV2ArtifactContainerAssemblyErrorV1::StaleAttempt)
+            prepare_worker_v2_artifact_container_v1(&publisher, plan, upstream, &publication),
+            Err(WorkerV2ArtifactContainerAssemblyErrorV1::FinalizedHsaco(_))
         ));
-
-        for field in [
-            "attempt",
-            "producer",
-            "scope",
-            "plan",
-            "upstream",
-            "finalized",
-            "publication",
-        ] {
-            let mut substituted = valid;
-            match field {
-                "attempt" => substituted.attempt[0] ^= 1,
-                "producer" => substituted.producer[0] ^= 1,
-                "scope" => substituted.scope[0] ^= 1,
-                "plan" => substituted.plan[0] ^= 1,
-                "upstream" => substituted.upstream[0] ^= 1,
-                "finalized" => substituted.finalized[0] ^= 1,
-                "publication" => substituted.publication[0] ^= 1,
-                _ => unreachable!(),
-            }
-            assert!(matches!(
-                validate_lineage(
-                    current_attempt,
-                    valid.producer,
-                    plan,
-                    upstream,
-                    substituted,
-                    &bytes
-                ),
-                Err(WorkerV2ArtifactContainerAssemblyErrorV1::ReceiptSubstitution(_))
-            ));
-        }
-
-        let mut changed_payload = bytes;
-        changed_payload[0] ^= 1;
+        let substituted = producer("alpha_zeta", "/workspace/substituted.rs");
         assert!(matches!(
-            validate_lineage(
-                current_attempt,
-                valid.producer,
+            prepare_worker_v2_artifact_container_v1(&substituted, plan, upstream, &publication),
+            Err(WorkerV2ArtifactContainerAssemblyErrorV1::Receipt(
+                BackendPublicationReceiptValidationErrorV1::ProducerIdentityMismatch
+            ))
+        ));
+        assert_eq!(
+            publication.outcome(),
+            AttemptScopedHsacoPublicationOutcomeV1::Published
+        );
+    }
+
+    #[test]
+    fn finalized_alpha_zeta_publication_assembles_complete_bound_container() {
+        let fixture = alpha_zeta_fixture(ProfileMutation::None);
+        assert!(fixture.is_finalized);
+        let directory = TestDirectory::new();
+        let publisher = producer("alpha_zeta", "/workspace/alpha_zeta.rs");
+        let attempt = begin(&directory, &publisher, 0x61);
+        let finalized: [u8; 32] = Sha256::digest(&fixture.bytes).into();
+        let plan = plan(attempt, finalized, 0x71);
+        let upstream = UpstreamCodeObjectEvidenceIdentityV1::from_bytes([0x81; 32]);
+        let publication = publish_exact_hsaco_evidence_for_attempt_v1(
+            &directory.0,
+            &publisher,
+            attempt,
+            plan,
+            upstream,
+            &fixture.bytes,
+        )
+        .unwrap();
+
+        let prepared =
+            prepare_worker_v2_artifact_container_v1(&publisher, plan, upstream, &publication)
+                .unwrap();
+        let manifest = prepared.container.manifest();
+        assert_eq!(manifest.target().capabilities(), &[Capability::AmdWave]);
+        assert_eq!(manifest.kernels().len(), 2);
+        assert!(
+            manifest
+                .kernels()
+                .iter()
+                .all(|kernel| kernel.required_capabilities() == [Capability::AmdWave])
+        );
+        assert_eq!(
+            manifest
+                .kernels()
+                .iter()
+                .map(|kernel| kernel.name().as_str())
+                .collect::<Vec<_>>(),
+            ["alpha", "zeta"]
+        );
+        for kernel in manifest.kernels() {
+            let output = kernel.abi().fields().last().unwrap();
+            assert_eq!(output.name().as_str(), "output");
+            assert_eq!(output.access(), Access::ReadWrite);
+            assert_eq!(output.mutability(), Mutability::Mutable);
+            assert_eq!(output.ownership(), ArgumentOwnership::UniqueBorrow);
+            assert_eq!(output.alias_class(), AliasClass::Exclusive);
+        }
+        assert_eq!(prepared.attempt, attempt);
+        assert_eq!(
+            prepared.outcome,
+            AttemptScopedHsacoPublicationOutcomeV1::Published
+        );
+        assert_eq!(prepared.raw_output_digest, *plan.linked_output().as_bytes());
+        assert_eq!(prepared.finalized_output_digest, finalized);
+        assert_eq!(
+            prepared.canonical_code_object_digest,
+            *inspect_finalized(&fixture.bytes)
+                .unwrap()
+                .digest()
+                .as_bytes()
+        );
+        assert_eq!(
+            prepared.finalization_identity,
+            *plan.finalization().as_bytes()
+        );
+        assert_eq!(
+            prepared.publication_identity,
+            publication.receipt().publication_identity()
+        );
+        assert_eq!(prepared.upstream_evidence_identity, upstream.as_bytes());
+        assert_eq!(
+            prepared.producer_receipt_identity,
+            publication.receipt().producer_identity()
+        );
+        assert_eq!(prepared.compiler_commit, [0x31; 20]);
+        assert_eq!(prepared.descriptors.len(), 2);
+        for (descriptor, name, symbol, id, source_identity, executable_identity) in [
+            (
+                &prepared.descriptors[0],
+                "alpha",
+                "alpha.kd",
+                0x61,
+                0x11,
+                0x13,
+            ),
+            (
+                &prepared.descriptors[1],
+                "zeta",
+                "zeta.kd",
+                0x7a,
+                0x21,
+                0x23,
+            ),
+        ] {
+            assert_eq!(descriptor.kernel_id.as_bytes(), &[id; 32]);
+            assert_eq!(descriptor.logical_name, name);
+            assert_eq!(descriptor.entry_name, name);
+            assert_eq!(descriptor.descriptor_symbol, symbol);
+            assert_eq!(descriptor.source_evidence_identity, [source_identity; 32]);
+            assert_eq!(
+                descriptor.executable_evidence_identity,
+                [executable_identity; 32]
+            );
+        }
+    }
+
+    #[test]
+    fn published_profile_mutations_fail_closed_at_the_public_assembly_boundary() {
+        for (index, mutation) in [
+            ProfileMutation::MissingCapability,
+            ProfileMutation::WriteOnlyAccess,
+            ProfileMutation::SharedOwnership,
+            ProfileMutation::SharedAlias,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let fixture = alpha_zeta_fixture(mutation);
+            let directory = TestDirectory::new();
+            let seed = 0x91_u8.wrapping_add(index as u8 * 16);
+            let publisher = producer("alpha_zeta", "/workspace/alpha_zeta_mutated.rs");
+            let attempt = begin(&directory, &publisher, seed);
+            let finalized: [u8; 32] = Sha256::digest(&fixture.bytes).into();
+            let plan = plan(attempt, finalized, seed.wrapping_add(2));
+            let upstream =
+                UpstreamCodeObjectEvidenceIdentityV1::from_bytes([seed.wrapping_add(3); 32]);
+            let publication = publish_exact_hsaco_evidence_for_attempt_v1(
+                &directory.0,
+                &publisher,
+                attempt,
                 plan,
                 upstream,
-                valid,
-                &changed_payload
-            ),
-            Err(WorkerV2ArtifactContainerAssemblyErrorV1::FinalizedDigestMismatch)
-        ));
+                &fixture.bytes,
+            )
+            .unwrap();
+
+            let error =
+                prepare_worker_v2_artifact_container_v1(&publisher, plan, upstream, &publication)
+                    .unwrap_err();
+            if fixture.is_finalized {
+                assert!(matches!(
+                    error,
+                    WorkerV2ArtifactContainerAssemblyErrorV1::DescriptorModel(_)
+                ));
+            } else {
+                assert!(matches!(
+                    error,
+                    WorkerV2ArtifactContainerAssemblyErrorV1::FinalizedHsaco(_)
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn capability_access_ownership_and_alias_mutations_fail_closed() {
+        let baseline = table(vec![kernel("alpha", 0x20), kernel("zeta", 0x10)]);
+
+        let mut capability = baseline.clone();
+        capability.kernels[0].capabilities.clear();
+        let mut access = baseline.clone();
+        access.kernels[0].fields[2].access = Access::WriteOnly;
+        let mut ownership = baseline.clone();
+        ownership.kernels[0].fields[2].ownership = ArgumentOwnership::SharedBorrow;
+        let mut alias = baseline.clone();
+        alias.kernels[0].fields[2].alias = AliasClass::SharedReadOnly;
+
+        for mutation in [capability, access, ownership, alias] {
+            assert!(matches!(
+                validate_profile(&mutation),
+                Err(WorkerV2ArtifactContainerAssemblyErrorV1::DescriptorModel(_))
+            ));
+        }
     }
 
     #[test]
@@ -1269,46 +1321,6 @@ mod tests {
     }
 
     #[test]
-    fn recovery_outcomes_preserve_container_bytes_and_distinct_lineage() {
-        let descriptor_table = table(vec![kernel("alpha", 0x20), kernel("zeta", 0x10)]);
-        let payload = vec![0x6a; 128];
-        let (container, descriptors) = build_container(&descriptor_table, payload.clone()).unwrap();
-        let digest: [u8; 32] = Sha256::digest(&payload).into();
-        let attempt = attempt(9);
-        let plan = plan(attempt, digest, 0x61);
-        let upstream = UpstreamCodeObjectEvidenceIdentityV1::from_bytes([0x62; 32]);
-        let receipt = receipt_fields(plan, upstream);
-
-        let prepared = |outcome| PreparedWorkerV2ArtifactContainerV1 {
-            container: ArtifactContainerV1::from_bytes(&container.to_bytes()).unwrap(),
-            attempt,
-            outcome,
-            raw_output_digest: *plan.linked_output().as_bytes(),
-            finalized_output_digest: receipt.finalized,
-            canonical_code_object_digest: [0x71; 32],
-            finalization_identity: *plan.finalization().as_bytes(),
-            publication_identity: receipt.publication,
-            upstream_evidence_identity: receipt.upstream,
-            producer_receipt_identity: receipt.producer,
-            compiler_commit: descriptor_table.compiler_commit,
-            descriptors: descriptors.clone(),
-        };
-        let fresh = prepared(AttemptScopedHsacoPublicationOutcomeV1::Published);
-        let recovered =
-            prepared(AttemptScopedHsacoPublicationOutcomeV1::RecoveredCommittedPublication);
-
-        assert_eq!(fresh.to_container_bytes(), recovered.to_container_bytes());
-        assert_ne!(fresh.outcome(), recovered.outcome());
-        assert_eq!(fresh.attempt(), attempt);
-        assert_eq!(fresh.raw_output_digest(), *plan.linked_output().as_bytes());
-        assert_eq!(fresh.finalized_output_digest(), digest);
-        assert_eq!(fresh.descriptors(), recovered.descriptors());
-        assert!(!fresh.grants_current_publication_authority());
-        assert!(!fresh.grants_load_authority());
-        assert!(!fresh.grants_launch_authority());
-    }
-
-    #[test]
     fn frozen_type_and_layout_identities_are_distinct_and_stable() {
         assert_ne!(
             FrozenFieldKindV1::F32.rust_type_identity(),
@@ -1316,18 +1328,11 @@ mod tests {
         );
         assert_ne!(
             FrozenFieldKindV1::SharedF32.rust_type_identity(),
-            FrozenFieldKindV1::WriteOnlyDisjointF32.rust_type_identity()
+            FrozenFieldKindV1::ReadWriteDisjointF32.rust_type_identity()
         );
         assert_ne!(
             FrozenFieldKindV1::F32.layout_identity(),
             FrozenFieldKindV1::SharedF32.layout_identity()
         );
-    }
-
-    #[test]
-    fn build_session_shape_used_by_fixture_is_managed() {
-        let attempt = attempt(3);
-        assert_ne!(attempt.session(), BuildSession::DIRECT);
-        assert_ne!(attempt.invocation().as_bytes(), &[0; 32]);
     }
 }

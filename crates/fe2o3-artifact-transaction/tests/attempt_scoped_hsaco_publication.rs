@@ -1,16 +1,17 @@
 use fe2o3_artifact_transaction::{
     AtomicPublicationIdentityV1, AttemptScopedHsacoPublicationErrorV1,
-    AttemptScopedHsacoPublicationOutcomeV1, BuildAttempt, BuildInvocation, BuildSession,
-    CanonicalLinkRequestIdentityV1, DurableArtifactBoundaryV1, DurableFaultTimingV1,
-    DurableJournalBoundaryV1, DurableJournalStageV1, DurableLinkPublicationError,
-    DurableLinkPublicationFaultPointV1, DurableLinkPublicationOptionsV1,
-    DurableLinkPublicationPlanV1, FinalizationIdentityV1, FinalizedOutputIdentityV1,
-    KernelSetIdentityV1, LinkPublicationScopeV1, LinkedOutputIdentityV1, PackageIdentityV1,
-    PersistedBackendReceiptV1, PinnedWorkerIdentityV1, ProducerIdentity, TargetIdentityV1,
-    UpstreamCodeObjectEvidenceIdentityV1, ValidatedResponseIdentityV1, begin_build_attempt,
-    fail_build_attempt, finish_build_attempt, publish_exact_hsaco_evidence_for_attempt_v1,
+    AttemptScopedHsacoPublicationOutcomeV1, BackendPublicationReceiptValidationErrorV1,
+    BuildAttempt, BuildInvocation, BuildSession, CanonicalLinkRequestIdentityV1,
+    DurableArtifactBoundaryV1, DurableFaultTimingV1, DurableJournalBoundaryV1,
+    DurableJournalStageV1, DurableLinkPublicationError, DurableLinkPublicationFaultPointV1,
+    DurableLinkPublicationOptionsV1, DurableLinkPublicationPlanV1, FinalizationIdentityV1,
+    FinalizedOutputIdentityV1, KernelSetIdentityV1, LinkPublicationScopeV1, LinkedOutputIdentityV1,
+    PackageIdentityV1, PersistedBackendReceiptV1, PinnedWorkerIdentityV1, ProducerIdentity,
+    TargetIdentityV1, UpstreamCodeObjectEvidenceIdentityV1, ValidatedResponseIdentityV1,
+    begin_build_attempt, fail_build_attempt, finish_build_attempt,
+    publish_exact_hsaco_evidence_for_attempt_v1,
     publish_exact_hsaco_evidence_for_attempt_v1_with_options, read_backend_publication_receipt_v1,
-    recover_durable_link_publication_v1,
+    recover_durable_link_publication_v1, validate_backend_publication_receipt_v1,
 };
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -210,6 +211,73 @@ fn publishes_exact_bytes_and_complete_identity_chain_once() {
         .unwrap();
     assert_eq!(recovered.record(), record);
     assert_eq!(recovered.artifact().bytes(), bytes);
+}
+
+#[test]
+fn public_receipt_validation_rejects_typed_lineage_substitution() {
+    let temp = TestDirectory::new();
+    let output = temp.output();
+    let publisher = producer("kernel", "/src/receipt-validation.rs");
+    let attempt = begin(&output, &publisher, 5);
+    let bytes = b"exact finalized bytes";
+    let publication_scope = scope(0x31);
+    let publication_plan = plan(attempt, publication_scope, 0x41, bytes);
+    let upstream = upstream_evidence(publication_plan);
+    let result = publish_exact(&output, &publisher, attempt, publication_plan, bytes).unwrap();
+    let receipt = result.receipt();
+
+    assert_eq!(
+        validate_backend_publication_receipt_v1(
+            &publisher,
+            attempt,
+            publication_plan,
+            upstream,
+            receipt
+        ),
+        Ok(())
+    );
+    let substituted_producer = producer("kernel", "/src/substituted.rs");
+    assert_eq!(
+        validate_backend_publication_receipt_v1(
+            &substituted_producer,
+            attempt,
+            publication_plan,
+            upstream,
+            receipt
+        ),
+        Err(BackendPublicationReceiptValidationErrorV1::ProducerIdentityMismatch)
+    );
+    assert_eq!(
+        validate_backend_publication_receipt_v1(
+            &publisher,
+            attempt,
+            publication_plan,
+            UpstreamCodeObjectEvidenceIdentityV1::from_bytes([0xa5; 32]),
+            receipt
+        ),
+        Err(BackendPublicationReceiptValidationErrorV1::UpstreamEvidenceIdentityMismatch)
+    );
+    let substituted_plan = plan(attempt, publication_scope, 0x42, bytes);
+    assert_eq!(
+        validate_backend_publication_receipt_v1(
+            &publisher,
+            attempt,
+            substituted_plan,
+            upstream,
+            receipt
+        ),
+        Err(BackendPublicationReceiptValidationErrorV1::PlanCommitmentMismatch)
+    );
+    assert_eq!(
+        validate_backend_publication_receipt_v1(
+            &publisher,
+            fake_attempt(attempt, 0x51),
+            publication_plan,
+            upstream,
+            receipt
+        ),
+        Err(BackendPublicationReceiptValidationErrorV1::PlanAttemptMismatch)
+    );
 }
 
 #[test]
