@@ -1,10 +1,11 @@
 use crate::generated_argument_plan::validate_argument_packing;
 use crate::{
     AdmittedFinalizedWorkerV2BundleV1, AdmittedWorkerV2TypedKernelV1, ArtifactKernelIdentityV1,
-    CompilerGeneratedArgumentLayoutV1, CompilerGeneratedKernelExpectationV1, DeviceIdentity,
-    FinalizedWorkerV2BundleAdmissionError, GeneratedArgumentPackingError,
-    GeneratedArgumentPackingPlanV1, PhysicalMetadataValueV1, PublishedKernelPhysicalLayoutV1,
-    PublishedPhysicalLaunchLayoutV1, WorkerV2TypedKernelSelectionError,
+    CompilerGeneratedArgumentLayoutV1, CompilerGeneratedKernelExpectationV1,
+    CompilerGeneratedSemanticWitnessErrorV1, DeviceIdentity, FinalizedWorkerV2BundleAdmissionError,
+    GeneratedArgumentPackingError, GeneratedArgumentPackingPlanV1, PhysicalMetadataValueV1,
+    PublishedKernelPhysicalLayoutV1, PublishedPhysicalLaunchLayoutV1,
+    WorkerV2TypedKernelSelectionError, validate_compiler_generated_semantic_witness_v1,
 };
 use fe2o3_amd_target::AmdTargetId;
 use fe2o3_artifacts::{
@@ -267,6 +268,8 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV2ExecutableV1<
         admission: AdmittedFinalizedWorkerV2BundleV1,
         authenticator: &mut A,
     ) -> Result<Self, WorkerV2ExecutableAuthenticationError<A::Error>> {
+        validate_compiler_generated_semantic_witness_v1::<K>()
+            .map_err(WorkerV2ExecutableAuthenticationError::SemanticWitness)?;
         validate_required_profile(&admission)
             .map_err(WorkerV2ExecutableAuthenticationError::Profile)?;
         admission
@@ -327,6 +330,7 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV2ExecutableV1<
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum WorkerV2ExecutableAuthenticationError<E> {
+    SemanticWitness(CompilerGeneratedSemanticWitnessErrorV1),
     Profile(WorkerV2RequiredProfileError),
     CurrentPublication(FinalizedWorkerV2BundleAdmissionError),
     Authenticator(E),
@@ -1460,6 +1464,8 @@ impl<K: CompilerGeneratedKernelExpectationV1> InertLoadedWorkerV2KernelSelection
         AuthenticatedLoadedWorkerV2KernelSelectionV1<K>,
         WorkerV2ExecutableAuthenticationError<A::Error>,
     > {
+        validate_compiler_generated_semantic_witness_v1::<K>()
+            .map_err(WorkerV2ExecutableAuthenticationError::SemanticWitness)?;
         let request = WorkerV2PrerequisiteRequestV1 {
             artifact_identity: self.selected.artifact_identity(),
             finalized_digest: self.selected.finalized_payload_identity().digest(),
@@ -2665,6 +2671,57 @@ mod tests {
         const KERNEL_BINDING_ID_V1: [u8; 32] = [0x5b; 32];
     }
 
+    struct SubstitutedPrimaryWitness;
+
+    unsafe impl KernelMarkerV1 for SubstitutedPrimaryWitness {
+        type Function = fn();
+        type Registration = (u16, &'static str, &'static str, fn());
+
+        const LOGICAL_NAME: &'static str = "logical_primary";
+        const EXPORT_NAME: &'static str = "primary_kernel";
+        const FUNCTION: Self::Function = test_kernel;
+        const REGISTRATION: &'static Self::Registration = &TEST_REGISTRATION;
+    }
+
+    unsafe impl CompilerGeneratedKernelExpectationV1 for SubstitutedPrimaryWitness {
+        const PROFILE: CompilerGeneratedKernelProfileV1 =
+            CompilerGeneratedKernelProfileV1::TypedVecAddF32RustcLayoutV2;
+        const KERNEL_BINDING_ID_V1: [u8; 32] = [0x4b; 32];
+
+        fn semantic_witness_v1() -> Result<
+            crate::ValidatedCompilerGeneratedSemanticWitnessV1,
+            crate::CompilerGeneratedSemanticWitnessErrorV1,
+        > {
+            validate_compiler_generated_semantic_witness_v1::<SecondTestKernel>()
+        }
+    }
+
+    struct SubstitutedSecondWitness;
+
+    unsafe impl KernelMarkerV1 for SubstitutedSecondWitness {
+        type Function = fn();
+        type Registration = (u16, &'static str, &'static str, fn());
+
+        const LOGICAL_NAME: &'static str = "logical_second";
+        const EXPORT_NAME: &'static str = "second_kernel";
+        const FUNCTION: Self::Function = test_kernel;
+        const REGISTRATION: &'static Self::Registration =
+            &(1, "logical_second", "second_kernel", test_kernel);
+    }
+
+    unsafe impl CompilerGeneratedKernelExpectationV1 for SubstitutedSecondWitness {
+        const PROFILE: CompilerGeneratedKernelProfileV1 =
+            CompilerGeneratedKernelProfileV1::TypedVecAddF32RustcLayoutV2;
+        const KERNEL_BINDING_ID_V1: [u8; 32] = [0x5b; 32];
+
+        fn semantic_witness_v1() -> Result<
+            crate::ValidatedCompilerGeneratedSemanticWitnessV1,
+            crate::CompilerGeneratedSemanticWitnessErrorV1,
+        > {
+            validate_compiler_generated_semantic_witness_v1::<TestKernel>()
+        }
+    }
+
     fn digest(seed: u8) -> PayloadDigest {
         PayloadDigest::new(DigestAlgorithm::Sha256, DigestBytes::from_bytes([seed; 32]))
     }
@@ -2760,6 +2817,21 @@ mod tests {
                 effects,
                 properties,
             ))
+        }
+    }
+
+    struct PanicAuthenticator;
+
+    unsafe impl<K: CompilerGeneratedKernelExpectationV1> WorkerV2PrerequisiteAuthenticatorV1<K>
+        for PanicAuthenticator
+    {
+        type Error = core::convert::Infallible;
+
+        unsafe fn authenticate(
+            &mut self,
+            _request: &WorkerV2PrerequisiteRequestV1<'_, K>,
+        ) -> Result<WorkerV2PrerequisiteDecisionV1, Self::Error> {
+            panic!("semantic-witness rejection must precede the authenticator")
         }
     }
 
@@ -3567,6 +3639,37 @@ mod tests {
             loaded.unload().unwrap();
             assert_eq!(unloads.load(Ordering::SeqCst), 1);
         }
+    }
+
+    #[test]
+    fn initial_authentication_rejects_a_substituted_semantic_witness_first() {
+        let (admission, _directory) = admitted_for_lifecycle_test(0x8d);
+        assert!(matches!(
+            AuthenticatedWorkerV2ExecutableV1::<SubstitutedPrimaryWitness>::authenticate(
+                admission,
+                &mut PanicAuthenticator,
+            ),
+            Err(WorkerV2ExecutableAuthenticationError::SemanticWitness(
+                CompilerGeneratedSemanticWitnessErrorV1::WitnessSubstitution
+            ))
+        ));
+    }
+
+    #[test]
+    fn selected_authentication_rejects_a_substituted_semantic_witness_first() {
+        let (loaded, unloads, _directory) = load_two_kernels(0x8e);
+        let loaded = loaded.unwrap();
+        let selection = loaded
+            .select_typed_kernel::<SubstitutedSecondWitness>()
+            .unwrap();
+        assert!(matches!(
+            selection.authenticate(&mut PanicAuthenticator),
+            Err(WorkerV2ExecutableAuthenticationError::SemanticWitness(
+                CompilerGeneratedSemanticWitnessErrorV1::WitnessSubstitution
+            ))
+        ));
+        loaded.unload().unwrap();
+        assert_eq!(unloads.load(Ordering::SeqCst), 1);
     }
 
     #[test]
