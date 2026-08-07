@@ -10,14 +10,14 @@ help: the trait `LdsElement` is not implemented for `ContainsReference<'_>`
 3 | struct ContainsReference<'a>(&'a u32);
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   = help: the following other types implement trait `LdsElement`:
+            Bf16
+            Bf16x2
+            F16
             [T; N]
             f32
             f64
             i16
             i32
-            i64
-            i8
-            isize
           and $N others
 note: required by a bound in `DynamicLds`
  --> src/lds.rs

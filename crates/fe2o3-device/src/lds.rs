@@ -51,6 +51,8 @@ macro_rules! lds_scalars {
 
 lds_scalars!(u8, i8, u16, i16, u32, i32, u64, i64, usize, isize, f32, f64);
 
+lds_scalars!(crate::F16, crate::Bf16, crate::Bf16x2);
+
 impl<T: LdsElement, const N: usize> sealed::Sealed for [T; N] {}
 
 // SAFETY: arrays preserve the layout and byte-movability requirements of their

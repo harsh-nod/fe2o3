@@ -1,4 +1,5 @@
 #![no_std]
+#![feature(core_float_math)]
 #![feature(rustc_attrs)]
 #![allow(internal_features)]
 
@@ -8,10 +9,15 @@
 //! the backend pinned to this repository's nightly toolchain. They do not
 //! authenticate this crate's package source or contents.
 
+#[cfg(test)]
+extern crate std;
+
 use core::marker::PhantomData;
 
 pub mod ffi;
+pub mod half;
 pub mod lds;
+pub mod math;
 pub mod sync;
 pub mod thread;
 pub mod wave;
@@ -21,10 +27,12 @@ pub use ffi::{
     DeviceConstantPtr, DeviceFfiAbiTypeV1, DeviceGlobalConstPtr, DeviceGlobalMutPtr,
     DevicePrivateConstPtr, DevicePrivateMutPtr, DeviceWorkgroupConstPtr, DeviceWorkgroupMutPtr,
 };
+pub use half::{Bf16, Bf16x2, F16};
 pub use lds::{
     DynamicLds, DynamicLdsError, LdsElement, LdsInitialized, LdsUninitialized,
     MAX_DYNAMIC_LDS_ALIGNMENT, WorkgroupLdsScope,
 };
+pub use math::{DEVICE_MATH_CONTRACT_VERSION_V1, DeviceMath};
 pub use thread::{
     GlobalGridSize, GlobalWorkitemId, GridSize, Index1D, Index2D, Invocation3D, ThreadIndex,
     WorkgroupId, WorkgroupSize, WorkitemId,
