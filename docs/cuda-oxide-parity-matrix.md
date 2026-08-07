@@ -25,28 +25,40 @@ The fe2o3 current-state column is based on commit
 <!-- parity-status:baseline:end -->
 
 Post-snapshot update: commit
-`10a1fc8dbd18189c2ec4e1b04f85bd3aaed56385` extends the bounded `gfx942`
-Worker V2 vertical slice without changing any row to Complete. One real Rust
-source fixture now reaches an exact compiler symbol-role handoff, two
-byte-identical direct LLVM/LLD worker executions, independent raw-HSACO
-inspection, and attempt-scoped durable publication with a provenance receipt.
+`90b6fe31cbb1d89b82755f194ac7950c4eef4756` extends the bounded `gfx942`
+Worker V2 path through a two-kernel compiler, artifact, proof-binding, host
+selection, and HSA lifecycle spine without changing any row to Complete. One
+external Cargo fixture declares two kernel roots and one shared helper. The
+frontend assigns that helper one canonical identity, Kernel IR lowering checks
+both internal calls against its exact signature, and AMDGPU lowering emits the
+helper once. The sealed Cargo backend invokes the direct LLVM/LLD worker and
+publishes one independently inspected HSACO containing exactly both entries.
 The worker calls LLVM and LLD library APIs directly and does not use COMGR or
-command-line linking. This evidence remains source/unit and negative-test
-evidence: compiler origin and Verus results are unauthenticated, canonical
-artifact finalization and bundle binding are absent, and no HSA load or launch
-authority is granted. Both ignored `gfx942` Worker V2 integration tests pass on
-the MI300X with an unoptimized Debug worker: direct real-source publication and
-real-source publication with an external LLVM bitcode provider. Commit
-`8f81306` propagates the measured LLVM include path and major-version guard to
-all worker-protocol consumers, preventing the mixed-header ABI that caused the
-earlier `emitObject` failure; `10a1fc8` binds target-machine features, ELF
-flags, and AMDHSA metadata to the exact requested target. These runs establish
-compile, inspection, provider-link, and durable-publication behavior on the
-named host. They do not execute an HSA kernel and do not cover an optimized
-Release worker. The generated dashboard remains the older pinned evidence
-snapshot until this post-snapshot evidence is admitted through its gate.
+command-line linking.
 
-At that commit fe2o3 has a HIP runtime, explicit unsafe raw module and launch
+The existing V1 artifact wire format now has a strict `gfx942` profile with two
+canonically ordered entries over one digest-validated native payload. Each
+entry has a separate proof binding over its kernel, ABI, effects, launch,
+source, target, and shared executable identities. Host admission can select two
+different compiler-generated marker types from that executable and rejects
+name, binding, physical-layout, target, payload, effects, launch, and
+executable substitution. The reviewed HSA adapter can resolve a fixed set of
+distinct native symbols and retains them in a non-clone value that borrows the
+loaded executable, so safe Rust cannot unload it while the set is live.
+
+The evidence remains bounded. The MI300X Worker V2 test compiles, inspects, and
+publishes the two-kernel `gfx942` code object but does not dispatch it. The
+second host selection is deliberately inert, multi-symbol HSA tests establish
+identity and lifetime rather than a generated typed ABI, and dispatch still
+uses the exact vecadd kernarg profile. General manifest-derived packing, safe
+dispatch of both entries, asynchronous composition, broad Rust signatures,
+and machine-code refinement remain incomplete. The next bounded scope and exit
+gate are defined by the
+[general typed dispatch V1 contract](general-typed-dispatch-v1.md). The
+generated dashboard and status blocks remain the older pinned evidence snapshot
+until their separate evidence-admission lane updates them.
+
+At `90b6fe3` fe2o3 also has a HIP runtime, explicit unsafe raw module and launch
 paths, versioned kernel registration, reachable MIR collection, bounded rustc
 frontend and general layout records, a canonical target-neutral kernel IR and
 verifier, concrete generic-helper collection, semantic constants,
@@ -55,19 +67,18 @@ verified-IR AMDGPU fill and exact three-slice vecadd paths, experimental LDS,
 scoped integer atomics, wave operations, fence, and workgroup-barrier lowering,
 a default narrow elementwise `f32`/`f64` LLVM/HSACO emitter, fail-closed formal
 affine memory/race obligations for modeled effects, artifact and proof schemas,
-a multi-kernel bundle index, generated `KernelMarkerV1` types, exact loaded
-module/function authority, host argument-alias admission, bounded HSACO
-inspection/finalization, event-backed asynchronous transfer lifetimes,
-transactional artifact publication, bounded Verus driver records, and paired
-Verus harnesses.
-`#[kernel(typed)]` additionally connects one exact
+generated `KernelMarkerV1` types, exact loaded module/function authority, host
+argument-alias admission, bounded HSACO inspection/finalization, event-backed
+asynchronous transfer lifetimes, transactional artifact publication, bounded
+Verus driver records, and paired Verus harnesses.
+`#[kernel(typed)]` still connects only one exact
 `pub fn(&[f32], &[f32], DisjointSlice<f32>)` profile to a backend-generated,
 canonical embedded artifact and safe load, prepare, synchronous launch, and
-non-escapable scoped launch API. The profile now authenticates canonical
+non-escapable scoped launch API. That narrow launch path authenticates canonical
 rustc-derived argument layout evidence and validates the finalized physical
-AMDHSA kernarg shape. This narrow vertical is not a general compiler, general
-typed module system, machine-code effect proof, authenticated proof-carrying
-artifact, or proof-requiring build.
+AMDHSA kernarg shape. It is not a general compiler, general typed module
+system, machine-code effect proof, authenticated proof-carrying artifact, or
+proof-requiring build.
 
 This matrix compares capabilities and observable semantics, not identical
 vendor syntax. It is not a claim that either project is production-ready.
@@ -106,6 +117,17 @@ An IR type, schema, parser, or isolated proof is classified as **Partial** only
 when it implements a meaningful part of the row; it does not stand in for
 end-to-end compiler/runtime behavior.
 
+A post-snapshot read-only audit found qualifying bounded evidence to move rows
+01, 26, 40, 51, and 87 from Missing to Partial and supplemental row S11 from
+Missing to Partial. Row 47 remains Missing: the authenticated inline-assembly
+lowering described for row 87 is not a public `amdgpu_asm!` macro with the
+required operand and clobber surface. Once the authoritative status TSV is
+updated by its owning lane, the expected projection is 0 Complete, 50 Partial,
+32 Missing, and 12 N/A normative rows, plus 0 Complete, 11 Partial, and 4
+Missing supplemental rows. This narrative does not move the generated status
+or dashboard snapshot to `90b6fe3`; those changes require the full
+evidence-generation gate.
+
 ## Gates
 
 | Gate | Scope |
@@ -125,6 +147,14 @@ The detailed dependencies and exit criteria are in
 
 ## Evidence Behind Current Partial Status
 
+- Row 01 and supplemental row S06: the HIP ABI records managed-memory,
+  concurrent-access, VMM, and peer capabilities against exact context and
+  physical-device identities. Linear managed allocations support bounded
+  advice, prefetch, location queries, and reclamation; VMM typestates cover
+  reserve, map, per-device access, query, and reverse-order cleanup. Opt-in HIP
+  tests exercise managed allocation lifecycle and two-`gfx942` VMM access.
+  Safe host-reference capture, coherent CPU/GPU access semantics, in-flight
+  launch retention, and broad topology evidence remain incomplete.
 - Row 07: reachable collection now distinguishes concrete generic and
   const-generic helper instances, deduplicates them deterministically,
   terminates recursive graphs, and diagnoses unavailable cross-crate MIR with
@@ -137,33 +167,60 @@ The detailed dependencies and exit criteria are in
   model independently validates and canonicalizes the same shape families.
   Neither path is connected to host packing, artifact identity, constants, or
   general device codegen, so these rows remain Partial.
-- Rows 12, 17, 20, 24, and 25: the manifest ABI model and canonical
-  target-neutral kernel IR represent part of the required type, control-flow,
-  arithmetic, and cast semantics. Structured MIR lowering covers a tested
-  vecadd-shaped subset. The opt-in `kernel-ir-v1` backend now takes the exact
-  fill and three-slice vecadd kernels through translation, verification,
-  legalization, G1 AMD lowering, transactional publication, and hardware
-  execution. Compiler-generated host packing exists only for the exact typed
-  vecadd profile; general Rust signatures and general AMDGPU lowering are
-  absent.
+- Row 12: canonical ABI records represent scalar and approved slice components,
+  rustc-derived type/layout identities, source argument indexes, physical
+  offsets, widths, alignments, address spaces, and effects. The bounded
+  `GeneratedArgumentPackingPlanV1` rejects omission, duplication, reordering,
+  wrong kind/width/access/address space, pointer-width mismatch, and
+  cross-kernel values. Safe generated value binding and launch integration are
+  still limited to exact profiles; structs, closures, return values, and the
+  full acceptance target are not complete.
+- Rows 17 and 20: authenticated control-flow records, canonical successor and
+  block-argument models, reducible-CFG validation, and bounded MIR branch/loop
+  fixtures exist. The compiler rejects malformed predecessor, block-argument,
+  and unsupported control-flow shapes rather than approximating them. General
+  integer `match`, arbitrary reducible while/if graphs, nested loop exits, and
+  broad source-to-hardware execution remain incomplete.
+- Rows 24 and 25: the manifest ABI model and canonical target-neutral Kernel IR
+  represent a bounded arithmetic and cast subset. The opt-in `kernel-ir-v1`
+  backend takes exact fill and three-slice vecadd through translation,
+  verification, AMD lowering, transactional publication, and hardware
+  execution. Complete signed/unsigned operations, casts, overflow forms, and
+  general source lowering remain absent.
+- Rows 26 and 40 and supplemental row S11: authenticated device identities and
+  Kernel IR float contracts cover f16/BF16 conversion, packed BF16x2 fused
+  multiply-add, strict divide, and selected math calls. Exact `gfx942` golden
+  lowering uses constrained operations and pinned OCML imports, with malformed
+  contract, capability, symbol, target, and type rejection plus code-object
+  compilation tests. The public source API, full math/type matrix, edge-case
+  GPU execution, other AMD targets, packed storage/arithmetic breadth, and
+  cuda-oxide-equivalent rounding coverage are incomplete.
 - Rows 32, 33, and 35: `#[kernel]` emits strict V1 registration metadata tied to
   a direct function pointer and a deterministic, doc-hidden typed
   `KernelMarkerV1`; public kernels expose that marker publicly. Reachable helper
-  collection, helper-call translation, and multiple kernels are exercised. For
-  the exact vecadd signature, `#[kernel(typed)]` emits a public generated host
-  module and a V2 typed registration. Full crate/kernel binding IDs are derived
-  independently by the Cargo wrapper, macro, and backend and qualify private
-  host/accessor symbols; a real two-rlib same-name link test rejects silent
-  archive coalescing. The backend also validates the normalized monomorphized
-  signature and rejects a token-level `type f32 = f64` spoof. The association
-  is still a trusted compiler contract, and the narrow emitters are not a
-  general compiler or multi-kernel bundle.
-- Rows 36-38 and 41-43: one-source builds, AMDGPU LLVM/HSACO sidecars, diagnostic
+  collection now assigns one canonical source identity to a helper reached by
+  two roots, and Kernel IR lowering validates both calls against the collected
+  helper's exact signature. The real-source Worker V2 fixture emits one helper
+  definition and two entries into one `gfx942` HSACO. For the exact vecadd
+  signature, `#[kernel(typed)]` emits a public generated host module and a V2
+  typed registration. Full crate/kernel binding IDs are derived independently
+  by the Cargo wrapper, macro, and backend and qualify private host/accessor
+  symbols; a real two-rlib same-name link test rejects silent archive
+  coalescing. The backend also validates the normalized monomorphized signature
+  and rejects a token-level `type f32 = f64` spoof. The association is still a
+  trusted compiler contract, general signatures and cross-crate finalization
+  are absent, and only the exact vecadd profile has a generated safe launch.
+- Rows 35-38 and 41-43: one-source builds, AMDGPU LLVM/HSACO sidecars, diagnostic
   dumps, bounded HSACO inspection, a read-only `cargo fe2o3 inspect` command,
   complete external-project build/run orchestration, project-local cleanup, and
-  the opt-in exact fill and vecadd paths exist. Project build scripts and
-  procedural macros remain trusted, and the general source-to-GPU pipeline does
-  not exist.
+  the opt-in exact fill and vecadd paths exist. The sealed external-Cargo
+  Worker V2 fixture also compiles two roots and one shared helper into one
+  deterministically inspected and published `gfx942` payload; the canonical
+  artifact profile indexes both entries over that payload and rejects duplicate
+  or conflicting identities. Project build scripts and procedural macros
+  remain trusted; pipeline inspection is not stage-complete, broad Rust
+  semantics and cross-crate finalization are absent, and neither entry has a
+  generated general dispatch path.
 - Rows 27, 28, and 39: bounded device FFI macros and compiler validation bind
   import/export direction, exact symbols, physical scalar/pointer ABI,
   address spaces, effects, target, code-object version, and semantic identity.
@@ -173,14 +230,13 @@ The detailed dependencies and exit criteria are in
   `gfx942` Worker V2 slice, Cargo consumes an exact compiler-produced
   symbol-role manifest, requires byte-identical output from two worker
   executions, independently inspects the raw HSACO, and durably publishes it
-  under the originating build attempt with a provenance receipt. The compiler
-  and its origin are not authenticated, Verus evidence is not authenticated or
-  executable-bound, canonical artifact finalization and bundle binding are not
-  run, and HSA load/launch remain absent. On MI300X, the ignored direct-kernel
-  and external-bitcode-provider Worker V2 tests both pass with an unoptimized
-  Debug worker after the pinned LLVM headers were propagated to every protocol
-  consumer. This is target-specific compile and publication evidence, not GPU
-  execution or optimized-Release evidence.
+  under the originating build attempt with a provenance receipt. The path now
+  covers two kernel roots with one canonical shared helper and feeds a strict
+  two-entry artifact profile with per-kernel proof bindings. Compiler origin
+  authentication and compiler-to-machine-code refinement remain outside the
+  claim. The MI300X ignored integration test establishes target-specific
+  compile, inspection, and publication evidence, not two-kernel GPU execution
+  or optimized-Release evidence.
 - Rows 44 and 45: `cargo fe2o3 sanitize` and `debug` retain plan-only mode and
   can execute an exact descriptor-pinned native ROCgdb binary with bounded
   output, timeout, process cleanup, an environment allowlist, and diagnostic
@@ -192,10 +248,19 @@ The detailed dependencies and exit criteria are in
   target-neutral launch-axis verification, and observed target/capability facts
   exist. Kernel IR derives formal affine regions, bounds, runtime-alias, and
   inter-invocation race obligations for modeled effects and fails closed on
-  unsupported effects. The exact generated vecadd adapter authenticates its
-  fixed launch contract and maps three runtime allocations to it; general
-  launch extents and parameter/allocation mappings remain unauthenticated.
-- Rows 53-55, 57, 58, 61, 64-67, 70, and 71: canonical Kernel IR models scoped
+  unsupported effects. Compile-fail tests reject witness copying, transfer, and
+  index-space mismatch. The exact generated vecadd adapter authenticates its
+  fixed one-dimensional launch contract and maps three runtime allocations to
+  it; complete 2D/3D branded construction, general launch extents, and general
+  parameter/allocation mappings remain incomplete.
+- Row 51: `PreparedLaunch<K>`, loaded prepared launch, artifact-prepared launch,
+  and cooperative admission types bind bounded geometry and resources to exact
+  kernel, context, module/function, and capability observations. Construction
+  and compile-fail tests reject rank, brand, context, and loaded-kernel
+  substitution. The reusable public path is still centered on exact profiles
+  and does not yet derive arbitrary resource and geometry proofs from every
+  manifest entry.
+- Rows 53-55, 64-67, 70, and 71: canonical Kernel IR models scoped
   integer atomics, static and dynamic workgroup memory, scoped fences,
   convergence-bearing workgroup barriers, and explicit wave32/wave64 lane,
   ballot, vote, and bounded shuffle operations. AMD lowering for those bounded
@@ -205,12 +270,20 @@ The detailed dependencies and exit criteria are in
   integration, dynamic-LDS launch-byte admission, float and standard-library
   atomics, broad wave types/tiles/collectives, and GPU semantic execution are
   still absent.
-- Row 74 and supplemental row S06: observed capabilities retain exact live
+- Rows 57, 58, and 61: Kernel IR distinguishes static LDS from the one dynamic
+  LDS base, derives required capabilities, validates extent/alignment/address
+  space, and represents workgroup barriers with convergence, scope, ordering,
+  and memory-space claims. AMD lowering emits address-space-3 storage and
+  convergent `llvm.amdgcn.s.barrier` plus required fences, and rejects
+  conditional or cyclic barrier placement under the bounded proof. Ordinary
+  Rust source integration, dynamic launch-byte admission, LDS initialization
+  transfer, general barrier convergence proof, and GPU semantic execution are
+  absent.
+- Row 74: observed capabilities retain exact live
   contexts. Cooperative admission retains the exact loaded function and stream
   and conservatively accepts one workgroup until per-function occupancy is
-  available. Directional peer enablement has linear cleanup ownership and
-  retains contexts on ambiguous failure. Neither layer proves pointer validity,
-  coherence, aliasing, race freedom, completion, or cross-device topology.
+  available. It does not prove grid-wide synchronization semantics or general
+  occupancy-safe cooperative execution.
 - Rows 78 and 79: for the exact public
   `fn(&[f32], &[f32], DisjointSlice<f32>)` profile, `#[kernel(typed)]`
   generates the public `<kernel>_gpu` module with `Kernel` and `Prepared`
@@ -224,33 +297,41 @@ The detailed dependencies and exit criteria are in
   Before embedding, the backend binds ELF entries to AMDHSA descriptors and
   requires the exact six pointer/length kernargs. `prepare` checks context,
   equal nonzero lengths, u32 index geometry, resource limits, and alias
-  admission while retaining the loaded authority and typed buffers. General
-  typed signatures, arbitrary Rust layouts, machine-code effect verification,
-  and multi-kernel modules are not complete, so both rows remain Partial.
+  admission while retaining the loaded authority and typed buffers. Separately,
+  the `gfx942` two-entry profile binds both entries to one payload and host
+  admission can select either compiler-generated marker without exchanging
+  ABI, effects, launch, target, physical-layout, or executable identities. The
+  second selection is inert and has no generated argument packer or dispatch
+  method. General typed signatures, arbitrary Rust layouts, machine-code effect
+  verification, and safe multi-kernel execution are incomplete, so both rows
+  remain Partial.
 - Row 80: the general `launch!` macro remains an explicit unsafe raw-ABI escape
   hatch with compile-fail coverage. The generated vecadd module instead exposes
   safe `prepare(...).launch(...)`; the example contains no raw parameter pack,
-  artifact pathname, or unsafe user launch. This is one fixed profile, not a
-  general generated launch macro, so the row remains Partial.
+  artifact pathname, or unsafe user launch. The two-entry Worker V2 path does
+  not yet generate equivalent methods or manifest-derived packing for either
+  entry. This is one fixed safe profile, not a general generated launch macro,
+  so the row remains Partial.
 - Row 81 and supplemental row S03: the generated vecadd `launch_scoped` API
   retains typed resource borrows, loaded authority, alias admission, and packed
   parameters through event completion or stronger stream quiescence. Its
   higher-ranked callback cannot return the in-flight operation. Generalized
   returnable borrowed or owned generated async operations, cancellation, and
-  composition are incomplete, so both rows remain Partial.
-- Supplemental rows S01-S07, S14, and S15: the corresponding bounded models,
-  parsers, lifetime types, target query, exact proof-evidence matching, and
-  focused UI tests exist. The typed vecadd backend now emits and embeds a
-  canonical container whose fixed argument identities come from normalized
-  rustc types and canonical physical-layout evidence. Its generated kernel
-  identity binds the marker binding, source and executable digests, complete
-  ABI/effects, layout identities, and launch contract. Transaction-held,
-  descriptor-pinned snapshots keep finalized IR and HSACO in one generation
-  even after republishing or pathname replacement. This remains one exact
-  profile, machine-code behavior is not proven from those declarations, Verus
-  proof binding/refinement is not authenticated into the artifact, general
-  generated safe-launch integration is incomplete, and host-object embedding
-  is limited to `x86_64-unknown-linux-gnu`.
+  composition are incomplete. The linear HSA kernel set prevents executable
+  unload while resolved kernels are retained, but it does not add an async
+  operation or typed dispatch for the second entry, so both rows remain
+  Partial.
+- Supplemental rows S01 and S02: the V1 container, bundle index, direct-link
+  evidence, descriptor finalization, transactional publication, and durable
+  recovery records form a canonical bounded artifact path. The `gfx942`
+  profile carries two independently identified entries and two
+  non-substitutable proof bindings over one digest-validated native payload.
+  Descriptor-pinned snapshots retain finalized IR and HSACO in one generation
+  across pathname replacement. This is not general compiler production,
+  all-target loading, or machine-code refinement evidence.
+- Supplemental rows S04 and S05: bounded `DeviceCopy`, pinned-memory, event,
+  and transfer-lifetime models exist, but general manifest-gated device type
+  interpretation and broad asynchronous hardware ordering remain incomplete.
 - Supplemental row S07 specifically has a bounded semantic-constant and data
   relocation model that rejects function, vtable, thread-local, and unknown
   relocations. Rustc promotions, emitted device globals/statics, and GPU use
@@ -260,6 +341,26 @@ The detailed dependencies and exit criteria are in
   affine kernels against an independent HIP/CPU oracle over boundary lengths,
   deterministic data, NaN/infinity policy, and physical canaries. This is a
   narrow conformance corpus, not general MIR fuzzing or safety proof.
+- Supplemental row S14: target detection and explicit override produce
+  canonical AMD target identities with observed-device correlation, capability
+  checks, and fail-closed XNACK/SRAMECC handling in bounded host/HSA paths. Not
+  every payload producer and cache identity is covered across the full target
+  matrix.
+- Supplemental row S15: compile-fail suites cover kernel/index brands,
+  non-transferable witnesses, private generated fields, unsafe pointer
+  binding, loaded-executable borrows, non-clone typed selections and HSA kernel
+  sets, and unload-before-release errors. The suite does not yet cover every
+  general typed signature, async cancellation path, barrier lifecycle, or
+  remaining unsafe transition.
+- Row 87: authenticated rustc inline-assembly records bind statement,
+  function, contract, and frontend-unit identities before a closed `gfx942`
+  instruction table emits static LLVM templates. V1 covers a small set of
+  register-only 32-bit move and ALU instructions and rejects unknown mnemonics,
+  memory, atomics, barriers, control flow, convergence, special-state effects,
+  and operand mismatches. Source MIR integration, broad operands/effects, and
+  hardware execution are incomplete. This evidence does not satisfy row 47,
+  which remains Missing because no baseline-equivalent public
+  `amdgpu_asm!` macro exists.
 
 ## Normative 94-row Matrix
 

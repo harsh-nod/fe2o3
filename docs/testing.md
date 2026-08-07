@@ -50,6 +50,61 @@ or crate behavior.
 The comprehensive lane may link ROCm libraries through workspace packages. It
 does not opt in to ignored GPU execution tests.
 
+## `90b6fe3` multi-kernel checkpoint
+
+The checkpoint at
+`90b6fe31cbb1d89b82755f194ac7950c4eef4756` has focused CPU-only coverage for
+the two-kernel contracts at each layer:
+
+```text
+cargo test --locked -p cargo-fe2o3 --test general_two_kernel_project
+cargo test --locked -p dialect-amdgcn
+cargo test --locked -p fe2o3-artifacts
+cargo test --locked -p fe2o3-verifier
+cargo test --locked -p fe2o3-host
+cargo test --locked -p fe2o3-hsa-runtime
+cargo test --locked -p rustc-codegen-fe2o3 --all-targets
+```
+
+These tests cover deterministic root/helper import, exact internal-helper call
+signatures, two-kernel AMDGPU lowering, one-payload bundle validation,
+per-kernel proof binding, typed host selection, distinct native HSA symbol
+resolution, and borrow-enforced executable lifetime. Mutation and UI tests
+reject ambiguous helpers, signature changes, payload/proof/kernel
+substitutions, duplicate native identities, cloning linear selections, and
+unloading while a kernel set remains live.
+
+The real-source Worker V2 integration remains an ignored ROCm test. Run it with
+the same pinned worker and toolchain identities used to build the worker:
+
+```text
+FE2O3_LLVM_LINK_WORKER=/absolute/path/to/fe2o3-llvm-link-worker \
+FE2O3_LLVM_LINK_WORKER_BUILD_ID=<measured-worker-id> \
+FE2O3_LLVM_BUILD_ID=<measured-llvm-id> \
+cargo test --locked -p rustc-codegen-fe2o3 \
+  --test kernel_ir_codegen \
+  worker_v2_real_source_publishes_two_kernels_with_one_shared_helper \
+  -- --ignored --exact --nocapture
+```
+
+On MI300X this test is compile/publication evidence: it runs the sealed Cargo
+backend, emits one `gfx942` HSACO containing both entries and one shared helper,
+and checks the published code object. It does not dispatch either kernel. HSA
+multi-symbol lifecycle tests at this checkpoint use the reviewed adapter's
+host-side test boundary and likewise do not establish two-kernel hardware
+execution.
+
+The next [general typed dispatch V1](general-typed-dispatch-v1.md) gate must
+archive one run from a single commit that includes all focused commands above
+plus strict Clippy, the ignored Worker V2 test, and an opt-in MI300X execution
+test. That hardware test must load one executable, resolve and dispatch two
+differently typed kernels through the descriptor-driven path, compare outputs
+with independent CPU oracles and canary checks at boundary lengths, and record
+commit, rustc, worker, LLVM, ROCm, driver, and `gfx942` device identities. It
+must also run the contract's generated-expectation, packing, alias, artifact,
+proof, HSA identity, hidden-kernarg, queue, and lifetime rejection suite.
+Compilation or symbol resolution alone does not pass this gate.
+
 ## Verus proof coverage
 
 Run the two positive vecadd and fill proof harnesses plus all twelve

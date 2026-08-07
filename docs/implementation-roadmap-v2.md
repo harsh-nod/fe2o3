@@ -2,9 +2,12 @@
 
 Status: execution plan for parallel implementation.
 
+Implementation checkpoint: `90b6fe31cbb1d89b82755f194ac7950c4eef4756`.
+
 This roadmap turns [architecture-v2.md](architecture-v2.md),
 [verification-model.md](verification-model.md), the
-[GPU safety contract v1](gpu-safety-contract-v1.md), and the
+[GPU safety contract v1](gpu-safety-contract-v1.md), the
+[general typed dispatch V1 contract](general-typed-dispatch-v1.md), and the
 [cuda-oxide parity matrix](cuda-oxide-parity-matrix.md) into independently
 owned work with staged integration gates. Gates are evidence-based; calendar
 dates depend on staffing and hardware availability.
@@ -62,6 +65,34 @@ Parallel work is effective only after these contracts have golden fixtures:
 
 Freeze means backward-compatible evolution through explicit version changes,
 not permanent immutability.
+
+## Implemented Checkpoint: `90b6fe3`
+
+The `90b6fe3` checkpoint establishes a bounded `gfx942` multi-kernel spine:
+
+- one external Cargo fixture declares two kernel roots and one reachable shared
+  helper;
+- MIR import assigns the helper one canonical source identity, and Kernel IR
+  lowering validates calls against the collected helper's exact signature;
+- AMDGPU lowering is deterministic for two kernels, one shared helper, and
+  shared OCML declarations;
+- Worker V2 compiles the real Rust fixture into one independently inspected and
+  durably published HSACO through the sealed Cargo backend path;
+- the V1 artifact wire format carries exactly two canonically ordered kernel
+  entries that reference one digest-validated native `gfx942` payload;
+- each kernel has an independently keyed proof binding over its own ABI,
+  effects, launch contract, source identity, and the shared executable;
+- host admission can select two distinct compiler-generated kernel markers from
+  the same authenticated executable without allowing marker, target, layout,
+  payload, or executable substitution; and
+- the reviewed HSA adapter can resolve and linearly retain a fixed set of
+  distinct symbols while borrowing the loaded executable.
+
+This is compilation, artifact, proof-binding, selection, and lifecycle
+evidence. It is not general typed dispatch. The generated safe launch surface
+and reviewed HSA argument initializer still implement only the exact vecadd
+profile, and the second host selection is deliberately inert. No parity row is
+promoted by this checkpoint.
 
 ## G0: Baseline and Safety Boundary
 
@@ -210,6 +241,70 @@ G2 passes when:
 - Retain resources through completion, cancellation, callback failure, and
   stream error paths.
 - Add deterministic cache keys and local clean behavior.
+
+### G3.1: General typed multi-kernel dispatch
+
+This is the next critical vertical slice. It replaces the exact vecadd-only
+packing and dispatch bridge with one path generated from each admitted kernel
+entry. Its normative scope and authority transitions are frozen in the
+[general typed dispatch V1 contract](general-typed-dispatch-v1.md): by-value
+scalars, shared slices, and exclusive `DisjointSlice` arguments already
+represented by the bounded ABI model. Aggregates, return values, asynchronous
+launch, and language coverage not yet accepted by G2 are not silently added
+here.
+
+Parallel ownership is split at frozen records:
+
+| Slice | Owns | Produces |
+|:--|:--|:--|
+| G3.1-A: compiler ABI | rustc layout extraction, physical parameter expansion, effect/alias declarations | Canonical per-entry ABI descriptor fixtures |
+| G3.1-B: artifact/module | multi-entry bundle validation, descriptor-to-payload binding, generated module declarations | One module descriptor with two independently typed kernel entries |
+| G3.1-C: host packing | generated argument views, checked offset/alignment writes, prepared geometry, retained borrows | Kernel-specific packed arguments that cannot be exchanged |
+| G3.1-D: HSA dispatch | multi-symbol resolution, reviewed COV6 hidden arguments, queue submission, completion, unload ordering | Generic synchronous dispatch for an admitted kernel descriptor |
+| G3.1-E: adversarial tests | UI tests, mutation tests, CPU oracles, MI300X execution evidence | Reproducible positive and fail-closed evidence |
+
+The compiler ABI descriptor is the integration boundary. Runtime code may
+compare an untrusted manifest with a compiler-generated descriptor, but it may
+not synthesize a safe Rust argument interface from manifest bytes alone. Each
+packed argument value is branded by kernel, executable, context, and descriptor
+identity and retains all referenced resources until quiescence.
+
+G3.1 passes only when all of the following are true:
+
+1. One ordinary Cargo project declares two kernels with different nontrivial
+   signatures and one shared Rust helper; the sealed backend emits one `gfx942`
+   HSACO containing exactly both entries and one helper definition.
+2. The backend emits canonical ordered physical fields, offsets, sizes,
+   alignments, address spaces, mutability/effects, launch contract, target, and
+   code-object identity for each entry. Repeated clean builds are byte-identical.
+3. One V1 bundle references the shared payload from both entries, and
+   independent HSACO inspection matches each entry to exactly one descriptor.
+4. Generated host declarations expose distinct safe argument and prepared
+   launch types for both kernels. No kernel name, signature, offset, or byte
+   count is special-cased in `fe2o3-host` or `fe2o3-hsa-runtime`.
+5. Safe packing writes every explicit kernarg field from its manifest-derived
+   descriptor, preserves resource borrows and alias classes, initializes
+   padding deterministically, and rejects arithmetic overflow.
+6. One loaded HSA executable resolves both symbols. Each typed selection can be
+   prepared and synchronously dispatched through the same generic path, and
+   the executable cannot unload while either selection, packed arguments,
+   launch authorization, or submitted dispatch remains live.
+7. An MI300X runs both kernels from that one executable and compares all output
+   bytes with independent CPU oracles for empty/rejected, single-element,
+   boundary, and multi-workgroup lengths. The evidence records `gfx942`, ROCm,
+   LLVM worker, rustc, and commit identities.
+8. Negative tests reject swapped argument order or type, changed physical
+   layout, wrong symbol or kernel marker, target/context/executable
+   substitution, stale payload, changed effects or launch contract, duplicate
+   HSA symbols or kernel objects, cross-kernel proof substitution, alias
+   violations, and unload-before-quiescence.
+9. CPU-only unit tests, compile-fail tests, package tests, strict Clippy, the
+   ignored Worker V2 integration test, and the MI300X execution test all pass
+   from the same commit with commands recorded in [testing.md](testing.md).
+10. The exact vecadd public API either uses the new descriptor-driven path or
+    remains explicitly marked as a compatibility profile. Async operations,
+    cross-crate finalization, and broader G2 aggregate support remain separate
+    gates and are not implied by G3.1.
 
 ### Safety tests
 

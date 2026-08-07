@@ -2,6 +2,8 @@
 
 Status: proposed architecture and implementation contract.
 
+Implementation checkpoint: `90b6fe31cbb1d89b82755f194ac7950c4eef4756`.
+
 This document describes the target architecture for fe2o3. It is not a
 description of the current implementation. The current backend is a useful
 bootstrap: it discovers `#[kernel]` functions, walks reachable MIR, recognizes a
@@ -19,6 +21,7 @@ Related documents:
 - [verification model](verification-model.md)
 - [GPU safety contract v1](gpu-safety-contract-v1.md)
 - [implementation roadmap](implementation-roadmap-v2.md)
+- [general typed dispatch V1](general-typed-dispatch-v1.md)
 
 ## Goals
 
@@ -107,6 +110,30 @@ steps:
 
 The implementation may overlap independent steps, but the artifact bundle is
 not valid until all required identities agree.
+
+### `90b6fe3` multi-kernel checkpoint
+
+The current implementation has a bounded realization of steps 1, 2, and 4 for
+one `gfx942` profile. An external Cargo fixture supplies two kernel roots and a
+shared helper. The frontend gives the helper one canonical source identity;
+Kernel IR lowering checks each internal call against the collected helper's
+declared signature; and the direct LLVM/LLD Worker V2 path emits one inspected,
+durably published HSACO. The canonical V1 artifact container then represents
+two kernel entries over that one native payload, with an independently keyed
+proof binding for each entry.
+
+Host admission can select either compiler-generated kernel marker while
+retaining the exact artifact, executable, target, physical layout, effects,
+and launch identities. The HSA adapter can resolve a fixed set of distinct
+symbols and returns a non-clone set that borrows the executable, preventing
+safe unload while any selected native kernel is retained.
+
+The boundary is intentionally incomplete. The second host selection is inert,
+the HSA set establishes native identity rather than typed ABI authority, and
+dispatch still uses the exact vecadd physical layout and hidden-argument
+initializer. The checkpoint therefore demonstrates a multi-kernel compiler,
+artifact, selection, and lifecycle spine, not general safe multi-kernel
+execution or cuda-oxide parity.
 
 ## Permanent Component Boundaries
 
@@ -265,6 +292,13 @@ optional proof record and assurance level
 debug/source map reference
 ```
 
+Multiple entries may reference one native payload. Shared payload identity does
+not merge entry authority: kernel ID, exported symbol, source identity, ABI,
+effects, launch contract, and proof key remain independently bound. A module
+loader owns the executable; selected kernel values borrow that loader and add
+their entry-specific identity. Duplicate names, symbols, native kernel objects,
+or proof keys fail closed rather than aliasing two logical entries.
+
 Payloads can include AMDGPU LLVM bitcode, relocatable AMDGPU objects, and
 targeted HSACO images. The container is target-neutral and versioned; loading
 policy belongs to the AMD runtime. Unknown mandatory fields or capability bits
@@ -291,6 +325,62 @@ Async operations borrow or own every referenced allocation until a completion
 event proves the device is finished. Dropping a submitted future cannot free
 its resources early. Cross-stream accesses require an event dependency or an
 explicit unsafe obligation.
+
+### Descriptor-driven multi-kernel dispatch
+
+The next implementation milestone makes the generated declaration and the
+finalized entry descriptor the only safe route from Rust arguments to kernarg
+bytes. The generated declaration is trusted compiler output compiled into the
+host object. The serialized manifest is untrusted input until it matches that
+declaration and independent code-object inspection. A loader must never create
+a safe Rust signature by interpreting manifest bytes alone. The exact V1
+accepted argument profiles, authority transitions, rejection suite, and exit
+gate are specified by the
+[general typed dispatch contract](general-typed-dispatch-v1.md).
+
+The transition is:
+
+```text
+compiler-generated KernelDeclaration<K>
+                 +
+validated bundle entry + inspected code-object descriptor
+                 |
+                 v
+LoadedModule<M, C> --select K--> LoadedKernel<'module, K, C>
+                                      |
+                         typed arguments + geometry
+                                      |
+                                      v
+                           PreparedLaunch<'resources, K, C>
+                                      |
+                                      v
+                         submitted dispatch -> quiescence
+```
+
+The concrete type names may evolve, but these ownership rules do not:
+
+1. `LoadedModule` owns exactly one executable and its observed context.
+2. `LoadedKernel` borrows that module and binds one generated declaration to
+   one manifest entry, inspected descriptor, and resolved HSA symbol.
+3. Generated adapters bind values by source argument index to the existing
+   `GeneratedArgumentPackingPlanV1`. The plan writes explicit fields by checked
+   descriptor offsets, zeroes padding, preserves scalar bit patterns, and
+   retains every buffer borrow, provenance witness, mutability/effect class,
+   and alias admission.
+4. The target adapter initializes only the reviewed implicit COV6 region and
+   verifies the complete kernarg size/alignment reported by HSA. It does not
+   know a Rust signature or kernel name.
+5. Preparation brands geometry and packed bytes with kernel, executable,
+   context, ABI, and launch-contract identities. Values from another entry or
+   load generation are not interchangeable even when their bytes match.
+6. Dispatch consumes launch authority, publishes one AQL packet, and releases
+   resources only after quiescence. The module cannot unload while any child
+   kernel, preparation, or submitted operation is live.
+
+This design turns the exact vecadd bridge into one generated instance of the
+general rule. It does not make every Rust type device-safe: G2 still controls
+which layouts and language semantics the compiler accepts, and raw dispatch
+remains an explicit `unsafe` escape hatch.
 
 ## Verification Integration
 
