@@ -4,10 +4,13 @@ use fe2o3_kernel_ir::{
     AMDGPU_GFX942_INLINE_ASSEMBLY_CAPABILITY_NAME,
     AMDGPU_GFX942_INLINE_ASSEMBLY_CAPABILITY_NAMESPACE, AssemblyConstraint, AssemblyEffect,
     AssemblyOperand, AssemblyOperandKind, AssemblyOption, AssemblySourceIdentity, BasicBlock,
-    BlockId, DiagnosticCode, Function, InlineAssembly, InlineAssemblyTarget, Kernel, LaunchDomain,
+    BlockId, DiagnosticCode, EffectExtractionCompleteness, EffectExtractionIssue,
+    ExplicitLaunchExtent1d, FormalIndexWidth, FormalMemoryIncompleteReason, Function,
+    FunctionEffectBindings, InlineAssembly, InlineAssemblyTarget, Kernel, KernelId, LaunchDomain,
     LaunchExtent, Module, Operation, OperationKind, ScalarType, Signature, TargetCapability,
-    Terminator, Type, ValueDef, ValueId, WorkgroupSize, decode_module_v3, encode_module_v1,
-    encode_module_v2, encode_module_v3, verify_module,
+    Terminator, Type, ValueDef, ValueId, WorkgroupSize, decode_module_v3,
+    derive_kernel_memory_obligations, encode_module_v1, encode_module_v2, encode_module_v3,
+    extract_function_region_effects, verify_module,
 };
 
 fn source() -> AssemblySourceIdentity {
@@ -162,4 +165,35 @@ fn v3_single_bit_mutations_never_bypass_canonical_decoding() {
             }
         }
     }
+}
+
+#[test]
+fn generic_memory_analyses_fail_closed_for_inline_assembly() {
+    let module = module_with(assembly("v_add_u32"));
+    let function = &module.functions[0];
+    let report =
+        extract_function_region_effects(&module, &function.id, &FunctionEffectBindings::new())
+            .unwrap();
+    assert_eq!(
+        report.completeness(),
+        EffectExtractionCompleteness::Incomplete
+    );
+    assert_eq!(
+        report.extraction_issues(),
+        &[EffectExtractionIssue::InlineAssemblyEffectsUnavailable {
+            location: fe2o3_kernel_ir::FunctionOperationLocation::new(BlockId(0), 0),
+        }]
+    );
+
+    let analysis = derive_kernel_memory_obligations(
+        &module,
+        &KernelId::new("assembly_kernel"),
+        ExplicitLaunchExtent1d::Exact(1),
+        FormalIndexWidth::Bits64,
+    )
+    .unwrap();
+    assert!(matches!(
+        analysis.incomplete_reasons(),
+        [FormalMemoryIncompleteReason::UnsupportedMemoryEffect { .. }]
+    ));
 }

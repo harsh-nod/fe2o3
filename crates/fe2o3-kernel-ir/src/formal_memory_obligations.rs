@@ -513,6 +513,7 @@ pub fn derive_kernel_memory_obligations(
                 | OperationKind::Barrier(_)
                 | OperationKind::Atomic(_)
                 | OperationKind::Fence(_)
+                | OperationKind::InlineAssembly(_)
                 | OperationKind::WorkgroupBarrier(_)
                 | OperationKind::WorkgroupMemory(_) => {
                     reasons
@@ -521,7 +522,6 @@ pub fn derive_kernel_memory_obligations(
                 OperationKind::Constant(_)
                 | OperationKind::Intrinsic(_)
                 | OperationKind::Wave(_)
-                | OperationKind::InlineAssembly(_)
                 | OperationKind::Unary { .. }
                 | OperationKind::Binary { .. }
                 | OperationKind::Compare { .. }

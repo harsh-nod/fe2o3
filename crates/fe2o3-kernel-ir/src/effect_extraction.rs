@@ -164,6 +164,9 @@ pub enum EffectExtractionIssue {
         location: FunctionOperationLocation,
         callee: FunctionId,
     },
+    InlineAssemblyEffectsUnavailable {
+        location: FunctionOperationLocation,
+    },
 }
 
 /// Describes the non-authoritative facts on which this report is based.
@@ -299,6 +302,10 @@ pub fn extract_function_region_effects(
                     location,
                     callee: callee.clone(),
                 });
+            }
+            if matches!(operation.kind, OperationKind::InlineAssembly(_)) {
+                extraction_issues
+                    .push(EffectExtractionIssue::InlineAssemblyEffectsUnavailable { location });
             }
 
             let Some(memory_operation) = MemoryOperation::from_ir(operation, &value_types) else {
