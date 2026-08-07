@@ -1,0 +1,23 @@
+error[E0505]: cannot move out of `input` because it is borrowed
+ --> tests/ui/generated_spi/fail/generated_view_capability_retains_allocation.rs:7:10
+  |
+4 | fn shared_view_retains_parent(observed: &ObservedContext, input: DeviceBuffer<f32>) {
+  |                                                           ----- binding `input` declared here
+5 |     let view = input.view(..).unwrap();
+  |                ----- borrow of `input` occurs here
+6 |     let capability = GeneratedReadDeviceSlice::from_view(observed, view).unwrap();
+7 |     drop(input);
+  |          ^^^^^ move out of `input` occurs here
+8 |     drop(capability);
+  |          ---------- borrow later used here
+
+error[E0502]: cannot borrow `output` as immutable because it is also borrowed as mutable
+  --> tests/ui/generated_spi/fail/generated_view_capability_retains_allocation.rs:14:18
+   |
+12 |     let view = output.view_mut(..).unwrap();
+   |                ------ mutable borrow occurs here
+13 |     let capability = GeneratedWriteDeviceSlice::from_view_mut(observed, view).unwrap();
+14 |     let _reuse = output.len();
+   |                  ^^^^^^ immutable borrow occurs here
+15 |     drop(capability);
+   |          ---------- mutable borrow later used here

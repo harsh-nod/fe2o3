@@ -16,7 +16,9 @@ use crate::{
     ReviewedHsaImplicitKernargAdapterV1, UnloadedHsaExecutableV1,
 };
 use fe2o3_artifacts::{Access, AddressSpace, PointerWidth};
-use fe2o3_core::{DeviceBuffer, Error as CoreError, GpuContext};
+use fe2o3_core::{
+    DeviceBuffer, DeviceBufferView, DeviceBufferViewMut, Error as CoreError, GpuContext,
+};
 use std::fmt;
 use std::sync::Arc;
 
@@ -172,6 +174,42 @@ where
             .map_err(GeneratedWorkerV2VecAddPrepareError::Region)?;
         let c = GeneratedWriteDeviceSlice::new(&self.observed, c)
             .map_err(GeneratedWorkerV2VecAddPrepareError::Region)?;
+        self.prepare_slices(grid_x, a, b, c)
+    }
+
+    /// Packs and reserves vecadd over checked subregions, preserving canaries
+    /// outside each selected range. The output view is consumed so no shared
+    /// view can enter the writable path.
+    pub fn prepare_views<'allocation>(
+        &mut self,
+        a: DeviceBufferView<'allocation, f32>,
+        b: DeviceBufferView<'allocation, f32>,
+        c: DeviceBufferViewMut<'allocation, f32>,
+    ) -> Result<
+        GeneratedWorkerV2VecAddPreparedV1<'_, 'allocation, K, A>,
+        GeneratedWorkerV2VecAddPrepareError,
+    > {
+        let grid_x = checked_vecadd_grid(a.len(), b.len(), c.len())
+            .map_err(GeneratedWorkerV2VecAddPrepareError::Shape)?;
+        let a = GeneratedReadDeviceSlice::from_view(&self.observed, a)
+            .map_err(GeneratedWorkerV2VecAddPrepareError::Region)?;
+        let b = GeneratedReadDeviceSlice::from_view(&self.observed, b)
+            .map_err(GeneratedWorkerV2VecAddPrepareError::Region)?;
+        let c = GeneratedWriteDeviceSlice::from_view_mut(&self.observed, c)
+            .map_err(GeneratedWorkerV2VecAddPrepareError::Region)?;
+        self.prepare_slices(grid_x, a, b, c)
+    }
+
+    fn prepare_slices<'allocation>(
+        &mut self,
+        grid_x: u32,
+        a: GeneratedReadDeviceSlice<'allocation, f32>,
+        b: GeneratedReadDeviceSlice<'allocation, f32>,
+        c: GeneratedWriteDeviceSlice<'allocation, f32>,
+    ) -> Result<
+        GeneratedWorkerV2VecAddPreparedV1<'_, 'allocation, K, A>,
+        GeneratedWorkerV2VecAddPrepareError,
+    > {
         let (admission, registration) = admit_and_register(
             self.observed.alias_registry(),
             &self.observed,
@@ -188,7 +226,7 @@ where
         let c_len = u64::try_from(c.len()).expect("vecadd length was checked against u32");
         // SAFETY: each pointer and length comes from the retained generated
         // capability for that exact argument. Alias admission above reserves
-        // the same complete regions through synchronous completion.
+        // the same selected regions through synchronous completion.
         let inputs = unsafe {
             [
                 self.packing.slice(

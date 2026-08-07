@@ -5,7 +5,10 @@ use crate::{
         GeneratedDeviceScalarV1,
     },
 };
-use fe2o3_core::{DeviceBuffer, DeviceCopy, KernelParams};
+use fe2o3_core::{
+    DeviceBuffer, DeviceBufferIdentity, DeviceBufferRegion, DeviceBufferView, DeviceBufferViewMut,
+    DeviceCopy, DevicePtr, KernelParams,
+};
 use std::collections::HashMap;
 use std::fmt;
 use std::marker::PhantomData;
@@ -193,7 +196,9 @@ impl CheckedByteRegion<'_> {
 
 struct GeneratedDeviceSliceMetadata {
     identity: AllocationIdentity,
+    _device_buffer_identity: DeviceBufferIdentity,
     context: ObservedContext,
+    byte_offset: usize,
     byte_length: usize,
 }
 
@@ -213,54 +218,115 @@ pub(super) const fn generated_argument_borrow_for_test() -> GeneratedArgumentBor
 }
 
 impl GeneratedDeviceSliceMetadata {
-    fn from_buffer<T: DeviceCopy>(
+    fn from_region<T: DeviceCopy, R: DeviceBufferRegion<T> + ?Sized>(
         observed: &ObservedContext,
-        buffer: &DeviceBuffer<T>,
+        region: &R,
     ) -> Result<Self, RegionError> {
-        if !observed.is_for_context(buffer.context()) {
+        if !observed.is_for_context(region.context()) {
             return Err(RegionError::WrongContext);
         }
 
-        let byte_length = buffer
-            .len()
-            .checked_mul(size_of::<T>())
-            .ok_or(RegionError::AllocationSizeOverflow)?;
-        let allocation = buffer.as_device_ptr().as_raw().addr();
-        allocation
-            .checked_add(byte_length)
-            .ok_or(RegionError::AllocationAddressOverflow)?;
+        let checked = checked_device_region::<T>(
+            region.allocation_device_ptr().as_raw().addr(),
+            region.allocation_len(),
+            region.region_device_ptr().as_raw().addr(),
+            region.region_len(),
+        )?;
 
         Ok(Self {
             identity: AllocationIdentity {
                 context: observed.context_key(),
-                allocation,
+                allocation: region.allocation_device_ptr().as_raw().addr(),
             },
+            _device_buffer_identity: region.allocation_identity(),
             context: observed.clone(),
-            byte_length,
+            byte_offset: checked.byte_offset,
+            byte_length: checked.byte_length,
         })
     }
 
-    fn whole_region<'allocation>(&self) -> CheckedByteRegion<'allocation> {
+    fn checked_region<'allocation>(&self) -> CheckedByteRegion<'allocation> {
+        let byte_end = self
+            .byte_offset
+            .checked_add(self.byte_length)
+            .expect("generated device region was checked at construction");
         CheckedByteRegion {
             identity: self.identity,
             context: self.context.clone(),
-            byte_offset: 0,
+            byte_offset: self.byte_offset,
             byte_length: self.byte_length,
-            byte_end: self.byte_length,
+            byte_end,
             marker: PhantomData,
         }
     }
 }
 
-/// Generated read-only capability for one complete typed device buffer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct CheckedDeviceRegion {
+    byte_offset: usize,
+    byte_length: usize,
+}
+
+fn checked_device_region<T>(
+    allocation_address: usize,
+    allocation_len: usize,
+    region_address: usize,
+    region_len: usize,
+) -> Result<CheckedDeviceRegion, RegionError> {
+    if size_of::<T>() == 0 {
+        return Err(RegionError::ZeroSizedElement);
+    }
+    if region_len == 0 {
+        return Err(RegionError::EmptyRegion);
+    }
+
+    let allocation_byte_length = allocation_len
+        .checked_mul(size_of::<T>())
+        .ok_or(RegionError::AllocationSizeOverflow)?;
+    allocation_address
+        .checked_add(allocation_byte_length)
+        .ok_or(RegionError::AllocationAddressOverflow)?;
+    let byte_length = region_len
+        .checked_mul(size_of::<T>())
+        .ok_or(RegionError::AllocationSizeOverflow)?;
+    let byte_offset = region_address.checked_sub(allocation_address).ok_or(
+        RegionError::RegionAddressOutsideAllocation {
+            allocation_address,
+            region_address,
+        },
+    )?;
+    let byte_end =
+        byte_offset
+            .checked_add(byte_length)
+            .ok_or(RegionError::OffsetLengthOverflow {
+                byte_offset,
+                byte_length,
+            })?;
+    if byte_end > allocation_byte_length {
+        return Err(RegionError::OutOfBounds {
+            allocation_length: allocation_byte_length,
+            byte_offset,
+            byte_length,
+        });
+    }
+
+    Ok(CheckedDeviceRegion {
+        byte_offset,
+        byte_length,
+    })
+}
+
+/// Generated read-only capability for one checked typed device-buffer region.
 ///
 /// This doc-hidden SPI owns the actual shared buffer borrow. Its admission
 /// access is fixed to [`ArgumentAccessMode::SharedRead`], and its packing helper
 /// emits the pointer and element count from that same retained buffer.
 #[doc(hidden)]
 pub struct GeneratedReadDeviceSlice<'allocation, T: DeviceCopy> {
-    buffer: &'allocation DeviceBuffer<T>,
+    pointer: DevicePtr<T>,
+    len: usize,
     metadata: GeneratedDeviceSliceMetadata,
+    marker: PhantomData<&'allocation T>,
 }
 
 impl<'allocation, T: DeviceCopy> GeneratedReadDeviceSlice<'allocation, T> {
@@ -268,26 +334,55 @@ impl<'allocation, T: DeviceCopy> GeneratedReadDeviceSlice<'allocation, T> {
         observed: &ObservedContext,
         buffer: &'allocation DeviceBuffer<T>,
     ) -> Result<Self, RegionError> {
-        let metadata = GeneratedDeviceSliceMetadata::from_buffer(observed, buffer)?;
-        Ok(Self { buffer, metadata })
+        Self::from_region(observed, buffer)
+    }
+
+    /// Retains one checked immutable subregion as a generated shared argument.
+    pub fn from_view(
+        observed: &ObservedContext,
+        view: DeviceBufferView<'allocation, T>,
+    ) -> Result<Self, RegionError> {
+        let metadata = GeneratedDeviceSliceMetadata::from_region(observed, &view)?;
+        Ok(Self {
+            pointer: view.region_device_ptr(),
+            len: view.region_len(),
+            metadata,
+            marker: PhantomData,
+        })
+    }
+
+    fn from_region<R: DeviceBufferRegion<T> + ?Sized>(
+        observed: &ObservedContext,
+        region: &'allocation R,
+    ) -> Result<Self, RegionError> {
+        let metadata = GeneratedDeviceSliceMetadata::from_region(observed, region)?;
+        Ok(Self {
+            pointer: region.region_device_ptr(),
+            len: region.region_len(),
+            metadata,
+            marker: PhantomData,
+        })
     }
 
     pub fn argument_access(&self) -> ArgumentAccess<'allocation> {
-        ArgumentAccess::new(self.metadata.whole_region(), ArgumentAccessMode::SharedRead)
+        ArgumentAccess::new(
+            self.metadata.checked_region(),
+            ArgumentAccessMode::SharedRead,
+        )
     }
 
     /// Appends this slice's exact device pointer and element count.
     pub fn push_pointer_and_len(&self, params: &mut KernelParams) {
-        params.push(self.buffer.as_device_ptr());
-        params.push(self.buffer.len());
+        params.push(self.pointer);
+        params.push(self.len);
     }
 
     pub fn len(&self) -> usize {
-        self.buffer.len()
+        self.len
     }
 
     pub fn is_empty(&self) -> bool {
-        self.buffer.is_empty()
+        self.len == 0
     }
 
     /// Binds this retained shared slice to one exact generated argument plan.
@@ -301,26 +396,28 @@ impl<'allocation, T: DeviceCopy> GeneratedReadDeviceSlice<'allocation, T> {
     {
         plan.bind_generated_read_slice_v1::<T>(
             argument_index,
-            self.buffer.as_device_ptr().as_raw().addr(),
-            self.buffer.len(),
+            self.pointer.as_raw().addr(),
+            self.len,
             GeneratedArgumentBorrowV1::new(),
         )
     }
 
     pub(crate) fn device_pointer(&self) -> *const () {
-        self.buffer.as_device_ptr().as_raw().cast_const().cast()
+        self.pointer.as_raw().cast_const().cast()
     }
 }
 
-/// Generated writable capability for one complete typed device buffer.
+/// Generated writable capability for one exclusive typed device-buffer region.
 ///
 /// This doc-hidden SPI owns the actual exclusive buffer borrow. Its admission
 /// access is fixed to [`ArgumentAccessMode::ExclusiveWrite`], and its packing
 /// helper emits the pointer and element count from that same retained buffer.
 #[doc(hidden)]
 pub struct GeneratedWriteDeviceSlice<'allocation, T: DeviceCopy> {
-    buffer: &'allocation mut DeviceBuffer<T>,
+    pointer: DevicePtr<T>,
+    len: usize,
     metadata: GeneratedDeviceSliceMetadata,
+    marker: PhantomData<&'allocation mut T>,
 }
 
 impl<'allocation, T: DeviceCopy> GeneratedWriteDeviceSlice<'allocation, T> {
@@ -328,37 +425,56 @@ impl<'allocation, T: DeviceCopy> GeneratedWriteDeviceSlice<'allocation, T> {
         observed: &ObservedContext,
         buffer: &'allocation mut DeviceBuffer<T>,
     ) -> Result<Self, RegionError> {
-        let metadata = GeneratedDeviceSliceMetadata::from_buffer(observed, buffer)?;
-        Ok(Self { buffer, metadata })
+        let metadata = GeneratedDeviceSliceMetadata::from_region(observed, buffer)?;
+        Ok(Self {
+            pointer: buffer.region_device_ptr(),
+            len: buffer.region_len(),
+            metadata,
+            marker: PhantomData,
+        })
+    }
+
+    /// Consumes one checked exclusive subregion as a generated writable argument.
+    pub fn from_view_mut(
+        observed: &ObservedContext,
+        view: DeviceBufferViewMut<'allocation, T>,
+    ) -> Result<Self, RegionError> {
+        let metadata = GeneratedDeviceSliceMetadata::from_region(observed, &view)?;
+        Ok(Self {
+            pointer: view.region_device_ptr(),
+            len: view.region_len(),
+            metadata,
+            marker: PhantomData,
+        })
     }
 
     pub fn argument_access(&self) -> ArgumentAccess<'allocation> {
         ArgumentAccess::new(
-            self.metadata.whole_region(),
+            self.metadata.checked_region(),
             ArgumentAccessMode::ExclusiveWrite,
         )
     }
 
     /// Appends this slice's exact device pointer and element count.
     pub fn push_pointer_and_len(&self, params: &mut KernelParams) {
-        params.push(self.buffer.as_device_ptr());
-        params.push(self.buffer.len());
+        params.push(self.pointer);
+        params.push(self.len);
     }
 
     pub fn len(&self) -> usize {
-        self.buffer.len()
+        self.len
     }
 
     pub fn is_empty(&self) -> bool {
-        self.buffer.is_empty()
+        self.len == 0
     }
 
     pub(crate) fn device_pointer(&self) -> *const () {
-        self.buffer.as_device_ptr().as_raw().cast_const().cast()
+        self.pointer.as_raw().cast_const().cast()
     }
 }
 
-/// Generated initialized read-write capability for one complete typed buffer.
+/// Generated initialized read-write capability for one exclusive typed region.
 ///
 /// This doc-hidden SPI owns the actual exclusive buffer borrow. Its admission
 /// access is distinct from write-only output and its safe packing helper binds
@@ -366,8 +482,10 @@ impl<'allocation, T: DeviceCopy> GeneratedWriteDeviceSlice<'allocation, T> {
 /// argument.
 #[doc(hidden)]
 pub struct GeneratedReadWriteDeviceSlice<'allocation, T: DeviceCopy> {
-    buffer: &'allocation mut DeviceBuffer<T>,
+    pointer: DevicePtr<T>,
+    len: usize,
     metadata: GeneratedDeviceSliceMetadata,
+    marker: PhantomData<&'allocation mut T>,
 }
 
 impl<'allocation, T: DeviceCopy> GeneratedReadWriteDeviceSlice<'allocation, T> {
@@ -375,23 +493,42 @@ impl<'allocation, T: DeviceCopy> GeneratedReadWriteDeviceSlice<'allocation, T> {
         observed: &ObservedContext,
         buffer: &'allocation mut DeviceBuffer<T>,
     ) -> Result<Self, RegionError> {
-        let metadata = GeneratedDeviceSliceMetadata::from_buffer(observed, buffer)?;
-        Ok(Self { buffer, metadata })
+        let metadata = GeneratedDeviceSliceMetadata::from_region(observed, buffer)?;
+        Ok(Self {
+            pointer: buffer.region_device_ptr(),
+            len: buffer.region_len(),
+            metadata,
+            marker: PhantomData,
+        })
+    }
+
+    /// Consumes one checked exclusive subregion as a generated read-write argument.
+    pub fn from_view_mut(
+        observed: &ObservedContext,
+        view: DeviceBufferViewMut<'allocation, T>,
+    ) -> Result<Self, RegionError> {
+        let metadata = GeneratedDeviceSliceMetadata::from_region(observed, &view)?;
+        Ok(Self {
+            pointer: view.region_device_ptr(),
+            len: view.region_len(),
+            metadata,
+            marker: PhantomData,
+        })
     }
 
     pub fn argument_access(&self) -> ArgumentAccess<'allocation> {
         ArgumentAccess::new(
-            self.metadata.whole_region(),
+            self.metadata.checked_region(),
             ArgumentAccessMode::ExclusiveReadWrite,
         )
     }
 
     pub fn len(&self) -> usize {
-        self.buffer.len()
+        self.len
     }
 
     pub fn is_empty(&self) -> bool {
-        self.buffer.is_empty()
+        self.len == 0
     }
 
     /// Binds this retained exclusive slice to one exact generated argument plan.
@@ -405,8 +542,8 @@ impl<'allocation, T: DeviceCopy> GeneratedReadWriteDeviceSlice<'allocation, T> {
     {
         plan.bind_generated_read_write_slice_v1::<T>(
             argument_index,
-            self.buffer.as_device_ptr().as_raw().addr(),
-            self.buffer.len(),
+            self.pointer.as_raw().addr(),
+            self.len,
             GeneratedArgumentBorrowV1::new(),
         )
     }
@@ -911,8 +1048,14 @@ impl std::error::Error for AliasAdmissionError {}
 #[non_exhaustive]
 pub enum RegionError {
     WrongContext,
+    ZeroSizedElement,
+    EmptyRegion,
     AllocationSizeOverflow,
     AllocationAddressOverflow,
+    RegionAddressOutsideAllocation {
+        allocation_address: usize,
+        region_address: usize,
+    },
     OffsetLengthOverflow {
         byte_offset: usize,
         byte_length: usize,
@@ -928,12 +1071,25 @@ impl fmt::Display for RegionError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::WrongContext => formatter.write_str("allocation belongs to a different context"),
+            Self::ZeroSizedElement => {
+                formatter.write_str("generated device regions require non-zero-sized elements")
+            }
+            Self::EmptyRegion => {
+                formatter.write_str("generated device regions must contain at least one element")
+            }
             Self::AllocationSizeOverflow => {
                 formatter.write_str("allocation element count overflows its byte length")
             }
             Self::AllocationAddressOverflow => {
                 formatter.write_str("allocation address plus byte length overflows")
             }
+            Self::RegionAddressOutsideAllocation {
+                allocation_address,
+                region_address,
+            } => write!(
+                formatter,
+                "region address {region_address:#x} is before allocation address {allocation_address:#x}"
+            ),
             Self::OffsetLengthOverflow {
                 byte_offset,
                 byte_length,
@@ -987,6 +1143,24 @@ mod tests {
 
     fn read_write(region: CheckedByteRegion<'_>) -> ArgumentAccess<'_> {
         ArgumentAccess::new(region, ArgumentAccessMode::ExclusiveReadWrite)
+    }
+
+    fn selected_region<'allocation>(
+        context: &ObservedContext,
+        allocation: usize,
+        checked: CheckedDeviceRegion,
+    ) -> CheckedByteRegion<'allocation> {
+        CheckedByteRegion {
+            identity: AllocationIdentity {
+                context: context.context_key(),
+                allocation,
+            },
+            context: context.clone(),
+            byte_offset: checked.byte_offset,
+            byte_length: checked.byte_length,
+            byte_end: checked.byte_offset + checked.byte_length,
+            marker: PhantomData,
+        }
     }
 
     fn atomic(region: CheckedByteRegion<'_>) -> ArgumentAccess<'_> {
@@ -1044,6 +1218,77 @@ mod tests {
         }
         .unwrap_err();
         assert_eq!(error, RegionError::AllocationAddressOverflow);
+    }
+
+    #[test]
+    fn generated_region_geometry_keeps_allocation_relative_offsets() {
+        let selected = checked_device_region::<u32>(0x1000, 12, 0x100c, 4).unwrap();
+        assert_eq!(
+            selected,
+            CheckedDeviceRegion {
+                byte_offset: 12,
+                byte_length: 16,
+            }
+        );
+
+        assert_eq!(
+            checked_device_region::<u32>(0x1000, 12, 0x0ffc, 4).unwrap_err(),
+            RegionError::RegionAddressOutsideAllocation {
+                allocation_address: 0x1000,
+                region_address: 0x0ffc,
+            }
+        );
+        assert_eq!(
+            checked_device_region::<u32>(0x1000, 12, 0x1028, 4).unwrap_err(),
+            RegionError::OutOfBounds {
+                allocation_length: 48,
+                byte_offset: 40,
+                byte_length: 16,
+            }
+        );
+    }
+
+    #[test]
+    fn generated_regions_reject_empty_and_zero_sized_elements() {
+        assert_eq!(
+            checked_device_region::<u32>(0x1000, 4, 0x1000, 0).unwrap_err(),
+            RegionError::EmptyRegion
+        );
+        assert_eq!(
+            checked_device_region::<[u8; 0]>(0, usize::MAX, 0, 1).unwrap_err(),
+            RegionError::ZeroSizedElement
+        );
+    }
+
+    #[test]
+    fn generated_mutable_subregions_preserve_canaries_and_alias_identity() {
+        let context = context(1);
+        let first = checked_device_region::<u32>(0x1000, 12, 0x1004, 4).unwrap();
+        let second = checked_device_region::<u32>(0x1000, 12, 0x1014, 4).unwrap();
+        let first = selected_region(&context, 0x1000, first);
+        let second = selected_region(&context, 0x1000, second);
+
+        assert_eq!(first.allocation(), second.allocation());
+        assert_eq!((first.byte_offset(), first.byte_end()), (4, 20));
+        assert_eq!((second.byte_offset(), second.byte_end()), (20, 36));
+        ArgumentAliasValidator::new()
+            .admit(&context, [write(first), write(second)], &[])
+            .unwrap();
+
+        let first = selected_region(
+            &context,
+            0x1000,
+            checked_device_region::<u32>(0x1000, 12, 0x1004, 4).unwrap(),
+        );
+        let overlapping = selected_region(
+            &context,
+            0x1000,
+            checked_device_region::<u32>(0x1000, 12, 0x1010, 4).unwrap(),
+        );
+        assert!(matches!(
+            ArgumentAliasValidator::new().admit(&context, [write(first), write(overlapping)], &[],),
+            Err(AliasAdmissionError::Conflict { .. })
+        ));
     }
 
     #[test]

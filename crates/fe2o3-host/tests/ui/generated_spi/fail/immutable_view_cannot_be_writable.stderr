@@ -1,0 +1,31 @@
+error[E0308]: mismatched types
+ --> tests/ui/generated_spi/fail/immutable_view_cannot_be_writable.rs:6:69
+  |
+6 |     let _write = GeneratedWriteDeviceSlice::from_view_mut(observed, shared);
+  |                  ----------------------------------------           ^^^^^^ expected `DeviceBufferViewMut<'_, _>`, found `DeviceBufferView<'_, f32>`
+  |                  |
+  |                  arguments to this function are incorrect
+  |
+  = note: expected struct `DeviceBufferViewMut<'_, _>`
+             found struct `DeviceBufferView<'_, f32>`
+note: associated function defined here
+ --> src/argument_alias.rs
+  |
+  |     pub fn from_view_mut(
+  |            ^^^^^^^^^^^^^
+
+error[E0308]: mismatched types
+ --> tests/ui/generated_spi/fail/immutable_view_cannot_be_writable.rs:9:78
+  |
+9 |     let _read_write = GeneratedReadWriteDeviceSlice::from_view_mut(observed, shared);
+  |                       --------------------------------------------           ^^^^^^ expected `DeviceBufferViewMut<'_, _>`, found `DeviceBufferView<'_, f32>`
+  |                       |
+  |                       arguments to this function are incorrect
+  |
+  = note: expected struct `DeviceBufferViewMut<'_, _>`
+             found struct `DeviceBufferView<'_, f32>`
+note: associated function defined here
+ --> src/argument_alias.rs
+  |
+  |     pub fn from_view_mut(
+  |            ^^^^^^^^^^^^^
