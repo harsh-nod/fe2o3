@@ -1,5 +1,6 @@
 #![allow(non_camel_case_types)]
 
+#[cfg(not(feature = "general-genuine"))]
 use fe2o3_device::kernel;
 #[cfg(not(any(feature = "general-genuine", feature = "general-lookalike")))]
 use fe2o3_device::{DisjointSlice, thread};
@@ -64,7 +65,7 @@ mod general_genuine {
         typed,
         namespace = "1b3f523833ae188d124b710c48983f3911bd8be1ea82408ffc78121e843e6271"
     )]
-    pub fn genuine_general_v3(scale: f32, input: &[f32], mut output: DisjointSlice<f32>) {
+    pub fn alpha(scale: f32, input: &[f32], mut output: DisjointSlice<f32>) {
         let index = thread::index_1d();
         let i = index.get();
         if let Some(value) = output.get_mut(index) {
@@ -72,11 +73,27 @@ mod general_genuine {
         }
     }
 
+    #[kernel(
+        typed,
+        namespace = "1b3f523833ae188d124b710c48983f3911bd8be1ea82408ffc78121e843e6271"
+    )]
+    pub fn zeta(a: &[f32], b: &[f32], bias: f32, mut output: DisjointSlice<f32>) {
+        let index = thread::index_1d();
+        let i = index.get();
+        if let Some(value) = output.get_mut(index) {
+            *value = a[i] + b[i] + bias;
+        }
+    }
+
     pub fn validate_backend_witness() {
         fe2o3_host::__generated::validate_compiler_generated_semantic_witness_v1::<
-            genuine_general_v3_gpu::Marker,
+            alpha_gpu::Marker,
         >()
-        .expect("backend-issued general V3 semantic witness");
+        .expect("backend-issued alpha semantic witness");
+        fe2o3_host::__generated::validate_compiler_generated_semantic_witness_v1::<
+            zeta_gpu::Marker,
+        >()
+        .expect("backend-issued zeta semantic witness");
     }
 }
 

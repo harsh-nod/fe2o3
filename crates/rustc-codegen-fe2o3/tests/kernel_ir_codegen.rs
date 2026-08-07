@@ -1,3 +1,4 @@
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::{Mutex, MutexGuard, OnceLock};
@@ -10,6 +11,7 @@ const PROVIDER_SYMBOL: &str = "external_device_add_v1";
 const PROVIDER_KERNEL: &str = "worker_v2_provider_kernel";
 const MULTI_KERNEL_ALPHA: &str = "worker_v2_alpha";
 const MULTI_KERNEL_ZETA: &str = "worker_v2_zeta";
+const ALPHA_ZETA_OUTPUT_ENV: &str = "FE2O3_GFX942_ALPHA_ZETA_OUTPUT";
 
 fn backend_test_lock() -> MutexGuard<'static, ()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -413,10 +415,37 @@ fn artifact_paths(workspace: &Path, kernel: &str) -> [PathBuf; 3] {
 }
 
 fn assert_published_worker_v2_hsaco(artifact_dir: &Path, expected_kernel: &str) {
-    assert_published_worker_v2_kernels(artifact_dir, &[expected_kernel]);
+    let _ = assert_published_worker_v2_kernels_with_version(
+        artifact_dir,
+        &[expected_kernel],
+        fe2o3_hsaco::CodeObjectVersion::V5,
+    );
 }
 
 fn assert_published_worker_v2_kernels(artifact_dir: &Path, expected_kernels: &[&str]) {
+    let _ = assert_published_worker_v2_kernels_with_version(
+        artifact_dir,
+        expected_kernels,
+        fe2o3_hsaco::CodeObjectVersion::V5,
+    );
+}
+
+fn assert_published_worker_v2_cov6_kernels(
+    artifact_dir: &Path,
+    expected_kernels: &[&str],
+) -> Vec<u8> {
+    assert_published_worker_v2_kernels_with_version(
+        artifact_dir,
+        expected_kernels,
+        fe2o3_hsaco::CodeObjectVersion::V6,
+    )
+}
+
+fn assert_published_worker_v2_kernels_with_version(
+    artifact_dir: &Path,
+    expected_kernels: &[&str],
+    expected_version: fe2o3_hsaco::CodeObjectVersion,
+) -> Vec<u8> {
     let mut artifacts = Vec::new();
     let mut records = Vec::new();
     for entry in std::fs::read_dir(artifact_dir).expect("read Worker V2 artifact directory") {
@@ -440,10 +469,7 @@ fn assert_published_worker_v2_kernels(artifact_dir: &Path, expected_kernels: &[&
     let bytes = std::fs::read(&artifacts[0]).expect("read durable Worker V2 HSACO");
     let inspected = fe2o3_hsaco::inspect(&bytes).expect("inspect durable Worker V2 HSACO");
     assert_eq!(inspected.target().processor(), "gfx942");
-    assert_eq!(
-        inspected.code_object_version(),
-        fe2o3_hsaco::CodeObjectVersion::V5
-    );
+    assert_eq!(inspected.code_object_version(), expected_version);
     let mut actual_names = inspected
         .kernels()
         .iter()
@@ -458,6 +484,40 @@ fn assert_published_worker_v2_kernels(artifact_dir: &Path, expected_kernels: &[&
         assert_eq!(kernel.max_flat_workgroup_size(), 256);
         assert_eq!(kernel.wavefront_size(), 64);
     }
+    bytes
+}
+
+fn export_alpha_zeta_evidence(bytes: &[u8]) {
+    let Some(output) = std::env::var_os(ALPHA_ZETA_OUTPUT_ENV) else {
+        return;
+    };
+    let output = PathBuf::from(output);
+    assert!(
+        output.is_absolute(),
+        "{ALPHA_ZETA_OUTPUT_ENV} must be absolute"
+    );
+    let parent = output.parent().expect("alpha/zeta output parent");
+    assert_eq!(
+        parent
+            .canonicalize()
+            .expect("canonical alpha/zeta output parent"),
+        parent,
+        "{ALPHA_ZETA_OUTPUT_ENV} parent must already be canonical",
+    );
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&output)
+        .unwrap_or_else(|error| panic!("create {}: {error}", output.display()));
+    file.write_all(bytes)
+        .unwrap_or_else(|error| panic!("write {}: {error}", output.display()));
+    file.sync_all()
+        .unwrap_or_else(|error| panic!("sync {}: {error}", output.display()));
+    eprintln!(
+        "exported alpha/zeta COV6 evidence {} sha256 {}",
+        output.display(),
+        sha256_hex(bytes),
+    );
 }
 
 fn preseed(paths: &[PathBuf]) {
@@ -868,11 +928,12 @@ fn worker_v2_real_source_publishes_two_kernels_with_one_shared_helper() {
 
 #[test]
 #[ignore = "requires the configured native LLVM/LLD Worker V2 executable"]
-fn worker_v2_general_v3_build_links_and_validates_backend_witness() {
+fn worker_v2_general_v3_alpha_zeta_build_links_and_validate_backend_witnesses() {
     let _lock = backend_test_lock();
     let workspace = workspace();
     let directory = WorkerV2SourceDirectory::new(&workspace);
-    let project = workspace.join("crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof");
+    let source =
+        Path::new("crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src/main.rs");
     let worker =
         PathBuf::from(std::env::var_os("FE2O3_LLVM_LINK_WORKER").expect("FE2O3_LLVM_LINK_WORKER"));
     let worker_build_identity =
@@ -880,8 +941,8 @@ fn worker_v2_general_v3_build_links_and_validates_backend_witness() {
     let llvm_build_identity = std::env::var("FE2O3_LLVM_BUILD_ID").expect("LLVM build identity");
     let config = WorkerV2TestConfig::native_source_for_crate(
         &directory.0,
-        &project,
-        Path::new("src/main.rs"),
+        &workspace,
+        source,
         ("fe2o3_typed_alias_spoof", 6),
         &worker,
         &worker_build_identity,
@@ -935,7 +996,8 @@ fn worker_v2_general_v3_build_links_and_validates_backend_witness() {
         "linked general V3 witness validation failed:\n{}",
         String::from_utf8_lossy(&run.stderr)
     );
-    assert_published_worker_v2_hsaco(&target.join("fe2o3"), "genuine_general_v3");
+    let bytes = assert_published_worker_v2_cov6_kernels(&target.join("fe2o3"), &["alpha", "zeta"]);
+    export_alpha_zeta_evidence(&bytes);
 }
 
 #[test]
