@@ -31,7 +31,8 @@ pub use authenticated_proof_binding::{
     AUTHENTICATED_PROOF_EXECUTABLE_BINDING_VERSION_V1, AuthenticatedExecutionFreshnessV1,
     AuthenticatedPayloadIdentityV1, AuthenticatedProofExecutableBindingError,
     AuthenticatedProofExecutableBindingV1, AuthenticatedProofExecutablePolicyV1,
-    AuthenticatedProofExecutionIdentityV1, bind_authenticated_proof_executable_v1,
+    AuthenticatedProofExecutionIdentityV1, bind_authenticated_proof_executable_persistent_v1,
+    bind_authenticated_proof_executable_v1,
 };
 pub use control_flow_binding::{
     AUTHENTICATED_CONTROL_FLOW_EXECUTABLE_BINDING_DOMAIN_V1,

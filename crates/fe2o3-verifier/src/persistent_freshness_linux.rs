@@ -936,6 +936,13 @@ mod tests {
         assert!(LinuxLedger::open(&link).is_err());
 
         let directory = TestDirectory::new();
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o770)).unwrap();
+        assert!(matches!(
+            LinuxLedger::open(directory.path()),
+            Err(PersistentFreshnessLedgerErrorV1::InsecureDirectoryPermissions)
+        ));
+
+        let directory = TestDirectory::new();
         let (ledger, _) = LinuxLedger::open(directory.path()).unwrap();
         drop(ledger);
         fs::remove_file(directory.file(STATE_NAME)).unwrap();
@@ -1042,6 +1049,23 @@ mod tests {
                 })
             ));
         }
+
+        let directory = TestDirectory::new();
+        let (ledger, _) = LinuxLedger::open(directory.path()).unwrap();
+        drop(ledger);
+        fs::write(directory.file(INTENT_NAME), vec![0; 64]).unwrap();
+        fs::set_permissions(
+            directory.file(INTENT_NAME),
+            fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+        assert!(matches!(
+            LinuxLedger::open(directory.path()),
+            Err(PersistentFreshnessLedgerErrorV1::Record {
+                file: PersistentFreshnessLedgerFileV1::Intent,
+                ..
+            })
+        ));
 
         let directory = TestDirectory::new();
         let (ledger, _) = LinuxLedger::open(directory.path()).unwrap();

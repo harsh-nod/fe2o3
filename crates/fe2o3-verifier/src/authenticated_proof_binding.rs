@@ -10,7 +10,8 @@ use fe2o3_artifacts::{
 use crate::{
     ArtifactRecordConversionError, AuthenticatedExecutionError,
     AuthenticatedVerusExecutionEvidenceV1, BoundExecutionPayloadV1, Digest,
-    ExecutableMeasurementV1, ExecutableRole, ReviewedInvocationIdentityV1, VerifierPolicy,
+    ExecutableMeasurementV1, ExecutableRole, PersistentFreshnessLedgerErrorV1,
+    PersistentProofFreshnessLedgerV1, ReviewedInvocationIdentityV1, VerifierPolicy,
     canonical_invocation_digest, convert_to_artifact_proof_record,
 };
 
@@ -348,12 +349,49 @@ pub fn bind_authenticated_proof_executable_v1(
     policy: &AuthenticatedProofExecutablePolicyV1,
     freshness: &mut AuthenticatedExecutionFreshnessV1,
 ) -> Result<AuthenticatedProofExecutableBindingV1, AuthenticatedProofExecutableBindingError> {
+    validate_authenticated_binding_input(&evidence, policy)?;
+    freshness.check(evidence.challenge(), evidence.transcript_digest())?;
+
+    let binding = finish_authenticated_proof_executable_binding(evidence, policy)?;
+    freshness.consume(
+        binding.execution_identity.challenge,
+        binding.execution_identity.transcript_digest,
+    );
+    Ok(binding)
+}
+
+/// Authenticates and binds one proof only after durably consuming its exact
+/// challenge, transcript, and sealed-result identities.
+///
+/// All proof, policy, result, and executable checks complete before the ledger
+/// transaction begins. The durable transaction completes before this function
+/// returns the inert binding. An I/O failure after intent publication may
+/// conservatively consume the evidence; recovery will never make it replayable.
+pub fn bind_authenticated_proof_executable_persistent_v1(
+    evidence: AuthenticatedVerusExecutionEvidenceV1,
+    policy: &AuthenticatedProofExecutablePolicyV1,
+    freshness: &mut PersistentProofFreshnessLedgerV1,
+) -> Result<AuthenticatedProofExecutableBindingV1, AuthenticatedProofExecutableBindingError> {
+    validate_authenticated_binding_input(&evidence, policy)?;
+    let binding = finish_authenticated_proof_executable_binding(evidence, policy)?;
+    freshness.consume_authenticated_execution(binding.execution_identity())?;
+    Ok(binding)
+}
+
+fn validate_authenticated_binding_input(
+    evidence: &AuthenticatedVerusExecutionEvidenceV1,
+    policy: &AuthenticatedProofExecutablePolicyV1,
+) -> Result<(), AuthenticatedProofExecutableBindingError> {
     if policy.binding_digest_algorithm != DigestAlgorithm::Sha256 {
         return Err(AuthenticatedProofExecutableBindingError::UnsupportedDigestAlgorithm);
     }
-    validate_authenticated_execution(&evidence, &policy.verifier_policy)?;
-    freshness.check(evidence.challenge(), evidence.transcript_digest())?;
+    validate_authenticated_execution(evidence, &policy.verifier_policy)
+}
 
+fn finish_authenticated_proof_executable_binding(
+    evidence: AuthenticatedVerusExecutionEvidenceV1,
+    policy: &AuthenticatedProofExecutablePolicyV1,
+) -> Result<AuthenticatedProofExecutableBindingV1, AuthenticatedProofExecutableBindingError> {
     let plan = evidence.invocation_plan();
     let reviewed = ReviewedInvocationIdentityV1::new(
         plan.request().correlation_id(),
@@ -378,7 +416,6 @@ pub fn bind_authenticated_proof_executable_v1(
         &execution_identity,
         &executable_binding,
     ));
-    freshness.consume(evidence.challenge(), evidence.transcript_digest());
     Ok(AuthenticatedProofExecutableBindingV1 {
         execution_evidence: evidence,
         execution_identity,
@@ -658,6 +695,7 @@ pub enum AuthenticatedProofExecutableBindingError {
     ArtifactRecord(ArtifactRecordConversionError),
     ProofMatch(ProofMatchError),
     ExecutableBinding(ProofExecutableBindingError),
+    PersistentFreshness(PersistentFreshnessLedgerErrorV1),
 }
 
 impl fmt::Display for AuthenticatedProofExecutableBindingError {
@@ -720,6 +758,9 @@ impl fmt::Display for AuthenticatedProofExecutableBindingError {
             Self::ExecutableBinding(error) => {
                 write!(formatter, "cannot bind proof to executable: {error}")
             }
+            Self::PersistentFreshness(error) => {
+                write!(formatter, "cannot persist proof freshness: {error}")
+            }
         }
     }
 }
@@ -747,5 +788,11 @@ impl From<ProofMatchError> for AuthenticatedProofExecutableBindingError {
 impl From<ProofExecutableBindingError> for AuthenticatedProofExecutableBindingError {
     fn from(value: ProofExecutableBindingError) -> Self {
         Self::ExecutableBinding(value)
+    }
+}
+
+impl From<PersistentFreshnessLedgerErrorV1> for AuthenticatedProofExecutableBindingError {
+    fn from(value: PersistentFreshnessLedgerErrorV1) -> Self {
+        Self::PersistentFreshness(value)
     }
 }

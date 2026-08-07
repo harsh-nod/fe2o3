@@ -22,9 +22,12 @@ use fe2o3_verifier::{
     AuthenticatedProofExecutablePolicyV1, AuthenticatedVerusExecutionEvidenceV1, AxiomPolicy,
     Configuration, ConfigurationEntry, ControlFlowBindingErrorV1, ControlFlowClaimsV1,
     ControlFlowIntegerSwitchCaseClaimV1, ControlFlowIntegerSwitchClaimV1, ControlFlowLoopClaimV1,
-    CorrelationId, Digest, ExecutionLimits, ExecutionTools, MeasuredToolIdentity, ProofProperty,
-    ProofRequestV1, ProofTargetIdentity, VerificationModelIdentity, VerifierPolicy,
-    bind_authenticated_control_flow_executable_v1, bind_authenticated_proof_executable_v1,
+    CorrelationId, Digest, ExecutionLimits, ExecutionTools, MeasuredToolIdentity,
+    PersistentFreshnessIdentityFieldV1, PersistentFreshnessLedgerErrorV1,
+    PersistentFreshnessRecoveryV1, PersistentProofFreshnessLedgerV1, ProofProperty, ProofRequestV1,
+    ProofTargetIdentity, VerificationModelIdentity, VerifierPolicy,
+    bind_authenticated_control_flow_executable_v1,
+    bind_authenticated_proof_executable_persistent_v1, bind_authenticated_proof_executable_v1,
     bind_control_flow_proof_request_v1, derive_control_flow_functional_specification_digest_v1,
     execute_authenticated_verus, reconcile_control_flow_source_v1,
 };
@@ -72,6 +75,36 @@ fn name(value: &str) -> Name {
 
 fn fixture_program() -> &'static str {
     env!("CARGO_BIN_EXE_fe2o3-verifier-test-recorder")
+}
+
+#[cfg(target_os = "linux")]
+struct PersistentLedgerDirectory {
+    path: std::path::PathBuf,
+}
+
+#[cfg(target_os = "linux")]
+impl PersistentLedgerDirectory {
+    fn new() -> Self {
+        use std::os::unix::fs::PermissionsExt;
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
+        let nonce = NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "fe2o3-authenticated-binding-ledger-{}-{nonce}",
+            std::process::id()
+        ));
+        fs::create_dir(&path).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+        Self { path }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for PersistentLedgerDirectory {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
 }
 
 fn sha256(bytes: &[u8]) -> Digest {
@@ -449,6 +482,42 @@ fn exact_measured_transaction_binds_every_proof_and_executable_axis() {
         Err(AuthenticatedProofExecutableBindingError::ChallengeReplay)
     );
     assert_eq!(freshness.consumed_count(), 1);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn persistent_binding_rejects_exact_evidence_replay_after_restart() {
+    let directory = PersistentLedgerDirectory::new();
+    let manifest = manifest();
+    let target = artifact_target(&manifest);
+    let (evidence, verifier_policy) = measured_execution(target);
+    let replay = evidence.clone();
+    let policy = binding_policy(manifest, target, &evidence, verifier_policy);
+    let (mut ledger, recovery) = PersistentProofFreshnessLedgerV1::open(&directory.path).unwrap();
+    assert_eq!(recovery, PersistentFreshnessRecoveryV1::Initialized);
+
+    let binding =
+        bind_authenticated_proof_executable_persistent_v1(evidence, &policy, &mut ledger).unwrap();
+    assert_eq!(ledger.inspect().unwrap().generation(), 1);
+    assert_eq!(ledger.inspect().unwrap().consumed_count(), 1);
+    assert!(!binding.grants_load_authority());
+    assert!(!binding.grants_launch_authority());
+    drop(ledger);
+
+    let (mut reopened, recovery) = PersistentProofFreshnessLedgerV1::open(&directory.path).unwrap();
+    assert_eq!(recovery, PersistentFreshnessRecoveryV1::Clean);
+    assert_eq!(reopened.inspect().unwrap().generation(), 1);
+    assert_eq!(
+        bind_authenticated_proof_executable_persistent_v1(replay, &policy, &mut reopened),
+        Err(
+            AuthenticatedProofExecutableBindingError::PersistentFreshness(
+                PersistentFreshnessLedgerErrorV1::Replay {
+                    field: PersistentFreshnessIdentityFieldV1::Challenge,
+                },
+            ),
+        )
+    );
+    assert_eq!(reopened.inspect().unwrap().consumed_count(), 1);
 }
 
 #[test]
