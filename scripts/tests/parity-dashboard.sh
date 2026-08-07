@@ -176,7 +176,8 @@ expect_failure unknown_strength 'has unknown strength: model-checking' \
 
 mutate_claim_field "${CLAIMS}" "${TEST_ROOT}/stale-commit.tsv" evidence layout 5 \
   0000000000000000000000000000000000000000
-expect_failure stale_commit 'claim layout is newer than its evidence' \
+expect_failure stale_commit \
+  'claim layout evidence commit is not a landed descendant of the status snapshot' \
   "${DASHBOARD_SCRIPT}" validate --status "${STATUS}" --matrix "${MATRIX}" \
   --claims "${TEST_ROOT}/stale-commit.tsv" --repo "${REPO_ROOT}"
 
