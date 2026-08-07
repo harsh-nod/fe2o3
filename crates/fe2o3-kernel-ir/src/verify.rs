@@ -467,6 +467,15 @@ impl<'module> ModuleVerifier<'module> {
         capabilities: &BTreeSet<TargetCapability>,
         location: DiagnosticLocation,
     ) {
+        if capabilities.contains(&TargetCapability::DynamicWorkgroupMemory)
+            && !capabilities.contains(&TargetCapability::WorkgroupMemory)
+        {
+            self.emit(
+                location.clone(),
+                DiagnosticCode::InvalidCapability,
+                "dynamic workgroup memory requires the base workgroup-memory capability",
+            );
+        }
         let wave_widths = capabilities
             .iter()
             .filter_map(|capability| match capability {

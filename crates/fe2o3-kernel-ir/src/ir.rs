@@ -92,6 +92,18 @@ impl Module {
             .flat_map(Function::derived_capabilities)
             .collect()
     }
+
+    /// All capabilities declared by or semantically required by this module.
+    ///
+    /// Consumers that construct target or artifact requirements must use this
+    /// closure rather than trusting frontend-supplied declarations alone.
+    pub fn effective_capabilities(&self) -> BTreeSet<TargetCapability> {
+        self.required_capabilities
+            .iter()
+            .cloned()
+            .chain(self.derived_capabilities())
+            .collect()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -258,6 +270,15 @@ impl Function {
         }
         capabilities
     }
+
+    /// All capabilities declared by or semantically required by this function.
+    pub fn effective_capabilities(&self) -> BTreeSet<TargetCapability> {
+        self.required_capabilities
+            .iter()
+            .cloned()
+            .chain(self.derived_capabilities())
+            .collect()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -401,18 +422,38 @@ impl Operation {
                 }
                 capabilities
             }
-            OperationKind::Barrier(barrier) => match barrier.execution_scope {
-                SynchronizationScope::Subgroup => BTreeSet::from([TargetCapability::Subgroups]),
-                SynchronizationScope::Workgroup => {
-                    BTreeSet::from([TargetCapability::WorkgroupBarrier])
-                }
-                _ => BTreeSet::new(),
-            },
-            OperationKind::Fence(fence) if fence.memory_scope == SynchronizationScope::Subgroup => {
-                BTreeSet::from([TargetCapability::Subgroups])
+            OperationKind::Barrier(barrier) => {
+                let mut capabilities = match barrier.execution_scope {
+                    SynchronizationScope::Subgroup => BTreeSet::from([TargetCapability::Subgroups]),
+                    SynchronizationScope::Workgroup => {
+                        BTreeSet::from([TargetCapability::WorkgroupBarrier])
+                    }
+                    _ => BTreeSet::new(),
+                };
+                add_synchronized_memory_capabilities(
+                    &mut capabilities,
+                    &barrier.semantics.address_spaces,
+                );
+                capabilities
             }
-            OperationKind::WorkgroupBarrier(_) => {
-                BTreeSet::from([TargetCapability::WorkgroupBarrier])
+            OperationKind::Fence(fence) => {
+                let mut capabilities = BTreeSet::new();
+                if fence.memory_scope == SynchronizationScope::Subgroup {
+                    capabilities.insert(TargetCapability::Subgroups);
+                }
+                add_synchronized_memory_capabilities(
+                    &mut capabilities,
+                    &fence.semantics.address_spaces,
+                );
+                capabilities
+            }
+            OperationKind::WorkgroupBarrier(barrier) => {
+                let mut capabilities = BTreeSet::from([TargetCapability::WorkgroupBarrier]);
+                add_synchronized_memory_capabilities(
+                    &mut capabilities,
+                    &barrier.semantics.address_spaces,
+                );
+                capabilities
             }
             OperationKind::WorkgroupMemory(memory) => {
                 let mut capabilities = BTreeSet::from([TargetCapability::WorkgroupMemory]);
@@ -424,6 +465,15 @@ impl Operation {
             OperationKind::Wave(wave) => wave.required_capabilities(),
             _ => BTreeSet::new(),
         }
+    }
+}
+
+fn add_synchronized_memory_capabilities(
+    capabilities: &mut BTreeSet<TargetCapability>,
+    address_spaces: &BTreeSet<AddressSpace>,
+) {
+    if address_spaces.contains(&AddressSpace::Workgroup) {
+        capabilities.insert(TargetCapability::WorkgroupMemory);
     }
 }
 

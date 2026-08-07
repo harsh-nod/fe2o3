@@ -159,6 +159,86 @@ fn verifies_scoped_synchronization_lds_and_wave_requirements() {
 }
 
 #[test]
+fn synchronization_capabilities_include_the_memory_being_ordered() {
+    let workgroup_barrier = Operation::new(
+        vec![],
+        OperationKind::WorkgroupBarrier(WorkgroupBarrier {
+            memory_scope: SynchronizationScope::Workgroup,
+            semantics: BarrierSemantics::new(
+                MemoryOrdering::AcquireRelease,
+                [AddressSpace::Workgroup],
+            ),
+            convergence: Convergence::uniform(SynchronizationScope::Workgroup),
+        }),
+    );
+    assert_eq!(
+        workgroup_barrier.required_capabilities(),
+        BTreeSet::from([
+            TargetCapability::WorkgroupMemory,
+            TargetCapability::WorkgroupBarrier,
+        ])
+    );
+
+    let global_only_barrier = Operation::new(
+        vec![],
+        OperationKind::WorkgroupBarrier(WorkgroupBarrier {
+            memory_scope: SynchronizationScope::Workgroup,
+            semantics: BarrierSemantics::new(
+                MemoryOrdering::AcquireRelease,
+                [AddressSpace::Global],
+            ),
+            convergence: Convergence::uniform(SynchronizationScope::Workgroup),
+        }),
+    );
+    assert_eq!(
+        global_only_barrier.required_capabilities(),
+        BTreeSet::from([TargetCapability::WorkgroupBarrier])
+    );
+
+    let workgroup_fence = Operation::new(
+        vec![],
+        OperationKind::Fence(Fence {
+            memory_scope: SynchronizationScope::Workgroup,
+            semantics: BarrierSemantics::new(MemoryOrdering::Release, [AddressSpace::Workgroup]),
+        }),
+    );
+    assert_eq!(
+        workgroup_fence.required_capabilities(),
+        BTreeSet::from([TargetCapability::WorkgroupMemory])
+    );
+
+    let module = module(vec![], vec![workgroup_barrier]);
+    assert_eq!(
+        module.effective_capabilities(),
+        module.derived_capabilities()
+    );
+    let errors = verify_module_with_capabilities(
+        &module,
+        &BTreeSet::from([TargetCapability::WorkgroupBarrier]),
+    )
+    .unwrap_err();
+    assert!(errors.contains(DiagnosticCode::UnsupportedCapability));
+}
+
+#[test]
+fn dynamic_lds_capability_cannot_exist_without_base_lds_support() {
+    let mut module = Module::new("g4::malformed-dynamic-capability");
+    module
+        .required_capabilities
+        .insert(TargetCapability::DynamicWorkgroupMemory);
+    let errors = verify_module(&module).unwrap_err();
+    assert_eq!(
+        errors
+            .diagnostics()
+            .iter()
+            .filter(|diagnostic| diagnostic.code == DiagnosticCode::InvalidCapability)
+            .map(|diagnostic| diagnostic.message.as_str())
+            .collect::<Vec<_>>(),
+        vec!["dynamic workgroup memory requires the base workgroup-memory capability"]
+    );
+}
+
+#[test]
 fn rejects_illegal_atomic_type_order_scope_and_target_combinations() {
     let mut invalid_compare_exchange = atomic(
         AtomicKind::CompareExchange,
@@ -504,4 +584,26 @@ fn v2_decoder_rejects_malformed_wave_extent_and_convergence_tags() {
             tag: 0xff,
         })
     );
+}
+
+#[test]
+fn v2_synchronization_wire_rejects_every_truncation_and_never_panics_on_mutation() {
+    let encoded = encode_module_v2(&g4_wire_module()).unwrap();
+    for length in 0..encoded.len() {
+        assert!(
+            decode_module_v2(&encoded[..length]).is_err(),
+            "accepted truncation at {length}"
+        );
+    }
+
+    for index in 0..encoded.len() {
+        for replacement in [0, 0x7f, 0xff] {
+            let mut mutated = encoded.clone();
+            mutated[index] = replacement;
+            assert!(
+                std::panic::catch_unwind(|| decode_module_v2(&mutated)).is_ok(),
+                "decoder panicked for byte {index} = {replacement:#04x}"
+            );
+        }
+    }
 }
