@@ -4,8 +4,10 @@
 use core::ffi::{c_char, c_int, c_uint, c_void};
 
 mod cooperative_peer;
+mod memory_topology;
 
 pub use cooperative_peer::*;
+pub use memory_topology::*;
 
 pub type hipError_t = c_int;
 pub type hipStream_t = *mut c_void;
