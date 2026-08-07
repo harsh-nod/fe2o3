@@ -3,7 +3,7 @@ use fe2o3_artifacts::{
     AbiField, AbiKind, AbiLayout, Access, AddressSpace, MAX_ABI_BYTES, PointerWidth, ScalarType,
     ValidationError,
 };
-use std::fmt;
+use std::{fmt, sync::Arc};
 
 /// Compiler-generated expectation for one complete logical kernel ABI.
 ///
@@ -100,10 +100,14 @@ enum GeneratedArgumentValueV1 {
 #[doc(hidden)]
 pub struct GeneratedArgumentInputV1 {
     kernel_id: KernelId,
+    source_plan: Arc<GeneratedArgumentPackingPlanSealV1>,
     source_field: AbiField,
     argument_index: usize,
     value: GeneratedArgumentValueV1,
 }
+
+#[derive(Debug, Eq, PartialEq)]
+struct GeneratedArgumentPackingPlanSealV1;
 
 /// Inert, deterministically initialized kernel-argument bytes.
 ///
@@ -167,6 +171,7 @@ impl fmt::Debug for GeneratedPackedArgumentsV1 {
 #[doc(hidden)]
 pub struct GeneratedArgumentPackingPlanV1 {
     kernel_id: KernelId,
+    seal: Arc<GeneratedArgumentPackingPlanSealV1>,
     kernarg_size: u64,
     kernarg_alignment: u32,
     pointer_width: PointerWidth,
@@ -394,6 +399,7 @@ impl GeneratedArgumentPackingPlanV1 {
         )?;
         let input = GeneratedArgumentInputV1 {
             kernel_id: self.kernel_id,
+            source_plan: Arc::clone(&self.seal),
             source_field: source_field.clone(),
             argument_index,
             value,
@@ -568,6 +574,9 @@ pub enum GeneratedArgumentPackError {
     SourceKernelMismatch {
         argument_index: usize,
     },
+    SourcePlanMismatch {
+        argument_index: usize,
+    },
     SourceFieldMismatch {
         argument_index: usize,
     },
@@ -654,6 +663,10 @@ impl fmt::Display for GeneratedArgumentPackError {
             Self::SourceKernelMismatch { argument_index } => write!(
                 formatter,
                 "argument {argument_index} was bound by a different kernel plan"
+            ),
+            Self::SourcePlanMismatch { argument_index } => write!(
+                formatter,
+                "argument {argument_index} was bound by a different validation of the kernel layout"
             ),
             Self::SourceFieldMismatch { argument_index } => write!(
                 formatter,
@@ -909,6 +922,9 @@ fn validate_input(
     )?;
     if input.kernel_id != plan.kernel_id {
         return Err(GeneratedArgumentPackError::SourceKernelMismatch { argument_index });
+    }
+    if !Arc::ptr_eq(&input.source_plan, &plan.seal) {
+        return Err(GeneratedArgumentPackError::SourcePlanMismatch { argument_index });
     }
     if input.source_field != *field {
         return Err(GeneratedArgumentPackError::SourceFieldMismatch { argument_index });
@@ -1254,6 +1270,7 @@ pub(crate) fn validate_argument_packing(
 
     Ok(GeneratedArgumentPackingPlanV1 {
         kernel_id,
+        seal: Arc::new(GeneratedArgumentPackingPlanSealV1),
         kernarg_size: manifest.size(),
         kernarg_alignment: manifest.alignment(),
         pointer_width: manifest.pointer_width(),
@@ -1474,6 +1491,10 @@ mod tests {
     }
 
     fn slice(name: &str, offset: u64, seed: u8) -> AbiField {
+        slice_with_access(name, offset, Access::ReadOnly, seed)
+    }
+
+    fn slice_with_access(name: &str, offset: u64, access: Access, seed: u8) -> AbiField {
         reference(
             name,
             offset,
@@ -1481,7 +1502,7 @@ mod tests {
                 element_size: 4,
                 element_alignment: 4,
             },
-            Access::ReadOnly,
+            access,
             AddressSpace::Global,
             seed,
         )
@@ -1822,6 +1843,176 @@ mod tests {
     }
 
     #[test]
+    fn two_v1_kernel_layouts_pack_shared_and_exclusive_slices_independently() {
+        let map_fields = vec![
+            scalar("factor", 0, 4, 1),
+            slice("input", 8, 2),
+            slice_with_access("output", 24, Access::WriteOnly, 3),
+        ];
+        let map_manifest = layout(map_fields.clone(), 40, 8);
+        let map_plan = validate(&map_manifest, &generated(map_fields, 40, 8)).unwrap();
+
+        let reduce_fields = vec![
+            typed_scalar("seed", 0, 8, ScalarType::U64, 4),
+            slice_with_access("accumulator", 8, Access::ReadWrite, 5),
+            scalar("count", 24, 4, 6),
+        ];
+        let reduce_manifest = layout(reduce_fields.clone(), 32, 8);
+        let reduce_plan = validate_argument_packing(
+            KernelId::from_bytes([10; 32]),
+            &reduce_manifest,
+            &generated(reduce_fields, 32, 8),
+        )
+        .unwrap();
+
+        let map_input = unsafe {
+            map_plan.slice(
+                1,
+                0x1111_2222_3333_4444_usize as *const (),
+                5,
+                PointerWidth::Bits64,
+                AddressSpace::Global,
+                Access::ReadOnly,
+            )
+        }
+        .unwrap();
+        let map_output = unsafe {
+            map_plan.slice(
+                2,
+                0x5555_6666_7777_8888_usize as *const (),
+                7,
+                PointerWidth::Bits64,
+                AddressSpace::Global,
+                Access::WriteOnly,
+            )
+        }
+        .unwrap();
+        let map = map_plan
+            .pack([
+                map_output,
+                map_plan.scalar_u32(0, 0xaabb_ccdd).unwrap(),
+                map_input,
+            ])
+            .unwrap();
+        assert_eq!(map.kernel_id(), KERNEL_ID);
+        assert_eq!(&map.bytes()[0..4], &0xaabb_ccdd_u32.to_le_bytes());
+        assert_eq!(&map.bytes()[4..8], &[0; 4]);
+        assert_eq!(
+            &map.bytes()[8..16],
+            &0x1111_2222_3333_4444_u64.to_le_bytes()
+        );
+        assert_eq!(&map.bytes()[16..24], &5_u64.to_le_bytes());
+        assert_eq!(
+            &map.bytes()[24..32],
+            &0x5555_6666_7777_8888_u64.to_le_bytes()
+        );
+        assert_eq!(&map.bytes()[32..40], &7_u64.to_le_bytes());
+
+        let accumulator = unsafe {
+            reduce_plan.slice(
+                1,
+                0x9999_aaaa_bbbb_cccc_usize as *const (),
+                3,
+                PointerWidth::Bits64,
+                AddressSpace::Global,
+                Access::ReadWrite,
+            )
+        }
+        .unwrap();
+        let reduce = reduce_plan
+            .pack([
+                reduce_plan.scalar_u32(2, 3).unwrap(),
+                accumulator,
+                reduce_plan.scalar_u64(0, 0x0102_0304_0506_0708).unwrap(),
+            ])
+            .unwrap();
+        assert_eq!(reduce.kernel_id(), KernelId::from_bytes([10; 32]));
+        assert_eq!(
+            &reduce.bytes()[0..8],
+            &0x0102_0304_0506_0708_u64.to_le_bytes()
+        );
+        assert_eq!(
+            &reduce.bytes()[8..16],
+            &0x9999_aaaa_bbbb_cccc_u64.to_le_bytes()
+        );
+        assert_eq!(&reduce.bytes()[16..24], &3_u64.to_le_bytes());
+        assert_eq!(&reduce.bytes()[24..28], &3_u32.to_le_bytes());
+        assert_eq!(&reduce.bytes()[28..32], &[0; 4]);
+    }
+
+    #[test]
+    fn values_are_sealed_to_one_exact_validated_plan() {
+        let fields = vec![scalar("factor", 0, 4, 1), slice("input", 8, 2)];
+        let manifest = layout(fields.clone(), 24, 8);
+        let first = validate(&manifest, &generated(fields.clone(), 24, 8)).unwrap();
+        let independently_validated =
+            validate(&manifest, &generated(fields.clone(), 24, 8)).unwrap();
+        let first_value = first.scalar_u32(0, 7).unwrap();
+
+        assert_eq!(
+            independently_validated
+                .pack([first_value.clone()])
+                .unwrap_err(),
+            GeneratedArgumentPackError::SourcePlanMismatch { argument_index: 0 }
+        );
+
+        let different_fields = vec![
+            scalar("factor", 0, 4, 1),
+            slice_with_access("output", 8, Access::WriteOnly, 3),
+        ];
+        let different_manifest = layout(different_fields.clone(), 24, 8);
+        let different_layout =
+            validate(&different_manifest, &generated(different_fields, 24, 8)).unwrap();
+        assert_eq!(
+            different_layout.pack([first_value.clone()]).unwrap_err(),
+            GeneratedArgumentPackError::SourcePlanMismatch { argument_index: 0 }
+        );
+
+        let cloned = first.clone();
+        let input = unsafe {
+            cloned.slice(
+                1,
+                core::ptr::dangling::<()>(),
+                1,
+                PointerWidth::Bits64,
+                AddressSpace::Global,
+                Access::ReadOnly,
+            )
+        }
+        .unwrap();
+        assert!(cloned.pack([first_value.clone(), input]).is_ok());
+
+        let other_kernel = validate_argument_packing(
+            KernelId::from_bytes([10; 32]),
+            &manifest,
+            &generated(fields, 24, 8),
+        )
+        .unwrap();
+        assert_eq!(
+            other_kernel.pack([first_value]).unwrap_err(),
+            GeneratedArgumentPackError::SourceKernelMismatch { argument_index: 0 }
+        );
+    }
+
+    #[test]
+    fn exact_maximum_kernarg_size_is_packable_and_zero_initialized() {
+        let fields = vec![scalar("value", 0, 4, 1)];
+        let manifest = layout(fields.clone(), fe2o3_artifacts::MAX_ABI_BYTES, 8);
+        let plan = validate(
+            &manifest,
+            &generated(fields, fe2o3_artifacts::MAX_ABI_BYTES, 8),
+        )
+        .unwrap();
+        let packed = plan
+            .pack([plan.scalar_u32(0, 0x1122_3344).unwrap()])
+            .unwrap();
+
+        assert_eq!(packed.len(), fe2o3_artifacts::MAX_ABI_BYTES as usize);
+        assert_eq!(&packed.bytes()[..4], &0x1122_3344_u32.to_le_bytes());
+        assert!(packed.bytes()[4..].iter().all(|byte| *byte == 0));
+    }
+
+    #[test]
     fn missing_duplicate_and_out_of_range_inputs_are_rejected() {
         let fields = vec![scalar("first", 0, 4, 1), scalar("second", 4, 4, 2)];
         let manifest = layout(fields.clone(), 8, 4);
@@ -2059,6 +2250,7 @@ mod tests {
 
         let oversized = super::GeneratedArgumentPackingPlanV1 {
             kernel_id: KERNEL_ID,
+            seal: std::sync::Arc::new(super::GeneratedArgumentPackingPlanSealV1),
             kernarg_size: fe2o3_artifacts::MAX_ABI_BYTES + 1,
             kernarg_alignment: 1,
             pointer_width: PointerWidth::Bits64,
