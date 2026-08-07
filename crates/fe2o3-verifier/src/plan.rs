@@ -106,8 +106,54 @@ impl VerifierPolicy {
         &self.expected_tools
     }
 
+    pub const fn expected_configuration(&self) -> &Configuration {
+        &self.expected_configuration
+    }
+
+    pub const fn expected_model(&self) -> &VerificationModelIdentity {
+        &self.expected_model
+    }
+
     pub const fn axiom_policy(&self) -> &AxiomPolicy {
         &self.axiom_policy
+    }
+
+    pub const fn max_timeout_seconds(&self) -> u32 {
+        self.max_timeout_seconds
+    }
+
+    /// Canonical policy bytes committed by authenticated verifier evidence.
+    pub fn to_canonical_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(1024);
+        put_bytes(&mut bytes, b"FE2O3VPL");
+        put_u16(&mut bytes, 1);
+        for tool in [
+            self.expected_tools.verifier(),
+            self.expected_tools.solver(),
+            self.expected_tools.evidence_recorder(),
+        ] {
+            put_text(&mut bytes, tool.name().as_str());
+            put_text(&mut bytes, tool.version().as_str());
+            put_bytes(&mut bytes, tool.executable_digest().as_bytes());
+            put_bytes(&mut bytes, tool.configuration_digest().as_bytes());
+        }
+        put_u16(
+            &mut bytes,
+            self.expected_configuration.entries().len() as u16,
+        );
+        for entry in self.expected_configuration.entries() {
+            put_text(&mut bytes, entry.key().as_str());
+            put_text(&mut bytes, entry.value().as_str());
+        }
+        put_text(&mut bytes, self.expected_model.version().as_str());
+        put_bytes(&mut bytes, self.expected_model.axioms_digest().as_bytes());
+        put_u16(&mut bytes, self.axiom_policy.allowed().len() as u16);
+        for item in self.axiom_policy.allowed() {
+            put_text(&mut bytes, item.name().as_str());
+            put_bytes(&mut bytes, item.contract_digest().as_bytes());
+        }
+        put_u32(&mut bytes, self.max_timeout_seconds);
+        bytes
     }
 }
 

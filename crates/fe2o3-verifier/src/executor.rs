@@ -137,7 +137,13 @@ pub fn execute_recorder(
             ProcessOutput::default(),
         )
     })?;
-    supervise_child(child, plan, limits)
+    let output = supervise_child(child, plan.timeout_seconds(), limits)?;
+    let result_bytes = read_bounded_result(plan.result_file(), &output)?;
+    let result = parse_recorder_result(&result_bytes, plan, RecorderTermination::Exited(0))
+        .map_err(|error| {
+            ExecutionError::new(ExecutionErrorKind::InvalidEnvelope(error), output.clone())
+        })?;
+    Ok(ExecutionSuccess { result, output })
 }
 
 fn validate_execution_paths(plan: &InvocationPlan) -> Result<(), ExecutionError> {
@@ -192,11 +198,11 @@ fn materialize_request(plan: &InvocationPlan) -> Result<RequestFileGuard<'_>, Ex
     Ok(guard)
 }
 
-fn supervise_child(
+pub(crate) fn supervise_child(
     child: Child,
-    plan: &InvocationPlan,
+    timeout_seconds: u32,
     limits: ExecutionLimits,
-) -> Result<ExecutionSuccess, ExecutionError> {
+) -> Result<ProcessOutput, ExecutionError> {
     let mut child = ChildGuard(Some(child));
     let stdout = child
         .as_mut()
@@ -211,7 +217,7 @@ fn supervise_child(
     let stdout = CaptureTask::spawn(stdout, limits.max_stdout_bytes);
     let stderr = CaptureTask::spawn(stderr, limits.max_stderr_bytes);
     let deadline = Instant::now()
-        .checked_add(Duration::from_secs(u64::from(plan.timeout_seconds())))
+        .checked_add(Duration::from_secs(u64::from(timeout_seconds)))
         .ok_or_else(|| ExecutionError::without_output(ExecutionErrorKind::DeadlineOverflow))?;
 
     let mut forced = None;
@@ -307,11 +313,7 @@ fn supervise_child(
         return Err(ExecutionError::new(kind, output));
     }
 
-    let result_bytes = read_bounded_result(plan.result_file(), &output)?;
-    let result = parse_recorder_result(&result_bytes, plan, termination).map_err(|error| {
-        ExecutionError::new(ExecutionErrorKind::InvalidEnvelope(error), output.clone())
-    })?;
-    Ok(ExecutionSuccess { result, output })
+    Ok(output)
 }
 
 fn read_bounded_result(path: &str, output: &ProcessOutput) -> Result<Vec<u8>, ExecutionError> {
@@ -507,15 +509,19 @@ pub struct ExecutionError {
 }
 
 impl ExecutionError {
-    fn new(kind: ExecutionErrorKind, output: ProcessOutput) -> Self {
+    pub(crate) fn from_spawn(kind: io::ErrorKind) -> Self {
+        Self::without_output(ExecutionErrorKind::SpawnFailed(kind))
+    }
+
+    pub(crate) fn new(kind: ExecutionErrorKind, output: ProcessOutput) -> Self {
         Self { kind, output }
     }
 
-    fn without_output(kind: ExecutionErrorKind) -> Self {
+    pub(crate) fn without_output(kind: ExecutionErrorKind) -> Self {
         Self::new(kind, ProcessOutput::default())
     }
 
-    fn io(stage: ExecutionStage, error: io::Error, output: ProcessOutput) -> Self {
+    pub(crate) fn io(stage: ExecutionStage, error: io::Error, output: ProcessOutput) -> Self {
         Self::new(
             ExecutionErrorKind::Io {
                 stage,

@@ -4,10 +4,16 @@ use std::path::Path;
 use std::process;
 use std::time::Duration;
 
+use fe2o3_artifacts::DigestAlgorithm;
+
 const CORRELATION: &str = "32323232323232323232323232323232";
 
 fn main() {
     let arguments: Vec<_> = std::env::args().collect();
+    if arguments.len() == 25 {
+        authenticated_execution(&arguments);
+        return;
+    }
     if arguments.get(1).map(String::as_str) == Some("--pipe-holder") {
         std::thread::sleep(Duration::from_millis(1200));
         return;
@@ -93,6 +99,90 @@ fn main() {
         "malformed" => write_result(result, b"proved\n"),
         _ => process::exit(92),
     }
+}
+
+fn authenticated_execution(arguments: &[String]) {
+    for (index, expected) in [
+        (1, "--request"),
+        (3, "--result"),
+        (5, "--verifier"),
+        (7, "--solver"),
+        (9, "--timeout-seconds"),
+        (11, "--auth-challenge"),
+        (13, "--auth-invocation"),
+        (15, "--auth-policy"),
+        (17, "--auth-request"),
+        (19, "--auth-verus"),
+        (21, "--auth-solver"),
+        (23, "--auth-recorder"),
+    ] {
+        if arguments[index] != expected {
+            process::exit(91);
+        }
+    }
+    if ![&arguments[2], &arguments[4], &arguments[6], &arguments[8]]
+        .iter()
+        .all(|path| path.starts_with("/proc/self/fd/"))
+        || arguments[10].parse::<u32>().is_err()
+    {
+        process::exit(90);
+    }
+    for value in [
+        &arguments[12],
+        &arguments[14],
+        &arguments[16],
+        &arguments[18],
+        &arguments[20],
+        &arguments[22],
+        &arguments[24],
+    ] {
+        if value.len() != 64
+            || !value.bytes().all(|byte| byte.is_ascii_hexdigit())
+            || value.bytes().any(|byte| byte.is_ascii_uppercase())
+        {
+            process::exit(89);
+        }
+    }
+
+    let request = fs::read(&arguments[2]).unwrap();
+    if hex_digest(&request) != arguments[18] {
+        process::exit(88);
+    }
+    let executable = fs::read("/proc/self/exe").unwrap();
+    let executable_digest = hex_digest(&executable);
+    if [&arguments[20], &arguments[22], &arguments[24]]
+        .iter()
+        .any(|digest| **digest != executable_digest)
+    {
+        process::exit(87);
+    }
+
+    io::stdout().write_all(b"authenticated stdout").unwrap();
+    io::stderr().write_all(b"authenticated stderr").unwrap();
+    let payload = envelope(CORRELATION, "proved");
+    let result = format!(
+        "FE2O3-VERUS-AUTH-RESULT-V1\nchallenge={}\ninvocation={}\npolicy={}\nrequest={}\nverus={}\nsolver={}\nrecorder={}\nresult-bytes={}\n{}",
+        arguments[12],
+        arguments[14],
+        arguments[16],
+        arguments[18],
+        arguments[20],
+        arguments[22],
+        arguments[24],
+        payload.len(),
+        String::from_utf8(payload).unwrap(),
+    );
+    write_result(Path::new(&arguments[4]), result.as_bytes());
+}
+
+fn hex_digest(bytes: &[u8]) -> String {
+    let digest = DigestAlgorithm::Sha256.calculate(bytes);
+    let mut output = String::with_capacity(64);
+    for byte in digest.bytes().as_bytes() {
+        use std::fmt::Write as _;
+        write!(output, "{byte:02x}").unwrap();
+    }
+    output
 }
 
 #[allow(clippy::zombie_processes)]
