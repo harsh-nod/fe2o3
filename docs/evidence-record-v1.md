@@ -52,6 +52,95 @@ status. Such a record is diagnostic evidence; `verify-record` rejects it as a
 passing result. Missing declared artifacts and source-tree changes fail record
 creation.
 
+## Running a Bounded Snapshot
+
+`scripts/run-parity-snapshot.sh` builds independent result records on top of
+`record` and `verify-record`. It has a static V1 plan rather than accepting
+arbitrary commands:
+
+| Shard | Bounded coverage |
+|---|---|
+| Q1 | Workspace tests plus parity matrix, dashboard, and evidence validators |
+| Q2 | `rustc-codegen-fe2o3` tests |
+| Q3 | MIR, Kernel IR, kernel analysis, and AMDGPU lowering tests |
+| Q4 | Artifact, transaction, HSACO inspection, and finalization tests |
+| Q5 | Core, HIP, device, completion, verifier, host, and HSA runtime tests |
+| Q6 | Cargo integration, differential unit tests, and conformance harness |
+| Q7 | Positive and negative Verus fixtures |
+| GFX942-COMPILE | Optional gfx942 ROCm compilation and two-kernel publication |
+| GFX942-HARDWARE | Optional gfx942 identity and generated vecadd execution |
+
+List the plan without inspecting a checkout:
+
+```bash
+scripts/run-parity-snapshot.sh list
+```
+
+Every other mode requires an existing archive outside a clean detached
+checkout. With no `--shard`, the seven Q shards are selected in order. Q7 also
+requires an exact Verus executable. Optional gfx942 lanes are never selected
+implicitly.
+
+```bash
+mkdir -p /evidence/snapshot-001
+git switch --detach <commit>
+
+scripts/run-parity-snapshot.sh dry-run \
+  --repo "$PWD" \
+  --archive-root /evidence/snapshot-001 \
+  --verus /absolute/path/to/verus
+
+scripts/run-parity-snapshot.sh run \
+  --repo "$PWD" \
+  --archive-root /evidence/snapshot-001 \
+  --verus /absolute/path/to/verus
+```
+
+`dry-run` emits a deterministic canonical plan containing the commit, archive
+paths, hex-encoded environment and outer command argv, and exact tool paths. It
+does not create records or work directories. Machine-specific values such as
+`PATH`, `HOME`, `CARGO_HOME`, and `RUSTUP_HOME` can be supplied explicitly;
+every `PATH` entry must be absolute.
+
+`run` preflights every selected record, log, and work path before starting the
+first shard. Each shard gets a fresh `work/<shard>/target`, `tmp`, `output`, and
+CI log directory. The command runs with the recorder's empty-environment
+policy, a per-shard timeout, and the exact environment shown by `dry-run`.
+Commands within a shard stop at the first failure. A failed record is retained,
+the runner returns that status, and no later shard starts. Each successful
+record is immediately passed to `verify-record` before the next shard runs.
+
+Use repeated `--shard` options to run or verify a subset:
+
+```bash
+scripts/run-parity-snapshot.sh run \
+  --repo "$PWD" \
+  --archive-root /evidence/snapshot-001 \
+  --shard Q3 --shard Q4
+
+scripts/run-parity-snapshot.sh verify-only \
+  --repo "$PWD" \
+  --archive-root /evidence/snapshot-001 \
+  --shard Q3 --shard Q4
+```
+
+The gfx942 hardware lane requires the exact vecadd HSACO to be a regular,
+non-symlink file inside the archive. Its size and digest are bound as a record
+artifact, while its absolute path is recorded in the command environment:
+
+```bash
+scripts/run-parity-snapshot.sh run \
+  --repo "$PWD" \
+  --archive-root /evidence/snapshot-001 \
+  --shard Q5 \
+  --gfx942-hardware \
+  --vecadd-hsaco artifacts/gfx942-vecadd.hsaco
+```
+
+Snapshot orchestration creates result evidence only. It does not update a row
+link, restamp a declaration, promote a parity status, regenerate the matrix or
+dashboard, or turn a compile observation into a hardware-execution claim.
+
 ## Canonical Schema
 
 A record is bounded to 1 MiB and uses canonical TSV in this order:
