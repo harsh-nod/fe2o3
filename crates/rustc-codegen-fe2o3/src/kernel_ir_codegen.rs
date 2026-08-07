@@ -13,9 +13,9 @@ use fe2o3_compiler_ffi::{
 };
 use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, BasicBlock, BinaryOp, BlockId, ComparePredicate, Constant,
-    FunctionBody, FunctionRole, IntrinsicOperation, KernelId, MemoryAccess, Module, Operation,
-    OperationKind, TargetCapability, Terminator, Type, ValueDef, ValueId, WorkgroupSize,
-    verify_module,
+    F32MathFunction, F32MathImplementation, FloatOperation, FunctionBody, FunctionRole,
+    IntrinsicOperation, KernelId, MemoryAccess, Module, Operation, OperationKind, TargetCapability,
+    Terminator, Type, ValueDef, ValueId, WorkgroupSize, verify_module,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -113,6 +113,7 @@ pub(crate) enum CompilerModuleConstructionError {
     DescriptorSourceAlreadyBound,
     DescriptorKernelEntryClosureMismatch,
     DescriptorSymbolClosureMismatch,
+    UnsupportedFloatTarget(String),
     Lowering(dialect_amdgcn::LoweringErrors),
 }
 
@@ -130,6 +131,10 @@ impl fmt::Display for CompilerModuleConstructionError {
             Self::DescriptorSymbolClosureMismatch => {
                 formatter.write_str("compiler descriptor symbols do not match the module closure")
             }
+            Self::UnsupportedFloatTarget(target) => write!(
+                formatter,
+                "compiler-module float contracts require exact gfx942 lowering; found target `{target}`"
+            ),
             Self::Lowering(error) => write!(formatter, "{error}"),
         }
     }
@@ -142,12 +147,37 @@ impl std::error::Error for CompilerModuleConstructionError {}
 /// Structural bounds are checked before kernel-IR verification. The dialect lowerer then
 /// preflights every kernel, helper, declaration, call, attribute, and metadata record before its
 /// private capacity-limited emission pass. An error returns no partially constructed module.
+#[cfg(test)]
 pub(crate) fn construct_inert_compiler_module_text_v1(
     module: &Module,
 ) -> Result<InertCompilerModuleTextV1, CompilerModuleConstructionError> {
+    construct_inert_compiler_module_text_for_target_v1(module, None)
+}
+
+pub(crate) fn construct_inert_compiler_module_text_for_target_v1(
+    module: &Module,
+    target_processor: Option<&str>,
+) -> Result<InertCompilerModuleTextV1, CompilerModuleConstructionError> {
     enforce_compiler_module_bounds(module)?;
-    let llvm_ir = dialect_amdgcn::lower_compiler_module_to_llvm_ir(module)
-        .map_err(CompilerModuleConstructionError::Lowering)?;
+    let has_float_contracts = module
+        .functions
+        .iter()
+        .any(|function| FloatOperation::from_intrinsic_id(&function.id).is_some());
+    let llvm_ir = match (has_float_contracts, target_processor) {
+        (true, Some("gfx942")) => dialect_amdgcn::lower_compiler_module_to_gfx942_llvm_ir(module),
+        (true, Some(target)) => {
+            return Err(CompilerModuleConstructionError::UnsupportedFloatTarget(
+                target.to_owned(),
+            ));
+        }
+        (true, None) => {
+            return Err(CompilerModuleConstructionError::UnsupportedFloatTarget(
+                "<unbound>".to_owned(),
+            ));
+        }
+        (false, _) => dialect_amdgcn::lower_compiler_module_to_llvm_ir(module),
+    }
+    .map_err(CompilerModuleConstructionError::Lowering)?;
 
     let mut kernel_entries = module
         .kernels
@@ -180,9 +210,13 @@ pub(crate) fn construct_inert_compiler_module_text_v1(
     let mut external_declarations = module
         .functions
         .iter()
-        .filter(|function| function.role == FunctionRole::ExternalImport)
+        .filter(|function| {
+            function.role == FunctionRole::ExternalImport
+                && FloatOperation::from_intrinsic_id(&function.id).is_none()
+        })
         .map(|function| function.id.as_str().to_string())
         .collect::<Vec<_>>();
+    external_declarations.extend(ocml_link_imports(module).map(str::to_owned));
     kernel_entries.sort();
     device_definitions.sort();
     internal_helpers.sort();
@@ -202,6 +236,36 @@ pub(crate) fn construct_inert_compiler_module_text_v1(
             UnboundCompilerModuleTargetPropertyV1::TargetProcessor,
             UnboundCompilerModuleTargetPropertyV1::CodeObjectVersion,
         ],
+    })
+}
+
+fn ocml_link_imports(module: &Module) -> impl Iterator<Item = &'static str> + '_ {
+    module.functions.iter().filter_map(|function| {
+        let FloatOperation::F32Math {
+            function,
+            implementation: F32MathImplementation::OcmlAbiV1,
+            ..
+        } = FloatOperation::from_intrinsic_id(&function.id)?
+        else {
+            return None;
+        };
+        Some(match function {
+            F32MathFunction::Sin => "__ocml_sin_f32",
+            F32MathFunction::Cos => "__ocml_cos_f32",
+            F32MathFunction::Exp => "__ocml_exp_f32",
+            F32MathFunction::Exp2 => "__ocml_exp2_f32",
+            F32MathFunction::Ln => "__ocml_log_f32",
+            F32MathFunction::Log2 => "__ocml_log2_f32",
+            F32MathFunction::Log10 => "__ocml_log10_f32",
+            F32MathFunction::Sqrt
+            | F32MathFunction::FusedMultiplyAdd
+            | F32MathFunction::Floor
+            | F32MathFunction::Ceil
+            | F32MathFunction::Truncate
+            | F32MathFunction::RoundTiesEven => {
+                unreachable!("canonical implementation excludes constrained LLVM from OCML")
+            }
+        })
     })
 }
 
@@ -2240,6 +2304,48 @@ mod tests {
         module
     }
 
+    fn float_compiler_module_fixture(float: FloatOperation) -> Module {
+        let result = ValueId(float.operands().len() as u32);
+        let parameter_types = float.parameter_types();
+        let parameters = (0..parameter_types.len())
+            .map(|index| ValueId(index as u32))
+            .collect::<Vec<_>>();
+        let declaration = float.declaration();
+        let mut entry_block = BasicBlock::new(BlockId(0));
+        entry_block.operations.push(float.operation(result));
+        entry_block.terminator = Some(Terminator::Return { values: vec![] });
+        let entry = Function::kernel_entry(
+            "float_entry",
+            Signature::new(parameter_types, vec![]),
+            parameters,
+            vec![entry_block],
+        );
+        let mut kernel = fe2o3_kernel_ir::Kernel::new(
+            "float_kernel",
+            "float_entry",
+            LaunchDomain::D1 {
+                x: LaunchExtent::Dynamic,
+            },
+        );
+        kernel.workgroup_size = Some(WorkgroupSize::new(64, 1, 1));
+        kernel
+            .required_capabilities
+            .insert(TargetCapability::WaveWidth(
+                fe2o3_kernel_ir::WaveWidth::Wave64,
+            ));
+
+        let mut module = Module::new("tests::float_compiler_module");
+        module.required_capabilities = declaration.required_capabilities.clone();
+        module
+            .required_capabilities
+            .insert(TargetCapability::WaveWidth(
+                fe2o3_kernel_ir::WaveWidth::Wave64,
+            ));
+        module.functions = vec![entry, declaration];
+        module.kernels.push(kernel);
+        module
+    }
+
     #[test]
     fn inert_compiler_module_wrapper_is_descriptive_and_deterministic() {
         let module = inert_compiler_module_fixture();
@@ -2265,6 +2371,44 @@ mod tests {
         assert!(first.llvm_ir().contains("declare void @external_import"));
         assert!(!first.llvm_ir().contains("bitcode"));
         assert_eq!(first.descriptor_source_identity(), None);
+    }
+
+    #[test]
+    fn gfx942_compiler_module_preserves_float_contracts_and_real_link_imports() {
+        let sin = FloatOperation::F32Math {
+            function: F32MathFunction::Sin,
+            implementation: F32MathImplementation::OcmlAbiV1,
+            arguments: vec![ValueId(0)],
+        };
+        let module = float_compiler_module_fixture(sin);
+
+        assert!(matches!(
+            construct_inert_compiler_module_text_for_target_v1(&module, None),
+            Err(CompilerModuleConstructionError::UnsupportedFloatTarget(target))
+                if target == "<unbound>"
+        ));
+        assert!(matches!(
+            construct_inert_compiler_module_text_for_target_v1(&module, Some("gfx1100")),
+            Err(CompilerModuleConstructionError::UnsupportedFloatTarget(target))
+                if target == "gfx1100"
+        ));
+
+        let compiled = construct_inert_compiler_module_text_for_target_v1(&module, Some("gfx942"))
+            .expect("gfx942 float compiler module");
+        assert!(compiled.llvm_ir().contains("\"target-cpu\"=\"gfx942\""));
+        assert!(
+            compiled
+                .llvm_ir()
+                .contains("declare float @__ocml_sin_f32(float)")
+        );
+        assert!(compiled.llvm_ir().contains("call float @__ocml_sin_f32"));
+        assert_eq!(compiled.external_declarations(), &["__ocml_sin_f32"]);
+        assert!(
+            !compiled
+                .external_declarations()
+                .iter()
+                .any(|symbol| symbol.starts_with("__fe2o3_ir_float_v1_"))
+        );
     }
 
     #[test]

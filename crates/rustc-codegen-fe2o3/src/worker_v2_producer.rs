@@ -5,7 +5,7 @@ use crate::compiler_descriptor::{
 };
 use crate::kernel_ir_codegen::{
     CompilerModuleConstructionError, InertCompilerModuleTextV1, bind_compiler_descriptor_source_v1,
-    construct_inert_compiler_module_text_v1,
+    construct_inert_compiler_module_text_for_target_v1,
 };
 use fe2o3_amd_target::{CapabilityDerivationError, WavefrontWidth};
 use fe2o3_artifact_transaction::{
@@ -59,8 +59,10 @@ pub(crate) fn publish_worker_v2_compiler_module_with_descriptors(
     let envelope = envelope.ok_or(WorkerV2ProducerError::MissingCompilerFfiEnvelope)?;
     let module = bind_g1_launch_contract(module)?;
     let module = bind_exact_target_wave_mode(envelope, &module)?;
-    let mut compiler_module = construct_inert_compiler_module_text_v1(&module)
-        .map_err(WorkerV2ProducerError::CompilerModule)?;
+    let target = envelope.target().as_amd_target_id();
+    let mut compiler_module =
+        construct_inert_compiler_module_text_for_target_v1(&module, Some(target.processor()))
+            .map_err(WorkerV2ProducerError::CompilerModule)?;
     if let Some(source) =
         construct_compiler_descriptor_source_v1(envelope, &module, &compiler_module, typed_roots)
             .map_err(WorkerV2ProducerError::CompilerDescriptor)?
