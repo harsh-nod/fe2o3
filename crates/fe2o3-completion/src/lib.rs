@@ -6,8 +6,18 @@
 //! can be exercised on CPU-only CI runners.
 
 #[allow(unsafe_code)]
+mod graph;
+#[allow(unsafe_code)]
 mod lifecycle;
 
+pub use graph::{
+    CancellationCodeV1, CompletionAuthorityV1, CompletionGraphErrorV1, CompletionGraphV1,
+    CompletionNodeIdV1, CompletionNodeKindV1, CompletionNodeStateV1, CompletionNodeV1,
+    CompletionReportEntryV1, CompletionReportV1, CompletionTransitionErrorV1, ContextIdentityV1,
+    DeviceIdentityV1, EventIdentityV1, FailureCodeV1, FutureIdentityV1,
+    MAX_COMPLETION_GRAPH_EDGES_V1, MAX_COMPLETION_GRAPH_NODES_V1, MAX_COMPLETION_GRAPH_STREAMS_V1,
+    StreamIdentityV1,
+};
 pub use lifecycle::{
     BoundedQuarantine, CancelRequestError, ConcurrentOperationLifecycle, LeakReason,
     MAX_QUARANTINED_OPERATIONS, NotificationError, OperationLifecycle, OperationState,
