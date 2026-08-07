@@ -1,13 +1,13 @@
 use crate::{
     AliasAdmissionError, ArtifactKernelIdentityV1, AuthenticatedKernelArtifactV1,
-    CompilerGeneratedKernelContractV1, GeneratedAdmittedLaunch,
+    CompilerGeneratedArgumentLayoutV1, CompilerGeneratedKernelContractV1, GeneratedAdmittedLaunch,
     GeneratedArtifactAuthenticationError, GeneratedReadDeviceSlice, GeneratedWriteDeviceSlice,
     LoadedKernel, LoadedKernelLoadError, LoadedKernelMatchError, LoadedLaunchError,
     ObservedContext, PrepareLaunchError, RegionError, UntrustedLaunchRequest,
 };
 use fe2o3_artifacts::{
-    AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership, BlockSize,
-    LaunchContract, Mutability, PointerWidth,
+    AbiField, AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership, BlockSize,
+    LaunchContract, Mutability, Name, PointerWidth,
 };
 use fe2o3_core::{
     BorrowedDeviceOperation, DeviceBuffer, Error as CoreError, GpuContext, KernelParams, Stream,
@@ -250,6 +250,7 @@ impl std::error::Error for GeneratedVecAddPrepareError {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum GeneratedVecAddProfileError {
+    HostRustLayout,
     AbiSize {
         actual: u64,
     },
@@ -298,6 +299,8 @@ pub enum GeneratedVecAddProfileError {
 impl fmt::Display for GeneratedVecAddProfileError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::HostRustLayout => formatter
+                .write_str("host Rust layout does not match the generated 64-bit vecadd contract"),
             Self::AbiSize { actual } => write!(
                 formatter,
                 "ABI size {actual} does not match required size {VECADD_ABI_SIZE}"
@@ -365,7 +368,7 @@ impl fmt::Display for GeneratedVecAddProfileError {
 
 impl std::error::Error for GeneratedVecAddProfileError {}
 
-fn validate_vecadd_profile(
+pub(crate) fn validate_vecadd_profile(
     identity: &ArtifactKernelIdentityV1,
 ) -> Result<(), GeneratedVecAddProfileError> {
     validate_vecadd_artifact_profile(identity.abi(), identity.launch())
@@ -483,7 +486,11 @@ fn validate_vecadd_artifact_profile(
     Ok(())
 }
 
-fn checked_vecadd_grid(a: usize, b: usize, c: usize) -> Result<u32, GeneratedVecAddPrepareError> {
+pub(crate) fn checked_vecadd_grid(
+    a: usize,
+    b: usize,
+    c: usize,
+) -> Result<u32, GeneratedVecAddPrepareError> {
     if a == 0 || b == 0 || c == 0 {
         return Err(GeneratedVecAddPrepareError::EmptyInput);
     }
@@ -496,6 +503,81 @@ fn checked_vecadd_grid(a: usize, b: usize, c: usize) -> Result<u32, GeneratedVec
             max: u32::MAX,
         })?;
     Ok(length.div_ceil(VECADD_BLOCK_SIZE))
+}
+
+pub(crate) fn generated_vecadd_argument_layout_v2()
+-> Result<CompilerGeneratedArgumentLayoutV1, GeneratedVecAddProfileError> {
+    let abi = generated_vecadd_abi_v2()?;
+    CompilerGeneratedArgumentLayoutV1::new(
+        abi.size(),
+        abi.alignment(),
+        abi.pointer_width(),
+        abi.fields().to_vec(),
+    )
+    .map_err(|_| GeneratedVecAddProfileError::HostRustLayout)
+}
+
+pub(crate) fn generated_vecadd_abi_v2() -> Result<AbiLayout, GeneratedVecAddProfileError> {
+    let type_identities = crate::artifact_binding::host_typed_vecadd_type_identities()
+        .map_err(|_| GeneratedVecAddProfileError::HostRustLayout)?;
+    let slice_kind = AbiKind::Slice {
+        element_size: 4,
+        element_alignment: 4,
+    };
+    let fields = [
+        (
+            "arg0",
+            0,
+            Mutability::Immutable,
+            Access::ReadOnly,
+            ArgumentOwnership::SharedBorrow,
+            AliasClass::SharedReadOnly,
+        ),
+        (
+            "arg1",
+            16,
+            Mutability::Immutable,
+            Access::ReadOnly,
+            ArgumentOwnership::SharedBorrow,
+            AliasClass::SharedReadOnly,
+        ),
+        (
+            "arg2",
+            32,
+            Mutability::Mutable,
+            Access::WriteOnly,
+            ArgumentOwnership::UniqueBorrow,
+            AliasClass::Exclusive,
+        ),
+    ]
+    .into_iter()
+    .zip(type_identities)
+    .map(
+        |((name, offset, mutability, access, ownership, alias), type_identity)| {
+            AbiField::new(
+                Name::new(name).expect("fixed generated vecadd names are valid"),
+                offset,
+                VECADD_FIELD_SIZE,
+                VECADD_FIELD_ALIGNMENT,
+                slice_kind,
+                mutability,
+                access,
+                AddressSpace::Global,
+                type_identity,
+                ownership,
+                alias,
+            )
+            .expect("fixed generated vecadd fields are valid")
+        },
+    )
+    .collect();
+    AbiLayout::new(
+        VECADD_ABI_SIZE,
+        VECADD_ABI_ALIGNMENT,
+        PointerWidth::Bits64,
+        fields,
+    )
+    .map_err(|_| GeneratedVecAddProfileError::HostRustLayout)
 }
 
 #[cfg(test)]

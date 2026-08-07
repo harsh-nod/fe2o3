@@ -614,8 +614,8 @@ impl std::error::Error for FinalizedWorkerV2BundleAdmissionError {
 pub(crate) mod tests {
     use super::*;
     use crate::published_direct_link::tests::{
-        Fixture, make_observed_for, make_single_hsaco_fixture, physical_arguments_hsaco_for_target,
-        physical_test_abi,
+        Fixture, make_observed_for, make_single_hsaco_fixture,
+        make_single_hsaco_fixture_with_kernel_id, physical_test_abi, typed_vecadd_hsaco_for_target,
     };
     use fe2o3_artifact_transaction::{
         AtomicPublicationIdentityV1, BuildInvocation, BuildSession, CanonicalLinkRequestIdentityV1,
@@ -629,8 +629,9 @@ pub(crate) mod tests {
         AbiLayout, BlockSize, Dimensions, DirectLinkBindingExpectationV1,
         DirectLinkBindingSourceV1, DirectLinkBundleEvidenceV1, DirectLinkFinalizationIdentityV1,
         DirectLinkLinkedOutputIdentityV1, DirectLinkTransformationIdentityV1, LaunchContract,
-        PointerWidth,
+        PointerWidth, derive_generated_kernel_identity_v2,
     };
+    use reserved_fe2o3_symbols::TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2;
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -677,6 +678,10 @@ pub(crate) mod tests {
         .unwrap()
     }
 
+    fn repeated_digest(seed: u8) -> fe2o3_artifacts::DigestBytes {
+        fe2o3_artifacts::DigestBytes::from_bytes([seed; 32])
+    }
+
     fn admission_fixture(seed: u8, plan_finalization_delta: u8) -> AdmissionFixture {
         admission_fixture_with_linked_bytes(seed, plan_finalization_delta, None)
     }
@@ -686,20 +691,26 @@ pub(crate) mod tests {
         plan_finalization_delta: u8,
         linked_bytes: Option<Vec<u8>>,
     ) -> AdmissionFixture {
-        let hsaco = physical_arguments_hsaco_for_target(
-            "gfx942",
-            288,
-            8,
-            Some([256, 1, 1]),
-            [None; 3],
-            false,
+        let hsaco = typed_vecadd_hsaco_for_target("gfx942");
+        let abi = crate::generated_vecadd::generated_vecadd_abi_v2().unwrap();
+        let launch = exact_launch(256);
+        let kernel_id = derive_generated_kernel_identity_v2(
+            TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2,
+            [0x4b; 32],
+            "logical_primary",
+            "primary_kernel",
+            repeated_digest(seed.wrapping_add(0x40)),
+            repeated_digest(seed.wrapping_add(0x50)),
+            &abi,
+            &launch,
         );
-        let mut fixture = make_single_hsaco_fixture(
+        let mut fixture = make_single_hsaco_fixture_with_kernel_id(
             seed,
             hsaco.bytes.clone(),
             "gfx942",
-            physical_test_abi(false),
-            exact_launch(256),
+            abi,
+            launch,
+            kernel_id,
         );
         let linked_bytes = linked_bytes.unwrap_or_else(|| hsaco.bytes.clone());
         bind_worker_linked_output(&mut fixture, &linked_bytes);
@@ -877,15 +888,7 @@ pub(crate) mod tests {
 
     #[test]
     fn binds_transformed_finalized_bytes_to_their_distinct_worker_linked_output() {
-        let mut linked_bytes = physical_arguments_hsaco_for_target(
-            "gfx942",
-            288,
-            8,
-            Some([256, 1, 1]),
-            [None; 3],
-            false,
-        )
-        .bytes;
+        let mut linked_bytes = typed_vecadd_hsaco_for_target("gfx942").bytes;
         linked_bytes.push(0);
         let input = admission_fixture_with_linked_bytes(0x35, 0, Some(linked_bytes.clone()));
         let validated = input.fixture.validated();

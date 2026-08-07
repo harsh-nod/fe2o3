@@ -995,10 +995,27 @@ pub(crate) mod tests {
         abi: AbiLayout,
         launch: LaunchContract,
     ) -> Fixture {
+        make_single_hsaco_fixture_with_kernel_id(
+            seed,
+            payload_bytes,
+            architecture,
+            abi,
+            launch,
+            repeated_digest(seed.wrapping_add(0x10)),
+        )
+    }
+
+    pub(crate) fn make_single_hsaco_fixture_with_kernel_id(
+        seed: u8,
+        payload_bytes: Vec<u8>,
+        architecture: &str,
+        abi: AbiLayout,
+        launch: LaunchContract,
+        primary_kernel: DigestBytes,
+    ) -> Fixture {
         let payload =
             CodeObjectPayload::from_bytes(DigestAlgorithm::Sha256, payload_bytes).unwrap();
         let payload_identity = payload.digest();
-        let primary_kernel = repeated_digest(seed.wrapping_add(0x10));
         let manifest = ManifestV1::new(
             CompilerIdentity::new(text("rustc"), text("1.94.0")),
             ToolIdentity::new(text("fe2o3"), text("0.1.0")),
@@ -1291,6 +1308,51 @@ pub(crate) mod tests {
             private_segment_fixed_size,
             kernarg_segment_size,
         )
+    }
+
+    pub(crate) fn typed_vecadd_hsaco_for_target(target: &str) -> TestHsaco {
+        let private_segment_fixed_size: u32 = if target.starts_with("gfx94") { 0 } else { 16 };
+        let mut arguments = Vec::new();
+        for (index, access) in [(0, "read_only"), (1, "read_only"), (2, "write_only")] {
+            let offset = index * 16;
+            arguments.push(test_explicit_argument(
+                &format!("arg{index}_ptr"),
+                offset,
+                8,
+                "global_buffer",
+                Some("global"),
+                Some(8),
+                Some(access),
+                Some(access),
+            ));
+            arguments.push(test_explicit_argument(
+                &format!("arg{index}_len"),
+                offset + 8,
+                8,
+                "by_value",
+                None,
+                None,
+                None,
+                None,
+            ));
+        }
+        let metadata = test_metadata(
+            target,
+            vec![test_metadata_kernel_with_wavefront(
+                "primary_kernel",
+                "primary_kernel.kd",
+                arguments,
+                304,
+                8,
+                0,
+                private_segment_fixed_size,
+                Some([256, 1, 1]),
+                [None; 3],
+                false,
+                if target.starts_with("gfx94") { 64 } else { 32 },
+            )],
+        );
+        binding_hsaco(metadata, target, 0, private_segment_fixed_size, 304)
     }
 
     fn test_metadata(target: &str, kernels: Vec<Value>) -> Value {

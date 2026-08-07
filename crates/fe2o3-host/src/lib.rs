@@ -3,6 +3,7 @@ mod artifact_binding;
 mod cooperative_launch;
 mod generated_argument_plan;
 mod generated_vecadd;
+mod generated_worker_v2_vecadd;
 mod hsa_executable_lifecycle;
 mod loaded_kernel;
 mod prepared_launch;
@@ -44,6 +45,12 @@ pub use generated_argument_plan::{
 pub use generated_vecadd::{
     GeneratedVecAddKernelV1, GeneratedVecAddLoadError, GeneratedVecAddPrepareError,
     GeneratedVecAddPreparedV1, GeneratedVecAddProfileError,
+};
+#[doc(hidden)]
+pub use generated_worker_v2_vecadd::{
+    GeneratedWorkerV2VecAddBindError, GeneratedWorkerV2VecAddCompletionV1,
+    GeneratedWorkerV2VecAddExecutorV1, GeneratedWorkerV2VecAddPrepareError,
+    GeneratedWorkerV2VecAddPreparedV1,
 };
 pub use hsa_executable_lifecycle::{
     AuthenticatedWorkerV2ExecutableV1, AuthorizedHsaLoadV1, HsaAgentIdentityV1,
@@ -100,7 +107,10 @@ pub mod __generated {
         GeneratedKernelProfileError, GeneratedMarkerBindingError, GeneratedPackingComponentKindV1,
         GeneratedPackingComponentV1, GeneratedReadDeviceSlice, GeneratedVecAddKernelV1,
         GeneratedVecAddLoadError, GeneratedVecAddPrepareError, GeneratedVecAddPreparedV1,
-        GeneratedVecAddProfileError, GeneratedWriteDeviceSlice, LoadedKernelLoadError,
+        GeneratedVecAddProfileError, GeneratedWorkerV2VecAddBindError,
+        GeneratedWorkerV2VecAddCompletionV1, GeneratedWorkerV2VecAddExecutorV1,
+        GeneratedWorkerV2VecAddPrepareError, GeneratedWorkerV2VecAddPreparedV1,
+        GeneratedWriteDeviceSlice, LoadedKernelLoadError,
     };
 
     /// Constructs the exact immutable slice promised by a generated backend

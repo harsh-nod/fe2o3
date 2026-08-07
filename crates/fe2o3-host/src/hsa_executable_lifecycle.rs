@@ -1268,17 +1268,14 @@ impl<K, A: ReviewedHsaExecutableLifecycleAdapterV1> LoadedHsaExecutableV1<K, A> 
         &self.resolution
     }
 
-    #[allow(dead_code)]
     pub(crate) const fn artifact_identity(&self) -> &ArtifactKernelIdentityV1 {
         self.authenticated.admission.artifact_identity()
     }
 
-    #[allow(dead_code)]
     pub(crate) fn physical_kernel(&self) -> &crate::PublishedKernelPhysicalLayoutV1 {
         self.authenticated.admission.selected_kernel()
     }
 
-    #[allow(dead_code)]
     pub(crate) const fn environment(&self) -> &HsaEnvironmentObservationV1 {
         &self.environment
     }
@@ -1421,7 +1418,6 @@ impl<K, A: ReviewedHsaExecutableLifecycleAdapterV1> HsaKernelLaunchAuthorization
 }
 
 impl<K, A: ReviewedHsaImplicitKernargAdapterV1> HsaKernelLaunchAuthorizationV1<'_, K, A> {
-    #[allow(dead_code)]
     pub(crate) fn launch_generated_with_implicit_kernarg(
         self,
         explicit: &[u8],
@@ -1488,7 +1484,13 @@ impl<K, A: ReviewedHsaImplicitKernargAdapterV1> HsaKernelLaunchAuthorizationV1<'
         // SAFETY: the generated path supplied the complete explicit ABI and
         // the reviewed extension initialized the exact implicit span. The base
         // lifecycle still validates the synchronous dispatch observation.
-        unsafe { self.launch_and_wait(kernarg) }.map_err(HsaGeneratedDispatchError::Dispatch)
+        match unsafe { self.launch_and_wait(kernarg) } {
+            Ok(completed) => Ok(completed),
+            // The base adapter does not distinguish definite non-submission
+            // from ambiguous failure after queue publication. Safe generated
+            // code cannot release borrowed allocations in that state.
+            Err(_) => std::process::abort(),
+        }
     }
 }
 
@@ -1501,11 +1503,38 @@ pub enum HsaGeneratedDispatchError<E> {
     ImplicitAdapter(E),
     ExplicitKernargMutation,
     ImplicitObservationMismatch(&'static str),
-    Dispatch(HsaDispatchError<E>),
+}
+
+impl<E: fmt::Display> fmt::Display for HsaGeneratedDispatchError<E> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::KernargSize => formatter.write_str("generated kernarg size is not exact"),
+            Self::KernargAlignment => {
+                formatter.write_str("generated kernarg storage is not sufficiently aligned")
+            }
+            Self::ImplicitAdapter(error) => {
+                write!(formatter, "implicit-kernarg adapter failed: {error}")
+            }
+            Self::ExplicitKernargMutation => {
+                formatter.write_str("implicit-kernarg adapter mutated explicit bytes")
+            }
+            Self::ImplicitObservationMismatch(field) => {
+                write!(formatter, "implicit-kernarg observation mismatched {field}")
+            }
+        }
+    }
+}
+
+impl<E: std::error::Error + 'static> std::error::Error for HsaGeneratedDispatchError<E> {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::ImplicitAdapter(error) => Some(error),
+            _ => None,
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
-#[allow(dead_code)]
 fn validate_implicit_kernarg_observation(
     load: &HsaCodeObjectLoadObservationV1,
     resolution: &HsaKernelResolutionObservationV1,
@@ -1820,8 +1849,8 @@ fn validate_nonzero_bytes(bytes: &[u8], field: &'static str) -> Result<(), HsaOb
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::CompilerGeneratedKernelProfileV1;
     use crate::worker_v2_bundle_admission::tests::{TestDirectory, admitted_for_lifecycle_test};
+    use crate::{CompilerGeneratedKernelProfileV1, ObservedContext};
     use fe2o3_device::KernelMarkerV1;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1845,7 +1874,7 @@ mod tests {
 
     unsafe impl CompilerGeneratedKernelContractV1 for TestKernel {
         const PROFILE: CompilerGeneratedKernelProfileV1 =
-            CompilerGeneratedKernelProfileV1::TypedVecAddF32V1;
+            CompilerGeneratedKernelProfileV1::TypedVecAddF32RustcLayoutV2;
         const KERNEL_BINDING_ID_V1: [u8; 32] = [0x4b; 32];
 
         fn artifact_container_bytes() -> &'static [u8] {
@@ -2082,9 +2111,9 @@ mod tests {
                 export_symbol
             };
             let size = if self.fault == AdapterFault::KernargSize {
-                296
+                312
             } else {
-                288
+                304
             };
             let alignment = if self.fault == AdapterFault::KernargAlignment {
                 16
@@ -2112,7 +2141,7 @@ mod tests {
             kernarg: &mut [u8],
         ) -> Result<HsaDispatchObservationV1, Self::Error> {
             if self.implicit_initialized
-                && (kernarg[..32] != [0x5a; 32] || kernarg[32..] != [0xa5; 256])
+                && (kernarg[..48] != [0x5a; 48] || kernarg[48..] != [0xa5; 256])
             {
                 return Err("generated kernarg was not preserved");
             }
@@ -2204,7 +2233,7 @@ mod tests {
     }
 
     #[repr(align(8))]
-    struct AlignedKernarg([u8; 288]);
+    struct AlignedKernarg([u8; 304]);
 
     #[test]
     fn complete_lifecycle_binds_all_identities_and_unloads() {
@@ -2215,13 +2244,13 @@ mod tests {
             loaded.kernel_observation().export_symbol(),
             "primary_kernel"
         );
-        assert_eq!(loaded.kernel_observation().kernarg_segment_size(), 288);
+        assert_eq!(loaded.kernel_observation().kernarg_segment_size(), 304);
         assert_eq!(loaded.kernel_observation().kernarg_segment_alignment(), 8);
 
         let geometry = HsaLaunchGeometryV1::new([32, 1, 1], [256, 1, 1], 0);
         let launch = loaded.authorize_launch(geometry).unwrap();
         assert!(launch.grants_launch_authority());
-        let mut kernarg = AlignedKernarg([0; 288]);
+        let mut kernarg = AlignedKernarg([0; 304]);
         let completed = unsafe { launch.launch_and_wait(&mut kernarg.0) }.unwrap();
         assert_eq!(completed.geometry(), geometry);
         assert!(completed.dispatch().completed());
@@ -2230,6 +2259,31 @@ mod tests {
         assert!(unloaded.unload_observation().released());
         assert!(!unloaded.grants_load_authority());
         assert!(!unloaded.grants_launch_authority());
+        assert_eq!(unloads.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn exact_typed_vecadd_profile_enters_generated_worker_v2_executor() {
+        let (loaded, unloads, _directory) = load(0x92, AdapterFault::None);
+        let executor = crate::GeneratedWorkerV2VecAddExecutorV1::bind_observed_for_test(
+            loaded.unwrap(),
+            ObservedContext::for_test(0x92, 0, "gfx942", 1_024, 65_536),
+        )
+        .unwrap();
+        executor.unload().unwrap();
+        assert_eq!(unloads.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn generated_worker_v2_executor_rejects_context_substitution() {
+        let (loaded, unloads, _directory) = load(0x93, AdapterFault::None);
+        assert!(matches!(
+            crate::GeneratedWorkerV2VecAddExecutorV1::bind_observed_for_test(
+                loaded.unwrap(),
+                ObservedContext::for_test(0x93, 1, "gfx942", 1_024, 65_536),
+            ),
+            Err(crate::GeneratedWorkerV2VecAddBindError::ContextDeviceMismatch)
+        ));
         assert_eq!(unloads.load(Ordering::SeqCst), 1);
     }
 
@@ -2347,7 +2401,7 @@ mod tests {
             let launch = loaded
                 .authorize_launch(HsaLaunchGeometryV1::new([1, 1, 1], [256, 1, 1], 0))
                 .unwrap();
-            let mut kernarg = AlignedKernarg([0; 288]);
+            let mut kernarg = AlignedKernarg([0; 304]);
             assert!(matches!(
                 unsafe { launch.launch_and_wait(&mut kernarg.0) },
                 Err(HsaDispatchError::ObservationMismatch(_))
@@ -2362,14 +2416,14 @@ mod tests {
         let launch = loaded
             .authorize_launch(HsaLaunchGeometryV1::new([1, 1, 1], [256, 1, 1], 0))
             .unwrap();
-        let explicit = [0x5a; 32];
-        let mut kernarg = AlignedKernarg([0; 288]);
+        let explicit = [0x5a; 48];
+        let mut kernarg = AlignedKernarg([0; 304]);
         let completed = launch
-            .launch_generated_with_implicit_kernarg(&explicit, 32, 256, &mut kernarg.0)
+            .launch_generated_with_implicit_kernarg(&explicit, 48, 256, &mut kernarg.0)
             .unwrap();
         assert!(completed.dispatch().completed());
-        assert_eq!(kernarg.0[..32], explicit);
-        assert_eq!(kernarg.0[32..], [0xa5; 256]);
+        assert_eq!(kernarg.0[..48], explicit);
+        assert_eq!(kernarg.0[48..], [0xa5; 256]);
     }
 
     #[test]
@@ -2379,10 +2433,10 @@ mod tests {
         let launch = loaded
             .authorize_launch(HsaLaunchGeometryV1::new([1, 1, 1], [256, 1, 1], 0))
             .unwrap();
-        let explicit = [0x5a; 32];
-        let mut kernarg = AlignedKernarg([0; 288]);
+        let explicit = [0x5a; 48];
+        let mut kernarg = AlignedKernarg([0; 304]);
         assert!(matches!(
-            launch.launch_generated_with_implicit_kernarg(&explicit, 40, 248, &mut kernarg.0),
+            launch.launch_generated_with_implicit_kernarg(&explicit, 56, 248, &mut kernarg.0),
             Err(HsaGeneratedDispatchError::KernargSize)
         ));
 
@@ -2402,11 +2456,11 @@ mod tests {
             let launch = loaded
                 .authorize_launch(HsaLaunchGeometryV1::new([1, 1, 1], [256, 1, 1], 0))
                 .unwrap();
-            let mut kernarg = AlignedKernarg([0; 288]);
+            let mut kernarg = AlignedKernarg([0; 304]);
             assert!(matches!(
                 launch.launch_generated_with_implicit_kernarg(
                     &explicit,
-                    32,
+                    48,
                     256,
                     &mut kernarg.0,
                 ),
@@ -2420,9 +2474,9 @@ mod tests {
         let launch = loaded
             .authorize_launch(HsaLaunchGeometryV1::new([1, 1, 1], [256, 1, 1], 0))
             .unwrap();
-        let mut kernarg = AlignedKernarg([0; 288]);
+        let mut kernarg = AlignedKernarg([0; 304]);
         assert!(matches!(
-            launch.launch_generated_with_implicit_kernarg(&explicit, 32, 256, &mut kernarg.0),
+            launch.launch_generated_with_implicit_kernarg(&explicit, 48, 256, &mut kernarg.0),
             Err(HsaGeneratedDispatchError::ExplicitKernargMutation)
         ));
     }

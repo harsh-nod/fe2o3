@@ -268,6 +268,10 @@ impl<'allocation, T: DeviceCopy> GeneratedReadDeviceSlice<'allocation, T> {
     pub fn is_empty(&self) -> bool {
         self.buffer.is_empty()
     }
+
+    pub(crate) fn device_pointer(&self) -> *const () {
+        self.buffer.as_device_ptr().as_raw().cast_const().cast()
+    }
 }
 
 /// Generated writable capability for one complete typed device buffer.
@@ -309,6 +313,10 @@ impl<'allocation, T: DeviceCopy> GeneratedWriteDeviceSlice<'allocation, T> {
 
     pub fn is_empty(&self) -> bool {
         self.buffer.is_empty()
+    }
+
+    pub(crate) fn device_pointer(&self) -> *const () {
+        self.buffer.as_device_ptr().as_raw().cast_const().cast()
     }
 }
 

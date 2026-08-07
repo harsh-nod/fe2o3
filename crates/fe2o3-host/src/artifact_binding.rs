@@ -465,7 +465,7 @@ impl fmt::Display for GeneratedKernelProfileError {
 
 impl std::error::Error for GeneratedKernelProfileError {}
 
-fn validate_generated_profile(
+pub(crate) fn validate_generated_profile(
     profile: CompilerGeneratedKernelProfileV1,
     kernel_binding: [u8; 32],
     identity: &ArtifactKernelIdentityV1,
@@ -617,7 +617,8 @@ fn validate_typed_vecadd_abi_with_identities(
     Ok(())
 }
 
-fn host_typed_vecadd_type_identities() -> Result<[TypeIdentity; 3], GeneratedKernelProfileError> {
+pub(crate) fn host_typed_vecadd_type_identities()
+-> Result<[TypeIdentity; 3], GeneratedKernelProfileError> {
     let pointer_size = u64::try_from(core::mem::size_of::<*const f32>())
         .map_err(|_| GeneratedKernelProfileError::AbiMismatch)?;
     let pointer_alignment = u32::try_from(core::mem::align_of::<*const f32>())

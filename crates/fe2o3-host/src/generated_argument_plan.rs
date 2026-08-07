@@ -1215,7 +1215,7 @@ fn validate_field_order(fields: &[AbiField]) -> Result<(), GeneratedArgumentLayo
     Ok(())
 }
 
-fn validate_argument_packing(
+pub(crate) fn validate_argument_packing(
     kernel_id: KernelId,
     manifest: &AbiLayout,
     generated: &CompilerGeneratedArgumentLayoutV1,
