@@ -71,6 +71,30 @@ V1 limits a unit to 4 MiB, 4096 functions, 131072 blocks in total, 65535
 blocks per function, 128 parameters per function, 256 successors per block,
 and 512 UTF-8 bytes per diagnostic name.
 
+## Kernel contract wire V1
+
+Launch and unsafe-assembly declarations use a separate wire domain, so the
+`FrontendUnitV1` bytes above remain unchanged. `KernelFrontendContractV1` has
+magic `FE2O3KF\0`, version 1, a maximum length of 64 bytes, and explicit flags
+for its launch and assembly records. It models:
+
+- optional required and maximum 3D workgroup dimensions, each with a volume no
+  larger than 1024;
+- an optional minimum workgroups per compute unit in `1..=64`, valid only with
+  maximum dimensions; and
+- a gfx942 assembly declaration with bounded operand, option, and effect bits.
+
+The decoder rejects unknown bits, targets, nonzero reserved bytes,
+noncanonical absent fields, contradictory dimensions, and incompatible
+assembly options and effects. It then requires byte-identical re-encoding.
+
+The proc macro emits this wire in an immutable `#[used]` sidecar whose final
+path segment starts with `__fe2o3_kernel_frontend_contract_v1_`. The sidecar
+also binds the logical kernel name and exact function pointer while preserving
+the existing kernel registration tuple. Collection, reachable-assembly
+comparison, lowering to AMDGPU attributes, and executable inspection remain
+compiler responsibilities.
+
 ## rustc producer
 
 `rustc-codegen-fe2o3` contains a fail-closed producer for this wire format. It
@@ -99,7 +123,7 @@ particular, it does **not**:
 - prove that a function was monomorphized, that helpers are reachable from a
   kernel, or that names and source locations are truthful;
 - encode MIR statements, terminators, edge conditions, call sites, constants,
-  layouts, ABI details, effects, ownership, or target information;
+  layouts, ABI details, ownership, or general target information;
 - establish type safety, memory safety, bounds safety, initialization, alias
   safety, race freedom, convergence, or functional correctness;
 - bind a record to source inputs, a compiler invocation, Kernel IR, a proof,

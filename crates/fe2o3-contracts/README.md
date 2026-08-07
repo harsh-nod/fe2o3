@@ -12,6 +12,10 @@ device lowering, and verification tooling. Its v1 specification layer models:
 - self-contained executable proof obligations with precise failure reasons;
 - bounded independent-thread checks for initialized reads, disjoint writes, and
   initialization after writes;
+- bounded required and maximum 3D workgroup dimensions plus an optional
+  minimum-resident-workgroups constraint;
+- a gfx942 V1 unsafe-assembly declaration with explicit operand, option, and
+  memory/control-flow effect sets;
 - kernel, executable, contract, and proof artifact identities; and
 - `Unverified`, `Checked`, and `Verified` proof states.
 
@@ -39,3 +43,9 @@ checks internal consistency only: success is neither a Verus result nor runtime
 authorization. The sealed `SpecificationFactV1` marker makes that type domain
 explicit, and the crate intentionally exposes no conversion to host loading,
 allocation, or launch tokens.
+
+`KernelFrontendContractV1` is also descriptive. Its assembly declaration is an
+allowlist that a compiler may validate against reachable assembly; constructing
+it neither permits an instruction nor proves that generated code matches the
+declaration. Target admission must recheck launch bounds and occupancy against
+the exact device and executable.

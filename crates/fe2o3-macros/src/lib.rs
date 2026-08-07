@@ -11,9 +11,9 @@ use reserved_fe2o3_symbols::{
     artifact_pointer_symbol_v1, derive_kernel_binding_id_v1, host_kernel_symbol_v1,
 };
 use syn::{
-    Data, DeriveInput, Expr, FnArg, ForeignItem, GenericArgument, ItemFn, ItemForeignMod, Lit,
-    Meta, Pat, PathArguments, ReturnType, Token, Type, Visibility, parse::Parser,
-    parse_macro_input, punctuated::Punctuated,
+    Data, DeriveInput, Expr, ExprArray, FnArg, ForeignItem, GenericArgument, ItemFn,
+    ItemForeignMod, Lit, LitInt, Meta, Pat, PathArguments, ReturnType, Token, Type, Visibility,
+    parse::Parser, parse_macro_input, punctuated::Punctuated, visit::Visit,
 };
 
 #[proc_macro_derive(DeviceCopy)]
@@ -189,6 +189,16 @@ fn validate_device_copy_repr(attrs: &[syn::Attribute]) -> syn::Result<DeviceCopy
     })
 }
 
+/// Marks a device kernel and emits its collector registration.
+///
+/// V1 launch declarations use `launch(required = [x, y, z], max = [x, y, z],
+/// min_workgroups_per_compute_unit = n)`. Each dimension is nonzero and the
+/// product is at most 1024. The occupancy field requires `max`.
+///
+/// Target assembly must be declared with `unsafe_asm(target = "gfx942",
+/// operands(...), options(...), effects(...))` on an `unsafe fn`. The
+/// declaration is recorded for later compiler validation and grants no
+/// assembly, memory, loading, or launch authority by itself.
 #[proc_macro_attribute]
 pub fn kernel(attr: TokenStream, item: TokenStream) -> TokenStream {
     let options = match parse_kernel_options(attr.into()) {
@@ -213,21 +223,66 @@ enum KernelMode {
 struct KernelOptions {
     mode: KernelMode,
     explicit_namespace: Option<CrateBindingIdV1>,
+    launch: Option<ParsedLaunchBoundsV1>,
+    unsafe_assembly: Option<ParsedUnsafeAssemblyV1>,
 }
 
 const MAX_TYPED_KERNEL_SYMBOL_STEM_BYTES: usize = 128;
+const MAX_WORKGROUP_THREADS_V1: u64 = 1_024;
+const MAX_RESIDENT_WORKGROUPS_PER_COMPUTE_UNIT_V1: u16 = 64;
+const KERNEL_FRONTEND_REGISTRATION_PREFIX_V1: &str = "__fe2o3_kernel_frontend_contract_v1_";
+const KERNEL_FRONTEND_REGISTRATION_MAGIC_V1: u64 = u64::from_le_bytes(*b"FE2O3KFA");
+const KERNEL_FRONTEND_REGISTRATION_VERSION_V1: u16 = 1;
+const KERNEL_FRONTEND_REGISTRATION_KIND_V1: u16 = 1;
+const FRONTEND_KERNEL_CONTRACT_MAGIC_V1: [u8; 8] = *b"FE2O3KF\0";
+
+const ASSEMBLY_OPERAND_SGPR_V1: u16 = 0x0001;
+const ASSEMBLY_OPERAND_VGPR_V1: u16 = 0x0002;
+const ASSEMBLY_OPERAND_IMMEDIATE_V1: u16 = 0x0004;
+const ASSEMBLY_OPERAND_ADDRESS_V1: u16 = 0x0008;
+const ASSEMBLY_OPTION_NOMEM_V1: u16 = 0x0001;
+const ASSEMBLY_OPTION_READONLY_V1: u16 = 0x0002;
+const ASSEMBLY_OPTION_PURE_V1: u16 = 0x0004;
+const ASSEMBLY_OPTION_PRESERVES_FLAGS_V1: u16 = 0x0008;
+const ASSEMBLY_OPTION_NOSTACK_V1: u16 = 0x0010;
+const ASSEMBLY_EFFECT_READ_GLOBAL_V1: u16 = 0x0001;
+const ASSEMBLY_EFFECT_WRITE_GLOBAL_V1: u16 = 0x0002;
+const ASSEMBLY_EFFECT_READ_WORKGROUP_V1: u16 = 0x0004;
+const ASSEMBLY_EFFECT_WRITE_WORKGROUP_V1: u16 = 0x0008;
+const ASSEMBLY_EFFECT_ATOMIC_V1: u16 = 0x0010;
+const ASSEMBLY_EFFECT_BARRIER_V1: u16 = 0x0020;
+const ASSEMBLY_EFFECT_CONTROL_FLOW_V1: u16 = 0x0040;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ParsedLaunchBoundsV1 {
+    required: Option<[u32; 3]>,
+    maximum: Option<[u32; 3]>,
+    min_workgroups_per_compute_unit: Option<u16>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ParsedUnsafeAssemblyV1 {
+    target: u16,
+    operands: u16,
+    options: u16,
+    effects: u16,
+}
 
 fn parse_kernel_options(attr: proc_macro2::TokenStream) -> syn::Result<KernelOptions> {
     if attr.is_empty() {
         return Ok(KernelOptions {
             mode: KernelMode::Basic,
             explicit_namespace: None,
+            launch: None,
+            unsafe_assembly: None,
         });
     }
 
     let arguments = Punctuated::<Meta, Token![,]>::parse_terminated.parse2(attr.clone())?;
     let mut typed = false;
     let mut explicit_namespace = None;
+    let mut launch = None;
+    let mut unsafe_assembly = None;
     for argument in arguments {
         match argument {
             Meta::Path(path) if path.is_ident("typed") && !typed => typed = true,
@@ -255,29 +310,328 @@ fn parse_kernel_options(attr: proc_macro2::TokenStream) -> syn::Result<KernelOpt
                         .map_err(|error| syn::Error::new_spanned(literal, error))?,
                 );
             }
+            Meta::List(list) if list.path.is_ident("launch") => {
+                if launch.is_some() {
+                    return Err(syn::Error::new_spanned(
+                        list,
+                        "#[kernel] accepts at most one launch declaration",
+                    ));
+                }
+                launch = Some(parse_launch_bounds_v1(&list)?);
+            }
+            Meta::List(list) if list.path.is_ident("unsafe_asm") => {
+                if unsafe_assembly.is_some() {
+                    return Err(syn::Error::new_spanned(
+                        list,
+                        "#[kernel] accepts at most one unsafe_asm declaration",
+                    ));
+                }
+                unsafe_assembly = Some(parse_unsafe_assembly_v1(&list)?);
+            }
             _ => {
                 return Err(syn::Error::new_spanned(
                     argument,
-                    "#[kernel] accepts only #[kernel], #[kernel(typed)], or #[kernel(typed, namespace = \"<64 lowercase hex bytes>\")]",
+                    "#[kernel] accepts only #[kernel], #[kernel(typed)], namespace, launch(...), and unsafe_asm(...) declarations",
                 ));
             }
         }
     }
 
-    if !typed {
+    if explicit_namespace.is_some() && !typed {
         return Err(syn::Error::new_spanned(
             attr,
-            "#[kernel] accepts only #[kernel], #[kernel(typed)], or #[kernel(typed, namespace = \"<64 lowercase hex bytes>\")]",
+            "#[kernel] namespace requires typed mode",
         ));
     }
 
     Ok(KernelOptions {
-        mode: KernelMode::Typed,
+        mode: if typed {
+            KernelMode::Typed
+        } else {
+            KernelMode::Basic
+        },
         explicit_namespace,
+        launch,
+        unsafe_assembly,
     })
 }
 
+fn parse_launch_bounds_v1(list: &syn::MetaList) -> syn::Result<ParsedLaunchBoundsV1> {
+    let mut required = None;
+    let mut maximum = None;
+    let mut occupancy = None;
+    list.parse_nested_meta(|meta| {
+        if meta.path.is_ident("required") {
+            if required.is_some() {
+                return Err(meta.error("launch required dimensions are duplicated"));
+            }
+            required = Some(parse_workgroup_dimensions_v1(&meta)?);
+            return Ok(());
+        }
+        if meta.path.is_ident("max") {
+            if maximum.is_some() {
+                return Err(meta.error("launch maximum dimensions are duplicated"));
+            }
+            maximum = Some(parse_workgroup_dimensions_v1(&meta)?);
+            return Ok(());
+        }
+        if meta.path.is_ident("min_workgroups_per_compute_unit") {
+            if occupancy.is_some() {
+                return Err(meta.error("launch occupancy constraint is duplicated"));
+            }
+            let value = meta.value()?.parse::<LitInt>()?.base10_parse::<u16>()?;
+            if value == 0 || value > MAX_RESIDENT_WORKGROUPS_PER_COMPUTE_UNIT_V1 {
+                return Err(meta.error(
+                    "min_workgroups_per_compute_unit must be an integer in 1..=64",
+                ));
+            }
+            occupancy = Some(value);
+            return Ok(());
+        }
+        Err(meta.error(
+            "launch supports only required = [x, y, z], max = [x, y, z], and min_workgroups_per_compute_unit = n",
+        ))
+    })?;
+
+    if required.is_none() && maximum.is_none() {
+        return Err(syn::Error::new_spanned(
+            list,
+            "launch requires required or max workgroup dimensions",
+        ));
+    }
+    if occupancy.is_some() && maximum.is_none() {
+        return Err(syn::Error::new_spanned(
+            list,
+            "min_workgroups_per_compute_unit requires max workgroup dimensions",
+        ));
+    }
+    if let (Some(required), Some(maximum)) = (required, maximum)
+        && required
+            .into_iter()
+            .zip(maximum)
+            .any(|(required, maximum)| required > maximum)
+    {
+        return Err(syn::Error::new_spanned(
+            list,
+            "required workgroup dimensions exceed max dimensions",
+        ));
+    }
+    Ok(ParsedLaunchBoundsV1 {
+        required,
+        maximum,
+        min_workgroups_per_compute_unit: occupancy,
+    })
+}
+
+fn parse_workgroup_dimensions_v1(meta: &syn::meta::ParseNestedMeta<'_>) -> syn::Result<[u32; 3]> {
+    let array = meta.value()?.parse::<ExprArray>()?;
+    if array.elems.len() != 3 {
+        return Err(syn::Error::new_spanned(
+            array,
+            "workgroup dimensions require exactly three integer components",
+        ));
+    }
+    let mut result = [0_u32; 3];
+    for (index, expression) in array.elems.iter().enumerate() {
+        let Expr::Lit(literal) = expression else {
+            return Err(syn::Error::new_spanned(
+                expression,
+                "workgroup dimensions must be integer literals",
+            ));
+        };
+        let Lit::Int(integer) = &literal.lit else {
+            return Err(syn::Error::new_spanned(
+                expression,
+                "workgroup dimensions must be integer literals",
+            ));
+        };
+        result[index] = integer.base10_parse::<u32>()?;
+        if result[index] == 0 {
+            return Err(syn::Error::new_spanned(
+                integer,
+                "workgroup dimensions must be nonzero",
+            ));
+        }
+    }
+    let volume = result.into_iter().try_fold(1_u64, |volume, component| {
+        volume.checked_mul(u64::from(component))
+    });
+    if volume.is_none_or(|volume| volume > MAX_WORKGROUP_THREADS_V1) {
+        return Err(syn::Error::new_spanned(
+            array,
+            "workgroup dimension product must not exceed 1024",
+        ));
+    }
+    Ok(result)
+}
+
+fn parse_unsafe_assembly_v1(list: &syn::MetaList) -> syn::Result<ParsedUnsafeAssemblyV1> {
+    let mut target = None;
+    let mut operands = None;
+    let mut options = None;
+    let mut effects = None;
+    list.parse_nested_meta(|meta| {
+        if meta.path.is_ident("target") {
+            if target.is_some() {
+                return Err(meta.error("unsafe_asm target is duplicated"));
+            }
+            let value = meta.value()?.parse::<syn::LitStr>()?;
+            if value.value() != "gfx942" {
+                return Err(syn::Error::new_spanned(
+                    value,
+                    "unsafe_asm supports only target = \"gfx942\" in V1",
+                ));
+            }
+            target = Some(1_u16);
+            return Ok(());
+        }
+        if meta.path.is_ident("operands") {
+            if operands.is_some() {
+                return Err(meta.error("unsafe_asm operands are duplicated"));
+            }
+            operands = Some(parse_assembly_flags_v1(
+                &meta,
+                &[
+                    ("sgpr", ASSEMBLY_OPERAND_SGPR_V1),
+                    ("vgpr", ASSEMBLY_OPERAND_VGPR_V1),
+                    ("immediate", ASSEMBLY_OPERAND_IMMEDIATE_V1),
+                    ("address", ASSEMBLY_OPERAND_ADDRESS_V1),
+                ],
+                false,
+                "unsafe_asm operands support only sgpr, vgpr, immediate, and address",
+            )?);
+            return Ok(());
+        }
+        if meta.path.is_ident("options") {
+            if options.is_some() {
+                return Err(meta.error("unsafe_asm options are duplicated"));
+            }
+            options = Some(parse_assembly_flags_v1(
+                &meta,
+                &[
+                    ("nomem", ASSEMBLY_OPTION_NOMEM_V1),
+                    ("readonly", ASSEMBLY_OPTION_READONLY_V1),
+                    ("pure", ASSEMBLY_OPTION_PURE_V1),
+                    ("preserves_flags", ASSEMBLY_OPTION_PRESERVES_FLAGS_V1),
+                    ("nostack", ASSEMBLY_OPTION_NOSTACK_V1),
+                ],
+                true,
+                "unsafe_asm options support only nomem, readonly, pure, preserves_flags, and nostack",
+            )?);
+            return Ok(());
+        }
+        if meta.path.is_ident("effects") {
+            if effects.is_some() {
+                return Err(meta.error("unsafe_asm effects are duplicated"));
+            }
+            effects = Some(parse_assembly_flags_v1(
+                &meta,
+                &[
+                    ("read_global", ASSEMBLY_EFFECT_READ_GLOBAL_V1),
+                    ("write_global", ASSEMBLY_EFFECT_WRITE_GLOBAL_V1),
+                    ("read_workgroup", ASSEMBLY_EFFECT_READ_WORKGROUP_V1),
+                    ("write_workgroup", ASSEMBLY_EFFECT_WRITE_WORKGROUP_V1),
+                    ("atomic", ASSEMBLY_EFFECT_ATOMIC_V1),
+                    ("barrier", ASSEMBLY_EFFECT_BARRIER_V1),
+                    ("control_flow", ASSEMBLY_EFFECT_CONTROL_FLOW_V1),
+                ],
+                true,
+                "unsafe_asm effects support only none, read/write_global, read/write_workgroup, atomic, barrier, and control_flow",
+            )?);
+            return Ok(());
+        }
+        Err(meta.error("unsafe_asm requires target, operands(...), options(...), and effects(...)"))
+    })?;
+
+    let target =
+        target.ok_or_else(|| syn::Error::new_spanned(list, "unsafe_asm target is required"))?;
+    let operands = operands
+        .ok_or_else(|| syn::Error::new_spanned(list, "unsafe_asm operands are required"))?;
+    if operands == 0 {
+        return Err(syn::Error::new_spanned(
+            list,
+            "unsafe_asm must declare at least one operand kind",
+        ));
+    }
+    let options =
+        options.ok_or_else(|| syn::Error::new_spanned(list, "unsafe_asm options are required"))?;
+    let effects =
+        effects.ok_or_else(|| syn::Error::new_spanned(list, "unsafe_asm effects are required"))?;
+    validate_assembly_options_and_effects_v1(list, options, effects)?;
+    Ok(ParsedUnsafeAssemblyV1 {
+        target,
+        operands,
+        options,
+        effects,
+    })
+}
+
+fn parse_assembly_flags_v1(
+    meta: &syn::meta::ParseNestedMeta<'_>,
+    supported: &[(&str, u16)],
+    allow_none: bool,
+    unsupported_message: &'static str,
+) -> syn::Result<u16> {
+    let mut bits = 0_u16;
+    let mut saw_none = false;
+    meta.parse_nested_meta(|item| {
+        if allow_none && item.path.is_ident("none") {
+            if saw_none || bits != 0 {
+                return Err(item.error("none conflicts with other declarations"));
+            }
+            saw_none = true;
+            return Ok(());
+        }
+        let Some((_, bit)) = supported.iter().find(|(name, _)| item.path.is_ident(name)) else {
+            return Err(item.error(unsupported_message));
+        };
+        if saw_none || bits & *bit != 0 {
+            return Err(item.error("unsafe_asm declaration is duplicated or conflicting"));
+        }
+        bits |= *bit;
+        Ok(())
+    })?;
+    Ok(bits)
+}
+
+fn validate_assembly_options_and_effects_v1(
+    list: &syn::MetaList,
+    options: u16,
+    effects: u16,
+) -> syn::Result<()> {
+    if options & ASSEMBLY_OPTION_NOMEM_V1 != 0 && options & ASSEMBLY_OPTION_READONLY_V1 != 0
+        || options & ASSEMBLY_OPTION_PURE_V1 != 0
+            && options & (ASSEMBLY_OPTION_NOMEM_V1 | ASSEMBLY_OPTION_READONLY_V1) == 0
+    {
+        return Err(syn::Error::new_spanned(
+            list,
+            "unsafe_asm nomem/readonly conflict, and pure requires one of them",
+        ));
+    }
+    let memory = ASSEMBLY_EFFECT_READ_GLOBAL_V1
+        | ASSEMBLY_EFFECT_WRITE_GLOBAL_V1
+        | ASSEMBLY_EFFECT_READ_WORKGROUP_V1
+        | ASSEMBLY_EFFECT_WRITE_WORKGROUP_V1
+        | ASSEMBLY_EFFECT_ATOMIC_V1
+        | ASSEMBLY_EFFECT_BARRIER_V1;
+    let writes = ASSEMBLY_EFFECT_WRITE_GLOBAL_V1
+        | ASSEMBLY_EFFECT_WRITE_WORKGROUP_V1
+        | ASSEMBLY_EFFECT_ATOMIC_V1;
+    if options & ASSEMBLY_OPTION_NOMEM_V1 != 0 && effects & memory != 0
+        || options & ASSEMBLY_OPTION_READONLY_V1 != 0 && effects & writes != 0
+        || options & ASSEMBLY_OPTION_PURE_V1 != 0 && effects & ASSEMBLY_EFFECT_CONTROL_FLOW_V1 != 0
+        || effects == 0 && options & ASSEMBLY_OPTION_NOMEM_V1 == 0
+    {
+        return Err(syn::Error::new_spanned(
+            list,
+            "unsafe_asm effects conflict with its memory/control-flow options",
+        ));
+    }
+    Ok(())
+}
+
 fn expand_kernel(input: ItemFn, options: KernelOptions) -> syn::Result<proc_macro2::TokenStream> {
+    validate_kernel_assembly_boundary(&input, options.unsafe_assembly)?;
     if options.mode == KernelMode::Typed {
         validate_typed_kernel_signature(&input)?;
         validate_typed_kernel_symbol_stem(&input.sig.ident)?;
@@ -299,7 +653,7 @@ fn expand_kernel(input: ItemFn, options: KernelOptions) -> syn::Result<proc_macr
 
     expand_kernel_with_imports(
         input,
-        options.mode,
+        options,
         &device_import,
         host_import.as_ref(),
         crate_binding,
@@ -334,16 +688,29 @@ fn expand_kernel_with_device_import(
     input: ItemFn,
     device_import: &proc_macro2::TokenStream,
 ) -> syn::Result<proc_macro2::TokenStream> {
-    expand_kernel_with_imports(input, KernelMode::Basic, device_import, None, None)
+    expand_kernel_with_imports(
+        input,
+        KernelOptions {
+            mode: KernelMode::Basic,
+            explicit_namespace: None,
+            launch: None,
+            unsafe_assembly: None,
+        },
+        device_import,
+        None,
+        None,
+    )
 }
 
 fn expand_kernel_with_imports(
     mut input: ItemFn,
-    mode: KernelMode,
+    options: KernelOptions,
     device_import: &proc_macro2::TokenStream,
     host_import: Option<&proc_macro2::TokenStream>,
     crate_binding: Option<CrateBindingIdV1>,
 ) -> syn::Result<proc_macro2::TokenStream> {
+    let mode = options.mode;
+    validate_kernel_assembly_boundary(&input, options.unsafe_assembly)?;
     if mode == KernelMode::Typed {
         validate_typed_kernel_signature(&input)?;
         validate_typed_kernel_symbol_stem(&input.sig.ident)?;
@@ -444,6 +811,31 @@ fn expand_kernel_with_imports(
         }
         None => quote!(#[unsafe(no_mangle)]),
     };
+    let frontend_registration = encode_kernel_frontend_contract_v1(&options).map(|bytes| {
+        let registration_ident =
+            format_ident!("{KERNEL_FRONTEND_REGISTRATION_PREFIX_V1}{original_name}");
+        let bytes = bytes.iter();
+        quote! {
+            #[doc(hidden)]
+            #[allow(non_upper_case_globals)]
+            #[used]
+            static #registration_ident: (
+                u64,
+                u16,
+                u16,
+                &'static str,
+                &'static [u8],
+                #function_pointer,
+            ) = (
+                #KERNEL_FRONTEND_REGISTRATION_MAGIC_V1,
+                #KERNEL_FRONTEND_REGISTRATION_VERSION_V1,
+                #KERNEL_FRONTEND_REGISTRATION_KIND_V1,
+                #marker_value,
+                &[#(#bytes),*],
+                #internal_ident,
+            );
+        }
+    });
 
     let typed_module = if let Some(kernel_binding) = kernel_binding {
         let host_import = host_import.expect("typed expansion requires a host import");
@@ -522,6 +914,8 @@ fn expand_kernel_with_imports(
         #[allow(non_upper_case_globals)]
         #[used]
         static #registration_ident: #registration_type = #registration_value;
+
+        #frontend_registration
 
         const _: () = {
             #device_import
@@ -759,6 +1153,113 @@ fn is_exact_f32(ty: &Type) -> bool {
         && path.path.segments.len() == 1
         && path.path.segments[0].ident == "f32"
         && matches!(path.path.segments[0].arguments, PathArguments::None)
+}
+
+fn encode_kernel_frontend_contract_v1(options: &KernelOptions) -> Option<Vec<u8>> {
+    if options.launch.is_none() && options.unsafe_assembly.is_none() {
+        return None;
+    }
+    let mut bytes = Vec::with_capacity(64);
+    bytes.extend_from_slice(&FRONTEND_KERNEL_CONTRACT_MAGIC_V1);
+    push_u16(&mut bytes, 1);
+    let flags = u16::from(options.launch.is_some())
+        | (u16::from(options.unsafe_assembly.is_some()) * 0x0002);
+    push_u16(&mut bytes, flags);
+    push_u32(&mut bytes, 0);
+    push_u32(&mut bytes, 0);
+    if let Some(launch) = options.launch {
+        let launch_flags = u16::from(launch.required.is_some())
+            | (u16::from(launch.maximum.is_some()) * 0x0002)
+            | (u16::from(launch.min_workgroups_per_compute_unit.is_some()) * 0x0004);
+        push_u16(&mut bytes, launch_flags);
+        push_u16(&mut bytes, 0);
+        push_dimensions(&mut bytes, launch.required);
+        push_dimensions(&mut bytes, launch.maximum);
+        push_u16(
+            &mut bytes,
+            launch.min_workgroups_per_compute_unit.unwrap_or(0),
+        );
+        push_u16(&mut bytes, 0);
+    }
+    if let Some(assembly) = options.unsafe_assembly {
+        push_u16(&mut bytes, assembly.target);
+        push_u16(&mut bytes, assembly.operands);
+        push_u16(&mut bytes, assembly.options);
+        push_u16(&mut bytes, assembly.effects);
+        push_u32(&mut bytes, 0);
+    }
+    let length = u32::try_from(bytes.len()).expect("V1 kernel contract is bounded below u32");
+    bytes[12..16].copy_from_slice(&length.to_le_bytes());
+    debug_assert!(bytes.len() <= 64);
+    Some(bytes)
+}
+
+fn push_dimensions(bytes: &mut Vec<u8>, dimensions: Option<[u32; 3]>) {
+    for component in dimensions.unwrap_or([0; 3]) {
+        push_u32(bytes, component);
+    }
+}
+
+fn push_u16(bytes: &mut Vec<u8>, value: u16) {
+    bytes.extend_from_slice(&value.to_le_bytes());
+}
+
+fn push_u32(bytes: &mut Vec<u8>, value: u32) {
+    bytes.extend_from_slice(&value.to_le_bytes());
+}
+
+#[derive(Default)]
+struct KernelAssemblyUseVisitor {
+    inline_assembly: Option<proc_macro2::Span>,
+    unsupported_assembly: Option<proc_macro2::Span>,
+}
+
+impl<'ast> Visit<'ast> for KernelAssemblyUseVisitor {
+    fn visit_macro(&mut self, invocation: &'ast syn::Macro) {
+        let Some(name) = invocation
+            .path
+            .segments
+            .last()
+            .map(|segment| &segment.ident)
+        else {
+            return;
+        };
+        if name == "asm" {
+            self.inline_assembly.get_or_insert(name.span());
+        } else if name == "global_asm" || name == "llvm_asm" {
+            self.unsupported_assembly.get_or_insert(name.span());
+        }
+        syn::visit::visit_macro(self, invocation);
+    }
+}
+
+fn validate_kernel_assembly_boundary(
+    input: &ItemFn,
+    declaration: Option<ParsedUnsafeAssemblyV1>,
+) -> syn::Result<()> {
+    let mut visitor = KernelAssemblyUseVisitor::default();
+    visitor.visit_block(&input.block);
+    if let Some(span) = visitor.unsupported_assembly {
+        return Err(syn::Error::new(
+            span,
+            "#[kernel] supports only local asm! declarations; global_asm! and llvm_asm! fail closed",
+        ));
+    }
+    if let Some(span) = visitor.inline_assembly
+        && declaration.is_none()
+    {
+        return Err(syn::Error::new(
+            span,
+            "asm! reachable directly from a kernel requires an explicit unsafe_asm(...) declaration",
+        ));
+    }
+    if declaration.is_some() && input.sig.unsafety.is_none() {
+        return Err(syn::Error::new_spanned(
+            &input.sig,
+            "unsafe_asm(...) requires an unsafe kernel function",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_kernel_signature(input: &ItemFn) -> syn::Result<()> {
@@ -1477,7 +1978,8 @@ mod tests {
         expand_device_import_with_import, expand_kernel_with_device_import,
         expand_kernel_with_imports, host_import_for, parse_device_ffi_options,
         parse_kernel_options, validate_generated_device_ffi_contract_grammar,
-        validate_typed_kernel_signature, validate_typed_kernel_symbol_stem,
+        validate_kernel_assembly_boundary, validate_typed_kernel_signature,
+        validate_typed_kernel_symbol_stem,
     };
     use proc_macro_crate::FoundCrate;
     use reserved_fe2o3_symbols::{
@@ -1791,6 +2293,8 @@ mod tests {
             KernelOptions {
                 mode: KernelMode::Basic,
                 explicit_namespace: None,
+                launch: None,
+                unsafe_assembly: None,
             }
         );
         assert_eq!(
@@ -1798,6 +2302,8 @@ mod tests {
             KernelOptions {
                 mode: KernelMode::Typed,
                 explicit_namespace: None,
+                launch: None,
+                unsafe_assembly: None,
             }
         );
 
@@ -1829,6 +2335,193 @@ mod tests {
     }
 
     #[test]
+    fn launch_and_unsafe_assembly_options_encode_canonically() {
+        let options = parse_kernel_options(quote::quote!(
+            launch(
+                required = [256, 1, 1],
+                max = [256, 1, 1],
+                min_workgroups_per_compute_unit = 2
+            ),
+            unsafe_asm(
+                target = "gfx942",
+                operands(sgpr, immediate),
+                options(nomem, pure, nostack),
+                effects(none)
+            )
+        ))
+        .unwrap();
+        assert_eq!(options.mode, KernelMode::Basic);
+        assert_eq!(options.launch.unwrap().required, Some([256, 1, 1]));
+        assert_eq!(options.launch.unwrap().maximum, Some([256, 1, 1]));
+        assert_eq!(
+            options.launch.unwrap().min_workgroups_per_compute_unit,
+            Some(2)
+        );
+        assert_eq!(options.unsafe_assembly.unwrap().target, 1);
+
+        let bytes = super::encode_kernel_frontend_contract_v1(&options).unwrap();
+        let hex = bytes
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        assert_eq!(
+            hex,
+            "4645324f334b46000100030040000000000000000700000000010000010000000100000000010000010000000100000002000000010005001500000000000000"
+        );
+    }
+
+    #[test]
+    fn launch_parser_rejects_malformed_duplicate_and_conflicting_bounds() {
+        let rejected = [
+            quote::quote!(launch()),
+            quote::quote!(launch(required = [64, 1])),
+            quote::quote!(launch(required = [0, 1, 1])),
+            quote::quote!(launch(max = [1025, 1, 1])),
+            quote::quote!(launch(required = [64, 2, 1], max = [32, 2, 1])),
+            quote::quote!(launch(
+                required = [64, 1, 1],
+                min_workgroups_per_compute_unit = 2
+            )),
+            quote::quote!(launch(
+                max = [64, 1, 1],
+                min_workgroups_per_compute_unit = 0
+            )),
+            quote::quote!(launch(required = [64, 1, 1], required = [64, 1, 1])),
+            quote::quote!(launch(max = [64, 1, 1]), launch(max = [64, 1, 1])),
+        ];
+        for attributes in rejected {
+            assert!(parse_kernel_options(attributes).is_err());
+        }
+    }
+
+    #[test]
+    fn unsafe_assembly_parser_rejects_unknown_or_ambiguous_authority() {
+        let rejected = [
+            quote::quote!(unsafe_asm(
+                target = "gfx1100",
+                operands(sgpr),
+                options(nomem),
+                effects(none)
+            )),
+            quote::quote!(unsafe_asm(
+                target = "gfx942",
+                operands(memory),
+                options(nomem),
+                effects(none)
+            )),
+            quote::quote!(unsafe_asm(
+                target = "gfx942",
+                operands(sgpr),
+                options(may_unwind),
+                effects(none)
+            )),
+            quote::quote!(unsafe_asm(
+                target = "gfx942",
+                operands(sgpr, sgpr),
+                options(nomem),
+                effects(none)
+            )),
+            quote::quote!(unsafe_asm(
+                target = "gfx942",
+                operands(sgpr),
+                options(nomem, readonly),
+                effects(none)
+            )),
+            quote::quote!(unsafe_asm(
+                target = "gfx942",
+                operands(address),
+                options(readonly),
+                effects(write_global)
+            )),
+            quote::quote!(unsafe_asm(
+                target = "gfx942",
+                operands(sgpr),
+                options(nomem),
+                effects(none, barrier)
+            )),
+        ];
+        for attributes in rejected {
+            assert!(parse_kernel_options(attributes).is_err());
+        }
+    }
+
+    #[test]
+    fn assembly_use_requires_an_explicit_unsafe_kernel_boundary() {
+        let direct_asm: ItemFn = parse_quote! {
+            fn kernel() { unsafe { core::arch::asm!("nop") } }
+        };
+        assert!(
+            validate_kernel_assembly_boundary(&direct_asm, None)
+                .unwrap_err()
+                .to_string()
+                .contains("requires an explicit unsafe_asm")
+        );
+
+        let declaration = parse_kernel_options(quote::quote!(unsafe_asm(
+            target = "gfx942",
+            operands(sgpr),
+            options(nomem),
+            effects(none)
+        )))
+        .unwrap()
+        .unsafe_assembly;
+        assert!(
+            validate_kernel_assembly_boundary(&direct_asm, declaration)
+                .unwrap_err()
+                .to_string()
+                .contains("requires an unsafe kernel function")
+        );
+        let unsafe_direct_asm: ItemFn = parse_quote! {
+            unsafe fn kernel() { unsafe { core::arch::asm!("nop") } }
+        };
+        validate_kernel_assembly_boundary(&unsafe_direct_asm, declaration).unwrap();
+
+        let unsupported: ItemFn = parse_quote! {
+            unsafe fn kernel() { core::arch::global_asm!("nop"); }
+        };
+        assert!(
+            validate_kernel_assembly_boundary(&unsupported, declaration)
+                .unwrap_err()
+                .to_string()
+                .contains("global_asm!")
+        );
+    }
+
+    #[test]
+    fn attributed_kernel_emits_a_separate_bound_sidecar() {
+        let input = parse_quote! {
+            pub unsafe fn bounded(value: u32) -> u32 { value }
+        };
+        let options = parse_kernel_options(quote::quote!(
+            launch(max = [256, 1, 1], min_workgroups_per_compute_unit = 2),
+            unsafe_asm(
+                target = "gfx942",
+                operands(sgpr),
+                options(nomem),
+                effects(none)
+            )
+        ))
+        .unwrap();
+        let device_import = device_import_for(FoundCrate::Name("gpu_device".to_string()));
+        let expansion = expand_kernel_with_imports(input, options, &device_import, None, None)
+            .unwrap()
+            .to_string();
+        assert!(expansion.contains("static __fe2o3_kernel_registration_bounded"));
+        assert!(expansion.contains("static __fe2o3_kernel_frontend_contract_v1_bounded"));
+        assert!(expansion.contains(&format!(
+            "{}u64",
+            super::KERNEL_FRONTEND_REGISTRATION_MAGIC_V1
+        )));
+        assert!(expansion.contains("1u16 , 1u16"));
+
+        let legacy: ItemFn = parse_quote! { pub fn legacy() {} };
+        let legacy = expand_kernel_with_device_import(legacy, &device_import)
+            .unwrap()
+            .to_string();
+        assert!(!legacy.contains("__fe2o3_kernel_frontend_contract_v1_legacy"));
+    }
+
+    #[test]
     fn typed_kernel_emits_guarded_embedded_artifact_contract() {
         let input = parse_quote! {
             pub fn vecadd(a: &[f32], b: &[f32], mut c: DisjointSlice<f32>) {
@@ -1847,7 +2540,12 @@ mod tests {
 
         let expansion = expand_kernel_with_imports(
             input,
-            KernelMode::Typed,
+            KernelOptions {
+                mode: KernelMode::Typed,
+                explicit_namespace: None,
+                launch: None,
+                unsafe_assembly: None,
+            },
             &device_import,
             Some(&host_import),
             Some(crate_binding),

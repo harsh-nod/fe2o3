@@ -67,6 +67,29 @@ fn typed_kernel_compile_fail_diagnostics_are_stable() {
                 "#[kernel(typed)] kernel name must be 1 to 128 ASCII identifier bytes for backend artifact symbols",
             ],
         ),
+        (
+            "invalid_launch",
+            &[
+                "workgroup dimensions must be nonzero",
+                "required workgroup dimensions exceed max dimensions",
+                "min_workgroups_per_compute_unit requires max workgroup dimensions",
+                "launch maximum dimensions are duplicated",
+            ],
+        ),
+        (
+            "invalid_unsafe_asm",
+            &[
+                "unsafe_asm supports only target = \"gfx942\" in V1",
+                "unsafe_asm effects conflict with its memory/control-flow options",
+                "unsafe_asm(...) requires an unsafe kernel function",
+            ],
+        ),
+        (
+            "undeclared_asm",
+            &[
+                "asm! reachable directly from a kernel requires an explicit unsafe_asm(...) declaration",
+            ],
+        ),
     ];
 
     for (bin, expected_diagnostics) in cases {

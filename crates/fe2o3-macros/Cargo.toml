@@ -15,4 +15,4 @@ proc-macro2.workspace = true
 proc-macro-crate.workspace = true
 quote.workspace = true
 reserved-fe2o3-symbols.workspace = true
-syn.workspace = true
+syn = { workspace = true, features = ["visit"] }
