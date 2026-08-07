@@ -8,6 +8,8 @@ const PIPELINE_ENV: &str = "FE2O3_CODEGEN_PIPELINE";
 const LLVM_AS_ENV: &str = "FE2O3_LLVM_AS";
 const PROVIDER_SYMBOL: &str = "external_device_add_v1";
 const PROVIDER_KERNEL: &str = "worker_v2_provider_kernel";
+const MULTI_KERNEL_ALPHA: &str = "worker_v2_alpha";
+const MULTI_KERNEL_ZETA: &str = "worker_v2_zeta";
 
 fn backend_test_lock() -> MutexGuard<'static, ()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -240,6 +242,75 @@ static __fe2o3_kernel_registration_worker_v2_kernel: (
     )
 }
 
+fn worker_v2_multi_kernel_source() -> String {
+    let fields = reserved_fe2o3_symbols::DeviceFfiContractFieldsV1 {
+        direction: reserved_fe2o3_symbols::DEVICE_FFI_DIRECTION_EXPORT_V1,
+        symbol: "local_device_identity_v1",
+        calling_convention: "C",
+        code_object_version: 5,
+        target: "gfx942:xnack-",
+        physical_abi: "C(u32[size=4,align=4])->u32[size=4,align=4]",
+        effects: "none",
+        semantic_identity: "5656565656565656565656565656565656565656565656565656565656565656",
+    };
+    let contract = reserved_fe2o3_symbols::derive_device_ffi_contract_id_v1(fields);
+    let marker = reserved_fe2o3_symbols::device_ffi_marker_v1(contract, fields);
+    format!(
+        r#"
+#[doc = "{marker}"]
+#[unsafe(export_name = "local_device_identity_v1")]
+pub unsafe extern "C" fn local_device_identity(value: u32) -> u32 {{
+    value
+}}
+
+#[used]
+static __fe2o3_device_ffi_registration_v1_{contract}: (
+    u64, u16, u16, &'static str, &'static str, &'static str, u16,
+    &'static str, &'static str, &'static str, &'static str,
+    unsafe extern "C" fn(u32) -> u32,
+) = (
+    0x4946_4633_4f32_4546, 1, 2, "{contract}", "local_device_identity_v1",
+    "C", 5, "gfx942:xnack-", "C(u32[size=4,align=4])->u32[size=4,align=4]",
+    "none", "5656565656565656565656565656565656565656565656565656565656565656",
+    local_device_identity,
+);
+
+#[inline(never)]
+#[unsafe(export_name = "worker_v2_shared_helper")]
+pub fn shared_helper(value: u32) -> u32 {{
+    value + 1
+}}
+
+#[unsafe(export_name = "fe2o3_kernel_{MULTI_KERNEL_ZETA}")]
+pub fn zeta() {{
+    let _ = shared_helper(2);
+}}
+
+#[used]
+static __fe2o3_kernel_registration_worker_v2_zeta: (
+    u64, u16, u16, &'static str, &'static str, fn(),
+) = (
+    0x4e52_4b33_4f32_4546, 1, 1, "{MULTI_KERNEL_ZETA}",
+    "{MULTI_KERNEL_ZETA}", zeta,
+);
+
+#[unsafe(export_name = "fe2o3_kernel_{MULTI_KERNEL_ALPHA}")]
+pub fn alpha() {{
+    let _ = shared_helper(1);
+}}
+
+#[used]
+static __fe2o3_kernel_registration_worker_v2_alpha: (
+    u64, u16, u16, &'static str, &'static str, fn(),
+) = (
+    0x4e52_4b33_4f32_4546, 1, 1, "{MULTI_KERNEL_ALPHA}",
+    "{MULTI_KERNEL_ALPHA}", alpha,
+);
+"#,
+        contract = contract.to_hex(),
+    )
+}
+
 fn worker_v2_provider_source() -> String {
     let fields = reserved_fe2o3_symbols::DeviceFfiContractFieldsV1 {
         direction: reserved_fe2o3_symbols::DEVICE_FFI_DIRECTION_IMPORT_V1,
@@ -321,6 +392,10 @@ fn artifact_paths(workspace: &Path, kernel: &str) -> [PathBuf; 3] {
 }
 
 fn assert_published_worker_v2_hsaco(artifact_dir: &Path, expected_kernel: &str) {
+    assert_published_worker_v2_kernels(artifact_dir, &[expected_kernel]);
+}
+
+fn assert_published_worker_v2_kernels(artifact_dir: &Path, expected_kernels: &[&str]) {
     let mut artifacts = Vec::new();
     let mut records = Vec::new();
     for entry in std::fs::read_dir(artifact_dir).expect("read Worker V2 artifact directory") {
@@ -348,14 +423,20 @@ fn assert_published_worker_v2_hsaco(artifact_dir: &Path, expected_kernel: &str) 
         inspected.code_object_version(),
         fe2o3_hsaco::CodeObjectVersion::V5
     );
-    let kernel = inspected
+    let mut actual_names = inspected
         .kernels()
         .iter()
-        .find(|kernel| kernel.name() == expected_kernel)
-        .unwrap_or_else(|| panic!("missing published kernel {expected_kernel}"));
-    assert_eq!(kernel.required_workgroup_size(), Some([256, 1, 1]));
-    assert_eq!(kernel.max_flat_workgroup_size(), 256);
-    assert_eq!(kernel.wavefront_size(), 64);
+        .map(|kernel| kernel.name())
+        .collect::<Vec<_>>();
+    actual_names.sort_unstable();
+    let mut expected_names = expected_kernels.to_vec();
+    expected_names.sort_unstable();
+    assert_eq!(actual_names, expected_names);
+    for kernel in inspected.kernels() {
+        assert_eq!(kernel.required_workgroup_size(), Some([256, 1, 1]));
+        assert_eq!(kernel.max_flat_workgroup_size(), 256);
+        assert_eq!(kernel.wavefront_size(), 64);
+    }
 }
 
 fn preseed(paths: &[PathBuf]) {
@@ -677,6 +758,94 @@ fn worker_v2_real_source_publishes_inspected_gfx942_hsaco() {
         );
     }
     assert_published_worker_v2_hsaco(&directory.0.join("artifacts"), "worker_v2_kernel");
+}
+
+#[test]
+#[ignore = "requires the configured native LLVM/LLD Worker V2 executable"]
+fn worker_v2_real_source_publishes_two_kernels_with_one_shared_helper() {
+    let _lock = backend_test_lock();
+    let workspace = workspace();
+    let directory = WorkerV2SourceDirectory::new(&workspace);
+    let source = directory.0.join("worker-v2-multi-kernel-source.rs");
+    std::fs::write(&source, worker_v2_multi_kernel_source())
+        .expect("write multi-kernel Worker V2 source fixture");
+    let worker =
+        PathBuf::from(std::env::var_os("FE2O3_LLVM_LINK_WORKER").expect("FE2O3_LLVM_LINK_WORKER"));
+    let worker_build_identity =
+        std::env::var("FE2O3_LLVM_LINK_WORKER_BUILD_ID").expect("worker build identity");
+    let llvm_build_identity = std::env::var("FE2O3_LLVM_BUILD_ID").expect("LLVM build identity");
+    let config = WorkerV2TestConfig::native_source(
+        &directory.0,
+        &workspace,
+        &source,
+        &worker,
+        &worker_build_identity,
+        &llvm_build_identity,
+    );
+    let backend = build_codegen_backend(&workspace);
+    let output = Command::new(env!("CARGO"))
+        .current_dir(&workspace)
+        .args(["run", "--locked", "-p", "cargo-fe2o3", "--"])
+        .arg("rustc")
+        .arg(&source)
+        .args([
+            "--crate-name",
+            "worker_v2_source",
+            "--edition=2024",
+            "--crate-type=lib",
+            "--emit=obj",
+            "-Cpanic=abort",
+            "-Cmetadata=worker-v2-multi-kernel-source",
+        ])
+        .arg(format!("-Zcodegen-backend={}", backend.display()))
+        .arg("-Zmir-enable-passes=-JumpThreading")
+        .arg("-o")
+        .arg(directory.0.join("host.o"))
+        .env("FE2O3_BINDING_WRAPPER_MODE_V1", "1")
+        .env("FE2O3_BUILD_SESSION_V1", "99".repeat(16))
+        .env("FE2O3_CODEGEN_PIPELINE", "kernel-ir-worker-v2")
+        .env("FE2O3_HSACO_DIR", directory.0.join("artifacts"))
+        .env("FE2O3_TARGET", "gfx942:xnack-")
+        .env("FE2O3_VERBOSE", "1")
+        .env("FE2O3_WORKER_V2_CONFIG_V2", &config.0)
+        .output()
+        .expect("run multi-kernel Worker V2 flow");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "multi-kernel Worker V2 publication failed:\n{stderr}"
+    );
+    assert!(
+        stderr.contains(
+            "selected kernel-ir-worker-v2: verified compiler-module candidate with 2 kernel(s)"
+        ),
+        "rustc did not preserve both kernel roots:\n{stderr}"
+    );
+    assert_eq!(
+        stderr
+            .matches("[internal-helper] worker_v2_shared_helper")
+            .count(),
+        1,
+        "shared helper was not collected exactly once:\n{stderr}"
+    );
+    for rejected in [
+        "defined-symbol set mismatch",
+        "GenericLink candidate and compiler-FFI-aware Worker V2 output bytes differ",
+        "Worker V2 execution failed",
+        "independent Worker V2 HSACO inspection failed",
+        "Worker V2 HSACO publication failed",
+        "build-attempt completion failed",
+    ] {
+        assert!(
+            !stderr.contains(rejected),
+            "multi-kernel Worker V2 flow reported {rejected:?}:\n{stderr}"
+        );
+    }
+    assert_published_worker_v2_kernels(
+        &directory.0.join("artifacts"),
+        &[MULTI_KERNEL_ALPHA, MULTI_KERNEL_ZETA],
+    );
 }
 
 #[test]
