@@ -6,6 +6,9 @@ use fe2o3_kernel_descriptor::{
 };
 use sha2::{Digest, Sha256};
 
+/// ELF section carrying the canonical V1 compiler descriptor source.
+pub const COMPILER_DESCRIPTOR_SECTION_NAME_V1: &str = ".fe2o3.kd.v1";
+
 /// SHA-256 and byte length of one exact canonical unfinalized descriptor table.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct CompilerDescriptorSourceIdentityV1 {

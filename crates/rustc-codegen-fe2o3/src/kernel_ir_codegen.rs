@@ -7,6 +7,10 @@
 use crate::CODEGEN_PIPELINE_ENV;
 use crate::amdgpu_llvm::{EmitError, PreparedDeviceKernel};
 use crate::trusted_device_items::TrustedDeviceItem;
+use fe2o3_compiler_ffi::{
+    COMPILER_DESCRIPTOR_SECTION_NAME_V1, CompilerDescriptorSourceIdentityV1,
+    CompilerDescriptorSourceV1,
+};
 use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, BasicBlock, BinaryOp, BlockId, ComparePredicate, Constant,
     FunctionBody, FunctionRole, IntrinsicOperation, KernelId, MemoryAccess, Module, Operation,
@@ -49,6 +53,7 @@ pub(crate) struct InertCompilerModuleTextV1 {
     internal_helpers: Vec<String>,
     device_ffi_exports: Vec<String>,
     external_declarations: Vec<String>,
+    descriptor_source_identity: Option<CompilerDescriptorSourceIdentityV1>,
     unbound_target_properties: [UnboundCompilerModuleTargetPropertyV1; 3],
 }
 
@@ -86,6 +91,12 @@ impl InertCompilerModuleTextV1 {
         &self.external_declarations
     }
 
+    pub(crate) const fn descriptor_source_identity(
+        &self,
+    ) -> Option<CompilerDescriptorSourceIdentityV1> {
+        self.descriptor_source_identity
+    }
+
     pub(crate) fn unbound_target_properties(&self) -> &[UnboundCompilerModuleTargetPropertyV1; 3] {
         &self.unbound_target_properties
     }
@@ -99,6 +110,12 @@ pub(crate) enum CompilerModuleConstructionError {
         actual: usize,
         max: usize,
     },
+    #[allow(dead_code)] // Connected when rustc-derived descriptor construction reaches Worker V2.
+    DescriptorSourceAlreadyBound,
+    #[allow(dead_code)] // Connected when rustc-derived descriptor construction reaches Worker V2.
+    DescriptorKernelEntryClosureMismatch,
+    #[allow(dead_code)] // Connected when rustc-derived descriptor construction reaches Worker V2.
+    DescriptorSymbolClosureMismatch,
     Lowering(dialect_amdgcn::LoweringErrors),
 }
 
@@ -107,6 +124,14 @@ impl fmt::Display for CompilerModuleConstructionError {
         match self {
             Self::LimitExceeded { field, actual, max } => {
                 write!(formatter, "{field} count/size {actual} exceeds limit {max}")
+            }
+            Self::DescriptorSourceAlreadyBound => {
+                formatter.write_str("compiler module already has a descriptor source")
+            }
+            Self::DescriptorKernelEntryClosureMismatch => formatter
+                .write_str("compiler descriptor kernel entries do not match the module closure"),
+            Self::DescriptorSymbolClosureMismatch => {
+                formatter.write_str("compiler descriptor symbols do not match the module closure")
             }
             Self::Lowering(error) => write!(formatter, "{error}"),
         }
@@ -174,12 +199,90 @@ pub(crate) fn construct_inert_compiler_module_text_v1(
         internal_helpers,
         device_ffi_exports,
         external_declarations,
+        descriptor_source_identity: None,
         unbound_target_properties: [
             UnboundCompilerModuleTargetPropertyV1::DataLayout,
             UnboundCompilerModuleTargetPropertyV1::TargetProcessor,
             UnboundCompilerModuleTargetPropertyV1::CodeObjectVersion,
         ],
     })
+}
+
+/// Embeds one exact zero-digest descriptor source in compiler-owned LLVM module assembly.
+///
+/// The empty ELF flag string is intentional: LLVM and LLD preserve this as a non-allocatable,
+/// non-writable, non-executable `SHT_PROGBITS` section. The existing Worker V2 module identity
+/// therefore commits to the descriptor bytes without a second transport or linker input.
+#[allow(dead_code)] // The next Worker V2 producer step supplies the rustc-derived source value.
+pub(crate) fn bind_compiler_descriptor_source_v1(
+    mut module: InertCompilerModuleTextV1,
+    source: &CompilerDescriptorSourceV1,
+) -> Result<InertCompilerModuleTextV1, CompilerModuleConstructionError> {
+    if module.descriptor_source_identity.is_some() {
+        return Err(CompilerModuleConstructionError::DescriptorSourceAlreadyBound);
+    }
+
+    let mut entries = source
+        .table()
+        .kernels()
+        .iter()
+        .map(|kernel| kernel.entry_name().as_str())
+        .collect::<Vec<_>>();
+    entries.sort_unstable();
+    if entries
+        != module
+            .kernel_entries
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+    {
+        return Err(CompilerModuleConstructionError::DescriptorKernelEntryClosureMismatch);
+    }
+
+    let mut descriptors = source
+        .table()
+        .kernels()
+        .iter()
+        .map(|kernel| kernel.descriptor_symbol().as_str())
+        .collect::<Vec<_>>();
+    descriptors.sort_unstable();
+    let expected_descriptors = module
+        .kernel_entries
+        .iter()
+        .map(|entry| format!("{entry}.kd"))
+        .collect::<Vec<_>>();
+    if descriptors
+        != expected_descriptors
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+    {
+        return Err(CompilerModuleConstructionError::DescriptorSymbolClosureMismatch);
+    }
+
+    append_descriptor_module_assembly(&mut module.llvm_ir, source.canonical_bytes());
+    module.descriptor_source_identity = Some(source.identity());
+    Ok(module)
+}
+
+#[allow(dead_code)] // Called only by the staged Worker V2 descriptor binding above.
+fn append_descriptor_module_assembly(llvm_ir: &mut String, bytes: &[u8]) {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    llvm_ir.push_str("\nmodule asm \".section ");
+    llvm_ir.push_str(COMPILER_DESCRIPTOR_SECTION_NAME_V1);
+    llvm_ir.push_str(",\\22\\22,@progbits\"\nmodule asm \".balign 8\"\n");
+    for chunk in bytes.chunks(16) {
+        llvm_ir.push_str("module asm \".byte ");
+        for (index, byte) in chunk.iter().copied().enumerate() {
+            if index != 0 {
+                llvm_ir.push_str(", ");
+            }
+            llvm_ir.push_str("0x");
+            llvm_ir.push(HEX[usize::from(byte >> 4)] as char);
+            llvm_ir.push(HEX[usize::from(byte & 0x0f)] as char);
+        }
+        llvm_ir.push_str("\"\n");
+    }
 }
 
 fn enforce_compiler_module_bounds(module: &Module) -> Result<(), CompilerModuleConstructionError> {
@@ -1444,10 +1547,91 @@ fn reject(reason: impl Into<String>) -> EmitError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fe2o3_compiler_ffi::CompilerDescriptorSourceV1;
+    use fe2o3_kernel_descriptor::{
+        BlockSizeV1, BuildEvidenceV1, CanonicalCodeObjectDigest, CodeObjectVersion,
+        CompilerIdentityV1, DeviceDescriptorTableV1, DeviceLayoutDescriptorV1,
+        DeviceLayoutRecordV1, DeviceTargetV1, DimensionsV1, EvidenceDigest, EvidenceIdentity,
+        KernelAbiLayoutV1, KernelDescriptorV1, KernelId as DescriptorKernelId, LaunchConstraintsV1,
+        LogicalArgumentV1, ProducerIdentityV1, ScalarTypeV1, SourceTypeDescriptorV1,
+        SourceTypeRecordV1, Text, ValidName,
+    };
     use fe2o3_kernel_ir::{
         BasicBlock, BlockId, Constant, Function, FunctionId, LaunchDomain, LaunchExtent,
         MemoryAccess, Signature, SwitchCase,
     };
+
+    fn descriptor_source(entry: &str, descriptor: &str) -> CompilerDescriptorSourceV1 {
+        let source_type =
+            SourceTypeRecordV1::new(SourceTypeDescriptorV1::scalar(ScalarTypeV1::F32));
+        let layout = DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::scalar(ScalarTypeV1::F32));
+        let argument = LogicalArgumentV1::scalar(
+            0,
+            ValidName::new("value").unwrap(),
+            &source_type,
+            &layout,
+            0,
+        )
+        .unwrap();
+        let evidence = |byte| {
+            BuildEvidenceV1::new(
+                EvidenceIdentity::from_opaque_bytes([byte; 32]),
+                EvidenceDigest::from_sha256_bytes([byte.wrapping_add(1); 32]),
+            )
+        };
+        let kernel = KernelDescriptorV1::new(
+            DescriptorKernelId::from_bytes([0x11; 32]),
+            ValidName::new(entry).unwrap(),
+            ValidName::new(entry).unwrap(),
+            ValidName::new(descriptor).unwrap(),
+            evidence(0x21),
+            evidence(0x31),
+            vec![],
+            KernelAbiLayoutV1::new(4, 4, 4).unwrap(),
+            LaunchConstraintsV1::new(
+                1,
+                BlockSizeV1::Exact(DimensionsV1::new(256, 1, 1).unwrap()),
+                DimensionsV1::new(u32::MAX, 1, 1).unwrap(),
+                256,
+                0,
+                0,
+            )
+            .unwrap(),
+            vec![argument],
+        )
+        .unwrap();
+        let table = DeviceDescriptorTableV1::new(
+            CanonicalCodeObjectDigest::from_bytes([0; 32]),
+            CodeObjectVersion::V6,
+            CompilerIdentityV1::new(
+                Text::new("rustc-codegen-fe2o3").unwrap(),
+                Text::new("test").unwrap(),
+                [0x41; 20],
+            ),
+            ProducerIdentityV1::new(
+                Text::new("rustc-codegen-fe2o3").unwrap(),
+                Text::new("test").unwrap(),
+            ),
+            DeviceTargetV1::parse("gfx942:xnack-").unwrap(),
+            vec![source_type],
+            vec![layout],
+            vec![kernel],
+        )
+        .unwrap();
+        CompilerDescriptorSourceV1::new(table).unwrap()
+    }
+
+    fn embedded_descriptor_bytes(llvm_ir: &str) -> Vec<u8> {
+        llvm_ir
+            .lines()
+            .filter_map(|line| {
+                line.strip_prefix("module asm \".byte ")
+                    .and_then(|line| line.strip_suffix('"'))
+            })
+            .flat_map(|line| line.split(", "))
+            .map(|byte| u8::from_str_radix(byte.strip_prefix("0x").unwrap(), 16).unwrap())
+            .collect()
+    }
 
     fn translated_fill() -> Module {
         let slice = writable_f32_slice();
@@ -2076,6 +2260,52 @@ mod tests {
         assert!(first.llvm_ir().contains("define void @visible_helper"));
         assert!(first.llvm_ir().contains("declare void @external_import"));
         assert!(!first.llvm_ir().contains("bitcode"));
+        assert_eq!(first.descriptor_source_identity(), None);
+    }
+
+    #[test]
+    fn descriptor_source_is_embedded_exactly_once_with_non_alloc_section_directives() {
+        let source = descriptor_source("entry", "entry.kd");
+        let module = construct_inert_compiler_module_text_v1(&inert_compiler_module_fixture())
+            .expect("bounded module");
+        let bound = bind_compiler_descriptor_source_v1(module, &source).expect("matching closure");
+
+        assert_eq!(bound.descriptor_source_identity(), Some(source.identity()));
+        assert!(
+            bound
+                .llvm_ir()
+                .contains("module asm \".section .fe2o3.kd.v1,\\22\\22,@progbits\"")
+        );
+        assert!(bound.llvm_ir().contains("module asm \".balign 8\""));
+        assert_eq!(
+            embedded_descriptor_bytes(bound.llvm_ir()),
+            source.canonical_bytes()
+        );
+
+        assert!(matches!(
+            bind_compiler_descriptor_source_v1(bound, &source),
+            Err(CompilerModuleConstructionError::DescriptorSourceAlreadyBound)
+        ));
+    }
+
+    #[test]
+    fn descriptor_source_kernel_and_symbol_substitution_fail_closed() {
+        let module = construct_inert_compiler_module_text_v1(&inert_compiler_module_fixture())
+            .expect("bounded module");
+        assert!(matches!(
+            bind_compiler_descriptor_source_v1(
+                module.clone(),
+                &descriptor_source("other", "other.kd")
+            ),
+            Err(CompilerModuleConstructionError::DescriptorKernelEntryClosureMismatch)
+        ));
+        assert!(matches!(
+            bind_compiler_descriptor_source_v1(
+                module,
+                &descriptor_source("entry", "other_descriptor")
+            ),
+            Err(CompilerModuleConstructionError::DescriptorSymbolClosureMismatch)
+        ));
     }
 
     #[test]

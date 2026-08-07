@@ -19,7 +19,8 @@ mod module_handoff_v2;
 mod symbol_manifest;
 
 pub use descriptor_source::{
-    CompilerDescriptorSourceErrorV1, CompilerDescriptorSourceIdentityV1, CompilerDescriptorSourceV1,
+    COMPILER_DESCRIPTOR_SECTION_NAME_V1, CompilerDescriptorSourceErrorV1,
+    CompilerDescriptorSourceIdentityV1, CompilerDescriptorSourceV1,
 };
 pub use module_handoff::{
     CompilerModuleHandoffErrorV1, CompilerModuleHandoffPartsV1, CompilerModuleHandoffV1,
