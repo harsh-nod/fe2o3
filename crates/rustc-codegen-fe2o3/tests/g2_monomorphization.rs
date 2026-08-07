@@ -11,7 +11,7 @@ struct TestOutputDir {
 impl TestOutputDir {
     fn new(workspace: &Path) -> Self {
         let path = workspace.join(format!(
-            "target/fe2o3/test-output/g2-monomorphization-{}-{}",
+            "target/rustc-codegen-fe2o3-test-output/g2-monomorphization-{}-{}",
             std::process::id(),
             NEXT_OUTPUT_DIRECTORY.fetch_add(1, Ordering::Relaxed)
         ));

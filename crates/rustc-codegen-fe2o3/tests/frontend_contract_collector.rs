@@ -11,7 +11,7 @@ struct TestOutputDir {
 impl TestOutputDir {
     fn new(workspace: &Path) -> Self {
         let path = workspace.join(format!(
-            "target/fe2o3/test-output/frontend-contract-{}-{}",
+            "target/rustc-codegen-fe2o3-test-output/frontend-contract-{}-{}",
             std::process::id(),
             NEXT_OUTPUT_DIRECTORY.fetch_add(1, Ordering::Relaxed)
         ));

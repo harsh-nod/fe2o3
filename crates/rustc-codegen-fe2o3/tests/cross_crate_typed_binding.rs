@@ -8,7 +8,7 @@ struct TestOutputDir {
 impl TestOutputDir {
     fn new(workspace: &Path) -> Self {
         let path = workspace.join(format!(
-            "target/fe2o3/test-output/cross-crate-binding-{}",
+            "target/rustc-codegen-fe2o3-test-output/cross-crate-binding-{}",
             std::process::id()
         ));
         if path.exists() {

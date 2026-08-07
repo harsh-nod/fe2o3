@@ -6,7 +6,7 @@ struct TestOutputDir(PathBuf);
 impl TestOutputDir {
     fn new(workspace: &Path, label: &str) -> Self {
         let path = workspace.join(format!(
-            "target/fe2o3/test-output/device-ffi-{label}-{}",
+            "target/rustc-codegen-fe2o3-test-output/device-ffi-{label}-{}",
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&path);
