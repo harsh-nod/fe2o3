@@ -10,6 +10,7 @@ mod pinned_codegen_backend;
 mod project;
 mod tool_commands;
 mod worker_v2;
+mod worker_v2_artifact_container;
 mod worker_v2_restart;
 
 use std::env;
