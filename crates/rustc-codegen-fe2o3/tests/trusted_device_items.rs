@@ -269,8 +269,7 @@ fn general_v3_rejects_local_disjoint_slice_and_index1d_lookalikes() {
     ));
     let _ = std::fs::remove_dir_all(&target);
     let backend = build_codegen_backend(&workspace);
-    let source =
-        workspace.join("crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src/main.rs");
+    let fixture = workspace.join("crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof");
     let worker = std::env::current_exe().expect("current test executable");
     let worker_bytes = std::fs::read(&worker).expect("read current test executable");
     let worker_digest = DigestAlgorithm::Sha256
@@ -283,7 +282,7 @@ fn general_v3_rejects_local_disjoint_slice_and_index1d_lookalikes() {
     std::fs::create_dir_all(&target).expect("create spoof probe directory");
     let config = target.join("worker-v2-spoof-probe.json");
     let json = format!(
-        "{{\"candidate_output_max_bytes\":4194304,\"format\":\"fe2o3-worker-v2-config-v2\",\"limits\":{{\"stderr_bytes\":65536,\"stdout_bytes\":8388608,\"timeout_ms\":30000}},\"link_options\":[{{\"name\":\"code-object-version\",\"value\":\"6\"}},{{\"name\":\"opt-level\",\"value\":\"2\"}},{{\"name\":\"strip-debug\",\"value\":\"true\"}},{{\"name\":\"verify-each\",\"value\":\"true\"}}],\"providers\":[],\"units\":[{{\"crate_name\":\"fe2o3_typed_alias_spoof\",\"source\":{source:?},\"working_directory\":{workspace:?}}}],\"worker\":{{\"byte_len\":{},\"llvm_build_identity\":\"test-only-unreached-llvm\",\"path\":{worker:?},\"sha256\":\"{worker_digest}\",\"worker_build_identity\":\"test-only-unreached-worker\"}}}}",
+        "{{\"candidate_output_max_bytes\":4194304,\"format\":\"fe2o3-worker-v2-config-v2\",\"limits\":{{\"stderr_bytes\":65536,\"stdout_bytes\":8388608,\"timeout_ms\":30000}},\"link_options\":[{{\"name\":\"code-object-version\",\"value\":\"6\"}},{{\"name\":\"opt-level\",\"value\":\"2\"}},{{\"name\":\"strip-debug\",\"value\":\"true\"}},{{\"name\":\"verify-each\",\"value\":\"true\"}}],\"providers\":[],\"units\":[{{\"crate_name\":\"fe2o3_typed_alias_spoof\",\"source\":\"src/main.rs\",\"working_directory\":{fixture:?}}}],\"worker\":{{\"byte_len\":{},\"llvm_build_identity\":\"test-only-unreached-llvm\",\"path\":{worker:?},\"sha256\":\"{worker_digest}\",\"worker_build_identity\":\"test-only-unreached-worker\"}}}}",
         worker_bytes.len(),
     );
     std::fs::write(&config, json).expect("write spoof probe Worker V2 config");

@@ -872,8 +872,7 @@ fn worker_v2_general_v3_build_links_and_validates_backend_witness() {
     let _lock = backend_test_lock();
     let workspace = workspace();
     let directory = WorkerV2SourceDirectory::new(&workspace);
-    let source =
-        workspace.join("crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src/main.rs");
+    let project = workspace.join("crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof");
     let worker =
         PathBuf::from(std::env::var_os("FE2O3_LLVM_LINK_WORKER").expect("FE2O3_LLVM_LINK_WORKER"));
     let worker_build_identity =
@@ -881,8 +880,8 @@ fn worker_v2_general_v3_build_links_and_validates_backend_witness() {
     let llvm_build_identity = std::env::var("FE2O3_LLVM_BUILD_ID").expect("LLVM build identity");
     let config = WorkerV2TestConfig::native_source_for_crate(
         &directory.0,
-        &workspace,
-        &source,
+        &project,
+        Path::new("src/main.rs"),
         ("fe2o3_typed_alias_spoof", 6),
         &worker,
         &worker_build_identity,
