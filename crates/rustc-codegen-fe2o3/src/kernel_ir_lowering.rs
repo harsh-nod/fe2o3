@@ -25,7 +25,8 @@ use crate::trusted_device_items::TrustedDeviceItem;
 use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, BasicBlock, BinaryOp, BlockId, ComparePredicate, Constant, Function,
     FunctionId, Kernel, LaunchDomain, LaunchExtent, MemoryAccess, Module, Operation, OperationKind,
-    ScalarType, Signature, SwitchCase, Terminator, Type, ValueDef, ValueId, verify_module,
+    ScalarType, Signature, SwitchCase, Terminator, Type, ValueDef, ValueId, WorkgroupSize,
+    verify_module,
 };
 use reserved_fe2o3_symbols::{
     DeviceFfiAddressSpaceV1, DeviceFfiPhysicalResultV1, DeviceFfiPhysicalTypeV1,
@@ -192,6 +193,22 @@ pub fn translate_and_verify(mir: &MirModule) -> Result<Module, TranslationErrors
     let mut definitions = Vec::new();
     let mut kernel_entries = Vec::new();
     let mut kernel_ids = BTreeSet::new();
+    let mut launch_contracts = BTreeMap::new();
+
+    for function in functions.iter().copied() {
+        if function.kind != MirFunctionKind::KernelEntry {
+            continue;
+        }
+        match kernel_ir_launch_contract(function) {
+            Ok(workgroup_size) => {
+                launch_contracts.insert(function.export_name.as_str(), workgroup_size);
+            }
+            Err(error) => diagnostics.push(error),
+        }
+    }
+    if !diagnostics.is_empty() {
+        return Err(errors(diagnostics));
+    }
 
     for function in functions {
         if function.kind == MirFunctionKind::KernelEntry
@@ -208,7 +225,14 @@ pub fn translate_and_verify(mir: &MirModule) -> Result<Module, TranslationErrors
         match FunctionLowerer::new(function, &mut declarations).lower() {
             Ok(definition) => {
                 if function.kind == MirFunctionKind::KernelEntry {
-                    kernel_entries.push((function.export_name.clone(), definition.id.clone()));
+                    kernel_entries.push((
+                        function.export_name.clone(),
+                        definition.id.clone(),
+                        launch_contracts
+                            .get(function.export_name.as_str())
+                            .copied()
+                            .flatten(),
+                    ));
                 }
                 definitions.push(definition);
             }
@@ -235,14 +259,16 @@ pub fn translate_and_verify(mir: &MirModule) -> Result<Module, TranslationErrors
     module.functions = definitions;
     module.kernels = kernel_entries
         .into_iter()
-        .map(|(kernel, entry)| {
-            Kernel::new(
+        .map(|(kernel, entry, workgroup_size)| {
+            let mut kernel = Kernel::new(
                 kernel,
                 entry,
                 LaunchDomain::D1 {
                     x: LaunchExtent::Dynamic,
                 },
-            )
+            );
+            kernel.workgroup_size = workgroup_size;
+            kernel
         })
         .collect();
 
@@ -271,6 +297,53 @@ pub fn translate_and_verify(mir: &MirModule) -> Result<Module, TranslationErrors
     }
 
     Ok(module)
+}
+
+fn kernel_ir_launch_contract(
+    function: &MirFunction,
+) -> Result<Option<WorkgroupSize>, TranslationDiagnostic> {
+    let Some(authenticated) = &function.frontend_contract else {
+        return Ok(None);
+    };
+    let contract = authenticated.contract();
+    if contract.unsafe_assembly().is_some() {
+        return Err(diagnostic(
+            TranslationDiagnosticCode::UnsupportedStatement,
+            TranslationLocation::function(function),
+            format!(
+                "authenticated unsafe assembly from `{}` cannot enter kernel IR until AMDGPU inline-assembly lowering preserves its exact operands, options, and effects",
+                authenticated.registration_path()
+            ),
+        ));
+    }
+    let Some(launch) = contract.launch() else {
+        return Ok(None);
+    };
+    if launch.min_workgroups_per_compute_unit().is_some() {
+        return Err(diagnostic(
+            TranslationDiagnosticCode::UnsupportedStatement,
+            TranslationLocation::function(function),
+            "authenticated minimum-workgroup occupancy cannot be represented by kernel IR V2",
+        ));
+    }
+    let Some(required) = launch.required() else {
+        return Err(diagnostic(
+            TranslationDiagnosticCode::UnsupportedStatement,
+            TranslationLocation::function(function),
+            "authenticated maximum-only launch bounds cannot be represented by kernel IR V2",
+        ));
+    };
+    if let Some(maximum) = launch.maximum()
+        && maximum != required
+    {
+        return Err(diagnostic(
+            TranslationDiagnosticCode::UnsupportedStatement,
+            TranslationLocation::function(function),
+            "authenticated non-exact maximum launch bounds cannot be represented by kernel IR V2",
+        ));
+    }
+    let [x, y, z] = required.as_array();
+    Ok(Some(WorkgroupSize::new(x, y, z)))
 }
 
 fn errors(mut diagnostics: Vec<TranslationDiagnostic>) -> TranslationErrors {
@@ -1560,6 +1633,9 @@ mod tests {
         MirImportedType, MirLocal, MirLocalRole, MirPlaceRef, MirProjectionElem,
     };
     use dialect_mir::MirType;
+    use fe2o3_rustc_front::{
+        FrontendLaunchBoundsV1, FrontendWorkgroupDimensionsV1, KernelFrontendContractV1,
+    };
 
     #[test]
     fn empty_kernels_are_sorted_and_verify() {
@@ -1580,6 +1656,50 @@ mod tests {
 
         assert_eq!(module.kernels[0].id.as_str(), "alpha");
         assert_eq!(module.kernels[1].id.as_str(), "zeta");
+    }
+
+    #[test]
+    fn exact_authenticated_launch_contract_enters_kernel_ir() {
+        let mut kernel =
+            empty_kernel_with_contract(launch_contract(Some([128, 1, 1]), Some([128, 1, 1]), None));
+        kernel.export_name = "launch_exact".to_owned();
+        kernel.rust_path = "tests::launch_exact".to_owned();
+
+        let module = translate_and_verify(&MirModule {
+            functions: vec![kernel],
+        })
+        .expect("exact launch contract");
+        assert_eq!(
+            module.kernels[0].workgroup_size,
+            Some(WorkgroupSize::new(128, 1, 1))
+        );
+    }
+
+    #[test]
+    fn unrepresentable_authenticated_launch_fields_fail_closed() {
+        for (contract, expected) in [
+            (
+                launch_contract(None, Some([128, 1, 1]), None),
+                "maximum-only launch bounds",
+            ),
+            (
+                launch_contract(Some([64, 1, 1]), Some([128, 1, 1]), None),
+                "non-exact maximum launch bounds",
+            ),
+            (
+                launch_contract(Some([64, 1, 1]), Some([64, 1, 1]), Some(2)),
+                "minimum-workgroup occupancy",
+            ),
+        ] {
+            let error = translate_and_verify(&MirModule {
+                functions: vec![empty_kernel_with_contract(contract)],
+            })
+            .unwrap_err();
+            assert!(
+                error.to_string().contains(expected),
+                "missing `{expected}` in {error}"
+            );
+        }
     }
 
     #[test]
@@ -1876,6 +1996,7 @@ mod tests {
                 export_name: "borrowed_index".to_string(),
                 rust_path: "tests::borrowed_index".to_string(),
                 kind: MirFunctionKind::KernelEntry,
+                frontend_contract: None,
                 arg_count: 0,
                 local_count: 4,
                 locals: vec![
@@ -2087,6 +2208,7 @@ mod tests {
                 export_name: "scalar".to_string(),
                 rust_path: "tests::scalar".to_string(),
                 kind: MirFunctionKind::KernelEntry,
+                frontend_contract: None,
                 arg_count: 2,
                 local_count: 5,
                 locals: vec![
@@ -2159,6 +2281,7 @@ mod tests {
                 export_name: "memory".to_string(),
                 rust_path: "tests::memory".to_string(),
                 kind: MirFunctionKind::KernelEntry,
+                frontend_contract: None,
                 arg_count: 3,
                 local_count: 6,
                 locals: vec![
@@ -2229,6 +2352,7 @@ mod tests {
                 export_name: "helper_call".to_string(),
                 rust_path: "tests::helper_call".to_string(),
                 kind: MirFunctionKind::KernelEntry,
+                frontend_contract: None,
                 arg_count: argument_shapes.len(),
                 local_count: locals.len(),
                 locals,
@@ -2273,6 +2397,7 @@ mod tests {
             export_name: name.to_string(),
             rust_path: format!("tests::{name}"),
             kind,
+            frontend_contract: None,
             arg_count,
             local_count: locals.len(),
             locals,
@@ -2282,6 +2407,39 @@ mod tests {
                 terminator: Some(terminator(MirTerminatorKind::Return)),
             }],
         }
+    }
+
+    fn empty_kernel_with_contract(contract: KernelFrontendContractV1) -> MirFunction {
+        MirFunction {
+            export_name: "kernel".to_owned(),
+            rust_path: "tests::kernel".to_owned(),
+            kind: MirFunctionKind::KernelEntry,
+            frontend_contract: Some(
+                crate::collector::AuthenticatedKernelFrontendContractV1::for_test(contract),
+            ),
+            arg_count: 0,
+            local_count: 1,
+            locals: vec![local(0, MirLocalRole::Return, MirTypeShape::Unit)],
+            blocks: vec![MirBlock {
+                index: 0,
+                statements: Vec::new(),
+                terminator: Some(terminator(MirTerminatorKind::Return)),
+            }],
+        }
+    }
+
+    fn launch_contract(
+        required: Option<[u32; 3]>,
+        maximum: Option<[u32; 3]>,
+        occupancy: Option<u16>,
+    ) -> KernelFrontendContractV1 {
+        let required = required.map(|value| FrontendWorkgroupDimensionsV1::new(value).unwrap());
+        let maximum = maximum.map(|value| FrontendWorkgroupDimensionsV1::new(value).unwrap());
+        KernelFrontendContractV1::new(
+            Some(FrontendLaunchBoundsV1::new(required, maximum, occupancy).unwrap()),
+            None,
+        )
+        .unwrap()
     }
 
     fn local(index: usize, role: MirLocalRole, shape: MirTypeShape) -> MirLocal {

@@ -3,7 +3,10 @@
 //! This bridge is an observational preflight gate. Its output does not grant
 //! code-generation, artifact, proof, or launch authority.
 
-use crate::collector::{CollectedFunction, CollectionResult};
+use crate::collector::{
+    AuthenticatedKernelFrontendContractV1, CollectedFunction, CollectionResult,
+    ReachableAssemblySummaryV1,
+};
 use fe2o3_artifacts::DigestAlgorithm;
 use fe2o3_rustc_front::{
     BasicBlockV1, BlockIdV1, DecodeError, FrontendUnitV1, FunctionIdentityV1, FunctionRoleV1,
@@ -144,6 +147,18 @@ impl From<DecodeError> for FrontendRecordBridgeError {
 pub(crate) struct CompilerFrontendRecordV1 {
     unit: FrontendUnitV1,
     canonical_bytes: Vec<u8>,
+    kernel_contracts: Vec<CompilerKernelFrontendContractRecordV1>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CompilerKernelFrontendContractRecordV1 {
+    function_identity: FunctionIdentityV1,
+    registration_path: String,
+    target_def_path_hash: [u8; 16],
+    target_symbol: String,
+    canonical_bytes: Vec<u8>,
+    contract: fe2o3_rustc_front::KernelFrontendContractV1,
+    reachable_assembly: ReachableAssemblySummaryV1,
 }
 
 impl CompilerFrontendRecordV1 {
@@ -153,6 +168,39 @@ impl CompilerFrontendRecordV1 {
 
     pub(crate) fn canonical_bytes(&self) -> &[u8] {
         &self.canonical_bytes
+    }
+
+    pub(crate) fn kernel_contracts(&self) -> &[CompilerKernelFrontendContractRecordV1] {
+        &self.kernel_contracts
+    }
+}
+
+impl CompilerKernelFrontendContractRecordV1 {
+    fn from_authenticated(
+        function_identity: FunctionIdentityV1,
+        authenticated: &AuthenticatedKernelFrontendContractV1,
+    ) -> Self {
+        Self {
+            function_identity,
+            registration_path: authenticated.registration_path().to_owned(),
+            target_def_path_hash: authenticated.target_def_path_hash(),
+            target_symbol: authenticated.target_symbol().to_owned(),
+            canonical_bytes: authenticated.canonical_bytes().to_vec(),
+            contract: authenticated.contract(),
+            reachable_assembly: authenticated.reachable_assembly(),
+        }
+    }
+
+    pub(crate) fn canonical_bytes(&self) -> &[u8] {
+        &self.canonical_bytes
+    }
+
+    pub(crate) const fn contract(&self) -> fe2o3_rustc_front::KernelFrontendContractV1 {
+        self.contract
+    }
+
+    pub(crate) const fn reachable_assembly(&self) -> ReachableAssemblySummaryV1 {
+        self.reachable_assembly
     }
 }
 
@@ -175,6 +223,7 @@ fn extract_frontend_record_untrimmed_v1<'tcx>(
 
     let mut total_blocks = 0_usize;
     let mut functions = Vec::with_capacity(collection.functions.len());
+    let mut kernel_contracts = Vec::new();
     for function in &collection.functions {
         let name = function_name(tcx, function);
         if !matches!(function.instance.def, InstanceKind::Item(_)) {
@@ -201,8 +250,22 @@ fn extract_frontend_record_untrimmed_v1<'tcx>(
             },
         )?;
         check_bound("frontend CFG blocks", total_blocks, MAX_TOTAL_BLOCKS_V1)?;
-        functions.push(extract_function(tcx, function, body)?);
+        let extracted = extract_function(tcx, function, body)?;
+        if let Some(contract) = &function.frontend_contract {
+            kernel_contracts.push(CompilerKernelFrontendContractRecordV1::from_authenticated(
+                extracted.identity(),
+                contract,
+            ));
+        }
+        functions.push(extracted);
     }
+
+    kernel_contracts.sort_by(|lhs, rhs| {
+        lhs.target_symbol
+            .cmp(&rhs.target_symbol)
+            .then_with(|| lhs.registration_path.cmp(&rhs.registration_path))
+            .then_with(|| lhs.target_def_path_hash.cmp(&rhs.target_def_path_hash))
+    });
 
     let extracted = FrontendUnitV1::new(functions)?;
     let canonical_bytes = encode_frontend_unit_v1(&extracted)?;
@@ -213,6 +276,7 @@ fn extract_frontend_record_untrimmed_v1<'tcx>(
     Ok(CompilerFrontendRecordV1 {
         unit: decoded,
         canonical_bytes,
+        kernel_contracts,
     })
 }
 
@@ -566,6 +630,7 @@ fn kernel(value: u32) -> u32 {
             typed_profile: None,
             kernel_binding: None,
             typed_layout_identities: None,
+            frontend_contract: None,
         }
     }
 

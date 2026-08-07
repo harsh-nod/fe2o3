@@ -1,14 +1,24 @@
 use fe2o3_artifacts::TypeIdentity;
+use fe2o3_rustc_front::{
+    ASSEMBLY_OPERAND_ADDRESS_V1, ASSEMBLY_OPERAND_IMMEDIATE_V1, ASSEMBLY_OPERAND_SGPR_V1,
+    ASSEMBLY_OPERAND_VGPR_V1, ASSEMBLY_OPTION_NOMEM_V1, ASSEMBLY_OPTION_NOSTACK_V1,
+    ASSEMBLY_OPTION_PRESERVES_FLAGS_V1, ASSEMBLY_OPTION_PURE_V1, ASSEMBLY_OPTION_READONLY_V1,
+    KERNEL_FRONTEND_REGISTRATION_KIND_V1, KERNEL_FRONTEND_REGISTRATION_MAGIC_V1,
+    KERNEL_FRONTEND_REGISTRATION_PREFIX_V1, KERNEL_FRONTEND_REGISTRATION_VERSION_V1,
+    KernelFrontendContractV1, decode_kernel_frontend_contract_v1,
+};
 use reserved_fe2o3_symbols::{
     CrateBindingIdV1, KernelBindingIdV1, TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2,
     derive_crate_binding_id_v1, derive_kernel_binding_id_v1, host_kernel_symbol_v1,
 };
-use rustc_hir::ItemKind;
+use rustc_ast::InlineAsmOptions;
 use rustc_hir::def_id::{DefId, LOCAL_CRATE};
+use rustc_hir::{ItemKind, Safety};
 use rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags;
 use rustc_middle::mir::mono::{CodegenUnit, MonoItem};
 use rustc_middle::mir::{
-    AggregateKind, CastKind, Operand, RETURN_PLACE, Rvalue, TerminatorKind, UnwindAction,
+    AggregateKind, Body, CastKind, InlineAsmMacro, InlineAsmOperand, Operand, RETURN_PLACE, Rvalue,
+    TerminatorKind, UnwindAction,
 };
 use rustc_middle::ty::adjustment::PointerCoercion;
 use rustc_middle::ty::{
@@ -45,6 +55,81 @@ pub struct CollectedFunction<'tcx> {
     pub(crate) kernel_binding: Option<KernelBindingIdV1>,
     /// rustc-derived identities for each source argument in a typed profile.
     pub(crate) typed_layout_identities: Option<[TypeIdentity; 3]>,
+    /// Compiler-authenticated source contract for this exact kernel root.
+    pub(crate) frontend_contract: Option<AuthenticatedKernelFrontendContractV1>,
+}
+
+/// Source-level kernel contract authenticated against one exact rustc instance.
+///
+/// This is compiler evidence only. It grants no code-generation, proof, load,
+/// or launch authority.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedKernelFrontendContractV1 {
+    registration_path: String,
+    target_def_path_hash: [u8; 16],
+    target_symbol: String,
+    canonical_bytes: Vec<u8>,
+    contract: KernelFrontendContractV1,
+    reachable_assembly: ReachableAssemblySummaryV1,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct ReachableAssemblySummaryV1 {
+    blocks: u32,
+    operand_bits: u16,
+    option_bits: u16,
+}
+
+impl AuthenticatedKernelFrontendContractV1 {
+    pub(crate) fn registration_path(&self) -> &str {
+        &self.registration_path
+    }
+
+    pub(crate) const fn target_def_path_hash(&self) -> [u8; 16] {
+        self.target_def_path_hash
+    }
+
+    pub(crate) fn target_symbol(&self) -> &str {
+        &self.target_symbol
+    }
+
+    pub(crate) fn canonical_bytes(&self) -> &[u8] {
+        &self.canonical_bytes
+    }
+
+    pub(crate) const fn contract(&self) -> KernelFrontendContractV1 {
+        self.contract
+    }
+
+    pub(crate) const fn reachable_assembly(&self) -> ReachableAssemblySummaryV1 {
+        self.reachable_assembly
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test(contract: KernelFrontendContractV1) -> Self {
+        Self {
+            registration_path: "tests::__fe2o3_kernel_frontend_contract_v1_kernel".to_owned(),
+            target_def_path_hash: [0x5a; 16],
+            target_symbol: "fe2o3_kernel_kernel".to_owned(),
+            canonical_bytes: fe2o3_rustc_front::encode_kernel_frontend_contract_v1(contract),
+            contract,
+            reachable_assembly: ReachableAssemblySummaryV1::default(),
+        }
+    }
+}
+
+impl ReachableAssemblySummaryV1 {
+    pub(crate) const fn blocks(self) -> u32 {
+        self.blocks
+    }
+
+    pub(crate) const fn operand_bits(self) -> u16 {
+        self.operand_bits
+    }
+
+    pub(crate) const fn option_bits(self) -> u16 {
+        self.option_bits
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -136,6 +221,7 @@ pub fn collect_device_functions<'tcx>(
             root.typed_profile,
             root.kernel_binding,
             root.typed_layout_identities,
+            root.frontend_contract,
         )?;
     }
 
@@ -151,6 +237,7 @@ pub fn dump_device_functions<'tcx>(tcx: TyCtxt<'tcx>, functions: &[CollectedFunc
             debug_assert!(function.is_kernel_entry() || function.typed_profile.is_none());
             debug_assert!(function.is_kernel_entry() || function.kernel_binding.is_none());
             debug_assert!(function.is_kernel_entry() || function.typed_layout_identities.is_none());
+            debug_assert!(function.is_kernel_entry() || function.frontend_contract.is_none());
             let mir_stats = if tcx.is_mir_available(def_id) {
                 let mir = tcx.instance_mir(function.instance.def);
                 format!(
@@ -223,6 +310,22 @@ struct KernelRoot<T> {
     typed_profile: Option<TypedKernelProfile>,
     kernel_binding: Option<KernelBindingIdV1>,
     typed_layout_identities: Option<[TypeIdentity; 3]>,
+    frontend_contract: Option<AuthenticatedKernelFrontendContractV1>,
+}
+
+#[derive(Clone, Debug)]
+struct FrontendContractRegistrationRecord<T> {
+    registration_path: String,
+    item_name: String,
+    magic: u64,
+    version: u16,
+    kind: u16,
+    logical_name: String,
+    canonical_bytes: Vec<u8>,
+    contract: KernelFrontendContractV1,
+    target_symbol: String,
+    target_identity: String,
+    target: T,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -320,6 +423,8 @@ fn kernel_roots<'tcx>(
     }
 
     let mut roots = validate_registration_records(records, session_crate_binding(tcx))?;
+    let frontend_records = decode_frontend_contract_registrations(tcx, &functions_by_symbol)?;
+    bind_frontend_contract_registrations(tcx, &mut roots, frontend_records)?;
     for root in &mut roots {
         root.typed_layout_identities = match root.typed_profile {
             Some(TypedKernelProfile::VecAddRustcLayoutV2) => {
@@ -374,6 +479,244 @@ fn registration_candidates<'tcx>(
                 .then_some((path, item_name, def_id, item))
         })
         .collect()
+}
+
+fn frontend_contract_candidates<'tcx>(
+    tcx: TyCtxt<'tcx>,
+) -> Vec<(
+    String,
+    String,
+    rustc_hir::def_id::LocalDefId,
+    &'tcx rustc_hir::Item<'tcx>,
+)> {
+    tcx.hir_free_items()
+        .filter_map(|item_id| {
+            let item = tcx.hir_item(item_id);
+            let def_id = item.owner_id.def_id;
+            let path = tcx.def_path_str(def_id.to_def_id());
+            let item_name = final_path_segment(&path).to_string();
+            item_name
+                .starts_with(KERNEL_FRONTEND_REGISTRATION_PREFIX_V1)
+                .then_some((path, item_name, def_id, item))
+        })
+        .collect()
+}
+
+fn decode_frontend_contract_registrations<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    functions_by_symbol: &BTreeMap<String, Vec<Instance<'tcx>>>,
+) -> Result<Vec<FrontendContractRegistrationRecord<Instance<'tcx>>>, RegistrationError> {
+    let mut candidates = frontend_contract_candidates(tcx);
+    candidates.sort_by(|lhs, rhs| lhs.0.cmp(&rhs.0));
+
+    candidates
+        .into_iter()
+        .map(|(path, item_name, def_id, item)| {
+            decode_frontend_contract_registration(
+                tcx,
+                def_id,
+                path,
+                item_name,
+                item,
+                functions_by_symbol,
+            )
+        })
+        .collect()
+}
+
+fn decode_frontend_contract_registration<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    def_id: rustc_hir::def_id::LocalDefId,
+    registration_path: String,
+    item_name: String,
+    item: &rustc_hir::Item<'tcx>,
+    functions_by_symbol: &BTreeMap<String, Vec<Instance<'tcx>>>,
+) -> Result<FrontendContractRegistrationRecord<Instance<'tcx>>, RegistrationError> {
+    if !matches!(item.kind, ItemKind::Static(..)) {
+        return Err(RegistrationError::new(
+            registration_path,
+            "the reserved frontend-contract name must identify a static item",
+        ));
+    }
+    if tcx.is_mutable_static(def_id.to_def_id()) {
+        return Err(RegistrationError::new(
+            registration_path,
+            "frontend-contract registration statics must be immutable",
+        ));
+    }
+    let flags = tcx.codegen_fn_attrs(def_id).flags;
+    if !flags.intersects(CodegenFnAttrFlags::USED_COMPILER | CodegenFnAttrFlags::USED_LINKER) {
+        return Err(RegistrationError::new(
+            registration_path,
+            "frontend-contract registration statics must carry #[used]",
+        ));
+    }
+
+    let registration_ty = tcx.type_of(def_id).instantiate_identity();
+    let TyKind::Tuple(field_types) = registration_ty.kind() else {
+        return Err(RegistrationError::new(
+            registration_path,
+            "frontend-contract registration must use the exact V1 tuple type",
+        ));
+    };
+    let exact_type = field_types.len() == 6
+        && field_types[0] == tcx.types.u64
+        && field_types[1] == tcx.types.u16
+        && field_types[2] == tcx.types.u16
+        && is_shared_str(field_types[3])
+        && is_shared_u8_slice(field_types[4])
+        && matches!(field_types[5].kind(), TyKind::FnPtr(..));
+    if !exact_type {
+        return Err(RegistrationError::new(
+            registration_path,
+            "frontend-contract registration type must be `(u64, u16, u16, &str, &[u8], fn pointer)`",
+        ));
+    }
+
+    let body = tcx.mir_for_ctfe(def_id);
+    let fields = registration_tuple_fields(body, 6, &registration_path)?;
+    let magic = registration_integer(tcx, fields[0], tcx.types.u64, "magic", &registration_path)?;
+    let version =
+        registration_integer(tcx, fields[1], tcx.types.u16, "version", &registration_path)?;
+    let kind = registration_integer(tcx, fields[2], tcx.types.u16, "kind", &registration_path)?;
+    let logical_name = registration_string(tcx, fields[3], "logical name", &registration_path)?;
+    let canonical_bytes = registration_bytes(tcx, fields[4], "contract", &registration_path)?;
+    let contract = decode_kernel_frontend_contract_v1(&canonical_bytes).map_err(|error| {
+        RegistrationError::new(
+            &registration_path,
+            format!("frontend-contract bytes are invalid: {error}"),
+        )
+    })?;
+    let target = registration_target(tcx, body, fields[5], &registration_path)?;
+    let target_symbol = tcx.symbol_name(target).name.to_string();
+    let target_identity = tcx.def_path_str(target.def_id());
+    let Some(cgu_targets) = functions_by_symbol.get(&target_symbol) else {
+        return Err(RegistrationError::new(
+            registration_path,
+            format!(
+                "frontend-contract target `{target_symbol}` was not monomorphized into a codegen unit"
+            ),
+        ));
+    };
+    if cgu_targets.as_slice() != [target] {
+        return Err(RegistrationError::new(
+            registration_path,
+            format!("frontend-contract target `{target_symbol}` is ambiguous or inconsistent"),
+        ));
+    }
+
+    Ok(FrontendContractRegistrationRecord {
+        registration_path,
+        item_name,
+        magic: u64::try_from(magic)
+            .map_err(|_| RegistrationError::new("frontend contract", "magic does not fit u64"))?,
+        version: u16::try_from(version)
+            .map_err(|_| RegistrationError::new("frontend contract", "version does not fit u16"))?,
+        kind: u16::try_from(kind)
+            .map_err(|_| RegistrationError::new("frontend contract", "kind does not fit u16"))?,
+        logical_name,
+        canonical_bytes,
+        contract,
+        target_symbol,
+        target_identity,
+        target,
+    })
+}
+
+fn bind_frontend_contract_registrations<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    roots: &mut [KernelRoot<Instance<'tcx>>],
+    mut records: Vec<FrontendContractRegistrationRecord<Instance<'tcx>>>,
+) -> Result<(), RegistrationError> {
+    records.sort_by(|lhs, rhs| lhs.registration_path.cmp(&rhs.registration_path));
+    let roots_by_name = roots
+        .iter()
+        .enumerate()
+        .map(|(index, root)| (root.logical_name.clone(), index))
+        .collect::<BTreeMap<_, _>>();
+    let mut targets = BTreeMap::new();
+
+    for record in records {
+        let error = |reason| RegistrationError::new(record.registration_path.clone(), reason);
+        if record.magic != KERNEL_FRONTEND_REGISTRATION_MAGIC_V1 {
+            return Err(error(format!(
+                "frontend-contract magic {:#018x} does not match {:#018x}",
+                record.magic, KERNEL_FRONTEND_REGISTRATION_MAGIC_V1
+            )));
+        }
+        if record.version != KERNEL_FRONTEND_REGISTRATION_VERSION_V1 {
+            return Err(error(format!(
+                "unknown frontend-contract registration version {}",
+                record.version
+            )));
+        }
+        if record.kind != KERNEL_FRONTEND_REGISTRATION_KIND_V1 {
+            return Err(error(format!(
+                "unknown frontend-contract registration kind {}",
+                record.kind
+            )));
+        }
+        if record.logical_name.is_empty() {
+            return Err(error(
+                "frontend-contract logical name must not be empty".to_owned(),
+            ));
+        }
+        let expected_item_name = format!(
+            "{KERNEL_FRONTEND_REGISTRATION_PREFIX_V1}{}",
+            record.logical_name
+        );
+        if record.item_name != expected_item_name {
+            return Err(error(format!(
+                "frontend-contract item name `{}` is inconsistent with logical name `{}`",
+                record.item_name, record.logical_name
+            )));
+        }
+        let Some(&root_index) = roots_by_name.get(&record.logical_name) else {
+            return Err(error(format!(
+                "orphan frontend contract has no registered kernel `{}`",
+                record.logical_name
+            )));
+        };
+        let root = &mut roots[root_index];
+        if root.target != record.target {
+            return Err(error(format!(
+                "frontend-contract target `{}` is not the exact registered kernel function",
+                record.target_identity
+            )));
+        }
+        if root.frontend_contract.is_some() {
+            return Err(error(format!(
+                "duplicate frontend contract for kernel `{}`",
+                record.logical_name
+            )));
+        }
+        if let Some(previous) = targets.insert(
+            record.target_identity.clone(),
+            record.registration_path.clone(),
+        ) {
+            return Err(error(format!(
+                "duplicate frontend-contract target `{}`; first registered by `{previous}`",
+                record.target_identity
+            )));
+        }
+        if record.contract.unsafe_assembly().is_some()
+            && tcx.fn_sig(record.target.def_id()).skip_binder().safety() != Safety::Unsafe
+        {
+            return Err(error(
+                "unsafe-assembly contracts require an unsafe registered kernel function".to_owned(),
+            ));
+        }
+
+        root.frontend_contract = Some(AuthenticatedKernelFrontendContractV1 {
+            registration_path: record.registration_path,
+            target_def_path_hash: tcx.def_path_hash(record.target.def_id()).0.to_le_bytes(),
+            target_symbol: record.target_symbol,
+            canonical_bytes: record.canonical_bytes,
+            contract: record.contract,
+            reachable_assembly: ReachableAssemblySummaryV1::default(),
+        });
+    }
+    Ok(())
 }
 
 fn decode_registration_static<'tcx>(
@@ -613,6 +956,84 @@ fn registration_string<'tcx>(
     })
 }
 
+fn registration_bytes<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    operand: &Operand<'tcx>,
+    field: &str,
+    registration_path: &str,
+) -> Result<Vec<u8>, RegistrationError> {
+    let Operand::Constant(constant) = operand else {
+        return Err(RegistrationError::new(
+            registration_path,
+            format!("V1 {field} field must be a byte-slice constant"),
+        ));
+    };
+    if !is_shared_u8_slice(constant.const_.ty()) {
+        return Err(RegistrationError::new(
+            registration_path,
+            format!("V1 {field} field has the wrong type"),
+        ));
+    }
+    let value = constant
+        .const_
+        .eval(tcx, TypingEnv::fully_monomorphized(), constant.span)
+        .map_err(|_| {
+            RegistrationError::new(
+                registration_path,
+                format!("V1 {field} field could not be evaluated"),
+            )
+        })?;
+    value
+        .try_get_slice_bytes_for_diagnostics(tcx)
+        .map(<[u8]>::to_vec)
+        .ok_or_else(|| {
+            RegistrationError::new(
+                registration_path,
+                format!("V1 {field} field did not evaluate to byte-slice data"),
+            )
+        })
+}
+
+fn registration_tuple_fields<'a, 'tcx>(
+    body: &'a rustc_middle::mir::Body<'tcx>,
+    expected_fields: usize,
+    registration_path: &str,
+) -> Result<Vec<&'a Operand<'tcx>>, RegistrationError> {
+    let mut aggregate = None;
+    for block in body.basic_blocks.iter() {
+        for statement in &block.statements {
+            let Some((place, Rvalue::Aggregate(kind, fields))) = statement.kind.as_assign() else {
+                continue;
+            };
+            if place.as_local() != Some(RETURN_PLACE) || !matches!(**kind, AggregateKind::Tuple) {
+                continue;
+            }
+            if aggregate.replace(fields).is_some() {
+                return Err(RegistrationError::new(
+                    registration_path,
+                    "registration initializer must contain exactly one tuple value",
+                ));
+            }
+        }
+    }
+    let fields = aggregate.ok_or_else(|| {
+        RegistrationError::new(
+            registration_path,
+            "registration initializer does not contain the required tuple value",
+        )
+    })?;
+    if fields.len() != expected_fields {
+        return Err(RegistrationError::new(
+            registration_path,
+            format!(
+                "registration initializer has {} fields; expected {expected_fields}",
+                fields.len()
+            ),
+        ));
+    }
+    Ok(fields.iter().collect())
+}
+
 fn registration_target<'tcx>(
     tcx: TyCtxt<'tcx>,
     body: &rustc_middle::mir::Body<'tcx>,
@@ -690,6 +1111,15 @@ fn registration_target<'tcx>(
 
 fn is_shared_str(ty: rustc_middle::ty::Ty<'_>) -> bool {
     matches!(ty.kind(), TyKind::Ref(_, inner, mutability) if inner.is_str() && !mutability.is_mut())
+}
+
+fn is_shared_u8_slice(ty: rustc_middle::ty::Ty<'_>) -> bool {
+    matches!(
+        ty.kind(),
+        TyKind::Ref(_, inner, mutability)
+            if !mutability.is_mut()
+                && matches!(inner.kind(), TyKind::Slice(element) if matches!(element.kind(), TyKind::Uint(rustc_middle::ty::UintTy::U8)))
+    )
 }
 
 fn validate_registration_records<T: Copy>(
@@ -852,6 +1282,7 @@ fn validate_registration_records<T: Copy>(
             typed_profile,
             kernel_binding,
             typed_layout_identities: None,
+            frontend_contract: None,
         });
     }
 
@@ -898,6 +1329,12 @@ struct DeviceCollector<'tcx> {
     tcx: TyCtxt<'tcx>,
     seen: BTreeSet<crate::device_ffi::DeviceFfiInstanceIdentity>,
     call_chains: BTreeMap<crate::device_ffi::DeviceFfiInstanceIdentity, Vec<String>>,
+    call_edges: BTreeMap<
+        crate::device_ffi::DeviceFfiInstanceIdentity,
+        BTreeSet<crate::device_ffi::DeviceFfiInstanceIdentity>,
+    >,
+    inline_assembly:
+        BTreeMap<crate::device_ffi::DeviceFfiInstanceIdentity, ObservedInlineAssemblyV1>,
     used_export_names: BTreeSet<String>,
     worklist: VecDeque<CollectedFunction<'tcx>>,
     result: Vec<CollectedFunction<'tcx>>,
@@ -905,6 +1342,13 @@ struct DeviceCollector<'tcx> {
     reachable_ffi_imports: BTreeSet<reserved_fe2o3_symbols::DeviceFfiContractIdV1>,
     expected_target: String,
     verbose: bool,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct ObservedInlineAssemblyV1 {
+    blocks: u32,
+    operand_bits: u16,
+    option_sets: BTreeSet<u16>,
 }
 
 impl<'tcx> DeviceCollector<'tcx> {
@@ -917,6 +1361,8 @@ impl<'tcx> DeviceCollector<'tcx> {
             tcx,
             seen: BTreeSet::new(),
             call_chains: BTreeMap::new(),
+            call_edges: BTreeMap::new(),
+            inline_assembly: BTreeMap::new(),
             used_export_names: BTreeSet::new(),
             worklist: VecDeque::new(),
             result: Vec::new(),
@@ -954,6 +1400,7 @@ impl<'tcx> DeviceCollector<'tcx> {
                 typed_profile: None,
                 kernel_binding: None,
                 typed_layout_identities: None,
+                frontend_contract: None,
             });
         }
         Ok(())
@@ -967,6 +1414,7 @@ impl<'tcx> DeviceCollector<'tcx> {
         typed_profile: Option<TypedKernelProfile>,
         kernel_binding: Option<KernelBindingIdV1>,
         typed_layout_identities: Option<[TypeIdentity; 3]>,
+        frontend_contract: Option<AuthenticatedKernelFrontendContractV1>,
     ) -> Result<(), CollectError> {
         if !self.used_export_names.insert(export_name.clone()) {
             return Err(CollectError {
@@ -987,6 +1435,7 @@ impl<'tcx> DeviceCollector<'tcx> {
                 typed_profile,
                 kernel_binding,
                 typed_layout_identities,
+                frontend_contract,
             });
         }
         Ok(())
@@ -1017,6 +1466,7 @@ impl<'tcx> DeviceCollector<'tcx> {
                 if let Some(terminator) = &block.terminator {
                     self.process_terminator(
                         &terminator.kind,
+                        mir,
                         &function.instance,
                         function.is_kernel_entry(),
                     )?;
@@ -1025,6 +1475,8 @@ impl<'tcx> DeviceCollector<'tcx> {
 
             self.result.push(function);
         }
+
+        self.authenticate_reachable_frontend_contracts()?;
 
         let device_ffi = crate::device_ffi::validate_local_closure(
             self.tcx,
@@ -1065,6 +1517,7 @@ impl<'tcx> DeviceCollector<'tcx> {
     fn process_terminator(
         &mut self,
         terminator: &TerminatorKind<'tcx>,
+        body: &Body<'tcx>,
         caller: &Instance<'tcx>,
         is_kernel_root: bool,
     ) -> Result<(), CollectError> {
@@ -1084,6 +1537,22 @@ impl<'tcx> DeviceCollector<'tcx> {
                 }
                 self.process_call_operand(func, caller)
             }
+            TerminatorKind::InlineAsm {
+                asm_macro,
+                operands,
+                options,
+                targets,
+                unwind,
+                ..
+            } => self.process_inline_assembly(
+                *asm_macro,
+                operands,
+                *options,
+                targets.len(),
+                *unwind,
+                body,
+                caller,
+            ),
             TerminatorKind::Assert { unwind, .. }
                 if is_kernel_root
                     && matches!(unwind, UnwindAction::Continue | UnwindAction::Unreachable) =>
@@ -1105,6 +1574,208 @@ impl<'tcx> DeviceCollector<'tcx> {
                 None,
             )),
         }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn process_inline_assembly(
+        &mut self,
+        asm_macro: InlineAsmMacro,
+        operands: &[InlineAsmOperand<'tcx>],
+        options: InlineAsmOptions,
+        target_count: usize,
+        unwind: UnwindAction,
+        body: &Body<'tcx>,
+        caller: &Instance<'tcx>,
+    ) -> Result<(), CollectError> {
+        if !matches!(asm_macro, InlineAsmMacro::Asm) {
+            return Err(self.reachable_error(
+                caller,
+                "only local asm! is representable by the V1 kernel frontend contract",
+                None,
+            ));
+        }
+        if target_count != 1 || !matches!(unwind, UnwindAction::Unreachable) {
+            return Err(self.reachable_error(
+                caller,
+                "inline assembly with labels, divergence, or unwind behavior is not representable by the V1 kernel frontend contract",
+                None,
+            ));
+        }
+
+        let supported_options = InlineAsmOptions::PURE
+            | InlineAsmOptions::NOMEM
+            | InlineAsmOptions::READONLY
+            | InlineAsmOptions::PRESERVES_FLAGS
+            | InlineAsmOptions::NOSTACK;
+        let unsupported = options.bits() & !supported_options.bits();
+        if unsupported != 0 {
+            return Err(self.reachable_error(
+                caller,
+                &format!(
+                    "inline assembly uses options {unsupported:#x} outside the V1 frontend contract"
+                ),
+                None,
+            ));
+        }
+
+        let mut operand_bits = 0_u16;
+        for operand in operands {
+            operand_bits |= match operand {
+                InlineAsmOperand::In { value, .. } => {
+                    assembly_operand_bit(value.ty(body, self.tcx)).ok_or_else(|| {
+                        self.reachable_error(
+                            caller,
+                            &format!(
+                                "inline assembly input type `{}` has no V1 operand classification",
+                                value.ty(body, self.tcx)
+                            ),
+                            None,
+                        )
+                    })?
+                }
+                InlineAsmOperand::Out {
+                    place: Some(place), ..
+                } => {
+                    let ty = place.ty(body, self.tcx).ty;
+                    assembly_operand_bit(ty).ok_or_else(|| {
+                        self.reachable_error(
+                            caller,
+                            &format!(
+                                "inline assembly output type `{ty}` has no V1 operand classification"
+                            ),
+                            None,
+                        )
+                    })?
+                }
+                InlineAsmOperand::InOut {
+                    in_value,
+                    out_place,
+                    ..
+                } => {
+                    let input_ty = in_value.ty(body, self.tcx);
+                    let input = assembly_operand_bit(input_ty).ok_or_else(|| {
+                        self.reachable_error(
+                            caller,
+                            &format!(
+                                "inline assembly inout type `{input_ty}` has no V1 operand classification"
+                            ),
+                            None,
+                        )
+                    })?;
+                    if let Some(place) = out_place {
+                        let output_ty = place.ty(body, self.tcx).ty;
+                        let output = assembly_operand_bit(output_ty).ok_or_else(|| {
+                            self.reachable_error(
+                                caller,
+                                &format!(
+                                    "inline assembly inout output type `{output_ty}` has no V1 operand classification"
+                                ),
+                                None,
+                            )
+                        })?;
+                        if input != output {
+                            return Err(self.reachable_error(
+                                caller,
+                                "inline assembly inout types disagree on their V1 operand classification",
+                                None,
+                            ));
+                        }
+                    }
+                    input
+                }
+                InlineAsmOperand::Const { .. } => ASSEMBLY_OPERAND_IMMEDIATE_V1,
+                InlineAsmOperand::Out { place: None, .. }
+                | InlineAsmOperand::SymFn { .. }
+                | InlineAsmOperand::SymStatic { .. }
+                | InlineAsmOperand::Label { .. } => {
+                    return Err(self.reachable_error(
+                        caller,
+                        "inline assembly clobber-only, symbol, and label operands are not representable by the V1 frontend contract",
+                        None,
+                    ));
+                }
+            };
+        }
+        if operand_bits == 0 {
+            return Err(self.reachable_error(
+                caller,
+                "inline assembly has no classifiable V1 operands",
+                None,
+            ));
+        }
+
+        let option_bits = frontend_assembly_option_bits(options);
+        let identity = self.instance_identity(*caller);
+        let observation = self.inline_assembly.entry(identity).or_default();
+        observation.blocks = observation
+            .blocks
+            .checked_add(1)
+            .ok_or_else(|| CollectError {
+                message: "reachable inline assembly block count exceeds u32".to_owned(),
+            })?;
+        observation.operand_bits |= operand_bits;
+        observation.option_sets.insert(option_bits);
+        Ok(())
+    }
+
+    fn authenticate_reachable_frontend_contracts(&mut self) -> Result<(), CollectError> {
+        let kernel_indices = self
+            .result
+            .iter()
+            .enumerate()
+            .filter_map(|(index, function)| function.is_kernel_entry().then_some(index))
+            .collect::<Vec<_>>();
+
+        for index in kernel_indices {
+            let function = &self.result[index];
+            let identity = self.instance_identity(function.instance);
+            let observed = self.reachable_inline_assembly(&identity)?;
+            let logical_name = function
+                .logical_name
+                .as_deref()
+                .unwrap_or(&function.export_name);
+            let authenticated = reconcile_frontend_contract(
+                logical_name,
+                &self.expected_target,
+                function.frontend_contract.as_ref(),
+                observed,
+            )?;
+            if let Some(contract) = &mut self.result[index].frontend_contract {
+                contract.reachable_assembly = authenticated;
+            }
+        }
+        Ok(())
+    }
+
+    fn reachable_inline_assembly(
+        &self,
+        root: &crate::device_ffi::DeviceFfiInstanceIdentity,
+    ) -> Result<ObservedInlineAssemblyV1, CollectError> {
+        let mut visited = BTreeSet::new();
+        let mut pending = vec![root.clone()];
+        let mut summary = ObservedInlineAssemblyV1::default();
+        while let Some(identity) = pending.pop() {
+            if !visited.insert(identity.clone()) {
+                continue;
+            }
+            if let Some(observed) = self.inline_assembly.get(&identity) {
+                summary.blocks =
+                    summary
+                        .blocks
+                        .checked_add(observed.blocks)
+                        .ok_or_else(|| CollectError {
+                            message: "reachable inline assembly block count exceeds u32".to_owned(),
+                        })?;
+                summary.operand_bits |= observed.operand_bits;
+                summary
+                    .option_sets
+                    .extend(observed.option_sets.iter().copied());
+            }
+            if let Some(callees) = self.call_edges.get(&identity) {
+                pending.extend(callees.iter().cloned());
+            }
+        }
+        Ok(summary)
     }
 
     fn process_call_operand(
@@ -1245,6 +1916,10 @@ impl<'tcx> DeviceCollector<'tcx> {
         };
 
         let identity = self.instance_identity(resolved);
+        self.call_edges
+            .entry(self.instance_identity(*caller))
+            .or_default()
+            .insert(identity.clone());
         if self.seen.contains(&identity) {
             return Ok(());
         }
@@ -1320,6 +1995,7 @@ impl<'tcx> DeviceCollector<'tcx> {
             typed_profile: None,
             kernel_binding: None,
             typed_layout_identities: None,
+            frontend_contract: None,
         });
         Ok(())
     }
@@ -1464,6 +2140,104 @@ impl<'tcx> DeviceCollector<'tcx> {
             None
         }
     }
+}
+
+fn assembly_operand_bit(ty: rustc_middle::ty::Ty<'_>) -> Option<u16> {
+    match ty.kind() {
+        TyKind::Bool | TyKind::Char | TyKind::Int(_) | TyKind::Uint(_) | TyKind::FnDef(..) => {
+            Some(ASSEMBLY_OPERAND_SGPR_V1)
+        }
+        TyKind::Float(_) => Some(ASSEMBLY_OPERAND_VGPR_V1),
+        TyKind::Ref(..) | TyKind::RawPtr(..) | TyKind::FnPtr(..) => {
+            Some(ASSEMBLY_OPERAND_ADDRESS_V1)
+        }
+        _ => None,
+    }
+}
+
+fn frontend_assembly_option_bits(options: InlineAsmOptions) -> u16 {
+    let mut bits = 0;
+    for (option, frontend_bit) in [
+        (InlineAsmOptions::NOMEM, ASSEMBLY_OPTION_NOMEM_V1),
+        (InlineAsmOptions::READONLY, ASSEMBLY_OPTION_READONLY_V1),
+        (InlineAsmOptions::PURE, ASSEMBLY_OPTION_PURE_V1),
+        (
+            InlineAsmOptions::PRESERVES_FLAGS,
+            ASSEMBLY_OPTION_PRESERVES_FLAGS_V1,
+        ),
+        (InlineAsmOptions::NOSTACK, ASSEMBLY_OPTION_NOSTACK_V1),
+    ] {
+        if options.contains(option) {
+            bits |= frontend_bit;
+        }
+    }
+    bits
+}
+
+fn reconcile_frontend_contract(
+    logical_name: &str,
+    expected_target: &str,
+    authenticated: Option<&AuthenticatedKernelFrontendContractV1>,
+    observed: ObservedInlineAssemblyV1,
+) -> Result<ReachableAssemblySummaryV1, CollectError> {
+    let declared = authenticated.and_then(|contract| contract.contract.unsafe_assembly());
+    if observed.blocks == 0 {
+        if declared.is_some() {
+            return Err(CollectError {
+                message: format!(
+                    "kernel `{logical_name}` declares unsafe assembly but no asm! block is reachable from its exact rustc instance"
+                ),
+            });
+        }
+        return Ok(ReachableAssemblySummaryV1::default());
+    }
+
+    let Some(declared) = declared else {
+        return Err(CollectError {
+            message: format!(
+                "kernel `{logical_name}` reaches inline assembly without an authenticated unsafe_asm frontend contract"
+            ),
+        });
+    };
+    let target_arch = expected_target.split(':').next().unwrap_or(expected_target);
+    if declared.target().canonical_name() != target_arch {
+        return Err(CollectError {
+            message: format!(
+                "kernel `{logical_name}` unsafe-assembly target `{}` disagrees with compiler target `{expected_target}`",
+                declared.target().canonical_name()
+            ),
+        });
+    }
+    if observed.operand_bits != declared.operand_bits() {
+        return Err(CollectError {
+            message: format!(
+                "kernel `{logical_name}` unsafe-assembly operand declaration {:#x} disagrees with reachable MIR operands {:#x}",
+                declared.operand_bits(),
+                observed.operand_bits
+            ),
+        });
+    }
+    let [observed_options] = observed.option_sets.iter().copied().collect::<Vec<_>>()[..] else {
+        return Err(CollectError {
+            message: format!(
+                "kernel `{logical_name}` reaches asm! blocks with different option sets that one V1 contract cannot represent"
+            ),
+        });
+    };
+    if observed_options != declared.option_bits() {
+        return Err(CollectError {
+            message: format!(
+                "kernel `{logical_name}` unsafe-assembly option declaration {:#x} disagrees with reachable MIR options {observed_options:#x}",
+                declared.option_bits()
+            ),
+        });
+    }
+
+    Ok(ReachableAssemblySummaryV1 {
+        blocks: observed.blocks,
+        operand_bits: observed.operand_bits,
+        option_bits: observed_options,
+    })
 }
 
 fn sanitize_symbol_name(name: &str) -> String {

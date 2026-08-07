@@ -261,6 +261,45 @@ impl BackendConfig {
     }
 }
 
+fn dump_authenticated_frontend_contracts(
+    frontend: &frontend_record_bridge::CompilerFrontendRecordV1,
+) {
+    let contracts = frontend.kernel_contracts();
+    if contracts.is_empty() {
+        return;
+    }
+    let bytes = contracts
+        .iter()
+        .map(|record| record.canonical_bytes().len())
+        .sum::<usize>();
+    let assembly_blocks = contracts
+        .iter()
+        .map(|record| record.reachable_assembly().blocks() as usize)
+        .sum::<usize>();
+    let effectful = contracts
+        .iter()
+        .filter(|record| {
+            record
+                .contract()
+                .unsafe_assembly()
+                .is_some_and(|assembly| assembly.effect_bits() != 0)
+        })
+        .count();
+    let operand_options = contracts.iter().fold((0_u16, 0_u16), |combined, record| {
+        let assembly = record.reachable_assembly();
+        (
+            combined.0 | assembly.operand_bits(),
+            combined.1 | assembly.option_bits(),
+        )
+    });
+    eprintln!(
+        "[rustc-codegen-fe2o3] authenticated {} kernel frontend contract(s), {bytes} canonical byte(s), {assembly_blocks} reachable asm block(s), {effectful} effectful declaration(s), operand/options union {:#x}/{:#x}",
+        contracts.len(),
+        operand_options.0,
+        operand_options.1
+    );
+}
+
 impl CodegenBackend for Fe2o3CodegenBackend {
     fn name(&self) -> &'static str {
         "fe2o3"
@@ -373,6 +412,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                                 frontend_record.unit().functions().len(),
                                 frontend_record.canonical_bytes().len()
                             );
+                            dump_authenticated_frontend_contracts(&frontend_record);
                         }
                         collector::dump_device_functions(tcx, &collection.functions);
                         let descriptor_roots =
@@ -477,6 +517,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                                     frontend_record.unit().functions().len(),
                                     frontend_record.canonical_bytes().len()
                                 );
+                                dump_authenticated_frontend_contracts(&frontend_record);
                             }
                             collector::dump_device_functions(tcx, &collection.functions);
                             let mir_module = mir_import::import_collection(tcx, &collection)

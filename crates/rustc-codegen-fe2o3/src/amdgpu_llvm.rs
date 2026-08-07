@@ -121,6 +121,15 @@ fn emit_kernel<'tcx>(
     kernel: &CollectedFunction<'tcx>,
     record_function: Option<&RecordLoweringFunction>,
 ) -> Result<String, EmitError> {
+    if let Some(contract) = &kernel.frontend_contract {
+        return Err(unsupported_kernel(
+            &kernel.export_name,
+            format!(
+                "authenticated frontend contract `{}` cannot use legacy-v1 emission; select a kernel-IR pipeline that preserves launch bounds, while unsafe assembly remains blocked pending AMDGPU lowering",
+                contract.registration_path()
+            ),
+        ));
+    }
     let mir = tcx.instance_mir(kernel.instance.def);
     let abi = analyze_kernel_abi(tcx, kernel)?;
     if let Some(record_function) = record_function {

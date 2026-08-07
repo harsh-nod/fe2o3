@@ -208,6 +208,7 @@ fn vecadd_fixture() -> MirModule {
             export_name: "vecadd".to_string(),
             rust_path: "fe2o3_vecadd::fe2o3_kernel_vecadd".to_string(),
             kind: MirFunctionKind::KernelEntry,
+            frontend_contract: None,
             arg_count: 3,
             local_count: 17,
             locals: vec![

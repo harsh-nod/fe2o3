@@ -31,6 +31,7 @@ pub struct MirFunction {
     pub local_count: usize,
     pub locals: Vec<MirLocal>,
     pub blocks: Vec<MirBlock>,
+    pub frontend_contract: Option<crate::collector::AuthenticatedKernelFrontendContractV1>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -618,6 +619,7 @@ pub fn import_collection<'tcx>(
                 function.export_name.clone(),
                 rust_path,
                 import_function_kind(function.role),
+                function.frontend_contract.clone(),
                 &compiler_ffi_imports,
             ))
         })
@@ -1123,6 +1125,7 @@ fn import_body<'tcx>(
     export_name: String,
     rust_path: String,
     kind: MirFunctionKind,
+    frontend_contract: Option<crate::collector::AuthenticatedKernelFrontendContractV1>,
     compiler_ffi_imports: &CompilerFfiImports,
 ) -> MirFunction {
     let blocks = body
@@ -1172,6 +1175,7 @@ fn import_body<'tcx>(
         local_count: body.local_decls.len(),
         locals,
         blocks,
+        frontend_contract,
     }
 }
 
@@ -1696,6 +1700,7 @@ mod tests {
                 export_name: "vecadd".to_string(),
                 rust_path: "fe2o3_vecadd::fe2o3_kernel_vecadd".to_string(),
                 kind: MirFunctionKind::KernelEntry,
+                frontend_contract: None,
                 arg_count: 3,
                 local_count: 17,
                 locals: vec![
@@ -1751,6 +1756,7 @@ mod tests {
                 export_name: "vecadd".to_string(),
                 rust_path: "fe2o3_vecadd::fe2o3_kernel_vecadd".to_string(),
                 kind: MirFunctionKind::KernelEntry,
+                frontend_contract: None,
                 arg_count: 3,
                 local_count: 17,
                 locals: vec![MirLocal {
@@ -1820,6 +1826,7 @@ mod tests {
                 export_name: "copy".to_string(),
                 rust_path: "fe2o3_copy::fe2o3_kernel_copy".to_string(),
                 kind: MirFunctionKind::KernelEntry,
+                frontend_contract: None,
                 arg_count: 1,
                 local_count: 3,
                 locals: Vec::new(),
@@ -1894,6 +1901,7 @@ mod tests {
                 export_name: "consumer".to_string(),
                 rust_path: "tests::consumer".to_string(),
                 kind: MirFunctionKind::KernelEntry,
+                frontend_contract: None,
                 arg_count: 0,
                 local_count: 1,
                 locals: Vec::new(),

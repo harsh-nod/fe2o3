@@ -580,7 +580,16 @@ pub(crate) fn prepare_fill_collection(
         .iter_mut()
         .find(|kernel| kernel.id.as_str() == kernel_name)
         .expect("identity equality established the selected kernel");
-    kernel.workgroup_size = Some(WorkgroupSize::new(WORKGROUP_X, 1, 1));
+    let required_workgroup_size = WorkgroupSize::new(WORKGROUP_X, 1, 1);
+    match kernel.workgroup_size {
+        None => kernel.workgroup_size = Some(required_workgroup_size),
+        Some(observed) if observed == required_workgroup_size => {}
+        Some(observed) => {
+            return Err(reject(format!(
+                "`{kernel_name}` authenticated workgroup size {observed:?} conflicts with the exact {WORKGROUP_X}x1x1 executable profile"
+            )));
+        }
+    }
     let entry = kernel.entry.clone();
 
     let function = module
