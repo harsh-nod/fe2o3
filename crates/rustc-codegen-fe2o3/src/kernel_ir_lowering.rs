@@ -1040,6 +1040,16 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                         ),
                     ));
                 }
+                Some(TrustedDeviceItem::DeviceValue(_) | TrustedDeviceItem::DeviceMath(_)) => {
+                    return Err(diagnostic(
+                        TranslationDiagnosticCode::UnsupportedCall,
+                        location,
+                        format!(
+                            "trusted half/math item `{}` has not entered target-specific lowering",
+                            callee.identity()
+                        ),
+                    ));
+                }
                 None => {
                     return Err(diagnostic(
                         TranslationDiagnosticCode::UnsupportedCall,

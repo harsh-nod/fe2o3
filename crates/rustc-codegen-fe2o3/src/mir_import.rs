@@ -73,6 +73,10 @@ pub enum MirTypeShape {
     USize,
     F32,
     F64,
+    F16,
+    Bf16,
+    Bf16x2,
+    DeviceMath,
     Slice {
         element: Box<MirTypeShape>,
         mutable: bool,
@@ -1193,12 +1197,17 @@ fn import_type<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> MirImportedType {
             _ => MirType::Ptr,
         },
         TyKind::RawPtr(_, _) => MirType::Ptr,
-        TyKind::Adt(adt, _)
-            if trusted_device_items::classify(tcx, adt.did())
-                == Some(TrustedDeviceItem::DisjointSlice) =>
-        {
-            MirType::DisjointSlice
-        }
+        TyKind::Adt(adt, _) => match trusted_device_items::classify(tcx, adt.did()) {
+            Some(TrustedDeviceItem::DisjointSlice) => MirType::DisjointSlice,
+            Some(TrustedDeviceItem::DeviceValue(
+                dialect_amdgcn::DeviceValueDiagnosticItem::Bf16x2,
+            )) => MirType::I32,
+            Some(
+                TrustedDeviceItem::DeviceValue(_)
+                | TrustedDeviceItem::DeviceMath(dialect_amdgcn::DeviceMathDiagnosticItem::Context),
+            ) => MirType::Unknown,
+            _ => MirType::Unknown,
+        },
         TyKind::Tuple(elements) if elements.is_empty() => MirType::Unit,
         _ => MirType::Unknown,
     };
@@ -1234,13 +1243,25 @@ fn import_type_shape<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> MirTypeShape {
             pointee: Box::new(import_type_shape(tcx, *pointee)),
             mutable: *mutability == Mutability::Mut,
         },
-        TyKind::Adt(adt, args) if is_disjoint_slice(tcx, adt.did()) => {
-            MirTypeShape::DisjointSlice {
+        TyKind::Adt(adt, args) => match trusted_device_items::classify(tcx, adt.did()) {
+            Some(TrustedDeviceItem::DisjointSlice) => MirTypeShape::DisjointSlice {
                 element: Box::new(import_type_shape(tcx, args.type_at(0))),
-            }
-        }
-        TyKind::Adt(adt, _) => MirTypeShape::Adt {
-            identity: tcx.def_path_str(adt.did()),
+            },
+            Some(TrustedDeviceItem::DeviceValue(
+                dialect_amdgcn::DeviceValueDiagnosticItem::F16,
+            )) => MirTypeShape::F16,
+            Some(TrustedDeviceItem::DeviceValue(
+                dialect_amdgcn::DeviceValueDiagnosticItem::Bf16,
+            )) => MirTypeShape::Bf16,
+            Some(TrustedDeviceItem::DeviceValue(
+                dialect_amdgcn::DeviceValueDiagnosticItem::Bf16x2,
+            )) => MirTypeShape::Bf16x2,
+            Some(TrustedDeviceItem::DeviceMath(
+                dialect_amdgcn::DeviceMathDiagnosticItem::Context,
+            )) => MirTypeShape::DeviceMath,
+            _ => MirTypeShape::Adt {
+                identity: tcx.def_path_str(adt.did()),
+            },
         },
         TyKind::Tuple(elements) if elements.is_empty() => MirTypeShape::Unit,
         TyKind::Tuple(elements) => MirTypeShape::Tuple(
@@ -1251,10 +1272,6 @@ fn import_type_shape<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> MirTypeShape {
         ),
         _ => MirTypeShape::Unknown,
     }
-}
-
-fn is_disjoint_slice(tcx: TyCtxt<'_>, def_id: rustc_hir::def_id::DefId) -> bool {
-    trusted_device_items::classify(tcx, def_id) == Some(TrustedDeviceItem::DisjointSlice)
 }
 
 fn import_statement<'tcx>(

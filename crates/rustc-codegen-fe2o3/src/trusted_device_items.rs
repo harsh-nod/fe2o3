@@ -15,6 +15,10 @@ use rustc_hir::def_id::{DefId, LOCAL_CRATE};
 use rustc_middle::ty::TyCtxt;
 use rustc_span::Symbol;
 
+use dialect_amdgcn::{
+    DeviceMathDiagnosticItem, DeviceValueDiagnosticItem, Fe2o3DeviceDiagnosticItem,
+};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum TrustedDeviceItem {
     DisjointSlice,
@@ -27,6 +31,8 @@ pub(crate) enum TrustedDeviceItem {
     ThreadIndexStrideOffset,
     DisjointSliceGetMut,
     DisjointSliceGetMutAt,
+    DeviceValue(DeviceValueDiagnosticItem),
+    DeviceMath(DeviceMathDiagnosticItem),
 }
 
 const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
@@ -82,12 +88,83 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
     ),
 ];
 
+const HALF_MATH_DIAGNOSTIC_ITEMS: &[(&str, &str)] = &[
+    ("fe2o3_device_f16_v1", "fe2o3_device::F16"),
+    ("fe2o3_device_bf16_v1", "fe2o3_device::Bf16"),
+    ("fe2o3_device_bf16x2_v1", "fe2o3_device::Bf16x2"),
+    ("fe2o3_device_math_context_v1", "fe2o3_device::DeviceMath"),
+    (
+        "fe2o3_device_math_context_from_compiler_v1",
+        "fe2o3_device::DeviceMath::from_compiler",
+    ),
+    (
+        "fe2o3_device_math_sqrt_f32_v1",
+        "fe2o3_device::DeviceMath::sqrt_f32",
+    ),
+    (
+        "fe2o3_device_math_fma_f32_v1",
+        "fe2o3_device::DeviceMath::mul_add_f32",
+    ),
+    (
+        "fe2o3_device_math_floor_f32_v1",
+        "fe2o3_device::DeviceMath::floor_f32",
+    ),
+    (
+        "fe2o3_device_math_ceil_f32_v1",
+        "fe2o3_device::DeviceMath::ceil_f32",
+    ),
+    (
+        "fe2o3_device_math_trunc_f32_v1",
+        "fe2o3_device::DeviceMath::trunc_f32",
+    ),
+    (
+        "fe2o3_device_math_roundeven_f32_v1",
+        "fe2o3_device::DeviceMath::round_ties_even_f32",
+    ),
+    (
+        "fe2o3_device_math_sin_f32_v1",
+        "fe2o3_device::DeviceMath::sin_f32",
+    ),
+    (
+        "fe2o3_device_math_cos_f32_v1",
+        "fe2o3_device::DeviceMath::cos_f32",
+    ),
+    (
+        "fe2o3_device_math_exp_f32_v1",
+        "fe2o3_device::DeviceMath::exp_f32",
+    ),
+    (
+        "fe2o3_device_math_exp2_f32_v1",
+        "fe2o3_device::DeviceMath::exp2_f32",
+    ),
+    (
+        "fe2o3_device_math_log_f32_v1",
+        "fe2o3_device::DeviceMath::ln_f32",
+    ),
+    (
+        "fe2o3_device_math_log2_f32_v1",
+        "fe2o3_device::DeviceMath::log2_f32",
+    ),
+    (
+        "fe2o3_device_math_log10_f32_v1",
+        "fe2o3_device::DeviceMath::log10_f32",
+    ),
+    (
+        "fe2o3_device_math_fma_bf16x2_v1",
+        "fe2o3_device::DeviceMath::mul_add_bf16x2",
+    ),
+];
+
 impl TrustedDeviceItem {
     pub(crate) fn canonical_path(self) -> &'static str {
-        TRUSTED_ITEMS
-            .iter()
-            .find_map(|(item, _, path)| (*item == self).then_some(*path))
-            .expect("every trusted device item has one canonical path")
+        match self {
+            Self::DeviceValue(value) => half_math_path(Fe2o3DeviceDiagnosticItem::Value(value)),
+            Self::DeviceMath(math) => half_math_path(Fe2o3DeviceDiagnosticItem::Math(math)),
+            _ => TRUSTED_ITEMS
+                .iter()
+                .find_map(|(item, _, path)| (*item == self).then_some(*path))
+                .expect("every trusted device item has one canonical path"),
+        }
     }
 }
 
@@ -96,14 +173,42 @@ pub(crate) fn classify(tcx: TyCtxt<'_>, def_id: DefId) -> Option<TrustedDeviceIt
         return None;
     }
 
-    TRUSTED_ITEMS.iter().find_map(|(item, marker, _)| {
-        (tcx.get_diagnostic_item(Symbol::intern(marker)) == Some(def_id)).then_some(*item)
-    })
+    TRUSTED_ITEMS
+        .iter()
+        .find_map(|(item, marker, _)| {
+            (tcx.get_diagnostic_item(Symbol::intern(marker)) == Some(def_id)).then_some(*item)
+        })
+        .or_else(|| {
+            HALF_MATH_DIAGNOSTIC_ITEMS.iter().find_map(|(marker, _)| {
+                if tcx.get_diagnostic_item(Symbol::intern(marker)) != Some(def_id) {
+                    return None;
+                }
+                let item = dialect_amdgcn::recognize_fe2o3_device_diagnostic_item(marker)
+                    .expect("half/math registry markers must remain canonical");
+                Some(match item {
+                    Fe2o3DeviceDiagnosticItem::Value(value) => {
+                        TrustedDeviceItem::DeviceValue(value)
+                    }
+                    Fe2o3DeviceDiagnosticItem::Math(math) => TrustedDeviceItem::DeviceMath(math),
+                })
+            })
+        })
+}
+
+fn half_math_path(item: Fe2o3DeviceDiagnosticItem) -> &'static str {
+    HALF_MATH_DIAGNOSTIC_ITEMS
+        .iter()
+        .find_map(|(marker, path)| {
+            (dialect_amdgcn::recognize_fe2o3_device_diagnostic_item(marker) == Some(item))
+                .then_some(*path)
+        })
+        .expect("every trusted half/math diagnostic item has one canonical path")
 }
 
 #[cfg(test)]
 mod tests {
-    use super::TrustedDeviceItem;
+    use super::{HALF_MATH_DIAGNOSTIC_ITEMS, TrustedDeviceItem};
+    use dialect_amdgcn::{DeviceMathDiagnosticItem, DeviceValueDiagnosticItem};
 
     #[test]
     fn semantic_registry_is_complete_and_unique() {
@@ -134,6 +239,30 @@ mod tests {
         for (index, marker) in markers.iter().enumerate() {
             assert!(!marker.is_empty());
             assert!(!markers[..index].contains(marker));
+        }
+
+        let half_math_items = [
+            TrustedDeviceItem::DeviceValue(DeviceValueDiagnosticItem::F16),
+            TrustedDeviceItem::DeviceValue(DeviceValueDiagnosticItem::Bf16),
+            TrustedDeviceItem::DeviceValue(DeviceValueDiagnosticItem::Bf16x2),
+            TrustedDeviceItem::DeviceMath(DeviceMathDiagnosticItem::Context),
+            TrustedDeviceItem::DeviceMath(DeviceMathDiagnosticItem::ContextFromCompiler),
+        ];
+        for item in half_math_items {
+            assert!(!item.canonical_path().is_empty());
+        }
+
+        let markers = HALF_MATH_DIAGNOSTIC_ITEMS
+            .iter()
+            .map(|(marker, _)| *marker)
+            .collect::<Vec<_>>();
+        let paths = HALF_MATH_DIAGNOSTIC_ITEMS
+            .iter()
+            .map(|(_, path)| *path)
+            .collect::<Vec<_>>();
+        for index in 0..markers.len() {
+            assert!(!markers[..index].contains(&markers[index]));
+            assert!(!paths[..index].contains(&paths[index]));
         }
     }
 }
