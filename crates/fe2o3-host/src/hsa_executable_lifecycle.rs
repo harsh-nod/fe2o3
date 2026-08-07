@@ -12,6 +12,8 @@ use std::fmt;
 use std::marker::PhantomData;
 
 const REQUIRED_TARGET: &str = "gfx942";
+const REQUIRED_RUNTIME_TARGET: &str = "gfx942:xnack-";
+const HSA_MINIMUM_KERNARG_ALIGNMENT: u64 = 16;
 const MAX_HSA_IDENTITY_TEXT_BYTES: usize = 256;
 
 /// Safety properties an authenticated compiler/Verus chain must establish.
@@ -297,8 +299,8 @@ impl<K: CompilerGeneratedKernelContractV1> AuthenticatedWorkerV2ExecutableV1<K> 
     ) -> Result<AuthorizedHsaLoadV1<K, A>, HsaLoadAuthorizationError<A::Error>> {
         // SAFETY: the adapter is an unsafe implementation whose observation is
         // validated against the exact admission before authority is issued.
-        let environment =
-            unsafe { adapter.observe_environment() }.map_err(HsaLoadAuthorizationError::Adapter)?;
+        let environment = reviewed_adapter_call(|| unsafe { adapter.observe_environment() })
+            .map_err(HsaLoadAuthorizationError::Adapter)?;
         validate_environment(&self.admission, &environment)
             .map_err(HsaLoadAuthorizationError::Environment)?;
         Ok(AuthorizedHsaLoadV1 {
@@ -869,9 +871,16 @@ impl HsaUnloadObservationV1 {
 /// runtime instance, map the HSA agent to the reported physical HIP device,
 /// load exactly the supplied bytes, resolve exactly the supplied symbol,
 /// report ABI properties queried from that kernel object, synchronously wait
-/// for dispatch completion, and release the exact executable on unload. Handles
-/// must remain valid while owned by the adapter state and must never be reused
-/// under an existing identity.
+/// for dispatch completion, and release the exact executable on unload. A
+/// launch error may return only before packet publication or after quiescence.
+/// Once publication may have occurred, an implementation must retain all
+/// device-reachable authority in a non-returning state or terminate the process
+/// if bounded quiescence cannot be established. No adapter method may unwind:
+/// unwinding across an unsafe lifecycle transition makes native authority
+/// ambiguous. An `Err` from load or implicit-kernarg initialization must mean
+/// that no native authority from that operation remains live. Handles must
+/// remain valid while owned by the adapter state and must never be reused under
+/// an existing identity.
 pub unsafe trait ReviewedHsaExecutableLifecycleAdapterV1 {
     type Executable;
     type Kernel;
@@ -888,7 +897,10 @@ pub unsafe trait ReviewedHsaExecutableLifecycleAdapterV1 {
     ///
     /// # Safety
     ///
-    /// The returned handle and observation must denote only `bytes`.
+    /// The returned handle and observation must denote only `bytes`. `Err` may
+    /// be returned only after every partially created reader, executable, and
+    /// backing allocation has been conclusively released. This method must not
+    /// unwind.
     unsafe fn load_executable(
         &mut self,
         bytes: &[u8],
@@ -900,6 +912,7 @@ pub unsafe trait ReviewedHsaExecutableLifecycleAdapterV1 {
     /// # Safety
     ///
     /// The kernel handle must remain tied to `executable` until it is dropped.
+    /// This method must not unwind.
     unsafe fn resolve_kernel(
         &mut self,
         executable: &Self::Executable,
@@ -910,8 +923,11 @@ pub unsafe trait ReviewedHsaExecutableLifecycleAdapterV1 {
     ///
     /// # Safety
     ///
-    /// The adapter must use the exact handles, geometry, and kernarg storage,
-    /// and return success only after completion is unambiguous.
+    /// The adapter must use the exact handles, geometry, and kernarg storage.
+    /// It may return only after proving no packet was submitted or after all
+    /// submitted effects are quiescent. Success additionally requires an exact
+    /// completion observation. This method must not unwind before or after
+    /// packet publication.
     unsafe fn launch_and_wait(
         &mut self,
         executable: &Self::Executable,
@@ -925,7 +941,8 @@ pub unsafe trait ReviewedHsaExecutableLifecycleAdapterV1 {
     /// # Safety
     ///
     /// Success must mean the executable and all runtime-owned lifecycle state
-    /// are fully released. Failure is treated as an ambiguous terminal state.
+    /// are fully released. Failure is treated as an ambiguous terminal state,
+    /// and this method must not unwind.
     unsafe fn unload_executable(
         &mut self,
         executable: Self::Executable,
@@ -955,7 +972,9 @@ pub unsafe trait ReviewedHsaImplicitKernargAdapterV1:
     ///
     /// The implementation obligations are those of the unsafe trait. The
     /// executable and kernel are the exact private handles retained by the
-    /// lifecycle, and all spans have already been bounds checked.
+    /// lifecycle, and all spans have already been bounds checked. `Err` may be
+    /// returned only when no queue, callback, or other native authority created
+    /// by this operation remains live. This method must not unwind.
     #[allow(clippy::too_many_arguments)]
     unsafe fn initialize_implicit_kernarg(
         &mut self,
@@ -1048,13 +1067,17 @@ impl<K, A: ReviewedHsaExecutableLifecycleAdapterV1> AuthorizedHsaLoadV1<K, A> {
             u64::try_from(bytes.len()).map_err(|_| HsaExecutableLoadError::ExactBytesChanged)?;
         // SAFETY: authority is bound to this reviewed adapter and exact locked
         // bytes. The returned observation is checked before it can advance.
-        let (executable, load) = unsafe { self.adapter.load_executable(bytes, digest) }
-            .map_err(HsaExecutableLoadError::AdapterLoad)?;
+        let (executable, load) =
+            reviewed_adapter_call(|| unsafe { self.adapter.load_executable(bytes, digest) })
+                .map_err(HsaExecutableLoadError::AdapterLoad)?;
         drop(current);
 
         if let Err(field) = validate_load_observation(&self.environment, digest, byte_len, &load) {
-            let cleanup = unsafe { self.adapter.unload_executable(executable) }.err();
-            return Err(HsaExecutableLoadError::LoadObservationMismatch { field, cleanup });
+            terminal_unload(&mut self.adapter, executable, &self.environment, &load);
+            return Err(HsaExecutableLoadError::LoadObservationMismatch {
+                field,
+                cleanup: None,
+            });
         }
 
         let symbol = self
@@ -1064,12 +1087,16 @@ impl<K, A: ReviewedHsaExecutableLifecycleAdapterV1> AuthorizedHsaLoadV1<K, A> {
             .export_symbol();
         // SAFETY: the executable survived exact load observation validation;
         // the adapter must resolve only this exact symbol against that handle.
-        let (kernel, resolution) = match unsafe { self.adapter.resolve_kernel(&executable, symbol) }
-        {
+        let (kernel, resolution) = match reviewed_adapter_call(|| unsafe {
+            self.adapter.resolve_kernel(&executable, symbol)
+        }) {
             Ok(resolved) => resolved,
             Err(source) => {
-                let cleanup = unsafe { self.adapter.unload_executable(executable) }.err();
-                return Err(HsaExecutableLoadError::KernelResolution { source, cleanup });
+                terminal_unload(&mut self.adapter, executable, &self.environment, &load);
+                return Err(HsaExecutableLoadError::KernelResolution {
+                    source,
+                    cleanup: None,
+                });
             }
         };
         if let Err(field) = validate_kernel_resolution(
@@ -1078,8 +1105,11 @@ impl<K, A: ReviewedHsaExecutableLifecycleAdapterV1> AuthorizedHsaLoadV1<K, A> {
             &resolution,
         ) {
             drop(kernel);
-            let cleanup = unsafe { self.adapter.unload_executable(executable) }.err();
-            return Err(HsaExecutableLoadError::KernelObservationMismatch { field, cleanup });
+            terminal_unload(&mut self.adapter, executable, &self.environment, &load);
+            return Err(HsaExecutableLoadError::KernelObservationMismatch {
+                field,
+                cleanup: None,
+            });
         }
 
         Ok(LoadedHsaExecutableV1 {
@@ -1118,9 +1148,12 @@ fn validate_environment(
 ) -> Result<(), HsaEnvironmentMismatch> {
     let expected_target = admission.target();
     let actual_target = environment.physical_device.target;
+    let required_runtime_target = AmdTargetId::parse(REQUIRED_RUNTIME_TARGET)
+        .expect("reviewed runtime target ID is a valid static constant");
     if expected_target.to_string() != REQUIRED_TARGET
-        || actual_target != expected_target
-        || environment.agent.target != expected_target
+        || !expected_target.is_compatible_with_observed(&actual_target)
+        || !required_runtime_target.is_compatible_with_observed(&actual_target)
+        || environment.agent.target != actual_target
     {
         return Err(HsaEnvironmentMismatch::Target {
             actual: actual_target.to_string(),
@@ -1194,6 +1227,9 @@ fn validate_kernel_resolution(
 ) -> Result<(), &'static str> {
     let selected = admission.selected_kernel();
     let physical = selected.launch();
+    let expected_hsa_alignment = physical
+        .kernarg_segment_alignment()
+        .max(HSA_MINIMUM_KERNARG_ALIGNMENT);
     for (matches, field) in [
         (
             resolution.executable_object == executable,
@@ -1208,7 +1244,7 @@ fn validate_kernel_resolution(
             "kernarg segment size",
         ),
         (
-            resolution.kernarg_segment_alignment == physical.kernarg_segment_alignment(),
+            resolution.kernarg_segment_alignment == expected_hsa_alignment,
             "kernarg segment alignment",
         ),
     ] {
@@ -1299,10 +1335,7 @@ impl<K, A: ReviewedHsaExecutableLifecycleAdapterV1> LoadedHsaExecutableV1<K, A> 
             .expect("loaded executable state must own an executable");
         // SAFETY: launch authority borrows `self`, so this consuming method can
         // run only after all launch witnesses and synchronous dispatches end.
-        let unload = unsafe { self.adapter.unload_executable(executable) }
-            .map_err(HsaExecutableUnloadError::Adapter)?;
-        validate_unload_observation(&self.environment, &self.load, &unload)
-            .map_err(HsaExecutableUnloadError::ObservationMismatch)?;
+        let unload = terminal_unload(&mut self.adapter, executable, &self.environment, &self.load);
         Ok(UnloadedHsaExecutableV1 {
             finalized_digest: self.load.finalized_digest,
             executable_object: self.load.executable_object,
@@ -1322,13 +1355,7 @@ impl<K, A: ReviewedHsaExecutableLifecycleAdapterV1> Drop for LoadedHsaExecutable
         };
         // SAFETY: Drop runs only after all Rust borrows of this value end. The
         // unsafe adapter owns the remaining native lifetime obligations.
-        let unload = unsafe { self.adapter.unload_executable(executable) };
-        let valid = unload.as_ref().is_ok_and(|observation| {
-            validate_unload_observation(&self.environment, &self.load, observation).is_ok()
-        });
-        if !valid {
-            std::process::abort();
-        }
+        terminal_unload(&mut self.adapter, executable, &self.environment, &self.load);
     }
 }
 
@@ -1394,11 +1421,11 @@ impl<K, A: ReviewedHsaExecutableLifecycleAdapterV1> HsaKernelLaunchAuthorization
             .expect("launch authority retains the resolved kernel");
         // SAFETY: the caller owns concrete ABI and resource obligations. The
         // reviewed adapter owns exact-handle dispatch and wait semantics.
-        let dispatch = unsafe {
+        let dispatch = reviewed_adapter_call(|| unsafe {
             self.loaded
                 .adapter
                 .launch_and_wait(executable, kernel, self.geometry, kernarg)
-        }
+        })
         .map_err(HsaDispatchError::Adapter)?;
         validate_dispatch_observation(
             &self.loaded.load,
@@ -1455,7 +1482,7 @@ impl<K, A: ReviewedHsaImplicitKernargAdapterV1> HsaKernelLaunchAuthorizationV1<'
         // SAFETY: this crate-private transition is reachable only after typed
         // generated code sealed its exact explicit ABI and resource witnesses.
         // The unsafe extension owns the hidden-argument initialization contract.
-        let observation = unsafe {
+        let observation = reviewed_adapter_call(|| unsafe {
             self.loaded.adapter.initialize_implicit_kernarg(
                 executable,
                 kernel,
@@ -1465,7 +1492,7 @@ impl<K, A: ReviewedHsaImplicitKernargAdapterV1> HsaKernelLaunchAuthorizationV1<'
                 implicit_byte_len,
                 kernarg,
             )
-        }
+        })
         .map_err(HsaGeneratedDispatchError::ImplicitAdapter)?;
         if kernarg[..explicit.len()] != *explicit {
             return Err(HsaGeneratedDispatchError::ExplicitKernargMutation);
@@ -1482,14 +1509,21 @@ impl<K, A: ReviewedHsaImplicitKernargAdapterV1> HsaKernelLaunchAuthorizationV1<'
         .map_err(HsaGeneratedDispatchError::ImplicitObservationMismatch)?;
 
         // SAFETY: the generated path supplied the complete explicit ABI and
-        // the reviewed extension initialized the exact implicit span. The base
-        // lifecycle still validates the synchronous dispatch observation.
+        // the reviewed extension initialized the exact implicit span. By the
+        // unsafe adapter contract, either result returns only before submission
+        // or after quiescence, so caller-owned allocations may be released.
         match unsafe { self.launch_and_wait(kernarg) } {
             Ok(completed) => Ok(completed),
-            // The base adapter does not distinguish definite non-submission
-            // from ambiguous failure after queue publication. Safe generated
-            // code cannot release borrowed allocations in that state.
-            Err(_) => std::process::abort(),
+            Err(HsaDispatchError::KernargSize) => Err(HsaGeneratedDispatchError::KernargSize),
+            Err(HsaDispatchError::KernargAlignment) => {
+                Err(HsaGeneratedDispatchError::KernargAlignment)
+            }
+            Err(HsaDispatchError::Adapter(error)) => {
+                Err(HsaGeneratedDispatchError::DispatchAdapter(error))
+            }
+            Err(HsaDispatchError::ObservationMismatch(field)) => Err(
+                HsaGeneratedDispatchError::DispatchObservationMismatch(field),
+            ),
         }
     }
 }
@@ -1501,8 +1535,10 @@ pub enum HsaGeneratedDispatchError<E> {
     KernargSize,
     KernargAlignment,
     ImplicitAdapter(E),
+    DispatchAdapter(E),
     ExplicitKernargMutation,
     ImplicitObservationMismatch(&'static str),
+    DispatchObservationMismatch(&'static str),
 }
 
 impl<E: fmt::Display> fmt::Display for HsaGeneratedDispatchError<E> {
@@ -1515,11 +1551,15 @@ impl<E: fmt::Display> fmt::Display for HsaGeneratedDispatchError<E> {
             Self::ImplicitAdapter(error) => {
                 write!(formatter, "implicit-kernarg adapter failed: {error}")
             }
+            Self::DispatchAdapter(error) => write!(formatter, "HSA dispatch failed: {error}"),
             Self::ExplicitKernargMutation => {
                 formatter.write_str("implicit-kernarg adapter mutated explicit bytes")
             }
             Self::ImplicitObservationMismatch(field) => {
                 write!(formatter, "implicit-kernarg observation mismatched {field}")
+            }
+            Self::DispatchObservationMismatch(field) => {
+                write!(formatter, "HSA dispatch observation mismatched {field}")
             }
         }
     }
@@ -1743,6 +1783,38 @@ pub enum HsaExecutableUnloadError<E> {
     ObservationMismatch(&'static str),
 }
 
+fn reviewed_adapter_call<T>(call: impl FnOnce() -> T) -> T {
+    // `AssertUnwindSafe` is sound here because no unwind is ever resumed. The
+    // process terminates while the outer lifecycle and caller allocations are
+    // still live, so their destructors cannot release GPU-reachable authority.
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(call)) {
+        Ok(value) => value,
+        Err(payload) => {
+            std::mem::forget(payload);
+            std::process::abort()
+        }
+    }
+}
+
+fn terminal_unload<A: ReviewedHsaExecutableLifecycleAdapterV1>(
+    adapter: &mut A,
+    executable: A::Executable,
+    environment: &HsaEnvironmentObservationV1,
+    load: &HsaCodeObjectLoadObservationV1,
+) -> HsaUnloadObservationV1 {
+    let unload = match reviewed_adapter_call(|| unsafe { adapter.unload_executable(executable) }) {
+        Ok(unload) => unload,
+        Err(error) => {
+            std::mem::forget(error);
+            std::process::abort()
+        }
+    };
+    if validate_unload_observation(environment, load, &unload).is_err() {
+        std::process::abort();
+    }
+    unload
+}
+
 fn validate_unload_observation(
     environment: &HsaEnvironmentObservationV1,
     load: &HsaCodeObjectLoadObservationV1,
@@ -1910,12 +1982,14 @@ mod tests {
         }
     }
 
-    unsafe impl WorkerV2PrerequisiteAuthenticatorV1<TestKernel> for FakeAuthenticator {
+    unsafe impl<K: CompilerGeneratedKernelContractV1> WorkerV2PrerequisiteAuthenticatorV1<K>
+        for FakeAuthenticator
+    {
         type Error = &'static str;
 
         unsafe fn authenticate(
             &mut self,
-            request: &WorkerV2PrerequisiteRequestV1<'_, TestKernel>,
+            request: &WorkerV2PrerequisiteRequestV1<'_, K>,
         ) -> Result<WorkerV2PrerequisiteDecisionV1, Self::Error> {
             let artifact = request.artifact_identity();
             let finalized_digest = if self.fault == PrerequisiteFault::FinalizedDigest {
@@ -1931,7 +2005,7 @@ mod tests {
             let marker_binding_identity = if self.fault == PrerequisiteFault::Marker {
                 [0xf3; 32]
             } else {
-                TestKernel::KERNEL_BINDING_ID_V1
+                K::KERNEL_BINDING_ID_V1
             };
             let compiler = if self.fault == PrerequisiteFault::Compiler {
                 digest(0)
@@ -1992,6 +2066,10 @@ mod tests {
     enum AdapterFault {
         None,
         DeviceOrdinal,
+        TargetSramEccDisabled,
+        TargetXnackEnabled,
+        TargetXnackOmitted,
+        TargetProcessor,
         LoadDigest,
         LoadLength,
         Symbol,
@@ -2000,12 +2078,16 @@ mod tests {
         DispatchObject,
         DispatchGeometry,
         DispatchIncomplete,
+        DispatchAdapterError,
+        DispatchPanic,
         ImplicitExecutable,
         ImplicitOffset,
         ImplicitIncomplete,
         ExplicitMutation,
         UnloadObject,
         UnloadIncomplete,
+        UnloadAdapterError,
+        UnloadPanic,
     }
 
     #[derive(Debug)]
@@ -2039,7 +2121,14 @@ mod tests {
         }
 
         fn environment(&self) -> HsaEnvironmentObservationV1 {
-            let target = AmdTargetId::parse(REQUIRED_TARGET).unwrap();
+            let target = AmdTargetId::parse(match self.fault {
+                AdapterFault::TargetSramEccDisabled => "gfx942:sramecc-:xnack-",
+                AdapterFault::TargetXnackEnabled => "gfx942:sramecc+:xnack+",
+                AdapterFault::TargetXnackOmitted => "gfx942:sramecc+",
+                AdapterFault::TargetProcessor => "gfx950:sramecc+:xnack-",
+                _ => "gfx942:sramecc+:xnack-",
+            })
+            .unwrap();
             let runtime =
                 HsaRuntimeIdentityV1::new("ROCr", "test-v1", digest(0x71), [0x72; 16]).unwrap();
             let ordinal = if self.fault == AdapterFault::DeviceOrdinal {
@@ -2116,9 +2205,9 @@ mod tests {
                 304
             };
             let alignment = if self.fault == AdapterFault::KernargAlignment {
-                16
-            } else {
                 8
+            } else {
+                16
             };
             Ok((
                 FakeKernel,
@@ -2140,6 +2229,12 @@ mod tests {
             geometry: HsaLaunchGeometryV1,
             kernarg: &mut [u8],
         ) -> Result<HsaDispatchObservationV1, Self::Error> {
+            if self.fault == AdapterFault::DispatchPanic {
+                panic!("malicious adapter panic after simulated packet publication");
+            }
+            if self.fault == AdapterFault::DispatchAdapterError {
+                return Err("definite pre-submit dispatch failure");
+            }
             if self.implicit_initialized
                 && (kernarg[..48] != [0x5a; 48] || kernarg[48..] != [0xa5; 256])
             {
@@ -2170,6 +2265,12 @@ mod tests {
             _executable: Self::Executable,
         ) -> Result<HsaUnloadObservationV1, Self::Error> {
             self.unloads.fetch_add(1, Ordering::SeqCst);
+            if self.fault == AdapterFault::UnloadPanic {
+                panic!("malicious adapter panic during executable unload");
+            }
+            if self.fault == AdapterFault::UnloadAdapterError {
+                return Err("ambiguous executable unload");
+            }
             let executable = if self.fault == AdapterFault::UnloadObject {
                 HsaExecutableObjectIdentityV1::new([0x83; 32]).unwrap()
             } else {
@@ -2232,7 +2333,7 @@ mod tests {
         (authorized.load(), unloads, directory)
     }
 
-    #[repr(align(8))]
+    #[repr(align(16))]
     struct AlignedKernarg([u8; 304]);
 
     #[test]
@@ -2245,7 +2346,7 @@ mod tests {
             "primary_kernel"
         );
         assert_eq!(loaded.kernel_observation().kernarg_segment_size(), 304);
-        assert_eq!(loaded.kernel_observation().kernarg_segment_alignment(), 8);
+        assert_eq!(loaded.kernel_observation().kernarg_segment_alignment(), 16);
 
         let geometry = HsaLaunchGeometryV1::new([32, 1, 1], [256, 1, 1], 0);
         let launch = loaded.authorize_launch(geometry).unwrap();
@@ -2267,7 +2368,7 @@ mod tests {
         let (loaded, unloads, _directory) = load(0x92, AdapterFault::None);
         let executor = crate::GeneratedWorkerV2VecAddExecutorV1::bind_observed_for_test(
             loaded.unwrap(),
-            ObservedContext::for_test(0x92, 0, "gfx942", 1_024, 65_536),
+            ObservedContext::for_test(0x92, 0, "gfx942:sramecc+:xnack-", 1_024, 65_536),
         )
         .unwrap();
         executor.unload().unwrap();
@@ -2328,6 +2429,29 @@ mod tests {
                 HsaEnvironmentMismatch::DeviceOrdinal { .. }
             ))
         ));
+    }
+
+    #[test]
+    fn runtime_target_requires_exact_xnack_off_and_allows_observed_sramecc_state() {
+        for fault in [AdapterFault::None, AdapterFault::TargetSramEccDisabled] {
+            let (authenticated, _directory) = authenticate(0xa4);
+            let (adapter, _) = FakeHsaAdapter::new(fault);
+            assert!(authenticated.authorize_hsa_load(adapter).is_ok());
+        }
+        for fault in [
+            AdapterFault::TargetXnackEnabled,
+            AdapterFault::TargetXnackOmitted,
+            AdapterFault::TargetProcessor,
+        ] {
+            let (authenticated, _directory) = authenticate(0xa5);
+            let (adapter, _) = FakeHsaAdapter::new(fault);
+            assert!(matches!(
+                authenticated.authorize_hsa_load(adapter),
+                Err(HsaLoadAuthorizationError::Environment(
+                    HsaEnvironmentMismatch::Target { .. }
+                ))
+            ));
+        }
     }
 
     #[test]
@@ -2479,17 +2603,96 @@ mod tests {
             launch.launch_generated_with_implicit_kernarg(&explicit, 48, 256, &mut kernarg.0),
             Err(HsaGeneratedDispatchError::ExplicitKernargMutation)
         ));
+
+        let (loaded, _unloads, _directory) = load(0x9e, AdapterFault::DispatchAdapterError);
+        let mut loaded = loaded.unwrap();
+        let launch = loaded
+            .authorize_launch(HsaLaunchGeometryV1::new([1, 1, 1], [256, 1, 1], 0))
+            .unwrap();
+        let mut kernarg = AlignedKernarg([0; 304]);
+        assert!(matches!(
+            launch.launch_generated_with_implicit_kernarg(&explicit, 48, 256, &mut kernarg.0),
+            Err(HsaGeneratedDispatchError::DispatchAdapter(
+                "definite pre-submit dispatch failure"
+            ))
+        ));
+
+        let (loaded, _unloads, _directory) = load(0x9f, AdapterFault::DispatchObject);
+        let mut loaded = loaded.unwrap();
+        let launch = loaded
+            .authorize_launch(HsaLaunchGeometryV1::new([1, 1, 1], [256, 1, 1], 0))
+            .unwrap();
+        let mut kernarg = AlignedKernarg([0; 304]);
+        assert!(matches!(
+            launch.launch_generated_with_implicit_kernarg(&explicit, 48, 256, &mut kernarg.0),
+            Err(HsaGeneratedDispatchError::DispatchObservationMismatch(_))
+        ));
     }
 
     #[test]
-    fn explicit_unload_rejects_object_and_completion_substitution() {
-        for fault in [AdapterFault::UnloadObject, AdapterFault::UnloadIncomplete] {
-            let (loaded, unloads, _directory) = load(0x99, fault);
-            assert!(matches!(
-                loaded.unwrap().unload(),
-                Err(HsaExecutableUnloadError::ObservationMismatch(_))
-            ));
-            assert_eq!(unloads.load(Ordering::SeqCst), 1);
+    #[cfg(unix)]
+    fn adapter_unwind_and_ambiguous_unload_are_terminal() {
+        const CASE: &str = "FE2O3_HSA_TERMINAL_ADAPTER_CASE";
+        if let Ok(case) = std::env::var(CASE) {
+            match case.as_str() {
+                "dispatch-panic" => {
+                    let (loaded, _unloads, _directory) = load(0xa0, AdapterFault::DispatchPanic);
+                    let mut loaded = loaded.unwrap();
+                    let launch = loaded
+                        .authorize_launch(HsaLaunchGeometryV1::new([1, 1, 1], [256, 1, 1], 0))
+                        .unwrap();
+                    let explicit = [0x5a; 48];
+                    let mut kernarg = AlignedKernarg([0; 304]);
+                    let _caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        let _ = launch.launch_generated_with_implicit_kernarg(
+                            &explicit,
+                            48,
+                            256,
+                            &mut kernarg.0,
+                        );
+                    }));
+                }
+                "unload-error" => {
+                    let (loaded, _unloads, _directory) =
+                        load(0xa1, AdapterFault::UnloadAdapterError);
+                    let _caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        let _ = loaded.unwrap().unload();
+                    }));
+                }
+                "unload-panic" => {
+                    let (loaded, _unloads, _directory) = load(0xa2, AdapterFault::UnloadPanic);
+                    let _caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        let _ = loaded.unwrap().unload();
+                    }));
+                }
+                "unload-observation" => {
+                    let (loaded, _unloads, _directory) = load(0xa3, AdapterFault::UnloadIncomplete);
+                    let _caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        let _ = loaded.unwrap().unload();
+                    }));
+                }
+                _ => panic!("unknown terminal adapter test case"),
+            }
+            std::process::exit(91);
+        }
+
+        use std::os::unix::process::ExitStatusExt;
+        for case in [
+            "dispatch-panic",
+            "unload-error",
+            "unload-panic",
+            "unload-observation",
+        ] {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .arg("--exact")
+                .arg(
+                    "hsa_executable_lifecycle::tests::adapter_unwind_and_ambiguous_unload_are_terminal",
+                )
+                .arg("--nocapture")
+                .env(CASE, case)
+                .status()
+                .unwrap();
+            assert_eq!(status.signal(), Some(6), "terminal case {case}: {status}");
         }
     }
 

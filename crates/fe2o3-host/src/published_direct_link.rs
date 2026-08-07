@@ -486,8 +486,10 @@ impl PublishedDirectLinkAdmissionError {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "hardware-test-hooks"))]
 pub(crate) mod tests {
+    #![cfg_attr(not(test), allow(dead_code, unused_imports))]
+
     use super::*;
     use crate::{
         InspectedPublishedDirectLinkPhysicalLayoutV1, MissingPublishedDirectLinkLoadPrerequisiteV1,
@@ -1013,6 +1015,29 @@ pub(crate) mod tests {
         launch: LaunchContract,
         primary_kernel: DigestBytes,
     ) -> Fixture {
+        make_single_hsaco_fixture_with_names_and_kernel_id(
+            seed,
+            payload_bytes,
+            architecture,
+            "logical_primary",
+            "primary_kernel",
+            abi,
+            launch,
+            primary_kernel,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn make_single_hsaco_fixture_with_names_and_kernel_id(
+        seed: u8,
+        payload_bytes: Vec<u8>,
+        architecture: &str,
+        logical_name: &str,
+        export_symbol: &str,
+        abi: AbiLayout,
+        launch: LaunchContract,
+        primary_kernel: DigestBytes,
+    ) -> Fixture {
         let payload =
             CodeObjectPayload::from_bytes(DigestAlgorithm::Sha256, payload_bytes).unwrap();
         let payload_identity = payload.digest();
@@ -1038,8 +1063,8 @@ pub(crate) mod tests {
             vec![
                 KernelEntry::new(
                     primary_kernel,
-                    name("logical_primary"),
-                    name("primary_kernel"),
+                    name(logical_name),
+                    name(export_symbol),
                     repeated_digest(seed.wrapping_add(0x40)),
                     repeated_digest(seed.wrapping_add(0x50)),
                     payload_identity.bytes(),

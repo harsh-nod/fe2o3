@@ -1,4 +1,4 @@
-#[cfg(test)]
+#[cfg(any(test, feature = "hardware-test-hooks"))]
 use crate::argument_alias::fresh_alias_registry;
 use crate::argument_alias::{
     AliasAdmissionRegistry, InFlightRegionRegistration, admit_and_register, shared_alias_registry,
@@ -209,7 +209,7 @@ impl ObservedContext {
         self.limits.max_shared_memory_per_block
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "hardware-test-hooks"))]
     pub(crate) fn for_test(
         identity: usize,
         ordinal: i32,

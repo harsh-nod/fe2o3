@@ -54,7 +54,7 @@ pub struct AdmittedFinalizedWorkerV2BundleV1 {
 
 enum RetainedWorkerV2PreparationV1 {
     Production(Box<PreparedWorkerV2HsacoPublicationV1>),
-    #[cfg(test)]
+    #[cfg(any(test, feature = "hardware-test-hooks"))]
     Test {
         attempt: BuildAttempt,
         exact_bytes: Box<[u8]>,
@@ -65,7 +65,7 @@ impl RetainedWorkerV2PreparationV1 {
     fn attempt(&self) -> BuildAttempt {
         match self {
             Self::Production(prepared) => prepared.attempt(),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "hardware-test-hooks"))]
             Self::Test { attempt, .. } => *attempt,
         }
     }
@@ -73,7 +73,7 @@ impl RetainedWorkerV2PreparationV1 {
     fn exact_bytes(&self) -> &[u8] {
         match self {
             Self::Production(prepared) => prepared.exact_bytes(),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "hardware-test-hooks"))]
             Self::Test { exact_bytes, .. } => exact_bytes,
         }
     }
@@ -610,12 +610,16 @@ impl std::error::Error for FinalizedWorkerV2BundleAdmissionError {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "hardware-test-hooks"))]
 pub(crate) mod tests {
+    #![cfg_attr(not(test), allow(dead_code, unused_imports))]
+
     use super::*;
     use crate::published_direct_link::tests::{
         Fixture, make_observed_for, make_single_hsaco_fixture,
-        make_single_hsaco_fixture_with_kernel_id, physical_test_abi, typed_vecadd_hsaco_for_target,
+        make_single_hsaco_fixture_with_kernel_id,
+        make_single_hsaco_fixture_with_names_and_kernel_id, physical_test_abi,
+        typed_vecadd_hsaco_for_target,
     };
     use fe2o3_artifact_transaction::{
         AtomicPublicationIdentityV1, BuildInvocation, BuildSession, CanonicalLinkRequestIdentityV1,
@@ -638,7 +642,7 @@ pub(crate) mod tests {
 
     static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(1);
 
-    pub(crate) struct TestDirectory(PathBuf);
+    pub struct TestDirectory(PathBuf);
 
     impl TestDirectory {
         fn new() -> Self {
@@ -842,6 +846,117 @@ pub(crate) mod tests {
             selected_kernel_index: parts.selected_kernel_index,
         };
         (admission, input._directory)
+    }
+
+    #[allow(dead_code)]
+    pub fn admitted_hardware_for_lifecycle_test(
+        seed: u8,
+        finalized_bytes: Vec<u8>,
+        logical_name: &str,
+        export_symbol: &str,
+        marker_binding_identity: [u8; 32],
+        observed: &ObservedContext,
+    ) -> (AdmittedFinalizedWorkerV2BundleV1, TestDirectory) {
+        let abi = crate::generated_vecadd::generated_vecadd_abi_v2().unwrap();
+        let launch = exact_launch(256);
+        let kernel_id = derive_generated_kernel_identity_v2(
+            TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2,
+            marker_binding_identity,
+            logical_name,
+            export_symbol,
+            repeated_digest(seed.wrapping_add(0x40)),
+            repeated_digest(seed.wrapping_add(0x50)),
+            &abi,
+            &launch,
+        );
+        let mut fixture = make_single_hsaco_fixture_with_names_and_kernel_id(
+            seed,
+            finalized_bytes.clone(),
+            "gfx942",
+            logical_name,
+            export_symbol,
+            abi,
+            launch,
+            kernel_id,
+        );
+        bind_worker_linked_output(&mut fixture, &finalized_bytes);
+
+        let directory = TestDirectory::new();
+        let producer = ProducerIdentity::from_codegen(
+            "fe2o3_host_worker_v2_hardware_admission",
+            Some(Path::new("tests/gfx942_hardware.rs")),
+        )
+        .unwrap();
+        let attempt = begin_build_attempt(
+            &directory.0,
+            &producer,
+            BuildInvocation::from_bytes([seed; 32]),
+            BuildSession::from_bytes([seed.wrapping_add(1); 16]),
+        )
+        .unwrap();
+        let output_digest = DigestAlgorithm::Sha256.calculate(&finalized_bytes).bytes();
+        let expected_finalization = fixture.expectations[0]
+            .finalization_identity()
+            .digest()
+            .bytes();
+        let plan = DurableLinkPublicationPlanV1::new(
+            attempt,
+            LinkPublicationScopeV1::new(
+                PackageIdentityV1::from_bytes([seed.wrapping_add(2); 32]),
+                KernelSetIdentityV1::from_bytes([seed.wrapping_add(3); 32]),
+                TargetIdentityV1::from_bytes([seed.wrapping_add(4); 32]),
+            ),
+            CanonicalLinkRequestIdentityV1::from_bytes([seed.wrapping_add(5); 32]),
+            PinnedWorkerIdentityV1::from_bytes([seed.wrapping_add(6); 32]),
+            ValidatedResponseIdentityV1::from_bytes([seed.wrapping_add(7); 32]),
+            LinkedOutputIdentityV1::from_bytes(*output_digest.as_bytes()),
+            FinalizationIdentityV1::from_bytes(*expected_finalization.as_bytes()),
+            FinalizedOutputIdentityV1::from_bytes(*output_digest.as_bytes()),
+            AtomicPublicationIdentityV1::from_bytes([seed.wrapping_add(8); 32]),
+        );
+        let publication = publish_exact_hsaco_evidence_for_attempt_v1(
+            &directory.0,
+            &producer,
+            attempt,
+            plan,
+            UpstreamCodeObjectEvidenceIdentityV1::from_bytes([seed.wrapping_add(9); 32]),
+            &finalized_bytes,
+        )
+        .unwrap();
+        let validated = fixture.validated();
+        let selected_kernel = selected(&fixture);
+        let parts = admit_parts(
+            attempt,
+            &finalized_bytes,
+            publication,
+            &validated,
+            &fixture.container,
+            selected_kernel,
+            observed,
+        )
+        .unwrap();
+        let admission = AdmittedFinalizedWorkerV2BundleV1 {
+            prepared: RetainedWorkerV2PreparationV1::Test {
+                attempt,
+                exact_bytes: finalized_bytes.into_boxed_slice(),
+            },
+            current_lease: parts.current_lease,
+            receipt: parts.receipt,
+            published: parts.published,
+            bundle_index_identity: parts.bundle_index_identity,
+            bundle_evidence_identity: parts.bundle_evidence_identity,
+            binding_index: parts.binding_index,
+            container_identity: parts.container_identity,
+            linked_output_identity: parts.linked_output_identity,
+            finalization_identity: parts.finalization_identity,
+            finalized_payload_identity: parts.finalized_payload_identity,
+            artifact_identity: parts.artifact_identity,
+            device: parts.device,
+            inspected: parts.inspected,
+            kernels: parts.kernels,
+            selected_kernel_index: parts.selected_kernel_index,
+        };
+        (admission, directory)
     }
 
     #[test]

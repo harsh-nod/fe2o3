@@ -1,0 +1,23 @@
+error[E0277]: `Cell<()>` cannot be shared between threads safely
+ --> tests/ui/authority/runtime_adapter_cannot_be_shared.rs:6:20
+  |
+6 |     require_sync::<ReviewedHsaRuntimeAdapterV1>();
+  |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Cell<()>` cannot be shared between threads safely
+  |
+  = help: within `ReviewedHsaRuntimeAdapterV1`, the trait `Sync` is not implemented for `Cell<()>`
+  = note: if you want to do aliasing and mutation between multiple threads, use `std::sync::RwLock`
+note: required because it appears within the type `PhantomData<Cell<()>>`
+ --> $RUST/core/src/marker.rs
+  |
+  | pub struct PhantomData<T: PointeeSized>;
+  |            ^^^^^^^^^^^
+note: required because it appears within the type `ReviewedHsaRuntimeAdapterV1`
+ --> src/environment.rs
+  |
+  | pub struct ReviewedHsaRuntimeAdapterV1 {
+  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `require_sync`
+ --> tests/ui/authority/runtime_adapter_cannot_be_shared.rs:3:20
+  |
+3 | fn require_sync<T: Sync>() {}
+  |                    ^^^^ required by this bound in `require_sync`

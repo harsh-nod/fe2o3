@@ -638,7 +638,7 @@ pub(crate) fn shared_alias_registry(context: usize) -> Arc<AliasAdmissionRegistr
     registry
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "hardware-test-hooks"))]
 pub(crate) fn fresh_alias_registry(context: usize) -> Arc<AliasAdmissionRegistry> {
     Arc::new(AliasAdmissionRegistry::new(context))
 }

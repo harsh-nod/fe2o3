@@ -25,7 +25,7 @@ const BLOCK_SIZE: u32 = 256;
 const EXPLICIT_KERNARG_BYTES: usize = 48;
 const IMPLICIT_KERNARG_BYTES: usize = 256;
 const TOTAL_KERNARG_BYTES: usize = EXPLICIT_KERNARG_BYTES + IMPLICIT_KERNARG_BYTES;
-const KERNARG_ALIGNMENT: u64 = 8;
+const PHYSICAL_KERNARG_ALIGNMENT: u64 = 8;
 
 type VecAddResources<'allocation> = (
     GeneratedReadDeviceSlice<'allocation, f32>,
@@ -33,7 +33,7 @@ type VecAddResources<'allocation> = (
     GeneratedWriteDeviceSlice<'allocation, f32>,
 );
 
-#[repr(C, align(8))]
+#[repr(C, align(16))]
 struct AlignedVecAddKernargV1 {
     bytes: [u8; TOTAL_KERNARG_BYTES],
 }
@@ -110,7 +110,7 @@ where
         let physical_device = loaded.environment().physical_device();
         if observed.device().ordinal() != physical_device.hip_ordinal()
             || observed.device().target_id() != physical_device.target()
-            || observed.device().target() != TARGET
+            || observed.device().target_id().processor() != TARGET
         {
             return Err(GeneratedWorkerV2VecAddBindError::ContextDeviceMismatch);
         }
@@ -121,7 +121,7 @@ where
                 actual: physical.kernarg_segment_size(),
             });
         }
-        if physical.kernarg_segment_alignment() != KERNARG_ALIGNMENT {
+        if physical.kernarg_segment_alignment() != PHYSICAL_KERNARG_ALIGNMENT {
             return Err(GeneratedWorkerV2VecAddBindError::KernargSegmentAlignment {
                 actual: physical.kernarg_segment_alignment(),
             });
@@ -252,7 +252,7 @@ fn validate_packed_arguments(
 ) -> Result<(), GeneratedWorkerV2VecAddPrepareError> {
     if packed.kernel_id() != kernel_id
         || packed.len() != EXPLICIT_KERNARG_BYTES
-        || packed.alignment() != KERNARG_ALIGNMENT as u32
+        || packed.alignment() != PHYSICAL_KERNARG_ALIGNMENT as u32
     {
         return Err(GeneratedWorkerV2VecAddPrepareError::PackedArgumentSubstitution);
     }
@@ -473,7 +473,7 @@ mod tests {
     fn exact_vecadd_arguments_pack_into_the_48_byte_explicit_prefix() {
         let packed = packed(0x11);
         assert_eq!(packed.len(), EXPLICIT_KERNARG_BYTES);
-        assert_eq!(packed.alignment(), KERNARG_ALIGNMENT as u32);
+        assert_eq!(packed.alignment(), PHYSICAL_KERNARG_ALIGNMENT as u32);
         for (offset, value) in [
             (0, 0x1000_u64),
             (8, 7),
@@ -501,13 +501,10 @@ mod tests {
             std::mem::size_of::<AlignedVecAddKernargV1>(),
             TOTAL_KERNARG_BYTES
         );
-        assert_eq!(
-            std::mem::align_of::<AlignedVecAddKernargV1>(),
-            KERNARG_ALIGNMENT as usize
-        );
+        assert_eq!(std::mem::align_of::<AlignedVecAddKernargV1>(), 16);
         let storage = AlignedVecAddKernargV1 {
             bytes: [0; TOTAL_KERNARG_BYTES],
         };
-        assert!(storage.bytes.as_ptr().addr().is_multiple_of(8));
+        assert!(storage.bytes.as_ptr().addr().is_multiple_of(16));
     }
 }

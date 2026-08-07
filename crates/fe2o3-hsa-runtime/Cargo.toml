@@ -1,0 +1,28 @@
+[package]
+name = "fe2o3-hsa-runtime"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Reviewed direct-HSA runtime adapter for fe2o3 Worker V2."
+
+[features]
+hardware-test-hooks = ["fe2o3-host/hardware-test-hooks"]
+
+[dependencies]
+fe2o3-amd-target.workspace = true
+fe2o3-artifacts.workspace = true
+fe2o3-core.workspace = true
+fe2o3-host.workspace = true
+sha2.workspace = true
+
+[build-dependencies]
+cc = "1"
+
+[dev-dependencies]
+fe2o3-device.workspace = true
+trybuild = "1"
+
+[lib]
+name = "fe2o3_hsa_runtime"

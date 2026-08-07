@@ -11,6 +11,14 @@ mod published_direct_link;
 mod published_hsaco_inspection;
 mod worker_v2_bundle_admission;
 
+#[cfg(feature = "hardware-test-hooks")]
+#[doc(hidden)]
+pub mod __hardware_test {
+    pub use crate::worker_v2_bundle_admission::tests::{
+        TestDirectory, admitted_hardware_for_lifecycle_test,
+    };
+}
+
 pub use argument_alias::{
     AliasAdmissionError, AllocationIdentity, AllocationProvenance, ArgumentAccess,
     ArgumentAccessMode, ArgumentAliasAdmission, ArgumentAliasValidator, AtomicAccess,
