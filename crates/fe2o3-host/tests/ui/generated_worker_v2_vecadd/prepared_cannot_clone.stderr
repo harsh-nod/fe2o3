@@ -1,0 +1,5 @@
+error[E0599]: no method named `clone` found for struct `fe2o3_host::GeneratedWorkerV2VecAddPreparedV1<'loaded, 'allocation, K, A>` in the current scope
+ --> tests/ui/generated_worker_v2_vecadd/prepared_cannot_clone.rs:7:31
+  |
+7 |     let _duplicate = prepared.clone();
+  |                               ^^^^^ method not found in `fe2o3_host::GeneratedWorkerV2VecAddPreparedV1<'_, '_, K, A>`

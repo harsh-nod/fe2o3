@@ -1,0 +1,5 @@
+error[E0616]: field `loaded` of struct `fe2o3_host::GeneratedWorkerV2VecAddExecutorV1` is private
+  --> tests/ui/generated_worker_v2_vecadd/executor_fields_are_private.rs:11:28
+   |
+11 |     let _loaded = executor.loaded;
+   |                            ^^^^^^ private field
