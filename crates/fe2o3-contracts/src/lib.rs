@@ -8,6 +8,7 @@
 
 mod artifact;
 mod index;
+mod kernel_frontend_v1;
 mod launch;
 mod memory_v1;
 
@@ -16,6 +17,12 @@ pub use artifact::{
     ToolIdentity,
 };
 pub use index::{BoundedIndex, IdentityWriteIndex};
+pub use kernel_frontend_v1::{
+    AssemblyEffectSetV1, AssemblyOperandSetV1, AssemblyOptionSetV1, KernelFrontendContractErrorV1,
+    KernelFrontendContractV1, LaunchBoundsV1, MAX_RESIDENT_WORKGROUPS_PER_COMPUTE_UNIT_V1,
+    MAX_WORKGROUP_THREADS_V1, UnsafeAssemblyDeclarationV1, UnsafeAssemblyTargetV1,
+    WorkgroupDimensionsV1,
+};
 pub use launch::{LaunchDomain1d, LaunchGeometry1d, ThreadId1d, ThreadInDomain1d};
 pub use memory_v1::{
     AccessKindV1, AddressSpaceIdV1, AffineWriteMappingV1, AllocationProvenanceIdV1,
