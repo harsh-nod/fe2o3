@@ -772,7 +772,7 @@ fn worker_v2_real_source_publishes_two_kernels_with_one_shared_helper() {
         .expect("create multi-kernel Worker V2 project");
     std::fs::write(
         project.join("Cargo.toml"),
-        "[package]\nname = \"worker-v2-source\"\nversion = \"0.0.0\"\nedition = \"2024\"\npublish = false\n",
+        "[workspace]\n\n[package]\nname = \"worker-v2-source\"\nversion = \"0.0.0\"\nedition = \"2024\"\npublish = false\n",
     )
     .expect("write multi-kernel Worker V2 manifest");
     std::fs::write(&source, worker_v2_multi_kernel_source())
