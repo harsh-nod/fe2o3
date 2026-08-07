@@ -1214,7 +1214,6 @@ enum GeneralTypedScalarV1 {
     U32,
     I64,
     U64,
-    F16,
     F32,
     F64,
 }
@@ -1230,7 +1229,6 @@ impl GeneralTypedScalarV1 {
             Self::U32 => "u32",
             Self::I64 => "i64",
             Self::U64 => "u64",
-            Self::F16 => "f16",
             Self::F32 => "f32",
             Self::F64 => "f64",
         }
@@ -1239,7 +1237,7 @@ impl GeneralTypedScalarV1 {
     const fn size_alignment(self) -> (u64, u32) {
         match self {
             Self::I8 | Self::U8 => (1, 1),
-            Self::I16 | Self::U16 | Self::F16 => (2, 2),
+            Self::I16 | Self::U16 => (2, 2),
             Self::I32 | Self::U32 | Self::F32 => (4, 4),
             Self::I64 | Self::U64 | Self::F64 => (8, 8),
         }
@@ -1255,7 +1253,6 @@ impl GeneralTypedScalarV1 {
             Self::U32 => ScalarType::U32,
             Self::I64 => ScalarType::I64,
             Self::U64 => ScalarType::U64,
-            Self::F16 => ScalarType::F16,
             Self::F32 => ScalarType::F32,
             Self::F64 => ScalarType::F64,
         }
@@ -1271,7 +1268,6 @@ impl GeneralTypedScalarV1 {
             Self::U32 => RustScalarElementTypeV1::U32,
             Self::I64 => RustScalarElementTypeV1::I64,
             Self::U64 => RustScalarElementTypeV1::U64,
-            Self::F16 => RustScalarElementTypeV1::F16,
             Self::F32 => RustScalarElementTypeV1::F32,
             Self::F64 => RustScalarElementTypeV1::F64,
         }
@@ -1300,6 +1296,8 @@ fn model_general_typed_signature_v1(
     options: &KernelOptions,
     kernel_binding: [u8; 32],
 ) -> syn::Result<GeneralTypedSignatureModelV1> {
+    // Groundwork only: rustc must independently reconstruct this exact
+    // type/layout/effect convention before expansion may emit this identity.
     validate_general_typed_function_shape_v1(input)?;
     let arguments = input
         .sig
@@ -1481,7 +1479,6 @@ fn parse_general_typed_scalar_v1(ty: &Type) -> Option<GeneralTypedScalarV1> {
         "u32" => Some(GeneralTypedScalarV1::U32),
         "i64" => Some(GeneralTypedScalarV1::I64),
         "u64" => Some(GeneralTypedScalarV1::U64),
-        "f16" => Some(GeneralTypedScalarV1::F16),
         "f32" => Some(GeneralTypedScalarV1::F32),
         "f64" => Some(GeneralTypedScalarV1::F64),
         _ => None,
@@ -1581,6 +1578,8 @@ fn general_typed_abi_field_v1(
                 GENERAL_TYPED_POINTER_ALIGNMENT_V1,
                 general_typed_slice_kind_v1(scalar),
                 Mutability::Mutable,
+                // A proc macro cannot authenticate effects from the function
+                // body. Exclusive slices therefore remain conservative.
                 Access::ReadWrite,
                 AddressSpace::Global,
                 ArgumentOwnership::UniqueBorrow,
@@ -3441,7 +3440,7 @@ mod tests {
     fn general_typed_model_accepts_every_bounded_scalar_spelling() {
         let options = parse_kernel_options(quote!(typed)).unwrap();
         let scalar_spellings = [
-            "i8", "u8", "i16", "u16", "i32", "u32", "i64", "u64", "f16", "f32", "f64",
+            "i8", "u8", "i16", "u16", "i32", "u32", "i64", "u64", "f32", "f64",
         ];
         let arguments = scalar_spellings
             .iter()
@@ -3459,6 +3458,29 @@ mod tests {
                 .iter()
                 .all(|argument| matches!(argument, GeneralTypedArgumentKindV1::Scalar(_)))
         );
+    }
+
+    #[test]
+    fn exclusive_slice_effect_is_conservative_and_body_independent() {
+        let empty_body: ItemFn = parse_quote!(
+            pub fn exclusive(output: DisjointSlice<u32>) {}
+        );
+        let consuming_body: ItemFn = parse_quote!(
+            pub fn exclusive(output: DisjointSlice<u32>) {
+                let _ = output;
+            }
+        );
+        let options = parse_kernel_options(quote!(typed)).unwrap();
+        let empty = model_general_typed_signature_v1(&empty_body, &options, [0xb1; 32]).unwrap();
+        let consuming =
+            model_general_typed_signature_v1(&consuming_body, &options, [0xb1; 32]).unwrap();
+
+        assert_eq!(empty.abi.fields()[0].access(), Access::ReadWrite);
+        assert_eq!(
+            empty.generated_host_contract_identity,
+            consuming.generated_host_contract_identity
+        );
+        assert!(validate_typed_kernel_signature(&empty_body).is_err());
     }
 
     #[test]
@@ -3546,6 +3568,9 @@ mod tests {
             ),
             parse_quote!(
                 pub fn alias(value: ScalarAlias) {}
+            ),
+            parse_quote!(
+                pub fn primitive_f16(value: f16) {}
             ),
             parse_quote!(
                 pub fn array(value: &[UserElement]) {}
