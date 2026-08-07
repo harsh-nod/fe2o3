@@ -19,6 +19,7 @@ use sha2::{Digest, Sha256};
 
 pub(crate) const CODEGEN_PIPELINE_ENV: &str = "FE2O3_CODEGEN_PIPELINE";
 pub(crate) const WORKER_V2_CONFIG_ENV: &str = "FE2O3_WORKER_V2_CONFIG_V2";
+pub(crate) const WORKER_V2_EXPECTED_ID_ENV: &str = "FE2O3_WORKER_V2_EXPECTED_ID_V1";
 const WORKER_V2_PIPELINE: &str = "kernel-ir-worker-v2";
 const CONFIG_FORMAT: &str = "fe2o3-worker-v2-config-v2";
 const MAX_CONFIG_BYTES: usize = 1024 * 1024;
@@ -57,6 +58,10 @@ pub(crate) struct WorkerV2ConfigIdentity([u8; 32]);
 impl WorkerV2ConfigIdentity {
     pub(crate) const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
+    }
+
+    pub(crate) fn to_hex(self) -> String {
+        hex(&self.0)
     }
 
     #[cfg(test)]
@@ -138,8 +143,9 @@ impl PreparedWorkerV2Config {
         let limits = parse_limits(required_value(root, "limits", "configuration")?)?;
         let units = parse_units(required_value(root, "units", "configuration")?)?;
 
+        let identity = transitive_identity(&bytes, &worker, &providers);
         Ok(Self {
-            identity: WorkerV2ConfigIdentity(Sha256::digest(&bytes).into()),
+            identity,
             worker,
             providers,
             link_options,
@@ -188,6 +194,47 @@ impl PreparedWorkerV2Config {
             self.limits,
         )
     }
+}
+
+fn transitive_identity(
+    manifest: &[u8],
+    worker: &PinnedWorkerV1,
+    providers: &[WorkerInputV1],
+) -> WorkerV2ConfigIdentity {
+    let mut hash = Sha256::new();
+    update_identity(&mut hash, b"fe2o3-worker-v2-transitive-config-v1");
+    update_identity(&mut hash, manifest);
+    let measurement = worker.measurement();
+    update_identity(&mut hash, measurement.executable().sha256());
+    update_identity(
+        &mut hash,
+        &measurement.executable().byte_len().to_le_bytes(),
+    );
+    update_identity(&mut hash, measurement.worker_build_identity().as_bytes());
+    update_identity(&mut hash, measurement.llvm_build_identity().as_bytes());
+    update_identity(&mut hash, &(providers.len() as u64).to_le_bytes());
+    for provider in providers {
+        update_identity(&mut hash, &[provider.kind() as u8]);
+        update_identity(&mut hash, provider.identity().sha256());
+        update_identity(&mut hash, &provider.identity().byte_len().to_le_bytes());
+        update_identity(&mut hash, provider.bytes());
+    }
+    WorkerV2ConfigIdentity(hash.finalize().into())
+}
+
+fn update_identity(hash: &mut Sha256, bytes: &[u8]) {
+    hash.update((bytes.len() as u64).to_le_bytes());
+    hash.update(bytes);
+}
+
+fn hex(bytes: &[u8]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        encoded.push(DIGITS[(byte >> 4) as usize] as char);
+        encoded.push(DIGITS[(byte & 0x0f) as usize] as char);
+    }
+    encoded
 }
 
 #[derive(Debug)]

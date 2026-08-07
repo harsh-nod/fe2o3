@@ -20,7 +20,7 @@ use fe2o3_hsaco_finalize::{
     InspectedRawWorkerV2HsacoV1, PreparedWorkerV2HsacoPublicationV1, WorkerV2HsacoPublicationError,
     prepare_worker_v2_hsaco_publication_v1,
 };
-use rustix::fd::OwnedFd;
+use rustix::fd::{FromRawFd, OwnedFd};
 use rustix::fs::{
     AtFlags, FileType, FlockOperation, Mode, OFlags, RenameFlags, flock, fstat, fsync, open,
     openat, renameat, renameat_with, statat, unlinkat,
@@ -451,13 +451,7 @@ impl WorkerV2ResumeStoreV1 {
         output_dir: &Path,
         producer: &ProducerIdentity,
     ) -> Result<Self, ResumeMarkerErrorV1> {
-        std::fs::create_dir_all(output_dir)?;
-        let directory = open(
-            output_dir,
-            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-            Mode::empty(),
-        )
-        .map_err(std::io::Error::from)?;
+        let directory = open_output_directory(output_dir, true)?;
         let directory_stat = fstat(&directory).map_err(std::io::Error::from)?;
         if FileType::from_raw_mode(directory_stat.st_mode) != FileType::Directory {
             return Err(Self::invalid_at(
@@ -495,12 +489,7 @@ impl WorkerV2ResumeStoreV1 {
     }
 
     pub(crate) fn verify_output_path(&self) -> Result<(), ResumeMarkerErrorV1> {
-        let reopened = open(
-            &self.display_path,
-            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-            Mode::empty(),
-        )
-        .map_err(std::io::Error::from)?;
+        let reopened = open_output_directory(&self.display_path, false)?;
         let stat = fstat(&reopened).map_err(std::io::Error::from)?;
         if stat.st_dev != self.device || stat.st_ino != self.inode {
             return Err(ResumeMarkerErrorV1::OutputDirectoryChanged(
@@ -695,6 +684,70 @@ impl WorkerV2ResumeStoreV1 {
     }
 }
 
+fn open_output_directory(path: &Path, create: bool) -> Result<OwnedFd, ResumeMarkerErrorV1> {
+    #[cfg(target_os = "linux")]
+    if let Some(directory) = duplicate_proc_self_fd_directory(path) {
+        return directory.map_err(Into::into);
+    }
+
+    if create {
+        std::fs::create_dir_all(path)?;
+    }
+    open(
+        path,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(std::io::Error::from)
+    .map_err(Into::into)
+}
+
+#[cfg(target_os = "linux")]
+fn duplicate_proc_self_fd_directory(path: &Path) -> Option<std::io::Result<OwnedFd>> {
+    use std::os::unix::ffi::OsStrExt;
+
+    const PREFIX: &[u8] = b"/proc/self/fd/";
+    let descriptor = path.as_os_str().as_bytes().strip_prefix(PREFIX)?;
+    let canonical = descriptor == b"0"
+        || descriptor
+            .first()
+            .is_some_and(|byte| matches!(byte, b'1'..=b'9'))
+            && descriptor.iter().all(u8::is_ascii_digit);
+    if !canonical {
+        return Some(Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "procfs descriptor path is not canonical",
+        )));
+    }
+    let Some(raw_fd) = descriptor.iter().try_fold(0_i32, |value, digit| {
+        value.checked_mul(10)?.checked_add(i32::from(*digit - b'0'))
+    }) else {
+        return Some(Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "procfs descriptor number is out of range",
+        )));
+    };
+
+    // Raw fcntl reports EBADF for stale descriptor numbers without manufacturing an invalid
+    // BorrowedFd. A successful return is a new descriptor owned by this process.
+    let duplicated = unsafe { libc::fcntl(raw_fd, libc::F_DUPFD_CLOEXEC, 0) };
+    if duplicated < 0 {
+        return Some(Err(std::io::Error::last_os_error()));
+    }
+    let directory = unsafe { OwnedFd::from_raw_fd(duplicated) };
+    let stat = match fstat(&directory) {
+        Ok(stat) => stat,
+        Err(error) => return Some(Err(std::io::Error::from(error))),
+    };
+    if FileType::from_raw_mode(stat.st_mode) != FileType::Directory {
+        return Some(Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "procfs descriptor does not reference a directory",
+        )));
+    }
+    Some(Ok(directory))
+}
+
 fn validate_private_file(
     directory: &OwnedFd,
     descriptor: &impl rustix::fd::AsFd,
@@ -872,6 +925,7 @@ impl<'a> Decoder<'a> {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::os::fd::AsRawFd;
     use std::os::unix::fs::{PermissionsExt, symlink};
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -1102,6 +1156,37 @@ mod tests {
             store.verify_output_path(),
             Err(ResumeMarkerErrorV1::OutputDirectoryChanged(_))
         ));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn proc_self_fd_resume_store_stays_bound_to_retained_directory() {
+        let parent = TestDirectory::new();
+        let output = parent.0.join("output");
+        let moved = parent.0.join("moved");
+        fs::create_dir(&output).unwrap();
+        let producer = producer(41);
+        let attempt = attempt(&output, &producer, 41);
+        let retained = fs::File::open(&output).unwrap();
+        let descriptor_path = PathBuf::from(format!("/proc/self/fd/{}", retained.as_raw_fd()));
+        let store = WorkerV2ResumeStoreV1::open(&descriptor_path, &producer).unwrap();
+        let marker_name = store.marker_name.clone();
+        store.persist_pending(attempt, [0x35; 32]).unwrap();
+
+        fs::rename(&output, &moved).unwrap();
+        fs::create_dir(&output).unwrap();
+        let intent = WorkerV2PublicationIntentIdentityV1::from_bytes([0x45; 32]);
+        store.persist_ready(attempt, intent).unwrap();
+        drop(store);
+
+        let reopened = WorkerV2ResumeStoreV1::open(&descriptor_path, &producer).unwrap();
+        assert_eq!(
+            reopened.load().unwrap(),
+            Some(ResumeMarkerStateV1::Ready { attempt, intent })
+        );
+        assert!(moved.join(marker_name).is_file());
+        assert!(fs::read_dir(&output).unwrap().next().is_none());
+        assert!(open_output_directory(Path::new("/proc/self/fd/01"), false).is_err());
     }
 
     #[test]

@@ -95,7 +95,8 @@ fe2o3-rustc-front = { path = "crates/fe2o3-rustc-front" }
 fe2o3-verifier = { path = "crates/fe2o3-verifier" }
 reserved-fe2o3-symbols = { path = "crates/reserved-fe2o3-symbols" }
 rustc-codegen-fe2o3 = { path = "crates/rustc-codegen-fe2o3" }
-rustix = { version = "1.1.4", features = ["fs"] }
+libc = "0.2.189"
+rustix = { version = "1.1.4", features = ["fs", "net"] }
 
 proc-macro2 = "1"
 proc-macro-crate = "3"

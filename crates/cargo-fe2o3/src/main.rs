@@ -1,12 +1,19 @@
 mod binding_wrapper;
+mod capability_broker;
 mod clean;
 mod example_manifest;
+mod generation;
 mod inspect;
+#[allow(dead_code)]
+#[path = "rustc_wrapper/pinned_codegen_backend.rs"]
+mod pinned_codegen_backend;
+mod project;
 mod tool_commands;
 mod worker_v2;
 mod worker_v2_restart;
 
 use std::env;
+use std::ffi::{OsStr, OsString};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -16,11 +23,23 @@ const BACKEND_ENV: &str = "FE2O3_BACKEND";
 const HSACO_DIR_ENV: &str = "FE2O3_HSACO_DIR";
 const DEFAULT_TARGET: &str = "gfx1100";
 const BINDING_WRAPPER_MODE_ENV: &str = "FE2O3_BINDING_WRAPPER_MODE_V1";
+const MANAGED_RUSTC_ARGS_ENV: &str = "FE2O3_MANAGED_RUSTC_ARGS_V1";
 const BUILD_SESSION_ENV: &str = "FE2O3_BUILD_SESSION_V1";
+const INTERNAL_RUNNER_ARG: &str = "__fe2o3-runner-v1";
+const BACKEND_BUILD_CHILD_FD: std::os::fd::RawFd = 196;
+const ARTIFACT_CHILD_FD: std::os::fd::RawFd = 197;
+const BACKEND_CHILD_FD: std::os::fd::RawFd = 198;
 
 fn main() -> ExitCode {
+    let raw_args = env::args_os().skip(1).collect::<Vec<_>>();
+    if raw_args
+        .first()
+        .is_some_and(|argument| argument == INTERNAL_RUNNER_ARG)
+    {
+        return run_application_boundary(&raw_args[1..]);
+    }
     if env::var_os(BINDING_WRAPPER_MODE_ENV).is_some() {
-        return match binding_wrapper::run(env::args_os().skip(1).collect()) {
+        return match binding_wrapper::run(raw_args) {
             Ok(status) => ExitCode::from(binding_wrapper::exit_code(status)),
             Err(error) => {
                 eprintln!("cargo-fe2o3 binding wrapper: {error}");
@@ -29,31 +48,54 @@ fn main() -> ExitCode {
         };
     }
 
-    let mut invocation = normalize_invocation(env::args().skip(1).collect());
+    let mut invocation = normalize_invocation(raw_args);
     let mut args = invocation.drain(..);
-    let command = args.next().unwrap_or_else(|| "help".to_string());
-    let rest: Vec<String> = args.collect();
+    let command = args.next().unwrap_or_else(|| OsString::from("help"));
+    let rest: Vec<OsString> = args.collect();
 
-    match command.as_str() {
-        "doctor" => doctor(),
-        "build" => cargo_with_backend("build", &rest),
-        "run" => cargo_with_backend("run", &rest),
-        "smoke" => smoke(&rest),
-        "examples" => example_manifest::command(&rest),
-        "clean" => clean_command(&rest),
-        "inspect" => report(inspect::command(&rest)),
-        "sanitize" => tool_report(tool_commands::command(tool_commands::Mode::Sanitize, &rest)),
-        "debug" => tool_report(tool_commands::command(tool_commands::Mode::Debug, &rest)),
-        "help" | "--help" | "-h" => {
+    match command.to_str() {
+        Some("doctor") => doctor(),
+        Some("build") => cargo_with_backend("build", &rest),
+        Some("run") => cargo_with_backend("run", &rest),
+        Some("smoke") => with_utf8_args(&rest, smoke),
+        Some("examples") => with_utf8_args(&rest, example_manifest::command),
+        Some("clean") => clean_command(&rest),
+        Some("inspect") => with_utf8_args(&rest, |args| report(inspect::command(args))),
+        Some("sanitize") => with_utf8_args(&rest, |args| {
+            tool_report(tool_commands::command(tool_commands::Mode::Sanitize, args))
+        }),
+        Some("debug") => with_utf8_args(&rest, |args| {
+            tool_report(tool_commands::command(tool_commands::Mode::Debug, args))
+        }),
+        Some("help" | "--help" | "-h") => {
             print_help();
             ExitCode::SUCCESS
         }
-        other => {
-            eprintln!("unknown cargo-fe2o3 command `{other}`");
+        _ => {
+            eprintln!("unknown cargo-fe2o3 command {command:?}");
             print_help();
             ExitCode::FAILURE
         }
     }
+}
+
+fn with_utf8_args(args: &[OsString], command: impl FnOnce(&[String]) -> ExitCode) -> ExitCode {
+    let args = match args
+        .iter()
+        .map(|arg| {
+            arg.to_str()
+                .map(str::to_owned)
+                .ok_or_else(|| format!("command argument is not valid UTF-8: {arg:?}"))
+        })
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(args) => args,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    command(&args)
 }
 
 fn report(result: Result<String, String>) -> ExitCode {
@@ -86,29 +128,29 @@ fn tool_report(result: Result<tool_commands::CommandReport, String>) -> ExitCode
     }
 }
 
-fn normalize_invocation(mut args: Vec<String>) -> Vec<String> {
-    if args.first().is_some_and(|arg| arg == "fe2o3") {
+fn normalize_invocation(mut args: Vec<OsString>) -> Vec<OsString> {
+    if args.first().is_some_and(|arg| arg == OsStr::new("fe2o3")) {
         args.remove(0);
     }
     args
 }
 
-fn clean_command(args: &[String]) -> ExitCode {
-    let options = match clean::parse_options(args) {
+fn clean_command(args: &[OsString]) -> ExitCode {
+    let options = match clean::parse_project_options(args) {
         Ok(options) => options,
         Err(error) => {
             eprintln!("{error}");
             return ExitCode::FAILURE;
         }
     };
-    let workspace_root = match find_workspace_root() {
-        Ok(path) => path,
+    let project = match project::CargoProject::discover(args) {
+        Ok(project) => project,
         Err(error) => {
             eprintln!("{error}");
             return ExitCode::FAILURE;
         }
     };
-    let plan = match clean::plan(&workspace_root) {
+    let plan = match clean::plan_project(project) {
         Ok(plan) => plan,
         Err(error) => {
             eprintln!("{error}");
@@ -116,7 +158,7 @@ fn clean_command(args: &[String]) -> ExitCode {
         }
     };
 
-    match clean::execute(&plan, options) {
+    match clean::execute_project(plan, options) {
         Ok(actions) => {
             for action in actions {
                 eprintln!("{}", action.diagnostic());
@@ -156,7 +198,7 @@ fn doctor() -> ExitCode {
     }
 }
 
-fn cargo_with_backend(command: &str, args: &[String]) -> ExitCode {
+fn cargo_with_backend(command: &str, args: &[OsString]) -> ExitCode {
     match cargo_with_backend_result(command, args) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
@@ -186,22 +228,10 @@ fn smoke(args: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let context = match BackendRunContext::prepare(workspace_root) {
-        Ok(context) => context,
-        Err(error) => {
-            eprintln!("{error}");
-            return ExitCode::FAILURE;
-        }
-    };
-
     for package in packages {
         eprintln!("cargo fe2o3 smoke: running {package}");
-        let args = ["-p".to_string(), package];
-        if let Err(error) = clean_explicit_packages(&context.workspace_root, &args) {
-            eprintln!("{error}");
-            return ExitCode::FAILURE;
-        }
-        if let Err(error) = run_cargo_with_backend(&context, "run", &args) {
+        let args = [OsString::from("-p"), OsString::from(package)];
+        if let Err(error) = cargo_with_backend_result("run", &args) {
             eprintln!("{error}");
             return ExitCode::FAILURE;
         }
@@ -210,51 +240,64 @@ fn smoke(args: &[String]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn cargo_with_backend_result(command: &str, args: &[String]) -> Result<(), String> {
-    let workspace_root = find_workspace_root()?;
-
-    clean_explicit_packages(&workspace_root, args)?;
-    let context = BackendRunContext::prepare(workspace_root)?;
-    run_cargo_with_backend(&context, command, args)
+fn cargo_with_backend_result(command: &str, args: &[OsString]) -> Result<(), String> {
+    let project = project::CargoProject::discover(args)?;
+    reject_preexisting_rustc_wrappers(&project, args)?;
+    let mut context = BackendRunContext::prepare(project, args)?;
+    run_cargo_with_backend(&mut context, command, args)
 }
 
-#[derive(Debug)]
 struct BackendRunContext {
     target: String,
-    workspace_root: PathBuf,
+    project: project::CargoProject,
     backend: PathBuf,
-    artifact_dir: PathBuf,
-    rustflags: String,
+    pinned_backend: pinned_codegen_backend::PinnedCodegenBackend,
+    _worker_v2: Option<worker_v2::PreparedWorkerV2Config>,
+    worker_v2_identity: Option<worker_v2::WorkerV2ConfigIdentity>,
+    target_dir: project::PinnedDirectory,
+    generation: generation::PreparedGeneration,
+    managed_rustc_args: OsString,
     binding_wrapper: PathBuf,
     build_session: fe2o3_artifact_transaction::BuildSession,
 }
 
 impl BackendRunContext {
-    fn prepare(workspace_root: PathBuf) -> Result<Self, String> {
+    fn prepare(project: project::CargoProject, args: &[OsString]) -> Result<Self, String> {
         let target = amd_gpu_target();
-        let backend = find_or_build_backend(&workspace_root)?;
-        let artifact_dir = workspace_root.join("target/fe2o3");
-        if let Err(error) = std::fs::create_dir_all(&artifact_dir) {
-            return Err(format!(
-                "failed to create fe2o3 artifact directory {}: {error}",
-                artifact_dir.display()
-            ));
-        }
-
-        let rustflags = append_rustflags(&[
-            format!("-Zcodegen-backend={}", backend.display()),
-            "-Zmir-enable-passes=-JumpThreading".to_string(),
-        ]);
+        let target_dir = project.open_or_create_target()?;
+        let backend = find_or_build_backend(&target_dir)?;
+        let pinned_backend = pinned_codegen_backend::PinnedCodegenBackend::open(&backend)
+            .map_err(|error| format!("failed to pin codegen backend: {error}"))?;
+        let worker_v2 = worker_v2::PreparedWorkerV2Config::from_environment()
+            .map_err(|error| format!("Worker V2 setup failed: {error}"))?;
+        let worker_v2_identity = worker_v2.as_ref().map(|config| config.identity());
+        let cargo_configuration = project.semantic_configuration(args)?;
+        let semantic = generation::semantic_identity(
+            &target,
+            pinned_backend.sha256(),
+            worker_v2_identity,
+            &cargo_configuration,
+        )?;
+        let generation = generation::PreparedGeneration::prepare(&target_dir, semantic)?;
+        let backend_reference = pinned_backend
+            .fixed_child_descriptor_path(BACKEND_CHILD_FD)
+            .map_err(|error| format!("failed to retain pinned codegen backend: {error}"))?;
+        let managed_rustc_args =
+            generation::managed_rustc_args(&backend_reference, generation.token())?;
         let binding_wrapper = env::current_exe()
             .map_err(|error| format!("failed to locate cargo-fe2o3 executable: {error}"))?;
         let build_session = random_build_session()?;
 
         Ok(Self {
             target,
-            workspace_root,
+            project,
             backend,
-            artifact_dir,
-            rustflags,
+            pinned_backend,
+            _worker_v2: worker_v2,
+            worker_v2_identity,
+            target_dir,
+            generation,
+            managed_rustc_args,
             binding_wrapper,
             build_session,
         })
@@ -262,34 +305,482 @@ impl BackendRunContext {
 }
 
 fn run_cargo_with_backend(
-    context: &BackendRunContext,
+    context: &mut BackendRunContext,
     command: &str,
-    args: &[String],
+    args: &[OsString],
 ) -> Result<(), String> {
-    reject_preexisting_rustc_wrappers()?;
+    context.project.validate_paths()?;
+    context.target_dir.validate_path("Cargo target directory")?;
+    context.generation.reject_if_substituted()?;
     eprintln!(
         "cargo fe2o3 {command}: using backend {} for target {}",
         context.backend.display(),
         context.target
     );
 
-    let status = Command::new("cargo")
+    let cargo = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
+    let mut cargo = Command::new(cargo);
+    let mut forwarded_args = args.to_vec();
+    if command == "run" {
+        inject_application_runner(&context.project, &mut forwarded_args)?;
+    }
+    let artifact_dir = context.generation.artifact_dir();
+    let capability_broker = capability_broker::CapabilityBroker::start(
+        context.build_session,
+        &context.pinned_backend,
+        artifact_dir,
+    )?;
+    cargo
         .arg(command)
-        .args(args)
-        .env("RUSTFLAGS", &context.rustflags)
-        .env(HSACO_DIR_ENV, &context.artifact_dir)
+        .args(&forwarded_args)
+        .current_dir(context.project.invocation_dir().child_path())
+        .env_remove(HSACO_DIR_ENV)
+        .env(
+            capability_broker::CAPABILITY_BROKER_ENV,
+            capability_broker.endpoint(),
+        )
         .env(TARGET_ENV, &context.target)
         .env("FE2O3_HOST_PASSTHROUGH", "0")
+        .env("RUSTC_WRAPPER", "")
+        .env("CARGO_BUILD_RUSTC_WRAPPER", "")
         .env("RUSTC_WORKSPACE_WRAPPER", &context.binding_wrapper)
         .env(BINDING_WRAPPER_MODE_ENV, "1")
-        .env(BUILD_SESSION_ENV, context.build_session.to_hex())
-        .status();
+        .env(MANAGED_RUSTC_ARGS_ENV, &context.managed_rustc_args)
+        .env(BUILD_SESSION_ENV, context.build_session.to_hex());
+    match context.worker_v2_identity {
+        Some(identity) => {
+            cargo.env(worker_v2::WORKER_V2_EXPECTED_ID_ENV, identity.to_hex());
+        }
+        None => {
+            cargo.env_remove(worker_v2::WORKER_V2_EXPECTED_ID_ENV);
+        }
+    }
+    let status = cargo.status();
 
     match status {
-        Ok(status) if status.success() => Ok(()),
+        Ok(status) if status.success() => {
+            context.project.validate_paths()?;
+            context.target_dir.validate_path("Cargo target directory")?;
+            context.generation.reject_if_substituted()?;
+            context.generation.commit()
+        }
         Ok(status) => Err(format!("cargo {command} failed with status {status}")),
         Err(error) => Err(format!("failed to run cargo: {error}")),
     }
+}
+
+fn inject_application_runner(
+    project: &project::CargoProject,
+    args: &mut Vec<OsString>,
+) -> Result<(), String> {
+    let target = match selected_run_target(args)? {
+        Some(target) => target,
+        None => configured_run_target(project, args)?.unwrap_or(host_rustc_target()?),
+    };
+    if !target
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err(format!(
+            "unsupported Cargo run target for runner isolation: {target:?}"
+        ));
+    }
+    let original_runner = resolve_original_runner(project, args, &target)?;
+    reject_recursive_runner(&original_runner)?;
+    inject_application_runner_config(args, &target, &original_runner)
+}
+
+fn inject_application_runner_config(
+    args: &mut Vec<OsString>,
+    target: &str,
+    original_runner: &[OsString],
+) -> Result<(), String> {
+    let executable = env::current_exe()
+        .map_err(|error| format!("failed to locate cargo-fe2o3 runner executable: {error}"))?;
+    let executable = executable.to_str().ok_or_else(|| {
+        "cargo fe2o3 run requires a UTF-8 cargo-fe2o3 executable path for Cargo runner configuration"
+            .to_string()
+    })?;
+    let mut runner = vec![
+        executable.to_string(),
+        INTERNAL_RUNNER_ARG.to_string(),
+        original_runner.len().to_string(),
+    ];
+    runner.extend(
+        original_runner
+            .iter()
+            .map(|argument| hex_encode(os_bytes(argument))),
+    );
+    let runner = serde_json::to_string(&runner)
+        .map_err(|error| format!("failed to encode Cargo runner configuration: {error}"))?;
+    let config = OsString::from(format!("target.{target}.runner={runner}"));
+    let insert_at = args
+        .iter()
+        .position(|argument| argument == "--")
+        .unwrap_or(args.len());
+    args.insert(insert_at, OsString::from("--config"));
+    args.insert(insert_at + 1, config);
+    Ok(())
+}
+
+fn configured_run_target(
+    project: &project::CargoProject,
+    args: &[OsString],
+) -> Result<Option<String>, String> {
+    let Some(value) = project.cargo_config_value(args, "build.target")? else {
+        return Ok(None);
+    };
+    let targets = match value {
+        serde_json::Value::String(target) => vec![target],
+        serde_json::Value::Array(targets) => targets
+            .into_iter()
+            .map(|target| {
+                target.as_str().map(str::to_string).ok_or_else(|| {
+                    "Cargo build.target array contains a non-string value".to_string()
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+        _ => {
+            return Err("Cargo build.target must be a string or string array".to_string());
+        }
+    };
+    match targets.as_slice() {
+        [] => Err("Cargo build.target may not be empty".to_string()),
+        [target] if !target.is_empty() => Ok(Some(target.clone())),
+        [_] => Err("Cargo build.target may not contain an empty target".to_string()),
+        _ => Err("cargo fe2o3 run requires exactly one configured build target".to_string()),
+    }
+}
+
+fn resolve_original_runner(
+    project: &project::CargoProject,
+    args: &[OsString],
+    target: &str,
+) -> Result<Vec<OsString>, String> {
+    let environment_name = target_runner_environment_name(target);
+    if let Some(environment_runner) = env::var_os(&environment_name)
+        && environment_runner.to_str().is_none()
+    {
+        if has_invocation_config(args) {
+            return Err(format!(
+                "cannot determine precedence for non-UTF-8 {environment_name} with --config; refusing to bypass a Cargo runner"
+            ));
+        }
+        return parse_runner_bytes(os_bytes(&environment_runner), &environment_name);
+    }
+
+    let key = format!("target.{target}.runner");
+    if let Some(value) = project.cargo_config_value(args, &key)? {
+        return parse_runner_value(value, &key);
+    }
+
+    if let Some(serde_json::Value::Object(targets)) = project.cargo_config_value(args, "target")?
+        && targets.iter().any(|(selector, value)| {
+            selector.starts_with("cfg(")
+                && value
+                    .as_object()
+                    .is_some_and(|table| table.contains_key("runner"))
+        })
+    {
+        return Err(format!(
+            "cannot safely resolve cfg-selected Cargo runner for target {target}; configure target.{target}.runner explicitly"
+        ));
+    }
+    Ok(Vec::new())
+}
+
+fn target_runner_environment_name(target: &str) -> String {
+    let normalized = target
+        .bytes()
+        .map(|byte| match byte {
+            b'a'..=b'z' => (byte - b'a' + b'A') as char,
+            b'A'..=b'Z' | b'0'..=b'9' => byte as char,
+            _ => '_',
+        })
+        .collect::<String>();
+    format!("CARGO_TARGET_{normalized}_RUNNER")
+}
+
+fn has_invocation_config(args: &[OsString]) -> bool {
+    args.iter()
+        .take_while(|argument| *argument != "--")
+        .any(|argument| argument == "--config" || os_bytes(argument).starts_with(b"--config="))
+}
+
+fn parse_runner_value(value: serde_json::Value, source: &str) -> Result<Vec<OsString>, String> {
+    let runner = match value {
+        serde_json::Value::String(value) => value
+            .split_whitespace()
+            .map(OsString::from)
+            .collect::<Vec<_>>(),
+        serde_json::Value::Array(values) => values
+            .into_iter()
+            .map(|value| {
+                value.as_str().map(OsString::from).ok_or_else(|| {
+                    format!("Cargo runner `{source}` contains a non-string argument")
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+        _ => {
+            return Err(format!(
+                "Cargo runner `{source}` must be a string or string array"
+            ));
+        }
+    };
+    if runner.is_empty() || runner[0].is_empty() {
+        return Err(format!("Cargo runner `{source}` may not be empty"));
+    }
+    Ok(runner)
+}
+
+fn parse_runner_bytes(value: &[u8], source: &str) -> Result<Vec<OsString>, String> {
+    let runner = value
+        .split(|byte| byte.is_ascii_whitespace())
+        .filter(|argument| !argument.is_empty())
+        .map(|argument| os_string(argument.to_vec()))
+        .collect::<Result<Vec<_>, _>>()?;
+    if runner.is_empty() {
+        return Err(format!("Cargo runner `{source}` may not be empty"));
+    }
+    Ok(runner)
+}
+
+fn reject_recursive_runner(runner: &[OsString]) -> Result<(), String> {
+    let Some(program) = runner.first() else {
+        return Ok(());
+    };
+    let current = env::current_exe()
+        .map_err(|error| format!("failed to identify cargo-fe2o3 executable: {error}"))?;
+    if program == current.as_os_str()
+        || program == current.file_name().unwrap_or_default()
+        || resolve_runner_program(program).is_some_and(|path| {
+            same_executable_file(&path, &current)
+                || std::fs::canonicalize(path).ok() == std::fs::canonicalize(&current).ok()
+        })
+    {
+        return Err("refusing recursive cargo-fe2o3 Cargo runner configuration".to_string());
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn same_executable_file(left: &Path, right: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    let Ok(left) = std::fs::metadata(left) else {
+        return false;
+    };
+    let Ok(right) = std::fs::metadata(right) else {
+        return false;
+    };
+    left.is_file() && right.is_file() && left.dev() == right.dev() && left.ino() == right.ino()
+}
+
+#[cfg(not(unix))]
+fn same_executable_file(_left: &Path, _right: &Path) -> bool {
+    false
+}
+
+fn resolve_runner_program(program: &OsStr) -> Option<PathBuf> {
+    let path = Path::new(program);
+    if path.is_absolute() || os_bytes(program).contains(&b'/') {
+        return Some(if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            env::current_dir().ok()?.join(path)
+        });
+    }
+    env::var_os("PATH")
+        .into_iter()
+        .flat_map(|paths| env::split_paths(&paths).collect::<Vec<_>>())
+        .map(|directory| directory.join(path))
+        .find(|candidate| candidate.is_file())
+}
+
+fn selected_run_target(args: &[OsString]) -> Result<Option<String>, String> {
+    let mut selected = None;
+    let mut index = 0;
+    while index < args.len() {
+        let argument = &args[index];
+        if argument == "--" {
+            break;
+        }
+        let value = if argument == "--target" {
+            index += 1;
+            Some(
+                args.get(index)
+                    .ok_or_else(|| "--target requires an argument".to_string())?
+                    .clone(),
+            )
+        } else {
+            split_joined_os_option(argument, "--target")
+        };
+        if let Some(value) = value {
+            let value = value
+                .to_str()
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| "Cargo run target must be non-empty UTF-8".to_string())?;
+            if selected.replace(value.to_string()).is_some() {
+                return Err("--target may be specified only once".to_string());
+            }
+        }
+        index += 1;
+    }
+    Ok(selected)
+}
+
+fn split_joined_os_option(argument: &OsStr, option: &str) -> Option<OsString> {
+    let bytes = os_bytes(argument);
+    let prefix = option.as_bytes();
+    if !bytes.starts_with(prefix) || bytes.get(prefix.len()) != Some(&b'=') {
+        return None;
+    }
+    os_string(bytes[prefix.len() + 1..].to_vec()).ok()
+}
+
+fn host_rustc_target() -> Result<String, String> {
+    let rustc = env::var_os("RUSTC").unwrap_or_else(|| OsString::from("rustc"));
+    let output = Command::new(rustc)
+        .arg("-vV")
+        .output()
+        .map_err(|error| format!("failed to query rustc host target: {error}"))?;
+    if !output.status.success() {
+        return Err(format!("rustc -vV failed with status {}", output.status));
+    }
+    let output = String::from_utf8(output.stdout)
+        .map_err(|_| "rustc -vV output was not UTF-8".to_string())?;
+    output
+        .lines()
+        .find_map(|line| line.strip_prefix("host: "))
+        .map(str::to_string)
+        .ok_or_else(|| "rustc -vV output did not contain a host target".to_string())
+}
+
+fn run_application_boundary(args: &[OsString]) -> ExitCode {
+    match run_application_boundary_result(args) {
+        Ok(status) => ExitCode::from(binding_wrapper::exit_code(status)),
+        Err(error) => {
+            eprintln!("cargo-fe2o3 application runner: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run_application_boundary_result(args: &[OsString]) -> Result<std::process::ExitStatus, String> {
+    if args.len() < 2 {
+        return Err("runner requires an original-runner count and application".to_string());
+    }
+    let runner_count = args[0]
+        .to_str()
+        .and_then(|value| value.parse::<usize>().ok())
+        .ok_or_else(|| format!("invalid original runner argument count {:?}", args[0]))?;
+    let application_index = 1_usize
+        .checked_add(runner_count)
+        .ok_or_else(|| "original runner argument count overflowed".to_string())?;
+    let application = args
+        .get(application_index)
+        .ok_or_else(|| "runner argument count does not leave an application".to_string())?;
+    let original_runner = args[1..application_index]
+        .iter()
+        .map(|argument| hex_decode_os(argument))
+        .collect::<Result<Vec<_>, _>>()?;
+    if original_runner
+        .first()
+        .is_some_and(|program| program.is_empty())
+    {
+        return Err("original Cargo runner executable may not be empty".to_string());
+    }
+    reject_recursive_runner(&original_runner)?;
+
+    let mut child = if let Some(program) = original_runner.first() {
+        let mut command = Command::new(program);
+        command.args(&original_runner[1..]);
+        command.arg(application);
+        command.args(&args[application_index + 1..]);
+        command
+    } else {
+        let mut command = Command::new(application);
+        command.args(&args[application_index + 1..]);
+        command
+    };
+    for (name, _) in env::vars_os() {
+        let bytes = os_bytes(&name);
+        if bytes.starts_with(b"FE2O3_")
+            || matches!(
+                bytes,
+                b"RUSTFLAGS"
+                    | b"CARGO_ENCODED_RUSTFLAGS"
+                    | b"RUSTC_WRAPPER"
+                    | b"RUSTC_WORKSPACE_WRAPPER"
+            )
+        {
+            child.env_remove(name);
+        }
+    }
+    child
+        .status()
+        .map_err(|error| format!("failed to launch Cargo runner/application: {error}"))
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        encoded.push(HEX[(byte >> 4) as usize] as char);
+        encoded.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    encoded
+}
+
+fn hex_decode_os(value: &OsStr) -> Result<OsString, String> {
+    let bytes = os_bytes(value);
+    if !bytes.len().is_multiple_of(2) {
+        return Err(format!("invalid encoded Cargo runner argument {value:?}"));
+    }
+    let decoded = bytes
+        .chunks_exact(2)
+        .map(|pair| {
+            let high = hex_nibble(pair[0])?;
+            let low = hex_nibble(pair[1])?;
+            Ok((high << 4) | low)
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    os_string(decoded)
+}
+
+fn hex_nibble(byte: u8) -> Result<u8, String> {
+    match byte {
+        b'0'..=b'9' => Ok(byte - b'0'),
+        b'a'..=b'f' => Ok(byte - b'a' + 10),
+        _ => Err("Cargo runner argument contains invalid hexadecimal".to_string()),
+    }
+}
+
+#[cfg(unix)]
+fn os_bytes(value: &OsStr) -> &[u8] {
+    use std::os::unix::ffi::OsStrExt;
+    value.as_bytes()
+}
+
+#[cfg(unix)]
+fn os_string(value: Vec<u8>) -> Result<OsString, String> {
+    use std::os::unix::ffi::OsStringExt;
+    Ok(OsString::from_vec(value))
+}
+
+#[cfg(not(unix))]
+fn os_bytes(value: &OsStr) -> &[u8] {
+    value
+        .to_str()
+        .expect("environment names are UTF-8 off Unix")
+        .as_bytes()
+}
+
+#[cfg(not(unix))]
+fn os_string(value: Vec<u8>) -> Result<OsString, String> {
+    String::from_utf8(value)
+        .map(OsString::from)
+        .map_err(|_| "Cargo option value is not UTF-8".to_string())
 }
 
 fn random_build_session() -> Result<fe2o3_artifact_transaction::BuildSession, String> {
@@ -306,7 +797,10 @@ fn random_build_session() -> Result<fe2o3_artifact_transaction::BuildSession, St
     Err("failed to obtain a nonzero build-session nonce".to_string())
 }
 
-fn reject_preexisting_rustc_wrappers() -> Result<(), String> {
+fn reject_preexisting_rustc_wrappers(
+    project: &project::CargoProject,
+    args: &[OsString],
+) -> Result<(), String> {
     for variable in ["RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER"] {
         if let Some(value) = env::var_os(variable) {
             return Err(format!(
@@ -314,71 +808,18 @@ fn reject_preexisting_rustc_wrappers() -> Result<(), String> {
             ));
         }
     }
+    for key in ["build.rustc-wrapper", "build.rustc-workspace-wrapper"] {
+        if let Some(value) = project.cargo_config_value(args, key)? {
+            return Err(format!(
+                "cargo fe2o3 cannot compose its binding-identity wrapper with configured {key}={value}"
+            ));
+        }
+    }
     Ok(())
 }
 
-fn clean_explicit_packages(workspace_root: &Path, args: &[String]) -> Result<(), String> {
-    let packages = explicit_packages(args);
-    if packages.is_empty() {
-        return Ok(());
-    }
-
-    eprintln!(
-        "cargo fe2o3: cleaning package artifact(s) for {}",
-        packages.join(", ")
-    );
-
-    let mut command = Command::new("cargo");
-    command.arg("clean");
-    for package in packages {
-        command.args(["-p", &package]);
-    }
-
-    let status = command
-        .current_dir(workspace_root)
-        .env_remove("RUSTFLAGS")
-        .env_remove("CARGO_ENCODED_RUSTFLAGS")
-        .status()
-        .map_err(|error| format!("failed to clean package artifacts: {error}"))?;
-
-    status
-        .success()
-        .then_some(())
-        .ok_or_else(|| "failed to clean package artifacts".to_string())
-}
-
-fn explicit_packages(args: &[String]) -> Vec<String> {
-    let mut packages = Vec::new();
-    let mut args = args.iter();
-
-    while let Some(arg) = args.next() {
-        if arg == "--" {
-            break;
-        }
-
-        let package = if arg == "-p" || arg == "--package" {
-            args.next().map(String::as_str)
-        } else if let Some(package) = arg.strip_prefix("--package=") {
-            Some(package)
-        } else if arg.starts_with("-p") && !arg.starts_with("--") && arg.len() > 2 {
-            Some(&arg[2..])
-        } else {
-            None
-        };
-
-        if let Some(package) = package
-            && !package.is_empty()
-            && !packages.iter().any(|existing| existing == package)
-        {
-            packages.push(package.to_string());
-        }
-    }
-
-    packages
-}
-
-fn find_or_build_backend(workspace_root: &Path) -> Result<PathBuf, String> {
-    if let Ok(path) = env::var(BACKEND_ENV) {
+fn find_or_build_backend(target_dir: &project::PinnedDirectory) -> Result<PathBuf, String> {
+    if let Some(path) = env::var_os(BACKEND_ENV) {
         let path = PathBuf::from(path);
         if path.is_file() {
             return Ok(path);
@@ -389,13 +830,43 @@ fn find_or_build_backend(workspace_root: &Path) -> Result<PathBuf, String> {
         ));
     }
 
-    let backend = dylib_path(workspace_root);
+    let source_root = fe2o3_source_root()?;
+    let backend_target = target_dir.open_or_create_child(
+        ".fe2o3-backend-build-v1",
+        "isolated codegen-backend build directory",
+    )?;
+    let backend = dylib_path(backend_target.display_path());
     eprintln!("building rustc-codegen-fe2o3 backend...");
-    let status = Command::new("cargo")
-        .args(["build", "-p", "rustc-codegen-fe2o3"])
-        .current_dir(workspace_root)
+    let cargo = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
+    let mut command = Command::new(cargo);
+    command
+        .args(["build", "--manifest-path"])
+        .arg(source_root.join("Cargo.toml"))
+        .args(["--target-dir"])
+        .arg(backend_target.fixed_child_path(BACKEND_BUILD_CHILD_FD)?)
+        .args(["-p", "rustc-codegen-fe2o3"])
+        .current_dir(&source_root)
         .env_remove("RUSTFLAGS")
         .env_remove("CARGO_ENCODED_RUSTFLAGS")
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTC_WRAPPER")
+        .env_remove("RUSTC_WORKSPACE_WRAPPER");
+    for name in [
+        TARGET_ENV,
+        BACKEND_ENV,
+        HSACO_DIR_ENV,
+        capability_broker::CAPABILITY_BROKER_ENV,
+        BINDING_WRAPPER_MODE_ENV,
+        BUILD_SESSION_ENV,
+        worker_v2::CODEGEN_PIPELINE_ENV,
+        worker_v2::WORKER_V2_CONFIG_ENV,
+        worker_v2::WORKER_V2_EXPECTED_ID_ENV,
+        "FE2O3_HOST_PASSTHROUGH",
+    ] {
+        command.env_remove(name);
+    }
+    backend_target.inherit_for_child_at(&mut command, BACKEND_BUILD_CHILD_FD)?;
+    let status = command
         .status()
         .map_err(|error| format!("failed to build rustc-codegen-fe2o3: {error}"))?;
 
@@ -413,10 +884,26 @@ fn find_or_build_backend(workspace_root: &Path) -> Result<PathBuf, String> {
     }
 }
 
-fn dylib_path(workspace_root: &Path) -> PathBuf {
-    let target_dir = env::var("CARGO_TARGET_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| workspace_root.join("target"));
+fn fe2o3_source_root() -> Result<PathBuf, String> {
+    let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let source_root = crate_root.parent().and_then(Path::parent).ok_or_else(|| {
+        format!(
+            "cargo-fe2o3 was built from an unsupported source layout: {}",
+            crate_root.display()
+        )
+    })?;
+    let manifest = source_root.join("Cargo.toml");
+    if !manifest.is_file() {
+        return Err(format!(
+            "fe2o3 source manifest is unavailable at {}; set {BACKEND_ENV} to a built backend",
+            manifest.display()
+        ));
+    }
+    std::fs::canonicalize(source_root)
+        .map_err(|error| format!("failed to resolve fe2o3 source root: {error}"))
+}
+
+fn dylib_path(target_dir: &Path) -> PathBuf {
     target_dir.join("debug/librustc_codegen_fe2o3.so")
 }
 
@@ -446,17 +933,6 @@ fn find_workspace_root() -> Result<PathBuf, String> {
 
     std::fs::canonicalize(root)
         .map_err(|error| format!("failed to resolve Cargo project/workspace root: {error}"))
-}
-
-fn append_rustflags(extra: &[String]) -> String {
-    let mut flags = env::var("RUSTFLAGS").unwrap_or_default();
-    for flag in extra {
-        if !flags.is_empty() {
-            flags.push(' ');
-        }
-        flags.push_str(flag);
-    }
-    flags
 }
 
 #[derive(Debug)]
@@ -584,24 +1060,28 @@ fn is_gfx_target(candidate: &str) -> bool {
 
 fn print_help() {
     eprintln!(
-        "usage: cargo fe2o3 <command>\n\ncommands:\n  doctor              check ROCm/HIP toolchain discovery\n  build               build with the fe2o3 rustc backend\n  run                 run with the fe2o3 rustc backend\n  smoke               run manifest-selected GPU examples\n  examples            validate or query the example regression manifest\n  clean [--dry-run]   preview or remove target/fe2o3 artifacts (removal requires Unix)\n  inspect             inspect bounded artifact or HSACO metadata without execution\n  sanitize            plan or execute bounded ROCgdb precise-memory diagnostics\n  debug               plan or execute bounded batch/interactive ROCgdb sessions"
+        "usage: cargo fe2o3 <command>\n\ncommands:\n  doctor              check ROCm/HIP toolchain discovery\n  build               build with the fe2o3 rustc backend\n  run                 run with the fe2o3 rustc backend\n  smoke               run manifest-selected GPU examples\n  examples            validate or query the example regression manifest\n  clean [--dry-run]   remove guarded fe2o3-owned target artifacts\n  inspect             inspect bounded artifact or HSACO metadata without execution\n  sanitize            plan or execute bounded ROCgdb precise-memory diagnostics\n  debug               plan or execute bounded batch/interactive ROCgdb sessions"
     );
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{explicit_packages, normalize_invocation, parse_rocminfo_target};
+    use super::{
+        inject_application_runner_config, normalize_invocation, parse_rocminfo_target,
+        selected_run_target,
+    };
+    use std::ffi::OsString;
 
     #[test]
     fn normalizes_direct_and_cargo_subcommand_invocations() {
         for command in [
             "doctor", "build", "run", "smoke", "examples", "clean", "inspect", "sanitize", "debug",
         ] {
-            let direct = vec![command.to_string(), "argument".to_string()];
+            let direct = vec![OsString::from(command), OsString::from("argument")];
             let cargo = vec![
-                "fe2o3".to_string(),
-                command.to_string(),
-                "argument".to_string(),
+                OsString::from("fe2o3"),
+                OsString::from(command),
+                OsString::from("argument"),
             ];
 
             assert_eq!(normalize_invocation(direct.clone()), direct);
@@ -639,25 +1119,42 @@ Agent 2
     }
 
     #[test]
-    fn parses_explicit_package_args() {
-        let args = [
-            "-p",
-            "fe2o3-vecadd",
-            "--package=fe2o3-scale",
-            "-pfe2o3-saxpy",
-        ]
-        .map(str::to_string);
-
-        assert_eq!(
-            explicit_packages(&args),
-            ["fe2o3-vecadd", "fe2o3-scale", "fe2o3-saxpy"]
+    fn runner_configuration_precedes_and_preserves_application_arguments() {
+        let mut args = ["--target", "gfx942", "--", "application"]
+            .map(OsString::from)
+            .to_vec();
+        inject_application_runner_config(
+            &mut args,
+            "gfx942",
+            &[
+                OsString::from("qemu"),
+                OsString::from("-cpu"),
+                OsString::from("max"),
+            ],
+        )
+        .expect("inject runner");
+        let separator = args
+            .iter()
+            .position(|argument| argument == "--")
+            .expect("application separator");
+        assert_eq!(&args[separator..], ["--", "application"]);
+        assert_eq!(&args[separator - 2], "--config");
+        assert!(
+            args[separator - 1]
+                .to_string_lossy()
+                .starts_with("target.gfx942.runner=")
         );
+        assert!(args[separator - 1].to_string_lossy().contains("71656d75"));
     }
 
     #[test]
-    fn ignores_package_args_after_program_separator() {
-        let args = ["-p", "fe2o3-vecadd", "--", "-p", "program-arg"].map(str::to_string);
-
-        assert_eq!(explicit_packages(&args), ["fe2o3-vecadd"]);
+    fn run_target_routing_is_strict_and_stops_at_separator() {
+        let args = ["--target=gfx942", "--", "--target", "application"].map(OsString::from);
+        assert_eq!(
+            selected_run_target(&args).expect("parse target").as_deref(),
+            Some("gfx942")
+        );
+        let duplicate = ["--target", "gfx942", "--target=gfx1100"].map(OsString::from);
+        assert!(selected_run_target(&duplicate).is_err());
     }
 }

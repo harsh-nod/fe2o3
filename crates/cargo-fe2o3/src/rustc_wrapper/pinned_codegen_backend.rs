@@ -292,9 +292,9 @@ mod platform {
     use sha2::{Digest, Sha256};
     use std::fs::{File, Metadata};
     use std::io::{self, Read, Seek, SeekFrom, Write};
-    use std::os::fd::{AsRawFd, BorrowedFd, RawFd};
+    use std::os::fd::{AsRawFd, BorrowedFd, IntoRawFd, RawFd};
     use std::os::unix::ffi::OsStrExt;
-    use std::os::unix::fs::MetadataExt;
+    use std::os::unix::fs::{FileExt, MetadataExt};
     use std::os::unix::process::CommandExt;
 
     use super::{Command, ExitStatus, OsStr, OsString, Output};
@@ -394,7 +394,6 @@ mod platform {
 
             let descriptor_path = PathBuf::from(format!("/proc/self/fd/{}", file.as_raw_fd()));
             validate_descriptor_path(&file, &descriptor_path, snapshot, seals, &display_path)?;
-
             Ok(Self {
                 file,
                 display_path,
@@ -403,6 +402,65 @@ mod platform {
                 seals,
                 sha256,
             })
+        }
+
+        #[allow(dead_code)] // Used by the Cargo orchestration binary, not the standalone wrapper.
+        pub(crate) fn from_transferred_file(file: File) -> Result<Self, PinCodegenBackendError> {
+            let display_path = PathBuf::from("<cargo-fe2o3 capability broker backend>");
+            require_close_on_exec(&file, &display_path)?;
+            require_read_only(&file, &display_path)?;
+            let metadata = file
+                .metadata()
+                .map_err(|source| PinCodegenBackendError::Inspect {
+                    path: display_path.clone(),
+                    source,
+                })?;
+            if !metadata.is_file() {
+                return Err(PinCodegenBackendError::NotRegular { path: display_path });
+            }
+            let snapshot = ObjectSnapshot::from_metadata(&metadata);
+            if snapshot.size == 0 {
+                return Err(PinCodegenBackendError::Empty { path: display_path });
+            }
+            if snapshot.size > MAX_CODEGEN_BACKEND_BYTES {
+                return Err(PinCodegenBackendError::TooLarge {
+                    path: display_path,
+                    size: snapshot.size,
+                    limit: MAX_CODEGEN_BACKEND_BYTES,
+                });
+            }
+            let seals = rustix::fs::fcntl_get_seals(&file).map_err(|source| {
+                PinCodegenBackendError::SealImage {
+                    path: display_path.clone(),
+                    source: source.into(),
+                }
+            })?;
+            let required = SealFlags::WRITE | SealFlags::GROW | SealFlags::SHRINK | SealFlags::SEAL;
+            if seals != required && seals != required | SealFlags::FUTURE_WRITE {
+                return Err(PinCodegenBackendError::ImageSealsChanged { path: display_path });
+            }
+            let sha256 = hash_exact_at(&file, &display_path, snapshot.size)?;
+            let descriptor_path = PathBuf::from(format!("/proc/self/fd/{}", file.as_raw_fd()));
+            validate_descriptor_path(&file, &descriptor_path, snapshot, seals, &display_path)?;
+            Ok(Self {
+                file,
+                display_path,
+                descriptor_path,
+                snapshot,
+                seals,
+                sha256,
+            })
+        }
+
+        #[allow(dead_code)] // Used by the Cargo orchestration binary, not the standalone wrapper.
+        pub(crate) fn try_clone_for_transfer(&self) -> Result<File, PinCodegenBackendError> {
+            self.descriptor_reference()?;
+            self.file
+                .try_clone()
+                .map_err(|source| PinCodegenBackendError::DescriptorStrategy {
+                    path: self.display_path.clone(),
+                    source,
+                })
         }
 
         /// Returns an unauthenticated SHA-256 measurement of the captured source bytes.
@@ -432,6 +490,77 @@ mod platform {
                 path: &self.descriptor_path,
                 child_inheritance: ChildDescriptorInheritance::BlockedByCloseOnExec,
             })
+        }
+
+        /// Returns the stable procfs path used after the sealed image is installed at `target_fd`
+        /// in one child. The target must be unused in the parent so the child setup cannot replace
+        /// an unrelated capability.
+        #[allow(dead_code)] // Used by the Cargo orchestration binary, not the standalone wrapper.
+        pub(crate) fn fixed_child_descriptor_path(
+            &self,
+            target_fd: RawFd,
+        ) -> Result<PathBuf, PinCodegenBackendError> {
+            require_close_on_exec(&self.file, &self.display_path)?;
+            require_read_only(&self.file, &self.display_path)?;
+            require_unused_descriptor(target_fd, &self.display_path)?;
+            Ok(PathBuf::from(format!("/proc/self/fd/{target_fd}")))
+        }
+
+        /// Installs the exact sealed image at a stable descriptor in one child process.
+        #[allow(dead_code)] // Used by the Cargo orchestration binary, not the standalone wrapper.
+        pub(crate) fn inherit_for_child_at(
+            &self,
+            command: &mut Command,
+            target_fd: RawFd,
+        ) -> Result<(), PinCodegenBackendError> {
+            require_close_on_exec(&self.file, &self.display_path)?;
+            require_read_only(&self.file, &self.display_path)?;
+            require_unused_descriptor(target_fd, &self.display_path)?;
+            let source_fd = self.file.as_raw_fd();
+            let snapshot = self.snapshot;
+            let seals = self.seals;
+            // SAFETY: the retained File remains alive through spawn. `dup2` and descriptor-only
+            // validation are async-signal-safe operations in the child callback.
+            unsafe {
+                command.pre_exec(move || {
+                    prepare_fixed_descriptor_in_child(source_fd, target_fd, snapshot, seals)
+                });
+            }
+            Ok(())
+        }
+
+        /// Installs the sealed image at a stable descriptor in one child, replacing only the
+        /// child's inherited entry at that number when Cargo kept it occupied.
+        #[allow(dead_code)] // Used by the Cargo orchestration binary, not the standalone wrapper.
+        pub(crate) fn replace_for_child_at(
+            &self,
+            command: &mut Command,
+            target_fd: RawFd,
+        ) -> Result<(), PinCodegenBackendError> {
+            require_close_on_exec(&self.file, &self.display_path)?;
+            require_read_only(&self.file, &self.display_path)?;
+            if target_fd < 3 {
+                return Err(PinCodegenBackendError::DescriptorStrategy {
+                    path: self.display_path.clone(),
+                    source: io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "fixed backend descriptor would replace a standard stream",
+                    ),
+                });
+            }
+            let source_fd = self.file.as_raw_fd();
+            let snapshot = self.snapshot;
+            let seals = self.seals;
+            // SAFETY: the retained File remains alive through spawn. dup3 runs only in the child
+            // and may replace a descriptor inherited through Cargo without changing the wrapper.
+            unsafe {
+                command.pre_exec(move || {
+                    prepare_replacing_fixed_descriptor_in_child(
+                        source_fd, target_fd, snapshot, seals,
+                    )
+                });
+            }
+            Ok(())
         }
 
         /// Prepare one command to pass this exact opened object to rustc.
@@ -555,6 +684,94 @@ mod platform {
         let mut inherited_flags = flags;
         inherited_flags.remove(FdFlags::CLOEXEC);
         rustix::io::fcntl_setfd(descriptor, inherited_flags).map_err(io::Error::from)
+    }
+
+    fn require_unused_descriptor(
+        descriptor: RawFd,
+        display_path: &Path,
+    ) -> Result<(), PinCodegenBackendError> {
+        if descriptor < 3 {
+            return Err(PinCodegenBackendError::DescriptorStrategy {
+                path: display_path.to_path_buf(),
+                source: io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "fixed backend descriptor would replace a standard stream",
+                ),
+            });
+        }
+        let path = PathBuf::from(format!("/proc/self/fd/{descriptor}"));
+        match std::fs::symlink_metadata(&path) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Ok(_) => Err(PinCodegenBackendError::DescriptorStrategy {
+                path: display_path.to_path_buf(),
+                source: io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    format!("fixed backend descriptor {descriptor} is already in use"),
+                ),
+            }),
+            Err(source) => Err(PinCodegenBackendError::DescriptorStrategy {
+                path: display_path.to_path_buf(),
+                source,
+            }),
+        }
+    }
+
+    fn prepare_fixed_descriptor_in_child(
+        source_fd: RawFd,
+        target_fd: RawFd,
+        expected: ObjectSnapshot,
+        expected_seals: SealFlags,
+    ) -> io::Result<()> {
+        // SAFETY: the prepared command borrows the File that owns this descriptor through spawn.
+        let source = unsafe { BorrowedFd::borrow_raw(source_fd) };
+        let installed =
+            rustix::io::fcntl_dupfd_cloexec(source, target_fd).map_err(io::Error::from)?;
+        if installed.as_raw_fd() != target_fd {
+            return Err(io::Error::from_raw_os_error(
+                rustix::io::Errno::BUSY.raw_os_error(),
+            ));
+        }
+        let stat = rustix::fs::fstat(&installed).map_err(io::Error::from)?;
+        let status_flags = rustix::fs::fcntl_getfl(&installed).map_err(io::Error::from)?;
+        let seals = rustix::fs::fcntl_get_seals(&installed).map_err(io::Error::from)?;
+        if !expected.matches_stat(&stat)
+            || status_flags & OFlags::ACCMODE != OFlags::RDONLY
+            || seals != expected_seals
+        {
+            return Err(io::Error::from_raw_os_error(
+                rustix::io::Errno::STALE.raw_os_error(),
+            ));
+        }
+        rustix::io::fcntl_setfd(&installed, FdFlags::empty()).map_err(io::Error::from)?;
+        let _ = installed.into_raw_fd();
+        Ok(())
+    }
+
+    fn prepare_replacing_fixed_descriptor_in_child(
+        source_fd: RawFd,
+        target_fd: RawFd,
+        expected: ObjectSnapshot,
+        expected_seals: SealFlags,
+    ) -> io::Result<()> {
+        if source_fd != target_fd
+            && unsafe { libc::dup3(source_fd, target_fd, libc::O_CLOEXEC) } != target_fd
+        {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: dup3 succeeded or the retained source already occupies the requested number.
+        let installed = unsafe { BorrowedFd::borrow_raw(target_fd) };
+        let stat = rustix::fs::fstat(installed).map_err(io::Error::from)?;
+        let status_flags = rustix::fs::fcntl_getfl(installed).map_err(io::Error::from)?;
+        let seals = rustix::fs::fcntl_get_seals(installed).map_err(io::Error::from)?;
+        if !expected.matches_stat(&stat)
+            || status_flags & OFlags::ACCMODE != OFlags::RDONLY
+            || seals != expected_seals
+        {
+            return Err(io::Error::from_raw_os_error(
+                rustix::io::Errno::STALE.raw_os_error(),
+            ));
+        }
+        rustix::io::fcntl_setfd(installed, FdFlags::empty()).map_err(io::Error::from)
     }
 
     fn reject_preexisting_backend_selector(
@@ -858,9 +1075,64 @@ mod platform {
         Ok(hasher.finalize().into())
     }
 
+    fn hash_exact_at(
+        file: &File,
+        display_path: &Path,
+        expected_size: u64,
+    ) -> Result<[u8; 32], PinCodegenBackendError> {
+        let mut hasher = Sha256::new();
+        let mut buffer = [0_u8; HASH_CHUNK_BYTES];
+        let mut total = 0_u64;
+
+        while total < expected_size {
+            let remaining = expected_size - total;
+            let requested = usize::try_from(remaining.min(HASH_CHUNK_BYTES as u64))
+                .expect("hash chunk length fits usize");
+            let read = read_at_retry(file, &mut buffer[..requested], total).map_err(|source| {
+                PinCodegenBackendError::Read {
+                    path: display_path.to_path_buf(),
+                    source,
+                }
+            })?;
+            if read == 0 {
+                return Err(PinCodegenBackendError::UnexpectedEof {
+                    path: display_path.to_path_buf(),
+                    expected: expected_size,
+                    actual: total,
+                });
+            }
+            hasher.update(&buffer[..read]);
+            total += read as u64;
+        }
+
+        if read_at_retry(file, &mut buffer[..1], expected_size).map_err(|source| {
+            PinCodegenBackendError::Read {
+                path: display_path.to_path_buf(),
+                source,
+            }
+        })? != 0
+        {
+            return Err(PinCodegenBackendError::GrewDuringRead {
+                path: display_path.to_path_buf(),
+                expected: expected_size,
+            });
+        }
+
+        Ok(hasher.finalize().into())
+    }
+
     fn read_retry<R: Read>(reader: &mut R, buffer: &mut [u8]) -> io::Result<usize> {
         loop {
             match reader.read(buffer) {
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                result => return result,
+            }
+        }
+    }
+
+    fn read_at_retry(file: &File, buffer: &mut [u8], offset: u64) -> io::Result<usize> {
+        loop {
+            match file.read_at(buffer, offset) {
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
                 result => return result,
             }
@@ -1605,6 +1877,18 @@ pub(crate) use platform::{
 pub(crate) struct PinnedCodegenBackend;
 
 #[cfg(not(target_os = "linux"))]
+pub(crate) struct BackendDescriptorReference<'backend> {
+    _backend: &'backend PinnedCodegenBackend,
+}
+
+#[cfg(not(target_os = "linux"))]
+impl BackendDescriptorReference<'_> {
+    pub(crate) fn path(&self) -> &Path {
+        unreachable!("unsupported platforms cannot construct a backend descriptor reference")
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
 impl PinnedCodegenBackend {
     pub(crate) fn open(_path: &Path) -> Result<Self, PinCodegenBackendError> {
         Err(PinCodegenBackendError::UnsupportedPlatform)
@@ -1614,6 +1898,39 @@ impl PinnedCodegenBackend {
         &self,
         _command: Command,
     ) -> Result<PreparedCodegenBackendCommand<'_>, PinCodegenBackendError> {
+        Err(PinCodegenBackendError::UnsupportedPlatform)
+    }
+
+    pub(crate) fn from_transferred_file(
+        _file: std::fs::File,
+    ) -> Result<Self, PinCodegenBackendError> {
+        Err(PinCodegenBackendError::UnsupportedPlatform)
+    }
+
+    pub(crate) fn sha256(&self) -> &[u8; 32] {
+        unreachable!("unsupported platforms cannot construct a pinned backend")
+    }
+
+    pub(crate) fn fixed_child_descriptor_path(
+        &self,
+        _target_fd: std::os::fd::RawFd,
+    ) -> Result<PathBuf, PinCodegenBackendError> {
+        Err(PinCodegenBackendError::UnsupportedPlatform)
+    }
+
+    pub(crate) fn inherit_for_child_at(
+        &self,
+        _command: &mut Command,
+        _target_fd: std::os::fd::RawFd,
+    ) -> Result<(), PinCodegenBackendError> {
+        Err(PinCodegenBackendError::UnsupportedPlatform)
+    }
+
+    pub(crate) fn replace_for_child_at(
+        &self,
+        _command: &mut Command,
+        _target_fd: std::os::fd::RawFd,
+    ) -> Result<(), PinCodegenBackendError> {
         Err(PinCodegenBackendError::UnsupportedPlatform)
     }
 }

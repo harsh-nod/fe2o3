@@ -4,6 +4,80 @@
 The adjacent `fe2o3-rustc-wrapper` is fail closed for compile invocations while
 its trusted execution boundary is built incrementally.
 
+## External Cargo projects
+
+`cargo fe2o3 build` and `cargo fe2o3 run` operate from standalone Cargo
+projects and workspace members. Cargo receives the original platform argument
+vector without shell construction or UTF-8 conversion. A separate bounded
+`cargo metadata --no-deps` probe resolves the selected `--manifest-path`,
+workspace root, and configured target directory. An explicit `--target-dir`
+has the same invocation-directory-relative interpretation as Cargo and takes
+precedence over metadata; `CARGO_TARGET_DIR`, repeated `--config`/`-Z`
+arguments, and locked/offline/frozen routing are reflected by metadata.
+
+The invocation directory, workspace root, target directory, and
+`<target>/fe2o3` output directory are opened without following path-component
+symlinks and retained through the operation. On Linux, generated output is
+passed through a validated fixed `/proc/self/fd` directory reference. The
+backend is copied into a sealed read-only memfd and installed at a separate
+fixed child descriptor, so the measured bytes are the bytes selected for
+rustc. Path substitution is checked before and after Cargo runs.
+
+Generated output carries an atomic deletion guard and a bounded generation
+marker that binds the sealed backend digest, transitive Worker V2 inputs,
+target, effective Cargo build/target/profile configuration, inherited codegen
+environment, rustflags, and a snapshot of the generated artifact tree. Cargo's
+own environment and configured rustflags remain intact. fe2o3 passes its
+backend selector and generation cfg separately to the trusted rustc wrapper,
+which rejects response files and any preexisting codegen-backend selector.
+Configured or inherited outer rustc wrappers are rejected rather than composed.
+A private target-scoped lock serializes preparation, Cargo execution, and
+marker publication. Stale or failed owned generations allocate a new Cargo
+fingerprint and remove only the opened
+`<target>/fe2o3` directory; a missing or malformed deletion guard fails
+closed without deletion. Successful incremental builds republish their exact
+snapshot. Unrelated host outputs remain available for normal Cargo reuse.
+
+Deletion guards are structural accident and substitution defenses, not
+authentication. Their random tokens correlate an interrupted creation with
+the directory completed by that operation, but every record is stored inside
+same-UID-writable filesystem state. A malicious process running as the same
+UID can forge or replace them and is outside this cleanup threat model.
+
+When `FE2O3_BACKEND` is unset, a source-tree build of `cargo-fe2o3` builds the
+backend into `<selected-target>/.fe2o3-backend-build-v1`, passed to the child
+through its own pinned descriptor. It never shares the fe2o3 source tree's
+ordinary `target`. Packaged deployments without that source tree must provide
+a built backend through `FE2O3_BACKEND`.
+
+`cargo fe2o3 run` places a narrow application boundary in front of Cargo's
+effective exact-target runner. The boundary closes the backend and artifact
+descriptors and removes `FE2O3_*`, rustflags, and rustc-wrapper controls before
+chaining to the configured runner with its command, arguments, environment,
+application path, and application arguments preserved byte-for-byte. String
+and array runners from target configuration and target-runner environment
+variables are supported, including non-UTF-8 Unix environment values.
+Recursive cargo-fe2o3 runners, including aliases and hardlinks to the same
+executable inode, and runner selections that cannot be resolved unambiguously
+fail closed. In particular, a `cfg(...)` runner must currently be made explicit
+as `target.<triple>.runner` for `cargo fe2o3 run`.
+
+## Cleanup
+
+`cargo fe2o3 clean` removes only `<selected-target>/fe2o3`. It honors
+`--manifest-path`, `--target-dir`, `CARGO_TARGET_DIR`, and Cargo target
+configuration. `--dry-run` reports the exact opened directory without
+removing it.
+
+`cargo fe2o3 clean` never removes the selected target directory or any sibling
+output. `--all-target` is rejected because fe2o3 has no authority to identify
+those outputs as disposable; broader cleanup remains the responsibility of an
+explicit standard `cargo clean` invocation. Package, workspace, exclude, and
+other partial-clean selectors are also rejected because they do not map to an
+unambiguous fe2o3 directory capability.
+Destructive cleanup is supported only where descriptor-relative recursive
+removal is available; symlinked or substituted selected paths fail closed.
+
 ## Narrow Worker V2 handoff flow
 
 `FE2O3_CODEGEN_PIPELINE=kernel-ir-worker-v2` requires
@@ -31,8 +105,10 @@ absent. A selected compilation must publish exactly one attempt-scoped handoff;
 a missing handoff is an error and invalidates the attempt.
 
 For a selected unit, the wrapper pins and validates all configured inputs,
-binds the SHA-256 identity of the exact manifest bytes into `BuildInvocation`,
-runs rustc, consumes the handoff once, and invokes the reproducible GenericLink
+binds a domain-separated identity of the exact manifest, sealed worker image,
+and provider bytes into both the Cargo generation and `BuildInvocation`,
+rereads that identity in the wrapper before use, runs rustc, consumes the
+handoff once, and invokes the reproducible GenericLink
 V1 plus compiler-aware Worker V2 workflow. It requires byte-identical output
 from two executions, independently inspects the raw HSACO target, exports,
 descriptors, and AMDHSA launch metadata, and derives a typed publication plan
@@ -83,7 +159,7 @@ passthrough or compile plans yet.
 
 ## Pinned codegen-backend object
 
-The wrapper also contains a private Linux primitive for the codegen-backend
+The wrapper also contains a Linux primitive for the codegen-backend
 dynamic-library object. It applies the same final-component `O_NOFOLLOW` and
 nonblocking source-open policy, requires a non-empty regular file no larger
 than 512 MiB, and copies exactly the source bytes into an anonymous memfd while
@@ -95,8 +171,9 @@ A prepared child command rejects pre-existing joined, split, underscore, and
 response-file backend selectors. It appends one descriptor-backed selector and
 uses a child-only `pre_exec` step to revalidate the image and seals before
 clearing `FD_CLOEXEC`. The prepared command borrows the pin and exposes no
-argument mutation, so the selector cannot be replaced after preparation.
-Compile activation and dynamic loading remain disabled.
+argument mutation, so the selector cannot be replaced after preparation. The
+external Cargo path actively uses the same primitive with a reserved stable
+descriptor; the separate `fe2o3-rustc-wrapper` compile path remains disabled.
 
 ## Platform and trust limits
 
@@ -118,6 +195,6 @@ trusted expected digest.
 ELF interpreters, transitive shared libraries of either rustc or the codegen
 backend, dynamic-loader search and loading behavior, procfs mount/identity
 semantics, and the kernel remain outside these primitives' boundary. The
-backend descriptor may also remain visible to rustc descendants until an
-activation design closes or resets it. Pinning the backend object does not pin
-its shared dependencies.
+backend descriptor remains visible to Cargo build descendants that need to
+load it; the `run` application boundary closes it before application exec.
+Pinning the backend object does not pin its shared dependencies.

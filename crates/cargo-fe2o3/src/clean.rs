@@ -1,8 +1,16 @@
+use crate::generation::{GenerationLock, validate_owned_artifact};
+use crate::project::{CargoProject, PinnedDirectory};
+#[cfg(test)]
 use cap_primitives::ambient_authority;
 #[cfg(unix)]
 use cap_primitives::fs::remove_open_dir_all;
+#[cfg(test)]
 use cap_primitives::fs::{FollowSymlinks, open_ambient_dir, open_dir_nofollow, stat};
-use std::fs::{self, File};
+use std::ffi::{OsStr, OsString};
+#[cfg(test)]
+use std::fs;
+use std::fs::File;
+#[cfg(test)]
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -13,7 +21,22 @@ pub(crate) struct CleanOptions {
     pub(crate) dry_run: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ProjectCleanOptions {
+    pub(crate) dry_run: bool,
+}
+
 #[derive(Debug)]
+pub(crate) struct ProjectCleanPlan {
+    project: CargoProject,
+    target_path: PathBuf,
+    target_dir: Option<PinnedDirectory>,
+    artifact_dir: Option<PinnedDirectory>,
+    _lock: Option<GenerationLock>,
+}
+
+#[derive(Debug)]
+#[cfg(test)]
 pub(crate) struct CleanPlan {
     workspace_root: PathBuf,
     workspace_dir: File,
@@ -65,6 +88,127 @@ pub(crate) fn parse_options(args: &[String]) -> Result<CleanOptions, String> {
     Ok(CleanOptions { dry_run })
 }
 
+pub(crate) fn parse_project_options(args: &[OsString]) -> Result<ProjectCleanOptions, String> {
+    let mut dry_run_args = Vec::new();
+    let mut index = 0;
+
+    while index < args.len() {
+        let argument = &args[index];
+        if argument == "--dry-run" {
+            dry_run_args.push("--dry-run".to_string());
+        } else if argument == "--all-target" {
+            return Err(
+                "cargo fe2o3 clean: --all-target is unsupported because fe2o3 cannot authorize deleting sibling Cargo outputs; use an explicit `cargo clean` for broader cleanup"
+                    .to_string(),
+            );
+        } else if matches!(
+            argument.to_str(),
+            Some("--manifest-path" | "--target-dir" | "--config" | "-Z")
+        ) {
+            index += 1;
+            if args
+                .get(index)
+                .is_none_or(|value| value.is_empty() || os_bytes(value).first() == Some(&b'-'))
+            {
+                return Err(format!(
+                    "cargo fe2o3 clean: {} requires a non-empty path",
+                    argument.to_string_lossy()
+                ));
+            }
+        } else if is_joined_path_option(argument, "--manifest-path")
+            || is_joined_path_option(argument, "--target-dir")
+            || is_joined_path_option(argument, "--config")
+            || os_bytes(argument).starts_with(b"-Z") && os_bytes(argument).len() > 2
+            || matches!(
+                argument.to_str(),
+                Some("--locked" | "--offline" | "--frozen")
+            )
+        {
+        } else {
+            return Err(format!(
+                "cargo fe2o3 clean: unexpected or ambiguous argument {argument:?}; expected cleanup options and Cargo routing/configuration options"
+            ));
+        }
+        index += 1;
+    }
+
+    let dry_run = parse_options(&dry_run_args)?.dry_run;
+    Ok(ProjectCleanOptions { dry_run })
+}
+
+pub(crate) fn plan_project(project: CargoProject) -> Result<ProjectCleanPlan, String> {
+    let target_path = project.target_path().to_path_buf();
+    let target_dir = project.open_target()?;
+    let mut artifact_dir = None;
+    if let Some(target_dir) = &target_dir {
+        artifact_dir =
+            target_dir.open_child(GENERATED_COMPONENTS[1], "fe2o3 artifact directory")?;
+    }
+    let lock = artifact_dir
+        .as_ref()
+        .map(|_| GenerationLock::acquire(target_dir.as_ref().expect("artifact has target parent")))
+        .transpose()?;
+    if let Some(artifact) = &artifact_dir {
+        artifact.validate_path("fe2o3 artifact directory")?;
+        validate_owned_artifact(artifact)?;
+    }
+    Ok(ProjectCleanPlan {
+        project,
+        target_path,
+        target_dir,
+        artifact_dir,
+        _lock: lock,
+    })
+}
+
+pub(crate) fn execute_project(
+    plan: ProjectCleanPlan,
+    options: ProjectCleanOptions,
+) -> Result<Vec<CleanAction>, String> {
+    plan.project.validate_paths()?;
+    let Some(target_dir) = plan.target_dir else {
+        return Ok(vec![CleanAction::Missing(
+            plan.target_path.join(GENERATED_COMPONENTS[1]),
+        )]);
+    };
+    target_dir.validate_path("Cargo target directory")?;
+
+    let generated_path = plan.target_path.join(GENERATED_COMPONENTS[1]);
+    let Some(generated_dir) = plan.artifact_dir else {
+        return Ok(vec![CleanAction::Missing(generated_path)]);
+    };
+    generated_dir.validate_path("fe2o3 artifact directory")?;
+    validate_owned_artifact(&generated_dir)?;
+    if options.dry_run {
+        return Ok(vec![CleanAction::WouldRemove(generated_path)]);
+    }
+    remove_generated_dir(generated_dir.into_file(), &generated_path)?;
+    Ok(vec![CleanAction::Removed(generated_path)])
+}
+
+fn is_joined_path_option(argument: &OsStr, option: &str) -> bool {
+    let bytes = os_bytes(argument);
+    let option = option.as_bytes();
+    bytes.len() > option.len() + 1
+        && bytes.starts_with(option)
+        && bytes.get(option.len()) == Some(&b'=')
+}
+
+#[cfg(unix)]
+fn os_bytes(value: &OsStr) -> &[u8] {
+    use std::os::unix::ffi::OsStrExt;
+    value.as_bytes()
+}
+
+#[cfg(not(unix))]
+fn os_bytes(value: &OsStr) -> &[u8] {
+    value
+        .to_str()
+        .expect("clean options must be UTF-8 off Unix")
+        .as_bytes()
+}
+
+#[cfg(test)]
 pub(crate) fn plan(workspace_root: &Path) -> Result<CleanPlan, String> {
     let workspace_root = fs::canonicalize(workspace_root).map_err(|error| {
         format!(
@@ -93,6 +237,7 @@ pub(crate) fn plan(workspace_root: &Path) -> Result<CleanPlan, String> {
     })
 }
 
+#[cfg(test)]
 pub(crate) fn execute(plan: &CleanPlan, options: CleanOptions) -> Result<Vec<CleanAction>, String> {
     let Some(generated_dir) = open_generated_dir(plan)? else {
         return Ok(vec![CleanAction::Missing(plan.target.clone())]);
@@ -118,6 +263,7 @@ pub(crate) fn execute(plan: &CleanPlan, options: CleanOptions) -> Result<Vec<Cle
     }
 }
 
+#[cfg(test)]
 fn open_generated_dir(plan: &CleanPlan) -> Result<Option<File>, String> {
     let target_path = plan.workspace_root.join(GENERATED_COMPONENTS[0]);
     let Some(target_dir) =
@@ -131,6 +277,7 @@ fn open_generated_dir(plan: &CleanPlan) -> Result<Option<File>, String> {
 
 // A successful no-follow open is the authority. Metadata is consulted only
 // after failure to produce a fail-closed diagnostic.
+#[cfg(test)]
 fn open_component_nofollow(
     parent: &File,
     component: &str,
@@ -175,15 +322,25 @@ fn remove_generated_dir(generated_dir: File, display_path: &Path) -> Result<(), 
     })
 }
 
+#[cfg(not(unix))]
+fn remove_generated_dir(generated_dir: File, _display_path: &Path) -> Result<(), String> {
+    drop(generated_dir);
+    Err(
+        "cargo fe2o3 clean: destructive cleanup is unsupported on this platform; use --dry-run"
+            .to_string(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     #[cfg(unix)]
     use super::remove_generated_dir;
     use super::{
-        CleanAction, CleanOptions, execute, open_component_nofollow, open_generated_dir,
-        parse_options, plan,
+        CleanAction, CleanOptions, ProjectCleanOptions, execute, open_component_nofollow,
+        open_generated_dir, parse_options, parse_project_options, plan,
     };
     use std::env;
+    use std::ffi::OsString;
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::process;
@@ -255,6 +412,29 @@ mod tests {
                     .to_string()
             )
         );
+    }
+
+    #[test]
+    fn parses_project_cleanup_options_and_rejects_broad_selectors() {
+        assert_eq!(
+            parse_project_options(&[
+                OsString::from("--dry-run"),
+                OsString::from("--manifest-path=member/Cargo.toml"),
+                OsString::from("--target-dir"),
+                OsString::from("custom-target"),
+            ]),
+            Ok(ProjectCleanOptions { dry_run: true })
+        );
+
+        for args in [
+            vec![OsString::from("--all-target")],
+            vec![OsString::from("--package"), OsString::from("member")],
+            vec![OsString::from("--workspace")],
+            vec![OsString::from("--manifest-path=")],
+            vec![OsString::from("--target-dir")],
+        ] {
+            assert!(parse_project_options(&args).is_err(), "accepted {args:?}");
+        }
     }
 
     #[test]

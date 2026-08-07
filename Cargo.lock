@@ -58,6 +58,7 @@ dependencies = [
  "fe2o3-hsaco",
  "fe2o3-hsaco-finalize",
  "fe2o3-rustc-invocation",
+ "libc",
  "reserved-fe2o3-symbols",
  "rmpv",
  "rustix",
@@ -161,6 +162,7 @@ version = "0.1.0"
 name = "fe2o3-artifact-transaction"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "rustix",
  "sha2",
 ]

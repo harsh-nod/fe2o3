@@ -703,24 +703,28 @@ mod platform {
 
             let mut bytes = fs::read(&selected).unwrap();
             bytes[0] ^= 0xff;
-            std::thread::sleep(Duration::from_millis(10));
-            fs::write(&selected, &bytes).unwrap();
-            File::options()
-                .write(true)
-                .open(&selected)
-                .unwrap()
-                .set_times(FileTimes::new().set_modified(original_modified))
-                .unwrap();
-
-            let changed_metadata = fs::metadata(&selected).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(2);
+            let changed_metadata = loop {
+                fs::write(&selected, &bytes).unwrap();
+                File::options()
+                    .write(true)
+                    .open(&selected)
+                    .unwrap()
+                    .set_times(FileTimes::new().set_modified(original_modified))
+                    .unwrap();
+                let metadata = fs::metadata(&selected).unwrap();
+                if (metadata.ctime(), metadata.ctime_nsec()) != original_ctime {
+                    break metadata;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "fixture filesystem did not expose a ctime change"
+                );
+                std::thread::sleep(Duration::from_millis(20));
+            };
             assert_eq!(changed_metadata.len(), original_metadata.len());
             assert_eq!(changed_metadata.mode(), original_metadata.mode());
             assert_eq!(changed_metadata.modified().unwrap(), original_modified);
-            assert_ne!(
-                (changed_metadata.ctime(), changed_metadata.ctime_nsec()),
-                original_ctime,
-                "fixture filesystem did not expose a ctime change"
-            );
 
             assert!(matches!(
                 pinned.command(),

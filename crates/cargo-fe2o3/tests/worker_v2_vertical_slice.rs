@@ -1,19 +1,146 @@
 #![cfg(target_os = "linux")]
 
-use std::fs;
+use std::fs::{self, File};
+use std::io::{self, IoSlice, Read, Write};
+use std::mem::MaybeUninit;
+use std::os::fd::{AsFd, AsRawFd};
+use std::os::linux::net::SocketAddrExt;
+use std::os::unix::net::{SocketAddr, UnixListener};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use rustix::fs::{MemfdFlags, Mode, OFlags, SealFlags};
+use rustix::net::{SendAncillaryBuffer, SendAncillaryMessage, SendFlags, sendmsg};
 use serde_json::{Value as JsonValue, json};
 use sha2::{Digest, Sha256};
 
 include!("../../fe2o3-hsaco-finalize/tests/fixtures/worker_v2_hsaco_test_support.rs");
 
 const WORKER_ID: &str = "cargo-fe2o3-fixture-worker-v1";
+const CAPABILITY_BROKER_ENV: &str = "FE2O3_CAPABILITY_BROKER_V1";
+const REQUEST_MAGIC: &[u8] = b"FE2O3-CARGO-CAPABILITY-BROKER-V1\0";
+const BUILD_SESSION_BYTES: [u8; 16] = [0x11; 16];
 static NEXT_TEST: AtomicU64 = AtomicU64::new(1);
+
+struct TestCapabilityBroker {
+    endpoint: String,
+    stop: Arc<std::sync::atomic::AtomicBool>,
+    worker: Option<thread::JoinHandle<io::Result<()>>>,
+}
+
+impl TestCapabilityBroker {
+    fn start(artifact_dir: &Path) -> io::Result<Self> {
+        let endpoint = random_broker_endpoint()?;
+        let address =
+            SocketAddr::from_abstract_name(format!("fe2o3-cap-v1-{endpoint}").as_bytes())?;
+        let listener = UnixListener::bind_addr(&address)?;
+        listener.set_nonblocking(true)?;
+        let backend = sealed_test_backend()?;
+        let artifact = File::from(
+            rustix::fs::open(
+                artifact_dir,
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            )
+            .map_err(io::Error::from)?,
+        );
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let worker_stop = Arc::clone(&stop);
+        let worker = thread::spawn(move || {
+            while !worker_stop.load(Ordering::Acquire) {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+                        let mut request = vec![0_u8; REQUEST_MAGIC.len() + 16];
+                        stream.read_exact(&mut request)?;
+                        let mut expected = REQUEST_MAGIC.to_vec();
+                        expected.extend_from_slice(&BUILD_SESSION_BYTES);
+                        if request != expected {
+                            return Err(io::Error::new(
+                                io::ErrorKind::PermissionDenied,
+                                "test broker request did not match the build session",
+                            ));
+                        }
+                        let descriptors = [backend.as_fd(), artifact.as_fd()];
+                        let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(2))];
+                        let mut ancillary = SendAncillaryBuffer::new(&mut space);
+                        assert!(ancillary.push(SendAncillaryMessage::ScmRights(&descriptors)));
+                        let sent = sendmsg(
+                            &stream,
+                            &[IoSlice::new(&[1])],
+                            &mut ancillary,
+                            SendFlags::NOSIGNAL,
+                        )
+                        .map_err(io::Error::from)?;
+                        if sent != 1 {
+                            return Err(io::Error::new(
+                                io::ErrorKind::WriteZero,
+                                "test broker response was truncated",
+                            ));
+                        }
+                        return Ok(());
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(2));
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            Ok(())
+        });
+        Ok(Self {
+            endpoint,
+            stop,
+            worker: Some(worker),
+        })
+    }
+
+    fn endpoint(&self) -> &str {
+        &self.endpoint
+    }
+}
+
+impl Drop for TestCapabilityBroker {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        if let Some(worker) = self.worker.take() {
+            worker.join().expect("join test capability broker").unwrap();
+        }
+    }
+}
+
+fn random_broker_endpoint() -> io::Result<String> {
+    let mut bytes = [0_u8; 32];
+    File::open("/dev/urandom")?.read_exact(&mut bytes)?;
+    Ok(hex(&bytes))
+}
+
+fn sealed_test_backend() -> io::Result<File> {
+    let descriptor = rustix::fs::memfd_create(
+        "cargo-fe2o3-worker-v2-test-backend",
+        MemfdFlags::CLOEXEC | MemfdFlags::ALLOW_SEALING,
+    )
+    .map_err(io::Error::from)?;
+    let mut writable = File::from(descriptor);
+    writable.write_all(b"worker-v2 test backend")?;
+    rustix::fs::fcntl_add_seals(
+        &writable,
+        SealFlags::WRITE | SealFlags::GROW | SealFlags::SHRINK,
+    )
+    .map_err(io::Error::from)?;
+    rustix::fs::fcntl_add_seals(&writable, SealFlags::SEAL).map_err(io::Error::from)?;
+    let path = PathBuf::from(format!("/proc/self/fd/{}", writable.as_raw_fd()));
+    let read_only = File::from(
+        rustix::fs::open(&path, OFlags::RDONLY | OFlags::CLOEXEC, Mode::empty())
+            .map_err(io::Error::from)?,
+    );
+    drop(writable);
+    Ok(read_only)
+}
 
 struct TestDirectory(PathBuf);
 
@@ -102,23 +229,32 @@ fn write_config_with_output(
 }
 
 fn run_wrapper(directory: &TestDirectory, config: Option<&Path>, rustc_mode: &str) -> Output {
-    wrapper_command(directory, config, rustc_mode)
-        .output()
-        .unwrap()
+    let (mut command, _broker) = wrapper_command(directory, config, rustc_mode);
+    command.output().unwrap()
 }
 
-fn wrapper_command(directory: &TestDirectory, config: Option<&Path>, rustc_mode: &str) -> Command {
+fn wrapper_command(
+    directory: &TestDirectory,
+    config: Option<&Path>,
+    rustc_mode: &str,
+) -> (Command, TestCapabilityBroker) {
     let source = directory.0.join("workflow_fixture.rs");
     fs::write(&source, "fn main() {}\n").unwrap();
     let artifact_dir = directory.0.join("artifacts");
     fs::create_dir_all(&artifact_dir).unwrap();
+    let broker = TestCapabilityBroker::start(&artifact_dir).unwrap();
 
     let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"));
     command
         .env_clear()
         .current_dir(&directory.0)
         .env("FE2O3_BINDING_WRAPPER_MODE_V1", "1")
+        .env(
+            "FE2O3_MANAGED_RUSTC_ARGS_V1",
+            "-Zcodegen-backend=/proc/self/fd/198\x1f-Zmir-enable-passes=-JumpThreading\x1f--cfg\x1ffe2o3_codegen_generation=\"11111111111111111111111111111111\"",
+        )
         .env("FE2O3_BUILD_SESSION_V1", "11".repeat(16))
+        .env(CAPABILITY_BROKER_ENV, broker.endpoint())
         .env("FE2O3_CODEGEN_PIPELINE", "kernel-ir-worker-v2")
         .env("FE2O3_FIXTURE_RUSTC_MARKER", directory.0.join("spawned"))
         .env("FE2O3_FIXTURE_RUSTC_MODE", rustc_mode)
@@ -132,7 +268,7 @@ fn wrapper_command(directory: &TestDirectory, config: Option<&Path>, rustc_mode:
     if let Some(config) = config {
         command.env("FE2O3_WORKER_V2_CONFIG_V2", config);
     }
-    command
+    (command, broker)
 }
 
 fn stderr(output: &Output) -> String {
@@ -142,9 +278,10 @@ fn stderr(output: &Output) -> String {
 fn stage_ready_restart(directory: &TestDirectory) -> (PathBuf, PathBuf) {
     let config = write_config(directory, true);
     let handoff_marker = directory.0.join("handoff-ready");
-    let mut first = wrapper_command(directory, Some(&config), "stop-after-handoff");
-    first.env("FE2O3_FIXTURE_HANDOFF_MARKER", &handoff_marker);
-    let mut first = first.spawn().unwrap();
+    let (mut first_command, _broker) =
+        wrapper_command(directory, Some(&config), "stop-after-handoff");
+    first_command.env("FE2O3_FIXTURE_HANDOFF_MARKER", &handoff_marker);
+    let mut first = first_command.spawn().unwrap();
 
     let deadline = Instant::now() + Duration::from_secs(10);
     while Instant::now() < deadline {

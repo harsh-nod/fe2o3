@@ -12,6 +12,9 @@
 //! while that exact generation is current. Both registries use the same pinned directory and
 //! exclusive lock. Attempt state prevents stale cooperating compilers from publishing, but it is
 //! coordination metadata rather than artifact or launch authority.
+//! On Linux, a canonical `/proc/self/fd/<n>` output root is imported by duplicating that descriptor;
+//! every ordinary configured path is still opened one component at a time without following
+//! symlinks.
 //!
 //! The configured output directory is a generated-artifact namespace. Canonically named files
 //! without a registry owner are treated as legacy fe2o3 outputs: a successful transaction adopts
@@ -71,7 +74,7 @@ pub use link_publication::{
     PackageIdentityV1, PinnedWorkerIdentityV1, PublicationOutcomeV1, PublishedLinkArtifactV1,
     RecoveryOutcomeV1, TargetIdentityV1, ValidatedResponseIdentityV1,
 };
-use rustix::fd::{AsRawFd, OwnedFd};
+use rustix::fd::{AsRawFd, FromRawFd, OwnedFd};
 use rustix::fs::{
     AtFlags, Dir, FileType, FlockOperation, Mode, OFlags, fcntl_lock, fstat, fsync, mkdirat, open,
     openat, renameat, statat, unlinkat,
@@ -1192,6 +1195,48 @@ mod tests {
         assert!(matches!(error, EmitError::Io(_)));
         assert_eq!(fs::read(target.join("unrelated")).unwrap(), b"keep");
         assert_absent(&target, &["alpha"]);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn proc_self_fd_output_stays_bound_to_retained_directory() {
+        let temp = TestDirectory::new();
+        let output = temp.path.join("output");
+        let retained_output = temp.path.join("retained-output");
+        fs::create_dir(&output).unwrap();
+        let retained = fs::File::open(&output).unwrap();
+        let descriptor_path = PathBuf::from(format!("/proc/self/fd/{}", retained.as_raw_fd()));
+        let producer = ProducerIdentity::for_test("producer", "/src/producer.rs");
+
+        run(&descriptor_path, &producer, &one("alpha", "first")).unwrap();
+        fs::rename(&output, &retained_output).unwrap();
+        fs::create_dir(&output).unwrap();
+        fs::write(output.join("unrelated"), b"keep").unwrap();
+
+        run(&descriptor_path, &producer, &one("alpha", "second")).unwrap();
+
+        assert_generation(&retained_output, &["alpha"], "second");
+        assert_eq!(fs::read(output.join("unrelated")).unwrap(), b"keep");
+        assert_absent(&output, &["alpha"]);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn proc_self_fd_output_requires_canonical_directory_descriptor() {
+        let temp = TestDirectory::new();
+        let file = temp.path.join("regular-file");
+        fs::write(&file, b"not a directory").unwrap();
+        let retained = fs::File::open(&file).unwrap();
+        let non_directory = PathBuf::from(format!("/proc/self/fd/{}", retained.as_raw_fd()));
+
+        assert!(matches!(
+            PinnedOutput::open(Path::new("/proc/self/fd/01")),
+            Err(EmitError::InvalidArtifactDestination { .. })
+        ));
+        assert!(matches!(
+            PinnedOutput::open(&non_directory),
+            Err(EmitError::InvalidArtifactDestination { .. })
+        ));
     }
 
     #[test]
@@ -2837,6 +2882,11 @@ impl PinnedOutput {
 }
 
 fn open_directory_walk(path: &Path, create: bool) -> Result<OwnedFd, EmitError> {
+    #[cfg(target_os = "linux")]
+    if let Some(directory) = duplicate_proc_self_fd_directory(path) {
+        return directory;
+    }
+
     let absolute = path.is_absolute();
     let mut names = Vec::new();
     for component in path.components() {
@@ -2902,6 +2952,55 @@ fn open_directory_walk(path: &Path, create: bool) -> Result<OwnedFd, EmitError> 
         };
     }
     Ok(current)
+}
+
+#[cfg(target_os = "linux")]
+fn duplicate_proc_self_fd_directory(path: &Path) -> Option<Result<OwnedFd, EmitError>> {
+    use std::os::unix::ffi::OsStrExt;
+
+    const PREFIX: &[u8] = b"/proc/self/fd/";
+    let bytes = path.as_os_str().as_bytes();
+    let descriptor = bytes.strip_prefix(PREFIX)?;
+    let canonical = descriptor == b"0"
+        || descriptor
+            .first()
+            .is_some_and(|byte| matches!(byte, b'1'..=b'9'))
+            && descriptor.iter().all(u8::is_ascii_digit);
+    if !canonical {
+        return Some(Err(EmitError::InvalidArtifactDestination {
+            path: path.to_path_buf(),
+            reason: "procfs descriptor path is not canonical".to_string(),
+        }));
+    }
+
+    let raw_fd = descriptor.iter().try_fold(0_i32, |value, digit| {
+        value.checked_mul(10)?.checked_add(i32::from(*digit - b'0'))
+    });
+    let Some(raw_fd) = raw_fd else {
+        return Some(Err(EmitError::InvalidArtifactDestination {
+            path: path.to_path_buf(),
+            reason: "procfs descriptor number is out of range".to_string(),
+        }));
+    };
+
+    // Raw fcntl reports EBADF for stale descriptor numbers without manufacturing a BorrowedFd
+    // whose validity contract would already have been violated.
+    let duplicated = unsafe { libc::fcntl(raw_fd, libc::F_DUPFD_CLOEXEC, 0) };
+    if duplicated < 0 {
+        return Some(Err(std::io::Error::last_os_error().into()));
+    }
+    let directory = unsafe { OwnedFd::from_raw_fd(duplicated) };
+    let stat = match fstat(&directory) {
+        Ok(stat) => stat,
+        Err(error) => return Some(Err(std::io::Error::from(error).into())),
+    };
+    if FileType::from_raw_mode(stat.st_mode) != FileType::Directory {
+        return Some(Err(EmitError::InvalidArtifactDestination {
+            path: path.to_path_buf(),
+            reason: "procfs descriptor does not reference a directory".to_string(),
+        }));
+    }
+    Some(Ok(directory))
 }
 
 struct OutputLock {

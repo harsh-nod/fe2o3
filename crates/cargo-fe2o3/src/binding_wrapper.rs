@@ -1,7 +1,7 @@
 use std::error::Error;
 use std::ffi::{OsStr, OsString};
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
 
 use fe2o3_artifact_transaction::{
@@ -22,11 +22,17 @@ use fe2o3_rustc_invocation::{
 use reserved_fe2o3_symbols::{CRATE_BINDING_ID_ENV_V1, derive_crate_binding_id_v1};
 use sha2::{Digest, Sha256};
 
-use crate::worker_v2::{PreparedWorkerV2Config, WorkerV2ConfigError, WorkerV2ConfigIdentity};
+use crate::capability_broker;
+use crate::pinned_codegen_backend::{PinCodegenBackendError, PinnedCodegenBackend};
+use crate::project::PinnedDirectory;
+use crate::worker_v2::{
+    PreparedWorkerV2Config, WORKER_V2_EXPECTED_ID_ENV, WorkerV2ConfigError, WorkerV2ConfigIdentity,
+};
 use crate::worker_v2_restart::{
     ReceiptRecordV1, RestartIntentErrorV1, ResumeMarkerErrorV1, ResumeMarkerStateV1,
     WorkerV2ResumeStoreV1, persist_admitted_worker_v2_intent_v1, recover_worker_v2_intent_v1,
 };
+use crate::{ARTIFACT_CHILD_FD, BACKEND_CHILD_FD, MANAGED_RUSTC_ARGS_ENV};
 
 const HSACO_DIR_ENV: &str = "FE2O3_HSACO_DIR";
 const TARGET_ENV: &str = "FE2O3_TARGET";
@@ -49,6 +55,17 @@ pub(crate) enum BindingWrapperError {
     },
     MissingManagedEnvironment(&'static str),
     InvalidBuildSession,
+    InvalidManagedRustcArguments(&'static str),
+    ManagedBackend(PinCodegenBackendError),
+    ManagedArtifact(String),
+    CapabilityBroker(String),
+    ChildCapability(String),
+    UninspectableRustcResponseFile {
+        argument_index: usize,
+    },
+    PreexistingCodegenBackend {
+        argument_index: usize,
+    },
     CurrentDirectory(std::io::Error),
     WorkerV2Configuration(WorkerV2ConfigError),
     WorkerV2Restart(ResumeMarkerErrorV1),
@@ -86,6 +103,35 @@ impl fmt::Display for BindingWrapperError {
             }
             Self::InvalidBuildSession => formatter
                 .write_str("managed rustc invocation has a noncanonical or reserved build session"),
+            Self::InvalidManagedRustcArguments(reason) => {
+                write!(formatter, "invalid {MANAGED_RUSTC_ARGS_ENV}: {reason}")
+            }
+            Self::ManagedBackend(error) => {
+                write!(formatter, "failed to pin managed codegen backend: {error}")
+            }
+            Self::ManagedArtifact(error) => {
+                write!(
+                    formatter,
+                    "failed to pin managed artifact directory: {error}"
+                )
+            }
+            Self::CapabilityBroker(error) => {
+                write!(formatter, "failed to receive managed capabilities: {error}")
+            }
+            Self::ChildCapability(error) => {
+                write!(
+                    formatter,
+                    "failed to install managed rustc capabilities: {error}"
+                )
+            }
+            Self::UninspectableRustcResponseFile { argument_index } => write!(
+                formatter,
+                "managed rustc argv[{argument_index}] is an uninspectable response file"
+            ),
+            Self::PreexistingCodegenBackend { argument_index } => write!(
+                formatter,
+                "managed rustc argv[{argument_index}] contains a preexisting codegen-backend selector"
+            ),
             Self::CurrentDirectory(error) => {
                 write!(
                     formatter,
@@ -133,6 +179,7 @@ impl Error for BindingWrapperError {
             Self::WorkerV2Configuration(error) => Some(error),
             Self::WorkerV2Restart(error) => Some(error),
             Self::Artifact(error) => Some(error),
+            Self::ManagedBackend(error) => Some(error),
             Self::ManagedCompletion { cleanup, .. } => cleanup
                 .as_ref()
                 .map(|error| error as &(dyn Error + 'static)),
@@ -142,6 +189,12 @@ impl Error for BindingWrapperError {
             | Self::EmptyMetadata { .. }
             | Self::MissingManagedEnvironment(_)
             | Self::InvalidBuildSession
+            | Self::InvalidManagedRustcArguments(_)
+            | Self::ManagedArtifact(_)
+            | Self::CapabilityBroker(_)
+            | Self::ChildCapability(_)
+            | Self::UninspectableRustcResponseFile { .. }
+            | Self::PreexistingCodegenBackend { .. }
             | Self::UnsupportedInvocation => None,
         }
     }
@@ -154,6 +207,7 @@ impl From<RustcArgsErrorV2> for BindingWrapperError {
 }
 
 pub(crate) fn run(argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperError> {
+    reject_uninspectable_rustc_args(&argv)?;
     let invocation = match classify_rustc_invocation_v2(&argv) {
         Ok(invocation) => invocation,
         Err(_) if is_cargo_stdin_probe(&argv) => {
@@ -164,34 +218,50 @@ pub(crate) fn run(argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperError
         }
         Err(error) => return Err(error.into()),
     };
-    let (crate_binding, managed_attempt) = match invocation {
-        RustcInvocationV2::Compile(compile) => {
-            let metadata = ordered_metadata_values(compile.argv())?;
-            if metadata.is_empty() {
-                return Err(BindingWrapperError::MissingMetadata {
-                    crate_name: compile.crate_name().to_owned(),
-                });
+    let (crate_binding, managed_attempt, managed_rustc_args, compiler_capabilities) =
+        match invocation {
+            RustcInvocationV2::Compile(compile) => {
+                let managed_rustc_args = managed_rustc_args_from_environment()?;
+                let compiler_capabilities = CompilerCapabilities::from_environment()?;
+                let metadata = ordered_metadata_values(compile.argv())?;
+                if metadata.is_empty() {
+                    return Err(BindingWrapperError::MissingMetadata {
+                        crate_name: compile.crate_name().to_owned(),
+                    });
+                }
+                let binding = derive_crate_binding_id_v1(
+                    compile.crate_name(),
+                    metadata.iter().map(String::as_str),
+                );
+                let worker_v2 = PreparedWorkerV2Config::from_environment()
+                    .map_err(BindingWrapperError::WorkerV2Configuration)?;
+                validate_expected_worker_v2_identity(worker_v2.as_ref())?;
+                let current_dir =
+                    std::env::current_dir().map_err(BindingWrapperError::CurrentDirectory)?;
+                let managed = if worker_v2.as_ref().is_some_and(|config| {
+                    !config.selects(compile.crate_name(), compile.source_path(), &current_dir)
+                }) {
+                    None
+                } else {
+                    Some(prepare_managed_attempt(
+                        compile,
+                        worker_v2,
+                        &current_dir,
+                        compiler_capabilities.output_dir(),
+                    )?)
+                };
+                (
+                    Some(binding),
+                    managed,
+                    managed_rustc_args,
+                    Some(compiler_capabilities),
+                )
             }
-            let binding = derive_crate_binding_id_v1(
-                compile.crate_name(),
-                metadata.iter().map(String::as_str),
-            );
-            let worker_v2 = PreparedWorkerV2Config::from_environment()
-                .map_err(BindingWrapperError::WorkerV2Configuration)?;
-            let current_dir =
-                std::env::current_dir().map_err(BindingWrapperError::CurrentDirectory)?;
-            let managed = if worker_v2.as_ref().is_some_and(|config| {
-                !config.selects(compile.crate_name(), compile.source_path(), &current_dir)
-            }) {
-                None
-            } else {
-                Some(prepare_managed_attempt(compile, worker_v2, &current_dir)?)
-            };
-            (Some(binding), managed)
-        }
-        RustcInvocationV2::Terminal(_) | RustcInvocationV2::Query(_) => (None, None),
-        _ => return Err(BindingWrapperError::UnsupportedInvocation),
-    };
+            RustcInvocationV2::Terminal(_) | RustcInvocationV2::Query(_) => {
+                (None, None, Vec::new(), None)
+            }
+            _ => return Err(BindingWrapperError::UnsupportedInvocation),
+        };
 
     if managed_attempt
         .as_ref()
@@ -203,6 +273,10 @@ pub(crate) fn run(argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperError
 
     let mut command = Command::new(invocation.executable());
     command.args(invocation.forwarded_args());
+    command.args(managed_rustc_args);
+    if let Some(capabilities) = &compiler_capabilities {
+        capabilities.prepare_command(&mut command)?;
+    }
     if let Some(crate_binding) = crate_binding {
         command.env(CRATE_BINDING_ID_ENV_V1, crate_binding.to_hex());
     } else {
@@ -238,6 +312,186 @@ pub(crate) fn run(argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperError
     Ok(status)
 }
 
+fn managed_rustc_args_from_environment() -> Result<Vec<OsString>, BindingWrapperError> {
+    let value = std::env::var_os(MANAGED_RUSTC_ARGS_ENV).ok_or(
+        BindingWrapperError::MissingManagedEnvironment(MANAGED_RUSTC_ARGS_ENV),
+    )?;
+    decode_managed_rustc_args(&value)
+}
+
+fn decode_managed_rustc_args(value: &OsStr) -> Result<Vec<OsString>, BindingWrapperError> {
+    let fields = os_bytes(value)
+        .split(|byte| *byte == 0x1f)
+        .map(|field| os_string(field.to_vec()))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| {
+            BindingWrapperError::InvalidManagedRustcArguments("arguments are not representable")
+        })?;
+    if fields.len() != 4 || fields.iter().any(|field| field.is_empty()) {
+        return Err(BindingWrapperError::InvalidManagedRustcArguments(
+            "expected exactly four non-empty arguments",
+        ));
+    }
+    let expected_backend = format!("-Zcodegen-backend=/proc/self/fd/{BACKEND_CHILD_FD}");
+    if fields[0] != OsStr::new(&expected_backend) {
+        return Err(BindingWrapperError::InvalidManagedRustcArguments(
+            "backend selector is not a fixed procfs descriptor",
+        ));
+    }
+    if fields[1] != "-Zmir-enable-passes=-JumpThreading" || fields[2] != "--cfg" {
+        return Err(BindingWrapperError::InvalidManagedRustcArguments(
+            "managed compiler options changed",
+        ));
+    }
+    let generation = os_bytes(&fields[3]);
+    let prefix = b"fe2o3_codegen_generation=\"";
+    if generation.len() != prefix.len() + 32 + 1
+        || !generation.starts_with(prefix)
+        || generation.last() != Some(&b'"')
+        || generation[prefix.len()..generation.len() - 1]
+            .iter()
+            .any(|byte| !byte.is_ascii_hexdigit() || byte.is_ascii_uppercase())
+    {
+        return Err(BindingWrapperError::InvalidManagedRustcArguments(
+            "generation cfg is noncanonical",
+        ));
+    }
+    Ok(fields)
+}
+
+fn reject_uninspectable_rustc_args(argv: &[OsString]) -> Result<(), BindingWrapperError> {
+    for (index, argument) in argv.iter().enumerate() {
+        let bytes = os_bytes(argument);
+        if bytes.starts_with(b"@") {
+            return Err(BindingWrapperError::UninspectableRustcResponseFile {
+                argument_index: index,
+            });
+        }
+        let joined = bytes
+            .strip_prefix(b"-Z")
+            .is_some_and(|value| backend_selector_value(value.strip_prefix(b"=").unwrap_or(value)));
+        let split = bytes == b"-Z"
+            && argv
+                .get(index + 1)
+                .is_some_and(|next| backend_selector_value(os_bytes(next)));
+        if joined || split {
+            return Err(BindingWrapperError::PreexistingCodegenBackend {
+                argument_index: index,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn backend_selector_value(value: &[u8]) -> bool {
+    [b"codegen-backend".as_slice(), b"codegen_backend".as_slice()]
+        .iter()
+        .any(|name| {
+            value == *name
+                || value
+                    .strip_prefix(*name)
+                    .is_some_and(|rest| rest.starts_with(b"="))
+        })
+}
+
+#[cfg(unix)]
+fn os_bytes(value: &OsStr) -> &[u8] {
+    use std::os::unix::ffi::OsStrExt;
+    value.as_bytes()
+}
+
+#[cfg(not(unix))]
+fn os_bytes(value: &OsStr) -> &[u8] {
+    value
+        .to_str()
+        .expect("managed rustc arguments must be UTF-8 off Unix")
+        .as_bytes()
+}
+
+#[cfg(unix)]
+fn os_string(value: Vec<u8>) -> Result<OsString, ()> {
+    use std::os::unix::ffi::OsStringExt;
+    Ok(OsString::from_vec(value))
+}
+
+#[cfg(not(unix))]
+fn os_string(value: Vec<u8>) -> Result<OsString, ()> {
+    String::from_utf8(value).map(OsString::from).map_err(|_| ())
+}
+
+fn validate_expected_worker_v2_identity(
+    config: Option<&PreparedWorkerV2Config>,
+) -> Result<(), BindingWrapperError> {
+    let Some(expected) = std::env::var_os(WORKER_V2_EXPECTED_ID_ENV) else {
+        return Ok(());
+    };
+    let expected = expected.to_str().ok_or_else(|| {
+        BindingWrapperError::WorkerV2Configuration(WorkerV2ConfigError::Invalid(format!(
+            "{WORKER_V2_EXPECTED_ID_ENV} must be lowercase hexadecimal"
+        )))
+    })?;
+    let actual = config.map(|config| config.identity().to_hex());
+    if actual.as_deref() != Some(expected) {
+        return Err(BindingWrapperError::WorkerV2Configuration(
+            WorkerV2ConfigError::Invalid(
+                "Worker V2 transitive inputs changed after Cargo generation preparation"
+                    .to_string(),
+            ),
+        ));
+    }
+    Ok(())
+}
+
+struct CompilerCapabilities {
+    backend: PinnedCodegenBackend,
+    artifact: PinnedDirectory,
+    output_dir: PathBuf,
+}
+
+impl CompilerCapabilities {
+    fn from_environment() -> Result<Self, BindingWrapperError> {
+        let transferred = capability_broker::receive(managed_build_session()?)
+            .map_err(BindingWrapperError::CapabilityBroker)?;
+        let backend = PinnedCodegenBackend::from_transferred_file(transferred.backend)
+            .map_err(BindingWrapperError::ManagedBackend)?;
+        let artifact = PinnedDirectory::from_transferred_file(
+            transferred.artifact,
+            "artifact output directory",
+        )
+        .map_err(BindingWrapperError::ManagedArtifact)?;
+        let output_dir = artifact.child_path();
+        Ok(Self {
+            backend,
+            artifact,
+            output_dir,
+        })
+    }
+
+    fn output_dir(&self) -> &Path {
+        &self.output_dir
+    }
+
+    fn prepare_command(&self, command: &mut Command) -> Result<(), BindingWrapperError> {
+        let artifact_path = PathBuf::from(format!("/proc/self/fd/{ARTIFACT_CHILD_FD}"));
+        self.backend
+            .replace_for_child_at(command, BACKEND_CHILD_FD)
+            .map_err(|error| BindingWrapperError::ChildCapability(error.to_string()))?;
+        self.artifact
+            .replace_for_child_at(command, ARTIFACT_CHILD_FD)
+            .map_err(BindingWrapperError::ChildCapability)?;
+        command.env(HSACO_DIR_ENV, artifact_path);
+        Ok(())
+    }
+}
+
+fn managed_build_session() -> Result<BuildSession, BindingWrapperError> {
+    std::env::var(BUILD_SESSION_ENV)
+        .ok()
+        .and_then(|value| BuildSession::from_hex(&value).ok())
+        .filter(|session| *session != BuildSession::DIRECT)
+        .ok_or(BindingWrapperError::InvalidBuildSession)
+}
+
 struct ManagedAttempt {
     output_dir: PathBuf,
     producer: ProducerIdentity,
@@ -271,24 +525,15 @@ fn prepare_managed_attempt(
     compile: RustcCompileInvocationV2<'_>,
     worker_v2: Option<PreparedWorkerV2Config>,
     current_dir: &std::path::Path,
+    output_dir: &Path,
 ) -> Result<ManagedAttempt, BindingWrapperError> {
-    let output_dir = std::env::var_os(HSACO_DIR_ENV)
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .ok_or(BindingWrapperError::MissingManagedEnvironment(
-            HSACO_DIR_ENV,
-        ))?;
-    let session = std::env::var(BUILD_SESSION_ENV)
-        .ok()
-        .and_then(|value| BuildSession::from_hex(&value).ok())
-        .filter(|session| *session != BuildSession::DIRECT)
-        .ok_or(BindingWrapperError::InvalidBuildSession)?;
+    let session = managed_build_session()?;
     let producer =
         ProducerIdentity::from_codegen(compile.crate_name(), Some(compile.source_path()))
             .map_err(BindingWrapperError::Artifact)?;
     let invocation = derive_build_invocation(compile.argv(), worker_v2.as_ref(), current_dir);
     let (attempt, worker_v2) = if let Some(config) = worker_v2 {
-        let resume = WorkerV2ResumeStoreV1::open(&output_dir, &producer)
+        let resume = WorkerV2ResumeStoreV1::open(output_dir, &producer)
             .map_err(BindingWrapperError::WorkerV2Restart)?;
         if let Some(state) = resume
             .load()
@@ -302,17 +547,17 @@ fn prepare_managed_attempt(
             }
             (attempt, Some(ManagedWorkerV2::Recovery { resume, state }))
         } else {
-            let attempt = begin_build_attempt(&output_dir, &producer, invocation, session)
+            let attempt = begin_build_attempt(output_dir, &producer, invocation, session)
                 .map_err(BindingWrapperError::Artifact)?;
             (attempt, Some(ManagedWorkerV2::Fresh { config, resume }))
         }
     } else {
-        let attempt = begin_build_attempt(&output_dir, &producer, invocation, session)
+        let attempt = begin_build_attempt(output_dir, &producer, invocation, session)
             .map_err(BindingWrapperError::Artifact)?;
         (attempt, None)
     };
     Ok(ManagedAttempt {
-        output_dir,
+        output_dir: output_dir.to_path_buf(),
         producer,
         attempt,
         worker_v2,
@@ -731,8 +976,9 @@ pub(crate) fn exit_code(status: ExitStatus) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::{
-        BindingWrapperError, derive_build_invocation_with_config_identity, is_cargo_stdin_probe,
-        ordered_metadata_values,
+        BindingWrapperError, decode_managed_rustc_args,
+        derive_build_invocation_with_config_identity, is_cargo_stdin_probe,
+        ordered_metadata_values, reject_uninspectable_rustc_args,
     };
     use crate::worker_v2::WorkerV2ConfigIdentity;
     use reserved_fe2o3_symbols::derive_crate_binding_id_v1;
@@ -835,6 +1081,47 @@ mod tests {
         assert_ne!(
             derive_build_invocation_with_config_identity(&argv, Some(first), &current_dir),
             derive_build_invocation_with_config_identity(&argv, Some(second), &current_dir)
+        );
+    }
+
+    #[test]
+    fn managed_rustc_arguments_are_exact_and_canonical() {
+        let value = OsString::from(
+            "-Zcodegen-backend=/proc/self/fd/198\x1f-Zmir-enable-passes=-JumpThreading\x1f--cfg\x1ffe2o3_codegen_generation=\"0123456789abcdef0123456789abcdef\"",
+        );
+        let decoded = decode_managed_rustc_args(&value).unwrap();
+        assert_eq!(decoded.len(), 4);
+
+        for invalid in [
+            OsString::from(""),
+            OsString::from(
+                "-Zcodegen-backend=/tmp/backend\x1f-Zmir-enable-passes=-JumpThreading\x1f--cfg\x1ffe2o3_codegen_generation=\"0123456789abcdef0123456789abcdef\"",
+            ),
+            OsString::from(
+                "-Zcodegen-backend=/proc/self/fd/198\x1f-Zmir-enable-passes=-JumpThreading\x1f--cfg\x1ffe2o3_codegen_generation=\"ABCDEF0123456789abcdef0123456789\"",
+            ),
+        ] {
+            assert!(decode_managed_rustc_args(&invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn cargo_rustflags_cannot_select_a_backend_or_hide_in_response_files() {
+        for argv in [
+            args(&["rustc", "unit.rs", "-Zcodegen-backend=/tmp/evil.so"]),
+            args(&["rustc", "unit.rs", "-Z", "codegen_backend=/tmp/evil.so"]),
+            args(&["rustc", "unit.rs", "@response"]),
+        ] {
+            assert!(reject_uninspectable_rustc_args(&argv).is_err());
+        }
+        assert!(
+            reject_uninspectable_rustc_args(&args(&[
+                "rustc",
+                "unit.rs",
+                "--cfg",
+                "from_cargo_config"
+            ]))
+            .is_ok()
         );
     }
 }
