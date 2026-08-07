@@ -187,7 +187,7 @@ pub(crate) fn typed_descriptor_roots_from_collection<'tcx>(
                             .enumerate()
                             .map(|(index, (argument, field))| {
                                 Ok(TypedDescriptorArgumentV1 {
-                                    name: format!("arg{index}"),
+                                    name: field.name().as_str().to_owned(),
                                     kind: descriptor_argument_kind(argument.kind()),
                                     access: match argument.kind() {
                                         GeneralTypedArgumentKindV3::Scalar(_) => {
@@ -986,6 +986,17 @@ mod tests {
         }
     }
 
+    fn named_descriptor_argument(
+        name: &str,
+        index: usize,
+        kind: DescriptorArgumentKindV1,
+        offset: u32,
+    ) -> TypedDescriptorArgumentV1 {
+        let mut argument = descriptor_argument(index, kind, offset);
+        argument.name = name.to_owned();
+        argument
+    }
+
     fn general_root(
         logical_name: &str,
         binding: u8,
@@ -1013,13 +1024,20 @@ mod tests {
             0x61,
             40,
             vec![
-                descriptor_argument(0, DescriptorArgumentKindV1::Scalar(ScalarTypeV1::F32), 0),
-                descriptor_argument(
+                named_descriptor_argument(
+                    "scale",
+                    0,
+                    DescriptorArgumentKindV1::Scalar(ScalarTypeV1::F32),
+                    0,
+                ),
+                named_descriptor_argument(
+                    "input",
                     1,
                     DescriptorArgumentKindV1::SharedSlice(ScalarTypeV1::F32),
                     8,
                 ),
-                descriptor_argument(
+                named_descriptor_argument(
+                    "output",
                     2,
                     DescriptorArgumentKindV1::DisjointSlice(ScalarTypeV1::F32),
                     24,
@@ -1034,18 +1052,26 @@ mod tests {
             0x7a,
             56,
             vec![
-                descriptor_argument(
+                named_descriptor_argument(
+                    "a",
                     0,
                     DescriptorArgumentKindV1::SharedSlice(ScalarTypeV1::F32),
                     0,
                 ),
-                descriptor_argument(
+                named_descriptor_argument(
+                    "b",
                     1,
                     DescriptorArgumentKindV1::SharedSlice(ScalarTypeV1::F32),
                     16,
                 ),
-                descriptor_argument(2, DescriptorArgumentKindV1::Scalar(ScalarTypeV1::F32), 32),
-                descriptor_argument(
+                named_descriptor_argument(
+                    "bias",
+                    2,
+                    DescriptorArgumentKindV1::Scalar(ScalarTypeV1::F32),
+                    32,
+                ),
+                named_descriptor_argument(
+                    "output",
                     3,
                     DescriptorArgumentKindV1::DisjointSlice(ScalarTypeV1::F32),
                     40,
@@ -1189,6 +1215,14 @@ mod tests {
             kernels[0]
                 .arguments()
                 .iter()
+                .map(|argument| argument.name().as_str())
+                .collect::<Vec<_>>(),
+            ["scale", "input", "output"]
+        );
+        assert_eq!(
+            kernels[0]
+                .arguments()
+                .iter()
                 .map(|argument| {
                     argument
                         .physical_components()
@@ -1205,6 +1239,14 @@ mod tests {
         assert_eq!(kernels[1].abi_layout().explicit_argument_size(), 56);
         assert_eq!(kernels[1].abi_layout().kernarg_segment_size(), 312);
         assert_eq!(kernels[1].arguments().len(), 4);
+        assert_eq!(
+            kernels[1]
+                .arguments()
+                .iter()
+                .map(|argument| argument.name().as_str())
+                .collect::<Vec<_>>(),
+            ["a", "b", "bias", "output"]
+        );
         assert_eq!(
             kernels[1]
                 .arguments()
@@ -1240,6 +1282,74 @@ mod tests {
         assert_eq!(
             mixed.table().kernels()[1].arguments()[2].access(),
             AccessMode::ReadWrite
+        );
+    }
+
+    #[test]
+    fn general_v3_contract_field_names_are_identity_bound_and_lookalikes_stay_positional() {
+        let positional_alpha_arguments = || {
+            vec![
+                descriptor_argument(0, DescriptorArgumentKindV1::Scalar(ScalarTypeV1::F32), 0),
+                descriptor_argument(
+                    1,
+                    DescriptorArgumentKindV1::SharedSlice(ScalarTypeV1::F32),
+                    8,
+                ),
+                descriptor_argument(
+                    2,
+                    DescriptorArgumentKindV1::DisjointSlice(ScalarTypeV1::F32),
+                    24,
+                ),
+            ]
+        };
+        let envelope = envelope(CodeObjectVersion::V6);
+        let alpha_module = module_for(&["alpha"]);
+        let alpha_llvm = construct_inert_compiler_module_text_v1(&alpha_module).unwrap();
+        let exact = construct_compiler_descriptor_source_v1(
+            &envelope,
+            &alpha_module,
+            &alpha_llvm,
+            &[alpha_root()],
+        )
+        .unwrap()
+        .unwrap();
+        let positional = construct_compiler_descriptor_source_v1(
+            &envelope,
+            &alpha_module,
+            &alpha_llvm,
+            &[general_root(
+                "alpha",
+                0x61,
+                40,
+                positional_alpha_arguments(),
+            )],
+        )
+        .unwrap()
+        .unwrap();
+        assert_ne!(exact.identity(), positional.identity());
+
+        let lookalike_module = module_for(&["alpha_lookalike"]);
+        let lookalike_llvm = construct_inert_compiler_module_text_v1(&lookalike_module).unwrap();
+        let lookalike = construct_compiler_descriptor_source_v1(
+            &envelope,
+            &lookalike_module,
+            &lookalike_llvm,
+            &[general_root(
+                "alpha_lookalike",
+                0x62,
+                40,
+                positional_alpha_arguments(),
+            )],
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            lookalike.table().kernels()[0]
+                .arguments()
+                .iter()
+                .map(|argument| argument.name().as_str())
+                .collect::<Vec<_>>(),
+            ["arg0", "arg1", "arg2"]
         );
     }
 
