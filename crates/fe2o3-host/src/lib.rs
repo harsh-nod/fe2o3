@@ -148,6 +148,10 @@ pub mod __generated {
         ValidatedCompilerGeneratedSemanticWitnessV1, semantic_witness_from_backend_v1,
         validate_compiler_generated_semantic_witness_v1,
     };
+    pub use fe2o3_artifacts::{
+        AbiField, AbiKind, Access, AddressSpace, AliasClass, ArgumentOwnership, Mutability, Name,
+        PointerWidth, ScalarType,
+    };
 
     /// Constructs the exact immutable slice promised by a generated backend
     /// accessor pair.
