@@ -12,6 +12,7 @@ mod authenticated_proof_binding;
 mod control_flow_binding;
 mod executor;
 mod model;
+mod multi_kernel_proof;
 mod persistent_freshness;
 mod plan;
 mod result;
@@ -59,6 +60,11 @@ pub use model::{
     MAX_CONFIGURATION_ENTRIES, MAX_PROPERTIES, MAX_TEXT_BYTES, MAX_TRUSTED_ITEMS,
     MeasuredToolIdentity, ModelError, ProofOutcome, ProofProperty, ProofRequestV1,
     ProofTargetIdentity, Text, TrustedItem, VerificationModelIdentity,
+};
+pub use multi_kernel_proof::{
+    KernelProofAdmissionIdentityV1, KernelProofAdmissionRequestV1,
+    MULTI_KERNEL_PROOF_ADMISSION_DOMAIN_V1, MULTI_KERNEL_PROOF_ADMISSION_VERSION_V1,
+    MultiKernelProofAdmissionErrorV1, MultiKernelProofAdmissionV1,
 };
 pub use persistent_freshness::{
     MAX_PERSISTENT_FRESHNESS_ENTRIES_V1, MAX_PERSISTENT_FRESHNESS_STATE_BYTES_V1,

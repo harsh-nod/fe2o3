@@ -1,5 +1,5 @@
 use std::fs;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 use fe2o3_artifacts::{
     AbiLayout, BlockSize, Capability, CodeObjectFormat, CodeObjectIdentity, CompilerIdentity,
@@ -18,12 +18,15 @@ use fe2o3_rustc_front::{
 use fe2o3_verifier::{
     AUTHENTICATED_CONTROL_FLOW_EXECUTABLE_BINDING_DOMAIN_V1,
     AUTHENTICATED_PROOF_EXECUTABLE_BINDING_DOMAIN_V1,
-    AUTHENTICATED_PROOF_EXECUTABLE_BINDING_VERSION_V1, AuthenticatedExecutionFreshnessV1,
-    AuthenticatedExecutionProgramsV1, AuthenticatedProofExecutableBindingError,
-    AuthenticatedProofExecutablePolicyV1, AuthenticatedVerusExecutionEvidenceV1, AxiomPolicy,
-    Configuration, ConfigurationEntry, ControlFlowBindingErrorV1, ControlFlowClaimsV1,
-    ControlFlowIntegerSwitchCaseClaimV1, ControlFlowIntegerSwitchClaimV1, ControlFlowLoopClaimV1,
-    CorrelationId, Digest, ExecutionLimits, ExecutionTools, MeasuredToolIdentity,
+    AUTHENTICATED_PROOF_EXECUTABLE_BINDING_VERSION_V1, AuthenticatedControlFlowExecutableBindingV1,
+    AuthenticatedExecutionFreshnessV1, AuthenticatedExecutionProgramsV1,
+    AuthenticatedProofExecutableBindingError, AuthenticatedProofExecutablePolicyV1,
+    AuthenticatedVerusExecutionEvidenceV1, AxiomPolicy, Configuration, ConfigurationEntry,
+    ControlFlowBindingErrorV1, ControlFlowClaimsV1, ControlFlowIntegerSwitchCaseClaimV1,
+    ControlFlowIntegerSwitchClaimV1, ControlFlowLoopClaimV1, CorrelationId, Digest,
+    ExecutionLimits, ExecutionTools, KernelProofAdmissionIdentityV1, KernelProofAdmissionRequestV1,
+    MULTI_KERNEL_PROOF_ADMISSION_DOMAIN_V1, MULTI_KERNEL_PROOF_ADMISSION_VERSION_V1,
+    MeasuredToolIdentity, MultiKernelProofAdmissionErrorV1, MultiKernelProofAdmissionV1,
     PERSISTENT_AUTHENTICATED_CONTROL_FLOW_EXECUTABLE_BINDING_DOMAIN_V1,
     PERSISTENT_AUTHENTICATED_PROOF_EXECUTABLE_BINDING_DOMAIN_V1,
     PersistentFreshnessIdentityFieldV1, PersistentFreshnessLedgerErrorV1,
@@ -170,12 +173,24 @@ fn manifest() -> ManifestV1 {
     let abi = AbiLayout::new(0, 1, PointerWidth::Bits64, vec![]).unwrap();
     let object =
         CodeObjectIdentity::new(bytes(0x44), CodeObjectFormat::NativeExecutable, 4096).unwrap();
-    let kernel = KernelEntry::new(
+    let first_kernel = KernelEntry::new(
         bytes(0x11),
         name("verified_kernel"),
         name("verified_kernel.kd"),
         bytes(0x22),
         bytes(0x33),
+        object.digest(),
+        vec![Capability::AmdWave],
+        launch.clone(),
+        abi.clone(),
+    )
+    .unwrap();
+    let second_kernel = KernelEntry::new(
+        bytes(0x12),
+        name("verified_kernel_second"),
+        name("verified_kernel_second.kd"),
+        bytes(0x23),
+        bytes(0x34),
         object.digest(),
         vec![Capability::AmdWave],
         launch,
@@ -187,7 +202,7 @@ fn manifest() -> ManifestV1 {
         ToolIdentity::new(text("fe2o3"), text("0.1.0")),
         target,
         vec![object],
-        vec![kernel],
+        vec![first_kernel, second_kernel],
     )
     .unwrap()
 }
@@ -200,13 +215,23 @@ fn artifact_target_with_contracts(
     manifest: &ManifestV1,
     source_contracts: SourceContractIdentity,
 ) -> ArtifactTarget {
+    artifact_target_for_kernel(manifest, 0x11, 0x22, 0x33, source_contracts)
+}
+
+fn artifact_target_for_kernel(
+    manifest: &ManifestV1,
+    kernel_id: u8,
+    source: u8,
+    executable: u8,
+    source_contracts: SourceContractIdentity,
+) -> ArtifactTarget {
     manifest
         .proof_target(
-            payload(0x11),
+            payload(kernel_id),
             payload(0x40),
-            payload(0x22),
+            payload(source),
             payload(0x41),
-            payload(0x33),
+            payload(executable),
             payload(0x44),
             source_contracts,
             &compiler(),
@@ -217,8 +242,15 @@ fn artifact_target_with_contracts(
 }
 
 fn control_flow_source() -> (Vec<u8>, Vec<u8>, ControlFlowClaimsV1) {
+    control_flow_source_with("src/kernel.rs", 8)
+}
+
+fn control_flow_source_with(
+    source_path: &str,
+    max_iterations: u32,
+) -> (Vec<u8>, Vec<u8>, ControlFlowClaimsV1) {
     let id = ControlFlowNodeIdV1::new;
-    let span = |line| FrontendSourceSpanV1::new("src/kernel.rs", line, 1, line, 8).unwrap();
+    let span = |line| FrontendSourceSpanV1::new(source_path, line, 1, line, 8).unwrap();
     let switch = ControlFlowNodeKindV1::integer_switch(
         FrontendIntegerSwitchTypeV1::new(32, false).unwrap(),
         vec![FrontendIntegerSwitchCaseV1::from_unsigned(0, id(3))],
@@ -237,7 +269,7 @@ fn control_flow_source() -> (Vec<u8>, Vec<u8>, ControlFlowClaimsV1) {
                 id(1),
                 span(11),
                 ControlFlowNodeKindV1::Loop {
-                    max_iterations: 8,
+                    max_iterations,
                     body: id(2),
                     exit: id(5),
                 },
@@ -264,7 +296,7 @@ fn control_flow_source() -> (Vec<u8>, Vec<u8>, ControlFlowClaimsV1) {
     )
     .unwrap();
     let claims = ControlFlowClaimsV1::new(
-        vec![ControlFlowLoopClaimV1::new(1, 8).unwrap()],
+        vec![ControlFlowLoopClaimV1::new(1, max_iterations).unwrap()],
         vec![
             ControlFlowIntegerSwitchClaimV1::new(
                 2,
@@ -426,6 +458,226 @@ fn binding_policy(
         producer(),
         DigestAlgorithm::Sha256,
     )
+}
+
+#[derive(Clone)]
+struct MultiKernelProofFixture {
+    first: AuthenticatedControlFlowExecutableBindingV1,
+    second: AuthenticatedControlFlowExecutableBindingV1,
+}
+
+fn multi_kernel_proof_fixture() -> &'static MultiKernelProofFixture {
+    static FIXTURE: OnceLock<MultiKernelProofFixture> = OnceLock::new();
+    FIXTURE.get_or_init(|| {
+        let manifest = manifest();
+        MultiKernelProofFixture {
+            first: authenticated_control_flow_fixture(
+                &manifest,
+                0x11,
+                0x22,
+                0x33,
+                control_flow_source_with("src/kernel.rs", 8),
+                digest(0x55),
+            ),
+            second: authenticated_control_flow_fixture(
+                &manifest,
+                0x12,
+                0x23,
+                0x34,
+                control_flow_source_with("src/kernel_second.rs", 4),
+                digest(0x56),
+            ),
+        }
+    })
+}
+
+fn authenticated_control_flow_fixture(
+    manifest: &ManifestV1,
+    kernel_id: u8,
+    source_digest: u8,
+    executable_digest: u8,
+    source_input: (Vec<u8>, Vec<u8>, ControlFlowClaimsV1),
+    base_functional_specification: Digest,
+) -> AuthenticatedControlFlowExecutableBindingV1 {
+    let (source_bytes, cfg_identity, claims) = source_input;
+    let source = reconcile_control_flow_source_v1(&source_bytes, &cfg_identity, claims).unwrap();
+    let functional_specification = derive_control_flow_functional_specification_digest_v1(
+        base_functional_specification,
+        &source,
+    )
+    .unwrap();
+    let target = artifact_target_for_kernel(
+        manifest,
+        kernel_id,
+        source_digest,
+        executable_digest,
+        source_contracts_with_functional(payload_from_digest(functional_specification)),
+    );
+    let (evidence, verifier_policy) = measured_execution(target);
+    let request_binding = bind_control_flow_proof_request_v1(
+        evidence.invocation_plan().request(),
+        base_functional_specification,
+        source,
+    )
+    .unwrap();
+    let policy = binding_policy(manifest.clone(), target, &evidence, verifier_policy);
+    let proof = bind_authenticated_proof_executable_v1(
+        evidence,
+        &policy,
+        &mut AuthenticatedExecutionFreshnessV1::new(),
+    )
+    .unwrap();
+    bind_authenticated_control_flow_executable_v1(request_binding, proof).unwrap()
+}
+
+fn multi_kernel_admission() -> MultiKernelProofAdmissionV1 {
+    let fixture = multi_kernel_proof_fixture();
+    MultiKernelProofAdmissionV1::new(vec![fixture.second.clone(), fixture.first.clone()]).unwrap()
+}
+
+#[test]
+fn multi_kernel_admission_binds_each_kernel_to_its_own_proof() {
+    let fixture = multi_kernel_proof_fixture();
+    let admission = multi_kernel_admission();
+    let canonical =
+        MultiKernelProofAdmissionV1::new(vec![fixture.first.clone(), fixture.second.clone()])
+            .unwrap();
+    let first = KernelProofAdmissionRequestV1::from_binding(&fixture.first);
+    let second = KernelProofAdmissionRequestV1::from_binding(&fixture.second);
+
+    assert_eq!(MULTI_KERNEL_PROOF_ADMISSION_DOMAIN_V1, *b"FE2MKPA\0");
+    assert_eq!(admission.version(), MULTI_KERNEL_PROOF_ADMISSION_VERSION_V1);
+    assert_eq!(admission.kernel_count(), 2);
+    assert_eq!(admission.binding_identity(), canonical.binding_identity());
+    assert_eq!(
+        admission.admit_kernel(first).unwrap().binding_identity(),
+        fixture.first.binding_identity()
+    );
+    assert_eq!(
+        admission.admit_kernel(second).unwrap().binding_identity(),
+        fixture.second.binding_identity()
+    );
+    assert_ne!(first.kernel_id(), second.kernel_id());
+    assert_ne!(first.source_identity(), second.source_identity());
+    assert_ne!(first.contract_identity(), second.contract_identity());
+    assert_ne!(
+        first.authenticated_proof_identity(),
+        second.authenticated_proof_identity()
+    );
+    assert_eq!(
+        admission.finalized_executable_digest(),
+        fixture
+            .first
+            .proof_executable_binding()
+            .executable_binding()
+            .executable()
+            .finalized_code_object_digest()
+    );
+    assert!(!admission.grants_load_authority());
+    assert!(!admission.grants_launch_authority());
+}
+
+#[test]
+fn multi_kernel_admission_rejects_stale_request_identity() {
+    let fixture = multi_kernel_proof_fixture();
+    let original = fixture.first.request_binding();
+    let stale_request = ProofRequestV1::new(
+        CorrelationId::from_bytes([52; 16]),
+        original.target(),
+        configuration(),
+        model(),
+        ALL_PROPERTIES.to_vec(),
+        vec![],
+    )
+    .unwrap();
+    let stale = bind_control_flow_proof_request_v1(
+        &stale_request,
+        original.base_functional_specification_digest(),
+        original.source().clone(),
+    )
+    .unwrap();
+    let request = KernelProofAdmissionRequestV1::new(
+        &stale,
+        fixture.first.proof_executable_binding().binding_identity(),
+    );
+
+    assert_eq!(
+        multi_kernel_admission().admit_kernel(request),
+        Err(MultiKernelProofAdmissionErrorV1::IdentityMismatch {
+            kernel_id: original.target().kernel_id,
+            field: KernelProofAdmissionIdentityV1::ProofRequest,
+        })
+    );
+}
+
+#[test]
+fn multi_kernel_admission_rejects_swapped_kernel_proof() {
+    let fixture = multi_kernel_proof_fixture();
+    let request = KernelProofAdmissionRequestV1::new(
+        fixture.second.request_binding(),
+        fixture.first.proof_executable_binding().binding_identity(),
+    );
+
+    assert_eq!(
+        multi_kernel_admission().admit_kernel(request),
+        Err(MultiKernelProofAdmissionErrorV1::IdentityMismatch {
+            kernel_id: fixture.second.request_binding().target().kernel_id,
+            field: KernelProofAdmissionIdentityV1::AuthenticatedProof,
+        })
+    );
+}
+
+#[test]
+fn multi_kernel_admission_rejects_swapped_contract() {
+    let fixture = multi_kernel_proof_fixture();
+    let original = fixture.first.request_binding();
+    let swapped_base = digest(0x57);
+    let swapped_functional =
+        derive_control_flow_functional_specification_digest_v1(swapped_base, original.source())
+            .unwrap();
+    let swapped_target = artifact_target_with_contracts(
+        &manifest(),
+        source_contracts_with_functional(payload_from_digest(swapped_functional)),
+    );
+    let swapped_request = ProofRequestV1::new(
+        CorrelationId::from_bytes([51; 16]),
+        verifier_target(swapped_target),
+        configuration(),
+        model(),
+        ALL_PROPERTIES.to_vec(),
+        vec![],
+    )
+    .unwrap();
+    let swapped = bind_control_flow_proof_request_v1(
+        &swapped_request,
+        swapped_base,
+        original.source().clone(),
+    )
+    .unwrap();
+    let request = KernelProofAdmissionRequestV1::new(
+        &swapped,
+        fixture.first.proof_executable_binding().binding_identity(),
+    );
+
+    assert_eq!(
+        multi_kernel_admission().admit_kernel(request),
+        Err(MultiKernelProofAdmissionErrorV1::IdentityMismatch {
+            kernel_id: original.target().kernel_id,
+            field: KernelProofAdmissionIdentityV1::Contract,
+        })
+    );
+}
+
+#[test]
+fn multi_kernel_admission_rejects_duplicate_kernel_proofs() {
+    let first = &multi_kernel_proof_fixture().first;
+
+    assert_eq!(
+        MultiKernelProofAdmissionV1::new(vec![first.clone(), first.clone()]),
+        Err(MultiKernelProofAdmissionErrorV1::DuplicateKernel {
+            kernel_id: first.request_binding().target().kernel_id,
+        })
+    );
 }
 
 #[test]
