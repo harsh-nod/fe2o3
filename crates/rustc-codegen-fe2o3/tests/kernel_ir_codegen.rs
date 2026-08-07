@@ -103,6 +103,27 @@ impl WorkerV2TestConfig {
         worker_build_identity: &str,
         llvm_build_identity: &str,
     ) -> Self {
+        Self::native_source_for_crate(
+            directory,
+            workspace,
+            source,
+            ("worker_v2_source", 5),
+            worker,
+            worker_build_identity,
+            llvm_build_identity,
+        )
+    }
+
+    fn native_source_for_crate(
+        directory: &Path,
+        workspace: &Path,
+        source: &Path,
+        unit: (&str, u16),
+        worker: &Path,
+        worker_build_identity: &str,
+        llvm_build_identity: &str,
+    ) -> Self {
+        let (crate_name, code_object_version) = unit;
         let bytes = std::fs::read(worker).expect("read configured Worker V2 executable");
         let digest = DigestAlgorithm::Sha256.calculate(&bytes).bytes();
         let hex = digest
@@ -115,8 +136,8 @@ impl WorkerV2TestConfig {
         let workspace = workspace.to_str().expect("UTF-8 workspace path");
         let source = source.to_str().expect("UTF-8 source path");
         let json = format!(
-            "{{\"candidate_output_max_bytes\":4194304,\"format\":\"fe2o3-worker-v2-config-v2\",\"limits\":{{\"stderr_bytes\":65536,\"stdout_bytes\":8388608,\"timeout_ms\":30000}},\"link_options\":[{{\"name\":\"code-object-version\",\"value\":\"5\"}},{{\"name\":\"opt-level\",\"value\":\"2\"}},{{\"name\":\"strip-debug\",\"value\":\"true\"}},{{\"name\":\"verify-each\",\"value\":\"true\"}}],\"providers\":[],\"units\":[{{\"crate_name\":\"worker_v2_source\",\"source\":{source:?},\"working_directory\":{workspace:?}}}],\"worker\":{{\"byte_len\":{},\"llvm_build_identity\":{llvm_build_identity:?},\"path\":{worker:?},\"sha256\":\"{hex}\",\"worker_build_identity\":{worker_build_identity:?}}}}}",
-            bytes.len()
+            "{{\"candidate_output_max_bytes\":4194304,\"format\":\"fe2o3-worker-v2-config-v2\",\"limits\":{{\"stderr_bytes\":65536,\"stdout_bytes\":8388608,\"timeout_ms\":30000}},\"link_options\":[{{\"name\":\"code-object-version\",\"value\":\"{code_object_version}\"}},{{\"name\":\"opt-level\",\"value\":\"2\"}},{{\"name\":\"strip-debug\",\"value\":\"true\"}},{{\"name\":\"verify-each\",\"value\":\"true\"}}],\"providers\":[],\"units\":[{{\"crate_name\":{crate_name:?},\"source\":{source:?},\"working_directory\":{workspace:?}}}],\"worker\":{{\"byte_len\":{},\"llvm_build_identity\":{llvm_build_identity:?},\"path\":{worker:?},\"sha256\":\"{hex}\",\"worker_build_identity\":{worker_build_identity:?}}}}}",
+            bytes.len(),
         );
         std::fs::write(&path, json).expect("write native Worker V2 source config");
         Self(path)
@@ -843,6 +864,79 @@ fn worker_v2_real_source_publishes_two_kernels_with_one_shared_helper() {
         &target.join("fe2o3"),
         &[MULTI_KERNEL_ALPHA, MULTI_KERNEL_ZETA],
     );
+}
+
+#[test]
+#[ignore = "requires the configured native LLVM/LLD Worker V2 executable"]
+fn worker_v2_general_v3_build_links_and_validates_backend_witness() {
+    let _lock = backend_test_lock();
+    let workspace = workspace();
+    let directory = WorkerV2SourceDirectory::new(&workspace);
+    let source =
+        workspace.join("crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src/main.rs");
+    let worker =
+        PathBuf::from(std::env::var_os("FE2O3_LLVM_LINK_WORKER").expect("FE2O3_LLVM_LINK_WORKER"));
+    let worker_build_identity =
+        std::env::var("FE2O3_LLVM_LINK_WORKER_BUILD_ID").expect("worker build identity");
+    let llvm_build_identity = std::env::var("FE2O3_LLVM_BUILD_ID").expect("LLVM build identity");
+    let config = WorkerV2TestConfig::native_source_for_crate(
+        &directory.0,
+        &workspace,
+        &source,
+        ("fe2o3_typed_alias_spoof", 6),
+        &worker,
+        &worker_build_identity,
+        &llvm_build_identity,
+    );
+    let backend = build_codegen_backend(&workspace);
+    let target = directory.0.join("cargo-target");
+    let output = Command::new(env!("CARGO"))
+        .current_dir(&workspace)
+        .args([
+            "run",
+            "--locked",
+            "-p",
+            "cargo-fe2o3",
+            "--",
+            "build",
+            "-p",
+            "fe2o3-typed-alias-spoof",
+            "--features",
+            "general-genuine",
+            "--target-dir",
+        ])
+        .arg(&target)
+        .env("FE2O3_BACKEND", &backend)
+        .env("FE2O3_CODEGEN_PIPELINE", "kernel-ir-worker-v2")
+        .env("FE2O3_TARGET", "gfx942:xnack-")
+        .env("FE2O3_VERBOSE", "1")
+        .env("FE2O3_WORKER_V2_CONFIG_V2", &config.0)
+        .output()
+        .expect("build genuine general V3 witness fixture");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "genuine general V3 Worker V2 build failed:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("published inert Worker V2 compiler-module handoff"),
+        "genuine general V3 fixture did not publish through Worker V2:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("undefined reference to `__fe2o3_semantic_witness_v1_"),
+        "semantic witness accessors remained unresolved:\n{stderr}"
+    );
+
+    let executable = target.join("debug/fe2o3-typed-alias-spoof");
+    let run = Command::new(&executable)
+        .output()
+        .unwrap_or_else(|error| panic!("run {}: {error}", executable.display()));
+    assert!(
+        run.status.success(),
+        "linked general V3 witness validation failed:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_published_worker_v2_hsaco(&target.join("fe2o3"), "genuine_general_v3");
 }
 
 #[test]

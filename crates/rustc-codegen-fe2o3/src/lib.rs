@@ -31,6 +31,7 @@ mod rust_type_layout;
 mod rust_type_layout_general;
 mod rust_type_layout_v3;
 pub mod semantic_layout_bridge;
+mod semantic_witness;
 mod trusted_device_items;
 mod typed_artifact;
 mod worker_v2_producer;
@@ -426,6 +427,17 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                                     "{CODEGEN_PIPELINE_ENV}=kernel-ir-worker-v2 typed descriptor extraction failed: {error}"
                                 )
                             })?;
+                        let (semantic_witness_objects, semantic_witness_temporary) =
+                            generate_semantic_witness_host_objects(
+                                &descriptor_roots,
+                                output_dir,
+                                tcx.sess.target.llvm_target.as_ref(),
+                            )
+                            .map_err(|error| {
+                                format!(
+                                    "{CODEGEN_PIPELINE_ENV}=kernel-ir-worker-v2 semantic-witness emission failed: {error}"
+                                )
+                            })?;
                         let mir_module = mir_import::import_collection(tcx, &collection).map_err(
                             |error| {
                                 format!(
@@ -451,21 +463,31 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                         if self.config.dump_mir {
                             eprintln!("{}", mir_module.summary());
                         }
-                        worker_v2_producer::publish_worker_v2_compiler_module_with_descriptors(
-                            output_dir,
-                            &producer,
-                            Some(attempt),
-                            collection.compiler_ffi_observation.as_ref(),
-                            &module,
-                            &descriptor_roots,
-                        )
-                        .map_err(|error| error.to_string())
+                        let receipt =
+                            worker_v2_producer::publish_worker_v2_compiler_module_with_descriptors(
+                                output_dir,
+                                &producer,
+                                Some(attempt),
+                                collection.compiler_ffi_observation.as_ref(),
+                                &module,
+                                &descriptor_roots,
+                            )
+                            .map_err(|error| error.to_string())?;
+                        Ok((
+                            receipt,
+                            semantic_witness_objects,
+                            semantic_witness_temporary,
+                        ))
                     })();
                     match publication {
-                        Ok(receipt) => eprintln!(
-                            "[rustc-codegen-fe2o3] published inert Worker V2 compiler-module handoff: {} canonical byte(s)",
-                            receipt.length()
-                        ),
+                        Ok((receipt, objects, temporary)) => {
+                            generated_host_objects = objects;
+                            temporary_host_objects = temporary;
+                            eprintln!(
+                                "[rustc-codegen-fe2o3] published inert Worker V2 compiler-module handoff: {} canonical byte(s)",
+                                receipt.length()
+                            );
+                        }
                         Err(error) => tcx.dcx().fatal(format!(
                             "[rustc-codegen-fe2o3] Worker V2 producer failed: {error}"
                         )),
@@ -844,6 +866,40 @@ fn generate_typed_host_objects(
     Ok((objects, temporary))
 }
 
+fn generate_semantic_witness_host_objects(
+    roots: &[compiler_descriptor::TypedDescriptorRootV1],
+    output_dir: &Path,
+    host_triple: &str,
+) -> Result<(host_object::GeneratedHostObjects, TemporaryHostObjects), TypedVerticalError> {
+    let plans = semantic_witness::plans_from_descriptor_roots(roots)
+        .map_err(TypedVerticalError::SemanticWitness)?;
+    let mut objects = host_object::GeneratedHostObjects::default();
+    let mut temporary = TemporaryHostObjects::default();
+    if plans.is_empty() {
+        return Ok((objects, temporary));
+    }
+
+    let rocm = RocmToolchain::detect().map_err(TypedVerticalError::Toolchain)?;
+    let toolchain = host_object::HostObjectToolchain::from_rocm(&rocm)
+        .map_err(TypedVerticalError::HostObject)?;
+    for plan in plans {
+        let kernel_binding = plan.kernel_binding();
+        let object_path = temporary.reserve(output_dir, &kernel_binding.to_hex())?;
+        let object = host_object::generate_semantic_witness_host_object(
+            &toolchain,
+            host_triple,
+            &object_path,
+            kernel_binding,
+            plan.payload(),
+        )
+        .map_err(TypedVerticalError::HostObject)?;
+        objects
+            .register(object)
+            .map_err(TypedVerticalError::HostObject)?;
+    }
+    Ok((objects, temporary))
+}
+
 fn match_typed_artifacts(
     roots: &[TypedKernelRootV1],
     artifacts: &[amdgpu_llvm::DeviceArtifact],
@@ -951,6 +1007,7 @@ enum TypedVerticalError {
     TemporaryDirectoryExhausted(PathBuf),
     Toolchain(ToolchainError),
     Artifact(typed_artifact::TypedArtifactError),
+    SemanticWitness(semantic_witness::SemanticWitnessError),
     HostObject(host_object::HostObjectError),
 }
 
@@ -1009,6 +1066,7 @@ impl fmt::Display for TypedVerticalError {
             ),
             Self::Toolchain(error) => write!(formatter, "{error}"),
             Self::Artifact(error) => write!(formatter, "{error}"),
+            Self::SemanticWitness(error) => write!(formatter, "{error}"),
             Self::HostObject(error) => write!(formatter, "{error}"),
         }
     }
@@ -1020,6 +1078,7 @@ impl std::error::Error for TypedVerticalError {
             Self::TemporaryDirectory { source, .. } => Some(source),
             Self::Toolchain(error) => Some(error),
             Self::Artifact(error) => Some(error),
+            Self::SemanticWitness(error) => Some(error),
             Self::HostObject(error) => Some(error),
             Self::InvalidCollectedRoot { .. }
             | Self::DuplicatePublishedArtifact(_)

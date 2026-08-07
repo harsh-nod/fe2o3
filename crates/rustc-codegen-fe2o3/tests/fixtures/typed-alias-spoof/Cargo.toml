@@ -6,6 +6,7 @@ license.workspace = true
 publish = false
 
 [features]
+general-genuine = []
 general-lookalike = []
 
 [dependencies]

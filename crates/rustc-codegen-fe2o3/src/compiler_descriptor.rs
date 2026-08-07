@@ -49,6 +49,22 @@ pub(crate) struct TypedDescriptorRootV1 {
     kernarg_alignment_bytes: u32,
 }
 
+impl TypedDescriptorRootV1 {
+    pub(crate) fn general_v3_semantic_identity(
+        &self,
+    ) -> Option<(
+        KernelBindingIdV1,
+        reserved_fe2o3_symbols::GeneratedHostContractIdV3,
+    )> {
+        match self.profile {
+            TypedKernelProfile::GeneralScalarSliceRustcLayoutV3 {
+                generated_host_contract_identity,
+            } => Some((self.kernel_binding, generated_host_contract_identity)),
+            TypedKernelProfile::VecAddRustcLayoutV2 => None,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum DescriptorArgumentKindV1 {
     SharedSlice(ScalarTypeV1),
@@ -1225,6 +1241,26 @@ mod tests {
             mixed.table().kernels()[1].arguments()[2].access(),
             AccessMode::ReadWrite
         );
+    }
+
+    #[test]
+    fn semantic_witness_plans_select_only_general_v3_roots_in_binding_order() {
+        assert!(
+            crate::semantic_witness::plans_from_descriptor_roots(&[root(0x42)])
+                .unwrap()
+                .is_empty()
+        );
+
+        let plans = crate::semantic_witness::plans_from_descriptor_roots(&[
+            zeta_root(),
+            root(0x42),
+            alpha_root(),
+        ])
+        .unwrap();
+        assert_eq!(plans.len(), 2);
+        assert_eq!(plans[0].kernel_binding().as_bytes(), [0x61; 32]);
+        assert_eq!(plans[1].kernel_binding().as_bytes(), [0x7a; 32]);
+        assert_ne!(plans[0].payload(), plans[1].payload());
     }
 
     #[test]

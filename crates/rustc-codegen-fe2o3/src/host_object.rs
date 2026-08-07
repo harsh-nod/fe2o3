@@ -6,6 +6,7 @@
 use crate::{RocmToolchain, require_tool};
 use reserved_fe2o3_symbols::{
     KernelBindingIdV1, artifact_length_symbol_v1, artifact_pointer_symbol_v1,
+    semantic_witness_length_symbol_v1, semantic_witness_pointer_symbol_v1,
 };
 use rustc_codegen_ssa::{CompiledModule, CompiledModules, ModuleKind};
 use std::fmt;
@@ -65,14 +66,20 @@ impl GeneratedHostObjects {
         if self.objects.len() >= MAX_HOST_OBJECTS {
             return Err(HostObjectError::TooManyObjects);
         }
+        self.validate_unique(&object)?;
         object.validate_unchanged()?;
+        self.objects.push(object);
+        Ok(())
+    }
+
+    fn validate_unique(&self, object: &GeneratedHostObject) -> Result<(), HostObjectError> {
         for existing in &self.objects {
             if existing.path() == object.path() {
                 return Err(HostObjectError::DuplicateObjectPath(
                     object.path().to_path_buf(),
                 ));
             }
-            if symbols_collide(existing, &object) {
+            if symbols_collide(existing, object) {
                 return Err(HostObjectError::SymbolCollision {
                     first: existing.pointer_symbol().to_owned(),
                     second: object.pointer_symbol().to_owned(),
@@ -84,7 +91,6 @@ impl GeneratedHostObjects {
                 ));
             }
         }
-        self.objects.push(object);
         Ok(())
     }
 
@@ -173,10 +179,64 @@ pub(crate) fn generate_host_object(
 ) -> Result<GeneratedHostObject, HostObjectError> {
     validate_request(toolchain, host_triple, output_path, artifact_id, payload)?;
 
-    let pointer_symbol = artifact_pointer_symbol_v1(kernel_binding);
-    let length_symbol = artifact_length_symbol_v1(kernel_binding);
-    let module_name = format!("fe2o3-host-object-{artifact_id}");
-    let assembly = render_assembly(artifact_id, &pointer_symbol, &length_symbol, payload);
+    generate_host_object_with_accessors(
+        toolchain,
+        output_path,
+        HostObjectAccessors {
+            module_name: format!("fe2o3-host-object-{artifact_id}"),
+            section_id: artifact_id.to_owned(),
+            data_label: format!(".Lfe2o3_artifact_data_{artifact_id}"),
+            pointer_symbol: artifact_pointer_symbol_v1(kernel_binding),
+            length_symbol: artifact_length_symbol_v1(kernel_binding),
+        },
+        payload,
+    )
+}
+
+pub(crate) fn generate_semantic_witness_host_object(
+    toolchain: &HostObjectToolchain,
+    host_triple: &str,
+    output_path: &Path,
+    kernel_binding: KernelBindingIdV1,
+    payload: &[u8],
+) -> Result<GeneratedHostObject, HostObjectError> {
+    let binding_hex = kernel_binding.to_hex();
+    validate_request(toolchain, host_triple, output_path, &binding_hex, payload)?;
+    generate_host_object_with_accessors(
+        toolchain,
+        output_path,
+        HostObjectAccessors {
+            module_name: format!("fe2o3-semantic-witness-v1-{binding_hex}"),
+            section_id: format!("semantic_witness_v1.{binding_hex}"),
+            data_label: format!(".Lfe2o3_semantic_witness_v1_data_{binding_hex}"),
+            pointer_symbol: semantic_witness_pointer_symbol_v1(kernel_binding),
+            length_symbol: semantic_witness_length_symbol_v1(kernel_binding),
+        },
+        payload,
+    )
+}
+
+struct HostObjectAccessors {
+    module_name: String,
+    section_id: String,
+    data_label: String,
+    pointer_symbol: String,
+    length_symbol: String,
+}
+
+fn generate_host_object_with_accessors(
+    toolchain: &HostObjectToolchain,
+    output_path: &Path,
+    accessors: HostObjectAccessors,
+    payload: &[u8],
+) -> Result<GeneratedHostObject, HostObjectError> {
+    let assembly = render_assembly(
+        &accessors.section_id,
+        &accessors.data_label,
+        &accessors.pointer_symbol,
+        &accessors.length_symbol,
+        payload,
+    );
 
     let mut child = Command::new(&toolchain.llvm_mc)
         .args(["-triple=x86_64-unknown-linux-gnu", "-filetype=obj", "-o"])
@@ -229,10 +289,10 @@ pub(crate) fn generate_host_object(
         }
     };
     Ok(GeneratedHostObject {
-        module_name,
+        module_name: accessors.module_name,
         path: output_path.to_path_buf(),
-        pointer_symbol,
-        length_symbol,
+        pointer_symbol: accessors.pointer_symbol,
+        length_symbol: accessors.length_symbol,
         exact_object,
     })
 }
@@ -285,16 +345,17 @@ fn validate_request(
 }
 
 fn render_assembly(
-    artifact_id: &str,
+    section_id: &str,
+    data_label: &str,
     pointer_symbol: &str,
     length_symbol: &str,
     payload: &[u8],
 ) -> String {
     let mut assembly = format!(
-        ".section .rodata.fe2o3.{artifact_id},\"a\",@progbits\n\
+        ".section .rodata.fe2o3.{section_id},\"a\",@progbits\n\
          .p2align 4\n\
-         .type .Lfe2o3_artifact_data_{artifact_id},@object\n\
-         .Lfe2o3_artifact_data_{artifact_id}:\n"
+         .type {data_label},@object\n\
+         {data_label}:\n"
     );
     for chunk in payload.chunks(16) {
         assembly.push_str(".byte ");
@@ -310,14 +371,14 @@ fn render_assembly(
     use fmt::Write as _;
     write!(
         assembly,
-        ".size .Lfe2o3_artifact_data_{artifact_id}, {payload_length}\n\
-         .section .text.fe2o3.{artifact_id},\"ax\",@progbits\n\
+        ".size {data_label}, {payload_length}\n\
+         .section .text.fe2o3.{section_id},\"ax\",@progbits\n\
          .p2align 4\n\
          .globl {pointer_symbol}\n\
          .hidden {pointer_symbol}\n\
          .type {pointer_symbol},@function\n\
          {pointer_symbol}:\n\
-         leaq .Lfe2o3_artifact_data_{artifact_id}(%rip), %rax\n\
+         leaq {data_label}(%rip), %rax\n\
          retq\n\
          .size {pointer_symbol}, .-{pointer_symbol}\n\
          .p2align 4\n\
@@ -675,6 +736,116 @@ fn main() {{
     }
 
     #[test]
+    #[ignore = "requires the configured ROCm LLVM toolchain"]
+    fn linked_semantic_witness_accessors_return_exact_payload() {
+        let toolchain = test_toolchain();
+        let directory = TestDir::new();
+        let object = generate_semantic_witness_host_object(
+            &toolchain,
+            SUPPORTED_HOST_TRIPLE,
+            &directory.0.join("witness.o"),
+            KERNEL_BINDING,
+            PAYLOAD,
+        )
+        .expect("generate semantic witness object");
+        assert_eq!(
+            object.pointer_symbol(),
+            semantic_witness_pointer_symbol_v1(KERNEL_BINDING)
+        );
+        assert_eq!(
+            object.length_symbol(),
+            semantic_witness_length_symbol_v1(KERNEL_BINDING)
+        );
+
+        let expected = PAYLOAD
+            .iter()
+            .map(u8::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        let source = format!(
+            r#"
+unsafe extern "C" {{
+    #[link_name = "{pointer}"]
+    fn witness_pointer() -> *const u8;
+    #[link_name = "{length}"]
+    fn witness_length() -> usize;
+}}
+
+fn main() {{
+    let pointer = unsafe {{ witness_pointer() }};
+    let length = unsafe {{ witness_length() }};
+    let bytes = unsafe {{ core::slice::from_raw_parts(pointer, length) }};
+    assert_eq!(bytes, &[{expected}]);
+}}
+"#,
+            pointer = object.pointer_symbol(),
+            length = object.length_symbol(),
+        );
+        let source_path = directory.0.join("witness-consumer.rs");
+        let executable_path = directory.0.join("witness-consumer");
+        fs::write(&source_path, source).expect("write witness consumer");
+        let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+        let compile = Command::new(rustc)
+            .arg(&source_path)
+            .arg("-o")
+            .arg(&executable_path)
+            .arg("-C")
+            .arg(format!("link-arg={}", object.path().display()))
+            .output()
+            .expect("compile witness consumer");
+        assert!(
+            compile.status.success(),
+            "rustc failed: {}",
+            String::from_utf8_lossy(&compile.stderr)
+        );
+        let run = Command::new(executable_path)
+            .output()
+            .expect("run linked witness consumer");
+        assert!(
+            run.status.success(),
+            "linked witness consumer failed: {}",
+            String::from_utf8_lossy(&run.stderr)
+        );
+    }
+
+    #[test]
+    #[ignore = "requires the configured ROCm LLVM toolchain"]
+    fn multiple_semantic_witness_objects_are_disjoint_and_deterministically_ordered() {
+        let toolchain = test_toolchain();
+        let first_dir = TestDir::new();
+        let second_dir = TestDir::new();
+        let alpha = KernelBindingIdV1::from_bytes([0x61; 32]);
+        let zeta = KernelBindingIdV1::from_bytes([0x7a; 32]);
+        let zeta_object = generate_semantic_witness_host_object(
+            &toolchain,
+            SUPPORTED_HOST_TRIPLE,
+            &first_dir.0.join("zeta.o"),
+            zeta,
+            b"zeta witness",
+        )
+        .unwrap();
+        let alpha_object = generate_semantic_witness_host_object(
+            &toolchain,
+            SUPPORTED_HOST_TRIPLE,
+            &second_dir.0.join("alpha.o"),
+            alpha,
+            b"alpha witness",
+        )
+        .unwrap();
+        assert_ne!(alpha_object.pointer_symbol(), zeta_object.pointer_symbol());
+        assert_ne!(alpha_object.length_symbol(), zeta_object.length_symbol());
+
+        let mut objects = GeneratedHostObjects::default();
+        objects.register(zeta_object).unwrap();
+        objects.register(alpha_object).unwrap();
+        let mut modules = empty_compiled_modules();
+        objects.append_to(&mut modules).unwrap();
+        assert_eq!(modules.modules.len(), 2);
+        assert!(modules.modules[0].name.contains(&alpha.to_hex()));
+        assert!(modules.modules[1].name.contains(&zeta.to_hex()));
+    }
+
+    #[test]
     fn rejects_unsupported_or_unbounded_requests() {
         let directory = TestDir::new();
         let toolchain = HostObjectToolchain::for_test(PathBuf::from("/missing/llvm-mc"));
@@ -857,6 +1028,51 @@ fn main() {{
         assert!(matches!(
             duplicate_symbols.register(first_again),
             Err(HostObjectError::SymbolCollision { .. })
+        ));
+    }
+
+    #[test]
+    fn duplicate_path_accessor_and_module_checks_do_not_require_tool_execution() {
+        fn metadata(
+            module_name: &str,
+            path: &str,
+            pointer_symbol: &str,
+            length_symbol: &str,
+        ) -> GeneratedHostObject {
+            GeneratedHostObject {
+                module_name: module_name.to_owned(),
+                path: PathBuf::from(path),
+                pointer_symbol: pointer_symbol.to_owned(),
+                length_symbol: length_symbol.to_owned(),
+                exact_object: Box::new([]),
+            }
+        }
+
+        let existing = metadata("module-a", "/object-a.o", "pointer-a", "length-a");
+        let registry = GeneratedHostObjects {
+            objects: vec![existing],
+        };
+        assert!(matches!(
+            registry.validate_unique(&metadata(
+                "module-b",
+                "/object-a.o",
+                "pointer-b",
+                "length-b"
+            )),
+            Err(HostObjectError::DuplicateObjectPath(_))
+        ));
+        assert!(matches!(
+            registry.validate_unique(&metadata("module-b", "/object-b.o", "length-a", "length-b")),
+            Err(HostObjectError::SymbolCollision { .. })
+        ));
+        assert!(matches!(
+            registry.validate_unique(&metadata(
+                "module-a",
+                "/object-b.o",
+                "pointer-b",
+                "length-b"
+            )),
+            Err(HostObjectError::ModuleNameCollision(name)) if name == "module-a"
         ));
     }
 

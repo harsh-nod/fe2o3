@@ -2,6 +2,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
+use fe2o3_artifacts::DigestAlgorithm;
+
 const GENUINE_CASES: &[(&str, &str)] = &[
     ("fe2o3-vecadd", "vecadd"),
     ("fe2o3-trusted-item-renamed-genuine", "renamed_genuine"),
@@ -93,6 +95,20 @@ fn backend_build_with_args(workspace: &Path, package: &str, args: &[&str]) -> Ou
         .args(args)
         .output()
         .expect("run cargo-fe2o3")
+}
+
+fn build_codegen_backend(workspace: &Path) -> PathBuf {
+    let output = Command::new(env!("CARGO"))
+        .current_dir(workspace)
+        .args(["build", "--locked", "-p", "rustc-codegen-fe2o3"])
+        .output()
+        .expect("build rustc-codegen-fe2o3");
+    assert!(
+        output.status.success(),
+        "backend build failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    workspace.join("target/debug/librustc_codegen_fe2o3.so")
 }
 
 #[test]
@@ -247,11 +263,53 @@ fn registration_contract_accepts_genuine_metadata_and_rejects_spoofs_and_duplica
 fn general_v3_rejects_local_disjoint_slice_and_index1d_lookalikes() {
     let _lock = backend_test_lock();
     let workspace = workspace();
-    let rejected = backend_build_with_args(
-        &workspace,
-        "fe2o3-typed-alias-spoof",
-        &["--features", "general-lookalike"],
+    let target = workspace.join(format!(
+        "target/general-v3-spoof-probe-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&target);
+    let backend = build_codegen_backend(&workspace);
+    let source =
+        workspace.join("crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src/main.rs");
+    let worker = std::env::current_exe().expect("current test executable");
+    let worker_bytes = std::fs::read(&worker).expect("read current test executable");
+    let worker_digest = DigestAlgorithm::Sha256
+        .calculate(&worker_bytes)
+        .bytes()
+        .as_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    std::fs::create_dir_all(&target).expect("create spoof probe directory");
+    let config = target.join("worker-v2-spoof-probe.json");
+    let json = format!(
+        "{{\"candidate_output_max_bytes\":4194304,\"format\":\"fe2o3-worker-v2-config-v2\",\"limits\":{{\"stderr_bytes\":65536,\"stdout_bytes\":8388608,\"timeout_ms\":30000}},\"link_options\":[{{\"name\":\"code-object-version\",\"value\":\"6\"}},{{\"name\":\"opt-level\",\"value\":\"2\"}},{{\"name\":\"strip-debug\",\"value\":\"true\"}},{{\"name\":\"verify-each\",\"value\":\"true\"}}],\"providers\":[],\"units\":[{{\"crate_name\":\"fe2o3_typed_alias_spoof\",\"source\":{source:?},\"working_directory\":{workspace:?}}}],\"worker\":{{\"byte_len\":{},\"llvm_build_identity\":\"test-only-unreached-llvm\",\"path\":{worker:?},\"sha256\":\"{worker_digest}\",\"worker_build_identity\":\"test-only-unreached-worker\"}}}}",
+        worker_bytes.len(),
     );
+    std::fs::write(&config, json).expect("write spoof probe Worker V2 config");
+    let rejected = Command::new(env!("CARGO"))
+        .current_dir(&workspace)
+        .args([
+            "run",
+            "--locked",
+            "-p",
+            "cargo-fe2o3",
+            "--",
+            "build",
+            "-p",
+            "fe2o3-typed-alias-spoof",
+            "--features",
+            "general-lookalike",
+            "--target-dir",
+        ])
+        .arg(target.join("cargo-target"))
+        .env("FE2O3_BACKEND", &backend)
+        .env("FE2O3_CODEGEN_PIPELINE", "kernel-ir-worker-v2")
+        .env("FE2O3_TARGET", "gfx942:xnack-")
+        .env("FE2O3_WORKER_V2_CONFIG_V2", &config)
+        .output()
+        .expect("run isolated general V3 lookalike probe");
+    let _ = std::fs::remove_dir_all(&target);
     let stderr = String::from_utf8_lossy(&rejected.stderr);
     assert!(
         !rejected.status.success(),
