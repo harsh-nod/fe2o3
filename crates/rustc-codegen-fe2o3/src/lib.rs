@@ -88,7 +88,7 @@ struct TypedKernelRootV1 {
     export_name: String,
     profile: collector::TypedKernelProfile,
     kernel_binding: reserved_fe2o3_symbols::KernelBindingIdV1,
-    type_identities: [fe2o3_artifacts::TypeIdentity; 3],
+    type_identities: collector::TypedArgumentListV1<fe2o3_artifacts::TypeIdentity>,
 }
 
 #[derive(Debug, Default)]
@@ -739,12 +739,19 @@ fn typed_roots_from_collection(
                         reason: "typed kernel root has no validated kernel binding",
                     }
                 })?;
-                let type_identities = function.typed_layout_identities.ok_or_else(|| {
-                    TypedVerticalError::InvalidCollectedRoot {
+                let type_identities =
+                    function.typed_layout_identities.clone().ok_or_else(|| {
+                        TypedVerticalError::InvalidCollectedRoot {
+                            export_name: function.export_name.clone(),
+                            reason: "typed kernel root has no rustc-derived layout identities",
+                        }
+                    })?;
+                if type_identities.len() != profile.expected_argument_count() {
+                    return Err(TypedVerticalError::InvalidCollectedRoot {
                         export_name: function.export_name.clone(),
-                        reason: "typed kernel root has no rustc-derived layout identities",
-                    }
-                })?;
+                        reason: "typed kernel argument count does not match its profile",
+                    });
+                }
                 Ok(TypedKernelRootV1 {
                     logical_name,
                     export_name: function.export_name.clone(),
@@ -782,13 +789,20 @@ fn generate_typed_host_objects(
         let hsaco = finalized_artifact_bytes(&artifact.hsaco, "HSACO", MAX_FINALIZED_HSACO_BYTES)?;
         let generated = match root.profile {
             collector::TypedKernelProfile::VecAddRustcLayoutV2 => {
+                let type_identities: [fe2o3_artifacts::TypeIdentity; 3] =
+                    root.type_identities.as_slice().try_into().map_err(|_| {
+                        TypedVerticalError::InvalidCollectedRoot {
+                            export_name: root.export_name.clone(),
+                            reason: "typed vecadd profile requires exactly three layout identities",
+                        }
+                    })?;
                 typed_artifact::validate_typed_vecadd_hsaco_v2(&root.export_name, target, hsaco)
                     .map_err(TypedVerticalError::Artifact)?;
                 typed_artifact::build_typed_vecadd_artifact_v1(
                     &root.logical_name,
                     &root.export_name,
                     root.kernel_binding,
-                    root.type_identities,
+                    type_identities,
                     target,
                     llvm_ir,
                     hsaco.to_vec(),
@@ -1409,14 +1423,16 @@ mod tests {
                 logical_name,
                 export_name,
             ),
-            type_identities: [fe2o3_artifacts::TypeIdentity::new(
+            type_identities: crate::collector::TypedArgumentListV1::new(vec![
+                fe2o3_artifacts::TypeIdentity::new(
                 fe2o3_artifacts::DeclaredRustTypeIdentity::from_untrusted_bytes(
                     fe2o3_artifacts::DigestBytes::from_bytes([0x31; 32]),
                 ),
                 fe2o3_artifacts::DeclaredRustLayoutIdentity::from_untrusted_bytes(
                     fe2o3_artifacts::DigestBytes::from_bytes([0x32; 32]),
                 ),
-            ); 3],
+            ); 3])
+            .unwrap(),
         }
     }
 

@@ -1,6 +1,6 @@
 //! Rustc-derived descriptor input for the first typed Worker V2 profile.
 
-use crate::collector::{CollectedFunction, TypedKernelProfile};
+use crate::collector::{CollectedFunction, TypedArgumentListV1, TypedKernelProfile};
 use crate::kernel_ir_codegen::InertCompilerModuleTextV1;
 use crate::rust_type_layout::{ExtractError, extract_exact_typed_vecadd_layout};
 use fe2o3_artifacts::{RustLayoutEvidenceV1, TypeIdentity};
@@ -37,8 +37,9 @@ const IR_DIGEST_DOMAIN_V1: &[u8] = b"FE2O3/RUSTC-DESCRIPTOR-IR-DIGEST/V1\0";
 pub(crate) struct TypedDescriptorRootV1 {
     logical_name: String,
     export_name: String,
+    profile: TypedKernelProfile,
     kernel_binding: KernelBindingIdV1,
-    layouts: [RustLayoutEvidenceV1; 3],
+    layouts: TypedArgumentListV1<RustLayoutEvidenceV1>,
 }
 
 /// Re-extracts exact rustc layout evidence instead of trusting retained identity bytes alone.
@@ -70,16 +71,39 @@ pub(crate) fn typed_descriptor_roots_from_collection<'tcx>(
                         field: "kernel binding",
                     }
                 })?;
-                let retained = function.typed_layout_identities.ok_or_else(|| {
+                let retained = function.typed_layout_identities.as_ref().ok_or_else(|| {
                     CompilerDescriptorError::MissingTypedField {
                         kernel: function.export_name.clone(),
                         field: "rustc layout identities",
                     }
                 })?;
-                let layouts = extract_exact_typed_vecadd_layout(tcx, function.instance)
-                    .map_err(CompilerDescriptorError::RustLayout)?;
-                let rederived = layouts.each_ref().map(|layout| layout.type_identity());
-                if retained != rederived {
+                validate_profile_argument_count(profile, &function.export_name, retained.len())?;
+                let layouts = TypedArgumentListV1::new(
+                    extract_exact_typed_vecadd_layout(tcx, function.instance)
+                        .map_err(CompilerDescriptorError::RustLayout)?
+                        .into_iter()
+                        .collect(),
+                )
+                .map_err(|error| {
+                    CompilerDescriptorError::InvalidArgumentCollection {
+                        kernel: function.export_name.clone(),
+                        reason: error.to_string(),
+                    }
+                })?;
+                if retained.len() != layouts.len() {
+                    return Err(
+                        CompilerDescriptorError::RetainedLayoutArgumentCountMismatch {
+                            kernel: function.export_name.clone(),
+                            retained: retained.len(),
+                            rederived: layouts.len(),
+                        },
+                    );
+                }
+                if !retained.as_slice().iter().copied().eq(layouts
+                    .as_slice()
+                    .iter()
+                    .map(|layout| layout.type_identity()))
+                {
                     return Err(CompilerDescriptorError::RetainedLayoutIdentityMismatch(
                         function.export_name.clone(),
                     ));
@@ -87,6 +111,7 @@ pub(crate) fn typed_descriptor_roots_from_collection<'tcx>(
                 Ok(TypedDescriptorRootV1 {
                     logical_name,
                     export_name: function.export_name.clone(),
+                    profile,
                     kernel_binding,
                     layouts,
                 })
@@ -138,6 +163,7 @@ pub(crate) fn construct_compiler_descriptor_source_v1(
     let mut seen_exports = BTreeSet::new();
     let mut kernels = Vec::with_capacity(typed_roots.len());
     for root in typed_roots {
+        validate_profile_argument_count(root.profile, &root.export_name, root.layouts.len())?;
         if !seen_exports.insert(root.export_name.as_str()) {
             return Err(CompilerDescriptorError::DuplicateTypedKernel(
                 root.export_name.clone(),
@@ -269,15 +295,21 @@ fn source_evidence(root: &TypedDescriptorRootV1) -> BuildEvidenceV1 {
         root.logical_name.as_bytes(),
         root.export_name.as_bytes(),
     ];
-    let identities = root.layouts.each_ref().map(|layout| layout.type_identity());
-    let identity_bytes = identities.map(type_identity_bytes);
+    let identity_bytes = root
+        .layouts
+        .as_slice()
+        .iter()
+        .map(|layout| type_identity_bytes(layout.type_identity()))
+        .collect::<Vec<_>>();
     for bytes in &identity_bytes {
         identity_frames.push(bytes.as_slice());
     }
     let canonical_layouts = root
         .layouts
-        .each_ref()
-        .map(|layout| layout.canonical_bytes());
+        .as_slice()
+        .iter()
+        .map(|layout| layout.canonical_bytes())
+        .collect::<Vec<_>>();
     let digest_frames = canonical_layouts
         .iter()
         .map(Vec::as_slice)
@@ -289,6 +321,22 @@ fn source_evidence(root: &TypedDescriptorRootV1) -> BuildEvidenceV1 {
         )),
         EvidenceDigest::from_sha256_bytes(domain_hash(SOURCE_DIGEST_DOMAIN_V1, &digest_frames)),
     )
+}
+
+fn validate_profile_argument_count(
+    profile: TypedKernelProfile,
+    kernel: &str,
+    actual: usize,
+) -> Result<(), CompilerDescriptorError> {
+    let expected = profile.expected_argument_count();
+    if actual != expected {
+        return Err(CompilerDescriptorError::TypedProfileArgumentCountMismatch {
+            kernel: kernel.to_owned(),
+            expected,
+            actual,
+        });
+    }
+    Ok(())
 }
 
 fn ir_evidence(
@@ -344,10 +392,30 @@ fn domain_hash(domain: &[u8], frames: &[&[u8]]) -> [u8; 32] {
 pub(crate) enum CompilerDescriptorError {
     TypedProfileOnNonKernel(String),
     UnsupportedTypedProfile,
-    MissingTypedField { kernel: String, field: &'static str },
+    MissingTypedField {
+        kernel: String,
+        field: &'static str,
+    },
+    InvalidArgumentCollection {
+        kernel: String,
+        reason: String,
+    },
+    TypedProfileArgumentCountMismatch {
+        kernel: String,
+        expected: usize,
+        actual: usize,
+    },
+    RetainedLayoutArgumentCountMismatch {
+        kernel: String,
+        retained: usize,
+        rederived: usize,
+    },
     RustLayout(ExtractError),
     RetainedLayoutIdentityMismatch(String),
-    IncompleteTypedKernelClosure { typed: usize, total: usize },
+    IncompleteTypedKernelClosure {
+        typed: usize,
+        total: usize,
+    },
     UnsupportedTarget(String),
     UnsupportedCodeObjectVersion(CodeObjectVersion),
     DuplicateTypedKernel(String),
@@ -379,6 +447,28 @@ impl fmt::Display for CompilerDescriptorError {
             Self::MissingTypedField { kernel, field } => {
                 write!(formatter, "typed kernel `{kernel}` has no {field}")
             }
+            Self::InvalidArgumentCollection { kernel, reason } => {
+                write!(
+                    formatter,
+                    "typed kernel `{kernel}` has invalid arguments: {reason}"
+                )
+            }
+            Self::TypedProfileArgumentCountMismatch {
+                kernel,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "typed kernel `{kernel}` profile requires {expected} argument(s), found {actual}"
+            ),
+            Self::RetainedLayoutArgumentCountMismatch {
+                kernel,
+                retained,
+                rederived,
+            } => write!(
+                formatter,
+                "typed kernel `{kernel}` retained {retained} layout identity/identities but rustc rederived {rederived}"
+            ),
             Self::RustLayout(error) => write!(formatter, "rustc layout extraction failed: {error}"),
             Self::RetainedLayoutIdentityMismatch(kernel) => write!(
                 formatter,
@@ -531,13 +621,18 @@ mod tests {
         .unwrap()
     }
 
-    fn root(binding: u8) -> TypedDescriptorRootV1 {
+    fn root_with_layouts(binding: u8, layouts: Vec<RustLayoutEvidenceV1>) -> TypedDescriptorRootV1 {
         TypedDescriptorRootV1 {
             logical_name: "add".to_owned(),
             export_name: "vecadd".to_owned(),
+            profile: TypedKernelProfile::VecAddRustcLayoutV2,
             kernel_binding: KernelBindingIdV1::from_bytes([binding; 32]),
-            layouts: [layout(false), layout(false), layout(true)],
+            layouts: TypedArgumentListV1::new(layouts).unwrap(),
         }
+    }
+
+    fn root(binding: u8) -> TypedDescriptorRootV1 {
+        root_with_layouts(binding, vec![layout(false), layout(false), layout(true)])
     }
 
     fn module() -> Module {
@@ -602,6 +697,28 @@ mod tests {
         let bound = bind_compiler_descriptor_source_v1(llvm, &source).unwrap();
         assert_eq!(bound.descriptor_source_identity(), Some(source_identity));
         assert!(bound.llvm_ir().contains(".section .fe2o3.kd.v1"));
+    }
+
+    #[test]
+    fn synthetic_roots_retain_distinct_argument_counts_but_vecadd_rejects_them() {
+        let one = root_with_layouts(1, vec![layout(false)]);
+        let two = root_with_layouts(2, vec![layout(false), layout(true)]);
+        assert_eq!(one.layouts.len(), 1);
+        assert_eq!(two.layouts.len(), 2);
+
+        let envelope = envelope(CodeObjectVersion::V6);
+        let module = module();
+        let llvm = construct_inert_compiler_module_text_v1(&module).unwrap();
+        for (root, actual) in [(one, 1), (two, 2)] {
+            assert!(matches!(
+                construct_compiler_descriptor_source_v1(&envelope, &module, &llvm, &[root]),
+                Err(CompilerDescriptorError::TypedProfileArgumentCountMismatch {
+                    expected: 3,
+                    actual: found,
+                    ..
+                }) if found == actual
+            ));
+        }
     }
 
     #[test]

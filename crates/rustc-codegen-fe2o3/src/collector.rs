@@ -1,4 +1,5 @@
 use fe2o3_artifacts::TypeIdentity;
+use fe2o3_kernel_descriptor::MAX_ARGUMENTS_PER_KERNEL;
 use fe2o3_rustc_front::{
     ASSEMBLY_OPERAND_ADDRESS_V1, ASSEMBLY_OPERAND_IMMEDIATE_V1, ASSEMBLY_OPERAND_SGPR_V1,
     ASSEMBLY_OPERAND_VGPR_V1, ASSEMBLY_OPTION_NOMEM_V1, ASSEMBLY_OPTION_NOSTACK_V1,
@@ -32,6 +33,60 @@ pub(crate) enum TypedKernelProfile {
     VecAddRustcLayoutV2,
 }
 
+impl TypedKernelProfile {
+    pub(crate) const fn expected_argument_count(self) -> usize {
+        match self {
+            Self::VecAddRustcLayoutV2 => 3,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct TypedArgumentListV1<T> {
+    arguments: Vec<T>,
+}
+
+impl<T> TypedArgumentListV1<T> {
+    pub(crate) fn new(arguments: Vec<T>) -> Result<Self, TypedArgumentListError> {
+        if arguments.is_empty() {
+            return Err(TypedArgumentListError::Empty);
+        }
+        if arguments.len() > MAX_ARGUMENTS_PER_KERNEL {
+            return Err(TypedArgumentListError::TooMany {
+                actual: arguments.len(),
+                maximum: MAX_ARGUMENTS_PER_KERNEL,
+            });
+        }
+        Ok(Self { arguments })
+    }
+
+    pub(crate) fn as_slice(&self) -> &[T] {
+        &self.arguments
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.arguments.len()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum TypedArgumentListError {
+    Empty,
+    TooMany { actual: usize, maximum: usize },
+}
+
+impl fmt::Display for TypedArgumentListError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Empty => formatter.write_str("typed kernel argument list must not be empty"),
+            Self::TooMany { actual, maximum } => write!(
+                formatter,
+                "typed kernel argument count {actual} exceeds maximum {maximum}"
+            ),
+        }
+    }
+}
+
 /// Compiler-authoritative role attached when a function enters the closed
 /// device graph. Downstream consumers must preserve it rather than reconstruct
 /// it from symbol spelling or later reachability analysis.
@@ -54,7 +109,7 @@ pub struct CollectedFunction<'tcx> {
     /// Present only for a V2 typed registration validated by the backend.
     pub(crate) kernel_binding: Option<KernelBindingIdV1>,
     /// rustc-derived identities for each source argument in a typed profile.
-    pub(crate) typed_layout_identities: Option<[TypeIdentity; 3]>,
+    pub(crate) typed_layout_identities: Option<TypedArgumentListV1<TypeIdentity>>,
     /// Compiler-authenticated source contract for this exact kernel root.
     pub(crate) frontend_contract: Option<AuthenticatedKernelFrontendContractV1>,
 }
@@ -302,7 +357,7 @@ struct KernelRoot<T> {
     export_name: String,
     typed_profile: Option<TypedKernelProfile>,
     kernel_binding: Option<KernelBindingIdV1>,
-    typed_layout_identities: Option<[TypeIdentity; 3]>,
+    typed_layout_identities: Option<TypedArgumentListV1<TypeIdentity>>,
     frontend_contract: Option<AuthenticatedKernelFrontendContractV1>,
 }
 
@@ -433,7 +488,20 @@ fn kernel_roots<'tcx>(
                                 format!("rustc type/layout evidence extraction failed: {error}"),
                             )
                         })?;
-                Some(evidence.map(|argument| argument.type_identity()))
+                let identities = evidence
+                    .into_iter()
+                    .map(|argument| argument.type_identity())
+                    .collect();
+                Some(TypedArgumentListV1::new(identities).map_err(|error| {
+                    RegistrationError::new(
+                        format!(
+                            "{}{}",
+                            reserved_fe2o3_symbols::KERNEL_REGISTRATION_PREFIX,
+                            root.logical_name
+                        ),
+                        error.to_string(),
+                    )
+                })?)
             }
             None => None,
         };
@@ -2249,9 +2317,14 @@ fn sanitize_symbol_name(name: &str) -> String {
 mod tests {
     use super::{
         AuthenticatedKernelFrontendContractV1, KernelRoot, ObservedInlineAssemblyV1,
-        RegistrationError, RegistrationRecord, TypedKernelProfile, reconcile_frontend_contract,
+        RegistrationError, RegistrationRecord, TypedArgumentListError, TypedArgumentListV1,
+        TypedKernelProfile, reconcile_frontend_contract,
         validate_registration_records as validate_records,
     };
+    use fe2o3_artifacts::{
+        DeclaredRustLayoutIdentity, DeclaredRustTypeIdentity, DigestBytes, TypeIdentity,
+    };
+    use fe2o3_kernel_descriptor::MAX_ARGUMENTS_PER_KERNEL;
     use fe2o3_rustc_front::{
         ASSEMBLY_OPERAND_SGPR_V1, ASSEMBLY_OPTION_NOMEM_V1, ASSEMBLY_OPTION_NOSTACK_V1,
         ASSEMBLY_OPTION_PRESERVES_FLAGS_V1, FrontendUnsafeAssemblyDeclarationV1,
@@ -2265,6 +2338,39 @@ mod tests {
         derive_crate_binding_id_v1, derive_kernel_binding_id_v1, host_kernel_symbol_v1,
     };
     use std::collections::BTreeSet;
+
+    fn type_identity(byte: u8) -> TypeIdentity {
+        TypeIdentity::new(
+            DeclaredRustTypeIdentity::from_untrusted_bytes(DigestBytes::from_bytes([byte; 32])),
+            DeclaredRustLayoutIdentity::from_untrusted_bytes(DigestBytes::from_bytes(
+                [byte.wrapping_add(1); 32],
+            )),
+        )
+    }
+
+    #[test]
+    fn typed_argument_lists_are_owned_and_not_fixed_to_three_arguments() {
+        let one = TypedArgumentListV1::new(vec![type_identity(1)]).unwrap();
+        let two = TypedArgumentListV1::new(vec![type_identity(2), type_identity(3)]).unwrap();
+
+        assert_eq!(one.len(), 1);
+        assert_eq!(two.len(), 2);
+        assert_ne!(one.as_slice(), two.as_slice());
+    }
+
+    #[test]
+    fn typed_argument_lists_reject_empty_and_oversized_collections() {
+        assert_eq!(
+            TypedArgumentListV1::<TypeIdentity>::new(Vec::new()),
+            Err(TypedArgumentListError::Empty)
+        );
+        assert!(matches!(
+            TypedArgumentListV1::new(vec![type_identity(7); MAX_ARGUMENTS_PER_KERNEL + 1]),
+            Err(TypedArgumentListError::TooMany { actual, maximum })
+                if actual == MAX_ARGUMENTS_PER_KERNEL + 1
+                    && maximum == MAX_ARGUMENTS_PER_KERNEL
+        ));
+    }
 
     fn validate_registration_records<T: Copy>(
         records: Vec<RegistrationRecord<T>>,
