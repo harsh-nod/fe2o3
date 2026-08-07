@@ -7,6 +7,13 @@ packing plan to a second typed kernel selected from one authenticated Worker V2
 executable. It does not make arbitrary artifact metadata authoritative and it
 does not replace the existing exact vecadd profile.
 
+Implementation checkpoint `ceb0e4675173866a50fb737108e6a9b04827691d` has the
+V3 lexical registration, rustc-semantic reconstruction, variable descriptor
+generation, lifetime-branded host packing, and backend-witness consumer
+contract. It does not have the rustc backend witness host-object emitter,
+generated alpha/zeta wrappers, a production two-entry container, or alpha/zeta
+load, dispatch, and hardware execution. The exit gate therefore remains open.
+
 ## Scope
 
 V1 accepts compiler-generated kernel entries whose logical arguments are:
@@ -28,7 +35,8 @@ LDS, asynchronous launch, or caller-constructed ABI descriptions.
 ## Authority Transitions
 
 ```text
-compiler-generated Rust expectation
+macro-generated Rust expectation
+        + backend-issued semantic witness
         + authenticated artifact entry
         + exact finalized executable occurrence
         + observed context/device
@@ -58,14 +66,21 @@ upstream evidence that it validates.
 
 ### Compiler-generated expectation
 
-Generated code supplies an independent bounded expectation for the kernel's
-logical ABI, physical components, effects, launch contract, and kernel binding
-identity. Runtime validation compares that expectation with the authenticated
-artifact. It must not derive the expectation from the artifact being checked.
+The macro supplies an independent bounded lexical expectation for the kernel's
+logical ABI, physical components, effects, launch contract, kernel binding, and
+generated host-contract identity. Lexical matching is not semantic authority:
+the expectation must obtain a versioned, identity-bound witness from private
+backend-defined pointer/length accessors. Host validation rejects missing,
+malformed, substituted, wrong-profile, wrong-binding, wrong-contract, and
+trailing witness bytes before artifact admission can use the expectation.
 
-The unsafe compiler-generated marker implementation remains sealed from normal
-downstream construction. Type aliases and monomorphized layouts are validated
-by rustc before artifact publication.
+Rustc independently validates aliases and monomorphized layouts against
+semantic primitive types and genuine trusted `DisjointSlice<T, Index1D>`
+identities. At `ceb0e46`, that semantic reconstruction and the witness consumer
+contract are implemented, but rustc does not yet emit the witness accessors.
+Consequently a general V3 application that attempts to use semantic authority
+fails at final link rather than falling back to lexical trust. The exact vecadd
+V2 profile remains byte-compatible and does not use this unfinished V3 path.
 
 ### Artifact and bundle binding
 
@@ -88,9 +103,13 @@ engine. Generated adapters bind values by source argument index. The plan
 rejects missing, duplicate, reordered, wrong-kind, wrong-width, wrong-access,
 wrong-address-space, wrong-pointer-width, and cross-kernel values.
 
-Packed bytes remain inert and retain the selected kernel ID. Safe launch code
-must additionally retain allocation provenance, alias admission, and borrowed
-resources through completion.
+General V3 scalar binding accepts only canonical `i8`/`u8` through
+`i64`/`u64`, `f32`, and `f64` identities. Shared and exclusive slice binding
+checks element type, layout, access, and address space. Packed bytes remain
+inert, retain the selected kernel ID, and carry allocation-borrow lifetimes;
+safe code cannot reuse or free a borrowed allocation while an input or packed
+value remains live. Safe launch code must additionally retain allocation
+provenance, alias admission, and borrowed resources through completion.
 
 ### HSA resolution and dispatch
 

@@ -138,16 +138,19 @@ command-line linking.
 Cargo then independently admits the exact raw HSACO against the retained
 target, code-object version, symbol roles, descriptors, and launch metadata.
 `PreparedWorkerV2HsacoPublicationV1` derives a private publication plan from
-that retained evidence, and the artifact transaction durably publishes the
-exact admitted bytes and provenance receipt for the same managed build attempt
-before completing the attempt. The worker response and the intermediate
-evidence remain non-authoritative by themselves.
+that retained evidence. Descriptor-free COV5 remains a raw compatibility path;
+descriptor-bearing COV6 is canonically finalized downstream, and the artifact
+transaction durably publishes the exact admitted raw or finalized bytes plus
+the provenance receipt for the same managed build attempt. The worker response
+and the intermediate evidence remain non-authoritative by themselves.
 
 This flow does not authenticate the compiler or its origin, authenticate or
-bind Verus verification, run canonical `.fe2o3.kd.v1` descriptor finalization,
-or grant HSA load or kernel-launch authority. Exact retry is supported while
-the prepared publication intent remains in the same Cargo process, but restart
-recovery after the compiler handoff has been consumed remains incomplete.
+bind Verus verification, construct an `ArtifactContainerV1`, or grant HSA load
+or kernel-launch authority. Cargo owns canonical `.fe2o3.kd.v1` finalization for
+COV6 and persists the exact publication kind, plan, upstream identity, bytes,
+route/admission, and receipt. Raw and finalized publications recover across
+process crashes, including migration of legacy raw markers; fault exits are
+compiled only by the non-default `worker-v2-fault-injection-test-only` feature.
 
 On `mi300x`, the ignored Debug-worker integration tests
 `worker_v2_real_source_publishes_inspected_gfx942_hsaco` and

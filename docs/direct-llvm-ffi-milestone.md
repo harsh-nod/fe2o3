@@ -1,8 +1,8 @@
 # Direct LLVM and Device FFI Milestone
 
-Status: active; bounded `gfx942` multi-kernel publication and inert runtime
-authority foundations are implemented through commit
-`90b6fe31cbb1d89b82755f194ac7950c4eef4756`.
+Status: active; bounded `gfx942` multi-kernel publication, canonical COV6
+recovery, and inert runtime authority foundations are implemented through
+commit `ceb0e4675173866a50fb737108e6a9b04827691d`.
 
 This milestone connects the existing direct LLVM/LLD worker and device FFI
 contracts to the artifact transaction, bundle, and runtime paths. Its end state
@@ -15,7 +15,7 @@ CUDA-Oxide parity gates in `implementation-roadmap-v2.md`.
 
 ## Implemented gfx942 Vertical Slice
 
-As of commit `90b6fe31cbb1d89b82755f194ac7950c4eef4756`, the opt-in
+As of commit `ceb0e4675173866a50fb737108e6a9b04827691d`, the opt-in
 `kernel-ir-worker-v2` path implements a bounded G1-G5 publication slice for a
 real Cargo crate with two Rust kernel roots and one shared internal helper:
 
@@ -34,11 +34,13 @@ real Cargo crate with two Rust kernel roots and one shared internal helper:
   parse, link, optimize, emit AMDGPU code, and link both kernels and their helper
   into one `gfx942` HSACO; neither COMGR nor command-line linking is used;
 - Cargo independently checks the raw HSACO target, exact two-kernel export set,
-  descriptors, and AMDHSA metadata before deriving an immutable publication
-  plan from the retained evidence; and
-- the artifact transaction durably publishes the exact bytes and an
-  attempt-bound provenance receipt, with adversarial substitution,
-  crash-boundary, redo, and generation-isolation tests.
+  descriptors, and AMDHSA metadata. Descriptor-free COV5 retains raw
+  compatibility while descriptor-bearing COV6 is canonically finalized from
+  the retained evidence before publication; and
+- the artifact transaction durably publishes the exact admitted raw or
+  finalized bytes and an attempt-bound provenance receipt, with adversarial
+  substitution, legacy-marker migration, raw/finalized process crash recovery,
+  redo, and generation-isolation tests.
 
 The same snapshot adds independently tested foundations around that publication:
 
@@ -60,14 +62,17 @@ The same snapshot adds independently tested foundations around that publication:
   set remains live.
 
 These foundations are not yet composed into one authority-producing pipeline.
-The artifact transaction persists and recovers an exact Worker V2 publication
-intent across restart, with crash-boundary and substitution coverage. Reusing a
-consumed compiler handoff to recompute the direct-link result remains limited
-to the same Cargo process. The rustc/compiler executable and its origin are not
+The artifact transaction persists and recovers exact Worker V2 raw or finalized
+publication state across process restart. Recovery validates the journal,
+publication kind, plan, upstream identity, route/admission, backend receipt,
+and completed attempt before clearing durable state; V1 raw markers migrate to
+the V2 format. The rustc/compiler executable and its origin are not
 authenticated. No Verus result or compiler/machine-code refinement proof is
-authenticated and bound to the emitted code. Generic manifest-derived host
-bindings, kernarg packing, and dispatch are absent, and the two Worker V2
-kernels have not been launched.
+authenticated and bound to the emitted code. General V3 argument-packing and
+semantic-witness consumer foundations exist separately, but the backend witness
+emitter, generated alpha/zeta wrappers, production two-kernel container, and
+composed dispatch path are absent. The two Worker V2 kernels have not been
+launched.
 The HSA dispatch adapter remains restricted to the separately reviewed exact
 vecadd ABI; no load or launch authority follows from the Worker V2 publication
 receipt or the descriptive proof records.
@@ -95,6 +100,13 @@ Debug worker. These integration tests compile, link, inspect, and publish
 the device. They do not load or execute either new kernel through HSA; no
 optimized Release-worker, generic dispatch, two-kernel execution, Verus proof,
 or compiler/refinement result is claimed.
+
+Native worker CTests at `ceb0e46` additionally link a descriptor-bearing COV6
+request with two entries and one shared helper, preserve both metadata entries
+and both `.kd` symbols, require AMDHSA ELF ABI version 4, and reject mismatched
+descriptor metadata. This is a native LLVM/LLD boundary test, not archived
+MI300X execution evidence. Canonical `.fe2o3.kd.v1` authentication and
+`ArtifactContainerV1` construction remain downstream.
 
 ## Program Invariants
 

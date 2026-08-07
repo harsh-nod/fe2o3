@@ -203,9 +203,23 @@ turn the foundations below into end-to-end features.
   context-scoped allocation ranges and rejects overlapping mutable or
   mutable/shared aliases. The exact generated vecadd adapter assembles these
   pieces behind its safe API. The general doc-hidden generated-code SPI still
-  exposes an unsafe compiler boundary: backend/linker association of a marker,
-  complete ABI and effects, and executable semantics must be correct before its
-  sealed launch can be treated as safe.
+  exposes an unsafe compiler boundary for legacy profiles: backend/linker
+  association of a marker, complete ABI and effects, and executable semantics
+  must be correct before its sealed launch can be treated as safe. General V3
+  adds the separate fail-closed semantic-witness requirement described below.
+- The bounded general typed V3 foundation accepts by-value `i8`/`u8` through
+  `i64`/`u64`, `f32`/`f64`, shared slices, and genuine trusted
+  `DisjointSlice<T, Index1D>` arguments. The macro emits an expectation-only V3
+  registration while rustc independently reconstructs semantic types, layouts,
+  effects, and physical ABI. The alpha and zeta descriptor fixtures have
+  explicit/complete COV6 kernarg sizes `40/296` and `56/312`. Host binding uses
+  canonical scalar identities and lifetime-branded packed arguments that retain
+  allocation borrows. General V3 authority additionally requires a bounded,
+  identity-bound backend semantic witness. The witness schema, reserved
+  accessors, parser, and rejection tests exist, but the rustc backend does not
+  yet emit the witness host object, so this foundation cannot yet produce a
+  linkable safe V3 application. The exact vecadd V2 token stream and generated
+  API remain the executable compatibility profile.
 - The bounded Worker V2 host path can admit every manifest kernel that shares
   one exact finalized payload and select two distinct compiler-generated marker
   types from that admitted executable identity. Selection rechecks marker,
@@ -269,11 +283,20 @@ turn the foundations below into end-to-end features.
   signature-incompatible callees fail closed. The worker links both kernels and
   the helper into one HSACO using LLVM and LLD library APIs directly, without
   COMGR or command-line linking. Cargo independently checks the exact two-kernel
-  symbol set and the returned raw HSACO, derives publication only from retained
-  inspection evidence, and durably publishes it with an attempt-bound
-  provenance receipt. The durable transaction has adversarial and
-  crash-boundary coverage, while exact retry after the handoff has been
-  consumed is currently limited to the same Cargo process.
+  symbol set and the returned raw HSACO. Descriptor-free COV5 remains a raw
+  compatibility publication; descriptor-bearing COV6 is canonically finalized
+  downstream and the exact finalized bytes are durably published with an
+  attempt-bound provenance receipt. The durable transaction has adversarial,
+  legacy-marker migration, and raw/finalized process crash-recovery coverage.
+  Recovery revalidates the exact journal, plan, admission, route, receipt, and
+  completed attempt before clearing durable state. Fault exits are available
+  only under the non-default `worker-v2-fault-injection-test-only` feature.
+
+  At the worker boundary, COV6 is protocol version 6, LLVM module flag 600, and
+  AMDHSA ELF ABI version 4. Native tests preserve two metadata entries, both
+  `.kd` symbols, and one shared helper in a single deterministic output. The
+  worker does not authenticate `.fe2o3.kd.v1` or construct an
+  `ArtifactContainerV1`; those remain downstream responsibilities.
 
   Compiler identity and origin are not authenticated, no Verus result or
   compiler/machine-code refinement proof is authenticated and bound to this
@@ -297,17 +320,18 @@ turn the foundations below into end-to-end features.
 - General MIR to kernel IR to AMDGPU lowering is not complete; `kernel-ir-v1`
   accepts only the exact fill and vecadd shapes, and the elementwise recognizer
   remains the default emitter.
-- The generated executable typed path supports only
-  `pub fn(&[f32], &[f32], DisjointSlice<f32>)`; general typed signatures,
-  arbitrary rustc layouts, aggregate arguments, and multi-profile generated
-  modules are not implemented. Worker V2 can publish two no-argument test
-  kernels that share one helper in one `gfx942` HSACO, and bounded artifact,
-  host-selection, and HSA symbol-set foundations model that shape. Those layers
-  are not yet composed into generated bindings: no general manifest-to-host
-  generator derives kernarg types and offsets, no generic packer consumes that
-  manifest, and the two Worker V2 kernels are not dispatched. Canonical
-  rustc-derived executable ABI evidence currently covers only the fixed two
-  shared slices and one `DisjointSlice<f32, Index1D>` profile on 64-bit targets.
+- The only generated executable typed path remains
+  `pub fn(&[f32], &[f32], DisjointSlice<f32>)` under the exact vecadd V2
+  compatibility profile. General V3 lexical registration, rustc-semantic
+  scalar/shared-slice/`DisjointSlice` reconstruction, variable COV6 descriptor
+  generation, safe value binding, lifetime-retaining packing, and the backend
+  witness contract are implemented as source/unit foundations. They are not yet
+  composed into a generated application: the backend witness host-object
+  emitter, per-kernel alpha/zeta `Arguments` and `Prepared` wrappers, production
+  two-entry container, and safe two-kernel load/dispatch path are absent.
+  Aggregates, return values, and arbitrary rustc layouts also remain outside V3.
+  The current Worker V2 application fixture still publishes two zero-argument
+  test kernels with one helper; neither kernel is dispatched.
 - The generated contract identity authenticates compiler declarations and the
   exact payload bytes; it does not inspect machine code to prove that declared
   read/read/write effects match every executable memory access. The fixed

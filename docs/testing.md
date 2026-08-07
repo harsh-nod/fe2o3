@@ -105,6 +105,54 @@ must also run the contract's generated-expectation, packing, alias, artifact,
 proof, HSA identity, hidden-kernarg, queue, and lifetime rejection suite.
 Compilation or symbol resolution alone does not pass this gate.
 
+## `ceb0e46` general V3 and Worker V2 source/unit checkpoint
+
+The following commands exercise the implementation landed through
+`ceb0e4675173866a50fb737108e6a9b04827691d`. They are source/unit,
+compile-fail, process-recovery, and native-link boundary checks; none is an
+alpha/zeta GPU execution result:
+
+```text
+cargo test --locked -p fe2o3-macros --all-targets
+cargo test --locked -p fe2o3-host --all-targets --all-features
+cargo test --locked -p rustc-codegen-fe2o3 --lib
+cargo test --locked -p rustc-codegen-fe2o3 --test general_two_kernel_import
+cargo test --locked -p cargo-fe2o3 --test worker_v2_vertical_slice
+cargo test --locked -p cargo-fe2o3 --test worker_v2_vertical_slice \
+  --features worker-v2-fault-injection-test-only
+cargo test --locked -p fe2o3-hsaco-finalize --all-targets --all-features
+cargo test --locked -p fe2o3-artifact-transaction --all-targets --all-features
+scripts/tests/run-parity-snapshot.sh
+ctest --test-dir /absolute/path/to/llvm-link-worker-build --output-on-failure
+```
+
+The non-default Cargo feature is required for the raw/finalized 14-case process
+fault matrix. Without it, the production binary has no fault-switch path. The
+native worker CTests require a build configured against pinned LLVM and LLD,
+but do not require a GPU. Their COV6 case verifies protocol version 6, LLVM
+module flag 600, AMDHSA ELF ABI version 4, two metadata entries, both `.kd`
+symbols, one shared helper, deterministic producer-order output, and
+fail-closed descriptor mismatch handling. `.fe2o3.kd.v1` authentication and
+`ArtifactContainerV1` construction are downstream and are not worker claims.
+
+Strict lint coverage for the Rust portions is:
+
+```text
+cargo clippy --locked -p fe2o3-macros --all-targets --all-features -- -D warnings
+cargo clippy --locked -p fe2o3-host --all-targets --all-features -- -D warnings
+cargo clippy --locked -p rustc-codegen-fe2o3 --all-targets --all-features -- -D warnings
+cargo clippy --locked -p cargo-fe2o3 --all-targets --all-features -- -D warnings
+```
+
+The source/unit checkpoint covers V3 registration and rustc-semantic descriptor
+fixtures, lifetime-retaining packing, semantic-witness parsing and rejection,
+canonical COV6 publication, legacy migration, and restart recovery. It does not
+cover a backend-emitted witness object, generated alpha/zeta wrappers,
+production two-kernel container/load/dispatch, or Verus. The remote MI300X
+evidence documented above remains compile/inspection/publication evidence for
+the older zero-argument Worker V2 fixture. No alpha/zeta hardware execution is
+claimed.
+
 ## Verus proof coverage
 
 Run the two positive vecadd and fill proof harnesses plus all twelve

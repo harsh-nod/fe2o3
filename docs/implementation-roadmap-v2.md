@@ -2,7 +2,7 @@
 
 Status: execution plan for parallel implementation.
 
-Implementation checkpoint: `90b6fe31cbb1d89b82755f194ac7950c4eef4756`.
+Implementation checkpoint: `ceb0e4675173866a50fb737108e6a9b04827691d`.
 
 This roadmap turns [architecture-v2.md](architecture-v2.md),
 [verification-model.md](verification-model.md), the
@@ -93,6 +93,36 @@ evidence. It is not general typed dispatch. The generated safe launch surface
 and reviewed HSA argument initializer still implement only the exact vecadd
 profile, and the second host selection is deliberately inert. No parity row is
 promoted by this checkpoint.
+
+## Implemented Source/Unit Checkpoint: `ceb0e46`
+
+The post-snapshot implementation through
+`ceb0e4675173866a50fb737108e6a9b04827691d` advances G3.1 foundations without
+passing its vertical-slice exit gate:
+
+- `#[kernel(typed)]` preserves the exact vecadd V2 expansion and emits an
+  expectation-only V3 registration for bounded scalar, shared-slice, and
+  `DisjointSlice` signatures outside that compatibility profile;
+- rustc validates the V3 registration against semantic primitive types and
+  genuine trusted `DisjointSlice<T, Index1D>` identities, then derives variable
+  physical layouts and COV6 descriptors. The alpha and zeta fixtures are
+  `40/296` and `56/312` explicit/complete kernarg bytes;
+- host argument binding validates canonical scalar and slice identities,
+  retains allocation borrows in lifetime-branded packed values, and requires a
+  backend-issued semantic witness before general V3 authority can exist;
+- the witness wire contract, reserved symbols, parser, and fail-closed tests are
+  implemented, but the rustc backend witness host-object emitter is not;
+- Worker V2 canonically finalizes descriptor-bearing COV6 before publication,
+  preserves descriptor-free COV5 compatibility, and recovers exact raw and
+  finalized publications across process crashes with legacy-marker migration;
+  and
+- native worker tests preserve two COV6 entries, both `.kd` symbols, and one
+  shared helper. `.fe2o3.kd.v1` authentication and artifact-container
+  construction remain downstream.
+
+These are source/unit and native-worker boundary results. There is no generated
+alpha/zeta wrapper, production two-kernel container/load/dispatch, alpha/zeta
+MI300X execution, or Verus result at this checkpoint. No parity row is Complete.
 
 ## G0: Baseline and Safety Boundary
 
@@ -244,7 +274,7 @@ G2 passes when:
 
 ### G3.1: General typed multi-kernel dispatch
 
-This is the next critical vertical slice. It replaces the exact vecadd-only
+This remains the next critical vertical slice. It replaces the exact vecadd-only
 packing and dispatch bridge with one path generated from each admitted kernel
 entry. Its normative scope and authority transitions are frozen in the
 [general typed dispatch V1 contract](general-typed-dispatch-v1.md): by-value
@@ -262,6 +292,15 @@ Parallel ownership is split at frozen records:
 | G3.1-C: host packing | generated argument views, checked offset/alignment writes, prepared geometry, retained borrows | Kernel-specific packed arguments that cannot be exchanged |
 | G3.1-D: HSA dispatch | multi-symbol resolution, reviewed COV6 hidden arguments, queue submission, completion, unload ordering | Generic synchronous dispatch for an admitted kernel descriptor |
 | G3.1-E: adversarial tests | UI tests, mutation tests, CPU oracles, MI300X execution evidence | Reproducible positive and fail-closed evidence |
+
+Progress at `ceb0e46` is deliberately partial. G3.1-A has V3 registration,
+rustc-semantic reconstruction, and alpha/zeta descriptor fixtures. G3.1-C has
+typed scalar/slice binding, retained packing lifetimes, and the semantic-witness
+consumer contract. Worker V2 contributes canonical COV6 publication and restart
+recovery to G3.1-B, while native worker tests cover its COV6 link boundary.
+Still missing are the backend witness emitter, production two-entry container,
+generated per-kernel wrappers, checked subranges and equal-length admission,
+one-executable alpha/zeta dispatch, and the G3.1-E MI300X evidence.
 
 The compiler ABI descriptor is the integration boundary. Runtime code may
 compare an untrusted manifest with a compiler-generated descriptor, but it may

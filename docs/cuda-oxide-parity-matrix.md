@@ -24,17 +24,16 @@ The fe2o3 current-state column is based on commit
 `37eee8f15b985190449ece7a93f4ab386aa3cb18`.
 <!-- parity-status:baseline:end -->
 
-Post-snapshot update: commit
-`90b6fe31cbb1d89b82755f194ac7950c4eef4756` extends the bounded `gfx942`
-Worker V2 path through a two-kernel compiler, artifact, proof-binding, host
-selection, and HSA lifecycle spine without changing any row to Complete. One
-external Cargo fixture declares two kernel roots and one shared helper. The
-frontend assigns that helper one canonical identity, Kernel IR lowering checks
-both internal calls against its exact signature, and AMDGPU lowering emits the
-helper once. The sealed Cargo backend invokes the direct LLVM/LLD worker and
-publishes one independently inspected HSACO containing exactly both entries.
-The worker calls LLVM and LLD library APIs directly and does not use COMGR or
-command-line linking.
+Post-snapshot updates through
+`ceb0e4675173866a50fb737108e6a9b04827691d` extend the bounded `gfx942`
+Worker V2 and general typed G3.1 foundations without changing any row to
+Complete. The earlier `90b6fe31cbb1d89b82755f194ac7950c4eef4756`
+checkpoint carries the archived remote compile/publication evidence: one
+external Cargo fixture declares two kernel roots and one shared helper, the
+frontend and Kernel IR path retain one exact helper identity, and the sealed
+Cargo backend invokes the direct LLVM/LLD worker to publish one inspected HSACO
+containing both entries. The worker uses LLVM and LLD library APIs directly and
+does not use COMGR or command-line linking.
 
 The existing V1 artifact wire format now has a strict `gfx942` profile with two
 canonically ordered entries over one digest-validated native payload. Each
@@ -46,19 +45,32 @@ executable substitution. The reviewed HSA adapter can resolve a fixed set of
 distinct native symbols and retains them in a non-clone value that borrows the
 loaded executable, so safe Rust cannot unload it while the set is live.
 
-The evidence remains bounded. The MI300X Worker V2 test compiles, inspects, and
-publishes the two-kernel `gfx942` code object but does not dispatch it. The
-second host selection is deliberately inert, multi-symbol HSA tests establish
-identity and lifetime rather than a generated typed ABI, and dispatch still
-uses the exact vecadd kernarg profile. General manifest-derived packing, safe
-dispatch of both entries, asynchronous composition, broad Rust signatures,
-and machine-code refinement remain incomplete. The next bounded scope and exit
-gate are defined by the
-[general typed dispatch V1 contract](general-typed-dispatch-v1.md). The
-generated dashboard and status blocks remain the older pinned evidence snapshot
-until their separate evidence-admission lane updates them.
+The post-snapshot source/unit work adds expectation-only V3 registration for
+bounded scalars, shared slices, and `DisjointSlice`; rustc-semantic type/layout
+reconstruction; alpha `40/296` and zeta `56/312` COV6 descriptor fixtures;
+lifetime-branded host packing; and a backend-issued semantic-witness contract.
+The witness host-object emitter is not implemented, so no linkable safe V3
+application follows. Worker V2 now canonically finalizes descriptor-bearing
+COV6 before durable publication and recovers exact raw/finalized state across
+process crashes with legacy-marker migration. Native worker tests preserve two
+COV6 metadata entries, both `.kd` symbols, and one shared helper, while
+`.fe2o3.kd.v1` authentication and artifact-container construction remain
+downstream.
 
-At `90b6fe3` fe2o3 also has a HIP runtime, explicit unsafe raw module and launch
+The evidence remains bounded. The archived MI300X Worker V2 test compiles,
+inspects, and publishes the older two-kernel `gfx942` fixture but does not
+dispatch it. The second host selection is deliberately inert, multi-symbol HSA
+tests establish identity and lifetime rather than a generated typed ABI, and
+safe execution still uses the exact vecadd V2 profile. No generated alpha/zeta
+wrapper, production two-kernel container/load/dispatch, alpha/zeta hardware
+execution, or Verus result exists. The next bounded scope and exit gate are
+defined by the
+[general typed dispatch V1 contract](general-typed-dispatch-v1.md). The
+status TSV and generated status blocks remain the older pinned evidence snapshot
+until a separately archived evidence-admission lane updates them; individual
+dashboard source/unit declarations may name landed descendant commits.
+
+At `ceb0e46` fe2o3 also has a HIP runtime, explicit unsafe raw module and launch
 paths, versioned kernel registration, reachable MIR collection, bounded rustc
 frontend and general layout records, a canonical target-neutral kernel IR and
 verifier, concrete generic-helper collection, semantic constants,
@@ -71,7 +83,7 @@ generated `KernelMarkerV1` types, exact loaded module/function authority, host
 argument-alias admission, bounded HSACO inspection/finalization, event-backed
 asynchronous transfer lifetimes, transactional artifact publication, bounded
 Verus driver records, and paired Verus harnesses.
-`#[kernel(typed)]` still connects only one exact
+`#[kernel(typed)]` still connects only one exact executable
 `pub fn(&[f32], &[f32], DisjointSlice<f32>)` profile to a backend-generated,
 canonical embedded artifact and safe load, prepare, synchronous launch, and
 non-escapable scoped launch API. That narrow launch path authenticates canonical
@@ -125,7 +137,7 @@ required operand and clobber surface. Once the authoritative status TSV is
 updated by its owning lane, the expected projection is 0 Complete, 50 Partial,
 32 Missing, and 12 N/A normative rows, plus 0 Complete, 11 Partial, and 4
 Missing supplemental rows. This narrative does not move the generated status
-or dashboard snapshot to `90b6fe3`; those changes require the full
+snapshot to the post-snapshot implementation; that requires the full archived
 evidence-generation gate.
 
 ## Gates
@@ -172,9 +184,11 @@ The detailed dependencies and exit criteria are in
   offsets, widths, alignments, address spaces, and effects. The bounded
   `GeneratedArgumentPackingPlanV1` rejects omission, duplication, reordering,
   wrong kind/width/access/address space, pointer-width mismatch, and
-  cross-kernel values. Safe generated value binding and launch integration are
-  still limited to exact profiles; structs, closures, return values, and the
-  full acceptance target are not complete.
+  cross-kernel values. General V3 binding now accepts canonical scalar and slice
+  identities and retains allocation borrows in packed values. The backend
+  semantic-witness emitter and generated launch integration are still absent;
+  structs, closures, return values, and the full acceptance target are not
+  complete.
 - Rows 17 and 20: authenticated control-flow records, canonical successor and
   block-argument models, reducible-CFG validation, and bounded MIR branch/loop
   fixtures exist. The compiler rejects malformed predecessor, block-argument,
@@ -203,13 +217,16 @@ The detailed dependencies and exit criteria are in
   helper's exact signature. The real-source Worker V2 fixture emits one helper
   definition and two entries into one `gfx942` HSACO. For the exact vecadd
   signature, `#[kernel(typed)]` emits a public generated host module and a V2
-  typed registration. Full crate/kernel binding IDs are derived independently
-  by the Cargo wrapper, macro, and backend and qualify private host/accessor
-  symbols; a real two-rlib same-name link test rejects silent archive
-  coalescing. The backend also validates the normalized monomorphized signature
-  and rejects a token-level `type f32 = f64` spoof. The association is still a
-  trusted compiler contract, general signatures and cross-crate finalization
-  are absent, and only the exact vecadd profile has a generated safe launch.
+  typed registration. Other bounded scalar/slice signatures emit
+  expectation-only V3 registrations that rustc checks against semantic
+  primitive and trusted `DisjointSlice<T, Index1D>` identities. Full
+  crate/kernel binding IDs are derived independently by the Cargo wrapper,
+  macro, and backend and qualify private host/accessor symbols; a real two-rlib
+  same-name link test rejects silent archive coalescing. The backend rejects
+  token aliases and local trusted-type lookalikes. V3 requires a backend-issued
+  semantic witness, but its host-object emitter is not yet implemented. General
+  application bindings and cross-crate finalization are absent, and only the
+  exact vecadd profile has a generated safe launch.
 - Rows 35-38 and 41-43: one-source builds, AMDGPU LLVM/HSACO sidecars, diagnostic
   dumps, bounded HSACO inspection, a read-only `cargo fe2o3 inspect` command,
   complete external-project build/run orchestration, project-local cleanup, and
@@ -229,8 +246,10 @@ The detailed dependencies and exit criteria are in
   with no COMGR or command-line linker dependency. In the post-snapshot
   `gfx942` Worker V2 slice, Cargo consumes an exact compiler-produced
   symbol-role manifest, requires byte-identical output from two worker
-  executions, independently inspects the raw HSACO, and durably publishes it
-  under the originating build attempt with a provenance receipt. The path now
+  executions, and independently inspects the raw HSACO. Descriptor-bearing COV6
+  is canonically finalized before durable publication under the originating
+  build attempt; raw COV5 remains a compatibility path. Exact restart recovery
+  covers both publication kinds and legacy migration. The path now
   covers two kernel roots with one canonical shared helper and feeds a strict
   two-entry artifact profile with per-kernel proof bindings. Compiler origin
   authentication and compiler-to-machine-code refinement remain outside the
@@ -301,10 +320,11 @@ The detailed dependencies and exit criteria are in
   the `gfx942` two-entry profile binds both entries to one payload and host
   admission can select either compiler-generated marker without exchanging
   ABI, effects, launch, target, physical-layout, or executable identities. The
-  second selection is inert and has no generated argument packer or dispatch
-  method. General typed signatures, arbitrary Rust layouts, machine-code effect
-  verification, and safe multi-kernel execution are incomplete, so both rows
-  remain Partial.
+  second selection remains inert. General V3 now has semantic scalar/slice
+  descriptors and lifetime-retaining argument-packing foundations, but no
+  backend witness emitter, generated per-kernel wrapper, or composed dispatch
+  method. Arbitrary Rust layouts, machine-code effect verification, and safe
+  multi-kernel execution are incomplete, so both rows remain Partial.
 - Row 80: the general `launch!` macro remains an explicit unsafe raw-ABI escape
   hatch with compile-fail coverage. The generated vecadd module instead exposes
   safe `prepare(...).launch(...)`; the example contains no raw parameter pack,
@@ -323,7 +343,8 @@ The detailed dependencies and exit criteria are in
   Partial.
 - Supplemental rows S01 and S02: the V1 container, bundle index, direct-link
   evidence, descriptor finalization, transactional publication, and durable
-  recovery records form a canonical bounded artifact path. The `gfx942`
+  raw/finalized crash-recovery records form a canonical bounded artifact path.
+  The `gfx942`
   profile carries two independently identified entries and two
   non-substitutable proof bindings over one digest-validated native payload.
   Descriptor-pinned snapshots retain finalized IR and HSACO in one generation

@@ -124,6 +124,27 @@ scripts/run-parity-snapshot.sh verify-only \
   --shard Q3 --shard Q4
 ```
 
+The optional gfx942 compile shard requires all four Worker V2 identities. The
+runner validates them, includes them in the canonical dry-run plan and result
+record, and passes only those exact values through its empty environment:
+
+```bash
+scripts/run-parity-snapshot.sh run \
+  --repo "$PWD" \
+  --archive-root /evidence/snapshot-001 \
+  --gfx942-compile \
+  --llvm-link-worker /absolute/path/to/fe2o3-llvm-link-worker \
+  --llvm-link-worker-build-id fe2o3-worker-v1-sha256-<digest> \
+  --llvm-build-id rocm-7.2.4 \
+  --llvm-as /absolute/path/to/llvm-as
+```
+
+Ambient `FE2O3_LLVM_LINK_WORKER`, `FE2O3_LLVM_LINK_WORKER_BUILD_ID`,
+`FE2O3_LLVM_BUILD_ID`, and `FE2O3_LLVM_AS` values are ignored. Missing,
+malformed, non-executable, or inconsistent options fail before any shard runs.
+The compile shard records compilation and Worker V2 publication only; it is not
+hardware execution evidence.
+
 The gfx942 hardware lane requires the exact vecadd HSACO to be a regular,
 non-symlink file inside the archive. Its size and digest are bound as a record
 artifact, while its absolute path is recorded in the command environment:
