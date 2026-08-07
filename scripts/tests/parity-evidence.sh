@@ -213,6 +213,138 @@ expect_failure unknown_option 'unknown collect option: --environment' \
 expect_failure unknown_command 'unknown command: publish' \
   bash "${EVIDENCE_SCRIPT}" publish
 
+# Result-record V1 executes only from a clean detached checkout and binds the
+# exact scrubbed invocation to durable logs, tools, and declared artifacts.
+readonly RESULT_REPO="${TEST_ROOT}/result-repo"
+readonly RESULT_ARCHIVE="${TEST_ROOT}/result-archive"
+readonly BASH_BIN="$(realpath -- "$(command -v bash)")"
+readonly GIT_BIN="$(realpath -- "$(command -v git)")"
+git init -q "${RESULT_REPO}"
+git -C "${RESULT_REPO}" config user.email evidence@example.invalid
+git -C "${RESULT_REPO}" config user.name 'Evidence Test'
+printf '%s\n' tracked >"${RESULT_REPO}/tracked.txt"
+git -C "${RESULT_REPO}" add tracked.txt
+git -C "${RESULT_REPO}" commit -qm initial
+readonly RESULT_BRANCH="$(git -C "${RESULT_REPO}" symbolic-ref --short HEAD)"
+git -C "${RESULT_REPO}" checkout -q --detach
+mkdir -p "${RESULT_ARCHIVE}/artifacts"
+
+bash "${EVIDENCE_SCRIPT}" record \
+  --repo "${RESULT_REPO}" \
+  --archive-root "${RESULT_ARCHIVE}" \
+  --record records/valid.tsv \
+  --log logs/valid.log \
+  --env "OUTPUT_PATH=${RESULT_ARCHIVE}/artifacts/output.bin" \
+  --tool "git=${GIT_BIN}" \
+  --artifact output=artifacts/output.bin \
+  -- "${BASH_BIN}" -c \
+  'printf "%s" artifact-v1 >"${OUTPUT_PATH}"; printf "%s\n" log-line'
+bash "${EVIDENCE_SCRIPT}" verify-record \
+  --repo "${RESULT_REPO}" \
+  --archive-root "${RESULT_ARCHIVE}" \
+  records/valid.tsv
+
+mkdir -p "${TEST_ROOT}/deterministic-a" "${TEST_ROOT}/deterministic-b"
+for archive in "${TEST_ROOT}/deterministic-a" "${TEST_ROOT}/deterministic-b"; do
+  bash "${EVIDENCE_SCRIPT}" record \
+    --repo "${RESULT_REPO}" --archive-root "${archive}" \
+    --record records/same.tsv --log logs/same.log -- \
+    "${BASH_BIN}" -c 'printf "%s\n" deterministic'
+done
+cmp -- "${TEST_ROOT}/deterministic-a/records/same.tsv" \
+  "${TEST_ROOT}/deterministic-b/records/same.tsv"
+cmp -- "${TEST_ROOT}/deterministic-a/logs/same.log" \
+  "${TEST_ROOT}/deterministic-b/logs/same.log"
+
+grep -F $'git_detached\ttrue' "${RESULT_ARCHIVE}/records/valid.tsv" >/dev/null
+grep -F $'git_clean_before\ttrue' "${RESULT_ARCHIVE}/records/valid.tsv" >/dev/null
+grep -F $'git_clean_after\ttrue' "${RESULT_ARCHIVE}/records/valid.tsv" >/dev/null
+grep -F $'environment\tLC_ALL\t43' "${RESULT_ARCHIVE}/records/valid.tsv" >/dev/null
+grep -F $'exit_status\t0' "${RESULT_ARCHIVE}/records/valid.tsv" >/dev/null
+grep -E $'^record_sha256\t[0-9a-f]{64}$' \
+  "${RESULT_ARCHIVE}/records/valid.tsv" >/dev/null
+
+cp -- "${RESULT_ARCHIVE}/records/valid.tsv" \
+  "${RESULT_ARCHIVE}/records/tampered-record.tsv"
+awk -F '\t' 'BEGIN { OFS = "\t" } $1 == "argv" && $2 == "0002" { $3 = "61" } { print }' \
+  "${RESULT_ARCHIVE}/records/tampered-record.tsv" \
+  >"${RESULT_ARCHIVE}/records/tampered-record.tmp"
+mv -- "${RESULT_ARCHIVE}/records/tampered-record.tmp" \
+  "${RESULT_ARCHIVE}/records/tampered-record.tsv"
+expect_failure tampered_record 'result record digest mismatch' \
+  bash "${EVIDENCE_SCRIPT}" verify-record \
+  --repo "${RESULT_REPO}" --archive-root "${RESULT_ARCHIVE}" \
+  records/tampered-record.tsv
+
+printf '%s\n' tampered >>"${RESULT_ARCHIVE}/logs/valid.log"
+expect_failure tampered_log 'recorded log size mismatch' \
+  bash "${EVIDENCE_SCRIPT}" verify-record \
+  --repo "${RESULT_REPO}" --archive-root "${RESULT_ARCHIVE}" records/valid.tsv
+printf '%s\n' log-line >"${RESULT_ARCHIVE}/logs/valid.log"
+
+printf '%s' tampered >"${RESULT_ARCHIVE}/artifacts/output.bin"
+expect_failure tampered_artifact 'recorded artifact size mismatch: output' \
+  bash "${EVIDENCE_SCRIPT}" verify-record \
+  --repo "${RESULT_REPO}" --archive-root "${RESULT_ARCHIVE}" records/valid.tsv
+printf '%s' artifact-v1 >"${RESULT_ARCHIVE}/artifacts/output.bin"
+
+cp -- "${RESULT_ARCHIVE}/records/valid.tsv" \
+  "${RESULT_ARCHIVE}/records/mismatched-digest.tsv"
+awk -F '\t' 'BEGIN { OFS = "\t" } $1 == "log_sha256" { $2 = sprintf("%064d", 0) } { print }' \
+  "${RESULT_ARCHIVE}/records/mismatched-digest.tsv" \
+  >"${RESULT_ARCHIVE}/records/mismatched-digest.tmp"
+mv -- "${RESULT_ARCHIVE}/records/mismatched-digest.tmp" \
+  "${RESULT_ARCHIVE}/records/mismatched-digest.tsv"
+expect_failure mismatched_digest 'recorded log digest mismatch' \
+  bash "${EVIDENCE_SCRIPT}" verify-record \
+  --repo "${RESULT_REPO}" --archive-root "${RESULT_ARCHIVE}" \
+  records/mismatched-digest.tsv
+
+mv -- "${RESULT_ARCHIVE}/logs/valid.log" "${RESULT_ARCHIVE}/logs/valid.saved"
+expect_failure missing_log 'archive entry is missing or not a regular file: logs/valid.log' \
+  bash "${EVIDENCE_SCRIPT}" verify-record \
+  --repo "${RESULT_REPO}" --archive-root "${RESULT_ARCHIVE}" records/valid.tsv
+mv -- "${RESULT_ARCHIVE}/logs/valid.saved" "${RESULT_ARCHIVE}/logs/valid.log"
+
+mv -- "${RESULT_ARCHIVE}/artifacts/output.bin" \
+  "${RESULT_ARCHIVE}/artifacts/output.saved"
+expect_failure missing_artifact \
+  'archive entry is missing or not a regular file: artifacts/output.bin' \
+  bash "${EVIDENCE_SCRIPT}" verify-record \
+  --repo "${RESULT_REPO}" --archive-root "${RESULT_ARCHIVE}" records/valid.tsv
+mv -- "${RESULT_ARCHIVE}/artifacts/output.saved" \
+  "${RESULT_ARCHIVE}/artifacts/output.bin"
+
+expect_failure failed_command 'command failed with exit status 7' \
+  bash "${EVIDENCE_SCRIPT}" record \
+  --repo "${RESULT_REPO}" --archive-root "${RESULT_ARCHIVE}" \
+  --record records/failed.tsv --log logs/failed.log -- \
+  "${BASH_BIN}" -c 'printf "%s\n" failure; exit 7'
+expect_failure failed_record 'exit_status must be exactly 0 for passing evidence' \
+  bash "${EVIDENCE_SCRIPT}" verify-record \
+  --repo "${RESULT_REPO}" --archive-root "${RESULT_ARCHIVE}" records/failed.tsv
+
+printf '%s\n' dirty >"${RESULT_REPO}/untracked.txt"
+expect_failure dirty_checkout 'repository must be clean before command' \
+  bash "${EVIDENCE_SCRIPT}" record \
+  --repo "${RESULT_REPO}" --archive-root "${RESULT_ARCHIVE}" \
+  --record records/dirty.tsv --log logs/dirty.log -- "${BASH_BIN}" -c true
+rm -f -- "${RESULT_REPO}/untracked.txt"
+
+expect_failure dirtied_by_command 'repository must be clean after command' \
+  bash "${EVIDENCE_SCRIPT}" record \
+  --repo "${RESULT_REPO}" --archive-root "${RESULT_ARCHIVE}" \
+  --record records/dirtied.tsv --log logs/dirtied.log -- \
+  "${BASH_BIN}" -c 'printf "%s\n" dirty >command-output.txt'
+rm -f -- "${RESULT_REPO}/command-output.txt"
+
+git -C "${RESULT_REPO}" checkout -q "${RESULT_BRANCH}"
+expect_failure attached_checkout 'repository must be detached before command' \
+  bash "${EVIDENCE_SCRIPT}" record \
+  --repo "${RESULT_REPO}" --archive-root "${RESULT_ARCHIVE}" \
+  --record records/attached.tsv --log logs/attached.log -- "${BASH_BIN}" -c true
+git -C "${RESULT_REPO}" checkout -q --detach
+
 bash -n "${EVIDENCE_SCRIPT}"
 bash -n "${BASH_SOURCE[0]}"
 if command -v shellcheck >/dev/null 2>&1; then
