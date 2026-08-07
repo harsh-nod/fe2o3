@@ -1111,23 +1111,55 @@ pub(crate) mod tests {
         abi: AbiLayout,
         launch: LaunchContract,
     ) -> Fixture {
+        make_two_hsaco_fixture_with_kernel_ids_and_abis(
+            seed,
+            payload_bytes,
+            architecture,
+            first_logical_name,
+            first_export_symbol,
+            first_kernel,
+            abi.clone(),
+            second_logical_name,
+            second_export_symbol,
+            second_kernel,
+            abi,
+            launch,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn make_two_hsaco_fixture_with_kernel_ids_and_abis(
+        seed: u8,
+        payload_bytes: Vec<u8>,
+        architecture: &str,
+        first_logical_name: &str,
+        first_export_symbol: &str,
+        first_kernel: DigestBytes,
+        first_abi: AbiLayout,
+        second_logical_name: &str,
+        second_export_symbol: &str,
+        second_kernel: DigestBytes,
+        second_abi: AbiLayout,
+        launch: LaunchContract,
+    ) -> Fixture {
         let payload =
             CodeObjectPayload::from_bytes(DigestAlgorithm::Sha256, payload_bytes).unwrap();
         let payload_identity = payload.digest();
-        let kernel = |kernel_id, logical_name: &str, export_symbol: &str, identity_seed| {
-            KernelEntry::new(
-                kernel_id,
-                name(logical_name),
-                name(export_symbol),
-                repeated_digest(identity_seed),
-                repeated_digest(identity_seed.wrapping_add(0x10)),
-                payload_identity.bytes(),
-                vec![],
-                launch.clone(),
-                abi.clone(),
-            )
-            .unwrap()
-        };
+        let kernel =
+            |kernel_id, logical_name: &str, export_symbol: &str, identity_seed, abi: AbiLayout| {
+                KernelEntry::new(
+                    kernel_id,
+                    name(logical_name),
+                    name(export_symbol),
+                    repeated_digest(identity_seed),
+                    repeated_digest(identity_seed.wrapping_add(0x10)),
+                    payload_identity.bytes(),
+                    vec![],
+                    launch.clone(),
+                    abi,
+                )
+                .unwrap()
+            };
         let manifest = ManifestV1::new(
             CompilerIdentity::new(text("rustc"), text("1.94.0")),
             ToolIdentity::new(text("fe2o3"), text("0.1.0")),
@@ -1153,12 +1185,14 @@ pub(crate) mod tests {
                     first_logical_name,
                     first_export_symbol,
                     seed.wrapping_add(0x40),
+                    first_abi,
                 ),
                 kernel(
                     second_kernel,
                     second_logical_name,
                     second_export_symbol,
                     seed.wrapping_add(0x41),
+                    second_abi,
                 ),
             ],
         )
@@ -1521,6 +1555,86 @@ pub(crate) mod tests {
         )
     }
 
+    pub(crate) fn alpha_zeta_cov6_hsaco_for_target(target: &str) -> TestHsaco {
+        let private_segment_fixed_size: u32 = if target.starts_with("gfx94") { 0 } else { 16 };
+        let slice_arguments = |name: &str, offset: u64, access: &'static str| {
+            vec![
+                test_explicit_argument(
+                    &format!("{name}_ptr"),
+                    offset,
+                    8,
+                    "global_buffer",
+                    Some("global"),
+                    Some(8),
+                    Some(access),
+                    Some(access),
+                ),
+                test_explicit_argument(
+                    &format!("{name}_len"),
+                    offset + 8,
+                    8,
+                    "by_value",
+                    None,
+                    None,
+                    None,
+                    None,
+                ),
+            ]
+        };
+        let mut alpha_arguments = vec![test_explicit_argument(
+            "scale", 0, 4, "by_value", None, None, None, None,
+        )];
+        alpha_arguments.extend(slice_arguments("input", 8, "read_only"));
+        alpha_arguments.extend(slice_arguments("output", 24, "read_write"));
+
+        let mut zeta_arguments = slice_arguments("a", 0, "read_only");
+        zeta_arguments.extend(slice_arguments("b", 16, "read_only"));
+        zeta_arguments.push(test_explicit_argument(
+            "bias", 32, 4, "by_value", None, None, None, None,
+        ));
+        zeta_arguments.extend(slice_arguments("output", 40, "read_write"));
+
+        let metadata = test_metadata(
+            target,
+            vec![
+                test_metadata_kernel_with_wavefront(
+                    "alpha",
+                    "alpha.kd",
+                    alpha_arguments,
+                    296,
+                    8,
+                    0,
+                    private_segment_fixed_size,
+                    Some([256, 1, 1]),
+                    [None; 3],
+                    false,
+                    if target.starts_with("gfx94") { 64 } else { 32 },
+                ),
+                test_metadata_kernel_with_wavefront(
+                    "zeta",
+                    "zeta.kd",
+                    zeta_arguments,
+                    312,
+                    8,
+                    0,
+                    private_segment_fixed_size,
+                    Some([256, 1, 1]),
+                    [None; 3],
+                    false,
+                    if target.starts_with("gfx94") { 64 } else { 32 },
+                ),
+            ],
+        );
+        binding_hsaco_with_kernel_layouts(
+            metadata,
+            target,
+            0,
+            private_segment_fixed_size,
+            ("alpha", "alpha.kd", 296),
+            Some(("zeta", "zeta.kd", 312)),
+        )
+    }
+
     pub(crate) fn typed_vecadd_two_kernel_hsaco_for_target(target: &str) -> TestHsaco {
         let private_segment_fixed_size: u32 = if target.starts_with("gfx94") { 0 } else { 16 };
         let mut arguments = Vec::new();
@@ -1826,6 +1940,25 @@ pub(crate) mod tests {
         first_kernel: (&str, &str),
         second_kernel: Option<(&str, &str)>,
     ) -> TestHsaco {
+        binding_hsaco_with_kernel_layouts(
+            document,
+            target,
+            static_shared_memory_bytes,
+            private_segment_fixed_size,
+            (first_kernel.0, first_kernel.1, kernarg_segment_size),
+            second_kernel.map(|(entry, descriptor)| (entry, descriptor, kernarg_segment_size)),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn binding_hsaco_with_kernel_layouts(
+        document: Value,
+        target: &str,
+        static_shared_memory_bytes: u32,
+        private_segment_fixed_size: u32,
+        first_kernel: (&str, &str, u32),
+        second_kernel: Option<(&str, &str, u32)>,
+    ) -> TestHsaco {
         const PROGRAM_HEADER_BYTES: usize = 56;
         const PROGRAM_COUNT: usize = 2;
         const SECTION_COUNT: usize = 7;
@@ -1867,7 +2000,7 @@ pub(crate) mod tests {
         strings.push(0);
         let other_name_index = strings.len() as u32;
         strings.extend_from_slice(b"other\0");
-        let second_name_indices = second_kernel.map(|(entry, descriptor)| {
+        let second_name_indices = second_kernel.map(|(entry, descriptor, _)| {
             let entry_index = strings.len() as u32;
             strings.extend_from_slice(entry.as_bytes());
             strings.push(0);
@@ -2056,6 +2189,11 @@ pub(crate) mod tests {
                 descriptor_offset + 4,
                 private_segment_fixed_size,
             );
+            let kernarg_segment_size = if index == 0 {
+                first_kernel.2
+            } else {
+                second_kernel.unwrap().2
+            };
             write_test_u32(&mut bytes, descriptor_offset + 8, kernarg_segment_size);
             write_test_i64(
                 &mut bytes,

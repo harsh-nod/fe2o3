@@ -16,7 +16,8 @@ mod worker_v2_bundle_admission;
 #[doc(hidden)]
 pub mod __hardware_test {
     pub use crate::worker_v2_bundle_admission::tests::{
-        TestDirectory, admitted_hardware_for_lifecycle_test,
+        TestDirectory, admitted_alpha_zeta_cov6_hardware_for_lifecycle_test,
+        admitted_hardware_for_lifecycle_test,
     };
 }
 

@@ -862,10 +862,11 @@ pub(crate) mod tests {
 
     use super::*;
     use crate::published_direct_link::tests::{
-        Fixture, alpha_cov6_hsaco_for_target, make_observed_for, make_single_hsaco_fixture,
-        make_single_hsaco_fixture_with_kernel_id,
+        Fixture, alpha_cov6_hsaco_for_target, alpha_zeta_cov6_hsaco_for_target, make_observed_for,
+        make_single_hsaco_fixture, make_single_hsaco_fixture_with_kernel_id,
         make_single_hsaco_fixture_with_names_and_kernel_id, make_two_hsaco_fixture_with_kernel_ids,
-        physical_test_abi, typed_vecadd_hsaco_for_target, typed_vecadd_two_kernel_hsaco_for_target,
+        make_two_hsaco_fixture_with_kernel_ids_and_abis, physical_test_abi,
+        typed_vecadd_hsaco_for_target, typed_vecadd_two_kernel_hsaco_for_target,
     };
     use fe2o3_artifact_transaction::{
         AtomicPublicationIdentityV1, BuildInvocation, BuildSession, CanonicalLinkRequestIdentityV1,
@@ -1043,6 +1044,42 @@ pub(crate) mod tests {
             kernel_id,
         );
         finish_admission_fixture(seed, 0, fixture, hsaco.bytes.clone(), hsaco.bytes)
+    }
+
+    fn renamed_abi_field(template: &AbiField, name: &str, offset: u64) -> AbiField {
+        AbiField::new(
+            Name::new(name).unwrap(),
+            offset,
+            template.size(),
+            template.alignment(),
+            template.kind(),
+            template.mutability(),
+            template.access(),
+            template.address_space(),
+            template.type_identity(),
+            template.ownership(),
+            template.alias_class(),
+        )
+        .unwrap()
+    }
+
+    fn zeta_cov6_test_abi() -> AbiLayout {
+        let alpha = crate::generated_alpha_zeta_cov6::alpha_cov6_test_abi();
+        let scalar = &alpha.fields()[0];
+        let shared_slice = &alpha.fields()[1];
+        let disjoint_slice = &alpha.fields()[2];
+        AbiLayout::new(
+            56,
+            8,
+            PointerWidth::Bits64,
+            vec![
+                renamed_abi_field(shared_slice, "a", 0),
+                renamed_abi_field(shared_slice, "b", 16),
+                renamed_abi_field(scalar, "bias", 32),
+                renamed_abi_field(disjoint_slice, "output", 40),
+            ],
+        )
+        .unwrap()
     }
 
     fn finish_admission_fixture(
@@ -1378,6 +1415,167 @@ pub(crate) mod tests {
             selected_kernel_index: parts.selected_kernel_index,
         };
         (admission, directory)
+    }
+
+    /// Admits one exact finalized gfx942 COV6 payload containing both generated roles.
+    #[allow(dead_code)]
+    pub fn admitted_alpha_zeta_cov6_hardware_for_lifecycle_test(
+        seed: u8,
+        finalized_bytes: Vec<u8>,
+        alpha_marker_binding_identity: [u8; 32],
+        zeta_marker_binding_identity: [u8; 32],
+        observed: &ObservedContext,
+    ) -> (AdmittedFinalizedWorkerV2BundleV1, TestDirectory) {
+        let alpha_abi = crate::generated_alpha_zeta_cov6::alpha_cov6_test_abi();
+        let zeta_abi = zeta_cov6_test_abi();
+        let launch = crate::generated_alpha_zeta_cov6::alpha_cov6_test_launch();
+        let alpha_kernel = derive_generated_kernel_identity_v2(
+            MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
+            alpha_marker_binding_identity,
+            "alpha",
+            "alpha",
+            repeated_digest(seed.wrapping_add(0x40)),
+            repeated_digest(seed.wrapping_add(0x50)),
+            &alpha_abi,
+            &launch,
+        );
+        let zeta_kernel = derive_generated_kernel_identity_v2(
+            MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
+            zeta_marker_binding_identity,
+            "zeta",
+            "zeta",
+            repeated_digest(seed.wrapping_add(0x41)),
+            repeated_digest(seed.wrapping_add(0x51)),
+            &zeta_abi,
+            &launch,
+        );
+        let fixture = make_two_hsaco_fixture_with_kernel_ids_and_abis(
+            seed,
+            finalized_bytes.clone(),
+            "gfx942",
+            "alpha",
+            "alpha",
+            alpha_kernel,
+            alpha_abi,
+            "zeta",
+            "zeta",
+            zeta_kernel,
+            zeta_abi,
+            launch,
+        );
+        let input =
+            finish_admission_fixture(seed, 0, fixture, finalized_bytes.clone(), finalized_bytes);
+        let validated = input.fixture.validated();
+        let selected_kernel = selected(&input.fixture);
+        let parts = admit_parts(
+            input.attempt,
+            &input.exact_bytes,
+            input.publication,
+            &validated,
+            &input.fixture.container,
+            selected_kernel,
+            observed,
+        )
+        .unwrap();
+        let admission = AdmittedFinalizedWorkerV2BundleV1 {
+            prepared: RetainedWorkerV2PreparationV1::Test {
+                attempt: input.attempt,
+                exact_bytes: input.exact_bytes.into_boxed_slice(),
+            },
+            current_lease: parts.current_lease,
+            receipt: parts.receipt,
+            published: parts.published,
+            bundle_index_identity: parts.bundle_index_identity,
+            bundle_evidence_identity: parts.bundle_evidence_identity,
+            binding_index: parts.binding_index,
+            container_identity: parts.container_identity,
+            linked_output_identity: parts.linked_output_identity,
+            finalization_identity: parts.finalization_identity,
+            finalized_payload_identity: parts.finalized_payload_identity,
+            artifact_identity: parts.artifact_identity,
+            kernel_identities: parts.kernel_identities,
+            device: parts.device,
+            inspected: parts.inspected,
+            kernels: parts.kernels,
+            selected_kernel_index: parts.selected_kernel_index,
+        };
+        (admission, input._directory)
+    }
+
+    #[test]
+    fn alpha_zeta_hardware_helper_admits_exact_two_kernel_cov6_payload() {
+        let seed = 0xa7;
+        let alpha_binding = [0x61; 32];
+        let zeta_binding = [0x71; 32];
+        let hsaco = alpha_zeta_cov6_hsaco_for_target("gfx942");
+        let exact_bytes = hsaco.bytes.clone();
+        let observed = make_observed_for(seed.into(), "gfx942");
+        let (admission, _directory) = admitted_alpha_zeta_cov6_hardware_for_lifecycle_test(
+            seed,
+            hsaco.bytes,
+            alpha_binding,
+            zeta_binding,
+            &observed,
+        );
+
+        assert_eq!(admission.kernel_count(), 2);
+        assert_eq!(admission.artifact_identity.name().as_str(), "alpha");
+        assert_eq!(admission.artifact_identity.symbol().as_str(), "alpha");
+        assert_eq!(admission.artifact_identity.abi().size(), 40);
+        assert_eq!(admission.selected_kernel().export_symbol(), "alpha");
+        assert_eq!(
+            admission.selected_kernel().launch().kernarg_segment_size(),
+            296
+        );
+
+        let alpha = admission
+            .kernel_identities
+            .iter()
+            .find(|identity| identity.name().as_str() == "alpha")
+            .unwrap();
+        let zeta = admission
+            .kernel_identities
+            .iter()
+            .find(|identity| identity.name().as_str() == "zeta")
+            .unwrap();
+        assert_eq!((alpha.name().as_str(), alpha.abi().size()), ("alpha", 40));
+        assert_eq!((zeta.name().as_str(), zeta.abi().size()), ("zeta", 56));
+        assert_eq!(
+            alpha.kernel_id().as_bytes(),
+            derive_generated_kernel_identity_v2(
+                MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
+                alpha_binding,
+                "alpha",
+                "alpha",
+                repeated_digest(seed.wrapping_add(0x40)),
+                repeated_digest(seed.wrapping_add(0x50)),
+                alpha.abi(),
+                alpha.launch(),
+            )
+            .as_bytes()
+        );
+        assert_eq!(
+            zeta.kernel_id().as_bytes(),
+            derive_generated_kernel_identity_v2(
+                MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
+                zeta_binding,
+                "zeta",
+                "zeta",
+                repeated_digest(seed.wrapping_add(0x41)),
+                repeated_digest(seed.wrapping_add(0x51)),
+                zeta.abi(),
+                zeta.launch(),
+            )
+            .as_bytes()
+        );
+        let physical_zeta = admission
+            .kernels
+            .iter()
+            .find(|kernel| kernel.export_symbol() == "zeta")
+            .unwrap();
+        assert_eq!(physical_zeta.launch().kernarg_segment_size(), 312);
+        let current = admission.acquire_currentness().unwrap();
+        assert_eq!(current.exact_artifact_bytes(), exact_bytes);
     }
 
     #[test]
