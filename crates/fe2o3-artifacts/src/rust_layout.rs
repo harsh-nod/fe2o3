@@ -18,7 +18,7 @@ pub const MAX_RUST_LAYOUT_ALIGNMENT: u32 = 1 << 20;
 /// Maximum number of physical components in one Rust layout evidence record.
 pub const MAX_RUST_LAYOUT_COMPONENTS: usize = 32;
 
-/// Scalar element identity used by the V1 source-type schema.
+/// Scalar identity used by the V1 source-type schema.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[non_exhaustive]
 pub enum RustScalarElementTypeV1 {
@@ -57,6 +57,9 @@ pub enum RustDisjointIndexSpaceV1 {
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[non_exhaustive]
 pub enum RustSourceTypeShapeV1 {
+    Scalar {
+        scalar: RustScalarElementTypeV1,
+    },
     SharedSlice {
         element: RustScalarElementTypeV1,
     },
@@ -67,6 +70,10 @@ pub enum RustSourceTypeShapeV1 {
 }
 
 impl RustSourceTypeShapeV1 {
+    pub const fn scalar(scalar: RustScalarElementTypeV1) -> Self {
+        Self::Scalar { scalar }
+    }
+
     pub const fn shared_slice(element: RustScalarElementTypeV1) -> Self {
         Self::SharedSlice { element }
     }
@@ -83,6 +90,7 @@ impl RustSourceTypeShapeV1 {
 
     pub const fn element(self) -> RustScalarElementTypeV1 {
         match self {
+            Self::Scalar { scalar } => scalar,
             Self::SharedSlice { element } | Self::DisjointSlice { element, .. } => element,
         }
     }
@@ -110,6 +118,9 @@ pub enum RustPointerMutabilityV1 {
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[non_exhaustive]
 pub enum RustPhysicalComponentKindV1 {
+    Scalar {
+        scalar: RustScalarElementTypeV1,
+    },
     Pointer {
         mutability: RustPointerMutabilityV1,
         pointee: RustScalarElementTypeV1,
@@ -166,7 +177,8 @@ impl RustPhysicalComponentV1 {
                     "a ZST component must have size zero",
                 ));
             }
-            RustPhysicalComponentKindV1::Pointer { .. }
+            RustPhysicalComponentKindV1::Scalar { .. }
+            | RustPhysicalComponentKindV1::Pointer { .. }
             | RustPhysicalComponentKindV1::Usize
             | RustPhysicalComponentKindV1::Padding
                 if size == 0 =>
@@ -462,6 +474,10 @@ fn validate_source_semantics(
     abi_alignment: u32,
     components: &[RustPhysicalComponentV1],
 ) -> Result<(), RustLayoutEvidenceError> {
+    if let RustSourceTypeShapeV1::Scalar { scalar } = source_type {
+        return validate_scalar_semantics(scalar, abi_class, size, abi_alignment, components);
+    }
+
     let width = pointer_width.bytes();
     let expected_size = width
         .checked_mul(2)
@@ -473,6 +489,9 @@ fn validate_source_semantics(
     }
 
     let (element, pointer_mutability) = match source_type {
+        RustSourceTypeShapeV1::Scalar { .. } => {
+            unreachable!("scalar source types return before slice validation")
+        }
         RustSourceTypeShapeV1::SharedSlice { element } => (element, RustPointerMutabilityV1::Const),
         RustSourceTypeShapeV1::DisjointSlice { element, .. } => {
             (element, RustPointerMutabilityV1::Mut)
@@ -514,9 +533,47 @@ fn validate_source_semantics(
     Ok(())
 }
 
+fn validate_scalar_semantics(
+    scalar: RustScalarElementTypeV1,
+    abi_class: RustcAbiClassV1,
+    size: u64,
+    abi_alignment: u32,
+    components: &[RustPhysicalComponentV1],
+) -> Result<(), RustLayoutEvidenceError> {
+    let scalar_size = scalar.size_bytes();
+    let scalar_alignment = scalar_size as u32;
+    if abi_class != RustcAbiClassV1::Scalar {
+        return Err(RustLayoutEvidenceError::SemanticMismatch(
+            "rustc ABI class does not match the scalar source type",
+        ));
+    }
+    if size != scalar_size || abi_alignment != scalar_alignment {
+        return Err(RustLayoutEvidenceError::SemanticMismatch(
+            "scalar size or ABI alignment does not match its source type",
+        ));
+    }
+    if components
+        != [RustPhysicalComponentV1 {
+            offset: 0,
+            size: scalar_size,
+            abi_alignment: scalar_alignment,
+            kind: RustPhysicalComponentKindV1::Scalar { scalar },
+        }]
+    {
+        return Err(RustLayoutEvidenceError::SemanticMismatch(
+            "scalar physical component does not match its source type",
+        ));
+    }
+    Ok(())
+}
+
 fn encode_source_type(source_type: RustSourceTypeShapeV1) -> Vec<u8> {
     let mut writer = CanonicalWriter::default();
     match source_type {
+        RustSourceTypeShapeV1::Scalar { scalar } => {
+            writer.u8(3);
+            writer.u8(scalar_tag(scalar));
+        }
         RustSourceTypeShapeV1::SharedSlice { element } => {
             writer.u8(1);
             writer.u8(scalar_tag(element));
@@ -539,6 +596,10 @@ fn encode_component(component: RustPhysicalComponentV1) -> Vec<u8> {
     writer.u64(component.size);
     writer.u32(component.abi_alignment);
     match component.kind {
+        RustPhysicalComponentKindV1::Scalar { scalar } => {
+            writer.u8(5);
+            writer.u8(scalar_tag(scalar));
+        }
         RustPhysicalComponentKindV1::Pointer {
             mutability,
             pointee,

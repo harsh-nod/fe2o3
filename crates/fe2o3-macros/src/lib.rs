@@ -4,11 +4,11 @@ mod control_flow_v1;
 
 use fe2o3_artifacts::{
     AbiField, AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership, BlockSize,
-    DeclaredRustLayoutIdentity, DeclaredRustTypeIdentity, DigestAlgorithm, DigestBytes, Dimensions,
-    LaunchContract, Mutability, Name, PointerWidth, RustDisjointIndexSpaceV1, RustLayoutEvidenceV1,
-    RustPhysicalComponentKindV1, RustPhysicalComponentV1, RustPointerMutabilityV1,
-    RustScalarElementTypeV1, RustSourceTypeShapeV1, RustTypeEvidenceV1, RustcAbiClassV1,
-    ScalarType, TypeIdentity, derive_generated_host_contract_identity_v1,
+    DigestBytes, Dimensions, LaunchContract, Mutability, Name, PointerWidth,
+    RustDisjointIndexSpaceV1, RustLayoutEvidenceV1, RustPhysicalComponentKindV1,
+    RustPhysicalComponentV1, RustPointerMutabilityV1, RustScalarElementTypeV1,
+    RustSourceTypeShapeV1, RustTypeEvidenceV1, RustcAbiClassV1, ScalarType, TypeIdentity,
+    derive_generated_host_contract_identity_v1,
 };
 use proc_macro::TokenStream;
 use proc_macro_crate::{FoundCrate, crate_name};
@@ -260,8 +260,6 @@ const GENERAL_TYPED_DEFAULT_BLOCK_V1: [u32; 3] = [256, 1, 1];
 const GENERAL_TYPED_POINTER_SIZE_V1: u64 = 8;
 const GENERAL_TYPED_POINTER_ALIGNMENT_V1: u32 = 8;
 const GENERAL_TYPED_SLICE_SIZE_V1: u64 = 16;
-const GENERAL_TYPED_TYPE_ID_DOMAIN_V1: &[u8] = b"fe2o3.rust-type.v1\0";
-const GENERAL_TYPED_LAYOUT_ID_DOMAIN_V1: &[u8] = b"fe2o3.rust-layout.v1\0";
 const KERNEL_FRONTEND_REGISTRATION_PREFIX_V1: &str = "__fe2o3_kernel_frontend_contract_v1_";
 const KERNEL_FRONTEND_REGISTRATION_MAGIC_V1: u64 = u64::from_le_bytes(*b"FE2O3KFA");
 const KERNEL_FRONTEND_REGISTRATION_VERSION_V1: u16 = 1;
@@ -1219,21 +1217,6 @@ enum GeneralTypedScalarV1 {
 }
 
 impl GeneralTypedScalarV1 {
-    const fn spelling(self) -> &'static str {
-        match self {
-            Self::I8 => "i8",
-            Self::U8 => "u8",
-            Self::I16 => "i16",
-            Self::U16 => "u16",
-            Self::I32 => "i32",
-            Self::U32 => "u32",
-            Self::I64 => "i64",
-            Self::U64 => "u64",
-            Self::F32 => "f32",
-            Self::F64 => "f64",
-        }
-    }
-
     const fn size_alignment(self) -> (u64, u32) {
         match self {
             Self::I8 | Self::U8 => (1, 1),
@@ -1611,13 +1594,7 @@ fn general_typed_slice_kind_v1(scalar: GeneralTypedScalarV1) -> AbiKind {
 
 fn general_typed_type_identity_v1(argument: GeneralTypedArgumentKindV1) -> TypeIdentity {
     match argument {
-        GeneralTypedArgumentKindV1::Scalar(scalar) => {
-            let (size, alignment) = scalar.size_alignment();
-            general_typed_framed_type_identity_v1(
-                scalar.spelling(),
-                &format!("scalar-{}-size{size}-align{alignment}", scalar.spelling()),
-            )
-        }
+        GeneralTypedArgumentKindV1::Scalar(scalar) => general_typed_scalar_type_identity_v1(scalar),
         GeneralTypedArgumentKindV1::SharedSlice(scalar) => {
             general_typed_slice_type_identity_v1(scalar, false)
         }
@@ -1627,25 +1604,27 @@ fn general_typed_type_identity_v1(argument: GeneralTypedArgumentKindV1) -> TypeI
     }
 }
 
-fn general_typed_framed_type_identity_v1(rust_type: &str, layout: &str) -> TypeIdentity {
-    TypeIdentity::new(
-        DeclaredRustTypeIdentity::from_untrusted_bytes(general_typed_profile_digest_v1(
-            GENERAL_TYPED_TYPE_ID_DOMAIN_V1,
-            rust_type.as_bytes(),
-        )),
-        DeclaredRustLayoutIdentity::from_untrusted_bytes(general_typed_profile_digest_v1(
-            GENERAL_TYPED_LAYOUT_ID_DOMAIN_V1,
-            layout.as_bytes(),
-        )),
+fn general_typed_scalar_type_identity_v1(scalar: GeneralTypedScalarV1) -> TypeIdentity {
+    let scalar = scalar.rust_layout_scalar();
+    let size = scalar.size_bytes();
+    let alignment = size as u32;
+    let component = RustPhysicalComponentV1::new(
+        0,
+        size,
+        alignment,
+        RustPhysicalComponentKindV1::Scalar { scalar },
     )
-}
-
-fn general_typed_profile_digest_v1(domain: &[u8], field: &[u8]) -> DigestBytes {
-    let mut canonical = Vec::with_capacity(domain.len() + 8 + field.len());
-    canonical.extend_from_slice(domain);
-    canonical.extend_from_slice(&(field.len() as u64).to_le_bytes());
-    canonical.extend_from_slice(field);
-    DigestAlgorithm::Sha256.calculate(&canonical).bytes()
+    .expect("the fixed V1 scalar component is valid");
+    RustLayoutEvidenceV1::new(
+        RustTypeEvidenceV1::new(RustSourceTypeShapeV1::scalar(scalar)),
+        RustcAbiClassV1::Scalar,
+        PointerWidth::Bits64,
+        size,
+        alignment,
+        vec![component],
+    )
+    .expect("the fixed V1 scalar layout is valid")
+    .type_identity()
 }
 
 fn general_typed_slice_type_identity_v1(
@@ -1697,45 +1676,36 @@ fn general_typed_launch_v1(
     launch: Option<&ParsedLaunchBoundsV1>,
     span: impl quote::ToTokens,
 ) -> syn::Result<LaunchContract> {
-    let (block_size, dimensions) = match launch {
-        None => (
-            BlockSize::Exact(general_typed_dimensions_v1(GENERAL_TYPED_DEFAULT_BLOCK_V1)),
-            GENERAL_TYPED_DEFAULT_BLOCK_V1,
-        ),
+    match launch {
+        None => {}
         Some(launch) => {
             if launch.min_workgroups_per_compute_unit.is_some() {
                 return Err(syn::Error::new_spanned(
                     &span,
-                    "general typed V1 cannot bind an occupancy-only launch constraint",
+                    "general typed V1 supports only an exact 256x1x1 launch contract",
                 ));
             }
             match (launch.required, launch.maximum) {
                 (Some(required), Some(maximum)) if required != maximum => {
                     return Err(syn::Error::new_spanned(
                         &span,
-                        "general typed V1 requires equal required and max dimensions",
+                        "general typed V1 supports only an exact 256x1x1 launch contract",
                     ));
                 }
-                (Some(required), _) => (
-                    BlockSize::Exact(general_typed_dimensions_v1(required)),
-                    required,
-                ),
-                (None, Some(maximum)) => (
-                    BlockSize::AtMost(general_typed_dimensions_v1(maximum)),
-                    maximum,
-                ),
+                (Some(required), _) if required == GENERAL_TYPED_DEFAULT_BLOCK_V1 => {}
+                (Some(_), _) | (None, Some(_)) => {
+                    return Err(syn::Error::new_spanned(
+                        &span,
+                        "general typed V1 supports only an exact 256x1x1 launch contract",
+                    ));
+                }
                 (None, None) => unreachable!("launch parser requires one dimension bound"),
             }
         }
-    };
-    let rank = general_typed_rank_v1(dimensions);
-    let max_grid = Dimensions::new(
-        u32::MAX,
-        if rank >= 2 { 65_535 } else { 1 },
-        if rank >= 3 { 65_535 } else { 1 },
-    )
-    .expect("the fixed V1 maximum grid is valid");
-    LaunchContract::new(rank, block_size, max_grid, 0, 0).map_err(|error| {
+    }
+    let block_size = BlockSize::Exact(general_typed_dimensions_v1(GENERAL_TYPED_DEFAULT_BLOCK_V1));
+    let max_grid = Dimensions::new(u32::MAX, 1, 1).expect("the fixed V1 maximum grid is valid");
+    LaunchContract::new(1, block_size, max_grid, 0, 0).map_err(|error| {
         syn::Error::new_spanned(span, format!("invalid general typed V1 launch: {error}"))
     })
 }
@@ -1743,16 +1713,6 @@ fn general_typed_launch_v1(
 fn general_typed_dimensions_v1(dimensions: [u32; 3]) -> Dimensions {
     Dimensions::new(dimensions[0], dimensions[1], dimensions[2])
         .expect("macro launch parsing already validates dimensions")
-}
-
-const fn general_typed_rank_v1(dimensions: [u32; 3]) -> u8 {
-    if dimensions[2] != 1 {
-        3
-    } else if dimensions[1] != 1 {
-        2
-    } else {
-        1
-    }
 }
 
 const fn align_up_v1(value: u64, alignment: u32) -> Option<u64> {
@@ -2592,6 +2552,8 @@ mod tests {
     };
     use fe2o3_artifacts::{
         AbiKind, Access, AddressSpace, AliasClass, ArgumentOwnership, BlockSize, Mutability,
+        PointerWidth, RustLayoutEvidenceV1, RustPhysicalComponentKindV1, RustPhysicalComponentV1,
+        RustScalarElementTypeV1, RustSourceTypeShapeV1, RustTypeEvidenceV1, RustcAbiClassV1,
         ScalarType,
     };
     use proc_macro_crate::FoundCrate;
@@ -2602,6 +2564,10 @@ mod tests {
         host_kernel_symbol_v1,
     };
     use syn::{ItemFn, ItemForeignMod, parse_quote};
+
+    fn hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    }
 
     fn ffi_options() -> DeviceFfiOptions {
         DeviceFfiOptions {
@@ -3393,7 +3359,7 @@ mod tests {
     }
 
     #[test]
-    fn general_typed_model_constructs_a_distinct_explicit_multidimensional_contract() {
+    fn general_typed_model_constructs_nontrivial_abi_under_fixed_launch() {
         let input: ItemFn = parse_quote!(
             pub fn beta(
                 seed: i8,
@@ -3403,9 +3369,11 @@ mod tests {
             ) {
             }
         );
-        let options =
-            parse_kernel_options(quote!(typed, launch(required = [8, 4, 1], max = [8, 4, 1])))
-                .unwrap();
+        let options = parse_kernel_options(quote!(
+            typed,
+            launch(required = [256, 1, 1], max = [256, 1, 1])
+        ))
+        .unwrap();
         let model = model_general_typed_signature_v1(&input, &options, [0x52; 32]).unwrap();
 
         assert_eq!(model.abi.size(), 48);
@@ -3418,22 +3386,13 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![(0, 1, 1), (8, 8, 8), (16, 16, 8), (32, 16, 8)]
         );
-        assert_eq!(model.launch.rank(), 2);
+        assert_eq!(model.launch.rank(), 1);
         assert_eq!(
             model.launch.block_size(),
-            BlockSize::Exact(fe2o3_artifacts::Dimensions::new(8, 4, 1).unwrap())
+            BlockSize::Exact(fe2o3_artifacts::Dimensions::new(256, 1, 1).unwrap())
         );
-        assert_eq!(model.launch.max_grid().y(), 65_535);
+        assert_eq!(model.launch.max_grid().y(), 1);
         assert_eq!(model.launch.max_grid().z(), 1);
-
-        let maximum_only = parse_kernel_options(quote!(typed, launch(max = [4, 2, 2]))).unwrap();
-        let model = model_general_typed_signature_v1(&input, &maximum_only, [0x52; 32]).unwrap();
-        assert_eq!(model.launch.rank(), 3);
-        assert_eq!(
-            model.launch.block_size(),
-            BlockSize::AtMost(fe2o3_artifacts::Dimensions::new(4, 2, 2).unwrap())
-        );
-        assert_eq!(model.launch.max_grid().z(), 65_535);
     }
 
     #[test]
@@ -3461,6 +3420,111 @@ mod tests {
     }
 
     #[test]
+    fn general_typed_scalar_identities_match_shared_artifact_goldens() {
+        let scalar_spellings = [
+            "i8", "u8", "i16", "u16", "i32", "u32", "i64", "u64", "f32", "f64",
+        ];
+        let shared_scalars = [
+            RustScalarElementTypeV1::I8,
+            RustScalarElementTypeV1::U8,
+            RustScalarElementTypeV1::I16,
+            RustScalarElementTypeV1::U16,
+            RustScalarElementTypeV1::I32,
+            RustScalarElementTypeV1::U32,
+            RustScalarElementTypeV1::I64,
+            RustScalarElementTypeV1::U64,
+            RustScalarElementTypeV1::F32,
+            RustScalarElementTypeV1::F64,
+        ];
+        let expected_identities = [
+            (
+                "ff65d4e4147594edf8151ba77165309fa936203a650ca2daecbde51ce29a4e69",
+                "d1081bb401a18da25bf6fa63fb3e769d3ffcbf9c847f7bf509d4210fcedd730f",
+            ),
+            (
+                "1d706983e50eae90f37a598e592d6e0b3806fd8abb04631303af81d1e80ce210",
+                "8bddfa68ddac6f85a8c30d7ef47cb27a0a4046c47cfd390436dadc6a6696e68f",
+            ),
+            (
+                "24372d467042ac8437546c3439a3e00c2daa262f958e51582b5087c0f7c4e86c",
+                "af357f6ec867517b376d8a9ae7a6f479bbccf4e7afb8f5ecae80a5149928ae9f",
+            ),
+            (
+                "e5377f8d3cdb2409256d5addba15c46e53e2196b23aaf23dbe6b19a71fa95c95",
+                "2528593b47fa823e89ae33b2205400360e1b48bb5bb53248ae061dcdce3645ae",
+            ),
+            (
+                "e6786cf029d616cbb3ff5c317a47d55fd84e72ced23b7f610830d03b6103a93a",
+                "1acb3481b8e99bb29cef03cc2777bf9e6f3cf1d3584da4ee456c478faf69cdaa",
+            ),
+            (
+                "e312b413d7890a7147b229b57a42d7935d015dee58f0fb610d46999e62659a08",
+                "801df7d2b519e75f693078558936feb7813b577c6306110c21c0075b7fceddb2",
+            ),
+            (
+                "dd857c35102cc0d85917be7a380912b70fc3f9bbdab1fb86ff1b69b218b61683",
+                "0936d0e4b71167ba7e1e1846e81e3d77a77c9c6c630d6c4c795ce08d66d05df4",
+            ),
+            (
+                "4919da5956e23a23e11be9653162fa6fed5b2f90a1e11ef6b83ad232270ee8a4",
+                "3071ad4ec69848183edd068ff74bd280c5fd1987d46cbd703bf9b99fa81e794f",
+            ),
+            (
+                "42301591dde145200e107c459da19b8bdfd11aba362338fdbd5a4dd258c76df2",
+                "8c1c71a7931f3627ae1031cab818406af8161716dc51b1c1ea208e405e17fb16",
+            ),
+            (
+                "2073ec8b971717ac59ef1291b84b1662aba314a26f62af3196c0ad6812a162b6",
+                "05bbfb5846ec168daf9ab3abb0f86a4d85de88b3f241dffaa20d1bf7835a6f9d",
+            ),
+        ];
+        let arguments = scalar_spellings
+            .iter()
+            .enumerate()
+            .map(|(index, scalar)| format!("scalar{index}: {scalar}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let input: ItemFn = syn::parse_str(&format!("pub fn scalars({arguments}) {{}}"))
+            .expect("all bounded scalar spellings parse");
+        let options = parse_kernel_options(quote!(typed)).unwrap();
+        let model = model_general_typed_signature_v1(&input, &options, [0xa2; 32]).unwrap();
+        let mut actual_identities = Vec::new();
+
+        for (field, scalar) in model.abi.fields().iter().zip(shared_scalars) {
+            let size = scalar.size_bytes();
+            let alignment = size as u32;
+            let component = RustPhysicalComponentV1::new(
+                0,
+                size,
+                alignment,
+                RustPhysicalComponentKindV1::Scalar { scalar },
+            )
+            .unwrap();
+            let independent = RustLayoutEvidenceV1::new(
+                RustTypeEvidenceV1::new(RustSourceTypeShapeV1::scalar(scalar)),
+                RustcAbiClassV1::Scalar,
+                PointerWidth::Bits64,
+                size,
+                alignment,
+                vec![component],
+            )
+            .unwrap()
+            .type_identity();
+
+            assert_eq!(field.type_identity(), independent);
+            actual_identities.push((
+                hex(independent.rust_type().bytes().as_bytes()),
+                hex(independent.layout().bytes().as_bytes()),
+            ));
+        }
+        assert_eq!(
+            actual_identities,
+            expected_identities
+                .map(|(rust_type, layout)| (rust_type.to_owned(), layout.to_owned()))
+        );
+    }
+
+    #[test]
     fn exclusive_slice_effect_is_conservative_and_body_independent() {
         let empty_body: ItemFn = parse_quote!(
             pub fn exclusive(output: DisjointSlice<u32>) {}
@@ -3484,7 +3548,7 @@ mod tests {
     }
 
     #[test]
-    fn general_typed_contract_identity_binds_signature_launch_name_and_binding() {
+    fn general_typed_contract_identity_binds_signature_name_and_binding() {
         let alpha: ItemFn = parse_quote!(
             pub fn alpha(scale: u32, input: &[f32], output: DisjointSlice<f32>) {}
         );
@@ -3499,7 +3563,7 @@ mod tests {
         );
         let default_options = parse_kernel_options(quote!(typed)).unwrap();
         let explicit_options =
-            parse_kernel_options(quote!(typed, launch(required = [64, 1, 1]))).unwrap();
+            parse_kernel_options(quote!(typed, launch(required = [256, 1, 1]))).unwrap();
         let identity = |input: &ItemFn, options: &KernelOptions, binding| {
             model_general_typed_signature_v1(input, options, binding)
                 .unwrap()
@@ -3516,7 +3580,7 @@ mod tests {
             baseline,
             identity(&changed_effect, &default_options, [0x61; 32])
         );
-        assert_ne!(baseline, identity(&alpha, &explicit_options, [0x61; 32]));
+        assert_eq!(baseline, identity(&alpha, &explicit_options, [0x61; 32]));
         assert_ne!(baseline, identity(&alpha, &default_options, [0x62; 32]));
         assert_eq!(baseline, identity(&alpha, &default_options, [0x61; 32]));
     }
@@ -3633,6 +3697,9 @@ mod tests {
             pub fn kernel(value: u32) {}
         );
         for options in [
+            parse_kernel_options(quote!(typed, launch(max = [256, 1, 1]))).unwrap(),
+            parse_kernel_options(quote!(typed, launch(required = [128, 2, 1]))).unwrap(),
+            parse_kernel_options(quote!(typed, launch(required = [128, 1, 1]))).unwrap(),
             parse_kernel_options(quote!(
                 typed,
                 launch(required = [64, 1, 1], max = [128, 1, 1])
@@ -3644,7 +3711,13 @@ mod tests {
             ))
             .unwrap(),
         ] {
-            assert!(model_general_typed_signature_v1(&input, &options, [0x91; 32]).is_err());
+            let error = model_general_typed_signature_v1(&input, &options, [0x91; 32])
+                .expect_err("unsupported launch contract must fail closed");
+            assert!(
+                error
+                    .to_string()
+                    .contains("supports only an exact 256x1x1 launch contract")
+            );
         }
     }
 

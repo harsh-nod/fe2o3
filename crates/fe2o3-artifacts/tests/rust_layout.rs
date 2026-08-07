@@ -33,6 +33,31 @@ fn zst(offset: u64, alignment: u32) -> RustPhysicalComponentV1 {
     RustPhysicalComponentV1::new(offset, 0, alignment, RustPhysicalComponentKindV1::Zst).unwrap()
 }
 
+fn scalar_layout(
+    scalar: RustScalarElementTypeV1,
+    pointer_width: PointerWidth,
+) -> RustLayoutEvidenceV1 {
+    let size = scalar.size_bytes();
+    let alignment = size as u32;
+    RustLayoutEvidenceV1::new(
+        RustTypeEvidenceV1::new(RustSourceTypeShapeV1::scalar(scalar)),
+        RustcAbiClassV1::Scalar,
+        pointer_width,
+        size,
+        alignment,
+        vec![
+            RustPhysicalComponentV1::new(
+                0,
+                size,
+                alignment,
+                RustPhysicalComponentKindV1::Scalar { scalar },
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap()
+}
+
 fn shared_slice(
     element: RustScalarElementTypeV1,
     pointer_width: PointerWidth,
@@ -129,6 +154,106 @@ fn exact_vecadd_evidence_has_stable_golden_encodings_and_identities() {
         hex(disjoint.type_identity().layout().bytes().as_bytes()),
         "d12579e2b46502e88aa0b663d986f4dd34b8f167c1b7796e7ea0e272398686ce"
     );
+}
+
+#[test]
+fn scalar_evidence_has_stable_golden_encodings_and_identities() {
+    let scalar = scalar_layout(RustScalarElementTypeV1::U32, PointerWidth::Bits64);
+
+    assert_eq!(
+        hex(&scalar.rust_type().canonical_bytes()),
+        "1c0000004645324f332f525553542d545950452d45564944454e43452f5631000100020000000306"
+    );
+    assert_eq!(
+        hex(&scalar.canonical_bytes()),
+        concat!(
+            "1e0000004645324f332f525553542d4c41594f55542d45564944454e43452f563100010028000000",
+            "1c0000004645324f332f525553542d545950452d45564944454e43452f5631000100020000000306",
+            "010204000000000000000400000001000000160000000000000000000000040000000000000004",
+            "0000000506"
+        )
+    );
+    assert_eq!(
+        hex(scalar.type_identity().rust_type().bytes().as_bytes()),
+        "e312b413d7890a7147b229b57a42d7935d015dee58f0fb610d46999e62659a08"
+    );
+    assert_eq!(
+        hex(scalar.type_identity().layout().bytes().as_bytes()),
+        "801df7d2b519e75f693078558936feb7813b577c6306110c21c0075b7fceddb2"
+    );
+}
+
+#[test]
+fn scalar_identity_mutations_are_domain_separated() {
+    let u32_64 = scalar_layout(RustScalarElementTypeV1::U32, PointerWidth::Bits64);
+    let u32_32 = scalar_layout(RustScalarElementTypeV1::U32, PointerWidth::Bits32);
+    let i32_64 = scalar_layout(RustScalarElementTypeV1::I32, PointerWidth::Bits64);
+    let shared_u32 = shared_slice(RustScalarElementTypeV1::U32, PointerWidth::Bits64);
+
+    assert_eq!(
+        u32_64.type_identity().rust_type(),
+        u32_32.type_identity().rust_type()
+    );
+    assert_ne!(
+        u32_64.type_identity().layout(),
+        u32_32.type_identity().layout()
+    );
+    assert_ne!(u32_64.type_identity(), i32_64.type_identity());
+    assert_ne!(u32_64.type_identity(), shared_u32.type_identity());
+}
+
+#[test]
+fn scalar_evidence_fails_closed_on_inconsistent_facts() {
+    let rust_type =
+        RustTypeEvidenceV1::new(RustSourceTypeShapeV1::scalar(RustScalarElementTypeV1::U32));
+    let scalar_component = |scalar| {
+        RustPhysicalComponentV1::new(0, 4, 4, RustPhysicalComponentKindV1::Scalar { scalar })
+            .unwrap()
+    };
+
+    assert!(matches!(
+        RustLayoutEvidenceV1::new(
+            rust_type,
+            RustcAbiClassV1::Aggregate,
+            PointerWidth::Bits64,
+            4,
+            4,
+            vec![scalar_component(RustScalarElementTypeV1::U32)],
+        ),
+        Err(RustLayoutEvidenceError::SemanticMismatch(_))
+    ));
+    assert!(matches!(
+        RustLayoutEvidenceV1::new(
+            rust_type,
+            RustcAbiClassV1::Scalar,
+            PointerWidth::Bits64,
+            4,
+            4,
+            vec![scalar_component(RustScalarElementTypeV1::I32)],
+        ),
+        Err(RustLayoutEvidenceError::SemanticMismatch(_))
+    ));
+    assert!(matches!(
+        RustLayoutEvidenceV1::new(
+            rust_type,
+            RustcAbiClassV1::Scalar,
+            PointerWidth::Bits64,
+            8,
+            8,
+            vec![
+                RustPhysicalComponentV1::new(
+                    0,
+                    8,
+                    8,
+                    RustPhysicalComponentKindV1::Scalar {
+                        scalar: RustScalarElementTypeV1::U64,
+                    },
+                )
+                .unwrap()
+            ],
+        ),
+        Err(RustLayoutEvidenceError::SemanticMismatch(_))
+    ));
 }
 
 #[test]
