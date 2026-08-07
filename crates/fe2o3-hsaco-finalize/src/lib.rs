@@ -128,6 +128,11 @@ const ELF64_SECTION_ALIGNMENT_OFFSET: usize = 48;
 const SHT_PROGBITS: u32 = 1;
 const SHT_STRTAB: u32 = 3;
 const SHT_NOBITS: u32 = 8;
+const GENERAL_V3_COV6_COMPILER_NAME_V1: &str = "rustc-codegen-fe2o3";
+const GENERAL_V3_COV6_PRODUCER_NAME_V1: &str = "rustc-codegen-fe2o3-worker-v2";
+const GENERAL_V3_COV6_PRODUCER_VERSION_V1: &str = "typed-general-gfx942-cov6-v1";
+const GENERAL_V3_COV6_DEVICE_TARGET_V1: &str = "gfx942:xnack-";
+const GENERAL_V3_COV6_IMPLICIT_KERNARG_BYTES_V1: u64 = 256;
 
 /// Failure while locating, checking, finalizing, or rechecking a descriptor table.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -709,8 +714,7 @@ fn validate_kernel_physical_abi(
     let layout = descriptor.abi_layout();
     let descriptor_size = layout.kernarg_segment_size();
     let bound_descriptor = binding.descriptor();
-    if u64::from(descriptor_size) != metadata.kernarg_segment_size()
-        || descriptor_size != bound_descriptor.kernarg_size()
+    if !kernarg_segment_sizes_match_v1(table, descriptor, metadata, bound_descriptor.kernarg_size())
     {
         return Err(FinalizationError::KernargSegmentSizeMismatch {
             entry_name: entry_name.to_owned(),
@@ -839,6 +843,57 @@ fn validate_kernel_physical_abi(
         }
     }
     Ok(())
+}
+
+fn kernarg_segment_sizes_match_v1(
+    table: &DeviceDescriptorTableV1,
+    descriptor: &KernelDescriptorV1,
+    metadata: &InspectedKernel,
+    bound_descriptor_size: u32,
+) -> bool {
+    let layout = descriptor.abi_layout();
+    let descriptor_total = u64::from(layout.kernarg_segment_size());
+    let metadata_size = metadata.kernarg_segment_size();
+    let bound_descriptor_size = u64::from(bound_descriptor_size);
+
+    if descriptor_total == metadata_size && descriptor_total == bound_descriptor_size {
+        return true;
+    }
+
+    is_general_v3_cov6_profile_v1(table)
+        && metadata.hidden_arguments().is_empty()
+        && metadata.implicit_argument_offset().is_none()
+        && metadata.implicit_argument_size() == 0
+        && metadata_size == u64::from(layout.explicit_argument_size())
+        && bound_descriptor_size == metadata_size
+        && general_v3_cov6_total_kernarg_size_v1(metadata_size) == Some(descriptor_total)
+}
+
+fn is_general_v3_cov6_profile_v1(table: &DeviceDescriptorTableV1) -> bool {
+    table.code_object_version() == CodeObjectVersion::V6
+        && table.device_target().to_string() == GENERAL_V3_COV6_DEVICE_TARGET_V1
+        && table.compiler().name().as_str() == GENERAL_V3_COV6_COMPILER_NAME_V1
+        && table.producer().name().as_str() == GENERAL_V3_COV6_PRODUCER_NAME_V1
+        && table.producer().version().as_str() == GENERAL_V3_COV6_PRODUCER_VERSION_V1
+}
+
+fn general_v3_cov6_total_kernarg_size_v1(explicit_size: u64) -> Option<u64> {
+    explicit_size.checked_add(GENERAL_V3_COV6_IMPLICIT_KERNARG_BYTES_V1)
+}
+
+#[cfg(test)]
+mod kernarg_reconciliation_tests {
+    use super::general_v3_cov6_total_kernarg_size_v1;
+
+    #[test]
+    fn general_v3_cov6_total_size_rejects_overflow() {
+        assert_eq!(general_v3_cov6_total_kernarg_size_v1(u64::MAX), None);
+        assert_eq!(general_v3_cov6_total_kernarg_size_v1(u64::MAX - 255), None);
+        assert_eq!(
+            general_v3_cov6_total_kernarg_size_v1(u64::MAX - 256),
+            Some(u64::MAX)
+        );
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

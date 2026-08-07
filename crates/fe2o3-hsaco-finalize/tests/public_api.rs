@@ -7,11 +7,12 @@ use fe2o3_hsaco_finalize::{
 };
 use fe2o3_kernel_descriptor::{
     AccessMode, BlockSizeV1, BuildEvidenceV1, CANONICAL_CODE_OBJECT_DIGEST_OFFSET,
-    CanonicalCodeObjectDigest, CodeObjectVersion, CompilerIdentityV1, DeviceDescriptorTableV1,
-    DeviceLayoutDescriptorV1, DeviceLayoutRecordV1, DeviceTargetV1, DimensionsV1, EvidenceDigest,
-    EvidenceIdentity, KernelAbiLayoutV1, KernelDescriptorV1, KernelId, LaunchConstraintsV1,
-    LogicalArgumentV1, MAX_DESCRIPTOR_TABLE_BYTES, ProducerIdentityV1, ScalarTypeV1,
-    SourceTypeDescriptorV1, SourceTypeRecordV1, Text, ValidName, encode_device_descriptor_table_v1,
+    CanonicalCodeObjectDigest, CapabilityV1, CodeObjectVersion, CompilerIdentityV1,
+    DeviceDescriptorTableV1, DeviceLayoutDescriptorV1, DeviceLayoutRecordV1, DeviceTargetV1,
+    DimensionsV1, EvidenceDigest, EvidenceIdentity, KernelAbiLayoutV1, KernelDescriptorV1,
+    KernelId, LaunchConstraintsV1, LogicalArgumentV1, MAX_DESCRIPTOR_TABLE_BYTES,
+    ProducerIdentityV1, ScalarTypeV1, SourceTypeDescriptorV1, SourceTypeRecordV1, Text, ValidName,
+    encode_device_descriptor_table_v1,
 };
 use rmpv::{Value, encode::write_value};
 use sha2::{Digest, Sha256};
@@ -26,6 +27,29 @@ const STRTAB_SECTION_INDEX: usize = 4;
 const SYMTAB_SECTION_INDEX: usize = 5;
 const DESCRIPTOR_SECTION_INDEX: usize = 6;
 const TARGET: &str = "gfx1151";
+const GENERAL_V3_TARGET: &str = "gfx942:xnack-";
+
+#[derive(Clone, Copy)]
+enum GeneralV3Kernel {
+    Alpha,
+    Zeta,
+}
+
+impl GeneralV3Kernel {
+    const fn entry(self) -> &'static str {
+        match self {
+            Self::Alpha => "alpha",
+            Self::Zeta => "zeta",
+        }
+    }
+
+    const fn descriptor(self) -> &'static str {
+        match self {
+            Self::Alpha => "alpha.kd",
+            Self::Zeta => "zeta.kd",
+        }
+    }
+}
 
 #[derive(Clone, Copy)]
 struct KernelSpec<'a> {
@@ -592,6 +616,132 @@ fn cross_checks_complete_kernarg_segment_size() {
 }
 
 #[test]
+fn reconciles_general_v3_cov6_alpha_and_zeta_explicit_metadata_sizes() {
+    for (profile, explicit_size, total_size) in [
+        (GeneralV3Kernel::Alpha, 40, 296),
+        (GeneralV3Kernel::Zeta, 56, 312),
+    ] {
+        let fixture = general_v3_fixture(
+            profile,
+            explicit_size,
+            total_size,
+            8,
+            8,
+            CodeObjectVersion::V6,
+            "typed-general-gfx942-cov6-v1",
+        );
+        let finalized = finalize_unfinalized(&fixture.bytes).unwrap();
+        let inspection = finalized.inspection();
+        let descriptor = &inspection.descriptor_table().kernels()[0];
+        let metadata = &inspection.hsaco().kernels()[0];
+
+        assert_eq!(
+            descriptor.abi_layout().explicit_argument_size(),
+            explicit_size
+        );
+        assert_eq!(descriptor.abi_layout().kernarg_segment_size(), total_size);
+        assert_eq!(descriptor.abi_layout().kernarg_segment_alignment(), 8);
+        assert_eq!(metadata.kernarg_segment_size(), u64::from(explicit_size));
+        assert_eq!(metadata.implicit_argument_size(), 0);
+        verify_finalized(finalized.as_bytes()).unwrap();
+    }
+}
+
+#[test]
+fn general_v3_cov6_reconciliation_rejects_wrong_hidden_span() {
+    let fixture = general_v3_fixture(
+        GeneralV3Kernel::Alpha,
+        40,
+        300,
+        8,
+        8,
+        CodeObjectVersion::V6,
+        "typed-general-gfx942-cov6-v1",
+    );
+    assert!(matches!(
+        finalize_unfinalized(&fixture.bytes),
+        Err(FinalizationError::KernargSegmentSizeMismatch {
+            descriptor: 300,
+            metadata: 40,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn general_v3_kernarg_reconciliation_does_not_relax_cov5() {
+    let fixture = general_v3_fixture(
+        GeneralV3Kernel::Alpha,
+        40,
+        296,
+        8,
+        8,
+        CodeObjectVersion::V5,
+        "typed-general-gfx942-cov6-v1",
+    );
+    assert!(matches!(
+        finalize_unfinalized(&fixture.bytes),
+        Err(FinalizationError::KernargSegmentSizeMismatch { .. })
+    ));
+}
+
+#[test]
+fn general_v3_cov6_reconciliation_preserves_alignment_check() {
+    let fixture = general_v3_fixture(
+        GeneralV3Kernel::Alpha,
+        40,
+        296,
+        16,
+        8,
+        CodeObjectVersion::V6,
+        "typed-general-gfx942-cov6-v1",
+    );
+    assert!(matches!(
+        finalize_unfinalized(&fixture.bytes),
+        Err(FinalizationError::KernargSegmentAlignmentMismatch {
+            descriptor: 16,
+            metadata: 8,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn general_v3_cov6_reconciliation_rejects_profile_substitution() {
+    let fixture = general_v3_fixture(
+        GeneralV3Kernel::Alpha,
+        40,
+        296,
+        8,
+        8,
+        CodeObjectVersion::V6,
+        "typed-vecadd-gfx942-cov6-v1",
+    );
+    assert!(matches!(
+        finalize_unfinalized(&fixture.bytes),
+        Err(FinalizationError::KernargSegmentSizeMismatch { .. })
+    ));
+}
+
+#[test]
+fn general_v3_cov6_reconciliation_rejects_target_substitution() {
+    let fixture = general_v3_fixture_for_target(
+        GeneralV3Kernel::Alpha,
+        40,
+        296,
+        8,
+        8,
+        CodeObjectVersion::V6,
+        "typed-general-gfx942-cov6-v1",
+        "gfx942",
+    );
+    assert!(matches!(
+        finalize_unfinalized(&fixture.bytes),
+        Err(FinalizationError::KernargSegmentSizeMismatch { .. })
+    ));
+}
+
+#[test]
 fn requires_real_function_object_and_descriptor_bindings() {
     let fixture = valid_fixture();
     let inspected = inspect_unfinalized(&fixture.bytes).unwrap();
@@ -1060,6 +1210,176 @@ fn table(
     table_with_options(kernels, target, version, TableOptions::standard())
 }
 
+#[allow(clippy::too_many_arguments)]
+fn general_v3_fixture(
+    profile: GeneralV3Kernel,
+    explicit_size: u32,
+    total_size: u32,
+    descriptor_alignment: u32,
+    metadata_alignment: u32,
+    version: CodeObjectVersion,
+    producer_version: &str,
+) -> Fixture {
+    general_v3_fixture_for_target(
+        profile,
+        explicit_size,
+        total_size,
+        descriptor_alignment,
+        metadata_alignment,
+        version,
+        producer_version,
+        GENERAL_V3_TARGET,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn general_v3_fixture_for_target(
+    profile: GeneralV3Kernel,
+    explicit_size: u32,
+    total_size: u32,
+    descriptor_alignment: u32,
+    metadata_alignment: u32,
+    version: CodeObjectVersion,
+    producer_version: &str,
+    target: &str,
+) -> Fixture {
+    let table = general_v3_table(
+        profile,
+        explicit_size,
+        total_size,
+        descriptor_alignment,
+        version,
+        producer_version,
+        target,
+    );
+    let metadata = general_v3_metadata(profile, explicit_size, metadata_alignment, target);
+    let mut fixture = build_fixture_for_kernels(
+        &encode_device_descriptor_table_v1(&table).unwrap(),
+        &metadata,
+        1,
+        &[],
+        &[(profile.entry(), profile.descriptor())],
+        0,
+    );
+
+    fixture.bytes[8] = match version {
+        CodeObjectVersion::V4 => 2,
+        CodeObjectVersion::V5 => 3,
+        CodeObjectVersion::V6 => 4,
+    };
+    write_u32(
+        &mut fixture.bytes,
+        48,
+        match target {
+            "gfx942" => 0x54c,
+            "gfx942:xnack-" => 0x64c,
+            _ => panic!("unsupported general V3 test target"),
+        },
+    );
+    for descriptor_offset in fixture.kernel_descriptor_offsets.iter().copied() {
+        write_u32(&mut fixture.bytes, descriptor_offset + 8, explicit_size);
+        write_u32(&mut fixture.bytes, descriptor_offset + 44, 1);
+        write_u32(&mut fixture.bytes, descriptor_offset + 48, 0x00af_0081);
+        write_u16(&mut fixture.bytes, descriptor_offset + 56, 0x001e);
+    }
+    fixture
+}
+
+fn general_v3_table(
+    profile: GeneralV3Kernel,
+    explicit_size: u32,
+    total_size: u32,
+    kernarg_alignment: u32,
+    version: CodeObjectVersion,
+    producer_version: &str,
+    target: &str,
+) -> DeviceDescriptorTableV1 {
+    let scalar_source = SourceTypeRecordV1::new(SourceTypeDescriptorV1::scalar(ScalarTypeV1::F32));
+    let scalar_layout =
+        DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::scalar(ScalarTypeV1::F32));
+    let shared_source =
+        SourceTypeRecordV1::new(SourceTypeDescriptorV1::shared_slice(ScalarTypeV1::F32));
+    let shared_layout =
+        DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::shared_slice(ScalarTypeV1::F32));
+    let disjoint_source =
+        SourceTypeRecordV1::new(SourceTypeDescriptorV1::disjoint_slice(ScalarTypeV1::F32));
+    let disjoint_layout =
+        DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::disjoint_slice(ScalarTypeV1::F32));
+
+    let arguments = match profile {
+        GeneralV3Kernel::Alpha => vec![
+            LogicalArgumentV1::scalar(0, name("scale"), &scalar_source, &scalar_layout, 0).unwrap(),
+            LogicalArgumentV1::shared_slice(1, name("input"), &shared_source, &shared_layout, 8)
+                .unwrap(),
+            LogicalArgumentV1::disjoint_slice(
+                2,
+                name("output"),
+                &disjoint_source,
+                &disjoint_layout,
+                AccessMode::ReadWrite,
+                24,
+            )
+            .unwrap(),
+        ],
+        GeneralV3Kernel::Zeta => vec![
+            LogicalArgumentV1::shared_slice(0, name("left"), &shared_source, &shared_layout, 0)
+                .unwrap(),
+            LogicalArgumentV1::shared_slice(1, name("right"), &shared_source, &shared_layout, 16)
+                .unwrap(),
+            LogicalArgumentV1::scalar(2, name("bias"), &scalar_source, &scalar_layout, 32).unwrap(),
+            LogicalArgumentV1::disjoint_slice(
+                3,
+                name("output"),
+                &disjoint_source,
+                &disjoint_layout,
+                AccessMode::ReadWrite,
+                40,
+            )
+            .unwrap(),
+        ],
+    };
+    let kernel = KernelDescriptorV1::new(
+        KernelId::from_bytes(
+            [match profile {
+                GeneralV3Kernel::Alpha => 0xa1,
+                GeneralV3Kernel::Zeta => 0xb2,
+            }; 32],
+        ),
+        name(profile.entry()),
+        name(profile.entry()),
+        name(profile.descriptor()),
+        evidence(0x31, 0x32),
+        evidence(0x33, 0x34),
+        vec![CapabilityV1::AmdWave],
+        KernelAbiLayoutV1::new(explicit_size, total_size, kernarg_alignment).unwrap(),
+        LaunchConstraintsV1::new(
+            1,
+            BlockSizeV1::Exact(DimensionsV1::new(256, 1, 1).unwrap()),
+            DimensionsV1::new(u32::MAX, 1, 1).unwrap(),
+            256,
+            0,
+            0,
+        )
+        .unwrap(),
+        arguments,
+    )
+    .unwrap();
+    DeviceDescriptorTableV1::new(
+        CanonicalCodeObjectDigest::from_bytes([0; 32]),
+        version,
+        CompilerIdentityV1::new(text("rustc-codegen-fe2o3"), text("test"), [0x21; 20]),
+        ProducerIdentityV1::new(
+            text("rustc-codegen-fe2o3-worker-v2"),
+            text(producer_version),
+        ),
+        DeviceTargetV1::parse(target).unwrap(),
+        vec![scalar_source, shared_source, disjoint_source],
+        vec![scalar_layout, shared_layout, disjoint_layout],
+        vec![kernel],
+    )
+    .unwrap()
+}
+
 fn table_with_options(
     kernels: &[KernelSpec<'_>],
     target: &str,
@@ -1161,6 +1481,72 @@ fn metadata(kernels: &[(&str, &str, u32)]) -> Vec<u8> {
             .map(|(entry, symbol, size)| metadata_kernel(entry, symbol, *size))
             .collect(),
     )
+}
+
+fn general_v3_metadata(
+    profile: GeneralV3Kernel,
+    explicit_size: u32,
+    kernarg_alignment: u32,
+    target: &str,
+) -> Vec<u8> {
+    let arguments = match profile {
+        GeneralV3Kernel::Alpha => vec![
+            argument(Some("scale"), 0, 4, "by_value", None),
+            argument(Some("input_ptr"), 8, 8, "global_buffer", Some("global")),
+            argument(Some("input_len"), 16, 8, "by_value", None),
+            argument(Some("output_ptr"), 24, 8, "global_buffer", Some("global")),
+            argument(Some("output_len"), 32, 8, "by_value", None),
+        ],
+        GeneralV3Kernel::Zeta => vec![
+            argument(Some("left_ptr"), 0, 8, "global_buffer", Some("global")),
+            argument(Some("left_len"), 8, 8, "by_value", None),
+            argument(Some("right_ptr"), 16, 8, "global_buffer", Some("global")),
+            argument(Some("right_len"), 24, 8, "by_value", None),
+            argument(Some("bias"), 32, 4, "by_value", None),
+            argument(Some("output_ptr"), 40, 8, "global_buffer", Some("global")),
+            argument(Some("output_len"), 48, 8, "by_value", None),
+        ],
+    };
+    let kernel = Value::Map(vec![
+        (Value::from(".name"), Value::from(profile.entry())),
+        (Value::from(".symbol"), Value::from(profile.descriptor())),
+        (Value::from(".args"), Value::Array(arguments)),
+        (
+            Value::from(".kernarg_segment_size"),
+            Value::from(explicit_size),
+        ),
+        (
+            Value::from(".kernarg_segment_align"),
+            Value::from(kernarg_alignment),
+        ),
+        (Value::from(".group_segment_fixed_size"), Value::from(0)),
+        (Value::from(".private_segment_fixed_size"), Value::from(0)),
+        (Value::from(".wavefront_size"), Value::from(64)),
+        (Value::from(".sgpr_count"), Value::from(14)),
+        (Value::from(".vgpr_count"), Value::from(11)),
+        (Value::from(".agpr_count"), Value::from(3)),
+        (Value::from(".sgpr_spill_count"), Value::from(2)),
+        (Value::from(".vgpr_spill_count"), Value::from(4)),
+        (Value::from(".max_flat_workgroup_size"), Value::from(256)),
+        (
+            Value::from(".reqd_workgroup_size"),
+            Value::Array(vec![Value::from(256), Value::from(1), Value::from(1)]),
+        ),
+    ]);
+    let root = Value::Map(vec![
+        (
+            Value::from("amdhsa.version"),
+            Value::Array(vec![Value::from(1), Value::from(2)]),
+        ),
+        (
+            Value::from("amdhsa.target"),
+            Value::from(format!("amdgcn-amd-amdhsa--{target}")),
+        ),
+        (Value::from("amdhsa.kernels"), Value::Array(vec![kernel])),
+    ]);
+    let mut encoded = Vec::new();
+    write_value(&mut encoded, &root).unwrap();
+    encoded
 }
 
 fn metadata_from_values(kernels: Vec<Value>) -> Vec<u8> {
