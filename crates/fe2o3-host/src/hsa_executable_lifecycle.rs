@@ -1,6 +1,7 @@
 use crate::{
-    AdmittedFinalizedWorkerV2BundleV1, ArtifactKernelIdentityV1, CompilerGeneratedKernelContractV1,
-    DeviceIdentity, FinalizedWorkerV2BundleAdmissionError, PhysicalMetadataValueV1,
+    AdmittedFinalizedWorkerV2BundleV1, AdmittedWorkerV2TypedKernelV1, ArtifactKernelIdentityV1,
+    CompilerGeneratedKernelContractV1, DeviceIdentity, FinalizedWorkerV2BundleAdmissionError,
+    PhysicalMetadataValueV1, PublishedKernelPhysicalLayoutV1, WorkerV2TypedKernelSelectionError,
 };
 use fe2o3_amd_target::AmdTargetId;
 use fe2o3_artifacts::{
@@ -1316,6 +1317,28 @@ impl<K, A: ReviewedHsaExecutableLifecycleAdapterV1> LoadedHsaExecutableV1<K, A> 
         &self.environment
     }
 
+    /// Selects another typed kernel from this exact loaded executable.
+    ///
+    /// The result is deliberately inert. It binds the exact HSA executable
+    /// object to admission-scoped marker/ABI/effect evidence, but it does not
+    /// resolve the second HSA kernel handle or authenticate that marker's
+    /// compiler/Verus prerequisite decision. Consequently it has no dispatch
+    /// operation and cannot be converted into the existing vecadd executor.
+    #[doc(hidden)]
+    pub fn select_typed_kernel<S: CompilerGeneratedKernelContractV1>(
+        &self,
+    ) -> Result<InertLoadedWorkerV2KernelSelectionV1<'_, S>, WorkerV2TypedKernelSelectionError>
+    {
+        let selected = self.authenticated.admission.select_typed_kernel::<S>()?;
+        if selected.finalized_payload_identity().digest() != self.load.finalized_digest {
+            return Err(WorkerV2TypedKernelSelectionError::ExecutableSubstitution);
+        }
+        Ok(InertLoadedWorkerV2KernelSelectionV1 {
+            selected,
+            executable_object: self.load.executable_object,
+        })
+    }
+
     pub fn authorize_launch(
         &mut self,
         geometry: HsaLaunchGeometryV1,
@@ -1344,6 +1367,60 @@ impl<K, A: ReviewedHsaExecutableLifecycleAdapterV1> LoadedHsaExecutableV1<K, A> 
             agent: self.environment.agent.clone(),
             unload,
         })
+    }
+}
+
+/// Typed selection bound to one exact live HSA executable object.
+///
+/// This is the integration boundary for general multi-kernel execution. A
+/// future transition must consume this evidence, authenticate the selected
+/// marker's compiler/Verus prerequisites, resolve its symbol against the
+/// retained executable handle, and validate that resolution before issuing
+/// launch authority. Fields are private, the loaded executable remains
+/// borrowed, and this value is intentionally neither `Clone` nor `Copy`.
+#[doc(hidden)]
+pub struct InertLoadedWorkerV2KernelSelectionV1<'loaded, K> {
+    selected: AdmittedWorkerV2TypedKernelV1<'loaded, K>,
+    executable_object: HsaExecutableObjectIdentityV1,
+}
+
+impl<K> fmt::Debug for InertLoadedWorkerV2KernelSelectionV1<'_, K> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("InertLoadedWorkerV2KernelSelectionV1")
+            .field("artifact_identity", self.artifact_identity())
+            .field("executable_object", &self.executable_object)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<K> InertLoadedWorkerV2KernelSelectionV1<'_, K> {
+    pub const fn artifact_identity(&self) -> &ArtifactKernelIdentityV1 {
+        self.selected.artifact_identity()
+    }
+
+    pub const fn physical_kernel(&self) -> &PublishedKernelPhysicalLayoutV1 {
+        self.selected.physical_kernel()
+    }
+
+    pub const fn executable_object(&self) -> HsaExecutableObjectIdentityV1 {
+        self.executable_object
+    }
+
+    pub const fn requires_prerequisite_authentication(&self) -> bool {
+        true
+    }
+
+    pub const fn requires_hsa_kernel_resolution(&self) -> bool {
+        true
+    }
+
+    pub const fn grants_load_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
     }
 }
 
@@ -1921,7 +1998,9 @@ fn validate_nonzero_bytes(bytes: &[u8], field: &'static str) -> Result<(), HsaOb
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::worker_v2_bundle_admission::tests::{TestDirectory, admitted_for_lifecycle_test};
+    use crate::worker_v2_bundle_admission::tests::{
+        TestDirectory, admitted_for_lifecycle_test, admitted_two_kernel_for_lifecycle_test,
+    };
     use crate::{CompilerGeneratedKernelProfileV1, ObservedContext};
     use fe2o3_device::KernelMarkerV1;
     use std::sync::Arc;
@@ -1948,6 +2027,29 @@ mod tests {
         const PROFILE: CompilerGeneratedKernelProfileV1 =
             CompilerGeneratedKernelProfileV1::TypedVecAddF32RustcLayoutV2;
         const KERNEL_BINDING_ID_V1: [u8; 32] = [0x4b; 32];
+
+        fn artifact_container_bytes() -> &'static [u8] {
+            &[]
+        }
+    }
+
+    struct SecondTestKernel;
+
+    unsafe impl KernelMarkerV1 for SecondTestKernel {
+        type Function = fn();
+        type Registration = (u16, &'static str, &'static str, fn());
+
+        const LOGICAL_NAME: &'static str = "logical_second";
+        const EXPORT_NAME: &'static str = "second_kernel";
+        const FUNCTION: Self::Function = test_kernel;
+        const REGISTRATION: &'static Self::Registration =
+            &(1, "logical_second", "second_kernel", test_kernel);
+    }
+
+    unsafe impl CompilerGeneratedKernelContractV1 for SecondTestKernel {
+        const PROFILE: CompilerGeneratedKernelProfileV1 =
+            CompilerGeneratedKernelProfileV1::TypedVecAddF32RustcLayoutV2;
+        const KERNEL_BINDING_ID_V1: [u8; 32] = [0x5b; 32];
 
         fn artifact_container_bytes() -> &'static [u8] {
             &[]
@@ -2054,6 +2156,18 @@ mod tests {
 
     fn authenticate(seed: u8) -> (AuthenticatedWorkerV2ExecutableV1<TestKernel>, TestDirectory) {
         let (admission, directory) = admitted_for_lifecycle_test(seed);
+        let authenticated = AuthenticatedWorkerV2ExecutableV1::authenticate(
+            admission,
+            &mut FakeAuthenticator::exact(),
+        )
+        .unwrap();
+        (authenticated, directory)
+    }
+
+    fn authenticate_two_kernels(
+        seed: u8,
+    ) -> (AuthenticatedWorkerV2ExecutableV1<TestKernel>, TestDirectory) {
+        let (admission, directory) = admitted_two_kernel_for_lifecycle_test(seed);
         let authenticated = AuthenticatedWorkerV2ExecutableV1::authenticate(
             admission,
             &mut FakeAuthenticator::exact(),
@@ -2333,6 +2447,13 @@ mod tests {
         (authorized.load(), unloads, directory)
     }
 
+    fn load_two_kernels(seed: u8) -> (TestLoadedResult, Arc<AtomicUsize>, TestDirectory) {
+        let (authenticated, directory) = authenticate_two_kernels(seed);
+        let (adapter, unloads) = FakeHsaAdapter::new(AdapterFault::None);
+        let authorized = authenticated.authorize_hsa_load(adapter).unwrap();
+        (authorized.load(), unloads, directory)
+    }
+
     #[repr(align(16))]
     struct AlignedKernarg([u8; 304]);
 
@@ -2360,6 +2481,63 @@ mod tests {
         assert!(unloaded.unload_observation().released());
         assert!(!unloaded.grants_load_authority());
         assert!(!unloaded.grants_launch_authority());
+        assert_eq!(unloads.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn loaded_executable_issues_only_inert_exact_typed_selection() {
+        let (loaded, unloads, _directory) = load(0x8f, AdapterFault::None);
+        let loaded = loaded.unwrap();
+        {
+            let selection = loaded.select_typed_kernel::<TestKernel>().unwrap();
+
+            assert_eq!(
+                selection.artifact_identity().kernel_id(),
+                loaded.artifact_identity().kernel_id()
+            );
+            assert_eq!(
+                selection.executable_object(),
+                loaded.load_observation().executable_object()
+            );
+            assert!(selection.requires_prerequisite_authentication());
+            assert!(selection.requires_hsa_kernel_resolution());
+            assert!(!selection.grants_load_authority());
+            assert!(!selection.grants_launch_authority());
+        }
+        loaded.unload().unwrap();
+        assert_eq!(unloads.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn one_exact_loaded_executable_selects_two_distinct_typed_markers() {
+        let (loaded, unloads, _directory) = load_two_kernels(0x8e);
+        let loaded = loaded.unwrap();
+        {
+            let first = loaded.select_typed_kernel::<TestKernel>().unwrap();
+            let second = loaded.select_typed_kernel::<SecondTestKernel>().unwrap();
+
+            assert_ne!(
+                first.artifact_identity().kernel_id(),
+                second.artifact_identity().kernel_id()
+            );
+            assert_eq!(
+                first.artifact_identity().symbol().as_str(),
+                "primary_kernel"
+            );
+            assert_eq!(
+                second.artifact_identity().symbol().as_str(),
+                "second_kernel"
+            );
+            assert_eq!(first.executable_object(), second.executable_object());
+            assert_eq!(
+                first.executable_object(),
+                loaded.load_observation().executable_object()
+            );
+            assert_eq!(first.physical_kernel().export_symbol(), "primary_kernel");
+            assert_eq!(second.physical_kernel().export_symbol(), "second_kernel");
+            assert!(!second.grants_launch_authority());
+        }
+        loaded.unload().unwrap();
         assert_eq!(unloads.load(Ordering::SeqCst), 1);
     }
 

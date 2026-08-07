@@ -1097,6 +1097,93 @@ pub(crate) mod tests {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn make_two_hsaco_fixture_with_kernel_ids(
+        seed: u8,
+        payload_bytes: Vec<u8>,
+        architecture: &str,
+        first_logical_name: &str,
+        first_export_symbol: &str,
+        first_kernel: DigestBytes,
+        second_logical_name: &str,
+        second_export_symbol: &str,
+        second_kernel: DigestBytes,
+        abi: AbiLayout,
+        launch: LaunchContract,
+    ) -> Fixture {
+        let payload =
+            CodeObjectPayload::from_bytes(DigestAlgorithm::Sha256, payload_bytes).unwrap();
+        let payload_identity = payload.digest();
+        let kernel = |kernel_id, logical_name: &str, export_symbol: &str, identity_seed| {
+            KernelEntry::new(
+                kernel_id,
+                name(logical_name),
+                name(export_symbol),
+                repeated_digest(identity_seed),
+                repeated_digest(identity_seed.wrapping_add(0x10)),
+                payload_identity.bytes(),
+                vec![],
+                launch.clone(),
+                abi.clone(),
+            )
+            .unwrap()
+        };
+        let manifest = ManifestV1::new(
+            CompilerIdentity::new(text("rustc"), text("1.94.0")),
+            ToolIdentity::new(text("fe2o3"), text("0.1.0")),
+            TargetIdentity::new(
+                text("amdgcn-amd-amdhsa"),
+                text(architecture),
+                PointerWidth::Bits64,
+                Endianness::Little,
+                vec![],
+            )
+            .unwrap(),
+            vec![
+                CodeObjectIdentity::new(
+                    payload_identity.bytes(),
+                    CodeObjectFormat::NativeExecutable,
+                    payload.bytes().len() as u64,
+                )
+                .unwrap(),
+            ],
+            vec![
+                kernel(
+                    first_kernel,
+                    first_logical_name,
+                    first_export_symbol,
+                    seed.wrapping_add(0x40),
+                ),
+                kernel(
+                    second_kernel,
+                    second_logical_name,
+                    second_export_symbol,
+                    seed.wrapping_add(0x41),
+                ),
+            ],
+        )
+        .unwrap();
+        let container =
+            ArtifactContainerV1::new(manifest, DigestAlgorithm::Sha256, vec![payload]).unwrap();
+        let bundle = BundleIndexV1::from_containers(std::slice::from_ref(&container)).unwrap();
+        let expectations = vec![expectation(seed.wrapping_add(0x20), payload_identity)];
+        let sources = expectations
+            .iter()
+            .cloned()
+            .map(|expectation| DirectLinkBindingSourceV1::new(&container, expectation))
+            .collect::<Vec<_>>();
+        let evidence = DirectLinkBundleEvidenceV1::bind(&bundle, &[&container], &sources).unwrap();
+        Fixture {
+            container,
+            bundle,
+            expectations,
+            evidence,
+            primary_kernel: first_kernel,
+            alias_kernel: second_kernel,
+            other_payload_kernel: repeated_digest(seed.wrapping_add(0x12)),
+        }
+    }
+
     fn fixture_from_generated_container(seed: u8, container: ArtifactContainerV1) -> Fixture {
         assert_eq!(container.manifest().kernels().len(), 1);
         let primary_kernel = container.manifest().kernels()[0].kernel_id();
@@ -1380,6 +1467,64 @@ pub(crate) mod tests {
         binding_hsaco(metadata, target, 0, private_segment_fixed_size, 304)
     }
 
+    pub(crate) fn typed_vecadd_two_kernel_hsaco_for_target(target: &str) -> TestHsaco {
+        let private_segment_fixed_size: u32 = if target.starts_with("gfx94") { 0 } else { 16 };
+        let mut arguments = Vec::new();
+        for (index, access) in [(0, "read_only"), (1, "read_only"), (2, "write_only")] {
+            let offset = index * 16;
+            arguments.push(test_explicit_argument(
+                &format!("arg{index}_ptr"),
+                offset,
+                8,
+                "global_buffer",
+                Some("global"),
+                Some(8),
+                Some(access),
+                Some(access),
+            ));
+            arguments.push(test_explicit_argument(
+                &format!("arg{index}_len"),
+                offset + 8,
+                8,
+                "by_value",
+                None,
+                None,
+                None,
+                None,
+            ));
+        }
+        let kernel = |export: &str, descriptor: &str| {
+            test_metadata_kernel_with_wavefront(
+                export,
+                descriptor,
+                arguments.clone(),
+                304,
+                8,
+                0,
+                private_segment_fixed_size,
+                Some([256, 1, 1]),
+                [None; 3],
+                false,
+                if target.starts_with("gfx94") { 64 } else { 32 },
+            )
+        };
+        let metadata = test_metadata(
+            target,
+            vec![
+                kernel("primary_kernel", "primary_kernel.kd"),
+                kernel("second_kernel", "second_kernel.kd"),
+            ],
+        );
+        binding_hsaco_with_optional_second_kernel(
+            metadata,
+            target,
+            0,
+            private_segment_fixed_size,
+            304,
+            Some(("second_kernel", "second_kernel.kd")),
+        )
+    }
+
     fn test_metadata(target: &str, kernels: Vec<Value>) -> Value {
         value_map(vec![
             (
@@ -1588,10 +1733,37 @@ pub(crate) mod tests {
         private_segment_fixed_size: u32,
         kernarg_segment_size: u32,
     ) -> TestHsaco {
+        binding_hsaco_with_optional_second_kernel(
+            document,
+            target,
+            static_shared_memory_bytes,
+            private_segment_fixed_size,
+            kernarg_segment_size,
+            None,
+        )
+    }
+
+    fn binding_hsaco_with_optional_second_kernel(
+        document: Value,
+        target: &str,
+        static_shared_memory_bytes: u32,
+        private_segment_fixed_size: u32,
+        kernarg_segment_size: u32,
+        second_kernel: Option<(&str, &str)>,
+    ) -> TestHsaco {
         const PROGRAM_HEADER_BYTES: usize = 56;
         const PROGRAM_COUNT: usize = 2;
         const SECTION_COUNT: usize = 7;
-        const DESCRIPTOR_OFFSET: usize = 0x9c0;
+        const SINGLE_DESCRIPTOR_OFFSET: usize = 0x9c0;
+        let kernel_count = if second_kernel.is_some() { 2 } else { 1 };
+        let descriptor_bytes = 64 * kernel_count;
+        let entry_stride = if second_kernel.is_some() { 256 } else { 64 };
+        let entry_bytes = entry_stride * kernel_count;
+        let descriptor_file_offset = if second_kernel.is_some() {
+            0x1800
+        } else {
+            SINGLE_DESCRIPTOR_OFFSET
+        };
 
         let note = metadata_note(&encode_value(&document));
         let first_program_header = ELF_HEADER_BYTES;
@@ -1601,13 +1773,13 @@ pub(crate) mod tests {
         let note_offset = bytes.len();
         bytes.extend_from_slice(&note);
         align_bytes(&mut bytes, 64);
-        assert!(bytes.len() <= DESCRIPTOR_OFFSET);
-        bytes.resize(DESCRIPTOR_OFFSET + 64, 0);
+        assert!(bytes.len() <= descriptor_file_offset);
+        bytes.resize(descriptor_file_offset + descriptor_bytes, 0);
         align_bytes(&mut bytes, 256);
         let entry_offset = bytes.len();
-        bytes.resize(entry_offset + 64, 0xbf);
+        bytes.resize(entry_offset + entry_bytes, 0xbf);
         let entry_address = entry_offset as u64 + 0x1000;
-        let descriptor_address = DESCRIPTOR_OFFSET as u64;
+        let descriptor_address = descriptor_file_offset as u64;
 
         let entry_name = b"primary_kernel";
         let descriptor_name = b"primary_kernel.kd";
@@ -1620,12 +1792,22 @@ pub(crate) mod tests {
         strings.push(0);
         let other_name_index = strings.len() as u32;
         strings.extend_from_slice(b"other\0");
+        let second_name_indices = second_kernel.map(|(entry, descriptor)| {
+            let entry_index = strings.len() as u32;
+            strings.extend_from_slice(entry.as_bytes());
+            strings.push(0);
+            let descriptor_index = strings.len() as u32;
+            strings.extend_from_slice(descriptor.as_bytes());
+            strings.push(0);
+            (entry_index, descriptor_index)
+        });
         let string_table_offset = bytes.len();
         bytes.extend_from_slice(&strings);
         align_bytes(&mut bytes, 8);
 
         let symbol_table_offset = bytes.len();
-        bytes.resize(symbol_table_offset + 4 * 24, 0);
+        let symbol_count = 4 + usize::from(second_kernel.is_some()) * 2;
+        bytes.resize(symbol_table_offset + symbol_count * 24, 0);
         let entry_symbol = symbol_table_offset + 24;
         write_test_u32(&mut bytes, entry_symbol, entry_name_index);
         bytes[entry_symbol + 4] = 0x12;
@@ -1645,6 +1827,31 @@ pub(crate) mod tests {
         write_test_u32(&mut bytes, spare_symbol, other_name_index);
         bytes[spare_symbol + 4] = 0x10;
         write_test_u16(&mut bytes, spare_symbol + 6, 0xfff1);
+
+        if let Some((second_entry_name, second_descriptor_name)) = second_name_indices {
+            let second_entry_symbol = symbol_table_offset + 96;
+            write_test_u32(&mut bytes, second_entry_symbol, second_entry_name);
+            bytes[second_entry_symbol + 4] = 0x12;
+            bytes[second_entry_symbol + 5] = 3;
+            write_test_u16(&mut bytes, second_entry_symbol + 6, 3);
+            write_test_u64(
+                &mut bytes,
+                second_entry_symbol + 8,
+                entry_address + entry_stride as u64,
+            );
+            write_test_u64(&mut bytes, second_entry_symbol + 16, 64);
+
+            let second_descriptor_symbol = symbol_table_offset + 120;
+            write_test_u32(&mut bytes, second_descriptor_symbol, second_descriptor_name);
+            bytes[second_descriptor_symbol + 4] = 0x11;
+            write_test_u16(&mut bytes, second_descriptor_symbol + 6, 2);
+            write_test_u64(
+                &mut bytes,
+                second_descriptor_symbol + 8,
+                descriptor_address + 64,
+            );
+            write_test_u64(&mut bytes, second_descriptor_symbol + 16, 64);
+        }
 
         let section_names = b"\0.note\0.rodata\0.text\0.strtab\0.symtab\0.shstrtab\0";
         let section_names_offset = bytes.len();
@@ -1679,12 +1886,12 @@ pub(crate) mod tests {
         write_test_u64(
             &mut bytes,
             first_program_header + 32,
-            (DESCRIPTOR_OFFSET + 64) as u64,
+            (descriptor_file_offset + descriptor_bytes) as u64,
         );
         write_test_u64(
             &mut bytes,
             first_program_header + 40,
-            (DESCRIPTOR_OFFSET + 64) as u64,
+            (descriptor_file_offset + descriptor_bytes) as u64,
         );
         write_test_u64(&mut bytes, first_program_header + 48, 0x1000);
 
@@ -1692,8 +1899,8 @@ pub(crate) mod tests {
         write_test_u32(&mut bytes, second_program_header + 4, 5);
         write_test_u64(&mut bytes, second_program_header + 8, entry_offset as u64);
         write_test_u64(&mut bytes, second_program_header + 16, entry_address);
-        write_test_u64(&mut bytes, second_program_header + 32, 64);
-        write_test_u64(&mut bytes, second_program_header + 40, 64);
+        write_test_u64(&mut bytes, second_program_header + 32, entry_bytes as u64);
+        write_test_u64(&mut bytes, second_program_header + 40, entry_bytes as u64);
         write_test_u64(&mut bytes, second_program_header + 48, 0x1000);
 
         let note_header = section_offset + SECTION_HEADER_BYTES;
@@ -1710,8 +1917,12 @@ pub(crate) mod tests {
         write_test_u32(&mut bytes, rodata_header + 4, 1);
         write_test_u64(&mut bytes, rodata_header + 8, 2);
         write_test_u64(&mut bytes, rodata_header + 16, descriptor_address);
-        write_test_u64(&mut bytes, rodata_header + 24, DESCRIPTOR_OFFSET as u64);
-        write_test_u64(&mut bytes, rodata_header + 32, 64);
+        write_test_u64(
+            &mut bytes,
+            rodata_header + 24,
+            descriptor_file_offset as u64,
+        );
+        write_test_u64(&mut bytes, rodata_header + 32, descriptor_bytes as u64);
         write_test_u64(&mut bytes, rodata_header + 48, 64);
 
         let text_header = section_offset + 3 * SECTION_HEADER_BYTES;
@@ -1720,7 +1931,7 @@ pub(crate) mod tests {
         write_test_u64(&mut bytes, text_header + 8, 6);
         write_test_u64(&mut bytes, text_header + 16, entry_address);
         write_test_u64(&mut bytes, text_header + 24, entry_offset as u64);
-        write_test_u64(&mut bytes, text_header + 32, 64);
+        write_test_u64(&mut bytes, text_header + 32, entry_bytes as u64);
         write_test_u64(&mut bytes, text_header + 48, 256);
 
         let strings_header = section_offset + 4 * SECTION_HEADER_BYTES;
@@ -1734,7 +1945,7 @@ pub(crate) mod tests {
         write_test_u32(&mut bytes, symbols_header, 29);
         write_test_u32(&mut bytes, symbols_header + 4, 2);
         write_test_u64(&mut bytes, symbols_header + 24, symbol_table_offset as u64);
-        write_test_u64(&mut bytes, symbols_header + 32, 4 * 24);
+        write_test_u64(&mut bytes, symbols_header + 32, (symbol_count * 24) as u64);
         write_test_u32(&mut bytes, symbols_header + 40, 4);
         write_test_u32(&mut bytes, symbols_header + 44, 1);
         write_test_u64(&mut bytes, symbols_header + 48, 8);
@@ -1755,39 +1966,44 @@ pub(crate) mod tests {
         );
         write_test_u64(&mut bytes, section_strings_header + 48, 1);
 
-        write_test_u32(&mut bytes, DESCRIPTOR_OFFSET, static_shared_memory_bytes);
-        write_test_u32(
-            &mut bytes,
-            DESCRIPTOR_OFFSET + 4,
-            private_segment_fixed_size,
-        );
-        write_test_u32(&mut bytes, DESCRIPTOR_OFFSET + 8, kernarg_segment_size);
-        write_test_i64(
-            &mut bytes,
-            DESCRIPTOR_OFFSET + 16,
-            i64::try_from(entry_address - descriptor_address).unwrap(),
-        );
         let (rsrc1, rsrc2, rsrc3) = if target.starts_with("gfx94") {
             (1, 0x00af_0081, 0x1390)
         } else {
             (0x40, 0xe0af_0000, 0x1391)
         };
-        write_test_u32(&mut bytes, DESCRIPTOR_OFFSET + 44, rsrc1);
-        write_test_u32(&mut bytes, DESCRIPTOR_OFFSET + 48, rsrc2);
-        write_test_u32(&mut bytes, DESCRIPTOR_OFFSET + 52, rsrc3);
-        write_test_u16(
-            &mut bytes,
-            DESCRIPTOR_OFFSET + 56,
-            if target.starts_with("gfx94") {
-                0x001e
-            } else {
-                0x041e
-            },
-        );
+        for index in 0..kernel_count {
+            let descriptor_offset = descriptor_file_offset + index * 64;
+            let descriptor_address = descriptor_address + (index * 64) as u64;
+            let entry_address = entry_address + (index * entry_stride) as u64;
+            write_test_u32(&mut bytes, descriptor_offset, static_shared_memory_bytes);
+            write_test_u32(
+                &mut bytes,
+                descriptor_offset + 4,
+                private_segment_fixed_size,
+            );
+            write_test_u32(&mut bytes, descriptor_offset + 8, kernarg_segment_size);
+            write_test_i64(
+                &mut bytes,
+                descriptor_offset + 16,
+                i64::try_from(entry_address - descriptor_address).unwrap(),
+            );
+            write_test_u32(&mut bytes, descriptor_offset + 44, rsrc1);
+            write_test_u32(&mut bytes, descriptor_offset + 48, rsrc2);
+            write_test_u32(&mut bytes, descriptor_offset + 52, rsrc3);
+            write_test_u16(
+                &mut bytes,
+                descriptor_offset + 56,
+                if target.starts_with("gfx94") {
+                    0x001e
+                } else {
+                    0x041e
+                },
+            );
+        }
 
         TestHsaco {
             bytes,
-            descriptor_offset: DESCRIPTOR_OFFSET,
+            descriptor_offset: descriptor_file_offset,
         }
     }
 

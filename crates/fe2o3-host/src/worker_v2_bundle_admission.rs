@@ -1,7 +1,9 @@
+use crate::artifact_binding::validate_generated_profile;
 use crate::published_direct_link::payload_kernel_set;
 use crate::published_hsaco_inspection::inspect_payload_against_artifact_identity;
 use crate::{
-    ArtifactBindingError, ArtifactKernelIdentityV1, DeviceIdentity, ObservedContext,
+    ArtifactBindingError, ArtifactKernelIdentityV1, CompilerGeneratedKernelContractV1,
+    CompilerGeneratedKernelProfileV1, DeviceIdentity, GeneratedKernelProfileError, ObservedContext,
     PublishedKernelPhysicalLayoutV1, PublishedPhysicalLayoutInspectionError,
     ValidatedArtifactSelectionV1,
 };
@@ -20,6 +22,7 @@ use fe2o3_artifacts::{
 use fe2o3_hsaco::{CodeObjectVersion, InspectedKernelBindings, KernelDescriptorBinding};
 use fe2o3_hsaco_finalize::PreparedWorkerV2HsacoPublicationV1;
 use std::fmt;
+use std::marker::PhantomData;
 
 /// Strict, inert host admission for one finalized Worker V2 bundle occurrence.
 ///
@@ -46,6 +49,7 @@ pub struct AdmittedFinalizedWorkerV2BundleV1 {
     finalization_identity: DirectLinkFinalizationIdentityV1,
     finalized_payload_identity: DirectLinkFinalizedPayloadIdentityV1,
     artifact_identity: ArtifactKernelIdentityV1,
+    kernel_identities: Box<[ArtifactKernelIdentityV1]>,
     device: DeviceIdentity,
     inspected: InspectedKernelBindings,
     kernels: Box<[PublishedKernelPhysicalLayoutV1]>,
@@ -138,6 +142,7 @@ impl AdmittedFinalizedWorkerV2BundleV1 {
             finalization_identity: parts.finalization_identity,
             finalized_payload_identity: parts.finalized_payload_identity,
             artifact_identity: parts.artifact_identity,
+            kernel_identities: parts.kernel_identities,
             device: parts.device,
             inspected: parts.inspected,
             kernels: parts.kernels,
@@ -183,6 +188,49 @@ impl AdmittedFinalizedWorkerV2BundleV1 {
 
     pub const fn artifact_identity(&self) -> &ArtifactKernelIdentityV1 {
         &self.artifact_identity
+    }
+
+    /// Number of manifest kernels physically admitted from the exact finalized payload.
+    pub fn kernel_count(&self) -> usize {
+        self.kernel_identities.len()
+    }
+
+    /// Selects one compiler-generated marker from this exact admitted payload.
+    ///
+    /// This token is inert: it proves structural marker, ABI/effect, target,
+    /// executable, and physical-layout agreement but grants neither HSA load nor
+    /// launch authority. A later loaded-executable selection must additionally
+    /// bind the exact HSA executable object and resolve this symbol through the
+    /// reviewed lifecycle adapter.
+    #[doc(hidden)]
+    pub fn select_typed_kernel<K: CompilerGeneratedKernelContractV1>(
+        &self,
+    ) -> Result<AdmittedWorkerV2TypedKernelV1<'_, K>, WorkerV2TypedKernelSelectionError> {
+        let identity_index = select_typed_kernel_identity::<K>(
+            &self.kernel_identities,
+            self.artifact_identity.target(),
+            self.finalized_payload_identity.digest(),
+        )?;
+        let identity = &self.kernel_identities[identity_index];
+        let mut physical_matches = self
+            .kernels
+            .iter()
+            .enumerate()
+            .filter(|(_, physical)| physical.export_symbol() == identity.symbol().as_str());
+        let (physical_index, physical) = physical_matches
+            .next()
+            .ok_or(WorkerV2TypedKernelSelectionError::PhysicalKernelSubstitution)?;
+        if physical_matches.next().is_some()
+            || validate_selected_identity(identity, physical).is_err()
+        {
+            return Err(WorkerV2TypedKernelSelectionError::PhysicalKernelSubstitution);
+        }
+        Ok(AdmittedWorkerV2TypedKernelV1 {
+            admission: self,
+            identity_index,
+            physical_index,
+            _marker: PhantomData,
+        })
     }
 
     /// Physical HIP device observation used when this bundle was admitted.
@@ -261,6 +309,7 @@ struct AdmissionParts {
     finalization_identity: DirectLinkFinalizationIdentityV1,
     finalized_payload_identity: DirectLinkFinalizedPayloadIdentityV1,
     artifact_identity: ArtifactKernelIdentityV1,
+    kernel_identities: Box<[ArtifactKernelIdentityV1]>,
     device: DeviceIdentity,
     inspected: InspectedKernelBindings,
     kernels: Box<[PublishedKernelPhysicalLayoutV1]>,
@@ -316,6 +365,7 @@ fn admit_parts(
         .map_err(FinalizedWorkerV2BundleAdmissionError::ArtifactBinding)?;
     let artifact_identity = validated.identity().clone();
     let expected_kernels = payload_kernel_set(selected);
+    let kernel_identities = validate_payload_kernel_identities(container, selected, observed)?;
     let (linked_inspected, linked_kernels, linked_selected_kernel_index) =
         inspect_payload_against_artifact_identity(
             prepared_bytes,
@@ -330,6 +380,7 @@ fn admit_parts(
     )
     .map_err(FinalizedWorkerV2BundleAdmissionError::PhysicalInspection)?;
     validate_selected_identity(&artifact_identity, &kernels[selected_kernel_index])?;
+    validate_complete_identity_set(&kernel_identities, &kernels)?;
     if linked_inspected.inspection().target() != inspected.inspection().target()
         || linked_inspected.inspection().code_object_version()
             != inspected.inspection().code_object_version()
@@ -354,11 +405,202 @@ fn admit_parts(
         finalization_identity,
         finalized_payload_identity,
         artifact_identity,
+        kernel_identities,
         device: observed.device().clone(),
         inspected,
         kernels,
         selected_kernel_index,
     })
+}
+
+fn validate_payload_kernel_identities(
+    container: &ArtifactContainerV1,
+    selected: SelectedNativeKernel<'_>,
+    observed: &ObservedContext,
+) -> Result<Box<[ArtifactKernelIdentityV1]>, FinalizedWorkerV2BundleAdmissionError> {
+    let mut identities = Vec::new();
+    for kernel in selected
+        .manifest()
+        .kernels()
+        .iter()
+        .filter(|kernel| kernel.code_object_digest() == selected.code_object().digest())
+    {
+        let candidate = container
+            .select_native_kernel(kernel.kernel_id())
+            .map_err(|_| FinalizedWorkerV2BundleAdmissionError::SelectedKernelSubstitution)?;
+        if candidate.payload() != selected.payload() {
+            return Err(FinalizedWorkerV2BundleAdmissionError::SelectedKernelSubstitution);
+        }
+        let validated = ValidatedArtifactSelectionV1::validate(candidate, observed)
+            .map_err(FinalizedWorkerV2BundleAdmissionError::ArtifactBinding)?;
+        identities.push(validated.identity().clone());
+    }
+    if identities.is_empty() {
+        return Err(FinalizedWorkerV2BundleAdmissionError::SelectedKernelSubstitution);
+    }
+    Ok(identities.into_boxed_slice())
+}
+
+fn validate_complete_identity_set(
+    identities: &[ArtifactKernelIdentityV1],
+    physical: &[PublishedKernelPhysicalLayoutV1],
+) -> Result<(), FinalizedWorkerV2BundleAdmissionError> {
+    if identities.len() != physical.len() {
+        return Err(FinalizedWorkerV2BundleAdmissionError::FinalizationSemanticMismatch);
+    }
+    for identity in identities {
+        let mut matches = physical
+            .iter()
+            .filter(|kernel| kernel.export_symbol() == identity.symbol().as_str());
+        let kernel = matches
+            .next()
+            .ok_or(FinalizedWorkerV2BundleAdmissionError::FinalizationSemanticMismatch)?;
+        if matches.next().is_some() || validate_selected_identity(identity, kernel).is_err() {
+            return Err(FinalizedWorkerV2BundleAdmissionError::FinalizationSemanticMismatch);
+        }
+    }
+    Ok(())
+}
+
+fn select_typed_kernel_identity<K: CompilerGeneratedKernelContractV1>(
+    identities: &[ArtifactKernelIdentityV1],
+    target: &fe2o3_artifacts::TargetIdentity,
+    finalized_payload: PayloadDigest,
+) -> Result<usize, WorkerV2TypedKernelSelectionError> {
+    if K::PROFILE != CompilerGeneratedKernelProfileV1::TypedVecAddF32RustcLayoutV2 {
+        return Err(WorkerV2TypedKernelSelectionError::UnsupportedGeneratedProfile);
+    }
+
+    let mut matches = identities.iter().enumerate().filter(|(_, identity)| {
+        identity.name().as_str() == K::LOGICAL_NAME && identity.symbol().as_str() == K::EXPORT_NAME
+    });
+    let (index, identity) = match matches.next() {
+        Some(candidate) => candidate,
+        None => {
+            let partial_name_match = identities.iter().any(|identity| {
+                identity.name().as_str() == K::LOGICAL_NAME
+                    || identity.symbol().as_str() == K::EXPORT_NAME
+            });
+            return Err(if partial_name_match {
+                WorkerV2TypedKernelSelectionError::NameSubstitution
+            } else {
+                WorkerV2TypedKernelSelectionError::KernelNotFound
+            });
+        }
+    };
+    if matches.next().is_some() {
+        return Err(WorkerV2TypedKernelSelectionError::AmbiguousKernel);
+    }
+    if identity.target() != target {
+        return Err(WorkerV2TypedKernelSelectionError::TargetSubstitution);
+    }
+    if identity.payload_digest() != finalized_payload {
+        return Err(WorkerV2TypedKernelSelectionError::ExecutableSubstitution);
+    }
+    validate_generated_profile(K::PROFILE, K::KERNEL_BINDING_ID_V1, identity)
+        .map_err(WorkerV2TypedKernelSelectionError::GeneratedProfile)?;
+    Ok(index)
+}
+
+/// Inert typed selection from one exact admitted Worker V2 payload.
+///
+/// Private fields and the retained admission borrow prevent callers from
+/// manufacturing or substituting this evidence. It is intentionally neither
+/// `Clone` nor `Copy` and has no HSA operation.
+#[doc(hidden)]
+pub struct AdmittedWorkerV2TypedKernelV1<'admission, K> {
+    admission: &'admission AdmittedFinalizedWorkerV2BundleV1,
+    identity_index: usize,
+    physical_index: usize,
+    _marker: PhantomData<fn() -> K>,
+}
+
+impl<K> fmt::Debug for AdmittedWorkerV2TypedKernelV1<'_, K> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AdmittedWorkerV2TypedKernelV1")
+            .field("artifact_identity", self.artifact_identity())
+            .finish_non_exhaustive()
+    }
+}
+
+impl<K> AdmittedWorkerV2TypedKernelV1<'_, K> {
+    pub const fn artifact_identity(&self) -> &ArtifactKernelIdentityV1 {
+        &self.admission.kernel_identities[self.identity_index]
+    }
+
+    pub const fn physical_kernel(&self) -> &PublishedKernelPhysicalLayoutV1 {
+        &self.admission.kernels[self.physical_index]
+    }
+
+    pub fn descriptor_binding(&self) -> KernelDescriptorBinding {
+        self.admission.inspected.bindings()[self.physical_index]
+    }
+
+    pub const fn finalized_payload_identity(&self) -> DirectLinkFinalizedPayloadIdentityV1 {
+        self.admission.finalized_payload_identity
+    }
+
+    pub const fn grants_load_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
+    }
+}
+
+/// Failure while selecting a typed marker from an exact Worker V2 payload.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[doc(hidden)]
+#[non_exhaustive]
+pub enum WorkerV2TypedKernelSelectionError {
+    UnsupportedGeneratedProfile,
+    KernelNotFound,
+    NameSubstitution,
+    AmbiguousKernel,
+    TargetSubstitution,
+    ExecutableSubstitution,
+    GeneratedProfile(GeneratedKernelProfileError),
+    PhysicalKernelSubstitution,
+}
+
+impl fmt::Display for WorkerV2TypedKernelSelectionError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnsupportedGeneratedProfile => {
+                formatter.write_str("generated marker profile lacks an exact V2 kernel binding")
+            }
+            Self::KernelNotFound => {
+                formatter.write_str("generated marker is absent from the admitted executable")
+            }
+            Self::NameSubstitution => {
+                formatter.write_str("generated logical and export names select different kernels")
+            }
+            Self::AmbiguousKernel => {
+                formatter.write_str("generated marker names select multiple admitted kernels")
+            }
+            Self::TargetSubstitution => {
+                formatter.write_str("selected kernel target differs from the admitted executable")
+            }
+            Self::ExecutableSubstitution => {
+                formatter.write_str("selected kernel payload differs from the finalized executable")
+            }
+            Self::GeneratedProfile(error) => error.fmt(formatter),
+            Self::PhysicalKernelSubstitution => {
+                formatter.write_str("selected kernel differs from the inspected physical layout")
+            }
+        }
+    }
+}
+
+impl std::error::Error for WorkerV2TypedKernelSelectionError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::GeneratedProfile(error) => Some(error),
+            _ => None,
+        }
+    }
 }
 
 /// Currentness guard for one exact admitted Worker V2 bundle.
@@ -618,8 +860,8 @@ pub(crate) mod tests {
     use crate::published_direct_link::tests::{
         Fixture, make_observed_for, make_single_hsaco_fixture,
         make_single_hsaco_fixture_with_kernel_id,
-        make_single_hsaco_fixture_with_names_and_kernel_id, physical_test_abi,
-        typed_vecadd_hsaco_for_target,
+        make_single_hsaco_fixture_with_names_and_kernel_id, make_two_hsaco_fixture_with_kernel_ids,
+        physical_test_abi, typed_vecadd_hsaco_for_target, typed_vecadd_two_kernel_hsaco_for_target,
     };
     use fe2o3_artifact_transaction::{
         AtomicPublicationIdentityV1, BuildInvocation, BuildSession, CanonicalLinkRequestIdentityV1,
@@ -630,14 +872,18 @@ pub(crate) mod tests {
         publish_exact_hsaco_evidence_for_attempt_v1,
     };
     use fe2o3_artifacts::{
-        AbiLayout, BlockSize, Dimensions, DirectLinkBindingExpectationV1,
+        AbiField, AbiLayout, Access, BlockSize, CodeObjectFormat, CodeObjectIdentity,
+        CodeObjectPayload, CompilerIdentity, Dimensions, DirectLinkBindingExpectationV1,
         DirectLinkBindingSourceV1, DirectLinkBundleEvidenceV1, DirectLinkFinalizationIdentityV1,
-        DirectLinkLinkedOutputIdentityV1, DirectLinkTransformationIdentityV1, LaunchContract,
-        PointerWidth, derive_generated_kernel_identity_v2,
+        DirectLinkLinkedOutputIdentityV1, DirectLinkTransformationIdentityV1, Endianness,
+        IdentityText, KernelEntry, LaunchContract, ManifestV1, Name, PointerWidth, TargetIdentity,
+        ToolIdentity, derive_generated_kernel_identity_v2,
     };
+    use fe2o3_device::KernelMarkerV1;
     use reserved_fe2o3_symbols::TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2;
     use std::fs;
     use std::path::{Path, PathBuf};
+    use std::sync::OnceLock;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(1);
@@ -708,7 +954,7 @@ pub(crate) mod tests {
             &abi,
             &launch,
         );
-        let mut fixture = make_single_hsaco_fixture_with_kernel_id(
+        let fixture = make_single_hsaco_fixture_with_kernel_id(
             seed,
             hsaco.bytes.clone(),
             "gfx942",
@@ -717,6 +963,62 @@ pub(crate) mod tests {
             kernel_id,
         );
         let linked_bytes = linked_bytes.unwrap_or_else(|| hsaco.bytes.clone());
+        finish_admission_fixture(
+            seed,
+            plan_finalization_delta,
+            fixture,
+            linked_bytes,
+            hsaco.bytes,
+        )
+    }
+
+    fn two_kernel_admission_fixture(seed: u8) -> AdmissionFixture {
+        let hsaco = typed_vecadd_two_kernel_hsaco_for_target("gfx942");
+        let abi = crate::generated_vecadd::generated_vecadd_abi_v2().unwrap();
+        let launch = exact_launch(256);
+        let first_kernel = derive_generated_kernel_identity_v2(
+            TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2,
+            [0x4b; 32],
+            "logical_primary",
+            "primary_kernel",
+            repeated_digest(seed.wrapping_add(0x40)),
+            repeated_digest(seed.wrapping_add(0x50)),
+            &abi,
+            &launch,
+        );
+        let second_kernel = derive_generated_kernel_identity_v2(
+            TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2,
+            [0x5b; 32],
+            "logical_second",
+            "second_kernel",
+            repeated_digest(seed.wrapping_add(0x41)),
+            repeated_digest(seed.wrapping_add(0x51)),
+            &abi,
+            &launch,
+        );
+        let fixture = make_two_hsaco_fixture_with_kernel_ids(
+            seed,
+            hsaco.bytes.clone(),
+            "gfx942",
+            "logical_primary",
+            "primary_kernel",
+            first_kernel,
+            "logical_second",
+            "second_kernel",
+            second_kernel,
+            abi,
+            launch,
+        );
+        finish_admission_fixture(seed, 0, fixture, hsaco.bytes.clone(), hsaco.bytes)
+    }
+
+    fn finish_admission_fixture(
+        seed: u8,
+        plan_finalization_delta: u8,
+        mut fixture: Fixture,
+        linked_bytes: Vec<u8>,
+        finalized_bytes: Vec<u8>,
+    ) -> AdmissionFixture {
         bind_worker_linked_output(&mut fixture, &linked_bytes);
         let directory = TestDirectory::new();
         let producer = ProducerIdentity::from_codegen(
@@ -731,7 +1033,7 @@ pub(crate) mod tests {
             BuildSession::from_bytes([seed.wrapping_add(1); 16]),
         )
         .unwrap();
-        let output_digest = DigestAlgorithm::Sha256.calculate(&hsaco.bytes).bytes();
+        let output_digest = DigestAlgorithm::Sha256.calculate(&finalized_bytes).bytes();
         let linked_digest = DigestAlgorithm::Sha256.calculate(&linked_bytes).bytes();
         let expected_finalization = fixture.expectations[0]
             .finalization_identity()
@@ -760,7 +1062,7 @@ pub(crate) mod tests {
             attempt,
             plan,
             UpstreamCodeObjectEvidenceIdentityV1::from_bytes([seed.wrapping_add(9); 32]),
-            &hsaco.bytes,
+            &finalized_bytes,
         )
         .unwrap();
         AdmissionFixture {
@@ -769,7 +1071,7 @@ pub(crate) mod tests {
             attempt,
             publication,
             exact_bytes: linked_bytes,
-            finalized_bytes: hsaco.bytes,
+            finalized_bytes,
         }
     }
 
@@ -840,6 +1142,49 @@ pub(crate) mod tests {
             finalization_identity: parts.finalization_identity,
             finalized_payload_identity: parts.finalized_payload_identity,
             artifact_identity: parts.artifact_identity,
+            kernel_identities: parts.kernel_identities,
+            device: parts.device,
+            inspected: parts.inspected,
+            kernels: parts.kernels,
+            selected_kernel_index: parts.selected_kernel_index,
+        };
+        (admission, input._directory)
+    }
+
+    pub(crate) fn admitted_two_kernel_for_lifecycle_test(
+        seed: u8,
+    ) -> (AdmittedFinalizedWorkerV2BundleV1, TestDirectory) {
+        let input = two_kernel_admission_fixture(seed);
+        let validated = input.fixture.validated();
+        let selected_kernel = selected(&input.fixture);
+        let observed = make_observed_for(seed.into(), "gfx942");
+        let parts = admit_parts(
+            input.attempt,
+            &input.exact_bytes,
+            input.publication,
+            &validated,
+            &input.fixture.container,
+            selected_kernel,
+            &observed,
+        )
+        .unwrap();
+        let admission = AdmittedFinalizedWorkerV2BundleV1 {
+            prepared: RetainedWorkerV2PreparationV1::Test {
+                attempt: input.attempt,
+                exact_bytes: input.exact_bytes.into_boxed_slice(),
+            },
+            current_lease: parts.current_lease,
+            receipt: parts.receipt,
+            published: parts.published,
+            bundle_index_identity: parts.bundle_index_identity,
+            bundle_evidence_identity: parts.bundle_evidence_identity,
+            binding_index: parts.binding_index,
+            container_identity: parts.container_identity,
+            linked_output_identity: parts.linked_output_identity,
+            finalization_identity: parts.finalization_identity,
+            finalized_payload_identity: parts.finalized_payload_identity,
+            artifact_identity: parts.artifact_identity,
+            kernel_identities: parts.kernel_identities,
             device: parts.device,
             inspected: parts.inspected,
             kernels: parts.kernels,
@@ -951,6 +1296,7 @@ pub(crate) mod tests {
             finalization_identity: parts.finalization_identity,
             finalized_payload_identity: parts.finalized_payload_identity,
             artifact_identity: parts.artifact_identity,
+            kernel_identities: parts.kernel_identities,
             device: parts.device,
             inspected: parts.inspected,
             kernels: parts.kernels,
@@ -1236,6 +1582,286 @@ pub(crate) mod tests {
                 MissingFinalizedWorkerV2LoadPrerequisiteV1::AuthenticatedRustMarkerAbiAndEffectsBinding,
                 MissingFinalizedWorkerV2LoadPrerequisiteV1::AuthenticatedHsaModuleLifecycle,
             ]
+        );
+    }
+
+    fn marker_function() {}
+
+    macro_rules! typed_selection_marker {
+        ($marker:ident, $logical:literal, $export:literal, $binding:expr) => {
+            struct $marker;
+
+            unsafe impl KernelMarkerV1 for $marker {
+                type Function = fn();
+                type Registration = ();
+
+                const LOGICAL_NAME: &'static str = $logical;
+                const EXPORT_NAME: &'static str = $export;
+                const FUNCTION: Self::Function = marker_function;
+                const REGISTRATION: &'static Self::Registration = &();
+            }
+
+            // SAFETY: The private fixture emits a canonical single-kernel V2
+            // container for this exact marker. Selection tests never load it.
+            unsafe impl CompilerGeneratedKernelContractV1 for $marker {
+                const PROFILE: CompilerGeneratedKernelProfileV1 =
+                    CompilerGeneratedKernelProfileV1::TypedVecAddF32RustcLayoutV2;
+                const KERNEL_BINDING_ID_V1: [u8; 32] = $binding;
+
+                fn artifact_container_bytes() -> &'static [u8] {
+                    static BYTES: OnceLock<Vec<u8>> = OnceLock::new();
+                    BYTES
+                        .get_or_init(|| {
+                            selection_container(
+                                "gfx942",
+                                0xe1,
+                                &[SelectionSpec::new($logical, $export, $binding)],
+                                None,
+                            )
+                            .to_bytes()
+                        })
+                        .as_slice()
+                }
+            }
+        };
+    }
+
+    typed_selection_marker!(
+        FirstTypedKernel,
+        "logical_first",
+        "first_kernel",
+        [0x11; 32]
+    );
+    typed_selection_marker!(
+        SecondTypedKernel,
+        "logical_second",
+        "second_kernel",
+        [0x22; 32]
+    );
+    typed_selection_marker!(
+        MissingTypedKernel,
+        "logical_missing",
+        "missing_kernel",
+        [0x33; 32]
+    );
+    typed_selection_marker!(
+        PartialNameTypedKernel,
+        "logical_first",
+        "second_kernel",
+        [0x44; 32]
+    );
+    typed_selection_marker!(
+        WrongBindingTypedKernel,
+        "logical_second",
+        "second_kernel",
+        [0x55; 32]
+    );
+
+    #[derive(Clone, Copy)]
+    struct SelectionSpec {
+        logical: &'static str,
+        export: &'static str,
+        binding: [u8; 32],
+    }
+
+    impl SelectionSpec {
+        const fn new(logical: &'static str, export: &'static str, binding: [u8; 32]) -> Self {
+            Self {
+                logical,
+                export,
+                binding,
+            }
+        }
+    }
+
+    fn selection_text(value: &str) -> IdentityText {
+        IdentityText::new(value).unwrap()
+    }
+
+    fn selection_name(value: &str) -> Name {
+        Name::new(value).unwrap()
+    }
+
+    fn selection_container(
+        target: &str,
+        payload_seed: u8,
+        specs: &[SelectionSpec],
+        wrong_effect_index: Option<usize>,
+    ) -> ArtifactContainerV1 {
+        let payload =
+            CodeObjectPayload::from_bytes(DigestAlgorithm::Sha256, vec![payload_seed; 96]).unwrap();
+        let payload_digest = payload.digest();
+        let code_object = CodeObjectIdentity::new(
+            payload_digest.bytes(),
+            CodeObjectFormat::NativeExecutable,
+            payload.bytes().len() as u64,
+        )
+        .unwrap();
+        let launch = exact_launch(256);
+        let kernels = specs
+            .iter()
+            .enumerate()
+            .map(|(index, spec)| {
+                let mut abi = crate::generated_vecadd::generated_vecadd_abi_v2().unwrap();
+                if wrong_effect_index == Some(index) {
+                    let mut fields = abi.fields().to_vec();
+                    let output = &fields[2];
+                    fields[2] = AbiField::new(
+                        output.name().clone(),
+                        output.offset(),
+                        output.size(),
+                        output.alignment(),
+                        output.kind(),
+                        output.mutability(),
+                        Access::ReadWrite,
+                        output.address_space(),
+                        output.type_identity(),
+                        output.ownership(),
+                        output.alias_class(),
+                    )
+                    .unwrap();
+                    abi = AbiLayout::new(abi.size(), abi.alignment(), abi.pointer_width(), fields)
+                        .unwrap();
+                }
+                let source = repeated_digest(payload_seed.wrapping_add(0x20 + index as u8));
+                let executable = repeated_digest(payload_seed.wrapping_add(0x40 + index as u8));
+                let kernel_id = derive_generated_kernel_identity_v2(
+                    TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2,
+                    spec.binding,
+                    spec.logical,
+                    spec.export,
+                    source,
+                    executable,
+                    &abi,
+                    &launch,
+                );
+                KernelEntry::new(
+                    kernel_id,
+                    selection_name(spec.logical),
+                    selection_name(spec.export),
+                    source,
+                    executable,
+                    payload_digest.bytes(),
+                    vec![],
+                    launch.clone(),
+                    abi,
+                )
+                .unwrap()
+            })
+            .collect();
+        let manifest = ManifestV1::new(
+            CompilerIdentity::new(selection_text("rustc"), selection_text("test")),
+            ToolIdentity::new(selection_text("fe2o3"), selection_text("test")),
+            TargetIdentity::new(
+                selection_text("amdgcn-amd-amdhsa"),
+                selection_text(target),
+                PointerWidth::Bits64,
+                Endianness::Little,
+                vec![],
+            )
+            .unwrap(),
+            vec![code_object],
+            kernels,
+        )
+        .unwrap();
+        ArtifactContainerV1::new(manifest, DigestAlgorithm::Sha256, vec![payload]).unwrap()
+    }
+
+    fn selection_identities(
+        target: &str,
+        payload_seed: u8,
+        wrong_effect_index: Option<usize>,
+    ) -> Box<[ArtifactKernelIdentityV1]> {
+        let specs = [
+            SelectionSpec::new("logical_first", "first_kernel", [0x11; 32]),
+            SelectionSpec::new("logical_second", "second_kernel", [0x22; 32]),
+        ];
+        let container = selection_container(target, payload_seed, &specs, wrong_effect_index);
+        let observed = make_observed_for(payload_seed.into(), target);
+        container
+            .manifest()
+            .kernels()
+            .iter()
+            .map(|kernel| {
+                let selected = container.select_native_kernel(kernel.kernel_id()).unwrap();
+                ValidatedArtifactSelectionV1::validate(selected, &observed)
+                    .unwrap()
+                    .identity()
+                    .clone()
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice()
+    }
+
+    #[test]
+    fn selects_two_distinct_typed_markers_from_one_exact_payload() {
+        let identities = selection_identities("gfx942", 0xb1, None);
+        let target = identities[0].target();
+        let finalized = identities[0].payload_digest();
+        let first =
+            select_typed_kernel_identity::<FirstTypedKernel>(&identities, target, finalized)
+                .unwrap();
+        let second =
+            select_typed_kernel_identity::<SecondTypedKernel>(&identities, target, finalized)
+                .unwrap();
+
+        assert_ne!(first, second);
+        assert_eq!(identities[first].symbol().as_str(), "first_kernel");
+        assert_eq!(identities[second].symbol().as_str(), "second_kernel");
+        assert_eq!(
+            identities[first].payload_digest(),
+            identities[second].payload_digest()
+        );
+    }
+
+    #[test]
+    fn typed_selection_rejects_name_binding_abi_effect_target_and_executable_substitution() {
+        let identities = selection_identities("gfx942", 0xb2, None);
+        let target = identities[0].target();
+        let finalized = identities[0].payload_digest();
+        assert_eq!(
+            select_typed_kernel_identity::<MissingTypedKernel>(&identities, target, finalized),
+            Err(WorkerV2TypedKernelSelectionError::KernelNotFound)
+        );
+        assert_eq!(
+            select_typed_kernel_identity::<PartialNameTypedKernel>(&identities, target, finalized,),
+            Err(WorkerV2TypedKernelSelectionError::NameSubstitution)
+        );
+        assert_eq!(
+            select_typed_kernel_identity::<WrongBindingTypedKernel>(&identities, target, finalized,),
+            Err(WorkerV2TypedKernelSelectionError::GeneratedProfile(
+                GeneratedKernelProfileError::KernelIdentityMismatch,
+            ))
+        );
+
+        let wrong_effects = selection_identities("gfx942", 0xb3, Some(1));
+        assert_eq!(
+            select_typed_kernel_identity::<SecondTypedKernel>(
+                &wrong_effects,
+                wrong_effects[0].target(),
+                wrong_effects[0].payload_digest(),
+            ),
+            Err(WorkerV2TypedKernelSelectionError::GeneratedProfile(
+                GeneratedKernelProfileError::AbiMismatch,
+            ))
+        );
+
+        let wrong_target = selection_identities("gfx950", 0xb2, None);
+        assert_eq!(
+            select_typed_kernel_identity::<SecondTypedKernel>(
+                &wrong_target,
+                target,
+                wrong_target[0].payload_digest(),
+            ),
+            Err(WorkerV2TypedKernelSelectionError::TargetSubstitution)
+        );
+        assert_eq!(
+            select_typed_kernel_identity::<SecondTypedKernel>(
+                &identities,
+                target,
+                wrong_effects[0].payload_digest(),
+            ),
+            Err(WorkerV2TypedKernelSelectionError::ExecutableSubstitution)
         );
     }
 }

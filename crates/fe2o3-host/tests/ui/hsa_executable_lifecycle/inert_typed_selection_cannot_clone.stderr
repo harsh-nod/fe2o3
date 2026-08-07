@@ -1,0 +1,5 @@
+error[E0599]: no method named `clone` found for struct `fe2o3_host::InertLoadedWorkerV2KernelSelectionV1<'loaded, K>` in the current scope
+ --> tests/ui/hsa_executable_lifecycle/inert_typed_selection_cannot_clone.rs:4:32
+  |
+4 |     let _duplicate = selection.clone();
+  |                                ^^^^^ method not found in `fe2o3_host::InertLoadedWorkerV2KernelSelectionV1<'_, K>`

@@ -1,0 +1,12 @@
+error[E0505]: cannot move out of `loaded` because it is borrowed
+  --> tests/ui/hsa_executable_lifecycle/unload_while_typed_selection_borrowed.rs:12:21
+   |
+ 6 | fn unload_while_selected<K, S, A>(loaded: LoadedHsaExecutableV1<K, A>)
+   |                                   ------ binding `loaded` declared here
+...
+11 |     let selection = loaded.select_typed_kernel::<S>();
+   |                     ------ borrow of `loaded` occurs here
+12 |     let _unloaded = loaded.unload();
+   |                     ^^^^^^ move out of `loaded` occurs here
+13 |     drop(selection);
+   |          --------- borrow later used here

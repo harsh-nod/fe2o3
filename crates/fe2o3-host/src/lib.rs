@@ -69,11 +69,12 @@ pub use hsa_executable_lifecycle::{
     HsaKernelLaunchAuthorizationV1, HsaKernelObjectIdentityV1, HsaKernelResolutionObservationV1,
     HsaLaunchAuthorizationError, HsaLaunchGeometryV1, HsaLoadAuthorizationError,
     HsaObservationError, HsaPhysicalDeviceIdentityV1, HsaRuntimeIdentityV1, HsaUnloadObservationV1,
-    LoadedHsaExecutableV1, ReviewedHsaExecutableLifecycleAdapterV1,
-    ReviewedHsaImplicitKernargAdapterV1, UnloadedHsaExecutableV1,
-    WorkerV2ExecutableAuthenticationError, WorkerV2PrerequisiteAuthenticatorV1,
-    WorkerV2PrerequisiteDecisionV1, WorkerV2PrerequisiteError, WorkerV2PrerequisiteRequestV1,
-    WorkerV2RequiredProfileError, WorkerV2SafetyPropertiesV1, WorkerV2SafetyPropertyV1,
+    InertLoadedWorkerV2KernelSelectionV1, LoadedHsaExecutableV1,
+    ReviewedHsaExecutableLifecycleAdapterV1, ReviewedHsaImplicitKernargAdapterV1,
+    UnloadedHsaExecutableV1, WorkerV2ExecutableAuthenticationError,
+    WorkerV2PrerequisiteAuthenticatorV1, WorkerV2PrerequisiteDecisionV1, WorkerV2PrerequisiteError,
+    WorkerV2PrerequisiteRequestV1, WorkerV2RequiredProfileError, WorkerV2SafetyPropertiesV1,
+    WorkerV2SafetyPropertyV1,
 };
 #[doc(hidden)]
 pub use loaded_kernel::{GeneratedAdmittedLaunch, LoadedKernelLoadError};
@@ -98,8 +99,9 @@ pub use published_hsaco_inspection::{
     PublishedPhysicalLayoutInspectionError,
 };
 pub use worker_v2_bundle_admission::{
-    AdmittedFinalizedWorkerV2BundleV1, CurrentFinalizedWorkerV2BundleAdmissionV1,
-    FinalizedWorkerV2BundleAdmissionError, MissingFinalizedWorkerV2LoadPrerequisiteV1,
+    AdmittedFinalizedWorkerV2BundleV1, AdmittedWorkerV2TypedKernelV1,
+    CurrentFinalizedWorkerV2BundleAdmissionV1, FinalizedWorkerV2BundleAdmissionError,
+    MissingFinalizedWorkerV2LoadPrerequisiteV1, WorkerV2TypedKernelSelectionError,
 };
 
 /// Compiler-generated host bindings. This is an unstable implementation SPI,
