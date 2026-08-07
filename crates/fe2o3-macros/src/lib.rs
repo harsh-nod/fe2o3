@@ -2,6 +2,14 @@
 
 mod control_flow_v1;
 
+use fe2o3_artifacts::{
+    AbiField, AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership, BlockSize,
+    DeclaredRustLayoutIdentity, DeclaredRustTypeIdentity, DigestAlgorithm, DigestBytes, Dimensions,
+    LaunchContract, Mutability, Name, PointerWidth, RustDisjointIndexSpaceV1, RustLayoutEvidenceV1,
+    RustPhysicalComponentKindV1, RustPhysicalComponentV1, RustPointerMutabilityV1,
+    RustScalarElementTypeV1, RustSourceTypeShapeV1, RustTypeEvidenceV1, RustcAbiClassV1,
+    ScalarType, TypeIdentity, derive_generated_host_contract_identity_v1,
+};
 use proc_macro::TokenStream;
 use proc_macro_crate::{FoundCrate, crate_name};
 use quote::{format_ident, quote};
@@ -247,6 +255,13 @@ struct KernelOptions {
 const MAX_TYPED_KERNEL_SYMBOL_STEM_BYTES: usize = 128;
 const MAX_WORKGROUP_THREADS_V1: u64 = 1_024;
 const MAX_RESIDENT_WORKGROUPS_PER_COMPUTE_UNIT_V1: u16 = 64;
+const GENERAL_TYPED_PROFILE_TAG_V1: &str = "fe2o3.manifest-derived-scalar-slice.v1";
+const GENERAL_TYPED_DEFAULT_BLOCK_V1: [u32; 3] = [256, 1, 1];
+const GENERAL_TYPED_POINTER_SIZE_V1: u64 = 8;
+const GENERAL_TYPED_POINTER_ALIGNMENT_V1: u32 = 8;
+const GENERAL_TYPED_SLICE_SIZE_V1: u64 = 16;
+const GENERAL_TYPED_TYPE_ID_DOMAIN_V1: &[u8] = b"fe2o3.rust-type.v1\0";
+const GENERAL_TYPED_LAYOUT_ID_DOMAIN_V1: &[u8] = b"fe2o3.rust-layout.v1\0";
 const KERNEL_FRONTEND_REGISTRATION_PREFIX_V1: &str = "__fe2o3_kernel_frontend_contract_v1_";
 const KERNEL_FRONTEND_REGISTRATION_MAGIC_V1: u64 = u64::from_le_bytes(*b"FE2O3KFA");
 const KERNEL_FRONTEND_REGISTRATION_VERSION_V1: u16 = 1;
@@ -1121,17 +1136,29 @@ fn validate_typed_kernel_signature(input: &ItemFn) -> syn::Result<()> {
     }
 
     let arguments = signature.inputs.iter().collect::<Vec<_>>();
-    validate_typed_argument(arguments[0], 1, is_shared_f32_slice)?;
-    validate_typed_argument(arguments[1], 2, is_shared_f32_slice)?;
-    validate_typed_argument(arguments[2], 3, is_disjoint_f32_slice)?;
+    validate_exact_vecadd_argument(
+        arguments[0],
+        1,
+        GeneralTypedArgumentKindV1::SharedSlice(GeneralTypedScalarV1::F32),
+    )?;
+    validate_exact_vecadd_argument(
+        arguments[1],
+        2,
+        GeneralTypedArgumentKindV1::SharedSlice(GeneralTypedScalarV1::F32),
+    )?;
+    validate_exact_vecadd_argument(
+        arguments[2],
+        3,
+        GeneralTypedArgumentKindV1::ExclusiveSlice(GeneralTypedScalarV1::F32),
+    )?;
 
     Ok(())
 }
 
-fn validate_typed_argument(
+fn validate_exact_vecadd_argument(
     argument: &FnArg,
     position: usize,
-    type_matches: fn(&Type) -> bool,
+    expected: GeneralTypedArgumentKindV1,
 ) -> syn::Result<()> {
     let FnArg::Typed(argument) = argument else {
         return Err(syn::Error::new_spanned(
@@ -1153,7 +1180,7 @@ fn validate_typed_argument(
         ));
     }
 
-    if !type_matches(&argument.ty) {
+    if parse_general_typed_argument_type_v1(&argument.ty).ok() != Some(expected) {
         let required_type = if position < 3 {
             "&[f32]"
         } else {
@@ -1177,50 +1204,565 @@ fn is_unit_return(output: &ReturnType) -> bool {
     }
 }
 
-fn is_shared_f32_slice(ty: &Type) -> bool {
-    let Type::Reference(reference) = ty else {
-        return false;
-    };
-    if reference.lifetime.is_some() || reference.mutability.is_some() {
-        return false;
-    }
-    let Type::Slice(slice) = reference.elem.as_ref() else {
-        return false;
-    };
-
-    is_exact_f32(&slice.elem)
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GeneralTypedScalarV1 {
+    I8,
+    U8,
+    I16,
+    U16,
+    I32,
+    U32,
+    I64,
+    U64,
+    F16,
+    F32,
+    F64,
 }
 
-fn is_disjoint_f32_slice(ty: &Type) -> bool {
+impl GeneralTypedScalarV1 {
+    const fn spelling(self) -> &'static str {
+        match self {
+            Self::I8 => "i8",
+            Self::U8 => "u8",
+            Self::I16 => "i16",
+            Self::U16 => "u16",
+            Self::I32 => "i32",
+            Self::U32 => "u32",
+            Self::I64 => "i64",
+            Self::U64 => "u64",
+            Self::F16 => "f16",
+            Self::F32 => "f32",
+            Self::F64 => "f64",
+        }
+    }
+
+    const fn size_alignment(self) -> (u64, u32) {
+        match self {
+            Self::I8 | Self::U8 => (1, 1),
+            Self::I16 | Self::U16 | Self::F16 => (2, 2),
+            Self::I32 | Self::U32 | Self::F32 => (4, 4),
+            Self::I64 | Self::U64 | Self::F64 => (8, 8),
+        }
+    }
+
+    const fn abi_scalar(self) -> ScalarType {
+        match self {
+            Self::I8 => ScalarType::I8,
+            Self::U8 => ScalarType::U8,
+            Self::I16 => ScalarType::I16,
+            Self::U16 => ScalarType::U16,
+            Self::I32 => ScalarType::I32,
+            Self::U32 => ScalarType::U32,
+            Self::I64 => ScalarType::I64,
+            Self::U64 => ScalarType::U64,
+            Self::F16 => ScalarType::F16,
+            Self::F32 => ScalarType::F32,
+            Self::F64 => ScalarType::F64,
+        }
+    }
+
+    const fn rust_layout_scalar(self) -> RustScalarElementTypeV1 {
+        match self {
+            Self::I8 => RustScalarElementTypeV1::I8,
+            Self::U8 => RustScalarElementTypeV1::U8,
+            Self::I16 => RustScalarElementTypeV1::I16,
+            Self::U16 => RustScalarElementTypeV1::U16,
+            Self::I32 => RustScalarElementTypeV1::I32,
+            Self::U32 => RustScalarElementTypeV1::U32,
+            Self::I64 => RustScalarElementTypeV1::I64,
+            Self::U64 => RustScalarElementTypeV1::U64,
+            Self::F16 => RustScalarElementTypeV1::F16,
+            Self::F32 => RustScalarElementTypeV1::F32,
+            Self::F64 => RustScalarElementTypeV1::F64,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GeneralTypedArgumentKindV1 {
+    Scalar(GeneralTypedScalarV1),
+    SharedSlice(GeneralTypedScalarV1),
+    ExclusiveSlice(GeneralTypedScalarV1),
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct GeneralTypedSignatureModelV1 {
+    arguments: Vec<GeneralTypedArgumentKindV1>,
+    abi: AbiLayout,
+    launch: LaunchContract,
+    generated_host_contract_identity: DigestBytes,
+}
+
+#[allow(dead_code)]
+fn model_general_typed_signature_v1(
+    input: &ItemFn,
+    options: &KernelOptions,
+    kernel_binding: [u8; 32],
+) -> syn::Result<GeneralTypedSignatureModelV1> {
+    validate_general_typed_function_shape_v1(input)?;
+    let arguments = input
+        .sig
+        .inputs
+        .iter()
+        .enumerate()
+        .map(|(index, argument)| parse_general_typed_argument_v1(argument, index + 1))
+        .collect::<syn::Result<Vec<_>>>()?;
+    let abi = general_typed_abi_v1(&arguments, &input.sig)?;
+    let launch = general_typed_launch_v1(options.launch.as_ref(), &input.sig)?;
+    let logical_name = input.sig.ident.to_string();
+    let generated_host_contract_identity = derive_generated_host_contract_identity_v1(
+        GENERAL_TYPED_PROFILE_TAG_V1,
+        kernel_binding,
+        &logical_name,
+        &logical_name,
+        &abi,
+        &launch,
+    );
+    Ok(GeneralTypedSignatureModelV1 {
+        arguments,
+        abi,
+        launch,
+        generated_host_contract_identity,
+    })
+}
+
+fn validate_general_typed_function_shape_v1(input: &ItemFn) -> syn::Result<()> {
+    let signature = &input.sig;
+    if !matches!(input.vis, Visibility::Public(_)) {
+        return Err(syn::Error::new_spanned(
+            &input.vis,
+            "general typed V1 requires a public kernel function",
+        ));
+    }
+    if signature.unsafety.is_some() {
+        return Err(syn::Error::new_spanned(
+            signature.unsafety,
+            "general typed V1 requires a safe kernel function",
+        ));
+    }
+    if signature.constness.is_some() || signature.asyncness.is_some() || signature.abi.is_some() {
+        return Err(syn::Error::new_spanned(
+            signature,
+            "general typed V1 requires a non-const synchronous Rust function",
+        ));
+    }
+    if signature.variadic.is_some() {
+        return Err(syn::Error::new_spanned(
+            &signature.variadic,
+            "general typed V1 does not support variadic functions",
+        ));
+    }
+    if !signature.generics.params.is_empty() || signature.generics.where_clause.is_some() {
+        return Err(syn::Error::new_spanned(
+            &signature.generics,
+            "general typed V1 does not support generic kernel functions",
+        ));
+    }
+    if !is_unit_return(&signature.output) {
+        return Err(syn::Error::new_spanned(
+            &signature.output,
+            "general typed V1 requires the unit return type",
+        ));
+    }
+    if signature.inputs.is_empty() {
+        return Err(syn::Error::new_spanned(
+            &signature.inputs,
+            "general typed V1 requires at least one kernel argument",
+        ));
+    }
+    Ok(())
+}
+
+fn parse_general_typed_argument_v1(
+    argument: &FnArg,
+    position: usize,
+) -> syn::Result<GeneralTypedArgumentKindV1> {
+    let FnArg::Typed(argument) = argument else {
+        return Err(syn::Error::new_spanned(
+            argument,
+            "general typed V1 does not support methods",
+        ));
+    };
+    let Pat::Ident(pattern) = argument.pat.as_ref() else {
+        return Err(syn::Error::new_spanned(
+            &argument.pat,
+            format!("general typed V1 argument {position} must use an identifier pattern"),
+        ));
+    };
+    if pattern.by_ref.is_some() || pattern.subpat.is_some() {
+        return Err(syn::Error::new_spanned(
+            pattern,
+            format!("general typed V1 argument {position} must use an identifier pattern"),
+        ));
+    }
+    parse_general_typed_argument_type_v1(&argument.ty).map_err(|_| {
+        syn::Error::new_spanned(
+            &argument.ty,
+            format!(
+                "general typed V1 argument {position} must be a supported scalar, `&[T]`, or `fe2o3_device::DisjointSlice<T, Index1D>`"
+            ),
+        )
+    })
+}
+
+fn parse_general_typed_argument_type_v1(ty: &Type) -> Result<GeneralTypedArgumentKindV1, ()> {
+    if let Some(scalar) = parse_general_typed_scalar_v1(ty) {
+        return Ok(GeneralTypedArgumentKindV1::Scalar(scalar));
+    }
+    if let Type::Reference(reference) = ty {
+        if reference.lifetime.is_some() || reference.mutability.is_some() {
+            return Err(());
+        }
+        let Type::Slice(slice) = reference.elem.as_ref() else {
+            return Err(());
+        };
+        return parse_general_typed_scalar_v1(&slice.elem)
+            .map(GeneralTypedArgumentKindV1::SharedSlice)
+            .ok_or(());
+    }
+
     let Type::Path(path) = ty else {
-        return false;
+        return Err(());
+    };
+    if path.qself.is_some() || path.path.leading_colon.is_some() {
+        return Err(());
+    }
+    let segments = path.path.segments.iter().collect::<Vec<_>>();
+    let segment = match segments.as_slice() {
+        [segment] if segment.ident == "DisjointSlice" => *segment,
+        [namespace, segment]
+            if namespace.ident == "fe2o3_device"
+                && matches!(namespace.arguments, PathArguments::None)
+                && segment.ident == "DisjointSlice" =>
+        {
+            *segment
+        }
+        _ => return Err(()),
+    };
+    let PathArguments::AngleBracketed(arguments) = &segment.arguments else {
+        return Err(());
+    };
+    if arguments.colon2_token.is_some() || !(1..=2).contains(&arguments.args.len()) {
+        return Err(());
+    }
+    let Some(GenericArgument::Type(element)) = arguments.args.first() else {
+        return Err(());
+    };
+    let scalar = parse_general_typed_scalar_v1(element).ok_or(())?;
+    if let Some(index_space) = arguments.args.iter().nth(1) {
+        let GenericArgument::Type(index_space) = index_space else {
+            return Err(());
+        };
+        if !is_index_1d_v1(index_space) {
+            return Err(());
+        }
+    }
+    Ok(GeneralTypedArgumentKindV1::ExclusiveSlice(scalar))
+}
+
+fn parse_general_typed_scalar_v1(ty: &Type) -> Option<GeneralTypedScalarV1> {
+    let Type::Path(path) = ty else {
+        return None;
     };
     if path.qself.is_some() || path.path.leading_colon.is_some() || path.path.segments.len() != 1 {
-        return false;
+        return None;
     }
     let segment = &path.path.segments[0];
-    if segment.ident != "DisjointSlice" {
-        return false;
+    if !matches!(segment.arguments, PathArguments::None) {
+        return None;
     }
-    let PathArguments::AngleBracketed(arguments) = &segment.arguments else {
-        return false;
-    };
-    if arguments.colon2_token.is_some() || arguments.args.len() != 1 {
-        return false;
+    match segment.ident.to_string().as_str() {
+        "i8" => Some(GeneralTypedScalarV1::I8),
+        "u8" => Some(GeneralTypedScalarV1::U8),
+        "i16" => Some(GeneralTypedScalarV1::I16),
+        "u16" => Some(GeneralTypedScalarV1::U16),
+        "i32" => Some(GeneralTypedScalarV1::I32),
+        "u32" => Some(GeneralTypedScalarV1::U32),
+        "i64" => Some(GeneralTypedScalarV1::I64),
+        "u64" => Some(GeneralTypedScalarV1::U64),
+        "f16" => Some(GeneralTypedScalarV1::F16),
+        "f32" => Some(GeneralTypedScalarV1::F32),
+        "f64" => Some(GeneralTypedScalarV1::F64),
+        _ => None,
     }
-
-    matches!(arguments.args.first(), Some(GenericArgument::Type(ty)) if is_exact_f32(ty))
 }
 
-fn is_exact_f32(ty: &Type) -> bool {
+fn is_index_1d_v1(ty: &Type) -> bool {
     let Type::Path(path) = ty else {
         return false;
     };
-    path.qself.is_none()
-        && path.path.leading_colon.is_none()
-        && path.path.segments.len() == 1
-        && path.path.segments[0].ident == "f32"
-        && matches!(path.path.segments[0].arguments, PathArguments::None)
+    if path.qself.is_some() || path.path.leading_colon.is_some() {
+        return false;
+    }
+    let segments = path.path.segments.iter().collect::<Vec<_>>();
+    match segments.as_slice() {
+        [segment] => segment.ident == "Index1D" && matches!(segment.arguments, PathArguments::None),
+        [namespace, segment] => {
+            namespace.ident == "fe2o3_device"
+                && matches!(namespace.arguments, PathArguments::None)
+                && segment.ident == "Index1D"
+                && matches!(segment.arguments, PathArguments::None)
+        }
+        _ => false,
+    }
+}
+
+fn general_typed_abi_v1(
+    arguments: &[GeneralTypedArgumentKindV1],
+    span: impl quote::ToTokens,
+) -> syn::Result<AbiLayout> {
+    let mut offset = 0_u64;
+    let mut layout_alignment = 1_u32;
+    let mut fields = Vec::with_capacity(arguments.len());
+    for (index, argument) in arguments.iter().copied().enumerate() {
+        let (size, alignment) = match argument {
+            GeneralTypedArgumentKindV1::Scalar(scalar) => scalar.size_alignment(),
+            GeneralTypedArgumentKindV1::SharedSlice(_)
+            | GeneralTypedArgumentKindV1::ExclusiveSlice(_) => (
+                GENERAL_TYPED_SLICE_SIZE_V1,
+                GENERAL_TYPED_POINTER_ALIGNMENT_V1,
+            ),
+        };
+        offset = align_up_v1(offset, alignment).ok_or_else(|| {
+            syn::Error::new_spanned(&span, "general typed V1 argument layout overflows")
+        })?;
+        fields.push(
+            general_typed_abi_field_v1(index, offset, argument).map_err(|error| {
+                syn::Error::new_spanned(&span, format!("invalid general typed V1 ABI: {error}"))
+            })?,
+        );
+        offset = offset.checked_add(size).ok_or_else(|| {
+            syn::Error::new_spanned(&span, "general typed V1 argument layout overflows")
+        })?;
+        layout_alignment = layout_alignment.max(alignment);
+    }
+    let size = align_up_v1(offset, layout_alignment).ok_or_else(|| {
+        syn::Error::new_spanned(&span, "general typed V1 argument layout overflows")
+    })?;
+    AbiLayout::new(size, layout_alignment, PointerWidth::Bits64, fields).map_err(|error| {
+        syn::Error::new_spanned(span, format!("invalid general typed V1 ABI: {error}"))
+    })
+}
+
+fn general_typed_abi_field_v1(
+    index: usize,
+    offset: u64,
+    argument: GeneralTypedArgumentKindV1,
+) -> Result<AbiField, fe2o3_artifacts::ValidationError> {
+    let name = Name::new(format!("arg{index}"))?;
+    let (size, alignment, kind, mutability, access, address_space, ownership, alias_class) =
+        match argument {
+            GeneralTypedArgumentKindV1::Scalar(scalar) => {
+                let (size, alignment) = scalar.size_alignment();
+                (
+                    size,
+                    alignment,
+                    AbiKind::Scalar(scalar.abi_scalar()),
+                    Mutability::Immutable,
+                    Access::ByValue,
+                    AddressSpace::Value,
+                    ArgumentOwnership::ByValue,
+                    AliasClass::Value,
+                )
+            }
+            GeneralTypedArgumentKindV1::SharedSlice(scalar) => (
+                GENERAL_TYPED_SLICE_SIZE_V1,
+                GENERAL_TYPED_POINTER_ALIGNMENT_V1,
+                general_typed_slice_kind_v1(scalar),
+                Mutability::Immutable,
+                Access::ReadOnly,
+                AddressSpace::Global,
+                ArgumentOwnership::SharedBorrow,
+                AliasClass::SharedReadOnly,
+            ),
+            GeneralTypedArgumentKindV1::ExclusiveSlice(scalar) => (
+                GENERAL_TYPED_SLICE_SIZE_V1,
+                GENERAL_TYPED_POINTER_ALIGNMENT_V1,
+                general_typed_slice_kind_v1(scalar),
+                Mutability::Mutable,
+                Access::ReadWrite,
+                AddressSpace::Global,
+                ArgumentOwnership::UniqueBorrow,
+                AliasClass::Exclusive,
+            ),
+        };
+    AbiField::new(
+        name,
+        offset,
+        size,
+        alignment,
+        kind,
+        mutability,
+        access,
+        address_space,
+        general_typed_type_identity_v1(argument),
+        ownership,
+        alias_class,
+    )
+}
+
+fn general_typed_slice_kind_v1(scalar: GeneralTypedScalarV1) -> AbiKind {
+    let (element_size, element_alignment) = scalar.size_alignment();
+    AbiKind::Slice {
+        element_size,
+        element_alignment,
+    }
+}
+
+fn general_typed_type_identity_v1(argument: GeneralTypedArgumentKindV1) -> TypeIdentity {
+    match argument {
+        GeneralTypedArgumentKindV1::Scalar(scalar) => {
+            let (size, alignment) = scalar.size_alignment();
+            general_typed_framed_type_identity_v1(
+                scalar.spelling(),
+                &format!("scalar-{}-size{size}-align{alignment}", scalar.spelling()),
+            )
+        }
+        GeneralTypedArgumentKindV1::SharedSlice(scalar) => {
+            general_typed_slice_type_identity_v1(scalar, false)
+        }
+        GeneralTypedArgumentKindV1::ExclusiveSlice(scalar) => {
+            general_typed_slice_type_identity_v1(scalar, true)
+        }
+    }
+}
+
+fn general_typed_framed_type_identity_v1(rust_type: &str, layout: &str) -> TypeIdentity {
+    TypeIdentity::new(
+        DeclaredRustTypeIdentity::from_untrusted_bytes(general_typed_profile_digest_v1(
+            GENERAL_TYPED_TYPE_ID_DOMAIN_V1,
+            rust_type.as_bytes(),
+        )),
+        DeclaredRustLayoutIdentity::from_untrusted_bytes(general_typed_profile_digest_v1(
+            GENERAL_TYPED_LAYOUT_ID_DOMAIN_V1,
+            layout.as_bytes(),
+        )),
+    )
+}
+
+fn general_typed_profile_digest_v1(domain: &[u8], field: &[u8]) -> DigestBytes {
+    let mut canonical = Vec::with_capacity(domain.len() + 8 + field.len());
+    canonical.extend_from_slice(domain);
+    canonical.extend_from_slice(&(field.len() as u64).to_le_bytes());
+    canonical.extend_from_slice(field);
+    DigestAlgorithm::Sha256.calculate(&canonical).bytes()
+}
+
+fn general_typed_slice_type_identity_v1(
+    scalar: GeneralTypedScalarV1,
+    exclusive: bool,
+) -> TypeIdentity {
+    let source_type = if exclusive {
+        RustSourceTypeShapeV1::disjoint_slice(
+            scalar.rust_layout_scalar(),
+            RustDisjointIndexSpaceV1::Index1D,
+        )
+    } else {
+        RustSourceTypeShapeV1::shared_slice(scalar.rust_layout_scalar())
+    };
+    let pointer = RustPhysicalComponentV1::new(
+        0,
+        GENERAL_TYPED_POINTER_SIZE_V1,
+        GENERAL_TYPED_POINTER_ALIGNMENT_V1,
+        RustPhysicalComponentKindV1::Pointer {
+            mutability: if exclusive {
+                RustPointerMutabilityV1::Mut
+            } else {
+                RustPointerMutabilityV1::Const
+            },
+            pointee: scalar.rust_layout_scalar(),
+        },
+    )
+    .expect("the fixed V1 pointer layout is valid");
+    let length = RustPhysicalComponentV1::new(
+        GENERAL_TYPED_POINTER_SIZE_V1,
+        GENERAL_TYPED_POINTER_SIZE_V1,
+        GENERAL_TYPED_POINTER_ALIGNMENT_V1,
+        RustPhysicalComponentKindV1::Usize,
+    )
+    .expect("the fixed V1 usize layout is valid");
+    RustLayoutEvidenceV1::new(
+        RustTypeEvidenceV1::new(source_type),
+        RustcAbiClassV1::ScalarPair,
+        PointerWidth::Bits64,
+        GENERAL_TYPED_SLICE_SIZE_V1,
+        GENERAL_TYPED_POINTER_ALIGNMENT_V1,
+        vec![pointer, length],
+    )
+    .expect("the fixed V1 slice layout is valid")
+    .type_identity()
+}
+
+fn general_typed_launch_v1(
+    launch: Option<&ParsedLaunchBoundsV1>,
+    span: impl quote::ToTokens,
+) -> syn::Result<LaunchContract> {
+    let (block_size, dimensions) = match launch {
+        None => (
+            BlockSize::Exact(general_typed_dimensions_v1(GENERAL_TYPED_DEFAULT_BLOCK_V1)),
+            GENERAL_TYPED_DEFAULT_BLOCK_V1,
+        ),
+        Some(launch) => {
+            if launch.min_workgroups_per_compute_unit.is_some() {
+                return Err(syn::Error::new_spanned(
+                    &span,
+                    "general typed V1 cannot bind an occupancy-only launch constraint",
+                ));
+            }
+            match (launch.required, launch.maximum) {
+                (Some(required), Some(maximum)) if required != maximum => {
+                    return Err(syn::Error::new_spanned(
+                        &span,
+                        "general typed V1 requires equal required and max dimensions",
+                    ));
+                }
+                (Some(required), _) => (
+                    BlockSize::Exact(general_typed_dimensions_v1(required)),
+                    required,
+                ),
+                (None, Some(maximum)) => (
+                    BlockSize::AtMost(general_typed_dimensions_v1(maximum)),
+                    maximum,
+                ),
+                (None, None) => unreachable!("launch parser requires one dimension bound"),
+            }
+        }
+    };
+    let rank = general_typed_rank_v1(dimensions);
+    let max_grid = Dimensions::new(
+        u32::MAX,
+        if rank >= 2 { 65_535 } else { 1 },
+        if rank >= 3 { 65_535 } else { 1 },
+    )
+    .expect("the fixed V1 maximum grid is valid");
+    LaunchContract::new(rank, block_size, max_grid, 0, 0).map_err(|error| {
+        syn::Error::new_spanned(span, format!("invalid general typed V1 launch: {error}"))
+    })
+}
+
+fn general_typed_dimensions_v1(dimensions: [u32; 3]) -> Dimensions {
+    Dimensions::new(dimensions[0], dimensions[1], dimensions[2])
+        .expect("macro launch parsing already validates dimensions")
+}
+
+const fn general_typed_rank_v1(dimensions: [u32; 3]) -> u8 {
+    if dimensions[2] != 1 {
+        3
+    } else if dimensions[1] != 1 {
+        2
+    } else {
+        1
+    }
+}
+
+const fn align_up_v1(value: u64, alignment: u32) -> Option<u64> {
+    let alignment = alignment as u64;
+    let mask = alignment - 1;
+    match value.checked_add(mask) {
+        Some(value) => Some(value & !mask),
+        None => None,
+    }
 }
 
 fn encode_kernel_frontend_contract_v1(options: &KernelOptions) -> Option<Vec<u8>> {
@@ -2040,16 +2582,21 @@ fn validate_lower_hex_256(value: &str, field: &str) -> syn::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        DeviceFfiOptions, KernelMode, KernelOptions, canonical_device_ffi_signature,
-        core_import_for, device_ffi_contract, device_import_for,
-        expand_device_copy_with_core_import, expand_device_export_with_import,
+        DeviceFfiOptions, GeneralTypedArgumentKindV1, GeneralTypedScalarV1, KernelMode,
+        KernelOptions, canonical_device_ffi_signature, core_import_for, device_ffi_contract,
+        device_import_for, expand_device_copy_with_core_import, expand_device_export_with_import,
         expand_device_import_with_import, expand_kernel_with_device_import,
-        expand_kernel_with_imports, host_import_for, parse_device_ffi_options,
-        parse_kernel_options, validate_generated_device_ffi_contract_grammar,
-        validate_kernel_assembly_boundary, validate_typed_kernel_signature,
-        validate_typed_kernel_symbol_stem,
+        expand_kernel_with_imports, host_import_for, model_general_typed_signature_v1,
+        parse_device_ffi_options, parse_kernel_options,
+        validate_generated_device_ffi_contract_grammar, validate_kernel_assembly_boundary,
+        validate_typed_kernel_signature, validate_typed_kernel_symbol_stem,
+    };
+    use fe2o3_artifacts::{
+        AbiKind, Access, AddressSpace, AliasClass, ArgumentOwnership, BlockSize, Mutability,
+        ScalarType,
     };
     use proc_macro_crate::FoundCrate;
+    use quote::quote;
     use reserved_fe2o3_symbols::{
         TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2, artifact_length_symbol_v1,
         artifact_pointer_symbol_v1, derive_crate_binding_id_v1, derive_kernel_binding_id_v1,
@@ -2776,6 +3323,303 @@ mod tests {
                 "unexpected diagnostic for {}",
                 input.sig.ident,
             );
+        }
+    }
+
+    #[test]
+    fn general_typed_model_constructs_scalar_slice_abi_and_default_launch() {
+        let input: ItemFn = parse_quote!(
+            pub fn alpha(scale: u32, input: &[f32], output: fe2o3_device::DisjointSlice<f32>) {}
+        );
+        let options = parse_kernel_options(quote!(typed)).unwrap();
+        let model = model_general_typed_signature_v1(&input, &options, [0x41; 32]).unwrap();
+
+        assert_eq!(
+            model.arguments,
+            vec![
+                GeneralTypedArgumentKindV1::Scalar(GeneralTypedScalarV1::U32),
+                GeneralTypedArgumentKindV1::SharedSlice(GeneralTypedScalarV1::F32),
+                GeneralTypedArgumentKindV1::ExclusiveSlice(GeneralTypedScalarV1::F32),
+            ]
+        );
+        assert_eq!(model.abi.size(), 40);
+        assert_eq!(model.abi.alignment(), 8);
+        assert_eq!(
+            model
+                .abi
+                .fields()
+                .iter()
+                .map(|field| (field.name().as_str(), field.offset(), field.size()))
+                .collect::<Vec<_>>(),
+            vec![("arg0", 0, 4), ("arg1", 8, 16), ("arg2", 24, 16)]
+        );
+
+        let scalar = &model.abi.fields()[0];
+        assert_eq!(scalar.kind(), AbiKind::Scalar(ScalarType::U32));
+        assert_eq!(scalar.mutability(), Mutability::Immutable);
+        assert_eq!(scalar.access(), Access::ByValue);
+        assert_eq!(scalar.address_space(), AddressSpace::Value);
+        assert_eq!(scalar.ownership(), ArgumentOwnership::ByValue);
+        assert_eq!(scalar.alias_class(), AliasClass::Value);
+
+        let shared = &model.abi.fields()[1];
+        assert_eq!(
+            shared.kind(),
+            AbiKind::Slice {
+                element_size: 4,
+                element_alignment: 4,
+            }
+        );
+        assert_eq!(shared.mutability(), Mutability::Immutable);
+        assert_eq!(shared.access(), Access::ReadOnly);
+        assert_eq!(shared.address_space(), AddressSpace::Global);
+        assert_eq!(shared.ownership(), ArgumentOwnership::SharedBorrow);
+        assert_eq!(shared.alias_class(), AliasClass::SharedReadOnly);
+
+        let exclusive = &model.abi.fields()[2];
+        assert_eq!(exclusive.mutability(), Mutability::Mutable);
+        assert_eq!(exclusive.access(), Access::ReadWrite);
+        assert_eq!(exclusive.ownership(), ArgumentOwnership::UniqueBorrow);
+        assert_eq!(exclusive.alias_class(), AliasClass::Exclusive);
+        assert_ne!(shared.type_identity(), exclusive.type_identity());
+
+        assert_eq!(model.launch.rank(), 1);
+        assert_eq!(
+            model.launch.block_size(),
+            BlockSize::Exact(fe2o3_artifacts::Dimensions::new(256, 1, 1).unwrap())
+        );
+        assert_eq!(model.launch.max_grid().x(), u32::MAX);
+        assert_eq!(model.launch.max_grid().y(), 1);
+        assert_eq!(model.launch.max_grid().z(), 1);
+    }
+
+    #[test]
+    fn general_typed_model_constructs_a_distinct_explicit_multidimensional_contract() {
+        let input: ItemFn = parse_quote!(
+            pub fn beta(
+                seed: i8,
+                coefficient: f64,
+                input: &[u16],
+                output: DisjointSlice<u32, Index1D>,
+            ) {
+            }
+        );
+        let options =
+            parse_kernel_options(quote!(typed, launch(required = [8, 4, 1], max = [8, 4, 1])))
+                .unwrap();
+        let model = model_general_typed_signature_v1(&input, &options, [0x52; 32]).unwrap();
+
+        assert_eq!(model.abi.size(), 48);
+        assert_eq!(
+            model
+                .abi
+                .fields()
+                .iter()
+                .map(|field| (field.offset(), field.size(), field.alignment()))
+                .collect::<Vec<_>>(),
+            vec![(0, 1, 1), (8, 8, 8), (16, 16, 8), (32, 16, 8)]
+        );
+        assert_eq!(model.launch.rank(), 2);
+        assert_eq!(
+            model.launch.block_size(),
+            BlockSize::Exact(fe2o3_artifacts::Dimensions::new(8, 4, 1).unwrap())
+        );
+        assert_eq!(model.launch.max_grid().y(), 65_535);
+        assert_eq!(model.launch.max_grid().z(), 1);
+
+        let maximum_only = parse_kernel_options(quote!(typed, launch(max = [4, 2, 2]))).unwrap();
+        let model = model_general_typed_signature_v1(&input, &maximum_only, [0x52; 32]).unwrap();
+        assert_eq!(model.launch.rank(), 3);
+        assert_eq!(
+            model.launch.block_size(),
+            BlockSize::AtMost(fe2o3_artifacts::Dimensions::new(4, 2, 2).unwrap())
+        );
+        assert_eq!(model.launch.max_grid().z(), 65_535);
+    }
+
+    #[test]
+    fn general_typed_model_accepts_every_bounded_scalar_spelling() {
+        let options = parse_kernel_options(quote!(typed)).unwrap();
+        let scalar_spellings = [
+            "i8", "u8", "i16", "u16", "i32", "u32", "i64", "u64", "f16", "f32", "f64",
+        ];
+        let arguments = scalar_spellings
+            .iter()
+            .enumerate()
+            .map(|(index, scalar)| format!("scalar{index}: {scalar}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let input: ItemFn = syn::parse_str(&format!("pub fn scalars({arguments}) {{}}"))
+            .expect("all bounded scalar spellings parse");
+        let model = model_general_typed_signature_v1(&input, &options, [0xa1; 32]).unwrap();
+        assert_eq!(model.arguments.len(), scalar_spellings.len());
+        assert!(
+            model
+                .arguments
+                .iter()
+                .all(|argument| matches!(argument, GeneralTypedArgumentKindV1::Scalar(_)))
+        );
+    }
+
+    #[test]
+    fn general_typed_contract_identity_binds_signature_launch_name_and_binding() {
+        let alpha: ItemFn = parse_quote!(
+            pub fn alpha(scale: u32, input: &[f32], output: DisjointSlice<f32>) {}
+        );
+        let renamed: ItemFn = parse_quote!(
+            pub fn renamed(scale: u32, input: &[f32], output: DisjointSlice<f32>) {}
+        );
+        let changed_scalar: ItemFn = parse_quote!(
+            pub fn alpha(scale: u64, input: &[f32], output: DisjointSlice<f32>) {}
+        );
+        let changed_effect: ItemFn = parse_quote!(
+            pub fn alpha(scale: u32, input: &[f32], output: &[f32]) {}
+        );
+        let default_options = parse_kernel_options(quote!(typed)).unwrap();
+        let explicit_options =
+            parse_kernel_options(quote!(typed, launch(required = [64, 1, 1]))).unwrap();
+        let identity = |input: &ItemFn, options: &KernelOptions, binding| {
+            model_general_typed_signature_v1(input, options, binding)
+                .unwrap()
+                .generated_host_contract_identity
+        };
+        let baseline = identity(&alpha, &default_options, [0x61; 32]);
+
+        assert_ne!(baseline, identity(&renamed, &default_options, [0x61; 32]));
+        assert_ne!(
+            baseline,
+            identity(&changed_scalar, &default_options, [0x61; 32])
+        );
+        assert_ne!(
+            baseline,
+            identity(&changed_effect, &default_options, [0x61; 32])
+        );
+        assert_ne!(baseline, identity(&alpha, &explicit_options, [0x61; 32]));
+        assert_ne!(baseline, identity(&alpha, &default_options, [0x62; 32]));
+        assert_eq!(baseline, identity(&alpha, &default_options, [0x61; 32]));
+    }
+
+    #[test]
+    fn general_typed_model_rejects_unsupported_function_and_argument_shapes() {
+        let options = parse_kernel_options(quote!(typed)).unwrap();
+        let cases: Vec<ItemFn> = vec![
+            parse_quote!(
+                fn private(value: u32) {}
+            ),
+            parse_quote!(
+                pub unsafe fn unsafe_kernel(value: u32) {}
+            ),
+            parse_quote!(
+                pub const fn constant(value: u32) {}
+            ),
+            parse_quote!(
+                pub async fn asynchronous(value: u32) {}
+            ),
+            parse_quote!(
+                pub extern "C" fn foreign(value: u32) {}
+            ),
+            parse_quote!(
+                pub fn generic<T>(value: T) {}
+            ),
+            parse_quote!(
+                pub fn lifetime<'a>(value: &'a [u32]) {}
+            ),
+            parse_quote!(
+                pub fn result(value: u32) -> u32 {
+                    value
+                }
+            ),
+            parse_quote!(
+                pub fn empty() {}
+            ),
+            parse_quote!(
+                pub fn raw(value: *const u32) {}
+            ),
+            parse_quote!(
+                pub fn mutable(value: &mut [u32]) {}
+            ),
+            parse_quote!(
+                pub fn aggregate(value: (u32, u32)) {}
+            ),
+            parse_quote!(
+                pub fn named(value: UserAggregate) {}
+            ),
+            parse_quote!(
+                pub fn alias(value: ScalarAlias) {}
+            ),
+            parse_quote!(
+                pub fn array(value: &[UserElement]) {}
+            ),
+            parse_quote!(
+                pub fn wrong_index(value: DisjointSlice<u32, Index2D>) {}
+            ),
+            parse_quote!(
+                pub fn aliased_slice(value: gpu::DisjointSlice<u32>) {}
+            ),
+            parse_quote!(
+                pub fn receiver(self: Box<Self>) {}
+            ),
+            parse_quote!(
+                pub fn pattern((left, right): (u32, u32)) {
+                    let _ = (left, right);
+                }
+            ),
+        ];
+
+        for input in cases {
+            assert!(
+                model_general_typed_signature_v1(&input, &options, [0x71; 32]).is_err(),
+                "unexpectedly accepted {}",
+                input.sig.ident,
+            );
+        }
+    }
+
+    #[test]
+    fn general_typed_model_enforces_the_canonical_field_bound() {
+        let options = parse_kernel_options(quote!(typed)).unwrap();
+        let arguments = (0..64)
+            .map(|index| format!("arg{index}: u8"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let accepted: ItemFn = syn::parse_str(&format!("pub fn bounded({arguments}) {{}}"))
+            .expect("valid bounded function");
+        assert_eq!(
+            model_general_typed_signature_v1(&accepted, &options, [0x81; 32])
+                .unwrap()
+                .abi
+                .fields()
+                .len(),
+            64
+        );
+
+        let arguments = (0..65)
+            .map(|index| format!("arg{index}: u8"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let rejected: ItemFn = syn::parse_str(&format!("pub fn excessive({arguments}) {{}}"))
+            .expect("valid excessive function");
+        assert!(model_general_typed_signature_v1(&rejected, &options, [0x81; 32]).is_err());
+    }
+
+    #[test]
+    fn general_typed_model_fails_closed_on_unrepresentable_launch_options() {
+        let input: ItemFn = parse_quote!(
+            pub fn kernel(value: u32) {}
+        );
+        for options in [
+            parse_kernel_options(quote!(
+                typed,
+                launch(required = [64, 1, 1], max = [128, 1, 1])
+            ))
+            .unwrap(),
+            parse_kernel_options(quote!(
+                typed,
+                launch(max = [128, 1, 1], min_workgroups_per_compute_unit = 2)
+            ))
+            .unwrap(),
+        ] {
+            assert!(model_general_typed_signature_v1(&input, &options, [0x91; 32]).is_err());
         }
     }
 

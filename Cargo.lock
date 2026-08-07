@@ -357,6 +357,7 @@ version = "0.1.0"
 name = "fe2o3-macros"
 version = "0.1.0"
 dependencies = [
+ "fe2o3-artifacts",
  "proc-macro-crate",
  "proc-macro2",
  "quote",
