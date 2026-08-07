@@ -3,6 +3,7 @@ mod artifact_binding;
 mod cooperative_launch;
 mod generated_argument_plan;
 mod generated_vecadd;
+mod hsa_executable_lifecycle;
 mod loaded_kernel;
 mod prepared_launch;
 mod published_direct_link;
@@ -43,6 +44,19 @@ pub use generated_argument_plan::{
 pub use generated_vecadd::{
     GeneratedVecAddKernelV1, GeneratedVecAddLoadError, GeneratedVecAddPrepareError,
     GeneratedVecAddPreparedV1, GeneratedVecAddProfileError,
+};
+pub use hsa_executable_lifecycle::{
+    AuthenticatedWorkerV2ExecutableV1, AuthorizedHsaLoadV1, HsaAgentIdentityV1,
+    HsaCodeObjectLoadObservationV1, HsaCompletedDispatchV1, HsaDispatchError,
+    HsaDispatchObservationV1, HsaEnvironmentMismatch, HsaEnvironmentObservationV1,
+    HsaExecutableLoadError, HsaExecutableObjectIdentityV1, HsaExecutableUnloadError,
+    HsaKernelLaunchAuthorizationV1, HsaKernelObjectIdentityV1, HsaKernelResolutionObservationV1,
+    HsaLaunchAuthorizationError, HsaLaunchGeometryV1, HsaLoadAuthorizationError,
+    HsaObservationError, HsaPhysicalDeviceIdentityV1, HsaRuntimeIdentityV1, HsaUnloadObservationV1,
+    LoadedHsaExecutableV1, ReviewedHsaExecutableLifecycleAdapterV1, UnloadedHsaExecutableV1,
+    WorkerV2ExecutableAuthenticationError, WorkerV2PrerequisiteAuthenticatorV1,
+    WorkerV2PrerequisiteDecisionV1, WorkerV2PrerequisiteError, WorkerV2PrerequisiteRequestV1,
+    WorkerV2RequiredProfileError, WorkerV2SafetyPropertiesV1, WorkerV2SafetyPropertyV1,
 };
 #[doc(hidden)]
 pub use loaded_kernel::{GeneratedAdmittedLaunch, LoadedKernelLoadError};

@@ -1,0 +1,12 @@
+error[E0200]: the trait `WorkerV2PrerequisiteAuthenticatorV1<K>` requires an `unsafe impl` declaration
+ --> tests/ui/hsa_executable_lifecycle/prerequisite_adapter_requires_unsafe_impl.rs:8:1
+  |
+8 | / impl<K: CompilerGeneratedKernelContractV1> WorkerV2PrerequisiteAuthenticatorV1<K>
+9 | |     for Authenticator
+  | |_____________________^
+  |
+  = note: the trait `WorkerV2PrerequisiteAuthenticatorV1<K>` enforces invariants that the compiler can't check. Review the trait documentation and make sure this implementation upholds those invariants before adding the `unsafe` keyword
+help: add `unsafe` to this trait implementation
+  |
+8 | unsafe impl<K: CompilerGeneratedKernelContractV1> WorkerV2PrerequisiteAuthenticatorV1<K>
+  | ++++++

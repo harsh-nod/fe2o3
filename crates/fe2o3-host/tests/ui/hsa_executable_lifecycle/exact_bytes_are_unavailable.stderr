@@ -1,0 +1,5 @@
+error[E0599]: no method named `exact_bytes` found for reference `&AuthorizedHsaLoadV1<K, A>` in the current scope
+ --> tests/ui/hsa_executable_lifecycle/exact_bytes_are_unavailable.rs:6:29
+  |
+6 |     let _bytes = authorized.exact_bytes();
+  |                             ^^^^^^^^^^^ method not found in `&AuthorizedHsaLoadV1<K, A>`

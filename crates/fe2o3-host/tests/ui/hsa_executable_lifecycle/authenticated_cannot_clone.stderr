@@ -1,0 +1,5 @@
+error[E0599]: no method named `clone` found for struct `AuthenticatedWorkerV2ExecutableV1<K>` in the current scope
+ --> tests/ui/hsa_executable_lifecycle/authenticated_cannot_clone.rs:4:36
+  |
+4 |     let _duplicate = authenticated.clone();
+  |                                    ^^^^^ method not found in `AuthenticatedWorkerV2ExecutableV1<K>`

@@ -1,0 +1,5 @@
+error[E0599]: no method named `clone` found for struct `LoadedHsaExecutableV1<K, A>` in the current scope
+ --> tests/ui/hsa_executable_lifecycle/loaded_cannot_clone.rs:6:29
+  |
+6 |     let _duplicate = loaded.clone();
+  |                             ^^^^^ method not found in `LoadedHsaExecutableV1<K, A>`

@@ -1,0 +1,7 @@
+error[E0133]: call to unsafe function `HsaKernelLaunchAuthorizationV1::<'_, K, A>::launch_and_wait` is unsafe and requires unsafe block
+ --> tests/ui/hsa_executable_lifecycle/launch_requires_unsafe.rs:7:22
+  |
+7 |     let _completed = authorization.launch_and_wait(kernarg);
+  |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
+  |
+  = note: consult the function's documentation for information on how to avoid undefined behavior

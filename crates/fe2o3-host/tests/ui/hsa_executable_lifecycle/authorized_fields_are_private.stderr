@@ -1,0 +1,5 @@
+error[E0616]: field `adapter` of struct `AuthorizedHsaLoadV1` is private
+ --> tests/ui/hsa_executable_lifecycle/authorized_fields_are_private.rs:6:31
+  |
+6 |     let _adapter = authorized.adapter;
+  |                               ^^^^^^^ private field

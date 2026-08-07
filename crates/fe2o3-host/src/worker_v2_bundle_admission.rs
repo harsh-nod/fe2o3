@@ -1,7 +1,7 @@
 use crate::published_direct_link::payload_kernel_set;
 use crate::published_hsaco_inspection::inspect_payload_against_artifact_identity;
 use crate::{
-    ArtifactBindingError, ArtifactKernelIdentityV1, ObservedContext,
+    ArtifactBindingError, ArtifactKernelIdentityV1, DeviceIdentity, ObservedContext,
     PublishedKernelPhysicalLayoutV1, PublishedPhysicalLayoutInspectionError,
     ValidatedArtifactSelectionV1,
 };
@@ -34,7 +34,7 @@ use std::fmt;
 /// safe HSA module initialization/finalization behavior. Consequently this type has no load or
 /// launch method and is intentionally neither `Clone` nor `Copy`.
 pub struct AdmittedFinalizedWorkerV2BundleV1 {
-    prepared: PreparedWorkerV2HsacoPublicationV1,
+    prepared: RetainedWorkerV2PreparationV1,
     current_lease: DurableCurrentLinkPublicationLeaseV1,
     receipt: BackendPublicationReceiptV1,
     published: PublishedLinkArtifactV1,
@@ -46,9 +46,37 @@ pub struct AdmittedFinalizedWorkerV2BundleV1 {
     finalization_identity: DirectLinkFinalizationIdentityV1,
     finalized_payload_identity: DirectLinkFinalizedPayloadIdentityV1,
     artifact_identity: ArtifactKernelIdentityV1,
+    device: DeviceIdentity,
     inspected: InspectedKernelBindings,
     kernels: Box<[PublishedKernelPhysicalLayoutV1]>,
     selected_kernel_index: usize,
+}
+
+enum RetainedWorkerV2PreparationV1 {
+    Production(Box<PreparedWorkerV2HsacoPublicationV1>),
+    #[cfg(test)]
+    Test {
+        attempt: BuildAttempt,
+        exact_bytes: Box<[u8]>,
+    },
+}
+
+impl RetainedWorkerV2PreparationV1 {
+    fn attempt(&self) -> BuildAttempt {
+        match self {
+            Self::Production(prepared) => prepared.attempt(),
+            #[cfg(test)]
+            Self::Test { attempt, .. } => *attempt,
+        }
+    }
+
+    fn exact_bytes(&self) -> &[u8] {
+        match self {
+            Self::Production(prepared) => prepared.exact_bytes(),
+            #[cfg(test)]
+            Self::Test { exact_bytes, .. } => exact_bytes,
+        }
+    }
 }
 
 impl fmt::Debug for AdmittedFinalizedWorkerV2BundleV1 {
@@ -98,7 +126,7 @@ impl AdmittedFinalizedWorkerV2BundleV1 {
         )?;
 
         Ok(Self {
-            prepared,
+            prepared: RetainedWorkerV2PreparationV1::Production(Box::new(prepared)),
             current_lease: parts.current_lease,
             receipt: parts.receipt,
             published: parts.published,
@@ -110,6 +138,7 @@ impl AdmittedFinalizedWorkerV2BundleV1 {
             finalization_identity: parts.finalization_identity,
             finalized_payload_identity: parts.finalized_payload_identity,
             artifact_identity: parts.artifact_identity,
+            device: parts.device,
             inspected: parts.inspected,
             kernels: parts.kernels,
             selected_kernel_index: parts.selected_kernel_index,
@@ -154,6 +183,13 @@ impl AdmittedFinalizedWorkerV2BundleV1 {
 
     pub const fn artifact_identity(&self) -> &ArtifactKernelIdentityV1 {
         &self.artifact_identity
+    }
+
+    /// Physical HIP device observation used when this bundle was admitted.
+    ///
+    /// This remains descriptive identity and grants no HSA authority.
+    pub const fn device(&self) -> &DeviceIdentity {
+        &self.device
     }
 
     pub fn target(&self) -> fe2o3_amd_target::AmdTargetId {
@@ -225,6 +261,7 @@ struct AdmissionParts {
     finalization_identity: DirectLinkFinalizationIdentityV1,
     finalized_payload_identity: DirectLinkFinalizedPayloadIdentityV1,
     artifact_identity: ArtifactKernelIdentityV1,
+    device: DeviceIdentity,
     inspected: InspectedKernelBindings,
     kernels: Box<[PublishedKernelPhysicalLayoutV1]>,
     selected_kernel_index: usize,
@@ -317,6 +354,7 @@ fn admit_parts(
         finalization_identity,
         finalized_payload_identity,
         artifact_identity,
+        device: observed.device().clone(),
         inspected,
         kernels,
         selected_kernel_index,
@@ -350,6 +388,10 @@ impl CurrentFinalizedWorkerV2BundleAdmissionV1<'_> {
 
     pub const fn grants_launch_authority(&self) -> bool {
         false
+    }
+
+    pub(crate) fn exact_artifact_bytes(&self) -> &[u8] {
+        self._current.exact_artifact_bytes()
     }
 }
 
@@ -569,7 +611,7 @@ impl std::error::Error for FinalizedWorkerV2BundleAdmissionError {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::published_direct_link::tests::{
         Fixture, make_observed_for, make_single_hsaco_fixture, physical_arguments_hsaco_for_target,
@@ -595,7 +637,7 @@ mod tests {
 
     static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(1);
 
-    struct TestDirectory(PathBuf);
+    pub(crate) struct TestDirectory(PathBuf);
 
     impl TestDirectory {
         fn new() -> Self {
@@ -748,6 +790,47 @@ mod tests {
         fixture.evidence =
             DirectLinkBundleEvidenceV1::bind(&fixture.bundle, &[&fixture.container], &sources)
                 .unwrap();
+    }
+
+    pub(crate) fn admitted_for_lifecycle_test(
+        seed: u8,
+    ) -> (AdmittedFinalizedWorkerV2BundleV1, TestDirectory) {
+        let input = admission_fixture(seed, 0);
+        let validated = input.fixture.validated();
+        let selected_kernel = selected(&input.fixture);
+        let observed = make_observed_for(seed.into(), "gfx942");
+        let parts = admit_parts(
+            input.attempt,
+            &input.exact_bytes,
+            input.publication,
+            &validated,
+            &input.fixture.container,
+            selected_kernel,
+            &observed,
+        )
+        .unwrap();
+        let admission = AdmittedFinalizedWorkerV2BundleV1 {
+            prepared: RetainedWorkerV2PreparationV1::Test {
+                attempt: input.attempt,
+                exact_bytes: input.exact_bytes.into_boxed_slice(),
+            },
+            current_lease: parts.current_lease,
+            receipt: parts.receipt,
+            published: parts.published,
+            bundle_index_identity: parts.bundle_index_identity,
+            bundle_evidence_identity: parts.bundle_evidence_identity,
+            binding_index: parts.binding_index,
+            container_identity: parts.container_identity,
+            linked_output_identity: parts.linked_output_identity,
+            finalization_identity: parts.finalization_identity,
+            finalized_payload_identity: parts.finalized_payload_identity,
+            artifact_identity: parts.artifact_identity,
+            device: parts.device,
+            inspected: parts.inspected,
+            kernels: parts.kernels,
+            selected_kernel_index: parts.selected_kernel_index,
+        };
+        (admission, input._directory)
     }
 
     #[test]

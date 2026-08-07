@@ -1,0 +1,5 @@
+error[E0599]: no method named `clone` found for struct `AuthorizedHsaLoadV1<K, A>` in the current scope
+ --> tests/ui/hsa_executable_lifecycle/authorized_cannot_clone.rs:6:33
+  |
+6 |     let _duplicate = authorized.clone();
+  |                                 ^^^^^ method not found in `AuthorizedHsaLoadV1<K, A>`
