@@ -3,8 +3,9 @@ use std::error::Error;
 use std::fmt;
 
 use crate::{
-    AccessMode, AddressSpace, Atomic, AtomicKind, Barrier, BasicBlock, BinaryOp, BlockId,
-    ComparePredicate, Fence, FloatOperation, Function, FunctionId, FunctionRole, Kernel, KernelId,
+    AccessMode, AddressSpace, AssemblyConstraint, AssemblyEffect, AssemblyOperandKind,
+    AssemblyOption, Atomic, AtomicKind, Barrier, BasicBlock, BinaryOp, BlockId, ComparePredicate,
+    Fence, FloatOperation, Function, FunctionId, FunctionRole, InlineAssembly, Kernel, KernelId,
     LaunchExtent, MemoryOrdering, Module, ModuleId, Operation, OperationKind, ScalarType,
     SynchronizationScope, TargetCapability, Terminator, Type, UnaryOp, ValueId, WaveOperation,
     WaveOperationKind, WorkgroupBarrier, WorkgroupMemory, WorkgroupMemoryExtent, pointer_for,
@@ -49,6 +50,7 @@ pub enum DiagnosticCode {
     InvalidWorkgroupMemory,
     InvalidWaveOperation,
     InvalidFloatOperation,
+    InvalidInlineAssembly,
     InvalidTerminator,
 }
 
@@ -984,6 +986,226 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
                 self.verify_workgroup_memory(operation, memory, location);
             }
             OperationKind::Wave(wave) => self.verify_wave(operation, wave, location),
+            OperationKind::InlineAssembly(assembly) => {
+                self.verify_inline_assembly(operation, assembly, location)
+            }
+        }
+    }
+
+    fn verify_inline_assembly(
+        &mut self,
+        operation: &Operation,
+        assembly: &InlineAssembly,
+        location: DiagnosticLocation,
+    ) {
+        if !assembly.source.is_complete() {
+            self.emit(
+                location.clone(),
+                DiagnosticCode::InvalidInlineAssembly,
+                "inline assembly requires nonzero frontend-unit, function, contract, and statement identities",
+            );
+        }
+        if assembly.mnemonic.is_empty()
+            || !assembly
+                .mnemonic
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+        {
+            self.emit(
+                location.clone(),
+                DiagnosticCode::InvalidInlineAssembly,
+                "inline assembly mnemonic must be nonempty canonical lowercase ASCII",
+            );
+        }
+        if assembly.operands.is_empty() {
+            self.emit(
+                location.clone(),
+                DiagnosticCode::InvalidInlineAssembly,
+                "inline assembly requires at least one exact operand",
+            );
+        }
+
+        let mut referenced_results = BTreeSet::new();
+        for (operand_index, operand) in assembly.operands.iter().enumerate() {
+            let value = match operand.kind {
+                AssemblyOperandKind::Input(value) => Some(value),
+                AssemblyOperandKind::InOut {
+                    input,
+                    result_index,
+                } => {
+                    self.verify_assembly_result(
+                        operation,
+                        result_index,
+                        operand.constraint,
+                        operand_index,
+                        &mut referenced_results,
+                        location.clone(),
+                    );
+                    Some(input)
+                }
+                AssemblyOperandKind::Output { result_index } => {
+                    self.verify_assembly_result(
+                        operation,
+                        result_index,
+                        operand.constraint,
+                        operand_index,
+                        &mut referenced_results,
+                        location.clone(),
+                    );
+                    None
+                }
+                AssemblyOperandKind::ImmediateI32(_) => {
+                    if operand.constraint != AssemblyConstraint::ImmediateI32 {
+                        self.emit(
+                            location.clone(),
+                            DiagnosticCode::InvalidInlineAssembly,
+                            format!(
+                                "inline assembly immediate operand {operand_index} requires ImmediateI32 constraint"
+                            ),
+                        );
+                    }
+                    None
+                }
+            };
+            if let Some(value) = value {
+                if operand.constraint == AssemblyConstraint::ImmediateI32 {
+                    self.emit(
+                        location.clone(),
+                        DiagnosticCode::InvalidInlineAssembly,
+                        format!(
+                            "inline assembly SSA operand {operand_index} cannot use an immediate constraint"
+                        ),
+                    );
+                }
+                if let Some(ty) = self.ty(value).cloned()
+                    && !is_assembly_register_type(&ty)
+                {
+                    self.emit(
+                        location.clone(),
+                        DiagnosticCode::InvalidOperandType,
+                        format!(
+                            "inline assembly register operand {operand_index} requires i32 or u32, found {ty:?}"
+                        ),
+                    );
+                }
+            }
+        }
+        if referenced_results.len() != operation.results.len() {
+            self.emit(
+                location.clone(),
+                DiagnosticCode::ResultArity,
+                "every inline assembly result must be referenced exactly once by an output or inout operand",
+            );
+        }
+
+        let no_memory = assembly.options.contains(&AssemblyOption::NoMemory);
+        let read_only = assembly.options.contains(&AssemblyOption::ReadOnly);
+        if no_memory && read_only {
+            self.emit(
+                location.clone(),
+                DiagnosticCode::InvalidInlineAssembly,
+                "NoMemory and ReadOnly assembly options are mutually exclusive",
+            );
+        }
+        if assembly.options.contains(&AssemblyOption::Pure) && !(no_memory || read_only) {
+            self.emit(
+                location.clone(),
+                DiagnosticCode::InvalidInlineAssembly,
+                "Pure inline assembly requires NoMemory or ReadOnly",
+            );
+        }
+        let has_memory_effect = assembly
+            .declared_effects
+            .iter()
+            .any(|effect| !matches!(effect, AssemblyEffect::ControlFlow));
+        if no_memory && has_memory_effect {
+            self.emit(
+                location.clone(),
+                DiagnosticCode::InvalidInlineAssembly,
+                "NoMemory inline assembly cannot declare memory, atomic, or barrier effects",
+            );
+        }
+        let has_write = assembly.declared_effects.iter().any(|effect| {
+            matches!(
+                effect,
+                AssemblyEffect::WriteGlobal
+                    | AssemblyEffect::WriteWorkgroup
+                    | AssemblyEffect::Atomic
+            )
+        });
+        if read_only && has_write {
+            self.emit(
+                location.clone(),
+                DiagnosticCode::InvalidInlineAssembly,
+                "ReadOnly inline assembly cannot declare write or atomic effects",
+            );
+        }
+        if assembly.options.contains(&AssemblyOption::Pure)
+            && assembly
+                .declared_effects
+                .contains(&AssemblyEffect::ControlFlow)
+        {
+            self.emit(
+                location.clone(),
+                DiagnosticCode::InvalidInlineAssembly,
+                "Pure inline assembly cannot declare control-flow effects",
+            );
+        }
+        if assembly.declared_effects.is_empty() && !no_memory {
+            self.emit(
+                location,
+                DiagnosticCode::InvalidInlineAssembly,
+                "effect-free inline assembly requires an explicit NoMemory option",
+            );
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn verify_assembly_result(
+        &mut self,
+        operation: &Operation,
+        result_index: u32,
+        constraint: AssemblyConstraint,
+        operand_index: usize,
+        referenced_results: &mut BTreeSet<u32>,
+        location: DiagnosticLocation,
+    ) {
+        let Some(result) = usize::try_from(result_index)
+            .ok()
+            .and_then(|index| operation.results.get(index))
+        else {
+            self.emit(
+                location,
+                DiagnosticCode::ResultArity,
+                format!(
+                    "inline assembly operand {operand_index} references missing result {result_index}"
+                ),
+            );
+            return;
+        };
+        if !referenced_results.insert(result_index) {
+            self.emit(
+                location.clone(),
+                DiagnosticCode::DuplicateValue,
+                format!("inline assembly result {result_index} is referenced more than once"),
+            );
+        }
+        if constraint == AssemblyConstraint::ImmediateI32 {
+            self.emit(
+                location.clone(),
+                DiagnosticCode::InvalidInlineAssembly,
+                format!("inline assembly output operand {operand_index} cannot be immediate"),
+            );
+        }
+        if !is_assembly_register_type(&result.ty) {
+            self.emit(
+                location,
+                DiagnosticCode::InvalidOperandType,
+                format!(
+                    "inline assembly result operand {operand_index} requires i32 or u32, found {:?}",
+                    result.ty
+                ),
+            );
         }
     }
 
@@ -1819,6 +2041,10 @@ fn scope_can_observe_address_space(
         AddressSpace::Global | AddressSpace::Generic => scope != SynchronizationScope::Invocation,
         AddressSpace::Private | AddressSpace::Constant => false,
     }
+}
+
+fn is_assembly_register_type(ty: &Type) -> bool {
+    matches!(ty, Type::Scalar(ScalarType::I32 | ScalarType::U32))
 }
 
 fn capability_is_supported(

@@ -399,6 +399,7 @@ impl Operation {
             OperationKind::WorkgroupMemory(_) => {
                 vec![MemoryEffect::Allocate(AddressSpace::Workgroup)]
             }
+            OperationKind::InlineAssembly(assembly) => assembly.memory_effects(),
             OperationKind::Wave(_) => Vec::new(),
             _ => Vec::new(),
         }
@@ -463,6 +464,7 @@ impl Operation {
                 capabilities
             }
             OperationKind::Wave(wave) => wave.required_capabilities(),
+            OperationKind::InlineAssembly(assembly) => assembly.required_capabilities(),
             OperationKind::Call { callee, arguments } => {
                 FloatOperation::from_intrinsic_call(callee, arguments)
                     .map_or_else(BTreeSet::new, |float| float.required_capabilities())
@@ -548,6 +550,8 @@ pub enum OperationKind {
     WorkgroupMemory(WorkgroupMemory),
     /// A width-bound, convergent operation over one physical AMD-style wave.
     Wave(WaveOperation),
+    /// Source-bound target assembly whose authority was established by the frontend.
+    InlineAssembly(InlineAssembly),
 }
 
 impl OperationKind {
@@ -579,7 +583,173 @@ impl OperationKind {
             Self::Store { pointer, value, .. } => vec![*pointer, *value],
             Self::Atomic(atomic) => atomic.operands(),
             Self::Wave(wave) => wave.operands(),
+            Self::InlineAssembly(assembly) => assembly.operands(),
         }
+    }
+}
+
+/// Target capability required by the first authenticated gfx942 assembly profile.
+pub const AMDGPU_GFX942_INLINE_ASSEMBLY_CAPABILITY_NAMESPACE: &str = "fe2o3.amdgpu";
+pub const AMDGPU_GFX942_INLINE_ASSEMBLY_CAPABILITY_NAME: &str =
+    "authenticated-inline-assembly.gfx942.v1";
+
+/// Exact compiler identities that bind one assembly statement to authenticated source records.
+///
+/// These digests are evidence references, not self-authenticating flags. A compiler bridge must
+/// construct them from the already authenticated frontend unit, monomorphized function, kernel
+/// contract, and statement record. Backends consume the bound semantic operation and never grant
+/// authority based on a symbol or mnemonic spelling.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct AssemblySourceIdentity {
+    pub frontend_unit: [u8; 32],
+    pub function: [u8; 32],
+    pub contract: [u8; 32],
+    pub statement: [u8; 32],
+}
+
+impl AssemblySourceIdentity {
+    pub const fn new(
+        frontend_unit: [u8; 32],
+        function: [u8; 32],
+        contract: [u8; 32],
+        statement: [u8; 32],
+    ) -> Self {
+        Self {
+            frontend_unit,
+            function,
+            contract,
+            statement,
+        }
+    }
+
+    pub fn is_complete(self) -> bool {
+        [
+            self.frontend_unit,
+            self.function,
+            self.contract,
+            self.statement,
+        ]
+        .into_iter()
+        .all(|identity| identity != [0; 32])
+    }
+}
+
+/// Assembly syntax and register model selected by an authenticated source contract.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum InlineAssemblyTarget {
+    AmdGpuGfx942,
+}
+
+/// Exact operand constraint accepted by the bounded assembly carrier.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum AssemblyConstraint {
+    Sgpr32,
+    Vgpr32,
+    ImmediateI32,
+}
+
+/// The SSA role of one source-order assembly operand.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum AssemblyOperandKind {
+    Input(ValueId),
+    Output { result_index: u32 },
+    InOut { input: ValueId, result_index: u32 },
+    ImmediateI32(i32),
+}
+
+/// One source-order operand with its authenticated target constraint.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct AssemblyOperand {
+    pub kind: AssemblyOperandKind,
+    pub constraint: AssemblyConstraint,
+}
+
+impl AssemblyOperand {
+    pub const fn input(value: ValueId, constraint: AssemblyConstraint) -> Self {
+        Self {
+            kind: AssemblyOperandKind::Input(value),
+            constraint,
+        }
+    }
+
+    pub const fn output(result_index: u32, constraint: AssemblyConstraint) -> Self {
+        Self {
+            kind: AssemblyOperandKind::Output { result_index },
+            constraint,
+        }
+    }
+}
+
+/// Source options whose meaning must survive target lowering exactly.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum AssemblyOption {
+    NoMemory,
+    ReadOnly,
+    Pure,
+    PreservesFlags,
+    NoStack,
+}
+
+/// Effects declared by the authenticated source contract.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum AssemblyEffect {
+    ReadGlobal,
+    WriteGlobal,
+    ReadWorkgroup,
+    WriteWorkgroup,
+    Atomic,
+    Barrier,
+    ControlFlow,
+}
+
+/// One source-bound assembly statement.
+///
+/// The mnemonic is data to be validated by a target backend. It is never a trust token and is
+/// never emitted verbatim unless the backend recognizes its complete operand/effect contract.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InlineAssembly {
+    pub target: InlineAssemblyTarget,
+    pub source: AssemblySourceIdentity,
+    pub mnemonic: String,
+    pub operands: Vec<AssemblyOperand>,
+    pub options: BTreeSet<AssemblyOption>,
+    pub declared_effects: BTreeSet<AssemblyEffect>,
+}
+
+impl InlineAssembly {
+    pub fn operands(&self) -> Vec<ValueId> {
+        self.operands
+            .iter()
+            .filter_map(|operand| match operand.kind {
+                AssemblyOperandKind::Input(value)
+                | AssemblyOperandKind::InOut { input: value, .. } => Some(value),
+                AssemblyOperandKind::Output { .. } | AssemblyOperandKind::ImmediateI32(_) => None,
+            })
+            .collect()
+    }
+
+    pub fn memory_effects(&self) -> Vec<MemoryEffect> {
+        self.declared_effects
+            .iter()
+            .filter_map(|effect| match effect {
+                AssemblyEffect::ReadGlobal => Some(MemoryEffect::Read(AddressSpace::Global)),
+                AssemblyEffect::WriteGlobal => Some(MemoryEffect::Write(AddressSpace::Global)),
+                AssemblyEffect::ReadWorkgroup => Some(MemoryEffect::Read(AddressSpace::Workgroup)),
+                AssemblyEffect::WriteWorkgroup => {
+                    Some(MemoryEffect::Write(AddressSpace::Workgroup))
+                }
+                AssemblyEffect::Atomic | AssemblyEffect::Barrier | AssemblyEffect::ControlFlow => {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    pub fn required_capabilities(&self) -> BTreeSet<TargetCapability> {
+        BTreeSet::from([TargetCapability::Extension {
+            namespace: AMDGPU_GFX942_INLINE_ASSEMBLY_CAPABILITY_NAMESPACE.to_owned(),
+            name: AMDGPU_GFX942_INLINE_ASSEMBLY_CAPABILITY_NAME.to_owned(),
+        }])
     }
 }
 

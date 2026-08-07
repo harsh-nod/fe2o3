@@ -3,13 +3,15 @@ use std::fmt;
 use std::str;
 
 use crate::{
-    AccessMode, AddressSpace, Atomic, AtomicKind, Axis, Barrier, BarrierSemantics, BasicBlock,
-    BinaryOp, BlockId, CastKind, ComparePredicate, Constant, Convergence, Fence, Function,
-    FunctionBody, FunctionId, FunctionRole, IndexKind, IntegerSwitchCase, IntrinsicKind,
-    IntrinsicOperation, Kernel, KernelId, LaunchDomain, LaunchExtent, MemoryAccess, MemoryOrdering,
-    Module, ModuleId, Operation, OperationKind, PointerType, ScalarType, Signature, SliceType,
-    SwitchCase, SynchronizationScope, TargetCapability, Terminator, Type, UnaryOp, ValueDef,
-    ValueId, WaveOperation, WaveOperationKind, WaveWidth, WorkgroupBarrier, WorkgroupMemory,
+    AccessMode, AddressSpace, AssemblyConstraint, AssemblyEffect, AssemblyOperand,
+    AssemblyOperandKind, AssemblyOption, AssemblySourceIdentity, Atomic, AtomicKind, Axis, Barrier,
+    BarrierSemantics, BasicBlock, BinaryOp, BlockId, CastKind, ComparePredicate, Constant,
+    Convergence, Fence, Function, FunctionBody, FunctionId, FunctionRole, IndexKind,
+    InlineAssembly, InlineAssemblyTarget, IntegerSwitchCase, IntrinsicKind, IntrinsicOperation,
+    Kernel, KernelId, LaunchDomain, LaunchExtent, MemoryAccess, MemoryOrdering, Module, ModuleId,
+    Operation, OperationKind, PointerType, ScalarType, Signature, SliceType, SwitchCase,
+    SynchronizationScope, TargetCapability, Terminator, Type, UnaryOp, ValueDef, ValueId,
+    WaveOperation, WaveOperationKind, WaveWidth, WorkgroupBarrier, WorkgroupMemory,
     WorkgroupMemoryExtent, WorkgroupSize,
 };
 
@@ -19,6 +21,8 @@ pub const KERNEL_IR_MAGIC_V1: [u8; 8] = *b"FE2O3KI\0";
 pub const KERNEL_IR_VERSION_V1: u16 = 1;
 /// Additive synchronization, LDS, and wave-capability wire version.
 pub const KERNEL_IR_VERSION_V2: u16 = 2;
+/// Additive source-bound inline-assembly wire version.
+pub const KERNEL_IR_VERSION_V3: u16 = 3;
 /// Maximum size of one encoded kernel IR module.
 pub const MAX_MODULE_BYTES_V1: usize = 16 * 1024 * 1024;
 /// Maximum UTF-8 byte length of any identifier or extension component.
@@ -43,6 +47,8 @@ pub const MAX_OPERATIONS_V1: usize = 65_536;
 pub const MAX_OPERATION_RESULTS_V1: usize = 65_536;
 /// Maximum value arguments in any argument list.
 pub const MAX_VALUE_ARGUMENTS_V1: usize = 65_536;
+/// Maximum operands in one V3 inline-assembly statement.
+pub const MAX_ASSEMBLY_OPERANDS_V3: usize = 256;
 /// Maximum cases in one switch terminator.
 pub const MAX_SWITCH_CASES_V1: usize = 65_536;
 /// Maximum cases in one typed V2 integer switch terminator.
@@ -200,6 +206,11 @@ pub fn encode_module_v2(module: &Module) -> Result<Vec<u8>, KernelIrEncodeError>
     encode_module(module, KERNEL_IR_VERSION_V2)
 }
 
+/// Encodes a module in the bounded canonical kernel IR V3 wire format.
+pub fn encode_module_v3(module: &Module) -> Result<Vec<u8>, KernelIrEncodeError> {
+    encode_module(module, KERNEL_IR_VERSION_V3)
+}
+
 fn encode_module(module: &Module, version: u16) -> Result<Vec<u8>, KernelIrEncodeError> {
     let mut writer = Writer::new(version);
     writer.bytes(&KERNEL_IR_MAGIC_V1)?;
@@ -244,6 +255,11 @@ pub fn decode_module_v1(bytes: &[u8]) -> Result<Module, KernelIrDecodeError> {
 /// before producers begin emitting the additive V2 operation set.
 pub fn decode_module_v2(bytes: &[u8]) -> Result<Module, KernelIrDecodeError> {
     decode_module(bytes, KERNEL_IR_VERSION_V2, true)
+}
+
+/// Decodes canonical V1, V2, or V3 bytes using the latest bounded reader.
+pub fn decode_module_v3(bytes: &[u8]) -> Result<Module, KernelIrDecodeError> {
+    decode_module(bytes, KERNEL_IR_VERSION_V3, true)
 }
 
 fn decode_module(
@@ -692,6 +708,11 @@ fn encode_operation_kind(
             writer.u8(20)?;
             encode_wave_operation(writer, wave)?;
         }
+        OperationKind::InlineAssembly(assembly) => {
+            require_v3(writer, "source-bound inline assembly")?;
+            writer.u8(21)?;
+            encode_inline_assembly(writer, assembly)?;
+        }
     }
     Ok(())
 }
@@ -765,12 +786,134 @@ fn decode_operation_kind(reader: &mut Reader<'_>) -> Result<OperationKind, Kerne
         20 if reader.version >= KERNEL_IR_VERSION_V2 => {
             OperationKind::Wave(decode_wave_operation(reader)?)
         }
+        21 if reader.version >= KERNEL_IR_VERSION_V3 => {
+            OperationKind::InlineAssembly(decode_inline_assembly(reader)?)
+        }
         tag => {
             return Err(KernelIrDecodeError::UnknownTag {
                 kind: "operation",
                 tag,
             });
         }
+    })
+}
+
+fn encode_inline_assembly(
+    writer: &mut Writer,
+    assembly: &InlineAssembly,
+) -> Result<(), KernelIrEncodeError> {
+    writer.u8(inline_assembly_target_tag(assembly.target))?;
+    writer.bytes(&assembly.source.frontend_unit)?;
+    writer.bytes(&assembly.source.function)?;
+    writer.bytes(&assembly.source.contract)?;
+    writer.bytes(&assembly.source.statement)?;
+    writer.text("inline assembly mnemonic", &assembly.mnemonic)?;
+    writer.count(
+        "inline assembly operands",
+        assembly.operands.len(),
+        MAX_ASSEMBLY_OPERANDS_V3,
+    )?;
+    for operand in &assembly.operands {
+        writer.u8(assembly_constraint_tag(operand.constraint))?;
+        match operand.kind {
+            AssemblyOperandKind::Input(value) => {
+                writer.u8(1)?;
+                writer.u32(value.0)?;
+            }
+            AssemblyOperandKind::Output { result_index } => {
+                writer.u8(2)?;
+                writer.u32(result_index)?;
+            }
+            AssemblyOperandKind::InOut {
+                input,
+                result_index,
+            } => {
+                writer.u8(3)?;
+                writer.u32(input.0)?;
+                writer.u32(result_index)?;
+            }
+            AssemblyOperandKind::ImmediateI32(value) => {
+                writer.u8(4)?;
+                writer.bytes(&value.to_le_bytes())?;
+            }
+        }
+    }
+    writer.count("inline assembly options", assembly.options.len(), 5)?;
+    for option in &assembly.options {
+        writer.u8(assembly_option_tag(*option))?;
+    }
+    writer.count(
+        "inline assembly declared effects",
+        assembly.declared_effects.len(),
+        7,
+    )?;
+    for effect in &assembly.declared_effects {
+        writer.u8(assembly_effect_tag(*effect))?;
+    }
+    Ok(())
+}
+
+fn decode_inline_assembly(reader: &mut Reader<'_>) -> Result<InlineAssembly, KernelIrDecodeError> {
+    let target = decode_inline_assembly_target(reader.u8()?)?;
+    let source = AssemblySourceIdentity::new(
+        reader.fixed()?,
+        reader.fixed()?,
+        reader.fixed()?,
+        reader.fixed()?,
+    );
+    let mnemonic = reader.text("inline assembly mnemonic")?;
+    let operand_count = reader.count("inline assembly operands", MAX_ASSEMBLY_OPERANDS_V3)?;
+    let mut operands = Vec::with_capacity(operand_count);
+    for _ in 0..operand_count {
+        let constraint = decode_assembly_constraint(reader.u8()?)?;
+        let kind = match reader.u8()? {
+            1 => AssemblyOperandKind::Input(ValueId(reader.u32()?)),
+            2 => AssemblyOperandKind::Output {
+                result_index: reader.u32()?,
+            },
+            3 => AssemblyOperandKind::InOut {
+                input: ValueId(reader.u32()?),
+                result_index: reader.u32()?,
+            },
+            4 => AssemblyOperandKind::ImmediateI32(i32::from_le_bytes(reader.fixed()?)),
+            tag => {
+                return Err(KernelIrDecodeError::UnknownTag {
+                    kind: "inline assembly operand role",
+                    tag,
+                });
+            }
+        };
+        operands.push(AssemblyOperand { kind, constraint });
+    }
+    let option_count = reader.count("inline assembly options", 5)?;
+    let mut options = BTreeSet::new();
+    let mut previous_option = None;
+    for _ in 0..option_count {
+        let option = decode_assembly_option(reader.u8()?)?;
+        if previous_option.is_some_and(|previous| previous >= option) {
+            return Err(KernelIrDecodeError::NonCanonical);
+        }
+        previous_option = Some(option);
+        options.insert(option);
+    }
+    let effect_count = reader.count("inline assembly declared effects", 7)?;
+    let mut declared_effects = BTreeSet::new();
+    let mut previous_effect = None;
+    for _ in 0..effect_count {
+        let effect = decode_assembly_effect(reader.u8()?)?;
+        if previous_effect.is_some_and(|previous| previous >= effect) {
+            return Err(KernelIrDecodeError::NonCanonical);
+        }
+        previous_effect = Some(effect);
+        declared_effects.insert(effect);
+    }
+    Ok(InlineAssembly {
+        target,
+        source,
+        mnemonic,
+        operands,
+        options,
+        declared_effects,
     })
 }
 
@@ -1776,9 +1919,44 @@ enum_codec!(atomic_kind_tag, decode_atomic_kind, AtomicKind, "atomic kind", {
     AtomicKind::BitOr => 10,
     AtomicKind::BitXor => 11,
 });
+enum_codec!(inline_assembly_target_tag, decode_inline_assembly_target, InlineAssemblyTarget, "inline assembly target", {
+    InlineAssemblyTarget::AmdGpuGfx942 => 1,
+});
+enum_codec!(assembly_constraint_tag, decode_assembly_constraint, AssemblyConstraint, "inline assembly constraint", {
+    AssemblyConstraint::Sgpr32 => 1,
+    AssemblyConstraint::Vgpr32 => 2,
+    AssemblyConstraint::ImmediateI32 => 3,
+});
+enum_codec!(assembly_option_tag, decode_assembly_option, AssemblyOption, "inline assembly option", {
+    AssemblyOption::NoMemory => 1,
+    AssemblyOption::ReadOnly => 2,
+    AssemblyOption::Pure => 3,
+    AssemblyOption::PreservesFlags => 4,
+    AssemblyOption::NoStack => 5,
+});
+enum_codec!(assembly_effect_tag, decode_assembly_effect, AssemblyEffect, "inline assembly effect", {
+    AssemblyEffect::ReadGlobal => 1,
+    AssemblyEffect::WriteGlobal => 2,
+    AssemblyEffect::ReadWorkgroup => 3,
+    AssemblyEffect::WriteWorkgroup => 4,
+    AssemblyEffect::Atomic => 5,
+    AssemblyEffect::Barrier => 6,
+    AssemblyEffect::ControlFlow => 7,
+});
 
 fn require_v2(writer: &Writer, feature: &'static str) -> Result<(), KernelIrEncodeError> {
     if writer.version >= KERNEL_IR_VERSION_V2 {
+        Ok(())
+    } else {
+        Err(KernelIrEncodeError::UnsupportedInVersion {
+            version: writer.version,
+            feature,
+        })
+    }
+}
+
+fn require_v3(writer: &Writer, feature: &'static str) -> Result<(), KernelIrEncodeError> {
+    if writer.version >= KERNEL_IR_VERSION_V3 {
         Ok(())
     } else {
         Err(KernelIrEncodeError::UnsupportedInVersion {
