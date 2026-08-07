@@ -2248,8 +2248,14 @@ fn sanitize_symbol_name(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        KernelRoot, RegistrationError, RegistrationRecord, TypedKernelProfile,
+        AuthenticatedKernelFrontendContractV1, KernelRoot, ObservedInlineAssemblyV1,
+        RegistrationError, RegistrationRecord, TypedKernelProfile, reconcile_frontend_contract,
         validate_registration_records as validate_records,
+    };
+    use fe2o3_rustc_front::{
+        ASSEMBLY_OPERAND_SGPR_V1, ASSEMBLY_OPTION_NOMEM_V1, ASSEMBLY_OPTION_NOSTACK_V1,
+        ASSEMBLY_OPTION_PRESERVES_FLAGS_V1, FrontendUnsafeAssemblyDeclarationV1,
+        FrontendUnsafeAssemblyTargetV1, KernelFrontendContractV1,
     };
     use reserved_fe2o3_symbols::{
         KERNEL_PREFIX, KERNEL_REGISTRATION_KIND_KERNEL,
@@ -2258,6 +2264,7 @@ mod tests {
         KERNEL_REGISTRATION_VERSION_V2, TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2,
         derive_crate_binding_id_v1, derive_kernel_binding_id_v1, host_kernel_symbol_v1,
     };
+    use std::collections::BTreeSet;
 
     fn validate_registration_records<T: Copy>(
         records: Vec<RegistrationRecord<T>>,
@@ -2384,6 +2391,83 @@ mod tests {
     fn kernel_prefix_spoof_without_registration_is_not_a_root() {
         let roots = validate_registration_records::<u8>(Vec::new()).unwrap();
         assert!(roots.is_empty());
+    }
+
+    #[test]
+    fn reachable_assembly_reconciliation_is_exact_and_target_bound() {
+        let option_bits = ASSEMBLY_OPTION_NOMEM_V1
+            | ASSEMBLY_OPTION_NOSTACK_V1
+            | ASSEMBLY_OPTION_PRESERVES_FLAGS_V1;
+        let contract = KernelFrontendContractV1::new(
+            None,
+            Some(
+                FrontendUnsafeAssemblyDeclarationV1::new(
+                    FrontendUnsafeAssemblyTargetV1::AmdGpuGfx942,
+                    ASSEMBLY_OPERAND_SGPR_V1,
+                    option_bits,
+                    0,
+                )
+                .unwrap(),
+            ),
+        )
+        .unwrap();
+        let authenticated = AuthenticatedKernelFrontendContractV1::for_test(contract);
+        let observed = ObservedInlineAssemblyV1 {
+            blocks: 2,
+            operand_bits: ASSEMBLY_OPERAND_SGPR_V1,
+            option_sets: BTreeSet::from([option_bits]),
+        };
+
+        let summary = reconcile_frontend_contract(
+            "kernel",
+            "gfx942:xnack-",
+            Some(&authenticated),
+            observed.clone(),
+        )
+        .unwrap();
+        assert_eq!(summary.blocks, 2);
+        assert_eq!(summary.operand_bits, ASSEMBLY_OPERAND_SGPR_V1);
+        assert_eq!(summary.option_bits, option_bits);
+
+        for (target, contract, observation, expected) in [
+            (
+                "gfx1100",
+                Some(&authenticated),
+                observed.clone(),
+                "disagrees with compiler target",
+            ),
+            (
+                "gfx942",
+                None,
+                observed.clone(),
+                "without an authenticated unsafe_asm",
+            ),
+            (
+                "gfx942",
+                Some(&authenticated),
+                ObservedInlineAssemblyV1 {
+                    operand_bits: fe2o3_rustc_front::ASSEMBLY_OPERAND_VGPR_V1,
+                    ..observed.clone()
+                },
+                "operand declaration",
+            ),
+            (
+                "gfx942",
+                Some(&authenticated),
+                ObservedInlineAssemblyV1 {
+                    option_sets: BTreeSet::from([option_bits, ASSEMBLY_OPTION_NOMEM_V1]),
+                    ..observed
+                },
+                "different option sets",
+            ),
+        ] {
+            let error =
+                reconcile_frontend_contract("kernel", target, contract, observation).unwrap_err();
+            assert!(
+                error.to_string().contains(expected),
+                "missing `{expected}` in {error}"
+            );
+        }
     }
 
     #[test]
