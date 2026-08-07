@@ -84,6 +84,10 @@ impl SemanticCase {
         }
         self.specification.validate()
     }
+
+    pub(crate) fn rebuild(&self, specification: SemanticSpec) -> Option<Self> {
+        Self::new(self.seed, self.ordinal, self.feature, specification).ok()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

@@ -55,6 +55,16 @@ pub struct SemanticReplayIdentityV1 {
     pub canonical_fingerprint: [u8; 32],
 }
 
+/// Exact canonical identity for any valid case, including reduced cases.
+///
+/// Like `SemanticReplayIdentityV1`, this is deterministic test metadata and
+/// carries no authentication or execution authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SemanticCaseIdentityV1 {
+    pub corpus_version: u8,
+    pub canonical_fingerprint: [u8; 32],
+}
+
 /// Generates the bounded corpus in stable feature-major, ordinal-minor order.
 pub fn generate_semantic_corpus(seed: u64, config: SemanticCorpusConfig) -> Vec<SemanticCase> {
     let mut cases =
@@ -109,6 +119,16 @@ pub fn semantic_replay_identity_v1(
         seed: case.seed(),
         feature: case.feature(),
         ordinal: case.ordinal(),
+        canonical_fingerprint: replay_fingerprint(&bytes),
+    })
+}
+
+pub fn semantic_case_identity_v1(
+    case: &SemanticCase,
+) -> Result<SemanticCaseIdentityV1, CorpusError> {
+    let bytes = encode_semantic_case_v1(case)?;
+    Ok(SemanticCaseIdentityV1 {
+        corpus_version: SEMANTIC_CORPUS_VERSION_V1,
         canonical_fingerprint: replay_fingerprint(&bytes),
     })
 }

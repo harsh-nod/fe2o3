@@ -1,8 +1,9 @@
-//! Deterministic differential-testing infrastructure for scalar GPU kernels.
+//! Deterministic differential and semantic-conformance infrastructure for GPU kernels.
 //!
-//! The crate generates and evaluates a deliberately small, bounded expression
-//! language. It does not compile or execute GPU code and its results are not
-//! parity, correctness, or safety evidence.
+//! The crate provides both a bounded scalar expression language and a typed
+//! corpus for high-risk Rust GPU semantics. It does not compile or execute GPU
+//! code and its standalone results are not parity, correctness, or safety
+//! evidence.
 
 mod codec;
 mod conformance;
@@ -11,6 +12,7 @@ mod eval;
 mod generate;
 mod model;
 mod reduce;
+mod semantic_reduce;
 
 pub use codec::{CodecError, MAX_CANONICAL_BYTES, decode_case_v1, encode_case_v1};
 pub use conformance::{
@@ -24,9 +26,10 @@ pub use conformance::{
 };
 pub use corpus::{
     CorpusError, MAX_CASES_PER_FEATURE, MAX_SEMANTIC_CANONICAL_BYTES, MAX_SEMANTIC_CORPUS_CASES,
-    SEMANTIC_CORPUS_VERSION_V1, SemanticCorpusConfig, SemanticReplayIdentityV1,
-    encode_semantic_case_v1, generate_semantic_case, generate_semantic_corpus,
-    replay_semantic_case_v1, semantic_replay_identity_v1,
+    SEMANTIC_CORPUS_VERSION_V1, SemanticCaseIdentityV1, SemanticCorpusConfig,
+    SemanticReplayIdentityV1, encode_semantic_case_v1, generate_semantic_case,
+    generate_semantic_corpus, replay_semantic_case_v1, semantic_case_identity_v1,
+    semantic_replay_identity_v1,
 };
 pub use eval::{
     LaneMismatch, MAX_REPORTED_MISMATCHES, MismatchReport, compare_outputs, evaluate_case,
@@ -39,4 +42,8 @@ pub use model::{
 };
 pub use reduce::{
     CaseComplexity, MAX_REDUCTION_ATTEMPTS, ReduceError, ReductionResult, reduce_case,
+};
+pub use semantic_reduce::{
+    MAX_SEMANTIC_REDUCTION_ATTEMPTS, SemanticCaseComplexity, SemanticReduceError,
+    SemanticReductionResult, reduce_semantic_case,
 };
