@@ -1,0 +1,5 @@
+error[E0599]: no method named `clone` found for struct `DeviceBufferViewMut<'allocation, T>` in the current scope
+ --> tests/ui/device_buffer_view/mutable_view_cannot_be_cloned.rs:4:27
+  |
+4 |     let _duplicate = view.clone();
+  |                           ^^^^^ method not found in `DeviceBufferViewMut<'_, u32>`

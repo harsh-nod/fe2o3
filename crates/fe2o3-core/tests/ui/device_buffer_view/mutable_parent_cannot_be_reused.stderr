@@ -1,0 +1,9 @@
+error[E0502]: cannot borrow `*buffer` as immutable because it is also borrowed as mutable
+ --> tests/ui/device_buffer_view/mutable_parent_cannot_be_reused.rs:5:19
+  |
+4 |     let view = buffer.view_mut(..).unwrap();
+  |                ------ mutable borrow occurs here
+5 |     let _length = buffer.len();
+  |                   ^^^^^^ immutable borrow occurs here
+6 |     drop(view);
+  |          ---- mutable borrow later used here

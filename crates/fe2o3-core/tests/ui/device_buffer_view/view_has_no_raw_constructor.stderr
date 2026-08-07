@@ -1,0 +1,11 @@
+error[E0599]: no associated function or constant named `from_raw` found for struct `DeviceBufferView<'allocation, T>` in the current scope
+ --> tests/ui/device_buffer_view/view_has_no_raw_constructor.rs:5:23
+  |
+5 |     DeviceBufferView::from_raw(context, core::ptr::null_mut(), 0)
+  |                       ^^^^^^^^ associated function or constant not found in `DeviceBufferView<'_, _>`
+  |
+help: there is an associated function `from` with a similar name
+ --> $RUST/core/src/convert/mod.rs
+  |
+  |     fn from(value: T) -> Self;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^

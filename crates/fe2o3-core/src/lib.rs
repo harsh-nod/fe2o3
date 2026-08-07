@@ -30,7 +30,10 @@ pub use managed_memory::{
     ManagedMemoryCleanupError, ManagedMemoryError, ManagedMemoryLocation, ManagedMigrationReceipt,
     ManagedReclamationReceipt, ManagedResidencyState,
 };
-pub use memory::DeviceBuffer;
+pub use memory::{
+    DeviceBuffer, DeviceBufferIdentity, DeviceBufferRangeError, DeviceBufferRegion,
+    DeviceBufferView, DeviceBufferViewMut,
+};
 pub use memory_topology::{
     AllocationIdentity, AllocationKind, ContextIdentity, MemoryCapabilities,
     MemoryTopologyObservation, MemoryTopologyObservationError, PhysicalDeviceIdentity,
