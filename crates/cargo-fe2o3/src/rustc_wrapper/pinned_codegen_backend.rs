@@ -1219,7 +1219,7 @@ mod platform {
     mod tests {
         use super::*;
         use std::fs::{self, OpenOptions};
-        use std::os::unix::fs::{MetadataExt, symlink};
+        use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
         use std::sync::atomic::{AtomicU64, Ordering};
         use std::time::{Duration, Instant};
 
@@ -1434,6 +1434,7 @@ mod platform {
             let root = TestDirectory::new();
             let selected = root.path().join("backend.so");
             fs::write(&selected, b"before").unwrap();
+            fs::set_permissions(&selected, fs::Permissions::from_mode(0o640)).unwrap();
             let fd = rustix::fs::open(
                 &selected,
                 OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
@@ -1443,8 +1444,8 @@ mod platform {
             let mut source = File::from(fd);
             let initial = ObjectSnapshot::from_metadata(&source.metadata().unwrap());
 
-            std::thread::sleep(Duration::from_millis(10));
             fs::write(&selected, b"after!").unwrap();
+            fs::set_permissions(&selected, fs::Permissions::from_mode(0o600)).unwrap();
 
             assert!(matches!(
                 capture_source(&mut source, &selected, initial),
