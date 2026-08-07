@@ -74,6 +74,7 @@ fn typed_kernel_compile_fail_diagnostics_are_stable() {
                 "required workgroup dimensions exceed max dimensions",
                 "min_workgroups_per_compute_unit requires max workgroup dimensions",
                 "launch maximum dimensions are duplicated",
+                "general typed V1 supports only an exact 256x1x1 launch contract",
             ],
         ),
         (

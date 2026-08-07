@@ -17,21 +17,24 @@ pub fn result(a: &[f32], b: &[f32], c: DisjointSlice<f32>) -> Result<(), ()> {
 }
 
 #[kernel(typed)]
-pub fn wrong_count(a: &[f32], b: &[f32]) {}
-
-#[kernel(typed)]
 pub fn alias(a: &Floats, b: &[f32], c: DisjointSlice<f32>) {}
-
-#[kernel(typed)]
-pub fn wrong_element(a: &[u32], b: &[f32], c: DisjointSlice<f32>) {}
-
-#[kernel(typed)]
-pub fn wrong_order(a: &[f32], b: DisjointSlice<f32>, c: &[f32]) {}
 
 #[kernel(typed)]
 pub fn raw_pointer(a: *const f32, b: &[f32], c: DisjointSlice<f32>) {}
 
 #[kernel(typed)]
-pub fn wrong_output(a: &[f32], b: &[f32], c: DisjointSlice<u32>) {}
+pub fn unsupported_second(a: &[f32], b: *const f32, c: DisjointSlice<f32>) {}
+
+#[kernel(typed)]
+pub fn unsupported_third(a: &[f32], b: &[f32], c: *mut f32) {}
+
+#[kernel(typed)]
+pub fn mutable_slice(a: &mut [f32]) {}
+
+#[kernel(typed)]
+pub fn aggregate(value: (u32, u32)) {}
+
+#[kernel(typed)]
+pub fn empty() {}
 
 fn main() {}

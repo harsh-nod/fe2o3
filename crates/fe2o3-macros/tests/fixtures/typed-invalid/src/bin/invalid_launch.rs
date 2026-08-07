@@ -15,4 +15,14 @@ fn occupancy_without_maximum() {}
 #[kernel(launch(max = [64, 1, 1], max = [64, 1, 1]))]
 fn duplicate_maximum() {}
 
+#[kernel(typed, launch(max = [256, 1, 1]))]
+pub fn general_maximum_only(value: u32) {
+    let _ = value;
+}
+
+#[kernel(typed, launch(required = [128, 1, 1]))]
+pub fn general_wrong_block(value: u32) {
+    let _ = value;
+}
+
 fn main() {}

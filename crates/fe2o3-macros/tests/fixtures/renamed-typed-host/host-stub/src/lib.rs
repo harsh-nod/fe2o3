@@ -2,6 +2,19 @@ pub mod __generated {
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub enum CompilerGeneratedKernelProfileV1 {
         TypedVecAddF32RustcLayoutV2,
+        ManifestDerivedScalarSliceV1 {
+            generated_host_contract_identity: [u8; 32],
+        },
+    }
+
+    /// Minimal fixture copy of the shared-bundle expectation contract.
+    ///
+    /// # Safety
+    ///
+    /// Implementors must describe the exact compiler-generated kernel marker.
+    pub unsafe trait CompilerGeneratedKernelExpectationV1 {
+        const PROFILE: CompilerGeneratedKernelProfileV1;
+        const KERNEL_BINDING_ID_V1: [u8; 32];
     }
 
     /// Minimal fixture copy of the host contract consumed by generated bindings.

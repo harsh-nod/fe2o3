@@ -14,12 +14,14 @@ use proc_macro::TokenStream;
 use proc_macro_crate::{FoundCrate, crate_name};
 use quote::{format_ident, quote};
 use reserved_fe2o3_symbols::{
-    CRATE_BINDING_ID_ENV_V1, CrateBindingIdV1, KERNEL_PREFIX, KERNEL_REGISTRATION_KIND_KERNEL,
+    CRATE_BINDING_ID_ENV_V1, CrateBindingIdV1, GeneratedHostContractIdV3, KERNEL_PREFIX,
+    KERNEL_REGISTRATION_KIND_KERNEL, KERNEL_REGISTRATION_KIND_TYPED_GENERAL_LAYOUT_V3,
     KERNEL_REGISTRATION_KIND_TYPED_VECADD_LAYOUT_V2, KERNEL_REGISTRATION_MAGIC,
     KERNEL_REGISTRATION_PREFIX, KERNEL_REGISTRATION_VERSION_V1, KERNEL_REGISTRATION_VERSION_V2,
-    MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1, RESERVED_ROOT,
-    TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2, artifact_length_symbol_v1, artifact_pointer_symbol_v1,
-    derive_kernel_binding_id_v1, host_kernel_symbol_v1,
+    KERNEL_REGISTRATION_VERSION_V3, MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1, RESERVED_ROOT,
+    TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3, TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2,
+    artifact_length_symbol_v1, artifact_pointer_symbol_v1, derive_kernel_binding_id_v1,
+    host_kernel_symbol_v1,
 };
 use syn::{
     Data, DeriveInput, Expr, ExprArray, FnArg, ForeignItem, GenericArgument, ItemFn,
@@ -675,7 +677,7 @@ fn validate_assembly_options_and_effects_v1(
 fn expand_kernel(input: ItemFn, options: KernelOptions) -> syn::Result<proc_macro2::TokenStream> {
     validate_kernel_assembly_boundary(&input, options.unsafe_assembly)?;
     if options.mode == KernelMode::Typed {
-        validate_typed_kernel_signature(&input)?;
+        validate_typed_kernel_profile_v1(&input, &options)?;
         validate_typed_kernel_symbol_stem(&input.sig.ident)?;
     }
     validate_kernel_signature(&input)?;
@@ -746,6 +748,31 @@ fn expand_kernel_with_device_import(
 }
 
 fn expand_kernel_with_imports(
+    input: ItemFn,
+    options: KernelOptions,
+    device_import: &proc_macro2::TokenStream,
+    host_import: Option<&proc_macro2::TokenStream>,
+    crate_binding: Option<CrateBindingIdV1>,
+) -> syn::Result<proc_macro2::TokenStream> {
+    if options.mode == KernelMode::Typed
+        && let Err(exact_error) = validate_typed_kernel_signature(&input)
+    {
+        if validate_general_typed_signature_shape_v1(&input, &options).is_err() {
+            return Err(exact_error);
+        }
+        return expand_general_typed_kernel_with_imports(
+            input,
+            options,
+            device_import,
+            host_import,
+            crate_binding,
+        );
+    }
+
+    expand_legacy_kernel_with_imports(input, options, device_import, host_import, crate_binding)
+}
+
+fn expand_legacy_kernel_with_imports(
     mut input: ItemFn,
     options: KernelOptions,
     device_import: &proc_macro2::TokenStream,
@@ -1018,6 +1045,229 @@ fn expand_kernel_with_imports(
     })
 }
 
+fn expand_general_typed_kernel_with_imports(
+    mut input: ItemFn,
+    options: KernelOptions,
+    device_import: &proc_macro2::TokenStream,
+    host_import: Option<&proc_macro2::TokenStream>,
+    crate_binding: Option<CrateBindingIdV1>,
+) -> syn::Result<proc_macro2::TokenStream> {
+    validate_kernel_assembly_boundary(&input, options.unsafe_assembly)?;
+    if options.control_flow.is_some()
+        && options
+            .unsafe_assembly
+            .is_some_and(|assembly| assembly.effects & ASSEMBLY_EFFECT_CONTROL_FLOW_V1 != 0)
+    {
+        return Err(syn::Error::new_spanned(
+            &input.sig,
+            "unsafe assembly with control_flow effects cannot participate in a structured control_flow V1 contract",
+        ));
+    }
+    validate_typed_kernel_symbol_stem(&input.sig.ident)?;
+    validate_kernel_signature(&input)?;
+
+    let original_ident = input.sig.ident.clone();
+    let original_name = original_ident.to_string();
+    if original_name.starts_with(RESERVED_ROOT) {
+        return Err(syn::Error::new_spanned(
+            original_ident,
+            format!("function names starting with `{RESERVED_ROOT}` are reserved by fe2o3"),
+        ));
+    }
+
+    let crate_binding = crate_binding.ok_or_else(|| {
+        syn::Error::new(
+            proc_macro2::Span::call_site(),
+            "general typed V1 expansion requires a resolved crate binding",
+        )
+    })?;
+    let kernel_binding = derive_kernel_binding_id_v1(
+        crate_binding,
+        MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
+        &original_name,
+        &original_name,
+    );
+    let model = model_general_typed_signature_v1(&input, &options, kernel_binding.as_bytes())?;
+    let generated_host_contract =
+        GeneratedHostContractIdV3::from_bytes(*model.generated_host_contract_identity.as_bytes());
+    let control_flow_contract =
+        analyze_kernel_control_flow_v1(&input, options.control_flow.as_ref())?;
+
+    let internal_ident = format_ident!("__fe2o3_host_kernel_v1_{}", kernel_binding.to_hex());
+    let name_marker_ident = format_ident!("__fe2o3_kernel_name_{original_name}");
+    let type_marker_ident = format_ident!("__fe2o3_kernel_marker_{original_name}");
+    let registration_ident = format_ident!("{KERNEL_REGISTRATION_PREFIX}{original_name}");
+    let marker_value = syn::LitStr::new(&original_name, original_ident.span());
+    let export_value = syn::LitStr::new(&original_name, original_ident.span());
+    let crate_binding_hex = syn::LitStr::new(&crate_binding.to_hex(), original_ident.span());
+    let kernel_binding_hex = syn::LitStr::new(&kernel_binding.to_hex(), original_ident.span());
+    let generated_host_contract_hex =
+        syn::LitStr::new(&generated_host_contract.to_hex(), original_ident.span());
+    let argument_types = input
+        .sig
+        .inputs
+        .iter()
+        .map(|argument| match argument {
+            syn::FnArg::Typed(argument) => (*argument.ty).clone(),
+            syn::FnArg::Receiver(_) => unreachable!("free function unexpectedly had a receiver"),
+        })
+        .collect::<Vec<_>>();
+    let visibility = input.vis.clone();
+    let safety = input.sig.unsafety;
+    let abi = input.sig.abi.clone();
+    let output = input.sig.output.clone();
+    let function_pointer = quote!(#safety #abi fn(#(#argument_types),*) #output);
+    input.sig.ident = internal_ident.clone();
+
+    let registration_type = quote!((
+        u64,
+        u16,
+        u16,
+        &'static str,
+        &'static str,
+        &'static str,
+        &'static str,
+        &'static str,
+        &'static str,
+        #function_pointer,
+    ));
+    let registration_value = quote!((
+        #KERNEL_REGISTRATION_MAGIC,
+        #KERNEL_REGISTRATION_VERSION_V3,
+        #KERNEL_REGISTRATION_KIND_TYPED_GENERAL_LAYOUT_V3,
+        #marker_value,
+        #export_value,
+        #crate_binding_hex,
+        #kernel_binding_hex,
+        #TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3,
+        #generated_host_contract_hex,
+        #internal_ident,
+    ));
+    let symbol = syn::LitStr::new(
+        &host_kernel_symbol_v1(kernel_binding),
+        original_ident.span(),
+    );
+    let export_attribute = quote!(#[unsafe(export_name = #symbol)]);
+    let frontend_registration = encode_kernel_frontend_contract_v1(&options).map(|bytes| {
+        let registration_ident =
+            format_ident!("{KERNEL_FRONTEND_REGISTRATION_PREFIX_V1}{original_name}");
+        let bytes = bytes.iter();
+        quote! {
+            #[doc(hidden)]
+            #[allow(non_upper_case_globals)]
+            #[used]
+            static #registration_ident: (
+                u64,
+                u16,
+                u16,
+                &'static str,
+                &'static [u8],
+                #function_pointer,
+            ) = (
+                #KERNEL_FRONTEND_REGISTRATION_MAGIC_V1,
+                #KERNEL_FRONTEND_REGISTRATION_VERSION_V1,
+                #KERNEL_FRONTEND_REGISTRATION_KIND_V1,
+                #marker_value,
+                &[#(#bytes),*],
+                #internal_ident,
+            );
+        }
+    });
+    let control_flow_registration = control_flow_contract.map(|bytes| {
+        let registration_ident =
+            format_ident!("{CONTROL_FLOW_REGISTRATION_PREFIX_V1}{original_name}");
+        let bytes = bytes.iter();
+        quote! {
+            #[doc(hidden)]
+            #[allow(non_upper_case_globals)]
+            #[used]
+            static #registration_ident: (
+                u64,
+                u16,
+                u16,
+                &'static str,
+                &'static [u8],
+                #function_pointer,
+            ) = (
+                #CONTROL_FLOW_REGISTRATION_MAGIC_V1,
+                #CONTROL_FLOW_REGISTRATION_VERSION_V1,
+                #CONTROL_FLOW_REGISTRATION_KIND_V1,
+                #marker_value,
+                &[#(#bytes),*],
+                #internal_ident,
+            );
+        }
+    });
+    let host_import = host_import.expect("typed expansion requires a host import");
+    let module_ident = format_ident!("{original_name}_gpu");
+    let binding_bytes = kernel_binding.as_bytes().into_iter();
+    let generated_host_contract_bytes = generated_host_contract.as_bytes().into_iter();
+    let typed_module = quote! {
+        pub mod #module_ident {
+            #host_import
+
+            pub type Marker = super::#type_marker_ident;
+
+            const _: () = {
+                // SAFETY: the V3 backend collector must independently reconstruct
+                // and authenticate the registration's complete typed contract.
+                unsafe impl __fe2o3_kernel_host::__generated::CompilerGeneratedKernelExpectationV1
+                    for super::#type_marker_ident
+                {
+                    const PROFILE:
+                        __fe2o3_kernel_host::__generated::CompilerGeneratedKernelProfileV1 =
+                        __fe2o3_kernel_host::__generated::CompilerGeneratedKernelProfileV1::ManifestDerivedScalarSliceV1 {
+                            generated_host_contract_identity: [#(#generated_host_contract_bytes),*],
+                        };
+
+                    const KERNEL_BINDING_ID_V1: [u8; 32] = [#(#binding_bytes),*];
+                }
+            };
+        }
+    };
+
+    Ok(quote! {
+        #[doc(hidden)]
+        #[allow(non_snake_case)]
+        #export_attribute
+        #input
+
+        #[doc(hidden)]
+        #[allow(non_upper_case_globals)]
+        pub const #name_marker_ident: &str = #marker_value;
+
+        #[doc(hidden)]
+        #[allow(non_camel_case_types)]
+        #visibility enum #type_marker_ident {}
+
+        #[doc(hidden)]
+        #[allow(non_upper_case_globals)]
+        #[used]
+        static #registration_ident: #registration_type = #registration_value;
+
+        #frontend_registration
+        #control_flow_registration
+
+        const _: () = {
+            #device_import
+
+            // SAFETY: every associated value below is generated from the same
+            // parsed function and the same collector-visible registration.
+            unsafe impl __fe2o3_kernel_device::KernelMarkerV1 for #type_marker_ident {
+                type Function = #function_pointer;
+                type Registration = #registration_type;
+
+                const LOGICAL_NAME: &'static str = #marker_value;
+                const EXPORT_NAME: &'static str = #export_value;
+                const FUNCTION: Self::Function = #internal_ident;
+                const REGISTRATION: &'static Self::Registration = &#registration_ident;
+            }
+        };
+
+        #typed_module
+    })
+}
+
 fn fe2o3_device_import() -> syn::Result<proc_macro2::TokenStream> {
     let found = crate_name("fe2o3-device").map_err(|error| {
         syn::Error::new(
@@ -1153,6 +1403,28 @@ fn validate_typed_kernel_signature(input: &ItemFn) -> syn::Result<()> {
     Ok(())
 }
 
+fn validate_typed_kernel_profile_v1(input: &ItemFn, options: &KernelOptions) -> syn::Result<()> {
+    match validate_typed_kernel_signature(input) {
+        Ok(()) => Ok(()),
+        Err(exact_error) => {
+            if validate_general_typed_signature_shape_v1(input, options).is_err() {
+                Err(exact_error)
+            } else {
+                model_general_typed_signature_v1(input, options, [0; 32]).map(|_| ())
+            }
+        }
+    }
+}
+
+fn validate_general_typed_signature_shape_v1(
+    input: &ItemFn,
+    options: &KernelOptions,
+) -> syn::Result<()> {
+    let mut signature_options = options.clone();
+    signature_options.launch = None;
+    model_general_typed_signature_v1(input, &signature_options, [0; 32]).map(|_| ())
+}
+
 fn validate_exact_vecadd_argument(
     argument: &FnArg,
     position: usize,
@@ -1279,8 +1551,8 @@ fn model_general_typed_signature_v1(
     options: &KernelOptions,
     kernel_binding: [u8; 32],
 ) -> syn::Result<GeneralTypedSignatureModelV1> {
-    // Groundwork only: rustc must independently reconstruct this exact
-    // type/layout/effect convention before expansion may emit this identity.
+    // The rustc collector must independently reconstruct this exact
+    // type/layout/effect convention before accepting the emitted identity.
     validate_general_typed_function_shape_v1(input)?;
     let arguments = input
         .sig
@@ -2545,10 +2817,11 @@ mod tests {
         KernelOptions, canonical_device_ffi_signature, core_import_for, device_ffi_contract,
         device_import_for, expand_device_copy_with_core_import, expand_device_export_with_import,
         expand_device_import_with_import, expand_kernel_with_device_import,
-        expand_kernel_with_imports, host_import_for, model_general_typed_signature_v1,
-        parse_device_ffi_options, parse_kernel_options,
+        expand_kernel_with_imports, expand_legacy_kernel_with_imports, host_import_for,
+        model_general_typed_signature_v1, parse_device_ffi_options, parse_kernel_options,
         validate_generated_device_ffi_contract_grammar, validate_kernel_assembly_boundary,
-        validate_typed_kernel_signature, validate_typed_kernel_symbol_stem,
+        validate_typed_kernel_profile_v1, validate_typed_kernel_signature,
+        validate_typed_kernel_symbol_stem,
     };
     use fe2o3_artifacts::{
         AbiKind, Access, AddressSpace, AliasClass, ArgumentOwnership, BlockSize, Mutability,
@@ -2557,13 +2830,14 @@ mod tests {
         ScalarType,
     };
     use proc_macro_crate::FoundCrate;
-    use quote::quote;
+    use quote::{ToTokens, quote};
     use reserved_fe2o3_symbols::{
-        TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2, artifact_length_symbol_v1,
-        artifact_pointer_symbol_v1, derive_crate_binding_id_v1, derive_kernel_binding_id_v1,
-        host_kernel_symbol_v1,
+        GeneratedHostContractIdV3, MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
+        TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3, TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2,
+        artifact_length_symbol_v1, artifact_pointer_symbol_v1, derive_crate_binding_id_v1,
+        derive_kernel_binding_id_v1, host_kernel_symbol_v1,
     };
-    use syn::{ItemFn, ItemForeignMod, parse_quote};
+    use syn::{Expr, Item, ItemFn, ItemForeignMod, Type, parse_quote};
 
     fn hex(bytes: &[u8]) -> String {
         bytes.iter().map(|byte| format!("{byte:02x}")).collect()
@@ -3178,6 +3452,221 @@ mod tests {
     }
 
     #[test]
+    fn exact_vecadd_dispatch_preserves_the_legacy_v2_token_stream() {
+        let input: ItemFn = parse_quote! {
+            pub fn vecadd(a: &[f32], b: &[f32], mut c: DisjointSlice<f32>) {
+                let _ = (a, b, &mut c);
+            }
+        };
+        let options = parse_kernel_options(quote!(typed)).unwrap();
+        let device_import = device_import_for(FoundCrate::Name("gpu_device".to_string()));
+        let host_import = host_import_for(FoundCrate::Name("gpu_host".to_string()));
+        let crate_binding = derive_crate_binding_id_v1("fixture", ["legacy-token-golden"]);
+
+        let selected = expand_kernel_with_imports(
+            input.clone(),
+            options.clone(),
+            &device_import,
+            Some(&host_import),
+            Some(crate_binding),
+        )
+        .unwrap();
+        let legacy = expand_legacy_kernel_with_imports(
+            input,
+            options,
+            &device_import,
+            Some(&host_import),
+            Some(crate_binding),
+        )
+        .unwrap();
+
+        assert_eq!(selected.to_string(), legacy.to_string());
+        let file: syn::File = syn::parse2(selected.clone()).unwrap();
+        let registration = file
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Static(item) if item.ident == "__fe2o3_kernel_registration_vecadd" => {
+                    Some(item)
+                }
+                _ => None,
+            })
+            .expect("exact vecadd V2 registration static");
+        let Type::Tuple(registration_type) = registration.ty.as_ref() else {
+            panic!("V2 registration type must be a tuple");
+        };
+        let Expr::Tuple(registration_value) = registration.expr.as_ref() else {
+            panic!("V2 registration value must be a tuple");
+        };
+        let kernel_binding = derive_kernel_binding_id_v1(
+            crate_binding,
+            TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2,
+            "vecadd",
+            "vecadd",
+        );
+        assert_eq!(registration_type.elems.len(), 8);
+        assert_eq!(registration_value.elems.len(), 8);
+        assert_eq!(
+            registration_value.elems[1].to_token_stream().to_string(),
+            "2u16"
+        );
+        assert_eq!(
+            registration_value.elems[2].to_token_stream().to_string(),
+            "3u16"
+        );
+        assert_eq!(
+            registration_value.elems[7].to_token_stream().to_string(),
+            format!("__fe2o3_host_kernel_v1_{}", kernel_binding.to_hex())
+        );
+        let selected = selected.to_string();
+        assert!(selected.contains("CompilerGeneratedKernelContractV1"));
+        assert!(selected.contains("artifact_container_bytes"));
+        assert!(selected.contains("pub type Kernel"));
+        assert!(selected.contains("pub type Prepared"));
+        assert!(!selected.contains(TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3));
+    }
+
+    #[test]
+    fn general_typed_kernels_emit_exact_v3_expectation_only_registrations() {
+        let alpha: ItemFn = parse_quote! {
+            pub fn alpha(scale: f32, input: &[f32], output: DisjointSlice<f32>) {
+                let _ = (scale, input, output);
+            }
+        };
+        let zeta: ItemFn = parse_quote! {
+            pub fn zeta(
+                a: &[f32],
+                b: &[f32],
+                bias: f32,
+                output: DisjointSlice<f32>,
+            ) {
+                let _ = (a, b, bias, output);
+            }
+        };
+        let options = parse_kernel_options(quote!(typed)).unwrap();
+        let device_import = device_import_for(FoundCrate::Name("gpu_device".to_string()));
+        let host_import = host_import_for(FoundCrate::Name("gpu_host".to_string()));
+        let crate_binding = derive_crate_binding_id_v1("fixture", ["general-v3-golden"]);
+
+        let expand = |input: ItemFn, crate_binding| {
+            let name = input.sig.ident.to_string();
+            let binding = derive_kernel_binding_id_v1(
+                crate_binding,
+                MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
+                &name,
+                &name,
+            );
+            let model =
+                model_general_typed_signature_v1(&input, &options, binding.as_bytes()).unwrap();
+            let contract = GeneratedHostContractIdV3::from_bytes(
+                *model.generated_host_contract_identity.as_bytes(),
+            );
+            let expansion = expand_kernel_with_imports(
+                input,
+                options.clone(),
+                &device_import,
+                Some(&host_import),
+                Some(crate_binding),
+            )
+            .unwrap();
+            (expansion, binding, contract)
+        };
+
+        let (alpha_expansion, alpha_binding, alpha_contract) = expand(alpha.clone(), crate_binding);
+        let (zeta_expansion, zeta_binding, zeta_contract) = expand(zeta, crate_binding);
+        for (name, expansion, binding, contract) in [
+            ("alpha", &alpha_expansion, alpha_binding, alpha_contract),
+            ("zeta", &zeta_expansion, zeta_binding, zeta_contract),
+        ] {
+            let file: syn::File = syn::parse2(expansion.clone()).unwrap();
+            let registration_name = format!("__fe2o3_kernel_registration_{name}");
+            let registration = file
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    Item::Static(item) if item.ident == registration_name.as_str() => Some(item),
+                    _ => None,
+                })
+                .expect("general typed registration static");
+            let Type::Tuple(registration_type) = registration.ty.as_ref() else {
+                panic!("V3 registration type must be a tuple");
+            };
+            let Expr::Tuple(registration_value) = registration.expr.as_ref() else {
+                panic!("V3 registration value must be a tuple");
+            };
+            assert_eq!(registration_type.elems.len(), 10);
+            assert_eq!(registration_value.elems.len(), 10);
+            assert_eq!(
+                registration_value.elems[1].to_token_stream().to_string(),
+                "3u16"
+            );
+            assert_eq!(
+                registration_value.elems[2].to_token_stream().to_string(),
+                "4u16"
+            );
+            assert_eq!(
+                registration_value.elems[7].to_token_stream().to_string(),
+                format!("\"{TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3}\"")
+            );
+            assert_eq!(
+                registration_value.elems[8].to_token_stream().to_string(),
+                format!("\"{}\"", contract.to_hex())
+            );
+            assert_eq!(
+                registration_value.elems[9].to_token_stream().to_string(),
+                format!("__fe2o3_host_kernel_v1_{}", binding.to_hex())
+            );
+
+            let expansion = expansion.to_string();
+            assert!(expansion.contains(&format!("pub mod {name}_gpu")));
+            assert!(expansion.contains(&format!(
+                "pub type Marker = super :: __fe2o3_kernel_marker_{name}"
+            )));
+            assert!(expansion.contains("CompilerGeneratedKernelExpectationV1"));
+            assert!(expansion.contains("ManifestDerivedScalarSliceV1"));
+            assert!(expansion.contains(&binding.to_hex()));
+            assert!(expansion.contains(&contract.to_hex()));
+            assert!(expansion.contains(&host_kernel_symbol_v1(binding)));
+            assert!(!expansion.contains("CompilerGeneratedKernelContractV1"));
+            assert!(!expansion.contains("artifact_container_bytes"));
+            assert!(!expansion.contains("__fe2o3_artifact_v1_"));
+            assert!(!expansion.contains("GeneratedVecAdd"));
+            assert!(!expansion.contains("pub type Kernel"));
+            assert!(!expansion.contains("pub type Prepared"));
+            assert_eq!(contract.to_hex().len(), 64);
+            assert!(
+                contract
+                    .to_hex()
+                    .bytes()
+                    .all(|byte| { byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte) })
+            );
+        }
+
+        assert_ne!(alpha_binding, zeta_binding);
+        assert_ne!(alpha_contract, zeta_contract);
+
+        let changed_signature: ItemFn = parse_quote! {
+            pub fn alpha(scale: f64, input: &[f32], output: DisjointSlice<f32>) {}
+        };
+        let (_, changed_signature_binding, changed_signature_contract) =
+            expand(changed_signature, crate_binding);
+        assert_eq!(alpha_binding, changed_signature_binding);
+        assert_ne!(alpha_contract, changed_signature_contract);
+
+        let renamed: ItemFn = parse_quote! {
+            pub fn renamed(scale: f32, input: &[f32], output: DisjointSlice<f32>) {}
+        };
+        let (_, renamed_binding, renamed_contract) = expand(renamed, crate_binding);
+        assert_ne!(alpha_binding, renamed_binding);
+        assert_ne!(alpha_contract, renamed_contract);
+
+        let other_crate_binding = derive_crate_binding_id_v1("fixture", ["other-binding"]);
+        let (_, rebound_binding, rebound_contract) = expand(alpha, other_crate_binding);
+        assert_ne!(alpha_binding, rebound_binding);
+        assert_ne!(alpha_contract, rebound_contract);
+    }
+
+    #[test]
     fn typed_kernel_symbol_stem_matches_the_backend_contract() {
         let valid = parse_quote!(vecadd);
         validate_typed_kernel_symbol_stem(&valid).unwrap();
@@ -3287,6 +3776,46 @@ mod tests {
                 expected,
                 "unexpected diagnostic for {}",
                 input.sig.ident,
+            );
+        }
+    }
+
+    #[test]
+    fn rejected_general_fallback_preserves_exact_vecadd_diagnostics() {
+        let options = parse_kernel_options(quote!(typed)).unwrap();
+        let cases: Vec<ItemFn> = vec![
+            parse_quote! {
+                pub fn alias(a: &Floats, b: &[f32], c: DisjointSlice<f32>) {}
+            },
+            parse_quote! {
+                pub fn raw(a: *const f32, b: &[f32], c: DisjointSlice<f32>) {}
+            },
+            parse_quote! {
+                pub fn unsupported_second(
+                    a: &[f32],
+                    b: *const f32,
+                    c: DisjointSlice<f32>,
+                ) {}
+            },
+            parse_quote! {
+                pub fn unsupported_third(a: &[f32], b: &[f32], c: *mut f32) {}
+            },
+            parse_quote! {
+                pub fn empty() {}
+            },
+        ];
+
+        for input in cases {
+            let exact = validate_typed_kernel_signature(&input)
+                .unwrap_err()
+                .to_string();
+            let selected = validate_typed_kernel_profile_v1(&input, &options)
+                .unwrap_err()
+                .to_string();
+            assert_eq!(
+                selected, exact,
+                "diagnostic owner changed for {}",
+                input.sig.ident
             );
         }
     }
