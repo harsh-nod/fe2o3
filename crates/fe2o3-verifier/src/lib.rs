@@ -9,6 +9,7 @@
 mod artifact_record;
 mod authenticated_execution;
 mod authenticated_proof_binding;
+mod control_flow_binding;
 mod executor;
 mod model;
 mod plan;
@@ -30,6 +31,15 @@ pub use authenticated_proof_binding::{
     AuthenticatedPayloadIdentityV1, AuthenticatedProofExecutableBindingError,
     AuthenticatedProofExecutableBindingV1, AuthenticatedProofExecutablePolicyV1,
     AuthenticatedProofExecutionIdentityV1, bind_authenticated_proof_executable_v1,
+};
+pub use control_flow_binding::{
+    CONTROL_FLOW_BINDING_VERSION_V1, CONTROL_FLOW_FUNCTIONAL_SPECIFICATION_DOMAIN_V1,
+    CONTROL_FLOW_REQUEST_BINDING_DOMAIN_V1, CONTROL_FLOW_SOURCE_BINDING_DOMAIN_V1,
+    ControlFlowBindingErrorV1, ControlFlowClaimsV1, ControlFlowIntegerSwitchCaseClaimV1,
+    ControlFlowIntegerSwitchClaimV1, ControlFlowLoopClaimV1, ControlFlowPayloadIdentityV1,
+    ControlFlowProofRequestBindingV1, ControlFlowSourceBindingV1, MAX_BOUND_CONTROL_FLOW_LOOPS_V1,
+    MAX_BOUND_CONTROL_FLOW_SWITCHES_V1, bind_control_flow_proof_request_v1,
+    derive_control_flow_functional_specification_digest_v1, reconcile_control_flow_source_v1,
 };
 pub use executor::{
     ExecutionError, ExecutionErrorKind, ExecutionLimits, ExecutionPath, ExecutionStage,

@@ -13,6 +13,8 @@ name = "fe2o3_verifier"
 
 [dependencies]
 fe2o3-artifacts.workspace = true
+fe2o3-contracts.workspace = true
+fe2o3-rustc-front.workspace = true
 
 [[bin]]
 name = "fe2o3-verifier-test-recorder"

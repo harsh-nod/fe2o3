@@ -572,6 +572,8 @@ name = "fe2o3-verifier"
 version = "0.1.0"
 dependencies = [
  "fe2o3-artifacts",
+ "fe2o3-contracts",
+ "fe2o3-rustc-front",
 ]
 
 [[package]]
