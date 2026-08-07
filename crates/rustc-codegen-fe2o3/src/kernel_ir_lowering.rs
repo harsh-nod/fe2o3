@@ -229,6 +229,12 @@ enum StrictFloatPolicy {
     CustomLlvmPipeline,
 }
 
+#[derive(Clone, Debug)]
+struct InternalDefinitionContract {
+    export_name: String,
+    signature: Signature,
+}
+
 fn translate_and_verify_with_float_target(
     mir: &MirModule,
     float_target: Option<Gfx942FloatTarget>,
@@ -245,6 +251,54 @@ fn translate_and_verify_with_float_target(
     let mut kernel_entries = Vec::new();
     let mut kernel_ids = BTreeSet::new();
     let mut launch_contracts = BTreeMap::new();
+    let mut internal_definitions = BTreeMap::new();
+    let mut internal_exports = BTreeMap::new();
+
+    for function in functions.iter().copied().filter(|function| {
+        matches!(
+            function.kind,
+            MirFunctionKind::InternalHelper | MirFunctionKind::DeviceFfiExport
+        )
+    }) {
+        let signature = match declared_function_signature(function) {
+            Ok(signature) => signature,
+            Err(error) => {
+                diagnostics.push(error);
+                continue;
+            }
+        };
+        if let Some(previous) = internal_definitions.insert(
+            function.rust_path.clone(),
+            InternalDefinitionContract {
+                export_name: function.export_name.clone(),
+                signature,
+            },
+        ) {
+            diagnostics.push(diagnostic(
+                TranslationDiagnosticCode::MalformedMir,
+                TranslationLocation::function(function),
+                format!(
+                    "internal definition path `{}` resolves to both `{}` and `{}`",
+                    function.rust_path, previous.export_name, function.export_name
+                ),
+            ));
+        }
+        if let Some(previous_path) =
+            internal_exports.insert(function.export_name.clone(), function.rust_path.clone())
+        {
+            diagnostics.push(diagnostic(
+                TranslationDiagnosticCode::MalformedMir,
+                TranslationLocation::function(function),
+                format!(
+                    "internal export symbol `{}` is defined by both `{}` and `{}`",
+                    function.export_name, previous_path, function.rust_path
+                ),
+            ));
+        }
+    }
+    if !diagnostics.is_empty() {
+        return Err(errors(diagnostics));
+    }
 
     for function in functions.iter().copied() {
         if function.kind != MirFunctionKind::KernelEntry {
@@ -276,6 +330,7 @@ fn translate_and_verify_with_float_target(
         match FunctionLowerer::new(
             function,
             &mut declarations,
+            &internal_definitions,
             float_target,
             strict_float_policy,
         )
@@ -448,6 +503,7 @@ enum LocalBinding {
 struct FunctionLowerer<'function, 'declarations> {
     function: &'function MirFunction,
     declarations: &'declarations mut BTreeMap<String, Signature>,
+    internal_definitions: &'declarations BTreeMap<String, InternalDefinitionContract>,
     locals: BTreeMap<usize, LocalBinding>,
     value_types: BTreeMap<ValueId, Type>,
     return_type: Option<Type>,
@@ -461,12 +517,14 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
     fn new(
         function: &'function MirFunction,
         declarations: &'declarations mut BTreeMap<String, Signature>,
+        internal_definitions: &'declarations BTreeMap<String, InternalDefinitionContract>,
         float_target: Option<Gfx942FloatTarget>,
         strict_float_policy: StrictFloatPolicy,
     ) -> Self {
         Self {
             function,
             declarations,
+            internal_definitions,
             locals: BTreeMap::new(),
             value_types: BTreeMap::new(),
             return_type: None,
@@ -478,6 +536,7 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
     }
 
     fn lower(mut self) -> Result<Function, TranslationDiagnostic> {
+        let signature = declared_function_signature(self.function)?;
         let mut args = self
             .function
             .locals
@@ -497,7 +556,6 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
             ));
         }
 
-        let mut parameter_types = Vec::with_capacity(args.len());
         let mut parameter_values = Vec::with_capacity(args.len());
         for arg in args {
             let ty = lower_parameter_type(&arg.ty.shape).ok_or_else(|| {
@@ -524,7 +582,6 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                 TranslationLocation::function(self.function),
             )?;
             self.value_types.insert(id, ty.clone());
-            parameter_types.push(ty);
             parameter_values.push(id);
         }
 
@@ -547,34 +604,7 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                 "local0 is not marked as the function return local",
             ));
         }
-        let result_types = match (&self.function.kind, &return_local.ty.shape) {
-            (_, MirTypeShape::Unit) => Vec::new(),
-            (MirFunctionKind::InternalHelper | MirFunctionKind::DeviceFfiExport, shape) => {
-                lower_scalar_type(shape).map_or_else(
-                    || {
-                        Err(diagnostic(
-                            TranslationDiagnosticCode::UnsupportedType,
-                            TranslationLocation::function(self.function),
-                            format!(
-                                "device definition return type `{}` is not supported",
-                                return_local.ty.rust
-                            ),
-                        ))
-                    },
-                    |ty| Ok(vec![ty]),
-                )?
-            }
-            (MirFunctionKind::KernelEntry, _) => {
-                return Err(diagnostic(
-                    TranslationDiagnosticCode::UnsupportedType,
-                    TranslationLocation::function(self.function),
-                    format!(
-                        "kernel entry return type `{}` is not supported",
-                        return_local.ty.rust
-                    ),
-                ));
-            }
-        };
+        let result_types = signature.results.clone();
         self.return_type = result_types.first().cloned();
 
         let mut source_blocks = self.function.blocks.iter().collect::<Vec<_>>();
@@ -634,7 +664,6 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
             blocks.push(block);
         }
 
-        let signature = Signature::new(parameter_types, result_types);
         Ok(match self.function.kind {
             MirFunctionKind::KernelEntry => Function::kernel_entry(
                 self.function.rust_path.clone(),
@@ -1041,6 +1070,8 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
 
         let trusted_item = callee.trusted_item();
         let external_import = callee.external_import_evidence();
+        let internal_definition = self.internal_definitions.get(callee.identity()).cloned();
+        let mut call_identity = callee.identity().to_string();
         let result_types = if let Some(import) = external_import {
             if !import.effects().is_none() {
                 return Err(diagnostic(
@@ -1060,6 +1091,15 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                 location.clone(),
             )?;
             signature.results
+        } else if let Some(definition) = &internal_definition {
+            self.require_call_types(
+                callee,
+                &argument_types,
+                &definition.signature.parameters,
+                location.clone(),
+            )?;
+            call_identity.clone_from(&definition.export_name);
+            definition.signature.results.clone()
         } else {
             match trusted_item {
                 Some(TrustedDeviceItem::ThreadIndex1d) => {
@@ -1183,7 +1223,7 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
         };
 
         let signature = Signature::new(argument_types, result_types.clone());
-        self.register_declaration(callee, signature, &location)?;
+        self.register_declaration_identity(&call_identity, signature, &location)?;
         let results = result_types
             .into_iter()
             .map(|ty| self.fresh_value(ty, &location))
@@ -1191,18 +1231,23 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
         block.operations.push(Operation::new(
             results.clone(),
             OperationKind::Call {
-                callee: FunctionId::new(callee.identity()),
+                callee: FunctionId::new(call_identity),
                 arguments,
             },
         ));
 
         match results.as_slice() {
-            [] if external_import.is_some() => {}
-            [result] => self.bind_local(
-                destination.local,
-                LocalBinding::Value(result.id),
-                location.clone(),
-            )?,
+            [] if external_import.is_some() || internal_definition.is_some() => {}
+            [result] => {
+                if internal_definition.is_some() {
+                    self.require_destination_type(destination, &result.ty, &location)?;
+                }
+                self.bind_local(
+                    destination.local,
+                    LocalBinding::Value(result.id),
+                    location.clone(),
+                )?;
+            }
             [discriminant, payload]
                 if matches!(
                     trusted_item,
@@ -1533,15 +1578,6 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
             ));
         }
         Ok(())
-    }
-
-    fn register_declaration(
-        &mut self,
-        callee: &MirCallee,
-        signature: Signature,
-        location: &TranslationLocation,
-    ) -> Result<(), TranslationDiagnostic> {
-        self.register_declaration_identity(callee.identity(), signature, location)
     }
 
     fn register_declaration_identity(
@@ -1967,6 +2003,89 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
             )
         })
     }
+}
+
+fn declared_function_signature(function: &MirFunction) -> Result<Signature, TranslationDiagnostic> {
+    let mut args = function
+        .locals
+        .iter()
+        .filter(|local| local.role == crate::mir_import::MirLocalRole::Arg)
+        .collect::<Vec<_>>();
+    args.sort_by_key(|local| local.index);
+    if args.len() != function.arg_count {
+        return Err(diagnostic(
+            TranslationDiagnosticCode::MalformedMir,
+            TranslationLocation::function(function),
+            format!(
+                "function declares {} arguments but imports {} argument locals",
+                function.arg_count,
+                args.len()
+            ),
+        ));
+    }
+    let parameters = args
+        .into_iter()
+        .map(|arg| {
+            lower_parameter_type(&arg.ty.shape).ok_or_else(|| {
+                diagnostic(
+                    TranslationDiagnosticCode::UnsupportedType,
+                    TranslationLocation::function(function),
+                    format!(
+                        "argument local{} has unsupported type `{}`",
+                        arg.index, arg.ty.rust
+                    ),
+                )
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let return_local = function
+        .locals
+        .iter()
+        .find(|local| local.index == 0)
+        .ok_or_else(|| {
+            diagnostic(
+                TranslationDiagnosticCode::MalformedMir,
+                TranslationLocation::function(function),
+                "function has no return local0",
+            )
+        })?;
+    if return_local.role != crate::mir_import::MirLocalRole::Return {
+        return Err(diagnostic(
+            TranslationDiagnosticCode::MalformedMir,
+            TranslationLocation::function(function),
+            "local0 is not marked as the function return local",
+        ));
+    }
+    let results = match (&function.kind, &return_local.ty.shape) {
+        (_, MirTypeShape::Unit) => Vec::new(),
+        (MirFunctionKind::InternalHelper | MirFunctionKind::DeviceFfiExport, shape) => {
+            lower_scalar_type(shape).map_or_else(
+                || {
+                    Err(diagnostic(
+                        TranslationDiagnosticCode::UnsupportedType,
+                        TranslationLocation::function(function),
+                        format!(
+                            "device definition return type `{}` is not supported",
+                            return_local.ty.rust
+                        ),
+                    ))
+                },
+                |ty| Ok(vec![ty]),
+            )?
+        }
+        (MirFunctionKind::KernelEntry, _) => {
+            return Err(diagnostic(
+                TranslationDiagnosticCode::UnsupportedType,
+                TranslationLocation::function(function),
+                format!(
+                    "kernel entry return type `{}` is not supported",
+                    return_local.ty.rust
+                ),
+            ));
+        }
+    };
+    Ok(Signature::new(parameters, results))
 }
 
 fn lower_parameter_type(shape: &MirTypeShape) -> Option<Type> {
@@ -2723,6 +2842,147 @@ mod tests {
             diagnostic
                 .message
                 .contains("has no classified trusted device identity")
+        }));
+    }
+
+    #[test]
+    fn collected_internal_helper_call_uses_its_export_symbol() {
+        let mut fixture = helper_call_fixture(
+            MirCallee::untrusted_for_test("tests::shared_helper"),
+            &[MirTypeShape::U32],
+        );
+        fixture.functions[0].locals[2] = local(2, MirLocalRole::Temp, MirTypeShape::U32);
+        fixture.functions.push(u32_definition(
+            "shared_helper_export",
+            MirFunctionKind::InternalHelper,
+            false,
+        ));
+        fixture.functions[1].rust_path = "tests::shared_helper".to_string();
+
+        let module = translate_and_verify(&fixture).expect("collected helper call should lower");
+        let kernel = module
+            .functions
+            .iter()
+            .find(|function| function.id.as_str() == "tests::helper_call")
+            .expect("kernel definition");
+        let calls = kernel
+            .body
+            .as_ref()
+            .expect("kernel body")
+            .blocks
+            .iter()
+            .flat_map(|block| &block.operations)
+            .filter_map(|operation| match &operation.kind {
+                OperationKind::Call { callee, .. } => Some(callee.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(calls, ["shared_helper_export"]);
+        assert_eq!(
+            module
+                .functions
+                .iter()
+                .filter(|function| function.id.as_str() == "shared_helper_export")
+                .count(),
+            1
+        );
+        assert!(
+            module
+                .functions
+                .iter()
+                .all(|function| function.id.as_str() != "tests::shared_helper")
+        );
+    }
+
+    #[test]
+    fn two_kernels_share_one_collected_internal_helper() {
+        let mut fixture = helper_call_fixture(
+            MirCallee::untrusted_for_test("tests::shared_helper"),
+            &[MirTypeShape::U32],
+        );
+        fixture.functions[0].locals[2] = local(2, MirLocalRole::Temp, MirTypeShape::U32);
+        let mut second_kernel = fixture.functions[0].clone();
+        second_kernel.export_name = "zeta_kernel".to_string();
+        second_kernel.rust_path = "tests::zeta_kernel".to_string();
+        let mut helper = u32_definition(
+            "shared_helper_export",
+            MirFunctionKind::InternalHelper,
+            false,
+        );
+        helper.rust_path = "tests::shared_helper".to_string();
+        fixture.functions = vec![second_kernel, helper, fixture.functions.remove(0)];
+
+        let module = translate_and_verify(&fixture).expect("shared helper should lower once");
+        assert_eq!(module.kernels.len(), 2);
+        assert_eq!(
+            module
+                .functions
+                .iter()
+                .filter(|function| function.id.as_str() == "shared_helper_export")
+                .count(),
+            1
+        );
+        for kernel in module
+            .functions
+            .iter()
+            .filter(|function| matches!(function.role, fe2o3_kernel_ir::FunctionRole::KernelEntry))
+        {
+            assert!(
+                kernel
+                    .body
+                    .as_ref()
+                    .expect("kernel body")
+                    .blocks
+                    .iter()
+                    .flat_map(|block| &block.operations)
+                    .any(|operation| matches!(
+                        &operation.kind,
+                        OperationKind::Call { callee, .. }
+                            if callee.as_str() == "shared_helper_export"
+                    ))
+            );
+        }
+    }
+
+    #[test]
+    fn collected_internal_helper_signature_mismatch_is_rejected() {
+        let mut fixture = helper_call_fixture(
+            MirCallee::untrusted_for_test("tests::shared_helper"),
+            &[MirTypeShape::F32],
+        );
+        fixture.functions[0].locals[2] = local(2, MirLocalRole::Temp, MirTypeShape::U32);
+        let mut helper = u32_definition(
+            "shared_helper_export",
+            MirFunctionKind::InternalHelper,
+            false,
+        );
+        helper.rust_path = "tests::shared_helper".to_string();
+        fixture.functions.push(helper);
+
+        let errors = translate_and_verify(&fixture).expect_err("ABI mismatch must fail closed");
+        assert!(errors.contains(TranslationDiagnosticCode::UnsupportedType));
+        assert!(errors.diagnostics().iter().any(|diagnostic| {
+            diagnostic.message.contains("operand 0 must lower to")
+                && diagnostic.message.contains("found Scalar(F32)")
+        }));
+    }
+
+    #[test]
+    fn ambiguous_internal_definition_paths_are_rejected() {
+        let mut alpha = u32_definition("helper_alpha", MirFunctionKind::InternalHelper, false);
+        alpha.rust_path = "tests::ambiguous_helper".to_string();
+        let mut beta = u32_definition("helper_beta", MirFunctionKind::InternalHelper, false);
+        beta.rust_path = "tests::ambiguous_helper".to_string();
+
+        let errors = translate_and_verify(&MirModule {
+            functions: vec![alpha, beta],
+        })
+        .expect_err("ambiguous source path must fail closed");
+        assert!(errors.contains(TranslationDiagnosticCode::MalformedMir));
+        assert!(errors.diagnostics().iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("internal definition path `tests::ambiguous_helper`")
         }));
     }
 
