@@ -1,4 +1,4 @@
-# Verus vecadd, fill, copy, map, and gather source models
+# Verus GPU kernel source models
 
 The primary milestone in this directory verifies the executable body of the
 real `f32` `#[kernel]` in `examples/vecadd`. The operation, index extraction,
@@ -83,6 +83,42 @@ and gather reads element zero. The runner requires each mutated theorem to
 reach Verus, emit one primary proof error, and fail at its exact postcondition;
 a parser error or an unrelated failure does not count as a successful negative.
 
+## General typed two-kernel slice
+
+`src/two_kernel_bodies.rs` adds shared executable fragments for the planned
+general typed vertical slice:
+
+- `alpha(scale: f32, input: &[f32], output: DisjointSlice<f32>)` computes
+  `output[i] = scale * input[i]`; and
+- `zeta(a: &[f32], b: &[f32], bias: f32, output: DisjointSlice<f32>)` computes
+  `output[i] = a[i] + b[i] + bias`.
+
+Ordinary Rust expands those fragments over actual `f32` slices. The positive
+Verus harness in `verus/two_kernel.rs` expands the same guarded index/read/write
+fragments over a bounded integer arithmetic abstraction. It reuses the
+allocation, byte-region, permission, and identity-index lemmas from
+`verus/vecadd.rs` and proves, for both distinct signatures:
+
+- the output guard dominates every input access, including rounded launch
+  tails;
+- every modeled four-byte access is within its allocation and ends at or below
+  `usize::MAX`;
+- input capabilities are initialized shared reads;
+- the owned output element is initialized by the exclusive write;
+- different active thread identities own disjoint output regions and therefore
+  cannot race; and
+- the resulting element and frame equal the exact bounded mathematical alpha
+  or zeta expression.
+
+The bounded arithmetic abstraction is deliberately not an IEEE-754 theorem.
+Proving that production `f32` multiply and add refine it, including rounding,
+NaNs, infinities, signed zero, contraction, and operation order, remains an
+authenticated compiler/backend refinement obligation.
+
+Three paired negative fixtures require Verus to reject an alpha arithmetic
+mutation, an input read moved before the output guard, and duplicate exclusive
+ownership of one output element.
+
 ## Running the checks
 
 Run the ordinary Rust tests with:
@@ -92,7 +128,7 @@ cargo +stable test --manifest-path examples/verus_vecadd/Cargo.toml
 cargo test -p fe2o3-vecadd
 ```
 
-Run all three positive Verus harnesses and all fifteen expected proof
+Run all five positive Verus harnesses and all twenty-two expected proof
 rejections with:
 
 ```text
@@ -108,7 +144,8 @@ examples/verus_vecadd/run-verus.sh --source-only
 Without `--require`, the runner always performs those source-shape checks and
 then reports a Verus skip when the executable is unavailable. Ordinary Rust
 tests remain a separate command and exercise successful results, mismatched
-domains, gather bounds failures, and extreme affine inputs.
+domains, gather bounds failures, extreme affine inputs, both `f32` signatures,
+and rounded-tail no-op behavior.
 
 The real-kernel negative mutations independently reject an input read moved
 ahead of the output guard, a real shared-body expansion through a constant-zero

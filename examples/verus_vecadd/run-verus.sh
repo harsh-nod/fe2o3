@@ -59,6 +59,31 @@ require_source "$script_dir/verus/negative/affine_wrong_bias.rs" \
 require_source "$script_dir/verus/negative/gather_wrong_index.rs" \
     'pub fn mutated_gather_source'
 
+two_kernel_body="$script_dir/src/two_kernel_bodies.rs"
+two_kernel="$script_dir/verus/two_kernel.rs"
+require_source "$two_kernel" 'include!("../src/two_kernel_bodies.rs")'
+require_source "$two_kernel" '#[path = "vecadd.rs"]'
+require_source "$two_kernel_body" 'macro_rules! alpha_kernel_body'
+require_source "$two_kernel_body" 'macro_rules! zeta_kernel_body'
+require_source "$two_kernel_body" 'if let Some(out) = $output.get_mut($thread)'
+require_source "$two_kernel" 'pub fn verified_alpha_thread'
+require_source "$two_kernel" 'pub fn verified_zeta_thread'
+require_source "$two_kernel" 'pub proof fn initialized_read_is_bounded'
+require_source "$two_kernel" 'pub proof fn exclusive_output_is_bounded_and_initialized_by_write'
+require_source "$two_kernel" 'pub proof fn two_kernel_identity_ownership_is_race_free'
+forbid_source "$two_kernel" 'admit('
+forbid_source "$two_kernel" 'assume(false'
+forbid_source "$two_kernel" '#[verifier::external_body]'
+
+require_source "$script_dir/verus/negative/two_kernel_wrong_scalar.rs" \
+    'mutated_alpha_uses_wrong_scalar_result'
+require_source "$script_dir/verus/negative/two_kernel_wrong_scalar.rs" \
+    'include!("../../src/two_kernel_bodies.rs")'
+require_source "$script_dir/verus/negative/two_kernel_guard_bypass.rs" \
+    'mutated_alpha_bypasses_output_guard'
+require_source "$script_dir/verus/negative/two_kernel_overlapping_output.rs" \
+    'mutated_overlapping_output_ownership_is_race_free'
+
 wave_lds="$script_dir/verus/wave_lds.rs"
 require_source "$wave_lds" 'include!("vecadd.rs")'
 require_source "$wave_lds" 'pub proof fn active_values_determine_reduction'
@@ -83,7 +108,7 @@ if [ "$source_failures" -ne 0 ]; then
     printf 'Source-shape checks failed: %s missing marker(s)\n' "$source_failures" >&2
     exit 1
 fi
-printf 'PASS:  shared-body, active-wave, and LDS proof source shapes are paired\n'
+printf 'PASS:  shared-body, two-kernel, active-wave, and LDS proof source shapes are paired\n'
 
 if [ "$source_only" -eq 1 ]; then
     exit 0
@@ -256,6 +281,7 @@ run_pass vecadd "$script_dir/verus/vecadd.rs"
 run_pass fill "$script_dir/verus/fill.rs"
 run_pass elementwise "$script_dir/verus/elementwise.rs"
 run_pass wave_lds "$script_dir/verus/wave_lds.rs"
+run_pass two_kernel "$script_dir/verus/two_kernel.rs"
 run_rejected fill_missing_bounds \
     "$script_dir/verus/negative/fill_missing_bounds.rs" \
     'mutated_fill_index_is_in_bounds' \
@@ -322,6 +348,18 @@ run_rejected_exact gather_wrong_index \
     'mutated_gather_claims_selected_index' \
     'error: postcondition not satisfied' \
     'final(output)@ == old(output)@.update'
+run_rejected two_kernel_wrong_scalar \
+    "$script_dir/verus/negative/two_kernel_wrong_scalar.rs" \
+    'mutated_alpha_uses_wrong_scalar_result' \
+    'postcondition.*not satisfied|postcondition failure'
+run_rejected two_kernel_guard_bypass \
+    "$script_dir/verus/negative/two_kernel_guard_bypass.rs" \
+    'mutated_alpha_bypasses_output_guard' \
+    'precondition.*not satisfied|precondition failure'
+run_rejected two_kernel_overlapping_output \
+    "$script_dir/verus/negative/two_kernel_overlapping_output.rs" \
+    'mutated_overlapping_output_ownership_is_race_free' \
+    'postcondition.*not satisfied|postcondition failure'
 run_rejected wave_inactive_lane_contributes \
     "$script_dir/verus/negative/wave_inactive_lane_contributes.rs" \
     'mutated_inactive_lane_contributes' \
@@ -343,4 +381,4 @@ if [ "$failures" -ne 0 ]; then
     printf 'Verus fixture run failed: %s unexpected result(s)\n' "$failures" >&2
     exit 1
 fi
-printf 'Verus fixture run passed: 4 proof harnesses, 19 expected rejections\n'
+printf 'Verus fixture run passed: 5 proof harnesses, 22 expected rejections\n'

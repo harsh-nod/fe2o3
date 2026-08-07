@@ -5,6 +5,7 @@ use fe2o3_contracts::{IdentityWriteIndex, LaunchDomain1d, ThreadInDomain1d};
 
 include!("vecadd_body.rs");
 include!("elementwise_bodies.rs");
+include!("two_kernel_bodies.rs");
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum VecAddError {
@@ -23,6 +24,11 @@ pub enum ElementwiseError {
     GatherIndexOutOfBounds,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TwoKernelError {
+    DomainLengthMismatch,
+}
+
 fn identity_source(thread: usize) -> usize {
     thread
 }
@@ -33,6 +39,65 @@ fn exact_affine(value: i16, scale: i16, bias: i32) -> i64 {
 
 fn selected_source(indices: &[usize], thread: usize) -> usize {
     indices[thread]
+}
+
+fn f32_alpha(scale: f32, value: f32) -> f32 {
+    scale * value
+}
+
+fn f32_zeta(a: f32, b: f32, bias: f32) -> f32 {
+    a + b + bias
+}
+
+/// Executes one logical thread of `alpha(scale, input, output)`.
+pub fn alpha_thread(
+    thread: usize,
+    scale: f32,
+    input: &[f32],
+    output: &mut [f32],
+) -> Result<(), TwoKernelError> {
+    if input.len() != output.len() {
+        return Err(TwoKernelError::DomainLengthMismatch);
+    }
+    alpha_kernel_body!(thread, f32_alpha, scale, input, output);
+    Ok(())
+}
+
+/// Runs the ordinary-Rust reference for `output[i] = scale * input[i]`.
+pub fn alpha(scale: f32, input: &[f32], output: &mut [f32]) -> Result<(), TwoKernelError> {
+    if input.len() != output.len() {
+        return Err(TwoKernelError::DomainLengthMismatch);
+    }
+    for thread in 0..output.len() {
+        alpha_thread(thread, scale, input, output)?;
+    }
+    Ok(())
+}
+
+/// Executes one logical thread of `zeta(a, b, bias, output)`.
+pub fn zeta_thread(
+    thread: usize,
+    a: &[f32],
+    b: &[f32],
+    bias: f32,
+    output: &mut [f32],
+) -> Result<(), TwoKernelError> {
+    if a.len() != output.len() || b.len() != output.len() {
+        return Err(TwoKernelError::DomainLengthMismatch);
+    }
+    zeta_kernel_body!(thread, f32_zeta, a, b, bias, output);
+    Ok(())
+}
+
+/// Runs the ordinary-Rust reference for `output[i] = a[i] + b[i] + bias`.
+pub fn zeta(a: &[f32], b: &[f32], bias: f32, output: &mut [f32]) -> Result<(), TwoKernelError> {
+    if a.len() != output.len() || b.len() != output.len() {
+        return Err(TwoKernelError::DomainLengthMismatch);
+    }
+    for thread in 0..output.len() {
+        zeta_thread(thread, a, b, bias, output)?;
+    }
+    Ok(())
 }
 
 /// Executes one identity-indexed copy write.
@@ -278,6 +343,62 @@ mod tests {
         ] {
             assert!(fixture.contains(marker), "missing mutation marker {marker}");
         }
+    }
+
+    #[test]
+    fn two_kernel_verus_harness_expands_the_shared_bodies() {
+        let positive = include_str!("../verus/two_kernel.rs");
+        let bodies = include_str!("two_kernel_bodies.rs");
+
+        assert!(positive.contains("include!(\"../src/two_kernel_bodies.rs\")"));
+        for (declaration, invocation) in [
+            ("macro_rules! alpha_kernel_body", "alpha_kernel_body!"),
+            ("macro_rules! zeta_kernel_body", "zeta_kernel_body!"),
+        ] {
+            assert!(bodies.contains(declaration));
+            assert!(positive.contains(invocation));
+        }
+
+        for fixture in [
+            include_str!("../verus/negative/two_kernel_wrong_scalar.rs"),
+            include_str!("../verus/negative/two_kernel_guard_bypass.rs"),
+            include_str!("../verus/negative/two_kernel_overlapping_output.rs"),
+        ] {
+            assert!(fixture.contains("two_kernel.rs"));
+        }
+    }
+
+    #[test]
+    fn alpha_and_zeta_execute_distinct_f32_signatures() {
+        let input = [1.0, -2.0, 0.5, 4.0];
+        let mut alpha_output = [99.0; 4];
+        assert_eq!(alpha(2.0, &input, &mut alpha_output), Ok(()));
+        assert_eq!(alpha_output, [2.0, -4.0, 1.0, 8.0]);
+
+        let a = [1.0, 2.0, 3.0, 4.0];
+        let b = [10.0, 20.0, 30.0, 40.0];
+        let mut zeta_output = [99.0; 4];
+        assert_eq!(zeta(&a, &b, -1.0, &mut zeta_output), Ok(()));
+        assert_eq!(zeta_output, [10.0, 21.0, 32.0, 43.0]);
+    }
+
+    #[test]
+    fn two_kernel_models_reject_shape_mismatches_and_ignore_tail_threads() {
+        let mut output = [7.0; 2];
+        assert_eq!(
+            alpha(2.0, &[1.0], &mut output),
+            Err(TwoKernelError::DomainLengthMismatch)
+        );
+        assert_eq!(
+            zeta(&[1.0, 2.0], &[3.0], 4.0, &mut output),
+            Err(TwoKernelError::DomainLengthMismatch)
+        );
+        assert_eq!(alpha_thread(2, 9.0, &[1.0, 2.0], &mut output), Ok(()));
+        assert_eq!(
+            zeta_thread(2, &[1.0, 2.0], &[3.0, 4.0], 5.0, &mut output),
+            Ok(())
+        );
+        assert_eq!(output, [7.0; 2]);
     }
 
     #[test]
