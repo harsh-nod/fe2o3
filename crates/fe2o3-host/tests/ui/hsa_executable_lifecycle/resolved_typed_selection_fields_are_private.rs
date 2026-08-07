@@ -18,7 +18,7 @@ fn extract_kernel<P, S, A, Auth>(
     let Ok(resolved) = authenticated.resolve(loaded) else {
         return;
     };
-    let _kernel = resolved._kernel;
+    let _kernel = resolved.kernel;
 }
 
 fn main() {}

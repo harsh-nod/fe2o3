@@ -1,7 +1,8 @@
 use crate::{
     AdmittedFinalizedWorkerV2BundleV1, AdmittedWorkerV2TypedKernelV1, ArtifactKernelIdentityV1,
     CompilerGeneratedKernelContractV1, DeviceIdentity, FinalizedWorkerV2BundleAdmissionError,
-    PhysicalMetadataValueV1, PublishedKernelPhysicalLayoutV1, WorkerV2TypedKernelSelectionError,
+    PhysicalMetadataValueV1, PublishedKernelPhysicalLayoutV1, PublishedPhysicalLaunchLayoutV1,
+    WorkerV2TypedKernelSelectionError,
 };
 use fe2o3_amd_target::AmdTargetId;
 use fe2o3_artifacts::{
@@ -1590,9 +1591,10 @@ impl<K: CompilerGeneratedKernelContractV1> AuthenticatedLoadedWorkerV2KernelSele
             artifact_identity: self.artifact_identity,
             physical_kernel: self.physical_kernel,
             prerequisites: self.prerequisites,
+            environment: self.environment,
             resolution,
-            _kernel: kernel,
-            _loaded: PhantomData,
+            kernel,
+            loaded,
             _marker: PhantomData,
         })
     }
@@ -1685,11 +1687,11 @@ fn validate_selected_kernel_resolution(
     Ok(())
 }
 
-/// Resolved but non-dispatchable selected kernel bound to one loaded object.
+/// Resolved selected kernel bound to one exact loaded object.
 ///
-/// The private kernel handle is dropped before this borrow can end. No method
-/// exposes the handle or grants launch authority, and the token is neither
-/// `Clone` nor `Copy`.
+/// The private kernel handle and actual mutable executable borrow are retained
+/// together. Only the unsafe compiler-generated SPI can consume this token;
+/// no method exposes either native handle or reusable launch authority.
 #[doc(hidden)]
 pub struct ResolvedLoadedWorkerV2KernelSelectionV1<
     'loaded,
@@ -1700,9 +1702,10 @@ pub struct ResolvedLoadedWorkerV2KernelSelectionV1<
     artifact_identity: ArtifactKernelIdentityV1,
     physical_kernel: PublishedKernelPhysicalLayoutV1,
     prerequisites: WorkerV2PrerequisiteDecisionV1,
+    environment: HsaEnvironmentObservationV1,
     resolution: HsaKernelResolutionObservationV1,
-    _kernel: A::Kernel,
-    _loaded: PhantomData<&'loaded mut LoadedHsaExecutableV1<P, A>>,
+    kernel: A::Kernel,
+    loaded: &'loaded mut LoadedHsaExecutableV1<P, A>,
     _marker: PhantomData<fn() -> K>,
 }
 
@@ -1752,6 +1755,197 @@ impl<P, K, A: ReviewedHsaExecutableLifecycleAdapterV1>
     pub const fn grants_launch_authority(&self) -> bool {
         false
     }
+}
+
+impl<P, K, A: ReviewedHsaImplicitKernargAdapterV1>
+    ResolvedLoadedWorkerV2KernelSelectionV1<'_, P, K, A>
+{
+    /// Completes and synchronously dispatches one compiler-generated kernarg.
+    ///
+    /// This is an SPI for generated safe adapters, not an application launch
+    /// API. It consumes the selected-kernel resolution and therefore cannot
+    /// yield reusable dispatch or native-handle authority.
+    ///
+    /// # Safety
+    ///
+    /// Generated code must have initialized the complete explicit ABI in
+    /// `kernarg` and must retain every referenced allocation until this method
+    /// returns. Those allocations must satisfy the authenticated bounds,
+    /// provenance, initialization, ownership, alias, and effect contracts for
+    /// `K`. The supplied spans must describe the compiler-selected code-object
+    /// ABI; callers cannot infer them from untrusted runtime metadata.
+    #[doc(hidden)]
+    pub unsafe fn dispatch_generated_and_wait(
+        self,
+        geometry: HsaLaunchGeometryV1,
+        kernarg: &mut [u8],
+        explicit_byte_len: usize,
+        implicit_byte_offset: usize,
+        implicit_byte_len: usize,
+    ) -> Result<HsaCompletedSelectedWorkerV2DispatchV1<K>, HsaGeneratedDispatchError<A::Error>>
+    {
+        let Self {
+            artifact_identity,
+            physical_kernel,
+            prerequisites,
+            environment,
+            resolution,
+            kernel,
+            loaded,
+            _marker: _,
+        } = self;
+
+        // Keep the selected handle alive through the synchronous operation,
+        // then release it before the mutable executable borrow can end on every
+        // ordinary success or error path.
+        let result = (|| {
+            validate_selected_dispatch_state(
+                &artifact_identity,
+                &physical_kernel,
+                &prerequisites,
+                &environment,
+                &resolution,
+                loaded,
+            )
+            .map_err(HsaGeneratedDispatchError::SelectionMismatch)?;
+            validate_launch_geometry_contract(
+                artifact_identity.launch(),
+                physical_kernel.launch(),
+                geometry,
+            )
+            .map_err(HsaGeneratedDispatchError::LaunchAuthorization)?;
+
+            let expected_size = usize::try_from(resolution.kernarg_segment_size)
+                .map_err(|_| HsaGeneratedDispatchError::KernargSize)?;
+            let expected_explicit = usize::try_from(artifact_identity.abi().size())
+                .map_err(|_| HsaGeneratedDispatchError::KernargSize)?;
+            if kernarg.len() != expected_size
+                || explicit_byte_len != expected_explicit
+                || explicit_byte_len != implicit_byte_offset
+                || physical_kernel.launch().implicit_argument_offset()
+                    != PhysicalMetadataValueV1::Known(
+                        u64::try_from(implicit_byte_offset)
+                            .map_err(|_| HsaGeneratedDispatchError::KernargSize)?,
+                    )
+                || physical_kernel.launch().implicit_argument_size()
+                    != u64::try_from(implicit_byte_len)
+                        .map_err(|_| HsaGeneratedDispatchError::KernargSize)?
+                || implicit_byte_offset
+                    .checked_add(implicit_byte_len)
+                    .is_none_or(|end| end != expected_size)
+            {
+                return Err(HsaGeneratedDispatchError::KernargSize);
+            }
+            let alignment = usize::try_from(resolution.kernarg_segment_alignment)
+                .map_err(|_| HsaGeneratedDispatchError::KernargAlignment)?;
+            if !kernarg.as_ptr().addr().is_multiple_of(alignment) {
+                return Err(HsaGeneratedDispatchError::KernargAlignment);
+            }
+
+            let explicit = kernarg[..explicit_byte_len].to_vec();
+            let executable = loaded
+                .executable
+                .as_ref()
+                .expect("resolved selection retains the loaded executable");
+            // SAFETY: the consumed token binds these private handles to the
+            // authenticated selected ABI. The caller owns the generated-memory
+            // obligations stated above; the reviewed adapter owns initialization.
+            let implicit = reviewed_adapter_call(|| unsafe {
+                loaded.adapter.initialize_implicit_kernarg(
+                    executable,
+                    &kernel,
+                    geometry,
+                    explicit_byte_len,
+                    implicit_byte_offset,
+                    implicit_byte_len,
+                    kernarg,
+                )
+            })
+            .map_err(HsaGeneratedDispatchError::ImplicitAdapter)?;
+            if kernarg[..explicit_byte_len] != *explicit {
+                return Err(HsaGeneratedDispatchError::ExplicitKernargMutation);
+            }
+            validate_implicit_kernarg_observation(
+                &loaded.load,
+                &resolution,
+                geometry,
+                explicit_byte_len,
+                implicit_byte_offset,
+                implicit_byte_len,
+                &implicit,
+            )
+            .map_err(HsaGeneratedDispatchError::ImplicitObservationMismatch)?;
+
+            // SAFETY: all explicit and implicit bytes are now validated, and
+            // the unsafe adapter returns only before submission or after every
+            // effect is quiescent.
+            let dispatch = reviewed_adapter_call(|| unsafe {
+                loaded
+                    .adapter
+                    .launch_and_wait(executable, &kernel, geometry, kernarg)
+            })
+            .map_err(HsaGeneratedDispatchError::DispatchAdapter)?;
+            validate_dispatch_observation(&loaded.load, &resolution, geometry, &dispatch)
+                .map_err(HsaGeneratedDispatchError::DispatchObservationMismatch)?;
+
+            Ok(HsaCompletedSelectedWorkerV2DispatchV1 {
+                artifact_identity,
+                completed: HsaCompletedDispatchV1 {
+                    finalized_digest: loaded.load.finalized_digest,
+                    executable_object: loaded.load.executable_object,
+                    kernel_object: resolution.kernel_object,
+                    geometry,
+                    dispatch,
+                },
+                _marker: PhantomData,
+            })
+        })();
+        drop(kernel);
+        result
+    }
+}
+
+fn validate_selected_dispatch_state<P, A: ReviewedHsaExecutableLifecycleAdapterV1>(
+    identity: &ArtifactKernelIdentityV1,
+    physical: &PublishedKernelPhysicalLayoutV1,
+    prerequisites: &WorkerV2PrerequisiteDecisionV1,
+    environment: &HsaEnvironmentObservationV1,
+    resolution: &HsaKernelResolutionObservationV1,
+    loaded: &LoadedHsaExecutableV1<P, A>,
+) -> Result<(), &'static str> {
+    for (matches, field) in [
+        (
+            environment == &loaded.environment,
+            "selected HSA environment",
+        ),
+        (
+            identity.payload_digest() == loaded.load.finalized_digest,
+            "selected finalized digest",
+        ),
+        (
+            prerequisites.finalized_digest == loaded.load.finalized_digest,
+            "selected prerequisite digest",
+        ),
+        (
+            prerequisites.kernel_id == identity.kernel_id(),
+            "selected prerequisite kernel",
+        ),
+        (
+            physical.export_symbol() == identity.symbol().as_str(),
+            "selected physical kernel",
+        ),
+    ] {
+        if !matches {
+            return Err(field);
+        }
+    }
+    validate_selected_kernel_resolution(
+        identity,
+        physical,
+        loaded.load.executable_object,
+        &loaded.resolution,
+        resolution,
+    )
 }
 
 impl<K, A: ReviewedHsaExecutableLifecycleAdapterV1> Drop for LoadedHsaExecutableV1<K, A> {
@@ -1941,6 +2135,8 @@ impl<K, A: ReviewedHsaImplicitKernargAdapterV1> HsaKernelLaunchAuthorizationV1<'
 pub enum HsaGeneratedDispatchError<E> {
     KernargSize,
     KernargAlignment,
+    LaunchAuthorization(HsaLaunchAuthorizationError),
+    SelectionMismatch(&'static str),
     ImplicitAdapter(E),
     DispatchAdapter(E),
     ExplicitKernargMutation,
@@ -1954,6 +2150,15 @@ impl<E: fmt::Display> fmt::Display for HsaGeneratedDispatchError<E> {
             Self::KernargSize => formatter.write_str("generated kernarg size is not exact"),
             Self::KernargAlignment => {
                 formatter.write_str("generated kernarg storage is not sufficiently aligned")
+            }
+            Self::LaunchAuthorization(error) => {
+                write!(
+                    formatter,
+                    "generated launch geometry was rejected: {error:?}"
+                )
+            }
+            Self::SelectionMismatch(field) => {
+                write!(formatter, "selected HSA kernel mismatched {field}")
             }
             Self::ImplicitAdapter(error) => {
                 write!(formatter, "implicit-kernarg adapter failed: {error}")
@@ -1975,7 +2180,7 @@ impl<E: fmt::Display> fmt::Display for HsaGeneratedDispatchError<E> {
 impl<E: std::error::Error + 'static> std::error::Error for HsaGeneratedDispatchError<E> {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::ImplicitAdapter(error) => Some(error),
+            Self::ImplicitAdapter(error) | Self::DispatchAdapter(error) => Some(error),
             _ => None,
         }
     }
@@ -2054,12 +2259,23 @@ fn validate_launch_geometry(
     admission: &AdmittedFinalizedWorkerV2BundleV1,
     geometry: HsaLaunchGeometryV1,
 ) -> Result<(), HsaLaunchAuthorizationError> {
+    validate_launch_geometry_contract(
+        admission.artifact_identity().launch(),
+        admission.selected_kernel().launch(),
+        geometry,
+    )
+}
+
+fn validate_launch_geometry_contract(
+    source: &LaunchContract,
+    physical: &PublishedPhysicalLaunchLayoutV1,
+    geometry: HsaLaunchGeometryV1,
+) -> Result<(), HsaLaunchAuthorizationError> {
     if geometry.grid.contains(&0) || geometry.workgroup.contains(&0) {
         return Err(HsaLaunchAuthorizationError::ZeroDimension);
     }
     let workgroup_product = product(geometry.workgroup)?;
     product(geometry.grid)?;
-    let source = admission.artifact_identity().launch();
     if (source.rank() < 2 && (geometry.grid[1] != 1 || geometry.workgroup[1] != 1))
         || (source.rank() < 3 && (geometry.grid[2] != 1 || geometry.workgroup[2] != 1))
     {
@@ -2084,7 +2300,6 @@ fn validate_launch_geometry(
             return Err(HsaLaunchAuthorizationError::WorkgroupExceedsContract);
         }
     }
-    let physical = admission.selected_kernel().launch();
     if workgroup_product > u64::from(physical.max_flat_workgroup_size()) {
         return Err(HsaLaunchAuthorizationError::WorkgroupExceedsPhysicalLimit);
     }
@@ -2158,6 +2373,31 @@ pub struct HsaCompletedDispatchV1 {
     kernel_object: HsaKernelObjectIdentityV1,
     geometry: HsaLaunchGeometryV1,
     dispatch: HsaDispatchObservationV1,
+}
+
+/// Quiescent completion evidence for one exact typed selected kernel.
+///
+/// This value is descriptive. It contains no executable, kernel, queue, or
+/// allocation authority and cannot be used to dispatch again.
+#[derive(Debug)]
+pub struct HsaCompletedSelectedWorkerV2DispatchV1<K> {
+    artifact_identity: ArtifactKernelIdentityV1,
+    completed: HsaCompletedDispatchV1,
+    _marker: PhantomData<fn() -> K>,
+}
+
+impl<K> HsaCompletedSelectedWorkerV2DispatchV1<K> {
+    pub const fn artifact_identity(&self) -> &ArtifactKernelIdentityV1 {
+        &self.artifact_identity
+    }
+
+    pub const fn completed_dispatch(&self) -> &HsaCompletedDispatchV1 {
+        &self.completed
+    }
+
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
+    }
 }
 
 impl HsaCompletedDispatchV1 {
@@ -2523,11 +2763,14 @@ mod tests {
         KernargSize,
         KernargAlignment,
         DispatchObject,
+        DispatchKernel,
         DispatchGeometry,
         DispatchIncomplete,
         DispatchAdapterError,
         DispatchPanic,
         ImplicitExecutable,
+        ImplicitKernel,
+        ImplicitGeometry,
         ImplicitOffset,
         ImplicitIncomplete,
         ExplicitMutation,
@@ -2541,7 +2784,9 @@ mod tests {
     struct FakeExecutable;
 
     #[derive(Debug)]
-    struct FakeKernel;
+    struct FakeKernel {
+        object: HsaKernelObjectIdentityV1,
+    }
 
     type TestLoadedResult = Result<
         LoadedHsaExecutableV1<TestKernel, FakeHsaAdapter>,
@@ -2679,7 +2924,9 @@ mod tests {
                 Self::kernel_object()
             };
             Ok((
-                FakeKernel,
+                FakeKernel {
+                    object: kernel_object,
+                },
                 HsaKernelResolutionObservationV1::new(
                     executable_object,
                     kernel_object,
@@ -2694,7 +2941,7 @@ mod tests {
         unsafe fn launch_and_wait(
             &mut self,
             _executable: &Self::Executable,
-            _kernel: &Self::Kernel,
+            kernel: &Self::Kernel,
             geometry: HsaLaunchGeometryV1,
             kernarg: &mut [u8],
         ) -> Result<HsaDispatchObservationV1, Self::Error> {
@@ -2719,10 +2966,15 @@ mod tests {
             } else {
                 geometry
             };
+            let kernel_object = if self.fault == AdapterFault::DispatchKernel {
+                Self::kernel_object()
+            } else {
+                kernel.object
+            };
             HsaDispatchObservationV1::new(
                 [0x82; 16],
                 executable,
-                Self::kernel_object(),
+                kernel_object,
                 geometry,
                 self.fault != AdapterFault::DispatchIncomplete,
             )
@@ -2759,7 +3011,7 @@ mod tests {
         unsafe fn initialize_implicit_kernarg(
             &mut self,
             _executable: &Self::Executable,
-            _kernel: &Self::Kernel,
+            kernel: &Self::Kernel,
             geometry: HsaLaunchGeometryV1,
             explicit_byte_len: usize,
             implicit_byte_offset: usize,
@@ -2781,10 +3033,20 @@ mod tests {
             } else {
                 implicit_byte_offset
             };
+            let reported_geometry = if self.fault == AdapterFault::ImplicitGeometry {
+                HsaLaunchGeometryV1::new([2, 1, 1], [256, 1, 1], 0)
+            } else {
+                geometry
+            };
+            let kernel_object = if self.fault == AdapterFault::ImplicitKernel {
+                Self::kernel_object()
+            } else {
+                kernel.object
+            };
             Ok(HsaImplicitKernargInitializationObservationV1::new(
                 executable,
-                Self::kernel_object(),
-                geometry,
+                kernel_object,
+                reported_geometry,
                 u64::try_from(explicit_byte_len).unwrap(),
                 u64::try_from(reported_offset).unwrap(),
                 u64::try_from(implicit_byte_len).unwrap(),
@@ -2818,6 +3080,9 @@ mod tests {
 
     #[repr(align(16))]
     struct AlignedKernarg([u8; 304]);
+
+    #[repr(align(16))]
+    struct OffsetKernarg([u8; 305]);
 
     #[test]
     fn complete_lifecycle_binds_all_identities_and_unloads() {
@@ -2934,6 +3199,213 @@ mod tests {
 
         loaded.unload().unwrap();
         assert_eq!(unloads.load(Ordering::SeqCst), 1);
+    }
+
+    fn dispatch_second_kernel(
+        seed: u8,
+        fault: AdapterFault,
+        geometry: HsaLaunchGeometryV1,
+        kernarg_len: usize,
+        explicit_byte_len: usize,
+        implicit_byte_offset: usize,
+        implicit_byte_len: usize,
+    ) -> Result<
+        HsaCompletedSelectedWorkerV2DispatchV1<SecondTestKernel>,
+        HsaGeneratedDispatchError<&'static str>,
+    > {
+        let (loaded, unloads, _directory) = load_two_kernels(seed);
+        let mut loaded = loaded.unwrap();
+        let selection = loaded.select_typed_kernel::<SecondTestKernel>().unwrap();
+        let authenticated = selection
+            .authenticate(&mut FakeAuthenticator::exact())
+            .unwrap();
+        let resolved = authenticated.resolve(&mut loaded).unwrap();
+        resolved.loaded.adapter.fault = fault;
+        let mut kernarg = AlignedKernarg([0; 304]);
+        kernarg.0[..48].fill(0x5a);
+        // SAFETY: this test supplies the fixture's exact explicit bytes and
+        // retains its empty synthetic resource set through synchronous return.
+        let result = unsafe {
+            resolved.dispatch_generated_and_wait(
+                geometry,
+                &mut kernarg.0[..kernarg_len],
+                explicit_byte_len,
+                implicit_byte_offset,
+                implicit_byte_len,
+            )
+        };
+        loaded.unload().unwrap();
+        assert_eq!(unloads.load(Ordering::SeqCst), 1);
+        result
+    }
+
+    #[test]
+    fn selected_kernel_generated_dispatch_is_exact_and_quiescent() {
+        let geometry = HsaLaunchGeometryV1::new([32, 1, 1], [256, 1, 1], 0);
+        let completed =
+            dispatch_second_kernel(0x89, AdapterFault::None, geometry, 304, 48, 48, 256).unwrap();
+        assert_eq!(
+            completed.artifact_identity().symbol().as_str(),
+            "second_kernel"
+        );
+        assert_eq!(
+            completed.completed_dispatch().kernel_object(),
+            FakeHsaAdapter::second_kernel_object()
+        );
+        assert_eq!(completed.completed_dispatch().geometry(), geometry);
+        assert!(completed.completed_dispatch().dispatch().completed());
+        assert!(!completed.grants_launch_authority());
+    }
+
+    #[test]
+    fn selected_kernel_dispatch_rejects_byte_and_span_substitutions() {
+        let geometry = HsaLaunchGeometryV1::new([1, 1, 1], [256, 1, 1], 0);
+        for (kernarg_len, explicit, offset, implicit) in [
+            (303, 48, 48, 255),
+            (304, 47, 48, 256),
+            (304, 48, 47, 257),
+            (304, 48, 48, 255),
+        ] {
+            assert!(matches!(
+                dispatch_second_kernel(
+                    0x88,
+                    AdapterFault::None,
+                    geometry,
+                    kernarg_len,
+                    explicit,
+                    offset,
+                    implicit,
+                ),
+                Err(HsaGeneratedDispatchError::KernargSize)
+            ));
+        }
+    }
+
+    #[test]
+    fn selected_kernel_dispatch_rejects_misaligned_complete_storage() {
+        let (loaded, unloads, _directory) = load_two_kernels(0x84);
+        let mut loaded = loaded.unwrap();
+        let selection = loaded.select_typed_kernel::<SecondTestKernel>().unwrap();
+        let authenticated = selection
+            .authenticate(&mut FakeAuthenticator::exact())
+            .unwrap();
+        let resolved = authenticated.resolve(&mut loaded).unwrap();
+        let mut kernarg = OffsetKernarg([0; 305]);
+        assert!(matches!(
+            // SAFETY: rejection occurs before the adapter is entered.
+            unsafe {
+                resolved.dispatch_generated_and_wait(
+                    HsaLaunchGeometryV1::new([1, 1, 1], [256, 1, 1], 0),
+                    &mut kernarg.0[1..],
+                    48,
+                    48,
+                    256,
+                )
+            },
+            Err(HsaGeneratedDispatchError::KernargAlignment)
+        ));
+        loaded.unload().unwrap();
+        assert_eq!(unloads.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn selected_kernel_dispatch_rejects_geometry_substitution() {
+        assert!(matches!(
+            dispatch_second_kernel(
+                0x87,
+                AdapterFault::None,
+                HsaLaunchGeometryV1::new([1, 1, 1], [64, 1, 1], 0),
+                304,
+                48,
+                48,
+                256,
+            ),
+            Err(HsaGeneratedDispatchError::LaunchAuthorization(
+                HsaLaunchAuthorizationError::WorkgroupMismatch
+            ))
+        ));
+    }
+
+    #[test]
+    fn selected_kernel_dispatch_rejects_adapter_observation_substitutions() {
+        let geometry = HsaLaunchGeometryV1::new([1, 1, 1], [256, 1, 1], 0);
+        for fault in [
+            AdapterFault::ImplicitExecutable,
+            AdapterFault::ImplicitKernel,
+            AdapterFault::ImplicitGeometry,
+            AdapterFault::ImplicitOffset,
+            AdapterFault::ImplicitIncomplete,
+            AdapterFault::ExplicitMutation,
+            AdapterFault::DispatchObject,
+            AdapterFault::DispatchKernel,
+            AdapterFault::DispatchGeometry,
+            AdapterFault::DispatchIncomplete,
+        ] {
+            assert!(
+                dispatch_second_kernel(0x86, fault, geometry, 304, 48, 48, 256).is_err(),
+                "adapter fault {fault:?} was accepted"
+            );
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    enum SelectedDispatchStateFault {
+        Environment,
+        Executable,
+        Symbol,
+        Kernel,
+    }
+
+    #[test]
+    fn selected_kernel_dispatch_revalidates_retained_identity_state() {
+        for fault in [
+            SelectedDispatchStateFault::Environment,
+            SelectedDispatchStateFault::Executable,
+            SelectedDispatchStateFault::Symbol,
+            SelectedDispatchStateFault::Kernel,
+        ] {
+            let (loaded, unloads, _directory) = load_two_kernels(0x85);
+            let mut loaded = loaded.unwrap();
+            let selection = loaded.select_typed_kernel::<SecondTestKernel>().unwrap();
+            let authenticated = selection
+                .authenticate(&mut FakeAuthenticator::exact())
+                .unwrap();
+            let mut resolved = authenticated.resolve(&mut loaded).unwrap();
+            match fault {
+                SelectedDispatchStateFault::Environment => {
+                    let (crossed, _) = FakeHsaAdapter::new(AdapterFault::RuntimeInstance);
+                    resolved.environment = crossed.environment();
+                }
+                SelectedDispatchStateFault::Executable => {
+                    resolved.resolution.executable_object =
+                        HsaExecutableObjectIdentityV1::new([0xa1; 32]).unwrap();
+                }
+                SelectedDispatchStateFault::Symbol => {
+                    resolved.resolution.export_symbol = "primary_kernel".into();
+                }
+                SelectedDispatchStateFault::Kernel => {
+                    resolved.resolution.kernel_object = FakeHsaAdapter::kernel_object();
+                }
+            }
+            let mut kernarg = AlignedKernarg([0; 304]);
+            kernarg.0[..48].fill(0x5a);
+            // SAFETY: the test intentionally corrupts retained descriptive
+            // state and expects rejection before any adapter operation.
+            assert!(matches!(
+                unsafe {
+                    resolved.dispatch_generated_and_wait(
+                        HsaLaunchGeometryV1::new([1, 1, 1], [256, 1, 1], 0),
+                        &mut kernarg.0,
+                        48,
+                        48,
+                        256,
+                    )
+                },
+                Err(HsaGeneratedDispatchError::SelectionMismatch(_))
+            ));
+            loaded.unload().unwrap();
+            assert_eq!(unloads.load(Ordering::SeqCst), 1);
+        }
     }
 
     #[test]
