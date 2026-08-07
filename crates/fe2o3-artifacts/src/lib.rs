@@ -18,6 +18,7 @@ mod direct_link_encode;
 mod encode;
 mod error;
 mod generated_kernel_identity;
+mod gfx942_bundle;
 mod host_launch_abi;
 mod identities;
 mod manifest;
@@ -85,6 +86,10 @@ pub use encode::{MANIFEST_MAGIC, MANIFEST_VERSION, MAX_MANIFEST_BYTES};
 pub use error::{DecodeError, ValidationError};
 pub use generated_kernel_identity::{
     GENERATED_KERNEL_IDENTITY_DOMAIN_V2, derive_generated_kernel_identity_v2,
+};
+pub use gfx942_bundle::{
+    GFX942_TWO_KERNEL_BUNDLE_VERSION_V1, GFX942_TWO_KERNEL_COUNT, Gfx942BundleError,
+    Gfx942KernelProofBindingV1, Gfx942TwoKernelBundleV1,
 };
 pub use host_launch_abi::{HostLaunchAbi, HostLaunchAbiError};
 pub use identities::{

@@ -176,6 +176,24 @@ its device, validate the payload metadata, and keep any stronger device-bound
 token private. A caller-constructed `TargetIdentity` cannot authorize safe
 loading, ABI matching, or launch.
 
+## Canonical gfx942 two-kernel profile
+
+`Gfx942TwoKernelBundleV1` is a strict construction and validation profile over
+the existing V1 manifest, artifact container, bundle index, and executable
+proof binding. It admits exactly two canonically ordered kernel entries in one
+digest-validated native gfx942 payload. Each independently keyed proof must
+match its kernel ID, source and executable identities, complete ABI and launch
+contract, effects identity, target, code-object version, and shared finalized
+payload identity. Duplicate names remain rejected by `ManifestV1`; duplicate
+proof keys, conflicting payload references, and cross-kernel proof substitution
+are rejected by the profile.
+
+The profile adds no wire envelope. Container round trips use the canonical
+`ArtifactContainerV1` V1 encoding, the index is derived through
+`BundleIndexV1::from_containers`, and proof bindings remain separately supplied
+evidence. The resulting value authenticates none of its inputs and grants no
+load or launch authority.
+
 ## Direct-link bundle evidence
 
 `DirectLinkBundleEvidenceV1` is a separate bounded companion envelope. It
