@@ -1,0 +1,5 @@
+error[E0599]: no method named `clone` found for struct `VmmAccessibleAllocation` in the current scope
+ --> tests/ui/vmm/accessible_owner_is_linear.rs:4:23
+  |
+4 |     let _copy = owner.clone();
+  |                       ^^^^^ method not found in `VmmAccessibleAllocation`

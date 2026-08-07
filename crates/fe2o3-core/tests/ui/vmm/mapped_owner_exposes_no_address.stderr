@@ -1,0 +1,5 @@
+error[E0599]: no method named `raw_pointer` found for reference `&VmmMappedAllocation` in the current scope
+ --> tests/ui/vmm/mapped_owner_exposes_no_address.rs:4:35
+  |
+4 |     let _pointer = unsafe { owner.raw_pointer() };
+  |                                   ^^^^^^^^^^^ method not found in `&VmmMappedAllocation`
