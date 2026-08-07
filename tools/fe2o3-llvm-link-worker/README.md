@@ -65,6 +65,17 @@ descriptor-free generic path. Supplying an optional path writes the successful
 mixed-input HSACO for independent inspection. Two additional paths also export
 the exact bitcode and relocatable inputs used for that link:
 
+At this boundary, `COV6` means request code-object version `6`, LLVM module flag
+`amdhsa_code_object_version = 600`, and AMDHSA ELF ABI version `4`. The pipeline
+suite directly links a COV6 Worker V2 request containing two kernel entries and
+one shared helper, then checks both AMDGPU metadata entries and both `.kd`
+symbols in one output and proves equivalent producer input orderings canonicalize
+to identical bytes. A canonical `.fe2o3.kd.v1` table may be carried opaquely
+through compiler IR and the raw HSACO, but its parsing, executable-agreement
+checks, and digest finalization are downstream duties; `ArtifactContainerV1` is
+also constructed downstream. This worker neither parses nor authenticates
+either format.
+
 `fe2o3-worker-codec-tests` decodes a Rust-produced V2 golden, rejects every
 single-byte mutation and V2-to-V1 downgrade, and checks V2 response framing.
 The pipeline suite also executes the same mixed link as V2 and verifies that

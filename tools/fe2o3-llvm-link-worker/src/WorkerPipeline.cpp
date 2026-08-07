@@ -1281,8 +1281,8 @@ Expected<std::vector<std::string>> inspectOutput(ArrayRef<uint8_t> Bytes,
   std::vector<std::string> Diagnostics;
   Diagnostics.push_back(
       (Twine("post_link.check=target status=ok arch=") +
-       diagnosticAtom(RequestedTarget.Cpu) +
-       " code_object_version=" + Twine(RequestValue.CodeObjectVersion) +
+       diagnosticAtom(RequestedTarget.Cpu) + " code_object_version=" +
+       Twine(static_cast<unsigned>(RequestValue.CodeObjectVersion)) +
        " e_flags=" + hexadecimal(Elf->getPlatformFlags()))
           .str());
   Diagnostics.push_back((Twine("post_link.check=exports status=ok symbols=") +

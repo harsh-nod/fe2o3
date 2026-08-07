@@ -63,6 +63,7 @@ struct FixtureOptions {
   StringRef FunctionFeatures;
   bool WeakDefinition = false;
   bool WeakImport = false;
+  bool NoInlineDefinition = false;
   uint32_t Addend = 1;
 };
 
@@ -81,6 +82,12 @@ FixtureOptions withCpu(StringRef Cpu) {
 FixtureOptions withCodeObjectVersion(uint8_t Version) {
   FixtureOptions Result;
   Result.CodeObjectVersion = Version;
+  return Result;
+}
+
+FixtureOptions withNoInlineCodeObjectVersion(uint8_t Version) {
+  FixtureOptions Result = withCodeObjectVersion(Version);
+  Result.NoInlineDefinition = true;
   return Result;
 }
 
@@ -171,6 +178,8 @@ std::unique_ptr<Module> makeModule(LLVMContext &Context, StringRef ModuleName,
                                        Definition, *Result);
   if (Options.WeakDefinition)
     Defined->setLinkage(GlobalValue::WeakAnyLinkage);
+  if (Options.NoInlineDefinition)
+    Defined->addFnAttr(Attribute::NoInline);
   if (!Options.FunctionCpu.empty())
     Defined->addFnAttr("target-cpu", Options.FunctionCpu);
   if (!Options.FunctionFeatures.empty())
@@ -489,6 +498,53 @@ makeKernelBitcode(StringRef Name,
   return std::vector<uint8_t>(Buffer.begin(), Buffer.end());
 }
 
+std::vector<uint8_t> makeCov6TwoKernelBitcode() {
+  LLVMContext Context;
+  Module ModuleValue("cov6-two-kernel", Context);
+  std::unique_ptr<TargetMachine> Machine = createMachine("gfx942");
+  ModuleValue.setTargetTriple(Triple(AmdGpuTriple));
+  ModuleValue.setDataLayout(Machine->createDataLayout());
+  ModuleValue.addModuleFlag(Module::Error, "amdhsa_code_object_version", 600);
+
+  Type *I32 = Type::getInt32Ty(Context);
+  FunctionType *HelperSignature = FunctionType::get(I32, {I32}, false);
+  FunctionCallee SharedHelper =
+      ModuleValue.getOrInsertFunction("cov6_shared_helper", HelperSignature);
+  Type *GlobalPointer = PointerType::get(Context, 1);
+  FunctionType *KernelSignature =
+      FunctionType::get(Type::getVoidTy(Context), {GlobalPointer, I32}, false);
+
+  auto AddKernel = [&](StringRef Name, uint32_t Addend) {
+    Function *Kernel = Function::Create(
+        KernelSignature, GlobalValue::ExternalLinkage, Name, ModuleValue);
+    Kernel->setCallingConv(CallingConv::AMDGPU_KERNEL);
+    Kernel->addFnAttr("target-cpu", "gfx942");
+    Kernel->addFnAttr("target-features", "-wavefrontsize32,+wavefrontsize64");
+    Kernel->addFnAttr("amdgpu-flat-work-group-size", "256,256");
+    Metadata *Workgroup[] = {
+        ConstantAsMetadata::get(ConstantInt::get(I32, 256)),
+        ConstantAsMetadata::get(ConstantInt::get(I32, 1)),
+        ConstantAsMetadata::get(ConstantInt::get(I32, 1))};
+    Kernel->setMetadata("reqd_work_group_size",
+                        MDNode::get(Context, Workgroup));
+
+    BasicBlock *Entry = BasicBlock::Create(Context, "entry", Kernel);
+    IRBuilder<> Builder(Entry);
+    Value *Input =
+        Builder.CreateAdd(Kernel->getArg(1), ConstantInt::get(I32, Addend));
+    Value *Output = Builder.CreateCall(SharedHelper, {Input});
+    Builder.CreateStore(Output, Kernel->getArg(0));
+    Builder.CreateRetVoid();
+  };
+  AddKernel("cov6_alpha", 1);
+  AddKernel("cov6_bravo", 2);
+
+  SmallVector<char, 0> Buffer;
+  raw_svector_ostream Stream(Buffer);
+  WriteBitcodeToFile(ModuleValue, Stream);
+  return std::vector<uint8_t>(Buffer.begin(), Buffer.end());
+}
+
 std::vector<uint8_t> makeObject(StringRef ModuleName, StringRef Definition,
                                 std::optional<StringRef> Callee,
                                 const FixtureOptions &Options = {}) {
@@ -558,7 +614,8 @@ Request makeV2Request(Input CompilerModule,
   return Result;
 }
 
-std::set<std::string> inspectHsaco(ArrayRef<uint8_t> Bytes) {
+std::set<std::string> inspectHsaco(ArrayRef<uint8_t> Bytes,
+                                   uint8_t CodeObjectVersion) {
   StringRef Data(reinterpret_cast<const char *>(Bytes.data()), Bytes.size());
   auto ObjectOrError =
       ObjectFile::createObjectFile(MemoryBufferRef(Data, "fixture.hsaco"));
@@ -575,8 +632,22 @@ std::set<std::string> inspectHsaco(ArrayRef<uint8_t> Bytes) {
           "output has the wrong ELF envelope");
   require(Bytes[ELF::EI_OSABI] == ELF::ELFOSABI_AMDGPU_HSA,
           "output does not use the AMDHSA OS ABI");
-  require(Elf->getEIdentABIVersion() == ELF::ELFABIVERSION_AMDGPU_HSA_V5,
-          "output does not use code-object V5");
+  uint8_t ExpectedAbiVersion = 0;
+  switch (CodeObjectVersion) {
+  case 4:
+    ExpectedAbiVersion = ELF::ELFABIVERSION_AMDGPU_HSA_V4;
+    break;
+  case 5:
+    ExpectedAbiVersion = ELF::ELFABIVERSION_AMDGPU_HSA_V5;
+    break;
+  case 6:
+    ExpectedAbiVersion = ELF::ELFABIVERSION_AMDGPU_HSA_V6;
+    break;
+  default:
+    fail("test requested an unsupported code-object version");
+  }
+  require(Elf->getEIdentABIVersion() == ExpectedAbiVersion,
+          "output does not use the requested code-object version");
 
   std::set<std::string> Symbols;
   for (SymbolRef Symbol : Elf->getDynamicSymbolIterators()) {
@@ -615,7 +686,8 @@ Response runSuccess(const Request &RequestValue,
   require(Result.LinkedOutput->Digest ==
               SHA256::hash(Result.LinkedOutput->Bytes),
           "success output digest is incorrect");
-  require(inspectHsaco(Result.LinkedOutput->Bytes) == ExpectedSymbols,
+  require(inspectHsaco(Result.LinkedOutput->Bytes,
+                       RequestValue.CodeObjectVersion) == ExpectedSymbols,
           "HSACO exports do not match the request");
   return Result;
 }
@@ -636,7 +708,8 @@ Response runSuccessWithPolicy(const Request &RequestValue,
   require(Result.LinkedOutput->Digest ==
               SHA256::hash(Result.LinkedOutput->Bytes),
           "synthetic OCML output digest is incorrect");
-  require(inspectHsaco(Result.LinkedOutput->Bytes) == ExpectedSymbols,
+  require(inspectHsaco(Result.LinkedOutput->Bytes,
+                       RequestValue.CodeObjectVersion) == ExpectedSymbols,
           "synthetic OCML HSACO exports do not match the request");
   require(Result.WorkerBuildIdentity ==
               "fe2o3-unauthenticated-test-device-library-policy",
@@ -686,11 +759,15 @@ Response requireFailureWithPolicy(const Request &RequestValue,
 }
 
 void requireDiagnostic(const Response &ResponseValue, StringRef Text) {
-  require(llvm::any_of(ResponseValue.Diagnostics,
-                       [Text](const std::string &Diagnostic) {
-                         return StringRef(Diagnostic).contains(Text);
-                       }),
-          Text);
+  if (llvm::any_of(ResponseValue.Diagnostics,
+                   [Text](const std::string &Diagnostic) {
+                     return StringRef(Diagnostic).contains(Text);
+                   }))
+    return;
+  errs() << "missing diagnostic: " << Text << '\n';
+  for (const std::string &Diagnostic : ResponseValue.Diagnostics)
+    errs() << "actual diagnostic: " << Diagnostic << '\n';
+  fail("response omitted an expected diagnostic");
 }
 
 void requireInspectionFailure(ArrayRef<uint8_t> Bytes,
@@ -807,6 +884,29 @@ void replaceMetadataText(std::vector<uint8_t> &Bytes, StringRef Expected,
                               Expected.bytes_begin(), Expected.bytes_end());
   require(Position != Bytes.end(), "fixture has no requested metadata text");
   llvm::copy(Replacement, Position);
+}
+
+void replaceMetadataFieldText(std::vector<uint8_t> &Bytes, StringRef Key,
+                              StringRef Expected, StringRef Replacement) {
+  require(Expected.size() == Replacement.size(),
+          "metadata field replacement changes the encoded length");
+  auto Search = Bytes.begin();
+  while (Search != Bytes.end()) {
+    auto KeyPosition =
+        std::search(Search, Bytes.end(), Key.bytes_begin(), Key.bytes_end());
+    require(KeyPosition != Bytes.end(),
+            "fixture has no requested metadata field value");
+    auto ValueBegin = KeyPosition + Key.size();
+    auto ValueEnd = std::min(Bytes.end(), ValueBegin + 256);
+    auto Value = std::search(ValueBegin, ValueEnd, Expected.bytes_begin(),
+                             Expected.bytes_end());
+    if (Value != ValueEnd) {
+      llvm::copy(Replacement, Value);
+      return;
+    }
+    Search = ValueBegin;
+  }
+  fail("fixture has no requested metadata field value");
 }
 
 void replaceMetadataByte(std::vector<uint8_t> &Bytes, StringRef Key,
@@ -1291,6 +1391,61 @@ int main(int ArgumentCount, char **Arguments) {
   requireDiagnostic(PublicationResponse, "wavefront_size=64");
   requireDiagnostic(PublicationResponse, "max_workgroup_size=256");
   requireDiagnostic(PublicationResponse, "reqd_workgroup_size=[256,1,1]");
+
+  Input Cov6Compiler =
+      makeInput(InputKind::LlvmBitcode, makeCov6TwoKernelBitcode());
+  Input Cov6Helper =
+      makeInput(InputKind::LlvmBitcode,
+                makeBitcode("cov6-helper", "cov6_shared_helper", std::nullopt,
+                            withNoInlineCodeObjectVersion(6)));
+  const std::vector<std::string> Cov6FinalSymbols = {
+      "cov6_alpha", "cov6_alpha.kd", "cov6_bravo", "cov6_bravo.kd",
+      "cov6_shared_helper"};
+  auto MakeCov6Request = [&](bool HelperFirst) {
+    std::vector<Input> Inputs =
+        HelperFirst ? std::vector<Input>{Cov6Helper, Cov6Compiler}
+                    : std::vector<Input>{Cov6Compiler, Cov6Helper};
+    Request Result =
+        makeRequest(std::move(Inputs), Cov6FinalSymbols, "gfx942:xnack-", 6);
+    Result.Protocol = ProtocolVersion::V2;
+    Result.WorkerBuildIdentity = FE2O3_WORKER_BUILD_ID;
+    Result.WorkerExecutableDigest.fill(0x51);
+    Result.WorkerExecutableBytes = 4096;
+    Result.CompilerEnvelopeIdentity.fill(0x62);
+    Result.CompilerModule = Cov6Compiler;
+    Result.ExternalProviders = {Cov6Helper};
+    Result.ImportSymbols = {"cov6_shared_helper"};
+    Result.ExportSymbols = {"cov6_alpha", "cov6_bravo"};
+    Result.FinalSymbols = Cov6FinalSymbols;
+    return Result;
+  };
+
+  const std::set<std::string> Cov6ExpectedSymbols(Cov6FinalSymbols.begin(),
+                                                  Cov6FinalSymbols.end());
+  Request Cov6Kernels = MakeCov6Request(false);
+  Response Cov6First = runSuccess(Cov6Kernels, Cov6ExpectedSymbols);
+  Response Cov6Reordered =
+      runSuccess(MakeCov6Request(true), Cov6ExpectedSymbols);
+  require(
+      Cov6First.LinkedOutput->Bytes == Cov6Reordered.LinkedOutput->Bytes,
+      "equivalent producer input orderings changed canonical COV6 HSACO bytes");
+  requireDiagnostic(Cov6First, "post_link.check=target status=ok arch=gfx942 "
+                               "code_object_version=6");
+  requireDiagnostic(Cov6First, "post_link.check=metadata status=ok kernels=2");
+  requireDiagnostic(Cov6First, "post_link.kernel name=cov6_alpha "
+                               "symbol=cov6_alpha.kd");
+  requireDiagnostic(Cov6First, "post_link.kernel name=cov6_bravo "
+                               "symbol=cov6_bravo.kd");
+  require(hasObjectSymbol(Cov6First.LinkedOutput->Bytes, "cov6_shared_helper"),
+          "COV6 output removed the helper shared by both kernels");
+
+  std::vector<uint8_t> MismatchedCov6Descriptor = Cov6First.LinkedOutput->Bytes;
+  replaceMetadataFieldText(MismatchedCov6Descriptor, ".symbol", "cov6_alpha.kd",
+                           "cov6_omega.kd");
+  requireInspectionFailure(MismatchedCov6Descriptor, Cov6Kernels,
+                           "post_link.check=metadata status=failed "
+                           "reason=AMDGPU%20metadata%20kernel%20descriptor%20"
+                           "does%20not%20match%20its%20entry%20name");
 
   struct TargetFlagCase {
     const char *Target;
