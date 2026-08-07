@@ -21,7 +21,7 @@ use reserved_fe2o3_symbols::{
     KERNEL_REGISTRATION_VERSION_V3, MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1, RESERVED_ROOT,
     TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3, TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2,
     artifact_length_symbol_v1, artifact_pointer_symbol_v1, derive_kernel_binding_id_v1,
-    host_kernel_symbol_v1,
+    host_kernel_symbol_v1, semantic_witness_length_symbol_v1, semantic_witness_pointer_symbol_v1,
 };
 use syn::{
     Data, DeriveInput, Expr, ExprArray, FnArg, ForeignItem, GenericArgument, ItemFn,
@@ -1200,27 +1200,56 @@ fn expand_general_typed_kernel_with_imports(
     });
     let host_import = host_import.expect("typed expansion requires a host import");
     let module_ident = format_ident!("{original_name}_gpu");
+    let semantic_witness_pointer_ident =
+        format_ident!("{}", semantic_witness_pointer_symbol_v1(kernel_binding));
+    let semantic_witness_length_ident =
+        format_ident!("{}", semantic_witness_length_symbol_v1(kernel_binding));
     let binding_bytes = kernel_binding.as_bytes().into_iter();
-    let generated_host_contract_bytes = generated_host_contract.as_bytes().into_iter();
+    let generated_host_contract_profile_bytes = generated_host_contract.as_bytes().into_iter();
+    let generated_host_contract_witness_bytes = generated_host_contract.as_bytes().into_iter();
     let typed_module = quote! {
         pub mod #module_ident {
+            unsafe extern "C" {
+                fn #semantic_witness_pointer_ident() -> *const u8;
+                fn #semantic_witness_length_ident() -> usize;
+            }
+
             #host_import
 
             pub type Marker = super::#type_marker_ident;
 
             const _: () = {
-                // SAFETY: the V3 backend collector must independently reconstruct
-                // and authenticate the registration's complete typed contract.
+                // SAFETY: the associated constants are only a lexical
+                // declaration. Semantic authority is obtained separately from
+                // the backend-issued, identity-bound witness accessors below.
                 unsafe impl __fe2o3_kernel_host::__generated::CompilerGeneratedKernelExpectationV1
                     for super::#type_marker_ident
                 {
                     const PROFILE:
                         __fe2o3_kernel_host::__generated::CompilerGeneratedKernelProfileV1 =
                         __fe2o3_kernel_host::__generated::CompilerGeneratedKernelProfileV1::ManifestDerivedScalarSliceV1 {
-                            generated_host_contract_identity: [#(#generated_host_contract_bytes),*],
+                            generated_host_contract_identity: [#(#generated_host_contract_profile_bytes),*],
                         };
 
                     const KERNEL_BINDING_ID_V1: [u8; 32] = [#(#binding_bytes),*];
+
+                    fn semantic_witness_v1() -> Result<
+                        __fe2o3_kernel_host::__generated::ValidatedCompilerGeneratedSemanticWitnessV1,
+                        __fe2o3_kernel_host::__generated::CompilerGeneratedSemanticWitnessErrorV1,
+                    > {
+                        // SAFETY: the backend owns this exact binding-derived
+                        // accessor pair. The host parser validates every byte
+                        // against both generated identities before issuing the
+                        // opaque authority token.
+                        unsafe {
+                            __fe2o3_kernel_host::__generated::semantic_witness_from_backend_v1(
+                                #semantic_witness_pointer_ident(),
+                                #semantic_witness_length_ident(),
+                                Self::KERNEL_BINDING_ID_V1,
+                                [#(#generated_host_contract_witness_bytes),*],
+                            )
+                        }
+                    }
                 }
             };
         }
@@ -2835,7 +2864,8 @@ mod tests {
         GeneratedHostContractIdV3, MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
         TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3, TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2,
         artifact_length_symbol_v1, artifact_pointer_symbol_v1, derive_crate_binding_id_v1,
-        derive_kernel_binding_id_v1, host_kernel_symbol_v1,
+        derive_kernel_binding_id_v1, host_kernel_symbol_v1, semantic_witness_length_symbol_v1,
+        semantic_witness_pointer_symbol_v1,
     };
     use syn::{Expr, Item, ItemFn, ItemForeignMod, Type, parse_quote};
 
@@ -3627,6 +3657,17 @@ mod tests {
             assert!(expansion.contains(&binding.to_hex()));
             assert!(expansion.contains(&contract.to_hex()));
             assert!(expansion.contains(&host_kernel_symbol_v1(binding)));
+            assert!(expansion.contains(&format!(
+                "fn {} () -> * const u8",
+                semantic_witness_pointer_symbol_v1(binding)
+            )));
+            assert!(expansion.contains(&format!(
+                "fn {} () -> usize",
+                semantic_witness_length_symbol_v1(binding)
+            )));
+            assert!(expansion.contains("fn semantic_witness_v1"));
+            assert!(expansion.contains("semantic_witness_from_backend_v1"));
+            assert!(expansion.contains("ValidatedCompilerGeneratedSemanticWitnessV1"));
             assert!(!expansion.contains("CompilerGeneratedKernelContractV1"));
             assert!(!expansion.contains("artifact_container_bytes"));
             assert!(!expansion.contains("__fe2o3_artifact_v1_"));

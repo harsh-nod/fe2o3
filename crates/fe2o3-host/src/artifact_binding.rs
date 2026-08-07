@@ -17,7 +17,10 @@ use fe2o3_artifacts::{
 use fe2o3_device::{DisjointSlice, Index1D, KernelMarkerV1};
 use fe2o3_kernel_descriptor::ValidationError as DescriptorValidationError;
 use reserved_fe2o3_symbols::{
-    MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1, TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2,
+    GENERAL_TYPED_V3_SEMANTIC_WITNESS_DOMAIN_V1, GENERAL_TYPED_V3_SEMANTIC_WITNESS_HEADER_BYTES_V1,
+    GENERAL_TYPED_V3_SEMANTIC_WITNESS_MAGIC_V1, GENERAL_TYPED_V3_SEMANTIC_WITNESS_VERSION_V1,
+    MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1, MAX_GENERAL_TYPED_V3_SEMANTIC_WITNESS_BYTES_V1,
+    TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3, TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2,
 };
 use std::fmt;
 use std::sync::Arc;
@@ -263,21 +266,105 @@ impl ValidatedArtifactSelectionV1 {
     }
 }
 
-/// Trusted backend expectation for one compiler-generated kernel.
+/// Validated semantic authority for one compiler-generated kernel expectation.
 ///
-/// This trait binds a marker to the independently generated host ABI, effects,
-/// launch, and kernel-binding expectation used to authenticate a kernel from a
-/// shared artifact. It deliberately carries no artifact bytes: Worker V2
-/// admission supplies and authenticates one shared bundle separately.
+/// This value is intentionally opaque. Legacy V2 implementations receive one
+/// only through their stronger embedded-artifact contract. General typed V3
+/// implementations receive one only after parsing the exact backend-issued
+/// witness bound to their kernel and generated host-contract identities.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[doc(hidden)]
+pub struct ValidatedCompilerGeneratedSemanticWitnessV1 {
+    profile: CompilerGeneratedKernelProfileV1,
+    kernel_binding: [u8; 32],
+    generated_host_contract: Option<[u8; 32]>,
+}
+
+impl ValidatedCompilerGeneratedSemanticWitnessV1 {
+    const fn legacy(profile: CompilerGeneratedKernelProfileV1, kernel_binding: [u8; 32]) -> Self {
+        Self {
+            profile,
+            kernel_binding,
+            generated_host_contract: None,
+        }
+    }
+
+    const fn general_v3(kernel_binding: [u8; 32], generated_host_contract: [u8; 32]) -> Self {
+        Self {
+            profile: CompilerGeneratedKernelProfileV1::ManifestDerivedScalarSliceV1 {
+                generated_host_contract_identity: generated_host_contract,
+            },
+            kernel_binding,
+            generated_host_contract: Some(generated_host_contract),
+        }
+    }
+}
+
+/// Failure while obtaining or validating compiler-generated semantic authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[doc(hidden)]
+#[non_exhaustive]
+pub enum CompilerGeneratedSemanticWitnessErrorV1 {
+    MissingBackendWitness,
+    InvalidPointer,
+    InvalidLength,
+    MagicMismatch,
+    VersionMismatch,
+    DomainMismatch,
+    KernelBindingMismatch,
+    GeneratedHostContractMismatch,
+    ProfileTagMismatch,
+    TrailingBytes,
+    WitnessSubstitution,
+}
+
+impl fmt::Display for CompilerGeneratedSemanticWitnessErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::MissingBackendWitness => {
+                "the general typed kernel has no backend-issued semantic witness"
+            }
+            Self::InvalidPointer => "the backend semantic-witness pointer is invalid",
+            Self::InvalidLength => "the backend semantic-witness length is invalid",
+            Self::MagicMismatch => "the backend semantic-witness magic does not match",
+            Self::VersionMismatch => "the backend semantic-witness version does not match",
+            Self::DomainMismatch => "the backend semantic-witness domain does not match",
+            Self::KernelBindingMismatch => {
+                "the backend semantic witness names a different kernel binding"
+            }
+            Self::GeneratedHostContractMismatch => {
+                "the backend semantic witness names a different generated host contract"
+            }
+            Self::ProfileTagMismatch => "the backend semantic-witness profile tag does not match",
+            Self::TrailingBytes => "the backend semantic witness contains trailing bytes",
+            Self::WitnessSubstitution => {
+                "the backend semantic witness was substituted across expectations"
+            }
+        })
+    }
+}
+
+impl std::error::Error for CompilerGeneratedSemanticWitnessErrorV1 {}
+
+/// Trusted generated expectation for one compiler-generated kernel.
+///
+/// The associated constants are a frontend declaration of the expected host
+/// ABI, effects, launch, and kernel binding. They are not by themselves proof
+/// that rustc accepted those semantics. General typed V3 code must additionally
+/// return a backend-issued semantic witness. The trait deliberately carries no
+/// artifact bytes: Worker V2 admission supplies and authenticates one shared
+/// bundle separately.
 ///
 /// # Safety
 ///
-/// The implementation must be emitted by the trusted compiler backend. Its
-/// profile and binding identity must describe `Self::FUNCTION` exactly,
+/// The profile and binding identity must describe `Self::FUNCTION` exactly,
 /// including the complete physical host ABI, memory effects, launch contract,
-/// and all behavior relevant to safe loading and dispatch. A false
-/// implementation can authorize dispatch of native code under the wrong Rust
-/// signature or safety contract.
+/// and all behavior relevant to safe loading and dispatch. A general typed V3
+/// implementation emitted by the lexical macro must obtain its witness through
+/// the reserved backend accessors and validate it against both associated
+/// identities. Other implementations are an explicit unsafe trust boundary. A
+/// false implementation can authorize dispatch of native code under the wrong
+/// Rust signature or safety contract.
 #[doc(hidden)]
 pub unsafe trait CompilerGeneratedKernelExpectationV1: KernelMarkerV1 {
     /// Versioned host ABI and memory-effect profile expected by generated code.
@@ -285,6 +372,172 @@ pub unsafe trait CompilerGeneratedKernelExpectationV1: KernelMarkerV1 {
 
     /// Full backend-validated identity used by private host linker symbols.
     const KERNEL_BINDING_ID_V1: [u8; 32];
+
+    /// Obtains semantic authority for this exact expectation.
+    ///
+    /// Embedded-artifact V2 contracts already carry a stronger backend trust
+    /// boundary and use this default. General typed V3 expectations fail closed
+    /// until their generated implementation overrides this method and validates
+    /// the backend-issued witness.
+    fn semantic_witness_v1()
+    -> Result<ValidatedCompilerGeneratedSemanticWitnessV1, CompilerGeneratedSemanticWitnessErrorV1>
+    {
+        match Self::PROFILE {
+            CompilerGeneratedKernelProfileV1::ManifestDerivedScalarSliceV1 { .. } => {
+                Err(CompilerGeneratedSemanticWitnessErrorV1::MissingBackendWitness)
+            }
+            profile => Ok(ValidatedCompilerGeneratedSemanticWitnessV1::legacy(
+                profile,
+                Self::KERNEL_BINDING_ID_V1,
+            )),
+        }
+    }
+}
+
+/// Obtains an opaque semantic-authority token for one exact generated
+/// expectation and rejects cross-kernel token substitution.
+#[doc(hidden)]
+pub fn validate_compiler_generated_semantic_witness_v1<K: CompilerGeneratedKernelExpectationV1>()
+-> Result<ValidatedCompilerGeneratedSemanticWitnessV1, CompilerGeneratedSemanticWitnessErrorV1> {
+    let witness = K::semantic_witness_v1()?;
+    let expected_contract = match K::PROFILE {
+        CompilerGeneratedKernelProfileV1::ManifestDerivedScalarSliceV1 {
+            generated_host_contract_identity,
+        } => Some(generated_host_contract_identity),
+        CompilerGeneratedKernelProfileV1::TypedVecAddF32V1
+        | CompilerGeneratedKernelProfileV1::TypedVecAddF32RustcLayoutV2 => None,
+    };
+    if witness.profile != K::PROFILE
+        || witness.kernel_binding != K::KERNEL_BINDING_ID_V1
+        || witness.generated_host_contract != expected_contract
+    {
+        return Err(CompilerGeneratedSemanticWitnessErrorV1::WitnessSubstitution);
+    }
+    Ok(witness)
+}
+
+/// Parses the immutable witness bytes returned by one reserved backend accessor
+/// pair and binds them to an exact general typed V3 expectation.
+///
+/// # Safety
+///
+/// `pointer` must be non-null and point to one live, immutable allocation of
+/// exactly `length` initialized bytes. The allocation must remain live and
+/// immutable for the entire call. The range must not wrap the address space.
+/// Only compiler-generated unsafe trait implementations may call this function
+/// with values returned by their exact backend-owned accessor pair.
+#[doc(hidden)]
+pub unsafe fn semantic_witness_from_backend_v1(
+    pointer: *const u8,
+    length: usize,
+    expected_kernel_binding: [u8; 32],
+    expected_generated_host_contract: [u8; 32],
+) -> Result<ValidatedCompilerGeneratedSemanticWitnessV1, CompilerGeneratedSemanticWitnessErrorV1> {
+    if pointer.is_null() {
+        return Err(CompilerGeneratedSemanticWitnessErrorV1::InvalidPointer);
+    }
+    if !(GENERAL_TYPED_V3_SEMANTIC_WITNESS_HEADER_BYTES_V1
+        ..=MAX_GENERAL_TYPED_V3_SEMANTIC_WITNESS_BYTES_V1)
+        .contains(&length)
+        || length > isize::MAX as usize
+        || pointer.addr().checked_add(length).is_none()
+    {
+        return Err(CompilerGeneratedSemanticWitnessErrorV1::InvalidLength);
+    }
+
+    // SAFETY: the caller establishes the allocation, initialization,
+    // immutability, range, and lifetime requirements above.
+    let bytes = unsafe { core::slice::from_raw_parts(pointer, length) };
+    parse_general_typed_v3_semantic_witness_v1(
+        bytes,
+        expected_kernel_binding,
+        expected_generated_host_contract,
+    )
+}
+
+fn parse_general_typed_v3_semantic_witness_v1(
+    bytes: &[u8],
+    expected_kernel_binding: [u8; 32],
+    expected_generated_host_contract: [u8; 32],
+) -> Result<ValidatedCompilerGeneratedSemanticWitnessV1, CompilerGeneratedSemanticWitnessErrorV1> {
+    if !(GENERAL_TYPED_V3_SEMANTIC_WITNESS_HEADER_BYTES_V1
+        ..=MAX_GENERAL_TYPED_V3_SEMANTIC_WITNESS_BYTES_V1)
+        .contains(&bytes.len())
+    {
+        return Err(CompilerGeneratedSemanticWitnessErrorV1::InvalidLength);
+    }
+
+    let magic = u64::from_le_bytes(bytes[0..8].try_into().expect("fixed witness magic range"));
+    if magic != GENERAL_TYPED_V3_SEMANTIC_WITNESS_MAGIC_V1 {
+        return Err(CompilerGeneratedSemanticWitnessErrorV1::MagicMismatch);
+    }
+    let version = u16::from_le_bytes(
+        bytes[8..10]
+            .try_into()
+            .expect("fixed witness version range"),
+    );
+    if version != GENERAL_TYPED_V3_SEMANTIC_WITNESS_VERSION_V1 {
+        return Err(CompilerGeneratedSemanticWitnessErrorV1::VersionMismatch);
+    }
+    let domain = u16::from_le_bytes(
+        bytes[10..12]
+            .try_into()
+            .expect("fixed witness domain range"),
+    );
+    if domain != GENERAL_TYPED_V3_SEMANTIC_WITNESS_DOMAIN_V1 {
+        return Err(CompilerGeneratedSemanticWitnessErrorV1::DomainMismatch);
+    }
+
+    let declared_length = usize::try_from(u32::from_le_bytes(
+        bytes[12..16]
+            .try_into()
+            .expect("fixed witness length range"),
+    ))
+    .map_err(|_| CompilerGeneratedSemanticWitnessErrorV1::InvalidLength)?;
+    if !(GENERAL_TYPED_V3_SEMANTIC_WITNESS_HEADER_BYTES_V1
+        ..=MAX_GENERAL_TYPED_V3_SEMANTIC_WITNESS_BYTES_V1)
+        .contains(&declared_length)
+    {
+        return Err(CompilerGeneratedSemanticWitnessErrorV1::InvalidLength);
+    }
+    if bytes.len() > declared_length {
+        return Err(CompilerGeneratedSemanticWitnessErrorV1::TrailingBytes);
+    }
+    if bytes.len() != declared_length {
+        return Err(CompilerGeneratedSemanticWitnessErrorV1::InvalidLength);
+    }
+
+    if bytes[16..48] != expected_kernel_binding {
+        return Err(CompilerGeneratedSemanticWitnessErrorV1::KernelBindingMismatch);
+    }
+    if bytes[48..80] != expected_generated_host_contract {
+        return Err(CompilerGeneratedSemanticWitnessErrorV1::GeneratedHostContractMismatch);
+    }
+
+    let profile_length = usize::from(u16::from_le_bytes(
+        bytes[80..82]
+            .try_into()
+            .expect("fixed witness profile-length range"),
+    ));
+    let profile_end = GENERAL_TYPED_V3_SEMANTIC_WITNESS_HEADER_BYTES_V1
+        .checked_add(profile_length)
+        .ok_or(CompilerGeneratedSemanticWitnessErrorV1::InvalidLength)?;
+    if profile_end < declared_length {
+        return Err(CompilerGeneratedSemanticWitnessErrorV1::TrailingBytes);
+    }
+    if profile_end != declared_length {
+        return Err(CompilerGeneratedSemanticWitnessErrorV1::InvalidLength);
+    }
+    if bytes[GENERAL_TYPED_V3_SEMANTIC_WITNESS_HEADER_BYTES_V1..profile_end]
+        != *TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3.as_bytes()
+    {
+        return Err(CompilerGeneratedSemanticWitnessErrorV1::ProfileTagMismatch);
+    }
+
+    Ok(ValidatedCompilerGeneratedSemanticWitnessV1::general_v3(
+        expected_kernel_binding,
+        expected_generated_host_contract,
+    ))
 }
 
 /// Trusted backend contract for one embedded compiler-generated artifact.
@@ -1370,6 +1623,8 @@ mod tests {
     struct VecAdd;
     struct WrongLogicalName;
     struct WrongExportName;
+    struct LegacyExpectation;
+    struct GeneralExpectationWithoutBackend;
 
     fn marker_function() {}
 
@@ -1401,6 +1656,190 @@ mod tests {
         const EXPORT_NAME: &'static str = "wrong_export.kd";
         const FUNCTION: Self::Function = marker_function;
         const REGISTRATION: &'static Self::Registration = &();
+    }
+
+    unsafe impl KernelMarkerV1 for LegacyExpectation {
+        type Function = fn();
+        type Registration = ();
+
+        const LOGICAL_NAME: &'static str = "legacy";
+        const EXPORT_NAME: &'static str = "legacy";
+        const FUNCTION: Self::Function = marker_function;
+        const REGISTRATION: &'static Self::Registration = &();
+    }
+
+    unsafe impl CompilerGeneratedKernelExpectationV1 for LegacyExpectation {
+        const PROFILE: CompilerGeneratedKernelProfileV1 =
+            CompilerGeneratedKernelProfileV1::TypedVecAddF32RustcLayoutV2;
+        const KERNEL_BINDING_ID_V1: [u8; 32] = [0x31; 32];
+    }
+
+    unsafe impl KernelMarkerV1 for GeneralExpectationWithoutBackend {
+        type Function = fn();
+        type Registration = ();
+
+        const LOGICAL_NAME: &'static str = "general";
+        const EXPORT_NAME: &'static str = "general";
+        const FUNCTION: Self::Function = marker_function;
+        const REGISTRATION: &'static Self::Registration = &();
+    }
+
+    unsafe impl CompilerGeneratedKernelExpectationV1 for GeneralExpectationWithoutBackend {
+        const PROFILE: CompilerGeneratedKernelProfileV1 =
+            CompilerGeneratedKernelProfileV1::ManifestDerivedScalarSliceV1 {
+                generated_host_contract_identity: [0x42; 32],
+            };
+        const KERNEL_BINDING_ID_V1: [u8; 32] = [0x41; 32];
+    }
+
+    fn general_v3_semantic_witness_bytes(
+        kernel_binding: [u8; 32],
+        generated_host_contract: [u8; 32],
+    ) -> Vec<u8> {
+        let profile = TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3.as_bytes();
+        let length = GENERAL_TYPED_V3_SEMANTIC_WITNESS_HEADER_BYTES_V1 + profile.len();
+        let mut bytes = Vec::with_capacity(length);
+        bytes.extend_from_slice(&GENERAL_TYPED_V3_SEMANTIC_WITNESS_MAGIC_V1.to_le_bytes());
+        bytes.extend_from_slice(&GENERAL_TYPED_V3_SEMANTIC_WITNESS_VERSION_V1.to_le_bytes());
+        bytes.extend_from_slice(&GENERAL_TYPED_V3_SEMANTIC_WITNESS_DOMAIN_V1.to_le_bytes());
+        bytes.extend_from_slice(
+            &u32::try_from(length)
+                .expect("test witness length fits u32")
+                .to_le_bytes(),
+        );
+        bytes.extend_from_slice(&kernel_binding);
+        bytes.extend_from_slice(&generated_host_contract);
+        bytes.extend_from_slice(
+            &u16::try_from(profile.len())
+                .expect("test profile length fits u16")
+                .to_le_bytes(),
+        );
+        bytes.extend_from_slice(profile);
+        assert_eq!(bytes.len(), length);
+        bytes
+    }
+
+    fn parse_test_semantic_witness(
+        bytes: &[u8],
+        kernel_binding: [u8; 32],
+        generated_host_contract: [u8; 32],
+    ) -> Result<ValidatedCompilerGeneratedSemanticWitnessV1, CompilerGeneratedSemanticWitnessErrorV1>
+    {
+        // SAFETY: `bytes` is one initialized immutable allocation that remains
+        // live for the complete parser call.
+        unsafe {
+            semantic_witness_from_backend_v1(
+                bytes.as_ptr(),
+                bytes.len(),
+                kernel_binding,
+                generated_host_contract,
+            )
+        }
+    }
+
+    #[test]
+    fn general_v3_semantic_witness_is_exact_and_identity_bound() {
+        let binding = [0x51; 32];
+        let contract = [0x52; 32];
+        let bytes = general_v3_semantic_witness_bytes(binding, contract);
+        let witness = parse_test_semantic_witness(&bytes, binding, contract).unwrap();
+
+        assert_eq!(
+            witness.profile,
+            CompilerGeneratedKernelProfileV1::ManifestDerivedScalarSliceV1 {
+                generated_host_contract_identity: contract,
+            }
+        );
+        assert_eq!(witness.kernel_binding, binding);
+        assert_eq!(witness.generated_host_contract, Some(contract));
+    }
+
+    #[test]
+    fn general_v3_semantic_witness_rejects_malformed_and_substituted_payloads() {
+        let binding = [0x61; 32];
+        let contract = [0x62; 32];
+        let canonical = general_v3_semantic_witness_bytes(binding, contract);
+
+        let mut changed = canonical.clone();
+        changed[0] ^= 1;
+        assert_eq!(
+            parse_test_semantic_witness(&changed, binding, contract),
+            Err(CompilerGeneratedSemanticWitnessErrorV1::MagicMismatch)
+        );
+
+        let mut changed = canonical.clone();
+        changed[8..10].copy_from_slice(&2_u16.to_le_bytes());
+        assert_eq!(
+            parse_test_semantic_witness(&changed, binding, contract),
+            Err(CompilerGeneratedSemanticWitnessErrorV1::VersionMismatch)
+        );
+
+        let mut changed = canonical.clone();
+        changed[10..12].copy_from_slice(&2_u16.to_le_bytes());
+        assert_eq!(
+            parse_test_semantic_witness(&changed, binding, contract),
+            Err(CompilerGeneratedSemanticWitnessErrorV1::DomainMismatch)
+        );
+
+        let mut changed = canonical.clone();
+        let too_long = u32::try_from(changed.len() + 1).unwrap();
+        changed[12..16].copy_from_slice(&too_long.to_le_bytes());
+        assert_eq!(
+            parse_test_semantic_witness(&changed, binding, contract),
+            Err(CompilerGeneratedSemanticWitnessErrorV1::InvalidLength)
+        );
+
+        assert_eq!(
+            parse_test_semantic_witness(&canonical, [0x63; 32], contract),
+            Err(CompilerGeneratedSemanticWitnessErrorV1::KernelBindingMismatch)
+        );
+        assert_eq!(
+            parse_test_semantic_witness(&canonical, binding, [0x64; 32]),
+            Err(CompilerGeneratedSemanticWitnessErrorV1::GeneratedHostContractMismatch)
+        );
+
+        let mut changed = canonical.clone();
+        *changed.last_mut().expect("profile tag is nonempty") ^= 1;
+        assert_eq!(
+            parse_test_semantic_witness(&changed, binding, contract),
+            Err(CompilerGeneratedSemanticWitnessErrorV1::ProfileTagMismatch)
+        );
+
+        let mut changed = canonical.clone();
+        changed.push(0);
+        assert_eq!(
+            parse_test_semantic_witness(&changed, binding, contract),
+            Err(CompilerGeneratedSemanticWitnessErrorV1::TrailingBytes)
+        );
+
+        let mut changed = canonical.clone();
+        changed[80..82].copy_from_slice(&0_u16.to_le_bytes());
+        assert_eq!(
+            parse_test_semantic_witness(&changed, binding, contract),
+            Err(CompilerGeneratedSemanticWitnessErrorV1::TrailingBytes)
+        );
+
+        assert_eq!(
+            parse_general_typed_v3_semantic_witness_v1(&[], binding, contract),
+            Err(CompilerGeneratedSemanticWitnessErrorV1::InvalidLength)
+        );
+    }
+
+    #[test]
+    fn semantic_authority_defaults_preserve_v2_and_fail_closed_for_general_v3() {
+        let legacy =
+            validate_compiler_generated_semantic_witness_v1::<LegacyExpectation>().unwrap();
+        assert_eq!(
+            legacy.profile,
+            CompilerGeneratedKernelProfileV1::TypedVecAddF32RustcLayoutV2
+        );
+        assert_eq!(legacy.kernel_binding, [0x31; 32]);
+        assert_eq!(legacy.generated_host_contract, None);
+
+        assert_eq!(
+            validate_compiler_generated_semantic_witness_v1::<GeneralExpectationWithoutBackend>(),
+            Err(CompilerGeneratedSemanticWitnessErrorV1::MissingBackendWitness)
+        );
     }
 
     #[derive(Clone)]

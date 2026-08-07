@@ -91,9 +91,22 @@ pub const MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1: &str =
 pub const TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3: &str =
     MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1;
 
+/// ASCII `FE2O3SMW`, interpreted as a little-endian `u64`.
+///
+/// This identifies the backend-issued semantic-witness wire format. It is
+/// intentionally distinct from kernel registrations and artifact containers.
+pub const GENERAL_TYPED_V3_SEMANTIC_WITNESS_MAGIC_V1: u64 = u64::from_le_bytes(*b"FE2O3SMW");
+pub const GENERAL_TYPED_V3_SEMANTIC_WITNESS_VERSION_V1: u16 = 1;
+pub const GENERAL_TYPED_V3_SEMANTIC_WITNESS_DOMAIN_V1: u16 = 1;
+/// Fixed bytes before the canonical profile tag in a V1 semantic witness.
+pub const GENERAL_TYPED_V3_SEMANTIC_WITNESS_HEADER_BYTES_V1: usize = 82;
+/// Hard upper bound accepted by host witness parsing.
+pub const MAX_GENERAL_TYPED_V3_SEMANTIC_WITNESS_BYTES_V1: usize = 256;
+
 const CRATE_BINDING_DOMAIN_V1: &[u8] = b"fe2o3.crate-binding.v1\0";
 const KERNEL_BINDING_DOMAIN_V1: &[u8] = b"fe2o3.kernel-binding.v1\0";
 const ARTIFACT_ACCESSOR_PREFIX_V1: &str = "__fe2o3_artifact_v1_";
+const SEMANTIC_WITNESS_ACCESSOR_PREFIX_V1: &str = "__fe2o3_semantic_witness_v1_";
 const HOST_KERNEL_PREFIX_V1: &str = "__fe2o3_host_kernel_v1_";
 const BINDING_ID_BYTES: usize = 32;
 const BINDING_ID_HEX_BYTES: usize = BINDING_ID_BYTES * 2;
@@ -790,6 +803,24 @@ pub fn artifact_length_symbol_v1(binding: KernelBindingIdV1) -> String {
     format!("{ARTIFACT_ACCESSOR_PREFIX_V1}{}_len", binding.to_hex())
 }
 
+/// Returns the private semantic-witness pointer accessor for one exact kernel
+/// binding.
+pub fn semantic_witness_pointer_symbol_v1(binding: KernelBindingIdV1) -> String {
+    format!(
+        "{SEMANTIC_WITNESS_ACCESSOR_PREFIX_V1}{}_ptr",
+        binding.to_hex()
+    )
+}
+
+/// Returns the private semantic-witness length accessor for one exact kernel
+/// binding.
+pub fn semantic_witness_length_symbol_v1(binding: KernelBindingIdV1) -> String {
+    format!(
+        "{SEMANTIC_WITNESS_ACCESSOR_PREFIX_V1}{}_len",
+        binding.to_hex()
+    )
+}
+
 /// Returns the reserved host symbol for one exact registered kernel function.
 pub fn host_kernel_symbol_v1(binding: KernelBindingIdV1) -> String {
     format!("{HOST_KERNEL_PREFIX_V1}{}", binding.to_hex())
@@ -866,6 +897,14 @@ mod tests {
             TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3,
             MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1
         );
+        assert_eq!(
+            GENERAL_TYPED_V3_SEMANTIC_WITNESS_MAGIC_V1.to_le_bytes(),
+            *b"FE2O3SMW"
+        );
+        assert_eq!(GENERAL_TYPED_V3_SEMANTIC_WITNESS_VERSION_V1, 1);
+        assert_eq!(GENERAL_TYPED_V3_SEMANTIC_WITNESS_DOMAIN_V1, 1);
+        assert_eq!(GENERAL_TYPED_V3_SEMANTIC_WITNESS_HEADER_BYTES_V1, 82);
+        assert_eq!(MAX_GENERAL_TYPED_V3_SEMANTIC_WITNESS_BYTES_V1, 256);
     }
 
     #[test]
@@ -936,6 +975,14 @@ mod tests {
         assert_eq!(
             artifact_length_symbol_v1(kernel),
             format!("__fe2o3_artifact_v1_{hex}_len")
+        );
+        assert_eq!(
+            semantic_witness_pointer_symbol_v1(kernel),
+            format!("__fe2o3_semantic_witness_v1_{hex}_ptr")
+        );
+        assert_eq!(
+            semantic_witness_length_symbol_v1(kernel),
+            format!("__fe2o3_semantic_witness_v1_{hex}_len")
         );
         assert_eq!(
             host_kernel_symbol_v1(kernel),

@@ -37,8 +37,10 @@ pub use artifact_binding::{
 pub use artifact_binding::{
     AuthenticatedKernelArtifactV1, CompilerGeneratedKernelContractV1,
     CompilerGeneratedKernelExpectationV1, CompilerGeneratedKernelProfileV1,
-    GeneratedArtifactAuthenticationError, GeneratedKernelBindingV1, GeneratedKernelProfileError,
-    GeneratedMarkerBindingError,
+    CompilerGeneratedSemanticWitnessErrorV1, GeneratedArtifactAuthenticationError,
+    GeneratedKernelBindingV1, GeneratedKernelProfileError, GeneratedMarkerBindingError,
+    ValidatedCompilerGeneratedSemanticWitnessV1, semantic_witness_from_backend_v1,
+    validate_compiler_generated_semantic_witness_v1,
 };
 pub use cooperative_launch::{
     CooperativeAdmissionError, CooperativeLaunchAdmission, CooperativeLaunchError,
@@ -115,17 +117,19 @@ pub mod __generated {
     pub use crate::{
         AuthenticatedKernelArtifactV1, CompilerGeneratedArgumentLayoutV1,
         CompilerGeneratedKernelContractV1, CompilerGeneratedKernelExpectationV1,
-        CompilerGeneratedKernelProfileV1, GeneratedAdmittedLaunch, GeneratedArgumentFieldProperty,
-        GeneratedArgumentLayoutError, GeneratedArgumentPackError, GeneratedArgumentPackingError,
-        GeneratedArgumentPackingPlanV1, GeneratedArtifactAuthenticationError,
-        GeneratedDeviceScalarV1, GeneratedKernelBindingV1, GeneratedKernelProfileError,
-        GeneratedMarkerBindingError, GeneratedPackingComponentKindV1, GeneratedPackingComponentV1,
-        GeneratedReadDeviceSlice, GeneratedReadWriteDeviceSlice, GeneratedVecAddKernelV1,
-        GeneratedVecAddLoadError, GeneratedVecAddPrepareError, GeneratedVecAddPreparedV1,
-        GeneratedVecAddProfileError, GeneratedWorkerV2VecAddBindError,
+        CompilerGeneratedKernelProfileV1, CompilerGeneratedSemanticWitnessErrorV1,
+        GeneratedAdmittedLaunch, GeneratedArgumentFieldProperty, GeneratedArgumentLayoutError,
+        GeneratedArgumentPackError, GeneratedArgumentPackingError, GeneratedArgumentPackingPlanV1,
+        GeneratedArtifactAuthenticationError, GeneratedDeviceScalarV1, GeneratedKernelBindingV1,
+        GeneratedKernelProfileError, GeneratedMarkerBindingError, GeneratedPackingComponentKindV1,
+        GeneratedPackingComponentV1, GeneratedReadDeviceSlice, GeneratedReadWriteDeviceSlice,
+        GeneratedVecAddKernelV1, GeneratedVecAddLoadError, GeneratedVecAddPrepareError,
+        GeneratedVecAddPreparedV1, GeneratedVecAddProfileError, GeneratedWorkerV2VecAddBindError,
         GeneratedWorkerV2VecAddCompletionV1, GeneratedWorkerV2VecAddExecutorV1,
         GeneratedWorkerV2VecAddPrepareError, GeneratedWorkerV2VecAddPreparedV1,
         GeneratedWriteDeviceSlice, LoadedKernelLoadError,
+        ValidatedCompilerGeneratedSemanticWitnessV1, semantic_witness_from_backend_v1,
+        validate_compiler_generated_semantic_witness_v1,
     };
 
     /// Constructs the exact immutable slice promised by a generated backend

@@ -1,0 +1,12 @@
+error[E0451]: fields `profile`, `kernel_binding` and `generated_host_contract` of struct `fe2o3_host::ValidatedCompilerGeneratedSemanticWitnessV1` are private
+  --> tests/ui/authenticated_artifact/semantic_witness_fields_are_private.rs:7:9
+   |
+ 6 |     let _forged = ValidatedCompilerGeneratedSemanticWitnessV1 {
+   |                   ------------------------------------------- in this type
+ 7 |         profile: CompilerGeneratedKernelProfileV1::ManifestDerivedScalarSliceV1 {
+   |         ^^^^^^^ private field
+...
+10 |         kernel_binding: [1; 32],
+   |         ^^^^^^^^^^^^^^ private field
+11 |         generated_host_contract: Some([2; 32]),
+   |         ^^^^^^^^^^^^^^^^^^^^^^^ private field

@@ -7,6 +7,13 @@ pub mod __generated {
         },
     }
 
+    pub struct ValidatedCompilerGeneratedSemanticWitnessV1;
+
+    #[derive(Debug)]
+    pub enum CompilerGeneratedSemanticWitnessErrorV1 {
+        MissingBackendWitness,
+    }
+
     /// Minimal fixture copy of the shared-bundle expectation contract.
     ///
     /// # Safety
@@ -15,6 +22,13 @@ pub mod __generated {
     pub unsafe trait CompilerGeneratedKernelExpectationV1 {
         const PROFILE: CompilerGeneratedKernelProfileV1;
         const KERNEL_BINDING_ID_V1: [u8; 32];
+
+        fn semantic_witness_v1() -> Result<
+            ValidatedCompilerGeneratedSemanticWitnessV1,
+            CompilerGeneratedSemanticWitnessErrorV1,
+        > {
+            Err(CompilerGeneratedSemanticWitnessErrorV1::MissingBackendWitness)
+        }
     }
 
     /// Minimal fixture copy of the host contract consumed by generated bindings.
@@ -47,5 +61,20 @@ pub mod __generated {
         _length: usize,
     ) -> &'static [u8] {
         &[]
+    }
+
+    /// Minimal fixture copy of the V3 semantic-witness parser SPI.
+    ///
+    /// # Safety
+    ///
+    /// The pointer and length must describe one immutable backend allocation.
+    pub unsafe fn semantic_witness_from_backend_v1(
+        _pointer: *const u8,
+        _length: usize,
+        _kernel_binding: [u8; 32],
+        _generated_host_contract: [u8; 32],
+    ) -> Result<ValidatedCompilerGeneratedSemanticWitnessV1, CompilerGeneratedSemanticWitnessErrorV1>
+    {
+        Err(CompilerGeneratedSemanticWitnessErrorV1::MissingBackendWitness)
     }
 }
