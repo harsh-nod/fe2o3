@@ -18,6 +18,8 @@ use rustix::net::{SendAncillaryBuffer, SendAncillaryMessage, SendFlags, sendmsg}
 use serde_json::{Value as JsonValue, json};
 use sha2::{Digest, Sha256};
 
+use fe2o3_hsaco_finalize::finalize_unfinalized;
+
 include!("../../fe2o3-hsaco-finalize/tests/fixtures/worker_v2_hsaco_test_support.rs");
 
 const WORKER_ID: &str = "cargo-fe2o3-fixture-worker-v1";
@@ -170,6 +172,114 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+fn descriptor_identity(domain: &[u8], descriptor: &[u8]) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(domain);
+    digest.update((descriptor.len() as u64).to_le_bytes());
+    digest.update(descriptor);
+    digest.finalize().into()
+}
+
+fn descriptor_u16(bytes: &mut Vec<u8>, value: u16) {
+    bytes.extend_from_slice(&value.to_le_bytes());
+}
+
+fn descriptor_u32(bytes: &mut Vec<u8>, value: u32) {
+    bytes.extend_from_slice(&value.to_le_bytes());
+}
+
+fn descriptor_text(bytes: &mut Vec<u8>, value: &str) {
+    descriptor_u16(bytes, value.len() as u16);
+    bytes.extend_from_slice(value.as_bytes());
+}
+
+fn cov6_descriptor_table() -> Vec<u8> {
+    const RUST_TYPE_DOMAIN: &[u8] = b"FE2O3/RUST-TYPE/V1\0";
+    const DEVICE_LAYOUT_DOMAIN: &[u8] = b"FE2O3/DEVICE-LAYOUT/V1\0";
+    const SOURCE_DESCRIPTOR: &[u8] = &[2, 10, 0, 0];
+    const LAYOUT_DESCRIPTOR: &[u8] = &[2, 10, 16, 0, 8, 0, 8, 8, 0, 0, 0, 0];
+
+    let source_identity = descriptor_identity(RUST_TYPE_DOMAIN, SOURCE_DESCRIPTOR);
+    let layout_identity = descriptor_identity(DEVICE_LAYOUT_DOMAIN, LAYOUT_DESCRIPTOR);
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"FE2O3KD\0");
+    descriptor_u16(&mut bytes, 1);
+    descriptor_u16(&mut bytes, 0);
+    descriptor_u32(&mut bytes, 0);
+    bytes.extend_from_slice(&[0; 32]);
+    bytes.extend_from_slice(&[6, 8, 1, 0]);
+    descriptor_text(&mut bytes, "rustc");
+    descriptor_text(&mut bytes, "fixture");
+    bytes.extend_from_slice(&[0x66; 20]);
+    descriptor_text(&mut bytes, "cargo-fe2o3-test");
+    descriptor_text(&mut bytes, "fixture");
+    descriptor_text(&mut bytes, "gfx942:xnack-");
+    descriptor_u16(&mut bytes, 1);
+    descriptor_u16(&mut bytes, 1);
+    descriptor_u16(&mut bytes, 1);
+    descriptor_u16(&mut bytes, 0);
+
+    bytes.extend_from_slice(&source_identity);
+    bytes.extend_from_slice(SOURCE_DESCRIPTOR);
+    bytes.extend_from_slice(&layout_identity);
+    bytes.extend_from_slice(LAYOUT_DESCRIPTOR);
+
+    bytes.extend_from_slice(&[0x61; 32]);
+    descriptor_text(&mut bytes, "workflow_kernel");
+    descriptor_text(&mut bytes, "workflow_kernel");
+    descriptor_text(&mut bytes, "workflow_kernel.kd");
+    bytes.extend_from_slice(&[1, 1, 1, 0]);
+    bytes.extend_from_slice(&[0x62; 32]);
+    bytes.extend_from_slice(&[0x63; 32]);
+    bytes.extend_from_slice(&[2, 1, 1, 0]);
+    bytes.extend_from_slice(&[0x64; 32]);
+    bytes.extend_from_slice(&[0x65; 32]);
+    descriptor_u16(&mut bytes, 0);
+
+    bytes.extend_from_slice(&[1, 1, 0, 0]);
+    descriptor_u32(&mut bytes, 256);
+    descriptor_u32(&mut bytes, 1);
+    descriptor_u32(&mut bytes, 1);
+    descriptor_u32(&mut bytes, u32::MAX);
+    descriptor_u32(&mut bytes, 1);
+    descriptor_u32(&mut bytes, 1);
+    descriptor_u32(&mut bytes, 256);
+    descriptor_u32(&mut bytes, 0);
+    descriptor_u32(&mut bytes, 64 * 1024);
+
+    descriptor_u16(&mut bytes, 1);
+    descriptor_u16(&mut bytes, 2);
+    descriptor_u32(&mut bytes, 16);
+    descriptor_u32(&mut bytes, 272);
+    descriptor_u32(&mut bytes, 8);
+
+    descriptor_u16(&mut bytes, 0);
+    descriptor_u16(&mut bytes, 0);
+    descriptor_text(&mut bytes, "values");
+    bytes.extend_from_slice(&source_identity);
+    bytes.extend_from_slice(&layout_identity);
+    bytes.extend_from_slice(&[2, 2, 2, 0]);
+    descriptor_u16(&mut bytes, 2);
+    descriptor_u16(&mut bytes, 0);
+
+    bytes.extend_from_slice(&[2, 0, 2, 2]);
+    descriptor_u32(&mut bytes, 0);
+    descriptor_u16(&mut bytes, 8);
+    descriptor_u16(&mut bytes, 8);
+    descriptor_u16(&mut bytes, 0);
+    descriptor_u16(&mut bytes, 0);
+    bytes.extend_from_slice(&[3, 8, 1, 1]);
+    descriptor_u32(&mut bytes, 8);
+    descriptor_u16(&mut bytes, 8);
+    descriptor_u16(&mut bytes, 8);
+    descriptor_u16(&mut bytes, 0);
+    descriptor_u16(&mut bytes, 0);
+
+    let total_len = bytes.len() as u32;
+    bytes[12..16].copy_from_slice(&total_len.to_le_bytes());
+    bytes
+}
+
 fn write_config(directory: &TestDirectory, selects_invocation: bool) -> PathBuf {
     write_config_with_output(directory, selects_invocation, None)
 }
@@ -178,6 +288,15 @@ fn write_config_with_output(
     directory: &TestDirectory,
     selects_invocation: bool,
     worker_output: Option<&[u8]>,
+) -> PathBuf {
+    write_config_with_output_and_cov(directory, selects_invocation, worker_output, 5)
+}
+
+fn write_config_with_output_and_cov(
+    directory: &TestDirectory,
+    selects_invocation: bool,
+    worker_output: Option<&[u8]>,
+    code_object_version: u8,
 ) -> PathBuf {
     let worker_bytes = fs::read(worker_fixture()).unwrap();
     let selected_source = if selects_invocation {
@@ -204,7 +323,7 @@ fn write_config_with_output(
             "timeout_ms": 2000
         },
         "link_options": [
-            {"name": "code-object-version", "value": "5"},
+            {"name": "code-object-version", "value": code_object_version.to_string()},
             {"name": "opt-level", "value": "2"},
             {"name": "strip-debug", "value": "true"},
             {"name": "verify-each", "value": "true"}
@@ -233,10 +352,32 @@ fn run_wrapper(directory: &TestDirectory, config: Option<&Path>, rustc_mode: &st
     command.output().unwrap()
 }
 
+fn run_wrapper_with_options(
+    directory: &TestDirectory,
+    config: &Path,
+    rustc_mode: &str,
+    cov6: bool,
+    fault: Option<&str>,
+) -> Output {
+    let (mut command, _broker) =
+        wrapper_command_with_options(directory, Some(config), rustc_mode, cov6, fault);
+    command.output().unwrap()
+}
+
 fn wrapper_command(
     directory: &TestDirectory,
     config: Option<&Path>,
     rustc_mode: &str,
+) -> (Command, TestCapabilityBroker) {
+    wrapper_command_with_options(directory, config, rustc_mode, false, None)
+}
+
+fn wrapper_command_with_options(
+    directory: &TestDirectory,
+    config: Option<&Path>,
+    rustc_mode: &str,
+    cov6: bool,
+    fault: Option<&str>,
 ) -> (Command, TestCapabilityBroker) {
     let source = directory.0.join("workflow_fixture.rs");
     fs::write(&source, "fn main() {}\n").unwrap();
@@ -267,6 +408,12 @@ fn wrapper_command(
         .arg("-Cmetadata=worker-v2-test");
     if let Some(config) = config {
         command.env("FE2O3_WORKER_V2_CONFIG_V2", config);
+    }
+    if cov6 {
+        command.env("FE2O3_TEST_WORKER_V2_COV6", "1");
+    }
+    if let Some(fault) = fault {
+        command.env("FE2O3_TEST_WORKER_V2_FAULT_POINT_V1", fault);
     }
     (command, broker)
 }
@@ -311,6 +458,77 @@ fn stage_ready_restart(directory: &TestDirectory) -> (PathBuf, PathBuf) {
     (config, artifact_dir)
 }
 
+struct PublicationFixture {
+    config: PathBuf,
+    raw_worker_output: Vec<u8>,
+    expected_publication: Vec<u8>,
+    cov6: bool,
+}
+
+fn publication_fixture(directory: &TestDirectory, cov6: bool) -> PublicationFixture {
+    let table = cov6.then(cov6_descriptor_table);
+    let built = fixture_with_descriptor_table(
+        FixtureOptions {
+            target: "gfx942:xnack-",
+            code_object_version: if cov6 { 4 } else { 3 },
+            entry: "workflow_kernel",
+            descriptor: "workflow_kernel.kd",
+            ..FixtureOptions::valid()
+        },
+        table.as_deref(),
+    );
+    let provider = built.bytes;
+    let mut raw_worker_output = provider.clone();
+    raw_worker_output[built.text_offset] ^= 1;
+    let expected_publication = if cov6 {
+        finalize_unfinalized(&raw_worker_output)
+            .unwrap()
+            .as_bytes()
+            .to_vec()
+    } else {
+        raw_worker_output.clone()
+    };
+    let config = write_config_with_output_and_cov(
+        directory,
+        true,
+        Some(&provider),
+        if cov6 { 6 } else { 5 },
+    );
+    PublicationFixture {
+        config,
+        raw_worker_output,
+        expected_publication,
+        cov6,
+    }
+}
+
+fn published_artifacts(directory: &TestDirectory) -> Vec<Vec<u8>> {
+    fs::read_dir(directory.0.join("artifacts"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with(".fe2o3-link-artifact-v1-")
+        })
+        .map(|path| fs::read(path).unwrap())
+        .collect()
+}
+
+fn restart_records(directory: &TestDirectory) -> Vec<PathBuf> {
+    fs::read_dir(directory.0.join("artifacts"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            let name = path.file_name().unwrap().to_string_lossy();
+            name.ends_with(".record")
+                && (name.starts_with(".fe2o3-worker-v2-publication-intent-v1-")
+                    || name.starts_with(".fe2o3-cargo-worker-v2-resume-v1-"))
+        })
+        .collect()
+}
+
 #[test]
 fn valid_worker_output_persists_before_publication_and_cleans_exact_restart_state() {
     let directory = TestDirectory::new();
@@ -349,6 +567,109 @@ fn valid_worker_output_persists_before_publication_and_cleans_exact_restart_stat
             || (!name.starts_with(".fe2o3-worker-v2-publication-intent-v1-")
                 && !name.starts_with(".fe2o3-cargo-worker-v2-resume-v1-"))
     }));
+}
+
+#[test]
+fn cov6_production_publishes_exact_canonical_finalized_bytes() {
+    let directory = TestDirectory::new();
+    let fixture = publication_fixture(&directory, true);
+    let result = run_wrapper_with_options(
+        &directory,
+        &fixture.config,
+        "publish-valid",
+        fixture.cov6,
+        None,
+    );
+    assert!(result.status.success(), "{}", stderr(&result));
+    assert_ne!(fixture.raw_worker_output, fixture.expected_publication);
+    assert_eq!(
+        published_artifacts(&directory),
+        [fixture.expected_publication]
+    );
+    assert!(restart_records(&directory).is_empty());
+}
+
+#[test]
+#[cfg(not(feature = "worker-v2-fault-injection-test-only"))]
+fn production_build_does_not_expose_the_fault_injection_environment_switch() {
+    let directory = TestDirectory::new();
+    let fixture = publication_fixture(&directory, true);
+    let result = run_wrapper_with_options(
+        &directory,
+        &fixture.config,
+        "publish-valid",
+        fixture.cov6,
+        Some("completed"),
+    );
+    assert!(result.status.success(), "{}", stderr(&result));
+    assert_eq!(
+        published_artifacts(&directory),
+        [fixture.expected_publication]
+    );
+    assert!(restart_records(&directory).is_empty());
+}
+
+#[test]
+#[cfg(feature = "worker-v2-fault-injection-test-only")]
+fn raw_and_finalized_fault_matrix_recovers_every_durable_boundary() {
+    const RECOVERABLE: &[&str] = &[
+        "pending-intent",
+        "ready",
+        "published",
+        "completed",
+        "intent-cleared",
+        "finished",
+    ];
+
+    for cov6 in [false, true] {
+        for point in std::iter::once("pending-marker").chain(RECOVERABLE.iter().copied()) {
+            let directory = TestDirectory::new();
+            let fixture = publication_fixture(&directory, cov6);
+            let interrupted = run_wrapper_with_options(
+                &directory,
+                &fixture.config,
+                "publish-valid",
+                fixture.cov6,
+                Some(point),
+            );
+            assert_eq!(
+                interrupted.status.code(),
+                Some(86),
+                "{point} cov6={cov6}: {}",
+                stderr(&interrupted)
+            );
+            fs::remove_file(directory.0.join("spawned")).unwrap();
+
+            let recovered =
+                run_wrapper_with_options(&directory, &fixture.config, "fail", fixture.cov6, None);
+            assert!(
+                !directory.0.join("spawned").exists(),
+                "{point} cov6={cov6} unexpectedly spawned rustc"
+            );
+            if point == "pending-marker" {
+                assert!(
+                    !recovered.status.success(),
+                    "marker-only state must fail closed for cov6={cov6}"
+                );
+                assert!(published_artifacts(&directory).is_empty());
+            } else {
+                assert!(
+                    recovered.status.success(),
+                    "{point} cov6={cov6}: {}",
+                    stderr(&recovered)
+                );
+                assert_eq!(
+                    published_artifacts(&directory),
+                    [fixture.expected_publication],
+                    "{point} cov6={cov6}"
+                );
+            }
+            assert!(
+                restart_records(&directory).is_empty(),
+                "{point} cov6={cov6} left restart records"
+            );
+        }
+    }
 }
 
 #[test]

@@ -69,7 +69,10 @@ fn fake_rustc(mode: &str) {
         BuildAttempt::from_env_value(&env::var("FE2O3_BUILD_ATTEMPT_V1").unwrap()).unwrap();
     let producer =
         ProducerIdentity::from_codegen("workflow_fixture", Some(Path::new(&source))).unwrap();
-    let handoff = canonical_handoff(mode == "publish-mismatch");
+    let handoff = canonical_handoff(
+        mode == "publish-mismatch",
+        env::var_os("FE2O3_TEST_WORKER_V2_COV6").is_some(),
+    );
     publish_compiler_module_handoff_v1(
         Path::new(&output_dir),
         &producer,
@@ -152,8 +155,13 @@ fn stage_restart() {
         .unwrap();
 }
 
-fn canonical_handoff(mismatch: bool) -> CompilerModuleHandoffV2 {
+fn canonical_handoff(mismatch: bool, cov6: bool) -> CompilerModuleHandoffV2 {
     let target = DeviceTargetV1::parse("gfx942:xnack-").unwrap();
+    let code_object_version = if cov6 {
+        CodeObjectVersion::V6
+    } else {
+        CodeObjectVersion::V5
+    };
     let semantic_identity = [0x53; 32];
     let semantic_text = semantic_identity
         .iter()
@@ -163,7 +171,7 @@ fn canonical_handoff(mismatch: bool) -> CompilerModuleHandoffV2 {
         direction: DEVICE_FFI_DIRECTION_EXPORT_V1,
         symbol: "ffi_export",
         calling_convention: "C",
-        code_object_version: 5,
+        code_object_version: if cov6 { 6 } else { 5 },
         target: "gfx942:xnack-",
         physical_abi: ABI,
         effects: "none",
@@ -174,7 +182,7 @@ fn canonical_handoff(mismatch: bool) -> CompilerModuleHandoffV2 {
         DeviceFfiDirectionV1::Export,
         CompilerFfiLinkRoleV1::RequiresCompilerModuleDefinition,
         target,
-        CodeObjectVersion::V5,
+        code_object_version,
         CompilerFfiSourceOwnerV1::new(
             "workflow_fixture",
             "workflow_fixture::ffi_export",
@@ -188,7 +196,7 @@ fn canonical_handoff(mismatch: bool) -> CompilerModuleHandoffV2 {
         semantic_identity,
     )
     .unwrap();
-    let mut envelope = CompilerFfiEnvelopeBuilderV1::new(target, CodeObjectVersion::V5, 1).unwrap();
+    let mut envelope = CompilerFfiEnvelopeBuilderV1::new(target, code_object_version, 1).unwrap();
     envelope.push(contract).unwrap();
     let mut entries = vec![
         (
@@ -218,7 +226,7 @@ fn canonical_handoff(mismatch: bool) -> CompilerModuleHandoffV2 {
     CompilerModuleHandoffV2::new(
         CompilerModuleKindV1::LlvmTextIr,
         target,
-        CodeObjectVersion::V5,
+        code_object_version,
         envelope.finish().unwrap(),
         CompilerModuleSymbolManifestV1::new(entries).unwrap(),
         b"define amdgpu_kernel void @workflow_kernel() { ret void }\ndefine i32 @ffi_export(i32 %value) { ret i32 %value }\n",
