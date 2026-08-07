@@ -1,0 +1,11 @@
+error[E0133]: call to unsafe function `fe2o3_host::GeneratedAlphaZetaCov6ArgumentBindingV1::<'allocation>::from_compiler_generated_parts_v1` is unsafe and requires unsafe block
+ --> tests/ui/generated_spi/fail/alpha_zeta_cov6_binding_constructor_requires_unsafe.rs:4:13
+  |
+4 |       let _ = GeneratedAlphaZetaCov6ArgumentBindingV1::from_compiler_generated_parts_v1(
+  |  _____________^
+5 | |         Vec::new(),
+6 | |         Vec::new(),
+7 | |     );
+  | |_____^ call to unsafe function
+  |
+  = note: consult the function's documentation for information on how to avoid undefined behavior

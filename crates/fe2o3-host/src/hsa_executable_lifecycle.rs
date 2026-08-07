@@ -2295,7 +2295,7 @@ fn validate_launch_geometry(
     )
 }
 
-fn validate_launch_geometry_contract(
+pub(crate) fn validate_launch_geometry_contract(
     source: &LaunchContract,
     physical: &PublishedPhysicalLaunchLayoutV1,
     geometry: HsaLaunchGeometryV1,
@@ -2598,12 +2598,25 @@ fn validate_nonzero_bytes(bytes: &[u8], field: &'static str) -> Result<(), HsaOb
 mod tests {
     use super::*;
     use crate::worker_v2_bundle_admission::tests::{
-        TestDirectory, admitted_for_lifecycle_test, admitted_two_kernel_for_lifecycle_test,
+        TestDirectory, admitted_alpha_cov6_for_lifecycle_test, admitted_for_lifecycle_test,
+        admitted_two_kernel_for_lifecycle_test,
     };
     use crate::{
-        CompilerGeneratedKernelContractV1, CompilerGeneratedKernelProfileV1, ObservedContext,
+        AlphaZetaCov6DispatchIdentityV1, AlphaZetaCov6KernelRoleV1, ArgumentAccess,
+        ArgumentAccessMode, CompilerGeneratedAlphaZetaCov6ArgumentsV1,
+        CompilerGeneratedArgumentLayoutV1, CompilerGeneratedKernelContractV1,
+        CompilerGeneratedKernelProfileV1, GeneratedAlphaZetaCov6ArgumentBindingV1,
+        GeneratedArgumentPackError, GeneratedArgumentPackingPlanV1, ObservedContext,
     };
+    use fe2o3_artifacts::{Access, AddressSpace, PointerWidth};
     use fe2o3_device::KernelMarkerV1;
+    use reserved_fe2o3_symbols::{
+        GENERAL_TYPED_V3_SEMANTIC_WITNESS_DOMAIN_V1,
+        GENERAL_TYPED_V3_SEMANTIC_WITNESS_HEADER_BYTES_V1,
+        GENERAL_TYPED_V3_SEMANTIC_WITNESS_MAGIC_V1, GENERAL_TYPED_V3_SEMANTIC_WITNESS_VERSION_V1,
+        MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1, TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3,
+    };
+    use std::cell::RefCell;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -2669,6 +2682,204 @@ mod tests {
         const PROFILE: CompilerGeneratedKernelProfileV1 =
             CompilerGeneratedKernelProfileV1::TypedVecAddF32RustcLayoutV2;
         const KERNEL_BINDING_ID_V1: [u8; 32] = [0x5b; 32];
+    }
+
+    const ALPHA_COV6_TEST_SEED: u8 = 0xa5;
+    const ALPHA_COV6_TEST_BINDING: [u8; 32] = [0x61; 32];
+    const ALPHA_COV6_TEST_CONTRACT: [u8; 32] = [
+        149, 219, 170, 144, 118, 68, 97, 9, 43, 235, 107, 123, 185, 90, 192, 247, 80, 112, 25, 186,
+        186, 157, 128, 188, 5, 15, 155, 59, 206, 210, 56, 199,
+    ];
+
+    struct AlphaCov6TestKernel;
+
+    unsafe impl KernelMarkerV1 for AlphaCov6TestKernel {
+        type Function = fn();
+        type Registration = ();
+
+        const LOGICAL_NAME: &'static str = "alpha";
+        const EXPORT_NAME: &'static str = "alpha";
+        const FUNCTION: Self::Function = test_kernel;
+        const REGISTRATION: &'static Self::Registration = &();
+    }
+
+    unsafe impl CompilerGeneratedKernelExpectationV1 for AlphaCov6TestKernel {
+        const PROFILE: CompilerGeneratedKernelProfileV1 =
+            CompilerGeneratedKernelProfileV1::ManifestDerivedScalarSliceV1 {
+                generated_host_contract_identity: ALPHA_COV6_TEST_CONTRACT,
+            };
+        const KERNEL_BINDING_ID_V1: [u8; 32] = ALPHA_COV6_TEST_BINDING;
+
+        fn semantic_witness_v1() -> Result<
+            crate::ValidatedCompilerGeneratedSemanticWitnessV1,
+            crate::CompilerGeneratedSemanticWitnessErrorV1,
+        > {
+            let bytes = alpha_cov6_semantic_witness_bytes();
+            // SAFETY: `bytes` is an initialized immutable allocation retained
+            // for this complete parser call and contains the exact test marker
+            // identities.
+            unsafe {
+                crate::semantic_witness_from_backend_v1(
+                    bytes.as_ptr(),
+                    bytes.len(),
+                    ALPHA_COV6_TEST_BINDING,
+                    ALPHA_COV6_TEST_CONTRACT,
+                )
+            }
+        }
+    }
+
+    fn alpha_cov6_semantic_witness_bytes() -> Vec<u8> {
+        let profile = TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3.as_bytes();
+        let length = GENERAL_TYPED_V3_SEMANTIC_WITNESS_HEADER_BYTES_V1 + profile.len();
+        let mut bytes = Vec::with_capacity(length);
+        bytes.extend_from_slice(&GENERAL_TYPED_V3_SEMANTIC_WITNESS_MAGIC_V1.to_le_bytes());
+        bytes.extend_from_slice(&GENERAL_TYPED_V3_SEMANTIC_WITNESS_VERSION_V1.to_le_bytes());
+        bytes.extend_from_slice(&GENERAL_TYPED_V3_SEMANTIC_WITNESS_DOMAIN_V1.to_le_bytes());
+        bytes.extend_from_slice(&u32::try_from(length).unwrap().to_le_bytes());
+        bytes.extend_from_slice(&ALPHA_COV6_TEST_BINDING);
+        bytes.extend_from_slice(&ALPHA_COV6_TEST_CONTRACT);
+        bytes.extend_from_slice(&u16::try_from(profile.len()).unwrap().to_le_bytes());
+        bytes.extend_from_slice(profile);
+        bytes
+    }
+
+    fn alpha_cov6_test_kernel_id() -> KernelId {
+        let abi = crate::generated_alpha_zeta_cov6::tests::alpha_test_abi();
+        let launch = crate::generated_alpha_zeta_cov6::tests::alpha_test_launch();
+        let digest = fe2o3_artifacts::derive_generated_kernel_identity_v2(
+            MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
+            ALPHA_COV6_TEST_BINDING,
+            "alpha",
+            "alpha",
+            DigestBytes::from_bytes([ALPHA_COV6_TEST_SEED.wrapping_add(0x40); 32]),
+            DigestBytes::from_bytes([ALPHA_COV6_TEST_SEED.wrapping_add(0x50); 32]),
+            &abi,
+            &launch,
+        );
+        KernelId::from_bytes(*digest.as_bytes())
+    }
+
+    struct AlphaCov6TestArguments {
+        observed: ObservedContext,
+        scale: f32,
+        input_address: usize,
+        output_address: usize,
+        length: usize,
+        input_owner: &'static (),
+        output_owner: &'static (),
+        bound: RefCell<bool>,
+        drops: Arc<AtomicUsize>,
+    }
+
+    impl Drop for AlphaCov6TestArguments {
+        fn drop(&mut self) {
+            self.drops.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    unsafe impl CompilerGeneratedAlphaZetaCov6ArgumentsV1<'static, AlphaCov6TestKernel>
+        for AlphaCov6TestArguments
+    {
+        fn dispatch_identity_v1() -> AlphaZetaCov6DispatchIdentityV1 {
+            AlphaZetaCov6DispatchIdentityV1::new(
+                AlphaZetaCov6KernelRoleV1::Alpha,
+                alpha_cov6_test_kernel_id(),
+                ALPHA_COV6_TEST_BINDING,
+                ALPHA_COV6_TEST_CONTRACT,
+            )
+        }
+
+        fn generated_argument_layout_v1()
+        -> Result<CompilerGeneratedArgumentLayoutV1, crate::GeneratedArgumentLayoutError> {
+            let abi = crate::generated_alpha_zeta_cov6::tests::alpha_test_abi();
+            CompilerGeneratedArgumentLayoutV1::new(
+                abi.size(),
+                abi.alignment(),
+                abi.pointer_width(),
+                abi.fields().to_vec(),
+            )
+        }
+
+        fn bind_arguments_v1(
+            &self,
+            plan: &GeneratedArgumentPackingPlanV1,
+        ) -> Result<GeneratedAlphaZetaCov6ArgumentBindingV1<'static>, GeneratedArgumentPackError>
+        {
+            assert!(
+                !self.bound.replace(true),
+                "test adapter bound more than once"
+            );
+            let byte_length = self.length.checked_mul(size_of::<f32>()).unwrap();
+            // SAFETY: these inert test allocations are used only by the fake
+            // synchronous adapter and remain represented by leaked test owners.
+            let input_access = unsafe {
+                crate::AllocationProvenance::from_raw_parts(
+                    &self.observed,
+                    self.input_owner,
+                    self.input_address as *mut u8,
+                    byte_length,
+                )
+            }
+            .unwrap();
+            // SAFETY: same test-only allocation model as `input_access`.
+            let output_access = unsafe {
+                crate::AllocationProvenance::from_raw_parts(
+                    &self.observed,
+                    self.output_owner,
+                    self.output_address as *mut u8,
+                    byte_length,
+                )
+            }
+            .unwrap();
+            // SAFETY: the pointer/length pairs exactly match the retained test
+            // allocation records assembled immediately below.
+            let input = unsafe {
+                plan.slice(
+                    1,
+                    self.input_address as *const (),
+                    self.length as u64,
+                    PointerWidth::Bits64,
+                    AddressSpace::Global,
+                    Access::ReadOnly,
+                )?
+            };
+            // SAFETY: as above, for the exclusive output allocation.
+            let output = unsafe {
+                plan.slice(
+                    2,
+                    self.output_address as *const (),
+                    self.length as u64,
+                    PointerWidth::Bits64,
+                    AddressSpace::Global,
+                    Access::ReadWrite,
+                )?
+            };
+            let pairs = vec![
+                crate::argument_alias::generated_slice_argument_pair_for_test(
+                    input,
+                    ArgumentAccess::new(
+                        input_access.region(0, byte_length).unwrap(),
+                        ArgumentAccessMode::SharedRead,
+                    ),
+                ),
+                crate::argument_alias::generated_slice_argument_pair_for_test(
+                    output,
+                    ArgumentAccess::new(
+                        output_access.region(0, byte_length).unwrap(),
+                        ArgumentAccessMode::ExclusiveReadWrite,
+                    ),
+                ),
+            ];
+            // SAFETY: this fake generated adapter supplies the exact alpha
+            // scalar and two opaque capability-equivalent slice pairs.
+            Ok(unsafe {
+                GeneratedAlphaZetaCov6ArgumentBindingV1::from_compiler_generated_parts_v1(
+                    vec![plan.scalar(0, self.scale)?],
+                    pairs,
+                )
+            })
+        }
     }
 
     struct SubstitutedPrimaryWitness;
@@ -2908,6 +3119,8 @@ mod tests {
         fault: AdapterFault,
         unloads: Arc<AtomicUsize>,
         implicit_initialized: bool,
+        explicit_snapshot: Vec<u8>,
+        implicit_span: Option<(usize, usize)>,
     }
 
     impl FakeHsaAdapter {
@@ -2918,6 +3131,8 @@ mod tests {
                     fault,
                     unloads: unloads.clone(),
                     implicit_initialized: false,
+                    explicit_snapshot: Vec::new(),
+                    implicit_span: None,
                 },
                 unloads,
             )
@@ -3014,6 +3229,8 @@ mod tests {
             };
             let size = if self.fault == AdapterFault::KernargSize {
                 312
+            } else if export_symbol == "alpha" {
+                296
             } else {
                 304
             };
@@ -3062,10 +3279,17 @@ mod tests {
             if self.fault == AdapterFault::DispatchAdapterError {
                 return Err("definite pre-submit dispatch failure");
             }
-            if self.implicit_initialized
-                && (kernarg[..48] != [0x5a; 48] || kernarg[48..] != [0xa5; 256])
-            {
-                return Err("generated kernarg was not preserved");
+            if self.implicit_initialized {
+                let Some((implicit_offset, implicit_len)) = self.implicit_span else {
+                    return Err("generated implicit span was not retained");
+                };
+                if kernarg.get(..self.explicit_snapshot.len())
+                    != Some(self.explicit_snapshot.as_slice())
+                    || kernarg.get(implicit_offset..implicit_offset + implicit_len)
+                        != Some(&[0xa5; 256][..implicit_len])
+                {
+                    return Err("generated kernarg was not preserved");
+                }
             }
             let executable = if self.fault == AdapterFault::DispatchObject {
                 HsaExecutableObjectIdentityV1::new([0x81; 32]).unwrap()
@@ -3129,6 +3353,8 @@ mod tests {
             implicit_byte_len: usize,
             kernarg: &mut [u8],
         ) -> Result<HsaImplicitKernargInitializationObservationV1, Self::Error> {
+            self.explicit_snapshot = kernarg[..explicit_byte_len].to_vec();
+            self.implicit_span = Some((implicit_byte_offset, implicit_byte_len));
             if self.fault == AdapterFault::ExplicitMutation {
                 kernarg[0] ^= 0xff;
             }
@@ -3187,6 +3413,114 @@ mod tests {
         let (adapter, unloads) = FakeHsaAdapter::new(fault);
         let authorized = authenticated.authorize_hsa_load(adapter).unwrap();
         (authorized.load(), unloads, directory)
+    }
+
+    #[test]
+    fn alpha_cov6_generated_prepare_dispatch_and_drop_is_end_to_end() {
+        let abi = crate::generated_alpha_zeta_cov6::tests::alpha_test_abi();
+        let launch = crate::generated_alpha_zeta_cov6::tests::alpha_test_launch();
+        let contract = fe2o3_artifacts::derive_generated_host_contract_identity_v1(
+            MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
+            ALPHA_COV6_TEST_BINDING,
+            "alpha",
+            "alpha",
+            &abi,
+            &launch,
+        );
+        assert_eq!(contract.as_bytes(), &ALPHA_COV6_TEST_CONTRACT);
+
+        let (admission, _directory) = admitted_alpha_cov6_for_lifecycle_test(ALPHA_COV6_TEST_SEED);
+        let authenticated: AuthenticatedWorkerV2ExecutableV1<AlphaCov6TestKernel> =
+            AuthenticatedWorkerV2ExecutableV1::authenticate(
+                admission,
+                &mut FakeAuthenticator::exact(),
+            )
+            .unwrap();
+        let (adapter, unloads) = FakeHsaAdapter::new(AdapterFault::None);
+        let authorized = authenticated.authorize_hsa_load(adapter).unwrap();
+        let mut loaded = authorized.load().unwrap();
+        assert_eq!(loaded.kernel_observation().export_symbol(), "alpha");
+        assert_eq!(loaded.kernel_observation().kernarg_segment_size(), 296);
+
+        let observed = ObservedContext::for_test(
+            ALPHA_COV6_TEST_SEED.into(),
+            0,
+            "gfx942:sramecc+:xnack-",
+            1_024,
+            65_536,
+        );
+        let input_owner: &'static () = Box::leak(Box::new(()));
+        let output_owner: &'static () = Box::leak(Box::new(()));
+        let drops = Arc::new(AtomicUsize::new(0));
+        let arguments = AlphaCov6TestArguments {
+            observed: observed.clone(),
+            scale: 1.5,
+            input_address: 0x10_000,
+            output_address: 0x20_000,
+            length: 257,
+            input_owner,
+            output_owner,
+            bound: RefCell::new(false),
+            drops: drops.clone(),
+        };
+        let prepared = loaded
+            .prepare_generated_alpha_zeta_cov6_selected_kernel_v1::<AlphaCov6TestKernel, _, _>(
+                &observed,
+                &mut FakeAuthenticator::exact(),
+                arguments,
+            )
+            .unwrap();
+        assert_eq!(prepared.geometry().grid(), [2, 1, 1]);
+        assert_eq!(prepared.geometry().workgroup(), [256, 1, 1]);
+        assert_eq!(prepared.explicit_byte_len(), 40);
+        assert_eq!(prepared.physical_kernarg_byte_len(), 296);
+        assert_eq!(prepared.physical_kernarg_alignment(), 16);
+        assert_eq!(drops.load(Ordering::SeqCst), 0);
+
+        let byte_length = 257 * size_of::<f32>();
+        // SAFETY: the inert output range exactly repeats the test adapter's
+        // retained allocation identity and is never submitted to hardware.
+        let conflict = unsafe {
+            crate::AllocationProvenance::from_raw_parts(
+                &observed,
+                output_owner,
+                0x20_000usize as *mut u8,
+                byte_length,
+            )
+        }
+        .unwrap();
+        assert!(matches!(
+            crate::argument_alias::admit_and_register(
+                observed.alias_registry(),
+                &observed,
+                vec![ArgumentAccess::new(
+                    conflict.region(0, byte_length).unwrap(),
+                    ArgumentAccessMode::ExclusiveReadWrite,
+                )],
+            ),
+            Err(crate::AliasAdmissionError::Conflict { .. })
+        ));
+
+        let completed = prepared.dispatch().unwrap();
+        assert_eq!(completed.artifact_identity().symbol().as_str(), "alpha");
+        assert!(completed.completed_dispatch().dispatch().completed());
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+
+        // The in-flight registration is released only after synchronous
+        // completion and the generated argument owner has been dropped.
+        let (post_completion, registration) = crate::argument_alias::admit_and_register(
+            observed.alias_registry(),
+            &observed,
+            vec![ArgumentAccess::new(
+                conflict.region(0, byte_length).unwrap(),
+                ArgumentAccessMode::ExclusiveReadWrite,
+            )],
+        )
+        .unwrap();
+        drop((post_completion, registration));
+
+        drop(loaded);
+        assert_eq!(unloads.load(Ordering::SeqCst), 1);
     }
 
     #[repr(align(16))]

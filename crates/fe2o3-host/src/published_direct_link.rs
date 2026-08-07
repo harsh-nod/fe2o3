@@ -1467,6 +1467,60 @@ pub(crate) mod tests {
         binding_hsaco(metadata, target, 0, private_segment_fixed_size, 304)
     }
 
+    pub(crate) fn alpha_cov6_hsaco_for_target(target: &str) -> TestHsaco {
+        let private_segment_fixed_size: u32 = if target.starts_with("gfx94") { 0 } else { 16 };
+        let arguments = vec![
+            test_explicit_argument("scale", 0, 4, "by_value", None, None, None, None),
+            test_explicit_argument(
+                "input_ptr",
+                8,
+                8,
+                "global_buffer",
+                Some("global"),
+                Some(8),
+                Some("read_only"),
+                Some("read_only"),
+            ),
+            test_explicit_argument("input_len", 16, 8, "by_value", None, None, None, None),
+            test_explicit_argument(
+                "output_ptr",
+                24,
+                8,
+                "global_buffer",
+                Some("global"),
+                Some(8),
+                Some("read_write"),
+                Some("read_write"),
+            ),
+            test_explicit_argument("output_len", 32, 8, "by_value", None, None, None, None),
+        ];
+        let metadata = test_metadata(
+            target,
+            vec![test_metadata_kernel_with_wavefront(
+                "alpha",
+                "alpha.kd",
+                arguments,
+                296,
+                8,
+                0,
+                private_segment_fixed_size,
+                Some([256, 1, 1]),
+                [None; 3],
+                false,
+                if target.starts_with("gfx94") { 64 } else { 32 },
+            )],
+        );
+        binding_hsaco_with_kernel_names(
+            metadata,
+            target,
+            0,
+            private_segment_fixed_size,
+            296,
+            ("alpha", "alpha.kd"),
+            None,
+        )
+    }
+
     pub(crate) fn typed_vecadd_two_kernel_hsaco_for_target(target: &str) -> TestHsaco {
         let private_segment_fixed_size: u32 = if target.starts_with("gfx94") { 0 } else { 16 };
         let mut arguments = Vec::new();
@@ -1751,6 +1805,27 @@ pub(crate) mod tests {
         kernarg_segment_size: u32,
         second_kernel: Option<(&str, &str)>,
     ) -> TestHsaco {
+        binding_hsaco_with_kernel_names(
+            document,
+            target,
+            static_shared_memory_bytes,
+            private_segment_fixed_size,
+            kernarg_segment_size,
+            ("primary_kernel", "primary_kernel.kd"),
+            second_kernel,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn binding_hsaco_with_kernel_names(
+        document: Value,
+        target: &str,
+        static_shared_memory_bytes: u32,
+        private_segment_fixed_size: u32,
+        kernarg_segment_size: u32,
+        first_kernel: (&str, &str),
+        second_kernel: Option<(&str, &str)>,
+    ) -> TestHsaco {
         const PROGRAM_HEADER_BYTES: usize = 56;
         const PROGRAM_COUNT: usize = 2;
         const SECTION_COUNT: usize = 7;
@@ -1781,8 +1856,8 @@ pub(crate) mod tests {
         let entry_address = entry_offset as u64 + 0x1000;
         let descriptor_address = descriptor_file_offset as u64;
 
-        let entry_name = b"primary_kernel";
-        let descriptor_name = b"primary_kernel.kd";
+        let entry_name = first_kernel.0.as_bytes();
+        let descriptor_name = first_kernel.1.as_bytes();
         let mut strings = vec![0];
         let entry_name_index = strings.len() as u32;
         strings.extend_from_slice(entry_name);

@@ -1,0 +1,11 @@
+error: lifetime may not live long enough
+  --> tests/ui/generated_spi/fail/alpha_zeta_cov6_binding_retains_allocation.rs:12:9
+   |
+ 6 |   fn escape<'allocation>(
+   |             ----------- lifetime `'allocation` defined here
+...
+12 | /         GeneratedAlphaZetaCov6ArgumentBindingV1::from_compiler_generated_parts_v1(
+13 | |             Vec::new(),
+14 | |             vec![pair],
+15 | |         )
+   | |_________^ returning this value requires that `'allocation` must outlive `'static`

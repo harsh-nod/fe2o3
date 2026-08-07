@@ -1,6 +1,7 @@
 mod argument_alias;
 mod artifact_binding;
 mod cooperative_launch;
+mod generated_alpha_zeta_cov6;
 mod generated_argument_plan;
 mod generated_vecadd;
 mod generated_worker_v2_vecadd;
@@ -27,7 +28,8 @@ pub use argument_alias::{
 };
 #[doc(hidden)]
 pub use argument_alias::{
-    GeneratedReadDeviceSlice, GeneratedReadWriteDeviceSlice, GeneratedWriteDeviceSlice,
+    GeneratedReadDeviceSlice, GeneratedReadWriteDeviceSlice, GeneratedSliceArgumentPairV1,
+    GeneratedWriteDeviceSlice,
 };
 pub use artifact_binding::{
     ARTIFACT_KERNEL_IDENTITY_VERSION, ArtifactBindingError, ArtifactKernelIdentityV1,
@@ -48,6 +50,15 @@ pub use cooperative_launch::{
 };
 pub use fe2o3_core::{KernelParams, LaunchConfig};
 pub use fe2o3_kernel_descriptor::{BlockSizeV1, DimensionsV1, KernelId, LaunchConstraintsV1};
+#[doc(hidden)]
+pub use generated_alpha_zeta_cov6::{
+    AlphaZetaCov6DispatchIdentityV1, AlphaZetaCov6KernelRoleV1, AlphaZetaCov6ProfileError,
+    CompilerGeneratedAlphaZetaCov6ArgumentsV1, GeneratedAlphaZetaCov6ArgumentBindingV1,
+    GeneratedAlphaZetaCov6ArgumentError, GeneratedAlphaZetaCov6CompletionV1,
+    GeneratedAlphaZetaCov6GeometryError, GeneratedAlphaZetaCov6PhysicalKernargError,
+    GeneratedAlphaZetaCov6PrepareError, GeneratedAlphaZetaCov6PrepareResultV1,
+    GeneratedAlphaZetaCov6PreparedInvocationV1,
+};
 #[doc(hidden)]
 pub use generated_argument_plan::{
     CompilerGeneratedArgumentLayoutV1, GeneratedArgumentFieldProperty,
@@ -115,19 +126,25 @@ pub use worker_v2_bundle_admission::{
 #[doc(hidden)]
 pub mod __generated {
     pub use crate::{
-        AuthenticatedKernelArtifactV1, CompilerGeneratedArgumentLayoutV1,
-        CompilerGeneratedKernelContractV1, CompilerGeneratedKernelExpectationV1,
-        CompilerGeneratedKernelProfileV1, CompilerGeneratedSemanticWitnessErrorV1,
-        GeneratedAdmittedLaunch, GeneratedArgumentFieldProperty, GeneratedArgumentLayoutError,
-        GeneratedArgumentPackError, GeneratedArgumentPackingError, GeneratedArgumentPackingPlanV1,
+        AlphaZetaCov6DispatchIdentityV1, AlphaZetaCov6KernelRoleV1, AlphaZetaCov6ProfileError,
+        AuthenticatedKernelArtifactV1, CompilerGeneratedAlphaZetaCov6ArgumentsV1,
+        CompilerGeneratedArgumentLayoutV1, CompilerGeneratedKernelContractV1,
+        CompilerGeneratedKernelExpectationV1, CompilerGeneratedKernelProfileV1,
+        CompilerGeneratedSemanticWitnessErrorV1, GeneratedAdmittedLaunch,
+        GeneratedAlphaZetaCov6ArgumentBindingV1, GeneratedAlphaZetaCov6ArgumentError,
+        GeneratedAlphaZetaCov6CompletionV1, GeneratedAlphaZetaCov6GeometryError,
+        GeneratedAlphaZetaCov6PhysicalKernargError, GeneratedAlphaZetaCov6PrepareError,
+        GeneratedAlphaZetaCov6PrepareResultV1, GeneratedAlphaZetaCov6PreparedInvocationV1,
+        GeneratedArgumentFieldProperty, GeneratedArgumentLayoutError, GeneratedArgumentPackError,
+        GeneratedArgumentPackingError, GeneratedArgumentPackingPlanV1,
         GeneratedArtifactAuthenticationError, GeneratedDeviceScalarV1, GeneratedKernelBindingV1,
         GeneratedKernelProfileError, GeneratedMarkerBindingError, GeneratedPackingComponentKindV1,
         GeneratedPackingComponentV1, GeneratedReadDeviceSlice, GeneratedReadWriteDeviceSlice,
-        GeneratedVecAddKernelV1, GeneratedVecAddLoadError, GeneratedVecAddPrepareError,
-        GeneratedVecAddPreparedV1, GeneratedVecAddProfileError, GeneratedWorkerV2VecAddBindError,
-        GeneratedWorkerV2VecAddCompletionV1, GeneratedWorkerV2VecAddExecutorV1,
-        GeneratedWorkerV2VecAddPrepareError, GeneratedWorkerV2VecAddPreparedV1,
-        GeneratedWriteDeviceSlice, LoadedKernelLoadError,
+        GeneratedSliceArgumentPairV1, GeneratedVecAddKernelV1, GeneratedVecAddLoadError,
+        GeneratedVecAddPrepareError, GeneratedVecAddPreparedV1, GeneratedVecAddProfileError,
+        GeneratedWorkerV2VecAddBindError, GeneratedWorkerV2VecAddCompletionV1,
+        GeneratedWorkerV2VecAddExecutorV1, GeneratedWorkerV2VecAddPrepareError,
+        GeneratedWorkerV2VecAddPreparedV1, GeneratedWriteDeviceSlice, LoadedKernelLoadError,
         ValidatedCompilerGeneratedSemanticWitnessV1, semantic_witness_from_backend_v1,
         validate_compiler_generated_semantic_witness_v1,
     };

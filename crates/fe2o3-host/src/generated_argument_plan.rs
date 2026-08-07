@@ -270,6 +270,39 @@ pub struct GeneratedArgumentInputV1<'allocation> {
     allocation: PhantomData<&'allocation ()>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct GeneratedSliceInputDescriptionV1 {
+    pub(crate) argument_index: usize,
+    pub(crate) address: u64,
+    pub(crate) length: u64,
+    pub(crate) element_size: u64,
+    pub(crate) access: Access,
+}
+
+impl GeneratedArgumentInputV1<'_> {
+    pub(crate) fn slice_description_v1(&self) -> Option<GeneratedSliceInputDescriptionV1> {
+        let GeneratedArgumentValueV1::Slice {
+            address,
+            length,
+            access,
+            ..
+        } = self.value
+        else {
+            return None;
+        };
+        let AbiKind::Slice { element_size, .. } = self.source_field.kind() else {
+            return None;
+        };
+        Some(GeneratedSliceInputDescriptionV1 {
+            argument_index: self.argument_index,
+            address,
+            length,
+            element_size,
+            access,
+        })
+    }
+}
+
 #[derive(Debug, Eq, PartialEq)]
 struct GeneratedArgumentPackingPlanSealV1;
 

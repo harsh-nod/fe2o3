@@ -402,6 +402,22 @@ impl<'allocation, T: DeviceCopy> GeneratedReadDeviceSlice<'allocation, T> {
         )
     }
 
+    /// Binds this capability and its exact access record as one opaque unit.
+    #[doc(hidden)]
+    pub fn bind_argument_pair(
+        &self,
+        plan: &GeneratedArgumentPackingPlanV1,
+        argument_index: usize,
+    ) -> Result<GeneratedSliceArgumentPairV1<'allocation>, GeneratedArgumentPackError>
+    where
+        T: GeneratedDeviceScalarV1,
+    {
+        Ok(GeneratedSliceArgumentPairV1 {
+            input: self.bind_argument(plan, argument_index)?,
+            access: self.argument_access(),
+        })
+    }
+
     pub(crate) fn device_pointer(&self) -> *const () {
         self.pointer.as_raw().cast_const().cast()
     }
@@ -547,6 +563,22 @@ impl<'allocation, T: DeviceCopy> GeneratedReadWriteDeviceSlice<'allocation, T> {
             GeneratedArgumentBorrowV1::new(),
         )
     }
+
+    /// Binds this capability and its exact access record as one opaque unit.
+    #[doc(hidden)]
+    pub fn bind_argument_pair(
+        &self,
+        plan: &GeneratedArgumentPackingPlanV1,
+        argument_index: usize,
+    ) -> Result<GeneratedSliceArgumentPairV1<'allocation>, GeneratedArgumentPackError>
+    where
+        T: GeneratedDeviceScalarV1,
+    {
+        Ok(GeneratedSliceArgumentPairV1 {
+            input: self.bind_argument(plan, argument_index)?,
+            access: self.argument_access(),
+        })
+    }
 }
 
 /// Device atomic operation category used by host alias admission.
@@ -680,6 +712,37 @@ pub struct ArgumentAccess<'allocation> {
     mode: ArgumentAccessMode,
 }
 
+/// Opaque pairing of one branded slice input with the access record emitted by
+/// the same retained generated capability.
+///
+/// There is no public constructor and this value is neither `Clone` nor `Copy`.
+/// Generated adapters can obtain it only from a generated slice capability's
+/// `bind_argument_pair` method.
+#[doc(hidden)]
+pub struct GeneratedSliceArgumentPairV1<'allocation> {
+    input: GeneratedArgumentInputV1<'allocation>,
+    access: ArgumentAccess<'allocation>,
+}
+
+impl<'allocation> GeneratedSliceArgumentPairV1<'allocation> {
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        GeneratedArgumentInputV1<'allocation>,
+        ArgumentAccess<'allocation>,
+    ) {
+        (self.input, self.access)
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn generated_slice_argument_pair_for_test<'allocation>(
+    input: GeneratedArgumentInputV1<'allocation>,
+    access: ArgumentAccess<'allocation>,
+) -> GeneratedSliceArgumentPairV1<'allocation> {
+    GeneratedSliceArgumentPairV1 { input, access }
+}
+
 impl fmt::Debug for ArgumentAccess<'_> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut output = formatter.debug_struct("ArgumentAccess");
@@ -710,6 +773,38 @@ impl<'allocation> ArgumentAccess<'allocation> {
 
     pub const fn mode(&self) -> ArgumentAccessMode {
         self.mode
+    }
+
+    pub(crate) fn matches_generated_slice_v1(
+        &self,
+        address: u64,
+        length: u64,
+        element_size: u64,
+        expected_mode: ArgumentAccessMode,
+    ) -> bool {
+        let ArgumentRegion::Known(region) = &self.region else {
+            return false;
+        };
+        if self.mode != expected_mode {
+            return false;
+        }
+        let Ok(address) = usize::try_from(address) else {
+            return false;
+        };
+        let Ok(length) = usize::try_from(length) else {
+            return false;
+        };
+        let Ok(element_size) = usize::try_from(element_size) else {
+            return false;
+        };
+        let Some(region_address) = region.identity.allocation.checked_add(region.byte_offset)
+        else {
+            return false;
+        };
+        let Some(byte_length) = length.checked_mul(element_size) else {
+            return false;
+        };
+        address == region_address && byte_length == region.byte_length
     }
 }
 

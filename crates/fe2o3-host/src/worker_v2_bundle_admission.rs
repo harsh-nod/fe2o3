@@ -467,7 +467,11 @@ fn select_typed_kernel_identity<K: CompilerGeneratedKernelExpectationV1>(
     target: &fe2o3_artifacts::TargetIdentity,
     finalized_payload: PayloadDigest,
 ) -> Result<usize, WorkerV2TypedKernelSelectionError> {
-    if K::PROFILE != CompilerGeneratedKernelProfileV1::TypedVecAddF32RustcLayoutV2 {
+    if !matches!(
+        K::PROFILE,
+        CompilerGeneratedKernelProfileV1::TypedVecAddF32RustcLayoutV2
+            | CompilerGeneratedKernelProfileV1::ManifestDerivedScalarSliceV1 { .. }
+    ) {
         return Err(WorkerV2TypedKernelSelectionError::UnsupportedGeneratedProfile);
     }
 
@@ -569,7 +573,7 @@ impl fmt::Display for WorkerV2TypedKernelSelectionError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::UnsupportedGeneratedProfile => {
-                formatter.write_str("generated marker profile lacks an exact V2 kernel binding")
+                formatter.write_str("generated marker profile lacks an admitted typed binding")
             }
             Self::KernelNotFound => {
                 formatter.write_str("generated marker is absent from the admitted executable")
@@ -858,7 +862,7 @@ pub(crate) mod tests {
 
     use super::*;
     use crate::published_direct_link::tests::{
-        Fixture, make_observed_for, make_single_hsaco_fixture,
+        Fixture, alpha_cov6_hsaco_for_target, make_observed_for, make_single_hsaco_fixture,
         make_single_hsaco_fixture_with_kernel_id,
         make_single_hsaco_fixture_with_names_and_kernel_id, make_two_hsaco_fixture_with_kernel_ids,
         physical_test_abi, typed_vecadd_hsaco_for_target, typed_vecadd_two_kernel_hsaco_for_target,
@@ -880,7 +884,9 @@ pub(crate) mod tests {
         ToolIdentity, derive_generated_kernel_identity_v2,
     };
     use fe2o3_device::KernelMarkerV1;
-    use reserved_fe2o3_symbols::TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2;
+    use reserved_fe2o3_symbols::{
+        MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1, TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2,
+    };
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -1007,6 +1013,34 @@ pub(crate) mod tests {
             second_kernel,
             abi,
             launch,
+        );
+        finish_admission_fixture(seed, 0, fixture, hsaco.bytes.clone(), hsaco.bytes)
+    }
+
+    fn alpha_cov6_admission_fixture(seed: u8) -> AdmissionFixture {
+        let hsaco = alpha_cov6_hsaco_for_target("gfx942");
+        let abi = crate::generated_alpha_zeta_cov6::tests::alpha_test_abi();
+        let launch = crate::generated_alpha_zeta_cov6::tests::alpha_test_launch();
+        let kernel_binding = [0x61; 32];
+        let kernel_id = derive_generated_kernel_identity_v2(
+            MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
+            kernel_binding,
+            "alpha",
+            "alpha",
+            repeated_digest(seed.wrapping_add(0x40)),
+            repeated_digest(seed.wrapping_add(0x50)),
+            &abi,
+            &launch,
+        );
+        let fixture = make_single_hsaco_fixture_with_names_and_kernel_id(
+            seed,
+            hsaco.bytes.clone(),
+            "gfx942",
+            "alpha",
+            "alpha",
+            abi,
+            launch,
+            kernel_id,
         );
         finish_admission_fixture(seed, 0, fixture, hsaco.bytes.clone(), hsaco.bytes)
     }
@@ -1154,6 +1188,48 @@ pub(crate) mod tests {
         seed: u8,
     ) -> (AdmittedFinalizedWorkerV2BundleV1, TestDirectory) {
         let input = two_kernel_admission_fixture(seed);
+        let validated = input.fixture.validated();
+        let selected_kernel = selected(&input.fixture);
+        let observed = make_observed_for(seed.into(), "gfx942");
+        let parts = admit_parts(
+            input.attempt,
+            &input.exact_bytes,
+            input.publication,
+            &validated,
+            &input.fixture.container,
+            selected_kernel,
+            &observed,
+        )
+        .unwrap();
+        let admission = AdmittedFinalizedWorkerV2BundleV1 {
+            prepared: RetainedWorkerV2PreparationV1::Test {
+                attempt: input.attempt,
+                exact_bytes: input.exact_bytes.into_boxed_slice(),
+            },
+            current_lease: parts.current_lease,
+            receipt: parts.receipt,
+            published: parts.published,
+            bundle_index_identity: parts.bundle_index_identity,
+            bundle_evidence_identity: parts.bundle_evidence_identity,
+            binding_index: parts.binding_index,
+            container_identity: parts.container_identity,
+            linked_output_identity: parts.linked_output_identity,
+            finalization_identity: parts.finalization_identity,
+            finalized_payload_identity: parts.finalized_payload_identity,
+            artifact_identity: parts.artifact_identity,
+            kernel_identities: parts.kernel_identities,
+            device: parts.device,
+            inspected: parts.inspected,
+            kernels: parts.kernels,
+            selected_kernel_index: parts.selected_kernel_index,
+        };
+        (admission, input._directory)
+    }
+
+    pub(crate) fn admitted_alpha_cov6_for_lifecycle_test(
+        seed: u8,
+    ) -> (AdmittedFinalizedWorkerV2BundleV1, TestDirectory) {
+        let input = alpha_cov6_admission_fixture(seed);
         let validated = input.fixture.validated();
         let selected_kernel = selected(&input.fixture);
         let observed = make_observed_for(seed.into(), "gfx942");
