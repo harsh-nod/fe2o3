@@ -309,8 +309,8 @@ fn managed_selector_stays_child_only_after_backend_source_replacement() {
     assert!(
         invocations[1]
             .managed_rustc_args
-            .windows(b"-Zcodegen-backend=/proc/self/fd/198".len())
-            .any(|window| window == b"-Zcodegen-backend=/proc/self/fd/198")
+            .windows(b"-Zcodegen-backend=/proc/./self/fd/198".len())
+            .any(|window| window == b"-Zcodegen-backend=/proc/./self/fd/198")
     );
     assert!(invocations[1].hsaco_dir.is_empty());
     assert_eq!(

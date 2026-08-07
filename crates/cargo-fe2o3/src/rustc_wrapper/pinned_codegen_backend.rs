@@ -339,6 +339,12 @@ mod platform {
         }
     }
 
+    fn rustc_backend_descriptor_path(descriptor: RawFd) -> PathBuf {
+        // This pinned rustc treats a backend selector as a dylib path only when the value
+        // contains a dot. The dotted procfs alias resolves to the same retained descriptor.
+        PathBuf::from(format!("/proc/./self/fd/{descriptor}"))
+    }
+
     /// One immutable anonymous image retained after validating its origin bytes.
     pub(crate) struct PinnedCodegenBackend {
         file: File,
@@ -392,7 +398,7 @@ mod platform {
                 capture_source(&mut source_file, &display_path, initial)?;
             require_read_only(&file, &display_path)?;
 
-            let descriptor_path = PathBuf::from(format!("/proc/self/fd/{}", file.as_raw_fd()));
+            let descriptor_path = rustc_backend_descriptor_path(file.as_raw_fd());
             validate_descriptor_path(&file, &descriptor_path, snapshot, seals, &display_path)?;
             Ok(Self {
                 file,
@@ -440,7 +446,7 @@ mod platform {
                 return Err(PinCodegenBackendError::ImageSealsChanged { path: display_path });
             }
             let sha256 = hash_exact_at(&file, &display_path, snapshot.size)?;
-            let descriptor_path = PathBuf::from(format!("/proc/self/fd/{}", file.as_raw_fd()));
+            let descriptor_path = rustc_backend_descriptor_path(file.as_raw_fd());
             validate_descriptor_path(&file, &descriptor_path, snapshot, seals, &display_path)?;
             Ok(Self {
                 file,
@@ -503,7 +509,7 @@ mod platform {
             require_close_on_exec(&self.file, &self.display_path)?;
             require_read_only(&self.file, &self.display_path)?;
             require_unused_descriptor(target_fd, &self.display_path)?;
-            Ok(PathBuf::from(format!("/proc/self/fd/{target_fd}")))
+            Ok(rustc_backend_descriptor_path(target_fd))
         }
 
         /// Installs the exact sealed image at a stable descriptor in one child process.
@@ -1403,7 +1409,7 @@ mod platform {
             assert_eq!(fs::read(descriptor.path()).unwrap(), original);
             assert_eq!(fs::read(&selected).unwrap(), replacement_bytes);
             assert_ne!(descriptor.path(), selected);
-            assert!(descriptor.path().starts_with("/proc/self/fd"));
+            assert!(descriptor.path().starts_with("/proc/./self/fd"));
             assert_eq!(pinned.sha256(), &original_digest);
             let replacement_digest: [u8; 32] = Sha256::digest(replacement_bytes).into();
             assert_ne!(pinned.sha256(), &replacement_digest);
@@ -1601,7 +1607,7 @@ mod platform {
 
             let prepared = pinned.prepare_command(Command::new("/bin/true")).unwrap();
             let expected = OsString::from(format!(
-                "-Zcodegen-backend=/proc/self/fd/{}",
+                "-Zcodegen-backend=/proc/./self/fd/{}",
                 pinned.file.as_raw_fd()
             ));
 
@@ -1729,7 +1735,7 @@ mod platform {
             command.args([
                 "-c",
                 concat!(
-                    "case \"$1\" in -Zcodegen-backend=/proc/self/fd/*) ;; ",
+                    "case \"$1\" in -Zcodegen-backend=/proc/./self/fd/*) ;; ",
                     "*) exit 91 ;; esac; ",
                     "path=${1#-Zcodegen-backend=}; cat \"$path\""
                 ),

@@ -332,7 +332,7 @@ fn decode_managed_rustc_args(value: &OsStr) -> Result<Vec<OsString>, BindingWrap
             "expected exactly four non-empty arguments",
         ));
     }
-    let expected_backend = format!("-Zcodegen-backend=/proc/self/fd/{BACKEND_CHILD_FD}");
+    let expected_backend = format!("-Zcodegen-backend=/proc/./self/fd/{BACKEND_CHILD_FD}");
     if fields[0] != OsStr::new(&expected_backend) {
         return Err(BindingWrapperError::InvalidManagedRustcArguments(
             "backend selector is not a fixed procfs descriptor",
@@ -1087,7 +1087,7 @@ mod tests {
     #[test]
     fn managed_rustc_arguments_are_exact_and_canonical() {
         let value = OsString::from(
-            "-Zcodegen-backend=/proc/self/fd/198\x1f-Zmir-enable-passes=-JumpThreading\x1f--cfg\x1ffe2o3_codegen_generation=\"0123456789abcdef0123456789abcdef\"",
+            "-Zcodegen-backend=/proc/./self/fd/198\x1f-Zmir-enable-passes=-JumpThreading\x1f--cfg\x1ffe2o3_codegen_generation=\"0123456789abcdef0123456789abcdef\"",
         );
         let decoded = decode_managed_rustc_args(&value).unwrap();
         assert_eq!(decoded.len(), 4);
@@ -1098,7 +1098,7 @@ mod tests {
                 "-Zcodegen-backend=/tmp/backend\x1f-Zmir-enable-passes=-JumpThreading\x1f--cfg\x1ffe2o3_codegen_generation=\"0123456789abcdef0123456789abcdef\"",
             ),
             OsString::from(
-                "-Zcodegen-backend=/proc/self/fd/198\x1f-Zmir-enable-passes=-JumpThreading\x1f--cfg\x1ffe2o3_codegen_generation=\"ABCDEF0123456789abcdef0123456789\"",
+                "-Zcodegen-backend=/proc/./self/fd/198\x1f-Zmir-enable-passes=-JumpThreading\x1f--cfg\x1ffe2o3_codegen_generation=\"ABCDEF0123456789abcdef0123456789\"",
             ),
         ] {
             assert!(decode_managed_rustc_args(&invalid).is_err());

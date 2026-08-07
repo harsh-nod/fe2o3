@@ -251,7 +251,7 @@ fn wrapper_command(
         .env("FE2O3_BINDING_WRAPPER_MODE_V1", "1")
         .env(
             "FE2O3_MANAGED_RUSTC_ARGS_V1",
-            "-Zcodegen-backend=/proc/self/fd/198\x1f-Zmir-enable-passes=-JumpThreading\x1f--cfg\x1ffe2o3_codegen_generation=\"11111111111111111111111111111111\"",
+            "-Zcodegen-backend=/proc/./self/fd/198\x1f-Zmir-enable-passes=-JumpThreading\x1f--cfg\x1ffe2o3_codegen_generation=\"11111111111111111111111111111111\"",
         )
         .env("FE2O3_BUILD_SESSION_V1", "11".repeat(16))
         .env(CAPABILITY_BROKER_ENV, broker.endpoint())
