@@ -8,8 +8,10 @@ fn main() {
     println!("cargo:rerun-if-changed=native/device_properties.c");
     println!("cargo:rerun-if-changed=native/device_properties.h");
     println!("cargo:rerun-if-changed=native/cooperative_peer_abi.c");
+    println!("cargo:rerun-if-changed=native/memory_topology_abi.c");
     println!("cargo:rustc-check-cfg=cfg(fe2o3_hip_device_properties)");
     println!("cargo:rustc-check-cfg=cfg(fe2o3_hip_cooperative_peer)");
+    println!("cargo:rustc-check-cfg=cfg(fe2o3_hip_memory_topology)");
     println!("cargo:rustc-check-cfg=cfg(fe2o3_hip_runtime)");
 
     let rocm_path = find_rocm_path();
@@ -35,6 +37,14 @@ fn main() {
             println!(
                 "cargo:warning=HIP headers do not provide the required cooperative-launch and \
                  peer-access ABI; those entry points will fail closed"
+            );
+        }
+        if compile_memory_topology_abi(&include_dir) {
+            println!("cargo:rustc-cfg=fe2o3_hip_memory_topology");
+        } else {
+            println!(
+                "cargo:warning=HIP headers do not provide the required managed-memory and VMM \
+                 ABI; those entry points will fail closed"
             );
         }
     } else {
@@ -66,6 +76,18 @@ fn compile_cooperative_peer_abi(include_dir: &Path) -> bool {
         .warnings(true)
         .warnings_into_errors(true)
         .try_compile("fe2o3_hip_cooperative_peer_abi")
+        .is_ok()
+}
+
+fn compile_memory_topology_abi(include_dir: &Path) -> bool {
+    cc::Build::new()
+        .file("native/memory_topology_abi.c")
+        .include(include_dir)
+        .define("__HIP_PLATFORM_AMD__", None)
+        .std("c11")
+        .warnings(true)
+        .warnings_into_errors(true)
+        .try_compile("fe2o3_hip_memory_topology_abi")
         .is_ok()
 }
 
