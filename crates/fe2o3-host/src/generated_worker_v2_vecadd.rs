@@ -248,7 +248,7 @@ where
 
 fn validate_packed_arguments(
     kernel_id: crate::KernelId,
-    packed: &GeneratedPackedArgumentsV1,
+    packed: &GeneratedPackedArgumentsV1<'_>,
 ) -> Result<(), GeneratedWorkerV2VecAddPrepareError> {
     if packed.kernel_id() != kernel_id
         || packed.len() != EXPLICIT_KERNARG_BYTES
@@ -431,7 +431,7 @@ mod tests {
             .unwrap()
     }
 
-    fn packed(kernel: u8) -> GeneratedPackedArgumentsV1 {
+    fn packed(kernel: u8) -> GeneratedPackedArgumentsV1<'static> {
         let plan = plan(kernel);
         // SAFETY: these inert test addresses are never dispatched or
         // dereferenced. The test covers only deterministic ABI encoding.

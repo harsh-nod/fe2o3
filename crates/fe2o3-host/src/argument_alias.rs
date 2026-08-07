@@ -197,6 +197,16 @@ struct GeneratedDeviceSliceMetadata {
     byte_length: usize,
 }
 
+/// Crate-private proof that a generated argument remains tied to an original
+/// allocation borrow even after its capability wrapper is dropped.
+pub(super) struct GeneratedArgumentBorrowV1<'allocation>(PhantomData<&'allocation ()>);
+
+impl GeneratedArgumentBorrowV1<'_> {
+    pub(super) const fn new() -> Self {
+        Self(PhantomData)
+    }
+}
+
 impl GeneratedDeviceSliceMetadata {
     fn from_buffer<T: DeviceCopy>(
         observed: &ObservedContext,
@@ -280,7 +290,7 @@ impl<'allocation, T: DeviceCopy> GeneratedReadDeviceSlice<'allocation, T> {
         &self,
         plan: &GeneratedArgumentPackingPlanV1,
         argument_index: usize,
-    ) -> Result<GeneratedArgumentInputV1, GeneratedArgumentPackError>
+    ) -> Result<GeneratedArgumentInputV1<'allocation>, GeneratedArgumentPackError>
     where
         T: GeneratedDeviceScalarV1,
     {
@@ -288,6 +298,7 @@ impl<'allocation, T: DeviceCopy> GeneratedReadDeviceSlice<'allocation, T> {
             argument_index,
             self.buffer.as_device_ptr().as_raw().addr(),
             self.buffer.len(),
+            GeneratedArgumentBorrowV1::new(),
         )
     }
 
@@ -383,7 +394,7 @@ impl<'allocation, T: DeviceCopy> GeneratedReadWriteDeviceSlice<'allocation, T> {
         &self,
         plan: &GeneratedArgumentPackingPlanV1,
         argument_index: usize,
-    ) -> Result<GeneratedArgumentInputV1, GeneratedArgumentPackError>
+    ) -> Result<GeneratedArgumentInputV1<'allocation>, GeneratedArgumentPackError>
     where
         T: GeneratedDeviceScalarV1,
     {
@@ -391,6 +402,7 @@ impl<'allocation, T: DeviceCopy> GeneratedReadWriteDeviceSlice<'allocation, T> {
             argument_index,
             self.buffer.as_device_ptr().as_raw().addr(),
             self.buffer.len(),
+            GeneratedArgumentBorrowV1::new(),
         )
     }
 }

@@ -1,4 +1,7 @@
-use crate::{AuthenticatedKernelArtifactV1, CompilerGeneratedKernelContractV1, KernelId};
+use crate::{
+    AuthenticatedKernelArtifactV1, CompilerGeneratedKernelContractV1, KernelId,
+    argument_alias::GeneratedArgumentBorrowV1,
+};
 use fe2o3_artifacts::{
     AbiField, AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership,
     MAX_ABI_BYTES, Mutability, PointerWidth, RustDisjointIndexSpaceV1, RustLayoutEvidenceV1,
@@ -7,7 +10,7 @@ use fe2o3_artifacts::{
     ScalarType, TypeIdentity, ValidationError,
 };
 use fe2o3_core::DeviceCopy;
-use std::{fmt, sync::Arc};
+use std::{fmt, marker::PhantomData, sync::Arc};
 
 mod generated_device_scalar_seal {
     pub trait Sealed {}
@@ -253,15 +256,18 @@ enum GeneratedArgumentValueV1 {
 ///
 /// The fields are private so downstream code cannot relabel a value as a
 /// different source argument or physical component. Construction is available
-/// only through a manifest-validated [`GeneratedArgumentPackingPlanV1`].
+/// only through a manifest-validated [`GeneratedArgumentPackingPlanV1`]. Safe
+/// slice inputs carry the lifetime of the capability's original allocation
+/// borrow; scalar and explicitly unsafe raw-slice inputs carry no such borrow.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[doc(hidden)]
-pub struct GeneratedArgumentInputV1 {
+pub struct GeneratedArgumentInputV1<'allocation> {
     kernel_id: KernelId,
     source_plan: Arc<GeneratedArgumentPackingPlanSealV1>,
     source_field: AbiField,
     argument_index: usize,
     value: GeneratedArgumentValueV1,
+    allocation: PhantomData<&'allocation ()>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -269,19 +275,21 @@ struct GeneratedArgumentPackingPlanSealV1;
 
 /// Inert, deterministically initialized kernel-argument bytes.
 ///
-/// This value contains no module, context, alias admission, retained resource,
-/// or launch authority. In particular, it deliberately has no raw-pointer
-/// accessor. Generated launch code must pair it with the existing lifetime and
-/// admission capabilities before an unsafe runtime boundary may consume it.
+/// This value contains no module, context, alias admission, resource handle, or
+/// launch authority. Its lifetime brand nevertheless retains every safe slice
+/// input's original allocation borrow. It deliberately has no raw-pointer
+/// accessor. Generated launch code must pair it with admission capabilities
+/// before an unsafe runtime boundary may consume it.
 #[must_use = "packed arguments are inert until paired with launch authority"]
 #[doc(hidden)]
-pub struct GeneratedPackedArgumentsV1 {
+pub struct GeneratedPackedArgumentsV1<'allocation> {
     kernel_id: KernelId,
     alignment: u32,
     bytes: Box<[u8]>,
+    allocation: PhantomData<&'allocation ()>,
 }
 
-impl GeneratedPackedArgumentsV1 {
+impl GeneratedPackedArgumentsV1<'_> {
     pub const fn kernel_id(&self) -> KernelId {
         self.kernel_id
     }
@@ -308,7 +316,7 @@ impl GeneratedPackedArgumentsV1 {
     }
 }
 
-impl fmt::Debug for GeneratedPackedArgumentsV1 {
+impl fmt::Debug for GeneratedPackedArgumentsV1<'_> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("GeneratedPackedArgumentsV1")
@@ -375,7 +383,7 @@ impl GeneratedArgumentPackingPlanV1 {
         &self,
         argument_index: usize,
         value: T,
-    ) -> Result<GeneratedArgumentInputV1, GeneratedArgumentPackError> {
+    ) -> Result<GeneratedArgumentInputV1<'static>, GeneratedArgumentPackError> {
         let expected = GeneratedFieldExpectationV1 {
             kind: AbiKind::Scalar(T::ABI_SCALAR_TYPE),
             size: T::RUST_SCALAR_TYPE.size_bytes(),
@@ -404,98 +412,96 @@ impl GeneratedArgumentPackingPlanV1 {
         &self,
         argument_index: usize,
         value: i8,
-    ) -> Result<GeneratedArgumentInputV1, GeneratedArgumentPackError> {
-        self.bind_scalar(argument_index, ScalarType::I8, &[value as u8])
+    ) -> Result<GeneratedArgumentInputV1<'static>, GeneratedArgumentPackError> {
+        self.scalar(argument_index, value)
     }
 
     pub fn scalar_u8(
         &self,
         argument_index: usize,
         value: u8,
-    ) -> Result<GeneratedArgumentInputV1, GeneratedArgumentPackError> {
-        self.bind_scalar(argument_index, ScalarType::U8, &[value])
+    ) -> Result<GeneratedArgumentInputV1<'static>, GeneratedArgumentPackError> {
+        self.scalar(argument_index, value)
     }
 
     pub fn scalar_i16(
         &self,
         argument_index: usize,
         value: i16,
-    ) -> Result<GeneratedArgumentInputV1, GeneratedArgumentPackError> {
-        self.bind_scalar(argument_index, ScalarType::I16, &value.to_le_bytes())
+    ) -> Result<GeneratedArgumentInputV1<'static>, GeneratedArgumentPackError> {
+        self.scalar(argument_index, value)
     }
 
     pub fn scalar_u16(
         &self,
         argument_index: usize,
         value: u16,
-    ) -> Result<GeneratedArgumentInputV1, GeneratedArgumentPackError> {
-        self.bind_scalar(argument_index, ScalarType::U16, &value.to_le_bytes())
+    ) -> Result<GeneratedArgumentInputV1<'static>, GeneratedArgumentPackError> {
+        self.scalar(argument_index, value)
     }
 
     /// Binds the exact IEEE-754 binary16 bit representation generated for an
     /// `f16` argument. Rust has no stable `f16` primitive on the supported MSRV.
-    pub fn scalar_f16_bits(
+    ///
+    /// # Safety
+    ///
+    /// This legacy escape must not be used by a general V3 adapter. The caller
+    /// must independently establish the exact source type and layout identity
+    /// for the manifest's `f16` argument.
+    pub unsafe fn scalar_f16_bits(
         &self,
         argument_index: usize,
         bits: u16,
-    ) -> Result<GeneratedArgumentInputV1, GeneratedArgumentPackError> {
-        self.bind_scalar(argument_index, ScalarType::F16, &bits.to_le_bytes())
+    ) -> Result<GeneratedArgumentInputV1<'static>, GeneratedArgumentPackError> {
+        self.bind_legacy_f16_bits(argument_index, bits)
     }
 
     pub fn scalar_i32(
         &self,
         argument_index: usize,
         value: i32,
-    ) -> Result<GeneratedArgumentInputV1, GeneratedArgumentPackError> {
-        self.bind_scalar(argument_index, ScalarType::I32, &value.to_le_bytes())
+    ) -> Result<GeneratedArgumentInputV1<'static>, GeneratedArgumentPackError> {
+        self.scalar(argument_index, value)
     }
 
     pub fn scalar_u32(
         &self,
         argument_index: usize,
         value: u32,
-    ) -> Result<GeneratedArgumentInputV1, GeneratedArgumentPackError> {
-        self.bind_scalar(argument_index, ScalarType::U32, &value.to_le_bytes())
+    ) -> Result<GeneratedArgumentInputV1<'static>, GeneratedArgumentPackError> {
+        self.scalar(argument_index, value)
     }
 
     pub fn scalar_f32(
         &self,
         argument_index: usize,
         value: f32,
-    ) -> Result<GeneratedArgumentInputV1, GeneratedArgumentPackError> {
-        self.bind_scalar(
-            argument_index,
-            ScalarType::F32,
-            &value.to_bits().to_le_bytes(),
-        )
+    ) -> Result<GeneratedArgumentInputV1<'static>, GeneratedArgumentPackError> {
+        self.scalar(argument_index, value)
     }
 
     pub fn scalar_i64(
         &self,
         argument_index: usize,
         value: i64,
-    ) -> Result<GeneratedArgumentInputV1, GeneratedArgumentPackError> {
-        self.bind_scalar(argument_index, ScalarType::I64, &value.to_le_bytes())
+    ) -> Result<GeneratedArgumentInputV1<'static>, GeneratedArgumentPackError> {
+        self.scalar(argument_index, value)
     }
 
     pub fn scalar_u64(
         &self,
         argument_index: usize,
         value: u64,
-    ) -> Result<GeneratedArgumentInputV1, GeneratedArgumentPackError> {
-        self.bind_scalar(argument_index, ScalarType::U64, &value.to_le_bytes())
+    ) -> Result<GeneratedArgumentInputV1<'static>, GeneratedArgumentPackError> {
+        self.scalar(argument_index, value)
     }
 
     pub fn scalar_f64(
         &self,
         argument_index: usize,
         value: f64,
-    ) -> Result<GeneratedArgumentInputV1, GeneratedArgumentPackError> {
-        self.bind_scalar(
-            argument_index,
-            ScalarType::F64,
-            &value.to_bits().to_le_bytes(),
-        )
+    ) -> Result<GeneratedArgumentInputV1<'static>, GeneratedArgumentPackError> {
+        self.scalar(argument_index, value)
     }
 
     /// Binds one generated device slice to its exact logical argument.
@@ -521,7 +527,7 @@ impl GeneratedArgumentPackingPlanV1 {
         pointer_width: PointerWidth,
         address_space: AddressSpace,
         access: Access,
-    ) -> Result<GeneratedArgumentInputV1, GeneratedArgumentPackError> {
+    ) -> Result<GeneratedArgumentInputV1<'static>, GeneratedArgumentPackError> {
         let address = u64::try_from(device_pointer.addr()).map_err(|_| {
             GeneratedArgumentPackError::IntegerWidthOverflow {
                 argument_index,
@@ -542,41 +548,46 @@ impl GeneratedArgumentPackingPlanV1 {
         )
     }
 
-    pub(crate) fn bind_generated_read_slice_v1<T: GeneratedDeviceScalarV1>(
+    pub(crate) fn bind_generated_read_slice_v1<'allocation, T: GeneratedDeviceScalarV1>(
         &self,
         argument_index: usize,
         address: usize,
         length: usize,
-    ) -> Result<GeneratedArgumentInputV1, GeneratedArgumentPackError> {
+        borrow: GeneratedArgumentBorrowV1<'allocation>,
+    ) -> Result<GeneratedArgumentInputV1<'allocation>, GeneratedArgumentPackError> {
         self.bind_generated_slice_v1::<T>(
             argument_index,
             address,
             length,
             GeneratedSliceEffectV1::SharedRead,
+            borrow,
         )
     }
 
-    pub(crate) fn bind_generated_read_write_slice_v1<T: GeneratedDeviceScalarV1>(
+    pub(crate) fn bind_generated_read_write_slice_v1<'allocation, T: GeneratedDeviceScalarV1>(
         &self,
         argument_index: usize,
         address: usize,
         length: usize,
-    ) -> Result<GeneratedArgumentInputV1, GeneratedArgumentPackError> {
+        borrow: GeneratedArgumentBorrowV1<'allocation>,
+    ) -> Result<GeneratedArgumentInputV1<'allocation>, GeneratedArgumentPackError> {
         self.bind_generated_slice_v1::<T>(
             argument_index,
             address,
             length,
             GeneratedSliceEffectV1::ExclusiveReadWrite,
+            borrow,
         )
     }
 
-    fn bind_generated_slice_v1<T: GeneratedDeviceScalarV1>(
+    fn bind_generated_slice_v1<'allocation, T: GeneratedDeviceScalarV1>(
         &self,
         argument_index: usize,
         address: usize,
         length: usize,
         effect: GeneratedSliceEffectV1,
-    ) -> Result<GeneratedArgumentInputV1, GeneratedArgumentPackError> {
+        _borrow: GeneratedArgumentBorrowV1<'allocation>,
+    ) -> Result<GeneratedArgumentInputV1<'allocation>, GeneratedArgumentPackError> {
         let width = self.pointer_width.bytes();
         let (type_identity, mutability, access, ownership, alias_class) = match effect {
             GeneratedSliceEffectV1::SharedRead => (
@@ -646,36 +657,36 @@ impl GeneratedArgumentPackingPlanV1 {
     /// zero and is never overwritten. Standalone raw-pointer arguments are not
     /// supported by this executor because no retained capability is represented
     /// here.
-    pub fn pack(
+    pub fn pack<'allocation>(
         &self,
-        inputs: impl IntoIterator<Item = GeneratedArgumentInputV1>,
-    ) -> Result<GeneratedPackedArgumentsV1, GeneratedArgumentPackError> {
+        inputs: impl IntoIterator<Item = GeneratedArgumentInputV1<'allocation>>,
+    ) -> Result<GeneratedPackedArgumentsV1<'allocation>, GeneratedArgumentPackError> {
         pack_arguments(self, inputs)
     }
 
-    fn bind_scalar(
+    fn bind_legacy_f16_bits(
         &self,
         argument_index: usize,
-        scalar_type: ScalarType,
-        bytes: &[u8],
-    ) -> Result<GeneratedArgumentInputV1, GeneratedArgumentPackError> {
+        bits: u16,
+    ) -> Result<GeneratedArgumentInputV1<'static>, GeneratedArgumentPackError> {
+        let bytes = bits.to_le_bytes();
         let mut storage = [0_u8; 8];
-        storage[..bytes.len()].copy_from_slice(bytes);
+        storage[..bytes.len()].copy_from_slice(&bytes);
         self.bind_input(
             argument_index,
             GeneratedArgumentValueV1::Scalar {
-                scalar_type,
+                scalar_type: ScalarType::F16,
                 bytes: storage,
                 byte_length: bytes.len() as u8,
             },
         )
     }
 
-    fn bind_input(
+    fn bind_input<'allocation>(
         &self,
         argument_index: usize,
         value: GeneratedArgumentValueV1,
-    ) -> Result<GeneratedArgumentInputV1, GeneratedArgumentPackError> {
+    ) -> Result<GeneratedArgumentInputV1<'allocation>, GeneratedArgumentPackError> {
         let source_field = self.fields.get(argument_index).ok_or(
             GeneratedArgumentPackError::ArgumentIndexOutOfBounds {
                 argument_index,
@@ -688,6 +699,7 @@ impl GeneratedArgumentPackingPlanV1 {
             source_field: source_field.clone(),
             argument_index,
             value,
+            allocation: PhantomData,
         };
         validate_input(self, &input)?;
         Ok(input)
@@ -1181,10 +1193,10 @@ impl fmt::Display for GeneratedArgumentFieldProperty {
     }
 }
 
-fn pack_arguments(
+fn pack_arguments<'allocation>(
     plan: &GeneratedArgumentPackingPlanV1,
-    inputs: impl IntoIterator<Item = GeneratedArgumentInputV1>,
-) -> Result<GeneratedPackedArgumentsV1, GeneratedArgumentPackError> {
+    inputs: impl IntoIterator<Item = GeneratedArgumentInputV1<'allocation>>,
+) -> Result<GeneratedPackedArgumentsV1<'allocation>, GeneratedArgumentPackError> {
     if plan.kernarg_size > MAX_ABI_BYTES {
         return Err(GeneratedArgumentPackError::KernargTooLarge {
             size: plan.kernarg_size,
@@ -1282,12 +1294,13 @@ fn pack_arguments(
         kernel_id: plan.kernel_id,
         alignment: plan.kernarg_alignment,
         bytes: bytes.into_boxed_slice(),
+        allocation: PhantomData,
     })
 }
 
 fn validate_input(
     plan: &GeneratedArgumentPackingPlanV1,
-    input: &GeneratedArgumentInputV1,
+    input: &GeneratedArgumentInputV1<'_>,
 ) -> Result<(), GeneratedArgumentPackError> {
     let argument_index = input.argument_index;
     let field = plan.fields.get(argument_index).ok_or(
@@ -1761,10 +1774,10 @@ fn packing_components(layout: &AbiLayout) -> Vec<GeneratedPackingComponentV1> {
 #[cfg(test)]
 mod tests {
     use super::{
-        CompilerGeneratedArgumentLayoutV1, GeneratedArgumentFieldProperty,
-        GeneratedArgumentLayoutError, GeneratedArgumentPackError, GeneratedArgumentPackingError,
-        GeneratedArgumentValueV1, GeneratedDeviceScalarV1, GeneratedPackingComponentKindV1,
-        validate_argument_packing,
+        CompilerGeneratedArgumentLayoutV1, GeneratedArgumentBorrowV1,
+        GeneratedArgumentFieldProperty, GeneratedArgumentLayoutError, GeneratedArgumentPackError,
+        GeneratedArgumentPackingError, GeneratedArgumentValueV1, GeneratedDeviceScalarV1,
+        GeneratedPackingComponentKindV1, validate_argument_packing,
     };
     use crate::KernelId;
     use fe2o3_artifacts::{
@@ -1784,6 +1797,10 @@ mod tests {
         )
     }
 
+    fn borrow() -> GeneratedArgumentBorrowV1<'static> {
+        GeneratedArgumentBorrowV1::new()
+    }
+
     fn scalar(name: &str, offset: u64, alignment: u32, seed: u8) -> AbiField {
         typed_scalar(name, offset, alignment, ScalarType::U32, seed)
     }
@@ -1801,6 +1818,45 @@ mod tests {
             super::scalar_width(scalar_type),
             alignment,
             AbiKind::Scalar(scalar_type),
+            Mutability::Immutable,
+            Access::ByValue,
+            AddressSpace::Value,
+            if scalar_type == ScalarType::F16 {
+                identity(seed)
+            } else {
+                let scalar = match scalar_type {
+                    ScalarType::I8 => fe2o3_artifacts::RustScalarElementTypeV1::I8,
+                    ScalarType::U8 => fe2o3_artifacts::RustScalarElementTypeV1::U8,
+                    ScalarType::I16 => fe2o3_artifacts::RustScalarElementTypeV1::I16,
+                    ScalarType::U16 => fe2o3_artifacts::RustScalarElementTypeV1::U16,
+                    ScalarType::I32 => fe2o3_artifacts::RustScalarElementTypeV1::I32,
+                    ScalarType::U32 => fe2o3_artifacts::RustScalarElementTypeV1::U32,
+                    ScalarType::I64 => fe2o3_artifacts::RustScalarElementTypeV1::I64,
+                    ScalarType::U64 => fe2o3_artifacts::RustScalarElementTypeV1::U64,
+                    ScalarType::F32 => fe2o3_artifacts::RustScalarElementTypeV1::F32,
+                    ScalarType::F64 => fe2o3_artifacts::RustScalarElementTypeV1::F64,
+                    ScalarType::F16 => unreachable!(),
+                };
+                super::canonical_scalar_layout_v1(scalar, PointerWidth::Bits64).type_identity()
+            },
+            ArgumentOwnership::ByValue,
+            AliasClass::Value,
+        )
+        .unwrap()
+    }
+
+    fn scalar_with_untrusted_identity(
+        name: &str,
+        offset: u64,
+        alignment: u32,
+        seed: u8,
+    ) -> AbiField {
+        AbiField::new(
+            Name::new(name).unwrap(),
+            offset,
+            4,
+            alignment,
+            AbiKind::Scalar(ScalarType::U32),
             Mutability::Immutable,
             Access::ByValue,
             AddressSpace::Value,
@@ -2035,9 +2091,12 @@ mod tests {
 
     #[test]
     fn type_size_and_alignment_must_match() {
-        let manifest = layout(vec![scalar("value", 0, 4, 1)], 8, 8);
+        let manifest = layout(vec![scalar_with_untrusted_identity("value", 0, 4, 1)], 8, 8);
         assert_eq!(
-            validate(&manifest, &generated(vec![scalar("value", 0, 4, 2)], 8, 8)),
+            validate(
+                &manifest,
+                &generated(vec![scalar_with_untrusted_identity("value", 0, 4, 2)], 8, 8,),
+            ),
             Err(GeneratedArgumentPackingError::FieldMismatch {
                 index: 0,
                 property: GeneratedArgumentFieldProperty::TypeIdentity,
@@ -2153,6 +2212,9 @@ mod tests {
         ];
         let manifest = layout(fields.clone(), 48, 8);
         let plan = validate(&manifest, &generated(fields, 48, 8)).unwrap();
+        // SAFETY: this regression test exercises only the explicitly unsafe
+        // legacy f16 wire escape; the inert value is never dispatched.
+        let f16 = unsafe { plan.scalar_f16_bits(4, 0x3e00) }.unwrap();
         let inputs = vec![
             plan.scalar_f64(10, -13.5).unwrap(),
             plan.scalar_u64(9, 0x8877_6655_4433_2211).unwrap(),
@@ -2160,7 +2222,7 @@ mod tests {
             plan.scalar_f32(7, -2.5).unwrap(),
             plan.scalar_u32(6, 0x8877_6655).unwrap(),
             plan.scalar_i32(5, -0x0102_0304).unwrap(),
-            plan.scalar_f16_bits(4, 0x3e00).unwrap(),
+            f16,
             plan.scalar_u16(3, 0x8877).unwrap(),
             plan.scalar_i16(2, -0x0102).unwrap(),
             plan.scalar_u8(1, 0x88).unwrap(),
@@ -2232,7 +2294,7 @@ mod tests {
         let slice_plan = validate(&slice_manifest, &generated(vec![slice_field], 16, 8)).unwrap();
         assert_eq!(
             slice_plan
-                .bind_generated_read_slice_v1::<u32>(0, 0x1000, 4)
+                .bind_generated_read_slice_v1::<u32>(0, 0x1000, 4, borrow())
                 .unwrap_err(),
             GeneratedArgumentPackError::FieldMismatch {
                 argument_index: 0,
@@ -2247,7 +2309,7 @@ mod tests {
         let shared_manifest = layout(vec![shared.clone()], 16, 8);
         let shared_plan = validate(&shared_manifest, &generated(vec![shared], 16, 8)).unwrap();
         let input = shared_plan
-            .bind_generated_read_slice_v1::<f32>(0, 0x1234, 7)
+            .bind_generated_read_slice_v1::<f32>(0, 0x1234, 7, borrow())
             .unwrap();
         assert_eq!(
             shared_plan.pack([input.clone()]).unwrap().bytes(),
@@ -2276,7 +2338,7 @@ mod tests {
             validate(&write_only_manifest, &generated(vec![write_only], 16, 8)).unwrap();
         assert_eq!(
             write_only_plan
-                .bind_generated_read_write_slice_v1::<f32>(0, 0x2000, 8)
+                .bind_generated_read_write_slice_v1::<f32>(0, 0x2000, 8, borrow())
                 .unwrap_err(),
             GeneratedArgumentPackError::FieldMismatch {
                 argument_index: 0,
@@ -2290,7 +2352,7 @@ mod tests {
             validate(&read_write_manifest, &generated(vec![read_write], 16, 8)).unwrap();
         assert!(
             read_write_plan
-                .bind_generated_read_write_slice_v1::<f32>(0, 0x2000, 8)
+                .bind_generated_read_write_slice_v1::<f32>(0, 0x2000, 8, borrow())
                 .is_ok()
         );
     }
@@ -2299,7 +2361,7 @@ mod tests {
         let manifest = layout(vec![field.clone()], 16, 8);
         let plan = validate(&manifest, &generated(vec![field], 16, 8)).unwrap();
         assert_eq!(
-            plan.bind_generated_read_slice_v1::<f32>(0, 0x1000, 4)
+            plan.bind_generated_read_slice_v1::<f32>(0, 0x1000, 4, borrow())
                 .unwrap_err(),
             GeneratedArgumentPackError::FieldMismatch {
                 argument_index: 0,
@@ -2383,7 +2445,7 @@ mod tests {
         let manifest = layout(vec![raw_pointer_field.clone()], 16, 8);
         let plan = validate(&manifest, &generated(vec![raw_pointer_field], 16, 8)).unwrap();
         assert_eq!(
-            plan.bind_generated_read_write_slice_v1::<f32>(0, 0x2000, 4)
+            plan.bind_generated_read_write_slice_v1::<f32>(0, 0x2000, 4, borrow())
                 .unwrap_err(),
             GeneratedArgumentPackError::FieldMismatch {
                 argument_index: 0,
@@ -2681,10 +2743,9 @@ mod tests {
             validate(&slice_manifest, &generated(slice_fields.clone(), 16, 8)).unwrap();
         assert!(matches!(
             slice_plan.scalar_u32(0, 1),
-            Err(GeneratedArgumentPackError::KindMismatch {
+            Err(GeneratedArgumentPackError::FieldMismatch {
                 argument_index: 0,
-                expected: "slice",
-                provided: "scalar",
+                property: GeneratedArgumentFieldProperty::TypeIdentity,
             })
         ));
 
@@ -2693,10 +2754,9 @@ mod tests {
         let scalar_plan = validate(&scalar_manifest, &generated(scalar_fields, 4, 4)).unwrap();
         assert!(matches!(
             scalar_plan.scalar_u64(0, 1),
-            Err(GeneratedArgumentPackError::ScalarTypeMismatch {
+            Err(GeneratedArgumentPackError::FieldMismatch {
                 argument_index: 0,
-                expected: ScalarType::U32,
-                provided: ScalarType::U64,
+                property: GeneratedArgumentFieldProperty::TypeIdentity,
             })
         ));
 
