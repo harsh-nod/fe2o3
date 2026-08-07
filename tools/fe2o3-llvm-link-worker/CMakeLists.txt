@@ -67,6 +67,48 @@ if(CMAKE_CONFIGURATION_TYPES)
     "multi-config generators cannot produce one measured worker identity")
 endif()
 
+set(FE2O3_GFX942_DEVICE_LIB_DIR "/opt/rocm/amdgcn/bitcode" CACHE PATH
+  "Directory containing the reviewed ROCm gfx942 device-library bitcode")
+set(FE2O3_GFX942_DEVICE_LIB_FILES
+  ocml.bc oclc_isa_version_942.bc oclc_unsafe_math_off.bc
+  oclc_finite_only_off.bc)
+set(FE2O3_GFX942_DEVICE_LIBS_ENABLED 1)
+foreach(FE2O3_DEVICE_LIB_FILE IN LISTS FE2O3_GFX942_DEVICE_LIB_FILES)
+  if(NOT EXISTS
+     "${FE2O3_GFX942_DEVICE_LIB_DIR}/${FE2O3_DEVICE_LIB_FILE}")
+    set(FE2O3_GFX942_DEVICE_LIBS_ENABLED 0)
+  endif()
+endforeach()
+if(FE2O3_GFX942_DEVICE_LIBS_ENABLED)
+  file(REAL_PATH "${FE2O3_GFX942_DEVICE_LIB_DIR}"
+    FE2O3_GFX942_DEVICE_LIB_DIR)
+  file(SHA256 "${FE2O3_GFX942_DEVICE_LIB_DIR}/ocml.bc"
+    FE2O3_GFX942_OCML_SHA256)
+  file(SHA256
+    "${FE2O3_GFX942_DEVICE_LIB_DIR}/oclc_isa_version_942.bc"
+    FE2O3_GFX942_ISA_SHA256)
+  file(SHA256
+    "${FE2O3_GFX942_DEVICE_LIB_DIR}/oclc_unsafe_math_off.bc"
+    FE2O3_GFX942_UNSAFE_MATH_SHA256)
+  file(SHA256
+    "${FE2O3_GFX942_DEVICE_LIB_DIR}/oclc_finite_only_off.bc"
+    FE2O3_GFX942_FINITE_ONLY_SHA256)
+  message(STATUS
+    "gfx942 OCML provider enabled from ${FE2O3_GFX942_DEVICE_LIB_DIR}")
+else()
+  set(FE2O3_GFX942_OCML_SHA256 "disabled")
+  set(FE2O3_GFX942_ISA_SHA256 "disabled")
+  set(FE2O3_GFX942_UNSAFE_MATH_SHA256 "disabled")
+  set(FE2O3_GFX942_FINITE_ONLY_SHA256 "disabled")
+  message(STATUS "gfx942 OCML provider disabled: reviewed bitcode is absent")
+endif()
+string(REPLACE "\\" "\\\\" FE2O3_GFX942_DEVICE_LIB_DIR_ESCAPED
+  "${FE2O3_GFX942_DEVICE_LIB_DIR}")
+string(REPLACE "\"" "\\\"" FE2O3_GFX942_DEVICE_LIB_DIR_ESCAPED
+  "${FE2O3_GFX942_DEVICE_LIB_DIR_ESCAPED}")
+configure_file(include/WorkerBuildConfig.h.in
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/WorkerBuildConfig.h" @ONLY)
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -88,11 +130,18 @@ set(FE2O3_WORKER_MEASUREMENT_PREIMAGE
   "|exe_linker_flags=${CMAKE_EXE_LINKER_FLAGS}"
   "|ipo=${CMAKE_INTERPROCEDURAL_OPTIMIZATION}"
   "|pic=${CMAKE_POSITION_INDEPENDENT_CODE}"
+  "|gfx942_device_libs=${FE2O3_GFX942_DEVICE_LIBS_ENABLED}"
+  "|ocml=${FE2O3_GFX942_OCML_SHA256}"
+  "|isa942=${FE2O3_GFX942_ISA_SHA256}"
+  "|unsafe_math_off=${FE2O3_GFX942_UNSAFE_MATH_SHA256}"
+  "|finite_only_off=${FE2O3_GFX942_FINITE_ONLY_SHA256}"
   "|cxx=20|target_flags=-fno-exceptions,-fno-rtti")
 foreach(FE2O3_WORKER_SOURCE IN ITEMS
     CMakeLists.txt include/WorkerProtocol.h include/WorkerPipeline.h
+    include/WorkerDeviceLibraryPolicy.h include/WorkerBuildConfig.h.in
     include/WorkerLldPolicy.h
-    src/WorkerProtocol.cpp src/WorkerPipeline.cpp src/main.cpp)
+    src/WorkerProtocol.cpp src/WorkerPipeline.cpp
+    src/WorkerDeviceLibraryPolicy.cpp src/main.cpp)
   file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/${FE2O3_WORKER_SOURCE}"
     FE2O3_WORKER_SOURCE_SHA256)
   string(APPEND FE2O3_WORKER_MEASUREMENT_PREIMAGE
@@ -120,11 +169,14 @@ target_compile_options(fe2o3_worker_protocol PRIVATE -Wall -Wextra -Wpedantic
   -Werror -Wno-unused-parameter -fno-exceptions -fno-rtti)
 target_link_libraries(fe2o3_worker_protocol PUBLIC LLVMSupport)
 
-add_library(fe2o3_worker_pipeline STATIC src/WorkerPipeline.cpp)
+add_library(fe2o3_worker_pipeline STATIC src/WorkerPipeline.cpp
+  src/WorkerDeviceLibraryPolicy.cpp)
 target_include_directories(fe2o3_worker_pipeline
   PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_include_directories(fe2o3_worker_pipeline SYSTEM PRIVATE
   ${LLVM_INCLUDE_DIRS} ${LLD_INCLUDE_DIRS})
+target_include_directories(fe2o3_worker_pipeline PRIVATE
+  "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_compile_definitions(fe2o3_worker_pipeline PRIVATE
   FE2O3_LLVM_BUILD_ID="${FE2O3_MEASURED_LLVM_BUILD_ID}"
   FE2O3_WORKER_BUILD_ID="${FE2O3_WORKER_MEASUREMENT}")
@@ -164,4 +216,16 @@ if(BUILD_TESTING)
     fe2o3_worker_pipeline ${FE2O3_LLVM_TEST_LIBS})
   add_test(NAME fe2o3-worker-pipeline-tests
     COMMAND fe2o3-worker-pipeline-tests)
+
+  add_executable(fe2o3-worker-device-library-policy-tests
+    tests/DeviceLibraryPolicyTests.cpp)
+  target_include_directories(fe2o3-worker-device-library-policy-tests SYSTEM
+    PRIVATE ${LLVM_INCLUDE_DIRS})
+  target_compile_options(fe2o3-worker-device-library-policy-tests PRIVATE
+    -Wall -Wextra -Wpedantic -Werror -Wno-unused-parameter
+    -fno-exceptions -fno-rtti)
+  target_link_libraries(fe2o3-worker-device-library-policy-tests PRIVATE
+    fe2o3_worker_pipeline ${FE2O3_LLVM_TEST_LIBS})
+  add_test(NAME fe2o3-worker-device-library-policy-tests
+    COMMAND fe2o3-worker-device-library-policy-tests)
 endif()
