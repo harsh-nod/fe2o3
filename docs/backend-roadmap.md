@@ -34,16 +34,19 @@ For the full milestone plan, see [implementation-plan.md](implementation-plan.md
   ops, thread-index calls, record load coverage, and selected index/arithmetic
   shape markers before emitting through the existing MIR recognizer. Load/store
   record place labels are parsed into a small access sketch, helper/raw index
-  records are parsed into a linear index sketch, and direct slice reads/writes
-  are combined into a slice-access sketch keyed by ABI arg, MIR local, and
-  affine index. The AMDGPU validator now checks read-only slice loads and direct
-  `&mut [T]` output stores from that record-derived slice sketch. A record
-  expression sketch also binds slice-load leaves, scalar args, float literals,
-  unary/binary expression ops, and store roots so the validator can cross-check
-  expression requirements. When that sketch can reconstruct the full expression
-  root, the AMDGPU path now uses the record-derived `ElementwiseExpr` for LLVM
-  IR emission; raw rustc MIR remains the temporary fallback for cases the record
-  expression sketch cannot yet represent.
+  records are parsed into a linear index sketch, and slice reads/writes are
+  combined into a slice-access sketch keyed by ABI arg, MIR local, and affine
+  index. The sketch tracks direct slice accesses plus
+  `DisjointSlice::get_mut`/`get_mut_at` element references through option
+  projection into the final deref load/store. The AMDGPU validator now checks
+  read-only slice loads, direct `&mut [T]` output stores, and disjoint output
+  read-before-write stores from that record-derived slice sketch. A record
+  expression sketch also binds slice-load leaves, disjoint output element
+  leaves, scalar args, float literals, unary/binary expression ops, and store
+  roots so the validator can cross-check expression requirements. When that
+  sketch can reconstruct the full expression root, the AMDGPU path now uses the
+  record-derived `ElementwiseExpr` for LLVM IR emission; raw rustc MIR remains
+  the temporary fallback for shape discovery the record plan does not yet own.
 - `rustc-codegen-fe2o3` contains the first real backend utilities:
   - ABI validation for supported kernel arguments from monomorphized MIR locals.
   - A narrow MIR recognizer and AMDGPU LLVM IR emitter for `f32`/`f64` elementwise
@@ -118,18 +121,21 @@ For the full milestone plan, see [implementation-plan.md](implementation-plan.md
    current example, preserving strict rejection and transactional cleanup,
    before making it the default and removing the temporary elementwise
    recognizer.
-2. Replace device stubs in `fe2o3-device` with lowering rules:
+2. Move the remaining legacy `ElementwiseShape` output/source discovery off raw
+   rustc MIR and onto
+   the record-derived access/expression sketches.
+3. Replace device stubs in `fe2o3-device` with lowering rules:
    - `thread::thread_idx_*` -> `llvm.amdgcn.workitem.id.*`
    - `thread::block_idx_*` -> `llvm.amdgcn.workgroup.id.*`
    - `sync::syncthreads` -> `llvm.amdgcn.s.barrier`
    - `block_dim_*` and grid dimensions -> dispatch packet reads
-3. Define the device kernel ABI explicitly:
+4. Define the device kernel ABI explicitly:
    - Rust slices lower to pointer plus `usize` length.
    - `DisjointSlice<T>` lowers to mutable pointer plus `usize` length.
    - Plain scalars pass by value.
-4. Generalize artifact placement beyond sidecar files in
+5. Generalize artifact placement beyond sidecar files in
    `target/fe2o3`.
-5. Add a repeatable hardware test target for the generated host binary plus
+6. Add a repeatable hardware test target for the generated host binary plus
    HSACO path.
 
 ## Runtime ABI Assumption

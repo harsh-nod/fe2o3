@@ -112,7 +112,10 @@ Safe ownership of resources used by asynchronous copies is documented in
   elementwise examples. It recognizes scalar float arguments and literals,
   read-only slice loads, `DisjointSlice<T>` or indexed mutable-slice stores,
   `+`, `-`, `*`, `/`, unary negation, read-before-write, and the documented
-  constant/affine one-dimensional index forms.
+  constant/affine one-dimensional index forms. Its record-derived access and
+  expression sketches retain `DisjointSlice::get_mut` and `get_mut_at`
+  references through option projection into the final dereference, including
+  read-before-write expressions.
 - Setting `FE2O3_CODEGEN_PIPELINE=kernel-ir-v1` routes the exact `fill` or
   three-slice `vecadd` kernel through imported MIR, canonical target-neutral
   kernel IR, verification, exact-shape legalization, G1 AMDGPU lowering, and

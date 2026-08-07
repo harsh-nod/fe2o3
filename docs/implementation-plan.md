@@ -204,16 +204,19 @@ Status: MVP implemented for `f32`/`f64` elementwise expression kernel shapes.
   ops, thread-index calls, record load coverage, and selected index/arithmetic
   shape markers before emitting through the existing MIR recognizer. Load/store
   record place labels are parsed into a small access sketch, helper/raw index
-  records are parsed into a linear index sketch, and direct slice reads/writes
-  are combined into a slice-access sketch keyed by ABI arg, MIR local, and
-  affine index. The AMDGPU validator now checks read-only slice loads and direct
-  `&mut [T]` output stores from that record-derived slice sketch. A record
-  expression sketch also binds slice-load leaves, scalar args, float literals,
-  unary/binary expression ops, and store roots so the validator can cross-check
-  expression requirements. When that sketch can reconstruct the full expression
-  root, the AMDGPU path now uses the record-derived `ElementwiseExpr` for LLVM
-  IR emission; raw rustc MIR remains the temporary fallback for cases the record
-  expression sketch cannot yet represent.
+  records are parsed into a linear index sketch, and slice reads/writes are
+  combined into a slice-access sketch keyed by ABI arg, MIR local, and affine
+  index. The sketch tracks direct slice accesses plus
+  `DisjointSlice::get_mut`/`get_mut_at` element references through option
+  projection into the final deref load/store. The AMDGPU validator now checks
+  read-only slice loads, direct `&mut [T]` output stores, and disjoint output
+  read-before-write stores from that record-derived slice sketch. A record
+  expression sketch also binds slice-load leaves, disjoint output element
+  leaves, scalar args, float literals, unary/binary expression ops, and store
+  roots so the validator can cross-check expression requirements. When that
+  sketch can reconstruct the full expression root, the AMDGPU path now uses the
+  record-derived `ElementwiseExpr` for LLVM IR emission; raw rustc MIR remains
+  the temporary fallback for shape discovery the record plan does not yet own.
 - The backend emits an AMDGPU LLVM IR `amdgpu_kernel` after validating the ABI
   and body pattern.
 - The emitted IR uses `llvm.amdgcn.workitem.id.x` and
@@ -427,12 +430,12 @@ Grow the MIR import scaffold into the first real lowering path:
    record-driven lowering plan one piece at a time. The plan now carries typed
    locals, statement operation labels, call destinations/operands, parsed
    load/store access sketches, a linear index sketch, and a derived slice-access
-   sketch for read/write slice sources, plus a first expression sketch for
-   leaves, literals, unary/binary ops, and store roots. The AMDGPU path now uses
-   the record-derived expression root for emission when it is complete enough.
-   The next slice should cover disjoint-output read-before-write sources in the
-   record expression sketch and then move output/source discovery itself off raw
-   rustc MIR.
+   sketch for direct and disjoint read/write slice sources, plus a first
+   expression sketch for leaves, literals, unary/binary ops, and store roots.
+   The AMDGPU path now uses the record-derived expression root for emission when
+   it is complete enough. The next slice should move `ElementwiseShape`
+   output/source discovery itself off raw rustc MIR and onto the record-derived
+   access/expression sketches.
 2. Lower enough operations for the current elementwise kernel shapes: args,
    basic blocks, integer arithmetic, pointer arithmetic, loads/stores, branch,
    and return.
