@@ -447,7 +447,7 @@ fn kernel_ir_launch_contract(
         ));
     }
     let Some(launch) = contract.launch() else {
-        return Ok(None);
+        return Ok(typed_workgroup);
     };
     if launch.min_workgroups_per_compute_unit().is_some() {
         return Err(diagnostic(
@@ -510,6 +510,7 @@ enum LocalBinding {
     OptionPointer {
         discriminant: ValueId,
         payload: ValueId,
+        some_entry: Option<usize>,
     },
 }
 
@@ -520,6 +521,7 @@ struct FunctionLowerer<'function, 'declarations> {
     locals: BTreeMap<usize, LocalBinding>,
     value_types: BTreeMap<ValueId, Type>,
     trusted_thread_indices: BTreeSet<ValueId>,
+    guarded_pointer_values: BTreeMap<ValueId, usize>,
     return_type: Option<Type>,
     next_value: u32,
     trap_block: Option<BlockId>,
@@ -542,6 +544,7 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
             locals: BTreeMap::new(),
             value_types: BTreeMap::new(),
             trusted_thread_indices: BTreeSet::new(),
+            guarded_pointer_values: BTreeMap::new(),
             return_type: None,
             next_value: 0,
             trap_block: None,
@@ -885,6 +888,26 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                 let lhs = self.lower_operand(lhs, block, &location)?;
                 let rhs = self.lower_operand(rhs, block, &location)?;
                 let ty = self.value_type(lhs, &location)?.clone();
+                if self.is_exact_general_v3_alpha_zeta_context() {
+                    let rhs_ty = self.value_type(rhs, &location)?;
+                    if ty != Type::F32 || rhs_ty != &Type::F32 {
+                        return Err(diagnostic(
+                            TranslationDiagnosticCode::UnsupportedType,
+                            location,
+                            format!(
+                                "exact General V3 alpha/zeta addition requires two f32 operands; found {ty:?} and {rhs_ty:?}"
+                            ),
+                        ));
+                    }
+                    if self.float_target.is_none() {
+                        return Err(diagnostic(
+                            TranslationDiagnosticCode::UnsupportedRvalue,
+                            location,
+                            "f32 addition requires the exact gfx942 floating-point profile",
+                        ));
+                    }
+                    self.require_strict_float_policy(&location)?;
+                }
                 let result = self.emit_result(
                     block,
                     ty,
@@ -1031,6 +1054,7 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                     let exhaustive = targets.len() == 2
                         && zero.is_some()
                         && one.is_some()
+                        && zero.map(|target| target.target) != one.map(|target| target.target)
                         && self.function.blocks.iter().any(|block| {
                             block.index == *otherwise
                                 && matches!(
@@ -1045,10 +1069,50 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                             "boolean switch must have exact 0/1 cases and an unreachable default",
                         ));
                     }
+                    let some_entry = one.expect("checked above").target;
+                    if !mir_block_dominates(self.function, block_index, some_entry) {
+                        return Err(diagnostic(
+                            TranslationDiagnosticCode::UnsupportedStatement,
+                            location,
+                            "Option Some edge is not dominated by its bounds predicate",
+                        ));
+                    }
+                    let mut option_locals = self.locals.iter().filter_map(|(local, binding)| {
+                        matches!(
+                            binding,
+                            LocalBinding::OptionPointer { discriminant, .. }
+                                if *discriminant == selector
+                        )
+                        .then_some(*local)
+                    });
+                    let option_local = option_locals.next();
+                    if option_local.is_none() || option_locals.next().is_some() {
+                        return Err(diagnostic(
+                            TranslationDiagnosticCode::UnsupportedStatement,
+                            location,
+                            "boolean Option switch is not bound to exactly one translated get_mut result",
+                        ));
+                    }
+                    let option_local = option_local.expect("checked above");
+                    let LocalBinding::OptionPointer {
+                        discriminant,
+                        payload,
+                        ..
+                    } = self.locals[&option_local]
+                    else {
+                        unreachable!("selected an Option pointer above")
+                    };
+                    self.locals.insert(
+                        option_local,
+                        LocalBinding::OptionPointer {
+                            discriminant,
+                            payload,
+                            some_entry: Some(some_entry),
+                        },
+                    );
                     return Ok(Terminator::ConditionalBranch {
                         condition: selector,
-                        then_target: self
-                            .block_id(one.expect("checked above").target, location.clone())?,
+                        then_target: self.block_id(some_entry, location.clone())?,
                         then_arguments: Vec::new(),
                         else_target: self
                             .block_id(zero.expect("checked above").target, location)?,
@@ -1434,6 +1498,7 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                     LocalBinding::OptionPointer {
                         discriminant: discriminant.id,
                         payload: payload.id,
+                        some_entry: None,
                     },
                     location.clone(),
                 )?
@@ -1609,6 +1674,7 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
             LocalBinding::OptionPointer {
                 discriminant: in_bounds,
                 payload,
+                some_entry: None,
             },
             location.clone(),
         )?;
@@ -2020,7 +2086,10 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
     ) -> Result<ValueId, TranslationDiagnostic> {
         match place.projection.as_slice() {
             [] => match self.locals.get(&place.local).copied() {
-                Some(LocalBinding::Value(value)) => Ok(value),
+                Some(LocalBinding::Value(value)) => {
+                    self.validate_guarded_pointer_use(value, location)?;
+                    Ok(value)
+                }
                 Some(LocalBinding::OptionPointer { .. } | LocalBinding::DeviceMathCapability) => {
                     Err(diagnostic(
                         TranslationDiagnosticCode::UnsupportedType,
@@ -2037,7 +2106,37 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                 MirProjectionElem::Downcast { variant: 1 },
                 MirProjectionElem::Field(0),
             ] => match self.locals.get(&place.local).copied() {
-                Some(LocalBinding::OptionPointer { payload, .. }) => Ok(payload),
+                Some(LocalBinding::OptionPointer {
+                    payload,
+                    some_entry,
+                    ..
+                }) => {
+                    if self.is_exact_general_v3_alpha_zeta_context() {
+                        let Some(some_entry) = some_entry else {
+                            return Err(diagnostic(
+                                TranslationDiagnosticCode::UnsupportedProjection,
+                                location.clone(),
+                                "Option payload is used before an authenticated Some-edge guard",
+                            ));
+                        };
+                        let Some(use_block) = location.block else {
+                            return Err(diagnostic(
+                                TranslationDiagnosticCode::UnsupportedProjection,
+                                location.clone(),
+                                "Option payload use has no MIR block identity",
+                            ));
+                        };
+                        if !mir_block_dominates(self.function, some_entry, use_block) {
+                            return Err(diagnostic(
+                                TranslationDiagnosticCode::UnsupportedProjection,
+                                location.clone(),
+                                "Option payload use is not dominated by the bounds-checked Some edge",
+                            ));
+                        }
+                        self.guarded_pointer_values.insert(payload, some_entry);
+                    }
+                    Ok(payload)
+                }
                 Some(LocalBinding::Value(_) | LocalBinding::DeviceMathCapability) => {
                     Err(diagnostic(
                         TranslationDiagnosticCode::UnsupportedType,
@@ -2270,7 +2369,10 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
         location: &TranslationLocation,
     ) -> Result<ValueId, TranslationDiagnostic> {
         match self.locals.get(&local).copied() {
-            Some(LocalBinding::Value(value)) => Ok(value),
+            Some(LocalBinding::Value(value)) => {
+                self.validate_guarded_pointer_use(value, location)?;
+                Ok(value)
+            }
             Some(LocalBinding::OptionPointer { .. } | LocalBinding::DeviceMathCapability) => {
                 Err(diagnostic(
                     TranslationDiagnosticCode::UnsupportedType,
@@ -2280,6 +2382,31 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
             }
             None => Err(self.undefined_local(local, location.clone())),
         }
+    }
+
+    fn validate_guarded_pointer_use(
+        &self,
+        value: ValueId,
+        location: &TranslationLocation,
+    ) -> Result<(), TranslationDiagnostic> {
+        let Some(some_entry) = self.guarded_pointer_values.get(&value).copied() else {
+            return Ok(());
+        };
+        let Some(use_block) = location.block else {
+            return Err(diagnostic(
+                TranslationDiagnosticCode::UnsupportedProjection,
+                location.clone(),
+                "guarded Option payload use has no MIR block identity",
+            ));
+        };
+        if !mir_block_dominates(self.function, some_entry, use_block) {
+            return Err(diagnostic(
+                TranslationDiagnosticCode::UnsupportedProjection,
+                location.clone(),
+                "Option payload alias escapes the bounds-checked Some region",
+            ));
+        }
+        Ok(())
     }
 
     fn local_shape(
@@ -2456,6 +2583,92 @@ fn is_readonly_f32_slice(shape: &MirTypeShape) -> bool {
             mutable: false,
         } if element.as_ref() == &MirTypeShape::F32
     )
+}
+
+fn mir_block_dominates(function: &MirFunction, dominator: usize, dominated: usize) -> bool {
+    let blocks = function
+        .blocks
+        .iter()
+        .map(|block| block.index)
+        .collect::<BTreeSet<_>>();
+    if !blocks.contains(&dominator) || !blocks.contains(&dominated) {
+        return false;
+    }
+    let Some(entry) = blocks.first().copied() else {
+        return false;
+    };
+    let mut predecessors = blocks
+        .iter()
+        .copied()
+        .map(|block| (block, BTreeSet::new()))
+        .collect::<BTreeMap<_, _>>();
+    for block in &function.blocks {
+        let Some(terminator) = block.terminator.as_ref() else {
+            return false;
+        };
+        for successor in mir_successors(&terminator.kind) {
+            let Some(incoming) = predecessors.get_mut(&successor) else {
+                return false;
+            };
+            incoming.insert(block.index);
+        }
+    }
+
+    let mut dominators = blocks
+        .iter()
+        .copied()
+        .map(|block| {
+            let initial = if block == entry {
+                BTreeSet::from([entry])
+            } else {
+                blocks.clone()
+            };
+            (block, initial)
+        })
+        .collect::<BTreeMap<_, _>>();
+    loop {
+        let previous = dominators.clone();
+        let mut changed = false;
+        for block in blocks.iter().copied().filter(|block| *block != entry) {
+            let incoming = &predecessors[&block];
+            let mut next = if let Some(first) = incoming.first() {
+                previous[first].clone()
+            } else {
+                BTreeSet::new()
+            };
+            for predecessor in incoming.iter().skip(1) {
+                next = next.intersection(&previous[predecessor]).copied().collect();
+            }
+            next.insert(block);
+            if next != previous[&block] {
+                dominators.insert(block, next);
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    dominators[&dominated].contains(&dominator)
+}
+
+fn mir_successors(terminator: &MirTerminatorKind) -> Vec<usize> {
+    match terminator {
+        MirTerminatorKind::Goto { target }
+        | MirTerminatorKind::Assert { target, .. }
+        | MirTerminatorKind::Drop { target } => vec![*target],
+        MirTerminatorKind::SwitchInt {
+            targets, otherwise, ..
+        } => targets
+            .iter()
+            .map(|target| target.target)
+            .chain(std::iter::once(*otherwise))
+            .collect(),
+        MirTerminatorKind::Call { target, .. } => target.iter().copied().collect(),
+        MirTerminatorKind::Return | MirTerminatorKind::Unreachable | MirTerminatorKind::Other => {
+            Vec::new()
+        }
+    }
 }
 
 fn is_disjoint_f32_slice(shape: &MirTypeShape) -> bool {

@@ -158,6 +158,82 @@ fn general_v3_rejects_wrong_index_untrusted_callee_and_wrong_profile() {
             .message
             .contains("requires the exact gfx942 floating-point profile")
     }));
+
+    let zeta_only = MirModule {
+        functions: vec![zeta()],
+    };
+    let errors = translate_and_verify_for_target(&zeta_only, &AmdGpuTarget::new("gfx1100"))
+        .expect_err("zeta addition must independently require gfx942");
+    assert!(errors.diagnostics().iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("f32 addition requires the exact gfx942 floating-point profile")
+    }));
+    let errors = translate_and_verify_with_float_target(
+        &zeta_only,
+        Some(Gfx942FloatTarget),
+        StrictFloatPolicy::CustomLlvmPipeline,
+    )
+    .expect_err("zeta addition must independently reject custom LLVM pipelines");
+    assert!(errors.diagnostics().iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("rejects custom -Cllvm-args and -Cpasses")
+    }));
+}
+
+#[test]
+fn option_payload_cannot_escape_the_bounds_checked_some_region() {
+    let mut false_to_store = MirModule {
+        functions: vec![alpha()],
+    };
+    let switch = &mut false_to_store.functions[0].blocks[2]
+        .terminator
+        .as_mut()
+        .expect("Option switch")
+        .kind;
+    let MirTerminatorKind::SwitchInt { targets, .. } = switch else {
+        panic!("Option switch")
+    };
+    targets
+        .iter_mut()
+        .find(|target| target.value == 0)
+        .expect("None edge")
+        .target = 4;
+    let errors = lower_general_v3(&false_to_store).expect_err("false edge reaches store");
+    assert!(errors.diagnostics().iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("Option payload alias escapes the bounds-checked Some region")
+    }));
+
+    let mut merged_edges = MirModule {
+        functions: vec![alpha()],
+    };
+    let switch = &mut merged_edges.functions[0].blocks[2]
+        .terminator
+        .as_mut()
+        .expect("Option switch")
+        .kind;
+    let MirTerminatorKind::SwitchInt { targets, .. } = switch else {
+        panic!("Option switch")
+    };
+    let some_target = targets
+        .iter()
+        .find(|target| target.value == 1)
+        .expect("Some edge")
+        .target;
+    targets
+        .iter_mut()
+        .find(|target| target.value == 0)
+        .expect("None edge")
+        .target = some_target;
+    let errors = lower_general_v3(&merged_edges).expect_err("Some and None edges must differ");
+    assert!(errors.diagnostics().iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("boolean switch must have exact 0/1 cases")
+    }));
 }
 
 fn lower_general_v3(module: &MirModule) -> Result<Module, TranslationErrors> {
