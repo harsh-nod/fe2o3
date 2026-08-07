@@ -142,6 +142,8 @@ foreach(FE2O3_WORKER_SOURCE IN ITEMS
     include/WorkerLldPolicy.h
     src/WorkerProtocol.cpp src/WorkerPipeline.cpp
     src/WorkerDeviceLibraryPolicy.cpp src/main.cpp)
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/${FE2O3_WORKER_SOURCE}")
   file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/${FE2O3_WORKER_SOURCE}"
     FE2O3_WORKER_SOURCE_SHA256)
   string(APPEND FE2O3_WORKER_MEASUREMENT_PREIMAGE

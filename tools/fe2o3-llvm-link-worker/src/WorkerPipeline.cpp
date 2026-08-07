@@ -1,4 +1,5 @@
 #include "WorkerPipeline.h"
+#include "WorkerDeviceLibraryPolicy.h"
 #include "WorkerLldPolicy.h"
 
 #include "lld/Common/Driver.h"
@@ -34,6 +35,8 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
+#include "llvm/Transforms/IPO/GlobalDCE.h"
+#include "llvm/Transforms/IPO/Internalize.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 
 #include <algorithm>
@@ -65,6 +68,8 @@ namespace {
 
 constexpr StringLiteral LlvmBuildIdentity = FE2O3_LLVM_BUILD_ID;
 constexpr StringLiteral WorkerBuildIdentity = FE2O3_WORKER_BUILD_ID;
+constexpr StringLiteral UnauthenticatedTestWorkerIdentity =
+    "fe2o3-unauthenticated-test-device-library-policy";
 constexpr StringLiteral AmdGpuTriple = "amdgcn-amd-amdhsa";
 
 Response failure(const Request &RequestValue, Stage FailureStage,
@@ -404,7 +409,123 @@ Error setAndCheckModuleContract(Module &ModuleValue,
   return Error::success();
 }
 
+Expected<std::unique_ptr<Module>>
+parseModuleInput(const Input &InputValue, StringRef InputName,
+                 const Request &RequestValue, LLVMContext &Context,
+                 const TargetMachine &Machine) {
+  if (InputValue.Kind != InputKind::LlvmBitcode &&
+      InputValue.Kind != InputKind::LlvmTextIr)
+    return pipelineError(Twine(InputName) + " is not an LLVM module");
+  StringRef Bytes(reinterpret_cast<const char *>(InputValue.Bytes.data()),
+                  InputValue.Bytes.size());
+  DataLayout ExpectedLayout = Machine.createDataLayout();
+  bool AcceptedLayout = false;
+  ParserCallbacks Callbacks([&](StringRef TripleValue, StringRef Layout) {
+    std::string InferredAbsent = UpgradeDataLayoutString("", TripleValue);
+    if (Layout == InferredAbsent) {
+      AcceptedLayout = true;
+    } else {
+      auto ParsedLayout = DataLayout::parse(Layout);
+      if (ParsedLayout)
+        AcceptedLayout = *ParsedLayout == ExpectedLayout;
+      else
+        consumeError(ParsedLayout.takeError());
+    }
+    return std::optional<std::string>(ExpectedLayout.getStringRepresentation());
+  });
+  Expected<std::unique_ptr<Module>> Parsed =
+      [&]() -> Expected<std::unique_ptr<Module>> {
+    if (InputValue.Kind == InputKind::LlvmBitcode)
+      return parseBitcodeFile(MemoryBufferRef(Bytes, InputName), Context,
+                              std::move(Callbacks));
+    SMDiagnostic Diagnostic;
+    auto TextBuffer = MemoryBuffer::getMemBufferCopy(Bytes, InputName);
+    auto TextModule =
+        parseAssembly(TextBuffer->getMemBufferRef(), Diagnostic, Context);
+    if (!TextModule) {
+      std::string Message;
+      raw_string_ostream Stream(Message);
+      Diagnostic.print("fe2o3-llvm-link-worker", Stream, false, false);
+      Stream.flush();
+      return pipelineError(Twine("textual LLVM IR input ") + InputName + ": " +
+                           Message);
+    }
+    AcceptedLayout = TextModule->getDataLayoutStr().empty() ||
+                     TextModule->getDataLayout() == ExpectedLayout;
+    return TextModule;
+  }();
+  if (!Parsed)
+    return pipelineError(Twine(InputName) + ": " +
+                         errorToDiagnostic(Parsed.takeError()));
+  if (!AcceptedLayout)
+    return pipelineError(
+        "LLVM module data layout does not match target machine");
+  if (Error E = setAndCheckModuleContract(**Parsed, RequestValue, Machine))
+    return E;
+  if (RequestValue.LinkOptions.VerifyEach) {
+    BoundedRawStream Stream(MaxDiagnosticBytes);
+    if (verifyModule(**Parsed, &Stream)) {
+      Stream.flush();
+      return pipelineError(Twine("input LLVM module verification failed: ") +
+                           Stream.str());
+    }
+  }
+  return std::move(*Parsed);
+}
+
+bool hasOcmlF32Abi(const Function &FunctionValue) {
+  FunctionType *Type = FunctionValue.getFunctionType();
+  return Type->getReturnType()->isFloatTy() && !Type->isVarArg() &&
+         Type->getNumParams() == 1 && Type->getParamType(0)->isFloatTy() &&
+         FunctionValue.getCallingConv() == CallingConv::C;
+}
+
+Error validateOcmlImportAbi(const Module &Compiler, StringRef Name) {
+  const auto *FunctionValue =
+      dyn_cast_or_null<Function>(Compiler.getNamedValue(Name));
+  if (!FunctionValue || !FunctionValue->isDeclaration() ||
+      !hasOcmlF32Abi(*FunctionValue))
+    return pipelineError(Twine("compiler module has the wrong OCML ABI for ") +
+                         Name);
+  return Error::success();
+}
+
+Error validateOcmlRootAbi(const Module &Provider, StringRef Name) {
+  const auto *FunctionValue =
+      dyn_cast_or_null<Function>(Provider.getNamedValue(Name));
+  if (!FunctionValue || FunctionValue->isDeclaration())
+    return pipelineError(Twine("gfx942 OCML provider does not define ") + Name);
+  if (!hasOcmlF32Abi(*FunctionValue))
+    return pipelineError(Twine("gfx942 OCML provider has the wrong ABI for ") +
+                         Name);
+  return Error::success();
+}
+
+Error reduceBuiltinProviderClosure(Module &Linked,
+                                   const Request &RequestValue) {
+  std::set<std::string> Preserved(RequestValue.ExpectedDefinedSymbols.begin(),
+                                  RequestValue.ExpectedDefinedSymbols.end());
+  for (const std::string &Import : RequestValue.ImportSymbols) {
+    if (!isSupportedGfx942OcmlImport(Import))
+      continue;
+    auto *FunctionValue =
+        dyn_cast_or_null<Function>(Linked.getNamedValue(Import));
+    if (!FunctionValue || FunctionValue->isDeclaration())
+      return pipelineError(Twine("gfx942 OCML import remained unresolved: ") +
+                           Import);
+    FunctionValue->setVisibility(GlobalValue::DefaultVisibility);
+  }
+
+  internalizeModule(Linked, [&Preserved](const GlobalValue &Value) {
+    return Value.hasName() && Preserved.contains(Value.getName().str());
+  });
+  ModuleAnalysisManager Analyses;
+  GlobalDCEPass().run(Linked, Analyses);
+  return Error::success();
+}
+
 Expected<std::unique_ptr<Module>> linkBitcode(const Request &RequestValue,
+                                              ArrayRef<Input> BuiltinProviders,
                                               LLVMContext &Context,
                                               const TargetMachine &Machine) {
   std::unique_ptr<Module> Linked;
@@ -413,68 +534,50 @@ Expected<std::unique_ptr<Module>> linkBitcode(const Request &RequestValue,
     if (InputValue.Kind != InputKind::LlvmBitcode &&
         InputValue.Kind != InputKind::LlvmTextIr)
       continue;
-    StringRef Bytes(reinterpret_cast<const char *>(InputValue.Bytes.data()),
-                    InputValue.Bytes.size());
     std::string InputName = (Twine("<bitcode-input-") + Twine(I) + ">").str();
-    DataLayout ExpectedLayout = Machine.createDataLayout();
-    bool AcceptedLayout = false;
-    ParserCallbacks Callbacks([&](StringRef TripleValue, StringRef Layout) {
-      std::string InferredAbsent = UpgradeDataLayoutString("", TripleValue);
-      if (Layout == InferredAbsent) {
-        AcceptedLayout = true;
-      } else {
-        auto ParsedLayout = DataLayout::parse(Layout);
-        if (ParsedLayout)
-          AcceptedLayout = *ParsedLayout == ExpectedLayout;
-        else
-          consumeError(ParsedLayout.takeError());
-      }
-      return std::optional<std::string>(
-          ExpectedLayout.getStringRepresentation());
-    });
-    Expected<std::unique_ptr<Module>> Parsed =
-        [&]() -> Expected<std::unique_ptr<Module>> {
-      if (InputValue.Kind == InputKind::LlvmBitcode)
-        return parseBitcodeFile(MemoryBufferRef(Bytes, InputName), Context,
-                                std::move(Callbacks));
-      SMDiagnostic Diagnostic;
-      auto TextBuffer = MemoryBuffer::getMemBufferCopy(Bytes, InputName);
-      auto TextModule =
-          parseAssembly(TextBuffer->getMemBufferRef(), Diagnostic, Context);
-      if (!TextModule) {
-        std::string Message;
-        raw_string_ostream Stream(Message);
-        Diagnostic.print("fe2o3-llvm-link-worker", Stream, false, false);
-        Stream.flush();
-        return pipelineError(Twine("textual LLVM IR input ") + Twine(I) + ": " +
-                             Message);
-      }
-      AcceptedLayout = TextModule->getDataLayoutStr().empty() ||
-                       TextModule->getDataLayout() == ExpectedLayout;
-      return TextModule;
-    }();
+    auto Parsed =
+        parseModuleInput(InputValue, InputName, RequestValue, Context, Machine);
     if (!Parsed)
-      return pipelineError(Twine("LLVM module input ") + Twine(I) + ": " +
-                           errorToDiagnostic(Parsed.takeError()));
-    if (!AcceptedLayout)
-      return pipelineError(
-          "LLVM module data layout does not match target machine");
-    if (Error E = setAndCheckModuleContract(**Parsed, RequestValue, Machine))
-      return E;
-    if (RequestValue.LinkOptions.VerifyEach) {
-      BoundedRawStream Stream(MaxDiagnosticBytes);
-      if (verifyModule(**Parsed, &Stream)) {
-        Stream.flush();
-        return pipelineError(Twine("input LLVM module verification failed: ") +
-                             Stream.str());
-      }
-    }
-    if (!Linked) {
+      return Parsed.takeError();
+    if (!Linked)
       Linked = std::move(*Parsed);
-    } else if (Linker::linkModules(*Linked, std::move(*Parsed))) {
+    else if (Linker::linkModules(*Linked, std::move(*Parsed)))
       return pipelineError("LLVM module linking failed");
-    }
   }
+
+  if (!BuiltinProviders.empty() && !Linked)
+    return pipelineError(
+        "measured device library has no compiler LLVM module to resolve");
+  if (!BuiltinProviders.empty())
+    for (const std::string &Import : RequestValue.ImportSymbols)
+      if (isSupportedGfx942OcmlImport(Import))
+        if (Error E = validateOcmlImportAbi(*Linked, Import))
+          return E;
+
+  for (size_t I = 0; I < BuiltinProviders.size(); ++I) {
+    const Input &InputValue = BuiltinProviders[I];
+    std::string InputName =
+        (Twine("<measured-gfx942-device-library-") + Twine(I) + ">").str();
+    auto Parsed =
+        parseModuleInput(InputValue, InputName, RequestValue, Context, Machine);
+    if (!Parsed)
+      return Parsed.takeError();
+    for (const std::string &Import : RequestValue.ImportSymbols)
+      if (isSupportedGfx942OcmlImport(Import))
+        if (const GlobalValue *Value = (*Parsed)->getNamedValue(Import);
+            Value && !Value->isDeclaration())
+          if (Error E = validateOcmlRootAbi(**Parsed, Import))
+            return E;
+    if (!Linked)
+      return pipelineError(
+          "measured device library has no compiler module to resolve");
+    if (Linker::linkModules(*Linked, std::move(*Parsed),
+                            Linker::Flags::LinkOnlyNeeded))
+      return pipelineError("gfx942 device-library linking failed");
+  }
+  if (!BuiltinProviders.empty())
+    if (Error E = reduceBuiltinProviderClosure(*Linked, RequestValue))
+      return E;
   if (Linked) {
     BoundedRawStream Stream(MaxDiagnosticBytes);
     if (verifyModule(*Linked, &Stream)) {
@@ -553,6 +656,33 @@ struct SymbolContract {
   std::set<std::string> RequiredImports;
 };
 
+std::string diagnosticAtom(StringRef Value) {
+  static constexpr char Hex[] = "0123456789ABCDEF";
+  std::string Result;
+  for (unsigned char Byte : Value) {
+    if (llvm::isAlnum(Byte) || Byte == '_' || Byte == '-' || Byte == '.' ||
+        Byte == '$') {
+      Result.push_back(static_cast<char>(Byte));
+    } else {
+      Result.push_back('%');
+      Result.push_back(Hex[Byte >> 4]);
+      Result.push_back(Hex[Byte & 0xf]);
+    }
+  }
+  return Result;
+}
+
+std::string diagnosticList(const std::set<std::string> &Values) {
+  std::string Result = "[";
+  for (const std::string &Value : Values) {
+    if (Result.size() != 1)
+      Result.push_back(',');
+    Result.append(diagnosticAtom(Value));
+  }
+  Result.push_back(']');
+  return Result;
+}
+
 bool matches(const ElfContract &Left, const ElfContract &Right) {
   return Left.Flags == Right.Flags && Left.OsAbi == Right.OsAbi &&
          Left.AbiVersion == Right.AbiVersion &&
@@ -593,8 +723,7 @@ Expected<ElfContract> inspectRelocatable(ArrayRef<uint8_t> Bytes) {
     if (!FlagsOrError)
       return FlagsOrError.takeError();
     uint32_t Flags = *FlagsOrError;
-    if ((Flags & (SymbolRef::SF_Global | SymbolRef::SF_Weak)) == 0 ||
-        (Flags & SymbolRef::SF_FormatSpecific) != 0)
+    if ((Flags & SymbolRef::SF_FormatSpecific) != 0)
       continue;
     auto NameOrError = Symbol.getName();
     if (!NameOrError)
@@ -604,11 +733,34 @@ Expected<ElfContract> inspectRelocatable(ArrayRef<uint8_t> Bytes) {
     std::string Name = NameOrError->str();
     if ((Flags & SymbolRef::SF_Undefined) != 0) {
       Result.RequiredImports.insert(std::move(Name));
-    } else {
+    } else if ((Flags & (SymbolRef::SF_Global | SymbolRef::SF_Weak)) != 0) {
       Result.Definitions.insert(Name);
       if ((Flags & SymbolRef::SF_Hidden) == 0)
         Result.PublicDefinitions.insert(std::move(Name));
     }
+  }
+  return Result;
+}
+
+SymbolContract inspectModuleSymbols(const Module &ModuleValue) {
+  SymbolContract Result;
+  for (const GlobalValue &Value : ModuleValue.global_values()) {
+    if (!Value.hasName() || Value.hasLocalLinkage() ||
+        Value.hasAppendingLinkage())
+      continue;
+
+    if (Value.isDeclarationForLinker()) {
+      const auto *FunctionValue = dyn_cast<Function>(&Value);
+      if (!Value.use_empty() &&
+          (!FunctionValue || !FunctionValue->isIntrinsic()))
+        Result.RequiredImports.insert(Value.getName().str());
+      continue;
+    }
+
+    std::string Name = Value.getName().str();
+    Result.Definitions.insert(Name);
+    if (Value.getVisibility() == GlobalValue::DefaultVisibility)
+      Result.PublicDefinitions.insert(std::move(Name));
   }
   return Result;
 }
@@ -639,22 +791,68 @@ Expected<SymbolContract> inspectModuleSymbols(const Input &InputValue,
     return pipelineError(Twine(InputName) + ": " +
                          errorToDiagnostic(Parsed.takeError()));
 
-  SymbolContract Result;
-  for (const GlobalValue &Value : (*Parsed)->global_values()) {
-    if (!Value.hasName() || Value.hasLocalLinkage())
-      continue;
-    std::string Name = Value.getName().str();
-    if (Value.isDeclaration()) {
-      Result.RequiredImports.insert(std::move(Name));
-      continue;
-    }
-    if (Value.isDeclarationForLinker())
-      continue;
-    Result.Definitions.insert(Name);
-    if (Value.getVisibility() == GlobalValue::DefaultVisibility)
-      Result.PublicDefinitions.insert(std::move(Name));
+  return inspectModuleSymbols(**Parsed);
+}
+
+Error requireExactCompilerImports(const Request &RequestValue,
+                                  const SymbolContract &CompilerModule,
+                                  StringRef Source) {
+  std::set<std::string> Declared(RequestValue.ImportSymbols.begin(),
+                                 RequestValue.ImportSymbols.end());
+  std::set<std::string> Omitted;
+  std::set<std::string> Extra;
+  for (const std::string &Name : CompilerModule.RequiredImports)
+    if (!Declared.contains(Name))
+      Omitted.insert(Name);
+  for (const std::string &Name : Declared)
+    if (!CompilerModule.RequiredImports.contains(Name))
+      Extra.insert(Name);
+  if (!Omitted.empty() || !Extra.empty())
+    return pipelineError(
+        Twine("compiler-module") +
+        (Source.empty() ? "" : (Twine(" ") + Source).str()) +
+        " import manifest mismatch: omitted=" + diagnosticList(Omitted) +
+        " extra=" + diagnosticList(Extra));
+  return Error::success();
+}
+
+Expected<SymbolContract>
+inspectNormalizedCompilerModule(const Request &RequestValue,
+                                TargetMachine &Machine) {
+  LLVMContext Context;
+  auto Parsed =
+      parseModuleInput(RequestValue.CompilerModule, "<compiler-module>",
+                       RequestValue, Context, Machine);
+  if (!Parsed)
+    return Parsed.takeError();
+
+  BoundedRawStream Verification(MaxDiagnosticBytes);
+  if (verifyModule(**Parsed, &Verification)) {
+    Verification.flush();
+    return pipelineError(Twine("compiler-module verification failed: ") +
+                         Verification.str());
   }
-  return Result;
+
+  SymbolContract IrSymbols = inspectModuleSymbols(**Parsed);
+  auto ObjectBytes = emitObject(**Parsed, Machine);
+  if (!ObjectBytes)
+    return ObjectBytes.takeError();
+  auto ObjectSymbols = inspectRelocatable(*ObjectBytes);
+  if (!ObjectSymbols)
+    return ObjectSymbols.takeError();
+  SymbolContract EmittedSymbols{std::move(ObjectSymbols->Definitions),
+                                std::move(ObjectSymbols->PublicDefinitions),
+                                std::move(ObjectSymbols->RequiredImports)};
+
+  if (Error E = requireExactCompilerImports(RequestValue, IrSymbols, ""))
+    return E;
+  if (Error E =
+          requireExactCompilerImports(RequestValue, EmittedSymbols, "object"))
+    return E;
+  if (IrSymbols.RequiredImports != EmittedSymbols.RequiredImports)
+    return pipelineError(
+        "compiler-module IR and object import sets do not match");
+  return IrSymbols;
 }
 
 Expected<SymbolContract> inspectInputSymbols(const Input &InputValue,
@@ -670,14 +868,12 @@ Expected<SymbolContract> inspectInputSymbols(const Input &InputValue,
                         std::move(Elf->RequiredImports)};
 }
 
-Error validateV2SymbolRoles(const Request &RequestValue) {
-  auto Module =
-      inspectInputSymbols(RequestValue.CompilerModule, "<compiler-module>");
-  if (!Module)
-    return Module.takeError();
-
+Error validateV2SymbolRoles(const Request &RequestValue,
+                            const SymbolContract &Module,
+                            ArrayRef<Input> BuiltinProviders) {
   std::vector<SymbolContract> Providers;
-  Providers.reserve(RequestValue.ExternalProviders.size());
+  Providers.reserve(RequestValue.ExternalProviders.size() +
+                    BuiltinProviders.size());
   for (size_t I = 0; I < RequestValue.ExternalProviders.size(); ++I) {
     std::string Name = (Twine("<external-provider-") + Twine(I) + ">").str();
     auto Provider =
@@ -686,9 +882,17 @@ Error validateV2SymbolRoles(const Request &RequestValue) {
       return Provider.takeError();
     Providers.push_back(std::move(*Provider));
   }
+  for (size_t I = 0; I < BuiltinProviders.size(); ++I) {
+    std::string Name =
+        (Twine("<measured-gfx942-device-library-") + Twine(I) + ">").str();
+    auto Provider = inspectInputSymbols(BuiltinProviders[I], Name);
+    if (!Provider)
+      return Provider.takeError();
+    Providers.push_back(std::move(*Provider));
+  }
 
   std::map<std::string, size_t> DefinitionCounts;
-  for (const std::string &Name : Module->Definitions)
+  for (const std::string &Name : Module.Definitions)
     ++DefinitionCounts[Name];
   for (const SymbolContract &Provider : Providers)
     for (const std::string &Name : Provider.Definitions)
@@ -698,17 +902,17 @@ Error validateV2SymbolRoles(const Request &RequestValue) {
       return pipelineError(Twine("duplicate definition: ") + Name);
 
   for (const std::string &Name : RequestValue.ExportSymbols)
-    if (!Module->PublicDefinitions.contains(Name))
+    if (!Module.PublicDefinitions.contains(Name))
       return pipelineError(Twine("compiler-module export is not defined by "
                                  "the compiler module: ") +
                            Name);
 
   for (const std::string &Name : RequestValue.ImportSymbols) {
-    if (Module->Definitions.contains(Name))
+    if (Module.Definitions.contains(Name))
       return pipelineError(Twine("compiler-module import is defined by the "
                                  "compiler module: ") +
                            Name);
-    if (!Module->RequiredImports.contains(Name))
+    if (!Module.RequiredImports.contains(Name))
       return pipelineError(Twine("compiler-module import is not unresolved "
                                  "by the compiler module: ") +
                            Name);
@@ -741,33 +945,6 @@ struct MetadataContract {
   std::optional<std::string> Target;
   std::vector<KernelLaunchContract> Kernels;
 };
-
-std::string diagnosticAtom(StringRef Value) {
-  static constexpr char Hex[] = "0123456789ABCDEF";
-  std::string Result;
-  for (unsigned char Byte : Value) {
-    if (llvm::isAlnum(Byte) || Byte == '_' || Byte == '-' || Byte == '.' ||
-        Byte == '$') {
-      Result.push_back(static_cast<char>(Byte));
-    } else {
-      Result.push_back('%');
-      Result.push_back(Hex[Byte >> 4]);
-      Result.push_back(Hex[Byte & 0xf]);
-    }
-  }
-  return Result;
-}
-
-std::string diagnosticList(const std::set<std::string> &Values) {
-  std::string Result = "[";
-  for (const std::string &Value : Values) {
-    if (Result.size() != 1)
-      Result.push_back(',');
-    Result.append(diagnosticAtom(Value));
-  }
-  Result.push_back(']');
-  return Result;
-}
 
 Error postLinkError(StringRef Check, StringRef Reason) {
   return pipelineError(Twine("post_link.check=") + Check +
@@ -1291,7 +1468,8 @@ inspectLinkedOutputForPublication(ArrayRef<uint8_t> Bytes,
   return inspectOutput(Bytes, *ExpectedElf, RequestValue);
 }
 
-Response execute(const Request &RequestValue) {
+Response executeImpl(const Request &RequestValue,
+                     const Gfx942DeviceLibraryPolicy *TestPolicy) {
   if (RequestValue.LlvmBuildIdentity != LlvmBuildIdentity)
     return failure(RequestValue, Stage::Toolchain,
                    {"request LLVM identity does not match worker measurement"});
@@ -1308,12 +1486,58 @@ Response execute(const Request &RequestValue) {
     return failure(RequestValue, Stage::Toolchain, MachineOrError.takeError());
   std::unique_ptr<TargetMachine> Machine = std::move(*MachineOrError);
 
+  std::optional<SymbolContract> CompilerModule;
+  if (RequestValue.Protocol == ProtocolVersion::V2) {
+    auto Inspected = inspectNormalizedCompilerModule(RequestValue, *Machine);
+    if (!Inspected)
+      return failure(RequestValue, Stage::InputValidation,
+                     Inspected.takeError());
+    CompilerModule = std::move(*Inspected);
+  }
+
+  std::set<std::string> BuiltinOcmlImports;
+  const std::set<std::string> NoImports;
+  const std::set<std::string> &MeasuredImports =
+      CompilerModule ? CompilerModule->RequiredImports : NoImports;
+  for (const std::string &Import : MeasuredImports) {
+    if (isSupportedGfx942OcmlImport(Import)) {
+      BuiltinOcmlImports.insert(Import);
+      continue;
+    }
+    if (isOcmlImportNamespace(Import))
+      return failure(RequestValue, Stage::InputValidation,
+                     {"unsupported gfx942 OCML import: " + Import});
+  }
+
+  std::vector<Input> BuiltinProviders;
+  if (!BuiltinOcmlImports.empty()) {
+    TargetParts Parts = parseTarget(RequestValue.Target);
+    if (RequestValue.Protocol != ProtocolVersion::V2 || Parts.Cpu != "gfx942" ||
+        RequestValue.CodeObjectVersion != 5)
+      return failure(RequestValue, Stage::InputValidation,
+                     {"measured OCML providers require Worker V2, gfx942, and "
+                      "code-object V5"});
+    Expected<Gfx942DeviceLibraryPolicy> Measured =
+        TestPolicy ? Expected<Gfx942DeviceLibraryPolicy>(*TestPolicy)
+                   : measuredGfx942DeviceLibraryPolicy();
+    if (!Measured)
+      return failure(RequestValue, Stage::Toolchain, Measured.takeError());
+    std::vector<std::string> MeasuredImportList(MeasuredImports.begin(),
+                                                MeasuredImports.end());
+    auto Loaded = loadGfx942DeviceLibraries(MeasuredImportList, *Measured);
+    if (!Loaded)
+      return failure(RequestValue, Stage::Toolchain, Loaded.takeError());
+    BuiltinProviders = std::move(*Loaded);
+  }
+
   if (RequestValue.Protocol == ProtocolVersion::V2)
-    if (Error E = validateV2SymbolRoles(RequestValue))
+    if (Error E = validateV2SymbolRoles(RequestValue, *CompilerModule,
+                                        BuiltinProviders))
       return failure(RequestValue, Stage::InputValidation, std::move(E));
 
   LLVMContext Context;
-  auto LinkedModule = linkBitcode(RequestValue, Context, *Machine);
+  auto LinkedModule =
+      linkBitcode(RequestValue, BuiltinProviders, Context, *Machine);
   if (!LinkedModule)
     return failure(RequestValue, Stage::BitcodeLink, LinkedModule.takeError());
 
@@ -1375,6 +1599,12 @@ Response execute(const Request &RequestValue) {
     return failure(RequestValue, Stage::NativeLink,
                    errorCodeToError(ErrorCode));
   std::vector<std::string> LinkDiagnostics;
+  if (!BuiltinProviders.empty())
+    LinkDiagnostics.push_back(
+        (Twine("device_library.check=identity status=ok ") +
+         "provider=gfx942-ocml-v1 roots=" + diagnosticList(BuiltinOcmlImports) +
+         " files=" + Twine(BuiltinProviders.size()))
+            .str());
   auto LinkedBytes =
       nativeLink(Objects, RequestValue, Temporary.Path, LinkDiagnostics);
   if (!LinkedBytes) {
@@ -1392,15 +1622,26 @@ Response execute(const Request &RequestValue) {
                          PublicationDiagnostics->end());
 
   Output ResultOutput{SHA256::hash(*LinkedBytes), std::move(*LinkedBytes)};
-  Response Result{RequestValue.RequestId,
-                  RequestValue.Identity,
-                  WorkerBuildIdentity.str(),
-                  Stage::Complete,
-                  canonicalDiagnostics(LinkDiagnostics, Temporary.Path),
-                  std::move(ResultOutput)};
+  Response Result{
+      RequestValue.RequestId,
+      RequestValue.Identity,
+      (TestPolicy ? UnauthenticatedTestWorkerIdentity : WorkerBuildIdentity)
+          .str(),
+      Stage::Complete,
+      canonicalDiagnostics(LinkDiagnostics, Temporary.Path),
+      std::move(ResultOutput)};
   Result.Protocol = RequestValue.Protocol;
   Result.CompilerEnvelopeIdentity = RequestValue.CompilerEnvelopeIdentity;
   return Result;
+}
+
+Response execute(const Request &RequestValue) {
+  return executeImpl(RequestValue, nullptr);
+}
+
+Response executeWithUnauthenticatedGfx942DeviceLibraryPolicyForTesting(
+    const Request &RequestValue, const Gfx942DeviceLibraryPolicy &Policy) {
+  return executeImpl(RequestValue, &Policy);
 }
 
 } // namespace fe2o3::worker

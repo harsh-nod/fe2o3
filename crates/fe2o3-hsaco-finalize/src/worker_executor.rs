@@ -1146,7 +1146,10 @@ impl PinnedWorkerV1 {
 mod configured_v2_tests {
     use super::*;
     use crate::{
-        LinkOptionV1, WorkerInputKindV1, WorkerInputV1, WorkerOutputConstraintsV1,
+        ContentIdentityV1, LinkInputKindClosureV1, LinkInputV1, LinkOptionV1, LinkOutputV1,
+        MultiInputLinkPlanV1, ProvenanceNodeV1, WorkerInputKindV1, WorkerInputV1,
+        WorkerOutputConstraintsV1, WorkerStageV1,
+        construct_worker_request_v2_from_consumed_handoff,
         execute_reproducible_first_build_worker_v2,
     };
     use fe2o3_artifact_transaction::{
@@ -1159,6 +1162,7 @@ mod configured_v2_tests {
         CompilerModuleHandoffV2, CompilerModuleKindV1, CompilerModuleSymbolManifestV1,
         CompilerModuleSymbolRoleV1, DeviceTargetV1 as CompilerDeviceTargetV1,
     };
+    use fe2o3_kernel_descriptor::DeviceTargetV1;
     use reserved_fe2o3_symbols::{
         DEVICE_FFI_DIRECTION_EXPORT_V1, DEVICE_FFI_DIRECTION_IMPORT_V1, DeviceFfiContractFieldsV1,
         DeviceFfiDirectionV1, derive_device_ffi_contract_id_v1,
@@ -1171,6 +1175,92 @@ mod configured_v2_tests {
 
     const TARGET: &str = "gfx942";
     const ABI: &str = "C(u32[size=4,align=4])->u32[size=4,align=4]";
+    const OCML_ABI: &str = "C(f32[size=4,align=4])->f32[size=4,align=4]";
+    const OCML_MODULE: &[u8] = br#"target triple = "amdgcn-amd-amdhsa"
+
+declare float @__ocml_sin_f32(float)
+
+define float @ocml_entry(float %value) {
+entry:
+  %result = call float @__ocml_sin_f32(float %value)
+  ret float %result
+}
+
+!llvm.module.flags = !{!0}
+!0 = !{i32 1, !"amdhsa_code_object_version", i32 500}
+"#;
+    const OCML_OMITTED_IMPORT_MODULE: &[u8] = br#"target triple = "amdgcn-amd-amdhsa"
+
+declare float @__ocml_sin_f32(float)
+declare float @__ocml_sqrt_f32(float)
+
+define float @ocml_entry(float %value) {
+entry:
+  %sin = call float @__ocml_sin_f32(float %value)
+  %result = call float @__ocml_sqrt_f32(float %sin)
+  ret float %result
+}
+
+!llvm.module.flags = !{!0}
+!0 = !{i32 1, !"amdhsa_code_object_version", i32 500}
+"#;
+    const OCML_MODULE_ASM_IMPORT_MODULE: &[u8] = br#"target triple = "amdgcn-amd-amdhsa"
+module asm ".long hidden_runtime_import"
+
+declare float @__ocml_sin_f32(float)
+
+define float @ocml_entry(float %value) {
+entry:
+  %result = call float @__ocml_sin_f32(float %value)
+  ret float %result
+}
+
+!llvm.module.flags = !{!0}
+!0 = !{i32 1, !"amdhsa_code_object_version", i32 500}
+"#;
+    const OCML_FUNCTION_ASM_IMPORT_MODULE: &[u8] = br#"target triple = "amdgcn-amd-amdhsa"
+
+declare float @__ocml_sin_f32(float)
+
+define float @ocml_entry(float %value) {
+entry:
+  call void asm sideeffect ".long __ocml_sqrt_f32", ""()
+  %result = call float @__ocml_sin_f32(float %value)
+  ret float %result
+}
+
+!llvm.module.flags = !{!0}
+!0 = !{i32 1, !"amdhsa_code_object_version", i32 500}
+"#;
+    const OCML_LOCAL_MODULE_ASM_IMPORT_MODULE: &[u8] = br#"target triple = "amdgcn-amd-amdhsa"
+module asm ".local local_hidden_import"
+module asm ".long local_hidden_import"
+
+declare float @__ocml_sin_f32(float)
+
+define float @ocml_entry(float %value) {
+entry:
+  %result = call float @__ocml_sin_f32(float %value)
+  ret float %result
+}
+
+!llvm.module.flags = !{!0}
+!0 = !{i32 1, !"amdhsa_code_object_version", i32 500}
+"#;
+    const OCML_LOCAL_FUNCTION_ASM_IMPORT_MODULE: &[u8] = br#"target triple = "amdgcn-amd-amdhsa"
+
+declare float @__ocml_sin_f32(float)
+
+define float @ocml_entry(float %value) {
+entry:
+  call void asm sideeffect ".local local_hidden_import\0A.long local_hidden_import", ""()
+  %result = call float @__ocml_sin_f32(float %value)
+  ret float %result
+}
+
+!llvm.module.flags = !{!0}
+!0 = !{i32 1, !"amdhsa_code_object_version", i32 500}
+"#;
 
     fn required_env(name: &str) -> String {
         std::env::var(name).unwrap_or_else(|_| panic!("missing configured test variable {name}"))
@@ -1202,6 +1292,7 @@ mod configured_v2_tests {
         direction: DeviceFfiDirectionV1,
         role: CompilerFfiLinkRoleV1,
         semantic_byte: u8,
+        abi: &str,
     ) -> CompilerFfiContractV1 {
         let semantic_identity = [semantic_byte; 32];
         let semantic_text = semantic_identity
@@ -1218,7 +1309,7 @@ mod configured_v2_tests {
             calling_convention: "C",
             code_object_version: 5,
             target: TARGET,
-            physical_abi: ABI,
+            physical_abi: abi,
             effects: "none",
             semantic_identity: &semantic_text,
         };
@@ -1236,11 +1327,116 @@ mod configured_v2_tests {
             )
             .unwrap(),
             symbol,
-            ABI,
+            abi,
             "none",
             semantic_identity,
         )
         .unwrap()
+    }
+
+    fn make_ocml_handoff_request(
+        module: &[u8],
+        expected_output: &[u8],
+        measurement: &WorkerMeasurementV1,
+        invocation_byte: u8,
+    ) -> (TestDirectory, CompilerHandoffWorkerRequestV2) {
+        let mut envelope = CompilerFfiEnvelopeBuilderV1::new(
+            CompilerDeviceTargetV1::parse(TARGET).unwrap(),
+            CompilerCodeObjectVersion::V5,
+            2,
+        )
+        .unwrap();
+        envelope
+            .push(ffi_contract(
+                "__ocml_sin_f32",
+                DeviceFfiDirectionV1::Import,
+                CompilerFfiLinkRoleV1::RequiresExternalDefinition,
+                0x51,
+                OCML_ABI,
+            ))
+            .unwrap();
+        envelope
+            .push(ffi_contract(
+                "ocml_entry",
+                DeviceFfiDirectionV1::Export,
+                CompilerFfiLinkRoleV1::RequiresCompilerModuleDefinition,
+                0x52,
+                OCML_ABI,
+            ))
+            .unwrap();
+        let manifest = CompilerModuleSymbolManifestV1::new([
+            (CompilerModuleSymbolRoleV1::DeviceFfiExport, "ocml_entry"),
+            (
+                CompilerModuleSymbolRoleV1::UnresolvedExternalImport,
+                "__ocml_sin_f32",
+            ),
+        ])
+        .unwrap();
+        let handoff = CompilerModuleHandoffV2::new(
+            CompilerModuleKindV1::LlvmTextIr,
+            CompilerDeviceTargetV1::parse(TARGET).unwrap(),
+            CompilerCodeObjectVersion::V5,
+            envelope.finish().unwrap(),
+            manifest,
+            module,
+        )
+        .unwrap();
+
+        let directory = TestDirectory::new();
+        let producer = ProducerIdentity::from_codegen(
+            "ocml_native_fixture",
+            Some(std::path::Path::new("src/lib.rs")),
+        )
+        .unwrap();
+        let attempt = begin_build_attempt(
+            &directory.0,
+            &producer,
+            BuildInvocation::from_bytes([invocation_byte; 32]),
+            BuildSession::from_bytes([invocation_byte.wrapping_add(1); 16]),
+        )
+        .unwrap();
+        publish_compiler_module_handoff_v1(
+            &directory.0,
+            &producer,
+            attempt,
+            handoff.canonical_bytes(),
+        )
+        .unwrap();
+        let consumed =
+            consume_compiler_module_handoff_v1(&directory.0, &producer, attempt).unwrap();
+
+        let target = DeviceTargetV1::parse(TARGET).unwrap();
+        let compiler_module =
+            WorkerInputV1::new(WorkerInputKindV1::LlvmTextIr, module.to_vec()).unwrap();
+        let input = LinkInputV1::new(compiler_module.identity(), target);
+        let output_identity = ContentIdentityV1::calculate(expected_output);
+        let plan = MultiInputLinkPlanV1::canonicalized(
+            target,
+            vec![input],
+            vec![
+                LinkOptionV1::new("code-object-version", "5").unwrap(),
+                LinkOptionV1::new("opt-level", "3").unwrap(),
+                LinkOptionV1::new("strip-debug", "true").unwrap(),
+                LinkOptionV1::new("verify-each", "true").unwrap(),
+            ],
+            LinkOutputV1::new(output_identity, target),
+            vec![
+                ProvenanceNodeV1::new(input.identity(), vec![]).unwrap(),
+                ProvenanceNodeV1::new(output_identity, vec![input.identity()]).unwrap(),
+            ],
+        )
+        .unwrap();
+        let input_kinds = LinkInputKindClosureV1::new(&plan, vec![compiler_module.kind()]).unwrap();
+        let request = construct_worker_request_v2_from_consumed_handoff(
+            &plan,
+            measurement,
+            consumed,
+            vec![],
+            &input_kinds,
+            WorkerOutputConstraintsV1::new(output_identity.byte_len()).unwrap(),
+        )
+        .unwrap();
+        (directory, request)
     }
 
     #[test]
@@ -1275,6 +1471,7 @@ mod configured_v2_tests {
                 DeviceFfiDirectionV1::Import,
                 CompilerFfiLinkRoleV1::RequiresExternalDefinition,
                 0x41,
+                ABI,
             ))
             .unwrap();
         envelope
@@ -1283,6 +1480,7 @@ mod configured_v2_tests {
                 DeviceFfiDirectionV1::Export,
                 CompilerFfiLinkRoleV1::RequiresCompilerModuleDefinition,
                 0x42,
+                ABI,
             ))
             .unwrap();
         let symbol_manifest = CompilerModuleSymbolManifestV1::new([
@@ -1357,5 +1555,166 @@ mod configured_v2_tests {
         assert!(!evidence.grants_publication_authority());
         assert!(!evidence.grants_load_authority());
         assert!(!evidence.grants_launch_authority());
+    }
+
+    #[test]
+    #[ignore = "requires the explicitly configured gfx942 OCML worker"]
+    fn configured_cpp_worker_v2_resolves_measured_ocml_without_request_provider() {
+        let worker_path = required_env("FE2O3_LLVM_LINK_WORKER");
+        let worker_bytes = fs::read(&worker_path).unwrap();
+        let measurement = WorkerMeasurementV1::new(
+            ContentIdentityV1::calculate(&worker_bytes),
+            required_env("FE2O3_LLVM_LINK_WORKER_BUILD_ID"),
+            required_env("FE2O3_LLVM_BUILD_ID"),
+        )
+        .unwrap();
+        let pinned = PinnedWorkerV1::open(worker_path, measurement.clone()).unwrap();
+        let expected_output = fs::read(required_env("FE2O3_LLVM_V2_OCML_EXPECTED_OUTPUT")).unwrap();
+
+        let (_directory, request) =
+            make_ocml_handoff_request(OCML_MODULE, &expected_output, &measurement, 0xa1);
+        let attempt = request.attempt();
+        let handoff_identity = request.handoff_identity();
+        let execution = pinned
+            .execute_compiler_handoff_v2(
+                &request,
+                WorkerExecutionLimitsV1::new(
+                    Duration::from_secs(120),
+                    MAX_WORKER_RESPONSE_BYTES,
+                    DEFAULT_WORKER_STDERR_BYTES,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+
+        assert_eq!(execution.attempt(), attempt);
+        assert_eq!(execution.handoff_identity(), handoff_identity);
+        assert_eq!(execution.worker_executable(), measurement.executable());
+        let response = execution.response();
+        assert_eq!(response.stage(), WorkerStageV1::Complete);
+        assert_eq!(
+            response.worker_build_identity(),
+            measurement.worker_build_identity()
+        );
+        assert_eq!(response.request_id(), request.sealed_request().request_id());
+        assert_eq!(
+            response.request_identity(),
+            request.sealed_request().identity()
+        );
+        assert_eq!(
+            response.compiler_envelope_identity(),
+            request.sealed_request().compiler_envelope_identity()
+        );
+        assert!(response.diagnostics().iter().any(|diagnostic| {
+            diagnostic
+                == "device_library.check=identity status=ok provider=gfx942-ocml-v1 \
+roots=[__ocml_sin_f32] files=4"
+        }));
+        let output = response.output().expect("OCML link did not produce output");
+        assert!(output.identity().matches(output.bytes()));
+        assert_eq!(output.bytes(), expected_output);
+        let inspected = fe2o3_hsaco::inspect(output.bytes()).unwrap();
+        assert_eq!(inspected.target().to_string(), TARGET);
+        assert_eq!(
+            inspected.code_object_version(),
+            fe2o3_hsaco::CodeObjectVersion::V5
+        );
+        assert!(!execution.grants_publication_authority());
+        assert!(!execution.grants_load_authority());
+        assert!(!execution.grants_launch_authority());
+    }
+
+    #[test]
+    #[ignore = "requires the explicitly configured gfx942 OCML worker"]
+    fn configured_cpp_worker_v2_rejects_omitted_measured_ocml_import() {
+        let worker_path = required_env("FE2O3_LLVM_LINK_WORKER");
+        let worker_bytes = fs::read(&worker_path).unwrap();
+        let measurement = WorkerMeasurementV1::new(
+            ContentIdentityV1::calculate(&worker_bytes),
+            required_env("FE2O3_LLVM_LINK_WORKER_BUILD_ID"),
+            required_env("FE2O3_LLVM_BUILD_ID"),
+        )
+        .unwrap();
+        let pinned = PinnedWorkerV1::open(worker_path, measurement.clone()).unwrap();
+        let expected_output = fs::read(required_env("FE2O3_LLVM_V2_OCML_EXPECTED_OUTPUT")).unwrap();
+        let (_directory, request) = make_ocml_handoff_request(
+            OCML_OMITTED_IMPORT_MODULE,
+            &expected_output,
+            &measurement,
+            0xb1,
+        );
+
+        let execution = pinned
+            .execute_compiler_handoff_v2(
+                &request,
+                WorkerExecutionLimitsV1::new(
+                    Duration::from_secs(120),
+                    MAX_WORKER_RESPONSE_BYTES,
+                    DEFAULT_WORKER_STDERR_BYTES,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let response = execution.response();
+        assert_eq!(response.stage(), WorkerStageV1::InputValidation);
+        assert!(response.output().is_none());
+        assert_eq!(
+            response.diagnostics(),
+            &["compiler-module import manifest mismatch: \
+omitted=[__ocml_sqrt_f32] extra=[]"]
+        );
+    }
+
+    #[test]
+    #[ignore = "requires the explicitly configured gfx942 OCML worker"]
+    fn configured_cpp_worker_v2_rejects_inline_assembly_imports_before_ocml_linking() {
+        let worker_path = required_env("FE2O3_LLVM_LINK_WORKER");
+        let worker_bytes = fs::read(&worker_path).unwrap();
+        let measurement = WorkerMeasurementV1::new(
+            ContentIdentityV1::calculate(&worker_bytes),
+            required_env("FE2O3_LLVM_LINK_WORKER_BUILD_ID"),
+            required_env("FE2O3_LLVM_BUILD_ID"),
+        )
+        .unwrap();
+        let pinned = PinnedWorkerV1::open(worker_path, measurement.clone()).unwrap();
+        let expected_output = fs::read(required_env("FE2O3_LLVM_V2_OCML_EXPECTED_OUTPUT")).unwrap();
+
+        for (module, invocation_byte, omitted) in [
+            (OCML_MODULE_ASM_IMPORT_MODULE, 0xc1, "hidden_runtime_import"),
+            (OCML_FUNCTION_ASM_IMPORT_MODULE, 0xd1, "__ocml_sqrt_f32"),
+            (
+                OCML_LOCAL_MODULE_ASM_IMPORT_MODULE,
+                0xe1,
+                "local_hidden_import",
+            ),
+            (
+                OCML_LOCAL_FUNCTION_ASM_IMPORT_MODULE,
+                0xf1,
+                "local_hidden_import",
+            ),
+        ] {
+            let (_directory, request) =
+                make_ocml_handoff_request(module, &expected_output, &measurement, invocation_byte);
+            let execution = pinned
+                .execute_compiler_handoff_v2(
+                    &request,
+                    WorkerExecutionLimitsV1::new(
+                        Duration::from_secs(120),
+                        MAX_WORKER_RESPONSE_BYTES,
+                        DEFAULT_WORKER_STDERR_BYTES,
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+            let response = execution.response();
+            assert_eq!(response.stage(), WorkerStageV1::InputValidation);
+            assert!(response.output().is_none());
+            assert_eq!(
+                response.diagnostics(),
+                &[format!(
+                    "compiler-module object import manifest mismatch: omitted=[{omitted}] extra=[]"
+                )]
+            );
+        }
     }
 }

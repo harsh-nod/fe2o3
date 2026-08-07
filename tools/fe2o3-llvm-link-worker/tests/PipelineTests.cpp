@@ -11,11 +11,13 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
+#include "llvm/Linker/Linker.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Object/ELFObjectFile.h"
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/Path.h"
 #include "llvm/Support/SHA256.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/raw_ostream.h"
@@ -200,6 +202,236 @@ std::vector<uint8_t> makeBitcode(StringRef ModuleName, StringRef Definition,
   SmallVector<char, 0> Buffer;
   raw_svector_ostream Stream(Buffer);
   WriteBitcodeToFile(*ModuleValue, Stream);
+  return std::vector<uint8_t>(Buffer.begin(), Buffer.end());
+}
+
+std::vector<uint8_t>
+makeFloatConsumerBitcode(StringRef Entry, ArrayRef<StringRef> Imports,
+                         ArrayRef<StringRef> UnusedDeclarations) {
+  LLVMContext Context;
+  Module ModuleValue("float-consumer", Context);
+  std::unique_ptr<TargetMachine> Machine = createMachine("gfx942");
+  ModuleValue.setTargetTriple(Triple(AmdGpuTriple));
+  ModuleValue.setDataLayout(Machine->createDataLayout());
+  ModuleValue.addModuleFlag(Module::Error, "amdhsa_code_object_version", 500);
+  Type *F32 = Type::getFloatTy(Context);
+  FunctionType *Signature = FunctionType::get(F32, {F32}, false);
+  Function *Defined = Function::Create(Signature, GlobalValue::ExternalLinkage,
+                                       Entry, ModuleValue);
+  BasicBlock *Block = BasicBlock::Create(Context, "entry", Defined);
+  IRBuilder<> Builder(Block);
+  Value *Result = Defined->getArg(0);
+  for (StringRef Import : Imports) {
+    FunctionCallee Imported =
+        ModuleValue.getOrInsertFunction(Import, Signature);
+    Result = Builder.CreateCall(Imported, {Result});
+  }
+  for (StringRef Declaration : UnusedDeclarations)
+    ModuleValue.getOrInsertFunction(Declaration, Signature);
+  Builder.CreateRet(Result);
+  SmallVector<char, 0> Buffer;
+  raw_svector_ostream Stream(Buffer);
+  WriteBitcodeToFile(ModuleValue, Stream);
+  return std::vector<uint8_t>(Buffer.begin(), Buffer.end());
+}
+
+std::vector<uint8_t> makeFloatConsumerBitcode(StringRef Entry,
+                                              StringRef Import) {
+  return makeFloatConsumerBitcode(Entry, ArrayRef<StringRef>(Import), {});
+}
+
+std::vector<uint8_t> makeCrossDefinedCompilerBitcode() {
+  LLVMContext Context;
+  std::unique_ptr<Module> Entry =
+      makeModule(Context, "cross-entry", "cross_entry", "cross_helper", {});
+  std::unique_ptr<Module> Helper =
+      makeModule(Context, "cross-helper", "cross_helper", std::nullopt, {});
+  require(!Linker::linkModules(*Entry, std::move(Helper)),
+          "could not form cross-defined compiler fixture");
+  SmallVector<char, 0> Buffer;
+  raw_svector_ostream Stream(Buffer);
+  WriteBitcodeToFile(*Entry, Stream);
+  return std::vector<uint8_t>(Buffer.begin(), Buffer.end());
+}
+
+std::vector<uint8_t> makeSymbolKindCompilerIr() {
+  constexpr StringLiteral Ir = R"IR(
+target triple = "amdgcn-amd-amdhsa"
+
+@ordinary_global = external global i32
+@address_slot = internal global ptr @ordinary_global
+@llvm.used = appending global [1 x ptr] [ptr @used_only], section "llvm.metadata"
+@llvm.compiler.used = appending global [1 x ptr] [ptr @weak_used], section "llvm.metadata"
+@aliased = alias void (), ptr @aliased_impl
+@selected = ifunc void (), ptr @resolve
+
+declare void @unused_function()
+declare void @used_only()
+declare extern_weak void @weak_used()
+declare extern_weak void @weak_call()
+declare i32 @llvm.amdgcn.workitem.id.x()
+
+define void @aliased_impl() {
+entry:
+  ret void
+}
+
+define ptr @resolve() {
+entry:
+  ret ptr @aliased_impl
+}
+
+define i32 @symbol_kinds_entry() {
+entry:
+  %global = load i32, ptr @ordinary_global
+  %id = call i32 @llvm.amdgcn.workitem.id.x()
+  call void @weak_call()
+  %result = add i32 %global, %id
+  ret i32 %result
+}
+
+!llvm.module.flags = !{!0}
+!0 = !{i32 1, !"amdhsa_code_object_version", i32 500}
+)IR";
+  return std::vector<uint8_t>(Ir.bytes_begin(), Ir.bytes_end());
+}
+
+std::vector<uint8_t> makeInlineAsmCompilerIr(StringRef Symbol,
+                                             bool ModuleAssembly,
+                                             bool LocalBinding = false) {
+  std::string Ir;
+  raw_string_ostream Stream(Ir);
+  Stream << "target triple = \"amdgcn-amd-amdhsa\"\n";
+  if (ModuleAssembly && LocalBinding)
+    Stream << "module asm \".local " << Symbol << "\"\n";
+  if (ModuleAssembly)
+    Stream << "module asm \".long " << Symbol << "\"\n";
+  Stream << R"IR(
+declare float @__ocml_sin_f32(float)
+
+define float @ocml_entry(float %value) {
+entry:
+)IR";
+  if (!ModuleAssembly) {
+    Stream << "  call void asm sideeffect \"";
+    if (LocalBinding)
+      Stream << ".local " << Symbol << "\\0A";
+    Stream << ".long " << Symbol << "\", \"\"()\n";
+  }
+  Stream << R"IR(  %result = call float @__ocml_sin_f32(float %value)
+  ret float %result
+}
+
+!llvm.module.flags = !{!0}
+!0 = !{i32 1, !"amdhsa_code_object_version", i32 500}
+)IR";
+  Stream.flush();
+  return std::vector<uint8_t>(Ir.begin(), Ir.end());
+}
+
+std::vector<uint8_t> makeIntrinsicCompilerIr(bool Malformed) {
+  StringRef ReturnType = Malformed ? "i64" : "i32";
+  std::string Ir;
+  raw_string_ostream Stream(Ir);
+  Stream << "target triple = \"amdgcn-amd-amdhsa\"\n\n"
+         << "declare " << ReturnType << " @llvm.amdgcn.workitem.id.x()\n\n"
+         << "define " << ReturnType << " @intrinsic_entry() {\n"
+         << "entry:\n"
+         << "  %id = call " << ReturnType << " @llvm.amdgcn.workitem.id.x()\n"
+         << "  ret " << ReturnType << " %id\n"
+         << "}\n\n"
+         << "!llvm.module.flags = !{!0}\n"
+         << "!0 = !{i32 1, !\"amdhsa_code_object_version\", i32 500}\n";
+  Stream.flush();
+  return std::vector<uint8_t>(Ir.begin(), Ir.end());
+}
+
+struct SyntheticOcmlOptions {
+  LayoutMode Layout = LayoutMode::Exact;
+  bool WrongTriple = false;
+  bool WrongAbi = false;
+  bool UnresolvedDependency = false;
+};
+
+std::vector<uint8_t>
+makeSyntheticOcmlBitcode(const SyntheticOcmlOptions &Options = {}) {
+  LLVMContext Context;
+  Module ModuleValue("synthetic-ocml", Context);
+  std::unique_ptr<TargetMachine> Machine = createMachine("gfx942");
+  ModuleValue.setTargetTriple(
+      Triple(Options.WrongTriple ? "nvptx64-nvidia-cuda" : AmdGpuTriple));
+  if (Options.Layout == LayoutMode::Exact)
+    ModuleValue.setDataLayout(Machine->createDataLayout());
+  else if (Options.Layout == LayoutMode::Incompatible)
+    ModuleValue.setDataLayout("e-p:32:32");
+  ModuleValue.addModuleFlag(Module::Error, "amdhsa_code_object_version", 500);
+
+  Type *F32 = Type::getFloatTy(Context);
+  FunctionType *F32Signature = FunctionType::get(F32, {F32}, false);
+  Function *Helper =
+      Function::Create(F32Signature, GlobalValue::LinkOnceODRLinkage,
+                       "__fe2o3_required_ocml_helper", ModuleValue);
+  Helper->setVisibility(GlobalValue::HiddenVisibility);
+  Helper->addFnAttr(Attribute::NoInline);
+  BasicBlock *HelperBlock = BasicBlock::Create(Context, "entry", Helper);
+  IRBuilder<> HelperBuilder(HelperBlock);
+  HelperBuilder.CreateRet(
+      HelperBuilder.CreateFAdd(Helper->getArg(0), ConstantFP::get(F32, 1.0)));
+
+  FunctionType *RootSignature =
+      Options.WrongAbi ? FunctionType::get(Type::getInt32Ty(Context),
+                                           {Type::getInt32Ty(Context)}, false)
+                       : F32Signature;
+  Function *Root =
+      Function::Create(RootSignature, GlobalValue::LinkOnceODRLinkage,
+                       "__ocml_sin_f32", ModuleValue);
+  Root->setVisibility(GlobalValue::HiddenVisibility);
+  BasicBlock *RootBlock = BasicBlock::Create(Context, "entry", Root);
+  IRBuilder<> RootBuilder(RootBlock);
+  if (Options.WrongAbi) {
+    RootBuilder.CreateRet(RootBuilder.CreateAdd(
+        Root->getArg(0), ConstantInt::get(Type::getInt32Ty(Context), 1)));
+  } else if (Options.UnresolvedDependency) {
+    FunctionCallee Missing = ModuleValue.getOrInsertFunction(
+        "__ocml_missing_dependency", F32Signature);
+    RootBuilder.CreateRet(RootBuilder.CreateCall(Missing, {Root->getArg(0)}));
+  } else {
+    RootBuilder.CreateRet(RootBuilder.CreateCall(Helper, {Root->getArg(0)}));
+  }
+
+  Function *UndeclaredRoot =
+      Function::Create(F32Signature, GlobalValue::LinkOnceODRLinkage,
+                       "__ocml_sqrt_f32", ModuleValue);
+  UndeclaredRoot->setVisibility(GlobalValue::HiddenVisibility);
+  BasicBlock *UndeclaredBlock =
+      BasicBlock::Create(Context, "entry", UndeclaredRoot);
+  IRBuilder<> UndeclaredBuilder(UndeclaredBlock);
+  UndeclaredBuilder.CreateRet(
+      UndeclaredBuilder.CreateCall(Helper, {UndeclaredRoot->getArg(0)}));
+
+  Function *Decoy =
+      Function::Create(F32Signature, GlobalValue::LinkOnceODRLinkage,
+                       "__ocml_dead_decoy", ModuleValue);
+  Decoy->setVisibility(GlobalValue::HiddenVisibility);
+  BasicBlock *DecoyBlock = BasicBlock::Create(Context, "entry", Decoy);
+  IRBuilder<>(DecoyBlock).CreateRet(Decoy->getArg(0));
+
+  SmallVector<char, 0> Buffer;
+  raw_svector_ostream Stream(Buffer);
+  WriteBitcodeToFile(ModuleValue, Stream);
+  return std::vector<uint8_t>(Buffer.begin(), Buffer.end());
+}
+
+std::vector<uint8_t> makeEmptyProviderBitcode(StringRef Name) {
+  LLVMContext Context;
+  Module ModuleValue(Name, Context);
+  std::unique_ptr<TargetMachine> Machine = createMachine("gfx942");
+  ModuleValue.setTargetTriple(Triple(AmdGpuTriple));
+  ModuleValue.setDataLayout(Machine->createDataLayout());
+  ModuleValue.addModuleFlag(Module::Error, "amdhsa_code_object_version", 500);
+  SmallVector<char, 0> Buffer;
+  raw_svector_ostream Stream(Buffer);
+  WriteBitcodeToFile(ModuleValue, Stream);
   return std::vector<uint8_t>(Buffer.begin(), Buffer.end());
 }
 
@@ -388,6 +620,30 @@ Response runSuccess(const Request &RequestValue,
   return Result;
 }
 
+Response runSuccessWithPolicy(const Request &RequestValue,
+                              const Gfx942DeviceLibraryPolicy &Policy,
+                              const std::set<std::string> &ExpectedSymbols) {
+  Response Result =
+      executeWithUnauthenticatedGfx942DeviceLibraryPolicyForTesting(
+          RequestValue, Policy);
+  if (!Result.LinkedOutput) {
+    for (const std::string &Diagnostic : Result.Diagnostics)
+      errs() << Diagnostic << '\n';
+    fail("expected synthetic OCML worker success");
+  }
+  require(Result.FailureStage == Stage::Complete,
+          "synthetic OCML success reported the wrong stage");
+  require(Result.LinkedOutput->Digest ==
+              SHA256::hash(Result.LinkedOutput->Bytes),
+          "synthetic OCML output digest is incorrect");
+  require(inspectHsaco(Result.LinkedOutput->Bytes) == ExpectedSymbols,
+          "synthetic OCML HSACO exports do not match the request");
+  require(Result.WorkerBuildIdentity ==
+              "fe2o3-unauthenticated-test-device-library-policy",
+          "synthetic provider result claimed the measured worker identity");
+  return Result;
+}
+
 Response requireFailure(const Request &RequestValue, Stage ExpectedStage) {
   Response Result = execute(RequestValue);
   require(!Result.LinkedOutput, "rejected request returned output bytes");
@@ -408,6 +664,24 @@ Response requireFailure(const Request &RequestValue, Stage ExpectedStage) {
   }
   require(Total <= MaxTotalDiagnosticBytes,
           "diagnostics exceeded their total byte bound");
+  return Result;
+}
+
+Response requireFailureWithPolicy(const Request &RequestValue,
+                                  const Gfx942DeviceLibraryPolicy &Policy,
+                                  Stage ExpectedStage) {
+  Response Result =
+      executeWithUnauthenticatedGfx942DeviceLibraryPolicyForTesting(
+          RequestValue, Policy);
+  require(!Result.LinkedOutput,
+          "rejected synthetic OCML request returned output bytes");
+  if (Result.FailureStage != ExpectedStage) {
+    for (const std::string &Diagnostic : Result.Diagnostics)
+      errs() << Diagnostic << '\n';
+    fail("synthetic OCML request failed at an unexpected stage");
+  }
+  require(!Result.Diagnostics.empty(),
+          "synthetic OCML failure omitted diagnostics");
   return Result;
 }
 
@@ -556,6 +830,311 @@ void writeOutput(StringRef Path, ArrayRef<uint8_t> Bytes) {
   require(!Stream.has_error(), "could not write requested HSACO fixture");
 }
 
+bool hasObjectSymbol(ArrayRef<uint8_t> Bytes, StringRef Expected) {
+  StringRef Data(reinterpret_cast<const char *>(Bytes.data()), Bytes.size());
+  auto ObjectOrError =
+      ObjectFile::createObjectFile(MemoryBufferRef(Data, "ocml-output"));
+  if (!ObjectOrError)
+    fail(toString(ObjectOrError.takeError()));
+  for (SymbolRef Symbol : (*ObjectOrError)->symbols()) {
+    auto Name = Symbol.getName();
+    if (!Name)
+      fail(toString(Name.takeError()));
+    if (*Name == Expected)
+      return true;
+  }
+  return false;
+}
+
+struct SyntheticDeviceLibraryDirectory {
+  SmallString<128> Path;
+
+  SyntheticDeviceLibraryDirectory() {
+    if (std::error_code Error =
+            sys::fs::createUniqueDirectory("fe2o3-ocml-pipeline", Path))
+      fail(Error.message());
+  }
+
+  ~SyntheticDeviceLibraryDirectory() {
+    if (std::error_code Error = sys::fs::remove_directories(Path))
+      errs() << "could not remove OCML test directory: " << Error.message()
+             << '\n';
+  }
+};
+
+Gfx942DeviceLibraryPolicy
+makeSyntheticPolicy(SyntheticDeviceLibraryDirectory &Directory,
+                    std::vector<uint8_t> Ocml) {
+  static constexpr std::array<StringLiteral, 4> Names = {
+      "ocml.bc",
+      "oclc_isa_version_942.bc",
+      "oclc_unsafe_math_off.bc",
+      "oclc_finite_only_off.bc",
+  };
+  std::array<std::vector<uint8_t>, 4> Bytes = {
+      std::move(Ocml), makeEmptyProviderBitcode(Names[1]),
+      makeEmptyProviderBitcode(Names[2]), makeEmptyProviderBitcode(Names[3])};
+  Gfx942DeviceLibraryPolicy Result;
+  Result.Directory = Directory.Path.str().str();
+  for (size_t I = 0; I < Names.size(); ++I) {
+    SmallString<160> File(Result.Directory);
+    sys::path::append(File, Names[I]);
+    writeOutput(File, Bytes[I]);
+    Result.Files.push_back(
+        {Names[I].str(), SHA256::hash(Bytes[I]), MaxDeviceLibraryFileBytes});
+  }
+  return Result;
+}
+
+Request makeOcmlRequest(StringRef Import = "__ocml_sin_f32") {
+  return makeV2Request(
+      makeInput(InputKind::LlvmBitcode,
+                makeFloatConsumerBitcode("ocml_entry", Import)),
+      {}, {Import.str()}, {"ocml_entry"}, {Import.str(), "ocml_entry"});
+}
+
+void testSyntheticOcmlPipeline() {
+  SyntheticDeviceLibraryDirectory ValidDirectory;
+  Gfx942DeviceLibraryPolicy ValidPolicy =
+      makeSyntheticPolicy(ValidDirectory, makeSyntheticOcmlBitcode());
+  Request Valid = makeOcmlRequest();
+  Response Linked = runSuccessWithPolicy(Valid, ValidPolicy,
+                                         {"__ocml_sin_f32", "ocml_entry"});
+  requireDiagnostic(Linked,
+                    "device_library.check=identity status=ok "
+                    "provider=gfx942-ocml-v1 roots=[__ocml_sin_f32] files=4");
+  require(hasObjectSymbol(Linked.LinkedOutput->Bytes,
+                          "__fe2o3_required_ocml_helper"),
+          "required OCML helper was removed from the closure");
+  require(!hasObjectSymbol(Linked.LinkedOutput->Bytes, "__ocml_dead_decoy"),
+          "dead OCML provider definition escaped global DCE");
+
+  const std::array<StringRef, 2> SinAndSqrt = {"__ocml_sin_f32",
+                                               "__ocml_sqrt_f32"};
+  Request OmittedOcml = makeV2Request(
+      makeInput(InputKind::LlvmBitcode,
+                makeFloatConsumerBitcode("ocml_entry", SinAndSqrt, {})),
+      {}, {"__ocml_sin_f32"}, {"ocml_entry"}, {"__ocml_sin_f32", "ocml_entry"});
+  Response OmittedOcmlFailure = requireFailureWithPolicy(
+      OmittedOcml, ValidPolicy, Stage::InputValidation);
+  requireDiagnostic(OmittedOcmlFailure,
+                    "compiler-module import manifest mismatch: "
+                    "omitted=[__ocml_sqrt_f32] extra=[]");
+
+  Gfx942DeviceLibraryPolicy MissingPolicy = ValidPolicy;
+  SmallString<160> MissingDirectory(ValidDirectory.Path);
+  sys::path::append(MissingDirectory, "provider-must-not-be-opened");
+  MissingPolicy.Directory = MissingDirectory.str().str();
+
+  Request HiddenModuleAssembly = makeV2Request(
+      makeInput(InputKind::LlvmTextIr,
+                makeInlineAsmCompilerIr("hidden_runtime_import", true)),
+      {}, {"__ocml_sin_f32"}, {"ocml_entry"}, {"__ocml_sin_f32", "ocml_entry"});
+  Response HiddenModuleFailure = requireFailureWithPolicy(
+      HiddenModuleAssembly, MissingPolicy, Stage::InputValidation);
+  requireDiagnostic(HiddenModuleFailure,
+                    "compiler-module object import manifest mismatch: "
+                    "omitted=[hidden_runtime_import] extra=[]");
+
+  Request HiddenFunctionAssembly = makeV2Request(
+      makeInput(InputKind::LlvmTextIr,
+                makeInlineAsmCompilerIr("__ocml_sqrt_f32", false)),
+      {}, {"__ocml_sin_f32"}, {"ocml_entry"}, {"__ocml_sin_f32", "ocml_entry"});
+  Response HiddenFunctionFailure = requireFailureWithPolicy(
+      HiddenFunctionAssembly, MissingPolicy, Stage::InputValidation);
+  requireDiagnostic(HiddenFunctionFailure,
+                    "compiler-module object import manifest mismatch: "
+                    "omitted=[__ocml_sqrt_f32] extra=[]");
+
+  for (bool ModuleAssembly : {false, true}) {
+    Request LocalAssembly =
+        makeV2Request(makeInput(InputKind::LlvmTextIr,
+                                makeInlineAsmCompilerIr("local_hidden_import",
+                                                        ModuleAssembly, true)),
+                      {}, {"__ocml_sin_f32"}, {"ocml_entry"},
+                      {"__ocml_sin_f32", "ocml_entry"});
+    Response LocalFailure = requireFailureWithPolicy(
+        LocalAssembly, MissingPolicy, Stage::InputValidation);
+    requireDiagnostic(LocalFailure,
+                      "compiler-module object import manifest mismatch: "
+                      "omitted=[local_hidden_import] extra=[]");
+  }
+
+  Request ValidIntrinsic = makeV2Request(
+      makeInput(InputKind::LlvmTextIr, makeIntrinsicCompilerIr(false)), {}, {},
+      {"intrinsic_entry"}, {"intrinsic_entry"});
+  runSuccess(ValidIntrinsic, {"intrinsic_entry"});
+
+  Request MalformedIntrinsic = makeV2Request(
+      makeInput(InputKind::LlvmTextIr, makeIntrinsicCompilerIr(true)), {}, {},
+      {"intrinsic_entry"}, {"intrinsic_entry"});
+  MalformedIntrinsic.LinkOptions.VerifyEach = false;
+  Response MalformedIntrinsicFailure =
+      requireFailure(MalformedIntrinsic, Stage::InputValidation);
+  requireDiagnostic(MalformedIntrinsicFailure,
+                    "compiler-module verification failed:");
+
+  const std::array<StringRef, 1> Sin = {"__ocml_sin_f32"};
+  const std::array<StringRef, 1> UnusedCos = {"__ocml_cos_f32"};
+  Request ExtraUnusedOcml = makeV2Request(
+      makeInput(InputKind::LlvmBitcode,
+                makeFloatConsumerBitcode("ocml_entry", Sin, UnusedCos)),
+      {}, {"__ocml_cos_f32", "__ocml_sin_f32"}, {"ocml_entry"},
+      {"__ocml_cos_f32", "__ocml_sin_f32", "ocml_entry"});
+  Response ExtraUnusedFailure = requireFailureWithPolicy(
+      ExtraUnusedOcml, ValidPolicy, Stage::InputValidation);
+  requireDiagnostic(ExtraUnusedFailure,
+                    "compiler-module import manifest mismatch: omitted=[] "
+                    "extra=[__ocml_cos_f32]");
+
+  Request OmittedOrdinary = makeV2Request(
+      makeInput(
+          InputKind::LlvmBitcode,
+          makeBitcode("ordinary-entry", "ordinary_entry", "ordinary_helper")),
+      {makeInput(
+          InputKind::LlvmBitcode,
+          makeBitcode("ordinary-provider", "ordinary_helper", std::nullopt))},
+      {}, {"ordinary_entry"}, {"ordinary_entry", "ordinary_helper"});
+  Response OmittedOrdinaryFailure =
+      requireFailure(OmittedOrdinary, Stage::InputValidation);
+  requireDiagnostic(
+      OmittedOrdinaryFailure,
+      "compiler-module import manifest mismatch: omitted=[ordinary_helper] "
+      "extra=[]");
+
+  Request OmittedWeak = makeV2Request(
+      makeInput(InputKind::LlvmBitcode,
+                makeBitcode("weak-entry", "weak_entry", "weak_helper",
+                            withWeakImport())),
+      {makeInput(InputKind::LlvmBitcode,
+                 makeBitcode("weak-provider", "weak_helper", std::nullopt))},
+      {}, {"weak_entry"}, {"weak_entry", "weak_helper"});
+  Response OmittedWeakFailure =
+      requireFailure(OmittedWeak, Stage::InputValidation);
+  requireDiagnostic(
+      OmittedWeakFailure,
+      "compiler-module import manifest mismatch: omitted=[weak_helper] "
+      "extra=[]");
+
+  Request CrossDefined = makeV2Request(
+      makeInput(InputKind::LlvmBitcode, makeCrossDefinedCompilerBitcode()), {},
+      {}, {"cross_entry", "cross_helper"}, {"cross_entry", "cross_helper"});
+  runSuccess(CrossDefined, {"cross_entry", "cross_helper"});
+
+  Request SymbolKinds = makeV2Request(
+      makeInput(InputKind::LlvmTextIr, makeSymbolKindCompilerIr()), {}, {},
+      {"symbol_kinds_entry"}, {"symbol_kinds_entry"});
+  Response SymbolKindsFailure =
+      requireFailure(SymbolKinds, Stage::InputValidation);
+  requireDiagnostic(
+      SymbolKindsFailure,
+      "compiler-module import manifest mismatch: "
+      "omitted=[ordinary_global,used_only,weak_call,weak_used] extra=[]");
+
+  Request Unknown = makeOcmlRequest("__ocml_sqrt_f32");
+  requireFailureWithPolicy(Unknown, ValidPolicy, Stage::InputValidation);
+  Request WrongTarget = Valid;
+  WrongTarget.Target = "gfx950";
+  requireFailureWithPolicy(WrongTarget, ValidPolicy, Stage::InputValidation);
+  Request WrongCodeObject = Valid;
+  WrongCodeObject.CodeObjectVersion = 4;
+  requireFailureWithPolicy(WrongCodeObject, ValidPolicy,
+                           Stage::InputValidation);
+
+  Gfx942DeviceLibraryPolicy WrongDigest = ValidPolicy;
+  WrongDigest.Files[0].Digest[0] ^= 0xff;
+  requireFailureWithPolicy(Valid, WrongDigest, Stage::Toolchain);
+
+  SyntheticDeviceLibraryDirectory WrongAbiDirectory;
+  SyntheticOcmlOptions WrongAbiOptions;
+  WrongAbiOptions.WrongAbi = true;
+  Gfx942DeviceLibraryPolicy WrongAbiPolicy = makeSyntheticPolicy(
+      WrongAbiDirectory, makeSyntheticOcmlBitcode(WrongAbiOptions));
+  requireFailureWithPolicy(Valid, WrongAbiPolicy, Stage::BitcodeLink);
+
+  Request WrongCompilerAbi = makeV2Request(
+      makeInput(
+          InputKind::LlvmBitcode,
+          makeBitcode("wrong-ocml-import-abi", "ocml_entry", "__ocml_sin_f32")),
+      {}, {"__ocml_sin_f32"}, {"ocml_entry"}, {"__ocml_sin_f32", "ocml_entry"});
+  requireFailureWithPolicy(WrongCompilerAbi, ValidPolicy, Stage::BitcodeLink);
+
+  SyntheticDeviceLibraryDirectory WrongTripleDirectory;
+  SyntheticOcmlOptions WrongTripleOptions;
+  WrongTripleOptions.WrongTriple = true;
+  Gfx942DeviceLibraryPolicy WrongTriplePolicy = makeSyntheticPolicy(
+      WrongTripleDirectory, makeSyntheticOcmlBitcode(WrongTripleOptions));
+  requireFailureWithPolicy(Valid, WrongTriplePolicy, Stage::BitcodeLink);
+
+  SyntheticDeviceLibraryDirectory WrongLayoutDirectory;
+  SyntheticOcmlOptions WrongLayoutOptions;
+  WrongLayoutOptions.Layout = LayoutMode::Incompatible;
+  Gfx942DeviceLibraryPolicy WrongLayoutPolicy = makeSyntheticPolicy(
+      WrongLayoutDirectory, makeSyntheticOcmlBitcode(WrongLayoutOptions));
+  requireFailureWithPolicy(Valid, WrongLayoutPolicy, Stage::BitcodeLink);
+
+  SyntheticDeviceLibraryDirectory UnresolvedDirectory;
+  SyntheticOcmlOptions UnresolvedOptions;
+  UnresolvedOptions.UnresolvedDependency = true;
+  Gfx942DeviceLibraryPolicy UnresolvedPolicy = makeSyntheticPolicy(
+      UnresolvedDirectory, makeSyntheticOcmlBitcode(UnresolvedOptions));
+  requireFailureWithPolicy(Valid, UnresolvedPolicy, Stage::InputValidation);
+
+  Request Duplicate = makeV2Request(
+      makeInput(InputKind::LlvmBitcode,
+                makeFloatConsumerBitcode("ocml_entry", "__ocml_sin_f32")),
+      {makeInput(InputKind::LlvmBitcode, makeSyntheticOcmlBitcode())},
+      {"__ocml_sin_f32"}, {"ocml_entry"}, {"__ocml_sin_f32", "ocml_entry"});
+  requireFailureWithPolicy(Duplicate, ValidPolicy, Stage::InputValidation);
+}
+
+std::optional<std::vector<uint8_t>> testMeasuredOcmlPipeline() {
+  auto Policy = measuredGfx942DeviceLibraryPolicy();
+  if (!Policy) {
+    consumeError(Policy.takeError());
+    return std::nullopt;
+  }
+  Request Valid = makeOcmlRequest();
+
+  const std::array<StringRef, 2> SinAndSqrt = {"__ocml_sin_f32",
+                                               "__ocml_sqrt_f32"};
+  Request OmittedOcml = makeV2Request(
+      makeInput(InputKind::LlvmBitcode,
+                makeFloatConsumerBitcode("ocml_entry", SinAndSqrt, {})),
+      {}, {"__ocml_sin_f32"}, {"ocml_entry"}, {"__ocml_sin_f32", "ocml_entry"});
+  Response OmittedOcmlFailure =
+      requireFailure(OmittedOcml, Stage::InputValidation);
+  requireDiagnostic(OmittedOcmlFailure,
+                    "compiler-module import manifest mismatch: "
+                    "omitted=[__ocml_sqrt_f32] extra=[]");
+
+  Response Linked = runSuccess(Valid, {"__ocml_sin_f32", "ocml_entry"});
+  requireDiagnostic(Linked,
+                    "device_library.check=identity status=ok "
+                    "provider=gfx942-ocml-v1 roots=[__ocml_sin_f32] files=4");
+  require(!hasObjectSymbol(Linked.LinkedOutput->Bytes, "__ocml_acos_f64"),
+          "unrequested measured OCML definition escaped closure reduction");
+
+  const std::array<StringRef, 7> AllSupported = {
+      "__ocml_cos_f32",   "__ocml_exp2_f32", "__ocml_exp_f32",
+      "__ocml_log10_f32", "__ocml_log2_f32", "__ocml_log_f32",
+      "__ocml_sin_f32"};
+  std::vector<std::string> AllImports;
+  std::set<std::string> AllOutputSymbols = {"ocml_all_entry"};
+  for (StringRef Import : AllSupported) {
+    AllImports.push_back(Import.str());
+    AllOutputSymbols.insert(Import.str());
+  }
+  std::vector<std::string> AllFinalSymbols(AllImports);
+  AllFinalSymbols.push_back("ocml_all_entry");
+  Request AllSeven = makeV2Request(
+      makeInput(InputKind::LlvmBitcode,
+                makeFloatConsumerBitcode("ocml_all_entry", AllSupported, {})),
+      {}, AllImports, {"ocml_all_entry"}, AllFinalSymbols);
+  runSuccess(AllSeven, AllOutputSymbols);
+  return Linked.LinkedOutput->Bytes;
+}
+
 void testLldExitPolicy(int ExitCode) {
   pid_t Child = fork();
   require(Child >= 0, "could not fork LLD contract test");
@@ -576,14 +1155,18 @@ void testLldExitPolicy(int ExitCode) {
 } // namespace
 
 int main(int ArgumentCount, char **Arguments) {
-  require(ArgumentCount == 1 || ArgumentCount == 2 || ArgumentCount == 4,
+  require(ArgumentCount == 1 || ArgumentCount == 2 || ArgumentCount == 4 ||
+              ArgumentCount == 5,
           "usage: fe2o3-worker-pipeline-tests "
-          "[OUTPUT.hsaco [INPUT.bc INPUT.o]]");
+          "[OUTPUT.hsaco [INPUT.bc INPUT.o [OCML_OUTPUT.hsaco]]]");
 
   fe2o3::worker::detail::enforceReusableLldResult({0, true});
   fe2o3::worker::detail::enforceReusableLldResult({1, true});
   testLldExitPolicy(0);
   testLldExitPolicy(1);
+  testSyntheticOcmlPipeline();
+  std::optional<std::vector<uint8_t>> MeasuredOcmlOutput =
+      testMeasuredOcmlPipeline();
 
   Request BitcodePair = makeRequest(
       {makeInput(InputKind::LlvmBitcode,
@@ -886,6 +1469,13 @@ int main(int ArgumentCount, char **Arguments) {
   if (ArgumentCount == 4) {
     writeOutput(Arguments[2], MixedBitcode);
     writeOutput(Arguments[3], MixedObject);
+  }
+  if (ArgumentCount == 5) {
+    require(MeasuredOcmlOutput.has_value(),
+            "measured gfx942 OCML providers are unavailable");
+    writeOutput(Arguments[2], MixedBitcode);
+    writeOutput(Arguments[3], MixedObject);
+    writeOutput(Arguments[4], *MeasuredOcmlOutput);
   }
 
   Request ObjectPair = makeRequest(
