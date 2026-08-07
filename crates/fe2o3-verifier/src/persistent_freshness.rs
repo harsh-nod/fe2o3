@@ -188,7 +188,8 @@ impl PersistentFreshnessReceiptV1 {
 }
 
 /// A Linux persistent replay ledger rooted at one retained directory
-/// descriptor and one retained lock-file descriptor.
+/// descriptor. Every transaction opens and locks a fresh nofollow lock-file
+/// descriptor and rejects use from a process other than its creator.
 ///
 /// Construction is intentionally separate from the process-local
 /// `AuthenticatedExecutionFreshnessV1`. The value is neither `Clone` nor a
@@ -209,6 +210,8 @@ impl fmt::Debug for PersistentProofFreshnessLedgerV1 {
 }
 
 impl PersistentProofFreshnessLedgerV1 {
+    /// Creates and durably initializes a ledger in a directory that has never
+    /// contained one. Existing ledger files are rejected.
     pub fn create_new(
         directory: impl AsRef<Path>,
     ) -> Result<(Self, PersistentFreshnessRecoveryV1), PersistentFreshnessLedgerErrorV1> {
@@ -224,6 +227,8 @@ impl PersistentProofFreshnessLedgerV1 {
         }
     }
 
+    /// Opens and recovers an initialized ledger without creating missing
+    /// state. A deleted state file fails closed.
     pub fn open_existing(
         directory: impl AsRef<Path>,
     ) -> Result<(Self, PersistentFreshnessRecoveryV1), PersistentFreshnessLedgerErrorV1> {

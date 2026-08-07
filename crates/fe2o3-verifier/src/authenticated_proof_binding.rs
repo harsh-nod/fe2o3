@@ -483,21 +483,30 @@ pub fn bind_authenticated_proof_executable_persistent_v1(
     validate_authenticated_binding_input(&evidence, policy)?;
     let binding = finish_authenticated_proof_executable_binding(evidence, policy)?;
     let receipt = freshness.consume_authenticated_execution(binding.execution_identity())?;
-    Ok(persistently_fresh_binding(binding, receipt))
+    persistently_fresh_binding(binding, receipt)
 }
 
 fn persistently_fresh_binding(
     proof_binding: AuthenticatedProofExecutableBindingV1,
     freshness_receipt: PersistentFreshnessReceiptV1,
-) -> PersistentlyFreshProofExecutableBindingV1 {
+) -> Result<PersistentlyFreshProofExecutableBindingV1, AuthenticatedProofExecutableBindingError> {
     let execution = &proof_binding.execution_identity;
     let consumed_execution = freshness_receipt.identity();
-    debug_assert_eq!(consumed_execution.challenge(), execution.challenge());
-    debug_assert_eq!(
+    require_equal(
+        consumed_execution.challenge(),
+        execution.challenge(),
+        "persistent receipt challenge",
+    )?;
+    require_equal(
         consumed_execution.transcript(),
-        execution.transcript_digest()
-    );
-    debug_assert_eq!(consumed_execution.result(), execution.result().digest());
+        execution.transcript_digest(),
+        "persistent receipt transcript",
+    )?;
+    require_equal(
+        consumed_execution.result(),
+        execution.result().digest(),
+        "persistent receipt result",
+    )?;
     let binding_identity = persistent_binding_identity(&proof_binding, freshness_receipt);
     let identity = PersistentlyFreshProofExecutableIdentityV1 {
         proof_binding_identity: proof_binding.binding_identity,
@@ -507,11 +516,11 @@ fn persistently_fresh_binding(
         ledger_state_identity: freshness_receipt.state_identity(),
         binding_identity,
     };
-    PersistentlyFreshProofExecutableBindingV1 {
+    Ok(PersistentlyFreshProofExecutableBindingV1 {
         proof_binding,
         freshness_receipt,
         identity,
-    }
+    })
 }
 
 fn persistent_binding_identity(

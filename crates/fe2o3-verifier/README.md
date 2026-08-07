@@ -41,22 +41,32 @@ tests and short-lived tools. Production callers can use
 `bind_authenticated_proof_executable_persistent_v1`. That path completes every
 proof and executable check first, then durably consumes the exact authenticated
 challenge, transcript, and sealed-result identities before returning the inert
-binding. A rejected proof does not consume freshness; an I/O failure after a
-durable intent may conservatively consume it.
+`PersistentlyFreshProofExecutableBindingV1`. This distinct, non-clone type
+retains the receipt. Its canonical identity commits the underlying authenticated
+proof binding, consumed challenge/transcript/result tuple, random ledger
+namespace, generation, and resulting state identity. A rejected proof does not
+consume freshness; an I/O failure after a durable intent may conservatively
+consume it.
 
 Persistent state and intent records use separate versioned domains, canonical
 little-endian encodings, SHA-256 checksums and state identities, fixed-width
-execution identities, and explicit count and size bounds. Decoding rejects
-unknown or zero identity fields, duplicate challenge/transcript/result axes,
-noncanonical ordering, malformed lengths, trailing bytes, and discontinuous
-generations.
+execution identities, a nonzero creation namespace, and explicit count and size
+bounds. Decoding rejects unknown or zero identity fields, duplicate
+challenge/transcript/result axes, noncanonical ordering, malformed lengths,
+trailing bytes, discontinuous generations, and recovery intents from another
+namespace.
 
+Callers must use `create_new` exactly once and `open_existing` thereafter.
+`open_existing` never synthesizes missing state, so deleting the state cannot
+silently reset replay history; creation also refuses an existing lock anchor.
 On Linux, the ledger opens its owner-controlled directory and fixed files with
-`openat2`, rejecting symlinks and magic links. It retains directory and lock
-descriptors, addresses records relative to the retained directory, requires
-private regular single-link files, and revalidates object metadata. A
-nonblocking exclusive `flock` serializes recovery and consumption across
-processes. Intent and state files are written to exclusive temporary files,
+`openat2`, rejecting symlinks and magic links. It retains the directory
+descriptor, addresses records relative to it, requires private regular
+single-link files, and revalidates object metadata. Each transaction opens a
+fresh nofollow lock descriptor before taking a nonblocking exclusive `flock`.
+The transaction records its creating PID, rejects mutation after `fork`, and a
+fork child cannot unlock the parent's transaction when its inherited value is
+dropped. Intent and state files are written to exclusive temporary files,
 synced, atomically renamed, and followed by directory syncs.
 
 Recovery is explicit: a clean or newly initialized state is accepted; a
@@ -80,6 +90,12 @@ successful result properties, proof target, and finalized executable's source
 contract identity before retaining the complete measured chain. Source and
 request bindings are descriptive inputs; none of these types grants compiler,
 module-load, or kernel-launch authority.
+
+Security-sensitive consumers that require durable freshness use
+`bind_persistently_fresh_authenticated_control_flow_executable_v1`. Its input
+and output types are distinct from the process-local path, and its identity
+retains the ledger receipt through the control-flow binding. Neither path grants
+compiler, module-load, or kernel-launch authority.
 
 ## Trust boundary
 
@@ -107,6 +123,10 @@ module-load, or kernel-launch authority.
 - `PersistentProofFreshnessLedgerV1` can only consume identities derived from
   an `AuthenticatedProofExecutionIdentityV1`; its records and receipts do not
   grant module-load, kernel-launch, compiler, or runtime authority.
+- `PersistentlyFreshProofExecutableBindingV1` and
+  `PersistentlyFreshAuthenticatedControlFlowExecutableBindingV1` have private
+  constructors. Their type distinction allows downstream code to reject
+  process-local freshness without treating persistence as execution authority.
 - `ControlFlowSourceBindingV1` authenticates internal agreement among source
   bytes, CFG identity, and claims only. Compiler/MIR reconciliation remains a
   separate measured obligation, and only authenticated proof/executable
@@ -129,11 +149,18 @@ rename, and durable file and directory `fsync` semantics on an owner-controlled
 local filesystem. The retained directory descriptor prevents live pathname
 replacement from redirecting one ledger instance. The caller remains
 responsible for provisioning the same trusted directory across restart; the
-pathname itself is not an authenticated storage identity. No distributed or
-network-filesystem locking claim is made, and a malicious process with the same
-effective user, a compromised kernel, or storage rollback remains outside this
-local trust boundary. The V1 ledger is bounded to 65,536 consumed executions;
-it intentionally fails closed at capacity rather than compacting history.
+pathname itself is not an authenticated storage identity.
+
+The namespace and chained state identities detect accidental substitution and
+bind receipts to one ledger history, but they are not an external monotonic
+counter or keyed storage authenticator. Restoring an older complete directory
+snapshot can therefore restore older replay state. Preventing rollback by an
+administrator, malicious same-UID process, VM snapshot, or storage layer
+requires an external monotonic/version anchor, such as trusted hardware or a
+remote append-only service, checked against the ledger namespace, generation,
+and state identity. No distributed or network-filesystem locking claim is made;
+a compromised kernel is also outside this local trust boundary. The V1 ledger
+is bounded to 65,536 consumed executions and fails closed at capacity.
 
 A timeout kills and reaps the direct recorder child, but does not yet establish
 a process group or forcibly terminate arbitrary descendants. The existing

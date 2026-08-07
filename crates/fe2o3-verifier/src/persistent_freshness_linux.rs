@@ -456,7 +456,8 @@ fn recover(
     };
     let intent = decode_intent(PersistentFreshnessLedgerFileV1::Intent, &intent_bytes)?;
 
-    if state.generation == intent.previous_generation
+    if state.namespace == intent.namespace
+        && state.generation == intent.previous_generation
         && state.identity() == intent.previous_state_identity
     {
         let next = state
@@ -497,7 +498,8 @@ fn recover(
         return Ok((next, PersistentFreshnessRecoveryV1::AppliedPendingIntent));
     }
 
-    if state.generation == intent.next_generation
+    if state.namespace == intent.namespace
+        && state.generation == intent.next_generation
         && state.identity() == intent.next_state_identity
         && state.contains(intent.identity)
     {
@@ -516,7 +518,8 @@ fn validate_previous_state(
     state: &FreshnessStateV1,
     intent: FreshnessIntentV1,
 ) -> Result<(), PersistentFreshnessLedgerErrorV1> {
-    if state.generation != intent.previous_generation
+    if state.namespace != intent.namespace
+        || state.generation != intent.previous_generation
         || state.identity() != intent.previous_state_identity
     {
         Err(PersistentFreshnessLedgerErrorV1::RecoveryConflict)
@@ -1111,6 +1114,40 @@ mod tests {
             .unwrap()
             .consume(identity(7))
             .unwrap();
+    }
+
+    #[test]
+    fn recovery_rejects_an_intent_from_another_ledger_namespace() {
+        let directory = TestDirectory::new();
+        let (mut ledger, _) = LinuxLedger::create_new(directory.path()).unwrap();
+        {
+            let transaction = ledger.try_begin_exclusive().unwrap();
+            let next = transaction.state.with_consumed(identity(8)).unwrap();
+            let mut intent =
+                FreshnessIntentV1::new(&transaction.state, &next, identity(8)).unwrap();
+            intent.namespace = digest(0xee);
+            write_new_file(
+                transaction.ledger,
+                INTENT_TEMPORARY_NAME,
+                PersistentFreshnessLedgerFileV1::IntentTemporary,
+                &intent.encode().unwrap(),
+            )
+            .unwrap();
+            rename_file(
+                transaction.ledger,
+                INTENT_TEMPORARY_NAME,
+                INTENT_NAME,
+                PersistentFreshnessLedgerFileV1::Intent,
+            )
+            .unwrap();
+            sync_directory(&transaction.ledger.directory).unwrap();
+        }
+        drop(ledger);
+
+        assert!(matches!(
+            LinuxLedger::open_existing(directory.path()),
+            Err(PersistentFreshnessLedgerErrorV1::RecoveryConflict)
+        ));
     }
 
     #[test]
