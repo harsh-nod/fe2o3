@@ -27,6 +27,7 @@ members = [
     "crates/reserved-fe2o3-symbols",
     "crates/rustc-codegen-fe2o3",
     "crates/rustc-codegen-fe2o3/tests/fixtures/external-spoof",
+    "crates/rustc-codegen-fe2o3/tests/fixtures/half-math-compiler",
     "crates/rustc-codegen-fe2o3/tests/fixtures/local-marker",
     "crates/rustc-codegen-fe2o3/tests/fixtures/lookalike-helper",
     "crates/rustc-codegen-fe2o3/tests/fixtures/lookalike-thread",

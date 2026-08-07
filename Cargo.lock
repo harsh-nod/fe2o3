@@ -262,6 +262,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-half-math-compiler-fixture"
+version = "0.0.0"
+dependencies = [
+ "fe2o3-device",
+ "fe2o3-macros",
+]
+
+[[package]]
 name = "fe2o3-hip-sys"
 version = "0.1.0"
 dependencies = [
