@@ -932,6 +932,85 @@ pub unsafe trait ReviewedHsaExecutableLifecycleAdapterV1 {
     ) -> Result<HsaUnloadObservationV1, Self::Error>;
 }
 
+/// Reviewed extension that prepares compiler-declared implicit kernargs.
+///
+/// The base lifecycle adapter deliberately accepts only complete raw kernarg
+/// storage. Generated typed launch code uses this extension so application code
+/// never constructs or initializes AMDHSA hidden arguments.
+///
+/// # Safety
+///
+/// Implementations must preserve every byte in the explicit span, initialize
+/// the complete implicit span for the exact executable, kernel, and geometry,
+/// and report an observation derived from that same operation. Success must not
+/// be reported while any hidden byte required by the code-object ABI remains
+/// uninitialized. Implementing this trait does not itself grant launch
+/// authority; the lifecycle validates the observation before dispatch.
+pub unsafe trait ReviewedHsaImplicitKernargAdapterV1:
+    ReviewedHsaExecutableLifecycleAdapterV1
+{
+    /// Initializes only the compiler-declared implicit span in `kernarg`.
+    ///
+    /// # Safety
+    ///
+    /// The implementation obligations are those of the unsafe trait. The
+    /// executable and kernel are the exact private handles retained by the
+    /// lifecycle, and all spans have already been bounds checked.
+    #[allow(clippy::too_many_arguments)]
+    unsafe fn initialize_implicit_kernarg(
+        &mut self,
+        executable: &Self::Executable,
+        kernel: &Self::Kernel,
+        geometry: HsaLaunchGeometryV1,
+        explicit_byte_len: usize,
+        implicit_byte_offset: usize,
+        implicit_byte_len: usize,
+        kernarg: &mut [u8],
+    ) -> Result<HsaImplicitKernargInitializationObservationV1, Self::Error>;
+}
+
+/// Adapter-reported completion of one implicit-kernarg initialization.
+///
+/// This is descriptive data. Only the private generated lifecycle transition
+/// can reconcile it with exact loaded handles and issue dispatch authority.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HsaImplicitKernargInitializationObservationV1 {
+    executable_object: HsaExecutableObjectIdentityV1,
+    kernel_object: HsaKernelObjectIdentityV1,
+    geometry: HsaLaunchGeometryV1,
+    explicit_byte_len: u64,
+    implicit_byte_offset: u64,
+    implicit_byte_len: u64,
+    initialized: bool,
+}
+
+impl HsaImplicitKernargInitializationObservationV1 {
+    #[allow(clippy::too_many_arguments)]
+    pub const fn new(
+        executable_object: HsaExecutableObjectIdentityV1,
+        kernel_object: HsaKernelObjectIdentityV1,
+        geometry: HsaLaunchGeometryV1,
+        explicit_byte_len: u64,
+        implicit_byte_offset: u64,
+        implicit_byte_len: u64,
+        initialized: bool,
+    ) -> Self {
+        Self {
+            executable_object,
+            kernel_object,
+            geometry,
+            explicit_byte_len,
+            implicit_byte_offset,
+            implicit_byte_len,
+            initialized,
+        }
+    }
+
+    pub const fn initialized(&self) -> bool {
+        self.initialized
+    }
+}
+
 /// Environment-authenticated permission to load one exact finalized code object.
 ///
 /// This state owns the reviewed adapter and is intentionally linear.
@@ -1189,6 +1268,21 @@ impl<K, A: ReviewedHsaExecutableLifecycleAdapterV1> LoadedHsaExecutableV1<K, A> 
         &self.resolution
     }
 
+    #[allow(dead_code)]
+    pub(crate) const fn artifact_identity(&self) -> &ArtifactKernelIdentityV1 {
+        self.authenticated.admission.artifact_identity()
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn physical_kernel(&self) -> &crate::PublishedKernelPhysicalLayoutV1 {
+        self.authenticated.admission.selected_kernel()
+    }
+
+    #[allow(dead_code)]
+    pub(crate) const fn environment(&self) -> &HsaEnvironmentObservationV1 {
+        &self.environment
+    }
+
     pub fn authorize_launch(
         &mut self,
         geometry: HsaLaunchGeometryV1,
@@ -1324,6 +1418,144 @@ impl<K, A: ReviewedHsaExecutableLifecycleAdapterV1> HsaKernelLaunchAuthorization
             dispatch,
         })
     }
+}
+
+impl<K, A: ReviewedHsaImplicitKernargAdapterV1> HsaKernelLaunchAuthorizationV1<'_, K, A> {
+    #[allow(dead_code)]
+    pub(crate) fn launch_generated_with_implicit_kernarg(
+        self,
+        explicit: &[u8],
+        implicit_byte_offset: usize,
+        implicit_byte_len: usize,
+        kernarg: &mut [u8],
+    ) -> Result<HsaCompletedDispatchV1, HsaGeneratedDispatchError<A::Error>> {
+        let expected_size = usize::try_from(self.loaded.resolution.kernarg_segment_size)
+            .map_err(|_| HsaGeneratedDispatchError::KernargSize)?;
+        if kernarg.len() != expected_size
+            || explicit.len() != implicit_byte_offset
+            || implicit_byte_offset
+                .checked_add(implicit_byte_len)
+                .is_none_or(|end| end != expected_size)
+        {
+            return Err(HsaGeneratedDispatchError::KernargSize);
+        }
+        let alignment = usize::try_from(self.loaded.resolution.kernarg_segment_alignment)
+            .map_err(|_| HsaGeneratedDispatchError::KernargAlignment)?;
+        if !kernarg.as_ptr().addr().is_multiple_of(alignment) {
+            return Err(HsaGeneratedDispatchError::KernargAlignment);
+        }
+
+        kernarg[..explicit.len()].copy_from_slice(explicit);
+        let executable = self
+            .loaded
+            .executable
+            .as_ref()
+            .expect("launch authority retains the loaded executable");
+        let kernel = self
+            .loaded
+            .kernel
+            .as_ref()
+            .expect("launch authority retains the resolved kernel");
+        // SAFETY: this crate-private transition is reachable only after typed
+        // generated code sealed its exact explicit ABI and resource witnesses.
+        // The unsafe extension owns the hidden-argument initialization contract.
+        let observation = unsafe {
+            self.loaded.adapter.initialize_implicit_kernarg(
+                executable,
+                kernel,
+                self.geometry,
+                explicit.len(),
+                implicit_byte_offset,
+                implicit_byte_len,
+                kernarg,
+            )
+        }
+        .map_err(HsaGeneratedDispatchError::ImplicitAdapter)?;
+        if kernarg[..explicit.len()] != *explicit {
+            return Err(HsaGeneratedDispatchError::ExplicitKernargMutation);
+        }
+        validate_implicit_kernarg_observation(
+            &self.loaded.load,
+            &self.loaded.resolution,
+            self.geometry,
+            explicit.len(),
+            implicit_byte_offset,
+            implicit_byte_len,
+            &observation,
+        )
+        .map_err(HsaGeneratedDispatchError::ImplicitObservationMismatch)?;
+
+        // SAFETY: the generated path supplied the complete explicit ABI and
+        // the reviewed extension initialized the exact implicit span. The base
+        // lifecycle still validates the synchronous dispatch observation.
+        unsafe { self.launch_and_wait(kernarg) }.map_err(HsaGeneratedDispatchError::Dispatch)
+    }
+}
+
+/// Failure while completing a generated typed kernarg and dispatching it.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum HsaGeneratedDispatchError<E> {
+    KernargSize,
+    KernargAlignment,
+    ImplicitAdapter(E),
+    ExplicitKernargMutation,
+    ImplicitObservationMismatch(&'static str),
+    Dispatch(HsaDispatchError<E>),
+}
+
+#[allow(clippy::too_many_arguments)]
+#[allow(dead_code)]
+fn validate_implicit_kernarg_observation(
+    load: &HsaCodeObjectLoadObservationV1,
+    resolution: &HsaKernelResolutionObservationV1,
+    geometry: HsaLaunchGeometryV1,
+    explicit_byte_len: usize,
+    implicit_byte_offset: usize,
+    implicit_byte_len: usize,
+    observation: &HsaImplicitKernargInitializationObservationV1,
+) -> Result<(), &'static str> {
+    let explicit_byte_len =
+        u64::try_from(explicit_byte_len).map_err(|_| "explicit kernarg length")?;
+    let implicit_byte_offset =
+        u64::try_from(implicit_byte_offset).map_err(|_| "implicit kernarg offset")?;
+    let implicit_byte_len =
+        u64::try_from(implicit_byte_len).map_err(|_| "implicit kernarg length")?;
+    for (matches, field) in [
+        (
+            observation.executable_object == load.executable_object,
+            "implicit kernarg executable object",
+        ),
+        (
+            observation.kernel_object == resolution.kernel_object,
+            "implicit kernarg kernel object",
+        ),
+        (
+            observation.geometry == geometry,
+            "implicit kernarg launch geometry",
+        ),
+        (
+            observation.explicit_byte_len == explicit_byte_len,
+            "explicit kernarg length",
+        ),
+        (
+            observation.implicit_byte_offset == implicit_byte_offset,
+            "implicit kernarg offset",
+        ),
+        (
+            observation.implicit_byte_len == implicit_byte_len,
+            "implicit kernarg length",
+        ),
+        (
+            observation.initialized,
+            "implicit kernarg initialization completion",
+        ),
+    ] {
+        if !matches {
+            return Err(field);
+        }
+    }
+    Ok(())
 }
 
 /// Failure while validating launch geometry.
@@ -1739,6 +1971,10 @@ mod tests {
         DispatchObject,
         DispatchGeometry,
         DispatchIncomplete,
+        ImplicitExecutable,
+        ImplicitOffset,
+        ImplicitIncomplete,
+        ExplicitMutation,
         UnloadObject,
         UnloadIncomplete,
     }
@@ -1757,6 +1993,7 @@ mod tests {
     struct FakeHsaAdapter {
         fault: AdapterFault,
         unloads: Arc<AtomicUsize>,
+        implicit_initialized: bool,
     }
 
     impl FakeHsaAdapter {
@@ -1766,6 +2003,7 @@ mod tests {
                 Self {
                     fault,
                     unloads: unloads.clone(),
+                    implicit_initialized: false,
                 },
                 unloads,
             )
@@ -1871,8 +2109,13 @@ mod tests {
             _executable: &Self::Executable,
             _kernel: &Self::Kernel,
             geometry: HsaLaunchGeometryV1,
-            _kernarg: &mut [u8],
+            kernarg: &mut [u8],
         ) -> Result<HsaDispatchObservationV1, Self::Error> {
+            if self.implicit_initialized
+                && (kernarg[..32] != [0x5a; 32] || kernarg[32..] != [0xa5; 256])
+            {
+                return Err("generated kernarg was not preserved");
+            }
             let executable = if self.fault == AdapterFault::DispatchObject {
                 HsaExecutableObjectIdentityV1::new([0x81; 32]).unwrap()
             } else {
@@ -1909,6 +2152,44 @@ mod tests {
                 environment.runtime().instance(),
                 environment.agent().agent_handle(),
                 self.fault != AdapterFault::UnloadIncomplete,
+            ))
+        }
+    }
+
+    unsafe impl ReviewedHsaImplicitKernargAdapterV1 for FakeHsaAdapter {
+        unsafe fn initialize_implicit_kernarg(
+            &mut self,
+            _executable: &Self::Executable,
+            _kernel: &Self::Kernel,
+            geometry: HsaLaunchGeometryV1,
+            explicit_byte_len: usize,
+            implicit_byte_offset: usize,
+            implicit_byte_len: usize,
+            kernarg: &mut [u8],
+        ) -> Result<HsaImplicitKernargInitializationObservationV1, Self::Error> {
+            if self.fault == AdapterFault::ExplicitMutation {
+                kernarg[0] ^= 0xff;
+            }
+            kernarg[implicit_byte_offset..implicit_byte_offset + implicit_byte_len].fill(0xa5);
+            self.implicit_initialized = true;
+            let executable = if self.fault == AdapterFault::ImplicitExecutable {
+                HsaExecutableObjectIdentityV1::new([0x91; 32]).unwrap()
+            } else {
+                Self::executable_object()
+            };
+            let reported_offset = if self.fault == AdapterFault::ImplicitOffset {
+                implicit_byte_offset + 8
+            } else {
+                implicit_byte_offset
+            };
+            Ok(HsaImplicitKernargInitializationObservationV1::new(
+                executable,
+                Self::kernel_object(),
+                geometry,
+                u64::try_from(explicit_byte_len).unwrap(),
+                u64::try_from(reported_offset).unwrap(),
+                u64::try_from(implicit_byte_len).unwrap(),
+                self.fault != AdapterFault::ImplicitIncomplete,
             ))
         }
     }
@@ -2072,6 +2353,78 @@ mod tests {
                 Err(HsaDispatchError::ObservationMismatch(_))
             ));
         }
+    }
+
+    #[test]
+    fn generated_dispatch_delegates_only_the_implicit_span() {
+        let (loaded, _unloads, _directory) = load(0x9a, AdapterFault::None);
+        let mut loaded = loaded.unwrap();
+        let launch = loaded
+            .authorize_launch(HsaLaunchGeometryV1::new([1, 1, 1], [256, 1, 1], 0))
+            .unwrap();
+        let explicit = [0x5a; 32];
+        let mut kernarg = AlignedKernarg([0; 288]);
+        let completed = launch
+            .launch_generated_with_implicit_kernarg(&explicit, 32, 256, &mut kernarg.0)
+            .unwrap();
+        assert!(completed.dispatch().completed());
+        assert_eq!(kernarg.0[..32], explicit);
+        assert_eq!(kernarg.0[32..], [0xa5; 256]);
+    }
+
+    #[test]
+    fn generated_dispatch_rejects_span_and_adapter_substitution() {
+        let (loaded, _unloads, _directory) = load(0x9b, AdapterFault::None);
+        let mut loaded = loaded.unwrap();
+        let launch = loaded
+            .authorize_launch(HsaLaunchGeometryV1::new([1, 1, 1], [256, 1, 1], 0))
+            .unwrap();
+        let explicit = [0x5a; 32];
+        let mut kernarg = AlignedKernarg([0; 288]);
+        assert!(matches!(
+            launch.launch_generated_with_implicit_kernarg(&explicit, 40, 248, &mut kernarg.0),
+            Err(HsaGeneratedDispatchError::KernargSize)
+        ));
+
+        for (fault, expected) in [
+            (
+                AdapterFault::ImplicitExecutable,
+                "implicit kernarg executable object",
+            ),
+            (AdapterFault::ImplicitOffset, "implicit kernarg offset"),
+            (
+                AdapterFault::ImplicitIncomplete,
+                "implicit kernarg initialization completion",
+            ),
+        ] {
+            let (loaded, _unloads, _directory) = load(0x9c, fault);
+            let mut loaded = loaded.unwrap();
+            let launch = loaded
+                .authorize_launch(HsaLaunchGeometryV1::new([1, 1, 1], [256, 1, 1], 0))
+                .unwrap();
+            let mut kernarg = AlignedKernarg([0; 288]);
+            assert!(matches!(
+                launch.launch_generated_with_implicit_kernarg(
+                    &explicit,
+                    32,
+                    256,
+                    &mut kernarg.0,
+                ),
+                Err(HsaGeneratedDispatchError::ImplicitObservationMismatch(field))
+                    if field == expected
+            ));
+        }
+
+        let (loaded, _unloads, _directory) = load(0x9d, AdapterFault::ExplicitMutation);
+        let mut loaded = loaded.unwrap();
+        let launch = loaded
+            .authorize_launch(HsaLaunchGeometryV1::new([1, 1, 1], [256, 1, 1], 0))
+            .unwrap();
+        let mut kernarg = AlignedKernarg([0; 288]);
+        assert!(matches!(
+            launch.launch_generated_with_implicit_kernarg(&explicit, 32, 256, &mut kernarg.0),
+            Err(HsaGeneratedDispatchError::ExplicitKernargMutation)
+        ));
     }
 
     #[test]
