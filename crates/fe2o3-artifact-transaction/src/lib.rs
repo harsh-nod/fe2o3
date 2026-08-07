@@ -719,6 +719,8 @@ mod tests {
     use super::*;
     use std::cell::Cell;
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    use std::os::unix::net::UnixStream;
+    use std::os::unix::process::CommandExt;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Barrier, mpsc};
     use std::thread;
@@ -1767,6 +1769,49 @@ mod tests {
             assert_snapshot(artifact, "second", &artifact.kernel_name);
         }
         assert_no_staging(&output);
+    }
+
+    #[test]
+    fn publication_lock_is_not_inherited_during_fork_to_exec_window() {
+        let temp = TestDirectory::new();
+        let output = PinnedOutput::open(&temp.path.join("output")).unwrap();
+        let lock = output.lock().unwrap();
+        let (mut parent_control, child_control) = UnixStream::pair().unwrap();
+        parent_control
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        child_control
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+
+        let child = thread::spawn(move || {
+            let mut command = process::Command::new("true");
+            // Only async-signal-safe read/write syscalls run between fork and exec.
+            unsafe {
+                command.pre_exec(move || {
+                    rustix::io::write(&child_control, &[1]).map_err(io::Error::from)?;
+                    let mut go = [0];
+                    let count =
+                        rustix::io::read(&child_control, &mut go).map_err(io::Error::from)?;
+                    if count != 1 {
+                        return Err(io::Error::new(
+                            io::ErrorKind::UnexpectedEof,
+                            "parent did not release fork-to-exec child",
+                        ));
+                    }
+                    Ok(())
+                });
+            }
+            command.status().unwrap()
+        });
+
+        let mut ready = [0];
+        parent_control.read_exact(&mut ready).unwrap();
+        drop(lock);
+        let reacquired = output.try_lock().unwrap();
+        parent_control.write_all(&[1]).unwrap();
+        assert!(child.join().unwrap().success());
+        drop(reacquired.expect("forked child must not retain the parent's publication lock"));
     }
 
     #[test]
