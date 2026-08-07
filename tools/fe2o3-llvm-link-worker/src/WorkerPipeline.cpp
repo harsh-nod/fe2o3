@@ -618,6 +618,21 @@ Error optimizeModule(Module &ModuleValue, const Request &RequestValue,
   ModulePassManager Pipeline = Builder.buildPerModuleDefaultPipeline(
       irLevel(RequestValue.LinkOptions.Optimization));
   Pipeline.run(ModuleValue, Modules);
+
+  // The compiler descriptor commits COV5/6 kernels to the complete 256-byte
+  // implicit block. Optimization may infer amdgpu-no-implicitarg-ptr when a
+  // kernel does not read that block; canonicalize the physical ABI after the
+  // inference passes so metadata, native descriptors, and host admission stay
+  // on the same contract.
+  if (RequestValue.CodeObjectVersion >= 5) {
+    for (Function &FunctionValue : ModuleValue) {
+      if (FunctionValue.getCallingConv() != CallingConv::AMDGPU_KERNEL)
+        continue;
+      FunctionValue.removeFnAttr("amdgpu-no-implicitarg-ptr");
+      FunctionValue.addFnAttr("amdgpu-implicitarg-num-bytes", "256");
+    }
+  }
+
   BoundedRawStream Stream(MaxDiagnosticBytes);
   if (verifyModule(ModuleValue, &Stream)) {
     Stream.flush();

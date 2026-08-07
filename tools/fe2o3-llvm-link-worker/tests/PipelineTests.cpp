@@ -1434,8 +1434,12 @@ int main(int ArgumentCount, char **Arguments) {
   requireDiagnostic(Cov6First, "post_link.check=metadata status=ok kernels=2");
   requireDiagnostic(Cov6First, "post_link.kernel name=cov6_alpha "
                                "symbol=cov6_alpha.kd");
+  requireDiagnostic(Cov6First, "post_link.kernel name=cov6_alpha "
+                               "symbol=cov6_alpha.kd kernarg_size=272");
   requireDiagnostic(Cov6First, "post_link.kernel name=cov6_bravo "
                                "symbol=cov6_bravo.kd");
+  requireDiagnostic(Cov6First, "post_link.kernel name=cov6_bravo "
+                               "symbol=cov6_bravo.kd kernarg_size=272");
   require(hasObjectSymbol(Cov6First.LinkedOutput->Bytes, "cov6_shared_helper"),
           "COV6 output removed the helper shared by both kernels");
 
