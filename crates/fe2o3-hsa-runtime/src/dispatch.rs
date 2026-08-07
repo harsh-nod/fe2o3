@@ -1,6 +1,7 @@
 use crate::api::{ApiError, DispatchApi, QueueHandle};
 use crate::environment::{AdapterCore, HsaRuntimeAdapterError, ReviewedHsaRuntimeAdapterV1};
 use crate::lifecycle::{ReviewedHsaExecutableV1, ReviewedHsaKernelV1};
+use fe2o3_artifacts::MAX_ABI_BYTES;
 use fe2o3_host::{
     HsaDispatchObservationV1, HsaImplicitKernargInitializationObservationV1, HsaLaunchGeometryV1,
     ReviewedHsaImplicitKernargAdapterV1,
@@ -8,9 +9,12 @@ use fe2o3_host::{
 use sha2::{Digest, Sha256};
 use std::time::{Duration, Instant};
 
+#[cfg(test)]
 const EXPLICIT_BYTES: usize = 48;
-const IMPLICIT_OFFSET: usize = 48;
+#[cfg(test)]
+const IMPLICIT_OFFSET: usize = EXPLICIT_BYTES;
 const IMPLICIT_BYTES: usize = 256;
+#[cfg(test)]
 const TOTAL_BYTES: usize = EXPLICIT_BYTES + IMPLICIT_BYTES;
 const BLOCK_COUNT_X: usize = 0;
 const BLOCK_COUNT_Y: usize = 4;
@@ -38,7 +42,15 @@ pub(crate) struct PendingDispatch {
     executable_identity: fe2o3_host::HsaExecutableObjectIdentityV1,
     kernel_identity: fe2o3_host::HsaKernelObjectIdentityV1,
     geometry: HsaLaunchGeometryV1,
+    layout: ReviewedImplicitKernargLayout,
     kernarg_digest: [u8; 32],
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ReviewedImplicitKernargLayout {
+    explicit_byte_len: usize,
+    implicit_byte_offset: usize,
+    total_byte_len: usize,
 }
 
 struct PreSubmitDispatch {
@@ -77,9 +89,11 @@ enum CompletionTransition {
     Unquiesced(UnquiescedDispatch),
 }
 
-// SAFETY: the exact 256-byte COV6 hidden span is initialized from reviewed
-// geometry and the exact private HSA queue retained for the following launch.
-// This profile rejects every other layout and every launch substitution.
+// SAFETY: the bounded explicit prefix is supplied by the reviewed host
+// lifecycle and preserved byte-for-byte. The exact 256-byte COV6 hidden span
+// is initialized from reviewed geometry and the exact private HSA queue
+// retained for the following launch. Every other layout and launch
+// substitution is rejected.
 unsafe impl ReviewedHsaImplicitKernargAdapterV1 for ReviewedHsaRuntimeAdapterV1 {
     unsafe fn initialize_implicit_kernarg(
         &mut self,
@@ -114,7 +128,7 @@ fn validate_implicit_kernarg(
     implicit_byte_offset: usize,
     implicit_byte_len: usize,
     kernarg: &[u8],
-) -> Result<(), HsaRuntimeAdapterError> {
+) -> Result<ReviewedImplicitKernargLayout, HsaRuntimeAdapterError> {
     let executable =
         executable
             .state
@@ -127,16 +141,22 @@ fn validate_implicit_kernarg(
             "kernel/executable identity",
         ));
     }
-    if explicit_byte_len != EXPLICIT_BYTES
-        || implicit_byte_offset != IMPLICIT_OFFSET
+    let explicit_byte_len_u64 = u64::try_from(explicit_byte_len).map_err(|_| {
+        HsaRuntimeAdapterError::InvalidImplicitKernarg("bounded explicit kernarg prefix")
+    })?;
+    let total_byte_len = explicit_byte_len.checked_add(IMPLICIT_BYTES).ok_or(
+        HsaRuntimeAdapterError::InvalidImplicitKernarg("kernarg layout size overflow"),
+    )?;
+    if explicit_byte_len_u64 > MAX_ABI_BYTES
+        || implicit_byte_offset != explicit_byte_len
         || implicit_byte_len != IMPLICIT_BYTES
-        || kernarg.len() != TOTAL_BYTES
+        || kernarg.len() != total_byte_len
         || usize::try_from(kernel.kernarg_segment_size).ok() != Some(kernarg.len())
         || kernel.kernarg_segment_alignment == 0
         || !kernel.kernarg_segment_alignment.is_power_of_two()
     {
         return Err(HsaRuntimeAdapterError::InvalidImplicitKernarg(
-            "exact 48+256 byte layout",
+            "bounded explicit prefix plus exact 256-byte hidden span",
         ));
     }
     let grid = geometry.grid();
@@ -154,7 +174,11 @@ fn validate_implicit_kernarg(
             "the reviewed COV6 vecadd profile requires zero dynamic LDS",
         ));
     }
-    Ok(())
+    Ok(ReviewedImplicitKernargLayout {
+        explicit_byte_len,
+        implicit_byte_offset,
+        total_byte_len,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -174,7 +198,7 @@ fn prepare_implicit_kernarg<A: DispatchApi>(
             "one unconsumed queue binding already exists",
         ));
     }
-    validate_implicit_kernarg(
+    let layout = validate_implicit_kernarg(
         executable,
         kernel,
         geometry,
@@ -214,20 +238,21 @@ fn prepare_implicit_kernarg<A: DispatchApi>(
 
     let grid = geometry.grid();
     let workgroup = geometry.workgroup();
-    let explicit = kernarg[..EXPLICIT_BYTES].to_vec();
-    kernarg[IMPLICIT_OFFSET..].fill(0);
-    put_u32(kernarg, IMPLICIT_OFFSET + BLOCK_COUNT_X, grid[0]);
-    put_u32(kernarg, IMPLICIT_OFFSET + BLOCK_COUNT_Y, grid[1]);
-    put_u32(kernarg, IMPLICIT_OFFSET + BLOCK_COUNT_Z, grid[2]);
-    put_u16(kernarg, IMPLICIT_OFFSET + GROUP_SIZE_X, workgroup[0] as u16);
-    put_u16(kernarg, IMPLICIT_OFFSET + GROUP_SIZE_Y, workgroup[1] as u16);
-    put_u16(kernarg, IMPLICIT_OFFSET + GROUP_SIZE_Z, workgroup[2] as u16);
-    put_u16(kernarg, IMPLICIT_OFFSET + REMAINDER_X, 0);
-    put_u16(kernarg, IMPLICIT_OFFSET + REMAINDER_Y, 0);
-    put_u16(kernarg, IMPLICIT_OFFSET + REMAINDER_Z, 0);
-    put_u64(kernarg, IMPLICIT_OFFSET + GLOBAL_OFFSET_X, 0);
-    put_u64(kernarg, IMPLICIT_OFFSET + GLOBAL_OFFSET_Y, 0);
-    put_u64(kernarg, IMPLICIT_OFFSET + GLOBAL_OFFSET_Z, 0);
+    let implicit_offset = layout.implicit_byte_offset;
+    let explicit = kernarg[..layout.explicit_byte_len].to_vec();
+    kernarg[implicit_offset..layout.total_byte_len].fill(0);
+    put_u32(kernarg, implicit_offset + BLOCK_COUNT_X, grid[0]);
+    put_u32(kernarg, implicit_offset + BLOCK_COUNT_Y, grid[1]);
+    put_u32(kernarg, implicit_offset + BLOCK_COUNT_Z, grid[2]);
+    put_u16(kernarg, implicit_offset + GROUP_SIZE_X, workgroup[0] as u16);
+    put_u16(kernarg, implicit_offset + GROUP_SIZE_Y, workgroup[1] as u16);
+    put_u16(kernarg, implicit_offset + GROUP_SIZE_Z, workgroup[2] as u16);
+    put_u16(kernarg, implicit_offset + REMAINDER_X, 0);
+    put_u16(kernarg, implicit_offset + REMAINDER_Y, 0);
+    put_u16(kernarg, implicit_offset + REMAINDER_Z, 0);
+    put_u64(kernarg, implicit_offset + GLOBAL_OFFSET_X, 0);
+    put_u64(kernarg, implicit_offset + GLOBAL_OFFSET_Y, 0);
+    put_u64(kernarg, implicit_offset + GLOBAL_OFFSET_Z, 0);
     let dimensions = if grid[2]
         .checked_mul(workgroup[2])
         .is_some_and(|size| size > 1)
@@ -241,14 +266,14 @@ fn prepare_implicit_kernarg<A: DispatchApi>(
     } else {
         1
     };
-    put_u16(kernarg, IMPLICIT_OFFSET + GRID_DIMS, dimensions);
-    put_u64(kernarg, IMPLICIT_OFFSET + HOSTCALL_PTR, 0);
-    put_u64(kernarg, IMPLICIT_OFFSET + MULTIGRID_SYNC_ARG, 0);
-    put_u64(kernarg, IMPLICIT_OFFSET + HEAP_V1_PTR, 0);
-    put_u64(kernarg, IMPLICIT_OFFSET + DEFAULT_QUEUE_PTR, 0);
-    put_u64(kernarg, IMPLICIT_OFFSET + COMPLETION_ACTION, 0);
-    put_u64(kernarg, IMPLICIT_OFFSET + QUEUE_PTR, queue_pointer);
-    if kernarg[..EXPLICIT_BYTES] != explicit {
+    put_u16(kernarg, implicit_offset + GRID_DIMS, dimensions);
+    put_u64(kernarg, implicit_offset + HOSTCALL_PTR, 0);
+    put_u64(kernarg, implicit_offset + MULTIGRID_SYNC_ARG, 0);
+    put_u64(kernarg, implicit_offset + HEAP_V1_PTR, 0);
+    put_u64(kernarg, implicit_offset + DEFAULT_QUEUE_PTR, 0);
+    put_u64(kernarg, implicit_offset + COMPLETION_ACTION, 0);
+    put_u64(kernarg, implicit_offset + QUEUE_PTR, queue_pointer);
+    if kernarg[..layout.explicit_byte_len] != explicit {
         std::process::abort();
     }
     let mut digest = Sha256::new();
@@ -259,14 +284,15 @@ fn prepare_implicit_kernarg<A: DispatchApi>(
         executable_identity: state.identity,
         kernel_identity: kernel.identity,
         geometry,
+        layout,
         kernarg_digest,
     });
     Ok(HsaImplicitKernargInitializationObservationV1::new(
         state.identity,
         kernel.identity,
         geometry,
-        EXPLICIT_BYTES as u64,
-        IMPLICIT_OFFSET as u64,
+        u64::try_from(layout.explicit_byte_len).expect("validated explicit length fits u64"),
+        u64::try_from(layout.implicit_byte_offset).expect("validated implicit offset fits u64"),
         IMPLICIT_BYTES as u64,
         true,
     ))
@@ -300,7 +326,7 @@ pub(crate) fn launch_and_wait<A: DispatchApi>(
     digest.update(&*kernarg);
     let kernarg_digest: [u8; 32] = digest.finalize().into();
     if kernel.executable_identity != executable.identity
-        || kernarg.len() != TOTAL_BYTES
+        || kernarg.len() != prepared.layout.total_byte_len
         || usize::try_from(kernel.kernarg_segment_size).ok() != Some(kernarg.len())
         || kernel.kernarg_segment_alignment == 0
         || !kernel.kernarg_segment_alignment.is_power_of_two()
@@ -948,44 +974,73 @@ mod tests {
         bytes
     }
 
-    #[test]
-    fn cov6_hidden_layout_is_exact_and_preserves_the_explicit_prefix() {
-        let (executable, kernel) = handles();
-        let mut core = make_core(MockApi::default());
-        let mut pending = None;
-        let mut bytes = kernarg();
-        let explicit = bytes[..EXPLICIT_BYTES].to_vec();
-        let observation = prepare_implicit_kernarg(
-            &mut core,
-            &mut pending,
-            &executable,
-            &kernel,
-            geometry(),
-            EXPLICIT_BYTES,
-            IMPLICIT_OFFSET,
-            IMPLICIT_BYTES,
-            &mut bytes,
+    fn handles_for_explicit_prefix(
+        explicit_byte_len: usize,
+    ) -> (ReviewedHsaExecutableV1, ReviewedHsaKernelV1) {
+        let (executable, mut kernel) = handles();
+        kernel.kernarg_segment_size = u32::try_from(
+            explicit_byte_len
+                .checked_add(IMPLICIT_BYTES)
+                .expect("test kernarg size must not overflow"),
         )
-        .unwrap();
-        assert!(observation.initialized());
-        assert_eq!(&bytes[..EXPLICIT_BYTES], explicit);
-        let mut expected = [0_u8; IMPLICIT_BYTES];
-        expected[0..4].copy_from_slice(&2_u32.to_le_bytes());
-        expected[4..8].copy_from_slice(&1_u32.to_le_bytes());
-        expected[8..12].copy_from_slice(&1_u32.to_le_bytes());
-        expected[12..14].copy_from_slice(&256_u16.to_le_bytes());
-        expected[14..16].copy_from_slice(&1_u16.to_le_bytes());
-        expected[16..18].copy_from_slice(&1_u16.to_le_bytes());
-        expected[64..66].copy_from_slice(&1_u16.to_le_bytes());
-        expected[200..208].copy_from_slice(&0xabc0_u64.to_le_bytes());
-        assert_eq!(&bytes[IMPLICIT_OFFSET..], expected);
-        destroy_pending_dispatch(&mut core.api, &mut pending);
+        .expect("test kernarg size must fit u32");
+        (executable, kernel)
+    }
+
+    fn kernarg_for_explicit_prefix(explicit_byte_len: usize) -> Vec<u8> {
+        let mut bytes = vec![0; explicit_byte_len + IMPLICIT_BYTES];
+        for (index, byte) in bytes[..explicit_byte_len].iter_mut().enumerate() {
+            *byte = index.wrapping_mul(17).wrapping_add(3) as u8;
+        }
+        bytes
+    }
+
+    #[test]
+    fn cov6_hidden_layout_is_exact_for_variable_explicit_prefixes() {
+        for explicit_byte_len in [16, EXPLICIT_BYTES, 80] {
+            let (executable, kernel) = handles_for_explicit_prefix(explicit_byte_len);
+            let mut core = make_core(MockApi::default());
+            let mut pending = None;
+            let mut bytes = kernarg_for_explicit_prefix(explicit_byte_len);
+            let explicit = bytes[..explicit_byte_len].to_vec();
+            let observation = prepare_implicit_kernarg(
+                &mut core,
+                &mut pending,
+                &executable,
+                &kernel,
+                geometry(),
+                explicit_byte_len,
+                explicit_byte_len,
+                IMPLICIT_BYTES,
+                &mut bytes,
+            )
+            .unwrap();
+            assert!(observation.initialized());
+            assert_eq!(&bytes[..explicit_byte_len], explicit);
+            let mut expected = [0_u8; IMPLICIT_BYTES];
+            expected[0..4].copy_from_slice(&2_u32.to_le_bytes());
+            expected[4..8].copy_from_slice(&1_u32.to_le_bytes());
+            expected[8..12].copy_from_slice(&1_u32.to_le_bytes());
+            expected[12..14].copy_from_slice(&256_u16.to_le_bytes());
+            expected[14..16].copy_from_slice(&1_u16.to_le_bytes());
+            expected[16..18].copy_from_slice(&1_u16.to_le_bytes());
+            expected[64..66].copy_from_slice(&1_u16.to_le_bytes());
+            expected[200..208].copy_from_slice(&0xabc0_u64.to_le_bytes());
+            assert_eq!(&bytes[explicit_byte_len..], expected);
+            destroy_pending_dispatch(&mut core.api, &mut pending);
+        }
     }
 
     #[test]
     fn implicit_initialization_rejects_layout_and_handle_substitution() {
         let (executable, mut kernel) = handles();
-        for (explicit, offset, implicit) in [(47, 48, 256), (48, 49, 255), (48, 48, 255)] {
+        for (explicit, offset, implicit) in [
+            (48, 47, 256),
+            (48, 49, 256),
+            (48, 48, 255),
+            (48, 48, 257),
+            (32, 32, 256),
+        ] {
             let mut core = make_core(MockApi::default());
             let mut pending = None;
             let mut bytes = kernarg();
@@ -1024,6 +1079,41 @@ mod tests {
             Err(HsaRuntimeAdapterError::InvalidImplicitKernarg(_))
         ));
         assert!(core.api.log.is_empty());
+
+        let bounded_explicit = usize::try_from(MAX_ABI_BYTES).unwrap() + 1;
+        let (bounded_executable, bounded_kernel) = handles_for_explicit_prefix(bounded_explicit);
+        let mut bounded_bytes = kernarg_for_explicit_prefix(bounded_explicit);
+        assert!(matches!(
+            prepare_implicit_kernarg(
+                &mut core,
+                &mut pending,
+                &bounded_executable,
+                &bounded_kernel,
+                geometry(),
+                bounded_explicit,
+                bounded_explicit,
+                IMPLICIT_BYTES,
+                &mut bounded_bytes,
+            ),
+            Err(HsaRuntimeAdapterError::InvalidImplicitKernarg(_))
+        ));
+        assert!(pending.is_none());
+        assert!(core.api.log.is_empty());
+
+        assert!(matches!(
+            validate_implicit_kernarg(
+                &executable,
+                &kernel,
+                geometry(),
+                usize::MAX,
+                usize::MAX,
+                IMPLICIT_BYTES,
+                &[],
+            ),
+            Err(HsaRuntimeAdapterError::InvalidImplicitKernarg(
+                "kernarg layout size overflow"
+            ))
+        ));
 
         kernel.executable_identity = HsaExecutableObjectIdentityV1::new([9; 32]).unwrap();
         let mut core = make_core(MockApi::default());
