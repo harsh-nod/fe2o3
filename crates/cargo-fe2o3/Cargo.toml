@@ -53,6 +53,12 @@ test = false
 bench = false
 
 [[bin]]
+name = "cargo-fe2o3-build-script-fixture"
+path = "tests/fixtures/build_script_fixture.rs"
+test = false
+bench = false
+
+[[bin]]
 name = "cargo-fe2o3-runner-app-fixture"
 path = "tests/fixtures/runner_app_fixture.rs"
 test = false

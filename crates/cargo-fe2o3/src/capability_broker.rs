@@ -5,10 +5,13 @@
 //! sealed backend image and a read-only artifact-directory descriptor with `SCM_RIGHTS`.
 //! Receivers independently validate both descriptors before installing them in a rustc child.
 //!
-//! This boundary prevents descriptor loss or reuse inside Cargo and pathname substitution between
-//! orchestration and rustc. It is not an OS sandbox against hostile code already running as the
-//! same user: Cargo children inherit the routing values and same-user process inspection may be
-//! available under the host's ptrace/procfs policy. Untrusted build scripts therefore require a
+//! This boundary prevents accidental descriptor inheritance through Cargo and pathname
+//! substitution between orchestration and rustc. It is not an OS sandbox against project code or
+//! hostile code already running as the same user. Cargo children inherit the routing values, so a
+//! hostile build script can deliberately replay the wrapper, and a procedural macro executes
+//! inside rustc after the descriptors are installed. Both are trusted by this design. The
+//! directory is opened `O_RDONLY`, but still grants descriptor-relative namespace mutation. The
+//! client does not authenticate the broker server. Untrusted build dependencies require a
 //! separate process sandbox; the endpoint and session are routing bindings, not bearer secrets.
 
 #[cfg(target_os = "linux")]
@@ -417,6 +420,16 @@ mod platform {
             for client in clients {
                 client.join().unwrap();
             }
+        }
+
+        #[test]
+        fn dropping_broker_closes_the_endpoint_before_post_build_work() {
+            let (_temp, backend, artifact, session) = fixture();
+            let broker = CapabilityBroker::start(session, &backend, &artifact).unwrap();
+            let endpoint = broker.endpoint().to_owned();
+            drop(broker);
+
+            assert!(receive_from(&endpoint, session).is_err());
         }
 
         #[test]

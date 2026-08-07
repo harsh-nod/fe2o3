@@ -374,14 +374,20 @@ fn caller_rustflags_are_preserved_for_cargo_and_managed_flags_are_separate() {
 }
 
 #[test]
-fn real_cargo_receives_capabilities_only_in_the_managed_rustc_child() {
+fn real_cargo_cooperatively_routes_capabilities_to_the_managed_rustc_child() {
     let fixture = ProjectFixture::standalone();
+    let bin_dir = fixture.workspace.join("src/bin");
+    fs::create_dir_all(&bin_dir).expect("create parallel rustc fixtures");
+    for name in ["parallel_a", "parallel_b", "parallel_c", "parallel_d"] {
+        fs::write(bin_dir.join(format!("{name}.rs")), "fn main() {}\n")
+            .expect("write parallel rustc fixture");
+    }
     let report = fixture.root.join("rustc-capabilities.log");
     let real_rustc = env::var_os("RUSTC").unwrap_or_else(|| OsString::from("rustc"));
     let real_cargo = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
     let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"));
     command
-        .arg("build")
+        .args(["build", "-j", "4"])
         .current_dir(&fixture.workspace)
         .env("CARGO", real_cargo)
         .env("RUSTC", env!("CARGO_BIN_EXE_cargo-fe2o3-rustc-fixture"))
@@ -404,6 +410,9 @@ fn real_cargo_receives_capabilities_only_in_the_managed_rustc_child() {
     );
     let report = fs::read_to_string(report).expect("read rustc capability report");
     assert!(report.contains("external_standalone:probe_"), "{report}");
+    for name in ["parallel_a", "parallel_b", "parallel_c", "parallel_d"] {
+        assert!(report.contains(&format!("{name}:probe_")), "{report}");
+    }
     assert!(
         fs::read_dir(fixture.target.join("fe2o3"))
             .expect("read committed artifact directory")
@@ -413,6 +422,135 @@ fn real_cargo_receives_capabilities_only_in_the_managed_rustc_child() {
                 .to_string_lossy()
                 .ends_with(".hsaco"))
     );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn ordinary_build_script_process_inherits_no_raw_capability_descriptors() {
+    let fixture = ProjectFixture::standalone();
+    let report = fixture.root.join("ordinary-build-script-capabilities.log");
+    let mut command = fixture.command(&[OsString::from("build")]);
+    command
+        .env("FE2O3_TEST_BUILD_SCRIPT_MODE", "ordinary")
+        .env("FE2O3_TEST_BUILD_SCRIPT_REPORT", &report)
+        .env(
+            "FE2O3_TEST_BUILD_SCRIPT_FIXTURE",
+            env!("CARGO_BIN_EXE_cargo-fe2o3-build-script-fixture"),
+        );
+
+    let output = command.output().expect("run ordinary build-script probe");
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report = fs::read_to_string(report).expect("read ordinary build-script report");
+    assert!(report.contains("backend_open=false"), "{report}");
+    assert!(report.contains("artifact_open=false"), "{report}");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn trusted_build_script_exec_replay_documents_broker_scope() {
+    let fixture = ProjectFixture::standalone();
+    let report = fixture.root.join("exec-build-script-capabilities.log");
+    let mut command = fixture.command(&[OsString::from("build")]);
+    command
+        .env("FE2O3_TEST_BUILD_SCRIPT_MODE", "exec-wrapper")
+        .env("FE2O3_TEST_BUILD_SCRIPT_REPORT", &report)
+        .env(
+            "FE2O3_TEST_BUILD_SCRIPT_FIXTURE",
+            env!("CARGO_BIN_EXE_cargo-fe2o3-build-script-fixture"),
+        );
+
+    let output = command.output().expect("run exec build-script probe");
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report = fs::read_to_string(report).expect("read exec build-script report");
+    assert!(report.contains("backend_open=true"), "{report}");
+    assert!(report.contains("artifact_open=true"), "{report}");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn trusted_procedural_macro_documents_in_process_descriptor_visibility() {
+    let fixture = ProjectFixture::standalone();
+    let macro_root = fixture.workspace.join("fd-probe-macro");
+    fs::create_dir_all(macro_root.join("src")).expect("create procedural macro fixture");
+    fs::write(
+        fixture.workspace.join("Cargo.toml"),
+        "[package]\nname='external-standalone'\nversion='0.1.0'\nedition='2024'\n\
+         [dependencies]\nfd-probe-macro={path='fd-probe-macro'}\n\
+         [workspace]\nmembers=['fd-probe-macro']\nresolver='2'\n",
+    )
+    .expect("write procedural macro host manifest");
+    fs::write(
+        macro_root.join("Cargo.toml"),
+        "[package]\nname='fd-probe-macro'\nversion='0.1.0'\nedition='2024'\n\
+         [lib]\nproc-macro=true\n",
+    )
+    .expect("write procedural macro manifest");
+    fs::write(
+        macro_root.join("src/lib.rs"),
+        r#"extern crate proc_macro;
+
+use proc_macro::TokenStream;
+
+#[proc_macro_attribute]
+pub fn probe(_attribute: TokenStream, item: TokenStream) -> TokenStream {
+    let backend = std::fs::symlink_metadata("/proc/self/fd/198").is_ok();
+    let artifact = std::fs::symlink_metadata("/proc/self/fd/197").is_ok();
+    let report = std::env::var_os("FE2O3_TEST_PROC_MACRO_REPORT").unwrap();
+    std::fs::write(report, format!("backend_open={backend}\nartifact_open={artifact}\n")).unwrap();
+    item
+}
+"#,
+    )
+    .expect("write procedural macro source");
+    fs::write(
+        fixture.workspace.join("src/main.rs"),
+        "#[fd_probe_macro::probe]\nfn main() {}\n",
+    )
+    .expect("write procedural macro host source");
+
+    let proc_macro_report = fixture.root.join("proc-macro-capabilities.log");
+    let rustc_report = fixture.root.join("proc-macro-rustc-capabilities.log");
+    let real_rustc = env::var_os("RUSTC").unwrap_or_else(|| OsString::from("rustc"));
+    let real_cargo = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"));
+    command
+        .arg("build")
+        .current_dir(&fixture.workspace)
+        .env("CARGO", real_cargo)
+        .env("RUSTC", env!("CARGO_BIN_EXE_cargo-fe2o3-rustc-fixture"))
+        .env("FE2O3_TEST_REAL_RUSTC", real_rustc)
+        .env("FE2O3_TEST_RUSTC_CAPABILITY_REPORT", &rustc_report)
+        .env("FE2O3_TEST_PROC_MACRO_REPORT", &proc_macro_report)
+        .env("FE2O3_BACKEND", &fixture.backend)
+        .env("FE2O3_TARGET", "gfx942")
+        .env_remove("RUSTC_WRAPPER")
+        .env_remove("RUSTC_WORKSPACE_WRAPPER")
+        .env_remove("RUSTFLAGS")
+        .env_remove("CARGO_ENCODED_RUSTFLAGS")
+        .env_remove("CARGO_TARGET_DIR");
+
+    let output = command
+        .output()
+        .expect("run procedural macro capability probe");
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report = fs::read_to_string(proc_macro_report).expect("read procedural macro report");
+    assert!(report.contains("backend_open=true"), "{report}");
+    assert!(report.contains("artifact_open=true"), "{report}");
 }
 
 #[test]

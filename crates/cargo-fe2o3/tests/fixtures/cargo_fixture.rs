@@ -107,6 +107,38 @@ fn build_or_run(args: &[OsString]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     }
+    if let Some(mode) = env::var_os("FE2O3_TEST_BUILD_SCRIPT_MODE") {
+        let fixture = required_path("FE2O3_TEST_BUILD_SCRIPT_FIXTURE");
+        let status = match Command::new(fixture).arg(mode).status() {
+            Ok(status) => status,
+            Err(error) => {
+                eprintln!("fake Cargo could not launch build-script probe: {error}");
+                return ExitCode::FAILURE;
+            }
+        };
+        let report = required_path("FE2O3_TEST_BUILD_SCRIPT_REPORT");
+        let report = fs::read_to_string(report).unwrap_or_default();
+        let expected = match env::var("FE2O3_TEST_BUILD_SCRIPT_MODE").as_deref() {
+            Ok("ordinary") => {
+                status.success()
+                    && report.contains("mode=ordinary")
+                    && report.contains("backend_open=false")
+                    && report.contains("artifact_open=false")
+            }
+            Ok("exec-wrapper") => {
+                report.contains("mode=exec-wrapper")
+                    && report.contains("backend_open=true")
+                    && report.contains("artifact_open=true")
+            }
+            _ => false,
+        };
+        if !expected {
+            eprintln!(
+                "fake Cargo build-script probe produced unexpected status {status} and report {report:?}"
+            );
+            return ExitCode::FAILURE;
+        }
+    }
     let output = required_path("FE2O3_TEST_TARGET_DIRECTORY").join("fe2o3");
     if let Some(source) = env::var_os("FE2O3_TEST_REPLACE_BACKEND")
         && let Err(error) = fs::write(source, b"replacement backend")

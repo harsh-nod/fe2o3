@@ -356,6 +356,7 @@ fn run_cargo_with_backend(
         }
     }
     let status = cargo.status();
+    drop(capability_broker);
 
     match status {
         Ok(status) if status.success() => {

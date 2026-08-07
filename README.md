@@ -207,9 +207,10 @@ turn the foundations below into end-to-end features.
   replacement cannot mix generations. Build-attempt and canonical rustc
   invocation descriptors are versioned and bounded.
 - Linux-only rustc and codegen-backend primitives use descriptor-backed procfs
-  paths. The backend is copied into a rehashed, immutable sealed memfd and can
-  be inherited only by a prepared child command. Neither primitive is connected
-  to compile execution.
+  paths. The external Cargo path copies the backend into a rehashed, immutable
+  sealed memfd and installs it only in a managed rustc child. This protects the
+  measured bytes from pathname substitution; it is not a sandbox for hostile
+  build scripts or procedural macros, which remain trusted inputs.
 - `examples/regression-manifest-v1.txt` is the authoritative package/artifact
   inventory for ordinary checks, ROCm compilation, and GPU smoke tests.
 - The Verus vecadd, fill, active-wave, and LDS harnesses prove bounded
@@ -370,15 +371,17 @@ is not atomic against every concurrent rename and can fail after partially
 removing the opened directory's contents.
 
 This is intentionally narrower than pinned cuda-oxide's clean command, which
-removes the project's full target directory. Parity remains partial until fe2o3
-also supports complete build orchestration from an external Cargo project.
+removes the project's full target directory. External-project build and run
+orchestration are now supported, but local-clean parity remains partial because
+fe2o3 deliberately removes only its guarded `target/fe2o3` output.
 
 If `FE2O3_TARGET` is not set, `cargo-fe2o3` tries to infer the target from
 `rocminfo` and falls back to `gfx1100`.
 
-For explicit package builds such as `-p fe2o3-saxpy`, `cargo-fe2o3` cleans that
-package before invoking Cargo so sidecar HSACO files are regenerated even if the
-host crate was already up to date.
+Each external build uses a generation identity that binds the selected target,
+backend, Worker V2 configuration, and effective Cargo configuration. A changed
+or failed generation receives fresh Cargo fingerprint state; successful
+incremental builds republish the exact generated snapshot.
 
 Validate the authoritative example manifest and list a lane:
 

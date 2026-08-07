@@ -44,6 +44,41 @@ the directory completed by that operation, but every record is stored inside
 same-UID-writable filesystem state. A malicious process running as the same
 UID can forge or replace them and is outside this cleanup threat model.
 
+### Trust boundary
+
+The external Cargo path defends against pathname substitution, accidental
+descriptor inheritance by Cargo, malformed compiler invocations, and
+cross-generation publication. It does not sandbox the package being built.
+The selected Cargo and rustc executables, Cargo configuration and environment
+(including `CARGO`), the codegen backend and its dynamic dependencies, project
+and dependency build scripts, procedural macros, native helpers, linkers, and
+compiler-launched tools are trusted inputs. Same-UID processes are also trusted
+where host isolation does not prevent their interference.
+
+Cargo children inherit the broker endpoint, build session, wrapper path, and
+managed compiler arguments. A hostile build script can deliberately execute
+the same wrapper with a forged compiler command and request the brokered
+backend and artifact descriptors. Procedural macros run inside an authorized
+rustc process after those descriptors are installed. Process ancestry cannot
+distinguish either case from an intended compiler invocation without trusted
+Cargo or rustc cooperation. Same-UID process inspection or injection may also
+cross the boundary where host policy permits it. The wrapper authenticates the
+session presented to the broker, but does not authenticate the broker server;
+Cargo configuration can replace inherited environment values.
+
+The artifact descriptor is opened with `O_RDONLY`, which prevents file I/O on
+the directory descriptor itself but still grants namespace authority through
+descriptor-relative operations such as `openat`. Treat it as writable
+publication authority. The broker is dropped immediately after Cargo exits,
+before generation validation and commit, to stop serving escaped descendants
+during post-build processing.
+
+Do not use this path to build untrusted packages. Supporting that threat model
+requires an OS sandbox for build scripts and procedural macros or a redesigned
+publisher that never grants compiler-side code a writable final-artifact
+directory. The broker endpoint and session bind routing and build identity;
+they are not bearer-secret authentication.
+
 When `FE2O3_BACKEND` is unset, a source-tree build of `cargo-fe2o3` builds the
 backend into `<selected-target>/.fe2o3-backend-build-v1`, passed to the child
 through its own pinned descriptor. It never shares the fe2o3 source tree's
@@ -195,6 +230,7 @@ trusted expected digest.
 ELF interpreters, transitive shared libraries of either rustc or the codegen
 backend, dynamic-loader search and loading behavior, procfs mount/identity
 semantics, and the kernel remain outside these primitives' boundary. The
-backend descriptor remains visible to Cargo build descendants that need to
-load it; the `run` application boundary closes it before application exec.
+broker installs the backend descriptor only in managed rustc children, but
+trusted Cargo descendants can deliberately replay that wrapper as described
+above. The `run` application boundary closes it before application exec.
 Pinning the backend object does not pin its shared dependencies.
