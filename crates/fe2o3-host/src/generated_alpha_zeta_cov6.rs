@@ -14,7 +14,7 @@ use crate::{
     GeneratedArgumentLayoutError, GeneratedArgumentPackError, GeneratedArgumentPackingError,
     GeneratedArgumentPackingPlanV1, GeneratedSliceArgumentPairV1, HsaCompletedDispatchV1,
     HsaExecutableLoadError, HsaGeneratedDispatchError, HsaLaunchAuthorizationError,
-    HsaLaunchGeometryV1, KernelId, LoadedHsaExecutableV1, ObservedContext, PhysicalMetadataValueV1,
+    HsaLaunchGeometryV1, LoadedHsaExecutableV1, ObservedContext, PhysicalMetadataValueV1,
     ReviewedHsaExecutableLifecycleAdapterV1, ReviewedHsaImplicitKernargAdapterV1,
     WorkerV2ExecutableAuthenticationError, WorkerV2PrerequisiteAuthenticatorV1,
     WorkerV2TypedKernelSelectionError,
@@ -111,7 +111,6 @@ impl AlphaZetaCov6KernelRoleV1 {
 #[doc(hidden)]
 pub struct AlphaZetaCov6DispatchIdentityV1 {
     role: AlphaZetaCov6KernelRoleV1,
-    expected_kernel_id: KernelId,
     kernel_binding_id: [u8; 32],
     generated_host_contract_identity: [u8; 32],
 }
@@ -119,13 +118,11 @@ pub struct AlphaZetaCov6DispatchIdentityV1 {
 impl AlphaZetaCov6DispatchIdentityV1 {
     pub const fn new(
         role: AlphaZetaCov6KernelRoleV1,
-        expected_kernel_id: KernelId,
         kernel_binding_id: [u8; 32],
         generated_host_contract_identity: [u8; 32],
     ) -> Self {
         Self {
             role,
-            expected_kernel_id,
             kernel_binding_id,
             generated_host_contract_identity,
         }
@@ -388,6 +385,22 @@ fn validate_alpha_zeta_cov6_profile<
     generated: AlphaZetaCov6DispatchIdentityV1,
 ) -> Result<(), AlphaZetaCov6ProfileError> {
     let artifact = resolved.artifact_identity();
+    validate_alpha_zeta_cov6_generated_identity::<K>(generated)?;
+    let expected_name = generated.role.logical_name();
+    if artifact.name().as_str() != expected_name
+        || artifact.symbol().as_str() != expected_name
+        || resolved.physical_kernel().export_symbol() != expected_name
+    {
+        return Err(AlphaZetaCov6ProfileError::KernelRoleSubstitution);
+    }
+    validate_alpha_zeta_cov6_abi(artifact.abi(), generated.role)?;
+    validate_alpha_zeta_cov6_launch(artifact.launch())?;
+    Ok(())
+}
+
+fn validate_alpha_zeta_cov6_generated_identity<K: CompilerGeneratedKernelExpectationV1>(
+    generated: AlphaZetaCov6DispatchIdentityV1,
+) -> Result<(), AlphaZetaCov6ProfileError> {
     let expected_contract = match K::PROFILE {
         CompilerGeneratedKernelProfileV1::ManifestDerivedScalarSliceV1 {
             generated_host_contract_identity,
@@ -399,20 +412,10 @@ fn validate_alpha_zeta_cov6_profile<
     {
         return Err(AlphaZetaCov6ProfileError::GeneratedIdentitySubstitution);
     }
-    if generated.expected_kernel_id != artifact.kernel_id() {
-        return Err(AlphaZetaCov6ProfileError::KernelIdentitySubstitution);
-    }
     let expected_name = generated.role.logical_name();
-    if K::LOGICAL_NAME != expected_name
-        || K::EXPORT_NAME != expected_name
-        || artifact.name().as_str() != expected_name
-        || artifact.symbol().as_str() != expected_name
-        || resolved.physical_kernel().export_symbol() != expected_name
-    {
+    if K::LOGICAL_NAME != expected_name || K::EXPORT_NAME != expected_name {
         return Err(AlphaZetaCov6ProfileError::KernelRoleSubstitution);
     }
-    validate_alpha_zeta_cov6_abi(artifact.abi(), generated.role)?;
-    validate_alpha_zeta_cov6_launch(artifact.launch())?;
     Ok(())
 }
 
@@ -840,7 +843,6 @@ impl Drop for AlignedKernargStorageV1 {
 pub enum AlphaZetaCov6ProfileError {
     UnsupportedGeneratedProfile,
     GeneratedIdentitySubstitution,
-    KernelIdentitySubstitution,
     KernelRoleSubstitution,
     AbiMismatch,
     AbiFieldMismatch { index: usize },
@@ -1087,6 +1089,32 @@ pub(crate) mod tests {
         AbiField, AbiKind, AbiLayout, AddressSpace, AliasClass, ArgumentOwnership, Dimensions,
         LaunchContract, Mutability, Name, PointerWidth,
     };
+    use fe2o3_device::KernelMarkerV1;
+
+    const ALPHA_IDENTITY_TEST_BINDING: [u8; 32] = [0x61; 32];
+    const ALPHA_IDENTITY_TEST_CONTRACT: [u8; 32] = [0x71; 32];
+
+    fn alpha_identity_test_kernel() {}
+
+    struct AlphaIdentityTestKernel;
+
+    unsafe impl KernelMarkerV1 for AlphaIdentityTestKernel {
+        type Function = fn();
+        type Registration = ();
+
+        const LOGICAL_NAME: &'static str = "alpha";
+        const EXPORT_NAME: &'static str = "alpha";
+        const FUNCTION: Self::Function = alpha_identity_test_kernel;
+        const REGISTRATION: &'static Self::Registration = &();
+    }
+
+    unsafe impl CompilerGeneratedKernelExpectationV1 for AlphaIdentityTestKernel {
+        const PROFILE: CompilerGeneratedKernelProfileV1 =
+            CompilerGeneratedKernelProfileV1::ManifestDerivedScalarSliceV1 {
+                generated_host_contract_identity: ALPHA_IDENTITY_TEST_CONTRACT,
+            };
+        const KERNEL_BINDING_ID_V1: [u8; 32] = ALPHA_IDENTITY_TEST_BINDING;
+    }
 
     fn scalar<T: GeneratedDeviceScalarV1>(name: &str, offset: u64) -> AbiField {
         let size = T::RUST_SCALAR_TYPE.size_bytes();
@@ -1271,6 +1299,45 @@ pub(crate) mod tests {
             0,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn generated_identity_rejects_role_binding_and_host_contract_substitution() {
+        let identity =
+            |role, binding, contract| AlphaZetaCov6DispatchIdentityV1::new(role, binding, contract);
+
+        assert_eq!(
+            validate_alpha_zeta_cov6_generated_identity::<AlphaIdentityTestKernel>(identity(
+                AlphaZetaCov6KernelRoleV1::Alpha,
+                ALPHA_IDENTITY_TEST_BINDING,
+                ALPHA_IDENTITY_TEST_CONTRACT,
+            )),
+            Ok(())
+        );
+        assert_eq!(
+            validate_alpha_zeta_cov6_generated_identity::<AlphaIdentityTestKernel>(identity(
+                AlphaZetaCov6KernelRoleV1::Zeta,
+                ALPHA_IDENTITY_TEST_BINDING,
+                ALPHA_IDENTITY_TEST_CONTRACT,
+            )),
+            Err(AlphaZetaCov6ProfileError::KernelRoleSubstitution)
+        );
+        assert_eq!(
+            validate_alpha_zeta_cov6_generated_identity::<AlphaIdentityTestKernel>(identity(
+                AlphaZetaCov6KernelRoleV1::Alpha,
+                [0x62; 32],
+                ALPHA_IDENTITY_TEST_CONTRACT,
+            )),
+            Err(AlphaZetaCov6ProfileError::GeneratedIdentitySubstitution)
+        );
+        assert_eq!(
+            validate_alpha_zeta_cov6_generated_identity::<AlphaIdentityTestKernel>(identity(
+                AlphaZetaCov6KernelRoleV1::Alpha,
+                ALPHA_IDENTITY_TEST_BINDING,
+                [0x72; 32],
+            )),
+            Err(AlphaZetaCov6ProfileError::GeneratedIdentitySubstitution)
+        );
     }
 
     #[test]

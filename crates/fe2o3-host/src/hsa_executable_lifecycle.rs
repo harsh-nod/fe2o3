@@ -2744,22 +2744,6 @@ mod tests {
         bytes
     }
 
-    fn alpha_cov6_test_kernel_id() -> KernelId {
-        let abi = crate::generated_alpha_zeta_cov6::tests::alpha_test_abi();
-        let launch = crate::generated_alpha_zeta_cov6::tests::alpha_test_launch();
-        let digest = fe2o3_artifacts::derive_generated_kernel_identity_v2(
-            MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
-            ALPHA_COV6_TEST_BINDING,
-            "alpha",
-            "alpha",
-            DigestBytes::from_bytes([ALPHA_COV6_TEST_SEED.wrapping_add(0x40); 32]),
-            DigestBytes::from_bytes([ALPHA_COV6_TEST_SEED.wrapping_add(0x50); 32]),
-            &abi,
-            &launch,
-        );
-        KernelId::from_bytes(*digest.as_bytes())
-    }
-
     struct AlphaCov6TestArguments {
         observed: ObservedContext,
         scale: f32,
@@ -2784,7 +2768,6 @@ mod tests {
         fn dispatch_identity_v1() -> AlphaZetaCov6DispatchIdentityV1 {
             AlphaZetaCov6DispatchIdentityV1::new(
                 AlphaZetaCov6KernelRoleV1::Alpha,
-                alpha_cov6_test_kernel_id(),
                 ALPHA_COV6_TEST_BINDING,
                 ALPHA_COV6_TEST_CONTRACT,
             )

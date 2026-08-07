@@ -1813,9 +1813,6 @@ fn generated_alpha_zeta_cov6_adapter_v1(
             ) -> __fe2o3_kernel_host::__generated::AlphaZetaCov6DispatchIdentityV1 {
                 __fe2o3_kernel_host::__generated::AlphaZetaCov6DispatchIdentityV1::new(
                     #role,
-                    __fe2o3_kernel_host::KernelId::from_bytes([
-                        #(#kernel_binding_identity),*
-                    ]),
                     [#(#kernel_binding_identity),*],
                     [#(#generated_host_contract_identity),*],
                 )
@@ -4264,6 +4261,7 @@ mod tests {
             assert!(expansion.contains("ValidatedCompilerGeneratedSemanticWitnessV1"));
             assert!(expansion.contains("CompilerGeneratedAlphaZetaCov6ArgumentsV1"));
             assert!(expansion.contains("AlphaZetaCov6DispatchIdentityV1 :: new"));
+            assert!(!expansion.contains("KernelId :: from_bytes"));
             assert!(expansion.contains("CompilerGeneratedArgumentLayoutV1 :: new"));
             assert!(expansion.contains("from_compiler_generated_parts_v1"));
             assert!(expansion.contains("pub fn prepare"));
