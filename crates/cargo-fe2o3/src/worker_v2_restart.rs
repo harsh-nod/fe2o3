@@ -193,7 +193,7 @@ pub(crate) struct PersistedAdmittedWorkerV2IntentV1 {
 #[derive(Debug)]
 pub(crate) enum PreparedWorkerV2PublicationV1 {
     Raw(PreparedWorkerV2HsacoPublicationV1),
-    Finalized(PreparedFinalizedWorkerV2HsacoPublicationV1),
+    Finalized(Box<PreparedFinalizedWorkerV2HsacoPublicationV1>),
 }
 
 impl PreparedWorkerV2PublicationV1 {
@@ -244,7 +244,7 @@ pub(crate) fn persist_admitted_worker_v2_intent_v1(
             (
                 plan,
                 upstream,
-                PreparedWorkerV2PublicationV1::Finalized(prepared),
+                PreparedWorkerV2PublicationV1::Finalized(Box::new(prepared)),
             )
         }
     };

@@ -1,8 +1,10 @@
+use crate::generated_argument_plan::validate_argument_packing;
 use crate::{
     AdmittedFinalizedWorkerV2BundleV1, AdmittedWorkerV2TypedKernelV1, ArtifactKernelIdentityV1,
-    CompilerGeneratedKernelExpectationV1, DeviceIdentity, FinalizedWorkerV2BundleAdmissionError,
-    PhysicalMetadataValueV1, PublishedKernelPhysicalLayoutV1, PublishedPhysicalLaunchLayoutV1,
-    WorkerV2TypedKernelSelectionError,
+    CompilerGeneratedArgumentLayoutV1, CompilerGeneratedKernelExpectationV1, DeviceIdentity,
+    FinalizedWorkerV2BundleAdmissionError, GeneratedArgumentPackingError,
+    GeneratedArgumentPackingPlanV1, PhysicalMetadataValueV1, PublishedKernelPhysicalLayoutV1,
+    PublishedPhysicalLaunchLayoutV1, WorkerV2TypedKernelSelectionError,
 };
 use fe2o3_amd_target::AmdTargetId;
 use fe2o3_artifacts::{
@@ -1755,6 +1757,27 @@ impl<P, K, A: ReviewedHsaExecutableLifecycleAdapterV1>
     pub const fn grants_launch_authority(&self) -> bool {
         false
     }
+
+    /// Validates compiler-generated argument packing against this selected
+    /// kernel's independently admitted manifest ABI.
+    ///
+    /// # Safety
+    ///
+    /// `generated` must be emitted from the trusted compiler analysis for `K`,
+    /// not reconstructed from the artifact manifest. The generated adapter
+    /// must bind values of those exact Rust types and retain every referenced
+    /// resource through synchronous completion.
+    #[doc(hidden)]
+    pub unsafe fn validate_argument_packing(
+        &self,
+        generated: &CompilerGeneratedArgumentLayoutV1,
+    ) -> Result<GeneratedArgumentPackingPlanV1, GeneratedArgumentPackingError> {
+        validate_argument_packing(
+            self.artifact_identity.kernel_id(),
+            self.artifact_identity.abi(),
+            generated,
+        )
+    }
 }
 
 impl<P, K, A: ReviewedHsaImplicitKernargAdapterV1>
@@ -3211,6 +3234,44 @@ mod tests {
         assert!(!resolved.requires_hsa_kernel_resolution());
         assert!(!resolved.grants_load_authority());
         assert!(!resolved.grants_launch_authority());
+        drop(resolved);
+
+        loaded.unload().unwrap();
+        assert_eq!(unloads.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn resolved_selected_marker_validates_its_generated_packing_plan() {
+        let (loaded, unloads, _directory) = load_two_kernels(0x82);
+        let mut loaded = loaded.unwrap();
+        let selection = loaded.select_typed_kernel::<SecondTestKernel>().unwrap();
+        let authenticated = selection
+            .authenticate(&mut FakeAuthenticator::exact())
+            .unwrap();
+        let resolved = authenticated.resolve(&mut loaded).unwrap();
+        let generated = crate::generated_vecadd::generated_vecadd_argument_layout_v2().unwrap();
+
+        // SAFETY: the fixture layout is the independently generated exact
+        // vecadd layout used to construct SecondTestKernel's host contract.
+        let plan = unsafe { resolved.validate_argument_packing(&generated) }.unwrap();
+        assert_eq!(plan.kernel_id(), resolved.artifact_identity().kernel_id());
+        assert_eq!(plan.kernarg_size(), 48);
+        assert_eq!(plan.argument_count(), 3);
+
+        let abi = resolved.artifact_identity().abi();
+        let substituted = CompilerGeneratedArgumentLayoutV1::new(
+            abi.size() + 8,
+            abi.alignment(),
+            abi.pointer_width(),
+            abi.fields().to_vec(),
+        )
+        .unwrap();
+        assert!(matches!(
+            // SAFETY: this deliberately substituted layout contains no values
+            // and is expected to fail before a packing plan is returned.
+            unsafe { resolved.validate_argument_packing(&substituted) },
+            Err(GeneratedArgumentPackingError::KernargSize { .. })
+        ));
         drop(resolved);
 
         loaded.unload().unwrap();
