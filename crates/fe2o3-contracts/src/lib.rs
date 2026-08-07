@@ -7,6 +7,7 @@
 //! This is intentionally a small contract layer, not a SIMT execution model.
 
 mod artifact;
+mod control_flow_v1;
 mod index;
 mod kernel_frontend_v1;
 mod launch;
@@ -15,6 +16,11 @@ mod memory_v1;
 pub use artifact::{
     ArtifactDigest, ArtifactIdentity, KernelIdentity, ProofArtifact, ProofIdentity, ProofStatus,
     ToolIdentity,
+};
+pub use control_flow_v1::{
+    ControlFlowContractErrorV1, IntegerSwitchCaseV1, IntegerSwitchTypeV1, LoopBoundV1,
+    MAX_INTEGER_SWITCH_CASES_V1, MAX_SOURCE_INTEGER_SWITCHES_V1, MAX_SOURCE_LOOPS_V1,
+    StructuredTransferKindV1, UnsupportedControlFlowV1,
 };
 pub use index::{BoundedIndex, IdentityWriteIndex};
 pub use kernel_frontend_v1::{
