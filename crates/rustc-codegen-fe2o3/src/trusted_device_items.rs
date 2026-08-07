@@ -12,12 +12,25 @@
 //! that provides them.
 
 use rustc_hir::def_id::{DefId, LOCAL_CRATE};
-use rustc_middle::ty::TyCtxt;
+use rustc_hir::lang_items::LangItem;
+use rustc_middle::ty::{TyCtxt, TyKind};
 use rustc_span::Symbol;
 
 use dialect_amdgcn::{
     DeviceMathDiagnosticItem, DeviceValueDiagnosticItem, Fe2o3DeviceDiagnosticItem,
 };
+use fe2o3_kernel_ir::{NarrowFloatFormat, WidenedFloatBinaryOp};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum TrustedHalfOperation {
+    FromF32(NarrowFloatFormat),
+    ToF32(NarrowFloatFormat),
+    WidenedBinary {
+        format: NarrowFloatFormat,
+        op: WidenedFloatBinaryOp,
+    },
+    Bf16x2FusedMultiplyAdd,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum TrustedDeviceItem {
@@ -33,6 +46,7 @@ pub(crate) enum TrustedDeviceItem {
     DisjointSliceGetMutAt,
     DeviceValue(DeviceValueDiagnosticItem),
     DeviceMath(DeviceMathDiagnosticItem),
+    HalfOperation(TrustedHalfOperation),
 }
 
 const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
@@ -160,6 +174,7 @@ impl TrustedDeviceItem {
         match self {
             Self::DeviceValue(value) => half_math_path(Fe2o3DeviceDiagnosticItem::Value(value)),
             Self::DeviceMath(math) => half_math_path(Fe2o3DeviceDiagnosticItem::Math(math)),
+            Self::HalfOperation(operation) => operation.canonical_path(),
             _ => TRUSTED_ITEMS
                 .iter()
                 .find_map(|(item, _, path)| (*item == self).then_some(*path))
@@ -193,6 +208,7 @@ pub(crate) fn classify(tcx: TyCtxt<'_>, def_id: DefId) -> Option<TrustedDeviceIt
                 })
             })
         })
+        .or_else(|| classify_half_operation(tcx, def_id).map(TrustedDeviceItem::HalfOperation))
 }
 
 fn half_math_path(item: Fe2o3DeviceDiagnosticItem) -> &'static str {
@@ -203,6 +219,118 @@ fn half_math_path(item: Fe2o3DeviceDiagnosticItem) -> &'static str {
                 .then_some(*path)
         })
         .expect("every trusted half/math diagnostic item has one canonical path")
+}
+
+impl TrustedHalfOperation {
+    fn canonical_path(self) -> &'static str {
+        use NarrowFloatFormat::{Bf16, F16};
+        use WidenedFloatBinaryOp::{Add, Divide, Multiply, Subtract};
+        match self {
+            Self::FromF32(F16) => "fe2o3_device::F16::from_f32",
+            Self::FromF32(Bf16) => "fe2o3_device::Bf16::from_f32",
+            Self::ToF32(F16) => "fe2o3_device::F16::to_f32",
+            Self::ToF32(Bf16) => "fe2o3_device::Bf16::to_f32",
+            Self::WidenedBinary {
+                format: F16,
+                op: Add,
+            } => "<fe2o3_device::F16 as core::ops::Add>::add",
+            Self::WidenedBinary {
+                format: F16,
+                op: Subtract,
+            } => "<fe2o3_device::F16 as core::ops::Sub>::sub",
+            Self::WidenedBinary {
+                format: F16,
+                op: Multiply,
+            } => "<fe2o3_device::F16 as core::ops::Mul>::mul",
+            Self::WidenedBinary {
+                format: F16,
+                op: Divide,
+            } => "<fe2o3_device::F16 as core::ops::Div>::div",
+            Self::WidenedBinary {
+                format: Bf16,
+                op: Add,
+            } => "<fe2o3_device::Bf16 as core::ops::Add>::add",
+            Self::WidenedBinary {
+                format: Bf16,
+                op: Subtract,
+            } => "<fe2o3_device::Bf16 as core::ops::Sub>::sub",
+            Self::WidenedBinary {
+                format: Bf16,
+                op: Multiply,
+            } => "<fe2o3_device::Bf16 as core::ops::Mul>::mul",
+            Self::WidenedBinary {
+                format: Bf16,
+                op: Divide,
+            } => "<fe2o3_device::Bf16 as core::ops::Div>::div",
+            Self::Bf16x2FusedMultiplyAdd => "fe2o3_device::Bf16x2::mul_add_widened",
+        }
+    }
+}
+
+fn classify_half_operation(tcx: TyCtxt<'_>, def_id: DefId) -> Option<TrustedHalfOperation> {
+    let associated = tcx.opt_associated_item(def_id)?;
+    if !associated.is_fn() {
+        return None;
+    }
+    let impl_id = tcx.impl_of_assoc(def_id)?;
+    if impl_id.krate == LOCAL_CRATE {
+        return None;
+    }
+    let self_ty = tcx.type_of(impl_id).instantiate_identity();
+    let TyKind::Adt(adt, _) = self_ty.kind() else {
+        return None;
+    };
+    let value = match classify(tcx, adt.did())? {
+        TrustedDeviceItem::DeviceValue(value) => value,
+        _ => return None,
+    };
+    let item_name = tcx.item_name(def_id);
+    let name = item_name.as_str();
+
+    if tcx.impl_is_of_trait(impl_id) {
+        let trait_id = tcx.impl_trait_id(impl_id);
+        let (lang_item, op) = match name {
+            "add" => (LangItem::Add, WidenedFloatBinaryOp::Add),
+            "sub" => (LangItem::Sub, WidenedFloatBinaryOp::Subtract),
+            "mul" => (LangItem::Mul, WidenedFloatBinaryOp::Multiply),
+            "div" => (LangItem::Div, WidenedFloatBinaryOp::Divide),
+            _ => return None,
+        };
+        if tcx.lang_items().get(lang_item) != Some(trait_id) {
+            return None;
+        }
+        return Some(TrustedHalfOperation::WidenedBinary {
+            format: narrow_format(value)?,
+            op,
+        });
+    }
+
+    match (value, name) {
+        (DeviceValueDiagnosticItem::F16, "from_f32") => {
+            Some(TrustedHalfOperation::FromF32(NarrowFloatFormat::F16))
+        }
+        (DeviceValueDiagnosticItem::Bf16, "from_f32") => {
+            Some(TrustedHalfOperation::FromF32(NarrowFloatFormat::Bf16))
+        }
+        (DeviceValueDiagnosticItem::F16, "to_f32") => {
+            Some(TrustedHalfOperation::ToF32(NarrowFloatFormat::F16))
+        }
+        (DeviceValueDiagnosticItem::Bf16, "to_f32") => {
+            Some(TrustedHalfOperation::ToF32(NarrowFloatFormat::Bf16))
+        }
+        (DeviceValueDiagnosticItem::Bf16x2, "mul_add_widened") => {
+            Some(TrustedHalfOperation::Bf16x2FusedMultiplyAdd)
+        }
+        _ => None,
+    }
+}
+
+const fn narrow_format(value: DeviceValueDiagnosticItem) -> Option<NarrowFloatFormat> {
+    match value {
+        DeviceValueDiagnosticItem::F16 => Some(NarrowFloatFormat::F16),
+        DeviceValueDiagnosticItem::Bf16 => Some(NarrowFloatFormat::Bf16),
+        DeviceValueDiagnosticItem::Bf16x2 => None,
+    }
 }
 
 #[cfg(test)]

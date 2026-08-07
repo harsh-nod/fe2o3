@@ -13,7 +13,9 @@ use rustc_middle::mir::{
     BasicBlock, BinOp, Body, ConstOperand, Local, Operand, Place, ProjectionElem, Rvalue,
     SourceInfo, StatementKind, TerminatorKind, UnOp,
 };
-use rustc_middle::ty::{FloatTy, IntTy, Mutability, Ty, TyCtxt, TyKind, TypingEnv, UintTy};
+use rustc_middle::ty::{
+    FloatTy, Instance, IntTy, Mutability, Ty, TyCtxt, TyKind, TypingEnv, UintTy,
+};
 use std::error::Error;
 use std::fmt::{self, Write};
 
@@ -1675,16 +1677,25 @@ fn call_identity<'tcx>(
     let Operand::Constant(constant) = func else {
         return None;
     };
-    let TyKind::FnDef(def_id, _) = constant.const_.ty().kind() else {
+    let TyKind::FnDef(def_id, args) = constant.const_.ty().kind() else {
         return None;
     };
+    let resolved_def_id =
+        Instance::try_resolve(tcx, TypingEnv::fully_monomorphized(), *def_id, args)
+            .ok()
+            .flatten()
+            .map(|instance| instance.def_id())
+            .unwrap_or(*def_id);
     Some(
-        if let Some(item) = trusted_device_items::classify(tcx, *def_id) {
+        if let Some(item) = trusted_device_items::classify(tcx, resolved_def_id) {
             MirCallee::trusted(item)
-        } else if let Some(import) = compiler_ffi_imports.classify(tcx, *def_id) {
+        } else if let Some(import) = compiler_ffi_imports
+            .classify(tcx, resolved_def_id)
+            .or_else(|| compiler_ffi_imports.classify(tcx, *def_id))
+        {
             MirCallee::external_import(import)
         } else {
-            MirCallee::untrusted(tcx.def_path_str(*def_id))
+            MirCallee::untrusted(tcx.def_path_str(resolved_def_id))
         },
     )
 }

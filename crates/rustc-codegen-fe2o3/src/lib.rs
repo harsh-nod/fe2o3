@@ -432,9 +432,10 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                                 )
                             },
                         )?;
-                        let module = kernel_ir_lowering::translate_and_verify_for_target(
+                        let module = kernel_ir_lowering::translate_and_verify_for_session(
                             &mir_module,
                             &self.config.target,
+                            tcx.sess,
                         )
                             .map_err(|errors| {
                                 format!(
@@ -532,9 +533,10 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                                 match run_optional_kernel_ir_analysis(
                                     self.config.verify_kernel_ir,
                                     || {
-                                        kernel_ir_lowering::translate_and_verify_for_target(
+                                        kernel_ir_lowering::translate_and_verify_for_session(
                                             &mir_module,
                                             &self.config.target,
+                                            tcx.sess,
                                         )
                                     },
                                 ) {
@@ -564,9 +566,10 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                                 )
                             }
                             CodegenPipeline::KernelIrV1 => {
-                                let module = kernel_ir_lowering::translate_and_verify_for_target(
+                                let module = kernel_ir_lowering::translate_and_verify_for_session(
                                     &mir_module,
                                     &self.config.target,
+                                    tcx.sess,
                                 )
                                     .map_err(|errors| amdgpu_llvm::EmitError::Preflight {
                                         reason: format!(

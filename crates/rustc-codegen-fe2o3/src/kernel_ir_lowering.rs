@@ -22,18 +22,19 @@ use crate::mir_import::{
     MirOperandRef, MirPlaceRef, MirProjectionElem, MirRvalueKind, MirSourceLocation, MirStatement,
     MirStatementKind, MirTerminator, MirTerminatorKind, MirTypeShape, MirUnaryOp,
 };
-use crate::trusted_device_items::TrustedDeviceItem;
+use crate::trusted_device_items::{TrustedDeviceItem, TrustedHalfOperation};
 use dialect_amdgcn::{DeviceMathDiagnosticItem, recognized_device_math_operation};
 use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, BasicBlock, BinaryOp, BlockId, ComparePredicate, Constant,
-    FloatOperation, Function, FunctionId, Kernel, LaunchDomain, LaunchExtent, MemoryAccess, Module,
-    Operation, OperationKind, ScalarType, Signature, SwitchCase, Terminator, Type, ValueDef,
-    ValueId, WorkgroupSize, verify_module,
+    FloatConversionKind, FloatOperation, Function, FunctionId, Kernel, LaunchDomain, LaunchExtent,
+    MemoryAccess, Module, Operation, OperationKind, ScalarType, Signature, SwitchCase, Terminator,
+    Type, ValueDef, ValueId, WorkgroupSize, verify_module,
 };
 use reserved_fe2o3_symbols::{
     DeviceFfiAddressSpaceV1, DeviceFfiPhysicalResultV1, DeviceFfiPhysicalTypeV1,
     DeviceFfiPointerAccessV1, DeviceFfiScalarTypeV1,
 };
+use rustc_session::Session;
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
@@ -186,23 +187,52 @@ impl Error for TranslationErrors {}
 
 #[cfg(test)]
 pub fn translate_and_verify(mir: &MirModule) -> Result<Module, TranslationErrors> {
-    translate_and_verify_with_float_target(mir, None)
+    translate_and_verify_with_float_target(mir, None, StrictFloatPolicy::Canonical)
 }
 
+#[cfg(test)]
 pub(crate) fn translate_and_verify_for_target(
     mir: &MirModule,
     target: &AmdGpuTarget,
 ) -> Result<Module, TranslationErrors> {
+    translate_and_verify_for_target_with_policy(mir, target, StrictFloatPolicy::Canonical)
+}
+
+pub(crate) fn translate_and_verify_for_session(
+    mir: &MirModule,
+    target: &AmdGpuTarget,
+    session: &Session,
+) -> Result<Module, TranslationErrors> {
+    let policy = if session.opts.cg.llvm_args.is_empty() && session.opts.cg.passes.is_empty() {
+        StrictFloatPolicy::Canonical
+    } else {
+        StrictFloatPolicy::CustomLlvmPipeline
+    };
+    translate_and_verify_for_target_with_policy(mir, target, policy)
+}
+
+fn translate_and_verify_for_target_with_policy(
+    mir: &MirModule,
+    target: &AmdGpuTarget,
+    strict_float_policy: StrictFloatPolicy,
+) -> Result<Module, TranslationErrors> {
     let float_target = (target.as_str() == "gfx942").then_some(Gfx942FloatTarget);
-    translate_and_verify_with_float_target(mir, float_target)
+    translate_and_verify_with_float_target(mir, float_target, strict_float_policy)
 }
 
 #[derive(Clone, Copy, Debug)]
 struct Gfx942FloatTarget;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StrictFloatPolicy {
+    Canonical,
+    CustomLlvmPipeline,
+}
+
 fn translate_and_verify_with_float_target(
     mir: &MirModule,
     float_target: Option<Gfx942FloatTarget>,
+    strict_float_policy: StrictFloatPolicy,
 ) -> Result<Module, TranslationErrors> {
     let mut functions = mir.functions.iter().collect::<Vec<_>>();
     functions.sort_by(|lhs, rhs| {
@@ -243,7 +273,14 @@ fn translate_and_verify_with_float_target(
             continue;
         }
 
-        match FunctionLowerer::new(function, &mut declarations, float_target).lower() {
+        match FunctionLowerer::new(
+            function,
+            &mut declarations,
+            float_target,
+            strict_float_policy,
+        )
+        .lower()
+        {
             Ok(definition) => {
                 if function.kind == MirFunctionKind::KernelEntry {
                     kernel_entries.push((
@@ -417,6 +454,7 @@ struct FunctionLowerer<'function, 'declarations> {
     next_value: u32,
     trap_block: Option<BlockId>,
     float_target: Option<Gfx942FloatTarget>,
+    strict_float_policy: StrictFloatPolicy,
 }
 
 impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
@@ -424,6 +462,7 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
         function: &'function MirFunction,
         declarations: &'declarations mut BTreeMap<String, Signature>,
         float_target: Option<Gfx942FloatTarget>,
+        strict_float_policy: StrictFloatPolicy,
     ) -> Self {
         Self {
             function,
@@ -434,6 +473,7 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
             next_value: 0,
             trap_block: None,
             float_target,
+            strict_float_policy,
         }
     }
 
@@ -978,6 +1018,17 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                 location,
             );
         }
+        if let Some(TrustedDeviceItem::HalfOperation(operation)) = callee.trusted_item() {
+            return self.lower_half_operation_call(
+                callee,
+                operation,
+                target,
+                destination,
+                operands,
+                block,
+                location,
+            );
+        }
 
         let arguments = operands
             .iter()
@@ -1115,6 +1166,9 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                 Some(TrustedDeviceItem::DeviceMath(_)) => {
                     unreachable!("device math calls are handled before ordinary argument lowering")
                 }
+                Some(TrustedDeviceItem::HalfOperation(_)) => {
+                    unreachable!("half operations are handled before ordinary argument lowering")
+                }
                 None => {
                     return Err(diagnostic(
                         TranslationDiagnosticCode::UnsupportedCall,
@@ -1203,6 +1257,7 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                 ),
             ));
         }
+        self.require_strict_float_policy(&location)?;
 
         if item == DeviceMathDiagnosticItem::Context {
             return Err(diagnostic(
@@ -1268,6 +1323,106 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn lower_half_operation_call(
+        &mut self,
+        callee: &MirCallee,
+        operation: TrustedHalfOperation,
+        target: usize,
+        destination: &MirPlaceRef,
+        operands: &[MirOperandRef],
+        block: &mut BasicBlock,
+        location: TranslationLocation,
+    ) -> Result<Terminator, TranslationDiagnostic> {
+        if self.float_target.is_none() {
+            return Err(diagnostic(
+                TranslationDiagnosticCode::UnsupportedCall,
+                location,
+                format!(
+                    "trusted half operation `{}` requires the exact gfx942 floating-point profile",
+                    callee.identity()
+                ),
+            ));
+        }
+        self.require_strict_float_policy(&location)?;
+
+        let arguments = operands
+            .iter()
+            .map(|operand| self.lower_operand(operand, block, &location))
+            .collect::<Result<Vec<_>, _>>()?;
+        let float = match operation {
+            TrustedHalfOperation::FromF32(format) => {
+                let [value] = arguments.as_slice() else {
+                    return Err(self.call_arity(callee, 1, arguments.len(), location));
+                };
+                FloatOperation::Convert {
+                    kind: match format {
+                        fe2o3_kernel_ir::NarrowFloatFormat::F16 => {
+                            FloatConversionKind::F32ToF16RoundTiesEven
+                        }
+                        fe2o3_kernel_ir::NarrowFloatFormat::Bf16 => {
+                            FloatConversionKind::F32ToBf16RoundTiesEven
+                        }
+                    },
+                    value: *value,
+                }
+            }
+            TrustedHalfOperation::ToF32(format) => {
+                let [value] = arguments.as_slice() else {
+                    return Err(self.call_arity(callee, 1, arguments.len(), location));
+                };
+                FloatOperation::Convert {
+                    kind: match format {
+                        fe2o3_kernel_ir::NarrowFloatFormat::F16 => FloatConversionKind::F16ToF32,
+                        fe2o3_kernel_ir::NarrowFloatFormat::Bf16 => FloatConversionKind::Bf16ToF32,
+                    },
+                    value: *value,
+                }
+            }
+            TrustedHalfOperation::WidenedBinary { format, op } => {
+                let [lhs, rhs] = arguments.as_slice() else {
+                    return Err(self.call_arity(callee, 2, arguments.len(), location));
+                };
+                FloatOperation::WidenedBinary {
+                    format,
+                    op,
+                    lhs: *lhs,
+                    rhs: *rhs,
+                }
+            }
+            TrustedHalfOperation::Bf16x2FusedMultiplyAdd => {
+                let [value, multiplier, addend] = arguments.as_slice() else {
+                    return Err(self.call_arity(callee, 3, arguments.len(), location));
+                };
+                FloatOperation::Bf16x2FusedMultiplyAdd {
+                    value: *value,
+                    multiplier: *multiplier,
+                    addend: *addend,
+                }
+            }
+        };
+        self.require_float_argument_types(&float, &location)?;
+        self.require_destination_type(destination, &float.result_type(), &location)?;
+
+        let declaration = float.declaration();
+        self.register_declaration_identity(
+            declaration.id.as_str(),
+            declaration.signature.clone(),
+            &location,
+        )?;
+        let result = self.fresh_value(float.result_type(), &location)?;
+        block.operations.push(float.operation(result.id));
+        self.bind_local(
+            destination.local,
+            LocalBinding::Value(result.id),
+            location.clone(),
+        )?;
+        Ok(Terminator::Branch {
+            target: self.block_id(target, location)?,
+            arguments: Vec::new(),
+        })
+    }
+
     fn require_device_math_receiver(
         &self,
         operand: &MirOperandRef,
@@ -1290,6 +1445,20 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                 TranslationDiagnosticCode::UnsupportedType,
                 location.clone(),
                 "DeviceMath receiver did not originate from the authenticated compiler constructor",
+            ));
+        }
+        Ok(())
+    }
+
+    fn require_strict_float_policy(
+        &self,
+        location: &TranslationLocation,
+    ) -> Result<(), TranslationDiagnostic> {
+        if self.strict_float_policy != StrictFloatPolicy::Canonical {
+            return Err(diagnostic(
+                TranslationDiagnosticCode::UnsupportedCall,
+                location.clone(),
+                "strict gfx942 half/math lowering rejects custom -Cllvm-args and -Cpasses pipelines",
             ));
         }
         Ok(())
@@ -2184,6 +2353,103 @@ mod tests {
     }
 
     #[test]
+    fn authenticated_half_forms_become_canonical_float_calls() {
+        use fe2o3_kernel_ir::{NarrowFloatFormat, TargetCapability, WidenedFloatBinaryOp};
+
+        let cases = [
+            (
+                TrustedHalfOperation::FromF32(NarrowFloatFormat::F16),
+                vec![MirTypeShape::F32],
+                MirTypeShape::F16,
+                "__fe2o3_ir_float_v1_f32_to_f16_rne",
+                TargetCapability::Float16,
+            ),
+            (
+                TrustedHalfOperation::ToF32(NarrowFloatFormat::Bf16),
+                vec![MirTypeShape::Bf16],
+                MirTypeShape::F32,
+                "__fe2o3_ir_float_v1_bf16_to_f32",
+                TargetCapability::BFloat16,
+            ),
+            (
+                TrustedHalfOperation::WidenedBinary {
+                    format: NarrowFloatFormat::F16,
+                    op: WidenedFloatBinaryOp::Divide,
+                },
+                vec![MirTypeShape::F16, MirTypeShape::F16],
+                MirTypeShape::F16,
+                "__fe2o3_ir_float_v1_f16_div_widened_rne",
+                TargetCapability::Float16,
+            ),
+            (
+                TrustedHalfOperation::Bf16x2FusedMultiplyAdd,
+                vec![
+                    MirTypeShape::Bf16x2,
+                    MirTypeShape::Bf16x2,
+                    MirTypeShape::Bf16x2,
+                ],
+                MirTypeShape::Bf16x2,
+                "__fe2o3_ir_float_v1_fma_bf16x2",
+                TargetCapability::BFloat16,
+            ),
+        ];
+
+        for (operation, arguments, result, intrinsic, capability) in cases {
+            let fixture = half_operation_fixture(operation, &arguments, result);
+            let module = translate_and_verify_for_target(&fixture, &AmdGpuTarget::new("gfx942"))
+                .expect("authenticated half form");
+            assert!(module.required_capabilities.contains(&capability));
+            assert!(module.functions.iter().any(|function| {
+                function.id.as_str() == intrinsic
+                    && function.role == fe2o3_kernel_ir::FunctionRole::ExternalImport
+            }));
+            verify_module(&module).expect("canonical half module");
+        }
+    }
+
+    #[test]
+    fn half_forms_reject_wrong_target_arity_and_type() {
+        use fe2o3_kernel_ir::NarrowFloatFormat;
+
+        let operation = TrustedHalfOperation::FromF32(NarrowFloatFormat::F16);
+        let fixture = half_operation_fixture(operation, &[MirTypeShape::F32], MirTypeShape::F16);
+        assert!(
+            translate_and_verify_for_target(&fixture, &AmdGpuTarget::new("gfx1100"))
+                .unwrap_err()
+                .to_string()
+                .contains("exact gfx942")
+        );
+
+        let wrong_arity = half_operation_fixture(operation, &[], MirTypeShape::F16);
+        assert!(
+            translate_and_verify_for_target(&wrong_arity, &AmdGpuTarget::new("gfx942"))
+                .unwrap_err()
+                .to_string()
+                .contains("expects 1 operand(s), found 0")
+        );
+
+        let wrong_type = half_operation_fixture(operation, &[MirTypeShape::U32], MirTypeShape::F16);
+        assert!(
+            translate_and_verify_for_target(&wrong_type, &AmdGpuTarget::new("gfx942"))
+                .unwrap_err()
+                .to_string()
+                .contains("must lower to [Scalar(F32)]")
+        );
+
+        let custom_pipeline = translate_and_verify_for_target_with_policy(
+            &fixture,
+            &AmdGpuTarget::new("gfx942"),
+            StrictFloatPolicy::CustomLlvmPipeline,
+        )
+        .unwrap_err();
+        assert!(
+            custom_pipeline
+                .to_string()
+                .contains("rejects custom -Cllvm-args and -Cpasses")
+        );
+    }
+
+    #[test]
     fn u32_return_requires_an_initialized_return_local() {
         let mut function = u32_definition(
             "missing_return_value",
@@ -2585,6 +2851,54 @@ mod tests {
                 .map(|source| source.file.as_str()),
             Some("tests/scalar.rs")
         );
+    }
+
+    fn half_operation_fixture(
+        operation: TrustedHalfOperation,
+        argument_shapes: &[MirTypeShape],
+        result_shape: MirTypeShape,
+    ) -> MirModule {
+        let destination = argument_shapes.len() + 1;
+        let mut locals = vec![local(0, MirLocalRole::Return, MirTypeShape::Unit)];
+        locals.extend(
+            argument_shapes
+                .iter()
+                .cloned()
+                .enumerate()
+                .map(|(index, shape)| local(index + 1, MirLocalRole::Arg, shape)),
+        );
+        locals.push(local(destination, MirLocalRole::Temp, result_shape));
+
+        MirModule {
+            functions: vec![MirFunction {
+                export_name: "half_operation".to_string(),
+                rust_path: "tests::half_operation".to_string(),
+                kind: MirFunctionKind::KernelEntry,
+                frontend_contract: None,
+                arg_count: argument_shapes.len(),
+                local_count: locals.len(),
+                locals,
+                blocks: vec![
+                    MirBlock {
+                        index: 0,
+                        statements: Vec::new(),
+                        terminator: Some(terminator(MirTerminatorKind::Call {
+                            callee: Some(MirCallee::trusted_for_test(
+                                TrustedDeviceItem::HalfOperation(operation),
+                            )),
+                            target: Some(1),
+                            destination: Some(place(destination)),
+                            operands: (1..=argument_shapes.len()).map(operand).collect(),
+                        })),
+                    },
+                    MirBlock {
+                        index: 1,
+                        statements: Vec::new(),
+                        terminator: Some(terminator(MirTerminatorKind::Return)),
+                    },
+                ],
+            }],
+        }
     }
 
     fn device_math_fixture(
