@@ -676,7 +676,6 @@ mod platform {
             fs::rename(&replacement, &selected).expect("atomically replace selected pathname");
 
             let pinned_result = pinned.command();
-            let replacement_status = Command::new(&selected).status().unwrap();
             match pinned_result {
                 Ok(mut command) => assert!(
                     command.status().unwrap().success(),
@@ -685,9 +684,10 @@ mod platform {
                 Err(PinExecutableError::ExecutionObjectChanged { .. }) => {}
                 Err(error) => panic!("unexpected substitution result: {error}"),
             }
-            assert!(!replacement_status.success());
             assert_eq!(pinned.sha256(), &selected_digest);
-            let replacement_digest: [u8; 32] = Sha256::digest(fs::read(&selected).unwrap()).into();
+            let replacement_bytes = fs::read(&selected).unwrap();
+            assert_eq!(replacement_bytes, fs::read("/bin/false").unwrap());
+            let replacement_digest: [u8; 32] = Sha256::digest(replacement_bytes).into();
             assert_ne!(pinned.sha256(), &replacement_digest);
         }
 
