@@ -766,7 +766,15 @@ fn worker_v2_real_source_publishes_two_kernels_with_one_shared_helper() {
     let _lock = backend_test_lock();
     let workspace = workspace();
     let directory = WorkerV2SourceDirectory::new(&workspace);
-    let source = directory.0.join("worker-v2-multi-kernel-source.rs");
+    let project = directory.0.join("project");
+    let source = project.join("src/lib.rs");
+    std::fs::create_dir_all(source.parent().expect("multi-kernel source parent"))
+        .expect("create multi-kernel Worker V2 project");
+    std::fs::write(
+        project.join("Cargo.toml"),
+        "[package]\nname = \"worker-v2-source\"\nversion = \"0.0.0\"\nedition = \"2024\"\npublish = false\n",
+    )
+    .expect("write multi-kernel Worker V2 manifest");
     std::fs::write(&source, worker_v2_multi_kernel_source())
         .expect("write multi-kernel Worker V2 source fixture");
     let worker =
@@ -776,35 +784,24 @@ fn worker_v2_real_source_publishes_two_kernels_with_one_shared_helper() {
     let llvm_build_identity = std::env::var("FE2O3_LLVM_BUILD_ID").expect("LLVM build identity");
     let config = WorkerV2TestConfig::native_source(
         &directory.0,
-        &workspace,
-        &source,
+        &project,
+        Path::new("src/lib.rs"),
         &worker,
         &worker_build_identity,
         &llvm_build_identity,
     );
     let backend = build_codegen_backend(&workspace);
+    let target = directory.0.join("cargo-target");
     let output = Command::new(env!("CARGO"))
         .current_dir(&workspace)
-        .args(["run", "--locked", "-p", "cargo-fe2o3", "--"])
-        .arg("rustc")
-        .arg(&source)
-        .args([
-            "--crate-name",
-            "worker_v2_source",
-            "--edition=2024",
-            "--crate-type=lib",
-            "--emit=obj",
-            "-Cpanic=abort",
-            "-Cmetadata=worker-v2-multi-kernel-source",
-        ])
-        .arg(format!("-Zcodegen-backend={}", backend.display()))
-        .arg("-Zmir-enable-passes=-JumpThreading")
-        .arg("-o")
-        .arg(directory.0.join("host.o"))
-        .env("FE2O3_BINDING_WRAPPER_MODE_V1", "1")
-        .env("FE2O3_BUILD_SESSION_V1", "99".repeat(16))
+        .args(["run", "--locked", "-p", "cargo-fe2o3", "--", "build"])
+        .arg("--manifest-path")
+        .arg(project.join("Cargo.toml"))
+        .arg("--target-dir")
+        .arg(&target)
+        .arg("--offline")
+        .env("FE2O3_BACKEND", &backend)
         .env("FE2O3_CODEGEN_PIPELINE", "kernel-ir-worker-v2")
-        .env("FE2O3_HSACO_DIR", directory.0.join("artifacts"))
         .env("FE2O3_TARGET", "gfx942:xnack-")
         .env("FE2O3_VERBOSE", "1")
         .env("FE2O3_WORKER_V2_CONFIG_V2", &config.0)
@@ -843,7 +840,7 @@ fn worker_v2_real_source_publishes_two_kernels_with_one_shared_helper() {
         );
     }
     assert_published_worker_v2_kernels(
-        &directory.0.join("artifacts"),
+        &target.join("fe2o3"),
         &[MULTI_KERNEL_ALPHA, MULTI_KERNEL_ZETA],
     );
 }
