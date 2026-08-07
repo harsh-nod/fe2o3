@@ -34,6 +34,7 @@ mod attempt_scoped_hsaco_publication;
 mod compiler_module_handoff;
 mod durable_link_publication;
 mod link_publication;
+mod worker_v2_publication_intent;
 
 pub use attempt::{
     AttemptCodecError, BackendPublicationReceiptV1, BuildAttempt, BuildInvocation, BuildSession,
@@ -83,6 +84,16 @@ use std::path::{Component, Path, PathBuf};
 use std::process;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+pub use worker_v2_publication_intent::{
+    MAX_WORKER_V2_PUBLICATION_INTENT_OUTPUT_BYTES, MAX_WORKER_V2_PUBLICATION_INTENT_RECORD_BYTES,
+    RecoveredWorkerV2PublicationIntentV1, WorkerV2PublicationIntentBoundaryV1,
+    WorkerV2PublicationIntentErrorV1, WorkerV2PublicationIntentFaultPointV1,
+    WorkerV2PublicationIntentFaultTimingV1, WorkerV2PublicationIntentIdentityV1,
+    WorkerV2PublicationIntentOptionsV1, WorkerV2PublicationIntentOutcomeV1,
+    WorkerV2PublicationIntentRecordV1, clear_worker_v2_publication_intent_v1,
+    persist_worker_v2_publication_intent_v1, persist_worker_v2_publication_intent_v1_with_options,
+    recover_worker_v2_publication_intent_v1,
+};
 
 /// Immutable bytes captured from one finalized artifact while its publication lock was held.
 ///

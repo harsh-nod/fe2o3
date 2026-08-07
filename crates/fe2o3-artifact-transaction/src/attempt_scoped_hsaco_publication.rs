@@ -476,7 +476,7 @@ pub fn read_backend_publication_receipt_v1(
     })
 }
 
-fn publication_receipt(
+pub(crate) fn publication_receipt(
     producer: &ProducerIdentity,
     attempt: BuildAttempt,
     plan: DurableLinkPublicationPlanV1,
