@@ -20,14 +20,20 @@ CUDA, or a serialization framework.
   claim. The verifier checks the claim's scope; uniformity analysis or a proof
   artifact must establish that the claim is true.
 - `WorkgroupMemory` distinguishes fixed element counts from the one dynamic LDS
-  base allowed in a function. The legacy `Alloca` form remains representable.
+  base allowed in a function. Dynamic LDS requires both the dynamic and base
+  workgroup-memory capabilities. The legacy `Alloca` form remains
+  representable.
 - `WaveWidth` expresses an exact wave32 or wave64 lowering requirement without
   overloading target-neutral subgroup sizes.
 - Source-level logical launch queries use typed `IntrinsicOperation` nodes.
   Each node carries an explicit result type, while `IntrinsicKind` owns the
   canonical type, memory effects, and required target capabilities.
 - Capabilities describe requirements; they do not encode a particular GPU.
-  Backends decide whether a target satisfies them.
+  Synchronization over workgroup memory derives `WorkgroupMemory` in addition
+  to its execution capability. `Module::effective_capabilities` and
+  `Function::effective_capabilities` close explicit declarations over all
+  operation-derived requirements. Backends decide whether a target satisfies
+  that closure.
 
 ## Initial Intrinsic Set
 
@@ -72,6 +78,13 @@ space, malformed atomic orderings and operands, unsupported atomic widths,
 multiple dynamic LDS bases, and inconsistent wave-width requirements. Target
 atomic capabilities are subsuming: support at a wider legal scope authorizes a
 narrower requested scope with the same width and address space.
+
+The uniform-workgroup marker remains an explicit claim rather than an inferred
+property. A backend must bind it to accepted control-flow analysis or proof
+evidence before emitting a convergent target operation. The first AMDGPU
+lowering accepts only barriers on an acyclic unconditional entry chain and
+rejects conditional, cyclic, unreachable, and unsummarized interprocedural
+placements.
 
 The verifier does not prove bounds, race freedom, the truth of a barrier's
 convergence claim,

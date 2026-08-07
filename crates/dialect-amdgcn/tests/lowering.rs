@@ -663,6 +663,35 @@ fn g4_synchronization_module() -> Module {
     module
 }
 
+fn workgroup_barrier(
+    memory_scope: SynchronizationScope,
+    ordering: MemoryOrdering,
+    address_spaces: impl IntoIterator<Item = AddressSpace>,
+) -> Operation {
+    Operation::new(
+        vec![],
+        OperationKind::WorkgroupBarrier(WorkgroupBarrier {
+            memory_scope,
+            semantics: BarrierSemantics::new(ordering, address_spaces),
+            convergence: Convergence::uniform(SynchronizationScope::Workgroup),
+        }),
+    )
+}
+
+fn barrier_only_module(memory_scope: SynchronizationScope, ordering: MemoryOrdering) -> Module {
+    let mut module = fill_module();
+    module
+        .required_capabilities
+        .insert(TargetCapability::WorkgroupBarrier);
+    module.functions[0].body.as_mut().unwrap().blocks[0]
+        .operations
+        .insert(
+            0,
+            workgroup_barrier(memory_scope, ordering, [AddressSpace::Global]),
+        );
+    module
+}
+
 fn atomic(
     kind: AtomicKind,
     pointer: ValueId,
@@ -949,6 +978,221 @@ fn lowers_fences_convergent_barriers_static_dynamic_lds_and_wave_width() {
         "\"target-features\"=\"-wavefrontsize32,+wavefrontsize64\"",
     ] {
         assert!(llvm.contains(expected), "missing {expected:?} in:\n{llvm}");
+    }
+}
+
+#[test]
+fn lowers_each_workgroup_barrier_order_and_memory_scope_exactly() {
+    let acquire = lower_kernel_to_llvm_ir(
+        &barrier_only_module(SynchronizationScope::Workgroup, MemoryOrdering::Acquire),
+        &KernelId::new("fill"),
+    )
+    .unwrap();
+    assert!(
+        acquire.contains(
+            "call void @llvm.amdgcn.s.barrier()\n  fence syncscope(\"workgroup\") acquire"
+        )
+    );
+    assert!(!acquire.contains("fence syncscope(\"workgroup\") release"));
+
+    let release = lower_kernel_to_llvm_ir(
+        &barrier_only_module(SynchronizationScope::Device, MemoryOrdering::Release),
+        &KernelId::new("fill"),
+    )
+    .unwrap();
+    assert!(
+        release
+            .contains("fence syncscope(\"agent\") release\n  call void @llvm.amdgcn.s.barrier()")
+    );
+    assert!(!release.contains("fence syncscope(\"agent\") acquire"));
+
+    let acquire_release = lower_kernel_to_llvm_ir(
+        &barrier_only_module(SynchronizationScope::Device, MemoryOrdering::AcquireRelease),
+        &KernelId::new("fill"),
+    )
+    .unwrap();
+    assert!(acquire_release.contains("fence syncscope(\"agent\") release"));
+    assert!(acquire_release.contains("fence syncscope(\"agent\") acquire"));
+
+    let sequential = lower_kernel_to_llvm_ir(
+        &barrier_only_module(
+            SynchronizationScope::System,
+            MemoryOrdering::SequentiallyConsistent,
+        ),
+        &KernelId::new("fill"),
+    )
+    .unwrap();
+    assert_occurrences(&sequential, "  fence seq_cst", 2);
+    assert!(!sequential.contains("fence syncscope"));
+}
+
+#[test]
+fn accepts_only_structurally_convergent_workgroup_barrier_placement() {
+    let mut unconditional = barrier_only_module(
+        SynchronizationScope::Workgroup,
+        MemoryOrdering::AcquireRelease,
+    );
+    let barrier = unconditional.functions[0].body.as_mut().unwrap().blocks[0]
+        .operations
+        .remove(0);
+    unconditional.functions[0].body.as_mut().unwrap().blocks[0].terminator =
+        Some(Terminator::Branch {
+            target: BlockId(1),
+            arguments: vec![],
+        });
+    unconditional.functions[0].body.as_mut().unwrap().blocks[1]
+        .operations
+        .insert(0, barrier);
+    lower_kernel_to_llvm_ir(&unconditional, &KernelId::new("fill"))
+        .expect("an acyclic unconditional entry chain is convergent by construction");
+
+    let mut divergent = barrier_only_module(
+        SynchronizationScope::Workgroup,
+        MemoryOrdering::AcquireRelease,
+    );
+    let barrier = divergent.functions[0].body.as_mut().unwrap().blocks[0]
+        .operations
+        .remove(0);
+    divergent.functions[0].body.as_mut().unwrap().blocks[1]
+        .operations
+        .insert(0, barrier);
+    let error = lower_kernel_to_llvm_ir(&divergent, &KernelId::new("fill")).unwrap_err();
+    assert_eq!(
+        error.diagnostics()[0].code,
+        LoweringDiagnosticCode::UnprovenBarrierConvergence
+    );
+    assert_eq!(error.diagnostics()[0].location.block, Some(BlockId(1)));
+    assert!(
+        error.diagnostics()[0]
+            .message
+            .contains("no uniformity is inferred from branch values")
+    );
+
+    let mut cyclic = phi_loop_module();
+    cyclic
+        .required_capabilities
+        .insert(TargetCapability::WorkgroupBarrier);
+    cyclic.functions[0].body.as_mut().unwrap().blocks[1]
+        .operations
+        .insert(
+            0,
+            workgroup_barrier(
+                SynchronizationScope::Workgroup,
+                MemoryOrdering::AcquireRelease,
+                [AddressSpace::Global],
+            ),
+        );
+    let error = lower_kernel_to_llvm_ir(&cyclic, &KernelId::new("phi_loop")).unwrap_err();
+    assert_eq!(
+        error.diagnostics()[0].code,
+        LoweringDiagnosticCode::UnprovenBarrierConvergence
+    );
+    assert!(
+        error.diagnostics()[0]
+            .message
+            .contains("dynamic-order proof")
+    );
+
+    let mut duplicate_successor = barrier_only_module(
+        SynchronizationScope::Workgroup,
+        MemoryOrdering::AcquireRelease,
+    );
+    let barrier = duplicate_successor.functions[0]
+        .body
+        .as_mut()
+        .unwrap()
+        .blocks[0]
+        .operations
+        .remove(0);
+    duplicate_successor.functions[0]
+        .body
+        .as_mut()
+        .unwrap()
+        .blocks[1]
+        .operations
+        .insert(0, barrier);
+    duplicate_successor.functions[0]
+        .body
+        .as_mut()
+        .unwrap()
+        .blocks[0]
+        .terminator = Some(Terminator::ConditionalBranch {
+        condition: ValueId(4),
+        then_target: BlockId(1),
+        then_arguments: vec![],
+        else_target: BlockId(1),
+        else_arguments: vec![],
+    });
+    let result = std::panic::catch_unwind(|| {
+        lower_kernel_to_llvm_ir(&duplicate_successor, &KernelId::new("fill"))
+    });
+    assert!(result.is_ok(), "duplicate CFG successors must not panic");
+    assert_eq!(
+        result.unwrap().unwrap_err().diagnostics()[0].code,
+        LoweringDiagnosticCode::UnprovenBarrierConvergence
+    );
+}
+
+#[test]
+fn lds_lowering_requires_declared_capabilities_alignment_and_addressability() {
+    let mut missing_dynamic = g4_synchronization_module();
+    missing_dynamic
+        .required_capabilities
+        .remove(&TargetCapability::DynamicWorkgroupMemory);
+    let error = lower_kernel_to_llvm_ir(&missing_dynamic, &KernelId::new("fill")).unwrap_err();
+    assert_eq!(
+        error.diagnostics()[0].code,
+        LoweringDiagnosticCode::UnsupportedCapability
+    );
+    assert!(
+        error.diagnostics()[0]
+            .message
+            .contains("DynamicWorkgroupMemory")
+    );
+
+    for (extent, expected_fragment) in [
+        (WorkgroupMemoryExtent::Static(1), "requires alignment 8"),
+        (
+            WorkgroupMemoryExtent::Static(u32::MAX),
+            "exceeding the AMDGPU 32-bit LDS address space",
+        ),
+    ] {
+        let mut module = fill_module();
+        module
+            .required_capabilities
+            .insert(TargetCapability::WorkgroupMemory);
+        module.functions[0].body.as_mut().unwrap().blocks[0]
+            .operations
+            .insert(
+                0,
+                op(
+                    30,
+                    Type::pointer(
+                        Type::Scalar(ScalarType::U64),
+                        AddressSpace::Workgroup,
+                        AccessMode::ReadWrite,
+                    ),
+                    OperationKind::WorkgroupMemory(WorkgroupMemory {
+                        element: Type::Scalar(ScalarType::U64),
+                        extent,
+                        alignment: if matches!(extent, WorkgroupMemoryExtent::Static(1)) {
+                            4
+                        } else {
+                            8
+                        },
+                    }),
+                ),
+            );
+        let error = lower_kernel_to_llvm_ir(&module, &KernelId::new("fill")).unwrap_err();
+        assert_eq!(
+            error.diagnostics()[0].code,
+            LoweringDiagnosticCode::UnsupportedWorkgroupMemory
+        );
+        assert!(
+            error.diagnostics()[0].message.contains(expected_fragment),
+            "unexpected diagnostic: {}",
+            error.diagnostics()[0]
+        );
     }
 }
 
@@ -2157,7 +2401,7 @@ fn rocm_compiles_g4_synchronization_and_lds() {
         lower_kernel_to_llvm_ir(&g4_synchronization_module(), &KernelId::new("fill")).unwrap();
     fs::write(&input, llvm_ir).unwrap();
 
-    let result = Command::new(clang)
+    let result = Command::new(&clang)
         .arg("--target=amdgcn-amd-amdhsa")
         .arg(format!("-mcpu={target_text}"))
         .arg("-nogpulib")
@@ -2171,7 +2415,31 @@ fn rocm_compiles_g4_synchronization_and_lds() {
         "clang failed:\n{}",
         String::from_utf8_lossy(&result.stderr)
     );
-    assert!(fs::metadata(output).unwrap().len() > 64);
+    assert!(fs::metadata(&output).unwrap().len() > 64);
+
+    let readobj = std::env::var_os("FE2O3_ROCM_LLVM_READOBJ")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            let mut tool = clang;
+            tool.set_file_name("llvm-readobj");
+            tool
+        });
+    let result = Command::new(readobj)
+        .arg("--notes")
+        .arg(&output)
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "llvm-readobj failed:\n{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let report = String::from_utf8(result.stdout).unwrap();
+    let metadata = metadata(&report);
+    assert!(
+        metadata.contains("    .group_segment_fixed_size: 256\n"),
+        "static LDS was not reflected in AMDGPU metadata:\n{metadata}"
+    );
 }
 
 #[test]

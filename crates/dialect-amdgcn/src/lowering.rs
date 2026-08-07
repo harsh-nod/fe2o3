@@ -46,6 +46,7 @@ pub enum LoweringDiagnosticCode {
     UnsupportedOperation,
     UnsupportedAtomic,
     UnsupportedBarrier,
+    UnprovenBarrierConvergence,
     UnsupportedWorkgroupMemory,
     UnsupportedWaveOperation,
     UnsupportedCast,
@@ -303,7 +304,7 @@ pub fn lower_kernel_to_llvm_ir(
         .iter()
         .find(|function| function.id == kernel.entry)
         .expect("verify_module established the kernel entry");
-    let body = entry.body.as_ref().ok_or_else(|| {
+    entry.body.as_ref().ok_or_else(|| {
         LoweringErrors::one(
             LoweringLocation::function(module, kernel, entry),
             LoweringDiagnosticCode::KernelEntryDeclaration,
@@ -337,11 +338,7 @@ pub fn lower_kernel_to_llvm_ir(
     }
 
     let mut lowerer = FunctionLowerer::new(module, kernel, entry, workgroup_size.x, wave_width);
-    lowerer.validate_parameters()?;
-    for block in &body.blocks {
-        lowerer.validate_block(block)?;
-    }
-    lowerer.validate_block_arguments()?;
+    preflight_function(&mut lowerer)?;
     lowerer.emit()
 }
 
@@ -953,12 +950,147 @@ fn component_names(helpers: &[&Function], component: &[usize]) -> String {
 }
 
 fn preflight_function(lowerer: &mut FunctionLowerer<'_>) -> Result<(), LoweringErrors> {
+    validate_barrier_convergence(lowerer)?;
     lowerer.validate_parameters()?;
     let body = lowerer.function.body.as_ref().expect("definition required");
     for block in &body.blocks {
         lowerer.validate_block(block)?;
     }
-    lowerer.validate_block_arguments()
+    lowerer.validate_block_arguments()?;
+    lowerer.validate_lds_addressability()
+}
+
+fn validate_barrier_convergence(lowerer: &FunctionLowerer<'_>) -> Result<(), LoweringErrors> {
+    let body = lowerer.function.body.as_ref().expect("definition required");
+    let barriers = body
+        .blocks
+        .iter()
+        .flat_map(|block| {
+            block
+                .operations
+                .iter()
+                .enumerate()
+                .filter_map(|(operation, value)| {
+                    matches!(value.kind, OperationKind::WorkgroupBarrier(_))
+                        .then_some((block.id, operation))
+                })
+        })
+        .collect::<Vec<_>>();
+    if barriers.is_empty() {
+        return Ok(());
+    }
+
+    if body.blocks.iter().any(|block| {
+        block
+            .operations
+            .iter()
+            .any(|operation| matches!(operation.kind, OperationKind::Call { .. }))
+    }) {
+        return Err(LoweringErrors::one(
+            lowerer.function_location(),
+            LoweringDiagnosticCode::UnprovenBarrierConvergence,
+            "workgroup barrier convergence requires an interprocedural summary when the entry calls another function",
+        ));
+    }
+
+    let blocks = body
+        .blocks
+        .iter()
+        .map(|block| (block.id, block))
+        .collect::<BTreeMap<_, _>>();
+    let entry = body.blocks.first().expect("verified non-empty body").id;
+    let mut reachable = BTreeSet::from([entry]);
+    let mut pending = vec![entry];
+    let mut predecessors = BTreeMap::<BlockId, BTreeSet<BlockId>>::new();
+    while let Some(block_id) = pending.pop() {
+        let block = blocks[&block_id];
+        for successor in block
+            .terminator
+            .as_ref()
+            .expect("verified terminator")
+            .successors()
+            .into_iter()
+            .collect::<BTreeSet<_>>()
+        {
+            predecessors.entry(successor).or_default().insert(block_id);
+            if reachable.insert(successor) {
+                pending.push(successor);
+            }
+        }
+    }
+
+    let mut indegrees = reachable
+        .iter()
+        .map(|block| {
+            let count = predecessors
+                .get(block)
+                .map_or(0, |incoming| incoming.intersection(&reachable).count());
+            (*block, count)
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut ready = indegrees
+        .iter()
+        .filter_map(|(block, count)| (*count == 0).then_some(*block))
+        .collect::<Vec<_>>();
+    let mut visited = 0usize;
+    while let Some(block_id) = ready.pop() {
+        visited += 1;
+        let block = blocks[&block_id];
+        for successor in block
+            .terminator
+            .as_ref()
+            .expect("verified terminator")
+            .successors()
+            .into_iter()
+            .collect::<BTreeSet<_>>()
+        {
+            let count = indegrees
+                .get_mut(&successor)
+                .expect("reachable successor has an indegree");
+            *count -= 1;
+            if *count == 0 {
+                ready.push(successor);
+            }
+        }
+    }
+    if visited != reachable.len() {
+        return Err(LoweringErrors::one(
+            lowerer.function_location(),
+            LoweringDiagnosticCode::UnprovenBarrierConvergence,
+            "workgroup barriers in cyclic control flow require a compatible dynamic-order proof",
+        ));
+    }
+
+    let mut unconditional_chain = BTreeSet::new();
+    let mut current = entry;
+    loop {
+        if !unconditional_chain.insert(current) {
+            break;
+        }
+        let block = blocks[&current];
+        let Some(Terminator::Branch { target, .. }) = &block.terminator else {
+            break;
+        };
+        if predecessors
+            .get(target)
+            .is_none_or(|incoming| incoming.len() != 1 || !incoming.contains(&current))
+        {
+            break;
+        }
+        current = *target;
+    }
+
+    if let Some((block, operation)) = barriers
+        .into_iter()
+        .find(|(block, _)| !unconditional_chain.contains(block))
+    {
+        return Err(LoweringErrors::one(
+            lowerer.operation_location(block, operation),
+            LoweringDiagnosticCode::UnprovenBarrierConvergence,
+            "workgroup barrier is not on the acyclic unconditional entry chain; no uniformity is inferred from branch values",
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1426,6 +1558,91 @@ impl<'a> FunctionLowerer<'a> {
         )
     }
 
+    fn declares_capability(&self, required: &TargetCapability) -> bool {
+        self.module
+            .required_capabilities
+            .iter()
+            .chain(&self.function.required_capabilities)
+            .chain(
+                self.kernel
+                    .into_iter()
+                    .flat_map(|kernel| &kernel.required_capabilities),
+            )
+            .any(|declared| declared == required)
+    }
+
+    fn validate_operation_capability_declarations(
+        &self,
+        operation: &Operation,
+        location: &LoweringLocation,
+    ) -> Result<(), LoweringErrors> {
+        if !matches!(
+            operation.kind,
+            OperationKind::Fence(_)
+                | OperationKind::WorkgroupBarrier(_)
+                | OperationKind::WorkgroupMemory(_)
+        ) {
+            return Ok(());
+        }
+        for required in operation
+            .required_capabilities()
+            .into_iter()
+            .filter(|capability| {
+                matches!(
+                    capability,
+                    TargetCapability::WorkgroupMemory
+                        | TargetCapability::DynamicWorkgroupMemory
+                        | TargetCapability::WorkgroupBarrier
+                )
+            })
+        {
+            if !self.declares_capability(&required) {
+                return Err(LoweringErrors::one(
+                    location.clone(),
+                    LoweringDiagnosticCode::UnsupportedCapability,
+                    format!(
+                        "AMDGPU lowering requires an explicit {required:?} capability declaration"
+                    ),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_lds_addressability(&self) -> Result<(), LoweringErrors> {
+        let body = self.function.body.as_ref().expect("definition required");
+        let mut static_end = 0u64;
+        for block in &body.blocks {
+            for (operation_index, operation) in block.operations.iter().enumerate() {
+                let OperationKind::WorkgroupMemory(memory) = &operation.kind else {
+                    continue;
+                };
+                let alignment = u64::from(memory.alignment);
+                let padding = (alignment - static_end % alignment) % alignment;
+                static_end = static_end
+                    .checked_add(padding)
+                    .expect("u32 LDS alignments cannot overflow u64");
+                if let WorkgroupMemoryExtent::Static(elements) = memory.extent {
+                    let element_bytes = amdgpu_lds_element_bytes(&memory.element)
+                        .expect("operation preflight accepted the LDS element type");
+                    static_end = static_end
+                        .checked_add(u64::from(elements) * element_bytes)
+                        .expect("u32 LDS extents cannot overflow u64");
+                }
+                if static_end > u64::from(u32::MAX) {
+                    return Err(LoweringErrors::one(
+                        self.operation_location(block.id, operation_index),
+                        LoweringDiagnosticCode::UnsupportedWorkgroupMemory,
+                        format!(
+                            "LDS declarations require at least {static_end} bytes, exceeding the AMDGPU 32-bit LDS address space"
+                        ),
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn validate_parameters(&mut self) -> Result<(), LoweringErrors> {
         let body = self.function.body.as_ref().expect("definition required");
         for (index, (value, ty)) in body
@@ -1650,6 +1867,7 @@ impl<'a> FunctionLowerer<'a> {
         operation: &Operation,
     ) -> Result<(), LoweringErrors> {
         let location = self.operation_location(block, index);
+        self.validate_operation_capability_declarations(operation, &location)?;
         match &operation.kind {
             OperationKind::Constant(constant) => {
                 validate_constant(constant).map_err(|message| {
@@ -1747,6 +1965,18 @@ impl<'a> FunctionLowerer<'a> {
                         format!(
                             "AMDGPU LDS lowering does not support element type {:?}",
                             memory.element
+                        ),
+                    ));
+                }
+                let natural_alignment = amdgpu_lds_element_bytes(&memory.element)
+                    .expect("supported LDS types have a fixed AMDGPU size");
+                if u64::from(memory.alignment) < natural_alignment {
+                    return Err(LoweringErrors::one(
+                        location,
+                        LoweringDiagnosticCode::UnsupportedWorkgroupMemory,
+                        format!(
+                            "LDS element type {:?} requires alignment {natural_alignment}, found {}",
+                            memory.element, memory.alignment
                         ),
                     ));
                 }
@@ -2820,6 +3050,16 @@ fn supported_integer(scalar: ScalarType) -> bool {
 
 fn supported_memory_type(ty: &Type) -> bool {
     matches!(ty, Type::Scalar(scalar) if supported_integer(*scalar) || *scalar == ScalarType::F32)
+}
+
+fn amdgpu_lds_element_bytes(ty: &Type) -> Option<u64> {
+    match ty {
+        Type::Scalar(ScalarType::I8 | ScalarType::U8) => Some(1),
+        Type::Scalar(ScalarType::I16 | ScalarType::U16) => Some(2),
+        Type::Scalar(ScalarType::I32 | ScalarType::U32 | ScalarType::F32) => Some(4),
+        Type::Scalar(ScalarType::I64 | ScalarType::U64 | ScalarType::Index) => Some(8),
+        _ => None,
+    }
 }
 
 fn supported_atomic_capability(

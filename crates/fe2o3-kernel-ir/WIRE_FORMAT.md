@@ -263,6 +263,13 @@ arguments.
 | 11 | `Extension` | `text namespace, text name` |
 | 12 (V2) | `WaveWidth` | `u8 width`, where `Wave32=1`, `Wave64=2` |
 
+Capability sets are encoded in strict `TargetCapability` order and reject
+duplicates. Their semantic closure is verified after decoding: in particular,
+`DynamicWorkgroupMemory` without `WorkgroupMemory` is malformed, and
+synchronization operations over workgroup memory derive `WorkgroupMemory` even
+when a producer omitted that declaration. Wire decoding alone grants no target
+or lowering authority.
+
 ## Resource Bounds
 
 | Resource | Maximum |

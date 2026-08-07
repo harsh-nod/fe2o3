@@ -31,13 +31,32 @@ Workgroup barriers lower to release/acquire fences around the convergent
 a conservatively stronger LLVM fence because LLVM fences do not carry the
 Kernel IR address-space set.
 
+The convergence marker is necessary but not sufficient for emission. G1
+independently accepts barriers only on an acyclic unconditional chain from the
+kernel entry. It rejects barriers reached through a conditional edge, in a
+cycle, in an unreachable block, or in a function containing an unsummarized
+call. This deliberately does not infer uniformity from branch value types;
+future accepted control flow must arrive with separately bound analysis or
+proof evidence.
+
+Static LDS lowers to an internal address-space-3 array. The one dynamic form is
+an external zero-length address-space-3 array, matching LLVM AMDGPU dynamic LDS
+semantics. Both forms require explicit operation-covering capability
+declarations before emission. Element alignment must be at least its AMDGPU
+natural alignment, and the declaration sequence must remain representable in
+the 32-bit LDS address space. Exact processor LDS capacity and dynamic launch
+bytes remain target and host-admission obligations; this textual lowering does
+not grant them.
+
 G1 rejects declarations, non-void entries, 2D/3D domains, missing or oversized
 workgroup sizes, unsupported capabilities, unsafe unquoted symbols, entry or
 predecessorless block arguments, duplicate edges into a block with arguments,
 private/constant/generic memory, unsupported scalar types, legacy barriers
-without convergence evidence, scoped atomics, ambiguous workgroup `Alloca`,
-and every operation not explicitly listed above. It does not select a GPU
-processor, invoke LLVM, produce an artifact, or grant launch authority.
+without convergence evidence, unproved barrier control flow, missing LDS or
+barrier capability declarations, under-aligned or unaddressable LDS, scoped
+atomics, ambiguous workgroup `Alloca`, and every operation not explicitly
+listed above. It does not select a GPU processor, invoke LLVM, produce an
+artifact, or grant launch authority.
 
 ## Inert compiler-module construction
 
