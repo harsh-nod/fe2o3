@@ -4,6 +4,7 @@ mod example_manifest;
 mod inspect;
 mod tool_commands;
 mod worker_v2;
+mod worker_v2_restart;
 
 use std::env;
 use std::io::Read;
