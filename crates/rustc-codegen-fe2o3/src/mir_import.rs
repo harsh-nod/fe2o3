@@ -2,6 +2,7 @@ use crate::collector::CollectionResult;
 use crate::trusted_device_items::{self, TrustedDeviceItem};
 use dialect_mir::{MirAttr, MirOp, MirOpRecord, MirType};
 use fe2o3_compiler_ffi::CodeObjectVersion;
+use fe2o3_rustc_front::FunctionIdentityV1;
 use reserved_fe2o3_symbols::{
     DEVICE_FFI_DIRECTION_IMPORT_V1, DeviceFfiContractFieldsV1, DeviceFfiContractIdV1,
     DeviceFfiEffectsV1, DeviceFfiPhysicalAbiV1, derive_device_ffi_contract_id_v1,
@@ -16,8 +17,12 @@ use rustc_middle::mir::{
 use rustc_middle::ty::{
     FloatTy, Instance, IntTy, Mutability, Ty, TyCtxt, TyKind, TypingEnv, UintTy,
 };
+use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt::{self, Write};
+
+const MIR_FUNCTION_IDENTITY_DOMAIN_V1: &[u8] = b"fe2o3.mir-function-identity.v1\0";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MirModule {
@@ -610,15 +615,7 @@ pub fn import_collection<'tcx>(
             }
 
             let body = tcx.instance_mir(function.instance.def);
-            let rust_path = if def_id.krate == LOCAL_CRATE {
-                format!(
-                    "{}::{}",
-                    tcx.crate_name(LOCAL_CRATE),
-                    tcx.def_path_str(def_id)
-                )
-            } else {
-                tcx.def_path_str(def_id)
-            };
+            let rust_path = imported_rust_path(tcx, def_id);
             Some(import_body(
                 tcx,
                 body,
@@ -631,7 +628,16 @@ pub fn import_collection<'tcx>(
         })
         .collect();
 
-    Ok(MirModule { functions })
+    MirModule::from_functions_v1(functions)
+}
+
+fn imported_rust_path(tcx: TyCtxt<'_>, def_id: rustc_hir::def_id::DefId) -> String {
+    let path = tcx.def_path_str(def_id);
+    if def_id.krate == LOCAL_CRATE {
+        format!("{}::{path}", tcx.crate_name(LOCAL_CRATE))
+    } else {
+        path
+    }
 }
 
 fn import_function_kind(role: crate::collector::CollectedFunctionRole) -> MirFunctionKind {
@@ -645,6 +651,65 @@ fn import_function_kind(role: crate::collector::CollectedFunctionRole) -> MirFun
 }
 
 impl MirModule {
+    fn from_functions_v1(mut functions: Vec<MirFunction>) -> Result<Self, MirImportError> {
+        if functions.is_empty() {
+            return Err(MirImportError::new(
+                "MIR module contains no imported functions",
+            ));
+        }
+
+        let mut exports = BTreeMap::new();
+        let mut kernel_paths = BTreeMap::new();
+        let mut identities = BTreeSet::new();
+        let mut kernel_count = 0_usize;
+        for function in &functions {
+            function.validate_identity_fields_v1()?;
+            if let Some(previous) = exports.insert(&function.export_name, &function.rust_path) {
+                return Err(MirImportError::new(format!(
+                    "duplicate function export `{}` for source functions `{previous}` and `{}`",
+                    function.export_name, function.rust_path
+                )));
+            }
+
+            let identity = function.source_identity_v1()?;
+            if !identities.insert(identity) {
+                return Err(MirImportError::new(format!(
+                    "duplicate MIR function identity {} for `{}`",
+                    function_identity_hex_v1(identity),
+                    function.rust_path
+                )));
+            }
+
+            if function.kind == MirFunctionKind::KernelEntry {
+                kernel_count += 1;
+                if let Some(previous) =
+                    kernel_paths.insert(&function.rust_path, &function.export_name)
+                {
+                    return Err(MirImportError::new(format!(
+                        "ambiguous kernel roots `{previous}` and `{}` select the same source function `{}`",
+                        function.export_name, function.rust_path
+                    )));
+                }
+            }
+        }
+        if kernel_count == 0 {
+            return Err(MirImportError::new("MIR module contains no kernel root"));
+        }
+
+        functions.sort_by(|lhs, rhs| {
+            lhs.kind
+                .canonical_order_v1()
+                .cmp(&rhs.kind.canonical_order_v1())
+                .then_with(|| {
+                    lhs.source_identity_bytes_v1()
+                        .cmp(&rhs.source_identity_bytes_v1())
+                })
+                .then_with(|| lhs.export_name.cmp(&rhs.export_name))
+                .then_with(|| lhs.rust_path.cmp(&rhs.rust_path))
+        });
+        Ok(Self { functions })
+    }
+
     pub fn summary(&self) -> String {
         let record_count = self.dialect_records().len();
         let mut output = format!(
@@ -664,6 +729,13 @@ impl MirModule {
                 MirOp::Func.name()
             );
             let _ = writeln!(output, "      path: {}", function.rust_path);
+            if let Ok(identity) = function.source_identity_v1() {
+                let _ = writeln!(
+                    output,
+                    "      source identity v1: {}",
+                    function_identity_hex_v1(identity)
+                );
+            }
             let _ = writeln!(
                 output,
                 "      MIR:  {} bb, {} locals, {} args",
@@ -714,9 +786,22 @@ impl MirModule {
     }
 
     pub fn dialect_records(&self) -> Vec<MirOpRecord> {
+        let source_identities = self.source_identities_by_path_v1();
+        let kernel_count = self
+            .functions
+            .iter()
+            .filter(|function| function.kind == MirFunctionKind::KernelEntry)
+            .count();
+        let helper_count = self
+            .functions
+            .iter()
+            .filter(|function| function.kind == MirFunctionKind::InternalHelper)
+            .count();
         let mut records = vec![
             MirOpRecord::new(MirOp::Module)
-                .with_attr(MirAttr::usize("functions", self.functions.len())),
+                .with_attr(MirAttr::usize("functions", self.functions.len()))
+                .with_attr(MirAttr::usize("kernel_roots", kernel_count))
+                .with_attr(MirAttr::usize("internal_helpers", helper_count)),
         ];
 
         for function in &self.functions {
@@ -726,14 +811,20 @@ impl MirModule {
                 MirFunctionKind::KernelEntry => "kernel",
                 MirFunctionKind::InternalHelper | MirFunctionKind::DeviceFfiExport => "device",
             };
-            records.push(
-                MirOpRecord::new(MirOp::Func)
-                    .with_attr(MirAttr::string("symbol", &function.export_name))
-                    .with_attr(MirAttr::string("kind", kind))
-                    .with_attr(MirAttr::usize("args", function.arg_count))
-                    .with_attr(MirAttr::usize("locals", function.local_count))
-                    .with_attr(MirAttr::usize("blocks", function.blocks.len())),
-            );
+            let mut function_record = MirOpRecord::new(MirOp::Func)
+                .with_attr(MirAttr::string("symbol", &function.export_name))
+                .with_attr(MirAttr::string("kind", kind))
+                .with_attr(MirAttr::string("rust_path", &function.rust_path))
+                .with_attr(MirAttr::usize("args", function.arg_count))
+                .with_attr(MirAttr::usize("locals", function.local_count))
+                .with_attr(MirAttr::usize("blocks", function.blocks.len()));
+            if let Ok(identity) = function.source_identity_v1() {
+                function_record.attrs.push(MirAttr::string(
+                    "source_identity_v1",
+                    function_identity_hex_v1(identity),
+                ));
+            }
+            records.push(function_record);
 
             for local in &function.locals {
                 let role = match local.role {
@@ -773,13 +864,88 @@ impl MirModule {
                 }
 
                 if let Some(terminator) = &block.terminator {
-                    records.push(terminator.kind.record(&function.export_name, block.index));
+                    records.push(terminator.kind.record(
+                        &function.export_name,
+                        block.index,
+                        &source_identities,
+                    ));
                 }
             }
         }
 
         records
     }
+
+    fn source_identities_by_path_v1(&self) -> BTreeMap<&str, Option<FunctionIdentityV1>> {
+        let mut identities = BTreeMap::new();
+        for function in &self.functions {
+            let identity = function.source_identity_v1().ok();
+            identities
+                .entry(function.rust_path.as_str())
+                .and_modify(|existing| *existing = None)
+                .or_insert(identity);
+        }
+        identities
+    }
+}
+
+impl MirFunction {
+    fn validate_identity_fields_v1(&self) -> Result<(), MirImportError> {
+        for (field, value) in [
+            ("function export", self.export_name.as_str()),
+            ("source function path", self.rust_path.as_str()),
+        ] {
+            if value.is_empty() {
+                return Err(MirImportError::new(format!("{field} must not be empty")));
+            }
+            if value.chars().any(char::is_control) {
+                return Err(MirImportError::new(format!(
+                    "{field} `{value:?}` contains control characters"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    fn source_identity_v1(&self) -> Result<FunctionIdentityV1, MirImportError> {
+        FunctionIdentityV1::new(self.source_identity_bytes_v1()).map_err(|error| {
+            MirImportError::new(format!(
+                "invalid source identity for `{}`: {error}",
+                self.rust_path
+            ))
+        })
+    }
+
+    fn source_identity_bytes_v1(&self) -> [u8; 32] {
+        let mut digest = Sha256::new();
+        append_identity_field_v1(&mut digest, MIR_FUNCTION_IDENTITY_DOMAIN_V1);
+        append_identity_field_v1(&mut digest, self.rust_path.as_bytes());
+        append_identity_field_v1(&mut digest, self.export_name.as_bytes());
+        digest.finalize().into()
+    }
+}
+
+impl MirFunctionKind {
+    const fn canonical_order_v1(self) -> u8 {
+        match self {
+            Self::KernelEntry => 0,
+            Self::InternalHelper => 1,
+            Self::DeviceFfiExport => 2,
+        }
+    }
+}
+
+fn append_identity_field_v1(digest: &mut Sha256, field: &[u8]) {
+    digest.update(u64::try_from(field.len()).unwrap_or(u64::MAX).to_le_bytes());
+    digest.update(field);
+}
+
+fn function_identity_hex_v1(identity: FunctionIdentityV1) -> String {
+    let mut encoded = String::with_capacity(64);
+    for byte in identity.as_bytes() {
+        let _ = write!(encoded, "{byte:02x}");
+    }
+    encoded
 }
 
 impl MirStatement {
@@ -1016,7 +1182,12 @@ impl MirOperandRef {
 }
 
 impl MirTerminatorKind {
-    fn record(&self, function: &str, block: usize) -> MirOpRecord {
+    fn record(
+        &self,
+        function: &str,
+        block: usize,
+        source_identities: &BTreeMap<&str, Option<FunctionIdentityV1>>,
+    ) -> MirOpRecord {
         let mut record = MirOpRecord::new(self.dialect_op())
             .with_attr(MirAttr::string("function", function))
             .with_attr(MirAttr::usize("block", block));
@@ -1040,6 +1211,12 @@ impl MirTerminatorKind {
                     record
                         .attrs
                         .push(MirAttr::string("callee", callee.identity()));
+                    if let Some(Some(identity)) = source_identities.get(callee.identity()) {
+                        record.attrs.push(MirAttr::string(
+                            "callee_source_identity_v1",
+                            function_identity_hex_v1(*identity),
+                        ));
+                    }
                     if let Some(import) = callee.external_import_evidence() {
                         record.attrs.push(MirAttr::string(
                             "device_ffi_contract",
@@ -1695,7 +1872,7 @@ fn call_identity<'tcx>(
         {
             MirCallee::external_import(import)
         } else {
-            MirCallee::untrusted(tcx.def_path_str(resolved_def_id))
+            MirCallee::untrusted(imported_rust_path(tcx, resolved_def_id))
         },
     )
 }
@@ -2150,6 +2327,272 @@ mod tests {
         assert_eq!(load.lowering_op(), Some(MirOp::Load));
         assert_eq!(store.lowering_op(), Some(MirOp::Store));
         assert_eq!(compare.lowering_op(), Some(MirOp::Lt));
+    }
+
+    #[test]
+    fn general_two_kernel_shared_helper_is_represented_once_by_source_identity() {
+        let helper = general_two_kernel_function(
+            "shared_helper",
+            "tests::shared_helper",
+            MirFunctionKind::InternalHelper,
+            None,
+        );
+        let helper_identity = function_identity_hex_v1(helper.source_identity_v1().unwrap());
+        let module = MirModule::from_functions_v1(vec![
+            general_two_kernel_function(
+                "zeta",
+                "tests::kernel_zeta",
+                MirFunctionKind::KernelEntry,
+                Some("tests::shared_helper"),
+            ),
+            helper,
+            general_two_kernel_function(
+                "alpha",
+                "tests::kernel_alpha",
+                MirFunctionKind::KernelEntry,
+                Some("tests::shared_helper"),
+            ),
+        ])
+        .unwrap();
+
+        assert_eq!(
+            module
+                .functions
+                .iter()
+                .filter(|function| function.kind == MirFunctionKind::KernelEntry)
+                .count(),
+            2
+        );
+        assert_eq!(
+            module
+                .functions
+                .iter()
+                .filter(|function| function.kind == MirFunctionKind::InternalHelper)
+                .count(),
+            1
+        );
+
+        let records = module.dialect_records();
+        assert_eq!(record_usize(&records[0], "kernel_roots"), Some(2));
+        assert_eq!(record_usize(&records[0], "internal_helpers"), Some(1));
+        let helper_record = records
+            .iter()
+            .find(|record| {
+                record.op == MirOp::Func && record_string(record, "symbol") == Some("shared_helper")
+            })
+            .unwrap();
+        assert_eq!(
+            record_string(helper_record, "source_identity_v1"),
+            Some(helper_identity.as_str())
+        );
+        let calls = records
+            .iter()
+            .filter(|record| record.op == MirOp::Call)
+            .collect::<Vec<_>>();
+        assert_eq!(calls.len(), 2);
+        assert!(calls.iter().all(|call| {
+            record_string(call, "callee") == Some("tests::shared_helper")
+                && record_string(call, "callee_source_identity_v1")
+                    == Some(helper_identity.as_str())
+        }));
+    }
+
+    #[test]
+    fn general_two_kernel_serialization_is_deterministic_for_all_input_orders() {
+        let functions = [
+            general_two_kernel_function(
+                "kernel_a",
+                "tests::kernel_a",
+                MirFunctionKind::KernelEntry,
+                Some("tests::shared"),
+            ),
+            general_two_kernel_function(
+                "kernel_b",
+                "tests::kernel_b",
+                MirFunctionKind::KernelEntry,
+                Some("tests::shared"),
+            ),
+            general_two_kernel_function(
+                "shared",
+                "tests::shared",
+                MirFunctionKind::InternalHelper,
+                None,
+            ),
+        ];
+        let permutations = [
+            [0, 1, 2],
+            [0, 2, 1],
+            [1, 0, 2],
+            [1, 2, 0],
+            [2, 0, 1],
+            [2, 1, 0],
+        ];
+        let expected = MirModule::from_functions_v1(
+            permutations[0]
+                .iter()
+                .map(|index| functions[*index].clone())
+                .collect(),
+        )
+        .unwrap()
+        .dialect_records();
+
+        for permutation in permutations.into_iter().skip(1) {
+            let records = MirModule::from_functions_v1(
+                permutation
+                    .iter()
+                    .map(|index| functions[*index].clone())
+                    .collect(),
+            )
+            .unwrap()
+            .dialect_records();
+            assert_eq!(records, expected);
+        }
+    }
+
+    #[test]
+    fn general_two_kernel_malformed_and_duplicate_roots_fail_closed() {
+        let malformed =
+            general_two_kernel_function("kernel", "", MirFunctionKind::KernelEntry, None);
+        assert!(
+            MirModule::from_functions_v1(vec![malformed])
+                .unwrap_err()
+                .to_string()
+                .contains("source function path must not be empty")
+        );
+
+        let duplicate_export = MirModule::from_functions_v1(vec![
+            general_two_kernel_function("same", "tests::first", MirFunctionKind::KernelEntry, None),
+            general_two_kernel_function(
+                "same",
+                "tests::second",
+                MirFunctionKind::KernelEntry,
+                None,
+            ),
+        ])
+        .unwrap_err();
+        assert!(
+            duplicate_export
+                .to_string()
+                .contains("duplicate function export `same`")
+        );
+
+        let ambiguous_source = MirModule::from_functions_v1(vec![
+            general_two_kernel_function(
+                "first",
+                "tests::same_root",
+                MirFunctionKind::KernelEntry,
+                None,
+            ),
+            general_two_kernel_function(
+                "second",
+                "tests::same_root",
+                MirFunctionKind::KernelEntry,
+                None,
+            ),
+        ])
+        .unwrap_err();
+        assert!(
+            ambiguous_source
+                .to_string()
+                .contains("select the same source function `tests::same_root`")
+        );
+
+        let helper_only = general_two_kernel_function(
+            "helper",
+            "tests::helper",
+            MirFunctionKind::InternalHelper,
+            None,
+        );
+        assert_eq!(
+            MirModule::from_functions_v1(vec![helper_only])
+                .unwrap_err()
+                .to_string(),
+            "MIR module contains no kernel root"
+        );
+    }
+
+    #[test]
+    fn general_two_kernel_order_places_canonical_roots_before_shared_helpers() {
+        let module = MirModule::from_functions_v1(vec![
+            general_two_kernel_function(
+                "helper",
+                "tests::helper",
+                MirFunctionKind::InternalHelper,
+                None,
+            ),
+            general_two_kernel_function(
+                "second",
+                "tests::second",
+                MirFunctionKind::KernelEntry,
+                Some("tests::helper"),
+            ),
+            general_two_kernel_function(
+                "first",
+                "tests::first",
+                MirFunctionKind::KernelEntry,
+                Some("tests::helper"),
+            ),
+        ])
+        .unwrap();
+
+        assert_eq!(module.functions[2].kind, MirFunctionKind::InternalHelper);
+        let root_identities = module.functions[..2]
+            .iter()
+            .map(|function| function.source_identity_v1().unwrap())
+            .collect::<Vec<_>>();
+        assert!(root_identities.windows(2).all(|pair| pair[0] < pair[1]));
+    }
+
+    fn general_two_kernel_function(
+        export_name: &str,
+        rust_path: &str,
+        kind: MirFunctionKind,
+        callee: Option<&str>,
+    ) -> MirFunction {
+        let blocks = if let Some(callee) = callee {
+            vec![
+                MirBlock {
+                    index: 0,
+                    statements: Vec::new(),
+                    terminator: Some(MirTerminator {
+                        kind: MirTerminatorKind::Call {
+                            callee: Some(MirCallee::untrusted_for_test(callee)),
+                            target: Some(1),
+                            destination: Some(local_place(0)),
+                            operands: vec![MirOperandRef::Place(local_place(1))],
+                        },
+                        source: None,
+                    }),
+                },
+                MirBlock {
+                    index: 1,
+                    statements: Vec::new(),
+                    terminator: Some(MirTerminator {
+                        kind: MirTerminatorKind::Return,
+                        source: None,
+                    }),
+                },
+            ]
+        } else {
+            vec![MirBlock {
+                index: 0,
+                statements: Vec::new(),
+                terminator: Some(MirTerminator {
+                    kind: MirTerminatorKind::Return,
+                    source: None,
+                }),
+            }]
+        };
+        MirFunction {
+            export_name: export_name.to_owned(),
+            rust_path: rust_path.to_owned(),
+            kind,
+            arg_count: 1,
+            local_count: 2,
+            locals: Vec::new(),
+            blocks,
+            frontend_contract: None,
+        }
     }
 
     fn simple_statement(index: usize, kind: MirStatementKind) -> MirStatement {
