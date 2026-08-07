@@ -5,12 +5,13 @@ use std::fmt::Write as _;
 
 use fe2o3_kernel_ir::{
     AddressSpace as KernelAddressSpace, Atomic, AtomicKind, Axis, BasicBlock, BinaryOp, BlockId,
-    CastKind, ComparePredicate, Constant, DiagnosticCode as VerificationDiagnosticCode, Function,
+    CastKind, ComparePredicate, Constant, DiagnosticCode as VerificationDiagnosticCode,
+    F32MathFunction, F32MathImplementation, FloatConversionKind, FloatOperation, Function,
     FunctionId, FunctionRole, IndexKind, IntrinsicKind, Kernel, KernelId, LaunchDomain,
-    LaunchExtent, MemoryOrdering, Module, ModuleId, Operation, OperationKind, ScalarType,
-    Signature, SynchronizationScope, TargetCapability, Terminator, Type, ValueId,
-    VerificationErrors, WaveOperation, WaveOperationKind, WaveWidth, WorkgroupMemoryExtent,
-    WorkgroupSize, verify_module,
+    LaunchExtent, MemoryOrdering, Module, ModuleId, NarrowFloatFormat, Operation, OperationKind,
+    ScalarType, Signature, SynchronizationScope, TargetCapability, Terminator, Type, ValueId,
+    VerificationErrors, WaveOperation, WaveOperationKind, WaveWidth, WidenedFloatBinaryOp,
+    WorkgroupMemoryExtent, WorkgroupSize, verify_module,
 };
 
 use crate::{AMDGPU_TRIPLE, AmdgcnIntrinsic, Dim};
@@ -21,6 +22,27 @@ const MAX_COMPILER_MODULE_GRAPH_KERNELS: usize = 256;
 const MAX_COMPILER_MODULE_CALL_EDGES: usize = 131_072;
 /// Maximum textual LLVM bytes returned by compiler-module construction.
 pub const MAX_COMPILER_MODULE_TEXT_BYTES: usize = 16 * 1024 * 1024;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LoweringTarget {
+    Baseline,
+    Gfx942StrictFloatV1,
+}
+
+impl LoweringTarget {
+    const fn supports_narrow_float(self) -> bool {
+        matches!(self, Self::Gfx942StrictFloatV1)
+    }
+
+    const fn llvm_function_attributes(self) -> &'static str {
+        match self {
+            Self::Baseline => "",
+            Self::Gfx942StrictFloatV1 => {
+                " \"target-cpu\"=\"gfx942\" \"denormal-fp-math-f32\"=\"ieee,ieee\" \"unsafe-fp-math\"=\"false\" \"no-infs-fp-math\"=\"false\" \"no-nans-fp-math\"=\"false\" \"no-signed-zeros-fp-math\"=\"false\" \"approx-func-fp-math\"=\"false\""
+            }
+        }
+    }
+}
 
 /// Stable rejection categories for the first target-neutral AMDGPU lowering slice.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -49,6 +71,7 @@ pub enum LoweringDiagnosticCode {
     UnprovenBarrierConvergence,
     UnsupportedWorkgroupMemory,
     UnsupportedWaveOperation,
+    UnsupportedFloatOperation,
     UnsupportedCast,
     UnsupportedConstant,
     UnsupportedTerminator,
@@ -254,6 +277,27 @@ pub fn lower_kernel_to_llvm_ir(
     module: &Module,
     kernel_id: &KernelId,
 ) -> Result<String, LoweringErrors> {
+    lower_kernel_to_llvm_ir_for_target(module, kernel_id, LoweringTarget::Baseline)
+}
+
+/// Lowers one kernel for the strict gfx942 floating-point profile.
+///
+/// This profile fixes the processor, preserves `f32` denormals, disables fast-math assumptions,
+/// and admits only the explicit floating-point contracts represented by [`FloatOperation`].
+/// OCML calls remain unresolved declarations and must be closed by an authenticated direct-LLVM
+/// link plan before the module can become executable.
+pub fn lower_kernel_to_gfx942_llvm_ir(
+    module: &Module,
+    kernel_id: &KernelId,
+) -> Result<String, LoweringErrors> {
+    lower_kernel_to_llvm_ir_for_target(module, kernel_id, LoweringTarget::Gfx942StrictFloatV1)
+}
+
+fn lower_kernel_to_llvm_ir_for_target(
+    module: &Module,
+    kernel_id: &KernelId,
+    target: LoweringTarget,
+) -> Result<String, LoweringErrors> {
     verify_module(module).map_err(LoweringErrors::verification)?;
 
     let matches = module
@@ -286,16 +330,25 @@ pub fn lower_kernel_to_llvm_ir(
             "kernel identity is not a safe unquoted LLVM symbol",
         ));
     }
+    if is_reserved_float_support_symbol(kernel.id.as_str()) {
+        return Err(LoweringErrors::one(
+            LoweringLocation::kernel(module, kernel),
+            LoweringDiagnosticCode::ConflictingSymbol,
+            "kernel identity collides with reserved gfx942 floating-point support",
+        ));
+    }
 
     let module_wave = validate_capabilities(
         LoweringLocation::module(module),
         &module.required_capabilities,
         "module",
+        target,
     )?;
     let kernel_wave = validate_capabilities(
         LoweringLocation::kernel(module, kernel),
         &kernel.required_capabilities,
         "kernel",
+        target,
     )?;
 
     let workgroup_size = validate_launch(module, kernel)?;
@@ -316,6 +369,7 @@ pub fn lower_kernel_to_llvm_ir(
         LoweringLocation::function(module, kernel, entry),
         &entry.required_capabilities,
         "entry function",
+        target,
     )?;
     let wave_widths = [module_wave, kernel_wave, function_wave]
         .into_iter()
@@ -337,7 +391,8 @@ pub fn lower_kernel_to_llvm_ir(
         ));
     }
 
-    let mut lowerer = FunctionLowerer::new(module, kernel, entry, workgroup_size.x, wave_width);
+    let mut lowerer =
+        FunctionLowerer::new(module, kernel, entry, workgroup_size.x, wave_width, target);
     preflight_function(&mut lowerer)?;
     lowerer.emit()
 }
@@ -358,6 +413,18 @@ pub fn lower_kernel_to_llvm_ir(
 /// The text binds the AMDGPU target triple only. Target data layout, processor identity, and code
 /// object version are deliberately absent and remain blockers for artifact construction.
 pub fn lower_compiler_module_to_llvm_ir(module: &Module) -> Result<String, LoweringErrors> {
+    lower_compiler_module_to_llvm_ir_for_target(module, LoweringTarget::Baseline)
+}
+
+/// Lowers a complete compiler module for the strict gfx942 floating-point profile.
+pub fn lower_compiler_module_to_gfx942_llvm_ir(module: &Module) -> Result<String, LoweringErrors> {
+    lower_compiler_module_to_llvm_ir_for_target(module, LoweringTarget::Gfx942StrictFloatV1)
+}
+
+fn lower_compiler_module_to_llvm_ir_for_target(
+    module: &Module,
+    target: LoweringTarget,
+) -> Result<String, LoweringErrors> {
     if module.kernels.is_empty() {
         return Err(LoweringErrors::one(
             LoweringLocation::module(module),
@@ -371,6 +438,7 @@ pub fn lower_compiler_module_to_llvm_ir(module: &Module) -> Result<String, Lower
         LoweringLocation::module(module),
         &module.required_capabilities,
         "module",
+        target,
     )?;
     let mut kernels = module.kernels.iter().collect::<Vec<_>>();
     kernels.sort_by(|lhs, rhs| lhs.id.cmp(&rhs.id));
@@ -385,6 +453,13 @@ pub fn lower_compiler_module_to_llvm_ir(module: &Module) -> Result<String, Lower
                 LoweringLocation::kernel(module, kernel),
                 LoweringDiagnosticCode::UnsafeSymbolName,
                 "kernel identity is not a safe unquoted LLVM symbol",
+            ));
+        }
+        if is_reserved_float_support_symbol(kernel.id.as_str()) {
+            return Err(LoweringErrors::one(
+                LoweringLocation::kernel(module, kernel),
+                LoweringDiagnosticCode::ConflictingSymbol,
+                "kernel identity collides with reserved gfx942 floating-point support",
             ));
         }
         if let Some(previous) = entries.insert(kernel.entry.clone(), kernel) {
@@ -444,26 +519,44 @@ pub fn lower_compiler_module_to_llvm_ir(module: &Module) -> Result<String, Lower
                 "device function identity is not a safe unquoted LLVM symbol",
             ));
         }
+        if is_reserved_float_support_symbol(function.id.as_str()) {
+            return Err(LoweringErrors::one(
+                location,
+                LoweringDiagnosticCode::ConflictingSymbol,
+                "device function identity collides with reserved gfx942 floating-point support",
+            ));
+        }
         reserve_emitted_symbol(
             &mut emitted_symbols,
             function.id.as_str(),
             format!("device function {}", function.id),
             location.clone(),
         )?;
-        validate_device_signature(module, function)?;
+        validate_device_signature(module, function, target)?;
         call_symbols.insert(function.id.clone(), function.id.as_str().to_string());
         match function.role {
             FunctionRole::InternalHelper | FunctionRole::DeviceFfiExport => {
                 helper_definitions.push(*function);
             }
             FunctionRole::ExternalImport => {
-                if !function.required_capabilities.is_empty() {
+                if function.required_capabilities.iter().any(|capability| {
+                    !matches!(
+                        capability,
+                        TargetCapability::Float16 | TargetCapability::BFloat16
+                    )
+                }) {
                     return Err(LoweringErrors::one(
                         location,
                         LoweringDiagnosticCode::UnsupportedCapability,
-                        "external declarations cannot carry target capability claims in this textual compiler-module slice",
+                        "external declarations may carry only narrow-float ABI capabilities in the gfx942 textual compiler-module slice",
                     ));
                 }
+                validate_capabilities(
+                    location,
+                    &function.required_capabilities,
+                    "external declaration",
+                    target,
+                )?;
                 declarations.push(*function);
             }
             FunctionRole::KernelEntry => {
@@ -473,7 +566,7 @@ pub fn lower_compiler_module_to_llvm_ir(module: &Module) -> Result<String, Lower
     }
 
     let wave_plan =
-        infer_effective_wave_widths(module, module_wave, &kernels, &helper_definitions)?;
+        infer_effective_wave_widths(module, module_wave, &kernels, &helper_definitions, target)?;
 
     let mut kernel_lowerers = Vec::with_capacity(kernels.len());
     for kernel in &kernels {
@@ -489,6 +582,7 @@ pub fn lower_compiler_module_to_llvm_ir(module: &Module) -> Result<String, Lower
             workgroup_size.x,
             wave_width,
             &call_symbols,
+            target,
         );
         preflight_function(&mut lowerer)?;
         kernel_lowerers.push(lowerer);
@@ -502,12 +596,19 @@ pub fn lower_compiler_module_to_llvm_ir(module: &Module) -> Result<String, Lower
             function,
             wave_width,
             &call_symbols,
+            target,
         );
         preflight_function(&mut lowerer)?;
         helper_lowerers.push(lowerer);
     }
 
-    emit_compiler_module(module, &kernel_lowerers, &helper_lowerers, &declarations)
+    emit_compiler_module(
+        module,
+        &kernel_lowerers,
+        &helper_lowerers,
+        &declarations,
+        target,
+    )
 }
 
 fn reserve_emitted_symbol(
@@ -526,10 +627,14 @@ fn reserve_emitted_symbol(
     Ok(())
 }
 
-fn validate_device_signature(module: &Module, function: &Function) -> Result<(), LoweringErrors> {
+fn validate_device_signature(
+    module: &Module,
+    function: &Function,
+    target: LoweringTarget,
+) -> Result<(), LoweringErrors> {
     let location = LoweringLocation::device_function(module, function);
     for (index, ty) in function.signature.parameters.iter().enumerate() {
-        validate_device_abi_type(ty, &location).map_err(|error| {
+        validate_device_abi_type(ty, &location, target).map_err(|error| {
             LoweringErrors::one(
                 location.clone(),
                 LoweringDiagnosticCode::UnsupportedParameter,
@@ -545,7 +650,7 @@ fn validate_device_signature(module: &Module, function: &Function) -> Result<(),
         ));
     }
     if let Some(result) = function.signature.results.first() {
-        validate_device_abi_type(result, &location).map_err(|error| {
+        validate_device_abi_type(result, &location, target).map_err(|error| {
             LoweringErrors::one(
                 location,
                 LoweringDiagnosticCode::UnsupportedResults,
@@ -556,10 +661,16 @@ fn validate_device_signature(module: &Module, function: &Function) -> Result<(),
     Ok(())
 }
 
-fn validate_device_abi_type(ty: &Type, location: &LoweringLocation) -> Result<(), String> {
+fn validate_device_abi_type(
+    ty: &Type,
+    location: &LoweringLocation,
+    target: LoweringTarget,
+) -> Result<(), String> {
     match ty {
-        Type::Scalar(scalar) if supported_scalar(*scalar) => Ok(()),
-        Type::Pointer(_) => validate_pointer(ty, location).map_err(|error| error.to_string()),
+        Type::Scalar(scalar) if supported_scalar(*scalar, target) => Ok(()),
+        Type::Pointer(_) => {
+            validate_pointer(ty, location, target).map_err(|error| error.to_string())
+        }
         _ => Err(format!("{ty:?}")),
     }
 }
@@ -589,6 +700,7 @@ fn infer_effective_wave_widths(
     module_wave: Option<WaveWidth>,
     kernels: &[&Kernel],
     helpers: &[&Function],
+    target: LoweringTarget,
 ) -> Result<EffectiveWavePlan, LoweringErrors> {
     enforce_call_graph_limit(
         module,
@@ -637,6 +749,7 @@ fn infer_effective_wave_widths(
             LoweringLocation::device_function(module, function),
             &function.required_capabilities,
             "device function",
+            target,
         )?;
         component_claims[component_of[index]]
             .extend([module_wave, function_wave].into_iter().flatten());
@@ -656,11 +769,13 @@ fn infer_effective_wave_widths(
             LoweringLocation::kernel(module, kernel),
             &kernel.required_capabilities,
             "kernel",
+            target,
         )?;
         let entry_wave = validate_capabilities(
             LoweringLocation::function(module, kernel, entry),
             &entry.required_capabilities,
             "entry function",
+            target,
         )?;
         let root_wave = unique_wave_width(
             LoweringLocation::function(module, kernel, entry),
@@ -1093,6 +1208,496 @@ fn validate_barrier_convergence(lowerer: &FunctionLowerer<'_>) -> Result<(), Low
     Ok(())
 }
 
+#[derive(Default)]
+struct FloatRequirements {
+    conversions: BTreeSet<FloatConversionKind>,
+    widened_binary: BTreeSet<WidenedFloatBinaryOp>,
+    math: BTreeSet<F32MathFunction>,
+    packed_bf16_fma: bool,
+}
+
+impl FloatRequirements {
+    fn collect<'a>(lowerers: impl Iterator<Item = &'a FunctionLowerer<'a>>) -> Self {
+        let mut requirements = Self::default();
+        for lowerer in lowerers {
+            let body = lowerer.function.body.as_ref().expect("definition required");
+            for operation in body.blocks.iter().flat_map(|block| &block.operations) {
+                let OperationKind::Float(float) = &operation.kind else {
+                    continue;
+                };
+                match float {
+                    FloatOperation::Convert { kind, .. } => {
+                        requirements.conversions.insert(*kind);
+                    }
+                    FloatOperation::WidenedBinary { format, op, .. } => {
+                        requirements.widened_binary.insert(*op);
+                        match format {
+                            NarrowFloatFormat::F16 => {
+                                requirements.conversions.extend([
+                                    FloatConversionKind::F16ToF32,
+                                    FloatConversionKind::F32ToF16RoundTiesEven,
+                                ]);
+                            }
+                            NarrowFloatFormat::Bf16 => {
+                                requirements.conversions.extend([
+                                    FloatConversionKind::Bf16ToF32,
+                                    FloatConversionKind::F32ToBf16RoundTiesEven,
+                                ]);
+                            }
+                        }
+                    }
+                    FloatOperation::F32Math { function, .. } => {
+                        requirements.math.insert(*function);
+                    }
+                    FloatOperation::Bf16x2FusedMultiplyAdd { .. } => {
+                        requirements.packed_bf16_fma = true;
+                        requirements.conversions.extend([
+                            FloatConversionKind::Bf16ToF32,
+                            FloatConversionKind::F32ToBf16RoundTiesEven,
+                        ]);
+                        requirements.math.insert(F32MathFunction::FusedMultiplyAdd);
+                    }
+                }
+            }
+        }
+        requirements
+    }
+
+    fn is_empty(&self) -> bool {
+        self.conversions.is_empty()
+            && self.widened_binary.is_empty()
+            && self.math.is_empty()
+            && !self.packed_bf16_fma
+    }
+}
+
+fn emit_float_support_declarations(output: &mut dyn fmt::Write, requirements: &FloatRequirements) {
+    if requirements
+        .conversions
+        .contains(&FloatConversionKind::F16ToF32)
+    {
+        writeln!(output, "declare i32 @llvm.ctlz.i32(i32, i1 immarg)").unwrap();
+    }
+    for op in &requirements.widened_binary {
+        writeln!(
+            output,
+            "declare float @{}(float, float, metadata, metadata)",
+            constrained_binary_name(*op)
+        )
+        .unwrap();
+    }
+    for function in &requirements.math {
+        match function.required_implementation() {
+            F32MathImplementation::ConstrainedLlvm => {
+                let arguments = match function {
+                    F32MathFunction::Sqrt => "float, metadata, metadata",
+                    F32MathFunction::FusedMultiplyAdd => "float, float, float, metadata, metadata",
+                    F32MathFunction::Floor
+                    | F32MathFunction::Ceil
+                    | F32MathFunction::Truncate
+                    | F32MathFunction::RoundTiesEven => "float, metadata",
+                    _ => unreachable!("validated constrained function"),
+                };
+                writeln!(
+                    output,
+                    "declare float @{}({arguments})",
+                    constrained_math_name(*function)
+                )
+                .unwrap();
+            }
+            F32MathImplementation::OcmlAbiV1 => {
+                writeln!(output, "declare float @{}(float)", ocml_name(*function)).unwrap();
+            }
+        }
+    }
+}
+
+fn emit_float_support_definitions(
+    output: &mut dyn fmt::Write,
+    requirements: &FloatRequirements,
+    target: LoweringTarget,
+) {
+    let attributes = target.llvm_function_attributes();
+    if requirements
+        .conversions
+        .contains(&FloatConversionKind::F16ToF32)
+    {
+        writeln!(
+            output,
+            "define internal float @__fe2o3_f16_to_f32_v1(i16 %bits) alwaysinline nounwind{attributes} {{"
+        )
+        .unwrap();
+        writeln!(output, "entry:").unwrap();
+        writeln!(output, "  %wide = zext i16 %bits to i32").unwrap();
+        writeln!(output, "  %sign16 = and i32 %wide, 32768").unwrap();
+        writeln!(output, "  %sign = shl i32 %sign16, 16").unwrap();
+        writeln!(output, "  %exponent.shift = lshr i32 %wide, 10").unwrap();
+        writeln!(output, "  %exponent = and i32 %exponent.shift, 31").unwrap();
+        writeln!(output, "  %fraction = and i32 %wide, 1023").unwrap();
+        writeln!(output, "  %fraction.f32 = shl i32 %fraction, 13").unwrap();
+        writeln!(output, "  %normal.exponent.add = add i32 %exponent, 112").unwrap();
+        writeln!(
+            output,
+            "  %normal.exponent = shl i32 %normal.exponent.add, 23"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  %normal.payload = or i32 %normal.exponent, %fraction.f32"
+        )
+        .unwrap();
+        writeln!(output, "  %normal = or i32 %sign, %normal.payload").unwrap();
+        writeln!(
+            output,
+            "  %special.payload = or i32 2139095040, %fraction.f32"
+        )
+        .unwrap();
+        writeln!(output, "  %special = or i32 %sign, %special.payload").unwrap();
+        writeln!(
+            output,
+            "  %leading = call i32 @llvm.ctlz.i32(i32 %fraction, i1 false)"
+        )
+        .unwrap();
+        writeln!(output, "  %subnormal.shift = sub i32 %leading, 21").unwrap();
+        writeln!(
+            output,
+            "  %subnormal.normalized = shl i32 %fraction, %subnormal.shift"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  %subnormal.fraction16 = and i32 %subnormal.normalized, 1023"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  %subnormal.fraction = shl i32 %subnormal.fraction16, 13"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  %subnormal.exponent.raw = sub i32 113, %subnormal.shift"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  %subnormal.exponent = shl i32 %subnormal.exponent.raw, 23"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  %subnormal.payload = or i32 %subnormal.exponent, %subnormal.fraction"
+        )
+        .unwrap();
+        writeln!(output, "  %subnormal = or i32 %sign, %subnormal.payload").unwrap();
+        writeln!(output, "  %fraction.zero = icmp eq i32 %fraction, 0").unwrap();
+        writeln!(
+            output,
+            "  %zero.or.subnormal = select i1 %fraction.zero, i32 %sign, i32 %subnormal"
+        )
+        .unwrap();
+        writeln!(output, "  %exponent.zero = icmp eq i32 %exponent, 0").unwrap();
+        writeln!(
+            output,
+            "  %finite = select i1 %exponent.zero, i32 %zero.or.subnormal, i32 %normal"
+        )
+        .unwrap();
+        writeln!(output, "  %exponent.special = icmp eq i32 %exponent, 31").unwrap();
+        writeln!(
+            output,
+            "  %result.bits = select i1 %exponent.special, i32 %special, i32 %finite"
+        )
+        .unwrap();
+        writeln!(output, "  %result = bitcast i32 %result.bits to float").unwrap();
+        writeln!(output, "  ret float %result").unwrap();
+        writeln!(output, "}}\n").unwrap();
+    }
+    if requirements
+        .conversions
+        .contains(&FloatConversionKind::F32ToF16RoundTiesEven)
+    {
+        emit_f32_to_f16_helper(output, attributes);
+    }
+    if requirements
+        .conversions
+        .contains(&FloatConversionKind::Bf16ToF32)
+    {
+        writeln!(
+            output,
+            "define internal float @__fe2o3_bf16_to_f32_v1(i16 %bits) alwaysinline nounwind{attributes} {{"
+        )
+        .unwrap();
+        writeln!(output, "entry:").unwrap();
+        writeln!(output, "  %wide = zext i16 %bits to i32").unwrap();
+        writeln!(output, "  %shifted = shl i32 %wide, 16").unwrap();
+        writeln!(output, "  %result = bitcast i32 %shifted to float").unwrap();
+        writeln!(output, "  ret float %result").unwrap();
+        writeln!(output, "}}\n").unwrap();
+    }
+    if requirements
+        .conversions
+        .contains(&FloatConversionKind::F32ToBf16RoundTiesEven)
+    {
+        writeln!(
+            output,
+            "define internal i16 @__fe2o3_f32_to_bf16_rne_v1(float %value) alwaysinline nounwind{attributes} {{"
+        )
+        .unwrap();
+        writeln!(output, "entry:").unwrap();
+        writeln!(output, "  %bits = bitcast float %value to i32").unwrap();
+        writeln!(output, "  %exponent = and i32 %bits, 2139095040").unwrap();
+        writeln!(output, "  %fraction = and i32 %bits, 8388607").unwrap();
+        writeln!(output, "  %special = icmp eq i32 %exponent, 2139095040").unwrap();
+        writeln!(output, "  %payload = icmp ne i32 %fraction, 0").unwrap();
+        writeln!(output, "  %is.nan = and i1 %special, %payload").unwrap();
+        writeln!(output, "  %upper = lshr i32 %bits, 16").unwrap();
+        writeln!(output, "  %nan = or i32 %upper, 64").unwrap();
+        writeln!(output, "  %lsb = and i32 %upper, 1").unwrap();
+        writeln!(output, "  %bias = add i32 32767, %lsb").unwrap();
+        writeln!(output, "  %biased = add i32 %bits, %bias").unwrap();
+        writeln!(output, "  %rounded = lshr i32 %biased, 16").unwrap();
+        writeln!(
+            output,
+            "  %selected = select i1 %is.nan, i32 %nan, i32 %rounded"
+        )
+        .unwrap();
+        writeln!(output, "  %result = trunc i32 %selected to i16").unwrap();
+        writeln!(output, "  ret i16 %result").unwrap();
+        writeln!(output, "}}\n").unwrap();
+    }
+}
+
+fn emit_f32_to_f16_helper(output: &mut dyn fmt::Write, attributes: &str) {
+    writeln!(
+        output,
+        "define internal i16 @__fe2o3_f32_to_f16_rne_v1(float %value) alwaysinline nounwind{attributes} {{"
+    )
+    .unwrap();
+    writeln!(output, "entry:").unwrap();
+    writeln!(output, "  %bits = bitcast float %value to i32").unwrap();
+    writeln!(output, "  %sign.shift = lshr i32 %bits, 16").unwrap();
+    writeln!(output, "  %sign = and i32 %sign.shift, 32768").unwrap();
+    writeln!(output, "  %exponent.shift = lshr i32 %bits, 23").unwrap();
+    writeln!(output, "  %exponent = and i32 %exponent.shift, 255").unwrap();
+    writeln!(output, "  %fraction = and i32 %bits, 8388607").unwrap();
+    writeln!(output, "  %payload.shift = lshr i32 %fraction, 13").unwrap();
+    writeln!(output, "  %payload.quiet = or i32 %payload.shift, 512").unwrap();
+    writeln!(output, "  %nan.payload = or i32 31744, %payload.quiet").unwrap();
+    writeln!(output, "  %nan = or i32 %sign, %nan.payload").unwrap();
+    writeln!(output, "  %infinity = or i32 %sign, 31744").unwrap();
+    writeln!(output, "  %fraction.nonzero = icmp ne i32 %fraction, 0").unwrap();
+    writeln!(
+        output,
+        "  %special.value = select i1 %fraction.nonzero, i32 %nan, i32 %infinity"
+    )
+    .unwrap();
+    writeln!(output, "  %half.exponent = sub i32 %exponent, 112").unwrap();
+    writeln!(output, "  %normal.truncated = lshr i32 %fraction, 13").unwrap();
+    writeln!(output, "  %normal.remainder = and i32 %fraction, 8191").unwrap();
+    writeln!(
+        output,
+        "  %normal.greater = icmp ugt i32 %normal.remainder, 4096"
+    )
+    .unwrap();
+    writeln!(
+        output,
+        "  %normal.equal = icmp eq i32 %normal.remainder, 4096"
+    )
+    .unwrap();
+    writeln!(output, "  %normal.odd.bits = and i32 %normal.truncated, 1").unwrap();
+    writeln!(output, "  %normal.odd = icmp ne i32 %normal.odd.bits, 0").unwrap();
+    writeln!(
+        output,
+        "  %normal.tie.up = and i1 %normal.equal, %normal.odd"
+    )
+    .unwrap();
+    writeln!(
+        output,
+        "  %normal.round.up = or i1 %normal.greater, %normal.tie.up"
+    )
+    .unwrap();
+    writeln!(
+        output,
+        "  %normal.increment = zext i1 %normal.round.up to i32"
+    )
+    .unwrap();
+    writeln!(
+        output,
+        "  %normal.rounded = add i32 %normal.truncated, %normal.increment"
+    )
+    .unwrap();
+    writeln!(
+        output,
+        "  %normal.carry = icmp eq i32 %normal.rounded, 1024"
+    )
+    .unwrap();
+    writeln!(output, "  %normal.carry.i32 = zext i1 %normal.carry to i32").unwrap();
+    writeln!(
+        output,
+        "  %normal.exponent.adjusted = add i32 %half.exponent, %normal.carry.i32"
+    )
+    .unwrap();
+    writeln!(
+        output,
+        "  %normal.overflow = icmp sge i32 %normal.exponent.adjusted, 31"
+    )
+    .unwrap();
+    writeln!(
+        output,
+        "  %normal.exponent.bits = shl i32 %normal.exponent.adjusted, 10"
+    )
+    .unwrap();
+    writeln!(
+        output,
+        "  %normal.fraction = select i1 %normal.carry, i32 0, i32 %normal.rounded"
+    )
+    .unwrap();
+    writeln!(
+        output,
+        "  %normal.payload = or i32 %normal.exponent.bits, %normal.fraction"
+    )
+    .unwrap();
+    writeln!(output, "  %normal.signed = or i32 %sign, %normal.payload").unwrap();
+    writeln!(
+        output,
+        "  %normal.value = select i1 %normal.overflow, i32 %infinity, i32 %normal.signed"
+    )
+    .unwrap();
+    writeln!(output, "  %raw.shift = sub i32 14, %half.exponent").unwrap();
+    writeln!(output, "  %shift.too.large = icmp ugt i32 %raw.shift, 31").unwrap();
+    writeln!(
+        output,
+        "  %safe.shift = select i1 %shift.too.large, i32 31, i32 %raw.shift"
+    )
+    .unwrap();
+    writeln!(output, "  %significand = or i32 %fraction, 8388608").unwrap();
+    writeln!(
+        output,
+        "  %subnormal.truncated = lshr i32 %significand, %safe.shift"
+    )
+    .unwrap();
+    writeln!(output, "  %mask.base = shl i32 1, %safe.shift").unwrap();
+    writeln!(output, "  %mask = sub i32 %mask.base, 1").unwrap();
+    writeln!(
+        output,
+        "  %subnormal.remainder = and i32 %significand, %mask"
+    )
+    .unwrap();
+    writeln!(output, "  %half.shift = sub i32 %safe.shift, 1").unwrap();
+    writeln!(output, "  %halfway = shl i32 1, %half.shift").unwrap();
+    writeln!(
+        output,
+        "  %subnormal.greater = icmp ugt i32 %subnormal.remainder, %halfway"
+    )
+    .unwrap();
+    writeln!(
+        output,
+        "  %subnormal.equal = icmp eq i32 %subnormal.remainder, %halfway"
+    )
+    .unwrap();
+    writeln!(
+        output,
+        "  %subnormal.odd.bits = and i32 %subnormal.truncated, 1"
+    )
+    .unwrap();
+    writeln!(
+        output,
+        "  %subnormal.odd = icmp ne i32 %subnormal.odd.bits, 0"
+    )
+    .unwrap();
+    writeln!(
+        output,
+        "  %subnormal.tie.up = and i1 %subnormal.equal, %subnormal.odd"
+    )
+    .unwrap();
+    writeln!(
+        output,
+        "  %subnormal.round.up = or i1 %subnormal.greater, %subnormal.tie.up"
+    )
+    .unwrap();
+    writeln!(
+        output,
+        "  %subnormal.increment = zext i1 %subnormal.round.up to i32"
+    )
+    .unwrap();
+    writeln!(
+        output,
+        "  %subnormal.rounded = add i32 %subnormal.truncated, %subnormal.increment"
+    )
+    .unwrap();
+    writeln!(
+        output,
+        "  %subnormal.signed = or i32 %sign, %subnormal.rounded"
+    )
+    .unwrap();
+    writeln!(
+        output,
+        "  %deep.underflow = icmp slt i32 %half.exponent, -10"
+    )
+    .unwrap();
+    writeln!(
+        output,
+        "  %subnormal.value = select i1 %deep.underflow, i32 %sign, i32 %subnormal.signed"
+    )
+    .unwrap();
+    writeln!(output, "  %is.subnormal = icmp sle i32 %half.exponent, 0").unwrap();
+    writeln!(
+        output,
+        "  %finite = select i1 %is.subnormal, i32 %subnormal.value, i32 %normal.value"
+    )
+    .unwrap();
+    writeln!(output, "  %is.special = icmp eq i32 %exponent, 255").unwrap();
+    writeln!(
+        output,
+        "  %selected = select i1 %is.special, i32 %special.value, i32 %finite"
+    )
+    .unwrap();
+    writeln!(output, "  %result = trunc i32 %selected to i16").unwrap();
+    writeln!(output, "  ret i16 %result").unwrap();
+    writeln!(output, "}}\n").unwrap();
+}
+
+fn constrained_binary_name(op: WidenedFloatBinaryOp) -> &'static str {
+    match op {
+        WidenedFloatBinaryOp::Add => "llvm.experimental.constrained.fadd.f32",
+        WidenedFloatBinaryOp::Subtract => "llvm.experimental.constrained.fsub.f32",
+        WidenedFloatBinaryOp::Multiply => "llvm.experimental.constrained.fmul.f32",
+        WidenedFloatBinaryOp::Divide => "llvm.experimental.constrained.fdiv.f32",
+    }
+}
+
+fn narrow_float_helpers(format: NarrowFloatFormat) -> (&'static str, &'static str) {
+    match format {
+        NarrowFloatFormat::F16 => ("__fe2o3_f16_to_f32_v1", "__fe2o3_f32_to_f16_rne_v1"),
+        NarrowFloatFormat::Bf16 => ("__fe2o3_bf16_to_f32_v1", "__fe2o3_f32_to_bf16_rne_v1"),
+    }
+}
+
+fn constrained_math_name(function: F32MathFunction) -> &'static str {
+    match function {
+        F32MathFunction::Sqrt => "llvm.experimental.constrained.sqrt.f32",
+        F32MathFunction::FusedMultiplyAdd => "llvm.experimental.constrained.fma.f32",
+        F32MathFunction::Floor => "llvm.experimental.constrained.floor.f32",
+        F32MathFunction::Ceil => "llvm.experimental.constrained.ceil.f32",
+        F32MathFunction::Truncate => "llvm.experimental.constrained.trunc.f32",
+        F32MathFunction::RoundTiesEven => "llvm.experimental.constrained.roundeven.f32",
+        _ => unreachable!("OCML functions are not LLVM constrained intrinsics"),
+    }
+}
+
+fn ocml_name(function: F32MathFunction) -> &'static str {
+    match function {
+        F32MathFunction::Sin => "__ocml_sin_f32",
+        F32MathFunction::Cos => "__ocml_cos_f32",
+        F32MathFunction::Exp => "__ocml_exp_f32",
+        F32MathFunction::Exp2 => "__ocml_exp2_f32",
+        F32MathFunction::Ln => "__ocml_log_f32",
+        F32MathFunction::Log2 => "__ocml_log2_f32",
+        F32MathFunction::Log10 => "__ocml_log10_f32",
+        _ => unreachable!("constrained functions are not OCML calls"),
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum IntrinsicAttribute {
     ReadNone,
@@ -1111,8 +1716,10 @@ fn emit_compiler_module(
     kernels: &[FunctionLowerer<'_>],
     helpers: &[FunctionLowerer<'_>],
     declarations: &[&Function],
+    target: LoweringTarget,
 ) -> Result<String, LoweringErrors> {
     let intrinsics = collect_intrinsic_declarations(kernels.iter().chain(helpers));
+    let float_requirements = FloatRequirements::collect(kernels.iter().chain(helpers));
     let has_readnone = intrinsics
         .values()
         .any(|declaration| declaration.attribute == IntrinsicAttribute::ReadNone);
@@ -1145,6 +1752,7 @@ fn emit_compiler_module(
         )
         .unwrap();
     }
+    emit_float_support_declarations(&mut output, &float_requirements);
     for function in declarations {
         writeln!(
             output,
@@ -1155,9 +1763,11 @@ fn emit_compiler_module(
         )
         .unwrap();
     }
-    if !intrinsics.is_empty() || !declarations.is_empty() {
+    if !intrinsics.is_empty() || !declarations.is_empty() || !float_requirements.is_empty() {
         writeln!(output).unwrap();
     }
+
+    emit_float_support_definitions(&mut output, &float_requirements, target);
 
     for (index, lowerer) in kernels.iter().enumerate() {
         lowerer.emit_compiler_module_definition(&mut output, Some(index), Some(index))?;
@@ -1173,7 +1783,8 @@ fn emit_compiler_module(
             .expect("compiler-module kernel requires a workgroup size");
         writeln!(
             output,
-            "attributes #{index} = {{ nounwind \"amdgpu-flat-work-group-size\"=\"{workgroup_x},{workgroup_x}\"{wave_attribute} }}"
+            "attributes #{index} = {{ nounwind \"amdgpu-flat-work-group-size\"=\"{workgroup_x},{workgroup_x}\"{wave_attribute}{} }}",
+            target.llvm_function_attributes()
         )
         .unwrap();
     }
@@ -1380,10 +1991,28 @@ fn is_safe_symbol(symbol: &str) -> bool {
         && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
 }
 
+fn is_reserved_float_support_symbol(symbol: &str) -> bool {
+    matches!(
+        symbol,
+        "__fe2o3_f16_to_f32_v1"
+            | "__fe2o3_f32_to_f16_rne_v1"
+            | "__fe2o3_bf16_to_f32_v1"
+            | "__fe2o3_f32_to_bf16_rne_v1"
+            | "__ocml_sin_f32"
+            | "__ocml_cos_f32"
+            | "__ocml_exp_f32"
+            | "__ocml_exp2_f32"
+            | "__ocml_log_f32"
+            | "__ocml_log2_f32"
+            | "__ocml_log10_f32"
+    )
+}
+
 fn validate_capabilities(
     location: LoweringLocation,
     capabilities: &BTreeSet<TargetCapability>,
     owner: &str,
+    target: LoweringTarget,
 ) -> Result<Option<WaveWidth>, LoweringErrors> {
     let mut wave_width = None;
     for capability in capabilities {
@@ -1392,6 +2021,8 @@ fn validate_capabilities(
             | TargetCapability::WorkgroupBarrier
             | TargetCapability::DynamicWorkgroupMemory
             | TargetCapability::Subgroups => {}
+            TargetCapability::Float16 | TargetCapability::BFloat16
+                if target.supports_narrow_float() => {}
             TargetCapability::SubgroupSize(32 | 64) => {}
             TargetCapability::WaveWidth(width) => wave_width = Some(*width),
             TargetCapability::Atomic {
@@ -1473,6 +2104,7 @@ struct FunctionLowerer<'a> {
     symbol: &'a str,
     workgroup_x: Option<u32>,
     wave_width: Option<WaveWidth>,
+    target: LoweringTarget,
     call_symbols: Option<&'a BTreeMap<FunctionId, String>>,
     bindings: BTreeMap<ValueId, ValueBinding>,
 }
@@ -1484,6 +2116,7 @@ impl<'a> FunctionLowerer<'a> {
         function: &'a Function,
         workgroup_x: u32,
         wave_width: Option<WaveWidth>,
+        target: LoweringTarget,
     ) -> Self {
         Self {
             module,
@@ -1492,6 +2125,7 @@ impl<'a> FunctionLowerer<'a> {
             symbol: kernel.id.as_str(),
             workgroup_x: Some(workgroup_x),
             wave_width,
+            target,
             call_symbols: None,
             bindings: BTreeMap::new(),
         }
@@ -1504,6 +2138,7 @@ impl<'a> FunctionLowerer<'a> {
         workgroup_x: u32,
         wave_width: Option<WaveWidth>,
         call_symbols: &'a BTreeMap<FunctionId, String>,
+        target: LoweringTarget,
     ) -> Self {
         Self {
             module,
@@ -1512,6 +2147,7 @@ impl<'a> FunctionLowerer<'a> {
             symbol: kernel.id.as_str(),
             workgroup_x: Some(workgroup_x),
             wave_width,
+            target,
             call_symbols: Some(call_symbols),
             bindings: BTreeMap::new(),
         }
@@ -1522,6 +2158,7 @@ impl<'a> FunctionLowerer<'a> {
         function: &'a Function,
         wave_width: Option<WaveWidth>,
         call_symbols: &'a BTreeMap<FunctionId, String>,
+        target: LoweringTarget,
     ) -> Self {
         Self {
             module,
@@ -1530,6 +2167,7 @@ impl<'a> FunctionLowerer<'a> {
             symbol: function.id.as_str(),
             workgroup_x: None,
             wave_width,
+            target,
             call_symbols: Some(call_symbols),
             bindings: BTreeMap::new(),
         }
@@ -1581,6 +2219,7 @@ impl<'a> FunctionLowerer<'a> {
             OperationKind::Fence(_)
                 | OperationKind::WorkgroupBarrier(_)
                 | OperationKind::WorkgroupMemory(_)
+                | OperationKind::Float(_)
         ) {
             return Ok(());
         }
@@ -1593,6 +2232,8 @@ impl<'a> FunctionLowerer<'a> {
                     TargetCapability::WorkgroupMemory
                         | TargetCapability::DynamicWorkgroupMemory
                         | TargetCapability::WorkgroupBarrier
+                        | TargetCapability::Float16
+                        | TargetCapability::BFloat16
                 )
             })
         {
@@ -1653,9 +2294,10 @@ impl<'a> FunctionLowerer<'a> {
             .enumerate()
         {
             let location = self.function_location();
+            self.validate_narrow_type_capability(ty, &location)?;
             match ty {
                 Type::Scalar(scalar) => {
-                    if !supported_scalar(*scalar) {
+                    if !supported_scalar(*scalar, self.target) {
                         return Err(LoweringErrors::one(
                             location,
                             LoweringDiagnosticCode::UnsupportedType,
@@ -1671,7 +2313,7 @@ impl<'a> FunctionLowerer<'a> {
                     );
                 }
                 Type::Pointer(_) if self.kernel.is_none() => {
-                    validate_pointer(ty, &location)?;
+                    validate_pointer(ty, &location, self.target)?;
                     self.bindings.insert(
                         value,
                         ValueBinding::Value {
@@ -1683,7 +2325,7 @@ impl<'a> FunctionLowerer<'a> {
                 Type::Slice(slice)
                     if self.kernel.is_some()
                         && slice.address_space == KernelAddressSpace::Global
-                        && supported_memory_type(&slice.element) =>
+                        && supported_memory_type(&slice.element, self.target) =>
                 {
                     self.bindings.insert(
                         value,
@@ -1718,8 +2360,9 @@ impl<'a> FunctionLowerer<'a> {
         for block in &body.blocks {
             for parameter in &block.parameters {
                 let location = self.block_location(block.id);
+                self.validate_narrow_type_capability(&parameter.ty, &location)?;
                 match &parameter.ty {
-                    Type::Scalar(scalar) if supported_scalar(*scalar) => {
+                    Type::Scalar(scalar) if supported_scalar(*scalar, self.target) => {
                         self.bindings.insert(
                             parameter.id,
                             ValueBinding::Value {
@@ -1729,7 +2372,7 @@ impl<'a> FunctionLowerer<'a> {
                         );
                     }
                     Type::Pointer(_) => {
-                        validate_pointer(&parameter.ty, &location)?;
+                        validate_pointer(&parameter.ty, &location, self.target)?;
                         self.bindings.insert(
                             parameter.id,
                             ValueBinding::Value {
@@ -1741,7 +2384,7 @@ impl<'a> FunctionLowerer<'a> {
                     Type::Slice(slice)
                         if self.kernel.is_some()
                             && slice.address_space == KernelAddressSpace::Global
-                            && supported_memory_type(&slice.element) =>
+                            && supported_memory_type(&slice.element, self.target) =>
                     {
                         self.bindings.insert(
                             parameter.id,
@@ -1783,6 +2426,10 @@ impl<'a> FunctionLowerer<'a> {
         for block in &body.blocks {
             for operation in &block.operations {
                 for result in &operation.results {
+                    self.validate_narrow_type_capability(
+                        &result.ty,
+                        &self.block_location(block.id),
+                    )?;
                     let llvm_name = match &operation.kind {
                         OperationKind::Constant(constant) => {
                             constant_value(constant).unwrap_or_else(|| value_name(result.id))
@@ -1798,6 +2445,34 @@ impl<'a> FunctionLowerer<'a> {
                     );
                 }
             }
+        }
+        Ok(())
+    }
+
+    fn validate_narrow_type_capability(
+        &self,
+        ty: &Type,
+        location: &LoweringLocation,
+    ) -> Result<(), LoweringErrors> {
+        let scalar = match ty {
+            Type::Scalar(scalar) => Some(*scalar),
+            Type::Pointer(pointer) => pointer.pointee.as_scalar(),
+            Type::Slice(slice) => slice.element.as_scalar(),
+            Type::Unit => None,
+        };
+        let required = match scalar {
+            Some(ScalarType::F16) => Some(TargetCapability::Float16),
+            Some(ScalarType::Bf16) => Some(TargetCapability::BFloat16),
+            _ => None,
+        };
+        if let Some(required) = required
+            && !self.declares_capability(&required)
+        {
+            return Err(LoweringErrors::one(
+                location.clone(),
+                LoweringDiagnosticCode::UnsupportedCapability,
+                format!("AMDGPU lowering requires an explicit {required:?} type capability"),
+            ));
         }
         Ok(())
     }
@@ -1870,7 +2545,7 @@ impl<'a> FunctionLowerer<'a> {
         self.validate_operation_capability_declarations(operation, &location)?;
         match &operation.kind {
             OperationKind::Constant(constant) => {
-                validate_constant(constant).map_err(|message| {
+                validate_constant(constant, self.target).map_err(|message| {
                     LoweringErrors::one(
                         location.clone(),
                         LoweringDiagnosticCode::UnsupportedConstant,
@@ -1910,7 +2585,7 @@ impl<'a> FunctionLowerer<'a> {
             }
             OperationKind::Cast { kind, value, to } => {
                 let from = self.value_type(*value);
-                validate_cast(*kind, from, to).map_err(|message| {
+                validate_cast(*kind, from, to, self.target).map_err(|message| {
                     LoweringErrors::one(
                         location.clone(),
                         LoweringDiagnosticCode::UnsupportedCast,
@@ -1931,15 +2606,25 @@ impl<'a> FunctionLowerer<'a> {
                 };
             }
             OperationKind::GetElementPointer { base, .. } => {
-                validate_pointer(self.value_type(*base), &location)?;
+                validate_pointer(self.value_type(*base), &location, self.target)?;
             }
             OperationKind::Load { pointer, access } => {
-                validate_memory_access(self.value_type(*pointer), access.address_space, &location)?;
+                validate_memory_access(
+                    self.value_type(*pointer),
+                    access.address_space,
+                    &location,
+                    self.target,
+                )?;
             }
             OperationKind::Store {
                 pointer, access, ..
             } => {
-                validate_memory_access(self.value_type(*pointer), access.address_space, &location)?;
+                validate_memory_access(
+                    self.value_type(*pointer),
+                    access.address_space,
+                    &location,
+                    self.target,
+                )?;
             }
             OperationKind::Fence(_) => {}
             OperationKind::WorkgroupBarrier(_) if self.kernel.is_some() => {}
@@ -1958,7 +2643,7 @@ impl<'a> FunctionLowerer<'a> {
                         "compiler-module helpers cannot own kernel-context LDS declarations",
                     ));
                 }
-                if !supported_memory_type(&memory.element) {
+                if !supported_memory_type(&memory.element, self.target) {
                     return Err(LoweringErrors::one(
                         location,
                         LoweringDiagnosticCode::UnsupportedWorkgroupMemory,
@@ -1982,6 +2667,7 @@ impl<'a> FunctionLowerer<'a> {
                 }
             }
             OperationKind::Wave(wave) => self.validate_wave(wave, &location)?,
+            OperationKind::Float(float) => self.validate_float(float, &location)?,
             OperationKind::Atomic(atomic) => self.validate_atomic(atomic, &location)?,
             OperationKind::Barrier(_) => {
                 return Err(LoweringErrors::one(
@@ -2146,9 +2832,38 @@ impl<'a> FunctionLowerer<'a> {
         Ok(())
     }
 
+    fn validate_float(
+        &self,
+        float: &FloatOperation,
+        location: &LoweringLocation,
+    ) -> Result<(), LoweringErrors> {
+        if self.target != LoweringTarget::Gfx942StrictFloatV1 {
+            return Err(LoweringErrors::one(
+                location.clone(),
+                LoweringDiagnosticCode::UnsupportedFloatOperation,
+                "floating-point contracts require the strict gfx942 lowering entry point",
+            ));
+        }
+        if let FloatOperation::F32Math {
+            function,
+            implementation,
+            ..
+        } = float
+            && function.required_implementation() != *implementation
+        {
+            return Err(LoweringErrors::one(
+                location.clone(),
+                LoweringDiagnosticCode::UnsupportedFloatOperation,
+                format!("gfx942 refuses {function:?} with implementation {implementation:?}"),
+            ));
+        }
+        Ok(())
+    }
+
     fn emit(&self) -> Result<String, LoweringErrors> {
         let mut output = String::new();
         writeln!(output, "target triple = \"{AMDGPU_TRIPLE}\"\n").unwrap();
+        let float_requirements = FloatRequirements::collect(std::iter::once(self));
         let has_workgroup_barrier = self.has_workgroup_barrier();
         let has_lane_id = self.has_wave_kind(|kind| {
             matches!(
@@ -2222,7 +2937,10 @@ impl<'a> FunctionLowerer<'a> {
             )
             .unwrap();
         }
+        emit_float_support_declarations(&mut output, &float_requirements);
         writeln!(output).unwrap();
+
+        emit_float_support_definitions(&mut output, &float_requirements, self.target);
 
         write!(output, "define amdgpu_kernel void @{}(", self.symbol).unwrap();
         let parameters = self.llvm_parameters()?;
@@ -2237,9 +2955,10 @@ impl<'a> FunctionLowerer<'a> {
         });
         writeln!(
             output,
-            "attributes #0 = {{ nounwind \"amdgpu-flat-work-group-size\"=\"{0},{0}\"{wave_attribute} }}",
+            "attributes #0 = {{ nounwind \"amdgpu-flat-work-group-size\"=\"{0},{0}\"{wave_attribute}{target_attributes} }}",
             self.workgroup_x
-                .expect("single-kernel emission requires a workgroup size")
+                .expect("single-kernel emission requires a workgroup size"),
+            target_attributes = self.target.llvm_function_attributes()
         )
         .unwrap();
         writeln!(
@@ -2289,8 +3008,9 @@ impl<'a> FunctionLowerer<'a> {
             };
             writeln!(
                 output,
-                "define {linkage}{result} @{}({parameters}) nounwind{wave_attribute} {{",
+                "define {linkage}{result} @{}({parameters}) nounwind{wave_attribute}{} {{",
                 self.symbol,
+                self.target.llvm_function_attributes(),
             )
             .unwrap();
         }
@@ -2748,6 +3468,13 @@ impl<'a> FunctionLowerer<'a> {
                     wave,
                 );
             }
+            OperationKind::Float(float) => {
+                self.emit_float(
+                    output,
+                    result_name.as_deref().expect("verified float result"),
+                    float,
+                );
+            }
             _ => unreachable!("preflight rejected unsupported operation"),
         }
         Ok(())
@@ -2825,6 +3552,139 @@ impl<'a> FunctionLowerer<'a> {
         }
     }
 
+    fn emit_float(&self, output: &mut dyn fmt::Write, result: &str, float: &FloatOperation) {
+        match float {
+            FloatOperation::Convert { kind, value } => {
+                let value = self.value(*value).0;
+                let (result_ty, helper, operand_ty) = match kind {
+                    FloatConversionKind::F16ToF32 => ("float", "__fe2o3_f16_to_f32_v1", "i16"),
+                    FloatConversionKind::F32ToF16RoundTiesEven => {
+                        ("i16", "__fe2o3_f32_to_f16_rne_v1", "float")
+                    }
+                    FloatConversionKind::Bf16ToF32 => ("float", "__fe2o3_bf16_to_f32_v1", "i16"),
+                    FloatConversionKind::F32ToBf16RoundTiesEven => {
+                        ("i16", "__fe2o3_f32_to_bf16_rne_v1", "float")
+                    }
+                };
+                writeln!(
+                    output,
+                    "  {result} = call {result_ty} @{helper}({operand_ty} {value})"
+                )
+                .unwrap();
+            }
+            FloatOperation::WidenedBinary {
+                format,
+                op,
+                lhs,
+                rhs,
+            } => {
+                let lhs = self.value(*lhs).0;
+                let rhs = self.value(*rhs).0;
+                let (widen, narrow) = narrow_float_helpers(*format);
+                writeln!(output, "  {result}.lhs = call float @{widen}(i16 {lhs})").unwrap();
+                writeln!(output, "  {result}.rhs = call float @{widen}(i16 {rhs})").unwrap();
+                writeln!(
+                    output,
+                    "  {result}.f32 = call float @{}(float {result}.lhs, float {result}.rhs, metadata !\"round.tonearest\", metadata !\"fpexcept.ignore\")",
+                    constrained_binary_name(*op)
+                )
+                .unwrap();
+                writeln!(
+                    output,
+                    "  {result} = call i16 @{narrow}(float {result}.f32)"
+                )
+                .unwrap();
+            }
+            FloatOperation::F32Math {
+                function,
+                implementation,
+                arguments,
+            } => match implementation {
+                F32MathImplementation::ConstrainedLlvm => {
+                    let arguments = arguments
+                        .iter()
+                        .map(|argument| format!("float {}", self.value(*argument).0))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let metadata = match function {
+                        F32MathFunction::Sqrt | F32MathFunction::FusedMultiplyAdd => {
+                            ", metadata !\"round.tonearest\", metadata !\"fpexcept.ignore\""
+                        }
+                        F32MathFunction::Floor
+                        | F32MathFunction::Ceil
+                        | F32MathFunction::Truncate
+                        | F32MathFunction::RoundTiesEven => ", metadata !\"fpexcept.ignore\"",
+                        _ => unreachable!("verifier fixed the math implementation"),
+                    };
+                    writeln!(
+                        output,
+                        "  {result} = call float @{}({arguments}{metadata})",
+                        constrained_math_name(*function)
+                    )
+                    .unwrap();
+                }
+                F32MathImplementation::OcmlAbiV1 => {
+                    let [argument] = arguments.as_slice() else {
+                        unreachable!("verifier checked OCML arity")
+                    };
+                    writeln!(
+                        output,
+                        "  {result} = call float @{}(float {})",
+                        ocml_name(*function),
+                        self.value(*argument).0
+                    )
+                    .unwrap();
+                }
+            },
+            FloatOperation::Bf16x2FusedMultiplyAdd {
+                value,
+                multiplier,
+                addend,
+            } => {
+                let packed =
+                    [*value, *multiplier, *addend].map(|value| self.value(value).0.to_string());
+                for (name, value) in ["value", "multiplier", "addend"].into_iter().zip(packed) {
+                    writeln!(output, "  {result}.{name}.lo = trunc i32 {value} to i16").unwrap();
+                    writeln!(output, "  {result}.{name}.shift = lshr i32 {value}, 16").unwrap();
+                    writeln!(
+                        output,
+                        "  {result}.{name}.hi = trunc i32 {result}.{name}.shift to i16"
+                    )
+                    .unwrap();
+                    writeln!(
+                        output,
+                        "  {result}.{name}.0 = call float @__fe2o3_bf16_to_f32_v1(i16 {result}.{name}.lo)"
+                    )
+                    .unwrap();
+                    writeln!(
+                        output,
+                        "  {result}.{name}.1 = call float @__fe2o3_bf16_to_f32_v1(i16 {result}.{name}.hi)"
+                    )
+                    .unwrap();
+                }
+                for lane in 0..2 {
+                    writeln!(
+                        output,
+                        "  {result}.fma.{lane} = call float @llvm.experimental.constrained.fma.f32(float {result}.value.{lane}, float {result}.multiplier.{lane}, float {result}.addend.{lane}, metadata !\"round.tonearest\", metadata !\"fpexcept.ignore\")"
+                    )
+                    .unwrap();
+                    writeln!(
+                        output,
+                        "  {result}.bf16.{lane} = call i16 @__fe2o3_f32_to_bf16_rne_v1(float {result}.fma.{lane})"
+                    )
+                    .unwrap();
+                    writeln!(
+                        output,
+                        "  {result}.wide.{lane} = zext i16 {result}.bf16.{lane} to i32"
+                    )
+                    .unwrap();
+                }
+                writeln!(output, "  {result}.high = shl i32 {result}.wide.1, 16").unwrap();
+                writeln!(output, "  {result} = or i32 {result}.wide.0, {result}.high").unwrap();
+            }
+        }
+    }
+
     fn emit_lane_id(&self, output: &mut dyn fmt::Write, result: &str, width: WaveWidth) {
         writeln!(
             output,
@@ -2853,7 +3713,7 @@ impl<'a> FunctionLowerer<'a> {
         location: &LoweringLocation,
     ) -> Result<(), LoweringErrors> {
         let pointer = self.value_type(atomic.pointer);
-        validate_memory_access(pointer, atomic.access.address_space, location)?;
+        validate_memory_access(pointer, atomic.access.address_space, location, self.target)?;
         let Type::Pointer(pointer) = pointer else {
             unreachable!("kernel IR verification required an atomic pointer")
         };
@@ -3029,8 +3889,11 @@ impl<'a> FunctionLowerer<'a> {
     }
 }
 
-fn supported_scalar(scalar: ScalarType) -> bool {
-    scalar == ScalarType::Bool || supported_integer(scalar) || scalar == ScalarType::F32
+fn supported_scalar(scalar: ScalarType, target: LoweringTarget) -> bool {
+    scalar == ScalarType::Bool
+        || supported_integer(scalar)
+        || scalar == ScalarType::F32
+        || (target.supports_narrow_float() && matches!(scalar, ScalarType::F16 | ScalarType::Bf16))
 }
 
 fn supported_integer(scalar: ScalarType) -> bool {
@@ -3048,14 +3911,19 @@ fn supported_integer(scalar: ScalarType) -> bool {
     )
 }
 
-fn supported_memory_type(ty: &Type) -> bool {
-    matches!(ty, Type::Scalar(scalar) if supported_integer(*scalar) || *scalar == ScalarType::F32)
+fn supported_memory_type(ty: &Type, target: LoweringTarget) -> bool {
+    matches!(ty, Type::Scalar(scalar) if supported_integer(*scalar)
+        || *scalar == ScalarType::F32
+        || (target.supports_narrow_float()
+            && matches!(scalar, ScalarType::F16 | ScalarType::Bf16)))
 }
 
 fn amdgpu_lds_element_bytes(ty: &Type) -> Option<u64> {
     match ty {
         Type::Scalar(ScalarType::I8 | ScalarType::U8) => Some(1),
-        Type::Scalar(ScalarType::I16 | ScalarType::U16) => Some(2),
+        Type::Scalar(ScalarType::I16 | ScalarType::U16 | ScalarType::F16 | ScalarType::Bf16) => {
+            Some(2)
+        }
         Type::Scalar(ScalarType::I32 | ScalarType::U32 | ScalarType::F32) => Some(4),
         Type::Scalar(ScalarType::I64 | ScalarType::U64 | ScalarType::Index) => Some(8),
         _ => None,
@@ -3095,7 +3963,11 @@ fn supported_binary(op: BinaryOp, ty: &Type) -> bool {
             .is_some_and(|scalar| supported_integer(scalar) || scalar == ScalarType::F32)
 }
 
-fn validate_pointer(ty: &Type, location: &LoweringLocation) -> Result<(), LoweringErrors> {
+fn validate_pointer(
+    ty: &Type,
+    location: &LoweringLocation,
+    target: LoweringTarget,
+) -> Result<(), LoweringErrors> {
     let Type::Pointer(pointer) = ty else {
         unreachable!("verify_module checked GEP base")
     };
@@ -3112,7 +3984,7 @@ fn validate_pointer(ty: &Type, location: &LoweringLocation) -> Result<(), Loweri
             ),
         ));
     }
-    if !supported_memory_type(&pointer.pointee) {
+    if !supported_memory_type(&pointer.pointee, target) {
         return Err(LoweringErrors::one(
             location.clone(),
             LoweringDiagnosticCode::UnsupportedType,
@@ -3126,8 +3998,9 @@ fn validate_memory_access(
     pointer: &Type,
     access_space: KernelAddressSpace,
     location: &LoweringLocation,
+    target: LoweringTarget,
 ) -> Result<(), LoweringErrors> {
-    validate_pointer(pointer, location)?;
+    validate_pointer(pointer, location, target)?;
     let Type::Pointer(pointer) = pointer else {
         unreachable!("validate_pointer required a pointer")
     };
@@ -3144,7 +4017,7 @@ fn validate_memory_access(
     Ok(())
 }
 
-fn validate_constant(constant: &Constant) -> Result<(), String> {
+fn validate_constant(constant: &Constant, target: LoweringTarget) -> Result<(), String> {
     match constant {
         Constant::Bool(_)
         | Constant::I8(_)
@@ -3158,17 +4031,23 @@ fn validate_constant(constant: &Constant) -> Result<(), String> {
         | Constant::Index(_) => Ok(()),
         Constant::F32Bits(bits) if !f32::from_bits(*bits).is_nan() => Ok(()),
         Constant::F32Bits(_) => Err("G1 rejects NaN f32 constants because LLVM's widened hexadecimal spelling does not preserve every payload".to_string()),
+        Constant::F16Bits(_) | Constant::Bf16Bits(_) if target.supports_narrow_float() => Ok(()),
         _ => Err(format!("G1 does not lower constant {constant:?}")),
     }
 }
 
-fn validate_cast(kind: CastKind, from: &Type, to: &Type) -> Result<(), String> {
+fn validate_cast(
+    kind: CastKind,
+    from: &Type,
+    to: &Type,
+    target: LoweringTarget,
+) -> Result<(), String> {
     let (Some(from_scalar), Some(to_scalar)) = (from.as_scalar(), to.as_scalar()) else {
         return Err(format!(
             "G1 casts require scalar types, found {from:?} to {to:?}"
         ));
     };
-    if !supported_scalar(from_scalar) || !supported_scalar(to_scalar) {
+    if !supported_scalar(from_scalar, target) || !supported_scalar(to_scalar, target) {
         return Err(format!("G1 does not lower cast types {from:?} to {to:?}"));
     }
     let from_width = llvm_width(from_scalar);
@@ -3315,11 +4194,11 @@ fn llvm_scalar(scalar: ScalarType) -> &'static str {
     match scalar {
         ScalarType::Bool => "i1",
         ScalarType::I8 | ScalarType::U8 => "i8",
-        ScalarType::I16 | ScalarType::U16 => "i16",
+        ScalarType::I16 | ScalarType::U16 | ScalarType::F16 | ScalarType::Bf16 => "i16",
         ScalarType::I32 | ScalarType::U32 => "i32",
         ScalarType::I64 | ScalarType::U64 | ScalarType::Index => "i64",
         ScalarType::F32 => "float",
-        ScalarType::F16 | ScalarType::Bf16 | ScalarType::F64 => {
+        ScalarType::F64 => {
             unreachable!("preflight rejected unsupported scalar")
         }
     }
@@ -3341,6 +4220,7 @@ fn constant_value(constant: &Constant) -> Option<String> {
         Constant::U32(value) => Some(value.to_string()),
         Constant::U64(value) => Some(value.to_string()),
         Constant::Index(value) => Some(value.to_string()),
+        Constant::F16Bits(value) | Constant::Bf16Bits(value) => Some(value.to_string()),
         Constant::F32Bits(bits) if !f32::from_bits(*bits).is_nan() => Some(format!(
             "0x{:016X}",
             f64::from(f32::from_bits(*bits)).to_bits()
