@@ -3,7 +3,8 @@
 //! Cargo receives only an abstract-socket endpoint and build-session binding. The broker checks
 //! Linux peer credentials and the exact `cargo-fe2o3` executable identity before transferring a
 //! sealed backend image and a read-only artifact-directory descriptor with `SCM_RIGHTS`.
-//! Receivers independently validate both descriptors before installing them in a rustc child.
+//! Receivers independently validate both descriptors before installing them in the
+//! caller-selected compiler process for a compile-shaped wrapper invocation.
 //!
 //! This boundary prevents accidental descriptor inheritance through Cargo and pathname
 //! substitution between orchestration and rustc. It is not an OS sandbox against project code or

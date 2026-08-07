@@ -58,13 +58,16 @@ where host isolation does not prevent their interference.
 Cargo children inherit the broker endpoint, build session, wrapper path, and
 managed compiler arguments. A hostile build script can deliberately execute
 the same wrapper with a forged compiler command and request the brokered
-backend and artifact descriptors. Procedural macros run inside an authorized
-rustc process after those descriptors are installed. Process ancestry cannot
+backend and artifact descriptors. Procedural macros run inside a
+descriptor-bearing rustc process after those descriptors are installed.
+Process ancestry cannot
 distinguish either case from an intended compiler invocation without trusted
 Cargo or rustc cooperation. Same-UID process inspection or injection may also
-cross the boundary where host policy permits it. The wrapper authenticates the
-session presented to the broker, but does not authenticate the broker server;
-Cargo configuration can replace inherited environment values.
+cross the boundary where host policy permits it. The broker compares a request
+with the expected build session, but neither that comparison nor compile-shaped
+arguments authenticate Cargo's intent. The client does not authenticate the
+broker server, and Cargo configuration can replace inherited environment
+values.
 
 The artifact descriptor is opened with `O_RDONLY`, which prevents file I/O on
 the directory descriptor itself but still grants namespace authority through
@@ -230,7 +233,9 @@ trusted expected digest.
 ELF interpreters, transitive shared libraries of either rustc or the codegen
 backend, dynamic-loader search and loading behavior, procfs mount/identity
 semantics, and the kernel remain outside these primitives' boundary. The
-broker installs the backend descriptor only in managed rustc children, but
-trusted Cargo descendants can deliberately replay that wrapper as described
-above. The `run` application boundary closes it before application exec.
+broker installs the backend descriptor only after a compile-shaped managed
+wrapper invocation; the executable selected by that invocation is not
+authenticated as rustc. Trusted Cargo descendants can deliberately replay the
+wrapper as described above. The `run` application boundary closes the
+descriptor before application exec.
 Pinning the backend object does not pin its shared dependencies.

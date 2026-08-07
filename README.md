@@ -208,9 +208,11 @@ turn the foundations below into end-to-end features.
   invocation descriptors are versioned and bounded.
 - Linux-only rustc and codegen-backend primitives use descriptor-backed procfs
   paths. The external Cargo path copies the backend into a rehashed, immutable
-  sealed memfd and installs it only in a managed rustc child. This protects the
-  measured bytes from pathname substitution; it is not a sandbox for hostile
-  build scripts or procedural macros, which remain trusted inputs.
+  sealed memfd and installs it after a compile-shaped managed wrapper
+  invocation. The caller-selected compiler executable is not authenticated as
+  rustc. This protects the measured bytes from pathname substitution; it is not
+  a sandbox for hostile build scripts or procedural macros, which remain
+  trusted inputs.
 - `examples/regression-manifest-v1.txt` is the authoritative package/artifact
   inventory for ordinary checks, ROCm compilation, and GPU smoke tests.
 - The Verus vecadd, fill, active-wave, and LDS harnesses prove bounded

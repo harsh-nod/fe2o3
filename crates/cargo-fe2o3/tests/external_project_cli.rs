@@ -478,6 +478,94 @@ fn trusted_build_script_exec_replay_documents_broker_scope() {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn real_cargo_build_script_exec_replay_documents_broker_scope() {
+    let fixture = ProjectFixture::standalone();
+    fs::write(
+        fixture.workspace.join("Cargo.toml"),
+        "[package]\nname='external-standalone'\nversion='0.1.0'\nedition='2024'\nbuild='build.rs'\n",
+    )
+    .expect("write real build-script manifest");
+    fs::write(
+        fixture.workspace.join("build.rs"),
+        r#"use std::env;
+use std::fs;
+use std::os::unix::process::CommandExt;
+use std::path::PathBuf;
+use std::process::Command;
+
+fn main() {
+    let wrapper = env::var_os("RUSTC_WORKSPACE_WRAPPER").unwrap();
+    let compiler = env::var_os("FE2O3_TEST_BUILD_SCRIPT_FIXTURE").unwrap();
+    let report = PathBuf::from(env::var_os("FE2O3_TEST_BUILD_SCRIPT_REPORT").unwrap());
+    let source = report.with_extension("rs");
+    fs::write(&source, "pub fn replayed() {}\n").unwrap();
+    let error = Command::new(wrapper)
+        .arg(compiler)
+        .args([
+            "--crate-name",
+            "real_build_script_replay",
+            "--crate-type",
+            "lib",
+            "--emit=metadata",
+            "-Cmetadata=real-build-script-replay",
+        ])
+        .arg(source)
+        .exec();
+    panic!("could not exec inherited wrapper: {error}");
+}
+"#,
+    )
+    .expect("write real build script");
+
+    let report = fixture.root.join("real-build-script-capabilities.log");
+    let rustc_report = fixture
+        .root
+        .join("real-build-script-rustc-capabilities.log");
+    let real_rustc = env::var_os("RUSTC").unwrap_or_else(|| OsString::from("rustc"));
+    let real_cargo = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"));
+    command
+        .arg("build")
+        .current_dir(&fixture.workspace)
+        .env("CARGO", real_cargo)
+        .env("RUSTC", env!("CARGO_BIN_EXE_cargo-fe2o3-rustc-fixture"))
+        .env("FE2O3_TEST_REAL_RUSTC", real_rustc)
+        .env("FE2O3_TEST_RUSTC_CAPABILITY_REPORT", &rustc_report)
+        .env("FE2O3_TEST_BUILD_SCRIPT_REPORT", &report)
+        .env(
+            "FE2O3_TEST_BUILD_SCRIPT_FIXTURE",
+            env!("CARGO_BIN_EXE_cargo-fe2o3-build-script-fixture"),
+        )
+        .env("FE2O3_BACKEND", &fixture.backend)
+        .env("FE2O3_TARGET", "gfx942")
+        .env_remove("RUSTC_WRAPPER")
+        .env_remove("RUSTC_WORKSPACE_WRAPPER")
+        .env_remove("RUSTFLAGS")
+        .env_remove("CARGO_ENCODED_RUSTFLAGS")
+        .env_remove("CARGO_TARGET_DIR");
+
+    let output = command
+        .output()
+        .expect("run real Cargo build-script replay");
+    assert!(
+        !output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("build completed without an authorized device backend"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report = fs::read_to_string(report).expect("read real build-script replay report");
+    assert!(report.contains("backend_open=true"), "{report}");
+    assert!(report.contains("artifact_open=true"), "{report}");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn trusted_procedural_macro_documents_in_process_descriptor_visibility() {
     let fixture = ProjectFixture::standalone();
     let macro_root = fixture.workspace.join("fd-probe-macro");
