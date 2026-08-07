@@ -34,10 +34,37 @@ all three measured executable snapshots, stdout/stderr/result transcripts,
 compiler and source semantics, finalized HSACO digest, target and code-object
 version, ABI, launch contract, effects, and proof policy.
 
-The bridge consumes its challenge and transcript in an
-`AuthenticatedExecutionFreshnessV1` ledger only after every check succeeds.
-Failed attempts leave freshness available for a corrected policy. Reusing the
-same evidence in one ledger is rejected.
+The bridge offers two separate freshness APIs. The existing
+`AuthenticatedExecutionFreshnessV1` remains a process-local convenience for
+tests and short-lived tools. Production callers can use
+`PersistentProofFreshnessLedgerV1` with
+`bind_authenticated_proof_executable_persistent_v1`. That path completes every
+proof and executable check first, then durably consumes the exact authenticated
+challenge, transcript, and sealed-result identities before returning the inert
+binding. A rejected proof does not consume freshness; an I/O failure after a
+durable intent may conservatively consume it.
+
+Persistent state and intent records use separate versioned domains, canonical
+little-endian encodings, SHA-256 checksums and state identities, fixed-width
+execution identities, and explicit count and size bounds. Decoding rejects
+unknown or zero identity fields, duplicate challenge/transcript/result axes,
+noncanonical ordering, malformed lengths, trailing bytes, and discontinuous
+generations.
+
+On Linux, the ledger opens its owner-controlled directory and fixed files with
+`openat2`, rejecting symlinks and magic links. It retains directory and lock
+descriptors, addresses records relative to the retained directory, requires
+private regular single-link files, and revalidates object metadata. A
+nonblocking exclusive `flock` serializes recovery and consumption across
+processes. Intent and state files are written to exclusive temporary files,
+synced, atomically renamed, and followed by directory syncs.
+
+Recovery is explicit: a clean or newly initialized state is accepted; a
+canonical unpublished intent is discarded; a durable published intent is
+applied to the preceding state or finalized against the already-installed next
+state. Conflicting, ambiguous, malformed, oversized, or unexpected recovery
+files fail closed. Once intent publication is durable, recovery never makes
+that authenticated execution replayable.
 
 `reconcile_control_flow_source_v1` decodes the canonical frontend sidecar,
 recomputes its span-independent CFG identity, and reconciles bounded loop and
@@ -77,6 +104,9 @@ module-load, or kernel-launch authority.
 - `AuthenticatedProofExecutableBindingV1` is also evidence only. The legacy
   conversion and artifact-binding paths remain explicitly descriptive and
   cannot acquire authority by supplying unmeasured identities.
+- `PersistentProofFreshnessLedgerV1` can only consume identities derived from
+  an `AuthenticatedProofExecutionIdentityV1`; its records and receipts do not
+  grant module-load, kernel-launch, compiler, or runtime authority.
 - `ControlFlowSourceBindingV1` authenticates internal agreement among source
   bytes, CFG identity, and claims only. Compiler/MIR reconciliation remains a
   separate measured obligation, and only authenticated proof/executable
@@ -94,9 +124,16 @@ The control-flow binding does not yet prove optimized MIR or machine CFG
 equivalence. It gives those later compiler-refinement checks a canonical exact
 identity to match; the source sidecar alone remains non-authoritative.
 
-The freshness ledger is process-local. A production admission service must
-persist consumed challenge and transcript identities transactionally across
-restart before this evidence can participate in a runtime-authority decision.
+The persistent ledger requires Linux `openat2`, `flock`, atomic same-directory
+rename, and durable file and directory `fsync` semantics on an owner-controlled
+local filesystem. The retained directory descriptor prevents live pathname
+replacement from redirecting one ledger instance. The caller remains
+responsible for provisioning the same trusted directory across restart; the
+pathname itself is not an authenticated storage identity. No distributed or
+network-filesystem locking claim is made, and a malicious process with the same
+effective user, a compromised kernel, or storage rollback remains outside this
+local trust boundary. The V1 ledger is bounded to 65,536 consumed executions;
+it intentionally fails closed at capacity rather than compacting history.
 
 A timeout kills and reaps the direct recorder child, but does not yet establish
 a process group or forcibly terminate arbitrary descendants. The existing

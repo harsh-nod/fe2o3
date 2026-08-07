@@ -92,8 +92,10 @@ impl AuthenticatedProofExecutablePolicyV1 {
 /// One process-local replay ledger for authenticated proof executions.
 ///
 /// The ledger is deliberately neither `Clone` nor serializable. A successful
-/// bridge consumes both the challenge and transcript identity. Durable replay
-/// protection must persist these two sets across process restarts.
+/// bridge consumes both the challenge and transcript identity. Production
+/// callers that require replay protection across restart should use
+/// `PersistentProofFreshnessLedgerV1` and
+/// `bind_authenticated_proof_executable_persistent_v1` instead.
 ///
 /// ```compile_fail
 /// let ledger = fe2o3_verifier::AuthenticatedExecutionFreshnessV1::new();

@@ -177,7 +177,9 @@ impl PersistentFreshnessReceiptV1 {
 ///
 /// Construction is intentionally separate from the process-local
 /// `AuthenticatedExecutionFreshnessV1`. The value is neither `Clone` nor a
-/// source of runtime authority.
+/// source of runtime authority. The caller must provision an owner-controlled
+/// local filesystem directory whose identity remains trustworthy across
+/// process restarts; a pathname is not treated as an authenticated identity.
 pub struct PersistentProofFreshnessLedgerV1 {
     #[cfg(target_os = "linux")]
     inner: linux::LinuxLedger,
