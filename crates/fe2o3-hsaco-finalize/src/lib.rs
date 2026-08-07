@@ -25,6 +25,7 @@ mod worker_executor;
 mod worker_protocol;
 mod worker_protocol_v2;
 mod worker_v2_hsaco_admission;
+mod worker_v2_hsaco_finalization;
 mod worker_v2_hsaco_publication;
 
 pub use compiler_ffi_bridge::{
@@ -97,6 +98,11 @@ pub use worker_v2_hsaco_admission::{
     InspectedRawWorkerV2HsacoV1, ObservedWorkerV2KernelSymbolsV1, SealedWorkerV2ResponseIdentityV1,
     WorkerV2RawHsacoInspectionError, WorkerV2RawHsacoPolicyIdentityV1, WorkerV2RawHsacoPolicyV1,
     WorkerV2RawLaunchContractV1, inspect_worker_v2_raw_hsaco_v1,
+};
+pub use worker_v2_hsaco_finalization::{
+    DescriptorSourceEvidenceRequirementV1, FinalizedWorkerV2HsacoIdentityV1,
+    MissingAuthenticatedDescriptorSourceEvidenceV1, PreparedFinalizedWorkerV2HsacoV1,
+    WorkerV2HsacoFinalizationError, finalize_inspected_worker_v2_hsaco_v1,
 };
 pub use worker_v2_hsaco_publication::{
     PreparedWorkerV2HsacoPublicationV1, WorkerV2HsacoPublicationError,

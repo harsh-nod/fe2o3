@@ -11,7 +11,8 @@ const RODATA_SECTION_INDEX: usize = 2;
 const TEXT_SECTION_INDEX: usize = 3;
 const STRTAB_SECTION_INDEX: usize = 4;
 const SYMTAB_SECTION_INDEX: usize = 5;
-const SHSTRTAB_SECTION_INDEX: usize = 6;
+const CANONICAL_DESCRIPTOR_SECTION_INDEX: usize = 6;
+const SHSTRTAB_SECTION_INDEX: usize = 7;
 
 #[derive(Clone, Copy)]
 struct FixtureOptions<'a> {
@@ -50,6 +51,13 @@ struct Fixture {
 }
 
 fn fixture(options: FixtureOptions<'_>) -> Fixture {
+    fixture_with_descriptor_table(options, None)
+}
+
+fn fixture_with_descriptor_table(
+    options: FixtureOptions<'_>,
+    descriptor_table: Option<&[u8]>,
+) -> Fixture {
     const PROGRAM_COUNT: usize = 2;
     let metadata = metadata(options);
     let note = metadata_note(&metadata);
@@ -120,6 +128,12 @@ fn fixture(options: FixtureOptions<'_>) -> Fixture {
         write_u64(&mut bytes, export_symbol + 16, 64);
     }
 
+    align(&mut bytes, 8);
+    let canonical_descriptor_offset = bytes.len();
+    if let Some(table) = descriptor_table {
+        bytes.extend_from_slice(table);
+    }
+
     write_u32(&mut bytes, descriptor_offset + 8, 272);
     write_i64(
         &mut bytes,
@@ -145,19 +159,20 @@ fn fixture(options: FixtureOptions<'_>) -> Fixture {
     let text_name = push_name(&mut shstr, ".text");
     let strtab_name = push_name(&mut shstr, ".strtab");
     let symtab_name = push_name(&mut shstr, ".symtab");
-    let shstrtab_name = push_name(
+    let canonical_descriptor_name = push_name(
         &mut shstr,
-        if options.include_canonical_descriptor_section_name {
+        if options.include_canonical_descriptor_section_name || descriptor_table.is_some() {
             DEVICE_DESCRIPTOR_SECTION_NAME
         } else {
-            ".shstrtab"
+            ".fixture"
         },
     );
+    let shstrtab_name = push_name(&mut shstr, ".shstrtab");
     let shstrtab_offset = bytes.len();
     bytes.extend_from_slice(&shstr);
     align(&mut bytes, 8);
     let section_table_offset = bytes.len();
-    bytes.resize(section_table_offset + 7 * SECTION_HEADER_BYTES, 0);
+    bytes.resize(section_table_offset + 8 * SECTION_HEADER_BYTES, 0);
 
     bytes[..4].copy_from_slice(b"\x7fELF");
     bytes[4] = 2;
@@ -175,7 +190,7 @@ fn fixture(options: FixtureOptions<'_>) -> Fixture {
     write_u16(&mut bytes, 54, PROGRAM_HEADER_BYTES as u16);
     write_u16(&mut bytes, 56, PROGRAM_COUNT as u16);
     write_u16(&mut bytes, 58, SECTION_HEADER_BYTES as u16);
-    write_u16(&mut bytes, 60, 7);
+    write_u16(&mut bytes, 60, 8);
     write_u16(&mut bytes, 62, SHSTRTAB_SECTION_INDEX as u16);
 
     let rodata_program = ELF_HEADER_BYTES;
@@ -252,6 +267,26 @@ fn fixture(options: FixtureOptions<'_>) -> Fixture {
     write_u32(&mut bytes, symtab_header + 44, 1);
     write_u64(&mut bytes, symtab_header + 48, 8);
     write_u64(&mut bytes, symtab_header + 56, 24);
+
+    let canonical_descriptor_header =
+        section_table_offset + CANONICAL_DESCRIPTOR_SECTION_INDEX * SECTION_HEADER_BYTES;
+    write_u32(
+        &mut bytes,
+        canonical_descriptor_header,
+        canonical_descriptor_name,
+    );
+    write_u32(&mut bytes, canonical_descriptor_header + 4, 1);
+    write_u64(
+        &mut bytes,
+        canonical_descriptor_header + 24,
+        canonical_descriptor_offset as u64,
+    );
+    write_u64(
+        &mut bytes,
+        canonical_descriptor_header + 32,
+        descriptor_table.map_or(0, |table| table.len()) as u64,
+    );
+    write_u64(&mut bytes, canonical_descriptor_header + 48, 8);
 
     let shstrtab_header = section_table_offset + SHSTRTAB_SECTION_INDEX * SECTION_HEADER_BYTES;
     write_u32(&mut bytes, shstrtab_header, shstrtab_name);

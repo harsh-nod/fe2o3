@@ -128,6 +128,21 @@ manifest, defined-symbol closure, descriptors, and `gfx942` launch metadata. It 
 replacement for those policies. This admission is deliberately distinct from canonical
 `.fe2o3.kd.v1` descriptor-table finalization, which does not run on the Worker V2 publication path.
 
+`finalize_inspected_worker_v2_hsaco_v1` is an opt-in bridge from that admitted raw evidence to the
+existing canonical finalizer. When the raw HSACO contains one valid zero-digest `.fe2o3.kd.v1`, it
+patches only the digest, independently verifies the result, cross-checks target, code-object
+version, kernel closure, and launch metadata against the retained raw policy, and returns an opaque
+`PreparedFinalizedWorkerV2HsacoV1`. The value privately retains both raw and finalized lineage.
+This is structural integrity evidence only: the embedded descriptor's compiler, source, ABI,
+layout, effect, and build-evidence claims remain unauthenticated.
+
+Current Worker V2 output may omit `.fe2o3.kd.v1`. In that case the bridge returns an owning
+`MissingAuthenticatedDescriptorSourceEvidenceV1` blocker. It records the admitted lineage, target,
+code-object version, policy, and observed kernels but does not expose or fabricate a descriptor
+table. In particular, Rust ABI, layout, effect, and source claims are never inferred from
+executable metadata. Neither the structural result nor the blocker grants publication, loading, or
+launch authority, and this bridge is not yet connected to `cargo-fe2o3` publication.
+
 `prepare_worker_v2_hsaco_publication_v1` consumes the admitted evidence and returns the typed
 `PreparedWorkerV2HsacoPublicationV1` bridge. Its durable plan and upstream evidence identity remain
 private. `publish_prepared_worker_v2_hsaco_v1` uses that bridge with the matching producer and live

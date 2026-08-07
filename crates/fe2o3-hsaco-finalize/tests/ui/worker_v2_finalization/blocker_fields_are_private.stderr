@@ -1,0 +1,5 @@
+error[E0616]: field `raw` of struct `MissingAuthenticatedDescriptorSourceEvidenceV1` is private
+ --> tests/ui/worker_v2_finalization/blocker_fields_are_private.rs:4:22
+  |
+4 |     let _ = &blocker.raw;
+  |                      ^^^ private field
