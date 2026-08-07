@@ -13,8 +13,8 @@ use fe2o3_artifact_transaction::{
     read_backend_publication_receipt_v1,
 };
 use fe2o3_hsaco_finalize::{
-    PreparedWorkerV2HsacoPublicationV1, WorkerV2HsacoPublicationError,
-    inspect_worker_v2_raw_hsaco_v1, publish_prepared_worker_v2_hsaco_v1,
+    WorkerV2HsacoPublicationError, inspect_worker_v2_raw_hsaco_v1,
+    publish_prepared_finalized_worker_v2_hsaco_v1, publish_prepared_worker_v2_hsaco_v1,
 };
 use fe2o3_rustc_invocation::{
     RustcArgsErrorV2, RustcCompileInvocationV2, RustcInvocationV2, classify_rustc_invocation_v2,
@@ -29,8 +29,9 @@ use crate::worker_v2::{
     PreparedWorkerV2Config, WORKER_V2_EXPECTED_ID_ENV, WorkerV2ConfigError, WorkerV2ConfigIdentity,
 };
 use crate::worker_v2_restart::{
-    ReceiptRecordV1, RestartIntentErrorV1, ResumeMarkerErrorV1, ResumeMarkerStateV1,
-    WorkerV2ResumeStoreV1, persist_admitted_worker_v2_intent_v1, recover_worker_v2_intent_v1,
+    PreparedWorkerV2PublicationV1, RestartIntentErrorV1, ResumeMarkerErrorV1, ResumeMarkerStateV1,
+    WorkerV2PublicationKindV1, WorkerV2ResumeStoreV1, persist_admitted_worker_v2_intent_v1,
+    recover_worker_v2_intent_v1,
 };
 use crate::{ARTIFACT_CHILD_FD, BACKEND_CHILD_FD, MANAGED_RUSTC_ARGS_ENV};
 
@@ -622,7 +623,13 @@ fn complete_fresh_worker_v2(
     })?;
     let persisted = persist_admitted_worker_v2_intent_v1(resume, &managed.producer, inspected)
         .map_err(|error| preserve_restart_error("persistence", error))?;
-    publish_finish_and_clear(managed, resume, persisted.intent, Some(&persisted.prepared))
+    publish_finish_and_clear(
+        managed,
+        resume,
+        persisted.prepared.kind(),
+        persisted.intent,
+        Some(&persisted.prepared),
+    )
 }
 
 fn complete_recovered_worker_v2(
@@ -630,13 +637,8 @@ fn complete_recovered_worker_v2(
     resume: &WorkerV2ResumeStoreV1,
     state: ResumeMarkerStateV1,
 ) -> Result<(), CompletionFailure> {
-    if let ResumeMarkerStateV1::Completed {
-        attempt,
-        intent,
-        receipt,
-    } = state
-    {
-        return reconcile_completed_worker_v2(managed, resume, attempt, intent, receipt, state);
+    if matches!(state, ResumeMarkerStateV1::Completed { .. }) {
+        return reconcile_completed_worker_v2(managed, resume, state);
     }
     let intent = match recover_worker_v2_intent_v1(resume, &managed.producer, state) {
         Ok(intent) => intent,
@@ -652,14 +654,15 @@ fn complete_recovered_worker_v2(
         }
         Err(error) => return Err(preserve_restart_error("recovery", error)),
     };
-    publish_finish_and_clear(managed, resume, intent, None)
+    publish_finish_and_clear(managed, resume, state.publication(), intent, None)
 }
 
 fn publish_finish_and_clear(
     managed: &ManagedAttempt,
     resume: &WorkerV2ResumeStoreV1,
+    publication: WorkerV2PublicationKindV1,
     intent: RecoveredWorkerV2PublicationIntentV1,
-    prepared: Option<&PreparedWorkerV2HsacoPublicationV1>,
+    prepared: Option<&PreparedWorkerV2PublicationV1>,
 ) -> Result<(), CompletionFailure> {
     let record = intent.record();
     let intent_identity = record.identity();
@@ -668,14 +671,9 @@ fn publish_finish_and_clear(
         verify_prepared_publication_compatibility(managed, prepared, receipt)?;
     }
     finish_worker_v2_attempt(managed)?;
-    resume
-        .persist_completed(managed.attempt, intent_identity, receipt)
+    let completed = resume
+        .persist_completed(publication, managed.attempt, intent_identity, receipt)
         .map_err(|error| preserve_marker_error("completion persistence", error))?;
-    let completed = ResumeMarkerStateV1::Completed {
-        attempt: managed.attempt,
-        intent: intent_identity,
-        receipt: ReceiptRecordV1::from_receipt(receipt),
-    };
     clear_worker_v2_publication_intent_v1(
         &managed.output_dir,
         &managed.producer,
@@ -690,22 +688,32 @@ fn publish_finish_and_clear(
 
 fn verify_prepared_publication_compatibility(
     managed: &ManagedAttempt,
-    prepared: &PreparedWorkerV2HsacoPublicationV1,
+    prepared: &PreparedWorkerV2PublicationV1,
     expected: BackendPublicationReceiptV1,
 ) -> Result<(), CompletionFailure> {
-    let actual =
-        match publish_prepared_worker_v2_hsaco_v1(&managed.output_dir, &managed.producer, prepared)
-        {
-            Ok(published) => published.receipt(),
-            Err(WorkerV2HsacoPublicationError::Publication(
-                AttemptScopedHsacoPublicationErrorV1::ReceiptAlreadyPersisted { receipt },
-            )) => *receipt,
-            Err(error) => {
-                return Err(CompletionFailure::PreserveAttempt(format!(
-                    "Worker V2 prepared publication disagrees with its restart journal: {error}"
-                )));
-            }
-        };
+    let published = match prepared {
+        PreparedWorkerV2PublicationV1::Raw(prepared) => {
+            publish_prepared_worker_v2_hsaco_v1(&managed.output_dir, &managed.producer, prepared)
+        }
+        PreparedWorkerV2PublicationV1::Finalized(prepared) => {
+            publish_prepared_finalized_worker_v2_hsaco_v1(
+                &managed.output_dir,
+                &managed.producer,
+                prepared,
+            )
+        }
+    };
+    let actual = match published {
+        Ok(published) => published.receipt(),
+        Err(WorkerV2HsacoPublicationError::Publication(
+            AttemptScopedHsacoPublicationErrorV1::ReceiptAlreadyPersisted { receipt },
+        )) => *receipt,
+        Err(error) => {
+            return Err(CompletionFailure::PreserveAttempt(format!(
+                "Worker V2 prepared publication disagrees with its restart journal: {error}"
+            )));
+        }
+    };
     if actual != expected {
         return Err(CompletionFailure::PreserveAttempt(
             "Worker V2 prepared publication produced a substituted backend receipt".into(),
@@ -717,11 +725,19 @@ fn verify_prepared_publication_compatibility(
 fn reconcile_completed_worker_v2(
     managed: &ManagedAttempt,
     resume: &WorkerV2ResumeStoreV1,
-    attempt: BuildAttempt,
-    intent_identity: fe2o3_artifact_transaction::WorkerV2PublicationIntentIdentityV1,
-    expected_receipt: ReceiptRecordV1,
     completed: ResumeMarkerStateV1,
 ) -> Result<(), CompletionFailure> {
+    let ResumeMarkerStateV1::Completed {
+        attempt,
+        intent: intent_identity,
+        receipt: expected_receipt,
+        ..
+    } = completed
+    else {
+        return Err(CompletionFailure::PreserveAttempt(
+            "Worker V2 completion reconciliation received a non-completed marker".into(),
+        ));
+    };
     debug_assert_eq!(attempt, managed.attempt);
     let receipt = read_backend_publication_receipt_v1(
         &managed.output_dir,

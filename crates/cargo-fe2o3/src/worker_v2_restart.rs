@@ -9,16 +9,19 @@ use fe2o3_artifact_transaction::{
     AtomicPublicationIdentityV1, BackendPublicationReceiptV1, BuildAttempt, BuildSession,
     CanonicalLinkRequestIdentityV1, DurableLinkPublicationPlanV1, FinalizationIdentityV1,
     FinalizedOutputIdentityV1, KernelSetIdentityV1, LinkPublicationScopeV1, LinkedOutputIdentityV1,
-    PinnedWorkerIdentityV1, ProducerIdentity, RecoveredWorkerV2PublicationIntentV1,
-    TargetIdentityV1, UpstreamCodeObjectEvidenceIdentityV1, ValidatedResponseIdentityV1,
-    WorkerV2PublicationIntentErrorV1, WorkerV2PublicationIntentIdentityV1,
-    persist_worker_v2_publication_intent_v1, producer_package_identity_v1,
-    recover_worker_v2_publication_intent_v1,
+    PackageIdentityV1, PinnedWorkerIdentityV1, ProducerIdentity,
+    RecoveredWorkerV2PublicationIntentV1, TargetIdentityV1, UpstreamCodeObjectEvidenceIdentityV1,
+    ValidatedResponseIdentityV1, WorkerV2PublicationIntentErrorV1,
+    WorkerV2PublicationIntentIdentityV1, persist_worker_v2_publication_intent_v1,
+    producer_package_identity_v1, recover_worker_v2_publication_intent_v1,
 };
 use fe2o3_compiler_ffi::CodeObjectVersion;
 use fe2o3_hsaco_finalize::{
-    InspectedRawWorkerV2HsacoV1, PreparedWorkerV2HsacoPublicationV1, WorkerV2HsacoPublicationError,
-    prepare_worker_v2_hsaco_publication_v1,
+    CanonicalDescriptorSectionObservationV1, InspectedRawWorkerV2HsacoV1,
+    PreparedFinalizedWorkerV2HsacoPublicationV1, PreparedFinalizedWorkerV2HsacoV1,
+    PreparedWorkerV2HsacoPublicationV1, WorkerV2HsacoFinalizationError,
+    WorkerV2HsacoPublicationError, finalize_inspected_worker_v2_hsaco_v1,
+    prepare_finalized_worker_v2_hsaco_publication_v1, prepare_worker_v2_hsaco_publication_v1,
 };
 use rustix::fd::{FromRawFd, OwnedFd};
 use rustix::fs::{
@@ -28,7 +31,7 @@ use rustix::fs::{
 use sha2::{Digest, Sha256};
 
 const MARKER_MAGIC: &[u8] = b"FE2O3-CARGO-WORKER-V2-RESUME-V1\0";
-const MARKER_VERSION: u16 = 1;
+const MARKER_VERSION: u16 = 2;
 const MARKER_CHECKSUM_DOMAIN: &[u8] = b"FE2O3/CARGO-WORKER-V2-RESUME-CHECKSUM/V1\0";
 const ADMISSION_COMMITMENT_DOMAIN: &[u8] = b"FE2O3/CARGO-WORKER-V2-ADMISSION-COMMITMENT/V1\0";
 const MARKER_PREFIX: &str = ".fe2o3-cargo-worker-v2-resume-v1-";
@@ -37,7 +40,7 @@ const RECORD_SUFFIX: &str = ".record";
 const TEMP_SUFFIX: &str = ".tmp-";
 const RECEIPT_FIELDS: usize = 7;
 const MARKER_BYTES: usize =
-    MARKER_MAGIC.len() + 2 + 1 + 32 + 8 + 16 + 32 + 32 + RECEIPT_FIELDS * 32 + 32;
+    MARKER_MAGIC.len() + 2 + 1 + 1 + 32 + 8 + 16 + 32 + 32 + 32 + RECEIPT_FIELDS * 32 + 32;
 
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(1);
 
@@ -80,19 +83,47 @@ impl ReceiptRecordV1 {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WorkerV2PublicationKindV1 {
+    Raw,
+    Finalized,
+}
+
+impl WorkerV2PublicationKindV1 {
+    const fn tag(self) -> u8 {
+        match self {
+            Self::Raw => 1,
+            Self::Finalized => 2,
+        }
+    }
+
+    const fn from_tag(tag: u8) -> Option<Self> {
+        match tag {
+            1 => Some(Self::Raw),
+            2 => Some(Self::Finalized),
+            _ => None,
+        }
+    }
+}
+
 #[allow(clippy::large_enum_variant)] // The fixed receipt is kept inline for exact marker equality.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ResumeMarkerStateV1 {
     Pending {
+        publication: WorkerV2PublicationKindV1,
         attempt: BuildAttempt,
         admission: [u8; 32],
     },
     Ready {
+        publication: WorkerV2PublicationKindV1,
         attempt: BuildAttempt,
+        admission: [u8; 32],
         intent: WorkerV2PublicationIntentIdentityV1,
     },
     Completed {
+        publication: WorkerV2PublicationKindV1,
         attempt: BuildAttempt,
+        admission: [u8; 32],
         intent: WorkerV2PublicationIntentIdentityV1,
         receipt: ReceiptRecordV1,
     },
@@ -103,6 +134,11 @@ pub(crate) enum RestartIntentErrorV1 {
     Marker(ResumeMarkerErrorV1),
     Intent(WorkerV2PublicationIntentErrorV1),
     Preparation(WorkerV2HsacoPublicationError),
+    Finalization(WorkerV2HsacoFinalizationError),
+    UnsupportedPublicationRoute {
+        code_object_version: CodeObjectVersion,
+        descriptor: CanonicalDescriptorSectionObservationV1,
+    },
     IntentIdentityMismatch,
 }
 
@@ -119,6 +155,16 @@ impl fmt::Display for RestartIntentErrorV1 {
                     "Worker V2 publication preparation failed: {error}"
                 )
             }
+            Self::Finalization(error) => {
+                write!(formatter, "Worker V2 HSACO finalization failed: {error}")
+            }
+            Self::UnsupportedPublicationRoute {
+                code_object_version,
+                descriptor,
+            } => write!(
+                formatter,
+                "Worker V2 publication rejects {code_object_version:?} with descriptor observation {descriptor:?}; only descriptor-missing COV5 raw compatibility and descriptor-bearing COV6 canonical finalization are supported"
+            ),
             Self::IntentIdentityMismatch => formatter.write_str(
                 "recovered Worker V2 publication intent does not match its resume marker",
             ),
@@ -132,6 +178,8 @@ impl Error for RestartIntentErrorV1 {
             Self::Marker(error) => Some(error),
             Self::Intent(error) => Some(error),
             Self::Preparation(error) => Some(error),
+            Self::Finalization(error) => Some(error),
+            Self::UnsupportedPublicationRoute { .. } => None,
             Self::IntentIdentityMismatch => None,
         }
     }
@@ -139,7 +187,22 @@ impl Error for RestartIntentErrorV1 {
 
 pub(crate) struct PersistedAdmittedWorkerV2IntentV1 {
     pub(crate) intent: RecoveredWorkerV2PublicationIntentV1,
-    pub(crate) prepared: PreparedWorkerV2HsacoPublicationV1,
+    pub(crate) prepared: PreparedWorkerV2PublicationV1,
+}
+
+#[derive(Debug)]
+pub(crate) enum PreparedWorkerV2PublicationV1 {
+    Raw(PreparedWorkerV2HsacoPublicationV1),
+    Finalized(PreparedFinalizedWorkerV2HsacoPublicationV1),
+}
+
+impl PreparedWorkerV2PublicationV1 {
+    pub(crate) const fn kind(&self) -> WorkerV2PublicationKindV1 {
+        match self {
+            Self::Raw(_) => WorkerV2PublicationKindV1::Raw,
+            Self::Finalized(_) => WorkerV2PublicationKindV1::Finalized,
+        }
+    }
 }
 
 impl From<ResumeMarkerErrorV1> for RestartIntentErrorV1 {
@@ -160,11 +223,35 @@ pub(crate) fn persist_admitted_worker_v2_intent_v1(
     inspected: InspectedRawWorkerV2HsacoV1,
 ) -> Result<PersistedAdmittedWorkerV2IntentV1, RestartIntentErrorV1> {
     let attempt = inspected.attempt();
-    let (plan, upstream) = derive_publication_plan_v1(producer, &inspected);
-    let admission = restart_admission_commitment_v1(plan, upstream, inspected.exact_bytes());
-    let prepared = prepare_worker_v2_hsaco_publication_v1(producer, inspected)
-        .map_err(RestartIntentErrorV1::Preparation)?;
-    store.persist_pending(attempt, admission)?;
+    let publication = select_publication_kind_v1(
+        inspected.code_object_version(),
+        inspected.canonical_descriptor_section(),
+    )?;
+    let (plan, upstream, prepared) = match publication {
+        WorkerV2PublicationKindV1::Raw => {
+            let (plan, upstream) = derive_publication_plan_v1(producer, &inspected);
+            let prepared = prepare_worker_v2_hsaco_publication_v1(producer, inspected)
+                .map_err(RestartIntentErrorV1::Preparation)?;
+            (plan, upstream, PreparedWorkerV2PublicationV1::Raw(prepared))
+        }
+        WorkerV2PublicationKindV1::Finalized => {
+            let seed = derive_finalized_publication_plan_seed_v1(producer, &inspected);
+            let finalized = finalize_inspected_worker_v2_hsaco_v1(inspected)
+                .map_err(RestartIntentErrorV1::Finalization)?;
+            let (plan, upstream) = complete_finalized_publication_plan_v1(seed, &finalized);
+            let prepared = prepare_finalized_worker_v2_hsaco_publication_v1(producer, finalized)
+                .map_err(RestartIntentErrorV1::Preparation)?;
+            (
+                plan,
+                upstream,
+                PreparedWorkerV2PublicationV1::Finalized(prepared),
+            )
+        }
+    };
+    debug_assert_eq!(publication, prepared.kind());
+    let admission =
+        restart_admission_commitment_v1(publication, plan, upstream, prepared.exact_bytes());
+    store.persist_pending(publication, attempt, admission)?;
     store.verify_output_path()?;
     let persisted = persist_worker_v2_publication_intent_v1(
         &store.display_path,
@@ -175,11 +262,32 @@ pub(crate) fn persist_admitted_worker_v2_intent_v1(
         prepared.exact_bytes(),
     )?;
     store.verify_output_path()?;
-    store.persist_ready(attempt, persisted.record().identity())?;
+    store.persist_ready(publication, attempt, persisted.record().identity())?;
     Ok(PersistedAdmittedWorkerV2IntentV1 {
         intent: persisted,
         prepared,
     })
+}
+
+fn select_publication_kind_v1(
+    code_object_version: CodeObjectVersion,
+    descriptor: CanonicalDescriptorSectionObservationV1,
+) -> Result<WorkerV2PublicationKindV1, RestartIntentErrorV1> {
+    match (code_object_version, descriptor) {
+        (CodeObjectVersion::V5, CanonicalDescriptorSectionObservationV1::Missing) => {
+            Ok(WorkerV2PublicationKindV1::Raw)
+        }
+        (
+            CodeObjectVersion::V6,
+            CanonicalDescriptorSectionObservationV1::PresentButNotFinalizedByThisInspection,
+        ) => Ok(WorkerV2PublicationKindV1::Finalized),
+        (code_object_version, descriptor) => {
+            Err(RestartIntentErrorV1::UnsupportedPublicationRoute {
+                code_object_version,
+                descriptor,
+            })
+        }
+    }
 }
 
 pub(crate) fn recover_worker_v2_intent_v1(
@@ -197,17 +305,17 @@ pub(crate) fn recover_worker_v2_intent_v1(
     {
         return Err(RestartIntentErrorV1::IntentIdentityMismatch);
     }
-    if let ResumeMarkerStateV1::Pending { admission, .. } = state
-        && restart_admission_commitment_v1(
-            recovered.record().plan(),
-            recovered.record().upstream_evidence(),
-            recovered.exact_output(),
-        ) != admission
+    if restart_admission_commitment_v1(
+        state.publication(),
+        recovered.record().plan(),
+        recovered.record().upstream_evidence(),
+        recovered.exact_output(),
+    ) != state.admission()
     {
         return Err(RestartIntentErrorV1::IntentIdentityMismatch);
     }
     if matches!(state, ResumeMarkerStateV1::Pending { .. }) {
-        store.persist_ready(attempt, recovered.record().identity())?;
+        store.persist_ready(state.publication(), attempt, recovered.record().identity())?;
     }
     Ok(recovered)
 }
@@ -330,12 +438,186 @@ fn derive_publication_plan_v1(
     (plan, upstream)
 }
 
+#[derive(Clone, Copy)]
+struct FinalizedPublicationPlanSeedV1 {
+    attempt: BuildAttempt,
+    producer_package: PackageIdentityV1,
+    kernel_set: KernelSetIdentityV1,
+    target: TargetIdentityV1,
+    request: CanonicalLinkRequestIdentityV1,
+    worker: PinnedWorkerIdentityV1,
+    response: ValidatedResponseIdentityV1,
+    linked_output: LinkedOutputIdentityV1,
+    raw_identity: [u8; 32],
+}
+
+fn derive_finalized_publication_plan_seed_v1(
+    producer: &ProducerIdentity,
+    raw: &InspectedRawWorkerV2HsacoV1,
+) -> FinalizedPublicationPlanSeedV1 {
+    const KERNEL_SET_DOMAIN: &[u8] = b"FE2O3/WORKER-V2-FINALIZED-PUBLICATION-KERNEL-SET/V1\0";
+    const TARGET_DOMAIN: &[u8] = b"FE2O3/WORKER-V2-FINALIZED-PUBLICATION-TARGET/V1\0";
+    const REQUEST_DOMAIN: &[u8] = b"FE2O3/WORKER-V2-FINALIZED-PUBLICATION-REQUEST/V1\0";
+    const WORKER_DOMAIN: &[u8] = b"FE2O3/WORKER-V2-FINALIZED-PUBLICATION-WORKER/V1\0";
+    const RESPONSE_DOMAIN: &[u8] = b"FE2O3/WORKER-V2-FINALIZED-PUBLICATION-RESPONSE/V1\0";
+
+    let producer_package = producer_package_identity_v1(producer);
+    let manifest = raw.policy().symbol_manifest().identity();
+    let compiler_envelope = raw.compiler_envelope_identity();
+    let kernel_set = KernelSetIdentityV1::from_bytes(hash_identity(KERNEL_SET_DOMAIN, |digest| {
+        digest.update(manifest.sha256());
+        digest.update(manifest.byte_len().to_le_bytes());
+        digest.update(compiler_envelope.as_bytes());
+    }));
+
+    let launch = raw.policy().launch();
+    let target_text = raw.target().to_string();
+    let target = TargetIdentityV1::from_bytes(hash_identity(TARGET_DOMAIN, |digest| {
+        update_length_prefixed(digest, target_text.as_bytes());
+        digest.update([code_object_version_tag(raw.code_object_version())]);
+        for axis in launch.required_workgroup_size() {
+            digest.update(axis.to_le_bytes());
+        }
+        digest.update(launch.max_flat_workgroup_size().to_le_bytes());
+        digest.update(launch.wavefront_size().to_le_bytes());
+    }));
+
+    let source = raw.source_evidence_identity();
+    let request =
+        CanonicalLinkRequestIdentityV1::from_bytes(hash_identity(REQUEST_DOMAIN, |digest| {
+            digest.update(raw.sealed_request_id());
+            digest.update(raw.sealed_request_identity());
+            digest.update(raw.handoff_identity().as_bytes());
+            digest.update(manifest.sha256());
+            digest.update(manifest.byte_len().to_le_bytes());
+            digest.update(raw.link_plan_identity().as_bytes());
+            digest.update(raw.policy().compiler_envelope_identity().as_bytes());
+            digest.update(raw.policy().identity().as_bytes());
+            digest.update(source.as_bytes());
+            digest.update(raw.worker_measurement().executable().sha256());
+            digest.update(
+                raw.worker_measurement()
+                    .executable()
+                    .byte_len()
+                    .to_le_bytes(),
+            );
+        }));
+
+    let measurement = raw.worker_measurement();
+    let executable = measurement.executable();
+    let worker = PinnedWorkerIdentityV1::from_bytes(hash_identity(WORKER_DOMAIN, |digest| {
+        digest.update(executable.sha256());
+        digest.update(executable.byte_len().to_le_bytes());
+        update_length_prefixed(digest, measurement.worker_build_identity().as_bytes());
+        update_length_prefixed(digest, measurement.llvm_build_identity().as_bytes());
+    }));
+    let response =
+        ValidatedResponseIdentityV1::from_bytes(hash_identity(RESPONSE_DOMAIN, |digest| {
+            digest.update(raw.response_identity().as_bytes());
+        }));
+
+    FinalizedPublicationPlanSeedV1 {
+        attempt: raw.attempt(),
+        producer_package,
+        kernel_set,
+        target,
+        request,
+        worker,
+        response,
+        linked_output: LinkedOutputIdentityV1::from_bytes(*raw.linked_output_identity().sha256()),
+        raw_identity: *raw.identity().as_bytes(),
+    }
+}
+
+fn complete_finalized_publication_plan_v1(
+    seed: FinalizedPublicationPlanSeedV1,
+    finalized: &PreparedFinalizedWorkerV2HsacoV1,
+) -> (
+    DurableLinkPublicationPlanV1,
+    UpstreamCodeObjectEvidenceIdentityV1,
+) {
+    const FINALIZATION_DOMAIN: &[u8] = b"FE2O3/WORKER-V2-FINALIZED-PUBLICATION-FINALIZATION/V1\0";
+    const PUBLICATION_DOMAIN: &[u8] = b"FE2O3/WORKER-V2-FINALIZED-ATOMIC-PUBLICATION/V1\0";
+    const UPSTREAM_DOMAIN: &[u8] = b"FE2O3/WORKER-V2-FINALIZED-PUBLICATION-UPSTREAM/V1\0";
+
+    let finalization =
+        FinalizationIdentityV1::from_bytes(hash_identity(FINALIZATION_DOMAIN, |digest| {
+            digest.update(seed.raw_identity);
+            digest.update(finalized.identity().as_bytes());
+            digest.update(finalized.canonical_digest().as_bytes());
+            hash_content_identity(
+                digest,
+                finalized.raw_output_identity().sha256(),
+                finalized.raw_output_identity().byte_len(),
+            );
+            hash_content_identity(
+                digest,
+                finalized.finalized_output_identity().sha256(),
+                finalized.finalized_output_identity().byte_len(),
+            );
+        }));
+    let finalized_output =
+        FinalizedOutputIdentityV1::from_bytes(*finalized.finalized_output_identity().sha256());
+    let publication =
+        AtomicPublicationIdentityV1::from_bytes(hash_identity(PUBLICATION_DOMAIN, |digest| {
+            digest.update(seed.attempt.generation().to_le_bytes());
+            digest.update(seed.attempt.session().as_bytes());
+            digest.update(seed.attempt.invocation().as_bytes());
+            digest.update(seed.producer_package.as_bytes());
+            digest.update(seed.kernel_set.as_bytes());
+            digest.update(seed.target.as_bytes());
+            digest.update(seed.request.as_bytes());
+            digest.update(seed.worker.as_bytes());
+            digest.update(seed.response.as_bytes());
+            digest.update(seed.linked_output.as_bytes());
+            digest.update(finalization.as_bytes());
+            digest.update(finalized_output.as_bytes());
+            digest.update(seed.raw_identity);
+            digest.update(finalized.identity().as_bytes());
+        }));
+    let plan = DurableLinkPublicationPlanV1::new(
+        seed.attempt,
+        LinkPublicationScopeV1::new(seed.producer_package, seed.kernel_set, seed.target),
+        seed.request,
+        seed.worker,
+        seed.response,
+        seed.linked_output,
+        finalization,
+        finalized_output,
+        publication,
+    );
+    let upstream = UpstreamCodeObjectEvidenceIdentityV1::from_bytes(hash_identity(
+        UPSTREAM_DOMAIN,
+        |digest| {
+            digest.update(seed.raw_identity);
+            digest.update(finalized.identity().as_bytes());
+            digest.update(finalization.as_bytes());
+        },
+    ));
+    (plan, upstream)
+}
+
+fn hash_content_identity(digest: &mut Sha256, sha256: &[u8; 32], byte_len: u64) {
+    digest.update(sha256);
+    digest.update(byte_len.to_le_bytes());
+}
+
+const fn code_object_version_tag(version: CodeObjectVersion) -> u8 {
+    match version {
+        CodeObjectVersion::V4 => 4,
+        CodeObjectVersion::V5 => 5,
+        CodeObjectVersion::V6 => 6,
+    }
+}
+
 pub(crate) fn restart_admission_commitment_v1(
+    publication: WorkerV2PublicationKindV1,
     plan: DurableLinkPublicationPlanV1,
     upstream: UpstreamCodeObjectEvidenceIdentityV1,
     output: &[u8],
 ) -> [u8; 32] {
     hash_identity(ADMISSION_COMMITMENT_DOMAIN, |digest| {
+        digest.update([publication.tag()]);
         let attempt = plan.attempt();
         digest.update(attempt.generation().to_le_bytes());
         digest.update(attempt.session().as_bytes());
@@ -354,6 +636,15 @@ pub(crate) fn restart_admission_commitment_v1(
         digest.update(Sha256::digest(output));
         digest.update((output.len() as u64).to_le_bytes());
     })
+}
+
+impl PreparedWorkerV2PublicationV1 {
+    pub(crate) fn exact_bytes(&self) -> &[u8] {
+        match self {
+            Self::Raw(prepared) => prepared.exact_bytes(),
+            Self::Finalized(prepared) => prepared.exact_finalized_bytes(),
+        }
+    }
 }
 
 fn hash_identity(domain: &[u8], update: impl FnOnce(&mut Sha256)) -> [u8; 32] {
@@ -381,6 +672,22 @@ impl ResumeMarkerStateV1 {
         match self {
             Self::Pending { .. } => None,
             Self::Ready { intent, .. } | Self::Completed { intent, .. } => Some(intent),
+        }
+    }
+
+    pub(crate) const fn publication(self) -> WorkerV2PublicationKindV1 {
+        match self {
+            Self::Pending { publication, .. }
+            | Self::Ready { publication, .. }
+            | Self::Completed { publication, .. } => publication,
+        }
+    }
+
+    pub(crate) const fn admission(self) -> [u8; 32] {
+        match self {
+            Self::Pending { admission, .. }
+            | Self::Ready { admission, .. }
+            | Self::Completed { admission, .. } => admission,
         }
     }
 }
@@ -534,13 +841,18 @@ impl WorkerV2ResumeStoreV1 {
 
     pub(crate) fn persist_pending(
         &self,
+        publication: WorkerV2PublicationKindV1,
         attempt: BuildAttempt,
         admission: [u8; 32],
     ) -> Result<(), ResumeMarkerErrorV1> {
         if admission == [0; 32] {
             return Err(ResumeMarkerErrorV1::InvalidTransition);
         }
-        let pending = ResumeMarkerStateV1::Pending { attempt, admission };
+        let pending = ResumeMarkerStateV1::Pending {
+            publication,
+            attempt,
+            admission,
+        };
         match self.load()? {
             None => self.write(pending, false),
             Some(existing) if existing == pending => Ok(()),
@@ -550,38 +862,81 @@ impl WorkerV2ResumeStoreV1 {
 
     pub(crate) fn persist_ready(
         &self,
+        publication: WorkerV2PublicationKindV1,
         attempt: BuildAttempt,
         intent: WorkerV2PublicationIntentIdentityV1,
     ) -> Result<(), ResumeMarkerErrorV1> {
-        let ready = ResumeMarkerStateV1::Ready { attempt, intent };
         match self.load()? {
             Some(ResumeMarkerStateV1::Pending {
-                attempt: current, ..
-            }) if current == attempt => self.write(ready, true),
-            Some(existing) if existing == ready => Ok(()),
+                publication: current_publication,
+                attempt: current_attempt,
+                admission,
+            }) if current_publication == publication && current_attempt == attempt => self.write(
+                ResumeMarkerStateV1::Ready {
+                    publication,
+                    attempt,
+                    admission,
+                    intent,
+                },
+                true,
+            ),
+            Some(ResumeMarkerStateV1::Ready {
+                publication: current_publication,
+                attempt: current_attempt,
+                intent: current_intent,
+                ..
+            }) if current_publication == publication
+                && current_attempt == attempt
+                && current_intent == intent =>
+            {
+                Ok(())
+            }
             _ => Err(ResumeMarkerErrorV1::InvalidTransition),
         }
     }
 
     pub(crate) fn persist_completed(
         &self,
+        publication: WorkerV2PublicationKindV1,
         attempt: BuildAttempt,
         intent: WorkerV2PublicationIntentIdentityV1,
         receipt: BackendPublicationReceiptV1,
-    ) -> Result<(), ResumeMarkerErrorV1> {
-        let completed = ResumeMarkerStateV1::Completed {
-            attempt,
-            intent,
-            receipt: ReceiptRecordV1::from_receipt(receipt),
-        };
+    ) -> Result<ResumeMarkerStateV1, ResumeMarkerErrorV1> {
         match self.load()? {
             Some(ResumeMarkerStateV1::Ready {
+                publication: current_publication,
                 attempt: current_attempt,
+                admission,
                 intent: current_intent,
-            }) if current_attempt == attempt && current_intent == intent => {
-                self.write(completed, true)
+            }) if current_publication == publication
+                && current_attempt == attempt
+                && current_intent == intent =>
+            {
+                let completed = ResumeMarkerStateV1::Completed {
+                    publication,
+                    attempt,
+                    admission,
+                    intent,
+                    receipt: ReceiptRecordV1::from_receipt(receipt),
+                };
+                self.write(completed, true)?;
+                Ok(completed)
             }
-            Some(existing) if existing == completed => Ok(()),
+            Some(
+                existing @ ResumeMarkerStateV1::Completed {
+                    publication: current_publication,
+                    attempt: current_attempt,
+                    intent: current_intent,
+                    receipt: current_receipt,
+                    ..
+                },
+            ) if current_publication == publication
+                && current_attempt == attempt
+                && current_intent == intent
+                && current_receipt == ReceiptRecordV1::from_receipt(receipt) =>
+            {
+                Ok(existing)
+            }
             _ => Err(ResumeMarkerErrorV1::InvalidTransition),
         }
     }
@@ -778,10 +1133,10 @@ fn validate_private_file(
 
 fn encode_marker(package: [u8; 32], state: ResumeMarkerStateV1) -> Vec<u8> {
     let attempt = state.attempt();
+    let publication = state.publication();
+    let admission = state.admission();
     let (stage, intent, receipt) = match state {
-        ResumeMarkerStateV1::Pending { admission, .. } => {
-            (1, admission, ReceiptRecordV1([[0; 32]; 7]))
-        }
+        ResumeMarkerStateV1::Pending { .. } => (1, [0; 32], ReceiptRecordV1([[0; 32]; 7])),
         ResumeMarkerStateV1::Ready { intent, .. } => {
             (2, intent.as_bytes(), ReceiptRecordV1([[0; 32]; 7]))
         }
@@ -793,10 +1148,12 @@ fn encode_marker(package: [u8; 32], state: ResumeMarkerStateV1) -> Vec<u8> {
     bytes.extend_from_slice(MARKER_MAGIC);
     bytes.extend_from_slice(&MARKER_VERSION.to_le_bytes());
     bytes.push(stage);
+    bytes.push(publication.tag());
     bytes.extend_from_slice(&package);
     bytes.extend_from_slice(&attempt.generation().to_le_bytes());
     bytes.extend_from_slice(attempt.session().as_bytes());
     bytes.extend_from_slice(attempt.invocation().as_bytes());
+    bytes.extend_from_slice(&admission);
     bytes.extend_from_slice(&intent);
     receipt.encode(&mut bytes);
     let checksum = checksum(&bytes);
@@ -824,6 +1181,8 @@ fn decode_marker(
         return Err("unsupported marker version");
     }
     let stage = decoder.byte()?;
+    let publication = WorkerV2PublicationKindV1::from_tag(decoder.byte()?)
+        .ok_or("marker publication kind is noncanonical")?;
     if decoder.array()? != expected_package {
         return Err("marker producer package mismatch");
     }
@@ -836,24 +1195,33 @@ fn decode_marker(
         invocation.to_hex()
     ))
     .map_err(|_| "marker contains an invalid attempt")?;
+    let admission = decoder.array()?;
     let intent = WorkerV2PublicationIntentIdentityV1::from_bytes(decoder.array()?);
     let receipt = ReceiptRecordV1::decode(&mut decoder)?;
     if !decoder.finished() {
         return Err("marker has trailing body bytes");
     }
     match stage {
-        1 if intent.as_bytes() != [0; 32] && receipt.is_zero() => {
+        1 if admission != [0; 32] && intent.as_bytes() == [0; 32] && receipt.is_zero() => {
             Ok(ResumeMarkerStateV1::Pending {
+                publication,
                 attempt,
-                admission: intent.as_bytes(),
+                admission,
             })
         }
-        2 if intent.as_bytes() != [0; 32] && receipt.is_zero() => {
-            Ok(ResumeMarkerStateV1::Ready { attempt, intent })
-        }
-        3 if intent.as_bytes() != [0; 32] && !receipt.is_zero() => {
-            Ok(ResumeMarkerStateV1::Completed {
+        2 if admission != [0; 32] && intent.as_bytes() != [0; 32] && receipt.is_zero() => {
+            Ok(ResumeMarkerStateV1::Ready {
+                publication,
                 attempt,
+                admission,
+                intent,
+            })
+        }
+        3 if admission != [0; 32] && intent.as_bytes() != [0; 32] && !receipt.is_zero() => {
+            Ok(ResumeMarkerStateV1::Completed {
+                publication,
+                attempt,
+                admission,
                 intent,
                 receipt,
             })
@@ -1033,31 +1401,51 @@ mod tests {
         let store = WorkerV2ResumeStoreV1::open(&directory.0, &producer).unwrap();
         assert_eq!(store.load().unwrap(), None);
 
+        let publication = WorkerV2PublicationKindV1::Raw;
         let admission = [0x31; 32];
-        store.persist_pending(attempt, admission).unwrap();
+        store
+            .persist_pending(publication, attempt, admission)
+            .unwrap();
         assert_eq!(
             store.load().unwrap(),
-            Some(ResumeMarkerStateV1::Pending { attempt, admission })
+            Some(ResumeMarkerStateV1::Pending {
+                publication,
+                attempt,
+                admission,
+            })
         );
-        store.persist_pending(attempt, admission).unwrap();
+        store
+            .persist_pending(publication, attempt, admission)
+            .unwrap();
 
         let intent = WorkerV2PublicationIntentIdentityV1::from_bytes([0x41; 32]);
-        store.persist_ready(attempt, intent).unwrap();
+        store.persist_ready(publication, attempt, intent).unwrap();
         assert_eq!(
             store.load().unwrap(),
-            Some(ResumeMarkerStateV1::Ready { attempt, intent })
+            Some(ResumeMarkerStateV1::Ready {
+                publication,
+                attempt,
+                admission,
+                intent,
+            })
         );
-        store.persist_ready(attempt, intent).unwrap();
+        store.persist_ready(publication, attempt, intent).unwrap();
 
         let receipt = receipt(&directory.0, &producer, attempt, 7);
-        store.persist_completed(attempt, intent, receipt).unwrap();
+        store
+            .persist_completed(publication, attempt, intent, receipt)
+            .unwrap();
         let completed = ResumeMarkerStateV1::Completed {
+            publication,
             attempt,
+            admission,
             intent,
             receipt: ReceiptRecordV1::from_receipt(receipt),
         };
         assert_eq!(store.load().unwrap(), Some(completed));
-        store.persist_completed(attempt, intent, receipt).unwrap();
+        store
+            .persist_completed(publication, attempt, intent, receipt)
+            .unwrap();
         store.clear_completed(completed).unwrap();
         assert_eq!(store.load().unwrap(), None);
     }
@@ -1071,12 +1459,15 @@ mod tests {
         let intent = WorkerV2PublicationIntentIdentityV1::from_bytes([0x42; 32]);
 
         assert!(matches!(
-            store.persist_ready(attempt, intent),
+            store.persist_ready(WorkerV2PublicationKindV1::Raw, attempt, intent),
             Err(ResumeMarkerErrorV1::InvalidTransition)
         ));
-        store.persist_pending(attempt, [0x32; 32]).unwrap();
+        store
+            .persist_pending(WorkerV2PublicationKindV1::Raw, attempt, [0x32; 32])
+            .unwrap();
         assert!(matches!(
             store.persist_pending(
+                WorkerV2PublicationKindV1::Raw,
                 BuildAttempt::from_env_value(&format!(
                     "{}:{}:{}",
                     attempt.generation() + 1,
@@ -1090,6 +1481,15 @@ mod tests {
         ));
         assert!(matches!(
             store.persist_ready(
+                WorkerV2PublicationKindV1::Finalized,
+                attempt,
+                WorkerV2PublicationIntentIdentityV1::from_bytes([0x43; 32])
+            ),
+            Err(ResumeMarkerErrorV1::InvalidTransition)
+        ));
+        assert!(matches!(
+            store.persist_ready(
+                WorkerV2PublicationKindV1::Raw,
                 attempt,
                 WorkerV2PublicationIntentIdentityV1::from_bytes([0x43; 32])
             ),
@@ -1097,6 +1497,7 @@ mod tests {
         ));
         assert!(matches!(
             store.persist_completed(
+                WorkerV2PublicationKindV1::Raw,
                 attempt,
                 intent,
                 receipt(&directory.0, &producer, attempt, 8)
@@ -1112,7 +1513,9 @@ mod tests {
             let producer = producer(20 + case);
             let attempt = attempt(&directory.0, &producer, 20 + case);
             let store = WorkerV2ResumeStoreV1::open(&directory.0, &producer).unwrap();
-            store.persist_pending(attempt, [0x33; 32]).unwrap();
+            store
+                .persist_pending(WorkerV2PublicationKindV1::Raw, attempt, [0x33; 32])
+                .unwrap();
             let marker = directory.0.join(&store.marker_name);
             drop(store);
 
@@ -1171,18 +1574,27 @@ mod tests {
         let descriptor_path = PathBuf::from(format!("/proc/self/fd/{}", retained.as_raw_fd()));
         let store = WorkerV2ResumeStoreV1::open(&descriptor_path, &producer).unwrap();
         let marker_name = store.marker_name.clone();
-        store.persist_pending(attempt, [0x35; 32]).unwrap();
+        let publication = WorkerV2PublicationKindV1::Finalized;
+        let admission = [0x35; 32];
+        store
+            .persist_pending(publication, attempt, admission)
+            .unwrap();
 
         fs::rename(&output, &moved).unwrap();
         fs::create_dir(&output).unwrap();
         let intent = WorkerV2PublicationIntentIdentityV1::from_bytes([0x45; 32]);
-        store.persist_ready(attempt, intent).unwrap();
+        store.persist_ready(publication, attempt, intent).unwrap();
         drop(store);
 
         let reopened = WorkerV2ResumeStoreV1::open(&descriptor_path, &producer).unwrap();
         assert_eq!(
             reopened.load().unwrap(),
-            Some(ResumeMarkerStateV1::Ready { attempt, intent })
+            Some(ResumeMarkerStateV1::Ready {
+                publication,
+                attempt,
+                admission,
+                intent,
+            })
         );
         assert!(moved.join(marker_name).is_file());
         assert!(fs::read_dir(&output).unwrap().next().is_none());
@@ -1196,11 +1608,10 @@ mod tests {
         let attempt = attempt(&directory.0, &producer, 50);
         let (output, plan, upstream) = publication_inputs(attempt, 50);
         let store = WorkerV2ResumeStoreV1::open(&directory.0, &producer).unwrap();
+        let publication = WorkerV2PublicationKindV1::Raw;
+        let admission = restart_admission_commitment_v1(publication, plan, upstream, &output);
         store
-            .persist_pending(
-                attempt,
-                restart_admission_commitment_v1(plan, upstream, &output),
-            )
+            .persist_pending(publication, attempt, admission)
             .unwrap();
         let persisted = persist_worker_v2_publication_intent_v1(
             &directory.0,
@@ -1224,7 +1635,9 @@ mod tests {
         assert_eq!(
             store.load().unwrap(),
             Some(ResumeMarkerStateV1::Ready {
+                publication,
                 attempt,
+                admission,
                 intent: intent_identity,
             })
         );
@@ -1245,7 +1658,7 @@ mod tests {
         .unwrap();
         fe2o3_artifact_transaction::finish_build_attempt(&directory.0, &producer, attempt).unwrap();
         store
-            .persist_completed(attempt, intent_identity, published.receipt())
+            .persist_completed(publication, attempt, intent_identity, published.receipt())
             .unwrap();
         let completed = store.load().unwrap().unwrap();
         clear_worker_v2_publication_intent_v1(&directory.0, &producer, attempt, intent_identity)
@@ -1261,10 +1674,12 @@ mod tests {
         let attempt = attempt(&directory.0, &producer, 60);
         let (output, plan, upstream) = publication_inputs(attempt, 60);
         let store = WorkerV2ResumeStoreV1::open(&directory.0, &producer).unwrap();
+        let publication = WorkerV2PublicationKindV1::Finalized;
         store
             .persist_pending(
+                publication,
                 attempt,
-                restart_admission_commitment_v1(plan, upstream, &output),
+                restart_admission_commitment_v1(publication, plan, upstream, &output),
             )
             .unwrap();
         let persisted = persist_worker_v2_publication_intent_v1(
@@ -1277,7 +1692,7 @@ mod tests {
         )
         .unwrap();
         store
-            .persist_ready(attempt, persisted.record().identity())
+            .persist_ready(publication, attempt, persisted.record().identity())
             .unwrap();
         drop(persisted);
         drop(store);
@@ -1311,7 +1726,9 @@ mod tests {
         let attempt = attempt(&directory.0, &producer, 70);
         let (output, plan, upstream) = publication_inputs(attempt, 70);
         let store = WorkerV2ResumeStoreV1::open(&directory.0, &producer).unwrap();
-        store.persist_pending(attempt, [0xa5; 32]).unwrap();
+        store
+            .persist_pending(WorkerV2PublicationKindV1::Raw, attempt, [0xa5; 32])
+            .unwrap();
         persist_worker_v2_publication_intent_v1(
             &directory.0,
             &producer,
@@ -1328,5 +1745,130 @@ mod tests {
             Err(RestartIntentErrorV1::IntentIdentityMismatch)
         ));
         assert_eq!(store.load().unwrap(), Some(state));
+    }
+
+    #[test]
+    fn publication_route_is_exact_and_never_downgrades_descriptor_bearing_cov6() {
+        use CanonicalDescriptorSectionObservationV1::{
+            Missing, PresentButNotFinalizedByThisInspection as Present,
+        };
+
+        assert_eq!(
+            select_publication_kind_v1(CodeObjectVersion::V5, Missing).unwrap(),
+            WorkerV2PublicationKindV1::Raw
+        );
+        assert_eq!(
+            select_publication_kind_v1(CodeObjectVersion::V6, Present).unwrap(),
+            WorkerV2PublicationKindV1::Finalized
+        );
+        for (version, descriptor) in [
+            (CodeObjectVersion::V4, Missing),
+            (CodeObjectVersion::V4, Present),
+            (CodeObjectVersion::V5, Present),
+            (CodeObjectVersion::V6, Missing),
+        ] {
+            assert!(matches!(
+                select_publication_kind_v1(version, descriptor),
+                Err(RestartIntentErrorV1::UnsupportedPublicationRoute { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn raw_and_finalized_journals_recover_their_exact_distinct_bytes() {
+        for (index, publication) in [
+            WorkerV2PublicationKindV1::Raw,
+            WorkerV2PublicationKindV1::Finalized,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let seed = 80 + u8::try_from(index).unwrap();
+            let directory = TestDirectory::new();
+            let producer = producer(seed);
+            let attempt = attempt(&directory.0, &producer, seed);
+            let (mut output, _, _) = publication_inputs(attempt, seed);
+            output.extend_from_slice(match publication {
+                WorkerV2PublicationKindV1::Raw => b"-raw",
+                WorkerV2PublicationKindV1::Finalized => b"-canonical-finalized",
+            });
+            let (_, template, upstream) = publication_inputs(attempt, seed);
+            let plan = DurableLinkPublicationPlanV1::new(
+                attempt,
+                template.scope(),
+                template.request(),
+                template.worker(),
+                template.response(),
+                LinkedOutputIdentityV1::from_bytes(Sha256::digest(&output).into()),
+                template.finalization(),
+                FinalizedOutputIdentityV1::from_bytes(Sha256::digest(&output).into()),
+                template.publication(),
+            );
+            let admission = restart_admission_commitment_v1(publication, plan, upstream, &output);
+            let store = WorkerV2ResumeStoreV1::open(&directory.0, &producer).unwrap();
+            store
+                .persist_pending(publication, attempt, admission)
+                .unwrap();
+            let persisted = persist_worker_v2_publication_intent_v1(
+                &directory.0,
+                &producer,
+                attempt,
+                plan,
+                upstream,
+                &output,
+            )
+            .unwrap();
+            store
+                .persist_ready(publication, attempt, persisted.record().identity())
+                .unwrap();
+            drop(persisted);
+
+            let state = store.load().unwrap().unwrap();
+            assert_eq!(state.publication(), publication);
+            let recovered = recover_worker_v2_intent_v1(&store, &producer, state).unwrap();
+            assert_eq!(recovered.exact_output(), output);
+        }
+    }
+
+    #[test]
+    fn restart_admission_rejects_publication_kind_substitution() {
+        let directory = TestDirectory::new();
+        let producer = producer(90);
+        let attempt = attempt(&directory.0, &producer, 90);
+        let (output, plan, upstream) = publication_inputs(attempt, 90);
+        let finalized_admission = restart_admission_commitment_v1(
+            WorkerV2PublicationKindV1::Finalized,
+            plan,
+            upstream,
+            &output,
+        );
+        assert_ne!(
+            finalized_admission,
+            restart_admission_commitment_v1(
+                WorkerV2PublicationKindV1::Raw,
+                plan,
+                upstream,
+                &output,
+            )
+        );
+
+        let store = WorkerV2ResumeStoreV1::open(&directory.0, &producer).unwrap();
+        store
+            .persist_pending(WorkerV2PublicationKindV1::Raw, attempt, finalized_admission)
+            .unwrap();
+        persist_worker_v2_publication_intent_v1(
+            &directory.0,
+            &producer,
+            attempt,
+            plan,
+            upstream,
+            &output,
+        )
+        .unwrap();
+        let state = store.load().unwrap().unwrap();
+        assert!(matches!(
+            recover_worker_v2_intent_v1(&store, &producer, state),
+            Err(RestartIntentErrorV1::IntentIdentityMismatch)
+        ));
     }
 }

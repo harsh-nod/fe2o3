@@ -129,8 +129,14 @@ fn stage_restart() {
     let store = restart_support::WorkerV2ResumeStoreV1::open(output_dir, &producer).unwrap();
     store
         .persist_pending(
+            restart_support::WorkerV2PublicationKindV1::Raw,
             attempt,
-            restart_support::restart_admission_commitment_v1(plan, upstream, output),
+            restart_support::restart_admission_commitment_v1(
+                restart_support::WorkerV2PublicationKindV1::Raw,
+                plan,
+                upstream,
+                output,
+            ),
         )
         .unwrap();
     let intent = persist_worker_v2_publication_intent_v1(
@@ -138,7 +144,11 @@ fn stage_restart() {
     )
     .unwrap();
     store
-        .persist_ready(attempt, intent.record().identity())
+        .persist_ready(
+            restart_support::WorkerV2PublicationKindV1::Raw,
+            attempt,
+            intent.record().identity(),
+        )
         .unwrap();
 }
 
