@@ -75,7 +75,6 @@ impl ObjectSnapshot {
 
 pub(super) struct LinuxLedger {
     directory: File,
-    lock: File,
     owner: u32,
     lock_snapshot: ObjectSnapshot,
 }
@@ -92,12 +91,13 @@ impl LinuxLedger {
             result => result?,
         };
         {
-            acquire_lock(&ledger.lock)?;
+            let lock = ledger.open_transaction_lock()?;
+            acquire_lock(&lock)?;
             let initialized = (|| {
                 ledger.validate_lock_name()?;
                 initialize_new(&ledger)
             })();
-            release_lock(&ledger.lock);
+            release_lock(&lock);
             initialized?;
         }
         Ok((ledger, PersistentFreshnessRecoveryV1::Initialized))
@@ -150,7 +150,6 @@ impl LinuxLedger {
 
         let ledger = Self {
             directory,
-            lock,
             owner,
             lock_snapshot,
         };
@@ -160,7 +159,8 @@ impl LinuxLedger {
     pub(super) fn try_begin_exclusive(
         &mut self,
     ) -> Result<LinuxTransaction<'_>, PersistentFreshnessLedgerErrorV1> {
-        acquire_lock(&self.lock)?;
+        let lock = self.open_transaction_lock()?;
+        acquire_lock(&lock)?;
         let recovered = (|| {
             self.validate_lock_name()?;
             recover(self)
@@ -170,13 +170,30 @@ impl LinuxLedger {
                 ledger: self,
                 state,
                 recovery,
-                locked: true,
+                lock,
+                owner_process: process_id(),
             }),
             Err(error) => {
-                release_lock(&self.lock);
+                release_lock(&lock);
                 Err(error)
             }
         }
+    }
+
+    fn open_transaction_lock(&self) -> Result<File, PersistentFreshnessLedgerErrorV1> {
+        let lock = open_relative(
+            &self.directory,
+            LOCK_NAME,
+            O_RDWR | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK,
+            0,
+            PersistentFreshnessLedgerFileV1::Lock,
+        )?;
+        let snapshot =
+            validate_regular_file(&lock, PersistentFreshnessLedgerFileV1::Lock, self.owner, 0)?;
+        if !snapshot.same_object(self.lock_snapshot) {
+            return Err(PersistentFreshnessLedgerErrorV1::LockFileSubstituted);
+        }
+        Ok(lock)
     }
 
     fn validate_lock_name(&self) -> Result<(), PersistentFreshnessLedgerErrorV1> {
@@ -253,7 +270,8 @@ pub(super) struct LinuxTransaction<'a> {
     ledger: &'a mut LinuxLedger,
     state: FreshnessStateV1,
     recovery: PersistentFreshnessRecoveryV1,
-    locked: bool,
+    lock: File,
+    owner_process: u32,
 }
 
 impl LinuxTransaction<'_> {
@@ -269,6 +287,7 @@ impl LinuxTransaction<'_> {
         &mut self,
         identity: PersistentFreshnessIdentityV1,
     ) -> Result<PersistentFreshnessReceiptV1, PersistentFreshnessLedgerErrorV1> {
+        self.ensure_owner_process()?;
         let next = self.state.with_consumed(identity)?;
         let intent = FreshnessIntentV1::new(&self.state, &next, identity).map_err(|error| {
             PersistentFreshnessLedgerErrorV1::Record {
@@ -329,13 +348,24 @@ impl LinuxTransaction<'_> {
             state_identity: self.state.identity(),
         })
     }
+
+    fn ensure_owner_process(&self) -> Result<(), PersistentFreshnessLedgerErrorV1> {
+        let current = process_id();
+        if current == self.owner_process {
+            Ok(())
+        } else {
+            Err(PersistentFreshnessLedgerErrorV1::ForkDetected {
+                owner: self.owner_process,
+                current,
+            })
+        }
+    }
 }
 
 impl Drop for LinuxTransaction<'_> {
     fn drop(&mut self) {
-        if self.locked {
-            release_lock(&self.ledger.lock);
-            self.locked = false;
+        if process_id() == self.owner_process {
+            release_lock(&self.lock);
         }
     }
 }
@@ -779,6 +809,11 @@ fn effective_user_id() -> u32 {
     unsafe { linux_geteuid() }
 }
 
+fn process_id() -> u32 {
+    // SAFETY: `getpid` has no preconditions.
+    unsafe { linux_getpid() as u32 }
+}
+
 fn random_namespace() -> Result<Digest, PersistentFreshnessLedgerErrorV1> {
     let mut bytes = [0_u8; 32];
     let mut offset = 0;
@@ -838,6 +873,9 @@ unsafe extern "C" {
 
     #[link_name = "geteuid"]
     fn linux_geteuid() -> c_uint;
+
+    #[link_name = "getpid"]
+    fn linux_getpid() -> c_int;
 
     #[link_name = "getrandom"]
     fn linux_getrandom(buffer: *mut c_void, length: usize, flags: c_uint) -> isize;
@@ -899,10 +937,17 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Copy)]
+    enum StateCrashStage {
+        Absent,
+        Temporary,
+        Published,
+    }
+
     fn stage_intent(
         transaction: &mut LinuxTransaction<'_>,
         identity: PersistentFreshnessIdentityV1,
-        write_state: bool,
+        state_stage: StateCrashStage,
         publish_intent: bool,
     ) {
         let next = transaction.state.with_consumed(identity).unwrap();
@@ -924,7 +969,7 @@ mod tests {
             .unwrap();
             sync_directory(&transaction.ledger.directory).unwrap();
         }
-        if write_state {
+        if !matches!(state_stage, StateCrashStage::Absent) {
             write_new_file(
                 transaction.ledger,
                 STATE_TEMPORARY_NAME,
@@ -932,6 +977,8 @@ mod tests {
                 &next.encode().unwrap(),
             )
             .unwrap();
+        }
+        if matches!(state_stage, StateCrashStage::Published) {
             rename_file(
                 transaction.ledger,
                 STATE_TEMPORARY_NAME,
@@ -998,15 +1045,25 @@ mod tests {
 
     #[test]
     fn crash_recovery_applies_or_finalizes_every_durable_intent() {
-        for (write_state, expected) in [
-            (false, PersistentFreshnessRecoveryV1::AppliedPendingIntent),
-            (true, PersistentFreshnessRecoveryV1::FinalizedPendingIntent),
+        for (state_stage, expected) in [
+            (
+                StateCrashStage::Absent,
+                PersistentFreshnessRecoveryV1::AppliedPendingIntent,
+            ),
+            (
+                StateCrashStage::Temporary,
+                PersistentFreshnessRecoveryV1::AppliedPendingIntent,
+            ),
+            (
+                StateCrashStage::Published,
+                PersistentFreshnessRecoveryV1::FinalizedPendingIntent,
+            ),
         ] {
             let directory = TestDirectory::new();
             let (mut ledger, _) = LinuxLedger::create_new(directory.path()).unwrap();
             {
                 let mut transaction = ledger.try_begin_exclusive().unwrap();
-                stage_intent(&mut transaction, identity(4), write_state, true);
+                stage_intent(&mut transaction, identity(4), state_stage, true);
             }
             drop(ledger);
 
@@ -1031,7 +1088,12 @@ mod tests {
         let (mut ledger, _) = LinuxLedger::create_new(directory.path()).unwrap();
         {
             let mut transaction = ledger.try_begin_exclusive().unwrap();
-            stage_intent(&mut transaction, identity(7), false, false);
+            stage_intent(
+                &mut transaction,
+                identity(7),
+                StateCrashStage::Absent,
+                false,
+            );
         }
         drop(ledger);
 
@@ -1049,6 +1111,25 @@ mod tests {
             .unwrap()
             .consume(identity(7))
             .unwrap();
+    }
+
+    #[test]
+    fn interrupted_initial_state_publication_recovers_without_resetting_namespace() {
+        let directory = TestDirectory::new();
+        let (mut ledger, _) = LinuxLedger::create_new(directory.path()).unwrap();
+        let expected_namespace = ledger.try_begin_exclusive().unwrap().state().namespace();
+        drop(ledger);
+        fs::rename(
+            directory.file(STATE_NAME),
+            directory.file(STATE_TEMPORARY_NAME),
+        )
+        .unwrap();
+
+        let (mut reopened, recovery) = LinuxLedger::open_existing(directory.path()).unwrap();
+        assert_eq!(recovery, PersistentFreshnessRecoveryV1::Initialized);
+        let state = reopened.try_begin_exclusive().unwrap().state();
+        assert_eq!(state.generation(), 0);
+        assert_eq!(state.namespace(), expected_namespace);
     }
 
     #[test]
@@ -1126,7 +1207,7 @@ mod tests {
     }
 
     #[test]
-    fn retained_lock_descriptor_detects_name_substitution() {
+    fn fresh_transaction_descriptor_detects_lock_name_substitution() {
         let directory = TestDirectory::new();
         let (mut ledger, _) = LinuxLedger::create_new(directory.path()).unwrap();
         fs::rename(directory.file(LOCK_NAME), directory.file("old-lock")).unwrap();
@@ -1357,5 +1438,85 @@ mod tests {
         ));
         assert!(child.wait().unwrap().success());
         LinuxLedger::open_existing(directory.path()).unwrap();
+    }
+
+    #[test]
+    #[ignore]
+    fn subprocess_rejects_fork_inherited_transaction() {
+        let path = std::env::var_os("FE2O3_LEDGER_TEST_DIRECTORY").unwrap();
+        let (mut ledger, _) = LinuxLedger::open_existing(Path::new(&path)).unwrap();
+        let mut transaction = ledger.try_begin_exclusive().unwrap();
+        // SAFETY: this dedicated subprocess runs only this exact test. The
+        // child performs the PID check, closes inherited descriptors, and
+        // exits without running the Rust test harness.
+        let child = unsafe { test_fork() };
+        assert!(child >= 0);
+        if child == 0 {
+            let rejected = matches!(
+                transaction.consume(identity(40)),
+                Err(PersistentFreshnessLedgerErrorV1::ForkDetected { owner, current })
+                    if owner != current
+            );
+            drop(transaction);
+            // SAFETY: `_exit` terminates only the fork child and skips copied
+            // parent test-harness state.
+            unsafe { test_exit(if rejected { 40 } else { 41 }) };
+        }
+
+        let mut status = 0;
+        // SAFETY: `child` is the positive PID returned by `fork`, and `status`
+        // is writable for one process status value.
+        assert_eq!(unsafe { test_waitpid(child, &mut status, 0) }, child);
+        assert_eq!(status & 0x7f, 0);
+        assert_eq!((status >> 8) & 0xff, 40);
+        assert!(matches!(
+            LinuxLedger::open_existing(Path::new(&path)),
+            Err(PersistentFreshnessLedgerErrorV1::LockBusy)
+        ));
+        transaction.consume(identity(40)).unwrap();
+    }
+
+    #[test]
+    fn fork_inherited_transaction_cannot_unlock_or_consume() {
+        let directory = TestDirectory::new();
+        let (ledger, _) = LinuxLedger::create_new(directory.path()).unwrap();
+        drop(ledger);
+        let status = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--ignored",
+                "--exact",
+                "persistent_freshness::linux::tests::subprocess_rejects_fork_inherited_transaction",
+                "--test-threads=1",
+                "--nocapture",
+            ])
+            .env("FE2O3_LEDGER_TEST_DIRECTORY", directory.path())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success());
+
+        let (mut ledger, recovery) = LinuxLedger::open_existing(directory.path()).unwrap();
+        assert_eq!(recovery, PersistentFreshnessRecoveryV1::Clean);
+        assert_eq!(
+            ledger.try_begin_exclusive().unwrap().state().generation(),
+            1
+        );
+    }
+
+    unsafe extern "C" {
+        #[link_name = "fork"]
+        fn test_fork() -> std::ffi::c_int;
+
+        #[link_name = "waitpid"]
+        fn test_waitpid(
+            process: std::ffi::c_int,
+            status: *mut std::ffi::c_int,
+            options: std::ffi::c_int,
+        ) -> std::ffi::c_int;
+
+        #[link_name = "_exit"]
+        fn test_exit(status: std::ffi::c_int) -> !;
     }
 }

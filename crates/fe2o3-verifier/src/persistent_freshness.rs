@@ -923,6 +923,10 @@ pub enum PersistentFreshnessLedgerErrorV1 {
         file: PersistentFreshnessLedgerFileV1,
     },
     LockBusy,
+    ForkDetected {
+        owner: u32,
+        current: u32,
+    },
     LockFileSubstituted,
     UnexpectedRecoveryFile {
         file: PersistentFreshnessLedgerFileV1,
@@ -1005,6 +1009,10 @@ impl fmt::Display for PersistentFreshnessLedgerErrorV1 {
                 file.as_str()
             ),
             Self::LockBusy => formatter.write_str("persistent freshness ledger is locked"),
+            Self::ForkDetected { owner, current } => write!(
+                formatter,
+                "persistent freshness transaction belongs to process {owner}, not {current}"
+            ),
             Self::LockFileSubstituted => {
                 formatter.write_str("persistent freshness lock file was substituted")
             }
