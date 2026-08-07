@@ -4,10 +4,13 @@ use std::fmt;
 use std::fmt::Write as _;
 
 use fe2o3_kernel_ir::{
-    AddressSpace as KernelAddressSpace, Atomic, AtomicKind, Axis, BasicBlock, BinaryOp, BlockId,
-    CastKind, ComparePredicate, Constant, DiagnosticCode as VerificationDiagnosticCode,
-    F32MathFunction, F32MathImplementation, FloatConversionKind, FloatOperation, Function,
-    FunctionId, FunctionRole, IndexKind, IntrinsicKind, Kernel, KernelId, LaunchDomain,
+    AMDGPU_GFX942_INLINE_ASSEMBLY_CAPABILITY_NAME,
+    AMDGPU_GFX942_INLINE_ASSEMBLY_CAPABILITY_NAMESPACE, AddressSpace as KernelAddressSpace,
+    AssemblyConstraint, AssemblyOperandKind, AssemblyOption, Atomic, AtomicKind, Axis, BasicBlock,
+    BinaryOp, BlockId, CastKind, ComparePredicate, Constant,
+    DiagnosticCode as VerificationDiagnosticCode, F32MathFunction, F32MathImplementation,
+    FloatConversionKind, FloatOperation, Function, FunctionId, FunctionRole, IndexKind,
+    InlineAssembly, InlineAssemblyTarget, IntrinsicKind, Kernel, KernelId, LaunchDomain,
     LaunchExtent, MemoryOrdering, Module, ModuleId, NarrowFloatFormat, Operation, OperationKind,
     ScalarType, Signature, SynchronizationScope, TargetCapability, Terminator, Type, ValueId,
     VerificationErrors, WaveOperation, WaveOperationKind, WaveWidth, WidenedFloatBinaryOp,
@@ -34,6 +37,10 @@ impl LoweringTarget {
         matches!(self, Self::Gfx942StrictFloatV1)
     }
 
+    const fn supports_gfx942_inline_assembly(self) -> bool {
+        matches!(self, Self::Gfx942StrictFloatV1)
+    }
+
     const fn llvm_function_attributes(self) -> &'static str {
         match self {
             Self::Baseline => "",
@@ -42,6 +49,31 @@ impl LoweringTarget {
             }
         }
     }
+}
+
+#[derive(Clone, Copy)]
+struct Gfx942AssemblyInstruction {
+    mnemonic: &'static str,
+    constraint: AssemblyConstraint,
+    input_count: usize,
+}
+
+fn gfx942_assembly_instruction(mnemonic: &str) -> Option<Gfx942AssemblyInstruction> {
+    let (mnemonic, constraint, input_count) = match mnemonic {
+        "v_mov_b32" => ("v_mov_b32", AssemblyConstraint::Vgpr32, 1),
+        "s_mov_b32" => ("s_mov_b32", AssemblyConstraint::Sgpr32, 1),
+        "v_add_u32" => ("v_add_u32", AssemblyConstraint::Vgpr32, 2),
+        "v_sub_u32" => ("v_sub_u32", AssemblyConstraint::Vgpr32, 2),
+        "v_and_b32" => ("v_and_b32", AssemblyConstraint::Vgpr32, 2),
+        "v_or_b32" => ("v_or_b32", AssemblyConstraint::Vgpr32, 2),
+        "v_xor_b32" => ("v_xor_b32", AssemblyConstraint::Vgpr32, 2),
+        _ => return None,
+    };
+    Some(Gfx942AssemblyInstruction {
+        mnemonic,
+        constraint,
+        input_count,
+    })
 }
 
 /// Stable rejection categories for the first target-neutral AMDGPU lowering slice.
@@ -72,6 +104,10 @@ pub enum LoweringDiagnosticCode {
     UnsupportedWorkgroupMemory,
     UnsupportedWaveOperation,
     UnsupportedFloatOperation,
+    UnsupportedInlineAssembly,
+    UnsupportedAssemblyInstruction,
+    AssemblyOperandMismatch,
+    AssemblyEffectMismatch,
     UnsupportedCast,
     UnsupportedConstant,
     UnsupportedTerminator,
@@ -2037,6 +2073,10 @@ fn validate_capabilities(
                 address_space,
                 max_scope,
             } if supported_atomic_capability(*width_bits, *address_space, *max_scope) => {}
+            TargetCapability::Extension { namespace, name }
+                if target.supports_gfx942_inline_assembly()
+                    && namespace == AMDGPU_GFX942_INLINE_ASSEMBLY_CAPABILITY_NAMESPACE
+                    && name == AMDGPU_GFX942_INLINE_ASSEMBLY_CAPABILITY_NAME => {}
             _ => {
                 return Err(LoweringErrors::one(
                     location,
@@ -2226,7 +2266,9 @@ impl<'a> FunctionLowerer<'a> {
             OperationKind::Call { callee, arguments }
                 if FloatOperation::from_intrinsic_call(callee, arguments).is_some()
         );
+        let is_inline_assembly = matches!(operation.kind, OperationKind::InlineAssembly(_));
         if !is_float
+            && !is_inline_assembly
             && !matches!(
                 operation.kind,
                 OperationKind::Fence(_)
@@ -2247,6 +2289,11 @@ impl<'a> FunctionLowerer<'a> {
                         | TargetCapability::WorkgroupBarrier
                         | TargetCapability::Float16
                         | TargetCapability::BFloat16
+                ) || matches!(
+                    capability,
+                    TargetCapability::Extension { namespace, name }
+                        if namespace == AMDGPU_GFX942_INLINE_ASSEMBLY_CAPABILITY_NAMESPACE
+                            && name == AMDGPU_GFX942_INLINE_ASSEMBLY_CAPABILITY_NAME
                 )
             })
         {
@@ -2679,6 +2726,9 @@ impl<'a> FunctionLowerer<'a> {
                     ));
                 }
             }
+            OperationKind::InlineAssembly(assembly) => {
+                self.validate_inline_assembly(operation, assembly, &location)?;
+            }
             OperationKind::Wave(wave) => self.validate_wave(wave, &location)?,
             OperationKind::Atomic(atomic) => self.validate_atomic(atomic, &location)?,
             OperationKind::Barrier(_) => {
@@ -2719,6 +2769,105 @@ impl<'a> FunctionLowerer<'a> {
                     location,
                     LoweringDiagnosticCode::UnsupportedOperation,
                     format!("G1 does not lower {:?}", operation.kind),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_inline_assembly(
+        &self,
+        operation: &Operation,
+        assembly: &InlineAssembly,
+        location: &LoweringLocation,
+    ) -> Result<(), LoweringErrors> {
+        if !self.target.supports_gfx942_inline_assembly()
+            || assembly.target != InlineAssemblyTarget::AmdGpuGfx942
+        {
+            return Err(LoweringErrors::one(
+                location.clone(),
+                LoweringDiagnosticCode::UnsupportedInlineAssembly,
+                "inline assembly is admitted only by the authenticated gfx942 lowering profile",
+            ));
+        }
+        let Some(instruction) = gfx942_assembly_instruction(&assembly.mnemonic) else {
+            return Err(LoweringErrors::one(
+                location.clone(),
+                LoweringDiagnosticCode::UnsupportedAssemblyInstruction,
+                format!(
+                    "gfx942 inline assembly does not admit instruction {:?}",
+                    assembly.mnemonic
+                ),
+            ));
+        };
+        if !assembly.declared_effects.is_empty()
+            || !assembly.options.contains(&AssemblyOption::NoMemory)
+            || assembly.options.contains(&AssemblyOption::ReadOnly)
+        {
+            return Err(LoweringErrors::one(
+                location.clone(),
+                LoweringDiagnosticCode::AssemblyEffectMismatch,
+                "the bounded gfx942 assembly subset is exactly NoMemory and effect-free",
+            ));
+        }
+        let expected_operand_count = instruction.input_count + 1;
+        if operation.results.len() != 1 || assembly.operands.len() != expected_operand_count {
+            return Err(LoweringErrors::one(
+                location.clone(),
+                LoweringDiagnosticCode::AssemblyOperandMismatch,
+                format!(
+                    "{} requires one output and {} inputs",
+                    instruction.mnemonic, instruction.input_count
+                ),
+            ));
+        }
+        let output = &assembly.operands[0];
+        if output.constraint != instruction.constraint
+            || output.kind != (AssemblyOperandKind::Output { result_index: 0 })
+        {
+            return Err(LoweringErrors::one(
+                location.clone(),
+                LoweringDiagnosticCode::AssemblyOperandMismatch,
+                format!(
+                    "{} output must be result zero with {:?} constraint",
+                    instruction.mnemonic, instruction.constraint
+                ),
+            ));
+        }
+        let result_type = &operation.results[0].ty;
+        if !is_i32_register_type(result_type) {
+            return Err(LoweringErrors::one(
+                location.clone(),
+                LoweringDiagnosticCode::AssemblyOperandMismatch,
+                format!(
+                    "{} output requires i32 or u32, found {result_type:?}",
+                    instruction.mnemonic
+                ),
+            ));
+        }
+        for (index, operand) in assembly.operands[1..].iter().enumerate() {
+            let AssemblyOperandKind::Input(value) = operand.kind else {
+                return Err(LoweringErrors::one(
+                    location.clone(),
+                    LoweringDiagnosticCode::AssemblyOperandMismatch,
+                    format!(
+                        "{} input {} must be a distinct SSA input role",
+                        instruction.mnemonic, index
+                    ),
+                ));
+            };
+            let ty = self.value_type(value);
+            if operand.constraint != instruction.constraint
+                || !is_i32_register_type(ty)
+                || ty != result_type
+            {
+                return Err(LoweringErrors::one(
+                    location.clone(),
+                    LoweringDiagnosticCode::AssemblyOperandMismatch,
+                    format!(
+                        "{} input {} requires {:?} with exact type {result_type:?}, found {:?} with {ty:?}",
+                        instruction.mnemonic, index, instruction.constraint, operand.constraint
+                    ),
                 ));
             }
         }
@@ -3490,6 +3639,9 @@ impl<'a> FunctionLowerer<'a> {
                 )
                 .unwrap();
             }
+            OperationKind::InlineAssembly(assembly) => {
+                self.emit_inline_assembly(output, operation, assembly);
+            }
             OperationKind::Wave(wave) => {
                 self.emit_wave(
                     output,
@@ -3500,6 +3652,63 @@ impl<'a> FunctionLowerer<'a> {
             _ => unreachable!("preflight rejected unsupported operation"),
         }
         Ok(())
+    }
+
+    fn emit_inline_assembly(
+        &self,
+        output: &mut dyn fmt::Write,
+        operation: &Operation,
+        assembly: &InlineAssembly,
+    ) {
+        let instruction = gfx942_assembly_instruction(&assembly.mnemonic)
+            .expect("preflight admitted a closed gfx942 instruction");
+        let result = operation
+            .results
+            .first()
+            .expect("preflight required one assembly result");
+        let placeholders = (0..assembly.operands.len())
+            .map(|index| format!("${index}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let register = match instruction.constraint {
+            AssemblyConstraint::Sgpr32 => "s",
+            AssemblyConstraint::Vgpr32 => "v",
+            AssemblyConstraint::ImmediateI32 => {
+                unreachable!("the bounded gfx942 subset has no immediate outputs")
+            }
+        };
+        let constraints = std::iter::once(format!("={register}"))
+            .chain((0..instruction.input_count).map(|_| register.to_owned()))
+            .collect::<Vec<_>>()
+            .join(",");
+        let inputs = assembly.operands[1..]
+            .iter()
+            .map(|operand| {
+                let AssemblyOperandKind::Input(value) = operand.kind else {
+                    unreachable!("preflight required SSA input roles")
+                };
+                let (name, ty) = self.value(value);
+                format!("{} {name}", llvm_type(ty))
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let side_effect = if assembly.options.contains(&AssemblyOption::Pure) {
+            ""
+        } else {
+            " sideeffect"
+        };
+        writeln!(
+            output,
+            "  {} = call {} asm{} \"{} {}\", \"{}\"({})",
+            value_name(result.id),
+            llvm_type(&result.ty),
+            side_effect,
+            instruction.mnemonic,
+            placeholders,
+            constraints,
+            inputs
+        )
+        .unwrap();
     }
 
     fn emit_wave(&self, output: &mut dyn fmt::Write, result: &str, wave: &WaveOperation) {
@@ -3916,6 +4125,10 @@ fn supported_scalar(scalar: ScalarType, target: LoweringTarget) -> bool {
         || supported_integer(scalar)
         || scalar == ScalarType::F32
         || (target.supports_narrow_float() && matches!(scalar, ScalarType::F16 | ScalarType::Bf16))
+}
+
+fn is_i32_register_type(ty: &Type) -> bool {
+    matches!(ty, Type::Scalar(ScalarType::I32 | ScalarType::U32))
 }
 
 fn supported_integer(scalar: ScalarType) -> bool {

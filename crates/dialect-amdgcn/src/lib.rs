@@ -2,8 +2,10 @@
 //!
 //! The initial target-neutral lowering subset is documented in
 //! `crates/dialect-amdgcn/G1_LOWERING.md`. The strict gfx942 floating-point
-//! extension is documented in `crates/dialect-amdgcn/GFX942_FLOATS.md`. Neither
-//! path grants linking, loading, or execution authority.
+//! extension is documented in `crates/dialect-amdgcn/GFX942_FLOATS.md`, and the
+//! source-bound assembly subset is documented in
+//! `crates/dialect-amdgcn/GFX942_INLINE_ASSEMBLY.md`. None of these paths grants
+//! linking, loading, or execution authority.
 
 mod device_math;
 mod lowering;
