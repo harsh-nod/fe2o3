@@ -310,6 +310,7 @@ impl<'a> Analyzer<'a> {
             OperationKind::Call { .. } | OperationKind::Load { .. } | OperationKind::Atomic(_) => {
                 Variation::Varying
             }
+            OperationKind::InlineAssembly(_) => Variation::Varying,
             OperationKind::Alloca {
                 count,
                 address_space,
