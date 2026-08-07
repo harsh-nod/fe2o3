@@ -23,13 +23,17 @@ use fe2o3_verifier::{
     Configuration, ConfigurationEntry, ControlFlowBindingErrorV1, ControlFlowClaimsV1,
     ControlFlowIntegerSwitchCaseClaimV1, ControlFlowIntegerSwitchClaimV1, ControlFlowLoopClaimV1,
     CorrelationId, Digest, ExecutionLimits, ExecutionTools, MeasuredToolIdentity,
+    PERSISTENT_AUTHENTICATED_CONTROL_FLOW_EXECUTABLE_BINDING_DOMAIN_V1,
+    PERSISTENT_AUTHENTICATED_PROOF_EXECUTABLE_BINDING_DOMAIN_V1,
     PersistentFreshnessIdentityFieldV1, PersistentFreshnessLedgerErrorV1,
     PersistentFreshnessRecoveryV1, PersistentProofFreshnessLedgerV1, ProofProperty, ProofRequestV1,
     ProofTargetIdentity, VerificationModelIdentity, VerifierPolicy,
     bind_authenticated_control_flow_executable_v1,
     bind_authenticated_proof_executable_persistent_v1, bind_authenticated_proof_executable_v1,
-    bind_control_flow_proof_request_v1, derive_control_flow_functional_specification_digest_v1,
-    execute_authenticated_verus, reconcile_control_flow_source_v1,
+    bind_control_flow_proof_request_v1,
+    bind_persistently_fresh_authenticated_control_flow_executable_v1,
+    derive_control_flow_functional_specification_digest_v1, execute_authenticated_verus,
+    reconcile_control_flow_source_v1,
 };
 
 const ALL_PROPERTIES: [ProofProperty; 7] = [
@@ -499,8 +503,43 @@ fn persistent_binding_rejects_exact_evidence_replay_after_restart() {
 
     let binding =
         bind_authenticated_proof_executable_persistent_v1(evidence, &policy, &mut ledger).unwrap();
-    assert_eq!(ledger.inspect().unwrap().generation(), 1);
-    assert_eq!(ledger.inspect().unwrap().consumed_count(), 1);
+    assert_eq!(
+        PERSISTENT_AUTHENTICATED_PROOF_EXECUTABLE_BINDING_DOMAIN_V1,
+        *b"FE2PPXB\0"
+    );
+    let state = ledger.inspect().unwrap();
+    assert_eq!(state.generation(), 1);
+    assert_eq!(state.consumed_count(), 1);
+    let persistent = binding.identity();
+    let receipt = binding.freshness_receipt();
+    let execution = binding.proof_binding().execution_identity();
+    assert_eq!(
+        persistent.proof_binding_identity(),
+        binding.proof_binding().binding_identity()
+    );
+    assert_eq!(
+        persistent.consumed_execution().challenge(),
+        execution.challenge()
+    );
+    assert_eq!(
+        persistent.consumed_execution().transcript(),
+        execution.transcript_digest()
+    );
+    assert_eq!(
+        persistent.consumed_execution().result(),
+        execution.result().digest()
+    );
+    assert_eq!(persistent.ledger_namespace(), state.namespace());
+    assert_eq!(persistent.ledger_generation(), 1);
+    assert_eq!(persistent.ledger_state_identity(), state.state_identity());
+    assert_eq!(receipt.namespace(), persistent.ledger_namespace());
+    assert_eq!(receipt.generation(), persistent.ledger_generation());
+    assert_eq!(receipt.state_identity(), persistent.ledger_state_identity());
+    assert_ne!(
+        binding.binding_identity(),
+        binding.proof_binding().binding_identity()
+    );
+    binding.validate_against(&binding).unwrap();
     assert!(!binding.grants_load_authority());
     assert!(!binding.grants_launch_authority());
     drop(ledger);
@@ -520,6 +559,64 @@ fn persistent_binding_rejects_exact_evidence_replay_after_restart() {
         )
     );
     assert_eq!(reopened.inspect().unwrap().consumed_count(), 1);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn persistent_control_flow_binding_retains_the_ledger_identity() {
+    let directory = PersistentLedgerDirectory::new();
+    let manifest = manifest();
+    let (source_bytes, cfg_identity, claims) = control_flow_source();
+    let source = reconcile_control_flow_source_v1(&source_bytes, &cfg_identity, claims).unwrap();
+    let base_functional_specification = digest(0x55);
+    let functional_specification = derive_control_flow_functional_specification_digest_v1(
+        base_functional_specification,
+        &source,
+    )
+    .unwrap();
+    let target = artifact_target_with_contracts(
+        &manifest,
+        source_contracts_with_functional(payload_from_digest(functional_specification)),
+    );
+    let (evidence, verifier_policy) = measured_execution(target);
+    let request_binding = bind_control_flow_proof_request_v1(
+        evidence.invocation_plan().request(),
+        base_functional_specification,
+        source,
+    )
+    .unwrap();
+    let policy = binding_policy(manifest, target, &evidence, verifier_policy);
+    let (mut ledger, _) = PersistentProofFreshnessLedgerV1::create_new(&directory.path).unwrap();
+    let proof =
+        bind_authenticated_proof_executable_persistent_v1(evidence, &policy, &mut ledger).unwrap();
+    let namespace = proof.identity().ledger_namespace();
+    let generation = proof.identity().ledger_generation();
+
+    let binding =
+        bind_persistently_fresh_authenticated_control_flow_executable_v1(request_binding, proof)
+            .unwrap();
+    assert_eq!(
+        PERSISTENT_AUTHENTICATED_CONTROL_FLOW_EXECUTABLE_BINDING_DOMAIN_V1,
+        *b"FE2PCFB\0"
+    );
+    assert_eq!(
+        binding
+            .proof_executable_binding()
+            .identity()
+            .ledger_namespace(),
+        namespace
+    );
+    assert_eq!(
+        binding
+            .proof_executable_binding()
+            .identity()
+            .ledger_generation(),
+        generation
+    );
+    binding.validate_against(&binding).unwrap();
+    assert!(!binding.grants_compiler_authority());
+    assert!(!binding.grants_load_authority());
+    assert!(!binding.grants_launch_authority());
 }
 
 #[test]

@@ -9,7 +9,8 @@ use fe2o3_rustc_front::{
 
 use crate::{
     AuthenticatedProofExecutableBindingError, AuthenticatedProofExecutableBindingV1, Digest,
-    ProofOutcome, ProofProperty, ProofRequestV1, ProofTargetIdentity,
+    PersistentlyFreshProofExecutableBindingV1, ProofOutcome, ProofProperty, ProofRequestV1,
+    ProofTargetIdentity,
 };
 
 pub const CONTROL_FLOW_BINDING_VERSION_V1: u16 = 1;
@@ -17,6 +18,8 @@ pub const CONTROL_FLOW_SOURCE_BINDING_DOMAIN_V1: [u8; 8] = *b"FE2CFSB\0";
 pub const CONTROL_FLOW_FUNCTIONAL_SPECIFICATION_DOMAIN_V1: [u8; 8] = *b"FE2CFFS\0";
 pub const CONTROL_FLOW_REQUEST_BINDING_DOMAIN_V1: [u8; 8] = *b"FE2CFRQ\0";
 pub const AUTHENTICATED_CONTROL_FLOW_EXECUTABLE_BINDING_DOMAIN_V1: [u8; 8] = *b"FE2ACFB\0";
+pub const PERSISTENT_AUTHENTICATED_CONTROL_FLOW_EXECUTABLE_BINDING_DOMAIN_V1: [u8; 8] =
+    *b"FE2PCFB\0";
 pub const MAX_BOUND_CONTROL_FLOW_LOOPS_V1: usize = MAX_SOURCE_LOOPS_V1 as usize;
 pub const MAX_BOUND_CONTROL_FLOW_SWITCHES_V1: usize = MAX_SOURCE_INTEGER_SWITCHES_V1 as usize;
 
@@ -397,6 +400,78 @@ impl AuthenticatedControlFlowExecutableBindingV1 {
     }
 }
 
+/// Control-flow evidence whose proof/executable input carries a durable
+/// freshness receipt in its canonical identity.
+///
+/// This non-clone type can only be constructed from
+/// `PersistentlyFreshProofExecutableBindingV1`. A process-local proof binding
+/// therefore cannot satisfy APIs that require persistent freshness.
+///
+/// ```compile_fail
+/// # fn require_persistent(
+/// #   request: fe2o3_verifier::ControlFlowProofRequestBindingV1,
+/// #   local: fe2o3_verifier::AuthenticatedProofExecutableBindingV1,
+/// # ) {
+/// fe2o3_verifier::bind_persistently_fresh_authenticated_control_flow_executable_v1(
+///     request,
+///     local,
+/// );
+/// # }
+/// ```
+#[derive(Debug, Eq, PartialEq)]
+pub struct PersistentlyFreshAuthenticatedControlFlowExecutableBindingV1 {
+    request_binding: ControlFlowProofRequestBindingV1,
+    proof_executable_binding: PersistentlyFreshProofExecutableBindingV1,
+    binding_identity: Digest,
+}
+
+impl PersistentlyFreshAuthenticatedControlFlowExecutableBindingV1 {
+    pub const fn version(&self) -> u16 {
+        CONTROL_FLOW_BINDING_VERSION_V1
+    }
+
+    pub const fn request_binding(&self) -> &ControlFlowProofRequestBindingV1 {
+        &self.request_binding
+    }
+
+    pub const fn proof_executable_binding(&self) -> &PersistentlyFreshProofExecutableBindingV1 {
+        &self.proof_executable_binding
+    }
+
+    pub const fn binding_identity(&self) -> Digest {
+        self.binding_identity
+    }
+
+    pub fn validate_against(&self, actual: &Self) -> Result<(), ControlFlowBindingErrorV1> {
+        if self.request_binding != actual.request_binding {
+            return Err(ControlFlowBindingErrorV1::IdentityMismatch {
+                field: "persistent control-flow request binding",
+            });
+        }
+        self.proof_executable_binding
+            .validate_against(&actual.proof_executable_binding)
+            .map_err(ControlFlowBindingErrorV1::AuthenticatedExecutableBinding)?;
+        if self.binding_identity != actual.binding_identity {
+            return Err(ControlFlowBindingErrorV1::IdentityMismatch {
+                field: "persistent authenticated control-flow binding",
+            });
+        }
+        Ok(())
+    }
+
+    pub const fn grants_compiler_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_load_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
+    }
+}
+
 pub fn reconcile_control_flow_source_v1(
     source_contract_bytes: &[u8],
     emitted_cfg_identity_bytes: &[u8],
@@ -484,6 +559,57 @@ pub fn bind_authenticated_control_flow_executable_v1(
     request_binding: ControlFlowProofRequestBindingV1,
     proof_executable_binding: AuthenticatedProofExecutableBindingV1,
 ) -> Result<AuthenticatedControlFlowExecutableBindingV1, ControlFlowBindingErrorV1> {
+    validate_authenticated_control_flow_executable(&request_binding, &proof_executable_binding)?;
+    let binding_identity =
+        authenticated_control_flow_binding_identity(&request_binding, &proof_executable_binding);
+    Ok(AuthenticatedControlFlowExecutableBindingV1 {
+        request_binding,
+        proof_executable_binding,
+        binding_identity,
+    })
+}
+
+pub fn bind_persistently_fresh_authenticated_control_flow_executable_v1(
+    request_binding: ControlFlowProofRequestBindingV1,
+    proof_executable_binding: PersistentlyFreshProofExecutableBindingV1,
+) -> Result<PersistentlyFreshAuthenticatedControlFlowExecutableBindingV1, ControlFlowBindingErrorV1>
+{
+    validate_authenticated_control_flow_executable(
+        &request_binding,
+        proof_executable_binding.proof_binding(),
+    )?;
+    let authenticated_identity = authenticated_control_flow_binding_identity(
+        &request_binding,
+        proof_executable_binding.proof_binding(),
+    );
+    let persistent = proof_executable_binding.identity();
+    let consumed = persistent.consumed_execution();
+    let mut writer = IdentityWriter::with_domain(
+        PERSISTENT_AUTHENTICATED_CONTROL_FLOW_EXECUTABLE_BINDING_DOMAIN_V1,
+    );
+    writer.digest(authenticated_identity);
+    writer.digest(request_binding.binding_identity);
+    writer.digest(proof_executable_binding.binding_identity());
+    writer.digest(consumed.challenge());
+    writer.digest(consumed.transcript());
+    writer.digest(consumed.result());
+    writer.digest(persistent.ledger_namespace());
+    writer.u64(persistent.ledger_generation());
+    writer.digest(persistent.ledger_state_identity());
+    let binding_identity = sha256(&writer.finish());
+    Ok(
+        PersistentlyFreshAuthenticatedControlFlowExecutableBindingV1 {
+            request_binding,
+            proof_executable_binding,
+            binding_identity,
+        },
+    )
+}
+
+fn validate_authenticated_control_flow_executable(
+    request_binding: &ControlFlowProofRequestBindingV1,
+    proof_executable_binding: &AuthenticatedProofExecutableBindingV1,
+) -> Result<(), ControlFlowBindingErrorV1> {
     let evidence = proof_executable_binding.execution_evidence();
     let request = evidence.invocation_plan().request();
     if sha256(&request.to_canonical_bytes()) != request_binding.request_digest {
@@ -539,6 +665,19 @@ pub fn bind_authenticated_control_flow_executable_v1(
         return Err(ControlFlowBindingErrorV1::UnsupportedExecutableDigestAlgorithm);
     }
 
+    Ok(())
+}
+
+fn authenticated_control_flow_binding_identity(
+    request_binding: &ControlFlowProofRequestBindingV1,
+    proof_executable_binding: &AuthenticatedProofExecutableBindingV1,
+) -> Digest {
+    let executable_binding_identity = proof_executable_binding
+        .executable_binding()
+        .binding_identity();
+    let proof_record_digest = proof_executable_binding
+        .executable_binding()
+        .proof_record_digest();
     let mut writer =
         IdentityWriter::with_domain(AUTHENTICATED_CONTROL_FLOW_EXECUTABLE_BINDING_DOMAIN_V1);
     writer.digest(request_binding.source.binding_identity);
@@ -563,12 +702,7 @@ pub fn bind_authenticated_control_flow_executable_v1(
     );
     writer.payload_digest(proof_record_digest);
     writer.payload_digest(executable_binding_identity);
-    let binding_identity = sha256(&writer.finish());
-    Ok(AuthenticatedControlFlowExecutableBindingV1 {
-        request_binding,
-        proof_executable_binding,
-        binding_identity,
-    })
+    sha256(&writer.finish())
 }
 
 fn claims_from_contract(
@@ -787,6 +921,10 @@ impl IdentityWriter {
     }
 
     fn u32(&mut self, value: u32) {
+        self.bytes.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn u64(&mut self, value: u64) {
         self.bytes.extend_from_slice(&value.to_le_bytes());
     }
 

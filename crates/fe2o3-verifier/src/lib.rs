@@ -31,8 +31,10 @@ pub use authenticated_proof_binding::{
     AUTHENTICATED_PROOF_EXECUTABLE_BINDING_VERSION_V1, AuthenticatedExecutionFreshnessV1,
     AuthenticatedPayloadIdentityV1, AuthenticatedProofExecutableBindingError,
     AuthenticatedProofExecutableBindingV1, AuthenticatedProofExecutablePolicyV1,
-    AuthenticatedProofExecutionIdentityV1, bind_authenticated_proof_executable_persistent_v1,
-    bind_authenticated_proof_executable_v1,
+    AuthenticatedProofExecutionIdentityV1,
+    PERSISTENT_AUTHENTICATED_PROOF_EXECUTABLE_BINDING_DOMAIN_V1,
+    PersistentlyFreshProofExecutableBindingV1, PersistentlyFreshProofExecutableIdentityV1,
+    bind_authenticated_proof_executable_persistent_v1, bind_authenticated_proof_executable_v1,
 };
 pub use control_flow_binding::{
     AUTHENTICATED_CONTROL_FLOW_EXECUTABLE_BINDING_DOMAIN_V1,
@@ -42,7 +44,10 @@ pub use control_flow_binding::{
     ControlFlowIntegerSwitchCaseClaimV1, ControlFlowIntegerSwitchClaimV1, ControlFlowLoopClaimV1,
     ControlFlowPayloadIdentityV1, ControlFlowProofRequestBindingV1, ControlFlowSourceBindingV1,
     MAX_BOUND_CONTROL_FLOW_LOOPS_V1, MAX_BOUND_CONTROL_FLOW_SWITCHES_V1,
+    PERSISTENT_AUTHENTICATED_CONTROL_FLOW_EXECUTABLE_BINDING_DOMAIN_V1,
+    PersistentlyFreshAuthenticatedControlFlowExecutableBindingV1,
     bind_authenticated_control_flow_executable_v1, bind_control_flow_proof_request_v1,
+    bind_persistently_fresh_authenticated_control_flow_executable_v1,
     derive_control_flow_functional_specification_digest_v1, reconcile_control_flow_source_v1,
 };
 pub use executor::{

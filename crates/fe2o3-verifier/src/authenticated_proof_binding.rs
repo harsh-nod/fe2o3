@@ -10,13 +10,15 @@ use fe2o3_artifacts::{
 use crate::{
     ArtifactRecordConversionError, AuthenticatedExecutionError,
     AuthenticatedVerusExecutionEvidenceV1, BoundExecutionPayloadV1, Digest,
-    ExecutableMeasurementV1, ExecutableRole, PersistentFreshnessLedgerErrorV1,
+    ExecutableMeasurementV1, ExecutableRole, PersistentFreshnessIdentityV1,
+    PersistentFreshnessLedgerErrorV1, PersistentFreshnessReceiptV1,
     PersistentProofFreshnessLedgerV1, ReviewedInvocationIdentityV1, VerifierPolicy,
     canonical_invocation_digest, convert_to_artifact_proof_record,
 };
 
 /// Domain and schema version for measured proof-to-executable bridge identities.
 pub const AUTHENTICATED_PROOF_EXECUTABLE_BINDING_DOMAIN_V1: [u8; 8] = *b"FE2APXB\0";
+pub const PERSISTENT_AUTHENTICATED_PROOF_EXECUTABLE_BINDING_DOMAIN_V1: [u8; 8] = *b"FE2PPXB\0";
 pub const AUTHENTICATED_PROOF_EXECUTABLE_BINDING_VERSION_V1: u16 = 1;
 
 /// Independent policies and finalized artifact identities admitted by the bridge.
@@ -341,6 +343,110 @@ impl AuthenticatedProofExecutableBindingV1 {
     }
 }
 
+/// Canonical identity of a proof/executable binding and its durable freshness
+/// receipt.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PersistentlyFreshProofExecutableIdentityV1 {
+    proof_binding_identity: Digest,
+    consumed_execution: PersistentFreshnessIdentityV1,
+    ledger_namespace: Digest,
+    ledger_generation: u64,
+    ledger_state_identity: Digest,
+    binding_identity: Digest,
+}
+
+impl PersistentlyFreshProofExecutableIdentityV1 {
+    pub const fn proof_binding_identity(self) -> Digest {
+        self.proof_binding_identity
+    }
+
+    pub const fn consumed_execution(self) -> PersistentFreshnessIdentityV1 {
+        self.consumed_execution
+    }
+
+    pub const fn ledger_namespace(self) -> Digest {
+        self.ledger_namespace
+    }
+
+    pub const fn ledger_generation(self) -> u64 {
+        self.ledger_generation
+    }
+
+    pub const fn ledger_state_identity(self) -> Digest {
+        self.ledger_state_identity
+    }
+
+    pub const fn binding_identity(self) -> Digest {
+        self.binding_identity
+    }
+}
+
+/// Non-clone evidence that an exact authenticated proof/executable binding was
+/// durably consumed by one named freshness ledger state.
+///
+/// Construction is private to the persistent bridge. The receipt and canonical
+/// identity remain attached so downstream APIs can require persistent
+/// freshness at the type boundary. This value grants no runtime authority.
+///
+/// ```compile_fail
+/// # fn duplicate(value: fe2o3_verifier::PersistentlyFreshProofExecutableBindingV1) {
+/// let _copy = value.clone();
+/// # }
+/// ```
+#[derive(Debug, Eq, PartialEq)]
+pub struct PersistentlyFreshProofExecutableBindingV1 {
+    proof_binding: AuthenticatedProofExecutableBindingV1,
+    freshness_receipt: PersistentFreshnessReceiptV1,
+    identity: PersistentlyFreshProofExecutableIdentityV1,
+}
+
+impl PersistentlyFreshProofExecutableBindingV1 {
+    pub const fn version(&self) -> u16 {
+        AUTHENTICATED_PROOF_EXECUTABLE_BINDING_VERSION_V1
+    }
+
+    pub const fn proof_binding(&self) -> &AuthenticatedProofExecutableBindingV1 {
+        &self.proof_binding
+    }
+
+    pub const fn freshness_receipt(&self) -> PersistentFreshnessReceiptV1 {
+        self.freshness_receipt
+    }
+
+    pub const fn identity(&self) -> PersistentlyFreshProofExecutableIdentityV1 {
+        self.identity
+    }
+
+    pub const fn binding_identity(&self) -> Digest {
+        self.identity.binding_identity
+    }
+
+    pub fn validate_against(
+        &self,
+        actual: &Self,
+    ) -> Result<(), AuthenticatedProofExecutableBindingError> {
+        self.proof_binding.validate_against(&actual.proof_binding)?;
+        require_equal(
+            self.freshness_receipt,
+            actual.freshness_receipt,
+            "persistent freshness receipt",
+        )?;
+        require_equal(
+            self.identity,
+            actual.identity,
+            "persistent authenticated binding identity",
+        )
+    }
+
+    pub const fn grants_load_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
+    }
+}
+
 /// Authenticates, policy-matches, and binds one exact measured proof execution.
 ///
 /// The evidence is consumed, all retained bytes and identities are recomputed,
@@ -373,11 +479,58 @@ pub fn bind_authenticated_proof_executable_persistent_v1(
     evidence: AuthenticatedVerusExecutionEvidenceV1,
     policy: &AuthenticatedProofExecutablePolicyV1,
     freshness: &mut PersistentProofFreshnessLedgerV1,
-) -> Result<AuthenticatedProofExecutableBindingV1, AuthenticatedProofExecutableBindingError> {
+) -> Result<PersistentlyFreshProofExecutableBindingV1, AuthenticatedProofExecutableBindingError> {
     validate_authenticated_binding_input(&evidence, policy)?;
     let binding = finish_authenticated_proof_executable_binding(evidence, policy)?;
-    freshness.consume_authenticated_execution(binding.execution_identity())?;
-    Ok(binding)
+    let receipt = freshness.consume_authenticated_execution(binding.execution_identity())?;
+    Ok(persistently_fresh_binding(binding, receipt))
+}
+
+fn persistently_fresh_binding(
+    proof_binding: AuthenticatedProofExecutableBindingV1,
+    freshness_receipt: PersistentFreshnessReceiptV1,
+) -> PersistentlyFreshProofExecutableBindingV1 {
+    let execution = &proof_binding.execution_identity;
+    let consumed_execution = freshness_receipt.identity();
+    debug_assert_eq!(consumed_execution.challenge(), execution.challenge());
+    debug_assert_eq!(
+        consumed_execution.transcript(),
+        execution.transcript_digest()
+    );
+    debug_assert_eq!(consumed_execution.result(), execution.result().digest());
+    let binding_identity = persistent_binding_identity(&proof_binding, freshness_receipt);
+    let identity = PersistentlyFreshProofExecutableIdentityV1 {
+        proof_binding_identity: proof_binding.binding_identity,
+        consumed_execution,
+        ledger_namespace: freshness_receipt.namespace(),
+        ledger_generation: freshness_receipt.generation(),
+        ledger_state_identity: freshness_receipt.state_identity(),
+        binding_identity,
+    };
+    PersistentlyFreshProofExecutableBindingV1 {
+        proof_binding,
+        freshness_receipt,
+        identity,
+    }
+}
+
+fn persistent_binding_identity(
+    proof_binding: &AuthenticatedProofExecutableBindingV1,
+    receipt: PersistentFreshnessReceiptV1,
+) -> Digest {
+    let consumed = receipt.identity();
+    let mut bytes = Vec::with_capacity(8 + 4 + 32 * 6 + 8);
+    bytes.extend_from_slice(&PERSISTENT_AUTHENTICATED_PROOF_EXECUTABLE_BINDING_DOMAIN_V1);
+    bytes.extend_from_slice(&AUTHENTICATED_PROOF_EXECUTABLE_BINDING_VERSION_V1.to_le_bytes());
+    bytes.extend_from_slice(&0_u16.to_le_bytes());
+    bytes.extend_from_slice(proof_binding.binding_identity.as_bytes());
+    bytes.extend_from_slice(consumed.challenge().as_bytes());
+    bytes.extend_from_slice(consumed.transcript().as_bytes());
+    bytes.extend_from_slice(consumed.result().as_bytes());
+    bytes.extend_from_slice(receipt.namespace().as_bytes());
+    bytes.extend_from_slice(&receipt.generation().to_le_bytes());
+    bytes.extend_from_slice(receipt.state_identity().as_bytes());
+    sha256(&bytes)
 }
 
 fn validate_authenticated_binding_input(
