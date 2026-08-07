@@ -171,29 +171,33 @@ impl WorkerV2PrerequisiteDecisionV1 {
 
 /// Exact challenge presented to a reviewed compiler/Verus authenticator.
 pub struct WorkerV2PrerequisiteRequestV1<'admission, K> {
-    admission: &'admission AdmittedFinalizedWorkerV2BundleV1,
+    artifact_identity: &'admission ArtifactKernelIdentityV1,
+    finalized_digest: PayloadDigest,
+    target: AmdTargetId,
+    code_object_version: CodeObjectVersion,
+    device: &'admission DeviceIdentity,
     _marker: PhantomData<fn() -> K>,
 }
 
 impl<K> WorkerV2PrerequisiteRequestV1<'_, K> {
     pub const fn artifact_identity(&self) -> &ArtifactKernelIdentityV1 {
-        self.admission.artifact_identity()
+        self.artifact_identity
     }
 
     pub const fn finalized_digest(&self) -> PayloadDigest {
-        self.admission.finalized_payload_identity().digest()
+        self.finalized_digest
     }
 
     pub fn target(&self) -> AmdTargetId {
-        self.admission.target()
+        self.target
     }
 
     pub fn code_object_version(&self) -> CodeObjectVersion {
-        self.admission.code_object_version()
+        self.code_object_version
     }
 
     pub const fn device(&self) -> &DeviceIdentity {
-        self.admission.device()
+        self.device
     }
 }
 
@@ -266,14 +270,18 @@ impl<K: CompilerGeneratedKernelContractV1> AuthenticatedWorkerV2ExecutableV1<K> 
             .acquire_currentness()
             .map_err(WorkerV2ExecutableAuthenticationError::CurrentPublication)?;
         let request = WorkerV2PrerequisiteRequestV1 {
-            admission: &admission,
+            artifact_identity: admission.artifact_identity(),
+            finalized_digest: admission.finalized_payload_identity().digest(),
+            target: admission.target(),
+            code_object_version: admission.code_object_version(),
+            device: admission.device(),
             _marker: PhantomData,
         };
         // SAFETY: callers cannot reach this transition through a safe trait
         // implementation. Every returned field is independently checked below.
         let prerequisites = unsafe { authenticator.authenticate(&request) }
             .map_err(WorkerV2ExecutableAuthenticationError::Authenticator)?;
-        validate_prerequisites::<K>(&admission, &prerequisites)
+        validate_prerequisites::<K>(&request, &prerequisites)
             .map_err(WorkerV2ExecutableAuthenticationError::Prerequisite)?;
         Ok(Self {
             admission,
@@ -356,13 +364,13 @@ fn validate_required_profile(
 }
 
 fn validate_prerequisites<K: CompilerGeneratedKernelContractV1>(
-    admission: &AdmittedFinalizedWorkerV2BundleV1,
+    request: &WorkerV2PrerequisiteRequestV1<'_, K>,
     actual: &WorkerV2PrerequisiteDecisionV1,
 ) -> Result<(), WorkerV2PrerequisiteError> {
-    let artifact = admission.artifact_identity();
+    let artifact = request.artifact_identity();
     for (matches, field) in [
         (
-            actual.finalized_digest == admission.finalized_payload_identity().digest(),
+            actual.finalized_digest == request.finalized_digest(),
             "finalized code object",
         ),
         (actual.kernel_id == artifact.kernel_id(), "kernel"),
@@ -370,9 +378,9 @@ fn validate_prerequisites<K: CompilerGeneratedKernelContractV1>(
             actual.executable_digest == artifact.executable_digest(),
             "executable semantics",
         ),
-        (actual.target == admission.target(), "target"),
+        (actual.target == request.target(), "target"),
         (
-            actual.code_object_version == admission.code_object_version(),
+            actual.code_object_version == request.code_object_version(),
             "code-object version",
         ),
         (
@@ -878,10 +886,10 @@ impl HsaUnloadObservationV1 {
 /// device-reachable authority in a non-returning state or terminate the process
 /// if bounded quiescence cannot be established. No adapter method may unwind:
 /// unwinding across an unsafe lifecycle transition makes native authority
-/// ambiguous. An `Err` from load or implicit-kernarg initialization must mean
-/// that no native authority from that operation remains live. Handles must
-/// remain valid while owned by the adapter state and must never be reused under
-/// an existing identity.
+/// ambiguous. An `Err` from load, symbol resolution, or implicit-kernarg
+/// initialization must mean that no native authority from that operation
+/// remains live. Handles must remain valid while owned by the adapter state and
+/// must never be reused under an existing identity.
 pub unsafe trait ReviewedHsaExecutableLifecycleAdapterV1 {
     type Executable;
     type Kernel;
@@ -913,7 +921,9 @@ pub unsafe trait ReviewedHsaExecutableLifecycleAdapterV1 {
     /// # Safety
     ///
     /// The kernel handle must remain tied to `executable` until it is dropped.
-    /// This method must not unwind.
+    /// `Err` may be returned only after every partially created kernel handle
+    /// and query resource has been conclusively released. This method must not
+    /// unwind.
     unsafe fn resolve_kernel(
         &mut self,
         executable: &Self::Executable,
@@ -1336,6 +1346,10 @@ impl<K, A: ReviewedHsaExecutableLifecycleAdapterV1> LoadedHsaExecutableV1<K, A> 
         Ok(InertLoadedWorkerV2KernelSelectionV1 {
             selected,
             executable_object: self.load.executable_object,
+            environment: self.environment.clone(),
+            target: self.authenticated.admission.target(),
+            code_object_version: self.authenticated.admission.code_object_version(),
+            device: self.authenticated.admission.device(),
         })
     }
 
@@ -1382,6 +1396,10 @@ impl<K, A: ReviewedHsaExecutableLifecycleAdapterV1> LoadedHsaExecutableV1<K, A> 
 pub struct InertLoadedWorkerV2KernelSelectionV1<'loaded, K> {
     selected: AdmittedWorkerV2TypedKernelV1<'loaded, K>,
     executable_object: HsaExecutableObjectIdentityV1,
+    environment: HsaEnvironmentObservationV1,
+    target: AmdTargetId,
+    code_object_version: CodeObjectVersion,
+    device: &'loaded DeviceIdentity,
 }
 
 impl<K> fmt::Debug for InertLoadedWorkerV2KernelSelectionV1<'_, K> {
@@ -1413,6 +1431,318 @@ impl<K> InertLoadedWorkerV2KernelSelectionV1<'_, K> {
 
     pub const fn requires_hsa_kernel_resolution(&self) -> bool {
         true
+    }
+
+    pub const fn grants_load_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
+    }
+}
+
+impl<K: CompilerGeneratedKernelContractV1> InertLoadedWorkerV2KernelSelectionV1<'_, K> {
+    /// Consumes this loaded-executable selection and authenticates the exact
+    /// selected marker's compiler, Verus, ABI, and effect prerequisites.
+    ///
+    /// The returned state owns only validated evidence. It retains no native
+    /// handle and grants no load or launch authority, so the original borrow
+    /// can end before the reviewed adapter is mutably entered for resolution.
+    #[doc(hidden)]
+    pub fn authenticate<A: WorkerV2PrerequisiteAuthenticatorV1<K>>(
+        self,
+        authenticator: &mut A,
+    ) -> Result<
+        AuthenticatedLoadedWorkerV2KernelSelectionV1<K>,
+        WorkerV2ExecutableAuthenticationError<A::Error>,
+    > {
+        let request = WorkerV2PrerequisiteRequestV1 {
+            artifact_identity: self.selected.artifact_identity(),
+            finalized_digest: self.selected.finalized_payload_identity().digest(),
+            target: self.target,
+            code_object_version: self.code_object_version,
+            device: self.device,
+            _marker: PhantomData,
+        };
+        // SAFETY: callers cannot reach this transition through a safe trait
+        // implementation. The exact selected-kernel fields are checked below.
+        let prerequisites = unsafe { authenticator.authenticate(&request) }
+            .map_err(WorkerV2ExecutableAuthenticationError::Authenticator)?;
+        validate_prerequisites::<K>(&request, &prerequisites)
+            .map_err(WorkerV2ExecutableAuthenticationError::Prerequisite)?;
+
+        Ok(AuthenticatedLoadedWorkerV2KernelSelectionV1 {
+            artifact_identity: self.selected.artifact_identity().clone(),
+            physical_kernel: self.selected.physical_kernel().clone(),
+            executable_object: self.executable_object,
+            environment: self.environment,
+            finalized_digest: request.finalized_digest,
+            target: request.target,
+            code_object_version: request.code_object_version,
+            prerequisites,
+            _marker: PhantomData,
+        })
+    }
+}
+
+/// Authenticated evidence for one selected kernel in an already loaded object.
+///
+/// This intermediate state is intentionally non-`Clone` and carries no native
+/// authority. Resolving it revalidates the loaded object before entering the
+/// reviewed adapter, then returns a token that borrows that object for as long
+/// as the resolved kernel handle remains live.
+#[doc(hidden)]
+pub struct AuthenticatedLoadedWorkerV2KernelSelectionV1<K> {
+    artifact_identity: ArtifactKernelIdentityV1,
+    physical_kernel: PublishedKernelPhysicalLayoutV1,
+    executable_object: HsaExecutableObjectIdentityV1,
+    environment: HsaEnvironmentObservationV1,
+    finalized_digest: PayloadDigest,
+    target: AmdTargetId,
+    code_object_version: CodeObjectVersion,
+    prerequisites: WorkerV2PrerequisiteDecisionV1,
+    _marker: PhantomData<fn() -> K>,
+}
+
+impl<K> fmt::Debug for AuthenticatedLoadedWorkerV2KernelSelectionV1<K> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AuthenticatedLoadedWorkerV2KernelSelectionV1")
+            .field("artifact_identity", &self.artifact_identity)
+            .field("executable_object", &self.executable_object)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<K: CompilerGeneratedKernelContractV1> AuthenticatedLoadedWorkerV2KernelSelectionV1<K> {
+    pub const fn requires_prerequisite_authentication(&self) -> bool {
+        false
+    }
+
+    pub const fn requires_hsa_kernel_resolution(&self) -> bool {
+        true
+    }
+
+    pub const fn grants_load_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
+    }
+
+    /// Resolves the authenticated symbol through the exact retained adapter.
+    ///
+    /// The returned opaque state owns the selected kernel handle and borrows
+    /// `loaded`, preventing executable unload until that handle is dropped. It
+    /// deliberately exposes no dispatch transition.
+    #[doc(hidden)]
+    pub fn resolve<'loaded, P, A>(
+        self,
+        loaded: &'loaded mut LoadedHsaExecutableV1<P, A>,
+    ) -> Result<
+        ResolvedLoadedWorkerV2KernelSelectionV1<'loaded, P, K, A>,
+        HsaExecutableLoadError<A::Error>,
+    >
+    where
+        A: ReviewedHsaExecutableLifecycleAdapterV1,
+    {
+        validate_authenticated_selection_against_loaded(&self, loaded).map_err(|field| {
+            HsaExecutableLoadError::KernelObservationMismatch {
+                field,
+                cleanup: None,
+            }
+        })?;
+
+        let executable = loaded
+            .executable
+            .as_ref()
+            .expect("loaded executable state must own an executable");
+        // SAFETY: the selected evidence has been authenticated and rebound to
+        // this exact live object. The reviewed adapter's complete observation
+        // is independently checked before the handle can escape this method.
+        let (kernel, resolution) = reviewed_adapter_call(|| unsafe {
+            loaded
+                .adapter
+                .resolve_kernel(executable, self.artifact_identity.symbol().as_str())
+        })
+        .map_err(|source| HsaExecutableLoadError::KernelResolution {
+            source,
+            cleanup: None,
+        })?;
+
+        if let Err(field) = validate_selected_kernel_resolution(
+            &self.artifact_identity,
+            &self.physical_kernel,
+            self.executable_object,
+            &loaded.resolution,
+            &resolution,
+        ) {
+            drop(kernel);
+            return Err(HsaExecutableLoadError::KernelObservationMismatch {
+                field,
+                cleanup: None,
+            });
+        }
+
+        Ok(ResolvedLoadedWorkerV2KernelSelectionV1 {
+            artifact_identity: self.artifact_identity,
+            physical_kernel: self.physical_kernel,
+            prerequisites: self.prerequisites,
+            resolution,
+            _kernel: kernel,
+            _loaded: PhantomData,
+            _marker: PhantomData,
+        })
+    }
+}
+
+fn validate_authenticated_selection_against_loaded<K, P, A>(
+    selected: &AuthenticatedLoadedWorkerV2KernelSelectionV1<K>,
+    loaded: &LoadedHsaExecutableV1<P, A>,
+) -> Result<(), &'static str>
+where
+    A: ReviewedHsaExecutableLifecycleAdapterV1,
+{
+    for (matches, field) in [
+        (
+            selected.executable_object == loaded.load.executable_object,
+            "HSA executable object",
+        ),
+        (
+            selected.environment == loaded.environment,
+            "HSA environment",
+        ),
+        (
+            selected.finalized_digest == loaded.load.finalized_digest,
+            "finalized digest",
+        ),
+        (
+            selected.artifact_identity.payload_digest() == loaded.load.finalized_digest,
+            "selected payload digest",
+        ),
+        (
+            selected.target == loaded.authenticated.admission.target(),
+            "target",
+        ),
+        (
+            selected.code_object_version == loaded.authenticated.admission.code_object_version(),
+            "code-object version",
+        ),
+        (
+            selected.physical_kernel.export_symbol()
+                == selected.artifact_identity.symbol().as_str(),
+            "selected physical kernel",
+        ),
+    ] {
+        if !matches {
+            return Err(field);
+        }
+    }
+    Ok(())
+}
+
+fn validate_selected_kernel_resolution(
+    identity: &ArtifactKernelIdentityV1,
+    physical: &PublishedKernelPhysicalLayoutV1,
+    executable_object: HsaExecutableObjectIdentityV1,
+    primary: &HsaKernelResolutionObservationV1,
+    selected: &HsaKernelResolutionObservationV1,
+) -> Result<(), &'static str> {
+    let launch = physical.launch();
+    let expected_hsa_alignment = launch
+        .kernarg_segment_alignment()
+        .max(HSA_MINIMUM_KERNARG_ALIGNMENT);
+    for (matches, field) in [
+        (
+            selected.executable_object == executable_object,
+            "HSA executable object",
+        ),
+        (
+            selected.export_symbol.as_ref() == identity.symbol().as_str()
+                && selected.export_symbol.as_ref() == physical.export_symbol(),
+            "HSA kernel symbol",
+        ),
+        (
+            selected.kernarg_segment_size == launch.kernarg_segment_size(),
+            "kernarg segment size",
+        ),
+        (
+            selected.kernarg_segment_alignment == expected_hsa_alignment,
+            "kernarg segment alignment",
+        ),
+        (
+            selected.export_symbol == primary.export_symbol
+                || selected.kernel_object != primary.kernel_object,
+            "HSA kernel object alias",
+        ),
+    ] {
+        if !matches {
+            return Err(field);
+        }
+    }
+    Ok(())
+}
+
+/// Resolved but non-dispatchable selected kernel bound to one loaded object.
+///
+/// The private kernel handle is dropped before this borrow can end. No method
+/// exposes the handle or grants launch authority, and the token is neither
+/// `Clone` nor `Copy`.
+#[doc(hidden)]
+pub struct ResolvedLoadedWorkerV2KernelSelectionV1<
+    'loaded,
+    P,
+    K,
+    A: ReviewedHsaExecutableLifecycleAdapterV1,
+> {
+    artifact_identity: ArtifactKernelIdentityV1,
+    physical_kernel: PublishedKernelPhysicalLayoutV1,
+    prerequisites: WorkerV2PrerequisiteDecisionV1,
+    resolution: HsaKernelResolutionObservationV1,
+    _kernel: A::Kernel,
+    _loaded: PhantomData<&'loaded mut LoadedHsaExecutableV1<P, A>>,
+    _marker: PhantomData<fn() -> K>,
+}
+
+impl<P, K, A: ReviewedHsaExecutableLifecycleAdapterV1> fmt::Debug
+    for ResolvedLoadedWorkerV2KernelSelectionV1<'_, P, K, A>
+{
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ResolvedLoadedWorkerV2KernelSelectionV1")
+            .field("artifact_identity", &self.artifact_identity)
+            .field("resolution", &self.resolution)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<P, K, A: ReviewedHsaExecutableLifecycleAdapterV1>
+    ResolvedLoadedWorkerV2KernelSelectionV1<'_, P, K, A>
+{
+    pub const fn artifact_identity(&self) -> &ArtifactKernelIdentityV1 {
+        &self.artifact_identity
+    }
+
+    pub const fn physical_kernel(&self) -> &PublishedKernelPhysicalLayoutV1 {
+        &self.physical_kernel
+    }
+
+    pub const fn prerequisites(&self) -> &WorkerV2PrerequisiteDecisionV1 {
+        &self.prerequisites
+    }
+
+    pub const fn kernel_observation(&self) -> &HsaKernelResolutionObservationV1 {
+        &self.resolution
+    }
+
+    pub const fn requires_prerequisite_authentication(&self) -> bool {
+        false
+    }
+
+    pub const fn requires_hsa_kernel_resolution(&self) -> bool {
+        false
     }
 
     pub const fn grants_load_authority(&self) -> bool {
@@ -2184,9 +2514,12 @@ mod tests {
         TargetXnackEnabled,
         TargetXnackOmitted,
         TargetProcessor,
+        RuntimeInstance,
         LoadDigest,
         LoadLength,
+        ResolutionExecutable,
         Symbol,
+        KernelObjectAlias,
         KernargSize,
         KernargAlignment,
         DispatchObject,
@@ -2243,8 +2576,14 @@ mod tests {
                 _ => "gfx942:sramecc+:xnack-",
             })
             .unwrap();
+            let runtime_instance = if self.fault == AdapterFault::RuntimeInstance {
+                [0x7a; 16]
+            } else {
+                [0x72; 16]
+            };
             let runtime =
-                HsaRuntimeIdentityV1::new("ROCr", "test-v1", digest(0x71), [0x72; 16]).unwrap();
+                HsaRuntimeIdentityV1::new("ROCr", "test-v1", digest(0x71), runtime_instance)
+                    .unwrap();
             let ordinal = if self.fault == AdapterFault::DeviceOrdinal {
                 1
             } else {
@@ -2262,6 +2601,10 @@ mod tests {
 
         fn kernel_object() -> HsaKernelObjectIdentityV1 {
             HsaKernelObjectIdentityV1::new([0x76; 32]).unwrap()
+        }
+
+        fn second_kernel_object() -> HsaKernelObjectIdentityV1 {
+            HsaKernelObjectIdentityV1::new([0x78; 32]).unwrap()
         }
     }
 
@@ -2323,11 +2666,23 @@ mod tests {
             } else {
                 16
             };
+            let executable_object = if self.fault == AdapterFault::ResolutionExecutable {
+                HsaExecutableObjectIdentityV1::new([0x79; 32]).unwrap()
+            } else {
+                Self::executable_object()
+            };
+            let kernel_object = if export_symbol == "second_kernel"
+                && self.fault != AdapterFault::KernelObjectAlias
+            {
+                Self::second_kernel_object()
+            } else {
+                Self::kernel_object()
+            };
             Ok((
                 FakeKernel,
                 HsaKernelResolutionObservationV1::new(
-                    Self::executable_object(),
-                    Self::kernel_object(),
+                    executable_object,
+                    kernel_object,
                     symbol,
                     size,
                     alignment,
@@ -2448,8 +2803,15 @@ mod tests {
     }
 
     fn load_two_kernels(seed: u8) -> (TestLoadedResult, Arc<AtomicUsize>, TestDirectory) {
+        load_two_kernels_with_fault(seed, AdapterFault::None)
+    }
+
+    fn load_two_kernels_with_fault(
+        seed: u8,
+        fault: AdapterFault,
+    ) -> (TestLoadedResult, Arc<AtomicUsize>, TestDirectory) {
         let (authenticated, directory) = authenticate_two_kernels(seed);
-        let (adapter, unloads) = FakeHsaAdapter::new(AdapterFault::None);
+        let (adapter, unloads) = FakeHsaAdapter::new(fault);
         let authorized = authenticated.authorize_hsa_load(adapter).unwrap();
         (authorized.load(), unloads, directory)
     }
@@ -2539,6 +2901,115 @@ mod tests {
         }
         loaded.unload().unwrap();
         assert_eq!(unloads.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn selected_marker_authenticates_and_resolves_without_launch_authority() {
+        let (loaded, unloads, _directory) = load_two_kernels(0x8d);
+        let mut loaded = loaded.unwrap();
+        let selection = loaded.select_typed_kernel::<SecondTestKernel>().unwrap();
+        let authenticated = selection
+            .authenticate(&mut FakeAuthenticator::exact())
+            .unwrap();
+        assert!(!authenticated.requires_prerequisite_authentication());
+        assert!(authenticated.requires_hsa_kernel_resolution());
+        assert!(!authenticated.grants_load_authority());
+        assert!(!authenticated.grants_launch_authority());
+
+        let resolved = authenticated.resolve(&mut loaded).unwrap();
+        assert_eq!(
+            resolved.artifact_identity().symbol().as_str(),
+            "second_kernel"
+        );
+        assert_eq!(resolved.physical_kernel().export_symbol(), "second_kernel");
+        assert_eq!(
+            resolved.kernel_observation().kernel_object(),
+            FakeHsaAdapter::second_kernel_object()
+        );
+        assert!(!resolved.requires_prerequisite_authentication());
+        assert!(!resolved.requires_hsa_kernel_resolution());
+        assert!(!resolved.grants_load_authority());
+        assert!(!resolved.grants_launch_authority());
+        drop(resolved);
+
+        loaded.unload().unwrap();
+        assert_eq!(unloads.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn selected_marker_prerequisite_substitutions_are_rejected() {
+        for fault in [
+            PrerequisiteFault::FinalizedDigest,
+            PrerequisiteFault::Kernel,
+            PrerequisiteFault::Marker,
+            PrerequisiteFault::Compiler,
+            PrerequisiteFault::TypeLayout,
+            PrerequisiteFault::Effects,
+            PrerequisiteFault::MissingRaceFreedom,
+        ] {
+            let (loaded, unloads, _directory) = load_two_kernels(0x8c);
+            let loaded = loaded.unwrap();
+            let selection = loaded.select_typed_kernel::<SecondTestKernel>().unwrap();
+            assert!(matches!(
+                selection.authenticate(&mut FakeAuthenticator { fault }),
+                Err(WorkerV2ExecutableAuthenticationError::Prerequisite(_))
+            ));
+            loaded.unload().unwrap();
+            assert_eq!(unloads.load(Ordering::SeqCst), 1);
+        }
+    }
+
+    #[test]
+    fn selected_hsa_resolution_substitutions_are_rejected() {
+        for (fault, expected_field) in [
+            (AdapterFault::ResolutionExecutable, "HSA executable object"),
+            (AdapterFault::Symbol, "HSA kernel symbol"),
+            (AdapterFault::KernelObjectAlias, "HSA kernel object alias"),
+            (AdapterFault::KernargSize, "kernarg segment size"),
+            (AdapterFault::KernargAlignment, "kernarg segment alignment"),
+        ] {
+            let (loaded, unloads, _directory) = load_two_kernels(0x8b);
+            let mut loaded = loaded.unwrap();
+            let selection = loaded.select_typed_kernel::<SecondTestKernel>().unwrap();
+            let authenticated = selection
+                .authenticate(&mut FakeAuthenticator::exact())
+                .unwrap();
+            loaded.adapter.fault = fault;
+            match authenticated.resolve(&mut loaded) {
+                Err(HsaExecutableLoadError::KernelObservationMismatch { field, .. }) => {
+                    assert_eq!(field, expected_field);
+                }
+                other => panic!("fault {fault:?} returned {other:?}"),
+            }
+            loaded.unload().unwrap();
+            assert_eq!(unloads.load(Ordering::SeqCst), 1);
+        }
+    }
+
+    #[test]
+    fn authenticated_selection_cannot_cross_hsa_environments() {
+        let (first, first_unloads, _first_directory) = load_two_kernels(0x8a);
+        let first = first.unwrap();
+        let selection = first.select_typed_kernel::<SecondTestKernel>().unwrap();
+        let authenticated = selection
+            .authenticate(&mut FakeAuthenticator::exact())
+            .unwrap();
+
+        let (second, second_unloads, _second_directory) =
+            load_two_kernels_with_fault(0x8a, AdapterFault::RuntimeInstance);
+        let mut second = second.unwrap();
+        assert!(matches!(
+            authenticated.resolve(&mut second),
+            Err(HsaExecutableLoadError::KernelObservationMismatch {
+                field: "HSA environment",
+                ..
+            })
+        ));
+
+        first.unload().unwrap();
+        second.unload().unwrap();
+        assert_eq!(first_unloads.load(Ordering::SeqCst), 1);
+        assert_eq!(second_unloads.load(Ordering::SeqCst), 1);
     }
 
     #[test]

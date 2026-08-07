@@ -1,0 +1,5 @@
+error[E0616]: field `_kernel` of struct `fe2o3_host::hsa_executable_lifecycle::ResolvedLoadedWorkerV2KernelSelectionV1` is private
+  --> tests/ui/hsa_executable_lifecycle/resolved_typed_selection_fields_are_private.rs:21:28
+   |
+21 |     let _kernel = resolved._kernel;
+   |                            ^^^^^^^ private field
