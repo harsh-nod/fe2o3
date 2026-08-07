@@ -1,12 +1,24 @@
 #![forbid(unsafe_code)]
 #![doc = include_str!("../README.md")]
 
+mod control_flow_v1;
 mod decode;
 mod encode;
 mod error;
 mod kernel_contract_v1;
 mod model;
 
+pub use control_flow_v1::{
+    CONTROL_FLOW_CONTRACT_MAGIC_V1, CONTROL_FLOW_CONTRACT_VERSION_V1,
+    CONTROL_FLOW_REGISTRATION_KIND_V1, CONTROL_FLOW_REGISTRATION_MAGIC_V1,
+    CONTROL_FLOW_REGISTRATION_PREFIX_V1, CONTROL_FLOW_REGISTRATION_VERSION_V1,
+    CanonicalCfgIdentityV1, ControlFlowContractV1, ControlFlowDecodeErrorV1, ControlFlowNodeIdV1,
+    ControlFlowNodeKindV1, ControlFlowNodeV1, ControlFlowValidationErrorV1,
+    FrontendIntegerSwitchCaseV1, FrontendIntegerSwitchTypeV1, FrontendSourceSpanV1,
+    MAX_CONTROL_FLOW_CONTRACT_BYTES_V1, MAX_CONTROL_FLOW_EDGES_V1, MAX_CONTROL_FLOW_NODES_V1,
+    MAX_INTEGER_SWITCH_CASES_V1, MAX_SOURCE_FILE_BYTES_V1, decode_control_flow_contract_v1,
+    encode_control_flow_contract_v1,
+};
 pub use decode::decode_frontend_unit_v1;
 pub use encode::{FRONTEND_UNIT_MAGIC_V1, FRONTEND_UNIT_VERSION_V1, encode_frontend_unit_v1};
 pub use error::{DecodeError, ValidationError};

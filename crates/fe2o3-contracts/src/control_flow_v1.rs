@@ -90,7 +90,7 @@ impl IntegerSwitchTypeV1 {
         self.signed
     }
 
-    pub const fn contains(self, value: i128) -> bool {
+    const fn contains_signed(self, value: i128) -> bool {
         if self.signed {
             if self.width == 128 {
                 return true;
@@ -99,33 +99,43 @@ impl IntegerSwitchTypeV1 {
             let maximum = (1_i128 << magnitude_bits) - 1;
             let minimum = -(1_i128 << magnitude_bits);
             value >= minimum && value <= maximum
-        } else if value < 0 {
-            false
-        } else if self.width == 128 {
-            true
         } else {
-            value < (1_i128 << self.width)
+            value >= 0 && self.contains_unsigned(value as u128)
         }
+    }
+
+    const fn contains_unsigned(self, value: u128) -> bool {
+        !self.signed && (self.width == 128 || value < (1_u128 << self.width))
     }
 }
 
-/// Canonical integer case value interpreted under an explicit switch type.
+/// Canonical two's-complement bit pattern interpreted under an explicit switch type.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[repr(transparent)]
-pub struct IntegerSwitchCaseV1(i128);
+pub struct IntegerSwitchCaseV1(u128);
 
 impl IntegerSwitchCaseV1 {
-    pub const fn new(
+    pub const fn from_signed(
         ty: IntegerSwitchTypeV1,
         value: i128,
     ) -> Result<Self, ControlFlowContractErrorV1> {
-        if !ty.contains(value) {
+        if !ty.contains_signed(value) {
+            return Err(ControlFlowContractErrorV1::IntegerCaseOutOfRange);
+        }
+        Ok(Self(value as u128))
+    }
+
+    pub const fn from_unsigned(
+        ty: IntegerSwitchTypeV1,
+        value: u128,
+    ) -> Result<Self, ControlFlowContractErrorV1> {
+        if !ty.contains_unsigned(value) {
             return Err(ControlFlowContractErrorV1::IntegerCaseOutOfRange);
         }
         Ok(Self(value))
     }
 
-    pub const fn value(self) -> i128 {
+    pub const fn bits(self) -> u128 {
         self.0
     }
 }

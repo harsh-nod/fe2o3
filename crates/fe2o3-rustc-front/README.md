@@ -95,6 +95,43 @@ the existing kernel registration tuple. Collection, reachable-assembly
 comparison, lowering to AMDGPU attributes, and executable inspection remain
 compiler responsibilities.
 
+## Control-flow sidecar V1
+
+Source control flow uses a third, independent wire domain. It does not modify
+either wire above. `ControlFlowContractV1` has magic `FE2O3CF\0`, version 1,
+and a 1 MiB limit. Its fixed 28-byte header records the total length, node
+count, dense entry-node ID, and zero flags and reserved fields.
+
+Each node records a dense ID, a complete source-file/start/end span, and one
+of these closed terminators:
+
+- entry or ordinary single-successor block;
+- exit or two-successor branch;
+- a loop header with a nonzero maximum iteration count, body, and exit;
+- `break` or `continue` with an exact enclosing-loop identity and target; or
+- a fixed-width signed or unsigned integer switch with canonical case bit
+  patterns, case targets, and a default target.
+
+Construction validates all references and source spans, requires every node
+to be reachable and at least one exit to exist, and checks break/continue
+targets against their declared loops. Dominator-derived backedges must target
+bounded loop headers. Removing those backedges must leave a DAG, which rejects
+unbounded and irreducible cycles. Every declared loop must have a structural
+backedge.
+
+Switch cases cover the complete `i8` through `i128` and `u8` through `u128`
+domains. `isize` and `usize` are deliberately absent because their width is
+target-dependent. Cases are sorted by their signed or unsigned semantic value
+and duplicates are rejected. The exact source-span-independent CFG projection
+is exposed as `CanonicalCfgIdentityV1`; its canonical bytes are a collision-free
+structural identity rather than a cryptographic digest.
+
+The decoder bounds every count before allocation, rejects unknown tags,
+versions, flags, nonzero reserved fields, invalid UTF-8, truncation, trailing
+bytes, malformed graphs, and noncanonical ordering, then requires exact
+re-encoding. Proc-macro emission and authenticated MIR reconciliation are
+separate producer responsibilities.
+
 ## rustc producer
 
 `rustc-codegen-fe2o3` contains a fail-closed producer for this wire format. It
@@ -123,7 +160,10 @@ particular, it does **not**:
 - prove that a function was monomorphized, that helpers are reachable from a
   kernel, or that names and source locations are truthful;
 - encode MIR statements, terminators, edge conditions, call sites, constants,
-  layouts, ABI details, ownership, or general target information;
+  layouts, ABI details, ownership, or general target information outside the
+  separately versioned control-flow sidecar;
+- prove source loop bounds, authenticate source spans, or prove that a source
+  control-flow sidecar is equivalent to optimized MIR;
 - establish type safety, memory safety, bounds safety, initialization, alias
   safety, race freedom, convergence, or functional correctness;
 - bind a record to source inputs, a compiler invocation, Kernel IR, a proof,

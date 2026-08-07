@@ -19,20 +19,26 @@ fn fixed_integer_switch_types_have_exact_ranges() {
         (IntegerSwitchTypeV1::U8, 0, 255),
         (IntegerSwitchTypeV1::U16, 0, 65_535),
     ] {
-        assert!(ty.contains(minimum));
-        assert!(ty.contains(maximum));
-        assert!(!ty.contains(minimum - 1));
-        assert!(!ty.contains(maximum + 1));
         assert_eq!(
-            IntegerSwitchCaseV1::new(ty, maximum).unwrap().value(),
-            maximum
+            IntegerSwitchCaseV1::from_signed(ty, maximum)
+                .unwrap()
+                .bits(),
+            maximum as u128
         );
+        assert!(IntegerSwitchCaseV1::from_signed(ty, minimum).is_ok());
+        assert!(IntegerSwitchCaseV1::from_signed(ty, minimum - 1).is_err());
+        assert!(IntegerSwitchCaseV1::from_signed(ty, maximum + 1).is_err());
     }
 
-    assert!(IntegerSwitchTypeV1::I128.contains(i128::MIN));
-    assert!(IntegerSwitchTypeV1::I128.contains(i128::MAX));
-    assert!(IntegerSwitchTypeV1::U128.contains(i128::MAX));
-    assert!(!IntegerSwitchTypeV1::U128.contains(-1));
+    assert!(IntegerSwitchCaseV1::from_signed(IntegerSwitchTypeV1::I128, i128::MIN).is_ok());
+    assert!(IntegerSwitchCaseV1::from_signed(IntegerSwitchTypeV1::I128, i128::MAX).is_ok());
+    assert_eq!(
+        IntegerSwitchCaseV1::from_unsigned(IntegerSwitchTypeV1::U128, u128::MAX)
+            .unwrap()
+            .bits(),
+        u128::MAX
+    );
+    assert!(IntegerSwitchCaseV1::from_signed(IntegerSwitchTypeV1::U128, -1).is_err());
 }
 
 #[test]
@@ -46,7 +52,7 @@ fn unsupported_widths_and_out_of_range_cases_fail_closed() {
         Err(ControlFlowContractErrorV1::UnsupportedIntegerWidth(24))
     );
     assert_eq!(
-        IntegerSwitchCaseV1::new(IntegerSwitchTypeV1::I8, 128),
+        IntegerSwitchCaseV1::from_signed(IntegerSwitchTypeV1::I8, 128),
         Err(ControlFlowContractErrorV1::IntegerCaseOutOfRange)
     );
 }
