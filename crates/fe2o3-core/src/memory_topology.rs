@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT_CONTEXT_ID: AtomicU64 = AtomicU64::new(1);
+static NEXT_ALLOCATION_ID: AtomicU64 = AtomicU64::new(1);
 
 fn next_identity(counter: &AtomicU64, kind: &'static str) -> u64 {
     counter
@@ -19,7 +20,7 @@ fn next_identity(counter: &AtomicU64, kind: &'static str) -> u64 {
 /// same physical device while having distinct Rust lifetimes. This identity
 /// captures that distinction. It is not stable across process restarts and is
 /// not native context, peer, memory, or launch authority.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ContextIdentity {
     device_ordinal: i32,
     process_sequence: u64,
@@ -43,7 +44,7 @@ impl ContextIdentity {
 /// UUID and canonical PCI address must agree in the same successful query.
 /// The ordinal is retained because all HIP operations in this process address
 /// the device by that ordinal. This copyable record is descriptive only.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct PhysicalDeviceIdentity {
     ordinal: i32,
     uuid: [u8; 16],
@@ -126,6 +127,81 @@ impl MemoryTopologyObservation {
 
     pub fn is_for_context(self, context: &Arc<GpuContext>) -> bool {
         self.context == context.identity()
+    }
+
+    pub(crate) fn new_allocation_identity(
+        self,
+        kind: AllocationKind,
+        byte_len: usize,
+    ) -> AllocationIdentity {
+        AllocationIdentity {
+            physical_device: self.physical_device,
+            context: self.context,
+            process_sequence: next_identity(&NEXT_ALLOCATION_ID, "allocation"),
+            kind,
+            byte_len,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test(context: &Arc<GpuContext>, ordinal: i32) -> Self {
+        assert_eq!(context.device_id(), ordinal);
+        Self {
+            physical_device: PhysicalDeviceIdentity {
+                ordinal,
+                uuid: [ordinal as u8 + 1; 16],
+                pci_domain: 0,
+                pci_bus: ordinal as u8,
+                pci_device: 0,
+                pci_function: 0,
+            },
+            context: context.identity(),
+            capabilities: MemoryCapabilities {
+                managed_memory: true,
+                concurrent_managed_access: true,
+                pageable_memory_access: false,
+                virtual_memory_management: true,
+            },
+        }
+    }
+}
+
+/// Native allocation category committed by an [`AllocationIdentity`].
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum AllocationKind {
+    Managed,
+    VmmPhysical,
+    VmmVirtualRange,
+}
+
+/// Exact process-local identity of one allocation or virtual reservation.
+///
+/// This record is copyable for comparison and logging. Ownership and cleanup
+/// authority live only in the non-`Clone` allocation witnesses.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct AllocationIdentity {
+    physical_device: PhysicalDeviceIdentity,
+    context: ContextIdentity,
+    process_sequence: u64,
+    kind: AllocationKind,
+    byte_len: usize,
+}
+
+impl AllocationIdentity {
+    pub const fn physical_device(self) -> PhysicalDeviceIdentity {
+        self.physical_device
+    }
+
+    pub const fn context(self) -> ContextIdentity {
+        self.context
+    }
+
+    pub const fn kind(self) -> AllocationKind {
+        self.kind
+    }
+
+    pub const fn byte_len(self) -> usize {
+        self.byte_len
     }
 }
 
