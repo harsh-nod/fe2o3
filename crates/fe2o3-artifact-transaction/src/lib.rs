@@ -73,7 +73,7 @@ pub use link_publication::{
 };
 use rustix::fd::{AsRawFd, OwnedFd};
 use rustix::fs::{
-    AtFlags, Dir, FileType, FlockOperation, Mode, OFlags, flock, fstat, fsync, mkdirat, open,
+    AtFlags, Dir, FileType, FlockOperation, Mode, OFlags, fcntl_lock, fstat, fsync, mkdirat, open,
     openat, renameat, statat, unlinkat,
 };
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -82,8 +82,8 @@ use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 pub use worker_v2_publication_intent::{
     MAX_WORKER_V2_PUBLICATION_INTENT_OUTPUT_BYTES, MAX_WORKER_V2_PUBLICATION_INTENT_RECORD_BYTES,
     RecoveredWorkerV2PublicationIntentV1, WorkerV2PublicationIntentBoundaryV1,
@@ -2559,6 +2559,79 @@ struct PinnedOutput {
     inode: u64,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct ProcessLockIdentity {
+    device: u64,
+    inode: u64,
+}
+
+impl ProcessLockIdentity {
+    const fn from_stat(stat: &rustix::fs::Stat) -> Self {
+        Self {
+            device: stat.st_dev,
+            inode: stat.st_ino,
+        }
+    }
+}
+
+struct ProcessLockState {
+    pid: u32,
+    held: HashSet<ProcessLockIdentity>,
+}
+
+// POSIX record locks do not distinguish threads. This registry restores same-process exclusion
+// without making lock ownership inheritable across fork like an open-file-description flock.
+struct ProcessLockRegistry {
+    state: Mutex<ProcessLockState>,
+    released: Condvar,
+}
+
+impl ProcessLockRegistry {
+    fn global() -> &'static Self {
+        static REGISTRY: OnceLock<ProcessLockRegistry> = OnceLock::new();
+        REGISTRY.get_or_init(|| ProcessLockRegistry {
+            state: Mutex::new(ProcessLockState {
+                pid: process::id(),
+                held: HashSet::new(),
+            }),
+            released: Condvar::new(),
+        })
+    }
+
+    fn state(&self) -> std::sync::MutexGuard<'_, ProcessLockState> {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let pid = process::id();
+        if state.pid != pid {
+            state.pid = pid;
+            state.held.clear();
+        }
+        state
+    }
+
+    fn wait<'a>(
+        &self,
+        state: std::sync::MutexGuard<'a, ProcessLockState>,
+    ) -> std::sync::MutexGuard<'a, ProcessLockState> {
+        self.released
+            .wait(state)
+            .unwrap_or_else(|error| error.into_inner())
+    }
+}
+
+struct ProcessLockReservation {
+    identity: ProcessLockIdentity,
+}
+
+impl Drop for ProcessLockReservation {
+    fn drop(&mut self) {
+        let registry = ProcessLockRegistry::global();
+        let mut state = registry.state();
+        if state.held.remove(&self.identity) {
+            registry.released.notify_all();
+        }
+    }
+}
+
 impl PinnedOutput {
     fn open(path: &Path) -> Result<Self, EmitError> {
         Self::open_with_create(path, true)
@@ -2620,13 +2693,6 @@ impl PinnedOutput {
     }
 
     fn lock_with(&self, operation: FlockOperation) -> Result<Option<OutputLock>, EmitError> {
-        let fd = openat(
-            &self.fd,
-            LOCK_FILE,
-            OFlags::RDWR | OFlags::CREATE | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-            Mode::RUSR | Mode::WUSR,
-        )
-        .map_err(std::io::Error::from)?;
         let validate_lock = |stat: &rustix::fs::Stat| {
             if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile {
                 return Err(EmitError::InvalidArtifactDestination {
@@ -2642,7 +2708,7 @@ impl PinnedOutput {
             }
             Ok(())
         };
-        let validate_path_identity = |fd_stat: &rustix::fs::Stat| {
+        let validate_path_identity = |fd_stat: &rustix::fs::Stat| -> Result<(), EmitError> {
             let path_stat = statat(&self.fd, LOCK_FILE, AtFlags::SYMLINK_NOFOLLOW)
                 .map_err(std::io::Error::from)?;
             validate_lock(&path_stat)?;
@@ -2654,25 +2720,74 @@ impl PinnedOutput {
             }
             Ok(())
         };
-        let stat = fstat(&fd).map_err(std::io::Error::from)?;
-        validate_lock(&stat)?;
-        validate_path_identity(&stat)?;
-        if let Err(error) = flock(&fd, operation) {
+
+        let nonblocking = operation == FlockOperation::NonBlockingLockExclusive;
+        let registry = ProcessLockRegistry::global();
+        let (fd, reservation) = loop {
+            let mut state = registry.state();
+            let path_stat = match statat(&self.fd, LOCK_FILE, AtFlags::SYMLINK_NOFOLLOW) {
+                Ok(stat) => {
+                    validate_lock(&stat)?;
+                    Some(stat)
+                }
+                Err(error) if error == rustix::io::Errno::NOENT => None,
+                Err(error) => return Err(std::io::Error::from(error).into()),
+            };
+            let path_identity = path_stat.as_ref().map(ProcessLockIdentity::from_stat);
+            if path_identity.is_some_and(|identity| state.held.contains(&identity)) {
+                if nonblocking {
+                    return Ok(None);
+                }
+                drop(registry.wait(state));
+                continue;
+            }
+
+            let fd = openat(
+                &self.fd,
+                LOCK_FILE,
+                OFlags::RDWR | OFlags::CREATE | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::RUSR | Mode::WUSR,
+            )
+            .map_err(std::io::Error::from)?;
+            let stat = fstat(&fd).map_err(std::io::Error::from)?;
+            validate_lock(&stat)?;
+            validate_path_identity(&stat)?;
+            let identity = ProcessLockIdentity::from_stat(&stat);
+            if state.held.contains(&identity) {
+                drop(fd);
+                if nonblocking {
+                    return Ok(None);
+                }
+                drop(registry.wait(state));
+                continue;
+            }
+            state.held.insert(identity);
+            drop(state);
+            break (fd, ProcessLockReservation { identity });
+        };
+
+        if let Err(error) = fcntl_lock(&fd, operation) {
             if operation == FlockOperation::NonBlockingLockExclusive
-                && (error == rustix::io::Errno::AGAIN || error == rustix::io::Errno::WOULDBLOCK)
+                && (error == rustix::io::Errno::ACCESS
+                    || error == rustix::io::Errno::AGAIN
+                    || error == rustix::io::Errno::WOULDBLOCK)
             {
+                drop(fd);
+                drop(reservation);
                 return Ok(None);
             }
+            drop(fd);
+            drop(reservation);
             return Err(std::io::Error::from(error).into());
         }
-        let locked_stat = fstat(&fd).map_err(std::io::Error::from)?;
-        if let Err(error) =
-            validate_lock(&locked_stat).and_then(|()| validate_path_identity(&locked_stat))
-        {
-            let _ = flock(&fd, FlockOperation::Unlock);
-            return Err(error);
-        }
-        Ok(Some(OutputLock { _fd: fd }))
+        let lock = OutputLock {
+            fd: Some(fd),
+            reservation: Some(reservation),
+        };
+        let locked_stat = fstat(lock.fd.as_ref().expect("lock descriptor is present"))
+            .map_err(std::io::Error::from)?;
+        validate_lock(&locked_stat).and_then(|()| validate_path_identity(&locked_stat))?;
+        Ok(Some(lock))
     }
 }
 
@@ -2745,7 +2860,15 @@ fn open_directory_walk(path: &Path, create: bool) -> Result<OwnedFd, EmitError> 
 }
 
 struct OutputLock {
-    _fd: OwnedFd,
+    fd: Option<OwnedFd>,
+    reservation: Option<ProcessLockReservation>,
+}
+
+impl Drop for OutputLock {
+    fn drop(&mut self) {
+        drop(self.fd.take());
+        drop(self.reservation.take());
+    }
 }
 
 struct StagingDirectory {
