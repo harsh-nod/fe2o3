@@ -1,10 +1,14 @@
 //! AMDGPU intrinsic vocabulary and fail-closed target lowering primitives.
 //!
 //! The initial target-neutral lowering subset is documented in
-//! `crates/dialect-amdgcn/G1_LOWERING.md` and is not wired into the production emitter.
+//! `crates/dialect-amdgcn/G1_LOWERING.md`. The strict gfx942 floating-point
+//! extension is documented in `crates/dialect-amdgcn/GFX942_FLOATS.md`. Neither
+//! path grants linking, loading, or execution authority.
 
+mod device_math;
 mod lowering;
 
+pub use device_math::*;
 pub use lowering::*;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
