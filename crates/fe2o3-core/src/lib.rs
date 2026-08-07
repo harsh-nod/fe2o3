@@ -13,6 +13,7 @@ mod operation;
 mod peer_access;
 mod pinned_memory;
 mod stream;
+mod vmm;
 
 pub use context::GpuContext;
 pub use cooperative::{
@@ -42,3 +43,8 @@ pub use peer_access::{
 };
 pub use pinned_memory::PinnedHostBuffer;
 pub use stream::Stream;
+pub use vmm::{
+    VmmAccess, VmmAccessReceipt, VmmAccessibleAllocation, VmmCleanupError, VmmCleanupStage,
+    VmmError, VmmLayout, VmmMapAmbiguity, VmmMappedAllocation, VmmReclamationReceipt,
+    VmmUnmappedAllocation,
+};
