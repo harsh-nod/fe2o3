@@ -110,11 +110,8 @@ pub(crate) enum CompilerModuleConstructionError {
         actual: usize,
         max: usize,
     },
-    #[allow(dead_code)] // Connected when rustc-derived descriptor construction reaches Worker V2.
     DescriptorSourceAlreadyBound,
-    #[allow(dead_code)] // Connected when rustc-derived descriptor construction reaches Worker V2.
     DescriptorKernelEntryClosureMismatch,
-    #[allow(dead_code)] // Connected when rustc-derived descriptor construction reaches Worker V2.
     DescriptorSymbolClosureMismatch,
     Lowering(dialect_amdgcn::LoweringErrors),
 }
@@ -213,7 +210,6 @@ pub(crate) fn construct_inert_compiler_module_text_v1(
 /// The empty ELF flag string is intentional: LLVM and LLD preserve this as a non-allocatable,
 /// non-writable, non-executable `SHT_PROGBITS` section. The existing Worker V2 module identity
 /// therefore commits to the descriptor bytes without a second transport or linker input.
-#[allow(dead_code)] // The next Worker V2 producer step supplies the rustc-derived source value.
 pub(crate) fn bind_compiler_descriptor_source_v1(
     mut module: InertCompilerModuleTextV1,
     source: &CompilerDescriptorSourceV1,
@@ -265,7 +261,6 @@ pub(crate) fn bind_compiler_descriptor_source_v1(
     Ok(module)
 }
 
-#[allow(dead_code)] // Called only by the staged Worker V2 descriptor binding above.
 fn append_descriptor_module_assembly(llvm_ir: &mut String, bytes: &[u8]) {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     llvm_ir.push_str("\nmodule asm \".section ");

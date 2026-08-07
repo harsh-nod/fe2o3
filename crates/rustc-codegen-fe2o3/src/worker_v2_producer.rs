@@ -1,7 +1,10 @@
 //! Attempt-scoped publication of one inert compiler module for the Worker V2 pipeline.
 
+use crate::compiler_descriptor::{
+    CompilerDescriptorError, TypedDescriptorRootV1, construct_compiler_descriptor_source_v1,
+};
 use crate::kernel_ir_codegen::{
-    CompilerModuleConstructionError, InertCompilerModuleTextV1,
+    CompilerModuleConstructionError, InertCompilerModuleTextV1, bind_compiler_descriptor_source_v1,
     construct_inert_compiler_module_text_v1,
 };
 use fe2o3_amd_target::{CapabilityDerivationError, WavefrontWidth};
@@ -26,6 +29,7 @@ const G1_WORKGROUP_X: u32 = 256;
 ///
 /// The handoff remains coordination data. Publication proves possession of the cooperative build
 /// attempt and exact byte identity; it does not grant artifact, link, load, or launch authority.
+#[cfg(test)]
 pub(crate) fn publish_worker_v2_compiler_module(
     output_dir: &Path,
     producer: &ProducerIdentity,
@@ -33,12 +37,37 @@ pub(crate) fn publish_worker_v2_compiler_module(
     envelope: Option<&CompilerFfiEnvelopeV1>,
     module: &Module,
 ) -> Result<CompilerModuleHandoffReceiptV1, WorkerV2ProducerError> {
+    publish_worker_v2_compiler_module_with_descriptors(
+        output_dir,
+        producer,
+        attempt,
+        envelope,
+        module,
+        &[],
+    )
+}
+
+pub(crate) fn publish_worker_v2_compiler_module_with_descriptors(
+    output_dir: &Path,
+    producer: &ProducerIdentity,
+    attempt: Option<BuildAttempt>,
+    envelope: Option<&CompilerFfiEnvelopeV1>,
+    module: &Module,
+    typed_roots: &[TypedDescriptorRootV1],
+) -> Result<CompilerModuleHandoffReceiptV1, WorkerV2ProducerError> {
     let attempt = attempt.ok_or(WorkerV2ProducerError::MissingBuildAttempt)?;
     let envelope = envelope.ok_or(WorkerV2ProducerError::MissingCompilerFfiEnvelope)?;
     let module = bind_g1_launch_contract(module)?;
     let module = bind_exact_target_wave_mode(envelope, &module)?;
-    let compiler_module = construct_inert_compiler_module_text_v1(&module)
+    let mut compiler_module = construct_inert_compiler_module_text_v1(&module)
         .map_err(WorkerV2ProducerError::CompilerModule)?;
+    if let Some(source) =
+        construct_compiler_descriptor_source_v1(envelope, &module, &compiler_module, typed_roots)
+            .map_err(WorkerV2ProducerError::CompilerDescriptor)?
+    {
+        compiler_module = bind_compiler_descriptor_source_v1(compiler_module, &source)
+            .map_err(WorkerV2ProducerError::CompilerModule)?;
+    }
     validate_envelope_module_roles(envelope, &compiler_module)?;
 
     let symbol_manifest = construct_symbol_manifest(&compiler_module)?;
@@ -226,6 +255,7 @@ pub(crate) enum WorkerV2ProducerError {
         required: WorkgroupSize,
     },
     CompilerModule(CompilerModuleConstructionError),
+    CompilerDescriptor(CompilerDescriptorError),
     SymbolManifest(CompilerModuleSymbolManifestErrorV1),
     Handoff(CompilerModuleHandoffErrorV2),
     Publication(HandoffPublicationErrorV1),
@@ -273,6 +303,12 @@ impl fmt::Display for WorkerV2ProducerError {
                     "whole compiler-module construction failed: {error}"
                 )
             }
+            Self::CompilerDescriptor(error) => {
+                write!(
+                    formatter,
+                    "compiler descriptor construction failed: {error}"
+                )
+            }
             Self::SymbolManifest(error) => {
                 write!(
                     formatter,
@@ -299,6 +335,7 @@ impl Error for WorkerV2ProducerError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::CompilerModule(error) => Some(error),
+            Self::CompilerDescriptor(error) => Some(error),
             Self::SymbolManifest(error) => Some(error),
             Self::TargetCapabilities(error) => Some(error),
             Self::Handoff(error) => Some(error),

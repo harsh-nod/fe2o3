@@ -16,6 +16,7 @@ extern crate rustc_span;
 
 mod amdgpu_llvm;
 mod collector;
+mod compiler_descriptor;
 mod compiler_ffi_adapter;
 mod device_ffi;
 mod frontend_record_bridge;
@@ -374,6 +375,16 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             );
                         }
                         collector::dump_device_functions(tcx, &collection.functions);
+                        let descriptor_roots =
+                            compiler_descriptor::typed_descriptor_roots_from_collection(
+                                tcx,
+                                &collection.functions,
+                            )
+                            .map_err(|error| {
+                                format!(
+                                    "{CODEGEN_PIPELINE_ENV}=kernel-ir-worker-v2 typed descriptor extraction failed: {error}"
+                                )
+                            })?;
                         let mir_module = mir_import::import_collection(tcx, &collection).map_err(
                             |error| {
                                 format!(
@@ -395,12 +406,13 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                         if self.config.dump_mir {
                             eprintln!("{}", mir_module.summary());
                         }
-                        worker_v2_producer::publish_worker_v2_compiler_module(
+                        worker_v2_producer::publish_worker_v2_compiler_module_with_descriptors(
                             output_dir,
                             &producer,
                             Some(attempt),
                             collection.compiler_ffi_observation.as_ref(),
                             &module,
+                            &descriptor_roots,
                         )
                         .map_err(|error| error.to_string())
                     })();

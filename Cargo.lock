@@ -274,6 +274,7 @@ dependencies = [
  "fe2o3-core",
  "fe2o3-device",
  "fe2o3-hsaco",
+ "fe2o3-hsaco-finalize",
  "fe2o3-kernel-descriptor",
  "reserved-fe2o3-symbols",
  "rmpv",
@@ -766,6 +767,7 @@ dependencies = [
  "fe2o3-kernel-ir",
  "fe2o3-rustc-front",
  "reserved-fe2o3-symbols",
+ "sha2",
 ]
 
 [[package]]
