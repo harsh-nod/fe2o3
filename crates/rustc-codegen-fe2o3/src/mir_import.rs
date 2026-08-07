@@ -1461,6 +1461,9 @@ fn import_type_shape<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> MirTypeShape {
             Some(TrustedDeviceItem::DisjointSlice) => MirTypeShape::DisjointSlice {
                 element: Box::new(import_type_shape(tcx, args.type_at(0))),
             },
+            Some(item @ TrustedDeviceItem::ThreadIndex) => MirTypeShape::Adt {
+                identity: item.canonical_path().to_owned(),
+            },
             Some(TrustedDeviceItem::DeviceValue(
                 dialect_amdgcn::DeviceValueDiagnosticItem::F16,
             )) => MirTypeShape::F16,
