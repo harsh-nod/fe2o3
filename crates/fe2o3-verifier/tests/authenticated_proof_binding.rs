@@ -9,15 +9,24 @@ use fe2o3_artifacts::{
     SourceContractIdentity, TargetIdentity, ToolIdentity, V1_REQUIRED_PROPERTIES,
     VerificationModelIdentity as ArtifactModel,
 };
+use fe2o3_rustc_front::{
+    ControlFlowContractV1, ControlFlowNodeIdV1, ControlFlowNodeKindV1, ControlFlowNodeV1,
+    FrontendIntegerSwitchCaseV1, FrontendIntegerSwitchTypeV1, FrontendSourceSpanV1,
+    encode_control_flow_contract_v1,
+};
 use fe2o3_verifier::{
+    AUTHENTICATED_CONTROL_FLOW_EXECUTABLE_BINDING_DOMAIN_V1,
     AUTHENTICATED_PROOF_EXECUTABLE_BINDING_DOMAIN_V1,
     AUTHENTICATED_PROOF_EXECUTABLE_BINDING_VERSION_V1, AuthenticatedExecutionFreshnessV1,
     AuthenticatedExecutionProgramsV1, AuthenticatedProofExecutableBindingError,
     AuthenticatedProofExecutablePolicyV1, AuthenticatedVerusExecutionEvidenceV1, AxiomPolicy,
-    Configuration, ConfigurationEntry, CorrelationId, Digest, ExecutionLimits, ExecutionTools,
-    MeasuredToolIdentity, ProofProperty, ProofRequestV1, ProofTargetIdentity,
-    VerificationModelIdentity, VerifierPolicy, bind_authenticated_proof_executable_v1,
-    execute_authenticated_verus,
+    Configuration, ConfigurationEntry, ControlFlowBindingErrorV1, ControlFlowClaimsV1,
+    ControlFlowIntegerSwitchCaseClaimV1, ControlFlowIntegerSwitchClaimV1, ControlFlowLoopClaimV1,
+    CorrelationId, Digest, ExecutionLimits, ExecutionTools, MeasuredToolIdentity, ProofProperty,
+    ProofRequestV1, ProofTargetIdentity, VerificationModelIdentity, VerifierPolicy,
+    bind_authenticated_control_flow_executable_v1, bind_authenticated_proof_executable_v1,
+    bind_control_flow_proof_request_v1, derive_control_flow_functional_specification_digest_v1,
+    execute_authenticated_verus, reconcile_control_flow_source_v1,
 };
 
 const ALL_PROPERTIES: [ProofProperty; 7] = [
@@ -88,12 +97,18 @@ fn producer() -> ArtifactMeasuredToolIdentity {
 }
 
 fn source_contracts() -> SourceContractIdentity {
+    source_contracts_with_functional(payload(0x54))
+}
+
+fn source_contracts_with_functional(
+    functional_specification_digest: PayloadDigest,
+) -> SourceContractIdentity {
     SourceContractIdentity::new(
         payload(0x50),
         payload(0x51),
         payload(0x52),
         payload(0x53),
-        payload(0x54),
+        functional_specification_digest,
     )
 }
 
@@ -140,6 +155,13 @@ fn manifest() -> ManifestV1 {
 }
 
 fn artifact_target(manifest: &ManifestV1) -> ArtifactTarget {
+    artifact_target_with_contracts(manifest, source_contracts())
+}
+
+fn artifact_target_with_contracts(
+    manifest: &ManifestV1,
+    source_contracts: SourceContractIdentity,
+) -> ArtifactTarget {
     manifest
         .proof_target(
             payload(0x11),
@@ -148,12 +170,80 @@ fn artifact_target(manifest: &ManifestV1) -> ArtifactTarget {
             payload(0x41),
             payload(0x33),
             payload(0x44),
-            source_contracts(),
+            source_contracts,
             &compiler(),
             &producer(),
             DigestAlgorithm::Sha256,
         )
         .unwrap()
+}
+
+fn control_flow_source() -> (Vec<u8>, Vec<u8>, ControlFlowClaimsV1) {
+    let id = ControlFlowNodeIdV1::new;
+    let span = |line| FrontendSourceSpanV1::new("src/kernel.rs", line, 1, line, 8).unwrap();
+    let switch = ControlFlowNodeKindV1::integer_switch(
+        FrontendIntegerSwitchTypeV1::new(32, false).unwrap(),
+        vec![FrontendIntegerSwitchCaseV1::from_unsigned(0, id(3))],
+        id(4),
+    )
+    .unwrap();
+    let contract = ControlFlowContractV1::new(
+        id(0),
+        vec![
+            ControlFlowNodeV1::new(
+                id(0),
+                span(10),
+                ControlFlowNodeKindV1::Entry { target: id(1) },
+            ),
+            ControlFlowNodeV1::new(
+                id(1),
+                span(11),
+                ControlFlowNodeKindV1::Loop {
+                    max_iterations: 8,
+                    body: id(2),
+                    exit: id(5),
+                },
+            ),
+            ControlFlowNodeV1::new(id(2), span(12), switch),
+            ControlFlowNodeV1::new(
+                id(3),
+                span(13),
+                ControlFlowNodeKindV1::Continue {
+                    loop_header: id(1),
+                    target: id(1),
+                },
+            ),
+            ControlFlowNodeV1::new(
+                id(4),
+                span(14),
+                ControlFlowNodeKindV1::Break {
+                    loop_header: id(1),
+                    target: id(5),
+                },
+            ),
+            ControlFlowNodeV1::new(id(5), span(15), ControlFlowNodeKindV1::Exit),
+        ],
+    )
+    .unwrap();
+    let claims = ControlFlowClaimsV1::new(
+        vec![ControlFlowLoopClaimV1::new(1, 8).unwrap()],
+        vec![
+            ControlFlowIntegerSwitchClaimV1::new(
+                2,
+                32,
+                false,
+                vec![ControlFlowIntegerSwitchCaseClaimV1::new(0, 3)],
+                4,
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap();
+    (
+        encode_control_flow_contract_v1(&contract).unwrap(),
+        contract.cfg_identity().as_bytes().to_vec(),
+        claims,
+    )
 }
 
 fn verifier_target(target: ArtifactTarget) -> ProofTargetIdentity {
@@ -359,6 +449,103 @@ fn exact_measured_transaction_binds_every_proof_and_executable_axis() {
         Err(AuthenticatedProofExecutableBindingError::ChallengeReplay)
     );
     assert_eq!(freshness.consumed_count(), 1);
+}
+
+#[test]
+fn exact_control_flow_identity_reaches_measured_result_and_final_executable() {
+    let manifest = manifest();
+    let (source_bytes, cfg_identity, claims) = control_flow_source();
+    let source = reconcile_control_flow_source_v1(&source_bytes, &cfg_identity, claims).unwrap();
+    let base_functional_specification = digest(0x55);
+    let functional_specification = derive_control_flow_functional_specification_digest_v1(
+        base_functional_specification,
+        &source,
+    )
+    .unwrap();
+    let target = artifact_target_with_contracts(
+        &manifest,
+        source_contracts_with_functional(payload_from_digest(functional_specification)),
+    );
+    let (evidence, verifier_policy) = measured_execution(target);
+    let request_binding = bind_control_flow_proof_request_v1(
+        evidence.invocation_plan().request(),
+        base_functional_specification,
+        source.clone(),
+    )
+    .unwrap();
+    let policy = binding_policy(manifest.clone(), target, &evidence, verifier_policy);
+    let proof = bind_authenticated_proof_executable_v1(
+        evidence,
+        &policy,
+        &mut AuthenticatedExecutionFreshnessV1::new(),
+    )
+    .unwrap();
+
+    let stale_base = digest(0x56);
+    let stale_functional =
+        derive_control_flow_functional_specification_digest_v1(stale_base, &source).unwrap();
+    let stale_target = artifact_target_with_contracts(
+        &manifest,
+        source_contracts_with_functional(payload_from_digest(stale_functional)),
+    );
+    let stale_request = ProofRequestV1::new(
+        CorrelationId::from_bytes([51; 16]),
+        verifier_target(stale_target),
+        configuration(),
+        model(),
+        ALL_PROPERTIES.to_vec(),
+        vec![],
+    )
+    .unwrap();
+    let stale_request_binding =
+        bind_control_flow_proof_request_v1(&stale_request, stale_base, source).unwrap();
+    assert_eq!(
+        bind_authenticated_control_flow_executable_v1(stale_request_binding, proof.clone()),
+        Err(ControlFlowBindingErrorV1::ProofRequestMismatch)
+    );
+
+    let binding = bind_authenticated_control_flow_executable_v1(request_binding, proof).unwrap();
+    assert_eq!(
+        AUTHENTICATED_CONTROL_FLOW_EXECUTABLE_BINDING_DOMAIN_V1,
+        *b"FE2ACFB\0"
+    );
+    assert_eq!(
+        binding.request_binding().functional_specification_digest(),
+        functional_specification
+    );
+    assert_eq!(
+        binding
+            .proof_executable_binding()
+            .execution_identity()
+            .request_digest(),
+        binding.request_binding().request_digest()
+    );
+    assert_ne!(binding.binding_identity(), digest(0));
+    binding.validate_against(&binding).unwrap();
+    assert!(!binding.grants_compiler_authority());
+    assert!(!binding.grants_load_authority());
+    assert!(!binding.grants_launch_authority());
+
+    let (second_evidence, second_verifier_policy) = measured_execution(target);
+    let second_policy = binding_policy(manifest, target, &second_evidence, second_verifier_policy);
+    let second_proof = bind_authenticated_proof_executable_v1(
+        second_evidence,
+        &second_policy,
+        &mut AuthenticatedExecutionFreshnessV1::new(),
+    )
+    .unwrap();
+    let second = bind_authenticated_control_flow_executable_v1(
+        binding.request_binding().clone(),
+        second_proof,
+    )
+    .unwrap();
+    assert_ne!(binding.binding_identity(), second.binding_identity());
+    assert_eq!(
+        binding.validate_against(&second),
+        Err(ControlFlowBindingErrorV1::AuthenticatedExecutableBinding(
+            AuthenticatedProofExecutableBindingError::IdentityMismatch { field: "challenge" }
+        ))
+    );
 }
 
 #[test]

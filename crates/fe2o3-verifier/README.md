@@ -39,6 +39,21 @@ The bridge consumes its challenge and transcript in an
 Failed attempts leave freshness available for a corrected policy. Reusing the
 same evidence in one ledger is rejected.
 
+`reconcile_control_flow_source_v1` decodes the canonical frontend sidecar,
+recomputes its span-independent CFG identity, and reconciles bounded loop and
+integer-switch claims field by field. The derived functional-specification
+identity composes the exact source bytes, CFG identity, claims, and an existing
+functional-specification identity without changing the frozen proof wire
+format. `bind_control_flow_proof_request_v1` requires bounds and functional
+correctness in the exact sealed request.
+
+`bind_authenticated_control_flow_executable_v1` can only extend an existing
+`AuthenticatedProofExecutableBindingV1`. It rechecks the sealed request,
+successful result properties, proof target, and finalized executable's source
+contract identity before retaining the complete measured chain. Source and
+request bindings are descriptive inputs; none of these types grants compiler,
+module-load, or kernel-launch authority.
+
 ## Trust boundary
 
 - `VerifierPolicy` is the explicit local trust anchor. The authenticated API
@@ -62,6 +77,10 @@ same evidence in one ledger is rejected.
 - `AuthenticatedProofExecutableBindingV1` is also evidence only. The legacy
   conversion and artifact-binding paths remain explicitly descriptive and
   cannot acquire authority by supplying unmeasured identities.
+- `ControlFlowSourceBindingV1` authenticates internal agreement among source
+  bytes, CFG identity, and claims only. Compiler/MIR reconciliation remains a
+  separate measured obligation, and only authenticated proof/executable
+  evidence can construct the final control-flow binding.
 
 ## Current limitations
 
@@ -70,6 +89,10 @@ scheme, dynamic-library closure measurement, compiler-refinement proof, or GPU
 runtime authority. Authentication is local and relative to the supplied trusted
 policy. The sealed execution path currently requires Linux `memfd_create`,
 `fcntl` seals, and `/proc/self/fd`.
+
+The control-flow binding does not yet prove optimized MIR or machine CFG
+equivalence. It gives those later compiler-refinement checks a canonical exact
+identity to match; the source sidecar alone remains non-authoritative.
 
 The freshness ledger is process-local. A production admission service must
 persist consumed challenge and transcript identities transactionally across

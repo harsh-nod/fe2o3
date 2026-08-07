@@ -1,18 +1,22 @@
 use std::fmt;
 
-use fe2o3_artifacts::DigestAlgorithm;
+use fe2o3_artifacts::{DigestAlgorithm, PayloadDigest};
 use fe2o3_contracts::{MAX_SOURCE_INTEGER_SWITCHES_V1, MAX_SOURCE_LOOPS_V1};
 use fe2o3_rustc_front::{
     ControlFlowContractV1, ControlFlowDecodeErrorV1, ControlFlowNodeKindV1,
     MAX_CONTROL_FLOW_CONTRACT_BYTES_V1, decode_control_flow_contract_v1,
 };
 
-use crate::{Digest, ProofProperty, ProofRequestV1, ProofTargetIdentity};
+use crate::{
+    AuthenticatedProofExecutableBindingError, AuthenticatedProofExecutableBindingV1, Digest,
+    ProofOutcome, ProofProperty, ProofRequestV1, ProofTargetIdentity,
+};
 
 pub const CONTROL_FLOW_BINDING_VERSION_V1: u16 = 1;
 pub const CONTROL_FLOW_SOURCE_BINDING_DOMAIN_V1: [u8; 8] = *b"FE2CFSB\0";
 pub const CONTROL_FLOW_FUNCTIONAL_SPECIFICATION_DOMAIN_V1: [u8; 8] = *b"FE2CFFS\0";
 pub const CONTROL_FLOW_REQUEST_BINDING_DOMAIN_V1: [u8; 8] = *b"FE2CFRQ\0";
+pub const AUTHENTICATED_CONTROL_FLOW_EXECUTABLE_BINDING_DOMAIN_V1: [u8; 8] = *b"FE2ACFB\0";
 pub const MAX_BOUND_CONTROL_FLOW_LOOPS_V1: usize = MAX_SOURCE_LOOPS_V1 as usize;
 pub const MAX_BOUND_CONTROL_FLOW_SWITCHES_V1: usize = MAX_SOURCE_INTEGER_SWITCHES_V1 as usize;
 
@@ -326,6 +330,73 @@ impl ControlFlowProofRequestBindingV1 {
     }
 }
 
+/// Inert evidence joining exact source control flow to one measured proof and
+/// finalized executable identity.
+///
+/// Construction requires the private-construction authenticated Verus bridge;
+/// a source declaration or request binding alone cannot create this value. The
+/// result is still evidence only and deliberately grants no compiler, module,
+/// or launch authority.
+///
+/// ```compile_fail
+/// # fn cannot_launch(value: fe2o3_verifier::AuthenticatedControlFlowExecutableBindingV1) {
+/// value.launch();
+/// # }
+/// ```
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AuthenticatedControlFlowExecutableBindingV1 {
+    request_binding: ControlFlowProofRequestBindingV1,
+    proof_executable_binding: AuthenticatedProofExecutableBindingV1,
+    binding_identity: Digest,
+}
+
+impl AuthenticatedControlFlowExecutableBindingV1 {
+    pub const fn version(&self) -> u16 {
+        CONTROL_FLOW_BINDING_VERSION_V1
+    }
+
+    pub const fn request_binding(&self) -> &ControlFlowProofRequestBindingV1 {
+        &self.request_binding
+    }
+
+    pub const fn proof_executable_binding(&self) -> &AuthenticatedProofExecutableBindingV1 {
+        &self.proof_executable_binding
+    }
+
+    pub const fn binding_identity(&self) -> Digest {
+        self.binding_identity
+    }
+
+    pub fn validate_against(&self, actual: &Self) -> Result<(), ControlFlowBindingErrorV1> {
+        if self.request_binding != actual.request_binding {
+            return Err(ControlFlowBindingErrorV1::IdentityMismatch {
+                field: "control-flow request binding",
+            });
+        }
+        self.proof_executable_binding
+            .validate_against(&actual.proof_executable_binding)
+            .map_err(ControlFlowBindingErrorV1::AuthenticatedExecutableBinding)?;
+        if self.binding_identity != actual.binding_identity {
+            return Err(ControlFlowBindingErrorV1::IdentityMismatch {
+                field: "authenticated control-flow binding",
+            });
+        }
+        Ok(())
+    }
+
+    pub const fn grants_compiler_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_load_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
+    }
+}
+
 pub fn reconcile_control_flow_source_v1(
     source_contract_bytes: &[u8],
     emitted_cfg_identity_bytes: &[u8],
@@ -405,6 +476,97 @@ pub fn bind_control_flow_proof_request_v1(
         functional_specification_digest,
         target,
         request_digest,
+        binding_identity,
+    })
+}
+
+pub fn bind_authenticated_control_flow_executable_v1(
+    request_binding: ControlFlowProofRequestBindingV1,
+    proof_executable_binding: AuthenticatedProofExecutableBindingV1,
+) -> Result<AuthenticatedControlFlowExecutableBindingV1, ControlFlowBindingErrorV1> {
+    let evidence = proof_executable_binding.execution_evidence();
+    let request = evidence.invocation_plan().request();
+    if sha256(&request.to_canonical_bytes()) != request_binding.request_digest {
+        return Err(ControlFlowBindingErrorV1::ProofRequestMismatch);
+    }
+    if request.target() != request_binding.target {
+        return Err(ControlFlowBindingErrorV1::ProofTargetMismatch);
+    }
+    if proof_executable_binding
+        .execution_identity()
+        .request_digest()
+        != request_binding.request_digest
+    {
+        return Err(ControlFlowBindingErrorV1::ProofExecutionRequestMismatch);
+    }
+
+    let result = evidence.result();
+    if result.target() != request_binding.target {
+        return Err(ControlFlowBindingErrorV1::ProofResultTargetMismatch);
+    }
+    if result.outcome() != ProofOutcome::Proved {
+        return Err(ControlFlowBindingErrorV1::ProofNotProved);
+    }
+    for property in [ProofProperty::Bounds, ProofProperty::FunctionalCorrectness] {
+        if result.proved_properties().binary_search(&property).is_err() {
+            return Err(ControlFlowBindingErrorV1::MissingProvedProperty { property });
+        }
+    }
+
+    let executable_functional_specification = proof_executable_binding
+        .executable_binding()
+        .executable()
+        .source_contracts()
+        .functional_specification_digest();
+    if executable_functional_specification.algorithm() != DigestAlgorithm::Sha256 {
+        return Err(ControlFlowBindingErrorV1::UnsupportedExecutableDigestAlgorithm);
+    }
+    let executable_functional_specification =
+        Digest::from_bytes(*executable_functional_specification.bytes().as_bytes());
+    if executable_functional_specification != request_binding.functional_specification_digest {
+        return Err(ControlFlowBindingErrorV1::ExecutableFunctionalSpecificationMismatch);
+    }
+
+    let executable_binding_identity = proof_executable_binding
+        .executable_binding()
+        .binding_identity();
+    let proof_record_digest = proof_executable_binding
+        .executable_binding()
+        .proof_record_digest();
+    if executable_binding_identity.algorithm() != DigestAlgorithm::Sha256
+        || proof_record_digest.algorithm() != DigestAlgorithm::Sha256
+    {
+        return Err(ControlFlowBindingErrorV1::UnsupportedExecutableDigestAlgorithm);
+    }
+
+    let mut writer =
+        IdentityWriter::with_domain(AUTHENTICATED_CONTROL_FLOW_EXECUTABLE_BINDING_DOMAIN_V1);
+    writer.digest(request_binding.source.binding_identity);
+    writer.digest(request_binding.binding_identity);
+    writer.digest(request_binding.functional_specification_digest);
+    writer.digest(proof_executable_binding.binding_identity());
+    writer.digest(
+        proof_executable_binding
+            .execution_identity()
+            .request_digest(),
+    );
+    writer.digest(
+        proof_executable_binding
+            .execution_identity()
+            .transcript_digest(),
+    );
+    writer.digest(
+        proof_executable_binding
+            .execution_identity()
+            .result()
+            .digest(),
+    );
+    writer.payload_digest(proof_record_digest);
+    writer.payload_digest(executable_binding_identity);
+    let binding_identity = sha256(&writer.finish());
+    Ok(AuthenticatedControlFlowExecutableBindingV1 {
+        request_binding,
+        proof_executable_binding,
         binding_identity,
     })
 }
@@ -636,6 +798,14 @@ impl IdentityWriter {
         self.bytes.extend_from_slice(value.as_bytes());
     }
 
+    fn payload_digest(&mut self, value: PayloadDigest) {
+        self.u8(match value.algorithm() {
+            DigestAlgorithm::Sha256 => 1,
+            _ => 0,
+        });
+        self.bytes.extend_from_slice(value.bytes().as_bytes());
+    }
+
     fn bytes(&mut self, value: &[u8]) {
         self.u32(value.len() as u32);
         self.bytes.extend_from_slice(value);
@@ -670,6 +840,16 @@ pub enum ControlFlowBindingErrorV1 {
     UnmeasuredIdentity { field: &'static str },
     MissingProofProperty { property: ProofProperty },
     FunctionalSpecificationMismatch,
+    ProofRequestMismatch,
+    ProofTargetMismatch,
+    ProofExecutionRequestMismatch,
+    ProofResultTargetMismatch,
+    ProofNotProved,
+    MissingProvedProperty { property: ProofProperty },
+    UnsupportedExecutableDigestAlgorithm,
+    ExecutableFunctionalSpecificationMismatch,
+    IdentityMismatch { field: &'static str },
+    AuthenticatedExecutableBinding(AuthenticatedProofExecutableBindingError),
 }
 
 impl fmt::Display for ControlFlowBindingErrorV1 {
@@ -746,6 +926,34 @@ impl fmt::Display for ControlFlowBindingErrorV1 {
             Self::FunctionalSpecificationMismatch => formatter.write_str(
                 "proof request functional specification does not bind the control-flow source",
             ),
+            Self::ProofRequestMismatch => formatter
+                .write_str("authenticated proof request does not match the control-flow request"),
+            Self::ProofTargetMismatch => formatter
+                .write_str("authenticated proof target does not match the control-flow request"),
+            Self::ProofExecutionRequestMismatch => formatter.write_str(
+                "authenticated proof execution did not retain the control-flow request identity",
+            ),
+            Self::ProofResultTargetMismatch => formatter.write_str(
+                "authenticated proof result target does not match the control-flow request",
+            ),
+            Self::ProofNotProved => {
+                formatter.write_str("authenticated control-flow proof did not succeed")
+            }
+            Self::MissingProvedProperty { property } => write!(
+                formatter,
+                "authenticated result did not prove {}",
+                property.as_str()
+            ),
+            Self::UnsupportedExecutableDigestAlgorithm => formatter
+                .write_str("authenticated control-flow executable binding requires SHA-256"),
+            Self::ExecutableFunctionalSpecificationMismatch => formatter.write_str(
+                "finalized executable evidence does not retain the control-flow specification",
+            ),
+            Self::IdentityMismatch { field } => write!(formatter, "{field} does not match"),
+            Self::AuthenticatedExecutableBinding(error) => write!(
+                formatter,
+                "authenticated proof executable binding does not match: {error}"
+            ),
         }
     }
 }
@@ -754,6 +962,7 @@ impl std::error::Error for ControlFlowBindingErrorV1 {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::SourceContract(error) => Some(error),
+            Self::AuthenticatedExecutableBinding(error) => Some(error),
             _ => None,
         }
     }
