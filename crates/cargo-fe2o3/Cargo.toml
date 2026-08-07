@@ -8,6 +8,9 @@ repository.workspace = true
 rust-version.workspace = true
 description = "Cargo subcommand for fe2o3."
 
+[features]
+worker-v2-fault-injection-test-only = []
+
 [dependencies]
 cap-primitives = "=4.0.2"
 fe2o3-artifacts.workspace = true

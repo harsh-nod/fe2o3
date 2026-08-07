@@ -5,6 +5,9 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+#[cfg(feature = "worker-v2-fault-injection-test-only")]
+use std::ffi::OsStr;
+
 use fe2o3_artifact_transaction::{
     AtomicPublicationIdentityV1, BackendPublicationReceiptV1, BuildAttempt, BuildSession,
     CanonicalLinkRequestIdentityV1, DurableLinkPublicationPlanV1, FinalizationIdentityV1,
@@ -18,10 +21,8 @@ use fe2o3_artifact_transaction::{
 use fe2o3_compiler_ffi::CodeObjectVersion;
 use fe2o3_hsaco_finalize::{
     CanonicalDescriptorSectionObservationV1, InspectedRawWorkerV2HsacoV1,
-    PreparedFinalizedWorkerV2HsacoPublicationV1, PreparedFinalizedWorkerV2HsacoV1,
-    PreparedWorkerV2HsacoPublicationV1, WorkerV2HsacoFinalizationError,
-    WorkerV2HsacoPublicationError, finalize_inspected_worker_v2_hsaco_v1,
-    prepare_finalized_worker_v2_hsaco_publication_v1, prepare_worker_v2_hsaco_publication_v1,
+    PreparedFinalizedWorkerV2HsacoV1, WorkerV2HsacoFinalizationError,
+    finalize_inspected_worker_v2_hsaco_v1,
 };
 use rustix::fd::{FromRawFd, OwnedFd};
 use rustix::fs::{
@@ -31,6 +32,7 @@ use rustix::fs::{
 use sha2::{Digest, Sha256};
 
 const MARKER_MAGIC: &[u8] = b"FE2O3-CARGO-WORKER-V2-RESUME-V1\0";
+const LEGACY_MARKER_VERSION: u16 = 1;
 const MARKER_VERSION: u16 = 2;
 const MARKER_CHECKSUM_DOMAIN: &[u8] = b"FE2O3/CARGO-WORKER-V2-RESUME-CHECKSUM/V1\0";
 const ADMISSION_COMMITMENT_DOMAIN: &[u8] = b"FE2O3/CARGO-WORKER-V2-ADMISSION-COMMITMENT/V1\0";
@@ -41,6 +43,8 @@ const TEMP_SUFFIX: &str = ".tmp-";
 const RECEIPT_FIELDS: usize = 7;
 const MARKER_BYTES: usize =
     MARKER_MAGIC.len() + 2 + 1 + 1 + 32 + 8 + 16 + 32 + 32 + 32 + RECEIPT_FIELDS * 32 + 32;
+const LEGACY_MARKER_BYTES: usize =
+    MARKER_MAGIC.len() + 2 + 1 + 32 + 8 + 16 + 32 + 32 + RECEIPT_FIELDS * 32 + 32;
 
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(1);
 
@@ -110,17 +114,20 @@ impl WorkerV2PublicationKindV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ResumeMarkerStateV1 {
     Pending {
+        legacy: bool,
         publication: WorkerV2PublicationKindV1,
         attempt: BuildAttempt,
         admission: [u8; 32],
     },
     Ready {
+        legacy: bool,
         publication: WorkerV2PublicationKindV1,
         attempt: BuildAttempt,
         admission: [u8; 32],
         intent: WorkerV2PublicationIntentIdentityV1,
     },
     Completed {
+        legacy: bool,
         publication: WorkerV2PublicationKindV1,
         attempt: BuildAttempt,
         admission: [u8; 32],
@@ -133,7 +140,6 @@ pub(crate) enum ResumeMarkerStateV1 {
 pub(crate) enum RestartIntentErrorV1 {
     Marker(ResumeMarkerErrorV1),
     Intent(WorkerV2PublicationIntentErrorV1),
-    Preparation(WorkerV2HsacoPublicationError),
     Finalization(WorkerV2HsacoFinalizationError),
     UnsupportedPublicationRoute {
         code_object_version: CodeObjectVersion,
@@ -148,12 +154,6 @@ impl fmt::Display for RestartIntentErrorV1 {
             Self::Marker(error) => write!(formatter, "Worker V2 resume marker failed: {error}"),
             Self::Intent(error) => {
                 write!(formatter, "Worker V2 publication intent failed: {error}")
-            }
-            Self::Preparation(error) => {
-                write!(
-                    formatter,
-                    "Worker V2 publication preparation failed: {error}"
-                )
             }
             Self::Finalization(error) => {
                 write!(formatter, "Worker V2 HSACO finalization failed: {error}")
@@ -177,7 +177,6 @@ impl Error for RestartIntentErrorV1 {
         match self {
             Self::Marker(error) => Some(error),
             Self::Intent(error) => Some(error),
-            Self::Preparation(error) => Some(error),
             Self::Finalization(error) => Some(error),
             Self::UnsupportedPublicationRoute { .. } => None,
             Self::IntentIdentityMismatch => None,
@@ -187,13 +186,27 @@ impl Error for RestartIntentErrorV1 {
 
 pub(crate) struct PersistedAdmittedWorkerV2IntentV1 {
     pub(crate) intent: RecoveredWorkerV2PublicationIntentV1,
-    pub(crate) prepared: PreparedWorkerV2PublicationV1,
+    pub(crate) publication: WorkerV2PublicationKindV1,
 }
 
 #[derive(Debug)]
 pub(crate) enum PreparedWorkerV2PublicationV1 {
-    Raw(Box<PreparedWorkerV2HsacoPublicationV1>),
-    Finalized(Box<PreparedFinalizedWorkerV2HsacoPublicationV1>),
+    Raw(Box<PreparedRawWorkerV2PublicationV1>),
+    Finalized(Box<PreparedCanonicalWorkerV2PublicationV1>),
+}
+
+#[derive(Debug)]
+pub(crate) struct PreparedRawWorkerV2PublicationV1 {
+    evidence: InspectedRawWorkerV2HsacoV1,
+    plan: DurableLinkPublicationPlanV1,
+    upstream: UpstreamCodeObjectEvidenceIdentityV1,
+}
+
+#[derive(Debug)]
+pub(crate) struct PreparedCanonicalWorkerV2PublicationV1 {
+    evidence: PreparedFinalizedWorkerV2HsacoV1,
+    plan: DurableLinkPublicationPlanV1,
+    upstream: UpstreamCodeObjectEvidenceIdentityV1,
 }
 
 impl PreparedWorkerV2PublicationV1 {
@@ -201,6 +214,27 @@ impl PreparedWorkerV2PublicationV1 {
         match self {
             Self::Raw(_) => WorkerV2PublicationKindV1::Raw,
             Self::Finalized(_) => WorkerV2PublicationKindV1::Finalized,
+        }
+    }
+
+    fn attempt(&self) -> BuildAttempt {
+        match self {
+            Self::Raw(prepared) => prepared.evidence.attempt(),
+            Self::Finalized(prepared) => prepared.evidence.attempt(),
+        }
+    }
+
+    fn plan(&self) -> DurableLinkPublicationPlanV1 {
+        match self {
+            Self::Raw(prepared) => prepared.plan,
+            Self::Finalized(prepared) => prepared.plan,
+        }
+    }
+
+    fn upstream(&self) -> UpstreamCodeObjectEvidenceIdentityV1 {
+        match self {
+            Self::Raw(prepared) => prepared.upstream,
+            Self::Finalized(prepared) => prepared.upstream,
         }
     }
 }
@@ -222,40 +256,42 @@ pub(crate) fn persist_admitted_worker_v2_intent_v1(
     producer: &ProducerIdentity,
     inspected: InspectedRawWorkerV2HsacoV1,
 ) -> Result<PersistedAdmittedWorkerV2IntentV1, RestartIntentErrorV1> {
-    let attempt = inspected.attempt();
     let publication = select_publication_kind_v1(
         inspected.code_object_version(),
         inspected.canonical_descriptor_section(),
     )?;
-    let (plan, upstream, prepared) = match publication {
+    let prepared = match publication {
         WorkerV2PublicationKindV1::Raw => {
             let (plan, upstream) = derive_publication_plan_v1(producer, &inspected);
-            let prepared = prepare_worker_v2_hsaco_publication_v1(producer, inspected)
-                .map_err(RestartIntentErrorV1::Preparation)?;
-            (
+            PreparedWorkerV2PublicationV1::Raw(Box::new(PreparedRawWorkerV2PublicationV1 {
+                evidence: inspected,
                 plan,
                 upstream,
-                PreparedWorkerV2PublicationV1::Raw(Box::new(prepared)),
-            )
+            }))
         }
         WorkerV2PublicationKindV1::Finalized => {
             let seed = derive_finalized_publication_plan_seed_v1(producer, &inspected);
             let finalized = finalize_inspected_worker_v2_hsaco_v1(inspected)
                 .map_err(RestartIntentErrorV1::Finalization)?;
             let (plan, upstream) = complete_finalized_publication_plan_v1(seed, &finalized);
-            let prepared = prepare_finalized_worker_v2_hsaco_publication_v1(producer, finalized)
-                .map_err(RestartIntentErrorV1::Preparation)?;
-            (
-                plan,
-                upstream,
-                PreparedWorkerV2PublicationV1::Finalized(Box::new(prepared)),
-            )
+            PreparedWorkerV2PublicationV1::Finalized(Box::new(
+                PreparedCanonicalWorkerV2PublicationV1 {
+                    evidence: finalized,
+                    plan,
+                    upstream,
+                },
+            ))
         }
     };
     debug_assert_eq!(publication, prepared.kind());
+    let attempt = prepared.attempt();
+    let plan = prepared.plan();
+    let upstream = prepared.upstream();
     let admission =
         restart_admission_commitment_v1(publication, plan, upstream, prepared.exact_bytes());
     store.persist_pending(publication, attempt, admission)?;
+    #[cfg(feature = "worker-v2-fault-injection-test-only")]
+    injected_fault_point_v1("pending-marker");
     store.verify_output_path()?;
     let persisted = persist_worker_v2_publication_intent_v1(
         &store.display_path,
@@ -265,12 +301,24 @@ pub(crate) fn persist_admitted_worker_v2_intent_v1(
         upstream,
         prepared.exact_bytes(),
     )?;
+    #[cfg(feature = "worker-v2-fault-injection-test-only")]
+    injected_fault_point_v1("pending-intent");
     store.verify_output_path()?;
     store.persist_ready(publication, attempt, persisted.record().identity())?;
+    #[cfg(feature = "worker-v2-fault-injection-test-only")]
+    injected_fault_point_v1("ready");
     Ok(PersistedAdmittedWorkerV2IntentV1 {
         intent: persisted,
-        prepared,
+        publication,
     })
+}
+
+#[cfg(feature = "worker-v2-fault-injection-test-only")]
+pub(crate) fn injected_fault_point_v1(point: &str) {
+    const ENV: &str = "FE2O3_TEST_WORKER_V2_FAULT_POINT_V1";
+    if std::env::var_os(ENV).as_deref() == Some(OsStr::new(point)) {
+        std::process::exit(86);
+    }
 }
 
 fn select_publication_kind_v1(
@@ -309,16 +357,35 @@ pub(crate) fn recover_worker_v2_intent_v1(
     {
         return Err(RestartIntentErrorV1::IntentIdentityMismatch);
     }
-    if restart_admission_commitment_v1(
+    let current_admission = restart_admission_commitment_v1(
         state.publication(),
         recovered.record().plan(),
         recovered.record().upstream_evidence(),
         recovered.exact_output(),
-    ) != state.admission()
-    {
+    );
+    if state.is_legacy() {
+        if state.publication() != WorkerV2PublicationKindV1::Raw {
+            return Err(RestartIntentErrorV1::IntentIdentityMismatch);
+        }
+        if matches!(state, ResumeMarkerStateV1::Pending { .. })
+            && legacy_restart_admission_commitment_v1(
+                recovered.record().plan(),
+                recovered.record().upstream_evidence(),
+                recovered.exact_output(),
+            ) != state.admission()
+        {
+            return Err(RestartIntentErrorV1::IntentIdentityMismatch);
+        }
+        if !matches!(state, ResumeMarkerStateV1::Completed { .. }) {
+            store.migrate_legacy_to_ready(
+                state,
+                current_admission,
+                recovered.record().identity(),
+            )?;
+        }
+    } else if current_admission != state.admission() {
         return Err(RestartIntentErrorV1::IntentIdentityMismatch);
-    }
-    if matches!(state, ResumeMarkerStateV1::Pending { .. }) {
+    } else if matches!(state, ResumeMarkerStateV1::Pending { .. }) {
         store.persist_ready(state.publication(), attempt, recovered.record().identity())?;
     }
     Ok(recovered)
@@ -642,11 +709,37 @@ pub(crate) fn restart_admission_commitment_v1(
     })
 }
 
+fn legacy_restart_admission_commitment_v1(
+    plan: DurableLinkPublicationPlanV1,
+    upstream: UpstreamCodeObjectEvidenceIdentityV1,
+    output: &[u8],
+) -> [u8; 32] {
+    hash_identity(ADMISSION_COMMITMENT_DOMAIN, |digest| {
+        let attempt = plan.attempt();
+        digest.update(attempt.generation().to_le_bytes());
+        digest.update(attempt.session().as_bytes());
+        digest.update(attempt.invocation().as_bytes());
+        digest.update(plan.scope().package().as_bytes());
+        digest.update(plan.scope().kernel_set().as_bytes());
+        digest.update(plan.scope().target().as_bytes());
+        digest.update(plan.request().as_bytes());
+        digest.update(plan.worker().as_bytes());
+        digest.update(plan.response().as_bytes());
+        digest.update(plan.linked_output().as_bytes());
+        digest.update(plan.finalization().as_bytes());
+        digest.update(plan.finalized_output().as_bytes());
+        digest.update(plan.publication().as_bytes());
+        digest.update(upstream.as_bytes());
+        digest.update(Sha256::digest(output));
+        digest.update((output.len() as u64).to_le_bytes());
+    })
+}
+
 impl PreparedWorkerV2PublicationV1 {
     pub(crate) fn exact_bytes(&self) -> &[u8] {
         match self {
-            Self::Raw(prepared) => prepared.exact_bytes(),
-            Self::Finalized(prepared) => prepared.exact_finalized_bytes(),
+            Self::Raw(prepared) => prepared.evidence.exact_bytes(),
+            Self::Finalized(prepared) => prepared.evidence.exact_finalized_bytes(),
         }
     }
 }
@@ -692,6 +785,14 @@ impl ResumeMarkerStateV1 {
             Self::Pending { admission, .. }
             | Self::Ready { admission, .. }
             | Self::Completed { admission, .. } => admission,
+        }
+    }
+
+    pub(crate) const fn is_legacy(self) -> bool {
+        match self {
+            Self::Pending { legacy, .. }
+            | Self::Ready { legacy, .. }
+            | Self::Completed { legacy, .. } => legacy,
         }
     }
 }
@@ -827,7 +928,7 @@ impl WorkerV2ResumeStoreV1 {
             &descriptor,
             &self.marker_name,
             &self.display_path,
-            Some(MARKER_BYTES),
+            None,
         )?;
         let mut file = File::from(descriptor);
         let mut bytes = Vec::with_capacity(MARKER_BYTES + 1);
@@ -835,7 +936,9 @@ impl WorkerV2ResumeStoreV1 {
             .take((MARKER_BYTES + 1) as u64)
             .read_to_end(&mut bytes)?;
         let final_stat = fstat(&file).map_err(std::io::Error::from)?;
-        if final_stat.st_nlink != 1 || final_stat.st_size != MARKER_BYTES as i64 {
+        let canonical_size = usize::try_from(final_stat.st_size)
+            .is_ok_and(|size| size == MARKER_BYTES || size == LEGACY_MARKER_BYTES);
+        if final_stat.st_nlink != 1 || !canonical_size {
             return Err(self.invalid("marker changed while it was read"));
         }
         decode_marker(&bytes, self.package)
@@ -853,6 +956,7 @@ impl WorkerV2ResumeStoreV1 {
             return Err(ResumeMarkerErrorV1::InvalidTransition);
         }
         let pending = ResumeMarkerStateV1::Pending {
+            legacy: false,
             publication,
             attempt,
             admission,
@@ -872,11 +976,13 @@ impl WorkerV2ResumeStoreV1 {
     ) -> Result<(), ResumeMarkerErrorV1> {
         match self.load()? {
             Some(ResumeMarkerStateV1::Pending {
+                legacy: false,
                 publication: current_publication,
                 attempt: current_attempt,
                 admission,
             }) if current_publication == publication && current_attempt == attempt => self.write(
                 ResumeMarkerStateV1::Ready {
+                    legacy: false,
                     publication,
                     attempt,
                     admission,
@@ -885,6 +991,7 @@ impl WorkerV2ResumeStoreV1 {
                 true,
             ),
             Some(ResumeMarkerStateV1::Ready {
+                legacy: false,
                 publication: current_publication,
                 attempt: current_attempt,
                 intent: current_intent,
@@ -908,6 +1015,7 @@ impl WorkerV2ResumeStoreV1 {
     ) -> Result<ResumeMarkerStateV1, ResumeMarkerErrorV1> {
         match self.load()? {
             Some(ResumeMarkerStateV1::Ready {
+                legacy: false,
                 publication: current_publication,
                 attempt: current_attempt,
                 admission,
@@ -917,6 +1025,7 @@ impl WorkerV2ResumeStoreV1 {
                 && current_intent == intent =>
             {
                 let completed = ResumeMarkerStateV1::Completed {
+                    legacy: false,
                     publication,
                     attempt,
                     admission,
@@ -970,6 +1079,9 @@ impl WorkerV2ResumeStoreV1 {
     }
 
     fn write(&self, state: ResumeMarkerStateV1, replace: bool) -> Result<(), ResumeMarkerErrorV1> {
+        if state.is_legacy() {
+            return Err(ResumeMarkerErrorV1::InvalidTransition);
+        }
         self.verify_output_path()?;
         let bytes = encode_marker(self.package, state);
         let temp_name = format!(
@@ -1026,6 +1138,31 @@ impl WorkerV2ResumeStoreV1 {
             let _ = unlinkat(&self.directory, &temp_name, AtFlags::empty());
         }
         result
+    }
+
+    pub(crate) fn migrate_legacy_to_ready(
+        &self,
+        expected: ResumeMarkerStateV1,
+        admission: [u8; 32],
+        intent: WorkerV2PublicationIntentIdentityV1,
+    ) -> Result<(), ResumeMarkerErrorV1> {
+        if !expected.is_legacy()
+            || expected.publication() != WorkerV2PublicationKindV1::Raw
+            || admission == [0; 32]
+            || self.load()? != Some(expected)
+        {
+            return Err(ResumeMarkerErrorV1::InvalidTransition);
+        }
+        self.write(
+            ResumeMarkerStateV1::Ready {
+                legacy: false,
+                publication: WorkerV2PublicationKindV1::Raw,
+                attempt: expected.attempt(),
+                admission,
+                intent,
+            },
+            true,
+        )
     }
 
     fn invalid(&self, reason: impl Into<String>) -> ResumeMarkerErrorV1 {
@@ -1136,6 +1273,7 @@ fn validate_private_file(
 }
 
 fn encode_marker(package: [u8; 32], state: ResumeMarkerStateV1) -> Vec<u8> {
+    debug_assert!(!state.is_legacy());
     let attempt = state.attempt();
     let publication = state.publication();
     let admission = state.admission();
@@ -1170,7 +1308,7 @@ fn decode_marker(
     bytes: &[u8],
     expected_package: [u8; 32],
 ) -> Result<ResumeMarkerStateV1, &'static str> {
-    if bytes.len() != MARKER_BYTES {
+    if bytes.len() != MARKER_BYTES && bytes.len() != LEGACY_MARKER_BYTES {
         return Err("marker has a noncanonical length");
     }
     let (body, encoded_checksum) = bytes.split_at(bytes.len() - 32);
@@ -1181,9 +1319,20 @@ fn decode_marker(
     if decoder.take(MARKER_MAGIC.len())? != MARKER_MAGIC {
         return Err("marker magic mismatch");
     }
-    if decoder.u16()? != MARKER_VERSION {
-        return Err("unsupported marker version");
+    let version = decoder.u16()?;
+    match (version, bytes.len()) {
+        (MARKER_VERSION, MARKER_BYTES) => decode_marker_v2(&mut decoder, expected_package),
+        (LEGACY_MARKER_VERSION, LEGACY_MARKER_BYTES) => {
+            decode_legacy_raw_marker_v1(&mut decoder, expected_package)
+        }
+        _ => Err("unsupported marker version or noncanonical version length"),
     }
+}
+
+fn decode_marker_v2(
+    decoder: &mut Decoder<'_>,
+    expected_package: [u8; 32],
+) -> Result<ResumeMarkerStateV1, &'static str> {
     let stage = decoder.byte()?;
     let publication = WorkerV2PublicationKindV1::from_tag(decoder.byte()?)
         .ok_or("marker publication kind is noncanonical")?;
@@ -1201,13 +1350,14 @@ fn decode_marker(
     .map_err(|_| "marker contains an invalid attempt")?;
     let admission = decoder.array()?;
     let intent = WorkerV2PublicationIntentIdentityV1::from_bytes(decoder.array()?);
-    let receipt = ReceiptRecordV1::decode(&mut decoder)?;
+    let receipt = ReceiptRecordV1::decode(decoder)?;
     if !decoder.finished() {
         return Err("marker has trailing body bytes");
     }
     match stage {
         1 if admission != [0; 32] && intent.as_bytes() == [0; 32] && receipt.is_zero() => {
             Ok(ResumeMarkerStateV1::Pending {
+                legacy: false,
                 publication,
                 attempt,
                 admission,
@@ -1215,6 +1365,7 @@ fn decode_marker(
         }
         2 if admission != [0; 32] && intent.as_bytes() != [0; 32] && receipt.is_zero() => {
             Ok(ResumeMarkerStateV1::Ready {
+                legacy: false,
                 publication,
                 attempt,
                 admission,
@@ -1223,6 +1374,7 @@ fn decode_marker(
         }
         3 if admission != [0; 32] && intent.as_bytes() != [0; 32] && !receipt.is_zero() => {
             Ok(ResumeMarkerStateV1::Completed {
+                legacy: false,
                 publication,
                 attempt,
                 admission,
@@ -1231,6 +1383,55 @@ fn decode_marker(
             })
         }
         _ => Err("marker stage fields are noncanonical"),
+    }
+}
+
+fn decode_legacy_raw_marker_v1(
+    decoder: &mut Decoder<'_>,
+    expected_package: [u8; 32],
+) -> Result<ResumeMarkerStateV1, &'static str> {
+    let stage = decoder.byte()?;
+    if decoder.array()? != expected_package {
+        return Err("marker producer package mismatch");
+    }
+    let generation = decoder.u64()?;
+    let session = BuildSession::from_bytes(decoder.array()?);
+    let invocation = fe2o3_artifact_transaction::BuildInvocation::from_bytes(decoder.array()?);
+    let attempt = BuildAttempt::from_env_value(&format!(
+        "{generation}:{}:{}",
+        session.to_hex(),
+        invocation.to_hex()
+    ))
+    .map_err(|_| "marker contains an invalid attempt")?;
+    let legacy_value = decoder.array()?;
+    let receipt = ReceiptRecordV1::decode(decoder)?;
+    if !decoder.finished() {
+        return Err("marker has trailing body bytes");
+    }
+    let publication = WorkerV2PublicationKindV1::Raw;
+    match stage {
+        1 if legacy_value != [0; 32] && receipt.is_zero() => Ok(ResumeMarkerStateV1::Pending {
+            legacy: true,
+            publication,
+            attempt,
+            admission: legacy_value,
+        }),
+        2 if legacy_value != [0; 32] && receipt.is_zero() => Ok(ResumeMarkerStateV1::Ready {
+            legacy: true,
+            publication,
+            attempt,
+            admission: [0; 32],
+            intent: WorkerV2PublicationIntentIdentityV1::from_bytes(legacy_value),
+        }),
+        3 if legacy_value != [0; 32] && !receipt.is_zero() => Ok(ResumeMarkerStateV1::Completed {
+            legacy: true,
+            publication,
+            attempt,
+            admission: [0; 32],
+            intent: WorkerV2PublicationIntentIdentityV1::from_bytes(legacy_value),
+            receipt,
+        }),
+        _ => Err("legacy raw marker stage fields are noncanonical"),
     }
 }
 
@@ -1397,6 +1598,35 @@ mod tests {
         .receipt()
     }
 
+    fn legacy_marker_bytes(
+        package: [u8; 32],
+        attempt: BuildAttempt,
+        stage: u8,
+        value: [u8; 32],
+        receipt: ReceiptRecordV1,
+    ) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(LEGACY_MARKER_BYTES);
+        bytes.extend_from_slice(MARKER_MAGIC);
+        bytes.extend_from_slice(&LEGACY_MARKER_VERSION.to_le_bytes());
+        bytes.push(stage);
+        bytes.extend_from_slice(&package);
+        bytes.extend_from_slice(&attempt.generation().to_le_bytes());
+        bytes.extend_from_slice(attempt.session().as_bytes());
+        bytes.extend_from_slice(attempt.invocation().as_bytes());
+        bytes.extend_from_slice(&value);
+        receipt.encode(&mut bytes);
+        let checksum = checksum(&bytes);
+        bytes.extend_from_slice(&checksum);
+        assert_eq!(bytes.len(), LEGACY_MARKER_BYTES);
+        bytes
+    }
+
+    fn install_marker(store: &WorkerV2ResumeStoreV1, bytes: &[u8]) {
+        let path = store.display_path.join(&store.marker_name);
+        fs::write(&path, bytes).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+
     #[test]
     fn canonical_state_machine_round_trips_exactly() {
         let directory = TestDirectory::new();
@@ -1413,6 +1643,7 @@ mod tests {
         assert_eq!(
             store.load().unwrap(),
             Some(ResumeMarkerStateV1::Pending {
+                legacy: false,
                 publication,
                 attempt,
                 admission,
@@ -1427,6 +1658,7 @@ mod tests {
         assert_eq!(
             store.load().unwrap(),
             Some(ResumeMarkerStateV1::Ready {
+                legacy: false,
                 publication,
                 attempt,
                 admission,
@@ -1440,6 +1672,7 @@ mod tests {
             .persist_completed(publication, attempt, intent, receipt)
             .unwrap();
         let completed = ResumeMarkerStateV1::Completed {
+            legacy: false,
             publication,
             attempt,
             admission,
@@ -1450,6 +1683,153 @@ mod tests {
         store
             .persist_completed(publication, attempt, intent, receipt)
             .unwrap();
+        store.clear_completed(completed).unwrap();
+        assert_eq!(store.load().unwrap(), None);
+    }
+
+    #[test]
+    fn legacy_v1_raw_ready_marker_recovers_and_migrates_to_v2() {
+        let directory = TestDirectory::new();
+        let producer = producer(91);
+        let attempt = attempt(&directory.0, &producer, 91);
+        let (output, plan, upstream) = publication_inputs(attempt, 91);
+        let persisted = persist_worker_v2_publication_intent_v1(
+            &directory.0,
+            &producer,
+            attempt,
+            plan,
+            upstream,
+            &output,
+        )
+        .unwrap();
+        let intent = persisted.record().identity();
+        drop(persisted);
+
+        let store = WorkerV2ResumeStoreV1::open(&directory.0, &producer).unwrap();
+        install_marker(
+            &store,
+            &legacy_marker_bytes(
+                store.package,
+                attempt,
+                2,
+                intent.as_bytes(),
+                ReceiptRecordV1([[0; 32]; RECEIPT_FIELDS]),
+            ),
+        );
+        let legacy = store.load().unwrap().unwrap();
+        assert!(legacy.is_legacy());
+        assert_eq!(legacy.publication(), WorkerV2PublicationKindV1::Raw);
+        let recovered = recover_worker_v2_intent_v1(&store, &producer, legacy).unwrap();
+        assert_eq!(recovered.exact_output(), output);
+
+        let migrated = store.load().unwrap().unwrap();
+        assert!(!migrated.is_legacy());
+        assert_eq!(migrated.publication(), WorkerV2PublicationKindV1::Raw);
+        assert_eq!(migrated.intent(), Some(intent));
+        assert_eq!(
+            migrated.admission(),
+            restart_admission_commitment_v1(
+                WorkerV2PublicationKindV1::Raw,
+                plan,
+                upstream,
+                &output,
+            )
+        );
+    }
+
+    #[test]
+    fn legacy_v1_pending_requires_the_exact_legacy_raw_commitment() {
+        for substituted in [false, true] {
+            let directory = TestDirectory::new();
+            let producer = producer(92 + u8::from(substituted));
+            let attempt = attempt(&directory.0, &producer, 92 + u8::from(substituted));
+            let (output, plan, upstream) = publication_inputs(attempt, 92 + u8::from(substituted));
+            persist_worker_v2_publication_intent_v1(
+                &directory.0,
+                &producer,
+                attempt,
+                plan,
+                upstream,
+                &output,
+            )
+            .unwrap();
+            let store = WorkerV2ResumeStoreV1::open(&directory.0, &producer).unwrap();
+            let mut admission = legacy_restart_admission_commitment_v1(plan, upstream, &output);
+            if substituted {
+                admission[0] ^= 1;
+            }
+            install_marker(
+                &store,
+                &legacy_marker_bytes(
+                    store.package,
+                    attempt,
+                    1,
+                    admission,
+                    ReceiptRecordV1([[0; 32]; RECEIPT_FIELDS]),
+                ),
+            );
+            let state = store.load().unwrap().unwrap();
+            let recovered = recover_worker_v2_intent_v1(&store, &producer, state);
+            if substituted {
+                assert!(matches!(
+                    recovered,
+                    Err(RestartIntentErrorV1::IntentIdentityMismatch)
+                ));
+                assert_eq!(store.load().unwrap(), Some(state));
+            } else {
+                assert_eq!(recovered.unwrap().exact_output(), output);
+                assert!(!store.load().unwrap().unwrap().is_legacy());
+            }
+        }
+    }
+
+    #[test]
+    fn legacy_v1_completed_reconciles_as_raw_and_cleans_exact_state() {
+        let directory = TestDirectory::new();
+        let producer = producer(94);
+        let attempt = attempt(&directory.0, &producer, 94);
+        let (output, plan, upstream) = publication_inputs(attempt, 94);
+        let persisted = persist_worker_v2_publication_intent_v1(
+            &directory.0,
+            &producer,
+            attempt,
+            plan,
+            upstream,
+            &output,
+        )
+        .unwrap();
+        let intent = persisted.record().identity();
+        drop(persisted);
+        let published = publish_exact_hsaco_evidence_for_attempt_v1(
+            &directory.0,
+            &producer,
+            attempt,
+            plan,
+            upstream,
+            &output,
+        )
+        .unwrap();
+
+        let store = WorkerV2ResumeStoreV1::open(&directory.0, &producer).unwrap();
+        install_marker(
+            &store,
+            &legacy_marker_bytes(
+                store.package,
+                attempt,
+                3,
+                intent.as_bytes(),
+                ReceiptRecordV1::from_receipt(published.receipt()),
+            ),
+        );
+        let completed = store.load().unwrap().unwrap();
+        assert!(completed.is_legacy());
+        assert_eq!(completed.publication(), WorkerV2PublicationKindV1::Raw);
+        let recovered = recover_worker_v2_intent_v1(&store, &producer, completed).unwrap();
+        assert_eq!(recovered.exact_output(), output);
+        drop(recovered);
+
+        clear_worker_v2_publication_intent_v1(&directory.0, &producer, attempt, intent).unwrap();
+        fe2o3_artifact_transaction::finish_build_attempt(&directory.0, &producer, attempt).unwrap();
         store.clear_completed(completed).unwrap();
         assert_eq!(store.load().unwrap(), None);
     }
@@ -1594,6 +1974,7 @@ mod tests {
         assert_eq!(
             reopened.load().unwrap(),
             Some(ResumeMarkerStateV1::Ready {
+                legacy: false,
                 publication,
                 attempt,
                 admission,
@@ -1639,6 +2020,7 @@ mod tests {
         assert_eq!(
             store.load().unwrap(),
             Some(ResumeMarkerStateV1::Ready {
+                legacy: false,
                 publication,
                 attempt,
                 admission,
@@ -1660,15 +2042,69 @@ mod tests {
             recovered.exact_output(),
         )
         .unwrap();
-        fe2o3_artifact_transaction::finish_build_attempt(&directory.0, &producer, attempt).unwrap();
         store
             .persist_completed(publication, attempt, intent_identity, published.receipt())
             .unwrap();
         let completed = store.load().unwrap().unwrap();
         clear_worker_v2_publication_intent_v1(&directory.0, &producer, attempt, intent_identity)
             .unwrap();
+        fe2o3_artifact_transaction::finish_build_attempt(&directory.0, &producer, attempt).unwrap();
         store.clear_completed(completed).unwrap();
         assert_eq!(store.load().unwrap(), None);
+    }
+
+    #[test]
+    fn exact_intent_clear_rejects_receipt_with_substituted_request_plan_field() {
+        let directory = TestDirectory::new();
+        let producer = producer(59);
+        let attempt = attempt(&directory.0, &producer, 59);
+        let (output, intent_plan, upstream) = publication_inputs(attempt, 59);
+        let persisted = persist_worker_v2_publication_intent_v1(
+            &directory.0,
+            &producer,
+            attempt,
+            intent_plan,
+            upstream,
+            &output,
+        )
+        .unwrap();
+        let intent_identity = persisted.record().identity();
+        drop(persisted);
+
+        let receipt_plan = DurableLinkPublicationPlanV1::new(
+            attempt,
+            intent_plan.scope(),
+            CanonicalLinkRequestIdentityV1::from_bytes([0xee; 32]),
+            intent_plan.worker(),
+            intent_plan.response(),
+            intent_plan.linked_output(),
+            intent_plan.finalization(),
+            intent_plan.finalized_output(),
+            intent_plan.publication(),
+        );
+        publish_exact_hsaco_evidence_for_attempt_v1(
+            &directory.0,
+            &producer,
+            attempt,
+            receipt_plan,
+            upstream,
+            &output,
+        )
+        .unwrap();
+
+        assert!(
+            clear_worker_v2_publication_intent_v1(
+                &directory.0,
+                &producer,
+                attempt,
+                intent_identity,
+            )
+            .is_err()
+        );
+        assert!(
+            recover_worker_v2_publication_intent_v1(&directory.0, &producer, attempt).is_ok(),
+            "a receipt with a substituted request must not authorize intent removal"
+        );
     }
 
     #[test]
@@ -1874,5 +2310,56 @@ mod tests {
             recover_worker_v2_intent_v1(&store, &producer, state),
             Err(RestartIntentErrorV1::IntentIdentityMismatch)
         ));
+    }
+
+    #[test]
+    fn completed_marker_rejects_publication_kind_and_admission_substitution() {
+        let directory = TestDirectory::new();
+        let producer = producer(95);
+        let attempt = attempt(&directory.0, &producer, 95);
+        let (output, plan, upstream) = publication_inputs(attempt, 95);
+        let persisted = persist_worker_v2_publication_intent_v1(
+            &directory.0,
+            &producer,
+            attempt,
+            plan,
+            upstream,
+            &output,
+        )
+        .unwrap();
+        let intent = persisted.record().identity();
+        drop(persisted);
+        let receipt = publish_exact_hsaco_evidence_for_attempt_v1(
+            &directory.0,
+            &producer,
+            attempt,
+            plan,
+            upstream,
+            &output,
+        )
+        .unwrap()
+        .receipt();
+        let raw_admission = restart_admission_commitment_v1(
+            WorkerV2PublicationKindV1::Raw,
+            plan,
+            upstream,
+            &output,
+        );
+        let substituted = ResumeMarkerStateV1::Completed {
+            legacy: false,
+            publication: WorkerV2PublicationKindV1::Finalized,
+            attempt,
+            admission: raw_admission,
+            intent,
+            receipt: ReceiptRecordV1::from_receipt(receipt),
+        };
+        let store = WorkerV2ResumeStoreV1::open(&directory.0, &producer).unwrap();
+        install_marker(&store, &encode_marker(store.package, substituted));
+
+        assert!(matches!(
+            recover_worker_v2_intent_v1(&store, &producer, substituted),
+            Err(RestartIntentErrorV1::IntentIdentityMismatch)
+        ));
+        assert_eq!(store.load().unwrap(), Some(substituted));
     }
 }

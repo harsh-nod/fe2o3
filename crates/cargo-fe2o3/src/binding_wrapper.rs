@@ -12,10 +12,7 @@ use fe2o3_artifact_transaction::{
     finish_build_attempt, publish_exact_hsaco_evidence_for_attempt_v1,
     read_backend_publication_receipt_v1,
 };
-use fe2o3_hsaco_finalize::{
-    WorkerV2HsacoPublicationError, inspect_worker_v2_raw_hsaco_v1,
-    publish_prepared_finalized_worker_v2_hsaco_v1, publish_prepared_worker_v2_hsaco_v1,
-};
+use fe2o3_hsaco_finalize::inspect_worker_v2_raw_hsaco_v1;
 use fe2o3_rustc_invocation::{
     RustcArgsErrorV2, RustcCompileInvocationV2, RustcInvocationV2, classify_rustc_invocation_v2,
 };
@@ -28,10 +25,11 @@ use crate::project::PinnedDirectory;
 use crate::worker_v2::{
     PreparedWorkerV2Config, WORKER_V2_EXPECTED_ID_ENV, WorkerV2ConfigError, WorkerV2ConfigIdentity,
 };
+#[cfg(feature = "worker-v2-fault-injection-test-only")]
+use crate::worker_v2_restart::injected_fault_point_v1;
 use crate::worker_v2_restart::{
-    PreparedWorkerV2PublicationV1, RestartIntentErrorV1, ResumeMarkerErrorV1, ResumeMarkerStateV1,
-    WorkerV2PublicationKindV1, WorkerV2ResumeStoreV1, persist_admitted_worker_v2_intent_v1,
-    recover_worker_v2_intent_v1,
+    RestartIntentErrorV1, ResumeMarkerErrorV1, ResumeMarkerStateV1, WorkerV2PublicationKindV1,
+    WorkerV2ResumeStoreV1, persist_admitted_worker_v2_intent_v1, recover_worker_v2_intent_v1,
 };
 use crate::{ARTIFACT_CHILD_FD, BACKEND_CHILD_FD, MANAGED_RUSTC_ARGS_ENV};
 
@@ -623,13 +621,7 @@ fn complete_fresh_worker_v2(
     })?;
     let persisted = persist_admitted_worker_v2_intent_v1(resume, &managed.producer, inspected)
         .map_err(|error| preserve_restart_error("persistence", error))?;
-    publish_finish_and_clear(
-        managed,
-        resume,
-        persisted.prepared.kind(),
-        persisted.intent,
-        Some(&persisted.prepared),
-    )
+    publish_finish_and_clear(managed, resume, persisted.publication, persisted.intent)
 }
 
 fn complete_recovered_worker_v2(
@@ -654,7 +646,7 @@ fn complete_recovered_worker_v2(
         }
         Err(error) => return Err(preserve_restart_error("recovery", error)),
     };
-    publish_finish_and_clear(managed, resume, state.publication(), intent, None)
+    publish_finish_and_clear(managed, resume, state.publication(), intent)
 }
 
 fn publish_finish_and_clear(
@@ -662,18 +654,17 @@ fn publish_finish_and_clear(
     resume: &WorkerV2ResumeStoreV1,
     publication: WorkerV2PublicationKindV1,
     intent: RecoveredWorkerV2PublicationIntentV1,
-    prepared: Option<&PreparedWorkerV2PublicationV1>,
 ) -> Result<(), CompletionFailure> {
     let record = intent.record();
     let intent_identity = record.identity();
     let receipt = publish_recovered_worker_v2(managed, &intent)?;
-    if let Some(prepared) = prepared {
-        verify_prepared_publication_compatibility(managed, prepared, receipt)?;
-    }
-    finish_worker_v2_attempt(managed)?;
+    #[cfg(feature = "worker-v2-fault-injection-test-only")]
+    injected_fault_point_v1("published");
     let completed = resume
         .persist_completed(publication, managed.attempt, intent_identity, receipt)
         .map_err(|error| preserve_marker_error("completion persistence", error))?;
+    #[cfg(feature = "worker-v2-fault-injection-test-only")]
+    injected_fault_point_v1("completed");
     clear_worker_v2_publication_intent_v1(
         &managed.output_dir,
         &managed.producer,
@@ -681,45 +672,14 @@ fn publish_finish_and_clear(
         intent_identity,
     )
     .map_err(|error| preserve_intent_error("cleanup", error))?;
+    #[cfg(feature = "worker-v2-fault-injection-test-only")]
+    injected_fault_point_v1("intent-cleared");
+    finish_worker_v2_attempt(managed)?;
+    #[cfg(feature = "worker-v2-fault-injection-test-only")]
+    injected_fault_point_v1("finished");
     resume
         .clear_completed(completed)
         .map_err(|error| preserve_marker_error("cleanup", error))
-}
-
-fn verify_prepared_publication_compatibility(
-    managed: &ManagedAttempt,
-    prepared: &PreparedWorkerV2PublicationV1,
-    expected: BackendPublicationReceiptV1,
-) -> Result<(), CompletionFailure> {
-    let published = match prepared {
-        PreparedWorkerV2PublicationV1::Raw(prepared) => {
-            publish_prepared_worker_v2_hsaco_v1(&managed.output_dir, &managed.producer, prepared)
-        }
-        PreparedWorkerV2PublicationV1::Finalized(prepared) => {
-            publish_prepared_finalized_worker_v2_hsaco_v1(
-                &managed.output_dir,
-                &managed.producer,
-                prepared,
-            )
-        }
-    };
-    let actual = match published {
-        Ok(published) => published.receipt(),
-        Err(WorkerV2HsacoPublicationError::Publication(
-            AttemptScopedHsacoPublicationErrorV1::ReceiptAlreadyPersisted { receipt },
-        )) => *receipt,
-        Err(error) => {
-            return Err(CompletionFailure::PreserveAttempt(format!(
-                "Worker V2 prepared publication disagrees with its restart journal: {error}"
-            )));
-        }
-    };
-    if actual != expected {
-        return Err(CompletionFailure::PreserveAttempt(
-            "Worker V2 prepared publication produced a substituted backend receipt".into(),
-        ));
-    }
-    Ok(())
 }
 
 fn reconcile_completed_worker_v2(
@@ -759,16 +719,12 @@ fn reconcile_completed_worker_v2(
             "Worker V2 completed resume marker receipt was substituted".into(),
         ));
     }
-    finish_worker_v2_attempt(managed)?;
-    match fe2o3_artifact_transaction::recover_worker_v2_publication_intent_v1(
-        &managed.output_dir,
-        &managed.producer,
-        managed.attempt,
-    ) {
+    match recover_worker_v2_intent_v1(resume, &managed.producer, completed) {
         Ok(intent) => {
             if intent.record().identity() != intent_identity {
                 return Err(CompletionFailure::PreserveAttempt(
-                    "Worker V2 completed resume marker names a different publication intent".into(),
+                    "Worker V2 completed resume marker disagrees with its exact journal authority"
+                        .into(),
                 ));
             }
             clear_worker_v2_publication_intent_v1(
@@ -777,16 +733,17 @@ fn reconcile_completed_worker_v2(
                 managed.attempt,
                 intent_identity,
             )
-            .map_err(|error| preserve_intent_error("completed recovery cleanup", error))?;
+            .map_err(|error| preserve_intent_error("completed recovery authorization", error))?;
         }
-        Err(WorkerV2PublicationIntentErrorV1::NotFound) => {}
+        Err(RestartIntentErrorV1::Intent(WorkerV2PublicationIntentErrorV1::NotFound)) => {}
         Err(error) => {
-            return Err(preserve_intent_error(
+            return Err(preserve_restart_error(
                 "completed recovery validation",
                 error,
             ));
         }
     }
+    finish_worker_v2_attempt(managed)?;
     resume
         .clear_completed(completed)
         .map_err(|error| preserve_marker_error("completed recovery cleanup", error))
