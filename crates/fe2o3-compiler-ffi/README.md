@@ -16,6 +16,12 @@ domain. Contract grammar and IDs come from `reserved-fe2o3-symbols`.
 The constructors are public so tests and non-rustc producers can create structurally identical
 values. The envelope binds bytes but does not authenticate that rustc produced them.
 
+`CompilerDescriptorSourceV1` retains one bounded canonical `DeviceDescriptorTableV1` whose
+code-object digest is still zero. Its identity commits to the exact table bytes that a later
+ELF-aware stage may embed and finalize. It rejects already-finalized, malformed, truncated,
+trailing, or noncanonical input. Public construction remains structural and does not authenticate
+rustc or grant link, load, or launch authority.
+
 `CompilerModuleHandoffV1` is the corresponding bounded data container for one exact LLVM text-IR
 or bitcode module and one envelope. Its canonical encoding commits to the module kind, SHA-256 and
 byte length, target, code-object version, and exact canonical envelope bytes. Strict decoding

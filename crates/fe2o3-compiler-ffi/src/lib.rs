@@ -13,10 +13,14 @@ use reserved_fe2o3_symbols::{
 };
 use sha2::{Digest, Sha256};
 
+mod descriptor_source;
 mod module_handoff;
 mod module_handoff_v2;
 mod symbol_manifest;
 
+pub use descriptor_source::{
+    CompilerDescriptorSourceErrorV1, CompilerDescriptorSourceIdentityV1, CompilerDescriptorSourceV1,
+};
 pub use module_handoff::{
     CompilerModuleHandoffErrorV1, CompilerModuleHandoffPartsV1, CompilerModuleHandoffV1,
     CompilerModuleIdentityV1, CompilerModuleKindV1, CompilerModulePayloadV1,
