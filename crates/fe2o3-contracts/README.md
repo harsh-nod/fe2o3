@@ -16,6 +16,8 @@ device lowering, and verification tooling. Its v1 specification layer models:
   minimum-resident-workgroups constraint;
 - a gfx942 V1 unsafe-assembly declaration with explicit operand, option, and
   memory/control-flow effect sets;
+- finite source loop bounds, fixed-width integer-switch cases, and structured
+  break/continue vocabulary for the separately versioned frontend sidecar;
 - kernel, executable, contract, and proof artifact identities; and
 - `Unverified`, `Checked`, and `Verified` proof states.
 
@@ -49,3 +51,7 @@ allowlist that a compiler may validate against reachable assembly; constructing
 it neither permits an instruction nor proves that generated code matches the
 declaration. Target admission must recheck launch bounds and occupancy against
 the exact device and executable.
+
+The control-flow vocabulary is descriptive as well. Consumers must
+authenticate source spans, validate the structured graph, and prove declared
+loop bounds against MIR and the final executable before relying on it.

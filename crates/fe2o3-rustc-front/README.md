@@ -116,8 +116,8 @@ Construction validates all references and source spans, requires every node
 to be reachable and at least one exit to exist, and checks break/continue
 targets against their declared loops. Dominator-derived backedges must target
 bounded loop headers. Removing those backedges must leave a DAG, which rejects
-unbounded and irreducible cycles. Every declared loop must have a structural
-backedge.
+unbounded and irreducible cycles. A syntactic loop whose body always exits may
+be acyclic and remains explicitly bounded.
 
 Switch cases cover the complete `i8` through `i128` and `u8` through `u128`
 domains. `isize` and `usize` are deliberately absent because their width is

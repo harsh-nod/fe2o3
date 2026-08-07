@@ -74,7 +74,12 @@ name = "fe2o3-renamed-device-marker-test"
 version = "0.0.0"
 dependencies = [
  "fe2o3-device",
+ "fe2o3-rustc-front",
 ]
+
+[[package]]
+name = "fe2o3-rustc-front"
+version = "0.1.0"
 
 [[package]]
 name = "hashbrown"

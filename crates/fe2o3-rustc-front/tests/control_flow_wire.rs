@@ -14,6 +14,10 @@ fn node(value: u32, kind: ControlFlowNodeKindV1) -> ControlFlowNodeV1 {
     ControlFlowNodeV1::new(id(value), span(value + 1), kind)
 }
 
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
 fn fixture_with_order(reverse: bool) -> ControlFlowContractV1 {
     let switch = ControlFlowNodeKindV1::integer_switch(
         FrontendIntegerSwitchTypeV1::new(32, false).unwrap(),
@@ -73,6 +77,14 @@ fn fixture() -> ControlFlowContractV1 {
 fn canonical_round_trip_preserves_spans_and_cfg_identity() {
     let contract = fixture();
     let encoded = encode_control_flow_contract_v1(&contract).unwrap();
+    assert_eq!(
+        hex(&encoded),
+        include_str!("fixtures/control_flow_v1.hex").trim()
+    );
+    assert_eq!(
+        hex(contract.cfg_identity().as_bytes()),
+        include_str!("fixtures/control_flow_cfg_identity_v1.hex").trim()
+    );
     let reordered = fixture_with_order(true);
     assert_eq!(
         encoded,

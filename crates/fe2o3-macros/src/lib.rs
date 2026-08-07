@@ -1,5 +1,7 @@
 #![feature(proc_macro_tracked_env)]
 
+mod control_flow_v1;
+
 use proc_macro::TokenStream;
 use proc_macro_crate::{FoundCrate, crate_name};
 use quote::{format_ident, quote};
@@ -14,6 +16,12 @@ use syn::{
     Data, DeriveInput, Expr, ExprArray, FnArg, ForeignItem, GenericArgument, ItemFn,
     ItemForeignMod, Lit, LitInt, Meta, Pat, PathArguments, ReturnType, Token, Type, Visibility,
     parse::Parser, parse_macro_input, punctuated::Punctuated, visit::Visit,
+};
+
+use crate::control_flow_v1::{
+    CONTROL_FLOW_REGISTRATION_KIND_V1, CONTROL_FLOW_REGISTRATION_MAGIC_V1,
+    CONTROL_FLOW_REGISTRATION_PREFIX_V1, CONTROL_FLOW_REGISTRATION_VERSION_V1,
+    ParsedControlFlowOptionsV1, analyze_kernel_control_flow_v1, parse_control_flow_options_v1,
 };
 
 #[proc_macro_derive(DeviceCopy)]
@@ -199,6 +207,14 @@ fn validate_device_copy_repr(attrs: &[syn::Attribute]) -> syn::Result<DeviceCopy
 /// operands(...), options(...), effects(...))` on an `unsafe fn`. The
 /// declaration is recorded for later compiler validation and grants no
 /// assembly, memory, loading, or launch authority by itself.
+///
+/// Direct source loops and integer `match` expressions require an ordered
+/// `control_flow(loop_bounds(...), integer_switches(...))` declaration. Every
+/// loop receives one nonzero maximum iteration count and every match receives
+/// one fixed-width signed or unsigned discriminant type in lexical order. The
+/// macro emits a separate canonical source-CFG sidecar with exact spans and
+/// structured break/continue targets. The sidecar is descriptive until a
+/// compiler collector authenticates it against MIR.
 #[proc_macro_attribute]
 pub fn kernel(attr: TokenStream, item: TokenStream) -> TokenStream {
     let options = match parse_kernel_options(attr.into()) {
@@ -219,12 +235,13 @@ enum KernelMode {
     Typed,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct KernelOptions {
     mode: KernelMode,
     explicit_namespace: Option<CrateBindingIdV1>,
     launch: Option<ParsedLaunchBoundsV1>,
     unsafe_assembly: Option<ParsedUnsafeAssemblyV1>,
+    control_flow: Option<ParsedControlFlowOptionsV1>,
 }
 
 const MAX_TYPED_KERNEL_SYMBOL_STEM_BYTES: usize = 128;
@@ -275,6 +292,7 @@ fn parse_kernel_options(attr: proc_macro2::TokenStream) -> syn::Result<KernelOpt
             explicit_namespace: None,
             launch: None,
             unsafe_assembly: None,
+            control_flow: None,
         });
     }
 
@@ -283,6 +301,7 @@ fn parse_kernel_options(attr: proc_macro2::TokenStream) -> syn::Result<KernelOpt
     let mut explicit_namespace = None;
     let mut launch = None;
     let mut unsafe_assembly = None;
+    let mut control_flow = None;
     for argument in arguments {
         match argument {
             Meta::Path(path) if path.is_ident("typed") && !typed => typed = true,
@@ -328,10 +347,19 @@ fn parse_kernel_options(attr: proc_macro2::TokenStream) -> syn::Result<KernelOpt
                 }
                 unsafe_assembly = Some(parse_unsafe_assembly_v1(&list)?);
             }
+            Meta::List(list) if list.path.is_ident("control_flow") => {
+                if control_flow.is_some() {
+                    return Err(syn::Error::new_spanned(
+                        list,
+                        "#[kernel] accepts at most one control_flow declaration",
+                    ));
+                }
+                control_flow = Some(parse_control_flow_options_v1(&list)?);
+            }
             _ => {
                 return Err(syn::Error::new_spanned(
                     argument,
-                    "#[kernel] accepts only #[kernel], #[kernel(typed)], namespace, launch(...), and unsafe_asm(...) declarations",
+                    "#[kernel] accepts only #[kernel], #[kernel(typed)], namespace, launch(...), unsafe_asm(...), and control_flow(...) declarations",
                 ));
             }
         }
@@ -353,6 +381,7 @@ fn parse_kernel_options(attr: proc_macro2::TokenStream) -> syn::Result<KernelOpt
         explicit_namespace,
         launch,
         unsafe_assembly,
+        control_flow,
     })
 }
 
@@ -695,6 +724,7 @@ fn expand_kernel_with_device_import(
             explicit_namespace: None,
             launch: None,
             unsafe_assembly: None,
+            control_flow: None,
         },
         device_import,
         None,
@@ -711,6 +741,16 @@ fn expand_kernel_with_imports(
 ) -> syn::Result<proc_macro2::TokenStream> {
     let mode = options.mode;
     validate_kernel_assembly_boundary(&input, options.unsafe_assembly)?;
+    if options.control_flow.is_some()
+        && options
+            .unsafe_assembly
+            .is_some_and(|assembly| assembly.effects & ASSEMBLY_EFFECT_CONTROL_FLOW_V1 != 0)
+    {
+        return Err(syn::Error::new_spanned(
+            &input.sig,
+            "unsafe assembly with control_flow effects cannot participate in a structured control_flow V1 contract",
+        ));
+    }
     if mode == KernelMode::Typed {
         validate_typed_kernel_signature(&input)?;
         validate_typed_kernel_symbol_stem(&input.sig.ident)?;
@@ -719,6 +759,8 @@ fn expand_kernel_with_imports(
 
     let original_ident = input.sig.ident.clone();
     let original_name = original_ident.to_string();
+    let control_flow_contract =
+        analyze_kernel_control_flow_v1(&input, options.control_flow.as_ref())?;
 
     if original_name.starts_with(RESERVED_ROOT) {
         return Err(syn::Error::new_spanned(
@@ -836,6 +878,31 @@ fn expand_kernel_with_imports(
             );
         }
     });
+    let control_flow_registration = control_flow_contract.map(|bytes| {
+        let registration_ident =
+            format_ident!("{CONTROL_FLOW_REGISTRATION_PREFIX_V1}{original_name}");
+        let bytes = bytes.iter();
+        quote! {
+            #[doc(hidden)]
+            #[allow(non_upper_case_globals)]
+            #[used]
+            static #registration_ident: (
+                u64,
+                u16,
+                u16,
+                &'static str,
+                &'static [u8],
+                #function_pointer,
+            ) = (
+                #CONTROL_FLOW_REGISTRATION_MAGIC_V1,
+                #CONTROL_FLOW_REGISTRATION_VERSION_V1,
+                #CONTROL_FLOW_REGISTRATION_KIND_V1,
+                #marker_value,
+                &[#(#bytes),*],
+                #internal_ident,
+            );
+        }
+    });
 
     let typed_module = if let Some(kernel_binding) = kernel_binding {
         let host_import = host_import.expect("typed expansion requires a host import");
@@ -916,6 +983,7 @@ fn expand_kernel_with_imports(
         static #registration_ident: #registration_type = #registration_value;
 
         #frontend_registration
+        #control_flow_registration
 
         const _: () = {
             #device_import
@@ -2295,6 +2363,7 @@ mod tests {
                 explicit_namespace: None,
                 launch: None,
                 unsafe_assembly: None,
+                control_flow: None,
             }
         );
         assert_eq!(
@@ -2304,6 +2373,7 @@ mod tests {
                 explicit_namespace: None,
                 launch: None,
                 unsafe_assembly: None,
+                control_flow: None,
             }
         );
 
@@ -2545,6 +2615,7 @@ mod tests {
                 explicit_namespace: None,
                 launch: None,
                 unsafe_assembly: None,
+                control_flow: None,
             },
             &device_import,
             Some(&host_import),

@@ -5,6 +5,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
+frontend = { package = "fe2o3-rustc-front", path = "../../../../fe2o3-rustc-front" }
 gpu_device = { package = "fe2o3-device", path = "../../../../fe2o3-device" }
 
 [workspace]

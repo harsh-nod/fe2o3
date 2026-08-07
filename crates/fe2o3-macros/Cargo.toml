@@ -11,7 +11,7 @@ description = "Procedural macros for fe2o3 kernels."
 proc-macro = true
 
 [dependencies]
-proc-macro2.workspace = true
+proc-macro2 = { workspace = true, features = ["span-locations"] }
 proc-macro-crate.workspace = true
 quote.workspace = true
 reserved-fe2o3-symbols.workspace = true

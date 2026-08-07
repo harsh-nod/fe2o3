@@ -33,7 +33,6 @@ pub enum ControlFlowValidationErrorV1 {
     InvalidSuccessor { node: u32, successor: u32 },
     UnreachableNode(u32),
     ZeroLoopBound(u32),
-    LoopHasNoBackedge(u32),
     InvalidLoopTransfer { node: u32, loop_header: u32 },
     BreakTargetMismatch { node: u32 },
     ContinueTargetMismatch { node: u32 },
@@ -73,9 +72,6 @@ impl fmt::Display for ControlFlowValidationErrorV1 {
             Self::UnreachableNode(node) => write!(formatter, "node {node} is unreachable"),
             Self::ZeroLoopBound(node) => {
                 write!(formatter, "loop node {node} has a zero iteration bound")
-            }
-            Self::LoopHasNoBackedge(node) => {
-                write!(formatter, "loop node {node} has no structural backedge")
             }
             Self::InvalidLoopTransfer { node, loop_header } => write!(
                 formatter,
@@ -700,7 +696,6 @@ fn validate_reducible(
         }
     }
 
-    let mut loop_has_backedge = vec![false; count];
     let mut acyclic_indegree = vec![0_usize; count];
     for (source, successors) in edges.iter().enumerate() {
         for successor in successors {
@@ -712,20 +707,11 @@ fn validate_reducible(
                 ) {
                     return Err(ControlFlowValidationErrorV1::IrreducibleControlFlow);
                 }
-                loop_has_backedge[target] = true;
             } else {
                 acyclic_indegree[target] += 1;
             }
         }
     }
-    for (index, node) in contract.nodes.iter().enumerate() {
-        if matches!(node.kind(), ControlFlowNodeKindV1::Loop { .. }) && !loop_has_backedge[index] {
-            return Err(ControlFlowValidationErrorV1::LoopHasNoBackedge(
-                node.id().get(),
-            ));
-        }
-    }
-
     let mut queue = acyclic_indegree
         .iter()
         .enumerate()

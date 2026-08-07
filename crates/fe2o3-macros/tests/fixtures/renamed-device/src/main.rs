@@ -24,6 +24,21 @@ pub unsafe fn assembly_declared(value: u32) -> u32 {
     value
 }
 
+#[kernel(control_flow(loop_bounds(8), integer_switches(u32)))]
+pub fn structured_control_flow(mut value: u32) -> u32 {
+    'outer: while value < 8 {
+        match value {
+            0 => {
+                value += 1;
+                continue 'outer;
+            }
+            1 => break 'outer,
+            _ => value += 2,
+        }
+    }
+    value
+}
+
 fn assert_marker<T: KernelMarkerV1>() {}
 
 fn main() {
@@ -38,4 +53,31 @@ fn main() {
     );
     assert_marker::<__fe2o3_kernel_marker_launch_bounded>();
     assert_marker::<__fe2o3_kernel_marker_assembly_declared>();
+    assert_marker::<__fe2o3_kernel_marker_structured_control_flow>();
+
+    let sidecar = __fe2o3_control_flow_contract_v1_structured_control_flow.4;
+    let contract = frontend::decode_control_flow_contract_v1(sidecar).unwrap();
+    assert_eq!(contract.entry().get(), 0);
+    assert!(contract.nodes().len() >= 8);
+    assert!(
+        contract
+            .nodes()
+            .iter()
+            .all(|node| node.span().file().ends_with("src/main.rs"))
+    );
+    for expected in ["loop", "break", "continue", "switch"] {
+        assert!(contract.nodes().iter().any(|node| {
+            matches!(
+                (expected, node.kind()),
+                ("loop", frontend::ControlFlowNodeKindV1::Loop { .. })
+                    | ("break", frontend::ControlFlowNodeKindV1::Break { .. })
+                    | ("continue", frontend::ControlFlowNodeKindV1::Continue { .. })
+                    | (
+                        "switch",
+                        frontend::ControlFlowNodeKindV1::IntegerSwitch { .. }
+                    )
+            )
+        }));
+    }
+    assert!(!contract.cfg_identity().as_bytes().is_empty());
 }
