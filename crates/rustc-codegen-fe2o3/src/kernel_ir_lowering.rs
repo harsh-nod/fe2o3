@@ -24,6 +24,7 @@ use crate::mir_import::{
 };
 use crate::trusted_device_items::{TrustedDeviceItem, TrustedHalfOperation};
 use dialect_amdgcn::{DeviceMathDiagnosticItem, recognized_device_math_operation};
+use fe2o3_amd_target::AmdTargetId;
 use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, BasicBlock, BinaryOp, BlockId, ComparePredicate, Constant,
     FloatConversionKind, FloatOperation, Function, FunctionId, IntrinsicOperation, Kernel,
@@ -216,7 +217,10 @@ fn translate_and_verify_for_target_with_policy(
     target: &AmdGpuTarget,
     strict_float_policy: StrictFloatPolicy,
 ) -> Result<Module, TranslationErrors> {
-    let float_target = (target.as_str() == "gfx942").then_some(Gfx942FloatTarget);
+    let float_target = AmdTargetId::parse(target.as_str())
+        .ok()
+        .filter(|target| target.processor() == "gfx942")
+        .map(|_| Gfx942FloatTarget);
     translate_and_verify_with_float_target(mir, float_target, strict_float_policy)
 }
 

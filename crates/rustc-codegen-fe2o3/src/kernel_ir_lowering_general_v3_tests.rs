@@ -92,6 +92,12 @@ fn alpha_zeta_share_semantic_helper_lowering_and_emit_fmul_fadd() {
 }
 
 #[test]
+fn gfx942_target_id_feature_states_preserve_the_float_profile() {
+    translate_and_verify_for_target(&alpha_zeta_module(), &AmdGpuTarget::new("gfx942:xnack-"))
+        .expect("canonical gfx942 target IDs must retain the gfx942 floating-point profile");
+}
+
+#[test]
 fn general_v3_rejects_wrong_index_untrusted_callee_and_wrong_profile() {
     let mut wrong_index = alpha_zeta_module();
     let get_mut = &mut wrong_index.functions[0].blocks[1]
