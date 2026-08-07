@@ -24,6 +24,7 @@ mod manifest;
 mod proof;
 mod proof_decode;
 mod proof_encode;
+mod proof_executable_binding;
 mod rust_layout;
 mod selection;
 
@@ -100,6 +101,11 @@ pub use proof::{
 };
 pub use proof_decode::ProofDecodeError;
 pub use proof_encode::{MAX_PROOF_RECORD_BYTES, PROOF_RECORD_MAGIC, PROOF_RECORD_VERSION};
+pub use proof_executable_binding::{
+    ExecutableCodeObjectVersionV1, PROOF_EXECUTABLE_BINDING_DOMAIN_V1,
+    PROOF_EXECUTABLE_BINDING_VERSION_V1, ProofExecutableBindingError, ProofExecutableBindingV1,
+    ProofExecutableSemanticIdentityV1, ProofToolPolicyIdentityV1,
+};
 pub use rust_layout::{
     MAX_RUST_LAYOUT_ALIGNMENT, MAX_RUST_LAYOUT_BYTES, MAX_RUST_LAYOUT_COMPONENTS,
     RUST_LAYOUT_EVIDENCE_DOMAIN_V1, RUST_LAYOUT_EVIDENCE_VERSION_V1, RUST_TYPE_EVIDENCE_DOMAIN_V1,
