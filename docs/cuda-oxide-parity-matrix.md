@@ -21,7 +21,7 @@ partial, experimental, planned, and N/A rows. The supplemental audit also
 accounts for capabilities demonstrated elsewhere in the repository.
 
 The fe2o3 current-state column is based on commit
-`1164c06c8b106b9a97f7e84c301196a449439b41`.
+`2fee8b63b77df73b92f4de79caaabc5b623ab867`.
 <!-- parity-status:baseline:end -->
 
 The source of truth now pins the cuda-oxide commit and date above. Its supported
