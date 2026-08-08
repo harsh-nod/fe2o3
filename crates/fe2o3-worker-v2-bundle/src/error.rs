@@ -1,6 +1,6 @@
 use std::fmt;
 
-use fe2o3_artifact_transaction::{LinkPublicationCodecError, LinkPublicationPhaseV1};
+use fe2o3_artifact_transaction::DurablePublishedClaimCodecErrorV1;
 use fe2o3_artifacts::{
     BundleDecodeError, ContainerDecodeError, DirectLinkDecodeError, DirectLinkEvidenceError,
     ProofDecodeError,
@@ -17,8 +17,7 @@ pub enum PublicationClaimFieldV1 {
     Finalization,
     FinalizedOutput,
     Publication,
-    ReceiptFinalizedOutput,
-    ReceiptPublication,
+    UpstreamEvidence,
 }
 
 #[derive(Debug)]
@@ -41,8 +40,8 @@ pub enum EnvelopeValidationError {
     ProofCountMismatch,
     DuplicateProofKernel,
     ProofKernelSetMismatch,
+    ProofManifestMismatch { field: &'static str },
     ProofEvidenceTooLarge { max: usize },
-    PublicationRecordNotPublished { actual: LinkPublicationPhaseV1 },
     PublicationClaimMismatch(PublicationClaimFieldV1),
     PublicationBridge,
 }
@@ -92,13 +91,15 @@ impl fmt::Display for EnvelopeValidationError {
             Self::ProofKernelSetMismatch => {
                 formatter.write_str("proof record kernel set does not match the manifest")
             }
+            Self::ProofManifestMismatch { field } => {
+                write!(
+                    formatter,
+                    "proof record {field} does not match the manifest"
+                )
+            }
             Self::ProofEvidenceTooLarge { max } => {
                 write!(formatter, "proof evidence exceeds {max} bytes")
             }
-            Self::PublicationRecordNotPublished { actual } => write!(
-                formatter,
-                "durable publication record is at {actual:?}, not Published"
-            ),
             Self::PublicationClaimMismatch(field) => {
                 write!(
                     formatter,
@@ -156,7 +157,7 @@ pub enum EnvelopeDecodeError {
     DirectLink(DirectLinkDecodeError),
     Descriptor(DescriptorDecodeError),
     Proof(ProofDecodeError),
-    Publication(LinkPublicationCodecError),
+    PublishedClaim(DurablePublishedClaimCodecErrorV1),
     Validation(EnvelopeValidationError),
     NonCanonical,
 }
@@ -201,7 +202,7 @@ impl fmt::Display for EnvelopeDecodeError {
             Self::DirectLink(error) => error.fmt(formatter),
             Self::Descriptor(error) => error.fmt(formatter),
             Self::Proof(error) => error.fmt(formatter),
-            Self::Publication(error) => error.fmt(formatter),
+            Self::PublishedClaim(error) => error.fmt(formatter),
             Self::Validation(error) => error.fmt(formatter),
             Self::NonCanonical => formatter.write_str("Worker V2 envelope is not canonical"),
         }
@@ -216,7 +217,7 @@ impl std::error::Error for EnvelopeDecodeError {
             Self::DirectLink(error) => Some(error),
             Self::Descriptor(error) => Some(error),
             Self::Proof(error) => Some(error),
-            Self::Publication(error) => Some(error),
+            Self::PublishedClaim(error) => Some(error),
             Self::Validation(error) => Some(error),
             _ => None,
         }

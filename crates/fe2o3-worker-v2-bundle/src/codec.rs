@@ -1,4 +1,6 @@
-use fe2o3_artifact_transaction::{LinkPublicationRecordV1, MAX_LINK_PUBLICATION_RECORD_BYTES};
+use fe2o3_artifact_transaction::{
+    DurablePublishedHsacoClaimV1, MAX_DURABLE_PUBLISHED_HSACO_CLAIM_BYTES,
+};
 use fe2o3_artifacts::{
     ArtifactContainerV1, BundleIndexV1, DigestAlgorithm, DigestBytes, DirectLinkBundleEvidenceV1,
     MAX_BUNDLE_INDEX_BYTES, MAX_CONTAINER_BYTES, MAX_DIRECT_LINK_EVIDENCE_BYTES, MAX_KERNELS,
@@ -7,15 +9,13 @@ use fe2o3_artifacts::{
 use fe2o3_kernel_descriptor::{MAX_DESCRIPTOR_TABLE_BYTES, decode_device_descriptor_table_v1};
 
 use crate::{
-    BackendPublicationReceiptProjectionV1, DescriptorLineageV1, DurablePublishedClaimV1,
-    EnvelopeDecodeError, ExactRawHsacoV1, MAX_WORKER_V2_LOAD_ENVELOPE_BYTES,
+    DescriptorLineageV1, EnvelopeDecodeError, ExactRawHsacoV1, MAX_WORKER_V2_LOAD_ENVELOPE_BYTES,
     MAX_WORKER_V2_PROOF_EVIDENCE_BYTES, MAX_WORKER_V2_RAW_HSACO_BYTES, WorkerV2LoadEnvelopeV1,
 };
 
 pub const WORKER_V2_LOAD_ENVELOPE_MAGIC: [u8; 8] = *b"FE2W2B1\0";
 pub const WORKER_V2_LOAD_ENVELOPE_VERSION: u16 = 1;
-const FIXED_HEADER_BYTES: usize = 301;
-const RECEIPT_FIELD_COUNT: usize = 7;
+const FIXED_HEADER_BYTES: usize = 77;
 
 impl WorkerV2LoadEnvelopeV1 {
     pub fn to_bytes(&self) -> Vec<u8> {
@@ -23,11 +23,10 @@ impl WorkerV2LoadEnvelopeV1 {
         let bundle = self.bundle_index().to_bytes();
         let direct_link = self.direct_link_evidence().to_bytes();
         let descriptor = self.descriptor_lineage().canonical_bytes();
-        let publication = self
+        let published_claim = self
             .published_claim()
-            .record()
             .encode_canonical()
-            .expect("validated publication record must encode canonically");
+            .expect("validated publication claim must encode canonically");
         let proofs = self
             .proof_records()
             .iter()
@@ -38,7 +37,7 @@ impl WorkerV2LoadEnvelopeV1 {
             + bundle.len()
             + direct_link.len()
             + descriptor.len()
-            + publication.len()
+            + published_claim.len()
             + proofs.iter().map(|proof| 4 + proof.len()).sum::<usize>()
             + self.raw_hsaco().bytes().len();
         let mut writer = Writer::with_capacity(total_len);
@@ -53,16 +52,15 @@ impl WorkerV2LoadEnvelopeV1 {
         writer.u32(self.raw_hsaco().bytes().len() as u32);
         writer.u16(proofs.len() as u16);
         writer.u16(0);
-        writer.u16(publication.len() as u16);
+        writer.u16(published_claim.len() as u16);
         writer.u16(0);
         writer.payload_digest(self.raw_hsaco().identity());
-        writer.receipt(self.published_claim().receipt());
         debug_assert_eq!(writer.bytes.len(), FIXED_HEADER_BYTES);
         writer.bytes(&container);
         writer.bytes(&bundle);
         writer.bytes(&direct_link);
         writer.bytes(&descriptor);
-        writer.bytes(&publication);
+        writer.bytes(&published_claim);
         for proof in proofs {
             writer.u32(proof.len() as u32);
             writer.bytes(&proof);
@@ -113,23 +111,22 @@ impl WorkerV2LoadEnvelopeV1 {
             });
         }
         require_zero(reader.u16()?)?;
-        let publication_len = usize::from(reader.u16()?);
-        if publication_len > MAX_LINK_PUBLICATION_RECORD_BYTES {
+        let published_claim_len = usize::from(reader.u16()?);
+        if published_claim_len > MAX_DURABLE_PUBLISHED_HSACO_CLAIM_BYTES {
             return Err(EnvelopeDecodeError::LengthOutOfRange {
-                field: "publication record",
-                value: publication_len as u64,
-                max: MAX_LINK_PUBLICATION_RECORD_BYTES,
+                field: "published claim",
+                value: published_claim_len as u64,
+                max: MAX_DURABLE_PUBLISHED_HSACO_CLAIM_BYTES,
             });
         }
         require_zero(reader.u16()?)?;
         let raw_identity = reader.payload_digest()?;
-        let receipt = reader.receipt()?;
 
         let fixed_components = container_len
             .checked_add(bundle_len)
             .and_then(|value| value.checked_add(direct_link_len))
             .and_then(|value| value.checked_add(descriptor_len))
-            .and_then(|value| value.checked_add(publication_len))
+            .and_then(|value| value.checked_add(published_claim_len))
             .and_then(|value| value.checked_add(raw_len))
             .ok_or(EnvelopeDecodeError::LengthOverflow)?;
         if reader.remaining_len() < fixed_components {
@@ -147,10 +144,9 @@ impl WorkerV2LoadEnvelopeV1 {
             decode_device_descriptor_table_v1(reader.take(descriptor_len)?)
                 .map_err(EnvelopeDecodeError::Descriptor)?,
         );
-        let record = LinkPublicationRecordV1::decode_canonical(reader.take(publication_len)?)
-            .map_err(EnvelopeDecodeError::Publication)?;
-        let published_claim = DurablePublishedClaimV1::new(record, receipt)
-            .map_err(EnvelopeDecodeError::Validation)?;
+        let published_claim =
+            DurablePublishedHsacoClaimV1::decode_canonical(reader.take(published_claim_len)?)
+                .map_err(EnvelopeDecodeError::PublishedClaim)?;
 
         let mut proof_records = Vec::with_capacity(proof_count);
         let mut proof_bytes = 0usize;
@@ -225,20 +221,6 @@ impl Writer {
         self.u8(0);
         self.bytes(value.bytes().as_bytes());
     }
-
-    fn receipt(&mut self, receipt: BackendPublicationReceiptProjectionV1) {
-        for field in [
-            receipt.attempt_identity(),
-            receipt.producer_identity(),
-            receipt.scope_identity(),
-            receipt.plan_commitment(),
-            receipt.upstream_evidence_identity(),
-            receipt.finalized_output_identity(),
-            receipt.publication_identity(),
-        ] {
-            self.bytes(&field);
-        }
-    }
 }
 
 struct Reader<'a> {
@@ -306,16 +288,6 @@ impl<'a> Reader<'a> {
         Ok(PayloadDigest::new(
             algorithm,
             DigestBytes::from_bytes(self.array()?),
-        ))
-    }
-
-    fn receipt(&mut self) -> Result<BackendPublicationReceiptProjectionV1, EnvelopeDecodeError> {
-        let mut fields = [[0; 32]; RECEIPT_FIELD_COUNT];
-        for field in &mut fields {
-            *field = self.array()?;
-        }
-        Ok(BackendPublicationReceiptProjectionV1::new(
-            fields[0], fields[1], fields[2], fields[3], fields[4], fields[5], fields[6],
         ))
     }
 }

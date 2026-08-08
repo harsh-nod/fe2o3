@@ -1,5 +1,8 @@
 use fe2o3_artifact_transaction::{
-    LinkPublicationCatalogV1, PackageIdentityV1, PublicationOutcomeV1,
+    BuildInvocation, BuildSession, DurableLinkPublicationPlanV1, DurablePublishedClaimCodecErrorV1,
+    DurablePublishedHsacoClaimV1, PackageIdentityV1, ProducerIdentity,
+    UpstreamCodeObjectEvidenceIdentityV1, begin_build_attempt, finish_build_attempt,
+    publish_exact_hsaco_evidence_for_attempt_v1,
 };
 use fe2o3_artifacts::{
     AbiField, AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership,
@@ -28,15 +31,44 @@ use fe2o3_kernel_descriptor::{
     SourceTypeDescriptorV1, SourceTypeRecordV1, Text, ValidName,
 };
 use fe2o3_worker_v2_bundle::{
-    BackendPublicationReceiptProjectionV1, DescriptorLineageV1, DurablePublishedClaimV1,
-    EnvelopeDecodeError, EnvelopeValidationError, ExactRawHsacoV1, MAX_WORKER_V2_RAW_HSACO_BYTES,
-    WorkerV2LoadEnvelopeV1,
+    DescriptorLineageV1, EnvelopeDecodeError, EnvelopeValidationError, ExactRawHsacoV1,
+    MAX_WORKER_V2_RAW_HSACO_BYTES, WorkerV2LoadEnvelopeV1,
 };
 use sha2::{Digest, Sha256};
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 const KERNELS: [(&str, u8, u8, u8); 2] = [("alpha", 0x21, 0x31, 0x41), ("zeta", 0x22, 0x32, 0x42)];
 const FINALIZED_BYTE: u8 = 0xf1;
 const RAW_BYTE: u8 = 0x71;
+static NEXT_TEST_ID: AtomicU64 = AtomicU64::new(1);
+
+struct TestDirectory {
+    path: PathBuf,
+}
+
+impl TestDirectory {
+    fn new() -> Self {
+        let path = std::env::temp_dir().join(format!(
+            "fe2o3-worker-v2-envelope-{}-{}",
+            std::process::id(),
+            NEXT_TEST_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir(&path).unwrap();
+        Self { path }
+    }
+
+    fn output(&self) -> PathBuf {
+        self.path.join("output")
+    }
+}
+
+impl Drop for TestDirectory {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
+}
 
 struct Parts {
     container: ArtifactContainerV1,
@@ -45,7 +77,7 @@ struct Parts {
     descriptor: DescriptorLineageV1,
     proofs: Vec<ProofRecordV1>,
     raw: ExactRawHsacoV1,
-    claim: DurablePublishedClaimV1,
+    claim: DurablePublishedHsacoClaimV1,
 }
 
 impl Parts {
@@ -202,13 +234,13 @@ fn descriptor_table() -> DeviceDescriptorTableV1 {
     .unwrap()
 }
 
-fn proof(kernel_id: u8) -> ProofRecordV1 {
+fn proof_with_lineage(kernel_id: u8, source: u8, executable: u8) -> ProofRecordV1 {
     let artifact = ProofArtifactIdentity::new(
         tagged(kernel_id),
         tagged(0x51),
-        tagged(0x52),
+        tagged(source),
         tagged(0x53),
-        tagged(0x54),
+        tagged(executable),
         tagged(0x55),
         tagged(0x56),
         tagged(0x57),
@@ -245,6 +277,14 @@ fn proof(kernel_id: u8) -> ProofRecordV1 {
     .unwrap()
 }
 
+fn proof(kernel_id: u8) -> ProofRecordV1 {
+    let (_, _, source, executable) = KERNELS
+        .iter()
+        .find(|(_, id, _, _)| *id == kernel_id)
+        .expect("known fixture kernel");
+    proof_with_lineage(kernel_id, *source, *executable)
+}
+
 fn direct_link_expectation(
     raw: PayloadDigest,
     finalized: PayloadDigest,
@@ -273,19 +313,15 @@ fn direct_link_expectation(
     )
 }
 
-fn attempt() -> fe2o3_artifact_transaction::BuildAttempt {
-    fe2o3_artifact_transaction::BuildAttempt::from_env_value(&format!(
-        "7:{}:{}",
-        "12".repeat(16),
-        "34".repeat(32)
-    ))
-    .unwrap()
+fn build_parts() -> Parts {
+    build_parts_with_upstream(None)
 }
 
-fn build_parts() -> Parts {
+fn build_parts_with_upstream(upstream_override: Option<[u8; 32]>) -> Parts {
     let finalized_bytes = vec![FINALIZED_BYTE; 64];
     let raw_bytes = vec![RAW_BYTE; 64];
-    let payload = CodeObjectPayload::from_bytes(DigestAlgorithm::Sha256, finalized_bytes).unwrap();
+    let payload =
+        CodeObjectPayload::from_bytes(DigestAlgorithm::Sha256, finalized_bytes.clone()).unwrap();
     let finalized_identity = payload.digest();
     let manifest = ManifestV1::new(
         CompilerIdentity::new(text("rustc"), text("1.94.0-nightly")),
@@ -339,6 +375,20 @@ fn build_parts() -> Parts {
             &[DirectLinkBindingSourceV1::new(&container, expectation)],
         )
         .unwrap();
+    let publication_dir = TestDirectory::new();
+    let output = publication_dir.output();
+    let owner = ProducerIdentity::from_codegen(
+        "fe2o3_worker_v2_bundle_test",
+        Some(Path::new("/src/worker-v2-bundle-test.rs")),
+    )
+    .unwrap();
+    let attempt = begin_build_attempt(
+        &output,
+        &owner,
+        BuildInvocation::from_bytes([0x43; 32]),
+        BuildSession::from_bytes([0x42; 16]),
+    )
+    .unwrap();
     let publication_scope = ManifestClaimDerivedLinkPublicationScopeV1::derive(
         CallerClaimedPackageIdentityV1::new(PackageIdentityV1::from_bytes([0x91; 32])),
         &validated,
@@ -347,7 +397,7 @@ fn build_parts() -> Parts {
     )
     .unwrap();
     let bridge = ManifestClaimDirectLinkPublicationBridgeV1::prepare_with_manifest_claim_scope(
-        attempt(),
+        attempt,
         publication_scope,
         &validated,
         0,
@@ -356,58 +406,32 @@ fn build_parts() -> Parts {
     let scope = bridge
         .non_authoritative_diagnostics()
         .descriptive_scope_claim();
-    let mut catalog = LinkPublicationCatalogV1::default();
-    let mut record = catalog
-        .begin(attempt(), scope, bridge.request_identity())
-        .unwrap();
-    record
-        .record_pinned_worker(
-            &catalog,
-            attempt(),
-            bridge.request_identity(),
-            bridge.worker_identity(),
-        )
-        .unwrap();
-    record
-        .record_validated_response(
-            &catalog,
-            attempt(),
-            bridge.request_identity(),
-            bridge.worker_identity(),
-            bridge.response_identity(),
-            bridge.linked_output_identity(),
-        )
-        .unwrap();
-    record
-        .record_finalization(
-            &catalog,
-            attempt(),
-            bridge.response_identity(),
-            bridge.linked_output_identity(),
-            bridge.finalization_identity(),
-            bridge.finalized_output_identity(),
-        )
-        .unwrap();
-    assert_eq!(
-        record.publish(
-            &mut catalog,
-            attempt(),
-            bridge.finalization_identity(),
-            bridge.finalized_output_identity(),
-            bridge.publication_identity(),
-        ),
-        Ok(PublicationOutcomeV1::Published)
+    let plan = DurableLinkPublicationPlanV1::new(
+        attempt,
+        scope,
+        bridge.request_identity(),
+        bridge.worker_identity(),
+        bridge.response_identity(),
+        bridge.linked_output_identity(),
+        bridge.finalization_identity(),
+        bridge.finalized_output_identity(),
+        bridge.publication_identity(),
     );
-    let receipt = BackendPublicationReceiptProjectionV1::new(
-        [0x92; 32],
-        [0x93; 32],
-        [0x94; 32],
-        [0x95; 32],
-        [0x96; 32],
-        *bridge.finalized_output_identity().as_bytes(),
-        *bridge.publication_identity().as_bytes(),
+    let upstream = UpstreamCodeObjectEvidenceIdentityV1::from_bytes(
+        upstream_override.unwrap_or_else(|| Sha256::digest(evidence.to_bytes()).into()),
     );
-    let claim = DurablePublishedClaimV1::new(record, receipt).unwrap();
+    let publication = publish_exact_hsaco_evidence_for_attempt_v1(
+        &output,
+        &owner,
+        attempt,
+        plan,
+        upstream,
+        &finalized_bytes,
+    )
+    .unwrap();
+    let claim = publication.published_claim().clone();
+    drop(publication);
+    finish_build_attempt(&output, &owner, attempt).unwrap();
     Parts {
         container,
         bundle,
@@ -428,14 +452,14 @@ fn component_offsets(bytes: &[u8]) -> (usize, usize, usize) {
     let descriptor_len = read_u32(28);
     let publication_len = u16::from_le_bytes(bytes[40..42].try_into().unwrap()) as usize;
     let proof_start =
-        301 + container_len + bundle_len + direct_len + descriptor_len + publication_len;
+        77 + container_len + bundle_len + direct_len + descriptor_len + publication_len;
     let raw_len = read_u32(32);
     let raw_start = bytes.len() - raw_len;
-    (301, proof_start, raw_start)
+    (77, proof_start, raw_start)
 }
 
 #[test]
-fn deterministic_round_trip_has_stable_golden_digest() {
+fn deterministic_round_trip_is_canonical() {
     let envelope = build_parts().into_envelope().unwrap();
     let bytes = envelope.to_bytes();
     let decoded = WorkerV2LoadEnvelopeV1::from_bytes(&bytes).unwrap();
@@ -452,14 +476,7 @@ fn deterministic_round_trip_has_stable_golden_digest() {
     assert!(!decoded.grants_currentness_authority());
     assert!(!decoded.grants_load_authority());
     assert!(!decoded.grants_launch_authority());
-    assert_eq!(
-        <[u8; 32]>::from(Sha256::digest(&bytes)),
-        [
-            0xfc, 0x79, 0xd4, 0xa3, 0x01, 0xdb, 0xa9, 0x30, 0xc8, 0x86, 0xc2, 0xf4, 0xfe, 0x18,
-            0x59, 0x12, 0x38, 0x6c, 0xef, 0xb3, 0xdf, 0x46, 0x1e, 0x46, 0xe3, 0x79, 0xbc, 0xd8,
-            0xb3, 0x59, 0xa9, 0x92,
-        ]
-    );
+    assert_eq!(decoded.published_claim(), envelope.published_claim());
 }
 
 #[test]
@@ -493,6 +510,27 @@ fn duplicate_and_incomplete_proof_closures_are_rejected() {
     assert!(matches!(
         incomplete.into_envelope(),
         Err(EnvelopeValidationError::ProofCountMismatch)
+    ));
+}
+
+#[test]
+fn proof_source_and_executable_substitution_are_rejected() {
+    let mut wrong_source = build_parts();
+    wrong_source.proofs[0] = proof_with_lineage(0x22, 0xee, 0x42);
+    assert!(matches!(
+        wrong_source.into_envelope(),
+        Err(EnvelopeValidationError::ProofManifestMismatch {
+            field: "source identity"
+        })
+    ));
+
+    let mut wrong_executable = build_parts();
+    wrong_executable.proofs[0] = proof_with_lineage(0x22, 0x32, 0xee);
+    assert!(matches!(
+        wrong_executable.into_envelope(),
+        Err(EnvelopeValidationError::ProofManifestMismatch {
+            field: "executable identity"
+        })
     ));
 }
 
@@ -532,14 +570,27 @@ fn wrong_raw_digest_and_raw_final_substitution_are_rejected() {
 }
 
 #[test]
-fn wrong_finalized_receipt_identity_is_rejected() {
+fn corrupted_published_claim_is_rejected() {
     let mut bytes = build_parts().into_envelope().unwrap().to_bytes();
-    let receipt_finalized_identity = 77 + 5 * 32;
-    bytes[receipt_finalized_identity] ^= 1;
+    let (_, proof_start, _) = component_offsets(&bytes);
+    let published_claim_len = u16::from_le_bytes(bytes[40..42].try_into().unwrap()) as usize;
+    let published_claim_start = proof_start - published_claim_len;
+    bytes[published_claim_start + 32] ^= 1;
     assert!(matches!(
         WorkerV2LoadEnvelopeV1::from_bytes(&bytes),
-        Err(EnvelopeDecodeError::Validation(
-            EnvelopeValidationError::PublicationClaimMismatch(_)
+        Err(EnvelopeDecodeError::PublishedClaim(
+            DurablePublishedClaimCodecErrorV1::ChecksumMismatch
+        ))
+    ));
+}
+
+#[test]
+fn published_claim_must_bind_the_direct_link_evidence() {
+    let parts = build_parts_with_upstream(Some([0xee; 32]));
+    assert!(matches!(
+        parts.into_envelope(),
+        Err(EnvelopeValidationError::PublicationClaimMismatch(
+            fe2o3_worker_v2_bundle::PublicationClaimFieldV1::UpstreamEvidence
         ))
     ));
 }

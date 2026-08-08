@@ -1,6 +1,5 @@
 use fe2o3_artifact_transaction::{
-    BackendPublicationReceiptV1, LinkPublicationPhaseV1, LinkPublicationRecordV1,
-    LinkPublicationStateV1, MAX_DURABLE_FINALIZED_ARTIFACT_BYTES,
+    DurablePublishedHsacoClaimV1, MAX_DURABLE_FINALIZED_ARTIFACT_BYTES,
 };
 use fe2o3_artifacts::{
     ArtifactContainerV1, BundleIndexV1, CallerClaimedPackageIdentityV1, CodeObjectFormat,
@@ -54,132 +53,6 @@ impl ExactRawHsacoV1 {
     }
 }
 
-/// Serializable projection of every public backend-receipt field.
-///
-/// The projection cannot be converted back into `BackendPublicationReceiptV1`
-/// and carries no receipt, currentness, load, or launch authority.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct BackendPublicationReceiptProjectionV1 {
-    attempt_identity: [u8; 32],
-    producer_identity: [u8; 32],
-    scope_identity: [u8; 32],
-    plan_commitment: [u8; 32],
-    upstream_evidence_identity: [u8; 32],
-    finalized_output_identity: [u8; 32],
-    publication_identity: [u8; 32],
-}
-
-impl BackendPublicationReceiptProjectionV1 {
-    #[allow(clippy::too_many_arguments)]
-    pub const fn new(
-        attempt_identity: [u8; 32],
-        producer_identity: [u8; 32],
-        scope_identity: [u8; 32],
-        plan_commitment: [u8; 32],
-        upstream_evidence_identity: [u8; 32],
-        finalized_output_identity: [u8; 32],
-        publication_identity: [u8; 32],
-    ) -> Self {
-        Self {
-            attempt_identity,
-            producer_identity,
-            scope_identity,
-            plan_commitment,
-            upstream_evidence_identity,
-            finalized_output_identity,
-            publication_identity,
-        }
-    }
-
-    pub const fn from_receipt(receipt: BackendPublicationReceiptV1) -> Self {
-        Self::new(
-            receipt.attempt_identity(),
-            receipt.producer_identity(),
-            receipt.scope_identity(),
-            receipt.plan_commitment(),
-            receipt.upstream_evidence_identity(),
-            receipt.finalized_output_identity(),
-            receipt.publication_identity(),
-        )
-    }
-
-    pub const fn attempt_identity(self) -> [u8; 32] {
-        self.attempt_identity
-    }
-
-    pub const fn producer_identity(self) -> [u8; 32] {
-        self.producer_identity
-    }
-
-    pub const fn scope_identity(self) -> [u8; 32] {
-        self.scope_identity
-    }
-
-    pub const fn plan_commitment(self) -> [u8; 32] {
-        self.plan_commitment
-    }
-
-    pub const fn upstream_evidence_identity(self) -> [u8; 32] {
-        self.upstream_evidence_identity
-    }
-
-    pub const fn finalized_output_identity(self) -> [u8; 32] {
-        self.finalized_output_identity
-    }
-
-    pub const fn publication_identity(self) -> [u8; 32] {
-        self.publication_identity
-    }
-}
-
-/// Canonical published record paired with a matching inert receipt projection.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DurablePublishedClaimV1 {
-    record: LinkPublicationRecordV1,
-    receipt: BackendPublicationReceiptProjectionV1,
-}
-
-impl DurablePublishedClaimV1 {
-    pub fn new(
-        record: LinkPublicationRecordV1,
-        receipt: BackendPublicationReceiptProjectionV1,
-    ) -> Result<Self, EnvelopeValidationError> {
-        validate_published_record(&record)?;
-        validate_receipt_projection(&record, receipt)?;
-        Ok(Self { record, receipt })
-    }
-
-    pub fn from_receipt(
-        record: LinkPublicationRecordV1,
-        receipt: BackendPublicationReceiptV1,
-    ) -> Result<Self, EnvelopeValidationError> {
-        Self::new(
-            record,
-            BackendPublicationReceiptProjectionV1::from_receipt(receipt),
-        )
-    }
-
-    pub const fn record(&self) -> &LinkPublicationRecordV1 {
-        &self.record
-    }
-
-    pub const fn receipt(&self) -> BackendPublicationReceiptProjectionV1 {
-        self.receipt
-    }
-
-    pub const fn grants_currentness_authority(&self) -> bool {
-        false
-    }
-
-    pub const fn grants_load_authority(&self) -> bool {
-        false
-    }
-
-    pub const fn grants_launch_authority(&self) -> bool {
-        false
-    }
-}
-
 /// Exact canonical descriptor table retained as inert compiler-lineage data.
 ///
 /// Recovered admission must still inspect the finalized HSACO and verify that
@@ -210,8 +83,10 @@ impl DescriptorLineageV1 {
 
 /// Bounded canonical inputs needed by a future recovered Worker V2 admission.
 ///
-/// Construction establishes structural and content closure only. It does not
-/// authenticate proof/compiler provenance or publication currentness.
+/// Construction establishes canonical structural closure and joins the proof
+/// kernel, source, and executable identities to the manifest. It does not
+/// authenticate proof/compiler provenance, inspect the finalized HSACO, or
+/// establish publication currentness.
 #[derive(Debug, Eq, PartialEq)]
 pub struct WorkerV2LoadEnvelopeV1 {
     container: ArtifactContainerV1,
@@ -220,7 +95,7 @@ pub struct WorkerV2LoadEnvelopeV1 {
     descriptor_lineage: DescriptorLineageV1,
     proof_records: Vec<ProofRecordV1>,
     raw_hsaco: ExactRawHsacoV1,
-    published_claim: DurablePublishedClaimV1,
+    published_claim: DurablePublishedHsacoClaimV1,
 }
 
 impl WorkerV2LoadEnvelopeV1 {
@@ -232,7 +107,7 @@ impl WorkerV2LoadEnvelopeV1 {
         descriptor_lineage: DescriptorLineageV1,
         mut proof_records: Vec<ProofRecordV1>,
         raw_hsaco: ExactRawHsacoV1,
-        published_claim: DurablePublishedClaimV1,
+        published_claim: DurablePublishedHsacoClaimV1,
     ) -> Result<Self, EnvelopeValidationError> {
         validate_raw_hsaco(raw_hsaco.identity, &raw_hsaco.bytes)?;
         let derived = BundleIndexV1::from_containers(std::slice::from_ref(&container))?;
@@ -292,7 +167,7 @@ impl WorkerV2LoadEnvelopeV1 {
         &self.raw_hsaco
     }
 
-    pub const fn published_claim(&self) -> &DurablePublishedClaimV1 {
+    pub const fn published_claim(&self) -> &DurablePublishedHsacoClaimV1 {
         &self.published_claim
     }
 
@@ -466,56 +341,32 @@ fn canonicalize_and_validate_proofs(
             max: MAX_WORKER_V2_PROOF_EVIDENCE_BYTES,
         });
     }
-    if proof_records
-        .iter()
-        .map(|record| record.target().artifact().kernel_id())
-        .zip(container.manifest().kernels())
-        .any(|(proof, kernel)| {
-            proof.algorithm() != DigestAlgorithm::Sha256
-                || proof.bytes().as_bytes() != kernel.kernel_id().as_bytes()
-        })
-    {
-        return Err(EnvelopeValidationError::ProofKernelSetMismatch);
-    }
-    Ok(())
-}
-
-fn validate_published_record(
-    record: &LinkPublicationRecordV1,
-) -> Result<(), EnvelopeValidationError> {
-    match record.state() {
-        LinkPublicationStateV1::Active(LinkPublicationPhaseV1::Published) => Ok(()),
-        LinkPublicationStateV1::Active(actual)
-        | LinkPublicationStateV1::Invalidated {
-            prior_phase: actual,
-            ..
-        } => Err(EnvelopeValidationError::PublicationRecordNotPublished { actual }),
-    }
-}
-
-fn validate_receipt_projection(
-    record: &LinkPublicationRecordV1,
-    receipt: BackendPublicationReceiptProjectionV1,
-) -> Result<(), EnvelopeValidationError> {
-    if receipt.finalized_output_identity
-        != *record
-            .finalized_output()
-            .expect("published record must have finalized output")
-            .as_bytes()
-    {
-        return Err(EnvelopeValidationError::PublicationClaimMismatch(
-            PublicationClaimFieldV1::ReceiptFinalizedOutput,
-        ));
-    }
-    if receipt.publication_identity
-        != *record
-            .publication()
-            .expect("published record must have publication")
-            .as_bytes()
-    {
-        return Err(EnvelopeValidationError::PublicationClaimMismatch(
-            PublicationClaimFieldV1::ReceiptPublication,
-        ));
+    for (record, kernel) in proof_records.iter().zip(container.manifest().kernels()) {
+        let artifact = record.target().artifact();
+        let kernel_id = artifact.kernel_id();
+        if kernel_id.algorithm() != DigestAlgorithm::Sha256
+            || kernel_id.bytes().as_bytes() != kernel.kernel_id().as_bytes()
+        {
+            return Err(EnvelopeValidationError::ProofKernelSetMismatch);
+        }
+        for (proof, manifest, field) in [
+            (
+                artifact.source_tree_digest(),
+                kernel.source_digest(),
+                "source identity",
+            ),
+            (
+                artifact.executable_digest(),
+                kernel.executable_digest(),
+                "executable identity",
+            ),
+        ] {
+            if proof.algorithm() != DigestAlgorithm::Sha256
+                || proof.bytes().as_bytes() != manifest.as_bytes()
+            {
+                return Err(EnvelopeValidationError::ProofManifestMismatch { field });
+            }
+        }
     }
     Ok(())
 }
@@ -523,15 +374,15 @@ fn validate_receipt_projection(
 fn validate_publication_claim(
     container: &ArtifactContainerV1,
     validated: &fe2o3_artifacts::ValidatedDirectLinkBundleEvidenceV1<'_>,
-    claim: &DurablePublishedClaimV1,
+    claim: &DurablePublishedHsacoClaimV1,
 ) -> Result<(), EnvelopeValidationError> {
-    validate_published_record(&claim.record)?;
-    let package = CallerClaimedPackageIdentityV1::new(claim.record.scope().package());
+    let plan = claim.plan();
+    let package = CallerClaimedPackageIdentityV1::new(plan.scope().package());
     let scope =
         ManifestClaimDerivedLinkPublicationScopeV1::derive(package, validated, 0, container)
             .map_err(|_| EnvelopeValidationError::PublicationBridge)?;
     let bridge = ManifestClaimDirectLinkPublicationBridgeV1::prepare_with_manifest_claim_scope(
-        claim.record.attempt(),
+        plan.attempt(),
         scope,
         validated,
         0,
@@ -540,38 +391,37 @@ fn validate_publication_claim(
     let expected_scope = bridge
         .non_authoritative_diagnostics()
         .descriptive_scope_claim();
-    let record = &claim.record;
     let checks = [
         (
-            record.scope() == expected_scope,
+            plan.scope() == expected_scope,
             PublicationClaimFieldV1::Scope,
         ),
         (
-            record.request() == bridge.request_identity(),
+            plan.request() == bridge.request_identity(),
             PublicationClaimFieldV1::Request,
         ),
         (
-            record.worker() == Some(bridge.worker_identity()),
+            plan.worker() == bridge.worker_identity(),
             PublicationClaimFieldV1::Worker,
         ),
         (
-            record.response() == Some(bridge.response_identity()),
+            plan.response() == bridge.response_identity(),
             PublicationClaimFieldV1::Response,
         ),
         (
-            record.linked_output() == Some(bridge.linked_output_identity()),
+            plan.linked_output() == bridge.linked_output_identity(),
             PublicationClaimFieldV1::LinkedOutput,
         ),
         (
-            record.finalization() == Some(bridge.finalization_identity()),
+            plan.finalization() == bridge.finalization_identity(),
             PublicationClaimFieldV1::Finalization,
         ),
         (
-            record.finalized_output() == Some(bridge.finalized_output_identity()),
+            plan.finalized_output() == bridge.finalized_output_identity(),
             PublicationClaimFieldV1::FinalizedOutput,
         ),
         (
-            record.publication() == Some(bridge.publication_identity()),
+            plan.publication() == bridge.publication_identity(),
             PublicationClaimFieldV1::Publication,
         ),
     ];
@@ -580,7 +430,6 @@ fn validate_publication_claim(
             return Err(EnvelopeValidationError::PublicationClaimMismatch(field));
         }
     }
-    validate_receipt_projection(record, claim.receipt)?;
     let evidence_digest = validated
         .evidence()
         .digest(DIRECT_LINK_EVIDENCE_DIGEST_ALGORITHM);
@@ -588,6 +437,11 @@ fn validate_publication_claim(
         return Err(EnvelopeValidationError::UnsupportedDigestAlgorithm {
             field: "direct-link evidence",
         });
+    }
+    if claim.upstream_evidence().as_bytes() != *evidence_digest.bytes().as_bytes() {
+        return Err(EnvelopeValidationError::PublicationClaimMismatch(
+            PublicationClaimFieldV1::UpstreamEvidence,
+        ));
     }
     Ok(())
 }
