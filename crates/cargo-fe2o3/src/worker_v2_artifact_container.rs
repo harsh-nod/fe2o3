@@ -625,6 +625,7 @@ pub(crate) fn derive_required_worker_v2_publication_plan_v1(
 }
 
 #[doc(hidden)]
+#[allow(dead_code)] // Shared verbatim with the standalone measured-input fixture.
 pub(crate) fn canonical_worker_v2_container_for_fixture_v1(
     exact_finalized_hsaco: &[u8],
 ) -> Result<ArtifactContainerV1, WorkerV2ArtifactContainerAssemblyErrorV1> {
@@ -1107,6 +1108,8 @@ mod tests {
         WorkerV2ResumeStoreV1, envelope_name, recover_worker_v2_intent_v1,
         restart_admission_commitment_with_inputs_v1,
     };
+    #[cfg(feature = "worker-v2-fault-injection-test-only")]
+    use fe2o3_artifact_transaction::recover_published_hsaco_claim_for_attempt_v1;
     use fe2o3_artifact_transaction::{
         AtomicPublicationIdentityV1, BuildInvocation, BuildSession, CanonicalLinkRequestIdentityV1,
         FinalizationIdentityV1, FinalizedOutputIdentityV1, KernelSetIdentityV1,
@@ -1114,7 +1117,6 @@ mod tests {
         TargetIdentityV1, ValidatedResponseIdentityV1, WorkerV2PublicationIntentIdentityV1,
         begin_build_attempt, finish_build_attempt, persist_worker_v2_publication_intent_v1,
         producer_package_identity_v1, publish_exact_hsaco_evidence_for_attempt_v1,
-        recover_published_hsaco_claim_for_attempt_v1,
     };
     use fe2o3_artifacts::{
         CallerClaimedPackageIdentityV1, ConfigurationEntry, DirectLinkBindingExpectationV1,
@@ -1139,6 +1141,7 @@ mod tests {
     static NEXT_TEST: AtomicU64 = AtomicU64::new(1);
     #[cfg(feature = "worker-v2-fault-injection-test-only")]
     const ENVELOPE_FAULT_HELPER_DIR_ENV: &str = "FE2O3_TEST_ENVELOPE_FAULT_HELPER_DIR";
+    const ENVELOPE_FAULT_HELPER_ATTEMPT_ENV: &str = "FE2O3_TEST_ENVELOPE_FAULT_HELPER_ATTEMPT";
 
     struct TestDirectory(PathBuf);
 
@@ -1523,6 +1526,19 @@ mod tests {
                     && name.ends_with(".capsule")
             })
             .unwrap()
+    }
+
+    fn envelope_input_residue(directory: &TestDirectory) -> Vec<PathBuf> {
+        fs::read_dir(&directory.0)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with(".fe2o3-worker-v2-envelope-inputs-v1-")
+            })
+            .collect()
     }
 
     fn field(spec: FrozenFieldV1) -> DescriptorFieldAssemblyV1 {
@@ -2126,6 +2142,60 @@ mod tests {
             .unwrap();
         assert!(matches!(completed, ResumeMarkerStateV1::Completed { .. }));
         assert_eq!(restarted.load().unwrap(), Some(completed));
+    }
+
+    #[test]
+    #[cfg(feature = "worker-v2-fault-injection-test-only")]
+    fn capsule_temp_crash_residue_is_scavenged_under_the_package_lock() {
+        let directory = TestDirectory::new();
+        let (publisher, envelope, _) = canonical_envelope_fixture(&directory);
+        let attempt = envelope.published_claim().plan().attempt();
+        let inputs = WorkerV2EnvelopeInputsV1::new(
+            envelope.direct_link_evidence().clone(),
+            envelope.proof_records().to_vec(),
+            envelope.raw_hsaco().clone(),
+        )
+        .unwrap();
+        fs::write(directory.0.join("fault-capsule-input"), inputs.to_bytes()).unwrap();
+
+        let interrupted = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg("worker_v2_artifact_container::tests::capsule_temp_fault_helper")
+            .env(ENVELOPE_FAULT_HELPER_DIR_ENV, &directory.0)
+            .env(ENVELOPE_FAULT_HELPER_ATTEMPT_ENV, attempt.to_env_value())
+            .env(
+                "FE2O3_TEST_WORKER_V2_FAULT_POINT_V1",
+                "envelope-inputs-temp-synced",
+            )
+            .status()
+            .unwrap();
+        assert_eq!(interrupted.code(), Some(86));
+        assert_eq!(envelope_input_residue(&directory).len(), 1);
+
+        let store = WorkerV2ResumeStoreV1::open(&directory.0, &publisher).unwrap();
+        assert_eq!(store.load().unwrap(), None);
+        assert!(envelope_input_residue(&directory).is_empty());
+    }
+
+    #[test]
+    #[cfg(feature = "worker-v2-fault-injection-test-only")]
+    fn capsule_temp_fault_helper() {
+        let (Some(directory), Some(attempt)) = (
+            std::env::var_os(ENVELOPE_FAULT_HELPER_DIR_ENV),
+            std::env::var(ENVELOPE_FAULT_HELPER_ATTEMPT_ENV).ok(),
+        ) else {
+            return;
+        };
+        let directory = PathBuf::from(directory);
+        let publisher = producer("alpha_zeta", "/workspace/envelope.rs");
+        let attempt = BuildAttempt::from_env_value(&attempt).unwrap();
+        let inputs = WorkerV2EnvelopeInputsV1::from_bytes(
+            &fs::read(directory.join("fault-capsule-input")).unwrap(),
+        )
+        .unwrap();
+        let store = WorkerV2ResumeStoreV1::open(&directory, &publisher).unwrap();
+        store.persist_envelope_inputs(attempt, &inputs).unwrap();
+        panic!("envelope-inputs-temp-synced fault was not injected");
     }
 
     #[test]

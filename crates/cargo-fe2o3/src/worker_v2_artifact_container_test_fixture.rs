@@ -73,6 +73,7 @@ pub(super) fn alpha_zeta_fixture(mutation: ProfileMutation) -> AlphaZetaFixture 
     }
 }
 
+#[allow(dead_code)] // Used only by the standalone production-handoff fixture target.
 pub(super) fn canonical_alpha_zeta_unfinalized_fixture() -> Vec<u8> {
     let table = encode_device_descriptor_table_v1(&descriptor_table(
         AccessMode::ReadWrite,

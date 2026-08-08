@@ -18,22 +18,43 @@ use fe2o3_artifacts::{
 };
 use fe2o3_worker_v2_bundle::{ExactRawHsacoV1, WorkerV2EnvelopeInputsV1};
 
+#[allow(dead_code)]
 #[path = "../../src/worker_v2_artifact_container.rs"]
 mod worker_v2_artifact_container;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let arguments = std::env::args_os().skip(1).collect::<Vec<_>>();
-    let [raw_path, finalized_path, output_path]: [PathBuf; 3] = arguments
-        .into_iter()
-        .map(PathBuf::from)
-        .collect::<Vec<_>>()
-        .try_into()
-        .map_err(|_| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "usage: envelope-input-fixture RAW FINALIZED OUTPUT",
-            )
-        })?;
+    if !(3..=4).contains(&arguments.len()) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "usage: envelope-input-fixture RAW FINALIZED OUTPUT [IDENTITY-SEED]",
+        )
+        .into());
+    }
+    let raw_path = PathBuf::from(arguments[0].as_os_str());
+    let finalized_path = PathBuf::from(arguments[1].as_os_str());
+    let output_path = PathBuf::from(arguments[2].as_os_str());
+    let identity_seed = arguments
+        .get(3)
+        .map(|value| {
+            value
+                .to_str()
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "identity seed is not UTF-8",
+                    )
+                })?
+                .parse::<u8>()
+                .map_err(|_| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "identity seed is not a byte",
+                    )
+                })
+        })
+        .transpose()?
+        .unwrap_or(0);
     let raw = fs::read(raw_path)?;
     let finalized = fs::read(finalized_path)?;
     let container =
@@ -41,7 +62,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let bundle = BundleIndexV1::from_containers(std::slice::from_ref(&container))?;
     let raw_hsaco = ExactRawHsacoV1::from_bytes(raw)?;
     let finalized_identity = DigestAlgorithm::Sha256.calculate(&finalized);
-    let tagged = |seed| payload_digest([seed; 32]);
+    let tagged = |seed: u8| payload_digest([seed.wrapping_add(identity_seed); 32]);
     let expectation = DirectLinkBindingExpectationV1::new(
         DirectLinkRequestIdentityV1::new(tagged(0x71)),
         DirectLinkWorkerIdentityV1::new(

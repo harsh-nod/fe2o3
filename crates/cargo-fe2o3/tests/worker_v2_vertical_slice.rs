@@ -20,6 +20,7 @@ use sha2::{Digest, Sha256};
 
 use fe2o3_hsaco_finalize::finalize_unfinalized;
 
+#[allow(dead_code)]
 #[path = "../src/worker_v2_artifact_container_test_fixture.rs"]
 mod alpha_zeta_support;
 
@@ -526,6 +527,13 @@ fn publication_fixture_with_envelope(
 }
 
 fn required_alpha_zeta_publication_fixture(directory: &TestDirectory) -> PublicationFixture {
+    required_alpha_zeta_publication_fixture_with_seed(directory, 0)
+}
+
+fn required_alpha_zeta_publication_fixture_with_seed(
+    directory: &TestDirectory,
+    identity_seed: u8,
+) -> PublicationFixture {
     let provider = alpha_zeta_support::canonical_alpha_zeta_unfinalized_fixture();
     let mut raw_worker_output = provider.clone();
     let text = raw_worker_output
@@ -542,8 +550,10 @@ fn required_alpha_zeta_publication_fixture(directory: &TestDirectory) -> Publica
     let capsule = directory.0.join("envelope-inputs.capsule");
     fs::write(&raw_path, &raw_worker_output).unwrap();
     fs::write(&finalized_path, &expected_publication).unwrap();
+    let _ = fs::remove_file(&capsule);
     let generated = Command::new(envelope_input_fixture())
         .args([&raw_path, &finalized_path, &capsule])
+        .arg(identity_seed.to_string())
         .output()
         .unwrap();
     assert!(generated.status.success(), "{}", stderr(&generated));
@@ -590,6 +600,19 @@ fn restart_records(directory: &TestDirectory) -> Vec<PathBuf> {
             name.ends_with(".record")
                 && (name.starts_with(".fe2o3-worker-v2-publication-intent-v1-")
                     || name.starts_with(".fe2o3-cargo-worker-v2-resume-v1-"))
+        })
+        .collect()
+}
+
+fn envelope_input_residue(directory: &TestDirectory) -> Vec<PathBuf> {
+    fs::read_dir(directory.0.join("artifacts"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with(".fe2o3-worker-v2-envelope-inputs-v1-")
         })
         .collect()
 }
@@ -702,6 +725,83 @@ fn required_cov6_production_wrapper_publishes_a_canonical_envelope() {
         })
         .count();
     assert_eq!(envelope_count, 1);
+    assert!(envelope_input_residue(&directory).is_empty());
+}
+
+#[test]
+fn repeated_required_builds_do_not_accumulate_capsules_or_temps() {
+    let directory = TestDirectory::new();
+    for seed in [0, 1, 2] {
+        let fixture = required_alpha_zeta_publication_fixture_with_seed(&directory, seed);
+        let _ = fs::remove_file(directory.0.join("spawned"));
+        let result = run_wrapper_with_options(
+            &directory,
+            &fixture.config,
+            "publish-valid",
+            fixture.cov6,
+            None,
+        );
+        assert!(result.status.success(), "seed {seed}: {}", stderr(&result));
+        assert!(restart_records(&directory).is_empty(), "seed {seed}");
+        assert!(envelope_input_residue(&directory).is_empty(), "seed {seed}");
+    }
+}
+
+#[test]
+#[cfg(feature = "worker-v2-fault-injection-test-only")]
+fn required_pending_marker_crash_fails_closed_without_capsule_residue() {
+    let directory = TestDirectory::new();
+    let fixture = required_alpha_zeta_publication_fixture(&directory);
+    let interrupted = run_wrapper_with_options(
+        &directory,
+        &fixture.config,
+        "publish-valid",
+        fixture.cov6,
+        Some("pending-marker"),
+    );
+    assert_eq!(
+        interrupted.status.code(),
+        Some(86),
+        "{}",
+        stderr(&interrupted)
+    );
+    assert_eq!(envelope_input_residue(&directory).len(), 1);
+    fs::remove_file(directory.0.join("spawned")).unwrap();
+
+    let recovered = run_wrapper_with_options(&directory, &fixture.config, "fail", true, None);
+    assert!(!recovered.status.success());
+    assert!(!directory.0.join("spawned").exists());
+    assert!(restart_records(&directory).is_empty());
+    assert!(envelope_input_residue(&directory).is_empty());
+}
+
+#[test]
+#[cfg(feature = "worker-v2-fault-injection-test-only")]
+fn required_finished_crash_recovery_removes_capsule_residue() {
+    let directory = TestDirectory::new();
+    let fixture = required_alpha_zeta_publication_fixture(&directory);
+    let interrupted = run_wrapper_with_options(
+        &directory,
+        &fixture.config,
+        "publish-valid",
+        fixture.cov6,
+        Some("finished"),
+    );
+    assert_eq!(
+        interrupted.status.code(),
+        Some(86),
+        "{}",
+        stderr(&interrupted)
+    );
+    assert_eq!(envelope_input_residue(&directory).len(), 1);
+    fs::remove_file(directory.0.join("spawned")).unwrap();
+    fs::remove_file(directory.0.join("envelope-inputs.capsule")).unwrap();
+
+    let recovered = run_wrapper_with_options(&directory, &fixture.config, "fail", true, None);
+    assert!(recovered.status.success(), "{}", stderr(&recovered));
+    assert!(!directory.0.join("spawned").exists());
+    assert!(restart_records(&directory).is_empty());
+    assert!(envelope_input_residue(&directory).is_empty());
 }
 
 #[test]

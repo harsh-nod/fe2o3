@@ -54,6 +54,7 @@ const ENVELOPE_SUFFIX: &str = ".envelope";
 const ENVELOPE_INPUTS_PREFIX: &str = ".fe2o3-worker-v2-envelope-inputs-v1-";
 const ENVELOPE_INPUTS_SUFFIX: &str = ".capsule";
 const ENVELOPE_INPUTS_NAME_DOMAIN: &[u8] = b"FE2O3/WORKER-V2-ENVELOPE-INPUTS-NAME/V1\0";
+const MAX_ENVELOPE_INPUT_RESIDUE_ENTRIES: usize = 256;
 const RECEIPT_FIELDS: usize = 7;
 const PREVIOUS_MARKER_BYTES: usize =
     MARKER_MAGIC.len() + 2 + 1 + 1 + 32 + 8 + 16 + 32 + 32 + 32 + RECEIPT_FIELDS * 32 + 32;
@@ -151,6 +152,7 @@ impl WorkerV2PublicationKindV1 {
         }
     }
 
+    #[allow(dead_code)] // Retained for fixture and state-machine assertions.
     pub(crate) const fn is_finalized(self) -> bool {
         matches!(self, Self::Finalized | Self::FinalizedEnvelopeRequired)
     }
@@ -280,6 +282,7 @@ pub(crate) enum PreparedWorkerV2PublicationV1 {
 }
 
 impl PreparedWorkerV2PublicationV1 {
+    #[allow(dead_code)] // Retained for fixture and state-machine assertions.
     pub(crate) const fn kind(&self) -> WorkerV2PublicationKindV1 {
         match self {
             Self::Raw(_) => WorkerV2PublicationKindV1::Raw,
@@ -395,6 +398,12 @@ pub(crate) fn persist_admitted_worker_v2_intent_v1(
         &exact_bytes,
         envelope_inputs_identity,
     );
+    // A required marker is recoverable only after its exact capsule name and bytes are durable.
+    if let Some(inputs) = envelope_inputs {
+        store.persist_envelope_inputs(attempt, inputs)?;
+        #[cfg(feature = "worker-v2-fault-injection-test-only")]
+        injected_fault_point_v1("envelope-inputs-persisted");
+    }
     store.persist_pending_with_envelope_inputs(
         publication,
         attempt,
@@ -403,11 +412,6 @@ pub(crate) fn persist_admitted_worker_v2_intent_v1(
     )?;
     #[cfg(feature = "worker-v2-fault-injection-test-only")]
     injected_fault_point_v1("pending-marker");
-    if let Some(inputs) = envelope_inputs {
-        store.persist_envelope_inputs(attempt, inputs)?;
-        #[cfg(feature = "worker-v2-fault-injection-test-only")]
-        injected_fault_point_v1("envelope-inputs-persisted");
-    }
     store.verify_output_path()?;
     let persisted = persist_worker_v2_publication_intent_v1(
         &store.display_path,
@@ -526,6 +530,7 @@ pub(crate) fn recover_worker_v2_intent_v1(
     Ok(recovered)
 }
 
+#[allow(dead_code)] // Ordinary fixture staging uses the no-capsule contract directly.
 pub(crate) fn restart_admission_commitment_v1(
     publication: WorkerV2PublicationKindV1,
     plan: DurableLinkPublicationPlanV1,
@@ -625,9 +630,48 @@ fn envelope_inputs_name(package: [u8; 32], attempt: BuildAttempt) -> String {
         digest.update(attempt.invocation().as_bytes());
     });
     format!(
-        "{ENVELOPE_INPUTS_PREFIX}{}{ENVELOPE_INPUTS_SUFFIX}",
+        "{ENVELOPE_INPUTS_PREFIX}{}-{}{ENVELOPE_INPUTS_SUFFIX}",
+        hex(&package),
         hex(&identity)
     )
+}
+
+fn envelope_inputs_package_prefix(package: [u8; 32]) -> String {
+    format!("{ENVELOPE_INPUTS_PREFIX}{}-", hex(&package))
+}
+
+fn is_canonical_envelope_inputs_name(name: &str, package_prefix: &str) -> bool {
+    is_canonical_envelope_inputs_name_bytes(name.as_bytes(), package_prefix)
+}
+
+fn is_canonical_envelope_inputs_name_bytes(bytes: &[u8], package_prefix: &str) -> bool {
+    let digest_start = package_prefix.len();
+    let digest_end = digest_start + 64;
+    bytes.len() == digest_end + ENVELOPE_INPUTS_SUFFIX.len()
+        && bytes.starts_with(package_prefix.as_bytes())
+        && bytes[digest_start..digest_end]
+            .iter()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+        && &bytes[digest_end..] == ENVELOPE_INPUTS_SUFFIX.as_bytes()
+}
+
+fn is_envelope_inputs_temp_name(name: &str, package_prefix: &str) -> bool {
+    let bytes = name.as_bytes();
+    let canonical_len = package_prefix.len() + 64 + ENVELOPE_INPUTS_SUFFIX.len();
+    if bytes.len() <= canonical_len + TEMP_SUFFIX.len()
+        || !is_canonical_envelope_inputs_name_bytes(&bytes[..canonical_len], package_prefix)
+        || &bytes[canonical_len..canonical_len + TEMP_SUFFIX.len()] != TEMP_SUFFIX.as_bytes()
+    {
+        return false;
+    }
+    let counters = &bytes[canonical_len + TEMP_SUFFIX.len()..];
+    let Some(separator) = counters.iter().position(|byte| *byte == b'-') else {
+        return false;
+    };
+    separator != 0
+        && separator + 1 < counters.len()
+        && counters[..separator].iter().all(u8::is_ascii_digit)
+        && counters[separator + 1..].iter().all(u8::is_ascii_digit)
 }
 
 impl ResumeMarkerStateV1 {
@@ -792,7 +836,59 @@ impl WorkerV2ResumeStoreV1 {
             marker_name,
         };
         store.verify_output_path()?;
+        store.cleanup_envelope_input_residue()?;
         Ok(store)
+    }
+
+    fn cleanup_envelope_input_residue(&self) -> Result<(), ResumeMarkerErrorV1> {
+        let retained = self.load()?.and_then(|state| {
+            state
+                .publication()
+                .requires_envelope()
+                .then(|| envelope_inputs_name(self.package, state.attempt()))
+        });
+        let package_prefix = envelope_inputs_package_prefix(self.package);
+        let scan =
+            rustix::io::fcntl_dupfd_cloexec(&self.directory, 0).map_err(std::io::Error::from)?;
+        let mut directory = rustix::fs::Dir::read_from(&scan).map_err(std::io::Error::from)?;
+        let mut residue = Vec::new();
+        for entry in &mut directory {
+            let entry = entry.map_err(std::io::Error::from)?;
+            let bytes = entry.file_name().to_bytes();
+            if !bytes.starts_with(package_prefix.as_bytes()) {
+                continue;
+            }
+            let name = std::str::from_utf8(bytes)
+                .map_err(|_| self.invalid("envelope input residue name is not UTF-8"))?;
+            let canonical = is_canonical_envelope_inputs_name(name, &package_prefix);
+            let temporary = is_envelope_inputs_temp_name(name, &package_prefix);
+            if !canonical && !temporary {
+                return Err(self.invalid_at_name(name, "malformed package-owned capsule name"));
+            }
+            if canonical && retained.as_deref() == Some(name) {
+                continue;
+            }
+            if residue.len() == MAX_ENVELOPE_INPUT_RESIDUE_ENTRIES {
+                return Err(self.invalid("too many package-owned envelope input residues"));
+            }
+            let descriptor = openat(
+                &self.directory,
+                name,
+                OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK,
+                Mode::empty(),
+            )
+            .map_err(std::io::Error::from)?;
+            validate_private_file(&self.directory, &descriptor, name, &self.display_path, None)?;
+            residue.push(name.to_owned());
+        }
+        if !residue.is_empty() {
+            for name in residue {
+                unlinkat(&self.directory, &name, AtFlags::empty()).map_err(std::io::Error::from)?;
+            }
+            fsync(&self.directory).map_err(std::io::Error::from)?;
+            self.verify_output_path()?;
+        }
+        Ok(())
     }
 
     pub(crate) fn verify_output_path(&self) -> Result<(), ResumeMarkerErrorV1> {
@@ -854,6 +950,8 @@ impl WorkerV2ResumeStoreV1 {
                 &self.display_path,
                 Some(bytes.len()),
             )?;
+            #[cfg(feature = "worker-v2-fault-injection-test-only")]
+            injected_fault_point_v1("envelope-inputs-temp-synced");
             self.verify_output_path()?;
             match renameat_with(
                 &self.directory,
@@ -1143,6 +1241,7 @@ impl WorkerV2ResumeStoreV1 {
             .map_err(|reason| self.invalid(reason))
     }
 
+    #[allow(dead_code)] // Ordinary fixture staging uses the no-capsule transition directly.
     pub(crate) fn persist_pending(
         &self,
         publication: WorkerV2PublicationKindV1,
@@ -1303,6 +1402,7 @@ impl WorkerV2ResumeStoreV1 {
     }
 
     /// Recovers only the canonical envelope named by `receipt` before advancing to `Completed`.
+    #[allow(dead_code)] // Exercises exact durable-envelope recovery in owner tests.
     pub(crate) fn recover_envelope_and_completed(
         &self,
         publication: WorkerV2PublicationKindV1,
@@ -1375,6 +1475,7 @@ impl WorkerV2ResumeStoreV1 {
         }
     }
 
+    #[allow(dead_code)] // Ordinary state-machine owner tests exercise this narrow transition.
     pub(crate) fn clear_completed(
         &self,
         expected: ResumeMarkerStateV1,
@@ -1383,6 +1484,64 @@ impl WorkerV2ResumeStoreV1 {
             return Err(ResumeMarkerErrorV1::InvalidTransition);
         }
         self.clear_exact(expected)
+    }
+
+    pub(crate) fn clear_completed_and_envelope_inputs(
+        &self,
+        expected: ResumeMarkerStateV1,
+    ) -> Result<(), ResumeMarkerErrorV1> {
+        if !matches!(expected, ResumeMarkerStateV1::Completed { .. }) {
+            return Err(ResumeMarkerErrorV1::InvalidTransition);
+        }
+        self.clear_exact_and_envelope_inputs(expected)
+    }
+
+    pub(crate) fn clear_abandoned_pending(
+        &self,
+        expected: ResumeMarkerStateV1,
+    ) -> Result<(), ResumeMarkerErrorV1> {
+        if !matches!(expected, ResumeMarkerStateV1::Pending { .. }) {
+            return Err(ResumeMarkerErrorV1::InvalidTransition);
+        }
+        self.clear_exact_and_envelope_inputs(expected)
+    }
+
+    fn clear_exact_and_envelope_inputs(
+        &self,
+        expected: ResumeMarkerStateV1,
+    ) -> Result<(), ResumeMarkerErrorV1> {
+        let expected_inputs = if expected.publication().requires_envelope() {
+            let inputs = self.recover_envelope_inputs(expected.attempt())?;
+            if inputs.identity().as_bytes() != expected.envelope_inputs() {
+                return Err(self.invalid("marker disagrees with its envelope input capsule"));
+            }
+            Some(inputs.identity())
+        } else {
+            None
+        };
+        self.clear_exact(expected)?;
+        if let Some(identity) = expected_inputs {
+            self.remove_envelope_inputs(expected.attempt(), identity)?;
+        }
+        Ok(())
+    }
+
+    fn remove_envelope_inputs(
+        &self,
+        attempt: BuildAttempt,
+        expected: WorkerV2EnvelopeInputsIdentityV1,
+    ) -> Result<(), ResumeMarkerErrorV1> {
+        let name = envelope_inputs_name(self.package, attempt);
+        let inputs = self
+            .read_envelope_inputs(&name)?
+            .ok_or_else(|| self.invalid_at_name(&name, "capsule disappeared before cleanup"))?;
+        if inputs.identity() != expected {
+            return Err(self.invalid_at_name(&name, "capsule identity changed before cleanup"));
+        }
+        unlinkat(&self.directory, &name, AtFlags::empty()).map_err(std::io::Error::from)?;
+        fsync(&self.directory).map_err(std::io::Error::from)?;
+        self.verify_output_path()?;
+        Ok(())
     }
 
     pub(crate) fn clear_exact(
@@ -2147,6 +2306,41 @@ mod tests {
             .unwrap();
         store.clear_completed(completed).unwrap();
         assert_eq!(store.load().unwrap(), None);
+    }
+
+    #[test]
+    fn startup_scavenges_only_package_owned_capsules_and_temps_without_growth() {
+        let directory = TestDirectory::new();
+        let publisher = producer(81);
+        let other = producer(82);
+        let attempt = attempt(&directory.0, &publisher, 81);
+        let store = WorkerV2ResumeStoreV1::open(&directory.0, &publisher).unwrap();
+        let package = store.package;
+        drop(store);
+
+        let canonical = envelope_inputs_name(package, attempt);
+        let temporary = format!("{canonical}{TEMP_SUFFIX}1-1");
+        let unrelated =
+            envelope_inputs_name(*producer_package_identity_v1(&other).as_bytes(), attempt);
+        fs::write(directory.0.join(&unrelated), b"unrelated").unwrap();
+        fs::set_permissions(
+            directory.0.join(&unrelated),
+            fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+
+        for _ in 0..3 {
+            for name in [&canonical, &temporary] {
+                fs::write(directory.0.join(name), b"abandoned").unwrap();
+                fs::set_permissions(directory.0.join(name), fs::Permissions::from_mode(0o600))
+                    .unwrap();
+            }
+            let store = WorkerV2ResumeStoreV1::open(&directory.0, &publisher).unwrap();
+            assert_eq!(store.load().unwrap(), None);
+            assert!(!directory.0.join(&canonical).exists());
+            assert!(!directory.0.join(&temporary).exists());
+            assert!(directory.0.join(&unrelated).exists());
+        }
     }
 
     #[test]

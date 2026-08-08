@@ -663,7 +663,7 @@ fn complete_recovered_worker_v2(
             if matches!(state, ResumeMarkerStateV1::Pending { .. }) =>
         {
             resume
-                .clear_exact(state)
+                .clear_abandoned_pending(state)
                 .map_err(|error| preserve_marker_error("abandoned-pending cleanup", error))?;
             return Err(CompletionFailure::Uncommitted(
                 "Worker V2 process stopped before its publication intent became durable".into(),
@@ -741,7 +741,7 @@ fn publish_finish_and_clear(
     #[cfg(feature = "worker-v2-fault-injection-test-only")]
     injected_fault_point_v1("finished");
     resume
-        .clear_completed(completed)
+        .clear_completed_and_envelope_inputs(completed)
         .map_err(|error| preserve_marker_error("cleanup", error))
 }
 
@@ -811,7 +811,7 @@ fn reconcile_completed_worker_v2(
     }
     finish_worker_v2_attempt(managed)?;
     resume
-        .clear_completed(completed)
+        .clear_completed_and_envelope_inputs(completed)
         .map_err(|error| preserve_marker_error("completed recovery cleanup", error))
 }
 

@@ -344,13 +344,10 @@ fn transitive_identity(
         update_identity(&mut hash, &provider.identity().byte_len().to_le_bytes());
         update_identity(&mut hash, provider.bytes());
     }
-    match envelope_inputs {
-        Some(inputs) => {
-            update_identity(&mut hash, &[1]);
-            update_identity(&mut hash, inputs.expected.sha256());
-            update_identity(&mut hash, &inputs.expected.byte_len().to_le_bytes());
-        }
-        None => {}
+    if let Some(inputs) = envelope_inputs {
+        update_identity(&mut hash, &[1]);
+        update_identity(&mut hash, inputs.expected.sha256());
+        update_identity(&mut hash, &inputs.expected.byte_len().to_le_bytes());
     }
     WorkerV2ConfigIdentity(hash.finalize().into())
 }
