@@ -13,14 +13,16 @@ use fe2o3_artifact_transaction::{
     DurableLinkPublicationError, PublishedLinkArtifactV1,
 };
 use fe2o3_artifacts::{
-    ArtifactContainerV1, DIRECT_LINK_EVIDENCE_DIGEST_ALGORITHM, DigestAlgorithm,
-    DirectLinkBundleIndexIdentityV1, DirectLinkContainerIdentityV1,
+    ArtifactContainerV1, DIRECT_LINK_EVIDENCE_DIGEST_ALGORITHM, DigestAlgorithm, DigestBytes,
+    DirectLinkBindingSourceV1, DirectLinkBundleIndexIdentityV1, DirectLinkContainerIdentityV1,
     DirectLinkFinalizationIdentityV1, DirectLinkFinalizedPayloadIdentityV1,
     DirectLinkLinkedOutputIdentityV1, PayloadDigest, SelectedNativeKernel,
     ValidatedDirectLinkBundleEvidenceV1,
 };
 use fe2o3_hsaco::{CodeObjectVersion, InspectedKernelBindings, KernelDescriptorBinding};
 use fe2o3_hsaco_finalize::PreparedWorkerV2HsacoPublicationV1;
+use fe2o3_kernel_descriptor::KernelId;
+use fe2o3_worker_v2_bundle::WorkerV2LoadEnvelopeV1;
 use std::fmt;
 use std::marker::PhantomData;
 
@@ -58,6 +60,7 @@ pub struct AdmittedFinalizedWorkerV2BundleV1 {
 
 enum RetainedWorkerV2PreparationV1 {
     Production(Box<PreparedWorkerV2HsacoPublicationV1>),
+    Recovered(Box<WorkerV2LoadEnvelopeV1>),
     #[cfg(any(test, feature = "hardware-test-hooks"))]
     Test {
         attempt: BuildAttempt,
@@ -69,6 +72,7 @@ impl RetainedWorkerV2PreparationV1 {
     fn attempt(&self) -> BuildAttempt {
         match self {
             Self::Production(prepared) => prepared.attempt(),
+            Self::Recovered(envelope) => envelope.published_claim().plan().attempt(),
             #[cfg(any(test, feature = "hardware-test-hooks"))]
             Self::Test { attempt, .. } => *attempt,
         }
@@ -77,6 +81,7 @@ impl RetainedWorkerV2PreparationV1 {
     fn exact_bytes(&self) -> &[u8] {
         match self {
             Self::Production(prepared) => prepared.exact_bytes(),
+            Self::Recovered(envelope) => envelope.raw_hsaco().bytes(),
             #[cfg(any(test, feature = "hardware-test-hooks"))]
             Self::Test { exact_bytes, .. } => exact_bytes,
         }
@@ -129,8 +134,55 @@ impl AdmittedFinalizedWorkerV2BundleV1 {
             observed,
         )?;
 
-        Ok(Self {
-            prepared: RetainedWorkerV2PreparationV1::Production(Box::new(prepared)),
+        Ok(Self::from_parts(
+            RetainedWorkerV2PreparationV1::Production(Box::new(prepared)),
+            parts,
+        ))
+    }
+
+    pub(crate) fn admit_recovered(
+        envelope: WorkerV2LoadEnvelopeV1,
+        current_lease: DurableCurrentLinkPublicationLeaseV1,
+        kernel_id: KernelId,
+        observed: &ObservedContext,
+    ) -> Result<Self, FinalizedWorkerV2BundleAdmissionError> {
+        let expectation = envelope
+            .direct_link_evidence()
+            .bindings()
+            .first()
+            .ok_or(FinalizedWorkerV2BundleAdmissionError::EnvelopeRevalidation)?
+            .expectation()
+            .clone();
+        let source = DirectLinkBindingSourceV1::new(envelope.container(), expectation);
+        let validated_bundle = envelope
+            .direct_link_evidence()
+            .validate_against(envelope.bundle_index(), &[envelope.container()], &[source])
+            .map_err(|_| FinalizedWorkerV2BundleAdmissionError::EnvelopeRevalidation)?;
+        let selected = envelope
+            .container()
+            .select_native_kernel(DigestBytes::from_bytes(*kernel_id.as_bytes()))
+            .map_err(|_| FinalizedWorkerV2BundleAdmissionError::SelectedKernelSubstitution)?;
+        let claim = envelope.published_claim();
+        let parts = admit_parts_with_lease(
+            claim.plan().attempt(),
+            envelope.raw_hsaco().bytes(),
+            claim.receipt(),
+            current_lease,
+            &validated_bundle,
+            envelope.container(),
+            selected,
+            observed,
+        )?;
+
+        Ok(Self::from_parts(
+            RetainedWorkerV2PreparationV1::Recovered(Box::new(envelope)),
+            parts,
+        ))
+    }
+
+    fn from_parts(prepared: RetainedWorkerV2PreparationV1, parts: AdmissionParts) -> Self {
+        Self {
+            prepared,
             current_lease: parts.current_lease,
             receipt: parts.receipt,
             published: parts.published,
@@ -147,7 +199,7 @@ impl AdmittedFinalizedWorkerV2BundleV1 {
             inspected: parts.inspected,
             kernels: parts.kernels,
             selected_kernel_index: parts.selected_kernel_index,
-        })
+        }
     }
 
     pub const fn published(&self) -> PublishedLinkArtifactV1 {
@@ -328,6 +380,29 @@ fn admit_parts(
 ) -> Result<AdmissionParts, FinalizedWorkerV2BundleAdmissionError> {
     let receipt = publication.receipt();
     let current_lease = publication.into_current_lease();
+    admit_parts_with_lease(
+        prepared_attempt,
+        prepared_bytes,
+        receipt,
+        current_lease,
+        validated_bundle,
+        container,
+        selected,
+        observed,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn admit_parts_with_lease(
+    prepared_attempt: BuildAttempt,
+    prepared_bytes: &[u8],
+    receipt: BackendPublicationReceiptV1,
+    current_lease: DurableCurrentLinkPublicationLeaseV1,
+    validated_bundle: &ValidatedDirectLinkBundleEvidenceV1<'_>,
+    container: &ArtifactContainerV1,
+    selected: SelectedNativeKernel<'_>,
+    observed: &ObservedContext,
+) -> Result<AdmissionParts, FinalizedWorkerV2BundleAdmissionError> {
     let current = current_lease
         .acquire_current_token()
         .map_err(FinalizedWorkerV2BundleAdmissionError::current_publication)?;
@@ -776,6 +851,7 @@ fn validate_selected_identity(
 pub enum FinalizedWorkerV2BundleAdmissionError {
     Busy,
     CurrentPublication { reason: String },
+    EnvelopeRevalidation,
     WorkerAttemptSubstitution,
     WorkerPayloadSubstitution,
     PublicationReceiptMismatch,
@@ -808,6 +884,9 @@ impl fmt::Display for FinalizedWorkerV2BundleAdmissionError {
             Self::Busy => formatter.write_str("durable Worker V2 publication lock is busy"),
             Self::CurrentPublication { reason } => {
                 write!(formatter, "Worker V2 publication is not current: {reason}")
+            }
+            Self::EnvelopeRevalidation => {
+                formatter.write_str("decoded Worker V2 envelope failed structural revalidation")
             }
             Self::WorkerAttemptSubstitution => {
                 formatter.write_str("published attempt differs from sealed Worker V2 preparation")

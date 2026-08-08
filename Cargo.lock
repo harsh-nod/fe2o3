@@ -291,6 +291,7 @@ dependencies = [
  "fe2o3-hsaco",
  "fe2o3-hsaco-finalize",
  "fe2o3-kernel-descriptor",
+ "fe2o3-worker-v2-bundle",
  "reserved-fe2o3-symbols",
  "rmpv",
  "trybuild",

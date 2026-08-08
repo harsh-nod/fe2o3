@@ -10,6 +10,7 @@ mod loaded_kernel;
 mod prepared_launch;
 mod published_direct_link;
 mod published_hsaco_inspection;
+mod recovered_worker_v2_admission;
 mod worker_v2_bundle_admission;
 
 #[cfg(feature = "hardware-test-hooks")]
@@ -115,6 +116,10 @@ pub use published_hsaco_inspection::{
     PublishedKernelPhysicalLayoutV1, PublishedLoadAdmissionError,
     PublishedPhysicalArgumentLayoutV1, PublishedPhysicalLaunchLayoutV1,
     PublishedPhysicalLayoutInspectionError,
+};
+pub use recovered_worker_v2_admission::{
+    RecoveredWorkerV2AdmissionError, RecoveredWorkerV2PinnedDescriptorV1,
+    recover_worker_v2_load_envelope_v1,
 };
 pub use worker_v2_bundle_admission::{
     AdmittedFinalizedWorkerV2BundleV1, AdmittedWorkerV2TypedKernelV1,

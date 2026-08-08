@@ -1,0 +1,5 @@
+#[test]
+fn recovered_worker_v2_admission_capabilities_are_sealed() {
+    let cases = trybuild::TestCases::new();
+    cases.compile_fail("tests/ui/recovered_worker_v2_admission/*.rs");
+}
