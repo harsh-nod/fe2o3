@@ -24,16 +24,17 @@ The fe2o3 current-state column is based on commit
 `37eee8f15b985190449ece7a93f4ab386aa3cb18`.
 <!-- parity-status:baseline:end -->
 
-Post-snapshot updates through
-`dc9738e367c392f7716eacb8459ca73fa32abbbb` extend the bounded `gfx942`
-Worker V2 and general typed G3.1 foundations without changing any row to
-Complete. The earlier `90b6fe31cbb1d89b82755f194ac7950c4eef4756`
-checkpoint carries the archived remote compile/publication evidence: one
-external Cargo fixture declares two kernel roots and one shared helper, the
-frontend and Kernel IR path retain one exact helper identity, and the sealed
-Cargo backend invokes the direct LLVM/LLD worker to publish one inspected HSACO
-containing both entries. The worker uses LLVM and LLD library APIs directly and
-does not use COMGR or command-line linking.
+The source of truth now pins cuda-oxide commit
+`2db97134d9a3a79fe71c211e65a616dacdf03235` from 2026-08-07. Its supported
+feature appendix is byte-identical to the prior snapshot, so the 94-row scope is
+unchanged. Post-snapshot fe2o3 updates extend the bounded `gfx942` Worker V2 and
+general typed foundations without changing any row to Complete. The archived
+remote compile/publication evidence includes an external Cargo fixture with two
+kernel roots and one shared helper; the frontend and Kernel IR path retain one
+exact helper identity, and the sealed Cargo backend invokes the direct LLVM/LLD
+worker to publish one inspected HSACO containing both entries. The worker uses
+LLVM and LLD library APIs directly and does not use COMGR or command-line
+linking.
 
 The existing V1 artifact wire format now has a strict `gfx942` profile with two
 canonically ordered entries over one digest-validated native payload. Each
@@ -47,10 +48,11 @@ loaded executable, so safe Rust cannot unload it while the set is live.
 
 The post-snapshot source/unit work adds expectation-only V3 registration for
 bounded scalars, shared slices, and `DisjointSlice`; rustc-semantic type/layout
-reconstruction; checked `DeviceBuffer` views; lifetime-branded host packing;
-and backend-issued semantic witnesses. It also lands exact single-source typed
-Rust `alpha` and `zeta` profiles. Their logical/export roles and source argument
-names are authenticated in the ABI identity: alpha is
+reconstruction; checked `DeviceBuffer` views and borrow-checked mutable splits;
+lifetime-branded host packing; and backend-issued semantic witnesses. It also
+lands exact single-source typed Rust `alpha` and `zeta` profiles. Their
+logical/export roles and source argument names are authenticated in the ABI
+identity: alpha is
 `scale/input/output`, zeta is `a/b/bias/output`, and their explicit/complete
 COV6 kernarg sizes are `40/296` and `56/312`. The macro generates exact
 signature-specific `Arguments` and host preparation/dispatch adapters from the
@@ -86,26 +88,30 @@ composition and hardware behavior but does not authenticate prerequisites.
 The evidence remains bounded. Durable Worker V2 publication, finalized-bundle
 host admission, currentness leasing, an authenticated load state machine, the
 generated alpha/zeta safe dispatch SPI, and the reviewed
-`fe2o3-hsa-runtime` adapter exist. Production composition still lacks Cargo
-envelope publication, recovered host admission, and application handoff.
-Canonical lease reacquisition and a bounded Worker V2 load envelope now retain
-the complete reacquirable claim, bundle/proof closure, descriptor lineage, and
-raw/finalized identities, but the Cargo artifact-container adapter remains
-test-only/inert and does not publish that envelope. An implementation of
-`WorkerV2PrerequisiteAuthenticatorV1` is also absent: only test/fake
-implementations exist, so compiler, Verus/proof, and effect evidence cannot be
-authentically promoted into generated safe dispatch. Declared
-read/read-write effects are not proved against machine-code accesses, exact
-alpha/zeta Verus mechanical proofs and compiler refinement are absent, mutable
-views lack a mechanical same-allocation split proof, and the hardware result
-covers only MI300X `gfx942:xnack-`. These gaps keep every Complete count at zero
-and prevent any cuda-oxide parity claim.
+`fe2o3-hsa-runtime` adapter exist. Required-envelope mode consumes a measured
+upstream canonical envelope-input capsule, binds and durably stages it, and can
+reconstruct the exact canonical envelope from durable input and HSACO claims
+after restart. Cargo does not synthesize or authenticate the capsule's compiler,
+proof, or effect claims. Recovered host admission independently reacquires a
+fresh lease and revalidates finalized bytes and descriptor lineage, but returns
+an inert descriptor with no bytes, authentication, load, launch, or prerequisite
+authority. Production application handoff and an implementation of
+`WorkerV2PrerequisiteAuthenticatorV1` remain absent.
+
+The new compiler-transaction capsule is inert caller-measured evidence. The
+pre-envelope proof capsule binds persistent ancestry but supplies neither
+durable single-use enforcement nor compiler refinement. The bounded `gfx942`
+machine-effect model analyzes caller-supplied straight-line mechanics rather
+than extracting LLVM IR or HSACO behavior. Rust borrowing enforces
+`split_at_mut` exclusivity, without a mechanical Verus split proof. The
+generated-safe hardware result covers only MI300X `gfx942:xnack-` and uses an
+explicitly fake prerequisite authenticator. These gaps keep every Complete
+count at zero and prevent any cuda-oxide parity claim.
 
 The next bounded scope and exit gate are defined by the
-[general typed dispatch V1 contract](general-typed-dispatch-v1.md). The
-status TSV and generated status blocks remain the older pinned evidence snapshot
-until a separately archived evidence-admission lane updates them; individual
-dashboard source/unit declarations may name landed descendant commits.
+[general typed dispatch V1 contract](general-typed-dispatch-v1.md). The status
+TSV is authoritative; the deterministic matrix and dashboard generators project
+that source together with archived evidence declarations.
 
 At `dc9738e` fe2o3 also has a HIP runtime, explicit unsafe raw module and launch
 paths, versioned kernel registration, reachable MIR collection, bounded rustc
@@ -166,16 +172,14 @@ An IR type, schema, parser, or isolated proof is classified as **Partial** only
 when it implements a meaningful part of the row; it does not stand in for
 end-to-end compiler/runtime behavior.
 
-A post-snapshot read-only audit found qualifying bounded evidence to move rows
-01, 26, 40, 51, and 87 from Missing to Partial and supplemental row S11 from
-Missing to Partial. Row 47 remains Missing: the authenticated inline-assembly
-lowering described for row 87 is not a public `amdgpu_asm!` macro with the
-required operand and clobber surface. Once the authoritative status TSV is
-updated by its owning lane, the expected projection is 0 Complete, 50 Partial,
-32 Missing, and 12 N/A normative rows, plus 0 Complete, 11 Partial, and 4
-Missing supplemental rows. This narrative does not move the generated status
-snapshot to the post-snapshot implementation; that requires the full archived
-evidence-generation gate.
+The authoritative status TSV records qualifying bounded evidence for rows 01,
+26, 40, 51, and 87 as Partial and supplemental row S11 as Partial. The resulting
+counts are 0 Complete, 50 Partial, 32 Missing, and 12 N/A normative rows, plus 0
+Complete, 11 Partial, 4 Missing, and 0 N/A supplemental rows. Rows 47 and 50
+remain Missing: the authenticated inline-assembly lowering described for row 87
+is not a public `amdgpu_asm!` API with the required operand and clobber surface,
+and borrow-checked mutable splitting is not a proof-carrying static-view
+implementation.
 
 ## Gates
 
@@ -288,20 +292,19 @@ The detailed dependencies and exit criteria are in
   alpha/zeta source pair and exports one independently inspected, canonically
   finalized COV6 artifact with SHA-256
   `3a916cdabca05ac74d340889aab2067221d6d1252a7cde13e61c1786252565c4`.
-  An inert Cargo adapter assembles a canonical container candidate but does not
-  publish the separate canonical Worker V2 envelope or retain a live lease, and
-  grants no currentness, load, or launch authority. The envelope schema retains
-  the complete plan/receipt claim, raw/finalized lineage, and bundle/proof
-  closure and can support lease reacquisition after durable revalidation.
-  Project build scripts and procedural macros remain trusted; pipeline
-  inspection is not stage-complete, broad Rust semantics and
-  cross-crate finalization are absent. Production publication, lease,
-  finalized-bundle admission, authenticated loading, generated safe dispatch,
-  and the reviewed runtime adapter exist outside this inert Cargo adapter, but
-  recovered admission, application handoff, and a production
-  `WorkerV2PrerequisiteAuthenticatorV1` are absent. The generated-safe MI300X
-  harness composes the runtime pieces only with a fake prerequisite
-  authenticator.
+  Required-envelope mode accepts only a measured upstream canonical
+  envelope-input capsule. It durably binds that input to the attempt, publishes
+  the exact canonical Worker V2 load envelope, and reconstructs the same
+  envelope after restart from durable input and HSACO claims. Cargo neither
+  synthesizes nor authenticates the supplied direct-link, proof, compiler, or
+  effect evidence. Recovered host admission reacquires and revalidates the exact
+  durable publication but returns an inert descriptor with no bytes,
+  authentication, load, or launch authority. Project build scripts and
+  procedural macros remain trusted; pipeline inspection is not stage-complete,
+  broad Rust semantics and cross-crate finalization are absent. Application
+  handoff and a production `WorkerV2PrerequisiteAuthenticatorV1` are absent. The
+  generated-safe MI300X harness composes the runtime pieces only with a fake
+  prerequisite authenticator.
 - Rows 27, 28, and 39: bounded device FFI macros and compiler validation bind
   import/export direction, exact symbols, physical scalar/pointer ABI,
   address spaces, effects, target, code-object version, and semantic identity.
@@ -324,6 +327,15 @@ The detailed dependencies and exit criteria are in
   The paired raw HSA test establishes two-kernel GPU behavior for five boundary
   lengths, but not optimized production-worker, general-target, or
   compiler-refinement evidence.
+- Cross-cutting compiler, proof, and effect evidence remains authority-free. A
+  canonical compiler-transaction capsule binds caller-measured source,
+  dependencies, invocation, tools, Worker V2 traffic, target, raw/final HSACO,
+  and artifact identities without authenticating the compiler. A bounded
+  pre-envelope proof capsule binds exact policy, execution/result records,
+  payload, and persistent-ledger ancestry, without durable single-use or
+  compiler-refinement authority. The `gfx942` machine-effect capsule validates
+  caller-supplied straight-line call/effect mechanics; it does not establish
+  correspondence to LLVM IR or HSACO.
 - Rows 44 and 45: `cargo fe2o3 sanitize` and `debug` retain plan-only mode and
   can execute an exact descriptor-pinned native ROCgdb binary with bounded
   output, timeout, process cleanup, an environment allowlist, and diagnostic
@@ -338,14 +350,15 @@ The detailed dependencies and exit criteria are in
   overflow, and enforce exclusive parent borrowing. Kernel IR derives formal
   affine regions, bounds, runtime-alias, and
   inter-invocation race obligations for modeled effects and fails closed on
-  unsupported effects. Compile-fail tests reject witness copying, transfer, and
-  index-space mismatch. The exact generated vecadd adapter authenticates its
-  fixed one-dimensional launch contract and maps three runtime allocations to
-  it; complete 2D/3D branded construction, general launch extents, and general
-  parameter/allocation mappings remain incomplete. The view API also lacks a
-  mechanical proof-producing operation for multiple simultaneously live,
-  disjoint mutable subviews of one allocation, so mutable split-view safety is
-  still an explicit gap.
+  unsupported effects. `DeviceBuffer::split_at_mut` creates simultaneously live
+  exclusive views with exact disjoint allocation-relative regions, and nested
+  splits retain those identities. Rust borrowing enforces exclusivity;
+  compile-fail tests reject overlap and lifetime escape. The exact generated
+  vecadd adapter authenticates its fixed one-dimensional launch contract and
+  maps three runtime allocations to it; complete 2D/3D branded construction,
+  general launch extents, and general parameter/allocation mappings remain
+  incomplete. A mechanical Verus proof of the mutable split implementation is
+  still absent.
 - Row 51: `PreparedLaunch<K>`, loaded prepared launch, artifact-prepared launch,
   and cooperative admission types bind bounded geometry and resources to exact
   kernel, context, module/function, and capability observations. Construction
@@ -401,13 +414,15 @@ The detailed dependencies and exit criteria are in
   admission. Exact named alpha/zeta roles now receive macro-generated packing,
   preparation, and synchronous dispatch adapters, while other signatures remain
   inert. Durable publication, finalized-bundle admission, currentness leasing,
-  authenticated loading, and the reviewed runtime adapter already exist. The
-  Cargo container candidate is still test-only and authority-free, and only
-  test/fake `WorkerV2PrerequisiteAuthenticatorV1` implementations can promote
-  evidence into the generated adapters. The successful MI300X run used the
-  unsafe raw harness. Arbitrary Rust layouts, machine-code effect verification,
-  architecture breadth, and end-to-end generated-safe-path hardware evidence
-  are incomplete, so both rows remain Partial.
+  authenticated loading, required-envelope persistence/recovery, recovered host
+  admission, and the reviewed runtime adapter exist. The envelope and recovered
+  descriptor remain authority-free, and only test/fake
+  `WorkerV2PrerequisiteAuthenticatorV1` implementations can promote evidence
+  into the generated adapters. The generated-safe MI300X run uses fake
+  prerequisite authority. Arbitrary Rust layouts, authenticated machine-code
+  effect verification, architecture breadth, application handoff, and
+  production authenticated dispatch are incomplete, so both rows remain
+  Partial.
 - Row 80: the general `launch!` macro remains an explicit unsafe raw-ABI escape
   hatch with compile-fail coverage. The generated vecadd module instead exposes
   safe `prepare(...).launch(...)`; the example contains no raw parameter pack,
@@ -415,10 +430,11 @@ The detailed dependencies and exit criteria are in
   generate manifest-checked preparation and dispatch for the exact alpha/zeta
   roles, and the production publication/admission/load state machines exist.
   The missing production prerequisite authenticator prevents authenticated
-  compiler/proof/effect evidence from reaching that safe SPI. The MI300X
-  alpha/zeta harness manually packs and calls the unsafe HSA adapter and passed;
-  it does not test the generated safe application path. These fixed profiles
-  are not a general generated launch macro, so the row remains Partial.
+  compiler/proof/effect evidence from reaching that safe SPI. The generated-safe
+  MI300X alpha/zeta harness passes through the safe dispatch SPI only by using a
+  fake prerequisite authenticator. These fixed profiles are not a general
+  generated launch macro or production authority path, so the row remains
+  Partial.
 - Row 81 and supplemental row S03: the generated vecadd `launch_scoped` API
   retains typed resource borrows, loaded authority, alias admission, and packed
   parameters through event completion or stronger stream quiescence. Its
@@ -437,12 +453,14 @@ The detailed dependencies and exit criteria are in
   Descriptor-pinned snapshots retain finalized IR and HSACO in one generation
   across pathname replacement. Exact alpha/zeta COV6 publication additionally
   reconciles the authenticated complete implicit-kernarg contract with AMDHSA
-  metadata and produced the digest-pinned MI300X hardware artifact. Durable
-  currentness leasing and finalized-bundle admission exist, but the Cargo
-  artifact-container adapter remains an inert test adapter and no production
-  prerequisite authenticator promotes proof/effect evidence into generated
-  dispatch. This is not general compiler production, all-target loading, or
-  machine-code refinement evidence.
+  metadata and produced the digest-pinned MI300X hardware artifact. Required
+  mode now persists a measured upstream envelope-input capsule and reconstructs
+  the exact canonical envelope across restart; recovered host admission
+  revalidates the durable publication. Neither path authenticates compiler,
+  proof, or effect evidence or grants load/launch authority, and no production
+  prerequisite authenticator promotes that evidence into generated dispatch.
+  This is not general compiler production, all-target loading, or machine-code
+  refinement evidence.
 - Supplemental rows S04 and S05: bounded `DeviceCopy`, pinned-memory, event,
   and transfer-lifetime models exist, but general manifest-gated device type
   interpretation and broad asynchronous hardware ordering remain incomplete.

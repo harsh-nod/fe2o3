@@ -208,12 +208,15 @@ turn the foundations below into end-to-end features.
   association of a marker, complete ABI and effects, and executable semantics
   must be correct before its sealed launch can be treated as safe. General V3
   adds the separate fail-closed semantic-witness requirement described below.
-- `DeviceBuffer::view` and `view_mut` produce checked, borrow-typed contiguous
-  regions while retaining the parent allocation identity, context, base address,
-  full extent, and selected region. Range, size, address, and null-allocation
-  failures are explicit; exclusive views are non-clone and keep the parent
-  mutably borrowed. These views are a host provenance foundation, not launch
-  authority.
+- `DeviceBuffer::view`, `view_mut`, and `split_at_mut` produce checked,
+  borrow-typed contiguous regions while retaining the parent allocation
+  identity, context, base address, full extent, and selected region. Splitting
+  creates two simultaneously live exclusive views with exact disjoint
+  allocation-relative byte regions; nested splits preserve those identities.
+  Range, size, address, zero-sized-type, overflow, and null-allocation failures
+  are explicit. Rust borrowing enforces exclusivity, but there is not yet a
+  mechanical Verus proof of the split implementation. These views are a host
+  provenance foundation, not launch authority.
 - The bounded general typed V3 foundation accepts by-value `i8`/`u8` through
   `i64`/`u64`, `f32`/`f64`, shared slices, and genuine trusted
   `DisjointSlice<T, Index1D>` arguments. The macro emits an expectation-only V3
@@ -261,6 +264,10 @@ turn the foundations below into end-to-end features.
   state machine. General kernarg derivation remains absent, and the exact
   adapters cannot enter their production safe path until a production
   `WorkerV2PrerequisiteAuthenticatorV1` promotes the required evidence.
+  Recovery can independently reopen the exact durable publication, reacquire a
+  fresh currentness lease, revalidate finalized bytes and descriptor lineage,
+  and return an inert recovered-bundle descriptor. That descriptor carries no
+  bytes, authentication, load, launch, or prerequisite authority.
 - Compiler artifact publication is transactional and generation-owned. Typed
   generation results contain bounded immutable IR and HSACO snapshots captured
   through exact staged file descriptors and validated after publication while
@@ -272,7 +279,13 @@ turn the foundations below into end-to-end features.
   a canonical inert `DurablePublishedHsacoClaimV1`, from which the transaction
   can reacquire a fresh non-clone currentness lease after revalidating the
   attempt, plan, receipt, generation, directory and file identities, digest,
-  and publication lock. Neither value grants load or launch authority.
+  and publication lock. A bounded canonical compiler-transaction capsule binds
+  source, dependencies, features, invocation, caller-measured compiler/backend
+  identities, semantic and Kernel IR identities, Worker V2 request/response,
+  target, raw and finalized HSACO, and artifact identity. The capsule is inert
+  caller-measured evidence: it does not authenticate the compiler or establish
+  source-to-machine-code refinement. None of these values grants load or launch
+  authority.
 - Linux-only rustc and codegen-backend primitives use descriptor-backed procfs
   paths. The external Cargo path copies the backend into a rehashed, immutable
   sealed memfd and installs it after a compile-shaped managed wrapper
@@ -300,13 +313,24 @@ turn the foundations below into end-to-end features.
   measured verifier policy and tool identities. It is local persistent
   consistency evidence, not rollback resistance, compiler refinement,
   prerequisite authentication, or load/launch authority.
+  A separate bounded canonical pre-envelope proof capsule binds proof policy,
+  execution and result records, target and payload identity, and the complete
+  persistent-ledger ancestry used for freshness. It checks the finalized digest
+  against the persistent executable binding and has bounded process-local
+  duplicate detection. It does not provide durable single-use enforcement,
+  compiler refinement, prerequisite authentication, or runtime authority.
 - The G5 contracts now describe bounded independent-thread reads and writes,
   allocation provenance, bounds, injective writes, and deterministic proof
   obligations. Paired copy, gather, and affine elementwise bodies have positive
   and negative Verus harnesses. `fe2o3-verifier` canonicalizes bounded tool,
   policy, invocation, and result records, has a bounded shell-free process
   executor, and can convert validated results into descriptive proof records.
-  It still has no reviewed Verus adapter, authenticated binary measurement,
+  Bounded canonical `gfx942` machine-effect evidence additionally computes call
+  closure and straight-line memory effects from caller-supplied mechanics,
+  rejecting recursion, control flow, malformed identities, and resource-limit
+  violations. It does not extract effects from LLVM IR or HSACO and does not
+  prove that supplied mechanics correspond to the executable. The verifier
+  still has no reviewed Verus adapter, authenticated binary measurement,
   compiler or machine-code refinement, or runtime authority.
 - G6/G7 includes canonical multi-input AMDGPU link plans and a standalone
   direct LLVM/LLD worker with bounded Rust/C++ protocols. Device FFI macros and
@@ -401,16 +425,18 @@ turn the foundations below into end-to-end features.
   packing foundations. Exact alpha/zeta `Arguments` now have macro-emitted
   preparation/dispatch adapters; other signatures remain inert.
   Aggregates, return values, and arbitrary rustc layouts also remain outside V3.
-  Cargo can assemble an inert descriptor-bound `ArtifactContainerV1` candidate
-  from exact Worker V2 publication evidence. The result deliberately grants no
-  current-publication, load, or launch authority. This adapter remains
-  test-only and is not handed to an application. A separate bounded canonical
-  `WorkerV2LoadEnvelopeV1` now retains the artifact container, bundle index,
-  direct-link evidence, descriptor lineage, per-kernel proof records, raw
-  HSACO, finalized payload, and canonical reacquirable publication claim. The
-  schema validates structural closure but grants no authority. Cargo does not
-  yet publish this envelope, the host has no recovered-admission constructor,
-  and the application runner receives no pinned bundle descriptor.
+  In required-envelope mode, the Cargo production path consumes a measured
+  upstream canonical envelope-input capsule rather than synthesizing direct-link
+  or proof evidence. It binds that input to the build attempt, durably stages
+  it, publishes the exact canonical Worker V2 load envelope, and reconstructs
+  the same envelope from durable input and HSACO claims across restart. The
+  envelope retains the artifact container, bundle index, direct-link evidence,
+  descriptor lineage, per-kernel proof records, raw HSACO, finalized payload,
+  and canonical reacquirable publication claim. Cargo validates transport,
+  canonical encoding, identities, and restart closure; it does not authenticate
+  the supplied compiler, proof, or machine-effect claims. The envelope and the
+  recovered host descriptor remain authority-free, and the application runner
+  still receives no production handoff to a pinned bundle descriptor.
 
   Separately, only fake/test implementations of
   `WorkerV2PrerequisiteAuthenticatorV1` exist, so compiler, Verus/proof, Rust
@@ -418,17 +444,19 @@ turn the foundations below into end-to-end features.
   safe dispatch. The generated-safe MI300X test proves that the existing host
   and HSA state machines compose once supplied with test authority; it does not
   close any of these production or proof gaps.
-- Checked mutable views preserve provenance and exclusive borrowing, but the
-  API does not yet construct multiple simultaneously live disjoint mutable
-  subviews of one allocation with a mechanical split proof. The mutable
-  split-view obligation therefore remains open.
+- Checked mutable views now support simultaneously live disjoint subviews via
+  `split_at_mut`, with exclusivity enforced by Rust borrowing. The mechanical
+  Verus proof of that split and its allocation-relative region theorem remains
+  open.
 - The generated contract identity authenticates compiler declarations and the
-  exact payload bytes; it does not inspect machine code to prove that declared
-  read/read/write effects match every executable memory access. The fixed
-  lowering, Kernel IR checks, host alias admission, and tests provide separate
-  defenses, but general illegal-access and race freedom still require complete
-  analysis and Verus/refinement evidence. Trusted rustc diagnostic-item
-  classification also remains part of the compiler TCB.
+  exact payload bytes. Caller-supplied straight-line `gfx942` machine-effect
+  evidence can be canonicalized and checked, but it is not an LLVM/HSACO
+  extractor and does not prove correspondence to every executable memory
+  access. The fixed lowering, Kernel IR checks, host alias admission, and tests
+  provide separate defenses, but general illegal-access and race freedom still
+  require authenticated analysis and Verus/compiler-refinement evidence.
+  Trusted rustc diagnostic-item classification also remains part of the
+  compiler TCB.
 - The generated vecadd API has synchronous launch and a scoped asynchronous
   callback that cannot return the in-flight operation. Generalized returnable
   borrowed or owned generated async APIs, cancellation, and composition are not

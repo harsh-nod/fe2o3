@@ -1,9 +1,9 @@
 schema_version	1
-cuda_oxide_commit	cd5ef3941d3347c7f6fcbfc78ef0fa7f4f179d87
-cuda_oxide_date	2026-08-05
+cuda_oxide_commit	2db97134d9a3a79fe71c211e65a616dacdf03235
+cuda_oxide_date	2026-08-07
 fe2o3_commit	37eee8f15b985190449ece7a93f4ab386aa3cb18
 kind	id	status
-normative	01	Missing
+normative	01	Partial
 normative	02	Partial
 normative	03	Partial
 normative	04	Missing
@@ -28,7 +28,7 @@ normative	22	Missing
 normative	23	Missing
 normative	24	Partial
 normative	25	Partial
-normative	26	Missing
+normative	26	Partial
 normative	27	Partial
 normative	28	Partial
 normative	29	Missing
@@ -42,7 +42,7 @@ normative	36	Partial
 normative	37	Partial
 normative	38	Partial
 normative	39	Partial
-normative	40	Missing
+normative	40	Partial
 normative	41	Partial
 normative	42	Partial
 normative	43	Partial
@@ -53,7 +53,7 @@ normative	47	Missing
 normative	48	Partial
 normative	49	Partial
 normative	50	Missing
-normative	51	Missing
+normative	51	Partial
 normative	52	Missing
 normative	53	Partial
 normative	54	Partial
@@ -89,7 +89,7 @@ normative	83	N/A
 normative	84	N/A
 normative	85	N/A
 normative	86	N/A
-normative	87	Missing
+normative	87	Partial
 normative	88	Missing
 normative	89	N/A
 normative	90	N/A
@@ -107,7 +107,7 @@ supplemental	S07	Partial
 supplemental	S08	Missing
 supplemental	S09	Missing
 supplemental	S10	Partial
-supplemental	S11	Missing
+supplemental	S11	Partial
 supplemental	S12	Missing
 supplemental	S13	Missing
 supplemental	S14	Partial

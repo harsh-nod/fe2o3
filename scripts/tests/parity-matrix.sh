@@ -44,8 +44,8 @@ bash "${PARITY_SCRIPT}" check "${SOURCE_STATUS}" "${SOURCE_MATRIX}"
 # Generation repairs valid drift and is byte-for-byte deterministic.
 reset_case
 awk '{
-  sub(/cd5ef3941d3347c7f6fcbfc78ef0fa7f4f179d87/,
-      "dd5ef3941d3347c7f6fcbfc78ef0fa7f4f179d87")
+  sub(/2db97134d9a3a79fe71c211e65a616dacdf03235/,
+      "3db97134d9a3a79fe71c211e65a616dacdf03235")
   if ($0 ~ /^\| Normative \|/) {
     count = split($0, cells, "|")
     if (count == 8) {
@@ -135,8 +135,8 @@ expect_check_failure count_mismatch "parity matrix is out of date"
 
 reset_case
 awk '{
-  sub(/cd5ef3941d3347c7f6fcbfc78ef0fa7f4f179d87/,
-      "dd5ef3941d3347c7f6fcbfc78ef0fa7f4f179d87")
+  sub(/2db97134d9a3a79fe71c211e65a616dacdf03235/,
+      "3db97134d9a3a79fe71c211e65a616dacdf03235")
   print
 }' "${TEST_ROOT}/matrix.md" >"${TEST_ROOT}/matrix.md.new"
 replace_file "${TEST_ROOT}/matrix.md"
