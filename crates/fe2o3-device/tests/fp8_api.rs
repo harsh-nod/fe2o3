@@ -187,11 +187,11 @@ fn every_e5m2_fnuz_encoding_round_trips() {
 fn exhaustive_decode_tables_match_rocm_7_2_4_reference() {
     assert_eq!(
         rocm_decode_fingerprint(Fp8E4M3Fnuz::from_bits, |value| { value.to_f32().to_bits() }),
-        0x1ef8_12d7_567f_89d5
+        0x10b5_2e16_89fa_0f98
     );
     assert_eq!(
         rocm_decode_fingerprint(Fp8E5M2Fnuz::from_bits, |value| { value.to_f32().to_bits() }),
-        0x7801_a3f2_3635_57e9
+        0x5bcf_a8ed_cce2_bf98
     );
 }
 
@@ -266,7 +266,13 @@ fn classification_and_sign_mutations_preserve_fnuz_special_values() {
     assert_eq!((-Fp8E4M3Fnuz::ZERO).to_bits(), 0);
     assert_eq!((-Fp8E4M3Fnuz::NAN).to_bits(), 0x80);
     assert_eq!(Fp8E4M3Fnuz::NAN.abs().to_bits(), 0x80);
+    assert!(Fp8E4M3Fnuz::NAN.is_sign_negative());
+    assert_eq!(Fp8E4M3Fnuz::NAN.to_f32().to_bits(), 0xffc0_0000);
+    assert!(Fp8E4M3Fnuz::NAN.to_f32().is_sign_negative());
     assert_eq!((-Fp8E5M2Fnuz::ZERO).to_bits(), 0);
     assert_eq!((-Fp8E5M2Fnuz::NAN).to_bits(), 0x80);
     assert_eq!(Fp8E5M2Fnuz::NAN.abs().to_bits(), 0x80);
+    assert!(Fp8E5M2Fnuz::NAN.is_sign_negative());
+    assert_eq!(Fp8E5M2Fnuz::NAN.to_f32().to_bits(), 0xffc0_0000);
+    assert!(Fp8E5M2Fnuz::NAN.to_f32().is_sign_negative());
 }

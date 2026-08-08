@@ -1,15 +1,18 @@
 //! AMD FNUZ eight-bit floating-point storage values.
 //!
-//! [`Fp8E4M3Fnuz`] and [`Fp8E5M2Fnuz`] model the two FNUZ encodings
-//! supported by `gfx942`. FNUZ uses one unsigned zero, reserves `0x80` as its
-//! sole NaN, has no infinity, and gives the remaining 255 encodings finite
-//! values. These are not the OCP E4M3 and E5M2 encodings.
+//! [`Fp8E4M3Fnuz`] and [`Fp8E5M2Fnuz`] model the two native FNUZ encodings of
+//! AMD `gfx942` under the pinned ROCm/Clang toolchain. FNUZ uses one unsigned
+//! zero, reserves `0x80` as its sole NaN, has no infinity, and gives the
+//! remaining 255 encodings finite values. These are not the OCP E4M3 and E5M2
+//! encodings.
 //!
 //! Conversions from `f32` use round-to-nearest, ties-to-even. Finite overflow
 //! saturates to the largest finite value, matching the default
 //! `__HIP_SATFINITE` behavior for ROCm's FNUZ types. Every `f32` NaN and both
 //! infinities become the sole FNUZ NaN. Underflow and negative zero become the
-//! unsigned FNUZ zero.
+//! unsigned FNUZ zero. Native `gfx942` widening maps `0x80` to the negative
+//! quiet `f32` NaN bit pattern `0xffc00000`; [`Fp8E4M3Fnuz::is_sign_negative`]
+//! and [`Fp8E5M2Fnuz::is_sign_negative`] therefore report `true` for it.
 //!
 //! These integer-backed value operations do not claim that a compiler has
 //! selected a native `gfx942` conversion instruction.
@@ -21,8 +24,7 @@ const FNUZ_NAN: u8 = 0x80;
 const F32_ABS_MASK: u32 = 0x7fff_ffff;
 const F32_EXPONENT_MASK: u32 = 0x7f80_0000;
 const F32_FRACTION_MASK: u32 = 0x007f_ffff;
-// This is the NaN bit pattern used by ROCm's software FNUZ widening path.
-const F32_FNUZ_NAN: u32 = 0x7f80_0001;
+const GFX942_F32_FNUZ_NAN: u32 = 0xffc0_0000;
 
 /// A `gfx942` E4M3-FNUZ value stored in exactly eight bits.
 ///
@@ -77,7 +79,9 @@ impl Fp8E4M3Fnuz {
         Self(f32_to_fnuz(value.to_bits(), 3, 8, 0x4370_0000))
     }
 
-    /// Widens exactly to `f32`, with a canonical NaN for the sole NaN value.
+    /// Widens exactly using native `gfx942` FNUZ semantics.
+    ///
+    /// The sole NaN widens to the negative quiet `f32` NaN `0xffc00000`.
     pub const fn to_f32(self) -> f32 {
         f32::from_bits(fnuz_to_f32(self.0, 3, 8))
     }
@@ -183,7 +187,9 @@ impl Fp8E5M2Fnuz {
         Self(f32_to_fnuz(value.to_bits(), 2, 16, 0x4760_0000))
     }
 
-    /// Widens exactly to `f32`, with a canonical NaN for the sole NaN value.
+    /// Widens exactly using native `gfx942` FNUZ semantics.
+    ///
+    /// The sole NaN widens to the negative quiet `f32` NaN `0xffc00000`.
     pub const fn to_f32(self) -> f32 {
         f32::from_bits(fnuz_to_f32(self.0, 2, 16))
     }
@@ -321,7 +327,7 @@ const fn f32_to_fnuz(bits: u32, mantissa_bits: u32, bias: i32, max_finite: u32) 
 
 const fn fnuz_to_f32(bits: u8, mantissa_bits: u32, bias: i32) -> u32 {
     if bits == FNUZ_NAN {
-        return F32_FNUZ_NAN;
+        return GFX942_F32_FNUZ_NAN;
     }
     if bits == 0 {
         return 0;
