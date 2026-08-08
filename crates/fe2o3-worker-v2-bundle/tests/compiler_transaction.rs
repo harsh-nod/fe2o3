@@ -477,7 +477,7 @@ fn constructor_rejects_duplicate_and_oversized_source_sets() {
     ));
 
     let dependencies = (0..=MAX_COMPILER_TRANSACTION_DEPENDENCIES_V2)
-        .map(|index| dependency(&format!("dep-{index:04}"), index as u8))
+        .map(|index| dependency(&format!("dep-{index:04}"), (index % 255 + 1) as u8))
         .collect();
     assert!(matches!(
         CompilerSourceClosureV2::new(
