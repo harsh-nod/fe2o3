@@ -1,5 +1,6 @@
 use crate::collector::CollectionResult;
-use crate::trusted_device_items::{self, TrustedDeviceItem};
+use crate::semantic_features::{self, AuthenticatedSemanticItem};
+use crate::trusted_device_items::TrustedDeviceItem;
 use dialect_mir::{MirAttr, MirOp, MirOpRecord, MirType};
 use fe2o3_compiler_ffi::CodeObjectVersion;
 use fe2o3_rustc_front::FunctionIdentityV1;
@@ -230,16 +231,21 @@ pub(crate) struct MirExternalImport {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum MirCalleeIdentity {
-    Trusted(TrustedDeviceItem),
+    Authenticated(AuthenticatedSemanticItem),
     ExternalImport(MirExternalImport),
     Untrusted(String),
 }
 
 impl MirCallee {
-    fn trusted(item: TrustedDeviceItem) -> Self {
+    fn authenticated(item: AuthenticatedSemanticItem) -> Self {
         Self {
-            identity: MirCalleeIdentity::Trusted(item),
+            identity: MirCalleeIdentity::Authenticated(item),
         }
+    }
+
+    #[cfg(test)]
+    fn trusted(item: TrustedDeviceItem) -> Self {
+        Self::authenticated(AuthenticatedSemanticItem::trusted_device_for_test(item))
     }
 
     fn untrusted(identity: String) -> Self {
@@ -256,23 +262,28 @@ impl MirCallee {
 
     pub(crate) fn identity(&self) -> &str {
         match &self.identity {
-            MirCalleeIdentity::Trusted(item) => item.canonical_path(),
+            MirCalleeIdentity::Authenticated(item) => item.canonical_path(),
             MirCalleeIdentity::ExternalImport(import) => &import.symbol,
             MirCalleeIdentity::Untrusted(identity) => identity,
         }
     }
 
-    pub(crate) fn trusted_item(&self) -> Option<TrustedDeviceItem> {
+    pub(crate) fn authenticated_item(&self) -> Option<AuthenticatedSemanticItem> {
         match &self.identity {
-            MirCalleeIdentity::Trusted(item) => Some(*item),
+            MirCalleeIdentity::Authenticated(item) => Some(*item),
             MirCalleeIdentity::ExternalImport(_) | MirCalleeIdentity::Untrusted(_) => None,
         }
+    }
+
+    pub(crate) fn trusted_item(&self) -> Option<TrustedDeviceItem> {
+        self.authenticated_item()
+            .map(AuthenticatedSemanticItem::trusted_device_item)
     }
 
     pub(crate) fn external_import_evidence(&self) -> Option<&MirExternalImport> {
         match &self.identity {
             MirCalleeIdentity::ExternalImport(import) => Some(import),
-            MirCalleeIdentity::Trusted(_) | MirCalleeIdentity::Untrusted(_) => None,
+            MirCalleeIdentity::Authenticated(_) | MirCalleeIdentity::Untrusted(_) => None,
         }
     }
 
@@ -1411,7 +1422,9 @@ fn import_type<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> MirImportedType {
             _ => MirType::Ptr,
         },
         TyKind::RawPtr(_, _) => MirType::Ptr,
-        TyKind::Adt(adt, _) => match trusted_device_items::classify(tcx, adt.did()) {
+        TyKind::Adt(adt, _) => match semantic_features::classify(tcx, adt.did())
+            .map(AuthenticatedSemanticItem::trusted_device_item)
+        {
             Some(TrustedDeviceItem::DisjointSlice) => MirType::DisjointSlice,
             Some(TrustedDeviceItem::DeviceValue(
                 dialect_amdgcn::DeviceValueDiagnosticItem::Bf16x2,
@@ -1457,7 +1470,9 @@ fn import_type_shape<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> MirTypeShape {
             pointee: Box::new(import_type_shape(tcx, *pointee)),
             mutable: *mutability == Mutability::Mut,
         },
-        TyKind::Adt(adt, args) => match trusted_device_items::classify(tcx, adt.did()) {
+        TyKind::Adt(adt, args) => match semantic_features::classify(tcx, adt.did())
+            .map(AuthenticatedSemanticItem::trusted_device_item)
+        {
             Some(TrustedDeviceItem::DisjointSlice) => MirTypeShape::DisjointSlice {
                 element: Box::new(import_type_shape(tcx, args.type_at(0))),
             },
@@ -1902,8 +1917,8 @@ fn call_identity<'tcx>(
             .map(|instance| instance.def_id())
             .unwrap_or(*def_id);
     Some(
-        if let Some(item) = trusted_device_items::classify(tcx, resolved_def_id) {
-            MirCallee::trusted(item)
+        if let Some(item) = semantic_features::classify(tcx, resolved_def_id) {
+            MirCallee::authenticated(item)
         } else if let Some(import) = compiler_ffi_imports
             .classify(tcx, resolved_def_id)
             .or_else(|| compiler_ffi_imports.classify(tcx, *def_id))

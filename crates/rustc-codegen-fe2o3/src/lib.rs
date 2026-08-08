@@ -30,6 +30,7 @@ mod rust_type_layout;
 #[allow(dead_code)]
 mod rust_type_layout_general;
 mod rust_type_layout_v3;
+mod semantic_features;
 pub mod semantic_layout_bridge;
 mod semantic_witness;
 mod trusted_device_items;
