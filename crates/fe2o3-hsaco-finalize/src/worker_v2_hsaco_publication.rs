@@ -44,11 +44,102 @@ const FINALIZED_ATOMIC_PUBLICATION_IDENTITY_DOMAIN_V1: &[u8] =
 const FINALIZED_UPSTREAM_IDENTITY_DOMAIN_V1: &[u8] =
     b"FE2O3/WORKER-V2-FINALIZED-PUBLICATION-UPSTREAM/V1\0";
 
+/// Canonical Worker V2 publication route sealed by the finalizer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WorkerV2HsacoPublicationRouteV1 {
+    /// Publish the exact independently inspected raw COV5 compatibility snapshot.
+    InspectedRaw,
+    /// Publish the exact COV6 snapshot produced by canonical descriptor finalization.
+    CanonicallyFinalized,
+}
+
+/// Inert, canonical publication intent derived from sealed Worker V2 evidence.
+///
+/// This is the only public view of the finalizer's private publication-plan derivation. It binds
+/// the raw linked snapshot and inspection identity even when the retained output is a distinct
+/// canonically finalized snapshot. Callers may persist the returned plan and upstream identity for
+/// restart recovery, but cannot construct or modify this value.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SealedWorkerV2HsacoPublicationIntentV1 {
+    route: WorkerV2HsacoPublicationRouteV1,
+    plan: DurableLinkPublicationPlanV1,
+    upstream: UpstreamCodeObjectEvidenceIdentityV1,
+    raw_inspection: crate::InspectedRawWorkerV2HsacoIdentityV1,
+    canonical_finalization: Option<crate::FinalizedWorkerV2HsacoIdentityV1>,
+    raw_snapshot: crate::ContentIdentityV1,
+    finalized_snapshot: crate::ContentIdentityV1,
+}
+
+impl SealedWorkerV2HsacoPublicationIntentV1 {
+    /// Returns whether the intent retains raw inspected bytes or canonical finalized bytes.
+    pub const fn route(self) -> WorkerV2HsacoPublicationRouteV1 {
+        self.route
+    }
+
+    /// Returns the complete canonical durable plan for restart persistence.
+    pub const fn durable_plan(self) -> DurableLinkPublicationPlanV1 {
+        self.plan
+    }
+
+    /// Returns the canonical upstream evidence identity paired with the durable plan.
+    pub const fn upstream_evidence(self) -> UpstreamCodeObjectEvidenceIdentityV1 {
+        self.upstream
+    }
+
+    /// Returns the independently derived identity of the sealed raw Worker V2 inspection.
+    pub const fn raw_inspection_identity(self) -> crate::InspectedRawWorkerV2HsacoIdentityV1 {
+        self.raw_inspection
+    }
+
+    /// Returns the canonical finalization identity when this is a finalized publication route.
+    pub const fn canonical_finalization_identity(
+        self,
+    ) -> Option<crate::FinalizedWorkerV2HsacoIdentityV1> {
+        self.canonical_finalization
+    }
+
+    /// Returns the digest and length of the exact raw linked snapshot.
+    pub const fn raw_linked_snapshot_identity(self) -> crate::ContentIdentityV1 {
+        self.raw_snapshot
+    }
+
+    /// Returns the digest and length of the exact snapshot retained for publication.
+    pub const fn finalized_snapshot_identity(self) -> crate::ContentIdentityV1 {
+        self.finalized_snapshot
+    }
+
+    /// Checks exact retained output bytes against both their sealed digest and length.
+    pub fn matches_exact_retained_output(self, bytes: &[u8]) -> bool {
+        self.finalized_snapshot.matches(bytes)
+    }
+
+    /// A restartable intent remains inert without attempt-scoped publication authority.
+    pub const fn grants_publication_authority(self) -> bool {
+        false
+    }
+
+    /// Publication identities do not authenticate compiler origin.
+    pub const fn authenticates_compiler_origin(self) -> bool {
+        false
+    }
+
+    /// Publication intent is not HSA loading authority.
+    pub const fn grants_load_authority(self) -> bool {
+        false
+    }
+
+    /// Publication intent is not kernel-launch authority.
+    pub const fn grants_launch_authority(self) -> bool {
+        false
+    }
+}
+
 /// A complete, internally derived publication intent for exact inspected Worker V2 bytes.
 ///
-/// The durable plan and upstream evidence identity remain private so callers cannot replace any
-/// retained manifest, target, request, worker, response, output, or inspection identity. This
-/// object is inert without the matching producer and live build-attempt registry authority.
+/// Construction of the durable plan and upstream evidence identity remains private so callers
+/// cannot replace any retained manifest, target, request, worker, response, output, or inspection
+/// identity inside this object. It is inert without the matching producer and live build-attempt
+/// registry authority.
 #[derive(Debug)]
 pub struct PreparedWorkerV2HsacoPublicationV1 {
     inspected: InspectedRawWorkerV2HsacoV1,
@@ -60,7 +151,8 @@ pub struct PreparedWorkerV2HsacoPublicationV1 {
 /// Complete durable intent for exact canonically finalized Worker V2 bytes.
 ///
 /// This value owns the finalization evidence, including its raw inspection lineage. It is not
-/// cloneable and exposes neither the durable plan nor replaceable byte fields.
+/// cloneable and exposes the durable plan only through an opaque inert intent; byte fields remain
+/// private and non-replaceable.
 #[derive(Debug)]
 pub struct PreparedFinalizedWorkerV2HsacoPublicationV1 {
     finalized: PreparedFinalizedWorkerV2HsacoV1,
@@ -94,6 +186,19 @@ impl PreparedFinalizedWorkerV2HsacoPublicationV1 {
         self.finalized.finalized_output_identity()
     }
 
+    /// Reconstructs the canonical inert intent from the retained sealed raw/finalized lineage.
+    pub const fn publication_intent(&self) -> SealedWorkerV2HsacoPublicationIntentV1 {
+        SealedWorkerV2HsacoPublicationIntentV1 {
+            route: WorkerV2HsacoPublicationRouteV1::CanonicallyFinalized,
+            plan: self.plan,
+            upstream: self.upstream,
+            raw_inspection: self.finalized.raw_inspection_identity(),
+            canonical_finalization: Some(self.finalized.identity()),
+            raw_snapshot: self.finalized.raw_output_identity(),
+            finalized_snapshot: self.finalized.finalized_output_identity(),
+        }
+    }
+
     pub const fn authenticates_compiler_origin(&self) -> bool {
         false
     }
@@ -124,6 +229,20 @@ impl PreparedWorkerV2HsacoPublicationV1 {
     /// Returns the exact raw HSACO bytes retained for publication and exact retry.
     pub fn exact_bytes(&self) -> &[u8] {
         self.inspected.exact_bytes()
+    }
+
+    /// Reconstructs the canonical inert intent from the retained sealed raw inspection.
+    pub const fn publication_intent(&self) -> SealedWorkerV2HsacoPublicationIntentV1 {
+        let raw_snapshot = self.inspected.linked_output_identity();
+        SealedWorkerV2HsacoPublicationIntentV1 {
+            route: WorkerV2HsacoPublicationRouteV1::InspectedRaw,
+            plan: self.plan,
+            upstream: self.upstream,
+            raw_inspection: self.inspected.identity(),
+            canonical_finalization: None,
+            raw_snapshot,
+            finalized_snapshot: raw_snapshot,
+        }
     }
 
     /// Preparation does not authenticate compiler origin.

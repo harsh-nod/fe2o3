@@ -9,20 +9,19 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::ffi::OsStr;
 
 use fe2o3_artifact_transaction::{
-    AtomicPublicationIdentityV1, BackendPublicationReceiptV1, BuildAttempt, BuildSession,
-    CanonicalLinkRequestIdentityV1, DurableLinkPublicationPlanV1, FinalizationIdentityV1,
-    FinalizedOutputIdentityV1, KernelSetIdentityV1, LinkPublicationScopeV1, LinkedOutputIdentityV1,
-    PackageIdentityV1, PinnedWorkerIdentityV1, ProducerIdentity,
-    RecoveredWorkerV2PublicationIntentV1, TargetIdentityV1, UpstreamCodeObjectEvidenceIdentityV1,
-    ValidatedResponseIdentityV1, WorkerV2PublicationIntentErrorV1,
-    WorkerV2PublicationIntentIdentityV1, persist_worker_v2_publication_intent_v1,
-    producer_package_identity_v1, recover_worker_v2_publication_intent_v1,
+    BackendPublicationReceiptV1, BuildAttempt, BuildSession, DurableLinkPublicationPlanV1,
+    ProducerIdentity, RecoveredWorkerV2PublicationIntentV1, UpstreamCodeObjectEvidenceIdentityV1,
+    WorkerV2PublicationIntentErrorV1, WorkerV2PublicationIntentIdentityV1,
+    persist_worker_v2_publication_intent_v1, producer_package_identity_v1,
+    recover_worker_v2_publication_intent_v1,
 };
 use fe2o3_compiler_ffi::CodeObjectVersion;
 use fe2o3_hsaco_finalize::{
     CanonicalDescriptorSectionObservationV1, InspectedRawWorkerV2HsacoV1,
-    PreparedFinalizedWorkerV2HsacoV1, WorkerV2HsacoFinalizationError,
-    finalize_inspected_worker_v2_hsaco_v1,
+    PreparedFinalizedWorkerV2HsacoPublicationV1, PreparedWorkerV2HsacoPublicationV1,
+    SealedWorkerV2HsacoPublicationIntentV1, WorkerV2HsacoFinalizationError,
+    WorkerV2HsacoPublicationError, finalize_inspected_worker_v2_hsaco_v1,
+    prepare_finalized_worker_v2_hsaco_publication_v1, prepare_worker_v2_hsaco_publication_v1,
 };
 use rustix::fd::{FromRawFd, OwnedFd};
 use rustix::fs::{
@@ -141,6 +140,7 @@ pub(crate) enum RestartIntentErrorV1 {
     Marker(ResumeMarkerErrorV1),
     Intent(WorkerV2PublicationIntentErrorV1),
     Finalization(WorkerV2HsacoFinalizationError),
+    PublicationIntent(WorkerV2HsacoPublicationError),
     UnsupportedPublicationRoute {
         code_object_version: CodeObjectVersion,
         descriptor: CanonicalDescriptorSectionObservationV1,
@@ -157,6 +157,12 @@ impl fmt::Display for RestartIntentErrorV1 {
             }
             Self::Finalization(error) => {
                 write!(formatter, "Worker V2 HSACO finalization failed: {error}")
+            }
+            Self::PublicationIntent(error) => {
+                write!(
+                    formatter,
+                    "Worker V2 HSACO publication intent failed: {error}"
+                )
             }
             Self::UnsupportedPublicationRoute {
                 code_object_version,
@@ -178,6 +184,7 @@ impl Error for RestartIntentErrorV1 {
             Self::Marker(error) => Some(error),
             Self::Intent(error) => Some(error),
             Self::Finalization(error) => Some(error),
+            Self::PublicationIntent(error) => Some(error),
             Self::UnsupportedPublicationRoute { .. } => None,
             Self::IntentIdentityMismatch => None,
         }
@@ -191,22 +198,8 @@ pub(crate) struct PersistedAdmittedWorkerV2IntentV1 {
 
 #[derive(Debug)]
 pub(crate) enum PreparedWorkerV2PublicationV1 {
-    Raw(Box<PreparedRawWorkerV2PublicationV1>),
-    Finalized(Box<PreparedCanonicalWorkerV2PublicationV1>),
-}
-
-#[derive(Debug)]
-pub(crate) struct PreparedRawWorkerV2PublicationV1 {
-    evidence: InspectedRawWorkerV2HsacoV1,
-    plan: DurableLinkPublicationPlanV1,
-    upstream: UpstreamCodeObjectEvidenceIdentityV1,
-}
-
-#[derive(Debug)]
-pub(crate) struct PreparedCanonicalWorkerV2PublicationV1 {
-    evidence: PreparedFinalizedWorkerV2HsacoV1,
-    plan: DurableLinkPublicationPlanV1,
-    upstream: UpstreamCodeObjectEvidenceIdentityV1,
+    Raw(Box<PreparedWorkerV2HsacoPublicationV1>),
+    Finalized(Box<PreparedFinalizedWorkerV2HsacoPublicationV1>),
 }
 
 impl PreparedWorkerV2PublicationV1 {
@@ -219,22 +212,15 @@ impl PreparedWorkerV2PublicationV1 {
 
     fn attempt(&self) -> BuildAttempt {
         match self {
-            Self::Raw(prepared) => prepared.evidence.attempt(),
-            Self::Finalized(prepared) => prepared.evidence.attempt(),
+            Self::Raw(prepared) => prepared.attempt(),
+            Self::Finalized(prepared) => prepared.attempt(),
         }
     }
 
-    fn plan(&self) -> DurableLinkPublicationPlanV1 {
+    fn intent(&self) -> SealedWorkerV2HsacoPublicationIntentV1 {
         match self {
-            Self::Raw(prepared) => prepared.plan,
-            Self::Finalized(prepared) => prepared.plan,
-        }
-    }
-
-    fn upstream(&self) -> UpstreamCodeObjectEvidenceIdentityV1 {
-        match self {
-            Self::Raw(prepared) => prepared.upstream,
-            Self::Finalized(prepared) => prepared.upstream,
+            Self::Raw(prepared) => prepared.publication_intent(),
+            Self::Finalized(prepared) => prepared.publication_intent(),
         }
     }
 }
@@ -261,32 +247,24 @@ pub(crate) fn persist_admitted_worker_v2_intent_v1(
         inspected.canonical_descriptor_section(),
     )?;
     let prepared = match publication {
-        WorkerV2PublicationKindV1::Raw => {
-            let (plan, upstream) = derive_publication_plan_v1(producer, &inspected);
-            PreparedWorkerV2PublicationV1::Raw(Box::new(PreparedRawWorkerV2PublicationV1 {
-                evidence: inspected,
-                plan,
-                upstream,
-            }))
-        }
+        WorkerV2PublicationKindV1::Raw => PreparedWorkerV2PublicationV1::Raw(Box::new(
+            prepare_worker_v2_hsaco_publication_v1(producer, inspected)
+                .map_err(RestartIntentErrorV1::PublicationIntent)?,
+        )),
         WorkerV2PublicationKindV1::Finalized => {
-            let seed = derive_finalized_publication_plan_seed_v1(producer, &inspected);
             let finalized = finalize_inspected_worker_v2_hsaco_v1(inspected)
                 .map_err(RestartIntentErrorV1::Finalization)?;
-            let (plan, upstream) = complete_finalized_publication_plan_v1(seed, &finalized);
             PreparedWorkerV2PublicationV1::Finalized(Box::new(
-                PreparedCanonicalWorkerV2PublicationV1 {
-                    evidence: finalized,
-                    plan,
-                    upstream,
-                },
+                prepare_finalized_worker_v2_hsaco_publication_v1(producer, finalized)
+                    .map_err(RestartIntentErrorV1::PublicationIntent)?,
             ))
         }
     };
     debug_assert_eq!(publication, prepared.kind());
     let attempt = prepared.attempt();
-    let plan = prepared.plan();
-    let upstream = prepared.upstream();
+    let intent = prepared.intent();
+    let plan = intent.durable_plan();
+    let upstream = intent.upstream_evidence();
     let admission =
         restart_admission_commitment_v1(publication, plan, upstream, prepared.exact_bytes());
     store.persist_pending(publication, attempt, admission)?;
@@ -391,296 +369,6 @@ pub(crate) fn recover_worker_v2_intent_v1(
     Ok(recovered)
 }
 
-// This derivation is intentionally byte-for-byte compatible with the raw-HSACO publication
-// bridge. The upstream bridge currently keeps its plan private, so cargo must reconstruct the plan
-// before the restart journal can retain it. Publication still requires the attempt protocol.
-fn derive_publication_plan_v1(
-    producer: &ProducerIdentity,
-    inspected: &InspectedRawWorkerV2HsacoV1,
-) -> (
-    DurableLinkPublicationPlanV1,
-    UpstreamCodeObjectEvidenceIdentityV1,
-) {
-    const KERNEL_SET_DOMAIN: &[u8] = b"FE2O3/WORKER-V2-PUBLICATION-KERNEL-SET/V1\0";
-    const TARGET_DOMAIN: &[u8] = b"FE2O3/WORKER-V2-PUBLICATION-TARGET/V1\0";
-    const REQUEST_DOMAIN: &[u8] = b"FE2O3/WORKER-V2-PUBLICATION-REQUEST/V1\0";
-    const WORKER_DOMAIN: &[u8] = b"FE2O3/WORKER-V2-PUBLICATION-WORKER/V1\0";
-    const RESPONSE_DOMAIN: &[u8] = b"FE2O3/WORKER-V2-PUBLICATION-RESPONSE/V1\0";
-    const INSPECTION_DOMAIN: &[u8] = b"FE2O3/WORKER-V2-PUBLICATION-RAW-INSPECTION/V1\0";
-    const PUBLICATION_DOMAIN: &[u8] = b"FE2O3/WORKER-V2-ATOMIC-PUBLICATION/V1\0";
-
-    let producer_package = producer_package_identity_v1(producer);
-    let manifest = inspected.policy().symbol_manifest().identity();
-    let compiler_envelope = inspected.compiler_envelope_identity();
-    let kernel_set = KernelSetIdentityV1::from_bytes(hash_identity(KERNEL_SET_DOMAIN, |digest| {
-        digest.update(manifest.sha256());
-        digest.update(manifest.byte_len().to_le_bytes());
-        digest.update(compiler_envelope.as_bytes());
-    }));
-
-    let launch = inspected.policy().launch();
-    let target_text = inspected.target().to_string();
-    let target = TargetIdentityV1::from_bytes(hash_identity(TARGET_DOMAIN, |digest| {
-        update_length_prefixed(digest, target_text.as_bytes());
-        digest.update([match inspected.code_object_version() {
-            CodeObjectVersion::V4 => 4,
-            CodeObjectVersion::V5 => 5,
-            CodeObjectVersion::V6 => 6,
-        }]);
-        for axis in launch.required_workgroup_size() {
-            digest.update(axis.to_le_bytes());
-        }
-        digest.update(launch.max_flat_workgroup_size().to_le_bytes());
-        digest.update(launch.wavefront_size().to_le_bytes());
-    }));
-    let scope = LinkPublicationScopeV1::new(producer_package, kernel_set, target);
-
-    let source = inspected.source_evidence_identity();
-    let request =
-        CanonicalLinkRequestIdentityV1::from_bytes(hash_identity(REQUEST_DOMAIN, |digest| {
-            digest.update(inspected.sealed_request_id());
-            digest.update(inspected.sealed_request_identity());
-            digest.update(inspected.handoff_identity().as_bytes());
-            digest.update(manifest.sha256());
-            digest.update(manifest.byte_len().to_le_bytes());
-            digest.update(inspected.link_plan_identity().as_bytes());
-            digest.update(inspected.policy().compiler_envelope_identity().as_bytes());
-            digest.update(inspected.policy().identity().as_bytes());
-            digest.update(source.as_bytes());
-            digest.update(inspected.worker_measurement().executable().sha256());
-            digest.update(
-                inspected
-                    .worker_measurement()
-                    .executable()
-                    .byte_len()
-                    .to_le_bytes(),
-            );
-        }));
-
-    let measurement = inspected.worker_measurement();
-    let executable = measurement.executable();
-    let worker = PinnedWorkerIdentityV1::from_bytes(hash_identity(WORKER_DOMAIN, |digest| {
-        digest.update(executable.sha256());
-        digest.update(executable.byte_len().to_le_bytes());
-        update_length_prefixed(digest, measurement.worker_build_identity().as_bytes());
-        update_length_prefixed(digest, measurement.llvm_build_identity().as_bytes());
-    }));
-    let response =
-        ValidatedResponseIdentityV1::from_bytes(hash_identity(RESPONSE_DOMAIN, |digest| {
-            digest.update(inspected.response_identity().as_bytes())
-        }));
-    let output_digest: [u8; 32] = Sha256::digest(inspected.exact_bytes()).into();
-    let linked_output = LinkedOutputIdentityV1::from_bytes(output_digest);
-    let finalization =
-        FinalizationIdentityV1::from_bytes(hash_identity(INSPECTION_DOMAIN, |digest| {
-            digest.update(inspected.identity().as_bytes())
-        }));
-    let finalized_output = FinalizedOutputIdentityV1::from_bytes(output_digest);
-    let attempt = inspected.attempt();
-    let publication =
-        AtomicPublicationIdentityV1::from_bytes(hash_identity(PUBLICATION_DOMAIN, |digest| {
-            digest.update(attempt.generation().to_le_bytes());
-            digest.update(attempt.session().as_bytes());
-            digest.update(attempt.invocation().as_bytes());
-            digest.update(producer_package.as_bytes());
-            digest.update(kernel_set.as_bytes());
-            digest.update(target.as_bytes());
-            digest.update(request.as_bytes());
-            digest.update(worker.as_bytes());
-            digest.update(response.as_bytes());
-            digest.update(linked_output.as_bytes());
-            digest.update(finalization.as_bytes());
-            digest.update(finalized_output.as_bytes());
-            digest.update(inspected.identity().as_bytes());
-        }));
-    let plan = DurableLinkPublicationPlanV1::new(
-        attempt,
-        scope,
-        request,
-        worker,
-        response,
-        linked_output,
-        finalization,
-        finalized_output,
-        publication,
-    );
-    let upstream =
-        UpstreamCodeObjectEvidenceIdentityV1::from_bytes(*inspected.identity().as_bytes());
-    (plan, upstream)
-}
-
-#[derive(Clone, Copy)]
-struct FinalizedPublicationPlanSeedV1 {
-    attempt: BuildAttempt,
-    producer_package: PackageIdentityV1,
-    kernel_set: KernelSetIdentityV1,
-    target: TargetIdentityV1,
-    request: CanonicalLinkRequestIdentityV1,
-    worker: PinnedWorkerIdentityV1,
-    response: ValidatedResponseIdentityV1,
-    linked_output: LinkedOutputIdentityV1,
-    raw_identity: [u8; 32],
-}
-
-fn derive_finalized_publication_plan_seed_v1(
-    producer: &ProducerIdentity,
-    raw: &InspectedRawWorkerV2HsacoV1,
-) -> FinalizedPublicationPlanSeedV1 {
-    const KERNEL_SET_DOMAIN: &[u8] = b"FE2O3/WORKER-V2-FINALIZED-PUBLICATION-KERNEL-SET/V1\0";
-    const TARGET_DOMAIN: &[u8] = b"FE2O3/WORKER-V2-FINALIZED-PUBLICATION-TARGET/V1\0";
-    const REQUEST_DOMAIN: &[u8] = b"FE2O3/WORKER-V2-FINALIZED-PUBLICATION-REQUEST/V1\0";
-    const WORKER_DOMAIN: &[u8] = b"FE2O3/WORKER-V2-FINALIZED-PUBLICATION-WORKER/V1\0";
-    const RESPONSE_DOMAIN: &[u8] = b"FE2O3/WORKER-V2-FINALIZED-PUBLICATION-RESPONSE/V1\0";
-
-    let producer_package = producer_package_identity_v1(producer);
-    let manifest = raw.policy().symbol_manifest().identity();
-    let compiler_envelope = raw.compiler_envelope_identity();
-    let kernel_set = KernelSetIdentityV1::from_bytes(hash_identity(KERNEL_SET_DOMAIN, |digest| {
-        digest.update(manifest.sha256());
-        digest.update(manifest.byte_len().to_le_bytes());
-        digest.update(compiler_envelope.as_bytes());
-    }));
-
-    let launch = raw.policy().launch();
-    let target_text = raw.target().to_string();
-    let target = TargetIdentityV1::from_bytes(hash_identity(TARGET_DOMAIN, |digest| {
-        update_length_prefixed(digest, target_text.as_bytes());
-        digest.update([code_object_version_tag(raw.code_object_version())]);
-        for axis in launch.required_workgroup_size() {
-            digest.update(axis.to_le_bytes());
-        }
-        digest.update(launch.max_flat_workgroup_size().to_le_bytes());
-        digest.update(launch.wavefront_size().to_le_bytes());
-    }));
-
-    let source = raw.source_evidence_identity();
-    let request =
-        CanonicalLinkRequestIdentityV1::from_bytes(hash_identity(REQUEST_DOMAIN, |digest| {
-            digest.update(raw.sealed_request_id());
-            digest.update(raw.sealed_request_identity());
-            digest.update(raw.handoff_identity().as_bytes());
-            digest.update(manifest.sha256());
-            digest.update(manifest.byte_len().to_le_bytes());
-            digest.update(raw.link_plan_identity().as_bytes());
-            digest.update(raw.policy().compiler_envelope_identity().as_bytes());
-            digest.update(raw.policy().identity().as_bytes());
-            digest.update(source.as_bytes());
-            digest.update(raw.worker_measurement().executable().sha256());
-            digest.update(
-                raw.worker_measurement()
-                    .executable()
-                    .byte_len()
-                    .to_le_bytes(),
-            );
-        }));
-
-    let measurement = raw.worker_measurement();
-    let executable = measurement.executable();
-    let worker = PinnedWorkerIdentityV1::from_bytes(hash_identity(WORKER_DOMAIN, |digest| {
-        digest.update(executable.sha256());
-        digest.update(executable.byte_len().to_le_bytes());
-        update_length_prefixed(digest, measurement.worker_build_identity().as_bytes());
-        update_length_prefixed(digest, measurement.llvm_build_identity().as_bytes());
-    }));
-    let response =
-        ValidatedResponseIdentityV1::from_bytes(hash_identity(RESPONSE_DOMAIN, |digest| {
-            digest.update(raw.response_identity().as_bytes());
-        }));
-
-    FinalizedPublicationPlanSeedV1 {
-        attempt: raw.attempt(),
-        producer_package,
-        kernel_set,
-        target,
-        request,
-        worker,
-        response,
-        linked_output: LinkedOutputIdentityV1::from_bytes(*raw.linked_output_identity().sha256()),
-        raw_identity: *raw.identity().as_bytes(),
-    }
-}
-
-fn complete_finalized_publication_plan_v1(
-    seed: FinalizedPublicationPlanSeedV1,
-    finalized: &PreparedFinalizedWorkerV2HsacoV1,
-) -> (
-    DurableLinkPublicationPlanV1,
-    UpstreamCodeObjectEvidenceIdentityV1,
-) {
-    const FINALIZATION_DOMAIN: &[u8] = b"FE2O3/WORKER-V2-FINALIZED-PUBLICATION-FINALIZATION/V1\0";
-    const PUBLICATION_DOMAIN: &[u8] = b"FE2O3/WORKER-V2-FINALIZED-ATOMIC-PUBLICATION/V1\0";
-    const UPSTREAM_DOMAIN: &[u8] = b"FE2O3/WORKER-V2-FINALIZED-PUBLICATION-UPSTREAM/V1\0";
-
-    let finalization =
-        FinalizationIdentityV1::from_bytes(hash_identity(FINALIZATION_DOMAIN, |digest| {
-            digest.update(seed.raw_identity);
-            digest.update(finalized.identity().as_bytes());
-            digest.update(finalized.canonical_digest().as_bytes());
-            hash_content_identity(
-                digest,
-                finalized.raw_output_identity().sha256(),
-                finalized.raw_output_identity().byte_len(),
-            );
-            hash_content_identity(
-                digest,
-                finalized.finalized_output_identity().sha256(),
-                finalized.finalized_output_identity().byte_len(),
-            );
-        }));
-    let finalized_output =
-        FinalizedOutputIdentityV1::from_bytes(*finalized.finalized_output_identity().sha256());
-    let publication =
-        AtomicPublicationIdentityV1::from_bytes(hash_identity(PUBLICATION_DOMAIN, |digest| {
-            digest.update(seed.attempt.generation().to_le_bytes());
-            digest.update(seed.attempt.session().as_bytes());
-            digest.update(seed.attempt.invocation().as_bytes());
-            digest.update(seed.producer_package.as_bytes());
-            digest.update(seed.kernel_set.as_bytes());
-            digest.update(seed.target.as_bytes());
-            digest.update(seed.request.as_bytes());
-            digest.update(seed.worker.as_bytes());
-            digest.update(seed.response.as_bytes());
-            digest.update(seed.linked_output.as_bytes());
-            digest.update(finalization.as_bytes());
-            digest.update(finalized_output.as_bytes());
-            digest.update(seed.raw_identity);
-            digest.update(finalized.identity().as_bytes());
-        }));
-    let plan = DurableLinkPublicationPlanV1::new(
-        seed.attempt,
-        LinkPublicationScopeV1::new(seed.producer_package, seed.kernel_set, seed.target),
-        seed.request,
-        seed.worker,
-        seed.response,
-        seed.linked_output,
-        finalization,
-        finalized_output,
-        publication,
-    );
-    let upstream = UpstreamCodeObjectEvidenceIdentityV1::from_bytes(hash_identity(
-        UPSTREAM_DOMAIN,
-        |digest| {
-            digest.update(seed.raw_identity);
-            digest.update(finalized.identity().as_bytes());
-            digest.update(finalization.as_bytes());
-        },
-    ));
-    (plan, upstream)
-}
-
-fn hash_content_identity(digest: &mut Sha256, sha256: &[u8; 32], byte_len: u64) {
-    digest.update(sha256);
-    digest.update(byte_len.to_le_bytes());
-}
-
-const fn code_object_version_tag(version: CodeObjectVersion) -> u8 {
-    match version {
-        CodeObjectVersion::V4 => 4,
-        CodeObjectVersion::V5 => 5,
-        CodeObjectVersion::V6 => 6,
-    }
-}
-
 pub(crate) fn restart_admission_commitment_v1(
     publication: WorkerV2PublicationKindV1,
     plan: DurableLinkPublicationPlanV1,
@@ -738,8 +426,8 @@ fn legacy_restart_admission_commitment_v1(
 impl PreparedWorkerV2PublicationV1 {
     pub(crate) fn exact_bytes(&self) -> &[u8] {
         match self {
-            Self::Raw(prepared) => prepared.evidence.exact_bytes(),
-            Self::Finalized(prepared) => prepared.evidence.exact_finalized_bytes(),
+            Self::Raw(prepared) => prepared.exact_bytes(),
+            Self::Finalized(prepared) => prepared.exact_finalized_bytes(),
         }
     }
 }
@@ -749,11 +437,6 @@ fn hash_identity(domain: &[u8], update: impl FnOnce(&mut Sha256)) -> [u8; 32] {
     digest.update(domain);
     update(&mut digest);
     digest.finalize().into()
-}
-
-fn update_length_prefixed(digest: &mut Sha256, bytes: &[u8]) {
-    digest.update((bytes.len() as u64).to_le_bytes());
-    digest.update(bytes);
 }
 
 impl ResumeMarkerStateV1 {
@@ -2108,55 +1791,102 @@ mod tests {
     }
 
     #[test]
-    fn ready_marker_rejects_mutated_retained_output() {
-        let directory = TestDirectory::new();
-        let producer = producer(60);
-        let attempt = attempt(&directory.0, &producer, 60);
-        let (output, plan, upstream) = publication_inputs(attempt, 60);
-        let store = WorkerV2ResumeStoreV1::open(&directory.0, &producer).unwrap();
-        let publication = WorkerV2PublicationKindV1::Finalized;
-        store
-            .persist_pending(
-                publication,
+    fn ready_markers_reject_raw_and_finalized_snapshot_substitution() {
+        for (seed, publication) in [
+            (60, WorkerV2PublicationKindV1::Raw),
+            (61, WorkerV2PublicationKindV1::Finalized),
+        ] {
+            let directory = TestDirectory::new();
+            let producer = producer(seed);
+            let attempt = attempt(&directory.0, &producer, seed);
+            let (output, plan, upstream) = publication_inputs(attempt, seed);
+            let store = WorkerV2ResumeStoreV1::open(&directory.0, &producer).unwrap();
+            store
+                .persist_pending(
+                    publication,
+                    attempt,
+                    restart_admission_commitment_v1(publication, plan, upstream, &output),
+                )
+                .unwrap();
+            let persisted = persist_worker_v2_publication_intent_v1(
+                &directory.0,
+                &producer,
                 attempt,
-                restart_admission_commitment_v1(publication, plan, upstream, &output),
+                plan,
+                upstream,
+                &output,
             )
             .unwrap();
-        let persisted = persist_worker_v2_publication_intent_v1(
+            store
+                .persist_ready(publication, attempt, persisted.record().identity())
+                .unwrap();
+            drop(persisted);
+            drop(store);
+
+            let retained_output = fs::read_dir(&directory.0)
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .find(|path| {
+                    let name = path.file_name().unwrap().to_string_lossy();
+                    name.starts_with(".fe2o3-worker-v2-publication-intent-v1-")
+                        && name.ends_with(".output")
+                })
+                .unwrap();
+            let mut substituted = fs::read(&retained_output).unwrap();
+            substituted[0] ^= 1;
+            fs::write(&retained_output, substituted).unwrap();
+
+            let store = WorkerV2ResumeStoreV1::open(&directory.0, &producer).unwrap();
+            let state = store.load().unwrap().unwrap();
+            assert_eq!(state.publication(), publication);
+            assert!(matches!(
+                recover_worker_v2_intent_v1(&store, &producer, state),
+                Err(RestartIntentErrorV1::Intent(_))
+            ));
+            assert_eq!(store.load().unwrap(), Some(state));
+        }
+    }
+
+    #[test]
+    fn stale_attempt_marker_cannot_recover_a_current_intent() {
+        let directory = TestDirectory::new();
+        let producer = producer(62);
+        let current = attempt(&directory.0, &producer, 62);
+        let stale = BuildAttempt::from_env_value(&format!(
+            "{}:{}:{}",
+            current.generation() + 1,
+            current.session().to_hex(),
+            current.invocation().to_hex()
+        ))
+        .unwrap();
+        let (output, plan, upstream) = publication_inputs(current, 62);
+        persist_worker_v2_publication_intent_v1(
             &directory.0,
             &producer,
-            attempt,
+            current,
             plan,
             upstream,
             &output,
         )
         .unwrap();
-        store
-            .persist_ready(publication, attempt, persisted.record().identity())
-            .unwrap();
-        drop(persisted);
-        drop(store);
 
-        let retained_output = fs::read_dir(&directory.0)
-            .unwrap()
-            .map(|entry| entry.unwrap().path())
-            .find(|path| {
-                let name = path.file_name().unwrap().to_string_lossy();
-                name.starts_with(".fe2o3-worker-v2-publication-intent-v1-")
-                    && name.ends_with(".output")
-            })
-            .unwrap();
-        let mut substituted = fs::read(&retained_output).unwrap();
-        substituted[0] ^= 1;
-        fs::write(&retained_output, substituted).unwrap();
-
+        let publication = WorkerV2PublicationKindV1::Finalized;
         let store = WorkerV2ResumeStoreV1::open(&directory.0, &producer).unwrap();
+        store
+            .persist_pending(
+                publication,
+                stale,
+                restart_admission_commitment_v1(publication, plan, upstream, &output),
+            )
+            .unwrap();
         let state = store.load().unwrap().unwrap();
+        assert_eq!(state.attempt(), stale);
         assert!(matches!(
             recover_worker_v2_intent_v1(&store, &producer, state),
             Err(RestartIntentErrorV1::Intent(_))
         ));
         assert_eq!(store.load().unwrap(), Some(state));
+        assert!(recover_worker_v2_publication_intent_v1(&directory.0, &producer, current).is_ok());
     }
 
     #[test]

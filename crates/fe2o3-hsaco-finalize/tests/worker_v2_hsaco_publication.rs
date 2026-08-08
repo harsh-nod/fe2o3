@@ -19,8 +19,9 @@ use fe2o3_compiler_ffi::{
 };
 use fe2o3_hsaco_finalize::{
     ContentIdentityV1, LinkOptionV1, PinnedWorkerV1, WorkerExecutionLimitsV1, WorkerMeasurementV1,
-    WorkerOutputConstraintsV1, execute_reproducible_first_build_worker_v2,
-    finalize_inspected_worker_v2_hsaco_v1, inspect_worker_v2_raw_hsaco_v1,
+    WorkerOutputConstraintsV1, WorkerV2HsacoPublicationRouteV1,
+    execute_reproducible_first_build_worker_v2, finalize_inspected_worker_v2_hsaco_v1,
+    inspect_worker_v2_raw_hsaco_v1,
 };
 use fe2o3_kernel_descriptor::{
     BlockSizeV1, BuildEvidenceV1, CanonicalCodeObjectDigest, CodeObjectVersion, CompilerIdentityV1,
@@ -95,6 +96,36 @@ fn typed_bridge_publishes_exact_inspected_bytes_and_recovers_exact_retry() {
 
     assert_eq!(prepared.attempt(), attempt);
     assert_eq!(prepared.exact_bytes(), fixture.bytes);
+    let intent = prepared.publication_intent();
+    assert_eq!(
+        intent.route(),
+        WorkerV2HsacoPublicationRouteV1::InspectedRaw
+    );
+    assert_eq!(
+        intent.raw_inspection_identity().as_bytes(),
+        &inspection_identity
+    );
+    assert_eq!(intent.canonical_finalization_identity(), None);
+    assert_eq!(
+        intent.raw_linked_snapshot_identity(),
+        intent.finalized_snapshot_identity()
+    );
+    assert_eq!(
+        intent.durable_plan().linked_output().as_bytes(),
+        intent.raw_linked_snapshot_identity().sha256()
+    );
+    assert_eq!(
+        intent.durable_plan().finalized_output().as_bytes(),
+        intent.finalized_snapshot_identity().sha256()
+    );
+    assert!(intent.matches_exact_retained_output(prepared.exact_bytes()));
+    let mut substituted_raw = prepared.exact_bytes().to_vec();
+    substituted_raw[0] ^= 1;
+    assert!(!intent.matches_exact_retained_output(&substituted_raw));
+    assert!(!intent.authenticates_compiler_origin());
+    assert!(!intent.grants_publication_authority());
+    assert!(!intent.grants_load_authority());
+    assert!(!intent.grants_launch_authority());
     assert!(!prepared.authenticates_compiler_origin());
     assert!(!prepared.grants_publication_authority());
     assert!(!prepared.grants_load_authority());
@@ -113,6 +144,10 @@ fn typed_bridge_publishes_exact_inspected_bytes_and_recovers_exact_retry() {
     assert_eq!(
         published.receipt().upstream_evidence_identity(),
         inspection_identity
+    );
+    assert_eq!(
+        published.receipt().upstream_evidence_identity(),
+        intent.upstream_evidence().as_bytes()
     );
     assert!(!published.snapshot().grants_load_authority());
     assert!(!published.snapshot().grants_launch_authority());
@@ -169,6 +204,45 @@ fn finalized_bridge_publishes_only_canonical_bytes_and_retries_exact_plan() {
             .matches(prepared.exact_finalized_bytes())
     );
     assert_ne!(prepared.exact_finalized_bytes(), raw_bytes);
+    let intent = prepared.publication_intent();
+    assert_eq!(
+        intent.route(),
+        WorkerV2HsacoPublicationRouteV1::CanonicallyFinalized
+    );
+    assert_eq!(intent.raw_inspection_identity(), raw_identity);
+    assert_eq!(
+        intent.canonical_finalization_identity(),
+        Some(finalization_identity)
+    );
+    assert_eq!(
+        intent.raw_linked_snapshot_identity(),
+        prepared.raw_output_identity()
+    );
+    assert_eq!(
+        intent.finalized_snapshot_identity(),
+        prepared.finalized_output_identity()
+    );
+    assert_ne!(
+        intent.raw_linked_snapshot_identity(),
+        intent.finalized_snapshot_identity()
+    );
+    assert_eq!(
+        intent.durable_plan().linked_output().as_bytes(),
+        intent.raw_linked_snapshot_identity().sha256()
+    );
+    assert_eq!(
+        intent.durable_plan().finalized_output().as_bytes(),
+        intent.finalized_snapshot_identity().sha256()
+    );
+    assert!(intent.matches_exact_retained_output(prepared.exact_finalized_bytes()));
+    assert!(!intent.matches_exact_retained_output(&raw_bytes));
+    let mut substituted_finalized = prepared.exact_finalized_bytes().to_vec();
+    substituted_finalized[0] ^= 1;
+    assert!(!intent.matches_exact_retained_output(&substituted_finalized));
+    assert!(!intent.authenticates_compiler_origin());
+    assert!(!intent.grants_publication_authority());
+    assert!(!intent.grants_load_authority());
+    assert!(!intent.grants_launch_authority());
     assert!(!prepared.authenticates_compiler_origin());
     assert!(!prepared.proves_verus_verification());
     assert!(!prepared.grants_publication_authority());
@@ -198,6 +272,10 @@ fn finalized_bridge_publishes_only_canonical_bytes_and_retries_exact_plan() {
     assert_ne!(
         published.receipt().upstream_evidence_identity(),
         *raw_identity.as_bytes()
+    );
+    assert_eq!(
+        published.receipt().upstream_evidence_identity(),
+        intent.upstream_evidence().as_bytes()
     );
     assert!(matches!(
         fe2o3_hsaco_finalize::publish_prepared_finalized_worker_v2_hsaco_v1(

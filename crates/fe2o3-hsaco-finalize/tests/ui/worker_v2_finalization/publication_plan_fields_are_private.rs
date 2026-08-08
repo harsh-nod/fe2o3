@@ -5,6 +5,14 @@ fn substitute_private_fields(prepared: &PreparedFinalizedWorkerV2HsacoPublicatio
     let _ = prepared.producer_package;
     let _ = prepared.plan;
     let _ = prepared.upstream;
+    let intent = prepared.publication_intent();
+    let _ = intent.route;
+    let _ = intent.plan;
+    let _ = intent.upstream;
+    let _ = intent.raw_inspection;
+    let _ = intent.canonical_finalization;
+    let _ = intent.raw_snapshot;
+    let _ = intent.finalized_snapshot;
 }
 
 fn main() {}
