@@ -5,11 +5,17 @@
 use core::{fmt, str::FromStr};
 
 mod capabilities;
+mod feature_capabilities;
 
 pub use capabilities::{
     AmdTargetCapabilities, AsyncCopyInstructionSet, AsyncCopyInstructionSets, AtomicScope,
     AtomicScopes, CapabilityDerivationError, CapabilitySupport, MatrixInstructionSet,
     MatrixInstructionSets, WavefrontWidth, WavefrontWidths,
+};
+pub use feature_capabilities::{
+    AtomicOrdering, AtomicOrderings, AtomicWidth, AtomicWidths, DeviceDiagnosticFeature, Fp8Format,
+    Fp8Formats, LaunchBoundsField, MfmaFamilies, MfmaFamily, MxFormat, MxFormats, WorkgroupAxis,
+    WorkgroupLimits,
 };
 
 /// Concrete canonical AMDGPU processor names understood by this crate.

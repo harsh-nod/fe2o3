@@ -1,5 +1,9 @@
 use core::fmt;
 
+use crate::feature_capabilities::{
+    AdvancedTargetCapabilities, AtomicOrderings, AtomicWidths, DeviceDiagnosticFeature, Fp8Formats,
+    LaunchBoundsField, MfmaFamilies, MxFormats, WorkgroupLimits,
+};
 use crate::{AmdTargetFeature, AmdTargetId};
 
 /// A wavefront width supported by an AMDGPU processor.
@@ -182,7 +186,8 @@ impl AtomicScopes {
     const DEVICE: u8 = 1 << 1;
     const SYSTEM: u8 = 1 << 2;
 
-    const ALL: Self = Self(Self::WORKGROUP | Self::DEVICE | Self::SYSTEM);
+    pub(crate) const NONE: Self = Self(0);
+    pub(crate) const ALL: Self = Self(Self::WORKGROUP | Self::DEVICE | Self::SYSTEM);
 
     /// Returns whether atomics can be lowered at `scope`.
     pub const fn contains(self, scope: AtomicScope) -> bool {
@@ -192,6 +197,11 @@ impl AtomicScopes {
             AtomicScope::System => Self::SYSTEM,
         };
         self.0 & flag != 0
+    }
+
+    /// Returns whether no atomic scope has been reviewed.
+    pub const fn is_empty(self) -> bool {
+        self.0 == 0
     }
 }
 
@@ -330,6 +340,7 @@ pub struct AmdTargetCapabilities {
     cooperative_launch: CapabilitySupport,
     matrix_instruction_sets: MatrixInstructionSets,
     async_copy_instruction_sets: AsyncCopyInstructionSets,
+    advanced: AdvancedTargetCapabilities,
 }
 
 impl AmdTargetCapabilities {
@@ -356,6 +367,7 @@ impl AmdTargetCapabilities {
             cooperative_launch: CapabilitySupport::RequiresRuntimeEvidence,
             matrix_instruction_sets: profile.matrix_instruction_sets,
             async_copy_instruction_sets: profile.async_copy_instruction_sets,
+            advanced: AdvancedTargetCapabilities::for_processor(target.processor()),
         })
     }
 
@@ -389,6 +401,86 @@ impl AmdTargetCapabilities {
 
     pub const fn async_copy_instruction_sets(&self) -> AsyncCopyInstructionSets {
         self.async_copy_instruction_sets
+    }
+
+    /// Returns reviewed workgroup limits, or `None` when this target profile
+    /// has not established them.
+    pub const fn workgroup_limits(&self) -> Option<WorkgroupLimits> {
+        self.advanced.workgroup_limits
+    }
+
+    /// Returns the maximum wavefront count implied by reviewed workgroup
+    /// limits for `width`.
+    pub const fn max_wavefronts_per_workgroup(&self, width: WavefrontWidth) -> Option<u32> {
+        if !self.wavefront_widths.contains(width) {
+            return None;
+        }
+        match self.advanced.workgroup_limits {
+            Some(limits) => Some(limits.max_wavefronts(width)),
+            None => None,
+        }
+    }
+
+    /// Standard Rust atomic widths with reviewed direct target lowering.
+    pub const fn standard_atomic_widths(&self) -> AtomicWidths {
+        self.advanced.standard_atomic_widths
+    }
+
+    /// Standard Rust atomic scopes with reviewed target lowering.
+    ///
+    /// System scope still requires runtime evidence for the allocation and
+    /// mapping. Address-space compatibility is a separate verifier check.
+    pub const fn standard_atomic_scopes(&self) -> AtomicScopes {
+        self.advanced.standard_atomic_scopes
+    }
+
+    /// Standard Rust atomic orderings with reviewed target lowering.
+    pub const fn standard_atomic_orderings(&self) -> AtomicOrderings {
+        self.advanced.standard_atomic_orderings
+    }
+
+    /// Whether the target has a reviewed native split-barrier mechanism.
+    pub const fn native_split_barriers(&self) -> CapabilitySupport {
+        self.advanced.native_split_barriers
+    }
+
+    /// Reviewed scalar FP8 encodings for this exact target.
+    pub const fn fp8_formats(&self) -> Fp8Formats {
+        self.advanced.fp8_formats
+    }
+
+    /// Reviewed native microscaling formats for this exact target.
+    pub const fn mx_formats(&self) -> MxFormats {
+        self.advanced.mx_formats
+    }
+
+    /// Reviewed MFMA numerical families for this exact target.
+    pub const fn mfma_families(&self) -> MfmaFamilies {
+        self.advanced.mfma_families
+    }
+
+    /// Returns the target-level support state for a device diagnostic feature.
+    pub const fn device_diagnostic_support(
+        &self,
+        feature: DeviceDiagnosticFeature,
+    ) -> CapabilitySupport {
+        match feature {
+            DeviceDiagnosticFeature::Printf => self.advanced.device_printf,
+            DeviceDiagnosticFeature::Trap => self.advanced.device_trap,
+            DeviceDiagnosticFeature::DebugTrap => self.advanced.device_debug_trap,
+            DeviceDiagnosticFeature::ClockCounter => self.advanced.device_clock_counter,
+            DeviceDiagnosticFeature::ProfilingMarker => self.advanced.device_profiling_marker,
+        }
+    }
+
+    /// Returns support for one source-level launch-bounds metadata field.
+    pub const fn launch_bounds_support(&self, field: LaunchBoundsField) -> CapabilitySupport {
+        match field {
+            LaunchBoundsField::MaxWorkgroupSize => self.advanced.max_workgroup_size_metadata,
+            LaunchBoundsField::MinWorkgroupsPerComputeUnit => {
+                self.advanced.min_workgroups_per_compute_unit_metadata
+            }
+        }
     }
 
     /// Writes the deterministic V1 canonical text encoding.

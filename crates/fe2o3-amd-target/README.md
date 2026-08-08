@@ -23,6 +23,18 @@ workgroup, lowerable atomic scopes, and narrowly named matrix and VMEM/LDS copy
 instruction families. Its `Display` implementation and `encode_canonical`
 method emit the same deterministic text.
 
+Additional typed queries describe reviewed source-contract prerequisites for
+workgroup dimensions, standard Rust atomics, native split barriers, FP8 and MX
+formats, MFMA numerical families, device diagnostics, and launch-bounds
+metadata. These queries currently carry a conservative `gfx942` profile.
+Unreviewed processors fail closed with `None`, empty sets, or `unsupported`;
+the older broad target queries retain their existing behavior.
+
+The advanced queries do not add fields to the V1 canonical text encoding. The
+encoding remains byte-for-byte compatible and identifies the exact target from
+which these deterministic queries are derived. A future serialized capability
+record must use a new explicit version rather than reinterpreting V1.
+
 The model deliberately distinguishes target facts from runtime facts.
 Cooperative launch is always `runtime-evidence`: HIP's observed device
 attribute and an occupancy-safe launch must authorize it. System-scope atomic
@@ -30,6 +42,15 @@ lowering is a target fact, but a system-scope operation additionally needs
 runtime evidence that its allocation and mapping are eligible. An instruction
 family is not itself a complete high-level matrix or asynchronous-copy
 contract.
+
+The `gfx942` profile admits wave64 workgroups of at most 1024 work-items,
+direct 32- and 64-bit standard atomic lowering, FNUZ E4M3/E5M2 encodings, and a
+bounded set of MFMA numerical families. It rejects native split barriers, OCP
+FP8, MX formats, profiling markers, and minimum-workgroups occupancy metadata.
+Device printf and debug-trap observation require runtime evidence. These facts
+do not authorize a source operation: address spaces, operation-specific atomic
+orderings, exact matrix shapes/layouts, linked device libraries, and launch
+admission remain separate checks.
 
 ```rust
 use fe2o3_amd_target::{AmdTargetId, CapabilitySupport, WavefrontWidth};
