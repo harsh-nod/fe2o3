@@ -242,19 +242,37 @@ pub struct CompilerTransactionEvidencePartsV1 {
 pub struct CompilerTransactionEvidenceCapsuleV1 {
     parts: CompilerTransactionEvidencePartsV1,
     identity: CompilerTransactionEvidenceIdentityV1,
+    encoded_len: usize,
 }
 
 impl CompilerTransactionEvidenceCapsuleV1 {
     pub fn new(
         parts: CompilerTransactionEvidencePartsV1,
     ) -> Result<Self, CompilerTransactionValidationErrorV1> {
+        Self::new_with_max_encoded_bytes(parts, MAX_COMPILER_TRANSACTION_EVIDENCE_BYTES_V1)
+    }
+
+    fn new_with_max_encoded_bytes(
+        parts: CompilerTransactionEvidencePartsV1,
+        max_encoded_bytes: usize,
+    ) -> Result<Self, CompilerTransactionValidationErrorV1> {
         validate_parts(&parts)?;
+        let encoded_len = checked_encoded_total_len(&parts).ok_or(
+            CompilerTransactionValidationErrorV1::EvidenceTooLarge {
+                max: max_encoded_bytes,
+            },
+        )?;
+        if encoded_len > max_encoded_bytes {
+            return Err(CompilerTransactionValidationErrorV1::EvidenceTooLarge {
+                max: max_encoded_bytes,
+            });
+        }
         let mut capsule = Self {
             parts,
             identity: CompilerTransactionEvidenceIdentityV1::from_bytes([0; 32]),
+            encoded_len,
         };
         capsule.identity = calculate_capsule_identity(&capsule.encode_prefix());
-        debug_assert!(capsule.to_bytes().len() <= MAX_COMPILER_TRANSACTION_EVIDENCE_BYTES_V1);
         Ok(capsule)
     }
 
@@ -337,7 +355,7 @@ impl CompilerTransactionEvidenceCapsuleV1 {
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = self.encode_prefix();
         write_field(&mut bytes, CAPSULE_IDENTITY_TAG, self.identity.as_bytes());
-        debug_assert_eq!(bytes.len(), encoded_total_len(&self.parts));
+        debug_assert_eq!(bytes.len(), self.encoded_len);
         bytes
     }
 
@@ -357,41 +375,25 @@ impl CompilerTransactionEvidenceCapsuleV1 {
     }
 
     fn encode_prefix(&self) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(encoded_total_len(&self.parts));
+        let mut bytes = Vec::with_capacity(self.encoded_len);
         bytes.extend_from_slice(&COMPILER_TRANSACTION_EVIDENCE_MAGIC_V1);
         bytes.extend_from_slice(&COMPILER_TRANSACTION_EVIDENCE_VERSION_V1.to_le_bytes());
         bytes.extend_from_slice(&0_u16.to_le_bytes());
-        bytes.extend_from_slice(&(encoded_total_len(&self.parts) as u32).to_le_bytes());
+        bytes.extend_from_slice(&(self.encoded_len as u32).to_le_bytes());
         write_field(
             &mut bytes,
             SOURCE_ROOT_TAG,
             &encode_digest(self.parts.source_closure.root.digest()),
         );
-        write_field(
-            &mut bytes,
-            DEPENDENCIES_TAG,
-            &encode_dependencies(&self.parts.source_closure),
-        );
-        write_field(
-            &mut bytes,
-            FEATURES_TAG,
-            &encode_features(&self.parts.source_closure),
-        );
-        write_field(
-            &mut bytes,
-            RUSTC_TOOL_TAG,
-            &encode_tool(&self.parts.rustc_tool),
-        );
+        write_dependencies_field(&mut bytes, &self.parts.source_closure);
+        write_features_field(&mut bytes, &self.parts.source_closure);
+        write_tool_field(&mut bytes, RUSTC_TOOL_TAG, &self.parts.rustc_tool);
         write_field(
             &mut bytes,
             RUSTC_INVOCATION_TAG,
             &encode_digest(self.parts.rustc_invocation.digest()),
         );
-        write_field(
-            &mut bytes,
-            BACKEND_TOOL_TAG,
-            &encode_tool(&self.parts.backend_tool),
-        );
+        write_tool_field(&mut bytes, BACKEND_TOOL_TAG, &self.parts.backend_tool);
         write_field(
             &mut bytes,
             BACKEND_INVOCATION_TAG,
@@ -447,6 +449,7 @@ impl CompilerTransactionEvidenceCapsuleV1 {
 pub enum CompilerTransactionValidationErrorV1 {
     TooManyDependencies { max: usize },
     TooManyFeatures { max: usize },
+    EvidenceTooLarge { max: usize },
     DuplicateDependency,
     DuplicateFeature,
     UnsupportedDigestAlgorithm { field: &'static str },
@@ -463,6 +466,12 @@ impl fmt::Display for CompilerTransactionValidationErrorV1 {
             }
             Self::TooManyFeatures { max } => {
                 write!(formatter, "compiler source closure exceeds {max} features")
+            }
+            Self::EvidenceTooLarge { max } => {
+                write!(
+                    formatter,
+                    "compiler transaction capsule exceeds {max} bytes"
+                )
             }
             Self::DuplicateDependency => {
                 formatter.write_str("compiler source closure contains a duplicate dependency")
@@ -614,43 +623,71 @@ fn require_sha256(
     }
 }
 
-fn encoded_total_len(parts: &CompilerTransactionEvidencePartsV1) -> usize {
+fn checked_encoded_total_len(parts: &CompilerTransactionEvidencePartsV1) -> Option<usize> {
     HEADER_BYTES
-        + FIELD_HEADER_BYTES * usize::from(LAST_FIELD_TAG)
-        + DIGEST_BYTES * 11
-        + 32 * 2
-        + encode_dependencies(&parts.source_closure).len()
-        + encode_features(&parts.source_closure).len()
-        + encode_tool(&parts.rustc_tool).len()
-        + encode_tool(&parts.backend_tool).len()
+        .checked_add(FIELD_HEADER_BYTES.checked_mul(usize::from(LAST_FIELD_TAG))?)?
+        .checked_add(DIGEST_BYTES.checked_mul(11)?)?
+        .checked_add(32_usize.checked_mul(2)?)?
+        .checked_add(checked_dependencies_encoded_len(&parts.source_closure)?)?
+        .checked_add(checked_features_encoded_len(&parts.source_closure)?)?
+        .checked_add(checked_tool_encoded_len(&parts.rustc_tool)?)?
+        .checked_add(checked_tool_encoded_len(&parts.backend_tool)?)
 }
 
-fn encode_dependencies(source: &CompilerSourceClosureV1) -> Vec<u8> {
-    let mut bytes = Vec::new();
+fn checked_dependencies_encoded_len(source: &CompilerSourceClosureV1) -> Option<usize> {
+    source
+        .dependencies
+        .iter()
+        .try_fold(2_usize, |total, dependency| {
+            total
+                .checked_add(2)?
+                .checked_add(dependency.name.as_str().len())?
+                .checked_add(DIGEST_BYTES)
+        })
+}
+
+fn checked_features_encoded_len(source: &CompilerSourceClosureV1) -> Option<usize> {
+    source.features.iter().try_fold(2_usize, |total, feature| {
+        total.checked_add(2)?.checked_add(feature.as_str().len())
+    })
+}
+
+fn checked_tool_encoded_len(tool: &MeasuredToolIdentity) -> Option<usize> {
+    4_usize
+        .checked_add(tool.name().as_str().len())?
+        .checked_add(tool.version().as_str().len())?
+        .checked_add(DIGEST_BYTES.checked_mul(2)?)
+}
+
+fn write_dependencies_field(bytes: &mut Vec<u8>, source: &CompilerSourceClosureV1) {
+    let payload_len = checked_dependencies_encoded_len(source)
+        .expect("validated dependency field length must remain representable");
+    write_field_header(bytes, DEPENDENCIES_TAG, payload_len);
     bytes.extend_from_slice(&(source.dependencies.len() as u16).to_le_bytes());
     for dependency in &source.dependencies {
-        write_text(&mut bytes, dependency.name.as_str());
+        write_text(bytes, dependency.name.as_str());
         bytes.extend_from_slice(&encode_digest(dependency.identity));
     }
-    bytes
 }
 
-fn encode_features(source: &CompilerSourceClosureV1) -> Vec<u8> {
-    let mut bytes = Vec::new();
+fn write_features_field(bytes: &mut Vec<u8>, source: &CompilerSourceClosureV1) {
+    let payload_len = checked_features_encoded_len(source)
+        .expect("validated feature field length must remain representable");
+    write_field_header(bytes, FEATURES_TAG, payload_len);
     bytes.extend_from_slice(&(source.features.len() as u16).to_le_bytes());
     for feature in &source.features {
-        write_text(&mut bytes, feature.as_str());
+        write_text(bytes, feature.as_str());
     }
-    bytes
 }
 
-fn encode_tool(tool: &MeasuredToolIdentity) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    write_text(&mut bytes, tool.name().as_str());
-    write_text(&mut bytes, tool.version().as_str());
+fn write_tool_field(bytes: &mut Vec<u8>, tag: u8, tool: &MeasuredToolIdentity) {
+    let payload_len = checked_tool_encoded_len(tool)
+        .expect("validated tool field length must remain representable");
+    write_field_header(bytes, tag, payload_len);
+    write_text(bytes, tool.name().as_str());
+    write_text(bytes, tool.version().as_str());
     bytes.extend_from_slice(&encode_digest(tool.executable_digest()));
     bytes.extend_from_slice(&encode_digest(tool.configuration_digest()));
-    bytes
 }
 
 fn encode_digest(digest: PayloadDigest) -> [u8; DIGEST_BYTES] {
@@ -668,9 +705,13 @@ fn write_text(bytes: &mut Vec<u8>, value: &str) {
 }
 
 fn write_field(bytes: &mut Vec<u8>, tag: u8, payload: &[u8]) {
-    bytes.push(tag);
-    bytes.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+    write_field_header(bytes, tag, payload.len());
     bytes.extend_from_slice(payload);
+}
+
+fn write_field_header(bytes: &mut Vec<u8>, tag: u8, payload_len: usize) {
+    bytes.push(tag);
+    bytes.extend_from_slice(&(payload_len as u32).to_le_bytes());
 }
 
 fn calculate_capsule_identity(prefix: &[u8]) -> CompilerTransactionEvidenceIdentityV1 {
@@ -1020,5 +1061,92 @@ impl<'a> Reader<'a> {
             .map_err(|_| CompilerTransactionDecodeErrorV1::InvalidUtf8 { field })?;
         IdentityText::new(value)
             .map_err(|_| CompilerTransactionDecodeErrorV1::InvalidText { field })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn digest(seed: u8) -> PayloadDigest {
+        PayloadDigest::new(DigestAlgorithm::Sha256, DigestBytes::from_bytes([seed; 32]))
+    }
+
+    fn maximum_text(prefix: &str) -> IdentityText {
+        assert!(prefix.len() <= MAX_IDENTITY_TEXT_BYTES);
+        IdentityText::new(format!(
+            "{prefix}{}",
+            "x".repeat(MAX_IDENTITY_TEXT_BYTES - prefix.len())
+        ))
+        .unwrap()
+    }
+
+    fn maximum_source_set_parts() -> CompilerTransactionEvidencePartsV1 {
+        let dependencies = (0..MAX_COMPILER_TRANSACTION_DEPENDENCIES_V1)
+            .map(|index| {
+                CompilerSourceDependencyV1::new(
+                    maximum_text(&format!("dependency-{index:04}:")),
+                    digest(index as u8),
+                )
+                .unwrap()
+            })
+            .collect();
+        let features = (0..MAX_COMPILER_TRANSACTION_FEATURES_V1)
+            .map(|index| maximum_text(&format!("feature-{index:04}:")))
+            .collect();
+        let source_closure = CompilerSourceClosureV1::new(
+            SourceRootIdentityV1::from_sha256([0x10; 32]),
+            dependencies,
+            features,
+        )
+        .unwrap();
+        let measured_tool = |prefix: &str, seed: u8| {
+            MeasuredToolIdentity::new(
+                maximum_text(&format!("{prefix}-name:")),
+                maximum_text(&format!("{prefix}-version:")),
+                digest(seed),
+                digest(seed.wrapping_add(1)),
+            )
+        };
+        CompilerTransactionEvidencePartsV1 {
+            source_closure,
+            rustc_tool: measured_tool("rustc", 0x20),
+            rustc_invocation: RustcInvocationIdentityV1::from_sha256([0x22; 32]),
+            backend_tool: measured_tool("backend", 0x30),
+            backend_invocation: BackendInvocationIdentityV1::from_sha256([0x32; 32]),
+            semantic_witness: SemanticWitnessIdentityV1::from_sha256([0x40; 32]),
+            kernel_ir: KernelIrIdentityV1::from_sha256([0x41; 32]),
+            worker_request: DirectLinkRequestIdentityV1::new(digest(0x50)),
+            worker_response: DirectLinkResponseIdentityV1::new(digest(0x51)),
+            target: TargetIdentityV1::from_bytes([0x52; 32]),
+            raw_hsaco: DirectLinkLinkedOutputIdentityV1::new(digest(0x60)),
+            finalized_hsaco: DirectLinkFinalizedPayloadIdentityV1::new(digest(0x61)),
+            artifact: DirectLinkContainerIdentityV1::new(digest(0x62)),
+            envelope: WorkerV2EnvelopeIdentityV1::from_sha256([0x63; 32]),
+        }
+    }
+
+    #[test]
+    fn constructor_rejects_legal_source_set_over_aggregate_limit_before_encoding() {
+        let parts = maximum_source_set_parts();
+        let encoded_len = checked_encoded_total_len(&parts).unwrap();
+        let test_limit = encoded_len - 1;
+
+        assert!(matches!(
+            CompilerTransactionEvidenceCapsuleV1::new_with_max_encoded_bytes(parts, test_limit),
+            Err(CompilerTransactionValidationErrorV1::EvidenceTooLarge { max })
+                if max == test_limit
+        ));
+    }
+
+    #[test]
+    fn maximum_current_public_source_set_remains_within_two_mibibytes() {
+        let parts = maximum_source_set_parts();
+        let encoded_len = checked_encoded_total_len(&parts).unwrap();
+        assert_eq!(encoded_len, 1_457_824);
+        assert!(encoded_len < MAX_COMPILER_TRANSACTION_EVIDENCE_BYTES_V1);
+
+        let capsule = CompilerTransactionEvidenceCapsuleV1::new(parts).unwrap();
+        assert_eq!(capsule.to_bytes().len(), encoded_len);
     }
 }
