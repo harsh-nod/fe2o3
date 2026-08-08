@@ -65,6 +65,12 @@ pub use multi_kernel_proof::{
     KernelProofAdmissionIdentityV1, KernelProofAdmissionRequestV1,
     MULTI_KERNEL_PROOF_ADMISSION_DOMAIN_V1, MULTI_KERNEL_PROOF_ADMISSION_VERSION_V1,
     MultiKernelProofAdmissionErrorV1, MultiKernelProofAdmissionV1,
+    PERSISTENT_MULTI_KERNEL_PROOF_ADMISSION_DOMAIN_V1,
+    PERSISTENT_MULTI_KERNEL_PROOF_ADMISSION_VERSION_V1,
+    PersistentlyFreshKernelProofAdmissionIdentityV1,
+    PersistentlyFreshKernelProofAdmissionRequestV1,
+    PersistentlyFreshMultiKernelProofAdmissionErrorV1,
+    PersistentlyFreshMultiKernelProofAdmissionV1,
 };
 pub use persistent_freshness::{
     MAX_PERSISTENT_FRESHNESS_ENTRIES_V1, MAX_PERSISTENT_FRESHNESS_STATE_BYTES_V1,

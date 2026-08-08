@@ -29,8 +29,14 @@ use fe2o3_verifier::{
     MeasuredToolIdentity, MultiKernelProofAdmissionErrorV1, MultiKernelProofAdmissionV1,
     PERSISTENT_AUTHENTICATED_CONTROL_FLOW_EXECUTABLE_BINDING_DOMAIN_V1,
     PERSISTENT_AUTHENTICATED_PROOF_EXECUTABLE_BINDING_DOMAIN_V1,
-    PersistentFreshnessIdentityFieldV1, PersistentFreshnessLedgerErrorV1,
-    PersistentFreshnessRecoveryV1, PersistentProofFreshnessLedgerV1, ProofProperty, ProofRequestV1,
+    PERSISTENT_MULTI_KERNEL_PROOF_ADMISSION_DOMAIN_V1,
+    PERSISTENT_MULTI_KERNEL_PROOF_ADMISSION_VERSION_V1, PersistentFreshnessIdentityFieldV1,
+    PersistentFreshnessLedgerErrorV1, PersistentFreshnessRecoveryV1,
+    PersistentProofFreshnessLedgerV1, PersistentlyFreshAuthenticatedControlFlowExecutableBindingV1,
+    PersistentlyFreshKernelProofAdmissionIdentityV1,
+    PersistentlyFreshKernelProofAdmissionRequestV1,
+    PersistentlyFreshMultiKernelProofAdmissionErrorV1,
+    PersistentlyFreshMultiKernelProofAdmissionV1, ProofProperty, ProofRequestV1,
     ProofTargetIdentity, VerificationModelIdentity, VerifierPolicy,
     bind_authenticated_control_flow_executable_v1,
     bind_authenticated_proof_executable_persistent_v1, bind_authenticated_proof_executable_v1,
@@ -154,9 +160,17 @@ fn source_contracts_with_functional(
 }
 
 fn manifest() -> ManifestV1 {
+    manifest_for_processor("gfx942")
+}
+
+fn manifest_for_processor(processor: &str) -> ManifestV1 {
+    manifest_for_bundle(processor, 0x44)
+}
+
+fn manifest_for_bundle(processor: &str, code_object_digest: u8) -> ManifestV1 {
     let target = TargetIdentity::new(
         text("amdgcn-amd-amdhsa"),
-        text("gfx942"),
+        text(processor),
         PointerWidth::Bits64,
         Endianness::Little,
         vec![Capability::AmdWave],
@@ -171,8 +185,12 @@ fn manifest() -> ManifestV1 {
     )
     .unwrap();
     let abi = AbiLayout::new(0, 1, PointerWidth::Bits64, vec![]).unwrap();
-    let object =
-        CodeObjectIdentity::new(bytes(0x44), CodeObjectFormat::NativeExecutable, 4096).unwrap();
+    let object = CodeObjectIdentity::new(
+        bytes(code_object_digest),
+        CodeObjectFormat::NativeExecutable,
+        4096,
+    )
+    .unwrap();
     let first_kernel = KernelEntry::new(
         bytes(0x11),
         name("verified_kernel"),
@@ -225,6 +243,29 @@ fn artifact_target_for_kernel(
     executable: u8,
     source_contracts: SourceContractIdentity,
 ) -> ArtifactTarget {
+    artifact_target_for_kernel_with_bundle(
+        manifest,
+        kernel_id,
+        source,
+        executable,
+        source_contracts,
+        payload(0x44),
+        &compiler(),
+        &producer(),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn artifact_target_for_kernel_with_bundle(
+    manifest: &ManifestV1,
+    kernel_id: u8,
+    source: u8,
+    executable: u8,
+    source_contracts: SourceContractIdentity,
+    finalized_executable_digest: PayloadDigest,
+    compiler: &ArtifactMeasuredToolIdentity,
+    producer: &ArtifactMeasuredToolIdentity,
+) -> ArtifactTarget {
     manifest
         .proof_target(
             payload(kernel_id),
@@ -232,10 +273,10 @@ fn artifact_target_for_kernel(
             payload(source),
             payload(0x41),
             payload(executable),
-            payload(0x44),
+            finalized_executable_digest,
             source_contracts,
-            &compiler(),
-            &producer(),
+            compiler,
+            producer,
             DigestAlgorithm::Sha256,
         )
         .unwrap()
@@ -351,9 +392,13 @@ fn measured_tool(name: &str, executable_digest: Digest, config: u8) -> MeasuredT
 }
 
 fn execution_tools() -> ExecutionTools {
+    execution_tools_with_verifier_configuration(0x71)
+}
+
+fn execution_tools_with_verifier_configuration(verifier_configuration: u8) -> ExecutionTools {
     let executable_digest = sha256(&fs::read(fixture_program()).unwrap());
     ExecutionTools::new(
-        measured_tool("verus", executable_digest, 0x71),
+        measured_tool("verus", executable_digest, verifier_configuration),
         measured_tool("z3", executable_digest, 0x72),
         measured_tool("fe2o3-recorder", executable_digest, 0x73),
     )
@@ -373,6 +418,13 @@ fn make_verifier_policy(tools: ExecutionTools, max_timeout_seconds: u32) -> Veri
 fn measured_execution(
     target: ArtifactTarget,
 ) -> (AuthenticatedVerusExecutionEvidenceV1, VerifierPolicy) {
+    measured_execution_with_tools(target, execution_tools())
+}
+
+fn measured_execution_with_tools(
+    target: ArtifactTarget,
+    tools: ExecutionTools,
+) -> (AuthenticatedVerusExecutionEvidenceV1, VerifierPolicy) {
     static MEASURED_EXECUTION: Mutex<()> = Mutex::new(());
 
     // The debug recorder is roughly 17 MiB and deliberately self-hashes before
@@ -381,7 +433,6 @@ fn measured_execution(
     // and use the policy's existing 10-second ceiling. Focused one-second
     // timeout coverage remains in the executor tests.
     let _execution = MEASURED_EXECUTION.lock().unwrap();
-    let tools = execution_tools();
     let verifier_policy = make_verifier_policy(tools, 10);
     let request = ProofRequestV1::new(
         CorrelationId::from_bytes([51; 16]),
@@ -448,16 +499,242 @@ fn binding_policy(
     evidence: &AuthenticatedVerusExecutionEvidenceV1,
     verifier_policy: VerifierPolicy,
 ) -> AuthenticatedProofExecutablePolicyV1 {
-    AuthenticatedProofExecutablePolicyV1::new(
-        verifier_policy,
-        proof_policy(target, evidence),
+    binding_policy_with_bundle(
         manifest,
+        target,
+        evidence,
+        verifier_policy,
         payload(0x44),
         ExecutableCodeObjectVersionV1::V6,
         compiler(),
         producer(),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn binding_policy_with_bundle(
+    manifest: ManifestV1,
+    target: ArtifactTarget,
+    evidence: &AuthenticatedVerusExecutionEvidenceV1,
+    verifier_policy: VerifierPolicy,
+    finalized_executable_digest: PayloadDigest,
+    code_object_version: ExecutableCodeObjectVersionV1,
+    compiler: ArtifactMeasuredToolIdentity,
+    producer: ArtifactMeasuredToolIdentity,
+) -> AuthenticatedProofExecutablePolicyV1 {
+    AuthenticatedProofExecutablePolicyV1::new(
+        verifier_policy,
+        proof_policy(target, evidence),
+        manifest,
+        finalized_executable_digest,
+        code_object_version,
+        compiler,
+        producer,
         DigestAlgorithm::Sha256,
     )
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone)]
+struct PersistentControlFlowBlueprint {
+    request_binding: fe2o3_verifier::ControlFlowProofRequestBindingV1,
+    evidence: AuthenticatedVerusExecutionEvidenceV1,
+    policy: AuthenticatedProofExecutablePolicyV1,
+}
+
+#[cfg(target_os = "linux")]
+#[allow(clippy::too_many_arguments)]
+fn persistent_control_flow_blueprint(
+    manifest: ManifestV1,
+    kernel_id: u8,
+    source_digest: u8,
+    executable_digest: u8,
+    source_input: (Vec<u8>, Vec<u8>, ControlFlowClaimsV1),
+    base_functional_specification: Digest,
+    finalized_executable_digest: PayloadDigest,
+    compiler: ArtifactMeasuredToolIdentity,
+    producer: ArtifactMeasuredToolIdentity,
+    tools: ExecutionTools,
+) -> PersistentControlFlowBlueprint {
+    let (source_bytes, cfg_identity, claims) = source_input;
+    let source = reconcile_control_flow_source_v1(&source_bytes, &cfg_identity, claims).unwrap();
+    let functional_specification = derive_control_flow_functional_specification_digest_v1(
+        base_functional_specification,
+        &source,
+    )
+    .unwrap();
+    let target = artifact_target_for_kernel_with_bundle(
+        &manifest,
+        kernel_id,
+        source_digest,
+        executable_digest,
+        source_contracts_with_functional(payload_from_digest(functional_specification)),
+        finalized_executable_digest,
+        &compiler,
+        &producer,
+    );
+    let (evidence, verifier_policy) = measured_execution_with_tools(target, tools);
+    let request_binding = bind_control_flow_proof_request_v1(
+        evidence.invocation_plan().request(),
+        base_functional_specification,
+        source,
+    )
+    .unwrap();
+    let policy = binding_policy_with_bundle(
+        manifest,
+        target,
+        &evidence,
+        verifier_policy,
+        finalized_executable_digest,
+        ExecutableCodeObjectVersionV1::V6,
+        compiler,
+        producer,
+    );
+    PersistentControlFlowBlueprint {
+        request_binding,
+        evidence,
+        policy,
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn bind_persistent_control_flow_blueprint(
+    blueprint: PersistentControlFlowBlueprint,
+    ledger: &mut PersistentProofFreshnessLedgerV1,
+) -> PersistentlyFreshAuthenticatedControlFlowExecutableBindingV1 {
+    let proof = bind_authenticated_proof_executable_persistent_v1(
+        blueprint.evidence,
+        &blueprint.policy,
+        ledger,
+    )
+    .unwrap();
+    bind_persistently_fresh_authenticated_control_flow_executable_v1(
+        blueprint.request_binding,
+        proof,
+    )
+    .unwrap()
+}
+
+#[cfg(target_os = "linux")]
+struct PersistentMultiKernelBlueprints {
+    first: PersistentControlFlowBlueprint,
+    first_new_execution: PersistentControlFlowBlueprint,
+    second: PersistentControlFlowBlueprint,
+    finalized_executable_mismatch: PersistentControlFlowBlueprint,
+    target_mismatch: PersistentControlFlowBlueprint,
+    compiler_mismatch: PersistentControlFlowBlueprint,
+    verifier_mismatch: PersistentControlFlowBlueprint,
+}
+
+#[cfg(target_os = "linux")]
+fn persistent_multi_kernel_blueprints() -> &'static PersistentMultiKernelBlueprints {
+    static BLUEPRINTS: OnceLock<PersistentMultiKernelBlueprints> = OnceLock::new();
+    BLUEPRINTS.get_or_init(|| {
+        let base_manifest = manifest();
+        let base_compiler = compiler();
+        let base_producer = producer();
+        let first = || {
+            persistent_control_flow_blueprint(
+                base_manifest.clone(),
+                0x11,
+                0x22,
+                0x33,
+                control_flow_source_with("src/kernel.rs", 8),
+                digest(0x55),
+                payload(0x44),
+                base_compiler.clone(),
+                base_producer.clone(),
+                execution_tools(),
+            )
+        };
+        let second = || {
+            persistent_control_flow_blueprint(
+                base_manifest.clone(),
+                0x12,
+                0x23,
+                0x34,
+                control_flow_source_with("src/kernel_second.rs", 4),
+                digest(0x56),
+                payload(0x44),
+                base_compiler.clone(),
+                base_producer.clone(),
+                execution_tools(),
+            )
+        };
+        PersistentMultiKernelBlueprints {
+            first: first(),
+            first_new_execution: first(),
+            second: second(),
+            finalized_executable_mismatch: persistent_control_flow_blueprint(
+                manifest_for_bundle("gfx942", 0x45),
+                0x12,
+                0x23,
+                0x34,
+                control_flow_source_with("src/kernel_second.rs", 4),
+                digest(0x56),
+                payload(0x45),
+                base_compiler.clone(),
+                base_producer.clone(),
+                execution_tools(),
+            ),
+            target_mismatch: persistent_control_flow_blueprint(
+                manifest_for_processor("gfx941"),
+                0x12,
+                0x23,
+                0x34,
+                control_flow_source_with("src/kernel_second.rs", 4),
+                digest(0x56),
+                payload(0x44),
+                base_compiler.clone(),
+                base_producer.clone(),
+                execution_tools(),
+            ),
+            compiler_mismatch: persistent_control_flow_blueprint(
+                base_manifest.clone(),
+                0x12,
+                0x23,
+                0x34,
+                control_flow_source_with("src/kernel_second.rs", 4),
+                digest(0x56),
+                payload(0x44),
+                artifact_tool("rustc", "1.94.0", 0x68),
+                base_producer.clone(),
+                execution_tools(),
+            ),
+            verifier_mismatch: persistent_control_flow_blueprint(
+                base_manifest,
+                0x12,
+                0x23,
+                0x34,
+                control_flow_source_with("src/kernel_second.rs", 4),
+                digest(0x56),
+                payload(0x44),
+                base_compiler,
+                base_producer,
+                execution_tools_with_verifier_configuration(0x79),
+            ),
+        }
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn persistent_bindings_in_one_ledger(
+    blueprints: Vec<PersistentControlFlowBlueprint>,
+) -> Vec<PersistentlyFreshAuthenticatedControlFlowExecutableBindingV1> {
+    let directory = PersistentLedgerDirectory::new();
+    let (mut ledger, _) = PersistentProofFreshnessLedgerV1::create_new(&directory.path).unwrap();
+    blueprints
+        .into_iter()
+        .map(|blueprint| bind_persistent_control_flow_blueprint(blueprint, &mut ledger))
+        .collect()
+}
+
+#[cfg(target_os = "linux")]
+fn copy_persistent_ledger(source: &std::path::Path, destination: &std::path::Path) {
+    for entry in fs::read_dir(source).unwrap() {
+        let entry = entry.unwrap();
+        fs::copy(entry.path(), destination.join(entry.file_name())).unwrap();
+    }
 }
 
 #[derive(Clone)]
@@ -678,6 +955,276 @@ fn multi_kernel_admission_rejects_duplicate_kernel_proofs() {
             kernel_id: first.request_binding().target().kernel_id,
         })
     );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn persistent_multi_kernel_admission_binds_exact_per_kernel_identities_without_authority() {
+    let blueprints = persistent_multi_kernel_blueprints();
+    let mut bindings = persistent_bindings_in_one_ledger(vec![
+        blueprints.first.clone(),
+        blueprints.second.clone(),
+    ]);
+    let first_request = PersistentlyFreshKernelProofAdmissionRequestV1::from_binding(&bindings[0]);
+    let second_request = PersistentlyFreshKernelProofAdmissionRequestV1::from_binding(&bindings[1]);
+    let expected_namespace = bindings[0]
+        .proof_executable_binding()
+        .identity()
+        .ledger_namespace();
+    bindings.reverse();
+
+    let admission = PersistentlyFreshMultiKernelProofAdmissionV1::new(bindings).unwrap();
+    assert_eq!(
+        PERSISTENT_MULTI_KERNEL_PROOF_ADMISSION_DOMAIN_V1,
+        *b"FE2PMKA\0"
+    );
+    assert_eq!(
+        admission.version(),
+        PERSISTENT_MULTI_KERNEL_PROOF_ADMISSION_VERSION_V1
+    );
+    assert_eq!(admission.kernel_count(), 2);
+    assert_eq!(admission.ledger_namespace(), expected_namespace);
+    assert_eq!(
+        admission.code_object_version(),
+        ExecutableCodeObjectVersionV1::V6
+    );
+    assert_eq!(admission.finalized_executable_digest(), payload(0x44));
+    assert!(!admission.grants_load_authority());
+    assert!(!admission.grants_launch_authority());
+
+    let first = admission.admit_kernel(first_request).unwrap();
+    let second = admission.admit_kernel(second_request).unwrap();
+    let original = first.request_binding();
+    let persistent_proof = first.proof_executable_binding();
+
+    let (source_bytes, cfg_identity, claims) = control_flow_source_with("src/changed_kernel.rs", 8);
+    let changed_source =
+        reconcile_control_flow_source_v1(&source_bytes, &cfg_identity, claims).unwrap();
+    let changed_functional = derive_control_flow_functional_specification_digest_v1(
+        original.base_functional_specification_digest(),
+        &changed_source,
+    )
+    .unwrap();
+    let mut changed_source_target = original.target();
+    changed_source_target.functional_specification_digest = changed_functional;
+    let changed_source_request = ProofRequestV1::new(
+        CorrelationId::from_bytes([0x81; 16]),
+        changed_source_target,
+        configuration(),
+        model(),
+        ALL_PROPERTIES.to_vec(),
+        vec![],
+    )
+    .unwrap();
+    let changed_source_binding = bind_control_flow_proof_request_v1(
+        &changed_source_request,
+        original.base_functional_specification_digest(),
+        changed_source,
+    )
+    .unwrap();
+    let request = PersistentlyFreshKernelProofAdmissionRequestV1::new(
+        &changed_source_binding,
+        persistent_proof,
+    );
+    assert_eq!(
+        admission.admit_kernel(request),
+        Err(
+            PersistentlyFreshMultiKernelProofAdmissionErrorV1::IdentityMismatch {
+                kernel_id: original.target().kernel_id,
+                field: PersistentlyFreshKernelProofAdmissionIdentityV1::Source,
+            }
+        )
+    );
+
+    let changed_base = digest(0x82);
+    let changed_contract_functional =
+        derive_control_flow_functional_specification_digest_v1(changed_base, original.source())
+            .unwrap();
+    let mut changed_contract_target = original.target();
+    changed_contract_target.functional_specification_digest = changed_contract_functional;
+    let changed_contract_request = ProofRequestV1::new(
+        CorrelationId::from_bytes([0x82; 16]),
+        changed_contract_target,
+        configuration(),
+        model(),
+        ALL_PROPERTIES.to_vec(),
+        vec![],
+    )
+    .unwrap();
+    let changed_contract_binding = bind_control_flow_proof_request_v1(
+        &changed_contract_request,
+        changed_base,
+        original.source().clone(),
+    )
+    .unwrap();
+    let request = PersistentlyFreshKernelProofAdmissionRequestV1::new(
+        &changed_contract_binding,
+        persistent_proof,
+    );
+    assert_eq!(
+        admission.admit_kernel(request),
+        Err(
+            PersistentlyFreshMultiKernelProofAdmissionErrorV1::IdentityMismatch {
+                kernel_id: original.target().kernel_id,
+                field: PersistentlyFreshKernelProofAdmissionIdentityV1::Contract,
+            }
+        )
+    );
+
+    let changed_request = ProofRequestV1::new(
+        CorrelationId::from_bytes([0x83; 16]),
+        original.target(),
+        configuration(),
+        model(),
+        ALL_PROPERTIES.to_vec(),
+        vec![],
+    )
+    .unwrap();
+    let changed_request_binding = bind_control_flow_proof_request_v1(
+        &changed_request,
+        original.base_functional_specification_digest(),
+        original.source().clone(),
+    )
+    .unwrap();
+    let request = PersistentlyFreshKernelProofAdmissionRequestV1::new(
+        &changed_request_binding,
+        persistent_proof,
+    );
+    assert_eq!(
+        admission.admit_kernel(request),
+        Err(
+            PersistentlyFreshMultiKernelProofAdmissionErrorV1::IdentityMismatch {
+                kernel_id: original.target().kernel_id,
+                field: PersistentlyFreshKernelProofAdmissionIdentityV1::ProofRequest,
+            }
+        )
+    );
+
+    let request = PersistentlyFreshKernelProofAdmissionRequestV1::new(
+        original,
+        second.proof_executable_binding(),
+    );
+    assert_eq!(
+        admission.admit_kernel(request),
+        Err(
+            PersistentlyFreshMultiKernelProofAdmissionErrorV1::IdentityMismatch {
+                kernel_id: original.target().kernel_id,
+                field: PersistentlyFreshKernelProofAdmissionIdentityV1::AuthenticatedProof,
+            }
+        )
+    );
+
+    let external = persistent_bindings_in_one_ledger(vec![blueprints.first.clone()])
+        .pop()
+        .unwrap();
+    let request = PersistentlyFreshKernelProofAdmissionRequestV1::new(
+        original,
+        external.proof_executable_binding(),
+    );
+    assert_eq!(
+        admission.admit_kernel(request),
+        Err(
+            PersistentlyFreshMultiKernelProofAdmissionErrorV1::IdentityMismatch {
+                kernel_id: original.target().kernel_id,
+                field: PersistentlyFreshKernelProofAdmissionIdentityV1::PersistentProof,
+            }
+        )
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn persistent_multi_kernel_admission_rejects_mixed_ledger_namespaces() {
+    let blueprints = persistent_multi_kernel_blueprints();
+    let first = persistent_bindings_in_one_ledger(vec![blueprints.first.clone()])
+        .pop()
+        .unwrap();
+    let second = persistent_bindings_in_one_ledger(vec![blueprints.second.clone()])
+        .pop()
+        .unwrap();
+
+    assert_eq!(
+        PersistentlyFreshMultiKernelProofAdmissionV1::new(vec![first, second]),
+        Err(PersistentlyFreshMultiKernelProofAdmissionErrorV1::MixedLedgerNamespace)
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn persistent_multi_kernel_admission_rejects_duplicate_generations_from_forked_local_state() {
+    let blueprints = persistent_multi_kernel_blueprints();
+    let first_directory = PersistentLedgerDirectory::new();
+    let second_directory = PersistentLedgerDirectory::new();
+    let (ledger, _) = PersistentProofFreshnessLedgerV1::create_new(&first_directory.path).unwrap();
+    drop(ledger);
+    copy_persistent_ledger(&first_directory.path, &second_directory.path);
+
+    let (mut first_ledger, _) =
+        PersistentProofFreshnessLedgerV1::open_existing(&first_directory.path).unwrap();
+    let (mut second_ledger, _) =
+        PersistentProofFreshnessLedgerV1::open_existing(&second_directory.path).unwrap();
+    let first = bind_persistent_control_flow_blueprint(blueprints.first.clone(), &mut first_ledger);
+    let second =
+        bind_persistent_control_flow_blueprint(blueprints.second.clone(), &mut second_ledger);
+    assert_eq!(
+        first
+            .proof_executable_binding()
+            .identity()
+            .ledger_namespace(),
+        second
+            .proof_executable_binding()
+            .identity()
+            .ledger_namespace()
+    );
+
+    assert_eq!(
+        PersistentlyFreshMultiKernelProofAdmissionV1::new(vec![first, second]),
+        Err(
+            PersistentlyFreshMultiKernelProofAdmissionErrorV1::DuplicateLedgerGeneration {
+                generation: 1,
+            }
+        )
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn persistent_multi_kernel_admission_rejects_duplicate_kernel_identities() {
+    let blueprints = persistent_multi_kernel_blueprints();
+    let mut bindings = persistent_bindings_in_one_ledger(vec![
+        blueprints.first.clone(),
+        blueprints.first_new_execution.clone(),
+    ]);
+    let kernel_id = bindings[0].request_binding().target().kernel_id;
+
+    assert_eq!(
+        PersistentlyFreshMultiKernelProofAdmissionV1::new(std::mem::take(&mut bindings)),
+        Err(PersistentlyFreshMultiKernelProofAdmissionErrorV1::DuplicateKernel { kernel_id })
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn persistent_multi_kernel_admission_rejects_mixed_executable_target_and_toolchain() {
+    let blueprints = persistent_multi_kernel_blueprints();
+    for (field, second) in [
+        (
+            "finalized executable",
+            blueprints.finalized_executable_mismatch.clone(),
+        ),
+        ("target", blueprints.target_mismatch.clone()),
+        ("compiler", blueprints.compiler_mismatch.clone()),
+        (
+            "measured verifier toolchain",
+            blueprints.verifier_mismatch.clone(),
+        ),
+    ] {
+        let bindings = persistent_bindings_in_one_ledger(vec![blueprints.first.clone(), second]);
+        assert_eq!(
+            PersistentlyFreshMultiKernelProofAdmissionV1::new(bindings),
+            Err(PersistentlyFreshMultiKernelProofAdmissionErrorV1::SharedBundleMismatch { field })
+        );
+    }
 }
 
 #[test]
