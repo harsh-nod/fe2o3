@@ -5,9 +5,13 @@ use core::ffi::{c_char, c_int, c_uint, c_void};
 
 mod cooperative_peer;
 mod memory_topology;
+#[cfg(not(fe2o3_hip_runtime))]
+mod unavailable_runtime;
 
 pub use cooperative_peer::*;
 pub use memory_topology::*;
+#[cfg(not(fe2o3_hip_runtime))]
+pub use unavailable_runtime::*;
 
 pub type hipError_t = c_int;
 pub type hipStream_t = *mut c_void;
@@ -85,6 +89,7 @@ pub const HIP_MEMCPY_DEVICE_TO_HOST: hipMemcpyKind = 2;
 pub const HIP_MEMCPY_DEVICE_TO_DEVICE: hipMemcpyKind = 3;
 pub const HIP_MEMCPY_DEFAULT: hipMemcpyKind = 4;
 
+#[cfg(fe2o3_hip_runtime)]
 unsafe extern "C" {
     pub fn hipInit(flags: c_uint) -> hipError_t;
     pub fn hipGetDeviceCount(count: *mut c_int) -> hipError_t;

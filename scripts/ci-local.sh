@@ -129,7 +129,9 @@ run_tests() {
       cargo_args+=(-p "${package}")
     fi
   done
-  run_step cpu-tests cargo "${cargo_args[@]}"
+  # Keep the generic test lane independent of whether the host happens to have
+  # ROCm installed. The raw HIP crate supplies a fail-closed no-runtime ABI.
+  run_step cpu-tests env FE2O3_HIP_SYS_DISABLE=1 cargo "${cargo_args[@]}"
   run_rustc_codegen_tests
   # fe2o3-core unit tests link HIP, but its compile-fail doctests do not.
   run_step core-doc-tests cargo test --locked --doc -p fe2o3-core

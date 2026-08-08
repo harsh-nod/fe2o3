@@ -100,6 +100,10 @@ macro_rules! unavailable_output {
         clear $output:ident as $output_ty:ty
     ) => {
         #[cfg(not(fe2o3_hip_memory_topology))]
+        #[doc = "Fails closed and clears the output when the HIP ABI is unavailable."]
+        #[doc = ""]
+        #[doc = "# Safety"]
+        #[doc = "Every non-null output pointer must identify one writable value."]
         pub unsafe extern "C" fn $name($($argument: $argument_ty),*) -> hipError_t {
             let _ = ($(&$argument),*);
             if !$output.is_null() {
@@ -161,6 +165,10 @@ unavailable_output!(
 macro_rules! unavailable_mutation {
     ($name:ident($($argument:ident : $argument_ty:ty),*)) => {
         #[cfg(not(fe2o3_hip_memory_topology))]
+        #[doc = "Fails closed without dereferencing arguments when the HIP ABI is unavailable."]
+        #[doc = ""]
+        #[doc = "# Safety"]
+        #[doc = "The arguments must satisfy the corresponding raw HIP ABI contract."]
         pub unsafe extern "C" fn $name($($argument: $argument_ty),*) -> hipError_t {
             let _ = ($($argument),*);
             HIP_ERROR_NOT_SUPPORTED
@@ -230,7 +238,7 @@ mod tests {
             pageable_memory_access: 1,
             virtual_memory_management: 1,
         };
-        let mut pointer = 1_usize as *mut c_void;
+        let mut pointer = core::ptr::dangling_mut::<c_void>();
         let mut handle = usize::MAX;
 
         // SAFETY: Every output points to a live writable value; fallbacks call no HIP API.
