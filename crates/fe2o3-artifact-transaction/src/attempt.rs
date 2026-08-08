@@ -574,6 +574,15 @@ impl AttemptRegistry {
         self.records.get(stable_source)
     }
 
+    pub(crate) fn record_for_attempt(
+        &self,
+        attempt: BuildAttempt,
+    ) -> Option<(&str, &AttemptRecord)> {
+        self.records.iter().find_map(|(source, record)| {
+            (record.attempt() == attempt).then_some((source.as_str(), record))
+        })
+    }
+
     pub(crate) fn start_or_resume(
         &mut self,
         stable_source: &str,

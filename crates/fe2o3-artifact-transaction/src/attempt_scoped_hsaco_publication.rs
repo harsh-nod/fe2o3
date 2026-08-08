@@ -2,6 +2,7 @@ use crate::attempt::{AttemptPhase, BackendReceiptV1};
 use crate::durable_link_publication::{
     DurablePlanRecoveryStateV1, publish_durable_link_v1_locked, recover_durable_link_plan_locked,
 };
+use crate::durable_published_claim::DurablePublishedHsacoClaimV1;
 use crate::{
     BackendPublicationReceiptV1, BuildAttempt, BuildSession, DurableCurrentLinkPublicationLeaseV1,
     DurableLinkPublicationError, DurableLinkPublicationOptionsV1, DurableLinkPublicationOutcomeV1,
@@ -72,6 +73,7 @@ pub struct AttemptScopedHsacoPublicationResultV1 {
     outcome: AttemptScopedHsacoPublicationOutcomeV1,
     publication: DurableLinkPublicationResultV1,
     receipt: BackendPublicationReceiptV1,
+    claim: DurablePublishedHsacoClaimV1,
 }
 
 /// Failure while matching a backend publication receipt to its typed producer and exact plan.
@@ -121,6 +123,11 @@ impl AttemptScopedHsacoPublicationResultV1 {
 
     pub const fn receipt(&self) -> BackendPublicationReceiptV1 {
         self.receipt
+    }
+
+    /// Returns the inert canonical claim that can be persisted across processes.
+    pub const fn published_claim(&self) -> &DurablePublishedHsacoClaimV1 {
+        &self.claim
     }
 
     pub fn into_current_lease(self) -> DurableCurrentLinkPublicationLeaseV1 {
@@ -524,10 +531,17 @@ pub fn publish_exact_hsaco_evidence_for_attempt_v1_with_options(
         ) => AttemptScopedHsacoPublicationOutcomeV1::RecoveredCommittedPublication,
         _ => AttemptScopedHsacoPublicationOutcomeV1::RecoveredCommittedPublication,
     };
+    let claim = DurablePublishedHsacoClaimV1::new(
+        plan,
+        upstream_evidence,
+        expected_receipt,
+        publication.published_file_binding(),
+    );
     Ok(AttemptScopedHsacoPublicationResultV1 {
         outcome,
         publication,
         receipt: expected_receipt,
+        claim,
     })
 }
 
@@ -567,18 +581,25 @@ pub(crate) fn publication_receipt(
     plan: DurableLinkPublicationPlanV1,
     upstream_evidence: UpstreamCodeObjectEvidenceIdentityV1,
 ) -> BackendPublicationReceiptV1 {
+    publication_receipt_for_producer_identity(
+        attempt,
+        plan,
+        upstream_evidence,
+        producer_receipt_identity_v1(&producer.stable_source, &producer.crate_name),
+    )
+}
+
+pub(crate) fn publication_receipt_for_producer_identity(
+    attempt: BuildAttempt,
+    plan: DurableLinkPublicationPlanV1,
+    upstream_evidence: UpstreamCodeObjectEvidenceIdentityV1,
+    producer_identity: [u8; 32],
+) -> BackendPublicationReceiptV1 {
     let mut attempt_digest = Sha256::new();
     attempt_digest.update(ATTEMPT_IDENTITY_DOMAIN);
     attempt_digest.update(attempt.generation().to_le_bytes());
     attempt_digest.update(attempt.session().as_bytes());
     attempt_digest.update(attempt.invocation().as_bytes());
-
-    let mut producer_digest = Sha256::new();
-    producer_digest.update(PRODUCER_IDENTITY_DOMAIN);
-    producer_digest.update((producer.stable_source.len() as u64).to_le_bytes());
-    producer_digest.update(producer.stable_source.as_bytes());
-    producer_digest.update((producer.crate_name.len() as u64).to_le_bytes());
-    producer_digest.update(producer.crate_name.as_bytes());
 
     let scope = plan.scope();
     let mut scope_digest = Sha256::new();
@@ -589,11 +610,21 @@ pub(crate) fn publication_receipt(
 
     BackendPublicationReceiptV1::new(
         attempt_digest.finalize().into(),
-        producer_digest.finalize().into(),
+        producer_identity,
         scope_digest.finalize().into(),
         plan.identity(),
         upstream_evidence.as_bytes(),
         *plan.finalized_output().as_bytes(),
         *plan.publication().as_bytes(),
     )
+}
+
+pub(crate) fn producer_receipt_identity_v1(stable_source: &str, crate_name: &str) -> [u8; 32] {
+    let mut producer_digest = Sha256::new();
+    producer_digest.update(PRODUCER_IDENTITY_DOMAIN);
+    producer_digest.update((stable_source.len() as u64).to_le_bytes());
+    producer_digest.update(stable_source.as_bytes());
+    producer_digest.update((crate_name.len() as u64).to_le_bytes());
+    producer_digest.update(crate_name.as_bytes());
+    producer_digest.finalize().into()
 }

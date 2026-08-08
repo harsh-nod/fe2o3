@@ -36,6 +36,7 @@ mod attempt;
 mod attempt_scoped_hsaco_publication;
 mod compiler_module_handoff;
 mod durable_link_publication;
+mod durable_published_claim;
 mod link_publication;
 mod worker_v2_publication_intent;
 
@@ -65,6 +66,11 @@ pub use durable_link_publication::{
     DurableLinkPublicationTransactionV1, MAX_DURABLE_FINALIZED_ARTIFACT_BYTES,
     MAX_DURABLE_LINK_PUBLICATION_RECORD_BYTES, publish_durable_link_v1,
     publish_durable_link_v1_with_options, recover_durable_link_publication_v1,
+};
+pub use durable_published_claim::{
+    DurablePublishedClaimCodecErrorV1, DurablePublishedClaimReacquisitionErrorV1,
+    DurablePublishedClaimReceiptFieldV1, DurablePublishedHsacoClaimV1,
+    MAX_DURABLE_PUBLISHED_HSACO_CLAIM_BYTES, reacquire_current_hsaco_publication_lease_v1,
 };
 pub use link_publication::{
     AtomicPublicationIdentityV1, CanonicalLinkRequestIdentityV1, FinalizationIdentityV1,

@@ -317,12 +317,16 @@ impl DurableLinkPublicationResultV1 {
     pub fn into_current_lease(self) -> DurableCurrentLinkPublicationLeaseV1 {
         self.lease
     }
+
+    pub(crate) fn published_file_binding(&self) -> DurablePublishedFileBindingV1 {
+        self.lease.published_file_binding()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct DurableFileIdentityV1 {
-    device: u64,
-    inode: u64,
+pub(crate) struct DurableFileIdentityV1 {
+    pub(crate) device: u64,
+    pub(crate) inode: u64,
 }
 
 impl DurableFileIdentityV1 {
@@ -332,6 +336,14 @@ impl DurableFileIdentityV1 {
             inode: stat.st_ino,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct DurablePublishedFileBindingV1 {
+    pub(crate) output_identity: DurableFileIdentityV1,
+    pub(crate) record_identity: DurableFileIdentityV1,
+    pub(crate) artifact_identity: DurableFileIdentityV1,
+    pub(crate) artifact_length: usize,
 }
 
 /// Opaque exact-file-handle lease for one publication that was current when minted.
@@ -470,6 +482,18 @@ impl DurableCurrentLinkPublicationLeaseV1 {
     /// A lease never grants kernel-launch authority.
     pub const fn grants_launch_authority(&self) -> bool {
         false
+    }
+
+    fn published_file_binding(&self) -> DurablePublishedFileBindingV1 {
+        DurablePublishedFileBindingV1 {
+            output_identity: DurableFileIdentityV1 {
+                device: self.binding.output.device,
+                inode: self.binding.output.inode,
+            },
+            record_identity: self.binding.record_identity,
+            artifact_identity: self.binding.artifact_identity,
+            artifact_length: self.binding.artifact_length,
+        }
     }
 }
 
@@ -1114,6 +1138,36 @@ pub(crate) fn recover_durable_link_plan_locked(
         return Ok(Some(DurablePlanRecoveryStateV1::Published));
     }
     Ok(crash_retry_matches_plan(&envelope, plan).then_some(DurablePlanRecoveryStateV1::Incomplete))
+}
+
+pub(crate) fn reacquire_current_publication_lease_locked(
+    output: &PinnedOutput,
+    plan: DurableLinkPublicationPlanV1,
+    expected_files: DurablePublishedFileBindingV1,
+) -> Result<DurableCurrentLinkPublicationLeaseV1, DurableLinkPublicationError> {
+    let output_identity = DurableFileIdentityV1 {
+        device: output.device,
+        inode: output.inode,
+    };
+    if output_identity != expected_files.output_identity {
+        return Err(current_publication_error(
+            "output directory identity differs from the durable claim",
+        ));
+    }
+    output.verify_path_identity()?;
+
+    let names = DurableNames::new(plan.scope);
+    let mut envelope = recover_envelope(output, &names, plan.scope)?;
+    recover_incomplete(output, &names, &mut envelope)?;
+    let mut faults = FaultInjector::new(None);
+    verify_or_invalidate_published(output, &names, &mut envelope, &mut faults)?;
+    let lease = mint_current_publication_lease(output, &names, &envelope, plan, &mut faults)?;
+    if lease.published_file_binding() != expected_files {
+        return Err(current_publication_error(
+            "canonical record or artifact identity differs from the durable claim",
+        ));
+    }
+    Ok(lease)
 }
 
 fn fail_after_terminal_invalidation<T>(
@@ -1831,6 +1885,14 @@ fn mint_current_publication_lease(
         DurableFileIdentityV1::from_stat(&opened_record.stat),
         &opened_record.bytes,
         "canonical durable publication record",
+    )?;
+    validate_open_file(
+        output,
+        &artifact_entry,
+        &opened_artifact.file,
+        DurableFileIdentityV1::from_stat(&opened_artifact.stat),
+        &opened_artifact.bytes,
+        "published finalized artifact",
     )?;
 
     let snapshot = DurableLinkPublicationSnapshotV1 {
