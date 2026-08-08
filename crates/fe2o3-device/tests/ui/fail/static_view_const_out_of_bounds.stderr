@@ -1,0 +1,16 @@
+error[E0080]: evaluation panicked: static view index is out of bounds
+ --> $RUST/core/src/panic.rs
+  |
+  |         $crate::panicking::panic_fmt($crate::const_format_args!($($t)+));
+  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `fe2o3_device::StaticIndex::<4, 4>::CHECKED` failed here
+  |
+ ::: src/views.rs
+  |
+  |         assert!(I < N, "static view index is out of bounds");
+  |         ---------------------------------------------------- in this macro invocation
+
+note: erroneous constant encountered
+ --> tests/ui/fail/static_view_const_out_of_bounds.rs:4:27
+  |
+4 |     let _ = view.at_const(StaticIndex::<4, 4>::CHECKED);
+  |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^

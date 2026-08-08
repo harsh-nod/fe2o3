@@ -1,0 +1,13 @@
+error[E0451]: fields `ptr`, `contract`, `_borrow` and `_index_space` of struct `StaticViewMut` are private
+  --> tests/ui/fail/static_view_private_fields.rs:7:9
+   |
+ 6 |     StaticViewMut::<u32, 4, Index1D> {
+   |     -------------------------------- in this type
+ 7 |         ptr,
+   |         ^^^ private field
+ 8 |         contract,
+   |         ^^^^^^^^ private field
+ 9 |         _borrow: PhantomData,
+   |         ^^^^^^^ private field
+10 |         _index_space: PhantomData,
+   |         ^^^^^^^^^^^^ private field

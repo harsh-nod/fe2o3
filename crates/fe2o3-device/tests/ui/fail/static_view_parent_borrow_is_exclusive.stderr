@@ -1,0 +1,10 @@
+error[E0499]: cannot borrow `*parent` as mutable more than once at a time
+  --> tests/ui/fail/static_view_parent_borrow_is_exclusive.rs:11:22
+   |
+ 9 |     let view = StaticViewMut::<u32, 4>::from_disjoint_slice(parent, allocation, region, 0)
+   |                                                             ------ first mutable borrow occurs here
+10 |         .unwrap();
+11 |     let _ = unsafe { parent.get_mut_at(0) };
+   |                      ^^^^^^ second mutable borrow occurs here
+12 |     let _ = view.at_const(StaticIndex::<4, 0>::CHECKED);
+   |             ---- first borrow later used here

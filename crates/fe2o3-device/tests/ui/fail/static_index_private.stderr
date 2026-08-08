@@ -1,0 +1,5 @@
+error[E0451]: field `_private` of struct `StaticIndex` is private
+ --> tests/ui/fail/static_index_private.rs:4:19
+  |
+4 |     StaticIndex { _private: () }
+  |                   ^^^^^^^^ private field
