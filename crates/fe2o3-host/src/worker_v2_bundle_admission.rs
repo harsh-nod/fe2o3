@@ -1429,6 +1429,10 @@ pub(crate) mod tests {
         let alpha_abi = crate::generated_alpha_zeta_cov6::alpha_cov6_test_abi();
         let zeta_abi = zeta_cov6_test_abi();
         let launch = crate::generated_alpha_zeta_cov6::alpha_cov6_test_launch();
+        let payload_target = fe2o3_hsaco::inspect(&finalized_bytes)
+            .expect("hardware test payload must be inspectable")
+            .target()
+            .to_string();
         let alpha_kernel = derive_generated_kernel_identity_v2(
             MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
             alpha_marker_binding_identity,
@@ -1452,7 +1456,7 @@ pub(crate) mod tests {
         let fixture = make_two_hsaco_fixture_with_kernel_ids_and_abis(
             seed,
             finalized_bytes.clone(),
-            observed.device().target(),
+            &payload_target,
             "alpha",
             "alpha",
             alpha_kernel,
@@ -1509,7 +1513,7 @@ pub(crate) mod tests {
         let zeta_binding = [0x71; 32];
         let hsaco = alpha_zeta_cov6_hsaco_for_target("gfx942:xnack-");
         let exact_bytes = hsaco.bytes.clone();
-        let observed = make_observed_for(seed.into(), "gfx942:xnack-");
+        let observed = make_observed_for(seed.into(), "gfx942:sramecc+:xnack-");
         let (admission, _directory) = admitted_alpha_zeta_cov6_hardware_for_lifecycle_test(
             seed,
             hsaco.bytes,
