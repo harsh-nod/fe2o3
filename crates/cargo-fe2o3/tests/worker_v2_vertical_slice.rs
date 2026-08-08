@@ -651,12 +651,15 @@ fn required_cov6_preserves_ready_intent_when_envelope_inputs_are_missing() {
         run_wrapper_with_options(&directory, &fixture.config, "fail", fixture.cov6, None);
     assert!(!recovered.status.success());
     assert!(
-        stderr(&recovered).contains("canonical Worker V2 envelope inputs are missing"),
+        stderr(&recovered).contains("canonical Worker V2 load envelope is missing"),
         "{}",
         stderr(&recovered)
     );
     assert!(!directory.0.join("spawned").exists());
-    assert!(published_artifacts(&directory).is_empty());
+    assert_eq!(
+        published_artifacts(&directory),
+        [fixture.expected_publication]
+    );
     assert_eq!(restart_records(&directory).len(), 2);
 }
 
@@ -773,14 +776,19 @@ fn required_finalized_faults_preserve_or_abandon_state_at_pre_envelope_boundarie
             run_wrapper_with_options(&directory, &fixture.config, "fail", fixture.cov6, None);
         assert!(!recovered.status.success());
         assert!(!directory.0.join("spawned").exists());
-        assert!(published_artifacts(&directory).is_empty());
         if point == "pending-marker" {
+            assert!(published_artifacts(&directory).is_empty());
             assert!(restart_records(&directory).is_empty());
         } else {
             assert!(
-                stderr(&recovered).contains("canonical Worker V2 envelope inputs are missing"),
+                stderr(&recovered).contains("canonical Worker V2 load envelope is missing"),
                 "{point}: {}",
                 stderr(&recovered)
+            );
+            assert_eq!(
+                published_artifacts(&directory),
+                [fixture.expected_publication],
+                "{point}"
             );
             assert_eq!(restart_records(&directory).len(), 2, "{point}");
         }

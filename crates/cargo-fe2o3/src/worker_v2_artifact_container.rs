@@ -934,8 +934,8 @@ mod tests {
     use super::test_fixture::{ProfileMutation, alpha_zeta_fixture};
     use super::*;
     use crate::worker_v2_restart::{
-        WorkerV2EnvelopePublicationOutcomeV1, WorkerV2PublicationKindV1, WorkerV2ResumeStoreV1,
-        restart_admission_commitment_v1,
+        ResumeMarkerStateV1, WorkerV2EnvelopePublicationOutcomeV1, WorkerV2PublicationKindV1,
+        WorkerV2ResumeStoreV1, restart_admission_commitment_v1,
     };
     use fe2o3_artifact_transaction::{
         AtomicPublicationIdentityV1, BuildInvocation, BuildSession, CanonicalLinkRequestIdentityV1,
@@ -963,6 +963,8 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT_TEST: AtomicU64 = AtomicU64::new(1);
+    #[cfg(feature = "worker-v2-fault-injection-test-only")]
+    const ENVELOPE_FAULT_HELPER_DIR_ENV: &str = "FE2O3_TEST_ENVELOPE_FAULT_HELPER_DIR";
 
     struct TestDirectory(PathBuf);
 
@@ -1083,8 +1085,20 @@ mod tests {
         WorkerV2LoadEnvelopeV1,
         fe2o3_artifact_transaction::BackendPublicationReceiptV1,
     ) {
+        canonical_envelope_fixture_for(directory, "alpha_zeta", "/workspace/envelope.rs")
+    }
+
+    fn canonical_envelope_fixture_for(
+        directory: &TestDirectory,
+        producer_name: &str,
+        source: &str,
+    ) -> (
+        ProducerIdentity,
+        WorkerV2LoadEnvelopeV1,
+        fe2o3_artifact_transaction::BackendPublicationReceiptV1,
+    ) {
         let fixture = alpha_zeta_fixture(ProfileMutation::None);
-        let publisher = producer("alpha_zeta", "/workspace/envelope.rs");
+        let publisher = producer(producer_name, source);
         let first_attempt = begin(directory, &publisher, 0x11);
         let finalized: [u8; 32] = Sha256::digest(&fixture.bytes).into();
         let first_plan = plan(first_attempt, finalized, 0x21);
@@ -1207,6 +1221,36 @@ mod tests {
         .unwrap();
         assert_eq!(envelope.published_claim().receipt(), publication.receipt());
         (publisher, envelope, stale_receipt)
+    }
+
+    fn stage_required_ready(
+        store: &WorkerV2ResumeStoreV1,
+        envelope: &WorkerV2LoadEnvelopeV1,
+        intent_seed: u8,
+    ) -> (
+        WorkerV2PublicationKindV1,
+        BuildAttempt,
+        fe2o3_artifact_transaction::BackendPublicationReceiptV1,
+        WorkerV2PublicationIntentIdentityV1,
+        ResumeMarkerStateV1,
+    ) {
+        let claim = envelope.published_claim();
+        let publication = WorkerV2PublicationKindV1::FinalizedEnvelopeRequired;
+        let admission = restart_admission_commitment_v1(
+            publication,
+            claim.plan(),
+            claim.upstream_evidence(),
+            envelope.finalized_payload(),
+        );
+        let attempt = claim.plan().attempt();
+        let receipt = claim.receipt();
+        let intent = WorkerV2PublicationIntentIdentityV1::from_bytes([intent_seed; 32]);
+        store
+            .persist_pending(publication, attempt, admission)
+            .unwrap();
+        store.persist_ready(publication, attempt, intent).unwrap();
+        let ready = store.load().unwrap().unwrap();
+        (publication, attempt, receipt, intent, ready)
     }
 
     fn field(spec: FrozenFieldV1) -> DescriptorFieldAssemblyV1 {
@@ -1675,22 +1719,9 @@ mod tests {
     fn required_completion_publishes_envelope_before_completed_marker() {
         let directory = TestDirectory::new();
         let (publisher, envelope, _) = canonical_envelope_fixture(&directory);
-        let claim = envelope.published_claim();
-        let attempt = claim.plan().attempt();
-        let receipt = claim.receipt();
-        let publication = WorkerV2PublicationKindV1::FinalizedEnvelopeRequired;
-        let admission = restart_admission_commitment_v1(
-            publication,
-            claim.plan(),
-            claim.upstream_evidence(),
-            envelope.finalized_payload(),
-        );
-        let intent = WorkerV2PublicationIntentIdentityV1::from_bytes([0xa1; 32]);
         let store = WorkerV2ResumeStoreV1::open(&directory.0, &publisher).unwrap();
-        store
-            .persist_pending(publication, attempt, admission)
-            .unwrap();
-        store.persist_ready(publication, attempt, intent).unwrap();
+        let (publication, attempt, receipt, intent, _) =
+            stage_required_ready(&store, &envelope, 0xa1);
         assert!(
             store
                 .persist_completed(publication, attempt, intent, receipt)
@@ -1711,22 +1742,9 @@ mod tests {
     fn required_completed_recovery_rejects_a_missing_envelope() {
         let directory = TestDirectory::new();
         let (publisher, envelope, _) = canonical_envelope_fixture(&directory);
-        let claim = envelope.published_claim();
-        let attempt = claim.plan().attempt();
-        let receipt = claim.receipt();
-        let publication = WorkerV2PublicationKindV1::FinalizedEnvelopeRequired;
-        let admission = restart_admission_commitment_v1(
-            publication,
-            claim.plan(),
-            claim.upstream_evidence(),
-            envelope.finalized_payload(),
-        );
-        let intent = WorkerV2PublicationIntentIdentityV1::from_bytes([0xa2; 32]);
         let store = WorkerV2ResumeStoreV1::open(&directory.0, &publisher).unwrap();
-        store
-            .persist_pending(publication, attempt, admission)
-            .unwrap();
-        store.persist_ready(publication, attempt, intent).unwrap();
+        let (publication, attempt, receipt, intent, _) =
+            stage_required_ready(&store, &envelope, 0xa2);
         let completed = store
             .persist_envelope_and_completed(publication, attempt, intent, receipt, &envelope)
             .unwrap();
@@ -1744,5 +1762,130 @@ mod tests {
         assert!(store.recover_load_envelope(receipt).is_err());
         assert_eq!(store.load().unwrap(), Some(completed));
         assert!(completed.publication().requires_envelope());
+    }
+
+    #[test]
+    fn required_ready_restart_recovers_a_durable_envelope() {
+        let directory = TestDirectory::new();
+        let (publisher, envelope, _) = canonical_envelope_fixture(&directory);
+        let store = WorkerV2ResumeStoreV1::open(&directory.0, &publisher).unwrap();
+        let (publication, attempt, receipt, intent, ready) =
+            stage_required_ready(&store, &envelope, 0xa3);
+
+        store.publish_load_envelope(&envelope).unwrap();
+        assert_eq!(store.load().unwrap(), Some(ready));
+        drop(store);
+
+        let restarted = WorkerV2ResumeStoreV1::open(&directory.0, &publisher).unwrap();
+        let completed = restarted
+            .recover_envelope_and_completed(publication, attempt, intent, receipt)
+            .unwrap();
+        assert!(matches!(completed, ResumeMarkerStateV1::Completed { .. }));
+        assert_eq!(restarted.load().unwrap(), Some(completed));
+        assert_eq!(
+            restarted.recover_load_envelope(receipt).unwrap().to_bytes(),
+            envelope.to_bytes()
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "worker-v2-fault-injection-test-only")]
+    fn required_ready_restart_after_envelope_published_fault_completes() {
+        let directory = TestDirectory::new();
+        let (publisher, envelope, _) = canonical_envelope_fixture(&directory);
+        let store = WorkerV2ResumeStoreV1::open(&directory.0, &publisher).unwrap();
+        let (publication, attempt, receipt, intent, ready) =
+            stage_required_ready(&store, &envelope, 0xa4);
+        fs::write(
+            directory.0.join("fault-envelope-input"),
+            envelope.to_bytes(),
+        )
+        .unwrap();
+        drop(store);
+
+        let interrupted = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg("worker_v2_artifact_container::tests::required_envelope_publication_fault_helper")
+            .env(ENVELOPE_FAULT_HELPER_DIR_ENV, &directory.0)
+            .env("FE2O3_TEST_WORKER_V2_FAULT_POINT_V1", "envelope-published")
+            .status()
+            .unwrap();
+        assert_eq!(interrupted.code(), Some(86));
+
+        let restarted = WorkerV2ResumeStoreV1::open(&directory.0, &publisher).unwrap();
+        assert_eq!(restarted.load().unwrap(), Some(ready));
+        let completed = restarted
+            .recover_envelope_and_completed(publication, attempt, intent, receipt)
+            .unwrap();
+        assert!(matches!(completed, ResumeMarkerStateV1::Completed { .. }));
+        assert_eq!(restarted.load().unwrap(), Some(completed));
+    }
+
+    #[test]
+    #[cfg(feature = "worker-v2-fault-injection-test-only")]
+    fn required_envelope_publication_fault_helper() {
+        let Some(directory) = std::env::var_os(ENVELOPE_FAULT_HELPER_DIR_ENV) else {
+            return;
+        };
+        let directory = PathBuf::from(directory);
+        let publisher = producer("alpha_zeta", "/workspace/envelope.rs");
+        let envelope = WorkerV2LoadEnvelopeV1::from_bytes(
+            &fs::read(directory.join("fault-envelope-input")).unwrap(),
+        )
+        .unwrap();
+        let store = WorkerV2ResumeStoreV1::open(&directory, &publisher).unwrap();
+        store.publish_load_envelope(&envelope).unwrap();
+        panic!("envelope-published fault was not injected");
+    }
+
+    #[test]
+    fn required_ready_restart_rejects_missing_malformed_and_substituted_envelopes() {
+        for case in ["missing", "malformed", "substituted"] {
+            let directory = TestDirectory::new();
+            let (publisher, envelope, _) = canonical_envelope_fixture(&directory);
+            let store = WorkerV2ResumeStoreV1::open(&directory.0, &publisher).unwrap();
+            let (publication, attempt, receipt, intent, ready) =
+                stage_required_ready(&store, &envelope, 0xb1);
+            let expected_path = directory
+                .0
+                .join(envelope_name(receipt.publication_identity()));
+
+            match case {
+                "missing" => {}
+                "malformed" => {
+                    store.publish_load_envelope(&envelope).unwrap();
+                    let mut bytes = fs::read(&expected_path).unwrap();
+                    bytes[0] ^= 1;
+                    fs::write(&expected_path, bytes).unwrap();
+                }
+                "substituted" => {
+                    let other_directory = TestDirectory::new();
+                    let (_, substituted, _) = canonical_envelope_fixture_for(
+                        &other_directory,
+                        "substituted_alpha_zeta",
+                        "/workspace/substituted-envelope.rs",
+                    );
+                    let substituted_receipt = substituted.published_claim().receipt();
+                    assert_ne!(substituted_receipt, receipt);
+                    store.publish_load_envelope(&substituted).unwrap();
+                    fs::rename(
+                        directory
+                            .0
+                            .join(envelope_name(substituted_receipt.publication_identity())),
+                        &expected_path,
+                    )
+                    .unwrap();
+                }
+                _ => unreachable!(),
+            }
+
+            assert!(
+                store
+                    .recover_envelope_and_completed(publication, attempt, intent, receipt)
+                    .is_err(),
+                "{case} envelope unexpectedly completed the required marker"
+            );
+            assert_eq!(store.load().unwrap(), Some(ready), "{case}");
+        }
     }
 }

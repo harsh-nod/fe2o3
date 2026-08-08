@@ -515,6 +515,12 @@ enum CompletionFailure {
     PreserveAttempt(String),
 }
 
+#[derive(Clone, Copy)]
+enum CompletionEnvelopeV1<'a> {
+    Fresh(Option<&'a fe2o3_worker_v2_bundle::WorkerV2LoadEnvelopeV1>),
+    RecoverDurable,
+}
+
 impl ManagedAttempt {
     fn is_worker_v2_recovery(&self) -> bool {
         matches!(self.worker_v2, Some(ManagedWorkerV2::Recovery { .. }))
@@ -634,7 +640,7 @@ fn complete_fresh_worker_v2(
         resume,
         persisted.publication,
         persisted.intent,
-        None,
+        CompletionEnvelopeV1::Fresh(None),
     )
 }
 
@@ -660,7 +666,13 @@ fn complete_recovered_worker_v2(
         }
         Err(error) => return Err(preserve_restart_error("recovery", error)),
     };
-    publish_finish_and_clear(managed, resume, state.publication(), intent, None)
+    publish_finish_and_clear(
+        managed,
+        resume,
+        state.publication(),
+        intent,
+        CompletionEnvelopeV1::RecoverDurable,
+    )
 }
 
 fn publish_finish_and_clear(
@@ -668,9 +680,9 @@ fn publish_finish_and_clear(
     resume: &WorkerV2ResumeStoreV1,
     publication: WorkerV2PublicationKindV1,
     intent: RecoveredWorkerV2PublicationIntentV1,
-    envelope: Option<&fe2o3_worker_v2_bundle::WorkerV2LoadEnvelopeV1>,
+    envelope: CompletionEnvelopeV1<'_>,
 ) -> Result<(), CompletionFailure> {
-    if publication.requires_envelope() && envelope.is_none() {
+    if publication.requires_envelope() && matches!(envelope, CompletionEnvelopeV1::Fresh(None)) {
         #[cfg(feature = "worker-v2-fault-injection-test-only")]
         injected_fault_point_v1("envelope-inputs-required");
         return Err(preserve_restart_error(
@@ -683,16 +695,19 @@ fn publish_finish_and_clear(
     let receipt = publish_recovered_worker_v2(managed, &intent)?;
     #[cfg(feature = "worker-v2-fault-injection-test-only")]
     injected_fault_point_v1("published");
-    let completed = if let Some(envelope) = envelope {
-        resume.persist_envelope_and_completed(
+    let completed = match envelope {
+        CompletionEnvelopeV1::Fresh(Some(envelope)) => resume.persist_envelope_and_completed(
             publication,
             managed.attempt,
             intent_identity,
             receipt,
             envelope,
-        )
-    } else {
-        resume.persist_completed(publication, managed.attempt, intent_identity, receipt)
+        ),
+        CompletionEnvelopeV1::RecoverDurable if publication.requires_envelope() => resume
+            .recover_envelope_and_completed(publication, managed.attempt, intent_identity, receipt),
+        CompletionEnvelopeV1::Fresh(None) | CompletionEnvelopeV1::RecoverDurable => {
+            resume.persist_completed(publication, managed.attempt, intent_identity, receipt)
+        }
     }
     .map_err(|error| preserve_marker_error("completion persistence", error))?;
     #[cfg(feature = "worker-v2-fault-injection-test-only")]

@@ -960,6 +960,21 @@ impl WorkerV2ResumeStoreV1 {
         self.persist_completed_inner(publication, attempt, intent, receipt)
     }
 
+    /// Recovers only the canonical envelope named by `receipt` before advancing to `Completed`.
+    pub(crate) fn recover_envelope_and_completed(
+        &self,
+        publication: WorkerV2PublicationKindV1,
+        attempt: BuildAttempt,
+        intent: WorkerV2PublicationIntentIdentityV1,
+        receipt: BackendPublicationReceiptV1,
+    ) -> Result<ResumeMarkerStateV1, ResumeMarkerErrorV1> {
+        if !publication.requires_envelope() {
+            return Err(ResumeMarkerErrorV1::InvalidTransition);
+        }
+        let envelope = self.recover_load_envelope(receipt)?;
+        self.persist_envelope_and_completed(publication, attempt, intent, receipt, &envelope)
+    }
+
     fn persist_completed_inner(
         &self,
         publication: WorkerV2PublicationKindV1,
