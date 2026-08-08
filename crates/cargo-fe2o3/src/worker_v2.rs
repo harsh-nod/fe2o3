@@ -17,6 +17,8 @@ use fe2o3_hsaco_finalize::{
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
+pub(crate) use crate::worker_v2_restart::WorkerV2EnvelopeModeV1;
+
 pub(crate) const CODEGEN_PIPELINE_ENV: &str = "FE2O3_CODEGEN_PIPELINE";
 pub(crate) const WORKER_V2_CONFIG_ENV: &str = "FE2O3_WORKER_V2_CONFIG_V2";
 pub(crate) const WORKER_V2_EXPECTED_ID_ENV: &str = "FE2O3_WORKER_V2_EXPECTED_ID_V1";
@@ -77,28 +79,6 @@ impl WorkerV2ConfigIdentity {
     #[cfg(test)]
     pub(crate) const fn for_test(bytes: [u8; 32]) -> Self {
         Self(bytes)
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WorkerV2EnvelopeModeV1 {
-    /// Preserve the inert HSACO publication flow without claiming load or launch authority.
-    NonAuthoritative,
-    /// Require a canonical inert envelope before the attempt can complete.
-    Required,
-}
-
-impl WorkerV2EnvelopeModeV1 {
-    pub(crate) const fn is_required(self) -> bool {
-        matches!(self, Self::Required)
-    }
-
-    pub(crate) const fn grants_load_authority(self) -> bool {
-        false
-    }
-
-    pub(crate) const fn grants_launch_authority(self) -> bool {
-        false
     }
 }
 

@@ -31,8 +31,6 @@ use rustix::fs::{
 };
 use sha2::{Digest, Sha256};
 
-use crate::worker_v2::WorkerV2EnvelopeModeV1;
-
 const MARKER_MAGIC: &[u8] = b"FE2O3-CARGO-WORKER-V2-RESUME-V1\0";
 const LEGACY_MARKER_VERSION: u16 = 1;
 const MARKER_VERSION: u16 = 2;
@@ -51,6 +49,28 @@ const LEGACY_MARKER_BYTES: usize =
     MARKER_MAGIC.len() + 2 + 1 + 32 + 8 + 16 + 32 + 32 + RECEIPT_FIELDS * 32 + 32;
 
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WorkerV2EnvelopeModeV1 {
+    /// Preserve the inert HSACO publication flow without claiming load or launch authority.
+    NonAuthoritative,
+    /// Require a canonical inert envelope before the attempt can complete.
+    Required,
+}
+
+impl WorkerV2EnvelopeModeV1 {
+    pub(crate) const fn is_required(self) -> bool {
+        matches!(self, Self::Required)
+    }
+
+    pub(crate) const fn grants_load_authority(self) -> bool {
+        false
+    }
+
+    pub(crate) const fn grants_launch_authority(self) -> bool {
+        false
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ReceiptRecordV1([[u8; 32]; RECEIPT_FIELDS]);
