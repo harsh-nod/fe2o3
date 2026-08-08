@@ -1452,7 +1452,7 @@ pub(crate) mod tests {
         let fixture = make_two_hsaco_fixture_with_kernel_ids_and_abis(
             seed,
             finalized_bytes.clone(),
-            "gfx942",
+            observed.device().target(),
             "alpha",
             "alpha",
             alpha_kernel,
@@ -1507,9 +1507,9 @@ pub(crate) mod tests {
         let seed = 0xa7;
         let alpha_binding = [0x61; 32];
         let zeta_binding = [0x71; 32];
-        let hsaco = alpha_zeta_cov6_hsaco_for_target("gfx942");
+        let hsaco = alpha_zeta_cov6_hsaco_for_target("gfx942:xnack-");
         let exact_bytes = hsaco.bytes.clone();
-        let observed = make_observed_for(seed.into(), "gfx942");
+        let observed = make_observed_for(seed.into(), "gfx942:xnack-");
         let (admission, _directory) = admitted_alpha_zeta_cov6_hardware_for_lifecycle_test(
             seed,
             hsaco.bytes,
@@ -1519,6 +1519,7 @@ pub(crate) mod tests {
         );
 
         assert_eq!(admission.kernel_count(), 2);
+        assert_eq!(admission.target().to_string(), "gfx942:xnack-");
         assert_eq!(admission.artifact_identity.name().as_str(), "alpha");
         assert_eq!(admission.artifact_identity.symbol().as_str(), "alpha");
         assert_eq!(admission.artifact_identity.abi().size(), 40);

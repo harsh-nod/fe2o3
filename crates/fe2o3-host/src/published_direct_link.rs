@@ -2225,6 +2225,7 @@ pub(crate) mod tests {
             "gfx1100" => 0x41,
             "gfx1151" => 0x4a,
             "gfx942" => 0x54c,
+            "gfx942:xnack-" => 0x64c,
             "gfx950" => 0x54f,
             _ => panic!("unsupported host inspection test target {target}"),
         }
