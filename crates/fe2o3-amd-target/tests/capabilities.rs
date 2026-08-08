@@ -1,10 +1,11 @@
 use fe2o3_amd_target::{
-    ADVANCED_CAPABILITY_MODEL_REVISION, AdvancedCapabilityModelRevision, AdvancedCapabilityStatus,
-    AmdTargetFeature, AmdTargetId, AsyncCopyInstructionSet, AtomicAddressSpace,
-    AtomicLegalizability, AtomicOperation, AtomicOrdering, AtomicScope, AtomicWidth,
-    CapabilityDerivationError, CapabilitySupport, DeviceDiagnosticFeature, Fp8Format,
-    KNOWN_PROCESSORS, LaunchBoundsField, LaunchBoundsMetadata, MatrixInstructionSet, MfmaFamily,
-    MxFormat, ParseAmdTargetIdError, StandardAtomicQuery, WavefrontWidth, WorkgroupAxis,
+    ADVANCED_CAPABILITY_MODEL_REVISION, AdvancedCapabilityModelIdentity,
+    AdvancedCapabilityModelRevision, AdvancedCapabilityStatus, AmdTargetFeature, AmdTargetId,
+    AsyncCopyInstructionSet, AtomicAddressSpace, AtomicLegalizability, AtomicOperation,
+    AtomicOrdering, AtomicScope, AtomicWidth, CapabilityDerivationError, CapabilitySupport,
+    DeviceDiagnosticFeature, Fp8Format, KNOWN_PROCESSORS, LaunchBoundsField, LaunchBoundsMetadata,
+    MatrixInstructionSet, MfmaFamily, MxFormat, ParseAmdTargetIdError, StandardAtomicQuery,
+    WavefrontWidth, WorkgroupAxis,
 };
 
 const ATOMIC_OPERATIONS: [AtomicOperation; 14] = [
@@ -598,21 +599,41 @@ fn subword_generic_and_signedness_cases_are_explicit() {
 fn advanced_model_revision_and_identity_are_explicit_without_changing_v1() {
     assert_eq!(
         ADVANCED_CAPABILITY_MODEL_REVISION,
-        AdvancedCapabilityModelRevision::V1
+        AdvancedCapabilityModelRevision::V2
     );
-    assert_eq!(ADVANCED_CAPABILITY_MODEL_REVISION.get(), 1);
+    assert_eq!(ADVANCED_CAPABILITY_MODEL_REVISION.get(), 2);
+    assert_ne!(
+        AdvancedCapabilityModelRevision::V1,
+        AdvancedCapabilityModelRevision::V2
+    );
 
-    let capabilities = capabilities("gfx942:xnack-");
+    let target = AmdTargetId::parse("gfx942:xnack-").unwrap();
+    let pre_change_identity =
+        AdvancedCapabilityModelIdentity::for_revision(AdvancedCapabilityModelRevision::V1, target);
+    let capabilities = target.capabilities().unwrap();
     assert_eq!(
         capabilities.advanced_model_revision(),
+        AdvancedCapabilityModelRevision::V2
+    );
+    let post_change_identity = capabilities.advanced_model_identity();
+    assert_ne!(pre_change_identity, post_change_identity);
+    assert_eq!(
+        pre_change_identity.revision(),
         AdvancedCapabilityModelRevision::V1
     );
-    let identity = capabilities.advanced_model_identity();
-    assert_eq!(identity.revision(), AdvancedCapabilityModelRevision::V1);
-    assert_eq!(identity.target().to_string(), "gfx942:xnack-");
     assert_eq!(
-        identity.to_string(),
+        post_change_identity.revision(),
+        AdvancedCapabilityModelRevision::V2
+    );
+    assert_eq!(pre_change_identity.target(), target);
+    assert_eq!(post_change_identity.target(), target);
+    assert_eq!(
+        pre_change_identity.to_string(),
         "amd-advanced-capability-model-v1{target=gfx942:xnack-}"
+    );
+    assert_eq!(
+        post_change_identity.to_string(),
+        "amd-advanced-capability-model-v2{target=gfx942:xnack-}"
     );
     assert_eq!(
         capabilities.to_string(),

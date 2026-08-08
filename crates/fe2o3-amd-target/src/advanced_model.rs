@@ -14,6 +14,9 @@ impl AdvancedCapabilityModelRevision {
     /// First reviewed advanced capability query model.
     pub const V1: Self = Self(1);
 
+    /// Atomic admission model with evidence-correct legalizability decisions.
+    pub const V2: Self = Self(2);
+
     /// Returns the stable numeric revision for bounded encoders.
     pub const fn get(self) -> u16 {
         self.0
@@ -22,7 +25,7 @@ impl AdvancedCapabilityModelRevision {
 
 /// Current advanced capability model revision.
 pub const ADVANCED_CAPABILITY_MODEL_REVISION: AdvancedCapabilityModelRevision =
-    AdvancedCapabilityModelRevision::V1;
+    AdvancedCapabilityModelRevision::V2;
 
 /// Review state for one advanced target capability.
 ///
@@ -78,10 +81,18 @@ pub struct AdvancedCapabilityModelIdentity {
 
 impl AdvancedCapabilityModelIdentity {
     pub(crate) const fn new(target: AmdTargetId) -> Self {
-        Self {
-            revision: ADVANCED_CAPABILITY_MODEL_REVISION,
-            target,
-        }
+        Self::for_revision(ADVANCED_CAPABILITY_MODEL_REVISION, target)
+    }
+
+    /// Constructs an inert identity for a declared model revision and target.
+    ///
+    /// This supports comparison with historical decision tables. It grants no
+    /// authority and does not attest that the revision admitted an operation.
+    pub const fn for_revision(
+        revision: AdvancedCapabilityModelRevision,
+        target: AmdTargetId,
+    ) -> Self {
+        Self { revision, target }
     }
 
     /// Advanced model revision bound by this identity.
