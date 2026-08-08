@@ -1141,6 +1141,7 @@ mod tests {
     static NEXT_TEST: AtomicU64 = AtomicU64::new(1);
     #[cfg(feature = "worker-v2-fault-injection-test-only")]
     const ENVELOPE_FAULT_HELPER_DIR_ENV: &str = "FE2O3_TEST_ENVELOPE_FAULT_HELPER_DIR";
+    #[cfg(feature = "worker-v2-fault-injection-test-only")]
     const ENVELOPE_FAULT_HELPER_ATTEMPT_ENV: &str = "FE2O3_TEST_ENVELOPE_FAULT_HELPER_ATTEMPT";
 
     struct TestDirectory(PathBuf);
@@ -1528,6 +1529,7 @@ mod tests {
             .unwrap()
     }
 
+    #[cfg(feature = "worker-v2-fault-injection-test-only")]
     fn envelope_input_residue(directory: &TestDirectory) -> Vec<PathBuf> {
         fs::read_dir(&directory.0)
             .unwrap()

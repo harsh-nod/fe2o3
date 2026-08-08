@@ -2661,8 +2661,11 @@ mod tests {
                 _ => unreachable!(),
             }
 
-            let store = WorkerV2ResumeStoreV1::open(&directory.0, &producer).unwrap();
-            assert!(store.load().is_err(), "tamper case {case} was accepted");
+            let rejected = match WorkerV2ResumeStoreV1::open(&directory.0, &producer) {
+                Err(_) => true,
+                Ok(store) => store.load().is_err(),
+            };
+            assert!(rejected, "tamper case {case} was accepted");
         }
     }
 
