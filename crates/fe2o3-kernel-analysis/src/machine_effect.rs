@@ -1930,7 +1930,7 @@ fn checked_aggregate_count(
     additional: usize,
     maximum: usize,
 ) -> Result<usize, MachineEffectDecodeErrorV1> {
-    let actual = prior.checked_add(additional).unwrap_or(usize::MAX);
+    let actual = prior.saturating_add(additional);
     if actual > maximum {
         Err(invalid_input(
             MachineEffectInputErrorV1::CountBoundExceeded {
