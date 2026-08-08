@@ -1104,7 +1104,8 @@ mod tests {
     use super::*;
     use crate::worker_v2_restart::{
         ResumeMarkerStateV1, WorkerV2EnvelopePublicationOutcomeV1, WorkerV2PublicationKindV1,
-        WorkerV2ResumeStoreV1, envelope_name, restart_admission_commitment_with_inputs_v1,
+        WorkerV2ResumeStoreV1, envelope_name, recover_worker_v2_intent_v1,
+        restart_admission_commitment_with_inputs_v1,
     };
     use fe2o3_artifact_transaction::{
         AtomicPublicationIdentityV1, BuildInvocation, BuildSession, CanonicalLinkRequestIdentityV1,
@@ -1113,7 +1114,7 @@ mod tests {
         TargetIdentityV1, ValidatedResponseIdentityV1, WorkerV2PublicationIntentIdentityV1,
         begin_build_attempt, finish_build_attempt, persist_worker_v2_publication_intent_v1,
         producer_package_identity_v1, publish_exact_hsaco_evidence_for_attempt_v1,
-        recover_published_hsaco_claim_for_attempt_v1, recover_worker_v2_publication_intent_v1,
+        recover_published_hsaco_claim_for_attempt_v1,
     };
     use fe2o3_artifacts::{
         CallerClaimedPackageIdentityV1, ConfigurationEntry, DirectLinkBindingExpectationV1,
@@ -1301,7 +1302,7 @@ mod tests {
             Some(mutation),
         );
         WorkerV2LoadEnvelopeV1::new(
-            envelope.container().clone(),
+            ArtifactContainerV1::from_bytes(&envelope.container().to_bytes()).unwrap(),
             envelope.bundle_index().clone(),
             envelope.direct_link_evidence().clone(),
             envelope.descriptor_lineage().clone(),
@@ -1495,11 +1496,6 @@ mod tests {
             Some(inputs.identity()),
         );
         let receipt = claim.receipt();
-        let intent =
-            recover_worker_v2_publication_intent_v1(&store.display_path, publisher, attempt)
-                .unwrap()
-                .record()
-                .identity();
         store
             .persist_pending_with_envelope_inputs(
                 publication,
@@ -1508,7 +1504,11 @@ mod tests {
                 Some(inputs.identity()),
             )
             .unwrap();
-        store.persist_ready(publication, attempt, intent).unwrap();
+        let pending = store.load().unwrap().unwrap();
+        let intent = recover_worker_v2_intent_v1(store, publisher, pending)
+            .unwrap()
+            .record()
+            .identity();
         let ready = store.load().unwrap().unwrap();
         (publication, attempt, receipt, intent, ready)
     }

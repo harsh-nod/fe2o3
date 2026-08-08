@@ -19,6 +19,10 @@ use reserved_fe2o3_symbols::{
 use sha2::{Digest, Sha256};
 
 #[allow(dead_code)]
+#[path = "../../src/worker_v2_artifact_container.rs"]
+mod worker_v2_artifact_container;
+
+#[allow(dead_code)]
 #[path = "../../src/worker_v2_restart.rs"]
 mod restart_support;
 
