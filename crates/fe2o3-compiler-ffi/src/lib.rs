@@ -14,6 +14,7 @@ use reserved_fe2o3_symbols::{
 use sha2::{Digest, Sha256};
 
 mod descriptor_source;
+mod external_device_library_manifest;
 mod module_handoff;
 mod module_handoff_v2;
 mod symbol_manifest;
@@ -21,6 +22,20 @@ mod symbol_manifest;
 pub use descriptor_source::{
     COMPILER_DESCRIPTOR_SECTION_NAME_V1, CompilerDescriptorSourceErrorV1,
     CompilerDescriptorSourceIdentityV1, CompilerDescriptorSourceV1,
+};
+pub use external_device_library_manifest::{
+    ExternalDeviceAddressSpaceV1, ExternalDeviceBlobIdentityV1, ExternalDeviceCallingConventionV1,
+    ExternalDeviceCapabilityIdentityV1, ExternalDeviceConvergenceV1,
+    ExternalDeviceLibraryContentIdentityV1, ExternalDeviceLibraryContentKindV1,
+    ExternalDeviceLibraryDependencyV1, ExternalDeviceLibraryManifestErrorV1,
+    ExternalDeviceLibraryManifestIdentityV1, ExternalDeviceLibraryManifestV1,
+    ExternalDeviceLibraryProvenanceKindV1, ExternalDeviceLibraryProvenanceV1,
+    ExternalDeviceLibraryTrustClassV1, ExternalDeviceLibraryTrustV1, ExternalDeviceLlvmIdentityV1,
+    ExternalDeviceSemanticIdentityV1, ExternalDeviceSymbolRoleV1, ExternalDeviceSymbolV1,
+    MAX_EXTERNAL_DEVICE_LIBRARY_CAPABILITIES_V1, MAX_EXTERNAL_DEVICE_LIBRARY_DEPENDENCIES_V1,
+    MAX_EXTERNAL_DEVICE_LIBRARY_LLVM_DATA_LAYOUT_BYTES_V1,
+    MAX_EXTERNAL_DEVICE_LIBRARY_LLVM_TOKEN_BYTES_V1, MAX_EXTERNAL_DEVICE_LIBRARY_MANIFEST_BYTES_V1,
+    MAX_EXTERNAL_DEVICE_LIBRARY_SYMBOLS_V1,
 };
 pub use module_handoff::{
     CompilerModuleHandoffErrorV1, CompilerModuleHandoffPartsV1, CompilerModuleHandoffV1,
