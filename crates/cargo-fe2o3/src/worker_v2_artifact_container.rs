@@ -1,9 +1,8 @@
-//! Deterministic, inert `ArtifactContainerV1` assembly for finalized Worker V2 COV6 output.
+//! Canonical, inert Worker V2 load-envelope assembly for finalized COV6 output.
 //!
-//! The artifact container wire does not carry durable Worker publication lineage, descriptor
-//! symbols, code-object version, or the descriptor compiler commit. This adapter retains those
-//! fields beside the canonical container. It does not publish the container and cannot prove that
-//! its immutable publication snapshot is still current after assembly.
+//! Cargo assembles this structural envelope only from independently supplied sealed evidence and
+//! exact raw and finalized snapshots. The envelope carries an inert durable publication claim; it
+//! never carries a process-local lease and grants no load or launch authority.
 
 use std::fmt;
 
@@ -15,17 +14,21 @@ use fe2o3_artifact_transaction::{
 };
 use fe2o3_artifacts::{
     AbiField, AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership,
-    ArtifactContainerV1, BlockSize, Capability, CodeObjectFormat, CodeObjectIdentity,
-    CodeObjectPayload, CompilerIdentity, ContainerValidationError, DeclaredRustLayoutIdentity,
-    DeclaredRustTypeIdentity, DigestAlgorithm, DigestBytes, Dimensions, Endianness, IdentityText,
-    KernelEntry, LaunchContract, ManifestV1, Mutability, Name, PointerWidth, ScalarType,
-    ToolIdentity, TypeIdentity, ValidationError,
+    ArtifactContainerV1, BlockSize, BundleIndexV1, Capability, CodeObjectFormat,
+    CodeObjectIdentity, CodeObjectPayload, CompilerIdentity, ContainerValidationError,
+    DeclaredRustLayoutIdentity, DeclaredRustTypeIdentity, DigestAlgorithm, DigestBytes, Dimensions,
+    DirectLinkBundleEvidenceV1, Endianness, IdentityText, KernelEntry, LaunchContract, ManifestV1,
+    Mutability, Name, PointerWidth, ProofRecordV1, ScalarType, ToolIdentity, TypeIdentity,
+    ValidationError,
 };
 use fe2o3_hsaco::{
     ArgumentAccess, ArgumentAddressSpace, CodeObjectVersion, ExplicitValueKind, InspectedKernel,
 };
 use fe2o3_hsaco_finalize::{FinalizationError, inspect_finalized};
 use fe2o3_kernel_descriptor::{AccessMode, AliasSemantics, CapabilityV1, OwnershipSemantics};
+use fe2o3_worker_v2_bundle::{
+    DescriptorLineageV1, EnvelopeValidationError, ExactRawHsacoV1, WorkerV2LoadEnvelopeV1,
+};
 use sha2::{Digest, Sha256};
 
 const TARGET: &str = "gfx942:xnack-";
@@ -51,6 +54,7 @@ pub(crate) struct WorkerV2DescriptorKernelLineageV1 {
 /// `ArtifactContainerV1` has no slots for it. The complete plan, receipt, raw
 /// bytes, bundle/proof evidence, and currentness lease are not retained.
 #[derive(Debug)]
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct PreparedWorkerV2ArtifactContainerV1 {
     container: ArtifactContainerV1,
     attempt: BuildAttempt,
@@ -80,6 +84,8 @@ pub(crate) enum WorkerV2ArtifactContainerAssemblyErrorV1 {
     DescriptorModel(&'static str),
     ArtifactModel(ValidationError),
     Container(ContainerValidationError),
+    Bundle(fe2o3_artifacts::BundleValidationError),
+    Envelope(EnvelopeValidationError),
 }
 
 impl fmt::Display for WorkerV2ArtifactContainerAssemblyErrorV1 {
@@ -115,6 +121,8 @@ impl fmt::Display for WorkerV2ArtifactContainerAssemblyErrorV1 {
             ),
             Self::ArtifactModel(error) => error.fmt(formatter),
             Self::Container(error) => error.fmt(formatter),
+            Self::Bundle(error) => error.fmt(formatter),
+            Self::Envelope(error) => error.fmt(formatter),
         }
     }
 }
@@ -126,6 +134,8 @@ impl std::error::Error for WorkerV2ArtifactContainerAssemblyErrorV1 {
             Self::FinalizedHsaco(error) => Some(error),
             Self::ArtifactModel(error) => Some(error),
             Self::Container(error) => Some(error),
+            Self::Bundle(error) => Some(error),
+            Self::Envelope(error) => Some(error),
             _ => None,
         }
     }
@@ -496,6 +506,42 @@ pub(crate) fn prepare_worker_v2_artifact_container_v1(
         compiler_commit: table.compiler_commit,
         descriptors,
     })
+}
+
+/// Assembles the canonical load envelope from exact, independently supplied evidence.
+///
+/// Cargo deliberately does not derive `direct_link` or `proofs` from descriptor digests. The
+/// upstream producer must provide those sealed records, and the envelope constructor checks their
+/// complete structural join against the finalized container and durable publication claim.
+#[allow(dead_code)] // Wired once the compiler handoff carries sealed direct-link and proof records.
+pub(crate) fn assemble_worker_v2_load_envelope_v1(
+    producer: &ProducerIdentity,
+    plan: DurableLinkPublicationPlanV1,
+    upstream: UpstreamCodeObjectEvidenceIdentityV1,
+    publication: &AttemptScopedHsacoPublicationResultV1,
+    direct_link: DirectLinkBundleEvidenceV1,
+    proofs: Vec<ProofRecordV1>,
+    raw: ExactRawHsacoV1,
+) -> Result<WorkerV2LoadEnvelopeV1, WorkerV2ArtifactContainerAssemblyErrorV1> {
+    let descriptor = DescriptorLineageV1::new(
+        inspect_finalized(publication.snapshot().artifact().bytes())
+            .map_err(WorkerV2ArtifactContainerAssemblyErrorV1::FinalizedHsaco)?
+            .descriptor_table()
+            .clone(),
+    );
+    let prepared = prepare_worker_v2_artifact_container_v1(producer, plan, upstream, publication)?;
+    let bundle = BundleIndexV1::from_containers(std::slice::from_ref(&prepared.container))
+        .map_err(WorkerV2ArtifactContainerAssemblyErrorV1::Bundle)?;
+    WorkerV2LoadEnvelopeV1::new(
+        prepared.container,
+        bundle,
+        direct_link,
+        descriptor,
+        proofs,
+        raw,
+        publication.published_claim().clone(),
+    )
+    .map_err(WorkerV2ArtifactContainerAssemblyErrorV1::Envelope)
 }
 
 fn expected_components(field: FrozenFieldV1) -> Vec<(u32, u16, u16)> {
@@ -887,12 +933,26 @@ mod test_fixture;
 mod tests {
     use super::test_fixture::{ProfileMutation, alpha_zeta_fixture};
     use super::*;
+    use crate::worker_v2_restart::{WorkerV2EnvelopePublicationOutcomeV1, WorkerV2ResumeStoreV1};
     use fe2o3_artifact_transaction::{
         AtomicPublicationIdentityV1, BuildInvocation, BuildSession, CanonicalLinkRequestIdentityV1,
         FinalizationIdentityV1, FinalizedOutputIdentityV1, KernelSetIdentityV1,
         LinkPublicationScopeV1, LinkedOutputIdentityV1, PackageIdentityV1, PinnedWorkerIdentityV1,
-        TargetIdentityV1, ValidatedResponseIdentityV1, begin_build_attempt,
-        publish_exact_hsaco_evidence_for_attempt_v1,
+        TargetIdentityV1, ValidatedResponseIdentityV1, begin_build_attempt, finish_build_attempt,
+        producer_package_identity_v1, publish_exact_hsaco_evidence_for_attempt_v1,
+    };
+    use fe2o3_artifacts::{
+        CallerClaimedPackageIdentityV1, DirectLinkBindingExpectationV1, DirectLinkBindingSourceV1,
+        DirectLinkFfiClosureIdentityV1, DirectLinkFinalizationIdentityV1,
+        DirectLinkFinalizedPayloadIdentityV1, DirectLinkLinkedOutputIdentityV1,
+        DirectLinkRequestIdentityV1, DirectLinkResponseIdentityV1,
+        DirectLinkToolchainConfigurationIdentityV1, DirectLinkToolchainExecutableIdentityV1,
+        DirectLinkToolchainIdentityV1, DirectLinkTransformationIdentityV1,
+        DirectLinkWorkerConfigurationIdentityV1, DirectLinkWorkerExecutableIdentityV1,
+        DirectLinkWorkerIdentityV1, ManifestClaimDerivedLinkPublicationScopeV1,
+        ManifestClaimDirectLinkPublicationBridgeV1, MeasuredToolIdentity, PayloadDigest,
+        ProofArtifactIdentity, ProofExecutionIdentity, ProofOutcome, ProofTargetIdentity,
+        SourceContractIdentity, VerificationModelIdentity,
     };
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -950,6 +1010,199 @@ mod tests {
             FinalizedOutputIdentityV1::from_bytes(finalized),
             AtomicPublicationIdentityV1::from_bytes([seed.wrapping_add(8); 32]),
         )
+    }
+
+    fn payload_digest(bytes: [u8; 32]) -> PayloadDigest {
+        PayloadDigest::new(DigestAlgorithm::Sha256, DigestBytes::from_bytes(bytes))
+    }
+
+    fn identity_text(value: &str) -> IdentityText {
+        IdentityText::new(value).unwrap()
+    }
+
+    fn proof_record(kernel: &KernelEntry) -> ProofRecordV1 {
+        let tagged = |seed| payload_digest([seed; 32]);
+        ProofRecordV1::new(
+            ProofTargetIdentity::new(
+                ProofArtifactIdentity::new(
+                    payload_digest(*kernel.kernel_id().as_bytes()),
+                    tagged(0x41),
+                    payload_digest(*kernel.source_digest().as_bytes()),
+                    tagged(0x42),
+                    payload_digest(*kernel.executable_digest().as_bytes()),
+                    tagged(0x43),
+                    tagged(0x44),
+                    tagged(0x45),
+                ),
+                SourceContractIdentity::new(
+                    tagged(0x51),
+                    tagged(0x52),
+                    tagged(0x53),
+                    tagged(0x54),
+                    tagged(0x55),
+                ),
+            ),
+            vec![],
+            ProofExecutionIdentity::new(
+                VerificationModelIdentity::new(identity_text("test-model"), tagged(0x61)),
+                MeasuredToolIdentity::new(
+                    identity_text("test-verifier"),
+                    identity_text("1"),
+                    tagged(0x62),
+                    tagged(0x63),
+                ),
+                MeasuredToolIdentity::new(
+                    identity_text("test-solver"),
+                    identity_text("1"),
+                    tagged(0x64),
+                    tagged(0x65),
+                ),
+                MeasuredToolIdentity::new(
+                    identity_text("test-recorder"),
+                    identity_text("1"),
+                    tagged(0x66),
+                    tagged(0x67),
+                ),
+                tagged(0x68),
+            ),
+            ProofOutcome::Failed,
+            vec![],
+            vec![],
+        )
+        .unwrap()
+    }
+
+    fn canonical_envelope_fixture(
+        directory: &TestDirectory,
+    ) -> (
+        ProducerIdentity,
+        WorkerV2LoadEnvelopeV1,
+        fe2o3_artifact_transaction::BackendPublicationReceiptV1,
+    ) {
+        let fixture = alpha_zeta_fixture(ProfileMutation::None);
+        let publisher = producer("alpha_zeta", "/workspace/envelope.rs");
+        let first_attempt = begin(directory, &publisher, 0x11);
+        let finalized: [u8; 32] = Sha256::digest(&fixture.bytes).into();
+        let first_plan = plan(first_attempt, finalized, 0x21);
+        let first_upstream = UpstreamCodeObjectEvidenceIdentityV1::from_bytes([0x31; 32]);
+        let first_publication = publish_exact_hsaco_evidence_for_attempt_v1(
+            &directory.0,
+            &publisher,
+            first_attempt,
+            first_plan,
+            first_upstream,
+            &fixture.bytes,
+        )
+        .unwrap();
+        let container = prepare_worker_v2_artifact_container_v1(
+            &publisher,
+            first_plan,
+            first_upstream,
+            &first_publication,
+        )
+        .unwrap()
+        .container;
+        let stale_receipt = first_publication.receipt();
+        drop(first_publication);
+        finish_build_attempt(&directory.0, &publisher, first_attempt).unwrap();
+
+        let bundle = BundleIndexV1::from_containers(std::slice::from_ref(&container)).unwrap();
+        let identity = DigestAlgorithm::Sha256.calculate(&fixture.bytes);
+        let tagged = |seed| payload_digest([seed; 32]);
+        let expectation = DirectLinkBindingExpectationV1::new(
+            DirectLinkRequestIdentityV1::new(tagged(0x71)),
+            DirectLinkWorkerIdentityV1::new(
+                identity_text("test-worker"),
+                identity_text("1"),
+                DirectLinkWorkerExecutableIdentityV1::new(tagged(0x72)),
+                DirectLinkWorkerConfigurationIdentityV1::new(tagged(0x73)),
+            ),
+            DirectLinkToolchainIdentityV1::new(
+                identity_text("test-llvm"),
+                identity_text("1"),
+                DirectLinkToolchainExecutableIdentityV1::new(tagged(0x74)),
+                DirectLinkToolchainConfigurationIdentityV1::new(tagged(0x75)),
+            ),
+            DirectLinkResponseIdentityV1::new(tagged(0x76)),
+            DirectLinkTransformationIdentityV1::new(
+                DirectLinkLinkedOutputIdentityV1::new(identity),
+                DirectLinkFinalizationIdentityV1::new(tagged(0x77)),
+                DirectLinkFinalizedPayloadIdentityV1::new(identity),
+            ),
+            DirectLinkFfiClosureIdentityV1::new(tagged(0x78)),
+        );
+        let direct_link = DirectLinkBundleEvidenceV1::bind(
+            &bundle,
+            &[&container],
+            &[DirectLinkBindingSourceV1::new(
+                &container,
+                expectation.clone(),
+            )],
+        )
+        .unwrap();
+        let validated = direct_link
+            .validate_against(
+                &bundle,
+                &[&container],
+                &[DirectLinkBindingSourceV1::new(&container, expectation)],
+            )
+            .unwrap();
+
+        let attempt = begin(directory, &publisher, 0x41);
+        let scope = ManifestClaimDerivedLinkPublicationScopeV1::derive(
+            CallerClaimedPackageIdentityV1::new(producer_package_identity_v1(&publisher)),
+            &validated,
+            0,
+            &container,
+        )
+        .unwrap();
+        let bridge = ManifestClaimDirectLinkPublicationBridgeV1::prepare_with_manifest_claim_scope(
+            attempt, scope, &validated, 0,
+        )
+        .unwrap();
+        let plan = DurableLinkPublicationPlanV1::new(
+            attempt,
+            bridge
+                .non_authoritative_diagnostics()
+                .descriptive_scope_claim(),
+            bridge.request_identity(),
+            bridge.worker_identity(),
+            bridge.response_identity(),
+            bridge.linked_output_identity(),
+            bridge.finalization_identity(),
+            bridge.finalized_output_identity(),
+            bridge.publication_identity(),
+        );
+        let upstream = UpstreamCodeObjectEvidenceIdentityV1::from_bytes(
+            Sha256::digest(direct_link.to_bytes()).into(),
+        );
+        let publication = publish_exact_hsaco_evidence_for_attempt_v1(
+            &directory.0,
+            &publisher,
+            attempt,
+            plan,
+            upstream,
+            &fixture.bytes,
+        )
+        .unwrap();
+        let proofs = container
+            .manifest()
+            .kernels()
+            .iter()
+            .map(proof_record)
+            .collect();
+        let envelope = assemble_worker_v2_load_envelope_v1(
+            &publisher,
+            plan,
+            upstream,
+            &publication,
+            direct_link,
+            proofs,
+            ExactRawHsacoV1::from_bytes(fixture.bytes).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(envelope.published_claim().receipt(), publication.receipt());
+        (publisher, envelope, stale_receipt)
     }
 
     fn field(spec: FrozenFieldV1) -> DescriptorFieldAssemblyV1 {
@@ -1335,6 +1588,82 @@ mod tests {
         assert_ne!(
             FrozenFieldKindV1::F32.layout_identity(),
             FrozenFieldKindV1::SharedF32.layout_identity()
+        );
+    }
+
+    #[test]
+    fn canonical_envelope_store_is_create_new_recoverable_and_inert() {
+        let directory = TestDirectory::new();
+        let (publisher, envelope, stale_receipt) = canonical_envelope_fixture(&directory);
+        let store = WorkerV2ResumeStoreV1::open(&directory.0, &publisher).unwrap();
+
+        assert_eq!(
+            store.publish_load_envelope(&envelope).unwrap(),
+            WorkerV2EnvelopePublicationOutcomeV1::Published
+        );
+        assert_eq!(
+            store.publish_load_envelope(&envelope).unwrap(),
+            WorkerV2EnvelopePublicationOutcomeV1::AlreadyPublished
+        );
+        let recovered = store
+            .recover_load_envelope(envelope.published_claim().receipt())
+            .unwrap();
+        assert_eq!(recovered.to_bytes(), envelope.to_bytes());
+        assert!(!recovered.grants_currentness_authority());
+        assert!(!recovered.grants_load_authority());
+        assert!(!recovered.grants_launch_authority());
+        assert!(store.recover_load_envelope(stale_receipt).is_err());
+    }
+
+    #[test]
+    fn malformed_or_mutated_envelope_is_never_replaced() {
+        let directory = TestDirectory::new();
+        let (publisher, envelope, _) = canonical_envelope_fixture(&directory);
+        let receipt = envelope.published_claim().receipt();
+        let store = WorkerV2ResumeStoreV1::open(&directory.0, &publisher).unwrap();
+        store.publish_load_envelope(&envelope).unwrap();
+        drop(store);
+
+        let path = fs::read_dir(&directory.0)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| {
+                let name = path.file_name().unwrap().to_string_lossy();
+                name.starts_with(".fe2o3-worker-v2-load-envelope-v1-")
+                    && name.ends_with(".envelope")
+            })
+            .unwrap();
+        let mut bytes = fs::read(&path).unwrap();
+        bytes[0] ^= 1;
+        fs::write(&path, &bytes).unwrap();
+
+        let store = WorkerV2ResumeStoreV1::open(&directory.0, &publisher).unwrap();
+        assert!(store.recover_load_envelope(receipt).is_err());
+        assert!(store.publish_load_envelope(&envelope).is_err());
+        assert_eq!(fs::read(path).unwrap(), bytes);
+    }
+
+    #[test]
+    fn abandoned_envelope_temp_is_not_recovered_as_a_publication() {
+        let directory = TestDirectory::new();
+        let (publisher, envelope, _) = canonical_envelope_fixture(&directory);
+        let stale_temp = directory
+            .0
+            .join(".fe2o3-worker-v2-load-envelope-v1-stale.envelope.tmp-1-1");
+        fs::write(&stale_temp, envelope.to_bytes()).unwrap();
+        let store = WorkerV2ResumeStoreV1::open(&directory.0, &publisher).unwrap();
+
+        assert_eq!(
+            store.publish_load_envelope(&envelope).unwrap(),
+            WorkerV2EnvelopePublicationOutcomeV1::Published
+        );
+        assert!(stale_temp.exists());
+        assert_eq!(
+            store
+                .recover_load_envelope(envelope.published_claim().receipt())
+                .unwrap()
+                .to_bytes(),
+            envelope.to_bytes()
         );
     }
 }

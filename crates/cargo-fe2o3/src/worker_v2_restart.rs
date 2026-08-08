@@ -23,6 +23,7 @@ use fe2o3_hsaco_finalize::{
     WorkerV2HsacoPublicationError, finalize_inspected_worker_v2_hsaco_v1,
     prepare_finalized_worker_v2_hsaco_publication_v1, prepare_worker_v2_hsaco_publication_v1,
 };
+use fe2o3_worker_v2_bundle::{MAX_WORKER_V2_LOAD_ENVELOPE_BYTES, WorkerV2LoadEnvelopeV1};
 use rustix::fd::{FromRawFd, OwnedFd};
 use rustix::fs::{
     AtFlags, FileType, FlockOperation, Mode, OFlags, RenameFlags, flock, fstat, fsync, open,
@@ -39,6 +40,8 @@ const MARKER_PREFIX: &str = ".fe2o3-cargo-worker-v2-resume-v1-";
 const LOCK_SUFFIX: &str = ".lock";
 const RECORD_SUFFIX: &str = ".record";
 const TEMP_SUFFIX: &str = ".tmp-";
+const ENVELOPE_PREFIX: &str = ".fe2o3-worker-v2-load-envelope-v1-";
+const ENVELOPE_SUFFIX: &str = ".envelope";
 const RECEIPT_FIELDS: usize = 7;
 const MARKER_BYTES: usize =
     MARKER_MAGIC.len() + 2 + 1 + 1 + 32 + 8 + 16 + 32 + 32 + 32 + RECEIPT_FIELDS * 32 + 32;
@@ -146,6 +149,7 @@ pub(crate) enum RestartIntentErrorV1 {
         descriptor: CanonicalDescriptorSectionObservationV1,
     },
     IntentIdentityMismatch,
+    MissingEnvelopeInputs,
 }
 
 impl fmt::Display for RestartIntentErrorV1 {
@@ -174,6 +178,9 @@ impl fmt::Display for RestartIntentErrorV1 {
             Self::IntentIdentityMismatch => formatter.write_str(
                 "recovered Worker V2 publication intent does not match its resume marker",
             ),
+            Self::MissingEnvelopeInputs => formatter.write_str(
+                "canonical Worker V2 envelope inputs are missing; the compiler handoff must provide sealed direct-link evidence and per-kernel proof records",
+            ),
         }
     }
 }
@@ -187,8 +194,16 @@ impl Error for RestartIntentErrorV1 {
             Self::PublicationIntent(error) => Some(error),
             Self::UnsupportedPublicationRoute { .. } => None,
             Self::IntentIdentityMismatch => None,
+            Self::MissingEnvelopeInputs => None,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[allow(dead_code)] // Exercised once sealed compiler-produced envelope inputs enter completion.
+pub(crate) enum WorkerV2EnvelopePublicationOutcomeV1 {
+    Published,
+    AlreadyPublished,
 }
 
 pub(crate) struct PersistedAdmittedWorkerV2IntentV1 {
@@ -439,6 +454,13 @@ fn hash_identity(domain: &[u8], update: impl FnOnce(&mut Sha256)) -> [u8; 32] {
     digest.finalize().into()
 }
 
+fn envelope_name(publication_identity: [u8; 32]) -> String {
+    format!(
+        "{ENVELOPE_PREFIX}{}{ENVELOPE_SUFFIX}",
+        hex(&publication_identity)
+    )
+}
+
 impl ResumeMarkerStateV1 {
     pub(crate) const fn attempt(self) -> BuildAttempt {
         match self {
@@ -592,6 +614,143 @@ impl WorkerV2ResumeStoreV1 {
             ));
         }
         Ok(())
+    }
+
+    #[allow(dead_code)] // Production store boundary for the pending upstream envelope producer.
+    pub(crate) fn publish_load_envelope(
+        &self,
+        envelope: &WorkerV2LoadEnvelopeV1,
+    ) -> Result<WorkerV2EnvelopePublicationOutcomeV1, ResumeMarkerErrorV1> {
+        self.verify_output_path()?;
+        let bytes = envelope.to_bytes();
+        let decoded = WorkerV2LoadEnvelopeV1::from_bytes(&bytes)
+            .map_err(|error| self.invalid(format!("envelope is not canonical: {error}")))?;
+        if &decoded != envelope {
+            return Err(self.invalid("envelope changed during canonical serialization"));
+        }
+        let receipt = envelope.published_claim().receipt();
+        let name = envelope_name(receipt.publication_identity());
+        if let Some(existing) = self.read_load_envelope(&name, receipt)? {
+            return if existing == *envelope {
+                Ok(WorkerV2EnvelopePublicationOutcomeV1::AlreadyPublished)
+            } else {
+                Err(self.invalid("conflicting canonical envelope publication"))
+            };
+        }
+
+        let temp_name = format!(
+            "{name}{TEMP_SUFFIX}{}-{}",
+            std::process::id(),
+            NEXT_TEMP.fetch_add(1, Ordering::Relaxed)
+        );
+        let result = (|| {
+            let descriptor = openat(
+                &self.directory,
+                &temp_name,
+                OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::RUSR | Mode::WUSR,
+            )
+            .map_err(std::io::Error::from)?;
+            let mut file = File::from(descriptor);
+            file.write_all(&bytes)?;
+            file.sync_all()?;
+            validate_private_file(
+                &self.directory,
+                &file,
+                &temp_name,
+                &self.display_path,
+                Some(bytes.len()),
+            )?;
+            #[cfg(feature = "worker-v2-fault-injection-test-only")]
+            injected_fault_point_v1("envelope-temp-synced");
+            self.verify_output_path()?;
+            match renameat_with(
+                &self.directory,
+                &temp_name,
+                &self.directory,
+                &name,
+                RenameFlags::NOREPLACE,
+            ) {
+                Ok(()) => {}
+                Err(rustix::io::Errno::EXIST) => {
+                    unlinkat(&self.directory, &temp_name, AtFlags::empty())
+                        .map_err(std::io::Error::from)?;
+                    let existing = self.read_load_envelope(&name, receipt)?.ok_or_else(|| {
+                        self.invalid("envelope disappeared after create-new conflict")
+                    })?;
+                    return if existing == *envelope {
+                        Ok(WorkerV2EnvelopePublicationOutcomeV1::AlreadyPublished)
+                    } else {
+                        Err(self.invalid("conflicting canonical envelope publication"))
+                    };
+                }
+                Err(error) => return Err(std::io::Error::from(error).into()),
+            }
+            fsync(&self.directory).map_err(std::io::Error::from)?;
+            self.verify_output_path()?;
+            #[cfg(feature = "worker-v2-fault-injection-test-only")]
+            injected_fault_point_v1("envelope-published");
+            let published = self.read_load_envelope(&name, receipt)?.ok_or_else(|| {
+                self.invalid("envelope is absent after durable create-new publication")
+            })?;
+            if published != *envelope {
+                return Err(self.invalid("envelope changed after durable publication"));
+            }
+            Ok(WorkerV2EnvelopePublicationOutcomeV1::Published)
+        })();
+        if result.is_err() {
+            let _ = unlinkat(&self.directory, &temp_name, AtFlags::empty());
+        }
+        result
+    }
+
+    pub(crate) fn recover_load_envelope(
+        &self,
+        receipt: BackendPublicationReceiptV1,
+    ) -> Result<WorkerV2LoadEnvelopeV1, ResumeMarkerErrorV1> {
+        let name = envelope_name(receipt.publication_identity());
+        self.read_load_envelope(&name, receipt)?
+            .ok_or_else(|| self.invalid("canonical Worker V2 load envelope is missing"))
+    }
+
+    fn read_load_envelope(
+        &self,
+        name: &str,
+        receipt: BackendPublicationReceiptV1,
+    ) -> Result<Option<WorkerV2LoadEnvelopeV1>, ResumeMarkerErrorV1> {
+        self.verify_output_path()?;
+        let descriptor = match openat(
+            &self.directory,
+            name,
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK,
+            Mode::empty(),
+        ) {
+            Ok(descriptor) => descriptor,
+            Err(rustix::io::Errno::NOENT) => return Ok(None),
+            Err(error) => return Err(std::io::Error::from(error).into()),
+        };
+        validate_private_file(&self.directory, &descriptor, name, &self.display_path, None)?;
+        let mut file = File::from(descriptor);
+        let mut bytes = Vec::new();
+        Read::by_ref(&mut file)
+            .take((MAX_WORKER_V2_LOAD_ENVELOPE_BYTES + 1) as u64)
+            .read_to_end(&mut bytes)?;
+        let final_stat = fstat(&file).map_err(std::io::Error::from)?;
+        if final_stat.st_nlink != 1
+            || usize::try_from(final_stat.st_size).ok() != Some(bytes.len())
+            || bytes.len() > MAX_WORKER_V2_LOAD_ENVELOPE_BYTES
+        {
+            return Err(self.invalid_at_name(name, "envelope changed while it was read"));
+        }
+        let envelope = WorkerV2LoadEnvelopeV1::from_bytes(&bytes)
+            .map_err(|error| self.invalid_at_name(name, format!("invalid envelope: {error}")))?;
+        if envelope.to_bytes() != bytes {
+            return Err(self.invalid_at_name(name, "envelope encoding is not canonical"));
+        }
+        if envelope.published_claim().receipt() != receipt {
+            return Err(self.invalid_at_name(name, "envelope publication receipt was substituted"));
+        }
+        Ok(Some(envelope))
     }
 
     pub(crate) fn load(&self) -> Result<Option<ResumeMarkerStateV1>, ResumeMarkerErrorV1> {
@@ -851,6 +1010,13 @@ impl WorkerV2ResumeStoreV1 {
     fn invalid(&self, reason: impl Into<String>) -> ResumeMarkerErrorV1 {
         ResumeMarkerErrorV1::InvalidMarker {
             path: self.display_path.join(&self.marker_name),
+            reason: reason.into(),
+        }
+    }
+
+    fn invalid_at_name(&self, name: &str, reason: impl Into<String>) -> ResumeMarkerErrorV1 {
+        ResumeMarkerErrorV1::InvalidMarker {
+            path: self.display_path.join(name),
             reason: reason.into(),
         }
     }

@@ -570,7 +570,7 @@ fn valid_worker_output_persists_before_publication_and_cleans_exact_restart_stat
 }
 
 #[test]
-fn cov6_production_publishes_exact_canonical_finalized_bytes() {
+fn cov6_production_preserves_ready_intent_when_envelope_inputs_are_missing() {
     let directory = TestDirectory::new();
     let fixture = publication_fixture(&directory, true);
     let result = run_wrapper_with_options(
@@ -580,13 +580,28 @@ fn cov6_production_publishes_exact_canonical_finalized_bytes() {
         fixture.cov6,
         None,
     );
-    assert!(result.status.success(), "{}", stderr(&result));
-    assert_ne!(fixture.raw_worker_output, fixture.expected_publication);
-    assert_eq!(
-        published_artifacts(&directory),
-        [fixture.expected_publication]
+    assert!(!result.status.success());
+    assert!(
+        stderr(&result).contains("canonical Worker V2 envelope inputs are missing"),
+        "{}",
+        stderr(&result)
     );
-    assert!(restart_records(&directory).is_empty());
+    assert_ne!(fixture.raw_worker_output, fixture.expected_publication);
+    assert!(published_artifacts(&directory).is_empty());
+    assert_eq!(restart_records(&directory).len(), 2);
+
+    fs::remove_file(directory.0.join("spawned")).unwrap();
+    let recovered =
+        run_wrapper_with_options(&directory, &fixture.config, "fail", fixture.cov6, None);
+    assert!(!recovered.status.success());
+    assert!(
+        stderr(&recovered).contains("canonical Worker V2 envelope inputs are missing"),
+        "{}",
+        stderr(&recovered)
+    );
+    assert!(!directory.0.join("spawned").exists());
+    assert!(published_artifacts(&directory).is_empty());
+    assert_eq!(restart_records(&directory).len(), 2);
 }
 
 #[test]
@@ -601,17 +616,19 @@ fn production_build_does_not_expose_the_fault_injection_environment_switch() {
         fixture.cov6,
         Some("completed"),
     );
-    assert!(result.status.success(), "{}", stderr(&result));
-    assert_eq!(
-        published_artifacts(&directory),
-        [fixture.expected_publication]
+    assert_ne!(result.status.code(), Some(86));
+    assert!(
+        stderr(&result).contains("canonical Worker V2 envelope inputs are missing"),
+        "{}",
+        stderr(&result)
     );
-    assert!(restart_records(&directory).is_empty());
+    assert!(published_artifacts(&directory).is_empty());
+    assert_eq!(restart_records(&directory).len(), 2);
 }
 
 #[test]
 #[cfg(feature = "worker-v2-fault-injection-test-only")]
-fn raw_and_finalized_fault_matrix_recovers_every_durable_boundary() {
+fn raw_fault_matrix_recovers_every_existing_durable_boundary() {
     const RECOVERABLE: &[&str] = &[
         "pending-intent",
         "ready",
@@ -621,53 +638,95 @@ fn raw_and_finalized_fault_matrix_recovers_every_durable_boundary() {
         "finished",
     ];
 
-    for cov6 in [false, true] {
-        for point in std::iter::once("pending-marker").chain(RECOVERABLE.iter().copied()) {
-            let directory = TestDirectory::new();
-            let fixture = publication_fixture(&directory, cov6);
-            let interrupted = run_wrapper_with_options(
-                &directory,
-                &fixture.config,
-                "publish-valid",
-                fixture.cov6,
-                Some(point),
+    for point in std::iter::once("pending-marker").chain(RECOVERABLE.iter().copied()) {
+        let directory = TestDirectory::new();
+        let fixture = publication_fixture(&directory, false);
+        let interrupted = run_wrapper_with_options(
+            &directory,
+            &fixture.config,
+            "publish-valid",
+            fixture.cov6,
+            Some(point),
+        );
+        assert_eq!(
+            interrupted.status.code(),
+            Some(86),
+            "{point}: {}",
+            stderr(&interrupted)
+        );
+        fs::remove_file(directory.0.join("spawned")).unwrap();
+
+        let recovered =
+            run_wrapper_with_options(&directory, &fixture.config, "fail", fixture.cov6, None);
+        assert!(
+            !directory.0.join("spawned").exists(),
+            "{point} unexpectedly spawned rustc"
+        );
+        if point == "pending-marker" {
+            assert!(
+                !recovered.status.success(),
+                "marker-only state must fail closed"
+            );
+            assert!(published_artifacts(&directory).is_empty());
+        } else {
+            assert!(
+                recovered.status.success(),
+                "{point}: {}",
+                stderr(&recovered)
             );
             assert_eq!(
-                interrupted.status.code(),
-                Some(86),
-                "{point} cov6={cov6}: {}",
-                stderr(&interrupted)
+                published_artifacts(&directory),
+                [fixture.expected_publication],
+                "{point}"
             );
-            fs::remove_file(directory.0.join("spawned")).unwrap();
+        }
+        assert!(
+            restart_records(&directory).is_empty(),
+            "{point} left restart records"
+        );
+    }
+}
 
-            let recovered =
-                run_wrapper_with_options(&directory, &fixture.config, "fail", fixture.cov6, None);
+#[test]
+#[cfg(feature = "worker-v2-fault-injection-test-only")]
+fn finalized_faults_preserve_or_abandon_state_at_exact_pre_envelope_boundaries() {
+    for point in [
+        "pending-marker",
+        "pending-intent",
+        "ready",
+        "envelope-inputs-required",
+    ] {
+        let directory = TestDirectory::new();
+        let fixture = publication_fixture(&directory, true);
+        let interrupted = run_wrapper_with_options(
+            &directory,
+            &fixture.config,
+            "publish-valid",
+            fixture.cov6,
+            Some(point),
+        );
+        assert_eq!(
+            interrupted.status.code(),
+            Some(86),
+            "{point}: {}",
+            stderr(&interrupted)
+        );
+        fs::remove_file(directory.0.join("spawned")).unwrap();
+
+        let recovered =
+            run_wrapper_with_options(&directory, &fixture.config, "fail", fixture.cov6, None);
+        assert!(!recovered.status.success());
+        assert!(!directory.0.join("spawned").exists());
+        assert!(published_artifacts(&directory).is_empty());
+        if point == "pending-marker" {
+            assert!(restart_records(&directory).is_empty());
+        } else {
             assert!(
-                !directory.0.join("spawned").exists(),
-                "{point} cov6={cov6} unexpectedly spawned rustc"
+                stderr(&recovered).contains("canonical Worker V2 envelope inputs are missing"),
+                "{point}: {}",
+                stderr(&recovered)
             );
-            if point == "pending-marker" {
-                assert!(
-                    !recovered.status.success(),
-                    "marker-only state must fail closed for cov6={cov6}"
-                );
-                assert!(published_artifacts(&directory).is_empty());
-            } else {
-                assert!(
-                    recovered.status.success(),
-                    "{point} cov6={cov6}: {}",
-                    stderr(&recovered)
-                );
-                assert_eq!(
-                    published_artifacts(&directory),
-                    [fixture.expected_publication],
-                    "{point} cov6={cov6}"
-                );
-            }
-            assert!(
-                restart_records(&directory).is_empty(),
-                "{point} cov6={cov6} left restart records"
-            );
+            assert_eq!(restart_records(&directory).len(), 2, "{point}");
         }
     }
 }

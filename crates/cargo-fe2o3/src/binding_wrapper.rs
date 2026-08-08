@@ -30,6 +30,7 @@ use crate::worker_v2_restart::injected_fault_point_v1;
 use crate::worker_v2_restart::{
     RestartIntentErrorV1, ResumeMarkerErrorV1, ResumeMarkerStateV1, WorkerV2PublicationKindV1,
     WorkerV2ResumeStoreV1, persist_admitted_worker_v2_intent_v1, recover_worker_v2_intent_v1,
+    restart_admission_commitment_v1,
 };
 use crate::{ARTIFACT_CHILD_FD, BACKEND_CHILD_FD, MANAGED_RUSTC_ARGS_ENV};
 
@@ -655,6 +656,14 @@ fn publish_finish_and_clear(
     publication: WorkerV2PublicationKindV1,
     intent: RecoveredWorkerV2PublicationIntentV1,
 ) -> Result<(), CompletionFailure> {
+    if publication == WorkerV2PublicationKindV1::Finalized {
+        #[cfg(feature = "worker-v2-fault-injection-test-only")]
+        injected_fault_point_v1("envelope-inputs-required");
+        return Err(preserve_restart_error(
+            "envelope assembly",
+            RestartIntentErrorV1::MissingEnvelopeInputs,
+        ));
+    }
     let record = intent.record();
     let intent_identity = record.identity();
     let receipt = publish_recovered_worker_v2(managed, &intent)?;
@@ -719,6 +728,9 @@ fn reconcile_completed_worker_v2(
             "Worker V2 completed resume marker receipt was substituted".into(),
         ));
     }
+    if completed.publication() == WorkerV2PublicationKindV1::Finalized {
+        validate_completed_worker_v2_envelope(resume, completed, receipt, managed.attempt)?;
+    }
     match recover_worker_v2_intent_v1(resume, &managed.producer, completed) {
         Ok(intent) => {
             if intent.record().identity() != intent_identity {
@@ -747,6 +759,38 @@ fn reconcile_completed_worker_v2(
     resume
         .clear_completed(completed)
         .map_err(|error| preserve_marker_error("completed recovery cleanup", error))
+}
+
+fn validate_completed_worker_v2_envelope(
+    resume: &WorkerV2ResumeStoreV1,
+    completed: ResumeMarkerStateV1,
+    receipt: BackendPublicationReceiptV1,
+    attempt: BuildAttempt,
+) -> Result<(), CompletionFailure> {
+    let envelope = resume.recover_load_envelope(receipt).map_err(|error| {
+        CompletionFailure::PreserveAttempt(format!(
+            "Worker V2 completed-recovery envelope inspection failed: {error}"
+        ))
+    })?;
+    let claim = envelope.published_claim();
+    let admission = restart_admission_commitment_v1(
+        WorkerV2PublicationKindV1::Finalized,
+        claim.plan(),
+        claim.upstream_evidence(),
+        envelope.finalized_payload(),
+    );
+    if admission != completed.admission()
+        || claim.receipt() != receipt
+        || claim.plan().attempt() != attempt
+        || envelope.grants_currentness_authority()
+        || envelope.grants_load_authority()
+        || envelope.grants_launch_authority()
+    {
+        return Err(CompletionFailure::PreserveAttempt(
+            "Worker V2 completed resume marker disagrees with its canonical inert envelope".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn publish_recovered_worker_v2(
@@ -949,13 +993,29 @@ pub(crate) fn exit_code(status: ExitStatus) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::{
-        BindingWrapperError, decode_managed_rustc_args,
+        BindingWrapperError, CompletionFailure, decode_managed_rustc_args,
         derive_build_invocation_with_config_identity, is_cargo_stdin_probe,
         ordered_metadata_values, reject_uninspectable_rustc_args,
+        validate_completed_worker_v2_envelope,
     };
     use crate::worker_v2::WorkerV2ConfigIdentity;
+    use crate::worker_v2_restart::{
+        WorkerV2PublicationKindV1, WorkerV2ResumeStoreV1, restart_admission_commitment_v1,
+    };
+    use fe2o3_artifact_transaction::{
+        AtomicPublicationIdentityV1, BuildInvocation, BuildSession, CanonicalLinkRequestIdentityV1,
+        DurableLinkPublicationPlanV1, FinalizationIdentityV1, FinalizedOutputIdentityV1,
+        KernelSetIdentityV1, LinkPublicationScopeV1, LinkedOutputIdentityV1, PackageIdentityV1,
+        PinnedWorkerIdentityV1, ProducerIdentity, TargetIdentityV1,
+        UpstreamCodeObjectEvidenceIdentityV1, ValidatedResponseIdentityV1, begin_build_attempt,
+        persist_worker_v2_publication_intent_v1, publish_exact_hsaco_evidence_for_attempt_v1,
+        recover_worker_v2_publication_intent_v1,
+    };
     use reserved_fe2o3_symbols::derive_crate_binding_id_v1;
+    use sha2::Digest;
     use std::ffi::OsString;
+    use std::fs;
+    use std::path::Path;
 
     fn args(values: &[&str]) -> Vec<OsString> {
         values.iter().map(OsString::from).collect()
@@ -1096,5 +1156,96 @@ mod tests {
             ]))
             .is_ok()
         );
+    }
+
+    #[test]
+    fn completed_finalized_recovery_preserves_marker_and_intent_without_envelope() {
+        let directory = std::env::temp_dir().join(format!(
+            "cargo-fe2o3-completed-envelope-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&directory);
+        fs::create_dir(&directory).unwrap();
+        let producer = ProducerIdentity::from_codegen(
+            "completed_envelope",
+            Some(Path::new("/workspace/completed_envelope.rs")),
+        )
+        .unwrap();
+        let attempt = begin_build_attempt(
+            &directory,
+            &producer,
+            BuildInvocation::from_bytes([0x11; 32]),
+            BuildSession::from_bytes([0x12; 16]),
+        )
+        .unwrap();
+        let output = b"finalized-envelope-output";
+        let finalized: [u8; 32] = sha2::Sha256::digest(output).into();
+        let plan = DurableLinkPublicationPlanV1::new(
+            attempt,
+            LinkPublicationScopeV1::new(
+                PackageIdentityV1::from_bytes([0x21; 32]),
+                KernelSetIdentityV1::from_bytes([0x22; 32]),
+                TargetIdentityV1::from_bytes([0x23; 32]),
+            ),
+            CanonicalLinkRequestIdentityV1::from_bytes([0x24; 32]),
+            PinnedWorkerIdentityV1::from_bytes([0x25; 32]),
+            ValidatedResponseIdentityV1::from_bytes([0x26; 32]),
+            LinkedOutputIdentityV1::from_bytes([0x27; 32]),
+            FinalizationIdentityV1::from_bytes([0x28; 32]),
+            FinalizedOutputIdentityV1::from_bytes(finalized),
+            AtomicPublicationIdentityV1::from_bytes([0x29; 32]),
+        );
+        let upstream = UpstreamCodeObjectEvidenceIdentityV1::from_bytes([0x31; 32]);
+        let admission = restart_admission_commitment_v1(
+            WorkerV2PublicationKindV1::Finalized,
+            plan,
+            upstream,
+            output,
+        );
+        let store = WorkerV2ResumeStoreV1::open(&directory, &producer).unwrap();
+        store
+            .persist_pending(WorkerV2PublicationKindV1::Finalized, attempt, admission)
+            .unwrap();
+        let intent = persist_worker_v2_publication_intent_v1(
+            &directory, &producer, attempt, plan, upstream, output,
+        )
+        .unwrap();
+        store
+            .persist_ready(
+                WorkerV2PublicationKindV1::Finalized,
+                attempt,
+                intent.record().identity(),
+            )
+            .unwrap();
+        let publication = publish_exact_hsaco_evidence_for_attempt_v1(
+            &directory, &producer, attempt, plan, upstream, output,
+        )
+        .unwrap();
+        let completed = store
+            .persist_completed(
+                WorkerV2PublicationKindV1::Finalized,
+                attempt,
+                intent.record().identity(),
+                publication.receipt(),
+            )
+            .unwrap();
+
+        let error = validate_completed_worker_v2_envelope(
+            &store,
+            completed,
+            publication.receipt(),
+            attempt,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            CompletionFailure::PreserveAttempt(message)
+                if message.contains("canonical Worker V2 load envelope is missing")
+        ));
+        assert_eq!(store.load().unwrap(), Some(completed));
+        assert!(recover_worker_v2_publication_intent_v1(&directory, &producer, attempt).is_ok());
+        drop(publication);
+        drop(store);
+        fs::remove_dir_all(&directory).unwrap();
     }
 }

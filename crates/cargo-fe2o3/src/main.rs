@@ -10,9 +10,6 @@ mod pinned_codegen_backend;
 mod project;
 mod tool_commands;
 mod worker_v2;
-// The container wire cannot retain Worker V2 lineage. Keep assembly test-only until a durable,
-// lineage-bound envelope and current-publication handoff exist.
-#[cfg(test)]
 mod worker_v2_artifact_container;
 mod worker_v2_restart;
 
