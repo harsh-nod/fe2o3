@@ -52,6 +52,12 @@ macro_rules! lds_scalars {
 lds_scalars!(u8, i8, u16, i16, u32, i32, u64, i64, usize, isize, f32, f64);
 
 lds_scalars!(crate::F16, crate::Bf16, crate::Bf16x2);
+lds_scalars!(
+    crate::Fp8E4M3Fnuz,
+    crate::Fp8E4M3Fnuzx4,
+    crate::Fp8E5M2Fnuz,
+    crate::Fp8E5M2Fnuzx4,
+);
 
 impl<T: LdsElement, const N: usize> sealed::Sealed for [T; N] {}
 

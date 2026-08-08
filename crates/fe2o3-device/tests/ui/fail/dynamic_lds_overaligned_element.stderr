@@ -13,11 +13,11 @@ help: the trait `LdsElement` is not implemented for `OverAligned`
             Bf16
             Bf16x2
             F16
+            Fp8E4M3Fnuz
+            Fp8E4M3Fnuzx4
+            Fp8E5M2Fnuz
+            Fp8E5M2Fnuzx4
             [T; N]
-            f32
-            f64
-            i16
-            i32
           and $N others
 note: required by a bound in `DynamicLds`
  --> src/lds.rs

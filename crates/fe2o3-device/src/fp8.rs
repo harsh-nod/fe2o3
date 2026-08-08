@@ -236,6 +236,50 @@ impl Fp8E5M2Fnuz {
     }
 }
 
+/// Four E4M3-FNUZ lanes packed into one 32-bit storage value.
+///
+/// Lane zero occupies bits 0..8, lane one bits 8..16, lane two bits 16..24,
+/// and lane three bits 24..32. The lane order is defined by bit position and
+/// does not depend on host byte order.
+///
+/// ```
+/// use fe2o3_device::{Fp8E4M3Fnuz, Fp8E4M3Fnuzx4};
+///
+/// let packed = Fp8E4M3Fnuzx4::from_array([
+///     Fp8E4M3Fnuz::ZERO,
+///     Fp8E4M3Fnuz::ONE,
+///     Fp8E4M3Fnuz::MAX,
+///     Fp8E4M3Fnuz::MIN,
+/// ]);
+/// assert_eq!(packed.to_bits(), 0xff7f_4000);
+/// assert_eq!(packed.to_array()[2], Fp8E4M3Fnuz::MAX);
+/// ```
+#[derive(Clone, Copy, Default)]
+#[repr(transparent)]
+pub struct Fp8E4M3Fnuzx4(u32);
+
+/// Four E5M2-FNUZ lanes packed into one 32-bit storage value.
+///
+/// Lane zero occupies bits 0..8, lane one bits 8..16, lane two bits 16..24,
+/// and lane three bits 24..32. The lane order is defined by bit position and
+/// does not depend on host byte order.
+///
+/// ```
+/// use fe2o3_device::{Fp8E5M2Fnuz, Fp8E5M2Fnuzx4};
+///
+/// let packed = Fp8E5M2Fnuzx4::new(
+///     Fp8E5M2Fnuz::ZERO,
+///     Fp8E5M2Fnuz::ONE,
+///     Fp8E5M2Fnuz::MAX,
+///     Fp8E5M2Fnuz::MIN,
+/// );
+/// assert_eq!(packed.to_bits(), 0xff7f_4000);
+/// assert_eq!(packed.lane3(), Fp8E5M2Fnuz::MIN);
+/// ```
+#[derive(Clone, Copy, Default)]
+#[repr(transparent)]
+pub struct Fp8E5M2Fnuzx4(u32);
+
 const fn f32_to_fnuz(bits: u32, mantissa_bits: u32, bias: i32, max_finite: u32) -> u8 {
     let magnitude = bits & F32_ABS_MASK;
     if magnitude >= F32_EXPONENT_MASK {
@@ -374,3 +418,88 @@ macro_rules! impl_fnuz_value {
 
 impl_fnuz_value!(Fp8E4M3Fnuz);
 impl_fnuz_value!(Fp8E5M2Fnuz);
+
+macro_rules! impl_fnuz_x4 {
+    ($packed:ty, $scalar:ty) => {
+        impl $packed {
+            /// Four zero lanes.
+            pub const ZERO: Self = Self(0);
+
+            /// Packs four lanes in increasing bit-position order.
+            pub const fn new(
+                lane0: $scalar,
+                lane1: $scalar,
+                lane2: $scalar,
+                lane3: $scalar,
+            ) -> Self {
+                Self(
+                    (lane0.to_bits() as u32)
+                        | ((lane1.to_bits() as u32) << 8)
+                        | ((lane2.to_bits() as u32) << 16)
+                        | ((lane3.to_bits() as u32) << 24),
+                )
+            }
+
+            /// Packs an array in increasing bit-position order.
+            pub const fn from_array(lanes: [$scalar; 4]) -> Self {
+                Self::new(lanes[0], lanes[1], lanes[2], lanes[3])
+            }
+
+            /// Creates a packed value from its exact 32-bit representation.
+            pub const fn from_bits(bits: u32) -> Self {
+                Self(bits)
+            }
+
+            /// Returns the exact packed representation.
+            pub const fn to_bits(self) -> u32 {
+                self.0
+            }
+
+            /// Returns lane zero from bits 0..8.
+            pub const fn lane0(self) -> $scalar {
+                <$scalar>::from_bits(self.0 as u8)
+            }
+
+            /// Returns lane one from bits 8..16.
+            pub const fn lane1(self) -> $scalar {
+                <$scalar>::from_bits((self.0 >> 8) as u8)
+            }
+
+            /// Returns lane two from bits 16..24.
+            pub const fn lane2(self) -> $scalar {
+                <$scalar>::from_bits((self.0 >> 16) as u8)
+            }
+
+            /// Returns lane three from bits 24..32.
+            pub const fn lane3(self) -> $scalar {
+                <$scalar>::from_bits((self.0 >> 24) as u8)
+            }
+
+            /// Unpacks all lanes in increasing bit-position order.
+            pub const fn to_array(self) -> [$scalar; 4] {
+                [self.lane0(), self.lane1(), self.lane2(), self.lane3()]
+            }
+        }
+
+        impl PartialEq for $packed {
+            fn eq(&self, other: &Self) -> bool {
+                self.lane0() == other.lane0()
+                    && self.lane1() == other.lane1()
+                    && self.lane2() == other.lane2()
+                    && self.lane3() == other.lane3()
+            }
+        }
+
+        impl fmt::Debug for $packed {
+            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter
+                    .debug_tuple(stringify!($packed))
+                    .field(&self.to_array())
+                    .finish()
+            }
+        }
+    };
+}
+
+impl_fnuz_x4!(Fp8E4M3Fnuzx4, Fp8E4M3Fnuz);
+impl_fnuz_x4!(Fp8E5M2Fnuzx4, Fp8E5M2Fnuz);
