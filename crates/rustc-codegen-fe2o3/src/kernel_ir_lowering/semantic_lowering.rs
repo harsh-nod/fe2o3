@@ -358,4 +358,45 @@ mod tests {
 
         assert_eq!(selected, ClaimSelection::Reject(rejection));
     }
+
+    #[test]
+    fn disjoint_multiplication_claims_select_one_owner_but_overlap_rejects() {
+        let location = location();
+        let general_v3_only = select_claim(
+            "assignment",
+            &location,
+            [
+                (0, "general-v3-f32-multiply", HandlerClaim::Owned),
+                (1, "integer-multiply", HandlerClaim::NotOwned),
+            ],
+        );
+        let integer_only = select_claim(
+            "assignment",
+            &location,
+            [
+                (0, "general-v3-f32-multiply", HandlerClaim::NotOwned),
+                (1, "integer-multiply", HandlerClaim::Owned),
+            ],
+        );
+
+        assert_eq!(general_v3_only, ClaimSelection::Handler(0));
+        assert_eq!(integer_only, ClaimSelection::Handler(1));
+
+        let overlap = select_claim(
+            "assignment",
+            &location,
+            [
+                (0, "general-v3-f32-multiply", HandlerClaim::Owned),
+                (1, "integer-multiply", HandlerClaim::Owned),
+            ],
+        );
+        let ClaimSelection::Reject(overlap) = overlap else {
+            panic!("overlapping multiplication claims must reject");
+        };
+        assert_eq!(overlap.code, TranslationDiagnosticCode::MalformedMir);
+        assert_eq!(
+            overlap.message,
+            "ambiguous semantic assignment lowering ownership: `general-v3-f32-multiply`, `integer-multiply`"
+        );
+    }
 }

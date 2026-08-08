@@ -5,7 +5,7 @@ use super::{
     TranslationDiagnostic,
 };
 use crate::kernel_ir_lowering::{LocalBinding, TranslationDiagnosticCode, diagnostic};
-use crate::mir_import::{MirBinaryOp, MirRvalueKind, MirTypeShape};
+use crate::mir_import::{MirBinaryOp, MirOperandRef, MirPlaceRef, MirRvalueKind, MirTypeShape};
 use crate::semantic_features::SessionRecognizedSemanticItem;
 use crate::trusted_device_items::TrustedDeviceItem;
 use fe2o3_kernel_ir::{
@@ -63,13 +63,39 @@ pub(super) fn lower_call(
 }
 
 pub(super) fn claim_assignment(
-    _lowerer: &FunctionLowerer<'_, '_>,
+    lowerer: &FunctionLowerer<'_, '_>,
     assignment: SemanticAssignment<'_>,
 ) -> HandlerClaim {
-    if assignment.rvalue == MirRvalueKind::Binary(MirBinaryOp::Mul) {
+    if is_exact_f32_multiply_domain(lowerer, assignment) {
         HandlerClaim::Owned
     } else {
         HandlerClaim::NotOwned
+    }
+}
+
+fn is_exact_f32_multiply_domain(
+    lowerer: &FunctionLowerer<'_, '_>,
+    assignment: SemanticAssignment<'_>,
+) -> bool {
+    assignment.rvalue == MirRvalueKind::Binary(MirBinaryOp::Mul)
+        && lowerer.is_exact_general_v3_alpha_zeta_context()
+        && is_unprojected_f32_place(lowerer, assignment.destination)
+        && matches!(
+            assignment.operands,
+            [lhs, rhs]
+                if is_f32_operand(lowerer, lhs) && is_f32_operand(lowerer, rhs)
+        )
+}
+
+fn is_unprojected_f32_place(lowerer: &FunctionLowerer<'_, '_>, place: &MirPlaceRef) -> bool {
+    place.projection.is_empty()
+        && lowerer.imported_local_shape(place.local) == Some(&MirTypeShape::F32)
+}
+
+fn is_f32_operand(lowerer: &FunctionLowerer<'_, '_>, operand: &MirOperandRef) -> bool {
+    match operand {
+        MirOperandRef::Place(place) => is_unprojected_f32_place(lowerer, place),
+        MirOperandRef::Constant { ty, .. } => ty.shape == MirTypeShape::F32,
     }
 }
 

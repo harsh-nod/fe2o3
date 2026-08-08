@@ -92,6 +92,26 @@ fn alpha_zeta_share_semantic_helper_lowering_and_emit_fmul_fadd() {
 }
 
 #[test]
+fn general_v3_multiply_claim_requires_imported_f32_operands() {
+    let mut module = alpha_zeta_module();
+    let loaded = module.functions[0]
+        .locals
+        .iter_mut()
+        .find(|local| local.index == 10)
+        .expect("alpha loaded value");
+    loaded.ty = imported(MirTypeShape::U32);
+
+    let errors = lower_general_v3(&module).expect_err("non-f32 multiply must remain unowned");
+
+    assert!(errors.contains(TranslationDiagnosticCode::UnsupportedRvalue));
+    assert!(errors.diagnostics().iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("f32 multiply requires an exact General V3 alpha/zeta kernel context")
+    }));
+}
+
+#[test]
 fn gfx942_target_id_feature_states_preserve_the_float_profile() {
     translate_and_verify_for_target(&alpha_zeta_module(), &AmdGpuTarget::new("gfx942:xnack-"))
         .expect("canonical gfx942 target IDs must retain the gfx942 floating-point profile");

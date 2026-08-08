@@ -963,6 +963,11 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                 )?;
                 self.bind_plain_destination(destination, result, location)
             }
+            MirRvalueKind::Binary(MirBinaryOp::Mul) => Err(diagnostic(
+                TranslationDiagnosticCode::UnsupportedRvalue,
+                location,
+                "f32 multiply requires an exact General V3 alpha/zeta kernel context",
+            )),
             unsupported => Err(diagnostic(
                 TranslationDiagnosticCode::UnsupportedRvalue,
                 location,
@@ -2195,18 +2200,21 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
         local: usize,
         location: &TranslationLocation,
     ) -> Result<&MirTypeShape, TranslationDiagnostic> {
+        self.imported_local_shape(local).ok_or_else(|| {
+            diagnostic(
+                TranslationDiagnosticCode::MalformedMir,
+                location.clone(),
+                format!("local{local} has no imported type"),
+            )
+        })
+    }
+
+    fn imported_local_shape(&self, local: usize) -> Option<&MirTypeShape> {
         self.function
             .locals
             .iter()
             .find(|candidate| candidate.index == local)
             .map(|candidate| &candidate.ty.shape)
-            .ok_or_else(|| {
-                diagnostic(
-                    TranslationDiagnosticCode::MalformedMir,
-                    location.clone(),
-                    format!("local{local} has no imported type"),
-                )
-            })
     }
 
     fn value_type(
