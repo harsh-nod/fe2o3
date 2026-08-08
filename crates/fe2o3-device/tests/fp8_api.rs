@@ -1,0 +1,173 @@
+use core::mem::{align_of, size_of};
+
+use fe2o3_device::{Fp8E4M3Fnuz, Fp8E5M2Fnuz};
+
+fn rocm_decode_fingerprint<T>(decode: impl Fn(u8) -> T, bits: impl Fn(T) -> u32) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for raw in u8::MIN..=u8::MAX {
+        for byte in bits(decode(raw)).to_le_bytes() {
+            hash ^= byte as u64;
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    hash
+}
+
+fn signed_encoding(magnitude: u8) -> u8 {
+    if magnitude == 0 { 0 } else { magnitude | 0x80 }
+}
+
+fn assert_all_rounding_boundaries<T>(
+    decode: impl Fn(u8) -> f32,
+    encode: impl Fn(f32) -> T,
+    bits: impl Fn(T) -> u8,
+) {
+    for lower in 0_u8..0x7f {
+        let midpoint = (decode(lower) + decode(lower + 1)) * 0.5;
+        let below = f32::from_bits(midpoint.to_bits() - 1);
+        let above = f32::from_bits(midpoint.to_bits() + 1);
+        let tie = if lower & 1 == 0 { lower } else { lower + 1 };
+
+        assert_eq!(bits(encode(below)), lower, "below tie after {lower:#04x}");
+        assert_eq!(bits(encode(midpoint)), tie, "tie after {lower:#04x}");
+        assert_eq!(
+            bits(encode(above)),
+            lower + 1,
+            "above tie after {lower:#04x}"
+        );
+
+        assert_eq!(
+            bits(encode(-below)),
+            signed_encoding(lower),
+            "negative below tie after {lower:#04x}"
+        );
+        assert_eq!(
+            bits(encode(-midpoint)),
+            signed_encoding(tie),
+            "negative tie after {lower:#04x}"
+        );
+        assert_eq!(
+            bits(encode(-above)),
+            signed_encoding(lower + 1),
+            "negative above tie after {lower:#04x}"
+        );
+    }
+}
+
+#[test]
+fn scalar_layout_and_constants_are_stable() {
+    assert_eq!(size_of::<Fp8E4M3Fnuz>(), 1);
+    assert_eq!(align_of::<Fp8E4M3Fnuz>(), 1);
+    assert_eq!(size_of::<Fp8E5M2Fnuz>(), 1);
+    assert_eq!(align_of::<Fp8E5M2Fnuz>(), 1);
+
+    assert_eq!(Fp8E4M3Fnuz::ONE.to_bits(), 0x40);
+    assert_eq!(Fp8E4M3Fnuz::MAX.to_f32(), 240.0);
+    assert_eq!(Fp8E4M3Fnuz::MIN.to_f32(), -240.0);
+    assert_eq!(Fp8E4M3Fnuz::MIN_POSITIVE.to_f32(), 2.0_f32.powi(-7));
+    assert_eq!(
+        Fp8E4M3Fnuz::MIN_POSITIVE_SUBNORMAL.to_f32(),
+        2.0_f32.powi(-10)
+    );
+
+    assert_eq!(Fp8E5M2Fnuz::ONE.to_bits(), 0x40);
+    assert_eq!(Fp8E5M2Fnuz::MAX.to_f32(), 57_344.0);
+    assert_eq!(Fp8E5M2Fnuz::MIN.to_f32(), -57_344.0);
+    assert_eq!(Fp8E5M2Fnuz::MIN_POSITIVE.to_f32(), 2.0_f32.powi(-15));
+    assert_eq!(
+        Fp8E5M2Fnuz::MIN_POSITIVE_SUBNORMAL.to_f32(),
+        2.0_f32.powi(-17)
+    );
+}
+
+#[test]
+fn every_e4m3_fnuz_encoding_round_trips() {
+    for raw in u8::MIN..=u8::MAX {
+        let value = Fp8E4M3Fnuz::from_bits(raw);
+        assert_eq!(value.to_bits(), raw);
+        assert_eq!(Fp8E4M3Fnuz::from_f32(value.to_f32()).to_bits(), raw);
+        assert_eq!(value.is_nan(), raw == 0x80);
+        assert_eq!(value.is_finite(), raw != 0x80);
+        assert!(!value.is_infinite());
+    }
+}
+
+#[test]
+fn every_e5m2_fnuz_encoding_round_trips() {
+    for raw in u8::MIN..=u8::MAX {
+        let value = Fp8E5M2Fnuz::from_bits(raw);
+        assert_eq!(value.to_bits(), raw);
+        assert_eq!(Fp8E5M2Fnuz::from_f32(value.to_f32()).to_bits(), raw);
+        assert_eq!(value.is_nan(), raw == 0x80);
+        assert_eq!(value.is_finite(), raw != 0x80);
+        assert!(!value.is_infinite());
+    }
+}
+
+#[test]
+fn exhaustive_decode_tables_match_rocm_7_2_4_reference() {
+    assert_eq!(
+        rocm_decode_fingerprint(Fp8E4M3Fnuz::from_bits, |value| { value.to_f32().to_bits() }),
+        0x1ef8_12d7_567f_89d5
+    );
+    assert_eq!(
+        rocm_decode_fingerprint(Fp8E5M2Fnuz::from_bits, |value| { value.to_f32().to_bits() }),
+        0x7801_a3f2_3635_57e9
+    );
+}
+
+#[test]
+fn every_positive_and_negative_rounding_boundary_is_rne() {
+    assert_all_rounding_boundaries(
+        |raw| Fp8E4M3Fnuz::from_bits(raw).to_f32(),
+        Fp8E4M3Fnuz::from_f32,
+        Fp8E4M3Fnuz::to_bits,
+    );
+    assert_all_rounding_boundaries(
+        |raw| Fp8E5M2Fnuz::from_bits(raw).to_f32(),
+        Fp8E5M2Fnuz::from_f32,
+        Fp8E5M2Fnuz::to_bits,
+    );
+}
+
+#[test]
+fn nan_infinity_overflow_underflow_and_negative_zero_are_canonical() {
+    for input in [
+        f32::NAN,
+        f32::from_bits(0x7f80_0001),
+        f32::from_bits(0xffc0_1234),
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+    ] {
+        assert_eq!(Fp8E4M3Fnuz::from_f32(input).to_bits(), 0x80);
+        assert_eq!(Fp8E5M2Fnuz::from_f32(input).to_bits(), 0x80);
+    }
+
+    assert_eq!(Fp8E4M3Fnuz::from_f32(241.0), Fp8E4M3Fnuz::MAX);
+    assert_eq!(Fp8E4M3Fnuz::from_f32(-241.0), Fp8E4M3Fnuz::MIN);
+    assert_eq!(Fp8E5M2Fnuz::from_f32(60_000.0), Fp8E5M2Fnuz::MAX);
+    assert_eq!(Fp8E5M2Fnuz::from_f32(-60_000.0), Fp8E5M2Fnuz::MIN);
+    assert_eq!(Fp8E4M3Fnuz::from_f32(2.0_f32.powi(-11)).to_bits(), 0);
+    assert_eq!(Fp8E5M2Fnuz::from_f32(2.0_f32.powi(-18)).to_bits(), 0);
+    assert_eq!(Fp8E4M3Fnuz::from_f32(-0.0).to_bits(), 0);
+    assert_eq!(Fp8E5M2Fnuz::from_f32(-0.0).to_bits(), 0);
+}
+
+#[test]
+fn classification_and_sign_mutations_preserve_fnuz_special_values() {
+    for raw in 1_u8..8 {
+        assert!(Fp8E4M3Fnuz::from_bits(raw).is_subnormal());
+        assert!(Fp8E4M3Fnuz::from_bits(raw | 0x80).is_subnormal());
+    }
+    for raw in 1_u8..4 {
+        assert!(Fp8E5M2Fnuz::from_bits(raw).is_subnormal());
+        assert!(Fp8E5M2Fnuz::from_bits(raw | 0x80).is_subnormal());
+    }
+
+    assert_eq!((-Fp8E4M3Fnuz::ZERO).to_bits(), 0);
+    assert_eq!((-Fp8E4M3Fnuz::NAN).to_bits(), 0x80);
+    assert_eq!(Fp8E4M3Fnuz::NAN.abs().to_bits(), 0x80);
+    assert_eq!((-Fp8E5M2Fnuz::ZERO).to_bits(), 0);
+    assert_eq!((-Fp8E5M2Fnuz::NAN).to_bits(), 0x80);
+    assert_eq!(Fp8E5M2Fnuz::NAN.abs().to_bits(), 0x80);
+}

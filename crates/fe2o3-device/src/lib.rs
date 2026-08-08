@@ -15,6 +15,7 @@ extern crate std;
 use core::marker::PhantomData;
 
 pub mod ffi;
+pub mod fp8;
 pub mod half;
 pub mod lds;
 pub mod math;
@@ -27,6 +28,7 @@ pub use ffi::{
     DeviceConstantPtr, DeviceFfiAbiTypeV1, DeviceGlobalConstPtr, DeviceGlobalMutPtr,
     DevicePrivateConstPtr, DevicePrivateMutPtr, DeviceWorkgroupConstPtr, DeviceWorkgroupMutPtr,
 };
+pub use fp8::{Fp8E4M3Fnuz, Fp8E5M2Fnuz};
 pub use half::{Bf16, Bf16x2, F16};
 pub use lds::{
     DynamicLds, DynamicLdsError, LdsElement, LdsInitialized, LdsUninitialized,
