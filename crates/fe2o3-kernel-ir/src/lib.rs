@@ -15,8 +15,8 @@
 //! distinguish those definitions from internal helpers.
 //!
 //! SemanticOperation is the versioned extension boundary for typed
-//! target-neutral operation families. Its standalone identity codec does not
-//! alter or extend any frozen module wire format.
+//! target-neutral operation families. Its separate schema and payload-bearing
+//! instance codecs do not alter or extend any frozen module wire format.
 
 mod effect_extraction;
 mod formal_memory_obligations;

@@ -568,11 +568,9 @@ impl OperationKind {
     }
 
     pub fn operands(&self) -> Vec<ValueId> {
-        if let Some(semantic) = self.semantic_operation() {
-            return semantic.contract().operands;
-        }
         match self {
             Self::Constant(_)
+            | Self::Intrinsic(_)
             | Self::Barrier(_)
             | Self::Fence(_)
             | Self::WorkgroupBarrier(_)
@@ -584,9 +582,6 @@ impl OperationKind {
             Self::Unary { operand, .. } => vec![*operand],
             Self::Binary { lhs, rhs, .. } | Self::Compare { lhs, rhs, .. } => vec![*lhs, *rhs],
             Self::Cast { value, .. } => vec![*value],
-            Self::Intrinsic(_) => {
-                unreachable!("semantic operations return before legacy operation dispatch")
-            }
             Self::Select {
                 condition,
                 true_value,

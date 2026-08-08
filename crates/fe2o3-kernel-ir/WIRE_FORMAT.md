@@ -306,14 +306,13 @@ header version. The frozen V1 golden fixture is `tests/fixtures/full_v1.hex`;
 the independent V2 fixtures are `tests/fixtures/g4_sync_v2.hex` and
 `tests/fixtures/integer_switch_v2.hex`.
 
-## Separate Semantic Operation Identities
+## Separate Semantic Operation Schemas and Instances
 
-encode_semantic_operation_id and decode_semantic_operation_id use a separate
-fixed-width identity format with magic FE2O3SO. This registry names reviewed
-target-neutral semantics; it is not a module encoding and does not change V1,
-V2, or V3 module bytes.
+These formats are not module encodings and do not change V1, V2, or V3 module
+bytes.
 
-The 16-byte V1 identity is:
+encode_semantic_operation_schema produces a fixed-width payload-blind dispatch
+key:
 
 ```text
 byte[8] magic = "FE2O3SO\0"
@@ -324,12 +323,31 @@ u16     family-local opcode
 u16     reserved = 0
 ```
 
-Family tags reserve namespaces for memory intrinsics, collectives, debugging,
-launch semantics, and matrix operations. A recognized family with an unknown
-opcode is still rejected. Reserved bytes, unknown versions, unknown families,
-truncation, and trailing bytes also fail closed.
+A schema intentionally aliases payload variants of one opcode. It must not be
+used as a proof, artifact, cache, equivalence, or executable identity.
 
-An identity contains no payload and grants no lowering authority. A semantic
-operation also needs a strongly typed payload implementing SemanticOperation,
-closed OperationKind admission, verification, and backend support. Serializing
-such a payload requires an explicitly new module wire version.
+encode_semantic_operation_instance_id produces the canonical full semantic
+instance:
+
+```text
+byte[8] magic = "FE2O3SI\0"
+u16     version = 1
+u8      family
+u8      flags = 0
+u16     family-local opcode
+u16     payload_length
+u32     reserved = 0
+byte[payload_length] canonical semantic payload
+```
+
+V1 launch-invocation payloads contain an index-kind tag followed by an axis
+tag. Launch-extent payloads contain an axis tag. Thus every admitted launch
+axis and index level has a distinct full instance identity despite sharing a
+schema.
+
+Both decoders reject unknown versions, families, opcodes, flags, payload tags,
+payload sizes, reserved fields, truncation, and trailing bytes. Neither format
+grants lowering authority. A semantic operation still needs closed
+OperationKind admission, independently extracted operands, verification, and
+backend support. Serializing an operation payload inside a Module requires an
+explicitly new module wire version.

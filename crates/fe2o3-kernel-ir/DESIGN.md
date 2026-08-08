@@ -101,23 +101,35 @@ never be represented as unstructured strings in this core IR.
 
 ### Semantic operation boundary
 
-The semantic_operations module owns a versioned identity registry and the
-SemanticOperation contract hook. Its stable families cover memory intrinsics,
-collectives, debugging, launch queries and constraints, and matrix operations
-without selecting a vendor dialect.
+The semantic_operations module owns a versioned schema registry, canonical
+payload-bearing instance identities, and the SemanticOperation contract hook.
+Its stable families cover memory intrinsics, collectives, debugging, launch
+queries and constraints, and matrix operations without selecting a vendor
+dialect.
+
+SemanticOperationSchema is only a payload-blind dispatch key. It cannot bind a
+proof, artifact, cache entry, semantic-equivalence claim, or executable.
+SemanticOperationInstanceId includes every admitted semantic payload field and
+is the canonical identity for those bindings. For example, launch axes and
+invocation-index levels share schemas but always have distinct instance
+identities.
 
 A family identity is not executable authority. Adding an operation requires:
 
-1. A closed family-local opcode and strongly typed payload.
-2. Explicit operands, result types, memory effects, and capabilities.
-3. Payload-specific structural and type verification.
+1. A closed family-local opcode and canonical instance-payload codec.
+2. Explicit operand count, trusted result constraints, memory effects, and
+   capabilities.
+3. Production operand extraction independent of the semantic contract plus
+   payload-specific structural and type verification.
 4. A closed OperationKind admission path.
 5. A new module wire version if the operation must be serialized.
 6. An explicit backend lowering and target-capability check.
 
 Unknown versions, families, and family-local opcodes fail closed. The existing
 launch intrinsics implement the contract to exercise the boundary while
-preserving their original representation and behavior.
+preserving their original representation and behavior. Their result
+constraints come from canonical intrinsic metadata, not frontend-declared
+result fields.
 
 ## Canonical Wire Format
 

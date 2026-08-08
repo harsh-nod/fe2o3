@@ -776,13 +776,13 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
         }
 
         if let Some(semantic) = operation.kind.semantic_operation() {
-            let contract = semantic.contract();
-            let operand_types = contract
-                .operands
+            let operands = operation.kind.operands();
+            let operand_types = operands
                 .iter()
                 .map(|operand| self.ty(*operand).cloned())
                 .collect::<Vec<_>>();
             let issues = semantic.verify(SemanticOperationVerificationContext {
+                operands: &operands,
                 results: &operation.results,
                 operand_types: &operand_types,
             });
