@@ -7,7 +7,7 @@ use crate::{
     PublishedKernelPhysicalLayoutV1, PublishedPhysicalLaunchLayoutV1,
     WorkerV2TypedKernelSelectionError, validate_compiler_generated_semantic_witness_v1,
 };
-use fe2o3_amd_target::AmdTargetId;
+use fe2o3_amd_target::{AmdTargetId, FeatureState};
 use fe2o3_artifacts::{
     AbiLayout, BlockSize, DigestAlgorithm, DigestBytes, LaunchContract, PayloadDigest,
 };
@@ -357,7 +357,7 @@ pub enum WorkerV2PrerequisiteError {
 fn validate_required_profile(
     admission: &AdmittedFinalizedWorkerV2BundleV1,
 ) -> Result<(), WorkerV2RequiredProfileError> {
-    if admission.target().to_string() != REQUIRED_TARGET {
+    if !is_required_artifact_target(admission.target()) {
         return Err(WorkerV2RequiredProfileError::Target {
             actual: admission.target().to_string(),
         });
@@ -368,6 +368,10 @@ fn validate_required_profile(
         });
     }
     Ok(())
+}
+
+fn is_required_artifact_target(target: AmdTargetId) -> bool {
+    target.processor() == REQUIRED_TARGET && target.xnack() != Some(FeatureState::Enabled)
 }
 
 fn validate_prerequisites<K: CompilerGeneratedKernelExpectationV1>(
@@ -1168,7 +1172,7 @@ fn validate_environment(
     let actual_target = environment.physical_device.target;
     let required_runtime_target = AmdTargetId::parse(REQUIRED_RUNTIME_TARGET)
         .expect("reviewed runtime target ID is a valid static constant");
-    if expected_target.to_string() != REQUIRED_TARGET
+    if !is_required_artifact_target(expected_target)
         || !expected_target.is_compatible_with_observed(&actual_target)
         || !required_runtime_target.is_compatible_with_observed(&actual_target)
         || environment.agent.target != actual_target
@@ -4129,6 +4133,27 @@ mod tests {
                 Err(HsaLoadAuthorizationError::Environment(
                     HsaEnvironmentMismatch::Target { .. }
                 ))
+            ));
+        }
+    }
+
+    #[test]
+    fn required_artifact_profile_accepts_feature_qualified_xnack_off() {
+        for target in [
+            "gfx942",
+            "gfx942:xnack-",
+            "gfx942:sramecc+:xnack-",
+            "gfx942:sramecc-:xnack-",
+        ] {
+            assert!(is_required_artifact_target(AmdTargetId::parse(target).unwrap()));
+        }
+        for target in [
+            "gfx942:xnack+",
+            "gfx942:sramecc+:xnack+",
+            "gfx950:xnack-",
+        ] {
+            assert!(!is_required_artifact_target(
+                AmdTargetId::parse(target).unwrap()
             ));
         }
     }
