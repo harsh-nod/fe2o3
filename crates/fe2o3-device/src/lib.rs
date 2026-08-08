@@ -21,6 +21,7 @@ pub mod lds;
 pub mod math;
 pub mod sync;
 pub mod thread;
+pub mod views;
 pub mod wave;
 
 pub use fe2o3_macros::{device_export, device_import, kernel};
@@ -39,6 +40,7 @@ pub use thread::{
     GlobalGridSize, GlobalWorkitemId, GridSize, Index1D, Index2D, Invocation3D, ThreadIndex,
     WorkgroupId, WorkgroupSize, WorkitemId,
 };
+pub use views::{StaticIndex, StaticView, StaticViewError, StaticViewMut};
 pub use wave::{Wave32, Wave64, WaveLane, WaveWidth};
 
 /// Version of the type-level kernel marker contract emitted by [`kernel`].
