@@ -200,8 +200,9 @@ mutation, and UI tests cover the state transitions, retained borrows, packing,
 alias admission, currentness, identity substitution, and terminal completion.
 
 The production trust chain still lacks both cross-process composition and
-prerequisite authentication. Cargo drops the live publication lease and has no
-durable load envelope, application handoff, or recovered host-admission path.
+prerequisite authentication. Canonical lease reacquisition and a durable load
+envelope now exist, but Cargo does not publish that envelope and there is no
+application handoff or recovered host-admission path.
 The `cargo-fe2o3` two-entry artifact-container adapter remains `cfg(test)` and
 inert. Separately, `WorkerV2PrerequisiteAuthenticatorV1` defines the reviewed
 boundary for compiler, Verus, proof, Rust ABI, and executable-effect evidence,

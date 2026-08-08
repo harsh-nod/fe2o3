@@ -28,12 +28,12 @@ SHA-256-pinned HSACO.
 
 The remaining production composition is larger than enabling the Cargo adapter
 and implementing `WorkerV2PrerequisiteAuthenticatorV1`. Cargo drops the live
-currentness lease after reducing publication to a receipt; no API reacquires a
-lease from durable state. There is no canonical serialized Worker V2 load
-envelope containing the container, bundle/proof evidence, descriptor lineage,
-raw/finalized identities, and durable published claim; host admission accepts
-only live in-process preparation/publication objects; and the application
-runner receives no pinned bundle descriptor. No production authenticator,
+currentness lease, but the canonical published claim can now reacquire a fresh
+lease after durable revalidation. A bounded Worker V2 load envelope retains the
+container, bundle/proof evidence, descriptor lineage, raw/finalized identities,
+and that canonical claim. Cargo does not yet publish the envelope, host
+admission accepts only live in-process preparation/publication objects, and the
+application runner receives no pinned bundle descriptor. No production authenticator,
 Verus proof, or machine-code effect/refinement evidence is bound to the payload.
 The production-safe exit gate therefore remains open, this result is not a
 CUDA-Oxide parity claim, and Complete remains `0`.
@@ -52,9 +52,9 @@ The bounded alpha/zeta executable contains two kernels with different non-empty
 signatures in one `gfx942` code object and selects, packs, resolves, and
 dispatches them independently through both the raw and generated-safe hardware
 paths. The full G3.1 exit fixture additionally requires a shared internal
-helper. Production completion also requires durable cross-process bundle and
-lease recovery, application handoff, recovered host admission, and a production
-prerequisite authenticator.
+helper. Production completion also requires Cargo envelope publication,
+application handoff, recovered host admission, and a production prerequisite
+authenticator.
 
 V1 does not accept standalone raw pointers, references not represented as an
 approved slice profile, aggregates, enums, closures, return values, dynamic
@@ -101,9 +101,9 @@ host APIs already admit finalized bundles from durable publication, retain and
 revalidate currentness, authenticate load prerequisites, and drive the reviewed
 runtime adapter. No production `WorkerV2PrerequisiteAuthenticatorV1` currently
 satisfies the unsafe authentication contract. The Cargo candidate also cannot
-cross the compiler/application boundary: it carries no durable load envelope,
-Cargo drops the live lease, host admission cannot recover one from a published
-claim, and the runner passes no pinned descriptor. The raw harness bypasses
+cross the compiler/application boundary: the separate durable envelope and
+lease-reacquisition foundations are not connected to Cargo or recovered host
+admission, and the runner passes no pinned descriptor. The raw harness bypasses
 these gaps. The generated-safe harness exercises the state machine but
 substitutes explicit test authority at the missing authenticator boundary.
 
@@ -252,14 +252,14 @@ refinement, or repository-wide CUDA-Oxide parity.
 
 ## Ordered Completion Plan
 
-1. Add a durable published-claim reacquisition API that validates the complete
+1. Implemented: durable published-claim reacquisition validates the complete
    plan, receipt, exact files, current generation, and lock before issuing a new
    non-clone lease.
-2. Move publication-intent derivation behind the finalizer API and preserve both
-   raw and finalized snapshots; remove Cargo's duplicate derivation.
-3. Define a canonical bounded Worker V2 load envelope containing the container,
-   bundle/proof index, descriptor lineage, raw/finalized identities, and
-   published claim, then make Cargo publish it durably.
+2. Implemented: publication-intent derivation is sealed behind the finalizer API
+   with raw and finalized snapshots; Cargo's duplicate derivation is removed.
+3. Implemented schema: a canonical bounded Worker V2 load envelope contains the
+   container, bundle/proof index, descriptor lineage, raw/finalized identities,
+   and canonical published claim. Cargo must now publish it durably.
 4. Add recovered host admission from a decoded envelope plus a freshly
    reacquired lease, and hand a read-only pinned descriptor to the application.
    Re-run the generated-safe MI300X matrix without an external-HSACO handoff;

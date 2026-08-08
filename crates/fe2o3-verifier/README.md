@@ -101,11 +101,12 @@ compiler, module-load, or kernel-launch authority.
 multi-kernel evidence set. Its constructor consumes non-clone
 `PersistentlyFreshAuthenticatedControlFlowExecutableBindingV1` values; a
 process-local control-flow binding cannot satisfy the API. The set is
-canonicalized by kernel identity and requires one persistent-ledger namespace,
-unique ledger generations, unique kernel identities, SHA-256 payload
+canonicalized by kernel identity and requires one contiguous persistent-ledger
+history, unique ledger generations, unique kernel identities, SHA-256 payload
 identities, and exact agreement on the finalized executable digest, target,
 code-object version, compiler, artifact producer, measured Verus/solver/recorder
-closure, proof configuration, verification model, and verifier timeout policy.
+closure, proof configuration, verification model, exact authenticated verifier
+policy digest, and invocation timeout.
 ABI, launch, source, contract, request, proof, and freshness identities remain
 per-kernel and are checked again by
 `PersistentlyFreshKernelProofAdmissionRequestV1` when a kernel is selected.
@@ -114,6 +115,8 @@ The aggregate identity commits its domain and version, finalized executable,
 code-object version, ledger namespace, canonical kernel order, each kernel's
 source/contract/request/authenticated-proof/persistent-proof/control-flow
 identities, and each receipt's generation and resulting ledger-state identity.
+Receipt ancestry is validated before construction, so distinct generations from
+divergent local ledger branches cannot be combined.
 Both the request and aggregate have private fields and are non-clone. They are
 evidence only: `grants_load_authority()` and `grants_launch_authority()` return
 false. This API does not implement or satisfy a Worker V2 prerequisite

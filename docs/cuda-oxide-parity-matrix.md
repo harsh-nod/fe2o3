@@ -86,12 +86,12 @@ composition and hardware behavior but does not authenticate prerequisites.
 The evidence remains bounded. Durable Worker V2 publication, finalized-bundle
 host admission, currentness leasing, an authenticated load state machine, the
 generated alpha/zeta safe dispatch SPI, and the reviewed
-`fe2o3-hsa-runtime` adapter exist. Production composition still lacks durable
-lease reacquisition, a canonical Worker V2 load envelope containing complete
-bundle/proof and raw/finalized lineage, production Cargo envelope publication,
-recovered host admission, and application handoff. The Cargo artifact-container
-adapter remains test-only/inert and Cargo drops the live publication lease
-after retaining a receipt. An implementation of
+`fe2o3-hsa-runtime` adapter exist. Production composition still lacks Cargo
+envelope publication, recovered host admission, and application handoff.
+Canonical lease reacquisition and a bounded Worker V2 load envelope now retain
+the complete reacquirable claim, bundle/proof closure, descriptor lineage, and
+raw/finalized identities, but the Cargo artifact-container adapter remains
+test-only/inert and does not publish that envelope. An implementation of
 `WorkerV2PrerequisiteAuthenticatorV1` is also absent: only test/fake
 implementations exist, so compiler, Verus/proof, and effect evidence cannot be
 authentically promoted into generated safe dispatch. Declared
@@ -289,17 +289,19 @@ The detailed dependencies and exit criteria are in
   finalized COV6 artifact with SHA-256
   `3a916cdabca05ac74d340889aab2067221d6d1252a7cde13e61c1786252565c4`.
   An inert Cargo adapter assembles a canonical container candidate but does not
-  retain the complete plan/receipt, raw/finalized lineage, bundle/proof index,
-  or a live lease, and grants no currentness, load, or launch authority.
+  publish the separate canonical Worker V2 envelope or retain a live lease, and
+  grants no currentness, load, or launch authority. The envelope schema retains
+  the complete plan/receipt claim, raw/finalized lineage, and bundle/proof
+  closure and can support lease reacquisition after durable revalidation.
   Project build scripts and procedural macros remain trusted; pipeline
   inspection is not stage-complete, broad Rust semantics and
   cross-crate finalization are absent. Production publication, lease,
   finalized-bundle admission, authenticated loading, generated safe dispatch,
   and the reviewed runtime adapter exist outside this inert Cargo adapter, but
-  durable lease reacquisition, a canonical load envelope, recovered admission,
-  application handoff, and a production `WorkerV2PrerequisiteAuthenticatorV1`
-  are absent. The generated-safe MI300X harness composes the runtime pieces only
-  with a fake prerequisite authenticator.
+  recovered admission, application handoff, and a production
+  `WorkerV2PrerequisiteAuthenticatorV1` are absent. The generated-safe MI300X
+  harness composes the runtime pieces only with a fake prerequisite
+  authenticator.
 - Rows 27, 28, and 39: bounded device FFI macros and compiler validation bind
   import/export direction, exact symbols, physical scalar/pointer ABI,
   address spaces, effects, target, code-object version, and semantic identity.

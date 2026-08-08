@@ -40,7 +40,8 @@ boundaries:
   `fe2o3-kernel-analysis`, `fe2o3-rustc-front`, `dialect-mir`, and
   `dialect-amdgcn`.
 - Artifact model: `fe2o3-artifacts`, `fe2o3-kernel-descriptor`, `fe2o3-hsaco`,
-  `fe2o3-hsaco-finalize`, and `fe2o3-artifact-transaction`.
+  `fe2o3-hsaco-finalize`, `fe2o3-artifact-transaction`, and
+  `fe2o3-worker-v2-bundle`.
 - Runtime: `fe2o3-core`, `fe2o3-completion`, `fe2o3-host`, and
   `fe2o3-hip-sys`.
 - Build coordination: `cargo-fe2o3`, `fe2o3-rustc-invocation`, and the
@@ -265,7 +266,13 @@ turn the foundations below into end-to-end features.
   through exact staged file descriptors and validated after publication while
   the transaction lock is still held. Later publication or pathname
   replacement cannot mix generations. Build-attempt and canonical rustc
-  invocation descriptors are versioned and bounded.
+  invocation descriptors are versioned and bounded. Worker V2 raw/final
+  publication intent is derived by `fe2o3-hsaco-finalize` from sealed lineage;
+  Cargo no longer duplicates its domain hashes. Completed publications produce
+  a canonical inert `DurablePublishedHsacoClaimV1`, from which the transaction
+  can reacquire a fresh non-clone currentness lease after revalidating the
+  attempt, plan, receipt, generation, directory and file identities, digest,
+  and publication lock. Neither value grants load or launch authority.
 - Linux-only rustc and codegen-backend primitives use descriptor-backed procfs
   paths. The external Cargo path copies the backend into a rehashed, immutable
   sealed memfd and installs it after a compile-shaped managed wrapper
@@ -287,6 +294,12 @@ turn the foundations below into end-to-end features.
   compiler output, HSACO, or GPU execution refines that model. Proof-record
   matching rejects incomplete or mismatched identities, but the records remain
   synthetic evidence rather than authenticated compiler-refinement evidence.
+  `PersistentlyFreshMultiKernelProofAdmissionV1` additionally consumes
+  non-clone per-kernel bindings from one exact local ledger history and requires
+  unique kernels and generations, one finalized executable, and identical
+  measured verifier policy and tool identities. It is local persistent
+  consistency evidence, not rollback resistance, compiler refinement,
+  prerequisite authentication, or load/launch authority.
 - The G5 contracts now describe bounded independent-thread reads and writes,
   allocation provenance, bounds, injective writes, and deterministic proof
   obligations. Paired copy, gather, and affine elementwise bodies have positive
@@ -391,13 +404,13 @@ turn the foundations below into end-to-end features.
   Cargo can assemble an inert descriptor-bound `ArtifactContainerV1` candidate
   from exact Worker V2 publication evidence. The result deliberately grants no
   current-publication, load, or launch authority. This adapter remains
-  test-only, is not serialized or handed to an application, and does not retain
-  the complete Worker V2 plan, receipt, raw/finalized lineage, bundle index, or
-  proof evidence. Cargo currently reduces a completed durable publication to a
-  receipt and drops the process-local currentness lease; there is no production
-  API to reacquire that lease from durable state, no canonical load envelope,
-  and no recovered-admission constructor in the host runtime. The application
-  runner receives no pinned bundle descriptor.
+  test-only and is not handed to an application. A separate bounded canonical
+  `WorkerV2LoadEnvelopeV1` now retains the artifact container, bundle index,
+  direct-link evidence, descriptor lineage, per-kernel proof records, raw
+  HSACO, finalized payload, and canonical reacquirable publication claim. The
+  schema validates structural closure but grants no authority. Cargo does not
+  yet publish this envelope, the host has no recovered-admission constructor,
+  and the application runner receives no pinned bundle descriptor.
 
   Separately, only fake/test implementations of
   `WorkerV2PrerequisiteAuthenticatorV1` exist, so compiler, Verus/proof, Rust

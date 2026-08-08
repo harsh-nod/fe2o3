@@ -2,7 +2,7 @@
 
 Status: execution plan for parallel implementation.
 
-Implementation checkpoint: `dc9738e367c392f7716eacb8459ca73fa32abbbb`.
+Implementation checkpoint: `f6efb26057952483bd88e5cd9ff786b5bff6d265`.
 
 This roadmap turns [architecture-v2.md](architecture-v2.md),
 [verification-model.md](verification-model.md), the
@@ -173,32 +173,36 @@ compiler-to-HSACO path and exercises the exact artifact on MI300X:
 This checkpoint supplies exact-digest source, compiler, direct LLVM/LLD,
 COV6, raw hardware, and generated-safe runtime-composition evidence. Both
 harnesses still inject the exported HSACO, and the safe harness uses an
-explicitly fake authenticator. Cargo drops the live publication lease after
-retaining only a receipt; no durable lease reacquisition API, canonical Worker
-V2 load envelope, recovered host admission path, or application bundle handoff
-exists. The Cargo artifact adapter remains test-only, and no production
-`WorkerV2PrerequisiteAuthenticatorV1`, machine-code effect evidence, or bound
-Verus result exists. Therefore this is not production proof-authenticated safe
+explicitly fake authenticator. Canonical durable lease reacquisition, sealed
+finalizer intent, a bounded Worker V2 envelope carrying the reacquirable claim,
+and one-history persistent multi-kernel proof admission now exist as composed
+foundations. Cargo does not publish the envelope, and no recovered host
+admission path or application bundle handoff exists. The Cargo artifact adapter
+remains test-only, and no production `WorkerV2PrerequisiteAuthenticatorV1`,
+machine-code effect evidence, or bound Verus result exists. Therefore this is
+not production proof-authenticated safe
 dispatch, no parity row is promoted solely by this checkpoint,
 repository-wide CUDA-Oxide parity is not claimed, and Complete remains `0`.
 
-## Ordered Critical Milestones After `dc9738e`
+## Ordered Critical Milestones After `f6efb26`
 
 These milestones are sequential authority gates. Work inside one milestone can
 be parallelized, but a later gate must not manufacture evidence that assumes an
 earlier authority transition.
 
-1. **Durable publication-lease reacquisition.** Add a canonical inert published
-   claim and an API that revalidates its receipt, complete plan, exact files,
+1. **Implemented foundation: durable publication-lease reacquisition
+   (`5ec6f6f`).** A canonical inert published claim and an API revalidate its
+   receipt, complete plan, exact files,
    current generation, path identity, and lock before returning a fresh
    non-clone lease. Reject stale generations, mutation, replacement, and lock
    contention.
-2. **Sealed finalizer intent and raw/final snapshots.** Move publication-plan
-   derivation behind `fe2o3-hsaco-finalize`, remove Cargo's duplicate domain
-   hashes, and retain exact raw and finalized snapshots through crash recovery
-   and migration.
-3. **Canonical Worker V2 load envelope.** Add a bounded shared wire type for the
-   artifact container, bundle/proof index, direct-link evidence, descriptor
+2. **Implemented foundation: sealed finalizer intent and raw/final snapshots
+   (`15ac976`).** Publication-plan derivation is sealed behind
+   `fe2o3-hsaco-finalize`; Cargo's duplicate domain hashes are removed, and
+   exact raw and finalized snapshots survive crash recovery and migration.
+3. **Implemented foundation: canonical Worker V2 load envelope (`a949518`,
+   `7b01057`).** The bounded shared wire type retains the artifact container,
+   bundle/proof index, direct-link evidence, descriptor
    lineage, raw HSACO, finalized payload identity, and published claim. A lease
    is process-local authority and must never be serialized.
 4. **Production Cargo envelope publication.** Promote the adapter out of
@@ -242,17 +246,18 @@ earlier authority transition.
 
 ### Parallel delivery shape
 
-After the published-claim interface is frozen, milestone 1, milestone 2, and
-the milestone 3 envelope schema have disjoint primary ownership and can start
-in parallel. Cargo envelope publication and recovered host admission can then
-proceed in parallel against the frozen wire and claim APIs. Application handoff
-is their integration gate.
+The claim, finalizer-intent, envelope-schema, and persistent proof-set
+foundations landed independently and are now composed. Cargo envelope
+publication and recovered host admission can proceed in parallel against the
+frozen wire and claim APIs. Application handoff is their integration gate.
 
 The production authenticator must not be implemented from today's descriptive
 digests. Its independent evidence lanes are:
 
-- a non-`Clone`, persistently fresh multi-kernel proof set and honest separation
-  of safe-dispatch properties from full IEEE-754 functional correctness;
+- an implemented non-`Clone`, persistently fresh multi-kernel proof-set
+  foundation (`2241cd7`, hardened by `f6efb26`) that requires one exact local
+  ledger history and honest separation of safe-dispatch properties from full
+  IEEE-754 functional correctness, but does not provide rollback resistance;
 - a canonical proof-input/dependency capsule and reviewed Verus/solver recorder
   that derives properties from actual sealed execution;
 - an authenticated compiler transaction binding source closure, rustc/backend
@@ -455,8 +460,8 @@ prerequisite authenticator and test-only witnesses.
 
 Durable publication, finalized-bundle admission, currentness lease
 revalidation, the authenticated load state machine, generated alpha/zeta safe
-dispatch SPI, and the reviewed runtime adapter already exist. Still missing are
-durable lease reacquisition, a canonical Worker V2 load envelope, production
+dispatch SPI, the reviewed runtime adapter, durable lease reacquisition, and a
+canonical Worker V2 load envelope already exist. Still missing are production
 Cargo publication and application handoff, recovered host admission, and a
 production `WorkerV2PrerequisiteAuthenticatorV1`. Machine-code effects and
 Verus proofs are not bound to the artifact, and safe split mutable views over

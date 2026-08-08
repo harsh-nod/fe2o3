@@ -174,13 +174,13 @@ production proof-authenticated dispatch or CUDA-Oxide parity. Complete remains
 
 ## Ordered Next Milestones
 
-1. **Durable claim and lease recovery.** Reacquire a fresh non-clone lease only
+1. **Implemented: durable claim and lease recovery.** Reacquire a fresh non-clone lease only
    after revalidating the persisted receipt, complete plan, exact files,
    current generation, path identity, and lock.
-2. **Canonical Worker V2 load envelope.** Preserve raw/final snapshots and
+2. **Implemented schema: canonical Worker V2 load envelope.** Preserve raw/final snapshots and
    encode the container, bundle/proof evidence, descriptor lineage, finalized
    identity, and durable claim. Never serialize the process-local lease.
-3. **Production Cargo, recovered host admission, and application handoff.**
+3. **Next integration: production Cargo, recovered host admission, and application handoff.**
    Publish the envelope before clearing restart state, pass a read-only pinned
    descriptor, reacquire the lease, and re-run all structural, semantic,
    physical ABI, marker, and currentness checks. Remove the external-HSACO
@@ -354,9 +354,9 @@ independent CPU oracles on MI300X.
 Finalized Worker V2 bundle admission, currentness leases, the authenticated
 load state machine, generated alpha/zeta safe dispatch SPI, and the reviewed
 runtime adapter already exist. The generated-safe MI300X test now exercises
-those runtime pieces with explicit test authority. This gate still requires
-durable lease reacquisition, a canonical load envelope, production Cargo and
-application handoff, recovered host admission, and a production
+those runtime pieces with explicit test authority. Canonical lease
+reacquisition and the load-envelope schema now exist. This gate still requires
+production Cargo and application handoff, recovered host admission, and a production
 `WorkerV2PrerequisiteAuthenticatorV1`. Bidirectional
 external-device FFI, `gfx1151`, machine-code effect evidence, and Verus
 refinement also remain open.

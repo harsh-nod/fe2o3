@@ -261,10 +261,11 @@ record does not upgrade production-authentication evidence.
 Durable Worker V2 publication, finalized-bundle host admission, currentness
 leases, the authenticated HSA load state machine, generated alpha/zeta safe
 dispatch SPI, and the reviewed `fe2o3-hsa-runtime` adapter are production code.
-The blocking production gaps include durable lease reacquisition, a canonical
-Worker V2 load envelope with complete bundle/proof and raw/finalized lineage,
-production Cargo publication and application handoff, recovered host admission,
-and a production `WorkerV2PrerequisiteAuthenticatorV1`. Current authenticator
+Canonical lease reacquisition and a Worker V2 load envelope with complete
+bundle/proof and raw/finalized lineage are implemented foundations. The blocking
+production gaps are Cargo envelope publication and application handoff,
+recovered host admission, and a production
+`WorkerV2PrerequisiteAuthenticatorV1`. Current authenticator
 implementations are tests/fakes, so compiler, Verus, proof, ABI, and effect
 evidence cannot yet be authentically promoted into safe load/launch authority.
 Neither adapter nor either hardware observation may restamp a declaration
