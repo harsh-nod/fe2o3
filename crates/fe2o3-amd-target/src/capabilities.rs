@@ -1,8 +1,14 @@
 use core::fmt;
 
+use crate::advanced_model::{
+    ADVANCED_CAPABILITY_MODEL_REVISION, AdvancedCapabilityModelIdentity,
+    AdvancedCapabilityModelRevision, AdvancedCapabilityStatus,
+};
+use crate::atomic_legalizability::{AtomicLegalizability, StandardAtomicQuery};
 use crate::feature_capabilities::{
-    AdvancedTargetCapabilities, AtomicOrderings, AtomicWidths, DeviceDiagnosticFeature, Fp8Formats,
-    LaunchBoundsField, MfmaFamilies, MxFormats, WorkgroupLimits,
+    AdvancedTargetCapabilities, AtomicOrderings, AtomicWidths, DeviceDiagnosticFeature, Fp8Format,
+    Fp8Formats, LaunchBoundsField, LaunchBoundsMetadata, MfmaFamilies, MfmaFamily, MxFormat,
+    MxFormats, WorkgroupLimits,
 };
 use crate::{AmdTargetFeature, AmdTargetId};
 
@@ -403,10 +409,31 @@ impl AmdTargetCapabilities {
         self.async_copy_instruction_sets
     }
 
+    /// Revision of the advanced capability decisions returned by this value.
+    pub const fn advanced_model_revision(&self) -> AdvancedCapabilityModelRevision {
+        ADVANCED_CAPABILITY_MODEL_REVISION
+    }
+
+    /// Exact target and revision identity for future proof/admission binding.
+    pub const fn advanced_model_identity(&self) -> AdvancedCapabilityModelIdentity {
+        AdvancedCapabilityModelIdentity::new(self.target)
+    }
+
+    /// Review status of the target's advanced capability profile.
+    pub const fn advanced_profile_status(&self) -> AdvancedCapabilityStatus {
+        self.advanced.profile_status
+    }
+
     /// Returns reviewed workgroup limits, or `None` when this target profile
     /// has not established them.
     pub const fn workgroup_limits(&self) -> Option<WorkgroupLimits> {
         self.advanced.workgroup_limits
+    }
+
+    /// Review status for the workgroup-limit record.
+    pub const fn workgroup_limits_support(&self) -> AdvancedCapabilityStatus {
+        self.advanced
+            .reviewed_set_member(self.advanced.workgroup_limits.is_some())
     }
 
     /// Returns the maximum wavefront count implied by reviewed workgroup
@@ -421,12 +448,17 @@ impl AmdTargetCapabilities {
         }
     }
 
-    /// Standard Rust atomic widths with reviewed direct target lowering.
+    /// Coarse positive projection of widths occurring in at least one reviewed
+    /// legalizable standard-atomic combination.
+    ///
+    /// Do not combine this independently with the scope and ordering sets. Use
+    /// [`Self::standard_atomic_legalizability`] for admission.
     pub const fn standard_atomic_widths(&self) -> AtomicWidths {
         self.advanced.standard_atomic_widths
     }
 
-    /// Standard Rust atomic scopes with reviewed target lowering.
+    /// Coarse positive projection of scopes occurring in at least one reviewed
+    /// legalizable standard-atomic combination.
     ///
     /// System scope still requires runtime evidence for the allocation and
     /// mapping. Address-space compatibility is a separate verifier check.
@@ -434,13 +466,26 @@ impl AmdTargetCapabilities {
         self.advanced.standard_atomic_scopes
     }
 
-    /// Standard Rust atomic orderings with reviewed target lowering.
+    /// Coarse positive projection of orderings occurring in at least one
+    /// reviewed legalizable standard-atomic combination.
     pub const fn standard_atomic_orderings(&self) -> AtomicOrderings {
         self.advanced.standard_atomic_orderings
     }
 
+    /// Checks one complete standard Rust atomic request for semantic
+    /// legalizability.
+    ///
+    /// A legalizable result does not claim that the target has a corresponding
+    /// machine-native atomic instruction.
+    pub const fn standard_atomic_legalizability(
+        &self,
+        query: StandardAtomicQuery,
+    ) -> AtomicLegalizability {
+        self.advanced.atomic_legalizability(query)
+    }
+
     /// Whether the target has a reviewed native split-barrier mechanism.
-    pub const fn native_split_barriers(&self) -> CapabilitySupport {
+    pub const fn native_split_barriers(&self) -> AdvancedCapabilityStatus {
         self.advanced.native_split_barriers
     }
 
@@ -449,9 +494,21 @@ impl AmdTargetCapabilities {
         self.advanced.fp8_formats
     }
 
+    /// Returns the reviewed status of one exact scalar FP8 encoding.
+    pub const fn fp8_format_support(&self, format: Fp8Format) -> AdvancedCapabilityStatus {
+        self.advanced
+            .reviewed_set_member(self.advanced.fp8_formats.contains(format))
+    }
+
     /// Reviewed native microscaling formats for this exact target.
     pub const fn mx_formats(&self) -> MxFormats {
         self.advanced.mx_formats
+    }
+
+    /// Returns the reviewed status of one exact microscaling format.
+    pub const fn mx_format_support(&self, format: MxFormat) -> AdvancedCapabilityStatus {
+        self.advanced
+            .reviewed_set_member(self.advanced.mx_formats.contains(format))
     }
 
     /// Reviewed MFMA numerical families for this exact target.
@@ -459,11 +516,17 @@ impl AmdTargetCapabilities {
         self.advanced.mfma_families
     }
 
+    /// Returns the reviewed status of one MFMA numerical family.
+    pub const fn mfma_family_support(&self, family: MfmaFamily) -> AdvancedCapabilityStatus {
+        self.advanced
+            .reviewed_set_member(self.advanced.mfma_families.contains(family))
+    }
+
     /// Returns the target-level support state for a device diagnostic feature.
     pub const fn device_diagnostic_support(
         &self,
         feature: DeviceDiagnosticFeature,
-    ) -> CapabilitySupport {
+    ) -> AdvancedCapabilityStatus {
         match feature {
             DeviceDiagnosticFeature::Printf => self.advanced.device_printf,
             DeviceDiagnosticFeature::Trap => self.advanced.device_trap,
@@ -474,11 +537,29 @@ impl AmdTargetCapabilities {
     }
 
     /// Returns support for one source-level launch-bounds metadata field.
-    pub const fn launch_bounds_support(&self, field: LaunchBoundsField) -> CapabilitySupport {
+    pub const fn launch_bounds_support(
+        &self,
+        field: LaunchBoundsField,
+    ) -> AdvancedCapabilityStatus {
         match field {
-            LaunchBoundsField::MaxWorkgroupSize => self.advanced.max_workgroup_size_metadata,
+            LaunchBoundsField::MaxWorkgroupSize => self.advanced.max_workgroup_size,
             LaunchBoundsField::MinWorkgroupsPerComputeUnit => {
-                self.advanced.min_workgroups_per_compute_unit_metadata
+                self.advanced.min_workgroups_per_compute_unit
+            }
+        }
+    }
+
+    /// Returns the target fact for one launch-bounds-related metadata form.
+    ///
+    /// Metadata support alone does not authorize a source-level launch bound.
+    pub const fn launch_bounds_metadata_support(
+        &self,
+        metadata: LaunchBoundsMetadata,
+    ) -> AdvancedCapabilityStatus {
+        match metadata {
+            LaunchBoundsMetadata::FlatWorkgroupSize => self.advanced.flat_workgroup_size_metadata,
+            LaunchBoundsMetadata::WavesPerExecutionUnit => {
+                self.advanced.waves_per_execution_unit_metadata
             }
         }
     }

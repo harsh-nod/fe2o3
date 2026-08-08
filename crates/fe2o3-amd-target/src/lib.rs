@@ -4,9 +4,18 @@
 
 use core::{fmt, str::FromStr};
 
+mod advanced_model;
+mod atomic_legalizability;
 mod capabilities;
 mod feature_capabilities;
 
+pub use advanced_model::{
+    ADVANCED_CAPABILITY_MODEL_REVISION, AdvancedCapabilityModelIdentity,
+    AdvancedCapabilityModelRevision, AdvancedCapabilityStatus,
+};
+pub use atomic_legalizability::{
+    AtomicAddressSpace, AtomicLegalizability, AtomicOperation, StandardAtomicQuery,
+};
 pub use capabilities::{
     AmdTargetCapabilities, AsyncCopyInstructionSet, AsyncCopyInstructionSets, AtomicScope,
     AtomicScopes, CapabilityDerivationError, CapabilitySupport, MatrixInstructionSet,
@@ -14,8 +23,8 @@ pub use capabilities::{
 };
 pub use feature_capabilities::{
     AtomicOrdering, AtomicOrderings, AtomicWidth, AtomicWidths, DeviceDiagnosticFeature, Fp8Format,
-    Fp8Formats, LaunchBoundsField, MfmaFamilies, MfmaFamily, MxFormat, MxFormats, WorkgroupAxis,
-    WorkgroupLimits,
+    Fp8Formats, LaunchBoundsField, LaunchBoundsMetadata, MfmaFamilies, MfmaFamily, MxFormat,
+    MxFormats, WorkgroupAxis, WorkgroupLimits,
 };
 
 /// Concrete canonical AMDGPU processor names understood by this crate.

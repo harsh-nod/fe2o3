@@ -1,6 +1,11 @@
-use crate::capabilities::{AtomicScopes, CapabilitySupport, WavefrontWidth};
+use crate::advanced_model::AdvancedCapabilityStatus;
+use crate::atomic_legalizability::{
+    AtomicLegalizability, StandardAtomicQuery, evaluate_gfx942_atomic_query,
+};
+use crate::capabilities::{AtomicScopes, WavefrontWidth};
 
 /// One coordinate axis in a three-dimensional workgroup.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum WorkgroupAxis {
     X,
@@ -68,6 +73,7 @@ impl WorkgroupLimits {
 }
 
 /// A storage width supported by the standard Rust atomic source contract.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum AtomicWidth {
     Bits8,
@@ -91,7 +97,11 @@ impl AtomicWidths {
     pub(crate) const NONE: Self = Self(0);
     pub(crate) const BITS32_AND_BITS64: Self = Self(Self::BITS32 | Self::BITS64);
 
-    /// Returns whether direct standard-atomic lowering is reviewed for `width`.
+    /// Returns whether `width` occurs in at least one reviewed legalizable
+    /// standard-atomic combination.
+    ///
+    /// This coarse projection must not be combined independently with the
+    /// scope or ordering sets. Use the complete atomic query for admission.
     pub const fn contains(self, width: AtomicWidth) -> bool {
         let flag = match width {
             AtomicWidth::Bits8 => Self::BITS8,
@@ -110,6 +120,7 @@ impl AtomicWidths {
 }
 
 /// A Rust atomic ordering supported by target lowering.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum AtomicOrdering {
     Relaxed,
@@ -160,6 +171,7 @@ impl AtomicOrderings {
 }
 
 /// A scalar eight-bit floating-point encoding.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum Fp8Format {
     E4M3Fnuz,
@@ -201,6 +213,7 @@ impl Fp8Formats {
 }
 
 /// A block-scaled Open Compute Project microscaling format.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum MxFormat {
     Fp8,
@@ -233,6 +246,7 @@ impl MxFormats {
 }
 
 /// A numerical input/accumulator family for AMD MFMA instructions.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum MfmaFamily {
     F32FromF16,
@@ -286,6 +300,7 @@ impl MfmaFamilies {
 }
 
 /// A target-facing diagnostic or observation facility used by device code.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum DeviceDiagnosticFeature {
     Printf,
@@ -296,78 +311,117 @@ pub enum DeviceDiagnosticFeature {
 }
 
 /// One source-level launch-bounds field requiring target metadata support.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum LaunchBoundsField {
     MaxWorkgroupSize,
     MinWorkgroupsPerComputeUnit,
 }
 
+/// One target metadata form related to source-level launch bounds.
+///
+/// Metadata availability does not establish that a source-level field has a
+/// semantics-preserving translation. In particular, waves-per-EU metadata is
+/// not itself CUDA-style minimum-workgroups-per-compute-unit admission.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum LaunchBoundsMetadata {
+    FlatWorkgroupSize,
+    WavesPerExecutionUnit,
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub(crate) struct AdvancedTargetCapabilities {
+    pub(crate) profile_status: AdvancedCapabilityStatus,
     pub(crate) workgroup_limits: Option<WorkgroupLimits>,
     pub(crate) standard_atomic_widths: AtomicWidths,
     pub(crate) standard_atomic_scopes: AtomicScopes,
     pub(crate) standard_atomic_orderings: AtomicOrderings,
-    pub(crate) native_split_barriers: CapabilitySupport,
+    pub(crate) native_split_barriers: AdvancedCapabilityStatus,
     pub(crate) fp8_formats: Fp8Formats,
     pub(crate) mx_formats: MxFormats,
     pub(crate) mfma_families: MfmaFamilies,
-    pub(crate) device_printf: CapabilitySupport,
-    pub(crate) device_trap: CapabilitySupport,
-    pub(crate) device_debug_trap: CapabilitySupport,
-    pub(crate) device_clock_counter: CapabilitySupport,
-    pub(crate) device_profiling_marker: CapabilitySupport,
-    pub(crate) max_workgroup_size_metadata: CapabilitySupport,
-    pub(crate) min_workgroups_per_compute_unit_metadata: CapabilitySupport,
+    pub(crate) device_printf: AdvancedCapabilityStatus,
+    pub(crate) device_trap: AdvancedCapabilityStatus,
+    pub(crate) device_debug_trap: AdvancedCapabilityStatus,
+    pub(crate) device_clock_counter: AdvancedCapabilityStatus,
+    pub(crate) device_profiling_marker: AdvancedCapabilityStatus,
+    pub(crate) max_workgroup_size: AdvancedCapabilityStatus,
+    pub(crate) min_workgroups_per_compute_unit: AdvancedCapabilityStatus,
+    pub(crate) flat_workgroup_size_metadata: AdvancedCapabilityStatus,
+    pub(crate) waves_per_execution_unit_metadata: AdvancedCapabilityStatus,
 }
 
 impl AdvancedTargetCapabilities {
     pub(crate) fn for_processor(processor: &str) -> Self {
         if processor == "gfx942" {
             Self {
+                profile_status: AdvancedCapabilityStatus::Supported,
                 workgroup_limits: Some(WorkgroupLimits::GFX942),
                 standard_atomic_widths: AtomicWidths::BITS32_AND_BITS64,
                 standard_atomic_scopes: AtomicScopes::ALL,
                 standard_atomic_orderings: AtomicOrderings::ALL,
-                native_split_barriers: CapabilitySupport::Unsupported,
+                native_split_barriers: AdvancedCapabilityStatus::Unsupported,
                 fp8_formats: Fp8Formats::FNUZ,
                 mx_formats: MxFormats::NONE,
                 mfma_families: MfmaFamilies::GFX942_REVIEWED,
                 // Device printf additionally needs an allowlisted device
                 // library ABI and compatible host runtime.
-                device_printf: CapabilitySupport::RequiresRuntimeEvidence,
-                device_trap: CapabilitySupport::Supported,
+                device_printf: AdvancedCapabilityStatus::RequiresRuntimeEvidence,
+                device_trap: AdvancedCapabilityStatus::Supported,
                 // Debug-trap observation depends on the driver/debugger path.
-                device_debug_trap: CapabilitySupport::RequiresRuntimeEvidence,
-                device_clock_counter: CapabilitySupport::Supported,
-                device_profiling_marker: CapabilitySupport::Unsupported,
-                max_workgroup_size_metadata: CapabilitySupport::Supported,
+                device_debug_trap: AdvancedCapabilityStatus::RequiresRuntimeEvidence,
+                device_clock_counter: AdvancedCapabilityStatus::Supported,
+                device_profiling_marker: AdvancedCapabilityStatus::Unsupported,
+                max_workgroup_size: AdvancedCapabilityStatus::Supported,
                 // A CUDA-style minimum-blocks hint needs a reviewed gfx942
                 // occupancy translation before it can be admitted.
-                min_workgroups_per_compute_unit_metadata: CapabilitySupport::Unsupported,
+                min_workgroups_per_compute_unit: AdvancedCapabilityStatus::Unsupported,
+                flat_workgroup_size_metadata: AdvancedCapabilityStatus::Supported,
+                waves_per_execution_unit_metadata: AdvancedCapabilityStatus::Supported,
             }
         } else {
-            Self::unsupported()
+            Self::unreviewed()
         }
     }
 
-    const fn unsupported() -> Self {
+    const fn unreviewed() -> Self {
         Self {
+            profile_status: AdvancedCapabilityStatus::Unreviewed,
             workgroup_limits: None,
             standard_atomic_widths: AtomicWidths::NONE,
             standard_atomic_scopes: AtomicScopes::NONE,
             standard_atomic_orderings: AtomicOrderings::NONE,
-            native_split_barriers: CapabilitySupport::Unsupported,
+            native_split_barriers: AdvancedCapabilityStatus::Unreviewed,
             fp8_formats: Fp8Formats::NONE,
             mx_formats: MxFormats::NONE,
             mfma_families: MfmaFamilies::NONE,
-            device_printf: CapabilitySupport::Unsupported,
-            device_trap: CapabilitySupport::Unsupported,
-            device_debug_trap: CapabilitySupport::Unsupported,
-            device_clock_counter: CapabilitySupport::Unsupported,
-            device_profiling_marker: CapabilitySupport::Unsupported,
-            max_workgroup_size_metadata: CapabilitySupport::Unsupported,
-            min_workgroups_per_compute_unit_metadata: CapabilitySupport::Unsupported,
+            device_printf: AdvancedCapabilityStatus::Unreviewed,
+            device_trap: AdvancedCapabilityStatus::Unreviewed,
+            device_debug_trap: AdvancedCapabilityStatus::Unreviewed,
+            device_clock_counter: AdvancedCapabilityStatus::Unreviewed,
+            device_profiling_marker: AdvancedCapabilityStatus::Unreviewed,
+            max_workgroup_size: AdvancedCapabilityStatus::Unreviewed,
+            min_workgroups_per_compute_unit: AdvancedCapabilityStatus::Unreviewed,
+            flat_workgroup_size_metadata: AdvancedCapabilityStatus::Unreviewed,
+            waves_per_execution_unit_metadata: AdvancedCapabilityStatus::Unreviewed,
         }
+    }
+
+    pub(crate) const fn reviewed_set_member(self, contains: bool) -> AdvancedCapabilityStatus {
+        if matches!(self.profile_status, AdvancedCapabilityStatus::Unreviewed) {
+            AdvancedCapabilityStatus::Unreviewed
+        } else if contains {
+            AdvancedCapabilityStatus::Supported
+        } else {
+            AdvancedCapabilityStatus::Unsupported
+        }
+    }
+
+    pub(crate) const fn atomic_legalizability(
+        self,
+        query: StandardAtomicQuery,
+    ) -> AtomicLegalizability {
+        evaluate_gfx942_atomic_query(self.profile_status, query)
     }
 }

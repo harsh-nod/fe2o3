@@ -1,8 +1,10 @@
 use fe2o3_amd_target::{
-    AmdTargetFeature, AmdTargetId, AsyncCopyInstructionSet, AtomicOrdering, AtomicScope,
-    AtomicWidth, CapabilityDerivationError, CapabilitySupport, DeviceDiagnosticFeature, Fp8Format,
-    KNOWN_PROCESSORS, LaunchBoundsField, MatrixInstructionSet, MfmaFamily, MxFormat,
-    ParseAmdTargetIdError, WavefrontWidth, WorkgroupAxis,
+    ADVANCED_CAPABILITY_MODEL_REVISION, AdvancedCapabilityModelRevision, AdvancedCapabilityStatus,
+    AmdTargetFeature, AmdTargetId, AsyncCopyInstructionSet, AtomicAddressSpace,
+    AtomicLegalizability, AtomicOperation, AtomicOrdering, AtomicScope, AtomicWidth,
+    CapabilityDerivationError, CapabilitySupport, DeviceDiagnosticFeature, Fp8Format,
+    KNOWN_PROCESSORS, LaunchBoundsField, LaunchBoundsMetadata, MatrixInstructionSet, MfmaFamily,
+    MxFormat, ParseAmdTargetIdError, StandardAtomicQuery, WavefrontWidth, WorkgroupAxis,
 };
 
 #[test]
@@ -117,6 +119,14 @@ fn representative_async_families_are_exact_and_fail_closed() {
 #[test]
 fn gfx942_advanced_capabilities_are_exact_and_conservative() {
     let gfx942 = capabilities("gfx942");
+    assert_eq!(
+        gfx942.advanced_profile_status(),
+        AdvancedCapabilityStatus::Supported
+    );
+    assert_eq!(
+        gfx942.workgroup_limits_support(),
+        AdvancedCapabilityStatus::Supported
+    );
     let limits = gfx942.workgroup_limits().unwrap();
     assert_eq!(limits.max_workitems(), 1024);
     for axis in [WorkgroupAxis::X, WorkgroupAxis::Y, WorkgroupAxis::Z] {
@@ -164,17 +174,29 @@ fn gfx942_advanced_capabilities_are_exact_and_conservative() {
     }
     assert_eq!(
         gfx942.native_split_barriers(),
-        CapabilitySupport::Unsupported
+        AdvancedCapabilityStatus::Unsupported
     );
 
     for format in [Fp8Format::E4M3Fnuz, Fp8Format::E5M2Fnuz] {
         assert!(gfx942.fp8_formats().contains(format));
+        assert_eq!(
+            gfx942.fp8_format_support(format),
+            AdvancedCapabilityStatus::Supported
+        );
     }
     for format in [Fp8Format::E4M3Ocp, Fp8Format::E5M2Ocp] {
         assert!(!gfx942.fp8_formats().contains(format));
+        assert_eq!(
+            gfx942.fp8_format_support(format),
+            AdvancedCapabilityStatus::Unsupported
+        );
     }
     for format in [MxFormat::Fp8, MxFormat::Bf8] {
         assert!(!gfx942.mx_formats().contains(format));
+        assert_eq!(
+            gfx942.mx_format_support(format),
+            AdvancedCapabilityStatus::Unsupported
+        );
     }
 
     for family in [
@@ -184,38 +206,67 @@ fn gfx942_advanced_capabilities_are_exact_and_conservative() {
         MfmaFamily::F32FromBf8Fnuz,
     ] {
         assert!(gfx942.mfma_families().contains(family));
+        assert_eq!(
+            gfx942.mfma_family_support(family),
+            AdvancedCapabilityStatus::Supported
+        );
     }
     for family in [MfmaFamily::F64FromF64, MfmaFamily::I32FromI8] {
         assert!(!gfx942.mfma_families().contains(family));
+        assert_eq!(
+            gfx942.mfma_family_support(family),
+            AdvancedCapabilityStatus::Unsupported
+        );
     }
 
     assert_eq!(
         gfx942.device_diagnostic_support(DeviceDiagnosticFeature::Printf),
-        CapabilitySupport::RequiresRuntimeEvidence
+        AdvancedCapabilityStatus::RequiresRuntimeEvidence
     );
     assert_eq!(
         gfx942.device_diagnostic_support(DeviceDiagnosticFeature::Trap),
-        CapabilitySupport::Supported
+        AdvancedCapabilityStatus::Supported
     );
     assert_eq!(
         gfx942.device_diagnostic_support(DeviceDiagnosticFeature::DebugTrap),
-        CapabilitySupport::RequiresRuntimeEvidence
+        AdvancedCapabilityStatus::RequiresRuntimeEvidence
     );
     assert_eq!(
         gfx942.device_diagnostic_support(DeviceDiagnosticFeature::ClockCounter),
-        CapabilitySupport::Supported
+        AdvancedCapabilityStatus::Supported
     );
     assert_eq!(
         gfx942.device_diagnostic_support(DeviceDiagnosticFeature::ProfilingMarker),
-        CapabilitySupport::Unsupported
+        AdvancedCapabilityStatus::Unsupported
     );
     assert_eq!(
         gfx942.launch_bounds_support(LaunchBoundsField::MaxWorkgroupSize),
-        CapabilitySupport::Supported
+        AdvancedCapabilityStatus::Supported
     );
     assert_eq!(
         gfx942.launch_bounds_support(LaunchBoundsField::MinWorkgroupsPerComputeUnit),
-        CapabilitySupport::Unsupported
+        AdvancedCapabilityStatus::Unsupported
+    );
+    assert_eq!(
+        gfx942.launch_bounds_metadata_support(LaunchBoundsMetadata::FlatWorkgroupSize),
+        AdvancedCapabilityStatus::Supported
+    );
+    assert_eq!(
+        gfx942.launch_bounds_metadata_support(LaunchBoundsMetadata::WavesPerExecutionUnit),
+        AdvancedCapabilityStatus::Supported
+    );
+}
+
+#[test]
+fn gfx942_min_workgroups_is_not_implied_by_waves_per_eu_metadata() {
+    let gfx942 = capabilities("gfx942");
+    assert_eq!(
+        gfx942.launch_bounds_metadata_support(LaunchBoundsMetadata::WavesPerExecutionUnit),
+        AdvancedCapabilityStatus::Supported
+    );
+    assert_eq!(
+        gfx942.launch_bounds_support(LaunchBoundsField::MinWorkgroupsPerComputeUnit),
+        AdvancedCapabilityStatus::Unsupported
     );
 }
 
@@ -226,6 +277,16 @@ fn unreviewed_advanced_capability_profiles_fail_closed() {
             continue;
         }
         let capabilities = capabilities(processor);
+        assert_eq!(
+            capabilities.advanced_profile_status(),
+            AdvancedCapabilityStatus::Unreviewed,
+            "{processor}"
+        );
+        assert_eq!(
+            capabilities.workgroup_limits_support(),
+            AdvancedCapabilityStatus::Unreviewed,
+            "{processor}"
+        );
         assert!(capabilities.workgroup_limits().is_none(), "{processor}");
         assert!(
             capabilities.standard_atomic_widths().is_empty(),
@@ -241,12 +302,27 @@ fn unreviewed_advanced_capability_profiles_fail_closed() {
         );
         assert_eq!(
             capabilities.native_split_barriers(),
-            CapabilitySupport::Unsupported,
+            AdvancedCapabilityStatus::Unreviewed,
             "{processor}"
         );
         assert!(capabilities.fp8_formats().is_empty(), "{processor}");
         assert!(capabilities.mx_formats().is_empty(), "{processor}");
         assert!(capabilities.mfma_families().is_empty(), "{processor}");
+        assert_eq!(
+            capabilities.fp8_format_support(Fp8Format::E4M3Fnuz),
+            AdvancedCapabilityStatus::Unreviewed,
+            "{processor}"
+        );
+        assert_eq!(
+            capabilities.mx_format_support(MxFormat::Fp8),
+            AdvancedCapabilityStatus::Unreviewed,
+            "{processor}"
+        );
+        assert_eq!(
+            capabilities.mfma_family_support(MfmaFamily::F32FromF16),
+            AdvancedCapabilityStatus::Unreviewed,
+            "{processor}"
+        );
         for feature in [
             DeviceDiagnosticFeature::Printf,
             DeviceDiagnosticFeature::Trap,
@@ -256,7 +332,7 @@ fn unreviewed_advanced_capability_profiles_fail_closed() {
         ] {
             assert_eq!(
                 capabilities.device_diagnostic_support(feature),
-                CapabilitySupport::Unsupported,
+                AdvancedCapabilityStatus::Unreviewed,
                 "{processor}: {feature:?}"
             );
         }
@@ -266,11 +342,159 @@ fn unreviewed_advanced_capability_profiles_fail_closed() {
         ] {
             assert_eq!(
                 capabilities.launch_bounds_support(field),
-                CapabilitySupport::Unsupported,
+                AdvancedCapabilityStatus::Unreviewed,
                 "{processor}: {field:?}"
             );
         }
+        for metadata in [
+            LaunchBoundsMetadata::FlatWorkgroupSize,
+            LaunchBoundsMetadata::WavesPerExecutionUnit,
+        ] {
+            assert_eq!(
+                capabilities.launch_bounds_metadata_support(metadata),
+                AdvancedCapabilityStatus::Unreviewed,
+                "{processor}: {metadata:?}"
+            );
+        }
     }
+}
+
+#[test]
+fn gfx942_atomic_queries_validate_the_complete_semantic_tuple() {
+    let gfx942 = capabilities("gfx942");
+    let legal_load = StandardAtomicQuery::new(
+        AtomicOperation::Load,
+        AtomicWidth::Bits32,
+        AtomicAddressSpace::Global,
+        AtomicScope::Device,
+        AtomicOrdering::Acquire,
+    )
+    .unwrap();
+    assert_eq!(
+        gfx942.standard_atomic_legalizability(legal_load),
+        AtomicLegalizability::Legalizable
+    );
+
+    let system_rmw = StandardAtomicQuery::new(
+        AtomicOperation::FetchAdd,
+        AtomicWidth::Bits64,
+        AtomicAddressSpace::Global,
+        AtomicScope::System,
+        AtomicOrdering::AcquireRelease,
+    )
+    .unwrap();
+    assert_eq!(
+        gfx942.standard_atomic_legalizability(system_rmw),
+        AtomicLegalizability::LegalizableWithRuntimeEvidence
+    );
+
+    let invalid_load = StandardAtomicQuery::new(
+        AtomicOperation::Load,
+        AtomicWidth::Bits32,
+        AtomicAddressSpace::Global,
+        AtomicScope::Device,
+        AtomicOrdering::Release,
+    )
+    .unwrap();
+    assert_eq!(
+        gfx942.standard_atomic_legalizability(invalid_load),
+        AtomicLegalizability::Invalid
+    );
+
+    let invalid_compare_exchange = StandardAtomicQuery::compare_exchange(
+        AtomicWidth::Bits32,
+        AtomicAddressSpace::Global,
+        AtomicScope::Device,
+        AtomicOrdering::Release,
+        AtomicOrdering::Acquire,
+    );
+    assert_eq!(
+        gfx942.standard_atomic_legalizability(invalid_compare_exchange),
+        AtomicLegalizability::Invalid
+    );
+
+    let unsupported_width = StandardAtomicQuery::new(
+        AtomicOperation::Swap,
+        AtomicWidth::Bits16,
+        AtomicAddressSpace::Global,
+        AtomicScope::Device,
+        AtomicOrdering::Relaxed,
+    )
+    .unwrap();
+    assert_eq!(
+        gfx942.standard_atomic_legalizability(unsupported_width),
+        AtomicLegalizability::Unsupported
+    );
+
+    let invalid_scope = StandardAtomicQuery::new(
+        AtomicOperation::Store,
+        AtomicWidth::Bits32,
+        AtomicAddressSpace::Workgroup,
+        AtomicScope::Device,
+        AtomicOrdering::Release,
+    )
+    .unwrap();
+    assert_eq!(
+        gfx942.standard_atomic_legalizability(invalid_scope),
+        AtomicLegalizability::Unsupported
+    );
+
+    assert!(
+        StandardAtomicQuery::new(
+            AtomicOperation::CompareExchange,
+            AtomicWidth::Bits32,
+            AtomicAddressSpace::Global,
+            AtomicScope::Device,
+            AtomicOrdering::AcquireRelease,
+        )
+        .is_none()
+    );
+}
+
+#[test]
+fn unreviewed_target_never_becomes_atomic_unsupported_by_default() {
+    let query = StandardAtomicQuery::new(
+        AtomicOperation::FetchXor,
+        AtomicWidth::Bits32,
+        AtomicAddressSpace::Global,
+        AtomicScope::Device,
+        AtomicOrdering::Relaxed,
+    )
+    .unwrap();
+    assert_eq!(
+        capabilities("gfx906").standard_atomic_legalizability(query),
+        AtomicLegalizability::Unreviewed
+    );
+    assert_eq!(
+        AmdTargetId::parse("gfx999"),
+        Err(ParseAmdTargetIdError::UnknownProcessor)
+    );
+}
+
+#[test]
+fn advanced_model_revision_and_identity_are_explicit_without_changing_v1() {
+    assert_eq!(
+        ADVANCED_CAPABILITY_MODEL_REVISION,
+        AdvancedCapabilityModelRevision::V1
+    );
+    assert_eq!(ADVANCED_CAPABILITY_MODEL_REVISION.get(), 1);
+
+    let capabilities = capabilities("gfx942:xnack-");
+    assert_eq!(
+        capabilities.advanced_model_revision(),
+        AdvancedCapabilityModelRevision::V1
+    );
+    let identity = capabilities.advanced_model_identity();
+    assert_eq!(identity.revision(), AdvancedCapabilityModelRevision::V1);
+    assert_eq!(identity.target().to_string(), "gfx942:xnack-");
+    assert_eq!(
+        identity.to_string(),
+        "amd-advanced-capability-model-v1{target=gfx942:xnack-}"
+    );
+    assert_eq!(
+        capabilities.to_string(),
+        "amd-target-capabilities-v1{target=gfx942:xnack-;default-wave=wave64;waves=[wave64];max-lds-per-workgroup=65536;atomic-scopes=[workgroup,device,system];cooperative-launch=runtime-evidence;matrix=[mfma];async-copy=[vmem-to-lds]}"
+    );
 }
 
 #[test]
