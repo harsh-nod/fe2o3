@@ -1,15 +1,18 @@
 use fe2o3_verifier::{
-    AxiomPolicy, CorrelationId, Digest, MAX_PROOF_CAPSULE_BYTES_V1, MeasuredToolIdentity,
-    ProofCapsuleAdmissionErrorV1, ProofCapsuleBuildErrorV1, ProofCapsuleDecodeErrorV1,
-    ProofCapsuleDependencyV1, ProofCapsuleExecutionV1, ProofCapsuleExpectationV1,
-    ProofCapsuleFreshnessExpectationV1, ProofCapsuleFreshnessIdentityV1,
-    ProofCapsuleIdentityFieldV1, ProofCapsulePayloadIdentityV1, ProofCapsulePolicyV1,
-    ProofCapsuleReplayGuardV1, ProofCapsuleResultV1, ProofCapsuleTargetV1, ProofCapsuleV1,
-    ProofOutcome, ProofProperty, ProofTargetIdentity, Text, TrustedItem, VerificationModelIdentity,
+    AxiomPolicy, CorrelationId, Digest, MAX_PROOF_CAPSULE_BYTES_V1,
+    MAX_PROOF_CAPSULE_FINALIZED_HSACO_BYTES_V1, MAX_PROOF_CAPSULE_SEALED_RESULT_BYTES_V1,
+    MeasuredToolIdentity, ProcessLocalProofCapsuleDuplicateDetectorV1, ProofCapsuleBuildErrorV1,
+    ProofCapsuleContextErrorV1, ProofCapsuleDecodeErrorV1, ProofCapsuleDependencyV1,
+    ProofCapsuleExecutionV1, ProofCapsuleExpectationV1, ProofCapsuleFreshnessExpectationV1,
+    ProofCapsuleFreshnessIdentityV1, ProofCapsuleIdentityFieldV1, ProofCapsulePayloadIdentityV1,
+    ProofCapsulePolicyV1, ProofCapsuleResultV1, ProofCapsuleTargetV1, ProofCapsuleV1, ProofOutcome,
+    ProofProperty, ProofTargetIdentity, Text, TrustedItem, VerificationModelIdentity,
 };
 
 const FIRST_FIELD_OFFSET: usize = 16;
+const TOTAL_LEN_OFFSET: usize = 12;
 const SECOND_FIELD_OFFSET: usize = 434;
+const DEPENDENCY_COUNT_OFFSET: usize = SECOND_FIELD_OFFSET + 2;
 const DEPENDENCY_RECORDS_OFFSET: usize = 438;
 const DEPENDENCY_RECORD_BYTES: usize = 39;
 const FEATURE_RECORDS_OFFSET: usize = 520;
@@ -19,8 +22,12 @@ fn digest(seed: u8) -> Digest {
     Digest::from_bytes([seed; 32])
 }
 
-fn payload(seed: u8) -> ProofCapsulePayloadIdentityV1 {
-    ProofCapsulePayloadIdentityV1::new(u64::from(seed) + 100, digest(seed)).unwrap()
+fn result_payload(seed: u8) -> ProofCapsulePayloadIdentityV1 {
+    ProofCapsulePayloadIdentityV1::sealed_result(u64::from(seed) + 100, digest(seed)).unwrap()
+}
+
+fn finalized_payload(seed: u8) -> ProofCapsulePayloadIdentityV1 {
+    ProofCapsulePayloadIdentityV1::finalized_hsaco(u64::from(seed) + 100, digest(seed)).unwrap()
 }
 
 fn proof_target() -> ProofTargetIdentity {
@@ -45,7 +52,6 @@ fn target_with(
     target: ProofTargetIdentity,
     machine_effect_seed: u8,
     artifact_seed: u8,
-    envelope_seed: u8,
 ) -> ProofCapsuleTargetV1 {
     ProofCapsuleTargetV1::new(
         target,
@@ -60,15 +66,14 @@ fn target_with(
         digest(57),
         digest(58),
         digest(machine_effect_seed),
-        payload(60),
+        finalized_payload(60),
         digest(artifact_seed),
-        payload(envelope_seed),
     )
     .unwrap()
 }
 
 fn target() -> ProofCapsuleTargetV1 {
-    target_with(proof_target(), 59, 61, 62)
+    target_with(proof_target(), 59, 61)
 }
 
 fn tool(name: &str, seed: u8) -> MeasuredToolIdentity {
@@ -99,6 +104,7 @@ fn freshness_with(
         digest(46),
         digest(47),
         digest(48),
+        digest(49),
         generation,
         digest(state_seed),
         digest(persistent_seed),
@@ -107,7 +113,7 @@ fn freshness_with(
 }
 
 fn freshness() -> ProofCapsuleFreshnessIdentityV1 {
-    freshness_with(7, 49, 50)
+    freshness_with(7, 50, 51)
 }
 
 fn execution_with(
@@ -121,7 +127,7 @@ fn execution_with(
         digest(43),
         digest(45),
         digest(46),
-        payload(47),
+        result_payload(47),
         freshness,
     )
     .unwrap()
@@ -157,13 +163,29 @@ fn expectation(capsule: &ProofCapsuleV1) -> ProofCapsuleExpectationV1 {
     ProofCapsuleExpectationV1::new(
         capsule.identity(),
         capsule.target().artifact_identity(),
-        capsule.target().envelope_identity(),
         capsule
             .execution()
             .freshness()
             .map(ProofCapsuleFreshnessExpectationV1::new),
     )
     .unwrap()
+}
+
+fn set_total_len(bytes: &mut [u8]) {
+    let len = u32::try_from(bytes.len()).unwrap();
+    bytes[TOTAL_LEN_OFFSET..TOTAL_LEN_OFFSET + 4].copy_from_slice(&len.to_le_bytes());
+}
+
+fn replace_unique_u64(bytes: &mut [u8], old: u64, new: u64) {
+    let old = old.to_le_bytes();
+    let positions = bytes
+        .windows(old.len())
+        .enumerate()
+        .filter_map(|(index, window)| (window == old).then_some(index))
+        .collect::<Vec<_>>();
+    assert_eq!(positions.len(), 1);
+    let offset = positions[0];
+    bytes[offset..offset + old.len()].copy_from_slice(&new.to_le_bytes());
 }
 
 #[test]
@@ -186,9 +208,8 @@ fn canonical_round_trip_binds_every_axis_without_authority() {
         decoded.target().machine_effect_evidence_identity(),
         digest(59)
     );
-    assert_eq!(decoded.target().finalized_payload(), payload(60));
+    assert_eq!(decoded.target().finalized_payload(), finalized_payload(60));
     assert_eq!(decoded.target().artifact_identity(), digest(61));
-    assert_eq!(decoded.target().envelope_identity(), payload(62));
     assert_eq!(decoded.policy().model().version().as_str(), "gpu-model-v1");
     assert_eq!(decoded.policy().verus().name().as_str(), "verus");
     assert_eq!(decoded.policy().solver().name().as_str(), "z3");
@@ -202,8 +223,17 @@ fn canonical_round_trip_binds_every_axis_without_authority() {
         decoded.result().proved_properties(),
         &[ProofProperty::Bounds, ProofProperty::RaceFreedom]
     );
-    assert_eq!(decoded.execution().sealed_result(), payload(47));
+    assert_eq!(decoded.execution().sealed_result(), result_payload(47));
     assert_eq!(decoded.execution().freshness(), Some(freshness()));
+    assert_eq!(
+        decoded
+            .execution()
+            .freshness()
+            .unwrap()
+            .previous_ledger_state_identity(),
+        digest(49)
+    );
+    assert!(decoded.is_pre_envelope_evidence());
     assert!(!decoded.grants_load_authority());
     assert!(!decoded.grants_launch_authority());
     assert!(!decoded.proves_compiler_refinement());
@@ -271,9 +301,10 @@ fn freshness_must_match_the_exact_sealed_execution() {
         digest(46),
         digest(47),
         digest(48),
-        7,
         digest(49),
+        7,
         digest(50),
+        digest(51),
     )
     .unwrap();
     assert_eq!(
@@ -284,7 +315,7 @@ fn freshness_must_match_the_exact_sealed_execution() {
             digest(43),
             digest(45),
             digest(46),
-            payload(47),
+            result_payload(47),
             Some(wrong),
         ),
         Err(ProofCapsuleBuildErrorV1::FreshnessMismatch { field: "challenge" })
@@ -317,6 +348,86 @@ fn parser_rejects_truncation_trailing_oversized_and_mutated_bytes() {
     assert_eq!(
         ProofCapsuleV1::from_bytes(&mutated),
         Err(ProofCapsuleDecodeErrorV1::IdentityMismatch)
+    );
+}
+
+#[test]
+fn payload_lengths_are_role_bounded_in_constructors_and_decoder() {
+    assert_eq!(
+        ProofCapsulePayloadIdentityV1::sealed_result(u64::MAX, digest(90)),
+        Err(ProofCapsuleBuildErrorV1::PayloadLengthOutOfRange {
+            field: "sealed proof result",
+            value: u64::MAX,
+            max: MAX_PROOF_CAPSULE_SEALED_RESULT_BYTES_V1,
+        })
+    );
+    assert_eq!(
+        ProofCapsulePayloadIdentityV1::finalized_hsaco(u64::MAX, digest(91)),
+        Err(ProofCapsuleBuildErrorV1::PayloadLengthOutOfRange {
+            field: "finalized HSACO",
+            value: u64::MAX,
+            max: MAX_PROOF_CAPSULE_FINALIZED_HSACO_BYTES_V1,
+        })
+    );
+
+    let capsule = capsule();
+    let mut oversized_result = capsule.to_bytes();
+    replace_unique_u64(
+        &mut oversized_result,
+        capsule.execution().sealed_result().byte_len(),
+        u64::MAX,
+    );
+    assert_eq!(
+        ProofCapsuleV1::from_bytes(&oversized_result),
+        Err(ProofCapsuleDecodeErrorV1::Build(
+            ProofCapsuleBuildErrorV1::PayloadLengthOutOfRange {
+                field: "sealed proof result",
+                value: u64::MAX,
+                max: MAX_PROOF_CAPSULE_SEALED_RESULT_BYTES_V1,
+            }
+        ))
+    );
+
+    let mut oversized_finalized = capsule.to_bytes();
+    replace_unique_u64(
+        &mut oversized_finalized,
+        capsule.target().finalized_payload().byte_len(),
+        u64::MAX,
+    );
+    assert_eq!(
+        ProofCapsuleV1::from_bytes(&oversized_finalized),
+        Err(ProofCapsuleDecodeErrorV1::Build(
+            ProofCapsuleBuildErrorV1::PayloadLengthOutOfRange {
+                field: "finalized HSACO",
+                value: u64::MAX,
+                max: MAX_PROOF_CAPSULE_FINALIZED_HSACO_BYTES_V1,
+            }
+        ))
+    );
+}
+
+#[test]
+fn decoder_rejects_tiny_records_and_max_counts_before_allocation() {
+    let bytes = capsule().to_bytes();
+
+    let mut tiny = bytes[..FIRST_FIELD_OFFSET + 2].to_vec();
+    set_total_len(&mut tiny);
+    assert_eq!(
+        ProofCapsuleV1::from_bytes(&tiny),
+        Err(ProofCapsuleDecodeErrorV1::Truncated)
+    );
+
+    let mut max_count = bytes[..DEPENDENCY_RECORDS_OFFSET].to_vec();
+    max_count[DEPENDENCY_COUNT_OFFSET..DEPENDENCY_COUNT_OFFSET + 2]
+        .copy_from_slice(&128_u16.to_le_bytes());
+    set_total_len(&mut max_count);
+    assert_eq!(
+        ProofCapsuleV1::from_bytes(&max_count),
+        Err(ProofCapsuleDecodeErrorV1::TruncatedCollection {
+            field: "dependencies",
+            minimum: 128 * 35,
+            remaining: 0,
+        })
     );
 }
 
@@ -403,20 +514,20 @@ fn parser_rejects_reordered_and_duplicate_dependency_or_feature_entries() {
 }
 
 #[test]
-fn admission_rejects_stale_and_forked_freshness() {
+fn expected_context_rejects_stale_and_forked_freshness() {
     let stale_freshness = freshness_with(6, 70, 71);
     let stale = capsule_with(target(), 44, stale_freshness);
-    let expected_freshness = freshness_with(7, 49, 50);
+    let expected_freshness = freshness();
     let expected = ProofCapsuleExpectationV1::new(
         stale.identity(),
         stale.target().artifact_identity(),
-        stale.target().envelope_identity(),
         Some(ProofCapsuleFreshnessExpectationV1::new(expected_freshness)),
     )
     .unwrap();
     assert_eq!(
-        ProofCapsuleReplayGuardV1::new().parse_and_consume(&stale.to_bytes(), expected),
-        Err(ProofCapsuleAdmissionErrorV1::StaleLedgerGeneration {
+        ProcessLocalProofCapsuleDuplicateDetectorV1::new()
+            .parse_validate_and_record(&stale.to_bytes(), expected),
+        Err(ProofCapsuleContextErrorV1::StaleLedgerGeneration {
             expected: 7,
             actual: 6,
         })
@@ -427,36 +538,56 @@ fn admission_rejects_stale_and_forked_freshness() {
     let expected = ProofCapsuleExpectationV1::new(
         forked.identity(),
         forked.target().artifact_identity(),
-        forked.target().envelope_identity(),
         Some(ProofCapsuleFreshnessExpectationV1::new(expected_freshness)),
     )
     .unwrap();
     assert_eq!(
-        ProofCapsuleReplayGuardV1::new().parse_and_consume(&forked.to_bytes(), expected),
-        Err(ProofCapsuleAdmissionErrorV1::IdentitySubstitution {
+        ProcessLocalProofCapsuleDuplicateDetectorV1::new()
+            .parse_validate_and_record(&forked.to_bytes(), expected),
+        Err(ProofCapsuleContextErrorV1::IdentitySubstitution {
             field: ProofCapsuleIdentityFieldV1::LedgerState,
+        })
+    );
+
+    let wrong_previous = ProofCapsuleFreshnessIdentityV1::new_inert(
+        digest(40),
+        digest(45),
+        digest(46),
+        digest(47),
+        digest(48),
+        digest(99),
+        7,
+        digest(50),
+        digest(51),
+    )
+    .unwrap();
+    let wrong_previous_capsule = capsule_with(target(), 44, wrong_previous);
+    let expected = ProofCapsuleExpectationV1::new(
+        wrong_previous_capsule.identity(),
+        wrong_previous_capsule.target().artifact_identity(),
+        Some(ProofCapsuleFreshnessExpectationV1::new(expected_freshness)),
+    )
+    .unwrap();
+    assert_eq!(
+        ProcessLocalProofCapsuleDuplicateDetectorV1::new()
+            .parse_validate_and_record(&wrong_previous_capsule.to_bytes(), expected,),
+        Err(ProofCapsuleContextErrorV1::IdentitySubstitution {
+            field: ProofCapsuleIdentityFieldV1::PreviousLedgerState,
         })
     );
 }
 
 #[test]
-fn admission_rejects_artifact_envelope_and_recomputed_capsule_substitution() {
+fn expected_context_rejects_artifact_and_recomputed_capsule_substitution() {
     let expected_capsule = capsule();
     let expected = expectation(&expected_capsule);
 
-    let artifact = capsule_with(target_with(proof_target(), 59, 80, 62), 44, freshness());
+    let artifact = capsule_with(target_with(proof_target(), 59, 80), 44, freshness());
     assert_eq!(
-        ProofCapsuleReplayGuardV1::new().parse_and_consume(&artifact.to_bytes(), expected),
-        Err(ProofCapsuleAdmissionErrorV1::IdentitySubstitution {
+        ProcessLocalProofCapsuleDuplicateDetectorV1::new()
+            .parse_validate_and_record(&artifact.to_bytes(), expected),
+        Err(ProofCapsuleContextErrorV1::IdentitySubstitution {
             field: ProofCapsuleIdentityFieldV1::Artifact,
-        })
-    );
-
-    let envelope = capsule_with(target_with(proof_target(), 59, 61, 80), 44, freshness());
-    assert_eq!(
-        ProofCapsuleReplayGuardV1::new().parse_and_consume(&envelope.to_bytes(), expected),
-        Err(ProofCapsuleAdmissionErrorV1::IdentitySubstitution {
-            field: ProofCapsuleIdentityFieldV1::Envelope,
         })
     );
 
@@ -464,36 +595,38 @@ fn admission_rejects_artifact_envelope_and_recomputed_capsule_substitution() {
         source_tree_digest: digest(80),
         ..proof_target()
     };
-    let substituted = capsule_with(target_with(source, 59, 61, 62), 44, freshness());
+    let substituted = capsule_with(target_with(source, 59, 61), 44, freshness());
     assert_eq!(
-        ProofCapsuleReplayGuardV1::new().parse_and_consume(&substituted.to_bytes(), expected),
-        Err(ProofCapsuleAdmissionErrorV1::IdentitySubstitution {
+        ProcessLocalProofCapsuleDuplicateDetectorV1::new()
+            .parse_validate_and_record(&substituted.to_bytes(), expected),
+        Err(ProofCapsuleContextErrorV1::IdentitySubstitution {
             field: ProofCapsuleIdentityFieldV1::Capsule,
         })
     );
 }
 
 #[test]
-fn admission_consumes_capsule_execution_and_persistent_binding_once() {
+fn process_local_detector_only_records_duplicates() {
     let original = capsule();
     let expected = expectation(&original);
-    let mut guard = ProofCapsuleReplayGuardV1::new();
+    let mut detector = ProcessLocalProofCapsuleDuplicateDetectorV1::new();
     assert_eq!(
-        guard
-            .parse_and_consume(&original.to_bytes(), expected)
+        detector
+            .parse_validate_and_record(&original.to_bytes(), expected)
             .unwrap(),
         original
     );
-    assert_eq!(guard.consumed_count(), 1);
+    assert_eq!(detector.recorded_count(), 1);
     assert_eq!(
-        guard.parse_and_consume(&original.to_bytes(), expected),
-        Err(ProofCapsuleAdmissionErrorV1::CapsuleReplay)
+        detector.parse_validate_and_record(&original.to_bytes(), expected),
+        Err(ProofCapsuleContextErrorV1::CapsuleDuplicate)
     );
 
-    let same_execution = capsule_with(target_with(proof_target(), 80, 61, 62), 44, freshness());
+    let same_execution = capsule_with(target_with(proof_target(), 80, 61), 44, freshness());
     assert_eq!(
-        guard.parse_and_consume(&same_execution.to_bytes(), expectation(&same_execution),),
-        Err(ProofCapsuleAdmissionErrorV1::ExecutionReplay)
+        detector
+            .parse_validate_and_record(&same_execution.to_bytes(), expectation(&same_execution),),
+        Err(ProofCapsuleContextErrorV1::ExecutionDuplicate)
     );
 
     let rebound_freshness = ProofCapsuleFreshnessIdentityV1::new_inert(
@@ -502,9 +635,10 @@ fn admission_consumes_capsule_execution_and_persistent_binding_once() {
         digest(85),
         digest(86),
         digest(48),
+        digest(49),
         8,
         digest(87),
-        digest(50),
+        digest(51),
     )
     .unwrap();
     let rebound_execution = ProofCapsuleExecutionV1::new_inert(
@@ -514,23 +648,23 @@ fn admission_consumes_capsule_execution_and_persistent_binding_once() {
         digest(90),
         digest(84),
         digest(85),
-        ProofCapsulePayloadIdentityV1::new(200, digest(86)).unwrap(),
+        ProofCapsulePayloadIdentityV1::sealed_result(200, digest(86)).unwrap(),
         Some(rebound_freshness),
     )
     .unwrap();
     let same_persistent_binding = ProofCapsuleV1::new_inert(
-        target_with(proof_target(), 81, 61, 62),
+        target_with(proof_target(), 81, 61),
         policy(),
         rebound_execution,
         proved_result(),
     )
     .unwrap();
     assert_eq!(
-        guard.parse_and_consume(
+        detector.parse_validate_and_record(
             &same_persistent_binding.to_bytes(),
             expectation(&same_persistent_binding),
         ),
-        Err(ProofCapsuleAdmissionErrorV1::PersistentProofReplay)
+        Err(ProofCapsuleContextErrorV1::PersistentProofDuplicate)
     );
 }
 
@@ -562,9 +696,8 @@ fn constructors_reject_duplicate_and_oversized_collections() {
             digest(57),
             digest(58),
             digest(59),
-            payload(60),
+            finalized_payload(60),
             digest(61),
-            payload(62),
         ),
         Err(ProofCapsuleBuildErrorV1::DuplicateItem {
             field: "dependency name"
@@ -582,9 +715,8 @@ fn constructors_reject_duplicate_and_oversized_collections() {
             digest(57),
             digest(58),
             digest(59),
-            payload(60),
+            finalized_payload(60),
             digest(61),
-            payload(62),
         ),
         Err(ProofCapsuleBuildErrorV1::TooManyItems {
             field: "dependencies",

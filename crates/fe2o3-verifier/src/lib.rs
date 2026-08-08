@@ -91,12 +91,13 @@ pub use plan::{
 };
 pub use proof_capsule::{
     MAX_PROOF_CAPSULE_BYTES_V1, MAX_PROOF_CAPSULE_DEPENDENCIES_V1, MAX_PROOF_CAPSULE_FEATURES_V1,
-    PROOF_CAPSULE_MAGIC_V1, PROOF_CAPSULE_VERSION_V1, ProofCapsuleAdmissionErrorV1,
-    ProofCapsuleBuildErrorV1, ProofCapsuleDecodeErrorV1, ProofCapsuleDependencyV1,
-    ProofCapsuleExecutionV1, ProofCapsuleExpectationV1, ProofCapsuleFreshnessExpectationV1,
-    ProofCapsuleFreshnessIdentityV1, ProofCapsuleIdentityFieldV1, ProofCapsulePayloadIdentityV1,
-    ProofCapsulePolicyV1, ProofCapsuleReplayGuardV1, ProofCapsuleResultV1, ProofCapsuleTargetV1,
-    ProofCapsuleV1,
+    MAX_PROOF_CAPSULE_FINALIZED_HSACO_BYTES_V1, MAX_PROOF_CAPSULE_SEALED_RESULT_BYTES_V1,
+    PROOF_CAPSULE_MAGIC_V1, PROOF_CAPSULE_VERSION_V1, ProcessLocalProofCapsuleDuplicateDetectorV1,
+    ProofCapsuleBuildErrorV1, ProofCapsuleContextErrorV1, ProofCapsuleDecodeErrorV1,
+    ProofCapsuleDependencyV1, ProofCapsuleExecutionV1, ProofCapsuleExpectationV1,
+    ProofCapsuleFreshnessExpectationV1, ProofCapsuleFreshnessIdentityV1,
+    ProofCapsuleIdentityFieldV1, ProofCapsulePayloadIdentityV1, ProofCapsulePolicyV1,
+    ProofCapsuleResultV1, ProofCapsuleTargetV1, ProofCapsuleV1,
 };
 pub use result::{
     MAX_RESULT_BYTES, ProofResultV1, RecorderTermination, ResultError, parse_recorder_result,

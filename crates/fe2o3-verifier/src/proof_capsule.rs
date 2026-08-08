@@ -1,30 +1,40 @@
 //! Canonical inert records joining proof inputs, dependencies, and results.
 //!
-//! A capsule is descriptive evidence. Its digest detects accidental mutation,
-//! while admission against identities supplied by a trusted caller detects
-//! substitution. Neither operation authenticates a compiler, establishes
-//! source-to-machine-code refinement, or grants load or launch authority.
+//! A capsule is pre-envelope descriptive evidence. It deliberately has no
+//! Worker V2 envelope identity, so an envelope can embed the capsule without a
+//! hash cycle. A later external publication receipt may bind the capsule and
+//! envelope identities together.
+//!
+//! Its digest detects accidental mutation, while comparison against identities
+//! supplied by a trusted caller detects substitution. Neither operation
+//! authenticates a compiler, establishes source-to-machine-code refinement,
+//! durably consumes freshness, or grants load or launch authority.
 
 use std::collections::BTreeSet;
 use std::fmt;
 
-use fe2o3_artifacts::DigestAlgorithm;
+use fe2o3_artifacts::{DigestAlgorithm, MAX_CODE_OBJECT_BYTES};
 
 use crate::{
     AxiomPolicy, CorrelationId, Digest, MeasuredToolIdentity, ModelError,
-    PersistentlyFreshProofExecutableBindingV1, PersistentlyFreshProofExecutableIdentityV1,
-    ProofOutcome, ProofProperty, ProofTargetIdentity, Text, TrustedItem, VerificationModelIdentity,
-    VerifierPolicy,
+    PersistentlyFreshProofExecutableBindingV1, ProofOutcome, ProofProperty, ProofTargetIdentity,
+    Text, TrustedItem, VerificationModelIdentity, VerifierPolicy,
 };
 
+/// Canonical pre-envelope V1 wire marker. The earlier envelope-dependent draft
+/// was never published and has no compatibility status.
 pub const PROOF_CAPSULE_MAGIC_V1: [u8; 8] = *b"FE2PCP1\0";
 pub const PROOF_CAPSULE_VERSION_V1: u16 = 1;
 pub const MAX_PROOF_CAPSULE_BYTES_V1: usize = 128 * 1024;
 pub const MAX_PROOF_CAPSULE_DEPENDENCIES_V1: usize = 128;
 pub const MAX_PROOF_CAPSULE_FEATURES_V1: usize = 128;
+pub const MAX_PROOF_CAPSULE_SEALED_RESULT_BYTES_V1: usize = crate::MAX_RESULT_BYTES;
+pub const MAX_PROOF_CAPSULE_FINALIZED_HSACO_BYTES_V1: usize = MAX_CODE_OBJECT_BYTES;
 
 const HEADER_BYTES: usize = 16;
-const LAST_FIELD_TAG: u16 = 19;
+const LAST_FIELD_TAG: u16 = 18;
+const MIN_IDENTIFIER_WIRE_BYTES: usize = 3;
+const MIN_NAMED_DIGEST_WIRE_BYTES: usize = MIN_IDENTIFIER_WIRE_BYTES + 32;
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct ProofCapsuleDependencyV1 {
@@ -61,9 +71,46 @@ pub struct ProofCapsulePayloadIdentityV1 {
 }
 
 impl ProofCapsulePayloadIdentityV1 {
-    pub fn new(byte_len: u64, digest: Digest) -> Result<Self, ProofCapsuleBuildErrorV1> {
+    pub fn sealed_result(byte_len: u64, digest: Digest) -> Result<Self, ProofCapsuleBuildErrorV1> {
+        Self::new_bounded(
+            byte_len,
+            digest,
+            "sealed proof result",
+            MAX_PROOF_CAPSULE_SEALED_RESULT_BYTES_V1,
+        )
+    }
+
+    pub fn finalized_hsaco(
+        byte_len: u64,
+        digest: Digest,
+    ) -> Result<Self, ProofCapsuleBuildErrorV1> {
+        Self::new_bounded(
+            byte_len,
+            digest,
+            "finalized HSACO",
+            MAX_PROOF_CAPSULE_FINALIZED_HSACO_BYTES_V1,
+        )
+    }
+
+    fn new_bounded(
+        byte_len: u64,
+        digest: Digest,
+        field: &'static str,
+        max: usize,
+    ) -> Result<Self, ProofCapsuleBuildErrorV1> {
         if byte_len == 0 {
-            return Err(ProofCapsuleBuildErrorV1::EmptyPayload);
+            return Err(ProofCapsuleBuildErrorV1::PayloadLengthOutOfRange {
+                field,
+                value: byte_len,
+                max,
+            });
+        }
+        if byte_len > max as u64 {
+            return Err(ProofCapsuleBuildErrorV1::PayloadLengthOutOfRange {
+                field,
+                value: byte_len,
+                max,
+            });
         }
         require_nonzero(digest, "payload identity")?;
         Ok(Self { byte_len, digest })
@@ -78,8 +125,18 @@ impl ProofCapsulePayloadIdentityV1 {
     }
 }
 
-/// Exact proof target plus dependency, feature, ABI, launch, machine-effect,
-/// artifact, finalized-payload, and envelope identities.
+/// Exact pre-envelope proof target plus dependency, feature, ABI, launch,
+/// machine-effect, artifact, and finalized-payload identities.
+///
+/// An envelope identity is intentionally unavailable, preventing a hash cycle
+/// when `WorkerV2LoadEnvelopeV1` embeds these bytes. A later external
+/// publication receipt may bind the resulting capsule and envelope identities.
+///
+/// ```compile_fail
+/// # fn no_envelope_dependency(target: &fe2o3_verifier::ProofCapsuleTargetV1) {
+/// let _ = target.envelope_identity();
+/// # }
+/// ```
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProofCapsuleTargetV1 {
     proof_target: ProofTargetIdentity,
@@ -90,7 +147,6 @@ pub struct ProofCapsuleTargetV1 {
     machine_effect_evidence_identity: Digest,
     finalized_payload: ProofCapsulePayloadIdentityV1,
     artifact_identity: Digest,
-    envelope_identity: ProofCapsulePayloadIdentityV1,
 }
 
 impl ProofCapsuleTargetV1 {
@@ -104,7 +160,6 @@ impl ProofCapsuleTargetV1 {
         machine_effect_evidence_identity: Digest,
         finalized_payload: ProofCapsulePayloadIdentityV1,
         artifact_identity: Digest,
-        envelope_identity: ProofCapsulePayloadIdentityV1,
     ) -> Result<Self, ProofCapsuleBuildErrorV1> {
         for (field, identity) in [
             ("kernel identity", proof_target.kernel_id),
@@ -132,6 +187,11 @@ impl ProofCapsuleTargetV1 {
         for identity in proof_target.digests() {
             require_nonzero(identity, "proof target identity")?;
         }
+        validate_payload_bound(
+            finalized_payload,
+            "finalized HSACO",
+            MAX_PROOF_CAPSULE_FINALIZED_HSACO_BYTES_V1,
+        )?;
         canonicalize_dependencies(&mut dependencies)?;
         canonicalize_features(&mut features)?;
         Ok(Self {
@@ -143,7 +203,6 @@ impl ProofCapsuleTargetV1 {
             machine_effect_evidence_identity,
             finalized_payload,
             artifact_identity,
-            envelope_identity,
         })
     }
 
@@ -181,10 +240,6 @@ impl ProofCapsuleTargetV1 {
 
     pub const fn artifact_identity(&self) -> Digest {
         self.artifact_identity
-    }
-
-    pub const fn envelope_identity(&self) -> ProofCapsulePayloadIdentityV1 {
-        self.envelope_identity
     }
 }
 
@@ -263,13 +318,16 @@ pub struct ProofCapsuleFreshnessIdentityV1 {
     transcript: Digest,
     result: Digest,
     ledger_namespace: Digest,
+    previous_ledger_state_identity: Digest,
     ledger_generation: u64,
     ledger_state_identity: Digest,
     persistent_binding_identity: Digest,
 }
 
 impl ProofCapsuleFreshnessIdentityV1 {
-    pub fn from_persistent(identity: PersistentlyFreshProofExecutableIdentityV1) -> Self {
+    pub fn project_from_persistent(binding: &PersistentlyFreshProofExecutableBindingV1) -> Self {
+        let identity = binding.identity();
+        let receipt = binding.freshness_receipt();
         let consumed = identity.consumed_execution();
         Self {
             proof_binding_identity: identity.proof_binding_identity(),
@@ -277,6 +335,7 @@ impl ProofCapsuleFreshnessIdentityV1 {
             transcript: consumed.transcript(),
             result: consumed.result(),
             ledger_namespace: identity.ledger_namespace(),
+            previous_ledger_state_identity: receipt.previous_state_identity(),
             ledger_generation: identity.ledger_generation(),
             ledger_state_identity: identity.ledger_state_identity(),
             persistent_binding_identity: identity.binding_identity(),
@@ -290,6 +349,7 @@ impl ProofCapsuleFreshnessIdentityV1 {
         transcript: Digest,
         result: Digest,
         ledger_namespace: Digest,
+        previous_ledger_state_identity: Digest,
         ledger_generation: u64,
         ledger_state_identity: Digest,
         persistent_binding_identity: Digest,
@@ -300,6 +360,10 @@ impl ProofCapsuleFreshnessIdentityV1 {
             ("freshness transcript", transcript),
             ("freshness result", result),
             ("ledger namespace", ledger_namespace),
+            (
+                "previous ledger state identity",
+                previous_ledger_state_identity,
+            ),
             ("ledger state identity", ledger_state_identity),
             ("persistent binding identity", persistent_binding_identity),
         ] {
@@ -314,6 +378,7 @@ impl ProofCapsuleFreshnessIdentityV1 {
             transcript,
             result,
             ledger_namespace,
+            previous_ledger_state_identity,
             ledger_generation,
             ledger_state_identity,
             persistent_binding_identity,
@@ -338,6 +403,10 @@ impl ProofCapsuleFreshnessIdentityV1 {
 
     pub const fn ledger_namespace(self) -> Digest {
         self.ledger_namespace
+    }
+
+    pub const fn previous_ledger_state_identity(self) -> Digest {
+        self.previous_ledger_state_identity
     }
 
     pub const fn ledger_generation(self) -> u64 {
@@ -406,6 +475,11 @@ impl ProofCapsuleExecutionV1 {
                 return Err(ProofCapsuleBuildErrorV1::FreshnessMismatch { field: "result" });
             }
         }
+        validate_payload_bound(
+            sealed_result,
+            "sealed proof result",
+            MAX_PROOF_CAPSULE_SEALED_RESULT_BYTES_V1,
+        )?;
         Ok(Self {
             correlation_id,
             canonical_invocation_identity,
@@ -418,24 +492,26 @@ impl ProofCapsuleExecutionV1 {
         })
     }
 
-    fn from_persistent(binding: &PersistentlyFreshProofExecutableBindingV1) -> Self {
+    fn project_from_persistent(
+        binding: &PersistentlyFreshProofExecutableBindingV1,
+    ) -> Result<Self, ProofCapsuleBuildErrorV1> {
         let proof = binding.proof_binding();
         let evidence = proof.execution_evidence();
         let execution = proof.execution_identity();
-        let freshness = ProofCapsuleFreshnessIdentityV1::from_persistent(binding.identity());
-        Self {
+        let freshness = ProofCapsuleFreshnessIdentityV1::project_from_persistent(binding);
+        Ok(Self {
             correlation_id: evidence.result().correlation_id(),
             canonical_invocation_identity: execution.canonical_invocation_digest(),
             policy_identity: execution.policy_digest(),
             request_identity: execution.request_digest(),
             challenge: execution.challenge(),
             transcript_identity: execution.transcript_digest(),
-            sealed_result: ProofCapsulePayloadIdentityV1 {
-                byte_len: execution.result().byte_len(),
-                digest: execution.result().digest(),
-            },
+            sealed_result: ProofCapsulePayloadIdentityV1::sealed_result(
+                execution.result().byte_len(),
+                execution.result().digest(),
+            )?,
             freshness: Some(freshness),
-        }
+        })
     }
 
     pub const fn correlation_id(&self) -> CorrelationId {
@@ -535,13 +611,13 @@ impl ProofCapsuleV1 {
         Ok(capsule)
     }
 
-    /// Builds a proved capsule from an existing persistently fresh binding.
+    /// Projects a proved, inert capsule from an existing persistent binding.
     ///
     /// The policy digest, proof target, model, measured Verus/solver identities,
     /// requested properties, and requested axioms are rejoined here. Additional
     /// target axes remain inert caller inputs and require a future production
     /// authenticator and compiler-refinement evidence.
-    pub fn from_persistently_fresh(
+    pub fn project_inert_from_persistently_fresh(
         target: ProofCapsuleTargetV1,
         verifier_policy: &VerifierPolicy,
         binding: &PersistentlyFreshProofExecutableBindingV1,
@@ -556,6 +632,14 @@ impl ProofCapsuleV1 {
         if target.proof_target != proof_result.target() {
             return Err(ProofCapsuleBuildErrorV1::ProofTargetMismatch);
         }
+        let bound_finalized = proof
+            .executable_binding()
+            .executable()
+            .finalized_code_object_digest();
+        // ProofExecutableBindingV1 retains the finalized occurrence digest but
+        // not its byte length. The capsule length is bounded here; a later
+        // artifact/envelope join must validate the exact occurrence length.
+        require_bound_finalized_payload(target.finalized_payload, bound_finalized)?;
         if verifier_policy.expected_tools() != plan.tools()
             || verifier_policy.expected_model() != proof_result.model()
         {
@@ -569,7 +653,7 @@ impl ProofCapsuleV1 {
             proof_result.trusted_items().to_vec(),
             plan.request().properties().to_vec(),
         )?;
-        let execution = ProofCapsuleExecutionV1::from_persistent(binding);
+        let execution = ProofCapsuleExecutionV1::project_from_persistent(binding)?;
         let result = ProofCapsuleResultV1::new(
             proof_result.outcome(),
             proof_result.proved_properties().to_vec(),
@@ -613,9 +697,15 @@ impl ProofCapsuleV1 {
         false
     }
 
+    /// Confirms this schema is deliberately independent of a Worker V2
+    /// envelope. A later external publication receipt may bind both identities.
+    pub const fn is_pre_envelope_evidence(&self) -> bool {
+        true
+    }
+
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = self.identity_input_bytes();
-        put_field(&mut bytes, 19);
+        put_field(&mut bytes, 18);
         put_digest(&mut bytes, self.identity);
         debug_assert!(bytes.len() <= MAX_PROOF_CAPSULE_BYTES_V1);
         bytes
@@ -661,14 +751,12 @@ impl ProofCapsuleV1 {
         writer.field(16);
         writer.digest(self.target.artifact_identity);
         writer.field(17);
-        writer.payload(self.target.envelope_identity);
-        writer.field(18);
         writer.freshness(self.execution.freshness);
         writer.finish_with_total_len()
     }
 }
 
-/// Trusted context required to admit one exact persistent freshness identity.
+/// Expected context for one exact persistent freshness identity.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ProofCapsuleFreshnessExpectationV1 {
     identity: ProofCapsuleFreshnessIdentityV1,
@@ -679,8 +767,10 @@ impl ProofCapsuleFreshnessExpectationV1 {
         Self { identity }
     }
 
-    pub fn from_persistent(identity: PersistentlyFreshProofExecutableIdentityV1) -> Self {
-        Self::new(ProofCapsuleFreshnessIdentityV1::from_persistent(identity))
+    pub fn project_from_persistent(binding: &PersistentlyFreshProofExecutableBindingV1) -> Self {
+        Self::new(ProofCapsuleFreshnessIdentityV1::project_from_persistent(
+            binding,
+        ))
     }
 
     pub const fn identity(self) -> ProofCapsuleFreshnessIdentityV1 {
@@ -688,16 +778,16 @@ impl ProofCapsuleFreshnessExpectationV1 {
     }
 }
 
-/// Identities supplied by a trusted caller for exact capsule admission.
+/// Identities supplied by a trusted caller for exact capsule comparison.
 ///
 /// Constructing this value does not authenticate its inputs. Production code
-/// must obtain them from authenticated compiler, artifact, envelope, and
-/// rollback-resistant freshness state.
+/// must obtain them from authenticated compiler, artifact, and
+/// rollback-resistant freshness state. Future runtime authority must revalidate
+/// and durably consume the proof against the live ledger.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ProofCapsuleExpectationV1 {
     capsule_identity: Digest,
     artifact_identity: Digest,
-    envelope_identity: ProofCapsulePayloadIdentityV1,
     freshness: Option<ProofCapsuleFreshnessExpectationV1>,
 }
 
@@ -705,7 +795,6 @@ impl ProofCapsuleExpectationV1 {
     pub fn new(
         capsule_identity: Digest,
         artifact_identity: Digest,
-        envelope_identity: ProofCapsulePayloadIdentityV1,
         freshness: Option<ProofCapsuleFreshnessExpectationV1>,
     ) -> Result<Self, ProofCapsuleBuildErrorV1> {
         require_nonzero(capsule_identity, "expected capsule identity")?;
@@ -713,7 +802,6 @@ impl ProofCapsuleExpectationV1 {
         Ok(Self {
             capsule_identity,
             artifact_identity,
-            envelope_identity,
             freshness,
         })
     }
@@ -726,88 +814,90 @@ impl ProofCapsuleExpectationV1 {
         self.artifact_identity
     }
 
-    pub const fn envelope_identity(self) -> ProofCapsulePayloadIdentityV1 {
-        self.envelope_identity
-    }
-
     pub const fn freshness(self) -> Option<ProofCapsuleFreshnessExpectationV1> {
         self.freshness
     }
 }
 
-/// Process-local replay rejection for already canonical, expected capsules.
+/// Process-local duplicate detection for canonical, expected capsules.
 ///
-/// This guard is intentionally not serializable and does not replace
-/// `PersistentProofFreshnessLedgerV1` or a rollback-resistant production root.
+/// This diagnostic set is intentionally not serializable. Recording a capsule
+/// here does not consume its persistent receipt and cannot preserve durable
+/// single-use freshness. Future authority must revalidate and durably consume
+/// against the live `PersistentProofFreshnessLedgerV1` and a rollback-resistant
+/// production root.
 #[derive(Debug, Default)]
-pub struct ProofCapsuleReplayGuardV1 {
-    consumed_capsules: BTreeSet<Digest>,
-    consumed_correlations: BTreeSet<CorrelationId>,
-    consumed_challenges: BTreeSet<Digest>,
-    consumed_transcripts: BTreeSet<Digest>,
-    consumed_results: BTreeSet<Digest>,
-    consumed_persistent_bindings: BTreeSet<Digest>,
+pub struct ProcessLocalProofCapsuleDuplicateDetectorV1 {
+    recorded_capsules: BTreeSet<Digest>,
+    recorded_correlations: BTreeSet<CorrelationId>,
+    recorded_challenges: BTreeSet<Digest>,
+    recorded_transcripts: BTreeSet<Digest>,
+    recorded_results: BTreeSet<Digest>,
+    recorded_persistent_bindings: BTreeSet<Digest>,
 }
 
-impl ProofCapsuleReplayGuardV1 {
+impl ProcessLocalProofCapsuleDuplicateDetectorV1 {
     pub const fn new() -> Self {
         Self {
-            consumed_capsules: BTreeSet::new(),
-            consumed_correlations: BTreeSet::new(),
-            consumed_challenges: BTreeSet::new(),
-            consumed_transcripts: BTreeSet::new(),
-            consumed_results: BTreeSet::new(),
-            consumed_persistent_bindings: BTreeSet::new(),
+            recorded_capsules: BTreeSet::new(),
+            recorded_correlations: BTreeSet::new(),
+            recorded_challenges: BTreeSet::new(),
+            recorded_transcripts: BTreeSet::new(),
+            recorded_results: BTreeSet::new(),
+            recorded_persistent_bindings: BTreeSet::new(),
         }
     }
 
-    pub fn consumed_count(&self) -> usize {
-        self.consumed_capsules.len()
+    pub fn recorded_count(&self) -> usize {
+        self.recorded_capsules.len()
     }
 
-    pub fn parse_and_consume(
+    /// Canonically parses, compares expected identities, and records local
+    /// duplicates. The returned capsule remains cloneable inert evidence; this
+    /// method does not consume or revalidate a live persistent ledger receipt.
+    pub fn parse_validate_and_record(
         &mut self,
         bytes: &[u8],
         expected: ProofCapsuleExpectationV1,
-    ) -> Result<ProofCapsuleV1, ProofCapsuleAdmissionErrorV1> {
+    ) -> Result<ProofCapsuleV1, ProofCapsuleContextErrorV1> {
         let capsule = ProofCapsuleV1::from_bytes(bytes)?;
         validate_expectation(&capsule, expected)?;
-        if self.consumed_capsules.contains(&capsule.identity) {
-            return Err(ProofCapsuleAdmissionErrorV1::CapsuleReplay);
+        if self.recorded_capsules.contains(&capsule.identity) {
+            return Err(ProofCapsuleContextErrorV1::CapsuleDuplicate);
         }
         if self
-            .consumed_correlations
+            .recorded_correlations
             .contains(&capsule.execution.correlation_id)
             || self
-                .consumed_challenges
+                .recorded_challenges
                 .contains(&capsule.execution.challenge)
             || self
-                .consumed_transcripts
+                .recorded_transcripts
                 .contains(&capsule.execution.transcript_identity)
             || self
-                .consumed_results
+                .recorded_results
                 .contains(&capsule.execution.sealed_result.digest)
         {
-            return Err(ProofCapsuleAdmissionErrorV1::ExecutionReplay);
+            return Err(ProofCapsuleContextErrorV1::ExecutionDuplicate);
         }
         if let Some(freshness) = capsule.execution.freshness
             && self
-                .consumed_persistent_bindings
+                .recorded_persistent_bindings
                 .contains(&freshness.persistent_binding_identity)
         {
-            return Err(ProofCapsuleAdmissionErrorV1::PersistentProofReplay);
+            return Err(ProofCapsuleContextErrorV1::PersistentProofDuplicate);
         }
 
-        let capsule_was_new = self.consumed_capsules.insert(capsule.identity);
+        let capsule_was_new = self.recorded_capsules.insert(capsule.identity);
         let correlation_was_new = self
-            .consumed_correlations
+            .recorded_correlations
             .insert(capsule.execution.correlation_id);
-        let challenge_was_new = self.consumed_challenges.insert(capsule.execution.challenge);
+        let challenge_was_new = self.recorded_challenges.insert(capsule.execution.challenge);
         let transcript_was_new = self
-            .consumed_transcripts
+            .recorded_transcripts
             .insert(capsule.execution.transcript_identity);
         let result_was_new = self
-            .consumed_results
+            .recorded_results
             .insert(capsule.execution.sealed_result.digest);
         debug_assert!(
             capsule_was_new
@@ -818,7 +908,7 @@ impl ProofCapsuleReplayGuardV1 {
         );
         if let Some(freshness) = capsule.execution.freshness {
             let persistent_was_new = self
-                .consumed_persistent_bindings
+                .recorded_persistent_bindings
                 .insert(freshness.persistent_binding_identity);
             debug_assert!(persistent_was_new);
         }
@@ -829,20 +919,15 @@ impl ProofCapsuleReplayGuardV1 {
 fn validate_expectation(
     capsule: &ProofCapsuleV1,
     expected: ProofCapsuleExpectationV1,
-) -> Result<(), ProofCapsuleAdmissionErrorV1> {
+) -> Result<(), ProofCapsuleContextErrorV1> {
     if capsule.target.artifact_identity != expected.artifact_identity {
-        return Err(ProofCapsuleAdmissionErrorV1::IdentitySubstitution {
+        return Err(ProofCapsuleContextErrorV1::IdentitySubstitution {
             field: ProofCapsuleIdentityFieldV1::Artifact,
-        });
-    }
-    if capsule.target.envelope_identity != expected.envelope_identity {
-        return Err(ProofCapsuleAdmissionErrorV1::IdentitySubstitution {
-            field: ProofCapsuleIdentityFieldV1::Envelope,
         });
     }
     validate_expected_freshness(capsule.execution.freshness, expected.freshness)?;
     if capsule.identity != expected.capsule_identity {
-        return Err(ProofCapsuleAdmissionErrorV1::IdentitySubstitution {
+        return Err(ProofCapsuleContextErrorV1::IdentitySubstitution {
             field: ProofCapsuleIdentityFieldV1::Capsule,
         });
     }
@@ -852,34 +937,39 @@ fn validate_expectation(
 fn validate_expected_freshness(
     actual: Option<ProofCapsuleFreshnessIdentityV1>,
     expected: Option<ProofCapsuleFreshnessExpectationV1>,
-) -> Result<(), ProofCapsuleAdmissionErrorV1> {
+) -> Result<(), ProofCapsuleContextErrorV1> {
     let (actual, expected) = match (actual, expected) {
         (Some(actual), Some(expected)) => (actual, expected.identity),
         (None, None) => return Ok(()),
         (Some(_), None) | (None, Some(_)) => {
-            return Err(ProofCapsuleAdmissionErrorV1::IdentitySubstitution {
+            return Err(ProofCapsuleContextErrorV1::IdentitySubstitution {
                 field: ProofCapsuleIdentityFieldV1::Freshness,
             });
         }
     };
     if actual.ledger_namespace != expected.ledger_namespace {
-        return Err(ProofCapsuleAdmissionErrorV1::IdentitySubstitution {
+        return Err(ProofCapsuleContextErrorV1::IdentitySubstitution {
             field: ProofCapsuleIdentityFieldV1::LedgerNamespace,
         });
     }
     if actual.ledger_generation < expected.ledger_generation {
-        return Err(ProofCapsuleAdmissionErrorV1::StaleLedgerGeneration {
+        return Err(ProofCapsuleContextErrorV1::StaleLedgerGeneration {
             expected: expected.ledger_generation,
             actual: actual.ledger_generation,
         });
     }
     if actual.ledger_generation > expected.ledger_generation {
-        return Err(ProofCapsuleAdmissionErrorV1::UnexpectedLedgerGeneration {
+        return Err(ProofCapsuleContextErrorV1::UnexpectedLedgerGeneration {
             expected: expected.ledger_generation,
             actual: actual.ledger_generation,
         });
     }
     for (field, actual, expected) in [
+        (
+            ProofCapsuleIdentityFieldV1::PreviousLedgerState,
+            actual.previous_ledger_state_identity,
+            expected.previous_ledger_state_identity,
+        ),
         (
             ProofCapsuleIdentityFieldV1::LedgerState,
             actual.ledger_state_identity,
@@ -912,7 +1002,7 @@ fn validate_expected_freshness(
         ),
     ] {
         if actual != expected {
-            return Err(ProofCapsuleAdmissionErrorV1::IdentitySubstitution { field });
+            return Err(ProofCapsuleContextErrorV1::IdentitySubstitution { field });
         }
     }
     Ok(())
@@ -976,16 +1066,17 @@ fn decode_capsule(bytes: &[u8]) -> Result<ProofCapsuleV1, ProofCapsuleDecodeErro
     reader.field(14)?;
     let machine_effect_evidence_identity = reader.digest()?;
     reader.field(15)?;
-    let finalized_payload = reader.payload()?;
+    let finalized_payload = reader.payload(
+        "finalized HSACO",
+        MAX_PROOF_CAPSULE_FINALIZED_HSACO_BYTES_V1,
+    )?;
     reader.field(16)?;
     let artifact_identity = reader.digest()?;
     reader.field(17)?;
-    let envelope_identity = reader.payload()?;
-    reader.field(18)?;
     let freshness = reader.freshness()?;
 
     let identity_input_len = reader.consumed_len();
-    reader.field(19)?;
+    reader.field(18)?;
     let encoded_identity = reader.digest()?;
     if !reader.is_empty() {
         return Err(ProofCapsuleDecodeErrorV1::TrailingBytes);
@@ -1003,7 +1094,6 @@ fn decode_capsule(bytes: &[u8]) -> Result<ProofCapsuleV1, ProofCapsuleDecodeErro
         machine_effect_evidence_identity,
         finalized_payload,
         artifact_identity,
-        envelope_identity,
     )?;
     let policy = ProofCapsulePolicyV1::new(
         model,
@@ -1148,6 +1238,35 @@ fn canonicalize_properties(
 fn require_nonzero(identity: Digest, field: &'static str) -> Result<(), ProofCapsuleBuildErrorV1> {
     if identity.as_bytes().iter().all(|byte| *byte == 0) {
         Err(ProofCapsuleBuildErrorV1::ZeroIdentity { field })
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_payload_bound(
+    payload: ProofCapsulePayloadIdentityV1,
+    field: &'static str,
+    max: usize,
+) -> Result<(), ProofCapsuleBuildErrorV1> {
+    if payload.byte_len == 0 || payload.byte_len > max as u64 {
+        Err(ProofCapsuleBuildErrorV1::PayloadLengthOutOfRange {
+            field,
+            value: payload.byte_len,
+            max,
+        })
+    } else {
+        Ok(())
+    }
+}
+
+fn require_bound_finalized_payload(
+    capsule: ProofCapsulePayloadIdentityV1,
+    bound: fe2o3_artifacts::PayloadDigest,
+) -> Result<(), ProofCapsuleBuildErrorV1> {
+    if bound.algorithm() != DigestAlgorithm::Sha256
+        || bound.bytes().as_bytes() != capsule.digest.as_bytes()
+    {
+        Err(ProofCapsuleBuildErrorV1::FinalizedPayloadMismatch)
     } else {
         Ok(())
     }
@@ -1303,6 +1422,7 @@ impl CapsuleWriter {
                 self.digest(value.transcript);
                 self.digest(value.result);
                 self.digest(value.ledger_namespace);
+                self.digest(value.previous_ledger_state_identity);
                 self.u64(value.ledger_generation);
                 self.digest(value.ledger_state_identity);
                 self.digest(value.persistent_binding_identity);
@@ -1342,6 +1462,10 @@ impl<'a> CapsuleReader<'a> {
 
     const fn is_empty(&self) -> bool {
         self.remaining.is_empty()
+    }
+
+    const fn remaining_len(&self) -> usize {
+        self.remaining.len()
     }
 
     fn take(&mut self, count: usize) -> Result<&'a [u8], ProofCapsuleDecodeErrorV1> {
@@ -1426,8 +1550,37 @@ impl<'a> CapsuleReader<'a> {
             .map_err(ProofCapsuleDecodeErrorV1::Build)
     }
 
-    fn payload(&mut self) -> Result<ProofCapsulePayloadIdentityV1, ProofCapsuleDecodeErrorV1> {
-        ProofCapsulePayloadIdentityV1::new(self.u64()?, self.digest()?).map_err(Into::into)
+    fn payload(
+        &mut self,
+        field: &'static str,
+        max: usize,
+    ) -> Result<ProofCapsulePayloadIdentityV1, ProofCapsuleDecodeErrorV1> {
+        ProofCapsulePayloadIdentityV1::new_bounded(self.u64()?, self.digest()?, field, max)
+            .map_err(Into::into)
+    }
+
+    fn reserve_collection<T>(
+        &self,
+        count: usize,
+        minimum_item_bytes: usize,
+        field: &'static str,
+    ) -> Result<Vec<T>, ProofCapsuleDecodeErrorV1> {
+        let minimum = count
+            .checked_mul(minimum_item_bytes)
+            .ok_or(ProofCapsuleDecodeErrorV1::CollectionMinimumBytesOverflow { field })?;
+        let remaining = self.remaining_len();
+        if minimum > remaining {
+            return Err(ProofCapsuleDecodeErrorV1::TruncatedCollection {
+                field,
+                minimum,
+                remaining,
+            });
+        }
+        let mut values = Vec::new();
+        values
+            .try_reserve_exact(count)
+            .map_err(|_| ProofCapsuleDecodeErrorV1::CollectionAllocationFailed { field, count })?;
+        Ok(values)
     }
 
     fn proof_target(&mut self) -> Result<ProofTargetIdentity, ProofCapsuleDecodeErrorV1> {
@@ -1457,7 +1610,8 @@ impl<'a> CapsuleReader<'a> {
                 max: MAX_PROOF_CAPSULE_DEPENDENCIES_V1,
             });
         }
-        let mut values = Vec::with_capacity(count);
+        let mut values =
+            self.reserve_collection(count, MIN_NAMED_DIGEST_WIRE_BYTES, "dependencies")?;
         for _ in 0..count {
             let name = self.identifier("dependency name")?;
             let identity = self.digest()?;
@@ -1476,7 +1630,7 @@ impl<'a> CapsuleReader<'a> {
                 max: MAX_PROOF_CAPSULE_FEATURES_V1,
             });
         }
-        let mut values = Vec::with_capacity(count);
+        let mut values = self.reserve_collection(count, MIN_IDENTIFIER_WIRE_BYTES, "features")?;
         for _ in 0..count {
             values.push(self.identifier("feature")?);
         }
@@ -1516,7 +1670,7 @@ impl<'a> CapsuleReader<'a> {
                 max: crate::MAX_TRUSTED_ITEMS,
             });
         }
-        let mut values = Vec::with_capacity(count);
+        let mut values = self.reserve_collection(count, MIN_NAMED_DIGEST_WIRE_BYTES, field)?;
         for _ in 0..count {
             let name = self.identifier("trusted item name")?;
             values.push(
@@ -1540,7 +1694,7 @@ impl<'a> CapsuleReader<'a> {
                 max: crate::MAX_PROPERTIES,
             });
         }
-        let mut values = Vec::with_capacity(count);
+        let mut values = self.reserve_collection(count, 1, "proof properties")?;
         for _ in 0..count {
             values.push(parse_property_tag(self.u8()?)?);
         }
@@ -1556,7 +1710,10 @@ impl<'a> CapsuleReader<'a> {
             request_identity: self.digest()?,
             challenge: self.digest()?,
             transcript_identity: self.digest()?,
-            sealed_result: self.payload()?,
+            sealed_result: self.payload(
+                "sealed proof result",
+                MAX_PROOF_CAPSULE_SEALED_RESULT_BYTES_V1,
+            )?,
         })
     }
 
@@ -1572,6 +1729,7 @@ impl<'a> CapsuleReader<'a> {
         match self.u8()? {
             0 => Ok(None),
             1 => Ok(Some(ProofCapsuleFreshnessIdentityV1::new_inert(
+                self.digest()?,
                 self.digest()?,
                 self.digest()?,
                 self.digest()?,
@@ -1710,21 +1868,40 @@ fn parse_outcome_tag(value: u8) -> Result<ProofOutcome, ProofCapsuleDecodeErrorV
 #[non_exhaustive]
 pub enum ProofCapsuleBuildErrorV1 {
     Model(ModelError),
-    TooLarge { max: usize },
-    TooManyItems { field: &'static str, max: usize },
-    PropertyCountOutOfRange { min: usize, max: usize },
-    DuplicateItem { field: &'static str },
-    ZeroIdentity { field: &'static str },
+    TooLarge {
+        max: usize,
+    },
+    TooManyItems {
+        field: &'static str,
+        max: usize,
+    },
+    PropertyCountOutOfRange {
+        min: usize,
+        max: usize,
+    },
+    DuplicateItem {
+        field: &'static str,
+    },
+    ZeroIdentity {
+        field: &'static str,
+    },
     ZeroCorrelation,
     ZeroLedgerGeneration,
-    EmptyPayload,
-    FreshnessMismatch { field: &'static str },
+    PayloadLengthOutOfRange {
+        field: &'static str,
+        value: u64,
+        max: usize,
+    },
+    FreshnessMismatch {
+        field: &'static str,
+    },
     ClaimsOnIncompleteProof,
     IncompleteProof,
     MissingPersistentFreshness,
     UnexpectedPersistentFreshness,
     PolicyIdentityMismatch,
     ProofTargetMismatch,
+    FinalizedPayloadMismatch,
     VerifierPolicyMismatch,
 }
 
@@ -1743,7 +1920,9 @@ impl fmt::Display for ProofCapsuleBuildErrorV1 {
             Self::ZeroIdentity { field } => write!(formatter, "{field} must not be zero"),
             Self::ZeroCorrelation => formatter.write_str("correlation ID must not be zero"),
             Self::ZeroLedgerGeneration => formatter.write_str("ledger generation must not be zero"),
-            Self::EmptyPayload => formatter.write_str("payload identity has zero length"),
+            Self::PayloadLengthOutOfRange { field, value, max } => {
+                write!(formatter, "{field} length {value} must be in 1..={max}")
+            }
             Self::FreshnessMismatch { field } => {
                 write!(
                     formatter,
@@ -1767,6 +1946,8 @@ impl fmt::Display for ProofCapsuleBuildErrorV1 {
             Self::ProofTargetMismatch => {
                 formatter.write_str("capsule proof target does not match proof result")
             }
+            Self::FinalizedPayloadMismatch => formatter
+                .write_str("capsule finalized payload does not match proof/executable binding"),
             Self::VerifierPolicyMismatch => formatter
                 .write_str("verifier policy model or tool identities do not match execution"),
         }
@@ -1792,6 +1973,18 @@ pub enum ProofCapsuleDecodeErrorV1 {
         field: &'static str,
         value: usize,
         max: usize,
+    },
+    CollectionMinimumBytesOverflow {
+        field: &'static str,
+    },
+    TruncatedCollection {
+        field: &'static str,
+        minimum: usize,
+        remaining: usize,
+    },
+    CollectionAllocationFailed {
+        field: &'static str,
+        count: usize,
     },
     TextLengthOutOfRange {
         field: &'static str,
@@ -1839,6 +2032,20 @@ impl fmt::Display for ProofCapsuleDecodeErrorV1 {
             Self::CountOutOfRange { field, value, max } => {
                 write!(formatter, "{field} count {value} exceeds {max}")
             }
+            Self::CollectionMinimumBytesOverflow { field } => {
+                write!(formatter, "{field} minimum encoded length overflowed")
+            }
+            Self::TruncatedCollection {
+                field,
+                minimum,
+                remaining,
+            } => write!(
+                formatter,
+                "{field} requires at least {minimum} bytes but only {remaining} remain"
+            ),
+            Self::CollectionAllocationFailed { field, count } => {
+                write!(formatter, "cannot reserve {count} {field} entries")
+            }
             Self::TextLengthOutOfRange { field, max } => {
                 write!(formatter, "{field} text length must be in 1..={max}")
             }
@@ -1881,9 +2088,9 @@ impl From<ProofCapsuleBuildErrorV1> for ProofCapsuleDecodeErrorV1 {
 pub enum ProofCapsuleIdentityFieldV1 {
     Capsule,
     Artifact,
-    Envelope,
     Freshness,
     LedgerNamespace,
+    PreviousLedgerState,
     LedgerState,
     ProofBinding,
     Challenge,
@@ -1897,9 +2104,9 @@ impl ProofCapsuleIdentityFieldV1 {
         match self {
             Self::Capsule => "capsule",
             Self::Artifact => "artifact",
-            Self::Envelope => "envelope",
             Self::Freshness => "freshness kind",
             Self::LedgerNamespace => "ledger namespace",
+            Self::PreviousLedgerState => "previous ledger state",
             Self::LedgerState => "ledger state",
             Self::ProofBinding => "proof binding",
             Self::Challenge => "challenge",
@@ -1912,17 +2119,17 @@ impl ProofCapsuleIdentityFieldV1 {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
-pub enum ProofCapsuleAdmissionErrorV1 {
+pub enum ProofCapsuleContextErrorV1 {
     Decode(ProofCapsuleDecodeErrorV1),
     IdentitySubstitution { field: ProofCapsuleIdentityFieldV1 },
     StaleLedgerGeneration { expected: u64, actual: u64 },
     UnexpectedLedgerGeneration { expected: u64, actual: u64 },
-    CapsuleReplay,
-    ExecutionReplay,
-    PersistentProofReplay,
+    CapsuleDuplicate,
+    ExecutionDuplicate,
+    PersistentProofDuplicate,
 }
 
-impl fmt::Display for ProofCapsuleAdmissionErrorV1 {
+impl fmt::Display for ProofCapsuleContextErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Decode(error) => write!(formatter, "cannot decode proof capsule: {error}"),
@@ -1937,21 +2144,47 @@ impl fmt::Display for ProofCapsuleAdmissionErrorV1 {
                 formatter,
                 "unexpected future ledger generation {actual}; expected {expected}"
             ),
-            Self::CapsuleReplay => formatter.write_str("proof capsule was already consumed"),
-            Self::ExecutionReplay => {
-                formatter.write_str("proof execution correlation was already consumed")
+            Self::CapsuleDuplicate => {
+                formatter.write_str("proof capsule was already recorded in this process")
             }
-            Self::PersistentProofReplay => {
-                formatter.write_str("persistent proof binding was already consumed")
+            Self::ExecutionDuplicate => {
+                formatter.write_str("proof execution was already recorded in this process")
+            }
+            Self::PersistentProofDuplicate => {
+                formatter.write_str("persistent proof was already recorded in this process")
             }
         }
     }
 }
 
-impl std::error::Error for ProofCapsuleAdmissionErrorV1 {}
+impl std::error::Error for ProofCapsuleContextErrorV1 {}
 
-impl From<ProofCapsuleDecodeErrorV1> for ProofCapsuleAdmissionErrorV1 {
+impl From<ProofCapsuleDecodeErrorV1> for ProofCapsuleContextErrorV1 {
     fn from(value: ProofCapsuleDecodeErrorV1) -> Self {
         Self::Decode(value)
+    }
+}
+
+#[cfg(test)]
+mod capsule_regression_tests {
+    use fe2o3_artifacts::{DigestBytes, PayloadDigest};
+
+    use super::*;
+
+    #[test]
+    fn persistent_projection_rejects_finalized_payload_substitution() {
+        let capsule =
+            ProofCapsulePayloadIdentityV1::finalized_hsaco(4096, Digest::from_bytes([0x41; 32]))
+                .unwrap();
+        let substituted =
+            PayloadDigest::new(DigestAlgorithm::Sha256, DigestBytes::from_bytes([0x42; 32]));
+        let exact =
+            PayloadDigest::new(DigestAlgorithm::Sha256, DigestBytes::from_bytes([0x41; 32]));
+
+        assert_eq!(require_bound_finalized_payload(capsule, exact), Ok(()));
+        assert_eq!(
+            require_bound_finalized_payload(capsule, substituted),
+            Err(ProofCapsuleBuildErrorV1::FinalizedPayloadMismatch)
+        );
     }
 }
