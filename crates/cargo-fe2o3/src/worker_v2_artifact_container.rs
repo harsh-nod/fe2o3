@@ -1543,6 +1543,19 @@ mod tests {
             .collect()
     }
 
+    #[cfg(feature = "worker-v2-fault-injection-test-only")]
+    fn envelope_publication_temp_residue(directory: &TestDirectory) -> Vec<PathBuf> {
+        fs::read_dir(&directory.0)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                let name = path.file_name().unwrap().to_string_lossy();
+                name.starts_with(".fe2o3-worker-v2-load-envelope-v1-")
+                    && name.contains(".envelope.tmp-")
+            })
+            .collect()
+    }
+
     fn field(spec: FrozenFieldV1) -> DescriptorFieldAssemblyV1 {
         DescriptorFieldAssemblyV1 {
             name: spec.name.to_owned(),
@@ -2144,6 +2157,77 @@ mod tests {
             .unwrap();
         assert!(matches!(completed, ResumeMarkerStateV1::Completed { .. }));
         assert_eq!(restarted.load().unwrap(), Some(completed));
+    }
+
+    #[test]
+    #[cfg(feature = "worker-v2-fault-injection-test-only")]
+    fn repeated_envelope_temp_synced_crashes_are_bounded_and_recoverable() {
+        let directory = TestDirectory::new();
+        let (publisher, envelope, _) = canonical_envelope_fixture(&directory);
+        let store = WorkerV2ResumeStoreV1::open(&directory.0, &publisher).unwrap();
+        let (publication, attempt, receipt, intent, ready) =
+            stage_required_ready(&store, &publisher, &envelope);
+        fs::write(
+            directory.0.join("fault-envelope-input"),
+            envelope.to_bytes(),
+        )
+        .unwrap();
+        drop(store);
+
+        for cycle in 1..=3 {
+            let interrupted = std::process::Command::new(std::env::current_exe().unwrap())
+                .arg("--exact")
+                .arg(
+                    "worker_v2_artifact_container::tests::required_envelope_publication_fault_helper",
+                )
+                .env(ENVELOPE_FAULT_HELPER_DIR_ENV, &directory.0)
+                .env(
+                    "FE2O3_TEST_WORKER_V2_FAULT_POINT_V1",
+                    "envelope-temp-synced",
+                )
+                .status()
+                .unwrap();
+            assert_eq!(interrupted.code(), Some(86), "crash cycle {cycle}");
+            assert_eq!(
+                envelope_publication_temp_residue(&directory).len(),
+                1,
+                "crash cycle {cycle} accumulated publication temps"
+            );
+        }
+
+        let restarted = WorkerV2ResumeStoreV1::open(&directory.0, &publisher).unwrap();
+        assert!(envelope_publication_temp_residue(&directory).is_empty());
+        assert_eq!(restarted.load().unwrap(), Some(ready));
+        let recovered_intent = recover_worker_v2_intent_v1(&restarted, &publisher, ready).unwrap();
+        let inputs = restarted.recover_envelope_inputs(attempt).unwrap();
+        let claim = recover_published_hsaco_claim_for_attempt_v1(
+            &directory.0,
+            &publisher,
+            attempt,
+            recovered_intent.record().plan(),
+            recovered_intent.record().upstream_evidence(),
+            receipt,
+        )
+        .unwrap();
+        let expected = assemble_recovered_worker_v2_load_envelope_v1(
+            &publisher,
+            recovered_intent.record().plan(),
+            recovered_intent.record().upstream_evidence(),
+            recovered_intent.exact_output(),
+            claim,
+            &inputs,
+        )
+        .unwrap();
+        let completed = restarted
+            .persist_envelope_and_completed(publication, attempt, intent, receipt, &expected)
+            .unwrap();
+        assert!(matches!(completed, ResumeMarkerStateV1::Completed { .. }));
+        assert_eq!(restarted.load().unwrap(), Some(completed));
+        assert!(envelope_publication_temp_residue(&directory).is_empty());
+        assert_eq!(
+            restarted.recover_load_envelope(receipt).unwrap().to_bytes(),
+            expected.to_bytes()
+        );
     }
 
     #[test]

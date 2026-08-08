@@ -617,6 +617,19 @@ fn envelope_input_residue(directory: &TestDirectory) -> Vec<PathBuf> {
         .collect()
 }
 
+#[cfg(feature = "worker-v2-fault-injection-test-only")]
+fn envelope_publication_temp_residue(directory: &TestDirectory) -> Vec<PathBuf> {
+    fs::read_dir(directory.0.join("artifacts"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            let name = path.file_name().unwrap().to_string_lossy();
+            name.starts_with(".fe2o3-worker-v2-load-envelope-v1-")
+                && name.contains(".envelope.tmp-")
+        })
+        .collect()
+}
+
 #[test]
 fn valid_worker_output_persists_before_publication_and_cleans_exact_restart_state() {
     let directory = TestDirectory::new();
@@ -834,6 +847,55 @@ fn required_cov6_production_wrapper_recovers_after_published_crash() {
         [fixture.expected_publication]
     );
     assert!(restart_records(&directory).is_empty());
+}
+
+#[test]
+#[cfg(feature = "worker-v2-fault-injection-test-only")]
+fn repeated_required_envelope_temp_crashes_are_bounded_and_recover() {
+    let directory = TestDirectory::new();
+    let fixture = required_alpha_zeta_publication_fixture(&directory);
+
+    for cycle in 1..=3 {
+        let interrupted = run_wrapper_with_options(
+            &directory,
+            &fixture.config,
+            "publish-valid",
+            fixture.cov6,
+            Some("envelope-temp-synced"),
+        );
+        assert_eq!(
+            interrupted.status.code(),
+            Some(86),
+            "crash cycle {cycle}: {}",
+            stderr(&interrupted)
+        );
+        assert_eq!(
+            envelope_publication_temp_residue(&directory).len(),
+            1,
+            "crash cycle {cycle} accumulated publication temps"
+        );
+        if cycle == 1 {
+            fs::remove_file(directory.0.join("spawned")).unwrap();
+            fs::remove_file(directory.0.join("envelope-inputs.capsule")).unwrap();
+        } else {
+            assert!(
+                !directory.0.join("spawned").exists(),
+                "crash cycle {cycle} unexpectedly spawned rustc"
+            );
+        }
+    }
+
+    let recovered =
+        run_wrapper_with_options(&directory, &fixture.config, "fail", fixture.cov6, None);
+    assert!(recovered.status.success(), "{}", stderr(&recovered));
+    assert!(!directory.0.join("spawned").exists());
+    assert!(envelope_publication_temp_residue(&directory).is_empty());
+    assert!(envelope_input_residue(&directory).is_empty());
+    assert!(restart_records(&directory).is_empty());
+    assert_eq!(
+        published_artifacts(&directory),
+        [fixture.expected_publication]
+    );
 }
 
 #[test]
