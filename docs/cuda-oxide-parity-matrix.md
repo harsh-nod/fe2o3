@@ -14,18 +14,17 @@ and its machine-readable TSV are validated with
 
 <!-- parity-status:baseline:start -->
 The fixed comparison point is the fetched cuda-oxide `origin/main` commit
-`cd5ef3941d3347c7f6fcbfc78ef0fa7f4f179d87` from 2026-08-05. The primary
+`2db97134d9a3a79fe71c211e65a616dacdf03235` from 2026-08-07. The primary
 source is `cuda-oxide-book/appendix/supported-features.md` at that commit. Its
 94 feature rows are reproduced below in the same category order, including
 partial, experimental, planned, and N/A rows. The supplemental audit also
 accounts for capabilities demonstrated elsewhere in the repository.
 
 The fe2o3 current-state column is based on commit
-`37eee8f15b985190449ece7a93f4ab386aa3cb18`.
+`1164c06c8b106b9a97f7e84c301196a449439b41`.
 <!-- parity-status:baseline:end -->
 
-The source of truth now pins cuda-oxide commit
-`2db97134d9a3a79fe71c211e65a616dacdf03235` from 2026-08-07. Its supported
+The source of truth now pins the cuda-oxide commit and date above. Its supported
 feature appendix is byte-identical to the prior snapshot, so the 94-row scope is
 unchanged. Post-snapshot fe2o3 updates extend the bounded `gfx942` Worker V2 and
 general typed foundations without changing any row to Complete. The archived
@@ -164,8 +163,8 @@ pass.
 <!-- parity-status:counts:start -->
 | Scope | Complete | Partial | Missing | N/A | Total |
 |:--|--:|--:|--:|--:|--:|
-| Normative | 0 | 45 | 37 | 12 | 94 |
-| Supplemental | 0 | 10 | 5 | 0 | 15 |
+| Normative | 0 | 50 | 32 | 12 | 94 |
+| Supplemental | 0 | 11 | 4 | 0 | 15 |
 <!-- parity-status:counts:end -->
 
 An IR type, schema, parser, or isolated proof is classified as **Partial** only
@@ -500,7 +499,7 @@ The detailed dependencies and exit criteria are in
 
 | ID | cuda-oxide feature | Baseline | Class | fe2o3 now | AMD/fe2o3 acceptance target | Gate |
 |:--|:--|:--|:--|:--|:--|:--|
-| 01 | HMM / Unified Memory Management | Full | AMD-equivalent | Missing | Fine-grained host/device shared allocations with capability checks; reference captures retain host lifetime and fail when the platform cannot provide coherent access | G3, G6 |
+| 01 | HMM / Unified Memory Management | Full | AMD-equivalent | Partial | Fine-grained host/device shared allocations with capability checks; reference captures retain host lifetime and fail when the platform cannot provide coherent access | G3, G6 |
 | 02 | Unified Struct ABI without `#[repr(C)]` | Full | Exact | Partial | Host and device use rustc-reported `repr(Rust)` layout, including padding and reordered fields | G2, G3 |
 | 03 | Dynamic Layout Matching | Full | Exact | Partial | Layout importer records field offset order, size, alignment, variants, and explicit padding; ABI tests compare host and device views | G2 |
 | 04 | Pointer Distance (`offset_from`) | Full | Exact | Missing | Signed/unsigned element and byte distances use pointee layout, provenance checks, and reject zero-sized pointees where Rust requires it | G2 |
@@ -545,7 +544,7 @@ The detailed dependencies and exit criteria are in
 |:--|:--|:--|:--|:--|:--|:--|
 | 24 | 64-bit Arithmetic | Full | Exact | Partial | Signed/unsigned arithmetic, comparison, shifts, bitwise operations, overflow forms, and descriptor packing pass CPU/GPU differential tests | G1, G2 |
 | 25 | Type Casting (all kinds) | Full | Exact | Partial | Integer/float widths, bitcasts, pointer casts, coercions, pointer/integer conversions, and provenance policy are explicit and tested | G2 |
-| 26 | Packed bf16x2 FMA | Full | AMD-equivalent | Missing | Target-gated packed BF16 FMA uses an AMD intrinsic or a documented equivalent sequence with matching lane and rounding semantics | G4 |
+| 26 | Packed bf16x2 FMA | Full | AMD-equivalent | Partial | Target-gated packed BF16 FMA uses an AMD intrinsic or a documented equivalent sequence with matching lane and rounding semantics | G4 |
 
 ### Compiler: Interop
 
@@ -574,7 +573,7 @@ The detailed dependencies and exit criteria are in
 | 37 | PTX Output | Full | AMD-equivalent | Partial | General pipeline emits target-correct HSACO for the declared AMD target set; elementwise recognition is not the default path | G1 |
 | 38 | NVVM IR Output | Full | AMD-equivalent | Partial | Emit inspectable, validated AMDGPU LLVM IR/bitcode with target and code-object policy recorded | G1, G6 |
 | 39 | LTOIR Linking | Full | AMD-equivalent | Partial | Link AMDGPU bitcode/relocatable device artifacts with deterministic provenance and option records | G6 |
-| 40 | Float Math Intrinsics (libdevice) | Full | AMD-equivalent | Missing | Rust float methods map to OCML/OCKL or LLVM intrinsics with target, precision, denormal, and contraction policy tests | G4 |
+| 40 | Float Math Intrinsics (libdevice) | Full | AMD-equivalent | Partial | Rust float methods map to OCML/OCKL or LLVM intrinsics with target, precision, denormal, and contraction policy tests | G4 |
 | 41 | Pipeline Inspection | Full | Exact | Partial | `cargo fe2o3 pipeline` shows imported MIR, post-SSA IR, `gpu.*`, lowered LLVM IR, and artifact metadata | G1 |
 | 42 | PTX Inspect | Full | AMD-equivalent | Partial | `cargo fe2o3 inspect` prints AMDGPU LLVM, disassembly/metadata, or selected bundle payload without executing | G1, G3 |
 | 43 | Local Clean | Full | Exact | Partial | `cargo fe2o3 clean` safely removes only guarded `target/fe2o3` output; pinned cuda-oxide removes the full project target directory | G0 |
@@ -590,7 +589,7 @@ The detailed dependencies and exit criteria are in
 | 48 | `DisjointSlice<T, IndexSpace>` | Full | Exact | Partial | Index-space and allocation-aware writable view accepts only matching branded witnesses; safe writes are bounded and disjoint | G0, G3, G5 |
 | 49 | `ThreadIndex<'kernel, IndexSpace>` | Full | Exact | Partial | Opaque, launch-branded, non-transferable, non-`Copy` witness with checked 1D/2D/3D constructors | G0, G3, G5 |
 | 50 | Proof-carrying static views | Full | Exact | Missing | One checked tile/view grants statically bounded constant accesses without repeated checks, with compile-fail coverage | G5 |
-| 51 | `PreparedLaunch<K>` | Full | Exact | Missing | Reusable geometry/resource proof is branded to kernel, artifact, context, dimensions, and capability set | G0, G3, G5 |
+| 51 | `PreparedLaunch<K>` | Full | Exact | Partial | Reusable geometry/resource proof is branded to kernel, artifact, context, dimensions, and capability set | G0, G3, G5 |
 | 52 | `ManagedBarrier` Typestate | Full | Exact | Missing | Lifecycle misuse is a compile error; Verus separately proves participant and epoch obligations | G4, G7 |
 
 ### Runtime Library: Atomics
@@ -666,7 +665,7 @@ The detailed dependencies and exit criteria are in
 
 | ID | cuda-oxide feature | Baseline | Class | fe2o3 now | AMD/fe2o3 acceptance target | Gate |
 |:--|:--|:--|:--|:--|:--|:--|
-| 87 | Rust `asm!` macro | Planned | AMD-equivalent | Missing | Lower MIR inline assembly for AMDGPU when rustc/LLVM operand semantics can be preserved; separate from `amdgpu_asm!` | G6 |
+| 87 | Rust `asm!` macro | Planned | AMD-equivalent | Partial | Lower MIR inline assembly for AMDGPU when rustc/LLVM operand semantics can be preserved; separate from `amdgpu_asm!` | G6 |
 | 88 | FP8 / MX Data Types | Planned | AMD-equivalent | Missing | Add target-gated AMD FP8 and supported microscaling formats with explicit layout, conversion, and matrix-operation tests | G6 |
 | 89 | Dynamic Dispatch (`dyn Trait`) | N/A | N/A | N/A | Not a parity deliverable; use monomorphized static dispatch | G8 |
 | 90 | Heap Allocation (`Box`, `Vec`) | N/A | N/A | N/A | No default device allocator; raw target extensions require a separate proposal | G8 |
@@ -693,7 +692,7 @@ for a credible parity release even though they are not separate appendix rows.
 | S08 | Kernel families and compile-time policies | Exact | Missing | Tuned monomorphized variants share a typed logical interface and carry policy identity in the bundle | G2, G3 |
 | S09 | Source debug metadata | Exact | Missing | Spans, functions, arguments, locals, and aggregate layouts survive supported optimization/debug modes | G2, G8 |
 | S10 | Differential MIR/codegen fuzzer | Exact | Partial | Generated accepted programs compare CPU reference behavior and AMD execution; reducer preserves failures | G8 |
-| S11 | Half/BF16 types and conversions | Exact | Missing | Scalar and packed formats, conversions, arithmetic, constants, ABI, and edge cases are tested | G2, G4 |
+| S11 | Half/BF16 types and conversions | Exact | Partial | Scalar and packed formats, conversions, arithmetic, constants, ABI, and edge cases are tested | G2, G4 |
 | S12 | Tensor/matrix instructions | AMD-equivalent | Missing | Capability-gated MFMA/WMMA abstractions cover supported shapes/types with ISA and numerical tests | G6 |
 | S13 | LDS swizzles and matrix load/store helpers | AMD-equivalent | Missing | AMD-native layouts expose bank/alignment contracts and compose with proof-aware views | G6, G7 |
 | S14 | Target auto-detection and override | AMD-equivalent | Partial | Detect AMD architecture and features, accept explicit override, and record the resolved target in every payload | G0, G3 |

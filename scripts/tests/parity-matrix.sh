@@ -110,7 +110,7 @@ expect_check_failure invalid_status "invalid status for 01: Unknown"
 reset_case
 awk '{
   if ($0 ~ /^\| 01 \|/) {
-    sub(/\| Missing \|/, "| Unknown |")
+    sub(/\| Partial \|/, "| Unknown |")
   }
   print
 }' "${TEST_ROOT}/matrix.md" >"${TEST_ROOT}/matrix.md.new"

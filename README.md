@@ -327,9 +327,10 @@ turn the foundations below into end-to-end features.
   executor, and can convert validated results into descriptive proof records.
   Bounded canonical `gfx942` machine-effect evidence additionally computes call
   closure and straight-line memory effects from caller-supplied mechanics,
-  rejecting recursion, control flow, malformed identities, and resource-limit
-  violations. It does not extract effects from LLVM IR or HSACO and does not
-  prove that supplied mechanics correspond to the executable. The verifier
+  requiring explicit complete bounds for recursion and rejecting indirect calls,
+  control flow, malformed identities, and resource-limit violations. It does not
+  extract effects from LLVM IR or HSACO and does not prove that supplied
+  mechanics correspond to the executable. The verifier
   still has no reviewed Verus adapter, authenticated binary measurement,
   compiler or machine-code refinement, or runtime authority.
 - G6/G7 includes canonical multi-input AMDGPU link plans and a standalone
