@@ -15,6 +15,7 @@ mod model;
 mod multi_kernel_proof;
 mod persistent_freshness;
 mod plan;
+mod proof_capsule;
 mod result;
 
 pub use artifact_record::{
@@ -87,6 +88,15 @@ pub use persistent_freshness::{
 pub use plan::{
     CommandSpec, InvocationPaths, InvocationPlan, MAX_PATH_BYTES, MAX_TIMEOUT_SECONDS, PlanError,
     VerifierPolicy, build_invocation_plan,
+};
+pub use proof_capsule::{
+    MAX_PROOF_CAPSULE_BYTES_V1, MAX_PROOF_CAPSULE_DEPENDENCIES_V1, MAX_PROOF_CAPSULE_FEATURES_V1,
+    PROOF_CAPSULE_MAGIC_V1, PROOF_CAPSULE_VERSION_V1, ProofCapsuleAdmissionErrorV1,
+    ProofCapsuleBuildErrorV1, ProofCapsuleDecodeErrorV1, ProofCapsuleDependencyV1,
+    ProofCapsuleExecutionV1, ProofCapsuleExpectationV1, ProofCapsuleFreshnessExpectationV1,
+    ProofCapsuleFreshnessIdentityV1, ProofCapsuleIdentityFieldV1, ProofCapsulePayloadIdentityV1,
+    ProofCapsulePolicyV1, ProofCapsuleReplayGuardV1, ProofCapsuleResultV1, ProofCapsuleTargetV1,
+    ProofCapsuleV1,
 };
 pub use result::{
     MAX_RESULT_BYTES, ProofResultV1, RecorderTermination, ResultError, parse_recorder_result,
