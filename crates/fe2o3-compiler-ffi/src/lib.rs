@@ -15,6 +15,7 @@ use sha2::{Digest, Sha256};
 
 mod descriptor_source;
 mod external_device_library_manifest;
+mod external_device_library_provider_set;
 mod module_handoff;
 mod module_handoff_v2;
 mod symbol_manifest;
@@ -37,6 +38,10 @@ pub use external_device_library_manifest::{
     MAX_EXTERNAL_DEVICE_LIBRARY_LLVM_DATA_LAYOUT_BYTES_V1,
     MAX_EXTERNAL_DEVICE_LIBRARY_LLVM_TOKEN_BYTES_V1, MAX_EXTERNAL_DEVICE_LIBRARY_MANIFEST_BYTES_V1,
     MAX_EXTERNAL_DEVICE_LIBRARY_SYMBOLS_V1,
+};
+pub use external_device_library_provider_set::{
+    ExternalDeviceLibraryProviderSetErrorV1, ExternalDeviceLibraryProviderSetValidationV1,
+    ExternalDeviceLibraryProviderV1,
 };
 pub use module_handoff::{
     CompilerModuleHandoffErrorV1, CompilerModuleHandoffPartsV1, CompilerModuleHandoffV1,
