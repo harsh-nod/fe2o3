@@ -3,10 +3,13 @@
 set -Eeuo pipefail
 export LC_ALL=C
 
-readonly TEST_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-readonly REPO_ROOT="$(cd -- "${TEST_SCRIPT_DIR}/../.." && pwd)"
+TEST_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+readonly TEST_SCRIPT_DIR
+REPO_ROOT="$(cd -- "${TEST_SCRIPT_DIR}/../.." && pwd)"
+readonly REPO_ROOT
 readonly DASHBOARD_SCRIPT="${REPO_ROOT}/scripts/parity-dashboard.sh"
-readonly TEST_ROOT="$(mktemp -d)"
+TEST_ROOT="$(mktemp -d)"
+readonly TEST_ROOT
 trap 'rm -rf "${TEST_ROOT}"' EXIT
 
 expect_failure() {

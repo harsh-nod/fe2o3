@@ -9,8 +9,10 @@ readonly MAX_LINK_LENGTH=240
 readonly MAX_RESULT_RECORD_BYTES=1048576
 readonly MAX_RESULT_ITEMS=1024
 readonly SCRIPT_PATH="${BASH_SOURCE[0]}"
-readonly SCRIPT_DIR="$(cd -- "${SCRIPT_PATH%/*}" && pwd)"
-readonly DEFAULT_REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
+SCRIPT_DIR="$(cd -- "${SCRIPT_PATH%/*}" && pwd)"
+readonly SCRIPT_DIR
+DEFAULT_REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
+readonly DEFAULT_REPO_ROOT
 
 declare -ar SCALAR_KEYS=(
   schema_version
@@ -133,9 +135,10 @@ validate_scalar() {
         die 'device_target must be a canonical AMD gfx target'
       ;;
     hardware_lane)
-      ((${#value} >= 1 && ${#value} <= 64)) &&
-        [[ "${value}" =~ ^[a-z0-9][a-z0-9._-]*$ ]] ||
+      if ((${#value} < 1 || ${#value} > 64)) ||
+        [[ ! "${value}" =~ ^[a-z0-9][a-z0-9._-]*$ ]]; then
         die 'hardware_lane must be a bounded lowercase lane identity'
+      fi
       ;;
     *) die "unknown scalar field: ${key}" ;;
   esac
@@ -588,17 +591,6 @@ validate_main() {
   printf 'parity evidence is canonical: 109 row records\n'
 }
 
-record_split_assignment() {
-  local kind="$1"
-  local assignment="$2"
-  local -n output_name="$3"
-  local -n output_value="$4"
-
-  [[ "${assignment}" == *=* ]] || die "${kind} must use NAME=VALUE syntax"
-  output_name="${assignment%%=*}"
-  output_value="${assignment#*=}"
-}
-
 record_main() {
   local repo=""
   local archive_root=""
@@ -649,7 +641,9 @@ record_main() {
             environment["${name}"]="${value}"
             ;;
           --tool)
-            record_split_assignment tool "$2" name value
+            [[ "$2" == *=* ]] || die 'tool must use NAME=VALUE syntax'
+            name="${2%%=*}"
+            value="${2#*=}"
             valid_label "${name}" || die "invalid tool label: ${name}"
             [[ "${name}" != command ]] || die 'tool label command is reserved'
             [[ ! -v "tools[${name}]" ]] || die "duplicate tool label: ${name}"
@@ -658,7 +652,9 @@ record_main() {
             tools["${name}"]="${value}"
             ;;
           --artifact)
-            record_split_assignment artifact "$2" name value
+            [[ "$2" == *=* ]] || die 'artifact must use NAME=VALUE syntax'
+            name="${2%%=*}"
+            value="${2#*=}"
             valid_label "${name}" || die "invalid artifact label: ${name}"
             [[ ! -v "artifacts[${name}]" ]] || die "duplicate artifact label: ${name}"
             valid_relative_path "${value}" ||
@@ -916,13 +912,13 @@ verify_record_main() {
   [[ "${value}" == true ]] || die 'git_clean_after must be exactly true'
 
   record_read_scalar lines index argv_count value
-  valid_uint "${value}" && ((value >= 1 && value <= MAX_RESULT_ITEMS)) ||
-    die 'invalid argv_count in result record'
+  valid_uint "${value}" || die 'invalid argv_count in result record'
+  ((value >= 1 && value <= MAX_RESULT_ITEMS)) || die 'invalid argv_count in result record'
   count="${value}"
   for ((item = 0; item < count; item++)); do
     IFS=$'\t' read -r -a fields <<<"${lines[${index}]:-}"
-    ((${#fields[@]} == 3)) && [[ "${fields[0]}" == argv ]] ||
-      die 'non-canonical argv result-record entry'
+    ((${#fields[@]} == 3)) || die 'non-canonical argv result-record entry'
+    [[ "${fields[0]}" == argv ]] || die 'non-canonical argv result-record entry'
     printf -v value '%04d' "${item}"
     [[ "${fields[1]}" == "${value}" ]] || die 'non-canonical argv index'
     valid_hex_value "${fields[2]}" || die 'invalid argv encoding'
@@ -933,13 +929,15 @@ verify_record_main() {
   done
 
   record_read_scalar lines index environment_count value
-  valid_uint "${value}" && ((value >= 1 && value <= MAX_RESULT_ITEMS)) ||
+  valid_uint "${value}" || die 'invalid environment_count in result record'
+  ((value >= 1 && value <= MAX_RESULT_ITEMS)) ||
     die 'invalid environment_count in result record'
   count="${value}"
   previous=""
   for ((item = 0; item < count; item++)); do
     IFS=$'\t' read -r -a fields <<<"${lines[${index}]:-}"
-    ((${#fields[@]} == 3)) && [[ "${fields[0]}" == environment ]] ||
+    ((${#fields[@]} == 3)) || die 'non-canonical environment result-record entry'
+    [[ "${fields[0]}" == environment ]] ||
       die 'non-canonical environment result-record entry'
     name="${fields[1]}"
     valid_name "${name}" || die 'invalid environment name in result record'
@@ -955,14 +953,14 @@ verify_record_main() {
   done
 
   record_read_scalar lines index tool_count value
-  valid_uint "${value}" && ((value >= 1 && value <= MAX_RESULT_ITEMS)) ||
-    die 'invalid tool_count in result record'
+  valid_uint "${value}" || die 'invalid tool_count in result record'
+  ((value >= 1 && value <= MAX_RESULT_ITEMS)) || die 'invalid tool_count in result record'
   count="${value}"
   previous=""
   for ((item = 0; item < count; item++)); do
     IFS=$'\t' read -r -a fields <<<"${lines[${index}]:-}"
-    ((${#fields[@]} == 4)) && [[ "${fields[0]}" == tool ]] ||
-      die 'non-canonical tool result-record entry'
+    ((${#fields[@]} == 4)) || die 'non-canonical tool result-record entry'
+    [[ "${fields[0]}" == tool ]] || die 'non-canonical tool result-record entry'
     name="${fields[1]}"
     path="${fields[2]}"
     digest="${fields[3]}"
@@ -986,7 +984,8 @@ verify_record_main() {
   [[ "${saw_command_tool}" == true ]] || die 'result record is missing command tool identity'
 
   record_read_scalar lines index exit_status value
-  valid_uint "${value}" && ((value <= 255)) || die 'invalid exit_status in result record'
+  valid_uint "${value}" || die 'invalid exit_status in result record'
+  ((value <= 255)) || die 'invalid exit_status in result record'
   [[ "${value}" == 0 ]] || die 'exit_status must be exactly 0 for passing evidence'
   record_read_scalar lines index log_path path
   valid_relative_path "${path}" || die 'invalid log_path in result record'
@@ -999,14 +998,14 @@ verify_record_main() {
   [[ "$(sha256_file "${absolute}")" == "${digest}" ]] || die 'recorded log digest mismatch'
 
   record_read_scalar lines index artifact_count value
-  valid_uint "${value}" && ((value <= MAX_RESULT_ITEMS)) ||
-    die 'invalid artifact_count in result record'
+  valid_uint "${value}" || die 'invalid artifact_count in result record'
+  ((value <= MAX_RESULT_ITEMS)) || die 'invalid artifact_count in result record'
   count="${value}"
   previous=""
   for ((item = 0; item < count; item++)); do
     IFS=$'\t' read -r -a fields <<<"${lines[${index}]:-}"
-    ((${#fields[@]} == 5)) && [[ "${fields[0]}" == artifact ]] ||
-      die 'non-canonical artifact result-record entry'
+    ((${#fields[@]} == 5)) || die 'non-canonical artifact result-record entry'
+    [[ "${fields[0]}" == artifact ]] || die 'non-canonical artifact result-record entry'
     name="${fields[1]}"
     path="${fields[2]}"
     digest="${fields[3]}"

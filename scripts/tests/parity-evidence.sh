@@ -3,10 +3,13 @@
 set -Eeuo pipefail
 export LC_ALL=C
 
-readonly TEST_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-readonly REPO_ROOT="$(cd -- "${TEST_SCRIPT_DIR}/../.." && pwd)"
+TEST_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+readonly TEST_SCRIPT_DIR
+REPO_ROOT="$(cd -- "${TEST_SCRIPT_DIR}/../.." && pwd)"
+readonly REPO_ROOT
 readonly EVIDENCE_SCRIPT="${REPO_ROOT}/scripts/parity-evidence.sh"
-readonly TEST_ROOT="$(mktemp -d)"
+TEST_ROOT="$(mktemp -d)"
+readonly TEST_ROOT
 trap 'rm -rf "${TEST_ROOT}"' EXIT
 
 row_link() {
@@ -217,15 +220,18 @@ expect_failure unknown_command 'unknown command: publish' \
 # exact scrubbed invocation to durable logs, tools, and declared artifacts.
 readonly RESULT_REPO="${TEST_ROOT}/result-repo"
 readonly RESULT_ARCHIVE="${TEST_ROOT}/result-archive"
-readonly BASH_BIN="$(realpath -- "$(command -v bash)")"
-readonly GIT_BIN="$(realpath -- "$(command -v git)")"
+BASH_BIN="$(realpath -- "$(command -v bash)")"
+readonly BASH_BIN
+GIT_BIN="$(realpath -- "$(command -v git)")"
+readonly GIT_BIN
 git init -q "${RESULT_REPO}"
 git -C "${RESULT_REPO}" config user.email evidence@example.invalid
 git -C "${RESULT_REPO}" config user.name 'Evidence Test'
 printf '%s\n' tracked >"${RESULT_REPO}/tracked.txt"
 git -C "${RESULT_REPO}" add tracked.txt
 git -C "${RESULT_REPO}" commit -qm initial
-readonly RESULT_BRANCH="$(git -C "${RESULT_REPO}" symbolic-ref --short HEAD)"
+RESULT_BRANCH="$(git -C "${RESULT_REPO}" symbolic-ref --short HEAD)"
+readonly RESULT_BRANCH
 git -C "${RESULT_REPO}" checkout -q --detach
 mkdir -p "${RESULT_ARCHIVE}/artifacts"
 
