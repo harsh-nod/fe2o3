@@ -7,6 +7,49 @@ use fe2o3_amd_target::{
     MxFormat, ParseAmdTargetIdError, StandardAtomicQuery, WavefrontWidth, WorkgroupAxis,
 };
 
+const ATOMIC_OPERATIONS: [AtomicOperation; 14] = [
+    AtomicOperation::Load,
+    AtomicOperation::Store,
+    AtomicOperation::Swap,
+    AtomicOperation::CompareExchange,
+    AtomicOperation::FetchAdd,
+    AtomicOperation::FetchSub,
+    AtomicOperation::FetchAnd,
+    AtomicOperation::FetchNand,
+    AtomicOperation::FetchOr,
+    AtomicOperation::FetchXor,
+    AtomicOperation::FetchMinSigned,
+    AtomicOperation::FetchMinUnsigned,
+    AtomicOperation::FetchMaxSigned,
+    AtomicOperation::FetchMaxUnsigned,
+];
+const ATOMIC_WIDTHS: [AtomicWidth; 5] = [
+    AtomicWidth::Bits8,
+    AtomicWidth::Bits16,
+    AtomicWidth::Bits32,
+    AtomicWidth::Bits64,
+    AtomicWidth::Bits128,
+];
+const ATOMIC_ADDRESS_SPACES: [AtomicAddressSpace; 5] = [
+    AtomicAddressSpace::Global,
+    AtomicAddressSpace::Workgroup,
+    AtomicAddressSpace::Generic,
+    AtomicAddressSpace::Private,
+    AtomicAddressSpace::Constant,
+];
+const ATOMIC_SCOPES: [AtomicScope; 3] = [
+    AtomicScope::Workgroup,
+    AtomicScope::Device,
+    AtomicScope::System,
+];
+const ATOMIC_ORDERINGS: [AtomicOrdering; 5] = [
+    AtomicOrdering::Relaxed,
+    AtomicOrdering::Acquire,
+    AtomicOrdering::Release,
+    AtomicOrdering::AcquireRelease,
+    AtomicOrdering::SequentiallyConsistent,
+];
+
 #[test]
 fn every_accepted_processor_has_a_canonical_capability_profile() {
     for &processor in KNOWN_PROCESSORS {
@@ -146,16 +189,19 @@ fn gfx942_advanced_capabilities_are_exact_and_conservative() {
         None
     );
 
-    for width in [AtomicWidth::Bits32, AtomicWidth::Bits64] {
-        assert!(gfx942.standard_atomic_widths().contains(width));
-    }
     for width in [
         AtomicWidth::Bits8,
         AtomicWidth::Bits16,
-        AtomicWidth::Bits128,
+        AtomicWidth::Bits32,
+        AtomicWidth::Bits64,
     ] {
-        assert!(!gfx942.standard_atomic_widths().contains(width));
+        assert!(gfx942.standard_atomic_widths().contains(width));
     }
+    assert!(
+        !gfx942
+            .standard_atomic_widths()
+            .contains(AtomicWidth::Bits128)
+    );
     for scope in [
         AtomicScope::Workgroup,
         AtomicScope::Device,
@@ -360,85 +406,149 @@ fn unreviewed_advanced_capability_profiles_fail_closed() {
 }
 
 #[test]
-fn gfx942_atomic_queries_validate_the_complete_semantic_tuple() {
+fn atomic_non_compare_exchange_matrix_is_exhaustive_and_evidence_correct() {
     let gfx942 = capabilities("gfx942");
-    let legal_load = StandardAtomicQuery::new(
-        AtomicOperation::Load,
-        AtomicWidth::Bits32,
-        AtomicAddressSpace::Global,
-        AtomicScope::Device,
-        AtomicOrdering::Acquire,
-    )
-    .unwrap();
-    assert_eq!(
-        gfx942.standard_atomic_legalizability(legal_load),
-        AtomicLegalizability::Legalizable
-    );
+    let unreviewed = capabilities("gfx906");
+    let mut legalizable = 0;
+    let mut runtime_evidence = 0;
+    let mut unsupported = 0;
+    let mut invalid = 0;
+    let mut unreviewed_count = 0;
 
-    let system_rmw = StandardAtomicQuery::new(
-        AtomicOperation::FetchAdd,
-        AtomicWidth::Bits64,
-        AtomicAddressSpace::Global,
-        AtomicScope::System,
-        AtomicOrdering::AcquireRelease,
-    )
-    .unwrap();
-    assert_eq!(
-        gfx942.standard_atomic_legalizability(system_rmw),
-        AtomicLegalizability::LegalizableWithRuntimeEvidence
-    );
+    for operation in ATOMIC_OPERATIONS {
+        if matches!(operation, AtomicOperation::CompareExchange) {
+            continue;
+        }
+        for width in ATOMIC_WIDTHS {
+            for address_space in ATOMIC_ADDRESS_SPACES {
+                for scope in ATOMIC_SCOPES {
+                    for ordering in ATOMIC_ORDERINGS {
+                        let query = StandardAtomicQuery::new(
+                            operation,
+                            width,
+                            address_space,
+                            scope,
+                            ordering,
+                        )
+                        .expect("only compare-exchange requires a failure ordering");
+                        let ordering_is_valid =
+                            non_compare_exchange_ordering_is_valid(operation, ordering);
+                        let expected_gfx942 = if ordering_is_valid {
+                            reviewed_tuple_status(width, address_space, scope)
+                        } else {
+                            AtomicLegalizability::Invalid
+                        };
+                        assert_eq!(
+                            gfx942.standard_atomic_legalizability(query),
+                            expected_gfx942,
+                            "gfx942 {operation:?} {width:?} {address_space:?} {scope:?} {ordering:?}"
+                        );
+                        match expected_gfx942 {
+                            AtomicLegalizability::Legalizable => legalizable += 1,
+                            AtomicLegalizability::LegalizableWithRuntimeEvidence => {
+                                runtime_evidence += 1
+                            }
+                            AtomicLegalizability::Unsupported => unsupported += 1,
+                            AtomicLegalizability::Invalid => invalid += 1,
+                            _ => panic!("reviewed gfx942 tuple returned an unexpected status"),
+                        }
 
-    let invalid_load = StandardAtomicQuery::new(
-        AtomicOperation::Load,
-        AtomicWidth::Bits32,
-        AtomicAddressSpace::Global,
-        AtomicScope::Device,
-        AtomicOrdering::Release,
-    )
-    .unwrap();
-    assert_eq!(
-        gfx942.standard_atomic_legalizability(invalid_load),
-        AtomicLegalizability::Invalid
-    );
+                        let expected_unreviewed = if ordering_is_valid {
+                            AtomicLegalizability::Unreviewed
+                        } else {
+                            AtomicLegalizability::Invalid
+                        };
+                        assert_eq!(
+                            unreviewed.standard_atomic_legalizability(query),
+                            expected_unreviewed,
+                            "unreviewed {operation:?} {width:?} {address_space:?} {scope:?} {ordering:?}"
+                        );
+                        if matches!(expected_unreviewed, AtomicLegalizability::Unreviewed) {
+                            unreviewed_count += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
 
-    let invalid_compare_exchange = StandardAtomicQuery::compare_exchange(
-        AtomicWidth::Bits32,
-        AtomicAddressSpace::Global,
-        AtomicScope::Device,
-        AtomicOrdering::Release,
-        AtomicOrdering::Acquire,
-    );
-    assert_eq!(
-        gfx942.standard_atomic_legalizability(invalid_compare_exchange),
-        AtomicLegalizability::Invalid
-    );
+    assert!(legalizable > 0);
+    assert!(runtime_evidence > 0);
+    assert!(unsupported > 0);
+    assert!(invalid > 0);
+    assert!(unreviewed_count > 0);
+}
 
-    let unsupported_width = StandardAtomicQuery::new(
-        AtomicOperation::Swap,
-        AtomicWidth::Bits16,
-        AtomicAddressSpace::Global,
-        AtomicScope::Device,
-        AtomicOrdering::Relaxed,
-    )
-    .unwrap();
-    assert_eq!(
-        gfx942.standard_atomic_legalizability(unsupported_width),
-        AtomicLegalizability::Unsupported
-    );
+#[test]
+fn atomic_compare_exchange_matrix_covers_every_success_failure_pair() {
+    let gfx942 = capabilities("gfx942");
+    let unreviewed = capabilities("gfx906");
+    let mut valid_pairs = 0;
+    let mut invalid_pairs = 0;
+    let mut legalizable = 0;
+    let mut runtime_evidence = 0;
+    let mut unsupported = 0;
+    let mut unreviewed_count = 0;
 
-    let invalid_scope = StandardAtomicQuery::new(
-        AtomicOperation::Store,
-        AtomicWidth::Bits32,
-        AtomicAddressSpace::Workgroup,
-        AtomicScope::Device,
-        AtomicOrdering::Release,
-    )
-    .unwrap();
-    assert_eq!(
-        gfx942.standard_atomic_legalizability(invalid_scope),
-        AtomicLegalizability::Unsupported
-    );
+    for width in ATOMIC_WIDTHS {
+        for address_space in ATOMIC_ADDRESS_SPACES {
+            for scope in ATOMIC_SCOPES {
+                for success in ATOMIC_ORDERINGS {
+                    for failure in ATOMIC_ORDERINGS {
+                        let query = StandardAtomicQuery::compare_exchange(
+                            width,
+                            address_space,
+                            scope,
+                            success,
+                            failure,
+                        );
+                        let pair_is_valid =
+                            compare_exchange_ordering_pair_is_valid(success, failure);
+                        let expected_gfx942 = if pair_is_valid {
+                            valid_pairs += 1;
+                            reviewed_tuple_status(width, address_space, scope)
+                        } else {
+                            invalid_pairs += 1;
+                            AtomicLegalizability::Invalid
+                        };
+                        assert_eq!(
+                            gfx942.standard_atomic_legalizability(query),
+                            expected_gfx942,
+                            "gfx942 cmpxchg {width:?} {address_space:?} {scope:?} {success:?}/{failure:?}"
+                        );
+                        if pair_is_valid {
+                            match expected_gfx942 {
+                                AtomicLegalizability::Legalizable => legalizable += 1,
+                                AtomicLegalizability::LegalizableWithRuntimeEvidence => {
+                                    runtime_evidence += 1
+                                }
+                                AtomicLegalizability::Unsupported => unsupported += 1,
+                                _ => panic!("valid reviewed CAS tuple had an unexpected status"),
+                            }
+                        }
+                        let expected_unreviewed = if pair_is_valid {
+                            unreviewed_count += 1;
+                            AtomicLegalizability::Unreviewed
+                        } else {
+                            AtomicLegalizability::Invalid
+                        };
+                        assert_eq!(
+                            unreviewed.standard_atomic_legalizability(query),
+                            expected_unreviewed,
+                            "unreviewed cmpxchg {width:?} {address_space:?} {scope:?} {success:?}/{failure:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
 
+    assert!(valid_pairs > 0);
+    assert!(invalid_pairs > 0);
+    assert!(legalizable > 0);
+    assert!(runtime_evidence > 0);
+    assert!(unsupported > 0);
+    assert!(unreviewed_count > 0);
     assert!(
         StandardAtomicQuery::new(
             AtomicOperation::CompareExchange,
@@ -452,19 +562,32 @@ fn gfx942_atomic_queries_validate_the_complete_semantic_tuple() {
 }
 
 #[test]
-fn unreviewed_target_never_becomes_atomic_unsupported_by_default() {
-    let query = StandardAtomicQuery::new(
-        AtomicOperation::FetchXor,
-        AtomicWidth::Bits32,
-        AtomicAddressSpace::Global,
-        AtomicScope::Device,
-        AtomicOrdering::Relaxed,
-    )
-    .unwrap();
-    assert_eq!(
-        capabilities("gfx906").standard_atomic_legalizability(query),
-        AtomicLegalizability::Unreviewed
-    );
+fn subword_generic_and_signedness_cases_are_explicit() {
+    let gfx942 = capabilities("gfx942");
+    for operation in [
+        AtomicOperation::FetchNand,
+        AtomicOperation::FetchMinSigned,
+        AtomicOperation::FetchMinUnsigned,
+        AtomicOperation::FetchMaxSigned,
+        AtomicOperation::FetchMaxUnsigned,
+    ] {
+        for width in [AtomicWidth::Bits8, AtomicWidth::Bits16] {
+            let query = StandardAtomicQuery::new(
+                operation,
+                width,
+                AtomicAddressSpace::Generic,
+                AtomicScope::Device,
+                AtomicOrdering::AcquireRelease,
+            )
+            .unwrap();
+            assert_eq!(
+                gfx942.standard_atomic_legalizability(query),
+                AtomicLegalizability::Legalizable,
+                "{operation:?} {width:?}"
+            );
+        }
+    }
+
     assert_eq!(
         AmdTargetId::parse("gfx999"),
         Err(ParseAmdTargetIdError::UnknownProcessor)
@@ -543,6 +666,85 @@ fn capability_derivation_error_text_is_stable() {
         CapabilityDerivationError::ContradictoryWavefrontProfile.to_string(),
         "processor has a contradictory wavefront profile"
     );
+}
+
+fn non_compare_exchange_ordering_is_valid(
+    operation: AtomicOperation,
+    ordering: AtomicOrdering,
+) -> bool {
+    match operation {
+        AtomicOperation::Load => matches!(
+            ordering,
+            AtomicOrdering::Relaxed
+                | AtomicOrdering::Acquire
+                | AtomicOrdering::SequentiallyConsistent
+        ),
+        AtomicOperation::Store => matches!(
+            ordering,
+            AtomicOrdering::Relaxed
+                | AtomicOrdering::Release
+                | AtomicOrdering::SequentiallyConsistent
+        ),
+        AtomicOperation::Swap
+        | AtomicOperation::FetchAdd
+        | AtomicOperation::FetchSub
+        | AtomicOperation::FetchAnd
+        | AtomicOperation::FetchNand
+        | AtomicOperation::FetchOr
+        | AtomicOperation::FetchXor
+        | AtomicOperation::FetchMinSigned
+        | AtomicOperation::FetchMinUnsigned
+        | AtomicOperation::FetchMaxSigned
+        | AtomicOperation::FetchMaxUnsigned => true,
+        AtomicOperation::CompareExchange => false,
+        _ => false,
+    }
+}
+
+fn compare_exchange_ordering_pair_is_valid(
+    success: AtomicOrdering,
+    failure: AtomicOrdering,
+) -> bool {
+    match success {
+        AtomicOrdering::Relaxed => matches!(failure, AtomicOrdering::Relaxed),
+        AtomicOrdering::Acquire => {
+            matches!(failure, AtomicOrdering::Relaxed | AtomicOrdering::Acquire)
+        }
+        AtomicOrdering::Release => matches!(failure, AtomicOrdering::Relaxed),
+        AtomicOrdering::AcquireRelease => {
+            matches!(failure, AtomicOrdering::Relaxed | AtomicOrdering::Acquire)
+        }
+        AtomicOrdering::SequentiallyConsistent => matches!(
+            failure,
+            AtomicOrdering::Relaxed
+                | AtomicOrdering::Acquire
+                | AtomicOrdering::SequentiallyConsistent
+        ),
+        _ => false,
+    }
+}
+
+fn reviewed_tuple_status(
+    width: AtomicWidth,
+    address_space: AtomicAddressSpace,
+    scope: AtomicScope,
+) -> AtomicLegalizability {
+    if matches!(width, AtomicWidth::Bits128)
+        || matches!(
+            address_space,
+            AtomicAddressSpace::Private | AtomicAddressSpace::Constant
+        )
+    {
+        AtomicLegalizability::Unsupported
+    } else if matches!(
+        address_space,
+        AtomicAddressSpace::Global | AtomicAddressSpace::Generic
+    ) && matches!(scope, AtomicScope::System)
+    {
+        AtomicLegalizability::LegalizableWithRuntimeEvidence
+    } else {
+        AtomicLegalizability::Legalizable
+    }
 }
 
 fn capabilities(target: &str) -> fe2o3_amd_target::AmdTargetCapabilities {

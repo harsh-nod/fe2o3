@@ -11,10 +11,13 @@ pub enum AtomicOperation {
     FetchAdd,
     FetchSub,
     FetchAnd,
+    FetchNand,
     FetchOr,
     FetchXor,
-    FetchMin,
-    FetchMax,
+    FetchMinSigned,
+    FetchMinUnsigned,
+    FetchMaxSigned,
+    FetchMaxUnsigned,
 }
 
 /// Address space containing the standard atomic object.
@@ -148,24 +151,23 @@ pub(crate) const fn evaluate_gfx942_atomic_query(
     if matches!(profile_status, AdvancedCapabilityStatus::Unreviewed) {
         return AtomicLegalizability::Unreviewed;
     }
-    if !matches!(query.width, AtomicWidth::Bits32 | AtomicWidth::Bits64) {
+    if matches!(query.width, AtomicWidth::Bits128) {
         return AtomicLegalizability::Unsupported;
     }
 
     match query.address_space {
-        AtomicAddressSpace::Workgroup => {
-            if !matches!(query.scope, AtomicScope::Workgroup) {
-                return AtomicLegalizability::Unsupported;
-            }
+        AtomicAddressSpace::Global
+        | AtomicAddressSpace::Workgroup
+        | AtomicAddressSpace::Generic => {}
+        AtomicAddressSpace::Private | AtomicAddressSpace::Constant => {
+            return AtomicLegalizability::Unsupported;
         }
-        AtomicAddressSpace::Global => {}
-        AtomicAddressSpace::Generic
-        | AtomicAddressSpace::Private
-        | AtomicAddressSpace::Constant => return AtomicLegalizability::Unsupported,
     }
 
-    if matches!(query.address_space, AtomicAddressSpace::Global)
-        && matches!(query.scope, AtomicScope::System)
+    if matches!(
+        query.address_space,
+        AtomicAddressSpace::Global | AtomicAddressSpace::Generic
+    ) && matches!(query.scope, AtomicScope::System)
     {
         AtomicLegalizability::LegalizableWithRuntimeEvidence
     } else {
@@ -201,10 +203,13 @@ const fn operation_orderings_are_valid(query: StandardAtomicQuery) -> bool {
         | AtomicOperation::FetchAdd
         | AtomicOperation::FetchSub
         | AtomicOperation::FetchAnd
+        | AtomicOperation::FetchNand
         | AtomicOperation::FetchOr
         | AtomicOperation::FetchXor
-        | AtomicOperation::FetchMin
-        | AtomicOperation::FetchMax => query.failure_ordering.is_none(),
+        | AtomicOperation::FetchMinSigned
+        | AtomicOperation::FetchMinUnsigned
+        | AtomicOperation::FetchMaxSigned
+        | AtomicOperation::FetchMaxUnsigned => query.failure_ordering.is_none(),
     }
 }
 

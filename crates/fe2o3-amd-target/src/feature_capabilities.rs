@@ -95,7 +95,8 @@ impl AtomicWidths {
     const BITS128: u8 = 1 << 4;
 
     pub(crate) const NONE: Self = Self(0);
-    pub(crate) const BITS32_AND_BITS64: Self = Self(Self::BITS32 | Self::BITS64);
+    pub(crate) const GFX942_LEGALIZABLE: Self =
+        Self(Self::BITS8 | Self::BITS16 | Self::BITS32 | Self::BITS64);
 
     /// Returns whether `width` occurs in at least one reviewed legalizable
     /// standard-atomic combination.
@@ -358,7 +359,7 @@ impl AdvancedTargetCapabilities {
             Self {
                 profile_status: AdvancedCapabilityStatus::Supported,
                 workgroup_limits: Some(WorkgroupLimits::GFX942),
-                standard_atomic_widths: AtomicWidths::BITS32_AND_BITS64,
+                standard_atomic_widths: AtomicWidths::GFX942_LEGALIZABLE,
                 standard_atomic_scopes: AtomicScopes::ALL,
                 standard_atomic_orderings: AtomicOrderings::ALL,
                 native_split_barriers: AdvancedCapabilityStatus::Unsupported,

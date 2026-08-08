@@ -48,17 +48,20 @@ runtime evidence that its allocation and mapping are eligible. An instruction
 family is not itself a complete high-level matrix or asynchronous-copy
 contract.
 
-The `gfx942` profile admits wave64 workgroups of at most 1024 work-items,
-reviewed 32- and 64-bit standard atomic legalizability for selected complete
-operation/address-space/scope/ordering tuples, FNUZ E4M3/E5M2 encodings, and a
-bounded set of MFMA numerical families. Legalizability does not claim a
-machine-native atomic instruction. The profile rejects native split barriers,
-OCP FP8, MX formats, and profiling markers. AMD flat-workgroup-size and
-waves-per-EU metadata are target facts, but minimum-workgroups-per-compute-unit
-remains unsupported until there is a reviewed occupancy translation. Device
-printf and debug-trap observation require runtime evidence. These facts do not
-authorize a source operation: exact matrix shapes/layouts, linked device
-libraries, and launch admission remain separate checks.
+The `gfx942` profile admits wave64 workgroups of at most 1024 work-items and
+reviewed 8-, 16-, 32-, and 64-bit standard atomic legalizability for selected
+complete operation/address-space/scope/ordering tuples. Subword and generic
+address-space legalizability may require CAS loops or flat operations;
+legalizability never claims a machine-native atomic instruction. Signed and
+unsigned min/max are distinct operations. The profile also admits FNUZ
+E4M3/E5M2 encodings and a bounded set of MFMA numerical families. It rejects
+native split barriers, OCP FP8, MX formats, and profiling markers. AMD
+flat-workgroup-size and waves-per-EU metadata are target facts, but
+minimum-workgroups-per-compute-unit remains unsupported until there is a
+reviewed occupancy translation. Device printf and debug-trap observation
+require runtime evidence. These facts do not authorize a source operation:
+exact matrix shapes/layouts, linked device libraries, and launch admission
+remain separate checks.
 
 ```rust
 use fe2o3_amd_target::{AmdTargetId, CapabilitySupport, WavefrontWidth};
