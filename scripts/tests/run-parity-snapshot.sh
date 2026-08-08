@@ -134,6 +134,7 @@ readonly FAILURE_ARCHIVE="${TEST_ROOT}/failure-archive"
 readonly COLLISION_ARCHIVE="${TEST_ROOT}/collision-archive"
 readonly ATTACHED_ARCHIVE="${TEST_ROOT}/attached-archive"
 readonly WORKER_ARCHIVE="${TEST_ROOT}/worker-archive"
+readonly ALPHA_ZETA_ARCHIVE="${TEST_ROOT}/alpha-zeta-archive"
 readonly TEST_HOME="${TEST_ROOT}/home"
 readonly RECORDED_PATH="${PASS_BIN}:/usr/bin:/bin"
 readonly FAIL_PATH="${FAIL_BIN}:/usr/bin:/bin"
@@ -141,10 +142,11 @@ readonly LLVM_LINK_WORKER="${PASS_BIN}/llvm-link-worker"
 readonly LLVM_AS="${PASS_BIN}/llvm-as"
 readonly LLVM_LINK_WORKER_BUILD_ID='fe2o3-worker-v1-sha256-0123456789abcdef'
 readonly LLVM_BUILD_ID='7.2.4'
+readonly ALPHA_ZETA_SHA256='3a916cdabca05ac74d340889aab2067221d6d1252a7cde13e61c1786252565c4'
 
 mkdir -p -- "${FIXTURE_REPO}" "${ATTACHED_REPO}" "${ARCHIVE}" \
   "${FAILURE_ARCHIVE}" "${COLLISION_ARCHIVE}" "${ATTACHED_ARCHIVE}" \
-  "${WORKER_ARCHIVE}" \
+  "${WORKER_ARCHIVE}" "${ALPHA_ZETA_ARCHIVE}" \
   "${TEST_HOME}/.cargo" \
   "${TEST_HOME}/.rustup"
 write_fake_repo "${FIXTURE_REPO}"
@@ -156,6 +158,7 @@ git -C "${FIXTURE_REPO}" checkout --detach -q
 OUTPUT="$(${RUNNER} list)"
 assert_contains $'Q1\tcore'
 assert_contains $'GFX942-HARDWARE\toptional'
+assert_contains $'GFX942-ALPHA-ZETA-HARDWARE\toptional'
 
 common_args=(
   --repo "${FIXTURE_REPO}"
@@ -248,6 +251,48 @@ OUTPUT="$(${RUNNER} dry-run "${common_args[@]}" --shard Q2 \
   --gfx942-hardware --vecadd-hsaco artifacts-vecadd.hsaco)"
 assert_contains $'shard\tGFX942-HARDWARE'
 assert_contains 'FE2O3_GFX942_VECADD_HSACO'
+
+printf 'fake alpha zeta hsaco\n' >"${ALPHA_ZETA_ARCHIVE}/artifacts-alpha-zeta.hsaco"
+alpha_zeta_args=(
+  --repo "${FIXTURE_REPO}"
+  --archive-root "${ALPHA_ZETA_ARCHIVE}"
+  --path "${RECORDED_PATH}"
+  --home "${TEST_HOME}"
+  --cargo-home "${TEST_HOME}/.cargo"
+  --rustup-home "${TEST_HOME}/.rustup"
+  --timeout-seconds 30
+  --shard Q2
+  --gfx942-alpha-zeta-hardware
+  --alpha-zeta-hsaco artifacts-alpha-zeta.hsaco
+  --alpha-zeta-sha256 "${ALPHA_ZETA_SHA256}"
+)
+OUTPUT="$(${RUNNER} dry-run "${alpha_zeta_args[@]}")"
+assert_contains $'shard\tGFX942-ALPHA-ZETA-HARDWARE'
+assert_contains 'FE2O3_RUN_GFX942_TWO_KERNEL'
+assert_contains 'FE2O3_GFX942_ALPHA_ZETA_HSACO'
+assert_contains 'FE2O3_GFX942_ALPHA_ZETA_SHA256'
+assert_contains "$(hex_encode gfx942_cov6_alpha_then_zeta_generated_safe_spi_with_fake_authenticator)"
+"${RUNNER}" run "${alpha_zeta_args[@]}" >/dev/null
+readonly ALPHA_ZETA_RECORD="${ALPHA_ZETA_ARCHIVE}/records/gfx942-alpha-zeta-hardware.tsv"
+readonly ALPHA_ZETA_INVOCATIONS="${ALPHA_ZETA_ARCHIVE}/work/gfx942-alpha-zeta-hardware/output/invocations.tsv"
+grep -Fq $'environment\tFE2O3_RUN_GFX942_TWO_KERNEL\t31' "${ALPHA_ZETA_RECORD}" ||
+  fail 'alpha/zeta record omitted its explicit opt-in'
+grep -Fq $'environment\tFE2O3_GFX942_ALPHA_ZETA_SHA256\t'"$(hex_encode "${ALPHA_ZETA_SHA256}")" \
+  "${ALPHA_ZETA_RECORD}" || fail 'alpha/zeta record omitted the expected digest'
+grep -Fq $'artifact\talpha-zeta-hsaco\tartifacts-alpha-zeta.hsaco\t' \
+  "${ALPHA_ZETA_RECORD}" || fail 'alpha/zeta record omitted the pinned artifact'
+grep -Fq 'gfx942_cov6_alpha_then_zeta_generated_safe_spi_with_fake_authenticator' \
+  "${ALPHA_ZETA_INVOCATIONS}" || fail 'alpha/zeta shard invoked the wrong test'
+
+expect_failure "${RUNNER}" dry-run "${common_args[@]}" --shard Q2 \
+  --gfx942-alpha-zeta-hardware \
+  --alpha-zeta-hsaco artifacts-alpha-zeta.hsaco
+assert_contains 'requires a lowercase --alpha-zeta-sha256 digest'
+expect_failure "${RUNNER}" dry-run "${common_args[@]}" --shard Q2 \
+  --gfx942-alpha-zeta-hardware \
+  --alpha-zeta-hsaco artifacts-alpha-zeta.hsaco \
+  --alpha-zeta-sha256 "${ALPHA_ZETA_SHA256^^}"
+assert_contains 'requires a lowercase --alpha-zeta-sha256 digest'
 
 worker_args=(
   --repo "${FIXTURE_REPO}"

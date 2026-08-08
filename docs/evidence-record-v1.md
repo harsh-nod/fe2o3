@@ -158,10 +158,12 @@ scripts/run-parity-snapshot.sh run \
   --vecadd-hsaco artifacts/gfx942-vecadd.hsaco
 ```
 
-The alpha/zeta vertical slice landed through
-`daf0b459ced07a25376670c83b1474eaebcd1a68` is not yet a shard in this static
-snapshot plan. The following commands reproduce the measured Worker V2 build
-and export on a ROCm 7.2.4 system. The worker measurement is derived by CMake
+The raw alpha/zeta vertical slice landed through
+`daf0b459ced07a25376670c83b1474eaebcd1a68` is not a shard in this static
+snapshot plan. The generated-safe fake-authenticator execution added at
+`dc9738e367c392f7716eacb8459ca73fa32abbbb` has a separate optional shard.
+The following commands reproduce the measured Worker V2 build and export on a
+ROCm 7.2.4 system. The worker measurement is derived by CMake
 from its pinned LLVM/LLD configuration and worker sources, not from the output
 binary alone:
 
@@ -237,6 +239,24 @@ alpha/zeta preparation, safe dispatch, and one reviewed loaded executable. Its
 semantic witnesses and prerequisite authenticator are explicit test fixtures.
 It is observed runtime-composition and hardware evidence, not production
 authentication, a dashboard `remote-hardware` strength, or a parity promotion.
+
+To archive that exact test in an isolated parity snapshot, first place the
+HSACO as a regular non-symlink file under the external archive root, then run:
+
+```bash
+scripts/run-parity-snapshot.sh run \
+  --repo "$PWD" \
+  --archive-root /evidence/snapshot-001 \
+  --shard Q5 \
+  --gfx942-alpha-zeta-hardware \
+  --alpha-zeta-hsaco artifacts/alpha-zeta-cov6.hsaco \
+  --alpha-zeta-sha256 3a916cdabca05ac74d340889aab2067221d6d1252a7cde13e61c1786252565c4
+```
+
+The shard name is `GFX942-ALPHA-ZETA-HARDWARE`. It records the expected digest,
+the artifact's independently computed record digest, and the exact test name.
+Its name and command preserve the fake-authenticator boundary; the resulting
+record does not upgrade production-authentication evidence.
 
 Durable Worker V2 publication, finalized-bundle host admission, currentness
 leases, the authenticated HSA load state machine, generated alpha/zeta safe

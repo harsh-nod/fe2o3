@@ -249,6 +249,8 @@ all five lengths through generated checked slice capabilities, typed alpha/zeta
 preparation, safe dispatch, and one reviewed loaded executable. The test-only
 semantic witnesses and explicitly fake authenticator mean this is not
 production proof authentication or a dashboard hardware-evidence strength.
+Use the optional `GFX942-ALPHA-ZETA-HARDWARE` parity snapshot shard to archive
+this exact command and artifact pin; see [Evidence Record V1](evidence-record-v1.md).
 
 ## Verus proof coverage
 
