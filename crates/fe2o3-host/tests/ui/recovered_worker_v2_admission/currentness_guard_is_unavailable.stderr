@@ -1,0 +1,15 @@
+error[E0308]: mismatched types
+ --> tests/ui/recovered_worker_v2_admission/currentness_guard_is_unavailable.rs:7:43
+  |
+7 |     let _ = Admitted::acquire_currentness(recovered);
+  |             ----------------------------- ^^^^^^^^^ expected `&AdmittedFinalizedWorkerV2BundleV1`, found `&RecoveredWorkerV2PinnedDescriptorV1`
+  |             |
+  |             arguments to this function are incorrect
+  |
+  = note: expected reference `&AdmittedFinalizedWorkerV2BundleV1`
+             found reference `&RecoveredWorkerV2PinnedDescriptorV1`
+note: method defined here
+ --> src/worker_v2_bundle_admission.rs
+  |
+  |     pub fn acquire_currentness(
+  |            ^^^^^^^^^^^^^^^^^^^
