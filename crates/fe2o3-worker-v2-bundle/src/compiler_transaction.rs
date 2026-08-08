@@ -7,23 +7,27 @@ use fe2o3_artifacts::{
     DirectLinkRequestIdentityV1, DirectLinkResponseIdentityV1, IdentityText,
     MAX_IDENTITY_TEXT_BYTES, MeasuredToolIdentity, PayloadDigest,
 };
+use fe2o3_rustc_invocation::InvocationDigestV2;
 use sha2::{Digest as _, Sha256};
 
-pub const COMPILER_TRANSACTION_EVIDENCE_MAGIC_V1: [u8; 8] = *b"FE2CTX1\0";
-pub const COMPILER_TRANSACTION_EVIDENCE_VERSION_V1: u16 = 1;
-pub const MAX_COMPILER_TRANSACTION_EVIDENCE_BYTES_V1: usize = 2 * 1024 * 1024;
-pub const MAX_COMPILER_TRANSACTION_DEPENDENCIES_V1: usize = 4096;
-pub const MAX_COMPILER_TRANSACTION_FEATURES_V1: usize = 1024;
+pub const COMPILER_TRANSACTION_EVIDENCE_MAGIC_V2: [u8; 8] = *b"FE2CTX2\0";
+pub const COMPILER_TRANSACTION_EVIDENCE_VERSION_V2: u16 = 2;
+pub const MAX_COMPILER_TRANSACTION_EVIDENCE_BYTES_V2: usize = 2 * 1024 * 1024;
+pub const MAX_COMPILER_TRANSACTION_DEPENDENCIES_V2: usize = 4096;
+pub const MAX_COMPILER_TRANSACTION_FEATURES_V2: usize = 1024;
+pub const CALLER_MEASURED_IDENTITY_ALGORITHM_V2: DigestAlgorithm = DigestAlgorithm::Sha256;
 
 const HEADER_BYTES: usize = 16;
 const FIELD_HEADER_BYTES: usize = 5;
 const DIGEST_BYTES: usize = 33;
 const SHA256_TAG: u8 = 1;
 const MAX_DEPENDENCIES_FIELD_BYTES: usize =
-    2 + MAX_COMPILER_TRANSACTION_DEPENDENCIES_V1 * (2 + MAX_IDENTITY_TEXT_BYTES + DIGEST_BYTES);
+    2 + MAX_COMPILER_TRANSACTION_DEPENDENCIES_V2 * (2 + MAX_IDENTITY_TEXT_BYTES + DIGEST_BYTES);
 const MAX_FEATURES_FIELD_BYTES: usize =
-    2 + MAX_COMPILER_TRANSACTION_FEATURES_V1 * (2 + MAX_IDENTITY_TEXT_BYTES);
+    2 + MAX_COMPILER_TRANSACTION_FEATURES_V2 * (2 + MAX_IDENTITY_TEXT_BYTES);
 const MAX_TOOL_FIELD_BYTES: usize = 4 + 2 * MAX_IDENTITY_TEXT_BYTES + 2 * DIGEST_BYTES;
+const MIN_DEPENDENCY_ENTRY_BYTES: usize = 2 + 1 + DIGEST_BYTES;
+const MIN_FEATURE_ENTRY_BYTES: usize = 2 + 1;
 
 const SOURCE_ROOT_TAG: u8 = 1;
 const DEPENDENCIES_TAG: u8 = 2;
@@ -40,25 +44,27 @@ const TARGET_TAG: u8 = 12;
 const RAW_HSACO_TAG: u8 = 13;
 const FINALIZED_HSACO_TAG: u8 = 14;
 const ARTIFACT_TAG: u8 = 15;
-const ENVELOPE_TAG: u8 = 16;
-const CAPSULE_IDENTITY_TAG: u8 = 17;
+const CAPSULE_IDENTITY_TAG: u8 = 16;
 const LAST_FIELD_TAG: u8 = CAPSULE_IDENTITY_TAG;
 
-const CAPSULE_IDENTITY_DOMAIN: &[u8] = b"FE2O3/COMPILER-TRANSACTION-EVIDENCE-CAPSULE/V1\0";
-const SOURCE_CLOSURE_IDENTITY_DOMAIN: &[u8] = b"FE2O3/COMPILER-SOURCE-CLOSURE/V1\0";
+const CAPSULE_IDENTITY_DOMAIN: &[u8] = b"FE2O3/COMPILER-TRANSACTION-EVIDENCE-CAPSULE/V2\0";
+const SOURCE_CLOSURE_IDENTITY_DOMAIN: &[u8] = b"FE2O3/COMPILER-SOURCE-CLOSURE/V2\0";
 
-macro_rules! digest_identity {
-    ($(#[$meta:meta])* $name:ident) => {
+macro_rules! caller_measured_digest_identity {
+    ($(#[$meta:meta])* $name:ident, $field:literal) => {
         $(#[$meta])*
         #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
         pub struct $name(PayloadDigest);
 
         impl $name {
-            pub const fn from_sha256(bytes: [u8; 32]) -> Self {
-                Self(PayloadDigest::new(
-                    DigestAlgorithm::Sha256,
+            pub fn try_from_sha256(
+                bytes: [u8; 32],
+            ) -> Result<Self, CompilerTransactionValidationErrorV2> {
+                require_nonzero($field, &bytes)?;
+                Ok(Self(PayloadDigest::new(
+                    CALLER_MEASURED_IDENTITY_ALGORITHM_V2,
                     DigestBytes::from_bytes(bytes),
-                ))
+                )))
             }
 
             pub const fn digest(self) -> PayloadDigest {
@@ -68,36 +74,40 @@ macro_rules! digest_identity {
     };
 }
 
-digest_identity!(
-    /// SHA-256 identity of the root source input selected for device compilation.
-    SourceRootIdentityV1
+caller_measured_digest_identity!(
+    /// Caller-measured SHA-256 identity of the root source input.
+    ///
+    /// Construction checks representation only; it does not validate the measurement's origin.
+    CallerMeasuredSourceRootIdentityV2,
+    "caller-measured source root"
 );
-digest_identity!(
-    /// SHA-256 identity of the exact final rustc invocation.
-    RustcInvocationIdentityV1
+caller_measured_digest_identity!(
+    /// Caller-measured SHA-256 identity of the backend invocation and configuration.
+    ///
+    /// Construction checks representation only; it does not validate a backend domain.
+    CallerMeasuredBackendInvocationIdentityV2,
+    "caller-measured backend invocation"
 );
-digest_identity!(
-    /// SHA-256 identity of the exact backend invocation and configuration.
-    BackendInvocationIdentityV1
+caller_measured_digest_identity!(
+    /// Caller-measured SHA-256 identity of the semantic witness bytes.
+    ///
+    /// Construction checks representation only; it does not validate witness semantics.
+    CallerMeasuredSemanticWitnessIdentityV2,
+    "caller-measured semantic witness"
 );
-digest_identity!(
-    /// SHA-256 identity of the semantic witness emitted by the frontend.
-    SemanticWitnessIdentityV1
-);
-digest_identity!(
-    /// SHA-256 identity of the canonical Kernel IR module.
-    KernelIrIdentityV1
-);
-digest_identity!(
-    /// SHA-256 identity of the exact canonical Worker V2 load envelope.
-    WorkerV2EnvelopeIdentityV1
+caller_measured_digest_identity!(
+    /// Caller-measured SHA-256 identity of the claimed canonical Kernel IR bytes.
+    ///
+    /// Construction checks representation only; it does not parse or validate Kernel IR.
+    CallerMeasuredKernelIrIdentityV2,
+    "caller-measured Kernel IR"
 );
 
 /// Domain-separated identity of one complete source/dependency/feature closure.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct SourceClosureIdentityV1([u8; 32]);
+pub struct SourceClosureIdentityV2([u8; 32]);
 
-impl SourceClosureIdentityV1 {
+impl SourceClosureIdentityV2 {
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
@@ -105,11 +115,12 @@ impl SourceClosureIdentityV1 {
 
 /// Domain-separated identity of one complete compiler-transaction capsule.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct CompilerTransactionEvidenceIdentityV1([u8; 32]);
+pub struct CompilerTransactionEvidenceIdentityV2([u8; 32]);
 
-impl CompilerTransactionEvidenceIdentityV1 {
-    pub const fn from_bytes(bytes: [u8; 32]) -> Self {
-        Self(bytes)
+impl CompilerTransactionEvidenceIdentityV2 {
+    pub fn from_bytes(bytes: [u8; 32]) -> Result<Self, CompilerTransactionValidationErrorV2> {
+        require_nonzero("compiler transaction capsule", &bytes)?;
+        Ok(Self(bytes))
     }
 
     pub const fn as_bytes(&self) -> &[u8; 32] {
@@ -117,20 +128,28 @@ impl CompilerTransactionEvidenceIdentityV1 {
     }
 }
 
-/// One named source dependency and the SHA-256 identity of its complete selected input.
+/// One named source dependency and its caller-measured SHA-256 content identity.
+///
+/// Construction checks representation only; it does not validate the measurement's origin.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CompilerSourceDependencyV1 {
+pub struct CallerMeasuredSourceDependencyV2 {
     name: IdentityText,
     identity: PayloadDigest,
 }
 
-impl CompilerSourceDependencyV1 {
-    pub fn new(
+impl CallerMeasuredSourceDependencyV2 {
+    pub fn try_from_sha256(
         name: IdentityText,
-        identity: PayloadDigest,
-    ) -> Result<Self, CompilerTransactionValidationErrorV1> {
-        require_sha256("source dependency", identity)?;
-        Ok(Self { name, identity })
+        bytes: [u8; 32],
+    ) -> Result<Self, CompilerTransactionValidationErrorV2> {
+        require_nonzero("caller-measured source dependency", &bytes)?;
+        Ok(Self {
+            name,
+            identity: PayloadDigest::new(
+                CALLER_MEASURED_IDENTITY_ALGORITHM_V2,
+                DigestBytes::from_bytes(bytes),
+            ),
+        })
     }
 
     pub const fn name(&self) -> &IdentityText {
@@ -144,27 +163,27 @@ impl CompilerSourceDependencyV1 {
 
 /// Canonical complete source closure selected for one compiler transaction.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CompilerSourceClosureV1 {
-    root: SourceRootIdentityV1,
-    dependencies: Vec<CompilerSourceDependencyV1>,
+pub struct CompilerSourceClosureV2 {
+    root: CallerMeasuredSourceRootIdentityV2,
+    dependencies: Vec<CallerMeasuredSourceDependencyV2>,
     features: Vec<IdentityText>,
 }
 
-impl CompilerSourceClosureV1 {
+impl CompilerSourceClosureV2 {
     pub fn new(
-        root: SourceRootIdentityV1,
-        mut dependencies: Vec<CompilerSourceDependencyV1>,
+        root: CallerMeasuredSourceRootIdentityV2,
+        mut dependencies: Vec<CallerMeasuredSourceDependencyV2>,
         mut features: Vec<IdentityText>,
-    ) -> Result<Self, CompilerTransactionValidationErrorV1> {
-        require_sha256("source root", root.digest())?;
-        if dependencies.len() > MAX_COMPILER_TRANSACTION_DEPENDENCIES_V1 {
-            return Err(CompilerTransactionValidationErrorV1::TooManyDependencies {
-                max: MAX_COMPILER_TRANSACTION_DEPENDENCIES_V1,
+    ) -> Result<Self, CompilerTransactionValidationErrorV2> {
+        require_sha256_nonzero("caller-measured source root", root.digest())?;
+        if dependencies.len() > MAX_COMPILER_TRANSACTION_DEPENDENCIES_V2 {
+            return Err(CompilerTransactionValidationErrorV2::TooManyDependencies {
+                max: MAX_COMPILER_TRANSACTION_DEPENDENCIES_V2,
             });
         }
-        if features.len() > MAX_COMPILER_TRANSACTION_FEATURES_V1 {
-            return Err(CompilerTransactionValidationErrorV1::TooManyFeatures {
-                max: MAX_COMPILER_TRANSACTION_FEATURES_V1,
+        if features.len() > MAX_COMPILER_TRANSACTION_FEATURES_V2 {
+            return Err(CompilerTransactionValidationErrorV2::TooManyFeatures {
+                max: MAX_COMPILER_TRANSACTION_FEATURES_V2,
             });
         }
         dependencies.sort_unstable_by(|left, right| left.name.as_str().cmp(right.name.as_str()));
@@ -172,11 +191,11 @@ impl CompilerSourceClosureV1 {
             .windows(2)
             .any(|pair| pair[0].name == pair[1].name)
         {
-            return Err(CompilerTransactionValidationErrorV1::DuplicateDependency);
+            return Err(CompilerTransactionValidationErrorV2::DuplicateDependency);
         }
         features.sort_unstable();
         if features.windows(2).any(|pair| pair[0] == pair[1]) {
-            return Err(CompilerTransactionValidationErrorV1::DuplicateFeature);
+            return Err(CompilerTransactionValidationErrorV2::DuplicateFeature);
         }
         Ok(Self {
             root,
@@ -185,11 +204,11 @@ impl CompilerSourceClosureV1 {
         })
     }
 
-    pub const fn root(&self) -> SourceRootIdentityV1 {
+    pub const fn root(&self) -> CallerMeasuredSourceRootIdentityV2 {
         self.root
     }
 
-    pub fn dependencies(&self) -> &[CompilerSourceDependencyV1] {
+    pub fn dependencies(&self) -> &[CallerMeasuredSourceDependencyV2] {
         &self.dependencies
     }
 
@@ -197,7 +216,7 @@ impl CompilerSourceClosureV1 {
         &self.features
     }
 
-    pub fn identity(&self) -> SourceClosureIdentityV1 {
+    pub fn identity(&self) -> SourceClosureIdentityV2 {
         let mut hasher = Sha256::new();
         hasher.update(SOURCE_CLOSURE_IDENTITY_DOMAIN);
         hash_digest(&mut hasher, self.root.digest());
@@ -210,27 +229,26 @@ impl CompilerSourceClosureV1 {
         for feature in &self.features {
             hash_text(&mut hasher, feature.as_str());
         }
-        SourceClosureIdentityV1(hasher.finalize().into())
+        SourceClosureIdentityV2(hasher.finalize().into())
     }
 }
 
 /// All identities supplied to one inert compiler-transaction evidence capsule.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CompilerTransactionEvidencePartsV1 {
-    pub source_closure: CompilerSourceClosureV1,
+pub struct CompilerTransactionEvidencePartsV2 {
+    pub source_closure: CompilerSourceClosureV2,
     pub rustc_tool: MeasuredToolIdentity,
-    pub rustc_invocation: RustcInvocationIdentityV1,
+    pub rustc_invocation: InvocationDigestV2,
     pub backend_tool: MeasuredToolIdentity,
-    pub backend_invocation: BackendInvocationIdentityV1,
-    pub semantic_witness: SemanticWitnessIdentityV1,
-    pub kernel_ir: KernelIrIdentityV1,
+    pub backend_invocation: CallerMeasuredBackendInvocationIdentityV2,
+    pub semantic_witness: CallerMeasuredSemanticWitnessIdentityV2,
+    pub kernel_ir: CallerMeasuredKernelIrIdentityV2,
     pub worker_request: DirectLinkRequestIdentityV1,
     pub worker_response: DirectLinkResponseIdentityV1,
     pub target: TargetIdentityV1,
     pub raw_hsaco: DirectLinkLinkedOutputIdentityV1,
     pub finalized_hsaco: DirectLinkFinalizedPayloadIdentityV1,
     pub artifact: DirectLinkContainerIdentityV1,
-    pub envelope: WorkerV2EnvelopeIdentityV1,
 }
 
 /// Bounded canonical evidence joining the complete compiler transaction.
@@ -238,45 +256,47 @@ pub struct CompilerTransactionEvidencePartsV1 {
 /// Every measurement is caller-supplied. Construction and decoding establish only
 /// canonical structure, digest-domain separation, and byte-level binding. This value
 /// authenticates no producer and grants no compiler, publication, load, or launch authority.
+/// A later external publication receipt may bind this capsule identity and a separately
+/// constructed Worker V2 load-envelope identity without introducing a hash cycle here.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CompilerTransactionEvidenceCapsuleV1 {
-    parts: CompilerTransactionEvidencePartsV1,
-    identity: CompilerTransactionEvidenceIdentityV1,
+pub struct CompilerTransactionEvidenceCapsuleV2 {
+    parts: CompilerTransactionEvidencePartsV2,
+    identity: CompilerTransactionEvidenceIdentityV2,
     encoded_len: usize,
 }
 
-impl CompilerTransactionEvidenceCapsuleV1 {
+impl CompilerTransactionEvidenceCapsuleV2 {
     pub fn new(
-        parts: CompilerTransactionEvidencePartsV1,
-    ) -> Result<Self, CompilerTransactionValidationErrorV1> {
-        Self::new_with_max_encoded_bytes(parts, MAX_COMPILER_TRANSACTION_EVIDENCE_BYTES_V1)
+        parts: CompilerTransactionEvidencePartsV2,
+    ) -> Result<Self, CompilerTransactionValidationErrorV2> {
+        Self::new_with_max_encoded_bytes(parts, MAX_COMPILER_TRANSACTION_EVIDENCE_BYTES_V2)
     }
 
     fn new_with_max_encoded_bytes(
-        parts: CompilerTransactionEvidencePartsV1,
+        parts: CompilerTransactionEvidencePartsV2,
         max_encoded_bytes: usize,
-    ) -> Result<Self, CompilerTransactionValidationErrorV1> {
+    ) -> Result<Self, CompilerTransactionValidationErrorV2> {
         validate_parts(&parts)?;
         let encoded_len = checked_encoded_total_len(&parts).ok_or(
-            CompilerTransactionValidationErrorV1::EvidenceTooLarge {
+            CompilerTransactionValidationErrorV2::EvidenceTooLarge {
                 max: max_encoded_bytes,
             },
         )?;
         if encoded_len > max_encoded_bytes {
-            return Err(CompilerTransactionValidationErrorV1::EvidenceTooLarge {
+            return Err(CompilerTransactionValidationErrorV2::EvidenceTooLarge {
                 max: max_encoded_bytes,
             });
         }
-        let mut capsule = Self {
+        let prefix = encode_prefix(&parts, encoded_len);
+        let identity = calculate_capsule_identity(&prefix)?;
+        Ok(Self {
             parts,
-            identity: CompilerTransactionEvidenceIdentityV1::from_bytes([0; 32]),
+            identity,
             encoded_len,
-        };
-        capsule.identity = calculate_capsule_identity(&capsule.encode_prefix());
-        Ok(capsule)
+        })
     }
 
-    pub fn source_closure(&self) -> &CompilerSourceClosureV1 {
+    pub fn source_closure(&self) -> &CompilerSourceClosureV2 {
         &self.parts.source_closure
     }
 
@@ -284,7 +304,7 @@ impl CompilerTransactionEvidenceCapsuleV1 {
         &self.parts.rustc_tool
     }
 
-    pub const fn rustc_invocation(&self) -> RustcInvocationIdentityV1 {
+    pub const fn rustc_invocation(&self) -> InvocationDigestV2 {
         self.parts.rustc_invocation
     }
 
@@ -292,15 +312,15 @@ impl CompilerTransactionEvidenceCapsuleV1 {
         &self.parts.backend_tool
     }
 
-    pub const fn backend_invocation(&self) -> BackendInvocationIdentityV1 {
+    pub const fn backend_invocation(&self) -> CallerMeasuredBackendInvocationIdentityV2 {
         self.parts.backend_invocation
     }
 
-    pub const fn semantic_witness(&self) -> SemanticWitnessIdentityV1 {
+    pub const fn semantic_witness(&self) -> CallerMeasuredSemanticWitnessIdentityV2 {
         self.parts.semantic_witness
     }
 
-    pub const fn kernel_ir(&self) -> KernelIrIdentityV1 {
+    pub const fn kernel_ir(&self) -> CallerMeasuredKernelIrIdentityV2 {
         self.parts.kernel_ir
     }
 
@@ -328,11 +348,7 @@ impl CompilerTransactionEvidenceCapsuleV1 {
         self.parts.artifact
     }
 
-    pub const fn envelope(&self) -> WorkerV2EnvelopeIdentityV1 {
-        self.parts.envelope
-    }
-
-    pub const fn identity(&self) -> CompilerTransactionEvidenceIdentityV1 {
+    pub const fn identity(&self) -> CompilerTransactionEvidenceIdentityV2 {
         self.identity
     }
 
@@ -359,7 +375,7 @@ impl CompilerTransactionEvidenceCapsuleV1 {
         bytes
     }
 
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self, CompilerTransactionDecodeErrorV1> {
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, CompilerTransactionDecodeErrorV2> {
         decode_capsule(bytes, None)
     }
 
@@ -369,93 +385,93 @@ impl CompilerTransactionEvidenceCapsuleV1 {
     /// identity must itself come from an authenticated/currentness boundary.
     pub fn from_bytes_for_identity(
         bytes: &[u8],
-        expected: CompilerTransactionEvidenceIdentityV1,
-    ) -> Result<Self, CompilerTransactionDecodeErrorV1> {
+        expected: CompilerTransactionEvidenceIdentityV2,
+    ) -> Result<Self, CompilerTransactionDecodeErrorV2> {
         decode_capsule(bytes, Some(expected))
     }
 
     fn encode_prefix(&self) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(self.encoded_len);
-        bytes.extend_from_slice(&COMPILER_TRANSACTION_EVIDENCE_MAGIC_V1);
-        bytes.extend_from_slice(&COMPILER_TRANSACTION_EVIDENCE_VERSION_V1.to_le_bytes());
-        bytes.extend_from_slice(&0_u16.to_le_bytes());
-        bytes.extend_from_slice(&(self.encoded_len as u32).to_le_bytes());
-        write_field(
-            &mut bytes,
-            SOURCE_ROOT_TAG,
-            &encode_digest(self.parts.source_closure.root.digest()),
-        );
-        write_dependencies_field(&mut bytes, &self.parts.source_closure);
-        write_features_field(&mut bytes, &self.parts.source_closure);
-        write_tool_field(&mut bytes, RUSTC_TOOL_TAG, &self.parts.rustc_tool);
-        write_field(
-            &mut bytes,
-            RUSTC_INVOCATION_TAG,
-            &encode_digest(self.parts.rustc_invocation.digest()),
-        );
-        write_tool_field(&mut bytes, BACKEND_TOOL_TAG, &self.parts.backend_tool);
-        write_field(
-            &mut bytes,
-            BACKEND_INVOCATION_TAG,
-            &encode_digest(self.parts.backend_invocation.digest()),
-        );
-        write_field(
-            &mut bytes,
-            SEMANTIC_WITNESS_TAG,
-            &encode_digest(self.parts.semantic_witness.digest()),
-        );
-        write_field(
-            &mut bytes,
-            KERNEL_IR_TAG,
-            &encode_digest(self.parts.kernel_ir.digest()),
-        );
-        write_field(
-            &mut bytes,
-            WORKER_REQUEST_TAG,
-            &encode_digest(self.parts.worker_request.digest()),
-        );
-        write_field(
-            &mut bytes,
-            WORKER_RESPONSE_TAG,
-            &encode_digest(self.parts.worker_response.digest()),
-        );
-        write_field(&mut bytes, TARGET_TAG, self.parts.target.as_bytes());
-        write_field(
-            &mut bytes,
-            RAW_HSACO_TAG,
-            &encode_digest(self.parts.raw_hsaco.digest()),
-        );
-        write_field(
-            &mut bytes,
-            FINALIZED_HSACO_TAG,
-            &encode_digest(self.parts.finalized_hsaco.digest()),
-        );
-        write_field(
-            &mut bytes,
-            ARTIFACT_TAG,
-            &encode_digest(self.parts.artifact.digest()),
-        );
-        write_field(
-            &mut bytes,
-            ENVELOPE_TAG,
-            &encode_digest(self.parts.envelope.digest()),
-        );
-        bytes
+        encode_prefix(&self.parts, self.encoded_len)
     }
+}
+
+fn encode_prefix(parts: &CompilerTransactionEvidencePartsV2, encoded_len: usize) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(encoded_len);
+    bytes.extend_from_slice(&COMPILER_TRANSACTION_EVIDENCE_MAGIC_V2);
+    bytes.extend_from_slice(&COMPILER_TRANSACTION_EVIDENCE_VERSION_V2.to_le_bytes());
+    bytes.extend_from_slice(&0_u16.to_le_bytes());
+    bytes.extend_from_slice(&(encoded_len as u32).to_le_bytes());
+    write_field(
+        &mut bytes,
+        SOURCE_ROOT_TAG,
+        &encode_digest(parts.source_closure.root.digest()),
+    );
+    write_dependencies_field(&mut bytes, &parts.source_closure);
+    write_features_field(&mut bytes, &parts.source_closure);
+    write_tool_field(&mut bytes, RUSTC_TOOL_TAG, &parts.rustc_tool);
+    write_field(
+        &mut bytes,
+        RUSTC_INVOCATION_TAG,
+        parts.rustc_invocation.as_bytes(),
+    );
+    write_tool_field(&mut bytes, BACKEND_TOOL_TAG, &parts.backend_tool);
+    write_field(
+        &mut bytes,
+        BACKEND_INVOCATION_TAG,
+        &encode_digest(parts.backend_invocation.digest()),
+    );
+    write_field(
+        &mut bytes,
+        SEMANTIC_WITNESS_TAG,
+        &encode_digest(parts.semantic_witness.digest()),
+    );
+    write_field(
+        &mut bytes,
+        KERNEL_IR_TAG,
+        &encode_digest(parts.kernel_ir.digest()),
+    );
+    write_field(
+        &mut bytes,
+        WORKER_REQUEST_TAG,
+        &encode_digest(parts.worker_request.digest()),
+    );
+    write_field(
+        &mut bytes,
+        WORKER_RESPONSE_TAG,
+        &encode_digest(parts.worker_response.digest()),
+    );
+    write_field(&mut bytes, TARGET_TAG, parts.target.as_bytes());
+    write_field(
+        &mut bytes,
+        RAW_HSACO_TAG,
+        &encode_digest(parts.raw_hsaco.digest()),
+    );
+    write_field(
+        &mut bytes,
+        FINALIZED_HSACO_TAG,
+        &encode_digest(parts.finalized_hsaco.digest()),
+    );
+    write_field(
+        &mut bytes,
+        ARTIFACT_TAG,
+        &encode_digest(parts.artifact.digest()),
+    );
+    bytes
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
-pub enum CompilerTransactionValidationErrorV1 {
+pub enum CompilerTransactionValidationErrorV2 {
     TooManyDependencies { max: usize },
     TooManyFeatures { max: usize },
     EvidenceTooLarge { max: usize },
     DuplicateDependency,
     DuplicateFeature,
+    ReservedZeroIdentity { field: &'static str },
     UnsupportedDigestAlgorithm { field: &'static str },
 }
 
-impl fmt::Display for CompilerTransactionValidationErrorV1 {
+impl fmt::Display for CompilerTransactionValidationErrorV2 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::TooManyDependencies { max } => {
@@ -479,6 +495,9 @@ impl fmt::Display for CompilerTransactionValidationErrorV1 {
             Self::DuplicateFeature => {
                 formatter.write_str("compiler source closure contains a duplicate feature")
             }
+            Self::ReservedZeroIdentity { field } => {
+                write!(formatter, "{field} uses the reserved all-zero identity")
+            }
             Self::UnsupportedDigestAlgorithm { field } => {
                 write!(formatter, "{field} must use SHA-256")
             }
@@ -486,11 +505,11 @@ impl fmt::Display for CompilerTransactionValidationErrorV1 {
     }
 }
 
-impl std::error::Error for CompilerTransactionValidationErrorV1 {}
+impl std::error::Error for CompilerTransactionValidationErrorV2 {}
 
 #[derive(Debug)]
 #[non_exhaustive]
-pub enum CompilerTransactionDecodeErrorV1 {
+pub enum CompilerTransactionDecodeErrorV2 {
     TooLarge {
         max: usize,
     },
@@ -516,6 +535,16 @@ pub enum CompilerTransactionDecodeErrorV1 {
         value: u64,
         max: usize,
     },
+    CollectionEncodingTooShort {
+        field: &'static str,
+        count: usize,
+        minimum: usize,
+        remaining: usize,
+    },
+    AllocationFailed {
+        field: &'static str,
+        count: usize,
+    },
     StringTooLong {
         field: &'static str,
         value: usize,
@@ -528,6 +557,7 @@ pub enum CompilerTransactionDecodeErrorV1 {
         field: &'static str,
     },
     UnknownDigestAlgorithm(u8),
+    InvalidRustcInvocationIdentity,
     NonCanonicalDependencyOrder,
     NonCanonicalFeatureOrder,
     FieldTrailingBytes {
@@ -535,11 +565,11 @@ pub enum CompilerTransactionDecodeErrorV1 {
     },
     CapsuleIdentityMismatch,
     UnexpectedCapsuleIdentity,
-    Validation(CompilerTransactionValidationErrorV1),
+    Validation(CompilerTransactionValidationErrorV2),
     NonCanonical,
 }
 
-impl fmt::Display for CompilerTransactionDecodeErrorV1 {
+impl fmt::Display for CompilerTransactionDecodeErrorV2 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::TooLarge { max } => write!(formatter, "compiler transaction capsule exceeds {max} bytes"),
@@ -554,10 +584,13 @@ impl fmt::Display for CompilerTransactionDecodeErrorV1 {
             Self::UnexpectedField { expected, actual } => write!(formatter, "expected compiler transaction field {expected}, found {actual}"),
             Self::LengthOutOfRange { field, value, max } => write!(formatter, "compiler transaction field {field} length {value} exceeds {max}"),
             Self::CountOutOfRange { field, value, max } => write!(formatter, "compiler transaction {field} count {value} exceeds {max}"),
+            Self::CollectionEncodingTooShort { field, count, minimum, remaining } => write!(formatter, "compiler transaction {field} count {count} requires at least {minimum} bytes, found {remaining}"),
+            Self::AllocationFailed { field, count } => write!(formatter, "could not reserve compiler transaction {field} collection for {count} entries"),
             Self::StringTooLong { field, value, max } => write!(formatter, "compiler transaction {field} length {value} exceeds {max}"),
             Self::InvalidUtf8 { field } => write!(formatter, "compiler transaction {field} is not UTF-8"),
             Self::InvalidText { field } => write!(formatter, "compiler transaction {field} is not canonical identity text"),
             Self::UnknownDigestAlgorithm(tag) => write!(formatter, "unknown compiler transaction digest algorithm {tag}"),
+            Self::InvalidRustcInvocationIdentity => formatter.write_str("compiler transaction rustc invocation identity is invalid"),
             Self::NonCanonicalDependencyOrder => formatter.write_str("compiler transaction dependencies are not strictly ordered"),
             Self::NonCanonicalFeatureOrder => formatter.write_str("compiler transaction features are not strictly ordered"),
             Self::FieldTrailingBytes { field } => write!(formatter, "compiler transaction field {field} has trailing bytes"),
@@ -569,7 +602,7 @@ impl fmt::Display for CompilerTransactionDecodeErrorV1 {
     }
 }
 
-impl std::error::Error for CompilerTransactionDecodeErrorV1 {
+impl std::error::Error for CompilerTransactionDecodeErrorV2 {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Validation(error) => Some(error),
@@ -579,62 +612,86 @@ impl std::error::Error for CompilerTransactionDecodeErrorV1 {
 }
 
 fn validate_parts(
-    parts: &CompilerTransactionEvidencePartsV1,
-) -> Result<(), CompilerTransactionValidationErrorV1> {
+    parts: &CompilerTransactionEvidencePartsV2,
+) -> Result<(), CompilerTransactionValidationErrorV2> {
     for (field, digest) in [
-        ("source root", parts.source_closure.root.digest()),
-        ("rustc executable", parts.rustc_tool.executable_digest()),
         (
-            "rustc configuration",
+            "caller-measured source root",
+            parts.source_closure.root.digest(),
+        ),
+        (
+            "caller-measured rustc executable",
+            parts.rustc_tool.executable_digest(),
+        ),
+        (
+            "caller-measured rustc configuration",
             parts.rustc_tool.configuration_digest(),
         ),
-        ("rustc invocation", parts.rustc_invocation.digest()),
-        ("backend executable", parts.backend_tool.executable_digest()),
         (
-            "backend configuration",
+            "caller-measured backend executable",
+            parts.backend_tool.executable_digest(),
+        ),
+        (
+            "caller-measured backend configuration",
             parts.backend_tool.configuration_digest(),
         ),
-        ("backend invocation", parts.backend_invocation.digest()),
-        ("semantic witness", parts.semantic_witness.digest()),
-        ("Kernel IR", parts.kernel_ir.digest()),
+        (
+            "caller-measured backend invocation",
+            parts.backend_invocation.digest(),
+        ),
+        (
+            "caller-measured semantic witness",
+            parts.semantic_witness.digest(),
+        ),
+        ("caller-measured Kernel IR", parts.kernel_ir.digest()),
         ("Worker V2 request", parts.worker_request.digest()),
         ("Worker V2 response", parts.worker_response.digest()),
         ("raw HSACO", parts.raw_hsaco.digest()),
         ("finalized HSACO", parts.finalized_hsaco.digest()),
         ("artifact", parts.artifact.digest()),
-        ("Worker V2 envelope", parts.envelope.digest()),
     ] {
-        require_sha256(field, digest)?;
+        require_sha256_nonzero(field, digest)?;
     }
     for dependency in &parts.source_closure.dependencies {
-        require_sha256("source dependency", dependency.identity)?;
+        require_sha256_nonzero("caller-measured source dependency", dependency.identity)?;
     }
+    require_nonzero("target", parts.target.as_bytes())?;
     Ok(())
 }
 
-fn require_sha256(
+fn require_sha256_nonzero(
     field: &'static str,
     digest: PayloadDigest,
-) -> Result<(), CompilerTransactionValidationErrorV1> {
-    if digest.algorithm() == DigestAlgorithm::Sha256 {
-        Ok(())
+) -> Result<(), CompilerTransactionValidationErrorV2> {
+    if digest.algorithm() != DigestAlgorithm::Sha256 {
+        return Err(CompilerTransactionValidationErrorV2::UnsupportedDigestAlgorithm { field });
+    }
+    require_nonzero(field, digest.bytes().as_bytes())
+}
+
+fn require_nonzero(
+    field: &'static str,
+    bytes: &[u8; 32],
+) -> Result<(), CompilerTransactionValidationErrorV2> {
+    if bytes == &[0; 32] {
+        Err(CompilerTransactionValidationErrorV2::ReservedZeroIdentity { field })
     } else {
-        Err(CompilerTransactionValidationErrorV1::UnsupportedDigestAlgorithm { field })
+        Ok(())
     }
 }
 
-fn checked_encoded_total_len(parts: &CompilerTransactionEvidencePartsV1) -> Option<usize> {
+fn checked_encoded_total_len(parts: &CompilerTransactionEvidencePartsV2) -> Option<usize> {
     HEADER_BYTES
         .checked_add(FIELD_HEADER_BYTES.checked_mul(usize::from(LAST_FIELD_TAG))?)?
-        .checked_add(DIGEST_BYTES.checked_mul(11)?)?
-        .checked_add(32_usize.checked_mul(2)?)?
+        .checked_add(DIGEST_BYTES.checked_mul(9)?)?
+        .checked_add(32_usize.checked_mul(3)?)?
         .checked_add(checked_dependencies_encoded_len(&parts.source_closure)?)?
         .checked_add(checked_features_encoded_len(&parts.source_closure)?)?
         .checked_add(checked_tool_encoded_len(&parts.rustc_tool)?)?
         .checked_add(checked_tool_encoded_len(&parts.backend_tool)?)
 }
 
-fn checked_dependencies_encoded_len(source: &CompilerSourceClosureV1) -> Option<usize> {
+fn checked_dependencies_encoded_len(source: &CompilerSourceClosureV2) -> Option<usize> {
     source
         .dependencies
         .iter()
@@ -646,7 +703,7 @@ fn checked_dependencies_encoded_len(source: &CompilerSourceClosureV1) -> Option<
         })
 }
 
-fn checked_features_encoded_len(source: &CompilerSourceClosureV1) -> Option<usize> {
+fn checked_features_encoded_len(source: &CompilerSourceClosureV2) -> Option<usize> {
     source.features.iter().try_fold(2_usize, |total, feature| {
         total.checked_add(2)?.checked_add(feature.as_str().len())
     })
@@ -659,7 +716,7 @@ fn checked_tool_encoded_len(tool: &MeasuredToolIdentity) -> Option<usize> {
         .checked_add(DIGEST_BYTES.checked_mul(2)?)
 }
 
-fn write_dependencies_field(bytes: &mut Vec<u8>, source: &CompilerSourceClosureV1) {
+fn write_dependencies_field(bytes: &mut Vec<u8>, source: &CompilerSourceClosureV2) {
     let payload_len = checked_dependencies_encoded_len(source)
         .expect("validated dependency field length must remain representable");
     write_field_header(bytes, DEPENDENCIES_TAG, payload_len);
@@ -670,7 +727,7 @@ fn write_dependencies_field(bytes: &mut Vec<u8>, source: &CompilerSourceClosureV
     }
 }
 
-fn write_features_field(bytes: &mut Vec<u8>, source: &CompilerSourceClosureV1) {
+fn write_features_field(bytes: &mut Vec<u8>, source: &CompilerSourceClosureV2) {
     let payload_len = checked_features_encoded_len(source)
         .expect("validated feature field length must remain representable");
     write_field_header(bytes, FEATURES_TAG, payload_len);
@@ -714,11 +771,13 @@ fn write_field_header(bytes: &mut Vec<u8>, tag: u8, payload_len: usize) {
     bytes.extend_from_slice(&(payload_len as u32).to_le_bytes());
 }
 
-fn calculate_capsule_identity(prefix: &[u8]) -> CompilerTransactionEvidenceIdentityV1 {
+fn calculate_capsule_identity(
+    prefix: &[u8],
+) -> Result<CompilerTransactionEvidenceIdentityV2, CompilerTransactionValidationErrorV2> {
     let mut hasher = Sha256::new();
     hasher.update(CAPSULE_IDENTITY_DOMAIN);
     hasher.update(prefix);
-    CompilerTransactionEvidenceIdentityV1(hasher.finalize().into())
+    CompilerTransactionEvidenceIdentityV2::from_bytes(hasher.finalize().into())
 }
 
 fn hash_text(hasher: &mut Sha256, value: &str) {
@@ -733,37 +792,39 @@ fn hash_digest(hasher: &mut Sha256, digest: PayloadDigest) {
 
 fn decode_capsule(
     bytes: &[u8],
-    expected: Option<CompilerTransactionEvidenceIdentityV1>,
-) -> Result<CompilerTransactionEvidenceCapsuleV1, CompilerTransactionDecodeErrorV1> {
-    if bytes.len() > MAX_COMPILER_TRANSACTION_EVIDENCE_BYTES_V1 {
-        return Err(CompilerTransactionDecodeErrorV1::TooLarge {
-            max: MAX_COMPILER_TRANSACTION_EVIDENCE_BYTES_V1,
+    expected: Option<CompilerTransactionEvidenceIdentityV2>,
+) -> Result<CompilerTransactionEvidenceCapsuleV2, CompilerTransactionDecodeErrorV2> {
+    if bytes.len() > MAX_COMPILER_TRANSACTION_EVIDENCE_BYTES_V2 {
+        return Err(CompilerTransactionDecodeErrorV2::TooLarge {
+            max: MAX_COMPILER_TRANSACTION_EVIDENCE_BYTES_V2,
         });
     }
     let mut reader = Reader::new(bytes);
-    if reader.array::<8>()? != COMPILER_TRANSACTION_EVIDENCE_MAGIC_V1 {
-        return Err(CompilerTransactionDecodeErrorV1::InvalidMagic);
+    if reader.array::<8>()? != COMPILER_TRANSACTION_EVIDENCE_MAGIC_V2 {
+        return Err(CompilerTransactionDecodeErrorV2::InvalidMagic);
     }
     let version = reader.u16()?;
-    if version != COMPILER_TRANSACTION_EVIDENCE_VERSION_V1 {
-        return Err(CompilerTransactionDecodeErrorV1::UnknownVersion(version));
+    if version != COMPILER_TRANSACTION_EVIDENCE_VERSION_V2 {
+        return Err(CompilerTransactionDecodeErrorV2::UnknownVersion(version));
     }
     let flags = reader.u16()?;
     if flags != 0 {
-        return Err(CompilerTransactionDecodeErrorV1::UnsupportedFlags(flags));
+        return Err(CompilerTransactionDecodeErrorV2::UnsupportedFlags(flags));
     }
     let total_len = reader.u32()? as usize;
     if total_len > bytes.len() {
-        return Err(CompilerTransactionDecodeErrorV1::Truncated);
+        return Err(CompilerTransactionDecodeErrorV2::Truncated);
     }
     if total_len < bytes.len() {
-        return Err(CompilerTransactionDecodeErrorV1::TrailingBytes);
+        return Err(CompilerTransactionDecodeErrorV2::TrailingBytes);
     }
     if total_len < HEADER_BYTES {
-        return Err(CompilerTransactionDecodeErrorV1::InvalidTotalLength);
+        return Err(CompilerTransactionDecodeErrorV2::InvalidTotalLength);
     }
 
-    let root = SourceRootIdentityV1(decode_digest_field(&mut reader, SOURCE_ROOT_TAG)?);
+    let root_digest = decode_digest_field(&mut reader, SOURCE_ROOT_TAG)?;
+    let root = CallerMeasuredSourceRootIdentityV2::try_from_sha256(*root_digest.bytes().as_bytes())
+        .map_err(CompilerTransactionDecodeErrorV2::Validation)?;
     let dependencies =
         decode_dependencies(reader.field(DEPENDENCIES_TAG, MAX_DEPENDENCIES_FIELD_BYTES)?)?;
     let features = decode_features(reader.field(FEATURES_TAG, MAX_FEATURES_FIELD_BYTES)?)?;
@@ -771,17 +832,29 @@ fn decode_capsule(
         reader.field(RUSTC_TOOL_TAG, MAX_TOOL_FIELD_BYTES)?,
         RUSTC_TOOL_TAG,
     )?;
-    let rustc_invocation =
-        RustcInvocationIdentityV1(decode_digest_field(&mut reader, RUSTC_INVOCATION_TAG)?);
+    let rustc_invocation = InvocationDigestV2::from_bytes(decode_fixed_field::<32>(
+        &mut reader,
+        RUSTC_INVOCATION_TAG,
+    )?)
+    .map_err(|_| CompilerTransactionDecodeErrorV2::InvalidRustcInvocationIdentity)?;
     let backend_tool = decode_tool(
         reader.field(BACKEND_TOOL_TAG, MAX_TOOL_FIELD_BYTES)?,
         BACKEND_TOOL_TAG,
     )?;
-    let backend_invocation =
-        BackendInvocationIdentityV1(decode_digest_field(&mut reader, BACKEND_INVOCATION_TAG)?);
-    let semantic_witness =
-        SemanticWitnessIdentityV1(decode_digest_field(&mut reader, SEMANTIC_WITNESS_TAG)?);
-    let kernel_ir = KernelIrIdentityV1(decode_digest_field(&mut reader, KERNEL_IR_TAG)?);
+    let backend_invocation_digest = decode_digest_field(&mut reader, BACKEND_INVOCATION_TAG)?;
+    let backend_invocation = CallerMeasuredBackendInvocationIdentityV2::try_from_sha256(
+        *backend_invocation_digest.bytes().as_bytes(),
+    )
+    .map_err(CompilerTransactionDecodeErrorV2::Validation)?;
+    let semantic_witness_digest = decode_digest_field(&mut reader, SEMANTIC_WITNESS_TAG)?;
+    let semantic_witness = CallerMeasuredSemanticWitnessIdentityV2::try_from_sha256(
+        *semantic_witness_digest.bytes().as_bytes(),
+    )
+    .map_err(CompilerTransactionDecodeErrorV2::Validation)?;
+    let kernel_ir_digest = decode_digest_field(&mut reader, KERNEL_IR_TAG)?;
+    let kernel_ir =
+        CallerMeasuredKernelIrIdentityV2::try_from_sha256(*kernel_ir_digest.bytes().as_bytes())
+            .map_err(CompilerTransactionDecodeErrorV2::Validation)?;
     let worker_request =
         DirectLinkRequestIdentityV1::new(decode_digest_field(&mut reader, WORKER_REQUEST_TAG)?);
     let worker_response =
@@ -795,28 +868,29 @@ fn decode_capsule(
     )?);
     let artifact =
         DirectLinkContainerIdentityV1::new(decode_digest_field(&mut reader, ARTIFACT_TAG)?);
-    let envelope = WorkerV2EnvelopeIdentityV1(decode_digest_field(&mut reader, ENVELOPE_TAG)?);
 
     let identity_prefix_len = reader.position();
     let encoded_identity =
-        CompilerTransactionEvidenceIdentityV1::from_bytes(decode_fixed_field::<32>(
+        CompilerTransactionEvidenceIdentityV2::from_bytes(decode_fixed_field::<32>(
             &mut reader,
             CAPSULE_IDENTITY_TAG,
-        )?);
+        )?)
+        .map_err(CompilerTransactionDecodeErrorV2::Validation)?;
     if !reader.is_empty() {
-        return Err(CompilerTransactionDecodeErrorV1::TrailingBytes);
+        return Err(CompilerTransactionDecodeErrorV2::TrailingBytes);
     }
-    let calculated_identity = calculate_capsule_identity(&bytes[..identity_prefix_len]);
+    let calculated_identity = calculate_capsule_identity(&bytes[..identity_prefix_len])
+        .map_err(CompilerTransactionDecodeErrorV2::Validation)?;
     if encoded_identity != calculated_identity {
-        return Err(CompilerTransactionDecodeErrorV1::CapsuleIdentityMismatch);
+        return Err(CompilerTransactionDecodeErrorV2::CapsuleIdentityMismatch);
     }
     if expected.is_some_and(|value| value != calculated_identity) {
-        return Err(CompilerTransactionDecodeErrorV1::UnexpectedCapsuleIdentity);
+        return Err(CompilerTransactionDecodeErrorV2::UnexpectedCapsuleIdentity);
     }
 
-    let source_closure = CompilerSourceClosureV1::new(root, dependencies, features)
-        .map_err(CompilerTransactionDecodeErrorV1::Validation)?;
-    let capsule = CompilerTransactionEvidenceCapsuleV1::new(CompilerTransactionEvidencePartsV1 {
+    let source_closure = CompilerSourceClosureV2::new(root, dependencies, features)
+        .map_err(CompilerTransactionDecodeErrorV2::Validation)?;
+    let capsule = CompilerTransactionEvidenceCapsuleV2::new(CompilerTransactionEvidencePartsV2 {
         source_closure,
         rustc_tool,
         rustc_invocation,
@@ -830,75 +904,98 @@ fn decode_capsule(
         raw_hsaco,
         finalized_hsaco,
         artifact,
-        envelope,
     })
-    .map_err(CompilerTransactionDecodeErrorV1::Validation)?;
+    .map_err(CompilerTransactionDecodeErrorV2::Validation)?;
     if capsule.identity != encoded_identity || capsule.to_bytes() != bytes {
-        return Err(CompilerTransactionDecodeErrorV1::NonCanonical);
+        return Err(CompilerTransactionDecodeErrorV2::NonCanonical);
     }
     Ok(capsule)
 }
 
 fn decode_dependencies(
     bytes: &[u8],
-) -> Result<Vec<CompilerSourceDependencyV1>, CompilerTransactionDecodeErrorV1> {
+) -> Result<Vec<CallerMeasuredSourceDependencyV2>, CompilerTransactionDecodeErrorV2> {
     let mut reader = Reader::new(bytes);
     let count = usize::from(reader.u16()?);
-    if count > MAX_COMPILER_TRANSACTION_DEPENDENCIES_V1 {
-        return Err(CompilerTransactionDecodeErrorV1::CountOutOfRange {
+    if count > MAX_COMPILER_TRANSACTION_DEPENDENCIES_V2 {
+        return Err(CompilerTransactionDecodeErrorV2::CountOutOfRange {
             field: "dependency",
             value: count as u64,
-            max: MAX_COMPILER_TRANSACTION_DEPENDENCIES_V1,
+            max: MAX_COMPILER_TRANSACTION_DEPENDENCIES_V2,
         });
     }
-    let mut dependencies = Vec::with_capacity(count);
+    require_minimum_collection_encoding(
+        "dependency",
+        count,
+        MIN_DEPENDENCY_ENTRY_BYTES,
+        reader.remaining_len(),
+    )?;
+    let mut dependencies = Vec::new();
+    dependencies.try_reserve_exact(count).map_err(|_| {
+        CompilerTransactionDecodeErrorV2::AllocationFailed {
+            field: "dependency",
+            count,
+        }
+    })?;
     for _ in 0..count {
         let name = reader.identity_text("dependency name")?;
         let identity = reader.digest()?;
         if dependencies
             .last()
-            .is_some_and(|previous: &CompilerSourceDependencyV1| {
+            .is_some_and(|previous: &CallerMeasuredSourceDependencyV2| {
                 previous.name.as_str() >= name.as_str()
             })
         {
-            return Err(CompilerTransactionDecodeErrorV1::NonCanonicalDependencyOrder);
+            return Err(CompilerTransactionDecodeErrorV2::NonCanonicalDependencyOrder);
         }
         dependencies.push(
-            CompilerSourceDependencyV1::new(name, identity)
-                .map_err(CompilerTransactionDecodeErrorV1::Validation)?,
+            CallerMeasuredSourceDependencyV2::try_from_sha256(name, *identity.bytes().as_bytes())
+                .map_err(CompilerTransactionDecodeErrorV2::Validation)?,
         );
     }
     if !reader.is_empty() {
-        return Err(CompilerTransactionDecodeErrorV1::FieldTrailingBytes {
+        return Err(CompilerTransactionDecodeErrorV2::FieldTrailingBytes {
             field: DEPENDENCIES_TAG,
         });
     }
     Ok(dependencies)
 }
 
-fn decode_features(bytes: &[u8]) -> Result<Vec<IdentityText>, CompilerTransactionDecodeErrorV1> {
+fn decode_features(bytes: &[u8]) -> Result<Vec<IdentityText>, CompilerTransactionDecodeErrorV2> {
     let mut reader = Reader::new(bytes);
     let count = usize::from(reader.u16()?);
-    if count > MAX_COMPILER_TRANSACTION_FEATURES_V1 {
-        return Err(CompilerTransactionDecodeErrorV1::CountOutOfRange {
+    if count > MAX_COMPILER_TRANSACTION_FEATURES_V2 {
+        return Err(CompilerTransactionDecodeErrorV2::CountOutOfRange {
             field: "feature",
             value: count as u64,
-            max: MAX_COMPILER_TRANSACTION_FEATURES_V1,
+            max: MAX_COMPILER_TRANSACTION_FEATURES_V2,
         });
     }
-    let mut features = Vec::with_capacity(count);
+    require_minimum_collection_encoding(
+        "feature",
+        count,
+        MIN_FEATURE_ENTRY_BYTES,
+        reader.remaining_len(),
+    )?;
+    let mut features = Vec::new();
+    features.try_reserve_exact(count).map_err(|_| {
+        CompilerTransactionDecodeErrorV2::AllocationFailed {
+            field: "feature",
+            count,
+        }
+    })?;
     for _ in 0..count {
         let feature = reader.identity_text("feature")?;
         if features
             .last()
             .is_some_and(|previous: &IdentityText| previous.as_str() >= feature.as_str())
         {
-            return Err(CompilerTransactionDecodeErrorV1::NonCanonicalFeatureOrder);
+            return Err(CompilerTransactionDecodeErrorV2::NonCanonicalFeatureOrder);
         }
         features.push(feature);
     }
     if !reader.is_empty() {
-        return Err(CompilerTransactionDecodeErrorV1::FieldTrailingBytes {
+        return Err(CompilerTransactionDecodeErrorV2::FieldTrailingBytes {
             field: FEATURES_TAG,
         });
     }
@@ -908,14 +1005,14 @@ fn decode_features(bytes: &[u8]) -> Result<Vec<IdentityText>, CompilerTransactio
 fn decode_tool(
     bytes: &[u8],
     field: u8,
-) -> Result<MeasuredToolIdentity, CompilerTransactionDecodeErrorV1> {
+) -> Result<MeasuredToolIdentity, CompilerTransactionDecodeErrorV2> {
     let mut reader = Reader::new(bytes);
     let name = reader.identity_text("tool name")?;
     let version = reader.identity_text("tool version")?;
     let executable = reader.digest()?;
     let configuration = reader.digest()?;
     if !reader.is_empty() {
-        return Err(CompilerTransactionDecodeErrorV1::FieldTrailingBytes { field });
+        return Err(CompilerTransactionDecodeErrorV2::FieldTrailingBytes { field });
     }
     Ok(MeasuredToolIdentity::new(
         name,
@@ -925,13 +1022,41 @@ fn decode_tool(
     ))
 }
 
+fn require_minimum_collection_encoding(
+    field: &'static str,
+    count: usize,
+    minimum_entry_bytes: usize,
+    remaining: usize,
+) -> Result<(), CompilerTransactionDecodeErrorV2> {
+    let minimum = count.checked_mul(minimum_entry_bytes).ok_or(
+        CompilerTransactionDecodeErrorV2::CollectionEncodingTooShort {
+            field,
+            count,
+            minimum: usize::MAX,
+            remaining,
+        },
+    )?;
+    if minimum > remaining {
+        Err(
+            CompilerTransactionDecodeErrorV2::CollectionEncodingTooShort {
+                field,
+                count,
+                minimum,
+                remaining,
+            },
+        )
+    } else {
+        Ok(())
+    }
+}
+
 fn decode_digest_field(
     reader: &mut Reader<'_>,
     tag: u8,
-) -> Result<PayloadDigest, CompilerTransactionDecodeErrorV1> {
+) -> Result<PayloadDigest, CompilerTransactionDecodeErrorV2> {
     let bytes = reader.field(tag, DIGEST_BYTES)?;
     if bytes.len() != DIGEST_BYTES {
-        return Err(CompilerTransactionDecodeErrorV1::LengthOutOfRange {
+        return Err(CompilerTransactionDecodeErrorV2::LengthOutOfRange {
             field: tag,
             value: bytes.len() as u64,
             max: DIGEST_BYTES,
@@ -944,10 +1069,10 @@ fn decode_digest_field(
 fn decode_fixed_field<const N: usize>(
     reader: &mut Reader<'_>,
     tag: u8,
-) -> Result<[u8; N], CompilerTransactionDecodeErrorV1> {
+) -> Result<[u8; N], CompilerTransactionDecodeErrorV2> {
     let bytes = reader.field(tag, N)?;
     if bytes.len() != N {
-        return Err(CompilerTransactionDecodeErrorV1::LengthOutOfRange {
+        return Err(CompilerTransactionDecodeErrorV2::LengthOutOfRange {
             field: tag,
             value: bytes.len() as u64,
             max: N,
@@ -975,34 +1100,38 @@ impl<'a> Reader<'a> {
         self.remaining.is_empty()
     }
 
+    const fn remaining_len(&self) -> usize {
+        self.remaining.len()
+    }
+
     const fn position(&self) -> usize {
         self.original_len - self.remaining.len()
     }
 
-    fn take(&mut self, count: usize) -> Result<&'a [u8], CompilerTransactionDecodeErrorV1> {
+    fn take(&mut self, count: usize) -> Result<&'a [u8], CompilerTransactionDecodeErrorV2> {
         if self.remaining.len() < count {
-            return Err(CompilerTransactionDecodeErrorV1::Truncated);
+            return Err(CompilerTransactionDecodeErrorV2::Truncated);
         }
         let (value, remaining) = self.remaining.split_at(count);
         self.remaining = remaining;
         Ok(value)
     }
 
-    fn array<const N: usize>(&mut self) -> Result<[u8; N], CompilerTransactionDecodeErrorV1> {
+    fn array<const N: usize>(&mut self) -> Result<[u8; N], CompilerTransactionDecodeErrorV2> {
         let mut value = [0; N];
         value.copy_from_slice(self.take(N)?);
         Ok(value)
     }
 
-    fn u8(&mut self) -> Result<u8, CompilerTransactionDecodeErrorV1> {
+    fn u8(&mut self) -> Result<u8, CompilerTransactionDecodeErrorV2> {
         Ok(self.array::<1>()?[0])
     }
 
-    fn u16(&mut self) -> Result<u16, CompilerTransactionDecodeErrorV1> {
+    fn u16(&mut self) -> Result<u16, CompilerTransactionDecodeErrorV2> {
         Ok(u16::from_le_bytes(self.array()?))
     }
 
-    fn u32(&mut self) -> Result<u32, CompilerTransactionDecodeErrorV1> {
+    fn u32(&mut self) -> Result<u32, CompilerTransactionDecodeErrorV2> {
         Ok(u32::from_le_bytes(self.array()?))
     }
 
@@ -1010,20 +1139,20 @@ impl<'a> Reader<'a> {
         &mut self,
         expected: u8,
         max: usize,
-    ) -> Result<&'a [u8], CompilerTransactionDecodeErrorV1> {
+    ) -> Result<&'a [u8], CompilerTransactionDecodeErrorV2> {
         let actual = self.u8()?;
         if actual != expected {
             return if actual > LAST_FIELD_TAG || actual == 0 {
-                Err(CompilerTransactionDecodeErrorV1::UnknownField(actual))
+                Err(CompilerTransactionDecodeErrorV2::UnknownField(actual))
             } else if actual < expected {
-                Err(CompilerTransactionDecodeErrorV1::DuplicateField(actual))
+                Err(CompilerTransactionDecodeErrorV2::DuplicateField(actual))
             } else {
-                Err(CompilerTransactionDecodeErrorV1::UnexpectedField { expected, actual })
+                Err(CompilerTransactionDecodeErrorV2::UnexpectedField { expected, actual })
             };
         }
         let length = u64::from(self.u32()?);
         if length > max as u64 {
-            return Err(CompilerTransactionDecodeErrorV1::LengthOutOfRange {
+            return Err(CompilerTransactionDecodeErrorV2::LengthOutOfRange {
                 field: actual,
                 value: length,
                 max,
@@ -1032,10 +1161,10 @@ impl<'a> Reader<'a> {
         self.take(length as usize)
     }
 
-    fn digest(&mut self) -> Result<PayloadDigest, CompilerTransactionDecodeErrorV1> {
+    fn digest(&mut self) -> Result<PayloadDigest, CompilerTransactionDecodeErrorV2> {
         let algorithm = self.u8()?;
         if algorithm != SHA256_TAG {
-            return Err(CompilerTransactionDecodeErrorV1::UnknownDigestAlgorithm(
+            return Err(CompilerTransactionDecodeErrorV2::UnknownDigestAlgorithm(
                 algorithm,
             ));
         }
@@ -1048,19 +1177,19 @@ impl<'a> Reader<'a> {
     fn identity_text(
         &mut self,
         field: &'static str,
-    ) -> Result<IdentityText, CompilerTransactionDecodeErrorV1> {
+    ) -> Result<IdentityText, CompilerTransactionDecodeErrorV2> {
         let length = usize::from(self.u16()?);
         if length > MAX_IDENTITY_TEXT_BYTES {
-            return Err(CompilerTransactionDecodeErrorV1::StringTooLong {
+            return Err(CompilerTransactionDecodeErrorV2::StringTooLong {
                 field,
                 value: length,
                 max: MAX_IDENTITY_TEXT_BYTES,
             });
         }
         let value = str::from_utf8(self.take(length)?)
-            .map_err(|_| CompilerTransactionDecodeErrorV1::InvalidUtf8 { field })?;
+            .map_err(|_| CompilerTransactionDecodeErrorV2::InvalidUtf8 { field })?;
         IdentityText::new(value)
-            .map_err(|_| CompilerTransactionDecodeErrorV1::InvalidText { field })
+            .map_err(|_| CompilerTransactionDecodeErrorV2::InvalidText { field })
     }
 }
 
@@ -1081,21 +1210,21 @@ mod tests {
         .unwrap()
     }
 
-    fn maximum_source_set_parts() -> CompilerTransactionEvidencePartsV1 {
-        let dependencies = (0..MAX_COMPILER_TRANSACTION_DEPENDENCIES_V1)
+    fn maximum_source_set_parts() -> CompilerTransactionEvidencePartsV2 {
+        let dependencies = (0..MAX_COMPILER_TRANSACTION_DEPENDENCIES_V2)
             .map(|index| {
-                CompilerSourceDependencyV1::new(
+                CallerMeasuredSourceDependencyV2::try_from_sha256(
                     maximum_text(&format!("dependency-{index:04}:")),
-                    digest(index as u8),
+                    [(index % 255 + 1) as u8; 32],
                 )
                 .unwrap()
             })
             .collect();
-        let features = (0..MAX_COMPILER_TRANSACTION_FEATURES_V1)
+        let features = (0..MAX_COMPILER_TRANSACTION_FEATURES_V2)
             .map(|index| maximum_text(&format!("feature-{index:04}:")))
             .collect();
-        let source_closure = CompilerSourceClosureV1::new(
-            SourceRootIdentityV1::from_sha256([0x10; 32]),
+        let source_closure = CompilerSourceClosureV2::new(
+            CallerMeasuredSourceRootIdentityV2::try_from_sha256([0x10; 32]).unwrap(),
             dependencies,
             features,
         )
@@ -1108,21 +1237,24 @@ mod tests {
                 digest(seed.wrapping_add(1)),
             )
         };
-        CompilerTransactionEvidencePartsV1 {
+        CompilerTransactionEvidencePartsV2 {
             source_closure,
             rustc_tool: measured_tool("rustc", 0x20),
-            rustc_invocation: RustcInvocationIdentityV1::from_sha256([0x22; 32]),
+            rustc_invocation: InvocationDigestV2::from_bytes([0x22; 32]).unwrap(),
             backend_tool: measured_tool("backend", 0x30),
-            backend_invocation: BackendInvocationIdentityV1::from_sha256([0x32; 32]),
-            semantic_witness: SemanticWitnessIdentityV1::from_sha256([0x40; 32]),
-            kernel_ir: KernelIrIdentityV1::from_sha256([0x41; 32]),
+            backend_invocation: CallerMeasuredBackendInvocationIdentityV2::try_from_sha256(
+                [0x32; 32],
+            )
+            .unwrap(),
+            semantic_witness: CallerMeasuredSemanticWitnessIdentityV2::try_from_sha256([0x40; 32])
+                .unwrap(),
+            kernel_ir: CallerMeasuredKernelIrIdentityV2::try_from_sha256([0x41; 32]).unwrap(),
             worker_request: DirectLinkRequestIdentityV1::new(digest(0x50)),
             worker_response: DirectLinkResponseIdentityV1::new(digest(0x51)),
             target: TargetIdentityV1::from_bytes([0x52; 32]),
             raw_hsaco: DirectLinkLinkedOutputIdentityV1::new(digest(0x60)),
             finalized_hsaco: DirectLinkFinalizedPayloadIdentityV1::new(digest(0x61)),
             artifact: DirectLinkContainerIdentityV1::new(digest(0x62)),
-            envelope: WorkerV2EnvelopeIdentityV1::from_sha256([0x63; 32]),
         }
     }
 
@@ -1133,8 +1265,8 @@ mod tests {
         let test_limit = encoded_len - 1;
 
         assert!(matches!(
-            CompilerTransactionEvidenceCapsuleV1::new_with_max_encoded_bytes(parts, test_limit),
-            Err(CompilerTransactionValidationErrorV1::EvidenceTooLarge { max })
+            CompilerTransactionEvidenceCapsuleV2::new_with_max_encoded_bytes(parts, test_limit),
+            Err(CompilerTransactionValidationErrorV2::EvidenceTooLarge { max })
                 if max == test_limit
         ));
     }
@@ -1143,10 +1275,10 @@ mod tests {
     fn maximum_current_public_source_set_remains_within_two_mibibytes() {
         let parts = maximum_source_set_parts();
         let encoded_len = checked_encoded_total_len(&parts).unwrap();
-        assert_eq!(encoded_len, 1_457_824);
-        assert!(encoded_len < MAX_COMPILER_TRANSACTION_EVIDENCE_BYTES_V1);
+        assert_eq!(encoded_len, 1_457_785);
+        assert!(encoded_len < MAX_COMPILER_TRANSACTION_EVIDENCE_BYTES_V2);
 
-        let capsule = CompilerTransactionEvidenceCapsuleV1::new(parts).unwrap();
+        let capsule = CompilerTransactionEvidenceCapsuleV2::new(parts).unwrap();
         assert_eq!(capsule.to_bytes().len(), encoded_len);
     }
 }

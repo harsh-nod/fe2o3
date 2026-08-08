@@ -8,14 +8,15 @@ mod model;
 
 pub use codec::{WORKER_V2_LOAD_ENVELOPE_MAGIC, WORKER_V2_LOAD_ENVELOPE_VERSION};
 pub use compiler_transaction::{
-    BackendInvocationIdentityV1, COMPILER_TRANSACTION_EVIDENCE_MAGIC_V1,
-    COMPILER_TRANSACTION_EVIDENCE_VERSION_V1, CompilerSourceClosureV1, CompilerSourceDependencyV1,
-    CompilerTransactionDecodeErrorV1, CompilerTransactionEvidenceCapsuleV1,
-    CompilerTransactionEvidenceIdentityV1, CompilerTransactionEvidencePartsV1,
-    CompilerTransactionValidationErrorV1, KernelIrIdentityV1,
-    MAX_COMPILER_TRANSACTION_DEPENDENCIES_V1, MAX_COMPILER_TRANSACTION_EVIDENCE_BYTES_V1,
-    MAX_COMPILER_TRANSACTION_FEATURES_V1, RustcInvocationIdentityV1, SemanticWitnessIdentityV1,
-    SourceClosureIdentityV1, SourceRootIdentityV1, WorkerV2EnvelopeIdentityV1,
+    CALLER_MEASURED_IDENTITY_ALGORITHM_V2, COMPILER_TRANSACTION_EVIDENCE_MAGIC_V2,
+    COMPILER_TRANSACTION_EVIDENCE_VERSION_V2, CallerMeasuredBackendInvocationIdentityV2,
+    CallerMeasuredKernelIrIdentityV2, CallerMeasuredSemanticWitnessIdentityV2,
+    CallerMeasuredSourceDependencyV2, CallerMeasuredSourceRootIdentityV2, CompilerSourceClosureV2,
+    CompilerTransactionDecodeErrorV2, CompilerTransactionEvidenceCapsuleV2,
+    CompilerTransactionEvidenceIdentityV2, CompilerTransactionEvidencePartsV2,
+    CompilerTransactionValidationErrorV2, MAX_COMPILER_TRANSACTION_DEPENDENCIES_V2,
+    MAX_COMPILER_TRANSACTION_EVIDENCE_BYTES_V2, MAX_COMPILER_TRANSACTION_FEATURES_V2,
+    SourceClosureIdentityV2,
 };
 pub use error::{EnvelopeDecodeError, EnvelopeValidationError, PublicationClaimFieldV1};
 pub use model::{

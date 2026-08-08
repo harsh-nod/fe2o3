@@ -611,6 +611,7 @@ dependencies = [
  "fe2o3-artifact-transaction",
  "fe2o3-artifacts",
  "fe2o3-kernel-descriptor",
+ "fe2o3-rustc-invocation",
  "sha2",
 ]
 
