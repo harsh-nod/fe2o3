@@ -1,7 +1,7 @@
 use fe2o3_verifier::{
-    AxiomPolicy, CorrelationId, Digest, MAX_PROOF_CAPSULE_BYTES_V1,
-    MAX_PROOF_CAPSULE_FINALIZED_HSACO_BYTES_V1, MAX_PROOF_CAPSULE_SEALED_RESULT_BYTES_V1,
-    MeasuredToolIdentity, ProcessLocalProofCapsuleDuplicateDetectorV1, ProofCapsuleBuildErrorV1,
+    AxiomPolicy, CorrelationId, Digest, MAX_PROCESS_LOCAL_PROOF_CAPSULE_RECORDS_V1,
+    MAX_PROOF_CAPSULE_BYTES_V1, MAX_PROOF_CAPSULE_SEALED_RESULT_BYTES_V1, MeasuredToolIdentity,
+    ProcessLocalProofCapsuleDuplicateDetectorV1, ProofCapsuleBuildErrorV1,
     ProofCapsuleContextErrorV1, ProofCapsuleDecodeErrorV1, ProofCapsuleDependencyV1,
     ProofCapsuleExecutionV1, ProofCapsuleExpectationV1, ProofCapsuleFreshnessExpectationV1,
     ProofCapsuleFreshnessIdentityV1, ProofCapsuleIdentityFieldV1, ProofCapsulePayloadIdentityV1,
@@ -26,8 +26,8 @@ fn result_payload(seed: u8) -> ProofCapsulePayloadIdentityV1 {
     ProofCapsulePayloadIdentityV1::sealed_result(u64::from(seed) + 100, digest(seed)).unwrap()
 }
 
-fn finalized_payload(seed: u8) -> ProofCapsulePayloadIdentityV1 {
-    ProofCapsulePayloadIdentityV1::finalized_hsaco(u64::from(seed) + 100, digest(seed)).unwrap()
+fn finalized_payload_identity(seed: u8) -> Digest {
+    digest(seed)
 }
 
 fn proof_target() -> ProofTargetIdentity {
@@ -53,6 +53,20 @@ fn target_with(
     machine_effect_seed: u8,
     artifact_seed: u8,
 ) -> ProofCapsuleTargetV1 {
+    target_with_finalized_identity(
+        target,
+        machine_effect_seed,
+        finalized_payload_identity(60),
+        artifact_seed,
+    )
+}
+
+fn target_with_finalized_identity(
+    target: ProofTargetIdentity,
+    machine_effect_seed: u8,
+    finalized_payload_identity: Digest,
+    artifact_seed: u8,
+) -> ProofCapsuleTargetV1 {
     ProofCapsuleTargetV1::new(
         target,
         vec![
@@ -66,7 +80,7 @@ fn target_with(
         digest(57),
         digest(58),
         digest(machine_effect_seed),
-        finalized_payload(60),
+        finalized_payload_identity,
         digest(artifact_seed),
     )
     .unwrap()
@@ -208,7 +222,10 @@ fn canonical_round_trip_binds_every_axis_without_authority() {
         decoded.target().machine_effect_evidence_identity(),
         digest(59)
     );
-    assert_eq!(decoded.target().finalized_payload(), finalized_payload(60));
+    assert_eq!(
+        decoded.target().finalized_payload_identity(),
+        finalized_payload_identity(60)
+    );
     assert_eq!(decoded.target().artifact_identity(), digest(61));
     assert_eq!(decoded.policy().model().version().as_str(), "gpu-model-v1");
     assert_eq!(decoded.policy().verus().name().as_str(), "verus");
@@ -352,7 +369,7 @@ fn parser_rejects_truncation_trailing_oversized_and_mutated_bytes() {
 }
 
 #[test]
-fn payload_lengths_are_role_bounded_in_constructors_and_decoder() {
+fn sealed_result_lengths_are_bounded_in_constructors_and_decoder() {
     assert_eq!(
         ProofCapsulePayloadIdentityV1::sealed_result(u64::MAX, digest(90)),
         Err(ProofCapsuleBuildErrorV1::PayloadLengthOutOfRange {
@@ -361,15 +378,6 @@ fn payload_lengths_are_role_bounded_in_constructors_and_decoder() {
             max: MAX_PROOF_CAPSULE_SEALED_RESULT_BYTES_V1,
         })
     );
-    assert_eq!(
-        ProofCapsulePayloadIdentityV1::finalized_hsaco(u64::MAX, digest(91)),
-        Err(ProofCapsuleBuildErrorV1::PayloadLengthOutOfRange {
-            field: "finalized HSACO",
-            value: u64::MAX,
-            max: MAX_PROOF_CAPSULE_FINALIZED_HSACO_BYTES_V1,
-        })
-    );
-
     let capsule = capsule();
     let mut oversized_result = capsule.to_bytes();
     replace_unique_u64(
@@ -387,22 +395,26 @@ fn payload_lengths_are_role_bounded_in_constructors_and_decoder() {
             }
         ))
     );
+}
 
-    let mut oversized_finalized = capsule.to_bytes();
-    replace_unique_u64(
-        &mut oversized_finalized,
-        capsule.target().finalized_payload().byte_len(),
-        u64::MAX,
-    );
+#[test]
+fn finalized_occurrence_length_is_deferred_to_the_byte_bearing_join() {
+    let finalized_digest = finalized_payload_identity(60);
+    let first_occurrence = (4096_u64, finalized_digest);
+    let substituted_length_occurrence = (8192_u64, finalized_digest);
+
+    let first = target_with_finalized_identity(proof_target(), 59, first_occurrence.1, 61);
+    let substituted_length =
+        target_with_finalized_identity(proof_target(), 59, substituted_length_occurrence.1, 61);
+    assert_ne!(first_occurrence.0, substituted_length_occurrence.0);
+    assert_eq!(first_occurrence.1, substituted_length_occurrence.1);
+    assert_eq!(first, substituted_length);
+    assert_eq!(first.finalized_payload_identity(), finalized_digest);
+    let first_capsule = capsule_with(first, 44, freshness());
+    let substituted_length_capsule = capsule_with(substituted_length, 44, freshness());
     assert_eq!(
-        ProofCapsuleV1::from_bytes(&oversized_finalized),
-        Err(ProofCapsuleDecodeErrorV1::Build(
-            ProofCapsuleBuildErrorV1::PayloadLengthOutOfRange {
-                field: "finalized HSACO",
-                value: u64::MAX,
-                max: MAX_PROOF_CAPSULE_FINALIZED_HSACO_BYTES_V1,
-            }
-        ))
+        first_capsule.to_bytes(),
+        substituted_length_capsule.to_bytes()
     );
 }
 
@@ -669,6 +681,78 @@ fn process_local_detector_only_records_duplicates() {
 }
 
 #[test]
+fn process_local_detector_is_hard_bounded_and_fails_closed_when_full() {
+    assert_eq!(
+        ProcessLocalProofCapsuleDuplicateDetectorV1::new().max_records(),
+        MAX_PROCESS_LOCAL_PROOF_CAPSULE_RECORDS_V1
+    );
+    assert_eq!(
+        ProcessLocalProofCapsuleDuplicateDetectorV1::default().max_records(),
+        MAX_PROCESS_LOCAL_PROOF_CAPSULE_RECORDS_V1
+    );
+    assert_eq!(
+        ProcessLocalProofCapsuleDuplicateDetectorV1::with_max_records(0).unwrap_err(),
+        ProofCapsuleContextErrorV1::DetectorCapacityOutOfRange {
+            value: 0,
+            max: MAX_PROCESS_LOCAL_PROOF_CAPSULE_RECORDS_V1,
+        }
+    );
+    assert_eq!(
+        ProcessLocalProofCapsuleDuplicateDetectorV1::with_max_records(
+            MAX_PROCESS_LOCAL_PROOF_CAPSULE_RECORDS_V1 + 1,
+        )
+        .unwrap_err(),
+        ProofCapsuleContextErrorV1::DetectorCapacityOutOfRange {
+            value: MAX_PROCESS_LOCAL_PROOF_CAPSULE_RECORDS_V1 + 1,
+            max: MAX_PROCESS_LOCAL_PROOF_CAPSULE_RECORDS_V1,
+        }
+    );
+
+    let second_freshness = ProofCapsuleFreshnessIdentityV1::new_inert(
+        digest(80),
+        digest(81),
+        digest(82),
+        digest(83),
+        digest(84),
+        digest(85),
+        8,
+        digest(86),
+        digest(87),
+    )
+    .unwrap();
+    let second_execution = ProofCapsuleExecutionV1::new_inert(
+        CorrelationId::from_bytes([80; 16]),
+        digest(88),
+        digest(89),
+        digest(90),
+        digest(81),
+        digest(82),
+        ProofCapsulePayloadIdentityV1::sealed_result(200, digest(83)).unwrap(),
+        Some(second_freshness),
+    )
+    .unwrap();
+    let second = ProofCapsuleV1::new_inert(
+        target_with(proof_target(), 81, 82),
+        policy(),
+        second_execution,
+        proved_result(),
+    )
+    .unwrap();
+
+    let first = capsule();
+    let mut detector = ProcessLocalProofCapsuleDuplicateDetectorV1::with_max_records(1).unwrap();
+    detector
+        .parse_validate_and_record(&first.to_bytes(), expectation(&first))
+        .unwrap();
+    assert_eq!(detector.recorded_count(), 1);
+    assert_eq!(
+        detector.parse_validate_and_record(&second.to_bytes(), expectation(&second)),
+        Err(ProofCapsuleContextErrorV1::DetectorCapacityReached { capacity: 1 })
+    );
+    assert_eq!(detector.recorded_count(), 1);
+}
+
+#[test]
 fn constructors_reject_duplicate_and_oversized_collections() {
     let zero_axiom = TrustedItem::new("zero_axiom", Digest::from_bytes([0; 32])).unwrap();
     assert_eq!(
@@ -696,7 +780,7 @@ fn constructors_reject_duplicate_and_oversized_collections() {
             digest(57),
             digest(58),
             digest(59),
-            finalized_payload(60),
+            finalized_payload_identity(60),
             digest(61),
         ),
         Err(ProofCapsuleBuildErrorV1::DuplicateItem {
@@ -715,7 +799,7 @@ fn constructors_reject_duplicate_and_oversized_collections() {
             digest(57),
             digest(58),
             digest(59),
-            finalized_payload(60),
+            finalized_payload_identity(60),
             digest(61),
         ),
         Err(ProofCapsuleBuildErrorV1::TooManyItems {

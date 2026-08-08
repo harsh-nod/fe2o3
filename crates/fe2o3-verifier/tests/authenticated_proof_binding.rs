@@ -36,8 +36,11 @@ use fe2o3_verifier::{
     PersistentlyFreshKernelProofAdmissionIdentityV1,
     PersistentlyFreshKernelProofAdmissionRequestV1,
     PersistentlyFreshMultiKernelProofAdmissionErrorV1,
-    PersistentlyFreshMultiKernelProofAdmissionV1, ProofProperty, ProofRequestV1,
-    ProofTargetIdentity, VerificationModelIdentity, VerifierPolicy,
+    PersistentlyFreshMultiKernelProofAdmissionV1, ProcessLocalProofCapsuleDuplicateDetectorV1,
+    ProofCapsuleBuildErrorV1, ProofCapsuleContextErrorV1, ProofCapsuleExpectationV1,
+    ProofCapsuleFreshnessExpectationV1, ProofCapsuleFreshnessIdentityV1,
+    ProofCapsuleIdentityFieldV1, ProofCapsuleTargetV1, ProofCapsuleV1, ProofProperty,
+    ProofRequestV1, ProofTargetIdentity, VerificationModelIdentity, VerifierPolicy,
     bind_authenticated_control_flow_executable_v1,
     bind_authenticated_proof_executable_persistent_v1, bind_authenticated_proof_executable_v1,
     bind_control_flow_proof_request_v1,
@@ -377,6 +380,23 @@ fn verifier_target(target: ArtifactTarget) -> ProofTargetIdentity {
             contracts.functional_specification_digest(),
         ),
     }
+}
+
+fn proof_capsule_target(
+    target: ProofTargetIdentity,
+    finalized_payload_identity: Digest,
+) -> ProofCapsuleTargetV1 {
+    ProofCapsuleTargetV1::new(
+        target,
+        vec![],
+        vec![],
+        digest(0xa0),
+        digest(0xa1),
+        digest(0xa2),
+        finalized_payload_identity,
+        digest(0xa3),
+    )
+    .unwrap()
 }
 
 fn configuration() -> Configuration {
@@ -1393,11 +1413,12 @@ fn exact_measured_transaction_binds_every_proof_and_executable_axis() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn persistent_binding_rejects_exact_evidence_replay_after_restart() {
+fn persistent_binding_projects_exact_capsule_and_rejects_substitutions_and_replay() {
     let directory = PersistentLedgerDirectory::new();
     let manifest = manifest();
     let target = artifact_target(&manifest);
     let (evidence, verifier_policy) = measured_execution(target);
+    let projection_policy = verifier_policy.clone();
     let replay = evidence.clone();
     let policy = binding_policy(manifest, target, &evidence, verifier_policy);
     let (mut ledger, recovery) =
@@ -1450,6 +1471,108 @@ fn persistent_binding_rejects_exact_evidence_replay_after_restart() {
     binding.validate_against(&binding).unwrap();
     assert!(!binding.grants_load_authority());
     assert!(!binding.grants_launch_authority());
+
+    let exact_proof_target = verifier_target(target);
+    let finalized_payload_identity = verifier_digest(payload(0x44));
+    let capsule_target = proof_capsule_target(exact_proof_target, finalized_payload_identity);
+    let capsule = ProofCapsuleV1::project_inert_from_persistently_fresh(
+        capsule_target.clone(),
+        &projection_policy,
+        &binding,
+    )
+    .unwrap();
+    assert_eq!(capsule.target(), &capsule_target);
+    assert_eq!(
+        capsule.target().finalized_payload_identity(),
+        finalized_payload_identity
+    );
+    assert_eq!(
+        capsule.execution().freshness(),
+        Some(ProofCapsuleFreshnessIdentityV1::project_from_persistent(
+            &binding,
+        ))
+    );
+    assert_eq!(
+        ProofCapsuleV1::from_bytes(&capsule.to_bytes()).unwrap(),
+        capsule
+    );
+
+    let exact_expectation = ProofCapsuleExpectationV1::new(
+        capsule.identity(),
+        capsule.target().artifact_identity(),
+        Some(ProofCapsuleFreshnessExpectationV1::project_from_persistent(
+            &binding,
+        )),
+    )
+    .unwrap();
+    ProcessLocalProofCapsuleDuplicateDetectorV1::with_max_records(1)
+        .unwrap()
+        .parse_validate_and_record(&capsule.to_bytes(), exact_expectation)
+        .unwrap();
+
+    let substituted_policy = make_verifier_policy(execution_tools(), 9);
+    assert_eq!(
+        ProofCapsuleV1::project_inert_from_persistently_fresh(
+            capsule_target.clone(),
+            &substituted_policy,
+            &binding,
+        ),
+        Err(ProofCapsuleBuildErrorV1::PolicyIdentityMismatch)
+    );
+
+    let substituted_proof_target = ProofTargetIdentity {
+        source_tree_digest: digest(0xb0),
+        ..exact_proof_target
+    };
+    assert_eq!(
+        ProofCapsuleV1::project_inert_from_persistently_fresh(
+            proof_capsule_target(substituted_proof_target, finalized_payload_identity),
+            &projection_policy,
+            &binding,
+        ),
+        Err(ProofCapsuleBuildErrorV1::ProofTargetMismatch)
+    );
+    assert_eq!(
+        ProofCapsuleV1::project_inert_from_persistently_fresh(
+            proof_capsule_target(exact_proof_target, digest(0xb1)),
+            &projection_policy,
+            &binding,
+        ),
+        Err(ProofCapsuleBuildErrorV1::FinalizedPayloadMismatch)
+    );
+
+    let exact_freshness = ProofCapsuleFreshnessIdentityV1::project_from_persistent(&binding);
+    let mut substituted_previous_state =
+        *exact_freshness.previous_ledger_state_identity().as_bytes();
+    substituted_previous_state[0] ^= 1;
+    let substituted_freshness = ProofCapsuleFreshnessIdentityV1::new_inert(
+        exact_freshness.proof_binding_identity(),
+        exact_freshness.challenge(),
+        exact_freshness.transcript(),
+        exact_freshness.result(),
+        exact_freshness.ledger_namespace(),
+        Digest::from_bytes(substituted_previous_state),
+        exact_freshness.ledger_generation(),
+        exact_freshness.ledger_state_identity(),
+        exact_freshness.persistent_binding_identity(),
+    )
+    .unwrap();
+    let substituted_expectation = ProofCapsuleExpectationV1::new(
+        capsule.identity(),
+        capsule.target().artifact_identity(),
+        Some(ProofCapsuleFreshnessExpectationV1::new(
+            substituted_freshness,
+        )),
+    )
+    .unwrap();
+    assert_eq!(
+        ProcessLocalProofCapsuleDuplicateDetectorV1::with_max_records(1)
+            .unwrap()
+            .parse_validate_and_record(&capsule.to_bytes(), substituted_expectation),
+        Err(ProofCapsuleContextErrorV1::IdentitySubstitution {
+            field: ProofCapsuleIdentityFieldV1::PreviousLedgerState,
+        })
+    );
     drop(ledger);
 
     let (mut reopened, recovery) =

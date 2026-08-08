@@ -13,7 +13,7 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
-use fe2o3_artifacts::{DigestAlgorithm, MAX_CODE_OBJECT_BYTES};
+use fe2o3_artifacts::DigestAlgorithm;
 
 use crate::{
     AxiomPolicy, CorrelationId, Digest, MeasuredToolIdentity, ModelError,
@@ -21,15 +21,16 @@ use crate::{
     Text, TrustedItem, VerificationModelIdentity, VerifierPolicy,
 };
 
-/// Canonical pre-envelope V1 wire marker. The earlier envelope-dependent draft
-/// was never published and has no compatibility status.
+/// Canonical pre-envelope V1 wire marker. Earlier envelope-dependent and
+/// unbound-finalized-length drafts were never published and have no
+/// compatibility status.
 pub const PROOF_CAPSULE_MAGIC_V1: [u8; 8] = *b"FE2PCP1\0";
 pub const PROOF_CAPSULE_VERSION_V1: u16 = 1;
 pub const MAX_PROOF_CAPSULE_BYTES_V1: usize = 128 * 1024;
 pub const MAX_PROOF_CAPSULE_DEPENDENCIES_V1: usize = 128;
 pub const MAX_PROOF_CAPSULE_FEATURES_V1: usize = 128;
 pub const MAX_PROOF_CAPSULE_SEALED_RESULT_BYTES_V1: usize = crate::MAX_RESULT_BYTES;
-pub const MAX_PROOF_CAPSULE_FINALIZED_HSACO_BYTES_V1: usize = MAX_CODE_OBJECT_BYTES;
+pub const MAX_PROCESS_LOCAL_PROOF_CAPSULE_RECORDS_V1: usize = 4096;
 
 const HEADER_BYTES: usize = 16;
 const LAST_FIELD_TAG: u16 = 18;
@@ -80,18 +81,6 @@ impl ProofCapsulePayloadIdentityV1 {
         )
     }
 
-    pub fn finalized_hsaco(
-        byte_len: u64,
-        digest: Digest,
-    ) -> Result<Self, ProofCapsuleBuildErrorV1> {
-        Self::new_bounded(
-            byte_len,
-            digest,
-            "finalized HSACO",
-            MAX_PROOF_CAPSULE_FINALIZED_HSACO_BYTES_V1,
-        )
-    }
-
     fn new_bounded(
         byte_len: u64,
         digest: Digest,
@@ -126,15 +115,23 @@ impl ProofCapsulePayloadIdentityV1 {
 }
 
 /// Exact pre-envelope proof target plus dependency, feature, ABI, launch,
-/// machine-effect, artifact, and finalized-payload identities.
+/// machine-effect, artifact, and finalized-payload digest identities.
 ///
 /// An envelope identity is intentionally unavailable, preventing a hash cycle
 /// when `WorkerV2LoadEnvelopeV1` embeds these bytes. A later external
 /// publication receipt may bind the resulting capsule and envelope identities.
+/// The finalized byte length is intentionally deferred to a later join with
+/// byte-bearing artifact evidence.
 ///
 /// ```compile_fail
 /// # fn no_envelope_dependency(target: &fe2o3_verifier::ProofCapsuleTargetV1) {
 /// let _ = target.envelope_identity();
+/// # }
+/// ```
+///
+/// ```compile_fail
+/// # fn no_untrusted_finalized_length(target: &fe2o3_verifier::ProofCapsuleTargetV1) {
+/// let _ = target.finalized_payload_identity().byte_len();
 /// # }
 /// ```
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -145,7 +142,7 @@ pub struct ProofCapsuleTargetV1 {
     abi_identity: Digest,
     launch_identity: Digest,
     machine_effect_evidence_identity: Digest,
-    finalized_payload: ProofCapsulePayloadIdentityV1,
+    finalized_payload_identity: Digest,
     artifact_identity: Digest,
 }
 
@@ -158,7 +155,7 @@ impl ProofCapsuleTargetV1 {
         abi_identity: Digest,
         launch_identity: Digest,
         machine_effect_evidence_identity: Digest,
-        finalized_payload: ProofCapsulePayloadIdentityV1,
+        finalized_payload_identity: Digest,
         artifact_identity: Digest,
     ) -> Result<Self, ProofCapsuleBuildErrorV1> {
         for (field, identity) in [
@@ -180,6 +177,7 @@ impl ProofCapsuleTargetV1 {
                 "machine-effect evidence identity",
                 machine_effect_evidence_identity,
             ),
+            ("finalized payload identity", finalized_payload_identity),
             ("artifact identity", artifact_identity),
         ] {
             require_nonzero(identity, field)?;
@@ -187,11 +185,6 @@ impl ProofCapsuleTargetV1 {
         for identity in proof_target.digests() {
             require_nonzero(identity, "proof target identity")?;
         }
-        validate_payload_bound(
-            finalized_payload,
-            "finalized HSACO",
-            MAX_PROOF_CAPSULE_FINALIZED_HSACO_BYTES_V1,
-        )?;
         canonicalize_dependencies(&mut dependencies)?;
         canonicalize_features(&mut features)?;
         Ok(Self {
@@ -201,7 +194,7 @@ impl ProofCapsuleTargetV1 {
             abi_identity,
             launch_identity,
             machine_effect_evidence_identity,
-            finalized_payload,
+            finalized_payload_identity,
             artifact_identity,
         })
     }
@@ -234,8 +227,8 @@ impl ProofCapsuleTargetV1 {
         self.machine_effect_evidence_identity
     }
 
-    pub const fn finalized_payload(&self) -> ProofCapsulePayloadIdentityV1 {
-        self.finalized_payload
+    pub const fn finalized_payload_identity(&self) -> Digest {
+        self.finalized_payload_identity
     }
 
     pub const fn artifact_identity(&self) -> Digest {
@@ -637,9 +630,10 @@ impl ProofCapsuleV1 {
             .executable()
             .finalized_code_object_digest();
         // ProofExecutableBindingV1 retains the finalized occurrence digest but
-        // not its byte length. The capsule length is bounded here; a later
-        // artifact/envelope join must validate the exact occurrence length.
-        require_bound_finalized_payload(target.finalized_payload, bound_finalized)?;
+        // not its byte length. The pre-envelope capsule therefore omits the
+        // unauthenticated length; a later byte-bearing artifact/envelope join
+        // must validate the exact occurrence length.
+        require_bound_finalized_payload(target.finalized_payload_identity, bound_finalized)?;
         if verifier_policy.expected_tools() != plan.tools()
             || verifier_policy.expected_model() != proof_result.model()
         {
@@ -747,7 +741,7 @@ impl ProofCapsuleV1 {
         writer.field(14);
         writer.digest(self.target.machine_effect_evidence_identity);
         writer.field(15);
-        writer.payload(self.target.finalized_payload);
+        writer.digest(self.target.finalized_payload_identity);
         writer.field(16);
         writer.digest(self.target.artifact_identity);
         writer.field(17);
@@ -825,9 +819,12 @@ impl ProofCapsuleExpectationV1 {
 /// here does not consume its persistent receipt and cannot preserve durable
 /// single-use freshness. Future authority must revalidate and durably consume
 /// against the live `PersistentProofFreshnessLedgerV1` and a rollback-resistant
-/// production root.
-#[derive(Debug, Default)]
+/// production root. Retained records are capped at
+/// [`MAX_PROCESS_LOCAL_PROOF_CAPSULE_RECORDS_V1`], with a smaller caller limit
+/// available through [`Self::with_max_records`].
+#[derive(Debug)]
 pub struct ProcessLocalProofCapsuleDuplicateDetectorV1 {
+    max_records: usize,
     recorded_capsules: BTreeSet<Digest>,
     recorded_correlations: BTreeSet<CorrelationId>,
     recorded_challenges: BTreeSet<Digest>,
@@ -839,6 +836,7 @@ pub struct ProcessLocalProofCapsuleDuplicateDetectorV1 {
 impl ProcessLocalProofCapsuleDuplicateDetectorV1 {
     pub const fn new() -> Self {
         Self {
+            max_records: MAX_PROCESS_LOCAL_PROOF_CAPSULE_RECORDS_V1,
             recorded_capsules: BTreeSet::new(),
             recorded_correlations: BTreeSet::new(),
             recorded_challenges: BTreeSet::new(),
@@ -846,6 +844,28 @@ impl ProcessLocalProofCapsuleDuplicateDetectorV1 {
             recorded_results: BTreeSet::new(),
             recorded_persistent_bindings: BTreeSet::new(),
         }
+    }
+
+    pub fn with_max_records(max_records: usize) -> Result<Self, ProofCapsuleContextErrorV1> {
+        if max_records == 0 || max_records > MAX_PROCESS_LOCAL_PROOF_CAPSULE_RECORDS_V1 {
+            return Err(ProofCapsuleContextErrorV1::DetectorCapacityOutOfRange {
+                value: max_records,
+                max: MAX_PROCESS_LOCAL_PROOF_CAPSULE_RECORDS_V1,
+            });
+        }
+        Ok(Self {
+            max_records,
+            recorded_capsules: BTreeSet::new(),
+            recorded_correlations: BTreeSet::new(),
+            recorded_challenges: BTreeSet::new(),
+            recorded_transcripts: BTreeSet::new(),
+            recorded_results: BTreeSet::new(),
+            recorded_persistent_bindings: BTreeSet::new(),
+        })
+    }
+
+    pub const fn max_records(&self) -> usize {
+        self.max_records
     }
 
     pub fn recorded_count(&self) -> usize {
@@ -860,6 +880,11 @@ impl ProcessLocalProofCapsuleDuplicateDetectorV1 {
         bytes: &[u8],
         expected: ProofCapsuleExpectationV1,
     ) -> Result<ProofCapsuleV1, ProofCapsuleContextErrorV1> {
+        if self.recorded_count() >= self.max_records {
+            return Err(ProofCapsuleContextErrorV1::DetectorCapacityReached {
+                capacity: self.max_records,
+            });
+        }
         let capsule = ProofCapsuleV1::from_bytes(bytes)?;
         validate_expectation(&capsule, expected)?;
         if self.recorded_capsules.contains(&capsule.identity) {
@@ -913,6 +938,12 @@ impl ProcessLocalProofCapsuleDuplicateDetectorV1 {
             debug_assert!(persistent_was_new);
         }
         Ok(capsule)
+    }
+}
+
+impl Default for ProcessLocalProofCapsuleDuplicateDetectorV1 {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -1066,10 +1097,7 @@ fn decode_capsule(bytes: &[u8]) -> Result<ProofCapsuleV1, ProofCapsuleDecodeErro
     reader.field(14)?;
     let machine_effect_evidence_identity = reader.digest()?;
     reader.field(15)?;
-    let finalized_payload = reader.payload(
-        "finalized HSACO",
-        MAX_PROOF_CAPSULE_FINALIZED_HSACO_BYTES_V1,
-    )?;
+    let finalized_payload_identity = reader.digest()?;
     reader.field(16)?;
     let artifact_identity = reader.digest()?;
     reader.field(17)?;
@@ -1092,7 +1120,7 @@ fn decode_capsule(bytes: &[u8]) -> Result<ProofCapsuleV1, ProofCapsuleDecodeErro
         abi_identity,
         launch_identity,
         machine_effect_evidence_identity,
-        finalized_payload,
+        finalized_payload_identity,
         artifact_identity,
     )?;
     let policy = ProofCapsulePolicyV1::new(
@@ -1260,11 +1288,11 @@ fn validate_payload_bound(
 }
 
 fn require_bound_finalized_payload(
-    capsule: ProofCapsulePayloadIdentityV1,
+    capsule: Digest,
     bound: fe2o3_artifacts::PayloadDigest,
 ) -> Result<(), ProofCapsuleBuildErrorV1> {
     if bound.algorithm() != DigestAlgorithm::Sha256
-        || bound.bytes().as_bytes() != capsule.digest.as_bytes()
+        || bound.bytes().as_bytes() != capsule.as_bytes()
     {
         Err(ProofCapsuleBuildErrorV1::FinalizedPayloadMismatch)
     } else {
@@ -2124,6 +2152,8 @@ pub enum ProofCapsuleContextErrorV1 {
     IdentitySubstitution { field: ProofCapsuleIdentityFieldV1 },
     StaleLedgerGeneration { expected: u64, actual: u64 },
     UnexpectedLedgerGeneration { expected: u64, actual: u64 },
+    DetectorCapacityOutOfRange { value: usize, max: usize },
+    DetectorCapacityReached { capacity: usize },
     CapsuleDuplicate,
     ExecutionDuplicate,
     PersistentProofDuplicate,
@@ -2144,6 +2174,14 @@ impl fmt::Display for ProofCapsuleContextErrorV1 {
                 formatter,
                 "unexpected future ledger generation {actual}; expected {expected}"
             ),
+            Self::DetectorCapacityOutOfRange { value, max } => write!(
+                formatter,
+                "process-local proof capsule detector capacity {value} must be in 1..={max}"
+            ),
+            Self::DetectorCapacityReached { capacity } => write!(
+                formatter,
+                "process-local proof capsule detector reached its capacity of {capacity}"
+            ),
             Self::CapsuleDuplicate => {
                 formatter.write_str("proof capsule was already recorded in this process")
             }
@@ -2162,29 +2200,5 @@ impl std::error::Error for ProofCapsuleContextErrorV1 {}
 impl From<ProofCapsuleDecodeErrorV1> for ProofCapsuleContextErrorV1 {
     fn from(value: ProofCapsuleDecodeErrorV1) -> Self {
         Self::Decode(value)
-    }
-}
-
-#[cfg(test)]
-mod capsule_regression_tests {
-    use fe2o3_artifacts::{DigestBytes, PayloadDigest};
-
-    use super::*;
-
-    #[test]
-    fn persistent_projection_rejects_finalized_payload_substitution() {
-        let capsule =
-            ProofCapsulePayloadIdentityV1::finalized_hsaco(4096, Digest::from_bytes([0x41; 32]))
-                .unwrap();
-        let substituted =
-            PayloadDigest::new(DigestAlgorithm::Sha256, DigestBytes::from_bytes([0x42; 32]));
-        let exact =
-            PayloadDigest::new(DigestAlgorithm::Sha256, DigestBytes::from_bytes([0x41; 32]));
-
-        assert_eq!(require_bound_finalized_payload(capsule, exact), Ok(()));
-        assert_eq!(
-            require_bound_finalized_payload(capsule, substituted),
-            Err(ProofCapsuleBuildErrorV1::FinalizedPayloadMismatch)
-        );
     }
 }
