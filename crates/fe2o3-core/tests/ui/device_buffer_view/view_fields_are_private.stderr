@@ -1,11 +1,13 @@
-error[E0451]: fields `buffer`, `ptr` and `len` of struct `DeviceBufferView` are private
- --> tests/ui/device_buffer_view/view_fields_are_private.rs:5:9
+error: cannot construct `DeviceBufferView<'_, _>` with struct literal syntax due to private fields
+ --> tests/ui/device_buffer_view/view_fields_are_private.rs:4:5
   |
 4 |     DeviceBufferView {
-  |     ---------------- in this type
+  |     ^^^^^^^^^^^^^^^^
 5 |         buffer,
-  |         ^^^^^^ private field
+  |         ------ private field
 6 |         ptr: core::ptr::null_mut(),
-  |         ^^^ private field
+  |         -------------------------- private field
 7 |         len: 0,
-  |         ^^^ private field
+  |         ------ private field
+  |
+  = note: ...and other private fields `byte_start` and `byte_end` that were not provided

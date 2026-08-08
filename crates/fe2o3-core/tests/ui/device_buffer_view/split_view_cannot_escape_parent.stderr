@@ -1,0 +1,8 @@
+error: lifetime may not live long enough
+ --> tests/ui/device_buffer_view/split_view_cannot_escape_parent.rs:5:5
+  |
+3 | fn rejected(buffer: &mut DeviceBuffer<u32>) -> DeviceBufferViewMut<'static, u32> {
+  |                     - let's call the lifetime of this reference `'1`
+4 |     let (left, _right) = buffer.split_at_mut(1).unwrap();
+5 |     left
+  |     ^^^^ returning this value requires that `'1` must outlive `'static`

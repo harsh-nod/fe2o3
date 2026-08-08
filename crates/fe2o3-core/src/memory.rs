@@ -1,5 +1,6 @@
 use crate::{DeviceCopy, DevicePtr, Error, GpuContext, Result, Stream, check};
 use core::ffi::c_void;
+use core::marker::PhantomData;
 use core::ops::{Bound, RangeBounds};
 use fe2o3_completion::{CompletionError, complete_borrowed, complete_owned};
 use std::sync::Arc;
@@ -83,6 +84,7 @@ pub trait DeviceBufferRegion<T: DeviceCopy>: region_sealed::Sealed {
     fn allocation_len(&self) -> usize;
     fn region_device_ptr(&self) -> DevicePtr<T>;
     fn region_len(&self) -> usize;
+    fn region_byte_range(&self) -> core::ops::Range<usize>;
 }
 
 #[derive(Debug)]
@@ -98,13 +100,18 @@ pub struct DeviceBufferView<'allocation, T: DeviceCopy> {
     buffer: &'allocation DeviceBuffer<T>,
     ptr: *mut T,
     len: usize,
+    byte_start: usize,
+    byte_end: usize,
 }
 
 /// Exclusive, borrow-typed contiguous region of a [`DeviceBuffer`].
 pub struct DeviceBufferViewMut<'allocation, T: DeviceCopy> {
-    buffer: &'allocation mut DeviceBuffer<T>,
+    buffer: &'allocation DeviceBuffer<T>,
     ptr: *mut T,
     len: usize,
+    byte_start: usize,
+    byte_end: usize,
+    _exclusive: PhantomData<&'allocation mut DeviceBuffer<T>>,
 }
 
 unsafe impl<T: DeviceCopy> Send for DeviceBuffer<T> {}
@@ -177,6 +184,8 @@ impl<T: DeviceCopy> DeviceBuffer<T> {
             buffer: self,
             ptr: region.ptr,
             len: region.len,
+            byte_start: region.byte_start,
+            byte_end: region.byte_end,
         })
     }
 
@@ -188,10 +197,34 @@ impl<T: DeviceCopy> DeviceBuffer<T> {
     ) -> core::result::Result<DeviceBufferViewMut<'_, T>, DeviceBufferRangeError> {
         let region = checked_region(self.ptr, self.len, range)?;
         Ok(DeviceBufferViewMut {
-            buffer: self,
+            buffer: &*self,
             ptr: region.ptr,
             len: region.len,
+            byte_start: region.byte_start,
+            byte_end: region.byte_end,
+            _exclusive: PhantomData,
         })
+    }
+
+    /// Splits this allocation into two simultaneous exclusive views.
+    ///
+    /// The split point is an element offset in `0..=self.len()`. Both views
+    /// retain this allocation's identity and carry exact, non-overlapping
+    /// allocation-relative byte intervals. The exclusive borrow prevents the
+    /// parent buffer from being used or dropped until both views are gone.
+    pub fn split_at_mut(
+        &mut self,
+        mid: usize,
+    ) -> core::result::Result<
+        (DeviceBufferViewMut<'_, T>, DeviceBufferViewMut<'_, T>),
+        DeviceBufferRangeError,
+    > {
+        let (left, right) = checked_split(self.ptr, self.len, 0, mid)?;
+        let buffer = &*self;
+        Ok((
+            DeviceBufferViewMut::from_checked(buffer, left),
+            DeviceBufferViewMut::from_checked(buffer, right),
+        ))
     }
 
     /// Returns the allocation's untyped HIP device address.
@@ -235,6 +268,13 @@ impl<T: DeviceCopy> DeviceBufferRegion<T> for DeviceBuffer<T> {
     fn region_len(&self) -> usize {
         self.len
     }
+
+    fn region_byte_range(&self) -> core::ops::Range<usize> {
+        0..self
+            .len
+            .checked_mul(core::mem::size_of::<T>())
+            .expect("DeviceBuffer byte-length invariant violated")
+    }
 }
 
 macro_rules! impl_device_buffer_view {
@@ -247,6 +287,7 @@ macro_rules! impl_device_buffer_view {
                     .field("allocation_len", &self.buffer.len)
                     .field("region_ptr", &self.ptr)
                     .field("region_len", &self.len)
+                    .field("region_byte_range", &(self.byte_start..self.byte_end))
                     .finish_non_exhaustive()
             }
         }
@@ -270,6 +311,12 @@ macro_rules! impl_device_buffer_view {
 
             pub fn allocation_identity(&self) -> DeviceBufferIdentity {
                 self.buffer.identity
+            }
+
+            /// Returns the exact half-open byte interval relative to the base
+            /// of the parent allocation.
+            pub fn region_byte_range(&self) -> core::ops::Range<usize> {
+                self.byte_start..self.byte_end
             }
         }
 
@@ -297,12 +344,49 @@ macro_rules! impl_device_buffer_view {
             fn region_len(&self) -> usize {
                 self.len
             }
+
+            fn region_byte_range(&self) -> core::ops::Range<usize> {
+                self.byte_start..self.byte_end
+            }
         }
     };
 }
 
 impl_device_buffer_view!(DeviceBufferView);
 impl_device_buffer_view!(DeviceBufferViewMut);
+
+impl<'allocation, T: DeviceCopy> DeviceBufferViewMut<'allocation, T> {
+    fn from_checked(buffer: &'allocation DeviceBuffer<T>, region: CheckedRegion<T>) -> Self {
+        Self {
+            buffer,
+            ptr: region.ptr,
+            len: region.len,
+            byte_start: region.byte_start,
+            byte_end: region.byte_end,
+            _exclusive: PhantomData,
+        }
+    }
+
+    /// Splits this exclusive view into two simultaneous exclusive subviews.
+    ///
+    /// Returned byte intervals remain relative to the original allocation,
+    /// including after repeated nested splits. The current view is exclusively
+    /// borrowed until both subviews are gone.
+    pub fn split_at_mut(
+        &mut self,
+        mid: usize,
+    ) -> core::result::Result<
+        (DeviceBufferViewMut<'_, T>, DeviceBufferViewMut<'_, T>),
+        DeviceBufferRangeError,
+    > {
+        let (left, right) = checked_split(self.ptr, self.len, self.byte_start, mid)?;
+        debug_assert_eq!(right.byte_end, self.byte_end);
+        Ok((
+            DeviceBufferViewMut::from_checked(self.buffer, left),
+            DeviceBufferViewMut::from_checked(self.buffer, right),
+        ))
+    }
+}
 
 impl<T: DeviceCopy> DeviceBuffer<T> {
     /// Copies `values` into a new device allocation.
@@ -392,6 +476,8 @@ fn byte_len<T>(len: usize) -> Result<usize> {
 struct CheckedRegion<T> {
     ptr: *mut T,
     len: usize,
+    byte_start: usize,
+    byte_end: usize,
 }
 
 fn checked_region<T, R: RangeBounds<usize>>(
@@ -436,6 +522,9 @@ fn checked_region<T, R: RangeBounds<usize>>(
     let byte_offset = start
         .checked_mul(element_size)
         .ok_or(DeviceBufferRangeError::AllocationSizeOverflow)?;
+    let byte_end = end
+        .checked_mul(element_size)
+        .ok_or(DeviceBufferRangeError::AllocationSizeOverflow)?;
     let region_address = allocation_ptr
         .addr()
         .checked_add(byte_offset)
@@ -443,7 +532,46 @@ fn checked_region<T, R: RangeBounds<usize>>(
     Ok(CheckedRegion {
         ptr: allocation_ptr.with_addr(region_address),
         len: end - start,
+        byte_start: byte_offset,
+        byte_end,
     })
+}
+
+fn checked_split<T>(
+    region_ptr: *mut T,
+    region_len: usize,
+    allocation_byte_start: usize,
+    mid: usize,
+) -> core::result::Result<(CheckedRegion<T>, CheckedRegion<T>), DeviceBufferRangeError> {
+    if mid > region_len {
+        return Err(DeviceBufferRangeError::OutOfBounds {
+            start: mid,
+            end: mid,
+            allocation_len: region_len,
+        });
+    }
+
+    let left = checked_region(region_ptr, region_len, ..mid)?;
+    let right = checked_region(region_ptr, region_len, mid..)?;
+    let absolute = |offset: usize| {
+        allocation_byte_start
+            .checked_add(offset)
+            .ok_or(DeviceBufferRangeError::AllocationSizeOverflow)
+    };
+    Ok((
+        CheckedRegion {
+            ptr: left.ptr,
+            len: left.len,
+            byte_start: absolute(left.byte_start)?,
+            byte_end: absolute(left.byte_end)?,
+        },
+        CheckedRegion {
+            ptr: right.ptr,
+            len: right.len,
+            byte_start: absolute(right.byte_start)?,
+            byte_end: absolute(right.byte_end)?,
+        },
+    ))
 }
 
 fn completion_error(error: CompletionError<Error, Error>) -> Error {
@@ -606,6 +734,91 @@ mod tests {
         assert_eq!(view.allocation_len(), 16);
         assert_eq!(view.region_device_ptr().as_raw().addr(), 0x200c);
         assert_eq!(view.region_len(), 4);
+        assert_eq!(view.region_byte_range(), 12..28);
+    }
+
+    #[test]
+    fn split_mut_views_preserve_identity_and_disjoint_byte_intervals() {
+        let mut buffer = test_buffer(0x2000_usize as *mut u32, 8);
+        let identity = buffer.allocation_identity();
+        let (mut left, mut right) = buffer.split_at_mut(3).unwrap();
+
+        assert_eq!(left.allocation_identity(), identity);
+        assert_eq!(right.allocation_identity(), identity);
+        assert_eq!(left.region_byte_range(), 0..12);
+        assert_eq!(right.region_byte_range(), 12..32);
+        assert_eq!(left.as_device_ptr().as_raw().addr(), 0x2000);
+        assert_eq!(right.as_device_ptr().as_raw().addr(), 0x200c);
+
+        let (head, tail) = left.split_at_mut(1).unwrap();
+        assert_eq!(head.allocation_identity(), identity);
+        assert_eq!(tail.allocation_identity(), identity);
+        assert_eq!(head.region_byte_range(), 0..4);
+        assert_eq!(tail.region_byte_range(), 4..12);
+        assert_eq!(tail.as_device_ptr().as_raw().addr(), 0x2004);
+
+        let (middle, end) = right.split_at_mut(2).unwrap();
+        assert_eq!(middle.region_byte_range(), 12..20);
+        assert_eq!(end.region_byte_range(), 20..32);
+        assert_eq!(end.as_device_ptr().as_raw().addr(), 0x2014);
+    }
+
+    #[test]
+    fn split_mut_views_preserve_empty_endpoint_intervals() {
+        let mut at_start_buffer = test_buffer(0x3000_usize as *mut u32, 4);
+        let (empty, full) = at_start_buffer.split_at_mut(0).unwrap();
+        assert!(empty.is_empty());
+        assert_eq!(empty.region_byte_range(), 0..0);
+        assert_eq!(empty.as_device_ptr().as_raw().addr(), 0x3000);
+        assert_eq!(full.region_byte_range(), 0..16);
+
+        let mut at_end_buffer = test_buffer(0x4000_usize as *mut u32, 4);
+        let (full, empty) = at_end_buffer.split_at_mut(4).unwrap();
+        assert_eq!(full.region_byte_range(), 0..16);
+        assert!(empty.is_empty());
+        assert_eq!(empty.region_byte_range(), 16..16);
+        assert_eq!(empty.as_device_ptr().as_raw().addr(), 0x4010);
+    }
+
+    #[test]
+    fn split_mut_views_reject_bounds_and_arithmetic_overflow() {
+        let mut buffer = test_buffer(0x1000_usize as *mut u32, 8);
+        assert_eq!(
+            buffer.split_at_mut(9).unwrap_err(),
+            DeviceBufferRangeError::OutOfBounds {
+                start: 9,
+                end: 9,
+                allocation_len: 8,
+            }
+        );
+
+        let mut oversized = test_buffer(core::ptr::null_mut::<u16>(), usize::MAX);
+        assert_eq!(
+            oversized.split_at_mut(0).unwrap_err(),
+            DeviceBufferRangeError::AllocationSizeOverflow
+        );
+
+        let mut wrapped = test_buffer((usize::MAX - 1) as *mut u32, 1);
+        assert_eq!(
+            wrapped.split_at_mut(0).unwrap_err(),
+            DeviceBufferRangeError::AllocationAddressOverflow
+        );
+    }
+
+    #[test]
+    fn split_mut_views_handle_zero_sized_elements() {
+        let mut buffer = test_buffer(core::ptr::null_mut::<[u8; 0]>(), usize::MAX);
+        let identity = buffer.allocation_identity();
+        let (left, right) = buffer.split_at_mut(usize::MAX - 1).unwrap();
+
+        assert_eq!(left.allocation_identity(), identity);
+        assert_eq!(right.allocation_identity(), identity);
+        assert_eq!(left.len(), usize::MAX - 1);
+        assert_eq!(right.len(), 1);
+        assert_eq!(left.region_byte_range(), 0..0);
+        assert_eq!(right.region_byte_range(), 0..0);
+        assert!(left.as_device_ptr().as_raw().is_null());
+        assert!(right.as_device_ptr().as_raw().is_null());
     }
 
     #[test]
