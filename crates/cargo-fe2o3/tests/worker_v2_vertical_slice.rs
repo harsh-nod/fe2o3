@@ -289,7 +289,7 @@ fn write_config_with_output(
     selects_invocation: bool,
     worker_output: Option<&[u8]>,
 ) -> PathBuf {
-    write_config_with_output_and_cov(directory, selects_invocation, worker_output, 5)
+    write_config_with_output_and_cov(directory, selects_invocation, worker_output, 5, false)
 }
 
 fn write_config_with_output_and_cov(
@@ -297,6 +297,7 @@ fn write_config_with_output_and_cov(
     selects_invocation: bool,
     worker_output: Option<&[u8]>,
     code_object_version: u8,
+    require_envelope: bool,
 ) -> PathBuf {
     let worker_bytes = fs::read(worker_fixture()).unwrap();
     let selected_source = if selects_invocation {
@@ -314,7 +315,7 @@ fn write_config_with_output_and_cov(
             "sha256": hex(&Sha256::digest(bytes))
         })]
     });
-    let value = json!({
+    let mut value = json!({
         "candidate_output_max_bytes": 67108864,
         "format": "fe2o3-worker-v2-config-v2",
         "limits": {
@@ -342,6 +343,9 @@ fn write_config_with_output_and_cov(
             "worker_build_identity": WORKER_ID
         }
     });
+    if require_envelope {
+        value["load_envelope"] = JsonValue::String("required".to_owned());
+    }
     let path = directory.0.join("worker-v2.json");
     fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
     path
@@ -466,6 +470,14 @@ struct PublicationFixture {
 }
 
 fn publication_fixture(directory: &TestDirectory, cov6: bool) -> PublicationFixture {
+    publication_fixture_with_envelope(directory, cov6, false)
+}
+
+fn publication_fixture_with_envelope(
+    directory: &TestDirectory,
+    cov6: bool,
+    require_envelope: bool,
+) -> PublicationFixture {
     let table = cov6.then(cov6_descriptor_table);
     let built = fixture_with_descriptor_table(
         FixtureOptions {
@@ -493,6 +505,7 @@ fn publication_fixture(directory: &TestDirectory, cov6: bool) -> PublicationFixt
         true,
         Some(&provider),
         if cov6 { 6 } else { 5 },
+        require_envelope,
     );
     PublicationFixture {
         config,
@@ -570,9 +583,29 @@ fn valid_worker_output_persists_before_publication_and_cleans_exact_restart_stat
 }
 
 #[test]
-fn cov6_production_preserves_ready_intent_when_envelope_inputs_are_missing() {
+fn ordinary_cov6_production_publishes_exact_non_authoritative_finalized_bytes() {
     let directory = TestDirectory::new();
     let fixture = publication_fixture(&directory, true);
+    let result = run_wrapper_with_options(
+        &directory,
+        &fixture.config,
+        "publish-valid",
+        fixture.cov6,
+        None,
+    );
+    assert!(result.status.success(), "{}", stderr(&result));
+    assert_ne!(fixture.raw_worker_output, fixture.expected_publication);
+    assert_eq!(
+        published_artifacts(&directory),
+        [fixture.expected_publication]
+    );
+    assert!(restart_records(&directory).is_empty());
+}
+
+#[test]
+fn required_cov6_preserves_ready_intent_when_envelope_inputs_are_missing() {
+    let directory = TestDirectory::new();
+    let fixture = publication_fixture_with_envelope(&directory, true, true);
     let result = run_wrapper_with_options(
         &directory,
         &fixture.config,
@@ -586,11 +619,34 @@ fn cov6_production_preserves_ready_intent_when_envelope_inputs_are_missing() {
         "{}",
         stderr(&result)
     );
-    assert_ne!(fixture.raw_worker_output, fixture.expected_publication);
     assert!(published_artifacts(&directory).is_empty());
     assert_eq!(restart_records(&directory).len(), 2);
 
     fs::remove_file(directory.0.join("spawned")).unwrap();
+    let required_config = fs::read(&fixture.config).unwrap();
+    let mut downgraded_config: JsonValue = serde_json::from_slice(&required_config).unwrap();
+    downgraded_config
+        .as_object_mut()
+        .unwrap()
+        .remove("load_envelope");
+    fs::write(
+        &fixture.config,
+        serde_json::to_vec(&downgraded_config).unwrap(),
+    )
+    .unwrap();
+    let downgraded =
+        run_wrapper_with_options(&directory, &fixture.config, "fail", fixture.cov6, None);
+    assert!(!downgraded.status.success());
+    assert!(
+        stderr(&downgraded).contains("different build session or invocation"),
+        "{}",
+        stderr(&downgraded)
+    );
+    assert!(!directory.0.join("spawned").exists());
+    assert!(published_artifacts(&directory).is_empty());
+    assert_eq!(restart_records(&directory).len(), 2);
+
+    fs::write(&fixture.config, required_config).unwrap();
     let recovered =
         run_wrapper_with_options(&directory, &fixture.config, "fail", fixture.cov6, None);
     assert!(!recovered.status.success());
@@ -616,19 +672,17 @@ fn production_build_does_not_expose_the_fault_injection_environment_switch() {
         fixture.cov6,
         Some("completed"),
     );
-    assert_ne!(result.status.code(), Some(86));
-    assert!(
-        stderr(&result).contains("canonical Worker V2 envelope inputs are missing"),
-        "{}",
-        stderr(&result)
+    assert!(result.status.success(), "{}", stderr(&result));
+    assert_eq!(
+        published_artifacts(&directory),
+        [fixture.expected_publication]
     );
-    assert!(published_artifacts(&directory).is_empty());
-    assert_eq!(restart_records(&directory).len(), 2);
+    assert!(restart_records(&directory).is_empty());
 }
 
 #[test]
 #[cfg(feature = "worker-v2-fault-injection-test-only")]
-fn raw_fault_matrix_recovers_every_existing_durable_boundary() {
+fn raw_and_ordinary_finalized_fault_matrix_recovers_every_durable_boundary() {
     const RECOVERABLE: &[&str] = &[
         "pending-intent",
         "ready",
@@ -638,58 +692,60 @@ fn raw_fault_matrix_recovers_every_existing_durable_boundary() {
         "finished",
     ];
 
-    for point in std::iter::once("pending-marker").chain(RECOVERABLE.iter().copied()) {
-        let directory = TestDirectory::new();
-        let fixture = publication_fixture(&directory, false);
-        let interrupted = run_wrapper_with_options(
-            &directory,
-            &fixture.config,
-            "publish-valid",
-            fixture.cov6,
-            Some(point),
-        );
-        assert_eq!(
-            interrupted.status.code(),
-            Some(86),
-            "{point}: {}",
-            stderr(&interrupted)
-        );
-        fs::remove_file(directory.0.join("spawned")).unwrap();
-
-        let recovered =
-            run_wrapper_with_options(&directory, &fixture.config, "fail", fixture.cov6, None);
-        assert!(
-            !directory.0.join("spawned").exists(),
-            "{point} unexpectedly spawned rustc"
-        );
-        if point == "pending-marker" {
-            assert!(
-                !recovered.status.success(),
-                "marker-only state must fail closed"
-            );
-            assert!(published_artifacts(&directory).is_empty());
-        } else {
-            assert!(
-                recovered.status.success(),
-                "{point}: {}",
-                stderr(&recovered)
+    for cov6 in [false, true] {
+        for point in std::iter::once("pending-marker").chain(RECOVERABLE.iter().copied()) {
+            let directory = TestDirectory::new();
+            let fixture = publication_fixture(&directory, cov6);
+            let interrupted = run_wrapper_with_options(
+                &directory,
+                &fixture.config,
+                "publish-valid",
+                fixture.cov6,
+                Some(point),
             );
             assert_eq!(
-                published_artifacts(&directory),
-                [fixture.expected_publication],
-                "{point}"
+                interrupted.status.code(),
+                Some(86),
+                "{point} cov6={cov6}: {}",
+                stderr(&interrupted)
+            );
+            fs::remove_file(directory.0.join("spawned")).unwrap();
+
+            let recovered =
+                run_wrapper_with_options(&directory, &fixture.config, "fail", fixture.cov6, None);
+            assert!(
+                !directory.0.join("spawned").exists(),
+                "{point} cov6={cov6} unexpectedly spawned rustc"
+            );
+            if point == "pending-marker" {
+                assert!(
+                    !recovered.status.success(),
+                    "marker-only state must fail closed for cov6={cov6}"
+                );
+                assert!(published_artifacts(&directory).is_empty());
+            } else {
+                assert!(
+                    recovered.status.success(),
+                    "{point} cov6={cov6}: {}",
+                    stderr(&recovered)
+                );
+                assert_eq!(
+                    published_artifacts(&directory),
+                    [fixture.expected_publication],
+                    "{point} cov6={cov6}"
+                );
+            }
+            assert!(
+                restart_records(&directory).is_empty(),
+                "{point} cov6={cov6} left restart records"
             );
         }
-        assert!(
-            restart_records(&directory).is_empty(),
-            "{point} left restart records"
-        );
     }
 }
 
 #[test]
 #[cfg(feature = "worker-v2-fault-injection-test-only")]
-fn finalized_faults_preserve_or_abandon_state_at_exact_pre_envelope_boundaries() {
+fn required_finalized_faults_preserve_or_abandon_state_at_pre_envelope_boundaries() {
     for point in [
         "pending-marker",
         "pending-intent",
@@ -697,7 +753,7 @@ fn finalized_faults_preserve_or_abandon_state_at_exact_pre_envelope_boundaries()
         "envelope-inputs-required",
     ] {
         let directory = TestDirectory::new();
-        let fixture = publication_fixture(&directory, true);
+        let fixture = publication_fixture_with_envelope(&directory, true, true);
         let interrupted = run_wrapper_with_options(
             &directory,
             &fixture.config,

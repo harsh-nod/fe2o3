@@ -933,13 +933,17 @@ mod test_fixture;
 mod tests {
     use super::test_fixture::{ProfileMutation, alpha_zeta_fixture};
     use super::*;
-    use crate::worker_v2_restart::{WorkerV2EnvelopePublicationOutcomeV1, WorkerV2ResumeStoreV1};
+    use crate::worker_v2_restart::{
+        WorkerV2EnvelopePublicationOutcomeV1, WorkerV2PublicationKindV1, WorkerV2ResumeStoreV1,
+        restart_admission_commitment_v1,
+    };
     use fe2o3_artifact_transaction::{
         AtomicPublicationIdentityV1, BuildInvocation, BuildSession, CanonicalLinkRequestIdentityV1,
         FinalizationIdentityV1, FinalizedOutputIdentityV1, KernelSetIdentityV1,
         LinkPublicationScopeV1, LinkedOutputIdentityV1, PackageIdentityV1, PinnedWorkerIdentityV1,
-        TargetIdentityV1, ValidatedResponseIdentityV1, begin_build_attempt, finish_build_attempt,
-        producer_package_identity_v1, publish_exact_hsaco_evidence_for_attempt_v1,
+        TargetIdentityV1, ValidatedResponseIdentityV1, WorkerV2PublicationIntentIdentityV1,
+        begin_build_attempt, finish_build_attempt, producer_package_identity_v1,
+        publish_exact_hsaco_evidence_for_attempt_v1,
     };
     use fe2o3_artifacts::{
         CallerClaimedPackageIdentityV1, DirectLinkBindingExpectationV1, DirectLinkBindingSourceV1,
@@ -1665,5 +1669,80 @@ mod tests {
                 .to_bytes(),
             envelope.to_bytes()
         );
+    }
+
+    #[test]
+    fn required_completion_publishes_envelope_before_completed_marker() {
+        let directory = TestDirectory::new();
+        let (publisher, envelope, _) = canonical_envelope_fixture(&directory);
+        let claim = envelope.published_claim();
+        let attempt = claim.plan().attempt();
+        let receipt = claim.receipt();
+        let publication = WorkerV2PublicationKindV1::FinalizedEnvelopeRequired;
+        let admission = restart_admission_commitment_v1(
+            publication,
+            claim.plan(),
+            claim.upstream_evidence(),
+            envelope.finalized_payload(),
+        );
+        let intent = WorkerV2PublicationIntentIdentityV1::from_bytes([0xa1; 32]);
+        let store = WorkerV2ResumeStoreV1::open(&directory.0, &publisher).unwrap();
+        store
+            .persist_pending(publication, attempt, admission)
+            .unwrap();
+        store.persist_ready(publication, attempt, intent).unwrap();
+        assert!(
+            store
+                .persist_completed(publication, attempt, intent, receipt)
+                .is_err()
+        );
+
+        let completed = store
+            .persist_envelope_and_completed(publication, attempt, intent, receipt, &envelope)
+            .unwrap();
+        assert_eq!(store.load().unwrap(), Some(completed));
+        assert_eq!(
+            store.recover_load_envelope(receipt).unwrap().to_bytes(),
+            envelope.to_bytes()
+        );
+    }
+
+    #[test]
+    fn required_completed_recovery_rejects_a_missing_envelope() {
+        let directory = TestDirectory::new();
+        let (publisher, envelope, _) = canonical_envelope_fixture(&directory);
+        let claim = envelope.published_claim();
+        let attempt = claim.plan().attempt();
+        let receipt = claim.receipt();
+        let publication = WorkerV2PublicationKindV1::FinalizedEnvelopeRequired;
+        let admission = restart_admission_commitment_v1(
+            publication,
+            claim.plan(),
+            claim.upstream_evidence(),
+            envelope.finalized_payload(),
+        );
+        let intent = WorkerV2PublicationIntentIdentityV1::from_bytes([0xa2; 32]);
+        let store = WorkerV2ResumeStoreV1::open(&directory.0, &publisher).unwrap();
+        store
+            .persist_pending(publication, attempt, admission)
+            .unwrap();
+        store.persist_ready(publication, attempt, intent).unwrap();
+        let completed = store
+            .persist_envelope_and_completed(publication, attempt, intent, receipt, &envelope)
+            .unwrap();
+        let path = fs::read_dir(&directory.0)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| {
+                let name = path.file_name().unwrap().to_string_lossy();
+                name.starts_with(".fe2o3-worker-v2-load-envelope-v1-")
+                    && name.ends_with(".envelope")
+            })
+            .unwrap();
+        fs::remove_file(path).unwrap();
+
+        assert!(store.recover_load_envelope(receipt).is_err());
+        assert_eq!(store.load().unwrap(), Some(completed));
+        assert!(completed.publication().requires_envelope());
     }
 }

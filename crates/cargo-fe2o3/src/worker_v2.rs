@@ -34,6 +34,16 @@ const ROOT_KEYS: &[&str] = &[
     "units",
     "worker",
 ];
+const ROOT_KEYS_WITH_ENVELOPE: &[&str] = &[
+    "candidate_output_max_bytes",
+    "format",
+    "limits",
+    "link_options",
+    "load_envelope",
+    "providers",
+    "units",
+    "worker",
+];
 const WORKER_KEYS: &[&str] = &[
     "byte_len",
     "llvm_build_identity",
@@ -70,6 +80,28 @@ impl WorkerV2ConfigIdentity {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WorkerV2EnvelopeModeV1 {
+    /// Preserve the inert HSACO publication flow without claiming load or launch authority.
+    NonAuthoritative,
+    /// Require a canonical inert envelope before the attempt can complete.
+    Required,
+}
+
+impl WorkerV2EnvelopeModeV1 {
+    pub(crate) const fn is_required(self) -> bool {
+        matches!(self, Self::Required)
+    }
+
+    pub(crate) const fn grants_load_authority(self) -> bool {
+        false
+    }
+
+    pub(crate) const fn grants_launch_authority(self) -> bool {
+        false
+    }
+}
+
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct ConfiguredUnit {
     crate_name: String,
@@ -79,6 +111,7 @@ struct ConfiguredUnit {
 
 pub(crate) struct PreparedWorkerV2Config {
     identity: WorkerV2ConfigIdentity,
+    envelope_mode: WorkerV2EnvelopeModeV1,
     worker: PinnedWorkerV1,
     providers: Vec<WorkerInputV1>,
     link_options: Vec<LinkOptionV1>,
@@ -123,7 +156,7 @@ impl PreparedWorkerV2Config {
             ));
         }
 
-        let root = exact_object(&value, ROOT_KEYS, "configuration")?;
+        let root = exact_root_object(&value)?;
         if required_string(root, "format", "configuration")? != CONFIG_FORMAT {
             return Err(WorkerV2ConfigError::Invalid(format!(
                 "configuration format must be exactly {CONFIG_FORMAT:?}"
@@ -142,10 +175,12 @@ impl PreparedWorkerV2Config {
         .map_err(WorkerV2ConfigError::Protocol)?;
         let limits = parse_limits(required_value(root, "limits", "configuration")?)?;
         let units = parse_units(required_value(root, "units", "configuration")?)?;
+        let envelope_mode = parse_envelope_mode(root)?;
 
         let identity = transitive_identity(&bytes, &worker, &providers);
         Ok(Self {
             identity,
+            envelope_mode,
             worker,
             providers,
             link_options,
@@ -157,6 +192,10 @@ impl PreparedWorkerV2Config {
 
     pub(crate) const fn identity(&self) -> WorkerV2ConfigIdentity {
         self.identity
+    }
+
+    pub(crate) const fn envelope_mode(&self) -> WorkerV2EnvelopeModeV1 {
+        self.envelope_mode
     }
 
     pub(crate) fn selects(
@@ -193,6 +232,18 @@ impl PreparedWorkerV2Config {
             self.candidate_output.clone(),
             self.limits,
         )
+    }
+}
+
+fn parse_envelope_mode(
+    root: &Map<String, Value>,
+) -> Result<WorkerV2EnvelopeModeV1, WorkerV2ConfigError> {
+    match root.get("load_envelope") {
+        None => Ok(WorkerV2EnvelopeModeV1::NonAuthoritative),
+        Some(Value::String(value)) if value == "required" => Ok(WorkerV2EnvelopeModeV1::Required),
+        Some(_) => Err(WorkerV2ConfigError::Invalid(
+            "configuration.load_envelope must be exactly \"required\" when present".to_owned(),
+        )),
     }
 }
 
@@ -471,6 +522,19 @@ fn exact_object<'a>(
     Ok(object)
 }
 
+fn exact_root_object(value: &Value) -> Result<&Map<String, Value>, WorkerV2ConfigError> {
+    let object = value.as_object().ok_or_else(|| {
+        WorkerV2ConfigError::Invalid("configuration must be an object".to_owned())
+    })?;
+    let keys = object.keys().map(String::as_str).collect::<Vec<_>>();
+    if keys != ROOT_KEYS && keys != ROOT_KEYS_WITH_ENVELOPE {
+        return Err(WorkerV2ConfigError::Invalid(format!(
+            "configuration must contain exactly the fields {ROOT_KEYS:?}, optionally plus \"load_envelope\"; found {keys:?}"
+        )));
+    }
+    Ok(object)
+}
+
 fn required_value<'a>(
     object: &'a Map<String, Value>,
     name: &str,
@@ -677,10 +741,38 @@ mod tests {
         let first = PreparedWorkerV2Config::from_manifest(&path).unwrap();
         let second = PreparedWorkerV2Config::from_manifest(&path).unwrap();
         assert_eq!(first.identity(), second.identity());
+        assert_eq!(
+            first.envelope_mode(),
+            WorkerV2EnvelopeModeV1::NonAuthoritative
+        );
+        assert!(!first.envelope_mode().grants_load_authority());
+        assert!(!first.envelope_mode().grants_launch_authority());
         assert_eq!(first.providers.len(), 1);
         assert_eq!(first.link_options.len(), 4);
         assert!(first.selects("kernel", Path::new("src/lib.rs"), &directory.0));
         assert!(!first.selects("host", Path::new("src/lib.rs"), &directory.0));
+    }
+
+    #[test]
+    fn load_envelope_requirement_is_explicit_and_identity_bound() {
+        let directory = TestDirectory::new();
+        let path = manifest(&directory);
+        let ordinary = PreparedWorkerV2Config::from_manifest(&path).unwrap();
+        let mut value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        value["load_envelope"] = Value::String("required".to_owned());
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+
+        let required = PreparedWorkerV2Config::from_manifest(&path).unwrap();
+        assert_eq!(required.envelope_mode(), WorkerV2EnvelopeModeV1::Required);
+        assert!(required.envelope_mode().is_required());
+        assert_ne!(ordinary.identity(), required.identity());
+
+        value["load_envelope"] = Value::String("optional".to_owned());
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(matches!(
+            PreparedWorkerV2Config::from_manifest(&path),
+            Err(WorkerV2ConfigError::Invalid(_))
+        ));
     }
 
     #[test]

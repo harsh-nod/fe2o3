@@ -604,6 +604,8 @@ fn complete_fresh_worker_v2(
     worker_v2: &PreparedWorkerV2Config,
     resume: &WorkerV2ResumeStoreV1,
 ) -> Result<(), CompletionFailure> {
+    debug_assert!(!worker_v2.envelope_mode().grants_load_authority());
+    debug_assert!(!worker_v2.envelope_mode().grants_launch_authority());
     let consumed =
         consume_compiler_module_handoff_v1(&managed.output_dir, &managed.producer, managed.attempt)
             .map_err(|error| {
@@ -620,9 +622,20 @@ fn complete_fresh_worker_v2(
             "independent Worker V2 HSACO inspection failed: {error}"
         ))
     })?;
-    let persisted = persist_admitted_worker_v2_intent_v1(resume, &managed.producer, inspected)
-        .map_err(|error| preserve_restart_error("persistence", error))?;
-    publish_finish_and_clear(managed, resume, persisted.publication, persisted.intent)
+    let persisted = persist_admitted_worker_v2_intent_v1(
+        resume,
+        &managed.producer,
+        inspected,
+        worker_v2.envelope_mode(),
+    )
+    .map_err(|error| preserve_restart_error("persistence", error))?;
+    publish_finish_and_clear(
+        managed,
+        resume,
+        persisted.publication,
+        persisted.intent,
+        None,
+    )
 }
 
 fn complete_recovered_worker_v2(
@@ -647,7 +660,7 @@ fn complete_recovered_worker_v2(
         }
         Err(error) => return Err(preserve_restart_error("recovery", error)),
     };
-    publish_finish_and_clear(managed, resume, state.publication(), intent)
+    publish_finish_and_clear(managed, resume, state.publication(), intent, None)
 }
 
 fn publish_finish_and_clear(
@@ -655,8 +668,9 @@ fn publish_finish_and_clear(
     resume: &WorkerV2ResumeStoreV1,
     publication: WorkerV2PublicationKindV1,
     intent: RecoveredWorkerV2PublicationIntentV1,
+    envelope: Option<&fe2o3_worker_v2_bundle::WorkerV2LoadEnvelopeV1>,
 ) -> Result<(), CompletionFailure> {
-    if publication == WorkerV2PublicationKindV1::Finalized {
+    if publication.requires_envelope() && envelope.is_none() {
         #[cfg(feature = "worker-v2-fault-injection-test-only")]
         injected_fault_point_v1("envelope-inputs-required");
         return Err(preserve_restart_error(
@@ -669,9 +683,18 @@ fn publish_finish_and_clear(
     let receipt = publish_recovered_worker_v2(managed, &intent)?;
     #[cfg(feature = "worker-v2-fault-injection-test-only")]
     injected_fault_point_v1("published");
-    let completed = resume
-        .persist_completed(publication, managed.attempt, intent_identity, receipt)
-        .map_err(|error| preserve_marker_error("completion persistence", error))?;
+    let completed = if let Some(envelope) = envelope {
+        resume.persist_envelope_and_completed(
+            publication,
+            managed.attempt,
+            intent_identity,
+            receipt,
+            envelope,
+        )
+    } else {
+        resume.persist_completed(publication, managed.attempt, intent_identity, receipt)
+    }
+    .map_err(|error| preserve_marker_error("completion persistence", error))?;
     #[cfg(feature = "worker-v2-fault-injection-test-only")]
     injected_fault_point_v1("completed");
     clear_worker_v2_publication_intent_v1(
@@ -728,7 +751,7 @@ fn reconcile_completed_worker_v2(
             "Worker V2 completed resume marker receipt was substituted".into(),
         ));
     }
-    if completed.publication() == WorkerV2PublicationKindV1::Finalized {
+    if completed.publication().requires_envelope() {
         validate_completed_worker_v2_envelope(resume, completed, receipt, managed.attempt)?;
     }
     match recover_worker_v2_intent_v1(resume, &managed.producer, completed) {
@@ -774,7 +797,7 @@ fn validate_completed_worker_v2_envelope(
     })?;
     let claim = envelope.published_claim();
     let admission = restart_admission_commitment_v1(
-        WorkerV2PublicationKindV1::Finalized,
+        completed.publication(),
         claim.plan(),
         claim.upstream_evidence(),
         envelope.finalized_payload(),
@@ -993,10 +1016,9 @@ pub(crate) fn exit_code(status: ExitStatus) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::{
-        BindingWrapperError, CompletionFailure, decode_managed_rustc_args,
+        BindingWrapperError, decode_managed_rustc_args,
         derive_build_invocation_with_config_identity, is_cargo_stdin_probe,
         ordered_metadata_values, reject_uninspectable_rustc_args,
-        validate_completed_worker_v2_envelope,
     };
     use crate::worker_v2::WorkerV2ConfigIdentity;
     use crate::worker_v2_restart::{
@@ -1159,7 +1181,7 @@ mod tests {
     }
 
     #[test]
-    fn completed_finalized_recovery_preserves_marker_and_intent_without_envelope() {
+    fn required_finalized_completion_cannot_bypass_the_envelope_transition() {
         let directory = std::env::temp_dir().join(format!(
             "cargo-fe2o3-completed-envelope-{}",
             std::process::id()
@@ -1196,53 +1218,32 @@ mod tests {
             AtomicPublicationIdentityV1::from_bytes([0x29; 32]),
         );
         let upstream = UpstreamCodeObjectEvidenceIdentityV1::from_bytes([0x31; 32]);
-        let admission = restart_admission_commitment_v1(
-            WorkerV2PublicationKindV1::Finalized,
-            plan,
-            upstream,
-            output,
-        );
+        let required = WorkerV2PublicationKindV1::FinalizedEnvelopeRequired;
+        let admission = restart_admission_commitment_v1(required, plan, upstream, output);
         let store = WorkerV2ResumeStoreV1::open(&directory, &producer).unwrap();
-        store
-            .persist_pending(WorkerV2PublicationKindV1::Finalized, attempt, admission)
-            .unwrap();
+        store.persist_pending(required, attempt, admission).unwrap();
         let intent = persist_worker_v2_publication_intent_v1(
             &directory, &producer, attempt, plan, upstream, output,
         )
         .unwrap();
         store
-            .persist_ready(
-                WorkerV2PublicationKindV1::Finalized,
-                attempt,
-                intent.record().identity(),
-            )
+            .persist_ready(required, attempt, intent.record().identity())
             .unwrap();
+        let ready = store.load().unwrap().unwrap();
         let publication = publish_exact_hsaco_evidence_for_attempt_v1(
             &directory, &producer, attempt, plan, upstream, output,
         )
         .unwrap();
-        let completed = store
-            .persist_completed(
-                WorkerV2PublicationKindV1::Finalized,
+        assert!(matches!(
+            store.persist_completed(
+                required,
                 attempt,
                 intent.record().identity(),
                 publication.receipt(),
-            )
-            .unwrap();
-
-        let error = validate_completed_worker_v2_envelope(
-            &store,
-            completed,
-            publication.receipt(),
-            attempt,
-        )
-        .unwrap_err();
-        assert!(matches!(
-            error,
-            CompletionFailure::PreserveAttempt(message)
-                if message.contains("canonical Worker V2 load envelope is missing")
+            ),
+            Err(crate::worker_v2_restart::ResumeMarkerErrorV1::InvalidTransition)
         ));
-        assert_eq!(store.load().unwrap(), Some(completed));
+        assert_eq!(store.load().unwrap(), Some(ready));
         assert!(recover_worker_v2_publication_intent_v1(&directory, &producer, attempt).is_ok());
         drop(publication);
         drop(store);

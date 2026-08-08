@@ -31,6 +31,8 @@ use rustix::fs::{
 };
 use sha2::{Digest, Sha256};
 
+use crate::worker_v2::WorkerV2EnvelopeModeV1;
+
 const MARKER_MAGIC: &[u8] = b"FE2O3-CARGO-WORKER-V2-RESUME-V1\0";
 const LEGACY_MARKER_VERSION: u16 = 1;
 const MARKER_VERSION: u16 = 2;
@@ -92,7 +94,10 @@ impl ReceiptRecordV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WorkerV2PublicationKindV1 {
     Raw,
+    /// Ordinary inert COV6 publication; no load envelope was requested.
     Finalized,
+    /// COV6 publication whose persisted transaction cannot complete without its load envelope.
+    FinalizedEnvelopeRequired,
 }
 
 impl WorkerV2PublicationKindV1 {
@@ -100,6 +105,7 @@ impl WorkerV2PublicationKindV1 {
         match self {
             Self::Raw => 1,
             Self::Finalized => 2,
+            Self::FinalizedEnvelopeRequired => 3,
         }
     }
 
@@ -107,8 +113,17 @@ impl WorkerV2PublicationKindV1 {
         match tag {
             1 => Some(Self::Raw),
             2 => Some(Self::Finalized),
+            3 => Some(Self::FinalizedEnvelopeRequired),
             _ => None,
         }
+    }
+
+    pub(crate) const fn is_finalized(self) -> bool {
+        matches!(self, Self::Finalized | Self::FinalizedEnvelopeRequired)
+    }
+
+    pub(crate) const fn requires_envelope(self) -> bool {
+        matches!(self, Self::FinalizedEnvelopeRequired)
     }
 }
 
@@ -200,7 +215,6 @@ impl Error for RestartIntentErrorV1 {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[allow(dead_code)] // Exercised once sealed compiler-produced envelope inputs enter completion.
 pub(crate) enum WorkerV2EnvelopePublicationOutcomeV1 {
     Published,
     AlreadyPublished,
@@ -256,17 +270,20 @@ pub(crate) fn persist_admitted_worker_v2_intent_v1(
     store: &WorkerV2ResumeStoreV1,
     producer: &ProducerIdentity,
     inspected: InspectedRawWorkerV2HsacoV1,
+    envelope_mode: WorkerV2EnvelopeModeV1,
 ) -> Result<PersistedAdmittedWorkerV2IntentV1, RestartIntentErrorV1> {
     let publication = select_publication_kind_v1(
         inspected.code_object_version(),
         inspected.canonical_descriptor_section(),
+        envelope_mode,
     )?;
     let prepared = match publication {
         WorkerV2PublicationKindV1::Raw => PreparedWorkerV2PublicationV1::Raw(Box::new(
             prepare_worker_v2_hsaco_publication_v1(producer, inspected)
                 .map_err(RestartIntentErrorV1::PublicationIntent)?,
         )),
-        WorkerV2PublicationKindV1::Finalized => {
+        WorkerV2PublicationKindV1::Finalized
+        | WorkerV2PublicationKindV1::FinalizedEnvelopeRequired => {
             let finalized = finalize_inspected_worker_v2_hsaco_v1(inspected)
                 .map_err(RestartIntentErrorV1::Finalization)?;
             PreparedWorkerV2PublicationV1::Finalized(Box::new(
@@ -275,7 +292,7 @@ pub(crate) fn persist_admitted_worker_v2_intent_v1(
             ))
         }
     };
-    debug_assert_eq!(publication, prepared.kind());
+    debug_assert_eq!(publication.is_finalized(), prepared.kind().is_finalized());
     let attempt = prepared.attempt();
     let intent = prepared.intent();
     let plan = intent.durable_plan();
@@ -317,10 +334,19 @@ pub(crate) fn injected_fault_point_v1(point: &str) {
 fn select_publication_kind_v1(
     code_object_version: CodeObjectVersion,
     descriptor: CanonicalDescriptorSectionObservationV1,
+    envelope_mode: WorkerV2EnvelopeModeV1,
 ) -> Result<WorkerV2PublicationKindV1, RestartIntentErrorV1> {
     match (code_object_version, descriptor) {
-        (CodeObjectVersion::V5, CanonicalDescriptorSectionObservationV1::Missing) => {
+        (CodeObjectVersion::V5, CanonicalDescriptorSectionObservationV1::Missing)
+            if !envelope_mode.is_required() =>
+        {
             Ok(WorkerV2PublicationKindV1::Raw)
+        }
+        (
+            CodeObjectVersion::V6,
+            CanonicalDescriptorSectionObservationV1::PresentButNotFinalizedByThisInspection,
+        ) if envelope_mode.is_required() => {
+            Ok(WorkerV2PublicationKindV1::FinalizedEnvelopeRequired)
         }
         (
             CodeObjectVersion::V6,
@@ -616,7 +642,6 @@ impl WorkerV2ResumeStoreV1 {
         Ok(())
     }
 
-    #[allow(dead_code)] // Production store boundary for the pending upstream envelope producer.
     pub(crate) fn publish_load_envelope(
         &self,
         envelope: &WorkerV2LoadEnvelopeV1,
@@ -849,6 +874,73 @@ impl WorkerV2ResumeStoreV1 {
     }
 
     pub(crate) fn persist_completed(
+        &self,
+        publication: WorkerV2PublicationKindV1,
+        attempt: BuildAttempt,
+        intent: WorkerV2PublicationIntentIdentityV1,
+        receipt: BackendPublicationReceiptV1,
+    ) -> Result<ResumeMarkerStateV1, ResumeMarkerErrorV1> {
+        if publication.requires_envelope() {
+            return Err(ResumeMarkerErrorV1::InvalidTransition);
+        }
+        self.persist_completed_inner(publication, attempt, intent, receipt)
+    }
+
+    /// Durably publishes the required inert envelope before advancing the marker to `Completed`.
+    pub(crate) fn persist_envelope_and_completed(
+        &self,
+        publication: WorkerV2PublicationKindV1,
+        attempt: BuildAttempt,
+        intent: WorkerV2PublicationIntentIdentityV1,
+        receipt: BackendPublicationReceiptV1,
+        envelope: &WorkerV2LoadEnvelopeV1,
+    ) -> Result<ResumeMarkerStateV1, ResumeMarkerErrorV1> {
+        if !publication.requires_envelope() {
+            return Err(ResumeMarkerErrorV1::InvalidTransition);
+        }
+        let admission = match self.load()? {
+            Some(ResumeMarkerStateV1::Ready {
+                legacy: false,
+                publication: current_publication,
+                attempt: current_attempt,
+                admission,
+                intent: current_intent,
+            })
+            | Some(ResumeMarkerStateV1::Completed {
+                legacy: false,
+                publication: current_publication,
+                attempt: current_attempt,
+                admission,
+                intent: current_intent,
+                ..
+            }) if current_publication == publication
+                && current_attempt == attempt
+                && current_intent == intent =>
+            {
+                admission
+            }
+            _ => return Err(ResumeMarkerErrorV1::InvalidTransition),
+        };
+        let claim = envelope.published_claim();
+        if claim.receipt() != receipt
+            || claim.plan().attempt() != attempt
+            || restart_admission_commitment_v1(
+                publication,
+                claim.plan(),
+                claim.upstream_evidence(),
+                envelope.finalized_payload(),
+            ) != admission
+            || envelope.grants_currentness_authority()
+            || envelope.grants_load_authority()
+            || envelope.grants_launch_authority()
+        {
+            return Err(self.invalid("required envelope disagrees with the ready publication"));
+        }
+        self.publish_load_envelope(envelope)?;
+        self.persist_completed_inner(publication, attempt, intent, receipt)
+    }
+
+    fn persist_completed_inner(
         &self,
         publication: WorkerV2PublicationKindV1,
         attempt: BuildAttempt,
@@ -2090,13 +2182,40 @@ mod tests {
         };
 
         assert_eq!(
-            select_publication_kind_v1(CodeObjectVersion::V5, Missing).unwrap(),
+            select_publication_kind_v1(
+                CodeObjectVersion::V5,
+                Missing,
+                WorkerV2EnvelopeModeV1::NonAuthoritative,
+            )
+            .unwrap(),
             WorkerV2PublicationKindV1::Raw
         );
         assert_eq!(
-            select_publication_kind_v1(CodeObjectVersion::V6, Present).unwrap(),
+            select_publication_kind_v1(
+                CodeObjectVersion::V6,
+                Present,
+                WorkerV2EnvelopeModeV1::NonAuthoritative,
+            )
+            .unwrap(),
             WorkerV2PublicationKindV1::Finalized
         );
+        assert_eq!(
+            select_publication_kind_v1(
+                CodeObjectVersion::V6,
+                Present,
+                WorkerV2EnvelopeModeV1::Required,
+            )
+            .unwrap(),
+            WorkerV2PublicationKindV1::FinalizedEnvelopeRequired
+        );
+        assert!(matches!(
+            select_publication_kind_v1(
+                CodeObjectVersion::V5,
+                Missing,
+                WorkerV2EnvelopeModeV1::Required,
+            ),
+            Err(RestartIntentErrorV1::UnsupportedPublicationRoute { .. })
+        ));
         for (version, descriptor) in [
             (CodeObjectVersion::V4, Missing),
             (CodeObjectVersion::V4, Present),
@@ -2104,7 +2223,11 @@ mod tests {
             (CodeObjectVersion::V6, Missing),
         ] {
             assert!(matches!(
-                select_publication_kind_v1(version, descriptor),
+                select_publication_kind_v1(
+                    version,
+                    descriptor,
+                    WorkerV2EnvelopeModeV1::NonAuthoritative,
+                ),
                 Err(RestartIntentErrorV1::UnsupportedPublicationRoute { .. })
             ));
         }
@@ -2127,6 +2250,9 @@ mod tests {
             output.extend_from_slice(match publication {
                 WorkerV2PublicationKindV1::Raw => b"-raw",
                 WorkerV2PublicationKindV1::Finalized => b"-canonical-finalized",
+                WorkerV2PublicationKindV1::FinalizedEnvelopeRequired => {
+                    b"-required-canonical-finalized"
+                }
             });
             let (_, template, upstream) = publication_inputs(attempt, seed);
             let plan = DurableLinkPublicationPlanV1::new(
@@ -2182,6 +2308,15 @@ mod tests {
             finalized_admission,
             restart_admission_commitment_v1(
                 WorkerV2PublicationKindV1::Raw,
+                plan,
+                upstream,
+                &output,
+            )
+        );
+        assert_ne!(
+            finalized_admission,
+            restart_admission_commitment_v1(
+                WorkerV2PublicationKindV1::FinalizedEnvelopeRequired,
                 plan,
                 upstream,
                 &output,
