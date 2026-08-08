@@ -1,0 +1,18 @@
+[package]
+name = "fe2o3-worker-v2-bundle"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Canonical inert Worker V2 load-envelope schema for fe2o3."
+publish = false
+
+[lib]
+name = "fe2o3_worker_v2_bundle"
+
+[dependencies]
+fe2o3-artifact-transaction.workspace = true
+fe2o3-artifacts.workspace = true
+fe2o3-kernel-descriptor.workspace = true
+sha2.workspace = true

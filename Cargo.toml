@@ -25,6 +25,7 @@ members = [
     "crates/fe2o3-rustc-invocation",
     "crates/fe2o3-rustc-front",
     "crates/fe2o3-verifier",
+    "crates/fe2o3-worker-v2-bundle",
     "crates/reserved-fe2o3-symbols",
     "crates/rustc-codegen-fe2o3",
     "crates/rustc-codegen-fe2o3/tests/fixtures/external-spoof",
@@ -93,6 +94,7 @@ fe2o3-macros = { path = "crates/fe2o3-macros" }
 fe2o3-rustc-invocation = { path = "crates/fe2o3-rustc-invocation" }
 fe2o3-rustc-front = { path = "crates/fe2o3-rustc-front" }
 fe2o3-verifier = { path = "crates/fe2o3-verifier" }
+fe2o3-worker-v2-bundle = { path = "crates/fe2o3-worker-v2-bundle" }
 reserved-fe2o3-symbols = { path = "crates/reserved-fe2o3-symbols" }
 rustc-codegen-fe2o3 = { path = "crates/rustc-codegen-fe2o3" }
 libc = "0.2.189"
