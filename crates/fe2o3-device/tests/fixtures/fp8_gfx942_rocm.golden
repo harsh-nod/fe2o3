@@ -1,0 +1,2632 @@
+meta schema fe2o3-fp8-gfx942-golden-v1
+meta target gfx942
+meta rocm-release 7.2.4
+meta hip-version 7.2.53211-97f5574fe2
+meta clang-version 22.0.0git
+meta clang-revision f58b06dce1f9c15707c5f808fd002e18c2accf7e
+meta rounding rne
+meta saturation satfinite
+meta fnuz-nan-f32 ffc00000
+meta oracle-sha256 84f86698e171f8b82211dab611c7122e612ac80d7ec1ea5f49ce5c9211e9576a
+meta generator-sha256 95b978f5222c5c3e2842901ff57dad73190ba1857fb610ffd1488ff90f942757
+widen e4 00 00000000
+widen e4 01 3a800000
+widen e4 02 3b000000
+widen e4 03 3b400000
+widen e4 04 3b800000
+widen e4 05 3ba00000
+widen e4 06 3bc00000
+widen e4 07 3be00000
+widen e4 08 3c000000
+widen e4 09 3c100000
+widen e4 0a 3c200000
+widen e4 0b 3c300000
+widen e4 0c 3c400000
+widen e4 0d 3c500000
+widen e4 0e 3c600000
+widen e4 0f 3c700000
+widen e4 10 3c800000
+widen e4 11 3c900000
+widen e4 12 3ca00000
+widen e4 13 3cb00000
+widen e4 14 3cc00000
+widen e4 15 3cd00000
+widen e4 16 3ce00000
+widen e4 17 3cf00000
+widen e4 18 3d000000
+widen e4 19 3d100000
+widen e4 1a 3d200000
+widen e4 1b 3d300000
+widen e4 1c 3d400000
+widen e4 1d 3d500000
+widen e4 1e 3d600000
+widen e4 1f 3d700000
+widen e4 20 3d800000
+widen e4 21 3d900000
+widen e4 22 3da00000
+widen e4 23 3db00000
+widen e4 24 3dc00000
+widen e4 25 3dd00000
+widen e4 26 3de00000
+widen e4 27 3df00000
+widen e4 28 3e000000
+widen e4 29 3e100000
+widen e4 2a 3e200000
+widen e4 2b 3e300000
+widen e4 2c 3e400000
+widen e4 2d 3e500000
+widen e4 2e 3e600000
+widen e4 2f 3e700000
+widen e4 30 3e800000
+widen e4 31 3e900000
+widen e4 32 3ea00000
+widen e4 33 3eb00000
+widen e4 34 3ec00000
+widen e4 35 3ed00000
+widen e4 36 3ee00000
+widen e4 37 3ef00000
+widen e4 38 3f000000
+widen e4 39 3f100000
+widen e4 3a 3f200000
+widen e4 3b 3f300000
+widen e4 3c 3f400000
+widen e4 3d 3f500000
+widen e4 3e 3f600000
+widen e4 3f 3f700000
+widen e4 40 3f800000
+widen e4 41 3f900000
+widen e4 42 3fa00000
+widen e4 43 3fb00000
+widen e4 44 3fc00000
+widen e4 45 3fd00000
+widen e4 46 3fe00000
+widen e4 47 3ff00000
+widen e4 48 40000000
+widen e4 49 40100000
+widen e4 4a 40200000
+widen e4 4b 40300000
+widen e4 4c 40400000
+widen e4 4d 40500000
+widen e4 4e 40600000
+widen e4 4f 40700000
+widen e4 50 40800000
+widen e4 51 40900000
+widen e4 52 40a00000
+widen e4 53 40b00000
+widen e4 54 40c00000
+widen e4 55 40d00000
+widen e4 56 40e00000
+widen e4 57 40f00000
+widen e4 58 41000000
+widen e4 59 41100000
+widen e4 5a 41200000
+widen e4 5b 41300000
+widen e4 5c 41400000
+widen e4 5d 41500000
+widen e4 5e 41600000
+widen e4 5f 41700000
+widen e4 60 41800000
+widen e4 61 41900000
+widen e4 62 41a00000
+widen e4 63 41b00000
+widen e4 64 41c00000
+widen e4 65 41d00000
+widen e4 66 41e00000
+widen e4 67 41f00000
+widen e4 68 42000000
+widen e4 69 42100000
+widen e4 6a 42200000
+widen e4 6b 42300000
+widen e4 6c 42400000
+widen e4 6d 42500000
+widen e4 6e 42600000
+widen e4 6f 42700000
+widen e4 70 42800000
+widen e4 71 42900000
+widen e4 72 42a00000
+widen e4 73 42b00000
+widen e4 74 42c00000
+widen e4 75 42d00000
+widen e4 76 42e00000
+widen e4 77 42f00000
+widen e4 78 43000000
+widen e4 79 43100000
+widen e4 7a 43200000
+widen e4 7b 43300000
+widen e4 7c 43400000
+widen e4 7d 43500000
+widen e4 7e 43600000
+widen e4 7f 43700000
+widen e4 80 ffc00000
+widen e4 81 ba800000
+widen e4 82 bb000000
+widen e4 83 bb400000
+widen e4 84 bb800000
+widen e4 85 bba00000
+widen e4 86 bbc00000
+widen e4 87 bbe00000
+widen e4 88 bc000000
+widen e4 89 bc100000
+widen e4 8a bc200000
+widen e4 8b bc300000
+widen e4 8c bc400000
+widen e4 8d bc500000
+widen e4 8e bc600000
+widen e4 8f bc700000
+widen e4 90 bc800000
+widen e4 91 bc900000
+widen e4 92 bca00000
+widen e4 93 bcb00000
+widen e4 94 bcc00000
+widen e4 95 bcd00000
+widen e4 96 bce00000
+widen e4 97 bcf00000
+widen e4 98 bd000000
+widen e4 99 bd100000
+widen e4 9a bd200000
+widen e4 9b bd300000
+widen e4 9c bd400000
+widen e4 9d bd500000
+widen e4 9e bd600000
+widen e4 9f bd700000
+widen e4 a0 bd800000
+widen e4 a1 bd900000
+widen e4 a2 bda00000
+widen e4 a3 bdb00000
+widen e4 a4 bdc00000
+widen e4 a5 bdd00000
+widen e4 a6 bde00000
+widen e4 a7 bdf00000
+widen e4 a8 be000000
+widen e4 a9 be100000
+widen e4 aa be200000
+widen e4 ab be300000
+widen e4 ac be400000
+widen e4 ad be500000
+widen e4 ae be600000
+widen e4 af be700000
+widen e4 b0 be800000
+widen e4 b1 be900000
+widen e4 b2 bea00000
+widen e4 b3 beb00000
+widen e4 b4 bec00000
+widen e4 b5 bed00000
+widen e4 b6 bee00000
+widen e4 b7 bef00000
+widen e4 b8 bf000000
+widen e4 b9 bf100000
+widen e4 ba bf200000
+widen e4 bb bf300000
+widen e4 bc bf400000
+widen e4 bd bf500000
+widen e4 be bf600000
+widen e4 bf bf700000
+widen e4 c0 bf800000
+widen e4 c1 bf900000
+widen e4 c2 bfa00000
+widen e4 c3 bfb00000
+widen e4 c4 bfc00000
+widen e4 c5 bfd00000
+widen e4 c6 bfe00000
+widen e4 c7 bff00000
+widen e4 c8 c0000000
+widen e4 c9 c0100000
+widen e4 ca c0200000
+widen e4 cb c0300000
+widen e4 cc c0400000
+widen e4 cd c0500000
+widen e4 ce c0600000
+widen e4 cf c0700000
+widen e4 d0 c0800000
+widen e4 d1 c0900000
+widen e4 d2 c0a00000
+widen e4 d3 c0b00000
+widen e4 d4 c0c00000
+widen e4 d5 c0d00000
+widen e4 d6 c0e00000
+widen e4 d7 c0f00000
+widen e4 d8 c1000000
+widen e4 d9 c1100000
+widen e4 da c1200000
+widen e4 db c1300000
+widen e4 dc c1400000
+widen e4 dd c1500000
+widen e4 de c1600000
+widen e4 df c1700000
+widen e4 e0 c1800000
+widen e4 e1 c1900000
+widen e4 e2 c1a00000
+widen e4 e3 c1b00000
+widen e4 e4 c1c00000
+widen e4 e5 c1d00000
+widen e4 e6 c1e00000
+widen e4 e7 c1f00000
+widen e4 e8 c2000000
+widen e4 e9 c2100000
+widen e4 ea c2200000
+widen e4 eb c2300000
+widen e4 ec c2400000
+widen e4 ed c2500000
+widen e4 ee c2600000
+widen e4 ef c2700000
+widen e4 f0 c2800000
+widen e4 f1 c2900000
+widen e4 f2 c2a00000
+widen e4 f3 c2b00000
+widen e4 f4 c2c00000
+widen e4 f5 c2d00000
+widen e4 f6 c2e00000
+widen e4 f7 c2f00000
+widen e4 f8 c3000000
+widen e4 f9 c3100000
+widen e4 fa c3200000
+widen e4 fb c3300000
+widen e4 fc c3400000
+widen e4 fd c3500000
+widen e4 fe c3600000
+widen e4 ff c3700000
+widen e5 00 00000000
+widen e5 01 37000000
+widen e5 02 37800000
+widen e5 03 37c00000
+widen e5 04 38000000
+widen e5 05 38200000
+widen e5 06 38400000
+widen e5 07 38600000
+widen e5 08 38800000
+widen e5 09 38a00000
+widen e5 0a 38c00000
+widen e5 0b 38e00000
+widen e5 0c 39000000
+widen e5 0d 39200000
+widen e5 0e 39400000
+widen e5 0f 39600000
+widen e5 10 39800000
+widen e5 11 39a00000
+widen e5 12 39c00000
+widen e5 13 39e00000
+widen e5 14 3a000000
+widen e5 15 3a200000
+widen e5 16 3a400000
+widen e5 17 3a600000
+widen e5 18 3a800000
+widen e5 19 3aa00000
+widen e5 1a 3ac00000
+widen e5 1b 3ae00000
+widen e5 1c 3b000000
+widen e5 1d 3b200000
+widen e5 1e 3b400000
+widen e5 1f 3b600000
+widen e5 20 3b800000
+widen e5 21 3ba00000
+widen e5 22 3bc00000
+widen e5 23 3be00000
+widen e5 24 3c000000
+widen e5 25 3c200000
+widen e5 26 3c400000
+widen e5 27 3c600000
+widen e5 28 3c800000
+widen e5 29 3ca00000
+widen e5 2a 3cc00000
+widen e5 2b 3ce00000
+widen e5 2c 3d000000
+widen e5 2d 3d200000
+widen e5 2e 3d400000
+widen e5 2f 3d600000
+widen e5 30 3d800000
+widen e5 31 3da00000
+widen e5 32 3dc00000
+widen e5 33 3de00000
+widen e5 34 3e000000
+widen e5 35 3e200000
+widen e5 36 3e400000
+widen e5 37 3e600000
+widen e5 38 3e800000
+widen e5 39 3ea00000
+widen e5 3a 3ec00000
+widen e5 3b 3ee00000
+widen e5 3c 3f000000
+widen e5 3d 3f200000
+widen e5 3e 3f400000
+widen e5 3f 3f600000
+widen e5 40 3f800000
+widen e5 41 3fa00000
+widen e5 42 3fc00000
+widen e5 43 3fe00000
+widen e5 44 40000000
+widen e5 45 40200000
+widen e5 46 40400000
+widen e5 47 40600000
+widen e5 48 40800000
+widen e5 49 40a00000
+widen e5 4a 40c00000
+widen e5 4b 40e00000
+widen e5 4c 41000000
+widen e5 4d 41200000
+widen e5 4e 41400000
+widen e5 4f 41600000
+widen e5 50 41800000
+widen e5 51 41a00000
+widen e5 52 41c00000
+widen e5 53 41e00000
+widen e5 54 42000000
+widen e5 55 42200000
+widen e5 56 42400000
+widen e5 57 42600000
+widen e5 58 42800000
+widen e5 59 42a00000
+widen e5 5a 42c00000
+widen e5 5b 42e00000
+widen e5 5c 43000000
+widen e5 5d 43200000
+widen e5 5e 43400000
+widen e5 5f 43600000
+widen e5 60 43800000
+widen e5 61 43a00000
+widen e5 62 43c00000
+widen e5 63 43e00000
+widen e5 64 44000000
+widen e5 65 44200000
+widen e5 66 44400000
+widen e5 67 44600000
+widen e5 68 44800000
+widen e5 69 44a00000
+widen e5 6a 44c00000
+widen e5 6b 44e00000
+widen e5 6c 45000000
+widen e5 6d 45200000
+widen e5 6e 45400000
+widen e5 6f 45600000
+widen e5 70 45800000
+widen e5 71 45a00000
+widen e5 72 45c00000
+widen e5 73 45e00000
+widen e5 74 46000000
+widen e5 75 46200000
+widen e5 76 46400000
+widen e5 77 46600000
+widen e5 78 46800000
+widen e5 79 46a00000
+widen e5 7a 46c00000
+widen e5 7b 46e00000
+widen e5 7c 47000000
+widen e5 7d 47200000
+widen e5 7e 47400000
+widen e5 7f 47600000
+widen e5 80 ffc00000
+widen e5 81 b7000000
+widen e5 82 b7800000
+widen e5 83 b7c00000
+widen e5 84 b8000000
+widen e5 85 b8200000
+widen e5 86 b8400000
+widen e5 87 b8600000
+widen e5 88 b8800000
+widen e5 89 b8a00000
+widen e5 8a b8c00000
+widen e5 8b b8e00000
+widen e5 8c b9000000
+widen e5 8d b9200000
+widen e5 8e b9400000
+widen e5 8f b9600000
+widen e5 90 b9800000
+widen e5 91 b9a00000
+widen e5 92 b9c00000
+widen e5 93 b9e00000
+widen e5 94 ba000000
+widen e5 95 ba200000
+widen e5 96 ba400000
+widen e5 97 ba600000
+widen e5 98 ba800000
+widen e5 99 baa00000
+widen e5 9a bac00000
+widen e5 9b bae00000
+widen e5 9c bb000000
+widen e5 9d bb200000
+widen e5 9e bb400000
+widen e5 9f bb600000
+widen e5 a0 bb800000
+widen e5 a1 bba00000
+widen e5 a2 bbc00000
+widen e5 a3 bbe00000
+widen e5 a4 bc000000
+widen e5 a5 bc200000
+widen e5 a6 bc400000
+widen e5 a7 bc600000
+widen e5 a8 bc800000
+widen e5 a9 bca00000
+widen e5 aa bcc00000
+widen e5 ab bce00000
+widen e5 ac bd000000
+widen e5 ad bd200000
+widen e5 ae bd400000
+widen e5 af bd600000
+widen e5 b0 bd800000
+widen e5 b1 bda00000
+widen e5 b2 bdc00000
+widen e5 b3 bde00000
+widen e5 b4 be000000
+widen e5 b5 be200000
+widen e5 b6 be400000
+widen e5 b7 be600000
+widen e5 b8 be800000
+widen e5 b9 bea00000
+widen e5 ba bec00000
+widen e5 bb bee00000
+widen e5 bc bf000000
+widen e5 bd bf200000
+widen e5 be bf400000
+widen e5 bf bf600000
+widen e5 c0 bf800000
+widen e5 c1 bfa00000
+widen e5 c2 bfc00000
+widen e5 c3 bfe00000
+widen e5 c4 c0000000
+widen e5 c5 c0200000
+widen e5 c6 c0400000
+widen e5 c7 c0600000
+widen e5 c8 c0800000
+widen e5 c9 c0a00000
+widen e5 ca c0c00000
+widen e5 cb c0e00000
+widen e5 cc c1000000
+widen e5 cd c1200000
+widen e5 ce c1400000
+widen e5 cf c1600000
+widen e5 d0 c1800000
+widen e5 d1 c1a00000
+widen e5 d2 c1c00000
+widen e5 d3 c1e00000
+widen e5 d4 c2000000
+widen e5 d5 c2200000
+widen e5 d6 c2400000
+widen e5 d7 c2600000
+widen e5 d8 c2800000
+widen e5 d9 c2a00000
+widen e5 da c2c00000
+widen e5 db c2e00000
+widen e5 dc c3000000
+widen e5 dd c3200000
+widen e5 de c3400000
+widen e5 df c3600000
+widen e5 e0 c3800000
+widen e5 e1 c3a00000
+widen e5 e2 c3c00000
+widen e5 e3 c3e00000
+widen e5 e4 c4000000
+widen e5 e5 c4200000
+widen e5 e6 c4400000
+widen e5 e7 c4600000
+widen e5 e8 c4800000
+widen e5 e9 c4a00000
+widen e5 ea c4c00000
+widen e5 eb c4e00000
+widen e5 ec c5000000
+widen e5 ed c5200000
+widen e5 ee c5400000
+widen e5 ef c5600000
+widen e5 f0 c5800000
+widen e5 f1 c5a00000
+widen e5 f2 c5c00000
+widen e5 f3 c5e00000
+widen e5 f4 c6000000
+widen e5 f5 c6200000
+widen e5 f6 c6400000
+widen e5 f7 c6600000
+widen e5 f8 c6800000
+widen e5 f9 c6a00000
+widen e5 fa c6c00000
+widen e5 fb c6e00000
+widen e5 fc c7000000
+widen e5 fd c7200000
+widen e5 fe c7400000
+widen e5 ff c7600000
+narrow e4 exact-00 00000000 00
+narrow e4 exact-01 3a800000 01
+narrow e4 exact-02 3b000000 02
+narrow e4 exact-03 3b400000 03
+narrow e4 exact-04 3b800000 04
+narrow e4 exact-05 3ba00000 05
+narrow e4 exact-06 3bc00000 06
+narrow e4 exact-07 3be00000 07
+narrow e4 exact-08 3c000000 08
+narrow e4 exact-09 3c100000 09
+narrow e4 exact-0a 3c200000 0a
+narrow e4 exact-0b 3c300000 0b
+narrow e4 exact-0c 3c400000 0c
+narrow e4 exact-0d 3c500000 0d
+narrow e4 exact-0e 3c600000 0e
+narrow e4 exact-0f 3c700000 0f
+narrow e4 exact-10 3c800000 10
+narrow e4 exact-11 3c900000 11
+narrow e4 exact-12 3ca00000 12
+narrow e4 exact-13 3cb00000 13
+narrow e4 exact-14 3cc00000 14
+narrow e4 exact-15 3cd00000 15
+narrow e4 exact-16 3ce00000 16
+narrow e4 exact-17 3cf00000 17
+narrow e4 exact-18 3d000000 18
+narrow e4 exact-19 3d100000 19
+narrow e4 exact-1a 3d200000 1a
+narrow e4 exact-1b 3d300000 1b
+narrow e4 exact-1c 3d400000 1c
+narrow e4 exact-1d 3d500000 1d
+narrow e4 exact-1e 3d600000 1e
+narrow e4 exact-1f 3d700000 1f
+narrow e4 exact-20 3d800000 20
+narrow e4 exact-21 3d900000 21
+narrow e4 exact-22 3da00000 22
+narrow e4 exact-23 3db00000 23
+narrow e4 exact-24 3dc00000 24
+narrow e4 exact-25 3dd00000 25
+narrow e4 exact-26 3de00000 26
+narrow e4 exact-27 3df00000 27
+narrow e4 exact-28 3e000000 28
+narrow e4 exact-29 3e100000 29
+narrow e4 exact-2a 3e200000 2a
+narrow e4 exact-2b 3e300000 2b
+narrow e4 exact-2c 3e400000 2c
+narrow e4 exact-2d 3e500000 2d
+narrow e4 exact-2e 3e600000 2e
+narrow e4 exact-2f 3e700000 2f
+narrow e4 exact-30 3e800000 30
+narrow e4 exact-31 3e900000 31
+narrow e4 exact-32 3ea00000 32
+narrow e4 exact-33 3eb00000 33
+narrow e4 exact-34 3ec00000 34
+narrow e4 exact-35 3ed00000 35
+narrow e4 exact-36 3ee00000 36
+narrow e4 exact-37 3ef00000 37
+narrow e4 exact-38 3f000000 38
+narrow e4 exact-39 3f100000 39
+narrow e4 exact-3a 3f200000 3a
+narrow e4 exact-3b 3f300000 3b
+narrow e4 exact-3c 3f400000 3c
+narrow e4 exact-3d 3f500000 3d
+narrow e4 exact-3e 3f600000 3e
+narrow e4 exact-3f 3f700000 3f
+narrow e4 exact-40 3f800000 40
+narrow e4 exact-41 3f900000 41
+narrow e4 exact-42 3fa00000 42
+narrow e4 exact-43 3fb00000 43
+narrow e4 exact-44 3fc00000 44
+narrow e4 exact-45 3fd00000 45
+narrow e4 exact-46 3fe00000 46
+narrow e4 exact-47 3ff00000 47
+narrow e4 exact-48 40000000 48
+narrow e4 exact-49 40100000 49
+narrow e4 exact-4a 40200000 4a
+narrow e4 exact-4b 40300000 4b
+narrow e4 exact-4c 40400000 4c
+narrow e4 exact-4d 40500000 4d
+narrow e4 exact-4e 40600000 4e
+narrow e4 exact-4f 40700000 4f
+narrow e4 exact-50 40800000 50
+narrow e4 exact-51 40900000 51
+narrow e4 exact-52 40a00000 52
+narrow e4 exact-53 40b00000 53
+narrow e4 exact-54 40c00000 54
+narrow e4 exact-55 40d00000 55
+narrow e4 exact-56 40e00000 56
+narrow e4 exact-57 40f00000 57
+narrow e4 exact-58 41000000 58
+narrow e4 exact-59 41100000 59
+narrow e4 exact-5a 41200000 5a
+narrow e4 exact-5b 41300000 5b
+narrow e4 exact-5c 41400000 5c
+narrow e4 exact-5d 41500000 5d
+narrow e4 exact-5e 41600000 5e
+narrow e4 exact-5f 41700000 5f
+narrow e4 exact-60 41800000 60
+narrow e4 exact-61 41900000 61
+narrow e4 exact-62 41a00000 62
+narrow e4 exact-63 41b00000 63
+narrow e4 exact-64 41c00000 64
+narrow e4 exact-65 41d00000 65
+narrow e4 exact-66 41e00000 66
+narrow e4 exact-67 41f00000 67
+narrow e4 exact-68 42000000 68
+narrow e4 exact-69 42100000 69
+narrow e4 exact-6a 42200000 6a
+narrow e4 exact-6b 42300000 6b
+narrow e4 exact-6c 42400000 6c
+narrow e4 exact-6d 42500000 6d
+narrow e4 exact-6e 42600000 6e
+narrow e4 exact-6f 42700000 6f
+narrow e4 exact-70 42800000 70
+narrow e4 exact-71 42900000 71
+narrow e4 exact-72 42a00000 72
+narrow e4 exact-73 42b00000 73
+narrow e4 exact-74 42c00000 74
+narrow e4 exact-75 42d00000 75
+narrow e4 exact-76 42e00000 76
+narrow e4 exact-77 42f00000 77
+narrow e4 exact-78 43000000 78
+narrow e4 exact-79 43100000 79
+narrow e4 exact-7a 43200000 7a
+narrow e4 exact-7b 43300000 7b
+narrow e4 exact-7c 43400000 7c
+narrow e4 exact-7d 43500000 7d
+narrow e4 exact-7e 43600000 7e
+narrow e4 exact-7f 43700000 7f
+narrow e4 exact-80 ffc00000 80
+narrow e4 exact-81 ba800000 81
+narrow e4 exact-82 bb000000 82
+narrow e4 exact-83 bb400000 83
+narrow e4 exact-84 bb800000 84
+narrow e4 exact-85 bba00000 85
+narrow e4 exact-86 bbc00000 86
+narrow e4 exact-87 bbe00000 87
+narrow e4 exact-88 bc000000 88
+narrow e4 exact-89 bc100000 89
+narrow e4 exact-8a bc200000 8a
+narrow e4 exact-8b bc300000 8b
+narrow e4 exact-8c bc400000 8c
+narrow e4 exact-8d bc500000 8d
+narrow e4 exact-8e bc600000 8e
+narrow e4 exact-8f bc700000 8f
+narrow e4 exact-90 bc800000 90
+narrow e4 exact-91 bc900000 91
+narrow e4 exact-92 bca00000 92
+narrow e4 exact-93 bcb00000 93
+narrow e4 exact-94 bcc00000 94
+narrow e4 exact-95 bcd00000 95
+narrow e4 exact-96 bce00000 96
+narrow e4 exact-97 bcf00000 97
+narrow e4 exact-98 bd000000 98
+narrow e4 exact-99 bd100000 99
+narrow e4 exact-9a bd200000 9a
+narrow e4 exact-9b bd300000 9b
+narrow e4 exact-9c bd400000 9c
+narrow e4 exact-9d bd500000 9d
+narrow e4 exact-9e bd600000 9e
+narrow e4 exact-9f bd700000 9f
+narrow e4 exact-a0 bd800000 a0
+narrow e4 exact-a1 bd900000 a1
+narrow e4 exact-a2 bda00000 a2
+narrow e4 exact-a3 bdb00000 a3
+narrow e4 exact-a4 bdc00000 a4
+narrow e4 exact-a5 bdd00000 a5
+narrow e4 exact-a6 bde00000 a6
+narrow e4 exact-a7 bdf00000 a7
+narrow e4 exact-a8 be000000 a8
+narrow e4 exact-a9 be100000 a9
+narrow e4 exact-aa be200000 aa
+narrow e4 exact-ab be300000 ab
+narrow e4 exact-ac be400000 ac
+narrow e4 exact-ad be500000 ad
+narrow e4 exact-ae be600000 ae
+narrow e4 exact-af be700000 af
+narrow e4 exact-b0 be800000 b0
+narrow e4 exact-b1 be900000 b1
+narrow e4 exact-b2 bea00000 b2
+narrow e4 exact-b3 beb00000 b3
+narrow e4 exact-b4 bec00000 b4
+narrow e4 exact-b5 bed00000 b5
+narrow e4 exact-b6 bee00000 b6
+narrow e4 exact-b7 bef00000 b7
+narrow e4 exact-b8 bf000000 b8
+narrow e4 exact-b9 bf100000 b9
+narrow e4 exact-ba bf200000 ba
+narrow e4 exact-bb bf300000 bb
+narrow e4 exact-bc bf400000 bc
+narrow e4 exact-bd bf500000 bd
+narrow e4 exact-be bf600000 be
+narrow e4 exact-bf bf700000 bf
+narrow e4 exact-c0 bf800000 c0
+narrow e4 exact-c1 bf900000 c1
+narrow e4 exact-c2 bfa00000 c2
+narrow e4 exact-c3 bfb00000 c3
+narrow e4 exact-c4 bfc00000 c4
+narrow e4 exact-c5 bfd00000 c5
+narrow e4 exact-c6 bfe00000 c6
+narrow e4 exact-c7 bff00000 c7
+narrow e4 exact-c8 c0000000 c8
+narrow e4 exact-c9 c0100000 c9
+narrow e4 exact-ca c0200000 ca
+narrow e4 exact-cb c0300000 cb
+narrow e4 exact-cc c0400000 cc
+narrow e4 exact-cd c0500000 cd
+narrow e4 exact-ce c0600000 ce
+narrow e4 exact-cf c0700000 cf
+narrow e4 exact-d0 c0800000 d0
+narrow e4 exact-d1 c0900000 d1
+narrow e4 exact-d2 c0a00000 d2
+narrow e4 exact-d3 c0b00000 d3
+narrow e4 exact-d4 c0c00000 d4
+narrow e4 exact-d5 c0d00000 d5
+narrow e4 exact-d6 c0e00000 d6
+narrow e4 exact-d7 c0f00000 d7
+narrow e4 exact-d8 c1000000 d8
+narrow e4 exact-d9 c1100000 d9
+narrow e4 exact-da c1200000 da
+narrow e4 exact-db c1300000 db
+narrow e4 exact-dc c1400000 dc
+narrow e4 exact-dd c1500000 dd
+narrow e4 exact-de c1600000 de
+narrow e4 exact-df c1700000 df
+narrow e4 exact-e0 c1800000 e0
+narrow e4 exact-e1 c1900000 e1
+narrow e4 exact-e2 c1a00000 e2
+narrow e4 exact-e3 c1b00000 e3
+narrow e4 exact-e4 c1c00000 e4
+narrow e4 exact-e5 c1d00000 e5
+narrow e4 exact-e6 c1e00000 e6
+narrow e4 exact-e7 c1f00000 e7
+narrow e4 exact-e8 c2000000 e8
+narrow e4 exact-e9 c2100000 e9
+narrow e4 exact-ea c2200000 ea
+narrow e4 exact-eb c2300000 eb
+narrow e4 exact-ec c2400000 ec
+narrow e4 exact-ed c2500000 ed
+narrow e4 exact-ee c2600000 ee
+narrow e4 exact-ef c2700000 ef
+narrow e4 exact-f0 c2800000 f0
+narrow e4 exact-f1 c2900000 f1
+narrow e4 exact-f2 c2a00000 f2
+narrow e4 exact-f3 c2b00000 f3
+narrow e4 exact-f4 c2c00000 f4
+narrow e4 exact-f5 c2d00000 f5
+narrow e4 exact-f6 c2e00000 f6
+narrow e4 exact-f7 c2f00000 f7
+narrow e4 exact-f8 c3000000 f8
+narrow e4 exact-f9 c3100000 f9
+narrow e4 exact-fa c3200000 fa
+narrow e4 exact-fb c3300000 fb
+narrow e4 exact-fc c3400000 fc
+narrow e4 exact-fd c3500000 fd
+narrow e4 exact-fe c3600000 fe
+narrow e4 exact-ff c3700000 ff
+narrow e4 boundary-00-below-positive 39ffffff 00
+narrow e4 boundary-00-tie-positive 3a000000 00
+narrow e4 boundary-00-above-positive 3a000001 01
+narrow e4 boundary-00-below-negative b9ffffff 00
+narrow e4 boundary-00-tie-negative ba000000 00
+narrow e4 boundary-00-above-negative ba000001 81
+narrow e4 boundary-01-below-positive 3abfffff 01
+narrow e4 boundary-01-tie-positive 3ac00000 02
+narrow e4 boundary-01-above-positive 3ac00001 02
+narrow e4 boundary-01-below-negative babfffff 81
+narrow e4 boundary-01-tie-negative bac00000 82
+narrow e4 boundary-01-above-negative bac00001 82
+narrow e4 boundary-02-below-positive 3b1fffff 02
+narrow e4 boundary-02-tie-positive 3b200000 02
+narrow e4 boundary-02-above-positive 3b200001 03
+narrow e4 boundary-02-below-negative bb1fffff 82
+narrow e4 boundary-02-tie-negative bb200000 82
+narrow e4 boundary-02-above-negative bb200001 83
+narrow e4 boundary-03-below-positive 3b5fffff 03
+narrow e4 boundary-03-tie-positive 3b600000 04
+narrow e4 boundary-03-above-positive 3b600001 04
+narrow e4 boundary-03-below-negative bb5fffff 83
+narrow e4 boundary-03-tie-negative bb600000 84
+narrow e4 boundary-03-above-negative bb600001 84
+narrow e4 boundary-04-below-positive 3b8fffff 04
+narrow e4 boundary-04-tie-positive 3b900000 04
+narrow e4 boundary-04-above-positive 3b900001 05
+narrow e4 boundary-04-below-negative bb8fffff 84
+narrow e4 boundary-04-tie-negative bb900000 84
+narrow e4 boundary-04-above-negative bb900001 85
+narrow e4 boundary-05-below-positive 3bafffff 05
+narrow e4 boundary-05-tie-positive 3bb00000 06
+narrow e4 boundary-05-above-positive 3bb00001 06
+narrow e4 boundary-05-below-negative bbafffff 85
+narrow e4 boundary-05-tie-negative bbb00000 86
+narrow e4 boundary-05-above-negative bbb00001 86
+narrow e4 boundary-06-below-positive 3bcfffff 06
+narrow e4 boundary-06-tie-positive 3bd00000 06
+narrow e4 boundary-06-above-positive 3bd00001 07
+narrow e4 boundary-06-below-negative bbcfffff 86
+narrow e4 boundary-06-tie-negative bbd00000 86
+narrow e4 boundary-06-above-negative bbd00001 87
+narrow e4 boundary-07-below-positive 3befffff 07
+narrow e4 boundary-07-tie-positive 3bf00000 08
+narrow e4 boundary-07-above-positive 3bf00001 08
+narrow e4 boundary-07-below-negative bbefffff 87
+narrow e4 boundary-07-tie-negative bbf00000 88
+narrow e4 boundary-07-above-negative bbf00001 88
+narrow e4 boundary-08-below-positive 3c07ffff 08
+narrow e4 boundary-08-tie-positive 3c080000 08
+narrow e4 boundary-08-above-positive 3c080001 09
+narrow e4 boundary-08-below-negative bc07ffff 88
+narrow e4 boundary-08-tie-negative bc080000 88
+narrow e4 boundary-08-above-negative bc080001 89
+narrow e4 boundary-09-below-positive 3c17ffff 09
+narrow e4 boundary-09-tie-positive 3c180000 0a
+narrow e4 boundary-09-above-positive 3c180001 0a
+narrow e4 boundary-09-below-negative bc17ffff 89
+narrow e4 boundary-09-tie-negative bc180000 8a
+narrow e4 boundary-09-above-negative bc180001 8a
+narrow e4 boundary-0a-below-positive 3c27ffff 0a
+narrow e4 boundary-0a-tie-positive 3c280000 0a
+narrow e4 boundary-0a-above-positive 3c280001 0b
+narrow e4 boundary-0a-below-negative bc27ffff 8a
+narrow e4 boundary-0a-tie-negative bc280000 8a
+narrow e4 boundary-0a-above-negative bc280001 8b
+narrow e4 boundary-0b-below-positive 3c37ffff 0b
+narrow e4 boundary-0b-tie-positive 3c380000 0c
+narrow e4 boundary-0b-above-positive 3c380001 0c
+narrow e4 boundary-0b-below-negative bc37ffff 8b
+narrow e4 boundary-0b-tie-negative bc380000 8c
+narrow e4 boundary-0b-above-negative bc380001 8c
+narrow e4 boundary-0c-below-positive 3c47ffff 0c
+narrow e4 boundary-0c-tie-positive 3c480000 0c
+narrow e4 boundary-0c-above-positive 3c480001 0d
+narrow e4 boundary-0c-below-negative bc47ffff 8c
+narrow e4 boundary-0c-tie-negative bc480000 8c
+narrow e4 boundary-0c-above-negative bc480001 8d
+narrow e4 boundary-0d-below-positive 3c57ffff 0d
+narrow e4 boundary-0d-tie-positive 3c580000 0e
+narrow e4 boundary-0d-above-positive 3c580001 0e
+narrow e4 boundary-0d-below-negative bc57ffff 8d
+narrow e4 boundary-0d-tie-negative bc580000 8e
+narrow e4 boundary-0d-above-negative bc580001 8e
+narrow e4 boundary-0e-below-positive 3c67ffff 0e
+narrow e4 boundary-0e-tie-positive 3c680000 0e
+narrow e4 boundary-0e-above-positive 3c680001 0f
+narrow e4 boundary-0e-below-negative bc67ffff 8e
+narrow e4 boundary-0e-tie-negative bc680000 8e
+narrow e4 boundary-0e-above-negative bc680001 8f
+narrow e4 boundary-0f-below-positive 3c77ffff 0f
+narrow e4 boundary-0f-tie-positive 3c780000 10
+narrow e4 boundary-0f-above-positive 3c780001 10
+narrow e4 boundary-0f-below-negative bc77ffff 8f
+narrow e4 boundary-0f-tie-negative bc780000 90
+narrow e4 boundary-0f-above-negative bc780001 90
+narrow e4 boundary-10-below-positive 3c87ffff 10
+narrow e4 boundary-10-tie-positive 3c880000 10
+narrow e4 boundary-10-above-positive 3c880001 11
+narrow e4 boundary-10-below-negative bc87ffff 90
+narrow e4 boundary-10-tie-negative bc880000 90
+narrow e4 boundary-10-above-negative bc880001 91
+narrow e4 boundary-11-below-positive 3c97ffff 11
+narrow e4 boundary-11-tie-positive 3c980000 12
+narrow e4 boundary-11-above-positive 3c980001 12
+narrow e4 boundary-11-below-negative bc97ffff 91
+narrow e4 boundary-11-tie-negative bc980000 92
+narrow e4 boundary-11-above-negative bc980001 92
+narrow e4 boundary-12-below-positive 3ca7ffff 12
+narrow e4 boundary-12-tie-positive 3ca80000 12
+narrow e4 boundary-12-above-positive 3ca80001 13
+narrow e4 boundary-12-below-negative bca7ffff 92
+narrow e4 boundary-12-tie-negative bca80000 92
+narrow e4 boundary-12-above-negative bca80001 93
+narrow e4 boundary-13-below-positive 3cb7ffff 13
+narrow e4 boundary-13-tie-positive 3cb80000 14
+narrow e4 boundary-13-above-positive 3cb80001 14
+narrow e4 boundary-13-below-negative bcb7ffff 93
+narrow e4 boundary-13-tie-negative bcb80000 94
+narrow e4 boundary-13-above-negative bcb80001 94
+narrow e4 boundary-14-below-positive 3cc7ffff 14
+narrow e4 boundary-14-tie-positive 3cc80000 14
+narrow e4 boundary-14-above-positive 3cc80001 15
+narrow e4 boundary-14-below-negative bcc7ffff 94
+narrow e4 boundary-14-tie-negative bcc80000 94
+narrow e4 boundary-14-above-negative bcc80001 95
+narrow e4 boundary-15-below-positive 3cd7ffff 15
+narrow e4 boundary-15-tie-positive 3cd80000 16
+narrow e4 boundary-15-above-positive 3cd80001 16
+narrow e4 boundary-15-below-negative bcd7ffff 95
+narrow e4 boundary-15-tie-negative bcd80000 96
+narrow e4 boundary-15-above-negative bcd80001 96
+narrow e4 boundary-16-below-positive 3ce7ffff 16
+narrow e4 boundary-16-tie-positive 3ce80000 16
+narrow e4 boundary-16-above-positive 3ce80001 17
+narrow e4 boundary-16-below-negative bce7ffff 96
+narrow e4 boundary-16-tie-negative bce80000 96
+narrow e4 boundary-16-above-negative bce80001 97
+narrow e4 boundary-17-below-positive 3cf7ffff 17
+narrow e4 boundary-17-tie-positive 3cf80000 18
+narrow e4 boundary-17-above-positive 3cf80001 18
+narrow e4 boundary-17-below-negative bcf7ffff 97
+narrow e4 boundary-17-tie-negative bcf80000 98
+narrow e4 boundary-17-above-negative bcf80001 98
+narrow e4 boundary-18-below-positive 3d07ffff 18
+narrow e4 boundary-18-tie-positive 3d080000 18
+narrow e4 boundary-18-above-positive 3d080001 19
+narrow e4 boundary-18-below-negative bd07ffff 98
+narrow e4 boundary-18-tie-negative bd080000 98
+narrow e4 boundary-18-above-negative bd080001 99
+narrow e4 boundary-19-below-positive 3d17ffff 19
+narrow e4 boundary-19-tie-positive 3d180000 1a
+narrow e4 boundary-19-above-positive 3d180001 1a
+narrow e4 boundary-19-below-negative bd17ffff 99
+narrow e4 boundary-19-tie-negative bd180000 9a
+narrow e4 boundary-19-above-negative bd180001 9a
+narrow e4 boundary-1a-below-positive 3d27ffff 1a
+narrow e4 boundary-1a-tie-positive 3d280000 1a
+narrow e4 boundary-1a-above-positive 3d280001 1b
+narrow e4 boundary-1a-below-negative bd27ffff 9a
+narrow e4 boundary-1a-tie-negative bd280000 9a
+narrow e4 boundary-1a-above-negative bd280001 9b
+narrow e4 boundary-1b-below-positive 3d37ffff 1b
+narrow e4 boundary-1b-tie-positive 3d380000 1c
+narrow e4 boundary-1b-above-positive 3d380001 1c
+narrow e4 boundary-1b-below-negative bd37ffff 9b
+narrow e4 boundary-1b-tie-negative bd380000 9c
+narrow e4 boundary-1b-above-negative bd380001 9c
+narrow e4 boundary-1c-below-positive 3d47ffff 1c
+narrow e4 boundary-1c-tie-positive 3d480000 1c
+narrow e4 boundary-1c-above-positive 3d480001 1d
+narrow e4 boundary-1c-below-negative bd47ffff 9c
+narrow e4 boundary-1c-tie-negative bd480000 9c
+narrow e4 boundary-1c-above-negative bd480001 9d
+narrow e4 boundary-1d-below-positive 3d57ffff 1d
+narrow e4 boundary-1d-tie-positive 3d580000 1e
+narrow e4 boundary-1d-above-positive 3d580001 1e
+narrow e4 boundary-1d-below-negative bd57ffff 9d
+narrow e4 boundary-1d-tie-negative bd580000 9e
+narrow e4 boundary-1d-above-negative bd580001 9e
+narrow e4 boundary-1e-below-positive 3d67ffff 1e
+narrow e4 boundary-1e-tie-positive 3d680000 1e
+narrow e4 boundary-1e-above-positive 3d680001 1f
+narrow e4 boundary-1e-below-negative bd67ffff 9e
+narrow e4 boundary-1e-tie-negative bd680000 9e
+narrow e4 boundary-1e-above-negative bd680001 9f
+narrow e4 boundary-1f-below-positive 3d77ffff 1f
+narrow e4 boundary-1f-tie-positive 3d780000 20
+narrow e4 boundary-1f-above-positive 3d780001 20
+narrow e4 boundary-1f-below-negative bd77ffff 9f
+narrow e4 boundary-1f-tie-negative bd780000 a0
+narrow e4 boundary-1f-above-negative bd780001 a0
+narrow e4 boundary-20-below-positive 3d87ffff 20
+narrow e4 boundary-20-tie-positive 3d880000 20
+narrow e4 boundary-20-above-positive 3d880001 21
+narrow e4 boundary-20-below-negative bd87ffff a0
+narrow e4 boundary-20-tie-negative bd880000 a0
+narrow e4 boundary-20-above-negative bd880001 a1
+narrow e4 boundary-21-below-positive 3d97ffff 21
+narrow e4 boundary-21-tie-positive 3d980000 22
+narrow e4 boundary-21-above-positive 3d980001 22
+narrow e4 boundary-21-below-negative bd97ffff a1
+narrow e4 boundary-21-tie-negative bd980000 a2
+narrow e4 boundary-21-above-negative bd980001 a2
+narrow e4 boundary-22-below-positive 3da7ffff 22
+narrow e4 boundary-22-tie-positive 3da80000 22
+narrow e4 boundary-22-above-positive 3da80001 23
+narrow e4 boundary-22-below-negative bda7ffff a2
+narrow e4 boundary-22-tie-negative bda80000 a2
+narrow e4 boundary-22-above-negative bda80001 a3
+narrow e4 boundary-23-below-positive 3db7ffff 23
+narrow e4 boundary-23-tie-positive 3db80000 24
+narrow e4 boundary-23-above-positive 3db80001 24
+narrow e4 boundary-23-below-negative bdb7ffff a3
+narrow e4 boundary-23-tie-negative bdb80000 a4
+narrow e4 boundary-23-above-negative bdb80001 a4
+narrow e4 boundary-24-below-positive 3dc7ffff 24
+narrow e4 boundary-24-tie-positive 3dc80000 24
+narrow e4 boundary-24-above-positive 3dc80001 25
+narrow e4 boundary-24-below-negative bdc7ffff a4
+narrow e4 boundary-24-tie-negative bdc80000 a4
+narrow e4 boundary-24-above-negative bdc80001 a5
+narrow e4 boundary-25-below-positive 3dd7ffff 25
+narrow e4 boundary-25-tie-positive 3dd80000 26
+narrow e4 boundary-25-above-positive 3dd80001 26
+narrow e4 boundary-25-below-negative bdd7ffff a5
+narrow e4 boundary-25-tie-negative bdd80000 a6
+narrow e4 boundary-25-above-negative bdd80001 a6
+narrow e4 boundary-26-below-positive 3de7ffff 26
+narrow e4 boundary-26-tie-positive 3de80000 26
+narrow e4 boundary-26-above-positive 3de80001 27
+narrow e4 boundary-26-below-negative bde7ffff a6
+narrow e4 boundary-26-tie-negative bde80000 a6
+narrow e4 boundary-26-above-negative bde80001 a7
+narrow e4 boundary-27-below-positive 3df7ffff 27
+narrow e4 boundary-27-tie-positive 3df80000 28
+narrow e4 boundary-27-above-positive 3df80001 28
+narrow e4 boundary-27-below-negative bdf7ffff a7
+narrow e4 boundary-27-tie-negative bdf80000 a8
+narrow e4 boundary-27-above-negative bdf80001 a8
+narrow e4 boundary-28-below-positive 3e07ffff 28
+narrow e4 boundary-28-tie-positive 3e080000 28
+narrow e4 boundary-28-above-positive 3e080001 29
+narrow e4 boundary-28-below-negative be07ffff a8
+narrow e4 boundary-28-tie-negative be080000 a8
+narrow e4 boundary-28-above-negative be080001 a9
+narrow e4 boundary-29-below-positive 3e17ffff 29
+narrow e4 boundary-29-tie-positive 3e180000 2a
+narrow e4 boundary-29-above-positive 3e180001 2a
+narrow e4 boundary-29-below-negative be17ffff a9
+narrow e4 boundary-29-tie-negative be180000 aa
+narrow e4 boundary-29-above-negative be180001 aa
+narrow e4 boundary-2a-below-positive 3e27ffff 2a
+narrow e4 boundary-2a-tie-positive 3e280000 2a
+narrow e4 boundary-2a-above-positive 3e280001 2b
+narrow e4 boundary-2a-below-negative be27ffff aa
+narrow e4 boundary-2a-tie-negative be280000 aa
+narrow e4 boundary-2a-above-negative be280001 ab
+narrow e4 boundary-2b-below-positive 3e37ffff 2b
+narrow e4 boundary-2b-tie-positive 3e380000 2c
+narrow e4 boundary-2b-above-positive 3e380001 2c
+narrow e4 boundary-2b-below-negative be37ffff ab
+narrow e4 boundary-2b-tie-negative be380000 ac
+narrow e4 boundary-2b-above-negative be380001 ac
+narrow e4 boundary-2c-below-positive 3e47ffff 2c
+narrow e4 boundary-2c-tie-positive 3e480000 2c
+narrow e4 boundary-2c-above-positive 3e480001 2d
+narrow e4 boundary-2c-below-negative be47ffff ac
+narrow e4 boundary-2c-tie-negative be480000 ac
+narrow e4 boundary-2c-above-negative be480001 ad
+narrow e4 boundary-2d-below-positive 3e57ffff 2d
+narrow e4 boundary-2d-tie-positive 3e580000 2e
+narrow e4 boundary-2d-above-positive 3e580001 2e
+narrow e4 boundary-2d-below-negative be57ffff ad
+narrow e4 boundary-2d-tie-negative be580000 ae
+narrow e4 boundary-2d-above-negative be580001 ae
+narrow e4 boundary-2e-below-positive 3e67ffff 2e
+narrow e4 boundary-2e-tie-positive 3e680000 2e
+narrow e4 boundary-2e-above-positive 3e680001 2f
+narrow e4 boundary-2e-below-negative be67ffff ae
+narrow e4 boundary-2e-tie-negative be680000 ae
+narrow e4 boundary-2e-above-negative be680001 af
+narrow e4 boundary-2f-below-positive 3e77ffff 2f
+narrow e4 boundary-2f-tie-positive 3e780000 30
+narrow e4 boundary-2f-above-positive 3e780001 30
+narrow e4 boundary-2f-below-negative be77ffff af
+narrow e4 boundary-2f-tie-negative be780000 b0
+narrow e4 boundary-2f-above-negative be780001 b0
+narrow e4 boundary-30-below-positive 3e87ffff 30
+narrow e4 boundary-30-tie-positive 3e880000 30
+narrow e4 boundary-30-above-positive 3e880001 31
+narrow e4 boundary-30-below-negative be87ffff b0
+narrow e4 boundary-30-tie-negative be880000 b0
+narrow e4 boundary-30-above-negative be880001 b1
+narrow e4 boundary-31-below-positive 3e97ffff 31
+narrow e4 boundary-31-tie-positive 3e980000 32
+narrow e4 boundary-31-above-positive 3e980001 32
+narrow e4 boundary-31-below-negative be97ffff b1
+narrow e4 boundary-31-tie-negative be980000 b2
+narrow e4 boundary-31-above-negative be980001 b2
+narrow e4 boundary-32-below-positive 3ea7ffff 32
+narrow e4 boundary-32-tie-positive 3ea80000 32
+narrow e4 boundary-32-above-positive 3ea80001 33
+narrow e4 boundary-32-below-negative bea7ffff b2
+narrow e4 boundary-32-tie-negative bea80000 b2
+narrow e4 boundary-32-above-negative bea80001 b3
+narrow e4 boundary-33-below-positive 3eb7ffff 33
+narrow e4 boundary-33-tie-positive 3eb80000 34
+narrow e4 boundary-33-above-positive 3eb80001 34
+narrow e4 boundary-33-below-negative beb7ffff b3
+narrow e4 boundary-33-tie-negative beb80000 b4
+narrow e4 boundary-33-above-negative beb80001 b4
+narrow e4 boundary-34-below-positive 3ec7ffff 34
+narrow e4 boundary-34-tie-positive 3ec80000 34
+narrow e4 boundary-34-above-positive 3ec80001 35
+narrow e4 boundary-34-below-negative bec7ffff b4
+narrow e4 boundary-34-tie-negative bec80000 b4
+narrow e4 boundary-34-above-negative bec80001 b5
+narrow e4 boundary-35-below-positive 3ed7ffff 35
+narrow e4 boundary-35-tie-positive 3ed80000 36
+narrow e4 boundary-35-above-positive 3ed80001 36
+narrow e4 boundary-35-below-negative bed7ffff b5
+narrow e4 boundary-35-tie-negative bed80000 b6
+narrow e4 boundary-35-above-negative bed80001 b6
+narrow e4 boundary-36-below-positive 3ee7ffff 36
+narrow e4 boundary-36-tie-positive 3ee80000 36
+narrow e4 boundary-36-above-positive 3ee80001 37
+narrow e4 boundary-36-below-negative bee7ffff b6
+narrow e4 boundary-36-tie-negative bee80000 b6
+narrow e4 boundary-36-above-negative bee80001 b7
+narrow e4 boundary-37-below-positive 3ef7ffff 37
+narrow e4 boundary-37-tie-positive 3ef80000 38
+narrow e4 boundary-37-above-positive 3ef80001 38
+narrow e4 boundary-37-below-negative bef7ffff b7
+narrow e4 boundary-37-tie-negative bef80000 b8
+narrow e4 boundary-37-above-negative bef80001 b8
+narrow e4 boundary-38-below-positive 3f07ffff 38
+narrow e4 boundary-38-tie-positive 3f080000 38
+narrow e4 boundary-38-above-positive 3f080001 39
+narrow e4 boundary-38-below-negative bf07ffff b8
+narrow e4 boundary-38-tie-negative bf080000 b8
+narrow e4 boundary-38-above-negative bf080001 b9
+narrow e4 boundary-39-below-positive 3f17ffff 39
+narrow e4 boundary-39-tie-positive 3f180000 3a
+narrow e4 boundary-39-above-positive 3f180001 3a
+narrow e4 boundary-39-below-negative bf17ffff b9
+narrow e4 boundary-39-tie-negative bf180000 ba
+narrow e4 boundary-39-above-negative bf180001 ba
+narrow e4 boundary-3a-below-positive 3f27ffff 3a
+narrow e4 boundary-3a-tie-positive 3f280000 3a
+narrow e4 boundary-3a-above-positive 3f280001 3b
+narrow e4 boundary-3a-below-negative bf27ffff ba
+narrow e4 boundary-3a-tie-negative bf280000 ba
+narrow e4 boundary-3a-above-negative bf280001 bb
+narrow e4 boundary-3b-below-positive 3f37ffff 3b
+narrow e4 boundary-3b-tie-positive 3f380000 3c
+narrow e4 boundary-3b-above-positive 3f380001 3c
+narrow e4 boundary-3b-below-negative bf37ffff bb
+narrow e4 boundary-3b-tie-negative bf380000 bc
+narrow e4 boundary-3b-above-negative bf380001 bc
+narrow e4 boundary-3c-below-positive 3f47ffff 3c
+narrow e4 boundary-3c-tie-positive 3f480000 3c
+narrow e4 boundary-3c-above-positive 3f480001 3d
+narrow e4 boundary-3c-below-negative bf47ffff bc
+narrow e4 boundary-3c-tie-negative bf480000 bc
+narrow e4 boundary-3c-above-negative bf480001 bd
+narrow e4 boundary-3d-below-positive 3f57ffff 3d
+narrow e4 boundary-3d-tie-positive 3f580000 3e
+narrow e4 boundary-3d-above-positive 3f580001 3e
+narrow e4 boundary-3d-below-negative bf57ffff bd
+narrow e4 boundary-3d-tie-negative bf580000 be
+narrow e4 boundary-3d-above-negative bf580001 be
+narrow e4 boundary-3e-below-positive 3f67ffff 3e
+narrow e4 boundary-3e-tie-positive 3f680000 3e
+narrow e4 boundary-3e-above-positive 3f680001 3f
+narrow e4 boundary-3e-below-negative bf67ffff be
+narrow e4 boundary-3e-tie-negative bf680000 be
+narrow e4 boundary-3e-above-negative bf680001 bf
+narrow e4 boundary-3f-below-positive 3f77ffff 3f
+narrow e4 boundary-3f-tie-positive 3f780000 40
+narrow e4 boundary-3f-above-positive 3f780001 40
+narrow e4 boundary-3f-below-negative bf77ffff bf
+narrow e4 boundary-3f-tie-negative bf780000 c0
+narrow e4 boundary-3f-above-negative bf780001 c0
+narrow e4 boundary-40-below-positive 3f87ffff 40
+narrow e4 boundary-40-tie-positive 3f880000 40
+narrow e4 boundary-40-above-positive 3f880001 41
+narrow e4 boundary-40-below-negative bf87ffff c0
+narrow e4 boundary-40-tie-negative bf880000 c0
+narrow e4 boundary-40-above-negative bf880001 c1
+narrow e4 boundary-41-below-positive 3f97ffff 41
+narrow e4 boundary-41-tie-positive 3f980000 42
+narrow e4 boundary-41-above-positive 3f980001 42
+narrow e4 boundary-41-below-negative bf97ffff c1
+narrow e4 boundary-41-tie-negative bf980000 c2
+narrow e4 boundary-41-above-negative bf980001 c2
+narrow e4 boundary-42-below-positive 3fa7ffff 42
+narrow e4 boundary-42-tie-positive 3fa80000 42
+narrow e4 boundary-42-above-positive 3fa80001 43
+narrow e4 boundary-42-below-negative bfa7ffff c2
+narrow e4 boundary-42-tie-negative bfa80000 c2
+narrow e4 boundary-42-above-negative bfa80001 c3
+narrow e4 boundary-43-below-positive 3fb7ffff 43
+narrow e4 boundary-43-tie-positive 3fb80000 44
+narrow e4 boundary-43-above-positive 3fb80001 44
+narrow e4 boundary-43-below-negative bfb7ffff c3
+narrow e4 boundary-43-tie-negative bfb80000 c4
+narrow e4 boundary-43-above-negative bfb80001 c4
+narrow e4 boundary-44-below-positive 3fc7ffff 44
+narrow e4 boundary-44-tie-positive 3fc80000 44
+narrow e4 boundary-44-above-positive 3fc80001 45
+narrow e4 boundary-44-below-negative bfc7ffff c4
+narrow e4 boundary-44-tie-negative bfc80000 c4
+narrow e4 boundary-44-above-negative bfc80001 c5
+narrow e4 boundary-45-below-positive 3fd7ffff 45
+narrow e4 boundary-45-tie-positive 3fd80000 46
+narrow e4 boundary-45-above-positive 3fd80001 46
+narrow e4 boundary-45-below-negative bfd7ffff c5
+narrow e4 boundary-45-tie-negative bfd80000 c6
+narrow e4 boundary-45-above-negative bfd80001 c6
+narrow e4 boundary-46-below-positive 3fe7ffff 46
+narrow e4 boundary-46-tie-positive 3fe80000 46
+narrow e4 boundary-46-above-positive 3fe80001 47
+narrow e4 boundary-46-below-negative bfe7ffff c6
+narrow e4 boundary-46-tie-negative bfe80000 c6
+narrow e4 boundary-46-above-negative bfe80001 c7
+narrow e4 boundary-47-below-positive 3ff7ffff 47
+narrow e4 boundary-47-tie-positive 3ff80000 48
+narrow e4 boundary-47-above-positive 3ff80001 48
+narrow e4 boundary-47-below-negative bff7ffff c7
+narrow e4 boundary-47-tie-negative bff80000 c8
+narrow e4 boundary-47-above-negative bff80001 c8
+narrow e4 boundary-48-below-positive 4007ffff 48
+narrow e4 boundary-48-tie-positive 40080000 48
+narrow e4 boundary-48-above-positive 40080001 49
+narrow e4 boundary-48-below-negative c007ffff c8
+narrow e4 boundary-48-tie-negative c0080000 c8
+narrow e4 boundary-48-above-negative c0080001 c9
+narrow e4 boundary-49-below-positive 4017ffff 49
+narrow e4 boundary-49-tie-positive 40180000 4a
+narrow e4 boundary-49-above-positive 40180001 4a
+narrow e4 boundary-49-below-negative c017ffff c9
+narrow e4 boundary-49-tie-negative c0180000 ca
+narrow e4 boundary-49-above-negative c0180001 ca
+narrow e4 boundary-4a-below-positive 4027ffff 4a
+narrow e4 boundary-4a-tie-positive 40280000 4a
+narrow e4 boundary-4a-above-positive 40280001 4b
+narrow e4 boundary-4a-below-negative c027ffff ca
+narrow e4 boundary-4a-tie-negative c0280000 ca
+narrow e4 boundary-4a-above-negative c0280001 cb
+narrow e4 boundary-4b-below-positive 4037ffff 4b
+narrow e4 boundary-4b-tie-positive 40380000 4c
+narrow e4 boundary-4b-above-positive 40380001 4c
+narrow e4 boundary-4b-below-negative c037ffff cb
+narrow e4 boundary-4b-tie-negative c0380000 cc
+narrow e4 boundary-4b-above-negative c0380001 cc
+narrow e4 boundary-4c-below-positive 4047ffff 4c
+narrow e4 boundary-4c-tie-positive 40480000 4c
+narrow e4 boundary-4c-above-positive 40480001 4d
+narrow e4 boundary-4c-below-negative c047ffff cc
+narrow e4 boundary-4c-tie-negative c0480000 cc
+narrow e4 boundary-4c-above-negative c0480001 cd
+narrow e4 boundary-4d-below-positive 4057ffff 4d
+narrow e4 boundary-4d-tie-positive 40580000 4e
+narrow e4 boundary-4d-above-positive 40580001 4e
+narrow e4 boundary-4d-below-negative c057ffff cd
+narrow e4 boundary-4d-tie-negative c0580000 ce
+narrow e4 boundary-4d-above-negative c0580001 ce
+narrow e4 boundary-4e-below-positive 4067ffff 4e
+narrow e4 boundary-4e-tie-positive 40680000 4e
+narrow e4 boundary-4e-above-positive 40680001 4f
+narrow e4 boundary-4e-below-negative c067ffff ce
+narrow e4 boundary-4e-tie-negative c0680000 ce
+narrow e4 boundary-4e-above-negative c0680001 cf
+narrow e4 boundary-4f-below-positive 4077ffff 4f
+narrow e4 boundary-4f-tie-positive 40780000 50
+narrow e4 boundary-4f-above-positive 40780001 50
+narrow e4 boundary-4f-below-negative c077ffff cf
+narrow e4 boundary-4f-tie-negative c0780000 d0
+narrow e4 boundary-4f-above-negative c0780001 d0
+narrow e4 boundary-50-below-positive 4087ffff 50
+narrow e4 boundary-50-tie-positive 40880000 50
+narrow e4 boundary-50-above-positive 40880001 51
+narrow e4 boundary-50-below-negative c087ffff d0
+narrow e4 boundary-50-tie-negative c0880000 d0
+narrow e4 boundary-50-above-negative c0880001 d1
+narrow e4 boundary-51-below-positive 4097ffff 51
+narrow e4 boundary-51-tie-positive 40980000 52
+narrow e4 boundary-51-above-positive 40980001 52
+narrow e4 boundary-51-below-negative c097ffff d1
+narrow e4 boundary-51-tie-negative c0980000 d2
+narrow e4 boundary-51-above-negative c0980001 d2
+narrow e4 boundary-52-below-positive 40a7ffff 52
+narrow e4 boundary-52-tie-positive 40a80000 52
+narrow e4 boundary-52-above-positive 40a80001 53
+narrow e4 boundary-52-below-negative c0a7ffff d2
+narrow e4 boundary-52-tie-negative c0a80000 d2
+narrow e4 boundary-52-above-negative c0a80001 d3
+narrow e4 boundary-53-below-positive 40b7ffff 53
+narrow e4 boundary-53-tie-positive 40b80000 54
+narrow e4 boundary-53-above-positive 40b80001 54
+narrow e4 boundary-53-below-negative c0b7ffff d3
+narrow e4 boundary-53-tie-negative c0b80000 d4
+narrow e4 boundary-53-above-negative c0b80001 d4
+narrow e4 boundary-54-below-positive 40c7ffff 54
+narrow e4 boundary-54-tie-positive 40c80000 54
+narrow e4 boundary-54-above-positive 40c80001 55
+narrow e4 boundary-54-below-negative c0c7ffff d4
+narrow e4 boundary-54-tie-negative c0c80000 d4
+narrow e4 boundary-54-above-negative c0c80001 d5
+narrow e4 boundary-55-below-positive 40d7ffff 55
+narrow e4 boundary-55-tie-positive 40d80000 56
+narrow e4 boundary-55-above-positive 40d80001 56
+narrow e4 boundary-55-below-negative c0d7ffff d5
+narrow e4 boundary-55-tie-negative c0d80000 d6
+narrow e4 boundary-55-above-negative c0d80001 d6
+narrow e4 boundary-56-below-positive 40e7ffff 56
+narrow e4 boundary-56-tie-positive 40e80000 56
+narrow e4 boundary-56-above-positive 40e80001 57
+narrow e4 boundary-56-below-negative c0e7ffff d6
+narrow e4 boundary-56-tie-negative c0e80000 d6
+narrow e4 boundary-56-above-negative c0e80001 d7
+narrow e4 boundary-57-below-positive 40f7ffff 57
+narrow e4 boundary-57-tie-positive 40f80000 58
+narrow e4 boundary-57-above-positive 40f80001 58
+narrow e4 boundary-57-below-negative c0f7ffff d7
+narrow e4 boundary-57-tie-negative c0f80000 d8
+narrow e4 boundary-57-above-negative c0f80001 d8
+narrow e4 boundary-58-below-positive 4107ffff 58
+narrow e4 boundary-58-tie-positive 41080000 58
+narrow e4 boundary-58-above-positive 41080001 59
+narrow e4 boundary-58-below-negative c107ffff d8
+narrow e4 boundary-58-tie-negative c1080000 d8
+narrow e4 boundary-58-above-negative c1080001 d9
+narrow e4 boundary-59-below-positive 4117ffff 59
+narrow e4 boundary-59-tie-positive 41180000 5a
+narrow e4 boundary-59-above-positive 41180001 5a
+narrow e4 boundary-59-below-negative c117ffff d9
+narrow e4 boundary-59-tie-negative c1180000 da
+narrow e4 boundary-59-above-negative c1180001 da
+narrow e4 boundary-5a-below-positive 4127ffff 5a
+narrow e4 boundary-5a-tie-positive 41280000 5a
+narrow e4 boundary-5a-above-positive 41280001 5b
+narrow e4 boundary-5a-below-negative c127ffff da
+narrow e4 boundary-5a-tie-negative c1280000 da
+narrow e4 boundary-5a-above-negative c1280001 db
+narrow e4 boundary-5b-below-positive 4137ffff 5b
+narrow e4 boundary-5b-tie-positive 41380000 5c
+narrow e4 boundary-5b-above-positive 41380001 5c
+narrow e4 boundary-5b-below-negative c137ffff db
+narrow e4 boundary-5b-tie-negative c1380000 dc
+narrow e4 boundary-5b-above-negative c1380001 dc
+narrow e4 boundary-5c-below-positive 4147ffff 5c
+narrow e4 boundary-5c-tie-positive 41480000 5c
+narrow e4 boundary-5c-above-positive 41480001 5d
+narrow e4 boundary-5c-below-negative c147ffff dc
+narrow e4 boundary-5c-tie-negative c1480000 dc
+narrow e4 boundary-5c-above-negative c1480001 dd
+narrow e4 boundary-5d-below-positive 4157ffff 5d
+narrow e4 boundary-5d-tie-positive 41580000 5e
+narrow e4 boundary-5d-above-positive 41580001 5e
+narrow e4 boundary-5d-below-negative c157ffff dd
+narrow e4 boundary-5d-tie-negative c1580000 de
+narrow e4 boundary-5d-above-negative c1580001 de
+narrow e4 boundary-5e-below-positive 4167ffff 5e
+narrow e4 boundary-5e-tie-positive 41680000 5e
+narrow e4 boundary-5e-above-positive 41680001 5f
+narrow e4 boundary-5e-below-negative c167ffff de
+narrow e4 boundary-5e-tie-negative c1680000 de
+narrow e4 boundary-5e-above-negative c1680001 df
+narrow e4 boundary-5f-below-positive 4177ffff 5f
+narrow e4 boundary-5f-tie-positive 41780000 60
+narrow e4 boundary-5f-above-positive 41780001 60
+narrow e4 boundary-5f-below-negative c177ffff df
+narrow e4 boundary-5f-tie-negative c1780000 e0
+narrow e4 boundary-5f-above-negative c1780001 e0
+narrow e4 boundary-60-below-positive 4187ffff 60
+narrow e4 boundary-60-tie-positive 41880000 60
+narrow e4 boundary-60-above-positive 41880001 61
+narrow e4 boundary-60-below-negative c187ffff e0
+narrow e4 boundary-60-tie-negative c1880000 e0
+narrow e4 boundary-60-above-negative c1880001 e1
+narrow e4 boundary-61-below-positive 4197ffff 61
+narrow e4 boundary-61-tie-positive 41980000 62
+narrow e4 boundary-61-above-positive 41980001 62
+narrow e4 boundary-61-below-negative c197ffff e1
+narrow e4 boundary-61-tie-negative c1980000 e2
+narrow e4 boundary-61-above-negative c1980001 e2
+narrow e4 boundary-62-below-positive 41a7ffff 62
+narrow e4 boundary-62-tie-positive 41a80000 62
+narrow e4 boundary-62-above-positive 41a80001 63
+narrow e4 boundary-62-below-negative c1a7ffff e2
+narrow e4 boundary-62-tie-negative c1a80000 e2
+narrow e4 boundary-62-above-negative c1a80001 e3
+narrow e4 boundary-63-below-positive 41b7ffff 63
+narrow e4 boundary-63-tie-positive 41b80000 64
+narrow e4 boundary-63-above-positive 41b80001 64
+narrow e4 boundary-63-below-negative c1b7ffff e3
+narrow e4 boundary-63-tie-negative c1b80000 e4
+narrow e4 boundary-63-above-negative c1b80001 e4
+narrow e4 boundary-64-below-positive 41c7ffff 64
+narrow e4 boundary-64-tie-positive 41c80000 64
+narrow e4 boundary-64-above-positive 41c80001 65
+narrow e4 boundary-64-below-negative c1c7ffff e4
+narrow e4 boundary-64-tie-negative c1c80000 e4
+narrow e4 boundary-64-above-negative c1c80001 e5
+narrow e4 boundary-65-below-positive 41d7ffff 65
+narrow e4 boundary-65-tie-positive 41d80000 66
+narrow e4 boundary-65-above-positive 41d80001 66
+narrow e4 boundary-65-below-negative c1d7ffff e5
+narrow e4 boundary-65-tie-negative c1d80000 e6
+narrow e4 boundary-65-above-negative c1d80001 e6
+narrow e4 boundary-66-below-positive 41e7ffff 66
+narrow e4 boundary-66-tie-positive 41e80000 66
+narrow e4 boundary-66-above-positive 41e80001 67
+narrow e4 boundary-66-below-negative c1e7ffff e6
+narrow e4 boundary-66-tie-negative c1e80000 e6
+narrow e4 boundary-66-above-negative c1e80001 e7
+narrow e4 boundary-67-below-positive 41f7ffff 67
+narrow e4 boundary-67-tie-positive 41f80000 68
+narrow e4 boundary-67-above-positive 41f80001 68
+narrow e4 boundary-67-below-negative c1f7ffff e7
+narrow e4 boundary-67-tie-negative c1f80000 e8
+narrow e4 boundary-67-above-negative c1f80001 e8
+narrow e4 boundary-68-below-positive 4207ffff 68
+narrow e4 boundary-68-tie-positive 42080000 68
+narrow e4 boundary-68-above-positive 42080001 69
+narrow e4 boundary-68-below-negative c207ffff e8
+narrow e4 boundary-68-tie-negative c2080000 e8
+narrow e4 boundary-68-above-negative c2080001 e9
+narrow e4 boundary-69-below-positive 4217ffff 69
+narrow e4 boundary-69-tie-positive 42180000 6a
+narrow e4 boundary-69-above-positive 42180001 6a
+narrow e4 boundary-69-below-negative c217ffff e9
+narrow e4 boundary-69-tie-negative c2180000 ea
+narrow e4 boundary-69-above-negative c2180001 ea
+narrow e4 boundary-6a-below-positive 4227ffff 6a
+narrow e4 boundary-6a-tie-positive 42280000 6a
+narrow e4 boundary-6a-above-positive 42280001 6b
+narrow e4 boundary-6a-below-negative c227ffff ea
+narrow e4 boundary-6a-tie-negative c2280000 ea
+narrow e4 boundary-6a-above-negative c2280001 eb
+narrow e4 boundary-6b-below-positive 4237ffff 6b
+narrow e4 boundary-6b-tie-positive 42380000 6c
+narrow e4 boundary-6b-above-positive 42380001 6c
+narrow e4 boundary-6b-below-negative c237ffff eb
+narrow e4 boundary-6b-tie-negative c2380000 ec
+narrow e4 boundary-6b-above-negative c2380001 ec
+narrow e4 boundary-6c-below-positive 4247ffff 6c
+narrow e4 boundary-6c-tie-positive 42480000 6c
+narrow e4 boundary-6c-above-positive 42480001 6d
+narrow e4 boundary-6c-below-negative c247ffff ec
+narrow e4 boundary-6c-tie-negative c2480000 ec
+narrow e4 boundary-6c-above-negative c2480001 ed
+narrow e4 boundary-6d-below-positive 4257ffff 6d
+narrow e4 boundary-6d-tie-positive 42580000 6e
+narrow e4 boundary-6d-above-positive 42580001 6e
+narrow e4 boundary-6d-below-negative c257ffff ed
+narrow e4 boundary-6d-tie-negative c2580000 ee
+narrow e4 boundary-6d-above-negative c2580001 ee
+narrow e4 boundary-6e-below-positive 4267ffff 6e
+narrow e4 boundary-6e-tie-positive 42680000 6e
+narrow e4 boundary-6e-above-positive 42680001 6f
+narrow e4 boundary-6e-below-negative c267ffff ee
+narrow e4 boundary-6e-tie-negative c2680000 ee
+narrow e4 boundary-6e-above-negative c2680001 ef
+narrow e4 boundary-6f-below-positive 4277ffff 6f
+narrow e4 boundary-6f-tie-positive 42780000 70
+narrow e4 boundary-6f-above-positive 42780001 70
+narrow e4 boundary-6f-below-negative c277ffff ef
+narrow e4 boundary-6f-tie-negative c2780000 f0
+narrow e4 boundary-6f-above-negative c2780001 f0
+narrow e4 boundary-70-below-positive 4287ffff 70
+narrow e4 boundary-70-tie-positive 42880000 70
+narrow e4 boundary-70-above-positive 42880001 71
+narrow e4 boundary-70-below-negative c287ffff f0
+narrow e4 boundary-70-tie-negative c2880000 f0
+narrow e4 boundary-70-above-negative c2880001 f1
+narrow e4 boundary-71-below-positive 4297ffff 71
+narrow e4 boundary-71-tie-positive 42980000 72
+narrow e4 boundary-71-above-positive 42980001 72
+narrow e4 boundary-71-below-negative c297ffff f1
+narrow e4 boundary-71-tie-negative c2980000 f2
+narrow e4 boundary-71-above-negative c2980001 f2
+narrow e4 boundary-72-below-positive 42a7ffff 72
+narrow e4 boundary-72-tie-positive 42a80000 72
+narrow e4 boundary-72-above-positive 42a80001 73
+narrow e4 boundary-72-below-negative c2a7ffff f2
+narrow e4 boundary-72-tie-negative c2a80000 f2
+narrow e4 boundary-72-above-negative c2a80001 f3
+narrow e4 boundary-73-below-positive 42b7ffff 73
+narrow e4 boundary-73-tie-positive 42b80000 74
+narrow e4 boundary-73-above-positive 42b80001 74
+narrow e4 boundary-73-below-negative c2b7ffff f3
+narrow e4 boundary-73-tie-negative c2b80000 f4
+narrow e4 boundary-73-above-negative c2b80001 f4
+narrow e4 boundary-74-below-positive 42c7ffff 74
+narrow e4 boundary-74-tie-positive 42c80000 74
+narrow e4 boundary-74-above-positive 42c80001 75
+narrow e4 boundary-74-below-negative c2c7ffff f4
+narrow e4 boundary-74-tie-negative c2c80000 f4
+narrow e4 boundary-74-above-negative c2c80001 f5
+narrow e4 boundary-75-below-positive 42d7ffff 75
+narrow e4 boundary-75-tie-positive 42d80000 76
+narrow e4 boundary-75-above-positive 42d80001 76
+narrow e4 boundary-75-below-negative c2d7ffff f5
+narrow e4 boundary-75-tie-negative c2d80000 f6
+narrow e4 boundary-75-above-negative c2d80001 f6
+narrow e4 boundary-76-below-positive 42e7ffff 76
+narrow e4 boundary-76-tie-positive 42e80000 76
+narrow e4 boundary-76-above-positive 42e80001 77
+narrow e4 boundary-76-below-negative c2e7ffff f6
+narrow e4 boundary-76-tie-negative c2e80000 f6
+narrow e4 boundary-76-above-negative c2e80001 f7
+narrow e4 boundary-77-below-positive 42f7ffff 77
+narrow e4 boundary-77-tie-positive 42f80000 78
+narrow e4 boundary-77-above-positive 42f80001 78
+narrow e4 boundary-77-below-negative c2f7ffff f7
+narrow e4 boundary-77-tie-negative c2f80000 f8
+narrow e4 boundary-77-above-negative c2f80001 f8
+narrow e4 boundary-78-below-positive 4307ffff 78
+narrow e4 boundary-78-tie-positive 43080000 78
+narrow e4 boundary-78-above-positive 43080001 79
+narrow e4 boundary-78-below-negative c307ffff f8
+narrow e4 boundary-78-tie-negative c3080000 f8
+narrow e4 boundary-78-above-negative c3080001 f9
+narrow e4 boundary-79-below-positive 4317ffff 79
+narrow e4 boundary-79-tie-positive 43180000 7a
+narrow e4 boundary-79-above-positive 43180001 7a
+narrow e4 boundary-79-below-negative c317ffff f9
+narrow e4 boundary-79-tie-negative c3180000 fa
+narrow e4 boundary-79-above-negative c3180001 fa
+narrow e4 boundary-7a-below-positive 4327ffff 7a
+narrow e4 boundary-7a-tie-positive 43280000 7a
+narrow e4 boundary-7a-above-positive 43280001 7b
+narrow e4 boundary-7a-below-negative c327ffff fa
+narrow e4 boundary-7a-tie-negative c3280000 fa
+narrow e4 boundary-7a-above-negative c3280001 fb
+narrow e4 boundary-7b-below-positive 4337ffff 7b
+narrow e4 boundary-7b-tie-positive 43380000 7c
+narrow e4 boundary-7b-above-positive 43380001 7c
+narrow e4 boundary-7b-below-negative c337ffff fb
+narrow e4 boundary-7b-tie-negative c3380000 fc
+narrow e4 boundary-7b-above-negative c3380001 fc
+narrow e4 boundary-7c-below-positive 4347ffff 7c
+narrow e4 boundary-7c-tie-positive 43480000 7c
+narrow e4 boundary-7c-above-positive 43480001 7d
+narrow e4 boundary-7c-below-negative c347ffff fc
+narrow e4 boundary-7c-tie-negative c3480000 fc
+narrow e4 boundary-7c-above-negative c3480001 fd
+narrow e4 boundary-7d-below-positive 4357ffff 7d
+narrow e4 boundary-7d-tie-positive 43580000 7e
+narrow e4 boundary-7d-above-positive 43580001 7e
+narrow e4 boundary-7d-below-negative c357ffff fd
+narrow e4 boundary-7d-tie-negative c3580000 fe
+narrow e4 boundary-7d-above-negative c3580001 fe
+narrow e4 boundary-7e-below-positive 4367ffff 7e
+narrow e4 boundary-7e-tie-positive 43680000 7e
+narrow e4 boundary-7e-above-positive 43680001 7f
+narrow e4 boundary-7e-below-negative c367ffff fe
+narrow e4 boundary-7e-tie-negative c3680000 fe
+narrow e4 boundary-7e-above-negative c3680001 ff
+narrow e4 exception-positive-zero 00000000 00
+narrow e4 exception-negative-zero 80000000 00
+narrow e4 exception-positive-infinity 7f800000 80
+narrow e4 exception-negative-infinity ff800000 80
+narrow e4 exception-positive-quiet-nan 7fc00000 80
+narrow e4 exception-negative-quiet-nan ffc00000 80
+narrow e4 exception-positive-signaling-nan 7f800001 80
+narrow e4 exception-negative-signaling-nan ff800001 80
+narrow e4 exception-positive-payload-nan 7fe12345 80
+narrow e4 exception-negative-payload-nan ffe12345 80
+narrow e4 exception-positive-min-subnormal-f32 00000001 00
+narrow e4 exception-negative-min-subnormal-f32 80000001 00
+narrow e4 exception-positive-max-subnormal-f32 007fffff 00
+narrow e4 exception-negative-max-subnormal-f32 807fffff 00
+narrow e4 exception-positive-min-normal-f32 00800000 00
+narrow e4 exception-negative-min-normal-f32 80800000 00
+narrow e4 exception-positive-max-f32 7f7fffff 7f
+narrow e4 exception-negative-max-f32 ff7fffff ff
+narrow e4 exception-positive-e4m3-max 43700000 7f
+narrow e4 exception-positive-e4m3-above-max 43700001 7f
+narrow e4 exception-negative-e4m3-above-max c3700001 ff
+narrow e4 exception-positive-e5m2-max 47600000 7f
+narrow e4 exception-positive-e5m2-above-max 47600001 7f
+narrow e4 exception-negative-e5m2-above-max c7600001 ff
+narrow e4 exception-positive-tiny-e4m3 1a738b2f 00
+narrow e4 exception-negative-tiny-e4m3 9c22a078 00
+narrow e4 exception-positive-tiny-e5m2 1715609d 00
+narrow e4 exception-negative-tiny-e5m2 96af9ca5 00
+narrow e5 exact-00 00000000 00
+narrow e5 exact-01 37000000 01
+narrow e5 exact-02 37800000 02
+narrow e5 exact-03 37c00000 03
+narrow e5 exact-04 38000000 04
+narrow e5 exact-05 38200000 05
+narrow e5 exact-06 38400000 06
+narrow e5 exact-07 38600000 07
+narrow e5 exact-08 38800000 08
+narrow e5 exact-09 38a00000 09
+narrow e5 exact-0a 38c00000 0a
+narrow e5 exact-0b 38e00000 0b
+narrow e5 exact-0c 39000000 0c
+narrow e5 exact-0d 39200000 0d
+narrow e5 exact-0e 39400000 0e
+narrow e5 exact-0f 39600000 0f
+narrow e5 exact-10 39800000 10
+narrow e5 exact-11 39a00000 11
+narrow e5 exact-12 39c00000 12
+narrow e5 exact-13 39e00000 13
+narrow e5 exact-14 3a000000 14
+narrow e5 exact-15 3a200000 15
+narrow e5 exact-16 3a400000 16
+narrow e5 exact-17 3a600000 17
+narrow e5 exact-18 3a800000 18
+narrow e5 exact-19 3aa00000 19
+narrow e5 exact-1a 3ac00000 1a
+narrow e5 exact-1b 3ae00000 1b
+narrow e5 exact-1c 3b000000 1c
+narrow e5 exact-1d 3b200000 1d
+narrow e5 exact-1e 3b400000 1e
+narrow e5 exact-1f 3b600000 1f
+narrow e5 exact-20 3b800000 20
+narrow e5 exact-21 3ba00000 21
+narrow e5 exact-22 3bc00000 22
+narrow e5 exact-23 3be00000 23
+narrow e5 exact-24 3c000000 24
+narrow e5 exact-25 3c200000 25
+narrow e5 exact-26 3c400000 26
+narrow e5 exact-27 3c600000 27
+narrow e5 exact-28 3c800000 28
+narrow e5 exact-29 3ca00000 29
+narrow e5 exact-2a 3cc00000 2a
+narrow e5 exact-2b 3ce00000 2b
+narrow e5 exact-2c 3d000000 2c
+narrow e5 exact-2d 3d200000 2d
+narrow e5 exact-2e 3d400000 2e
+narrow e5 exact-2f 3d600000 2f
+narrow e5 exact-30 3d800000 30
+narrow e5 exact-31 3da00000 31
+narrow e5 exact-32 3dc00000 32
+narrow e5 exact-33 3de00000 33
+narrow e5 exact-34 3e000000 34
+narrow e5 exact-35 3e200000 35
+narrow e5 exact-36 3e400000 36
+narrow e5 exact-37 3e600000 37
+narrow e5 exact-38 3e800000 38
+narrow e5 exact-39 3ea00000 39
+narrow e5 exact-3a 3ec00000 3a
+narrow e5 exact-3b 3ee00000 3b
+narrow e5 exact-3c 3f000000 3c
+narrow e5 exact-3d 3f200000 3d
+narrow e5 exact-3e 3f400000 3e
+narrow e5 exact-3f 3f600000 3f
+narrow e5 exact-40 3f800000 40
+narrow e5 exact-41 3fa00000 41
+narrow e5 exact-42 3fc00000 42
+narrow e5 exact-43 3fe00000 43
+narrow e5 exact-44 40000000 44
+narrow e5 exact-45 40200000 45
+narrow e5 exact-46 40400000 46
+narrow e5 exact-47 40600000 47
+narrow e5 exact-48 40800000 48
+narrow e5 exact-49 40a00000 49
+narrow e5 exact-4a 40c00000 4a
+narrow e5 exact-4b 40e00000 4b
+narrow e5 exact-4c 41000000 4c
+narrow e5 exact-4d 41200000 4d
+narrow e5 exact-4e 41400000 4e
+narrow e5 exact-4f 41600000 4f
+narrow e5 exact-50 41800000 50
+narrow e5 exact-51 41a00000 51
+narrow e5 exact-52 41c00000 52
+narrow e5 exact-53 41e00000 53
+narrow e5 exact-54 42000000 54
+narrow e5 exact-55 42200000 55
+narrow e5 exact-56 42400000 56
+narrow e5 exact-57 42600000 57
+narrow e5 exact-58 42800000 58
+narrow e5 exact-59 42a00000 59
+narrow e5 exact-5a 42c00000 5a
+narrow e5 exact-5b 42e00000 5b
+narrow e5 exact-5c 43000000 5c
+narrow e5 exact-5d 43200000 5d
+narrow e5 exact-5e 43400000 5e
+narrow e5 exact-5f 43600000 5f
+narrow e5 exact-60 43800000 60
+narrow e5 exact-61 43a00000 61
+narrow e5 exact-62 43c00000 62
+narrow e5 exact-63 43e00000 63
+narrow e5 exact-64 44000000 64
+narrow e5 exact-65 44200000 65
+narrow e5 exact-66 44400000 66
+narrow e5 exact-67 44600000 67
+narrow e5 exact-68 44800000 68
+narrow e5 exact-69 44a00000 69
+narrow e5 exact-6a 44c00000 6a
+narrow e5 exact-6b 44e00000 6b
+narrow e5 exact-6c 45000000 6c
+narrow e5 exact-6d 45200000 6d
+narrow e5 exact-6e 45400000 6e
+narrow e5 exact-6f 45600000 6f
+narrow e5 exact-70 45800000 70
+narrow e5 exact-71 45a00000 71
+narrow e5 exact-72 45c00000 72
+narrow e5 exact-73 45e00000 73
+narrow e5 exact-74 46000000 74
+narrow e5 exact-75 46200000 75
+narrow e5 exact-76 46400000 76
+narrow e5 exact-77 46600000 77
+narrow e5 exact-78 46800000 78
+narrow e5 exact-79 46a00000 79
+narrow e5 exact-7a 46c00000 7a
+narrow e5 exact-7b 46e00000 7b
+narrow e5 exact-7c 47000000 7c
+narrow e5 exact-7d 47200000 7d
+narrow e5 exact-7e 47400000 7e
+narrow e5 exact-7f 47600000 7f
+narrow e5 exact-80 ffc00000 80
+narrow e5 exact-81 b7000000 81
+narrow e5 exact-82 b7800000 82
+narrow e5 exact-83 b7c00000 83
+narrow e5 exact-84 b8000000 84
+narrow e5 exact-85 b8200000 85
+narrow e5 exact-86 b8400000 86
+narrow e5 exact-87 b8600000 87
+narrow e5 exact-88 b8800000 88
+narrow e5 exact-89 b8a00000 89
+narrow e5 exact-8a b8c00000 8a
+narrow e5 exact-8b b8e00000 8b
+narrow e5 exact-8c b9000000 8c
+narrow e5 exact-8d b9200000 8d
+narrow e5 exact-8e b9400000 8e
+narrow e5 exact-8f b9600000 8f
+narrow e5 exact-90 b9800000 90
+narrow e5 exact-91 b9a00000 91
+narrow e5 exact-92 b9c00000 92
+narrow e5 exact-93 b9e00000 93
+narrow e5 exact-94 ba000000 94
+narrow e5 exact-95 ba200000 95
+narrow e5 exact-96 ba400000 96
+narrow e5 exact-97 ba600000 97
+narrow e5 exact-98 ba800000 98
+narrow e5 exact-99 baa00000 99
+narrow e5 exact-9a bac00000 9a
+narrow e5 exact-9b bae00000 9b
+narrow e5 exact-9c bb000000 9c
+narrow e5 exact-9d bb200000 9d
+narrow e5 exact-9e bb400000 9e
+narrow e5 exact-9f bb600000 9f
+narrow e5 exact-a0 bb800000 a0
+narrow e5 exact-a1 bba00000 a1
+narrow e5 exact-a2 bbc00000 a2
+narrow e5 exact-a3 bbe00000 a3
+narrow e5 exact-a4 bc000000 a4
+narrow e5 exact-a5 bc200000 a5
+narrow e5 exact-a6 bc400000 a6
+narrow e5 exact-a7 bc600000 a7
+narrow e5 exact-a8 bc800000 a8
+narrow e5 exact-a9 bca00000 a9
+narrow e5 exact-aa bcc00000 aa
+narrow e5 exact-ab bce00000 ab
+narrow e5 exact-ac bd000000 ac
+narrow e5 exact-ad bd200000 ad
+narrow e5 exact-ae bd400000 ae
+narrow e5 exact-af bd600000 af
+narrow e5 exact-b0 bd800000 b0
+narrow e5 exact-b1 bda00000 b1
+narrow e5 exact-b2 bdc00000 b2
+narrow e5 exact-b3 bde00000 b3
+narrow e5 exact-b4 be000000 b4
+narrow e5 exact-b5 be200000 b5
+narrow e5 exact-b6 be400000 b6
+narrow e5 exact-b7 be600000 b7
+narrow e5 exact-b8 be800000 b8
+narrow e5 exact-b9 bea00000 b9
+narrow e5 exact-ba bec00000 ba
+narrow e5 exact-bb bee00000 bb
+narrow e5 exact-bc bf000000 bc
+narrow e5 exact-bd bf200000 bd
+narrow e5 exact-be bf400000 be
+narrow e5 exact-bf bf600000 bf
+narrow e5 exact-c0 bf800000 c0
+narrow e5 exact-c1 bfa00000 c1
+narrow e5 exact-c2 bfc00000 c2
+narrow e5 exact-c3 bfe00000 c3
+narrow e5 exact-c4 c0000000 c4
+narrow e5 exact-c5 c0200000 c5
+narrow e5 exact-c6 c0400000 c6
+narrow e5 exact-c7 c0600000 c7
+narrow e5 exact-c8 c0800000 c8
+narrow e5 exact-c9 c0a00000 c9
+narrow e5 exact-ca c0c00000 ca
+narrow e5 exact-cb c0e00000 cb
+narrow e5 exact-cc c1000000 cc
+narrow e5 exact-cd c1200000 cd
+narrow e5 exact-ce c1400000 ce
+narrow e5 exact-cf c1600000 cf
+narrow e5 exact-d0 c1800000 d0
+narrow e5 exact-d1 c1a00000 d1
+narrow e5 exact-d2 c1c00000 d2
+narrow e5 exact-d3 c1e00000 d3
+narrow e5 exact-d4 c2000000 d4
+narrow e5 exact-d5 c2200000 d5
+narrow e5 exact-d6 c2400000 d6
+narrow e5 exact-d7 c2600000 d7
+narrow e5 exact-d8 c2800000 d8
+narrow e5 exact-d9 c2a00000 d9
+narrow e5 exact-da c2c00000 da
+narrow e5 exact-db c2e00000 db
+narrow e5 exact-dc c3000000 dc
+narrow e5 exact-dd c3200000 dd
+narrow e5 exact-de c3400000 de
+narrow e5 exact-df c3600000 df
+narrow e5 exact-e0 c3800000 e0
+narrow e5 exact-e1 c3a00000 e1
+narrow e5 exact-e2 c3c00000 e2
+narrow e5 exact-e3 c3e00000 e3
+narrow e5 exact-e4 c4000000 e4
+narrow e5 exact-e5 c4200000 e5
+narrow e5 exact-e6 c4400000 e6
+narrow e5 exact-e7 c4600000 e7
+narrow e5 exact-e8 c4800000 e8
+narrow e5 exact-e9 c4a00000 e9
+narrow e5 exact-ea c4c00000 ea
+narrow e5 exact-eb c4e00000 eb
+narrow e5 exact-ec c5000000 ec
+narrow e5 exact-ed c5200000 ed
+narrow e5 exact-ee c5400000 ee
+narrow e5 exact-ef c5600000 ef
+narrow e5 exact-f0 c5800000 f0
+narrow e5 exact-f1 c5a00000 f1
+narrow e5 exact-f2 c5c00000 f2
+narrow e5 exact-f3 c5e00000 f3
+narrow e5 exact-f4 c6000000 f4
+narrow e5 exact-f5 c6200000 f5
+narrow e5 exact-f6 c6400000 f6
+narrow e5 exact-f7 c6600000 f7
+narrow e5 exact-f8 c6800000 f8
+narrow e5 exact-f9 c6a00000 f9
+narrow e5 exact-fa c6c00000 fa
+narrow e5 exact-fb c6e00000 fb
+narrow e5 exact-fc c7000000 fc
+narrow e5 exact-fd c7200000 fd
+narrow e5 exact-fe c7400000 fe
+narrow e5 exact-ff c7600000 ff
+narrow e5 boundary-00-below-positive 367fffff 00
+narrow e5 boundary-00-tie-positive 36800000 00
+narrow e5 boundary-00-above-positive 36800001 01
+narrow e5 boundary-00-below-negative b67fffff 00
+narrow e5 boundary-00-tie-negative b6800000 00
+narrow e5 boundary-00-above-negative b6800001 81
+narrow e5 boundary-01-below-positive 373fffff 01
+narrow e5 boundary-01-tie-positive 37400000 02
+narrow e5 boundary-01-above-positive 37400001 02
+narrow e5 boundary-01-below-negative b73fffff 81
+narrow e5 boundary-01-tie-negative b7400000 82
+narrow e5 boundary-01-above-negative b7400001 82
+narrow e5 boundary-02-below-positive 379fffff 02
+narrow e5 boundary-02-tie-positive 37a00000 02
+narrow e5 boundary-02-above-positive 37a00001 03
+narrow e5 boundary-02-below-negative b79fffff 82
+narrow e5 boundary-02-tie-negative b7a00000 82
+narrow e5 boundary-02-above-negative b7a00001 83
+narrow e5 boundary-03-below-positive 37dfffff 03
+narrow e5 boundary-03-tie-positive 37e00000 04
+narrow e5 boundary-03-above-positive 37e00001 04
+narrow e5 boundary-03-below-negative b7dfffff 83
+narrow e5 boundary-03-tie-negative b7e00000 84
+narrow e5 boundary-03-above-negative b7e00001 84
+narrow e5 boundary-04-below-positive 380fffff 04
+narrow e5 boundary-04-tie-positive 38100000 04
+narrow e5 boundary-04-above-positive 38100001 05
+narrow e5 boundary-04-below-negative b80fffff 84
+narrow e5 boundary-04-tie-negative b8100000 84
+narrow e5 boundary-04-above-negative b8100001 85
+narrow e5 boundary-05-below-positive 382fffff 05
+narrow e5 boundary-05-tie-positive 38300000 06
+narrow e5 boundary-05-above-positive 38300001 06
+narrow e5 boundary-05-below-negative b82fffff 85
+narrow e5 boundary-05-tie-negative b8300000 86
+narrow e5 boundary-05-above-negative b8300001 86
+narrow e5 boundary-06-below-positive 384fffff 06
+narrow e5 boundary-06-tie-positive 38500000 06
+narrow e5 boundary-06-above-positive 38500001 07
+narrow e5 boundary-06-below-negative b84fffff 86
+narrow e5 boundary-06-tie-negative b8500000 86
+narrow e5 boundary-06-above-negative b8500001 87
+narrow e5 boundary-07-below-positive 386fffff 07
+narrow e5 boundary-07-tie-positive 38700000 08
+narrow e5 boundary-07-above-positive 38700001 08
+narrow e5 boundary-07-below-negative b86fffff 87
+narrow e5 boundary-07-tie-negative b8700000 88
+narrow e5 boundary-07-above-negative b8700001 88
+narrow e5 boundary-08-below-positive 388fffff 08
+narrow e5 boundary-08-tie-positive 38900000 08
+narrow e5 boundary-08-above-positive 38900001 09
+narrow e5 boundary-08-below-negative b88fffff 88
+narrow e5 boundary-08-tie-negative b8900000 88
+narrow e5 boundary-08-above-negative b8900001 89
+narrow e5 boundary-09-below-positive 38afffff 09
+narrow e5 boundary-09-tie-positive 38b00000 0a
+narrow e5 boundary-09-above-positive 38b00001 0a
+narrow e5 boundary-09-below-negative b8afffff 89
+narrow e5 boundary-09-tie-negative b8b00000 8a
+narrow e5 boundary-09-above-negative b8b00001 8a
+narrow e5 boundary-0a-below-positive 38cfffff 0a
+narrow e5 boundary-0a-tie-positive 38d00000 0a
+narrow e5 boundary-0a-above-positive 38d00001 0b
+narrow e5 boundary-0a-below-negative b8cfffff 8a
+narrow e5 boundary-0a-tie-negative b8d00000 8a
+narrow e5 boundary-0a-above-negative b8d00001 8b
+narrow e5 boundary-0b-below-positive 38efffff 0b
+narrow e5 boundary-0b-tie-positive 38f00000 0c
+narrow e5 boundary-0b-above-positive 38f00001 0c
+narrow e5 boundary-0b-below-negative b8efffff 8b
+narrow e5 boundary-0b-tie-negative b8f00000 8c
+narrow e5 boundary-0b-above-negative b8f00001 8c
+narrow e5 boundary-0c-below-positive 390fffff 0c
+narrow e5 boundary-0c-tie-positive 39100000 0c
+narrow e5 boundary-0c-above-positive 39100001 0d
+narrow e5 boundary-0c-below-negative b90fffff 8c
+narrow e5 boundary-0c-tie-negative b9100000 8c
+narrow e5 boundary-0c-above-negative b9100001 8d
+narrow e5 boundary-0d-below-positive 392fffff 0d
+narrow e5 boundary-0d-tie-positive 39300000 0e
+narrow e5 boundary-0d-above-positive 39300001 0e
+narrow e5 boundary-0d-below-negative b92fffff 8d
+narrow e5 boundary-0d-tie-negative b9300000 8e
+narrow e5 boundary-0d-above-negative b9300001 8e
+narrow e5 boundary-0e-below-positive 394fffff 0e
+narrow e5 boundary-0e-tie-positive 39500000 0e
+narrow e5 boundary-0e-above-positive 39500001 0f
+narrow e5 boundary-0e-below-negative b94fffff 8e
+narrow e5 boundary-0e-tie-negative b9500000 8e
+narrow e5 boundary-0e-above-negative b9500001 8f
+narrow e5 boundary-0f-below-positive 396fffff 0f
+narrow e5 boundary-0f-tie-positive 39700000 10
+narrow e5 boundary-0f-above-positive 39700001 10
+narrow e5 boundary-0f-below-negative b96fffff 8f
+narrow e5 boundary-0f-tie-negative b9700000 90
+narrow e5 boundary-0f-above-negative b9700001 90
+narrow e5 boundary-10-below-positive 398fffff 10
+narrow e5 boundary-10-tie-positive 39900000 10
+narrow e5 boundary-10-above-positive 39900001 11
+narrow e5 boundary-10-below-negative b98fffff 90
+narrow e5 boundary-10-tie-negative b9900000 90
+narrow e5 boundary-10-above-negative b9900001 91
+narrow e5 boundary-11-below-positive 39afffff 11
+narrow e5 boundary-11-tie-positive 39b00000 12
+narrow e5 boundary-11-above-positive 39b00001 12
+narrow e5 boundary-11-below-negative b9afffff 91
+narrow e5 boundary-11-tie-negative b9b00000 92
+narrow e5 boundary-11-above-negative b9b00001 92
+narrow e5 boundary-12-below-positive 39cfffff 12
+narrow e5 boundary-12-tie-positive 39d00000 12
+narrow e5 boundary-12-above-positive 39d00001 13
+narrow e5 boundary-12-below-negative b9cfffff 92
+narrow e5 boundary-12-tie-negative b9d00000 92
+narrow e5 boundary-12-above-negative b9d00001 93
+narrow e5 boundary-13-below-positive 39efffff 13
+narrow e5 boundary-13-tie-positive 39f00000 14
+narrow e5 boundary-13-above-positive 39f00001 14
+narrow e5 boundary-13-below-negative b9efffff 93
+narrow e5 boundary-13-tie-negative b9f00000 94
+narrow e5 boundary-13-above-negative b9f00001 94
+narrow e5 boundary-14-below-positive 3a0fffff 14
+narrow e5 boundary-14-tie-positive 3a100000 14
+narrow e5 boundary-14-above-positive 3a100001 15
+narrow e5 boundary-14-below-negative ba0fffff 94
+narrow e5 boundary-14-tie-negative ba100000 94
+narrow e5 boundary-14-above-negative ba100001 95
+narrow e5 boundary-15-below-positive 3a2fffff 15
+narrow e5 boundary-15-tie-positive 3a300000 16
+narrow e5 boundary-15-above-positive 3a300001 16
+narrow e5 boundary-15-below-negative ba2fffff 95
+narrow e5 boundary-15-tie-negative ba300000 96
+narrow e5 boundary-15-above-negative ba300001 96
+narrow e5 boundary-16-below-positive 3a4fffff 16
+narrow e5 boundary-16-tie-positive 3a500000 16
+narrow e5 boundary-16-above-positive 3a500001 17
+narrow e5 boundary-16-below-negative ba4fffff 96
+narrow e5 boundary-16-tie-negative ba500000 96
+narrow e5 boundary-16-above-negative ba500001 97
+narrow e5 boundary-17-below-positive 3a6fffff 17
+narrow e5 boundary-17-tie-positive 3a700000 18
+narrow e5 boundary-17-above-positive 3a700001 18
+narrow e5 boundary-17-below-negative ba6fffff 97
+narrow e5 boundary-17-tie-negative ba700000 98
+narrow e5 boundary-17-above-negative ba700001 98
+narrow e5 boundary-18-below-positive 3a8fffff 18
+narrow e5 boundary-18-tie-positive 3a900000 18
+narrow e5 boundary-18-above-positive 3a900001 19
+narrow e5 boundary-18-below-negative ba8fffff 98
+narrow e5 boundary-18-tie-negative ba900000 98
+narrow e5 boundary-18-above-negative ba900001 99
+narrow e5 boundary-19-below-positive 3aafffff 19
+narrow e5 boundary-19-tie-positive 3ab00000 1a
+narrow e5 boundary-19-above-positive 3ab00001 1a
+narrow e5 boundary-19-below-negative baafffff 99
+narrow e5 boundary-19-tie-negative bab00000 9a
+narrow e5 boundary-19-above-negative bab00001 9a
+narrow e5 boundary-1a-below-positive 3acfffff 1a
+narrow e5 boundary-1a-tie-positive 3ad00000 1a
+narrow e5 boundary-1a-above-positive 3ad00001 1b
+narrow e5 boundary-1a-below-negative bacfffff 9a
+narrow e5 boundary-1a-tie-negative bad00000 9a
+narrow e5 boundary-1a-above-negative bad00001 9b
+narrow e5 boundary-1b-below-positive 3aefffff 1b
+narrow e5 boundary-1b-tie-positive 3af00000 1c
+narrow e5 boundary-1b-above-positive 3af00001 1c
+narrow e5 boundary-1b-below-negative baefffff 9b
+narrow e5 boundary-1b-tie-negative baf00000 9c
+narrow e5 boundary-1b-above-negative baf00001 9c
+narrow e5 boundary-1c-below-positive 3b0fffff 1c
+narrow e5 boundary-1c-tie-positive 3b100000 1c
+narrow e5 boundary-1c-above-positive 3b100001 1d
+narrow e5 boundary-1c-below-negative bb0fffff 9c
+narrow e5 boundary-1c-tie-negative bb100000 9c
+narrow e5 boundary-1c-above-negative bb100001 9d
+narrow e5 boundary-1d-below-positive 3b2fffff 1d
+narrow e5 boundary-1d-tie-positive 3b300000 1e
+narrow e5 boundary-1d-above-positive 3b300001 1e
+narrow e5 boundary-1d-below-negative bb2fffff 9d
+narrow e5 boundary-1d-tie-negative bb300000 9e
+narrow e5 boundary-1d-above-negative bb300001 9e
+narrow e5 boundary-1e-below-positive 3b4fffff 1e
+narrow e5 boundary-1e-tie-positive 3b500000 1e
+narrow e5 boundary-1e-above-positive 3b500001 1f
+narrow e5 boundary-1e-below-negative bb4fffff 9e
+narrow e5 boundary-1e-tie-negative bb500000 9e
+narrow e5 boundary-1e-above-negative bb500001 9f
+narrow e5 boundary-1f-below-positive 3b6fffff 1f
+narrow e5 boundary-1f-tie-positive 3b700000 20
+narrow e5 boundary-1f-above-positive 3b700001 20
+narrow e5 boundary-1f-below-negative bb6fffff 9f
+narrow e5 boundary-1f-tie-negative bb700000 a0
+narrow e5 boundary-1f-above-negative bb700001 a0
+narrow e5 boundary-20-below-positive 3b8fffff 20
+narrow e5 boundary-20-tie-positive 3b900000 20
+narrow e5 boundary-20-above-positive 3b900001 21
+narrow e5 boundary-20-below-negative bb8fffff a0
+narrow e5 boundary-20-tie-negative bb900000 a0
+narrow e5 boundary-20-above-negative bb900001 a1
+narrow e5 boundary-21-below-positive 3bafffff 21
+narrow e5 boundary-21-tie-positive 3bb00000 22
+narrow e5 boundary-21-above-positive 3bb00001 22
+narrow e5 boundary-21-below-negative bbafffff a1
+narrow e5 boundary-21-tie-negative bbb00000 a2
+narrow e5 boundary-21-above-negative bbb00001 a2
+narrow e5 boundary-22-below-positive 3bcfffff 22
+narrow e5 boundary-22-tie-positive 3bd00000 22
+narrow e5 boundary-22-above-positive 3bd00001 23
+narrow e5 boundary-22-below-negative bbcfffff a2
+narrow e5 boundary-22-tie-negative bbd00000 a2
+narrow e5 boundary-22-above-negative bbd00001 a3
+narrow e5 boundary-23-below-positive 3befffff 23
+narrow e5 boundary-23-tie-positive 3bf00000 24
+narrow e5 boundary-23-above-positive 3bf00001 24
+narrow e5 boundary-23-below-negative bbefffff a3
+narrow e5 boundary-23-tie-negative bbf00000 a4
+narrow e5 boundary-23-above-negative bbf00001 a4
+narrow e5 boundary-24-below-positive 3c0fffff 24
+narrow e5 boundary-24-tie-positive 3c100000 24
+narrow e5 boundary-24-above-positive 3c100001 25
+narrow e5 boundary-24-below-negative bc0fffff a4
+narrow e5 boundary-24-tie-negative bc100000 a4
+narrow e5 boundary-24-above-negative bc100001 a5
+narrow e5 boundary-25-below-positive 3c2fffff 25
+narrow e5 boundary-25-tie-positive 3c300000 26
+narrow e5 boundary-25-above-positive 3c300001 26
+narrow e5 boundary-25-below-negative bc2fffff a5
+narrow e5 boundary-25-tie-negative bc300000 a6
+narrow e5 boundary-25-above-negative bc300001 a6
+narrow e5 boundary-26-below-positive 3c4fffff 26
+narrow e5 boundary-26-tie-positive 3c500000 26
+narrow e5 boundary-26-above-positive 3c500001 27
+narrow e5 boundary-26-below-negative bc4fffff a6
+narrow e5 boundary-26-tie-negative bc500000 a6
+narrow e5 boundary-26-above-negative bc500001 a7
+narrow e5 boundary-27-below-positive 3c6fffff 27
+narrow e5 boundary-27-tie-positive 3c700000 28
+narrow e5 boundary-27-above-positive 3c700001 28
+narrow e5 boundary-27-below-negative bc6fffff a7
+narrow e5 boundary-27-tie-negative bc700000 a8
+narrow e5 boundary-27-above-negative bc700001 a8
+narrow e5 boundary-28-below-positive 3c8fffff 28
+narrow e5 boundary-28-tie-positive 3c900000 28
+narrow e5 boundary-28-above-positive 3c900001 29
+narrow e5 boundary-28-below-negative bc8fffff a8
+narrow e5 boundary-28-tie-negative bc900000 a8
+narrow e5 boundary-28-above-negative bc900001 a9
+narrow e5 boundary-29-below-positive 3cafffff 29
+narrow e5 boundary-29-tie-positive 3cb00000 2a
+narrow e5 boundary-29-above-positive 3cb00001 2a
+narrow e5 boundary-29-below-negative bcafffff a9
+narrow e5 boundary-29-tie-negative bcb00000 aa
+narrow e5 boundary-29-above-negative bcb00001 aa
+narrow e5 boundary-2a-below-positive 3ccfffff 2a
+narrow e5 boundary-2a-tie-positive 3cd00000 2a
+narrow e5 boundary-2a-above-positive 3cd00001 2b
+narrow e5 boundary-2a-below-negative bccfffff aa
+narrow e5 boundary-2a-tie-negative bcd00000 aa
+narrow e5 boundary-2a-above-negative bcd00001 ab
+narrow e5 boundary-2b-below-positive 3cefffff 2b
+narrow e5 boundary-2b-tie-positive 3cf00000 2c
+narrow e5 boundary-2b-above-positive 3cf00001 2c
+narrow e5 boundary-2b-below-negative bcefffff ab
+narrow e5 boundary-2b-tie-negative bcf00000 ac
+narrow e5 boundary-2b-above-negative bcf00001 ac
+narrow e5 boundary-2c-below-positive 3d0fffff 2c
+narrow e5 boundary-2c-tie-positive 3d100000 2c
+narrow e5 boundary-2c-above-positive 3d100001 2d
+narrow e5 boundary-2c-below-negative bd0fffff ac
+narrow e5 boundary-2c-tie-negative bd100000 ac
+narrow e5 boundary-2c-above-negative bd100001 ad
+narrow e5 boundary-2d-below-positive 3d2fffff 2d
+narrow e5 boundary-2d-tie-positive 3d300000 2e
+narrow e5 boundary-2d-above-positive 3d300001 2e
+narrow e5 boundary-2d-below-negative bd2fffff ad
+narrow e5 boundary-2d-tie-negative bd300000 ae
+narrow e5 boundary-2d-above-negative bd300001 ae
+narrow e5 boundary-2e-below-positive 3d4fffff 2e
+narrow e5 boundary-2e-tie-positive 3d500000 2e
+narrow e5 boundary-2e-above-positive 3d500001 2f
+narrow e5 boundary-2e-below-negative bd4fffff ae
+narrow e5 boundary-2e-tie-negative bd500000 ae
+narrow e5 boundary-2e-above-negative bd500001 af
+narrow e5 boundary-2f-below-positive 3d6fffff 2f
+narrow e5 boundary-2f-tie-positive 3d700000 30
+narrow e5 boundary-2f-above-positive 3d700001 30
+narrow e5 boundary-2f-below-negative bd6fffff af
+narrow e5 boundary-2f-tie-negative bd700000 b0
+narrow e5 boundary-2f-above-negative bd700001 b0
+narrow e5 boundary-30-below-positive 3d8fffff 30
+narrow e5 boundary-30-tie-positive 3d900000 30
+narrow e5 boundary-30-above-positive 3d900001 31
+narrow e5 boundary-30-below-negative bd8fffff b0
+narrow e5 boundary-30-tie-negative bd900000 b0
+narrow e5 boundary-30-above-negative bd900001 b1
+narrow e5 boundary-31-below-positive 3dafffff 31
+narrow e5 boundary-31-tie-positive 3db00000 32
+narrow e5 boundary-31-above-positive 3db00001 32
+narrow e5 boundary-31-below-negative bdafffff b1
+narrow e5 boundary-31-tie-negative bdb00000 b2
+narrow e5 boundary-31-above-negative bdb00001 b2
+narrow e5 boundary-32-below-positive 3dcfffff 32
+narrow e5 boundary-32-tie-positive 3dd00000 32
+narrow e5 boundary-32-above-positive 3dd00001 33
+narrow e5 boundary-32-below-negative bdcfffff b2
+narrow e5 boundary-32-tie-negative bdd00000 b2
+narrow e5 boundary-32-above-negative bdd00001 b3
+narrow e5 boundary-33-below-positive 3defffff 33
+narrow e5 boundary-33-tie-positive 3df00000 34
+narrow e5 boundary-33-above-positive 3df00001 34
+narrow e5 boundary-33-below-negative bdefffff b3
+narrow e5 boundary-33-tie-negative bdf00000 b4
+narrow e5 boundary-33-above-negative bdf00001 b4
+narrow e5 boundary-34-below-positive 3e0fffff 34
+narrow e5 boundary-34-tie-positive 3e100000 34
+narrow e5 boundary-34-above-positive 3e100001 35
+narrow e5 boundary-34-below-negative be0fffff b4
+narrow e5 boundary-34-tie-negative be100000 b4
+narrow e5 boundary-34-above-negative be100001 b5
+narrow e5 boundary-35-below-positive 3e2fffff 35
+narrow e5 boundary-35-tie-positive 3e300000 36
+narrow e5 boundary-35-above-positive 3e300001 36
+narrow e5 boundary-35-below-negative be2fffff b5
+narrow e5 boundary-35-tie-negative be300000 b6
+narrow e5 boundary-35-above-negative be300001 b6
+narrow e5 boundary-36-below-positive 3e4fffff 36
+narrow e5 boundary-36-tie-positive 3e500000 36
+narrow e5 boundary-36-above-positive 3e500001 37
+narrow e5 boundary-36-below-negative be4fffff b6
+narrow e5 boundary-36-tie-negative be500000 b6
+narrow e5 boundary-36-above-negative be500001 b7
+narrow e5 boundary-37-below-positive 3e6fffff 37
+narrow e5 boundary-37-tie-positive 3e700000 38
+narrow e5 boundary-37-above-positive 3e700001 38
+narrow e5 boundary-37-below-negative be6fffff b7
+narrow e5 boundary-37-tie-negative be700000 b8
+narrow e5 boundary-37-above-negative be700001 b8
+narrow e5 boundary-38-below-positive 3e8fffff 38
+narrow e5 boundary-38-tie-positive 3e900000 38
+narrow e5 boundary-38-above-positive 3e900001 39
+narrow e5 boundary-38-below-negative be8fffff b8
+narrow e5 boundary-38-tie-negative be900000 b8
+narrow e5 boundary-38-above-negative be900001 b9
+narrow e5 boundary-39-below-positive 3eafffff 39
+narrow e5 boundary-39-tie-positive 3eb00000 3a
+narrow e5 boundary-39-above-positive 3eb00001 3a
+narrow e5 boundary-39-below-negative beafffff b9
+narrow e5 boundary-39-tie-negative beb00000 ba
+narrow e5 boundary-39-above-negative beb00001 ba
+narrow e5 boundary-3a-below-positive 3ecfffff 3a
+narrow e5 boundary-3a-tie-positive 3ed00000 3a
+narrow e5 boundary-3a-above-positive 3ed00001 3b
+narrow e5 boundary-3a-below-negative becfffff ba
+narrow e5 boundary-3a-tie-negative bed00000 ba
+narrow e5 boundary-3a-above-negative bed00001 bb
+narrow e5 boundary-3b-below-positive 3eefffff 3b
+narrow e5 boundary-3b-tie-positive 3ef00000 3c
+narrow e5 boundary-3b-above-positive 3ef00001 3c
+narrow e5 boundary-3b-below-negative beefffff bb
+narrow e5 boundary-3b-tie-negative bef00000 bc
+narrow e5 boundary-3b-above-negative bef00001 bc
+narrow e5 boundary-3c-below-positive 3f0fffff 3c
+narrow e5 boundary-3c-tie-positive 3f100000 3c
+narrow e5 boundary-3c-above-positive 3f100001 3d
+narrow e5 boundary-3c-below-negative bf0fffff bc
+narrow e5 boundary-3c-tie-negative bf100000 bc
+narrow e5 boundary-3c-above-negative bf100001 bd
+narrow e5 boundary-3d-below-positive 3f2fffff 3d
+narrow e5 boundary-3d-tie-positive 3f300000 3e
+narrow e5 boundary-3d-above-positive 3f300001 3e
+narrow e5 boundary-3d-below-negative bf2fffff bd
+narrow e5 boundary-3d-tie-negative bf300000 be
+narrow e5 boundary-3d-above-negative bf300001 be
+narrow e5 boundary-3e-below-positive 3f4fffff 3e
+narrow e5 boundary-3e-tie-positive 3f500000 3e
+narrow e5 boundary-3e-above-positive 3f500001 3f
+narrow e5 boundary-3e-below-negative bf4fffff be
+narrow e5 boundary-3e-tie-negative bf500000 be
+narrow e5 boundary-3e-above-negative bf500001 bf
+narrow e5 boundary-3f-below-positive 3f6fffff 3f
+narrow e5 boundary-3f-tie-positive 3f700000 40
+narrow e5 boundary-3f-above-positive 3f700001 40
+narrow e5 boundary-3f-below-negative bf6fffff bf
+narrow e5 boundary-3f-tie-negative bf700000 c0
+narrow e5 boundary-3f-above-negative bf700001 c0
+narrow e5 boundary-40-below-positive 3f8fffff 40
+narrow e5 boundary-40-tie-positive 3f900000 40
+narrow e5 boundary-40-above-positive 3f900001 41
+narrow e5 boundary-40-below-negative bf8fffff c0
+narrow e5 boundary-40-tie-negative bf900000 c0
+narrow e5 boundary-40-above-negative bf900001 c1
+narrow e5 boundary-41-below-positive 3fafffff 41
+narrow e5 boundary-41-tie-positive 3fb00000 42
+narrow e5 boundary-41-above-positive 3fb00001 42
+narrow e5 boundary-41-below-negative bfafffff c1
+narrow e5 boundary-41-tie-negative bfb00000 c2
+narrow e5 boundary-41-above-negative bfb00001 c2
+narrow e5 boundary-42-below-positive 3fcfffff 42
+narrow e5 boundary-42-tie-positive 3fd00000 42
+narrow e5 boundary-42-above-positive 3fd00001 43
+narrow e5 boundary-42-below-negative bfcfffff c2
+narrow e5 boundary-42-tie-negative bfd00000 c2
+narrow e5 boundary-42-above-negative bfd00001 c3
+narrow e5 boundary-43-below-positive 3fefffff 43
+narrow e5 boundary-43-tie-positive 3ff00000 44
+narrow e5 boundary-43-above-positive 3ff00001 44
+narrow e5 boundary-43-below-negative bfefffff c3
+narrow e5 boundary-43-tie-negative bff00000 c4
+narrow e5 boundary-43-above-negative bff00001 c4
+narrow e5 boundary-44-below-positive 400fffff 44
+narrow e5 boundary-44-tie-positive 40100000 44
+narrow e5 boundary-44-above-positive 40100001 45
+narrow e5 boundary-44-below-negative c00fffff c4
+narrow e5 boundary-44-tie-negative c0100000 c4
+narrow e5 boundary-44-above-negative c0100001 c5
+narrow e5 boundary-45-below-positive 402fffff 45
+narrow e5 boundary-45-tie-positive 40300000 46
+narrow e5 boundary-45-above-positive 40300001 46
+narrow e5 boundary-45-below-negative c02fffff c5
+narrow e5 boundary-45-tie-negative c0300000 c6
+narrow e5 boundary-45-above-negative c0300001 c6
+narrow e5 boundary-46-below-positive 404fffff 46
+narrow e5 boundary-46-tie-positive 40500000 46
+narrow e5 boundary-46-above-positive 40500001 47
+narrow e5 boundary-46-below-negative c04fffff c6
+narrow e5 boundary-46-tie-negative c0500000 c6
+narrow e5 boundary-46-above-negative c0500001 c7
+narrow e5 boundary-47-below-positive 406fffff 47
+narrow e5 boundary-47-tie-positive 40700000 48
+narrow e5 boundary-47-above-positive 40700001 48
+narrow e5 boundary-47-below-negative c06fffff c7
+narrow e5 boundary-47-tie-negative c0700000 c8
+narrow e5 boundary-47-above-negative c0700001 c8
+narrow e5 boundary-48-below-positive 408fffff 48
+narrow e5 boundary-48-tie-positive 40900000 48
+narrow e5 boundary-48-above-positive 40900001 49
+narrow e5 boundary-48-below-negative c08fffff c8
+narrow e5 boundary-48-tie-negative c0900000 c8
+narrow e5 boundary-48-above-negative c0900001 c9
+narrow e5 boundary-49-below-positive 40afffff 49
+narrow e5 boundary-49-tie-positive 40b00000 4a
+narrow e5 boundary-49-above-positive 40b00001 4a
+narrow e5 boundary-49-below-negative c0afffff c9
+narrow e5 boundary-49-tie-negative c0b00000 ca
+narrow e5 boundary-49-above-negative c0b00001 ca
+narrow e5 boundary-4a-below-positive 40cfffff 4a
+narrow e5 boundary-4a-tie-positive 40d00000 4a
+narrow e5 boundary-4a-above-positive 40d00001 4b
+narrow e5 boundary-4a-below-negative c0cfffff ca
+narrow e5 boundary-4a-tie-negative c0d00000 ca
+narrow e5 boundary-4a-above-negative c0d00001 cb
+narrow e5 boundary-4b-below-positive 40efffff 4b
+narrow e5 boundary-4b-tie-positive 40f00000 4c
+narrow e5 boundary-4b-above-positive 40f00001 4c
+narrow e5 boundary-4b-below-negative c0efffff cb
+narrow e5 boundary-4b-tie-negative c0f00000 cc
+narrow e5 boundary-4b-above-negative c0f00001 cc
+narrow e5 boundary-4c-below-positive 410fffff 4c
+narrow e5 boundary-4c-tie-positive 41100000 4c
+narrow e5 boundary-4c-above-positive 41100001 4d
+narrow e5 boundary-4c-below-negative c10fffff cc
+narrow e5 boundary-4c-tie-negative c1100000 cc
+narrow e5 boundary-4c-above-negative c1100001 cd
+narrow e5 boundary-4d-below-positive 412fffff 4d
+narrow e5 boundary-4d-tie-positive 41300000 4e
+narrow e5 boundary-4d-above-positive 41300001 4e
+narrow e5 boundary-4d-below-negative c12fffff cd
+narrow e5 boundary-4d-tie-negative c1300000 ce
+narrow e5 boundary-4d-above-negative c1300001 ce
+narrow e5 boundary-4e-below-positive 414fffff 4e
+narrow e5 boundary-4e-tie-positive 41500000 4e
+narrow e5 boundary-4e-above-positive 41500001 4f
+narrow e5 boundary-4e-below-negative c14fffff ce
+narrow e5 boundary-4e-tie-negative c1500000 ce
+narrow e5 boundary-4e-above-negative c1500001 cf
+narrow e5 boundary-4f-below-positive 416fffff 4f
+narrow e5 boundary-4f-tie-positive 41700000 50
+narrow e5 boundary-4f-above-positive 41700001 50
+narrow e5 boundary-4f-below-negative c16fffff cf
+narrow e5 boundary-4f-tie-negative c1700000 d0
+narrow e5 boundary-4f-above-negative c1700001 d0
+narrow e5 boundary-50-below-positive 418fffff 50
+narrow e5 boundary-50-tie-positive 41900000 50
+narrow e5 boundary-50-above-positive 41900001 51
+narrow e5 boundary-50-below-negative c18fffff d0
+narrow e5 boundary-50-tie-negative c1900000 d0
+narrow e5 boundary-50-above-negative c1900001 d1
+narrow e5 boundary-51-below-positive 41afffff 51
+narrow e5 boundary-51-tie-positive 41b00000 52
+narrow e5 boundary-51-above-positive 41b00001 52
+narrow e5 boundary-51-below-negative c1afffff d1
+narrow e5 boundary-51-tie-negative c1b00000 d2
+narrow e5 boundary-51-above-negative c1b00001 d2
+narrow e5 boundary-52-below-positive 41cfffff 52
+narrow e5 boundary-52-tie-positive 41d00000 52
+narrow e5 boundary-52-above-positive 41d00001 53
+narrow e5 boundary-52-below-negative c1cfffff d2
+narrow e5 boundary-52-tie-negative c1d00000 d2
+narrow e5 boundary-52-above-negative c1d00001 d3
+narrow e5 boundary-53-below-positive 41efffff 53
+narrow e5 boundary-53-tie-positive 41f00000 54
+narrow e5 boundary-53-above-positive 41f00001 54
+narrow e5 boundary-53-below-negative c1efffff d3
+narrow e5 boundary-53-tie-negative c1f00000 d4
+narrow e5 boundary-53-above-negative c1f00001 d4
+narrow e5 boundary-54-below-positive 420fffff 54
+narrow e5 boundary-54-tie-positive 42100000 54
+narrow e5 boundary-54-above-positive 42100001 55
+narrow e5 boundary-54-below-negative c20fffff d4
+narrow e5 boundary-54-tie-negative c2100000 d4
+narrow e5 boundary-54-above-negative c2100001 d5
+narrow e5 boundary-55-below-positive 422fffff 55
+narrow e5 boundary-55-tie-positive 42300000 56
+narrow e5 boundary-55-above-positive 42300001 56
+narrow e5 boundary-55-below-negative c22fffff d5
+narrow e5 boundary-55-tie-negative c2300000 d6
+narrow e5 boundary-55-above-negative c2300001 d6
+narrow e5 boundary-56-below-positive 424fffff 56
+narrow e5 boundary-56-tie-positive 42500000 56
+narrow e5 boundary-56-above-positive 42500001 57
+narrow e5 boundary-56-below-negative c24fffff d6
+narrow e5 boundary-56-tie-negative c2500000 d6
+narrow e5 boundary-56-above-negative c2500001 d7
+narrow e5 boundary-57-below-positive 426fffff 57
+narrow e5 boundary-57-tie-positive 42700000 58
+narrow e5 boundary-57-above-positive 42700001 58
+narrow e5 boundary-57-below-negative c26fffff d7
+narrow e5 boundary-57-tie-negative c2700000 d8
+narrow e5 boundary-57-above-negative c2700001 d8
+narrow e5 boundary-58-below-positive 428fffff 58
+narrow e5 boundary-58-tie-positive 42900000 58
+narrow e5 boundary-58-above-positive 42900001 59
+narrow e5 boundary-58-below-negative c28fffff d8
+narrow e5 boundary-58-tie-negative c2900000 d8
+narrow e5 boundary-58-above-negative c2900001 d9
+narrow e5 boundary-59-below-positive 42afffff 59
+narrow e5 boundary-59-tie-positive 42b00000 5a
+narrow e5 boundary-59-above-positive 42b00001 5a
+narrow e5 boundary-59-below-negative c2afffff d9
+narrow e5 boundary-59-tie-negative c2b00000 da
+narrow e5 boundary-59-above-negative c2b00001 da
+narrow e5 boundary-5a-below-positive 42cfffff 5a
+narrow e5 boundary-5a-tie-positive 42d00000 5a
+narrow e5 boundary-5a-above-positive 42d00001 5b
+narrow e5 boundary-5a-below-negative c2cfffff da
+narrow e5 boundary-5a-tie-negative c2d00000 da
+narrow e5 boundary-5a-above-negative c2d00001 db
+narrow e5 boundary-5b-below-positive 42efffff 5b
+narrow e5 boundary-5b-tie-positive 42f00000 5c
+narrow e5 boundary-5b-above-positive 42f00001 5c
+narrow e5 boundary-5b-below-negative c2efffff db
+narrow e5 boundary-5b-tie-negative c2f00000 dc
+narrow e5 boundary-5b-above-negative c2f00001 dc
+narrow e5 boundary-5c-below-positive 430fffff 5c
+narrow e5 boundary-5c-tie-positive 43100000 5c
+narrow e5 boundary-5c-above-positive 43100001 5d
+narrow e5 boundary-5c-below-negative c30fffff dc
+narrow e5 boundary-5c-tie-negative c3100000 dc
+narrow e5 boundary-5c-above-negative c3100001 dd
+narrow e5 boundary-5d-below-positive 432fffff 5d
+narrow e5 boundary-5d-tie-positive 43300000 5e
+narrow e5 boundary-5d-above-positive 43300001 5e
+narrow e5 boundary-5d-below-negative c32fffff dd
+narrow e5 boundary-5d-tie-negative c3300000 de
+narrow e5 boundary-5d-above-negative c3300001 de
+narrow e5 boundary-5e-below-positive 434fffff 5e
+narrow e5 boundary-5e-tie-positive 43500000 5e
+narrow e5 boundary-5e-above-positive 43500001 5f
+narrow e5 boundary-5e-below-negative c34fffff de
+narrow e5 boundary-5e-tie-negative c3500000 de
+narrow e5 boundary-5e-above-negative c3500001 df
+narrow e5 boundary-5f-below-positive 436fffff 5f
+narrow e5 boundary-5f-tie-positive 43700000 60
+narrow e5 boundary-5f-above-positive 43700001 60
+narrow e5 boundary-5f-below-negative c36fffff df
+narrow e5 boundary-5f-tie-negative c3700000 e0
+narrow e5 boundary-5f-above-negative c3700001 e0
+narrow e5 boundary-60-below-positive 438fffff 60
+narrow e5 boundary-60-tie-positive 43900000 60
+narrow e5 boundary-60-above-positive 43900001 61
+narrow e5 boundary-60-below-negative c38fffff e0
+narrow e5 boundary-60-tie-negative c3900000 e0
+narrow e5 boundary-60-above-negative c3900001 e1
+narrow e5 boundary-61-below-positive 43afffff 61
+narrow e5 boundary-61-tie-positive 43b00000 62
+narrow e5 boundary-61-above-positive 43b00001 62
+narrow e5 boundary-61-below-negative c3afffff e1
+narrow e5 boundary-61-tie-negative c3b00000 e2
+narrow e5 boundary-61-above-negative c3b00001 e2
+narrow e5 boundary-62-below-positive 43cfffff 62
+narrow e5 boundary-62-tie-positive 43d00000 62
+narrow e5 boundary-62-above-positive 43d00001 63
+narrow e5 boundary-62-below-negative c3cfffff e2
+narrow e5 boundary-62-tie-negative c3d00000 e2
+narrow e5 boundary-62-above-negative c3d00001 e3
+narrow e5 boundary-63-below-positive 43efffff 63
+narrow e5 boundary-63-tie-positive 43f00000 64
+narrow e5 boundary-63-above-positive 43f00001 64
+narrow e5 boundary-63-below-negative c3efffff e3
+narrow e5 boundary-63-tie-negative c3f00000 e4
+narrow e5 boundary-63-above-negative c3f00001 e4
+narrow e5 boundary-64-below-positive 440fffff 64
+narrow e5 boundary-64-tie-positive 44100000 64
+narrow e5 boundary-64-above-positive 44100001 65
+narrow e5 boundary-64-below-negative c40fffff e4
+narrow e5 boundary-64-tie-negative c4100000 e4
+narrow e5 boundary-64-above-negative c4100001 e5
+narrow e5 boundary-65-below-positive 442fffff 65
+narrow e5 boundary-65-tie-positive 44300000 66
+narrow e5 boundary-65-above-positive 44300001 66
+narrow e5 boundary-65-below-negative c42fffff e5
+narrow e5 boundary-65-tie-negative c4300000 e6
+narrow e5 boundary-65-above-negative c4300001 e6
+narrow e5 boundary-66-below-positive 444fffff 66
+narrow e5 boundary-66-tie-positive 44500000 66
+narrow e5 boundary-66-above-positive 44500001 67
+narrow e5 boundary-66-below-negative c44fffff e6
+narrow e5 boundary-66-tie-negative c4500000 e6
+narrow e5 boundary-66-above-negative c4500001 e7
+narrow e5 boundary-67-below-positive 446fffff 67
+narrow e5 boundary-67-tie-positive 44700000 68
+narrow e5 boundary-67-above-positive 44700001 68
+narrow e5 boundary-67-below-negative c46fffff e7
+narrow e5 boundary-67-tie-negative c4700000 e8
+narrow e5 boundary-67-above-negative c4700001 e8
+narrow e5 boundary-68-below-positive 448fffff 68
+narrow e5 boundary-68-tie-positive 44900000 68
+narrow e5 boundary-68-above-positive 44900001 69
+narrow e5 boundary-68-below-negative c48fffff e8
+narrow e5 boundary-68-tie-negative c4900000 e8
+narrow e5 boundary-68-above-negative c4900001 e9
+narrow e5 boundary-69-below-positive 44afffff 69
+narrow e5 boundary-69-tie-positive 44b00000 6a
+narrow e5 boundary-69-above-positive 44b00001 6a
+narrow e5 boundary-69-below-negative c4afffff e9
+narrow e5 boundary-69-tie-negative c4b00000 ea
+narrow e5 boundary-69-above-negative c4b00001 ea
+narrow e5 boundary-6a-below-positive 44cfffff 6a
+narrow e5 boundary-6a-tie-positive 44d00000 6a
+narrow e5 boundary-6a-above-positive 44d00001 6b
+narrow e5 boundary-6a-below-negative c4cfffff ea
+narrow e5 boundary-6a-tie-negative c4d00000 ea
+narrow e5 boundary-6a-above-negative c4d00001 eb
+narrow e5 boundary-6b-below-positive 44efffff 6b
+narrow e5 boundary-6b-tie-positive 44f00000 6c
+narrow e5 boundary-6b-above-positive 44f00001 6c
+narrow e5 boundary-6b-below-negative c4efffff eb
+narrow e5 boundary-6b-tie-negative c4f00000 ec
+narrow e5 boundary-6b-above-negative c4f00001 ec
+narrow e5 boundary-6c-below-positive 450fffff 6c
+narrow e5 boundary-6c-tie-positive 45100000 6c
+narrow e5 boundary-6c-above-positive 45100001 6d
+narrow e5 boundary-6c-below-negative c50fffff ec
+narrow e5 boundary-6c-tie-negative c5100000 ec
+narrow e5 boundary-6c-above-negative c5100001 ed
+narrow e5 boundary-6d-below-positive 452fffff 6d
+narrow e5 boundary-6d-tie-positive 45300000 6e
+narrow e5 boundary-6d-above-positive 45300001 6e
+narrow e5 boundary-6d-below-negative c52fffff ed
+narrow e5 boundary-6d-tie-negative c5300000 ee
+narrow e5 boundary-6d-above-negative c5300001 ee
+narrow e5 boundary-6e-below-positive 454fffff 6e
+narrow e5 boundary-6e-tie-positive 45500000 6e
+narrow e5 boundary-6e-above-positive 45500001 6f
+narrow e5 boundary-6e-below-negative c54fffff ee
+narrow e5 boundary-6e-tie-negative c5500000 ee
+narrow e5 boundary-6e-above-negative c5500001 ef
+narrow e5 boundary-6f-below-positive 456fffff 6f
+narrow e5 boundary-6f-tie-positive 45700000 70
+narrow e5 boundary-6f-above-positive 45700001 70
+narrow e5 boundary-6f-below-negative c56fffff ef
+narrow e5 boundary-6f-tie-negative c5700000 f0
+narrow e5 boundary-6f-above-negative c5700001 f0
+narrow e5 boundary-70-below-positive 458fffff 70
+narrow e5 boundary-70-tie-positive 45900000 70
+narrow e5 boundary-70-above-positive 45900001 71
+narrow e5 boundary-70-below-negative c58fffff f0
+narrow e5 boundary-70-tie-negative c5900000 f0
+narrow e5 boundary-70-above-negative c5900001 f1
+narrow e5 boundary-71-below-positive 45afffff 71
+narrow e5 boundary-71-tie-positive 45b00000 72
+narrow e5 boundary-71-above-positive 45b00001 72
+narrow e5 boundary-71-below-negative c5afffff f1
+narrow e5 boundary-71-tie-negative c5b00000 f2
+narrow e5 boundary-71-above-negative c5b00001 f2
+narrow e5 boundary-72-below-positive 45cfffff 72
+narrow e5 boundary-72-tie-positive 45d00000 72
+narrow e5 boundary-72-above-positive 45d00001 73
+narrow e5 boundary-72-below-negative c5cfffff f2
+narrow e5 boundary-72-tie-negative c5d00000 f2
+narrow e5 boundary-72-above-negative c5d00001 f3
+narrow e5 boundary-73-below-positive 45efffff 73
+narrow e5 boundary-73-tie-positive 45f00000 74
+narrow e5 boundary-73-above-positive 45f00001 74
+narrow e5 boundary-73-below-negative c5efffff f3
+narrow e5 boundary-73-tie-negative c5f00000 f4
+narrow e5 boundary-73-above-negative c5f00001 f4
+narrow e5 boundary-74-below-positive 460fffff 74
+narrow e5 boundary-74-tie-positive 46100000 74
+narrow e5 boundary-74-above-positive 46100001 75
+narrow e5 boundary-74-below-negative c60fffff f4
+narrow e5 boundary-74-tie-negative c6100000 f4
+narrow e5 boundary-74-above-negative c6100001 f5
+narrow e5 boundary-75-below-positive 462fffff 75
+narrow e5 boundary-75-tie-positive 46300000 76
+narrow e5 boundary-75-above-positive 46300001 76
+narrow e5 boundary-75-below-negative c62fffff f5
+narrow e5 boundary-75-tie-negative c6300000 f6
+narrow e5 boundary-75-above-negative c6300001 f6
+narrow e5 boundary-76-below-positive 464fffff 76
+narrow e5 boundary-76-tie-positive 46500000 76
+narrow e5 boundary-76-above-positive 46500001 77
+narrow e5 boundary-76-below-negative c64fffff f6
+narrow e5 boundary-76-tie-negative c6500000 f6
+narrow e5 boundary-76-above-negative c6500001 f7
+narrow e5 boundary-77-below-positive 466fffff 77
+narrow e5 boundary-77-tie-positive 46700000 78
+narrow e5 boundary-77-above-positive 46700001 78
+narrow e5 boundary-77-below-negative c66fffff f7
+narrow e5 boundary-77-tie-negative c6700000 f8
+narrow e5 boundary-77-above-negative c6700001 f8
+narrow e5 boundary-78-below-positive 468fffff 78
+narrow e5 boundary-78-tie-positive 46900000 78
+narrow e5 boundary-78-above-positive 46900001 79
+narrow e5 boundary-78-below-negative c68fffff f8
+narrow e5 boundary-78-tie-negative c6900000 f8
+narrow e5 boundary-78-above-negative c6900001 f9
+narrow e5 boundary-79-below-positive 46afffff 79
+narrow e5 boundary-79-tie-positive 46b00000 7a
+narrow e5 boundary-79-above-positive 46b00001 7a
+narrow e5 boundary-79-below-negative c6afffff f9
+narrow e5 boundary-79-tie-negative c6b00000 fa
+narrow e5 boundary-79-above-negative c6b00001 fa
+narrow e5 boundary-7a-below-positive 46cfffff 7a
+narrow e5 boundary-7a-tie-positive 46d00000 7a
+narrow e5 boundary-7a-above-positive 46d00001 7b
+narrow e5 boundary-7a-below-negative c6cfffff fa
+narrow e5 boundary-7a-tie-negative c6d00000 fa
+narrow e5 boundary-7a-above-negative c6d00001 fb
+narrow e5 boundary-7b-below-positive 46efffff 7b
+narrow e5 boundary-7b-tie-positive 46f00000 7c
+narrow e5 boundary-7b-above-positive 46f00001 7c
+narrow e5 boundary-7b-below-negative c6efffff fb
+narrow e5 boundary-7b-tie-negative c6f00000 fc
+narrow e5 boundary-7b-above-negative c6f00001 fc
+narrow e5 boundary-7c-below-positive 470fffff 7c
+narrow e5 boundary-7c-tie-positive 47100000 7c
+narrow e5 boundary-7c-above-positive 47100001 7d
+narrow e5 boundary-7c-below-negative c70fffff fc
+narrow e5 boundary-7c-tie-negative c7100000 fc
+narrow e5 boundary-7c-above-negative c7100001 fd
+narrow e5 boundary-7d-below-positive 472fffff 7d
+narrow e5 boundary-7d-tie-positive 47300000 7e
+narrow e5 boundary-7d-above-positive 47300001 7e
+narrow e5 boundary-7d-below-negative c72fffff fd
+narrow e5 boundary-7d-tie-negative c7300000 fe
+narrow e5 boundary-7d-above-negative c7300001 fe
+narrow e5 boundary-7e-below-positive 474fffff 7e
+narrow e5 boundary-7e-tie-positive 47500000 7e
+narrow e5 boundary-7e-above-positive 47500001 7f
+narrow e5 boundary-7e-below-negative c74fffff fe
+narrow e5 boundary-7e-tie-negative c7500000 fe
+narrow e5 boundary-7e-above-negative c7500001 ff
+narrow e5 exception-positive-zero 00000000 00
+narrow e5 exception-negative-zero 80000000 00
+narrow e5 exception-positive-infinity 7f800000 80
+narrow e5 exception-negative-infinity ff800000 80
+narrow e5 exception-positive-quiet-nan 7fc00000 80
+narrow e5 exception-negative-quiet-nan ffc00000 80
+narrow e5 exception-positive-signaling-nan 7f800001 80
+narrow e5 exception-negative-signaling-nan ff800001 80
+narrow e5 exception-positive-payload-nan 7fe12345 80
+narrow e5 exception-negative-payload-nan ffe12345 80
+narrow e5 exception-positive-min-subnormal-f32 00000001 00
+narrow e5 exception-negative-min-subnormal-f32 80000001 00
+narrow e5 exception-positive-max-subnormal-f32 007fffff 00
+narrow e5 exception-negative-max-subnormal-f32 807fffff 00
+narrow e5 exception-positive-min-normal-f32 00800000 00
+narrow e5 exception-negative-min-normal-f32 80800000 00
+narrow e5 exception-positive-max-f32 7f7fffff 7f
+narrow e5 exception-negative-max-f32 ff7fffff ff
+narrow e5 exception-positive-e4m3-max 43700000 60
+narrow e5 exception-positive-e4m3-above-max 43700001 60
+narrow e5 exception-negative-e4m3-above-max c3700001 e0
+narrow e5 exception-positive-e5m2-max 47600000 7f
+narrow e5 exception-positive-e5m2-above-max 47600001 7f
+narrow e5 exception-negative-e5m2-above-max c7600001 ff
+narrow e5 exception-positive-tiny-e4m3 1a738b2f 00
+narrow e5 exception-negative-tiny-e4m3 9c22a078 00
+narrow e5 exception-positive-tiny-e5m2 1715609d 00
+narrow e5 exception-negative-tiny-e5m2 96af9ca5 00
+pack e4 lane-order 01 23 45 67 67452301
+pack e4 limits 00 40 7f ff ff7f4000
+pack e4 lane-zero 01 00 00 00 00000001
+pack e4 lane-one 00 02 00 00 00000200
+pack e4 lane-two 00 00 04 00 00040000
+pack e4 lane-three 00 00 00 08 08000000
+pack e4 nan-order 80 01 81 7f 7f810180
+pack e5 lane-order 01 23 45 67 67452301
+pack e5 limits 00 40 7f ff ff7f4000
+pack e5 lane-zero 01 00 00 00 00000001
+pack e5 lane-one 00 02 00 00 00000200
+pack e5 lane-two 00 00 04 00 00040000
+pack e5 lane-three 00 00 00 08 08000000
+pack e5 nan-order 80 01 81 7f 7f810180
+meta widening-cases 512
+meta narrowing-cases 2092
+meta packed-cases 14

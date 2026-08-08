@@ -4,80 +4,6 @@ use fe2o3_device::{Fp8E4M3Fnuz, Fp8E4M3Fnuzx4, Fp8E5M2Fnuz, Fp8E5M2Fnuzx4, LdsEl
 
 fn assert_lds_element<T: LdsElement>() {}
 
-fn rocm_decode_fingerprint<T>(decode: impl Fn(u8) -> T, bits: impl Fn(T) -> u32) -> u64 {
-    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
-    for raw in u8::MIN..=u8::MAX {
-        for byte in bits(decode(raw)).to_le_bytes() {
-            hash ^= byte as u64;
-            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-        }
-    }
-    hash
-}
-
-fn rocm_boundary_encode_fingerprint<T>(
-    decode: impl Fn(u8) -> f32,
-    encode: impl Fn(f32) -> T,
-    bits: impl Fn(T) -> u8,
-) -> u64 {
-    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
-    for raw in 0_u8..=0x7f {
-        hash ^= bits(encode(decode(raw))) as u64;
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    for lower in 0_u8..0x7f {
-        let midpoint = (decode(lower) + decode(lower + 1)) * 0.5;
-        let below = f32::from_bits(midpoint.to_bits() - 1);
-        let above = f32::from_bits(midpoint.to_bits() + 1);
-        for input in [below, midpoint, above, -below, -midpoint, -above] {
-            hash ^= bits(encode(input)) as u64;
-            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-        }
-    }
-    hash
-}
-
-fn signed_encoding(magnitude: u8) -> u8 {
-    if magnitude == 0 { 0 } else { magnitude | 0x80 }
-}
-
-fn assert_all_rounding_boundaries<T>(
-    decode: impl Fn(u8) -> f32,
-    encode: impl Fn(f32) -> T,
-    bits: impl Fn(T) -> u8,
-) {
-    for lower in 0_u8..0x7f {
-        let midpoint = (decode(lower) + decode(lower + 1)) * 0.5;
-        let below = f32::from_bits(midpoint.to_bits() - 1);
-        let above = f32::from_bits(midpoint.to_bits() + 1);
-        let tie = if lower & 1 == 0 { lower } else { lower + 1 };
-
-        assert_eq!(bits(encode(below)), lower, "below tie after {lower:#04x}");
-        assert_eq!(bits(encode(midpoint)), tie, "tie after {lower:#04x}");
-        assert_eq!(
-            bits(encode(above)),
-            lower + 1,
-            "above tie after {lower:#04x}"
-        );
-
-        assert_eq!(
-            bits(encode(-below)),
-            signed_encoding(lower),
-            "negative below tie after {lower:#04x}"
-        );
-        assert_eq!(
-            bits(encode(-midpoint)),
-            signed_encoding(tie),
-            "negative tie after {lower:#04x}"
-        );
-        assert_eq!(
-            bits(encode(-above)),
-            signed_encoding(lower + 1),
-            "negative above tie after {lower:#04x}"
-        );
-    }
-}
-
 #[test]
 fn scalar_layout_and_constants_are_stable() {
     assert_lds_element::<Fp8E4M3Fnuz>();
@@ -181,52 +107,6 @@ fn every_e5m2_fnuz_encoding_round_trips() {
         assert_eq!(value.is_finite(), raw != 0x80);
         assert!(!value.is_infinite());
     }
-}
-
-#[test]
-fn exhaustive_decode_tables_match_rocm_7_2_4_reference() {
-    assert_eq!(
-        rocm_decode_fingerprint(Fp8E4M3Fnuz::from_bits, |value| { value.to_f32().to_bits() }),
-        0x10b5_2e16_89fa_0f98
-    );
-    assert_eq!(
-        rocm_decode_fingerprint(Fp8E5M2Fnuz::from_bits, |value| { value.to_f32().to_bits() }),
-        0x5bcf_a8ed_cce2_bf98
-    );
-}
-
-#[test]
-fn boundary_encode_corpus_matches_rocm_7_2_4_satfinite_reference() {
-    assert_eq!(
-        rocm_boundary_encode_fingerprint(
-            |raw| Fp8E4M3Fnuz::from_bits(raw).to_f32(),
-            Fp8E4M3Fnuz::from_f32,
-            Fp8E4M3Fnuz::to_bits,
-        ),
-        0xd062_82ff_a323_b04f
-    );
-    assert_eq!(
-        rocm_boundary_encode_fingerprint(
-            |raw| Fp8E5M2Fnuz::from_bits(raw).to_f32(),
-            Fp8E5M2Fnuz::from_f32,
-            Fp8E5M2Fnuz::to_bits,
-        ),
-        0xd062_82ff_a323_b04f
-    );
-}
-
-#[test]
-fn every_positive_and_negative_rounding_boundary_is_rne() {
-    assert_all_rounding_boundaries(
-        |raw| Fp8E4M3Fnuz::from_bits(raw).to_f32(),
-        Fp8E4M3Fnuz::from_f32,
-        Fp8E4M3Fnuz::to_bits,
-    );
-    assert_all_rounding_boundaries(
-        |raw| Fp8E5M2Fnuz::from_bits(raw).to_f32(),
-        Fp8E5M2Fnuz::from_f32,
-        Fp8E5M2Fnuz::to_bits,
-    );
 }
 
 #[test]

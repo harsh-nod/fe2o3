@@ -14,6 +14,13 @@
 //! quiet `f32` NaN bit pattern `0xffc00000`; [`Fp8E4M3Fnuz::is_sign_negative`]
 //! and [`Fp8E5M2Fnuz::is_sign_negative`] therefore report `true` for it.
 //!
+//! The checked contract fixture was produced on `gfx942` with ROCm 7.2.4,
+//! HIP `7.2.53211-97f5574fe2`, and AMD Clang `22.0.0git` at revision
+//! `f58b06dce1f9c15707c5f808fd002e18c2accf7e`. Changing that toolchain or
+//! target requires regenerating and reviewing the native hardware golden; a
+//! similarly named format on another target does not silently change these
+//! value semantics.
+//!
 //! These integer-backed value operations do not claim that a compiler has
 //! selected a native `gfx942` conversion instruction.
 
