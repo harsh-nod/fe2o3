@@ -3,18 +3,42 @@ use std::fmt;
 #[cfg(feature = "hardware-test-hooks")]
 use fe2o3_amd_target::FeatureState;
 #[cfg(feature = "hardware-test-hooks")]
-use fe2o3_artifacts::DigestAlgorithm;
+use fe2o3_artifacts::{
+    AbiField, AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership, BlockSize,
+    DigestAlgorithm, Dimensions, LaunchContract, Mutability, Name, PointerWidth, ScalarType,
+    derive_generated_host_contract_identity_v1,
+};
 #[cfg(feature = "hardware-test-hooks")]
 use fe2o3_core::{DeviceBuffer, GpuContext};
 #[cfg(feature = "hardware-test-hooks")]
+use fe2o3_device::KernelMarkerV1;
+#[cfg(feature = "hardware-test-hooks")]
 use fe2o3_host::{
-    HsaKernelResolutionObservationV1, HsaLaunchGeometryV1, ReviewedHsaExecutableLifecycleAdapterV1,
-    ReviewedHsaImplicitKernargAdapterV1,
+    AlphaZetaCov6DispatchIdentityV1, AlphaZetaCov6KernelRoleV1, AuthenticatedWorkerV2ExecutableV1,
+    CompilerGeneratedAlphaZetaCov6ArgumentsV1, CompilerGeneratedArgumentLayoutV1,
+    CompilerGeneratedKernelExpectationV1, CompilerGeneratedKernelProfileV1,
+    CompilerGeneratedSemanticWitnessErrorV1, GeneratedAlphaZetaCov6ArgumentBindingV1,
+    GeneratedArgumentLayoutError, GeneratedArgumentPackError, GeneratedArgumentPackingPlanV1,
+    GeneratedDeviceScalarV1, GeneratedReadDeviceSlice, GeneratedReadWriteDeviceSlice,
+    HsaExecutableObjectIdentityV1, HsaKernelResolutionObservationV1, HsaLaunchGeometryV1,
+    LoadedHsaExecutableV1, ObservedContext, ReviewedHsaExecutableLifecycleAdapterV1,
+    ReviewedHsaImplicitKernargAdapterV1, ValidatedCompilerGeneratedSemanticWitnessV1,
+    WorkerV2PrerequisiteAuthenticatorV1, WorkerV2PrerequisiteDecisionV1,
+    WorkerV2PrerequisiteRequestV1, WorkerV2SafetyPropertiesV1, semantic_witness_from_backend_v1,
+    validate_compiler_generated_semantic_witness_v1,
 };
 #[cfg(feature = "hardware-test-hooks")]
 use fe2o3_hsa_runtime::{
     ReviewedHsaExecutableV1, ReviewedHsaKernelV1, ReviewedHsaRuntimeAdapterV1,
 };
+#[cfg(feature = "hardware-test-hooks")]
+use reserved_fe2o3_symbols::{
+    GENERAL_TYPED_V3_SEMANTIC_WITNESS_DOMAIN_V1, GENERAL_TYPED_V3_SEMANTIC_WITNESS_HEADER_BYTES_V1,
+    GENERAL_TYPED_V3_SEMANTIC_WITNESS_MAGIC_V1, GENERAL_TYPED_V3_SEMANTIC_WITNESS_VERSION_V1,
+    MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1, TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3,
+};
+#[cfg(feature = "hardware-test-hooks")]
+use std::cell::Cell;
 
 const WORKGROUP_SIZE: usize = 256;
 #[cfg(feature = "hardware-test-hooks")]
@@ -28,6 +52,23 @@ const ZETA_EXPLICIT_BYTES: usize = 56;
 const GUARD_PREFIX_ELEMENTS: usize = 8;
 const GUARD_SUFFIX_ELEMENTS: usize = 11;
 const HARDWARE_LENGTHS: [usize; 5] = [1, 255, 256, 257, 1023];
+
+#[cfg(feature = "hardware-test-hooks")]
+const GENERATED_SAFE_TEST_SEED: u8 = 0xa7;
+#[cfg(feature = "hardware-test-hooks")]
+const ALPHA_TEST_BINDING: [u8; 32] = [0x61; 32];
+#[cfg(feature = "hardware-test-hooks")]
+const ZETA_TEST_BINDING: [u8; 32] = [0x7a; 32];
+#[cfg(feature = "hardware-test-hooks")]
+const ALPHA_TEST_HOST_CONTRACT: [u8; 32] = [
+    149, 219, 170, 144, 118, 68, 97, 9, 43, 235, 107, 123, 185, 90, 192, 247, 80, 112, 25, 186,
+    186, 157, 128, 188, 5, 15, 155, 59, 206, 210, 56, 199,
+];
+#[cfg(feature = "hardware-test-hooks")]
+const ZETA_TEST_HOST_CONTRACT: [u8; 32] = [
+    246, 186, 214, 113, 9, 38, 46, 43, 129, 202, 66, 224, 213, 242, 145, 196, 184, 137, 97, 101,
+    58, 160, 169, 160, 136, 228, 129, 211, 20, 61, 128, 197,
+];
 
 #[cfg(feature = "hardware-test-hooks")]
 const INPUT_PREFIX: f32 = 12_345.0;
@@ -212,6 +253,440 @@ fn verify_guarded(
 
 #[cfg(feature = "hardware-test-hooks")]
 type BoxError = Box<dyn std::error::Error>;
+
+#[cfg(feature = "hardware-test-hooks")]
+fn alpha_generated_test_kernel() {}
+
+#[cfg(feature = "hardware-test-hooks")]
+fn zeta_generated_test_kernel() {}
+
+#[cfg(feature = "hardware-test-hooks")]
+struct AlphaGeneratedSafeTestKernel;
+
+#[cfg(feature = "hardware-test-hooks")]
+struct ZetaGeneratedSafeTestKernel;
+
+// SAFETY: this feature-gated marker is an exact test expectation for the
+// fixture's `alpha` role. It is not a production-generated marker.
+#[cfg(feature = "hardware-test-hooks")]
+unsafe impl KernelMarkerV1 for AlphaGeneratedSafeTestKernel {
+    type Function = fn();
+    type Registration = ();
+
+    const LOGICAL_NAME: &'static str = "alpha";
+    const EXPORT_NAME: &'static str = "alpha";
+    const FUNCTION: Self::Function = alpha_generated_test_kernel;
+    const REGISTRATION: &'static Self::Registration = &();
+}
+
+// SAFETY: this feature-gated marker is an exact test expectation for the
+// fixture's `zeta` role. It is not a production-generated marker.
+#[cfg(feature = "hardware-test-hooks")]
+unsafe impl KernelMarkerV1 for ZetaGeneratedSafeTestKernel {
+    type Function = fn();
+    type Registration = ();
+
+    const LOGICAL_NAME: &'static str = "zeta";
+    const EXPORT_NAME: &'static str = "zeta";
+    const FUNCTION: Self::Function = zeta_generated_test_kernel;
+    const REGISTRATION: &'static Self::Registration = &();
+}
+
+#[cfg(feature = "hardware-test-hooks")]
+fn backend_semantic_witness_fixture_bytes(
+    kernel_binding: [u8; 32],
+    generated_host_contract: [u8; 32],
+) -> Vec<u8> {
+    let profile = TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3.as_bytes();
+    let byte_len = GENERAL_TYPED_V3_SEMANTIC_WITNESS_HEADER_BYTES_V1 + profile.len();
+    let mut bytes = Vec::with_capacity(byte_len);
+    bytes.extend_from_slice(&GENERAL_TYPED_V3_SEMANTIC_WITNESS_MAGIC_V1.to_le_bytes());
+    bytes.extend_from_slice(&GENERAL_TYPED_V3_SEMANTIC_WITNESS_VERSION_V1.to_le_bytes());
+    bytes.extend_from_slice(&GENERAL_TYPED_V3_SEMANTIC_WITNESS_DOMAIN_V1.to_le_bytes());
+    bytes.extend_from_slice(
+        &u32::try_from(byte_len)
+            .expect("witness length fits u32")
+            .to_le_bytes(),
+    );
+    bytes.extend_from_slice(&kernel_binding);
+    bytes.extend_from_slice(&generated_host_contract);
+    bytes.extend_from_slice(
+        &u16::try_from(profile.len())
+            .expect("profile length fits u16")
+            .to_le_bytes(),
+    );
+    bytes.extend_from_slice(profile);
+    bytes
+}
+
+#[cfg(feature = "hardware-test-hooks")]
+fn parse_test_backend_semantic_witness(
+    kernel_binding: [u8; 32],
+    generated_host_contract: [u8; 32],
+) -> Result<ValidatedCompilerGeneratedSemanticWitnessV1, CompilerGeneratedSemanticWitnessErrorV1> {
+    let bytes = backend_semantic_witness_fixture_bytes(kernel_binding, generated_host_contract);
+    // SAFETY: this test-only immutable vector is initialized and retained for
+    // the complete parser call. The parser checks both expected identities.
+    unsafe {
+        semantic_witness_from_backend_v1(
+            bytes.as_ptr(),
+            bytes.len(),
+            kernel_binding,
+            generated_host_contract,
+        )
+    }
+}
+
+// SAFETY: the profile, binding, and test semantic-witness bytes describe the
+// exact alpha marker expected by this ignored integration harness. This is an
+// explicit test trust boundary, not production backend authentication.
+#[cfg(feature = "hardware-test-hooks")]
+unsafe impl CompilerGeneratedKernelExpectationV1 for AlphaGeneratedSafeTestKernel {
+    const PROFILE: CompilerGeneratedKernelProfileV1 =
+        CompilerGeneratedKernelProfileV1::ManifestDerivedScalarSliceV1 {
+            generated_host_contract_identity: ALPHA_TEST_HOST_CONTRACT,
+        };
+    const KERNEL_BINDING_ID_V1: [u8; 32] = ALPHA_TEST_BINDING;
+
+    fn semantic_witness_v1()
+    -> Result<ValidatedCompilerGeneratedSemanticWitnessV1, CompilerGeneratedSemanticWitnessErrorV1>
+    {
+        parse_test_backend_semantic_witness(ALPHA_TEST_BINDING, ALPHA_TEST_HOST_CONTRACT)
+    }
+}
+
+// SAFETY: the profile, binding, and test semantic-witness bytes describe the
+// exact zeta marker expected by this ignored integration harness. This is an
+// explicit test trust boundary, not production backend authentication.
+#[cfg(feature = "hardware-test-hooks")]
+unsafe impl CompilerGeneratedKernelExpectationV1 for ZetaGeneratedSafeTestKernel {
+    const PROFILE: CompilerGeneratedKernelProfileV1 =
+        CompilerGeneratedKernelProfileV1::ManifestDerivedScalarSliceV1 {
+            generated_host_contract_identity: ZETA_TEST_HOST_CONTRACT,
+        };
+    const KERNEL_BINDING_ID_V1: [u8; 32] = ZETA_TEST_BINDING;
+
+    fn semantic_witness_v1()
+    -> Result<ValidatedCompilerGeneratedSemanticWitnessV1, CompilerGeneratedSemanticWitnessErrorV1>
+    {
+        parse_test_backend_semantic_witness(ZETA_TEST_BINDING, ZETA_TEST_HOST_CONTRACT)
+    }
+}
+
+#[cfg(feature = "hardware-test-hooks")]
+fn generated_scalar_field(name: &str, offset: u64) -> AbiField {
+    AbiField::new(
+        Name::new(name).expect("generated scalar name is canonical"),
+        offset,
+        4,
+        4,
+        AbiKind::Scalar(ScalarType::F32),
+        Mutability::Immutable,
+        Access::ByValue,
+        AddressSpace::Value,
+        <f32 as GeneratedDeviceScalarV1>::scalar_type_identity_v1(PointerWidth::Bits64),
+        ArgumentOwnership::ByValue,
+        AliasClass::Value,
+    )
+    .expect("generated f32 scalar field is canonical")
+}
+
+#[cfg(feature = "hardware-test-hooks")]
+fn generated_slice_field(name: &str, offset: u64, read_write: bool) -> AbiField {
+    AbiField::new(
+        Name::new(name).expect("generated slice name is canonical"),
+        offset,
+        16,
+        8,
+        AbiKind::Slice {
+            element_size: 4,
+            element_alignment: 4,
+        },
+        if read_write {
+            Mutability::Mutable
+        } else {
+            Mutability::Immutable
+        },
+        if read_write {
+            Access::ReadWrite
+        } else {
+            Access::ReadOnly
+        },
+        AddressSpace::Global,
+        if read_write {
+            <f32 as GeneratedDeviceScalarV1>::disjoint_slice_type_identity_v1(PointerWidth::Bits64)
+        } else {
+            <f32 as GeneratedDeviceScalarV1>::shared_slice_type_identity_v1(PointerWidth::Bits64)
+        },
+        if read_write {
+            ArgumentOwnership::UniqueBorrow
+        } else {
+            ArgumentOwnership::SharedBorrow
+        },
+        if read_write {
+            AliasClass::Exclusive
+        } else {
+            AliasClass::SharedReadOnly
+        },
+    )
+    .expect("generated f32 slice field is canonical")
+}
+
+#[cfg(feature = "hardware-test-hooks")]
+fn alpha_generated_fields() -> Vec<AbiField> {
+    vec![
+        generated_scalar_field("scale", 0),
+        generated_slice_field("input", 8, false),
+        generated_slice_field("output", 24, true),
+    ]
+}
+
+#[cfg(feature = "hardware-test-hooks")]
+fn zeta_generated_fields() -> Vec<AbiField> {
+    vec![
+        generated_slice_field("a", 0, false),
+        generated_slice_field("b", 16, false),
+        generated_scalar_field("bias", 32),
+        generated_slice_field("output", 40, true),
+    ]
+}
+
+#[cfg(feature = "hardware-test-hooks")]
+fn alpha_generated_abi() -> AbiLayout {
+    AbiLayout::new(
+        ALPHA_EXPLICIT_BYTES as u64,
+        8,
+        PointerWidth::Bits64,
+        alpha_generated_fields(),
+    )
+    .expect("generated alpha ABI is canonical")
+}
+
+#[cfg(feature = "hardware-test-hooks")]
+fn zeta_generated_abi() -> AbiLayout {
+    AbiLayout::new(
+        ZETA_EXPLICIT_BYTES as u64,
+        8,
+        PointerWidth::Bits64,
+        zeta_generated_fields(),
+    )
+    .expect("generated zeta ABI is canonical")
+}
+
+#[cfg(feature = "hardware-test-hooks")]
+fn alpha_zeta_generated_launch() -> LaunchContract {
+    LaunchContract::new(
+        1,
+        BlockSize::Exact(
+            Dimensions::new(WORKGROUP_SIZE as u32, 1, 1)
+                .expect("generated alpha/zeta block dimensions are canonical"),
+        ),
+        Dimensions::new(u32::MAX, 1, 1)
+            .expect("generated alpha/zeta grid dimensions are canonical"),
+        0,
+        0,
+    )
+    .expect("generated alpha/zeta launch is canonical")
+}
+
+#[cfg(feature = "hardware-test-hooks")]
+fn alpha_generated_layout()
+-> Result<CompilerGeneratedArgumentLayoutV1, GeneratedArgumentLayoutError> {
+    CompilerGeneratedArgumentLayoutV1::new(
+        ALPHA_EXPLICIT_BYTES as u64,
+        8,
+        PointerWidth::Bits64,
+        alpha_generated_fields(),
+    )
+}
+
+#[cfg(feature = "hardware-test-hooks")]
+fn zeta_generated_layout() -> Result<CompilerGeneratedArgumentLayoutV1, GeneratedArgumentLayoutError>
+{
+    CompilerGeneratedArgumentLayoutV1::new(
+        ZETA_EXPLICIT_BYTES as u64,
+        8,
+        PointerWidth::Bits64,
+        zeta_generated_fields(),
+    )
+}
+
+#[cfg(feature = "hardware-test-hooks")]
+struct AlphaGeneratedArguments<'allocation> {
+    scale: f32,
+    input: GeneratedReadDeviceSlice<'allocation, f32>,
+    output: GeneratedReadWriteDeviceSlice<'allocation, f32>,
+    bound: Cell<bool>,
+}
+
+#[cfg(feature = "hardware-test-hooks")]
+impl<'allocation> AlphaGeneratedArguments<'allocation> {
+    fn new(
+        scale: f32,
+        input: GeneratedReadDeviceSlice<'allocation, f32>,
+        output: GeneratedReadWriteDeviceSlice<'allocation, f32>,
+    ) -> Self {
+        Self {
+            scale,
+            input,
+            output,
+            bound: Cell::new(false),
+        }
+    }
+}
+
+// SAFETY: this non-clone owner binds the exact alpha layout and retains both
+// checked generated slice capabilities until synchronous dispatch completes.
+#[cfg(feature = "hardware-test-hooks")]
+unsafe impl<'allocation>
+    CompilerGeneratedAlphaZetaCov6ArgumentsV1<'allocation, AlphaGeneratedSafeTestKernel>
+    for AlphaGeneratedArguments<'allocation>
+{
+    fn dispatch_identity_v1() -> AlphaZetaCov6DispatchIdentityV1 {
+        AlphaZetaCov6DispatchIdentityV1::new(
+            AlphaZetaCov6KernelRoleV1::Alpha,
+            ALPHA_TEST_BINDING,
+            ALPHA_TEST_HOST_CONTRACT,
+        )
+    }
+
+    fn generated_argument_layout_v1()
+    -> Result<CompilerGeneratedArgumentLayoutV1, GeneratedArgumentLayoutError> {
+        alpha_generated_layout()
+    }
+
+    fn bind_arguments_v1(
+        &self,
+        plan: &GeneratedArgumentPackingPlanV1,
+    ) -> Result<GeneratedAlphaZetaCov6ArgumentBindingV1<'allocation>, GeneratedArgumentPackError>
+    {
+        assert!(!self.bound.replace(true), "alpha arguments bound twice");
+        let slices = vec![
+            self.input.bind_argument_pair(plan, 1)?,
+            self.output.bind_argument_pair(plan, 2)?,
+        ];
+        // SAFETY: the scalar and opaque slice pairs cover alpha's exact source
+        // argument order, and this owner retains their capabilities.
+        Ok(unsafe {
+            GeneratedAlphaZetaCov6ArgumentBindingV1::from_compiler_generated_parts_v1(
+                vec![plan.scalar(0, self.scale)?],
+                slices,
+            )
+        })
+    }
+}
+
+#[cfg(feature = "hardware-test-hooks")]
+struct ZetaGeneratedArguments<'allocation> {
+    a: GeneratedReadDeviceSlice<'allocation, f32>,
+    b: GeneratedReadDeviceSlice<'allocation, f32>,
+    bias: f32,
+    output: GeneratedReadWriteDeviceSlice<'allocation, f32>,
+    bound: Cell<bool>,
+}
+
+#[cfg(feature = "hardware-test-hooks")]
+impl<'allocation> ZetaGeneratedArguments<'allocation> {
+    fn new(
+        a: GeneratedReadDeviceSlice<'allocation, f32>,
+        b: GeneratedReadDeviceSlice<'allocation, f32>,
+        bias: f32,
+        output: GeneratedReadWriteDeviceSlice<'allocation, f32>,
+    ) -> Self {
+        Self {
+            a,
+            b,
+            bias,
+            output,
+            bound: Cell::new(false),
+        }
+    }
+}
+
+// SAFETY: this non-clone owner binds the exact zeta layout and retains all
+// checked generated slice capabilities until synchronous dispatch completes.
+#[cfg(feature = "hardware-test-hooks")]
+unsafe impl<'allocation>
+    CompilerGeneratedAlphaZetaCov6ArgumentsV1<'allocation, ZetaGeneratedSafeTestKernel>
+    for ZetaGeneratedArguments<'allocation>
+{
+    fn dispatch_identity_v1() -> AlphaZetaCov6DispatchIdentityV1 {
+        AlphaZetaCov6DispatchIdentityV1::new(
+            AlphaZetaCov6KernelRoleV1::Zeta,
+            ZETA_TEST_BINDING,
+            ZETA_TEST_HOST_CONTRACT,
+        )
+    }
+
+    fn generated_argument_layout_v1()
+    -> Result<CompilerGeneratedArgumentLayoutV1, GeneratedArgumentLayoutError> {
+        zeta_generated_layout()
+    }
+
+    fn bind_arguments_v1(
+        &self,
+        plan: &GeneratedArgumentPackingPlanV1,
+    ) -> Result<GeneratedAlphaZetaCov6ArgumentBindingV1<'allocation>, GeneratedArgumentPackError>
+    {
+        assert!(!self.bound.replace(true), "zeta arguments bound twice");
+        let slices = vec![
+            self.a.bind_argument_pair(plan, 0)?,
+            self.b.bind_argument_pair(plan, 1)?,
+            self.output.bind_argument_pair(plan, 3)?,
+        ];
+        // SAFETY: the scalar and opaque slice pairs cover zeta's exact source
+        // argument order, and this owner retains their capabilities.
+        Ok(unsafe {
+            GeneratedAlphaZetaCov6ArgumentBindingV1::from_compiler_generated_parts_v1(
+                vec![plan.scalar(2, self.bias)?],
+                slices,
+            )
+        })
+    }
+}
+
+/// Explicitly fake prerequisite authentication for this ignored hardware test.
+///
+/// It echoes the admitted request and manufactures nonzero measurement digests.
+/// It therefore exercises lifecycle validation but provides no production
+/// compiler, Verus, proof-to-executable, layout, or effect authentication.
+#[cfg(feature = "hardware-test-hooks")]
+struct ExplicitlyFakePrerequisiteAuthenticator;
+
+// SAFETY: this implementation is deliberately valid only as a feature-gated
+// test fixture. The ignored test name and documentation expose that no real
+// prerequisite authentication is established.
+#[cfg(feature = "hardware-test-hooks")]
+unsafe impl<K: CompilerGeneratedKernelExpectationV1> WorkerV2PrerequisiteAuthenticatorV1<K>
+    for ExplicitlyFakePrerequisiteAuthenticator
+{
+    type Error = core::convert::Infallible;
+
+    unsafe fn authenticate(
+        &mut self,
+        request: &WorkerV2PrerequisiteRequestV1<'_, K>,
+    ) -> Result<WorkerV2PrerequisiteDecisionV1, Self::Error> {
+        let artifact = request.artifact_identity();
+        Ok(WorkerV2PrerequisiteDecisionV1::new(
+            request.finalized_digest(),
+            artifact.kernel_id(),
+            artifact.executable_digest(),
+            request.target(),
+            request.code_object_version(),
+            artifact.name().as_str(),
+            artifact.symbol().as_str(),
+            artifact.abi().clone(),
+            artifact.launch().clone(),
+            request.marker_binding_identity(),
+            DigestAlgorithm::Sha256.calculate(b"fake-hardware-test-compiler"),
+            DigestAlgorithm::Sha256.calculate(b"fake-hardware-test-verus"),
+            DigestAlgorithm::Sha256.calculate(b"fake-hardware-test-proof-executable"),
+            DigestAlgorithm::Sha256.calculate(b"fake-hardware-test-rust-layout"),
+            DigestAlgorithm::Sha256.calculate(b"fake-hardware-test-rust-effects"),
+            WorkerV2SafetyPropertiesV1::required(),
+        ))
+    }
+}
 
 #[cfg(feature = "hardware-test-hooks")]
 struct ResolvedKernel<'executable> {
@@ -508,6 +983,247 @@ fn execute_loaded_two_kernel_slice(
     Ok(())
 }
 
+#[cfg(feature = "hardware-test-hooks")]
+fn run_generated_safe_length_case(
+    loaded: &mut LoadedHsaExecutableV1<AlphaGeneratedSafeTestKernel, ReviewedHsaRuntimeAdapterV1>,
+    context: &std::sync::Arc<GpuContext>,
+    observed: &ObservedContext,
+    executable_identity: HsaExecutableObjectIdentityV1,
+    length: usize,
+) -> Result<(), BoxError> {
+    const SCALE: f32 = 1.5;
+    const BIAS: f32 = 0.25;
+
+    let stream = context.default_stream();
+    let input_body = alpha_input(length);
+    let b_body = zeta_input(length);
+    let expected_alpha = alpha_oracle(SCALE, &input_body);
+    let expected_zeta = zeta_oracle(&expected_alpha, &b_body, BIAS)?;
+    let input_host = guarded(&input_body, INPUT_PREFIX, INPUT_SUFFIX);
+    let b_host = guarded(&b_body, B_PREFIX, B_SUFFIX);
+    let alpha_initial = guarded(&vec![OUTPUT_FILL; length], ALPHA_PREFIX, ALPHA_SUFFIX);
+    let zeta_initial = guarded(&vec![OUTPUT_FILL; length], ZETA_PREFIX, ZETA_SUFFIX);
+
+    let input = DeviceBuffer::from_host(&stream, &input_host)?;
+    let b = DeviceBuffer::from_host(&stream, &b_host)?;
+    let mut alpha_output = DeviceBuffer::from_host(&stream, &alpha_initial)?;
+    let mut zeta_output = DeviceBuffer::from_host(&stream, &zeta_initial)?;
+    let body_end = GUARD_PREFIX_ELEMENTS
+        .checked_add(length)
+        .ok_or("guarded body range overflowed")?;
+
+    let alpha_completion = {
+        let arguments = AlphaGeneratedArguments::new(
+            SCALE,
+            GeneratedReadDeviceSlice::from_view(
+                observed,
+                input.view(GUARD_PREFIX_ELEMENTS..body_end)?,
+            )?,
+            GeneratedReadWriteDeviceSlice::from_view_mut(
+                observed,
+                alpha_output.view_mut(GUARD_PREFIX_ELEMENTS..body_end)?,
+            )?,
+        );
+        let mut fake_authenticator = ExplicitlyFakePrerequisiteAuthenticator;
+        let prepared = loaded
+            .prepare_generated_alpha_zeta_cov6_selected_kernel_v1::<
+                AlphaGeneratedSafeTestKernel,
+                _,
+                _,
+            >(observed, &mut fake_authenticator, arguments)?;
+        require(
+            prepared.geometry()
+                == HsaLaunchGeometryV1::new([grid_x(length)?, 1, 1], [256, 1, 1], 0),
+            "generated alpha geometry changed",
+        )?;
+        require(
+            prepared.explicit_byte_len() == ALPHA_EXPLICIT_BYTES
+                && prepared.physical_kernarg_byte_len()
+                    == ALPHA_EXPLICIT_BYTES + COV6_IMPLICIT_BYTES
+                && prepared.physical_kernarg_alignment()
+                    == EXPECTED_HSA_RESOLUTION_KERNARG_ALIGNMENT as usize,
+            "generated alpha COV6 kernarg facts changed",
+        )?;
+        prepared.dispatch()?
+    };
+    require(
+        alpha_completion.artifact_identity().name().as_str() == "alpha",
+        "generated alpha completion changed role",
+    )?;
+    require(
+        alpha_completion.completed_dispatch().dispatch().completed(),
+        "generated alpha dispatch did not complete",
+    )?;
+    require(
+        alpha_completion.completed_dispatch().executable_object() == executable_identity,
+        "generated alpha completion changed executable",
+    )?;
+
+    let zeta_completion = {
+        // Alpha completion above released its exclusive owner before this
+        // immutable capability for the same checked body can be constructed.
+        let arguments = ZetaGeneratedArguments::new(
+            GeneratedReadDeviceSlice::from_view(
+                observed,
+                alpha_output.view(GUARD_PREFIX_ELEMENTS..body_end)?,
+            )?,
+            GeneratedReadDeviceSlice::from_view(
+                observed,
+                b.view(GUARD_PREFIX_ELEMENTS..body_end)?,
+            )?,
+            BIAS,
+            GeneratedReadWriteDeviceSlice::from_view_mut(
+                observed,
+                zeta_output.view_mut(GUARD_PREFIX_ELEMENTS..body_end)?,
+            )?,
+        );
+        let mut fake_authenticator = ExplicitlyFakePrerequisiteAuthenticator;
+        let prepared = loaded
+            .prepare_generated_alpha_zeta_cov6_selected_kernel_v1::<
+                ZetaGeneratedSafeTestKernel,
+                _,
+                _,
+            >(observed, &mut fake_authenticator, arguments)?;
+        require(
+            prepared.geometry()
+                == HsaLaunchGeometryV1::new([grid_x(length)?, 1, 1], [256, 1, 1], 0),
+            "generated zeta geometry changed",
+        )?;
+        require(
+            prepared.explicit_byte_len() == ZETA_EXPLICIT_BYTES
+                && prepared.physical_kernarg_byte_len()
+                    == ZETA_EXPLICIT_BYTES + COV6_IMPLICIT_BYTES
+                && prepared.physical_kernarg_alignment()
+                    == EXPECTED_HSA_RESOLUTION_KERNARG_ALIGNMENT as usize,
+            "generated zeta COV6 kernarg facts changed",
+        )?;
+        prepared.dispatch()?
+    };
+    require(
+        zeta_completion.artifact_identity().name().as_str() == "zeta",
+        "generated zeta completion changed role",
+    )?;
+    require(
+        zeta_completion.completed_dispatch().dispatch().completed(),
+        "generated zeta dispatch did not complete",
+    )?;
+    require(
+        zeta_completion.completed_dispatch().executable_object() == executable_identity,
+        "generated zeta completion changed executable",
+    )?;
+
+    let input_after = input.to_host_vec(&stream)?;
+    let b_after = b.to_host_vec(&stream)?;
+    let alpha_after = alpha_output.to_host_vec(&stream)?;
+    let zeta_after = zeta_output.to_host_vec(&stream)?;
+    require(
+        input_after == input_host,
+        "generated-safe alpha input changed during dispatch",
+    )?;
+    require(
+        b_after == b_host,
+        "generated-safe zeta input changed during dispatch",
+    )?;
+    verify_guarded(&alpha_after, &expected_alpha, ALPHA_PREFIX, ALPHA_SUFFIX)
+        .map_err(|error| format!("generated-safe alpha length {length}: {error}"))?;
+    verify_guarded(&zeta_after, &expected_zeta, ZETA_PREFIX, ZETA_SUFFIX)
+        .map_err(|error| format!("generated-safe zeta length {length}: {error}"))?;
+    Ok(())
+}
+
+/// Exercises the generated safe alpha/zeta SPI through the reviewed lifecycle.
+///
+/// The marker semantic witnesses and prerequisite authenticator are explicit
+/// test fixtures. This test provides no production proof-authentication claim.
+/// Unlike `gfx942_cov6_alpha_then_zeta_one_executable`, it does not manually
+/// pack arguments or call the unsafe runtime dispatch API.
+///
+/// Required invocation:
+///
+/// ```text
+/// cargo test -p fe2o3-hsa-runtime --features hardware-test-hooks \
+///   --test gfx942_two_kernel_hardware \
+///   gfx942_cov6_alpha_then_zeta_generated_safe_spi_with_fake_authenticator \
+///   -- --ignored --exact --nocapture
+/// ```
+///
+/// The environment must set `FE2O3_RUN_GFX942_TWO_KERNEL=1`,
+/// `FE2O3_GFX942_ALPHA_ZETA_HSACO`, and
+/// `FE2O3_GFX942_ALPHA_ZETA_SHA256`.
+#[cfg(feature = "hardware-test-hooks")]
+#[test]
+#[ignore = "requires a pinned alpha/zeta COV6 HSACO, gfx942:xnack-, and uses a fake prerequisite authenticator"]
+fn gfx942_cov6_alpha_then_zeta_generated_safe_spi_with_fake_authenticator() -> Result<(), BoxError>
+{
+    let (bytes, digest) = pinned_hsaco()?;
+    let context = GpuContext::new(0)?;
+    let observed = ObservedContext::observe(&context)?;
+    let adapter = ReviewedHsaRuntimeAdapterV1::new(context.clone())?;
+    require(
+        adapter.environment().physical_device().target().processor() == "gfx942",
+        "the generated-safe hardware slice requires gfx942",
+    )?;
+    require(
+        adapter.environment().physical_device().target().xnack() == Some(FeatureState::Disabled),
+        "the generated-safe hardware slice requires gfx942:xnack-",
+    )?;
+
+    let (admission, publication_directory) =
+        fe2o3_host::__hardware_test::admitted_alpha_zeta_cov6_hardware_for_lifecycle_test(
+            GENERATED_SAFE_TEST_SEED,
+            bytes,
+            ALPHA_TEST_BINDING,
+            ZETA_TEST_BINDING,
+            &observed,
+        );
+    let mut fake_authenticator = ExplicitlyFakePrerequisiteAuthenticator;
+    let authenticated =
+        AuthenticatedWorkerV2ExecutableV1::<AlphaGeneratedSafeTestKernel>::authenticate(
+            admission,
+            &mut fake_authenticator,
+        )
+        .map_err(|error| format!("fake prerequisite authentication failed: {error:?}"))?;
+    let authorized = authenticated
+        .authorize_hsa_load(adapter)
+        .map_err(|error| format!("reviewed HSA load authorization failed: {error:?}"))?;
+    let mut loaded = authorized
+        .load()
+        .map_err(|error| format!("reviewed HSA executable load failed: {error:?}"))?;
+    require(
+        loaded.load_observation().finalized_digest() == digest,
+        "generated-safe load changed the finalized digest",
+    )?;
+    let executable_identity = loaded.load_observation().executable_object();
+
+    for length in HARDWARE_LENGTHS {
+        run_generated_safe_length_case(
+            &mut loaded,
+            &context,
+            &observed,
+            executable_identity,
+            length,
+        )?;
+    }
+
+    let unloaded = loaded
+        .unload()
+        .map_err(|error| format!("reviewed HSA executable unload failed: {error:?}"))?;
+    require(
+        unloaded.finalized_digest() == digest,
+        "generated-safe unload changed the finalized digest",
+    )?;
+    require(
+        unloaded.executable_object() == executable_identity,
+        "generated-safe unload released a substituted executable",
+    )?;
+    require(
+        unloaded.unload_observation().released(),
+        "generated-safe unload did not release the executable",
+    )?;
+    drop(publication_directory);
+    Ok(())
+}
+
 /// Executes the first general typed two-kernel gfx942 raw hardware evidence slice.
 ///
 /// This test intentionally calls the reviewed unsafe HSA adapter directly. It
@@ -671,4 +1387,46 @@ fn guarded_verification_detects_prefix_body_and_suffix_corruption() {
             .unwrap_err()
             .contains("suffix")
     );
+}
+
+#[cfg(feature = "hardware-test-hooks")]
+#[test]
+fn generated_safe_marker_fixtures_bind_exact_backend_witnesses_and_layouts() {
+    assert!(
+        validate_compiler_generated_semantic_witness_v1::<AlphaGeneratedSafeTestKernel>().is_ok()
+    );
+    assert!(
+        validate_compiler_generated_semantic_witness_v1::<ZetaGeneratedSafeTestKernel>().is_ok()
+    );
+    assert_ne!(
+        backend_semantic_witness_fixture_bytes(ALPHA_TEST_BINDING, ALPHA_TEST_HOST_CONTRACT),
+        backend_semantic_witness_fixture_bytes(ZETA_TEST_BINDING, ZETA_TEST_HOST_CONTRACT),
+    );
+    assert!(alpha_generated_layout().is_ok());
+    assert!(zeta_generated_layout().is_ok());
+}
+
+#[cfg(feature = "hardware-test-hooks")]
+#[test]
+fn generated_safe_host_contract_constants_match_canonical_derivation() {
+    let launch = alpha_zeta_generated_launch();
+    let alpha = derive_generated_host_contract_identity_v1(
+        MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
+        ALPHA_TEST_BINDING,
+        "alpha",
+        "alpha",
+        &alpha_generated_abi(),
+        &launch,
+    );
+    assert_eq!(*alpha.as_bytes(), ALPHA_TEST_HOST_CONTRACT);
+
+    let zeta = derive_generated_host_contract_identity_v1(
+        MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
+        ZETA_TEST_BINDING,
+        "zeta",
+        "zeta",
+        &zeta_generated_abi(),
+        &launch,
+    );
+    assert_eq!(*zeta.as_bytes(), ZETA_TEST_HOST_CONTRACT);
 }
