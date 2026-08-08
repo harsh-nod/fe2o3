@@ -340,10 +340,12 @@ impl LinuxTransaction<'_> {
         )?;
         sync_directory(&self.ledger.directory)?;
 
+        let previous_state_identity = self.state.identity();
         self.state = next;
         Ok(PersistentFreshnessReceiptV1 {
             identity,
             namespace: self.state.namespace,
+            previous_state_identity,
             generation: self.state.generation,
             state_identity: self.state.identity(),
         })

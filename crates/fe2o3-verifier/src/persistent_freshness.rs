@@ -161,6 +161,7 @@ pub enum PersistentFreshnessRecoveryV1 {
 pub struct PersistentFreshnessReceiptV1 {
     identity: PersistentFreshnessIdentityV1,
     namespace: Digest,
+    previous_state_identity: Digest,
     generation: u64,
     state_identity: Digest,
 }
@@ -176,6 +177,10 @@ impl PersistentFreshnessReceiptV1 {
 
     pub const fn namespace(self) -> Digest {
         self.namespace
+    }
+
+    pub const fn previous_state_identity(self) -> Digest {
+        self.previous_state_identity
     }
 
     pub const fn state_identity(self) -> Digest {

@@ -425,6 +425,15 @@ fn measured_execution_with_tools(
     target: ArtifactTarget,
     tools: ExecutionTools,
 ) -> (AuthenticatedVerusExecutionEvidenceV1, VerifierPolicy) {
+    measured_execution_with_tools_and_limits(target, tools, 10, 10)
+}
+
+fn measured_execution_with_tools_and_limits(
+    target: ArtifactTarget,
+    tools: ExecutionTools,
+    policy_timeout_seconds: u32,
+    invocation_timeout_seconds: u32,
+) -> (AuthenticatedVerusExecutionEvidenceV1, VerifierPolicy) {
     static MEASURED_EXECUTION: Mutex<()> = Mutex::new(());
 
     // The debug recorder is roughly 17 MiB and deliberately self-hashes before
@@ -433,7 +442,7 @@ fn measured_execution_with_tools(
     // and use the policy's existing 10-second ceiling. Focused one-second
     // timeout coverage remains in the executor tests.
     let _execution = MEASURED_EXECUTION.lock().unwrap();
-    let verifier_policy = make_verifier_policy(tools, 10);
+    let verifier_policy = make_verifier_policy(tools, policy_timeout_seconds);
     let request = ProofRequestV1::new(
         CorrelationId::from_bytes([51; 16]),
         verifier_target(target),
@@ -452,7 +461,7 @@ fn measured_execution_with_tools(
     let evidence = execute_authenticated_verus(
         request,
         programs,
-        verifier_policy.max_timeout_seconds(),
+        invocation_timeout_seconds,
         &verifier_policy,
         ExecutionLimits::default(),
     )
@@ -556,6 +565,38 @@ fn persistent_control_flow_blueprint(
     producer: ArtifactMeasuredToolIdentity,
     tools: ExecutionTools,
 ) -> PersistentControlFlowBlueprint {
+    persistent_control_flow_blueprint_with_policy_limits(
+        manifest,
+        kernel_id,
+        source_digest,
+        executable_digest,
+        source_input,
+        base_functional_specification,
+        finalized_executable_digest,
+        compiler,
+        producer,
+        tools,
+        10,
+        10,
+    )
+}
+
+#[cfg(target_os = "linux")]
+#[allow(clippy::too_many_arguments)]
+fn persistent_control_flow_blueprint_with_policy_limits(
+    manifest: ManifestV1,
+    kernel_id: u8,
+    source_digest: u8,
+    executable_digest: u8,
+    source_input: (Vec<u8>, Vec<u8>, ControlFlowClaimsV1),
+    base_functional_specification: Digest,
+    finalized_executable_digest: PayloadDigest,
+    compiler: ArtifactMeasuredToolIdentity,
+    producer: ArtifactMeasuredToolIdentity,
+    tools: ExecutionTools,
+    policy_timeout_seconds: u32,
+    invocation_timeout_seconds: u32,
+) -> PersistentControlFlowBlueprint {
     let (source_bytes, cfg_identity, claims) = source_input;
     let source = reconcile_control_flow_source_v1(&source_bytes, &cfg_identity, claims).unwrap();
     let functional_specification = derive_control_flow_functional_specification_digest_v1(
@@ -573,7 +614,12 @@ fn persistent_control_flow_blueprint(
         &compiler,
         &producer,
     );
-    let (evidence, verifier_policy) = measured_execution_with_tools(target, tools);
+    let (evidence, verifier_policy) = measured_execution_with_tools_and_limits(
+        target,
+        tools,
+        policy_timeout_seconds,
+        invocation_timeout_seconds,
+    );
     let request_binding = bind_control_flow_proof_request_v1(
         evidence.invocation_plan().request(),
         base_functional_specification,
@@ -624,6 +670,7 @@ struct PersistentMultiKernelBlueprints {
     target_mismatch: PersistentControlFlowBlueprint,
     compiler_mismatch: PersistentControlFlowBlueprint,
     verifier_mismatch: PersistentControlFlowBlueprint,
+    policy_mismatch: PersistentControlFlowBlueprint,
 }
 
 #[cfg(target_os = "linux")]
@@ -702,6 +749,18 @@ fn persistent_multi_kernel_blueprints() -> &'static PersistentMultiKernelBluepri
                 execution_tools(),
             ),
             verifier_mismatch: persistent_control_flow_blueprint(
+                base_manifest.clone(),
+                0x12,
+                0x23,
+                0x34,
+                control_flow_source_with("src/kernel_second.rs", 4),
+                digest(0x56),
+                payload(0x44),
+                base_compiler.clone(),
+                base_producer.clone(),
+                execution_tools_with_verifier_configuration(0x79),
+            ),
+            policy_mismatch: persistent_control_flow_blueprint_with_policy_limits(
                 base_manifest,
                 0x12,
                 0x23,
@@ -711,7 +770,9 @@ fn persistent_multi_kernel_blueprints() -> &'static PersistentMultiKernelBluepri
                 payload(0x44),
                 base_compiler,
                 base_producer,
-                execution_tools_with_verifier_configuration(0x79),
+                execution_tools(),
+                20,
+                10,
             ),
         }
     })
@@ -1189,6 +1250,39 @@ fn persistent_multi_kernel_admission_rejects_duplicate_generations_from_forked_l
 
 #[cfg(target_os = "linux")]
 #[test]
+fn persistent_multi_kernel_admission_rejects_distinct_generations_from_divergent_histories() {
+    let blueprints = persistent_multi_kernel_blueprints();
+    let first_directory = PersistentLedgerDirectory::new();
+    let second_directory = PersistentLedgerDirectory::new();
+    let (ledger, _) = PersistentProofFreshnessLedgerV1::create_new(&first_directory.path).unwrap();
+    drop(ledger);
+    copy_persistent_ledger(&first_directory.path, &second_directory.path);
+
+    let (mut first_branch, _) =
+        PersistentProofFreshnessLedgerV1::open_existing(&first_directory.path).unwrap();
+    let (mut second_branch, _) =
+        PersistentProofFreshnessLedgerV1::open_existing(&second_directory.path).unwrap();
+    let first = bind_persistent_control_flow_blueprint(blueprints.first.clone(), &mut first_branch);
+    let _divergent_generation = bind_persistent_control_flow_blueprint(
+        blueprints.first_new_execution.clone(),
+        &mut second_branch,
+    );
+    let second =
+        bind_persistent_control_flow_blueprint(blueprints.second.clone(), &mut second_branch);
+
+    assert_eq!(
+        PersistentlyFreshMultiKernelProofAdmissionV1::new(vec![first, second]),
+        Err(
+            PersistentlyFreshMultiKernelProofAdmissionErrorV1::LedgerHistoryMismatch {
+                previous_generation: 1,
+                next_generation: 2,
+            }
+        )
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn persistent_multi_kernel_admission_rejects_duplicate_kernel_identities() {
     let blueprints = persistent_multi_kernel_blueprints();
     let mut bindings = persistent_bindings_in_one_ledger(vec![
@@ -1218,6 +1312,7 @@ fn persistent_multi_kernel_admission_rejects_mixed_executable_target_and_toolcha
             "measured verifier toolchain",
             blueprints.verifier_mismatch.clone(),
         ),
+        ("verifier policy digest", blueprints.policy_mismatch.clone()),
     ] {
         let bindings = persistent_bindings_in_one_ledger(vec![blueprints.first.clone(), second]);
         assert_eq!(
@@ -1308,6 +1403,7 @@ fn persistent_binding_rejects_exact_evidence_replay_after_restart() {
     let (mut ledger, recovery) =
         PersistentProofFreshnessLedgerV1::create_new(&directory.path).unwrap();
     assert_eq!(recovery, PersistentFreshnessRecoveryV1::Initialized);
+    let initial_state = ledger.inspect().unwrap();
 
     let binding =
         bind_authenticated_proof_executable_persistent_v1(evidence, &policy, &mut ledger).unwrap();
@@ -1341,6 +1437,10 @@ fn persistent_binding_rejects_exact_evidence_replay_after_restart() {
     assert_eq!(persistent.ledger_generation(), 1);
     assert_eq!(persistent.ledger_state_identity(), state.state_identity());
     assert_eq!(receipt.namespace(), persistent.ledger_namespace());
+    assert_eq!(
+        receipt.previous_state_identity(),
+        initial_state.state_identity()
+    );
     assert_eq!(receipt.generation(), persistent.ledger_generation());
     assert_eq!(receipt.state_identity(), persistent.ledger_state_identity());
     assert_ne!(

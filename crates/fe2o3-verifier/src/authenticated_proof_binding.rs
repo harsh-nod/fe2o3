@@ -528,7 +528,7 @@ fn persistent_binding_identity(
     receipt: PersistentFreshnessReceiptV1,
 ) -> Digest {
     let consumed = receipt.identity();
-    let mut bytes = Vec::with_capacity(8 + 4 + 32 * 6 + 8);
+    let mut bytes = Vec::with_capacity(8 + 4 + 32 * 7 + 8);
     bytes.extend_from_slice(&PERSISTENT_AUTHENTICATED_PROOF_EXECUTABLE_BINDING_DOMAIN_V1);
     bytes.extend_from_slice(&AUTHENTICATED_PROOF_EXECUTABLE_BINDING_VERSION_V1.to_le_bytes());
     bytes.extend_from_slice(&0_u16.to_le_bytes());
@@ -537,6 +537,7 @@ fn persistent_binding_identity(
     bytes.extend_from_slice(consumed.transcript().as_bytes());
     bytes.extend_from_slice(consumed.result().as_bytes());
     bytes.extend_from_slice(receipt.namespace().as_bytes());
+    bytes.extend_from_slice(receipt.previous_state_identity().as_bytes());
     bytes.extend_from_slice(&receipt.generation().to_le_bytes());
     bytes.extend_from_slice(receipt.state_identity().as_bytes());
     sha256(&bytes)

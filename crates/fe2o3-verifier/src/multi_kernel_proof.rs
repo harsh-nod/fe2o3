@@ -509,6 +509,18 @@ impl PersistentlyFreshMultiKernelProofAdmissionV1 {
                 plan.timeout_seconds(),
                 "verifier timeout policy",
             )?;
+            require_persistent_equal(
+                bindings[0]
+                    .proof_executable_binding()
+                    .proof_binding()
+                    .execution_evidence()
+                    .policy_digest(),
+                persistent
+                    .proof_binding()
+                    .execution_evidence()
+                    .policy_digest(),
+                "verifier policy digest",
+            )?;
 
             let execution = executable.tool_policy().proof_execution();
             require_persistent_equal(
@@ -531,6 +543,26 @@ impl PersistentlyFreshMultiKernelProofAdmissionV1 {
                 execution.evidence_recorder(),
                 "artifact evidence recorder",
             )?;
+        }
+
+        let mut ledger_chain = bindings
+            .iter()
+            .map(|binding| binding.proof_executable_binding().freshness_receipt())
+            .collect::<Vec<_>>();
+        ledger_chain.sort_unstable_by_key(|receipt| receipt.generation());
+        for pair in ledger_chain.windows(2) {
+            let previous = pair[0];
+            let next = pair[1];
+            if previous.generation().checked_add(1) != Some(next.generation())
+                || previous.state_identity() != next.previous_state_identity()
+            {
+                return Err(
+                    PersistentlyFreshMultiKernelProofAdmissionErrorV1::LedgerHistoryMismatch {
+                        previous_generation: previous.generation(),
+                        next_generation: next.generation(),
+                    },
+                );
+            }
         }
 
         let binding_identity = persistent_admission_identity(
@@ -903,6 +935,10 @@ pub enum PersistentlyFreshMultiKernelProofAdmissionErrorV1 {
     DuplicateLedgerGeneration {
         generation: u64,
     },
+    LedgerHistoryMismatch {
+        previous_generation: u64,
+        next_generation: u64,
+    },
     InternalKernelMismatch {
         request: Digest,
         proof: Digest,
@@ -941,6 +977,13 @@ impl fmt::Display for PersistentlyFreshMultiKernelProofAdmissionErrorV1 {
             Self::DuplicateLedgerGeneration { generation } => write!(
                 formatter,
                 "persistent freshness generation {generation} is used by multiple kernels"
+            ),
+            Self::LedgerHistoryMismatch {
+                previous_generation,
+                next_generation,
+            } => write!(
+                formatter,
+                "persistent freshness generations {previous_generation} and {next_generation} do not form one ledger history"
             ),
             Self::InternalKernelMismatch { request, proof } => write!(
                 formatter,
