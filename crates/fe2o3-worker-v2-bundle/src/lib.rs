@@ -4,6 +4,7 @@
 mod codec;
 mod compiler_transaction;
 mod error;
+mod inputs;
 mod model;
 
 pub use codec::{WORKER_V2_LOAD_ENVELOPE_MAGIC, WORKER_V2_LOAD_ENVELOPE_VERSION};
@@ -19,7 +20,13 @@ pub use compiler_transaction::{
     SourceClosureIdentityV2,
 };
 pub use error::{EnvelopeDecodeError, EnvelopeValidationError, PublicationClaimFieldV1};
+pub use inputs::{
+    EnvelopeInputsDecodeError, EnvelopeInputsValidationError, MAX_WORKER_V2_ENVELOPE_INPUTS_BYTES,
+    WORKER_V2_ENVELOPE_INPUTS_MAGIC, WORKER_V2_ENVELOPE_INPUTS_VERSION,
+    WorkerV2EnvelopeInputsIdentityV1, WorkerV2EnvelopeInputsV1,
+};
 pub use model::{
     DescriptorLineageV1, ExactRawHsacoV1, MAX_WORKER_V2_LOAD_ENVELOPE_BYTES,
-    MAX_WORKER_V2_PROOF_EVIDENCE_BYTES, MAX_WORKER_V2_RAW_HSACO_BYTES, WorkerV2LoadEnvelopeV1,
+    MAX_WORKER_V2_PROOF_EVIDENCE_BYTES, MAX_WORKER_V2_RAW_HSACO_BYTES,
+    WorkerV2LoadEnvelopeIdentityV1, WorkerV2LoadEnvelopeV1,
 };

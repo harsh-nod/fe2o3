@@ -46,6 +46,12 @@ test = false
 bench = false
 
 [[bin]]
+name = "cargo-fe2o3-envelope-input-fixture"
+path = "tests/fixtures/envelope_input_fixture.rs"
+test = false
+bench = false
+
+[[bin]]
 name = "cargo-fe2o3-cargo-fixture"
 path = "tests/fixtures/cargo_fixture.rs"
 test = false

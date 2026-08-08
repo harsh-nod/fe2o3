@@ -3,7 +3,8 @@
 use std::error::Error;
 use std::ffi::OsStr;
 use std::fmt;
-use std::fs;
+use std::fs::{self, File};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -14,6 +15,8 @@ use fe2o3_hsaco_finalize::{
     WorkerInputKindV1, WorkerInputV1, WorkerMeasurementV1, WorkerOutputConstraintsV1,
     WorkerProtocolError, execute_reproducible_first_build_worker_v2,
 };
+use fe2o3_worker_v2_bundle::{MAX_WORKER_V2_ENVELOPE_INPUTS_BYTES, WorkerV2EnvelopeInputsV1};
+use rustix::fs::{FileType, Mode, OFlags, fstat, open};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
@@ -42,10 +45,32 @@ const ROOT_KEYS_WITH_ENVELOPE: &[&str] = &[
     "limits",
     "link_options",
     "load_envelope",
+    "load_envelope_inputs",
     "providers",
     "units",
     "worker",
 ];
+const ROOT_KEYS_WITH_ENVELOPE_MODE: &[&str] = &[
+    "candidate_output_max_bytes",
+    "format",
+    "limits",
+    "link_options",
+    "load_envelope",
+    "providers",
+    "units",
+    "worker",
+];
+const ROOT_KEYS_WITH_ENVELOPE_INPUTS: &[&str] = &[
+    "candidate_output_max_bytes",
+    "format",
+    "limits",
+    "link_options",
+    "load_envelope_inputs",
+    "providers",
+    "units",
+    "worker",
+];
+const ENVELOPE_INPUT_KEYS: &[&str] = &["byte_len", "path", "sha256"];
 const WORKER_KEYS: &[&str] = &[
     "byte_len",
     "llvm_build_identity",
@@ -92,12 +117,19 @@ struct ConfiguredUnit {
 pub(crate) struct PreparedWorkerV2Config {
     identity: WorkerV2ConfigIdentity,
     envelope_mode: WorkerV2EnvelopeModeV1,
+    envelope_inputs: Option<ConfiguredEnvelopeInputs>,
     worker: PinnedWorkerV1,
     providers: Vec<WorkerInputV1>,
     link_options: Vec<LinkOptionV1>,
     candidate_output: WorkerOutputConstraintsV1,
     limits: WorkerExecutionLimitsV1,
     units: Vec<ConfiguredUnit>,
+}
+
+#[derive(Clone, Debug)]
+struct ConfiguredEnvelopeInputs {
+    path: PathBuf,
+    expected: ContentIdentityV1,
 }
 
 impl PreparedWorkerV2Config {
@@ -155,12 +187,13 @@ impl PreparedWorkerV2Config {
         .map_err(WorkerV2ConfigError::Protocol)?;
         let limits = parse_limits(required_value(root, "limits", "configuration")?)?;
         let units = parse_units(required_value(root, "units", "configuration")?)?;
-        let envelope_mode = parse_envelope_mode(root)?;
+        let (envelope_mode, envelope_inputs) = parse_envelope_inputs(root)?;
 
-        let identity = transitive_identity(&bytes, &worker, &providers);
+        let identity = transitive_identity(&bytes, &worker, &providers, envelope_inputs.as_ref());
         Ok(Self {
             identity,
             envelope_mode,
+            envelope_inputs,
             worker,
             providers,
             link_options,
@@ -176,6 +209,15 @@ impl PreparedWorkerV2Config {
 
     pub(crate) const fn envelope_mode(&self) -> WorkerV2EnvelopeModeV1 {
         self.envelope_mode
+    }
+
+    pub(crate) fn load_envelope_inputs(
+        &self,
+    ) -> Result<Option<WorkerV2EnvelopeInputsV1>, WorkerV2ConfigError> {
+        self.envelope_inputs
+            .as_ref()
+            .map(ConfiguredEnvelopeInputs::load)
+            .transpose()
     }
 
     pub(crate) fn selects(
@@ -215,15 +257,66 @@ impl PreparedWorkerV2Config {
     }
 }
 
-fn parse_envelope_mode(
+fn parse_envelope_inputs(
     root: &Map<String, Value>,
-) -> Result<WorkerV2EnvelopeModeV1, WorkerV2ConfigError> {
-    match root.get("load_envelope") {
-        None => Ok(WorkerV2EnvelopeModeV1::NonAuthoritative),
-        Some(Value::String(value)) if value == "required" => Ok(WorkerV2EnvelopeModeV1::Required),
+) -> Result<(WorkerV2EnvelopeModeV1, Option<ConfiguredEnvelopeInputs>), WorkerV2ConfigError> {
+    let mode = match root.get("load_envelope") {
+        None => WorkerV2EnvelopeModeV1::NonAuthoritative,
+        Some(Value::String(value)) if value == "required" => WorkerV2EnvelopeModeV1::Required,
         Some(_) => Err(WorkerV2ConfigError::Invalid(
             "configuration.load_envelope must be exactly \"required\" when present".to_owned(),
+        ))?,
+    };
+    match (mode, root.get("load_envelope_inputs")) {
+        (WorkerV2EnvelopeModeV1::NonAuthoritative, None) => Ok((mode, None)),
+        (WorkerV2EnvelopeModeV1::NonAuthoritative, Some(_)) => Err(WorkerV2ConfigError::Invalid(
+            "configuration.load_envelope_inputs is valid only when load_envelope is \"required\""
+                .to_owned(),
         )),
+        (WorkerV2EnvelopeModeV1::Required, None) => Err(WorkerV2ConfigError::Invalid(
+            "configuration.load_envelope=\"required\" requires load_envelope_inputs".to_owned(),
+        )),
+        (WorkerV2EnvelopeModeV1::Required, Some(value)) => {
+            let object = exact_object(value, ENVELOPE_INPUT_KEYS, "load_envelope_inputs")?;
+            let path = absolute_json_path(
+                required_string(object, "path", "load_envelope_inputs")?,
+                "load_envelope_inputs",
+            )?;
+            let expected = declared_identity(object, "load_envelope_inputs")?;
+            let declared_len = usize::try_from(expected.byte_len()).map_err(|_| {
+                WorkerV2ConfigError::Invalid(
+                    "load_envelope_inputs.byte_len exceeds the platform bound".to_owned(),
+                )
+            })?;
+            if declared_len > MAX_WORKER_V2_ENVELOPE_INPUTS_BYTES {
+                return Err(WorkerV2ConfigError::Invalid(format!(
+                    "load_envelope_inputs.byte_len exceeds {MAX_WORKER_V2_ENVELOPE_INPUTS_BYTES} bytes"
+                )));
+            }
+            Ok((mode, Some(ConfiguredEnvelopeInputs { path, expected })))
+        }
+    }
+}
+
+impl ConfiguredEnvelopeInputs {
+    fn load(&self) -> Result<WorkerV2EnvelopeInputsV1, WorkerV2ConfigError> {
+        let declared_len = usize::try_from(self.expected.byte_len()).map_err(|_| {
+            WorkerV2ConfigError::Invalid(
+                "load_envelope_inputs.byte_len exceeds the platform bound".to_owned(),
+            )
+        })?;
+        let bytes = read_measured_private(&self.path, declared_len, "envelope input capsule")?;
+        let measured: [u8; 32] = Sha256::digest(&bytes).into();
+        if self.expected.sha256() != &measured {
+            return Err(WorkerV2ConfigError::Invalid(
+                "load_envelope_inputs.sha256 does not match the exact capsule bytes".to_owned(),
+            ));
+        }
+        WorkerV2EnvelopeInputsV1::from_bytes(&bytes).map_err(|error| {
+            WorkerV2ConfigError::Invalid(format!(
+                "load_envelope_inputs is not a canonical capsule: {error}"
+            ))
+        })
     }
 }
 
@@ -231,6 +324,7 @@ fn transitive_identity(
     manifest: &[u8],
     worker: &PinnedWorkerV1,
     providers: &[WorkerInputV1],
+    envelope_inputs: Option<&ConfiguredEnvelopeInputs>,
 ) -> WorkerV2ConfigIdentity {
     let mut hash = Sha256::new();
     update_identity(&mut hash, b"fe2o3-worker-v2-transitive-config-v1");
@@ -249,6 +343,14 @@ fn transitive_identity(
         update_identity(&mut hash, provider.identity().sha256());
         update_identity(&mut hash, &provider.identity().byte_len().to_le_bytes());
         update_identity(&mut hash, provider.bytes());
+    }
+    match envelope_inputs {
+        Some(inputs) => {
+            update_identity(&mut hash, &[1]);
+            update_identity(&mut hash, inputs.expected.sha256());
+            update_identity(&mut hash, &inputs.expected.byte_len().to_le_bytes());
+        }
+        None => {}
     }
     WorkerV2ConfigIdentity(hash.finalize().into())
 }
@@ -507,9 +609,13 @@ fn exact_root_object(value: &Value) -> Result<&Map<String, Value>, WorkerV2Confi
         WorkerV2ConfigError::Invalid("configuration must be an object".to_owned())
     })?;
     let keys = object.keys().map(String::as_str).collect::<Vec<_>>();
-    if keys != ROOT_KEYS && keys != ROOT_KEYS_WITH_ENVELOPE {
+    if keys != ROOT_KEYS
+        && keys != ROOT_KEYS_WITH_ENVELOPE_MODE
+        && keys != ROOT_KEYS_WITH_ENVELOPE_INPUTS
+        && keys != ROOT_KEYS_WITH_ENVELOPE
+    {
         return Err(WorkerV2ConfigError::Invalid(format!(
-            "configuration must contain exactly the fields {ROOT_KEYS:?}, optionally plus \"load_envelope\"; found {keys:?}"
+            "configuration contains unknown or duplicate envelope configuration fields; found {keys:?}"
         )));
     }
     Ok(object)
@@ -582,6 +688,77 @@ fn read_bounded(
     if bytes.is_empty() || bytes.len() > maximum {
         return Err(WorkerV2ConfigError::Invalid(format!(
             "Worker V2 {kind} {} must contain 1..={maximum} bytes",
+            path.display()
+        )));
+    }
+    Ok(bytes)
+}
+
+fn read_measured_private(
+    path: &Path,
+    exact_len: usize,
+    kind: &'static str,
+) -> Result<Vec<u8>, WorkerV2ConfigError> {
+    if exact_len == 0 || exact_len > MAX_WORKER_V2_ENVELOPE_INPUTS_BYTES {
+        return Err(WorkerV2ConfigError::Invalid(format!(
+            "Worker V2 {kind} {} has an invalid declared length",
+            path.display()
+        )));
+    }
+    let descriptor = open(
+        path,
+        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK,
+        Mode::empty(),
+    )
+    .map_err(|error| WorkerV2ConfigError::Io {
+        kind,
+        path: path.to_owned(),
+        error: std::io::Error::from(error),
+    })?;
+    let initial = fstat(&descriptor).map_err(|error| WorkerV2ConfigError::Io {
+        kind,
+        path: path.to_owned(),
+        error: std::io::Error::from(error),
+    })?;
+    if FileType::from_raw_mode(initial.st_mode) != FileType::RegularFile
+        || initial.st_nlink != 1
+        || initial.st_mode & 0o077 != 0
+        || usize::try_from(initial.st_size).ok() != Some(exact_len)
+    {
+        return Err(WorkerV2ConfigError::Invalid(format!(
+            "Worker V2 {kind} {} must be one private, single-link regular file of the declared size",
+            path.display()
+        )));
+    }
+    let mut file = File::from(descriptor);
+    let mut bytes = Vec::with_capacity(exact_len.saturating_add(1));
+    Read::by_ref(&mut file)
+        .take((exact_len + 1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|error| WorkerV2ConfigError::Io {
+            kind,
+            path: path.to_owned(),
+            error,
+        })?;
+    let final_stat = fstat(&file).map_err(|error| WorkerV2ConfigError::Io {
+        kind,
+        path: path.to_owned(),
+        error: std::io::Error::from(error),
+    })?;
+    if bytes.len() != exact_len
+        || final_stat.st_dev != initial.st_dev
+        || final_stat.st_ino != initial.st_ino
+        || final_stat.st_mode != initial.st_mode
+        || final_stat.st_nlink != 1
+        || final_stat.st_mtime != initial.st_mtime
+        || final_stat.st_mtime_nsec != initial.st_mtime_nsec
+        || final_stat.st_ctime != initial.st_ctime
+        || final_stat.st_ctime_nsec != initial.st_ctime_nsec
+        || final_stat.st_mode & 0o077 != 0
+        || usize::try_from(final_stat.st_size).ok() != Some(exact_len)
+    {
+        return Err(WorkerV2ConfigError::Invalid(format!(
+            "Worker V2 {kind} {} changed while it was measured",
             path.display()
         )));
     }
@@ -734,20 +911,82 @@ mod tests {
     }
 
     #[test]
-    fn load_envelope_requirement_is_explicit_and_identity_bound() {
+    fn load_envelope_requirement_needs_an_exact_measured_capsule() {
         let directory = TestDirectory::new();
         let path = manifest(&directory);
         let ordinary = PreparedWorkerV2Config::from_manifest(&path).unwrap();
         let mut value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         value["load_envelope"] = Value::String("required".to_owned());
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(matches!(
+            PreparedWorkerV2Config::from_manifest(&path),
+            Err(WorkerV2ConfigError::Invalid(_))
+        ));
 
-        let required = PreparedWorkerV2Config::from_manifest(&path).unwrap();
-        assert_eq!(required.envelope_mode(), WorkerV2EnvelopeModeV1::Required);
-        assert!(required.envelope_mode().is_required());
-        assert_ne!(ordinary.identity(), required.identity());
+        value["load_envelope_inputs"]["sha256"] = Value::String("00".repeat(32));
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(matches!(
+            PreparedWorkerV2Config::from_manifest(&path),
+            Err(WorkerV2ConfigError::Invalid(_))
+        ));
+
+        let capsule = directory.0.join("envelope-inputs.capsule");
+        fs::write(&capsule, b"not-a-canonical-capsule").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&capsule, fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        value["load_envelope_inputs"] = json!({
+            "byte_len": 23,
+            "path": capsule,
+            "sha256": hex(&Sha256::digest(b"not-a-canonical-capsule"))
+        });
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        let prepared = PreparedWorkerV2Config::from_manifest(&path).unwrap();
+        assert_eq!(prepared.envelope_mode(), WorkerV2EnvelopeModeV1::Required);
+        assert_ne!(ordinary.identity(), prepared.identity());
+        assert!(matches!(
+            prepared.load_envelope_inputs(),
+            Err(WorkerV2ConfigError::Invalid(_))
+        ));
 
         value["load_envelope"] = Value::String("optional".to_owned());
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(matches!(
+            PreparedWorkerV2Config::from_manifest(&path),
+            Err(WorkerV2ConfigError::Invalid(_))
+        ));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn required_envelope_input_rejects_symlink_and_oversized_handoffs() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let directory = TestDirectory::new();
+        let path = manifest(&directory);
+        let target = directory.0.join("capsule-target");
+        fs::write(&target, b"capsule").unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).unwrap();
+        let link = directory.0.join("capsule-link");
+        symlink(&target, &link).unwrap();
+        let mut value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        value["load_envelope"] = Value::String("required".to_owned());
+        value["load_envelope_inputs"] = json!({
+            "byte_len": 7,
+            "path": link,
+            "sha256": hex(&Sha256::digest(b"capsule"))
+        });
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        let prepared = PreparedWorkerV2Config::from_manifest(&path).unwrap();
+        assert!(matches!(
+            prepared.load_envelope_inputs(),
+            Err(WorkerV2ConfigError::Io { .. })
+        ));
+
+        value["load_envelope_inputs"]["byte_len"] =
+            Value::from((MAX_WORKER_V2_ENVELOPE_INPUTS_BYTES as u64) + 1);
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         assert!(matches!(
             PreparedWorkerV2Config::from_manifest(&path),

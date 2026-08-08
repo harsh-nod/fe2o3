@@ -50,7 +50,7 @@ pub use attempt_scoped_hsaco_publication::{
     PersistedBackendReceiptV1, UpstreamCodeObjectEvidenceIdentityV1, producer_package_identity_v1,
     publish_exact_hsaco_evidence_for_attempt_v1,
     publish_exact_hsaco_evidence_for_attempt_v1_with_options, read_backend_publication_receipt_v1,
-    validate_backend_publication_receipt_v1,
+    recover_published_hsaco_claim_for_attempt_v1, validate_backend_publication_receipt_v1,
 };
 pub use compiler_module_handoff::{
     CompilerModuleHandoffErrorV1, CompilerModuleHandoffIdentityV1, CompilerModuleHandoffReceiptV1,

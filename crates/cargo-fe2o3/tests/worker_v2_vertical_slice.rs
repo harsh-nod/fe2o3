@@ -20,6 +20,9 @@ use sha2::{Digest, Sha256};
 
 use fe2o3_hsaco_finalize::finalize_unfinalized;
 
+#[path = "../src/worker_v2_artifact_container_test_fixture.rs"]
+mod alpha_zeta_support;
+
 include!("../../fe2o3-hsaco-finalize/tests/fixtures/worker_v2_hsaco_test_support.rs");
 
 const WORKER_ID: &str = "cargo-fe2o3-fixture-worker-v1";
@@ -166,6 +169,10 @@ impl Drop for TestDirectory {
 
 fn worker_fixture() -> &'static Path {
     Path::new(env!("CARGO_BIN_EXE_cargo-fe2o3-worker-v2-fixture"))
+}
+
+fn envelope_input_fixture() -> &'static Path {
+    Path::new(env!("CARGO_BIN_EXE_cargo-fe2o3-envelope-input-fixture"))
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -419,6 +426,9 @@ fn wrapper_command_with_options(
     if let Some(fault) = fault {
         command.env("FE2O3_TEST_WORKER_V2_FAULT_POINT_V1", fault);
     }
+    if directory.0.join("alpha-zeta-profile").exists() {
+        command.env("FE2O3_TEST_WORKER_V2_ALPHA_ZETA", "1");
+    }
     (command, broker)
 }
 
@@ -515,6 +525,48 @@ fn publication_fixture_with_envelope(
     }
 }
 
+fn required_alpha_zeta_publication_fixture(directory: &TestDirectory) -> PublicationFixture {
+    let provider = alpha_zeta_support::canonical_alpha_zeta_unfinalized_fixture();
+    let mut raw_worker_output = provider.clone();
+    let text = raw_worker_output
+        .windows(16)
+        .position(|window| window == [0xbf; 16])
+        .unwrap();
+    raw_worker_output[text] ^= 1;
+    let expected_publication = finalize_unfinalized(&raw_worker_output)
+        .unwrap()
+        .as_bytes()
+        .to_vec();
+    let raw_path = directory.0.join("expected-worker-output.hsaco");
+    let finalized_path = directory.0.join("expected-finalized-output.hsaco");
+    let capsule = directory.0.join("envelope-inputs.capsule");
+    fs::write(&raw_path, &raw_worker_output).unwrap();
+    fs::write(&finalized_path, &expected_publication).unwrap();
+    let generated = Command::new(envelope_input_fixture())
+        .args([&raw_path, &finalized_path, &capsule])
+        .output()
+        .unwrap();
+    assert!(generated.status.success(), "{}", stderr(&generated));
+
+    let config = write_config_with_output_and_cov(directory, true, Some(&provider), 6, false);
+    let mut value: JsonValue = serde_json::from_slice(&fs::read(&config).unwrap()).unwrap();
+    let bytes = fs::read(&capsule).unwrap();
+    value["load_envelope"] = JsonValue::String("required".to_owned());
+    value["load_envelope_inputs"] = json!({
+        "byte_len": bytes.len(),
+        "path": capsule,
+        "sha256": hex(&Sha256::digest(&bytes))
+    });
+    fs::write(&config, serde_json::to_vec(&value).unwrap()).unwrap();
+    fs::write(directory.0.join("alpha-zeta-profile"), []).unwrap();
+    PublicationFixture {
+        config,
+        raw_worker_output,
+        expected_publication,
+        cov6: true,
+    }
+}
+
 fn published_artifacts(directory: &TestDirectory) -> Vec<Vec<u8>> {
     fs::read_dir(directory.0.join("artifacts"))
         .unwrap()
@@ -603,7 +655,7 @@ fn ordinary_cov6_production_publishes_exact_non_authoritative_finalized_bytes() 
 }
 
 #[test]
-fn required_cov6_preserves_ready_intent_when_envelope_inputs_are_missing() {
+fn required_cov6_rejects_missing_configured_capsule_before_attempt() {
     let directory = TestDirectory::new();
     let fixture = publication_fixture_with_envelope(&directory, true, true);
     let result = run_wrapper_with_options(
@@ -615,52 +667,73 @@ fn required_cov6_preserves_ready_intent_when_envelope_inputs_are_missing() {
     );
     assert!(!result.status.success());
     assert!(
-        stderr(&result).contains("canonical Worker V2 envelope inputs are missing"),
+        stderr(&result).contains("requires load_envelope_inputs"),
         "{}",
         stderr(&result)
     );
     assert!(published_artifacts(&directory).is_empty());
-    assert_eq!(restart_records(&directory).len(), 2);
-
-    fs::remove_file(directory.0.join("spawned")).unwrap();
-    let required_config = fs::read(&fixture.config).unwrap();
-    let mut downgraded_config: JsonValue = serde_json::from_slice(&required_config).unwrap();
-    downgraded_config
-        .as_object_mut()
-        .unwrap()
-        .remove("load_envelope");
-    fs::write(
-        &fixture.config,
-        serde_json::to_vec(&downgraded_config).unwrap(),
-    )
-    .unwrap();
-    let downgraded =
-        run_wrapper_with_options(&directory, &fixture.config, "fail", fixture.cov6, None);
-    assert!(!downgraded.status.success());
-    assert!(
-        stderr(&downgraded).contains("different build session or invocation"),
-        "{}",
-        stderr(&downgraded)
-    );
+    assert!(restart_records(&directory).is_empty());
     assert!(!directory.0.join("spawned").exists());
-    assert!(published_artifacts(&directory).is_empty());
-    assert_eq!(restart_records(&directory).len(), 2);
+}
 
-    fs::write(&fixture.config, required_config).unwrap();
+#[test]
+fn required_cov6_production_wrapper_publishes_a_canonical_envelope() {
+    let directory = TestDirectory::new();
+    let fixture = required_alpha_zeta_publication_fixture(&directory);
+    let result = run_wrapper_with_options(
+        &directory,
+        &fixture.config,
+        "publish-valid",
+        fixture.cov6,
+        None,
+    );
+    assert!(result.status.success(), "{}", stderr(&result));
+    assert_eq!(
+        published_artifacts(&directory),
+        [fixture.expected_publication]
+    );
+    assert!(restart_records(&directory).is_empty());
+    let envelope_count = fs::read_dir(directory.0.join("artifacts"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .filter(|name| {
+            let name = name.to_string_lossy();
+            name.starts_with(".fe2o3-worker-v2-load-envelope-v1-") && name.ends_with(".envelope")
+        })
+        .count();
+    assert_eq!(envelope_count, 1);
+}
+
+#[test]
+#[cfg(feature = "worker-v2-fault-injection-test-only")]
+fn required_cov6_production_wrapper_recovers_after_published_crash() {
+    let directory = TestDirectory::new();
+    let fixture = required_alpha_zeta_publication_fixture(&directory);
+    let interrupted = run_wrapper_with_options(
+        &directory,
+        &fixture.config,
+        "publish-valid",
+        fixture.cov6,
+        Some("published"),
+    );
+    assert_eq!(
+        interrupted.status.code(),
+        Some(86),
+        "{}",
+        stderr(&interrupted)
+    );
+    fs::remove_file(directory.0.join("spawned")).unwrap();
+    fs::remove_file(directory.0.join("envelope-inputs.capsule")).unwrap();
+
     let recovered =
         run_wrapper_with_options(&directory, &fixture.config, "fail", fixture.cov6, None);
-    assert!(!recovered.status.success());
-    assert!(
-        stderr(&recovered).contains("canonical Worker V2 load envelope is missing"),
-        "{}",
-        stderr(&recovered)
-    );
+    assert!(recovered.status.success(), "{}", stderr(&recovered));
     assert!(!directory.0.join("spawned").exists());
     assert_eq!(
         published_artifacts(&directory),
         [fixture.expected_publication]
     );
-    assert_eq!(restart_records(&directory).len(), 2);
+    assert!(restart_records(&directory).is_empty());
 }
 
 #[test]
@@ -748,51 +821,20 @@ fn raw_and_ordinary_finalized_fault_matrix_recovers_every_durable_boundary() {
 
 #[test]
 #[cfg(feature = "worker-v2-fault-injection-test-only")]
-fn required_finalized_faults_preserve_or_abandon_state_at_pre_envelope_boundaries() {
-    for point in [
-        "pending-marker",
-        "pending-intent",
-        "ready",
-        "envelope-inputs-required",
-    ] {
-        let directory = TestDirectory::new();
-        let fixture = publication_fixture_with_envelope(&directory, true, true);
-        let interrupted = run_wrapper_with_options(
-            &directory,
-            &fixture.config,
-            "publish-valid",
-            fixture.cov6,
-            Some(point),
-        );
-        assert_eq!(
-            interrupted.status.code(),
-            Some(86),
-            "{point}: {}",
-            stderr(&interrupted)
-        );
-        fs::remove_file(directory.0.join("spawned")).unwrap();
-
-        let recovered =
-            run_wrapper_with_options(&directory, &fixture.config, "fail", fixture.cov6, None);
-        assert!(!recovered.status.success());
-        assert!(!directory.0.join("spawned").exists());
-        if point == "pending-marker" {
-            assert!(published_artifacts(&directory).is_empty());
-            assert!(restart_records(&directory).is_empty());
-        } else {
-            assert!(
-                stderr(&recovered).contains("canonical Worker V2 load envelope is missing"),
-                "{point}: {}",
-                stderr(&recovered)
-            );
-            assert_eq!(
-                published_artifacts(&directory),
-                [fixture.expected_publication],
-                "{point}"
-            );
-            assert_eq!(restart_records(&directory).len(), 2, "{point}");
-        }
-    }
+fn required_fault_injection_cannot_bypass_missing_capsule_configuration() {
+    let directory = TestDirectory::new();
+    let fixture = publication_fixture_with_envelope(&directory, true, true);
+    let rejected = run_wrapper_with_options(
+        &directory,
+        &fixture.config,
+        "publish-valid",
+        fixture.cov6,
+        Some("published"),
+    );
+    assert!(!rejected.status.success());
+    assert!(stderr(&rejected).contains("requires load_envelope_inputs"));
+    assert!(published_artifacts(&directory).is_empty());
+    assert!(restart_records(&directory).is_empty());
 }
 
 #[test]

@@ -1140,6 +1140,31 @@ pub(crate) fn recover_durable_link_plan_locked(
     Ok(crash_retry_matches_plan(&envelope, plan).then_some(DurablePlanRecoveryStateV1::Incomplete))
 }
 
+pub(crate) fn recover_durable_published_file_binding_locked(
+    output: &PinnedOutput,
+    plan: DurableLinkPublicationPlanV1,
+) -> Result<Option<DurablePublishedFileBindingV1>, DurableLinkPublicationError> {
+    let names = DurableNames::new(plan.scope);
+    let mut envelope = recover_envelope(output, &names, plan.scope)?;
+    recover_incomplete(output, &names, &mut envelope)?;
+    verify_or_invalidate_published(output, &names, &mut envelope, &mut FaultInjector::new(None))?;
+    if !envelope
+        .published
+        .as_ref()
+        .is_some_and(|record| record_matches_plan(record, plan))
+    {
+        return Ok(None);
+    }
+    let lease = mint_current_publication_lease(
+        output,
+        &names,
+        &envelope,
+        plan,
+        &mut FaultInjector::new(None),
+    )?;
+    Ok(Some(lease.published_file_binding()))
+}
+
 pub(crate) fn reacquire_current_publication_lease_locked(
     output: &PinnedOutput,
     plan: DurableLinkPublicationPlanV1,

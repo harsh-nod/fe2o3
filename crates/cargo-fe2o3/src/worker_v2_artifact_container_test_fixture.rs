@@ -54,7 +54,7 @@ pub(super) fn alpha_zeta_fixture(mutation: ProfileMutation) -> AlphaZetaFixture 
         ProfileMutation::SharedAlias => mutate_output_semantic(&mut table, 2, 2),
         _ => {}
     }
-    let bytes = build_hsaco(&table, access);
+    let bytes = build_hsaco(&table, access, false);
     if matches!(
         mutation,
         ProfileMutation::SharedOwnership | ProfileMutation::SharedAlias
@@ -71,6 +71,15 @@ pub(super) fn alpha_zeta_fixture(mutation: ProfileMutation) -> AlphaZetaFixture 
             is_finalized: true,
         }
     }
+}
+
+pub(super) fn canonical_alpha_zeta_unfinalized_fixture() -> Vec<u8> {
+    let table = encode_device_descriptor_table_v1(&descriptor_table(
+        AccessMode::ReadWrite,
+        vec![CapabilityV1::AmdWave],
+    ))
+    .expect("encode canonical alpha/zeta descriptor table");
+    build_hsaco(&table, AccessMode::ReadWrite, true)
 }
 
 fn descriptor_table(
@@ -194,7 +203,7 @@ fn mutate_output_semantic(table: &mut [u8], semantic_offset: usize, replacement:
     table[semantics + semantic_offset] = replacement;
 }
 
-fn build_hsaco(table: &[u8], disjoint_access: AccessMode) -> Vec<u8> {
+fn build_hsaco(table: &[u8], disjoint_access: AccessMode, include_ffi_export: bool) -> Vec<u8> {
     const KERNELS: [(&str, &str, u32); 2] = [("alpha", "alpha.kd", 296), ("zeta", "zeta.kd", 312)];
     let note = metadata_note(&metadata(disjoint_access));
     let mut bytes = vec![0; ELF_HEADER_BYTES + 2 * PROGRAM_HEADER_BYTES];
@@ -220,6 +229,12 @@ fn build_hsaco(table: &[u8], disjoint_access: AccessMode) -> Vec<u8> {
         bytes.resize(bytes.len() + 64, 0xbf);
     }
     let text_offset = entry_offsets[0];
+    let ffi_export_offset = include_ffi_export.then(|| {
+        align(&mut bytes, 256);
+        let offset = bytes.len();
+        bytes.resize(bytes.len() + 64, 0xbe);
+        offset
+    });
     let text_end = bytes.len();
 
     let mut strtab = vec![0];
@@ -232,11 +247,12 @@ fn build_hsaco(table: &[u8], disjoint_access: AccessMode) -> Vec<u8> {
             )
         })
         .collect::<Vec<_>>();
+    let ffi_export_name = include_ffi_export.then(|| push_name(&mut strtab, "ffi_export"));
     let strtab_offset = bytes.len();
     bytes.extend_from_slice(&strtab);
     align(&mut bytes, 8);
     let symtab_offset = bytes.len();
-    let symbol_count = 1 + KERNELS.len() * 2;
+    let symbol_count = 1 + KERNELS.len() * 2 + usize::from(include_ffi_export);
     bytes.resize(symtab_offset + symbol_count * 24, 0);
 
     for (index, ((entry_name, descriptor_name), descriptor_offset)) in
@@ -272,6 +288,15 @@ fn build_hsaco(table: &[u8], disjoint_access: AccessMode) -> Vec<u8> {
         write_u32(&mut bytes, *descriptor_offset + 48, 0x00af_0081);
         write_u32(&mut bytes, *descriptor_offset + 52, 0x1390);
         write_u16(&mut bytes, *descriptor_offset + 56, 0x001e);
+    }
+    if let (Some(name), Some(offset)) = (ffi_export_name, ffi_export_offset) {
+        let export_symbol = symtab_offset + (1 + KERNELS.len() * 2) * 24;
+        write_u32(&mut bytes, export_symbol, name);
+        bytes[export_symbol + 4] = 0x12;
+        bytes[export_symbol + 5] = 3;
+        write_u16(&mut bytes, export_symbol + 6, TEXT_SECTION_INDEX as u16);
+        write_u64(&mut bytes, export_symbol + 8, (offset + 0x1000) as u64);
+        write_u64(&mut bytes, export_symbol + 16, 64);
     }
 
     align(&mut bytes, DEVICE_DESCRIPTOR_SECTION_ALIGNMENT as usize);

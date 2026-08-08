@@ -72,6 +72,7 @@ fn fake_rustc(mode: &str) {
     let handoff = canonical_handoff(
         mode == "publish-mismatch",
         env::var_os("FE2O3_TEST_WORKER_V2_COV6").is_some(),
+        env::var_os("FE2O3_TEST_WORKER_V2_ALPHA_ZETA").is_some(),
     );
     publish_compiler_module_handoff_v1(
         Path::new(&output_dir),
@@ -155,7 +156,7 @@ fn stage_restart() {
         .unwrap();
 }
 
-fn canonical_handoff(mismatch: bool, cov6: bool) -> CompilerModuleHandoffV2 {
+fn canonical_handoff(mismatch: bool, cov6: bool, alpha_zeta: bool) -> CompilerModuleHandoffV2 {
     let target = DeviceTargetV1::parse("gfx942:xnack-").unwrap();
     let code_object_version = if cov6 {
         CodeObjectVersion::V6
@@ -198,20 +199,39 @@ fn canonical_handoff(mismatch: bool, cov6: bool) -> CompilerModuleHandoffV2 {
     .unwrap();
     let mut envelope = CompilerFfiEnvelopeBuilderV1::new(target, code_object_version, 1).unwrap();
     envelope.push(contract).unwrap();
-    let mut entries = vec![
-        (
-            CompilerModuleSymbolRoleV1::KernelEntry,
-            "workflow_kernel".to_owned(),
-        ),
-        (
-            CompilerModuleSymbolRoleV1::KernelDescriptor,
-            "workflow_kernel.kd".to_owned(),
-        ),
-        (
-            CompilerModuleSymbolRoleV1::DeviceFfiExport,
-            "ffi_export".to_owned(),
-        ),
-    ];
+    let mut entries = if alpha_zeta {
+        vec![
+            (CompilerModuleSymbolRoleV1::KernelEntry, "alpha".to_owned()),
+            (CompilerModuleSymbolRoleV1::KernelEntry, "zeta".to_owned()),
+            (
+                CompilerModuleSymbolRoleV1::KernelDescriptor,
+                "alpha.kd".to_owned(),
+            ),
+            (
+                CompilerModuleSymbolRoleV1::KernelDescriptor,
+                "zeta.kd".to_owned(),
+            ),
+            (
+                CompilerModuleSymbolRoleV1::DeviceFfiExport,
+                "ffi_export".to_owned(),
+            ),
+        ]
+    } else {
+        vec![
+            (
+                CompilerModuleSymbolRoleV1::KernelEntry,
+                "workflow_kernel".to_owned(),
+            ),
+            (
+                CompilerModuleSymbolRoleV1::KernelDescriptor,
+                "workflow_kernel.kd".to_owned(),
+            ),
+            (
+                CompilerModuleSymbolRoleV1::DeviceFfiExport,
+                "ffi_export".to_owned(),
+            ),
+        ]
+    };
     if mismatch {
         entries.push((
             CompilerModuleSymbolRoleV1::KernelEntry,
@@ -223,13 +243,18 @@ fn canonical_handoff(mismatch: bool, cov6: bool) -> CompilerModuleHandoffV2 {
         ));
     }
     entries.sort();
+    let module: &[u8] = if alpha_zeta {
+        b"define amdgpu_kernel void @alpha() { ret void }\ndefine amdgpu_kernel void @zeta() { ret void }\ndefine i32 @ffi_export(i32 %value) { ret i32 %value }\n"
+    } else {
+        b"define amdgpu_kernel void @workflow_kernel() { ret void }\ndefine i32 @ffi_export(i32 %value) { ret i32 %value }\n"
+    };
     CompilerModuleHandoffV2::new(
         CompilerModuleKindV1::LlvmTextIr,
         target,
         code_object_version,
         envelope.finish().unwrap(),
         CompilerModuleSymbolManifestV1::new(entries).unwrap(),
-        b"define amdgpu_kernel void @workflow_kernel() { ret void }\ndefine i32 @ffi_export(i32 %value) { ret i32 %value }\n",
+        module,
     )
     .unwrap()
 }

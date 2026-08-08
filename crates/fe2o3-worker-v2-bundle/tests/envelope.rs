@@ -31,8 +31,9 @@ use fe2o3_kernel_descriptor::{
     SourceTypeDescriptorV1, SourceTypeRecordV1, Text, ValidName,
 };
 use fe2o3_worker_v2_bundle::{
-    DescriptorLineageV1, EnvelopeDecodeError, EnvelopeValidationError, ExactRawHsacoV1,
-    MAX_WORKER_V2_RAW_HSACO_BYTES, WorkerV2LoadEnvelopeV1,
+    DescriptorLineageV1, EnvelopeDecodeError, EnvelopeInputsDecodeError, EnvelopeValidationError,
+    ExactRawHsacoV1, MAX_WORKER_V2_RAW_HSACO_BYTES, WorkerV2EnvelopeInputsV1,
+    WorkerV2LoadEnvelopeV1,
 };
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -627,5 +628,29 @@ fn oversized_counts_and_fields_are_rejected_before_allocation() {
             field: "proof record",
             ..
         })
+    ));
+}
+
+#[test]
+fn pre_envelope_inputs_are_canonical_bounded_and_inert() {
+    let parts = build_parts();
+    let inputs = WorkerV2EnvelopeInputsV1::new(parts.evidence, parts.proofs, parts.raw).unwrap();
+    let bytes = inputs.to_bytes();
+    let recovered = WorkerV2EnvelopeInputsV1::from_bytes(&bytes).unwrap();
+    assert_eq!(recovered, inputs);
+    assert_eq!(recovered.identity(), inputs.identity());
+    assert!(!recovered.grants_currentness_authority());
+    assert!(!recovered.grants_load_authority());
+    assert!(!recovered.grants_launch_authority());
+
+    let mut changed = bytes.clone();
+    *changed.last_mut().unwrap() ^= 1;
+    assert!(WorkerV2EnvelopeInputsV1::from_bytes(&changed).is_err());
+
+    let mut trailing = bytes;
+    trailing.push(0);
+    assert!(matches!(
+        WorkerV2EnvelopeInputsV1::from_bytes(&trailing),
+        Err(EnvelopeInputsDecodeError::TrailingBytes)
     ));
 }

@@ -6,6 +6,12 @@ direct-link evidence, canonical device descriptor table, one proof record per
 kernel, the raw pre-finalization HSACO, and the canonical inert durable
 publication claim.
 
+`WorkerV2EnvelopeInputsV1` is the canonical pre-envelope capsule for independently
+supplied direct-link evidence, proof records, and exact raw HSACO bytes. Its digest can be
+committed before publication so restart recovery can reopen those exact inputs and reconstruct
+the complete envelope. Decoding the capsule does not authenticate any of that evidence; a genuine
+proof/compiler authenticator remains absent.
+
 The schema composes existing canonical codecs. It does not reinterpret their
 wire formats or recreate authority-bearing values. In particular, an envelope
 contains no process-local publication lease, currentness token, HSA executable,

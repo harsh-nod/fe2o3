@@ -11,6 +11,7 @@ use fe2o3_artifacts::{
 use fe2o3_kernel_descriptor::{
     DeviceDescriptorTableV1, MAX_DESCRIPTOR_TABLE_BYTES, encode_device_descriptor_table_v1,
 };
+use sha2::{Digest, Sha256};
 
 use crate::{EnvelopeValidationError, PublicationClaimFieldV1};
 
@@ -23,6 +24,21 @@ pub const MAX_WORKER_V2_LOAD_ENVELOPE_BYTES: usize = MAX_CONTAINER_BYTES
     + MAX_WORKER_V2_RAW_HSACO_BYTES
     + MAX_WORKER_V2_PROOF_EVIDENCE_BYTES
     + 4096;
+const LOAD_ENVELOPE_IDENTITY_DOMAIN: &[u8] = b"FE2O3/WORKER-V2-LOAD-ENVELOPE/V1\0";
+
+/// SHA-256 identity of one complete canonical Worker V2 load envelope.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WorkerV2LoadEnvelopeIdentityV1([u8; 32]);
+
+impl WorkerV2LoadEnvelopeIdentityV1 {
+    pub const fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
+    pub const fn as_bytes(self) -> [u8; 32] {
+        self.0
+    }
+}
 
 /// Exact raw linked HSACO bytes and their SHA-256 content identity.
 ///
@@ -171,6 +187,13 @@ impl WorkerV2LoadEnvelopeV1 {
         &self.published_claim
     }
 
+    pub fn identity(&self) -> WorkerV2LoadEnvelopeIdentityV1 {
+        let mut digest = Sha256::new();
+        digest.update(LOAD_ENVELOPE_IDENTITY_DOMAIN);
+        digest.update(self.to_bytes());
+        WorkerV2LoadEnvelopeIdentityV1(digest.finalize().into())
+    }
+
     pub fn finalized_payload(&self) -> &[u8] {
         let identity = self.direct_link_evidence.bindings()[0]
             .expectation()
@@ -224,7 +247,7 @@ fn validate_raw_hsaco(
         .map_err(|_| EnvelopeValidationError::RawHsacoDigestMismatch)
 }
 
-fn validate_payloads(
+pub(crate) fn validate_payloads(
     container: &ArtifactContainerV1,
     expectation: &fe2o3_artifacts::DirectLinkBindingExpectationV1,
     raw_hsaco: &ExactRawHsacoV1,
@@ -320,7 +343,7 @@ fn validate_descriptor(
     Ok(())
 }
 
-fn canonicalize_and_validate_proofs(
+pub(crate) fn canonicalize_and_validate_proofs(
     container: &ArtifactContainerV1,
     proof_records: &mut [ProofRecordV1],
 ) -> Result<(), EnvelopeValidationError> {

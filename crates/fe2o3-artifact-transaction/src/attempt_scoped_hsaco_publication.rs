@@ -1,6 +1,7 @@
 use crate::attempt::{AttemptPhase, BackendReceiptV1};
 use crate::durable_link_publication::{
     DurablePlanRecoveryStateV1, publish_durable_link_v1_locked, recover_durable_link_plan_locked,
+    recover_durable_published_file_binding_locked,
 };
 use crate::durable_published_claim::DurablePublishedHsacoClaimV1;
 use crate::{
@@ -573,6 +574,54 @@ pub fn read_backend_publication_receipt_v1(
             PersistedBackendReceiptV1::Provenance(receipt)
         }
     })
+}
+
+/// Reconstructs the inert canonical claim for one exact already-published attempt.
+///
+/// This reopens and validates the durable publication under its lock. The returned claim remains
+/// inert and establishes neither compiler/proof authenticity nor load or launch authority.
+pub fn recover_published_hsaco_claim_for_attempt_v1(
+    output_dir: &Path,
+    producer: &ProducerIdentity,
+    attempt: BuildAttempt,
+    plan: DurableLinkPublicationPlanV1,
+    upstream_evidence: UpstreamCodeObjectEvidenceIdentityV1,
+    receipt: BackendPublicationReceiptV1,
+) -> Result<DurablePublishedHsacoClaimV1, AttemptScopedHsacoPublicationErrorV1> {
+    validate_backend_publication_receipt_v1(producer, attempt, plan, upstream_evidence, receipt)
+        .map_err(|_| AttemptScopedHsacoPublicationErrorV1::ReceiptPublicationMismatch)?;
+    let output = PinnedOutput::open_existing(output_dir)
+        .map_err(AttemptScopedHsacoPublicationErrorV1::Attempt)?;
+    let _lock = output
+        .lock()
+        .map_err(AttemptScopedHsacoPublicationErrorV1::Attempt)?;
+    output
+        .verify_path_identity()
+        .map_err(AttemptScopedHsacoPublicationErrorV1::Attempt)?;
+    let attempts =
+        read_attempt_registry(&output).map_err(AttemptScopedHsacoPublicationErrorV1::Attempt)?;
+    let record = attempts
+        .record_exact(&producer.stable_source, attempt)
+        .map_err(build_attempt_error)
+        .map_err(AttemptScopedHsacoPublicationErrorV1::Attempt)?;
+    if record.crate_name != producer.crate_name
+        || !matches!(
+            record.phase,
+            AttemptPhase::BackendClaimed | AttemptPhase::Completed
+        )
+        || record.backend_receipt != Some(BackendReceiptV1::Provenance(receipt))
+    {
+        return Err(AttemptScopedHsacoPublicationErrorV1::ReceiptPublicationMismatch);
+    }
+    let files = recover_durable_published_file_binding_locked(&output, plan)
+        .map_err(AttemptScopedHsacoPublicationErrorV1::Durable)?
+        .ok_or(AttemptScopedHsacoPublicationErrorV1::ReceiptPublicationMismatch)?;
+    Ok(DurablePublishedHsacoClaimV1::new(
+        plan,
+        upstream_evidence,
+        receipt,
+        files,
+    ))
 }
 
 pub(crate) fn publication_receipt(
