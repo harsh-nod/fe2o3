@@ -16,6 +16,8 @@
 //! and MIR blocks must appear in definition-before-use order. Every other
 //! construct produces a located diagnostic rather than a partial module.
 
+mod semantic_lowering;
+
 use crate::AmdGpuTarget;
 use crate::mir_import::{
     MirBinaryOp, MirBlock, MirCallee, MirConstant, MirFunction, MirFunctionKind, MirKernelProfile,
@@ -27,9 +29,9 @@ use dialect_amdgcn::{DeviceMathDiagnosticItem, recognized_device_math_operation}
 use fe2o3_amd_target::AmdTargetId;
 use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, BasicBlock, BinaryOp, BlockId, ComparePredicate, Constant,
-    FloatConversionKind, FloatOperation, Function, FunctionId, IntrinsicOperation, Kernel,
-    LaunchDomain, LaunchExtent, MemoryAccess, Module, Operation, OperationKind, ScalarType,
-    Signature, SwitchCase, Terminator, Type, ValueDef, ValueId, WorkgroupSize, verify_module,
+    FloatConversionKind, FloatOperation, Function, FunctionId, Kernel, LaunchDomain, LaunchExtent,
+    MemoryAccess, Module, Operation, OperationKind, ScalarType, Signature, SwitchCase, Terminator,
+    Type, ValueDef, ValueId, WorkgroupSize, verify_module,
 };
 use reserved_fe2o3_symbols::{
     DeviceFfiAddressSpaceV1, DeviceFfiPhysicalResultV1, DeviceFfiPhysicalTypeV1,
@@ -795,6 +797,16 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
             )
         })?;
 
+        let assignment = semantic_lowering::SemanticAssignment::new(
+            rvalue,
+            destination,
+            &statement.operands,
+            &location,
+        );
+        if let Some(lowered) = semantic_lowering::try_lower_assignment(self, assignment, block) {
+            return lowered;
+        }
+
         match rvalue {
             MirRvalueKind::Ref => {
                 let [MirOperandRef::Place(place)] = statement.operands.as_slice() else {
@@ -924,12 +936,6 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                 )?;
                 self.assign_value(destination, result, block, location)
             }
-            MirRvalueKind::Binary(MirBinaryOp::Mul) => self.lower_f32_multiply_assignment(
-                destination,
-                &statement.operands,
-                block,
-                location,
-            ),
             MirRvalueKind::Binary(MirBinaryOp::Lt) => {
                 let [lhs, rhs] = statement.operands.as_slice() else {
                     return Err(diagnostic(
@@ -960,59 +966,6 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
         }
     }
 
-    fn lower_f32_multiply_assignment(
-        &mut self,
-        destination: &MirPlaceRef,
-        operands: &[MirOperandRef],
-        block: &mut BasicBlock,
-        location: TranslationLocation,
-    ) -> Result<(), TranslationDiagnostic> {
-        let [lhs, rhs] = operands else {
-            return Err(diagnostic(
-                TranslationDiagnosticCode::MalformedMir,
-                location,
-                "multiply must have two operands",
-            ));
-        };
-        let lhs = self.lower_operand(lhs, block, &location)?;
-        let rhs = self.lower_operand(rhs, block, &location)?;
-        let ty = self.value_type(lhs, &location)?.clone();
-        let rhs_ty = self.value_type(rhs, &location)?;
-        if ty != Type::F32 || rhs_ty != &Type::F32 {
-            return Err(diagnostic(
-                TranslationDiagnosticCode::UnsupportedType,
-                location,
-                format!("multiply requires two f32 operands; found {ty:?} and {rhs_ty:?}"),
-            ));
-        }
-        if !self.is_exact_general_v3_alpha_zeta_context() {
-            return Err(diagnostic(
-                TranslationDiagnosticCode::UnsupportedRvalue,
-                location,
-                "f32 multiply requires an exact General V3 alpha/zeta kernel context",
-            ));
-        }
-        if self.float_target.is_none() {
-            return Err(diagnostic(
-                TranslationDiagnosticCode::UnsupportedRvalue,
-                location,
-                "f32 multiply requires the exact gfx942 floating-point profile",
-            ));
-        }
-        self.require_strict_float_policy(&location)?;
-        let result = self.emit_result(
-            block,
-            Type::F32,
-            OperationKind::Binary {
-                op: BinaryOp::Multiply,
-                lhs,
-                rhs,
-            },
-            &location,
-        )?;
-        self.assign_value(destination, result, block, location)
-    }
-
     fn lower_terminator(
         &mut self,
         block_index: usize,
@@ -1020,6 +973,14 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
         block: &mut BasicBlock,
     ) -> Result<Terminator, TranslationDiagnostic> {
         let location = TranslationLocation::terminator(self.function, block_index, terminator);
+        let semantic_terminator =
+            semantic_lowering::SemanticTerminator::new(&terminator.kind, &location);
+        if let Some(lowered) =
+            semantic_lowering::try_lower_terminator(self, semantic_terminator, block)
+        {
+            return lowered;
+        }
+
         match &terminator.kind {
             MirTerminatorKind::Return => {
                 let values = match self.return_type.clone() {
@@ -1040,10 +1001,6 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                 Ok(Terminator::Return { values })
             }
             MirTerminatorKind::Unreachable => Ok(Terminator::Unreachable),
-            MirTerminatorKind::Goto { target } => Ok(Terminator::Branch {
-                target: self.block_id(*target, location)?,
-                arguments: Vec::new(),
-            }),
             MirTerminatorKind::SwitchInt {
                 discriminant,
                 targets,
@@ -1262,41 +1219,15 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                 location,
             );
         }
-        match callee
-            .trusted_item()
-            .filter(|_| self.is_exact_general_v3_alpha_zeta_context())
+        if let Some(call) = semantic_lowering::AuthenticatedSemanticCall::new(
+            callee,
+            target,
+            destination,
+            operands,
+            &location,
+        ) && let Some(lowered) = semantic_lowering::try_lower_call(self, call, block)
         {
-            Some(TrustedDeviceItem::ThreadIndex1d) => {
-                return self.lower_thread_index_1d_call(
-                    callee,
-                    target,
-                    destination,
-                    operands,
-                    block,
-                    location,
-                );
-            }
-            Some(TrustedDeviceItem::ThreadIndexGet) => {
-                return self.lower_thread_index_get_call(
-                    callee,
-                    target,
-                    destination,
-                    operands,
-                    block,
-                    location,
-                );
-            }
-            Some(TrustedDeviceItem::DisjointSliceGetMut) => {
-                return self.lower_disjoint_slice_get_mut_call(
-                    callee,
-                    target,
-                    destination,
-                    operands,
-                    block,
-                    location,
-                );
-            }
-            _ => {}
+            return lowered;
         }
 
         let arguments = operands
@@ -1516,172 +1447,6 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
             }
         }
 
-        Ok(Terminator::Branch {
-            target: self.block_id(target, location)?,
-            arguments: Vec::new(),
-        })
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn lower_thread_index_1d_call(
-        &mut self,
-        callee: &MirCallee,
-        target: usize,
-        destination: &MirPlaceRef,
-        operands: &[MirOperandRef],
-        block: &mut BasicBlock,
-        location: TranslationLocation,
-    ) -> Result<Terminator, TranslationDiagnostic> {
-        if !operands.is_empty() {
-            return Err(self.call_arity(callee, 0, operands.len(), location));
-        }
-        let MirTypeShape::Adt { identity } = self.local_shape(destination.local, &location)? else {
-            return Err(diagnostic(
-                TranslationDiagnosticCode::UnsupportedType,
-                location,
-                "thread::index_1d destination is not the trusted ThreadIndex type",
-            ));
-        };
-        if identity != TrustedDeviceItem::ThreadIndex.canonical_path() {
-            return Err(diagnostic(
-                TranslationDiagnosticCode::UnsupportedType,
-                location,
-                "thread::index_1d destination is not the trusted ThreadIndex type",
-            ));
-        }
-
-        let index = self.emit_result(
-            block,
-            Type::INDEX,
-            OperationKind::Intrinsic(IntrinsicOperation::global_id_1d()),
-            &location,
-        )?;
-        self.trusted_thread_indices.insert(index);
-        self.bind_local(
-            destination.local,
-            LocalBinding::Value(index),
-            location.clone(),
-        )?;
-        Ok(Terminator::Branch {
-            target: self.block_id(target, location)?,
-            arguments: Vec::new(),
-        })
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn lower_thread_index_get_call(
-        &mut self,
-        callee: &MirCallee,
-        target: usize,
-        destination: &MirPlaceRef,
-        operands: &[MirOperandRef],
-        block: &mut BasicBlock,
-        location: TranslationLocation,
-    ) -> Result<Terminator, TranslationDiagnostic> {
-        let [receiver] = operands else {
-            return Err(self.call_arity(callee, 1, operands.len(), location));
-        };
-        let receiver = self.lower_operand(receiver, block, &location)?;
-        if !self.trusted_thread_indices.contains(&receiver) {
-            return Err(diagnostic(
-                TranslationDiagnosticCode::UnsupportedCall,
-                location,
-                "ThreadIndex::get receiver did not originate from trusted thread::index_1d",
-            ));
-        }
-        self.require_destination_type(destination, &Type::INDEX, &location)?;
-        self.bind_local(
-            destination.local,
-            LocalBinding::Value(receiver),
-            location.clone(),
-        )?;
-        Ok(Terminator::Branch {
-            target: self.block_id(target, location)?,
-            arguments: Vec::new(),
-        })
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn lower_disjoint_slice_get_mut_call(
-        &mut self,
-        callee: &MirCallee,
-        target: usize,
-        destination: &MirPlaceRef,
-        operands: &[MirOperandRef],
-        block: &mut BasicBlock,
-        location: TranslationLocation,
-    ) -> Result<Terminator, TranslationDiagnostic> {
-        let [receiver, index] = operands else {
-            return Err(self.call_arity(callee, 2, operands.len(), location));
-        };
-        let receiver = self.lower_operand(receiver, block, &location)?;
-        let index = self.lower_operand(index, block, &location)?;
-        let receiver_ty = self.value_type(receiver, &location)?.clone();
-        let Type::Slice(slice) = receiver_ty else {
-            return Err(diagnostic(
-                TranslationDiagnosticCode::UnsupportedType,
-                location,
-                "trusted DisjointSlice::get_mut receiver is not a translated slice",
-            ));
-        };
-        if slice.access != AccessMode::ReadWrite {
-            return Err(diagnostic(
-                TranslationDiagnosticCode::UnsupportedType,
-                location,
-                "trusted DisjointSlice::get_mut receiver must be writable",
-            ));
-        }
-        if self.value_type(index, &location)? != &Type::INDEX
-            || !self.trusted_thread_indices.contains(&index)
-        {
-            return Err(diagnostic(
-                TranslationDiagnosticCode::UnsupportedCall,
-                location,
-                "DisjointSlice::get_mut index did not originate from trusted thread::index_1d",
-            ));
-        }
-
-        let length = self.emit_result(
-            block,
-            Type::INDEX,
-            OperationKind::SliceLength { slice: receiver },
-            &location,
-        )?;
-        let in_bounds = self.emit_result(
-            block,
-            Type::BOOL,
-            OperationKind::Compare {
-                predicate: ComparePredicate::LessThan,
-                lhs: index,
-                rhs: length,
-            },
-            &location,
-        )?;
-        let pointer_ty = Type::pointer((*slice.element).clone(), slice.address_space, slice.access);
-        let data = self.emit_result(
-            block,
-            pointer_ty.clone(),
-            OperationKind::SliceData { slice: receiver },
-            &location,
-        )?;
-        let payload = self.emit_result(
-            block,
-            pointer_ty,
-            OperationKind::GetElementPointer {
-                base: data,
-                offset: index,
-            },
-            &location,
-        )?;
-        self.bind_local(
-            destination.local,
-            LocalBinding::OptionPointer {
-                discriminant: in_bounds,
-                payload,
-                some_entry: None,
-            },
-            location.clone(),
-        )?;
         Ok(Terminator::Branch {
             target: self.block_id(target, location)?,
             arguments: Vec::new(),

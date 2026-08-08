@@ -189,6 +189,33 @@ fn general_v3_rejects_wrong_index_untrusted_callee_and_wrong_profile() {
 }
 
 #[test]
+fn general_v3_thread_index_spelling_does_not_cross_the_extension_boundary() {
+    let mut lookalike = MirModule {
+        functions: vec![alpha()],
+    };
+    let index_call = &mut lookalike.functions[0].blocks[0]
+        .terminator
+        .as_mut()
+        .expect("thread-index terminator")
+        .kind;
+    let MirTerminatorKind::Call { callee, .. } = index_call else {
+        panic!("thread-index call")
+    };
+    *callee = Some(MirCallee::untrusted_for_test(
+        TrustedDeviceItem::ThreadIndex1d.canonical_path(),
+    ));
+
+    let errors = lower_general_v3(&lookalike).expect_err("callee spelling is not authority");
+
+    assert!(errors.contains(TranslationDiagnosticCode::UnsupportedCall));
+    assert!(errors.diagnostics().iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("has no classified trusted device identity")
+    }));
+}
+
+#[test]
 fn option_payload_cannot_escape_the_bounds_checked_some_region() {
     let mut false_to_store = MirModule {
         functions: vec![alpha()],
