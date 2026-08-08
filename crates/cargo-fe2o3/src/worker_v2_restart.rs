@@ -500,7 +500,7 @@ fn hash_identity(domain: &[u8], update: impl FnOnce(&mut Sha256)) -> [u8; 32] {
     digest.finalize().into()
 }
 
-fn envelope_name(publication_identity: [u8; 32]) -> String {
+pub(super) fn envelope_name(publication_identity: [u8; 32]) -> String {
     format!(
         "{ENVELOPE_PREFIX}{}{ENVELOPE_SUFFIX}",
         hex(&publication_identity)

@@ -935,7 +935,7 @@ mod tests {
     use super::*;
     use crate::worker_v2_restart::{
         ResumeMarkerStateV1, WorkerV2EnvelopePublicationOutcomeV1, WorkerV2PublicationKindV1,
-        WorkerV2ResumeStoreV1, restart_admission_commitment_v1,
+        WorkerV2ResumeStoreV1, envelope_name, restart_admission_commitment_v1,
     };
     use fe2o3_artifact_transaction::{
         AtomicPublicationIdentityV1, BuildInvocation, BuildSession, CanonicalLinkRequestIdentityV1,
