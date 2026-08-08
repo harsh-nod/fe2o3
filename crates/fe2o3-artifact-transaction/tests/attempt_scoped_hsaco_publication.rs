@@ -11,10 +11,12 @@ use fe2o3_artifact_transaction::{
     begin_build_attempt, fail_build_attempt, finish_build_attempt,
     publish_exact_hsaco_evidence_for_attempt_v1,
     publish_exact_hsaco_evidence_for_attempt_v1_with_options, read_backend_publication_receipt_v1,
-    recover_durable_link_publication_v1, validate_backend_publication_receipt_v1,
+    recover_durable_link_publication_v1, recover_published_hsaco_claim_for_attempt_v1,
+    validate_backend_publication_receipt_v1,
 };
 use sha2::{Digest, Sha256};
 use std::fs;
+use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Barrier};
@@ -155,6 +157,19 @@ fn fake_attempt(attempt: BuildAttempt, seed: u8) -> BuildAttempt {
     .unwrap()
 }
 
+fn one_managed_entry(output: &Path, prefix: &str, suffix: &str) -> PathBuf {
+    let entries = fs::read_dir(output)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            let name = path.file_name().unwrap().to_string_lossy();
+            name.starts_with(prefix) && name.ends_with(suffix)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(entries.len(), 1);
+    entries.into_iter().next().unwrap()
+}
+
 #[test]
 fn publishes_exact_bytes_and_complete_identity_chain_once() {
     let temp = TestDirectory::new();
@@ -278,6 +293,155 @@ fn public_receipt_validation_rejects_typed_lineage_substitution() {
         ),
         Err(BackendPublicationReceiptValidationErrorV1::PlanAttemptMismatch)
     );
+}
+
+#[test]
+fn recovered_claim_requires_the_exact_complete_publication_lineage() {
+    let temp = TestDirectory::new();
+    let output = temp.output();
+    let publisher = producer("kernel", "/src/recovered-claim.rs");
+    let attempt = begin(&output, &publisher, 0x61);
+    let bytes = b"exact recoverable claim bytes";
+    let publication_scope = scope(0x62);
+    let publication_plan = plan(attempt, publication_scope, 0x63, bytes);
+    let upstream = upstream_evidence(publication_plan);
+    let receipt = publish_exact(&output, &publisher, attempt, publication_plan, bytes)
+        .unwrap()
+        .receipt();
+
+    let recovered = recover_published_hsaco_claim_for_attempt_v1(
+        &output,
+        &publisher,
+        attempt,
+        publication_plan,
+        upstream,
+        receipt,
+    )
+    .unwrap();
+    assert_eq!(recovered.plan(), publication_plan);
+    assert_eq!(recovered.upstream_evidence(), upstream);
+    assert_eq!(recovered.receipt(), receipt);
+    assert!(!recovered.grants_load_authority());
+    assert!(!recovered.grants_launch_authority());
+
+    let substituted_producer = producer("kernel", "/src/recovered-claim-substituted.rs");
+    assert!(matches!(
+        recover_published_hsaco_claim_for_attempt_v1(
+            &output,
+            &substituted_producer,
+            attempt,
+            publication_plan,
+            upstream,
+            receipt,
+        ),
+        Err(AttemptScopedHsacoPublicationErrorV1::ReceiptPublicationMismatch)
+    ));
+    assert!(matches!(
+        recover_published_hsaco_claim_for_attempt_v1(
+            &output,
+            &publisher,
+            fake_attempt(attempt, 0x64),
+            publication_plan,
+            upstream,
+            receipt,
+        ),
+        Err(AttemptScopedHsacoPublicationErrorV1::ReceiptPublicationMismatch)
+    ));
+    assert!(matches!(
+        recover_published_hsaco_claim_for_attempt_v1(
+            &output,
+            &publisher,
+            attempt,
+            plan(attempt, publication_scope, 0x65, bytes),
+            upstream,
+            receipt,
+        ),
+        Err(AttemptScopedHsacoPublicationErrorV1::ReceiptPublicationMismatch)
+    ));
+    assert!(matches!(
+        recover_published_hsaco_claim_for_attempt_v1(
+            &output,
+            &publisher,
+            attempt,
+            publication_plan,
+            UpstreamCodeObjectEvidenceIdentityV1::from_bytes([0x66; 32]),
+            receipt,
+        ),
+        Err(AttemptScopedHsacoPublicationErrorV1::ReceiptPublicationMismatch)
+    ));
+
+    let other_temp = TestDirectory::new();
+    let other_output = other_temp.output();
+    let other_publisher = producer("other", "/src/other-recovered-claim.rs");
+    let other_attempt = begin(&other_output, &other_publisher, 0x67);
+    let other_plan = plan(other_attempt, scope(0x68), 0x69, b"other claim bytes");
+    let other_receipt = publish_exact(
+        &other_output,
+        &other_publisher,
+        other_attempt,
+        other_plan,
+        b"other claim bytes",
+    )
+    .unwrap()
+    .receipt();
+    assert!(matches!(
+        recover_published_hsaco_claim_for_attempt_v1(
+            &output,
+            &publisher,
+            attempt,
+            publication_plan,
+            upstream,
+            other_receipt,
+        ),
+        Err(AttemptScopedHsacoPublicationErrorV1::ReceiptPublicationMismatch)
+    ));
+}
+
+#[test]
+fn recovered_claim_rejects_durable_filesystem_substitution() {
+    for substitution in ["missing", "mutated", "symlink", "record"] {
+        let temp = TestDirectory::new();
+        let output = temp.output();
+        let publisher = producer("kernel", &format!("/src/recovery-{substitution}.rs"));
+        let attempt = begin(&output, &publisher, 0x71);
+        let bytes = b"filesystem-bound exact claim";
+        let publication_plan = plan(attempt, scope(0x72), 0x73, bytes);
+        let upstream = upstream_evidence(publication_plan);
+        let receipt = publish_exact(&output, &publisher, attempt, publication_plan, bytes)
+            .unwrap()
+            .receipt();
+        let artifact = one_managed_entry(&output, ".fe2o3-link-artifact-v1-", ".bin");
+        match substitution {
+            "missing" => fs::remove_file(&artifact).unwrap(),
+            "mutated" => fs::write(&artifact, vec![b'x'; bytes.len()]).unwrap(),
+            "symlink" => {
+                let target = temp.path.join("substituted-artifact");
+                fs::write(&target, bytes).unwrap();
+                fs::remove_file(&artifact).unwrap();
+                symlink(target, artifact).unwrap();
+            }
+            "record" => {
+                let record = one_managed_entry(&output, ".fe2o3-link-publication-v1-", ".record");
+                let mut bytes = fs::read(&record).unwrap();
+                *bytes.last_mut().unwrap() ^= 1;
+                fs::write(record, bytes).unwrap();
+            }
+            _ => unreachable!(),
+        }
+
+        assert!(
+            recover_published_hsaco_claim_for_attempt_v1(
+                &output,
+                &publisher,
+                attempt,
+                publication_plan,
+                upstream,
+                receipt,
+            )
+            .is_err(),
+            "{substitution} substitution unexpectedly recovered a claim"
+        );
+    }
 }
 
 #[test]

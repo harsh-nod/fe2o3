@@ -10,6 +10,28 @@ pub const DIRECT_LINK_EVIDENCE_HEADER_BYTES: usize = 49;
 pub const MAX_DIRECT_LINK_EVIDENCE_BYTES: usize = 2 * 1024 * 1024;
 
 impl DirectLinkBundleEvidenceV1 {
+    /// Returns the exact length of this evidence's canonical v1 encoding without allocating.
+    pub fn encoded_len(&self) -> usize {
+        const DIGEST_BYTES: usize = 1 + 32;
+        let text_len = |value: &IdentityText| 2 + value.as_str().len();
+        let worker_len = |worker: &DirectLinkWorkerIdentityV1| {
+            text_len(worker.name()) + text_len(worker.version()) + 2 * DIGEST_BYTES
+        };
+        let toolchain_len = |toolchain: &DirectLinkToolchainIdentityV1| {
+            text_len(toolchain.name()) + text_len(toolchain.version()) + 2 * DIGEST_BYTES
+        };
+
+        let mut length = DIRECT_LINK_EVIDENCE_HEADER_BYTES;
+        for binding in self.bindings() {
+            let expectation = binding.expectation();
+            length += 7 * DIGEST_BYTES;
+            length += worker_len(expectation.worker());
+            length += toolchain_len(expectation.toolchain());
+        }
+        debug_assert!(length <= MAX_DIRECT_LINK_EVIDENCE_BYTES);
+        length
+    }
+
     /// Encodes this evidence using the canonical direct-link V1 format.
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut writer = Writer::new();
@@ -22,7 +44,7 @@ impl DirectLinkBundleEvidenceV1 {
         for binding in self.bindings() {
             writer.binding(binding);
         }
-        debug_assert!(writer.bytes.len() <= MAX_DIRECT_LINK_EVIDENCE_BYTES);
+        debug_assert_eq!(writer.bytes.len(), self.encoded_len());
         writer.bytes
     }
 

@@ -71,11 +71,21 @@ impl WorkerV2EnvelopeInputsV1 {
             return Err(EnvelopeInputsValidationError::DuplicateProofKernel);
         }
         let proof_bytes = proof_records.iter().try_fold(0usize, |total, proof| {
-            total.checked_add(proof.to_bytes().len())
+            total.checked_add(proof.encoded_len())
         });
         if proof_bytes.is_none_or(|total| total > MAX_WORKER_V2_PROOF_EVIDENCE_BYTES) {
             return Err(EnvelopeInputsValidationError::ProofEvidenceTooLarge {
                 max: MAX_WORKER_V2_PROOF_EVIDENCE_BYTES,
+            });
+        }
+        let total_len = canonical_length(
+            direct_link_evidence.encoded_len(),
+            raw_hsaco.bytes().len(),
+            proof_records.iter().map(ProofRecordV1::encoded_len),
+        );
+        if total_len.is_none_or(|length| length > MAX_WORKER_V2_ENVELOPE_INPUTS_BYTES) {
+            return Err(EnvelopeInputsValidationError::CapsuleTooLarge {
+                max: MAX_WORKER_V2_ENVELOPE_INPUTS_BYTES,
             });
         }
         Ok(Self {
@@ -221,16 +231,20 @@ impl WorkerV2EnvelopeInputsV1 {
             DigestAlgorithm::Sha256,
             DigestBytes::from_bytes(reader.array()?),
         );
-        if reader.remaining_len() < direct_link_len.saturating_add(raw_len) {
-            return Err(EnvelopeInputsDecodeError::Truncated);
+        let minimum_aggregate = FIXED_HEADER_BYTES
+            .checked_add(direct_link_len)
+            .and_then(|length| length.checked_add(raw_len))
+            .and_then(|length| length.checked_add(proof_count.checked_mul(4)?))
+            .ok_or(EnvelopeInputsDecodeError::LengthOverflow)?;
+        if minimum_aggregate > total_len {
+            return Err(EnvelopeInputsDecodeError::AggregateLengthMismatch);
         }
-        let direct_link_evidence =
-            DirectLinkBundleEvidenceV1::from_bytes(reader.take(direct_link_len)?)
-                .map_err(EnvelopeInputsDecodeError::DirectLink)?;
-        let mut proof_records = Vec::with_capacity(proof_count);
+        let body = reader.remaining();
+        let mut preflight = Reader::new(body);
+        preflight.take(direct_link_len)?;
         let mut proof_bytes = 0usize;
         for _ in 0..proof_count {
-            let proof_len = reader.length("proof record", MAX_PROOF_RECORD_BYTES)?;
+            let proof_len = preflight.length("proof record", MAX_PROOF_RECORD_BYTES)?;
             proof_bytes = proof_bytes
                 .checked_add(proof_len)
                 .ok_or(EnvelopeInputsDecodeError::LengthOverflow)?;
@@ -241,23 +255,87 @@ impl WorkerV2EnvelopeInputsV1 {
                     max: MAX_WORKER_V2_PROOF_EVIDENCE_BYTES,
                 });
             }
+            preflight.take(proof_len)?;
+        }
+        let raw_bytes = preflight.take(raw_len)?;
+        if !preflight.is_empty() {
+            return Err(EnvelopeInputsDecodeError::AggregateLengthMismatch);
+        }
+        let aggregate = FIXED_HEADER_BYTES
+            .checked_add(direct_link_len)
+            .and_then(|length| length.checked_add(raw_len))
+            .and_then(|length| length.checked_add(proof_count.checked_mul(4)?))
+            .and_then(|length| length.checked_add(proof_bytes))
+            .ok_or(EnvelopeInputsDecodeError::LengthOverflow)?;
+        if aggregate != total_len {
+            return Err(EnvelopeInputsDecodeError::AggregateLengthMismatch);
+        }
+        if raw_len == 0 {
+            return Err(EnvelopeInputsDecodeError::Envelope(
+                EnvelopeValidationError::EmptyRawHsaco,
+            ));
+        }
+        raw_identity.verify(raw_bytes).map_err(|_| {
+            EnvelopeInputsDecodeError::Envelope(EnvelopeValidationError::RawHsacoDigestMismatch)
+        })?;
+
+        let mut body_reader = Reader::new(body);
+        let direct_link_evidence =
+            DirectLinkBundleEvidenceV1::from_bytes(body_reader.take(direct_link_len)?)
+                .map_err(EnvelopeInputsDecodeError::DirectLink)?;
+        let mut proof_records = Vec::new();
+        reserve_exact(&mut proof_records, proof_count, "proof records")?;
+        for _ in 0..proof_count {
+            let proof_len = body_reader.length("proof record", MAX_PROOF_RECORD_BYTES)?;
             proof_records.push(
-                ProofRecordV1::from_bytes(reader.take(proof_len)?)
+                ProofRecordV1::from_bytes(body_reader.take(proof_len)?)
                     .map_err(EnvelopeInputsDecodeError::Proof)?,
             );
         }
-        let raw_hsaco = ExactRawHsacoV1::new(raw_identity, reader.take(raw_len)?.to_vec())
+        if proof_records.windows(2).any(|pair| {
+            pair[0].target().artifact().kernel_id() >= pair[1].target().artifact().kernel_id()
+        }) {
+            return Err(EnvelopeInputsDecodeError::NonCanonical);
+        }
+        let raw_slice = body_reader.take(raw_len)?;
+        let mut raw_bytes = Vec::new();
+        reserve_exact(&mut raw_bytes, raw_len, "raw HSACO")?;
+        raw_bytes.extend_from_slice(raw_slice);
+        let raw_hsaco = ExactRawHsacoV1::new(raw_identity, raw_bytes)
             .map_err(EnvelopeInputsDecodeError::Envelope)?;
-        if !reader.is_empty() {
+        if !body_reader.is_empty() {
             return Err(EnvelopeInputsDecodeError::TrailingBytes);
         }
         let capsule = Self::new(direct_link_evidence, proof_records, raw_hsaco)
             .map_err(EnvelopeInputsDecodeError::Validation)?;
-        if capsule.to_bytes() != bytes {
-            return Err(EnvelopeInputsDecodeError::NonCanonical);
-        }
         Ok(capsule)
     }
+}
+
+fn canonical_length(
+    direct_link_len: usize,
+    raw_len: usize,
+    proof_lengths: impl IntoIterator<Item = usize>,
+) -> Option<usize> {
+    proof_lengths.into_iter().try_fold(
+        FIXED_HEADER_BYTES
+            .checked_add(direct_link_len)?
+            .checked_add(raw_len)?,
+        |total, proof_len| total.checked_add(4)?.checked_add(proof_len),
+    )
+}
+
+fn reserve_exact<T>(
+    values: &mut Vec<T>,
+    additional: usize,
+    field: &'static str,
+) -> Result<(), EnvelopeInputsDecodeError> {
+    values
+        .try_reserve_exact(additional)
+        .map_err(|_| EnvelopeInputsDecodeError::AllocationFailed {
+            field,
+            requested: additional,
+        })
 }
 
 #[derive(Debug)]
@@ -267,6 +345,7 @@ pub enum EnvelopeInputsValidationError {
     ProofCount { actual: usize },
     DuplicateProofKernel,
     ProofEvidenceTooLarge { max: usize },
+    CapsuleTooLarge { max: usize },
 }
 
 impl fmt::Display for EnvelopeInputsValidationError {
@@ -285,6 +364,12 @@ impl fmt::Display for EnvelopeInputsValidationError {
             }
             Self::ProofEvidenceTooLarge { max } => {
                 write!(formatter, "Worker V2 proof evidence exceeds {max} bytes")
+            }
+            Self::CapsuleTooLarge { max } => {
+                write!(
+                    formatter,
+                    "Worker V2 envelope input capsule exceeds {max} bytes"
+                )
             }
         }
     }
@@ -315,6 +400,11 @@ pub enum EnvelopeInputsDecodeError {
         max: usize,
     },
     LengthOverflow,
+    AggregateLengthMismatch,
+    AllocationFailed {
+        field: &'static str,
+        requested: usize,
+    },
     TrailingBytes,
     DirectLink(DirectLinkDecodeError),
     Proof(ProofDecodeError),
@@ -356,6 +446,12 @@ impl fmt::Display for EnvelopeInputsDecodeError {
             Self::LengthOverflow => {
                 formatter.write_str("Worker V2 envelope inputs length overflows")
             }
+            Self::AggregateLengthMismatch => formatter
+                .write_str("Worker V2 envelope input component lengths do not match the capsule"),
+            Self::AllocationFailed { field, requested } => write!(
+                formatter,
+                "could not allocate {requested} elements for Worker V2 envelope input {field}"
+            ),
             Self::TrailingBytes => {
                 formatter.write_str("Worker V2 envelope inputs have trailing bytes")
             }
@@ -395,8 +491,8 @@ impl<'a> Reader<'a> {
         self.remaining.is_empty()
     }
 
-    const fn remaining_len(&self) -> usize {
-        self.remaining.len()
+    const fn remaining(&self) -> &'a [u8] {
+        self.remaining
     }
 
     fn take(&mut self, count: usize) -> Result<&'a [u8], EnvelopeInputsDecodeError> {
@@ -433,5 +529,23 @@ impl<'a> Reader<'a> {
         } else {
             Ok(value as usize)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn allocation_failure_is_explicit_before_copy() {
+        let mut bytes = Vec::<u8>::new();
+        assert!(matches!(
+            reserve_exact(&mut bytes, usize::MAX, "test bytes"),
+            Err(EnvelopeInputsDecodeError::AllocationFailed {
+                field: "test bytes",
+                requested: usize::MAX,
+            })
+        ));
+        assert!(bytes.is_empty());
     }
 }

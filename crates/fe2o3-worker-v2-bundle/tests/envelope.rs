@@ -653,4 +653,12 @@ fn pre_envelope_inputs_are_canonical_bounded_and_inert() {
         WorkerV2EnvelopeInputsV1::from_bytes(&trailing),
         Err(EnvelopeInputsDecodeError::TrailingBytes)
     ));
+
+    let mut infeasible = inputs.to_bytes();
+    let infeasible_len = infeasible.len() as u32;
+    infeasible[20..24].copy_from_slice(&infeasible_len.to_le_bytes());
+    assert!(matches!(
+        WorkerV2EnvelopeInputsV1::from_bytes(&infeasible),
+        Err(EnvelopeInputsDecodeError::AggregateLengthMismatch)
+    ));
 }

@@ -8,6 +8,33 @@ pub const PROOF_RECORD_VERSION: u16 = 1;
 pub const MAX_PROOF_RECORD_BYTES: usize = 1024 * 1024;
 
 impl ProofRecordV1 {
+    /// Returns the exact length of this record's canonical v1 encoding without allocating.
+    pub fn encoded_len(&self) -> usize {
+        const DIGEST_BYTES: usize = 1 + 32;
+        let text_len = |value: &str| 2 + value.len();
+        let tool_len = |tool: &MeasuredToolIdentity| {
+            text_len(tool.name().as_str()) + text_len(tool.version().as_str()) + 2 * DIGEST_BYTES
+        };
+
+        let mut length = PROOF_RECORD_MAGIC.len() + 2 + 2 + 13 * DIGEST_BYTES;
+        length += 2;
+        for entry in self.configuration() {
+            length += text_len(entry.key().as_str()) + text_len(entry.value().as_str());
+        }
+        length += text_len(self.execution().model().version().as_str()) + DIGEST_BYTES;
+        length += tool_len(self.execution().verifier());
+        length += tool_len(self.execution().solver());
+        length += tool_len(self.execution().evidence_recorder());
+        length += DIGEST_BYTES + 1;
+        length += 2 + self.proved_properties().len();
+        length += 2;
+        for item in self.trusted_items() {
+            length += text_len(item.name().as_str()) + DIGEST_BYTES;
+        }
+        debug_assert!(length <= MAX_PROOF_RECORD_BYTES);
+        length
+    }
+
     /// Encodes this validated record using the canonical proof-record v1 format.
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut writer = Writer::new();
@@ -52,7 +79,7 @@ impl ProofRecordV1 {
             writer.trusted_item(item);
         }
 
-        debug_assert!(writer.bytes.len() <= MAX_PROOF_RECORD_BYTES);
+        debug_assert_eq!(writer.bytes.len(), self.encoded_len());
         writer.bytes
     }
 
