@@ -1,15 +1,16 @@
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use fe2o3_compiler_ffi::{
-    CodeObjectVersion, DeviceTargetV1, ExternalDeviceAddressSpaceV1, ExternalDeviceBlobIdentityV1,
-    ExternalDeviceCallingConventionV1, ExternalDeviceCapabilityIdentityV1,
-    ExternalDeviceConvergenceV1, ExternalDeviceLibraryContentIdentityV1,
-    ExternalDeviceLibraryContentKindV1, ExternalDeviceLibraryDependencyV1,
-    ExternalDeviceLibraryManifestErrorV1, ExternalDeviceLibraryManifestIdentityV1,
-    ExternalDeviceLibraryManifestV1, ExternalDeviceLibraryProvenanceKindV1,
-    ExternalDeviceLibraryProvenanceV1, ExternalDeviceLibraryTrustClassV1,
-    ExternalDeviceLibraryTrustV1, ExternalDeviceLlvmIdentityV1, ExternalDeviceSemanticIdentityV1,
-    ExternalDeviceSymbolRoleV1, ExternalDeviceSymbolV1,
+    CodeObjectVersion, DeviceTargetV1, EXTERNAL_DEVICE_LIBRARY_GFX942_DATA_LAYOUT_V1,
+    EXTERNAL_DEVICE_LIBRARY_TARGET_TRIPLE_V1, ExternalDeviceAddressSpaceV1,
+    ExternalDeviceBlobIdentityV1, ExternalDeviceCallingConventionV1,
+    ExternalDeviceCapabilityIdentityV1, ExternalDeviceConvergenceV1,
+    ExternalDeviceLibraryContentIdentityV1, ExternalDeviceLibraryContentKindV1,
+    ExternalDeviceLibraryDependencyV1, ExternalDeviceLibraryManifestErrorV1,
+    ExternalDeviceLibraryManifestIdentityV1, ExternalDeviceLibraryManifestV1,
+    ExternalDeviceLibraryProvenanceKindV1, ExternalDeviceLibraryProvenanceV1,
+    ExternalDeviceLibraryTrustClassV1, ExternalDeviceLibraryTrustV1, ExternalDeviceLlvmIdentityV1,
+    ExternalDeviceSemanticIdentityV1, ExternalDeviceSymbolRoleV1, ExternalDeviceSymbolV1,
     MAX_EXTERNAL_DEVICE_LIBRARY_CAPABILITIES_V1, MAX_EXTERNAL_DEVICE_LIBRARY_DEPENDENCIES_V1,
     MAX_EXTERNAL_DEVICE_LIBRARY_LLVM_TOKEN_BYTES_V1, MAX_EXTERNAL_DEVICE_LIBRARY_SYMBOLS_V1,
 };
@@ -17,8 +18,6 @@ use sha2::{Digest, Sha256};
 
 const IMPORT_ABI: &str = "C(const_ptr<global,u32>[size=8,align=8,as=global])->u32[size=4,align=4]";
 const SCALAR_ABI: &str = "C(u32[size=4,align=4])->u32[size=4,align=4]";
-const KERNEL_ABI: &str =
-    "C(mut_ptr<global,u32>[size=8,align=8,as=global],u32[size=4,align=4])->unit[size=0,align=1]";
 
 fn digest(label: impl AsRef<[u8]>) -> [u8; 32] {
     Sha256::digest(label.as_ref()).into()
@@ -45,8 +44,8 @@ fn llvm(version: &str) -> ExternalDeviceLlvmIdentityV1 {
         version,
         [0x18; 20],
         blob("llvm-executable", 1_048_576),
-        "amdgcn-amd-amdhsa",
-        "e-p:64:64-p1:64:64-p3:32:32-i64:64-n32:64-S32-A5-G1-ni:7:8:9",
+        EXTERNAL_DEVICE_LIBRARY_TARGET_TRIPLE_V1,
+        EXTERNAL_DEVICE_LIBRARY_GFX942_DATA_LAYOUT_V1,
     )
     .unwrap()
 }
@@ -104,14 +103,6 @@ fn symbols() -> Vec<ExternalDeviceSymbolV1> {
             "none",
             ExternalDeviceConvergenceV1::Convergent,
             vec![capability("cap:device-call")],
-        ),
-        symbol(
-            ExternalDeviceSymbolRoleV1::KernelEntryExport,
-            "external_kernel",
-            KERNEL_ABI,
-            "write_global",
-            ExternalDeviceConvergenceV1::Convergent,
-            vec![capability("cap:global-memory")],
         ),
     ]
 }
@@ -202,7 +193,10 @@ fn public_round_trip_binds_every_contract_layer_without_authority() {
     );
     assert_eq!(original.llvm().major(), 18);
     assert_eq!(original.llvm().version(), "18.1.8");
-    assert_eq!(original.llvm().target_triple(), "amdgcn-amd-amdhsa");
+    assert_eq!(
+        original.llvm().target_triple(),
+        EXTERNAL_DEVICE_LIBRARY_TARGET_TRIPLE_V1
+    );
     assert_eq!(
         original.provenance().kind(),
         ExternalDeviceLibraryProvenanceKindV1::VendorSdk
@@ -211,9 +205,9 @@ fn public_round_trip_binds_every_contract_layer_without_authority() {
         original.trust().class(),
         ExternalDeviceLibraryTrustClassV1::DeclaredSpecification
     );
-    assert_eq!(original.symbols().len(), 4);
+    assert_eq!(original.symbols().len(), 3);
     assert_eq!(original.imports().count(), 2);
-    assert_eq!(original.exports().count(), 2);
+    assert_eq!(original.exports().count(), 1);
     assert_eq!(original.dependencies().len(), 2);
     assert_eq!(
         original.symbols()[0].calling_convention(),
@@ -266,11 +260,11 @@ fn stable_manifest_identity_and_separate_wire_domain_are_golden() {
     assert_eq!(
         (value.identity().byte_len(), *value.identity().sha256()),
         (
-            1_160,
+            1_135,
             [
-                0x71, 0xb2, 0xc8, 0xff, 0x45, 0x3f, 0x77, 0xdf, 0xe3, 0x2d, 0x30, 0x8f, 0x37, 0xc5,
-                0x5c, 0x8a, 0xe9, 0x9c, 0x59, 0x3c, 0x51, 0xfd, 0x2b, 0x5e, 0x06, 0xd0, 0xcc, 0x1c,
-                0xb5, 0xb1, 0x7d, 0x20,
+                0xfa, 0x3f, 0xdb, 0x08, 0xc7, 0xed, 0x8e, 0x5d, 0x67, 0xf3, 0x8f, 0x8d, 0xe7, 0x87,
+                0x03, 0x52, 0x47, 0x32, 0x5a, 0x4b, 0xef, 0xa5, 0xea, 0x01, 0xd6, 0xf1, 0x2b, 0x40,
+                0xef, 0xa1, 0x3a, 0x07,
             ]
         )
     );
@@ -300,8 +294,8 @@ fn identities_llvm_text_and_trust_evidence_are_strictly_bounded() {
             "18.1.8",
             [1; 20],
             blob("llvm", 1),
-            "amdgcn-amd-amdhsa",
-            "e-p:64:64"
+            EXTERNAL_DEVICE_LIBRARY_TARGET_TRIPLE_V1,
+            EXTERNAL_DEVICE_LIBRARY_GFX942_DATA_LAYOUT_V1
         ),
         Err(ExternalDeviceLibraryManifestErrorV1::InvalidLlvmIdentity)
     );
@@ -311,8 +305,8 @@ fn identities_llvm_text_and_trust_evidence_are_strictly_bounded() {
             "x".repeat(MAX_EXTERNAL_DEVICE_LIBRARY_LLVM_TOKEN_BYTES_V1 + 1),
             [1; 20],
             blob("llvm", 1),
-            "amdgcn-amd-amdhsa",
-            "e-p:64:64"
+            EXTERNAL_DEVICE_LIBRARY_TARGET_TRIPLE_V1,
+            EXTERNAL_DEVICE_LIBRARY_GFX942_DATA_LAYOUT_V1
         ),
         Err(ExternalDeviceLibraryManifestErrorV1::InvalidText)
     );
@@ -322,10 +316,109 @@ fn identities_llvm_text_and_trust_evidence_are_strictly_bounded() {
             "18.1.8 with space",
             [1; 20],
             blob("llvm", 1),
-            "amdgcn-amd-amdhsa",
-            "e-p:64:64"
+            EXTERNAL_DEVICE_LIBRARY_TARGET_TRIPLE_V1,
+            EXTERNAL_DEVICE_LIBRARY_GFX942_DATA_LAYOUT_V1
         ),
         Err(ExternalDeviceLibraryManifestErrorV1::InvalidText)
+    );
+
+    assert_eq!(
+        ExternalDeviceLlvmIdentityV1::new(
+            18,
+            "19.0.0git",
+            [1; 20],
+            blob("llvm", 1),
+            EXTERNAL_DEVICE_LIBRARY_TARGET_TRIPLE_V1,
+            EXTERNAL_DEVICE_LIBRARY_GFX942_DATA_LAYOUT_V1
+        ),
+        Err(ExternalDeviceLibraryManifestErrorV1::LlvmVersionMajorMismatch)
+    );
+    assert_eq!(
+        ExternalDeviceLlvmIdentityV1::new(
+            18,
+            "18vendor",
+            [1; 20],
+            blob("llvm", 1),
+            EXTERNAL_DEVICE_LIBRARY_TARGET_TRIPLE_V1,
+            EXTERNAL_DEVICE_LIBRARY_GFX942_DATA_LAYOUT_V1
+        ),
+        Err(ExternalDeviceLibraryManifestErrorV1::InvalidLlvmIdentity)
+    );
+    assert_eq!(
+        ExternalDeviceLlvmIdentityV1::new(
+            18,
+            "18.0.0git",
+            [1; 20],
+            blob("llvm", 1),
+            "nvptx64-nvidia-cuda",
+            EXTERNAL_DEVICE_LIBRARY_GFX942_DATA_LAYOUT_V1
+        ),
+        Err(ExternalDeviceLibraryManifestErrorV1::InvalidLlvmTargetTriple)
+    );
+    assert_eq!(
+        ExternalDeviceLlvmIdentityV1::new(
+            18,
+            "18.0.0git",
+            [1; 20],
+            blob("llvm", 1),
+            EXTERNAL_DEVICE_LIBRARY_TARGET_TRIPLE_V1,
+            "e-p:32:32"
+        ),
+        Err(ExternalDeviceLibraryManifestErrorV1::InvalidLlvmDataLayout)
+    );
+    assert!(
+        ExternalDeviceLlvmIdentityV1::new(
+            18,
+            "18.99.123git",
+            [1; 20],
+            blob("llvm", 1),
+            EXTERNAL_DEVICE_LIBRARY_TARGET_TRIPLE_V1,
+            EXTERNAL_DEVICE_LIBRARY_GFX942_DATA_LAYOUT_V1
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn reviewed_target_content_and_code_object_profiles_fail_closed() {
+    let make = |content, target, cov| {
+        ExternalDeviceLibraryManifestV1::new(
+            content,
+            target,
+            cov,
+            llvm("18.1.8"),
+            ExternalDeviceLibraryProvenanceV1::new(
+                ExternalDeviceLibraryProvenanceKindV1::VendorSdk,
+                digest("profile-provenance"),
+            )
+            .unwrap(),
+            ExternalDeviceLibraryTrustV1::unverified(),
+            symbols(),
+            dependencies(),
+        )
+    };
+    assert_eq!(
+        make(content("library-content"), target(), CodeObjectVersion::V4),
+        Err(ExternalDeviceLibraryManifestErrorV1::UnsupportedContentCodeObjectCombination)
+    );
+    assert_eq!(
+        make(
+            ExternalDeviceLibraryContentIdentityV1::new(
+                ExternalDeviceLibraryContentKindV1::CodeObject,
+                blob("library-content", 4_096),
+            ),
+            target(),
+            CodeObjectVersion::V6,
+        ),
+        Err(ExternalDeviceLibraryManifestErrorV1::UnsupportedContentCodeObjectCombination)
+    );
+    assert_eq!(
+        make(
+            content("library-content"),
+            DeviceTargetV1::parse("gfx950:xnack-").unwrap(),
+            CodeObjectVersion::V6,
+        ),
+        Err(ExternalDeviceLibraryManifestErrorV1::UnsupportedTargetProfile)
     );
 }
 
@@ -383,6 +476,34 @@ fn ffi_grammar_capability_order_and_address_spaces_fail_closed() {
             vec![duplicate, duplicate]
         ),
         Err(ExternalDeviceLibraryManifestErrorV1::NonCanonicalCapabilityOrder)
+    );
+}
+
+#[test]
+fn workgroup_barrier_effects_require_convergent_contracts() {
+    assert_eq!(
+        ExternalDeviceSymbolV1::new(
+            ExternalDeviceSymbolRoleV1::DeviceFunctionImport,
+            "barrier",
+            SCALAR_ABI,
+            "barrier_workgroup",
+            ExternalDeviceConvergenceV1::Unconstrained,
+            semantic("barrier"),
+            vec![]
+        ),
+        Err(ExternalDeviceLibraryManifestErrorV1::BarrierRequiresConvergence)
+    );
+    assert!(
+        ExternalDeviceSymbolV1::new(
+            ExternalDeviceSymbolRoleV1::DeviceFunctionImport,
+            "barrier",
+            SCALAR_ABI,
+            "barrier_workgroup",
+            ExternalDeviceConvergenceV1::Convergent,
+            semantic("barrier"),
+            vec![]
+        )
+        .is_ok()
     );
 }
 
@@ -527,7 +648,10 @@ fn dependency_closure_is_exact_unique_and_deterministic() {
     let self_content = vec![
         ExternalDeviceLibraryDependencyV1::new(
             manifest_id("self"),
-            content("library-content"),
+            ExternalDeviceLibraryContentIdentityV1::new(
+                ExternalDeviceLibraryContentKindV1::RelocatableObject,
+                content("library-content").blob(),
+            ),
             vec!["external_add".into(), "external_mul".into()],
         )
         .unwrap(),
@@ -566,17 +690,23 @@ fn duplicate_and_reordered_dependencies_are_rejected() {
         Err(ExternalDeviceLibraryManifestErrorV1::DuplicateDependencyManifest)
     );
 
-    let shared_content = content("shared-provider-content");
+    let shared_blob = content("shared-provider-content").blob();
     let mut duplicate_content = vec![
         ExternalDeviceLibraryDependencyV1::new(
             manifest_id("provider:a"),
-            shared_content,
+            ExternalDeviceLibraryContentIdentityV1::new(
+                ExternalDeviceLibraryContentKindV1::LlvmBitcode,
+                shared_blob,
+            ),
             vec!["external_add".into()],
         )
         .unwrap(),
         ExternalDeviceLibraryDependencyV1::new(
             manifest_id("provider:b"),
-            shared_content,
+            ExternalDeviceLibraryContentIdentityV1::new(
+                ExternalDeviceLibraryContentKindV1::RelocatableObject,
+                shared_blob,
+            ),
             vec!["external_mul".into()],
         )
         .unwrap(),
@@ -770,6 +900,27 @@ fn encoded_address_spaces_are_cross_checked_against_c_abi() {
 }
 
 #[test]
+fn kernel_entry_role_tag_is_not_part_of_v1() {
+    let value = manifest();
+    let mut bytes = value.canonical_bytes().to_vec();
+    let name = b"external_add";
+    let name_start = bytes
+        .windows(name.len())
+        .position(|window| window == name)
+        .unwrap();
+    let role_offset = name_start - 7;
+    assert_eq!(
+        bytes[role_offset],
+        ExternalDeviceSymbolRoleV1::DeviceFunctionImport as u8
+    );
+    bytes[role_offset] = 3;
+    assert_eq!(
+        ExternalDeviceLibraryManifestV1::decode(&bytes),
+        Err(ExternalDeviceLibraryManifestErrorV1::InvalidTag)
+    );
+}
+
+#[test]
 fn meaningful_valid_field_mutations_change_the_manifest_identity() {
     let original = manifest();
     let mutations = [
@@ -829,9 +980,8 @@ fn debug_output_does_not_expose_symbols_abi_or_tool_paths() {
         "external_add",
         "external_mul",
         "rust_helper",
-        "external_kernel",
         "const_ptr",
-        "amdgcn-amd-amdhsa",
+        EXTERNAL_DEVICE_LIBRARY_TARGET_TRIPLE_V1,
         "/opt/rocm",
         "--library-path",
     ] {

@@ -14,6 +14,11 @@ use super::{CodeObjectVersion, DeviceTargetV1, MAX_DEVICE_FFI_TARGET_BYTES_V1};
 
 const MANIFEST_DOMAIN_V1: &[u8] = b"FE2O3/EXTERNAL-DEVICE-LIBRARY-MANIFEST/V1\0";
 
+/// Reviewed target triple for V1 device-function libraries.
+pub const EXTERNAL_DEVICE_LIBRARY_TARGET_TRIPLE_V1: &str = "amdgcn-amd-amdhsa";
+/// Target-machine data layout reviewed for the gfx942 V1 lane.
+pub const EXTERNAL_DEVICE_LIBRARY_GFX942_DATA_LAYOUT_V1: &str = "e-p:64:64-p1:64:64-p2:32:32-p3:32:32-p4:64:64-p5:32:32-p6:32:32-p7:160:256:256:32-p8:128:128:128:48-p9:192:256:256:32-i64:64-v16:16-v24:32-v32:32-v48:64-v96:128-v192:256-v256:256-v512:512-v1024:1024-v2048:2048-n32:64-S32-A5-G1-ni:7:8:9";
+
 pub const MAX_EXTERNAL_DEVICE_LIBRARY_SYMBOLS_V1: usize = 1_024;
 pub const MAX_EXTERNAL_DEVICE_LIBRARY_DEPENDENCIES_V1: usize = 256;
 pub const MAX_EXTERNAL_DEVICE_LIBRARY_CAPABILITIES_V1: usize = 64;
@@ -123,6 +128,10 @@ impl ExternalDeviceLlvmIdentityV1 {
         let target_triple = target_triple.into();
         let data_layout = data_layout.into();
         validate_ascii_token(&version, MAX_EXTERNAL_DEVICE_LIBRARY_LLVM_TOKEN_BYTES_V1)?;
+        let parsed_major = parse_llvm_major(&version)?;
+        if parsed_major != major {
+            return Err(ExternalDeviceLibraryManifestErrorV1::LlvmVersionMajorMismatch);
+        }
         validate_ascii_token(
             &target_triple,
             MAX_EXTERNAL_DEVICE_LIBRARY_LLVM_TOKEN_BYTES_V1,
@@ -131,6 +140,12 @@ impl ExternalDeviceLlvmIdentityV1 {
             &data_layout,
             MAX_EXTERNAL_DEVICE_LIBRARY_LLVM_DATA_LAYOUT_BYTES_V1,
         )?;
+        if target_triple != EXTERNAL_DEVICE_LIBRARY_TARGET_TRIPLE_V1 {
+            return Err(ExternalDeviceLibraryManifestErrorV1::InvalidLlvmTargetTriple);
+        }
+        if data_layout != EXTERNAL_DEVICE_LIBRARY_GFX942_DATA_LAYOUT_V1 {
+            return Err(ExternalDeviceLibraryManifestErrorV1::InvalidLlvmDataLayout);
+        }
         Ok(Self {
             major,
             version,
@@ -163,6 +178,16 @@ impl ExternalDeviceLlvmIdentityV1 {
 
     pub fn data_layout(&self) -> &str {
         &self.data_layout
+    }
+
+    /// Checks the LLVM properties required for direct bitcode/object linking.
+    ///
+    /// Exact producer version, commit, and executable identities remain bound in each manifest,
+    /// but compatible patch builds of the same LLVM major are not forced to be byte-identical.
+    pub fn is_link_compatible_with(&self, other: &Self) -> bool {
+        self.major == other.major
+            && self.target_triple == other.target_triple
+            && self.data_layout == other.data_layout
     }
 }
 
@@ -297,7 +322,6 @@ impl ExternalDeviceCapabilityIdentityV1 {
 pub enum ExternalDeviceSymbolRoleV1 {
     DeviceFunctionImport = 1,
     DeviceFunctionExport = 2,
-    KernelEntryExport = 3,
 }
 
 impl ExternalDeviceSymbolRoleV1 {
@@ -364,6 +388,13 @@ impl ExternalDeviceSymbolV1 {
         let effects = effects.into();
         validate_device_ffi_contract_grammar_v1(&symbol, &physical_abi, &effects)
             .map_err(ExternalDeviceLibraryManifestErrorV1::FfiGrammar)?;
+        if effects
+            .split(',')
+            .any(|effect| effect == "barrier_workgroup")
+            && convergence != ExternalDeviceConvergenceV1::Convergent
+        {
+            return Err(ExternalDeviceLibraryManifestErrorV1::BarrierRequiresConvergence);
+        }
         let address_spaces = address_spaces(&physical_abi)?;
         Ok(Self {
             role,
@@ -541,6 +572,7 @@ impl ExternalDeviceLibraryManifestV1 {
         if dependencies.len() > MAX_EXTERNAL_DEVICE_LIBRARY_DEPENDENCIES_V1 {
             return Err(ExternalDeviceLibraryManifestErrorV1::TooManyDependencies);
         }
+        validate_reviewed_profile(content, target, code_object_version, &llvm)?;
         validate_symbol_order(&symbols)?;
         validate_dependency_order(&dependencies)?;
         validate_symbol_uniqueness(&symbols)?;
@@ -723,8 +755,14 @@ pub enum ExternalDeviceLibraryManifestErrorV1 {
     MissingIdentity,
     InvalidText,
     InvalidLlvmIdentity,
+    LlvmVersionMajorMismatch,
+    InvalidLlvmTargetTriple,
+    InvalidLlvmDataLayout,
     InvalidTarget,
+    UnsupportedTargetProfile,
+    UnsupportedContentCodeObjectCombination,
     FfiGrammar(reserved_fe2o3_symbols::DeviceFfiGrammarError),
+    BarrierRequiresConvergence,
     EmptySymbolSet,
     TooManySymbols,
     TooManyDependencies,
@@ -760,8 +798,25 @@ impl fmt::Display for ExternalDeviceLibraryManifestErrorV1 {
             Self::MissingIdentity => formatter.write_str("required external identity is absent"),
             Self::InvalidText => formatter.write_str("invalid external device manifest text"),
             Self::InvalidLlvmIdentity => formatter.write_str("invalid LLVM identity"),
+            Self::LlvmVersionMajorMismatch => {
+                formatter.write_str("LLVM version spelling disagrees with its declared major")
+            }
+            Self::InvalidLlvmTargetTriple => {
+                formatter.write_str("LLVM target triple is not the reviewed AMDHSA triple")
+            }
+            Self::InvalidLlvmDataLayout => {
+                formatter.write_str("LLVM data layout is not reviewed for the target")
+            }
             Self::InvalidTarget => formatter.write_str("invalid device target"),
+            Self::UnsupportedTargetProfile => {
+                formatter.write_str("external device target profile is not reviewed")
+            }
+            Self::UnsupportedContentCodeObjectCombination => formatter
+                .write_str("external content kind and code-object version are not reviewed"),
             Self::FfiGrammar(error) => write!(formatter, "invalid device FFI contract: {error}"),
+            Self::BarrierRequiresConvergence => {
+                formatter.write_str("workgroup barrier effects require a convergent contract")
+            }
             Self::EmptySymbolSet => formatter.write_str("external device symbol set is empty"),
             Self::TooManySymbols => formatter.write_str("too many external device symbols"),
             Self::TooManyDependencies => formatter.write_str("too many external dependencies"),
@@ -847,6 +902,47 @@ fn validate_ascii_token(
     } else {
         Ok(())
     }
+}
+
+fn parse_llvm_major(version: &str) -> Result<u16, ExternalDeviceLibraryManifestErrorV1> {
+    let digit_count = version.bytes().take_while(u8::is_ascii_digit).count();
+    if digit_count == 0
+        || (digit_count > 1 && version.as_bytes()[0] == b'0')
+        || version
+            .as_bytes()
+            .get(digit_count)
+            .is_some_and(|separator| !matches!(separator, b'.' | b'-' | b'+'))
+    {
+        return Err(ExternalDeviceLibraryManifestErrorV1::InvalidLlvmIdentity);
+    }
+    version[..digit_count]
+        .parse()
+        .map_err(|_| ExternalDeviceLibraryManifestErrorV1::InvalidLlvmIdentity)
+}
+
+fn validate_reviewed_profile(
+    content: ExternalDeviceLibraryContentIdentityV1,
+    target: DeviceTargetV1,
+    code_object_version: CodeObjectVersion,
+    llvm: &ExternalDeviceLlvmIdentityV1,
+) -> Result<(), ExternalDeviceLibraryManifestErrorV1> {
+    if target.as_amd_target_id().processor() != "gfx942"
+        || llvm.target_triple() != EXTERNAL_DEVICE_LIBRARY_TARGET_TRIPLE_V1
+        || llvm.data_layout() != EXTERNAL_DEVICE_LIBRARY_GFX942_DATA_LAYOUT_V1
+    {
+        return Err(ExternalDeviceLibraryManifestErrorV1::UnsupportedTargetProfile);
+    }
+    if !matches!(
+        (content.kind(), code_object_version),
+        (
+            ExternalDeviceLibraryContentKindV1::LlvmBitcode
+                | ExternalDeviceLibraryContentKindV1::RelocatableObject,
+            CodeObjectVersion::V5 | CodeObjectVersion::V6
+        )
+    ) {
+        return Err(ExternalDeviceLibraryManifestErrorV1::UnsupportedContentCodeObjectCombination);
+    }
+    Ok(())
 }
 
 fn validate_ascii_text(text: &str, max: usize) -> Result<(), ExternalDeviceLibraryManifestErrorV1> {
@@ -960,10 +1056,10 @@ fn validate_dependency_closure(
         if !manifests.insert(dependency.manifest_identity) {
             return Err(ExternalDeviceLibraryManifestErrorV1::DuplicateDependencyManifest);
         }
-        if dependency.content_identity == own_content {
+        if dependency.content_identity.blob() == own_content.blob() {
             return Err(ExternalDeviceLibraryManifestErrorV1::SelfDependencyContent);
         }
-        if !contents.insert(dependency.content_identity) {
+        if !contents.insert(dependency.content_identity.blob()) {
             return Err(ExternalDeviceLibraryManifestErrorV1::DuplicateDependencyContent);
         }
         for symbol in &dependency.resolved_imports {
@@ -1254,7 +1350,6 @@ fn decode_symbol_role(
     match value {
         1 => Ok(ExternalDeviceSymbolRoleV1::DeviceFunctionImport),
         2 => Ok(ExternalDeviceSymbolRoleV1::DeviceFunctionExport),
-        3 => Ok(ExternalDeviceSymbolRoleV1::KernelEntryExport),
         _ => Err(ExternalDeviceLibraryManifestErrorV1::InvalidTag),
     }
 }

@@ -24,6 +24,7 @@ pub use descriptor_source::{
     CompilerDescriptorSourceIdentityV1, CompilerDescriptorSourceV1,
 };
 pub use external_device_library_manifest::{
+    EXTERNAL_DEVICE_LIBRARY_GFX942_DATA_LAYOUT_V1, EXTERNAL_DEVICE_LIBRARY_TARGET_TRIPLE_V1,
     ExternalDeviceAddressSpaceV1, ExternalDeviceBlobIdentityV1, ExternalDeviceCallingConventionV1,
     ExternalDeviceCapabilityIdentityV1, ExternalDeviceConvergenceV1,
     ExternalDeviceLibraryContentIdentityV1, ExternalDeviceLibraryContentKindV1,
