@@ -711,10 +711,7 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
     }
 
     fn is_exact_general_v3_alpha_zeta_context(&self) -> bool {
-        if self.function.kind != MirFunctionKind::KernelEntry
-            || self.function.typed_profile
-                != Some(MirKernelProfile::GeneralScalarSliceRustcLayoutV3)
-        {
+        if !self.is_general_v3_profile_context() {
             return false;
         }
         let mut arguments = self
@@ -738,6 +735,12 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
             }
             _ => false,
         }
+    }
+
+    fn is_general_v3_profile_context(&self) -> bool {
+        self.function.kind == MirFunctionKind::KernelEntry
+            && self.function.typed_profile
+                == Some(MirKernelProfile::GeneralScalarSliceRustcLayoutV3)
     }
 
     fn lower_block(&mut self, source: &MirBlock) -> Result<BasicBlock, TranslationDiagnostic> {
@@ -803,8 +806,10 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
             &statement.operands,
             &location,
         );
-        if let Some(lowered) = semantic_lowering::try_lower_assignment(self, assignment, block) {
-            return lowered;
+        match semantic_lowering::lower_assignment(self, assignment, block) {
+            semantic_lowering::LoweringOutcome::NotOwned => {}
+            semantic_lowering::LoweringOutcome::Lowered(()) => return Ok(()),
+            semantic_lowering::LoweringOutcome::Reject(diagnostic) => return Err(diagnostic),
         }
 
         match rvalue {
@@ -975,10 +980,10 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
         let location = TranslationLocation::terminator(self.function, block_index, terminator);
         let semantic_terminator =
             semantic_lowering::SemanticTerminator::new(&terminator.kind, &location);
-        if let Some(lowered) =
-            semantic_lowering::try_lower_terminator(self, semantic_terminator, block)
-        {
-            return lowered;
+        match semantic_lowering::lower_terminator(self, semantic_terminator, block) {
+            semantic_lowering::LoweringOutcome::NotOwned => {}
+            semantic_lowering::LoweringOutcome::Lowered(terminator) => return Ok(terminator),
+            semantic_lowering::LoweringOutcome::Reject(diagnostic) => return Err(diagnostic),
         }
 
         match &terminator.kind {
@@ -1219,15 +1224,22 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                 location,
             );
         }
-        if let Some(call) = semantic_lowering::AuthenticatedSemanticCall::new(
+        if let Some(call) = semantic_lowering::SessionRecognizedSemanticCall::new(
             callee,
             target,
             destination,
             operands,
             &location,
-        ) && let Some(lowered) = semantic_lowering::try_lower_call(self, call, block)
-        {
-            return lowered;
+        ) {
+            match semantic_lowering::lower_call(self, call, block) {
+                semantic_lowering::LoweringOutcome::NotOwned => {}
+                semantic_lowering::LoweringOutcome::Lowered(terminator) => {
+                    return Ok(terminator);
+                }
+                semantic_lowering::LoweringOutcome::Reject(diagnostic) => {
+                    return Err(diagnostic);
+                }
+            }
         }
 
         let arguments = operands
@@ -3172,7 +3184,7 @@ mod tests {
     }
 
     #[test]
-    fn canonical_looking_untrusted_callee_is_rejected() {
+    fn marker_free_canonical_spelling_is_not_session_recognized() {
         let identity = TrustedDeviceItem::ThreadIndex1d.canonical_path();
         let fixture = helper_call_fixture(MirCallee::untrusted_for_test(identity), &[]);
 
@@ -3181,6 +3193,31 @@ mod tests {
         assert!(errors.contains(TranslationDiagnosticCode::UnsupportedCall));
         assert!(errors.diagnostics().iter().any(|diagnostic| {
             diagnostic
+                .message
+                .contains("has no classified trusted device identity")
+        }));
+    }
+
+    #[test]
+    fn session_recognized_call_rejects_unsupported_context_without_fallback() {
+        let mut fixture = helper_call_fixture(
+            MirCallee::trusted_for_test(TrustedDeviceItem::ThreadIndex1d),
+            &[],
+        );
+        fixture.functions[0].typed_profile =
+            Some(MirKernelProfile::GeneralScalarSliceRustcLayoutV3);
+
+        let errors = translate_and_verify(&fixture)
+            .expect_err("recognized General V3 call outside its context must fail closed");
+
+        assert!(errors.contains(TranslationDiagnosticCode::UnsupportedCall));
+        assert!(errors.diagnostics().iter().any(|diagnostic| {
+            diagnostic.message.contains(
+                "session-recognized semantic call `fe2o3_device::thread::index_1d` requires an exact General V3 alpha/zeta kernel context",
+            )
+        }));
+        assert!(errors.diagnostics().iter().all(|diagnostic| {
+            !diagnostic
                 .message
                 .contains("has no classified trusted device identity")
         }));

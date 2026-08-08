@@ -1,52 +1,89 @@
 //! Exact semantic helpers for the bounded General V3 alpha/zeta profile.
 
-use super::{AuthenticatedSemanticCall, FunctionLowerer, TranslationDiagnostic};
+use super::{
+    FunctionLowerer, HandlerClaim, SemanticAssignment, SessionRecognizedSemanticCall,
+    TranslationDiagnostic,
+};
 use crate::kernel_ir_lowering::{LocalBinding, TranslationDiagnosticCode, diagnostic};
 use crate::mir_import::{MirBinaryOp, MirRvalueKind, MirTypeShape};
-use crate::semantic_features::AuthenticatedSemanticItem;
+use crate::semantic_features::SessionRecognizedSemanticItem;
 use crate::trusted_device_items::TrustedDeviceItem;
 use fe2o3_kernel_ir::{
     AccessMode, BasicBlock, ComparePredicate, IntrinsicOperation, OperationKind, Terminator, Type,
 };
 
-pub(super) fn try_lower_call(
-    lowerer: &mut FunctionLowerer<'_, '_>,
-    call: AuthenticatedSemanticCall<'_>,
-    block: &mut BasicBlock,
-) -> Option<Result<Terminator, TranslationDiagnostic>> {
-    if !lowerer.is_exact_general_v3_alpha_zeta_context() {
-        return None;
+pub(super) fn claim_call(
+    lowerer: &FunctionLowerer<'_, '_>,
+    call: SessionRecognizedSemanticCall<'_>,
+) -> HandlerClaim {
+    let owned = matches!(
+        call.item,
+        SessionRecognizedSemanticItem::TrustedDevice(
+            TrustedDeviceItem::ThreadIndex1d
+                | TrustedDeviceItem::ThreadIndexGet
+                | TrustedDeviceItem::DisjointSliceGetMut
+        )
+    );
+    if !owned {
+        return HandlerClaim::NotOwned;
     }
+    if !lowerer.is_general_v3_profile_context() {
+        return HandlerClaim::NotOwned;
+    }
+    if !lowerer.is_exact_general_v3_alpha_zeta_context() {
+        return HandlerClaim::Reject(diagnostic(
+            TranslationDiagnosticCode::UnsupportedCall,
+            call.location.clone(),
+            format!(
+                "session-recognized semantic call `{}` requires an exact General V3 alpha/zeta kernel context",
+                call.callee.identity()
+            ),
+        ));
+    }
+    HandlerClaim::Owned
+}
 
+pub(super) fn lower_call(
+    lowerer: &mut FunctionLowerer<'_, '_>,
+    call: SessionRecognizedSemanticCall<'_>,
+    block: &mut BasicBlock,
+) -> Result<Terminator, TranslationDiagnostic> {
     match call.item {
-        AuthenticatedSemanticItem::TrustedDevice(TrustedDeviceItem::ThreadIndex1d) => {
-            Some(lower_thread_index_1d(lowerer, call, block))
+        SessionRecognizedSemanticItem::TrustedDevice(TrustedDeviceItem::ThreadIndex1d) => {
+            lower_thread_index_1d(lowerer, call, block)
         }
-        AuthenticatedSemanticItem::TrustedDevice(TrustedDeviceItem::ThreadIndexGet) => {
-            Some(lower_thread_index_get(lowerer, call, block))
+        SessionRecognizedSemanticItem::TrustedDevice(TrustedDeviceItem::ThreadIndexGet) => {
+            lower_thread_index_get(lowerer, call, block)
         }
-        AuthenticatedSemanticItem::TrustedDevice(TrustedDeviceItem::DisjointSliceGetMut) => {
-            Some(lower_disjoint_slice_get_mut(lowerer, call, block))
+        SessionRecognizedSemanticItem::TrustedDevice(TrustedDeviceItem::DisjointSliceGetMut) => {
+            lower_disjoint_slice_get_mut(lowerer, call, block)
         }
-        _ => None,
+        _ => unreachable!("only claimed General V3 calls may be lowered"),
     }
 }
 
-pub(super) fn try_lower_assignment(
-    lowerer: &mut FunctionLowerer<'_, '_>,
-    assignment: super::SemanticAssignment<'_>,
-    block: &mut BasicBlock,
-) -> Option<Result<(), TranslationDiagnostic>> {
-    if assignment.rvalue != MirRvalueKind::Binary(MirBinaryOp::Mul) {
-        return None;
+pub(super) fn claim_assignment(
+    _lowerer: &FunctionLowerer<'_, '_>,
+    assignment: SemanticAssignment<'_>,
+) -> HandlerClaim {
+    if assignment.rvalue == MirRvalueKind::Binary(MirBinaryOp::Mul) {
+        HandlerClaim::Owned
+    } else {
+        HandlerClaim::NotOwned
     }
+}
 
-    Some(lower_f32_multiply_assignment(lowerer, assignment, block))
+pub(super) fn lower_assignment(
+    lowerer: &mut FunctionLowerer<'_, '_>,
+    assignment: SemanticAssignment<'_>,
+    block: &mut BasicBlock,
+) -> Result<(), TranslationDiagnostic> {
+    lower_f32_multiply_assignment(lowerer, assignment, block)
 }
 
 fn lower_f32_multiply_assignment(
     lowerer: &mut FunctionLowerer<'_, '_>,
-    assignment: super::SemanticAssignment<'_>,
+    assignment: SemanticAssignment<'_>,
     block: &mut BasicBlock,
 ) -> Result<(), TranslationDiagnostic> {
     let [lhs, rhs] = assignment.operands else {
@@ -102,7 +139,7 @@ fn lower_f32_multiply_assignment(
 
 fn lower_thread_index_1d(
     lowerer: &mut FunctionLowerer<'_, '_>,
-    call: AuthenticatedSemanticCall<'_>,
+    call: SessionRecognizedSemanticCall<'_>,
     block: &mut BasicBlock,
 ) -> Result<Terminator, TranslationDiagnostic> {
     if !call.operands.is_empty() {
@@ -145,7 +182,7 @@ fn lower_thread_index_1d(
 
 fn lower_thread_index_get(
     lowerer: &mut FunctionLowerer<'_, '_>,
-    call: AuthenticatedSemanticCall<'_>,
+    call: SessionRecognizedSemanticCall<'_>,
     block: &mut BasicBlock,
 ) -> Result<Terminator, TranslationDiagnostic> {
     let [receiver] = call.operands else {
@@ -173,7 +210,7 @@ fn lower_thread_index_get(
 
 fn lower_disjoint_slice_get_mut(
     lowerer: &mut FunctionLowerer<'_, '_>,
-    call: AuthenticatedSemanticCall<'_>,
+    call: SessionRecognizedSemanticCall<'_>,
     block: &mut BasicBlock,
 ) -> Result<Terminator, TranslationDiagnostic> {
     let [receiver, index] = call.operands else {
