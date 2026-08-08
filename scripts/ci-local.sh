@@ -28,6 +28,7 @@ readonly CPU_TEST_PACKAGES=(
   fe2o3-rustc-front
   fe2o3-rustc-invocation
   fe2o3-verifier
+  fe2o3-worker-v2-bundle
   reserved-fe2o3-symbols
 )
 
