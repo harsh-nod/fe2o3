@@ -305,3 +305,31 @@ V2 decoder accepts both versions while enforcing the tags legal for the actual
 header version. The frozen V1 golden fixture is `tests/fixtures/full_v1.hex`;
 the independent V2 fixtures are `tests/fixtures/g4_sync_v2.hex` and
 `tests/fixtures/integer_switch_v2.hex`.
+
+## Separate Semantic Operation Identities
+
+encode_semantic_operation_id and decode_semantic_operation_id use a separate
+fixed-width identity format with magic FE2O3SO. This registry names reviewed
+target-neutral semantics; it is not a module encoding and does not change V1,
+V2, or V3 module bytes.
+
+The 16-byte V1 identity is:
+
+```text
+byte[8] magic = "FE2O3SO\0"
+u16     version = 1
+u8      family
+u8      reserved = 0
+u16     family-local opcode
+u16     reserved = 0
+```
+
+Family tags reserve namespaces for memory intrinsics, collectives, debugging,
+launch semantics, and matrix operations. A recognized family with an unknown
+opcode is still rejected. Reserved bytes, unknown versions, unknown families,
+truncation, and trailing bytes also fail closed.
+
+An identity contains no payload and grants no lowering authority. A semantic
+operation also needs a strongly typed payload implementing SemanticOperation,
+closed OperationKind admission, verification, and backend support. Serializing
+such a payload requires an explicitly new module wire version.

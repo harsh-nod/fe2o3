@@ -7,8 +7,9 @@ use crate::{
     AssemblyOption, Atomic, AtomicKind, Barrier, BasicBlock, BinaryOp, BlockId, ComparePredicate,
     Fence, FloatOperation, Function, FunctionId, FunctionRole, InlineAssembly, Kernel, KernelId,
     LaunchExtent, MemoryOrdering, Module, ModuleId, Operation, OperationKind, ScalarType,
-    SynchronizationScope, TargetCapability, Terminator, Type, UnaryOp, ValueId, WaveOperation,
-    WaveOperationKind, WorkgroupBarrier, WorkgroupMemory, WorkgroupMemoryExtent, pointer_for,
+    SemanticOperationIssueKind, SemanticOperationVerificationContext, SynchronizationScope,
+    TargetCapability, Terminator, Type, UnaryOp, ValueId, WaveOperation, WaveOperationKind,
+    WorkgroupBarrier, WorkgroupMemory, WorkgroupMemoryExtent, pointer_for,
 };
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -41,6 +42,7 @@ pub enum DiagnosticCode {
     ResultArity,
     TypeMismatch,
     InvalidOperandType,
+    InvalidSemanticOperation,
     InvalidMemoryAccess,
     InvalidAlignment,
     InvalidBarrier,
@@ -773,27 +775,39 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
             }
         }
 
+        if let Some(semantic) = operation.kind.semantic_operation() {
+            let contract = semantic.contract();
+            let operand_types = contract
+                .operands
+                .iter()
+                .map(|operand| self.ty(*operand).cloned())
+                .collect::<Vec<_>>();
+            let issues = semantic.verify(SemanticOperationVerificationContext {
+                results: &operation.results,
+                operand_types: &operand_types,
+            });
+            for issue in issues {
+                let code = match issue.kind {
+                    SemanticOperationIssueKind::InvalidStructure => {
+                        DiagnosticCode::InvalidSemanticOperation
+                    }
+                    SemanticOperationIssueKind::InvalidOperandType => {
+                        DiagnosticCode::InvalidOperandType
+                    }
+                    SemanticOperationIssueKind::ResultArity => DiagnosticCode::ResultArity,
+                    SemanticOperationIssueKind::TypeMismatch => DiagnosticCode::TypeMismatch,
+                };
+                self.emit(location.clone(), code, issue.message);
+            }
+            return;
+        }
+
         match &operation.kind {
             OperationKind::Constant(constant) => {
                 self.expect_results(operation, &[constant.ty()], location);
             }
-            OperationKind::Intrinsic(intrinsic) => {
-                let metadata = intrinsic.metadata();
-                if intrinsic.result_type != metadata.result_type {
-                    self.emit(
-                        location.clone(),
-                        DiagnosticCode::TypeMismatch,
-                        format!(
-                            "intrinsic declares result type {:?}, expected {:?}",
-                            intrinsic.result_type, metadata.result_type
-                        ),
-                    );
-                }
-                self.expect_results(
-                    operation,
-                    std::slice::from_ref(&intrinsic.result_type),
-                    location,
-                );
+            OperationKind::Intrinsic(_) => {
+                unreachable!("semantic operations return before legacy operation verification")
             }
             OperationKind::Unary { op, operand } => {
                 let Some(ty) = self.ty(*operand).cloned() else {

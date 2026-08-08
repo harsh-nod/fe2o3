@@ -13,6 +13,10 @@
 //! V1/V2/V3 reconstruct kernel-entry and import roles from their legacy records;
 //! they reject device-FFI exports because the frozen function records cannot
 //! distinguish those definitions from internal helpers.
+//!
+//! SemanticOperation is the versioned extension boundary for typed
+//! target-neutral operation families. Its standalone identity codec does not
+//! alter or extend any frozen module wire format.
 
 mod effect_extraction;
 mod formal_memory_obligations;

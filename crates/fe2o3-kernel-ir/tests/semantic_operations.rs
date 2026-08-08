@@ -124,6 +124,32 @@ fn existing_launch_intrinsic_exposes_a_target_neutral_contract() {
 }
 
 #[test]
+fn operation_queries_use_the_semantic_contract_without_changing_behavior() {
+    let intrinsic = launch_extent();
+    let operation = Operation::effect_free(
+        ValueDef::new(ValueId(7), Type::INDEX),
+        OperationKind::Intrinsic(intrinsic.clone()),
+    );
+    let semantic = operation
+        .kind
+        .semantic_operation()
+        .expect("launch intrinsic is a registered semantic operation");
+
+    assert_eq!(semantic.contract(), intrinsic.contract());
+    assert_eq!(operation.kind.operands(), intrinsic.contract().operands);
+    assert_eq!(operation.memory_effects(), Vec::<MemoryEffect>::new());
+    assert_eq!(
+        operation.required_capabilities(),
+        BTreeSet::<TargetCapability>::new()
+    );
+    assert!(
+        OperationKind::Constant(Constant::U32(1))
+            .semantic_operation()
+            .is_none()
+    );
+}
+
+#[test]
 fn semantic_verifier_reports_shape_and_declared_type_failures() {
     let intrinsic =
         IntrinsicOperation::new(IntrinsicKind::LaunchExtent { axis: Axis::X }, Type::F32);

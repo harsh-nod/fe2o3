@@ -3,7 +3,7 @@ use std::fmt;
 
 use crate::{
     AccessMode, AddressSpace, Axis, BarrierSemantics, LaunchDomain, MemoryOrdering, ScalarType,
-    SynchronizationScope, TargetCapability, Type, WaveWidth, WorkgroupSize,
+    SemanticOperation, SynchronizationScope, TargetCapability, Type, WaveWidth, WorkgroupSize,
 };
 
 macro_rules! string_id {
@@ -361,14 +361,13 @@ impl Operation {
     }
 
     pub fn memory_effects(&self) -> Vec<MemoryEffect> {
+        if let Some(semantic) = self.kind.semantic_operation() {
+            return semantic.contract().memory_effects;
+        }
         match &self.kind {
-            OperationKind::Intrinsic(intrinsic) => intrinsic
-                .metadata()
-                .memory_effects
-                .effects()
-                .iter()
-                .cloned()
-                .collect(),
+            OperationKind::Intrinsic(_) => {
+                unreachable!("semantic operations return before legacy operation dispatch")
+            }
             OperationKind::Alloca { address_space, .. } => {
                 vec![MemoryEffect::Allocate(*address_space)]
             }
@@ -410,8 +409,13 @@ impl Operation {
     }
 
     pub fn required_capabilities(&self) -> BTreeSet<TargetCapability> {
+        if let Some(semantic) = self.kind.semantic_operation() {
+            return semantic.contract().required_capabilities;
+        }
         match &self.kind {
-            OperationKind::Intrinsic(intrinsic) => intrinsic.metadata().required_capabilities,
+            OperationKind::Intrinsic(_) => {
+                unreachable!("semantic operations return before legacy operation dispatch")
+            }
             OperationKind::Alloca {
                 count,
                 address_space: AddressSpace::Workgroup,
@@ -555,10 +559,20 @@ pub enum OperationKind {
 }
 
 impl OperationKind {
+    /// Returns the common target-neutral contract for registered semantic operations.
+    pub fn semantic_operation(&self) -> Option<&dyn SemanticOperation> {
+        match self {
+            Self::Intrinsic(intrinsic) => Some(intrinsic),
+            _ => None,
+        }
+    }
+
     pub fn operands(&self) -> Vec<ValueId> {
+        if let Some(semantic) = self.semantic_operation() {
+            return semantic.contract().operands;
+        }
         match self {
             Self::Constant(_)
-            | Self::Intrinsic(_)
             | Self::Barrier(_)
             | Self::Fence(_)
             | Self::WorkgroupBarrier(_)
@@ -570,6 +584,9 @@ impl OperationKind {
             Self::Unary { operand, .. } => vec![*operand],
             Self::Binary { lhs, rhs, .. } | Self::Compare { lhs, rhs, .. } => vec![*lhs, *rhs],
             Self::Cast { value, .. } => vec![*value],
+            Self::Intrinsic(_) => {
+                unreachable!("semantic operations return before legacy operation dispatch")
+            }
             Self::Select {
                 condition,
                 true_value,

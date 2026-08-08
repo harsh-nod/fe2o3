@@ -99,6 +99,26 @@ effects, and required capabilities together. Vendor-specific operations belong
 in a later extension dialect or target-lowering layer. Unknown semantics must
 never be represented as unstructured strings in this core IR.
 
+### Semantic operation boundary
+
+The semantic_operations module owns a versioned identity registry and the
+SemanticOperation contract hook. Its stable families cover memory intrinsics,
+collectives, debugging, launch queries and constraints, and matrix operations
+without selecting a vendor dialect.
+
+A family identity is not executable authority. Adding an operation requires:
+
+1. A closed family-local opcode and strongly typed payload.
+2. Explicit operands, result types, memory effects, and capabilities.
+3. Payload-specific structural and type verification.
+4. A closed OperationKind admission path.
+5. A new module wire version if the operation must be serialized.
+6. An explicit backend lowering and target-capability check.
+
+Unknown versions, families, and family-local opcodes fail closed. The existing
+launch intrinsics implement the contract to exercise the boundary while
+preserving their original representation and behavior.
+
 ## Canonical Wire Format
 
 `Module` has bounded deterministic V1 and V2 binary representations documented in
