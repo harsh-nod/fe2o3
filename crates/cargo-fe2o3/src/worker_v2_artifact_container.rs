@@ -47,8 +47,9 @@ pub(crate) struct WorkerV2DescriptorKernelLineageV1 {
 
 /// Inert result of assembling the two-entry container from one finalized publication snapshot.
 ///
-/// The complete publication plan and receipt fields are retained because `ArtifactContainerV1`
-/// has no slots for them. This value is deliberately not a publication lease or currentness token.
+/// A bounded subset of publication and descriptor lineage is retained because
+/// `ArtifactContainerV1` has no slots for it. The complete plan, receipt, raw
+/// bytes, bundle/proof evidence, and currentness lease are not retained.
 #[derive(Debug)]
 pub(crate) struct PreparedWorkerV2ArtifactContainerV1 {
     container: ArtifactContainerV1,
@@ -339,8 +340,9 @@ const ZETA_FIELDS: [FrozenFieldV1; 4] = [
 /// Prepares one deterministic two-entry container from typed Worker V2 publication evidence.
 ///
 /// This test-only adapter deliberately has no container or serialization accessor. A production
-/// caller must first define a durable envelope that binds all retained lineage to the container and
-/// carries the publication lease into host admission.
+/// caller must first define a durable envelope that binds all required lineage
+/// to the container, then reacquire a fresh process-local publication lease for
+/// host admission. A lease must not be serialized in that envelope.
 pub(crate) fn prepare_worker_v2_artifact_container_v1(
     producer: &ProducerIdentity,
     plan: DurableLinkPublicationPlanV1,

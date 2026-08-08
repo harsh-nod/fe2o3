@@ -2,7 +2,7 @@
 
 Status: execution plan for parallel implementation.
 
-Implementation checkpoint: `daf0b459ced07a25376670c83b1474eaebcd1a68`.
+Implementation checkpoint: `dc9738e367c392f7716eacb8459ca73fa32abbbb`.
 
 This roadmap turns [architecture-v2.md](architecture-v2.md),
 [verification-model.md](verification-model.md), the
@@ -94,10 +94,10 @@ and reviewed HSA argument initializer still implement only the exact vecadd
 profile, and the second host selection is deliberately inert. No parity row is
 promoted by this checkpoint.
 
-## Implemented Alpha/Zeta gfx942 Checkpoint: `daf0b459`
+## Implemented Alpha/Zeta gfx942 Checkpoint: `dc9738e`
 
 The post-snapshot implementation through
-`daf0b459ced07a25376670c83b1474eaebcd1a68` completes the bounded alpha/zeta
+`dc9738e367c392f7716eacb8459ca73fa32abbbb` completes the bounded alpha/zeta
 compiler-to-HSACO path and exercises the exact artifact on MI300X:
 
 - `#[kernel(typed)]` preserves the exact vecadd V2 expansion and emits an
@@ -163,39 +163,54 @@ compiler-to-HSACO path and exercises the exact artifact on MI300X:
   `3a916cdabca05ac74d340889aab2067221d6d1252a7cde13e61c1786252565c4`.
   The opt-in raw MI300X harness loads one executable and runs both kernels for
   lengths `1`, `255`, `256`, `257`, and `1023`; independent CPU oracles and
-  all prefix/suffix canaries pass.
+  all prefix/suffix canaries pass; and
+- a second ignored MI300X harness passes the same digest and matrix through
+  generated checked slice capabilities, typed alpha/zeta selection and
+  preparation, the reviewed load/resolve/dispatch/unload lifecycle, and safe
+  `dispatch`. Its semantic witnesses and prerequisite authenticator are
+  explicit test fixtures, so this is runtime-composition evidence only.
 
 This checkpoint supplies exact-digest source, compiler, direct LLVM/LLD,
-COV6, and `gfx942` hardware evidence. The harness still injects the exported
-HSACO and calls a reviewed raw unsafe HSA adapter instead of the generated
-alpha/zeta safe SPI. Durable publication, finalized-bundle admission,
-currentness lease revalidation, the authenticated load state machine, generated
-safe dispatch SPI, and the reviewed `fe2o3-hsa-runtime` adapter already exist.
-The gaps are the inert/test-only Cargo artifact-container adapter and the lack
-of a production `WorkerV2PrerequisiteAuthenticatorV1` implementation that can
-connect those pieces. No machine-code effect evidence or Verus result is bound
-to the payload. Therefore this is not production safe dispatch, no parity row
-is promoted solely by this checkpoint, repository-wide CUDA-Oxide parity is
-not claimed, and Complete remains `0`.
+COV6, raw hardware, and generated-safe runtime-composition evidence. Both
+harnesses still inject the exported HSACO, and the safe harness uses an
+explicitly fake authenticator. Cargo drops the live publication lease after
+retaining only a receipt; no durable lease reacquisition API, canonical Worker
+V2 load envelope, recovered host admission path, or application bundle handoff
+exists. The Cargo artifact adapter remains test-only, and no production
+`WorkerV2PrerequisiteAuthenticatorV1`, machine-code effect evidence, or bound
+Verus result exists. Therefore this is not production proof-authenticated safe
+dispatch, no parity row is promoted solely by this checkpoint,
+repository-wide CUDA-Oxide parity is not claimed, and Complete remains `0`.
 
-## Ordered Critical Milestones After `daf0b459`
+## Ordered Critical Milestones After `dc9738e`
 
 These milestones are sequential authority gates. Work inside one milestone can
 be parallelized, but a later gate must not manufacture evidence that assumes an
 earlier authority transition.
 
-1. **Production Cargo adapter, prerequisite authenticator, and safe-SPI
-   exercise.** Promote the deterministic Worker V2 artifact-container adapter
-   out of `cfg(test)` and expose the production container/evidence result needed
-   by existing finalized-bundle admission. Implement a production
-   `WorkerV2PrerequisiteAuthenticatorV1` that authenticates immutable compiler
-   and verifier executions and binds the complete ABI and executable effects.
-   Compose these with the existing durable publication, currentness lease,
-   authenticated load state machine, generated alpha/zeta safe dispatch SPI,
-   and reviewed runtime adapter. Exit by running the MI300X matrix without the
-   external-HSACO handoff while all stale, substitution, restart, and
-   authenticator mutation tests remain fail-closed.
-2. **Machine-code effect validation tied to evidence.** Add a bounded validator
+1. **Durable publication-lease reacquisition.** Add a canonical inert published
+   claim and an API that revalidates its receipt, complete plan, exact files,
+   current generation, path identity, and lock before returning a fresh
+   non-clone lease. Reject stale generations, mutation, replacement, and lock
+   contention.
+2. **Sealed finalizer intent and raw/final snapshots.** Move publication-plan
+   derivation behind `fe2o3-hsaco-finalize`, remove Cargo's duplicate domain
+   hashes, and retain exact raw and finalized snapshots through crash recovery
+   and migration.
+3. **Canonical Worker V2 load envelope.** Add a bounded shared wire type for the
+   artifact container, bundle/proof index, direct-link evidence, descriptor
+   lineage, raw HSACO, finalized payload identity, and published claim. A lease
+   is process-local authority and must never be serialized.
+4. **Production Cargo envelope publication.** Promote the adapter out of
+   `cfg(test)`, assemble only from sealed inputs, and durably publish the
+   envelope before clearing restart state or completing the build attempt.
+5. **Recovered host admission and application handoff.** Decode the envelope,
+   reacquire a fresh lease, and re-run bundle, lineage, raw/final semantic,
+   physical ABI, currentness, and marker checks. Pass only a read-only pinned
+   descriptor to the application; it is transport, not authority. Exit by
+   running the generated-safe MI300X matrix without an external-HSACO handoff,
+   retaining the explicit fake-authenticator label.
+6. **Machine-code effect validation tied to evidence.** Add a bounded validator
    for finalized entry points and their closed call graphs. Record accepted
    global reads/writes and address derivations against compiler ABI/effects,
    reject indirect/unknown calls and effect expansion, and bind the result to
@@ -203,23 +218,56 @@ earlier authority transition.
    Admission must consume this evidence; a changed instruction byte, descriptor,
    effect, call edge, or analyzer identity must invalidate it. Hardware success
    remains an independent evidence class.
-3. **Verus proofs and proof-artifact binding.** Prove alpha/zeta bounds, address
+7. **Verus proofs and proof-artifact binding.** Prove alpha/zeta bounds, address
    overflow freedom, initialization, injective writes/race freedom, and
    functional postconditions. Bind source and dependency identity, ABI/effects,
    launch contract, Verus/solver identity, proof result, machine-code evidence,
    and finalized payload in the artifact. Add rejected mutations and stale proof
    replay tests, then make proof-required admission fail closed.
-4. **Split mutable views.** Add a safe `split_at_mut`-style operation that yields
+8. **Production prerequisite authentication.** Implement
+   `WorkerV2PrerequisiteAuthenticatorV1` only from reviewed immutable compiler,
+   Verus/solver, proof-to-executable, Rust-layout, and machine-effect records.
+   Every digest, identity, mutation, and stale-replay edge must fail closed.
+9. **Split mutable views.** Add a safe `split_at_mut`-style operation that yields
    simultaneous non-overlapping mutable views of one allocation while retaining
    parent identity and exact allocation-relative intervals. Test overlap,
    overflow, lifetime escape, rejoin/drop order, packing, and in-flight alias
    rejection; finish with a same-allocation split-view MI300X kernel.
-5. **Feature and architecture breadth.** Generalize beyond exact alpha/zeta only
+10. **Feature and architecture breadth.** Generalize beyond exact alpha/zeta only
    after the preceding authority/evidence gates: additional signatures and Rust
    semantics, core AMD operations, async/runtime behavior, then `gfx1151` and
    `gfx950` compile and hardware lanes. Every capability needs target gating,
    negative tests, differential oracles, and evidence scoped to its exact
    architecture.
+
+### Parallel delivery shape
+
+After the published-claim interface is frozen, milestone 1, milestone 2, and
+the milestone 3 envelope schema have disjoint primary ownership and can start
+in parallel. Cargo envelope publication and recovered host admission can then
+proceed in parallel against the frozen wire and claim APIs. Application handoff
+is their integration gate.
+
+The production authenticator must not be implemented from today's descriptive
+digests. Its independent evidence lanes are:
+
+- a non-`Clone`, persistently fresh multi-kernel proof set and honest separation
+  of safe-dispatch properties from full IEEE-754 functional correctness;
+- a canonical proof-input/dependency capsule and reviewed Verus/solver recorder
+  that derives properties from actual sealed execution;
+- an authenticated compiler transaction binding source closure, rustc/backend
+  invocation, semantic witnesses, Kernel IR, Worker response, and final HSACO;
+- a finalized `gfx942` LLVM Object/MC machine-effect analyzer for the closed
+  alpha/zeta call graphs; and
+- an evidence join plus rollback anchor that grants no authority until every
+  identity, currentness, proof, compiler, ABI, and machine-effect edge agrees.
+
+These lanes can execute concurrently after their shared identity records are
+frozen. The first sound production profile is a measured trusted-toolchain
+derivation for exact `gfx942:xnack-` COV6 alpha/zeta, not a claim that Verus
+proves compiler-to-machine-code refinement. The sole production unsafe
+authenticator implementation is the final integration PR and accepts no
+caller-supplied evidence digest.
 
 ## G0: Baseline and Safety Boundary
 
@@ -390,8 +438,9 @@ Parallel ownership is split at frozen records:
 | G3.1-D: HSA dispatch | multi-symbol resolution, reviewed COV6 hidden arguments, queue submission, completion, unload ordering | Generic synchronous dispatch for an admitted kernel descriptor |
 | G3.1-E: adversarial tests | UI tests, mutation tests, CPU oracles, MI300X execution evidence | Reproducible positive and fail-closed evidence |
 
-Progress at `daf0b459` completes the bounded raw vertical slice but not the
-production authority gate. G3.1-A has V3 registration, rustc-semantic
+Progress at `dc9738e` completes the bounded raw and generated-safe test
+vertical slices but not the production authority gate. G3.1-A has V3
+registration, rustc-semantic
 reconstruction, authenticated alpha/zeta role and ABI naming, guarded typed
 lowering, exact descriptors, and linked backend witnesses. G3.1-C has checked
 buffer views, allocation-relative capabilities, generated exact `Arguments`,
@@ -399,20 +448,20 @@ safe preparation, retained packing/alias lifetimes, and linear synchronous
 dispatch. Worker V2 supplies canonical COV6 publication and restart recovery to
 G3.1-B; explicit/complete kernarg reconciliation and post-optimization implicit
 ABI canonicalization now permit the genuine two-entry build to publish.
-G3.1-E records the exact SHA-256 and a passing raw MI300X run of alpha and zeta
-at lengths `1`, `255`, `256`, `257`, and `1023`, including independent oracles
-and canaries.
+G3.1-E records the exact SHA-256 and passing raw and generated-safe MI300X runs
+of alpha and zeta at lengths `1`, `255`, `256`, `257`, and `1023`, including
+independent oracles and canaries. The safe run uses an explicitly fake
+prerequisite authenticator and test-only witnesses.
 
 Durable publication, finalized-bundle admission, currentness lease
 revalidation, the authenticated load state machine, generated alpha/zeta safe
 dispatch SPI, and the reviewed runtime adapter already exist. Still missing are
-the production Cargo artifact-container adapter and a production
-`WorkerV2PrerequisiteAuthenticatorV1`; the hardware harness instead crosses the
-reviewed raw unsafe boundary with an externally provided digest-pinned file.
-Machine-code effects and Verus proofs are not bound to the artifact, and safe
-split mutable views over one allocation are not implemented. These are the
-first four ordered critical milestones above; the feature/architecture breadth
-milestone follows them.
+durable lease reacquisition, a canonical Worker V2 load envelope, production
+Cargo publication and application handoff, recovered host admission, and a
+production `WorkerV2PrerequisiteAuthenticatorV1`. Machine-code effects and
+Verus proofs are not bound to the artifact, and safe split mutable views over
+one allocation are not implemented. These are the ordered critical milestones
+above; feature and architecture breadth follows them.
 
 The compiler ABI descriptor is the integration boundary. Runtime code may
 compare an untrusted manifest with a compiler-generated descriptor, but it may

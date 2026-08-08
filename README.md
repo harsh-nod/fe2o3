@@ -347,15 +347,24 @@ turn the foundations below into end-to-end features.
   it is evidence for the generated artifact's code, ABI, and behavior, not an
   execution of the production generated adapter or a general safety proof.
 
+  At commit `dc9738e367c392f7716eacb8459ca73fa32abbbb`, a second ignored
+  MI300X test passed the same digest and boundary-length matrix through the
+  generated alpha/zeta argument capabilities, selected-kernel preparation,
+  reviewed load/resolve/dispatch/unload lifecycle, and safe `dispatch` SPI.
+  It uses an explicitly fake prerequisite authenticator and test-only semantic
+  witnesses, so it validates runtime composition and hardware behavior but is
+  not production authentication, Verus evidence, or a machine-code safety
+  proof.
+
   Compiler identity and origin are not authenticated, no Verus result or
   compiler/machine-code refinement proof is authenticated and bound to this
   executable, and the publication receipt grants no HSA load or launch
   authority. On the MI300X `gfx942:xnack-` lane, the ignored real-Cargo
-  alpha/zeta Worker V2 publication test and the digest-pinned raw HSA hardware
-  test pass alongside the earlier direct-source and external-bitcode-provider
-  publication tests. The hardware test does not call the generated alpha/zeta
-  safe SPI, and no production prerequisite authenticator can yet authorize that
-  SPI from authenticated compiler/proof/effect evidence.
+  alpha/zeta Worker V2 publication test and the digest-pinned HSA hardware
+  tests pass alongside the earlier direct-source and external-bitcode-provider
+  publication tests. Both the raw and generated-safe hardware paths are now
+  exercised, but no production prerequisite authenticator can authorize the
+  safe SPI from authenticated compiler/proof/effect evidence.
 - G8 adds deterministic model generation/reduction and a bounded conformance
   harness that executes fill, vecadd, and affine kernels against an independent
   HIP/CPU oracle. `cargo fe2o3 inspect` performs bounded read-only decoding.
@@ -379,17 +388,23 @@ turn the foundations below into end-to-end features.
   packing foundations. Exact alpha/zeta `Arguments` now have macro-emitted
   preparation/dispatch adapters; other signatures remain inert.
   Aggregates, return values, and arbitrary rustc layouts also remain outside V3.
-  Cargo can assemble an inert descriptor-bound
-  `ArtifactContainerV1` candidate from exact Worker V2 publication evidence.
-  The result deliberately grants no current-publication, load, or launch
-  authority. This Cargo adapter remains test-only/inert even though durable
-  publication, finalized-bundle admission, currentness leasing, authenticated
-  loading, generated alpha/zeta safe dispatch, and the reviewed HSA runtime
-  adapter exist elsewhere. The production composition stops at
-  `WorkerV2PrerequisiteAuthenticatorV1`: only fake/test implementations exist,
-  so compiler, Verus/proof, and machine-effect evidence cannot yet be
-  authentically promoted into safe dispatch. The current hardware test instead
-  uses reviewed raw unsafe packing.
+  Cargo can assemble an inert descriptor-bound `ArtifactContainerV1` candidate
+  from exact Worker V2 publication evidence. The result deliberately grants no
+  current-publication, load, or launch authority. This adapter remains
+  test-only, is not serialized or handed to an application, and does not retain
+  the complete Worker V2 plan, receipt, raw/finalized lineage, bundle index, or
+  proof evidence. Cargo currently reduces a completed durable publication to a
+  receipt and drops the process-local currentness lease; there is no production
+  API to reacquire that lease from durable state, no canonical load envelope,
+  and no recovered-admission constructor in the host runtime. The application
+  runner receives no pinned bundle descriptor.
+
+  Separately, only fake/test implementations of
+  `WorkerV2PrerequisiteAuthenticatorV1` exist, so compiler, Verus/proof, Rust
+  ABI, and machine-effect evidence cannot yet be authentically promoted into
+  safe dispatch. The generated-safe MI300X test proves that the existing host
+  and HSA state machines compose once supplied with test authority; it does not
+  close any of these production or proof gaps.
 - Checked mutable views preserve provenance and exclusive borrowing, but the
   API does not yet construct multiple simultaneously live disjoint mutable
   subviews of one allocation with a mechanical split proof. The mutable

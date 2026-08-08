@@ -25,7 +25,7 @@ The fe2o3 current-state column is based on commit
 <!-- parity-status:baseline:end -->
 
 Post-snapshot updates through
-`daf0b459ced07a25376670c83b1474eaebcd1a68` extend the bounded `gfx942`
+`dc9738e367c392f7716eacb8459ca73fa32abbbb` extend the bounded `gfx942`
 Worker V2 and general typed G3.1 foundations without changing any row to
 Complete. The earlier `90b6fe31cbb1d89b82755f194ac7950c4eef4756`
 checkpoint carries the archived remote compile/publication evidence: one
@@ -76,18 +76,25 @@ The feature-gated hardware lane loaded that digest-pinned artifact once,
 resolved distinct raw alpha/zeta symbols, ran both kernels for lengths `1`,
 `255`, `256`, `257`, and `1023`, checked independent CPU oracles and
 prefix/suffix canaries, and unloaded the executable once. The hardware harness
-uses the reviewed unsafe raw HSA boundary; it does not exercise the existing
-generated safe-dispatch SPI or authenticate its prerequisites.
+uses the reviewed unsafe raw HSA boundary. At `dc9738e`, a second ignored run
+passes the same digest and length matrix through generated checked slice
+capabilities, typed alpha/zeta preparation, the reviewed executable lifecycle,
+and safe `dispatch`. That test uses test-only semantic witnesses and an
+explicitly fake prerequisite authenticator, so it establishes runtime
+composition and hardware behavior but does not authenticate prerequisites.
 
 The evidence remains bounded. Durable Worker V2 publication, finalized-bundle
 host admission, currentness leasing, an authenticated load state machine, the
 generated alpha/zeta safe dispatch SPI, and the reviewed
-`fe2o3-hsa-runtime` adapter exist. The missing production bridge is an
-implementation of `WorkerV2PrerequisiteAuthenticatorV1`: only test/fake
+`fe2o3-hsa-runtime` adapter exist. Production composition still lacks durable
+lease reacquisition, a canonical Worker V2 load envelope containing complete
+bundle/proof and raw/finalized lineage, production Cargo envelope publication,
+recovered host admission, and application handoff. The Cargo artifact-container
+adapter remains test-only/inert and Cargo drops the live publication lease
+after retaining a receipt. An implementation of
+`WorkerV2PrerequisiteAuthenticatorV1` is also absent: only test/fake
 implementations exist, so compiler, Verus/proof, and effect evidence cannot be
-authentically promoted into generated safe dispatch. The Cargo
-artifact-container adapter also remains test-only/inert, and the hardware test
-uses reviewed raw unsafe packing rather than the generated safe path. Declared
+authentically promoted into generated safe dispatch. Declared
 read/read-write effects are not proved against machine-code accesses, exact
 alpha/zeta Verus mechanical proofs and compiler refinement are absent, mutable
 views lack a mechanical same-allocation split proof, and the hardware result
@@ -100,7 +107,7 @@ status TSV and generated status blocks remain the older pinned evidence snapshot
 until a separately archived evidence-admission lane updates them; individual
 dashboard source/unit declarations may name landed descendant commits.
 
-At `daf0b459` fe2o3 also has a HIP runtime, explicit unsafe raw module and launch
+At `dc9738e` fe2o3 also has a HIP runtime, explicit unsafe raw module and launch
 paths, versioned kernel registration, reachable MIR collection, bounded rustc
 frontend and general layout records, a canonical target-neutral kernel IR and
 verifier, concrete generic-helper collection, semantic constants,
@@ -268,8 +275,8 @@ The detailed dependencies and exit criteria are in
   `Arguments` remain inert. Durable publication, finalized-bundle admission,
   currentness leasing, authenticated loading, and the reviewed HSA adapter
   exist, but the production prerequisite-authenticator implementation does not.
-  Cross-crate finalization is absent, and the MI300X run used the unsafe raw HSA
-  harness rather than the generated adapter.
+  Cross-crate finalization is absent. Both raw and generated-safe MI300X paths
+  pass, but the latter uses explicit test authority.
 - Rows 35-38 and 41-43: one-source builds, AMDGPU LLVM/HSACO sidecars, diagnostic
   dumps, bounded HSACO inspection, a read-only `cargo fe2o3 inspect` command,
   complete external-project build/run orchestration, project-local cleanup, and
@@ -281,16 +288,18 @@ The detailed dependencies and exit criteria are in
   alpha/zeta source pair and exports one independently inspected, canonically
   finalized COV6 artifact with SHA-256
   `3a916cdabca05ac74d340889aab2067221d6d1252a7cde13e61c1786252565c4`.
-  An inert Cargo adapter assembles a canonical container candidate while
-  retaining publication and descriptor lineage, but grants no currentness,
-  load, or launch authority. Project build scripts and procedural macros remain
-  trusted; pipeline inspection is not stage-complete, broad Rust semantics and
+  An inert Cargo adapter assembles a canonical container candidate but does not
+  retain the complete plan/receipt, raw/finalized lineage, bundle/proof index,
+  or a live lease, and grants no currentness, load, or launch authority.
+  Project build scripts and procedural macros remain trusted; pipeline
+  inspection is not stage-complete, broad Rust semantics and
   cross-crate finalization are absent. Production publication, lease,
   finalized-bundle admission, authenticated loading, generated safe dispatch,
   and the reviewed runtime adapter exist outside this inert Cargo adapter, but
-  no production `WorkerV2PrerequisiteAuthenticatorV1` promotes the required
-  evidence between them. The separate raw HSA harness executes both entries on
-  MI300X but does not exercise that generated safe composition.
+  durable lease reacquisition, a canonical load envelope, recovered admission,
+  application handoff, and a production `WorkerV2PrerequisiteAuthenticatorV1`
+  are absent. The generated-safe MI300X harness composes the runtime pieces only
+  with a fake prerequisite authenticator.
 - Rows 27, 28, and 39: bounded device FFI macros and compiler validation bind
   import/export direction, exact symbols, physical scalar/pointer ABI,
   address spaces, effects, target, code-object version, and semantic identity.

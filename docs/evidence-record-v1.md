@@ -219,16 +219,35 @@ clean detached-checkout V1 snapshot runner. It is therefore an observed raw
 hardware result, not a dashboard `remote-hardware` strength or a parity row
 promotion.
 
+At commit `dc9738e367c392f7716eacb8459ca73fa32abbbb`, the same host, toolchain,
+artifact digest, and length matrix also passed through the generated-safe SPI:
+
+```bash
+FE2O3_RUN_GFX942_TWO_KERNEL=1 \
+FE2O3_GFX942_ALPHA_ZETA_HSACO=/absolute/path/to/alpha-zeta-cov6.hsaco \
+FE2O3_GFX942_ALPHA_ZETA_SHA256=3a916cdabca05ac74d340889aab2067221d6d1252a7cde13e61c1786252565c4 \
+cargo +nightly-2026-04-03 test --locked -p fe2o3-hsa-runtime \
+  --features hardware-test-hooks --test gfx942_two_kernel_hardware \
+  gfx942_cov6_alpha_then_zeta_generated_safe_spi_with_fake_authenticator \
+  -- --ignored --exact --nocapture
+```
+
+That test uses checked generated slice capabilities, independent typed
+alpha/zeta preparation, safe dispatch, and one reviewed loaded executable. Its
+semantic witnesses and prerequisite authenticator are explicit test fixtures.
+It is observed runtime-composition and hardware evidence, not production
+authentication, a dashboard `remote-hardware` strength, or a parity promotion.
+
 Durable Worker V2 publication, finalized-bundle host admission, currentness
 leases, the authenticated HSA load state machine, generated alpha/zeta safe
 dispatch SPI, and the reviewed `fe2o3-hsa-runtime` adapter are production code.
-The blocking trust gap is the absence of a production implementation of
-`WorkerV2PrerequisiteAuthenticatorV1`; current implementations are tests/fakes,
-so compiler, Verus, proof, ABI, and effect evidence cannot yet be authentically
-promoted into safe load/launch authority. In addition, the `cargo-fe2o3`
-artifact-container adapter remains test-only and inert even though the durable
-publication and host-admission infrastructure exists elsewhere. Neither that
-adapter nor the raw hardware observation may be used to restamp a declaration
+The blocking production gaps include durable lease reacquisition, a canonical
+Worker V2 load envelope with complete bundle/proof and raw/finalized lineage,
+production Cargo publication and application handoff, recovered host admission,
+and a production `WorkerV2PrerequisiteAuthenticatorV1`. Current authenticator
+implementations are tests/fakes, so compiler, Verus, proof, ABI, and effect
+evidence cannot yet be authentically promoted into safe load/launch authority.
+Neither adapter nor either hardware observation may restamp a declaration
 without an updated shard and archived clean-checkout result record.
 
 Snapshot orchestration creates result evidence only. It does not update a row

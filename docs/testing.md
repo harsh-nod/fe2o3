@@ -199,14 +199,15 @@ the reviewed `fe2o3-hsa-runtime` lifecycle and implicit-kernarg adapters. Unit,
 mutation, and UI tests cover the state transitions, retained borrows, packing,
 alias admission, currentness, identity substitution, and terminal completion.
 
-The production trust chain still stops at
-`WorkerV2PrerequisiteAuthenticatorV1`. The trait defines the reviewed boundary
-for compiler, Verus, proof, Rust ABI, and executable-effect evidence, but the
-repository has only test/fake implementations. Therefore the production safe
-path cannot yet authentically promote those prerequisites into load/launch
-authority. Separately, the `cargo-fe2o3` two-entry artifact-container adapter is
-still `cfg(test)`, inert, and not wired into the production publication and host
-admission infrastructure that already exists in other crates.
+The production trust chain still lacks both cross-process composition and
+prerequisite authentication. Cargo drops the live publication lease and has no
+durable load envelope, application handoff, or recovered host-admission path.
+The `cargo-fe2o3` two-entry artifact-container adapter remains `cfg(test)` and
+inert. Separately, `WorkerV2PrerequisiteAuthenticatorV1` defines the reviewed
+boundary for compiler, Verus, proof, Rust ABI, and executable-effect evidence,
+but the repository has only test/fake implementations. Therefore the
+production safe path cannot yet authentically promote those prerequisites into
+load/launch authority.
 
 The raw alpha/zeta hardware harness has CPU/unit tests for exact `40`/`56` byte
 packing, equal-length rejection, boundary grids, independent oracles, and canary
@@ -230,6 +231,24 @@ calls the reviewed unsafe HSA adapter directly. It is not an end-to-end hardware
 test of the generated alpha/zeta safe path, and it was not archived by the V1
 snapshot runner. It therefore does not promote a parity row or dashboard
 hardware-evidence strength.
+
+The generated-safe composition test uses the same environment and artifact pin:
+
+```text
+FE2O3_RUN_GFX942_TWO_KERNEL=1 \
+FE2O3_GFX942_ALPHA_ZETA_HSACO=/absolute/path/to/alpha-zeta-cov6.hsaco \
+FE2O3_GFX942_ALPHA_ZETA_SHA256=3a916cdabca05ac74d340889aab2067221d6d1252a7cde13e61c1786252565c4 \
+cargo test --locked -p fe2o3-hsa-runtime --features hardware-test-hooks \
+  --test gfx942_two_kernel_hardware \
+  gfx942_cov6_alpha_then_zeta_generated_safe_spi_with_fake_authenticator \
+  -- --ignored --exact --nocapture
+```
+
+At commit `dc9738e367c392f7716eacb8459ca73fa32abbbb` this passed on MI300X for
+all five lengths through generated checked slice capabilities, typed alpha/zeta
+preparation, safe dispatch, and one reviewed loaded executable. The test-only
+semantic witnesses and explicitly fake authenticator mean this is not
+production proof authentication or a dashboard hardware-evidence strength.
 
 ## Verus proof coverage
 

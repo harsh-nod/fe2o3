@@ -1397,12 +1397,12 @@ impl<K, A: ReviewedHsaExecutableLifecycleAdapterV1> LoadedHsaExecutableV1<K, A> 
 
 /// Typed selection bound to one exact live HSA executable object.
 ///
-/// This is the integration boundary for general multi-kernel execution. A
-/// future transition must consume this evidence, authenticate the selected
-/// marker's compiler/Verus prerequisites, resolve its symbol against the
-/// retained executable handle, and validate that resolution before issuing
-/// launch authority. Fields are private, the loaded executable remains
-/// borrowed, and this value is intentionally neither `Clone` nor `Copy`.
+/// This is the integration boundary for general multi-kernel execution.
+/// Existing transitions authenticate the selected marker's prerequisites,
+/// resolve its symbol against the retained executable handle, and validate
+/// that resolution before issuing launch authority. Fields are private, the
+/// loaded executable remains borrowed, and this value is intentionally neither
+/// `Clone` nor `Copy`.
 #[doc(hidden)]
 pub struct InertLoadedWorkerV2KernelSelectionV1<'loaded, K> {
     selected: AdmittedWorkerV2TypedKernelV1<'loaded, K>,
@@ -4145,13 +4145,11 @@ mod tests {
             "gfx942:sramecc+:xnack-",
             "gfx942:sramecc-:xnack-",
         ] {
-            assert!(is_required_artifact_target(AmdTargetId::parse(target).unwrap()));
+            assert!(is_required_artifact_target(
+                AmdTargetId::parse(target).unwrap()
+            ));
         }
-        for target in [
-            "gfx942:xnack+",
-            "gfx942:sramecc+:xnack+",
-            "gfx950:xnack-",
-        ] {
+        for target in ["gfx942:xnack+", "gfx942:sramecc+:xnack+", "gfx950:xnack-"] {
             assert!(!is_required_artifact_target(
                 AmdTargetId::parse(target).unwrap()
             ));

@@ -1,8 +1,8 @@
 # Direct LLVM and Device FFI Milestone
 
 Status: active; the bounded alpha/zeta `gfx942` compiler-to-HSACO vertical
-slice and raw MI300X execution are implemented through commit
-`daf0b459ced07a25376670c83b1474eaebcd1a68`.
+slice plus raw and generated-safe MI300X execution are implemented through
+commit `dc9738e367c392f7716eacb8459ca73fa32abbbb`.
 
 This milestone connects the existing direct LLVM/LLD worker and device FFI
 contracts to the artifact transaction, bundle, and runtime paths. Its end state
@@ -164,44 +164,51 @@ On the MI300X host, the opt-in raw hardware harness loaded one executable,
 resolved alpha and zeta, and ran both kernels for lengths `1`, `255`, `256`,
 `257`, and `1023`. Every case matched its independent CPU oracle and preserved
 prefix/suffix canaries. This is valuable compiler, linker, ABI, and hardware
-evidence for the exact digest and `gfx942` target. Because the harness injects
-an external digest-pinned HSACO and invokes reviewed raw unsafe dispatch, it
-bypasses the existing finalized-bundle/currentness/load state machine and
-generated safe SPI. It is not evidence of production safe dispatch or
-CUDA-Oxide parity. Complete remains `0`.
+evidence for the exact digest and `gfx942` target. At `dc9738e`, a second run
+passed the same matrix through generated checked slice capabilities, typed
+preparation, the reviewed lifecycle, and safe dispatch. It uses test-only
+semantic witnesses and an explicitly fake prerequisite authenticator, and both
+harnesses inject an external digest-pinned HSACO. Neither run is evidence of
+production proof-authenticated dispatch or CUDA-Oxide parity. Complete remains
+`0`.
 
 ## Ordered Next Milestones
 
-1. **Production Cargo adapter, prerequisite authenticator, and safe-SPI
-   exercise.** Promote the inert/test-only Cargo Worker V2 artifact-container
-   adapter into a production producer without weakening its deterministic
-   descriptor and receipt checks. Implement a production
-   `WorkerV2PrerequisiteAuthenticatorV1` that authenticates the compiler,
-   verifier, ABI/effect, and executable prerequisites. Feed both into the
-   existing finalized-bundle admission, currentness lease, authenticated load
-   state machine, generated alpha/zeta `prepare`/`dispatch` SPI, and reviewed
-   runtime adapter. Remove the external-HSACO handoff from this test lane and
-   rerun the MI300X matrix; stale leases, substitutions, and authenticator
-   mutations must continue to fail closed.
-2. **Machine-code effect validation tied to evidence.** Analyze the finalized
+1. **Durable claim and lease recovery.** Reacquire a fresh non-clone lease only
+   after revalidating the persisted receipt, complete plan, exact files,
+   current generation, path identity, and lock.
+2. **Canonical Worker V2 load envelope.** Preserve raw/final snapshots and
+   encode the container, bundle/proof evidence, descriptor lineage, finalized
+   identity, and durable claim. Never serialize the process-local lease.
+3. **Production Cargo, recovered host admission, and application handoff.**
+   Publish the envelope before clearing restart state, pass a read-only pinned
+   descriptor, reacquire the lease, and re-run all structural, semantic,
+   physical ABI, marker, and currentness checks. Remove the external-HSACO
+   handoff from the generated-safe MI300X lane while retaining the explicit
+   fake-authenticator label.
+4. **Machine-code effect validation tied to evidence.** Analyze the finalized
    alpha/zeta payload and its closed call graph with a bounded, versioned
    validator. Bind the accepted global loads/stores, address derivations,
    descriptor/effect identities, analyzer/toolchain identity, and exact payload
    digest into machine-code evidence consumed by admission. Unknown calls,
    indirect memory effects, effect expansion, or any byte substitution fail
    closed. Hardware success remains separate evidence.
-3. **Verus proofs and proof-artifact binding.** Prove bounds, address overflow
+5. **Verus proofs and proof-artifact binding.** Prove bounds, address overflow
    freedom, injective writes/race freedom, and alpha/zeta functional results.
    Bind source, crate/kernel identity, ABI/effects, launch contract, Verus and
    solver identities, proof result, machine-code evidence, and finalized
    payload into the artifact. Negative source/proof mutations and stale proof
    replay must be rejected.
-4. **Split mutable views.** Add a safe partition operation that can produce two
+6. **Production prerequisite authenticator.** Join reviewed persistent Verus,
+   measured compiler, Rust-layout, proof-to-executable, machine-effect, and
+   rollback freshness evidence. Only this final joined value may implement the
+   unsafe authenticator; it accepts no caller-provided evidence digest.
+7. **Split mutable views.** Add a safe partition operation that can produce two
    simultaneous non-overlapping mutable views of one allocation while retaining
    parent allocation identity and exact byte regions. Cover overlap, overflow,
    lifetime escape, rejoin/drop order, packing, and in-flight alias rejection,
    then execute a same-allocation multi-view kernel on MI300X.
-5. **Feature and architecture breadth.** Generalize the exact vertical slice
+8. **Feature and architecture breadth.** Generalize the exact vertical slice
    only after the preceding authority and evidence gates: more signatures and
    control flow, aggregates, async/runtime features, core AMD operations, then
    `gfx1151` and `gfx950` compile/hardware lanes. Each addition needs explicit
@@ -346,10 +353,11 @@ independent CPU oracles on MI300X.
 
 Finalized Worker V2 bundle admission, currentness leases, the authenticated
 load state machine, generated alpha/zeta safe dispatch SPI, and the reviewed
-runtime adapter already exist. This gate still requires the Cargo adapter to be
-available outside tests, a production `WorkerV2PrerequisiteAuthenticatorV1`,
-and MI300X execution through that generated safe path. The current raw harness's
-external digest pin and reviewed unsafe call do not exercise it. Bidirectional
+runtime adapter already exist. The generated-safe MI300X test now exercises
+those runtime pieces with explicit test authority. This gate still requires
+durable lease reacquisition, a canonical load envelope, production Cargo and
+application handoff, recovered host admission, and a production
+`WorkerV2PrerequisiteAuthenticatorV1`. Bidirectional
 external-device FFI, `gfx1151`, machine-code effect evidence, and Verus
 refinement also remain open.
 
