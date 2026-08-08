@@ -343,6 +343,7 @@ name = "fe2o3-kernel-analysis"
 version = "0.1.0"
 dependencies = [
  "fe2o3-kernel-ir",
+ "sha2",
 ]
 
 [[package]]

@@ -4,12 +4,14 @@
 //! grant `Checked`, `Verified`, safe-launch, or any other assurance authority.
 
 mod control_flow;
+mod machine_effect;
 mod uniformity;
 
 pub use control_flow::{
     ControlFlowAnalysis, ControlFlowDiagnostic, ControlFlowEdge, ControlFlowErrors,
     analyze_control_flow,
 };
+pub use machine_effect::*;
 pub use uniformity::analyze_function;
 
 use fe2o3_kernel_ir::{BlockId, FunctionId, SynchronizationScope, ValueId};

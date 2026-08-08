@@ -5,10 +5,11 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "Conservative target-independent analyses for fe2o3 kernel IR"
+description = "Conservative kernel IR and bounded machine-effect analyses for fe2o3"
 
 [dependencies]
 fe2o3-kernel-ir.workspace = true
+sha2.workspace = true
 
 [lib]
 name = "fe2o3_kernel_analysis"
