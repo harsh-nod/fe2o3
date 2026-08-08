@@ -1982,7 +1982,7 @@ mod tests {
     }
 
     #[test]
-    fn abandoned_envelope_temp_is_not_recovered_as_a_publication() {
+    fn legacy_unowned_envelope_temp_is_conservatively_ignored() {
         let directory = TestDirectory::new();
         let (publisher, envelope, _) = canonical_envelope_fixture(&directory);
         let stale_temp = directory
@@ -1995,7 +1995,7 @@ mod tests {
             store.publish_load_envelope(&envelope).unwrap(),
             WorkerV2EnvelopePublicationOutcomeV1::Published
         );
-        assert!(stale_temp.exists());
+        assert!(stale_temp.exists(), "legacy temp has no package ownership");
         assert_eq!(
             store
                 .recover_load_envelope(envelope.published_claim().receipt())

@@ -55,6 +55,7 @@ const ENVELOPE_INPUTS_PREFIX: &str = ".fe2o3-worker-v2-envelope-inputs-v1-";
 const ENVELOPE_INPUTS_SUFFIX: &str = ".capsule";
 const ENVELOPE_INPUTS_NAME_DOMAIN: &[u8] = b"FE2O3/WORKER-V2-ENVELOPE-INPUTS-NAME/V1\0";
 const MAX_ENVELOPE_INPUT_RESIDUE_ENTRIES: usize = 256;
+const MAX_ENVELOPE_TEMP_RESIDUE_ENTRIES: usize = 256;
 const RECEIPT_FIELDS: usize = 7;
 const PREVIOUS_MARKER_BYTES: usize =
     MARKER_MAGIC.len() + 2 + 1 + 1 + 32 + 8 + 16 + 32 + 32 + 32 + RECEIPT_FIELDS * 32 + 32;
@@ -640,6 +641,23 @@ fn envelope_inputs_package_prefix(package: [u8; 32]) -> String {
     format!("{ENVELOPE_INPUTS_PREFIX}{}-", hex(&package))
 }
 
+fn envelope_temp_package_prefix(package: [u8; 32]) -> String {
+    format!("{ENVELOPE_PREFIX}{}-", hex(&package))
+}
+
+fn envelope_temp_name(
+    package: [u8; 32],
+    publication_identity: [u8; 32],
+    process: u32,
+    counter: u64,
+) -> String {
+    format!(
+        "{}{}{ENVELOPE_SUFFIX}{TEMP_SUFFIX}{process}-{counter}",
+        envelope_temp_package_prefix(package),
+        hex(&publication_identity)
+    )
+}
+
 fn is_canonical_envelope_inputs_name(name: &str, package_prefix: &str) -> bool {
     is_canonical_envelope_inputs_name_bytes(name.as_bytes(), package_prefix)
 }
@@ -664,14 +682,36 @@ fn is_envelope_inputs_temp_name(name: &str, package_prefix: &str) -> bool {
     {
         return false;
     }
-    let counters = &bytes[canonical_len + TEMP_SUFFIX.len()..];
+    has_decimal_temp_counters(&bytes[canonical_len + TEMP_SUFFIX.len()..])
+}
+
+fn is_envelope_temp_name(name: &str, package_prefix: &str) -> bool {
+    let bytes = name.as_bytes();
+    let identity_start = package_prefix.len();
+    let identity_end = identity_start + 64;
+    let suffix_end = identity_end + ENVELOPE_SUFFIX.len();
+    let temp_end = suffix_end + TEMP_SUFFIX.len();
+    bytes.len() > temp_end
+        && bytes.starts_with(package_prefix.as_bytes())
+        && bytes[identity_start..identity_end]
+            .iter()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+        && &bytes[identity_end..suffix_end] == ENVELOPE_SUFFIX.as_bytes()
+        && &bytes[suffix_end..temp_end] == TEMP_SUFFIX.as_bytes()
+        && has_decimal_temp_counters(&bytes[temp_end..])
+}
+
+fn has_decimal_temp_counters(counters: &[u8]) -> bool {
     let Some(separator) = counters.iter().position(|byte| *byte == b'-') else {
         return false;
     };
-    separator != 0
-        && separator + 1 < counters.len()
-        && counters[..separator].iter().all(u8::is_ascii_digit)
-        && counters[separator + 1..].iter().all(u8::is_ascii_digit)
+    is_canonical_decimal(&counters[..separator]) && is_canonical_decimal(&counters[separator + 1..])
+}
+
+fn is_canonical_decimal(bytes: &[u8]) -> bool {
+    !bytes.is_empty()
+        && bytes.iter().all(u8::is_ascii_digit)
+        && (bytes.len() == 1 || bytes[0] != b'0')
 }
 
 impl ResumeMarkerStateV1 {
@@ -837,6 +877,7 @@ impl WorkerV2ResumeStoreV1 {
         };
         store.verify_output_path()?;
         store.cleanup_envelope_input_residue()?;
+        store.cleanup_envelope_temp_residue()?;
         Ok(store)
     }
 
@@ -870,6 +911,48 @@ impl WorkerV2ResumeStoreV1 {
             }
             if residue.len() == MAX_ENVELOPE_INPUT_RESIDUE_ENTRIES {
                 return Err(self.invalid("too many package-owned envelope input residues"));
+            }
+            let descriptor = openat(
+                &self.directory,
+                name,
+                OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK,
+                Mode::empty(),
+            )
+            .map_err(std::io::Error::from)?;
+            validate_private_file(&self.directory, &descriptor, name, &self.display_path, None)?;
+            residue.push(name.to_owned());
+        }
+        if !residue.is_empty() {
+            for name in residue {
+                unlinkat(&self.directory, &name, AtFlags::empty()).map_err(std::io::Error::from)?;
+            }
+            fsync(&self.directory).map_err(std::io::Error::from)?;
+            self.verify_output_path()?;
+        }
+        Ok(())
+    }
+
+    fn cleanup_envelope_temp_residue(&self) -> Result<(), ResumeMarkerErrorV1> {
+        let package_prefix = envelope_temp_package_prefix(self.package);
+        let scan =
+            rustix::io::fcntl_dupfd_cloexec(&self.directory, 0).map_err(std::io::Error::from)?;
+        let mut directory = rustix::fs::Dir::read_from(&scan).map_err(std::io::Error::from)?;
+        let mut residue = Vec::new();
+        for entry in &mut directory {
+            let entry = entry.map_err(std::io::Error::from)?;
+            let bytes = entry.file_name().to_bytes();
+            if !bytes.starts_with(package_prefix.as_bytes()) {
+                continue;
+            }
+            let name = std::str::from_utf8(bytes)
+                .map_err(|_| self.invalid("load-envelope temp residue name is not UTF-8"))?;
+            if !is_envelope_temp_name(name, &package_prefix) {
+                return Err(
+                    self.invalid_at_name(name, "malformed package-owned load-envelope temp name")
+                );
+            }
+            if residue.len() == MAX_ENVELOPE_TEMP_RESIDUE_ENTRIES {
+                return Err(self.invalid("too many package-owned load-envelope temp residues"));
             }
             let descriptor = openat(
                 &self.directory,
@@ -1070,10 +1153,11 @@ impl WorkerV2ResumeStoreV1 {
             };
         }
 
-        let temp_name = format!(
-            "{name}{TEMP_SUFFIX}{}-{}",
+        let temp_name = envelope_temp_name(
+            self.package,
+            receipt.publication_identity(),
             std::process::id(),
-            NEXT_TEMP.fetch_add(1, Ordering::Relaxed)
+            NEXT_TEMP.fetch_add(1, Ordering::Relaxed),
         );
         let result = (|| {
             let descriptor = openat(
@@ -2341,6 +2425,83 @@ mod tests {
             assert!(!directory.0.join(&temporary).exists());
             assert!(directory.0.join(&unrelated).exists());
         }
+    }
+
+    #[test]
+    fn startup_scavenges_only_package_owned_envelope_temps_without_growth() {
+        let directory = TestDirectory::new();
+        let publisher = producer(83);
+        let other = producer(84);
+        let store = WorkerV2ResumeStoreV1::open(&directory.0, &publisher).unwrap();
+        let package = store.package;
+        drop(store);
+        let other_package = *producer_package_identity_v1(&other).as_bytes();
+        let publication = [0x83; 32];
+        let unrelated = envelope_temp_name(other_package, publication, 2, 1);
+        let legacy = format!("{}{TEMP_SUFFIX}3-1", envelope_name(publication));
+        for name in [&unrelated, &legacy] {
+            fs::write(directory.0.join(name), b"not owned by this package").unwrap();
+            fs::set_permissions(directory.0.join(name), fs::Permissions::from_mode(0o600)).unwrap();
+        }
+
+        for counter in 1..=3 {
+            let temporary = envelope_temp_name(package, publication, 1, counter);
+            fs::write(directory.0.join(&temporary), b"abandoned").unwrap();
+            fs::set_permissions(
+                directory.0.join(&temporary),
+                fs::Permissions::from_mode(0o600),
+            )
+            .unwrap();
+
+            let store = WorkerV2ResumeStoreV1::open(&directory.0, &publisher).unwrap();
+            assert_eq!(store.load().unwrap(), None);
+            assert!(!directory.0.join(&temporary).exists());
+            assert!(directory.0.join(&unrelated).exists());
+            assert!(directory.0.join(&legacy).exists());
+        }
+    }
+
+    #[test]
+    fn malformed_package_owned_envelope_temp_fails_closed() {
+        let directory = TestDirectory::new();
+        let publisher = producer(85);
+        let store = WorkerV2ResumeStoreV1::open(&directory.0, &publisher).unwrap();
+        let package_prefix = envelope_temp_package_prefix(store.package);
+        drop(store);
+        let malformed = format!("{package_prefix}not-a-canonical-temp");
+        fs::write(directory.0.join(&malformed), b"malformed").unwrap();
+        fs::set_permissions(
+            directory.0.join(&malformed),
+            fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+
+        let error = match WorkerV2ResumeStoreV1::open(&directory.0, &publisher) {
+            Ok(_) => panic!("malformed package-owned temp unexpectedly opened"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("malformed package-owned load-envelope temp name")
+        );
+        assert!(directory.0.join(malformed).exists());
+    }
+
+    #[test]
+    fn package_owned_envelope_temp_symlink_fails_closed() {
+        let directory = TestDirectory::new();
+        let publisher = producer(86);
+        let store = WorkerV2ResumeStoreV1::open(&directory.0, &publisher).unwrap();
+        let temporary = envelope_temp_name(store.package, [0x86; 32], 1, 1);
+        drop(store);
+        let target = directory.0.join("untrusted-envelope-temp-target");
+        fs::write(&target, b"must survive").unwrap();
+        symlink(&target, directory.0.join(&temporary)).unwrap();
+
+        assert!(WorkerV2ResumeStoreV1::open(&directory.0, &publisher).is_err());
+        assert_eq!(fs::read(target).unwrap(), b"must survive");
+        assert!(directory.0.join(temporary).exists());
     }
 
     #[test]
