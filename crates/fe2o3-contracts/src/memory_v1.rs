@@ -14,7 +14,7 @@ pub const MAX_LAUNCH_THREADS_V1: u64 = u32::MAX as u64;
 /// Largest number of read bindings accepted by one independent-thread check.
 pub const MAX_READ_BINDINGS_V1: usize = 16;
 
-mod sealed {
+pub(crate) mod sealed {
     pub trait Sealed {}
 }
 

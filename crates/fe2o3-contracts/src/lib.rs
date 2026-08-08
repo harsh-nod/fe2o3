@@ -12,6 +12,7 @@ mod index;
 mod kernel_frontend_v1;
 mod launch;
 mod memory_v1;
+mod static_view_v1;
 
 pub use artifact::{
     ArtifactDigest, ArtifactIdentity, KernelIdentity, ProofArtifact, ProofIdentity, ProofStatus,
@@ -37,4 +38,7 @@ pub use memory_v1::{
     MAX_ALLOCATION_BYTES_V1, MAX_LAUNCH_THREADS_V1, MAX_READ_BINDINGS_V1, ObligationFailureV1,
     ObligationKindV1, ObligationResultV1, PermissionKindV1, ProofObligationV1, RegionBindingV1,
     RegionCapabilityV1, RegionPermissionV1, SpecificationFactV1,
+};
+pub use static_view_v1::{
+    MAX_STATIC_VIEW_ELEMENTS_V1, StaticViewContractErrorV1, StaticViewContractV1,
 };
