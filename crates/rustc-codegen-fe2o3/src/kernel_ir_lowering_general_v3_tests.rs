@@ -59,6 +59,15 @@ fn s09_alpha_requires_exact_guarded_cfg_and_dataflow() {
     let exact = s09_alpha();
     crate::source_debug::validate_alpha_mir_body(&exact).expect("exact S09 alpha MIR");
 
+    // The generated symbol is bound to the integrated Cargo dependency graph. The isolated
+    // S09 branch identity must not remain valid after that graph is merged.
+    let mut isolated_graph_identity = exact.clone();
+    isolated_graph_identity.rust_path = "fe2o3_typed_alias_spoof::general_genuine::__fe2o3_host_kernel_v1_2d2a566a37ac0eca1d21361c2da8616f124a89c9c4b5b02365e24633c914de06".to_owned();
+    assert!(
+        crate::source_debug::validate_alpha_mir_body(&isolated_graph_identity).is_err(),
+        "isolated-graph S09 DefPath identity was admitted after integration"
+    );
+
     let mut disconnected_guard = exact.clone();
     let MirTerminatorKind::Assert { condition, .. } = &mut disconnected_guard.blocks[4]
         .terminator
@@ -437,7 +446,7 @@ fn s09_alpha() -> MirFunction {
     ];
     MirFunction {
         export_name: "alpha".to_owned(),
-        rust_path: "fe2o3_typed_alias_spoof::general_genuine::__fe2o3_host_kernel_v1_2d2a566a37ac0eca1d21361c2da8616f124a89c9c4b5b02365e24633c914de06".to_owned(),
+        rust_path: "fe2o3_typed_alias_spoof::general_genuine::__fe2o3_host_kernel_v1_2f5e34fba662b3a3fb8dc387a1c06a6214b61f23005c3155f8f5fb8954a28b67".to_owned(),
         kind: MirFunctionKind::KernelEntry,
         typed_profile: Some(MirKernelProfile::GeneralScalarSliceRustcLayoutV3),
         arg_count: 3,

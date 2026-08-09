@@ -9,6 +9,12 @@ The profile is deliberately closed. The compiler binds the local crate name,
 the macro-generated alpha DefPath, the SHA-256 of the complete checked-in
 source file, and the canonical remapped path
 `crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src/main.rs`.
+The integrated dependency graph binds alpha to exact DefPath
+`general_genuine::__fe2o3_host_kernel_v1_2f5e34fba662b3a3fb8dc387a1c06a6214b61f23005c3155f8f5fb8954a28b67`.
+The isolated S09 branch emitted suffix
+`2d2a566a37ac0eca1d21361c2da8616f124a89c9c4b5b02365e24633c914de06`;
+that identity is intentionally rejected after integration because approved
+Cargo dependency metadata participates in the generated kernel identity.
 Absolute paths and paths containing `.` or `..` components are rejected and
 the checkout root is not emitted into DWARF. The compiler also requires the
 function at line 68, index statement at line 69, local `i` at line 70, and the

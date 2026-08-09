@@ -13,7 +13,7 @@ use std::fmt::{self, Write};
 pub(crate) const SOURCE_DEBUG_PROFILE_ENV: &str = "FE2O3_WORKER_V2_SOURCE_DEBUG_PROFILE_V1";
 const S09_ALPHA_PROFILE: &str = "s09-alpha-gfx942-o0-v1";
 const S09_CRATE_NAME: &str = "fe2o3_typed_alias_spoof";
-const S09_DEF_PATH: &str = "general_genuine::__fe2o3_host_kernel_v1_2d2a566a37ac0eca1d21361c2da8616f124a89c9c4b5b02365e24633c914de06";
+const S09_DEF_PATH: &str = "general_genuine::__fe2o3_host_kernel_v1_2f5e34fba662b3a3fb8dc387a1c06a6214b61f23005c3155f8f5fb8954a28b67";
 const S09_SOURCE_PATH: &str =
     "crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src/main.rs";
 const S09_SOURCE_SHA256: [u8; 32] = [
