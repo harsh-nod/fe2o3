@@ -171,6 +171,10 @@ run_parity_matrix_checks() {
   run_step parity-matrix-check bash scripts/parity-matrix.sh check
   run_step parity-matrix-tests bash scripts/tests/parity-matrix.sh
   run_step parity-evidence-tests bash scripts/tests/parity-evidence.sh
+  run_step parity-oci-executor-tests \
+    bash scripts/tests/parity-oci-executor.sh
+  run_step parity-oci-operator-tests \
+    bash scripts/tests/parity-oci-operator.sh
   run_step parity-row-evidence-tests \
     bash scripts/tests/parity-row-evidence.sh
   run_step mi300x-evidence-queue-tests \
