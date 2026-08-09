@@ -9,6 +9,7 @@ state or substitute image, runtime, device, or isolation settings.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import json
 import math
@@ -18,6 +19,7 @@ import re
 import shutil
 import signal
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
@@ -35,6 +37,8 @@ MAX_JSON_STRING_BYTES = 1024 * 1024
 MAX_OCI_METADATA_BYTES = 4 * 1024 * 1024
 MAX_OCI_LAYER_BYTES = 64 * 1024**3
 MAX_OCI_IMAGE_BYTES = 256 * 1024**3
+FS_IOC_GETFLAGS = 0x80086601
+FS_IMMUTABLE_FL = 0x00000010
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 ID_RE = re.compile(r"^[a-z][a-z0-9._-]{0,63}$")
@@ -213,11 +217,7 @@ def valid_absolute(value: str) -> bool:
     )
 
 
-def read_rows(path: Path, label: str) -> tuple[bytes, list[list[str]]]:
-    try:
-        raw = path.read_bytes()
-    except OSError as error:
-        fail(f"cannot read {label}: {error}")
+def parse_rows(raw: bytes, label: str) -> list[list[str]]:
     if not raw or len(raw) > MAX_FILE_BYTES:
         fail(f"invalid {label} size")
     if b"\r" in raw or not raw.endswith(b"\n"):
@@ -230,7 +230,7 @@ def read_rows(path: Path, label: str) -> tuple[bytes, list[list[str]]]:
             rows.append(raw_line.decode("ascii").split("\t"))
         except UnicodeDecodeError:
             fail(f"non-ASCII {label} line {number}")
-    return raw, rows
+    return rows
 
 
 class Cursor:
@@ -269,6 +269,177 @@ def parse_count(value: str, label: str, *, allow_zero: bool = False) -> int:
     if result > MAX_ITEMS or (result == 0 and not allow_zero):
         fail(f"invalid {label} count")
     return result
+
+
+@dataclass(frozen=True)
+class TrustAnchor:
+    policy_size: int
+    policy_digest: str
+    owner_uid: int
+    owner_gid: int
+    file_contract: str
+
+
+@dataclass
+class TrustedRoot:
+    path: Path
+    fd: int
+    owner_uid: int
+    owner_gid: int
+
+    def close(self) -> None:
+        os.close(self.fd)
+
+
+def stable_file_identity(info: os.stat_result) -> tuple[int, ...]:
+    return (
+        info.st_dev,
+        info.st_ino,
+        info.st_mode,
+        info.st_nlink,
+        info.st_uid,
+        info.st_gid,
+        info.st_size,
+        info.st_mtime_ns,
+        info.st_ctime_ns,
+    )
+
+
+def verify_trusted_metadata(
+    info: os.stat_result,
+    anchor: TrustAnchor,
+    label: str,
+    *,
+    directory: bool,
+) -> None:
+    expected_kind = (
+        stat.S_ISDIR(info.st_mode) if directory else stat.S_ISREG(info.st_mode)
+    )
+    if (
+        not expected_kind
+        or (info.st_uid, info.st_gid) != (anchor.owner_uid, anchor.owner_gid)
+        or info.st_mode & 0o022
+        or not directory
+        and info.st_nlink != 1
+    ):
+        fail(
+            f"{label} ownership, mode, type, or link contract is unsafe "
+            f"(uid={info.st_uid}, gid={info.st_gid}, "
+            f"mode={stat.S_IMODE(info.st_mode):04o}, links={info.st_nlink}, "
+            f"expected={anchor.owner_uid}:{anchor.owner_gid})"
+        )
+
+
+def verify_immutable_flag(file_fd: int, anchor: TrustAnchor, label: str) -> None:
+    if anchor.file_contract == "descriptor-stable":
+        return
+    if anchor.file_contract != "linux-immutable":
+        fail("invalid external trust-anchor file contract")
+    try:
+        packed = fcntl.ioctl(file_fd, FS_IOC_GETFLAGS, struct.pack("=I", 0))
+        flags = struct.unpack("=I", packed)[0]
+    except (OSError, struct.error) as error:
+        fail(f"cannot establish immutable flag for {label}: {error}")
+    if not flags & FS_IMMUTABLE_FL:
+        fail(f"{label} does not satisfy the external immutable-file contract")
+
+
+def open_trusted_root(path: Path, anchor: TrustAnchor) -> TrustedRoot:
+    if not path.is_absolute() or not valid_absolute(str(path)):
+        fail("protected root path must be canonical absolute")
+    try:
+        root_fd = os.open(
+            path,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+        )
+        info = os.fstat(root_fd)
+        verify_trusted_metadata(info, anchor, "protected root", directory=True)
+    except ExecutorError:
+        if "root_fd" in locals():
+            os.close(root_fd)
+        raise
+    except OSError as error:
+        if "root_fd" in locals():
+            os.close(root_fd)
+        fail(f"cannot open protected root without following links: {error}")
+    return TrustedRoot(path, root_fd, anchor.owner_uid, anchor.owner_gid)
+
+
+def read_descriptor_bound(file_fd: int, maximum: int, label: str) -> bytes:
+    output = bytearray()
+    try:
+        while len(output) <= maximum:
+            chunk = os.read(file_fd, min(65536, maximum + 1 - len(output)))
+            if not chunk:
+                break
+            output.extend(chunk)
+    except OSError as error:
+        fail(f"cannot read {label}: {error}")
+    if not output or len(output) > maximum:
+        fail(f"invalid {label} size")
+    return bytes(output)
+
+
+def read_trusted_file(
+    root: TrustedRoot,
+    relative: str,
+    anchor: TrustAnchor,
+    *,
+    expected_size: int,
+    expected_digest: str,
+    label: str,
+) -> bytes:
+    if (
+        not valid_relative(relative)
+        or not 1 <= expected_size <= MAX_FILE_BYTES
+        or not SHA256_RE.fullmatch(expected_digest)
+    ):
+        fail(f"malformed {label} external binding")
+    try:
+        current_fd = os.dup(root.fd)
+    except OSError as error:
+        fail(f"cannot retain protected root for {label}: {error}")
+    file_fd = -1
+    try:
+        components = relative.split("/")
+        for component in components[:-1]:
+            next_fd = os.open(
+                component,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                dir_fd=current_fd,
+            )
+            os.close(current_fd)
+            current_fd = next_fd
+            verify_trusted_metadata(
+                os.fstat(current_fd), anchor, f"{label} parent", directory=True
+            )
+        file_fd = os.open(
+            components[-1],
+            os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=current_fd,
+        )
+        before = os.fstat(file_fd)
+        verify_trusted_metadata(before, anchor, label, directory=False)
+        verify_immutable_flag(file_fd, anchor, label)
+        if before.st_size != expected_size:
+            fail(f"{label} size differs from its external binding")
+        raw = read_descriptor_bound(file_fd, MAX_FILE_BYTES, label)
+        after = os.fstat(file_fd)
+        if (
+            stable_file_identity(before) != stable_file_identity(after)
+            or len(raw) != expected_size
+            or sha256_bytes(raw) != expected_digest
+        ):
+            fail(f"{label} changed or differs from its external binding")
+        return raw
+    except ExecutorError:
+        raise
+    except OSError as error:
+        fail(f"cannot open protected {label} without following links: {error}")
+    finally:
+        if file_fd >= 0:
+            os.close(file_fd)
+        os.close(current_fd)
 
 
 def protected_path(root: Path, relative: str, label: str) -> Path:
@@ -367,17 +538,27 @@ class PolicyEntry:
 class Policy:
     domain: str
     profiles: dict[str, PolicyEntry]
+    digest: str
 
 
-def parse_policy(root: Path, relative: str) -> Policy:
-    path = protected_path(root, relative, "OCI executor policy")
-    _, rows = read_rows(path, "OCI executor policy")
+def parse_policy(root: TrustedRoot, relative: str, anchor: TrustAnchor) -> Policy:
+    raw = read_trusted_file(
+        root,
+        relative,
+        anchor,
+        expected_size=anchor.policy_size,
+        expected_digest=anchor.policy_digest,
+        label="OCI executor policy",
+    )
+    rows = parse_rows(raw, "OCI executor policy")
     cursor = Cursor(rows, "OCI executor policy")
     if cursor.scalar("oci_executor_policy_schema_version") != "1":
         fail("OCI executor policy schema must be 1")
     domain = cursor.scalar("trust_domain")
     if domain not in ("production", "test"):
         fail("invalid OCI executor policy trust domain")
+    if domain == "production" and anchor.file_contract != "linux-immutable":
+        fail("production policy requires an external Linux immutable-file contract")
     count = parse_count(cursor.scalar("profile_count"), "profile")
     profiles: dict[str, PolicyEntry] = {}
     previous = ""
@@ -398,7 +579,7 @@ def parse_policy(root: Path, relative: str) -> Policy:
         profiles[profile_id] = PolicyEntry(profile_id, profile_path, int(size), digest)
         previous = profile_id
     cursor.done()
-    return Policy(domain, profiles)
+    return Policy(domain, profiles, anchor.policy_digest)
 
 
 @dataclass(frozen=True)
@@ -531,17 +712,21 @@ def parse_positive(cursor: Cursor, key: str, minimum: int, maximum: int) -> int:
     return int(value)
 
 
-def load_profile(root: Path, policy: Policy, profile_id: str) -> Profile:
+def load_profile(
+    root: TrustedRoot, policy: Policy, profile_id: str, anchor: TrustAnchor
+) -> Profile:
     entry = policy.profiles.get(profile_id)
     if entry is None:
         fail("executor profile is not authorized by protected policy")
-    path = protected_path(root, entry.relative_path, "OCI executor profile")
-    verify_regular(
-        path, str(entry.size), entry.digest, "protected OCI executor profile"
+    raw = read_trusted_file(
+        root,
+        entry.relative_path,
+        anchor,
+        expected_size=entry.size,
+        expected_digest=entry.digest,
+        label="OCI executor profile",
     )
-    raw, rows = read_rows(path, "OCI executor profile")
-    if sha256_bytes(raw) != entry.digest:
-        fail("protected OCI executor profile digest mismatch")
+    rows = parse_rows(raw, "OCI executor profile")
     cursor = Cursor(rows, "OCI executor profile")
     if cursor.scalar("oci_executor_profile_schema_version") != "1":
         fail("OCI executor profile schema must be 1")
@@ -1085,6 +1270,7 @@ class AuthorizedRequest:
     profile: Profile
     request: Request
     seccomp_path: Path
+    authorization_digest: str
 
 
 @dataclass(frozen=True)
@@ -1095,8 +1281,8 @@ class ObservedRuntimeRequest:
     image_diff_ids: tuple[str, ...]
 
 
-def parse_request(path: Path) -> Request:
-    raw, rows = read_rows(path, "OCI execution request")
+def parse_request(raw: bytes) -> Request:
+    rows = parse_rows(raw, "OCI execution request")
     cursor = Cursor(rows, "OCI execution request")
     if cursor.scalar("oci_execution_request_schema_version") != "1":
         fail("OCI execution request schema must be 1")
@@ -1130,6 +1316,49 @@ def parse_request(path: Path) -> Request:
         raw,
         sha256_bytes(raw),
     )
+
+
+def read_request_file(path: Path, expected_uid: int, expected_gid: int) -> Request:
+    if (
+        not path.is_absolute()
+        or not valid_absolute(str(path))
+        or not 0 <= expected_uid <= 2**31 - 1
+        or not 0 <= expected_gid <= 2**31 - 1
+    ):
+        fail("OCI execution request path or external owner binding is invalid")
+    request_fd = -1
+    try:
+        request_fd = os.open(
+            path,
+            os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC,
+        )
+        before = os.fstat(request_fd)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_nlink != 1
+            or (before.st_uid, before.st_gid) != (expected_uid, expected_gid)
+            or before.st_mode & 0o022
+            or not 1 <= before.st_size <= MAX_FILE_BYTES
+        ):
+            fail(
+                "OCI execution request violates its external "
+                "owner/mode/type/link/size contract"
+            )
+        raw = read_descriptor_bound(request_fd, MAX_FILE_BYTES, "OCI execution request")
+        after = os.fstat(request_fd)
+        if (
+            stable_file_identity(before) != stable_file_identity(after)
+            or len(raw) != before.st_size
+        ):
+            fail("OCI execution request changed while being read")
+        return parse_request(raw)
+    except ExecutorError:
+        raise
+    except OSError as error:
+        fail(f"cannot open OCI execution request without following links: {error}")
+    finally:
+        if request_fd >= 0:
+            os.close(request_fd)
 
 
 @dataclass
@@ -1715,26 +1944,34 @@ def stage_source(profile: Profile, request: Request) -> SourceSnapshot:
             shutil.rmtree(control, ignore_errors=True)
 
 
-def authorize(args: argparse.Namespace) -> AuthorizedRequest:
-    root = Path(args.trusted_root)
-    policy = parse_policy(root, args.policy)
-    request_path = Path(args.request)
-    if not request_path.is_absolute() or not valid_absolute(str(request_path)):
-        fail("OCI execution request path must be canonical absolute")
-    try:
-        request_info = request_path.lstat()
-    except OSError:
-        fail("OCI execution request is missing")
+def external_trust_anchor(args: argparse.Namespace) -> TrustAnchor:
     if (
-        not stat.S_ISREG(request_info.st_mode)
-        or request_path.is_symlink()
-        or request_info.st_nlink != 1
+        not 1 <= args.policy_size <= MAX_FILE_BYTES
+        or not SHA256_RE.fullmatch(args.policy_sha256)
+        or not 0 <= args.trusted_owner_uid <= 2**31 - 1
+        or not 0 <= args.trusted_owner_gid <= 2**31 - 1
     ):
-        fail("OCI execution request is not a single-link regular file")
-    request = parse_request(request_path)
-    profile = load_profile(root, policy, request.profile_id)
-    root = root.resolve(strict=True)
-    verify_operator_owned(root, profile, "protected root", directory=True)
+        fail("external policy trust anchor is malformed")
+    return TrustAnchor(
+        args.policy_size,
+        args.policy_sha256,
+        args.trusted_owner_uid,
+        args.trusted_owner_gid,
+        args.trust_file_contract,
+    )
+
+
+def authorize(args: argparse.Namespace) -> AuthorizedRequest:
+    anchor = external_trust_anchor(args)
+    root = open_trusted_root(Path(args.trusted_root), anchor)
+    try:
+        policy = parse_policy(root, args.policy, anchor)
+        request = read_request_file(
+            Path(args.request), args.request_owner_uid, args.request_owner_gid
+        )
+        profile = load_profile(root, policy, request.profile_id, anchor)
+    finally:
+        root.close()
     verify_operator_owned(
         Path(profile.runtime_path),
         profile,
@@ -1770,7 +2007,7 @@ def authorize(args: argparse.Namespace) -> AuthorizedRequest:
         profile.runtime_digest,
         "OCI runtime",
     )
-    seccomp = protected_path(root, profile.seccomp_path, "seccomp profile")
+    seccomp = protected_path(root.path, profile.seccomp_path, "seccomp profile")
     verify_regular(
         seccomp,
         str(profile.seccomp_size),
@@ -1779,11 +2016,18 @@ def authorize(args: argparse.Namespace) -> AuthorizedRequest:
     )
     verify_operator_owned(seccomp, profile, "seccomp profile", directory=False)
     verify_oci_image(profile)
+    authorization_digest = sha256_bytes(
+        b"fe2o3-oci-authorization-v1\0"
+        + bytes.fromhex(policy.digest)
+        + bytes.fromhex(profile.profile_digest)
+        + bytes.fromhex(request.digest)
+    )
     return AuthorizedRequest(
         policy,
         profile,
         request,
         seccomp.resolve(strict=True),
+        authorization_digest,
     )
 
 
@@ -2048,33 +2292,42 @@ def command_verify(args: argparse.Namespace) -> None:
     print("authorization_source\tprotected-policy")
 
 
+def add_authorization_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--request", required=True)
+    parser.add_argument("--request-owner-uid", required=True, type=int)
+    parser.add_argument("--request-owner-gid", required=True, type=int)
+    parser.add_argument("--trusted-root", required=True)
+    parser.add_argument(
+        "--policy", required=True, help="externally pinned relative path"
+    )
+    parser.add_argument("--policy-size", required=True, type=int)
+    parser.add_argument("--policy-sha256", required=True)
+    parser.add_argument("--trusted-owner-uid", required=True, type=int)
+    parser.add_argument("--trusted-owner-gid", required=True, type=int)
+    parser.add_argument(
+        "--trust-file-contract",
+        required=True,
+        choices=("descriptor-stable", "linux-immutable"),
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
     verify = subparsers.add_parser(
         "verify", help="verify protected authorization and immutable inputs"
     )
-    verify.add_argument("--request", required=True)
-    verify.add_argument("--trusted-root", required=True)
-    verify.add_argument(
-        "--policy", required=True, help="path relative to protected root"
-    )
+    add_authorization_arguments(verify)
     verify.set_defaults(func=command_verify)
     plan = subparsers.add_parser(
         "plan", help="render the fixed protected OCI invocation"
     )
-    plan.add_argument("--request", required=True)
-    plan.add_argument("--trusted-root", required=True)
-    plan.add_argument("--policy", required=True, help="path relative to protected root")
+    add_authorization_arguments(plan)
     plan.set_defaults(func=command_plan)
     preflight = subparsers.add_parser(
         "preflight", help="validate host, runtime daemon, and loaded image identity"
     )
-    preflight.add_argument("--request", required=True)
-    preflight.add_argument("--trusted-root", required=True)
-    preflight.add_argument(
-        "--policy", required=True, help="path relative to protected root"
-    )
+    add_authorization_arguments(preflight)
     preflight.set_defaults(func=command_preflight)
     return parser
 

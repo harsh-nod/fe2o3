@@ -173,22 +173,60 @@ install_image_config() {
 verify() {
   "${EXECUTOR}" verify \
     --request "${REQUEST}" \
+    --request-owner-uid "$(id -u)" \
+    --request-owner-gid "$(id -g)" \
     --trusted-root "${TRUSTED_ROOT}" \
-    --policy policy.tsv
+    --policy policy.tsv \
+    --policy-size "$(size "${POLICY}")" \
+    --policy-sha256 "$(sha256 "${POLICY}")" \
+    --trusted-owner-uid "$(id -u)" \
+    --trusted-owner-gid "$(id -g)" \
+    --trust-file-contract descriptor-stable
 }
 
 plan() {
   "${EXECUTOR}" plan \
     --request "${REQUEST}" \
+    --request-owner-uid "$(id -u)" \
+    --request-owner-gid "$(id -g)" \
     --trusted-root "${TRUSTED_ROOT}" \
-    --policy policy.tsv
+    --policy policy.tsv \
+    --policy-size "$(size "${POLICY}")" \
+    --policy-sha256 "$(sha256 "${POLICY}")" \
+    --trusted-owner-uid "$(id -u)" \
+    --trusted-owner-gid "$(id -g)" \
+    --trust-file-contract descriptor-stable
 }
 
 preflight() {
   "${EXECUTOR}" preflight \
     --request "${REQUEST}" \
+    --request-owner-uid "$(id -u)" \
+    --request-owner-gid "$(id -g)" \
     --trusted-root "${TRUSTED_ROOT}" \
-    --policy policy.tsv
+    --policy policy.tsv \
+    --policy-size "$(size "${POLICY}")" \
+    --policy-sha256 "$(sha256 "${POLICY}")" \
+    --trusted-owner-uid "$(id -u)" \
+    --trusted-owner-gid "$(id -g)" \
+    --trust-file-contract descriptor-stable
+}
+
+verify_request_path() {
+  local path="$1"
+  local owner_uid="${2:-$(id -u)}"
+  local owner_gid="${3:-$(id -g)}"
+  "${EXECUTOR}" verify \
+    --request "${path}" \
+    --request-owner-uid "${owner_uid}" \
+    --request-owner-gid "${owner_gid}" \
+    --trusted-root "${TRUSTED_ROOT}" \
+    --policy policy.tsv \
+    --policy-size "$(size "${POLICY}")" \
+    --policy-sha256 "$(sha256 "${POLICY}")" \
+    --trusted-owner-uid "$(id -u)" \
+    --trusted-owner-gid "$(id -g)" \
+    --trust-file-contract descriptor-stable
 }
 
 mkdir -p "${TRUSTED_ROOT}/profiles" "${TRUSTED_ROOT}/seccomp" \
@@ -675,7 +713,7 @@ cp "${TEST_ROOT}/profile.good" "${PROFILE}"
 write_policy
 
 chmod 775 "${TRUSTED_ROOT}"
-expect_failure writable_trusted_root 'ownership or mode is unsafe' verify
+expect_failure writable_trusted_root 'ownership, mode, type, or link contract is unsafe' verify
 chmod 755 "${TRUSTED_ROOT}"
 
 sed -i 's|image_reference\texample.invalid/|image_reference\t-invalid/|' "${PROFILE}"
@@ -780,22 +818,157 @@ mv "${TEST_ROOT}/sha256.real" "${OCI_LAYOUT}/blobs/sha256"
 
 cp "${POLICY}" "${TEST_ROOT}/policy.good"
 printf '0' >>"${PROFILE}"
-expect_failure profile_mutation 'profile binding mismatch' verify
+expect_failure profile_mutation 'profile size differs from its external binding' verify
 cp "${TEST_ROOT}/profile.good" "${PROFILE}"
 cp "${TEST_ROOT}/policy.good" "${POLICY}"
 
 mv "${PROFILE}" "${TEST_ROOT}/profile.real"
 ln -s "${TEST_ROOT}/profile.real" "${PROFILE}"
-expect_failure profile_symlink 'path contains a symlink' verify
+expect_failure profile_symlink 'cannot open protected OCI executor profile' verify
 rm "${PROFILE}"
 mv "${TEST_ROOT}/profile.real" "${PROFILE}"
 
-ln -s "${REQUEST}" "${TEST_ROOT}/request.link"
-expect_failure request_symlink 'not a single-link regular file' \
+chmod 664 "${PROFILE}"
+expect_failure profile_writable 'OCI executor profile ownership, mode, type, or link contract is unsafe' verify
+chmod 644 "${PROFILE}"
+
+ln "${PROFILE}" "${TEST_ROOT}/profile.hardlink"
+expect_failure profile_hardlink 'OCI executor profile ownership, mode, type, or link contract is unsafe' verify
+rm "${TEST_ROOT}/profile.hardlink"
+
+cp "${POLICY}" "${TEST_ROOT}/policy.anchor.good"
+pinned_policy_size="$(size "${POLICY}")"
+pinned_policy_digest="$(sha256 "${POLICY}")"
+printf '# mutation\n' >>"${POLICY}"
+expect_failure stale_external_policy_pin 'differs from its external binding' \
   "${EXECUTOR}" verify \
-    --request "${TEST_ROOT}/request.link" \
+    --request "${REQUEST}" \
+    --request-owner-uid "$(id -u)" \
+    --request-owner-gid "$(id -g)" \
     --trusted-root "${TRUSTED_ROOT}" \
-    --policy policy.tsv
+    --policy policy.tsv \
+    --policy-size "${pinned_policy_size}" \
+    --policy-sha256 "${pinned_policy_digest}" \
+    --trusted-owner-uid "$(id -u)" \
+    --trusted-owner-gid "$(id -g)" \
+    --trust-file-contract descriptor-stable
+mv "${TEST_ROOT}/policy.anchor.good" "${POLICY}"
+
+chmod 664 "${POLICY}"
+expect_failure policy_writable 'OCI executor policy ownership, mode, type, or link contract is unsafe' verify
+chmod 644 "${POLICY}"
+
+ln "${POLICY}" "${TEST_ROOT}/policy.hardlink"
+expect_failure policy_hardlink 'OCI executor policy ownership, mode, type, or link contract is unsafe' verify
+rm "${TEST_ROOT}/policy.hardlink"
+
+mv "${POLICY}" "${TEST_ROOT}/policy.real"
+ln -s "${TEST_ROOT}/policy.real" "${POLICY}"
+expect_failure policy_symlink 'cannot open protected OCI executor policy' verify
+rm "${POLICY}"
+mv "${TEST_ROOT}/policy.real" "${POLICY}"
+
+cp "${POLICY}" "${TEST_ROOT}/policy.test-domain"
+sed -i 's/trust_domain\ttest/trust_domain\tproduction/' "${POLICY}"
+expect_failure production_anchor_unavailable 'requires an external Linux immutable-file contract' verify
+mv "${TEST_ROOT}/policy.test-domain" "${POLICY}"
+
+ln -s "${REQUEST}" "${TEST_ROOT}/request.link"
+expect_failure request_symlink 'cannot open OCI execution request without following links' \
+  verify_request_path "${TEST_ROOT}/request.link"
+rm "${TEST_ROOT}/request.link"
+
+ln "${REQUEST}" "${TEST_ROOT}/request.hardlink"
+expect_failure request_hardlink 'owner/mode/type/link/size contract' verify
+rm "${TEST_ROOT}/request.hardlink"
+
+chmod 666 "${REQUEST}"
+expect_failure request_writable 'owner/mode/type/link/size contract' verify
+chmod 644 "${REQUEST}"
+
+wrong_request_uid="$(( $(id -u) + 1 ))"
+expect_failure request_owner 'owner/mode/type/link/size contract' \
+  verify_request_path "${REQUEST}" "${wrong_request_uid}" "$(id -g)"
+
+cp "${REQUEST}" "${TEST_ROOT}/request.bounded"
+truncate -s 1048577 "${REQUEST}"
+expect_failure request_oversized 'owner/mode/type/link/size contract' verify
+mv "${TEST_ROOT}/request.bounded" "${REQUEST}"
+
+mkfifo "${TEST_ROOT}/request.fifo"
+expect_failure request_fifo 'owner/mode/type/link/size contract' \
+  verify_request_path "${TEST_ROOT}/request.fifo"
+rm "${TEST_ROOT}/request.fifo"
+
+PYTHONDONTWRITEBYTECODE=1 python3 - "${EXECUTOR}" "${REQUEST}" "${TRUSTED_ROOT}" <<'PY'
+import importlib.util
+import os
+from pathlib import Path
+import sys
+
+module_path, request_text, trusted_text = sys.argv[1:]
+spec = importlib.util.spec_from_file_location("parity_oci_executor_races", module_path)
+assert spec is not None and spec.loader is not None
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+
+request = Path(request_text)
+real_read = module.read_descriptor_bound
+
+
+def mutate_request(file_fd, maximum, label):
+    raw = real_read(file_fd, maximum, label)
+    os.utime(request, None)
+    return raw
+
+
+module.read_descriptor_bound = mutate_request
+try:
+    module.read_request_file(request, os.getuid(), os.getgid())
+except module.ExecutorError as error:
+    assert "changed while being read" in str(error)
+else:
+    raise AssertionError("request metadata race was accepted")
+finally:
+    module.read_descriptor_bound = real_read
+
+trusted = Path(trusted_text)
+policy = trusted / "policy.tsv"
+anchor = module.TrustAnchor(
+    policy.stat().st_size,
+    module.sha256_file(policy),
+    os.getuid(),
+    os.getgid(),
+    "descriptor-stable",
+)
+root = module.open_trusted_root(trusted, anchor)
+
+
+def mutate_policy(file_fd, maximum, label):
+    raw = real_read(file_fd, maximum, label)
+    os.utime(policy, None)
+    return raw
+
+
+module.read_descriptor_bound = mutate_policy
+try:
+    module.read_trusted_file(
+        root,
+        "policy.tsv",
+        anchor,
+        expected_size=anchor.policy_size,
+        expected_digest=anchor.policy_digest,
+        label="race policy",
+    )
+except module.ExecutorError as error:
+    assert "changed or differs" in str(error)
+else:
+    raise AssertionError("trusted policy metadata race was accepted")
+finally:
+    module.read_descriptor_bound = real_read
+    root.close()
+PY
 
 # Runtime unavailability cannot produce even an ObservedRuntimeRequest. This
 # command fails before host/image claims and cannot issue an execution receipt.
