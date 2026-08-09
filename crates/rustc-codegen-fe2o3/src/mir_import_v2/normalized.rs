@@ -23,6 +23,8 @@ pub(crate) struct CaptureLimitsV2 {
     pub max_type_nodes: usize,
     pub max_type_arity: usize,
     pub max_generic_args: usize,
+    pub max_source_scopes: usize,
+    pub max_macro_expansion_depth: usize,
 }
 
 impl Default for CaptureLimitsV2 {
@@ -43,6 +45,8 @@ impl Default for CaptureLimitsV2 {
             max_type_nodes: 16_384,
             max_type_arity: 4_096,
             max_generic_args: 1_024,
+            max_source_scopes: 65_536,
+            max_macro_expansion_depth: 64,
         }
     }
 }
@@ -61,6 +65,7 @@ pub(crate) struct CapturedBodyV2 {
     pub arg_count: usize,
     pub capture_work_items: usize,
     pub capture_text_bytes: usize,
+    pub source_scopes: Vec<SourceScopeIdentityV2>,
     pub locals: Vec<LocalDeclV2>,
     pub blocks: Vec<BasicBlockV2>,
 }
@@ -105,6 +110,7 @@ impl CapturedBodyV2 {
                 ),
             ));
         }
+        validate_source_scopes(&self.source_scopes, limits)?;
         validate_function_identity(&self.function, limits)?;
         validate_span("source", &self.source, limits)?;
         bounded(
@@ -212,7 +218,8 @@ impl CapturedBodyV2 {
                 limits,
             )?;
         }
-        bounded("statements", total_statements, limits.max_total_statements)
+        bounded("statements", total_statements, limits.max_total_statements)?;
+        validate_body_scope_bindings(self)
     }
 }
 
@@ -311,7 +318,9 @@ pub(crate) struct SourceSpanV2 {
     pub authority: SourceAuthorityV2,
     pub remapped_file: String,
     pub source_file_hash: [u8; 16],
+    pub original_span_hash: [u8; 16],
     pub span_hash: [u8; 16],
+    pub expansion: MacroExpansionIdentityV2,
     pub start_line: usize,
     pub start_column: usize,
     pub end_line: usize,
@@ -320,7 +329,50 @@ pub(crate) struct SourceSpanV2 {
     pub source_scope_hash: [u8; 16],
     pub source_scope_parent: Option<usize>,
     pub inlined_instance_hash: Option<[u8; 16]>,
+    pub source_scope_record_hash: [u8; 32],
     pub diagnostic_debug: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct SourceScopeIdentityV2 {
+    pub index: usize,
+    pub compiler_hash: [u8; 16],
+    pub parent: Option<usize>,
+    pub inlined_parent: Option<usize>,
+    pub inlined: Option<FunctionIdentityV2>,
+    pub scope_span: StructuralSpanIdentityV2,
+    pub inlined_callsite: Option<StructuralSpanIdentityV2>,
+    pub record_hash: [u8; 32],
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct StructuralSpanIdentityV2 {
+    pub original_span_hash: [u8; 16],
+    pub callsite_span_hash: [u8; 16],
+    pub expansion: MacroExpansionIdentityV2,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct MacroExpansionIdentityV2 {
+    pub syntax_context_hash: [u8; 16],
+    pub frames: Vec<MacroExpansionFrameV2>,
+    pub chain_hash: [u8; 32],
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct MacroExpansionFrameV2 {
+    pub expansion_hash: [u8; 16],
+    pub callsite_span_hash: [u8; 16],
+    pub definition_site_hash: [u8; 16],
+    pub macro_definition: Option<StableDefinitionKeyV2>,
+    pub parent_module: Option<StableDefinitionKeyV2>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct StableDefinitionKeyV2 {
+    pub def_path_hash: [u8; 16],
+    pub stable_crate_id: [u8; 16],
+    pub local_def_path_hash: [u8; 8],
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -816,6 +868,101 @@ pub(super) fn intrinsic_binding_hash_v2(
     Ok(hasher.finalize().into())
 }
 
+pub(super) fn expansion_chain_hash_v2(
+    expansion: &MacroExpansionIdentityV2,
+) -> Result<[u8; 32], ValidationErrorV2> {
+    let mut hasher = Sha256::new();
+    hasher.update(b"fe2o3.mir-v2.macro-expansion.v1\0");
+    hasher.update(expansion.syntax_context_hash);
+    hash_usize_binding(
+        &mut hasher,
+        expansion.frames.len(),
+        "macro expansion frames",
+    )?;
+    for frame in &expansion.frames {
+        hasher.update(frame.expansion_hash);
+        hasher.update(frame.callsite_span_hash);
+        hasher.update(frame.definition_site_hash);
+        hash_optional_definition_key(&mut hasher, frame.macro_definition.as_ref());
+        hash_optional_definition_key(&mut hasher, frame.parent_module.as_ref());
+    }
+    Ok(hasher.finalize().into())
+}
+
+pub(super) fn source_scope_record_hash_v2(
+    scope: &SourceScopeIdentityV2,
+) -> Result<[u8; 32], ValidationErrorV2> {
+    let mut hasher = Sha256::new();
+    hasher.update(b"fe2o3.mir-v2.source-scope.v1\0");
+    hash_usize_binding(&mut hasher, scope.index, "source scope index")?;
+    hasher.update(scope.compiler_hash);
+    hash_optional_usize_binding(&mut hasher, scope.parent, "source scope parent")?;
+    hash_optional_usize_binding(
+        &mut hasher,
+        scope.inlined_parent,
+        "source scope inlined parent",
+    )?;
+    match &scope.inlined {
+        Some(inlined) => {
+            hasher.update([1]);
+            hash_definition_binding(&mut hasher, &inlined.definition);
+            hasher.update(inlined.instance.generic_args_hash);
+            hash_usize_binding(
+                &mut hasher,
+                inlined.instance.generic_arg_count,
+                "source scope inlined generic arguments",
+            )?;
+            hasher.update(inlined.instance.instance_hash);
+            hash_instance_kind_binding(&mut hasher, &inlined.instance.kind)?;
+        }
+        None => hasher.update([0]),
+    }
+    hash_structural_span_binding(&mut hasher, &scope.scope_span);
+    match &scope.inlined_callsite {
+        Some(span) => {
+            hasher.update([1]);
+            hash_structural_span_binding(&mut hasher, span);
+        }
+        None => hasher.update([0]),
+    }
+    Ok(hasher.finalize().into())
+}
+
+fn hash_structural_span_binding(hasher: &mut Sha256, span: &StructuralSpanIdentityV2) {
+    hasher.update(span.original_span_hash);
+    hasher.update(span.callsite_span_hash);
+    hasher.update(span.expansion.chain_hash);
+}
+
+fn hash_optional_definition_key(hasher: &mut Sha256, definition: Option<&StableDefinitionKeyV2>) {
+    match definition {
+        Some(definition) => {
+            hasher.update([1]);
+            hasher.update(definition.def_path_hash);
+            hasher.update(definition.stable_crate_id);
+            hasher.update(definition.local_def_path_hash);
+        }
+        None => hasher.update([0]),
+    }
+}
+
+fn hash_optional_usize_binding(
+    hasher: &mut Sha256,
+    value: Option<usize>,
+    path: &str,
+) -> Result<(), ValidationErrorV2> {
+    match value {
+        Some(value) => {
+            hasher.update([1]);
+            hash_usize_binding(hasher, value, path)
+        }
+        None => {
+            hasher.update([0]);
+            Ok(())
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn resolution_binding_hash_v2(
     callable_type: &TypeIdentityV2,
@@ -1071,6 +1218,154 @@ fn validate_definition(
     Ok(())
 }
 
+fn validate_source_scopes(
+    scopes: &[SourceScopeIdentityV2],
+    limits: CaptureLimitsV2,
+) -> Result<(), ValidationErrorV2> {
+    bounded("source_scopes", scopes.len(), limits.max_source_scopes)?;
+    if scopes.is_empty() {
+        return Err(ValidationErrorV2::new(
+            "source_scopes",
+            "a captured MIR body must have a root source scope",
+        ));
+    }
+    for (index, scope) in scopes.iter().enumerate() {
+        let path = format!("source_scopes[{index}]");
+        if scope.index != index {
+            return Err(ValidationErrorV2::new(
+                format!("{path}.index"),
+                "source scope index is not canonical",
+            ));
+        }
+        validate_hash(&format!("{path}.compiler_hash"), &scope.compiler_hash)?;
+        if index == 0 && scope.parent.is_some() {
+            return Err(ValidationErrorV2::new(
+                format!("{path}.parent"),
+                "the root source scope cannot have a parent",
+            ));
+        }
+        for (label, parent) in [
+            ("parent", scope.parent),
+            ("inlined_parent", scope.inlined_parent),
+        ] {
+            if parent.is_some_and(|parent| parent >= index) {
+                return Err(ValidationErrorV2::new(
+                    format!("{path}.{label}"),
+                    "source-scope links must target an earlier canonical scope",
+                ));
+            }
+        }
+        if scope.inlined.is_some() != scope.inlined_callsite.is_some() {
+            return Err(ValidationErrorV2::new(
+                format!("{path}.inlined"),
+                "inlined instance and callsite identities must be present together",
+            ));
+        }
+        if let Some(parent) = scope.inlined_parent
+            && scopes[parent].inlined.is_none()
+        {
+            return Err(ValidationErrorV2::new(
+                format!("{path}.inlined_parent"),
+                "inlined parent must identify an earlier inlined scope",
+            ));
+        }
+        if let Some(inlined) = &scope.inlined {
+            validate_function_identity(inlined, limits)?;
+        }
+        validate_structural_span(&format!("{path}.scope_span"), &scope.scope_span, limits)?;
+        if let Some(callsite) = &scope.inlined_callsite {
+            validate_structural_span(&format!("{path}.inlined_callsite"), callsite, limits)?;
+        }
+        validate_hash32(&format!("{path}.record_hash"), &scope.record_hash)?;
+        if scope.record_hash != source_scope_record_hash_v2(scope)? {
+            return Err(ValidationErrorV2::new(
+                format!("{path}.record_hash"),
+                "source-scope record binding does not match its captured fields",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_structural_span(
+    path: &str,
+    span: &StructuralSpanIdentityV2,
+    limits: CaptureLimitsV2,
+) -> Result<(), ValidationErrorV2> {
+    validate_hash(
+        &format!("{path}.original_span_hash"),
+        &span.original_span_hash,
+    )?;
+    validate_hash(
+        &format!("{path}.callsite_span_hash"),
+        &span.callsite_span_hash,
+    )?;
+    validate_expansion(&format!("{path}.expansion"), &span.expansion, limits)
+}
+
+fn validate_expansion(
+    path: &str,
+    expansion: &MacroExpansionIdentityV2,
+    limits: CaptureLimitsV2,
+) -> Result<(), ValidationErrorV2> {
+    validate_hash(
+        &format!("{path}.syntax_context_hash"),
+        &expansion.syntax_context_hash,
+    )?;
+    bounded(
+        format!("{path}.frames"),
+        expansion.frames.len(),
+        limits.max_macro_expansion_depth,
+    )?;
+    for (index, frame) in expansion.frames.iter().enumerate() {
+        let frame_path = format!("{path}.frames[{index}]");
+        validate_hash(
+            &format!("{frame_path}.expansion_hash"),
+            &frame.expansion_hash,
+        )?;
+        validate_hash(
+            &format!("{frame_path}.callsite_span_hash"),
+            &frame.callsite_span_hash,
+        )?;
+        validate_hash(
+            &format!("{frame_path}.definition_site_hash"),
+            &frame.definition_site_hash,
+        )?;
+        if let Some(definition) = &frame.macro_definition {
+            validate_definition_key(&format!("{frame_path}.macro_definition"), definition)?;
+        }
+        if let Some(definition) = &frame.parent_module {
+            validate_definition_key(&format!("{frame_path}.parent_module"), definition)?;
+        }
+    }
+    validate_hash32(&format!("{path}.chain_hash"), &expansion.chain_hash)?;
+    if expansion.chain_hash != expansion_chain_hash_v2(expansion)? {
+        return Err(ValidationErrorV2::new(
+            format!("{path}.chain_hash"),
+            "macro expansion binding does not match its captured frames",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_definition_key(
+    path: &str,
+    definition: &StableDefinitionKeyV2,
+) -> Result<(), ValidationErrorV2> {
+    validate_hash(&format!("{path}.def_path_hash"), &definition.def_path_hash)?;
+    validate_hash(
+        &format!("{path}.stable_crate_id"),
+        &definition.stable_crate_id,
+    )?;
+    if definition.local_def_path_hash.iter().all(|byte| *byte == 0) {
+        return Err(ValidationErrorV2::new(
+            format!("{path}.local_def_path_hash"),
+            "stable local DefPath hash must not be the reserved zero value",
+        ));
+    }
+    Ok(())
+}
+
 fn validate_span(
     path: &str,
     span: &SourceSpanV2,
@@ -1093,10 +1388,19 @@ fn validate_span(
         limits,
     )?;
     validate_hash(&format!("{path}.source_file_hash"), &span.source_file_hash)?;
+    validate_hash(
+        &format!("{path}.original_span_hash"),
+        &span.original_span_hash,
+    )?;
     validate_hash(&format!("{path}.span_hash"), &span.span_hash)?;
+    validate_expansion(&format!("{path}.expansion"), &span.expansion, limits)?;
     validate_hash(
         &format!("{path}.source_scope_hash"),
         &span.source_scope_hash,
+    )?;
+    validate_hash32(
+        &format!("{path}.source_scope_record_hash"),
+        &span.source_scope_record_hash,
     )?;
     if span.start_line == 0
         || span.start_column == 0
@@ -1125,6 +1429,205 @@ fn validate_span(
         ));
     }
     Ok(())
+}
+
+fn validate_body_scope_bindings(body: &CapturedBodyV2) -> Result<(), ValidationErrorV2> {
+    validate_span_scope_binding("source", &body.source, &body.source_scopes)?;
+    for (index, local) in body.locals.iter().enumerate() {
+        validate_span_scope_binding(
+            &format!("locals[{index}].source"),
+            &local.source,
+            &body.source_scopes,
+        )?;
+    }
+    for (block_index, block) in body.blocks.iter().enumerate() {
+        for (statement_index, statement) in block.statements.iter().enumerate() {
+            let path = format!("blocks[{block_index}].statements[{statement_index}]");
+            validate_span_scope_binding(
+                &format!("{path}.source"),
+                &statement.source,
+                &body.source_scopes,
+            )?;
+            validate_statement_scope_bindings(&path, &statement.kind, &body.source_scopes)?;
+        }
+        let path = format!("blocks[{block_index}].terminator");
+        validate_span_scope_binding(
+            &format!("{path}.source"),
+            &block.terminator.source,
+            &body.source_scopes,
+        )?;
+        validate_terminator_scope_bindings(&path, &block.terminator.kind, &body.source_scopes)?;
+    }
+    Ok(())
+}
+
+fn validate_span_scope_binding(
+    path: &str,
+    span: &SourceSpanV2,
+    scopes: &[SourceScopeIdentityV2],
+) -> Result<(), ValidationErrorV2> {
+    let scope = scopes.get(span.source_scope).ok_or_else(|| {
+        ValidationErrorV2::new(
+            format!("{path}.source_scope"),
+            "source scope index is outside the canonical scope table",
+        )
+    })?;
+    let inlined_hash = scope
+        .inlined
+        .as_ref()
+        .map(|inlined| inlined.instance.instance_hash);
+    if span.source_scope_hash != scope.compiler_hash
+        || span.source_scope_parent != scope.parent
+        || span.inlined_instance_hash != inlined_hash
+        || span.source_scope_record_hash != scope.record_hash
+    {
+        return Err(ValidationErrorV2::new(
+            format!("{path}.source_scope"),
+            "span source-scope identity does not exactly match its canonical table record",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_statement_scope_bindings(
+    path: &str,
+    statement: &StatementKindV2,
+    scopes: &[SourceScopeIdentityV2],
+) -> Result<(), ValidationErrorV2> {
+    match statement {
+        StatementKindV2::Assign { value, .. } => {
+            validate_rvalue_scope_bindings(&format!("{path}.value"), value, scopes)
+        }
+        StatementKindV2::Intrinsic(intrinsic) => match intrinsic.as_ref() {
+            IntrinsicStatementV2::CopyNonOverlapping {
+                source,
+                destination,
+                count,
+            } => {
+                validate_operand_scope_bindings(&format!("{path}.source_operand"), source, scopes)?;
+                validate_operand_scope_bindings(
+                    &format!("{path}.destination_operand"),
+                    destination,
+                    scopes,
+                )?;
+                validate_operand_scope_bindings(&format!("{path}.count"), count, scopes)
+            }
+            IntrinsicStatementV2::Assume { condition } => {
+                validate_operand_scope_bindings(&format!("{path}.condition"), condition, scopes)
+            }
+        },
+        StatementKindV2::StorageLive { .. }
+        | StatementKindV2::StorageDead { .. }
+        | StatementKindV2::SetDiscriminant { .. }
+        | StatementKindV2::Retag { .. }
+        | StatementKindV2::PlaceMention { .. }
+        | StatementKindV2::Coverage { .. }
+        | StatementKindV2::Nop
+        | StatementKindV2::Unsupported(_) => Ok(()),
+    }
+}
+
+fn validate_rvalue_scope_bindings(
+    path: &str,
+    value: &RvalueV2,
+    scopes: &[SourceScopeIdentityV2],
+) -> Result<(), ValidationErrorV2> {
+    match value {
+        RvalueV2::Use(operand)
+        | RvalueV2::Repeat { operand, .. }
+        | RvalueV2::Cast { operand, .. }
+        | RvalueV2::Unary { operand, .. }
+        | RvalueV2::WrapUnsafeBinder { operand, .. } => {
+            validate_operand_scope_bindings(&format!("{path}.operand"), operand, scopes)
+        }
+        RvalueV2::Binary { lhs, rhs, .. } => {
+            validate_operand_scope_bindings(&format!("{path}.lhs"), lhs, scopes)?;
+            validate_operand_scope_bindings(&format!("{path}.rhs"), rhs, scopes)
+        }
+        RvalueV2::Aggregate { operands, .. } => {
+            for (index, operand) in operands.iter().enumerate() {
+                validate_operand_scope_bindings(
+                    &format!("{path}.operands[{index}]"),
+                    operand,
+                    scopes,
+                )?;
+            }
+            Ok(())
+        }
+        RvalueV2::Reference { .. }
+        | RvalueV2::RawPointer { .. }
+        | RvalueV2::Discriminant { .. }
+        | RvalueV2::CopyForDeref(_)
+        | RvalueV2::ThreadLocalRef { .. } => Ok(()),
+    }
+}
+
+fn validate_operand_scope_bindings(
+    path: &str,
+    operand: &OperandV2,
+    scopes: &[SourceScopeIdentityV2],
+) -> Result<(), ValidationErrorV2> {
+    match operand {
+        OperandV2::Constant { source, .. } => {
+            validate_span_scope_binding(&format!("{path}.source"), source, scopes)
+        }
+        OperandV2::Copy(_) | OperandV2::Move(_) | OperandV2::RuntimeChecks { .. } => Ok(()),
+    }
+}
+
+fn validate_terminator_scope_bindings(
+    path: &str,
+    terminator: &TerminatorKindV2,
+    scopes: &[SourceScopeIdentityV2],
+) -> Result<(), ValidationErrorV2> {
+    match terminator {
+        TerminatorKindV2::SwitchInt { discriminant, .. } => {
+            validate_operand_scope_bindings(&format!("{path}.discriminant"), discriminant, scopes)
+        }
+        TerminatorKindV2::Call {
+            function,
+            arguments,
+            function_span,
+            ..
+        }
+        | TerminatorKindV2::TailCall {
+            function,
+            arguments,
+            function_span,
+            ..
+        } => {
+            validate_operand_scope_bindings(&format!("{path}.function"), function, scopes)?;
+            for (index, argument) in arguments.iter().enumerate() {
+                validate_operand_scope_bindings(
+                    &format!("{path}.arguments[{index}].operand"),
+                    &argument.operand,
+                    scopes,
+                )?;
+                validate_span_scope_binding(
+                    &format!("{path}.arguments[{index}].source"),
+                    &argument.source,
+                    scopes,
+                )?;
+            }
+            validate_span_scope_binding(&format!("{path}.function_span"), function_span, scopes)
+        }
+        TerminatorKindV2::Assert { condition, .. } => {
+            validate_operand_scope_bindings(&format!("{path}.condition"), condition, scopes)
+        }
+        TerminatorKindV2::Yield { value, .. } => {
+            validate_operand_scope_bindings(&format!("{path}.value"), value, scopes)
+        }
+        TerminatorKindV2::Return
+        | TerminatorKindV2::Unreachable
+        | TerminatorKindV2::Goto { .. }
+        | TerminatorKindV2::Drop { .. }
+        | TerminatorKindV2::UnwindResume
+        | TerminatorKindV2::UnwindTerminate { .. }
+        | TerminatorKindV2::CoroutineDrop
+        | TerminatorKindV2::FalseEdge { .. }
+        | TerminatorKindV2::FalseUnwind { .. }
+        | TerminatorKindV2::Unsupported(_) => Ok(()),
+    }
 }
 
 fn validate_type(

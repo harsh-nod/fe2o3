@@ -310,7 +310,11 @@ impl Callbacks for SingleCaptureCallbacks {
 }
 
 fn compile_observed(crate_name: &str, metadata: &str) -> CapturedBodyV2 {
-    let fixture = CompilerFixture::create(FIXTURE_SOURCE);
+    compile_source_observed(FIXTURE_SOURCE, crate_name, metadata)
+}
+
+fn compile_source_observed(source: &str, crate_name: &str, metadata: &str) -> CapturedBodyV2 {
+    let fixture = CompilerFixture::create(source);
     let args = compiler_args(&fixture, crate_name, metadata);
     let mut callbacks = SingleCaptureCallbacks::default();
     run_compiler_serialized(&args, &mut callbacks);
@@ -352,13 +356,16 @@ struct CanonicalSpanKey {
     authority: SourceAuthorityV2,
     remapped_file: String,
     source_file_hash: [u8; 16],
+    original_span_hash: [u8; 16],
     span_hash: [u8; 16],
+    expansion: MacroExpansionIdentityV2,
     start: (usize, usize),
     end: (usize, usize),
     source_scope: usize,
     source_scope_hash: [u8; 16],
     source_scope_parent: Option<usize>,
     inlined_instance_hash: Option<[u8; 16]>,
+    source_scope_record_hash: [u8; 32],
 }
 
 impl From<&SourceSpanV2> for CanonicalSpanKey {
@@ -367,13 +374,16 @@ impl From<&SourceSpanV2> for CanonicalSpanKey {
             authority: span.authority,
             remapped_file: span.remapped_file.clone(),
             source_file_hash: span.source_file_hash,
+            original_span_hash: span.original_span_hash,
             span_hash: span.span_hash,
+            expansion: span.expansion.clone(),
             start: (span.start_line, span.start_column),
             end: (span.end_line, span.end_column),
             source_scope: span.source_scope,
             source_scope_hash: span.source_scope_hash,
             source_scope_parent: span.source_scope_parent,
             inlined_instance_hash: span.inlined_instance_hash,
+            source_scope_record_hash: span.source_scope_record_hash,
         }
     }
 }
@@ -1005,6 +1015,9 @@ fn normalized_validation_binds_intrinsic_presence_name_flags_and_definition() {
         |intrinsic: &mut IntrinsicIdentityV2| {
             intrinsic.must_be_overridden = !intrinsic.must_be_overridden;
         },
+        |intrinsic: &mut IntrinsicIdentityV2| {
+            intrinsic.const_stable = !intrinsic.const_stable;
+        },
         |intrinsic: &mut IntrinsicIdentityV2| intrinsic.definition.def_path_hash[0] ^= 1,
     ] {
         let mut body = original.clone();
@@ -1155,10 +1168,134 @@ fn canonical_remapped_spans_are_deterministic_across_source_roots() {
     let first_keys = canonical_span_keys(&first);
     let second_keys = canonical_span_keys(&second);
     assert_eq!(first_keys, second_keys);
+    assert_eq!(first.source_scopes, second.source_scopes);
     assert!(first_keys.iter().all(|key| {
         key.authority == SourceAuthorityV2::CanonicalRemapped
             && key.remapped_file == "/workspace/fixture.rs"
     }));
+}
+
+#[test]
+fn normalized_validation_binds_canonical_source_scope_records_topologically() {
+    let original = compiler_results().observed;
+    assert!(!original.source_scopes.is_empty());
+
+    let mut bad_span_record = original.clone();
+    bad_span_record.source.source_scope_record_hash[0] ^= 1;
+    let span_error = bad_span_record
+        .validate(CaptureLimitsV2::default())
+        .unwrap_err()
+        .to_string();
+    assert!(span_error.contains("exactly match"), "{span_error}");
+
+    let mut bad_record = original.clone();
+    bad_record.source_scopes[0].record_hash[0] ^= 1;
+    let record_error = bad_record
+        .validate(CaptureLimitsV2::default())
+        .unwrap_err()
+        .to_string();
+    assert!(record_error.contains("record binding"), "{record_error}");
+
+    if original.source_scopes.len() > 1 {
+        let mut cyclic = original.clone();
+        cyclic.source_scopes[1].parent = Some(1);
+        refresh_capture_accounting(&mut cyclic);
+        let cycle_error = cyclic
+            .validate(CaptureLimitsV2::default())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            cycle_error.contains("earlier canonical scope"),
+            "{cycle_error}"
+        );
+    }
+
+    let mut bad_inlined = original.clone();
+    let function = bad_inlined.function.clone();
+    let scope = bad_inlined
+        .source_scopes
+        .last_mut()
+        .expect("captured body must have a source scope");
+    scope.inlined = Some(function);
+    scope.inlined_callsite = Some(scope.scope_span.clone());
+    scope.record_hash = source_scope_record_hash_v2(scope).unwrap();
+    scope.inlined.as_mut().unwrap().instance.instance_hash[0] ^= 1;
+    refresh_capture_accounting(&mut bad_inlined);
+    let inlined_error = bad_inlined
+        .validate(CaptureLimitsV2::default())
+        .unwrap_err()
+        .to_string();
+    assert!(inlined_error.contains("record binding"), "{inlined_error}");
+
+    let tight_error = original
+        .validate(CaptureLimitsV2 {
+            max_source_scopes: original.source_scopes.len() - 1,
+            ..CaptureLimitsV2::default()
+        })
+        .unwrap_err()
+        .to_string();
+    assert!(tight_error.contains("source_scopes"), "{tight_error}");
+}
+
+#[test]
+fn macro_expansion_identity_is_bounded_deterministic_and_does_not_collapse() {
+    let source = r#"
+#![allow(dead_code)]
+macro_rules! two_assignments {
+    ($value:ident) => {{
+        $value = $value.wrapping_add(1);
+        $value = $value.wrapping_add(2);
+    }};
+}
+
+#[inline(never)]
+fn observed(mut value: u32) -> u32 {
+    two_assignments!(value);
+    value
+}
+"#;
+    let first = compile_source_observed(source, "mir_v2_macro_fixture", "same-macro");
+    let second = compile_source_observed(source, "mir_v2_macro_fixture", "same-macro");
+    first.validate(CaptureLimitsV2::default()).unwrap();
+    let first_keys = canonical_span_keys(&first);
+    let second_keys = canonical_span_keys(&second);
+    assert_eq!(first_keys, second_keys);
+    assert_eq!(first.source_scopes, second.source_scopes);
+
+    let expanded = first_keys
+        .iter()
+        .filter(|key| !key.expansion.frames.is_empty())
+        .collect::<Vec<_>>();
+    assert!(
+        !expanded.is_empty(),
+        "fixture must retain expanded MIR spans"
+    );
+    assert!(expanded.iter().all(|key| {
+        key.expansion.chain_hash == expansion_chain_hash_v2(&key.expansion).unwrap()
+    }));
+    assert!(expanded.iter().enumerate().any(|(index, left)| {
+        expanded[index + 1..].iter().any(|right| {
+            left.span_hash == right.span_hash && left.original_span_hash != right.original_span_hash
+        })
+    }));
+
+    let mut nested = String::new();
+    for index in 0..12 {
+        let next = index + 1;
+        nested.push_str(&format!(
+            "macro_rules! m{index} {{ ($value:ident) => {{ m{next}!($value); }}; }}\n"
+        ));
+    }
+    nested.push_str("macro_rules! m12 { ($value:ident) => { $value += 1; }; }\n");
+    nested.push_str("#[inline(never)]\nfn observed(mut value: u32) -> u32 { m0!(value); value }\n");
+    let bound_error = compile_capture_error(
+        &nested,
+        CaptureLimitsV2 {
+            max_macro_expansion_depth: 4,
+            ..CaptureLimitsV2::default()
+        },
+    );
+    assert!(bound_error.contains("macro expansion"), "{bound_error}");
 }
 
 #[test]
