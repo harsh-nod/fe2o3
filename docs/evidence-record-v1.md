@@ -303,6 +303,21 @@ scripts/parity-evidence.sh verify-record \
   records/host-tests.tsv
 ```
 
+Higher-level row manifests can validate an archive after the original machine
+and tool paths are gone:
+
+```bash
+scripts/parity-evidence.sh verify-record \
+  --archive-only \
+  --archive-root /evidence/run-001 \
+  records/host-tests.tsv
+```
+
+Archive-only mode verifies canonical structure, the record checksum, zero exit
+status, and every retained log and artifact digest. It deliberately does not
+verify the current checkout or executable paths and is therefore not replay or
+machine attestation. [Parity Row Evidence V1](parity-row-evidence-v1.md)
+defines how these records gate row promotions.
 The final record checksum detects accidental or partial modification. It is
 not a signature: an attacker able to rewrite the archive can rewrite content
 and recompute hashes. Authentic provenance requires a separately access-
@@ -339,3 +354,7 @@ declaration-to-archive resolution is a later schema capability.
 - Artifacts must be explicitly declared. Undeclared outputs have no evidentiary
   authority.
 - Concurrent, distributed, and hardware lanes need separate result records.
+
+V1 archive-only verification establishes internal integrity, not promotion or
+machine attestation. Promotion authority requires
+[Signed Parity Evidence V2](parity-signed-evidence-v2.md).

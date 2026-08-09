@@ -23,6 +23,29 @@ The generic test subset runs `rustc-codegen-fe2o3` in a dedicated Cargo process.
 The command-plan regression in `scripts/tests/ci-local-test-gate.sh` enforces
 that separation in every generic CI run.
 
+## Parity evidence validation
+
+The generic lane runs legacy integrity checks plus signed row-evidence and
+MI300X queue shell suites:
+
+```text
+scripts/ci-local.sh parity-evidence
+bash scripts/tests/parity-evidence.sh
+bash scripts/tests/parity-row-evidence.sh
+bash scripts/tests/mi300x-evidence-queue.sh
+bash scripts/tests/parity-dashboard.sh
+```
+
+The row suite runs class-specific test programs, signs test-domain result and
+review fixtures, and exercises trust substitution, signature mutation, replay,
+relabeling, stale source, duplicate identities, exact policy classes, queue
+bypass, Complete authorization, and source-tree deltas. The queue suite uses no
+GPU and makes no hardware claim. It consumes a signed test queue and verifies
+canonical admission, lock hardening, and concurrent serialization.
+
+See [Signed Parity Evidence V2](parity-signed-evidence-v2.md) for protected
+trust provisioning, row-sharded commands, and the production MI300X queue.
+
 ## Comprehensive workspace tests
 
 Run every workspace test target with the repository gate:

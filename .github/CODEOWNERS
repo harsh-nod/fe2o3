@@ -1,0 +1,9 @@
+/docs/parity-row-evidence-policy-v2.tsv @powderluv
+/docs/parity-evidence/trust-policy-v2.tsv @powderluv
+/docs/parity-evidence/trusted-keys/ @powderluv
+/scripts/parity-signed-evidence.py @powderluv
+/scripts/parity-protected-change-policy.sh @powderluv
+/.github/workflows/ci.yml @powderluv
+/.github/workflows/parity-promotion.yml @powderluv
+/.github/CODEOWNERS @powderluv
+/.github/parity-trust-reviewers.txt @powderluv

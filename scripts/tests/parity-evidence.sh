@@ -249,6 +249,14 @@ bash "${EVIDENCE_SCRIPT}" verify-record \
   --repo "${RESULT_REPO}" \
   --archive-root "${RESULT_ARCHIVE}" \
   records/valid.tsv
+bash "${EVIDENCE_SCRIPT}" verify-record \
+  --archive-only --archive-root "${RESULT_ARCHIVE}" records/valid.tsv
+expect_failure archive_only_repo \
+  '--repo cannot be combined with --archive-only' \
+  bash "${EVIDENCE_SCRIPT}" verify-record \
+  --archive-only --repo "${RESULT_REPO}" \
+  --archive-root "${RESULT_ARCHIVE}" records/valid.tsv
+
 
 mkdir -p "${TEST_ROOT}/deterministic-a" "${TEST_ROOT}/deterministic-b"
 for archive in "${TEST_ROOT}/deterministic-a" "${TEST_ROOT}/deterministic-b"; do

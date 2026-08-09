@@ -56,6 +56,21 @@ Options:
   --markdown FILE     Generated Markdown dashboard
   --tsv FILE          Generated machine-readable dashboard
 
+  --promotion-baseline FILE
+                      Previous canonical status snapshot
+  --row-evidence-archive DIR
+                      Archive containing the promotion manifest and records
+  --row-evidence-manifest PATH
+                      Archive-relative signed-evidence promotion manifest
+  --row-evidence-trusted-root DIR
+                      Protected-base root containing trust inputs and public keys
+  --row-evidence-trust-policy FILE
+                      Protected-base runner/reviewer public-key policy
+  --row-evidence-trusted-policy FILE
+                      Protected-base persistent row policy
+  --row-evidence-candidate-policy FILE
+                      Candidate row policy, required to equal the protected policy
+
 "check" rejects generated drift. "update" writes only the two deterministic
 generated dashboard files. "validate" validates claims without writing files.
 "claims" prints the canonical built-in claim records.
@@ -788,6 +803,13 @@ main() {
   local claims_file=""
   local markdown_file="${DEFAULT_MARKDOWN}"
   local tsv_file="${DEFAULT_TSV}"
+  local promotion_baseline=""
+  local row_evidence_archive=""
+  local row_evidence_manifest=""
+  local row_evidence_trusted_root=""
+  local row_evidence_trust_policy=""
+  local row_evidence_trusted_policy=""
+  local row_evidence_candidate_policy=""
   local generated_markdown
   local generated_tsv
 
@@ -822,6 +844,13 @@ main() {
       --repo) REPO_ROOT="$2" ;;
       --markdown) markdown_file="$2" ;;
       --tsv) tsv_file="$2" ;;
+      --promotion-baseline) promotion_baseline="$2" ;;
+      --row-evidence-archive) row_evidence_archive="$2" ;;
+      --row-evidence-manifest) row_evidence_manifest="$2" ;;
+      --row-evidence-trusted-root) row_evidence_trusted_root="$2" ;;
+      --row-evidence-trust-policy) row_evidence_trust_policy="$2" ;;
+      --row-evidence-trusted-policy) row_evidence_trusted_policy="$2" ;;
+      --row-evidence-candidate-policy) row_evidence_candidate_policy="$2" ;;
       *) die "unknown option: $1" ;;
     esac
     shift 2
@@ -836,6 +865,26 @@ main() {
   parse_status "${status_file}"
   parse_matrix "${matrix_file}"
   parse_claims "${claims_file}"
+
+  if [[ -n "${promotion_baseline}${row_evidence_archive}${row_evidence_manifest}${row_evidence_trusted_root}${row_evidence_trust_policy}${row_evidence_trusted_policy}${row_evidence_candidate_policy}" ]]; then
+    [[ -n "${promotion_baseline}" && -n "${row_evidence_archive}" &&
+      -n "${row_evidence_manifest}" &&
+      -n "${row_evidence_trusted_root}" &&
+      -n "${row_evidence_trust_policy}" &&
+      -n "${row_evidence_trusted_policy}" &&
+      -n "${row_evidence_candidate_policy}" ]] ||
+      die 'promotion validation requires every protected signed-evidence input'
+    "${SCRIPT_DIR}/parity-row-evidence.sh" gate \
+      --repo "${REPO_ROOT}" \
+      --archive-root "${row_evidence_archive}" \
+      --trusted-root "${row_evidence_trusted_root}" \
+      --trust-policy "${row_evidence_trust_policy}" \
+      --manifest "${row_evidence_manifest}" \
+      --trusted-policy "${row_evidence_trusted_policy}" \
+      --candidate-policy "${row_evidence_candidate_policy}" \
+      --baseline-status "${promotion_baseline}" \
+      --candidate-status "${status_file}"
+  fi
 
   if [[ "${command}" == validate ]]; then
     printf 'parity claims are valid: 109 rows, %d evidence records\n' "${#EVIDENCE_PATHS[@]}"

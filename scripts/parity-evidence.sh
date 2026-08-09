@@ -38,6 +38,7 @@ Usage:
   scripts/parity-evidence.sh record --repo PATH --archive-root PATH \
     --record RECORD.tsv --log LOG.txt [options] -- /absolute/command [args...]
   scripts/parity-evidence.sh verify-record --repo PATH --archive-root PATH RECORD.tsv
+  scripts/parity-evidence.sh verify-record --archive-only --archive-root PATH RECORD.tsv
 
 Live collection options:
   --repo PATH             Git checkout to identify (default: this checkout)
@@ -61,6 +62,11 @@ paths are relative to an archive root outside that checkout. It writes a V1
 record even when the command fails, then returns the command's exit status.
 Legacy collect/validate declarations remain canonical V1 declarations and do
 not constitute command-result evidence.
+
+Archive-only verification checks the canonical record checksum and every log
+and artifact digest, but does not require the original checkout or tool paths.
+It is intended for higher-level row evidence manifests; it is not a replay or
+machine attestation.
 EOF
 }
 
@@ -828,6 +834,7 @@ verify_record_main() {
   local repo=""
   local archive_root=""
   local record_relative=""
+  local archive_only=false
   local record_absolute=""
   local current_commit=""
   local value=""
@@ -859,6 +866,10 @@ verify_record_main() {
         esac
         shift 2
         ;;
+      --archive-only)
+        archive_only=true
+        shift
+        ;;
       -h | --help)
         usage
         return 0
@@ -873,7 +884,11 @@ verify_record_main() {
     esac
   done
 
-  [[ -n "${repo}" ]] || die '--repo is required for result verification'
+  if [[ "${archive_only}" == false ]]; then
+    [[ -n "${repo}" ]] || die '--repo is required for result verification'
+  elif [[ -n "${repo}" ]]; then
+    die '--repo cannot be combined with --archive-only'
+  fi
   [[ -n "${archive_root}" ]] || die '--archive-root is required for result verification'
   [[ -n "${record_relative}" ]] || die 'verify-record requires one record path'
   require_command git
@@ -883,12 +898,14 @@ verify_record_main() {
   require_command od
   require_command tr
 
-  repo="$(absolute_existing_directory "${repo}")"
   archive_root="$(absolute_existing_directory "${archive_root}")"
-  path_is_within "${archive_root}" "${repo}" &&
-    die 'archive root must be outside the repository checkout'
-  path_is_within "${repo}" "${archive_root}" &&
-    die 'archive root must not contain the repository checkout'
+  if [[ "${archive_only}" == false ]]; then
+    repo="$(absolute_existing_directory "${repo}")"
+    path_is_within "${archive_root}" "${repo}" &&
+      die 'archive root must be outside the repository checkout'
+    path_is_within "${repo}" "${archive_root}" &&
+      die 'archive root must not contain the repository checkout'
+  fi
   record_absolute="$(require_regular_archive_file "${archive_root}" "${record_relative}")"
   byte_count="$(stat -c %s -- "${record_absolute}")"
   ((byte_count >= 1 && byte_count <= MAX_RESULT_RECORD_BYTES)) ||
@@ -969,9 +986,11 @@ verify_record_main() {
       die 'tool entries are not unique and sorted'
     valid_absolute_tool_path "${path}" || die "invalid tool path in result record: ${name}"
     valid_sha256 "${digest}" || die "invalid tool digest in result record: ${name}"
-    [[ -f "${path}" && -x "${path}" ]] || die "recorded tool is missing: ${name}"
-    [[ "$(sha256_file "${path}")" == "${digest}" ]] ||
-      die "recorded tool digest mismatch: ${name}"
+    if [[ "${archive_only}" == false ]]; then
+      [[ -f "${path}" && -x "${path}" ]] || die "recorded tool is missing: ${name}"
+      [[ "$(sha256_file "${path}")" == "${digest}" ]] ||
+        die "recorded tool digest mismatch: ${name}"
+    fi
     if [[ "${name}" == command ]]; then
       [[ "$(hex_encode "${path}")" == "${argv_zero_hex}" ]] ||
         die 'command tool path does not match argv zero'
@@ -1036,10 +1055,14 @@ verify_record_main() {
   computed_digest="${computed_digest%% *}"
   [[ "${computed_digest}" == "${digest}" ]] || die 'result record digest mismatch'
 
-  current_commit="$(git_identity "${repo}" while-verifying)"
-  [[ "${current_commit}" == "${hash}" ]] ||
-    die 'recorded Git commit does not match verification checkout'
-  printf 'parity result record is valid: %s\n' "${record_relative}"
+  if [[ "${archive_only}" == false ]]; then
+    current_commit="$(git_identity "${repo}" while-verifying)"
+    [[ "${current_commit}" == "${hash}" ]] ||
+      die 'recorded Git commit does not match verification checkout'
+    printf 'parity result record is valid: %s\n' "${record_relative}"
+  else
+    printf 'parity result record archive is valid: %s\n' "${record_relative}"
+  fi
 }
 
 main() {

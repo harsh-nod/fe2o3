@@ -72,4 +72,20 @@ assert_equals \
   "$(step_command rustc-codegen-tests)" \
   'full workspace backend test command changed'
 
+STEP_NAMES=()
+STEP_COMMANDS=()
+main parity-evidence
+assert_equals \
+  "bash scripts/tests/parity-row-evidence.sh" \
+  "$(step_command parity-row-evidence-tests)" \
+  'parity evidence command did not dispatch the signed row suite'
+assert_equals \
+  "bash scripts/tests/mi300x-evidence-queue.sh" \
+  "$(step_command mi300x-evidence-queue-tests)" \
+  'parity evidence command did not dispatch the serialized queue suite'
+assert_equals \
+  "bash scripts/tests/hosted-parity-ci.sh" \
+  "$(step_command hosted-parity-ci-tests)" \
+  'parity evidence command did not dispatch the hosted trust-boundary suite'
+
 printf '%s\n' 'ci-local test gate regression passed'

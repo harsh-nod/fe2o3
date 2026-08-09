@@ -1,0 +1,148 @@
+name: Protected parity promotion
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+    paths:
+      - docs/cuda-oxide-parity-status.tsv
+      - docs/parity-row-evidence-policy-v2.tsv
+      - docs/parity-evidence/archive/**
+      - docs/parity-evidence/trust-policy-v2.tsv
+      - docs/parity-evidence/trusted-keys/**
+      - scripts/parity-signed-evidence.py
+      - scripts/parity-protected-change-policy.sh
+      - .github/workflows/ci.yml
+      - .github/workflows/parity-promotion.yml
+      - .github/CODEOWNERS
+      - .github/parity-trust-reviewers.txt
+  pull_request_review:
+    types: [submitted, edited, dismissed]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: parity-promotion-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Protected signed-evidence gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Require protected default-branch base
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -Eeuo pipefail
+          [[ "${BASE_REPOSITORY}" == "${GITHUB_REPOSITORY}" ]]
+          [[ "${BASE_REF}" == "${DEFAULT_BRANCH}" ]]
+          [[ "${BASE_SHA}" =~ ^[0-9a-f]{40}$ && ! "${BASE_SHA}" =~ ^0{40}$ ]]
+          git check-ref-format "refs/heads/${DEFAULT_BRANCH}" >/dev/null
+
+          DEFAULT_TIP_ROOT="${RUNNER_TEMP}/parity-default-tip.git"
+          DEFAULT_REMOTE_REF="refs/remotes/origin/${DEFAULT_BRANCH}"
+          git init --bare "${DEFAULT_TIP_ROOT}"
+          git -C "${DEFAULT_TIP_ROOT}" remote add origin \
+            "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="$(
+            printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n'
+          )"
+          git -C "${DEFAULT_TIP_ROOT}" \
+            -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
+            fetch --no-tags --depth=1 --force origin \
+            "+refs/heads/${DEFAULT_BRANCH}:${DEFAULT_REMOTE_REF}"
+          unset auth_header
+          CURRENT_DEFAULT_SHA="$(
+            git -C "${DEFAULT_TIP_ROOT}" rev-parse --verify \
+              "${DEFAULT_REMOTE_REF}^{commit}"
+          )"
+          if [[ "${CURRENT_DEFAULT_SHA}" != "${BASE_SHA}" ]]; then
+            printf 'pull request base SHA is not current default tip\n' >&2
+            exit 2
+          fi
+
+      - name: Check out protected base
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          path: protected
+
+      - name: Check out candidate as data only
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          path: candidate
+
+      - name: Classify protected changes and verify signed promotion
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          CHANGED_FILE_COUNT: ${{ github.event.pull_request.changed_files }}
+        run: |
+          set -Eeuo pipefail
+          reviews="${RUNNER_TEMP}/parity-pr-reviews.json"
+          changed_files="${RUNNER_TEMP}/parity-pr-files.json"
+          gh api --paginate \
+            "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100" |
+            jq -s 'add' >"${reviews}"
+          gh api --paginate \
+            "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/files?per_page=100" |
+            jq -s 'add' >"${changed_files}"
+          mode="$(bash protected/scripts/parity-protected-change-policy.sh \
+            protected candidate docs/cuda-oxide-parity-status.tsv \
+            "${reviews}" protected/.github/parity-trust-reviewers.txt \
+            "${changed_files}" "${CHANGED_FILE_COUNT}" "${HEAD_SHA}")"
+
+          case "${mode}" in
+            no-op)
+              printf 'no parity promotion or trust change\n'
+              exit 0
+              ;;
+            trust-change-approved)
+              python3 protected/scripts/parity-signed-evidence.py check-trust-update \
+                --protected-root protected \
+                --protected-policy protected/docs/parity-evidence/trust-policy-v2.tsv \
+                --candidate-root candidate \
+                --candidate-policy candidate/docs/parity-evidence/trust-policy-v2.tsv \
+                --protected-row-policy protected/docs/parity-row-evidence-policy-v2.tsv \
+                --candidate-row-policy candidate/docs/parity-row-evidence-policy-v2.tsv
+              printf 'separate trust change has designated review approval\n'
+              exit 0
+              ;;
+            promotion)
+              ;;
+            *)
+              printf 'unknown protected change mode: %s\n' "${mode}" >&2
+              exit 2
+              ;;
+          esac
+
+          test -f protected/docs/parity-evidence/trust-policy-v2.tsv
+          test -d protected/docs/parity-evidence/trusted-keys
+          test -f candidate/docs/parity-evidence/archive/manifests/promotion-v2.tsv
+          python3 protected/scripts/parity-signed-evidence.py gate \
+            --repo candidate \
+            --archive-root candidate/docs/parity-evidence/archive \
+            --trusted-root protected \
+            --trust-policy protected/docs/parity-evidence/trust-policy-v2.tsv \
+            --manifest manifests/promotion-v2.tsv \
+            --trusted-policy protected/docs/parity-row-evidence-policy-v2.tsv \
+            --candidate-policy candidate/docs/parity-row-evidence-policy-v2.tsv \
+            --baseline-status protected/docs/cuda-oxide-parity-status.tsv \
+            --candidate-status candidate/docs/cuda-oxide-parity-status.tsv
+
+          # No candidate executable or workflow content is invoked above.

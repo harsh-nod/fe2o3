@@ -43,6 +43,7 @@ Commands:
   test            Run unit tests that do not link or load the HIP runtime
   workspace-test  Run every workspace test target; may require ROCm libraries
   backend         Build the rustc codegen backend dylib
+  parity-evidence Run parity, signed-attestation, and queue shell tests
   verus           Run positive and negative Verus proof fixtures; requires Verus
   rocm-compile    Compile every example to host code and HSACO; requires ROCm
   hardware-smoke  Build and run every example; requires an AMD GPU and opt-in
@@ -170,6 +171,12 @@ run_parity_matrix_checks() {
   run_step parity-matrix-check bash scripts/parity-matrix.sh check
   run_step parity-matrix-tests bash scripts/tests/parity-matrix.sh
   run_step parity-evidence-tests bash scripts/tests/parity-evidence.sh
+  run_step parity-row-evidence-tests \
+    bash scripts/tests/parity-row-evidence.sh
+  run_step mi300x-evidence-queue-tests \
+    bash scripts/tests/mi300x-evidence-queue.sh
+  run_step hosted-parity-ci-tests \
+    bash scripts/tests/hosted-parity-ci.sh
 }
 
 run_generic() {
@@ -338,6 +345,7 @@ main() {
     test) run_tests ;;
     workspace-test) run_workspace_tests ;;
     backend) run_backend_build ;;
+    parity-evidence) run_parity_matrix_checks ;;
     verus) run_verus ;;
     rocm-compile) run_rocm_compile ;;
     hardware-smoke) run_hardware_smoke ;;

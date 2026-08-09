@@ -1,0 +1,8 @@
+parity_trust_policy_schema_version	2
+trust_domain	production
+metadata_path_count	2
+metadata_path	0000	exact	docs/cuda-oxide-parity-status.tsv
+metadata_path	0001	prefix	docs/parity-evidence/archive/
+key_count	2
+key	0000	attestor	operator-runner-v1	docs/parity-evidence/trusted-keys/operator-runner-v1.pem	PUBLIC_KEY_SHA256	ed25519
+key	0001	reviewer	operator-reviewer-v1	docs/parity-evidence/trusted-keys/operator-reviewer-v1.pem	PUBLIC_KEY_SHA256	ed25519
