@@ -1260,7 +1260,8 @@ impl<'a> Verifier<'a> {
             ));
         }
         self.verify_reachability()?;
-        self.verify_initialization()
+        self.verify_initialization()?;
+        self.verify_variant_state()
     }
 
     fn verify_locals(&self) -> Result<(), MirExecutableValidationError> {
@@ -2262,6 +2263,454 @@ impl<'a> Verifier<'a> {
         Ok(())
     }
 
+    fn verify_variant_state(&self) -> Result<(), MirExecutableValidationError> {
+        let body = &self.function.body;
+        let entry_state = VariantFlowState {
+            variants: body
+                .locals
+                .iter()
+                .map(|local| match self.type_at(local.ty).kind {
+                    MirTypeKind::Enum(_) => EnumVariantState::Unknown,
+                    _ => EnumVariantState::NotEnum,
+                })
+                .collect(),
+            discriminant_sources: vec![None; body.locals.len()],
+        };
+        let mut inputs = vec![None; body.blocks.len()];
+        inputs[body.entry.0 as usize] = Some(entry_state);
+        let mut queue = VecDeque::from([body.entry]);
+        while let Some(block_id) = queue.pop_front() {
+            let input = inputs[block_id.0 as usize]
+                .as_ref()
+                .expect("queued blocks have a variant input state")
+                .clone();
+            for (target, state) in self.transfer_variant_state(block_id, input, false)? {
+                let slot = &mut inputs[target.0 as usize];
+                let changed = match slot {
+                    Some(current) => merge_variant_state(current, &state),
+                    None => {
+                        *slot = Some(state);
+                        true
+                    }
+                };
+                if changed {
+                    queue.push_back(target);
+                }
+            }
+        }
+
+        for (index, input) in inputs.into_iter().enumerate() {
+            let input = input.ok_or_else(|| {
+                error(
+                    format!("{}.body.blocks[{index}]", self.path),
+                    "variant analysis did not reach block",
+                )
+            })?;
+            self.transfer_variant_state(MirBlockId(index as u32), input, true)?;
+        }
+        Ok(())
+    }
+
+    fn transfer_variant_state(
+        &self,
+        block_id: MirBlockId,
+        mut state: VariantFlowState,
+        strict: bool,
+    ) -> Result<Vec<(MirBlockId, VariantFlowState)>, MirExecutableValidationError> {
+        let block = &self.function.body.blocks[block_id.0 as usize];
+        let block_path = format!("{}.body.blocks[{}]", self.path, block_id.0);
+        for (index, statement) in block.statements.iter().enumerate() {
+            let path = format!("{block_path}.statements[{index}]");
+            match &statement.kind {
+                MirStatementKind::Assign { place, value } => {
+                    self.check_variant_place(&format!("{path}.place"), place, &state, strict)?;
+                    self.check_variant_rvalue(&format!("{path}.value"), value, &state, strict)?;
+                    if place.projection.is_empty() {
+                        let local = place.local.0 as usize;
+                        state.variants[local] =
+                            self.variant_state_from_rvalue(place.ty, value, &state);
+                        state.discriminant_sources[local] =
+                            self.discriminant_source_from_rvalue(value);
+                    }
+                }
+                MirStatementKind::Define { rvalue, .. } => {
+                    self.check_variant_rvalue(&format!("{path}.rvalue"), rvalue, &state, strict)?;
+                }
+                MirStatementKind::SetDiscriminant { place, variant } => {
+                    self.check_variant_place(&format!("{path}.place"), place, &state, strict)?;
+                    if !place.projection.is_empty() {
+                        return Err(error(
+                            format!("{path}.place"),
+                            "set-discriminant requires a direct local until field-sensitive variant state is modeled",
+                        ));
+                    }
+                    state.variants[place.local.0 as usize] = EnumVariantState::Active {
+                        variant: *variant,
+                        payload_initialized: true,
+                    };
+                }
+                MirStatementKind::StorageLive(local) | MirStatementKind::StorageDead(local) => {
+                    let index = local.0 as usize;
+                    state.variants[index] = match self.type_at(self.local(*local).ty).kind {
+                        MirTypeKind::Enum(_) => EnumVariantState::Unknown,
+                        _ => EnumVariantState::NotEnum,
+                    };
+                    state.discriminant_sources[index] = None;
+                }
+                MirStatementKind::Deinit(place) => {
+                    self.check_variant_place(&format!("{path}.place"), place, &state, strict)?;
+                    if place.projection.is_empty() {
+                        let local = place.local.0 as usize;
+                        if matches!(self.type_at(place.ty).kind, MirTypeKind::Enum(_)) {
+                            state.variants[local] = EnumVariantState::Unknown;
+                        }
+                        state.discriminant_sources[local] = None;
+                    }
+                }
+                MirStatementKind::Nop => {}
+            }
+        }
+
+        let path = format!("{block_path}.terminator");
+        let mut output = Vec::new();
+        match &block.terminator.kind {
+            MirTerminatorKind::Goto(edge) => {
+                self.check_variant_edge(&path, edge, &state, strict)?;
+                output.push((edge.target, state));
+            }
+            MirTerminatorKind::SwitchInt {
+                discr,
+                targets,
+                otherwise,
+            } => {
+                self.check_variant_operand(&format!("{path}.discr"), discr, &state, strict)?;
+                let source = self.discriminant_source_from_operand(discr, &state);
+                for (index, (value, edge)) in targets.iter().enumerate() {
+                    let mut edge_state = state.clone();
+                    self.refine_variant_for_discriminant(source, *value, &mut edge_state);
+                    self.check_variant_edge(
+                        &format!("{path}.targets[{index}]"),
+                        edge,
+                        &edge_state,
+                        strict,
+                    )?;
+                    output.push((edge.target, edge_state));
+                }
+                let mut edge_state = state;
+                self.refine_variant_for_otherwise(source, targets, &mut edge_state);
+                self.check_variant_edge(
+                    &format!("{path}.otherwise"),
+                    otherwise,
+                    &edge_state,
+                    strict,
+                )?;
+                output.push((otherwise.target, edge_state));
+            }
+            MirTerminatorKind::Return | MirTerminatorKind::Unreachable => {}
+            MirTerminatorKind::Call(call) => {
+                for (index, argument) in call.arguments.iter().enumerate() {
+                    self.check_variant_operand(
+                        &format!("{path}.arguments[{index}]"),
+                        argument,
+                        &state,
+                        strict,
+                    )?;
+                }
+                if let Some(destination) = &call.destination {
+                    self.check_variant_place(
+                        &format!("{path}.destination"),
+                        destination,
+                        &state,
+                        strict,
+                    )?;
+                }
+                if let Some(edge) = &call.target {
+                    let mut normal = state.clone();
+                    if let Some(destination) = &call.destination
+                        && destination.projection.is_empty()
+                    {
+                        let local = destination.local.0 as usize;
+                        normal.variants[local] = match self.type_at(destination.ty).kind {
+                            MirTypeKind::Enum(_) => EnumVariantState::Unknown,
+                            _ => EnumVariantState::NotEnum,
+                        };
+                        normal.discriminant_sources[local] = None;
+                    }
+                    self.check_variant_edge(&format!("{path}.target"), edge, &normal, strict)?;
+                    output.push((edge.target, normal));
+                }
+                self.push_variant_unwind(&path, &call.unwind, &state, strict, &mut output)?;
+            }
+            MirTerminatorKind::Drop {
+                place,
+                target,
+                unwind,
+            } => {
+                self.check_variant_place(&format!("{path}.place"), place, &state, strict)?;
+                self.check_variant_edge(&format!("{path}.target"), target, &state, strict)?;
+                output.push((target.target, state.clone()));
+                self.push_variant_unwind(&path, unwind, &state, strict, &mut output)?;
+            }
+            MirTerminatorKind::Assert {
+                condition,
+                target,
+                unwind,
+                ..
+            } => {
+                self.check_variant_operand(
+                    &format!("{path}.condition"),
+                    condition,
+                    &state,
+                    strict,
+                )?;
+                self.check_variant_edge(&format!("{path}.target"), target, &state, strict)?;
+                output.push((target.target, state.clone()));
+                self.push_variant_unwind(&path, unwind, &state, strict, &mut output)?;
+            }
+        }
+        Ok(output)
+    }
+
+    fn push_variant_unwind(
+        &self,
+        path: &str,
+        unwind: &MirUnwindAction,
+        state: &VariantFlowState,
+        strict: bool,
+        output: &mut Vec<(MirBlockId, VariantFlowState)>,
+    ) -> Result<(), MirExecutableValidationError> {
+        if let MirUnwindAction::Cleanup(edge) = unwind {
+            self.check_variant_edge(path, edge, state, strict)?;
+            output.push((edge.target, state.clone()));
+        }
+        Ok(())
+    }
+
+    fn check_variant_edge(
+        &self,
+        path: &str,
+        edge: &MirEdge,
+        state: &VariantFlowState,
+        strict: bool,
+    ) -> Result<(), MirExecutableValidationError> {
+        for (index, argument) in edge.arguments.iter().enumerate() {
+            self.check_variant_operand(
+                &format!("{path}.arguments[{index}]"),
+                argument,
+                state,
+                strict,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn check_variant_rvalue(
+        &self,
+        path: &str,
+        rvalue: &MirRvalue,
+        state: &VariantFlowState,
+        strict: bool,
+    ) -> Result<(), MirExecutableValidationError> {
+        match rvalue {
+            MirRvalue::Use(operand)
+            | MirRvalue::UnaryOp { operand, .. }
+            | MirRvalue::Cast { operand, .. }
+            | MirRvalue::Repeat { operand, .. } => {
+                self.check_variant_operand(path, operand, state, strict)
+            }
+            MirRvalue::BinaryOp { lhs, rhs, .. } | MirRvalue::CheckedBinaryOp { lhs, rhs, .. } => {
+                self.check_variant_operand(&format!("{path}.lhs"), lhs, state, strict)?;
+                self.check_variant_operand(&format!("{path}.rhs"), rhs, state, strict)
+            }
+            MirRvalue::Ref { place, .. }
+            | MirRvalue::AddressOf { place, .. }
+            | MirRvalue::Len(place)
+            | MirRvalue::Discriminant(place) => {
+                self.check_variant_place(&format!("{path}.place"), place, state, strict)
+            }
+            MirRvalue::Aggregate { operands, .. } => {
+                for (index, operand) in operands.iter().enumerate() {
+                    self.check_variant_operand(
+                        &format!("{path}.operands[{index}]"),
+                        operand,
+                        state,
+                        strict,
+                    )?;
+                }
+                Ok(())
+            }
+            MirRvalue::ThreadIndex1d => Ok(()),
+        }
+    }
+
+    fn check_variant_operand(
+        &self,
+        path: &str,
+        operand: &MirOperand,
+        state: &VariantFlowState,
+        strict: bool,
+    ) -> Result<(), MirExecutableValidationError> {
+        match operand {
+            MirOperand::Copy(place) | MirOperand::Move(place) => {
+                self.check_variant_place(path, place, state, strict)
+            }
+            MirOperand::Constant(_) | MirOperand::Value(_) => Ok(()),
+        }
+    }
+
+    fn check_variant_place(
+        &self,
+        path: &str,
+        place: &MirPlace,
+        state: &VariantFlowState,
+        strict: bool,
+    ) -> Result<(), MirExecutableValidationError> {
+        let local = self.local(place.local);
+        let mut current = ProjectionState {
+            ty: ProjectionType::Type(self.type_at(local.ty)),
+            writable: local.mutable,
+            address_space: local.storage_address_space,
+        };
+        for (index, projection) in place.projection.iter().enumerate() {
+            let projection_path = format!("{path}.projection[{index}]");
+            if let MirProjection::Downcast { variant } = projection {
+                let ProjectionType::Type(ty) = &current.ty else {
+                    return Err(error(&projection_path, "nested downcast is invalid"));
+                };
+                let MirTypeKind::Enum(enum_ty) = &ty.kind else {
+                    return Err(error(&projection_path, "downcast requires an enum"));
+                };
+                let selected = enum_ty
+                    .variants
+                    .iter()
+                    .find(|candidate| candidate.index == *variant)
+                    .expect("structural verification checked the variant index");
+                if !selected.aggregate.fields.is_empty() {
+                    if index != 0 {
+                        return Err(error(
+                            projection_path,
+                            "nested payload downcast requires field-sensitive variant authority",
+                        ));
+                    }
+                    if strict
+                        && state.variants[place.local.0 as usize]
+                            != (EnumVariantState::Active {
+                                variant: *variant,
+                                payload_initialized: true,
+                            })
+                    {
+                        return Err(error(
+                            projection_path,
+                            "payload downcast requires an exact active variant with initialized payload",
+                        ));
+                    }
+                }
+            }
+            current = self.project(&projection_path, current, projection)?;
+        }
+        Ok(())
+    }
+
+    fn variant_state_from_rvalue(
+        &self,
+        destination: MirTypeId,
+        rvalue: &MirRvalue,
+        state: &VariantFlowState,
+    ) -> EnumVariantState {
+        let MirTypeKind::Enum(destination_enum) = &self.type_at(destination).kind else {
+            return EnumVariantState::NotEnum;
+        };
+        match rvalue {
+            MirRvalue::Aggregate {
+                kind: MirAggregateKind::Adt { identity, variant },
+                ..
+            } if *identity == destination_enum.identity => EnumVariantState::Active {
+                variant: *variant,
+                payload_initialized: true,
+            },
+            MirRvalue::Use(MirOperand::Copy(place) | MirOperand::Move(place))
+                if place.projection.is_empty() =>
+            {
+                state.variants[place.local.0 as usize]
+            }
+            _ => EnumVariantState::Unknown,
+        }
+    }
+
+    fn discriminant_source_from_rvalue(&self, rvalue: &MirRvalue) -> Option<MirLocalId> {
+        match rvalue {
+            MirRvalue::Discriminant(place) if place.projection.is_empty() => Some(place.local),
+            _ => None,
+        }
+    }
+
+    fn discriminant_source_from_operand(
+        &self,
+        operand: &MirOperand,
+        state: &VariantFlowState,
+    ) -> Option<MirLocalId> {
+        match operand {
+            MirOperand::Copy(place) | MirOperand::Move(place) if place.projection.is_empty() => {
+                state.discriminant_sources[place.local.0 as usize]
+            }
+            MirOperand::Constant(_)
+            | MirOperand::Value(_)
+            | MirOperand::Copy(_)
+            | MirOperand::Move(_) => None,
+        }
+    }
+
+    fn refine_variant_for_discriminant(
+        &self,
+        source: Option<MirLocalId>,
+        discriminant: u128,
+        state: &mut VariantFlowState,
+    ) {
+        let Some(source) = source else {
+            return;
+        };
+        let MirTypeKind::Enum(enum_ty) = &self.type_at(self.local(source).ty).kind else {
+            return;
+        };
+        if let Some(variant) = enum_ty
+            .variants
+            .iter()
+            .find(|variant| variant.discriminant == discriminant)
+        {
+            state.variants[source.0 as usize] = EnumVariantState::Active {
+                variant: variant.index,
+                payload_initialized: true,
+            };
+        }
+    }
+
+    fn refine_variant_for_otherwise(
+        &self,
+        source: Option<MirLocalId>,
+        targets: &[(u128, MirEdge)],
+        state: &mut VariantFlowState,
+    ) {
+        let Some(source) = source else {
+            return;
+        };
+        let MirTypeKind::Enum(enum_ty) = &self.type_at(self.local(source).ty).kind else {
+            return;
+        };
+        let mut remaining = enum_ty.variants.iter().filter(|variant| {
+            !targets
+                .iter()
+                .any(|(value, _)| *value == variant.discriminant)
+        });
+        if let Some(variant) = remaining.next()
+            && remaining.next().is_none()
+        {
+            state.variants[source.0 as usize] = EnumVariantState::Active {
+                variant: variant.index,
+                payload_initialized: true,
+            };
+        }
+    }
+
     fn transfer_initialization(
         &self,
         block_id: MirBlockId,
@@ -2884,6 +3333,22 @@ enum LocalInitialization {
     MaybeInvalid,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum EnumVariantState {
+    NotEnum,
+    Unknown,
+    Active {
+        variant: u32,
+        payload_initialized: bool,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct VariantFlowState {
+    variants: Vec<EnumVariantState>,
+    discriminant_sources: Vec<Option<MirLocalId>>,
+}
+
 fn merge_initialization(
     current: &mut [LocalInitialization],
     incoming: &[LocalInitialization],
@@ -2894,6 +3359,37 @@ fn merge_initialization(
             *current
         } else {
             LocalInitialization::MaybeInvalid
+        };
+        if *current != merged {
+            *current = merged;
+            changed = true;
+        }
+    }
+    changed
+}
+
+fn merge_variant_state(current: &mut VariantFlowState, incoming: &VariantFlowState) -> bool {
+    let mut changed = false;
+    for (current, incoming) in current.variants.iter_mut().zip(&incoming.variants) {
+        let merged = if *current == *incoming {
+            *current
+        } else {
+            EnumVariantState::Unknown
+        };
+        if *current != merged {
+            *current = merged;
+            changed = true;
+        }
+    }
+    for (current, incoming) in current
+        .discriminant_sources
+        .iter_mut()
+        .zip(&incoming.discriminant_sources)
+    {
+        let merged = if *current == *incoming {
+            *current
+        } else {
+            None
         };
         if *current != merged {
             *current = merged;
