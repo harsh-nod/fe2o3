@@ -250,7 +250,7 @@ pub(crate) struct StatementV2 {
 pub(crate) enum StatementKindV2 {
     Assign {
         destination: PlaceV2,
-        value: RvalueV2,
+        value: Box<RvalueV2>,
     },
     StorageLive {
         local: usize,
@@ -285,9 +285,9 @@ pub(crate) enum StatementKindV2 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum IntrinsicStatementV2 {
     CopyNonOverlapping {
-        source: OperandV2,
-        destination: OperandV2,
-        count: OperandV2,
+        source: Box<OperandV2>,
+        destination: Box<OperandV2>,
+        count: Box<OperandV2>,
     },
     Assume {
         condition: OperandV2,
@@ -717,7 +717,7 @@ fn validate_rvalue(
         }
         RvalueV2::Aggregate { kind, operands } => {
             bounded(
-                &format!("{path}.operands"),
+                format!("{path}.operands"),
                 operands.len(),
                 limits.max_operands,
             )?;
@@ -787,7 +787,7 @@ fn validate_terminator(
             otherwise,
         } => {
             bounded(
-                &format!("{path}.targets"),
+                format!("{path}.targets"),
                 targets.len(),
                 limits.max_successors,
             )?;
@@ -838,7 +838,7 @@ fn validate_terminator(
                 validate_text(&format!("{path}.intrinsic.name"), &intrinsic.name, limits)?;
             }
             bounded(
-                &format!("{path}.arguments"),
+                format!("{path}.arguments"),
                 arguments.len(),
                 limits.max_operands,
             )?;
@@ -894,7 +894,7 @@ fn validate_terminator(
                 validate_text(&format!("{path}.intrinsic.name"), &intrinsic.name, limits)?;
             }
             bounded(
-                &format!("{path}.arguments"),
+                format!("{path}.arguments"),
                 arguments.len(),
                 limits.max_operands,
             )?;
@@ -1028,7 +1028,7 @@ fn validate_place(
 ) -> Result<(), ValidationErrorV2> {
     validate_local(&format!("{path}.local"), place.local, local_count)?;
     bounded(
-        &format!("{path}.projection"),
+        format!("{path}.projection"),
         place.projection.len(),
         limits.max_projection_depth,
     )?;

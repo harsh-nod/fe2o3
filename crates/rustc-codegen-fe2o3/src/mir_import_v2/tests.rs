@@ -189,7 +189,7 @@ fn assignments(body: &CapturedBodyV2) -> impl Iterator<Item = (&PlaceV2, &Rvalue
         .iter()
         .flat_map(|block| &block.statements)
         .filter_map(|statement| match &statement.kind {
-            StatementKindV2::Assign { destination, value } => Some((destination, value)),
+            StatementKindV2::Assign { destination, value } => Some((destination, value.as_ref())),
             _ => None,
         })
 }
