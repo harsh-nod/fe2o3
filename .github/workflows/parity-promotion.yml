@@ -5,12 +5,25 @@ on:
     types: [opened, synchronize, reopened, ready_for_review, edited]
     paths:
       - docs/cuda-oxide-parity-status.tsv
+      - docs/cuda-oxide-parity-matrix.md
+      - docs/generated/cuda-oxide-parity-dashboard.md
+      - docs/generated/cuda-oxide-parity-dashboard.tsv
+      - docs/generated/cuda-oxide-parity-signed-promotions.tsv
+      - docs/parity-signed-evidence-v2.md
       - docs/parity-row-evidence-policy-v2.tsv
       - docs/parity-evidence/archive/**
+      - docs/parity-evidence/trust-policy-v2.example.tsv
       - docs/parity-evidence/trust-policy-v2.tsv
       - docs/parity-evidence/trusted-keys/**
       - scripts/parity-signed-evidence.py
       - scripts/parity-protected-change-policy.sh
+      - scripts/parity-dashboard.sh
+      - scripts/parity-matrix.sh
+      - scripts/parity-promotion-projections.sh
+      - scripts/tests/hosted-parity-ci.sh
+      - scripts/tests/parity-dashboard.sh
+      - scripts/tests/parity-promotion-projections.sh
+      - scripts/tests/parity-row-evidence.sh
       - .github/workflows/ci.yml
       - .github/workflows/parity-promotion.yml
       - .github/CODEOWNERS

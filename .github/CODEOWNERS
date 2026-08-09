@@ -1,8 +1,17 @@
 /docs/parity-row-evidence-policy-v2.tsv @powderluv
+/docs/parity-signed-evidence-v2.md @powderluv
+/docs/parity-evidence/trust-policy-v2.example.tsv @powderluv
 /docs/parity-evidence/trust-policy-v2.tsv @powderluv
 /docs/parity-evidence/trusted-keys/ @powderluv
+/scripts/parity-dashboard.sh @powderluv
+/scripts/parity-matrix.sh @powderluv
+/scripts/parity-promotion-projections.sh @powderluv
 /scripts/parity-signed-evidence.py @powderluv
 /scripts/parity-protected-change-policy.sh @powderluv
+/scripts/tests/hosted-parity-ci.sh @powderluv
+/scripts/tests/parity-dashboard.sh @powderluv
+/scripts/tests/parity-promotion-projections.sh @powderluv
+/scripts/tests/parity-row-evidence.sh @powderluv
 /.github/workflows/ci.yml @powderluv
 /.github/workflows/parity-promotion.yml @powderluv
 /.github/CODEOWNERS @powderluv

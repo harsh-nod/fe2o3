@@ -28,16 +28,32 @@ readonly CANDIDATE_HEAD="$8"
 [[ "${CANDIDATE_HEAD}" =~ ^[0-9a-f]{40}$ ]] || die 'candidate head is malformed'
 
 readonly -a TRUST_FILES=(
+  docs/parity-signed-evidence-v2.md
+  docs/parity-evidence/trust-policy-v2.example.tsv
   docs/parity-row-evidence-policy-v2.tsv
   docs/parity-evidence/trust-policy-v2.tsv
+  scripts/parity-dashboard.sh
+  scripts/parity-matrix.sh
+  scripts/parity-promotion-projections.sh
   scripts/parity-signed-evidence.py
   scripts/parity-protected-change-policy.sh
+  scripts/tests/hosted-parity-ci.sh
+  scripts/tests/parity-dashboard.sh
+  scripts/tests/parity-promotion-projections.sh
+  scripts/tests/parity-row-evidence.sh
   .github/workflows/ci.yml
   .github/workflows/parity-promotion.yml
   .github/CODEOWNERS
   .github/parity-trust-reviewers.txt
 )
 readonly TRUST_KEY_DIRECTORY=docs/parity-evidence/trusted-keys
+readonly PROMOTION_LEDGER=docs/generated/cuda-oxide-parity-signed-promotions.tsv
+readonly -a PROMOTION_PROJECTIONS=(
+  docs/cuda-oxide-parity-matrix.md
+  docs/generated/cuda-oxide-parity-dashboard.md
+  docs/generated/cuda-oxide-parity-dashboard.tsv
+  "${PROMOTION_LEDGER}"
+)
 
 file_changed() {
   local relative="$1"
@@ -116,7 +132,10 @@ validate_changed_paths() {
   while IFS= read -r path; do
     trusted=false
     case "${path}" in
-      docs/parity-row-evidence-policy-v2.tsv|docs/parity-evidence/trust-policy-v2.tsv|scripts/parity-signed-evidence.py|scripts/parity-protected-change-policy.sh|.github/workflows/ci.yml|.github/workflows/parity-promotion.yml|.github/CODEOWNERS|.github/parity-trust-reviewers.txt)
+      docs/parity-signed-evidence-v2.md|docs/parity-evidence/trust-policy-v2.example.tsv|docs/parity-row-evidence-policy-v2.tsv|docs/parity-evidence/trust-policy-v2.tsv|scripts/parity-dashboard.sh|scripts/parity-matrix.sh|scripts/parity-promotion-projections.sh|scripts/parity-signed-evidence.py|scripts/parity-protected-change-policy.sh|scripts/tests/hosted-parity-ci.sh|scripts/tests/parity-dashboard.sh|scripts/tests/parity-promotion-projections.sh|scripts/tests/parity-row-evidence.sh|.github/workflows/ci.yml|.github/workflows/parity-promotion.yml|.github/CODEOWNERS|.github/parity-trust-reviewers.txt)
+        trusted=true
+        ;;
+      "${PROMOTION_LEDGER}")
         trusted=true
         ;;
       docs/parity-evidence/trusted-keys/*)
@@ -133,6 +152,13 @@ if file_changed "${STATUS_PATH}"; then
   status_changed=true
 fi
 
+projection_changed=false
+for relative in "${PROMOTION_PROJECTIONS[@]}"; do
+  if file_changed "${relative}"; then
+    projection_changed=true
+  fi
+done
+
 trust_changed=false
 for relative in "${TRUST_FILES[@]}"; do
   if file_changed "${relative}"; then
@@ -145,6 +171,19 @@ fi
 
 if [[ "${trust_changed}" == true ]]; then
   [[ "${status_changed}" == false ]] || die 'trust changes must not include parity status changes'
+  if [[ "${projection_changed}" == true ]]; then
+    [[ ! -e "${PROTECTED_ROOT}/${PROMOTION_LEDGER}" &&
+      -f "${CANDIDATE_ROOT}/${PROMOTION_LEDGER}" &&
+      ! -L "${CANDIDATE_ROOT}/${PROMOTION_LEDGER}" ]] ||
+      die 'trust changes must not include parity projection changes'
+    [[ "$(cat -- "${CANDIDATE_ROOT}/${PROMOTION_LEDGER}")" == $'signed_promotion_projection_schema_version\t1\nrow_count\t0' ]] ||
+      die 'initial signed-promotion ledger is not canonical and empty'
+    for relative in "${PROMOTION_PROJECTIONS[@]}"; do
+      [[ "${relative}" == "${PROMOTION_LEDGER}" ]] && continue
+      file_changed "${relative}" &&
+        die 'trust changes must not include parity projection changes'
+    done
+  fi
   validate_candidate_trust_types
   validate_changed_paths
   [[ -f "${REVIEWERS_FILE}" && ! -L "${REVIEWERS_FILE}" ]] || die 'protected reviewer policy is missing'
@@ -174,6 +213,8 @@ if [[ "${trust_changed}" == true ]]; then
   printf 'trust-change-approved\n'
 elif [[ "${status_changed}" == true ]]; then
   printf 'promotion\n'
+elif [[ "${projection_changed}" == true ]]; then
+  die 'parity projections may change only with a signed status promotion'
 else
   printf 'no-op\n'
 fi
