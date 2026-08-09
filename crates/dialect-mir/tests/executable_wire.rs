@@ -78,6 +78,17 @@ fn set_payload_len(bytes: &mut [u8]) {
     bytes[12..16].copy_from_slice(&payload_len.to_le_bytes());
 }
 
+fn raw_wire(module: &MirExecutableModule) -> Vec<u8> {
+    let payload = serde_json::to_vec(module).unwrap();
+    let mut bytes = Vec::with_capacity(16 + payload.len());
+    bytes.extend_from_slice(b"F2MEXE01");
+    bytes.extend_from_slice(&1_u16.to_le_bytes());
+    bytes.extend_from_slice(&0_u16.to_le_bytes());
+    bytes.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+    bytes.extend_from_slice(&payload);
+    bytes
+}
+
 #[test]
 fn canonical_wire_roundtrips_with_a_versioned_envelope() {
     let module = module();
@@ -92,6 +103,46 @@ fn canonical_wire_roundtrips_with_a_versioned_envelope() {
     let decoded: ValidatedMirExecutableModule = MirExecutableModule::from_bytes(&bytes).unwrap();
     assert_eq!(decoded, module);
     assert_eq!(module.to_bytes().unwrap(), bytes);
+}
+
+#[test]
+fn canonical_wire_binds_the_complete_gfx942_target_profile() {
+    let canonical = module().to_bytes().unwrap();
+    assert!(canonical.len() < MAX_EXECUTABLE_WIRE_BYTES);
+    let payload = std::str::from_utf8(&canonical[16..]).unwrap();
+    assert!(payload.contains("amdgcn-amd-amdhsa"));
+    assert!(payload.contains("gfx942"));
+    assert!(payload.contains("-wavefrontsize32,+wavefrontsize64"));
+    assert!(payload.contains("p3:32:32"));
+
+    let mut forged_layout = module();
+    forged_layout.target.data_layout = "e-p:64:64-p3:64:64".into();
+    assert!(matches!(
+        MirExecutableModule::from_bytes(&raw_wire(&forged_layout)),
+        Err(MirExecutableDecodeError::Validation(_))
+    ));
+
+    let mut forged_pointer_map = module();
+    forged_pointer_map.target.pointer_abis[3].width_bits = 64;
+    forged_pointer_map.target.pointer_abis[3].abi_alignment_bits = 64;
+    assert!(matches!(
+        MirExecutableModule::from_bytes(&raw_wire(&forged_pointer_map)),
+        Err(MirExecutableDecodeError::Validation(_))
+    ));
+
+    let mut duplicate_pointer_space = module();
+    duplicate_pointer_space.target.pointer_abis[4].address_space = MirAddressSpace(3);
+    assert!(matches!(
+        MirExecutableModule::from_bytes(&raw_wire(&duplicate_pointer_space)),
+        Err(MirExecutableDecodeError::Validation(_))
+    ));
+
+    let mut oversized_target = module();
+    oversized_target.target.features = "x".repeat(MAX_EXECUTABLE_WIRE_BYTES);
+    assert!(matches!(
+        MirExecutableModule::from_bytes(&raw_wire(&oversized_target)),
+        Err(MirExecutableDecodeError::InputTooLarge)
+    ));
 }
 
 #[test]
