@@ -2266,6 +2266,20 @@ impl<'tcx> DeviceCollector<'tcx> {
             ));
         }
 
+        // Trait calls name the trait method in MIR, so classification must be
+        // repeated against the exact concrete implementation selected by
+        // rustc. The classifier authenticates the implementation through the
+        // diagnostic-item-marked device type and the exact lang-item trait.
+        if crate::trusted_device_items::classify(self.tcx, resolved.def_id()).is_some() {
+            if self.verbose {
+                eprintln!(
+                    "[collector] stopping at resolved trusted device item {}",
+                    self.tcx.def_path_str(resolved.def_id())
+                );
+            }
+            return Ok(());
+        }
+
         if !self.tcx.is_mir_available(resolved.def_id()) {
             return Err(self.reachable_error(
                 caller,

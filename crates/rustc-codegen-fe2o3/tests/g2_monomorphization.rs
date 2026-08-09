@@ -267,7 +267,7 @@ fn collector_resolves_concrete_instances_and_rejects_unavailable_mir_stably() {
         &backend,
         &output.path.join("first"),
         &externs,
-        &[],
+        &["-Coverflow-checks=off"],
     );
     let first_stderr = String::from_utf8_lossy(&first.stderr);
     let rows = collection_rows(&first_stderr);
@@ -317,7 +317,7 @@ fn collector_resolves_concrete_instances_and_rejects_unavailable_mir_stably() {
         &backend,
         &output.path.join("second"),
         &externs,
-        &[],
+        &["-Coverflow-checks=off"],
     );
     let second_stderr = String::from_utf8_lossy(&second.stderr);
     assert_eq!(
