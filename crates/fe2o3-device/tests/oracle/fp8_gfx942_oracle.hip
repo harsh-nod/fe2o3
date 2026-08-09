@@ -2,6 +2,7 @@
 #include <hip/hip_runtime.h>
 
 #include <array>
+#include <bit>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -22,11 +23,6 @@ void check_hip(hipError_t status, const char *expression) {
 
 #define CHECK_HIP(expression) check_hip((expression), #expression)
 
-union FloatBits {
-  std::uint32_t bits;
-  float value;
-};
-
 __global__ void widen_all(std::uint32_t *e4m3, std::uint32_t *e5m2) {
   const unsigned raw = blockIdx.x * blockDim.x + threadIdx.x;
   if (raw >= 256)
@@ -36,10 +32,8 @@ __global__ void widen_all(std::uint32_t *e4m3, std::uint32_t *e5m2) {
   __hip_fp8_e5m2_fnuz e5;
   e4.__x = static_cast<unsigned char>(raw);
   e5.__x = static_cast<unsigned char>(raw);
-  FloatBits e4_result{.value = static_cast<float>(e4)};
-  FloatBits e5_result{.value = static_cast<float>(e5)};
-  e4m3[raw] = e4_result.bits;
-  e5m2[raw] = e5_result.bits;
+  e4m3[raw] = std::bit_cast<std::uint32_t>(static_cast<float>(e4));
+  e5m2[raw] = std::bit_cast<std::uint32_t>(static_cast<float>(e5));
 }
 
 __global__ void narrow_all(const std::uint32_t *inputs, unsigned char *e4m3,
@@ -48,9 +42,9 @@ __global__ void narrow_all(const std::uint32_t *inputs, unsigned char *e4m3,
   if (index >= count)
     return;
 
-  FloatBits input{.bits = inputs[index]};
-  e4m3[index] = __hip_fp8_e4m3_fnuz(input.value).__x;
-  e5m2[index] = __hip_fp8_e5m2_fnuz(input.value).__x;
+  const float input = std::bit_cast<float>(inputs[index]);
+  e4m3[index] = __hip_fp8_e4m3_fnuz(input).__x;
+  e5m2[index] = __hip_fp8_e5m2_fnuz(input).__x;
 }
 
 __global__ void pack_all(const std::uint32_t *inputs, std::uint32_t *e4m3,
@@ -60,10 +54,10 @@ __global__ void pack_all(const std::uint32_t *inputs, std::uint32_t *e4m3,
     return;
 
   const unsigned base = index * 4;
-  const float4 lanes = make_float4(FloatBits{.bits = inputs[base]}.value,
-                                   FloatBits{.bits = inputs[base + 1]}.value,
-                                   FloatBits{.bits = inputs[base + 2]}.value,
-                                   FloatBits{.bits = inputs[base + 3]}.value);
+  const float4 lanes = make_float4(std::bit_cast<float>(inputs[base]),
+                                   std::bit_cast<float>(inputs[base + 1]),
+                                   std::bit_cast<float>(inputs[base + 2]),
+                                   std::bit_cast<float>(inputs[base + 3]));
   e4m3[index] = __hip_fp8x4_e4m3_fnuz(lanes).__x;
   e5m2[index] = __hip_fp8x4_e5m2_fnuz(lanes).__x;
 }
@@ -80,14 +74,10 @@ struct PackCase {
   std::array<unsigned char, 4> lanes;
 };
 
-float as_float(std::uint32_t bits) {
-  FloatBits value{.bits = bits};
-  return value.value;
-}
+float as_float(std::uint32_t bits) { return std::bit_cast<float>(bits); }
 
 std::uint32_t as_bits(float value) {
-  FloatBits bits{.value = value};
-  return bits.bits;
+  return std::bit_cast<std::uint32_t>(value);
 }
 
 void add_narrowing_cases(char format,

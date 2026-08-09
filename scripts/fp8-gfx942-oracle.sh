@@ -18,6 +18,7 @@ repo_root="$(git -C "${script_dir}" rev-parse --show-toplevel)"
 oracle_source="${repo_root}/crates/fe2o3-device/tests/oracle/fp8_gfx942_oracle.hip"
 golden="${repo_root}/crates/fe2o3-device/tests/fixtures/fp8_gfx942_rocm.golden"
 target="gfx942"
+cxx_standard="c++20"
 hipcc="${HIPCC:-hipcc}"
 
 command -v "${hipcc}" >/dev/null
@@ -35,7 +36,8 @@ trap 'rm -rf -- "${temporary}"' EXIT
 binary="${temporary}/fp8-gfx942-oracle"
 actual="${temporary}/fp8_gfx942_rocm.golden"
 
-"${hipcc}" --offload-arch="${target}" -O2 "${oracle_source}" -o "${binary}"
+"${hipcc}" -std="${cxx_standard}" --offload-arch="${target}" -O2 \
+  "${oracle_source}" -o "${binary}"
 
 hip_version="$(hipconfig --version | tr -d '\r\n')"
 compiler_version="$("${hipcc}" --version)"
@@ -48,6 +50,7 @@ generator_digest="$(sha256sum "${BASH_SOURCE[0]}" | cut -d' ' -f1)"
 {
   echo "meta schema fe2o3-fp8-gfx942-golden-v1"
   echo "meta target ${target}"
+  echo "meta cxx-standard ${cxx_standard}"
   echo "meta rocm-release ${rocm_release}"
   echo "meta hip-version ${hip_version}"
   echo "meta clang-version ${clang_version}"

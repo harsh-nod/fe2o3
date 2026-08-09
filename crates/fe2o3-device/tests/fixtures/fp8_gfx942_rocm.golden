@@ -1,5 +1,6 @@
 meta schema fe2o3-fp8-gfx942-golden-v1
 meta target gfx942
+meta cxx-standard c++20
 meta rocm-release 7.2.4
 meta hip-version 7.2.53211-97f5574fe2
 meta clang-version 22.0.0git
@@ -7,8 +8,8 @@ meta clang-revision f58b06dce1f9c15707c5f808fd002e18c2accf7e
 meta rounding rne
 meta saturation satfinite
 meta fnuz-nan-f32 ffc00000
-meta oracle-sha256 84f86698e171f8b82211dab611c7122e612ac80d7ec1ea5f49ce5c9211e9576a
-meta generator-sha256 95b978f5222c5c3e2842901ff57dad73190ba1857fb610ffd1488ff90f942757
+meta oracle-sha256 5a24a212c601ee9fe9b34297a59ce40bfa3c90628bc627001c8e5ee4092c4b99
+meta generator-sha256 ff44049394ed18111d5a8cb769d106b5950234611f4776975cba29fd888f02ec
 widen e4 00 00000000
 widen e4 01 3a800000
 widen e4 02 3b000000
