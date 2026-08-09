@@ -121,6 +121,7 @@ dependencies = [
 name = "dialect-mir"
 version = "0.1.0"
 dependencies = [
+ "fe2o3-compiler-ffi",
  "serde",
  "serde_json",
 ]
