@@ -77,9 +77,20 @@ expect_fail "${CHECKER}" check-dwarf --input "${TMP}/dwarf-absolute-source"
 sed 's#crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src/main.rs#crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src/../src/main.rs#' \
   "${FIXTURES}/dwarf.pass.txt" >"${TMP}/dwarf-dotdot-source"
 expect_fail "${CHECKER}" check-dwarf --input "${TMP}/dwarf-dotdot-source"
+sed '/DW_TAG_compile_unit/a private_source = /home/harsh/private/build.rs' \
+  "${FIXTURES}/dwarf.pass.txt" >"${TMP}/dwarf-unrelated-absolute"
+expect_fail "${CHECKER}" check-dwarf --input "${TMP}/dwarf-unrelated-absolute"
 
 sed '/^i = /d' "${FIXTURES}/rocgdb.pass.txt" >"${TMP}/rocgdb-missing-local"
 expect_fail check_rocgdb "${TMP}/rocgdb-missing-local"
+sed '/hit Breakpoint 2/d' "${FIXTURES}/rocgdb.pass.txt" >"${TMP}/rocgdb-missing-bp2-hit"
+expect_fail check_rocgdb "${TMP}/rocgdb-missing-bp2-hit"
+sed '/hit Breakpoint 3/d' "${FIXTURES}/rocgdb.pass.txt" >"${TMP}/rocgdb-missing-bp3-hit"
+expect_fail check_rocgdb "${TMP}/rocgdb-missing-bp3-hit"
+sed '/AMDGPU Wave .*main.rs:69/d' "${FIXTURES}/rocgdb.pass.txt" >"${TMP}/rocgdb-missing-bp2-wave"
+expect_fail check_rocgdb "${TMP}/rocgdb-missing-bp2-wave"
+sed '/AMDGPU Wave .*main.rs:70/d' "${FIXTURES}/rocgdb.pass.txt" >"${TMP}/rocgdb-missing-bp3-wave"
+expect_fail check_rocgdb "${TMP}/rocgdb-missing-bp3-wave"
 sed 's/scale = 1.5/scale = <optimized out>/' \
   "${FIXTURES}/rocgdb.pass.txt" >"${TMP}/rocgdb-optimized"
 expect_fail check_rocgdb "${TMP}/rocgdb-optimized"
@@ -104,6 +115,12 @@ expect_fail check_rocgdb "${TMP}/rocgdb-substitute-host"
 sed 's#crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src/main.rs#/other-root/crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src/main.rs#' \
   "${FIXTURES}/rocgdb.pass.txt" >"${TMP}/rocgdb-cross-root"
 expect_fail check_rocgdb "${TMP}/rocgdb-cross-root"
+sed '/FE2O3_S09_BINDING/a leak = /home/harsh/private/build.rs' \
+  "${FIXTURES}/rocgdb.pass.txt" >"${TMP}/rocgdb-posix-leak"
+expect_fail check_rocgdb "${TMP}/rocgdb-posix-leak"
+sed '/FE2O3_S09_BINDING/a leak = C:\\private\\build.rs' \
+  "${FIXTURES}/rocgdb.pass.txt" >"${TMP}/rocgdb-windows-leak"
+expect_fail check_rocgdb "${TMP}/rocgdb-windows-leak"
 sed '/FE2O3_S09_BEGIN/a FE2O3_S09_BEGIN' \
   "${FIXTURES}/rocgdb.pass.txt" >"${TMP}/rocgdb-duplicate-marker"
 expect_fail check_rocgdb "${TMP}/rocgdb-duplicate-marker"
@@ -127,6 +144,9 @@ rg -q '^readonly READOBJ=/opt/rocm/llvm/bin/llvm-readobj$' "${RUNNER}"
 rg -q '^readonly READELF=/opt/rocm/llvm/bin/llvm-readobj$' "${RUNNER}"
 rg -q -- '--batch --nx --nh' "${RUNNER}"
 rg -q 'FE2O3_S09_HARDWARE_PASS' "${RUNNER}"
+rg -q 'FE2O3_S09_BP2_ARMED' "${RUNNER}"
+rg -q 'FE2O3_S09_BP3_STOP' "${RUNNER}"
+rg -Fq 'rm -f -- "${ROCGDB_RAW}"' "${RUNNER}"
 expect_fail rg -q -- '--command|command-file|FE2O3_.*DEBUG.*COMMAND' "${RUNNER}"
 expect_fail "${RUNNER}"
 

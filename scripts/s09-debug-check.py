@@ -21,6 +21,9 @@ HEX_BUILD_ID = re.compile(r"[0-9a-f]{40,64}")
 S09_SOURCE = "crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src/main.rs"
 S09_DIRECTORY = "crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src"
 SOURCE_CANDIDATE = re.compile(rf'(?:[^\s"()]+/)?{re.escape(S09_SOURCE)}')
+POSIX_ABSOLUTE_PATH = re.compile(r'(?:^|[\s"\'(=])(/[^\s"\'()]*)', re.MULTILINE)
+WINDOWS_ABSOLUTE_PATH = re.compile(r"(?:^|[\s\"'(=])(?:[A-Za-z]:[\\/]|\\\\)[^\s\"'()]*", re.MULTILINE)
+RELATIVE_RUST_PATH = re.compile(r"(?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_.-]+\.rs")
 VARIABLES = ("scale", "input_data", "input_len", "output_data", "output_len", "i")
 EXPECTED_OBSERVATIONS = {
     "scale": "1.5",
@@ -58,13 +61,18 @@ def write_new(path: pathlib.Path, text: str) -> None:
         output.write(text)
 
 
-def require_canonical_source_paths(text: str) -> None:
+def require_path_hygiene(text: str) -> None:
     candidates = SOURCE_CANDIDATE.findall(text)
     if not candidates:
         raise CheckError("evidence contains no canonical S09 source path")
     for candidate in candidates:
         if candidate != S09_SOURCE:
             raise CheckError("evidence contains an absolute or non-canonical S09 source path")
+    if POSIX_ABSOLUTE_PATH.search(text) or WINDOWS_ABSOLUTE_PATH.search(text):
+        raise CheckError("normalized evidence contains an absolute path")
+    for candidate in RELATIVE_RUST_PATH.findall(text):
+        if candidate != S09_SOURCE:
+            raise CheckError(f"normalized evidence contains unallowlisted source path {candidate!r}")
 
 
 def normalize_line(line: str) -> str:
@@ -75,11 +83,12 @@ def normalize_line(line: str) -> str:
     line = AMDGPU_WAVE.sub("AMDGPU Wave <WAVE>", line)
     line = re.sub(r"^(\*? )[0-9]+( +AMDGPU Wave)", r"\1<THREAD>\2", line)
     line = ADDRESS.sub("0x<ADDR>", line)
+    if line.lstrip().startswith("Starting program: "):
+        line = "Starting program: $HOST_EXECUTABLE"
     return SPACE.sub(" ", line.strip())
 
 
 def normalize_dwarf(text: str) -> str:
-    require_canonical_source_paths(text)
     lines = [normalize_line(line) for line in text.splitlines()]
     lines = [
         "$HSACO: file format elf64-amdgpu"
@@ -87,17 +96,20 @@ def normalize_dwarf(text: str) -> str:
         else line
         for line in lines
     ]
-    return "\n".join(line for line in lines if line) + "\n"
+    normalized = "\n".join(line for line in lines if line) + "\n"
+    require_path_hygiene(normalized)
+    return normalized
 
 
 def normalize_rocgdb(text: str) -> str:
-    require_canonical_source_paths(text)
     lines = [normalize_line(line) for line in text.splitlines()]
     begin = [index for index, line in enumerate(lines) if line == "FE2O3_S09_BEGIN"]
     end = [index for index, line in enumerate(lines) if line == "FE2O3_S09_END"]
     if len(begin) != 1 or len(end) != 1 or begin[0] >= end[0]:
         raise CheckError("ROCgdb transcript must contain one ordered S09 marker interval")
-    return "\n".join(line for line in lines[begin[0] : end[0] + 1] if line) + "\n"
+    normalized = "\n".join(line for line in lines[begin[0] : end[0] + 1] if line) + "\n"
+    require_path_hygiene(normalized)
+    return normalized
 
 
 def require_once(text: str, token: str, context: str) -> None:
@@ -203,7 +215,11 @@ def check_rocgdb(text: str, hsaco_sha256: str, hardware_sha256: str, build_id: s
         "FE2O3_S09_KERNEL_LOAD",
         "FE2O3_S09_GPU_CONTEXT",
         "FE2O3_S09_FUNCTION",
+        "FE2O3_S09_BP2_ARMED",
+        "FE2O3_S09_BP2_STOP",
         "FE2O3_S09_ARGUMENTS",
+        "FE2O3_S09_BP3_ARMED",
+        "FE2O3_S09_BP3_STOP",
         "FE2O3_S09_LOCAL",
         "FE2O3_S09_RESUME",
         "FE2O3_S09_HARDWARE_PASS",
@@ -225,10 +241,11 @@ def check_rocgdb(text: str, hsaco_sha256: str, hardware_sha256: str, build_id: s
     ):
         require_once(text, token, "ROCgdb binding")
 
-    kernel_section = text[positions[2] : positions[3]]
+    marker_position = dict(zip(markers, positions, strict=True))
+    kernel_section = text[marker_position["FE2O3_S09_KERNEL_LOAD"] : marker_position["FE2O3_S09_GPU_CONTEXT"]]
     if 'Function "alpha" not defined.' not in kernel_section or "Breakpoint 1 (alpha) pending." not in kernel_section:
         raise CheckError("ROCgdb did not prove pending alpha resolved after kernel load")
-    gpu_section = text[positions[3] : positions[4]]
+    gpu_section = text[marker_position["FE2O3_S09_GPU_CONTEXT"] : marker_position["FE2O3_S09_FUNCTION"]]
     if not re.search(r"Switching to Thread <THREAD>, lane 0 \(AMDGPU Lane <LANE>\)", gpu_section):
         raise CheckError("ROCgdb did not select an AMDGPU lane")
     if not re.search(r'(?m)^\* <THREAD> AMDGPU Wave <WAVE> .*"alpha".*' + re.escape(S09_SOURCE) + r":68$", gpu_section):
@@ -243,15 +260,45 @@ def check_rocgdb(text: str, hsaco_sha256: str, hardware_sha256: str, build_id: s
     ):
         raise CheckError("ROCgdb did not hit the loaded alpha kernel breakpoint")
 
-    function_section = text[positions[4] : positions[5]]
+    function_section = text[marker_position["FE2O3_S09_FUNCTION"] : marker_position["FE2O3_S09_BP2_ARMED"]]
     if f"at {S09_SOURCE}:68" not in function_section:
         raise CheckError("ROCgdb alpha frame is not bound to canonical source line 68")
-    for line in (69, 70):
-        if f"{S09_SOURCE}:{line}" not in text and f"line {line}" not in text.lower():
-            raise CheckError(f"ROCgdb did not report canonical alpha source line {line}")
 
-    argument_section = text[positions[5] : positions[6]]
-    local_section = text[positions[6] : positions[7]]
+    bp2_hit = text[marker_position["FE2O3_S09_BP2_ARMED"] : marker_position["FE2O3_S09_BP2_STOP"]]
+    if not re.search(
+        r'Thread <THREAD> "alpha" hit Breakpoint 2, with lanes \[0-63\], alpha .* at '
+        + re.escape(S09_SOURCE)
+        + r":69",
+        bp2_hit,
+    ):
+        raise CheckError("ROCgdb did not prove the exact BP2 line-69 stop")
+    bp2_context = text[marker_position["FE2O3_S09_BP2_STOP"] : marker_position["FE2O3_S09_ARGUMENTS"]]
+    if not re.search(
+        r'(?m)^\* <THREAD> AMDGPU Wave <WAVE> .*"alpha".*'
+        + re.escape(S09_SOURCE)
+        + r":69$",
+        bp2_context,
+    ) or f"at {S09_SOURCE}:69" not in bp2_context:
+        raise CheckError("ROCgdb BP2 observations are not bound to an AMDGPU wave at line 69")
+
+    argument_section = text[marker_position["FE2O3_S09_ARGUMENTS"] : marker_position["FE2O3_S09_BP3_ARMED"]]
+    bp3_hit = text[marker_position["FE2O3_S09_BP3_ARMED"] : marker_position["FE2O3_S09_BP3_STOP"]]
+    if not re.search(
+        r'Thread <THREAD> "alpha" hit Breakpoint 3, with lanes \[0-63\], alpha .* at '
+        + re.escape(S09_SOURCE)
+        + r":70",
+        bp3_hit,
+    ):
+        raise CheckError("ROCgdb did not prove the exact BP3 line-70 stop")
+    bp3_context = text[marker_position["FE2O3_S09_BP3_STOP"] : marker_position["FE2O3_S09_LOCAL"]]
+    if not re.search(
+        r'(?m)^\* <THREAD> AMDGPU Wave <WAVE> .*"alpha".*'
+        + re.escape(S09_SOURCE)
+        + r":70$",
+        bp3_context,
+    ) or f"at {S09_SOURCE}:70" not in bp3_context:
+        raise CheckError("ROCgdb local observation is not bound to an AMDGPU wave at line 70")
+    local_section = text[marker_position["FE2O3_S09_LOCAL"] : marker_position["FE2O3_S09_RESUME"]]
     for name in VARIABLES:
         section = local_section if name == "i" else argument_section
         observations = re.findall(rf"(?m)^{re.escape(name)}\s*=\s*(\S.*)$", section)
@@ -271,7 +318,7 @@ def check_rocgdb(text: str, hsaco_sha256: str, hardware_sha256: str, build_id: s
         if observations[0] != EXPECTED_OBSERVATIONS[name]:
             raise CheckError(f"ROCgdb observed unexpected {name!r} value: {observations[0]!r}")
 
-    hardware_section = text[positions[7] : positions[8]]
+    hardware_section = text[marker_position["FE2O3_S09_RESUME"] : marker_position["FE2O3_S09_HARDWARE_PASS"]]
     if f"test {HARDWARE_TEST} ... ok" not in hardware_section:
         raise CheckError("ROCgdb transcript does not contain the exact hardware test pass")
     if "test result: ok. 1 passed; 0 failed;" not in hardware_section:

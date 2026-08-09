@@ -182,7 +182,11 @@ if ((dwarf_verify_status == 0 && dwarf_dump_status == 0 && dwarf_normalize_statu
       -ex 'info line *$pc' \
       -ex 'disable 1' \
       -ex 'break main.rs:69' \
+      -ex 'echo FE2O3_S09_BP2_ARMED\n' \
       -ex 'continue' \
+      -ex 'echo FE2O3_S09_BP2_STOP\n' \
+      -ex 'info threads' \
+      -ex 'frame' \
       -ex 'echo FE2O3_S09_ARGUMENTS\n' \
       -ex 'echo scale = ' -ex 'output scale' -ex 'echo \n' \
       -ex 'echo input_data = ' -ex 'output input_data' -ex 'echo \n' \
@@ -191,7 +195,10 @@ if ((dwarf_verify_status == 0 && dwarf_dump_status == 0 && dwarf_normalize_statu
       -ex 'echo output_len = ' -ex 'output output_len' -ex 'echo \n' \
       -ex 'disable 2' \
       -ex 'break main.rs:70' \
+      -ex 'echo FE2O3_S09_BP3_ARMED\n' \
       -ex 'continue' \
+      -ex 'echo FE2O3_S09_BP3_STOP\n' \
+      -ex 'info threads' \
       -ex 'echo FE2O3_S09_LOCAL\n' \
       -ex 'frame' \
       -ex 'info line *$pc' \
@@ -224,6 +231,9 @@ else
   rocgdb_check_status=1
 fi
 set -e
+ROCGDB_RAW_SHA256="$(hash_or_missing "${ROCGDB_RAW}")"
+readonly ROCGDB_RAW_SHA256
+rm -f -- "${ROCGDB_RAW}"
 
 result=passed
 for status in \
@@ -261,6 +271,8 @@ done
   printf 'hardware_facts_sha256=%s\n' "$(hash_or_missing "${HARDWARE_FACTS}")"
   printf 'dwarf_normalized_sha256=%s\n' "$(hash_or_missing "${DWARF_NORMALIZED}")"
   printf 'rocgdb_normalized_sha256=%s\n' "$(hash_or_missing "${ROCGDB_NORMALIZED}")"
+  printf 'rocgdb_raw_sha256=%s\n' "${ROCGDB_RAW_SHA256}"
+  printf 'rocgdb_raw_retained=false\n'
   printf 'dwarf_verify_status=%d\n' "${dwarf_verify_status}"
   printf 'dwarf_dump_status=%d\n' "${dwarf_dump_status}"
   printf 'dwarf_normalize_status=%d\n' "${dwarf_normalize_status}"
