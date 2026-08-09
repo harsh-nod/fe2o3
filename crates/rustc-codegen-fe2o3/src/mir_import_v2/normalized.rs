@@ -88,6 +88,25 @@ pub(crate) fn canonical_semantic_bytes_v2(
     Ok(writer.into_bytes())
 }
 
+/// Reserved ingestion boundary. V2 remains observation-only until this is
+/// replaced by a reviewed streaming decoder that charges before allocation.
+pub(crate) fn decode_captured_body_v2_bounded(
+    bytes: &[u8],
+    limits: CaptureLimitsV2,
+) -> Result<CapturedBodyV2, ValidationErrorV2> {
+    let limit = semantic_byte_limit_v2(limits.max_total_work_items, limits.max_total_text_bytes)?;
+    if bytes.len() > limit {
+        return Err(ValidationErrorV2::new(
+            "semantic_bytes",
+            "serialized MIR V2 input exceeds its pre-allocation bound",
+        ));
+    }
+    Err(ValidationErrorV2::new(
+        "semantic_bytes",
+        "bounded MIR V2 decoding is not implemented; generic deserialization is disabled",
+    ))
+}
+
 fn semantic_byte_limit_v2(
     work_items: usize,
     text_bytes: usize,

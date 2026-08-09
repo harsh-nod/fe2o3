@@ -893,6 +893,24 @@ fn raw_data_is_serialize_only_and_cannot_satisfy_the_authentic_capture_api() {
 }
 
 #[test]
+fn bounded_decoder_boundary_is_fail_closed_before_ingestion_exists() {
+    let unavailable = decode_captured_body_v2_bounded(&[], CaptureLimitsV2::default())
+        .unwrap_err()
+        .to_string();
+    assert!(unavailable.contains("generic deserialization is disabled"));
+
+    let tight = CaptureLimitsV2 {
+        max_total_work_items: 0,
+        max_total_text_bytes: 0,
+        ..CaptureLimitsV2::default()
+    };
+    let oversized = decode_captured_body_v2_bounded(&[0; 64], tight)
+        .unwrap_err()
+        .to_string();
+    assert!(oversized.contains("pre-allocation bound"));
+}
+
+#[test]
 fn exact_rustc_recapture_rejects_refreshed_structural_forgeries() {
     let results = compiler_results();
     assert!(results.diagnostic_recapture_succeeded);
