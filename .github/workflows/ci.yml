@@ -26,6 +26,11 @@ jobs:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.event_name == 'merge_group' && github.event.merge_group.head_sha || github.sha }}
           fetch-depth: 0
 
+      - name: Install generic test prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes ripgrep
+
       - name: Gate parity status promotions
         env:
           EVENT_NAME: ${{ github.event_name }}
