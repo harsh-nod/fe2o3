@@ -7,6 +7,8 @@ mod inspect;
 #[allow(dead_code)]
 #[path = "rustc_wrapper/pinned_codegen_backend.rs"]
 mod pinned_codegen_backend;
+#[cfg(test)]
+mod pinned_executable_test_directory;
 mod project;
 mod tool_commands;
 mod worker_v2;
