@@ -6,22 +6,24 @@ mod semantic_memory;
 mod semantic_type;
 
 pub use executable::{
-    EXECUTABLE_MIR_VERSION, MAX_EXECUTABLE_ADDRESS_SPACE, MAX_EXECUTABLE_BLOCK_PARAMETERS,
-    MAX_EXECUTABLE_BLOCKS, MAX_EXECUTABLE_CALL_ARGUMENTS, MAX_EXECUTABLE_CALLABLES,
-    MAX_EXECUTABLE_EDGE_ARGUMENTS, MAX_EXECUTABLE_FIELDS, MAX_EXECUTABLE_FUNCTIONS,
-    MAX_EXECUTABLE_IDENTITY_BYTES, MAX_EXECUTABLE_LOCALS, MAX_EXECUTABLE_PROJECTIONS,
-    MAX_EXECUTABLE_SOURCE_FILE_BYTES, MAX_EXECUTABLE_STATEMENTS,
+    EXECUTABLE_MIR_VERSION, GFX942_POINTER_ABIS, GFX942_TARGET_CPU, GFX942_TARGET_DATA_LAYOUT,
+    GFX942_TARGET_FEATURES, GFX942_TARGET_TRIPLE, MAX_EXECUTABLE_ADDRESS_SPACE,
+    MAX_EXECUTABLE_BLOCK_PARAMETERS, MAX_EXECUTABLE_BLOCKS, MAX_EXECUTABLE_CALL_ARGUMENTS,
+    MAX_EXECUTABLE_CALLABLES, MAX_EXECUTABLE_EDGE_ARGUMENTS, MAX_EXECUTABLE_FIELDS,
+    MAX_EXECUTABLE_FUNCTIONS, MAX_EXECUTABLE_IDENTITY_BYTES, MAX_EXECUTABLE_LOCALS,
+    MAX_EXECUTABLE_PROJECTIONS, MAX_EXECUTABLE_SOURCE_FILE_BYTES, MAX_EXECUTABLE_STATEMENTS,
     MAX_EXECUTABLE_STATEMENTS_PER_BLOCK, MAX_EXECUTABLE_SWITCH_TARGETS, MAX_EXECUTABLE_TYPE_DEPTH,
     MAX_EXECUTABLE_TYPE_ITEMS, MAX_EXECUTABLE_TYPE_NODES, MAX_EXECUTABLE_TYPES,
     MAX_EXECUTABLE_VARIANTS, MirAggregateKind, MirAssertMessage, MirAuthorizedDeviceImport,
     MirBasicBlock, MirBinaryOp, MirBlockId, MirBlockParameter, MirBody, MirBodyForm, MirCall,
     MirCallAuthority, MirCallReturn, MirCallSignature, MirCallable, MirCallee, MirCastKind,
     MirConstant, MirConstantValue, MirEdge, MirExecutableModule, MirExecutableTarget,
-    MirExecutableValidationError, MirExecutableVersion, MirExternalCallRegistry,
-    MirExternalCallReturn, MirExternalCallSignature, MirFunction, MirIntrinsic, MirLocalDecl,
-    MirLocalId, MirLocalKind, MirOperand, MirPlace, MirProjection, MirRvalue, MirSourceSpan,
-    MirStatement, MirStatementKind, MirTerminator, MirTerminatorKind, MirTypeId, MirUnaryOp,
-    MirUnwindAction, MirValueId, ValidatedMirExecutableModule,
+    MirExecutableTargetProfile, MirExecutableValidationError, MirExecutableVersion,
+    MirExternalCallRegistry, MirExternalCallReturn, MirExternalCallSignature, MirFunction,
+    MirIntrinsic, MirLocalDecl, MirLocalId, MirLocalKind, MirOperand, MirPlace, MirPointerAbi,
+    MirProjection, MirRvalue, MirSourceSpan, MirStatement, MirStatementKind, MirTerminator,
+    MirTerminatorKind, MirTypeId, MirUnaryOp, MirUnwindAction, MirValueId,
+    ValidatedMirExecutableModule,
 };
 pub use executable_wire::{MAX_EXECUTABLE_WIRE_BYTES, MirExecutableDecodeError};
 pub use mem2reg::{

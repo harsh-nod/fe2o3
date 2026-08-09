@@ -29,8 +29,12 @@ pub const MAX_EXECUTABLE_TYPE_NODES: usize = 65_536;
 pub const MAX_EXECUTABLE_TYPE_ITEMS: usize = 65_536;
 pub const MAX_EXECUTABLE_FIELDS: usize = 4_096;
 pub const MAX_EXECUTABLE_VARIANTS: usize = 1_024;
-/// Closed AMDGPU address-space range supported by executable MIR V1.
-pub const MAX_EXECUTABLE_ADDRESS_SPACE: u32 = 5;
+/// Closed AMDGPU address-space range supported by the gfx942 executable MIR V1 profile.
+pub const MAX_EXECUTABLE_ADDRESS_SPACE: u32 = 6;
+pub const GFX942_TARGET_TRIPLE: &str = "amdgcn-amd-amdhsa";
+pub const GFX942_TARGET_CPU: &str = "gfx942";
+pub const GFX942_TARGET_FEATURES: &str = "-wavefrontsize32,+wavefrontsize64";
+pub const GFX942_TARGET_DATA_LAYOUT: &str = "e-p:64:64-p1:64:64-p2:32:32-p3:32:32-p4:64:64-p5:32:32-p6:32:32-p7:160:256:256:32-p8:128:128-p9:192:256:256:32-i64:64-v16:16-v24:32-v32:32-v48:64-v96:128-v192:256-v256:256-v512:512-v1024:1024-v2048:2048-n32:64-S32-A5-G1-ni:7:8:9";
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum MirExecutableVersion {
@@ -67,11 +71,91 @@ pub struct MirSourceSpan {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum MirExecutableTargetProfile {
+    Gfx942,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct MirPointerAbi {
+    pub address_space: MirAddressSpace,
+    pub width_bits: u16,
+    pub abi_alignment_bits: u16,
+}
+
+pub const GFX942_POINTER_ABIS: [MirPointerAbi; 7] = [
+    MirPointerAbi {
+        address_space: MirAddressSpace(0),
+        width_bits: 64,
+        abi_alignment_bits: 64,
+    },
+    MirPointerAbi {
+        address_space: MirAddressSpace(1),
+        width_bits: 64,
+        abi_alignment_bits: 64,
+    },
+    MirPointerAbi {
+        address_space: MirAddressSpace(2),
+        width_bits: 32,
+        abi_alignment_bits: 32,
+    },
+    MirPointerAbi {
+        address_space: MirAddressSpace(3),
+        width_bits: 32,
+        abi_alignment_bits: 32,
+    },
+    MirPointerAbi {
+        address_space: MirAddressSpace(4),
+        width_bits: 64,
+        abi_alignment_bits: 64,
+    },
+    MirPointerAbi {
+        address_space: MirAddressSpace(5),
+        width_bits: 32,
+        abi_alignment_bits: 32,
+    },
+    MirPointerAbi {
+        address_space: MirAddressSpace(6),
+        width_bits: 32,
+        abi_alignment_bits: 32,
+    },
+];
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct MirExecutableTarget {
+    pub profile: MirExecutableTargetProfile,
+    pub triple: String,
+    pub cpu: String,
+    pub features: String,
+    pub data_layout: String,
     /// Width of Rust `usize` and MIR index locals for this target.
     pub pointer_width_bits: u16,
     /// Width returned by target thread-index operations.
     pub thread_index_width_bits: u16,
+    /// Canonical, strictly sorted pointer ABI entries for every supported
+    /// executable address space.
+    pub pointer_abis: Vec<MirPointerAbi>,
+}
+
+impl MirExecutableTarget {
+    pub fn gfx942() -> Self {
+        Self {
+            profile: MirExecutableTargetProfile::Gfx942,
+            triple: GFX942_TARGET_TRIPLE.to_owned(),
+            cpu: GFX942_TARGET_CPU.to_owned(),
+            features: GFX942_TARGET_FEATURES.to_owned(),
+            data_layout: GFX942_TARGET_DATA_LAYOUT.to_owned(),
+            pointer_width_bits: 64,
+            thread_index_width_bits: 32,
+            pointer_abis: GFX942_POINTER_ABIS.to_vec(),
+        }
+    }
+
+    fn pointer_abi(&self, address_space: MirAddressSpace) -> Option<MirPointerAbi> {
+        self.pointer_abis
+            .binary_search_by_key(&address_space, |entry| entry.address_space)
+            .ok()
+            .map(|index| self.pointer_abis[index])
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -675,18 +759,7 @@ impl MirExecutableModule {
             ));
         }
         bounded_len("module.types", self.types.len(), 1, MAX_EXECUTABLE_TYPES)?;
-        if !matches!(self.target.pointer_width_bits, 32 | 64) {
-            return Err(error(
-                "module.target.pointer_width_bits",
-                "pointer width must be 32 or 64 bits",
-            ));
-        }
-        if !matches!(self.target.thread_index_width_bits, 32 | 64) {
-            return Err(error(
-                "module.target.thread_index_width_bits",
-                "thread-index width must be 32 or 64 bits",
-            ));
-        }
+        validate_executable_target(&self.target)?;
         bounded_len(
             "module.functions",
             self.functions.len(),
@@ -700,7 +773,7 @@ impl MirExecutableModule {
             let path = format!("module.types[{index}]");
             ty.validate()
                 .map_err(|source| map_type_error(&path, source))?;
-            validate_target_type_abi(&path, ty, self.target)?;
+            validate_target_type_abi(&path, ty, &self.target)?;
             let canonical = ty
                 .canonical_text()
                 .map_err(|source| map_type_error(&path, source))?;
@@ -1017,10 +1090,10 @@ impl MirExecutableModule {
                     callable.signature.inputs[1],
                     MirMutability::Mutable,
                 )?;
-                if source != destination {
+                if source.0 != destination.0 || source.1 != destination.1 {
                     return Err(error(
                         format!("{path}.signature.inputs"),
-                        "copy_nonoverlapping pointers must have the same pointee type",
+                        "copy_nonoverlapping pointers must have the same pointee and pointer ABI",
                     ));
                 }
                 self.require_intrinsic_integer(
@@ -1061,7 +1134,7 @@ impl MirExecutableModule {
                     &format!("{path}.signature.output"),
                     output,
                     true,
-                    self.target.pointer_width_bits,
+                    left.1.width_bits,
                 )
             }
             MirIntrinsic::VolatileLoad => {
@@ -1077,7 +1150,7 @@ impl MirExecutableModule {
                         "volatile_load must return its pointee type",
                     ));
                 };
-                if self.type_at(output) != Some(pointee) {
+                if self.type_at(output) != Some(pointee.0) {
                     return Err(error(
                         format!("{path}.signature.output"),
                         "volatile_load output must exactly match its pointee type",
@@ -1093,7 +1166,7 @@ impl MirExecutableModule {
                     callable.signature.inputs[0],
                     MirMutability::Mutable,
                 )?;
-                if self.type_at(callable.signature.inputs[1]) != Some(pointee) {
+                if self.type_at(callable.signature.inputs[1]) != Some(pointee.0) {
                     return Err(error(
                         format!("{path}.signature.inputs[1]"),
                         "volatile_store value must exactly match its pointee type",
@@ -1147,14 +1220,14 @@ impl MirExecutableModule {
         path: &str,
         id: MirTypeId,
         expected_mutability: MirMutability,
-    ) -> Result<&MirSemanticType, MirExecutableValidationError> {
+    ) -> Result<(&MirSemanticType, MirPointerAbi), MirExecutableValidationError> {
         let ty = self
             .type_at(id)
             .expect("callable type references were checked before intrinsic authority");
         let MirTypeKind::RawPointer {
             pointee,
             mutability,
-            ..
+            address_space,
         } = &ty.kind
         else {
             return Err(error(path, "intrinsic input must be a raw pointer"));
@@ -1165,13 +1238,21 @@ impl MirExecutableModule {
                 "intrinsic pointer input has the wrong mutability",
             ));
         }
-        if ty.layout.size != Some(u64::from(self.target.pointer_width_bits / 8)) {
+        let abi = self.target.pointer_abi(*address_space).ok_or_else(|| {
+            error(
+                path,
+                "intrinsic pointer address space is absent from the target ABI",
+            )
+        })?;
+        if ty.layout.size != Some(u64::from(abi.width_bits / 8))
+            || ty.layout.align != u64::from(abi.abi_alignment_bits / 8)
+        {
             return Err(error(
                 path,
-                "intrinsic pointer input does not match the target pointer width",
+                "intrinsic pointer input does not match its address-space pointer ABI",
             ));
         }
-        Ok(pointee)
+        Ok((pointee, abi))
     }
 
     fn require_intrinsic_integer(
@@ -1278,6 +1359,7 @@ impl<'a> Verifier<'a> {
             validate_executable_address_space(
                 &format!("{path}.storage_address_space"),
                 local.storage_address_space,
+                &self.module.target,
             )?;
             validate_name_opt(&format!("{path}.name"), local.name.as_deref())?;
             validate_span_opt(&format!("{path}.span"), local.span.as_ref())?;
@@ -3665,12 +3747,13 @@ fn map_type_error(path: &str, source: MirTypeValidationError) -> MirExecutableVa
 fn validate_executable_address_space(
     path: &str,
     address_space: MirAddressSpace,
+    target: &MirExecutableTarget,
 ) -> Result<(), MirExecutableValidationError> {
-    if address_space.0 > MAX_EXECUTABLE_ADDRESS_SPACE {
+    if target.pointer_abi(address_space).is_none() {
         return Err(error(
             path,
             format!(
-                "address space {} is outside the executable MIR V1 policy 0..={MAX_EXECUTABLE_ADDRESS_SPACE}",
+                "address space {} is absent from the exact gfx942 executable pointer ABI",
                 address_space.0
             ),
         ));
@@ -3678,12 +3761,75 @@ fn validate_executable_address_space(
     Ok(())
 }
 
+fn validate_executable_target(
+    target: &MirExecutableTarget,
+) -> Result<(), MirExecutableValidationError> {
+    if target.profile != MirExecutableTargetProfile::Gfx942 {
+        return Err(error(
+            "module.target.profile",
+            "executable MIR V1 supports only the reviewed gfx942 target profile",
+        ));
+    }
+    for (path, actual, expected) in [
+        ("triple", target.triple.as_str(), GFX942_TARGET_TRIPLE),
+        ("cpu", target.cpu.as_str(), GFX942_TARGET_CPU),
+        ("features", target.features.as_str(), GFX942_TARGET_FEATURES),
+        (
+            "data_layout",
+            target.data_layout.as_str(),
+            GFX942_TARGET_DATA_LAYOUT,
+        ),
+    ] {
+        if actual != expected {
+            return Err(error(
+                format!("module.target.{path}"),
+                "target identity does not exactly match the reviewed gfx942 profile",
+            ));
+        }
+    }
+    if target.pointer_width_bits != 64 {
+        return Err(error(
+            "module.target.pointer_width_bits",
+            "gfx942 Rust usize and default pointers must be 64 bits",
+        ));
+    }
+    if target.thread_index_width_bits != 32 {
+        return Err(error(
+            "module.target.thread_index_width_bits",
+            "gfx942 thread indices must be 32 bits",
+        ));
+    }
+    if target.pointer_abis.len() != GFX942_POINTER_ABIS.len() {
+        return Err(error(
+            "module.target.pointer_abis",
+            "gfx942 pointer ABI map has missing or extra address spaces",
+        ));
+    }
+    let mut previous = None;
+    for (index, actual) in target.pointer_abis.iter().enumerate() {
+        let path = format!("module.target.pointer_abis[{index}]");
+        if previous.is_some_and(|address_space| address_space >= actual.address_space) {
+            return Err(error(
+                format!("{path}.address_space"),
+                "pointer ABI address spaces must be unique and strictly sorted",
+            ));
+        }
+        previous = Some(actual.address_space);
+        if actual != &GFX942_POINTER_ABIS[index] {
+            return Err(error(
+                path,
+                "pointer width or alignment does not match the exact gfx942 address-space ABI",
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn validate_target_type_abi(
     root: &str,
     ty: &MirSemanticType,
-    target: MirExecutableTarget,
+    target: &MirExecutableTarget,
 ) -> Result<(), MirExecutableValidationError> {
-    let pointer_bytes = u64::from(target.pointer_width_bits / 8);
     let mut stack = vec![(root.to_owned(), ty)];
     while let Some((path, ty)) = stack.pop() {
         match &ty.kind {
@@ -3692,16 +3838,22 @@ fn validate_target_type_abi(
                 address_space,
                 ..
             } => {
-                if ty.layout.size != Some(pointer_bytes) || ty.layout.align != pointer_bytes {
-                    return Err(error(
-                        &path,
-                        "raw-pointer size and alignment must exactly match the target pointer ABI",
-                    ));
-                }
                 validate_executable_address_space(
                     &format!("{path}.address_space"),
                     *address_space,
+                    target,
                 )?;
+                let abi = target
+                    .pointer_abi(*address_space)
+                    .expect("validated address spaces have a pointer ABI");
+                let pointer_bytes = u64::from(abi.width_bits / 8);
+                let pointer_alignment = u64::from(abi.abi_alignment_bits / 8);
+                if ty.layout.size != Some(pointer_bytes) || ty.layout.align != pointer_alignment {
+                    return Err(error(
+                        &path,
+                        "raw-pointer size and alignment must exactly match its address-space pointer ABI",
+                    ));
+                }
                 if pointee.layout.size.is_none() {
                     return Err(error(
                         format!("{path}.pointee"),
@@ -3715,16 +3867,22 @@ fn validate_target_type_abi(
                 address_space,
                 ..
             } => {
-                if ty.layout.size != Some(pointer_bytes) || ty.layout.align != pointer_bytes {
-                    return Err(error(
-                        &path,
-                        "reference size and alignment must exactly match the target pointer ABI",
-                    ));
-                }
                 validate_executable_address_space(
                     &format!("{path}.address_space"),
                     *address_space,
+                    target,
                 )?;
+                let abi = target
+                    .pointer_abi(*address_space)
+                    .expect("validated address spaces have a pointer ABI");
+                let pointer_bytes = u64::from(abi.width_bits / 8);
+                let pointer_alignment = u64::from(abi.abi_alignment_bits / 8);
+                if ty.layout.size != Some(pointer_bytes) || ty.layout.align != pointer_alignment {
+                    return Err(error(
+                        &path,
+                        "reference size and alignment must exactly match its address-space pointer ABI",
+                    ));
+                }
                 if referent.layout.size.is_none() {
                     return Err(error(
                         format!("{path}.referent"),
