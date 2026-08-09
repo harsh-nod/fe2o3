@@ -10,7 +10,7 @@ use core::fmt;
 use core::marker::PhantomData;
 use core::mem::size_of;
 
-/// Zero-sized proof that constant `I` lies within fixed extent `N`.
+/// Zero-sized witness that constant `I` lies within fixed extent `N`.
 ///
 /// Safe code can construct this witness only through [`Self::CHECKED`], whose
 /// assertion is evaluated by rustc at the use site. Passing the witness adds no
