@@ -1233,6 +1233,24 @@ fn payload_downcasts_require_path_exact_active_variants() {
     );
 
     discriminant_downcast_module(false).validate().unwrap();
+    let mut stale_discriminant = discriminant_downcast_module(false);
+    stale_discriminant.functions[0].body.locals[1].mutable = true;
+    stale_discriminant.functions[0].body.blocks[0]
+        .statements
+        .push(MirStatement {
+            kind: MirStatementKind::SetDiscriminant {
+                place: MirPlace::local(MirLocalId(1), enum_id),
+                variant: 0,
+            },
+            span: None,
+        });
+    assert!(
+        stale_discriminant
+            .validate()
+            .unwrap_err()
+            .reason()
+            .contains("exact active variant")
+    );
     assert!(
         discriminant_downcast_module(true)
             .validate()
