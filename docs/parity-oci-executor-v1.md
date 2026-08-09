@@ -82,13 +82,14 @@ The protected profile binds all of the following:
 - absolute OCI layout path and exact bounded `index.json` size/digest;
 - exact image reference by manifest digest;
 - exact OCI manifest, config, and every ordered layer digest and size;
-- ordered rootfs diff IDs and an image config with no inherited environment;
+- ordered rootfs diff IDs and an image config with no inherited environment,
+  declared volumes, or healthcheck;
 - one fixed absolute entrypoint and fixed command vector;
 - a complete, ordered environment including deterministic `HOSTNAME`, `HOME`,
   `LC_ALL`, and `PATH`; `HIP_VISIBLE_DEVICES` and `ROCR_VISIBLE_DEVICES` must
   both equal the protected GPU unique ID;
 - fixed source, request, output, and temporary mount points;
-- output, temporary-storage, log, memory, PID, and CPU ceilings;
+- output, temporary-storage, shared-memory, log, memory, PID, and CPU ceilings;
 - container UID, GID, and one supplemental render-group GID;
 - disabled network, read-only root, all capabilities dropped,
   `no-new-privileges`, and an exact protected seccomp policy;
@@ -102,7 +103,8 @@ referenced blob by size and SHA-256, validates the config rootfs diff IDs, and
 requires Linux/amd64. JSON depth, node count, strings, descriptors, counts, and
 numeric sizes are bounded. Preflight observes whether the Docker daemon reports
 the same config digest, repository manifest digest, platform, diff IDs, and
-empty inherited environment. It does not claim to measure the complete daemon,
+empty inherited environment, no declared volumes, and no healthcheck. It does
+not claim to measure the complete daemon,
 containerd, `runc`, service configuration, or kernel execution closure.
 
 ## Candidate Request
@@ -150,13 +152,15 @@ aggregate byte limits.
 uses:
 
 - `--network none`;
+- `--pull=never` and `--no-healthcheck`;
+- `--cgroupns=private`;
 - `--read-only`;
 - `--cap-drop ALL`;
 - `--security-opt no-new-privileges=true`;
 - the digest-bound protected seccomp profile;
 - private IPC, PID, and UTS namespaces;
 - `--log-driver none`;
-- fixed PID, memory, and CPU limits;
+- fixed PID, memory, shared-memory, and CPU limits;
 - fixed non-root UID/GID and render supplemental group;
 - only the complete protected environment;
 - a recursively read-only exact source bind;
