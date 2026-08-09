@@ -27,7 +27,8 @@ use crate::pinned_codegen_backend::{PinCodegenBackendError, PinnedCodegenBackend
 use crate::project::PinnedDirectory;
 use crate::worker_v2::{
     PreparedWorkerV2Config, WORKER_V2_EXPECTED_ID_ENV, WORKER_V2_SOURCE_DEBUG_PROFILE_ENV,
-    WorkerV2ConfigError, WorkerV2ConfigIdentity, WorkerV2SourceDebugProfileV1,
+    WorkerV2BuildObservation, WorkerV2ConfigError, WorkerV2ConfigIdentity,
+    WorkerV2SourceDebugProfileV1,
 };
 use crate::worker_v2_artifact_container::assemble_recovered_worker_v2_load_envelope_v1;
 #[cfg(feature = "worker-v2-fault-injection-test-only")]
@@ -44,6 +45,12 @@ const TARGET_ENV: &str = "FE2O3_TARGET";
 const BUILD_SESSION_ENV: &str = "FE2O3_BUILD_SESSION_V1";
 const BUILD_ATTEMPT_ENV: &str = "FE2O3_BUILD_ATTEMPT_V1";
 const CARGO_METADATA_BUILD_OBSERVATION_ENV_V2: &str = "FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2";
+const CODEGEN_BACKEND_BUILD_OBSERVATION_ENV_V2: &str = "FE2O3_CODEGEN_BACKEND_BUILD_OBSERVATION_V2";
+const WORKER_CONFIG_BUILD_OBSERVATION_ENV_V2: &str = "FE2O3_WORKER_CONFIG_BUILD_OBSERVATION_V2";
+const WORKER_EXECUTABLE_BUILD_OBSERVATION_ENV_V2: &str =
+    "FE2O3_WORKER_EXECUTABLE_BUILD_OBSERVATION_V2";
+const WORKER_BUILD_IDENTITY_OBSERVATION_ENV_V2: &str = "FE2O3_WORKER_BUILD_IDENTITY_OBSERVATION_V2";
+const LLVM_BUILD_IDENTITY_OBSERVATION_ENV_V2: &str = "FE2O3_LLVM_BUILD_IDENTITY_OBSERVATION_V2";
 const BUILD_INVOCATION_DOMAIN: &[u8] = b"FE2O3/BUILD-INVOCATION/V1\0";
 const CARGO_METADATA_BUILD_OBSERVATION_DOMAIN_V2: &[u8] =
     b"FE2O3/CARGO-METADATA-BUILD-OBSERVATION/V2\0";
@@ -341,6 +348,12 @@ pub(crate) fn run(argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperError
             command.env_remove(WORKER_V2_SOURCE_DEBUG_PROFILE_ENV);
         }
     }
+    configure_worker_build_observation_environment(
+        &mut command,
+        managed_attempt
+            .as_ref()
+            .and_then(ManagedAttempt::worker_build_observation),
+    );
     let status = match command.status() {
         Ok(status) => status,
         Err(error) => {
@@ -381,6 +394,45 @@ fn configure_build_observation_environment(
         command.env_remove(CRATE_BINDING_ID_ENV_V1);
         command.env_remove(CARGO_METADATA_BUILD_OBSERVATION_ENV_V2);
     }
+}
+
+fn configure_worker_build_observation_environment(
+    command: &mut Command,
+    observation: Option<WorkerV2BuildObservation<'_>>,
+) {
+    if let Some(observation) = observation {
+        command.env(
+            WORKER_CONFIG_BUILD_OBSERVATION_ENV_V2,
+            observation.config_identity.to_hex(),
+        );
+        command.env(
+            WORKER_EXECUTABLE_BUILD_OBSERVATION_ENV_V2,
+            hex(&observation.executable_sha256),
+        );
+        command.env(
+            WORKER_BUILD_IDENTITY_OBSERVATION_ENV_V2,
+            observation.worker_build_identity,
+        );
+        command.env(
+            LLVM_BUILD_IDENTITY_OBSERVATION_ENV_V2,
+            observation.llvm_build_identity,
+        );
+    } else {
+        command.env_remove(WORKER_CONFIG_BUILD_OBSERVATION_ENV_V2);
+        command.env_remove(WORKER_EXECUTABLE_BUILD_OBSERVATION_ENV_V2);
+        command.env_remove(WORKER_BUILD_IDENTITY_OBSERVATION_ENV_V2);
+        command.env_remove(LLVM_BUILD_IDENTITY_OBSERVATION_ENV_V2);
+    }
+}
+
+fn hex(bytes: &[u8]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        encoded.push(DIGITS[usize::from(byte >> 4)] as char);
+        encoded.push(DIGITS[usize::from(byte & 0x0f)] as char);
+    }
+    encoded
 }
 
 fn managed_rustc_args_from_environment() -> Result<Vec<OsString>, BindingWrapperError> {
@@ -551,6 +603,10 @@ impl CompilerCapabilities {
             .replace_for_child_at(command, ARTIFACT_CHILD_FD)
             .map_err(BindingWrapperError::ChildCapability)?;
         command.env(HSACO_DIR_ENV, artifact_path);
+        command.env(
+            CODEGEN_BACKEND_BUILD_OBSERVATION_ENV_V2,
+            hex(&self.backend.sha256()[..]),
+        );
         Ok(())
     }
 }
@@ -595,6 +651,13 @@ impl ManagedAttempt {
     fn source_debug_profile(&self) -> Option<WorkerV2SourceDebugProfileV1> {
         match &self.worker_v2 {
             Some(ManagedWorkerV2::Fresh { config, .. }) => config.source_debug_profile(),
+            Some(ManagedWorkerV2::Recovery { .. }) | None => None,
+        }
+    }
+
+    fn worker_build_observation(&self) -> Option<WorkerV2BuildObservation<'_>> {
+        match &self.worker_v2 {
+            Some(ManagedWorkerV2::Fresh { config, .. }) => Some(config.build_observation()),
             Some(ManagedWorkerV2::Recovery { .. }) | None => None,
         }
     }

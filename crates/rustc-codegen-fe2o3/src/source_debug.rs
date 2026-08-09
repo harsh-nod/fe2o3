@@ -1,37 +1,127 @@
 //! Bounded source-debug metadata for the S09 alpha O0 pilot.
 
 use crate::AmdGpuTarget;
-use crate::collector::{CollectionResult, TypedKernelProfile};
+use crate::collector::{AuthenticatedKernelOwner, CollectionResult, TypedKernelProfile};
+use crate::mir_import::MirSemanticAdmissionInputsV2;
+use fe2o3_artifacts::{
+    AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership, BlockSize, Capability,
+    Endianness, IdentityText, LaunchContract, Mutability, PointerWidth, ScalarType, TargetIdentity,
+};
+use fe2o3_compiler_ffi::CodeObjectVersion;
 use rustc_middle::mir::{Body, VarDebugInfoContents};
 use rustc_middle::ty::{FloatTy, TyCtxt, TyKind, UintTy};
+use rustc_session::config::{DebugInfo, OptLevel};
 use rustc_span::Span;
 use sha2::{Digest, Sha256};
 use std::env;
 use std::error::Error;
 use std::fmt::{self, Write};
+use std::fs::File;
+use std::io::Read;
+use std::os::unix::fs::MetadataExt;
 
 pub(crate) const SOURCE_DEBUG_PROFILE_ENV: &str = "FE2O3_WORKER_V2_SOURCE_DEBUG_PROFILE_V1";
 const S09_ALPHA_PROFILE: &str = "s09-alpha-gfx942-o0-v1";
 const S09_CRATE_NAME: &str = "fe2o3_typed_alias_spoof";
-const S09_DEF_PATH: &str = "general_genuine::__fe2o3_host_kernel_v1_2f5e34fba662b3a3fb8dc387a1c06a6214b61f23005c3155f8f5fb8954a28b67";
+const S09_MODULE_PATH: &str = "general_genuine";
+const S09_LOGICAL_NAME: &str = "alpha";
+const S09_EXPORT_NAME: &str = "alpha";
 const S09_SOURCE_PATH: &str =
     "crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src/main.rs";
 const S09_SOURCE_SHA256: [u8; 32] = [
     0xa0, 0x2f, 0x62, 0xa7, 0x31, 0x98, 0xb4, 0x93, 0x25, 0x82, 0x24, 0x70, 0x1c, 0x4f, 0x29, 0xe2,
     0x5b, 0x3e, 0xca, 0x02, 0xa7, 0x38, 0xbf, 0x02, 0xc0, 0x39, 0x89, 0xd4, 0x5b, 0x77, 0x09, 0x9e,
 ];
+const S09_PORTABLE_MIR_SHA256_V2: [u8; 32] = [
+    0xe2, 0x1c, 0xe4, 0x57, 0xda, 0x60, 0xa6, 0x05, 0x25, 0xce, 0x9d, 0x80, 0xa9, 0x45, 0x48, 0x2c,
+    0xb8, 0xd2, 0x1e, 0x48, 0xad, 0xff, 0x67, 0xa1, 0x6d, 0x63, 0xc1, 0xa2, 0xd1, 0x01, 0xed, 0x99,
+];
 const S09_SOURCE_BYTES: usize = 3231;
 const S09_FUNCTION_LINE: usize = 68;
 const S09_INDEX_LINE: usize = 69;
 const S09_LOCAL_LINE: usize = 70;
+const S09_IDENTITY_SECTION_V2: &str = ".fe2o3.s09.identity.v2";
+const S09_SEMANTIC_SCHEMA_V2: &str = "fe2o3-s09-semantic-admission-v2";
+const S09_BUILD_SCHEMA_V2: &str = "fe2o3-s09-build-observation-v2";
+const S09_HANDOFF_DOMAIN_V2: &[u8] = b"FE2O3/S09-IDENTITY-HANDOFF/V2\0";
+const MAX_RUSTC_EXECUTABLE_BYTES: u64 = 256 * 1024 * 1024;
+
+const CARGO_METADATA_BUILD_OBSERVATION_ENV_V2: &str = "FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2";
+const CODEGEN_BACKEND_BUILD_OBSERVATION_ENV_V2: &str = "FE2O3_CODEGEN_BACKEND_BUILD_OBSERVATION_V2";
+const WORKER_CONFIG_BUILD_OBSERVATION_ENV_V2: &str = "FE2O3_WORKER_CONFIG_BUILD_OBSERVATION_V2";
+const WORKER_EXECUTABLE_BUILD_OBSERVATION_ENV_V2: &str =
+    "FE2O3_WORKER_EXECUTABLE_BUILD_OBSERVATION_V2";
+const WORKER_BUILD_IDENTITY_OBSERVATION_ENV_V2: &str = "FE2O3_WORKER_BUILD_IDENTITY_OBSERVATION_V2";
+const LLVM_BUILD_IDENTITY_OBSERVATION_ENV_V2: &str = "FE2O3_LLVM_BUILD_IDENTITY_OBSERVATION_V2";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct AlphaSourceDebugV1 {
+pub(crate) struct S09SemanticAdmissionV2 {
+    canonical_bytes: Vec<u8>,
+    identity_sha256: [u8; 32],
+    portable_mir_sha256: [u8; 32],
+}
+
+impl S09SemanticAdmissionV2 {
+    pub(crate) const fn identity_sha256(&self) -> &[u8; 32] {
+        &self.identity_sha256
+    }
+
+    pub(crate) const fn portable_mir_sha256(&self) -> &[u8; 32] {
+        &self.portable_mir_sha256
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct S09BuildObservationV2 {
+    canonical_bytes: Vec<u8>,
+    identity_sha256: [u8; 32],
+    cargo_metadata_sha256: [u8; 32],
+    observed_def_path: String,
+    observed_symbol: String,
+}
+
+impl S09BuildObservationV2 {
+    pub(crate) const fn identity_sha256(&self) -> &[u8; 32] {
+        &self.identity_sha256
+    }
+
+    pub(crate) const fn cargo_metadata_sha256(&self) -> &[u8; 32] {
+        &self.cargo_metadata_sha256
+    }
+
+    pub(crate) fn observed_def_path(&self) -> &str {
+        &self.observed_def_path
+    }
+
+    pub(crate) fn observed_symbol(&self) -> &str {
+        &self.observed_symbol
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct AlphaSourceDebugV2 {
     source_file: String,
     source_directory: String,
     function_line: usize,
     index_line: usize,
     local_line: usize,
+    semantic_admission: S09SemanticAdmissionV2,
+    build_observation: S09BuildObservationV2,
+    identity_handoff: Vec<u8>,
+}
+
+impl AlphaSourceDebugV2 {
+    pub(crate) const fn semantic_admission(&self) -> &S09SemanticAdmissionV2 {
+        &self.semantic_admission
+    }
+
+    pub(crate) const fn build_observation(&self) -> &S09BuildObservationV2 {
+        &self.build_observation
+    }
+
+    pub(crate) fn identity_handoff(&self) -> &[u8] {
+        &self.identity_handoff
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -56,7 +146,7 @@ pub(crate) fn collect_requested_profile<'tcx>(
     collection: &CollectionResult<'tcx>,
     mir_module: &crate::mir_import::MirModule,
     target: &AmdGpuTarget,
-) -> Result<Option<AlphaSourceDebugV1>, SourceDebugError> {
+) -> Result<Option<AlphaSourceDebugV2>, SourceDebugError> {
     let requested = match env::var(SOURCE_DEBUG_PROFILE_ENV) {
         Err(env::VarError::NotPresent) => return Ok(None),
         Err(env::VarError::NotUnicode(_)) => {
@@ -76,32 +166,64 @@ pub(crate) fn collect_requested_profile<'tcx>(
             "{requested} requires exact target gfx942:xnack-; found {target}"
         )));
     }
+    if tcx.sess.opts.optimize != OptLevel::No || tcx.sess.opts.debuginfo != DebugInfo::Full {
+        return Err(SourceDebugError::new(format!(
+            "{requested} requires rustc opt-level=0 and full debug info; found {:?} and {:?}",
+            tcx.sess.opts.optimize, tcx.sess.opts.debuginfo
+        )));
+    }
+    let envelope = collection
+        .compiler_ffi_observation
+        .as_ref()
+        .ok_or_else(|| {
+            SourceDebugError::new("S09 alpha requires one compiler FFI envelope observation")
+        })?;
+    if envelope.code_object_version() != CodeObjectVersion::V6 {
+        return Err(SourceDebugError::new(format!(
+            "{requested} requires code object version 6; found {:?}",
+            envelope.code_object_version()
+        )));
+    }
 
     let matches = collection
-        .functions
+        .authenticated_kernel_owners()
         .iter()
-        .filter(|function| {
-            function.is_kernel_entry()
-                && function.export_name == "alpha"
+        .filter(|owner| {
+            owner.crate_name() == S09_CRATE_NAME
+                && owner.module_path() == S09_MODULE_PATH
+                && owner.logical_name() == S09_LOGICAL_NAME
+                && owner.export_name() == S09_EXPORT_NAME
                 && matches!(
-                    function.typed_profile,
-                    Some(TypedKernelProfile::GeneralScalarSliceRustcLayoutV3 { .. })
+                    owner.typed_profile(),
+                    TypedKernelProfile::GeneralScalarSliceRustcLayoutV3 { .. }
                 )
         })
         .collect::<Vec<_>>();
-    let [alpha] = matches.as_slice() else {
+    let [owner] = matches.as_slice() else {
         return Err(SourceDebugError::new(format!(
-            "{requested} requires exactly one authenticated General V3 alpha kernel; found {}",
+            "{requested} requires exactly one sealed authenticated S09 owner; found {}",
             matches.len()
         )));
     };
-    let def_id = alpha.instance.def_id();
+    let alpha = collection
+        .functions
+        .iter()
+        .find(|function| function.instance == owner.target())
+        .ok_or_else(|| {
+            SourceDebugError::new("sealed S09 owner has no matching collected kernel root")
+        })?;
+    let contract = alpha.general_typed_contract.as_ref().ok_or_else(|| {
+        SourceDebugError::new("sealed S09 owner has no authenticated General V3 ABI contract")
+    })?;
+    let def_id = owner.target().def_id();
     let crate_name = tcx.crate_name(def_id.krate);
     let def_path = tcx.def_path_str(def_id);
+    validate_owner_observation(owner, crate_name.as_str(), &def_path)?;
+    let expected_rust_path = format!("{}::{def_path}", owner.crate_name());
     let mir_matches = mir_module
         .functions
         .iter()
-        .filter(|function| function.export_name == "alpha")
+        .filter(|function| function.export_name == owner.export_name())
         .collect::<Vec<_>>();
     let [mir_alpha] = mir_matches.as_slice() else {
         return Err(SourceDebugError::new(format!(
@@ -109,8 +231,26 @@ pub(crate) fn collect_requested_profile<'tcx>(
             mir_matches.len()
         )));
     };
-    validate_alpha_mir_body(mir_alpha)?;
-    let body = tcx.instance_mir(alpha.instance.def);
+    validate_alpha_mir_body(mir_alpha, &expected_rust_path)?;
+    let target_identity = s09_target_identity(target)?;
+    let portable_mir_sha256 = *mir_module
+        .portable_semantic_digest_v2(MirSemanticAdmissionInputsV2::new(
+            owner.export_name(),
+            &target_identity,
+            contract.abi(),
+            contract.launch(),
+        ))
+        .map_err(|error| {
+            SourceDebugError::new(format!("S09 portable MIR identity failed: {error}"))
+        })?
+        .as_bytes();
+    validate_portable_mir_policy_v2(portable_mir_sha256)?;
+    eprintln!(
+        "[rustc-codegen-fe2o3] S09 portable MIR semantic SHA-256: {}",
+        hex(&portable_mir_sha256)
+    );
+
+    let body = tcx.instance_mir(owner.target().def);
     validate_alpha_arguments(body)?;
     validate_debug_schema(
         body.var_debug_info.iter().map(|variable| {
@@ -123,12 +263,7 @@ pub(crate) fn collect_requested_profile<'tcx>(
     )?;
 
     let function = source_location(tcx, body.span)?;
-    validate_source_identity(
-        crate_name.as_str(),
-        &def_path,
-        &function.file,
-        function.source_sha256,
-    )?;
+    validate_source_identity(crate_name.as_str(), &function.file, function.source_sha256)?;
     let local = body
         .var_debug_info
         .iter()
@@ -173,13 +308,479 @@ pub(crate) fn collect_requested_profile<'tcx>(
         .expect("S09 source path has a directory");
     validate_metadata_string(source_directory, "source directory")?;
     validate_metadata_string(source_file, "source file")?;
-    Ok(Some(AlphaSourceDebugV1 {
+    let semantic_admission =
+        build_semantic_admission_v2(contract.abi(), contract.launch(), portable_mir_sha256);
+    let rustc_mir_capture_sha256 =
+        crate::mir_import_v2::capture_observation_sha256_v2(tcx, owner.target()).map_err(
+            |error| SourceDebugError::new(format!("S09 rustc MIR V2 capture failed: {error}")),
+        )?;
+    let build_observation = build_observation_v2(
+        owner,
+        def_path,
+        rustc_mir_capture_sha256,
+        *semantic_admission.identity_sha256(),
+    )?;
+    let identity_handoff = identity_handoff_v2(&semantic_admission, &build_observation)?;
+    Ok(Some(AlphaSourceDebugV2 {
         source_file: source_file.to_owned(),
         source_directory: source_directory.to_owned(),
         function_line: function.line,
         index_line: index_location.line,
         local_line: local_location.line,
+        semantic_admission,
+        build_observation,
+        identity_handoff,
     }))
+}
+
+fn validate_portable_mir_policy_v2(actual: [u8; 32]) -> Result<(), SourceDebugError> {
+    if actual != S09_PORTABLE_MIR_SHA256_V2 {
+        return Err(SourceDebugError::new(format!(
+            "S09 portable MIR semantic identity changed: expected {}, found {}",
+            hex(&S09_PORTABLE_MIR_SHA256_V2),
+            hex(&actual)
+        )));
+    }
+    Ok(())
+}
+
+fn validate_owner_observation(
+    owner: &AuthenticatedKernelOwner<rustc_middle::ty::Instance<'_>>,
+    crate_name: &str,
+    def_path: &str,
+) -> Result<(), SourceDebugError> {
+    let expected_symbol = reserved_fe2o3_symbols::host_kernel_symbol_v1(owner.kernel_binding());
+    let expected_def_path = format!("{}::{expected_symbol}", owner.module_path());
+    if crate_name != owner.crate_name()
+        || def_path != owner.target_def_path()
+        || def_path != expected_def_path
+        || owner.observed_symbol() != expected_symbol
+    {
+        return Err(SourceDebugError::new(
+            "S09 sealed owner disagrees with its exact rustc build observation",
+        ));
+    }
+    validate_observation_text(def_path, "observed DefPath")?;
+    validate_observation_text(owner.observed_symbol(), "observed symbol")
+}
+
+fn s09_target_identity(target: &AmdGpuTarget) -> Result<TargetIdentity, SourceDebugError> {
+    TargetIdentity::new(
+        IdentityText::new(dialect_amdgcn::AMDGPU_TRIPLE).map_err(|error| {
+            SourceDebugError::new(format!("invalid S09 target triple: {error}"))
+        })?,
+        IdentityText::new(target.as_str())
+            .map_err(|error| SourceDebugError::new(format!("invalid S09 processor: {error}")))?,
+        PointerWidth::Bits64,
+        Endianness::Little,
+        vec![Capability::Atomics, Capability::AmdWave],
+    )
+    .map_err(|error| SourceDebugError::new(format!("invalid S09 target policy: {error}")))
+}
+
+fn build_semantic_admission_v2(
+    abi: &AbiLayout,
+    launch: &LaunchContract,
+    portable_mir_sha256: [u8; 32],
+) -> S09SemanticAdmissionV2 {
+    let fields = [
+        ("schema", S09_SEMANTIC_SCHEMA_V2.to_owned()),
+        ("crate", S09_CRATE_NAME.to_owned()),
+        ("module", S09_MODULE_PATH.to_owned()),
+        ("logical_name", S09_LOGICAL_NAME.to_owned()),
+        ("export_name", S09_EXPORT_NAME.to_owned()),
+        ("profile", "general-scalar-slice-rustc-layout-v3".to_owned()),
+        ("source_path", S09_SOURCE_PATH.to_owned()),
+        ("source_sha256", hex(&S09_SOURCE_SHA256)),
+        ("source_bytes", S09_SOURCE_BYTES.to_string()),
+        ("target", "gfx942:xnack-".to_owned()),
+        ("target_capabilities", "atomics,amd-wave".to_owned()),
+        ("code_object_version", "6".to_owned()),
+        ("rustc_opt_level", "0".to_owned()),
+        ("rustc_debug_info", "full".to_owned()),
+        ("injected_debug_policy", "dwarf-v5-full".to_owned()),
+        ("abi_sha256", hex(&abi_policy_sha256_v2(abi))),
+        ("launch_sha256", hex(&launch_policy_sha256_v2(launch))),
+        ("portable_mir_sha256", hex(&portable_mir_sha256)),
+    ];
+    let canonical_bytes = canonical_fields(&fields);
+    let identity_sha256 = Sha256::digest(&canonical_bytes).into();
+    S09SemanticAdmissionV2 {
+        canonical_bytes,
+        identity_sha256,
+        portable_mir_sha256,
+    }
+}
+
+fn build_observation_v2(
+    owner: &AuthenticatedKernelOwner<rustc_middle::ty::Instance<'_>>,
+    observed_def_path: String,
+    rustc_mir_capture_sha256: [u8; 32],
+    semantic_identity_sha256: [u8; 32],
+) -> Result<S09BuildObservationV2, SourceDebugError> {
+    let cargo_metadata_sha256 =
+        required_digest_environment(CARGO_METADATA_BUILD_OBSERVATION_ENV_V2)?;
+    let codegen_backend_sha256 =
+        required_digest_environment(CODEGEN_BACKEND_BUILD_OBSERVATION_ENV_V2)?;
+    let worker_config_sha256 = required_digest_environment(WORKER_CONFIG_BUILD_OBSERVATION_ENV_V2)?;
+    let worker_executable_sha256 =
+        required_digest_environment(WORKER_EXECUTABLE_BUILD_OBSERVATION_ENV_V2)?;
+    let worker_build_identity =
+        required_text_environment(WORKER_BUILD_IDENTITY_OBSERVATION_ENV_V2)?;
+    let llvm_build_identity = required_text_environment(LLVM_BUILD_IDENTITY_OBSERVATION_ENV_V2)?;
+    let worker_build_identity_sha256 = observed_text_sha256_v2(
+        b"FE2O3/S09-WORKER-BUILD-IDENTITY/V2\0",
+        &worker_build_identity,
+    );
+    let llvm_build_identity_sha256 =
+        observed_text_sha256_v2(b"FE2O3/S09-LLVM-BUILD-IDENTITY/V2\0", &llvm_build_identity);
+    let rustc_executable_sha256 = running_rustc_sha256()?;
+    let observed_symbol = owner.observed_symbol().to_owned();
+    let fields = [
+        ("schema", S09_BUILD_SCHEMA_V2.to_owned()),
+        ("semantic_admission_sha256", hex(&semantic_identity_sha256)),
+        ("cargo_metadata_sha256", hex(&cargo_metadata_sha256)),
+        ("crate_binding", owner.crate_binding().to_hex()),
+        ("kernel_binding", owner.kernel_binding().to_hex()),
+        ("observed_def_path", observed_def_path.clone()),
+        ("observed_symbol", observed_symbol.clone()),
+        ("rustc_mir_capture_sha256", hex(&rustc_mir_capture_sha256)),
+        ("rustc_executable_sha256", hex(&rustc_executable_sha256)),
+        ("codegen_backend_sha256", hex(&codegen_backend_sha256)),
+        ("worker_config_sha256", hex(&worker_config_sha256)),
+        ("worker_executable_sha256", hex(&worker_executable_sha256)),
+        (
+            "worker_build_identity_sha256",
+            hex(&worker_build_identity_sha256),
+        ),
+        (
+            "llvm_build_identity_sha256",
+            hex(&llvm_build_identity_sha256),
+        ),
+    ];
+    let canonical_bytes = canonical_fields(&fields);
+    let identity_sha256 = Sha256::digest(&canonical_bytes).into();
+    Ok(S09BuildObservationV2 {
+        canonical_bytes,
+        identity_sha256,
+        cargo_metadata_sha256,
+        observed_def_path,
+        observed_symbol,
+    })
+}
+
+fn identity_handoff_v2(
+    semantic: &S09SemanticAdmissionV2,
+    observation: &S09BuildObservationV2,
+) -> Result<Vec<u8>, SourceDebugError> {
+    let semantic_len = u32::try_from(semantic.canonical_bytes.len())
+        .map_err(|_| SourceDebugError::new("S09 semantic admission record is too large"))?;
+    let observation_len = u32::try_from(observation.canonical_bytes.len())
+        .map_err(|_| SourceDebugError::new("S09 build observation record is too large"))?;
+    let mut bytes = Vec::with_capacity(
+        S09_HANDOFF_DOMAIN_V2.len()
+            + 8
+            + semantic.canonical_bytes.len()
+            + observation.canonical_bytes.len(),
+    );
+    bytes.extend_from_slice(S09_HANDOFF_DOMAIN_V2);
+    bytes.extend_from_slice(&semantic_len.to_le_bytes());
+    bytes.extend_from_slice(&semantic.canonical_bytes);
+    bytes.extend_from_slice(&observation_len.to_le_bytes());
+    bytes.extend_from_slice(&observation.canonical_bytes);
+    if bytes.len() > 64 * 1024 {
+        return Err(SourceDebugError::new(
+            "S09 identity handoff exceeds its 64 KiB bound",
+        ));
+    }
+    Ok(bytes)
+}
+
+fn canonical_fields(fields: &[(&str, String)]) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    for (name, value) in fields {
+        bytes.extend_from_slice(name.as_bytes());
+        bytes.push(b'\t');
+        bytes.extend_from_slice(value.as_bytes());
+        bytes.push(b'\n');
+    }
+    bytes
+}
+
+fn required_digest_environment(name: &'static str) -> Result<[u8; 32], SourceDebugError> {
+    let value = required_text_environment(name)?;
+    let bytes = value.as_bytes();
+    if bytes.len() != 64
+        || !bytes.iter().all(u8::is_ascii_hexdigit)
+        || bytes.iter().any(u8::is_ascii_uppercase)
+    {
+        return Err(SourceDebugError::new(format!(
+            "{name} must contain exactly 64 lowercase hexadecimal digits"
+        )));
+    }
+    let mut digest = [0_u8; 32];
+    for (index, pair) in bytes.chunks_exact(2).enumerate() {
+        digest[index] = (hex_nibble(pair[0])? << 4) | hex_nibble(pair[1])?;
+    }
+    if digest == [0; 32] {
+        return Err(SourceDebugError::new(format!("{name} must not be zero")));
+    }
+    Ok(digest)
+}
+
+fn required_text_environment(name: &'static str) -> Result<String, SourceDebugError> {
+    match env::var(name) {
+        Ok(value) if !value.is_empty() && value.len() <= 4096 => Ok(value),
+        Ok(_) => Err(SourceDebugError::new(format!(
+            "{name} must contain 1 through 4096 UTF-8 bytes"
+        ))),
+        Err(env::VarError::NotPresent) => Err(SourceDebugError::new(format!(
+            "{name} is required for the S09 build observation"
+        ))),
+        Err(env::VarError::NotUnicode(_)) => {
+            Err(SourceDebugError::new(format!("{name} is not valid UTF-8")))
+        }
+    }
+}
+
+fn hex_nibble(byte: u8) -> Result<u8, SourceDebugError> {
+    match byte {
+        b'0'..=b'9' => Ok(byte - b'0'),
+        b'a'..=b'f' => Ok(byte - b'a' + 10),
+        _ => Err(SourceDebugError::new("invalid lowercase hexadecimal digit")),
+    }
+}
+
+fn observed_text_sha256_v2(domain: &[u8], value: &str) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(domain);
+    digest.update((value.len() as u64).to_le_bytes());
+    digest.update(value.as_bytes());
+    digest.finalize().into()
+}
+
+fn validate_observation_text(value: &str, field: &str) -> Result<(), SourceDebugError> {
+    if value.is_empty()
+        || value.len() > 4096
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b':'))
+    {
+        return Err(SourceDebugError::new(format!(
+            "S09 {field} is not a bounded canonical observation"
+        )));
+    }
+    Ok(())
+}
+
+fn running_rustc_sha256() -> Result<[u8; 32], SourceDebugError> {
+    let mut file = File::open("/proc/self/exe")
+        .map_err(|error| SourceDebugError::new(format!("cannot open running rustc: {error}")))?;
+    let initial = file
+        .metadata()
+        .map_err(|error| SourceDebugError::new(format!("cannot inspect running rustc: {error}")))?;
+    if !initial.is_file() || initial.len() == 0 || initial.len() > MAX_RUSTC_EXECUTABLE_BYTES {
+        return Err(SourceDebugError::new(format!(
+            "running rustc has invalid bounded size {}",
+            initial.len()
+        )));
+    }
+    let mut digest = Sha256::new();
+    let mut remaining = initial.len();
+    let mut buffer = [0_u8; 64 * 1024];
+    while remaining != 0 {
+        let requested = usize::try_from(remaining.min(buffer.len() as u64))
+            .expect("bounded rustc chunk fits usize");
+        let read = file.read(&mut buffer[..requested]).map_err(|error| {
+            SourceDebugError::new(format!("cannot hash running rustc: {error}"))
+        })?;
+        if read == 0 {
+            return Err(SourceDebugError::new(
+                "running rustc became shorter while hashing",
+            ));
+        }
+        digest.update(&buffer[..read]);
+        remaining -= read as u64;
+    }
+    if file
+        .read(&mut buffer[..1])
+        .map_err(|error| SourceDebugError::new(format!("cannot finish hashing rustc: {error}")))?
+        != 0
+    {
+        return Err(SourceDebugError::new("running rustc grew while hashing"));
+    }
+    let final_metadata = file
+        .metadata()
+        .map_err(|error| SourceDebugError::new(format!("cannot re-inspect rustc: {error}")))?;
+    if metadata_identity(&initial) != metadata_identity(&final_metadata) {
+        return Err(SourceDebugError::new(
+            "running rustc metadata changed while hashing",
+        ));
+    }
+    Ok(digest.finalize().into())
+}
+
+fn metadata_identity(metadata: &std::fs::Metadata) -> (u64, u64, u64, i64, i64) {
+    (
+        metadata.dev(),
+        metadata.ino(),
+        metadata.len(),
+        metadata.mtime(),
+        metadata.mtime_nsec(),
+    )
+}
+
+fn abi_policy_sha256_v2(abi: &AbiLayout) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(b"FE2O3/S09-ABI-POLICY/V2\0");
+    digest.update(abi.size().to_le_bytes());
+    digest.update(abi.alignment().to_le_bytes());
+    digest.update([pointer_width_tag(abi.pointer_width())]);
+    digest.update((abi.fields().len() as u64).to_le_bytes());
+    for field in abi.fields() {
+        digest.update((field.name().as_str().len() as u64).to_le_bytes());
+        digest.update(field.name().as_str().as_bytes());
+        digest.update(field.offset().to_le_bytes());
+        digest.update(field.size().to_le_bytes());
+        digest.update(field.alignment().to_le_bytes());
+        encode_abi_kind(&mut digest, field.kind());
+        digest.update([mutability_tag(field.mutability())]);
+        digest.update([access_tag(field.access())]);
+        digest.update([address_space_tag(field.address_space())]);
+        digest.update(field.type_identity().rust_type().bytes().as_bytes());
+        digest.update(field.type_identity().layout().bytes().as_bytes());
+        digest.update([ownership_tag(field.ownership())]);
+        digest.update([alias_tag(field.alias_class())]);
+    }
+    digest.finalize().into()
+}
+
+fn launch_policy_sha256_v2(launch: &LaunchContract) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(b"FE2O3/S09-LAUNCH-POLICY/V2\0");
+    digest.update([launch.rank()]);
+    match launch.block_size() {
+        BlockSize::Any => digest.update([0]),
+        BlockSize::Exact(dimensions) => {
+            digest.update([1]);
+            encode_dimensions(&mut digest, dimensions);
+        }
+        BlockSize::AtMost(dimensions) => {
+            digest.update([2]);
+            encode_dimensions(&mut digest, dimensions);
+        }
+    }
+    encode_dimensions(&mut digest, launch.max_grid());
+    digest.update(launch.static_shared_memory_bytes().to_le_bytes());
+    digest.update(launch.max_dynamic_shared_memory_bytes().to_le_bytes());
+    digest.finalize().into()
+}
+
+fn encode_dimensions(digest: &mut Sha256, dimensions: fe2o3_artifacts::Dimensions) {
+    digest.update(dimensions.x().to_le_bytes());
+    digest.update(dimensions.y().to_le_bytes());
+    digest.update(dimensions.z().to_le_bytes());
+}
+
+fn encode_abi_kind(digest: &mut Sha256, kind: AbiKind) {
+    match kind {
+        AbiKind::Scalar(scalar) => digest.update([0, scalar_tag(scalar)]),
+        AbiKind::Pointer {
+            pointee_size,
+            pointee_alignment,
+        } => {
+            digest.update([1]);
+            digest.update(pointee_size.to_le_bytes());
+            digest.update(pointee_alignment.to_le_bytes());
+        }
+        AbiKind::Slice {
+            element_size,
+            element_alignment,
+        } => {
+            digest.update([2]);
+            digest.update(element_size.to_le_bytes());
+            digest.update(element_alignment.to_le_bytes());
+        }
+    }
+}
+
+fn pointer_width_tag(value: PointerWidth) -> u8 {
+    match value {
+        PointerWidth::Bits32 => 0,
+        PointerWidth::Bits64 => 1,
+    }
+}
+
+fn scalar_tag(value: ScalarType) -> u8 {
+    match value {
+        ScalarType::I8 => 0,
+        ScalarType::U8 => 1,
+        ScalarType::I16 => 2,
+        ScalarType::U16 => 3,
+        ScalarType::I32 => 4,
+        ScalarType::U32 => 5,
+        ScalarType::I64 => 6,
+        ScalarType::U64 => 7,
+        ScalarType::F16 => 8,
+        ScalarType::F32 => 9,
+        ScalarType::F64 => 10,
+    }
+}
+
+fn mutability_tag(value: Mutability) -> u8 {
+    match value {
+        Mutability::Immutable => 0,
+        Mutability::Mutable => 1,
+    }
+}
+
+fn access_tag(value: Access) -> u8 {
+    match value {
+        Access::ByValue => 0,
+        Access::ReadOnly => 1,
+        Access::WriteOnly => 2,
+        Access::ReadWrite => 3,
+    }
+}
+
+fn address_space_tag(value: AddressSpace) -> u8 {
+    match value {
+        AddressSpace::Value => 0,
+        AddressSpace::Global => 1,
+        AddressSpace::Constant => 2,
+        AddressSpace::Workgroup => 3,
+        AddressSpace::Private => 4,
+        AddressSpace::Generic => 5,
+    }
+}
+
+fn ownership_tag(value: ArgumentOwnership) -> u8 {
+    match value {
+        ArgumentOwnership::ByValue => 0,
+        ArgumentOwnership::SharedBorrow => 1,
+        ArgumentOwnership::UniqueBorrow => 2,
+        ArgumentOwnership::RawPointer => 3,
+    }
+}
+
+fn alias_tag(value: AliasClass) -> u8 {
+    match value {
+        AliasClass::Value => 0,
+        AliasClass::SharedReadOnly => 1,
+        AliasClass::Exclusive => 2,
+        AliasClass::SharedAtomic => 3,
+        AliasClass::Unrestricted => 4,
+    }
+}
+
+fn hex(bytes: &[u8]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        encoded.push(DIGITS[usize::from(byte >> 4)] as char);
+        encoded.push(DIGITS[usize::from(byte & 0x0f)] as char);
+    }
+    encoded
 }
 
 fn exact_place(
@@ -252,6 +853,7 @@ fn exact_call(
 
 pub(crate) fn validate_alpha_mir_body(
     function: &crate::mir_import::MirFunction,
+    expected_rust_path: &str,
 ) -> Result<(), SourceDebugError> {
     use crate::mir_import::{
         MirBinaryOp, MirFunctionKind, MirKernelProfile, MirLocalRole, MirProjectionElem,
@@ -259,8 +861,7 @@ pub(crate) fn validate_alpha_mir_body(
     };
     use crate::trusted_device_items::TrustedDeviceItem;
 
-    let expected_path = format!("{S09_CRATE_NAME}::{S09_DEF_PATH}");
-    if function.rust_path != expected_path
+    if function.rust_path != expected_rust_path
         || function.kind != MirFunctionKind::KernelEntry
         || function.typed_profile != Some(MirKernelProfile::GeneralScalarSliceRustcLayoutV3)
     {
@@ -580,7 +1181,6 @@ fn bounded_source_sha256(source: &[u8]) -> Result<[u8; 32], SourceDebugError> {
 
 fn validate_source_identity(
     crate_name: &str,
-    def_path: &str,
     source_path: &str,
     source_sha256: [u8; 32],
 ) -> Result<(), SourceDebugError> {
@@ -594,10 +1194,8 @@ fn validate_source_identity(
             "S09 alpha source path is not the exact canonical remapped path",
         ));
     }
-    if crate_name != S09_CRATE_NAME || def_path != S09_DEF_PATH {
-        return Err(SourceDebugError::new(
-            "S09 alpha crate or DefPath identity changed",
-        ));
+    if crate_name != S09_CRATE_NAME {
+        return Err(SourceDebugError::new("S09 alpha crate identity changed"));
     }
     if source_sha256 != S09_SOURCE_SHA256 {
         return Err(SourceDebugError::new(
@@ -623,7 +1221,7 @@ fn validate_metadata_string(value: &str, field: &str) -> Result<(), SourceDebugE
 
 pub(crate) fn inject_alpha_dwarf_v1(
     llvm: &str,
-    profile: &AlphaSourceDebugV1,
+    profile: &AlphaSourceDebugV2,
 ) -> Result<String, SourceDebugError> {
     for forbidden in [
         "!llvm.dbg.cu",
@@ -640,6 +1238,7 @@ pub(crate) fn inject_alpha_dwarf_v1(
         "!DILocalVariable",
         "!DILocation",
         "!DIExpression",
+        S09_IDENTITY_SECTION_V2,
     ] {
         if llvm.contains(forbidden) {
             return Err(SourceDebugError::new(format!(
@@ -716,7 +1315,27 @@ pub(crate) fn inject_alpha_dwarf_v1(
     output.push_str(&rewritten_function);
     output.push_str(&llvm[function_end..]);
     write_debug_metadata(&mut output, profile, ids)?;
+    append_identity_module_assembly(&mut output, profile.identity_handoff());
     Ok(output)
+}
+
+fn append_identity_module_assembly(llvm: &mut String, bytes: &[u8]) {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    llvm.push_str("\nmodule asm \".section ");
+    llvm.push_str(S09_IDENTITY_SECTION_V2);
+    llvm.push_str(",\\22\\22,@progbits\"\nmodule asm \".balign 8\"\n");
+    for chunk in bytes.chunks(16) {
+        llvm.push_str("module asm \".byte ");
+        for (index, byte) in chunk.iter().copied().enumerate() {
+            if index != 0 {
+                llvm.push_str(", ");
+            }
+            llvm.push_str("0x");
+            llvm.push(HEX[usize::from(byte >> 4)] as char);
+            llvm.push(HEX[usize::from(byte & 0x0f)] as char);
+        }
+        llvm.push_str("\"\n");
+    }
 }
 
 fn replace_exactly_once(
@@ -860,7 +1479,7 @@ impl DebugIds {
 
 fn write_debug_metadata(
     output: &mut String,
-    profile: &AlphaSourceDebugV1,
+    profile: &AlphaSourceDebugV2,
     ids: DebugIds,
 ) -> Result<(), SourceDebugError> {
     writeln!(output, "\n!llvm.dbg.cu = !{{!{}}}", ids.compile_unit).unwrap();
@@ -980,14 +1599,39 @@ fn write_debug_metadata(
 mod tests {
     use super::*;
 
-    fn profile() -> AlphaSourceDebugV1 {
-        AlphaSourceDebugV1 {
+    const PORTABLE_DIGEST_UNIT_VECTOR_V2: [u8; 32] = [
+        0x5d, 0xce, 0x95, 0xed, 0x57, 0x0b, 0x07, 0x99, 0x57, 0xb0, 0x4b, 0x56, 0x92, 0xc2, 0xab,
+        0x0f, 0x89, 0x7b, 0x6c, 0x74, 0x78, 0x50, 0x52, 0x60, 0x69, 0x2d, 0x88, 0x83, 0x1a, 0xd1,
+        0x4f, 0xf5,
+    ];
+
+    fn profile() -> AlphaSourceDebugV2 {
+        let semantic_bytes = canonical_fields(&[("schema", S09_SEMANTIC_SCHEMA_V2.to_owned())]);
+        let semantic_admission = S09SemanticAdmissionV2 {
+            identity_sha256: Sha256::digest(&semantic_bytes).into(),
+            canonical_bytes: semantic_bytes,
+            portable_mir_sha256: [0x31; 32],
+        };
+        let build_bytes = canonical_fields(&[("schema", S09_BUILD_SCHEMA_V2.to_owned())]);
+        let build_observation = S09BuildObservationV2 {
+            identity_sha256: Sha256::digest(&build_bytes).into(),
+            canonical_bytes: build_bytes,
+            cargo_metadata_sha256: [0x32; 32],
+            observed_def_path: "general_genuine::__fe2o3_host_kernel_v1_test".to_owned(),
+            observed_symbol: "__fe2o3_host_kernel_v1_test".to_owned(),
+        };
+        let identity_handoff =
+            identity_handoff_v2(&semantic_admission, &build_observation).unwrap();
+        AlphaSourceDebugV2 {
             source_file: "main.rs".to_owned(),
             source_directory: "crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src"
                 .to_owned(),
             function_line: S09_FUNCTION_LINE,
             index_line: S09_INDEX_LINE,
             local_line: S09_LOCAL_LINE,
+            semantic_admission,
+            build_observation,
+            identity_handoff,
         }
     }
 
@@ -1023,6 +1667,17 @@ attributes #0 = { nounwind }
     }
 
     #[test]
+    fn s09_portable_policy_is_distinct_from_unit_vector_and_rejects_mutation() {
+        assert_ne!(S09_PORTABLE_MIR_SHA256_V2, PORTABLE_DIGEST_UNIT_VECTOR_V2);
+        validate_portable_mir_policy_v2(S09_PORTABLE_MIR_SHA256_V2).unwrap();
+
+        let mut mutated = S09_PORTABLE_MIR_SHA256_V2;
+        mutated[0] ^= 1;
+        let error = validate_portable_mir_policy_v2(mutated).unwrap_err();
+        assert!(error.to_string().contains("semantic identity changed"));
+    }
+
+    #[test]
     fn injects_exact_physical_arguments_and_source_local() {
         let first = inject_alpha_dwarf_v1(module(), &profile()).unwrap();
         let second = inject_alpha_dwarf_v1(module(), &profile()).unwrap();
@@ -1039,6 +1694,7 @@ attributes #0 = { nounwind }
             "metadata i64 %v3",
             "line: 69",
             "line: 70",
+            S09_IDENTITY_SECTION_V2,
         ] {
             assert!(first.contains(expected), "missing {expected:?}\n{first}");
         }
@@ -1284,43 +1940,24 @@ attributes #0 = { nounwind }
 
     #[test]
     fn source_identity_rejects_spoofs_and_checkout_paths() {
-        validate_source_identity(
-            S09_CRATE_NAME,
-            S09_DEF_PATH,
-            S09_SOURCE_PATH,
-            S09_SOURCE_SHA256,
-        )
-        .unwrap();
+        validate_source_identity(S09_CRATE_NAME, S09_SOURCE_PATH, S09_SOURCE_SHA256).unwrap();
 
-        for (crate_name, def_path, source_path, digest) in [
-            (
-                "substitute",
-                S09_DEF_PATH,
-                S09_SOURCE_PATH,
-                S09_SOURCE_SHA256,
-            ),
+        for (crate_name, source_path, digest) in [
+            ("substitute", S09_SOURCE_PATH, S09_SOURCE_SHA256),
             (
                 S09_CRATE_NAME,
-                "general_genuine::__fe2o3_host_kernel_v1_substitute",
-                S09_SOURCE_PATH,
-                S09_SOURCE_SHA256,
-            ),
-            (
-                S09_CRATE_NAME,
-                S09_DEF_PATH,
                 "/checkout/crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src/main.rs",
                 S09_SOURCE_SHA256,
             ),
             (
                 S09_CRATE_NAME,
-                S09_DEF_PATH,
                 "crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src/../src/main.rs",
                 S09_SOURCE_SHA256,
             ),
-            (S09_CRATE_NAME, S09_DEF_PATH, S09_SOURCE_PATH, [0; 32]),
+            (S09_CRATE_NAME, S09_SOURCE_PATH, [0; 32]),
         ] {
             assert!(
-                validate_source_identity(crate_name, def_path, source_path, digest).is_err(),
+                validate_source_identity(crate_name, source_path, digest).is_err(),
                 "spoofed source identity was admitted"
             );
         }

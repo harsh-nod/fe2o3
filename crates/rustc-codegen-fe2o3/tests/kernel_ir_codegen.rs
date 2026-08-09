@@ -1068,7 +1068,19 @@ fn worker_v2_s09_alpha_o0_preserves_source_dwarf_in_hsaco() {
         &worker_build_identity,
         &llvm_build_identity,
     );
-    let remap = format!("--remap-path-prefix={}/=", workspace.display());
+    let mut remap = format!("--remap-path-prefix={}/=", workspace.display());
+    if let Ok(metadata) = std::env::var("FE2O3_S09_TEST_METADATA_V2") {
+        assert!(
+            !metadata.is_empty()
+                && metadata.len() <= 64
+                && metadata
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-')),
+            "FE2O3_S09_TEST_METADATA_V2 must be a bounded rustc metadata token"
+        );
+        remap.push_str(" -Cmetadata=");
+        remap.push_str(&metadata);
+    }
     let backend = build_codegen_backend(&workspace);
     let target = directory.0.join("cargo-target");
     let output = Command::new(env!("CARGO"))

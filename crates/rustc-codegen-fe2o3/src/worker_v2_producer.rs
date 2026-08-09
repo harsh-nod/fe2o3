@@ -55,7 +55,7 @@ pub(crate) fn publish_worker_v2_compiler_module_with_descriptors(
     envelope: Option<&CompilerFfiEnvelopeV1>,
     module: &Module,
     typed_roots: &[TypedDescriptorRootV1],
-    source_debug: Option<&crate::source_debug::AlphaSourceDebugV1>,
+    source_debug: Option<&crate::source_debug::AlphaSourceDebugV2>,
 ) -> Result<CompilerModuleHandoffReceiptV1, WorkerV2ProducerError> {
     let attempt = attempt.ok_or(WorkerV2ProducerError::MissingBuildAttempt)?;
     let envelope = envelope.ok_or(WorkerV2ProducerError::MissingCompilerFfiEnvelope)?;
@@ -89,8 +89,37 @@ pub(crate) fn publish_worker_v2_compiler_module_with_descriptors(
     )
     .map_err(WorkerV2ProducerError::Handoff)?;
 
+    if let Some(source_debug) = source_debug {
+        let semantic = source_debug.semantic_admission();
+        let observation = source_debug.build_observation();
+        eprintln!(
+            "[rustc-codegen-fe2o3] S09 SemanticAdmissionV2: schema={}; identity_sha256={}; portable_mir_sha256={}",
+            "fe2o3-s09-semantic-admission-v2",
+            hex(semantic.identity_sha256()),
+            hex(semantic.portable_mir_sha256()),
+        );
+        eprintln!(
+            "[rustc-codegen-fe2o3] S09 BuildObservationV2: schema={}; identity_sha256={}; cargo_metadata_sha256={}; observed_def_path={}; observed_symbol={}",
+            "fe2o3-s09-build-observation-v2",
+            hex(observation.identity_sha256()),
+            hex(observation.cargo_metadata_sha256()),
+            observation.observed_def_path(),
+            observation.observed_symbol(),
+        );
+    }
+
     publish_compiler_module_handoff_v1(output_dir, producer, attempt, handoff.canonical_bytes())
         .map_err(WorkerV2ProducerError::Publication)
+}
+
+fn hex(bytes: &[u8]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        encoded.push(DIGITS[usize::from(byte >> 4)] as char);
+        encoded.push(DIGITS[usize::from(byte & 0x0f)] as char);
+    }
+    encoded
 }
 
 fn construct_symbol_manifest(

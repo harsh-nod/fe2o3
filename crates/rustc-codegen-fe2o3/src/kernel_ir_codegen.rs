@@ -146,7 +146,7 @@ impl fmt::Display for CompilerModuleConstructionError {
 
 pub(crate) fn bind_source_debug_metadata_v1(
     mut module: InertCompilerModuleTextV1,
-    profile: &crate::source_debug::AlphaSourceDebugV1,
+    profile: &crate::source_debug::AlphaSourceDebugV2,
 ) -> Result<InertCompilerModuleTextV1, CompilerModuleConstructionError> {
     let llvm_ir = crate::source_debug::inject_alpha_dwarf_v1(&module.llvm_ir, profile)
         .map_err(CompilerModuleConstructionError::SourceDebug)?;

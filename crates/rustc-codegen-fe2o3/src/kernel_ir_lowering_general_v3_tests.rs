@@ -57,7 +57,9 @@ fn exact_alpha_and_zeta_bodies_lower_together() {
 #[test]
 fn s09_alpha_requires_exact_guarded_cfg_and_dataflow() {
     let exact = s09_alpha();
-    crate::source_debug::validate_alpha_mir_body(&exact).expect("exact S09 alpha MIR");
+    let authenticated_path = exact.rust_path.clone();
+    crate::source_debug::validate_alpha_mir_body(&exact, &authenticated_path)
+        .expect("exact S09 alpha MIR");
 
     // The generated symbol is bound to the integrated Cargo dependency graph. The isolated
     // S09 branch identity must not remain valid after that graph is merged.
@@ -66,7 +68,11 @@ fn s09_alpha_requires_exact_guarded_cfg_and_dataflow() {
         "fe2o3_typed_alias_spoof::general_genuine::__fe2o3_host_kernel_v1_stale_isolated_graph"
             .to_owned();
     assert!(
-        crate::source_debug::validate_alpha_mir_body(&isolated_graph_identity).is_err(),
+        crate::source_debug::validate_alpha_mir_body(
+            &isolated_graph_identity,
+            &authenticated_path,
+        )
+        .is_err(),
         "isolated-graph S09 DefPath identity was admitted after integration"
     );
 
@@ -80,14 +86,19 @@ fn s09_alpha_requires_exact_guarded_cfg_and_dataflow() {
         panic!("S09 guard assert")
     };
     *condition = operand(5);
-    assert!(crate::source_debug::validate_alpha_mir_body(&disconnected_guard).is_err());
+    assert!(
+        crate::source_debug::validate_alpha_mir_body(&disconnected_guard, &authenticated_path)
+            .is_err()
+    );
 
     let mut wrong_store = exact.clone();
     wrong_store.blocks[5].statements[1].destination = Some(MirPlaceRef {
         local: 8,
         projection: vec![MirProjectionElem::Deref],
     });
-    assert!(crate::source_debug::validate_alpha_mir_body(&wrong_store).is_err());
+    assert!(
+        crate::source_debug::validate_alpha_mir_body(&wrong_store, &authenticated_path).is_err()
+    );
 
     let mut alternate_output = exact.clone();
     let MirTerminatorKind::Call { operands, .. } = &mut alternate_output.blocks[2]
@@ -99,7 +110,10 @@ fn s09_alpha_requires_exact_guarded_cfg_and_dataflow() {
         panic!("S09 get-mut call")
     };
     operands[0] = operand(3);
-    assert!(crate::source_debug::validate_alpha_mir_body(&alternate_output).is_err());
+    assert!(
+        crate::source_debug::validate_alpha_mir_body(&alternate_output, &authenticated_path)
+            .is_err()
+    );
 }
 
 #[test]

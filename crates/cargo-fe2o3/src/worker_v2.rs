@@ -130,6 +130,14 @@ pub(crate) struct PreparedWorkerV2Config {
     units: Vec<ConfiguredUnit>,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct WorkerV2BuildObservation<'a> {
+    pub(crate) config_identity: WorkerV2ConfigIdentity,
+    pub(crate) executable_sha256: [u8; 32],
+    pub(crate) worker_build_identity: &'a str,
+    pub(crate) llvm_build_identity: &'a str,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WorkerV2SourceDebugProfileV1 {
     S09AlphaGfx942O0,
@@ -232,6 +240,16 @@ impl PreparedWorkerV2Config {
 
     pub(crate) const fn source_debug_profile(&self) -> Option<WorkerV2SourceDebugProfileV1> {
         self.source_debug_profile
+    }
+
+    pub(crate) fn build_observation(&self) -> WorkerV2BuildObservation<'_> {
+        let measurement = self.worker.measurement();
+        WorkerV2BuildObservation {
+            config_identity: self.identity,
+            executable_sha256: *measurement.executable().sha256(),
+            worker_build_identity: measurement.worker_build_identity(),
+            llvm_build_identity: measurement.llvm_build_identity(),
+        }
     }
 
     pub(crate) fn load_envelope_inputs(
