@@ -11,7 +11,8 @@
 /scripts/parity-protected-controller.sh @powderluv
 /scripts/parity-signed-evidence.py @powderluv
 /scripts/parity-oci-executor.py @powderluv
-/scripts/parity-oci-operator.py @powderluv
+/scripts/parity-oci-operator-launcher.c @powderluv
+/scripts/build-parity-oci-operator.sh @powderluv
 /scripts/ci-local.sh @powderluv
 /scripts/tests/parity-oci-executor.sh @powderluv
 /scripts/tests/parity-oci-operator.sh @powderluv

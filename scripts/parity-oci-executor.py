@@ -52,7 +52,15 @@ OPERATOR_CONFIG_DIRECTORY = Path("/etc/fe2o3/oci-executor")
 OPERATOR_CONFIG_NAME = "operator-v1.tsv"
 OPERATOR_CONFIG_DIGEST_NAME = "operator-v1.sha256"
 OPERATOR_LAUNCHER_PATH = Path("/usr/libexec/fe2o3-oci-operator")
+OPERATOR_PYTHON_ROOT = Path("/usr/libexec/fe2o3-python")
+OPERATOR_INTERPRETER_PATH = OPERATOR_PYTHON_ROOT / "bin/python3"
 OPERATOR_EXECUTOR_PATH = Path("/usr/libexec/fe2o3-oci-executor.py")
+OPERATOR_ENVIRONMENT = {
+    "HOME": "/nonexistent",
+    "LC_ALL": "C",
+    "PATH": "/usr/bin:/bin",
+    "TZ": "UTC",
+}
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 ID_RE = re.compile(r"^[a-z][a-z0-9._-]{0,63}$")
@@ -3426,12 +3434,26 @@ def build_parser() -> argparse.ArgumentParser:
 
 def verify_installed_operator_entrypoint() -> None:
     if (
-        Path(os.path.abspath(sys.argv[0])) != OPERATOR_LAUNCHER_PATH
+        Path(os.path.abspath(sys.argv[0])) != OPERATOR_EXECUTOR_PATH
         or Path(os.path.abspath(__file__)) != OPERATOR_EXECUTOR_PATH
+        or Path(os.path.abspath(sys.executable)) != OPERATOR_INTERPRETER_PATH
+        or os.getcwd() != "/"
+        or dict(os.environ) != OPERATOR_ENVIRONMENT
+        or not sys.flags.isolated
+        or not sys.flags.no_site
+        or not sys.flags.ignore_environment
+        or not sys.flags.no_user_site
+        or any(
+            not entry
+            or not Path(entry).is_absolute()
+            or OPERATOR_PYTHON_ROOT not in Path(entry).parents
+            for entry in sys.path
+        )
     ):
-        fail("production operator must run from fixed installed entrypoint paths")
+        fail("production operator startup state is not the fixed isolated contract")
     for path, label in (
         (OPERATOR_LAUNCHER_PATH, "operator launcher"),
+        (OPERATOR_INTERPRETER_PATH, "operator interpreter"),
         (OPERATOR_EXECUTOR_PATH, "operator executor"),
     ):
         file_fd = -1
@@ -3455,6 +3477,34 @@ def verify_installed_operator_entrypoint() -> None:
         finally:
             if file_fd >= 0:
                 close_descriptor(file_fd, f"fixed {label}")
+    launcher_fd = -1
+    parent_fd = -1
+    try:
+        launcher_fd = os.open(
+            OPERATOR_LAUNCHER_PATH,
+            os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC,
+        )
+        parent_fd = os.open(
+            f"/proc/{os.getppid()}/exe", os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC
+        )
+        launcher_info = os.fstat(launcher_fd)
+        parent_info = os.fstat(parent_fd)
+        if (launcher_info.st_dev, launcher_info.st_ino) != (
+            parent_info.st_dev,
+            parent_info.st_ino,
+        ):
+            fail("production operator parent is not the fixed native launcher")
+    except ExecutorError:
+        raise
+    except OSError as error:
+        fail(f"cannot establish fixed native launcher parent: {error}")
+    finally:
+        close_descriptors(
+            (
+                (parent_fd, "native launcher parent"),
+                (launcher_fd, "fixed operator launcher"),
+            )
+        )
 
 
 def operator_namespace(
@@ -3496,13 +3546,13 @@ def report_controlled_error(prefix: str, error: BaseException) -> int:
 
 def operator_main(argv: list[str] | None = None) -> int:
     try:
+        verify_installed_operator_entrypoint()
         parser = argparse.ArgumentParser(
             description="Fixed production OCI evidence operator entrypoint"
         )
         parser.add_argument("command", choices=("verify", "plan", "preflight"))
         parser.add_argument("--request-id", required=True)
         selected = parser.parse_args(argv)
-        verify_installed_operator_entrypoint()
         config = load_operator_config()
         function = {
             "verify": command_verify,
@@ -3527,4 +3577,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    if sys.argv[1:2] == ["--operator-internal"]:
+        raise SystemExit(operator_main(sys.argv[2:]))
     raise SystemExit(main())

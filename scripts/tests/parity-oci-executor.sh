@@ -16,8 +16,6 @@ readonly PROFILE="${TRUSTED_ROOT}/profiles/test-v1.tsv"
 readonly POLICY="${TRUSTED_ROOT}/policy.tsv"
 readonly SECCOMP="${TRUSTED_ROOT}/seccomp/default.json"
 readonly RUNTIME="${TEST_ROOT}/runtime"
-GIT="$(command -v git)"
-readonly GIT
 readonly SOURCE_STAGING="${TEST_ROOT}/staging/source"
 readonly OUTPUT_STAGING="${TEST_ROOT}/staging/output"
 readonly QUEUE_AUTH_SHA256="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
