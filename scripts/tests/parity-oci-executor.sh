@@ -122,6 +122,7 @@ output_mount	/evidence
 tmp_mount	/tmp
 output_limit_bytes	16777216
 tmp_limit_bytes	67108864
+shm_limit_bytes	33554432
 log_limit_bytes	4194304
 memory_limit_bytes	8589934592
 pids_limit	1024
@@ -149,6 +150,24 @@ gpu_pci_id	1002:74A1
 gpu_unique_id	6ced1647a296545c
 EOF
   write_policy
+}
+
+install_image_config() {
+  local source="$1"
+  cp "${source}" "${TEST_ROOT}/config.json"
+  config_digest="$(sha256 "${TEST_ROOT}/config.json")"
+  cp "${TEST_ROOT}/config.json" "${OCI_LAYOUT}/blobs/sha256/${config_digest}"
+  printf '{"schemaVersion":2,"config":{"mediaType":"application/vnd.oci.image.config.v1+json","digest":"sha256:%s","size":%s},"layers":[{"mediaType":"application/vnd.oci.image.layer.v1.tar","digest":"sha256:%s","size":%s}]}\n' \
+    "${config_digest}" "$(size "${TEST_ROOT}/config.json")" \
+    "${layer_digest}" "$(size "${TEST_ROOT}/layer")" >"${TEST_ROOT}/manifest.json"
+  manifest_digest="$(sha256 "${TEST_ROOT}/manifest.json")"
+  cp "${TEST_ROOT}/manifest.json" "${OCI_LAYOUT}/blobs/sha256/${manifest_digest}"
+  printf '{"schemaVersion":2,"manifests":[{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"sha256:%s","size":%s}]}\n' \
+    "${manifest_digest}" "$(size "${TEST_ROOT}/manifest.json")" >"${OCI_LAYOUT}/index.json"
+  write_profile \
+    "${manifest_digest}" "$(size "${TEST_ROOT}/manifest.json")" \
+    "${config_digest}" "$(size "${TEST_ROOT}/config.json")" \
+    "${layer_digest}" "$(size "${TEST_ROOT}/layer")"
 }
 
 verify() {
@@ -198,21 +217,8 @@ printf 'layer-fixture\n' >"${TEST_ROOT}/layer"
 layer_digest="$(sha256 "${TEST_ROOT}/layer")"
 cp "${TEST_ROOT}/layer" "${OCI_LAYOUT}/blobs/sha256/${layer_digest}"
 printf '{"architecture":"amd64","os":"linux","rootfs":{"type":"layers","diff_ids":["sha256:%s"]},"config":{"Env":[]}}\n' \
-  "${layer_digest}" >"${TEST_ROOT}/config.json"
-config_digest="$(sha256 "${TEST_ROOT}/config.json")"
-cp "${TEST_ROOT}/config.json" "${OCI_LAYOUT}/blobs/sha256/${config_digest}"
-printf '{"schemaVersion":2,"config":{"mediaType":"application/vnd.oci.image.config.v1+json","digest":"sha256:%s","size":%s},"layers":[{"mediaType":"application/vnd.oci.image.layer.v1.tar","digest":"sha256:%s","size":%s}]}\n' \
-  "${config_digest}" "$(size "${TEST_ROOT}/config.json")" \
-  "${layer_digest}" "$(size "${TEST_ROOT}/layer")" >"${TEST_ROOT}/manifest.json"
-manifest_digest="$(sha256 "${TEST_ROOT}/manifest.json")"
-cp "${TEST_ROOT}/manifest.json" "${OCI_LAYOUT}/blobs/sha256/${manifest_digest}"
-printf '{"schemaVersion":2,"manifests":[{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"sha256:%s","size":%s}]}\n' \
-  "${manifest_digest}" "$(size "${TEST_ROOT}/manifest.json")" >"${OCI_LAYOUT}/index.json"
-
-write_profile \
-  "${manifest_digest}" "$(size "${TEST_ROOT}/manifest.json")" \
-  "${config_digest}" "$(size "${TEST_ROOT}/config.json")" \
-  "${layer_digest}" "$(size "${TEST_ROOT}/layer")"
+  "${layer_digest}" >"${TEST_ROOT}/config.base.json"
+install_image_config "${TEST_ROOT}/config.base.json"
 
 source_commit="$(git -C "${SOURCE_REPO}" rev-parse HEAD)"
 source_tree="$(git -C "${SOURCE_REPO}" rev-parse 'HEAD^{tree}')"
@@ -418,6 +424,32 @@ except module.ExecutorError as error:
     assert time.monotonic() - started < 5
 else:
     raise AssertionError("subprocess timeout was accepted")
+
+diff_id = "sha256:" + "a" * 64
+module.validate_runtime_rootfs(
+    {"Type": "layers", "Layers": [diff_id]}, (diff_id,)
+)
+for malformed in (
+    None,
+    [],
+    {"Layers": [diff_id]},
+    {"Type": "layers", "Layers": diff_id},
+    {"Type": "layers", "Layers": [1]},
+):
+    try:
+        module.validate_runtime_rootfs(malformed, (diff_id,))
+    except module.ExecutorError:
+        pass
+    else:
+        raise AssertionError("malformed runtime RootFS.Layers was accepted")
+
+deep_json = b'{"nested":' * 2048 + b'{}' + b'}' * 2048
+try:
+    module.strict_json_object(deep_json, "deep fixture")
+except module.ExecutorError:
+    pass
+else:
+    raise AssertionError("recursive JSON parser input was accepted")
 PY
 plan_arguments="$({
   while IFS=$'\t' read -r key _ encoded; do
@@ -427,6 +459,10 @@ plan_arguments="$({
   done
 } <<<"${plan_output}")"
 grep -F -- $'--network\nnone' <<<"${plan_arguments}" >/dev/null
+grep -F -- '--pull=never' <<<"${plan_arguments}" >/dev/null
+grep -F -- '--no-healthcheck' <<<"${plan_arguments}" >/dev/null
+grep -F -- '--cgroupns=private' <<<"${plan_arguments}" >/dev/null
+grep -F -- $'--shm-size\n33554432' <<<"${plan_arguments}" >/dev/null
 grep -F -- $'--read-only\n--cap-drop\nALL' <<<"${plan_arguments}" >/dev/null
 grep -F -- $'--security-opt\nno-new-privileges=true' <<<"${plan_arguments}" >/dev/null
 grep -F -- $'--log-driver\nnone' <<<"${plan_arguments}" >/dev/null
@@ -484,6 +520,30 @@ sed -i 's/oci_index_size\t[0-9]*/oci_index_size\t999999999999999999999/' \
   "${PROFILE}"
 write_policy
 expect_failure numeric_bound 'malformed OCI index binding' verify
+cp "${TEST_ROOT}/profile.good" "${PROFILE}"
+write_policy
+
+printf '{"architecture":"amd64","os":"linux","rootfs":{"type":"layers","diff_ids":["sha256:%s"]},"config":{"Env":[],"Volumes":{"/candidate":{}}}}\n' \
+  "${layer_digest}" >"${TEST_ROOT}/config.adversarial.json"
+install_image_config "${TEST_ROOT}/config.adversarial.json"
+expect_failure image_volumes 'must not declare volumes' verify
+
+printf '{"architecture":"amd64","os":"linux","rootfs":{"type":"layers","diff_ids":["sha256:%s"]},"config":{"Env":[],"Healthcheck":{"Test":["CMD","true"]}}}\n' \
+  "${layer_digest}" >"${TEST_ROOT}/config.adversarial.json"
+install_image_config "${TEST_ROOT}/config.adversarial.json"
+expect_failure image_healthcheck 'must not declare a healthcheck' verify
+
+printf '{"architecture":"amd64","os":"linux","rootfs":[],"config":{"Env":[]}}\n' \
+  >"${TEST_ROOT}/config.adversarial.json"
+install_image_config "${TEST_ROOT}/config.adversarial.json"
+expect_failure rootfs_type 'lacks a layer rootfs' verify
+
+printf '{"architecture":"amd64","os":"linux","rootfs":{"type":"layers","diff_ids":"sha256:%s"},"config":{"Env":[]}}\n' \
+  "${layer_digest}" >"${TEST_ROOT}/config.adversarial.json"
+install_image_config "${TEST_ROOT}/config.adversarial.json"
+expect_failure rootfs_layers_type 'lacks a layer rootfs' verify
+
+install_image_config "${TEST_ROOT}/config.base.json"
 cp "${TEST_ROOT}/profile.good" "${PROFILE}"
 write_policy
 

@@ -456,6 +456,7 @@ class Profile:
     tmp_mount: str
     output_limit: int
     tmp_limit: int
+    shm_limit: int
     log_limit: int
     memory_limit: int
     pids_limit: int
@@ -672,6 +673,7 @@ def load_profile(root: Path, policy: Policy, profile_id: str) -> Profile:
         fail("invalid or duplicate executor mount")
     output_limit = parse_positive(cursor, "output_limit_bytes", 1, 16 * 1024**3)
     tmp_limit = parse_positive(cursor, "tmp_limit_bytes", 1, 16 * 1024**3)
+    shm_limit = parse_positive(cursor, "shm_limit_bytes", 1024**2, 16 * 1024**3)
     log_limit = parse_positive(cursor, "log_limit_bytes", 1, 1024**3)
     memory_limit = parse_positive(cursor, "memory_limit_bytes", 64 * 1024**2, 1024**4)
     pids_limit = parse_positive(cursor, "pids_limit", 1, 65536)
@@ -786,6 +788,7 @@ def load_profile(root: Path, policy: Policy, profile_id: str) -> Profile:
         tmp_mount,
         output_limit,
         tmp_limit,
+        shm_limit,
         log_limit,
         memory_limit,
         pids_limit,
@@ -861,11 +864,14 @@ def strict_json_object(raw: bytes, label: str) -> dict[str, object]:
             object_pairs_hook=object_pairs,
             parse_constant=reject_constant,
         )
-    except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError, ValueError):
         fail(f"invalid {label} JSON")
     if not isinstance(value, dict):
         fail(f"invalid {label} JSON object")
-    validate_json_shape(value, label)
+    try:
+        validate_json_shape(value, label)
+    except RecursionError:
+        fail(f"{label} JSON exceeds structural limits")
     return value
 
 
@@ -946,6 +952,42 @@ def descriptor(value: object, label: str) -> Layer:
     return Layer(digest, size)
 
 
+def validate_image_config(value: object, label: str) -> dict[str, object]:
+    if type(value) is not dict or value.get("Env") not in (None, []):
+        fail(f"{label} must not supply inherited environment")
+    if "Volumes" in value:
+        fail(f"{label} must not declare volumes")
+    if "Healthcheck" in value:
+        fail(f"{label} must not declare a healthcheck")
+    return value
+
+
+def validate_oci_rootfs(value: object, layer_count: int) -> tuple[str, ...]:
+    if type(value) is not dict:
+        fail("OCI config lacks a layer rootfs")
+    diff_ids = value.get("diff_ids")
+    if value.get("type") != "layers" or type(diff_ids) is not list:
+        fail("OCI config lacks a layer rootfs")
+    if any(
+        type(item) is not str or OCI_DIGEST_RE.fullmatch(item) is None
+        for item in diff_ids
+    ):
+        fail("OCI config has malformed rootfs diff IDs")
+    if len(diff_ids) != layer_count:
+        fail("OCI config/layer count mismatch")
+    return tuple(diff_ids)
+
+
+def validate_runtime_rootfs(value: object, expected: tuple[str, ...]) -> None:
+    if type(value) is not dict or value.get("Type") != "layers":
+        fail("runtime image has malformed RootFS")
+    layers = value.get("Layers")
+    if type(layers) is not list or any(type(item) is not str for item in layers):
+        fail("runtime image has malformed RootFS.Layers")
+    if tuple(layers) != expected:
+        fail("runtime image layers differ from protected OCI image")
+
+
 def verify_oci_image(profile: Profile) -> tuple[str, ...]:
     layout = Path(profile.layout_path)
     if (
@@ -1002,26 +1044,10 @@ def verify_oci_image(profile: Profile) -> tuple[str, ...]:
     )
     verify_operator_owned(config_path, profile, "OCI config", directory=False)
     config = read_json_bound(config_path, profile.config, "OCI config")
-    rootfs = config.get("rootfs")
-    diff_ids = rootfs.get("diff_ids") if isinstance(rootfs, dict) else None
-    if (
-        rootfs is None
-        or rootfs.get("type") != "layers"
-        or not isinstance(diff_ids, list)
-    ):
-        fail("OCI config lacks a layer rootfs")
-    if any(
-        not isinstance(item, str) or OCI_DIGEST_RE.fullmatch(item) is None
-        for item in diff_ids
-    ):
-        fail("OCI config has malformed rootfs diff IDs")
-    if len(diff_ids) != len(profile.layers):
-        fail("OCI config/layer count mismatch")
+    diff_ids = validate_oci_rootfs(config.get("rootfs"), len(profile.layers))
     if config.get("architecture") != "amd64" or config.get("os") != "linux":
         fail("OCI image platform must be linux/amd64")
-    image_config = config.get("config")
-    if not isinstance(image_config, dict) or image_config.get("Env") not in (None, []):
-        fail("OCI image must not supply inherited environment")
+    validate_image_config(config.get("config"), "OCI image config")
     for layer in profile.layers:
         layer_path = require_safe_oci_entry(
             layout,
@@ -1035,7 +1061,7 @@ def verify_oci_image(profile: Profile) -> tuple[str, ...]:
             layer.digest.removeprefix("sha256:"),
             "OCI layer",
         )
-    return tuple(diff_ids)
+    return diff_ids
 
 
 @dataclass(frozen=True)
@@ -1799,17 +1825,15 @@ def verify_runtime_image(profile: Profile) -> tuple[str, ...]:
     repo_digests = inspected.get("RepoDigests")
     if (
         inspected.get("Id") != profile.config.digest
-        or not isinstance(repo_digests, list)
-        or any(not isinstance(value, str) for value in repo_digests)
+        or type(repo_digests) is not list
+        or any(type(value) is not str for value in repo_digests)
         or profile.image_reference not in repo_digests
         or inspected.get("Os") != "linux"
         or inspected.get("Architecture") != "amd64"
-        or not isinstance(rootfs, dict)
-        or tuple(rootfs.get("Layers", [])) != diff_ids
-        or not isinstance(config, dict)
-        or config.get("Env") not in (None, [])
     ):
         fail("runtime image differs from protected OCI image")
+    validate_runtime_rootfs(rootfs, diff_ids)
+    validate_image_config(config, "runtime image config")
     return diff_ids
 
 
@@ -1824,6 +1848,7 @@ def docker_create_arguments(
     arguments = [
         profile.runtime_path,
         "create",
+        "--pull=never",
         "--name",
         name,
         "--hostname",
@@ -1836,6 +1861,8 @@ def docker_create_arguments(
         f"org.fe2o3.evidence.source-tree={request.source_tree}",
         "--network",
         "none",
+        "--no-healthcheck",
+        "--cgroupns=private",
         "--read-only",
         "--cap-drop",
         "ALL",
@@ -1855,6 +1882,8 @@ def docker_create_arguments(
         str(profile.pids_limit),
         "--memory",
         str(profile.memory_limit),
+        "--shm-size",
+        str(profile.shm_limit),
         "--cpus",
         f"{profile.cpu_limit_milli / 1000:.3f}",
         "--user",
