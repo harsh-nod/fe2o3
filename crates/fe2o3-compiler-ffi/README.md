@@ -16,6 +16,16 @@ domain. Contract grammar and IDs come from `reserved-fe2o3-symbols`.
 The constructors are public so tests and non-rustc producers can create structurally identical
 values. The envelope binds bytes but does not authenticate that rustc produced them.
 
+`ExternalDeviceLibraryManifestV1` is the bounded, canonical contract for gfx942 device-function
+libraries. `ExternalDeviceLibraryProviderV1::new` performs only byte-bound, declared-length, and
+recognizable-header preflight over borrowed provider bytes. It does not invoke an LLVM bitcode
+reader, parse complete LLVM bitcode, inspect ELF sections or symbols, or establish that content is
+well-formed or linkable. Provider-set validation checks the aggregate content bound before hashing
+or allocating closure maps, then checks exact digests, dependency identities, declared profiles,
+and import/export contracts. LLVM profile compatibility is only declared major/triple/data-layout
+agreement; it is not linker admission. These public structural values authenticate no producer,
+proof, or provenance and grant no compiler, link, load, or launch authority.
+
 `CompilerDescriptorSourceV1` retains one bounded canonical `DeviceDescriptorTableV1` whose
 code-object digest is still zero. Its identity commits to the exact table bytes that a later
 ELF-aware stage may embed and finalize. It rejects already-finalized, malformed, truncated,

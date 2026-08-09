@@ -26,10 +26,11 @@ pub const MAX_EXTERNAL_DEVICE_LIBRARY_PROVIDER_CLOSURE_BYTES_V1: usize = 64 * 10
 
 /// One actual provider manifest paired with the exact bytes it describes.
 ///
-/// Construction checks byte bounds, declared length, and the representation header without
-/// hashing content. Exact digest validation is deferred until the complete provider set has passed
-/// its aggregate byte preflight. This does not authenticate the producer, prove the symbol
-/// declarations, or grant link authority.
+/// Construction performs only a header preflight after checking byte bounds and declared length.
+/// It does not hash content, invoke an LLVM bitcode reader, parse ELF sections or symbols, or
+/// establish that the bytes are well-formed or linkable. Exact digest validation is deferred until
+/// the complete provider set has passed its aggregate byte preflight. This does not authenticate
+/// the producer, prove the symbol declarations, admit linker input, or grant link authority.
 #[derive(Clone, Copy)]
 pub struct ExternalDeviceLibraryProviderV1<'a> {
     manifest: &'a ExternalDeviceLibraryManifestV1,
@@ -56,7 +57,7 @@ impl<'a> ExternalDeviceLibraryProviderV1<'a> {
             content_bytes,
         };
         value.preflight_content_size()?;
-        validate_representation(value.manifest.content().kind(), value.content_bytes)?;
+        preflight_representation_header(value.manifest.content().kind(), value.content_bytes)?;
         Ok(value)
     }
 
@@ -146,7 +147,8 @@ impl ExternalDeviceLibraryManifestV1 {
     ///
     /// Input order has no meaning. The root dependency list must name every provider exactly once,
     /// including transitive providers. Each provider's own dependency records then select which
-    /// provider exports satisfy its imports.
+    /// provider exports satisfy its imports. Success records structural digest, declaration, and
+    /// profile agreement only; it neither performs format-reader validation nor admits link input.
     pub fn validate_provider_set(
         &self,
         providers: &[ExternalDeviceLibraryProviderV1<'_>],
@@ -214,7 +216,7 @@ pub enum ExternalDeviceLibraryProviderSetErrorV1 {
     ProviderContentByteLimitExceeded,
     ProviderClosureByteLimitExceeded,
     ProviderContentDigestMismatch,
-    ProviderContentRepresentationMismatch,
+    ProviderContentHeaderMismatch,
     RootRepeatedAsProvider,
     DuplicateProviderManifest,
     DuplicateProviderBlob,
@@ -223,7 +225,7 @@ pub enum ExternalDeviceLibraryProviderSetErrorV1 {
     DependencyContentMismatch,
     TargetMismatch,
     CodeObjectVersionMismatch,
-    LlvmIncompatible,
+    LlvmProfileMismatch,
     DuplicateProviderExport,
     MissingProviderExport,
     ImportExportContractMismatch,
@@ -243,9 +245,9 @@ impl fmt::Display for ExternalDeviceLibraryProviderSetErrorV1 {
             Self::ProviderContentDigestMismatch => {
                 formatter.write_str("provider content does not match its exact digest and length")
             }
-            Self::ProviderContentRepresentationMismatch => {
-                formatter.write_str("provider bytes do not match their declared representation")
-            }
+            Self::ProviderContentHeaderMismatch => formatter.write_str(
+                "provider bytes lack the header required by their declared representation",
+            ),
             Self::RootRepeatedAsProvider => {
                 formatter.write_str("root manifest repeated as provider")
             }
@@ -266,7 +268,9 @@ impl fmt::Display for ExternalDeviceLibraryProviderSetErrorV1 {
             Self::CodeObjectVersionMismatch => {
                 formatter.write_str("provider code-object version does not match consumer")
             }
-            Self::LlvmIncompatible => formatter.write_str("provider LLVM identity is incompatible"),
+            Self::LlvmProfileMismatch => {
+                formatter.write_str("provider LLVM profile does not match the consumer profile")
+            }
             Self::DuplicateProviderExport => {
                 formatter.write_str("provider closure contains duplicate exported symbols")
             }
@@ -323,7 +327,10 @@ fn add_provider_content_to_closure(
         .ok_or(ExternalDeviceLibraryProviderSetErrorV1::ProviderClosureByteLimitExceeded)
 }
 
-fn validate_representation(
+/// Performs a bounded recognizable-header check only.
+///
+/// This deliberately does not call an LLVM reader or validate the complete representation.
+fn preflight_representation_header(
     kind: ExternalDeviceLibraryContentKindV1,
     bytes: &[u8],
 ) -> Result<(), ExternalDeviceLibraryProviderSetErrorV1> {
@@ -351,7 +358,7 @@ fn validate_representation(
     if valid {
         Ok(())
     } else {
-        Err(ExternalDeviceLibraryProviderSetErrorV1::ProviderContentRepresentationMismatch)
+        Err(ExternalDeviceLibraryProviderSetErrorV1::ProviderContentHeaderMismatch)
     }
 }
 
@@ -368,7 +375,7 @@ fn validate_dependency_identity(
     Ok(())
 }
 
-fn validate_compatibility(
+fn validate_declared_profile(
     consumer: &ExternalDeviceLibraryManifestV1,
     provider: &ExternalDeviceLibraryManifestV1,
 ) -> Result<(), ExternalDeviceLibraryProviderSetErrorV1> {
@@ -378,8 +385,8 @@ fn validate_compatibility(
     if consumer.code_object_version() != provider.code_object_version() {
         return Err(ExternalDeviceLibraryProviderSetErrorV1::CodeObjectVersionMismatch);
     }
-    if !consumer.llvm().is_link_compatible_with(provider.llvm()) {
-        return Err(ExternalDeviceLibraryProviderSetErrorV1::LlvmIncompatible);
+    if !consumer.llvm().has_compatible_profile_with(provider.llvm()) {
+        return Err(ExternalDeviceLibraryProviderSetErrorV1::LlvmProfileMismatch);
     }
     Ok(())
 }
@@ -396,7 +403,7 @@ fn validate_consumer(
             .get(&dependency.manifest_identity())
             .ok_or(ExternalDeviceLibraryProviderSetErrorV1::MissingProvider)?;
         validate_dependency_identity(dependency, provider.manifest)?;
-        validate_compatibility(consumer, provider.manifest)?;
+        validate_declared_profile(consumer, provider.manifest)?;
         for import_name in dependency.resolved_imports() {
             let import = consumer
                 .imports()

@@ -180,11 +180,12 @@ impl ExternalDeviceLlvmIdentityV1 {
         &self.data_layout
     }
 
-    /// Checks the LLVM properties required for direct bitcode/object linking.
+    /// Compares the declared LLVM profile fields used by structural provider-set validation.
     ///
     /// Exact producer version, commit, and executable identities remain bound in each manifest,
-    /// but compatible patch builds of the same LLVM major are not forced to be byte-identical.
-    pub fn is_link_compatible_with(&self, other: &Self) -> bool {
+    /// but patch builds of the same LLVM major may share a profile. This comparison does not
+    /// inspect content, invoke LLVM, admit linker input, or grant link authority.
+    pub fn has_compatible_profile_with(&self, other: &Self) -> bool {
         self.major == other.major
             && self.target_triple == other.target_triple
             && self.data_layout == other.data_layout

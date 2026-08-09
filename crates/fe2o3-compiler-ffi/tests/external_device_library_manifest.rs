@@ -380,6 +380,33 @@ fn identities_llvm_text_and_trust_evidence_are_strictly_bounded() {
 }
 
 #[test]
+fn llvm_profile_compatibility_is_structural_and_not_link_admission() {
+    let baseline = llvm("18.1.8");
+    let alternate_patch_and_producer = ExternalDeviceLlvmIdentityV1::new(
+        18,
+        "18.99.123git",
+        [0x99; 20],
+        blob("alternate-llvm-executable", 2_048_576),
+        EXTERNAL_DEVICE_LIBRARY_TARGET_TRIPLE_V1,
+        EXTERNAL_DEVICE_LIBRARY_GFX942_DATA_LAYOUT_V1,
+    )
+    .unwrap();
+    let different_major = ExternalDeviceLlvmIdentityV1::new(
+        19,
+        "19.0.0git",
+        [0x19; 20],
+        blob("llvm-19-executable", 1_048_576),
+        EXTERNAL_DEVICE_LIBRARY_TARGET_TRIPLE_V1,
+        EXTERNAL_DEVICE_LIBRARY_GFX942_DATA_LAYOUT_V1,
+    )
+    .unwrap();
+
+    assert_ne!(baseline, alternate_patch_and_producer);
+    assert!(baseline.has_compatible_profile_with(&alternate_patch_and_producer));
+    assert!(!baseline.has_compatible_profile_with(&different_major));
+}
+
+#[test]
 fn reviewed_target_content_and_code_object_profiles_fail_closed() {
     let make = |content, target, cov| {
         ExternalDeviceLibraryManifestV1::new(

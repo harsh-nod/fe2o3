@@ -326,7 +326,25 @@ fn provider_set_checks_exact_digest_after_construction_preflight() {
 }
 
 #[test]
-fn provider_bytes_require_a_reviewed_representation() {
+fn provider_construction_is_only_a_representation_header_preflight() {
+    let header_only = bitcode("arbitrary-tail-not-reader-validated");
+    let header_only_manifest = manifest_for(
+        ExternalDeviceLibraryContentKindV1::LlvmBitcode,
+        &header_only,
+        target("gfx942:xnack-"),
+        CodeObjectVersion::V6,
+        llvm(18, "18.1.8", "header-only"),
+        vec![baseline_function(
+            ExternalDeviceSymbolRoleV1::DeviceFunctionExport,
+            "header_only",
+        )],
+        vec![],
+    );
+    assert!(
+        ExternalDeviceLibraryProviderV1::new(&header_only_manifest, &header_only).is_ok(),
+        "the constructor intentionally checks only the recognizable bitcode header"
+    );
+
     let invalid = b"not llvm bitcode".to_vec();
     let invalid_manifest = manifest_for(
         ExternalDeviceLibraryContentKindV1::LlvmBitcode,
@@ -342,7 +360,7 @@ fn provider_bytes_require_a_reviewed_representation() {
     );
     assert!(matches!(
         ExternalDeviceLibraryProviderV1::new(&invalid_manifest, &invalid),
-        Err(ExternalDeviceLibraryProviderSetErrorV1::ProviderContentRepresentationMismatch)
+        Err(ExternalDeviceLibraryProviderSetErrorV1::ProviderContentHeaderMismatch)
     ));
 
     let object = relocatable("valid-object");
@@ -387,7 +405,7 @@ fn provider_bytes_require_a_reviewed_representation() {
         );
         assert!(matches!(
             ExternalDeviceLibraryProviderV1::new(&malformed_manifest, &malformed),
-            Err(ExternalDeviceLibraryProviderSetErrorV1::ProviderContentRepresentationMismatch)
+            Err(ExternalDeviceLibraryProviderSetErrorV1::ProviderContentHeaderMismatch)
         ));
     }
 
@@ -406,7 +424,7 @@ fn provider_bytes_require_a_reviewed_representation() {
     );
     assert!(matches!(
         ExternalDeviceLibraryProviderV1::new(&truncated_manifest, &truncated),
-        Err(ExternalDeviceLibraryProviderSetErrorV1::ProviderContentRepresentationMismatch)
+        Err(ExternalDeviceLibraryProviderSetErrorV1::ProviderContentHeaderMismatch)
     ));
 }
 
@@ -494,7 +512,7 @@ fn root_repetition_and_reused_provider_blobs_are_rejected() {
 }
 
 #[test]
-fn dependency_representation_target_cov_and_llvm_compatibility_are_exact() {
+fn dependency_content_target_cov_and_llvm_profiles_are_exact() {
     let cases = [
         (
             provider(
@@ -524,7 +542,7 @@ fn dependency_representation_target_cov_and_llvm_compatibility_are_exact() {
                 CodeObjectVersion::V6,
                 llvm(19, "19.0.0git", "wrong-llvm"),
             ),
-            ExternalDeviceLibraryProviderSetErrorV1::LlvmIncompatible,
+            ExternalDeviceLibraryProviderSetErrorV1::LlvmProfileMismatch,
         ),
     ];
     for (provider, expected) in cases {
