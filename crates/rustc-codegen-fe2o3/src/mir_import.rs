@@ -623,31 +623,45 @@ pub fn import_collection<'tcx>(
     collection: &CollectionResult<'tcx>,
 ) -> Result<MirModule, MirImportError> {
     let compiler_ffi_imports = CompilerFfiImports::from_collection(tcx, collection)?;
-    let functions = collection
-        .functions
-        .iter()
-        .filter_map(|function| {
-            let def_id = function.instance.def_id();
-            if !tcx.is_mir_available(def_id) {
-                return None;
-            }
+    let mut functions = Vec::new();
+    for function in &collection.functions {
+        let def_id = function.instance.def_id();
+        if !tcx.is_mir_available(def_id) {
+            continue;
+        }
 
-            let body = tcx.instance_mir(function.instance.def);
-            let rust_path = imported_rust_path(tcx, def_id);
-            Some(import_body(
+        let body = tcx.instance_mir(function.instance.def);
+        let dead_branches = function.dead_branches.as_ref().ok_or_else(|| {
+            MirImportError::new(format!(
+                "collected function '{}' has no compiler dead-branch observation",
+                tcx.def_path_str(def_id)
+            ))
+        })?;
+        dead_branches
+            .validate_against(tcx, function.instance, body)
+            .map_err(|error| {
+                MirImportError::new(format!(
+                    "dead-branch evidence rejected before MIR import for '{}': {error}",
+                    tcx.def_path_str(def_id)
+                ))
+            })?;
+        let rust_path = imported_rust_path(tcx, def_id);
+        functions.push(import_body(
+            MirBodyImportContext {
                 tcx,
                 body,
-                function.export_name.clone(),
-                rust_path,
-                import_function_kind(function.role),
-                MirKernelMetadata {
-                    typed_profile: import_kernel_profile(function.typed_profile),
-                    frontend_contract: function.frontend_contract.clone(),
-                },
-                &compiler_ffi_imports,
-            ))
-        })
-        .collect();
+                compiler_ffi_imports: &compiler_ffi_imports,
+                dead_branches,
+            },
+            function.export_name.clone(),
+            rust_path,
+            import_function_kind(function.role),
+            MirKernelMetadata {
+                typed_profile: import_kernel_profile(function.typed_profile),
+                frontend_contract: function.frontend_contract.clone(),
+            },
+        ));
+    }
 
     MirModule::from_functions_v1(functions)
 }
@@ -1347,18 +1361,30 @@ struct MirKernelMetadata {
     frontend_contract: Option<crate::collector::AuthenticatedKernelFrontendContractV1>,
 }
 
-fn import_body<'tcx>(
+struct MirBodyImportContext<'a, 'tcx> {
     tcx: TyCtxt<'tcx>,
-    body: &Body<'tcx>,
+    body: &'a Body<'tcx>,
+    compiler_ffi_imports: &'a CompilerFfiImports,
+    dead_branches: &'a crate::monomorphization_dead::CompilerDeadBranchObservationV1,
+}
+
+fn import_body<'tcx>(
+    context: MirBodyImportContext<'_, 'tcx>,
     export_name: String,
     rust_path: String,
     kind: MirFunctionKind,
     kernel_metadata: MirKernelMetadata,
-    compiler_ffi_imports: &CompilerFfiImports,
 ) -> MirFunction {
+    let MirBodyImportContext {
+        tcx,
+        body,
+        compiler_ffi_imports,
+        dead_branches,
+    } = context;
     let blocks = body
         .basic_blocks
         .iter_enumerated()
+        .filter(|(index, _)| dead_branches.imports_block(index.as_usize()))
         .map(|(index, block)| MirBlock {
             index: index.as_usize(),
             statements: block
@@ -1370,7 +1396,12 @@ fn import_body<'tcx>(
                 })
                 .collect(),
             terminator: block.terminator.as_ref().map(|terminator| MirTerminator {
-                kind: terminator_kind(tcx, &terminator.kind, compiler_ffi_imports),
+                kind: dead_branches
+                    .selected_successor(index.as_usize())
+                    .map_or_else(
+                        || terminator_kind(tcx, &terminator.kind, compiler_ffi_imports),
+                        |target| MirTerminatorKind::Goto { target },
+                    ),
                 source: Some(import_source_location(tcx, terminator.source_info)),
             }),
         })

@@ -107,6 +107,14 @@ generated-safe hardware result covers only MI300X `gfx942:xnack-` and uses an
 explicitly fake prerequisite authenticator. These gaps keep every Complete
 count at zero and prevent any cuda-oxide parity claim.
 
+The [monomorphization-dead V1 foundation](monomorphization-dead-v1.md) defines
+one fixed-width, fail-closed folding policy and compiler-private MIR
+observation. It gates reachable-function collection, panic traversal, and MIR
+import only for policy-proven branches. It does not yet bind the observation
+through semantic IR to machine address-space analysis, and it has no archived
+configured-compiler or `gfx942` execution evidence. Row 23 therefore remains
+Missing.
+
 The next bounded scope and exit gate are defined by the
 [general typed dispatch V1 contract](general-typed-dispatch-v1.md). The status
 TSV is authoritative; the deterministic matrix and dashboard generators project

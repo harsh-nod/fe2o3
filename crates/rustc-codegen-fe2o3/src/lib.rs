@@ -24,6 +24,7 @@ mod host_object;
 mod kernel_ir_codegen;
 mod kernel_ir_lowering;
 mod mir_import;
+mod monomorphization_dead;
 mod record_lowering;
 #[allow(dead_code)]
 mod rust_type_layout;

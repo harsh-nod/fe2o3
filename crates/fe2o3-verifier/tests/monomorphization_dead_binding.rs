@@ -7,8 +7,8 @@ use fe2o3_verifier::{
     reconcile_monomorphization_dead_evidence_v1,
 };
 
-fn context(function: u8, cfg: u8, source: u8) -> DeadBranchContextV1 {
-    DeadBranchContextV1::new([function; 32], [cfg; 32], [source; 32]).unwrap()
+fn context(function: u8, cfg: u8, source: u8, target: u8) -> DeadBranchContextV1 {
+    DeadBranchContextV1::new([function; 32], [cfg; 32], [source; 32], [target; 32]).unwrap()
 }
 
 fn evidence(context: DeadBranchContextV1, discriminant: u128) -> MonomorphizationDeadEvidenceV1 {
@@ -29,7 +29,7 @@ fn evidence(context: DeadBranchContextV1, discriminant: u128) -> Monomorphizatio
 
 #[test]
 fn exact_observation_and_claim_have_one_canonical_inert_binding() {
-    let observation = evidence(context(1, 2, 3), 1);
+    let observation = evidence(context(1, 2, 3, 4), 1);
     let claim = MonomorphizationDeadClaimV1::from_evidence(&observation);
     let binding = reconcile_monomorphization_dead_evidence_v1(&observation, claim).unwrap();
     let repeated = reconcile_monomorphization_dead_evidence_v1(&observation, claim).unwrap();
@@ -52,20 +52,24 @@ fn exact_observation_and_claim_have_one_canonical_inert_binding() {
 }
 
 #[test]
-fn substituted_function_cfg_and_source_identities_fail_distinctly() {
-    let observation = evidence(context(1, 2, 3), 1);
+fn substituted_function_cfg_source_and_target_identities_fail_distinctly() {
+    let observation = evidence(context(1, 2, 3, 4), 1);
     for (substituted, expected) in [
         (
-            context(9, 2, 3),
+            context(9, 2, 3, 4),
             MonomorphizationDeadBindingErrorV1::FunctionIdentityMismatch,
         ),
         (
-            context(1, 9, 3),
+            context(1, 9, 3, 4),
             MonomorphizationDeadBindingErrorV1::CfgIdentityMismatch,
         ),
         (
-            context(1, 2, 9),
+            context(1, 2, 9, 4),
             MonomorphizationDeadBindingErrorV1::SourceIdentityMismatch,
+        ),
+        (
+            context(1, 2, 3, 9),
+            MonomorphizationDeadBindingErrorV1::TargetIdentityMismatch,
         ),
     ] {
         let claim = MonomorphizationDeadClaimV1::new(1, substituted, observation.identity());
@@ -78,8 +82,8 @@ fn substituted_function_cfg_and_source_identities_fail_distinctly() {
 
 #[test]
 fn substituted_decisions_and_policy_version_drift_fail_closed() {
-    let observation = evidence(context(1, 2, 3), 1);
-    let changed_decision = evidence(context(1, 2, 3), 0);
+    let observation = evidence(context(1, 2, 3, 4), 1);
+    let changed_decision = evidence(context(1, 2, 3, 4), 0);
     assert_eq!(
         reconcile_monomorphization_dead_evidence_v1(
             &observation,
@@ -101,8 +105,8 @@ fn substituted_decisions_and_policy_version_drift_fail_closed() {
 
 #[test]
 fn binding_validation_rejects_cross_observation_substitution() {
-    let first = evidence(context(1, 2, 3), 1);
-    let second = evidence(context(1, 2, 4), 1);
+    let first = evidence(context(1, 2, 3, 4), 1);
+    let second = evidence(context(1, 2, 4, 4), 1);
     let first = reconcile_monomorphization_dead_evidence_v1(
         &first,
         MonomorphizationDeadClaimV1::from_evidence(&first),

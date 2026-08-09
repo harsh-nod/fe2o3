@@ -13,7 +13,7 @@ const REJECTED_CASES: &[(&str, &str, &str)] = &[
     (
         "fe2o3-trusted-item-lookalike-type",
         "lookalike_type",
-        "argument 0 has unsupported type",
+        "[FE2O3-FFI-EDGE001] unsupported executable MIR edge",
     ),
     (
         "fe2o3-trusted-item-lookalike-helper",
@@ -33,7 +33,7 @@ const REJECTED_CASES: &[(&str, &str, &str)] = &[
     (
         "fe2o3-trusted-item-local-marker",
         "local_marker",
-        "argument 0 has unsupported type",
+        "[FE2O3-FFI-EDGE001] unsupported executable MIR edge",
     ),
     (
         "fe2o3-typed-alias-spoof",

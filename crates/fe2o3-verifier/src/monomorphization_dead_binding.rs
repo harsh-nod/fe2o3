@@ -161,6 +161,9 @@ pub fn reconcile_monomorphization_dead_evidence_v1(
     if observed.source_identity() != claimed.source_identity() {
         return Err(MonomorphizationDeadBindingErrorV1::SourceIdentityMismatch);
     }
+    if observed.target_identity() != claimed.target_identity() {
+        return Err(MonomorphizationDeadBindingErrorV1::TargetIdentityMismatch);
+    }
     if observation.identity() != claim.evidence_identity {
         return Err(MonomorphizationDeadBindingErrorV1::EvidenceIdentityMismatch);
     }
@@ -174,6 +177,7 @@ pub fn reconcile_monomorphization_dead_evidence_v1(
     bytes.extend_from_slice(&observed.function_identity());
     bytes.extend_from_slice(&observed.cfg_identity());
     bytes.extend_from_slice(&observed.source_identity());
+    bytes.extend_from_slice(&observed.target_identity());
     bytes.extend_from_slice(&observation.identity().as_bytes());
     bytes.extend_from_slice(&evidence_byte_len.to_le_bytes());
     let binding_identity = sha256(&bytes);
@@ -194,6 +198,7 @@ pub enum MonomorphizationDeadBindingErrorV1 {
     FunctionIdentityMismatch,
     CfgIdentityMismatch,
     SourceIdentityMismatch,
+    TargetIdentityMismatch,
     EvidenceIdentityMismatch,
     EvidenceTooLarge,
     BindingMismatch,
@@ -220,6 +225,9 @@ impl fmt::Display for MonomorphizationDeadBindingErrorV1 {
             }
             Self::SourceIdentityMismatch => {
                 formatter.write_str("dead-branch source identity was substituted")
+            }
+            Self::TargetIdentityMismatch => {
+                formatter.write_str("dead-branch compiler target identity was substituted")
             }
             Self::EvidenceIdentityMismatch => {
                 formatter.write_str("dead-branch decision evidence was substituted")

@@ -18,7 +18,7 @@ fn same_type(value: FixedWidthIntegerV1, bits: u128) -> FixedWidthIntegerV1 {
 }
 
 fn context(seed: u8) -> DeadBranchContextV1 {
-    DeadBranchContextV1::new([seed; 32], [seed + 1; 32], [seed + 2; 32]).unwrap()
+    DeadBranchContextV1::new([seed; 32], [seed + 1; 32], [seed + 2; 32], [seed + 3; 32]).unwrap()
 }
 
 fn decision(block: u32, value: FixedWidthIntegerV1) -> DeadBranchDecisionV1 {
@@ -193,9 +193,10 @@ fn evidence_is_canonical_and_every_identity_axis_matters() {
     assert_eq!(first.identity(), reordered.identity());
 
     for changed in [
-        DeadBranchContextV1::new([9; 32], [2; 32], [3; 32]).unwrap(),
-        DeadBranchContextV1::new([1; 32], [9; 32], [3; 32]).unwrap(),
-        DeadBranchContextV1::new([1; 32], [2; 32], [9; 32]).unwrap(),
+        DeadBranchContextV1::new([9; 32], [2; 32], [3; 32], [4; 32]).unwrap(),
+        DeadBranchContextV1::new([1; 32], [9; 32], [3; 32], [4; 32]).unwrap(),
+        DeadBranchContextV1::new([1; 32], [2; 32], [9; 32], [4; 32]).unwrap(),
+        DeadBranchContextV1::new([1; 32], [2; 32], [3; 32], [9; 32]).unwrap(),
     ] {
         let substituted =
             MonomorphizationDeadEvidenceV1::new(1, changed, first.decisions().to_vec()).unwrap();
@@ -248,9 +249,15 @@ fn cross_width_switch_cases_and_zero_identities_are_rejected() {
         ))
     );
     assert_eq!(
-        DeadBranchContextV1::new([1; 32], [0; 32], [3; 32]),
+        DeadBranchContextV1::new([1; 32], [0; 32], [3; 32], [4; 32]),
         Err(MonomorphizationDeadEvidenceErrorV1::ZeroIdentity {
             field: "CFG identity",
+        })
+    );
+    assert_eq!(
+        DeadBranchContextV1::new([1; 32], [2; 32], [3; 32], [0; 32]),
+        Err(MonomorphizationDeadEvidenceErrorV1::ZeroIdentity {
+            field: "target identity",
         })
     );
 }

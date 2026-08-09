@@ -719,6 +719,15 @@ fn validate_export_body<'tcx>(
             ));
         }
         let body = tcx.instance_mir(instance.def);
+        let dead_branches = crate::monomorphization_dead::CompilerDeadBranchObservationV1::observe(
+            tcx, instance, body,
+        )
+        .map_err(|error| {
+            DeviceFfiError::new(format!(
+                "device export `{}` dead-branch observation failed closed: {error}",
+                tcx.def_path_str(instance.def_id())
+            ))
+        })?;
         if let Some(static_def_id) = referenced_static(tcx, body) {
             return Err(DeviceFfiError::new(format!(
                 "device export `{}` reaches static `{}` requiring unsupported relocation handling",
@@ -726,7 +735,10 @@ fn validate_export_body<'tcx>(
                 tcx.def_path_str(static_def_id),
             )));
         }
-        for block in body.basic_blocks.iter() {
+        for (block_id, block) in body.basic_blocks.iter_enumerated() {
+            if !dead_branches.includes_block(block_id.as_usize()) {
+                continue;
+            }
             for statement in &block.statements {
                 if statement
                     .kind

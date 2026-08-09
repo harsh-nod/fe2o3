@@ -487,6 +487,7 @@ pub struct DeadBranchContextV1 {
     function_identity: [u8; 32],
     cfg_identity: [u8; 32],
     source_identity: [u8; 32],
+    target_identity: [u8; 32],
 }
 
 impl DeadBranchContextV1 {
@@ -494,11 +495,13 @@ impl DeadBranchContextV1 {
         function_identity: [u8; 32],
         cfg_identity: [u8; 32],
         source_identity: [u8; 32],
+        target_identity: [u8; 32],
     ) -> Result<Self, MonomorphizationDeadEvidenceErrorV1> {
         for (field, identity) in [
             ("function identity", function_identity),
             ("CFG identity", cfg_identity),
             ("source identity", source_identity),
+            ("target identity", target_identity),
         ] {
             if identity == [0; 32] {
                 return Err(MonomorphizationDeadEvidenceErrorV1::ZeroIdentity { field });
@@ -508,6 +511,7 @@ impl DeadBranchContextV1 {
             function_identity,
             cfg_identity,
             source_identity,
+            target_identity,
         })
     }
 
@@ -521,6 +525,10 @@ impl DeadBranchContextV1 {
 
     pub const fn source_identity(self) -> [u8; 32] {
         self.source_identity
+    }
+
+    pub const fn target_identity(self) -> [u8; 32] {
+        self.target_identity
     }
 }
 
@@ -697,6 +705,7 @@ fn encode_evidence(
     bytes.extend_from_slice(&context.function_identity);
     bytes.extend_from_slice(&context.cfg_identity);
     bytes.extend_from_slice(&context.source_identity);
+    bytes.extend_from_slice(&context.target_identity);
     bytes.extend_from_slice(&(decisions.len() as u32).to_le_bytes());
     for decision in decisions {
         bytes.extend_from_slice(&decision.branch_block.to_le_bytes());

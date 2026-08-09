@@ -128,6 +128,8 @@ pub struct CollectedFunction<'tcx> {
         Option<crate::rust_type_layout_v3::GeneralTypedKernelContractV3>,
     /// Compiler-authenticated source contract for this exact kernel root.
     pub(crate) frontend_contract: Option<AuthenticatedKernelFrontendContractV1>,
+    /// Compiler-private observation derived from this exact monomorphized MIR.
+    pub(crate) dead_branches: Option<crate::monomorphization_dead::CompilerDeadBranchObservationV1>,
 }
 
 /// Source-level kernel contract authenticated against one exact rustc instance.
@@ -222,7 +224,6 @@ impl CollectedFunction<'_> {
 #[derive(Debug)]
 enum CollectDecision {
     Collect,
-    SkipIntentional,
     Forbidden { crate_name: String, fn_path: String },
 }
 
@@ -1668,6 +1669,7 @@ impl<'tcx> DeviceCollector<'tcx> {
                 typed_layout_identities: None,
                 general_typed_contract: None,
                 frontend_contract: None,
+                dead_branches: None,
             });
         }
         Ok(())
@@ -1705,13 +1707,14 @@ impl<'tcx> DeviceCollector<'tcx> {
                 typed_layout_identities,
                 general_typed_contract,
                 frontend_contract,
+                dead_branches: None,
             });
         }
         Ok(())
     }
 
     fn collect(mut self) -> Result<CollectionResult<'tcx>, CollectError> {
-        while let Some(function) = self.worklist.pop_front() {
+        while let Some(mut function) = self.worklist.pop_front() {
             let def_id = function.instance.def_id();
 
             if !self.tcx.is_mir_available(def_id) {
@@ -1723,15 +1726,41 @@ impl<'tcx> DeviceCollector<'tcx> {
             }
 
             let mir = self.tcx.instance_mir(function.instance.def);
+            let dead_branches =
+                crate::monomorphization_dead::CompilerDeadBranchObservationV1::observe(
+                    self.tcx,
+                    function.instance,
+                    mir,
+                )
+                .map_err(|error| {
+                    self.reachable_error(
+                        &function.instance,
+                        &format!("dead-branch observation failed closed: {error}"),
+                        None,
+                    )
+                })?;
             if self.verbose {
+                let context = dead_branches.evidence().context();
                 eprintln!(
-                    "[collector] visiting {} ({} basic blocks)",
+                    "[collector] visiting {} ({} basic blocks, {} V1 decisions, {} policy-excluded)",
                     function.export_name,
-                    mir.basic_blocks.len()
+                    mir.basic_blocks.len(),
+                    dead_branches.evidence().decisions().len(),
+                    dead_branches.excluded_blocks().len(),
+                );
+                eprintln!(
+                    "[collector] V1 identity {} mir={} source={} target={}",
+                    function.export_name,
+                    encode_lower_hex(&context.cfg_identity()),
+                    encode_lower_hex(&context.source_identity()),
+                    encode_lower_hex(&context.target_identity()),
                 );
             }
 
-            for block in mir.basic_blocks.iter() {
+            for (block_id, block) in mir.basic_blocks.iter_enumerated() {
+                if !dead_branches.includes_block(block_id.as_usize()) {
+                    continue;
+                }
                 if let Some(terminator) = &block.terminator {
                     self.process_terminator(
                         &terminator.kind,
@@ -1742,6 +1771,7 @@ impl<'tcx> DeviceCollector<'tcx> {
                 }
             }
 
+            function.dead_branches = Some(dead_branches);
             self.result.push(function);
         }
 
@@ -2070,6 +2100,19 @@ impl<'tcx> DeviceCollector<'tcx> {
                 None,
             ));
         };
+        let callee_path = self.tcx.def_path_str(*def_id);
+        if callee_path.contains("::panicking::")
+            || callee_path.contains("::panic_fmt")
+            || callee_path.contains("::begin_panic")
+            || callee_path.contains("::unwrap_failed")
+            || callee_path.contains("precondition_check")
+        {
+            return Err(self.reachable_error(
+                caller,
+                "device code reaches a panic path",
+                Some(callee_path),
+            ));
+        }
 
         let normalized_args = self.tcx.instantiate_and_normalize_erasing_regions(
             caller.args,
@@ -2142,9 +2185,20 @@ impl<'tcx> DeviceCollector<'tcx> {
             }
         }
 
+        // Only an exact rustc diagnostic-item identity may terminate
+        // collection without traversing the callee body.
+        if crate::trusted_device_items::classify(self.tcx, *def_id).is_some() {
+            if self.verbose {
+                eprintln!(
+                    "[collector] stopping at trusted device item {}",
+                    self.tcx.def_path_str(*def_id)
+                );
+            }
+            return Ok(());
+        }
+
         match self.should_collect_from_crate(*def_id) {
             CollectDecision::Collect => {}
-            CollectDecision::SkipIntentional => return Ok(()),
             CollectDecision::Forbidden {
                 crate_name,
                 fn_path,
@@ -2212,21 +2266,6 @@ impl<'tcx> DeviceCollector<'tcx> {
             ));
         }
 
-        // Exact diagnostic-item identity is the compiler lowering boundary.
-        // Traversing the implementation of one of these semantic operations
-        // would incorrectly turn its host-side unreachable stub into a device
-        // dependency (and non-inline dependency stubs may intentionally have
-        // no encoded MIR at all). Local/path lookalikes do not classify.
-        if crate::trusted_device_items::classify(self.tcx, resolved.def_id()).is_some() {
-            if self.verbose {
-                eprintln!(
-                    "[collector] stopping at trusted device item {}",
-                    self.tcx.def_path_str(resolved.def_id())
-                );
-            }
-            return Ok(());
-        }
-
         if !self.tcx.is_mir_available(resolved.def_id()) {
             return Err(self.reachable_error(
                 caller,
@@ -2236,13 +2275,11 @@ impl<'tcx> DeviceCollector<'tcx> {
         }
 
         if self.is_unreachable_body(resolved.def_id()) {
-            if self.verbose {
-                eprintln!(
-                    "[collector] skipping intrinsic stub {}",
-                    self.tcx.def_path_str(resolved.def_id())
-                );
-            }
-            return Ok(());
+            return Err(self.reachable_error(
+                caller,
+                "device code reaches a panic path",
+                Some(self.instance_label(resolved)),
+            ));
         }
 
         let name = self.fqdn(resolved.def_id());
@@ -2266,6 +2303,7 @@ impl<'tcx> DeviceCollector<'tcx> {
             typed_layout_identities: None,
             general_typed_contract: None,
             frontend_contract: None,
+            dead_branches: None,
         });
         Ok(())
     }
@@ -2329,13 +2367,6 @@ impl<'tcx> DeviceCollector<'tcx> {
                 crate_name: crate_name.to_string(),
                 fn_path: path,
             };
-        }
-
-        if path.contains("::fmt::")
-            || path.contains("::panicking::")
-            || path.contains("precondition_check")
-        {
-            return CollectDecision::SkipIntentional;
         }
 
         CollectDecision::Collect
