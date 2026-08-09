@@ -8,8 +8,10 @@ meta clang-revision f58b06dce1f9c15707c5f808fd002e18c2accf7e
 meta rounding rne
 meta saturation satfinite
 meta fnuz-nan-f32 ffc00000
-meta oracle-sha256 5a24a212c601ee9fe9b34297a59ce40bfa3c90628bc627001c8e5ee4092c4b99
-meta generator-sha256 ff44049394ed18111d5a8cb769d106b5950234611f4776975cba29fd888f02ec
+meta oracle-sha256 383286388081f511c422723ddddb5e1504e23d58af628dfb880433b235e001b8
+meta generator-sha256 dcba0a8bb1324e7e8f62492aa936a0342a87680f3c8d62f88e6076b40b97f3eb
+meta device-index 0
+meta device-gcn-arch-name gfx942:sramecc+:xnack-
 widen e4 00 00000000
 widen e4 01 3a800000
 widen e4 02 3b000000

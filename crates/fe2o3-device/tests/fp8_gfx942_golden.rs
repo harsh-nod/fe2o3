@@ -29,6 +29,8 @@ fn metadata(key: &str) -> &'static str {
 fn golden_identifies_the_exact_gfx942_toolchain_contract() {
     assert_eq!(metadata("schema"), "fe2o3-fp8-gfx942-golden-v1");
     assert_eq!(metadata("target"), "gfx942");
+    assert_eq!(metadata("device-index"), "0");
+    assert_eq!(metadata("device-gcn-arch-name"), "gfx942:sramecc+:xnack-");
     assert_eq!(metadata("cxx-standard"), "c++20");
     assert_eq!(metadata("rocm-release"), "7.2.4");
     assert_eq!(metadata("hip-version"), "7.2.53211-97f5574fe2");

@@ -12,6 +12,7 @@
 #include <vector>
 
 namespace {
+constexpr char GFX942_TARGET[] = "gfx942";
 
 void check_hip(hipError_t status, const char *expression) {
   if (status != hipSuccess) {
@@ -157,7 +158,18 @@ void add_pack_cases(char format, std::vector<PackCase> &cases) {
 } // namespace
 
 int main() {
+  hipDeviceProp_t device_properties{};
+  CHECK_HIP(hipGetDeviceProperties(&device_properties, 0));
+  const std::string gcn_arch_name = device_properties.gcnArchName;
+  if (gcn_arch_name != GFX942_TARGET &&
+      !gcn_arch_name.starts_with(std::string(GFX942_TARGET) + ":")) {
+    std::fprintf(stderr, "HIP device 0 has gcnArchName '%s'; expected gfx942\n",
+                 gcn_arch_name.c_str());
+    return 3;
+  }
   CHECK_HIP(hipSetDevice(0));
+  std::printf("meta device-index 0\n");
+  std::printf("meta device-gcn-arch-name %s\n", gcn_arch_name.c_str());
 
   std::uint32_t *device_e4_widen = nullptr, *device_e5_widen = nullptr;
   CHECK_HIP(hipMalloc(&device_e4_widen, 256 * sizeof(std::uint32_t)));

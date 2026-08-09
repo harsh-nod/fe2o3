@@ -14,7 +14,7 @@ The checked golden records:
 - packed x4 lane order, special values, and one-lane mutations; and
 - SHA-256 identities of the oracle and generator.
 
-From the repository root on a machine with a visible gfx942 GPU:
+From the repository root on a machine where HIP device 0 is a gfx942 GPU:
 
 ```text
 scripts/fp8-gfx942-oracle.sh --check
@@ -25,6 +25,8 @@ scripts/fp8-gfx942-oracle.sh --write
 `--check` recompiles the committed oracle, runs it, and compares the complete
 output and toolchain metadata with the checked golden. `--write` is reserved
 for an intentional contract update followed by review of the textual diff.
+The executable queries `hipGetDeviceProperties` for device 0, rejects a
+non-gfx942 `gcnArchName`, and records the exact returned name in the golden.
 The script locates the repository and ROCm tools dynamically; generated data
 contains no filesystem paths. Generic CI does not need ROCm or a GPU because
 the Rust integration test consumes the checked golden directly.

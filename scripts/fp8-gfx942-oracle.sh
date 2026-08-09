@@ -23,13 +23,6 @@ hipcc="${HIPCC:-hipcc}"
 
 command -v "${hipcc}" >/dev/null
 command -v hipconfig >/dev/null
-command -v rocminfo >/dev/null
-
-rocminfo_output="$(rocminfo)"
-if ! rg -q "Name:[[:space:]]+${target}([[:space:]]|$)" <<<"${rocminfo_output}"; then
-  echo "no visible ${target} agent" >&2
-  exit 1
-fi
 
 temporary="$(mktemp -d "${TMPDIR:-/tmp}/fe2o3-fp8-oracle.XXXXXX")"
 trap 'rm -rf -- "${temporary}"' EXIT
