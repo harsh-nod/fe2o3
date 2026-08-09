@@ -20,6 +20,7 @@ GIT="$(command -v git)"
 readonly GIT
 readonly SOURCE_STAGING="${TEST_ROOT}/staging/source"
 readonly OUTPUT_STAGING="${TEST_ROOT}/staging/output"
+readonly QUEUE_AUTH_SHA256="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 cleanup() {
   chmod -R u+w -- "${TEST_ROOT}" 2>/dev/null || true
@@ -175,6 +176,7 @@ verify() {
     --request "${REQUEST}" \
     --request-owner-uid "$(id -u)" \
     --request-owner-gid "$(id -g)" \
+    --queue-authorization-sha256 "${QUEUE_AUTH_SHA256}" \
     --trusted-root "${TRUSTED_ROOT}" \
     --policy policy.tsv \
     --policy-size "$(size "${POLICY}")" \
@@ -189,6 +191,7 @@ plan() {
     --request "${REQUEST}" \
     --request-owner-uid "$(id -u)" \
     --request-owner-gid "$(id -g)" \
+    --queue-authorization-sha256 "${QUEUE_AUTH_SHA256}" \
     --trusted-root "${TRUSTED_ROOT}" \
     --policy policy.tsv \
     --policy-size "$(size "${POLICY}")" \
@@ -203,6 +206,7 @@ preflight() {
     --request "${REQUEST}" \
     --request-owner-uid "$(id -u)" \
     --request-owner-gid "$(id -g)" \
+    --queue-authorization-sha256 "${QUEUE_AUTH_SHA256}" \
     --trusted-root "${TRUSTED_ROOT}" \
     --policy policy.tsv \
     --policy-size "$(size "${POLICY}")" \
@@ -220,6 +224,7 @@ verify_request_path() {
     --request "${path}" \
     --request-owner-uid "${owner_uid}" \
     --request-owner-gid "${owner_gid}" \
+    --queue-authorization-sha256 "${QUEUE_AUTH_SHA256}" \
     --trusted-root "${TRUSTED_ROOT}" \
     --policy policy.tsv \
     --policy-size "$(size "${POLICY}")" \
@@ -287,13 +292,15 @@ request_snapshot="$(awk -F $'\t' '$1 == "request_snapshot" { print $2 }' <<<"${p
 source_manifest="$(awk -F $'\t' '$1 == "source_manifest" { print $2 }' <<<"${plan_output}")"
 artifact_stream="$(awk -F $'\t' '$1 == "artifact_stream_path" { print $2 }' <<<"${plan_output}")"
 stderr_stream="$(awk -F $'\t' '$1 == "stderr_stream_path" { print $2 }' <<<"${plan_output}")"
-if [[ -z "${source_snapshot}" || -e "${source_snapshot}/.git" ]]; then
-  printf 'immutable source snapshot is missing or contains .git\n' >&2
+authorization_digest="$(awk -F $'\t' '$1 == "authorization_sha256" { print $2 }' <<<"${plan_output}")"
+if [[ -z "${source_snapshot}" || -e "${source_snapshot}" || \
+  -e "${request_snapshot}" || -e "${source_manifest}" || \
+  -e "${artifact_stream}" || -e "${stderr_stream}" ]]; then
+  printf 'audit-only plan left an executable staging path behind\n' >&2
   exit 1
 fi
-if grep -F 'candidate worktree mutation' \
-  "${source_snapshot}/scripts/evidence/jobs/row-04.sh" >/dev/null; then
-  printf 'source snapshot consumed candidate worktree bytes\n' >&2
+if find "${SOURCE_STAGING}" "${OUTPUT_STAGING}" -mindepth 1 -print -quit | grep -q .; then
+  printf 'audit-only plan left staging entries behind\n' >&2
   exit 1
 fi
 grep -F $'container_name\tfe2o3-evidence-3333333333333333333333333333333333333333333333333333333333333333' \
@@ -302,10 +309,15 @@ grep -F $'artifact_stream_protocol\tfe2o3-artifact-stream-v1' \
   <<<"${plan_output}" >/dev/null
 if [[ "${artifact_stream}" != "${OUTPUT_STAGING}/"* || \
   "${stderr_stream}" != "${OUTPUT_STAGING}/"* || \
-  ! -f "${artifact_stream}" || ! -f "${stderr_stream}" || \
-  "$(stat -c '%a' "${artifact_stream}")" != 600 || \
-  "$(stat -c '%a' "${stderr_stream}")" != 600 ]]; then
-  printf 'durable bounded stream staging is invalid\n' >&2
+  "${source_snapshot}" != "${SOURCE_STAGING}/plan-${authorization_digest}-"*"/source" ]]; then
+  printf 'authorization-bound ephemeral staging identity is invalid\n' >&2
+  exit 1
+fi
+second_plan_output="$(plan)"
+second_source_snapshot="$(awk -F $'\t' '$1 == "source_snapshot" { print $2 }' <<<"${second_plan_output}")"
+if [[ "${second_source_snapshot}" == "${source_snapshot}" ]] || \
+  find "${SOURCE_STAGING}" "${OUTPUT_STAGING}" -mindepth 1 -print -quit | grep -q .; then
+  printf 'repeated plan reused or retained an ephemeral staging lease\n' >&2
   exit 1
 fi
 git -C "${SOURCE_REPO}" -c core.fsmonitor=false checkout -q -- \
@@ -331,19 +343,29 @@ module = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = module
 spec.loader.exec_module(module)
 
-source = Path(source_text)
-manifest = Path(manifest_text)
-request = Path(request_text)
-root = source.parent
+source_root = Path(source_text).parents[1]
+lease_name = "plan-" + "b" * 64 + "-" + "c" * 64
+root = source_root / lease_name
+source = root / "source"
+manifest = root / "source.manifest.tsv"
+request = root / "request.tsv"
+source.mkdir(parents=True, mode=0o700)
+manifest.write_bytes(b"manifest\n")
+request.write_bytes(b"request\n")
+staging_root_fd = os.open(
+    source_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+)
 root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
 source_fd = os.open(source, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
 request_fd = os.open(request, os.O_RDONLY | os.O_NOFOLLOW)
+lease_info = os.fstat(root_fd)
 source_info = os.fstat(source_fd)
 request_info = os.fstat(request_fd)
 snapshot = module.SourceSnapshot(
     source,
     manifest,
     request,
+    staging_root_fd,
     root_fd,
     source_fd,
     request_fd,
@@ -354,6 +376,9 @@ snapshot = module.SourceSnapshot(
     1,
     1,
     "0" * 64,
+    lease_name,
+    lease_info.st_dev,
+    lease_info.st_ino,
 )
 
 renamed_source = source.with_name(source.name + ".renamed")
@@ -383,9 +408,9 @@ try:
 finally:
     request.unlink()
     renamed_request.rename(request)
-    snapshot.close()
+    snapshot.cleanup()
 
-durability = root / "source-durability-fixture"
+durability = source_root / "source-durability-fixture"
 (durability / "alpha" / "beta").mkdir(parents=True, mode=0o700)
 (durability / "alpha" / "gamma").mkdir(mode=0o700)
 (durability / "kernel.rs").write_bytes(b"fn kernel() {}\n")
@@ -441,7 +466,9 @@ def record_directory_fsync(file_fd):
 
 
 durability_fd = os.open(durability, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-durability_root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+durability_root_fd = os.open(
+    source_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+)
 module.os.fchmod = record_directory_chmod
 module.os.fsync = record_directory_fsync
 try:
@@ -462,7 +489,7 @@ assert directory_events == [
     ("fsync", "alpha"),
     ("chmod", durability.name, 0o555),
     ("fsync", durability.name),
-    ("fsync", root.name),
+    ("fsync", source_root.name),
 ]
 
 
@@ -510,8 +537,14 @@ finally:
 
 artifact = Path(artifact_text)
 log = Path(log_text)
-output = artifact.parent
-output_root = output.parent
+output_root = artifact.parents[1]
+output_lease_name = "plan-" + "d" * 64 + "-" + "e" * 64
+output = output_root / output_lease_name
+output.mkdir(mode=0o700)
+artifact = output / "artifacts.stream"
+log = output / "stderr.log"
+artifact.write_bytes(b"")
+log.write_bytes(b"")
 output_root_fd = os.open(output_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
 output_fd = os.open(output, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
 artifact_fd = os.open(artifact, os.O_WRONLY | os.O_NOFOLLOW)
@@ -527,6 +560,7 @@ stage = module.OutputStage(
     log_fd,
     output_info.st_dev,
     output_info.st_ino,
+    output_lease_name,
 )
 renamed_output = output.with_name(output.name + ".renamed")
 output.rename(renamed_output)
@@ -541,7 +575,7 @@ try:
 finally:
     output.unlink()
     renamed_output.rename(output)
-    stage.close()
+    stage.cleanup()
 
 class Fixture:
     pass
@@ -549,8 +583,9 @@ class Fixture:
 
 profile = Fixture()
 profile.output_staging_root = str(output_root)
-request = Fixture()
-request.request_id = "4" * 64
+profile.operator_uid = os.getuid()
+profile.operator_gid = os.getgid()
+durable_lease = "plan-" + "1" * 64 + "-" + "2" * 64
 sync_order = []
 real_fsync = module.os.fsync
 
@@ -560,18 +595,19 @@ def record_fsync(file_fd):
 
 
 module.os.fsync = record_fsync
-durable_stage = module.stage_output(profile, request)
+durable_stage = module.stage_output(profile, durable_lease)
 try:
     assert sync_order == [
+        output_root.name,
         "artifacts.stream",
         "stderr.log",
-        f"execution-{request.request_id}",
+        durable_lease,
         output_root.name,
     ]
 finally:
-    durable_stage.close()
+    durable_stage.cleanup()
 
-request.request_id = "5" * 64
+failing_lease = "plan-" + "3" * 64 + "-" + "4" * 64
 sync_calls = 0
 
 
@@ -585,14 +621,172 @@ def fail_second_fsync(file_fd):
 
 module.os.fsync = fail_second_fsync
 try:
-    module.stage_output(profile, request)
+    module.stage_output(profile, failing_lease)
 except module.ExecutorError as error:
-    assert "cannot durably initialize output staging" in str(error)
-    assert sync_calls == 2
+    assert "output staging" in str(error)
+    assert sync_calls >= 2
 else:
     raise AssertionError("output fsync failure was accepted")
 finally:
     module.os.fsync = real_fsync
+assert not any(output_root.iterdir())
+
+read_fd, write_fd = os.pipe()
+real_write = module.os.write
+
+
+def reject_staging_write(file_fd, content):
+    del file_fd, content
+    raise OSError("injected staging write failure")
+
+
+module.os.write = reject_staging_write
+try:
+    module.write_all(write_fd, b"bounded")
+except module.ExecutorError as error:
+    assert "cannot write bounded staging content" in str(error)
+else:
+    raise AssertionError("staging write OSError escaped or was accepted")
+finally:
+    module.os.write = real_write
+    os.close(write_fd)
+    os.close(read_fd)
+
+blocked = source_root / "control-parent-file"
+blocked.write_bytes(b"not a directory")
+try:
+    module.initialize_git_control(blocked / "git-control")
+except module.ExecutorError as error:
+    assert "cannot initialize transient Git control directory" in str(error)
+else:
+    raise AssertionError("Git control filesystem failure escaped or was accepted")
+blocked.unlink()
+
+real_output_root = profile.output_staging_root
+profile.output_staging_root = str(output_root / "missing")
+try:
+    module.stage_output(profile, "plan-" + "5" * 64 + "-" + "6" * 64)
+except module.ExecutorError as error:
+    assert "cannot open or lock output staging root" in str(error)
+else:
+    raise AssertionError("output root open failure escaped or was accepted")
+finally:
+    profile.output_staging_root = real_output_root
+
+real_mkdir = module.os.mkdir
+
+
+def reject_staging_mkdir(*args, **kwargs):
+    del args, kwargs
+    raise OSError("injected staging mkdir failure")
+
+
+module.os.mkdir = reject_staging_mkdir
+try:
+    module.stage_output(profile, "plan-" + "7" * 64 + "-" + "8" * 64)
+except module.ExecutorError as error:
+    assert "cannot initialize output staging" in str(error)
+else:
+    raise AssertionError("output mkdir OSError escaped or was accepted")
+finally:
+    module.os.mkdir = real_mkdir
+assert not any(output_root.iterdir())
+
+real_open = module.os.open
+
+
+def reject_log_open(path, *args, **kwargs):
+    if path == "stderr.log":
+        raise OSError("injected log open failure")
+    return real_open(path, *args, **kwargs)
+
+
+module.os.open = reject_log_open
+try:
+    module.stage_output(profile, "plan-" + "9" * 64 + "-" + "a" * 64)
+except module.ExecutorError as error:
+    assert "cannot initialize output staging" in str(error)
+else:
+    raise AssertionError("partial output open failure was accepted")
+finally:
+    module.os.open = real_open
+assert not any(output_root.iterdir())
+
+collision_name = "plan-" + "b" * 64 + "-" + "d" * 64
+collision = output_root / collision_name
+collision.mkdir()
+(collision / "owner-marker").write_bytes(b"unrelated")
+try:
+    module.stage_output(profile, collision_name)
+except module.ExecutorError:
+    assert (collision / "owner-marker").read_bytes() == b"unrelated"
+else:
+    raise AssertionError("pre-existing lease collision was accepted")
+(collision / "owner-marker").unlink()
+collision.rmdir()
+
+lock_fd = os.open(output_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+module.fcntl.flock(lock_fd, module.fcntl.LOCK_EX | module.fcntl.LOCK_NB)
+try:
+    module.stage_output(profile, "plan-" + "c" * 64 + "-" + "e" * 64)
+except module.ExecutorError as error:
+    assert "busy with another staging lease" in str(error)
+else:
+    raise AssertionError("concurrent staging lock was accepted")
+finally:
+    os.close(lock_fd)
+
+for index in range(module.MAX_STAGING_ROOT_ENTRIES + 1):
+    (output_root / f"stale-{index:04d}").write_bytes(b"")
+try:
+    module.stage_output(profile, "plan-" + "d" * 64 + "-" + "f" * 64)
+except module.ExecutorError as error:
+    assert "stale-entry quota" in str(error)
+else:
+    raise AssertionError("staging-root exhaustion was accepted")
+for entry in output_root.iterdir():
+    entry.unlink()
+
+cleanup_name = "plan-" + "e" * 64 + "-" + "0" * 64
+cleanup = output_root / cleanup_name
+(cleanup / "nested").mkdir(parents=True)
+(cleanup / "nested" / "file").write_bytes(b"content")
+cleanup_root_fd = os.open(
+    output_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+)
+cleanup_info = cleanup.stat()
+real_unlink = module.os.unlink
+
+
+def reject_cleanup_unlink(*args, **kwargs):
+    del args, kwargs
+    raise OSError("injected cleanup unlink failure")
+
+
+module.os.unlink = reject_cleanup_unlink
+try:
+    module.cleanup_staging_lease(
+        cleanup_root_fd,
+        cleanup_name,
+        cleanup_info.st_dev,
+        cleanup_info.st_ino,
+        "fault fixture",
+    )
+except module.ExecutorError as error:
+    assert "cannot durably clean fault fixture" in str(error)
+else:
+    raise AssertionError("cleanup OSError escaped or was accepted")
+finally:
+    module.os.unlink = real_unlink
+module.cleanup_staging_lease(
+    cleanup_root_fd,
+    cleanup_name,
+    cleanup_info.st_dev,
+    cleanup_info.st_ino,
+    "fault fixture recovery",
+)
+os.close(cleanup_root_fd)
+assert not any(output_root.iterdir())
 PY
 PYTHONDONTWRITEBYTECODE=1 python3 - "${EXECUTOR}" <<'PY'
 import importlib.util
@@ -845,6 +1039,7 @@ expect_failure stale_external_policy_pin 'differs from its external binding' \
     --request "${REQUEST}" \
     --request-owner-uid "$(id -u)" \
     --request-owner-gid "$(id -g)" \
+    --queue-authorization-sha256 "${QUEUE_AUTH_SHA256}" \
     --trusted-root "${TRUSTED_ROOT}" \
     --policy policy.tsv \
     --policy-size "${pinned_policy_size}" \

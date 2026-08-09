@@ -16,13 +16,13 @@ import math
 import os
 from pathlib import Path
 import re
+import secrets
 import shutil
 import signal
 import stat
 import struct
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 from dataclasses import dataclass
@@ -37,6 +37,8 @@ MAX_JSON_STRING_BYTES = 1024 * 1024
 MAX_OCI_METADATA_BYTES = 4 * 1024 * 1024
 MAX_OCI_LAYER_BYTES = 64 * 1024**3
 MAX_OCI_IMAGE_BYTES = 256 * 1024**3
+MAX_STAGING_ROOT_ENTRIES = 64
+MAX_CLEANUP_ENTRIES = 20000
 FS_IOC_GETFLAGS = 0x80086601
 FS_IMMUTABLE_FL = 0x00000010
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -1361,11 +1363,122 @@ def read_request_file(path: Path, expected_uid: int, expected_gid: int) -> Reque
             os.close(request_fd)
 
 
+def safe_close(file_fd: int) -> None:
+    if file_fd < 0:
+        return
+    try:
+        os.close(file_fd)
+    except OSError:
+        pass
+
+
+def staging_lease_name(authorization_digest: str) -> str:
+    if not SHA256_RE.fullmatch(authorization_digest):
+        fail("invalid staging authorization identity")
+    return f"plan-{authorization_digest}-{secrets.token_hex(32)}"
+
+
+def open_staging_root(profile: Profile, path: Path, label: str) -> int:
+    root_fd = -1
+    try:
+        root_fd = os.open(
+            path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+        )
+        info = os.fstat(root_fd)
+        if (
+            not stat.S_ISDIR(info.st_mode)
+            or (info.st_uid, info.st_gid)
+            != (profile.operator_uid, profile.operator_gid)
+            or info.st_mode & 0o022
+        ):
+            fail(f"{label} ownership or mode changed before staging")
+        fcntl.flock(root_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        count = 0
+        with os.scandir(root_fd) as entries:
+            for _ in entries:
+                count += 1
+                if count > MAX_STAGING_ROOT_ENTRIES:
+                    fail(f"{label} exceeds the protected stale-entry quota")
+        return root_fd
+    except BlockingIOError:
+        safe_close(root_fd)
+        fail(f"{label} is busy with another staging lease")
+    except ExecutorError:
+        safe_close(root_fd)
+        raise
+    except OSError as error:
+        safe_close(root_fd)
+        fail(f"cannot open or lock {label}: {error}")
+
+
+def remove_directory_contents(directory_fd: int, budget: list[int], label: str) -> None:
+    try:
+        os.fchmod(directory_fd, 0o700)
+        with os.scandir(directory_fd) as iterator:
+            names = []
+            for entry in iterator:
+                budget[0] += 1
+                if budget[0] > MAX_CLEANUP_ENTRIES:
+                    fail(f"{label} cleanup exceeds the protected entry quota")
+                names.append(entry.name)
+        for name in sorted(names):
+            info = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+            if stat.S_ISDIR(info.st_mode):
+                child_fd = os.open(
+                    name,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                    dir_fd=directory_fd,
+                )
+                try:
+                    remove_directory_contents(child_fd, budget, label)
+                finally:
+                    safe_close(child_fd)
+                os.rmdir(name, dir_fd=directory_fd)
+            else:
+                os.unlink(name, dir_fd=directory_fd)
+            os.fsync(directory_fd)
+    except ExecutorError:
+        raise
+    except OSError as error:
+        fail(f"cannot durably clean {label}: {error}")
+
+
+def cleanup_staging_lease(
+    root_fd: int,
+    name: str,
+    expected_device: int,
+    expected_inode: int,
+    label: str,
+) -> None:
+    lease_fd = -1
+    try:
+        lease_fd = os.open(
+            name,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=root_fd,
+        )
+        info = os.fstat(lease_fd)
+        if (info.st_dev, info.st_ino) != (expected_device, expected_inode):
+            fail(f"{label} lease identity changed before cleanup")
+        remove_directory_contents(lease_fd, [0], label)
+        safe_close(lease_fd)
+        lease_fd = -1
+        os.rmdir(name, dir_fd=root_fd)
+        os.fsync(root_fd)
+    except ExecutorError:
+        raise
+    except OSError as error:
+        fail(f"cannot durably remove {label}: {error}")
+    finally:
+        safe_close(lease_fd)
+
+
 @dataclass
 class SourceSnapshot:
     path: Path
     manifest_path: Path
     request_path: Path
+    staging_root_fd: int
     root_fd: int
     directory_fd: int
     request_fd: int
@@ -1376,11 +1489,33 @@ class SourceSnapshot:
     file_count: int
     byte_count: int
     manifest_digest: str
+    lease_name: str
+    lease_device: int
+    lease_inode: int
 
     def close(self) -> None:
-        os.close(self.request_fd)
-        os.close(self.directory_fd)
-        os.close(self.root_fd)
+        for field in ("request_fd", "directory_fd", "root_fd", "staging_root_fd"):
+            safe_close(getattr(self, field))
+            setattr(self, field, -1)
+
+    def cleanup(self) -> None:
+        safe_close(self.request_fd)
+        safe_close(self.directory_fd)
+        safe_close(self.root_fd)
+        self.request_fd = -1
+        self.directory_fd = -1
+        self.root_fd = -1
+        try:
+            cleanup_staging_lease(
+                self.staging_root_fd,
+                self.lease_name,
+                self.lease_device,
+                self.lease_inode,
+                "source staging",
+            )
+        finally:
+            safe_close(self.staging_root_fd)
+            self.staging_root_fd = -1
 
 
 @dataclass
@@ -1394,12 +1529,48 @@ class OutputStage:
     log_fd: int
     device: int
     inode: int
+    lease_name: str
 
     def close(self) -> None:
-        os.close(self.log_fd)
-        os.close(self.artifact_fd)
-        os.close(self.directory_fd)
-        os.close(self.root_fd)
+        for field in ("log_fd", "artifact_fd", "directory_fd", "root_fd"):
+            safe_close(getattr(self, field))
+            setattr(self, field, -1)
+
+    def cleanup(self) -> None:
+        safe_close(self.log_fd)
+        safe_close(self.artifact_fd)
+        safe_close(self.directory_fd)
+        self.log_fd = -1
+        self.artifact_fd = -1
+        self.directory_fd = -1
+        try:
+            cleanup_staging_lease(
+                self.root_fd,
+                self.lease_name,
+                self.device,
+                self.inode,
+                "output staging",
+            )
+        finally:
+            safe_close(self.root_fd)
+            self.root_fd = -1
+
+
+def initialize_git_control(control: Path) -> None:
+    try:
+        (control / "objects" / "info").mkdir(mode=0o700, parents=True)
+        (control / "objects" / "pack").mkdir(mode=0o700)
+        (control / "refs" / "heads").mkdir(mode=0o700, parents=True)
+        (control / "refs" / "tags").mkdir(mode=0o700)
+        (control / "HEAD").write_text(
+            "ref: refs/heads/invalid\n", encoding="ascii"
+        )
+        (control / "config").write_text(
+            "[core]\n\trepositoryformatversion = 0\n\tbare = true\n",
+            encoding="ascii",
+        )
+    except OSError as error:
+        fail(f"cannot initialize transient Git control directory: {error}")
 
 
 def git_environment(profile: Profile, control: Path) -> dict[str, str]:
@@ -1539,11 +1710,16 @@ def open_child_directory(parent_fd: int, component: str) -> int:
 
 def write_all(file_fd: int, content: bytes) -> None:
     view = memoryview(content)
-    while view:
-        written = os.write(file_fd, view)
-        if written <= 0:
-            fail("staging write made no progress")
-        view = view[written:]
+    try:
+        while view:
+            written = os.write(file_fd, view)
+            if written <= 0:
+                fail("staging write made no progress")
+            view = view[written:]
+    except ExecutorError:
+        raise
+    except OSError as error:
+        fail(f"cannot write bounded staging content: {error}")
 
 
 def finalize_source_file(file_fd: int, mode: int, label: str) -> None:
@@ -1707,23 +1883,24 @@ def fsync_output_stage(
         fail(f"cannot durably initialize output staging: {error}")
 
 
-def stage_output(profile: Profile, request: Request) -> OutputStage:
+def stage_output(profile: Profile, lease_name: str) -> OutputStage:
     root = Path(profile.output_staging_root)
-    root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
-    name = f"execution-{request.request_id}"
-    try:
-        os.mkdir(name, 0o700, dir_fd=root_fd)
-    except FileExistsError:
-        os.close(root_fd)
-        fail("output staging identity already exists")
-    directory_fd = os.open(
-        name,
-        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
-        dir_fd=root_fd,
-    )
+    root_fd = open_staging_root(profile, root, "output staging root")
+    directory_fd = -1
     artifact_fd = -1
     log_fd = -1
+    created = False
+    identity: os.stat_result | None = None
     try:
+        os.mkdir(lease_name, 0o700, dir_fd=root_fd)
+        created = True
+        os.fsync(root_fd)
+        directory_fd = os.open(
+            lease_name,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=root_fd,
+        )
+        identity = os.fstat(directory_fd)
         artifact_fd = os.open(
             "artifacts.stream",
             os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
@@ -1737,31 +1914,49 @@ def stage_output(profile: Profile, request: Request) -> OutputStage:
             dir_fd=directory_fd,
         )
         fsync_output_stage(artifact_fd, log_fd, directory_fd, root_fd)
-        identity = os.fstat(directory_fd)
         stage = OutputStage(
-            root / name,
-            root / name / "artifacts.stream",
-            root / name / "stderr.log",
+            root / lease_name,
+            root / lease_name / "artifacts.stream",
+            root / lease_name / "stderr.log",
             root_fd,
             directory_fd,
             artifact_fd,
             log_fd,
             identity.st_dev,
             identity.st_ino,
+            lease_name,
         )
         verify_retained_output(stage)
         return stage
-    except Exception:
-        if log_fd >= 0:
-            os.close(log_fd)
-        if artifact_fd >= 0:
-            os.close(artifact_fd)
-        os.close(directory_fd)
-        os.close(root_fd)
-        raise
+    except (ExecutorError, OSError) as error:
+        safe_close(log_fd)
+        safe_close(artifact_fd)
+        safe_close(directory_fd)
+        cleanup_error: ExecutorError | None = None
+        if created:
+            try:
+                if identity is None:
+                    identity = os.stat(
+                        lease_name, dir_fd=root_fd, follow_symlinks=False
+                    )
+                cleanup_staging_lease(
+                    root_fd,
+                    lease_name,
+                    identity.st_dev,
+                    identity.st_ino,
+                    "partial output staging",
+                )
+            except (ExecutorError, OSError) as failure:
+                cleanup_error = ExecutorError(str(failure))
+        safe_close(root_fd)
+        if cleanup_error is not None:
+            fail(f"output staging failed and cleanup failed: {cleanup_error}")
+        if isinstance(error, ExecutorError):
+            raise error
+        fail(f"cannot initialize output staging: {error}")
 
 
-def stage_source(profile: Profile, request: Request) -> SourceSnapshot:
+def stage_source(profile: Profile, request: Request, lease_name: str) -> SourceSnapshot:
     verify_regular(
         Path(profile.git_path),
         str(profile.git_size),
@@ -1791,36 +1986,35 @@ def stage_source(profile: Profile, request: Request) -> SourceSnapshot:
         or not staging_root.is_dir()
     ):
         fail("immutable source object or staging root is unsafe")
-    root_fd = os.open(
-        staging_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
-    )
-    snapshot_name = f"source-{request.request_id}"
-    manifest_name = f"source-{request.request_id}.manifest.tsv"
-    request_name = f"request-{request.request_id}.tsv"
-    try:
-        os.mkdir(snapshot_name, 0o700, dir_fd=root_fd)
-    except FileExistsError:
-        os.close(root_fd)
-        fail("source snapshot identity already exists")
-    snapshot_fd = os.open(
-        snapshot_name,
-        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
-        dir_fd=root_fd,
-    )
+    staging_root_fd = open_staging_root(profile, staging_root, "source staging root")
+    root_fd = -1
+    snapshot_fd = -1
     request_fd = -1
-    snapshot_path = staging_root / snapshot_name
-    control = Path(tempfile.mkdtemp(prefix="git-control-", dir=staging_root))
-    control_removed = False
+    lease_created = False
+    lease_identity: os.stat_result | None = None
+    snapshot_name = "source"
+    manifest_name = "source.manifest.tsv"
+    request_name = "request.tsv"
+    lease_path = staging_root / lease_name
+    snapshot_path = lease_path / snapshot_name
+    control = lease_path / "git-control"
     try:
-        (control / "objects" / "info").mkdir(mode=0o700, parents=True)
-        (control / "objects" / "pack").mkdir(mode=0o700)
-        (control / "refs" / "heads").mkdir(mode=0o700, parents=True)
-        (control / "refs" / "tags").mkdir(mode=0o700)
-        (control / "HEAD").write_text("ref: refs/heads/invalid\n", encoding="ascii")
-        (control / "config").write_text(
-            "[core]\n\trepositoryformatversion = 0\n\tbare = true\n",
-            encoding="ascii",
+        os.mkdir(lease_name, 0o700, dir_fd=staging_root_fd)
+        lease_created = True
+        os.fsync(staging_root_fd)
+        root_fd = os.open(
+            lease_name,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=staging_root_fd,
         )
+        lease_identity = os.fstat(root_fd)
+        os.mkdir(snapshot_name, 0o700, dir_fd=root_fd)
+        snapshot_fd = os.open(
+            snapshot_name,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=root_fd,
+        )
+        initialize_git_control(control)
         commit = git_object_command(
             profile,
             control,
@@ -1912,14 +2106,14 @@ def stage_source(profile: Profile, request: Request) -> SourceSnapshot:
             shutil.rmtree(control)
         except OSError as error:
             fail(f"cannot remove transient Git control directory: {error}")
-        control_removed = True
         finalize_source_directories(snapshot_fd, directories, root_fd)
         identity = os.fstat(snapshot_fd)
         request_identity = os.fstat(request_fd)
         snapshot = SourceSnapshot(
             snapshot_path,
-            staging_root / manifest_name,
-            staging_root / request_name,
+            lease_path / manifest_name,
+            lease_path / request_name,
+            staging_root_fd,
             root_fd,
             snapshot_fd,
             request_fd,
@@ -1930,18 +2124,40 @@ def stage_source(profile: Profile, request: Request) -> SourceSnapshot:
             len(entries),
             total,
             sha256_bytes(manifest_raw),
+            lease_name,
+            lease_identity.st_dev,
+            lease_identity.st_ino,
         )
         verify_retained_snapshot(snapshot)
         return snapshot
-    except Exception:
-        if request_fd >= 0:
-            os.close(request_fd)
-        os.close(snapshot_fd)
-        os.close(root_fd)
-        raise
-    finally:
-        if not control_removed:
-            shutil.rmtree(control, ignore_errors=True)
+    except (ExecutorError, OSError) as error:
+        safe_close(request_fd)
+        safe_close(snapshot_fd)
+        safe_close(root_fd)
+        cleanup_error: ExecutorError | None = None
+        if lease_created:
+            try:
+                if lease_identity is None:
+                    lease_identity = os.stat(
+                        lease_name,
+                        dir_fd=staging_root_fd,
+                        follow_symlinks=False,
+                    )
+                cleanup_staging_lease(
+                    staging_root_fd,
+                    lease_name,
+                    lease_identity.st_dev,
+                    lease_identity.st_ino,
+                    "partial source staging",
+                )
+            except (ExecutorError, OSError) as failure:
+                cleanup_error = ExecutorError(str(failure))
+        safe_close(staging_root_fd)
+        if cleanup_error is not None:
+            fail(f"source staging failed and cleanup failed: {cleanup_error}")
+        if isinstance(error, ExecutorError):
+            raise error
+        fail(f"cannot initialize source staging: {error}")
 
 
 def external_trust_anchor(args: argparse.Namespace) -> TrustAnchor:
@@ -2016,11 +2232,14 @@ def authorize(args: argparse.Namespace) -> AuthorizedRequest:
     )
     verify_operator_owned(seccomp, profile, "seccomp profile", directory=False)
     verify_oci_image(profile)
+    if not SHA256_RE.fullmatch(args.queue_authorization_sha256):
+        fail("external queue authorization digest is malformed")
     authorization_digest = sha256_bytes(
         b"fe2o3-oci-authorization-v1\0"
         + bytes.fromhex(policy.digest)
         + bytes.fromhex(profile.profile_digest)
         + bytes.fromhex(request.digest)
+        + bytes.fromhex(args.queue_authorization_sha256)
     )
     return AuthorizedRequest(
         policy,
@@ -2230,44 +2449,55 @@ def command_plan(args: argparse.Namespace) -> None:
     authorized = authorize(args)
     profile = authorized.profile
     request = authorized.request
-    snapshot = stage_source(profile, request)
+    lease_name = staging_lease_name(authorized.authorization_digest)
+    snapshot = stage_source(profile, request, lease_name)
+    output: OutputStage | None = None
     try:
-        output = stage_output(profile, request)
-        try:
-            arguments = docker_create_arguments(
-                profile,
-                request,
-                snapshot.path,
-                snapshot.request_path,
-                authorized.seccomp_path,
-            )
-            verify_retained_snapshot(snapshot)
-            verify_retained_output(output)
-            print("oci_execution_plan_schema_version\t1")
-            print("authorization_source\tprotected-policy")
-            print(f"profile_id\t{profile.profile_id}")
-            print(f"profile_sha256\t{profile.profile_digest}")
-            print(f"request_id\t{request.request_id}")
-            print(f"container_name\tfe2o3-evidence-{request.request_id}")
-            print(f"source_snapshot\t{snapshot.path}")
-            print(f"source_manifest\t{snapshot.manifest_path}")
-            print(f"source_manifest_sha256\t{snapshot.manifest_digest}")
-            print(f"request_snapshot\t{snapshot.request_path}")
-            print(f"request_sha256\t{request.digest}")
-            print(f"source_file_count\t{snapshot.file_count}")
-            print(f"source_bytes\t{snapshot.byte_count}")
-            print(f"artifact_stream_protocol\t{profile.artifact_stream_protocol}")
-            print(f"artifact_stream_path\t{output.artifact_path}")
-            print(f"artifact_stream_limit\t{profile.output_limit}")
-            print(f"stderr_stream_path\t{output.log_path}")
-            print(f"stderr_stream_limit\t{profile.log_limit}")
-            print(f"argument_count\t{len(arguments)}")
-            for index, argument in enumerate(arguments):
-                print(f"argument\t{index:04d}\t{argument.encode('ascii').hex()}")
-        finally:
-            output.close()
+        output = stage_output(profile, lease_name)
+        arguments = docker_create_arguments(
+            profile,
+            request,
+            snapshot.path,
+            snapshot.request_path,
+            authorized.seccomp_path,
+        )
+        verify_retained_snapshot(snapshot)
+        verify_retained_output(output)
+        print("oci_execution_plan_schema_version\t1")
+        print("authorization_source\tprotected-policy")
+        print(f"authorization_sha256\t{authorized.authorization_digest}")
+        print(f"profile_id\t{profile.profile_id}")
+        print(f"profile_sha256\t{profile.profile_digest}")
+        print(f"request_id\t{request.request_id}")
+        print(f"container_name\tfe2o3-evidence-{request.request_id}")
+        print(f"source_snapshot\t{snapshot.path}")
+        print(f"source_manifest\t{snapshot.manifest_path}")
+        print(f"source_manifest_sha256\t{snapshot.manifest_digest}")
+        print(f"request_snapshot\t{snapshot.request_path}")
+        print(f"request_sha256\t{request.digest}")
+        print(f"source_file_count\t{snapshot.file_count}")
+        print(f"source_bytes\t{snapshot.byte_count}")
+        print(f"artifact_stream_protocol\t{profile.artifact_stream_protocol}")
+        print(f"artifact_stream_path\t{output.artifact_path}")
+        print(f"artifact_stream_limit\t{profile.output_limit}")
+        print(f"stderr_stream_path\t{output.log_path}")
+        print(f"stderr_stream_limit\t{profile.log_limit}")
+        print(f"argument_count\t{len(arguments)}")
+        for index, argument in enumerate(arguments):
+            print(f"argument\t{index:04d}\t{argument.encode('ascii').hex()}")
     finally:
-        snapshot.close()
+        cleanup_failures: list[str] = []
+        if output is not None:
+            try:
+                output.cleanup()
+            except ExecutorError as error:
+                cleanup_failures.append(str(error))
+        try:
+            snapshot.cleanup()
+        except ExecutorError as error:
+            cleanup_failures.append(str(error))
+        if cleanup_failures:
+            fail("plan staging cleanup failed: " + "; ".join(cleanup_failures))
 
 
 def command_preflight(args: argparse.Namespace) -> None:
@@ -2296,6 +2526,7 @@ def add_authorization_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--request", required=True)
     parser.add_argument("--request-owner-uid", required=True, type=int)
     parser.add_argument("--request-owner-gid", required=True, type=int)
+    parser.add_argument("--queue-authorization-sha256", required=True)
     parser.add_argument("--trusted-root", required=True)
     parser.add_argument(
         "--policy", required=True, help="externally pinned relative path"
