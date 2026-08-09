@@ -455,6 +455,7 @@ import hashlib
 import importlib.util
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 
 module_path, request_path, readme_path, job_path = sys.argv[1:]
 spec = importlib.util.spec_from_file_location("source_manifest_collision_test", module_path)
@@ -501,6 +502,65 @@ except module.ExecutorError as error:
     assert "authorized SHA-256 manifest or root" in str(error)
 else:
     raise AssertionError("same-SHA1-path changed bytes bypassed source SHA-256 authorization")
+
+
+def expect_manifest_rejection(raw, profile, expected_root, expected_message):
+    try:
+        module.parse_source_manifest(
+            raw,
+            profile,
+            request,
+            hashlib.sha256(raw).hexdigest(),
+            expected_root,
+        )
+    except module.ExecutorError as error:
+        assert expected_message in str(error)
+    else:
+        raise AssertionError(f"source manifest accepted: {expected_message}")
+
+
+profile = SimpleNamespace(
+    source_file_limit=len(expected),
+    source_byte_limit=sum(entry.size for entry in expected),
+)
+expect_manifest_rejection(
+    manifest,
+    SimpleNamespace(
+        source_file_limit=len(expected) - 1,
+        source_byte_limit=profile.source_byte_limit,
+    ),
+    root,
+    "metadata is malformed or mismatched",
+)
+expect_manifest_rejection(
+    manifest,
+    SimpleNamespace(
+        source_file_limit=profile.source_file_limit,
+        source_byte_limit=profile.source_byte_limit - 1,
+    ),
+    root,
+    "exceeds protected source byte limit",
+)
+unsafe_entries = (
+    module.SourceManifestEntry(
+        "../escape", "100644", len(readme), hashlib.sha256(readme).hexdigest()
+    ),
+)
+unsafe_manifest, unsafe_root = module.canonical_source_manifest(
+    request.source_commit, request.source_tree, unsafe_entries
+)
+expect_manifest_rejection(
+    unsafe_manifest,
+    profile,
+    unsafe_root,
+    "invalid file entry",
+)
+expect_manifest_rejection(
+    b"x" * (module.MAX_SOURCE_MANIFEST_BYTES + 1),
+    profile,
+    "0" * 64,
+    "invalid source authorization manifest size",
+)
 PY
 
 original_source_commit="${source_commit}"
