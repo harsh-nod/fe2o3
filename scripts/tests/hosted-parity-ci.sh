@@ -88,13 +88,26 @@ require_text() {
 }
 
 require_text "${PROTECTED_WORKFLOW}" 'pull_request_target:'
+require_text "${PROTECTED_WORKFLOW}" 'merge_group:'
+require_text "${PROTECTED_WORKFLOW}" 'types: [checks_requested]'
+require_text "${PROTECTED_WORKFLOW}" 'workflow_run:'
+require_text "${PROTECTED_WORKFLOW}" 'workflows: [CI]'
+require_text "${PROTECTED_WORKFLOW}" 'types: [completed]'
+require_text "${PROTECTED_WORKFLOW}" "github.event_name == 'workflow_run'"
+require_text "${PROTECTED_WORKFLOW}" "github.event.workflow_run.event == 'merge_group'"
+require_text "${PROTECTED_WORKFLOW}" "github.event.workflow_run.path == '.github/workflows/ci.yml'"
+require_text "${PROTECTED_WORKFLOW}" 'WORKFLOW_SHA: ${{ github.workflow_sha }}'
+require_text "${PROTECTED_WORKFLOW}" 'RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}'
+require_text "${PROTECTED_WORKFLOW}" 'RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}'
+require_text "${PROTECTED_WORKFLOW}" 'gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}"'
+require_text "${PROTECTED_WORKFLOW}" 'merge-group source run changed during protected verification'
 require_text "${PROTECTED_WORKFLOW}" 'REVISION_REPOSITORY="${RUNNER_TEMP}/parity-revisions.git"'
 require_text "${PROTECTED_WORKFLOW}" 'git init --bare "${REVISION_REPOSITORY}"'
-require_text "${PROTECTED_WORKFLOW}" '"+refs/heads/${BASE_REF}:refs/parity/base"'
-require_text "${PROTECTED_WORKFLOW}" '"+refs/heads/${HEAD_REF}:refs/parity/head"'
+require_text "${PROTECTED_WORKFLOW}" '"+${BASE_REF}:refs/parity/base"'
+require_text "${PROTECTED_WORKFLOW}" '"+${HEAD_REF}:refs/parity/head"'
 require_text "${PROTECTED_WORKFLOW}" 'worktree add --detach'
 require_text "${PROTECTED_WORKFLOW}" '"${REVISION_REPOSITORY}" "${BASE_SHA}" "${HEAD_SHA}"'
-require_text "${PROTECTED_WORKFLOW}" 'pull-request)"'
+require_text "${PROTECTED_WORKFLOW}" '"${EVENT_KIND}")"'
 require_text "${PROTECTED_WORKFLOW}" 'python3 protected/scripts/parity-signed-evidence.py gate'
 require_text "${PROTECTED_WORKFLOW}" 'derive-promotion-manifest'
 require_text "${PROTECTED_WORKFLOW}" '--protected-archive protected/docs/parity-evidence/archive'
@@ -107,6 +120,8 @@ require_text "${PROTECTED_WORKFLOW}" '--trust-policy protected/docs/parity-evide
 require_text "${PROTECTED_WORKFLOW}" '--trusted-policy protected/docs/parity-row-evidence-policy-v2.tsv'
 require_text "${PROTECTED_WORKFLOW}" '--candidate-policy candidate/docs/parity-row-evidence-policy-v2.tsv'
 require_text "${PROTECTED_WORKFLOW}" 'pull-requests: read'
+require_text "${PROTECTED_WORKFLOW}" 'actions: read'
+require_text "${PROTECTED_WORKFLOW}" 'cancel-in-progress: false'
 require_text "${PROTECTED_WORKFLOW}" 'protected/scripts/parity-protected-change-policy.sh'
 require_text "${PROTECTED_WORKFLOW}" 'gh api --paginate'
 require_text "${PROTECTED_WORKFLOW}" 'trust-change-approved'
@@ -115,44 +130,47 @@ require_text "${PROTECTED_WORKFLOW}" '--protected-row-policy protected/docs/pari
 require_text "${PROTECTED_WORKFLOW}" '--candidate-row-policy candidate/docs/parity-row-evidence-policy-v2.tsv'
 require_text "${PROTECTED_WORKFLOW}" 'pull_request_review:'
 require_text "${PROTECTED_WORKFLOW}" 'types: [submitted, edited, dismissed]'
-require_text "${PROTECTED_WORKFLOW}" 'BASE_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}'
+require_text "${PROTECTED_WORKFLOW}" 'PR_BASE_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}'
 require_text "${PROTECTED_WORKFLOW}" '[[ "${BASE_REPOSITORY}" == "${GITHUB_REPOSITORY}" ]]'
-require_text "${PROTECTED_WORKFLOW}" '[[ "${BASE_REF}" == "${DEFAULT_BRANCH}" ]]'
+require_text "${PROTECTED_WORKFLOW}" '[[ "${BASE_REF}" == "refs/heads/${DEFAULT_BRANCH}" ]]'
 require_text "${PROTECTED_WORKFLOW}" 'FETCHED_BASE_SHA="$(git -C "${REVISION_REPOSITORY}"'
 require_text "${PROTECTED_WORKFLOW}" 'FETCHED_HEAD_SHA="$(git -C "${REVISION_REPOSITORY}"'
-require_text "${PROTECTED_WORKFLOW}" 'if [[ "${FETCHED_BASE_SHA}" != "${BASE_SHA}" ]]; then'
-require_text "${PROTECTED_WORKFLOW}" 'if [[ "${FETCHED_HEAD_SHA}" != "${HEAD_SHA}" ]]; then'
-require_text "${PROTECTED_WORKFLOW}" 'pull request base SHA is not current default tip'
-require_text "${PROTECTED_WORKFLOW}" 'HEAD_SHA: ${{ github.event.pull_request.head.sha }}'
+require_text "${PROTECTED_WORKFLOW}" '[[ "${FETCHED_BASE_SHA}" == "${BASE_SHA}" ]]'
+require_text "${PROTECTED_WORKFLOW}" '[[ "${FETCHED_HEAD_SHA}" == "${HEAD_SHA}" ]]'
+require_text "${PROTECTED_WORKFLOW}" 'PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}'
+require_text "${PROTECTED_WORKFLOW}" 'MERGE_BASE_SHA: ${{ github.event.merge_group.base_sha }}'
+require_text "${PROTECTED_WORKFLOW}" 'MERGE_HEAD_SHA: ${{ github.event.merge_group.head_sha }}'
+require_text "${PROTECTED_WORKFLOW}" 'merge-base --is-ancestor'
+require_text "${PROTECTED_WORKFLOW}" 'pull request revision changed during protected verification'
+require_text "${PROTECTED_WORKFLOW}" 'gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}"'
+require_text "${PROTECTED_WORKFLOW}" '.base.sha == $base_sha and .head.sha == $head_sha'
+require_text "${PROTECTED_WORKFLOW}" '"+${HEAD_REF}:refs/parity/final-head"'
+require_text "${PROTECTED_WORKFLOW}" 'environment: parity-verdict'
+require_text "${PROTECTED_WORKFLOW}" 'actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349'
+require_text "${PROTECTED_WORKFLOW}" 'permission-checks: write'
+require_text "${PROTECTED_WORKFLOW}" 'app-id: ${{ vars.PARITY_VERDICT_APP_ID }}'
+require_text "${PROTECTED_WORKFLOW}" 'private-key: ${{ secrets.PARITY_VERDICT_APP_PRIVATE_KEY }}'
+require_text "${PROTECTED_WORKFLOW}" 'CHECK_NAME: fe2o3/protected-parity-promotion'
+require_text "${PROTECTED_WORKFLOW}" 'HEAD_SHA: ${{ steps.context.outputs.head_sha }}'
+require_text "${PROTECTED_WORKFLOW}" 'GH_TOKEN: ${{ steps.verdict-token.outputs.token }}'
+require_text "${PROTECTED_WORKFLOW}" '"repos/${GITHUB_REPOSITORY}/check-runs"'
+require_text "${PROTECTED_WORKFLOW}" '"repos/${GITHUB_REPOSITORY}/check-runs/${CHECK_ID}"'
+require_text "${PROTECTED_WORKFLOW}" '.app.id | tostring'
+require_text "${PROTECTED_WORKFLOW}" '.app.slug == $app_slug'
+require_text "${PROTECTED_WORKFLOW}" 'status:"in_progress"'
+require_text "${PROTECTED_WORKFLOW}" 'status:"completed",conclusion:$conclusion'
+require_text "${PROTECTED_WORKFLOW}" 'continue-on-error: true'
+require_text "${PROTECTED_WORKFLOW}" 'if: always() && steps.verdict.outputs.check_id !='
+require_text "${PROTECTED_WORKFLOW}" 'if: always() && steps.verdict.outputs.check_id =='
 require_text "${CHANGE_POLICY}" 'git -C "${REVISION_REPOSITORY}" diff --no-ext-diff --no-renames'
 require_text "${CHANGE_POLICY}" '--name-only -z "${BASE_SHA}" "${CANDIDATE_HEAD}"'
 require_text "${CHANGE_POLICY}" 'revision worktree does not match declared commit'
 require_text "${CHANGE_POLICY}" 'merge-group head does not descend from its base'
 
-for path in \
-  docs/cuda-oxide-parity-matrix.md \
-  docs/generated/cuda-oxide-parity-dashboard.md \
-  docs/generated/cuda-oxide-parity-dashboard.tsv \
-  docs/generated/cuda-oxide-parity-signed-promotions.tsv \
-  docs/parity-signed-evidence-v2.md \
-  docs/parity-evidence/trust-policy-v2.tsv \
-  docs/parity-evidence/trust-policy-v2.example.tsv \
-  docs/parity-evidence/trusted-keys/** \
-  scripts/parity-signed-evidence.py \
-  scripts/parity-protected-change-policy.sh \
-  scripts/parity-dashboard.sh \
-  scripts/parity-matrix.sh \
-  scripts/parity-promotion-projections.sh \
-  scripts/tests/hosted-parity-ci.sh \
-  scripts/tests/parity-dashboard.sh \
-  scripts/tests/parity-promotion-projections.sh \
-  scripts/tests/parity-row-evidence.sh \
-  .github/workflows/ci.yml \
-  .github/workflows/parity-promotion.yml \
-  .github/CODEOWNERS \
-  .github/parity-trust-reviewers.txt; do
-  require_text "${PROTECTED_WORKFLOW}" "- ${path}"
-done
+if rg -n '^\s+paths:' "${PROTECTED_WORKFLOW}"; then
+  printf 'required protected verdict is incorrectly path-filtered\n' >&2
+  exit 1
+fi
 for ownership in \
   /docs/parity-signed-evidence-v2.md \
   /docs/parity-evidence/trust-policy-v2.example.tsv \
@@ -189,6 +207,14 @@ require_text "${GENERIC_WORKFLOW}" '--trusted-policy "${trusted}/docs/parity-row
 require_text "${GENERIC_WORKFLOW}" 'EVENT_NAME: ${{ github.event_name }}'
 require_text "${GENERIC_WORKFLOW}" 'PUSH_BEFORE_SHA: ${{ github.event.before }}'
 require_text "${GENERIC_WORKFLOW}" 'EVENT_HEAD_SHA: ${{ github.sha }}'
+require_text "${GENERIC_WORKFLOW}" 'PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}'
+require_text "${GENERIC_WORKFLOW}" 'MERGE_BASE_SHA: ${{ github.event.merge_group.base_sha }}'
+require_text "${GENERIC_WORKFLOW}" 'MERGE_HEAD_SHA: ${{ github.event.merge_group.head_sha }}'
+require_text "${GENERIC_WORKFLOW}" 'merge_group:'
+require_text "${GENERIC_WORKFLOW}" 'types: [checks_requested]'
+require_text "${GENERIC_WORKFLOW}" 'BASE_SHA="${MERGE_BASE_SHA}"'
+require_text "${GENERIC_WORKFLOW}" 'HEAD_SHA="${MERGE_HEAD_SHA}"'
+require_text "${GENERIC_WORKFLOW}" 'merge-group head does not contain its declared base'
 require_text "${GENERIC_WORKFLOW}" 'REF_NAME: ${{ github.ref_name }}'
 require_text "${GENERIC_WORKFLOW}" 'git fetch --no-tags --prune --force origin'
 require_text "${GENERIC_WORKFLOW}" '"+refs/heads/${DEFAULT_BRANCH}:${DEFAULT_REMOTE_REF}"'
@@ -224,12 +250,131 @@ if rg -n 'actions/checkout@(v[0-9]+|main|master)' \
   printf 'hosted CI uses a mutable checkout action reference\n' >&2
   exit 1
 fi
+if rg -n 'actions/create-github-app-token@(v[0-9]+|main|master)' \
+  "${PROTECTED_WORKFLOW}"; then
+  printf 'protected parity CI uses a mutable token action reference\n' >&2
+  exit 1
+fi
+if rg -n '^  checks: write$' "${PROTECTED_WORKFLOW}"; then
+  printf 'workflow token must not have checks write permission\n' >&2
+  exit 1
+fi
+bootstrap_job="$(sed -n '/^  merge-group-bootstrap:/,/^  verify:/p' \
+  "${PROTECTED_WORKFLOW}")"
+if rg -n 'environment:|PARITY_VERDICT_APP|verdict-token|permission-checks' \
+  <<<"${bootstrap_job}"; then
+  printf 'unprivileged merge-group bootstrap receives verdict authority\n' >&2
+  exit 1
+fi
 
 
 if rg -n 'python3 candidate/|candidate/scripts/|scripts/parity-row-evidence.sh gate' "${PROTECTED_WORKFLOW}"; then
   printf 'protected parity CI invokes candidate executable content\n' >&2
   exit 1
 fi
+
+# Check-run payloads and responses remain bound to the exact revision and the
+# dedicated verdict App. A candidate workflow can copy the name, but its App
+# identity cannot satisfy the protected response/ruleset binding.
+verify_check_response() {
+  local response="$1"
+  local expected_id="$2"
+  local expected_name="$3"
+  local expected_head="$4"
+  local expected_app_id="$5"
+  local expected_app_slug="$6"
+  local expected_status="$7"
+  local expected_conclusion="$8"
+  jq -e \
+    --argjson id "${expected_id}" \
+    --arg name "${expected_name}" \
+    --arg head "${expected_head}" \
+    --arg app_id "${expected_app_id}" \
+    --arg app_slug "${expected_app_slug}" \
+    --arg status "${expected_status}" \
+    --arg conclusion "${expected_conclusion}" \
+    '.id == $id and .name == $name and .head_sha == $head and
+      .status == $status and
+      (($conclusion == "" and .conclusion == null) or
+       ($conclusion != "" and .conclusion == $conclusion)) and
+      (.app.id | tostring) == $app_id and .app.slug == $app_slug' \
+    "${response}" >/dev/null || {
+    printf 'check response binding mismatch\n' >&2
+    return 2
+  }
+}
+
+CHECK_NAME=fe2o3/protected-parity-promotion
+CHECK_HEAD=1111111111111111111111111111111111111111
+CHECK_APP_ID=424242
+CHECK_APP_SLUG=fe2o3-parity-verdict
+CREATE_PAYLOAD="${TEST_ROOT}/check-create-payload.json"
+COMPLETE_PAYLOAD="${TEST_ROOT}/check-complete-payload.json"
+CHECK_RESPONSE="${TEST_ROOT}/check-response.json"
+jq -n --arg name "${CHECK_NAME}" --arg head_sha "${CHECK_HEAD}" \
+  '{name:$name,head_sha:$head_sha,status:"in_progress"}' >"${CREATE_PAYLOAD}"
+jq -e --arg name "${CHECK_NAME}" --arg head "${CHECK_HEAD}" \
+  '.name == $name and .head_sha == $head and .status == "in_progress" and
+    (has("conclusion") | not)' "${CREATE_PAYLOAD}" >/dev/null
+jq -n '{status:"completed",conclusion:"success"}' >"${COMPLETE_PAYLOAD}"
+jq -e '.status == "completed" and .conclusion == "success" and
+  (has("head_sha") | not)' "${COMPLETE_PAYLOAD}" >/dev/null
+jq -n --arg name "${CHECK_NAME}" --arg head "${CHECK_HEAD}" \
+  --arg slug "${CHECK_APP_SLUG}" --argjson app_id "${CHECK_APP_ID}" \
+  '{id:7,name:$name,head_sha:$head,status:"in_progress",conclusion:null,
+    app:{id:$app_id,slug:$slug}}' >"${CHECK_RESPONSE}"
+verify_check_response "${CHECK_RESPONSE}" 7 "${CHECK_NAME}" "${CHECK_HEAD}" \
+  "${CHECK_APP_ID}" "${CHECK_APP_SLUG}" in_progress ''
+expect_failure check_wrong_sha 'check response binding mismatch' verify_check_response \
+  "${CHECK_RESPONSE}" 7 "${CHECK_NAME}" \
+  2222222222222222222222222222222222222222 \
+  "${CHECK_APP_ID}" "${CHECK_APP_SLUG}" in_progress ''
+expect_failure check_wrong_id 'check response binding mismatch' verify_check_response \
+  "${CHECK_RESPONSE}" 8 "${CHECK_NAME}" "${CHECK_HEAD}" \
+  "${CHECK_APP_ID}" "${CHECK_APP_SLUG}" in_progress ''
+expect_failure candidate_spoof_source 'check response binding mismatch' verify_check_response \
+  "${CHECK_RESPONSE}" 7 "${CHECK_NAME}" "${CHECK_HEAD}" \
+  15368 github-actions in_progress ''
+
+jq -n --arg name "${CHECK_NAME}" --arg head "${CHECK_HEAD}" \
+  --arg slug "${CHECK_APP_SLUG}" --argjson app_id "${CHECK_APP_ID}" \
+  '{id:7,name:$name,head_sha:$head,status:"completed",conclusion:"failure",
+    app:{id:$app_id,slug:$slug}}' >"${CHECK_RESPONSE}"
+verify_check_response "${CHECK_RESPONSE}" 7 "${CHECK_NAME}" "${CHECK_HEAD}" \
+  "${CHECK_APP_ID}" "${CHECK_APP_SLUG}" completed failure
+expect_failure wrong_conclusion 'check response binding mismatch' verify_check_response \
+  "${CHECK_RESPONSE}" 7 "${CHECK_NAME}" "${CHECK_HEAD}" \
+  "${CHECK_APP_ID}" "${CHECK_APP_SLUG}" completed success
+
+verify_pr_snapshot() {
+  local snapshot="$1"
+  local expected_base="$2"
+  local expected_head="$3"
+  jq -e --arg base "${expected_base}" --arg head "${expected_head}" \
+    '.number == 17 and .state == "open" and .draft == false and
+      .base.sha == $base and .head.sha == $head and
+      .base.repo.full_name == "powderluv/fe2o3" and
+      .head.repo.full_name == "contributor/fe2o3" and
+      .base.ref == "main" and .head.ref == "promotion"' \
+    "${snapshot}" >/dev/null || {
+    printf 'pull request snapshot mismatch\n' >&2
+    return 2
+  }
+}
+
+PR_SNAPSHOT="${TEST_ROOT}/current-pr.json"
+PR_BASE=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+PR_HEAD=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+jq -n --arg base "${PR_BASE}" --arg head "${PR_HEAD}" \
+  '{number:17,state:"open",draft:false,
+    base:{sha:$base,ref:"main",repo:{full_name:"powderluv/fe2o3"}},
+    head:{sha:$head,ref:"promotion",repo:{full_name:"contributor/fe2o3"}}}' \
+  >"${PR_SNAPSHOT}"
+verify_pr_snapshot "${PR_SNAPSHOT}" "${PR_BASE}" "${PR_HEAD}"
+expect_failure force_push_current_pr 'pull request snapshot mismatch' verify_pr_snapshot \
+  "${PR_SNAPSHOT}" "${PR_BASE}" cccccccccccccccccccccccccccccccccccccccc
+expect_failure base_advanced_current_pr 'pull request snapshot mismatch' verify_pr_snapshot \
+  "${PR_SNAPSHOT}" dddddddddddddddddddddddddddddddddddddddd "${PR_HEAD}"
 
 # A strengthened default policy invalidates a stale non-default branch. Once
 # updated, the branch is checked against and archives trust from the exact tip.
