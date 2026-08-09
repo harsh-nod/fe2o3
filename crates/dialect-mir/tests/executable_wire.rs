@@ -8,6 +8,7 @@ use dialect_mir::{
     MirExternalCallSignature, MirFunction, MirLayout, MirLocalDecl, MirLocalId, MirLocalKind,
     MirMutability, MirOperand, MirPlace, MirRvalue, MirScalarType, MirSemanticType, MirStatement,
     MirStatementKind, MirTerminator, MirTerminatorKind, MirTypeId, MirTypeKind,
+    ValidatedMirExecutableModule,
 };
 
 fn scalar_u32() -> MirSemanticType {
@@ -91,8 +92,25 @@ fn canonical_wire_roundtrips_with_a_versioned_envelope() {
         u32::from_le_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]) as usize,
         bytes.len() - 16
     );
-    assert_eq!(MirExecutableModule::from_bytes(&bytes).unwrap(), module);
+    let decoded: ValidatedMirExecutableModule = MirExecutableModule::from_bytes(&bytes).unwrap();
+    assert_eq!(decoded, module);
     assert_eq!(module.to_bytes().unwrap(), bytes);
+}
+
+#[test]
+fn serde_data_remains_unvalidated_and_validation_is_owning() {
+    let mut untrusted = module();
+    let json = serde_json::to_vec(&untrusted).unwrap();
+    let decoded: MirExecutableModule = serde_json::from_slice(&json).unwrap();
+    let validated = decoded.validate().unwrap();
+
+    untrusted.functions[0].body.blocks[0].statements.clear();
+    assert!(untrusted.validate().is_err());
+    assert!(validated.to_bytes().is_ok());
+    assert_eq!(validated.as_module(), &module());
+
+    let recovered_data = validated.into_unvalidated();
+    assert_eq!(recovered_data, module());
 }
 
 #[test]

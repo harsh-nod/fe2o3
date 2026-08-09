@@ -21,7 +21,7 @@ pub use executable::{
     MirExternalCallReturn, MirExternalCallSignature, MirFunction, MirIntrinsic, MirLocalDecl,
     MirLocalId, MirLocalKind, MirOperand, MirPlace, MirProjection, MirRvalue, MirSourceSpan,
     MirStatement, MirStatementKind, MirTerminator, MirTerminatorKind, MirTypeId, MirUnaryOp,
-    MirUnwindAction, MirValueId,
+    MirUnwindAction, MirValueId, ValidatedMirExecutableModule,
 };
 pub use executable_wire::{MAX_EXECUTABLE_WIRE_BYTES, MirExecutableDecodeError};
 pub use mem2reg::{

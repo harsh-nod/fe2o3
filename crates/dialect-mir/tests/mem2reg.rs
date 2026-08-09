@@ -178,7 +178,7 @@ fn value(operand: &MirOperand) -> MirValueId {
 #[test]
 fn promotes_loop_carried_values_through_explicit_backedge_arguments() {
     let input = loop_module();
-    input.validate().unwrap();
+    let input = input.validate().unwrap();
     let (output, report) = promote_module_to_ssa(&input).unwrap();
     output.validate().unwrap();
 
@@ -241,6 +241,7 @@ fn leaves_storage_marked_and_not_entry_initialized_locals_as_slots() {
                 span: None,
             },
         );
+    let storage_marked = storage_marked.validate().unwrap();
     let (_, report) = promote_module_to_ssa(&storage_marked).unwrap();
     assert_eq!(
         report.functions[0].promoted_locals,
@@ -255,6 +256,7 @@ fn leaves_storage_marked_and_not_entry_initialized_locals_as_slots() {
     late_initialized.functions[0].body.blocks[1]
         .statements
         .insert(0, assign(2, late_u32, MirRvalue::Use(integer(0, late_u32))));
+    let late_initialized = late_initialized.validate().unwrap();
     let (output, report) = promote_module_to_ssa(&late_initialized).unwrap();
     assert_eq!(
         report.functions[0].promoted_locals,
@@ -272,15 +274,33 @@ fn leaves_storage_marked_and_not_entry_initialized_locals_as_slots() {
 
 #[test]
 fn rejects_repromotion_and_invalid_input_without_partial_output() {
-    let (ssa, _) = promote_module_to_ssa(&loop_module()).unwrap();
+    let input = loop_module().validate().unwrap();
+    let (ssa, _) = promote_module_to_ssa(&input).unwrap();
     let error = promote_module_to_ssa(&ssa).unwrap_err();
     assert!(error.reason().contains("only place-form"));
 
     let mut invalid = loop_module();
     invalid.functions[0].body.blocks[0].terminator =
         terminator(MirTerminatorKind::Goto(MirEdge::new(MirBlockId(99))));
-    let error = promote_module_to_ssa(&invalid).unwrap_err();
+    let error = promote_module_to_ssa_with_registry(&invalid, &MirExternalCallRegistry::default())
+        .unwrap_err();
     assert!(error.reason().contains("does not exist"));
+}
+
+#[test]
+fn validated_input_is_owned_and_transform_output_stays_validated() {
+    let mut untrusted = loop_module();
+    let validated = untrusted.validate().unwrap();
+    untrusted.functions[0].body.blocks[0].terminator =
+        terminator(MirTerminatorKind::Goto(MirEdge::new(MirBlockId(99))));
+    assert!(untrusted.validate().is_err());
+
+    let (output, _) = promote_module_to_ssa(&validated).unwrap();
+    output.as_module().validate().unwrap();
+    let mut recovered_data = output.into_unvalidated();
+    recovered_data.functions[0].body.blocks[0].terminator =
+        terminator(MirTerminatorKind::Goto(MirEdge::new(MirBlockId(99))));
+    assert!(recovered_data.validate().is_err());
 }
 
 #[test]
@@ -320,9 +340,8 @@ fn leaves_call_defined_locals_as_slots() {
         },
     }])
     .unwrap();
-    input.validate_with_registry(&registry).unwrap();
-
-    let (output, report) = promote_module_to_ssa_with_registry(&input, &registry).unwrap();
+    let input = input.validate_with_registry(&registry).unwrap();
+    let (output, report) = promote_module_to_ssa(&input).unwrap();
     assert_eq!(
         report.functions[0].promoted_locals,
         vec![MirLocalId(1), MirLocalId(3)]
@@ -379,7 +398,7 @@ fn rejects_global_block_argument_amplification_before_transforming() {
         }],
     };
 
-    input.validate().unwrap();
+    let input = input.validate().unwrap();
     let error = promote_module_to_ssa(&input).unwrap_err();
     assert!(error.reason().contains("generated items"));
     assert!(
