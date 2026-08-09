@@ -1,13 +1,14 @@
 use dialect_mir::{
-    MirAddressSpace, MirAggregateLayout, MirAuthorizedDeviceImport, MirBasicBlock, MirBinaryOp,
-    MirBlockId, MirBlockParameter, MirBody, MirBodyForm, MirCall, MirCallAuthority, MirCallReturn,
-    MirCallSignature, MirCallable, MirCallee, MirCastKind, MirConstant, MirConstantValue, MirEdge,
-    MirEnumEncoding, MirEnumType, MirExecutableModule, MirExecutableTarget, MirExecutableVersion,
-    MirExternalCallRegistry, MirExternalCallReturn, MirExternalCallSignature, MirField,
-    MirFunction, MirIntrinsic, MirLayout, MirLocalDecl, MirLocalId, MirLocalKind, MirMutability,
-    MirOperand, MirPadding, MirPlace, MirProjection, MirRvalue, MirScalarType, MirSemanticType,
-    MirSourceSpan, MirStatement, MirStatementKind, MirStructType, MirTerminator, MirTerminatorKind,
-    MirTypeId, MirTypeKind, MirUnwindAction, MirValueId, MirVariant,
+    MirAddressSpace, MirAggregateKind, MirAggregateLayout, MirAuthorizedDeviceImport,
+    MirBasicBlock, MirBinaryOp, MirBlockId, MirBlockParameter, MirBody, MirBodyForm, MirCall,
+    MirCallAuthority, MirCallReturn, MirCallSignature, MirCallable, MirCallee, MirCastKind,
+    MirConstant, MirConstantValue, MirEdge, MirEnumEncoding, MirEnumType, MirExecutableModule,
+    MirExecutableTarget, MirExecutableVersion, MirExternalCallRegistry, MirExternalCallReturn,
+    MirExternalCallSignature, MirField, MirFunction, MirIntrinsic, MirLayout, MirLocalDecl,
+    MirLocalId, MirLocalKind, MirMutability, MirOperand, MirPadding, MirPlace, MirProjection,
+    MirRvalue, MirScalarType, MirSemanticType, MirSourceSpan, MirStatement, MirStatementKind,
+    MirStructType, MirTerminator, MirTerminatorKind, MirTypeId, MirTypeKind, MirUnwindAction,
+    MirValueId, MirVariant,
 };
 
 fn external_registry(
@@ -1086,6 +1087,237 @@ fn set_discriminant_cannot_expose_uninitialized_payload_fields() {
     *variant = 1;
     let error = module.validate().unwrap_err();
     assert!(error.reason().contains("payload fields"));
+}
+
+fn payload_enum_types() -> (Vec<MirSemanticType>, MirTypeId, MirTypeId) {
+    let enum_ty = payload_enum_type();
+    let u32_ty = ty(
+        MirTypeKind::Scalar(MirScalarType::Int {
+            signed: false,
+            bits: 32,
+        }),
+        4,
+        4,
+    );
+    let mut types = vec![enum_ty.clone(), u32_ty.clone()];
+    types.sort_by_key(|item| item.canonical_text().unwrap());
+    let enum_id = MirTypeId(types.iter().position(|item| item == &enum_ty).unwrap() as u32);
+    let u32_id = MirTypeId(types.iter().position(|item| item == &u32_ty).unwrap() as u32);
+    (types, enum_id, u32_id)
+}
+
+fn payload_field_place(u32_id: MirTypeId) -> MirPlace {
+    MirPlace {
+        local: MirLocalId(1),
+        projection: vec![
+            MirProjection::Downcast { variant: 1 },
+            MirProjection::Field { index: 0 },
+        ],
+        ty: u32_id,
+    }
+}
+
+fn discriminant_downcast_module(join_before_downcast: bool) -> MirExecutableModule {
+    let (types, enum_id, u32_id) = payload_enum_types();
+    let downcast = MirStatement {
+        kind: MirStatementKind::Assign {
+            place: MirPlace::local(MirLocalId(0), u32_id),
+            value: MirRvalue::Use(MirOperand::Copy(payload_field_place(u32_id))),
+        },
+        span: None,
+    };
+    let fallback = MirStatement {
+        kind: MirStatementKind::Assign {
+            place: MirPlace::local(MirLocalId(0), u32_id),
+            value: MirRvalue::Use(MirOperand::Constant(MirConstant {
+                ty: u32_id,
+                value: MirConstantValue::Integer(0),
+            })),
+        },
+        span: None,
+    };
+    let mut blocks = vec![MirBasicBlock {
+        parameters: vec![],
+        statements: vec![MirStatement {
+            kind: MirStatementKind::Assign {
+                place: MirPlace::local(MirLocalId(2), u32_id),
+                value: MirRvalue::Discriminant(MirPlace::local(MirLocalId(1), enum_id)),
+            },
+            span: None,
+        }],
+        terminator: terminator(MirTerminatorKind::SwitchInt {
+            discr: MirOperand::Copy(MirPlace::local(MirLocalId(2), u32_id)),
+            targets: vec![(1, MirEdge::new(MirBlockId(1)))],
+            otherwise: MirEdge::new(MirBlockId(2)),
+        }),
+    }];
+    if join_before_downcast {
+        blocks.extend([
+            MirBasicBlock {
+                parameters: vec![],
+                statements: vec![],
+                terminator: terminator(MirTerminatorKind::Goto(MirEdge::new(MirBlockId(3)))),
+            },
+            MirBasicBlock {
+                parameters: vec![],
+                statements: vec![],
+                terminator: terminator(MirTerminatorKind::Goto(MirEdge::new(MirBlockId(3)))),
+            },
+            MirBasicBlock {
+                parameters: vec![],
+                statements: vec![downcast],
+                terminator: terminator(MirTerminatorKind::Return),
+            },
+        ]);
+    } else {
+        blocks.extend([
+            MirBasicBlock {
+                parameters: vec![],
+                statements: vec![downcast],
+                terminator: terminator(MirTerminatorKind::Return),
+            },
+            MirBasicBlock {
+                parameters: vec![],
+                statements: vec![fallback],
+                terminator: terminator(MirTerminatorKind::Return),
+            },
+        ]);
+    }
+
+    MirExecutableModule {
+        version: MirExecutableVersion::V1,
+        target: MirExecutableTarget {
+            pointer_width_bits: 32,
+            thread_index_width_bits: 32,
+        },
+        types,
+        callables: vec![],
+        functions: vec![MirFunction {
+            identity: "fixture::variant_refinement".into(),
+            span: None,
+            body: MirBody {
+                form: MirBodyForm::Places,
+                locals: vec![
+                    local(u32_id, MirLocalKind::Return, true),
+                    local(enum_id, MirLocalKind::Argument, false),
+                    local(u32_id, MirLocalKind::Temporary, true),
+                ],
+                blocks,
+                entry: MirBlockId(0),
+            },
+        }],
+    }
+}
+
+#[test]
+fn payload_downcasts_require_path_exact_active_variants() {
+    let (types, enum_id, u32_id) = payload_enum_types();
+    let unknown_argument = MirExecutableModule {
+        version: MirExecutableVersion::V1,
+        target: MirExecutableTarget {
+            pointer_width_bits: 32,
+            thread_index_width_bits: 32,
+        },
+        types,
+        callables: vec![],
+        functions: vec![MirFunction {
+            identity: "fixture::unknown_downcast".into(),
+            span: None,
+            body: MirBody {
+                form: MirBodyForm::Places,
+                locals: vec![
+                    local(u32_id, MirLocalKind::Return, true),
+                    local(enum_id, MirLocalKind::Argument, false),
+                ],
+                blocks: vec![MirBasicBlock {
+                    parameters: vec![],
+                    statements: vec![MirStatement {
+                        kind: MirStatementKind::Assign {
+                            place: MirPlace::local(MirLocalId(0), u32_id),
+                            value: MirRvalue::Use(MirOperand::Copy(payload_field_place(u32_id))),
+                        },
+                        span: None,
+                    }],
+                    terminator: terminator(MirTerminatorKind::Return),
+                }],
+                entry: MirBlockId(0),
+            },
+        }],
+    };
+    assert!(
+        unknown_argument
+            .validate()
+            .unwrap_err()
+            .reason()
+            .contains("exact active variant")
+    );
+
+    discriminant_downcast_module(false).validate().unwrap();
+    assert!(
+        discriminant_downcast_module(true)
+            .validate()
+            .unwrap_err()
+            .reason()
+            .contains("exact active variant")
+    );
+}
+
+#[test]
+fn aggregate_construction_initializes_variant_payload_authority() {
+    let (types, enum_id, u32_id) = payload_enum_types();
+    let module = MirExecutableModule {
+        version: MirExecutableVersion::V1,
+        target: MirExecutableTarget {
+            pointer_width_bits: 32,
+            thread_index_width_bits: 32,
+        },
+        types,
+        callables: vec![],
+        functions: vec![MirFunction {
+            identity: "fixture::constructed_downcast".into(),
+            span: None,
+            body: MirBody {
+                form: MirBodyForm::Places,
+                locals: vec![
+                    local(u32_id, MirLocalKind::Return, true),
+                    local(enum_id, MirLocalKind::Temporary, true),
+                ],
+                blocks: vec![MirBasicBlock {
+                    parameters: vec![],
+                    statements: vec![
+                        MirStatement {
+                            kind: MirStatementKind::Assign {
+                                place: MirPlace::local(MirLocalId(1), enum_id),
+                                value: MirRvalue::Aggregate {
+                                    kind: MirAggregateKind::Adt {
+                                        identity: "fixture::Payload".into(),
+                                        variant: 1,
+                                    },
+                                    operands: vec![MirOperand::Constant(MirConstant {
+                                        ty: u32_id,
+                                        value: MirConstantValue::Integer(7),
+                                    })],
+                                },
+                            },
+                            span: None,
+                        },
+                        MirStatement {
+                            kind: MirStatementKind::Assign {
+                                place: MirPlace::local(MirLocalId(0), u32_id),
+                                value: MirRvalue::Use(MirOperand::Copy(payload_field_place(
+                                    u32_id,
+                                ))),
+                            },
+                            span: None,
+                        },
+                    ],
+                    terminator: terminator(MirTerminatorKind::Return),
+                }],
+                entry: MirBlockId(0),
+            },
+        }],
+    };
+    module.validate().unwrap();
 }
 
 #[derive(Clone, Copy)]
