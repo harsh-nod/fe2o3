@@ -12,6 +12,8 @@ readonly TRUSTED_ROOT="${TEST_ROOT}/trusted"
 readonly SOURCE_REPO="${TEST_ROOT}/source"
 readonly OCI_LAYOUT="${TEST_ROOT}/image"
 readonly REQUEST="${TEST_ROOT}/request.tsv"
+readonly REQUEST_ID="3333333333333333333333333333333333333333333333333333333333333333"
+readonly QUEUE_AUTH_ROOT="${TEST_ROOT}/queue-authorization"
 readonly PROFILE="${TRUSTED_ROOT}/profiles/test-v1.tsv"
 readonly POLICY="${TRUSTED_ROOT}/policy.tsv"
 readonly SECCOMP="${TRUSTED_ROOT}/seccomp/default.json"
@@ -33,6 +35,69 @@ sha256() {
 
 size() {
   stat -c '%s' -- "$1"
+}
+
+write_source_authorization() {
+  local commit="$1"
+  local tree="$2"
+  python3 - \
+    "${REQUEST}" "${QUEUE_AUTH_ROOT}" "${REQUEST_ID}" \
+    "${QUEUE_AUTH_SHA256}" "${commit}" "${tree}" \
+    "${TEST_ROOT}/expected-readme" "${TEST_ROOT}/expected-job" <<'PY'
+import hashlib
+from pathlib import Path
+import sys
+
+(
+    request_text,
+    root_text,
+    request_id,
+    queue_digest,
+    commit,
+    tree,
+    readme_text,
+    job_text,
+) = sys.argv[1:]
+request = Path(request_text).read_bytes()
+entries = (
+    ("README.fixture", "100644", Path(readme_text).read_bytes()),
+    ("scripts/evidence/jobs/row-04.sh", "100755", Path(job_text).read_bytes()),
+)
+lines = [
+    "source_authorization_manifest_schema_version\t1",
+    f"source_commit\t{commit}",
+    f"source_tree\t{tree}",
+    f"file_count\t{len(entries)}",
+]
+for index, (path, mode, content) in enumerate(entries):
+    lines.append(
+        f"file\t{index:04d}\t{path}\t{mode}\t{len(content)}\t"
+        f"{hashlib.sha256(content).hexdigest()}"
+    )
+lines.append(f"source_bytes\t{sum(len(item[2]) for item in entries)}")
+body = ("\n".join(lines) + "\n").encode("ascii")
+source_root = hashlib.sha256(b"fe2o3-source-root-v1\0" + body).hexdigest()
+manifest = body + f"source_root_sha256\t{source_root}\n".encode("ascii")
+manifest_digest = hashlib.sha256(manifest).hexdigest()
+root = Path(root_text)
+root.mkdir(mode=0o755, exist_ok=True)
+(root / f"{request_id}.source.tsv").write_bytes(manifest)
+authorization = (
+    "oci_queue_source_authorization_schema_version\t1\n"
+    f"queue_trust_sha256\t{queue_digest}\n"
+    f"request_id\t{request_id}\n"
+    f"request_sha256\t{hashlib.sha256(request).hexdigest()}\n"
+    f"source_commit\t{commit}\n"
+    f"source_tree\t{tree}\n"
+    f"source_manifest_size\t{len(manifest)}\n"
+    f"source_manifest_sha256\t{manifest_digest}\n"
+    f"source_root_sha256\t{source_root}\n"
+).encode("ascii")
+(root / f"{request_id}.authorization.tsv").write_bytes(authorization)
+PY
+  chmod 644 \
+    "${QUEUE_AUTH_ROOT}/${REQUEST_ID}.authorization.tsv" \
+    "${QUEUE_AUTH_ROOT}/${REQUEST_ID}.source.tsv"
 }
 
 expect_failure() {
@@ -175,6 +240,9 @@ verify() {
     --test-request-owner-uid "$(id -u)" \
     --test-request-owner-gid "$(id -g)" \
     --test-queue-trust-sha256 "${QUEUE_AUTH_SHA256}" \
+    --test-queue-authorization-root "${QUEUE_AUTH_ROOT}" \
+    --test-queue-authorization-owner-uid "$(id -u)" \
+    --test-queue-authorization-owner-gid "$(id -g)" \
     --test-trusted-root "${TRUSTED_ROOT}" \
     --test-policy policy.tsv \
     --test-policy-identity "${POLICY_IDENTITY}" \
@@ -191,6 +259,9 @@ plan() {
     --test-request-owner-uid "$(id -u)" \
     --test-request-owner-gid "$(id -g)" \
     --test-queue-trust-sha256 "${QUEUE_AUTH_SHA256}" \
+    --test-queue-authorization-root "${QUEUE_AUTH_ROOT}" \
+    --test-queue-authorization-owner-uid "$(id -u)" \
+    --test-queue-authorization-owner-gid "$(id -g)" \
     --test-trusted-root "${TRUSTED_ROOT}" \
     --test-policy policy.tsv \
     --test-policy-identity "${POLICY_IDENTITY}" \
@@ -207,6 +278,9 @@ preflight() {
     --test-request-owner-uid "$(id -u)" \
     --test-request-owner-gid "$(id -g)" \
     --test-queue-trust-sha256 "${QUEUE_AUTH_SHA256}" \
+    --test-queue-authorization-root "${QUEUE_AUTH_ROOT}" \
+    --test-queue-authorization-owner-uid "$(id -u)" \
+    --test-queue-authorization-owner-gid "$(id -g)" \
     --test-trusted-root "${TRUSTED_ROOT}" \
     --test-policy policy.tsv \
     --test-policy-identity "${POLICY_IDENTITY}" \
@@ -226,6 +300,9 @@ verify_request_path() {
     --test-request-owner-uid "${owner_uid}" \
     --test-request-owner-gid "${owner_gid}" \
     --test-queue-trust-sha256 "${QUEUE_AUTH_SHA256}" \
+    --test-queue-authorization-root "${QUEUE_AUTH_ROOT}" \
+    --test-queue-authorization-owner-uid "$(id -u)" \
+    --test-queue-authorization-owner-gid "$(id -g)" \
     --test-trusted-root "${TRUSTED_ROOT}" \
     --test-policy policy.tsv \
     --test-policy-identity "${POLICY_IDENTITY}" \
@@ -239,14 +316,19 @@ verify_request_path() {
 mkdir -p "${TRUSTED_ROOT}/profiles" "${TRUSTED_ROOT}/seccomp" \
   "${OCI_LAYOUT}/blobs/sha256" "${SOURCE_REPO}/scripts/evidence/jobs" \
   "${SOURCE_STAGING}" "${OUTPUT_STAGING}"
+printf 'base fixture\n' >"${SOURCE_REPO}/README.fixture"
 printf '%s\n' '#!/usr/bin/env bash' 'set -Eeuo pipefail' 'printf ok > /evidence/result.txt' \
   >"${SOURCE_REPO}/scripts/evidence/jobs/row-04.sh"
 chmod 755 "${SOURCE_REPO}/scripts/evidence/jobs/row-04.sh"
 git -C "${SOURCE_REPO}" init -q
 git -C "${SOURCE_REPO}" config user.name test
 git -C "${SOURCE_REPO}" config user.email test@example.invalid
+git -C "${SOURCE_REPO}" add README.fixture
+git -C "${SOURCE_REPO}" commit -qm base-fixture
 git -C "${SOURCE_REPO}" add scripts/evidence/jobs/row-04.sh
 git -C "${SOURCE_REPO}" commit -qm fixture
+cp "${SOURCE_REPO}/README.fixture" "${TEST_ROOT}/expected-readme"
+cp "${SOURCE_REPO}/scripts/evidence/jobs/row-04.sh" "${TEST_ROOT}/expected-job"
 printf '#!/usr/bin/env bash\nprintf executed > %q\n' "${TEST_ROOT}/fsmonitor-executed" \
   >"${TEST_ROOT}/candidate-fsmonitor"
 chmod 755 "${TEST_ROOT}/candidate-fsmonitor"
@@ -270,7 +352,7 @@ source_tree="$(git -C "${SOURCE_REPO}" rev-parse 'HEAD^{tree}')"
 job_digest="$(sha256 "${SOURCE_REPO}/scripts/evidence/jobs/row-04.sh")"
 cat >"${REQUEST}" <<EOF
 oci_execution_request_schema_version	1
-request_id	3333333333333333333333333333333333333333333333333333333333333333
+request_id	${REQUEST_ID}
 profile_id	mi300x-test-v1
 source_commit	${source_commit}
 source_tree	${source_tree}
@@ -278,6 +360,7 @@ job_id	row-04-hardware
 job_path	scripts/evidence/jobs/row-04.sh
 job_sha256	${job_digest}
 EOF
+write_source_authorization "${source_commit}" "${source_tree}"
 
 output="$(verify)"
 grep -F $'matched_profile\tmi300x-test-v1' <<<"${output}" >/dev/null
@@ -1164,7 +1247,8 @@ assert "fe2o3-oci-operator: operator top-level fs" in captured_stderr.getvalue()
 assert "Traceback" not in captured_stderr.getvalue()
 PY
 PYTHONDONTWRITEBYTECODE=1 python3 - "${EXECUTOR}" "${OCI_LAYOUT}" "${REQUEST}" \
-  "${TRUSTED_ROOT}" "${QUEUE_AUTH_SHA256}" "${POLICY_IDENTITY}" <<'PY'
+  "${TRUSTED_ROOT}" "${QUEUE_AUTH_ROOT}" "${QUEUE_AUTH_SHA256}" \
+  "${POLICY_IDENTITY}" <<'PY'
 import io
 import importlib.util
 import os
@@ -1177,6 +1261,7 @@ import time
     layout_text,
     request_text,
     trusted_text,
+    queue_root_text,
     queue_digest,
     policy_identity,
 ) = sys.argv[1:]
@@ -1366,6 +1451,12 @@ parsed = module.build_parser().parse_args(
         str(os.getgid()),
         "--test-queue-trust-sha256",
         queue_digest,
+        "--test-queue-authorization-root",
+        queue_root_text,
+        "--test-queue-authorization-owner-uid",
+        str(os.getuid()),
+        "--test-queue-authorization-owner-gid",
+        str(os.getgid()),
         "--test-trusted-root",
         str(trusted),
         "--test-policy",
@@ -1591,6 +1682,9 @@ expect_failure stale_external_policy_pin 'differs from its external binding' \
     --test-request-owner-uid "$(id -u)" \
     --test-request-owner-gid "$(id -g)" \
     --test-queue-trust-sha256 "${QUEUE_AUTH_SHA256}" \
+    --test-queue-authorization-root "${QUEUE_AUTH_ROOT}" \
+    --test-queue-authorization-owner-uid "$(id -u)" \
+    --test-queue-authorization-owner-gid "$(id -g)" \
     --test-trusted-root "${TRUSTED_ROOT}" \
     --test-policy policy.tsv \
     --test-policy-identity "${POLICY_IDENTITY}" \

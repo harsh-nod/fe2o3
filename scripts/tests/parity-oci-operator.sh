@@ -63,7 +63,7 @@ compile_test_launcher() {
 
 mkdir -m 755 "${CONFIG_ROOT}"
 cat >"${CONFIG}" <<'EOF'
-oci_operator_config_schema_version	1
+oci_operator_config_schema_version	2
 config_id	mi300x-gfx942-production-v1
 trusted_root	/etc/fe2o3/oci-executor/trust
 policy_path	policy.tsv
@@ -78,6 +78,9 @@ inbox_owner_uid	0
 inbox_owner_gid	0
 request_owner_uid	2001
 request_owner_gid	2001
+queue_authorization_root	/var/lib/fe2o3/oci-authorizations
+queue_authorization_owner_uid	0
+queue_authorization_owner_gid	0
 queue_trust_sha256	2222222222222222222222222222222222222222222222222222222222222222
 EOF
 write_digest
@@ -105,6 +108,7 @@ config = module.load_operator_config(
 assert config.config_id == "mi300x-gfx942-production-v1"
 assert config.trust_file_contract == "linux-immutable"
 assert config.queue_trust_digest == "2" * 64
+assert config.queue_authorization_root == "/var/lib/fe2o3/oci-authorizations"
 
 real_fstat = module.os.fstat
 failed_fds = []
