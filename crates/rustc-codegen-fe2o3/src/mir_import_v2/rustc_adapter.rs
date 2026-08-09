@@ -143,7 +143,7 @@ fn capture_statement<'tcx>(
             let (destination, value) = &**assignment;
             StatementKindV2::Assign {
                 destination: capture_place(tcx, instance, *destination, limits)?,
-                value: capture_rvalue(tcx, instance, value, source_info, limits)?,
+                value: Box::new(capture_rvalue(tcx, instance, value, source_info, limits)?),
             }
         }
         StatementKind::StorageLive(local) => StatementKindV2::StorageLive {
@@ -163,15 +163,27 @@ fn capture_statement<'tcx>(
             StatementKindV2::Intrinsic(match intrinsic.as_ref() {
                 NonDivergingIntrinsic::CopyNonOverlapping(copy) => {
                     IntrinsicStatementV2::CopyNonOverlapping {
-                        source: capture_operand(tcx, instance, &copy.src, source_info, limits)?,
-                        destination: capture_operand(
+                        source: Box::new(capture_operand(
+                            tcx,
+                            instance,
+                            &copy.src,
+                            source_info,
+                            limits,
+                        )?),
+                        destination: Box::new(capture_operand(
                             tcx,
                             instance,
                             &copy.dst,
                             source_info,
                             limits,
-                        )?,
-                        count: capture_operand(tcx, instance, &copy.count, source_info, limits)?,
+                        )?),
+                        count: Box::new(capture_operand(
+                            tcx,
+                            instance,
+                            &copy.count,
+                            source_info,
+                            limits,
+                        )?),
                     }
                 }
                 NonDivergingIntrinsic::Assume(condition) => IntrinsicStatementV2::Assume {
