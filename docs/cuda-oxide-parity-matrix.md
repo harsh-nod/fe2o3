@@ -634,6 +634,13 @@ The detailed dependencies and exit criteria are in
 | 73 | Block Reductions / Scans | Full | Exact | Missing | Workgroup collectives use LDS and barriers, support the baseline operation/type matrix, and work across wave widths | G4, G7 |
 | 74 | Cooperative Kernel Launch | Full | AMD-equivalent | Partial | HIP cooperative launch and grid synchronization are capability-checked, occupancy-safe, and encoded in the launch contract | G6, G7 |
 
+Rows 68 and 69 have a fail-closed source contract documented in
+[Typed groups foundation V1](typed-groups-foundation-v1.md). It establishes
+unforgeable handle shapes, checked ranks, gfx942 const-width admission, and an
+unsafe convergence-bearing workgroup synchronization boundary. It does not yet
+have source compiler lowering, Verus, artifact, or hardware evidence, so both
+rows remain `Missing`.
+
 ### Runtime Library: Debug
 
 | ID | cuda-oxide feature | Baseline | Class | fe2o3 now | AMD/fe2o3 acceptance target | Gate |
