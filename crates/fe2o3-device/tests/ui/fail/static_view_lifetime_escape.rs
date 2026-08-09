@@ -1,12 +1,7 @@
-use fe2o3_contracts::{AllocationSpecV1, ByteRegionV1};
-use fe2o3_device::{DisjointSlice, StaticViewMut};
+use fe2o3_device::StaticView;
 
-fn escape(
-    parent: &mut DisjointSlice<u32>,
-    allocation: AllocationSpecV1,
-    region: ByteRegionV1,
-) -> StaticViewMut<'static, u32, 4> {
-    StaticViewMut::from_disjoint_slice(parent, allocation, region, 0).unwrap()
+fn escape(parent: &[u32]) -> StaticView<'static, u32, 4> {
+    StaticView::from_shared_slice(parent, 0).unwrap()
 }
 
 fn main() {}

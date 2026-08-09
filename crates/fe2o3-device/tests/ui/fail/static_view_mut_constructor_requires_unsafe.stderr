@@ -1,0 +1,7 @@
+error[E0133]: call to unsafe function `StaticViewMut::<'parent, T, N>::from_globally_exclusive_slice` is unsafe and requires unsafe block
+ --> tests/ui/fail/static_view_mut_constructor_requires_unsafe.rs:4:13
+  |
+4 |     let _ = StaticViewMut::<u32, 4>::from_globally_exclusive_slice(parent, 0);
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
+  |
+  = note: consult the function's documentation for information on how to avoid undefined behavior

@@ -1,14 +1,9 @@
-use fe2o3_contracts::{AllocationSpecV1, ByteRegionV1};
-use fe2o3_device::{DisjointSlice, StaticIndex, StaticViewMut};
+use fe2o3_device::{StaticIndex, StaticViewMut};
 
-fn alias_parent<'parent>(
-    parent: &'parent mut DisjointSlice<u32>,
-    allocation: AllocationSpecV1,
-    region: ByteRegionV1,
-) {
-    let view = StaticViewMut::<u32, 4>::from_disjoint_slice(parent, allocation, region, 0)
+unsafe fn alias_parent(parent: &mut [u32]) {
+    let view = unsafe { StaticViewMut::<u32, 4>::from_globally_exclusive_slice(parent, 0) }
         .unwrap();
-    let _ = unsafe { parent.get_mut_at(0) };
+    parent[0] = 7;
     let _ = view.at_const(StaticIndex::<4, 0>::CHECKED);
 }
 

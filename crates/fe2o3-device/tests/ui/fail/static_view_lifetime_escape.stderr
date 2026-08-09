@@ -1,8 +1,7 @@
 error: lifetime may not live long enough
- --> tests/ui/fail/static_view_lifetime_escape.rs:9:5
+ --> tests/ui/fail/static_view_lifetime_escape.rs:4:5
   |
-5 |     parent: &mut DisjointSlice<u32>,
-  |             - let's call the lifetime of this reference `'1`
-...
-9 |     StaticViewMut::from_disjoint_slice(parent, allocation, region, 0).unwrap()
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ returning this value requires that `'1` must outlive `'static`
+3 | fn escape(parent: &[u32]) -> StaticView<'static, u32, 4> {
+  |                   - let's call the lifetime of this reference `'1`
+4 |     StaticView::from_shared_slice(parent, 0).unwrap()
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ returning this value requires that `'1` must outlive `'static`

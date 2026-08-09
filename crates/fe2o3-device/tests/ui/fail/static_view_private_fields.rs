@@ -1,13 +1,11 @@
 use core::marker::PhantomData;
-use fe2o3_contracts::StaticViewContractV1;
-use fe2o3_device::{Index1D, StaticViewMut};
+use fe2o3_device::StaticViewMut;
 
-fn forge<'a>(ptr: *mut u32, contract: StaticViewContractV1) -> StaticViewMut<'a, u32, 4> {
-    StaticViewMut::<u32, 4, Index1D> {
+fn forge<'a>(ptr: *mut u32) -> StaticViewMut<'a, u32, 4> {
+    StaticViewMut::<u32, 4> {
         ptr,
-        contract,
         _borrow: PhantomData,
-        _index_space: PhantomData,
+        _not_send_sync: PhantomData,
     }
 }
 

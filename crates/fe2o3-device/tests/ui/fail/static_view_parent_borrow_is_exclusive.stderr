@@ -1,10 +1,21 @@
-error[E0499]: cannot borrow `*parent` as mutable more than once at a time
-  --> tests/ui/fail/static_view_parent_borrow_is_exclusive.rs:11:22
-   |
- 9 |     let view = StaticViewMut::<u32, 4>::from_disjoint_slice(parent, allocation, region, 0)
-   |                                                             ------ first mutable borrow occurs here
-10 |         .unwrap();
-11 |     let _ = unsafe { parent.get_mut_at(0) };
-   |                      ^^^^^^ second mutable borrow occurs here
-12 |     let _ = view.at_const(StaticIndex::<4, 0>::CHECKED);
-   |             ---- first borrow later used here
+error[E0503]: cannot use `*parent` because it was mutably borrowed
+ --> tests/ui/fail/static_view_parent_borrow_is_exclusive.rs:6:5
+  |
+4 |     let view = unsafe { StaticViewMut::<u32, 4>::from_globally_exclusive_slice(parent, 0) }
+  |                                                                                ------ `*parent` is borrowed here
+5 |         .unwrap();
+6 |     parent[0] = 7;
+  |     ^^^^^^^^^ use of borrowed `*parent`
+7 |     let _ = view.at_const(StaticIndex::<4, 0>::CHECKED);
+  |             ---- borrow later used here
+
+error[E0506]: cannot assign to `parent[_]` because it is borrowed
+ --> tests/ui/fail/static_view_parent_borrow_is_exclusive.rs:6:5
+  |
+4 |     let view = unsafe { StaticViewMut::<u32, 4>::from_globally_exclusive_slice(parent, 0) }
+  |                                                                                ------ `parent[_]` is borrowed here
+5 |         .unwrap();
+6 |     parent[0] = 7;
+  |     ^^^^^^^^^^^^^ `parent[_]` is assigned to here but it was already borrowed
+7 |     let _ = view.at_const(StaticIndex::<4, 0>::CHECKED);
+  |             ---- borrow later used here

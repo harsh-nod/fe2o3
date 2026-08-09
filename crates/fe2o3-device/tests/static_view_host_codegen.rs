@@ -44,17 +44,35 @@ fn function_body<'a>(ir: &'a str, symbol: &str) -> &'a str {
     &ir[definition..end]
 }
 
+fn assert_exact_gep_offsets(body: &str, symbol: &str, expected: &[u64]) {
+    let gep_lines = body
+        .lines()
+        .filter(|line| line.contains("getelementptr"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        gep_lines.len(),
+        expected.len(),
+        "{symbol} has unexpected host GEPs:\n{body}"
+    );
+    for (line, offset) in gep_lines.into_iter().zip(expected) {
+        assert!(
+            line.contains(&format!(", i64 {offset}")),
+            "{symbol} has the wrong host byte offset; expected {offset}:\n{line}"
+        );
+    }
+}
+
 #[test]
-fn constant_access_has_no_runtime_bounds_path() {
+fn host_rustc_emits_exact_constant_offsets_without_bounds_paths() {
     let executable = std::env::current_exe().expect("locate integration test executable");
     let deps = executable
         .parent()
         .expect("integration test dependency directory");
     let device = newest_rlib(deps, "fe2o3_device");
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let source = manifest.join("tests/codegen/static_view_shape.rs");
+    let source = manifest.join("tests/host_codegen/static_view_shape.rs");
     let output = std::env::temp_dir().join(format!(
-        "fe2o3-static-view-shape-{}-{}.ll",
+        "fe2o3-host-static-view-shape-{}-{}.ll",
         std::process::id(),
         std::thread::current().name().unwrap_or("test")
     ));
@@ -80,22 +98,27 @@ fn constant_access_has_no_runtime_bounds_path() {
         .arg("-o")
         .arg(&output)
         .output()
-        .expect("run rustc LLVM-shape fixture");
+        .expect("run host rustc LLVM-shape fixture");
     assert!(
         compiled.status.success(),
-        "LLVM-shape compilation failed:\nstdout:\n{}\nstderr:\n{}",
+        "host LLVM-shape compilation failed:\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&compiled.stdout),
         String::from_utf8_lossy(&compiled.stderr)
     );
 
     let ir = fs::read_to_string(&output).expect("read generated LLVM IR");
     fs::remove_file(&output).expect("remove generated LLVM IR");
-    for symbol in ["static_view_read_index_2", "static_view_write_index_1"] {
+    assert!(
+        !ir.contains("amdgcn-amd-amdhsa"),
+        "host-only test must not be interpreted as AMDGPU evidence"
+    );
+
+    for symbol in [
+        "host_static_view_read_index_0",
+        "host_static_view_read_indices_1_3",
+        "host_static_view_write_index_2",
+    ] {
         let body = function_body(&ir, symbol);
-        assert!(
-            body.contains("getelementptr"),
-            "{symbol} lost its constant offset:\n{body}"
-        );
         for forbidden in ["panic_bounds_check", " br i1 ", " switch ", "icmp "] {
             assert!(
                 !body.contains(forbidden),
@@ -103,4 +126,27 @@ fn constant_access_has_no_runtime_bounds_path() {
             );
         }
     }
+
+    let index_zero = function_body(&ir, "host_static_view_read_index_0");
+    assert_exact_gep_offsets(index_zero, "host_static_view_read_index_0", &[]);
+
+    let indices_one_three = function_body(&ir, "host_static_view_read_indices_1_3");
+    assert_exact_gep_offsets(
+        indices_one_three,
+        "host_static_view_read_indices_1_3",
+        &[4, 12],
+    );
+    assert_eq!(
+        indices_one_three.matches("load i32").count(),
+        2,
+        "multiple static accesses should remain distinct loads:\n{indices_one_three}"
+    );
+
+    let index_two = function_body(&ir, "host_static_view_write_index_2");
+    assert_exact_gep_offsets(index_two, "host_static_view_write_index_2", &[8]);
+    assert_eq!(
+        index_two.matches("store i32").count(),
+        1,
+        "constant mutable access should end in a store:\n{index_two}"
+    );
 }
