@@ -28,6 +28,8 @@ pub const MAX_EXECUTABLE_TYPE_NODES: usize = 65_536;
 pub const MAX_EXECUTABLE_TYPE_ITEMS: usize = 65_536;
 pub const MAX_EXECUTABLE_FIELDS: usize = 4_096;
 pub const MAX_EXECUTABLE_VARIANTS: usize = 1_024;
+/// Closed AMDGPU address-space range supported by executable MIR V1.
+pub const MAX_EXECUTABLE_ADDRESS_SPACE: u32 = 5;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum MirExecutableVersion {
@@ -648,6 +650,7 @@ impl MirExecutableModule {
             let path = format!("module.types[{index}]");
             ty.validate()
                 .map_err(|source| map_type_error(&path, source))?;
+            validate_target_type_abi(&path, ty, self.target)?;
             let canonical = ty
                 .canonical_text()
                 .map_err(|source| map_type_error(&path, source))?;
@@ -1187,6 +1190,16 @@ impl<'a> Verifier<'a> {
         for (index, local) in self.function.body.locals.iter().enumerate() {
             let path = format!("{}.body.locals[{index}]", self.path);
             self.require_type(&format!("{path}.ty"), local.ty)?;
+            if self.type_at(local.ty).layout.size.is_none() {
+                return Err(error(
+                    format!("{path}.ty"),
+                    "executable MIR local storage types must be Sized",
+                ));
+            }
+            validate_executable_address_space(
+                &format!("{path}.storage_address_space"),
+                local.storage_address_space,
+            )?;
             validate_name_opt(&format!("{path}.name"), local.name.as_deref())?;
             validate_span_opt(&format!("{path}.span"), local.span.as_ref())?;
             if index == 0 {
@@ -3014,6 +3027,106 @@ fn map_type_error(path: &str, source: MirTypeValidationError) -> MirExecutableVa
         format!("{path}.{}", source.path()),
         source.reason().to_owned(),
     )
+}
+
+fn validate_executable_address_space(
+    path: &str,
+    address_space: MirAddressSpace,
+) -> Result<(), MirExecutableValidationError> {
+    if address_space.0 > MAX_EXECUTABLE_ADDRESS_SPACE {
+        return Err(error(
+            path,
+            format!(
+                "address space {} is outside the executable MIR V1 policy 0..={MAX_EXECUTABLE_ADDRESS_SPACE}",
+                address_space.0
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_target_type_abi(
+    root: &str,
+    ty: &MirSemanticType,
+    target: MirExecutableTarget,
+) -> Result<(), MirExecutableValidationError> {
+    let pointer_bytes = u64::from(target.pointer_width_bits / 8);
+    let mut stack = vec![(root.to_owned(), ty)];
+    while let Some((path, ty)) = stack.pop() {
+        match &ty.kind {
+            MirTypeKind::RawPointer {
+                pointee,
+                address_space,
+                ..
+            } => {
+                if ty.layout.size != Some(pointer_bytes) || ty.layout.align != pointer_bytes {
+                    return Err(error(
+                        &path,
+                        "raw-pointer size and alignment must exactly match the target pointer ABI",
+                    ));
+                }
+                validate_executable_address_space(
+                    &format!("{path}.address_space"),
+                    *address_space,
+                )?;
+                if pointee.layout.size.is_none() {
+                    return Err(error(
+                        format!("{path}.pointee"),
+                        "thin raw pointers require a Sized pointee",
+                    ));
+                }
+                stack.push((format!("{path}.pointee"), pointee));
+            }
+            MirTypeKind::Reference {
+                referent,
+                address_space,
+                ..
+            } => {
+                if ty.layout.size != Some(pointer_bytes) || ty.layout.align != pointer_bytes {
+                    return Err(error(
+                        &path,
+                        "reference size and alignment must exactly match the target pointer ABI",
+                    ));
+                }
+                validate_executable_address_space(
+                    &format!("{path}.address_space"),
+                    *address_space,
+                )?;
+                if referent.layout.size.is_none() {
+                    return Err(error(
+                        format!("{path}.referent"),
+                        "thin references require a Sized referent",
+                    ));
+                }
+                stack.push((format!("{path}.referent"), referent));
+            }
+            MirTypeKind::Slice { element } | MirTypeKind::Array { element, .. } => {
+                stack.push((format!("{path}.element"), element));
+            }
+            MirTypeKind::Tuple(aggregate) => {
+                for (index, field) in aggregate.fields.iter().enumerate() {
+                    stack.push((format!("{path}.fields[{index}].type"), &field.ty));
+                }
+            }
+            MirTypeKind::Struct(structure) => {
+                for (index, field) in structure.aggregate.fields.iter().enumerate() {
+                    stack.push((format!("{path}.fields[{index}].type"), &field.ty));
+                }
+            }
+            MirTypeKind::Enum(enum_ty) => {
+                for (variant_index, variant) in enum_ty.variants.iter().enumerate() {
+                    for (field_index, field) in variant.aggregate.fields.iter().enumerate() {
+                        stack.push((
+                            format!("{path}.variants[{variant_index}].fields[{field_index}].type"),
+                            &field.ty,
+                        ));
+                    }
+                }
+            }
+            MirTypeKind::Unit | MirTypeKind::Scalar(_) => {}
+        }
+    }
+    Ok(())
 }
 
 fn validate_type_budget(types: &[MirSemanticType]) -> Result<(), MirExecutableValidationError> {

@@ -6,8 +6,8 @@ use dialect_mir::{
     MirExternalCallRegistry, MirExternalCallReturn, MirExternalCallSignature, MirField,
     MirFunction, MirIntrinsic, MirLayout, MirLocalDecl, MirLocalId, MirLocalKind, MirMutability,
     MirOperand, MirPadding, MirPlace, MirProjection, MirRvalue, MirScalarType, MirSemanticType,
-    MirSourceSpan, MirStatement, MirStatementKind, MirTerminator, MirTerminatorKind, MirTypeId,
-    MirTypeKind, MirUnwindAction, MirValueId, MirVariant,
+    MirSourceSpan, MirStatement, MirStatementKind, MirStructType, MirTerminator, MirTerminatorKind,
+    MirTypeId, MirTypeKind, MirUnwindAction, MirValueId, MirVariant,
 };
 
 fn external_registry(
@@ -831,7 +831,7 @@ fn enforces_rustc_constant_index_and_subslice_semantics() {
             .validate()
             .unwrap_err()
             .reason()
-            .contains("external bound witness")
+            .contains("must be Sized")
     );
 }
 
@@ -1292,6 +1292,120 @@ fn references_and_raw_addresses_require_exact_mutability_and_address_space() {
             .unwrap_err()
             .reason()
             .contains("requires a writable place")
+    );
+}
+
+#[test]
+fn recursively_enforces_target_pointer_abi_and_address_spaces() {
+    let (mut wrong_width, ids) = pointer_module(true);
+    wrong_width.types[ids.const_ptr_as1.0 as usize].layout = MirLayout::sized(8, 8);
+    assert!(
+        wrong_width
+            .validate()
+            .unwrap_err()
+            .reason()
+            .contains("target pointer ABI")
+    );
+
+    let (mut wrong_alignment, ids) = pointer_module(true);
+    wrong_alignment.types[ids.const_ptr_as1.0 as usize].layout = MirLayout::sized(4, 2);
+    assert!(
+        wrong_alignment
+            .validate()
+            .unwrap_err()
+            .reason()
+            .contains("target pointer ABI")
+    );
+
+    let (mut wrong_space, ids) = pointer_module(true);
+    let MirTypeKind::RawPointer { address_space, .. } =
+        &mut wrong_space.types[ids.const_ptr_as1.0 as usize].kind
+    else {
+        unreachable!();
+    };
+    *address_space = MirAddressSpace(999);
+    assert!(
+        wrong_space
+            .validate()
+            .unwrap_err()
+            .reason()
+            .contains("address space 999")
+    );
+
+    let (mut dst_pointer, ids) = pointer_module(true);
+    let MirTypeKind::RawPointer { pointee, .. } =
+        &mut dst_pointer.types[ids.const_ptr_as1.0 as usize].kind
+    else {
+        unreachable!();
+    };
+    **pointee = MirSemanticType {
+        layout: MirLayout::dynamically_sized(4),
+        kind: MirTypeKind::Slice {
+            element: Box::new(ty(
+                MirTypeKind::Scalar(MirScalarType::Int {
+                    signed: false,
+                    bits: 32,
+                }),
+                4,
+                4,
+            )),
+        },
+    };
+    assert!(
+        dst_pointer
+            .validate()
+            .unwrap_err()
+            .reason()
+            .contains("Sized pointee")
+    );
+
+    let nested_bad_pointer = ty(
+        MirTypeKind::RawPointer {
+            pointee: Box::new(ty(
+                MirTypeKind::Scalar(MirScalarType::Int {
+                    signed: false,
+                    bits: 32,
+                }),
+                4,
+                4,
+            )),
+            mutability: MirMutability::Immutable,
+            address_space: MirAddressSpace(1),
+        },
+        8,
+        8,
+    );
+    let nested = ty(
+        MirTypeKind::Struct(MirStructType {
+            identity: "fixture::NestedPointer".into(),
+            aggregate: MirAggregateLayout {
+                fields: vec![MirField {
+                    name: Some("pointer".into()),
+                    offset: 0,
+                    ty: nested_bad_pointer,
+                }],
+                padding: vec![],
+            },
+        }),
+        8,
+        8,
+    );
+    assert!(
+        zero_sized_constant_module(nested)
+            .validate()
+            .unwrap_err()
+            .reason()
+            .contains("target pointer ABI")
+    );
+
+    let mut local_space = place_module();
+    local_space.functions[0].body.locals[0].storage_address_space = MirAddressSpace(6);
+    assert!(
+        local_space
+            .validate()
+            .unwrap_err()
+            .reason()
+            .contains("address space 6")
     );
 }
 
