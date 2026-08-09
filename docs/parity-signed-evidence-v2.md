@@ -367,22 +367,29 @@ derived from the candidate status using protected generators.
 ### Protected GitHub Verdict
 
 `.github/workflows/parity-promotion.yml` runs protected default-branch code for
-`pull_request_target`. It has no `pull_request_review` trigger. Review events run
-only `.github/workflows/parity-review-signal.yml`, which has explicit read-only
-permissions, no environment or secrets, and a GitHub-hosted runner. Submitted,
-edited, and dismissed reviews retrigger the privileged controller through
-`workflow_run`; candidate-controlled review-event YAML never receives the
-verdict App token.
+`pull_request_target`. It has no privileged `pull_request_review` or direct
+merge-group path. Review events run only
+`.github/workflows/parity-review-signal.yml`; direct merge-group execution is an
+unprivileged notification. Both notification workflows have read-only
+permissions, no secrets, and GitHub-hosted runners. Their completed
+`workflow_run` events only wake the default-branch controller.
 
-The direct `merge_group` job is also an unprivileged bootstrap. The privileged
-merge-queue verdict is triggered by the completed merge-group `CI` run through
-`workflow_run`, whose controller code GitHub loads from the default branch. The
-controller requires an administrator-configured immutable workflow ID and the
-exact source path, event, branch, and SHA for either `CI` or the review signal.
-The source run must have status `completed` and conclusion `success`; `failure`,
+A notification result is never authorization. `success`, `failure`,
 `cancelled`, `skipped`, `neutral`, `timed_out`, `action_required`, `stale`, and
-all unknown conclusions fail closed. Protected code comes from the controller's
-exact `github.workflow_sha`, which must still be the current default-branch tip.
+unknown conclusions have identical notification semantics. The controller
+independently fetches and validates the exact candidate or merge-group tree
+using protected scripts. Generic CI remains a separate required check; the
+parity verdict does not infer generic build or test correctness from CI.
+
+Every notification is bound to more than its configured workflow ID and path.
+The controller re-queries the exact run ID and requires its event, path, branch,
+head SHA, workflow ID, and completed status to match the immutable event. It
+then resolves the workflow-file Git blob at that exact source-run SHA and at the
+protected `github.workflow_sha`. The object must be a blob and both OIDs must be
+identical. A candidate-modified trigger, runner, permission, action, or command
+therefore cannot act as a notification source. The candidate or merge-group
+tree must also contain byte-identical `.github/workflows/ci.yml` and
+`.github/workflows/parity-review-signal.yml` blobs.
 
 Base and head refs are fetched into a runner-owned bare repository. The fetched
 refs must still resolve to the declared exact 40-character commit IDs, both
@@ -394,15 +401,23 @@ changed-path count and NUL-delimited paths with an immutable two-tree
 `changed_files` count are not authorization inputs.
 
 The workflow publishes `fe2o3/protected-parity-promotion` through the GitHub
-Checks API on the exact pull-request head or merge-group head SHA. It first
-creates an `in_progress` check, runs only protected-base verifier code against
-the candidate worktree as data, and updates the same check ID to `success` or
-`failure`. A verifier crash or rejection therefore fails the candidate-bound
-check; cancellation leaves it pending and blocks admission. Immediately before
-success, a pull-request run queries the current PR and requires its number,
-state, draft state, base/head repositories, refs, and SHAs to equal the event
-snapshot. A merge-group run refetches the protected default ref and queue head
-ref and requires both SHAs to remain exact.
+Checks API on the exact pull-request or merge-group SHA. Its deterministic
+external ID is `fe2o3-parity-v1:<sha>`. Before source lookup or verification,
+the controller queries exact-name checks on that SHA and selects only the
+configured App ID and slug. It updates the one matching deterministic check,
+adopts one unambiguous legacy App check, or creates the first check. Duplicate
+dedicated checks, multiple legacy App checks, truncated inventories, and
+candidate same-name checks fail closed. Check ID ordering is never an input.
+
+All privileged parity runs share one non-cancelling concurrency group. The
+selected check is reset to `in_progress`, verified, and updated in place to
+`success` or `failure`. A verifier rejection therefore replaces stale success
+on the same check. An interrupted run remains pending and is repaired by the
+next event or reconciliation. Immediately before success, a pull-request run
+requires the current number, open state, non-draft state, repositories, refs,
+and SHAs to remain exact. A merge-group run independently executes the
+protected parity classifier/gate on the exact queue SHA, verifies ancestry, and
+refetches both refs before success.
 
 Immediately before a successful PR verdict, the controller fetches the current
 reviews and reruns the protected classifier. Designated reviewers must be
@@ -411,14 +426,36 @@ CODEOWNERS for every changed trust path, their latest review must still be
 then fetches reviews again and compares canonical review IDs, submission times,
 states, commit bindings, and reviewer identities before re-querying the PR
 revision. Approval dismissal or revision movement during verification fails.
-A submitted approval or dismissal creates a newer same-App, same-name check on
-the exact candidate SHA, superseding the prior failed or successful verdict.
+Review submission, edit, dismissal, and PR synchronization reconcile the same
+deterministic exact-SHA check. Native required-review and CODEOWNER rules remain
+independent of the App check, so dismissal cannot be authorized by an earlier
+parity result.
 
 The pull-request trigger is intentionally not path-filtered: every candidate
 SHA receives the required check, and changes outside the parity trust surface
 complete through the protected classifier's `no-op` result. Runs are not
-concurrency-cancelled, so a newer event cannot strand an older check on the same
-SHA in `in_progress`.
+concurrency-cancelled. An hourly protected-default `schedule` and manual
+`workflow_dispatch` enumerate every open PR, fetch its current reviews, and
+enumerate active `gh-readonly-queue` refs. Each exact target passes through the
+same protected verifier and check-update path. This repairs interrupted pending
+checks and stale results without trusting notification history.
+
+Changes to `.github/workflows/ci.yml` or
+`.github/workflows/parity-review-signal.yml` cannot self-authorize. A
+`pull_request_target` synchronization first reconciles the target check to
+pending, then protected blob comparison and change policy force failure. Such
+changes use this administrator migration procedure:
+
+1. Isolate the workflow-byte change from parity status, archive, projection,
+   key, policy, and verifier changes. Obtain normal administrator and CODEOWNER
+   review of the exact commit.
+2. Confirm both workflows remain read-only, GitHub-hosted, and secret-free. Use
+   an audited ruleset bypass to merge the exact commit; the parity App check is
+   expected to fail and cannot approve it.
+3. If a workflow was recreated, update its configured immutable numeric ID.
+   Run protected-default `workflow_dispatch` reconciliation and confirm the
+   deterministic App check plus the separately required Generic validation
+   check before removing the temporary bypass.
 
 Configure the verdict identity as follows:
 
@@ -431,20 +468,20 @@ Configure the verdict identity as follows:
    Set `PARITY_VERDICT_APP_PRIVATE_KEY` as an environment secret. Restrict
    deployment branches to the protected default branch only. Ordinary branches,
    `refs/pull/*`, and `gh-readonly-queue/*` refs must not receive this
-   environment. The direct merge-group bootstrap never receives App secrets;
-   only the default-branch `workflow_run` controller does.
+   environment. Candidate-selected `workflow_dispatch`, direct merge-group, and
+   notification jobs must not receive App secrets.
 3. In the default-branch ruleset, require the exact check name
    `fe2o3/protected-parity-promotion` and select the dedicated App as the
    expected source. Pin its immutable numeric App ID, not merely its display
    name. Do not select the general GitHub Actions App as the source.
 4. Also require `Generic validation` from the GitHub Actions source and add an
    organization ruleset `Require workflows to pass before merging` rule pinned
-   to this repository's `.github/workflows/ci.yml`. The protected controller
-   independently checks the configured CI workflow ID and exact merge-group
-   SHA/ref before accepting it as a source signal.
+   to this repository's protected `.github/workflows/ci.yml`. Generic CI is
+   intentionally independent from the parity App verdict.
 5. Enable both required checks for pull requests and merge queue. Keep
-   `.github/workflows/parity-promotion.yml`, the environment policy, and the
-   ruleset under administrator/CODEOWNER control.
+   `.github/workflows/parity-promotion.yml`, both protected controller scripts,
+   the environment policy, and the ruleset under administrator/CODEOWNER
+   control. Require native CODEOWNER approval and dismissal of stale approvals.
 
 The workflow verifies every create/update response against the configured App
 ID and App slug, check name, check ID, candidate SHA, status, and conclusion. A
@@ -453,6 +490,13 @@ different and cannot satisfy the source-pinned ruleset. The App private key is
 never stored in this repository. Trust-change PR checks still require protected
 review approvals bound to the exact PR head; merge-group checks repeat the
 immutable-path and monotonic trust-update validation after candidate admission.
+
+Loss or expiration of the dedicated App credential is fail-closed for
+availability: the controller cannot reset or complete the required App check,
+so admission must stop until the credential is restored and reconciliation is
+run. Native CODEOWNER/review protection must remain required independently; it
+prevents an old successful parity check from substituting for a dismissed
+approval during an App outage.
 
 ## Tests
 
