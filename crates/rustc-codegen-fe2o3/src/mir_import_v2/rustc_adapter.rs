@@ -2,6 +2,10 @@ use super::accounting::recompute_capture_accounting_v2;
 use super::budget::{BudgetErrorV2, CaptureBudgetV2};
 use super::normalized::*;
 use super::preflight::{PreflightErrorV2, preflight_body_v2};
+use super::type_preflight::{
+    TypePreflightErrorV2, preflight_generic_args_v2, preflight_mir_const_v2, preflight_ty_const_v2,
+    preflight_ty_v2,
+};
 use rustc_data_structures::fingerprint::Fingerprint;
 use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
 use rustc_hir::def_id::DefId;
@@ -10,8 +14,8 @@ use rustc_middle::mir::{
     SourceScope, StatementKind, TerminatorKind, UnwindAction,
 };
 use rustc_middle::ty::{
-    EarlyBinder, FloatTy, Instance, InstanceKind, IntTy, ReifyReason, Ty, TyCtxt, TyKind,
-    TypingEnv, UintTy,
+    EarlyBinder, FloatTy, GenericArgsRef, Instance, InstanceKind, IntTy, ReifyReason, Ty, TyCtxt,
+    TyKind, TypingEnv, UintTy,
 };
 use rustc_span::Span;
 use std::error::Error;
@@ -62,6 +66,8 @@ pub(crate) fn capture_instance_observation_v2<'tcx>(
     instance: Instance<'tcx>,
     limits: CaptureLimitsV2,
 ) -> Result<CapturedBodyV2, CaptureErrorV2> {
+    let mut budget = CaptureBudgetV2::new(limits);
+    preflight_instance_v2("selected instance", instance, limits, &mut budget)?;
     if matches!(
         instance.def,
         InstanceKind::Intrinsic(_) | InstanceKind::Virtual(..)
@@ -77,7 +83,7 @@ pub(crate) fn capture_instance_observation_v2<'tcx>(
         ));
     }
     let body = tcx.instance_mir(instance.def);
-    capture_body_v2(tcx, instance, body, limits)
+    capture_body_v2(tcx, instance, body, limits, budget)
 }
 
 fn capture_body_v2<'tcx>(
@@ -85,9 +91,9 @@ fn capture_body_v2<'tcx>(
     instance: Instance<'tcx>,
     body: &Body<'tcx>,
     limits: CaptureLimitsV2,
+    mut budget: CaptureBudgetV2,
 ) -> Result<CapturedBodyV2, CaptureErrorV2> {
     let total_work = preflight_body_v2(body, limits)?;
-    let mut budget = CaptureBudgetV2::new(limits);
     budget.charge_work("MIR preflight", total_work)?;
     let mut context = CaptureContextV2 {
         tcx,
@@ -121,11 +127,12 @@ fn capture_body_v2<'tcx>(
     for (block_index, block) in body.basic_blocks.iter_enumerated() {
         let mut statements = Vec::with_capacity(block.statements.len());
         for (index, statement) in block.statements.iter().enumerate() {
+            let kind = capture_statement(&mut context, &statement.kind, statement.source_info)?;
             statements.push(StatementV2 {
                 index,
                 source: source_span(&mut context, statement.source_info)?,
                 diagnostic_debug: context.budget.bounded_debug("statement", &statement.kind)?,
-                kind: capture_statement(&mut context, &statement.kind, statement.source_info)?,
+                kind,
             });
         }
         let terminator = block.terminator.as_ref().ok_or_else(|| {
@@ -143,6 +150,8 @@ fn capture_body_v2<'tcx>(
                 .successors()
                 .map(|successor| successor.as_usize()),
         );
+        let terminator_kind =
+            capture_terminator(&mut context, &terminator.kind, terminator.source_info)?;
         blocks.push(BasicBlockV2 {
             index: block_index.as_usize(),
             cleanup: block.is_cleanup,
@@ -152,7 +161,7 @@ fn capture_body_v2<'tcx>(
                 diagnostic_debug: context
                     .budget
                     .bounded_debug("terminator", &terminator.kind)?,
-                kind: capture_terminator(&mut context, &terminator.kind, terminator.source_info)?,
+                kind: terminator_kind,
                 successors,
             },
         });
@@ -269,6 +278,7 @@ fn capture_rvalue<'tcx>(
             source_info,
         )?)),
         Rvalue::Repeat(operand, count) => {
+            preflight_ty_const_v2("repeat count", *count, context.limits, &mut context.budget)?;
             let normalized = context
                 .instance
                 .try_instantiate_mir_and_normalize_erasing_regions(
@@ -277,6 +287,12 @@ fn capture_rvalue<'tcx>(
                     EarlyBinder::bind(*count),
                 )
                 .map_err(|_| CaptureErrorV2::normalization("repeat count"))?;
+            preflight_ty_const_v2(
+                "normalized repeat count",
+                normalized,
+                context.limits,
+                &mut context.budget,
+            )?;
             Ok(RvalueV2::Repeat {
                 operand: capture_operand(context, operand, source_info)?,
                 count: stable_compiler_value!(context, "repeat count", &normalized)?,
@@ -337,6 +353,7 @@ fn capture_aggregate_kind<'tcx>(
     context: &mut CaptureContextV2<'_, 'tcx>,
     kind: &AggregateKind<'tcx>,
 ) -> Result<AggregateKindV2, CaptureErrorV2> {
+    preflight_aggregate_kind(context, kind, "aggregate kind")?;
     let normalized = context
         .instance
         .try_instantiate_mir_and_normalize_erasing_regions(
@@ -345,6 +362,7 @@ fn capture_aggregate_kind<'tcx>(
             EarlyBinder::bind(kind.clone()),
         )
         .map_err(|_| CaptureErrorV2::normalization("aggregate kind"))?;
+    preflight_aggregate_kind(context, &normalized, "normalized aggregate kind")?;
     match normalized {
         AggregateKind::Array(element) => Ok(AggregateKindV2::Array {
             element: type_identity_normalized(context, element)?,
@@ -353,7 +371,7 @@ fn capture_aggregate_kind<'tcx>(
         AggregateKind::Adt(def_id, variant, args, user_type, active_field) => {
             Ok(AggregateKindV2::Adt {
                 definition: definition_identity(context, def_id)?,
-                generic_args_hash: stable_hash!(context.tcx, args),
+                generic_args_hash: generic_args_hash(context, "ADT aggregate arguments", args)?,
                 variant: variant.index(),
                 user_type_annotation: user_type.map(|index| index.index()),
                 active_field: active_field.map(|field| field.index()),
@@ -361,21 +379,85 @@ fn capture_aggregate_kind<'tcx>(
         }
         AggregateKind::Closure(def_id, args) => Ok(AggregateKindV2::Closure {
             definition: definition_identity(context, def_id)?,
-            generic_args_hash: stable_hash!(context.tcx, args),
+            generic_args_hash: generic_args_hash(context, "closure aggregate arguments", args)?,
         }),
         AggregateKind::CoroutineClosure(def_id, args) => Ok(AggregateKindV2::CoroutineClosure {
             definition: definition_identity(context, def_id)?,
-            generic_args_hash: stable_hash!(context.tcx, args),
+            generic_args_hash: generic_args_hash(
+                context,
+                "coroutine closure aggregate arguments",
+                args,
+            )?,
         }),
         AggregateKind::Coroutine(def_id, args) => Ok(AggregateKindV2::Coroutine {
             definition: definition_identity(context, def_id)?,
-            generic_args_hash: stable_hash!(context.tcx, args),
+            generic_args_hash: generic_args_hash(context, "coroutine aggregate arguments", args)?,
         }),
         AggregateKind::RawPtr(pointee, mutability) => Ok(AggregateKindV2::RawPointer {
             pointee: type_identity_normalized(context, pointee)?,
             mutable: matches!(mutability, rustc_ast::Mutability::Mut),
         }),
     }
+}
+
+fn preflight_aggregate_kind<'tcx>(
+    context: &mut CaptureContextV2<'_, 'tcx>,
+    kind: &AggregateKind<'tcx>,
+    label: &str,
+) -> Result<(), CaptureErrorV2> {
+    match kind {
+        AggregateKind::Array(ty) | AggregateKind::RawPtr(ty, _) => {
+            preflight_ty_v2(label, *ty, context.limits, &mut context.budget)?;
+        }
+        AggregateKind::Tuple => {}
+        AggregateKind::Adt(_, _, args, _, _)
+        | AggregateKind::Closure(_, args)
+        | AggregateKind::CoroutineClosure(_, args)
+        | AggregateKind::Coroutine(_, args) => {
+            preflight_generic_args_v2(label, args, context.limits, &mut context.budget)?;
+        }
+    }
+    Ok(())
+}
+
+fn generic_args_hash<'tcx>(
+    context: &mut CaptureContextV2<'_, 'tcx>,
+    label: &str,
+    args: GenericArgsRef<'tcx>,
+) -> Result<[u8; 16], CaptureErrorV2> {
+    preflight_generic_args_v2(label, args, context.limits, &mut context.budget)?;
+    Ok(stable_hash!(context.tcx, args))
+}
+
+fn preflight_instance_v2<'tcx>(
+    label: &str,
+    instance: Instance<'tcx>,
+    limits: CaptureLimitsV2,
+    budget: &mut CaptureBudgetV2,
+) -> Result<(), CaptureErrorV2> {
+    preflight_generic_args_v2(label, instance.args, limits, budget)?;
+    match instance.def {
+        InstanceKind::FnPtrShim(_, ty)
+        | InstanceKind::CloneShim(_, ty)
+        | InstanceKind::FnPtrAddrShim(_, ty)
+        | InstanceKind::AsyncDropGlueCtorShim(_, ty)
+        | InstanceKind::AsyncDropGlue(_, ty) => preflight_ty_v2(label, ty, limits, budget)?,
+        InstanceKind::FutureDropPollShim(_, proxy, implementation) => {
+            preflight_ty_v2(label, proxy, limits, budget)?;
+            preflight_ty_v2(label, implementation, limits, budget)?;
+        }
+        InstanceKind::DropGlue(_, Some(ty)) => preflight_ty_v2(label, ty, limits, budget)?,
+        InstanceKind::Item(_)
+        | InstanceKind::Intrinsic(_)
+        | InstanceKind::VTableShim(_)
+        | InstanceKind::ReifyShim(..)
+        | InstanceKind::Virtual(..)
+        | InstanceKind::ClosureOnceShim { .. }
+        | InstanceKind::ConstructCoroutineInClosureShim { .. }
+        | InstanceKind::ThreadLocalShim(_)
+        | InstanceKind::DropGlue(_, None) => {}
+    }
+    Ok(())
 }
 
 fn capture_operand<'tcx>(
@@ -387,6 +469,12 @@ fn capture_operand<'tcx>(
         Operand::Copy(place) => Ok(OperandV2::Copy(capture_place(context, *place)?)),
         Operand::Move(place) => Ok(OperandV2::Move(capture_place(context, *place)?)),
         Operand::Constant(constant) => {
+            preflight_mir_const_v2(
+                "constant",
+                constant.const_,
+                context.limits,
+                &mut context.budget,
+            )?;
             let normalized = context
                 .instance
                 .try_instantiate_mir_and_normalize_erasing_regions(
@@ -395,6 +483,12 @@ fn capture_operand<'tcx>(
                     EarlyBinder::bind(constant.const_),
                 )
                 .map_err(|_| CaptureErrorV2::normalization("constant"))?;
+            preflight_mir_const_v2(
+                "normalized constant",
+                normalized,
+                context.limits,
+                &mut context.budget,
+            )?;
             Ok(OperandV2::Constant {
                 ty: Box::new(type_identity_normalized(context, normalized.ty())?),
                 value: stable_compiler_value!(context, "constant", &normalized)?,
@@ -648,14 +742,27 @@ fn capture_callee_identity<'tcx>(
     context: &mut CaptureContextV2<'_, 'tcx>,
     operand: &Operand<'tcx>,
 ) -> Result<CalleeIdentityV2, CaptureErrorV2> {
+    let raw_callable_ty = operand.ty(context.body, context.tcx);
+    preflight_ty_v2(
+        "callable type",
+        raw_callable_ty,
+        context.limits,
+        &mut context.budget,
+    )?;
     let callable_ty = context
         .instance
         .try_instantiate_mir_and_normalize_erasing_regions(
             context.tcx,
             TypingEnv::fully_monomorphized(),
-            EarlyBinder::bind(operand.ty(context.body, context.tcx)),
+            EarlyBinder::bind(raw_callable_ty),
         )
         .map_err(|_| CaptureErrorV2::normalization("callable type"))?;
+    preflight_ty_v2(
+        "normalized callable type",
+        callable_ty,
+        context.limits,
+        &mut context.budget,
+    )?;
     if let TyKind::FnDef(def_id, args) = callable_ty.kind() {
         let resolved = require_direct_resolution(Instance::try_resolve(
             context.tcx,
@@ -678,7 +785,11 @@ fn capture_callee_identity<'tcx>(
         };
         return Ok(CalleeIdentityV2::Direct {
             declared,
-            declared_generic_args_hash: stable_hash!(context.tcx, args),
+            declared_generic_args_hash: generic_args_hash(
+                context,
+                "declared callee arguments",
+                args,
+            )?,
             resolved: Box::new(function_identity(context, resolved)?),
             intrinsic,
         });
@@ -709,6 +820,12 @@ fn function_identity<'tcx>(
     context: &mut CaptureContextV2<'_, 'tcx>,
     instance: Instance<'tcx>,
 ) -> Result<FunctionIdentityV2, CaptureErrorV2> {
+    preflight_instance_v2(
+        "function instance",
+        instance,
+        context.limits,
+        &mut context.budget,
+    )?;
     let definition = definition_identity(context, instance.def_id())?;
     let kind = match instance.def {
         InstanceKind::Item(_) => InstanceKindV2::Item,
@@ -763,7 +880,11 @@ fn function_identity<'tcx>(
         definition,
         instance: InstanceIdentityV2 {
             kind,
-            generic_args_hash: stable_hash!(context.tcx, instance.args),
+            generic_args_hash: generic_args_hash(
+                context,
+                "function instance arguments",
+                instance.args,
+            )?,
             generic_arg_count: instance.args.len(),
             instance_hash: stable_hash!(context.tcx, instance),
             diagnostic_generic_args: context
@@ -801,6 +922,12 @@ fn type_identity<'tcx>(
     context: &mut CaptureContextV2<'_, 'tcx>,
     ty: Ty<'tcx>,
 ) -> Result<TypeIdentityV2, CaptureErrorV2> {
+    preflight_ty_v2(
+        "type before normalization",
+        ty,
+        context.limits,
+        &mut context.budget,
+    )?;
     let normalized = context
         .instance
         .try_instantiate_mir_and_normalize_erasing_regions(
@@ -816,6 +943,7 @@ fn type_identity_normalized<'tcx>(
     context: &mut CaptureContextV2<'_, 'tcx>,
     ty: Ty<'tcx>,
 ) -> Result<TypeIdentityV2, CaptureErrorV2> {
+    preflight_ty_v2("normalized type", ty, context.limits, &mut context.budget)?;
     let class = match ty.kind() {
         TyKind::Bool => TypeClassV2::Bool,
         TyKind::Char => TypeClassV2::Char,
@@ -824,7 +952,7 @@ fn type_identity_normalized<'tcx>(
         TyKind::Float(width) => TypeClassV2::Float(float_width(*width)),
         TyKind::Adt(definition, args) => TypeClassV2::Adt {
             definition: definition_identity(context, definition.did())?,
-            generic_args_hash: stable_hash!(context.tcx, args),
+            generic_args_hash: generic_args_hash(context, "ADT type arguments", args)?,
         },
         TyKind::Foreign(def_id) => TypeClassV2::Foreign {
             definition: definition_identity(context, *def_id)?,
@@ -841,26 +969,34 @@ fn type_identity_normalized<'tcx>(
         },
         TyKind::FnDef(def_id, args) => TypeClassV2::FunctionDefinition {
             definition: definition_identity(context, *def_id)?,
-            generic_args_hash: stable_hash!(context.tcx, args),
+            generic_args_hash: generic_args_hash(context, "function type arguments", args)?,
         },
         TyKind::FnPtr(..) => TypeClassV2::FunctionPointer,
         TyKind::UnsafeBinder(_) => TypeClassV2::UnsafeBinder,
         TyKind::Dynamic(..) => TypeClassV2::Dynamic,
         TyKind::Closure(def_id, args) => TypeClassV2::Closure {
             definition: definition_identity(context, *def_id)?,
-            generic_args_hash: stable_hash!(context.tcx, args),
+            generic_args_hash: generic_args_hash(context, "closure type arguments", args)?,
         },
         TyKind::CoroutineClosure(def_id, args) => TypeClassV2::CoroutineClosure {
             definition: definition_identity(context, *def_id)?,
-            generic_args_hash: stable_hash!(context.tcx, args),
+            generic_args_hash: generic_args_hash(
+                context,
+                "coroutine closure type arguments",
+                args,
+            )?,
         },
         TyKind::Coroutine(def_id, args) => TypeClassV2::Coroutine {
             definition: definition_identity(context, *def_id)?,
-            generic_args_hash: stable_hash!(context.tcx, args),
+            generic_args_hash: generic_args_hash(context, "coroutine type arguments", args)?,
         },
         TyKind::CoroutineWitness(def_id, args) => TypeClassV2::CoroutineWitness {
             definition: definition_identity(context, *def_id)?,
-            generic_args_hash: stable_hash!(context.tcx, args),
+            generic_args_hash: generic_args_hash(
+                context,
+                "coroutine witness type arguments",
+                args,
+            )?,
         },
         TyKind::Never => TypeClassV2::Never,
         TyKind::Tuple(types) => TypeClassV2::Tuple { arity: types.len() },
@@ -945,6 +1081,14 @@ fn span_identity<'tcx>(
             .source_scopes
             .get(SourceScope::from_usize(source_scope))
     {
+        if let Some((instance, _)) = scope_data.inlined {
+            preflight_instance_v2(
+                "inlined source-scope instance",
+                instance,
+                context.limits,
+                &mut context.budget,
+            )?;
+        }
         (
             stable_hash!(context.tcx, scope_data),
             scope_data.parent_scope.map(|scope| scope.as_usize()),
@@ -1027,6 +1171,12 @@ impl From<BudgetErrorV2> for CaptureErrorV2 {
 
 impl From<PreflightErrorV2> for CaptureErrorV2 {
     fn from(error: PreflightErrorV2) -> Self {
+        Self::new(error.to_string())
+    }
+}
+
+impl From<TypePreflightErrorV2> for CaptureErrorV2 {
+    fn from(error: TypePreflightErrorV2) -> Self {
         Self::new(error.to_string())
     }
 }

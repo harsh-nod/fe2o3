@@ -18,6 +18,10 @@ pub(crate) struct CaptureLimitsV2 {
     pub max_text_bytes: usize,
     pub max_total_text_bytes: usize,
     pub max_total_work_items: usize,
+    pub max_type_depth: usize,
+    pub max_type_nodes: usize,
+    pub max_type_arity: usize,
+    pub max_generic_args: usize,
 }
 
 impl Default for CaptureLimitsV2 {
@@ -34,6 +38,10 @@ impl Default for CaptureLimitsV2 {
             max_text_bytes: 16_384,
             max_total_text_bytes: 16 * 1_048_576,
             max_total_work_items: 8 * 1_048_576,
+            max_type_depth: 64,
+            max_type_nodes: 16_384,
+            max_type_arity: 4_096,
+            max_generic_args: 1_024,
         }
     }
 }
@@ -794,6 +802,11 @@ fn validate_function_identity(
         "function.instance.instance_hash",
         &identity.instance.instance_hash,
     )?;
+    bounded(
+        "function.instance.generic_arg_count",
+        identity.instance.generic_arg_count,
+        limits.max_generic_args,
+    )?;
     validate_text(
         "function.instance.diagnostic_generic_args",
         &identity.instance.diagnostic_generic_args,
@@ -1005,7 +1018,10 @@ fn validate_type(
         | TypeClassV2::UnsafeBinder
         | TypeClassV2::Dynamic
         | TypeClassV2::Never
-        | TypeClassV2::Tuple { .. } => Ok(()),
+        | TypeClassV2::Tuple { arity: 0 } => Ok(()),
+        TypeClassV2::Tuple { arity } => {
+            bounded(format!("{path}.tuple_arity"), *arity, limits.max_type_arity)
+        }
     }
 }
 
