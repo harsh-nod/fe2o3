@@ -72,6 +72,8 @@ hardware_lane	mi300x-gfx942-test
 runtime_path	${RUNTIME}
 runtime_size	$(size "${RUNTIME}")
 runtime_sha256	$(sha256 "${RUNTIME}")
+runtime_version_sha256	3333333333333333333333333333333333333333333333333333333333333333
+runtime_info_sha256	4444444444444444444444444444444444444444444444444444444444444444
 oci_layout_path	${OCI_LAYOUT}
 oci_index_sha256	$(sha256 "${OCI_LAYOUT}/index.json")
 image_reference	example.invalid/fe2o3-evidence@sha256:${manifest_digest}
@@ -135,6 +137,24 @@ verify() {
     --require-detached
 }
 
+plan() {
+  "${EXECUTOR}" plan \
+    --repo "${SOURCE_REPO}" \
+    --request "${REQUEST}" \
+    --trusted-root "${TRUSTED_ROOT}" \
+    --policy policy.tsv \
+    --require-detached
+}
+
+preflight() {
+  "${EXECUTOR}" preflight \
+    --repo "${SOURCE_REPO}" \
+    --request "${REQUEST}" \
+    --trusted-root "${TRUSTED_ROOT}" \
+    --policy policy.tsv \
+    --require-detached
+}
+
 mkdir -p "${TRUSTED_ROOT}/profiles" "${TRUSTED_ROOT}/seccomp" \
   "${OCI_LAYOUT}/blobs/sha256" "${SOURCE_REPO}/scripts/evidence/jobs"
 printf '%s\n' '#!/usr/bin/env bash' 'set -Eeuo pipefail' 'printf ok > /evidence/result.txt' \
@@ -147,7 +167,8 @@ git -C "${SOURCE_REPO}" add scripts/evidence/jobs/row-04.sh
 git -C "${SOURCE_REPO}" commit -qm fixture
 git -C "${SOURCE_REPO}" checkout -q --detach HEAD
 
-printf '#!/usr/bin/env bash\nexit 0\n' >"${RUNTIME}"
+printf '#!/usr/bin/env bash\nprintf "fixture runtime access denied\\n" >&2\nexit 1\n' \
+  >"${RUNTIME}"
 chmod 755 "${RUNTIME}"
 printf '{"defaultAction":"SCMP_ACT_ERRNO","architectures":["SCMP_ARCH_X86_64"],"syscalls":[]}\n' \
   >"${SECCOMP}"
@@ -190,6 +211,27 @@ output="$(verify)"
 grep -F $'authorized_profile\tmi300x-test-v1' <<<"${output}" >/dev/null
 grep -F $'authorization_source\tprotected-policy' <<<"${output}" >/dev/null
 
+plan_output="$(plan)"
+plan_arguments="$({
+  while IFS=$'\t' read -r key _ encoded; do
+    if [[ "${key}" == argument ]]; then
+      printf '%s\n' "$(printf '%s' "${encoded}" | xxd -r -p)"
+    fi
+  done
+} <<<"${plan_output}")"
+grep -F -- $'--network\nnone' <<<"${plan_arguments}" >/dev/null
+grep -F -- $'--read-only\n--cap-drop\nALL' <<<"${plan_arguments}" >/dev/null
+grep -F -- $'--security-opt\nno-new-privileges=true' <<<"${plan_arguments}" >/dev/null
+grep -F -- $'--log-driver\nnone' <<<"${plan_arguments}" >/dev/null
+grep -F 'readonly,bind-recursive=readonly' <<<"${plan_arguments}" >/dev/null
+grep -F -- $'--device\n/dev/dri/renderD128:/dev/dri/renderD128:rwm' <<<"${plan_arguments}" >/dev/null
+grep -F -- $'--device\n/dev/kfd:/dev/kfd:rwm' <<<"${plan_arguments}" >/dev/null
+if grep -F -- '--privileged' <<<"${plan_arguments}" >/dev/null || \
+  grep -F -- '/var/run/docker.sock' <<<"${plan_arguments}" >/dev/null; then
+  printf 'OCI plan exposed privilege or runtime control socket\n' >&2
+  exit 1
+fi
+
 cp "${REQUEST}" "${TEST_ROOT}/request.good"
 printf 'execution_closure\tverified\n' >>"${REQUEST}"
 expect_failure candidate_verified 'unexpected trailing field' verify
@@ -231,5 +273,18 @@ ln -s "${TEST_ROOT}/profile.real" "${PROFILE}"
 expect_failure profile_symlink 'path contains a symlink' verify
 rm "${PROFILE}"
 mv "${TEST_ROOT}/profile.real" "${PROFILE}"
+
+ln -s "${REQUEST}" "${TEST_ROOT}/request.link"
+expect_failure request_symlink 'not a single-link regular file' \
+  "${EXECUTOR}" verify \
+    --repo "${SOURCE_REPO}" \
+    --request "${TEST_ROOT}/request.link" \
+    --trusted-root "${TRUSTED_ROOT}" \
+    --policy policy.tsv \
+    --require-detached
+
+# Runtime unavailability cannot cross the RuntimeReadyRequest boundary. This
+# command fails before host/image claims and cannot issue an execution receipt.
+expect_failure operator_unavailable 'OCI runtime control plane unavailable' preflight
 
 printf 'parity OCI executor authorization tests passed\n'

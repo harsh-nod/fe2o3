@@ -236,6 +236,8 @@ class Profile:
     runtime_path: str
     runtime_size: int
     runtime_digest: str
+    runtime_version_digest: str
+    runtime_info_digest: str
     layout_path: str
     index_digest: str
     image_reference: str
@@ -290,7 +292,11 @@ def parse_environment(cursor: Cursor) -> tuple[tuple[str, str], ...]:
     previous = ""
     for index in range(count):
         name, encoded = cursor.record("environment", 4, index)[2:]
-        if not ENV_NAME_RE.fullmatch(name) or name <= previous or not re.fullmatch(r"(?:[0-9a-f]{2})*", encoded):
+        if (
+            not ENV_NAME_RE.fullmatch(name)
+            or name <= previous
+            or not re.fullmatch(r"(?:[0-9a-f]{2})*", encoded)
+        ):
             fail("invalid or unsorted profile environment")
         try:
             value = bytes.fromhex(encoded).decode("ascii")
@@ -318,7 +324,9 @@ def load_profile(root: Path, policy: Policy, profile_id: str) -> Profile:
     if entry is None:
         fail("executor profile is not authorized by protected policy")
     path = protected_path(root, entry.relative_path, "OCI executor profile")
-    verify_regular(path, str(entry.size), entry.digest, "protected OCI executor profile")
+    verify_regular(
+        path, str(entry.size), entry.digest, "protected OCI executor profile"
+    )
     raw, rows = read_rows(path, "OCI executor profile")
     if sha256_bytes(raw) != entry.digest:
         fail("protected OCI executor profile digest mismatch")
@@ -332,6 +340,8 @@ def load_profile(root: Path, policy: Policy, profile_id: str) -> Profile:
     runtime_path = cursor.scalar("runtime_path")
     runtime_size = cursor.scalar("runtime_size")
     runtime_digest = cursor.scalar("runtime_sha256")
+    runtime_version_digest = cursor.scalar("runtime_version_sha256")
+    runtime_info_digest = cursor.scalar("runtime_info_sha256")
     layout_path = cursor.scalar("oci_layout_path")
     index_digest = cursor.scalar("oci_index_sha256")
     image_reference = cursor.scalar("image_reference")
@@ -347,7 +357,12 @@ def load_profile(root: Path, policy: Policy, profile_id: str) -> Profile:
         fail("executor profile target/lane mismatch")
     if not valid_absolute(runtime_path) or not valid_absolute(layout_path):
         fail("executor profile host paths must be canonical absolute paths")
-    if not runtime_size.isdigit() or not SHA256_RE.fullmatch(runtime_digest):
+    if (
+        not runtime_size.isdigit()
+        or not SHA256_RE.fullmatch(runtime_digest)
+        or not SHA256_RE.fullmatch(runtime_version_digest)
+        or not SHA256_RE.fullmatch(runtime_info_digest)
+    ):
         fail("malformed runtime binding")
     if not SHA256_RE.fullmatch(index_digest):
         fail("malformed OCI index binding")
@@ -378,7 +393,9 @@ def load_profile(root: Path, policy: Policy, profile_id: str) -> Profile:
     output_mount = cursor.scalar("output_mount")
     tmp_mount = cursor.scalar("tmp_mount")
     mounts = (source_mount, request_mount, output_mount, tmp_mount)
-    if any(not valid_absolute(item) for item in mounts) or len(set(mounts)) != len(mounts):
+    if any(not valid_absolute(item) for item in mounts) or len(set(mounts)) != len(
+        mounts
+    ):
         fail("invalid or duplicate executor mount")
     output_limit = parse_positive(cursor, "output_limit_bytes", 1, 16 * 1024**3)
     tmp_limit = parse_positive(cursor, "tmp_limit_bytes", 1, 16 * 1024**3)
@@ -400,7 +417,11 @@ def load_profile(root: Path, policy: Policy, profile_id: str) -> Profile:
     seccomp_path = cursor.scalar("seccomp_profile_path")
     seccomp_size = cursor.scalar("seccomp_profile_size")
     seccomp_digest = cursor.scalar("seccomp_profile_sha256")
-    if not valid_relative(seccomp_path) or not seccomp_size.isdigit() or not SHA256_RE.fullmatch(seccomp_digest):
+    if (
+        not valid_relative(seccomp_path)
+        or not seccomp_size.isdigit()
+        or not SHA256_RE.fullmatch(seccomp_digest)
+    ):
         fail("malformed seccomp profile binding")
     device_count = parse_count(cursor.scalar("device_count"), "device")
     devices: list[Device] = []
@@ -409,7 +430,8 @@ def load_profile(root: Path, policy: Policy, profile_id: str) -> Profile:
         device_path, major, minor, access = cursor.record("device", 6, index)[2:]
         if (
             device_path <= previous
-            or device_path not in ("/dev/kfd",) and RENDER_RE.fullmatch(device_path) is None
+            or device_path not in ("/dev/kfd",)
+            and RENDER_RE.fullmatch(device_path) is None
             or not major.isdigit()
             or not minor.isdigit()
             or access != "rwm"
@@ -417,7 +439,10 @@ def load_profile(root: Path, policy: Policy, profile_id: str) -> Profile:
             fail("invalid or unsorted device policy")
         devices.append(Device(device_path, int(major), int(minor), access))
         previous = device_path
-    if len(devices) != 2 or {item.path == "/dev/kfd" for item in devices} != {False, True}:
+    if len(devices) != 2 or {item.path == "/dev/kfd" for item in devices} != {
+        False,
+        True,
+    }:
         fail("executor must expose exactly /dev/kfd and one render node")
     machine_id_digest = cursor.scalar("host_machine_id_sha256")
     kernel_release = cursor.scalar("host_kernel_release")
@@ -447,6 +472,8 @@ def load_profile(root: Path, policy: Policy, profile_id: str) -> Profile:
         runtime_path,
         int(runtime_size),
         runtime_digest,
+        runtime_version_digest,
+        runtime_info_digest,
         layout_path,
         index_digest,
         image_reference,
@@ -493,7 +520,9 @@ def oci_blob(layout: Path, digest: str) -> Path:
 
 
 def read_json_bound(path: Path, binding: Layer, label: str) -> dict[str, object]:
-    verify_regular(path, str(binding.size), binding.digest.removeprefix("sha256:"), label)
+    verify_regular(
+        path, str(binding.size), binding.digest.removeprefix("sha256:"), label
+    )
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
@@ -508,7 +537,12 @@ def descriptor(value: object, label: str) -> Layer:
         fail(f"invalid OCI {label} descriptor")
     digest = value.get("digest")
     size = value.get("size")
-    if not isinstance(digest, str) or OCI_DIGEST_RE.fullmatch(digest) is None or not isinstance(size, int) or size < 0:
+    if (
+        not isinstance(digest, str)
+        or OCI_DIGEST_RE.fullmatch(digest) is None
+        or not isinstance(size, int)
+        or size < 0
+    ):
         fail(f"invalid OCI {label} descriptor")
     return Layer(digest, size)
 
@@ -537,23 +571,40 @@ def verify_oci_image(profile: Profile) -> tuple[str, ...]:
     selected = [descriptor(value, "manifest") for value in manifests]
     if selected.count(profile.manifest) != 1:
         fail("protected OCI manifest is absent or ambiguous")
-    manifest = read_json_bound(oci_blob(layout, profile.manifest.digest), profile.manifest, "OCI manifest")
+    manifest = read_json_bound(
+        oci_blob(layout, profile.manifest.digest), profile.manifest, "OCI manifest"
+    )
     if descriptor(manifest.get("config"), "config") != profile.config:
         fail("OCI config differs from protected profile")
     layer_values = manifest.get("layers")
-    if not isinstance(layer_values, list) or tuple(descriptor(value, "layer") for value in layer_values) != profile.layers:
+    if (
+        not isinstance(layer_values, list)
+        or tuple(descriptor(value, "layer") for value in layer_values) != profile.layers
+    ):
         fail("OCI layers differ from protected profile")
-    config = read_json_bound(oci_blob(layout, profile.config.digest), profile.config, "OCI config")
+    config = read_json_bound(
+        oci_blob(layout, profile.config.digest), profile.config, "OCI config"
+    )
     rootfs = config.get("rootfs")
     diff_ids = rootfs.get("diff_ids") if isinstance(rootfs, dict) else None
-    if rootfs is None or rootfs.get("type") != "layers" or not isinstance(diff_ids, list):
+    if (
+        rootfs is None
+        or rootfs.get("type") != "layers"
+        or not isinstance(diff_ids, list)
+    ):
         fail("OCI config lacks a layer rootfs")
-    if any(not isinstance(item, str) or OCI_DIGEST_RE.fullmatch(item) is None for item in diff_ids):
+    if any(
+        not isinstance(item, str) or OCI_DIGEST_RE.fullmatch(item) is None
+        for item in diff_ids
+    ):
         fail("OCI config has malformed rootfs diff IDs")
     if len(diff_ids) != len(profile.layers):
         fail("OCI config/layer count mismatch")
     if config.get("architecture") != "amd64" or config.get("os") != "linux":
         fail("OCI image platform must be linux/amd64")
+    image_config = config.get("config")
+    if not isinstance(image_config, dict) or image_config.get("Env") not in (None, []):
+        fail("OCI image must not supply inherited environment")
     for layer in profile.layers:
         verify_regular(
             oci_blob(layout, layer.digest),
@@ -573,6 +624,26 @@ class Request:
     job_id: str
     job_path: str
     job_digest: str
+
+
+@dataclass(frozen=True)
+class AuthorizedRequest:
+    """Inputs authorized by protected policy, before any runtime contact."""
+
+    policy: Policy
+    profile: Profile
+    request: Request
+    repo: Path
+    request_path: Path
+    seccomp_path: Path
+
+
+@dataclass(frozen=True)
+class RuntimeReadyRequest:
+    """Authorized inputs whose exact host, daemon, and image passed preflight."""
+
+    authorized: AuthorizedRequest
+    image_diff_ids: tuple[str, ...]
 
 
 def parse_request(path: Path) -> Request:
@@ -599,7 +670,9 @@ def parse_request(path: Path) -> Request:
         or not SHA256_RE.fullmatch(job_digest)
     ):
         fail("malformed OCI execution request")
-    return Request(request_id, profile_id, source_commit, source_tree, job_id, job_path, job_digest)
+    return Request(
+        request_id, profile_id, source_commit, source_tree, job_id, job_path, job_digest
+    )
 
 
 def run_git(repo: Path, *arguments: str) -> str:
@@ -650,14 +723,29 @@ def verify_source(repo: Path, request: Request, *, require_detached: bool) -> No
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
     )
-    if blob.returncode or sha256_bytes(blob.stdout) != request.job_digest or sha256_file(job) != request.job_digest:
+    if (
+        blob.returncode
+        or sha256_bytes(blob.stdout) != request.job_digest
+        or sha256_file(job) != request.job_digest
+    ):
         fail("source job differs from attested source tree")
 
 
-def authorize(args: argparse.Namespace) -> tuple[Policy, Profile, Request]:
+def authorize(args: argparse.Namespace) -> AuthorizedRequest:
     root = Path(args.trusted_root)
     policy = parse_policy(root, args.policy)
-    request = parse_request(Path(args.request))
+    request_path = Path(args.request)
+    try:
+        request_info = request_path.lstat()
+    except OSError:
+        fail("OCI execution request is missing")
+    if (
+        not stat.S_ISREG(request_info.st_mode)
+        or request_path.is_symlink()
+        or request_info.st_nlink != 1
+    ):
+        fail("OCI execution request is not a single-link regular file")
+    request = parse_request(request_path)
     profile = load_profile(root, policy, request.profile_id)
     verify_regular(
         Path(profile.runtime_path),
@@ -666,14 +754,246 @@ def authorize(args: argparse.Namespace) -> tuple[Policy, Profile, Request]:
         "OCI runtime",
     )
     seccomp = protected_path(root, profile.seccomp_path, "seccomp profile")
-    verify_regular(seccomp, str(profile.seccomp_size), profile.seccomp_digest, "protected seccomp profile")
+    verify_regular(
+        seccomp,
+        str(profile.seccomp_size),
+        profile.seccomp_digest,
+        "protected seccomp profile",
+    )
     verify_oci_image(profile)
-    verify_source(Path(args.repo), request, require_detached=args.require_detached)
-    return policy, profile, request
+    repo = Path(args.repo).resolve(strict=True)
+    verify_source(repo, request, require_detached=args.require_detached)
+    return AuthorizedRequest(
+        policy,
+        profile,
+        request,
+        repo,
+        request_path.resolve(strict=True),
+        seccomp.resolve(strict=True),
+    )
+
+
+RUNTIME_VERSION_FORMAT = (
+    "client={{.Client.Version}}/{{.Client.ApiVersion}}/{{.Client.GitCommit}}/"
+    "{{.Client.Os}}/{{.Client.Arch}} server={{.Server.Version}}/"
+    "{{.Server.ApiVersion}}/{{.Server.GitCommit}}/{{.Server.Os}}/{{.Server.Arch}}"
+)
+RUNTIME_INFO_FORMAT = (
+    "id={{.ID}} name={{.Name}} driver={{.Driver}} cgroup={{.CgroupDriver}}/"
+    "{{.CgroupVersion}} kernel={{.KernelVersion}} os={{.OperatingSystem}} "
+    "type={{.OSType}} arch={{.Architecture}} root={{.DockerRootDir}} "
+    "security={{json .SecurityOptions}} version={{.ServerVersion}}"
+)
+
+
+def runtime_output(profile: Profile, arguments: list[str], label: str) -> bytes:
+    process = subprocess.run(
+        [profile.runtime_path, *arguments],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env={"HOME": "/nonexistent", "LC_ALL": "C", "PATH": "/nonexistent"},
+    )
+    if process.returncode != 0:
+        detail = process.stderr.decode("ascii", errors="replace").strip()
+        if len(detail) > 240:
+            detail = detail[:240] + "..."
+        fail(f"OCI runtime control plane unavailable for {label}: {detail}")
+    if process.stderr or not process.stdout.endswith(b"\n"):
+        fail(f"OCI runtime returned non-canonical {label} identity")
+    return process.stdout
+
+
+def establish_runtime_ready(authorized: AuthorizedRequest) -> RuntimeReadyRequest:
+    profile = authorized.profile
+    version = runtime_output(
+        profile, ["version", "--format", RUNTIME_VERSION_FORMAT], "version"
+    )
+    info = runtime_output(profile, ["info", "--format", RUNTIME_INFO_FORMAT], "daemon")
+    if sha256_bytes(version) != profile.runtime_version_digest:
+        fail("OCI runtime version differs from protected profile")
+    if sha256_bytes(info) != profile.runtime_info_digest:
+        fail("OCI runtime daemon identity differs from protected profile")
+    machine_id = Path("/etc/machine-id")
+    kernel_notes = Path("/sys/kernel/notes")
+    driver = Path(profile.driver_path)
+    if sha256_file(machine_id) != profile.machine_id_digest:
+        fail("host machine identity differs from protected profile")
+    if os.uname().release != profile.kernel_release:
+        fail("host kernel release differs from protected profile")
+    if sha256_file(kernel_notes) != profile.kernel_notes_digest:
+        fail("host kernel build identity differs from protected profile")
+    verify_regular(
+        driver, str(driver.stat().st_size), profile.driver_digest, "AMDGPU module"
+    )
+    for device in profile.devices:
+        path = Path(device.path)
+        try:
+            info = path.lstat()
+        except OSError:
+            fail(f"required device is missing: {device.path}")
+        if (
+            path.is_symlink()
+            or not stat.S_ISCHR(info.st_mode)
+            or os.major(info.st_rdev) != device.major
+            or os.minor(info.st_rdev) != device.minor
+            or info.st_gid != profile.supplemental_gid
+        ):
+            fail(f"device identity differs from protected profile: {device.path}")
+    render = next(device for device in profile.devices if device.path != "/dev/kfd")
+    render_name = Path(render.path).name
+    uevent_path = Path("/sys/class/drm") / render_name / "device" / "uevent"
+    unique_id_path = Path("/sys/class/drm") / render_name / "device" / "unique_id"
+    try:
+        uevent = dict(
+            line.split("=", 1)
+            for line in uevent_path.read_text(encoding="ascii").splitlines()
+            if "=" in line
+        )
+        unique_id = unique_id_path.read_text(encoding="ascii").strip()
+    except (OSError, UnicodeDecodeError, ValueError):
+        fail("cannot establish exact GPU sysfs identity")
+    if (
+        uevent.get("DRIVER") != "amdgpu"
+        or uevent.get("PCI_SLOT_NAME", "").lower() != profile.gpu_pci_slot
+        or uevent.get("PCI_ID") != profile.gpu_pci_id
+        or unique_id != profile.gpu_unique_id
+    ):
+        fail("GPU identity differs from protected profile")
+    return RuntimeReadyRequest(authorized, verify_runtime_image(profile))
+
+
+def verify_runtime_image(profile: Profile) -> tuple[str, ...]:
+    diff_ids = verify_oci_image(profile)
+    raw = runtime_output(
+        profile,
+        ["image", "inspect", "--format", "{{json .}}", profile.image_reference],
+        "image",
+    )
+    try:
+        inspected = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        fail("OCI runtime returned invalid image identity")
+    if not isinstance(inspected, dict):
+        fail("OCI runtime returned invalid image object")
+    rootfs = inspected.get("RootFS")
+    config = inspected.get("Config")
+    if (
+        inspected.get("Id") != profile.config.digest
+        or profile.image_reference not in inspected.get("RepoDigests", [])
+        or inspected.get("Os") != "linux"
+        or inspected.get("Architecture") != "amd64"
+        or not isinstance(rootfs, dict)
+        or tuple(rootfs.get("Layers", [])) != diff_ids
+        or not isinstance(config, dict)
+        or config.get("Env") not in (None, [])
+    ):
+        fail("runtime image differs from protected OCI image")
+    return diff_ids
+
+
+def docker_create_arguments(
+    profile: Profile,
+    request: Request,
+    repo: Path,
+    request_path: Path,
+    seccomp_path: Path,
+) -> list[str]:
+    name = f"fe2o3-evidence-{request.request_id[:24]}"
+    arguments = [
+        profile.runtime_path,
+        "create",
+        "--name",
+        name,
+        "--hostname",
+        "fe2o3-evidence",
+        "--network",
+        "none",
+        "--read-only",
+        "--cap-drop",
+        "ALL",
+        "--security-opt",
+        "no-new-privileges=true",
+        "--security-opt",
+        f"seccomp={seccomp_path}",
+        "--ipc",
+        "private",
+        "--pid",
+        "private",
+        "--uts",
+        "private",
+        "--log-driver",
+        "none",
+        "--pids-limit",
+        str(profile.pids_limit),
+        "--memory",
+        str(profile.memory_limit),
+        "--cpus",
+        f"{profile.cpu_limit_milli / 1000:.3f}",
+        "--user",
+        f"{profile.uid}:{profile.gid}",
+        "--group-add",
+        str(profile.supplemental_gid),
+        "--workdir",
+        profile.source_mount,
+    ]
+    for name, value in profile.environment:
+        arguments.extend(("--env", f"{name}={value}"))
+    arguments.extend(
+        (
+            "--mount",
+            f"type=bind,src={repo},dst={profile.source_mount},readonly,bind-recursive=readonly",
+            "--mount",
+            f"type=bind,src={request_path},dst={profile.request_mount},readonly",
+            "--tmpfs",
+            f"{profile.output_mount}:rw,nosuid,nodev,size={profile.output_limit}",
+            "--tmpfs",
+            f"{profile.tmp_mount}:rw,nosuid,nodev,noexec,size={profile.tmp_limit}",
+        )
+    )
+    for device in profile.devices:
+        arguments.extend(("--device", f"{device.path}:{device.path}:{device.access}"))
+    arguments.extend(("--entrypoint", profile.entrypoint[0], profile.image_reference))
+    arguments.extend(profile.command)
+    return arguments
+
+
+def command_plan(args: argparse.Namespace) -> None:
+    authorized = authorize(args)
+    profile = authorized.profile
+    request = authorized.request
+    arguments = docker_create_arguments(
+        profile,
+        request,
+        authorized.repo,
+        authorized.request_path,
+        authorized.seccomp_path,
+    )
+    print("oci_execution_plan_schema_version\t1")
+    print("authorization_source\tprotected-policy")
+    print(f"profile_id\t{profile.profile_id}")
+    print(f"profile_sha256\t{profile.profile_digest}")
+    print(f"request_id\t{request.request_id}")
+    print(f"argument_count\t{len(arguments)}")
+    for index, argument in enumerate(arguments):
+        print(f"argument\t{index:04d}\t{argument.encode('ascii').hex()}")
+
+
+def command_preflight(args: argparse.Namespace) -> None:
+    ready = establish_runtime_ready(authorize(args))
+    profile = ready.authorized.profile
+    request = ready.authorized.request
+    print(f"authorized_profile\t{profile.profile_id}")
+    print(f"profile_sha256\t{profile.profile_digest}")
+    print(f"request_id\t{request.request_id}")
+    print("runtime_preflight\tpassed")
+    print("execution_receipt\tnot-issued")
 
 
 def command_verify(args: argparse.Namespace) -> None:
-    _, profile, request = authorize(args)
+    authorized = authorize(args)
+    profile = authorized.profile
+    request = authorized.request
     print(f"authorized_profile\t{profile.profile_id}")
     print(f"profile_sha256\t{profile.profile_digest}")
     print(f"request_id\t{request.request_id}")
@@ -684,13 +1004,37 @@ def command_verify(args: argparse.Namespace) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
-    verify = subparsers.add_parser("verify", help="verify protected authorization and immutable inputs")
+    verify = subparsers.add_parser(
+        "verify", help="verify protected authorization and immutable inputs"
+    )
     verify.add_argument("--repo", required=True)
     verify.add_argument("--request", required=True)
     verify.add_argument("--trusted-root", required=True)
-    verify.add_argument("--policy", required=True, help="path relative to protected root")
+    verify.add_argument(
+        "--policy", required=True, help="path relative to protected root"
+    )
     verify.add_argument("--require-detached", action="store_true")
     verify.set_defaults(func=command_verify)
+    plan = subparsers.add_parser(
+        "plan", help="render the fixed protected OCI invocation"
+    )
+    plan.add_argument("--repo", required=True)
+    plan.add_argument("--request", required=True)
+    plan.add_argument("--trusted-root", required=True)
+    plan.add_argument("--policy", required=True, help="path relative to protected root")
+    plan.add_argument("--require-detached", action="store_true")
+    plan.set_defaults(func=command_plan)
+    preflight = subparsers.add_parser(
+        "preflight", help="validate host, runtime daemon, and loaded image identity"
+    )
+    preflight.add_argument("--repo", required=True)
+    preflight.add_argument("--request", required=True)
+    preflight.add_argument("--trusted-root", required=True)
+    preflight.add_argument(
+        "--policy", required=True, help="path relative to protected root"
+    )
+    preflight.add_argument("--require-detached", action="store_true")
+    preflight.set_defaults(func=command_preflight)
     return parser
 
 
