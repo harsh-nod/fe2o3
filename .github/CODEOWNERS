@@ -10,6 +10,11 @@
 /scripts/parity-check-reconcile.sh @powderluv
 /scripts/parity-protected-controller.sh @powderluv
 /scripts/parity-signed-evidence.py @powderluv
+/scripts/parity-oci-executor.py @powderluv
+/scripts/tests/parity-oci-executor.sh @powderluv
+/docs/parity-oci-executor-v1.md @powderluv
+/docs/parity-evidence/oci-executor-policy-v1.tsv @powderluv
+/docs/parity-evidence/executor-profiles/ @powderluv
 /scripts/parity-protected-change-policy.sh @powderluv
 /scripts/tests/hosted-parity-ci.sh @powderluv
 /scripts/tests/parity-dashboard.sh @powderluv

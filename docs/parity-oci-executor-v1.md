@@ -231,8 +231,8 @@ implemented and tested on a provisioned runner. The reviewed schema should:
 5. Continue rejecting shell queues, unknown profiles, test-domain profiles,
    preflight-only records, and every older schema for promotable hardware.
 
-Until then, central parser wiring intentionally waits. Run the independent
-generic tests with:
+Until then, central parser wiring intentionally waits. The generic
+`parity-evidence` lane runs the executor tests through:
 
 ```sh
 scripts/tests/parity-oci-executor.sh
