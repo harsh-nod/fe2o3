@@ -34,7 +34,8 @@ impl<T: ?Sized + RustcAuthenticCaptureV2> AmbiguousIfAuthenticCaptureV2<u8> for 
 
 const FIXTURE_SOURCE: &str = r#"
 #![feature(core_intrinsics)]
-#![allow(dead_code, internal_features)]
+#![feature(explicit_tail_calls)]
+#![allow(dead_code, incomplete_features, internal_features)]
 
 enum Choice {
     First(u32),
@@ -87,6 +88,16 @@ fn observed_c_call(value: u32) -> u32 {
 }
 
 #[inline(never)]
+fn tail_identity(value: u32) -> u32 {
+    value
+}
+
+#[inline(never)]
+fn observed_tail_call(value: u32) -> u32 {
+    become tail_identity(value)
+}
+
+#[inline(never)]
 fn observed_inline_assembly() {
     unsafe { core::arch::asm!("", options(nomem, nostack)) }
 }
@@ -100,6 +111,7 @@ struct DriverResults {
     intrinsic: CapturedBodyV2,
     function_pointer: CapturedBodyV2,
     c_call: CapturedBodyV2,
+    tail_call: CapturedBodyV2,
     bounded_error: String,
     work_bound_error: String,
     scope_work_bound_error: String,
@@ -122,6 +134,7 @@ impl Callbacks for CaptureCallbacks {
         let function_pointer_instance =
             Instance::mono(tcx, local_function(tcx, "observed_function_pointer"));
         let c_call_instance = Instance::mono(tcx, local_function(tcx, "observed_c_call"));
+        let tail_call_instance = Instance::mono(tcx, local_function(tcx, "observed_tail_call"));
         let inline_assembly_instance =
             Instance::mono(tcx, local_function(tcx, "observed_inline_assembly"));
         let invoke_instance = resolved_direct_calls(tcx, observed_instance)
@@ -172,6 +185,7 @@ impl Callbacks for CaptureCallbacks {
             intrinsic: capture_data(tcx, intrinsic_instance, limits),
             function_pointer: capture_data(tcx, function_pointer_instance, limits),
             c_call: capture_data(tcx, c_call_instance, limits),
+            tail_call: capture_data(tcx, tail_call_instance, limits),
             bounded_error: capture_instance_body_v2(
                 tcx,
                 observed_instance,
@@ -1403,6 +1417,70 @@ fn normalized_validation_binds_ordered_call_arguments_destination_and_control_fl
         error.contains("target presence") || error.contains("normal target"),
         "{error}"
     );
+}
+
+#[test]
+fn compiler_capture_binds_tail_call_to_the_caller_contract() {
+    let original = compiler_results().tail_call;
+    original
+        .validate_untrusted_shape(CaptureLimitsV2::default())
+        .unwrap();
+    assert!(
+        original
+            .blocks
+            .iter()
+            .any(|block| matches!(block.terminator.kind, TerminatorKindV2::TailCall { .. }))
+    );
+    assert!(original.caller_signature.is_some());
+
+    let mut missing_caller = original.clone();
+    missing_caller.caller_signature = None;
+    refresh_capture_accounting(&mut missing_caller);
+    let error = missing_caller
+        .validate_untrusted_shape(CaptureLimitsV2::default())
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("compiler-captured caller signature"),
+        "{error}"
+    );
+
+    let mut changed_safety = original.clone();
+    let signature = changed_safety.caller_signature.as_mut().unwrap();
+    signature.safety = match signature.safety {
+        FunctionSafetyV2::Safe => FunctionSafetyV2::Unsafe,
+        FunctionSafetyV2::Unsafe => FunctionSafetyV2::Safe,
+    };
+    signature.binding_hash = function_signature_binding_hash_v2(signature).unwrap();
+    refresh_capture_accounting(&mut changed_safety);
+    let error = changed_safety
+        .validate_untrusted_shape(CaptureLimitsV2::default())
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("differs from the caller"), "{error}");
+
+    let mut changed_unwind = original.clone();
+    let signature = changed_unwind.caller_signature.as_mut().unwrap();
+    signature.abi.canonical_name = "C".to_owned();
+    signature.abi.unwind_allowed = false;
+    signature.binding_hash = function_signature_binding_hash_v2(signature).unwrap();
+    refresh_capture_accounting(&mut changed_unwind);
+    let error = changed_unwind
+        .validate_untrusted_shape(CaptureLimitsV2::default())
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("differs from the caller"), "{error}");
+
+    let mut changed_output = original;
+    let signature = changed_output.caller_signature.as_mut().unwrap();
+    signature.output.stable_hash[0] ^= 1;
+    signature.binding_hash = function_signature_binding_hash_v2(signature).unwrap();
+    refresh_capture_accounting(&mut changed_output);
+    let error = changed_output
+        .validate_untrusted_shape(CaptureLimitsV2::default())
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("differs from the caller"), "{error}");
 }
 
 #[test]
