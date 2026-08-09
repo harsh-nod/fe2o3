@@ -1817,7 +1817,7 @@ impl<'a> Verifier<'a> {
             MirRvalue::Cast { kind, operand, ty } => {
                 self.require_type(&format!("{path}.ty"), *ty)?;
                 let source = self.verify_operand(&format!("{path}.operand"), operand, available)?;
-                if !valid_cast(*kind, &self.type_at(source).kind, &self.type_at(*ty).kind) {
+                if !valid_cast(*kind, self.type_at(source), self.type_at(*ty)) {
                     return Err(error(
                         path,
                         "cast kind does not match source and destination types",
@@ -1836,6 +1836,7 @@ impl<'a> Verifier<'a> {
                 if *mutability == MirMutability::Mutable && !writable {
                     return Err(error(path, "mutable reference requires a writable place"));
                 }
+                self.verify_reference_origin(&format!("{path}.place"), place)?;
                 self.verify_reference_type(path, *ty, place.ty, *mutability, address_space, false)?;
                 Ok(*ty)
             }
@@ -2651,6 +2652,38 @@ impl<'a> Verifier<'a> {
         }
     }
 
+    fn verify_reference_origin(
+        &self,
+        path: &str,
+        place: &MirPlace,
+    ) -> Result<(), MirExecutableValidationError> {
+        let local = self.local(place.local);
+        let mut current = ProjectionState {
+            ty: ProjectionType::Type(self.type_at(local.ty)),
+            writable: local.mutable,
+            address_space: local.storage_address_space,
+        };
+        for (index, projection) in place.projection.iter().enumerate() {
+            let projection_path = format!("{path}.projection[{index}]");
+            if matches!(projection, MirProjection::Deref)
+                && matches!(
+                    &current.ty,
+                    ProjectionType::Type(MirSemanticType {
+                        kind: MirTypeKind::RawPointer { .. },
+                        ..
+                    })
+                )
+            {
+                return Err(error(
+                    projection_path,
+                    "reference creation through a raw pointer requires external provenance authority",
+                ));
+            }
+            current = self.project(&projection_path, current, projection)?;
+        }
+        Ok(())
+    }
+
     fn find_scalar_type(
         &self,
         path: &str,
@@ -2925,16 +2958,42 @@ fn push_unwind<'a>(edges: &mut Vec<&'a MirEdge>, unwind: &'a MirUnwindAction) {
     }
 }
 
-fn valid_cast(kind: MirCastKind, source: &MirTypeKind, destination: &MirTypeKind) -> bool {
+fn valid_cast(kind: MirCastKind, source: &MirSemanticType, destination: &MirSemanticType) -> bool {
     match kind {
-        MirCastKind::IntToInt => is_integer(source) && is_integer(destination),
-        MirCastKind::IntToFloat => is_integer(source) && is_float(destination),
-        MirCastKind::FloatToInt => is_float(source) && is_integer(destination),
-        MirCastKind::FloatToFloat => is_float(source) && is_float(destination),
-        MirCastKind::PointerToPointer => is_pointer(source) && is_pointer(destination),
-        MirCastKind::PointerToInt => is_pointer(source) && is_integer(destination),
-        MirCastKind::IntToPointer => is_integer(source) && is_pointer(destination),
+        MirCastKind::IntToInt => is_integer(&source.kind) && is_integer(&destination.kind),
+        MirCastKind::IntToFloat => is_integer(&source.kind) && is_float(&destination.kind),
+        MirCastKind::FloatToInt => is_float(&source.kind) && is_integer(&destination.kind),
+        MirCastKind::FloatToFloat => is_float(&source.kind) && is_float(&destination.kind),
+        MirCastKind::PointerToPointer => raw_pointer_cast_is_valid(source, destination),
+        MirCastKind::PointerToInt => is_pointer(&source.kind) && is_integer(&destination.kind),
+        MirCastKind::IntToPointer => {
+            is_integer(&source.kind) && matches!(destination.kind, MirTypeKind::RawPointer { .. })
+        }
     }
+}
+
+fn raw_pointer_cast_is_valid(source: &MirSemanticType, destination: &MirSemanticType) -> bool {
+    let (
+        MirTypeKind::RawPointer {
+            mutability: source_mutability,
+            address_space: source_address_space,
+            ..
+        },
+        MirTypeKind::RawPointer {
+            mutability: destination_mutability,
+            address_space: destination_address_space,
+            ..
+        },
+    ) = (&source.kind, &destination.kind)
+    else {
+        return false;
+    };
+    source.layout == destination.layout
+        && source_address_space == destination_address_space
+        && !matches!(
+            (source_mutability, destination_mutability),
+            (MirMutability::Immutable, MirMutability::Mutable)
+        )
 }
 
 fn valid_binary_op(operation: MirBinaryOp, kind: &MirTypeKind) -> bool {
