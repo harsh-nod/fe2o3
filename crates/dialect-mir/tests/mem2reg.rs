@@ -1,9 +1,9 @@
 use dialect_mir::{
-    MirBasicBlock, MirBinaryOp, MirBlockId, MirBody, MirBodyForm, MirConstant, MirConstantValue,
-    MirEdge, MirExecutableModule, MirExecutableVersion, MirFunction, MirLayout, MirLocalDecl,
-    MirLocalId, MirLocalKind, MirOperand, MirPlace, MirRvalue, MirScalarType, MirSemanticType,
-    MirStatement, MirStatementKind, MirTerminator, MirTerminatorKind, MirTypeId, MirTypeKind,
-    MirValueId, promote_module_to_ssa,
+    MirBasicBlock, MirBinaryOp, MirBlockId, MirBody, MirBodyForm, MirCall, MirCallee, MirConstant,
+    MirConstantValue, MirEdge, MirExecutableModule, MirExecutableVersion, MirFunction, MirLayout,
+    MirLocalDecl, MirLocalId, MirLocalKind, MirOperand, MirPlace, MirRvalue, MirScalarType,
+    MirSemanticType, MirStatement, MirStatementKind, MirTerminator, MirTerminatorKind, MirTypeId,
+    MirTypeKind, MirUnwindAction, MirValueId, promote_module_to_ssa,
 };
 
 #[derive(Clone, Copy)]
@@ -268,4 +268,33 @@ fn rejects_repromotion_and_invalid_input_without_partial_output() {
         terminator(MirTerminatorKind::Goto(MirEdge::new(MirBlockId(99))));
     let error = promote_module_to_ssa(&invalid).unwrap_err();
     assert!(error.reason().contains("does not exist"));
+}
+
+#[test]
+fn leaves_call_defined_locals_as_slots() {
+    let mut input = loop_module();
+    input.functions[0].body.blocks[0].statements.remove(0);
+    let ids = Types {
+        bool_ty: input.functions[0].body.locals[4].ty,
+        u32_ty: input.functions[0].body.locals[2].ty,
+    };
+    input.functions[0].body.blocks[0].terminator = terminator(MirTerminatorKind::Call(MirCall {
+        callee: MirCallee::Direct("fixture::next".into()),
+        arguments: vec![],
+        destination: Some(place(2, ids.u32_ty)),
+        target: Some(MirEdge::new(MirBlockId(1))),
+        unwind: MirUnwindAction::Unreachable,
+    }));
+    input.validate().unwrap();
+
+    let (output, report) = promote_module_to_ssa(&input).unwrap();
+    assert_eq!(
+        report.functions[0].promoted_locals,
+        vec![MirLocalId(1), MirLocalId(3)]
+    );
+    let MirTerminatorKind::Call(call) = &output.functions[0].body.blocks[0].terminator.kind else {
+        unreachable!();
+    };
+    assert_eq!(call.destination.as_ref().unwrap().local, MirLocalId(2));
+    assert_eq!(call.target.as_ref().unwrap().arguments.len(), 2);
 }

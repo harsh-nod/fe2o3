@@ -21,6 +21,7 @@ pub const MAX_EXECUTABLE_IDENTITY_BYTES: usize = 4_096;
 pub const MAX_EXECUTABLE_SOURCE_FILE_BYTES: usize = 4_096;
 pub const MAX_EXECUTABLE_TYPE_DEPTH: usize = 64;
 pub const MAX_EXECUTABLE_TYPE_NODES: usize = 65_536;
+pub const MAX_EXECUTABLE_TYPE_ITEMS: usize = 65_536;
 pub const MAX_EXECUTABLE_FIELDS: usize = 4_096;
 pub const MAX_EXECUTABLE_VARIANTS: usize = 1_024;
 
@@ -947,23 +948,36 @@ impl<'a> Verifier<'a> {
     ) -> Result<MirTypeId, MirExecutableValidationError> {
         match rvalue {
             MirRvalue::Use(operand) => self.verify_operand(path, operand, available),
-            MirRvalue::BinaryOp { op, lhs, rhs } | MirRvalue::CheckedBinaryOp { op, lhs, rhs } => {
+            MirRvalue::BinaryOp { op, lhs, rhs } => {
                 let lhs_ty = self.verify_operand(&format!("{path}.lhs"), lhs, available)?;
                 let rhs_ty = self.verify_operand(&format!("{path}.rhs"), rhs, available)?;
                 self.require_same_type(path, lhs_ty, rhs_ty)?;
-                if !is_numeric(&self.type_at(lhs_ty).kind) {
-                    return Err(error(path, "binary operands must be numeric scalars"));
+                if !valid_binary_op(*op, &self.type_at(lhs_ty).kind) {
+                    return Err(error(
+                        path,
+                        "binary operation is invalid for its operand type",
+                    ));
                 }
                 if op.is_comparison() {
                     self.bool_type(path)
-                } else if matches!(rvalue, MirRvalue::CheckedBinaryOp { .. }) {
-                    Err(error(
-                        path,
-                        "checked binary operations require a tuple result and are reserved in V1",
-                    ))
                 } else {
                     Ok(lhs_ty)
                 }
+            }
+            MirRvalue::CheckedBinaryOp { op, lhs, rhs } => {
+                let lhs_ty = self.verify_operand(&format!("{path}.lhs"), lhs, available)?;
+                let rhs_ty = self.verify_operand(&format!("{path}.rhs"), rhs, available)?;
+                self.require_same_type(path, lhs_ty, rhs_ty)?;
+                if !matches!(op, MirBinaryOp::Add | MirBinaryOp::Sub | MirBinaryOp::Mul)
+                    || !is_machine_integer(&self.type_at(lhs_ty).kind)
+                {
+                    return Err(error(
+                        path,
+                        "checked V1 operations are limited to integer add, sub, and mul",
+                    ));
+                }
+                let bool_ty = self.bool_type(path)?;
+                self.find_aggregate_type(path, &MirAggregateKind::Tuple, &[lhs_ty, bool_ty])
             }
             MirRvalue::UnaryOp { op, operand } => {
                 let ty = self.verify_operand(&format!("{path}.operand"), operand, available)?;
@@ -1017,6 +1031,9 @@ impl<'a> Verifier<'a> {
                 self.find_scalar_type(path, enum_ty.discriminant)
             }
             MirRvalue::Aggregate { kind, operands } => {
+                if let MirAggregateKind::Adt { identity, .. } = kind {
+                    validate_identity(&format!("{path}.identity"), identity)?;
+                }
                 bounded_len(
                     &format!("{path}.operands"),
                     operands.len(),
@@ -1088,7 +1105,7 @@ impl<'a> Verifier<'a> {
                 MirTypeKind::Scalar(MirScalarType::Int { bits: width, .. }),
             ) => *width == 128 || *bits < (1_u128 << *width),
             (MirConstantValue::Integer(bits), MirTypeKind::Scalar(MirScalarType::Char)) => {
-                *bits <= u128::from(char::MAX as u32)
+                *bits <= u128::from(char::MAX as u32) && !(0xd800..=0xdfff).contains(bits)
             }
             (
                 MirConstantValue::FloatBits(bits),
@@ -1576,8 +1593,32 @@ fn valid_cast(kind: MirCastKind, source: &MirTypeKind, destination: &MirTypeKind
     }
 }
 
-fn is_numeric(kind: &MirTypeKind) -> bool {
-    is_integer(kind) || is_float(kind)
+fn valid_binary_op(operation: MirBinaryOp, kind: &MirTypeKind) -> bool {
+    match operation {
+        MirBinaryOp::Add
+        | MirBinaryOp::Sub
+        | MirBinaryOp::Mul
+        | MirBinaryOp::Div
+        | MirBinaryOp::Rem => is_arithmetic_numeric(kind),
+        MirBinaryOp::BitXor | MirBinaryOp::BitAnd | MirBinaryOp::BitOr => {
+            is_machine_integer(kind) || matches!(kind, MirTypeKind::Scalar(MirScalarType::Bool))
+        }
+        MirBinaryOp::Shl | MirBinaryOp::Shr => is_machine_integer(kind),
+        MirBinaryOp::Eq
+        | MirBinaryOp::Ne
+        | MirBinaryOp::Lt
+        | MirBinaryOp::Le
+        | MirBinaryOp::Gt
+        | MirBinaryOp::Ge => matches!(kind, MirTypeKind::Scalar(_)),
+    }
+}
+
+fn is_arithmetic_numeric(kind: &MirTypeKind) -> bool {
+    is_machine_integer(kind) || is_float(kind)
+}
+
+fn is_machine_integer(kind: &MirTypeKind) -> bool {
+    matches!(kind, MirTypeKind::Scalar(MirScalarType::Int { .. }))
 }
 
 fn is_integer_or_bool(kind: &MirTypeKind) -> bool {
@@ -1710,6 +1751,7 @@ fn validate_type_budget(types: &[MirSemanticType]) -> Result<(), MirExecutableVa
         .map(|(index, ty)| (format!("module.types[{index}]"), ty, 1_usize))
         .collect::<Vec<_>>();
     let mut nodes = 0_usize;
+    let mut items = types.len();
     while let Some((path, ty, depth)) = stack.pop() {
         nodes = nodes
             .checked_add(1)
@@ -1737,11 +1779,11 @@ fn validate_type_budget(types: &[MirSemanticType]) -> Result<(), MirExecutableVa
                 stack.push((format!("{path}.element"), element, depth + 1));
             }
             MirTypeKind::Tuple(aggregate) => {
-                push_aggregate_types(&path, aggregate, depth, &mut stack)?;
+                push_aggregate_types(&path, aggregate, depth, &mut stack, &mut items)?;
             }
             MirTypeKind::Struct(structure) => {
                 validate_identity(&format!("{path}.identity"), &structure.identity)?;
-                push_aggregate_types(&path, &structure.aggregate, depth, &mut stack)?;
+                push_aggregate_types(&path, &structure.aggregate, depth, &mut stack, &mut items)?;
             }
             MirTypeKind::Enum(enum_ty) => {
                 validate_identity(&format!("{path}.identity"), &enum_ty.identity)?;
@@ -1751,6 +1793,7 @@ fn validate_type_budget(types: &[MirSemanticType]) -> Result<(), MirExecutableVa
                     0,
                     MAX_EXECUTABLE_VARIANTS,
                 )?;
+                add_type_items(&path, &mut items, enum_ty.variants.len())?;
                 for (variant_index, variant) in enum_ty.variants.iter().enumerate() {
                     validate_name(
                         &format!("{path}.variants[{variant_index}].name"),
@@ -1761,6 +1804,7 @@ fn validate_type_budget(types: &[MirSemanticType]) -> Result<(), MirExecutableVa
                         &variant.aggregate,
                         depth,
                         &mut stack,
+                        &mut items,
                     )?;
                 }
             }
@@ -1775,6 +1819,7 @@ fn push_aggregate_types<'a>(
     aggregate: &'a crate::MirAggregateLayout,
     depth: usize,
     stack: &mut Vec<(String, &'a MirSemanticType, usize)>,
+    items: &mut usize,
 ) -> Result<(), MirExecutableValidationError> {
     bounded_len(
         &format!("{path}.fields"),
@@ -1782,6 +1827,8 @@ fn push_aggregate_types<'a>(
         0,
         MAX_EXECUTABLE_FIELDS,
     )?;
+    add_type_items(path, items, aggregate.fields.len())?;
+    add_type_items(path, items, aggregate.padding.len())?;
     bounded_len(
         &format!("{path}.padding"),
         aggregate.padding.len(),
@@ -1797,6 +1844,23 @@ fn push_aggregate_types<'a>(
             format!("{path}.fields[{field_index}].type"),
             &field.ty,
             depth + 1,
+        ));
+    }
+    Ok(())
+}
+
+fn add_type_items(
+    path: &str,
+    items: &mut usize,
+    additional: usize,
+) -> Result<(), MirExecutableValidationError> {
+    *items = items
+        .checked_add(additional)
+        .ok_or_else(|| error(path, "semantic type item count overflow"))?;
+    if *items > MAX_EXECUTABLE_TYPE_ITEMS {
+        return Err(error(
+            path,
+            format!("semantic type graph exceeds {MAX_EXECUTABLE_TYPE_ITEMS} structural items"),
         ));
     }
     Ok(())
