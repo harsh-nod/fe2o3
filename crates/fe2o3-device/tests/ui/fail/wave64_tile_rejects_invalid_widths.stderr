@@ -1,0 +1,110 @@
+error[E0277]: the trait bound `Wave64TileWidth<0>: ValidWave64TileWidth` is not satisfied
+ --> tests/ui/fail/wave64_tile_rejects_invalid_widths.rs:4:13
+  |
+4 |     let _ = SubgroupTile::<0>::from_wave64_snapshot(&lane);
+  |             ^^^^^^^^^^^^^^^^^ the trait `ValidWave64TileWidth` is not implemented for `Wave64TileWidth<0>`
+  |
+  = help: the following other types implement trait `ValidWave64TileWidth`:
+            Wave64TileWidth<16>
+            Wave64TileWidth<1>
+            Wave64TileWidth<2>
+            Wave64TileWidth<32>
+            Wave64TileWidth<4>
+            Wave64TileWidth<64>
+            Wave64TileWidth<8>
+note: required by a bound in `SubgroupTile`
+ --> src/group.rs
+  |
+  | pub struct SubgroupTile<'wave, const N: u32>
+  |            ------------ required by a bound in this struct
+  | where
+  |     Wave64TileWidth<N>: ValidWave64TileWidth,
+  |                         ^^^^^^^^^^^^^^^^^^^^ required by this bound in `SubgroupTile`
+
+error[E0599]: the associated function or constant `from_wave64_snapshot` exists for struct `SubgroupTile<'_, 0>`, but its trait bounds were not satisfied
+ --> tests/ui/fail/wave64_tile_rejects_invalid_widths.rs:4:32
+  |
+4 |     let _ = SubgroupTile::<0>::from_wave64_snapshot(&lane);
+  |                                ^^^^^^^^^^^^^^^^^^^^ associated function or constant cannot be called on `SubgroupTile<'_, 0>` due to unsatisfied trait bounds
+  |
+ ::: src/group.rs
+  |
+  | pub struct Wave64TileWidth<const N: u32>;
+  | ---------------------------------------- doesn't satisfy `Wave64TileWidth<0>: ValidWave64TileWidth`
+  |
+  = note: the following trait bounds were not satisfied:
+          `Wave64TileWidth<0>: ValidWave64TileWidth`
+
+error[E0277]: the trait bound `Wave64TileWidth<3>: ValidWave64TileWidth` is not satisfied
+ --> tests/ui/fail/wave64_tile_rejects_invalid_widths.rs:8:13
+  |
+8 |     let _ = SubgroupTile::<3>::from_wave64_snapshot(&lane);
+  |             ^^^^^^^^^^^^^^^^^ the trait `ValidWave64TileWidth` is not implemented for `Wave64TileWidth<3>`
+  |
+  = help: the following other types implement trait `ValidWave64TileWidth`:
+            Wave64TileWidth<16>
+            Wave64TileWidth<1>
+            Wave64TileWidth<2>
+            Wave64TileWidth<32>
+            Wave64TileWidth<4>
+            Wave64TileWidth<64>
+            Wave64TileWidth<8>
+note: required by a bound in `SubgroupTile`
+ --> src/group.rs
+  |
+  | pub struct SubgroupTile<'wave, const N: u32>
+  |            ------------ required by a bound in this struct
+  | where
+  |     Wave64TileWidth<N>: ValidWave64TileWidth,
+  |                         ^^^^^^^^^^^^^^^^^^^^ required by this bound in `SubgroupTile`
+
+error[E0599]: the associated function or constant `from_wave64_snapshot` exists for struct `SubgroupTile<'_, 3>`, but its trait bounds were not satisfied
+ --> tests/ui/fail/wave64_tile_rejects_invalid_widths.rs:8:32
+  |
+8 |     let _ = SubgroupTile::<3>::from_wave64_snapshot(&lane);
+  |                                ^^^^^^^^^^^^^^^^^^^^ associated function or constant cannot be called on `SubgroupTile<'_, 3>` due to unsatisfied trait bounds
+  |
+ ::: src/group.rs
+  |
+  | pub struct Wave64TileWidth<const N: u32>;
+  | ---------------------------------------- doesn't satisfy `Wave64TileWidth<3>: ValidWave64TileWidth`
+  |
+  = note: the following trait bounds were not satisfied:
+          `Wave64TileWidth<3>: ValidWave64TileWidth`
+
+error[E0277]: the trait bound `Wave64TileWidth<128>: ValidWave64TileWidth` is not satisfied
+  --> tests/ui/fail/wave64_tile_rejects_invalid_widths.rs:12:13
+   |
+12 |     let _ = SubgroupTile::<128>::from_wave64_snapshot(&lane);
+   |             ^^^^^^^^^^^^^^^^^^^ the trait `ValidWave64TileWidth` is not implemented for `Wave64TileWidth<128>`
+   |
+   = help: the following other types implement trait `ValidWave64TileWidth`:
+             Wave64TileWidth<16>
+             Wave64TileWidth<1>
+             Wave64TileWidth<2>
+             Wave64TileWidth<32>
+             Wave64TileWidth<4>
+             Wave64TileWidth<64>
+             Wave64TileWidth<8>
+note: required by a bound in `SubgroupTile`
+  --> src/group.rs
+   |
+   | pub struct SubgroupTile<'wave, const N: u32>
+   |            ------------ required by a bound in this struct
+   | where
+   |     Wave64TileWidth<N>: ValidWave64TileWidth,
+   |                         ^^^^^^^^^^^^^^^^^^^^ required by this bound in `SubgroupTile`
+
+error[E0599]: the associated function or constant `from_wave64_snapshot` exists for struct `SubgroupTile<'_, 128>`, but its trait bounds were not satisfied
+  --> tests/ui/fail/wave64_tile_rejects_invalid_widths.rs:12:34
+   |
+12 |     let _ = SubgroupTile::<128>::from_wave64_snapshot(&lane);
+   |                                  ^^^^^^^^^^^^^^^^^^^^ associated function or constant cannot be called on `SubgroupTile<'_, 128>` due to unsatisfied trait bounds
+   |
+  ::: src/group.rs
+   |
+   | pub struct Wave64TileWidth<const N: u32>;
+   | ---------------------------------------- doesn't satisfy `Wave64TileWidth<128>: ValidWave64TileWidth`
+   |
+   = note: the following trait bounds were not satisfied:
+           `Wave64TileWidth<128>: ValidWave64TileWidth`

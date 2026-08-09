@@ -1,8 +1,10 @@
-//! Invocation-bound GPU group handles.
+//! Non-authoritative GPU group snapshots.
 //!
-//! Handles in this module carry source-level execution identity. They do not
-//! authenticate a compiled artifact or a launch, and the current compiler does
-//! not lower their synchronization entry point.
+//! Values in this module support checked rank and size arithmetic over
+//! caller-asserted invocation and wave snapshots. They do not authenticate a
+//! launch, target, current hardware state, control-flow epoch, or compiled
+//! artifact. The current compiler does not construct these snapshots or lower
+//! their synchronization entry point.
 
 use core::fmt;
 use core::marker::PhantomData;
@@ -14,7 +16,7 @@ use crate::wave::{Wave64, WaveLane};
 mod sealed {
     pub trait Group {}
     pub trait SynchronizationContract {}
-    pub trait Gfx942SubgroupWidth {}
+    pub trait Wave64TileWidth {}
 }
 
 /// Execution and memory scopes named by a group synchronization contract.
@@ -38,13 +40,16 @@ pub enum GroupMemoryOrdering {
 /// Address spaces ordered by a supported group synchronization operation.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum GroupMemorySpace {
+    /// Global memory observed by members of one workgroup.
+    Global,
     /// AMD local data share visible within one workgroup.
     Workgroup,
 }
 
-/// Sealed type-level description of a group's legal synchronization behavior.
+/// Sealed type-level description of a group's synchronization semantics.
 ///
-/// A contract with `SUPPORTED == false` deliberately exposes no barrier method.
+/// This is descriptive metadata, not convergence or execution authority. A
+/// contract with `SUPPORTED == false` deliberately exposes no barrier method.
 /// A supported contract records the execution scope, memory scope, ordering,
 /// address spaces, and convergence requirement that compiler IR must preserve.
 pub trait SynchronizationContract: sealed::SynchronizationContract {
@@ -77,7 +82,7 @@ impl SynchronizationContract for UnsupportedSynchronization {
     const REQUIRES_UNIFORM_CONVERGENCE: bool = false;
 }
 
-/// Marker for a uniform workgroup barrier over workgroup memory.
+/// Marker for CUDA-compatible workgroup synchronization semantics.
 #[derive(Debug)]
 pub enum WorkgroupSynchronization {}
 
@@ -88,14 +93,16 @@ impl SynchronizationContract for WorkgroupSynchronization {
     const EXECUTION_SCOPE: Option<GroupScope> = Some(GroupScope::Workgroup);
     const MEMORY_SCOPE: Option<GroupScope> = Some(GroupScope::Workgroup);
     const ORDERING: Option<GroupMemoryOrdering> = Some(GroupMemoryOrdering::AcquireRelease);
-    const ADDRESS_SPACES: &'static [GroupMemorySpace] = &[GroupMemorySpace::Workgroup];
+    const ADDRESS_SPACES: &'static [GroupMemorySpace] =
+        &[GroupMemorySpace::Global, GroupMemorySpace::Workgroup];
     const REQUIRES_UNIFORM_CONVERGENCE: bool = true;
 }
 
-/// Universal interface implemented by every supported typed group handle.
+/// Universal arithmetic interface implemented by every group snapshot.
 ///
 /// Sizes and ranks use `u64` so the same generic algorithm can inspect grid,
-/// workgroup, subgroup-tile, and active-lane groups without truncation.
+/// workgroup, subgroup-tile, and active-lane snapshots without truncation. This
+/// trait grants no execution, synchronization, memory, or launch authority.
 pub trait Group: sealed::Group {
     /// Static synchronization policy for this group kind.
     type Synchronization: SynchronizationContract;
@@ -107,11 +114,13 @@ pub trait Group: sealed::Group {
     fn thread_rank(&self) -> u64;
 }
 
-/// The complete launch grid containing the current invocation.
+/// Arithmetic snapshot of a launch grid and one invocation's rank within it.
 ///
-/// Construction requires an authenticated [`Invocation3D`] and fails when the
-/// grid's total size or row-major rank cannot be represented in `u64`. This
-/// handle is deliberately neither `Copy`, `Clone`, `Send`, nor `Sync`.
+/// Construction borrows a caller-asserted [`Invocation3D`] snapshot and fails
+/// when the grid's total size or row-major rank cannot be represented in `u64`.
+/// It does not establish that the snapshot describes the current hardware
+/// invocation or epoch. This value is deliberately neither `Copy`, `Clone`,
+/// `Send`, nor `Sync`.
 pub struct Grid<'invocation> {
     size: u64,
     thread_rank: u64,
@@ -120,8 +129,8 @@ pub struct Grid<'invocation> {
 }
 
 impl<'invocation> Grid<'invocation> {
-    /// Derives a grid handle from the current invocation capability.
-    pub fn from_invocation(invocation: &'invocation Invocation3D) -> Option<Self> {
+    /// Derives checked arithmetic from a caller-asserted invocation snapshot.
+    pub fn from_invocation_snapshot(invocation: &'invocation Invocation3D) -> Option<Self> {
         let extent = invocation.global_grid_size();
         Some(Self {
             size: extent.volume()?,
@@ -156,11 +165,13 @@ impl Group for Grid<'_> {
     }
 }
 
-/// The workgroup containing the current invocation.
+/// Arithmetic snapshot of a workgroup and one invocation's rank within it.
 ///
-/// Construction requires an authenticated [`Invocation3D`] and fails when the
-/// workgroup's total size or row-major rank cannot be represented in `u64`.
-/// This handle is deliberately neither `Copy`, `Clone`, `Send`, nor `Sync`.
+/// Construction borrows a caller-asserted [`Invocation3D`] snapshot and fails
+/// when the workgroup's total size or row-major rank cannot be represented in
+/// `u64`. It does not establish that the snapshot describes the current
+/// hardware invocation or epoch. This value is deliberately neither `Copy`,
+/// `Clone`, `Send`, nor `Sync`.
 pub struct Workgroup<'invocation> {
     size: u64,
     thread_rank: u64,
@@ -169,8 +180,8 @@ pub struct Workgroup<'invocation> {
 }
 
 impl<'invocation> Workgroup<'invocation> {
-    /// Derives a workgroup handle from the current invocation capability.
-    pub fn from_invocation(invocation: &'invocation Invocation3D) -> Option<Self> {
+    /// Derives checked arithmetic from a caller-asserted invocation snapshot.
+    pub fn from_invocation_snapshot(invocation: &'invocation Invocation3D) -> Option<Self> {
         let size = invocation.workgroup_size();
         let id = invocation.workitem_id();
         let thread_rank = linear_rank_3d(
@@ -188,26 +199,22 @@ impl<'invocation> Workgroup<'invocation> {
         })
     }
 
-    /// Claims uniform convergence for one exact workgroup barrier.
-    ///
-    /// The returned one-shot witness can be consumed by
-    /// [`WorkgroupConvergence::synchronize`].
+    /// Executes one CUDA-compatible workgroup barrier.
     ///
     /// # Safety
     ///
-    /// Every active work-item in this workgroup must reach the resulting
-    /// witness's `synchronize` call exactly once, at the same dynamic program
-    /// point and in the same barrier sequence. No participating work-item may
-    /// diverge, return, panic, or otherwise skip that call. The caller must also
-    /// ensure that the compiler preserves the workgroup convergence claim and
-    /// the synchronization semantics in [`WorkgroupSynchronization`]. The
-    /// repository's current source compiler path does not yet establish those
-    /// facts.
-    pub unsafe fn assume_uniform(&self) -> WorkgroupConvergence<'_, 'invocation> {
-        WorkgroupConvergence {
-            _workgroup: self,
-            _not_send_sync: PhantomData,
-        }
+    /// This arithmetic snapshot must still describe the calling invocation's
+    /// current workgroup. Every active work-item in that workgroup must execute
+    /// this exact dynamic call once and in the same barrier sequence. No
+    /// participating work-item may take a conditional path that skips the call,
+    /// return, panic, or otherwise exit early. The compiler must preserve all
+    /// semantics in [`WorkgroupSynchronization`], including workgroup-uniform
+    /// convergence and acquire-release visibility for global and workgroup
+    /// memory. The current source compiler establishes none of these facts.
+    pub unsafe fn synchronize(&self) {
+        // SAFETY: The caller owns every dynamic convergence, snapshot-currentness,
+        // and compiler-lowering obligation required by `sync::syncthreads`.
+        unsafe { sync::syncthreads() }
     }
 }
 
@@ -235,79 +242,52 @@ impl Group for Workgroup<'_> {
     }
 }
 
-/// One-shot evidence that an exact workgroup barrier is reached uniformly.
+/// Type-level candidate for one arithmetic wave64 tile width.
 ///
-/// This witness is deliberately neither `Copy`, `Clone`, `Send`, nor `Sync`.
-/// Its only public constructor is the unsafe [`Workgroup::assume_uniform`]
-/// capability boundary.
-#[must_use = "a convergence witness must be consumed by synchronize"]
-pub struct WorkgroupConvergence<'group, 'invocation> {
-    _workgroup: &'group Workgroup<'invocation>,
-    _not_send_sync: PhantomData<*mut ()>,
-}
-
-impl WorkgroupConvergence<'_, '_> {
-    /// Executes the workgroup barrier represented by this one-shot witness.
-    ///
-    /// This is safe only because constructing the witness requires the unsafe
-    /// uniform-convergence proof boundary. On a host, and until compiler
-    /// recognition is implemented, this operation always panics closed.
-    pub fn synchronize(self) {
-        // SAFETY: `Workgroup::assume_uniform` is the only constructor and its
-        // contract establishes the requirements of `sync::syncthreads`.
-        unsafe { sync::syncthreads() }
-    }
-}
-
-impl fmt::Debug for WorkgroupConvergence<'_, '_> {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("WorkgroupConvergence")
-            .finish_non_exhaustive()
-    }
-}
-
-/// Type-level candidate for one gfx942 subgroup-tile width.
-///
-/// [`ValidGfx942SubgroupWidth`] is implemented only for `1`, `2`, `4`, `8`,
-/// `16`, `32`, and `64`: the power-of-two divisors of gfx942's physical wave64.
+/// [`ValidWave64TileWidth`] is implemented only for `1`, `2`, `4`, `8`, `16`,
+/// `32`, and `64`: the power-of-two divisors of 64. This marker contains no
+/// target or wave-mode authority.
 #[derive(Debug)]
-pub struct Gfx942SubgroupWidth<const N: u32>;
+pub struct Wave64TileWidth<const N: u32>;
 
-/// Sealed proof that a const subgroup width is legal for gfx942 wave64.
-pub trait ValidGfx942SubgroupWidth: sealed::Gfx942SubgroupWidth {}
+/// Sealed arithmetic proof that a const tile width partitions 64 lanes.
+pub trait ValidWave64TileWidth: sealed::Wave64TileWidth {}
 
-macro_rules! valid_gfx942_subgroup_widths {
+macro_rules! valid_wave64_tile_widths {
     ($($width:literal),+ $(,)?) => {
         $(
-            impl sealed::Gfx942SubgroupWidth for Gfx942SubgroupWidth<$width> {}
-            impl ValidGfx942SubgroupWidth for Gfx942SubgroupWidth<$width> {}
+            impl sealed::Wave64TileWidth for Wave64TileWidth<$width> {}
+            impl ValidWave64TileWidth for Wave64TileWidth<$width> {}
         )+
     };
 }
 
-valid_gfx942_subgroup_widths!(1, 2, 4, 8, 16, 32, 64);
+valid_wave64_tile_widths!(1, 2, 4, 8, 16, 32, 64);
 
-/// A static contiguous tile within the current gfx942 physical wave64.
+/// Arithmetic snapshot of a static contiguous tile in a wave64 snapshot.
 ///
-/// `N` must be a supported power-of-two divisor of 64. Construction consumes
-/// an authenticated wave64 lane witness. This handle is deliberately neither
-/// `Copy`, `Clone`, `Send`, nor `Sync`.
-pub struct SubgroupTile<const N: u32>
+/// `N` must be a supported power-of-two divisor of 64. The lifetime prevents
+/// this value from outliving its caller-asserted lane snapshot, but does not
+/// bind a hardware execution epoch. This value is deliberately neither `Copy`,
+/// `Clone`, `Send`, nor `Sync`.
+pub struct SubgroupTile<'wave, const N: u32>
 where
-    Gfx942SubgroupWidth<N>: ValidGfx942SubgroupWidth,
+    Wave64TileWidth<N>: ValidWave64TileWidth,
 {
     lane: u32,
+    _wave_snapshot: PhantomData<&'wave WaveLane<Wave64>>,
     _not_send_sync: PhantomData<*mut ()>,
 }
 
-impl<const N: u32> SubgroupTile<N>
+impl<'wave, const N: u32> SubgroupTile<'wave, N>
 where
-    Gfx942SubgroupWidth<N>: ValidGfx942SubgroupWidth,
+    Wave64TileWidth<N>: ValidWave64TileWidth,
 {
-    fn from_lane(lane: u32) -> Self {
+    /// Derives tile arithmetic from a caller-asserted wave64 lane snapshot.
+    pub fn from_wave64_snapshot(lane: &'wave WaveLane<Wave64>) -> Self {
         Self {
-            lane,
+            lane: lane.get(),
+            _wave_snapshot: PhantomData,
             _not_send_sync: PhantomData,
         }
     }
@@ -318,9 +298,9 @@ where
     }
 }
 
-impl<const N: u32> fmt::Debug for SubgroupTile<N>
+impl<const N: u32> fmt::Debug for SubgroupTile<'_, N>
 where
-    Gfx942SubgroupWidth<N>: ValidGfx942SubgroupWidth,
+    Wave64TileWidth<N>: ValidWave64TileWidth,
 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -332,14 +312,14 @@ where
     }
 }
 
-impl<const N: u32> sealed::Group for SubgroupTile<N> where
-    Gfx942SubgroupWidth<N>: ValidGfx942SubgroupWidth
+impl<const N: u32> sealed::Group for SubgroupTile<'_, N> where
+    Wave64TileWidth<N>: ValidWave64TileWidth
 {
 }
 
-impl<const N: u32> Group for SubgroupTile<N>
+impl<const N: u32> Group for SubgroupTile<'_, N>
 where
-    Gfx942SubgroupWidth<N>: ValidGfx942SubgroupWidth,
+    Wave64TileWidth<N>: ValidWave64TileWidth,
 {
     type Synchronization = UnsupportedSynchronization;
 
@@ -352,84 +332,77 @@ where
     }
 }
 
-/// The exact active-lane set at one convergent point in a gfx942 wave64.
+/// Arithmetic snapshot of a caller-asserted active-lane mask.
 ///
-/// Construction consumes an authenticated wave64 lane and requires an unsafe
-/// assertion that `member_mask` is the exact hardware active-lane mask at the
-/// same source point. This handle is deliberately neither `Copy`, `Clone`,
-/// `Send`, nor `Sync`.
-pub struct ActiveLaneGroup {
+/// The lifetime prevents this value from outliving its lane snapshot, but it
+/// does not bind a hardware execution epoch. In particular, this value is not
+/// persistent EXEC authority and cannot authorize a collective or barrier.
+/// This value is deliberately neither `Copy`, `Clone`, `Send`, nor `Sync`.
+pub struct ActiveLaneGroup<'wave> {
     lane: u32,
-    member_mask: u64,
+    asserted_mask: u64,
+    _wave_snapshot: PhantomData<&'wave WaveLane<Wave64>>,
     _not_send_sync: PhantomData<*mut ()>,
 }
 
-impl ActiveLaneGroup {
-    const fn checked(lane: u32, member_mask: u64) -> Option<Self> {
-        if lane >= 64 || member_mask & (1_u64 << lane) == 0 {
+impl<'wave> ActiveLaneGroup<'wave> {
+    /// Records a caller-asserted active mask for rank and size arithmetic.
+    ///
+    /// Returns `None` when `asserted_mask` excludes the lane snapshot.
+    ///
+    /// # Safety
+    ///
+    /// `asserted_mask` must equal the wave64 active mask observed for the same
+    /// invocation at the source point represented by `lane`. This assertion is
+    /// valid only for the arithmetic snapshot returned here; it grants no
+    /// continuing EXEC, convergence, collective, synchronization, target, or
+    /// epoch authority. The current compiler provides no checked constructor.
+    pub unsafe fn from_caller_asserted_snapshot(
+        lane: &'wave WaveLane<Wave64>,
+        asserted_mask: u64,
+    ) -> Option<Self> {
+        if asserted_mask & (1_u64 << lane.get()) == 0 {
             return None;
         }
         Some(Self {
-            lane,
-            member_mask,
+            lane: lane.get(),
+            asserted_mask,
+            _wave_snapshot: PhantomData,
             _not_send_sync: PhantomData,
         })
     }
 
-    /// Exact gfx942 EXEC-mask membership represented by this group.
-    pub const fn member_mask(&self) -> u64 {
-        self.member_mask
+    /// Returns the caller-asserted mask as non-authoritative snapshot data.
+    pub const fn caller_asserted_mask(&self) -> u64 {
+        self.asserted_mask
     }
 }
 
-impl fmt::Debug for ActiveLaneGroup {
+impl fmt::Debug for ActiveLaneGroup<'_> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("ActiveLaneGroup")
-            .field("member_mask", &format_args!("{:#018x}", self.member_mask))
+            .field(
+                "caller_asserted_mask",
+                &format_args!("{:#018x}", self.asserted_mask),
+            )
             .field("thread_rank", &self.thread_rank())
             .finish()
     }
 }
 
-impl sealed::Group for ActiveLaneGroup {}
+impl sealed::Group for ActiveLaneGroup<'_> {}
 
-impl Group for ActiveLaneGroup {
+impl Group for ActiveLaneGroup<'_> {
     type Synchronization = UnsupportedSynchronization;
 
     fn size(&self) -> u64 {
-        u64::from(self.member_mask.count_ones())
+        u64::from(self.asserted_mask.count_ones())
     }
 
     fn thread_rank(&self) -> u64 {
         let lower_lanes = (1_u64 << self.lane) - 1;
-        u64::from((self.member_mask & lower_lanes).count_ones())
-    }
-}
-
-impl WaveLane<Wave64> {
-    /// Partitions the current gfx942 wave64 into static contiguous `N`-lane
-    /// tiles and returns the tile containing this lane.
-    pub fn into_subgroup_tile<const N: u32>(self) -> SubgroupTile<N>
-    where
-        Gfx942SubgroupWidth<N>: ValidGfx942SubgroupWidth,
-    {
-        SubgroupTile::from_lane(self.get())
-    }
-
-    /// Forms the exact active-lane group at the current convergent source point.
-    ///
-    /// Returns `None` if `member_mask` does not contain the current lane.
-    ///
-    /// # Safety
-    ///
-    /// `member_mask` must be the exact gfx942 wave64 EXEC mask observed for the
-    /// same invocation and at the same convergent source point as this lane
-    /// witness. Every set bit must identify one participating lane in the same
-    /// physical wave. The current compiler does not yet provide an authenticated
-    /// source for this mask.
-    pub unsafe fn into_active_lane_group(self, member_mask: u64) -> Option<ActiveLaneGroup> {
-        ActiveLaneGroup::checked(self.get(), member_mask)
+        u64::from((self.asserted_mask & lower_lanes).count_ones())
     }
 }
 

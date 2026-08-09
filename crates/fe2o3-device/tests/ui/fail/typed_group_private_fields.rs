@@ -22,6 +22,7 @@ fn forge_workgroup() {
 fn forge_tile() {
     let _ = SubgroupTile::<32> {
         lane: 0,
+        _wave_snapshot: PhantomData,
         _not_send_sync: PhantomData,
     };
 }
@@ -29,7 +30,8 @@ fn forge_tile() {
 fn forge_active_group() {
     let _ = ActiveLaneGroup {
         lane: 0,
-        member_mask: 1,
+        asserted_mask: 1,
+        _wave_snapshot: PhantomData,
         _not_send_sync: PhantomData,
     };
 }

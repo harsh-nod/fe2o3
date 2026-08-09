@@ -34,11 +34,13 @@ impl WaveWidth for Wave64 {
     const LANES: u32 = 64;
 }
 
-/// Invocation-bound evidence for the current lane in the current wave.
+/// Caller-asserted arithmetic snapshot of one lane in a wave.
 ///
 /// `Width` makes the required native wave width part of the Rust type. The
 /// witness is deliberately neither `Copy`, `Clone`, `Send`, nor `Sync`; a lane
-/// number copied as plain integer data is not a substitute for this identity.
+/// number copied as plain integer data is not a substitute for the related
+/// snapshot. The type does not authenticate a target, wave mode, current lane,
+/// control-flow epoch, or compiler-provided value.
 #[repr(transparent)]
 #[rustc_diagnostic_item = "fe2o3_device_wave_lane"]
 pub struct WaveLane<Width: WaveWidth> {
@@ -56,10 +58,10 @@ impl<Width: WaveWidth> WaveLane<Width> {
     /// # Safety
     ///
     /// `lane` must be the current invocation's lane ID, and the active kernel
-    /// must execute with a native wave width of exactly `Width::LANES`. Both
-    /// facts must come from authenticated compilation and launch metadata. The
-    /// current compiler does not lower this constructor or expose a safe lane
-    /// intrinsic.
+    /// must execute with a native wave width of exactly `Width::LANES` at the
+    /// source point where the snapshot is used. The caller must establish both
+    /// facts from matching compiler and launch metadata. The current compiler
+    /// does not lower this constructor or expose a checked lane intrinsic.
     #[rustc_diagnostic_item = "fe2o3_device_wave_lane_from_raw"]
     pub unsafe fn from_raw(lane: u32) -> Option<Self> {
         Self::checked(lane)

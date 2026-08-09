@@ -1,8 +1,8 @@
 /// Executes one uniform workgroup barrier with acquire-release ordering over
-/// workgroup memory.
+/// global and workgroup memory.
 ///
-/// This low-level entry point is intentionally unsafe. Prefer deriving a typed
-/// [`crate::Workgroup`] and consuming a [`crate::WorkgroupConvergence`] witness.
+/// This low-level entry point is intentionally unsafe. The typed
+/// [`crate::Workgroup::synchronize`] operation remains unsafe for the same reasons.
 /// The current compiler does not recognize or lower this function, so calling
 /// it on a host or through an unsupported compilation path always panics.
 ///
@@ -15,7 +15,7 @@
 ///
 /// - workgroup execution scope;
 /// - workgroup memory scope;
-/// - acquire-release ordering over workgroup memory; and
+/// - acquire-release ordering over global and workgroup memory; and
 /// - uniform workgroup convergence.
 ///
 /// Calling this function without compiler recognition that preserves those

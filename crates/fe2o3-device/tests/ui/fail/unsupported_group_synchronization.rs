@@ -1,15 +1,15 @@
 use fe2o3_device::{ActiveLaneGroup, Grid, SubgroupTile};
 
 fn grid(group: &Grid<'_>) {
-    let _ = group.assume_uniform();
+    group.synchronize();
 }
 
-fn tile(group: &SubgroupTile<32>) {
-    let _ = group.assume_uniform();
+fn tile(group: &SubgroupTile<'_, 32>) {
+    group.synchronize();
 }
 
-fn active(group: &ActiveLaneGroup) {
-    let _ = group.assume_uniform();
+fn active(group: &ActiveLaneGroup<'_>) {
+    group.synchronize();
 }
 
 fn main() {}

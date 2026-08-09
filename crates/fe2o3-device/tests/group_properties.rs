@@ -1,8 +1,13 @@
+//! CPU arithmetic snapshot tests only.
+//!
+//! These tests provide no compiler lowering, codegen, Verus, or hardware
+//! evidence for typed groups or synchronization.
+
 use fe2o3_device::{
-    ActiveLaneGroup, Gfx942SubgroupWidth, Grid, GridSize, Group, GroupMemoryOrdering,
-    GroupMemorySpace, GroupScope, Invocation3D, SubgroupTile, SynchronizationContract,
-    UnsupportedSynchronization, ValidGfx942SubgroupWidth, Wave64, WaveLane, Workgroup, WorkgroupId,
-    WorkgroupSize, WorkgroupSynchronization, WorkitemId,
+    ActiveLaneGroup, Grid, GridSize, Group, GroupMemoryOrdering, GroupMemorySpace, GroupScope,
+    Invocation3D, SubgroupTile, SynchronizationContract, UnsupportedSynchronization,
+    ValidWave64TileWidth, Wave64, Wave64TileWidth, WaveLane, Workgroup, WorkgroupId, WorkgroupSize,
+    WorkgroupSynchronization, WorkitemId,
 };
 
 fn invocation(
@@ -14,8 +19,8 @@ fn invocation(
     let workgroup_size =
         WorkgroupSize::new(workgroup_size[0], workgroup_size[1], workgroup_size[2]).unwrap();
     let grid_size = GridSize::new(grid_size[0], grid_size[1], grid_size[2]).unwrap();
-    // SAFETY: The test supplies the checked current-invocation coordinates to
-    // exercise the public capability boundary without bypassing it.
+    // SAFETY: These CPU tests explicitly assert internally consistent snapshot
+    // coordinates. They do not claim a current device invocation.
     unsafe {
         Invocation3D::from_raw_parts(
             WorkitemId::new(local[0], local[1], local[2]),
@@ -28,8 +33,8 @@ fn invocation(
 }
 
 fn wave64_lane(lane: u32) -> WaveLane<Wave64> {
-    // SAFETY: Each test lane is the modeled current lane and the modeled target
-    // is gfx942 wave64.
+    // SAFETY: These CPU tests assert a wave64 lane snapshot solely to exercise
+    // arithmetic. This supplies no target, wave-mode, or hardware evidence.
     unsafe { WaveLane::from_raw(lane).unwrap() }
 }
 
@@ -39,32 +44,40 @@ fn inspect_group(group: &impl Group, expected_size: u64, expected_rank: u64) {
     assert!(group.thread_rank() < group.size());
 }
 
+fn enumerated_volume(shape: [u32; 3]) -> u64 {
+    let mut count = 0;
+    for _z in 0..shape[2] {
+        for _y in 0..shape[1] {
+            for _x in 0..shape[0] {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
 #[test]
-fn property_workgroup_rank_is_row_major_and_bijective() {
+fn property_workgroup_rank_matches_an_enumeration_oracle() {
     for size_x in 1..=8 {
         for size_y in 1..=5 {
             for size_z in 1..=3 {
-                let size = u64::from(size_x) * u64::from(size_y) * u64::from(size_z);
+                let shape = [size_x, size_y, size_z];
+                let size = enumerated_volume(shape);
+                let mut expected_rank = 0;
                 let mut seen = vec![false; size as usize];
                 for z in 0..size_z {
                     for y in 0..size_y {
                         for x in 0..size_x {
-                            let invocation = invocation(
-                                [x, y, z],
-                                [1, 1, 1],
-                                [size_x, size_y, size_z],
-                                [2, 2, 2],
-                            );
-                            let group = Workgroup::from_invocation(&invocation).unwrap();
-                            let rank = (u64::from(z) * u64::from(size_y) + u64::from(y))
-                                * u64::from(size_x)
-                                + u64::from(x);
-                            inspect_group(&group, size, rank);
-                            assert!(!seen[rank as usize]);
-                            seen[rank as usize] = true;
+                            let invocation = invocation([x, y, z], [1, 1, 1], shape, [2, 2, 2]);
+                            let group = Workgroup::from_invocation_snapshot(&invocation).unwrap();
+                            inspect_group(&group, size, expected_rank);
+                            assert!(!seen[expected_rank as usize]);
+                            seen[expected_rank as usize] = true;
+                            expected_rank += 1;
                         }
                     }
                 }
+                assert_eq!(expected_rank, size);
                 assert!(seen.into_iter().all(core::convert::identity));
             }
         }
@@ -72,69 +85,112 @@ fn property_workgroup_rank_is_row_major_and_bijective() {
 }
 
 #[test]
-fn property_grid_rank_is_row_major_and_bijective() {
+fn property_grid_rank_matches_a_global_coordinate_enumeration_oracle() {
     let workgroup_shapes = [[1, 1, 1], [8, 4, 2], [64, 1, 1], [3, 5, 2]];
     let grid_shapes = [[1, 1, 1], [2, 3, 4], [5, 2, 3]];
 
     for workgroup_size in workgroup_shapes {
         for grid_size in grid_shapes {
             let extent = [
-                u64::from(workgroup_size[0]) * u64::from(grid_size[0]),
-                u64::from(workgroup_size[1]) * u64::from(grid_size[1]),
-                u64::from(workgroup_size[2]) * u64::from(grid_size[2]),
+                workgroup_size[0] * grid_size[0],
+                workgroup_size[1] * grid_size[1],
+                workgroup_size[2] * grid_size[2],
             ];
-            let size = extent[0] * extent[1] * extent[2];
+            let size = enumerated_volume(extent);
+            let mut expected_rank = 0;
             let mut seen = vec![false; size as usize];
-            for workgroup_z in 0..grid_size[2] {
-                for workgroup_y in 0..grid_size[1] {
-                    for workgroup_x in 0..grid_size[0] {
-                        for local_z in 0..workgroup_size[2] {
-                            for local_y in 0..workgroup_size[1] {
-                                for local_x in 0..workgroup_size[0] {
-                                    let invocation = invocation(
-                                        [local_x, local_y, local_z],
-                                        [workgroup_x, workgroup_y, workgroup_z],
-                                        workgroup_size,
-                                        grid_size,
-                                    );
-                                    let group = Grid::from_invocation(&invocation).unwrap();
-                                    let global = [
-                                        u64::from(workgroup_x) * u64::from(workgroup_size[0])
-                                            + u64::from(local_x),
-                                        u64::from(workgroup_y) * u64::from(workgroup_size[1])
-                                            + u64::from(local_y),
-                                        u64::from(workgroup_z) * u64::from(workgroup_size[2])
-                                            + u64::from(local_z),
-                                    ];
-                                    let rank =
-                                        (global[2] * extent[1] + global[1]) * extent[0] + global[0];
-                                    inspect_group(&group, size, rank);
-                                    assert!(!seen[rank as usize]);
-                                    seen[rank as usize] = true;
-                                }
-                            }
-                        }
+            for global_z in 0..extent[2] {
+                for global_y in 0..extent[1] {
+                    for global_x in 0..extent[0] {
+                        let local = [
+                            global_x % workgroup_size[0],
+                            global_y % workgroup_size[1],
+                            global_z % workgroup_size[2],
+                        ];
+                        let workgroup = [
+                            global_x / workgroup_size[0],
+                            global_y / workgroup_size[1],
+                            global_z / workgroup_size[2],
+                        ];
+                        let invocation = invocation(local, workgroup, workgroup_size, grid_size);
+                        let group = Grid::from_invocation_snapshot(&invocation).unwrap();
+                        inspect_group(&group, size, expected_rank);
+                        assert!(!seen[expected_rank as usize]);
+                        seen[expected_rank as usize] = true;
+                        expected_rank += 1;
                     }
                 }
             }
+            assert_eq!(expected_rank, size);
             assert!(seen.into_iter().all(core::convert::identity));
         }
     }
 }
 
+#[test]
+fn fixed_rank_table_is_independent_of_the_implementation_formulas() {
+    let workgroup_cases = [
+        ([0, 0, 0], [4, 3, 2], 24, 0),
+        ([2, 1, 1], [4, 3, 2], 24, 18),
+        ([3, 2, 1], [4, 3, 2], 24, 23),
+    ];
+    for (local, shape, expected_size, expected_rank) in workgroup_cases {
+        let invocation = invocation(local, [0, 0, 0], shape, [1, 1, 1]);
+        let group = Workgroup::from_invocation_snapshot(&invocation).unwrap();
+        inspect_group(&group, expected_size, expected_rank);
+    }
+
+    let grid_cases = [
+        ([0, 0, 0], [0, 0, 0], 0),
+        ([2, 1, 0], [1, 0, 1], 110),
+        ([3, 2, 1], [1, 1, 1], 191),
+    ];
+    for (local, workgroup, expected_rank) in grid_cases {
+        let invocation = invocation(local, workgroup, [4, 3, 2], [2, 2, 2]);
+        let group = Grid::from_invocation_snapshot(&invocation).unwrap();
+        inspect_group(&group, 192, expected_rank);
+    }
+
+    let lane = wave64_lane(37);
+    let tile: SubgroupTile<'_, 8> = SubgroupTile::from_wave64_snapshot(&lane);
+    inspect_group(&tile, 8, 5);
+    assert_eq!(tile.tile_index(), 4);
+
+    let lane = wave64_lane(63);
+    // SAFETY: This test explicitly asserts the fixed mask snapshot used by its
+    // table; the returned value is used only for arithmetic.
+    let active = unsafe {
+        ActiveLaneGroup::from_caller_asserted_snapshot(&lane, (1_u64 << 63) | (1 << 17) | 1)
+    }
+    .unwrap();
+    inspect_group(&active, 3, 2);
+}
+
+fn enumerated_tile_position(lane: u32, width: u32) -> (u32, u32) {
+    let mut tile_index = 0;
+    let mut tile_start = 0;
+    while lane >= tile_start + width {
+        tile_start += width;
+        tile_index += 1;
+    }
+    (tile_index, lane - tile_start)
+}
+
 fn verify_tile_width<const N: u32>()
 where
-    Gfx942SubgroupWidth<N>: ValidGfx942SubgroupWidth,
+    Wave64TileWidth<N>: ValidWave64TileWidth,
 {
     for lane in 0..64 {
-        let group: SubgroupTile<N> = wave64_lane(lane).into_subgroup_tile();
-        inspect_group(&group, u64::from(N), u64::from(lane % N));
-        assert_eq!(group.tile_index(), lane / N);
+        let lane_snapshot = wave64_lane(lane);
+        let group: SubgroupTile<'_, N> = SubgroupTile::from_wave64_snapshot(&lane_snapshot);
+        let (expected_tile, expected_rank) = enumerated_tile_position(lane, N);
+        inspect_group(&group, u64::from(N), u64::from(expected_rank));
+        assert_eq!(group.tile_index(), expected_tile);
     }
 }
 
 #[test]
-fn property_every_supported_gfx942_tile_width_partitions_wave64() {
+fn property_every_supported_wave64_tile_width_matches_enumeration() {
     verify_tile_width::<1>();
     verify_tile_width::<2>();
     verify_tile_width::<4>();
@@ -144,14 +200,22 @@ fn property_every_supported_gfx942_tile_width_partitions_wave64() {
     verify_tile_width::<64>();
 }
 
-fn active_group(lane: u32, mask: u64) -> Option<ActiveLaneGroup> {
-    // SAFETY: The generated mask is the modeled EXEC mask at the modeled
-    // current lane's convergent source point.
-    unsafe { wave64_lane(lane).into_active_lane_group(mask) }
+fn enumerated_active_size_and_rank(mask: u64, lane: u32) -> (u64, u64) {
+    let mut size = 0;
+    let mut rank = 0;
+    for candidate in 0..64 {
+        if mask & (1_u64 << candidate) != 0 {
+            size += 1;
+            if candidate < lane {
+                rank += 1;
+            }
+        }
+    }
+    (size, rank)
 }
 
 #[test]
-fn property_active_lane_rank_counts_only_lower_active_lanes() {
+fn property_active_lane_rank_matches_bit_enumeration() {
     let mut state = 0x9e37_79b9_7f4a_7c15_u64;
     for lane in 0..64 {
         for sample in 0..256 {
@@ -165,22 +229,29 @@ fn property_active_lane_rank_counts_only_lower_active_lanes() {
                 3 => 0x5555_5555_5555_5555 | (1_u64 << lane),
                 _ => state | (1_u64 << lane),
             };
-            let group = active_group(lane, mask).unwrap();
-            let lower_lanes = (1_u64 << lane) - 1;
-            inspect_group(
-                &group,
-                u64::from(mask.count_ones()),
-                u64::from((mask & lower_lanes).count_ones()),
-            );
-            assert_eq!(group.member_mask(), mask);
+            let lane_snapshot = wave64_lane(lane);
+            // SAFETY: The test explicitly asserts each generated mask snapshot
+            // and uses it only for arithmetic at this source point.
+            let group =
+                unsafe { ActiveLaneGroup::from_caller_asserted_snapshot(&lane_snapshot, mask) }
+                    .unwrap();
+            let (expected_size, expected_rank) = enumerated_active_size_and_rank(mask, lane);
+            inspect_group(&group, expected_size, expected_rank);
+            assert_eq!(group.caller_asserted_mask(), mask);
         }
     }
 }
 
 #[test]
-fn active_lane_group_rejects_a_mask_that_excludes_the_current_lane() {
+fn active_lane_group_rejects_a_mask_that_excludes_the_lane_snapshot() {
     for lane in 0..64 {
-        assert!(active_group(lane, !(1_u64 << lane)).is_none());
+        let lane_snapshot = wave64_lane(lane);
+        // SAFETY: The deliberately inconsistent snapshot must be rejected
+        // before an `ActiveLaneGroup` is formed.
+        let group = unsafe {
+            ActiveLaneGroup::from_caller_asserted_snapshot(&lane_snapshot, !(1_u64 << lane))
+        };
+        assert!(group.is_none());
     }
 }
 
@@ -211,7 +282,7 @@ fn group_synchronization_contracts_are_exact_and_fail_closed() {
     );
     assert_eq!(
         WorkgroupSynchronization::ADDRESS_SPACES,
-        &[GroupMemorySpace::Workgroup]
+        &[GroupMemorySpace::Global, GroupMemorySpace::Workgroup]
     );
 }
 
@@ -223,8 +294,8 @@ fn oversized_groups_fail_closed_instead_of_truncating() {
         [u32::MAX, u32::MAX, u32::MAX],
         [1, 1, 1],
     );
-    assert!(Workgroup::from_invocation(&oversized_workgroup).is_none());
-    assert!(Grid::from_invocation(&oversized_workgroup).is_none());
+    assert!(Workgroup::from_invocation_snapshot(&oversized_workgroup).is_none());
+    assert!(Grid::from_invocation_snapshot(&oversized_workgroup).is_none());
 
     let invocation = invocation(
         [0, 0, 0],
@@ -232,18 +303,18 @@ fn oversized_groups_fail_closed_instead_of_truncating() {
         [u32::MAX, u32::MAX, 1],
         [u32::MAX, u32::MAX, 1],
     );
-    assert!(Workgroup::from_invocation(&invocation).is_some());
-    assert!(Grid::from_invocation(&invocation).is_none());
+    assert!(Workgroup::from_invocation_snapshot(&invocation).is_some());
+    assert!(Grid::from_invocation_snapshot(&invocation).is_none());
 }
 
 #[test]
-fn workgroup_synchronization_panics_closed_on_the_host() {
+fn unsafe_workgroup_synchronization_panics_closed_on_the_host() {
     let invocation = invocation([0, 0, 0], [0, 0, 0], [1, 1, 1], [1, 1, 1]);
-    let group = Workgroup::from_invocation(&invocation).unwrap();
+    let group = Workgroup::from_invocation_snapshot(&invocation).unwrap();
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         // SAFETY: This one-work-item modeled workgroup reaches this exact
-        // dynamic barrier once. The host barrier still must fail closed.
-        unsafe { group.assume_uniform() }.synchronize();
+        // dynamic barrier once. The unsupported host path must still fail closed.
+        unsafe { group.synchronize() };
     }));
     assert!(result.is_err());
 }

@@ -1,9 +1,0 @@
-error[E0451]: fields `_workgroup` and `_not_send_sync` of struct `WorkgroupConvergence` are private
- --> tests/ui/fail/workgroup_convergence_witness_private.rs:8:9
-  |
-7 |     WorkgroupConvergence {
-  |     -------------------- in this type
-8 |         _workgroup: workgroup,
-  |         ^^^^^^^^^^ private field
-9 |         _not_send_sync: PhantomData,
-  |         ^^^^^^^^^^^^^^ private field

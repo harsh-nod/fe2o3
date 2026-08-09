@@ -3,5 +3,5 @@ error: lifetime may not live long enough
   |
 3 | fn escape(invocation: &Invocation3D) -> Grid<'static> {
   |                       - let's call the lifetime of this reference `'1`
-4 |     Grid::from_invocation(invocation).unwrap()
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ returning this value requires that `'1` must outlive `'static`
+4 |     Grid::from_invocation_snapshot(invocation).unwrap()
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ returning this value requires that `'1` must outlive `'static`

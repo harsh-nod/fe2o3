@@ -4,7 +4,8 @@ use core::marker::PhantomData;
 /// A work-item's local coordinate within its workgroup.
 ///
 /// This is copyable coordinate data, not evidence that the values describe the
-/// current invocation. Use [`Invocation3D`] when invocation identity matters.
+/// current invocation. [`Invocation3D`] groups related caller assertions but
+/// likewise does not authenticate invocation identity.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[repr(C)]
 #[rustc_diagnostic_item = "fe2o3_device_workitem_id_3d"]
@@ -35,7 +36,8 @@ impl WorkitemId {
 /// A workgroup's coordinate within a grid.
 ///
 /// This is copyable coordinate data, not evidence that the values describe the
-/// current invocation. Use [`Invocation3D`] when invocation identity matters.
+/// current invocation. [`Invocation3D`] groups related caller assertions but
+/// likewise does not authenticate invocation identity.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[repr(C)]
 #[rustc_diagnostic_item = "fe2o3_device_workgroup_id_3d"]
@@ -228,12 +230,13 @@ impl GlobalGridSize {
     }
 }
 
-/// Invocation-bound evidence for one complete three-dimensional launch index.
+/// Caller-asserted snapshot of one complete three-dimensional launch index.
 ///
 /// Coordinate getters return ordinary copyable data. The witness itself is
 /// deliberately neither `Copy`, `Clone`, `Send`, nor `Sync`: code that later
-/// grants memory or collective authority from it must retain the association
-/// with the invocation that produced it.
+/// performs arithmetic from it retains the lexical association with the
+/// snapshot. The type is not branded and does not authenticate a launch,
+/// current invocation, control-flow epoch, or compiler-provided value.
 #[derive(Debug)]
 #[rustc_diagnostic_item = "fe2o3_device_invocation_3d"]
 pub struct Invocation3D {
@@ -245,18 +248,19 @@ pub struct Invocation3D {
 }
 
 impl Invocation3D {
-    /// Constructs an invocation witness from backend-provided coordinates.
+    /// Constructs an invocation snapshot from caller-asserted coordinates.
     ///
     /// Returns `None` when either coordinate is outside its corresponding
     /// extent. This API is unsafe because bounds checks cannot establish the
-    /// invocation identity.
+    /// invocation identity or execution epoch.
     ///
     /// # Safety
     ///
     /// All four arguments must describe the current device invocation and its
-    /// active launch. In particular, they must come from authenticated backend
-    /// intrinsics for the same invocation. The current compiler does not lower
-    /// this constructor or provide a safe source for these values.
+    /// active launch at the source point where the snapshot is used. The caller
+    /// must establish that they came from matching backend values for one
+    /// invocation. The current compiler does not lower this constructor or
+    /// provide a checked source for these values.
     #[rustc_diagnostic_item = "fe2o3_device_invocation_3d_from_raw_parts"]
     pub unsafe fn from_raw_parts(
         workitem: WorkitemId,

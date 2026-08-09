@@ -1,7 +1,0 @@
-error[E0133]: call to unsafe function `fe2o3_device::Workgroup::<'invocation>::assume_uniform` is unsafe and requires unsafe block
- --> tests/ui/fail/workgroup_convergence_requires_unsafe.rs:4:5
-  |
-4 |     group.assume_uniform().synchronize();
-  |     ^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
-  |
-  = note: consult the function's documentation for information on how to avoid undefined behavior

@@ -26,24 +26,28 @@ error[E0451]: fields `size`, `thread_rank`, `_invocation` and `_not_send_sync` o
 18 |         _not_send_sync: PhantomData,
    |         ^^^^^^^^^^^^^^ private field
 
-error[E0451]: fields `lane` and `_not_send_sync` of struct `SubgroupTile` are private
+error[E0451]: fields `lane`, `_wave_snapshot` and `_not_send_sync` of struct `SubgroupTile` are private
   --> tests/ui/fail/typed_group_private_fields.rs:24:9
    |
 23 |     let _ = SubgroupTile::<32> {
    |             ------------------ in this type
 24 |         lane: 0,
    |         ^^^^ private field
-25 |         _not_send_sync: PhantomData,
+25 |         _wave_snapshot: PhantomData,
+   |         ^^^^^^^^^^^^^^ private field
+26 |         _not_send_sync: PhantomData,
    |         ^^^^^^^^^^^^^^ private field
 
-error[E0451]: fields `lane`, `member_mask` and `_not_send_sync` of struct `ActiveLaneGroup` are private
-  --> tests/ui/fail/typed_group_private_fields.rs:31:9
+error[E0451]: fields `lane`, `asserted_mask`, `_wave_snapshot` and `_not_send_sync` of struct `ActiveLaneGroup` are private
+  --> tests/ui/fail/typed_group_private_fields.rs:32:9
    |
-30 |     let _ = ActiveLaneGroup {
+31 |     let _ = ActiveLaneGroup {
    |             --------------- in this type
-31 |         lane: 0,
+32 |         lane: 0,
    |         ^^^^ private field
-32 |         member_mask: 1,
-   |         ^^^^^^^^^^^ private field
-33 |         _not_send_sync: PhantomData,
+33 |         asserted_mask: 1,
+   |         ^^^^^^^^^^^^^ private field
+34 |         _wave_snapshot: PhantomData,
+   |         ^^^^^^^^^^^^^^ private field
+35 |         _not_send_sync: PhantomData,
    |         ^^^^^^^^^^^^^^ private field

@@ -1,17 +1,17 @@
-error[E0599]: no method named `assume_uniform` found for reference `&fe2o3_device::Grid<'_>` in the current scope
- --> tests/ui/fail/unsupported_group_synchronization.rs:4:19
+error[E0599]: no method named `synchronize` found for reference `&fe2o3_device::Grid<'_>` in the current scope
+ --> tests/ui/fail/unsupported_group_synchronization.rs:4:11
   |
-4 |     let _ = group.assume_uniform();
-  |                   ^^^^^^^^^^^^^^ method not found in `&fe2o3_device::Grid<'_>`
+4 |     group.synchronize();
+  |           ^^^^^^^^^^^ method not found in `&fe2o3_device::Grid<'_>`
 
-error[E0599]: no method named `assume_uniform` found for reference `&SubgroupTile<32>` in the current scope
- --> tests/ui/fail/unsupported_group_synchronization.rs:8:19
+error[E0599]: no method named `synchronize` found for reference `&SubgroupTile<'_, 32>` in the current scope
+ --> tests/ui/fail/unsupported_group_synchronization.rs:8:11
   |
-8 |     let _ = group.assume_uniform();
-  |                   ^^^^^^^^^^^^^^ method not found in `&SubgroupTile<32>`
+8 |     group.synchronize();
+  |           ^^^^^^^^^^^ method not found in `&SubgroupTile<'_, 32>`
 
-error[E0599]: no method named `assume_uniform` found for reference `&ActiveLaneGroup` in the current scope
-  --> tests/ui/fail/unsupported_group_synchronization.rs:12:19
+error[E0599]: no method named `synchronize` found for reference `&ActiveLaneGroup<'_>` in the current scope
+  --> tests/ui/fail/unsupported_group_synchronization.rs:12:11
    |
-12 |     let _ = group.assume_uniform();
-   |                   ^^^^^^^^^^^^^^ method not found in `&ActiveLaneGroup`
+12 |     group.synchronize();
+   |           ^^^^^^^^^^^ method not found in `&ActiveLaneGroup<'_>`
