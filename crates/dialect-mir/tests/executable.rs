@@ -1409,6 +1409,54 @@ fn device_imports_require_an_exact_external_authority() {
 }
 
 #[test]
+fn defined_function_unwind_declarations_cover_body_effects() {
+    let mut module = place_module();
+    let identity = module.functions[0].identity.clone();
+    let return_ty = module.functions[0].body.locals[0].ty;
+    let argument_ty = module.functions[0].body.locals[1].ty;
+    let bool_ty = MirTypeId(
+        module
+            .types
+            .iter()
+            .position(|ty| matches!(ty.kind, MirTypeKind::Scalar(MirScalarType::Bool)))
+            .unwrap() as u32,
+    );
+    module.callables.push(MirCallable {
+        identity,
+        authority: MirCallAuthority::DefinedFunction,
+        signature: MirCallSignature {
+            inputs: vec![argument_ty],
+            output: MirCallReturn::Value(return_ty),
+            can_unwind: false,
+        },
+    });
+    module.validate().unwrap();
+
+    module.functions[0].body.blocks[0].terminator = terminator(MirTerminatorKind::Assert {
+        condition: MirOperand::Constant(MirConstant {
+            ty: bool_ty,
+            value: MirConstantValue::Bool(true),
+        }),
+        expected: true,
+        message: dialect_mir::MirAssertMessage::User("probe".into()),
+        target: MirEdge::new(MirBlockId(1)),
+        unwind: MirUnwindAction::Unreachable,
+    });
+    module.functions[0].body.blocks.push(MirBasicBlock {
+        parameters: vec![],
+        statements: vec![],
+        terminator: terminator(MirTerminatorKind::Return),
+    });
+
+    module.callables[0].signature.can_unwind = true;
+    module.validate().unwrap();
+    module.callables[0].signature.can_unwind = false;
+    let error = module.validate().unwrap_err();
+    assert_eq!(error.path(), "module.callables[0].signature.can_unwind");
+    assert!(error.reason().contains("body may unwind"));
+}
+
+#[test]
 fn joins_require_initialization_on_every_normal_predecessor() {
     let mut module = place_module();
     let return_ty = module.functions[0].body.locals[0].ty;

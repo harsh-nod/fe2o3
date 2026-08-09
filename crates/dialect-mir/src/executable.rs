@@ -747,6 +747,12 @@ impl MirExecutableModule {
                             "defined callable signature does not match its body",
                         ));
                     }
+                    if !callable.signature.can_unwind && self.body_may_unwind(function) {
+                        return Err(error(
+                            format!("{path}.signature.can_unwind"),
+                            "defined callable body may unwind but its signature forbids unwinding",
+                        ));
+                    }
                 }
                 MirCallAuthority::DeviceImport { contract } => {
                     validate_identity(&format!("{path}.authority.contract"), contract)?;
@@ -803,6 +809,31 @@ impl MirExecutableModule {
                 }
                 _ => false,
             }
+    }
+
+    fn body_may_unwind(&self, function: &MirFunction) -> bool {
+        function
+            .body
+            .blocks
+            .iter()
+            .any(|block| match &block.terminator.kind {
+                MirTerminatorKind::Call(call) => {
+                    let identity = match &call.callee {
+                        MirCallee::Direct(identity) | MirCallee::Intrinsic(identity) => identity,
+                    };
+                    self.callables
+                        .binary_search_by(|callable| callable.identity.as_str().cmp(identity))
+                        .ok()
+                        .and_then(|index| self.callables.get(index))
+                        .is_none_or(|callable| callable.signature.can_unwind)
+                        || unwind_action_may_unwind(&call.unwind)
+                }
+                MirTerminatorKind::Drop { .. } | MirTerminatorKind::Assert { .. } => true,
+                MirTerminatorKind::Goto(_)
+                | MirTerminatorKind::SwitchInt { .. }
+                | MirTerminatorKind::Return
+                | MirTerminatorKind::Unreachable => false,
+            })
     }
 
     fn validate_intrinsic_signature(
@@ -2697,6 +2728,13 @@ struct ProjectionState<'a> {
     ty: ProjectionType<'a>,
     writable: bool,
     address_space: MirAddressSpace,
+}
+
+fn unwind_action_may_unwind(action: &MirUnwindAction) -> bool {
+    matches!(
+        action,
+        MirUnwindAction::Continue | MirUnwindAction::Cleanup(_)
+    )
 }
 
 pub(crate) fn terminator_edges(terminator: &MirTerminatorKind) -> Vec<&MirEdge> {
