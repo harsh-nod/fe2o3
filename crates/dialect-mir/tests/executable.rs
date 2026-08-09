@@ -73,10 +73,7 @@ fn place_module() -> MirExecutableModule {
     let (types, _, u32_id) = fixture_types();
     MirExecutableModule {
         version: MirExecutableVersion::V1,
-        target: MirExecutableTarget {
-            pointer_width_bits: 32,
-            thread_index_width_bits: 32,
-        },
+        target: MirExecutableTarget::gfx942(),
         types,
         callables: vec![],
         functions: vec![MirFunction {
@@ -118,10 +115,7 @@ fn ssa_module() -> MirExecutableModule {
     let (types, _, u32_id) = fixture_types();
     MirExecutableModule {
         version: MirExecutableVersion::V1,
-        target: MirExecutableTarget {
-            pointer_width_bits: 32,
-            thread_index_width_bits: 32,
-        },
+        target: MirExecutableTarget::gfx942(),
         types,
         callables: vec![],
         functions: vec![MirFunction {
@@ -398,10 +392,7 @@ fn rejects_double_move_of_a_conservatively_non_copy_value() {
     let tuple_id = MirTypeId(types.iter().position(|item| item == &tuple_ty).unwrap() as u32);
     let mut module = MirExecutableModule {
         version: MirExecutableVersion::V1,
-        target: MirExecutableTarget {
-            pointer_width_bits: 32,
-            thread_index_width_bits: 32,
-        },
+        target: MirExecutableTarget::gfx942(),
         types,
         callables: vec![],
         functions: vec![MirFunction {
@@ -583,6 +574,14 @@ fn sequence_module(slice: bool) -> MirExecutableModule {
         4,
         4,
     );
+    let u64_ty = ty(
+        MirTypeKind::Scalar(MirScalarType::Int {
+            signed: false,
+            bits: 64,
+        }),
+        8,
+        8,
+    );
     let array2_ty = ty(
         MirTypeKind::Array {
             element: Box::new(u32_ty.clone()),
@@ -607,6 +606,7 @@ fn sequence_module(slice: bool) -> MirExecutableModule {
     };
     let mut types = vec![
         u32_ty.clone(),
+        u64_ty.clone(),
         array2_ty.clone(),
         array4_ty.clone(),
         slice_ty.clone(),
@@ -616,6 +616,7 @@ fn sequence_module(slice: bool) -> MirExecutableModule {
         MirTypeId(types.iter().position(|item| item == needle).unwrap() as u32)
     };
     let u32_id = id(&u32_ty);
+    let u64_id = id(&u64_ty);
     let array2_id = id(&array2_ty);
     let sequence_id = if slice { id(&slice_ty) } else { id(&array4_ty) };
     let projection = if slice {
@@ -636,10 +637,7 @@ fn sequence_module(slice: bool) -> MirExecutableModule {
     let projected_ty = if slice { sequence_id } else { array2_id };
     MirExecutableModule {
         version: MirExecutableVersion::V1,
-        target: MirExecutableTarget {
-            pointer_width_bits: 32,
-            thread_index_width_bits: 32,
-        },
+        target: MirExecutableTarget::gfx942(),
         types,
         callables: vec![],
         functions: vec![MirFunction {
@@ -648,7 +646,7 @@ fn sequence_module(slice: bool) -> MirExecutableModule {
             body: MirBody {
                 form: MirBodyForm::Places,
                 locals: vec![
-                    local(u32_id, MirLocalKind::Return, true),
+                    local(u64_id, MirLocalKind::Return, true),
                     local(sequence_id, MirLocalKind::Argument, false),
                     local(u32_id, MirLocalKind::Argument, false),
                 ],
@@ -656,7 +654,7 @@ fn sequence_module(slice: bool) -> MirExecutableModule {
                     parameters: vec![],
                     statements: vec![MirStatement {
                         kind: MirStatementKind::Assign {
-                            place: MirPlace::local(MirLocalId(0), u32_id),
+                            place: MirPlace::local(MirLocalId(0), u64_id),
                             value: MirRvalue::Len(MirPlace {
                                 local: MirLocalId(1),
                                 projection: vec![projection],
@@ -719,12 +717,16 @@ fn enforces_rustc_constant_index_and_subslice_semantics() {
     );
 
     let mut constant = module;
-    let u32_id = constant.functions[0].body.locals[0].ty;
-    let MirStatementKind::Assign { value, .. } =
-        &mut constant.functions[0].body.blocks[0].statements[0].kind
+    let u32_id = constant.functions[0].body.locals[2].ty;
+    constant.functions[0].body.locals[0].ty = u32_id;
+    let MirStatementKind::Assign {
+        place: destination,
+        value,
+    } = &mut constant.functions[0].body.blocks[0].statements[0].kind
     else {
         unreachable!();
     };
+    destination.ty = u32_id;
     *value = MirRvalue::Use(MirOperand::Copy(MirPlace {
         local: MirLocalId(1),
         projection: vec![MirProjection::ConstantIndex {
@@ -802,28 +804,14 @@ fn enforces_rustc_constant_index_and_subslice_semantics() {
             .contains("must equal the static array length")
     );
 
-    let mut too_wide = sequence_module(false);
-    let u32_id = too_wide.functions[0].body.locals[0].ty;
-    let MirStatementKind::Assign { value, .. } =
-        &mut too_wide.functions[0].body.blocks[0].statements[0].kind
-    else {
-        unreachable!();
-    };
-    *value = MirRvalue::Use(MirOperand::Copy(MirPlace {
-        local: MirLocalId(1),
-        projection: vec![MirProjection::ConstantIndex {
-            offset: u64::from(u32::MAX) + 1,
-            min_length: u64::from(u32::MAX) + 2,
-            from_end: false,
-        }],
-        ty: u32_id,
-    }));
+    let mut forged_width = sequence_module(false);
+    forged_width.target.pointer_width_bits = 32;
     assert!(
-        too_wide
+        forged_width
             .validate()
             .unwrap_err()
             .reason()
-            .contains("target usize width")
+            .contains("default pointers must be 64 bits")
     );
 
     let slice = sequence_module(true);
@@ -852,25 +840,29 @@ fn target_controls_usize_index_and_thread_index_widths() {
             .validate()
             .unwrap_err()
             .reason()
-            .contains("required result type")
+            .contains("thread indices must be 32 bits")
     );
 
     let mut len = sequence_module(false);
-    len.target.pointer_width_bits = 64;
+    len.target.pointer_width_bits = 32;
     assert!(
         len.validate()
             .unwrap_err()
             .reason()
-            .contains("required result type")
+            .contains("default pointers must be 64 bits")
     );
 
     let mut index = sequence_module(false);
-    let u32_id = index.functions[0].body.locals[0].ty;
-    let MirStatementKind::Assign { value, .. } =
-        &mut index.functions[0].body.blocks[0].statements[0].kind
+    let u32_id = index.functions[0].body.locals[2].ty;
+    index.functions[0].body.locals[0].ty = u32_id;
+    let MirStatementKind::Assign {
+        place: destination,
+        value,
+    } = &mut index.functions[0].body.blocks[0].statements[0].kind
     else {
         unreachable!();
     };
+    destination.ty = u32_id;
     *value = MirRvalue::Use(MirOperand::Copy(MirPlace {
         local: MirLocalId(1),
         projection: vec![MirProjection::Index {
@@ -890,10 +882,7 @@ fn target_controls_usize_index_and_thread_index_widths() {
 fn zero_sized_constant_module(semantic_ty: MirSemanticType) -> MirExecutableModule {
     MirExecutableModule {
         version: MirExecutableVersion::V1,
-        target: MirExecutableTarget {
-            pointer_width_bits: 32,
-            thread_index_width_bits: 32,
-        },
+        target: MirExecutableTarget::gfx942(),
         types: vec![semantic_ty],
         callables: vec![],
         functions: vec![MirFunction {
@@ -1035,10 +1024,7 @@ fn set_discriminant_cannot_expose_uninitialized_payload_fields() {
     let enum_id = MirTypeId(0);
     let mut module = MirExecutableModule {
         version: MirExecutableVersion::V1,
-        target: MirExecutableTarget {
-            pointer_width_bits: 32,
-            thread_index_width_bits: 32,
-        },
+        target: MirExecutableTarget::gfx942(),
         types: vec![enum_ty],
         callables: vec![],
         functions: vec![MirFunction {
@@ -1186,10 +1172,7 @@ fn discriminant_downcast_module(join_before_downcast: bool) -> MirExecutableModu
 
     MirExecutableModule {
         version: MirExecutableVersion::V1,
-        target: MirExecutableTarget {
-            pointer_width_bits: 32,
-            thread_index_width_bits: 32,
-        },
+        target: MirExecutableTarget::gfx942(),
         types,
         callables: vec![],
         functions: vec![MirFunction {
@@ -1214,10 +1197,7 @@ fn payload_downcasts_require_path_exact_active_variants() {
     let (types, enum_id, u32_id) = payload_enum_types();
     let unknown_argument = MirExecutableModule {
         version: MirExecutableVersion::V1,
-        target: MirExecutableTarget {
-            pointer_width_bits: 32,
-            thread_index_width_bits: 32,
-        },
+        target: MirExecutableTarget::gfx942(),
         types,
         callables: vec![],
         functions: vec![MirFunction {
@@ -1267,10 +1247,7 @@ fn aggregate_construction_initializes_variant_payload_authority() {
     let (types, enum_id, u32_id) = payload_enum_types();
     let module = MirExecutableModule {
         version: MirExecutableVersion::V1,
-        target: MirExecutableTarget {
-            pointer_width_bits: 32,
-            thread_index_width_bits: 32,
-        },
+        target: MirExecutableTarget::gfx942(),
         types,
         callables: vec![],
         functions: vec![MirFunction {
@@ -1341,6 +1318,11 @@ fn pointer_module(raw: bool) -> (MirExecutableModule, PointerTypes) {
         4,
     );
     let pointer = |raw: bool, mutability, address_space| {
+        let pointer_bytes = match address_space {
+            MirAddressSpace(0 | 1 | 4) => 8,
+            MirAddressSpace(2 | 3 | 5 | 6) => 4,
+            _ => unreachable!(),
+        };
         ty(
             if raw {
                 MirTypeKind::RawPointer {
@@ -1355,8 +1337,8 @@ fn pointer_module(raw: bool) -> (MirExecutableModule, PointerTypes) {
                     address_space,
                 }
             },
-            4,
-            4,
+            pointer_bytes,
+            pointer_bytes,
         )
     };
     let shared_ref_as0 = pointer(false, MirMutability::Immutable, MirAddressSpace(0));
@@ -1410,10 +1392,7 @@ fn pointer_module(raw: bool) -> (MirExecutableModule, PointerTypes) {
     (
         MirExecutableModule {
             version: MirExecutableVersion::V1,
-            target: MirExecutableTarget {
-                pointer_width_bits: 32,
-                thread_index_width_bits: 32,
-            },
+            target: MirExecutableTarget::gfx942(),
             types,
             callables: vec![],
             functions: vec![MirFunction {
@@ -1644,23 +1623,23 @@ fn references_require_storage_or_reference_provenance() {
 #[test]
 fn recursively_enforces_target_pointer_abi_and_address_spaces() {
     let (mut wrong_width, ids) = pointer_module(true);
-    wrong_width.types[ids.const_ptr_as1.0 as usize].layout = MirLayout::sized(8, 8);
+    wrong_width.types[ids.const_ptr_as1.0 as usize].layout = MirLayout::sized(4, 4);
     assert!(
         wrong_width
             .validate()
             .unwrap_err()
             .reason()
-            .contains("target pointer ABI")
+            .contains("address-space pointer ABI")
     );
 
     let (mut wrong_alignment, ids) = pointer_module(true);
-    wrong_alignment.types[ids.const_ptr_as1.0 as usize].layout = MirLayout::sized(4, 2);
+    wrong_alignment.types[ids.const_ptr_as1.0 as usize].layout = MirLayout::sized(8, 4);
     assert!(
         wrong_alignment
             .validate()
             .unwrap_err()
             .reason()
-            .contains("target pointer ABI")
+            .contains("address-space pointer ABI")
     );
 
     let (mut wrong_space, ids) = pointer_module(true);
@@ -1718,8 +1697,8 @@ fn recursively_enforces_target_pointer_abi_and_address_spaces() {
             mutability: MirMutability::Immutable,
             address_space: MirAddressSpace(1),
         },
-        8,
-        8,
+        4,
+        4,
     );
     let nested = ty(
         MirTypeKind::Struct(MirStructType {
@@ -1730,18 +1709,18 @@ fn recursively_enforces_target_pointer_abi_and_address_spaces() {
                     offset: 0,
                     ty: nested_bad_pointer,
                 }],
-                padding: vec![],
+                padding: vec![MirPadding { offset: 4, size: 4 }],
             },
         }),
         8,
-        8,
+        4,
     );
     assert!(
         zero_sized_constant_module(nested)
             .validate()
             .unwrap_err()
             .reason()
-            .contains("target pointer ABI")
+            .contains("address-space pointer ABI")
     );
 
     let oversized_zst_array = ty(
@@ -1752,22 +1731,86 @@ fn recursively_enforces_target_pointer_abi_and_address_spaces() {
         0,
         1,
     );
-    assert!(
-        zero_sized_constant_module(oversized_zst_array)
-            .validate()
-            .unwrap_err()
-            .reason()
-            .contains("target usize width")
-    );
+    zero_sized_constant_module(oversized_zst_array)
+        .validate()
+        .unwrap();
 
     let mut local_space = place_module();
     local_space.functions[0].body.locals[0].storage_address_space = MirAddressSpace(6);
+    local_space.validate().unwrap();
+    local_space.functions[0].body.locals[0].storage_address_space = MirAddressSpace(7);
     assert!(
         local_space
             .validate()
             .unwrap_err()
             .reason()
-            .contains("address space 6")
+            .contains("address space 7")
+    );
+}
+
+#[test]
+fn gfx942_target_identity_and_pointer_map_are_exact() {
+    let mut wrong_triple = place_module();
+    wrong_triple.target.triple = "amdgcn-unknown-amdhsa".into();
+    assert!(
+        wrong_triple
+            .validate()
+            .unwrap_err()
+            .path()
+            .contains("triple")
+    );
+
+    let mut wrong_cpu = place_module();
+    wrong_cpu.target.cpu = "gfx950".into();
+    assert!(wrong_cpu.validate().unwrap_err().path().contains("cpu"));
+
+    let mut wrong_features = place_module();
+    wrong_features.target.features = "+wavefrontsize32".into();
+    assert!(
+        wrong_features
+            .validate()
+            .unwrap_err()
+            .path()
+            .contains("features")
+    );
+
+    let mut wrong_layout = place_module();
+    wrong_layout.target.data_layout = "e-p:64:64-p3:64:64".into();
+    assert!(
+        wrong_layout
+            .validate()
+            .unwrap_err()
+            .path()
+            .contains("data_layout")
+    );
+
+    let mut missing = place_module();
+    missing.target.pointer_abis.pop();
+    assert!(missing.validate().unwrap_err().reason().contains("missing"));
+
+    let mut extra = place_module();
+    extra.target.pointer_abis.push(extra.target.pointer_abis[6]);
+    assert!(extra.validate().unwrap_err().reason().contains("extra"));
+
+    let mut duplicate = place_module();
+    duplicate.target.pointer_abis[4].address_space = MirAddressSpace(3);
+    assert!(
+        duplicate
+            .validate()
+            .unwrap_err()
+            .reason()
+            .contains("unique")
+    );
+
+    let mut forged_local_pointer = place_module();
+    forged_local_pointer.target.pointer_abis[3].width_bits = 64;
+    forged_local_pointer.target.pointer_abis[3].abi_alignment_bits = 64;
+    assert!(
+        forged_local_pointer
+            .validate()
+            .unwrap_err()
+            .reason()
+            .contains("exact gfx942")
     );
 }
 
@@ -1797,12 +1840,20 @@ fn intrinsic_module() -> (MirExecutableModule, IntrinsicTypes) {
         4,
         4,
     );
+    let u64_ty = ty(
+        MirTypeKind::Scalar(MirScalarType::Int {
+            signed: false,
+            bits: 64,
+        }),
+        8,
+        8,
+    );
     let pointer = |mutability| {
         ty(
             MirTypeKind::RawPointer {
                 pointee: Box::new(u32_ty.clone()),
                 mutability,
-                address_space: MirAddressSpace(1),
+                address_space: MirAddressSpace(3),
             },
             4,
             4,
@@ -1814,6 +1865,7 @@ fn intrinsic_module() -> (MirExecutableModule, IntrinsicTypes) {
         unit.clone(),
         u32_ty.clone(),
         i32_ty.clone(),
+        u64_ty.clone(),
         const_ptr.clone(),
         mut_ptr.clone(),
     ];
@@ -1828,12 +1880,13 @@ fn intrinsic_module() -> (MirExecutableModule, IntrinsicTypes) {
         mut_ptr: id(&mut_ptr),
     };
     let i32_id = id(&i32_ty);
+    let u64_id = id(&u64_ty);
     let callables = vec![
         MirCallable {
             identity: "fe2o3.copy_nonoverlapping".into(),
             authority: MirCallAuthority::Intrinsic(MirIntrinsic::CopyNonOverlapping),
             signature: MirCallSignature {
-                inputs: vec![ids.const_ptr, ids.mut_ptr, ids.u32_ty],
+                inputs: vec![ids.const_ptr, ids.mut_ptr, u64_id],
                 output: MirCallReturn::Value(ids.unit),
                 can_unwind: false,
             },
@@ -1869,10 +1922,7 @@ fn intrinsic_module() -> (MirExecutableModule, IntrinsicTypes) {
     (
         MirExecutableModule {
             version: MirExecutableVersion::V1,
-            target: MirExecutableTarget {
-                pointer_width_bits: 32,
-                thread_index_width_bits: 32,
-            },
+            target: MirExecutableTarget::gfx942(),
             types,
             callables,
             functions: vec![MirFunction {

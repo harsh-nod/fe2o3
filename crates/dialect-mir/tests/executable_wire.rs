@@ -24,10 +24,7 @@ fn scalar_u32() -> MirSemanticType {
 fn module() -> MirExecutableModule {
     MirExecutableModule {
         version: MirExecutableVersion::V1,
-        target: MirExecutableTarget {
-            pointer_width_bits: 32,
-            thread_index_width_bits: 32,
-        },
+        target: MirExecutableTarget::gfx942(),
         types: vec![scalar_u32()],
         callables: vec![],
         functions: vec![MirFunction {
