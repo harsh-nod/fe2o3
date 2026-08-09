@@ -2117,36 +2117,151 @@ def open_staging_root(profile: Profile, path: Path, label: str) -> int:
         fail(f"cannot open or lock {label}: {error}")
 
 
+@dataclass
+class CleanupDirectory:
+    name: str | None
+    device: int
+    inode: int
+    entries: list[str]
+    next_entry: int = 0
+
+
+def read_cleanup_entries(
+    directory_fd: int, budget: list[int], label: str
+) -> list[str]:
+    os.fchmod(directory_fd, 0o700)
+    names = []
+    with os.scandir(directory_fd) as iterator:
+        for entry in iterator:
+            budget[0] += 1
+            if budget[0] > MAX_CLEANUP_ENTRIES:
+                fail(f"{label} cleanup exceeds the protected entry quota")
+            names.append(entry.name)
+    return sorted(names)
+
+
 def remove_directory_contents(directory_fd: int, budget: list[int], label: str) -> None:
+    walk_fd = directory_fd
+    walk_fd_owned = False
     try:
-        os.fchmod(directory_fd, 0o700)
-        with os.scandir(directory_fd) as iterator:
-            names = []
-            for entry in iterator:
-                budget[0] += 1
-                if budget[0] > MAX_CLEANUP_ENTRIES:
-                    fail(f"{label} cleanup exceeds the protected entry quota")
-                names.append(entry.name)
-        for name in sorted(names):
-            info = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
-            if stat.S_ISDIR(info.st_mode):
-                child_fd = os.open(
-                    name,
-                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
-                    dir_fd=directory_fd,
-                )
+        root_info = os.fstat(walk_fd)
+        stack = [
+            CleanupDirectory(
+                None,
+                root_info.st_dev,
+                root_info.st_ino,
+                read_cleanup_entries(walk_fd, budget, label),
+            )
+        ]
+
+        while stack:
+            current = stack[-1]
+            if current.next_entry < len(current.entries):
+                name = current.entries[current.next_entry]
+                current.next_entry += 1
+                info = os.stat(name, dir_fd=walk_fd, follow_symlinks=False)
+                if not stat.S_ISDIR(info.st_mode):
+                    os.unlink(name, dir_fd=walk_fd)
+                    os.fsync(walk_fd)
+                    continue
+
+                child_fd = -1
                 try:
-                    remove_directory_contents(child_fd, budget, label)
+                    child_fd = os.open(
+                        name,
+                        os.O_RDONLY
+                        | os.O_DIRECTORY
+                        | os.O_NOFOLLOW
+                        | os.O_CLOEXEC,
+                        dir_fd=walk_fd,
+                    )
+                    child_info = os.fstat(child_fd)
+                    if (
+                        not stat.S_ISDIR(child_info.st_mode)
+                        or (child_info.st_dev, child_info.st_ino)
+                        != (info.st_dev, info.st_ino)
+                    ):
+                        fail(f"{label} entry identity changed during cleanup")
+                    child_entries = read_cleanup_entries(child_fd, budget, label)
+                    closing_fd = walk_fd
+                    closing_fd_owned = walk_fd_owned
+                    walk_fd = child_fd
+                    walk_fd_owned = True
+                    child_fd = -1
+                    if closing_fd_owned:
+                        close_descriptor(closing_fd, f"{label} parent during cleanup")
+                    stack.append(
+                        CleanupDirectory(
+                            name,
+                            child_info.st_dev,
+                            child_info.st_ino,
+                            child_entries,
+                        )
+                    )
                 finally:
                     close_descriptor(child_fd, f"{label} child during cleanup")
-                os.rmdir(name, dir_fd=directory_fd)
-            else:
-                os.unlink(name, dir_fd=directory_fd)
-            os.fsync(directory_fd)
+                continue
+
+            if len(stack) == 1:
+                break
+
+            child = stack[-1]
+            parent = stack[-2]
+            if child.name is None:
+                fail(f"{label} cleanup stack lost the child name")
+            parent_fd = -1
+            try:
+                parent_fd = os.open(
+                    "..",
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                    dir_fd=walk_fd,
+                )
+                parent_info = os.fstat(parent_fd)
+                if (parent_info.st_dev, parent_info.st_ino) != (
+                    parent.device,
+                    parent.inode,
+                ):
+                    fail(f"{label} parent identity changed during cleanup")
+                linked_info = os.stat(
+                    child.name, dir_fd=parent_fd, follow_symlinks=False
+                )
+                if (
+                    not stat.S_ISDIR(linked_info.st_mode)
+                    or (linked_info.st_dev, linked_info.st_ino)
+                    != (child.device, child.inode)
+                ):
+                    fail(f"{label} child identity changed before removal")
+
+                closing_fd = walk_fd
+                walk_fd = -1
+                walk_fd_owned = False
+                close_descriptor(closing_fd, f"{label} child before removal")
+                if len(stack) == 2:
+                    closing_parent_fd = parent_fd
+                    parent_fd = -1
+                    close_descriptor(
+                        closing_parent_fd, f"{label} root parent during cleanup"
+                    )
+                    walk_fd = directory_fd
+                    walk_fd_owned = False
+                else:
+                    walk_fd = parent_fd
+                    walk_fd_owned = True
+                    parent_fd = -1
+                os.rmdir(child.name, dir_fd=walk_fd)
+                os.fsync(walk_fd)
+                stack.pop()
+            finally:
+                close_descriptor(parent_fd, f"{label} parent during cleanup")
     except ExecutorError:
         raise
+    except RecursionError as error:
+        fail(f"cannot durably clean {label}: traversal depth exceeded: {error}")
     except OSError as error:
         fail(f"cannot durably clean {label}: {error}")
+    finally:
+        if walk_fd_owned:
+            close_descriptor(walk_fd, f"{label} cleanup traversal")
 
 
 def cleanup_staging_lease(

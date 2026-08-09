@@ -1236,6 +1236,141 @@ module.cleanup_staging_lease(
 os.close(cleanup_root_fd)
 assert not any(output_root.iterdir())
 
+deep_name = "plan-" + "0" * 64 + "-" + "1" * 64
+deep_lease = output_root / deep_name
+deep_lease.mkdir()
+deep_cursor = deep_lease
+for _ in range(1101):
+    deep_cursor = deep_cursor / "d"
+    deep_cursor.mkdir()
+(deep_cursor / "leaf").write_bytes(b"deep cleanup\n")
+deep_info = deep_lease.stat()
+deep_root_fd = os.open(
+    output_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+)
+try:
+    module.cleanup_staging_lease(
+        deep_root_fd,
+        deep_name,
+        deep_info.st_dev,
+        deep_info.st_ino,
+        "deep cleanup fixture",
+    )
+except RecursionError as error:
+    raise AssertionError("deep cleanup leaked RecursionError") from error
+finally:
+    os.close(deep_root_fd)
+assert not deep_lease.exists()
+
+outside = output_root.parent / "cleanup-symlink-target"
+outside.mkdir()
+(outside / "sentinel").write_bytes(b"preserve me\n")
+symlink_name = "plan-" + "2" * 64 + "-" + "3" * 64
+symlink_lease = output_root / symlink_name
+symlink_lease.mkdir()
+(symlink_lease / "external").symlink_to(outside, target_is_directory=True)
+symlink_info = symlink_lease.stat()
+symlink_root_fd = os.open(
+    output_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+)
+module.cleanup_staging_lease(
+    symlink_root_fd,
+    symlink_name,
+    symlink_info.st_dev,
+    symlink_info.st_ino,
+    "symlink cleanup fixture",
+)
+os.close(symlink_root_fd)
+assert (outside / "sentinel").read_bytes() == b"preserve me\n"
+(outside / "sentinel").unlink()
+outside.rmdir()
+
+quota_name = "plan-" + "4" * 64 + "-" + "5" * 64
+quota_lease = output_root / quota_name
+(quota_lease / "one" / "two").mkdir(parents=True)
+(quota_lease / "one" / "two" / "three").write_bytes(b"quota\n")
+quota_info = quota_lease.stat()
+quota_root_fd = os.open(
+    output_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+)
+real_cleanup_limit = module.MAX_CLEANUP_ENTRIES
+module.MAX_CLEANUP_ENTRIES = 2
+try:
+    try:
+        module.cleanup_staging_lease(
+            quota_root_fd,
+            quota_name,
+            quota_info.st_dev,
+            quota_info.st_ino,
+            "quota cleanup fixture",
+        )
+    except module.ExecutorError as error:
+        assert "cleanup exceeds the protected entry quota" in str(error)
+    except RecursionError as error:
+        raise AssertionError("quota cleanup leaked RecursionError") from error
+    else:
+        raise AssertionError("cleanup entry quota was not enforced")
+finally:
+    module.MAX_CLEANUP_ENTRIES = real_cleanup_limit
+module.cleanup_staging_lease(
+    quota_root_fd,
+    quota_name,
+    quota_info.st_dev,
+    quota_info.st_ino,
+    "quota cleanup fixture recovery",
+)
+os.close(quota_root_fd)
+
+race_name = "plan-" + "6" * 64 + "-" + "7" * 64
+race_lease = output_root / race_name
+(race_lease / "child").mkdir(parents=True)
+(race_lease / "child" / "file").write_bytes(b"content\n")
+race_info = race_lease.stat()
+race_root_fd = os.open(
+    output_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+)
+real_open = module.os.open
+swapped_cleanup_child = False
+
+
+def swap_cleanup_child(path, *args, **kwargs):
+    global swapped_cleanup_child
+    if path == "child" and not swapped_cleanup_child:
+        swapped_cleanup_child = True
+        (race_lease / "child").rename(race_lease / "child.original")
+        (race_lease / "child").mkdir()
+    return real_open(path, *args, **kwargs)
+
+
+module.os.open = swap_cleanup_child
+try:
+    try:
+        module.cleanup_staging_lease(
+            race_root_fd,
+            race_name,
+            race_info.st_dev,
+            race_info.st_ino,
+            "replacement cleanup fixture",
+        )
+    except module.ExecutorError as error:
+        assert "entry identity changed during cleanup" in str(error)
+    else:
+        raise AssertionError("cleanup directory replacement was accepted")
+finally:
+    module.os.open = real_open
+assert swapped_cleanup_child
+(race_lease / "child").rmdir()
+(race_lease / "child.original").rename(race_lease / "child")
+module.cleanup_staging_lease(
+    race_root_fd,
+    race_name,
+    race_info.st_dev,
+    race_info.st_ino,
+    "replacement cleanup fixture recovery",
+)
+os.close(race_root_fd)
+assert not any(output_root.iterdir())
+
 single_close_name = "plan-" + "f" * 64 + "-" + "1" * 64
 single_close_lease = output_root / single_close_name
 single_close_lease.mkdir()
