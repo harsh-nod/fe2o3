@@ -1,21 +1,41 @@
 use super::accounting::recompute_capture_accounting_v2;
 use super::normalized::*;
 use super::preflight::preflight_body_v2;
-use super::rustc_adapter::{capture_instance_body_v2, capture_instance_observation_v2};
+use super::rustc_adapter::{
+    CompilerCapturedBodyV2, RustcAuthenticCaptureV2, ValidatedRustcCaptureV2,
+    capture_instance_body_v2, capture_instance_observation_v2, recapture_against_rustc_v2,
+    rustc_authentic_capture_data_v2, verify_and_authorize_v2,
+};
 use rustc_driver::{Callbacks, Compilation};
 use rustc_hir::def::DefKind;
 use rustc_interface::interface::Compiler;
 use rustc_middle::mir::{Operand, TerminatorKind};
 use rustc_middle::ty::{Instance, TyCtxt, TyKind, TypingEnv};
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 
+trait AmbiguousIfDeserializeV2<A> {
+    fn assert_not_implemented() {}
+}
+
+impl<T> AmbiguousIfDeserializeV2<()> for T {}
+impl<T> AmbiguousIfDeserializeV2<u8> for T where for<'de> T: Deserialize<'de> {}
+
+trait AmbiguousIfAuthenticCaptureV2<'tcx, A> {
+    fn assert_not_implemented() {}
+}
+
+impl<'tcx, T> AmbiguousIfAuthenticCaptureV2<'tcx, ()> for T {}
+impl<'tcx, T: RustcAuthenticCaptureV2<'tcx>> AmbiguousIfAuthenticCaptureV2<'tcx, u8> for T {}
+
 const FIXTURE_SOURCE: &str = r#"
 #![feature(core_intrinsics)]
-#![allow(dead_code, internal_features)]
+#![feature(explicit_tail_calls)]
+#![allow(dead_code, incomplete_features, internal_features)]
 
 enum Choice {
     First(u32),
@@ -68,6 +88,16 @@ fn observed_c_call(value: u32) -> u32 {
 }
 
 #[inline(never)]
+fn tail_identity(value: u32) -> u32 {
+    value
+}
+
+#[inline(never)]
+fn observed_tail_call(value: u32) -> u32 {
+    become tail_identity(value)
+}
+
+#[inline(never)]
 fn observed_inline_assembly() {
     unsafe { core::arch::asm!("", options(nomem, nostack)) }
 }
@@ -81,12 +111,17 @@ struct DriverResults {
     intrinsic: CapturedBodyV2,
     function_pointer: CapturedBodyV2,
     c_call: CapturedBodyV2,
+    tail_call: CapturedBodyV2,
     bounded_error: String,
     work_bound_error: String,
     scope_work_bound_error: String,
     text_bound_error: String,
     switch_bound_error: String,
     unsupported_error: String,
+    recapture_errors: Vec<String>,
+    diagnostic_recapture_succeeded: bool,
+    downcast_name_recapture_succeeded: bool,
+    downcast_variant_recapture_error: String,
 }
 
 #[derive(Default)]
@@ -102,6 +137,7 @@ impl Callbacks for CaptureCallbacks {
         let function_pointer_instance =
             Instance::mono(tcx, local_function(tcx, "observed_function_pointer"));
         let c_call_instance = Instance::mono(tcx, local_function(tcx, "observed_c_call"));
+        let tail_call_instance = Instance::mono(tcx, local_function(tcx, "observed_tail_call"));
         let inline_assembly_instance =
             Instance::mono(tcx, local_function(tcx, "observed_inline_assembly"));
         let invoke_instance = resolved_direct_calls(tcx, observed_instance)
@@ -133,20 +169,64 @@ impl Callbacks for CaptureCallbacks {
         )
         .expect_err("tight aggregate work must reject source scopes during preflight")
         .to_string();
+        let observed_capture =
+            capture_instance_body_v2(tcx, observed_instance, limits).expect("capture observed MIR");
+        assert!(!observed_capture.is_authorized_for_lowering());
+        let observed = rustc_authentic_capture_data_v2(&observed_capture).clone();
+        let recaptured = recapture_against_rustc_v2(tcx, observed_instance, limits, &observed)
+            .expect("canonical data must pass exact rustc recapture");
+        assert!(!recaptured.is_authorized_for_lowering());
+        assert_eq!(rustc_authentic_capture_data_v2(&recaptured), &observed);
+        let authorization_error = verify_and_authorize_v2(tcx, observed_instance, &recaptured)
+            .expect_err("the future authorization boundary must remain disabled")
+            .to_string();
+        assert!(authorization_error.contains("lowering remains disabled"));
+        let substitution_error = verify_and_authorize_v2(tcx, invoke_instance, &recaptured)
+            .expect_err("a branded capture cannot cross rustc instances")
+            .to_string();
+        assert!(substitution_error.contains("different rustc Instance"));
+        let mut diagnostic_only = observed.clone();
+        mutate_diagnostic_observation(&mut diagnostic_only);
+        refresh_capture_accounting(&mut diagnostic_only);
+        let diagnostic_recapture =
+            recapture_against_rustc_v2(tcx, observed_instance, limits, &diagnostic_only)
+                .expect("diagnostic-only changes must preserve rustc semantic authenticity");
+        assert_ne!(
+            rustc_authentic_capture_data_v2(&diagnostic_recapture),
+            &diagnostic_only
+        );
+        let mut downcast_name_only = observed.clone();
+        let (_, downcast_name) = fixture_downcast_mut(&mut downcast_name_only);
+        *downcast_name = Some("DIAGNOSTIC_DOWNCAST_NAME_SENTINEL".to_owned());
+        refresh_capture_accounting(&mut downcast_name_only);
+        let downcast_name_recapture_succeeded =
+            recapture_against_rustc_v2(tcx, observed_instance, limits, &downcast_name_only).is_ok();
+
+        let mut downcast_variant = observed.clone();
+        let (variant, _) = fixture_downcast_mut(&mut downcast_variant);
+        *variant = (*variant)
+            .checked_add(1)
+            .expect("fixture downcast variant must be incrementable");
+        refresh_capture_accounting(&mut downcast_variant);
+        downcast_variant
+            .validate_untrusted_shape(limits)
+            .expect("mutated downcast variant remains structurally well-formed raw data");
+        let downcast_variant_recapture_error =
+            recapture_against_rustc_v2(tcx, observed_instance, limits, &downcast_variant)
+                .expect_err("downcast variant substitution must fail exact rustc recapture")
+                .to_string();
+        let recapture_errors =
+            adversarial_recapture_errors(tcx, observed_instance, limits, &observed);
 
         self.results = Some(DriverResults {
-            observed: capture_instance_body_v2(tcx, observed_instance, limits)
-                .expect("capture observed MIR"),
-            invoke_once: capture_instance_body_v2(tcx, invoke_instance, limits)
-                .expect("capture monomorphized invoke_once MIR"),
+            observed,
+            invoke_once: capture_data(tcx, invoke_instance, limits),
             closure_once_shim: capture_instance_observation_v2(tcx, closure_once_shim, limits)
                 .expect("observe generated closure-once shim MIR without authority"),
-            intrinsic: capture_instance_body_v2(tcx, intrinsic_instance, limits)
-                .expect("capture intrinsic caller MIR"),
-            function_pointer: capture_instance_body_v2(tcx, function_pointer_instance, limits)
-                .expect("capture indirect function-pointer caller MIR"),
-            c_call: capture_instance_body_v2(tcx, c_call_instance, limits)
-                .expect("capture non-unwinding C ABI caller MIR"),
+            intrinsic: capture_data(tcx, intrinsic_instance, limits),
+            function_pointer: capture_data(tcx, function_pointer_instance, limits),
+            c_call: capture_data(tcx, c_call_instance, limits),
+            tail_call: capture_data(tcx, tail_call_instance, limits),
             bounded_error: capture_instance_body_v2(
                 tcx,
                 observed_instance,
@@ -191,9 +271,22 @@ impl Callbacks for CaptureCallbacks {
             unsupported_error: capture_instance_body_v2(tcx, inline_assembly_instance, limits)
                 .expect_err("inline assembly must remain an explicit unsupported record")
                 .to_string(),
+            recapture_errors,
+            diagnostic_recapture_succeeded: true,
+            downcast_name_recapture_succeeded,
+            downcast_variant_recapture_error,
         });
         Compilation::Stop
     }
+}
+
+fn capture_data<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+    limits: CaptureLimitsV2,
+) -> CapturedBodyV2 {
+    let captured = capture_instance_body_v2(tcx, instance, limits).expect("compiler capture");
+    rustc_authentic_capture_data_v2(&captured).clone()
 }
 
 fn local_function(tcx: TyCtxt<'_>, name: &str) -> rustc_hir::def_id::DefId {
@@ -334,10 +427,7 @@ struct SingleCaptureCallbacks {
 impl Callbacks for SingleCaptureCallbacks {
     fn after_analysis<'tcx>(&mut self, _compiler: &Compiler, tcx: TyCtxt<'tcx>) -> Compilation {
         let instance = Instance::mono(tcx, local_function(tcx, "observed"));
-        self.body = Some(
-            capture_instance_body_v2(tcx, instance, CaptureLimitsV2::default())
-                .expect("capture single observed body"),
-        );
+        self.body = Some(capture_data(tcx, instance, CaptureLimitsV2::default()));
         Compilation::Stop
     }
 }
@@ -485,6 +575,244 @@ fn refresh_capture_accounting(body: &mut CapturedBodyV2) {
     body.capture_text_bytes = accounting.text_bytes;
 }
 
+fn mutate_diagnostic_observation(body: &mut CapturedBodyV2) {
+    body.function.definition.diagnostic_crate_name = "DIAGNOSTIC_CRATE_SENTINEL".to_owned();
+    body.function.definition.diagnostic_def_path = "DIAGNOSTIC_PATH_SENTINEL".to_owned();
+    body.function.instance.diagnostic_generic_args = "DIAGNOSTIC_ARGS_SENTINEL".to_owned();
+    body.function.instance.diagnostic_debug = "DIAGNOSTIC_INSTANCE_SENTINEL".to_owned();
+    body.source.remapped_file = "/diagnostic/path/sentinel.rs".to_owned();
+    body.source.diagnostic_debug = "DIAGNOSTIC_SPAN_SENTINEL".to_owned();
+
+    let local = body.locals.first_mut().expect("fixture return local");
+    local.ty.diagnostic_display = "DIAGNOSTIC_TYPE_DISPLAY_SENTINEL".to_owned();
+    local.ty.diagnostic_debug = "DIAGNOSTIC_TYPE_DEBUG_SENTINEL".to_owned();
+    local.diagnostic_debug = "DIAGNOSTIC_LOCAL_SENTINEL".to_owned();
+
+    let block = body.blocks.first_mut().expect("fixture entry block");
+    if let Some(statement) = block.statements.first_mut() {
+        statement.diagnostic_debug = "DIAGNOSTIC_STATEMENT_SENTINEL".to_owned();
+        statement.source.remapped_file = "/diagnostic/statement/sentinel.rs".to_owned();
+        statement.source.diagnostic_debug = "DIAGNOSTIC_STATEMENT_SPAN_SENTINEL".to_owned();
+    }
+    block.terminator.diagnostic_debug = "DIAGNOSTIC_TERMINATOR_SENTINEL".to_owned();
+    block.terminator.source.remapped_file = "/diagnostic/terminator/sentinel.rs".to_owned();
+    block.terminator.source.diagnostic_debug = "DIAGNOSTIC_TERMINATOR_SPAN_SENTINEL".to_owned();
+
+    if let Some(call_source) = body.blocks.iter_mut().find_map(|block| {
+        if let TerminatorKindV2::Call { call_source, .. } = &mut block.terminator.kind {
+            Some(call_source)
+        } else {
+            None
+        }
+    }) {
+        call_source.diagnostic = "DIAGNOSTIC_COMPILER_VALUE_SENTINEL".to_owned();
+    }
+
+    let (_, downcast_name) = fixture_downcast_mut(body);
+    *downcast_name = Some("DIAGNOSTIC_DOWNCAST_NAME_SENTINEL".to_owned());
+}
+
+fn fixture_downcast_mut(body: &mut CapturedBodyV2) -> (&mut usize, &mut Option<String>) {
+    for block in &mut body.blocks {
+        for statement in &mut block.statements {
+            let StatementKindV2::Assign { value, .. } = &mut statement.kind else {
+                continue;
+            };
+            let RvalueV2::Use(operand) = value.as_mut() else {
+                continue;
+            };
+            let place = match operand {
+                OperandV2::Copy(place) | OperandV2::Move(place) => place,
+                OperandV2::Constant { .. } | OperandV2::RuntimeChecks { .. } => continue,
+            };
+            for projection in &mut place.projection {
+                if let ProjectionV2::Downcast { variant, name } = projection {
+                    return (variant, name);
+                }
+            }
+        }
+    }
+    panic!("observed fixture must contain a downcast place projection")
+}
+
+fn refresh_call_bindings(kind: &mut TerminatorKindV2) {
+    match kind {
+        TerminatorKindV2::Call {
+            function,
+            callee,
+            arguments,
+            destination,
+            target,
+            unwind,
+            contract_hash,
+            ..
+        } => {
+            refresh_callee_binding(function, callee);
+            *contract_hash = call_contract_hash_v2(
+                function,
+                callee,
+                arguments,
+                Some(destination),
+                *target,
+                Some(unwind),
+            )
+            .unwrap();
+        }
+        TerminatorKindV2::TailCall {
+            function,
+            callee,
+            arguments,
+            contract_hash,
+            ..
+        } => {
+            refresh_callee_binding(function, callee);
+            *contract_hash =
+                call_contract_hash_v2(function, callee, arguments, None, None, None).unwrap();
+        }
+        _ => panic!("expected call terminator"),
+    }
+}
+
+fn refresh_callee_binding(function: &OperandV2, callee: &mut CalleeIdentityV2) {
+    match callee {
+        CalleeIdentityV2::Direct {
+            declared,
+            declared_generic_args_hash,
+            declared_generic_arg_count,
+            declared_signature,
+            resolved,
+            resolved_signature,
+            intrinsic,
+            resolution_binding_hash,
+        } => {
+            declared_signature.binding_hash =
+                function_signature_binding_hash_v2(declared_signature).unwrap();
+            resolved_signature.binding_hash =
+                function_signature_binding_hash_v2(resolved_signature).unwrap();
+            if let Some(intrinsic) = intrinsic {
+                intrinsic.binding_hash = intrinsic_binding_hash_v2(intrinsic).unwrap();
+            }
+            let OperandV2::Constant { ty, .. } = function else {
+                panic!("direct fixture call must use a constant function operand")
+            };
+            *resolution_binding_hash = resolution_binding_hash_v2(
+                ty,
+                declared,
+                declared_generic_args_hash,
+                *declared_generic_arg_count,
+                declared_signature,
+                resolved,
+                resolved_signature,
+                intrinsic.as_deref(),
+            )
+            .unwrap();
+        }
+        CalleeIdentityV2::Indirect {
+            callable_type,
+            signature,
+            callable_binding_hash,
+        } => {
+            signature.binding_hash = function_signature_binding_hash_v2(signature).unwrap();
+            *callable_binding_hash =
+                indirect_callable_binding_hash_v2(callable_type, signature).unwrap();
+        }
+    }
+}
+
+fn adversarial_recapture_errors<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+    limits: CaptureLimitsV2,
+    canonical: &CapturedBodyV2,
+) -> Vec<String> {
+    let mut adversaries = Vec::new();
+
+    let mut local_type = canonical.clone();
+    local_type.locals[1].ty.stable_hash[0] ^= 1;
+    refresh_capture_accounting(&mut local_type);
+    adversaries.push(local_type);
+
+    let mut place_type = canonical.clone();
+    let place = place_type
+        .blocks
+        .iter_mut()
+        .flat_map(|block| &mut block.statements)
+        .find_map(|statement| match &mut statement.kind {
+            StatementKindV2::Assign { destination, .. } => Some(destination),
+            _ => None,
+        })
+        .expect("fixture must contain an assignment place");
+    place.type_hash[0] ^= 1;
+    if let Some(final_hash) = place.projection_type_hashes.last_mut() {
+        *final_hash = place.type_hash;
+    }
+    refresh_capture_accounting(&mut place_type);
+    adversaries.push(place_type);
+
+    let mut resolution = canonical.clone();
+    let call = resolution
+        .blocks
+        .iter_mut()
+        .find_map(|block| match &mut block.terminator.kind {
+            kind @ TerminatorKindV2::Call {
+                callee: CalleeIdentityV2::Direct { .. },
+                ..
+            } => Some(kind),
+            _ => None,
+        })
+        .expect("fixture must contain a direct call");
+    if let TerminatorKindV2::Call {
+        callee: CalleeIdentityV2::Direct { resolved, .. },
+        ..
+    } = call
+    {
+        resolved.instance.instance_hash[0] ^= 1;
+    }
+    refresh_call_bindings(call);
+    refresh_capture_accounting(&mut resolution);
+    adversaries.push(resolution);
+
+    let mut signature = canonical.clone();
+    let call = signature
+        .blocks
+        .iter_mut()
+        .find_map(|block| match &mut block.terminator.kind {
+            kind @ TerminatorKindV2::Call {
+                callee: CalleeIdentityV2::Direct { .. },
+                ..
+            } => Some(kind),
+            _ => None,
+        })
+        .expect("fixture must contain a direct call");
+    if let TerminatorKindV2::Call {
+        callee:
+            CalleeIdentityV2::Direct {
+                declared_signature,
+                resolved_signature,
+                ..
+            },
+        ..
+    } = call
+    {
+        declared_signature.stable_hash[0] ^= 1;
+        resolved_signature.stable_hash[0] ^= 1;
+    }
+    refresh_call_bindings(call);
+    refresh_capture_accounting(&mut signature);
+    adversaries.push(signature);
+
+    adversaries
+        .into_iter()
+        .map(|data| {
+            data.validate_untrusted_shape(limits)
+                .expect("refreshed adversarial data must remain shape-valid");
+            recapture_against_rustc_v2(tcx, instance, limits, &data)
+                .expect_err("mutated data must fail exact rustc recapture")
+                .to_string()
+        })
+        .collect()
+}
+
 fn places(body: &CapturedBodyV2) -> Vec<&PlaceV2> {
     let mut places = Vec::new();
     for block in &body.blocks {
@@ -601,9 +929,66 @@ fn push_operand_place<'a>(operand: &'a OperandV2, places: &mut Vec<&'a PlaceV2>)
 }
 
 #[test]
+fn raw_data_is_serialize_only_and_cannot_satisfy_the_authentic_capture_api() {
+    fn assert_serializable<T: Serialize>() {}
+    fn assert_authentic<'tcx, T: RustcAuthenticCaptureV2<'tcx>>() {}
+
+    assert_serializable::<CapturedBodyV2>();
+    assert_authentic::<CompilerCapturedBodyV2<'static>>();
+    assert_authentic::<ValidatedRustcCaptureV2<'static>>();
+    <CapturedBodyV2 as AmbiguousIfDeserializeV2<_>>::assert_not_implemented();
+    <CapturedBodyV2 as AmbiguousIfAuthenticCaptureV2<'static, _>>::assert_not_implemented();
+    <CompilerCapturedBodyV2<'static> as AmbiguousIfDeserializeV2<_>>::assert_not_implemented();
+    <ValidatedRustcCaptureV2<'static> as AmbiguousIfDeserializeV2<_>>::assert_not_implemented();
+}
+
+#[test]
+fn bounded_decoder_boundary_is_fail_closed_before_ingestion_exists() {
+    let unavailable = decode_captured_body_v2_bounded(&[], CaptureLimitsV2::default())
+        .unwrap_err()
+        .to_string();
+    assert!(unavailable.contains("generic deserialization is disabled"));
+
+    let tight = CaptureLimitsV2 {
+        max_total_work_items: 0,
+        max_total_text_bytes: 0,
+        ..CaptureLimitsV2::default()
+    };
+    let oversized = decode_captured_body_v2_bounded(&[0; 64], tight)
+        .unwrap_err()
+        .to_string();
+    assert!(oversized.contains("pre-allocation bound"));
+}
+
+#[test]
+fn exact_rustc_recapture_rejects_refreshed_structural_forgeries() {
+    let results = compiler_results();
+    assert!(results.diagnostic_recapture_succeeded);
+    assert_eq!(results.recapture_errors.len(), 4);
+    assert!(
+        results
+            .recapture_errors
+            .iter()
+            .all(|error| error.contains("differs from bounded canonical rustc recapture"))
+    );
+}
+
+#[test]
+fn downcast_display_name_is_diagnostic_but_variant_is_structural() {
+    let results = compiler_results();
+    assert!(results.downcast_name_recapture_succeeded);
+    assert!(
+        results
+            .downcast_variant_recapture_error
+            .contains("differs from bounded canonical rustc recapture")
+    );
+}
+
+#[test]
 fn compiler_capture_preserves_cfg_reassignments_and_source_spans() {
     let body = compiler_results().observed;
-    body.validate(CaptureLimitsV2::default()).unwrap();
+    body.validate_untrusted_shape(CaptureLimitsV2::default())
+        .unwrap();
     assert!(!body.is_authorized_for_lowering());
     assert!(
         body.blocks.len() > 3,
@@ -719,11 +1104,11 @@ fn compiler_capture_preserves_generated_callable_and_intrinsic_def_ids() {
     assert!(!results.closure_once_shim.is_authorized_for_lowering());
     let unauthoritative_error = results
         .closure_once_shim
-        .validate(CaptureLimitsV2::default())
+        .validate_untrusted_shape(CaptureLimitsV2::default())
         .unwrap_err()
         .to_string();
     assert!(
-        unauthoritative_error.contains("source identity is unauthoritative"),
+        unauthoritative_error.contains("canonical-remapped structural variant"),
         "{unauthoritative_error}"
     );
     let call_spans = calls(&results.invoke_once).find_map(|kind| match kind {
@@ -855,7 +1240,7 @@ fn normalized_validation_rejects_cfg_projection_identity_and_bound_mutations() {
     refresh_capture_accounting(&mut bad_cfg);
     assert!(
         bad_cfg
-            .validate(CaptureLimitsV2::default())
+            .validate_untrusted_shape(CaptureLimitsV2::default())
             .unwrap_err()
             .to_string()
             .contains("outside")
@@ -871,7 +1256,7 @@ fn normalized_validation_rejects_cfg_projection_identity_and_bound_mutations() {
     refresh_capture_accounting(&mut inconsistent_cfg);
     assert!(
         inconsistent_cfg
-            .validate(CaptureLimitsV2::default())
+            .validate_untrusted_shape(CaptureLimitsV2::default())
             .unwrap_err()
             .to_string()
             .contains("disagrees with terminator targets")
@@ -891,10 +1276,13 @@ fn normalized_validation_rejects_cfg_projection_identity_and_bound_mutations() {
     destination
         .projection
         .push(ProjectionV2::Index { local: local_count });
+    destination
+        .projection_type_hashes
+        .push(destination.type_hash);
     refresh_capture_accounting(&mut bad_place);
     assert!(
         bad_place
-            .validate(CaptureLimitsV2::default())
+            .validate_untrusted_shape(CaptureLimitsV2::default())
             .unwrap_err()
             .to_string()
             .contains("outside")
@@ -908,7 +1296,7 @@ fn normalized_validation_rejects_cfg_projection_identity_and_bound_mutations() {
         .push('\0');
     assert!(
         bad_identity
-            .validate(CaptureLimitsV2::default())
+            .validate_untrusted_shape(CaptureLimitsV2::default())
             .unwrap_err()
             .to_string()
             .contains("NUL")
@@ -920,7 +1308,7 @@ fn normalized_validation_rejects_cfg_projection_identity_and_bound_mutations() {
     };
     assert!(
         original
-            .validate(tight)
+            .validate_untrusted_shape(tight)
             .unwrap_err()
             .to_string()
             .contains("bound exceeded")
@@ -948,7 +1336,7 @@ fn normalized_validation_enforces_call_type_and_source_scope_coherence() {
     declared_args_hash[0] ^= 1;
     assert!(
         bad_call
-            .validate(CaptureLimitsV2::default())
+            .validate_untrusted_shape(CaptureLimitsV2::default())
             .unwrap_err()
             .to_string()
             .contains("disagrees with its operand type")
@@ -959,7 +1347,7 @@ fn normalized_validation_enforces_call_type_and_source_scope_coherence() {
     refresh_capture_accounting(&mut bad_scope);
     assert!(
         bad_scope
-            .validate(CaptureLimitsV2::default())
+            .validate_untrusted_shape(CaptureLimitsV2::default())
             .unwrap_err()
             .to_string()
             .contains("source scope")
@@ -992,7 +1380,7 @@ fn normalized_validation_rejects_direct_call_substitution_and_signature_mutation
     **direct = replacement;
     refresh_capture_accounting(&mut substituted);
     let substitution_error = substituted
-        .validate(CaptureLimitsV2::default())
+        .validate_untrusted_shape(CaptureLimitsV2::default())
         .unwrap_err()
         .to_string();
     assert!(
@@ -1017,7 +1405,7 @@ fn normalized_validation_rejects_direct_call_substitution_and_signature_mutation
         .expect("invoke_once fixture must have a resolved signature");
     signature.stable_hash[0] ^= 1;
     let signature_error = bad_signature
-        .validate(CaptureLimitsV2::default())
+        .validate_untrusted_shape(CaptureLimitsV2::default())
         .unwrap_err()
         .to_string();
     assert!(
@@ -1059,7 +1447,7 @@ fn normalized_validation_binds_ordered_call_arguments_destination_and_control_fl
     arguments.pop();
     refresh_capture_accounting(&mut removed);
     let error = removed
-        .validate(CaptureLimitsV2::default())
+        .validate_untrusted_shape(CaptureLimitsV2::default())
         .unwrap_err()
         .to_string();
     assert!(error.contains("argument count"), "{error}");
@@ -1076,7 +1464,7 @@ fn normalized_validation_binds_ordered_call_arguments_destination_and_control_fl
     arguments.push(arguments[0].clone());
     refresh_capture_accounting(&mut added);
     let error = added
-        .validate(CaptureLimitsV2::default())
+        .validate_untrusted_shape(CaptureLimitsV2::default())
         .unwrap_err()
         .to_string();
     assert!(error.contains("argument count"), "{error}");
@@ -1093,7 +1481,7 @@ fn normalized_validation_binds_ordered_call_arguments_destination_and_control_fl
     arguments.swap(0, 1);
     refresh_capture_accounting(&mut reordered);
     let error = reordered
-        .validate(CaptureLimitsV2::default())
+        .validate_untrusted_shape(CaptureLimitsV2::default())
         .unwrap_err()
         .to_string();
     assert!(
@@ -1117,7 +1505,7 @@ fn normalized_validation_binds_ordered_call_arguments_destination_and_control_fl
     destination.local = 0;
     refresh_capture_accounting(&mut changed_destination);
     let error = changed_destination
-        .validate(CaptureLimitsV2::default())
+        .validate_untrusted_shape(CaptureLimitsV2::default())
         .unwrap_err()
         .to_string();
     assert!(error.contains("contract_hash"), "{error}");
@@ -1138,7 +1526,7 @@ fn normalized_validation_binds_ordered_call_arguments_destination_and_control_fl
     destination.type_hash[0] ^= 1;
     refresh_capture_accounting(&mut bad_destination_type);
     let error = bad_destination_type
-        .validate(CaptureLimitsV2::default())
+        .validate_untrusted_shape(CaptureLimitsV2::default())
         .unwrap_err()
         .to_string();
     assert!(error.contains("destination place type"), "{error}");
@@ -1157,10 +1545,77 @@ fn normalized_validation_binds_ordered_call_arguments_destination_and_control_fl
     *target = None;
     refresh_capture_accounting(&mut bad_target);
     let error = bad_target
-        .validate(CaptureLimitsV2::default())
+        .validate_untrusted_shape(CaptureLimitsV2::default())
         .unwrap_err()
         .to_string();
-    assert!(error.contains("target presence"), "{error}");
+    assert!(
+        error.contains("target presence") || error.contains("normal target"),
+        "{error}"
+    );
+}
+
+#[test]
+fn compiler_capture_binds_tail_call_to_the_caller_contract() {
+    let original = compiler_results().tail_call;
+    original
+        .validate_untrusted_shape(CaptureLimitsV2::default())
+        .unwrap();
+    assert!(
+        original
+            .blocks
+            .iter()
+            .any(|block| matches!(block.terminator.kind, TerminatorKindV2::TailCall { .. }))
+    );
+    assert!(original.caller_signature.is_some());
+
+    let mut missing_caller = original.clone();
+    missing_caller.caller_signature = None;
+    refresh_capture_accounting(&mut missing_caller);
+    let error = missing_caller
+        .validate_untrusted_shape(CaptureLimitsV2::default())
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("compiler-captured caller signature"),
+        "{error}"
+    );
+
+    let mut changed_safety = original.clone();
+    let signature = changed_safety.caller_signature.as_mut().unwrap();
+    signature.safety = match signature.safety {
+        FunctionSafetyV2::Safe => FunctionSafetyV2::Unsafe,
+        FunctionSafetyV2::Unsafe => FunctionSafetyV2::Safe,
+    };
+    signature.binding_hash = function_signature_binding_hash_v2(signature).unwrap();
+    refresh_capture_accounting(&mut changed_safety);
+    let error = changed_safety
+        .validate_untrusted_shape(CaptureLimitsV2::default())
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("differs from the caller"), "{error}");
+
+    let mut changed_unwind = original.clone();
+    let signature = changed_unwind.caller_signature.as_mut().unwrap();
+    signature.abi.canonical_name = "C".to_owned();
+    signature.abi.unwind_allowed = false;
+    signature.binding_hash = function_signature_binding_hash_v2(signature).unwrap();
+    refresh_capture_accounting(&mut changed_unwind);
+    let error = changed_unwind
+        .validate_untrusted_shape(CaptureLimitsV2::default())
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("differs from the caller"), "{error}");
+
+    let mut changed_output = original;
+    let signature = changed_output.caller_signature.as_mut().unwrap();
+    signature.output.stable_hash[0] ^= 1;
+    signature.binding_hash = function_signature_binding_hash_v2(signature).unwrap();
+    refresh_capture_accounting(&mut changed_output);
+    let error = changed_output
+        .validate_untrusted_shape(CaptureLimitsV2::default())
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("differs from the caller"), "{error}");
 }
 
 #[test]
@@ -1194,7 +1649,7 @@ fn normalized_validation_binds_indirect_callable_type_and_abi_unwind() {
     function.type_hash = replacement.1;
     refresh_capture_accounting(&mut indirect);
     let error = indirect
-        .validate(CaptureLimitsV2::default())
+        .validate_untrusted_shape(CaptureLimitsV2::default())
         .unwrap_err()
         .to_string();
     assert!(error.contains("indirect callable operand type"), "{error}");
@@ -1241,7 +1696,7 @@ fn normalized_validation_binds_indirect_callable_type_and_abi_unwind() {
     .unwrap();
     refresh_capture_accounting(&mut non_unwinding);
     let error = non_unwinding
-        .validate(CaptureLimitsV2::default())
+        .validate_untrusted_shape(CaptureLimitsV2::default())
         .unwrap_err()
         .to_string();
     assert!(error.contains("non-unwinding ABI"), "{error}");
@@ -1266,7 +1721,7 @@ fn normalized_validation_binds_intrinsic_presence_name_flags_and_definition() {
     *intrinsic = None;
     refresh_capture_accounting(&mut removed);
     let removed_error = removed
-        .validate(CaptureLimitsV2::default())
+        .validate_untrusted_shape(CaptureLimitsV2::default())
         .unwrap_err()
         .to_string();
     assert!(removed_error.contains("if and only if"), "{removed_error}");
@@ -1299,7 +1754,7 @@ fn normalized_validation_binds_intrinsic_presence_name_flags_and_definition() {
             .expect("intrinsic fixture must have intrinsic metadata");
         mutate(intrinsic);
         let error = body
-            .validate(CaptureLimitsV2::default())
+            .validate_untrusted_shape(CaptureLimitsV2::default())
             .unwrap_err()
             .to_string();
         assert!(error.contains("intrinsic identity binding"), "{error}");
@@ -1333,7 +1788,7 @@ fn normalized_validation_binds_intrinsic_presence_name_flags_and_definition() {
     *target = Some(metadata);
     refresh_capture_accounting(&mut added);
     let added_error = added
-        .validate(CaptureLimitsV2::default())
+        .validate_untrusted_shape(CaptureLimitsV2::default())
         .unwrap_err()
         .to_string();
     assert!(added_error.contains("if and only if"), "{added_error}");
@@ -1346,7 +1801,7 @@ fn normalized_validation_rejects_explicit_unsupported_records() {
         StatementKindV2::Unsupported(UnsupportedStatementV2::ConstEvalCounter);
     refresh_capture_accounting(&mut body);
     assert!(
-        body.validate(CaptureLimitsV2::default())
+        body.validate_untrusted_shape(CaptureLimitsV2::default())
             .unwrap_err()
             .to_string()
             .contains("unsupported statement")
@@ -1355,13 +1810,30 @@ fn normalized_validation_rejects_explicit_unsupported_records() {
 
 #[test]
 fn diagnostic_strings_do_not_define_structural_identity() {
-    let mut body = compiler_results().observed;
-    body.function.definition.diagnostic_crate_name = "diagnostic-only-crate".to_owned();
-    body.function.definition.diagnostic_def_path = "diagnostic-only-path".to_owned();
-    body.locals[0].ty.diagnostic_display = "diagnostic-only-type".to_owned();
-    body.locals[0].ty.diagnostic_debug = "diagnostic-only-debug".to_owned();
-    refresh_capture_accounting(&mut body);
-    body.validate(CaptureLimitsV2::default()).unwrap();
+    let limits = CaptureLimitsV2::default();
+    let original = compiler_results().observed;
+    let original_bytes = canonical_semantic_bytes_v2(&original, limits).unwrap();
+
+    let mut diagnostic_only = original.clone();
+    mutate_diagnostic_observation(&mut diagnostic_only);
+    refresh_capture_accounting(&mut diagnostic_only);
+    diagnostic_only.validate_untrusted_shape(limits).unwrap();
+    let diagnostic_bytes = canonical_semantic_bytes_v2(&diagnostic_only, limits).unwrap();
+    assert_eq!(diagnostic_bytes, original_bytes);
+    assert!(
+        !String::from_utf8(diagnostic_bytes)
+            .unwrap()
+            .contains("DIAGNOSTIC_")
+    );
+
+    let mut structural = original;
+    structural.function.definition.def_path_hash[0] ^= 1;
+    refresh_capture_accounting(&mut structural);
+    structural.validate_untrusted_shape(limits).unwrap();
+    assert_ne!(
+        canonical_semantic_bytes_v2(&structural, limits).unwrap(),
+        original_bytes
+    );
 }
 
 #[test]
@@ -1374,7 +1846,7 @@ fn normalized_validation_recomputes_and_exactly_matches_capture_counters() {
         let mut body = original.clone();
         body.capture_work_items = forged;
         let error = body
-            .validate(CaptureLimitsV2::default())
+            .validate_untrusted_shape(CaptureLimitsV2::default())
             .unwrap_err()
             .to_string();
         assert!(error.contains("reported work count"), "{error}");
@@ -1386,14 +1858,14 @@ fn normalized_validation_recomputes_and_exactly_matches_capture_counters() {
         let mut body = original.clone();
         body.capture_text_bytes = forged;
         let error = body
-            .validate(CaptureLimitsV2::default())
+            .validate_untrusted_shape(CaptureLimitsV2::default())
             .unwrap_err()
             .to_string();
         assert!(error.contains("reported text count"), "{error}");
     }
 
     let work_error = original
-        .validate(CaptureLimitsV2 {
+        .validate_untrusted_shape(CaptureLimitsV2 {
             max_total_work_items: original.capture_work_items - 1,
             ..CaptureLimitsV2::default()
         })
@@ -1401,7 +1873,7 @@ fn normalized_validation_recomputes_and_exactly_matches_capture_counters() {
         .to_string();
     assert!(work_error.contains("recomputed work bound"), "{work_error}");
     let text_error = original
-        .validate(CaptureLimitsV2 {
+        .validate_untrusted_shape(CaptureLimitsV2 {
             max_total_text_bytes: original.capture_text_bytes - 1,
             ..CaptureLimitsV2::default()
         })
@@ -1418,7 +1890,8 @@ fn normalized_validation_accepts_repeated_assignments_but_never_authorizes_them(
         *counts.entry(place.local).or_insert(0usize) += 1;
     }
     assert!(counts.values().any(|count| *count > 1));
-    body.validate(CaptureLimitsV2::default()).unwrap();
+    body.validate_untrusted_shape(CaptureLimitsV2::default())
+        .unwrap();
     assert!(!body.is_authorized_for_lowering());
 }
 
@@ -1444,7 +1917,7 @@ fn normalized_validation_binds_canonical_source_scope_records_topologically() {
     let mut bad_span_record = original.clone();
     bad_span_record.source.source_scope_record_hash[0] ^= 1;
     let span_error = bad_span_record
-        .validate(CaptureLimitsV2::default())
+        .validate_untrusted_shape(CaptureLimitsV2::default())
         .unwrap_err()
         .to_string();
     assert!(span_error.contains("exactly match"), "{span_error}");
@@ -1452,7 +1925,7 @@ fn normalized_validation_binds_canonical_source_scope_records_topologically() {
     let mut bad_record = original.clone();
     bad_record.source_scopes[0].record_hash[0] ^= 1;
     let record_error = bad_record
-        .validate(CaptureLimitsV2::default())
+        .validate_untrusted_shape(CaptureLimitsV2::default())
         .unwrap_err()
         .to_string();
     assert!(record_error.contains("record binding"), "{record_error}");
@@ -1462,7 +1935,7 @@ fn normalized_validation_binds_canonical_source_scope_records_topologically() {
         cyclic.source_scopes[1].parent = Some(1);
         refresh_capture_accounting(&mut cyclic);
         let cycle_error = cyclic
-            .validate(CaptureLimitsV2::default())
+            .validate_untrusted_shape(CaptureLimitsV2::default())
             .unwrap_err()
             .to_string();
         assert!(
@@ -1483,13 +1956,13 @@ fn normalized_validation_binds_canonical_source_scope_records_topologically() {
     scope.inlined.as_mut().unwrap().instance.instance_hash[0] ^= 1;
     refresh_capture_accounting(&mut bad_inlined);
     let inlined_error = bad_inlined
-        .validate(CaptureLimitsV2::default())
+        .validate_untrusted_shape(CaptureLimitsV2::default())
         .unwrap_err()
         .to_string();
     assert!(inlined_error.contains("record binding"), "{inlined_error}");
 
     let tight_error = original
-        .validate(CaptureLimitsV2 {
+        .validate_untrusted_shape(CaptureLimitsV2 {
             max_source_scopes: original.source_scopes.len() - 1,
             ..CaptureLimitsV2::default()
         })
@@ -1517,7 +1990,9 @@ fn observed(mut value: u32) -> u32 {
 "#;
     let first = compile_source_observed(source, "mir_v2_macro_fixture", "same-macro");
     let second = compile_source_observed(source, "mir_v2_macro_fixture", "same-macro");
-    first.validate(CaptureLimitsV2::default()).unwrap();
+    first
+        .validate_untrusted_shape(CaptureLimitsV2::default())
+        .unwrap();
     let first_keys = canonical_span_keys(&first);
     let second_keys = canonical_span_keys(&second);
     assert_eq!(first_keys, second_keys);
