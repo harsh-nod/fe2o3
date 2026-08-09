@@ -136,9 +136,12 @@ pub(crate) struct WorkerV2BuildObservation<'a> {
     pub(crate) executable_sha256: [u8; 32],
     pub(crate) worker_build_identity: &'a str,
     pub(crate) llvm_build_identity: &'a str,
-    pub(crate) rustc_invocation_sha256: [u8; 32],
+    pub(crate) prepared_rustc_command_sha256: [u8; 32],
     pub(crate) cargo_fe2o3_executable_sha256: [u8; 32],
-    pub(crate) cargo_executable_sha256: [u8; 32],
+    pub(crate) declared_cargo_executable_sha256: [u8; 32],
+    pub(crate) cargo_launcher_executable_sha256: [u8; 32],
+    pub(crate) cargo_launcher_pid: u64,
+    pub(crate) cargo_launcher_start_time_ticks: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -247,9 +250,12 @@ impl PreparedWorkerV2Config {
 
     pub(crate) fn build_observation(
         &self,
-        rustc_invocation_sha256: [u8; 32],
+        prepared_rustc_command_sha256: [u8; 32],
         cargo_fe2o3_executable_sha256: [u8; 32],
-        cargo_executable_sha256: [u8; 32],
+        declared_cargo_executable_sha256: [u8; 32],
+        cargo_launcher_executable_sha256: [u8; 32],
+        cargo_launcher_pid: u64,
+        cargo_launcher_start_time_ticks: u64,
     ) -> WorkerV2BuildObservation<'_> {
         let measurement = self.worker.measurement();
         WorkerV2BuildObservation {
@@ -257,9 +263,12 @@ impl PreparedWorkerV2Config {
             executable_sha256: *measurement.executable().sha256(),
             worker_build_identity: measurement.worker_build_identity(),
             llvm_build_identity: measurement.llvm_build_identity(),
-            rustc_invocation_sha256,
+            prepared_rustc_command_sha256,
             cargo_fe2o3_executable_sha256,
-            cargo_executable_sha256,
+            declared_cargo_executable_sha256,
+            cargo_launcher_executable_sha256,
+            cargo_launcher_pid,
+            cargo_launcher_start_time_ticks,
         }
     }
 

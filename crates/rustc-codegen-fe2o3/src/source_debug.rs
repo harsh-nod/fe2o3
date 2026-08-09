@@ -53,12 +53,18 @@ const WORKER_EXECUTABLE_BUILD_OBSERVATION_ENV_V2: &str =
     "FE2O3_WORKER_EXECUTABLE_BUILD_OBSERVATION_V2";
 const WORKER_BUILD_IDENTITY_OBSERVATION_ENV_V2: &str = "FE2O3_WORKER_BUILD_IDENTITY_OBSERVATION_V2";
 const LLVM_BUILD_IDENTITY_OBSERVATION_ENV_V2: &str = "FE2O3_LLVM_BUILD_IDENTITY_OBSERVATION_V2";
-const RUSTC_INVOCATION_BUILD_OBSERVATION_ENV_V2: &str =
-    "FE2O3_RUSTC_INVOCATION_BUILD_OBSERVATION_V2";
+const PREPARED_RUSTC_COMMAND_BUILD_OBSERVATION_ENV_V2: &str =
+    "FE2O3_PREPARED_RUSTC_COMMAND_BUILD_OBSERVATION_V2";
 const CARGO_FE2O3_EXECUTABLE_BUILD_OBSERVATION_ENV_V2: &str =
     "FE2O3_CARGO_FE2O3_EXECUTABLE_BUILD_OBSERVATION_V2";
-const CARGO_EXECUTABLE_BUILD_OBSERVATION_ENV_V2: &str =
-    "FE2O3_CARGO_EXECUTABLE_BUILD_OBSERVATION_V2";
+const DECLARED_CARGO_EXECUTABLE_BUILD_OBSERVATION_ENV_V2: &str =
+    "FE2O3_DECLARED_CARGO_EXECUTABLE_BUILD_OBSERVATION_V2";
+const CARGO_LAUNCHER_EXECUTABLE_BUILD_OBSERVATION_ENV_V2: &str =
+    "FE2O3_CARGO_LAUNCHER_EXECUTABLE_BUILD_OBSERVATION_V2";
+const CARGO_LAUNCHER_PID_BUILD_OBSERVATION_ENV_V2: &str =
+    "FE2O3_CARGO_LAUNCHER_PID_BUILD_OBSERVATION_V2";
+const CARGO_LAUNCHER_START_TIME_BUILD_OBSERVATION_ENV_V2: &str =
+    "FE2O3_CARGO_LAUNCHER_START_TIME_BUILD_OBSERVATION_V2";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct AlphaSourceDebugV2 {
@@ -388,12 +394,18 @@ fn build_observation_v2(
     let worker_config_sha256 = required_digest_environment(WORKER_CONFIG_BUILD_OBSERVATION_ENV_V2)?;
     let worker_executable_sha256 =
         required_digest_environment(WORKER_EXECUTABLE_BUILD_OBSERVATION_ENV_V2)?;
-    let rustc_invocation_sha256 =
-        required_digest_environment(RUSTC_INVOCATION_BUILD_OBSERVATION_ENV_V2)?;
+    let prepared_rustc_command_sha256 =
+        required_digest_environment(PREPARED_RUSTC_COMMAND_BUILD_OBSERVATION_ENV_V2)?;
     let cargo_fe2o3_executable_sha256 =
         required_digest_environment(CARGO_FE2O3_EXECUTABLE_BUILD_OBSERVATION_ENV_V2)?;
-    let cargo_executable_sha256 =
-        required_digest_environment(CARGO_EXECUTABLE_BUILD_OBSERVATION_ENV_V2)?;
+    let declared_cargo_executable_sha256 =
+        required_digest_environment(DECLARED_CARGO_EXECUTABLE_BUILD_OBSERVATION_ENV_V2)?;
+    let cargo_launcher_executable_sha256 =
+        required_digest_environment(CARGO_LAUNCHER_EXECUTABLE_BUILD_OBSERVATION_ENV_V2)?;
+    let cargo_launcher_pid =
+        required_decimal_environment(CARGO_LAUNCHER_PID_BUILD_OBSERVATION_ENV_V2)?;
+    let cargo_launcher_start_time_ticks =
+        required_decimal_environment(CARGO_LAUNCHER_START_TIME_BUILD_OBSERVATION_ENV_V2)?;
     let worker_build_identity =
         required_text_environment(WORKER_BUILD_IDENTITY_OBSERVATION_ENV_V2)?;
     let llvm_build_identity = required_text_environment(LLVM_BUILD_IDENTITY_OBSERVATION_ENV_V2)?;
@@ -413,10 +425,13 @@ fn build_observation_v2(
         observed_def_path: &observed_def_path,
         observed_symbol: &observed_symbol,
         rustc_mir_capture_sha256,
-        rustc_invocation_sha256,
+        prepared_rustc_command_sha256,
         rustc_executable_sha256,
         cargo_fe2o3_executable_sha256,
-        cargo_executable_sha256,
+        declared_cargo_executable_sha256,
+        cargo_launcher_executable_sha256,
+        cargo_launcher_pid,
+        cargo_launcher_start_time_ticks,
         codegen_backend_sha256,
         worker_config_sha256,
         worker_executable_sha256,
@@ -444,6 +459,18 @@ fn required_digest_environment(name: &'static str) -> Result<[u8; 32], SourceDeb
         return Err(SourceDebugError::new(format!("{name} must not be zero")));
     }
     Ok(digest)
+}
+
+fn required_decimal_environment(name: &'static str) -> Result<u64, SourceDebugError> {
+    let value = required_text_environment(name)?;
+    if value.starts_with('0') || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(SourceDebugError::new(format!(
+            "{name} must be a nonzero canonical decimal"
+        )));
+    }
+    value
+        .parse::<u64>()
+        .map_err(|_| SourceDebugError::new(format!("{name} exceeds the canonical u64 range")))
 }
 
 fn required_text_environment(name: &'static str) -> Result<String, SourceDebugError> {
@@ -1552,15 +1579,18 @@ mod tests {
             observed_def_path: "general_genuine::__fe2o3_host_kernel_v1_test",
             observed_symbol: "__fe2o3_host_kernel_v1_test",
             rustc_mir_capture_sha256: [0x35; 32],
-            rustc_invocation_sha256: [0x36; 32],
+            prepared_rustc_command_sha256: [0x36; 32],
             rustc_executable_sha256: [0x37; 32],
             cargo_fe2o3_executable_sha256: [0x38; 32],
-            cargo_executable_sha256: [0x39; 32],
-            codegen_backend_sha256: [0x3a; 32],
-            worker_config_sha256: [0x3b; 32],
-            worker_executable_sha256: [0x3c; 32],
-            worker_build_identity_sha256: [0x3d; 32],
-            llvm_build_identity_sha256: [0x3e; 32],
+            declared_cargo_executable_sha256: [0x39; 32],
+            cargo_launcher_executable_sha256: [0x3a; 32],
+            cargo_launcher_pid: 59,
+            cargo_launcher_start_time_ticks: 60,
+            codegen_backend_sha256: [0x3d; 32],
+            worker_config_sha256: [0x3e; 32],
+            worker_executable_sha256: [0x3f; 32],
+            worker_build_identity_sha256: [0x40; 32],
+            llvm_build_identity_sha256: [0x41; 32],
         })
         .unwrap();
         let identity_handoff =

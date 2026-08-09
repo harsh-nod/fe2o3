@@ -42,7 +42,7 @@ const SEMANTIC_FIELDS_V2: [&str; 18] = [
     "portable_mir_sha256",
 ];
 
-const BUILD_FIELDS_V2: [&str; 17] = [
+const BUILD_FIELDS_V2: [&str; 20] = [
     "schema",
     "semantic_admission_sha256",
     "cargo_metadata_sha256",
@@ -51,10 +51,13 @@ const BUILD_FIELDS_V2: [&str; 17] = [
     "observed_def_path",
     "observed_symbol",
     "rustc_mir_capture_sha256",
-    "rustc_invocation_sha256",
+    "prepared_rustc_command_sha256",
     "rustc_executable_sha256",
     "cargo_fe2o3_executable_sha256",
-    "cargo_executable_sha256",
+    "declared_cargo_executable_sha256",
+    "cargo_launcher_executable_sha256",
+    "cargo_launcher_pid",
+    "cargo_launcher_start_time_ticks",
     "codegen_backend_sha256",
     "worker_config_sha256",
     "worker_executable_sha256",
@@ -273,10 +276,13 @@ pub(crate) struct BuildObservationFieldsV2<'a> {
     pub(crate) observed_def_path: &'a str,
     pub(crate) observed_symbol: &'a str,
     pub(crate) rustc_mir_capture_sha256: [u8; 32],
-    pub(crate) rustc_invocation_sha256: [u8; 32],
+    pub(crate) prepared_rustc_command_sha256: [u8; 32],
     pub(crate) rustc_executable_sha256: [u8; 32],
     pub(crate) cargo_fe2o3_executable_sha256: [u8; 32],
-    pub(crate) cargo_executable_sha256: [u8; 32],
+    pub(crate) declared_cargo_executable_sha256: [u8; 32],
+    pub(crate) cargo_launcher_executable_sha256: [u8; 32],
+    pub(crate) cargo_launcher_pid: u64,
+    pub(crate) cargo_launcher_start_time_ticks: u64,
     pub(crate) codegen_backend_sha256: [u8; 32],
     pub(crate) worker_config_sha256: [u8; 32],
     pub(crate) worker_executable_sha256: [u8; 32],
@@ -295,10 +301,13 @@ pub struct BuildObservationV2 {
     observed_def_path: String,
     observed_symbol: String,
     rustc_mir_capture_sha256: [u8; 32],
-    rustc_invocation_sha256: [u8; 32],
+    prepared_rustc_command_sha256: [u8; 32],
     rustc_executable_sha256: [u8; 32],
     cargo_fe2o3_executable_sha256: [u8; 32],
-    cargo_executable_sha256: [u8; 32],
+    declared_cargo_executable_sha256: [u8; 32],
+    cargo_launcher_executable_sha256: [u8; 32],
+    cargo_launcher_pid: u64,
+    cargo_launcher_start_time_ticks: u64,
     codegen_backend_sha256: [u8; 32],
     worker_config_sha256: [u8; 32],
     worker_executable_sha256: [u8; 32],
@@ -326,8 +335,8 @@ impl BuildObservationV2 {
                 hex(&fields.rustc_mir_capture_sha256),
             ),
             (
-                "rustc_invocation_sha256",
-                hex(&fields.rustc_invocation_sha256),
+                "prepared_rustc_command_sha256",
+                hex(&fields.prepared_rustc_command_sha256),
             ),
             (
                 "rustc_executable_sha256",
@@ -338,8 +347,17 @@ impl BuildObservationV2 {
                 hex(&fields.cargo_fe2o3_executable_sha256),
             ),
             (
-                "cargo_executable_sha256",
-                hex(&fields.cargo_executable_sha256),
+                "declared_cargo_executable_sha256",
+                hex(&fields.declared_cargo_executable_sha256),
+            ),
+            (
+                "cargo_launcher_executable_sha256",
+                hex(&fields.cargo_launcher_executable_sha256),
+            ),
+            ("cargo_launcher_pid", fields.cargo_launcher_pid.to_string()),
+            (
+                "cargo_launcher_start_time_ticks",
+                fields.cargo_launcher_start_time_ticks.to_string(),
             ),
             (
                 "codegen_backend_sha256",
@@ -375,21 +393,37 @@ impl BuildObservationV2 {
             observed_def_path: fields[5].to_owned(),
             observed_symbol: fields[6].to_owned(),
             rustc_mir_capture_sha256: decode_digest(fields[7], "rustc_mir_capture_sha256")?,
-            rustc_invocation_sha256: decode_digest(fields[8], "rustc_invocation_sha256")?,
+            prepared_rustc_command_sha256: decode_digest(
+                fields[8],
+                "prepared_rustc_command_sha256",
+            )?,
             rustc_executable_sha256: decode_digest(fields[9], "rustc_executable_sha256")?,
             cargo_fe2o3_executable_sha256: decode_digest(
                 fields[10],
                 "cargo_fe2o3_executable_sha256",
             )?,
-            cargo_executable_sha256: decode_digest(fields[11], "cargo_executable_sha256")?,
-            codegen_backend_sha256: decode_digest(fields[12], "codegen_backend_sha256")?,
-            worker_config_sha256: decode_digest(fields[13], "worker_config_sha256")?,
-            worker_executable_sha256: decode_digest(fields[14], "worker_executable_sha256")?,
+            declared_cargo_executable_sha256: decode_digest(
+                fields[11],
+                "declared_cargo_executable_sha256",
+            )?,
+            cargo_launcher_executable_sha256: decode_digest(
+                fields[12],
+                "cargo_launcher_executable_sha256",
+            )?,
+            cargo_launcher_pid: decode_decimal(fields[13], "cargo_launcher_pid", false)?,
+            cargo_launcher_start_time_ticks: decode_decimal(
+                fields[14],
+                "cargo_launcher_start_time_ticks",
+                false,
+            )?,
+            codegen_backend_sha256: decode_digest(fields[15], "codegen_backend_sha256")?,
+            worker_config_sha256: decode_digest(fields[16], "worker_config_sha256")?,
+            worker_executable_sha256: decode_digest(fields[17], "worker_executable_sha256")?,
             worker_build_identity_sha256: decode_digest(
-                fields[15],
+                fields[18],
                 "worker_build_identity_sha256",
             )?,
-            llvm_build_identity_sha256: decode_digest(fields[16], "llvm_build_identity_sha256")?,
+            llvm_build_identity_sha256: decode_digest(fields[19], "llvm_build_identity_sha256")?,
         })
     }
 
@@ -429,8 +463,8 @@ impl BuildObservationV2 {
         &self.rustc_mir_capture_sha256
     }
 
-    pub const fn rustc_invocation_sha256(&self) -> &[u8; 32] {
-        &self.rustc_invocation_sha256
+    pub const fn prepared_rustc_command_sha256(&self) -> &[u8; 32] {
+        &self.prepared_rustc_command_sha256
     }
 
     pub const fn rustc_executable_sha256(&self) -> &[u8; 32] {
@@ -441,8 +475,20 @@ impl BuildObservationV2 {
         &self.cargo_fe2o3_executable_sha256
     }
 
-    pub const fn cargo_executable_sha256(&self) -> &[u8; 32] {
-        &self.cargo_executable_sha256
+    pub const fn declared_cargo_executable_sha256(&self) -> &[u8; 32] {
+        &self.declared_cargo_executable_sha256
+    }
+
+    pub const fn cargo_launcher_executable_sha256(&self) -> &[u8; 32] {
+        &self.cargo_launcher_executable_sha256
+    }
+
+    pub const fn cargo_launcher_pid(&self) -> u64 {
+        self.cargo_launcher_pid
+    }
+
+    pub const fn cargo_launcher_start_time_ticks(&self) -> u64 {
+        self.cargo_launcher_start_time_ticks
     }
 
     pub const fn codegen_backend_sha256(&self) -> &[u8; 32] {
@@ -944,15 +990,18 @@ mod tests {
             observed_def_path: "module::__fe2o3_host_kernel_v1_abc",
             observed_symbol: "__fe2o3_host_kernel_v1_abc",
             rustc_mir_capture_sha256: [8; 32],
-            rustc_invocation_sha256: [9; 32],
+            prepared_rustc_command_sha256: [9; 32],
             rustc_executable_sha256: [10; 32],
             cargo_fe2o3_executable_sha256: [11; 32],
-            cargo_executable_sha256: [12; 32],
-            codegen_backend_sha256: [13; 32],
-            worker_config_sha256: [14; 32],
-            worker_executable_sha256: [15; 32],
-            worker_build_identity_sha256: [16; 32],
-            llvm_build_identity_sha256: [17; 32],
+            declared_cargo_executable_sha256: [12; 32],
+            cargo_launcher_executable_sha256: [13; 32],
+            cargo_launcher_pid: 14,
+            cargo_launcher_start_time_ticks: 15,
+            codegen_backend_sha256: [16; 32],
+            worker_config_sha256: [17; 32],
+            worker_executable_sha256: [18; 32],
+            worker_build_identity_sha256: [19; 32],
+            llvm_build_identity_sha256: [20; 32],
         })
         .unwrap()
     }
@@ -1075,7 +1124,7 @@ mod tests {
         assert_eq!(decoded.semantic_admission().rustc_opt_level(), 0);
         assert_eq!(decoded.semantic_admission().source_bytes(), 3231);
         assert_eq!(
-            decoded.build_observation().rustc_invocation_sha256(),
+            decoded.build_observation().prepared_rustc_command_sha256(),
             &[9; 32]
         );
         assert_eq!(
@@ -1083,8 +1132,23 @@ mod tests {
             &[11; 32]
         );
         assert_eq!(
-            decoded.build_observation().cargo_executable_sha256(),
+            decoded
+                .build_observation()
+                .declared_cargo_executable_sha256(),
             &[12; 32]
+        );
+        assert_eq!(
+            decoded
+                .build_observation()
+                .cargo_launcher_executable_sha256(),
+            &[13; 32]
+        );
+        assert_eq!(decoded.build_observation().cargo_launcher_pid(), 14);
+        assert_eq!(
+            decoded
+                .build_observation()
+                .cargo_launcher_start_time_ticks(),
+            15
         );
     }
 
@@ -1139,8 +1203,8 @@ mod tests {
 
         let zero_digest = replace_first(
             handoff.build_observation().canonical_bytes(),
-            b"rustc_invocation_sha256\t0909090909090909090909090909090909090909090909090909090909090909\n",
-            b"rustc_invocation_sha256\t0000000000000000000000000000000000000000000000000000000000000000\n",
+            b"prepared_rustc_command_sha256\t0909090909090909090909090909090909090909090909090909090909090909\n",
+            b"prepared_rustc_command_sha256\t0000000000000000000000000000000000000000000000000000000000000000\n",
         );
         assert!(
             IdentityHandoffV2::decode(&replace_record(&handoff, None, Some(&zero_digest))).is_err()

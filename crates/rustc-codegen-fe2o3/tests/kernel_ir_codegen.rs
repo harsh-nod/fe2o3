@@ -1182,18 +1182,25 @@ fn worker_v2_s09_alpha_o0_preserves_source_dwarf_in_hsaco() {
     );
     let cargo_bytes = std::fs::read(env!("CARGO")).expect("read Cargo executable");
     assert_eq!(
-        observation.cargo_executable_sha256(),
+        observation.declared_cargo_executable_sha256(),
         DigestAlgorithm::Sha256
             .calculate(&cargo_bytes)
             .bytes()
             .as_bytes()
     );
+    assert_eq!(
+        observation.cargo_launcher_executable_sha256(),
+        observation.declared_cargo_executable_sha256(),
+        "the S09 harness launches the wrapper directly from declared Cargo"
+    );
+    assert_ne!(observation.cargo_launcher_pid(), 0);
+    assert_ne!(observation.cargo_launcher_start_time_ticks(), 0);
     for digest in [
         observation.cargo_metadata_sha256(),
         observation.crate_binding(),
         observation.kernel_binding(),
         observation.rustc_mir_capture_sha256(),
-        observation.rustc_invocation_sha256(),
+        observation.prepared_rustc_command_sha256(),
         observation.rustc_executable_sha256(),
         observation.codegen_backend_sha256(),
         observation.worker_config_sha256(),
@@ -1207,9 +1214,10 @@ fn worker_v2_s09_alpha_o0_preserves_source_dwarf_in_hsaco() {
         semantic.identity_sha256(),
         semantic.portable_mir_sha256(),
         observation.identity_sha256(),
-        observation.rustc_invocation_sha256(),
+        observation.prepared_rustc_command_sha256(),
         observation.cargo_fe2o3_executable_sha256(),
-        observation.cargo_executable_sha256(),
+        observation.declared_cargo_executable_sha256(),
+        observation.cargo_launcher_executable_sha256(),
     ] {
         let digest = bytes_hex(digest);
         assert!(

@@ -23,7 +23,7 @@ fe2o3-rustc-invocation.workspace = true
 fe2o3-worker-v2-bundle.workspace = true
 libc.workspace = true
 reserved-fe2o3-symbols.workspace = true
-rustix.workspace = true
+rustix = { workspace = true, features = ["process"] }
 serde_json = "1"
 sha2.workspace = true
 syn = { workspace = true, features = ["visit"] }
