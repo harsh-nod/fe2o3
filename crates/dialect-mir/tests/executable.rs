@@ -690,13 +690,11 @@ fn enforces_rustc_constant_index_and_subslice_semantics() {
         unreachable!();
     };
     *from_end = true;
-    assert!(
-        invalid
-            .validate()
-            .unwrap_err()
-            .reason()
-            .contains("arrays cannot be subsliced from end")
-    );
+    let MirProjection::Subslice { to, .. } = &mut place.projection[0] else {
+        unreachable!();
+    };
+    *to = 1;
+    invalid.validate().unwrap();
 
     let mut invalid = module.clone();
     let MirStatementKind::Assign { value, .. } =
@@ -748,12 +746,59 @@ fn enforces_rustc_constant_index_and_subslice_semantics() {
         unreachable!();
     };
     *from_end = true;
+    constant.validate().unwrap();
+
+    {
+        let MirStatementKind::Assign { value, .. } =
+            &mut constant.functions[0].body.blocks[0].statements[0].kind
+        else {
+            unreachable!();
+        };
+        let MirRvalue::Use(MirOperand::Copy(place)) = value else {
+            unreachable!();
+        };
+        let MirProjection::ConstantIndex {
+            offset,
+            min_length,
+            from_end,
+        } = &mut place.projection[0]
+        else {
+            unreachable!();
+        };
+        *offset = 999;
+        *min_length = 4;
+        *from_end = false;
+    }
     assert!(
         constant
             .validate()
             .unwrap_err()
             .reason()
-            .contains("arrays cannot be constant-indexed from end")
+            .contains("static array bounds")
+    );
+
+    let MirStatementKind::Assign { value, .. } =
+        &mut constant.functions[0].body.blocks[0].statements[0].kind
+    else {
+        unreachable!();
+    };
+    let MirRvalue::Use(MirOperand::Copy(place)) = value else {
+        unreachable!();
+    };
+    let MirProjection::ConstantIndex {
+        offset, min_length, ..
+    } = &mut place.projection[0]
+    else {
+        unreachable!();
+    };
+    *offset = 3;
+    *min_length = 999;
+    assert!(
+        constant
+            .validate()
+            .unwrap_err()
+            .reason()
+            .contains("must equal the static array length")
     );
 
     let mut too_wide = sequence_module(false);
@@ -781,26 +826,12 @@ fn enforces_rustc_constant_index_and_subslice_semantics() {
     );
 
     let slice = sequence_module(true);
-    slice.validate().unwrap();
-    let mut invalid = slice;
-    let MirStatementKind::Assign { value, .. } =
-        &mut invalid.functions[0].body.blocks[0].statements[0].kind
-    else {
-        unreachable!();
-    };
-    let MirRvalue::Len(place) = value else {
-        unreachable!();
-    };
-    let MirProjection::Subslice { min_length, .. } = &mut place.projection[0] else {
-        unreachable!();
-    };
-    *min_length = 1;
     assert!(
-        invalid
+        slice
             .validate()
             .unwrap_err()
             .reason()
-            .contains("imported minimum length")
+            .contains("external bound witness")
     );
 }
 
@@ -846,14 +877,12 @@ fn target_controls_usize_index_and_thread_index_widths() {
         }],
         ty: u32_id,
     }));
-    index.validate().unwrap();
-    index.target.pointer_width_bits = 64;
     assert!(
         index
             .validate()
             .unwrap_err()
             .reason()
-            .contains("target usize type")
+            .contains("external range witness")
     );
 }
 
