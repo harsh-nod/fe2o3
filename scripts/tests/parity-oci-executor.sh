@@ -806,6 +806,60 @@ module.cleanup_staging_lease(
 os.close(cleanup_root_fd)
 assert not any(output_root.iterdir())
 
+single_close_name = "plan-" + "f" * 64 + "-" + "1" * 64
+single_close_lease = output_root / single_close_name
+single_close_lease.mkdir()
+single_close_info = single_close_lease.stat()
+single_close_root_fd = os.open(
+    output_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+)
+real_close = module.os.close
+failed_lease_fds = []
+lease_close_attempts = 0
+
+
+def reject_lease_close(file_fd):
+    global lease_close_attempts
+    try:
+        name = descriptor_name(file_fd)
+    except OSError:
+        name = ""
+    if name == single_close_name:
+        lease_close_attempts += 1
+        failed_lease_fds.append(file_fd)
+        raise OSError("injected lease close failure")
+    real_close(file_fd)
+
+
+module.os.close = reject_lease_close
+try:
+    try:
+        module.cleanup_staging_lease(
+            single_close_root_fd,
+            single_close_name,
+            single_close_info.st_dev,
+            single_close_info.st_ino,
+            "single-close fixture",
+        )
+    except module.ExecutorError as error:
+        assert "cannot close single-close fixture lease before removal" in str(error)
+    else:
+        raise AssertionError("lease close failure was accepted")
+finally:
+    module.os.close = real_close
+assert lease_close_attempts == 1
+for file_fd in failed_lease_fds:
+    real_close(file_fd)
+module.cleanup_staging_lease(
+    single_close_root_fd,
+    single_close_name,
+    single_close_info.st_dev,
+    single_close_info.st_ino,
+    "single-close fixture recovery",
+)
+real_close(single_close_root_fd)
+assert not any(output_root.iterdir())
+
 emission_lease = "plan-" + "1" * 64 + "-" + "f" * 64
 
 

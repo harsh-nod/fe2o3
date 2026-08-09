@@ -545,6 +545,7 @@ def load_operator_config(
             directory, provision_uid, provision_gid, "operator configuration"
         )
     else:
+        directory_fd = -1
         try:
             directory_fd = os.open(
                 directory,
@@ -552,7 +553,16 @@ def load_operator_config(
             )
             info = os.fstat(directory_fd)
         except OSError as error:
-            fail(f"cannot open test operator configuration directory: {error}")
+            failure = normalized_error(
+                error, "cannot open test operator configuration directory"
+            )
+            try:
+                close_descriptor(
+                    directory_fd, "unavailable test operator configuration directory"
+                )
+            except ExecutorError as close_error:
+                failure = append_error(failure, close_error)
+            raise failure
         if (
             not stat.S_ISDIR(info.st_mode)
             or (info.st_uid, info.st_gid) != (provision_uid, provision_gid)
@@ -1865,8 +1875,9 @@ def cleanup_staging_lease(
         if (info.st_dev, info.st_ino) != (expected_device, expected_inode):
             fail(f"{label} lease identity changed before cleanup")
         remove_directory_contents(lease_fd, [0], label)
-        close_descriptor(lease_fd, f"{label} lease before removal")
+        closing_fd = lease_fd
         lease_fd = -1
+        close_descriptor(closing_fd, f"{label} lease before removal")
         os.rmdir(name, dir_fd=root_fd)
         os.fsync(root_fd)
     except ExecutorError:

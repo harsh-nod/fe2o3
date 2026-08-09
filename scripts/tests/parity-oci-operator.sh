@@ -61,6 +61,7 @@ write_digest
 PYTHONDONTWRITEBYTECODE=1 python3 - \
   "${EXECUTOR}" "${CONFIG_ROOT}" "$(id -u)" "$(id -g)" <<'PY'
 import importlib.util
+import os
 from pathlib import Path
 import sys
 
@@ -80,6 +81,38 @@ config = module.load_operator_config(
 assert config.config_id == "mi300x-gfx942-production-v1"
 assert config.trust_file_contract == "linux-immutable"
 assert config.queue_trust_digest == "2" * 64
+
+real_fstat = module.os.fstat
+failed_fds = []
+
+
+def reject_config_fstat(file_fd):
+    failed_fds.append(file_fd)
+    raise OSError("injected operator configuration fstat failure")
+
+
+module.os.fstat = reject_config_fstat
+try:
+    try:
+        module.load_operator_config(
+            Path(root_text),
+            provision_uid=int(uid_text),
+            provision_gid=int(gid_text),
+            require_immutable=False,
+        )
+    except module.ExecutorError as error:
+        assert "cannot open test operator configuration directory" in str(error)
+    else:
+        raise AssertionError("operator configuration fstat failure was accepted")
+finally:
+    module.os.fstat = real_fstat
+assert len(failed_fds) == 1
+try:
+    os.fstat(failed_fds[0])
+except OSError:
+    pass
+else:
+    raise AssertionError("failed operator configuration descriptor was not closed")
 
 try:
     module.load_operator_config()
