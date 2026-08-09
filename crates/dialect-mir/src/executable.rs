@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
+use std::ops::Deref;
 
 use serde::{Deserialize, Serialize};
 
@@ -239,6 +240,55 @@ pub struct MirExecutableModule {
     pub callables: Vec<MirCallable>,
     /// Functions are sorted by monomorphized identity.
     pub functions: Vec<MirFunction>,
+}
+
+/// An executable module whose complete structure and external authorities
+/// were validated together. The authority context is retained privately so
+/// verified transformations can revalidate their output.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ValidatedMirExecutableModule {
+    module: MirExecutableModule,
+    registry: MirExternalCallRegistry,
+}
+
+impl ValidatedMirExecutableModule {
+    pub fn as_module(&self) -> &MirExecutableModule {
+        &self.module
+    }
+
+    pub fn into_unvalidated(self) -> MirExecutableModule {
+        self.module
+    }
+
+    pub(crate) fn registry(&self) -> &MirExternalCallRegistry {
+        &self.registry
+    }
+}
+
+impl Deref for ValidatedMirExecutableModule {
+    type Target = MirExecutableModule;
+
+    fn deref(&self) -> &Self::Target {
+        self.as_module()
+    }
+}
+
+impl AsRef<MirExecutableModule> for ValidatedMirExecutableModule {
+    fn as_ref(&self) -> &MirExecutableModule {
+        self.as_module()
+    }
+}
+
+impl PartialEq<MirExecutableModule> for ValidatedMirExecutableModule {
+    fn eq(&self, other: &MirExecutableModule) -> bool {
+        self.module == *other
+    }
+}
+
+impl PartialEq<ValidatedMirExecutableModule> for MirExecutableModule {
+    fn eq(&self, other: &ValidatedMirExecutableModule) -> bool {
+        self == &other.module
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -608,7 +658,7 @@ impl fmt::Display for MirExecutableValidationError {
 impl std::error::Error for MirExecutableValidationError {}
 
 impl MirExecutableModule {
-    pub fn validate(&self) -> Result<(), MirExecutableValidationError> {
+    pub fn validate(&self) -> Result<ValidatedMirExecutableModule, MirExecutableValidationError> {
         self.validate_with_registry(&MirExternalCallRegistry::default())
     }
 
@@ -617,7 +667,7 @@ impl MirExecutableModule {
     pub fn validate_with_registry(
         &self,
         registry: &MirExternalCallRegistry,
-    ) -> Result<(), MirExecutableValidationError> {
+    ) -> Result<ValidatedMirExecutableModule, MirExecutableValidationError> {
         if self.version.number() != EXECUTABLE_MIR_VERSION {
             return Err(error(
                 "module.version",
@@ -683,7 +733,10 @@ impl MirExecutableModule {
             validate_span_opt(&format!("{path}.span"), function.span.as_ref())?;
             Verifier::new(self, function, path).verify()?;
         }
-        Ok(())
+        Ok(ValidatedMirExecutableModule {
+            module: self.clone(),
+            registry: registry.clone(),
+        })
     }
 
     fn validate_namespace(
