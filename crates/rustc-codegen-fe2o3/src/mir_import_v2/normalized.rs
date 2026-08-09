@@ -1,6 +1,8 @@
 use std::error::Error;
 use std::fmt;
 
+use super::accounting::recompute_capture_accounting_v2;
+
 pub(crate) const NORMALIZED_MIR_SCHEMA_V2: u16 = 2;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -12,7 +14,14 @@ pub(crate) struct CaptureLimitsV2 {
     pub max_operands: usize,
     pub max_projection_depth: usize,
     pub max_successors: usize,
+    pub max_switch_targets: usize,
     pub max_text_bytes: usize,
+    pub max_total_text_bytes: usize,
+    pub max_total_work_items: usize,
+    pub max_type_depth: usize,
+    pub max_type_nodes: usize,
+    pub max_type_arity: usize,
+    pub max_generic_args: usize,
 }
 
 impl Default for CaptureLimitsV2 {
@@ -25,7 +34,14 @@ impl Default for CaptureLimitsV2 {
             max_operands: 4_096,
             max_projection_depth: 64,
             max_successors: 65_536,
+            max_switch_targets: 65_535,
             max_text_bytes: 16_384,
+            max_total_text_bytes: 16 * 1_048_576,
+            max_total_work_items: 8 * 1_048_576,
+            max_type_depth: 64,
+            max_type_nodes: 16_384,
+            max_type_arity: 4_096,
+            max_generic_args: 1_024,
         }
     }
 }
@@ -42,6 +58,8 @@ pub(crate) struct CapturedBodyV2 {
     pub function: FunctionIdentityV2,
     pub source: SourceSpanV2,
     pub arg_count: usize,
+    pub capture_work_items: usize,
+    pub capture_text_bytes: usize,
     pub locals: Vec<LocalDeclV2>,
     pub blocks: Vec<BasicBlockV2>,
 }
@@ -67,8 +85,43 @@ impl CapturedBodyV2 {
                 "normalized MIR V2 is an observation and cannot grant lowering authority",
             ));
         }
+        let accounting = recompute_capture_accounting_v2(self, limits)?;
+        if self.capture_work_items != accounting.work_items {
+            return Err(ValidationErrorV2::new(
+                "capture_work_items",
+                format!(
+                    "reported work count {} does not equal recomputed count {}",
+                    self.capture_work_items, accounting.work_items
+                ),
+            ));
+        }
+        if self.capture_text_bytes != accounting.text_bytes {
+            return Err(ValidationErrorV2::new(
+                "capture_text_bytes",
+                format!(
+                    "reported text count {} does not equal recomputed count {}",
+                    self.capture_text_bytes, accounting.text_bytes
+                ),
+            ));
+        }
         validate_function_identity(&self.function, limits)?;
         validate_span("source", &self.source, limits)?;
+        bounded(
+            "capture_work_items",
+            self.capture_work_items,
+            limits.max_total_work_items,
+        )?;
+        bounded(
+            "capture_text_bytes",
+            self.capture_text_bytes,
+            limits.max_total_text_bytes,
+        )?;
+        if self.capture_work_items == 0 || self.capture_text_bytes == 0 {
+            return Err(ValidationErrorV2::new(
+                "capture_budget",
+                "captured work and text accounting must be nonzero",
+            ));
+        }
         bounded("locals", self.locals.len(), limits.max_locals)?;
         bounded("blocks", self.blocks.len(), limits.max_blocks)?;
         if self.blocks.is_empty() {
@@ -107,8 +160,8 @@ impl CapturedBodyV2 {
             validate_type(&format!("locals[{expected}].type"), &local.ty, limits)?;
             validate_span(&format!("locals[{expected}].source"), &local.source, limits)?;
             validate_text(
-                &format!("locals[{expected}].rustc_debug"),
-                &local.rustc_debug,
+                &format!("locals[{expected}].diagnostic_debug"),
+                &local.diagnostic_debug,
                 limits,
             )?;
         }
@@ -170,9 +223,11 @@ pub(crate) struct FunctionIdentityV2 {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct DefinitionIdentityV2 {
-    pub crate_name: String,
-    pub def_path: String,
+    pub diagnostic_crate_name: String,
+    pub diagnostic_def_path: String,
     pub def_path_hash: [u8; 16],
+    pub stable_crate_id: [u8; 16],
+    pub local_def_path_hash: [u8; 8],
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -186,31 +241,186 @@ pub(crate) struct IntrinsicIdentityV2 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct InstanceIdentityV2 {
     pub kind: InstanceKindV2,
-    pub generic_args: String,
-    pub rustc_debug: String,
+    pub generic_args_hash: [u8; 16],
+    pub generic_arg_count: usize,
+    pub instance_hash: [u8; 16],
+    pub diagnostic_generic_args: String,
+    pub diagnostic_debug: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum InstanceKindV2 {
     Item,
-    GeneratedCallable { rustc_kind: String },
+    Intrinsic,
+    VTableShim,
+    ReifyShim {
+        reason: Option<ReifyReasonV2>,
+    },
+    FnPtrShim {
+        fn_pointer: Box<TypeIdentityV2>,
+    },
+    Virtual {
+        vtable_index: usize,
+    },
+    ClosureOnceShim {
+        track_caller: bool,
+    },
+    ConstructCoroutineInClosureShim {
+        coroutine_closure: DefinitionIdentityV2,
+        receiver_by_ref: bool,
+    },
+    ThreadLocalShim,
+    FutureDropPollShim {
+        proxy_coroutine: Box<TypeIdentityV2>,
+        implementation_coroutine: Box<TypeIdentityV2>,
+    },
+    DropGlue {
+        ty: Option<Box<TypeIdentityV2>>,
+    },
+    CloneShim {
+        ty: Box<TypeIdentityV2>,
+    },
+    FnPtrAddrShim {
+        ty: Box<TypeIdentityV2>,
+    },
+    AsyncDropGlueCtorShim {
+        ty: Box<TypeIdentityV2>,
+    },
+    AsyncDropGlue {
+        ty: Box<TypeIdentityV2>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ReifyReasonV2 {
+    FunctionPointer,
+    Vtable,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SourceSpanV2 {
-    pub file: String,
+    pub authority: SourceAuthorityV2,
+    pub remapped_file: String,
+    pub source_file_hash: [u8; 16],
+    pub span_hash: [u8; 16],
     pub start_line: usize,
     pub start_column: usize,
     pub end_line: usize,
     pub end_column: usize,
     pub source_scope: usize,
-    pub rustc_debug: String,
+    pub source_scope_hash: [u8; 16],
+    pub source_scope_parent: Option<usize>,
+    pub inlined_instance_hash: Option<[u8; 16]>,
+    pub diagnostic_debug: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SourceAuthorityV2 {
+    CanonicalRemapped,
+    Unauthoritative(SourceRejectionV2),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SourceRejectionV2 {
+    DummySpan,
+    CrossFileSpan,
+    InvalidPosition,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TypeIdentityV2 {
-    pub rust: String,
-    pub rustc_kind: String,
+    pub stable_hash: [u8; 16],
+    pub class: TypeClassV2,
+    pub diagnostic_display: String,
+    pub diagnostic_debug: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum TypeClassV2 {
+    Bool,
+    Char,
+    SignedInteger(IntegerWidthV2),
+    UnsignedInteger(IntegerWidthV2),
+    Float(FloatWidthV2),
+    Adt {
+        definition: DefinitionIdentityV2,
+        generic_args_hash: [u8; 16],
+    },
+    Foreign {
+        definition: DefinitionIdentityV2,
+    },
+    StringSlice,
+    Array,
+    Pattern,
+    Slice,
+    RawPointer {
+        mutable: bool,
+    },
+    Reference {
+        mutable: bool,
+    },
+    FunctionDefinition {
+        definition: DefinitionIdentityV2,
+        generic_args_hash: [u8; 16],
+    },
+    FunctionPointer,
+    UnsafeBinder,
+    Dynamic,
+    Closure {
+        definition: DefinitionIdentityV2,
+        generic_args_hash: [u8; 16],
+    },
+    CoroutineClosure {
+        definition: DefinitionIdentityV2,
+        generic_args_hash: [u8; 16],
+    },
+    Coroutine {
+        definition: DefinitionIdentityV2,
+        generic_args_hash: [u8; 16],
+    },
+    CoroutineWitness {
+        definition: DefinitionIdentityV2,
+        generic_args_hash: [u8; 16],
+    },
+    Never,
+    Tuple {
+        arity: usize,
+    },
+    Unsupported(UnresolvedTypeClassV2),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum IntegerWidthV2 {
+    Pointer,
+    Bits8,
+    Bits16,
+    Bits32,
+    Bits64,
+    Bits128,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FloatWidthV2 {
+    Bits16,
+    Bits32,
+    Bits64,
+    Bits128,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum UnresolvedTypeClassV2 {
+    Alias,
+    Parameter,
+    Bound,
+    Placeholder,
+    Inference,
+    Error,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct StableCompilerValueV2 {
+    pub stable_hash: [u8; 16],
+    pub diagnostic: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -220,7 +430,7 @@ pub(crate) struct LocalDeclV2 {
     pub ty: TypeIdentityV2,
     pub mutable: bool,
     pub source: SourceSpanV2,
-    pub rustc_debug: String,
+    pub diagnostic_debug: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -242,7 +452,7 @@ pub(crate) struct BasicBlockV2 {
 pub(crate) struct StatementV2 {
     pub index: usize,
     pub source: SourceSpanV2,
-    pub rustc_debug: String,
+    pub diagnostic_debug: String,
     pub kind: StatementKindV2,
 }
 
@@ -262,23 +472,36 @@ pub(crate) enum StatementKindV2 {
         place: PlaceV2,
         variant: usize,
     },
-    Intrinsic(IntrinsicStatementV2),
-    Deinit {
-        place: PlaceV2,
-    },
+    Intrinsic(Box<IntrinsicStatementV2>),
     Retag {
         place: PlaceV2,
-        rustc_kind: String,
+        kind: StableCompilerValueV2,
     },
     PlaceMention {
         place: PlaceV2,
     },
     Coverage {
-        rustc_kind: String,
+        kind: StableCompilerValueV2,
     },
     Nop,
-    CompilerOpaque {
-        rustc_kind: String,
+    Unsupported(UnsupportedStatementV2),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum UnsupportedStatementV2 {
+    FakeRead {
+        cause: StableCompilerValueV2,
+        place: PlaceV2,
+    },
+    AscribeUserType {
+        place: PlaceV2,
+        projection: StableCompilerValueV2,
+        variance: StableCompilerValueV2,
+    },
+    ConstEvalCounter,
+    BackwardIncompatibleDropHint {
+        place: PlaceV2,
+        reason: StableCompilerValueV2,
     },
 }
 
@@ -290,10 +513,7 @@ pub(crate) enum IntrinsicStatementV2 {
         count: Box<OperandV2>,
     },
     Assume {
-        condition: OperandV2,
-    },
-    CompilerOpaque {
-        rustc_kind: String,
+        condition: Box<OperandV2>,
     },
 }
 
@@ -330,14 +550,8 @@ pub(crate) enum ProjectionV2 {
     OpaqueCast {
         ty: TypeIdentityV2,
     },
-    Subtype {
-        ty: TypeIdentityV2,
-    },
     UnwrapUnsafeBinder {
         ty: TypeIdentityV2,
-    },
-    CompilerOpaque {
-        rustc_kind: String,
     },
 }
 
@@ -346,12 +560,12 @@ pub(crate) enum OperandV2 {
     Copy(PlaceV2),
     Move(PlaceV2),
     Constant {
-        ty: TypeIdentityV2,
-        literal: String,
-        source: SourceSpanV2,
+        ty: Box<TypeIdentityV2>,
+        value: StableCompilerValueV2,
+        source: Box<SourceSpanV2>,
     },
     RuntimeChecks {
-        kind: String,
+        kind: StableCompilerValueV2,
     },
 }
 
@@ -360,29 +574,28 @@ pub(crate) enum RvalueV2 {
     Use(OperandV2),
     Repeat {
         operand: OperandV2,
-        count: String,
+        count: StableCompilerValueV2,
     },
     Reference {
-        borrow_kind: String,
+        borrow_kind: StableCompilerValueV2,
         place: PlaceV2,
     },
     RawPointer {
-        mutability: String,
+        kind: StableCompilerValueV2,
         place: PlaceV2,
     },
-    Len(PlaceV2),
     Cast {
-        kind: String,
+        kind: StableCompilerValueV2,
         operand: OperandV2,
-        target: TypeIdentityV2,
+        target: Box<TypeIdentityV2>,
     },
     Binary {
-        operation: String,
+        operation: StableCompilerValueV2,
         lhs: OperandV2,
-        rhs: OperandV2,
+        rhs: Box<OperandV2>,
     },
     Unary {
-        operation: String,
+        operation: StableCompilerValueV2,
         operand: OperandV2,
     },
     Discriminant {
@@ -393,10 +606,6 @@ pub(crate) enum RvalueV2 {
         operands: Vec<OperandV2>,
     },
     CopyForDeref(PlaceV2),
-    Nullary {
-        operation: String,
-        ty: TypeIdentityV2,
-    },
     ThreadLocalRef {
         definition: DefinitionIdentityV2,
     },
@@ -404,35 +613,43 @@ pub(crate) enum RvalueV2 {
         operand: OperandV2,
         target: TypeIdentityV2,
     },
-    CompilerOpaque {
-        rustc_kind: String,
-    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct AggregateKindV2 {
-    pub class: AggregateClassV2,
-    pub definition: Option<DefinitionIdentityV2>,
-    pub variant: Option<usize>,
-    pub rustc_kind: String,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum AggregateClassV2 {
-    Array,
+pub(crate) enum AggregateKindV2 {
+    Array {
+        element: TypeIdentityV2,
+    },
     Tuple,
-    Adt,
-    Closure,
-    CoroutineClosure,
-    Coroutine,
-    RawPointer,
-    CompilerOpaque,
+    Adt {
+        definition: DefinitionIdentityV2,
+        generic_args_hash: [u8; 16],
+        variant: usize,
+        user_type_annotation: Option<usize>,
+        active_field: Option<usize>,
+    },
+    Closure {
+        definition: DefinitionIdentityV2,
+        generic_args_hash: [u8; 16],
+    },
+    CoroutineClosure {
+        definition: DefinitionIdentityV2,
+        generic_args_hash: [u8; 16],
+    },
+    Coroutine {
+        definition: DefinitionIdentityV2,
+        generic_args_hash: [u8; 16],
+    },
+    RawPointer {
+        pointee: TypeIdentityV2,
+        mutable: bool,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TerminatorV2 {
     pub source: SourceSpanV2,
-    pub rustc_debug: String,
+    pub diagnostic_debug: String,
     pub kind: TerminatorKindV2,
     pub successors: Vec<usize>,
 }
@@ -451,21 +668,17 @@ pub(crate) enum TerminatorKindV2 {
     },
     Call {
         function: OperandV2,
-        declared: Option<DefinitionIdentityV2>,
-        resolved: Option<FunctionIdentityV2>,
-        intrinsic: Option<IntrinsicIdentityV2>,
+        callee: CalleeIdentityV2,
         arguments: Vec<CallArgumentV2>,
         destination: PlaceV2,
         target: Option<usize>,
         unwind: UnwindActionV2,
-        call_source: String,
+        call_source: StableCompilerValueV2,
         function_span: SourceSpanV2,
     },
     TailCall {
         function: OperandV2,
-        declared: Option<DefinitionIdentityV2>,
-        resolved: Option<FunctionIdentityV2>,
-        intrinsic: Option<IntrinsicIdentityV2>,
+        callee: CalleeIdentityV2,
         arguments: Vec<CallArgumentV2>,
         function_span: SourceSpanV2,
     },
@@ -481,14 +694,51 @@ pub(crate) enum TerminatorKindV2 {
         condition: OperandV2,
         expected: bool,
         target: usize,
-        message: String,
+        message: StableCompilerValueV2,
         unwind: UnwindActionV2,
     },
-    InlineAsm {
-        rustc_kind: String,
+    UnwindResume,
+    UnwindTerminate {
+        reason: StableCompilerValueV2,
     },
-    CompilerOpaque {
-        rustc_kind: String,
+    Yield {
+        value: OperandV2,
+        resume: usize,
+        resume_argument: PlaceV2,
+        drop: Option<usize>,
+    },
+    CoroutineDrop,
+    FalseEdge {
+        real_target: usize,
+        imaginary_target: usize,
+    },
+    FalseUnwind {
+        real_target: usize,
+        unwind: UnwindActionV2,
+    },
+    Unsupported(UnsupportedTerminatorV2),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum CalleeIdentityV2 {
+    Direct {
+        declared: DefinitionIdentityV2,
+        declared_generic_args_hash: [u8; 16],
+        resolved: Box<FunctionIdentityV2>,
+        intrinsic: Option<IntrinsicIdentityV2>,
+    },
+    Indirect {
+        callable_type: TypeIdentityV2,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum UnsupportedTerminatorV2 {
+    InlineAssembly {
+        template_pieces: usize,
+        operands: usize,
+        line_spans: usize,
+        targets: usize,
     },
 }
 
@@ -508,7 +758,7 @@ pub(crate) struct SwitchTargetV2 {
 pub(crate) enum UnwindActionV2 {
     Continue,
     Unreachable,
-    Terminate { reason: String },
+    Terminate { reason: StableCompilerValueV2 },
     Cleanup { target: usize },
 }
 
@@ -544,18 +794,75 @@ fn validate_function_identity(
     limits: CaptureLimitsV2,
 ) -> Result<(), ValidationErrorV2> {
     validate_definition("function.definition", &identity.definition, limits)?;
+    validate_hash(
+        "function.instance.generic_args_hash",
+        &identity.instance.generic_args_hash,
+    )?;
+    validate_hash(
+        "function.instance.instance_hash",
+        &identity.instance.instance_hash,
+    )?;
+    bounded(
+        "function.instance.generic_arg_count",
+        identity.instance.generic_arg_count,
+        limits.max_generic_args,
+    )?;
     validate_text(
-        "function.instance.generic_args",
-        &identity.instance.generic_args,
+        "function.instance.diagnostic_generic_args",
+        &identity.instance.diagnostic_generic_args,
         limits,
     )?;
     validate_text(
-        "function.instance.rustc_debug",
-        &identity.instance.rustc_debug,
+        "function.instance.diagnostic_debug",
+        &identity.instance.diagnostic_debug,
         limits,
     )?;
-    if let InstanceKindV2::GeneratedCallable { rustc_kind } = &identity.instance.kind {
-        validate_text("function.instance.kind", rustc_kind, limits)?;
+    match &identity.instance.kind {
+        InstanceKindV2::Item
+        | InstanceKindV2::Intrinsic
+        | InstanceKindV2::VTableShim
+        | InstanceKindV2::ReifyShim { .. }
+        | InstanceKindV2::Virtual { .. }
+        | InstanceKindV2::ClosureOnceShim { .. }
+        | InstanceKindV2::ThreadLocalShim => {}
+        InstanceKindV2::ConstructCoroutineInClosureShim {
+            coroutine_closure, ..
+        } => {
+            validate_definition(
+                "function.instance.coroutine_closure",
+                coroutine_closure,
+                limits,
+            )?;
+            if coroutine_closure != &identity.definition {
+                return Err(ValidationErrorV2::new(
+                    "function.instance.coroutine_closure",
+                    "generated coroutine-closure shim definition disagrees with its instance",
+                ));
+            }
+        }
+        InstanceKindV2::FnPtrShim { fn_pointer }
+        | InstanceKindV2::CloneShim { ty: fn_pointer }
+        | InstanceKindV2::FnPtrAddrShim { ty: fn_pointer }
+        | InstanceKindV2::AsyncDropGlueCtorShim { ty: fn_pointer }
+        | InstanceKindV2::AsyncDropGlue { ty: fn_pointer } => {
+            validate_type("function.instance.type", fn_pointer, limits)?;
+        }
+        InstanceKindV2::FutureDropPollShim {
+            proxy_coroutine,
+            implementation_coroutine,
+        } => {
+            validate_type("function.instance.proxy_coroutine", proxy_coroutine, limits)?;
+            validate_type(
+                "function.instance.implementation_coroutine",
+                implementation_coroutine,
+                limits,
+            )?;
+        }
+        InstanceKindV2::DropGlue { ty } => {
+            if let Some(ty) = ty {
+                validate_type("function.instance.drop_type", ty, limits)?;
+            }
+        }
     }
     Ok(())
 }
@@ -566,11 +873,27 @@ fn validate_definition(
     limits: CaptureLimitsV2,
 ) -> Result<(), ValidationErrorV2> {
     validate_text(
-        &format!("{path}.crate_name"),
-        &definition.crate_name,
+        &format!("{path}.diagnostic_crate_name"),
+        &definition.diagnostic_crate_name,
         limits,
     )?;
-    validate_text(&format!("{path}.def_path"), &definition.def_path, limits)
+    validate_text(
+        &format!("{path}.diagnostic_def_path"),
+        &definition.diagnostic_def_path,
+        limits,
+    )?;
+    validate_hash(&format!("{path}.def_path_hash"), &definition.def_path_hash)?;
+    validate_hash(
+        &format!("{path}.stable_crate_id"),
+        &definition.stable_crate_id,
+    )?;
+    if definition.local_def_path_hash.iter().all(|byte| *byte == 0) {
+        return Err(ValidationErrorV2::new(
+            format!("{path}.local_def_path_hash"),
+            "stable local DefPath hash must not be the reserved zero value",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_span(
@@ -578,8 +901,28 @@ fn validate_span(
     span: &SourceSpanV2,
     limits: CaptureLimitsV2,
 ) -> Result<(), ValidationErrorV2> {
-    validate_text(&format!("{path}.file"), &span.file, limits)?;
-    validate_text(&format!("{path}.rustc_debug"), &span.rustc_debug, limits)?;
+    if span.authority != SourceAuthorityV2::CanonicalRemapped {
+        return Err(ValidationErrorV2::new(
+            format!("{path}.authority"),
+            "source identity is unauthoritative and cannot be an exact capture",
+        ));
+    }
+    validate_text(
+        &format!("{path}.remapped_file"),
+        &span.remapped_file,
+        limits,
+    )?;
+    validate_text(
+        &format!("{path}.diagnostic_debug"),
+        &span.diagnostic_debug,
+        limits,
+    )?;
+    validate_hash(&format!("{path}.source_file_hash"), &span.source_file_hash)?;
+    validate_hash(&format!("{path}.span_hash"), &span.span_hash)?;
+    validate_hash(
+        &format!("{path}.source_scope_hash"),
+        &span.source_scope_hash,
+    )?;
     if span.start_line == 0
         || span.start_column == 0
         || span.end_line == 0
@@ -591,6 +934,21 @@ fn validate_span(
             "source span is empty or reversed",
         ));
     }
+    if span.source_scope == 0 && span.source_scope_parent.is_some() {
+        return Err(ValidationErrorV2::new(
+            format!("{path}.source_scope_parent"),
+            "the root source scope cannot have a parent",
+        ));
+    }
+    if span
+        .source_scope_parent
+        .is_some_and(|parent| parent >= span.source_scope)
+    {
+        return Err(ValidationErrorV2::new(
+            format!("{path}.source_scope_parent"),
+            "source scopes must refer to an earlier canonical parent",
+        ));
+    }
     Ok(())
 }
 
@@ -599,8 +957,72 @@ fn validate_type(
     ty: &TypeIdentityV2,
     limits: CaptureLimitsV2,
 ) -> Result<(), ValidationErrorV2> {
-    validate_text(&format!("{path}.rust"), &ty.rust, limits)?;
-    validate_text(&format!("{path}.rustc_kind"), &ty.rustc_kind, limits)
+    validate_hash(&format!("{path}.stable_hash"), &ty.stable_hash)?;
+    validate_text(
+        &format!("{path}.diagnostic_display"),
+        &ty.diagnostic_display,
+        limits,
+    )?;
+    validate_text(
+        &format!("{path}.diagnostic_debug"),
+        &ty.diagnostic_debug,
+        limits,
+    )?;
+    match &ty.class {
+        TypeClassV2::Adt {
+            definition,
+            generic_args_hash,
+        }
+        | TypeClassV2::FunctionDefinition {
+            definition,
+            generic_args_hash,
+        }
+        | TypeClassV2::Closure {
+            definition,
+            generic_args_hash,
+        }
+        | TypeClassV2::CoroutineClosure {
+            definition,
+            generic_args_hash,
+        }
+        | TypeClassV2::Coroutine {
+            definition,
+            generic_args_hash,
+        }
+        | TypeClassV2::CoroutineWitness {
+            definition,
+            generic_args_hash,
+        } => {
+            validate_definition(&format!("{path}.definition"), definition, limits)?;
+            validate_hash(&format!("{path}.generic_args_hash"), generic_args_hash)
+        }
+        TypeClassV2::Foreign { definition } => {
+            validate_definition(&format!("{path}.definition"), definition, limits)
+        }
+        TypeClassV2::Unsupported(kind) => Err(ValidationErrorV2::new(
+            format!("{path}.class"),
+            format!("unresolved compiler type {kind:?} cannot be an exact capture"),
+        )),
+        TypeClassV2::Bool
+        | TypeClassV2::Char
+        | TypeClassV2::SignedInteger(_)
+        | TypeClassV2::UnsignedInteger(_)
+        | TypeClassV2::Float(_)
+        | TypeClassV2::StringSlice
+        | TypeClassV2::Array
+        | TypeClassV2::Pattern
+        | TypeClassV2::Slice
+        | TypeClassV2::RawPointer { .. }
+        | TypeClassV2::Reference { .. }
+        | TypeClassV2::FunctionPointer
+        | TypeClassV2::UnsafeBinder
+        | TypeClassV2::Dynamic
+        | TypeClassV2::Never
+        | TypeClassV2::Tuple { arity: 0 } => Ok(()),
+        TypeClassV2::Tuple { arity } => {
+            bounded(format!("{path}.tuple_arity"), *arity, limits.max_type_arity)
+        }
+    }
 }
 
 fn validate_statement(
@@ -611,8 +1033,8 @@ fn validate_statement(
 ) -> Result<(), ValidationErrorV2> {
     validate_span(&format!("{path}.source"), &statement.source, limits)?;
     validate_text(
-        &format!("{path}.rustc_debug"),
-        &statement.rustc_debug,
+        &format!("{path}.diagnostic_debug"),
+        &statement.diagnostic_debug,
         limits,
     )?;
     match &statement.kind {
@@ -629,11 +1051,10 @@ fn validate_statement(
             validate_local(&format!("{path}.local"), *local, local_count)
         }
         StatementKindV2::SetDiscriminant { place, .. }
-        | StatementKindV2::Deinit { place }
         | StatementKindV2::PlaceMention { place } => {
             validate_place(&format!("{path}.place"), place, local_count, limits)
         }
-        StatementKindV2::Intrinsic(intrinsic) => match intrinsic {
+        StatementKindV2::Intrinsic(intrinsic) => match intrinsic.as_ref() {
             IntrinsicStatementV2::CopyNonOverlapping {
                 source,
                 destination,
@@ -656,19 +1077,19 @@ fn validate_statement(
             IntrinsicStatementV2::Assume { condition } => {
                 validate_operand(&format!("{path}.condition"), condition, local_count, limits)
             }
-            IntrinsicStatementV2::CompilerOpaque { rustc_kind } => {
-                validate_text(&format!("{path}.intrinsic"), rustc_kind, limits)
-            }
         },
-        StatementKindV2::Retag { place, rustc_kind } => {
+        StatementKindV2::Retag { place, kind } => {
             validate_place(&format!("{path}.place"), place, local_count, limits)?;
-            validate_text(&format!("{path}.retag"), rustc_kind, limits)
+            validate_stable_value(&format!("{path}.retag"), kind, limits)
         }
-        StatementKindV2::Coverage { rustc_kind }
-        | StatementKindV2::CompilerOpaque { rustc_kind } => {
-            validate_text(&format!("{path}.rustc_kind"), rustc_kind, limits)
+        StatementKindV2::Coverage { kind } => {
+            validate_stable_value(&format!("{path}.coverage"), kind, limits)
         }
         StatementKindV2::Nop => Ok(()),
+        StatementKindV2::Unsupported(kind) => Err(ValidationErrorV2::new(
+            format!("{path}.kind"),
+            format!("unsupported statement {kind:?} cannot be an exact capture"),
+        )),
     }
 }
 
@@ -679,22 +1100,26 @@ fn validate_rvalue(
     limits: CaptureLimitsV2,
 ) -> Result<(), ValidationErrorV2> {
     match value {
-        RvalueV2::Use(operand) | RvalueV2::Unary { operand, .. } => {
+        RvalueV2::Use(operand) => {
+            validate_operand(&format!("{path}.operand"), operand, local_count, limits)
+        }
+        RvalueV2::Unary { operation, operand } => {
+            validate_stable_value(&format!("{path}.operation"), operation, limits)?;
             validate_operand(&format!("{path}.operand"), operand, local_count, limits)
         }
         RvalueV2::Repeat { operand, count } => {
             validate_operand(&format!("{path}.operand"), operand, local_count, limits)?;
-            validate_text(&format!("{path}.count"), count, limits)
+            validate_stable_value(&format!("{path}.count"), count, limits)
         }
         RvalueV2::Reference { borrow_kind, place } => {
-            validate_text(&format!("{path}.borrow_kind"), borrow_kind, limits)?;
+            validate_stable_value(&format!("{path}.borrow_kind"), borrow_kind, limits)?;
             validate_place(&format!("{path}.place"), place, local_count, limits)
         }
-        RvalueV2::RawPointer { mutability, place } => {
-            validate_text(&format!("{path}.mutability"), mutability, limits)?;
+        RvalueV2::RawPointer { kind, place } => {
+            validate_stable_value(&format!("{path}.raw_pointer_kind"), kind, limits)?;
             validate_place(&format!("{path}.place"), place, local_count, limits)
         }
-        RvalueV2::Len(place) | RvalueV2::Discriminant { place } | RvalueV2::CopyForDeref(place) => {
+        RvalueV2::Discriminant { place } | RvalueV2::CopyForDeref(place) => {
             validate_place(&format!("{path}.place"), place, local_count, limits)
         }
         RvalueV2::Cast {
@@ -702,7 +1127,7 @@ fn validate_rvalue(
             operand,
             target,
         } => {
-            validate_text(&format!("{path}.kind"), kind, limits)?;
+            validate_stable_value(&format!("{path}.kind"), kind, limits)?;
             validate_operand(&format!("{path}.operand"), operand, local_count, limits)?;
             validate_type(&format!("{path}.target"), target, limits)
         }
@@ -711,7 +1136,7 @@ fn validate_rvalue(
             lhs,
             rhs,
         } => {
-            validate_text(&format!("{path}.operation"), operation, limits)?;
+            validate_stable_value(&format!("{path}.operation"), operation, limits)?;
             validate_operand(&format!("{path}.lhs"), lhs, local_count, limits)?;
             validate_operand(&format!("{path}.rhs"), rhs, local_count, limits)
         }
@@ -721,10 +1146,7 @@ fn validate_rvalue(
                 operands.len(),
                 limits.max_operands,
             )?;
-            validate_text(&format!("{path}.aggregate_kind"), &kind.rustc_kind, limits)?;
-            if let Some(definition) = &kind.definition {
-                validate_definition(&format!("{path}.definition"), definition, limits)?;
-            }
+            validate_aggregate_kind(&format!("{path}.kind"), kind, limits)?;
             for (index, operand) in operands.iter().enumerate() {
                 validate_operand(
                     &format!("{path}.operands[{index}]"),
@@ -735,10 +1157,6 @@ fn validate_rvalue(
             }
             Ok(())
         }
-        RvalueV2::Nullary { operation, ty } => {
-            validate_text(&format!("{path}.operation"), operation, limits)?;
-            validate_type(&format!("{path}.type"), ty, limits)
-        }
         RvalueV2::ThreadLocalRef { definition } => {
             validate_definition(&format!("{path}.definition"), definition, limits)
         }
@@ -746,9 +1164,38 @@ fn validate_rvalue(
             validate_operand(&format!("{path}.operand"), operand, local_count, limits)?;
             validate_type(&format!("{path}.target"), target, limits)
         }
-        RvalueV2::CompilerOpaque { rustc_kind } => {
-            validate_text(&format!("{path}.rustc_kind"), rustc_kind, limits)
+    }
+}
+
+fn validate_aggregate_kind(
+    path: &str,
+    kind: &AggregateKindV2,
+    limits: CaptureLimitsV2,
+) -> Result<(), ValidationErrorV2> {
+    match kind {
+        AggregateKindV2::Array { element } => validate_type(path, element, limits),
+        AggregateKindV2::Tuple => Ok(()),
+        AggregateKindV2::Adt {
+            definition,
+            generic_args_hash,
+            ..
         }
+        | AggregateKindV2::Closure {
+            definition,
+            generic_args_hash,
+        }
+        | AggregateKindV2::CoroutineClosure {
+            definition,
+            generic_args_hash,
+        }
+        | AggregateKindV2::Coroutine {
+            definition,
+            generic_args_hash,
+        } => {
+            validate_definition(&format!("{path}.definition"), definition, limits)?;
+            validate_hash(&format!("{path}.generic_args_hash"), generic_args_hash)
+        }
+        AggregateKindV2::RawPointer { pointee, .. } => validate_type(path, pointee, limits),
     }
 }
 
@@ -761,8 +1208,8 @@ fn validate_terminator(
 ) -> Result<(), ValidationErrorV2> {
     validate_span(&format!("{path}.source"), &terminator.source, limits)?;
     validate_text(
-        &format!("{path}.rustc_debug"),
-        &terminator.rustc_debug,
+        &format!("{path}.diagnostic_debug"),
+        &terminator.diagnostic_debug,
         limits,
     )?;
     for (index, successor) in terminator.successors.iter().copied().enumerate() {
@@ -789,7 +1236,7 @@ fn validate_terminator(
             bounded(
                 format!("{path}.targets"),
                 targets.len(),
-                limits.max_successors,
+                limits.max_switch_targets,
             )?;
             validate_operand(
                 &format!("{path}.discriminant"),
@@ -812,9 +1259,7 @@ fn validate_terminator(
         }
         TerminatorKindV2::Call {
             function,
-            declared,
-            resolved,
-            intrinsic,
+            callee,
             arguments,
             destination,
             target,
@@ -823,20 +1268,7 @@ fn validate_terminator(
             function_span,
         } => {
             validate_operand(&format!("{path}.function"), function, local_count, limits)?;
-            if let Some(declared) = declared {
-                validate_definition(&format!("{path}.declared"), declared, limits)?;
-            }
-            if let Some(resolved) = resolved {
-                validate_function_identity(resolved, limits)?;
-            }
-            if let Some(intrinsic) = intrinsic {
-                validate_definition(
-                    &format!("{path}.intrinsic.definition"),
-                    &intrinsic.definition,
-                    limits,
-                )?;
-                validate_text(&format!("{path}.intrinsic.name"), &intrinsic.name, limits)?;
-            }
+            validate_callee(&format!("{path}.callee"), function, callee, limits)?;
             bounded(
                 format!("{path}.arguments"),
                 arguments.len(),
@@ -865,34 +1297,19 @@ fn validate_terminator(
                 validate_block(&format!("{path}.target"), *target, block_count)?;
             }
             validate_unwind(&format!("{path}.unwind"), unwind, block_count, limits)?;
-            validate_text(&format!("{path}.call_source"), call_source, limits)?;
+            validate_stable_value(&format!("{path}.call_source"), call_source, limits)?;
             validate_span(&format!("{path}.function_span"), function_span, limits)?;
             let expected = normal_and_unwind_successors(*target, unwind);
             validate_exact_successors(path, &terminator.successors, &expected)
         }
         TerminatorKindV2::TailCall {
             function,
-            declared,
-            resolved,
-            intrinsic,
+            callee,
             arguments,
             function_span,
         } => {
             validate_operand(&format!("{path}.function"), function, local_count, limits)?;
-            if let Some(declared) = declared {
-                validate_definition(&format!("{path}.declared"), declared, limits)?;
-            }
-            if let Some(resolved) = resolved {
-                validate_function_identity(resolved, limits)?;
-            }
-            if let Some(intrinsic) = intrinsic {
-                validate_definition(
-                    &format!("{path}.intrinsic.definition"),
-                    &intrinsic.definition,
-                    limits,
-                )?;
-                validate_text(&format!("{path}.intrinsic.name"), &intrinsic.name, limits)?;
-            }
+            validate_callee(&format!("{path}.callee"), function, callee, limits)?;
             bounded(
                 format!("{path}.arguments"),
                 arguments.len(),
@@ -944,14 +1361,148 @@ fn validate_terminator(
         } => {
             validate_operand(&format!("{path}.condition"), condition, local_count, limits)?;
             validate_block(&format!("{path}.target"), *target, block_count)?;
-            validate_text(&format!("{path}.message"), message, limits)?;
+            validate_stable_value(&format!("{path}.message"), message, limits)?;
             validate_unwind(&format!("{path}.unwind"), unwind, block_count, limits)?;
             let expected = normal_and_unwind_successors(Some(*target), unwind);
             validate_exact_successors(path, &terminator.successors, &expected)
         }
-        TerminatorKindV2::InlineAsm { rustc_kind }
-        | TerminatorKindV2::CompilerOpaque { rustc_kind } => {
-            validate_text(&format!("{path}.rustc_kind"), rustc_kind, limits)
+        TerminatorKindV2::UnwindResume
+        | TerminatorKindV2::UnwindTerminate { .. }
+        | TerminatorKindV2::CoroutineDrop => {
+            if let TerminatorKindV2::UnwindTerminate { reason } = &terminator.kind {
+                validate_stable_value(&format!("{path}.reason"), reason, limits)?;
+            }
+            validate_exact_successors(path, &terminator.successors, &[])
+        }
+        TerminatorKindV2::Yield {
+            value,
+            resume,
+            resume_argument,
+            drop,
+        } => {
+            validate_operand(&format!("{path}.value"), value, local_count, limits)?;
+            validate_block(&format!("{path}.resume"), *resume, block_count)?;
+            validate_place(
+                &format!("{path}.resume_argument"),
+                resume_argument,
+                local_count,
+                limits,
+            )?;
+            let mut expected = vec![*resume];
+            if let Some(drop) = drop {
+                validate_block(&format!("{path}.drop"), *drop, block_count)?;
+                expected.push(*drop);
+            }
+            validate_exact_successors(path, &terminator.successors, &expected)
+        }
+        TerminatorKindV2::FalseEdge {
+            real_target,
+            imaginary_target,
+        } => {
+            validate_block(&format!("{path}.real_target"), *real_target, block_count)?;
+            validate_block(
+                &format!("{path}.imaginary_target"),
+                *imaginary_target,
+                block_count,
+            )?;
+            validate_exact_successors(
+                path,
+                &terminator.successors,
+                &[*real_target, *imaginary_target],
+            )
+        }
+        TerminatorKindV2::FalseUnwind {
+            real_target,
+            unwind,
+        } => {
+            validate_block(&format!("{path}.real_target"), *real_target, block_count)?;
+            validate_unwind(&format!("{path}.unwind"), unwind, block_count, limits)?;
+            let expected = normal_and_unwind_successors(Some(*real_target), unwind);
+            validate_exact_successors(path, &terminator.successors, &expected)
+        }
+        TerminatorKindV2::Unsupported(kind) => Err(ValidationErrorV2::new(
+            format!("{path}.kind"),
+            format!("unsupported terminator {kind:?} cannot be an exact capture"),
+        )),
+    }
+}
+
+fn validate_callee(
+    path: &str,
+    function: &OperandV2,
+    callee: &CalleeIdentityV2,
+    limits: CaptureLimitsV2,
+) -> Result<(), ValidationErrorV2> {
+    match callee {
+        CalleeIdentityV2::Direct {
+            declared,
+            declared_generic_args_hash,
+            resolved,
+            intrinsic,
+        } => {
+            validate_definition(&format!("{path}.declared"), declared, limits)?;
+            validate_hash(
+                &format!("{path}.declared_generic_args_hash"),
+                declared_generic_args_hash,
+            )?;
+            validate_function_identity(resolved, limits)?;
+            let OperandV2::Constant { ty, .. } = function else {
+                return Err(ValidationErrorV2::new(
+                    path,
+                    "a direct callee requires a constant function-definition operand",
+                ));
+            };
+            let TypeClassV2::FunctionDefinition {
+                definition,
+                generic_args_hash,
+            } = &ty.class
+            else {
+                return Err(ValidationErrorV2::new(
+                    path,
+                    "direct callee operand does not have a function-definition type",
+                ));
+            };
+            if definition != declared || generic_args_hash != declared_generic_args_hash {
+                return Err(ValidationErrorV2::new(
+                    path,
+                    "declared callee identity disagrees with its operand type",
+                ));
+            }
+            if let Some(intrinsic) = intrinsic {
+                validate_definition(
+                    &format!("{path}.intrinsic.definition"),
+                    &intrinsic.definition,
+                    limits,
+                )?;
+                validate_text(&format!("{path}.intrinsic.name"), &intrinsic.name, limits)?;
+                if intrinsic.definition != *declared || resolved.definition != *declared {
+                    return Err(ValidationErrorV2::new(
+                        path,
+                        "intrinsic, declared, and resolved DefId identities disagree",
+                    ));
+                }
+            }
+            Ok(())
+        }
+        CalleeIdentityV2::Indirect { callable_type } => {
+            validate_type(&format!("{path}.callable_type"), callable_type, limits)?;
+            if !matches!(callable_type.class, TypeClassV2::FunctionPointer) {
+                return Err(ValidationErrorV2::new(
+                    path,
+                    "only a structurally identified function pointer is legitimately indirect",
+                ));
+            }
+            if matches!(
+                function,
+                OperandV2::Constant { ty, .. }
+                    if matches!(ty.class, TypeClassV2::FunctionDefinition { .. })
+            ) {
+                return Err(ValidationErrorV2::new(
+                    path,
+                    "a function-definition constant cannot be marked indirect",
+                ));
+            }
+            Ok(())
         }
     }
 }
@@ -964,7 +1515,7 @@ fn validate_unwind(
 ) -> Result<(), ValidationErrorV2> {
     match unwind {
         UnwindActionV2::Continue | UnwindActionV2::Unreachable => Ok(()),
-        UnwindActionV2::Terminate { reason } => validate_text(path, reason, limits),
+        UnwindActionV2::Terminate { reason } => validate_stable_value(path, reason, limits),
         UnwindActionV2::Cleanup { target } => validate_block(path, *target, block_count),
     }
 }
@@ -1005,17 +1556,13 @@ fn validate_operand(
         OperandV2::Copy(place) | OperandV2::Move(place) => {
             validate_place(path, place, local_count, limits)
         }
-        OperandV2::Constant {
-            ty,
-            literal,
-            source,
-        } => {
+        OperandV2::Constant { ty, value, source } => {
             validate_type(&format!("{path}.type"), ty, limits)?;
-            validate_text(&format!("{path}.literal"), literal, limits)?;
+            validate_stable_value(&format!("{path}.value"), value, limits)?;
             validate_span(&format!("{path}.source"), source, limits)
         }
         OperandV2::RuntimeChecks { kind } => {
-            validate_text(&format!("{path}.runtime_checks"), kind, limits)
+            validate_stable_value(&format!("{path}.runtime_checks"), kind, limits)
         }
     }
 }
@@ -1040,7 +1587,6 @@ fn validate_place(
             }
             ProjectionV2::Field { ty, .. }
             | ProjectionV2::OpaqueCast { ty }
-            | ProjectionV2::Subtype { ty }
             | ProjectionV2::UnwrapUnsafeBinder { ty } => {
                 validate_type(&format!("{projection_path}.type"), ty, limits)?;
             }
@@ -1048,9 +1594,6 @@ fn validate_place(
                 name: Some(name), ..
             } => {
                 validate_text(&format!("{projection_path}.name"), name, limits)?;
-            }
-            ProjectionV2::CompilerOpaque { rustc_kind } => {
-                validate_text(&format!("{projection_path}.rustc_kind"), rustc_kind, limits)?;
             }
             ProjectionV2::Deref
             | ProjectionV2::ConstantIndex { .. }
@@ -1076,6 +1619,25 @@ fn validate_block(path: &str, block: usize, block_count: usize) -> Result<(), Va
         return Err(ValidationErrorV2::new(
             path,
             format!("block {block} is outside 0..{block_count}"),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_stable_value(
+    path: &str,
+    value: &StableCompilerValueV2,
+    limits: CaptureLimitsV2,
+) -> Result<(), ValidationErrorV2> {
+    validate_hash(&format!("{path}.stable_hash"), &value.stable_hash)?;
+    validate_text(&format!("{path}.diagnostic"), &value.diagnostic, limits)
+}
+
+fn validate_hash(path: &str, hash: &[u8; 16]) -> Result<(), ValidationErrorV2> {
+    if hash.iter().all(|byte| *byte == 0) {
+        return Err(ValidationErrorV2::new(
+            path,
+            "stable identity hash must not be the reserved zero value",
         ));
     }
     Ok(())
