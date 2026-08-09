@@ -3,10 +3,11 @@ use dialect_mir::{
     MirBlockId, MirBlockParameter, MirBody, MirBodyForm, MirCall, MirCallAuthority, MirCallReturn,
     MirCallSignature, MirCallable, MirCallee, MirConstant, MirConstantValue, MirEdge,
     MirExecutableModule, MirExecutableTarget, MirExecutableVersion, MirExternalCallRegistry,
-    MirExternalCallReturn, MirExternalCallSignature, MirField, MirFunction, MirLayout,
-    MirLocalDecl, MirLocalId, MirLocalKind, MirMutability, MirOperand, MirPlace, MirProjection,
-    MirRvalue, MirScalarType, MirSemanticType, MirSourceSpan, MirStatement, MirStatementKind,
-    MirTerminator, MirTerminatorKind, MirTypeId, MirTypeKind, MirUnwindAction, MirValueId,
+    MirExternalCallReturn, MirExternalCallSignature, MirField, MirFunction, MirIntrinsic,
+    MirLayout, MirLocalDecl, MirLocalId, MirLocalKind, MirMutability, MirOperand, MirPlace,
+    MirProjection, MirRvalue, MirScalarType, MirSemanticType, MirSourceSpan, MirStatement,
+    MirStatementKind, MirTerminator, MirTerminatorKind, MirTypeId, MirTypeKind, MirUnwindAction,
+    MirValueId,
 };
 
 fn external_registry(
@@ -1060,6 +1061,207 @@ fn references_and_raw_addresses_require_exact_mutability_and_address_space() {
             .unwrap_err()
             .reason()
             .contains("requires a writable place")
+    );
+}
+
+#[derive(Clone, Copy)]
+struct IntrinsicTypes {
+    unit: MirTypeId,
+    u32_ty: MirTypeId,
+    const_ptr: MirTypeId,
+    mut_ptr: MirTypeId,
+}
+
+fn intrinsic_module() -> (MirExecutableModule, IntrinsicTypes) {
+    let unit = ty(MirTypeKind::Unit, 0, 1);
+    let u32_ty = ty(
+        MirTypeKind::Scalar(MirScalarType::Int {
+            signed: false,
+            bits: 32,
+        }),
+        4,
+        4,
+    );
+    let i32_ty = ty(
+        MirTypeKind::Scalar(MirScalarType::Int {
+            signed: true,
+            bits: 32,
+        }),
+        4,
+        4,
+    );
+    let pointer = |mutability| {
+        ty(
+            MirTypeKind::RawPointer {
+                pointee: Box::new(u32_ty.clone()),
+                mutability,
+                address_space: MirAddressSpace(1),
+            },
+            4,
+            4,
+        )
+    };
+    let const_ptr = pointer(MirMutability::Immutable);
+    let mut_ptr = pointer(MirMutability::Mutable);
+    let mut types = vec![
+        unit.clone(),
+        u32_ty.clone(),
+        i32_ty.clone(),
+        const_ptr.clone(),
+        mut_ptr.clone(),
+    ];
+    types.sort_by_key(|item| item.canonical_text().unwrap());
+    let id = |needle: &MirSemanticType| {
+        MirTypeId(types.iter().position(|item| item == needle).unwrap() as u32)
+    };
+    let ids = IntrinsicTypes {
+        unit: id(&unit),
+        u32_ty: id(&u32_ty),
+        const_ptr: id(&const_ptr),
+        mut_ptr: id(&mut_ptr),
+    };
+    let i32_id = id(&i32_ty);
+    let callables = vec![
+        MirCallable {
+            identity: "fe2o3.copy_nonoverlapping".into(),
+            authority: MirCallAuthority::Intrinsic(MirIntrinsic::CopyNonOverlapping),
+            signature: MirCallSignature {
+                inputs: vec![ids.const_ptr, ids.mut_ptr, ids.u32_ty],
+                output: MirCallReturn::Value(ids.unit),
+                can_unwind: false,
+            },
+        },
+        MirCallable {
+            identity: "fe2o3.pointer_distance".into(),
+            authority: MirCallAuthority::Intrinsic(MirIntrinsic::PointerDistance),
+            signature: MirCallSignature {
+                inputs: vec![ids.const_ptr, ids.const_ptr],
+                output: MirCallReturn::Value(i32_id),
+                can_unwind: false,
+            },
+        },
+        MirCallable {
+            identity: "fe2o3.volatile_load".into(),
+            authority: MirCallAuthority::Intrinsic(MirIntrinsic::VolatileLoad),
+            signature: MirCallSignature {
+                inputs: vec![ids.const_ptr],
+                output: MirCallReturn::Value(ids.u32_ty),
+                can_unwind: false,
+            },
+        },
+        MirCallable {
+            identity: "fe2o3.volatile_store".into(),
+            authority: MirCallAuthority::Intrinsic(MirIntrinsic::VolatileStore),
+            signature: MirCallSignature {
+                inputs: vec![ids.mut_ptr, ids.u32_ty],
+                output: MirCallReturn::Value(ids.unit),
+                can_unwind: false,
+            },
+        },
+    ];
+    (
+        MirExecutableModule {
+            version: MirExecutableVersion::V1,
+            target: MirExecutableTarget {
+                pointer_width_bits: 32,
+                thread_index_width_bits: 32,
+            },
+            types,
+            callables,
+            functions: vec![MirFunction {
+                identity: "fixture::intrinsic_authority".into(),
+                span: None,
+                body: MirBody {
+                    form: MirBodyForm::Places,
+                    locals: vec![
+                        local(ids.u32_ty, MirLocalKind::Return, true),
+                        local(ids.u32_ty, MirLocalKind::Argument, false),
+                    ],
+                    blocks: vec![MirBasicBlock {
+                        parameters: vec![],
+                        statements: vec![MirStatement {
+                            kind: MirStatementKind::Assign {
+                                place: MirPlace::local(MirLocalId(0), ids.u32_ty),
+                                value: MirRvalue::Use(MirOperand::Copy(MirPlace::local(
+                                    MirLocalId(1),
+                                    ids.u32_ty,
+                                ))),
+                            },
+                            span: None,
+                        }],
+                        terminator: terminator(MirTerminatorKind::Return),
+                    }],
+                    entry: MirBlockId(0),
+                },
+            }],
+        },
+        ids,
+    )
+}
+
+#[test]
+fn intrinsic_variants_have_closed_exact_signatures() {
+    let (module, ids) = intrinsic_module();
+    module.validate().unwrap();
+
+    let mut wrong_inputs = module.clone();
+    wrong_inputs.callables[2].signature.inputs.clear();
+    assert!(
+        wrong_inputs
+            .validate()
+            .unwrap_err()
+            .reason()
+            .contains("exactly 1 inputs")
+    );
+
+    let mut wrong_output = module.clone();
+    wrong_output.callables[2].signature.output = MirCallReturn::Value(ids.unit);
+    assert!(
+        wrong_output
+            .validate()
+            .unwrap_err()
+            .reason()
+            .contains("exactly match")
+    );
+
+    let mut forged_unwind = module.clone();
+    forged_unwind.callables[2].signature.can_unwind = true;
+    assert!(
+        forged_unwind
+            .validate()
+            .unwrap_err()
+            .reason()
+            .contains("cannot unwind")
+    );
+
+    let mut forged_copy = module.clone();
+    forged_copy.callables[0].signature.inputs[0] = ids.mut_ptr;
+    assert!(
+        forged_copy
+            .validate()
+            .unwrap_err()
+            .reason()
+            .contains("mutability")
+    );
+
+    let mut forged_distance = module.clone();
+    forged_distance.callables[1].signature.inputs[1] = ids.mut_ptr;
+    assert!(
+        forged_distance
+            .validate()
+            .unwrap_err()
+            .reason()
+            .contains("mutability")
+    );
+
+    let mut forged_store = module;
+    forged_store.callables[3].signature.inputs[0] = ids.const_ptr;
+    assert!(
+        forged_store
+            .validate()
+            .unwrap_err()
+            .reason()
+            .contains("mutability")
     );
 }
 
