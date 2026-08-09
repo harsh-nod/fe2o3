@@ -12,10 +12,15 @@ MAX_INPUT_BYTES = 8 * 1024 * 1024
 ADDRESS = re.compile(r"0x[0-9a-fA-F]+")
 THREAD = re.compile(r"\bThread (?:0x[0-9a-fA-F]+|[0-9]+)", re.IGNORECASE)
 PROCESS_ID = re.compile(r"\b(?:LWP|process) [0-9]+\b", re.IGNORECASE)
-AMDGPU_LANE = re.compile(r"AMDGPU Lane [^]]+\]")
+AMDGPU_LANE = re.compile(r"AMDGPU Lane (?!<LANE>)[^]]+\]")
+AMDGPU_WAVE = re.compile(r"AMDGPU Wave \S+")
+MEMORY_URI = re.compile(r"memory://[0-9]+#offset=0x[0-9a-fA-F]+&size=[0-9]+")
 SPACE = re.compile(r"[ \t]+")
+HEX_SHA256 = re.compile(r"[0-9a-f]{64}")
+HEX_BUILD_ID = re.compile(r"[0-9a-f]{40,64}")
 S09_SOURCE = "crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src/main.rs"
-SOURCE_PATH = re.compile(rf'(?:[^\s"(]*/)?{re.escape(S09_SOURCE)}')
+S09_DIRECTORY = "crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src"
+SOURCE_CANDIDATE = re.compile(rf'(?:[^\s"()]+/)?{re.escape(S09_SOURCE)}')
 VARIABLES = ("scale", "input_data", "input_len", "output_data", "output_len", "i")
 EXPECTED_OBSERVATIONS = {
     "scale": "1.5",
@@ -25,6 +30,7 @@ EXPECTED_OBSERVATIONS = {
     "output_len": "1",
     "i": "0",
 }
+HARDWARE_TEST = "gfx942_cov6_alpha_then_zeta_generated_safe_spi_with_fake_authenticator"
 
 
 class CheckError(Exception):
@@ -52,16 +58,28 @@ def write_new(path: pathlib.Path, text: str) -> None:
         output.write(text)
 
 
+def require_canonical_source_paths(text: str) -> None:
+    candidates = SOURCE_CANDIDATE.findall(text)
+    if not candidates:
+        raise CheckError("evidence contains no canonical S09 source path")
+    for candidate in candidates:
+        if candidate != S09_SOURCE:
+            raise CheckError("evidence contains an absolute or non-canonical S09 source path")
+
+
 def normalize_line(line: str) -> str:
+    line = MEMORY_URI.sub("memory://<PID>#offset=0x<ADDR>&size=<SIZE>", line)
     line = THREAD.sub("Thread <THREAD>", line)
     line = PROCESS_ID.sub("process <PID>", line)
     line = AMDGPU_LANE.sub("AMDGPU Lane <LANE>", line)
+    line = AMDGPU_WAVE.sub("AMDGPU Wave <WAVE>", line)
+    line = re.sub(r"^(\*? )[0-9]+( +AMDGPU Wave)", r"\1<THREAD>\2", line)
     line = ADDRESS.sub("0x<ADDR>", line)
-    line = SOURCE_PATH.sub(f"$REPO/{S09_SOURCE}", line)
     return SPACE.sub(" ", line.strip())
 
 
 def normalize_dwarf(text: str) -> str:
+    require_canonical_source_paths(text)
     lines = [normalize_line(line) for line in text.splitlines()]
     lines = [
         "$HSACO: file format elf64-amdgpu"
@@ -73,6 +91,7 @@ def normalize_dwarf(text: str) -> str:
 
 
 def normalize_rocgdb(text: str) -> str:
+    require_canonical_source_paths(text)
     lines = [normalize_line(line) for line in text.splitlines()]
     begin = [index for index, line in enumerate(lines) if line == "FE2O3_S09_BEGIN"]
     end = [index for index, line in enumerate(lines) if line == "FE2O3_S09_END"]
@@ -90,21 +109,23 @@ def require_once(text: str, token: str, context: str) -> None:
 def check_dwarf(text: str) -> None:
     for token in (
         "DW_TAG_compile_unit",
+        'DW_AT_producer ("fe2o3 S09 alpha gfx942 O0 v1")',
         "DW_LANG_Rust",
         "DW_TAG_subprogram",
-        'DW_AT_name (\"alpha\")',
-        "DW_AT_decl_line (68)",
-        S09_SOURCE,
+        'DW_AT_name ("alpha")',
+        f'DW_AT_comp_dir ("{S09_DIRECTORY}")',
     ):
+        require_once(text, token, "DWARF")
+    for token in ("DW_AT_decl_line (68)", S09_SOURCE):
         if token not in text:
             raise CheckError(f"DWARF is missing {token!r}")
     dies = re.split(r"(?=^0x<ADDR>: .*DW_TAG_)", text, flags=re.MULTILINE)
     for name in VARIABLES:
-        require_once(text, f'DW_AT_name (\"{name}\")', "DWARF")
+        require_once(text, f'DW_AT_name ("{name}")', "DWARF")
         matching = [
             die
             for die in dies
-            if f'DW_AT_name (\"{name}\")' in die
+            if f'DW_AT_name ("{name}")' in die
             and "DW_AT_location" in die
             and (
                 "DW_TAG_formal_parameter" in die
@@ -124,12 +145,68 @@ def check_dwarf(text: str) -> None:
             raise CheckError(f"bounded S09 DWARF contains unsupported construct {rejected!r}")
 
 
-def check_rocgdb(text: str) -> None:
+def artifact_facts(metadata: str, dwarf: str) -> str:
+    check_dwarf(normalize_dwarf(dwarf))
+    for token in (
+        "Format: elf64-amdgpu",
+        "Arch: amdgcn",
+        ".name:           alpha",
+        ".symbol:         alpha.kd",
+        ".name:           zeta",
+        ".symbol:         zeta.kd",
+    ):
+        require_once(metadata, token, "AMDGPU artifact metadata")
+    targets = re.findall(
+        r"(?m)^amdhsa\.target:\s+'(amdgcn-amd-amdhsa--gfx942:xnack-)'$", metadata
+    )
+    if targets != ["amdgcn-amd-amdhsa--gfx942:xnack-"]:
+        raise CheckError("AMDGPU artifact metadata has no exact unique gfx942:xnack- target")
+    return (
+        "format=fe2o3-s09-artifact-facts-v1\n"
+        "object_format=elf64-amdgpu\n"
+        "arch=amdgcn\n"
+        "target=gfx942:xnack-\n"
+        "optimization=O0\n"
+        "source_path=" + S09_SOURCE + "\n"
+        "kernel=alpha:alpha.kd\n"
+        "kernel=zeta:zeta.kd\n"
+    )
+
+
+def hardware_facts(text: str, sha256: str) -> tuple[str, str]:
+    if not HEX_SHA256.fullmatch(sha256):
+        raise CheckError("hardware executable SHA-256 must be 64 lowercase hex digits")
+    for token in ("Class:", "ELF64", "Machine:", "Advanced Micro Devices X86-64"):
+        if token not in text:
+            raise CheckError(f"hardware executable identity is missing {token!r}")
+    build_ids = re.findall(r"(?m)^\s*Build ID: ([0-9a-f]+)$", text)
+    if len(build_ids) != 1 or not HEX_BUILD_ID.fullmatch(build_ids[0]):
+        raise CheckError("hardware executable must contain one bounded GNU build ID")
+    build_id = build_ids[0]
+    facts = (
+        "format=fe2o3-s09-hardware-facts-v1\n"
+        "object_format=elf64-x86-64\n"
+        f"sha256={sha256}\n"
+        f"build_id={build_id}\n"
+    )
+    return facts, build_id
+
+
+def check_rocgdb(text: str, hsaco_sha256: str, hardware_sha256: str, build_id: str) -> None:
+    if not HEX_SHA256.fullmatch(hsaco_sha256) or not HEX_SHA256.fullmatch(hardware_sha256):
+        raise CheckError("ROCgdb binding SHA-256 values must be lowercase hex")
+    if not HEX_BUILD_ID.fullmatch(build_id):
+        raise CheckError("ROCgdb hardware build ID is malformed")
     markers = (
         "FE2O3_S09_BEGIN",
+        "FE2O3_S09_BINDING",
+        "FE2O3_S09_KERNEL_LOAD",
+        "FE2O3_S09_GPU_CONTEXT",
         "FE2O3_S09_FUNCTION",
         "FE2O3_S09_ARGUMENTS",
         "FE2O3_S09_LOCAL",
+        "FE2O3_S09_RESUME",
+        "FE2O3_S09_HARDWARE_PASS",
         "FE2O3_S09_END",
     )
     positions = []
@@ -138,18 +215,46 @@ def check_rocgdb(text: str) -> None:
         positions.append(text.index(marker))
     if positions != sorted(positions):
         raise CheckError("ROCgdb S09 markers are out of order")
-    if not re.search(r"Breakpoint [^\n]*\balpha\b", text):
-        raise CheckError("ROCgdb did not stop in alpha")
+
+    for token in (
+        f"hsaco_sha256 = {hsaco_sha256}",
+        f"hardware_sha256 = {hardware_sha256}",
+        f"hardware_build_id = {build_id}",
+        "target = gfx942:xnack-",
+        "optimization = O0",
+    ):
+        require_once(text, token, "ROCgdb binding")
+
+    kernel_section = text[positions[2] : positions[3]]
+    if 'Function "alpha" not defined.' not in kernel_section or "Breakpoint 1 (alpha) pending." not in kernel_section:
+        raise CheckError("ROCgdb did not prove pending alpha resolved after kernel load")
+    gpu_section = text[positions[3] : positions[4]]
+    if not re.search(r"Switching to Thread <THREAD>, lane 0 \(AMDGPU Lane <LANE>\)", gpu_section):
+        raise CheckError("ROCgdb did not select an AMDGPU lane")
+    if not re.search(r'(?m)^\* <THREAD> AMDGPU Wave <WAVE> .*"alpha".*' + re.escape(S09_SOURCE) + r":68$", gpu_section):
+        raise CheckError("ROCgdb thread inventory does not bind alpha to an AMDGPU wave")
+    if "Yes memory://<PID>#offset=0x<ADDR>&size=<SIZE>" not in gpu_section:
+        raise CheckError("ROCgdb did not report a loaded in-memory AMDGPU code object")
+    if not re.search(
+        r'Thread <THREAD> "alpha" hit Breakpoint 1, with lanes \[0-63\], alpha .* at '
+        + re.escape(S09_SOURCE)
+        + r":68",
+        gpu_section,
+    ):
+        raise CheckError("ROCgdb did not hit the loaded alpha kernel breakpoint")
+
+    function_section = text[positions[4] : positions[5]]
+    if f"at {S09_SOURCE}:68" not in function_section:
+        raise CheckError("ROCgdb alpha frame is not bound to canonical source line 68")
     for line in (69, 70):
-        if f"main.rs:{line}" not in text and f"line {line}" not in text.lower():
-            raise CheckError(f"ROCgdb did not report supported alpha source line {line}")
-    argument_section = text[positions[2] : positions[3]]
-    local_section = text[positions[3] : positions[4]]
+        if f"{S09_SOURCE}:{line}" not in text and f"line {line}" not in text.lower():
+            raise CheckError(f"ROCgdb did not report canonical alpha source line {line}")
+
+    argument_section = text[positions[5] : positions[6]]
+    local_section = text[positions[6] : positions[7]]
     for name in VARIABLES:
         section = local_section if name == "i" else argument_section
-        observations = re.findall(
-            rf"(?m)^{re.escape(name)}\s*=\s*(\S.*)$", section
-        )
+        observations = re.findall(rf"(?m)^{re.escape(name)}\s*=\s*(\S.*)$", section)
         if len(observations) != 1:
             raise CheckError(
                 f"ROCgdb requires one successful {name!r} observation; found {len(observations)}"
@@ -164,15 +269,17 @@ def check_rocgdb(text: str) -> None:
             if rejected in value:
                 raise CheckError(f"ROCgdb could not inspect {name!r}: {observations[0]}")
         if observations[0] != EXPECTED_OBSERVATIONS[name]:
-            raise CheckError(
-                f"ROCgdb observed unexpected {name!r} value: {observations[0]!r}"
-            )
-    for rejected in (
-        "No symbol",
-        "Cannot access memory",
-        "not defined",
-        "The program is not being run",
-    ):
+            raise CheckError(f"ROCgdb observed unexpected {name!r} value: {observations[0]!r}")
+
+    hardware_section = text[positions[7] : positions[8]]
+    if f"test {HARDWARE_TEST} ... ok" not in hardware_section:
+        raise CheckError("ROCgdb transcript does not contain the exact hardware test pass")
+    if "test result: ok. 1 passed; 0 failed;" not in hardware_section:
+        raise CheckError("ROCgdb transcript does not contain a successful hardware result")
+    if "exited normally" not in hardware_section:
+        raise CheckError("ROCgdb inferior did not exit normally after hardware execution")
+
+    for rejected in ("No symbol", "Cannot access memory", "The program is not being run"):
         if rejected.lower() in text.lower():
             raise CheckError(f"ROCgdb transcript contains failure marker {rejected!r}")
 
@@ -184,23 +291,47 @@ def parse_args() -> argparse.Namespace:
         command = subparsers.add_parser(name)
         command.add_argument("--input", required=True, type=pathlib.Path)
         command.add_argument("--output", required=True, type=pathlib.Path)
-    for name in ("check-dwarf", "check-rocgdb"):
-        command = subparsers.add_parser(name)
-        command.add_argument("--input", required=True, type=pathlib.Path)
+    command = subparsers.add_parser("check-dwarf")
+    command.add_argument("--input", required=True, type=pathlib.Path)
+    command = subparsers.add_parser("check-rocgdb")
+    command.add_argument("--input", required=True, type=pathlib.Path)
+    command.add_argument("--hsaco-sha256", required=True)
+    command.add_argument("--hardware-sha256", required=True)
+    command.add_argument("--hardware-build-id", required=True)
+    command = subparsers.add_parser("artifact-facts")
+    command.add_argument("--metadata", required=True, type=pathlib.Path)
+    command.add_argument("--dwarf", required=True, type=pathlib.Path)
+    command.add_argument("--output", required=True, type=pathlib.Path)
+    command = subparsers.add_parser("hardware-facts")
+    command.add_argument("--input", required=True, type=pathlib.Path)
+    command.add_argument("--sha256", required=True)
+    command.add_argument("--output", required=True, type=pathlib.Path)
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
-    text = read_bounded(args.input)
     if args.command == "normalize-dwarf":
-        write_new(args.output, normalize_dwarf(text))
+        write_new(args.output, normalize_dwarf(read_bounded(args.input)))
     elif args.command == "normalize-rocgdb":
-        write_new(args.output, normalize_rocgdb(text))
+        write_new(args.output, normalize_rocgdb(read_bounded(args.input)))
     elif args.command == "check-dwarf":
-        check_dwarf(normalize_dwarf(text))
+        check_dwarf(normalize_dwarf(read_bounded(args.input)))
     elif args.command == "check-rocgdb":
-        check_rocgdb(normalize_rocgdb(text))
+        check_rocgdb(
+            normalize_rocgdb(read_bounded(args.input)),
+            args.hsaco_sha256,
+            args.hardware_sha256,
+            args.hardware_build_id,
+        )
+    elif args.command == "artifact-facts":
+        write_new(
+            args.output,
+            artifact_facts(read_bounded(args.metadata), read_bounded(args.dwarf)),
+        )
+    elif args.command == "hardware-facts":
+        facts, _ = hardware_facts(read_bounded(args.input), args.sha256)
+        write_new(args.output, facts)
     else:
         raise AssertionError(args.command)
     return 0

@@ -4,6 +4,7 @@ fixture.hsaco: file format elf64-amdgpu
  DW_AT_producer ("fe2o3 S09 alpha gfx942 O0 v1")
  DW_AT_language (DW_LANG_Rust)
  DW_AT_name ("main.rs")
+ DW_AT_comp_dir ("crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src")
 0x00000027: DW_TAG_subprogram
  DW_AT_name ("alpha")
  DW_AT_decl_file ("crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src/main.rs")

@@ -1,0 +1,9 @@
+ELF Header:
+  Class:                             ELF64
+  Data:                              2's complement, little endian
+  Type:                              DYN (Shared object file)
+  Machine:                           Advanced Micro Devices X86-64
+Displaying notes found in: .note.gnu.build-id
+  Owner                Data size     Description
+  GNU                  0x00000014    NT_GNU_BUILD_ID (unique build ID bitstring)
+    Build ID: cccccccccccccccccccccccccccccccccccccccc
