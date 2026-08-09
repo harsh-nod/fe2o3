@@ -596,13 +596,13 @@ impl MirExecutableModule {
                     ));
                 }
             }
-            if let MirCallReturn::Value(ty) = callable.signature.output {
-                if self.type_at(ty).is_none() {
-                    return Err(error(
-                        format!("{path}.signature.output"),
-                        format!("type {} does not exist", ty.0),
-                    ));
-                }
+            if let MirCallReturn::Value(ty) = callable.signature.output
+                && self.type_at(ty).is_none()
+            {
+                return Err(error(
+                    format!("{path}.signature.output"),
+                    format!("type {} does not exist", ty.0),
+                ));
             }
             match &callable.authority {
                 MirCallAuthority::DefinedFunction => {
