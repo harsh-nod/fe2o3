@@ -150,6 +150,11 @@ def require_path_hygiene(text: str) -> None:
 
 
 def normalize_line(line: str) -> str:
+    stripped = line.strip()
+    if stripped.startswith("Reading symbols from ") or stripped.startswith("of file /"):
+        return "HOST_EXECUTABLE_SYMBOLS_LOADED"
+    if stripped.startswith('Using host libthread_db library "/'):
+        return "HOST_THREAD_LIBRARY_LOADED"
     line = MEMORY_URI.sub("memory://<PID>#offset=0x<ADDR>&size=<SIZE>", line)
     line = THREAD.sub("Thread <THREAD>", line)
     line = PROCESS_ID.sub("process <PID>", line)

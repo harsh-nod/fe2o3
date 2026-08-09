@@ -1,5 +1,8 @@
 fixed-profile setup noise
 FE2O3_S09_BEGIN
+Reading symbols from /home/runner/target/debug/deps/gfx942_two_kernel_hardware
+of file /home/runner/target/debug/deps/gfx942_two_kernel_hardware.
+Using host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".
 FE2O3_S09_BINDING
 hsaco_sha256 = aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 hardware_sha256 = bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
