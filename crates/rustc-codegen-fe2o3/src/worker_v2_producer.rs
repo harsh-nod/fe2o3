@@ -5,7 +5,7 @@ use crate::compiler_descriptor::{
 };
 use crate::kernel_ir_codegen::{
     CompilerModuleConstructionError, InertCompilerModuleTextV1, bind_compiler_descriptor_source_v1,
-    construct_inert_compiler_module_text_for_target_v1,
+    bind_source_debug_metadata_v1, construct_inert_compiler_module_text_for_target_v1,
 };
 use fe2o3_amd_target::{CapabilityDerivationError, WavefrontWidth};
 use fe2o3_artifact_transaction::{
@@ -44,6 +44,7 @@ pub(crate) fn publish_worker_v2_compiler_module(
         envelope,
         module,
         &[],
+        None,
     )
 }
 
@@ -54,6 +55,7 @@ pub(crate) fn publish_worker_v2_compiler_module_with_descriptors(
     envelope: Option<&CompilerFfiEnvelopeV1>,
     module: &Module,
     typed_roots: &[TypedDescriptorRootV1],
+    source_debug: Option<&crate::source_debug::AlphaSourceDebugV1>,
 ) -> Result<CompilerModuleHandoffReceiptV1, WorkerV2ProducerError> {
     let attempt = attempt.ok_or(WorkerV2ProducerError::MissingBuildAttempt)?;
     let envelope = envelope.ok_or(WorkerV2ProducerError::MissingCompilerFfiEnvelope)?;
@@ -63,6 +65,10 @@ pub(crate) fn publish_worker_v2_compiler_module_with_descriptors(
     let mut compiler_module =
         construct_inert_compiler_module_text_for_target_v1(&module, Some(target.processor()))
             .map_err(WorkerV2ProducerError::CompilerModule)?;
+    if let Some(source_debug) = source_debug {
+        compiler_module = bind_source_debug_metadata_v1(compiler_module, source_debug)
+            .map_err(WorkerV2ProducerError::CompilerModule)?;
+    }
     if let Some(source) =
         construct_compiler_descriptor_source_v1(envelope, &module, &compiler_module, typed_roots)
             .map_err(WorkerV2ProducerError::CompilerDescriptor)?
