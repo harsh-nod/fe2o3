@@ -367,13 +367,22 @@ derived from the candidate status using protected generators.
 ### Protected GitHub Verdict
 
 `.github/workflows/parity-promotion.yml` runs protected default-branch code for
-`pull_request_target` and review events. Its direct `merge_group` job is an
-unprivileged bootstrap only. The privileged merge-queue verdict is triggered by
-the completed merge-group `CI` run through `workflow_run`, whose workflow code
-GitHub loads from the default branch. The controller requires the source run to
-be the exact `.github/workflows/ci.yml` merge-group run and binds its `head_sha`
-and queue ref. Protected code comes from the controller's exact
-`github.workflow_sha`, which must still be the current default-branch tip.
+`pull_request_target`. It has no `pull_request_review` trigger. Review events run
+only `.github/workflows/parity-review-signal.yml`, which has explicit read-only
+permissions, no environment or secrets, and a GitHub-hosted runner. Submitted,
+edited, and dismissed reviews retrigger the privileged controller through
+`workflow_run`; candidate-controlled review-event YAML never receives the
+verdict App token.
+
+The direct `merge_group` job is also an unprivileged bootstrap. The privileged
+merge-queue verdict is triggered by the completed merge-group `CI` run through
+`workflow_run`, whose controller code GitHub loads from the default branch. The
+controller requires an administrator-configured immutable workflow ID and the
+exact source path, event, branch, and SHA for either `CI` or the review signal.
+The source run must have status `completed` and conclusion `success`; `failure`,
+`cancelled`, `skipped`, `neutral`, `timed_out`, `action_required`, `stale`, and
+all unknown conclusions fail closed. Protected code comes from the controller's
+exact `github.workflow_sha`, which must still be the current default-branch tip.
 
 Base and head refs are fetched into a runner-owned bare repository. The fetched
 refs must still resolve to the declared exact 40-character commit IDs, both
@@ -395,6 +404,16 @@ state, draft state, base/head repositories, refs, and SHAs to equal the event
 snapshot. A merge-group run refetches the protected default ref and queue head
 ref and requires both SHAs to remain exact.
 
+Immediately before a successful PR verdict, the controller fetches the current
+reviews and reruns the protected classifier. Designated reviewers must be
+CODEOWNERS for every changed trust path, their latest review must still be
+`APPROVED`, and its `commit_id` must equal the candidate head. The controller
+then fetches reviews again and compares canonical review IDs, submission times,
+states, commit bindings, and reviewer identities before re-querying the PR
+revision. Approval dismissal or revision movement during verification fails.
+A submitted approval or dismissal creates a newer same-App, same-name check on
+the exact candidate SHA, superseding the prior failed or successful verdict.
+
 The pull-request trigger is intentionally not path-filtered: every candidate
 SHA receives the required check, and changes outside the parity trust surface
 complete through the protected classifier's `no-op` result. Runs are not
@@ -407,7 +426,9 @@ Configure the verdict identity as follows:
    installation token `Checks: write` and no other write permission.
 2. Create a `parity-verdict` Actions environment. Set
    `PARITY_VERDICT_APP_ID` as an environment variable and
-   `PARITY_VERDICT_APP_PRIVATE_KEY` as an environment secret. Restrict
+   `PARITY_GENERIC_CI_WORKFLOW_ID` and
+   `PARITY_REVIEW_SIGNAL_WORKFLOW_ID` to the immutable numeric workflow IDs.
+   Set `PARITY_VERDICT_APP_PRIVATE_KEY` as an environment secret. Restrict
    deployment branches to the protected default branch only. Ordinary branches,
    `refs/pull/*`, and `gh-readonly-queue/*` refs must not receive this
    environment. The direct merge-group bootstrap never receives App secrets;
@@ -416,7 +437,12 @@ Configure the verdict identity as follows:
    `fe2o3/protected-parity-promotion` and select the dedicated App as the
    expected source. Pin its immutable numeric App ID, not merely its display
    name. Do not select the general GitHub Actions App as the source.
-4. Enable the required check for both pull requests and merge queue. Keep
+4. Also require `Generic validation` from the GitHub Actions source and add an
+   organization ruleset `Require workflows to pass before merging` rule pinned
+   to this repository's `.github/workflows/ci.yml`. The protected controller
+   independently checks the configured CI workflow ID and exact merge-group
+   SHA/ref before accepting it as a source signal.
+5. Enable both required checks for pull requests and merge queue. Keep
    `.github/workflows/parity-promotion.yml`, the environment policy, and the
    ruleset under administrator/CODEOWNER control.
 
