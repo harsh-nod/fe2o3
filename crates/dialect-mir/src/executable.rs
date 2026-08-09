@@ -1361,6 +1361,12 @@ impl<'a> Verifier<'a> {
                 local.storage_address_space,
                 &self.module.target,
             )?;
+            validate_target_offset_ranges(
+                &format!("{path}.ty"),
+                self.type_at(local.ty),
+                local.storage_address_space,
+                &self.module.target,
+            )?;
             validate_name_opt(&format!("{path}.name"), local.name.as_deref())?;
             validate_span_opt(&format!("{path}.span"), local.span.as_ref())?;
             if index == 0 {
@@ -3830,8 +3836,9 @@ fn validate_target_type_abi(
     ty: &MirSemanticType,
     target: &MirExecutableTarget,
 ) -> Result<(), MirExecutableValidationError> {
-    let mut stack = vec![(root.to_owned(), ty)];
-    while let Some((path, ty)) = stack.pop() {
+    let mut stack = vec![(root.to_owned(), ty, MirAddressSpace::DEFAULT)];
+    while let Some((path, ty, containing_address_space)) = stack.pop() {
+        validate_layout_offset_range(&path, ty.layout, containing_address_space, target)?;
         match &ty.kind {
             MirTypeKind::RawPointer {
                 pointee,
@@ -3860,7 +3867,7 @@ fn validate_target_type_abi(
                         "thin raw pointers require a Sized pointee",
                     ));
                 }
-                stack.push((format!("{path}.pointee"), pointee));
+                stack.push((format!("{path}.pointee"), pointee, *address_space));
             }
             MirTypeKind::Reference {
                 referent,
@@ -3889,10 +3896,10 @@ fn validate_target_type_abi(
                         "thin references require a Sized referent",
                     ));
                 }
-                stack.push((format!("{path}.referent"), referent));
+                stack.push((format!("{path}.referent"), referent, *address_space));
             }
             MirTypeKind::Slice { element } => {
-                stack.push((format!("{path}.element"), element));
+                stack.push((format!("{path}.element"), element, containing_address_space));
             }
             MirTypeKind::Array { element, length } => {
                 if target.pointer_width_bits == 32 && *length > u64::from(u32::MAX) {
@@ -3901,24 +3908,67 @@ fn validate_target_type_abi(
                         "array length does not fit the target usize width",
                     ));
                 }
-                stack.push((format!("{path}.element"), element));
+                let element_size = element
+                    .layout
+                    .size
+                    .expect("semantic validation requires sized array elements");
+                let total = element_size.checked_mul(*length).ok_or_else(|| {
+                    error(
+                        &path,
+                        "array element size times length overflows the executable layout width",
+                    )
+                })?;
+                if ty.layout.size != Some(total) || ty.layout.align != element.layout.align {
+                    return Err(error(
+                        &path,
+                        "array total layout is incoherent with its element size, length, or alignment",
+                    ));
+                }
+                stack.push((format!("{path}.element"), element, containing_address_space));
             }
             MirTypeKind::Tuple(aggregate) => {
                 for (index, field) in aggregate.fields.iter().enumerate() {
-                    stack.push((format!("{path}.fields[{index}].type"), &field.ty));
+                    validate_field_offset_range(
+                        &format!("{path}.fields[{index}]"),
+                        field,
+                        containing_address_space,
+                        target,
+                    )?;
+                    stack.push((
+                        format!("{path}.fields[{index}].type"),
+                        &field.ty,
+                        containing_address_space,
+                    ));
                 }
             }
             MirTypeKind::Struct(structure) => {
                 for (index, field) in structure.aggregate.fields.iter().enumerate() {
-                    stack.push((format!("{path}.fields[{index}].type"), &field.ty));
+                    validate_field_offset_range(
+                        &format!("{path}.fields[{index}]"),
+                        field,
+                        containing_address_space,
+                        target,
+                    )?;
+                    stack.push((
+                        format!("{path}.fields[{index}].type"),
+                        &field.ty,
+                        containing_address_space,
+                    ));
                 }
             }
             MirTypeKind::Enum(enum_ty) => {
                 for (variant_index, variant) in enum_ty.variants.iter().enumerate() {
                     for (field_index, field) in variant.aggregate.fields.iter().enumerate() {
+                        validate_field_offset_range(
+                            &format!("{path}.variants[{variant_index}].fields[{field_index}]"),
+                            field,
+                            containing_address_space,
+                            target,
+                        )?;
                         stack.push((
                             format!("{path}.variants[{variant_index}].fields[{field_index}].type"),
                             &field.ty,
+                            containing_address_space,
                         ));
                     }
                 }
@@ -3927,6 +3977,160 @@ fn validate_target_type_abi(
         }
     }
     Ok(())
+}
+
+fn validate_target_offset_ranges(
+    root: &str,
+    ty: &MirSemanticType,
+    containing_address_space: MirAddressSpace,
+    target: &MirExecutableTarget,
+) -> Result<(), MirExecutableValidationError> {
+    let mut stack = vec![(root.to_owned(), ty, containing_address_space)];
+    while let Some((path, ty, address_space)) = stack.pop() {
+        validate_layout_offset_range(&path, ty.layout, address_space, target)?;
+        match &ty.kind {
+            MirTypeKind::RawPointer {
+                pointee,
+                address_space: pointee_address_space,
+                ..
+            } => stack.push((format!("{path}.pointee"), pointee, *pointee_address_space)),
+            MirTypeKind::Reference {
+                referent,
+                address_space: referent_address_space,
+                ..
+            } => stack.push((
+                format!("{path}.referent"),
+                referent,
+                *referent_address_space,
+            )),
+            MirTypeKind::Slice { element } | MirTypeKind::Array { element, .. } => {
+                stack.push((format!("{path}.element"), element, address_space));
+            }
+            MirTypeKind::Tuple(aggregate) => {
+                push_offset_range_fields(
+                    &path,
+                    &aggregate.fields,
+                    address_space,
+                    target,
+                    &mut stack,
+                )?;
+            }
+            MirTypeKind::Struct(structure) => {
+                push_offset_range_fields(
+                    &path,
+                    &structure.aggregate.fields,
+                    address_space,
+                    target,
+                    &mut stack,
+                )?;
+            }
+            MirTypeKind::Enum(enum_ty) => {
+                for (variant_index, variant) in enum_ty.variants.iter().enumerate() {
+                    push_offset_range_fields(
+                        &format!("{path}.variants[{variant_index}]"),
+                        &variant.aggregate.fields,
+                        address_space,
+                        target,
+                        &mut stack,
+                    )?;
+                }
+            }
+            MirTypeKind::Unit | MirTypeKind::Scalar(_) => {}
+        }
+    }
+    Ok(())
+}
+
+fn push_offset_range_fields<'a>(
+    path: &str,
+    fields: &'a [crate::MirField],
+    address_space: MirAddressSpace,
+    target: &MirExecutableTarget,
+    stack: &mut Vec<(String, &'a MirSemanticType, MirAddressSpace)>,
+) -> Result<(), MirExecutableValidationError> {
+    for (index, field) in fields.iter().enumerate() {
+        let field_path = format!("{path}.fields[{index}]");
+        validate_field_offset_range(&field_path, field, address_space, target)?;
+        stack.push((format!("{field_path}.type"), &field.ty, address_space));
+    }
+    Ok(())
+}
+
+fn validate_field_offset_range(
+    path: &str,
+    field: &crate::MirField,
+    address_space: MirAddressSpace,
+    target: &MirExecutableTarget,
+) -> Result<(), MirExecutableValidationError> {
+    let maximum = signed_pointer_offset_max(address_space, target)?;
+    let field_size = field.ty.layout.size.unwrap_or(0);
+    let end = field.offset.checked_add(field_size).ok_or_else(|| {
+        error(
+            path,
+            "field offset plus layout size overflows the executable layout width",
+        )
+    })?;
+    if field.offset > maximum || end > maximum {
+        return Err(error(
+            path,
+            format!(
+                "field offset exceeds the signed pointer-offset range for address space {}",
+                address_space.0
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_layout_offset_range(
+    path: &str,
+    layout: crate::MirLayout,
+    address_space: MirAddressSpace,
+    target: &MirExecutableTarget,
+) -> Result<(), MirExecutableValidationError> {
+    let maximum = signed_pointer_offset_max(address_space, target)?;
+    if layout.align > maximum {
+        return Err(error(
+            format!("{path}.align"),
+            format!(
+                "layout alignment exceeds the signed pointer-offset range for address space {}",
+                address_space.0
+            ),
+        ));
+    }
+    if layout.size.is_some_and(|size| size > maximum) {
+        return Err(error(
+            format!("{path}.size"),
+            format!(
+                "layout size exceeds the signed pointer-offset range for address space {}",
+                address_space.0
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn signed_pointer_offset_max(
+    address_space: MirAddressSpace,
+    target: &MirExecutableTarget,
+) -> Result<u64, MirExecutableValidationError> {
+    let abi = target.pointer_abi(address_space).ok_or_else(|| {
+        error(
+            "module.target.pointer_abis",
+            format!(
+                "address space {} has no signed pointer-offset profile",
+                address_space.0
+            ),
+        )
+    })?;
+    match abi.width_bits {
+        32 => Ok(i32::MAX as u64),
+        64 => Ok(i64::MAX as u64),
+        _ => Err(error(
+            "module.target.pointer_abis",
+            "signed pointer-offset range requires a 32-bit or 64-bit pointer ABI",
+        )),
+    }
 }
 
 fn validate_type_budget(types: &[MirSemanticType]) -> Result<(), MirExecutableValidationError> {
