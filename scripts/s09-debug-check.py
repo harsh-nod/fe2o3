@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import array
+import fcntl
 import hashlib
 import os
 import pathlib
@@ -12,6 +14,9 @@ import stat
 import sys
 
 MAX_INPUT_BYTES = 8 * 1024 * 1024
+PRODUCTION_POLICY_PATH = pathlib.Path("/etc/fe2o3/s09-trust-v1.tsv")
+FS_IOC_GETFLAGS = 0x80086601
+FS_IMMUTABLE_FL = 0x00000010
 ADDRESS = re.compile(r"0x[0-9a-fA-F]+")
 THREAD = re.compile(r"\bThread (?:0x[0-9a-fA-F]+|[0-9]+)", re.IGNORECASE)
 PROCESS_ID = re.compile(r"\b(?:LWP|process) [0-9]+\b", re.IGNORECASE)
@@ -67,6 +72,33 @@ MANIFEST_FIELDS = (
     "rocgdb_normalized_sha256",
     "hardware_test",
     "execution_closure",
+)
+POLICY_SCHEMA = "fe2o3-s09-production-policy-v1"
+POLICY_FIELDS = (
+    "policy_schema",
+    "manifest_path",
+    "manifest_sha256",
+    "profile",
+    "target",
+    "source_commit",
+    "source_tree",
+    "source_sha256",
+    "rustc_sha256",
+    "llvm_link_worker_sha256",
+    "lld_sha256",
+    "llvm_dwarfdump_sha256",
+    "llvm_readobj_sha256",
+    "rocgdb_sha256",
+    "checker_sha256",
+    "harness_source_sha256",
+    "hsaco_sha256",
+    "host_executable_sha256",
+    "host_executable_build_id",
+)
+POLICY_MANIFEST_BINDINGS = tuple(
+    field
+    for field in POLICY_FIELDS
+    if field not in {"policy_schema", "manifest_path", "manifest_sha256"}
 )
 
 
@@ -124,6 +156,89 @@ def read_bounded(path: pathlib.Path) -> str:
 
 def file_sha256(path: pathlib.Path) -> str:
     return hashlib.sha256(read_bounded_bytes(path)).hexdigest()
+
+
+def descriptor_identity(value: os.stat_result) -> tuple[int, int, int, int, int]:
+    return (
+        value.st_dev,
+        value.st_ino,
+        value.st_size,
+        value.st_mtime_ns,
+        value.st_ctime_ns,
+    )
+
+
+def validate_production_policy_metadata(
+    metadata: os.stat_result, file_flags: int
+) -> None:
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_nlink != 1
+        or metadata.st_uid != 0
+        or metadata.st_mode & 0o222
+    ):
+        raise CheckError(
+            "production S09 policy must be root-owned, single-link, regular, and nonwritable"
+        )
+    if metadata.st_size == 0 or metadata.st_size > MAX_INPUT_BYTES:
+        raise CheckError("production S09 policy size is outside the fixed bound")
+    if not file_flags & FS_IMMUTABLE_FL:
+        raise CheckError("production S09 policy is not filesystem-immutable")
+
+
+def read_production_policy() -> bytes:
+    path = PRODUCTION_POLICY_PATH
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as error:
+        raise CheckError("cannot open fixed production S09 policy") from error
+    try:
+        before = os.fstat(descriptor)
+        file_flags = array.array("I", [0])
+        try:
+            fcntl.ioctl(descriptor, FS_IOC_GETFLAGS, file_flags, True)
+        except OSError as error:
+            raise CheckError("cannot verify production S09 policy immutable flag") from error
+        validate_production_policy_metadata(before, file_flags[0])
+        chunks: list[bytes] = []
+        remaining = MAX_INPUT_BYTES + 1
+        while remaining:
+            chunk = os.read(descriptor, min(64 * 1024, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        data = b"".join(chunks)
+        after = os.fstat(descriptor)
+        if (
+            descriptor_identity(before) != descriptor_identity(after)
+            or len(data) != before.st_size
+        ):
+            raise CheckError("production S09 policy changed while being read")
+        return data
+    except OSError as error:
+        raise CheckError("cannot read fixed production S09 policy") from error
+    finally:
+        try:
+            os.close(descriptor)
+        except OSError as error:
+            raise CheckError("cannot close fixed production S09 policy") from error
+
+
+def parse_fixed_manifest_path(value: str) -> pathlib.Path:
+    if not value.startswith("/") or "//" in value or "\\" in value:
+        raise CheckError("production manifest path is not an exact POSIX absolute path")
+    pure = pathlib.PurePosixPath(value)
+    if str(pure) != value or any(part in {".", ".."} for part in pure.parts):
+        raise CheckError("production manifest path is noncanonical")
+    path = pathlib.Path(value)
+    try:
+        if path.resolve(strict=True) != path:
+            raise CheckError("production manifest path does not resolve canonically")
+    except OSError as error:
+        raise CheckError("production manifest installation is absent") from error
+    return path
 
 
 def write_new(path: pathlib.Path, text: str) -> None:
@@ -410,7 +525,7 @@ def check_rocgdb(text: str, hsaco_sha256: str, hardware_sha256: str, build_id: s
             raise CheckError(f"ROCgdb transcript contains failure marker {rejected!r}")
 
 
-def parse_protected_manifest(data: bytes, allow_test_fixture: bool) -> dict[str, str]:
+def parse_protected_manifest(data: bytes, required_domain: str) -> dict[str, str]:
     try:
         text = data.decode("utf-8")
     except UnicodeDecodeError as error:
@@ -443,8 +558,7 @@ def parse_protected_manifest(data: bytes, allow_test_fixture: bool) -> dict[str,
     for field, expected in expected_values.items():
         if manifest[field] != expected:
             raise CheckError(f"protected manifest field {field!r} changed")
-    expected_domain = "test-fixture-v1" if allow_test_fixture else "production-v1"
-    if manifest["trust_domain"] != expected_domain:
+    if manifest["trust_domain"] != required_domain:
         raise CheckError("protected manifest trust domain is not authorized")
     for field in ("source_commit", "source_tree"):
         if not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", manifest[field]):
@@ -457,22 +571,49 @@ def parse_protected_manifest(data: bytes, allow_test_fixture: bool) -> dict[str,
     return manifest
 
 
-def check_authoritative(
-    manifest_path: pathlib.Path,
-    expected_manifest_sha256: str,
+def parse_production_policy(data: bytes) -> dict[str, str]:
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise CheckError("production S09 policy is not UTF-8") from error
+    if "\r" in text or not text.endswith("\n") or "\n\n" in text:
+        raise CheckError("production S09 policy is not canonical LF-delimited text")
+    lines = text.removesuffix("\n").split("\n")
+    if len(lines) != len(POLICY_FIELDS):
+        raise CheckError("production S09 policy field count changed")
+    policy: dict[str, str] = {}
+    for expected, line in zip(POLICY_FIELDS, lines, strict=True):
+        fields = line.split("\t")
+        if len(fields) != 2 or fields[0] != expected or not fields[1]:
+            raise CheckError(f"production S09 policy field {expected!r} is absent or out of order")
+        if fields[1] != fields[1].strip() or any(ord(character) < 0x20 for character in fields[1]):
+            raise CheckError(f"production S09 policy field {expected!r} is noncanonical")
+        policy[expected] = fields[1]
+    if policy["policy_schema"] != POLICY_SCHEMA:
+        raise CheckError("production S09 policy schema changed")
+    if policy["profile"] != "s09-alpha-gfx942-o0-v1" or policy["target"] != "gfx942:xnack-":
+        raise CheckError("production S09 policy profile or target changed")
+    if not HEX_SHA256.fullmatch(policy["manifest_sha256"]):
+        raise CheckError("production S09 policy manifest digest is malformed")
+    for field in POLICY_FIELDS:
+        if field.endswith("_sha256") and not HEX_SHA256.fullmatch(policy[field]):
+            raise CheckError(f"production S09 policy field {field!r} is not SHA-256")
+    for field in ("source_commit", "source_tree"):
+        if not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", policy[field]):
+            raise CheckError(f"production S09 policy field {field!r} is not a Git object ID")
+    if not HEX_BUILD_ID.fullmatch(policy["host_executable_build_id"]):
+        raise CheckError("production S09 policy host build ID is malformed")
+    parse_fixed_manifest_path(policy["manifest_path"])
+    return policy
+
+
+def check_evidence_bundle(
+    manifest: dict[str, str],
     artifact_path: pathlib.Path,
     hardware_path: pathlib.Path,
     dwarf_path: pathlib.Path,
     rocgdb_path: pathlib.Path,
-    allow_test_fixture: bool,
 ) -> None:
-    if not HEX_SHA256.fullmatch(expected_manifest_sha256):
-        raise CheckError("expected protected manifest digest must be lowercase SHA-256")
-    manifest_bytes = read_bounded_bytes(manifest_path)
-    if hashlib.sha256(manifest_bytes).hexdigest() != expected_manifest_sha256:
-        raise CheckError("protected manifest does not match the externally supplied digest")
-    manifest = parse_protected_manifest(manifest_bytes, allow_test_fixture)
-
     evidence = {
         "artifact_facts_sha256": artifact_path,
         "hardware_facts_sha256": hardware_path,
@@ -514,9 +655,51 @@ def check_authoritative(
         require_once(hardware, token, "protected hardware facts")
 
 
+def check_production(
+    artifact_path: pathlib.Path,
+    hardware_path: pathlib.Path,
+    dwarf_path: pathlib.Path,
+    rocgdb_path: pathlib.Path,
+) -> None:
+    policy = parse_production_policy(read_production_policy())
+    manifest_path = parse_fixed_manifest_path(policy["manifest_path"])
+    manifest_bytes = read_bounded_bytes(manifest_path)
+    if hashlib.sha256(manifest_bytes).hexdigest() != policy["manifest_sha256"]:
+        raise CheckError("installed production manifest does not match fixed policy")
+    manifest = parse_protected_manifest(manifest_bytes, "production-v1")
+    for field in POLICY_MANIFEST_BINDINGS:
+        if policy[field] != manifest[field]:
+            raise CheckError(f"production policy does not bind manifest field {field!r}")
+    check_evidence_bundle(manifest, artifact_path, hardware_path, dwarf_path, rocgdb_path)
+
+
+def check_fixture(
+    manifest_path: pathlib.Path,
+    expected_manifest_sha256: str,
+    artifact_path: pathlib.Path,
+    hardware_path: pathlib.Path,
+    dwarf_path: pathlib.Path,
+    rocgdb_path: pathlib.Path,
+) -> None:
+    if not HEX_SHA256.fullmatch(expected_manifest_sha256):
+        raise CheckError("fixture manifest digest must be lowercase SHA-256")
+    manifest_bytes = read_bounded_bytes(manifest_path)
+    if hashlib.sha256(manifest_bytes).hexdigest() != expected_manifest_sha256:
+        raise CheckError("fixture manifest does not match its non-authoritative test digest")
+    manifest = parse_protected_manifest(manifest_bytes, "test-fixture-v1")
+    check_evidence_bundle(manifest, artifact_path, hardware_path, dwarf_path, rocgdb_path)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    def add_evidence_arguments(command: argparse.ArgumentParser) -> None:
+        command.add_argument("--artifact-facts", required=True, type=pathlib.Path)
+        command.add_argument("--hardware-facts", required=True, type=pathlib.Path)
+        command.add_argument("--dwarf", required=True, type=pathlib.Path)
+        command.add_argument("--rocgdb", required=True, type=pathlib.Path)
+
     for name in ("normalize-dwarf", "normalize-rocgdb"):
         command = subparsers.add_parser(name)
         command.add_argument("--input", required=True, type=pathlib.Path)
@@ -536,14 +719,12 @@ def parse_args() -> argparse.Namespace:
     command.add_argument("--input", required=True, type=pathlib.Path)
     command.add_argument("--sha256", required=True)
     command.add_argument("--output", required=True, type=pathlib.Path)
-    command = subparsers.add_parser("check-authoritative")
+    command = subparsers.add_parser("check-production")
+    add_evidence_arguments(command)
+    command = subparsers.add_parser("check-fixture")
     command.add_argument("--manifest", required=True, type=pathlib.Path)
     command.add_argument("--expected-manifest-sha256", required=True)
-    command.add_argument("--artifact-facts", required=True, type=pathlib.Path)
-    command.add_argument("--hardware-facts", required=True, type=pathlib.Path)
-    command.add_argument("--dwarf", required=True, type=pathlib.Path)
-    command.add_argument("--rocgdb", required=True, type=pathlib.Path)
-    command.add_argument("--test-fixture", action="store_true")
+    add_evidence_arguments(command)
     return parser.parse_args()
 
 
@@ -570,18 +751,24 @@ def main() -> int:
     elif args.command == "hardware-facts":
         facts, _ = hardware_facts(read_bounded(args.input), args.sha256)
         write_new(args.output, facts)
-    elif args.command == "check-authoritative":
-        check_authoritative(
+    elif args.command == "check-production":
+        check_production(
+            args.artifact_facts,
+            args.hardware_facts,
+            args.dwarf,
+            args.rocgdb,
+        )
+        print("S09 production trust policy accepted protected evidence")
+    elif args.command == "check-fixture":
+        check_fixture(
             args.manifest,
             args.expected_manifest_sha256,
             args.artifact_facts,
             args.hardware_facts,
             args.dwarf,
             args.rocgdb,
-            args.test_fixture,
         )
-        claim = "non-production fixture" if args.test_fixture else "production manifest"
-        print(f"S09 authoritative checker accepted {claim}")
+        print("S09 non-authoritative fixture checker passed")
     else:
         raise AssertionError(args.command)
     return 0

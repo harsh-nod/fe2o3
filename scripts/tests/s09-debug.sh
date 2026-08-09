@@ -99,8 +99,8 @@ readonly checker_sha256 artifact_sha256 hardware_facts_sha256 dwarf_sha256 rocgd
 } >"${MANIFEST}"
 manifest_sha256="$(sha256sum "${MANIFEST}" | cut -d ' ' -f 1)"
 readonly manifest_sha256
-authoritative_args=(
-  "${CHECKER}" check-authoritative
+fixture_args=(
+  "${CHECKER}" check-fixture
   --manifest "${MANIFEST}"
   --expected-manifest-sha256 "${manifest_sha256}"
   --artifact-facts "${TMP}/artifact.facts"
@@ -108,25 +108,52 @@ authoritative_args=(
   --dwarf "${TMP}/dwarf.one"
   --rocgdb "${TMP}/rocgdb.one"
 )
-"${authoritative_args[@]}" --test-fixture >"${TMP}/authoritative.out"
-rg -q 'accepted non-production fixture' "${TMP}/authoritative.out"
-expect_fail "${authoritative_args[@]}"
-expect_fail "${CHECKER}" check-authoritative \
+"${fixture_args[@]}" >"${TMP}/fixture.out"
+rg -q '^S09 non-authoritative fixture checker passed$' "${TMP}/fixture.out"
+expect_fail rg -qi 'production.*accepted|authoritative.*accepted' "${TMP}/fixture.out"
+"${CHECKER}" check-production --help >"${TMP}/production-help"
+expect_fail rg -q -- '--manifest|--expected-manifest-sha256' "${TMP}/production-help"
+production_evidence_args=(
+  "${CHECKER}" check-production
+  --artifact-facts "${TMP}/artifact.facts"
+  --hardware-facts "${TMP}/hardware.facts"
+  --dwarf "${TMP}/dwarf.one"
+  --rocgdb "${TMP}/rocgdb.one"
+)
+expect_fail "${production_evidence_args[@]}"
+expect_fail "${CHECKER}" check-production \
+  --manifest "${MANIFEST}" \
+  --expected-manifest-sha256 "${manifest_sha256}" \
+  --artifact-facts "${TMP}/artifact.facts" \
+  --hardware-facts "${TMP}/hardware.facts" \
+  --dwarf "${TMP}/dwarf.one" \
+  --rocgdb "${TMP}/rocgdb.one"
+expect_fail "${CHECKER}" check-fixture \
   --manifest "${TMP}/absent-manifest.tsv" \
   --expected-manifest-sha256 "${manifest_sha256}" \
   --artifact-facts "${TMP}/artifact.facts" \
   --hardware-facts "${TMP}/hardware.facts" \
   --dwarf "${TMP}/dwarf.one" \
-  --rocgdb "${TMP}/rocgdb.one" --test-fixture
+  --rocgdb "${TMP}/rocgdb.one"
 cp "${TMP}/artifact.facts" "${TMP}/artifact-mutated.facts"
 printf 'mutation=true\n' >>"${TMP}/artifact-mutated.facts"
-expect_fail "${CHECKER}" check-authoritative \
+expect_fail "${CHECKER}" check-fixture \
   --manifest "${MANIFEST}" \
   --expected-manifest-sha256 "${manifest_sha256}" \
   --artifact-facts "${TMP}/artifact-mutated.facts" \
   --hardware-facts "${TMP}/hardware.facts" \
   --dwarf "${TMP}/dwarf.one" \
-  --rocgdb "${TMP}/rocgdb.one" --test-fixture
+  --rocgdb "${TMP}/rocgdb.one"
+sed 's/^trust_domain\ttest-fixture-v1$/trust_domain\tproduction-v1/' \
+  "${MANIFEST}" >"${TMP}/production-domain-manifest.tsv"
+production_domain_sha256="$(sha256sum "${TMP}/production-domain-manifest.tsv" | cut -d ' ' -f 1)"
+expect_fail "${CHECKER}" check-fixture \
+  --manifest "${TMP}/production-domain-manifest.tsv" \
+  --expected-manifest-sha256 "${production_domain_sha256}" \
+  --artifact-facts "${TMP}/artifact.facts" \
+  --hardware-facts "${TMP}/hardware.facts" \
+  --dwarf "${TMP}/dwarf.one" \
+  --rocgdb "${TMP}/rocgdb.one"
 expect_fail "${CHECKER}" normalize-dwarf \
   --input "${FIXTURES}/dwarf.pass.txt" --output "${TMP}/dwarf.one"
 
@@ -210,6 +237,9 @@ expect_fail "${CHECKER}" hardware-facts \
 rg -q '^readonly ROCGDB=/opt/rocm/bin/rocgdb-py_3\.12$' "${RUNNER}"
 rg -q '^readonly READOBJ=/opt/rocm/llvm/bin/llvm-readobj$' "${RUNNER}"
 rg -q '^readonly READELF=/opt/rocm/llvm/bin/llvm-readobj$' "${RUNNER}"
+rg -Fq '/etc/fe2o3/s09-trust-v1.tsv' "${CHECKER}"
+rg -q 'FS_IMMUTABLE_FL' "${CHECKER}"
+rg -q 'O_NOFOLLOW' "${CHECKER}"
 rg -q -- '--batch --nx --nh' "${RUNNER}"
 rg -q 'FE2O3_S09_HARDWARE_PASS' "${RUNNER}"
 rg -q 'FE2O3_S09_BP2_ARMED' "${RUNNER}"
@@ -219,5 +249,6 @@ expect_fail rg -Fq -- "-ex 'info sharedlibrary'" "${RUNNER}"
 rg -Fq 'rm -f -- "${ROCGDB_RAW}"' "${RUNNER}"
 expect_fail rg -q -- '--command|command-file|FE2O3_.*DEBUG.*COMMAND' "${RUNNER}"
 expect_fail "${RUNNER}"
+python3 "${ROOT}/scripts/tests/s09-debug-policy.py"
 
 printf 'S09 debug checker tests passed\n'

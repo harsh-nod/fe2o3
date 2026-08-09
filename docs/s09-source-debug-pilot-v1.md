@@ -70,10 +70,17 @@ Normalized DWARF, transcript, and facts files reject every absolute POSIX,
 Windows-drive, and UNC path. The only admitted Rust source path is the exact
 relative S09 fixture path. Raw logs are never authoritative artifacts.
 
-The only evidence-grade checker entry point is `check-authoritative`. It needs
-`--manifest` and an independently supplied `--expected-manifest-sha256`; the
-local runner does not create either. The canonical tab-separated manifest has
-the ordered schema `fe2o3-s09-protected-manifest-v1` and binds:
+The production entry point is `check-production`. It has no manifest, digest,
+policy, or trust-path arguments. It reads only the compiled fixed path
+`/etc/fe2o3/s09-trust-v1.tsv` using one `O_NOFOLLOW` descriptor. The
+policy must be a root-owned, single-link regular file with no write bits and
+the Linux filesystem immutable flag. Missing or unsupported installation
+fails closed. The policy binds the canonical installed manifest path and
+digest plus the exact source commit/tree, toolchain, checker, harness, HSACO,
+host executable, and host build-ID identities.
+
+The installed manifest uses ordered schema
+`fe2o3-s09-protected-manifest-v1` and binds:
 
 - production trust domain, profile, claim, and protected execution closure;
 - exact source commit, source tree, source path, and source SHA-256;
@@ -83,10 +90,13 @@ the ordered schema `fe2o3-s09-protected-manifest-v1` and binds:
 - exact normalized artifact-facts, hardware-facts, DWARF, and ROCgdb digests.
 
 Production accepts only `trust_domain=production-v1` and
-`execution_closure=protected-controller-v1`. Unit tests exercise the same
-schema through the explicit `--test-fixture` domain; that mode cannot validate
-a production manifest. A future protected controller must construct and pin
-the production manifest after selecting immutable inputs.
+`execution_closure=protected-controller-v1`. `check-fixture` is a separate,
+explicitly non-authoritative test command. It accepts only
+`trust_domain=test-fixture-v1`, cannot read production trust, and never emits a
+production-success message. A caller-supplied manifest or digest cannot reach
+the production command. A future protected controller and administrator must
+construct and install the production policy and manifest after selecting
+immutable inputs.
 
 The available real lane is an explicit, GPU-gated local capability pilot:
 
