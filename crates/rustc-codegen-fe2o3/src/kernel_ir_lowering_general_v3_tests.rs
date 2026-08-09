@@ -92,6 +92,35 @@ fn alpha_zeta_share_semantic_helper_lowering_and_emit_fmul_fadd() {
 }
 
 #[test]
+fn alpha_multiply_may_write_the_guarded_payload_directly() {
+    let mut alpha = alpha();
+    let arithmetic = &mut alpha.blocks[4].statements;
+    arithmetic[1].destination = Some(MirPlaceRef {
+        local: 8,
+        projection: vec![MirProjectionElem::Deref],
+    });
+    arithmetic.remove(2);
+
+    let module = lower_general_v3(&MirModule {
+        functions: vec![alpha],
+    })
+    .expect("direct guarded f32 store");
+    let operations = operations(function(&module, "tests::alpha"));
+    assert!(operations.iter().any(|operation| matches!(
+        operation.kind,
+        OperationKind::Binary {
+            op: BinaryOp::Multiply,
+            ..
+        }
+    )));
+    assert!(
+        operations
+            .iter()
+            .any(|operation| matches!(operation.kind, OperationKind::Store { .. }))
+    );
+}
+
+#[test]
 fn general_v3_multiply_claim_requires_imported_f32_operands() {
     let mut module = alpha_zeta_module();
     let loaded = module.functions[0]

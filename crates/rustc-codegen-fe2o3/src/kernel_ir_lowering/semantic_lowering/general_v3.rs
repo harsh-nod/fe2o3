@@ -79,12 +79,28 @@ fn is_exact_f32_multiply_domain(
 ) -> bool {
     assignment.rvalue == MirRvalueKind::Binary(MirBinaryOp::Mul)
         && lowerer.is_exact_general_v3_alpha_zeta_context()
-        && is_unprojected_f32_place(lowerer, assignment.destination)
+        && is_f32_destination(lowerer, assignment.destination)
         && matches!(
             assignment.operands,
             [lhs, rhs]
                 if is_f32_operand(lowerer, lhs) && is_f32_operand(lowerer, rhs)
         )
+}
+
+fn is_f32_destination(lowerer: &FunctionLowerer<'_, '_>, place: &MirPlaceRef) -> bool {
+    if is_unprojected_f32_place(lowerer, place) {
+        return true;
+    }
+    matches!(
+        place.projection.as_slice(),
+        [crate::mir_import::MirProjectionElem::Deref]
+    ) && matches!(
+        lowerer.imported_local_shape(place.local),
+        Some(MirTypeShape::Reference {
+            pointee,
+            mutable: true,
+        }) if pointee.as_ref() == &MirTypeShape::F32
+    )
 }
 
 fn is_unprojected_f32_place(lowerer: &FunctionLowerer<'_, '_>, place: &MirPlaceRef) -> bool {
