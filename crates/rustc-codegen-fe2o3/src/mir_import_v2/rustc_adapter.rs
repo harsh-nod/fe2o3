@@ -6,8 +6,10 @@ use super::type_preflight::{
     TypePreflightErrorV2, preflight_generic_args_v2, preflight_mir_const_v2, preflight_ty_const_v2,
     preflight_ty_v2,
 };
+use rustc_abi::ExternAbi;
 use rustc_data_structures::fingerprint::Fingerprint;
 use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
+use rustc_hir::Safety;
 use rustc_hir::def::DefKind;
 use rustc_hir::def_id::DefId;
 use rustc_middle::mir::{
@@ -536,9 +538,11 @@ fn capture_place<'tcx>(
     for element in place.projection {
         projection.push(capture_projection(context, element)?);
     }
+    let ty = place.ty(&context.body.local_decls, context.tcx).ty;
     Ok(PlaceV2 {
         local: place.local.as_usize(),
         projection,
+        type_hash: normalized_type_hash(context, ty, "place type")?,
     })
 }
 
@@ -622,6 +626,7 @@ fn capture_terminator<'tcx>(
         } => {
             ensure_bound("call arguments", args.len(), context.limits.max_operands)?;
             let callee = capture_callee_identity(context, func)?;
+            let function = capture_operand(context, func, source_info)?;
             let mut arguments = Vec::with_capacity(args.len());
             for argument in args {
                 arguments.push(CallArgumentV2 {
@@ -629,15 +634,27 @@ fn capture_terminator<'tcx>(
                     source: span_identity(context, argument.span, source_info.scope.as_usize())?,
                 });
             }
+            let destination = capture_place(context, *destination)?;
+            let target = target.map(|target| target.as_usize());
+            let unwind = capture_unwind(context, unwind)?;
+            let contract_hash = call_contract_hash_v2(
+                &function,
+                &callee,
+                &arguments,
+                Some(&destination),
+                target,
+                Some(&unwind),
+            )?;
             Ok(TerminatorKindV2::Call {
-                function: capture_operand(context, func, source_info)?,
+                function,
                 callee,
                 arguments,
-                destination: capture_place(context, *destination)?,
-                target: target.map(|target| target.as_usize()),
-                unwind: capture_unwind(context, unwind)?,
+                destination,
+                target,
+                unwind,
                 call_source: stable_compiler_value!(context, "call source", call_source)?,
                 function_span: span_identity(context, *fn_span, source_info.scope.as_usize())?,
+                contract_hash,
             })
         }
         TerminatorKind::TailCall {
@@ -651,6 +668,7 @@ fn capture_terminator<'tcx>(
                 context.limits.max_operands,
             )?;
             let callee = capture_callee_identity(context, func)?;
+            let function = capture_operand(context, func, source_info)?;
             let mut arguments = Vec::with_capacity(args.len());
             for argument in args {
                 arguments.push(CallArgumentV2 {
@@ -658,11 +676,14 @@ fn capture_terminator<'tcx>(
                     source: span_identity(context, argument.span, source_info.scope.as_usize())?,
                 });
             }
+            let contract_hash =
+                call_contract_hash_v2(&function, &callee, &arguments, None, None, None)?;
             Ok(TerminatorKindV2::TailCall {
-                function: capture_operand(context, func, source_info)?,
+                function,
                 callee,
                 arguments,
                 function_span: span_identity(context, *fn_span, source_info.scope.as_usize())?,
+                contract_hash,
             })
         }
         TerminatorKind::Drop {
@@ -910,7 +931,8 @@ fn capture_callee_identity<'tcx>(
         let declared_generic_arg_count = args.len();
         let declared_signature =
             function_signature_identity(context, *def_id, args, "declared callee signature")?;
-        let resolved_signature = resolved_signature_identity(context, resolved)?;
+        let resolved_signature =
+            resolved_signature_identity(context, resolved, &declared_signature)?;
         let resolved_identity = function_identity(context, resolved)?;
         let intrinsic = match resolved.def {
             InstanceKind::Intrinsic(def_id) => {
@@ -950,18 +972,32 @@ fn capture_callee_identity<'tcx>(
             declared_generic_arg_count,
             declared_signature,
             resolved: Box::new(resolved_identity),
-            resolved_signature,
+            resolved_signature: Box::new(resolved_signature),
             intrinsic,
             resolution_binding_hash,
         });
     }
-    if !matches!(callable_ty.kind(), TyKind::FnPtr(..)) {
+    let TyKind::FnPtr(signature, header) = callable_ty.kind() else {
         return Err(CaptureErrorV2::new(
             "a non-FnDef call operand was not a legitimate function pointer",
         ));
-    }
+    };
+    let signature = signature_identity_from_rustc(
+        context,
+        stable_hash!(context.tcx, callable_ty),
+        FunctionSignatureOriginV2::CompilerFnSig,
+        signature.skip_binder().inputs_and_output,
+        header.safety,
+        header.abi,
+        header.c_variadic,
+        "indirect callable signature",
+    )?;
+    let callable_type = type_identity_normalized(context, callable_ty)?;
+    let callable_binding_hash = indirect_callable_binding_hash_v2(&callable_type, &signature)?;
     Ok(CalleeIdentityV2::Indirect {
-        callable_type: type_identity_normalized(context, callable_ty)?,
+        callable_type,
+        signature: Box::new(signature),
+        callable_binding_hash,
     })
 }
 
@@ -991,17 +1027,22 @@ fn function_signature_identity<'tcx>(
         .tcx
         .instantiate_bound_regions_with_erased(normalized);
     preflight_signature_types(context, signature.inputs_and_output, label)?;
-    let signature_types = signature.inputs_and_output.iter().collect::<Vec<_>>();
-    Ok(FunctionSignatureIdentityV2 {
-        stable_hash: stable_hash!(context.tcx, signature),
-        shape_hash: stable_hash!(context.tcx, signature_types),
-        input_count: signature.inputs().len(),
-    })
+    signature_identity_from_rustc(
+        context,
+        stable_hash!(context.tcx, signature),
+        FunctionSignatureOriginV2::CompilerFnSig,
+        signature.inputs_and_output,
+        signature.safety,
+        signature.abi,
+        signature.c_variadic,
+        label,
+    )
 }
 
 fn resolved_signature_identity<'tcx>(
     context: &mut CaptureContextV2<'_, 'tcx>,
     instance: Instance<'tcx>,
+    declared: &FunctionSignatureIdentityV2,
 ) -> Result<FunctionSignatureIdentityV2, CaptureErrorV2> {
     if matches!(
         context.tcx.def_kind(instance.def_id()),
@@ -1059,11 +1100,76 @@ fn resolved_signature_identity<'tcx>(
         )?;
         types.push(normalized);
     }
-    Ok(FunctionSignatureIdentityV2 {
-        stable_hash: stable_hash!(context.tcx, instance),
-        shape_hash: stable_hash!(context.tcx, types),
-        input_count: body.arg_count,
-    })
+    let stable_hash = stable_hash!(context.tcx, (&instance, &types));
+    signature_identity_from_types(
+        context,
+        stable_hash,
+        FunctionSignatureOriginV2::GeneratedMir,
+        &types,
+        declared.safety,
+        declared.abi.clone(),
+        declared.c_variadic,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn signature_identity_from_rustc<'tcx>(
+    context: &mut CaptureContextV2<'_, 'tcx>,
+    stable_hash: [u8; 16],
+    origin: FunctionSignatureOriginV2,
+    types: &[Ty<'tcx>],
+    safety: Safety,
+    abi: ExternAbi,
+    c_variadic: bool,
+    label: &str,
+) -> Result<FunctionSignatureIdentityV2, CaptureErrorV2> {
+    preflight_signature_types(context, types, label)?;
+    let safety = match safety {
+        Safety::Safe => FunctionSafetyV2::Safe,
+        Safety::Unsafe => FunctionSafetyV2::Unsafe,
+    };
+    let abi_name = abi.as_str();
+    let abi = FunctionAbiIdentityV2 {
+        stable_hash: stable_hash!(context.tcx, abi),
+        canonical_name: context.budget.bounded_str("function ABI", abi_name)?,
+        unwind_allowed: abi.is_rustic_abi() || abi_name.ends_with("-unwind"),
+    };
+    signature_identity_from_types(context, stable_hash, origin, types, safety, abi, c_variadic)
+}
+
+fn signature_identity_from_types<'tcx>(
+    context: &mut CaptureContextV2<'_, 'tcx>,
+    stable_hash: [u8; 16],
+    origin: FunctionSignatureOriginV2,
+    types: &[Ty<'tcx>],
+    safety: FunctionSafetyV2,
+    abi: FunctionAbiIdentityV2,
+    c_variadic: bool,
+) -> Result<FunctionSignatureIdentityV2, CaptureErrorV2> {
+    let (output, inputs) = types
+        .split_last()
+        .ok_or_else(|| CaptureErrorV2::new("function signature has no output type"))?;
+    ensure_bound(
+        "function signature inputs",
+        inputs.len(),
+        context.limits.max_type_arity,
+    )?;
+    let mut captured_inputs = Vec::with_capacity(inputs.len());
+    for input in inputs {
+        captured_inputs.push(type_identity_normalized(context, *input)?);
+    }
+    let mut signature = FunctionSignatureIdentityV2 {
+        stable_hash,
+        origin,
+        inputs: captured_inputs,
+        output: Box::new(type_identity_normalized(context, *output)?),
+        safety,
+        abi,
+        c_variadic,
+        binding_hash: [0; 32],
+    };
+    signature.binding_hash = function_signature_binding_hash_v2(&signature)?;
+    Ok(signature)
 }
 
 fn preflight_signature_types<'tcx>(
@@ -1215,6 +1321,24 @@ fn type_identity<'tcx>(
         )
         .map_err(|_| CaptureErrorV2::normalization("type"))?;
     type_identity_normalized(context, normalized)
+}
+
+fn normalized_type_hash<'tcx>(
+    context: &mut CaptureContextV2<'_, 'tcx>,
+    ty: Ty<'tcx>,
+    label: &str,
+) -> Result<[u8; 16], CaptureErrorV2> {
+    preflight_ty_v2(label, ty, context.limits, &mut context.budget)?;
+    let normalized = context
+        .instance
+        .try_instantiate_mir_and_normalize_erasing_regions(
+            context.tcx,
+            TypingEnv::fully_monomorphized(),
+            EarlyBinder::bind(ty),
+        )
+        .map_err(|_| CaptureErrorV2::normalization(label))?;
+    preflight_ty_v2(label, normalized, context.limits, &mut context.budget)?;
+    Ok(stable_hash!(context.tcx, normalized))
 }
 
 fn type_identity_normalized<'tcx>(

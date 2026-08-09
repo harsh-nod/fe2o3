@@ -213,7 +213,7 @@ impl CapturedBodyV2 {
             validate_terminator(
                 &format!("blocks[{expected}].terminator"),
                 &block.terminator,
-                self.locals.len(),
+                &self.locals,
                 self.blocks.len(),
                 limits,
             )?;
@@ -247,11 +247,35 @@ pub(crate) struct IntrinsicIdentityV2 {
     pub binding_hash: [u8; 32],
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct FunctionSignatureIdentityV2 {
     pub stable_hash: [u8; 16],
-    pub shape_hash: [u8; 16],
-    pub input_count: usize,
+    pub origin: FunctionSignatureOriginV2,
+    pub inputs: Vec<TypeIdentityV2>,
+    pub output: Box<TypeIdentityV2>,
+    pub safety: FunctionSafetyV2,
+    pub abi: FunctionAbiIdentityV2,
+    pub c_variadic: bool,
+    pub binding_hash: [u8; 32],
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FunctionSignatureOriginV2 {
+    CompilerFnSig,
+    GeneratedMir,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FunctionSafetyV2 {
+    Safe,
+    Unsafe,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct FunctionAbiIdentityV2 {
+    pub stable_hash: [u8; 16],
+    pub canonical_name: String,
+    pub unwind_allowed: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -583,6 +607,7 @@ pub(crate) enum IntrinsicStatementV2 {
 pub(crate) struct PlaceV2 {
     pub local: usize,
     pub projection: Vec<ProjectionV2>,
+    pub type_hash: [u8; 16],
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -737,12 +762,14 @@ pub(crate) enum TerminatorKindV2 {
         unwind: UnwindActionV2,
         call_source: StableCompilerValueV2,
         function_span: SourceSpanV2,
+        contract_hash: [u8; 32],
     },
     TailCall {
         function: OperandV2,
         callee: CalleeIdentityV2,
         arguments: Vec<CallArgumentV2>,
         function_span: SourceSpanV2,
+        contract_hash: [u8; 32],
     },
     Drop {
         place: PlaceV2,
@@ -789,12 +816,14 @@ pub(crate) enum CalleeIdentityV2 {
         declared_generic_arg_count: usize,
         declared_signature: FunctionSignatureIdentityV2,
         resolved: Box<FunctionIdentityV2>,
-        resolved_signature: FunctionSignatureIdentityV2,
+        resolved_signature: Box<FunctionSignatureIdentityV2>,
         intrinsic: Option<Box<IntrinsicIdentityV2>>,
         resolution_binding_hash: [u8; 32],
     },
     Indirect {
         callable_type: TypeIdentityV2,
+        signature: Box<FunctionSignatureIdentityV2>,
+        callable_binding_hash: [u8; 32],
     },
 }
 
@@ -1016,12 +1045,198 @@ fn hash_signature_binding(
     signature: &FunctionSignatureIdentityV2,
 ) -> Result<(), ValidationErrorV2> {
     hasher.update(signature.stable_hash);
-    hasher.update(signature.shape_hash);
-    hash_usize_binding(
-        hasher,
-        signature.input_count,
-        "callee.signature.input_count",
-    )
+    hasher.update(signature.binding_hash);
+    Ok(())
+}
+
+pub(super) fn function_signature_binding_hash_v2(
+    signature: &FunctionSignatureIdentityV2,
+) -> Result<[u8; 32], ValidationErrorV2> {
+    let mut hasher = Sha256::new();
+    hasher.update(b"fe2o3.mir-v2.function-signature.v1\0");
+    hasher.update(signature.stable_hash);
+    hasher.update([match signature.origin {
+        FunctionSignatureOriginV2::CompilerFnSig => 0,
+        FunctionSignatureOriginV2::GeneratedMir => 1,
+    }]);
+    hash_usize_binding(&mut hasher, signature.inputs.len(), "signature.inputs")?;
+    for input in &signature.inputs {
+        hasher.update(input.stable_hash);
+    }
+    hasher.update(signature.output.stable_hash);
+    hasher.update([match signature.safety {
+        FunctionSafetyV2::Safe => 0,
+        FunctionSafetyV2::Unsafe => 1,
+    }]);
+    hasher.update(signature.abi.stable_hash);
+    hash_text_binding(
+        &mut hasher,
+        &signature.abi.canonical_name,
+        "signature.abi.canonical_name",
+    )?;
+    hasher.update([
+        u8::from(signature.abi.unwind_allowed),
+        u8::from(signature.c_variadic),
+    ]);
+    Ok(hasher.finalize().into())
+}
+
+pub(super) fn indirect_callable_binding_hash_v2(
+    callable_type: &TypeIdentityV2,
+    signature: &FunctionSignatureIdentityV2,
+) -> Result<[u8; 32], ValidationErrorV2> {
+    let mut hasher = Sha256::new();
+    hasher.update(b"fe2o3.mir-v2.indirect-callable.v1\0");
+    hasher.update(callable_type.stable_hash);
+    hash_signature_binding(&mut hasher, signature)?;
+    Ok(hasher.finalize().into())
+}
+
+pub(super) fn call_contract_hash_v2(
+    function: &OperandV2,
+    callee: &CalleeIdentityV2,
+    arguments: &[CallArgumentV2],
+    destination: Option<&PlaceV2>,
+    target: Option<usize>,
+    unwind: Option<&UnwindActionV2>,
+) -> Result<[u8; 32], ValidationErrorV2> {
+    let mut hasher = Sha256::new();
+    hasher.update(b"fe2o3.mir-v2.call-contract.v1\0");
+    hash_operand_binding(&mut hasher, function)?;
+    match callee {
+        CalleeIdentityV2::Direct {
+            resolution_binding_hash,
+            ..
+        } => {
+            hasher.update([0]);
+            hasher.update(resolution_binding_hash);
+        }
+        CalleeIdentityV2::Indirect {
+            callable_binding_hash,
+            ..
+        } => {
+            hasher.update([1]);
+            hasher.update(callable_binding_hash);
+        }
+    }
+    hash_usize_binding(&mut hasher, arguments.len(), "call.arguments")?;
+    for argument in arguments {
+        hash_operand_binding(&mut hasher, &argument.operand)?;
+    }
+    match destination {
+        Some(destination) => {
+            hasher.update([1]);
+            hash_place_binding(&mut hasher, destination)?;
+        }
+        None => hasher.update([0]),
+    }
+    hash_optional_usize_binding(&mut hasher, target, "call.target")?;
+    match unwind {
+        Some(unwind) => {
+            hasher.update([1]);
+            hash_unwind_binding(&mut hasher, unwind)?;
+        }
+        None => hasher.update([0]),
+    }
+    Ok(hasher.finalize().into())
+}
+
+fn hash_operand_binding(hasher: &mut Sha256, operand: &OperandV2) -> Result<(), ValidationErrorV2> {
+    match operand {
+        OperandV2::Copy(place) => {
+            hasher.update([0]);
+            hash_place_binding(hasher, place)
+        }
+        OperandV2::Move(place) => {
+            hasher.update([1]);
+            hash_place_binding(hasher, place)
+        }
+        OperandV2::Constant { ty, value, .. } => {
+            hasher.update([2]);
+            hasher.update(ty.stable_hash);
+            hasher.update(value.stable_hash);
+            Ok(())
+        }
+        OperandV2::RuntimeChecks { kind } => {
+            hasher.update([3]);
+            hasher.update(kind.stable_hash);
+            Ok(())
+        }
+    }
+}
+
+fn hash_place_binding(hasher: &mut Sha256, place: &PlaceV2) -> Result<(), ValidationErrorV2> {
+    hash_usize_binding(hasher, place.local, "call.place.local")?;
+    hasher.update(place.type_hash);
+    hash_usize_binding(hasher, place.projection.len(), "call.place.projection")?;
+    for projection in &place.projection {
+        match projection {
+            ProjectionV2::Deref => hasher.update([0]),
+            ProjectionV2::Field { index, ty } => {
+                hasher.update([1]);
+                hash_usize_binding(hasher, *index, "call.place.field")?;
+                hasher.update(ty.stable_hash);
+            }
+            ProjectionV2::Index { local } => {
+                hasher.update([2]);
+                hash_usize_binding(hasher, *local, "call.place.index")?;
+            }
+            ProjectionV2::ConstantIndex {
+                offset,
+                min_length,
+                from_end,
+            } => {
+                hasher.update([3]);
+                hasher.update(offset.to_le_bytes());
+                hasher.update(min_length.to_le_bytes());
+                hasher.update([u8::from(*from_end)]);
+            }
+            ProjectionV2::Subslice { from, to, from_end } => {
+                hasher.update([4]);
+                hasher.update(from.to_le_bytes());
+                hasher.update(to.to_le_bytes());
+                hasher.update([u8::from(*from_end)]);
+            }
+            ProjectionV2::Downcast { variant, .. } => {
+                hasher.update([5]);
+                hash_usize_binding(hasher, *variant, "call.place.downcast")?;
+            }
+            ProjectionV2::OpaqueCast { ty } => {
+                hasher.update([6]);
+                hasher.update(ty.stable_hash);
+            }
+            ProjectionV2::UnwrapUnsafeBinder { ty } => {
+                hasher.update([7]);
+                hasher.update(ty.stable_hash);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn hash_unwind_binding(
+    hasher: &mut Sha256,
+    unwind: &UnwindActionV2,
+) -> Result<(), ValidationErrorV2> {
+    match unwind {
+        UnwindActionV2::Continue => hasher.update([0]),
+        UnwindActionV2::Unreachable => hasher.update([1]),
+        UnwindActionV2::Terminate { reason } => {
+            hasher.update([2]);
+            hasher.update(reason.stable_hash);
+        }
+        UnwindActionV2::Cleanup { target } => {
+            hasher.update([3]);
+            hash_usize_binding(hasher, *target, "call.unwind.cleanup")?;
+        }
+    }
+    Ok(())
+}
+
+fn hash_text_binding(hasher: &mut Sha256, text: &str, path: &str) -> Result<(), ValidationErrorV2> {
+    hash_usize_binding(hasher, text.len(), path)?;
+    hasher.update(text.as_bytes());
+    Ok(())
 }
 
 fn hash_instance_kind_binding(
@@ -1892,10 +2107,11 @@ fn validate_aggregate_kind(
 fn validate_terminator(
     path: &str,
     terminator: &TerminatorV2,
-    local_count: usize,
+    locals: &[LocalDeclV2],
     block_count: usize,
     limits: CaptureLimitsV2,
 ) -> Result<(), ValidationErrorV2> {
+    let local_count = locals.len();
     validate_span(&format!("{path}.source"), &terminator.source, limits)?;
     validate_text(
         &format!("{path}.diagnostic_debug"),
@@ -1956,9 +2172,9 @@ fn validate_terminator(
             unwind,
             call_source,
             function_span,
+            contract_hash,
         } => {
             validate_operand(&format!("{path}.function"), function, local_count, limits)?;
-            validate_callee(&format!("{path}.callee"), function, callee, limits)?;
             bounded(
                 format!("{path}.arguments"),
                 arguments.len(),
@@ -1989,6 +2205,34 @@ fn validate_terminator(
             validate_unwind(&format!("{path}.unwind"), unwind, block_count, limits)?;
             validate_stable_value(&format!("{path}.call_source"), call_source, limits)?;
             validate_span(&format!("{path}.function_span"), function_span, limits)?;
+            validate_callee(
+                &format!("{path}.callee"),
+                function,
+                callee,
+                CallValidationContextV2 {
+                    arguments,
+                    destination: Some(destination),
+                    target: *target,
+                    unwind: Some(unwind),
+                    locals,
+                },
+                limits,
+            )?;
+            validate_hash32(&format!("{path}.contract_hash"), contract_hash)?;
+            let expected_contract = call_contract_hash_v2(
+                function,
+                callee,
+                arguments,
+                Some(destination),
+                *target,
+                Some(unwind),
+            )?;
+            if *contract_hash != expected_contract {
+                return Err(ValidationErrorV2::new(
+                    format!("{path}.contract_hash"),
+                    "call contract does not match its ordered operands, destination, target, and unwind",
+                ));
+            }
             let expected = normal_and_unwind_successors(*target, unwind);
             validate_exact_successors(path, &terminator.successors, &expected)
         }
@@ -1997,9 +2241,9 @@ fn validate_terminator(
             callee,
             arguments,
             function_span,
+            contract_hash,
         } => {
             validate_operand(&format!("{path}.function"), function, local_count, limits)?;
-            validate_callee(&format!("{path}.callee"), function, callee, limits)?;
             bounded(
                 format!("{path}.arguments"),
                 arguments.len(),
@@ -2019,6 +2263,28 @@ fn validate_terminator(
                 )?;
             }
             validate_span(&format!("{path}.function_span"), function_span, limits)?;
+            validate_callee(
+                &format!("{path}.callee"),
+                function,
+                callee,
+                CallValidationContextV2 {
+                    arguments,
+                    destination: None,
+                    target: None,
+                    unwind: None,
+                    locals,
+                },
+                limits,
+            )?;
+            validate_hash32(&format!("{path}.contract_hash"), contract_hash)?;
+            let expected_contract =
+                call_contract_hash_v2(function, callee, arguments, None, None, None)?;
+            if *contract_hash != expected_contract {
+                return Err(ValidationErrorV2::new(
+                    format!("{path}.contract_hash"),
+                    "tail-call contract does not match its ordered operands",
+                ));
+            }
             validate_exact_successors(path, &terminator.successors, &[])
         }
         TerminatorKindV2::Drop {
@@ -2117,13 +2383,23 @@ fn validate_terminator(
     }
 }
 
+#[derive(Clone, Copy)]
+struct CallValidationContextV2<'a> {
+    arguments: &'a [CallArgumentV2],
+    destination: Option<&'a PlaceV2>,
+    target: Option<usize>,
+    unwind: Option<&'a UnwindActionV2>,
+    locals: &'a [LocalDeclV2],
+}
+
 fn validate_callee(
     path: &str,
     function: &OperandV2,
     callee: &CalleeIdentityV2,
+    call: CallValidationContextV2<'_>,
     limits: CaptureLimitsV2,
 ) -> Result<(), ValidationErrorV2> {
-    match callee {
+    let signature = match callee {
         CalleeIdentityV2::Direct {
             declared,
             declared_generic_args_hash,
@@ -2217,10 +2493,20 @@ fn validate_callee(
                     "direct-call identity binding does not match its captured fields",
                 ));
             }
-            Ok(())
+            validate_signature_compatibility(
+                &format!("{path}.resolved_signature"),
+                declared_signature,
+                resolved_signature,
+            )?;
+            declared_signature
         }
-        CalleeIdentityV2::Indirect { callable_type } => {
+        CalleeIdentityV2::Indirect {
+            callable_type,
+            signature,
+            callable_binding_hash,
+        } => {
             validate_type(&format!("{path}.callable_type"), callable_type, limits)?;
+            validate_signature(&format!("{path}.signature"), signature, limits)?;
             if !matches!(callable_type.class, TypeClassV2::FunctionPointer) {
                 return Err(ValidationErrorV2::new(
                     path,
@@ -2237,8 +2523,149 @@ fn validate_callee(
                     "a function-definition constant cannot be marked indirect",
                 ));
             }
-            Ok(())
+            if operand_type_hash(function)? != callable_type.stable_hash {
+                return Err(ValidationErrorV2::new(
+                    path,
+                    "indirect callable operand type does not exactly match its captured function-pointer type",
+                ));
+            }
+            validate_hash32(
+                &format!("{path}.callable_binding_hash"),
+                callable_binding_hash,
+            )?;
+            let expected = indirect_callable_binding_hash_v2(callable_type, signature)?;
+            if *callable_binding_hash != expected {
+                return Err(ValidationErrorV2::new(
+                    format!("{path}.callable_binding_hash"),
+                    "indirect callable type and signature binding does not match",
+                ));
+            }
+            signature
         }
+    };
+    validate_call_signature(
+        path,
+        signature,
+        call.arguments,
+        call.destination,
+        call.target,
+        call.unwind,
+        call.locals,
+    )
+}
+
+fn validate_signature_compatibility(
+    path: &str,
+    declared: &FunctionSignatureIdentityV2,
+    resolved: &FunctionSignatureIdentityV2,
+) -> Result<(), ValidationErrorV2> {
+    let inputs_match = declared.inputs.len() == resolved.inputs.len()
+        && declared
+            .inputs
+            .iter()
+            .zip(&resolved.inputs)
+            .all(|(left, right)| left.stable_hash == right.stable_hash);
+    if !inputs_match
+        || declared.output.stable_hash != resolved.output.stable_hash
+        || declared.safety != resolved.safety
+        || declared.abi != resolved.abi
+        || declared.c_variadic != resolved.c_variadic
+    {
+        return Err(ValidationErrorV2::new(
+            path,
+            "resolved callable signature is not structurally compatible with the declared signature",
+        ));
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_call_signature(
+    path: &str,
+    signature: &FunctionSignatureIdentityV2,
+    arguments: &[CallArgumentV2],
+    destination: Option<&PlaceV2>,
+    target: Option<usize>,
+    unwind: Option<&UnwindActionV2>,
+    locals: &[LocalDeclV2],
+) -> Result<(), ValidationErrorV2> {
+    if arguments.len() != signature.inputs.len() {
+        return Err(ValidationErrorV2::new(
+            format!("{path}.arguments"),
+            format!(
+                "call argument count {} does not exactly match signature input count {}",
+                arguments.len(),
+                signature.inputs.len()
+            ),
+        ));
+    }
+    for (index, (argument, input)) in arguments.iter().zip(&signature.inputs).enumerate() {
+        if operand_type_hash(&argument.operand)? != input.stable_hash {
+            return Err(ValidationErrorV2::new(
+                format!("{path}.arguments[{index}]"),
+                "call operand type does not exactly match the ordered signature input",
+            ));
+        }
+    }
+
+    match destination {
+        Some(destination) => {
+            if destination.type_hash != signature.output.stable_hash {
+                return Err(ValidationErrorV2::new(
+                    format!("{path}.destination"),
+                    "call destination place type does not exactly match the signature output",
+                ));
+            }
+            let diverges = matches!(signature.output.class, TypeClassV2::Never);
+            if diverges != target.is_none() {
+                return Err(ValidationErrorV2::new(
+                    format!("{path}.target"),
+                    "normal target presence is incompatible with the signature output type",
+                ));
+            }
+            let _returns_unit = matches!(signature.output.class, TypeClassV2::Tuple { arity: 0 });
+        }
+        None => {
+            let caller_output = locals.first().ok_or_else(|| {
+                ValidationErrorV2::new(path, "tail call has no caller return local")
+            })?;
+            if signature.output.stable_hash != caller_output.ty.stable_hash {
+                return Err(ValidationErrorV2::new(
+                    format!("{path}.output"),
+                    "tail-call output does not exactly match the caller return type",
+                ));
+            }
+            if target.is_some() || unwind.is_some() {
+                return Err(ValidationErrorV2::new(
+                    path,
+                    "tail call cannot carry a normal target or unwind edge",
+                ));
+            }
+        }
+    }
+
+    if !signature.abi.unwind_allowed
+        && matches!(
+            unwind,
+            Some(UnwindActionV2::Continue | UnwindActionV2::Cleanup { .. })
+        )
+    {
+        return Err(ValidationErrorV2::new(
+            format!("{path}.unwind"),
+            "call unwind action is incompatible with a non-unwinding ABI",
+        ));
+    }
+    Ok(())
+}
+
+fn operand_type_hash(operand: &OperandV2) -> Result<[u8; 16], ValidationErrorV2> {
+    match operand {
+        OperandV2::Copy(place) | OperandV2::Move(place) => Ok(place.type_hash),
+        OperandV2::Constant { ty, .. } => Ok(ty.stable_hash),
+        OperandV2::RuntimeChecks { .. } => Err(ValidationErrorV2::new(
+            "call.operand",
+            "runtime-check operands do not have an exact callable argument type",
+        )),
     }
 }
 
@@ -2309,6 +2736,7 @@ fn validate_place(
     limits: CaptureLimitsV2,
 ) -> Result<(), ValidationErrorV2> {
     validate_local(&format!("{path}.local"), place.local, local_count)?;
+    validate_hash(&format!("{path}.type_hash"), &place.type_hash)?;
     bounded(
         format!("{path}.projection"),
         place.projection.len(),
@@ -2374,12 +2802,44 @@ fn validate_signature(
     limits: CaptureLimitsV2,
 ) -> Result<(), ValidationErrorV2> {
     validate_hash(&format!("{path}.stable_hash"), &signature.stable_hash)?;
-    validate_hash(&format!("{path}.shape_hash"), &signature.shape_hash)?;
     bounded(
-        format!("{path}.input_count"),
-        signature.input_count,
+        format!("{path}.inputs"),
+        signature.inputs.len(),
         limits.max_type_arity,
-    )
+    )?;
+    for (index, input) in signature.inputs.iter().enumerate() {
+        validate_type(&format!("{path}.inputs[{index}]"), input, limits)?;
+    }
+    validate_type(&format!("{path}.output"), &signature.output, limits)?;
+    validate_hash(
+        &format!("{path}.abi.stable_hash"),
+        &signature.abi.stable_hash,
+    )?;
+    validate_text(
+        &format!("{path}.abi.canonical_name"),
+        &signature.abi.canonical_name,
+        limits,
+    )?;
+    let expected_unwind = signature.abi.canonical_name.ends_with("-unwind")
+        || matches!(
+            signature.abi.canonical_name.as_str(),
+            "Rust" | "rust-call" | "rust-cold" | "rust-preserve-none"
+        );
+    if signature.abi.unwind_allowed != expected_unwind {
+        return Err(ValidationErrorV2::new(
+            format!("{path}.abi.unwind_allowed"),
+            "ABI unwind capability disagrees with its canonical ABI identity",
+        ));
+    }
+    validate_hash32(&format!("{path}.binding_hash"), &signature.binding_hash)?;
+    let expected = function_signature_binding_hash_v2(signature)?;
+    if signature.binding_hash != expected {
+        return Err(ValidationErrorV2::new(
+            format!("{path}.binding_hash"),
+            "function signature structural binding does not match its components",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_intrinsic(
