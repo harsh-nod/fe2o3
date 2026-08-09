@@ -91,12 +91,10 @@ impl CaptureBudgetV2 {
         Ok(writer.text)
     }
 
-    #[cfg(test)]
     pub(super) fn work_items(&self) -> usize {
         self.work_items
     }
 
-    #[cfg(test)]
     pub(super) fn text_bytes(&self) -> usize {
         self.text_bytes
     }
