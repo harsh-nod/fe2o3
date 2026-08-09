@@ -1,0 +1,42 @@
+name: Parity review signal
+
+on:
+  pull_request_review:
+    types: [submitted, edited, dismissed]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: parity-review-signal-${{ github.event.pull_request.number }}-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  signal:
+    name: Read-only parity review signal
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Validate review event shape
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BASE_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -Eeuo pipefail
+          [[ "${EVENT_NAME}" == pull_request_review ]]
+          case "${EVENT_ACTION}" in
+            submitted|edited|dismissed)
+              ;;
+            *)
+              printf 'unsupported review signal action: %s\n' "${EVENT_ACTION}" >&2
+              exit 2
+              ;;
+          esac
+          [[ "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]
+          [[ "${PR_BASE_REPOSITORY}" == "${GITHUB_REPOSITORY}" ]]
+          [[ "${PR_HEAD_SHA}" =~ ^[0-9a-f]{40}$ && ! "${PR_HEAD_SHA}" =~ ^0{40}$ ]]
+          printf 'read-only review signal accepted for protected revalidation\n'
