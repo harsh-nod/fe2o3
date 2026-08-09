@@ -9,6 +9,7 @@ state or substitute image, runtime, device, or isolation settings.
 from __future__ import annotations
 
 import argparse
+import configparser
 import fcntl
 import hashlib
 import json
@@ -17,7 +18,6 @@ import os
 from pathlib import Path
 import re
 import secrets
-import shutil
 import signal
 import stat
 import struct
@@ -25,6 +25,7 @@ import subprocess
 import sys
 import threading
 import time
+import zlib
 from dataclasses import dataclass
 from typing import BinaryIO
 
@@ -39,6 +40,8 @@ MAX_OCI_LAYER_BYTES = 64 * 1024**3
 MAX_OCI_IMAGE_BYTES = 256 * 1024**3
 MAX_STAGING_ROOT_ENTRIES = 64
 MAX_SOURCE_DIRECTORIES = 16384
+MAX_GIT_ROOT_ENTRIES = 258
+MAX_GIT_CONFIG_BYTES = 1024 * 1024
 MAX_CLEANUP_ENTRIES = 40000
 PROCESS_REAP_GRACE_SECONDS = 5.0
 PROCESS_PIPE_JOIN_SECONDS = 5.0
@@ -930,18 +933,17 @@ class Profile:
     runtime_digest: str
     runtime_version_digest: str
     runtime_info_digest: str
-    git_path: str
-    git_size: int
-    git_digest: str
-    git_version_digest: str
     git_objects_path: str
+    git_object_format: str
+    git_object_limit: int
+    git_object_bytes_limit: int
+    git_tree_depth_limit: int
     source_staging_root: str
     output_staging_root: str
     artifact_stream_protocol: str
     source_file_limit: int
     source_byte_limit: int
     source_index_limit: int
-    source_export_timeout: int
     operator_uid: int
     operator_gid: int
     layout_path: str
@@ -1051,8 +1053,8 @@ def load_profile(
     )
     rows = parse_rows(raw, "OCI executor profile")
     cursor = Cursor(rows, "OCI executor profile")
-    if cursor.scalar("oci_executor_profile_schema_version") != "1":
-        fail("OCI executor profile schema must be 1")
+    if cursor.scalar("oci_executor_profile_schema_version") != "2":
+        fail("OCI executor profile schema must be 2")
     actual_id = cursor.scalar("profile_id")
     mode = cursor.scalar("execution_mode")
     target = cursor.scalar("target")
@@ -1062,18 +1064,17 @@ def load_profile(
     runtime_digest = cursor.scalar("runtime_sha256")
     runtime_version_digest = cursor.scalar("runtime_version_sha256")
     runtime_info_digest = cursor.scalar("runtime_info_sha256")
-    git_path = cursor.scalar("git_path")
-    git_size = cursor.scalar("git_size")
-    git_digest = cursor.scalar("git_sha256")
-    git_version_digest = cursor.scalar("git_version_sha256")
     git_objects_path = cursor.scalar("git_objects_path")
+    git_object_format = cursor.scalar("git_object_format")
+    git_object_limit = cursor.scalar("git_object_limit")
+    git_object_bytes_limit = cursor.scalar("git_object_bytes_limit")
+    git_tree_depth_limit = cursor.scalar("git_tree_depth_limit")
     source_staging_root = cursor.scalar("source_staging_root")
     output_staging_root = cursor.scalar("output_staging_root")
     artifact_stream_protocol = cursor.scalar("artifact_stream_protocol")
     source_file_limit = cursor.scalar("source_file_limit")
     source_byte_limit = cursor.scalar("source_byte_limit")
     source_index_limit = cursor.scalar("source_index_limit")
-    source_export_timeout = cursor.scalar("source_export_timeout_seconds")
     operator_uid = cursor.scalar("operator_uid")
     operator_gid = cursor.scalar("operator_gid")
     layout_path = cursor.scalar("oci_layout_path")
@@ -1101,12 +1102,14 @@ def load_profile(
     ):
         fail("malformed runtime binding")
     if (
-        not valid_absolute(git_path)
-        or not git_size.isdigit()
-        or not 1 <= int(git_size) <= 1024**3
-        or not SHA256_RE.fullmatch(git_digest)
-        or not SHA256_RE.fullmatch(git_version_digest)
-        or not valid_absolute(git_objects_path)
+        not valid_absolute(git_objects_path)
+        or git_object_format != "sha1-loose"
+        or not git_object_limit.isdigit()
+        or not 1 <= int(git_object_limit) <= 65536
+        or not git_object_bytes_limit.isdigit()
+        or not 1 <= int(git_object_bytes_limit) <= 1024**3
+        or not git_tree_depth_limit.isdigit()
+        or not 1 <= int(git_tree_depth_limit) <= 128
         or not valid_absolute(source_staging_root)
         or not valid_absolute(output_staging_root)
         or artifact_stream_protocol != "fe2o3-artifact-stream-v1"
@@ -1116,8 +1119,6 @@ def load_profile(
         or not 1 <= int(source_byte_limit) <= 512 * 1024**2
         or not source_index_limit.isdigit()
         or not 1 <= int(source_index_limit) <= 64 * 1024**2
-        or not source_export_timeout.isdigit()
-        or not 1 <= int(source_export_timeout) <= 900
         or not operator_uid.isdigit()
         or not operator_gid.isdigit()
         or not 0 <= int(operator_uid) <= 2**31 - 1
@@ -1266,18 +1267,17 @@ def load_profile(
         runtime_digest,
         runtime_version_digest,
         runtime_info_digest,
-        git_path,
-        int(git_size),
-        git_digest,
-        git_version_digest,
         git_objects_path,
+        git_object_format,
+        int(git_object_limit),
+        int(git_object_bytes_limit),
+        int(git_tree_depth_limit),
         source_staging_root,
         output_staging_root,
         artifact_stream_protocol,
         int(source_file_limit),
         int(source_byte_limit),
         int(source_index_limit),
-        int(source_export_timeout),
         int(operator_uid),
         int(operator_gid),
         layout_path,
@@ -2007,137 +2007,460 @@ class OutputStage:
             raise failure
 
 
-def initialize_git_control(control: Path) -> None:
-    try:
-        (control / "objects" / "info").mkdir(mode=0o700, parents=True)
-        (control / "objects" / "pack").mkdir(mode=0o700)
-        (control / "refs" / "heads").mkdir(mode=0o700, parents=True)
-        (control / "refs" / "tags").mkdir(mode=0o700)
-        (control / "HEAD").write_text("ref: refs/heads/invalid\n", encoding="ascii")
-        (control / "config").write_text(
-            "[core]\n\trepositoryformatversion = 0\n\tbare = true\n",
-            encoding="ascii",
-        )
-    except OSError as error:
-        fail(f"cannot initialize transient Git control directory: {error}")
-
-
-def git_environment(profile: Profile, control: Path) -> dict[str, str]:
-    return {
-        "GIT_CONFIG_NOSYSTEM": "1",
-        "GIT_CONFIG_SYSTEM": "/dev/null",
-        "GIT_CONFIG_GLOBAL": "/dev/null",
-        "GIT_NO_REPLACE_OBJECTS": "1",
-        "GIT_OPTIONAL_LOCKS": "0",
-        "GIT_OBJECT_DIRECTORY": profile.git_objects_path,
-        "GIT_ALTERNATE_OBJECT_DIRECTORIES": "",
-        "GIT_DIR": str(control),
-        "GIT_WORK_TREE": "/nonexistent",
-        "HOME": "/nonexistent",
-        "LC_ALL": "C",
-        "PATH": "/nonexistent",
-        "XDG_CONFIG_HOME": "/nonexistent",
-    }
-
-
-def git_object_command(
-    profile: Profile,
-    control: Path,
-    arguments: list[str],
-    *,
-    label: str,
-    stdout_limit: int,
-    input_data: bytes | None = None,
-) -> bytes:
-    result = run_bounded(
-        [
-            profile.git_path,
-            "-c",
-            "core.fsmonitor=false",
-            "-c",
-            "core.hooksPath=/dev/null",
-            "-c",
-            "protocol.allow=never",
-            *arguments,
-        ],
-        label=label,
-        environment=git_environment(profile, control),
-        timeout_seconds=profile.source_export_timeout,
-        stdout_limit=stdout_limit,
-        stderr_limit=64 * 1024,
-        input_data=input_data,
+def verify_git_store_metadata(
+    info: os.stat_result, profile: Profile, label: str, *, directory: bool
+) -> None:
+    expected_kind = (
+        stat.S_ISDIR(info.st_mode) if directory else stat.S_ISREG(info.st_mode)
     )
-    if result.returncode or result.stderr:
-        fail(f"{label} failed")
-    return result.stdout
+    if (
+        not expected_kind
+        or (info.st_uid, info.st_gid) != (profile.operator_uid, profile.operator_gid)
+        or info.st_mode & 0o022
+        or not directory
+        and info.st_nlink != 1
+    ):
+        fail(f"{label} ownership, mode, type, or link contract is unsafe")
 
 
-def parse_tree_index(profile: Profile, raw: bytes) -> list[tuple[str, str, str]]:
-    records = raw.split(b"\0")
-    if records[-1] != b"":
-        fail("Git tree index is not NUL terminated")
-    records.pop()
-    if not 1 <= len(records) <= profile.source_file_limit:
-        fail("Git tree file count exceeds protected limit")
-    output: list[tuple[str, str, str]] = []
-    previous = ""
-    for record in records:
+def open_git_store_directory(
+    parent_fd: int, name: str, profile: Profile, label: str
+) -> int:
+    file_fd = -1
+    try:
+        file_fd = os.open(
+            name,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=parent_fd,
+        )
+        verify_git_store_metadata(os.fstat(file_fd), profile, label, directory=True)
+        return file_fd
+    except ExecutorError:
+        close_descriptor(file_fd, label)
+        raise
+    except OSError as error:
+        close_descriptor(file_fd, label)
+        fail(f"cannot open {label} without following links: {error}")
+
+
+def scan_git_directory(file_fd: int, maximum: int, label: str) -> list[str]:
+    names: list[str] = []
+    try:
+        with os.scandir(file_fd) as entries:
+            for entry in entries:
+                names.append(entry.name)
+                if len(names) > maximum:
+                    fail(f"{label} exceeds protected entry limit")
+    except ExecutorError:
+        raise
+    except OSError as error:
+        fail(f"cannot scan {label}: {error}")
+    return sorted(names)
+
+
+def git_path_exists(parent_fd: int, name: str, label: str) -> bool:
+    try:
+        os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    except OSError as error:
+        fail(f"cannot inspect {label}: {error}")
+    return True
+
+
+def read_git_control_file(
+    parent_fd: int, name: str, profile: Profile, maximum: int, label: str
+) -> bytes:
+    file_fd = -1
+    try:
+        file_fd = os.open(
+            name,
+            os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=parent_fd,
+        )
+        before = os.fstat(file_fd)
+        verify_git_store_metadata(before, profile, label, directory=False)
+        if not 1 <= before.st_size <= maximum:
+            fail(f"{label} exceeds protected size limit")
+        raw = read_descriptor_bound(file_fd, maximum, label)
+        after = os.fstat(file_fd)
+        if stable_file_identity(before) != stable_file_identity(after):
+            fail(f"{label} changed while being read")
+        return raw
+    except ExecutorError:
+        raise
+    except OSError as error:
+        fail(f"cannot read {label} without following links: {error}")
+    finally:
+        close_descriptor(file_fd, label)
+
+
+@dataclass(frozen=True)
+class GitTreeEntry:
+    name: str
+    mode: str
+    object_id: str
+    directory: bool
+
+
+@dataclass
+class GitLooseObjectStore:
+    profile: Profile
+    git_directory_fd: int
+    objects_fd: int
+    cache: dict[str, tuple[str, bytes]]
+    object_count: int = 0
+    compressed_bytes: int = 0
+    expanded_bytes: int = 0
+    tree_bytes: int = 0
+
+    @classmethod
+    def open(cls, profile: Profile) -> GitLooseObjectStore:
+        forbidden_environment = (
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+            "GIT_OBJECT_DIRECTORY",
+            "GIT_REPLACE_REF_BASE",
+            "GIT_GRAFT_FILE",
+        )
+        if any(name in os.environ for name in forbidden_environment):
+            fail("Git object-store indirection environment is forbidden")
+        objects_path = Path(profile.git_objects_path)
+        if objects_path.name != "objects":
+            fail("Git object store must be an exact repository objects directory")
+        git_fd = -1
+        objects_fd = -1
         try:
-            identity, raw_path = record.split(b"\t", 1)
-            mode, object_type, object_id = identity.decode("ascii").split(" ")
-            path = raw_path.decode("ascii")
-        except (ValueError, UnicodeDecodeError):
-            fail("Git tree index contains a malformed entry")
-        if (
-            mode not in ("100644", "100755")
-            or object_type != "blob"
-            or not COMMIT_RE.fullmatch(object_id)
-            or not valid_relative(path)
-            or any(component == ".git" for component in path.split("/"))
-            or path <= previous
-        ):
-            fail("Git tree contains an unsupported or unsorted entry")
-        output.append((path, mode, object_id))
-        previous = path
-    return output
-
-
-def parse_blob_batch(
-    profile: Profile, entries: list[tuple[str, str, str]], raw: bytes
-) -> list[bytes]:
-    position = 0
-    total = 0
-    output: list[bytes] = []
-    for _, _, expected_object in entries:
-        end = raw.find(b"\n", position, min(len(raw), position + 256))
-        if end < 0:
-            fail("Git blob batch has a malformed header")
-        try:
-            object_id, object_type, size_text = (
-                raw[position:end].decode("ascii").split(" ")
+            git_fd = os.open(
+                objects_path.parent,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
             )
-        except (ValueError, UnicodeDecodeError):
-            fail("Git blob batch has a malformed header")
-        if (
-            object_id != expected_object
-            or object_type != "blob"
-            or not size_text.isdigit()
-            or int(size_text) > profile.source_byte_limit
+            verify_git_store_metadata(
+                os.fstat(git_fd), profile, "Git repository directory", directory=True
+            )
+            objects_fd = open_git_store_directory(
+                git_fd, "objects", profile, "Git object store"
+            )
+            store = cls(profile, git_fd, objects_fd, {})
+            store.reject_repository_indirection()
+            return store
+        except (ExecutorError, OSError) as error:
+            close_descriptors(
+                (
+                    (objects_fd, "Git object store"),
+                    (git_fd, "Git repository directory"),
+                )
+            )
+            if isinstance(error, ExecutorError):
+                raise
+            fail(f"cannot open Git object store by descriptor: {error}")
+
+    def close(self) -> None:
+        descriptors = (
+            (self.objects_fd, "Git object store"),
+            (self.git_directory_fd, "Git repository directory"),
+        )
+        self.objects_fd = -1
+        self.git_directory_fd = -1
+        close_descriptors(descriptors)
+
+    def reject_repository_indirection(self) -> None:
+        names = scan_git_directory(
+            self.objects_fd, MAX_GIT_ROOT_ENTRIES, "Git object store root"
+        )
+        for name in names:
+            if name in ("info", "pack"):
+                directory_fd = open_git_store_directory(
+                    self.objects_fd, name, self.profile, f"Git objects/{name}"
+                )
+                try:
+                    if scan_git_directory(
+                        directory_fd,
+                        self.profile.git_object_limit,
+                        f"Git objects/{name}",
+                    ):
+                        fail(
+                            "Git alternates, packed objects, indexes, commit graphs, "
+                            "and promisor metadata are forbidden"
+                        )
+                finally:
+                    close_descriptor(directory_fd, f"Git objects/{name}")
+            elif re.fullmatch(r"[0-9a-f]{2}", name):
+                directory_fd = open_git_store_directory(
+                    self.objects_fd, name, self.profile, f"Git object fanout {name}"
+                )
+                close_descriptor(directory_fd, f"Git object fanout {name}")
+            else:
+                fail("Git object store contains an unsupported root entry")
+
+        if git_path_exists(
+            self.git_directory_fd, "info", "Git repository info directory"
         ):
-            fail("Git blob batch identity differs from tree index")
-        size = int(size_text)
-        position = end + 1
-        blob_end = position + size
-        if blob_end >= len(raw) or raw[blob_end : blob_end + 1] != b"\n":
-            fail("Git blob batch content is truncated")
-        output.append(raw[position:blob_end])
-        total += size
-        if total > profile.source_byte_limit:
-            fail("Git source bytes exceed protected limit")
-        position = blob_end + 1
-    if position != len(raw):
-        fail("Git blob batch has trailing output")
-    return output
+            info_fd = open_git_store_directory(
+                self.git_directory_fd,
+                "info",
+                self.profile,
+                "Git repository info directory",
+            )
+            try:
+                if "grafts" in scan_git_directory(
+                    info_fd,
+                    self.profile.git_object_limit,
+                    "Git repository info directory",
+                ):
+                    fail("Git grafts are forbidden")
+            finally:
+                close_descriptor(info_fd, "Git repository info directory")
+
+        if git_path_exists(self.git_directory_fd, "refs", "Git refs directory"):
+            refs_fd = open_git_store_directory(
+                self.git_directory_fd,
+                "refs",
+                self.profile,
+                "Git refs directory",
+            )
+            try:
+                if git_path_exists(refs_fd, "replace", "Git replace refs"):
+                    fail("Git replace refs are forbidden")
+            finally:
+                close_descriptor(refs_fd, "Git refs directory")
+
+        if git_path_exists(
+            self.git_directory_fd, "config", "Git repository configuration"
+        ):
+            raw = read_git_control_file(
+                self.git_directory_fd,
+                "config",
+                self.profile,
+                MAX_GIT_CONFIG_BYTES,
+                "Git repository configuration",
+            )
+            try:
+                text = raw.decode("utf-8")
+                parser = configparser.ConfigParser(
+                    interpolation=None, strict=True, default_section="__forbidden__"
+                )
+                parser.read_string(text)
+            except (UnicodeDecodeError, configparser.Error):
+                fail("Git repository configuration is malformed")
+            for section in parser.sections():
+                lowered = section.lower()
+                options = {name.lower() for name in parser.options(section)}
+                if lowered == "extensions" and "partialclone" in options:
+                    fail("Git partial-clone configuration is forbidden")
+                if lowered.startswith('remote "') and (
+                    "promisor" in options or "partialclonefilter" in options
+                ):
+                    fail("Git promisor configuration is forbidden")
+
+    def read_object(self, object_id: str, expected_kind: str) -> bytes:
+        if COMMIT_RE.fullmatch(object_id) is None:
+            fail("Git object ID is malformed")
+        cached = self.cache.get(object_id)
+        if cached is not None:
+            kind, payload = cached
+            if kind != expected_kind:
+                fail("Git object kind differs from tree closure")
+            return payload
+        if self.object_count >= self.profile.git_object_limit:
+            fail("Git object count exceeds protected limit")
+        payload_limits = {
+            "blob": self.profile.source_byte_limit,
+            "tree": self.profile.source_index_limit,
+            "commit": MAX_FILE_BYTES,
+        }
+        payload_limit = payload_limits.get(expected_kind)
+        if payload_limit is None:
+            fail("Git object kind is not supported")
+        compressed_remaining = (
+            self.profile.git_object_bytes_limit - self.compressed_bytes
+        )
+        compressed_limit = min(compressed_remaining, payload_limit + 64 * 1024)
+        if compressed_limit < 1:
+            fail("Git compressed object bytes exceed protected limit")
+        fanout_fd = open_git_store_directory(
+            self.objects_fd,
+            object_id[:2],
+            self.profile,
+            f"Git object fanout {object_id[:2]}",
+        )
+        object_fd = -1
+        try:
+            object_fd = os.open(
+                object_id[2:],
+                os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC,
+                dir_fd=fanout_fd,
+            )
+            before = os.fstat(object_fd)
+            verify_git_store_metadata(
+                before, self.profile, f"Git object {object_id}", directory=False
+            )
+            if not 1 <= before.st_size <= compressed_limit:
+                fail("Git compressed object bytes exceed protected limit")
+            compressed = read_descriptor_bound(
+                object_fd, compressed_limit, f"Git object {object_id}"
+            )
+            after = os.fstat(object_fd)
+            if stable_file_identity(before) != stable_file_identity(after):
+                fail(f"Git object {object_id} changed while being read")
+        except ExecutorError:
+            raise
+        except OSError as error:
+            fail(f"cannot read Git object {object_id} by descriptor: {error}")
+        finally:
+            close_descriptors(
+                (
+                    (object_fd, f"Git object {object_id}"),
+                    (fanout_fd, f"Git object fanout {object_id[:2]}"),
+                )
+            )
+
+        expanded_remaining = self.profile.git_object_bytes_limit - self.expanded_bytes
+        expanded_limit = min(expanded_remaining, payload_limit + 128)
+        if expanded_limit < 1:
+            fail("Git expanded object bytes exceed protected limit")
+        try:
+            decompressor = zlib.decompressobj()
+            expanded = decompressor.decompress(compressed, expanded_limit + 1)
+            if decompressor.unconsumed_tail or len(expanded) > expanded_limit:
+                fail("Git expanded object bytes exceed protected limit")
+            expanded += decompressor.flush(expanded_limit + 1 - len(expanded))
+        except zlib.error:
+            fail(f"Git object {object_id} has invalid zlib framing")
+        if (
+            len(expanded) > expanded_limit
+            or not decompressor.eof
+            or decompressor.unused_data
+            or decompressor.unconsumed_tail
+        ):
+            fail(f"Git object {object_id} has invalid or oversized zlib framing")
+        try:
+            header, payload = expanded.split(b"\0", 1)
+            kind_raw, size_raw = header.split(b" ", 1)
+            kind = kind_raw.decode("ascii")
+            size_text = size_raw.decode("ascii")
+        except (ValueError, UnicodeDecodeError):
+            fail(f"Git object {object_id} has malformed canonical framing")
+        if (
+            kind not in ("blob", "tree", "commit")
+            or kind != expected_kind
+            or not size_text.isdigit()
+            or len(size_text) > 20
+            or len(size_text) > 1
+            and size_text.startswith("0")
+            or int(size_text) != len(payload)
+            or hashlib.sha1(expanded).hexdigest() != object_id
+        ):
+            fail(f"Git object ID, kind, or size mismatch for {object_id}")
+        if len(payload) > payload_limit:
+            labels = {
+                "blob": "Git source bytes exceed protected limit",
+                "tree": "Git tree bytes exceed protected index limit",
+                "commit": "Git commit bytes exceed protected limit",
+            }
+            fail(labels[expected_kind])
+        self.object_count += 1
+        self.compressed_bytes += len(compressed)
+        self.expanded_bytes += len(expanded)
+        self.cache[object_id] = (kind, payload)
+        return payload
+
+    def commit_tree(self, commit_id: str) -> str:
+        payload = self.read_object(commit_id, "commit")
+        header_block = payload.split(b"\n\n", 1)[0]
+        lines = header_block.split(b"\n")
+        trees = [line[5:] for line in lines if line.startswith(b"tree ")]
+        if len(trees) != 1 or not lines or lines[0] != b"tree " + trees[0]:
+            fail("Git commit has malformed or ambiguous tree binding")
+        try:
+            tree_id = trees[0].decode("ascii")
+        except UnicodeDecodeError:
+            fail("Git commit tree ID is not ASCII")
+        if COMMIT_RE.fullmatch(tree_id) is None:
+            fail("Git commit tree ID is malformed")
+        return tree_id
+
+    def parse_tree(self, tree_id: str) -> list[GitTreeEntry]:
+        payload = self.read_object(tree_id, "tree")
+        self.tree_bytes += len(payload)
+        if self.tree_bytes > self.profile.source_index_limit:
+            fail("Git tree bytes exceed protected index limit")
+        output: list[GitTreeEntry] = []
+        position = 0
+        previous_key: bytes | None = None
+        seen_names: set[bytes] = set()
+        while position < len(payload):
+            space = payload.find(b" ", position, min(len(payload), position + 8))
+            nul = payload.find(b"\0", space + 1, min(len(payload), space + 258))
+            if space < 0 or nul < 0 or nul + 21 > len(payload):
+                fail("Git tree object is structurally malformed")
+            mode_raw = payload[position:space]
+            name_raw = payload[space + 1 : nul]
+            object_id = payload[nul + 1 : nul + 21].hex()
+            position = nul + 21
+            directory = mode_raw == b"40000"
+            if mode_raw not in (b"40000", b"100644", b"100755"):
+                fail("Git tree contains a symlink, submodule, or unsupported mode")
+            if (
+                not name_raw
+                or len(name_raw) > 255
+                or name_raw in (b".", b"..", b".git")
+                or b"/" in name_raw
+                or b"\n" in name_raw
+                or b"\r" in name_raw
+                or name_raw in seen_names
+            ):
+                fail("Git tree contains an unsafe or duplicate name")
+            try:
+                name = name_raw.decode("ascii")
+            except UnicodeDecodeError:
+                fail("Git tree path is not canonical ASCII")
+            if re.fullmatch(r"[A-Za-z0-9._+:-]{1,255}", name) is None:
+                fail("Git tree path contains unsupported characters")
+            ordering_key = name_raw + (b"/" if directory else b"")
+            if previous_key is not None and ordering_key <= previous_key:
+                fail("Git tree entries are not in canonical order")
+            previous_key = ordering_key
+            seen_names.add(name_raw)
+            output.append(
+                GitTreeEntry(name, mode_raw.decode("ascii"), object_id, directory)
+            )
+        return output
+
+    def export_tree(self, tree_id: str) -> list[tuple[str, str, str, bytes]]:
+        output: list[tuple[str, str, str, bytes]] = []
+        active: set[str] = set()
+        directory_count = 0
+
+        def visit(object_id: str, prefix: str, depth: int) -> None:
+            nonlocal directory_count
+            if depth > self.profile.git_tree_depth_limit:
+                fail("Git tree depth exceeds protected limit")
+            if object_id in active:
+                fail("Git tree closure contains a cycle")
+            active.add(object_id)
+            try:
+                for entry in self.parse_tree(object_id):
+                    path = entry.name if not prefix else f"{prefix}/{entry.name}"
+                    if len(path) > 512:
+                        fail("Git source path exceeds protected limit")
+                    if entry.directory:
+                        directory_count += 1
+                        if directory_count > MAX_SOURCE_DIRECTORIES:
+                            fail("Git source directory count exceeds protected limit")
+                        visit(entry.object_id, path, depth + 1)
+                    else:
+                        if len(output) >= self.profile.source_file_limit:
+                            fail("Git source file count exceeds protected limit")
+                        payload = self.read_object(entry.object_id, "blob")
+                        output.append((path, entry.mode, entry.object_id, payload))
+            finally:
+                active.remove(object_id)
+
+        visit(tree_id, "", 0)
+        output.sort(key=lambda item: item[0])
+        if not output or len({item[0] for item in output}) != len(output):
+            fail("Git source closure is empty or contains duplicate paths")
+        return output
 
 
 def open_child_directory(parent_fd: int, component: str) -> int:
@@ -2416,35 +2739,20 @@ def stage_output(profile: Profile, lease_name: str) -> OutputStage:
 
 
 def stage_source(profile: Profile, request: Request, lease_name: str) -> SourceSnapshot:
-    verify_regular(
-        Path(profile.git_path),
-        str(profile.git_size),
-        profile.git_digest,
-        "Git executable",
-    )
-    version = run_bounded(
-        [profile.git_path, "--version"],
-        label="Git version",
-        environment={"HOME": "/nonexistent", "LC_ALL": "C", "PATH": "/nonexistent"},
-        timeout_seconds=15,
-        stdout_limit=4096,
-        stderr_limit=4096,
-    )
-    if (
-        version.returncode
-        or version.stderr
-        or sha256_bytes(version.stdout) != profile.git_version_digest
-    ):
-        fail("Git executable version differs from protected profile")
-    objects = Path(profile.git_objects_path)
     staging_root = Path(profile.source_staging_root)
-    if (
-        objects.is_symlink()
-        or not objects.is_dir()
-        or staging_root.is_symlink()
-        or not staging_root.is_dir()
-    ):
-        fail("immutable source object or staging root is unsafe")
+    if staging_root.is_symlink() or not staging_root.is_dir():
+        fail("source staging root is unsafe")
+    store = GitLooseObjectStore.open(profile)
+    try:
+        commit_tree = store.commit_tree(request.source_commit)
+        if commit_tree != request.source_tree:
+            fail("source commit/tree binding differs from authenticated object store")
+        entries = store.export_tree(request.source_tree)
+    finally:
+        store.close()
+    source_total = sum(len(content) for _, _, _, content in entries)
+    if source_total > profile.source_byte_limit:
+        fail("Git source bytes exceed protected limit")
     staging_root_fd = open_staging_root(profile, staging_root, "source staging root")
     root_fd = -1
     snapshot_fd = -1
@@ -2456,7 +2764,6 @@ def stage_source(profile: Profile, request: Request, lease_name: str) -> SourceS
     request_name = "request.tsv"
     lease_path = staging_root / lease_name
     snapshot_path = lease_path / snapshot_name
-    control = lease_path / "git-control"
     try:
         os.mkdir(lease_name, 0o700, dir_fd=staging_root_fd)
         lease_created = True
@@ -2473,37 +2780,6 @@ def stage_source(profile: Profile, request: Request, lease_name: str) -> SourceS
             os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
             dir_fd=root_fd,
         )
-        initialize_git_control(control)
-        commit = git_object_command(
-            profile,
-            control,
-            ["cat-file", "commit", request.source_commit],
-            label="Git commit read",
-            stdout_limit=MAX_FILE_BYTES,
-        )
-        first_line = commit.split(b"\n", 1)[0]
-        if first_line != f"tree {request.source_tree}".encode("ascii"):
-            fail("source commit/tree binding differs from immutable object store")
-        raw_index = git_object_command(
-            profile,
-            control,
-            ["ls-tree", "-rz", "--full-tree", "-r", request.source_tree],
-            label="Git tree index",
-            stdout_limit=profile.source_index_limit,
-        )
-        entries = parse_tree_index(profile, raw_index)
-        batch_input = b"".join(
-            f"{object_id}\n".encode("ascii") for _, _, object_id in entries
-        )
-        raw_blobs = git_object_command(
-            profile,
-            control,
-            ["cat-file", "--batch"],
-            label="Git blob batch",
-            stdout_limit=profile.source_byte_limit + len(entries) * 128,
-            input_data=batch_input,
-        )
-        blobs = parse_blob_batch(profile, entries, raw_blobs)
         manifest_lines = [
             "source_snapshot_manifest_schema_version\t1",
             f"request_id\t{request.request_id}",
@@ -2514,9 +2790,7 @@ def stage_source(profile: Profile, request: Request, lease_name: str) -> SourceS
         total = 0
         job_found = False
         directories: set[str] = set()
-        for index, ((path, mode, object_id), content) in enumerate(
-            zip(entries, blobs, strict=True)
-        ):
+        for index, (path, mode, object_id, content) in enumerate(entries):
             file_size, digest = write_snapshot_file(snapshot_fd, path, mode, content)
             total += file_size
             parent = Path(path).parent
@@ -2563,10 +2837,6 @@ def stage_source(profile: Profile, request: Request, lease_name: str) -> SourceS
             os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
             dir_fd=root_fd,
         )
-        try:
-            shutil.rmtree(control)
-        except OSError as error:
-            fail(f"cannot remove transient Git control directory: {error}")
         finalize_source_directories(snapshot_fd, directories, root_fd)
         identity = os.fstat(snapshot_fd)
         request_identity = os.fstat(request_fd)
@@ -2675,14 +2945,7 @@ def authorize(args: argparse.Namespace) -> AuthorizedRequest:
         allow_root=True,
     )
     verify_operator_owned(
-        Path(profile.git_path),
-        profile,
-        "Git executable",
-        directory=False,
-        allow_root=True,
-    )
-    verify_operator_owned(
-        Path(profile.git_objects_path), profile, "Git objects", directory=True
+        Path(profile.git_objects_path), profile, "Git object store", directory=True
     )
     verify_operator_owned(
         Path(profile.source_staging_root),

@@ -72,7 +72,7 @@ write_profile() {
   local layer_digest="$5"
   local layer_size="$6"
   cat >"${PROFILE}" <<EOF
-oci_executor_profile_schema_version	1
+oci_executor_profile_schema_version	2
 profile_id	mi300x-test-v1
 execution_mode	test
 target	gfx942
@@ -82,18 +82,17 @@ runtime_size	$(size "${RUNTIME}")
 runtime_sha256	$(sha256 "${RUNTIME}")
 runtime_version_sha256	3333333333333333333333333333333333333333333333333333333333333333
 runtime_info_sha256	4444444444444444444444444444444444444444444444444444444444444444
-git_path	${GIT}
-git_size	$(size "${GIT}")
-git_sha256	$(sha256 "${GIT}")
-git_version_sha256	$(env -i HOME=/nonexistent LC_ALL=C PATH=/nonexistent "${GIT}" --version | sha256sum | cut -d' ' -f1)
 git_objects_path	${SOURCE_REPO}/.git/objects
+git_object_format	sha1-loose
+git_object_limit	4096
+git_object_bytes_limit	33554432
+git_tree_depth_limit	64
 source_staging_root	${SOURCE_STAGING}
 output_staging_root	${OUTPUT_STAGING}
 artifact_stream_protocol	fe2o3-artifact-stream-v1
 source_file_limit	1024
 source_byte_limit	16777216
 source_index_limit	1048576
-source_export_timeout_seconds	30
 operator_uid	$(id -u)
 operator_gid	$(id -g)
 oci_layout_path	${OCI_LAYOUT}
@@ -314,6 +313,98 @@ if find "${SOURCE_STAGING}" "${OUTPUT_STAGING}" -mindepth 1 -print -quit | grep 
 fi
 git -C "${SOURCE_REPO}" -c core.fsmonitor=false checkout -q -- \
   scripts/evidence/jobs/row-04.sh
+
+job_object_id="$(git -C "${SOURCE_REPO}" rev-parse \
+  'HEAD:scripts/evidence/jobs/row-04.sh')"
+job_object="${SOURCE_REPO}/.git/objects/${job_object_id:0:2}/${job_object_id:2}"
+cp "${job_object}" "${TEST_ROOT}/job-object.good"
+chmod 644 "${job_object}"
+python3 - "${job_object}" <<'PY'
+from pathlib import Path
+import sys
+import zlib
+
+path = Path(sys.argv[1])
+expanded = zlib.decompress(path.read_bytes())
+header, payload = expanded.split(b"\0", 1)
+assert payload
+mutated = bytes([payload[0] ^ 1]) + payload[1:]
+path.write_bytes(zlib.compress(header + b"\0" + mutated))
+PY
+expect_failure git_same_oid_mutation 'Git object ID, kind, or size mismatch' plan
+cp "${TEST_ROOT}/job-object.good" "${job_object}"
+chmod 444 "${job_object}"
+
+printf '%s\n' "${TEST_ROOT}/alternate-objects" \
+  >"${SOURCE_REPO}/.git/objects/info/alternates"
+expect_failure git_alternates 'Git alternates, packed objects' plan
+rm "${SOURCE_REPO}/.git/objects/info/alternates"
+
+GIT_ALTERNATE_OBJECT_DIRECTORIES="${TEST_ROOT}/alternate-objects" \
+  expect_failure git_alternates_environment \
+    'Git object-store indirection environment is forbidden' plan
+GIT_OBJECT_DIRECTORY='' \
+  expect_failure empty_git_object_environment \
+    'Git object-store indirection environment is forbidden' plan
+
+ln "${job_object}" "${TEST_ROOT}/job-object.hardlink"
+expect_failure git_object_hardlink 'ownership, mode, type, or link contract is unsafe' plan
+rm "${TEST_ROOT}/job-object.hardlink"
+
+mv "${job_object}" "${TEST_ROOT}/job-object.real"
+ln -s "${TEST_ROOT}/job-object.real" "${job_object}"
+expect_failure git_object_symlink 'cannot read Git object' plan
+rm "${job_object}"
+mv "${TEST_ROOT}/job-object.real" "${job_object}"
+
+chmod 666 "${job_object}"
+expect_failure git_object_mode_drift 'ownership, mode, type, or link contract is unsafe' plan
+chmod 444 "${job_object}"
+
+printf 'unsafe pack\n' >"${SOURCE_REPO}/.git/objects/pack/pack-fixture.pack"
+expect_failure git_pack 'packed objects, indexes' plan
+rm "${SOURCE_REPO}/.git/objects/pack/pack-fixture.pack"
+
+printf '%s %s\n' "${source_commit}" "${source_commit}" \
+  >"${SOURCE_REPO}/.git/info/grafts"
+expect_failure git_grafts 'Git grafts are forbidden' plan
+rm "${SOURCE_REPO}/.git/info/grafts"
+
+mkdir "${SOURCE_REPO}/.git/refs/replace"
+expect_failure git_replace_refs 'Git replace refs are forbidden' plan
+rmdir "${SOURCE_REPO}/.git/refs/replace"
+
+cp "${SOURCE_REPO}/.git/config" "${TEST_ROOT}/git-config.good"
+printf '\n[extensions]\n\tpartialClone = fixture\n' \
+  >>"${SOURCE_REPO}/.git/config"
+expect_failure git_partial_clone 'Git partial-clone configuration is forbidden' plan
+cp "${TEST_ROOT}/git-config.good" "${SOURCE_REPO}/.git/config"
+
+cp "${PROFILE}" "${TEST_ROOT}/profile.object-store.good"
+sed -i 's/git_object_limit\t4096/git_object_limit\t1/' "${PROFILE}"
+write_policy
+expect_failure git_object_count 'Git object count exceeds protected limit' plan
+cp "${TEST_ROOT}/profile.object-store.good" "${PROFILE}"
+write_policy
+
+sed -i 's/git_object_bytes_limit\t33554432/git_object_bytes_limit\t1/' "${PROFILE}"
+write_policy
+expect_failure git_object_bytes 'Git compressed object bytes exceed protected limit' plan
+cp "${TEST_ROOT}/profile.object-store.good" "${PROFILE}"
+write_policy
+
+sed -i 's/source_index_limit\t1048576/source_index_limit\t1/' "${PROFILE}"
+write_policy
+expect_failure git_index_bytes 'Git tree bytes exceed protected index limit' plan
+cp "${TEST_ROOT}/profile.object-store.good" "${PROFILE}"
+write_policy
+
+sed -i 's/git_tree_depth_limit\t64/git_tree_depth_limit\t2/' "${PROFILE}"
+write_policy
+expect_failure git_tree_depth 'Git tree depth exceeds protected limit' plan
+cp "${TEST_ROOT}/profile.object-store.good" "${PROFILE}"
+write_policy
+
 PYTHONDONTWRITEBYTECODE=1 python3 - "${EXECUTOR}" "${SOURCE_STAGING}" \
   "${OUTPUT_STAGING}" <<'PY'
 import importlib.util
@@ -669,16 +760,6 @@ finally:
     module.os.write = real_write
     os.close(write_fd)
     os.close(read_fd)
-
-blocked = source_root / "control-parent-file"
-blocked.write_bytes(b"not a directory")
-try:
-    module.initialize_git_control(blocked / "git-control")
-except module.ExecutorError as error:
-    assert "cannot initialize transient Git control directory" in str(error)
-else:
-    raise AssertionError("Git control filesystem failure escaped or was accepted")
-blocked.unlink()
 
 real_output_root = profile.output_staging_root
 profile.output_staging_root = str(output_root / "missing")
