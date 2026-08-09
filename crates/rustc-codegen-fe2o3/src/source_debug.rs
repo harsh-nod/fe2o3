@@ -4,8 +4,9 @@ use crate::AmdGpuTarget;
 use crate::collector::{AuthenticatedKernelOwner, CollectionResult, TypedKernelProfile};
 use crate::mir_import::MirSemanticAdmissionInputsV2;
 use crate::s09_identity_v2::{
-    BuildObservationFieldsV2, BuildObservationV2, IdentityCodecErrorV2, IdentityHandoffV2,
-    S09_IDENTITY_SECTION_V2, SemanticAdmissionFieldsV2, SemanticAdmissionV2,
+    BuildIdentityClaimFieldsV2, BuildIdentityClaimV2, DecodedIdentityHandoffV2,
+    IdentityCodecErrorV2, S09_IDENTITY_SECTION_V2, SemanticIdentityClaimFieldsV2,
+    SemanticIdentityClaimV2,
 };
 use fe2o3_artifacts::{
     AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership, BlockSize, Capability,
@@ -73,18 +74,18 @@ pub(crate) struct AlphaSourceDebugV2 {
     function_line: usize,
     index_line: usize,
     local_line: usize,
-    semantic_admission: SemanticAdmissionV2,
-    build_observation: BuildObservationV2,
-    identity_handoff: IdentityHandoffV2,
+    semantic_claim: SemanticIdentityClaimV2,
+    build_claim: BuildIdentityClaimV2,
+    identity_handoff: DecodedIdentityHandoffV2,
 }
 
 impl AlphaSourceDebugV2 {
-    pub(crate) const fn semantic_admission(&self) -> &SemanticAdmissionV2 {
-        &self.semantic_admission
+    pub(crate) const fn semantic_claim(&self) -> &SemanticIdentityClaimV2 {
+        &self.semantic_claim
     }
 
-    pub(crate) const fn build_observation(&self) -> &BuildObservationV2 {
-        &self.build_observation
+    pub(crate) const fn build_claim(&self) -> &BuildIdentityClaimV2 {
+        &self.build_claim
     }
 
     pub(crate) fn identity_handoff(&self) -> &[u8] {
@@ -282,28 +283,28 @@ pub(crate) fn collect_requested_profile<'tcx>(
         .expect("S09 source path has a directory");
     validate_metadata_string(source_directory, "source directory")?;
     validate_metadata_string(source_file, "source file")?;
-    let semantic_admission =
-        build_semantic_admission_v2(contract.abi(), contract.launch(), portable_mir_sha256)?;
+    let semantic_claim =
+        build_semantic_claim_v2(contract.abi(), contract.launch(), portable_mir_sha256)?;
     let rustc_mir_capture_sha256 =
         crate::mir_import_v2::capture_observation_sha256_v2(tcx, owner.target()).map_err(
             |error| SourceDebugError::new(format!("S09 rustc MIR V2 capture failed: {error}")),
         )?;
-    let build_observation = build_observation_v2(
+    let build_claim = build_identity_claim_v2(
         owner,
         def_path,
         rustc_mir_capture_sha256,
-        *semantic_admission.identity_sha256(),
+        *semantic_claim.identity_sha256(),
     )?;
     let identity_handoff =
-        IdentityHandoffV2::new(semantic_admission.clone(), build_observation.clone())?;
+        DecodedIdentityHandoffV2::from_claims(semantic_claim.clone(), build_claim.clone())?;
     Ok(Some(AlphaSourceDebugV2 {
         source_file: source_file.to_owned(),
         source_directory: source_directory.to_owned(),
         function_line: function.line,
         index_line: index_location.line,
         local_line: local_location.line,
-        semantic_admission,
-        build_observation,
+        semantic_claim,
+        build_claim,
         identity_handoff,
     }))
 }
@@ -353,13 +354,13 @@ fn s09_target_identity(target: &AmdGpuTarget) -> Result<TargetIdentity, SourceDe
     .map_err(|error| SourceDebugError::new(format!("invalid S09 target policy: {error}")))
 }
 
-fn build_semantic_admission_v2(
+fn build_semantic_claim_v2(
     abi: &AbiLayout,
     launch: &LaunchContract,
     portable_mir_sha256: [u8; 32],
-) -> Result<SemanticAdmissionV2, SourceDebugError> {
-    Ok(SemanticAdmissionV2::from_fields(
-        SemanticAdmissionFieldsV2 {
+) -> Result<SemanticIdentityClaimV2, SourceDebugError> {
+    Ok(SemanticIdentityClaimV2::from_fields(
+        SemanticIdentityClaimFieldsV2 {
             crate_name: S09_CRATE_NAME,
             module: S09_MODULE_PATH,
             logical_name: S09_LOGICAL_NAME,
@@ -381,12 +382,12 @@ fn build_semantic_admission_v2(
     )?)
 }
 
-fn build_observation_v2(
+fn build_identity_claim_v2(
     owner: &AuthenticatedKernelOwner<rustc_middle::ty::Instance<'_>>,
     observed_def_path: String,
     rustc_mir_capture_sha256: [u8; 32],
     semantic_identity_sha256: [u8; 32],
-) -> Result<BuildObservationV2, SourceDebugError> {
+) -> Result<BuildIdentityClaimV2, SourceDebugError> {
     let cargo_metadata_sha256 =
         required_digest_environment(CARGO_METADATA_BUILD_OBSERVATION_ENV_V2)?;
     let codegen_backend_sha256 =
@@ -417,27 +418,29 @@ fn build_observation_v2(
         observed_text_sha256_v2(b"FE2O3/S09-LLVM-BUILD-IDENTITY/V2\0", &llvm_build_identity);
     let rustc_executable_sha256 = running_rustc_sha256()?;
     let observed_symbol = owner.observed_symbol().to_owned();
-    Ok(BuildObservationV2::from_fields(BuildObservationFieldsV2 {
-        semantic_admission_sha256: semantic_identity_sha256,
-        cargo_metadata_sha256,
-        crate_binding: owner.crate_binding().as_bytes(),
-        kernel_binding: owner.kernel_binding().as_bytes(),
-        observed_def_path: &observed_def_path,
-        observed_symbol: &observed_symbol,
-        rustc_mir_capture_sha256,
-        prepared_rustc_command_sha256,
-        rustc_executable_sha256,
-        cargo_fe2o3_executable_sha256,
-        declared_cargo_executable_sha256,
-        cargo_launcher_executable_sha256,
-        cargo_launcher_pid,
-        cargo_launcher_start_time_ticks,
-        codegen_backend_sha256,
-        worker_config_sha256,
-        worker_executable_sha256,
-        worker_build_identity_sha256,
-        llvm_build_identity_sha256,
-    })?)
+    Ok(BuildIdentityClaimV2::from_fields(
+        BuildIdentityClaimFieldsV2 {
+            semantic_claim_sha256: semantic_identity_sha256,
+            cargo_metadata_sha256,
+            crate_binding: owner.crate_binding().as_bytes(),
+            kernel_binding: owner.kernel_binding().as_bytes(),
+            observed_def_path: &observed_def_path,
+            observed_symbol: &observed_symbol,
+            rustc_mir_capture_sha256,
+            prepared_rustc_command_sha256,
+            rustc_executable_sha256,
+            cargo_fe2o3_executable_sha256,
+            declared_cargo_executable_sha256,
+            cargo_launcher_executable_sha256,
+            cargo_launcher_pid,
+            cargo_launcher_start_time_ticks,
+            codegen_backend_sha256,
+            worker_config_sha256,
+            worker_executable_sha256,
+            worker_build_identity_sha256,
+            llvm_build_identity_sha256,
+        },
+    )?)
 }
 
 fn required_digest_environment(name: &'static str) -> Result<[u8; 32], SourceDebugError> {
@@ -1551,7 +1554,7 @@ mod tests {
     ];
 
     fn profile() -> AlphaSourceDebugV2 {
-        let semantic_admission = SemanticAdmissionV2::from_fields(SemanticAdmissionFieldsV2 {
+        let semantic_claim = SemanticIdentityClaimV2::from_fields(SemanticIdentityClaimFieldsV2 {
             crate_name: S09_CRATE_NAME,
             module: S09_MODULE_PATH,
             logical_name: S09_LOGICAL_NAME,
@@ -1571,8 +1574,8 @@ mod tests {
             portable_mir_sha256: [0x31; 32],
         })
         .unwrap();
-        let build_observation = BuildObservationV2::from_fields(BuildObservationFieldsV2 {
-            semantic_admission_sha256: *semantic_admission.identity_sha256(),
+        let build_claim = BuildIdentityClaimV2::from_fields(BuildIdentityClaimFieldsV2 {
+            semantic_claim_sha256: *semantic_claim.identity_sha256(),
             cargo_metadata_sha256: [0x32; 32],
             crate_binding: [0x33; 32],
             kernel_binding: [0x34; 32],
@@ -1594,7 +1597,8 @@ mod tests {
         })
         .unwrap();
         let identity_handoff =
-            IdentityHandoffV2::new(semantic_admission.clone(), build_observation.clone()).unwrap();
+            DecodedIdentityHandoffV2::from_claims(semantic_claim.clone(), build_claim.clone())
+                .unwrap();
         AlphaSourceDebugV2 {
             source_file: "main.rs".to_owned(),
             source_directory: "crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src"
@@ -1602,8 +1606,8 @@ mod tests {
             function_line: S09_FUNCTION_LINE,
             index_line: S09_INDEX_LINE,
             local_line: S09_LOCAL_LINE,
-            semantic_admission,
-            build_observation,
+            semantic_claim,
+            build_claim,
             identity_handoff,
         }
     }

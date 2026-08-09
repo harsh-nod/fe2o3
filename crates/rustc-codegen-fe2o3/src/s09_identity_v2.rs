@@ -1,12 +1,17 @@
-//! Canonical, bounded S09 semantic-admission and build-observation records.
+//! Canonical, bounded, inert S09 identity claims.
+//!
+//! The embedded handoff contains one 18-field semantic claim and one 20-field
+//! build claim, with exact manifest digests for both records. Decoding grants
+//! no authority. HSACO decoding first delegates envelope and metadata checks
+//! to `fe2o3_hsaco::inspect`, then checks exact gfx942:xnack- claim linkage.
 
 use sha2::{Digest, Sha256};
 use std::error::Error;
 use std::fmt;
 
 pub const S09_IDENTITY_SECTION_V2: &str = ".fe2o3.s09.identity.v2";
-pub const SEMANTIC_SCHEMA_V2: &str = "fe2o3-s09-semantic-admission-v2";
-pub const BUILD_SCHEMA_V2: &str = "fe2o3-s09-build-observation-v2";
+pub const SEMANTIC_SCHEMA_V2: &str = "fe2o3-s09-semantic-identity-claim-v2";
+pub const BUILD_SCHEMA_V2: &str = "fe2o3-s09-build-identity-claim-v2";
 pub const MAX_HANDOFF_BYTES_V2: usize = 64 * 1024;
 pub const MAX_RECORD_BYTES_V2: usize = 16 * 1024;
 pub const MAX_FIELD_NAME_BYTES_V2: usize = 64;
@@ -21,7 +26,7 @@ const ELF64_SECTION_HEADER_BYTES: usize = 64;
 const SHT_PROGBITS: u32 = 1;
 const SHT_STRTAB: u32 = 3;
 
-const SEMANTIC_FIELDS_V2: [&str; 18] = [
+const SEMANTIC_CLAIM_FIELDS_V2: [&str; 18] = [
     "schema",
     "crate",
     "module",
@@ -42,9 +47,9 @@ const SEMANTIC_FIELDS_V2: [&str; 18] = [
     "portable_mir_sha256",
 ];
 
-const BUILD_FIELDS_V2: [&str; 20] = [
+const BUILD_CLAIM_FIELDS_V2: [&str; 20] = [
     "schema",
-    "semantic_admission_sha256",
+    "semantic_claim_sha256",
     "cargo_metadata_sha256",
     "crate_binding",
     "kernel_binding",
@@ -82,7 +87,7 @@ impl fmt::Display for IdentityCodecErrorV2 {
 
 impl Error for IdentityCodecErrorV2 {}
 
-pub(crate) struct SemanticAdmissionFieldsV2<'a> {
+pub(crate) struct SemanticIdentityClaimFieldsV2<'a> {
     pub(crate) crate_name: &'a str,
     pub(crate) module: &'a str,
     pub(crate) logical_name: &'a str,
@@ -103,7 +108,7 @@ pub(crate) struct SemanticAdmissionFieldsV2<'a> {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SemanticAdmissionV2 {
+pub struct SemanticIdentityClaimV2 {
     canonical_bytes: Vec<u8>,
     identity_sha256: [u8; 32],
     crate_name: String,
@@ -125,9 +130,9 @@ pub struct SemanticAdmissionV2 {
     portable_mir_sha256: [u8; 32],
 }
 
-impl SemanticAdmissionV2 {
+impl SemanticIdentityClaimV2 {
     pub(crate) fn from_fields(
-        fields: SemanticAdmissionFieldsV2<'_>,
+        fields: SemanticIdentityClaimFieldsV2<'_>,
     ) -> Result<Self, IdentityCodecErrorV2> {
         let encoded = encode_fields(&[
             ("schema", SEMANTIC_SCHEMA_V2.to_owned()),
@@ -159,7 +164,7 @@ impl SemanticAdmissionV2 {
     }
 
     fn decode_record(bytes: &[u8]) -> Result<Self, IdentityCodecErrorV2> {
-        let fields = decode_fields(bytes, &SEMANTIC_FIELDS_V2, "semantic admission")?;
+        let fields = decode_fields(bytes, &SEMANTIC_CLAIM_FIELDS_V2, "semantic identity claim")?;
         require_exact(fields[0], SEMANTIC_SCHEMA_V2, "semantic schema")?;
         let source_sha256 = decode_digest(fields[7], "source_sha256")?;
         let source_bytes = decode_decimal(fields[8], "source_bytes", false)?;
@@ -268,8 +273,8 @@ impl SemanticAdmissionV2 {
     }
 }
 
-pub(crate) struct BuildObservationFieldsV2<'a> {
-    pub(crate) semantic_admission_sha256: [u8; 32],
+pub(crate) struct BuildIdentityClaimFieldsV2<'a> {
+    pub(crate) semantic_claim_sha256: [u8; 32],
     pub(crate) cargo_metadata_sha256: [u8; 32],
     pub(crate) crate_binding: [u8; 32],
     pub(crate) kernel_binding: [u8; 32],
@@ -291,10 +296,10 @@ pub(crate) struct BuildObservationFieldsV2<'a> {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct BuildObservationV2 {
+pub struct BuildIdentityClaimV2 {
     canonical_bytes: Vec<u8>,
     identity_sha256: [u8; 32],
-    semantic_admission_sha256: [u8; 32],
+    semantic_claim_sha256: [u8; 32],
     cargo_metadata_sha256: [u8; 32],
     crate_binding: [u8; 32],
     kernel_binding: [u8; 32],
@@ -315,16 +320,13 @@ pub struct BuildObservationV2 {
     llvm_build_identity_sha256: [u8; 32],
 }
 
-impl BuildObservationV2 {
+impl BuildIdentityClaimV2 {
     pub(crate) fn from_fields(
-        fields: BuildObservationFieldsV2<'_>,
+        fields: BuildIdentityClaimFieldsV2<'_>,
     ) -> Result<Self, IdentityCodecErrorV2> {
         let encoded = encode_fields(&[
             ("schema", BUILD_SCHEMA_V2.to_owned()),
-            (
-                "semantic_admission_sha256",
-                hex(&fields.semantic_admission_sha256),
-            ),
+            ("semantic_claim_sha256", hex(&fields.semantic_claim_sha256)),
             ("cargo_metadata_sha256", hex(&fields.cargo_metadata_sha256)),
             ("crate_binding", hex(&fields.crate_binding)),
             ("kernel_binding", hex(&fields.kernel_binding)),
@@ -381,12 +383,12 @@ impl BuildObservationV2 {
     }
 
     fn decode_record(bytes: &[u8]) -> Result<Self, IdentityCodecErrorV2> {
-        let fields = decode_fields(bytes, &BUILD_FIELDS_V2, "build observation")?;
+        let fields = decode_fields(bytes, &BUILD_CLAIM_FIELDS_V2, "build identity claim")?;
         require_exact(fields[0], BUILD_SCHEMA_V2, "build schema")?;
         Ok(Self {
             canonical_bytes: bytes.to_vec(),
             identity_sha256: Sha256::digest(bytes).into(),
-            semantic_admission_sha256: decode_digest(fields[1], "semantic_admission_sha256")?,
+            semantic_claim_sha256: decode_digest(fields[1], "semantic_claim_sha256")?,
             cargo_metadata_sha256: decode_digest(fields[2], "cargo_metadata_sha256")?,
             crate_binding: decode_digest(fields[3], "crate_binding")?,
             kernel_binding: decode_digest(fields[4], "kernel_binding")?,
@@ -435,8 +437,8 @@ impl BuildObservationV2 {
         &self.identity_sha256
     }
 
-    pub const fn semantic_admission_sha256(&self) -> &[u8; 32] {
-        &self.semantic_admission_sha256
+    pub const fn semantic_claim_sha256(&self) -> &[u8; 32] {
+        &self.semantic_claim_sha256
     }
 
     pub const fn cargo_metadata_sha256(&self) -> &[u8; 32] {
@@ -512,38 +514,47 @@ impl BuildObservationV2 {
     }
 }
 
+/// Bounded identity claims decoded from an inert handoff.
+///
+/// Decoding proves canonical syntax and internal digest linkage only. It does
+/// not authenticate the containing artifact or admit any claim as true.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct IdentityHandoffV2 {
+pub struct DecodedIdentityHandoffV2 {
     canonical_bytes: Vec<u8>,
-    semantic_admission: SemanticAdmissionV2,
-    build_observation: BuildObservationV2,
+    semantic_claim_sha256: [u8; 32],
+    build_claim_sha256: [u8; 32],
+    semantic_claim: SemanticIdentityClaimV2,
+    build_claim: BuildIdentityClaimV2,
 }
 
-impl IdentityHandoffV2 {
-    pub(crate) fn new(
-        semantic_admission: SemanticAdmissionV2,
-        build_observation: BuildObservationV2,
+impl DecodedIdentityHandoffV2 {
+    pub(crate) fn from_claims(
+        semantic_claim: SemanticIdentityClaimV2,
+        build_claim: BuildIdentityClaimV2,
     ) -> Result<Self, IdentityCodecErrorV2> {
-        if build_observation.semantic_admission_sha256() != semantic_admission.identity_sha256() {
+        if build_claim.semantic_claim_sha256() != semantic_claim.identity_sha256() {
             return Err(IdentityCodecErrorV2::new(
-                "build observation does not bind the semantic admission identity",
+                "build identity claim does not bind the semantic identity claim",
             ));
         }
-        let semantic_len = u32::try_from(semantic_admission.canonical_bytes().len())
-            .map_err(|_| IdentityCodecErrorV2::new("semantic admission record is too large"))?;
-        let observation_len = u32::try_from(build_observation.canonical_bytes().len())
-            .map_err(|_| IdentityCodecErrorV2::new("build observation record is too large"))?;
+        let semantic_len = u32::try_from(semantic_claim.canonical_bytes().len())
+            .map_err(|_| IdentityCodecErrorV2::new("semantic claim record is too large"))?;
+        let build_len = u32::try_from(build_claim.canonical_bytes().len())
+            .map_err(|_| IdentityCodecErrorV2::new("build claim record is too large"))?;
         let mut bytes = Vec::with_capacity(
             HANDOFF_DOMAIN_V2.len()
+                + 64
                 + 8
-                + semantic_admission.canonical_bytes().len()
-                + build_observation.canonical_bytes().len(),
+                + semantic_claim.canonical_bytes().len()
+                + build_claim.canonical_bytes().len(),
         );
         bytes.extend_from_slice(HANDOFF_DOMAIN_V2);
+        bytes.extend_from_slice(semantic_claim.identity_sha256());
+        bytes.extend_from_slice(build_claim.identity_sha256());
         bytes.extend_from_slice(&semantic_len.to_le_bytes());
-        bytes.extend_from_slice(semantic_admission.canonical_bytes());
-        bytes.extend_from_slice(&observation_len.to_le_bytes());
-        bytes.extend_from_slice(build_observation.canonical_bytes());
+        bytes.extend_from_slice(semantic_claim.canonical_bytes());
+        bytes.extend_from_slice(&build_len.to_le_bytes());
+        bytes.extend_from_slice(build_claim.canonical_bytes());
         Self::decode(&bytes)
     }
 
@@ -559,24 +570,35 @@ impl IdentityHandoffV2 {
             ));
         }
         let mut offset = HANDOFF_DOMAIN_V2.len();
-        let semantic_bytes = take_record(bytes, &mut offset, "semantic admission")?;
-        let observation_bytes = take_record(bytes, &mut offset, "build observation")?;
+        let semantic_claim_sha256 = take_digest(bytes, &mut offset, "semantic_claim_sha256")?;
+        let build_claim_sha256 = take_digest(bytes, &mut offset, "build_claim_sha256")?;
+        let semantic_bytes = take_record(bytes, &mut offset, "semantic identity claim")?;
+        let build_bytes = take_record(bytes, &mut offset, "build identity claim")?;
         if offset != bytes.len() {
             return Err(IdentityCodecErrorV2::new(
                 "identity handoff has trailing bytes or records",
             ));
         }
-        let semantic_admission = SemanticAdmissionV2::decode_record(semantic_bytes)?;
-        let build_observation = BuildObservationV2::decode_record(observation_bytes)?;
-        if build_observation.semantic_admission_sha256() != semantic_admission.identity_sha256() {
+        let semantic_claim = SemanticIdentityClaimV2::decode_record(semantic_bytes)?;
+        let build_claim = BuildIdentityClaimV2::decode_record(build_bytes)?;
+        if semantic_claim_sha256 != *semantic_claim.identity_sha256()
+            || build_claim_sha256 != *build_claim.identity_sha256()
+        {
             return Err(IdentityCodecErrorV2::new(
-                "build observation does not bind the semantic admission identity",
+                "identity handoff manifest does not bind the exact claim records",
+            ));
+        }
+        if build_claim.semantic_claim_sha256() != semantic_claim.identity_sha256() {
+            return Err(IdentityCodecErrorV2::new(
+                "build identity claim does not bind the semantic identity claim",
             ));
         }
         Ok(Self {
             canonical_bytes: bytes.to_vec(),
-            semantic_admission,
-            build_observation,
+            semantic_claim_sha256,
+            build_claim_sha256,
+            semantic_claim,
+            build_claim,
         })
     }
 
@@ -584,12 +606,20 @@ impl IdentityHandoffV2 {
         &self.canonical_bytes
     }
 
-    pub const fn semantic_admission(&self) -> &SemanticAdmissionV2 {
-        &self.semantic_admission
+    pub const fn semantic_claim_sha256(&self) -> &[u8; 32] {
+        &self.semantic_claim_sha256
     }
 
-    pub const fn build_observation(&self) -> &BuildObservationV2 {
-        &self.build_observation
+    pub const fn build_claim_sha256(&self) -> &[u8; 32] {
+        &self.build_claim_sha256
+    }
+
+    pub const fn semantic_claim(&self) -> &SemanticIdentityClaimV2 {
+        &self.semantic_claim
+    }
+
+    pub const fn build_claim(&self) -> &BuildIdentityClaimV2 {
+        &self.build_claim
     }
 }
 
@@ -599,6 +629,13 @@ pub fn identity_section_v2(hsaco: &[u8]) -> Result<&[u8], IdentityCodecErrorV2> 
             "HSACO must contain 1 through {MAX_HSACO_BYTES_V2} bytes"
         )));
     }
+    fe2o3_hsaco::inspect(hsaco).map_err(|error| {
+        IdentityCodecErrorV2::new(format!("authoritative HSACO inspection failed: {error}"))
+    })?;
+    identity_section_after_hsaco_inspection_v2(hsaco)
+}
+
+fn identity_section_after_hsaco_inspection_v2(hsaco: &[u8]) -> Result<&[u8], IdentityCodecErrorV2> {
     if hsaco.len() < ELF64_HEADER_BYTES
         || &hsaco[..4] != b"\x7fELF"
         || hsaco[4] != 2
@@ -658,8 +695,7 @@ pub fn identity_section_v2(hsaco: &[u8]) -> Result<&[u8], IdentityCodecErrorV2> 
         let header = section_header(hsaco, section_offset, index)?;
         let name_offset = usize::try_from(read_u32(header, 0, "ELF section name offset")?)
             .map_err(|_| IdentityCodecErrorV2::new("ELF section name offset exceeds usize"))?;
-        let name = elf_string(strings, name_offset)?;
-        if name != S09_IDENTITY_SECTION_V2.as_bytes() {
+        if !elf_name_matches(strings, name_offset, S09_IDENTITY_SECTION_V2.as_bytes())? {
             continue;
         }
         if found.is_some() {
@@ -684,8 +720,47 @@ pub fn identity_section_v2(hsaco: &[u8]) -> Result<&[u8], IdentityCodecErrorV2> 
     found.ok_or_else(|| IdentityCodecErrorV2::new("HSACO has no S09 identity section"))
 }
 
-pub fn decode_hsaco_identity_v2(hsaco: &[u8]) -> Result<IdentityHandoffV2, IdentityCodecErrorV2> {
-    IdentityHandoffV2::decode(identity_section_v2(hsaco)?)
+pub fn decode_hsaco_identity_claims_v2(
+    hsaco: &[u8],
+) -> Result<DecodedIdentityHandoffV2, IdentityCodecErrorV2> {
+    if hsaco.is_empty() || hsaco.len() > MAX_HSACO_BYTES_V2 {
+        return Err(IdentityCodecErrorV2::new(format!(
+            "HSACO must contain 1 through {MAX_HSACO_BYTES_V2} bytes"
+        )));
+    }
+    let inspection = fe2o3_hsaco::inspect(hsaco).map_err(|error| {
+        IdentityCodecErrorV2::new(format!("authoritative HSACO inspection failed: {error}"))
+    })?;
+    let decoded =
+        DecodedIdentityHandoffV2::decode(identity_section_after_hsaco_inspection_v2(hsaco)?)?;
+    let semantic = decoded.semantic_claim();
+    let observed_target = inspection.target().to_string();
+    if semantic.target() != "gfx942:xnack-" || observed_target != semantic.target() {
+        return Err(IdentityCodecErrorV2::new(format!(
+            "S09 target claim must exactly match inspected gfx942:xnack-; claim {:?}, inspection {:?}",
+            semantic.target(),
+            observed_target
+        )));
+    }
+    if u16::from(inspection.code_object_version().number()) != semantic.code_object_version() {
+        return Err(IdentityCodecErrorV2::new(
+            "S09 code-object-version claim does not match inspected HSACO",
+        ));
+    }
+    let matching_kernels = inspection
+        .kernels()
+        .iter()
+        .filter(|kernel| {
+            kernel.name() == semantic.export_name()
+                && kernel.symbol() == format!("{}.kd", semantic.export_name())
+        })
+        .count();
+    if matching_kernels != 1 {
+        return Err(IdentityCodecErrorV2::new(format!(
+            "S09 export claim has {matching_kernels} exact metadata kernel linkages; expected one"
+        )));
+    }
+    Ok(decoded)
 }
 
 fn encode_fields(fields: &[(&str, String)]) -> Result<Vec<u8>, IdentityCodecErrorV2> {
@@ -863,6 +938,23 @@ fn take_record<'a>(
     Ok(record_bytes)
 }
 
+fn take_digest(
+    bytes: &[u8],
+    offset: &mut usize,
+    field: &str,
+) -> Result<[u8; 32], IdentityCodecErrorV2> {
+    let digest: [u8; 32] = checked_range(bytes, *offset, 32, field)?
+        .try_into()
+        .expect("checked 32-byte identity digest");
+    *offset += 32;
+    if digest == [0; 32] {
+        return Err(IdentityCodecErrorV2::new(format!(
+            "{field} must not be zero"
+        )));
+    }
+    Ok(digest)
+}
+
 fn section_header(
     bytes: &[u8],
     table_offset: usize,
@@ -880,18 +972,20 @@ fn section_header(
     )
 }
 
-fn elf_string(strings: &[u8], offset: usize) -> Result<&[u8], IdentityCodecErrorV2> {
+fn elf_name_matches(
+    strings: &[u8],
+    offset: usize,
+    expected: &[u8],
+) -> Result<bool, IdentityCodecErrorV2> {
     if offset >= strings.len() {
         return Err(IdentityCodecErrorV2::new(
             "ELF section name offset is out of bounds",
         ));
     }
-    let suffix = &strings[offset..];
-    let end = suffix
-        .iter()
-        .position(|byte| *byte == 0)
-        .ok_or_else(|| IdentityCodecErrorV2::new("ELF section name is unterminated"))?;
-    Ok(&suffix[..end])
+    let Some(end) = offset.checked_add(expected.len()) else {
+        return Ok(false);
+    };
+    Ok(strings.get(offset..end) == Some(expected) && strings.get(end) == Some(&0))
 }
 
 fn checked_range<'a>(
@@ -957,9 +1051,10 @@ const fn hex_nibble(byte: u8) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rmpv::{Value, encode::write_value};
 
-    fn semantic() -> SemanticAdmissionV2 {
-        SemanticAdmissionV2::from_fields(SemanticAdmissionFieldsV2 {
+    fn semantic() -> SemanticIdentityClaimV2 {
+        SemanticIdentityClaimV2::from_fields(SemanticIdentityClaimFieldsV2 {
             crate_name: "fixture",
             module: "module",
             logical_name: "alpha",
@@ -981,9 +1076,9 @@ mod tests {
         .unwrap()
     }
 
-    fn build(semantic: &SemanticAdmissionV2) -> BuildObservationV2 {
-        BuildObservationV2::from_fields(BuildObservationFieldsV2 {
-            semantic_admission_sha256: *semantic.identity_sha256(),
+    fn build(semantic: &SemanticIdentityClaimV2) -> BuildIdentityClaimV2 {
+        BuildIdentityClaimV2::from_fields(BuildIdentityClaimFieldsV2 {
+            semantic_claim_sha256: *semantic.identity_sha256(),
             cargo_metadata_sha256: [5; 32],
             crate_binding: [6; 32],
             kernel_binding: [7; 32],
@@ -1006,21 +1101,23 @@ mod tests {
         .unwrap()
     }
 
-    fn handoff() -> IdentityHandoffV2 {
+    fn handoff() -> DecodedIdentityHandoffV2 {
         let semantic = semantic();
         let build = build(&semantic);
-        IdentityHandoffV2::new(semantic, build).unwrap()
+        DecodedIdentityHandoffV2::from_claims(semantic, build).unwrap()
     }
 
     fn replace_record(
-        handoff: &IdentityHandoffV2,
+        handoff: &DecodedIdentityHandoffV2,
         semantic_record: Option<&[u8]>,
         build_record: Option<&[u8]>,
     ) -> Vec<u8> {
-        let semantic = semantic_record.unwrap_or(handoff.semantic_admission().canonical_bytes());
-        let build = build_record.unwrap_or(handoff.build_observation().canonical_bytes());
+        let semantic = semantic_record.unwrap_or(handoff.semantic_claim().canonical_bytes());
+        let build = build_record.unwrap_or(handoff.build_claim().canonical_bytes());
         let mut bytes = Vec::new();
         bytes.extend_from_slice(HANDOFF_DOMAIN_V2);
+        bytes.extend_from_slice(&Sha256::digest(semantic));
+        bytes.extend_from_slice(&Sha256::digest(build));
         bytes.extend_from_slice(&(semantic.len() as u32).to_le_bytes());
         bytes.extend_from_slice(semantic);
         bytes.extend_from_slice(&(build.len() as u32).to_le_bytes());
@@ -1067,36 +1164,135 @@ mod tests {
         result
     }
 
+    fn align(bytes: &mut Vec<u8>, alignment: usize) {
+        while !bytes.len().is_multiple_of(alignment) {
+            bytes.push(0);
+        }
+    }
+
+    fn hidden_arguments(base: u64) -> Vec<Value> {
+        [
+            (0, 4, "hidden_block_count_x"),
+            (4, 4, "hidden_block_count_y"),
+            (8, 4, "hidden_block_count_z"),
+            (12, 2, "hidden_group_size_x"),
+            (14, 2, "hidden_group_size_y"),
+            (16, 2, "hidden_group_size_z"),
+            (18, 2, "hidden_remainder_x"),
+            (20, 2, "hidden_remainder_y"),
+            (22, 2, "hidden_remainder_z"),
+            (40, 8, "hidden_global_offset_x"),
+            (48, 8, "hidden_global_offset_y"),
+            (56, 8, "hidden_global_offset_z"),
+            (64, 2, "hidden_grid_dims"),
+        ]
+        .into_iter()
+        .map(|(offset, size, kind)| {
+            Value::Map(vec![
+                (Value::from(".offset"), Value::from(base + offset)),
+                (Value::from(".size"), Value::from(size)),
+                (Value::from(".value_kind"), Value::from(kind)),
+            ])
+        })
+        .collect()
+    }
+
+    fn metadata() -> Vec<u8> {
+        let kernel = Value::Map(vec![
+            (Value::from(".name"), Value::from("alpha")),
+            (Value::from(".symbol"), Value::from("alpha.kd")),
+            (Value::from(".args"), Value::Array(hidden_arguments(0))),
+            (Value::from(".kernarg_segment_size"), Value::from(256)),
+            (Value::from(".kernarg_segment_align"), Value::from(8)),
+            (Value::from(".group_segment_fixed_size"), Value::from(0)),
+            (Value::from(".private_segment_fixed_size"), Value::from(0)),
+            (Value::from(".wavefront_size"), Value::from(64)),
+            (Value::from(".sgpr_count"), Value::from(14)),
+            (Value::from(".vgpr_count"), Value::from(11)),
+            (Value::from(".agpr_count"), Value::from(3)),
+            (Value::from(".max_flat_workgroup_size"), Value::from(256)),
+        ]);
+        let root = Value::Map(vec![
+            (
+                Value::from("amdhsa.version"),
+                Value::Array(vec![Value::from(1), Value::from(2)]),
+            ),
+            (
+                Value::from("amdhsa.target"),
+                Value::from("amdgcn-amd-amdhsa--gfx942:xnack-"),
+            ),
+            (Value::from("amdhsa.kernels"), Value::Array(vec![kernel])),
+        ]);
+        let mut encoded = Vec::new();
+        write_value(&mut encoded, &root).unwrap();
+        encoded
+    }
+
+    fn metadata_note() -> Vec<u8> {
+        let owner = b"AMDGPU\0";
+        let metadata = metadata();
+        let mut note = Vec::new();
+        note.extend_from_slice(&(owner.len() as u32).to_le_bytes());
+        note.extend_from_slice(&(metadata.len() as u32).to_le_bytes());
+        note.extend_from_slice(&32_u32.to_le_bytes());
+        note.extend_from_slice(owner);
+        align(&mut note, 4);
+        note.extend_from_slice(&metadata);
+        align(&mut note, 4);
+        note
+    }
+
     fn elf(identity_sections: &[&[u8]]) -> Vec<u8> {
-        let mut strings = b"\0.shstrtab\0".to_vec();
+        let mut strings = b"\0.note\0".to_vec();
         let identity_name = strings.len() as u32;
         strings.extend_from_slice(S09_IDENTITY_SECTION_V2.as_bytes());
         strings.push(0);
+        let string_name = strings.len() as u32;
+        strings.extend_from_slice(b".shstrtab\0");
         let mut bytes = vec![0_u8; ELF64_HEADER_BYTES];
-        bytes[..7].copy_from_slice(b"\x7fELF\x02\x01\x01");
-        let string_offset = bytes.len();
-        bytes.extend_from_slice(&strings);
+        let note = metadata_note();
+        let note_offset = bytes.len();
+        bytes.extend_from_slice(&note);
         let mut identity_offsets = Vec::new();
         for identity in identity_sections {
             identity_offsets.push(bytes.len());
             bytes.extend_from_slice(identity);
         }
-        while !bytes.len().is_multiple_of(8) {
-            bytes.push(0);
-        }
+        let string_offset = bytes.len();
+        bytes.extend_from_slice(&strings);
+        align(&mut bytes, 8);
         let section_offset = bytes.len();
-        let section_count = 2 + identity_sections.len();
+        let section_count = 3 + identity_sections.len();
+        let string_index = section_count - 1;
         bytes.resize(
             section_offset + section_count * ELF64_SECTION_HEADER_BYTES,
             0,
         );
+        bytes[..7].copy_from_slice(b"\x7fELF\x02\x01\x01");
+        bytes[7] = 64;
+        bytes[8] = 4;
+        bytes[16..18].copy_from_slice(&3_u16.to_le_bytes());
+        bytes[18..20].copy_from_slice(&224_u16.to_le_bytes());
+        bytes[20..24].copy_from_slice(&1_u32.to_le_bytes());
         bytes[40..48].copy_from_slice(&(section_offset as u64).to_le_bytes());
+        bytes[48..52].copy_from_slice(&0x64c_u32.to_le_bytes());
         bytes[52..54].copy_from_slice(&(ELF64_HEADER_BYTES as u16).to_le_bytes());
+        bytes[54..56].copy_from_slice(&56_u16.to_le_bytes());
         bytes[58..60].copy_from_slice(&(ELF64_SECTION_HEADER_BYTES as u16).to_le_bytes());
         bytes[60..62].copy_from_slice(&(section_count as u16).to_le_bytes());
-        bytes[62..64].copy_from_slice(&1_u16.to_le_bytes());
-        let strings_header = section_offset + ELF64_SECTION_HEADER_BYTES;
-        bytes[strings_header..strings_header + 4].copy_from_slice(&1_u32.to_le_bytes());
+        bytes[62..64].copy_from_slice(&(string_index as u16).to_le_bytes());
+
+        let note_header = section_offset + ELF64_SECTION_HEADER_BYTES;
+        bytes[note_header..note_header + 4].copy_from_slice(&1_u32.to_le_bytes());
+        bytes[note_header + 4..note_header + 8].copy_from_slice(&7_u32.to_le_bytes());
+        bytes[note_header + 24..note_header + 32]
+            .copy_from_slice(&(note_offset as u64).to_le_bytes());
+        bytes[note_header + 32..note_header + 40]
+            .copy_from_slice(&(note.len() as u64).to_le_bytes());
+        bytes[note_header + 48..note_header + 56].copy_from_slice(&4_u64.to_le_bytes());
+
+        let strings_header = section_offset + string_index * ELF64_SECTION_HEADER_BYTES;
+        bytes[strings_header..strings_header + 4].copy_from_slice(&string_name.to_le_bytes());
         bytes[strings_header + 4..strings_header + 8].copy_from_slice(&SHT_STRTAB.to_le_bytes());
         bytes[strings_header + 24..strings_header + 32]
             .copy_from_slice(&(string_offset as u64).to_le_bytes());
@@ -1119,64 +1315,63 @@ mod tests {
     #[test]
     fn canonical_records_and_handoff_round_trip_exactly() {
         let handoff = handoff();
-        let decoded = IdentityHandoffV2::decode(handoff.canonical_bytes()).unwrap();
+        let decoded = DecodedIdentityHandoffV2::decode(handoff.canonical_bytes()).unwrap();
         assert_eq!(decoded, handoff);
-        assert_eq!(decoded.semantic_admission().rustc_opt_level(), 0);
-        assert_eq!(decoded.semantic_admission().source_bytes(), 3231);
+        assert_eq!(decoded.semantic_claim().rustc_opt_level(), 0);
+        assert_eq!(decoded.semantic_claim().source_bytes(), 3231);
         assert_eq!(
-            decoded.build_observation().prepared_rustc_command_sha256(),
+            decoded.build_claim().prepared_rustc_command_sha256(),
             &[9; 32]
         );
         assert_eq!(
-            decoded.build_observation().cargo_fe2o3_executable_sha256(),
+            decoded.build_claim().cargo_fe2o3_executable_sha256(),
             &[11; 32]
         );
         assert_eq!(
-            decoded
-                .build_observation()
-                .declared_cargo_executable_sha256(),
+            decoded.build_claim().declared_cargo_executable_sha256(),
             &[12; 32]
         );
         assert_eq!(
-            decoded
-                .build_observation()
-                .cargo_launcher_executable_sha256(),
+            decoded.build_claim().cargo_launcher_executable_sha256(),
             &[13; 32]
         );
-        assert_eq!(decoded.build_observation().cargo_launcher_pid(), 14);
-        assert_eq!(
-            decoded
-                .build_observation()
-                .cargo_launcher_start_time_ticks(),
-            15
-        );
+        assert_eq!(decoded.build_claim().cargo_launcher_pid(), 14);
+        assert_eq!(decoded.build_claim().cargo_launcher_start_time_ticks(), 15);
     }
 
     #[test]
     fn every_field_rejects_unknown_empty_and_missing_encodings() {
         let handoff = handoff();
-        for index in 0..SEMANTIC_FIELDS_V2.len() {
+        for index in 0..SEMANTIC_CLAIM_FIELDS_V2.len() {
             for mutation in [
-                mutate_field_name(handoff.semantic_admission().canonical_bytes(), index),
-                empty_field(handoff.semantic_admission().canonical_bytes(), index),
-                remove_field(handoff.semantic_admission().canonical_bytes(), index),
+                mutate_field_name(handoff.semantic_claim().canonical_bytes(), index),
+                empty_field(handoff.semantic_claim().canonical_bytes(), index),
+                remove_field(handoff.semantic_claim().canonical_bytes(), index),
             ] {
                 assert!(
-                    IdentityHandoffV2::decode(&replace_record(&handoff, Some(&mutation), None))
-                        .is_err(),
+                    DecodedIdentityHandoffV2::decode(&replace_record(
+                        &handoff,
+                        Some(&mutation),
+                        None,
+                    ))
+                    .is_err(),
                     "semantic field {index} mutation was accepted"
                 );
             }
         }
-        for index in 0..BUILD_FIELDS_V2.len() {
+        for index in 0..BUILD_CLAIM_FIELDS_V2.len() {
             for mutation in [
-                mutate_field_name(handoff.build_observation().canonical_bytes(), index),
-                empty_field(handoff.build_observation().canonical_bytes(), index),
-                remove_field(handoff.build_observation().canonical_bytes(), index),
+                mutate_field_name(handoff.build_claim().canonical_bytes(), index),
+                empty_field(handoff.build_claim().canonical_bytes(), index),
+                remove_field(handoff.build_claim().canonical_bytes(), index),
             ] {
                 assert!(
-                    IdentityHandoffV2::decode(&replace_record(&handoff, None, Some(&mutation)))
-                        .is_err(),
+                    DecodedIdentityHandoffV2::decode(&replace_record(
+                        &handoff,
+                        None,
+                        Some(&mutation),
+                    ))
+                    .is_err(),
                     "build field {index} mutation was accepted"
                 );
             }
@@ -1186,28 +1381,34 @@ mod tests {
     #[test]
     fn rejects_duplicate_reordered_zero_oversize_and_noncanonical_fields() {
         let handoff = handoff();
-        let semantic = handoff.semantic_admission().canonical_bytes();
+        let semantic = handoff.semantic_claim().canonical_bytes();
         let mut duplicate = semantic.to_vec();
         let first_end = semantic.iter().position(|byte| *byte == b'\n').unwrap() + 1;
         duplicate.extend_from_slice(&semantic[..first_end]);
         assert!(
-            IdentityHandoffV2::decode(&replace_record(&handoff, Some(&duplicate), None)).is_err()
+            DecodedIdentityHandoffV2::decode(&replace_record(&handoff, Some(&duplicate), None,))
+                .is_err()
         );
 
         let mut lines = record_lines(semantic);
         lines.swap(1, 2);
         assert!(
-            IdentityHandoffV2::decode(&replace_record(&handoff, Some(&lines.concat()), None))
-                .is_err()
+            DecodedIdentityHandoffV2::decode(&replace_record(
+                &handoff,
+                Some(&lines.concat()),
+                None,
+            ))
+            .is_err()
         );
 
         let zero_digest = replace_first(
-            handoff.build_observation().canonical_bytes(),
+            handoff.build_claim().canonical_bytes(),
             b"prepared_rustc_command_sha256\t0909090909090909090909090909090909090909090909090909090909090909\n",
             b"prepared_rustc_command_sha256\t0000000000000000000000000000000000000000000000000000000000000000\n",
         );
         assert!(
-            IdentityHandoffV2::decode(&replace_record(&handoff, None, Some(&zero_digest))).is_err()
+            DecodedIdentityHandoffV2::decode(&replace_record(&handoff, None, Some(&zero_digest),))
+                .is_err()
         );
 
         let mut oversize = b"crate\t".to_vec();
@@ -1216,15 +1417,23 @@ mod tests {
         let mut lines = record_lines(semantic);
         lines[1] = oversize;
         assert!(
-            IdentityHandoffV2::decode(&replace_record(&handoff, Some(&lines.concat()), None))
-                .is_err()
+            DecodedIdentityHandoffV2::decode(&replace_record(
+                &handoff,
+                Some(&lines.concat()),
+                None,
+            ))
+            .is_err()
         );
 
         let noncanonical_decimal =
             replace_first(semantic, b"source_bytes\t3231\n", b"source_bytes\t03231\n");
         assert!(
-            IdentityHandoffV2::decode(&replace_record(&handoff, Some(&noncanonical_decimal), None))
-                .is_err()
+            DecodedIdentityHandoffV2::decode(&replace_record(
+                &handoff,
+                Some(&noncanonical_decimal),
+                None,
+            ))
+            .is_err()
         );
     }
 
@@ -1233,31 +1442,102 @@ mod tests {
         let handoff = handoff();
         let bytes = handoff.canonical_bytes();
         let mut zero = bytes.to_vec();
-        zero[HANDOFF_DOMAIN_V2.len()..HANDOFF_DOMAIN_V2.len() + 4]
-            .copy_from_slice(&0_u32.to_le_bytes());
-        assert!(IdentityHandoffV2::decode(&zero).is_err());
+        let semantic_length = HANDOFF_DOMAIN_V2.len() + 64;
+        zero[semantic_length..semantic_length + 4].copy_from_slice(&0_u32.to_le_bytes());
+        assert!(DecodedIdentityHandoffV2::decode(&zero).is_err());
+
+        for manifest_offset in [HANDOFF_DOMAIN_V2.len(), HANDOFF_DOMAIN_V2.len() + 32] {
+            let mut wrong_manifest = bytes.to_vec();
+            wrong_manifest[manifest_offset] ^= 1;
+            assert!(DecodedIdentityHandoffV2::decode(&wrong_manifest).is_err());
+        }
 
         let mut trailing = bytes.to_vec();
         trailing.push(0);
-        assert!(IdentityHandoffV2::decode(&trailing).is_err());
+        assert!(DecodedIdentityHandoffV2::decode(&trailing).is_err());
 
         for length in 0..bytes.len() {
             assert!(
-                IdentityHandoffV2::decode(&bytes[..length]).is_err(),
+                DecodedIdentityHandoffV2::decode(&bytes[..length]).is_err(),
                 "truncation at {length} bytes was accepted"
             );
         }
     }
 
     #[test]
-    fn elf_requires_exactly_one_bounded_identity_section() {
+    fn hsaco_claim_decode_requires_exact_s09_elf_target_metadata_and_linkage() {
         let handoff = handoff();
         let one = elf(&[handoff.canonical_bytes()]);
         assert_eq!(
             identity_section_v2(&one).unwrap(),
             handoff.canonical_bytes()
         );
-        assert_eq!(decode_hsaco_identity_v2(&one).unwrap(), handoff);
+        assert_eq!(decode_hsaco_identity_claims_v2(&one).unwrap(), handoff);
+
+        for (offset, replacement) in [(16, 2_u16.to_le_bytes()), (18, 62_u16.to_le_bytes())] {
+            let mut wrong = one.clone();
+            wrong[offset..offset + 2].copy_from_slice(&replacement);
+            assert!(decode_hsaco_identity_claims_v2(&wrong).is_err());
+        }
+        let mut wrong_osabi = one.clone();
+        wrong_osabi[7] = 0;
+        assert!(decode_hsaco_identity_claims_v2(&wrong_osabi).is_err());
+        let mut wrong_code_object_abi = one.clone();
+        wrong_code_object_abi[8] = 1;
+        assert!(decode_hsaco_identity_claims_v2(&wrong_code_object_abi).is_err());
+
+        let mut wrong_features = one.clone();
+        wrong_features[48..52].copy_from_slice(&0x74c_u32.to_le_bytes());
+        assert!(decode_hsaco_identity_claims_v2(&wrong_features).is_err());
+
+        let mut wrong_metadata_feature = one.clone();
+        let feature = wrong_metadata_feature
+            .windows(b"gfx942:xnack-".len())
+            .position(|window| window == b"gfx942:xnack-")
+            .unwrap();
+        wrong_metadata_feature[feature + b"gfx942:xnack".len()] = b'+';
+        assert!(decode_hsaco_identity_claims_v2(&wrong_metadata_feature).is_err());
+
+        let wrong_target_claim = replace_first(
+            handoff.semantic_claim().canonical_bytes(),
+            b"target\tgfx942:xnack-\n",
+            b"target\tgfx942:xnack+\n",
+        );
+        let wrong_target_handoff = replace_record(&handoff, Some(&wrong_target_claim), None);
+        assert!(decode_hsaco_identity_claims_v2(&elf(&[&wrong_target_handoff])).is_err());
+
+        let wrong_version_claim = replace_first(
+            handoff.semantic_claim().canonical_bytes(),
+            b"code_object_version\t6\n",
+            b"code_object_version\t5\n",
+        );
+        let wrong_version_handoff = replace_record(&handoff, Some(&wrong_version_claim), None);
+        assert!(decode_hsaco_identity_claims_v2(&elf(&[&wrong_version_handoff])).is_err());
+
+        let mut wrong_kernel_linkage = one.clone();
+        let kernel = wrong_kernel_linkage
+            .windows(b"alpha".len())
+            .position(|window| window == b"alpha")
+            .unwrap();
+        wrong_kernel_linkage[kernel..kernel + b"alpha".len()].copy_from_slice(b"omega");
+        assert!(decode_hsaco_identity_claims_v2(&wrong_kernel_linkage).is_err());
+
+        let mut missing_metadata = one.clone();
+        let owner = missing_metadata
+            .windows(b"AMDGPU".len())
+            .position(|window| window == b"AMDGPU")
+            .unwrap();
+        missing_metadata[owner..owner + b"AMDGPU".len()].copy_from_slice(b"NOTGPU");
+        assert!(decode_hsaco_identity_claims_v2(&missing_metadata).is_err());
+
+        let mut malformed_metadata = one.clone();
+        let target_key = malformed_metadata
+            .windows(b"amdhsa.target".len())
+            .position(|window| window == b"amdhsa.target")
+            .unwrap();
+        malformed_metadata[target_key + b"amdhsa.targe".len()] = b'X';
+        assert!(decode_hsaco_identity_claims_v2(&malformed_metadata).is_err());
+
         assert!(identity_section_v2(&elf(&[])).is_err());
         assert!(
             identity_section_v2(&elf(&[

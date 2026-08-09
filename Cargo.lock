@@ -823,6 +823,7 @@ dependencies = [
  "fe2o3-kernel-ir",
  "fe2o3-rustc-front",
  "reserved-fe2o3-symbols",
+ "rmpv",
  "serde",
  "serde_json",
  "sha2",

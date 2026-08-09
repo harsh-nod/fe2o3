@@ -7,7 +7,7 @@ use fe2o3_artifacts::DigestAlgorithm;
 
 #[path = "../src/s09_identity_v2.rs"]
 mod s09_identity_v2;
-use s09_identity_v2::{decode_hsaco_identity_v2, identity_section_v2};
+use s09_identity_v2::{decode_hsaco_identity_claims_v2, identity_section_v2};
 
 const PIPELINE_ENV: &str = "FE2O3_CODEGEN_PIPELINE";
 const LLVM_AS_ENV: &str = "FE2O3_LLVM_AS";
@@ -1122,13 +1122,24 @@ fn worker_v2_s09_alpha_o0_preserves_source_dwarf_in_hsaco() {
     let stderr = String::from_utf8(output.stderr).expect("UTF-8 S09 build diagnostics");
     let bytes = assert_published_worker_v2_cov6_kernels(&target.join("fe2o3"), &["alpha", "zeta"]);
     let section = identity_section_v2(&bytes).expect("one bounded S09 identity section");
-    let identity = decode_hsaco_identity_v2(&bytes).expect("canonical S09 identity handoff");
+    let identity =
+        decode_hsaco_identity_claims_v2(&bytes).expect("canonical inert S09 identity claims");
     assert_eq!(
         identity.canonical_bytes(),
         section,
         "decoded identity must reproduce the exact HSACO section"
     );
-    let semantic = identity.semantic_admission();
+    assert_eq!(
+        identity.semantic_claim_sha256(),
+        identity.semantic_claim().identity_sha256(),
+        "handoff manifest must bind the exact semantic claim record"
+    );
+    assert_eq!(
+        identity.build_claim_sha256(),
+        identity.build_claim().identity_sha256(),
+        "handoff manifest must bind the exact build claim record"
+    );
+    let semantic = identity.semantic_claim();
     assert_eq!(semantic.crate_name(), "fe2o3_typed_alias_spoof");
     assert_eq!(semantic.module(), "general_genuine");
     assert_eq!(semantic.logical_name(), "alpha");
@@ -1156,9 +1167,9 @@ fn worker_v2_s09_alpha_o0_preserves_source_dwarf_in_hsaco() {
     assert_ne!(semantic.abi_sha256(), &[0; 32]);
     assert_ne!(semantic.launch_sha256(), &[0; 32]);
 
-    let observation = identity.build_observation();
+    let observation = identity.build_claim();
     assert_eq!(
-        observation.semantic_admission_sha256(),
+        observation.semantic_claim_sha256(),
         semantic.identity_sha256()
     );
     assert!(
