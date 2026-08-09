@@ -50,17 +50,43 @@ the fixed hardware-test executable, and a fresh archive directory. It invokes
 native `/opt/rocm/bin/rocgdb-py_3.12` with literal batch commands and accepts no
 debugger command, init file, or command environment input.
 
-Before ROCgdb runs, the runner derives the exact HSACO SHA-256, hardware-test
+Before ROCgdb runs, the local runner measures the HSACO SHA-256, hardware-test
 SHA-256, and hardware ELF GNU build ID. It derives `gfx942:xnack-` from AMDGPU
-metadata and `O0` from the exact inspected DWARF producer/configuration. Those
-facts are bound into both the normalized transcript and archive manifest. The
-hardware test independently reads the exact HSACO bytes under the same digest.
-The transcript must show the pending `alpha` breakpoint resolve after kernel
-load, an AMDGPU wave and lane stopped in canonical source line 68, a loaded
-in-memory AMDGPU code object, all five physical arguments at line 69, `i` at
-line 70, and the exact hardware test completing with a normal inferior exit.
-A substitute host `alpha`, digest/build-ID mismatch, missing hardware pass, or
-unavailable observation fails even when ROCgdb exits zero.
+metadata and `O0` from the inspected DWARF producer/configuration. These are
+capability measurements, not authenticated provenance: the same local process
+selected the executable and measured it. The raw ROCgdb log is hashed and then
+removed. Only the path-clean normalized transcript is retained.
+
+The normalized transcript is segmented around every debugger continuation.
+The checker requires an exact BP2 line-69 hit followed by an AMDGPU-wave frame
+and all physical argument observations before BP3 is armed. It then requires
+an exact BP3 line-70 hit, another AMDGPU-wave frame, and local `i` before the
+final continuation. Hardware success and normal inferior exit must occur after
+that continuation and before the final success marker. Removing or reordering
+either hit fails closed. A substitute host `alpha`, digest/build-ID mismatch,
+missing hardware pass, or unavailable observation also fails.
+
+Normalized DWARF, transcript, and facts files reject every absolute POSIX,
+Windows-drive, and UNC path. The only admitted Rust source path is the exact
+relative S09 fixture path. Raw logs are never authoritative artifacts.
+
+The only evidence-grade checker entry point is `check-authoritative`. It needs
+`--manifest` and an independently supplied `--expected-manifest-sha256`; the
+local runner does not create either. The canonical tab-separated manifest has
+the ordered schema `fe2o3-s09-protected-manifest-v1` and binds:
+
+- production trust domain, profile, claim, and protected execution closure;
+- exact source commit, source tree, source path, and source SHA-256;
+- exact rustc, LLVM link worker, LLD, dwarfdump, readobj, and ROCgdb digests;
+- exact checker and hardware-harness source digests;
+- exact HSACO and host executable digests plus host build ID; and
+- exact normalized artifact-facts, hardware-facts, DWARF, and ROCgdb digests.
+
+Production accepts only `trust_domain=production-v1` and
+`execution_closure=protected-controller-v1`. Unit tests exercise the same
+schema through the explicit `--test-fixture` domain; that mode cannot validate
+a production manifest. A future protected controller must construct and pin
+the production manifest after selecting immutable inputs.
 
 The available real lane is an explicit, GPU-gated local capability pilot:
 

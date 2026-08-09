@@ -11,6 +11,7 @@ readonly HSACO_SHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 readonly HARDWARE_SHA256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 readonly HARDWARE_BUILD_ID=cccccccccccccccccccccccccccccccccccccccc
 readonly HARDWARE_TEST=gfx942_cov6_alpha_then_zeta_generated_safe_spi_with_fake_authenticator
+readonly SOURCE_SHA256=a02f62a73198b493258224701c4f29e25b3eca02a738bf02c03989d45b77099e
 TMP="$(mktemp -d)"
 readonly TMP
 trap 'rm -rf -- "${TMP}"' EXIT
@@ -59,6 +60,73 @@ cmp "${TMP}/rocgdb.one" "${TMP}/rocgdb.two"
 rg -q "AMDGPU Wave <WAVE>.*alpha.*crates/.+main\.rs:68" "${TMP}/rocgdb.one"
 rg -q 'memory://<PID>#offset=0x<ADDR>&size=<SIZE>' "${TMP}/rocgdb.one"
 rg -q '0x<ADDR>' "${TMP}/rocgdb.one"
+
+readonly MANIFEST="${TMP}/protected-manifest.tsv"
+checker_sha256="$(sha256sum "${CHECKER}" | cut -d ' ' -f 1)"
+artifact_sha256="$(sha256sum "${TMP}/artifact.facts" | cut -d ' ' -f 1)"
+hardware_facts_sha256="$(sha256sum "${TMP}/hardware.facts" | cut -d ' ' -f 1)"
+dwarf_sha256="$(sha256sum "${TMP}/dwarf.one" | cut -d ' ' -f 1)"
+rocgdb_sha256="$(sha256sum "${TMP}/rocgdb.one" | cut -d ' ' -f 1)"
+readonly checker_sha256 artifact_sha256 hardware_facts_sha256 dwarf_sha256 rocgdb_sha256
+{
+  printf 'manifest_schema\tfe2o3-s09-protected-manifest-v1\n'
+  printf 'trust_domain\ttest-fixture-v1\n'
+  printf 'profile\ts09-alpha-gfx942-o0-v1\n'
+  printf 'claim\tauthoritative-source-debug\n'
+  printf 'source_commit\t1111111111111111111111111111111111111111\n'
+  printf 'source_tree\t2222222222222222222222222222222222222222\n'
+  printf 'source_path\tcrates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src/main.rs\n'
+  printf 'source_sha256\t%s\n' "${SOURCE_SHA256}"
+  printf 'target\tgfx942:xnack-\n'
+  printf 'optimization\tO0\n'
+  printf 'rustc_sha256\t%064d\n' 3
+  printf 'llvm_link_worker_sha256\t%064d\n' 4
+  printf 'lld_sha256\t%064d\n' 5
+  printf 'llvm_dwarfdump_sha256\t%064d\n' 6
+  printf 'llvm_readobj_sha256\t%064d\n' 7
+  printf 'rocgdb_sha256\t%064d\n' 8
+  printf 'checker_sha256\t%s\n' "${checker_sha256}"
+  printf 'harness_source_sha256\t%064d\n' 9
+  printf 'hsaco_sha256\t%s\n' "${HSACO_SHA256}"
+  printf 'host_executable_sha256\t%s\n' "${HARDWARE_SHA256}"
+  printf 'host_executable_build_id\t%s\n' "${HARDWARE_BUILD_ID}"
+  printf 'artifact_facts_sha256\t%s\n' "${artifact_sha256}"
+  printf 'hardware_facts_sha256\t%s\n' "${hardware_facts_sha256}"
+  printf 'dwarf_normalized_sha256\t%s\n' "${dwarf_sha256}"
+  printf 'rocgdb_normalized_sha256\t%s\n' "${rocgdb_sha256}"
+  printf 'hardware_test\t%s\n' "${HARDWARE_TEST}"
+  printf 'execution_closure\tprotected-controller-v1\n'
+} >"${MANIFEST}"
+manifest_sha256="$(sha256sum "${MANIFEST}" | cut -d ' ' -f 1)"
+readonly manifest_sha256
+authoritative_args=(
+  "${CHECKER}" check-authoritative
+  --manifest "${MANIFEST}"
+  --expected-manifest-sha256 "${manifest_sha256}"
+  --artifact-facts "${TMP}/artifact.facts"
+  --hardware-facts "${TMP}/hardware.facts"
+  --dwarf "${TMP}/dwarf.one"
+  --rocgdb "${TMP}/rocgdb.one"
+)
+"${authoritative_args[@]}" --test-fixture >"${TMP}/authoritative.out"
+rg -q 'accepted non-production fixture' "${TMP}/authoritative.out"
+expect_fail "${authoritative_args[@]}"
+expect_fail "${CHECKER}" check-authoritative \
+  --manifest "${TMP}/absent-manifest.tsv" \
+  --expected-manifest-sha256 "${manifest_sha256}" \
+  --artifact-facts "${TMP}/artifact.facts" \
+  --hardware-facts "${TMP}/hardware.facts" \
+  --dwarf "${TMP}/dwarf.one" \
+  --rocgdb "${TMP}/rocgdb.one" --test-fixture
+cp "${TMP}/artifact.facts" "${TMP}/artifact-mutated.facts"
+printf 'mutation=true\n' >>"${TMP}/artifact-mutated.facts"
+expect_fail "${CHECKER}" check-authoritative \
+  --manifest "${MANIFEST}" \
+  --expected-manifest-sha256 "${manifest_sha256}" \
+  --artifact-facts "${TMP}/artifact-mutated.facts" \
+  --hardware-facts "${TMP}/hardware.facts" \
+  --dwarf "${TMP}/dwarf.one" \
+  --rocgdb "${TMP}/rocgdb.one" --test-fixture
 expect_fail "${CHECKER}" normalize-dwarf \
   --input "${FIXTURES}/dwarf.pass.txt" --output "${TMP}/dwarf.one"
 

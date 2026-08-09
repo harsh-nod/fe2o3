@@ -4,8 +4,11 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import os
 import pathlib
 import re
+import stat
 import sys
 
 MAX_INPUT_BYTES = 8 * 1024 * 1024
@@ -34,22 +37,93 @@ EXPECTED_OBSERVATIONS = {
     "i": "0",
 }
 HARDWARE_TEST = "gfx942_cov6_alpha_then_zeta_generated_safe_spi_with_fake_authenticator"
+S09_SOURCE_SHA256 = "a02f62a73198b493258224701c4f29e25b3eca02a738bf02c03989d45b77099e"
+MANIFEST_SCHEMA = "fe2o3-s09-protected-manifest-v1"
+MANIFEST_FIELDS = (
+    "manifest_schema",
+    "trust_domain",
+    "profile",
+    "claim",
+    "source_commit",
+    "source_tree",
+    "source_path",
+    "source_sha256",
+    "target",
+    "optimization",
+    "rustc_sha256",
+    "llvm_link_worker_sha256",
+    "lld_sha256",
+    "llvm_dwarfdump_sha256",
+    "llvm_readobj_sha256",
+    "rocgdb_sha256",
+    "checker_sha256",
+    "harness_source_sha256",
+    "hsaco_sha256",
+    "host_executable_sha256",
+    "host_executable_build_id",
+    "artifact_facts_sha256",
+    "hardware_facts_sha256",
+    "dwarf_normalized_sha256",
+    "rocgdb_normalized_sha256",
+    "hardware_test",
+    "execution_closure",
+)
 
 
 class CheckError(Exception):
     pass
 
 
-def read_bounded(path: pathlib.Path) -> str:
-    if not path.is_file() or path.is_symlink():
-        raise CheckError(f"input must be a regular non-symlink file: {path}")
-    size = path.stat().st_size
-    if size == 0 or size > MAX_INPUT_BYTES:
-        raise CheckError(f"input size must be within 1..{MAX_INPUT_BYTES} bytes: {path}")
+def read_bounded_bytes(path: pathlib.Path) -> bytes:
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     try:
-        return path.read_text(encoding="utf-8")
+        descriptor = os.open(path, flags)
+    except OSError as error:
+        raise CheckError(f"cannot open input safely: {path}: {error}") from error
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+            raise CheckError(f"input must be a single-link regular file: {path}")
+        if before.st_size == 0 or before.st_size > MAX_INPUT_BYTES:
+            raise CheckError(f"input size must be within 1..{MAX_INPUT_BYTES} bytes: {path}")
+        chunks: list[bytes] = []
+        remaining = MAX_INPUT_BYTES + 1
+        while remaining:
+            chunk = os.read(descriptor, min(64 * 1024, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        data = b"".join(chunks)
+        after = os.fstat(descriptor)
+        identity = lambda value: (
+            value.st_dev,
+            value.st_ino,
+            value.st_size,
+            value.st_mtime_ns,
+            value.st_ctime_ns,
+        )
+        if identity(before) != identity(after) or len(data) != before.st_size:
+            raise CheckError(f"input changed while being read: {path}")
+        return data
+    except OSError as error:
+        raise CheckError(f"cannot read input safely: {path}: {error}") from error
+    finally:
+        try:
+            os.close(descriptor)
+        except OSError as error:
+            raise CheckError(f"cannot close input safely: {path}: {error}") from error
+
+
+def read_bounded(path: pathlib.Path) -> str:
+    try:
+        return read_bounded_bytes(path).decode("utf-8")
     except UnicodeDecodeError as error:
         raise CheckError(f"input is not UTF-8: {path}") from error
+
+
+def file_sha256(path: pathlib.Path) -> str:
+    return hashlib.sha256(read_bounded_bytes(path)).hexdigest()
 
 
 def write_new(path: pathlib.Path, text: str) -> None:
@@ -331,6 +405,110 @@ def check_rocgdb(text: str, hsaco_sha256: str, hardware_sha256: str, build_id: s
             raise CheckError(f"ROCgdb transcript contains failure marker {rejected!r}")
 
 
+def parse_protected_manifest(data: bytes, allow_test_fixture: bool) -> dict[str, str]:
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise CheckError("protected manifest is not UTF-8") from error
+    if "\r" in text or not text.endswith("\n") or "\n\n" in text:
+        raise CheckError("protected manifest is not canonical LF-delimited text")
+    lines = text.removesuffix("\n").split("\n")
+    if len(lines) != len(MANIFEST_FIELDS):
+        raise CheckError("protected manifest field count changed")
+    manifest: dict[str, str] = {}
+    for expected, line in zip(MANIFEST_FIELDS, lines, strict=True):
+        fields = line.split("\t")
+        if len(fields) != 2 or fields[0] != expected or not fields[1]:
+            raise CheckError(f"protected manifest field {expected!r} is absent or out of order")
+        if fields[1] != fields[1].strip() or any(ord(character) < 0x20 for character in fields[1]):
+            raise CheckError(f"protected manifest field {expected!r} is noncanonical")
+        manifest[expected] = fields[1]
+
+    expected_values = {
+        "manifest_schema": MANIFEST_SCHEMA,
+        "profile": "s09-alpha-gfx942-o0-v1",
+        "claim": "authoritative-source-debug",
+        "source_path": S09_SOURCE,
+        "source_sha256": S09_SOURCE_SHA256,
+        "target": "gfx942:xnack-",
+        "optimization": "O0",
+        "hardware_test": HARDWARE_TEST,
+        "execution_closure": "protected-controller-v1",
+    }
+    for field, expected in expected_values.items():
+        if manifest[field] != expected:
+            raise CheckError(f"protected manifest field {field!r} changed")
+    expected_domain = "test-fixture-v1" if allow_test_fixture else "production-v1"
+    if manifest["trust_domain"] != expected_domain:
+        raise CheckError("protected manifest trust domain is not authorized")
+    for field in ("source_commit", "source_tree"):
+        if not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", manifest[field]):
+            raise CheckError(f"protected manifest {field!r} is not a canonical Git object ID")
+    for field in MANIFEST_FIELDS:
+        if field.endswith("_sha256") and not HEX_SHA256.fullmatch(manifest[field]):
+            raise CheckError(f"protected manifest {field!r} is not a SHA-256 digest")
+    if not HEX_BUILD_ID.fullmatch(manifest["host_executable_build_id"]):
+        raise CheckError("protected manifest host executable build ID is malformed")
+    return manifest
+
+
+def check_authoritative(
+    manifest_path: pathlib.Path,
+    expected_manifest_sha256: str,
+    artifact_path: pathlib.Path,
+    hardware_path: pathlib.Path,
+    dwarf_path: pathlib.Path,
+    rocgdb_path: pathlib.Path,
+    allow_test_fixture: bool,
+) -> None:
+    if not HEX_SHA256.fullmatch(expected_manifest_sha256):
+        raise CheckError("expected protected manifest digest must be lowercase SHA-256")
+    manifest_bytes = read_bounded_bytes(manifest_path)
+    if hashlib.sha256(manifest_bytes).hexdigest() != expected_manifest_sha256:
+        raise CheckError("protected manifest does not match the externally supplied digest")
+    manifest = parse_protected_manifest(manifest_bytes, allow_test_fixture)
+
+    evidence = {
+        "artifact_facts_sha256": artifact_path,
+        "hardware_facts_sha256": hardware_path,
+        "dwarf_normalized_sha256": dwarf_path,
+        "rocgdb_normalized_sha256": rocgdb_path,
+    }
+    for digest_field, path in evidence.items():
+        if file_sha256(path) != manifest[digest_field]:
+            raise CheckError(f"evidence file does not match {digest_field!r}")
+    checker_path = pathlib.Path(__file__).resolve(strict=True)
+    if file_sha256(checker_path) != manifest["checker_sha256"]:
+        raise CheckError("protected manifest does not bind this exact checker")
+
+    artifact = read_bounded(artifact_path)
+    hardware = read_bounded(hardware_path)
+    dwarf = read_bounded(dwarf_path)
+    rocgdb = read_bounded(rocgdb_path)
+    if normalize_dwarf(dwarf) != dwarf or normalize_rocgdb(rocgdb) != rocgdb:
+        raise CheckError("authoritative evidence inputs must already be canonical normalized files")
+    check_dwarf(dwarf)
+    check_rocgdb(
+        rocgdb,
+        manifest["hsaco_sha256"],
+        manifest["host_executable_sha256"],
+        manifest["host_executable_build_id"],
+    )
+    for token in (
+        "format=fe2o3-s09-artifact-facts-v1\n",
+        "target=gfx942:xnack-\n",
+        "optimization=O0\n",
+        f"source_path={S09_SOURCE}\n",
+    ):
+        require_once(artifact, token, "protected artifact facts")
+    for token in (
+        "format=fe2o3-s09-hardware-facts-v1\n",
+        f"sha256={manifest['host_executable_sha256']}\n",
+        f"build_id={manifest['host_executable_build_id']}\n",
+    ):
+        require_once(hardware, token, "protected hardware facts")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -353,6 +531,14 @@ def parse_args() -> argparse.Namespace:
     command.add_argument("--input", required=True, type=pathlib.Path)
     command.add_argument("--sha256", required=True)
     command.add_argument("--output", required=True, type=pathlib.Path)
+    command = subparsers.add_parser("check-authoritative")
+    command.add_argument("--manifest", required=True, type=pathlib.Path)
+    command.add_argument("--expected-manifest-sha256", required=True)
+    command.add_argument("--artifact-facts", required=True, type=pathlib.Path)
+    command.add_argument("--hardware-facts", required=True, type=pathlib.Path)
+    command.add_argument("--dwarf", required=True, type=pathlib.Path)
+    command.add_argument("--rocgdb", required=True, type=pathlib.Path)
+    command.add_argument("--test-fixture", action="store_true")
     return parser.parse_args()
 
 
@@ -379,6 +565,18 @@ def main() -> int:
     elif args.command == "hardware-facts":
         facts, _ = hardware_facts(read_bounded(args.input), args.sha256)
         write_new(args.output, facts)
+    elif args.command == "check-authoritative":
+        check_authoritative(
+            args.manifest,
+            args.expected_manifest_sha256,
+            args.artifact_facts,
+            args.hardware_facts,
+            args.dwarf,
+            args.rocgdb,
+            args.test_fixture,
+        )
+        claim = "non-production fixture" if args.test_fixture else "production manifest"
+        print(f"S09 authoritative checker accepted {claim}")
     else:
         raise AssertionError(args.command)
     return 0
