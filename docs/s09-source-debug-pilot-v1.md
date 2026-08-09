@@ -66,9 +66,12 @@ that continuation and before the final success marker. Removing or reordering
 either hit fails closed. A substitute host `alpha`, digest/build-ID mismatch,
 missing hardware pass, or unavailable observation also fails.
 
-Normalized DWARF, transcript, and facts files reject every absolute POSIX,
-Windows-drive, and UNC path. The only admitted Rust source path is the exact
-relative S09 fixture path. Raw logs are never authoritative artifacts.
+Normalized DWARF, transcript, and facts files use ordered field schemas and
+strict value grammars. They reject file URIs, URIs carrying paths,
+percent-encoded paths, absolute POSIX paths, Windows drive/UNC/device paths,
+and dot components regardless of surrounding delimiters. The only admitted
+Rust source path is the exact relative S09 fixture path. Raw logs are never
+authoritative artifacts.
 
 The production entry point is `check-production`. It has no manifest, digest,
 policy, or trust-path arguments. It reads only the compiled fixed path

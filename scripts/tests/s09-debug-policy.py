@@ -88,5 +88,52 @@ class ProductionPolicyMetadataTests(unittest.TestCase):
             CHECKER.read_production_policy()
 
 
+class NormalizedEvidenceSchemaTests(unittest.TestCase):
+    ARTIFACT_FACTS = (
+        "format=fe2o3-s09-artifact-facts-v1\n"
+        "object_format=elf64-amdgpu\n"
+        "arch=amdgcn\n"
+        "target=gfx942:xnack-\n"
+        "optimization=O0\n"
+        f"source_path={CHECKER.S09_SOURCE}\n"
+        "kernel=alpha:alpha.kd\n"
+        "kernel=zeta:zeta.kd\n"
+    )
+
+    def test_accepts_exact_artifact_schema(self) -> None:
+        CHECKER.check_artifact_fact_schema(self.ARTIFACT_FACTS)
+
+    def test_rejects_noncanonical_artifact_fields_and_values(self) -> None:
+        probes = (
+            self.ARTIFACT_FACTS.replace(
+                f"source_path={CHECKER.S09_SOURCE}",
+                "source_path=file:///home/private/main.rs",
+            ),
+            self.ARTIFACT_FACTS.replace("target=gfx942:xnack-", "target=gfx90a"),
+            self.ARTIFACT_FACTS.replace("kernel=alpha:alpha.kd", "kernel=alpha=a.kd"),
+            self.ARTIFACT_FACTS + "extra=value\n",
+        )
+        for probe in probes:
+            with self.subTest(probe=probe), self.assertRaises(CHECKER.CheckError):
+                CHECKER.check_artifact_fact_schema(probe)
+
+    def test_rejects_absolute_and_uri_path_atoms(self) -> None:
+        probes = (
+            "/home/private/main.rs",
+            "file:///home/private/main.rs",
+            "https://host/etc/passwd",
+            "file:%2Fhome%2Fprivate%2Fmain.rs",
+            r"C:\private\main.rs",
+            r"\\server\share\main.rs",
+            r"\\?\C:\private\main.rs",
+            "relative/../private/main.rs",
+            "leak](/home/private/main.rs)",
+        )
+        for probe in probes:
+            evidence = f"{CHECKER.S09_SOURCE}\n{probe}\n"
+            with self.subTest(probe=probe), self.assertRaises(CHECKER.CheckError):
+                CHECKER.require_path_hygiene(evidence)
+
+
 if __name__ == "__main__":
     unittest.main()

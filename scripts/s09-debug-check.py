@@ -11,6 +11,7 @@ import os
 import pathlib
 import re
 import stat
+import string
 import sys
 
 MAX_INPUT_BYTES = 8 * 1024 * 1024
@@ -28,10 +29,18 @@ HEX_SHA256 = re.compile(r"[0-9a-f]{64}")
 HEX_BUILD_ID = re.compile(r"[0-9a-f]{40,64}")
 S09_SOURCE = "crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src/main.rs"
 S09_DIRECTORY = "crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src"
-SOURCE_CANDIDATE = re.compile(rf'(?:[^\s"()]+/)?{re.escape(S09_SOURCE)}')
-POSIX_ABSOLUTE_PATH = re.compile(r'(?:^|[\s"\'(=])(/[^\s"\'()]*)', re.MULTILINE)
-WINDOWS_ABSOLUTE_PATH = re.compile(r"(?:^|[\s\"'(=])(?:[A-Za-z]:[\\/]|\\\\)[^\s\"'()]*", re.MULTILINE)
-RELATIVE_RUST_PATH = re.compile(r"(?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_.-]+\.rs")
+PATH_ATOM_CHARACTERS = frozenset(
+    string.ascii_letters + string.digits + "._-$%+~:@#?&=<>/,\\"
+)
+PERCENT_ESCAPE = re.compile(r"%[0-9A-Fa-f]{2}")
+WAVE_COORDINATE = re.compile(r"\([0-9]+,[0-9]+,[0-9]+\)/[0-9]+")
+HOST_THREAD_FRAME_PREFIX = re.compile(
+    r'^[1-9][0-9]* Thread <THREAD> \(process <PID>\) "[A-Za-z0-9_]{1,15}" '
+)
+HOST_THREAD_FRAME_SUFFIX = re.compile(
+    r" at \.\./sysdeps/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*:[1-9][0-9]*$"
+)
+NORMALIZED_MEMORY_URI = "memory://<PID>#offset=0x<ADDR>&size=<SIZE>"
 VARIABLES = ("scale", "input_data", "input_len", "output_data", "output_len", "i")
 EXPECTED_OBSERVATIONS = {
     "scale": "1.5",
@@ -100,6 +109,17 @@ POLICY_MANIFEST_BINDINGS = tuple(
     for field in POLICY_FIELDS
     if field not in {"policy_schema", "manifest_path", "manifest_sha256"}
 )
+ARTIFACT_FACT_FIELDS = (
+    "format",
+    "object_format",
+    "arch",
+    "target",
+    "optimization",
+    "source_path",
+    "kernel",
+    "kernel",
+)
+HARDWARE_FACT_FIELDS = ("format", "object_format", "sha256", "build_id")
 
 
 class CheckError(Exception):
@@ -250,18 +270,46 @@ def write_new(path: pathlib.Path, text: str) -> None:
         output.write(text)
 
 
+def path_atoms(text: str) -> list[str]:
+    atoms: list[str] = []
+    index = 0
+    while index < len(text):
+        if text[index] not in PATH_ATOM_CHARACTERS:
+            index += 1
+            continue
+        end = index + 1
+        while end < len(text) and text[end] in PATH_ATOM_CHARACTERS:
+            end += 1
+        atoms.append(text[index:end])
+        index = end
+    return atoms
+
+
 def require_path_hygiene(text: str) -> None:
-    candidates = SOURCE_CANDIDATE.findall(text)
-    if not candidates:
+    if PERCENT_ESCAPE.search(text):
+        raise CheckError("normalized evidence contains percent-encoded path data")
+    without_wave_coordinates = WAVE_COORDINATE.sub("<WAVE_COORDINATE>", text)
+    saw_source = False
+    for atom in path_atoms(without_wave_coordinates):
+        candidate = atom.rstrip(",;")
+        if candidate == NORMALIZED_MEMORY_URI:
+            continue
+        if candidate == S09_DIRECTORY:
+            saw_source = True
+            continue
+        source_match = re.fullmatch(re.escape(S09_SOURCE) + r"(?::(?:68|69|70))?", candidate)
+        if source_match:
+            saw_source = True
+            continue
+        if candidate.lower().startswith("file:"):
+            raise CheckError("normalized evidence contains a file URI")
+        if "/" in candidate or "\\" in candidate:
+            components = re.split(r"[/\\]", candidate)
+            if any(component in {".", ".."} for component in components):
+                raise CheckError("normalized evidence contains a dot path component")
+            raise CheckError(f"normalized evidence contains unallowlisted path atom {candidate!r}")
+    if not saw_source:
         raise CheckError("evidence contains no canonical S09 source path")
-    for candidate in candidates:
-        if candidate != S09_SOURCE:
-            raise CheckError("evidence contains an absolute or non-canonical S09 source path")
-    if POSIX_ABSOLUTE_PATH.search(text) or WINDOWS_ABSOLUTE_PATH.search(text):
-        raise CheckError("normalized evidence contains an absolute path")
-    for candidate in RELATIVE_RUST_PATH.findall(text):
-        if candidate != S09_SOURCE:
-            raise CheckError(f"normalized evidence contains unallowlisted source path {candidate!r}")
 
 
 def normalize_line(line: str) -> str:
@@ -279,7 +327,10 @@ def normalize_line(line: str) -> str:
     line = ADDRESS.sub("0x<ADDR>", line)
     if line.lstrip().startswith("Starting program: "):
         line = "Starting program: $HOST_EXECUTABLE"
-    return SPACE.sub(" ", line.strip())
+    line = SPACE.sub(" ", line.strip())
+    if HOST_THREAD_FRAME_PREFIX.search(line) and HOST_THREAD_FRAME_SUFFIX.search(line):
+        return "HOST_THREAD_FRAME"
+    return line
 
 
 def normalize_dwarf(text: str) -> str:
@@ -310,6 +361,56 @@ def require_once(text: str, token: str, context: str) -> None:
     count = text.count(token)
     if count != 1:
         raise CheckError(f"{context} requires exactly one {token!r}; found {count}")
+
+
+def parse_canonical_facts(
+    text: str, expected_fields: tuple[str, ...], context: str
+) -> list[tuple[str, str]]:
+    if "\r" in text or not text.endswith("\n") or "\n\n" in text:
+        raise CheckError(f"{context} is not canonical LF-delimited text")
+    lines = text.removesuffix("\n").split("\n")
+    if len(lines) != len(expected_fields):
+        raise CheckError(f"{context} field count changed")
+    facts: list[tuple[str, str]] = []
+    for expected_field, line in zip(expected_fields, lines, strict=True):
+        fields = line.split("=")
+        if len(fields) != 2 or fields[0] != expected_field or not fields[1]:
+            raise CheckError(f"{context} field {expected_field!r} is absent or out of order")
+        value = fields[1]
+        if value != value.strip() or any(ord(character) < 0x20 for character in value):
+            raise CheckError(f"{context} field {expected_field!r} is noncanonical")
+        facts.append((expected_field, value))
+    return facts
+
+
+def check_artifact_fact_schema(text: str) -> None:
+    expected = [
+        ("format", "fe2o3-s09-artifact-facts-v1"),
+        ("object_format", "elf64-amdgpu"),
+        ("arch", "amdgcn"),
+        ("target", "gfx942:xnack-"),
+        ("optimization", "O0"),
+        ("source_path", S09_SOURCE),
+        ("kernel", "alpha:alpha.kd"),
+        ("kernel", "zeta:zeta.kd"),
+    ]
+    if parse_canonical_facts(
+        text, ARTIFACT_FACT_FIELDS, "protected artifact facts"
+    ) != expected:
+        raise CheckError("protected artifact facts contain an unexpected field value")
+
+
+def check_hardware_fact_schema(text: str, sha256: str, build_id: str) -> None:
+    expected = [
+        ("format", "fe2o3-s09-hardware-facts-v1"),
+        ("object_format", "elf64-x86-64"),
+        ("sha256", sha256),
+        ("build_id", build_id),
+    ]
+    if parse_canonical_facts(
+        text, HARDWARE_FACT_FIELDS, "protected hardware facts"
+    ) != expected:
+        raise CheckError("protected hardware facts contain an unexpected field value")
 
 
 def check_dwarf(text: str) -> None:
@@ -640,19 +741,12 @@ def check_evidence_bundle(
         manifest["host_executable_sha256"],
         manifest["host_executable_build_id"],
     )
-    for token in (
-        "format=fe2o3-s09-artifact-facts-v1\n",
-        "target=gfx942:xnack-\n",
-        "optimization=O0\n",
-        f"source_path={S09_SOURCE}\n",
-    ):
-        require_once(artifact, token, "protected artifact facts")
-    for token in (
-        "format=fe2o3-s09-hardware-facts-v1\n",
-        f"sha256={manifest['host_executable_sha256']}\n",
-        f"build_id={manifest['host_executable_build_id']}\n",
-    ):
-        require_once(hardware, token, "protected hardware facts")
+    check_artifact_fact_schema(artifact)
+    check_hardware_fact_schema(
+        hardware,
+        manifest["host_executable_sha256"],
+        manifest["host_executable_build_id"],
+    )
 
 
 def check_production(

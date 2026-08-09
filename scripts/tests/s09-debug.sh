@@ -60,6 +60,8 @@ cmp "${TMP}/rocgdb.one" "${TMP}/rocgdb.two"
 rg -q "AMDGPU Wave <WAVE>.*alpha.*crates/.+main\.rs:68" "${TMP}/rocgdb.one"
 rg -q 'memory://<PID>#offset=0x<ADDR>&size=<SIZE>' "${TMP}/rocgdb.one"
 rg -q '0x<ADDR>' "${TMP}/rocgdb.one"
+rg -q '^HOST_THREAD_FRAME$' "${TMP}/rocgdb.one"
+expect_fail rg -q 'sysdeps|\.\./' "${TMP}/rocgdb.one"
 
 readonly MANIFEST="${TMP}/protected-manifest.tsv"
 checker_sha256="$(sha256sum "${CHECKER}" | cut -d ' ' -f 1)"
@@ -175,6 +177,18 @@ expect_fail "${CHECKER}" check-dwarf --input "${TMP}/dwarf-dotdot-source"
 sed '/DW_TAG_compile_unit/a private_source = /home/harsh/private/build.rs' \
   "${FIXTURES}/dwarf.pass.txt" >"${TMP}/dwarf-unrelated-absolute"
 expect_fail "${CHECKER}" check-dwarf --input "${TMP}/dwarf-unrelated-absolute"
+sed '/DW_TAG_compile_unit/a private_source = file:///home/harsh/private/build.rs' \
+  "${FIXTURES}/dwarf.pass.txt" >"${TMP}/dwarf-file-uri"
+expect_fail "${CHECKER}" check-dwarf --input "${TMP}/dwarf-file-uri"
+sed '/DW_TAG_compile_unit/a private_source = https://host/etc/passwd' \
+  "${FIXTURES}/dwarf.pass.txt" >"${TMP}/dwarf-uri-absolute"
+expect_fail "${CHECKER}" check-dwarf --input "${TMP}/dwarf-uri-absolute"
+sed '/DW_TAG_compile_unit/a private_source = file:%2Fhome%2Fharsh%2Fprivate.rs' \
+  "${FIXTURES}/dwarf.pass.txt" >"${TMP}/dwarf-percent-absolute"
+expect_fail "${CHECKER}" check-dwarf --input "${TMP}/dwarf-percent-absolute"
+sed '/DW_TAG_compile_unit/a private_source](/home/harsh/private.rs)' \
+  "${FIXTURES}/dwarf.pass.txt" >"${TMP}/dwarf-delimiter-absolute"
+expect_fail "${CHECKER}" check-dwarf --input "${TMP}/dwarf-delimiter-absolute"
 
 sed '/^i = /d' "${FIXTURES}/rocgdb.pass.txt" >"${TMP}/rocgdb-missing-local"
 expect_fail check_rocgdb "${TMP}/rocgdb-missing-local"
@@ -216,6 +230,15 @@ expect_fail check_rocgdb "${TMP}/rocgdb-posix-leak"
 sed '/FE2O3_S09_BINDING/a leak = C:\\private\\build.rs' \
   "${FIXTURES}/rocgdb.pass.txt" >"${TMP}/rocgdb-windows-leak"
 expect_fail check_rocgdb "${TMP}/rocgdb-windows-leak"
+sed '/FE2O3_S09_BINDING/a leak = file:\/\/\/C:\\private\\build.rs' \
+  "${FIXTURES}/rocgdb.pass.txt" >"${TMP}/rocgdb-windows-file-uri"
+expect_fail check_rocgdb "${TMP}/rocgdb-windows-file-uri"
+sed '/FE2O3_S09_BINDING/a leak = \\\\server\\share\\build.rs' \
+  "${FIXTURES}/rocgdb.pass.txt" >"${TMP}/rocgdb-unc-leak"
+expect_fail check_rocgdb "${TMP}/rocgdb-unc-leak"
+sed '/FE2O3_S09_BINDING/a leak = \\\\?\\C:\\private\\build.rs' \
+  "${FIXTURES}/rocgdb.pass.txt" >"${TMP}/rocgdb-device-leak"
+expect_fail check_rocgdb "${TMP}/rocgdb-device-leak"
 sed '/FE2O3_S09_BEGIN/a FE2O3_S09_BEGIN' \
   "${FIXTURES}/rocgdb.pass.txt" >"${TMP}/rocgdb-duplicate-marker"
 expect_fail check_rocgdb "${TMP}/rocgdb-duplicate-marker"

@@ -1,5 +1,6 @@
 fixed-profile setup noise
 FE2O3_S09_BEGIN
+1 Thread 0x7ffff7c006c0 (process 12345) "gfx942_two_ker" 0x7ffff7e01f16 in futex_wait () at ../sysdeps/nptl/futex-internal.c:146
 Reading symbols from /home/runner/target/debug/deps/gfx942_two_kernel_hardware
 of file /home/runner/target/debug/deps/gfx942_two_kernel_hardware.
 Using host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".
