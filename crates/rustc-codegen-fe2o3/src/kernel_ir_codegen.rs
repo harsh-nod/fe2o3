@@ -148,9 +148,19 @@ pub(crate) fn bind_source_debug_metadata_v1(
     mut module: InertCompilerModuleTextV1,
     profile: &crate::source_debug::AlphaSourceDebugV1,
 ) -> Result<InertCompilerModuleTextV1, CompilerModuleConstructionError> {
-    module.llvm_ir = crate::source_debug::inject_alpha_dwarf_v1(&module.llvm_ir, profile)
+    let llvm_ir = crate::source_debug::inject_alpha_dwarf_v1(&module.llvm_ir, profile)
         .map_err(CompilerModuleConstructionError::SourceDebug)?;
+    enforce_source_debug_text_bound(&llvm_ir)?;
+    module.llvm_ir = llvm_ir;
     Ok(module)
+}
+
+fn enforce_source_debug_text_bound(llvm_ir: &str) -> Result<(), CompilerModuleConstructionError> {
+    check_compiler_module_limit(
+        "source-debug-injected compiler-module LLVM text bytes",
+        llvm_ir.len(),
+        dialect_amdgcn::MAX_COMPILER_MODULE_TEXT_BYTES,
+    )
 }
 
 impl std::error::Error for CompilerModuleConstructionError {}
@@ -2384,6 +2394,32 @@ mod tests {
         assert!(first.llvm_ir().contains("declare void @external_import"));
         assert!(!first.llvm_ir().contains("bitcode"));
         assert_eq!(first.descriptor_source_identity(), None);
+    }
+
+    #[test]
+    fn source_debug_injection_preserves_the_compiler_module_text_bound() {
+        let mut injected = "x".repeat(dialect_amdgcn::MAX_COMPILER_MODULE_TEXT_BYTES);
+        enforce_source_debug_text_bound(&injected).expect("exact text limit must remain valid");
+
+        injected.push('\n');
+        let actual = dialect_amdgcn::MAX_COMPILER_MODULE_TEXT_BYTES + 1;
+        let error = enforce_source_debug_text_bound(&injected)
+            .expect_err("one injected byte over the text limit must fail closed");
+        assert_eq!(
+            error,
+            CompilerModuleConstructionError::LimitExceeded {
+                field: "source-debug-injected compiler-module LLVM text bytes",
+                actual,
+                max: dialect_amdgcn::MAX_COMPILER_MODULE_TEXT_BYTES,
+            }
+        );
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "source-debug-injected compiler-module LLVM text bytes count/size {actual} exceeds limit {}",
+                dialect_amdgcn::MAX_COMPILER_MODULE_TEXT_BYTES
+            )
+        );
     }
 
     #[test]
