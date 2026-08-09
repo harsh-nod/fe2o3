@@ -333,6 +333,49 @@ class OperatorConfig:
     config_digest: str
 
 
+def close_descriptors(descriptors: tuple[tuple[int, str], ...]) -> None:
+    primary = sys.exception()
+    failures: list[str] = []
+    for file_fd, label in descriptors:
+        if file_fd < 0:
+            continue
+        try:
+            os.close(file_fd)
+        except OSError as close_error:
+            failures.append(f"cannot close {label}: {close_error}")
+    if failures:
+        detail = "; ".join(failures)
+        if primary is not None:
+            raise ExecutorError(f"{primary}; additionally {detail}") from primary
+        fail(detail)
+
+
+def close_descriptor(file_fd: int, label: str = "file descriptor") -> None:
+    close_descriptors(((file_fd, label),))
+
+
+def normalized_error(error: BaseException, context: str) -> ExecutorError:
+    if isinstance(error, ExecutorError):
+        return error
+    return ExecutorError(f"{context}: {error}")
+
+
+def append_error(primary: ExecutorError | None, error: BaseException) -> ExecutorError:
+    secondary = str(error)
+    if primary is None:
+        return normalized_error(error, "filesystem operation failed")
+    if secondary.startswith(str(primary)):
+        return normalized_error(error, "filesystem operation failed")
+    return ExecutorError(f"{primary}; additionally {secondary}")
+
+
+def resolve_path(path: Path, label: str) -> Path:
+    try:
+        return path.resolve(strict=True)
+    except OSError as error:
+        fail(f"cannot resolve {label}: {error}")
+
+
 @dataclass
 class TrustedRoot:
     path: Path
@@ -341,7 +384,9 @@ class TrustedRoot:
     owner_gid: int
 
     def close(self) -> None:
-        os.close(self.fd)
+        file_fd = self.fd
+        self.fd = -1
+        close_descriptor(file_fd, "protected root")
 
 
 def stable_file_identity(info: os.stat_result) -> tuple[int, ...]:
@@ -419,7 +464,7 @@ def open_owned_directory_tree(
                 os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
                 dir_fd=current_fd,
             )
-            os.close(current_fd)
+            close_descriptor(current_fd, f"{label} parent directory")
             current_fd = next_fd
             info = os.fstat(current_fd)
             if (
@@ -431,11 +476,11 @@ def open_owned_directory_tree(
         return current_fd
     except ExecutorError:
         if current_fd >= 0:
-            os.close(current_fd)
+            close_descriptor(current_fd, f"{label} directory after validation failure")
         raise
     except OSError as error:
         if current_fd >= 0:
-            os.close(current_fd)
+            close_descriptor(current_fd, f"{label} directory after open failure")
         fail(f"cannot open fixed {label} directory: {error}")
 
 
@@ -485,7 +530,7 @@ def read_owned_descriptor_file(
         fail(f"cannot open fixed {label}: {error}")
     finally:
         if file_fd >= 0:
-            os.close(file_fd)
+            close_descriptor(file_fd, f"fixed {label}")
 
 
 def load_operator_config(
@@ -513,7 +558,9 @@ def load_operator_config(
             or (info.st_uid, info.st_gid) != (provision_uid, provision_gid)
             or info.st_mode & 0o022
         ):
-            os.close(directory_fd)
+            close_descriptor(
+                directory_fd, "unsafe test operator configuration directory"
+            )
             fail("test operator configuration directory ownership or mode is unsafe")
     try:
         digest_raw = read_owned_descriptor_file(
@@ -544,7 +591,7 @@ def load_operator_config(
             expected_digest=config_digest,
         )
     finally:
-        os.close(directory_fd)
+        close_descriptor(directory_fd, "operator configuration directory")
     cursor = Cursor(parse_rows(raw, "operator configuration"), "operator configuration")
     if cursor.scalar("oci_operator_config_schema_version") != "1":
         fail("operator configuration schema must be 1")
@@ -622,11 +669,11 @@ def open_trusted_root(path: Path, anchor: TrustAnchor) -> TrustedRoot:
         verify_trusted_metadata(info, anchor, "protected root", directory=True)
     except ExecutorError:
         if "root_fd" in locals():
-            os.close(root_fd)
+            close_descriptor(root_fd, "invalid protected root")
         raise
     except OSError as error:
         if "root_fd" in locals():
-            os.close(root_fd)
+            close_descriptor(root_fd, "unavailable protected root")
         fail(f"cannot open protected root without following links: {error}")
     return TrustedRoot(path, root_fd, anchor.owner_uid, anchor.owner_gid)
 
@@ -674,7 +721,7 @@ def read_trusted_file(
                 os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
                 dir_fd=current_fd,
             )
-            os.close(current_fd)
+            close_descriptor(current_fd, f"protected {label} parent")
             current_fd = next_fd
             verify_trusted_metadata(
                 os.fstat(current_fd), anchor, f"{label} parent", directory=True
@@ -703,18 +750,18 @@ def read_trusted_file(
     except OSError as error:
         fail(f"cannot open protected {label} without following links: {error}")
     finally:
-        if file_fd >= 0:
-            os.close(file_fd)
-        os.close(current_fd)
+        close_descriptors(
+            (
+                (file_fd, f"protected {label}"),
+                (current_fd, f"protected {label} parent"),
+            )
+        )
 
 
 def protected_path(root: Path, relative: str, label: str) -> Path:
     if not valid_relative(relative):
         fail(f"invalid protected {label} path")
-    try:
-        root = root.resolve(strict=True)
-    except OSError as error:
-        fail(f"cannot resolve protected root: {error}")
+    root = resolve_path(root, "protected root")
     current = root
     for index, component in enumerate(relative.split("/")):
         current = current / component
@@ -729,7 +776,7 @@ def protected_path(root: Path, relative: str, label: str) -> Path:
                 fail(f"protected {label} parent is not a directory")
         elif not stat.S_ISREG(info.st_mode):
             fail(f"protected {label} is not a regular file")
-    if root not in current.resolve(strict=True).parents:
+    if root not in resolve_path(current, f"protected {label}").parents:
         fail(f"protected {label} escapes protected root")
     return current
 
@@ -1281,7 +1328,7 @@ def require_safe_oci_entry(
                 fail(f"{label} path contains a non-directory")
         elif not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
             fail(f"{label} is not a single-link regular file")
-    if layout not in current.resolve(strict=True).parents:
+    if layout not in resolve_path(current, label).parents:
         fail(f"{label} escapes OCI layout")
     return current
 
@@ -1349,7 +1396,7 @@ def read_oci_json(
                 os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
                 dir_fd=current_fd,
             )
-            os.close(current_fd)
+            close_descriptor(current_fd, f"{label} JSON parent")
             current_fd = next_fd
             parent = os.fstat(current_fd)
             if (
@@ -1389,10 +1436,12 @@ def read_oci_json(
     except OSError as error:
         fail(f"cannot open or read {label} by descriptor: {error}")
     finally:
-        if file_fd >= 0:
-            os.close(file_fd)
-        if current_fd >= 0:
-            os.close(current_fd)
+        close_descriptors(
+            (
+                (file_fd, f"{label} JSON"),
+                (current_fd, f"{label} JSON parent"),
+            )
+        )
 
 
 def validate_json_shape(value: object, label: str) -> None:
@@ -1585,7 +1634,7 @@ def verify_oci_image(profile: Profile) -> tuple[str, ...]:
         fail(f"cannot open OCI layout by descriptor: {error}")
     finally:
         if layout_fd >= 0:
-            os.close(layout_fd)
+            close_descriptor(layout_fd, "OCI layout")
 
 
 @dataclass(frozen=True)
@@ -1697,7 +1746,7 @@ def read_request_file(path: Path, expected_uid: int, expected_gid: int) -> Reque
         fail(f"cannot open OCI execution request without following links: {error}")
     finally:
         if request_fd >= 0:
-            os.close(request_fd)
+            close_descriptor(request_fd, "OCI execution request")
 
 
 def read_operator_request(config: OperatorConfig, request_id: str) -> Request:
@@ -1720,20 +1769,11 @@ def read_operator_request(config: OperatorConfig, request_id: str) -> Request:
             require_immutable=False,
         )
     finally:
-        os.close(inbox_fd)
+        close_descriptor(inbox_fd, "operator request inbox")
     request = parse_request(raw)
     if request.request_id != request_id:
         fail("operator request file identity differs from selected request")
     return request
-
-
-def safe_close(file_fd: int) -> None:
-    if file_fd < 0:
-        return
-    try:
-        os.close(file_fd)
-    except OSError:
-        pass
 
 
 def staging_lease_name(authorization_digest: str) -> str:
@@ -1765,13 +1805,13 @@ def open_staging_root(profile: Profile, path: Path, label: str) -> int:
                     fail(f"{label} exceeds the protected stale-entry quota")
         return root_fd
     except BlockingIOError:
-        safe_close(root_fd)
+        close_descriptor(root_fd, f"busy {label}")
         fail(f"{label} is busy with another staging lease")
     except ExecutorError:
-        safe_close(root_fd)
+        close_descriptor(root_fd, f"invalid {label}")
         raise
     except OSError as error:
-        safe_close(root_fd)
+        close_descriptor(root_fd, f"unavailable {label}")
         fail(f"cannot open or lock {label}: {error}")
 
 
@@ -1796,7 +1836,7 @@ def remove_directory_contents(directory_fd: int, budget: list[int], label: str) 
                 try:
                     remove_directory_contents(child_fd, budget, label)
                 finally:
-                    safe_close(child_fd)
+                    close_descriptor(child_fd, f"{label} child during cleanup")
                 os.rmdir(name, dir_fd=directory_fd)
             else:
                 os.unlink(name, dir_fd=directory_fd)
@@ -1825,7 +1865,7 @@ def cleanup_staging_lease(
         if (info.st_dev, info.st_ino) != (expected_device, expected_inode):
             fail(f"{label} lease identity changed before cleanup")
         remove_directory_contents(lease_fd, [0], label)
-        safe_close(lease_fd)
+        close_descriptor(lease_fd, f"{label} lease before removal")
         lease_fd = -1
         os.rmdir(name, dir_fd=root_fd)
         os.fsync(root_fd)
@@ -1834,7 +1874,7 @@ def cleanup_staging_lease(
     except OSError as error:
         fail(f"cannot durably remove {label}: {error}")
     finally:
-        safe_close(lease_fd)
+        close_descriptor(lease_fd, f"{label} lease")
 
 
 @dataclass
@@ -1858,17 +1898,28 @@ class SourceSnapshot:
     lease_inode: int
 
     def close(self) -> None:
-        for field in ("request_fd", "directory_fd", "root_fd", "staging_root_fd"):
-            safe_close(getattr(self, field))
+        fields = ("request_fd", "directory_fd", "root_fd", "staging_root_fd")
+        descriptors = tuple(
+            (getattr(self, field), f"source snapshot {field}") for field in fields
+        )
+        for field in fields:
             setattr(self, field, -1)
+        close_descriptors(descriptors)
 
     def cleanup(self) -> None:
-        safe_close(self.request_fd)
-        safe_close(self.directory_fd)
-        safe_close(self.root_fd)
+        descriptors = (
+            (self.request_fd, "source request snapshot"),
+            (self.directory_fd, "source snapshot directory"),
+            (self.root_fd, "source staging lease"),
+        )
         self.request_fd = -1
         self.directory_fd = -1
         self.root_fd = -1
+        failure: ExecutorError | None = None
+        try:
+            close_descriptors(descriptors)
+        except ExecutorError as error:
+            failure = error
         try:
             cleanup_staging_lease(
                 self.staging_root_fd,
@@ -1877,9 +1928,16 @@ class SourceSnapshot:
                 self.lease_inode,
                 "source staging",
             )
+        except (ExecutorError, OSError) as error:
+            failure = append_error(failure, error)
         finally:
-            safe_close(self.staging_root_fd)
+            try:
+                close_descriptor(self.staging_root_fd, "source staging root")
+            except ExecutorError as error:
+                failure = append_error(failure, error)
             self.staging_root_fd = -1
+        if failure is not None:
+            raise failure
 
 
 @dataclass
@@ -1896,17 +1954,28 @@ class OutputStage:
     lease_name: str
 
     def close(self) -> None:
-        for field in ("log_fd", "artifact_fd", "directory_fd", "root_fd"):
-            safe_close(getattr(self, field))
+        fields = ("log_fd", "artifact_fd", "directory_fd", "root_fd")
+        descriptors = tuple(
+            (getattr(self, field), f"output stage {field}") for field in fields
+        )
+        for field in fields:
             setattr(self, field, -1)
+        close_descriptors(descriptors)
 
     def cleanup(self) -> None:
-        safe_close(self.log_fd)
-        safe_close(self.artifact_fd)
-        safe_close(self.directory_fd)
+        descriptors = (
+            (self.log_fd, "output stderr stream"),
+            (self.artifact_fd, "output artifact stream"),
+            (self.directory_fd, "output staging directory"),
+        )
         self.log_fd = -1
         self.artifact_fd = -1
         self.directory_fd = -1
+        failure: ExecutorError | None = None
+        try:
+            close_descriptors(descriptors)
+        except ExecutorError as error:
+            failure = error
         try:
             cleanup_staging_lease(
                 self.root_fd,
@@ -1915,9 +1984,16 @@ class OutputStage:
                 self.inode,
                 "output staging",
             )
+        except (ExecutorError, OSError) as error:
+            failure = append_error(failure, error)
         finally:
-            safe_close(self.root_fd)
+            try:
+                close_descriptor(self.root_fd, "output staging root")
+            except ExecutorError as error:
+                failure = append_error(failure, error)
             self.root_fd = -1
+        if failure is not None:
+            raise failure
 
 
 def initialize_git_control(control: Path) -> None:
@@ -2104,11 +2180,11 @@ def open_snapshot_directory(snapshot_fd: int, relative: str) -> int:
                 os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
                 dir_fd=current_fd,
             )
-            os.close(current_fd)
+            close_descriptor(current_fd, "source staging directory parent")
             current_fd = next_fd
         return current_fd
     except OSError as error:
-        os.close(current_fd)
+        close_descriptor(current_fd, "changed source staging directory")
         fail(f"source staging directory changed during finalization: {error}")
 
 
@@ -2127,7 +2203,7 @@ def finalize_source_directories(
         except OSError as error:
             fail(f"cannot durably finalize source directory {relative}: {error}")
         finally:
-            os.close(directory_fd)
+            close_descriptor(directory_fd, f"source directory {relative}")
     try:
         os.fchmod(snapshot_fd, 0o555)
         os.fsync(snapshot_fd)
@@ -2140,11 +2216,14 @@ def write_snapshot_file(
     snapshot_fd: int, path: str, mode: str, content: bytes
 ) -> tuple[int, str]:
     components = path.split("/")
-    parent_fd = os.dup(snapshot_fd)
+    try:
+        parent_fd = os.dup(snapshot_fd)
+    except OSError as error:
+        fail(f"cannot retain source staging parent for {path}: {error}")
     try:
         for component in components[:-1]:
             next_fd = open_child_directory(parent_fd, component)
-            os.close(parent_fd)
+            close_descriptor(parent_fd, f"source file {path} parent")
             parent_fd = next_fd
         try:
             file_fd = os.open(
@@ -2163,9 +2242,9 @@ def write_snapshot_file(
                 f"source file {path}",
             )
         finally:
-            os.close(file_fd)
+            close_descriptor(file_fd, f"source file {path}")
     finally:
-        os.close(parent_fd)
+        close_descriptor(parent_fd, f"source file {path} parent")
     return len(content), sha256_bytes(content)
 
 
@@ -2216,6 +2295,8 @@ def verify_retained_output(stage: OutputStage) -> None:
         by_path = stage.path.lstat()
         artifact = stage.artifact_path.lstat()
         log = stage.log_path.lstat()
+        artifact_by_fd = os.fstat(stage.artifact_fd)
+        log_by_fd = os.fstat(stage.log_fd)
     except OSError:
         fail("retained output staging path is unavailable")
     if (
@@ -2226,9 +2307,8 @@ def verify_retained_output(stage: OutputStage) -> None:
         or not stat.S_ISREG(artifact.st_mode)
         or not stat.S_ISREG(log.st_mode)
         or (artifact.st_dev, artifact.st_ino)
-        != (os.fstat(stage.artifact_fd).st_dev, os.fstat(stage.artifact_fd).st_ino)
-        or (log.st_dev, log.st_ino)
-        != (os.fstat(stage.log_fd).st_dev, os.fstat(stage.log_fd).st_ino)
+        != (artifact_by_fd.st_dev, artifact_by_fd.st_ino)
+        or (log.st_dev, log.st_ino) != (log_by_fd.st_dev, log_by_fd.st_ino)
     ):
         fail("retained output staging path was replaced")
 
@@ -2291,10 +2371,17 @@ def stage_output(profile: Profile, lease_name: str) -> OutputStage:
         verify_retained_output(stage)
         return stage
     except (ExecutorError, OSError) as error:
-        safe_close(log_fd)
-        safe_close(artifact_fd)
-        safe_close(directory_fd)
-        cleanup_error: ExecutorError | None = None
+        failure = normalized_error(error, "cannot initialize output staging")
+        try:
+            close_descriptors(
+                (
+                    (log_fd, "partial output stderr stream"),
+                    (artifact_fd, "partial output artifact stream"),
+                    (directory_fd, "partial output staging directory"),
+                )
+            )
+        except ExecutorError as close_error:
+            failure = append_error(failure, close_error)
         if created:
             try:
                 if identity is None:
@@ -2308,14 +2395,13 @@ def stage_output(profile: Profile, lease_name: str) -> OutputStage:
                     identity.st_ino,
                     "partial output staging",
                 )
-            except (ExecutorError, OSError) as failure:
-                cleanup_error = ExecutorError(str(failure))
-        safe_close(root_fd)
-        if cleanup_error is not None:
-            fail(f"output staging failed and cleanup failed: {cleanup_error}")
-        if isinstance(error, ExecutorError):
-            raise error
-        fail(f"cannot initialize output staging: {error}")
+            except (ExecutorError, OSError) as cleanup_error:
+                failure = append_error(failure, cleanup_error)
+        try:
+            close_descriptor(root_fd, "partial output staging root")
+        except ExecutorError as close_error:
+            failure = append_error(failure, close_error)
+        raise failure
 
 
 def stage_source(profile: Profile, request: Request, lease_name: str) -> SourceSnapshot:
@@ -2449,7 +2535,7 @@ def stage_source(profile: Profile, request: Request, lease_name: str) -> SourceS
             write_all(manifest_fd, manifest_raw)
             finalize_source_file(manifest_fd, 0o444, "source manifest")
         finally:
-            os.close(manifest_fd)
+            close_descriptor(manifest_fd, "source manifest")
         request_write_fd = os.open(
             request_name,
             os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
@@ -2460,7 +2546,7 @@ def stage_source(profile: Profile, request: Request, lease_name: str) -> SourceS
             write_all(request_write_fd, request.raw)
             finalize_source_file(request_write_fd, 0o444, "request snapshot")
         finally:
-            os.close(request_write_fd)
+            close_descriptor(request_write_fd, "request snapshot writer")
         request_fd = os.open(
             request_name,
             os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
@@ -2495,10 +2581,17 @@ def stage_source(profile: Profile, request: Request, lease_name: str) -> SourceS
         verify_retained_snapshot(snapshot)
         return snapshot
     except (ExecutorError, OSError) as error:
-        safe_close(request_fd)
-        safe_close(snapshot_fd)
-        safe_close(root_fd)
-        cleanup_error: ExecutorError | None = None
+        failure = normalized_error(error, "cannot initialize source staging")
+        try:
+            close_descriptors(
+                (
+                    (request_fd, "partial request snapshot"),
+                    (snapshot_fd, "partial source snapshot"),
+                    (root_fd, "partial source staging lease"),
+                )
+            )
+        except ExecutorError as close_error:
+            failure = append_error(failure, close_error)
         if lease_created:
             try:
                 if lease_identity is None:
@@ -2514,14 +2607,13 @@ def stage_source(profile: Profile, request: Request, lease_name: str) -> SourceS
                     lease_identity.st_ino,
                     "partial source staging",
                 )
-            except (ExecutorError, OSError) as failure:
-                cleanup_error = ExecutorError(str(failure))
-        safe_close(staging_root_fd)
-        if cleanup_error is not None:
-            fail(f"source staging failed and cleanup failed: {cleanup_error}")
-        if isinstance(error, ExecutorError):
-            raise error
-        fail(f"cannot initialize source staging: {error}")
+            except (ExecutorError, OSError) as cleanup_error:
+                failure = append_error(failure, cleanup_error)
+        try:
+            close_descriptor(staging_root_fd, "partial source staging root")
+        except ExecutorError as close_error:
+            failure = append_error(failure, close_error)
+        raise failure
 
 
 def external_trust_anchor(args: argparse.Namespace) -> TrustAnchor:
@@ -2636,7 +2728,7 @@ def authorize(args: argparse.Namespace) -> AuthorizedRequest:
         policy,
         profile,
         request,
-        seccomp.resolve(strict=True),
+        resolve_path(seccomp, "protected seccomp profile"),
         authorization_digest,
     )
 
@@ -2866,7 +2958,7 @@ def require_lease_absent(root: Path, lease_name: str, label: str) -> None:
         fail(f"cannot establish {label} lease cleanup before plan output: {error}")
     finally:
         if root_fd >= 0:
-            os.close(root_fd)
+            close_descriptor(root_fd, f"{label} plan-output check")
 
 
 def emit_plan_output(
@@ -3088,7 +3180,7 @@ def verify_installed_operator_entrypoint() -> None:
             fail(f"cannot establish fixed {label}: {error}")
         finally:
             if file_fd >= 0:
-                os.close(file_fd)
+                close_descriptor(file_fd, f"fixed {label}")
 
 
 def operator_namespace(
@@ -3112,6 +3204,22 @@ def operator_namespace(
     )
 
 
+def report_controlled_error(prefix: str, error: BaseException) -> int:
+    detail = " ".join(str(error).splitlines())
+    if len(detail) > 2048:
+        detail = detail[:2048] + "..."
+    raw = f"{prefix}: {detail}\n"
+    try:
+        sys.stderr.write(raw)
+        sys.stderr.flush()
+    except OSError:
+        try:
+            os.write(2, raw.encode("ascii", errors="replace"))
+        except OSError:
+            pass
+    return 2
+
+
 def operator_main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Fixed production OCI evidence operator entrypoint"
@@ -3130,9 +3238,8 @@ def operator_main(argv: list[str] | None = None) -> int:
         args = operator_namespace(config, selected.request_id, function)
         function(args)
         return 0
-    except ExecutorError as error:
-        print(f"fe2o3-oci-operator: {error}", file=sys.stderr)
-        return 2
+    except (ExecutorError, OSError) as error:
+        return report_controlled_error("fe2o3-oci-operator", error)
 
 
 def main() -> int:
@@ -3141,9 +3248,8 @@ def main() -> int:
         args = parser.parse_args()
         args.func(args)
         return 0
-    except ExecutorError as error:
-        print(f"parity-oci-executor: {error}", file=sys.stderr)
-        return 2
+    except (ExecutorError, OSError) as error:
+        return report_controlled_error("parity-oci-executor", error)
 
 
 if __name__ == "__main__":

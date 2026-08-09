@@ -317,6 +317,7 @@ git -C "${SOURCE_REPO}" -c core.fsmonitor=false checkout -q -- \
 PYTHONDONTWRITEBYTECODE=1 python3 - "${EXECUTOR}" "${SOURCE_STAGING}" \
   "${OUTPUT_STAGING}" <<'PY'
 import importlib.util
+import io
 import os
 from pathlib import Path
 import sys
@@ -519,6 +520,40 @@ finally:
     module.os.fsync = real_fsync
     os.close(durability_root_fd)
     os.close(durability_fd)
+
+durability_fd = os.open(durability, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+durability_root_fd = os.open(
+    source_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+)
+real_close = module.os.close
+failed_directory_fd = []
+
+
+def reject_finalizer_close(file_fd):
+    if descriptor_name(file_fd) == "beta" and not failed_directory_fd:
+        failed_directory_fd.append(file_fd)
+        raise OSError("injected finalizer close failure")
+    real_close(file_fd)
+
+
+module.os.close = reject_finalizer_close
+try:
+    try:
+        module.finalize_source_directories(
+            durability_fd,
+            {"alpha", "alpha/beta", "alpha/gamma"},
+            durability_root_fd,
+        )
+    except module.ExecutorError as error:
+        assert "cannot close source directory alpha/beta" in str(error)
+    else:
+        raise AssertionError("source finalizer close OSError escaped or was accepted")
+finally:
+    module.os.close = real_close
+    for file_fd in failed_directory_fd:
+        real_close(file_fd)
+    real_close(durability_root_fd)
+    real_close(durability_fd)
 
 output_root = Path(output_root_text)
 output_lease_name = "plan-" + "d" * 64 + "-" + "e" * 64
@@ -822,6 +857,166 @@ finally:
     module.sys.stdout = real_stdout
     (source_root / emission_lease).rmdir()
 assert blocked_output.write_count == 0
+
+
+class FailingStdout:
+    def write(self, value):
+        del value
+        raise OSError("injected plan stdout failure")
+
+    def flush(self):
+        return None
+
+
+module.sys.stdout = FailingStdout()
+try:
+    try:
+        module.emit_plan_output(
+            ["oci_execution_plan_schema_version\t2"],
+            ((source_root, emission_lease, "source staging"),),
+        )
+    except module.ExecutorError as error:
+        assert "cannot emit cleaned OCI plan" in str(error)
+    else:
+        raise AssertionError("plan stdout OSError escaped or was accepted")
+finally:
+    module.sys.stdout = real_stdout
+
+close_read, close_write = os.pipe()
+real_close = module.os.close
+close_calls = []
+
+
+def reject_one_close(file_fd):
+    close_calls.append(file_fd)
+    if file_fd == close_read:
+        raise OSError("injected descriptor close failure")
+    real_close(file_fd)
+
+
+module.os.close = reject_one_close
+try:
+    try:
+        module.close_descriptors(
+            (
+                (close_read, "first close fixture"),
+                (close_write, "second close fixture"),
+            )
+        )
+    except module.ExecutorError as error:
+        assert "cannot close first close fixture" in str(error)
+    else:
+        raise AssertionError("descriptor close OSError escaped or was accepted")
+finally:
+    module.os.close = real_close
+    real_close(close_read)
+assert close_calls == [close_read, close_write]
+
+trusted_fd = os.open(source_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+trusted_root = module.TrustedRoot(source_root, trusted_fd, os.getuid(), os.getgid())
+
+
+def reject_trusted_close(file_fd):
+    if file_fd == trusted_fd:
+        raise OSError("injected trusted-root close failure")
+    real_close(file_fd)
+
+
+module.os.close = reject_trusted_close
+try:
+    try:
+        trusted_root.close()
+    except module.ExecutorError as error:
+        assert "cannot close protected root" in str(error)
+        assert trusted_root.fd == -1
+    else:
+        raise AssertionError("TrustedRoot close OSError escaped or was accepted")
+finally:
+    module.os.close = real_close
+    real_close(trusted_fd)
+
+primary_fd = os.open(source_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+
+
+def reject_primary_close(file_fd):
+    if file_fd == primary_fd:
+        raise OSError("injected primary cleanup close failure")
+    real_close(file_fd)
+
+
+module.os.close = reject_primary_close
+try:
+    try:
+        try:
+            raise module.ExecutorError("primary staging failure")
+        except module.ExecutorError:
+            module.close_descriptor(primary_fd, "primary cleanup fixture")
+    except module.ExecutorError as error:
+        assert "primary staging failure" in str(error)
+        assert "cannot close primary cleanup fixture" in str(error)
+    else:
+        raise AssertionError("close failure masked or lost the primary error")
+finally:
+    module.os.close = real_close
+    real_close(primary_fd)
+
+real_resolve = module.Path.resolve
+
+
+def reject_resolve(self, *args, **kwargs):
+    del self, args, kwargs
+    raise OSError("injected path resolution failure")
+
+
+module.Path.resolve = reject_resolve
+try:
+    try:
+        module.resolve_path(source_root, "resolution fixture")
+    except module.ExecutorError as error:
+        assert "cannot resolve resolution fixture" in str(error)
+    else:
+        raise AssertionError("path resolution OSError escaped or was accepted")
+finally:
+    module.Path.resolve = real_resolve
+
+
+class FailingParser:
+    def parse_args(self):
+        return type(
+            "Arguments",
+            (),
+            {"func": lambda self, args: (_ for _ in ()).throw(OSError("top-level fs"))},
+        )()
+
+
+real_build_parser = module.build_parser
+real_stderr = module.sys.stderr
+captured_stderr = io.StringIO()
+module.build_parser = FailingParser
+module.sys.stderr = captured_stderr
+try:
+    assert module.main() == 2
+finally:
+    module.build_parser = real_build_parser
+    module.sys.stderr = real_stderr
+assert captured_stderr.getvalue().count("\n") == 1
+assert "parity-oci-executor: top-level fs" in captured_stderr.getvalue()
+assert "Traceback" not in captured_stderr.getvalue()
+
+real_verify_entrypoint = module.verify_installed_operator_entrypoint
+captured_stderr = io.StringIO()
+module.verify_installed_operator_entrypoint = lambda: (_ for _ in ()).throw(
+    OSError("operator top-level fs")
+)
+module.sys.stderr = captured_stderr
+try:
+    assert module.operator_main(["verify", "--request-id", "a" * 64]) == 2
+finally:
+    module.verify_installed_operator_entrypoint = real_verify_entrypoint
+    module.sys.stderr = real_stderr
+assert captured_stderr.getvalue().count("\n") == 1
+assert "fe2o3-oci-operator: operator top-level fs" in captured_stderr.getvalue()
+assert "Traceback" not in captured_stderr.getvalue()
 PY
 PYTHONDONTWRITEBYTECODE=1 python3 - "${EXECUTOR}" "${OCI_LAYOUT}" "${REQUEST}" \
   "${TRUSTED_ROOT}" "${QUEUE_AUTH_SHA256}" "${POLICY_IDENTITY}" <<'PY'
