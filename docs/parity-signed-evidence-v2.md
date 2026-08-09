@@ -19,6 +19,14 @@ provisions runner-held private keys. PEM files under scripts/tests/fixtures
 are explicitly test-only. Their trust domain is test, which production gating
 rejects.
 
+The current `powderluv/fe2o3` and `harsh-nod/fe2o3` repositories are
+user-owned. GitHub's organization-level required-workflow rule is therefore
+not available on either repository, and this document does not claim that the
+protected verdict or authoritative generic CI is active there. Activation
+requires either moving the repository to an organization that can enforce a
+protected required workflow or deploying an independent App/external
+controller with equivalent immutable-source guarantees.
+
 ## Operator Provisioning
 
 1. Generate separate Ed25519 attestor and reviewer keys outside the repository.
@@ -378,18 +386,22 @@ A notification result is never authorization. `success`, `failure`,
 `cancelled`, `skipped`, `neutral`, `timed_out`, `action_required`, `stale`, and
 unknown conclusions have identical notification semantics. The controller
 independently fetches and validates the exact candidate or merge-group tree
-using protected scripts. Generic CI remains a separate required check; the
-parity verdict does not infer generic build or test correctness from CI.
+using protected scripts. Generic CI remains a separate non-authoritative
+signal; the parity verdict does not infer generic build or test correctness
+from CI.
 
 Every notification is bound to more than its configured workflow ID and path.
 The controller re-queries the exact run ID and requires its event, path, branch,
 head SHA, workflow ID, and completed status to match the immutable event. It
-then resolves the workflow-file Git blob at that exact source-run SHA and at the
-protected `github.workflow_sha`. The object must be a blob and both OIDs must be
-identical. A candidate-modified trigger, runner, permission, action, or command
-therefore cannot act as a notification source. The candidate or merge-group
-tree must also contain byte-identical `.github/workflows/ci.yml` and
-`.github/workflows/parity-review-signal.yml` blobs.
+then resolves the exact, case-sensitive workflow path with a NUL-safe
+`git ls-tree` parser at that source-run SHA and at the protected
+`github.workflow_sha`. Each tree must contain exactly one `100644 blob` entry
+with the requested name and identical OID. Executable files, symlinks,
+gitlinks, missing files, and case substitutions fail. A candidate-modified
+trigger, runner, permission, action, command, mode, or path therefore cannot
+act as a notification source. The candidate or merge-group tree must contain
+these exact entries for `.github/workflows/ci.yml` and
+`.github/workflows/parity-review-signal.yml`.
 
 Base and head refs are fetched into a runner-owned bare repository. The fetched
 refs must still resolve to the declared exact 40-character commit IDs, both
@@ -403,11 +415,21 @@ changed-path count and NUL-delimited paths with an immutable two-tree
 The workflow publishes `fe2o3/protected-parity-promotion` through the GitHub
 Checks API on the exact pull-request or merge-group SHA. Its deterministic
 external ID is `fe2o3-parity-v1:<sha>`. Before source lookup or verification,
-the controller queries exact-name checks on that SHA and selects only the
-configured App ID and slug. It updates the one matching deterministic check,
-adopts one unambiguous legacy App check, or creates the first check. Duplicate
-dedicated checks, multiple legacy App checks, truncated inventories, and
-candidate same-name checks fail closed. Check ID ordering is never an input.
+the controller paginates every check suite for the exact SHA and then every
+check run for every suite with `filter=all`. It validates suite/run IDs,
+reported counts, expected page counts and occupancy, global uniqueness, file
+size and count bounds, and complete suite coverage. The GitHub 1,000-result
+server cap, hidden pages, duplicate IDs, malformed page boundaries, and any
+truncation fail explicitly; the commit-level check-run aggregation endpoint is
+not an authority.
+
+Selection then considers only the configured App ID and slug and, when set,
+the configured App owner. Exactly one matching check may exist and it must
+carry the deterministic external ID. Any same-App, same-name, exact-SHA check
+without that external ID blocks reconciliation, even when a dedicated check
+also exists. Multiple deterministic checks also block. There is no legacy
+adoption or self-authorizing migration. Candidate same-name checks from other
+Apps are irrelevant, and check ID ordering is never an input.
 
 All privileged parity runs share one non-cancelling concurrency group. The
 selected check is reset to `in_progress`, verified, and updated in place to
@@ -454,15 +476,28 @@ changes use this administrator migration procedure:
    expected to fail and cannot approve it.
 3. If a workflow was recreated, update its configured immutable numeric ID.
    Run protected-default `workflow_dispatch` reconciliation and confirm the
-   deterministic App check plus the separately required Generic validation
-   check before removing the temporary bypass.
+   deterministic App check plus the separate Generic validation signal before
+   removing the temporary bypass.
+
+The same administrator-only rule applies to legacy App checks. Activation
+requires zero same-App, same-name legacy checks on every SHA that will be
+admitted. The parity controller will not rewrite a legacy check's external ID
+and cannot authorize its own migration. Existing SHAs with legacy checks must
+be replaced by a new candidate SHA or handled through an independently audited
+administrator procedure; they do not pass this controller.
 
 Configure the verdict identity as follows:
 
-1. Create a dedicated GitHub App installed only on this repository. Grant its
-   installation token `Checks: write` and no other write permission.
+1. Create a dedicated GitHub App installed only on this repository. The current
+   controller calls only the Checks API, so grant its installation token
+   `Checks: write` and no other write permission. `Commit statuses: write` is
+   not required and must remain disabled. An alternate trusted CI controller
+   that intentionally publishes commit statuses needs a separate documented
+   credential and must not broaden this parity App.
 2. Create a `parity-verdict` Actions environment. Set
    `PARITY_VERDICT_APP_ID` as an environment variable and
+   optionally set `PARITY_VERDICT_APP_OWNER` to the expected App owner login.
+   Set
    `PARITY_GENERIC_CI_WORKFLOW_ID` and
    `PARITY_REVIEW_SIGNAL_WORKFLOW_ID` to the immutable numeric workflow IDs.
    Set `PARITY_VERDICT_APP_PRIVATE_KEY` as an environment secret. Restrict
@@ -470,18 +505,30 @@ Configure the verdict identity as follows:
    `refs/pull/*`, and `gh-readonly-queue/*` refs must not receive this
    environment. Candidate-selected `workflow_dispatch`, direct merge-group, and
    notification jobs must not receive App secrets.
-3. In the default-branch ruleset, require the exact check name
+3. Where the repository plan and ownership model support source-pinned required
+   status checks, require the exact check name
    `fe2o3/protected-parity-promotion` and select the dedicated App as the
    expected source. Pin its immutable numeric App ID, not merely its display
    name. Do not select the general GitHub Actions App as the source.
-4. Also require `Generic validation` from the GitHub Actions source and add an
-   organization ruleset `Require workflows to pass before merging` rule pinned
-   to this repository's protected `.github/workflows/ci.yml`. Generic CI is
-   intentionally independent from the parity App verdict.
-5. Enable both required checks for pull requests and merge queue. Keep
+4. Treat `Generic validation` from GitHub Actions as a separate,
+   non-authoritative signal on the current user-owned repositories. Requiring
+   it can block a reported failure, but its success cannot prove generic
+   correctness because candidate workflow bytes are not an independent trust
+   root. The parity verdict independently authorizes only a no-op or the
+   evidence/status/projection transaction paths accepted by its protected
+   classifier; it never infers generic correctness from this signal.
+5. Enable the protected App check for pull requests and merge queue only after
+   all activation preconditions and the live canary below pass. Keep
    `.github/workflows/parity-promotion.yml`, both protected controller scripts,
    the environment policy, and the ruleset under administrator/CODEOWNER
    control. Require native CODEOWNER approval and dismissal of stale approvals.
+
+Authoritative generic CI requires one of two additional deployments: transfer
+to an organization and pin a protected required workflow, or deploy a dedicated
+external/App controller that fetches protected workflow and critical harness
+blobs, runs them against the exact candidate or merge-group tree without
+executing candidate control code, and emits a separately source-pinned verdict.
+Neither deployment is active in the current user-owned repositories.
 
 The workflow verifies every create/update response against the configured App
 ID and App slug, check name, check ID, candidate SHA, status, and conclusion. A
@@ -491,12 +538,21 @@ never stored in this repository. Trust-change PR checks still require protected
 review approvals bound to the exact PR head; merge-group checks repeat the
 immutable-path and monotonic trust-update validation after candidate admission.
 
-Loss or expiration of the dedicated App credential is fail-closed for
-availability: the controller cannot reset or complete the required App check,
-so admission must stop until the credential is restored and reconciliation is
-run. Native CODEOWNER/review protection must remain required independently; it
-prevents an old successful parity check from substituting for a dismissed
-approval during an App outage.
+Before activation, a live App canary is a hard blocker. On a disposable new
+candidate SHA with zero legacy checks, complete the deterministic App check,
+run protected reconciliation, and observe the same check ID and external ID
+transition back to `in_progress` before it completes again. Also confirm that a
+denied or ineffective PATCH makes the controller fail rather than continue.
+The code validates the PATCH response, but hosted fixtures are not a substitute
+for this live GitHub behavior test.
+
+Loss, expiration, or insufficient permission of the dedicated App credential is
+fail-closed for availability: the controller cannot reset or complete the
+required App check, so admission must stop until the credential is restored and
+reconciliation is run. A stale success is mitigated only after an independent
+native CODEOWNER requirement and stale-approval dismissal are configured and
+verified. Those deployment controls, the App canary, production keys, and an
+active production trust policy are not currently claimed active here.
 
 ## Tests
 
