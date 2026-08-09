@@ -2,6 +2,12 @@ use crate::collector::CollectionResult;
 use crate::semantic_features::{self, SessionRecognizedSemanticItem};
 use crate::trusted_device_items::TrustedDeviceItem;
 use dialect_mir::{MirAttr, MirOp, MirOpRecord, MirType};
+use fe2o3_artifacts::{
+    AbiKind as KernelAbiKind, AbiLayout, Access as KernelAccess,
+    AddressSpace as KernelAddressSpace, AliasClass, ArgumentOwnership, BlockSize, Capability,
+    Endianness, LaunchContract, Mutability as KernelMutability, PointerWidth, ScalarType,
+    TargetIdentity,
+};
 use fe2o3_compiler_ffi::CodeObjectVersion;
 use fe2o3_rustc_front::FunctionIdentityV1;
 use reserved_fe2o3_symbols::{
@@ -24,6 +30,62 @@ use std::error::Error;
 use std::fmt::{self, Write};
 
 const MIR_FUNCTION_IDENTITY_DOMAIN_V1: &[u8] = b"fe2o3.mir-function-identity.v1\0";
+#[allow(dead_code)]
+const PORTABLE_MIR_SEMANTIC_DOMAIN_V2: &[u8] = b"fe2o3.portable-mir-semantic.v2\0";
+#[allow(dead_code)]
+const MAX_PORTABLE_MIR_TYPE_DEPTH_V2: usize = 64;
+
+/// Stable policy inputs for one kernel's portable executable-MIR identity.
+///
+/// These values deliberately contain no compiler, Cargo, checkout, diagnostic,
+/// or artifact observations. The digest is an admission-policy key only; it
+/// does not authorize rustc MIR V2 ingestion or lowering.
+#[derive(Clone, Copy)]
+#[allow(dead_code)]
+pub(crate) struct MirSemanticAdmissionInputsV2<'a> {
+    kernel_export_name: &'a str,
+    target: &'a TargetIdentity,
+    abi: &'a AbiLayout,
+    launch: &'a LaunchContract,
+}
+
+#[allow(dead_code)]
+impl<'a> MirSemanticAdmissionInputsV2<'a> {
+    pub(crate) const fn new(
+        kernel_export_name: &'a str,
+        target: &'a TargetIdentity,
+        abi: &'a AbiLayout,
+        launch: &'a LaunchContract,
+    ) -> Self {
+        Self {
+            kernel_export_name,
+            target,
+            abi,
+            launch,
+        }
+    }
+}
+
+/// Domain-separated SHA-256 identity of normalized portable MIR semantics.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[allow(dead_code)]
+pub(crate) struct PortableMirSemanticDigestV2([u8; 32]);
+
+#[allow(dead_code)]
+impl PortableMirSemanticDigestV2 {
+    pub(crate) const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+
+    #[cfg(test)]
+    fn to_hex(self) -> String {
+        let mut encoded = String::with_capacity(64);
+        for byte in self.0 {
+            let _ = write!(encoded, "{byte:02x}");
+        }
+        encoded
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MirModule {
@@ -1001,6 +1063,759 @@ fn function_identity_hex_v1(identity: FunctionIdentityV1) -> String {
         let _ = write!(encoded, "{byte:02x}");
     }
     encoded
+}
+
+#[allow(dead_code)]
+impl MirModule {
+    /// Computes the portable semantic identity of one kernel and its reachable
+    /// local helper closure.
+    ///
+    /// Internal calls are resolved through compiler-authenticated collection
+    /// paths, then encoded by stable export identity. The paths themselves are
+    /// never included in the digest. This function produces no lowering or
+    /// artifact authority.
+    pub(crate) fn portable_semantic_digest_v2(
+        &self,
+        inputs: MirSemanticAdmissionInputsV2<'_>,
+    ) -> Result<PortableMirSemanticDigestV2, MirImportError> {
+        let (functions, functions_by_path) =
+            self.portable_semantic_closure_v2(inputs.kernel_export_name)?;
+        let mut encoder = PortableMirSemanticEncoderV2::new();
+        encoder.target(inputs.target)?;
+        encoder.abi(inputs.abi)?;
+        encoder.launch(inputs.launch);
+        encoder.text(inputs.kernel_export_name)?;
+        encoder.len(functions.len())?;
+        for function in functions {
+            encoder.function(function, &functions_by_path)?;
+        }
+        Ok(encoder.finish())
+    }
+
+    fn portable_semantic_closure_v2<'a>(
+        &'a self,
+        kernel_export_name: &str,
+    ) -> Result<(Vec<&'a MirFunction>, BTreeMap<&'a str, &'a MirFunction>), MirImportError> {
+        let mut functions_by_export = BTreeMap::new();
+        let mut functions_by_path = BTreeMap::new();
+        for function in &self.functions {
+            if function.export_name.is_empty() {
+                return Err(MirImportError::new(
+                    "portable MIR function export must not be empty",
+                ));
+            }
+            if functions_by_export
+                .insert(function.export_name.as_str(), function)
+                .is_some()
+            {
+                return Err(MirImportError::new(format!(
+                    "portable MIR contains duplicate export `{}`",
+                    function.export_name
+                )));
+            }
+            if functions_by_path
+                .insert(function.rust_path.as_str(), function)
+                .is_some()
+            {
+                return Err(MirImportError::new(format!(
+                    "portable MIR contains duplicate compiler path `{}`",
+                    function.rust_path
+                )));
+            }
+        }
+
+        let root = functions_by_export
+            .get(kernel_export_name)
+            .copied()
+            .ok_or_else(|| {
+                MirImportError::new(format!(
+                    "portable MIR kernel export `{kernel_export_name}` is absent"
+                ))
+            })?;
+        if root.kind != MirFunctionKind::KernelEntry {
+            return Err(MirImportError::new(format!(
+                "portable MIR export `{kernel_export_name}` is not a kernel root"
+            )));
+        }
+
+        let mut pending = vec![root];
+        let mut reachable = BTreeMap::new();
+        while let Some(function) = pending.pop() {
+            let stable_key = (
+                function.kind.canonical_order_v1(),
+                function.export_name.as_str(),
+            );
+            if reachable.insert(stable_key, function).is_some() {
+                continue;
+            }
+            for block in &function.blocks {
+                let Some(MirTerminator {
+                    kind:
+                        MirTerminatorKind::Call {
+                            callee: Some(callee),
+                            ..
+                        },
+                    ..
+                }) = &block.terminator
+                else {
+                    continue;
+                };
+                if let MirCalleeIdentity::Untrusted(path) = &callee.identity {
+                    let target =
+                        functions_by_path
+                            .get(path.as_str())
+                            .copied()
+                            .ok_or_else(|| {
+                                MirImportError::new(format!(
+                                    "portable MIR cannot normalize unresolved callee `{path}`"
+                                ))
+                            })?;
+                    pending.push(target);
+                }
+            }
+        }
+
+        Ok((reachable.into_values().collect(), functions_by_path))
+    }
+}
+
+#[allow(dead_code)]
+struct PortableMirSemanticEncoderV2 {
+    digest: Sha256,
+}
+
+#[allow(dead_code)]
+impl PortableMirSemanticEncoderV2 {
+    fn new() -> Self {
+        let mut digest = Sha256::new();
+        digest.update(PORTABLE_MIR_SEMANTIC_DOMAIN_V2);
+        Self { digest }
+    }
+
+    fn finish(self) -> PortableMirSemanticDigestV2 {
+        PortableMirSemanticDigestV2(self.digest.finalize().into())
+    }
+
+    fn tag(&mut self, value: u8) {
+        self.digest.update([value]);
+    }
+
+    fn boolean(&mut self, value: bool) {
+        self.tag(u8::from(value));
+    }
+
+    fn usize(&mut self, value: usize) -> Result<(), MirImportError> {
+        let value = u64::try_from(value)
+            .map_err(|_| MirImportError::new("portable MIR index cannot be represented as u64"))?;
+        self.u64(value);
+        Ok(())
+    }
+
+    fn len(&mut self, value: usize) -> Result<(), MirImportError> {
+        self.usize(value)
+    }
+
+    fn u16(&mut self, value: u16) {
+        self.digest.update(value.to_le_bytes());
+    }
+
+    fn u32(&mut self, value: u32) {
+        self.digest.update(value.to_le_bytes());
+    }
+
+    fn u64(&mut self, value: u64) {
+        self.digest.update(value.to_le_bytes());
+    }
+
+    fn u128(&mut self, value: u128) {
+        self.digest.update(value.to_le_bytes());
+    }
+
+    fn i32(&mut self, value: i32) {
+        self.digest.update(value.to_le_bytes());
+    }
+
+    fn i64(&mut self, value: i64) {
+        self.digest.update(value.to_le_bytes());
+    }
+
+    fn bytes(&mut self, value: &[u8]) -> Result<(), MirImportError> {
+        self.len(value.len())?;
+        self.digest.update(value);
+        Ok(())
+    }
+
+    fn text(&mut self, value: &str) -> Result<(), MirImportError> {
+        self.bytes(value.as_bytes())
+    }
+
+    fn target(&mut self, target: &TargetIdentity) -> Result<(), MirImportError> {
+        self.text(target.triple().as_str())?;
+        self.text(target.architecture().as_str())?;
+        self.pointer_width(target.pointer_width());
+        self.tag(match target.endianness() {
+            Endianness::Little => 0,
+            Endianness::Big => 1,
+        });
+        self.len(target.capabilities().len())?;
+        for capability in target.capabilities() {
+            self.tag(match capability {
+                Capability::Subgroup => 0,
+                Capability::Ballot => 1,
+                Capability::Shuffle => 2,
+                Capability::WorkgroupMemory => 3,
+                Capability::MatrixMultiply => 4,
+                Capability::AsyncCopy => 5,
+                Capability::Atomics => 6,
+                Capability::AmdWave => 7,
+                Capability::AmdMfma => 8,
+                Capability::AmdWmma => 9,
+                Capability::AmdDsPermute => 10,
+            });
+        }
+        Ok(())
+    }
+
+    fn pointer_width(&mut self, value: PointerWidth) {
+        self.tag(match value {
+            PointerWidth::Bits32 => 0,
+            PointerWidth::Bits64 => 1,
+        });
+    }
+
+    fn abi(&mut self, abi: &AbiLayout) -> Result<(), MirImportError> {
+        self.u64(abi.size());
+        self.u32(abi.alignment());
+        self.pointer_width(abi.pointer_width());
+        self.len(abi.fields().len())?;
+        for field in abi.fields() {
+            self.text(field.name().as_str())?;
+            self.u64(field.offset());
+            self.u64(field.size());
+            self.u32(field.alignment());
+            self.abi_kind(field.kind());
+            self.tag(match field.mutability() {
+                KernelMutability::Immutable => 0,
+                KernelMutability::Mutable => 1,
+            });
+            self.tag(match field.access() {
+                KernelAccess::ByValue => 0,
+                KernelAccess::ReadOnly => 1,
+                KernelAccess::WriteOnly => 2,
+                KernelAccess::ReadWrite => 3,
+            });
+            self.tag(match field.address_space() {
+                KernelAddressSpace::Value => 0,
+                KernelAddressSpace::Global => 1,
+                KernelAddressSpace::Constant => 2,
+                KernelAddressSpace::Workgroup => 3,
+                KernelAddressSpace::Private => 4,
+                KernelAddressSpace::Generic => 5,
+            });
+            self.tag(match field.ownership() {
+                ArgumentOwnership::ByValue => 0,
+                ArgumentOwnership::SharedBorrow => 1,
+                ArgumentOwnership::UniqueBorrow => 2,
+                ArgumentOwnership::RawPointer => 3,
+            });
+            self.tag(match field.alias_class() {
+                AliasClass::Value => 0,
+                AliasClass::SharedReadOnly => 1,
+                AliasClass::Exclusive => 2,
+                AliasClass::SharedAtomic => 3,
+                AliasClass::Unrestricted => 4,
+            });
+            // Opaque rustc type/layout identity bytes are build observations.
+            // Portable MIR types and physical ABI shape carry the stable policy.
+        }
+        Ok(())
+    }
+
+    fn abi_kind(&mut self, kind: KernelAbiKind) {
+        match kind {
+            KernelAbiKind::Scalar(scalar) => {
+                self.tag(0);
+                self.tag(match scalar {
+                    ScalarType::I8 => 0,
+                    ScalarType::U8 => 1,
+                    ScalarType::I16 => 2,
+                    ScalarType::U16 => 3,
+                    ScalarType::I32 => 4,
+                    ScalarType::U32 => 5,
+                    ScalarType::I64 => 6,
+                    ScalarType::U64 => 7,
+                    ScalarType::F16 => 8,
+                    ScalarType::F32 => 9,
+                    ScalarType::F64 => 10,
+                });
+            }
+            KernelAbiKind::Pointer {
+                pointee_size,
+                pointee_alignment,
+            } => {
+                self.tag(1);
+                self.u64(pointee_size);
+                self.u32(pointee_alignment);
+            }
+            KernelAbiKind::Slice {
+                element_size,
+                element_alignment,
+            } => {
+                self.tag(2);
+                self.u64(element_size);
+                self.u32(element_alignment);
+            }
+        }
+    }
+
+    fn launch(&mut self, launch: &LaunchContract) {
+        self.tag(launch.rank());
+        match launch.block_size() {
+            BlockSize::Any => self.tag(0),
+            BlockSize::Exact(dimensions) => {
+                self.tag(1);
+                self.dimensions(dimensions);
+            }
+            BlockSize::AtMost(dimensions) => {
+                self.tag(2);
+                self.dimensions(dimensions);
+            }
+        }
+        self.dimensions(launch.max_grid());
+        self.u32(launch.static_shared_memory_bytes());
+        self.u32(launch.max_dynamic_shared_memory_bytes());
+    }
+
+    fn dimensions(&mut self, dimensions: fe2o3_artifacts::Dimensions) {
+        self.u32(dimensions.x());
+        self.u32(dimensions.y());
+        self.u32(dimensions.z());
+    }
+
+    fn function(
+        &mut self,
+        function: &MirFunction,
+        functions_by_path: &BTreeMap<&str, &MirFunction>,
+    ) -> Result<(), MirImportError> {
+        self.text(&function.export_name)?;
+        self.tag(function.kind.canonical_order_v1());
+        self.kernel_profile(function.typed_profile);
+        self.usize(function.arg_count)?;
+        self.usize(function.local_count)?;
+        self.len(function.locals.len())?;
+        for local in &function.locals {
+            self.usize(local.index)?;
+            self.tag(match local.role {
+                MirLocalRole::Return => 0,
+                MirLocalRole::Arg => 1,
+                MirLocalRole::Temp => 2,
+            });
+            self.imported_type(&local.ty, 0)?;
+        }
+        self.len(function.blocks.len())?;
+        for block in &function.blocks {
+            self.block(block, functions_by_path)?;
+        }
+        // rust_path, frontend-contract compiler observations, and all source
+        // diagnostics are intentionally absent from this transcript.
+        Ok(())
+    }
+
+    fn kernel_profile(&mut self, profile: Option<MirKernelProfile>) {
+        self.tag(match profile {
+            None => 0,
+            Some(MirKernelProfile::VecAddRustcLayoutV2) => 1,
+            Some(MirKernelProfile::GeneralScalarSliceRustcLayoutV3) => 2,
+        });
+    }
+
+    fn imported_type(&mut self, ty: &MirImportedType, depth: usize) -> Result<(), MirImportError> {
+        self.tag(match ty.kind {
+            MirType::I1 => 0,
+            MirType::I32 => 1,
+            MirType::I64 => 2,
+            MirType::USize => 3,
+            MirType::F32 => 4,
+            MirType::F64 => 5,
+            MirType::Ptr => 6,
+            MirType::Slice => 7,
+            MirType::DisjointSlice => 8,
+            MirType::Unit => 9,
+            MirType::Unknown => 10,
+        });
+        self.type_shape(&ty.shape, depth)
+    }
+
+    fn type_shape(&mut self, shape: &MirTypeShape, depth: usize) -> Result<(), MirImportError> {
+        if depth >= MAX_PORTABLE_MIR_TYPE_DEPTH_V2 {
+            return Err(MirImportError::new(
+                "portable MIR type exceeds the semantic depth bound",
+            ));
+        }
+        match shape {
+            MirTypeShape::Unit => self.tag(0),
+            MirTypeShape::Bool => self.tag(1),
+            MirTypeShape::I32 => self.tag(2),
+            MirTypeShape::U32 => self.tag(3),
+            MirTypeShape::I64 => self.tag(4),
+            MirTypeShape::ISize => self.tag(5),
+            MirTypeShape::USize => self.tag(6),
+            MirTypeShape::F32 => self.tag(7),
+            MirTypeShape::F64 => self.tag(8),
+            MirTypeShape::F16 => self.tag(9),
+            MirTypeShape::Bf16 => self.tag(10),
+            MirTypeShape::Bf16x2 => self.tag(11),
+            MirTypeShape::DeviceMath => self.tag(12),
+            MirTypeShape::Slice { element, mutable } => {
+                self.tag(13);
+                self.boolean(*mutable);
+                self.type_shape(element, depth + 1)?;
+            }
+            MirTypeShape::DisjointSlice { element } => {
+                self.tag(14);
+                self.type_shape(element, depth + 1)?;
+            }
+            MirTypeShape::Reference { pointee, mutable } => {
+                self.tag(15);
+                self.boolean(*mutable);
+                self.type_shape(pointee, depth + 1)?;
+            }
+            MirTypeShape::RawPointer { pointee, mutable } => {
+                self.tag(16);
+                self.boolean(*mutable);
+                self.type_shape(pointee, depth + 1)?;
+            }
+            MirTypeShape::Adt { identity } => {
+                self.tag(17);
+                self.text(identity)?;
+            }
+            MirTypeShape::Tuple(fields) => {
+                self.tag(18);
+                self.len(fields.len())?;
+                for field in fields {
+                    self.type_shape(field, depth + 1)?;
+                }
+            }
+            MirTypeShape::Unknown => self.tag(19),
+        }
+        Ok(())
+    }
+
+    fn block(
+        &mut self,
+        block: &MirBlock,
+        functions_by_path: &BTreeMap<&str, &MirFunction>,
+    ) -> Result<(), MirImportError> {
+        self.usize(block.index)?;
+        self.len(block.statements.len())?;
+        for statement in &block.statements {
+            self.statement(statement)?;
+        }
+        match &block.terminator {
+            None => self.tag(0),
+            Some(terminator) => {
+                self.tag(1);
+                self.terminator(&terminator.kind, functions_by_path)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn statement(&mut self, statement: &MirStatement) -> Result<(), MirImportError> {
+        self.usize(statement.index)?;
+        self.tag(match statement.kind {
+            MirStatementKind::Assign => 0,
+            MirStatementKind::StorageLive => 1,
+            MirStatementKind::StorageDead => 2,
+            MirStatementKind::SetDiscriminant => 3,
+            MirStatementKind::Intrinsic => 4,
+            MirStatementKind::CopyNonOverlapping => 5,
+            MirStatementKind::Retag => 6,
+            MirStatementKind::Coverage => 7,
+            MirStatementKind::Nop => 8,
+            MirStatementKind::Other => 9,
+        });
+        self.optional_place(statement.destination.as_ref())?;
+        self.len(statement.operands.len())?;
+        for operand in &statement.operands {
+            self.operand(operand)?;
+        }
+        match statement.rvalue {
+            None => self.tag(0),
+            Some(rvalue) => {
+                self.tag(1);
+                self.rvalue(rvalue);
+            }
+        }
+        // operation and source are compatibility/diagnostic observations.
+        Ok(())
+    }
+
+    fn optional_place(&mut self, place: Option<&MirPlaceRef>) -> Result<(), MirImportError> {
+        match place {
+            None => self.tag(0),
+            Some(place) => {
+                self.tag(1);
+                self.place(place)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn place(&mut self, place: &MirPlaceRef) -> Result<(), MirImportError> {
+        self.usize(place.local)?;
+        self.len(place.projection.len())?;
+        for projection in &place.projection {
+            match projection {
+                MirProjectionElem::Deref => self.tag(0),
+                MirProjectionElem::Field(field) => {
+                    self.tag(1);
+                    self.usize(*field)?;
+                }
+                MirProjectionElem::Index { local } => {
+                    self.tag(2);
+                    self.usize(*local)?;
+                }
+                MirProjectionElem::ConstantIndex {
+                    offset,
+                    min_length,
+                    from_end,
+                } => {
+                    self.tag(3);
+                    self.u64(*offset);
+                    self.u64(*min_length);
+                    self.boolean(*from_end);
+                }
+                MirProjectionElem::Subslice { from, to, from_end } => {
+                    self.tag(4);
+                    self.u64(*from);
+                    self.u64(*to);
+                    self.boolean(*from_end);
+                }
+                MirProjectionElem::Downcast { variant } => {
+                    self.tag(5);
+                    self.usize(*variant)?;
+                }
+                MirProjectionElem::OpaqueCast => self.tag(6),
+                MirProjectionElem::Other => self.tag(7),
+            }
+        }
+        Ok(())
+    }
+
+    fn operand(&mut self, operand: &MirOperandRef) -> Result<(), MirImportError> {
+        match operand {
+            MirOperandRef::Place(place) => {
+                self.tag(0);
+                self.place(place)?;
+            }
+            MirOperandRef::Constant { ty, literal, .. } => {
+                self.tag(1);
+                self.imported_type(ty, 0)?;
+                self.constant(literal);
+            }
+        }
+        Ok(())
+    }
+
+    fn constant(&mut self, constant: &MirConstant) {
+        match constant {
+            MirConstant::Bool(value) => {
+                self.tag(0);
+                self.boolean(*value);
+            }
+            MirConstant::I32(value) => {
+                self.tag(1);
+                self.i32(*value);
+            }
+            MirConstant::U32(value) => {
+                self.tag(2);
+                self.u32(*value);
+            }
+            MirConstant::I64(value) => {
+                self.tag(3);
+                self.i64(*value);
+            }
+            MirConstant::ISize(value) => {
+                self.tag(4);
+                self.i64(*value);
+            }
+            MirConstant::USize(value) => {
+                self.tag(5);
+                self.u64(*value);
+            }
+            MirConstant::F32Bits(value) => {
+                self.tag(6);
+                self.u32(*value);
+            }
+            MirConstant::F64Bits(value) => {
+                self.tag(7);
+                self.u64(*value);
+            }
+            MirConstant::Unevaluated => self.tag(8),
+        }
+    }
+
+    fn rvalue(&mut self, rvalue: MirRvalueKind) {
+        match rvalue {
+            MirRvalueKind::Use => self.tag(0),
+            MirRvalueKind::Repeat => self.tag(1),
+            MirRvalueKind::Ref => self.tag(2),
+            MirRvalueKind::RawPointer => self.tag(3),
+            MirRvalueKind::Cast => self.tag(4),
+            MirRvalueKind::Binary(operation) => {
+                self.tag(5);
+                self.binary(operation);
+            }
+            MirRvalueKind::Unary(operation) => {
+                self.tag(6);
+                self.unary(operation);
+            }
+            MirRvalueKind::Discriminant => self.tag(7),
+            MirRvalueKind::Aggregate => self.tag(8),
+            MirRvalueKind::Other => self.tag(9),
+        }
+    }
+
+    fn binary(&mut self, operation: MirBinaryOp) {
+        self.tag(match operation {
+            MirBinaryOp::Add => 0,
+            MirBinaryOp::Sub => 1,
+            MirBinaryOp::Mul => 2,
+            MirBinaryOp::Div => 3,
+            MirBinaryOp::Rem => 4,
+            MirBinaryOp::BitXor => 5,
+            MirBinaryOp::BitAnd => 6,
+            MirBinaryOp::BitOr => 7,
+            MirBinaryOp::Shl => 8,
+            MirBinaryOp::Shr => 9,
+            MirBinaryOp::Eq => 10,
+            MirBinaryOp::Lt => 11,
+            MirBinaryOp::Le => 12,
+            MirBinaryOp::Ne => 13,
+            MirBinaryOp::Ge => 14,
+            MirBinaryOp::Gt => 15,
+            MirBinaryOp::Cmp => 16,
+            MirBinaryOp::Offset => 17,
+            MirBinaryOp::AddUnchecked => 18,
+            MirBinaryOp::SubUnchecked => 19,
+            MirBinaryOp::MulUnchecked => 20,
+            MirBinaryOp::ShlUnchecked => 21,
+            MirBinaryOp::ShrUnchecked => 22,
+            MirBinaryOp::AddWithOverflow => 23,
+            MirBinaryOp::SubWithOverflow => 24,
+            MirBinaryOp::MulWithOverflow => 25,
+        });
+    }
+
+    fn unary(&mut self, operation: MirUnaryOp) {
+        self.tag(match operation {
+            MirUnaryOp::Not => 0,
+            MirUnaryOp::Neg => 1,
+            MirUnaryOp::PtrMetadata => 2,
+        });
+    }
+
+    fn terminator(
+        &mut self,
+        terminator: &MirTerminatorKind,
+        functions_by_path: &BTreeMap<&str, &MirFunction>,
+    ) -> Result<(), MirImportError> {
+        match terminator {
+            MirTerminatorKind::Return => self.tag(0),
+            MirTerminatorKind::Unreachable => self.tag(1),
+            MirTerminatorKind::Goto { target } => {
+                self.tag(2);
+                self.usize(*target)?;
+            }
+            MirTerminatorKind::SwitchInt {
+                discriminant,
+                targets,
+                otherwise,
+            } => {
+                self.tag(3);
+                self.operand(discriminant)?;
+                self.len(targets.len())?;
+                for target in targets {
+                    self.u128(target.value);
+                    self.usize(target.target)?;
+                }
+                self.usize(*otherwise)?;
+            }
+            MirTerminatorKind::Call {
+                callee,
+                target,
+                destination,
+                operands,
+            } => {
+                self.tag(4);
+                self.callee(callee.as_ref(), functions_by_path)?;
+                match target {
+                    None => self.tag(0),
+                    Some(target) => {
+                        self.tag(1);
+                        self.usize(*target)?;
+                    }
+                }
+                self.optional_place(destination.as_ref())?;
+                self.len(operands.len())?;
+                for operand in operands {
+                    self.operand(operand)?;
+                }
+            }
+            MirTerminatorKind::Assert {
+                condition,
+                expected,
+                target,
+            } => {
+                self.tag(5);
+                self.operand(condition)?;
+                self.boolean(*expected);
+                self.usize(*target)?;
+            }
+            MirTerminatorKind::Drop { target } => {
+                self.tag(6);
+                self.usize(*target)?;
+            }
+            MirTerminatorKind::Other => self.tag(7),
+        }
+        Ok(())
+    }
+
+    fn callee(
+        &mut self,
+        callee: Option<&MirCallee>,
+        functions_by_path: &BTreeMap<&str, &MirFunction>,
+    ) -> Result<(), MirImportError> {
+        let Some(callee) = callee else {
+            self.tag(0);
+            return Ok(());
+        };
+        match &callee.identity {
+            MirCalleeIdentity::Untrusted(path) => {
+                let target = functions_by_path.get(path.as_str()).ok_or_else(|| {
+                    MirImportError::new(format!(
+                        "portable MIR cannot encode unresolved callee `{path}`"
+                    ))
+                })?;
+                self.tag(1);
+                self.text(&target.export_name)?;
+            }
+            MirCalleeIdentity::SessionRecognized(item) => {
+                self.tag(2);
+                self.text(item.canonical_path())?;
+            }
+            MirCalleeIdentity::ExternalImport(import) => {
+                self.tag(3);
+                self.bytes(&import.contract_identity.as_bytes())?;
+                self.text(&import.symbol)?;
+                self.text(&import.target)?;
+                self.u16(import.code_object_version);
+                self.text(&import.semantic_identity)?;
+            }
+        }
+        Ok(())
+    }
 }
 
 impl MirStatement {
@@ -1999,6 +2814,227 @@ mod tests {
     }
 
     #[test]
+    fn portable_semantic_digest_v2_is_deterministic_and_domain_stable() {
+        let module = portable_semantic_module();
+        let environment = portable_semantic_environment();
+        let first = portable_digest(&module, &environment);
+        let second = portable_digest(&module.clone(), &environment);
+
+        assert_eq!(first, second);
+        assert_ne!(first.as_bytes(), &[0; 32]);
+        assert_eq!(
+            first.to_hex(),
+            "5dce95ed570b079957b04b5692c2ab0f897b6c7478505260692d88831ad14ff5"
+        );
+    }
+
+    #[test]
+    fn portable_semantic_digest_v2_binds_executable_mir_mutations() {
+        let original = portable_semantic_module();
+        let environment = portable_semantic_environment();
+        let expected = portable_digest(&original, &environment);
+
+        let mut cfg = original.clone();
+        let MirTerminatorKind::Call { target, .. } =
+            &mut cfg.functions[0].blocks[0].terminator.as_mut().unwrap().kind
+        else {
+            panic!("fixture call terminator");
+        };
+        *target = Some(0);
+        assert_ne!(portable_digest(&cfg, &environment), expected, "CFG");
+
+        let mut operand = original.clone();
+        let MirOperandRef::Place(place) =
+            &mut operand.functions[0].blocks[0].statements[0].operands[0]
+        else {
+            panic!("fixture place operand");
+        };
+        place.local = 2;
+        assert_ne!(portable_digest(&operand, &environment), expected, "operand");
+
+        let mut ty = original.clone();
+        ty.functions[0].locals[1].ty.kind = MirType::I32;
+        ty.functions[0].locals[1].ty.shape = MirTypeShape::I32;
+        assert_ne!(portable_digest(&ty, &environment), expected, "type");
+
+        let mut callee = original.clone();
+        let MirTerminatorKind::Call { callee: target, .. } = &mut callee.functions[0].blocks[0]
+            .terminator
+            .as_mut()
+            .unwrap()
+            .kind
+        else {
+            panic!("fixture call terminator");
+        };
+        *target = Some(MirCallee::trusted_for_test(
+            TrustedDeviceItem::ThreadIndex1d,
+        ));
+        assert_ne!(portable_digest(&callee, &environment), expected, "callee");
+
+        let mut projection = original.clone();
+        let MirOperandRef::Place(place) =
+            &mut projection.functions[0].blocks[0].statements[0].operands[0]
+        else {
+            panic!("fixture place operand");
+        };
+        place.projection[1] = MirProjectionElem::Field(0);
+        assert_ne!(
+            portable_digest(&projection, &environment),
+            expected,
+            "projection"
+        );
+
+        let mut constant = original.clone();
+        let MirOperandRef::Constant { literal, .. } =
+            &mut constant.functions[0].blocks[0].statements[0].operands[1]
+        else {
+            panic!("fixture constant operand");
+        };
+        *literal = MirConstant::U32(8);
+        assert_ne!(
+            portable_digest(&constant, &environment),
+            expected,
+            "constant"
+        );
+
+        let mut profile = original;
+        profile.functions[0].typed_profile = Some(MirKernelProfile::VecAddRustcLayoutV2);
+        assert_ne!(portable_digest(&profile, &environment), expected, "profile");
+    }
+
+    #[test]
+    fn portable_semantic_digest_v2_excludes_paths_diagnostics_and_build_observations() {
+        let original = portable_semantic_module();
+        let environment = portable_semantic_environment();
+        let expected = portable_digest(&original, &environment);
+        let mut changed = original;
+
+        changed.functions[0].rust_path = "different_checkout::opaque_build_hash::alpha".to_owned();
+        changed.functions[1].rust_path = "different_checkout::opaque_build_hash::helper".to_owned();
+        let MirTerminatorKind::Call {
+            callee: Some(callee),
+            ..
+        } = &mut changed.functions[0].blocks[0]
+            .terminator
+            .as_mut()
+            .unwrap()
+            .kind
+        else {
+            panic!("fixture internal call");
+        };
+        *callee = MirCallee::untrusted_for_test("different_checkout::opaque_build_hash::helper");
+
+        changed.functions[0].locals[1].ty.rust =
+            "diagnostic::DisplayOnly<toolchain_hash>".to_owned();
+        let statement = &mut changed.functions[0].blocks[0].statements[0];
+        statement.operation = Some("different diagnostic spelling".to_owned());
+        statement.source = Some(MirSourceLocation {
+            file: "/different/checkout/src/kernel.rs".to_owned(),
+            line: 999,
+            column: 41,
+        });
+        let MirOperandRef::Constant { value, .. } = &mut statement.operands[1] else {
+            panic!("fixture constant operand");
+        };
+        *value = "debug-only constant rendering".to_owned();
+        changed.functions[0].blocks[0]
+            .terminator
+            .as_mut()
+            .unwrap()
+            .source = Some(MirSourceLocation {
+            file: "/another/checkout/generated.rs".to_owned(),
+            line: 1,
+            column: 1,
+        });
+
+        let dimensions = fe2o3_rustc_front::FrontendWorkgroupDimensionsV1::new([64, 1, 1]).unwrap();
+        let launch = fe2o3_rustc_front::FrontendLaunchBoundsV1::new(
+            Some(dimensions),
+            Some(dimensions),
+            Some(1),
+        )
+        .unwrap();
+        let contract =
+            fe2o3_rustc_front::KernelFrontendContractV1::new(Some(launch), None).unwrap();
+        changed.functions[0].frontend_contract =
+            Some(crate::collector::AuthenticatedKernelFrontendContractV1::for_test(contract));
+        changed.functions.reverse();
+
+        assert_eq!(portable_digest(&changed, &environment), expected);
+    }
+
+    #[test]
+    fn portable_semantic_digest_v2_binds_structured_target_abi_and_launch_policy() {
+        let module = portable_semantic_module();
+        let environment = portable_semantic_environment();
+        let expected = portable_digest(&module, &environment);
+
+        let different_target = TargetIdentity::new(
+            fe2o3_artifacts::IdentityText::new("amdgcn-amd-amdhsa").unwrap(),
+            fe2o3_artifacts::IdentityText::new("gfx950:xnack-").unwrap(),
+            PointerWidth::Bits64,
+            Endianness::Little,
+            vec![Capability::Atomics, Capability::AmdWave],
+        )
+        .unwrap();
+        let target_environment = PortableSemanticEnvironment {
+            target: different_target,
+            abi: environment.abi.clone(),
+            launch: environment.launch.clone(),
+        };
+        assert_ne!(portable_digest(&module, &target_environment), expected);
+
+        let abi_environment = PortableSemanticEnvironment {
+            target: environment.target.clone(),
+            abi: AbiLayout::new(0, 1, PointerWidth::Bits32, Vec::new()).unwrap(),
+            launch: environment.launch.clone(),
+        };
+        assert_ne!(portable_digest(&module, &abi_environment), expected);
+
+        let launch_environment = PortableSemanticEnvironment {
+            target: environment.target,
+            abi: environment.abi,
+            launch: LaunchContract::new(
+                1,
+                BlockSize::Exact(fe2o3_artifacts::Dimensions::new(64, 1, 1).unwrap()),
+                fe2o3_artifacts::Dimensions::new(65_535, 1, 1).unwrap(),
+                0,
+                0,
+            )
+            .unwrap(),
+        };
+        assert_ne!(portable_digest(&module, &launch_environment), expected);
+    }
+
+    #[test]
+    fn portable_semantic_digest_v2_rejects_unresolved_textual_callees() {
+        let mut module = portable_semantic_module();
+        let MirTerminatorKind::Call {
+            callee: Some(callee),
+            ..
+        } = &mut module.functions[0].blocks[0]
+            .terminator
+            .as_mut()
+            .unwrap()
+            .kind
+        else {
+            panic!("fixture internal call");
+        };
+        *callee = MirCallee::untrusted_for_test("foreign::opaque::callee");
+        let environment = portable_semantic_environment();
+
+        let error = module
+            .portable_semantic_digest_v2(MirSemanticAdmissionInputsV2::new(
+                "alpha",
+                &environment.target,
+                &environment.abi,
+                &environment.launch,
+            ))
+            .unwrap_err();
+        assert!(error.to_string().contains("unresolved callee"));
+    }
+
+    #[test]
     fn summary_includes_function_and_block_shape() {
         let module = MirModule {
             functions: vec![MirFunction {
@@ -2645,6 +3681,163 @@ mod tests {
             .map(|function| function.source_identity_v1().unwrap())
             .collect::<Vec<_>>();
         assert!(root_identities.windows(2).all(|pair| pair[0] < pair[1]));
+    }
+
+    #[derive(Clone)]
+    struct PortableSemanticEnvironment {
+        target: TargetIdentity,
+        abi: AbiLayout,
+        launch: LaunchContract,
+    }
+
+    fn portable_semantic_environment() -> PortableSemanticEnvironment {
+        PortableSemanticEnvironment {
+            target: TargetIdentity::new(
+                fe2o3_artifacts::IdentityText::new("amdgcn-amd-amdhsa").unwrap(),
+                fe2o3_artifacts::IdentityText::new("gfx942:xnack-").unwrap(),
+                PointerWidth::Bits64,
+                Endianness::Little,
+                vec![Capability::Atomics, Capability::AmdWave],
+            )
+            .unwrap(),
+            abi: AbiLayout::new(0, 1, PointerWidth::Bits64, Vec::new()).unwrap(),
+            launch: LaunchContract::new(
+                1,
+                BlockSize::AtMost(fe2o3_artifacts::Dimensions::new(256, 1, 1).unwrap()),
+                fe2o3_artifacts::Dimensions::new(65_535, 1, 1).unwrap(),
+                0,
+                1_024,
+            )
+            .unwrap(),
+        }
+    }
+
+    fn portable_digest(
+        module: &MirModule,
+        environment: &PortableSemanticEnvironment,
+    ) -> PortableMirSemanticDigestV2 {
+        module
+            .portable_semantic_digest_v2(MirSemanticAdmissionInputsV2::new(
+                "alpha",
+                &environment.target,
+                &environment.abi,
+                &environment.launch,
+            ))
+            .unwrap()
+    }
+
+    fn portable_semantic_module() -> MirModule {
+        let u32_ty = MirImportedType {
+            kind: MirType::I32,
+            rust: "u32".to_owned(),
+            shape: MirTypeShape::U32,
+        };
+        MirModule {
+            functions: vec![
+                MirFunction {
+                    export_name: "alpha".to_owned(),
+                    rust_path: "checkout_a::build_hash_a::alpha".to_owned(),
+                    kind: MirFunctionKind::KernelEntry,
+                    typed_profile: Some(MirKernelProfile::GeneralScalarSliceRustcLayoutV3),
+                    arg_count: 1,
+                    local_count: 3,
+                    locals: vec![
+                        MirLocal {
+                            index: 0,
+                            role: MirLocalRole::Return,
+                            ty: MirImportedType {
+                                kind: MirType::Unit,
+                                rust: "()".to_owned(),
+                                shape: MirTypeShape::Unit,
+                            },
+                        },
+                        MirLocal {
+                            index: 1,
+                            role: MirLocalRole::Arg,
+                            ty: u32_ty.clone(),
+                        },
+                        MirLocal {
+                            index: 2,
+                            role: MirLocalRole::Temp,
+                            ty: u32_ty.clone(),
+                        },
+                    ],
+                    blocks: vec![
+                        MirBlock {
+                            index: 0,
+                            statements: vec![MirStatement {
+                                index: 0,
+                                kind: MirStatementKind::Assign,
+                                destination: Some(local_place(2)),
+                                operands: vec![
+                                    MirOperandRef::Place(MirPlaceRef {
+                                        local: 1,
+                                        projection: vec![
+                                            MirProjectionElem::Deref,
+                                            MirProjectionElem::Index { local: 2 },
+                                        ],
+                                    }),
+                                    MirOperandRef::Constant {
+                                        ty: u32_ty,
+                                        literal: MirConstant::U32(7),
+                                        value: "const 7_u32".to_owned(),
+                                    },
+                                ],
+                                rvalue: Some(MirRvalueKind::Binary(MirBinaryOp::Add)),
+                                operation: Some("add diagnostic".to_owned()),
+                                source: None,
+                            }],
+                            terminator: Some(MirTerminator {
+                                kind: MirTerminatorKind::Call {
+                                    callee: Some(MirCallee::untrusted_for_test(
+                                        "checkout_a::build_hash_a::helper",
+                                    )),
+                                    target: Some(1),
+                                    destination: Some(local_place(0)),
+                                    operands: vec![MirOperandRef::Place(local_place(2))],
+                                },
+                                source: None,
+                            }),
+                        },
+                        MirBlock {
+                            index: 1,
+                            statements: Vec::new(),
+                            terminator: Some(MirTerminator {
+                                kind: MirTerminatorKind::Return,
+                                source: None,
+                            }),
+                        },
+                    ],
+                    frontend_contract: None,
+                },
+                MirFunction {
+                    export_name: "helper".to_owned(),
+                    rust_path: "checkout_a::build_hash_a::helper".to_owned(),
+                    kind: MirFunctionKind::InternalHelper,
+                    typed_profile: None,
+                    arg_count: 1,
+                    local_count: 1,
+                    locals: vec![MirLocal {
+                        index: 0,
+                        role: MirLocalRole::Return,
+                        ty: MirImportedType {
+                            kind: MirType::Unit,
+                            rust: "()".to_owned(),
+                            shape: MirTypeShape::Unit,
+                        },
+                    }],
+                    blocks: vec![MirBlock {
+                        index: 0,
+                        statements: Vec::new(),
+                        terminator: Some(MirTerminator {
+                            kind: MirTerminatorKind::Return,
+                            source: None,
+                        }),
+                    }],
+                    frontend_contract: None,
+                },
+            ],
+        }
     }
 
     fn general_two_kernel_function(
