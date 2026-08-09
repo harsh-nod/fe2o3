@@ -507,6 +507,17 @@ cp "${TEST_ROOT}/index.good" "${OCI_LAYOUT}/index.json"
 cp "${TEST_ROOT}/profile.good" "${PROFILE}"
 write_policy
 
+printf '{"schemaVersion":2,"schemaVersion":2,"manifests":[]}\n' \
+  >"${OCI_LAYOUT}/index.json"
+write_profile \
+  "${manifest_digest}" "$(size "${TEST_ROOT}/manifest.json")" \
+  "${config_digest}" "$(size "${TEST_ROOT}/config.json")" \
+  "${layer_digest}" "$(size "${TEST_ROOT}/layer")"
+expect_failure json_duplicate 'JSON contains a duplicate key' verify
+cp "${TEST_ROOT}/index.good" "${OCI_LAYOUT}/index.json"
+cp "${TEST_ROOT}/profile.good" "${PROFILE}"
+write_policy
+
 sed -i \
   's/environment\t0002\tHOSTNAME\t6665326f332d65766964656e6365/environment\t0002\tHOSTNAME\t77726f6e67/' \
   "${PROFILE}"
