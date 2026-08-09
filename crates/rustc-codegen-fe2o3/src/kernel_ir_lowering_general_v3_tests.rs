@@ -1,9 +1,29 @@
 use super::*;
 use crate::mir_import::{
-    MirImportedType, MirLocal, MirLocalRole, MirPlaceRef, MirProjectionElem, MirStatement,
-    MirSwitchTarget,
+    MirImportedType, MirLocal, MirLocalRole, MirPlaceRef, MirProjectionElem,
+    MirSemanticAdmissionInputsV2, MirStatement, MirSwitchTarget,
 };
 use dialect_mir::MirType;
+use fe2o3_artifacts::{
+    AbiLayout, BlockSize, Capability, Dimensions, Endianness, IdentityText, LaunchContract,
+    PointerWidth, TargetIdentity,
+};
+use reserved_fe2o3_symbols::{
+    KernelBindingIdV1, TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3, derive_crate_binding_id_v1,
+    derive_kernel_binding_id_v1, host_kernel_symbol_v1,
+};
+
+const S09_CRATE_NAME: &str = "fe2o3_typed_alias_spoof";
+const S09_MODULE_PATH: &str = "general_genuine";
+const S09_LOGICAL_NAME: &str = "alpha";
+const S09_EXPORT_NAME: &str = "alpha";
+
+#[derive(Debug)]
+struct S09SealedOwnerPathFixture {
+    kernel_binding: KernelBindingIdV1,
+    observed_symbol: String,
+    rust_path: String,
+}
 
 #[test]
 fn exact_alpha_and_zeta_bodies_lower_together() {
@@ -56,24 +76,35 @@ fn exact_alpha_and_zeta_bodies_lower_together() {
 
 #[test]
 fn s09_alpha_requires_exact_guarded_cfg_and_dataflow() {
-    let exact = s09_alpha();
-    let authenticated_path = exact.rust_path.clone();
-    crate::source_debug::validate_alpha_mir_body(&exact, &authenticated_path)
+    let sealed_owner = s09_sealed_owner_path_fixture("current-build-observation");
+    let exact = s09_alpha(&sealed_owner.rust_path);
+    crate::source_debug::validate_alpha_mir_body(&exact, &sealed_owner.rust_path)
         .expect("exact S09 alpha MIR");
 
-    // The generated symbol is bound to the integrated Cargo dependency graph. The isolated
-    // S09 branch identity must not remain valid after that graph is merged.
-    let mut isolated_graph_identity = exact.clone();
-    isolated_graph_identity.rust_path =
-        "fe2o3_typed_alias_spoof::general_genuine::__fe2o3_host_kernel_v1_stale_isolated_graph"
-            .to_owned();
+    let stale_binding = KernelBindingIdV1::from_bytes([0x5a; 32]);
+    let mut stale_build_observation = exact.clone();
+    stale_build_observation.rust_path = format!(
+        "{S09_CRATE_NAME}::{S09_MODULE_PATH}::{}",
+        host_kernel_symbol_v1(stale_binding)
+    );
     assert!(
         crate::source_debug::validate_alpha_mir_body(
-            &isolated_graph_identity,
-            &authenticated_path,
+            &stale_build_observation,
+            &sealed_owner.rust_path,
         )
         .is_err(),
-        "isolated-graph S09 DefPath identity was admitted after integration"
+        "stale synthetic S09 build binding was admitted"
+    );
+
+    let mut wrong_owner = exact.clone();
+    wrong_owner.rust_path = format!(
+        "synthetic_wrong_owner::{S09_MODULE_PATH}::{}",
+        sealed_owner.observed_symbol
+    );
+    assert!(
+        crate::source_debug::validate_alpha_mir_body(&wrong_owner, &sealed_owner.rust_path)
+            .is_err(),
+        "synthetic wrong S09 owner was admitted"
     );
 
     let mut disconnected_guard = exact.clone();
@@ -87,7 +118,7 @@ fn s09_alpha_requires_exact_guarded_cfg_and_dataflow() {
     };
     *condition = operand(5);
     assert!(
-        crate::source_debug::validate_alpha_mir_body(&disconnected_guard, &authenticated_path)
+        crate::source_debug::validate_alpha_mir_body(&disconnected_guard, &sealed_owner.rust_path)
             .is_err()
     );
 
@@ -97,7 +128,8 @@ fn s09_alpha_requires_exact_guarded_cfg_and_dataflow() {
         projection: vec![MirProjectionElem::Deref],
     });
     assert!(
-        crate::source_debug::validate_alpha_mir_body(&wrong_store, &authenticated_path).is_err()
+        crate::source_debug::validate_alpha_mir_body(&wrong_store, &sealed_owner.rust_path)
+            .is_err()
     );
 
     let mut alternate_output = exact.clone();
@@ -111,8 +143,30 @@ fn s09_alpha_requires_exact_guarded_cfg_and_dataflow() {
     };
     operands[0] = operand(3);
     assert!(
-        crate::source_debug::validate_alpha_mir_body(&alternate_output, &authenticated_path)
+        crate::source_debug::validate_alpha_mir_body(&alternate_output, &sealed_owner.rust_path)
             .is_err()
+    );
+}
+
+#[test]
+fn s09_dynamic_build_observations_do_not_change_stable_admission() {
+    let first_owner = s09_sealed_owner_path_fixture("build-observation-a");
+    let second_owner = s09_sealed_owner_path_fixture("build-observation-b");
+    assert_ne!(first_owner.kernel_binding, second_owner.kernel_binding);
+    assert_ne!(first_owner.observed_symbol, second_owner.observed_symbol);
+    assert_ne!(first_owner.rust_path, second_owner.rust_path);
+
+    let first = s09_alpha(&first_owner.rust_path);
+    let second = s09_alpha(&second_owner.rust_path);
+    crate::source_debug::validate_alpha_mir_body(&first, &first_owner.rust_path)
+        .expect("first sealed owner path");
+    crate::source_debug::validate_alpha_mir_body(&second, &second_owner.rust_path)
+        .expect("second sealed owner path");
+
+    assert_eq!(
+        s09_stable_admission_sha256(first),
+        s09_stable_admission_sha256(second),
+        "build-specific kernel bindings and observed symbols must remain outside stable admission"
     );
 }
 
@@ -416,7 +470,7 @@ fn alpha() -> MirFunction {
     )
 }
 
-fn s09_alpha() -> MirFunction {
+fn s09_alpha(rust_path: &str) -> MirFunction {
     let locals = vec![
         local(0, MirLocalRole::Return, MirTypeShape::Unit),
         local(1, MirLocalRole::Arg, MirTypeShape::F32),
@@ -462,7 +516,7 @@ fn s09_alpha() -> MirFunction {
     ];
     MirFunction {
         export_name: "alpha".to_owned(),
-        rust_path: "fe2o3_typed_alias_spoof::general_genuine::__fe2o3_host_kernel_v1_2f5e34fba662b3a3fb8dc387a1c06a6214b61f23005c3155f8f5fb8954a28b67".to_owned(),
+        rust_path: rust_path.to_owned(),
         kind: MirFunctionKind::KernelEntry,
         typed_profile: Some(MirKernelProfile::GeneralScalarSliceRustcLayoutV3),
         arg_count: 3,
@@ -567,6 +621,55 @@ fn s09_alpha() -> MirFunction {
         ],
         frontend_contract: None,
     }
+}
+
+fn s09_sealed_owner_path_fixture(metadata: &str) -> S09SealedOwnerPathFixture {
+    let crate_binding = derive_crate_binding_id_v1(S09_CRATE_NAME, [metadata]);
+    let kernel_binding = derive_kernel_binding_id_v1(
+        crate_binding,
+        TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3,
+        S09_LOGICAL_NAME,
+        S09_EXPORT_NAME,
+    );
+    let observed_symbol = host_kernel_symbol_v1(kernel_binding);
+    let rust_path = format!("{S09_CRATE_NAME}::{S09_MODULE_PATH}::{observed_symbol}");
+    S09SealedOwnerPathFixture {
+        kernel_binding,
+        observed_symbol,
+        rust_path,
+    }
+}
+
+fn s09_stable_admission_sha256(function: MirFunction) -> [u8; 32] {
+    let target = TargetIdentity::new(
+        IdentityText::new("amdgcn-amd-amdhsa").unwrap(),
+        IdentityText::new("gfx942:xnack-").unwrap(),
+        PointerWidth::Bits64,
+        Endianness::Little,
+        vec![Capability::Atomics, Capability::AmdWave],
+    )
+    .unwrap();
+    let abi = AbiLayout::new(0, 1, PointerWidth::Bits64, Vec::new()).unwrap();
+    let launch = LaunchContract::new(
+        1,
+        BlockSize::Exact(Dimensions::new(256, 1, 1).unwrap()),
+        Dimensions::new(u32::MAX, 1, 1).unwrap(),
+        0,
+        0,
+    )
+    .unwrap();
+    let module = MirModule {
+        functions: vec![function],
+    };
+    *module
+        .portable_semantic_digest_v2(MirSemanticAdmissionInputsV2::new(
+            S09_EXPORT_NAME,
+            &target,
+            &abi,
+            &launch,
+        ))
+        .expect("S09 portable semantic admission")
+        .as_bytes()
 }
 
 fn zeta() -> MirFunction {
