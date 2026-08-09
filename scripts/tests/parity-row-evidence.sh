@@ -392,6 +392,82 @@ expect_failure projection_history 'promotion projection history mismatch for row
     --transaction "${TEST_ROOT}/history-mismatch.tsv" \
     --output "${TEST_ROOT}/history-output.tsv"
 
+# Manifest selection is append-only, content-addressed, and derived from the
+# protected/candidate archive delta rather than caller-provided input.
+MANIFEST_BASE="${TEST_ROOT}/manifest-base"
+MANIFEST_FIRST="${TEST_ROOT}/manifest-first"
+MANIFEST_SECOND="${TEST_ROOT}/manifest-second"
+mkdir -p "${MANIFEST_BASE}/manifests"
+cp -a "${MANIFEST_BASE}" "${MANIFEST_FIRST}"
+printf 'first promotion manifest\n' >"${MANIFEST_FIRST}/manifests/new.tsv"
+first_manifest_digest="$(file_sha "${MANIFEST_FIRST}/manifests/new.tsv")"
+first_manifest="manifests/promotion-${first_manifest_digest}.tsv"
+mv "${MANIFEST_FIRST}/manifests/new.tsv" "${MANIFEST_FIRST}/${first_manifest}"
+[[ "$("${TOOL}" derive-promotion-manifest \
+  --protected-archive "${MANIFEST_BASE}" \
+  --candidate-archive "${MANIFEST_FIRST}")" == "${first_manifest}" ]]
+
+cp -a "${MANIFEST_FIRST}" "${MANIFEST_SECOND}"
+printf 'second promotion manifest\n' >"${MANIFEST_SECOND}/manifests/new.tsv"
+second_manifest_digest="$(file_sha "${MANIFEST_SECOND}/manifests/new.tsv")"
+second_manifest="manifests/promotion-${second_manifest_digest}.tsv"
+mv "${MANIFEST_SECOND}/manifests/new.tsv" "${MANIFEST_SECOND}/${second_manifest}"
+[[ "$("${TOOL}" derive-promotion-manifest \
+  --protected-archive "${MANIFEST_FIRST}" \
+  --candidate-archive "${MANIFEST_SECOND}")" == "${second_manifest}" ]]
+cmp "${MANIFEST_FIRST}/${first_manifest}" "${MANIFEST_SECOND}/${first_manifest}"
+
+expect_failure manifest_replay \
+  'promotion requires exactly one newly appended manifest: found 0' \
+  "${TOOL}" derive-promotion-manifest \
+    --protected-archive "${MANIFEST_FIRST}" \
+    --candidate-archive "${MANIFEST_FIRST}"
+
+MANIFEST_SUBSTITUTED="${TEST_ROOT}/manifest-substituted"
+cp -a "${MANIFEST_BASE}" "${MANIFEST_SUBSTITUTED}"
+printf 'named manifest\n' >"${MANIFEST_SUBSTITUTED}/manifests/new.tsv"
+substituted_digest="$(file_sha "${MANIFEST_SUBSTITUTED}/manifests/new.tsv")"
+substituted_manifest="manifests/promotion-${substituted_digest}.tsv"
+mv "${MANIFEST_SUBSTITUTED}/manifests/new.tsv" \
+  "${MANIFEST_SUBSTITUTED}/${substituted_manifest}"
+printf 'substitution\n' >>"${MANIFEST_SUBSTITUTED}/${substituted_manifest}"
+expect_failure manifest_substitution \
+  'new promotion manifest digest does not match its path' \
+  "${TOOL}" derive-promotion-manifest \
+    --protected-archive "${MANIFEST_BASE}" \
+    --candidate-archive "${MANIFEST_SUBSTITUTED}"
+
+MANIFEST_AMBIGUOUS="${TEST_ROOT}/manifest-ambiguous"
+cp -a "${MANIFEST_BASE}" "${MANIFEST_AMBIGUOUS}"
+for value in first second; do
+  printf '%s ambiguous manifest\n' "${value}" >"${MANIFEST_AMBIGUOUS}/manifests/new.tsv"
+  digest="$(file_sha "${MANIFEST_AMBIGUOUS}/manifests/new.tsv")"
+  mv "${MANIFEST_AMBIGUOUS}/manifests/new.tsv" \
+    "${MANIFEST_AMBIGUOUS}/manifests/promotion-${digest}.tsv"
+done
+expect_failure manifest_ambiguity \
+  'promotion requires exactly one newly appended manifest: found 2' \
+  "${TOOL}" derive-promotion-manifest \
+    --protected-archive "${MANIFEST_BASE}" \
+    --candidate-archive "${MANIFEST_AMBIGUOUS}"
+
+MANIFEST_HISTORY="${TEST_ROOT}/manifest-history"
+cp -a "${MANIFEST_FIRST}" "${MANIFEST_HISTORY}"
+printf 'mutated history\n' >>"${MANIFEST_HISTORY}/${first_manifest}"
+expect_failure manifest_history_mutation \
+  "candidate mutated protected evidence file: ${first_manifest}" \
+  "${TOOL}" derive-promotion-manifest \
+    --protected-archive "${MANIFEST_FIRST}" \
+    --candidate-archive "${MANIFEST_HISTORY}"
+rm -rf "${MANIFEST_HISTORY}"
+cp -a "${MANIFEST_FIRST}" "${MANIFEST_HISTORY}"
+rm "${MANIFEST_HISTORY}/${first_manifest}"
+expect_failure manifest_history_deletion \
+  "candidate mutated protected evidence file: ${first_manifest}" \
+  "${TOOL}" derive-promotion-manifest \
+    --protected-archive "${MANIFEST_FIRST}" \
+    --candidate-archive "${MANIFEST_HISTORY}"
+
 for class in unit ui ir compile; do
   write_result "${class}" Complete >/dev/null
 done

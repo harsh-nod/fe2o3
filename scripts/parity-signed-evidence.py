@@ -32,6 +32,9 @@ RESULT_ID_RE = re.compile(r"^[0-9a-f]{64}$")
 TARGET_RE = re.compile(r"^(generic|gfx[0-9a-f]+(?::[A-Za-z0-9_+-]+)*)$")
 LANE_RE = re.compile(r"^(-|[a-z0-9][a-z0-9._-]{0,63})$")
 PATH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/+:-]{0,511}$")
+PROMOTION_MANIFEST_RE = re.compile(
+    r"^manifests/promotion-([0-9a-f]{64})\.tsv$"
+)
 HEX_RE = re.compile(r"^(?:[0-9a-f]{2})+$")
 DEFAULT_LOCK = Path("/run/lock/fe2o3/mi300x-gfx942-evidence.lock")
 
@@ -1531,6 +1534,44 @@ def scan_archive_tree(root: Path, label: str, *, required: bool) -> ArchiveTree:
     return ArchiveTree(directories, files)
 
 
+def require_immutable_archive_history(
+    protected: ArchiveTree, candidate: ArchiveTree
+) -> None:
+    for relative in protected.directories:
+        if relative not in candidate.directories:
+            fail(f"candidate removed protected evidence namespace: {relative}")
+    for relative, binding in protected.files.items():
+        if candidate.files.get(relative) != binding:
+            fail(f"candidate mutated protected evidence file: {relative}")
+
+
+def derive_promotion_manifest(args: argparse.Namespace) -> None:
+    protected = scan_archive_tree(
+        args.protected_archive, "protected evidence archive", required=False
+    )
+    candidate = scan_archive_tree(
+        args.candidate_archive, "candidate evidence archive", required=True
+    )
+    require_immutable_archive_history(protected, candidate)
+    new_manifests = sorted(
+        relative
+        for relative in set(candidate.files) - set(protected.files)
+        if relative.startswith("manifests/")
+    )
+    if len(new_manifests) != 1:
+        fail(
+            "promotion requires exactly one newly appended manifest: "
+            f"found {len(new_manifests)}"
+        )
+    relative = new_manifests[0]
+    match = PROMOTION_MANIFEST_RE.fullmatch(relative)
+    if match is None:
+        fail(f"new promotion manifest path is not content-addressed: {relative}")
+    if candidate.files[relative].digest != match.group(1):
+        fail(f"new promotion manifest digest does not match its path: {relative}")
+    print(relative)
+
+
 def verify_promotion_archive(args: argparse.Namespace) -> None:
     transaction = parse_promotion_projection(
         args.transaction, "promotion transaction projection"
@@ -1553,12 +1594,7 @@ def verify_promotion_archive(args: argparse.Namespace) -> None:
     candidate = scan_archive_tree(
         args.candidate_archive, "candidate evidence archive", required=True
     )
-    for relative in protected.directories:
-        if relative not in candidate.directories:
-            fail(f"candidate removed protected evidence namespace: {relative}")
-    for relative, binding in protected.files.items():
-        if candidate.files.get(relative) != binding:
-            fail(f"candidate mutated protected evidence file: {relative}")
+    require_immutable_archive_history(protected, candidate)
 
     for relative, binding in closure_by_path.items():
         if candidate.files.get(relative) != binding:
@@ -2106,6 +2142,10 @@ def build_parser() -> argparse.ArgumentParser:
     archive_verify.add_argument("--transaction", type=Path, required=True)
     archive_verify.add_argument("--closure", type=Path, required=True)
 
+    manifest_derive = subparsers.add_parser("derive-promotion-manifest")
+    manifest_derive.add_argument("--protected-archive", type=Path, required=True)
+    manifest_derive.add_argument("--candidate-archive", type=Path, required=True)
+
     queue_run = subparsers.add_parser("queue-run")
     common_trust(queue_run)
     queue_run.add_argument("--manifest", required=True)
@@ -2191,6 +2231,8 @@ def main() -> None:
         merge_promotion_projections(args)
     elif args.command == "verify-promotion-archive":
         verify_promotion_archive(args)
+    elif args.command == "derive-promotion-manifest":
+        derive_promotion_manifest(args)
     elif args.command == "queue-run":
         run_queue(args)
     else:
