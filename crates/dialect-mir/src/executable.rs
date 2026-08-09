@@ -760,6 +760,31 @@ impl MirExecutableModule {
                 ));
             }
             previous_callable = Some(&callable.identity);
+            match &callable.authority {
+                MirCallAuthority::DefinedFunction => {
+                    if is_intrinsic_identity(&callable.identity) {
+                        return Err(error(
+                            path,
+                            "defined callable collides with the compiler intrinsic namespace",
+                        ));
+                    }
+                    if registry.find(&callable.identity).is_some() {
+                        return Err(error(
+                            path,
+                            "defined callable collides with the trusted import namespace",
+                        ));
+                    }
+                }
+                MirCallAuthority::DeviceImport { .. }
+                    if is_intrinsic_identity(&callable.identity) =>
+                {
+                    return Err(error(
+                        path,
+                        "device import collides with the compiler intrinsic namespace",
+                    ));
+                }
+                MirCallAuthority::DeviceImport { .. } | MirCallAuthority::Intrinsic(_) => {}
+            }
         }
 
         let mut previous_function: Option<&str> = None;
