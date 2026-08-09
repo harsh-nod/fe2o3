@@ -14,7 +14,8 @@ use rustc_hir::def::DefKind;
 use rustc_hir::def_id::DefId;
 use rustc_middle::mir::{
     AggregateKind, AssertKind, Body, InlineAsmOperand, Local, NonDivergingIntrinsic, Operand,
-    Place, ProjectionElem, Rvalue, SourceInfo, StatementKind, TerminatorKind, UnwindAction,
+    Place, PlaceTy, ProjectionElem, Rvalue, SourceInfo, StatementKind, TerminatorKind,
+    UnwindAction,
 };
 use rustc_middle::ty::{
     EarlyBinder, FloatTy, GenericArgsRef, Instance, InstanceKind, IntTy, ReifyReason, Ty, TyCtxt,
@@ -55,17 +56,86 @@ struct CaptureContextV2<'a, 'tcx> {
     source_scopes: Vec<SourceScopeIdentityV2>,
 }
 
+mod sealed {
+    pub trait Sealed {}
+}
+
+pub(crate) trait RustcAuthenticCaptureV2: sealed::Sealed {
+    fn data(&self) -> &CapturedBodyV2;
+}
+
+#[derive(Debug)]
+pub(crate) struct CompilerCapturedBodyV2 {
+    data: CapturedBodyV2,
+}
+
+impl CompilerCapturedBodyV2 {
+    fn new(data: CapturedBodyV2) -> Self {
+        Self { data }
+    }
+
+    pub(crate) fn is_authorized_for_lowering(&self) -> bool {
+        false
+    }
+}
+
+impl sealed::Sealed for CompilerCapturedBodyV2 {}
+
+impl RustcAuthenticCaptureV2 for CompilerCapturedBodyV2 {
+    fn data(&self) -> &CapturedBodyV2 {
+        &self.data
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct ValidatedRustcCaptureV2 {
+    recaptured: CompilerCapturedBodyV2,
+}
+
+impl ValidatedRustcCaptureV2 {
+    fn new(recaptured: CompilerCapturedBodyV2) -> Self {
+        Self { recaptured }
+    }
+
+    pub(crate) fn is_authorized_for_lowering(&self) -> bool {
+        false
+    }
+}
+
+impl sealed::Sealed for ValidatedRustcCaptureV2 {}
+
+impl RustcAuthenticCaptureV2 for ValidatedRustcCaptureV2 {
+    fn data(&self) -> &CapturedBodyV2 {
+        self.recaptured.data()
+    }
+}
+
+pub(crate) fn rustc_authentic_capture_data_v2(
+    capture: &impl RustcAuthenticCaptureV2,
+) -> &CapturedBodyV2 {
+    capture.data()
+}
+
 pub(crate) fn capture_instance_body_v2<'tcx>(
     tcx: TyCtxt<'tcx>,
     instance: Instance<'tcx>,
     limits: CaptureLimitsV2,
-) -> Result<CapturedBodyV2, CaptureErrorV2> {
-    let captured = capture_instance_observation_v2(tcx, instance, limits)?;
-    captured.validate(limits)?;
-    Ok(captured)
+) -> Result<CompilerCapturedBodyV2, CaptureErrorV2> {
+    let captured = capture_instance_data_v2(tcx, instance, limits)?;
+    captured.validate_untrusted_shape(limits)?;
+    Ok(CompilerCapturedBodyV2::new(captured))
 }
 
+#[cfg(test)]
 pub(crate) fn capture_instance_observation_v2<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+    limits: CaptureLimitsV2,
+) -> Result<CapturedBodyV2, CaptureErrorV2> {
+    capture_instance_data_v2(tcx, instance, limits)
+}
+
+fn capture_instance_data_v2<'tcx>(
     tcx: TyCtxt<'tcx>,
     instance: Instance<'tcx>,
     limits: CaptureLimitsV2,
@@ -88,6 +158,22 @@ pub(crate) fn capture_instance_observation_v2<'tcx>(
     }
     let body = tcx.instance_mir(instance.def);
     capture_body_v2(tcx, instance, body, limits, budget)
+}
+
+pub(crate) fn recapture_against_rustc_v2<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+    limits: CaptureLimitsV2,
+    untrusted_data: &CapturedBodyV2,
+) -> Result<ValidatedRustcCaptureV2, CaptureErrorV2> {
+    untrusted_data.validate_untrusted_shape(limits)?;
+    let recaptured = capture_instance_body_v2(tcx, instance, limits)?;
+    if recaptured.data() != untrusted_data {
+        return Err(CaptureErrorV2::new(
+            "untrusted MIR V2 data differs from bounded canonical rustc recapture",
+        ));
+    }
+    Ok(ValidatedRustcCaptureV2::new(recaptured))
 }
 
 fn capture_body_v2<'tcx>(
@@ -175,13 +261,26 @@ fn capture_body_v2<'tcx>(
         });
     }
 
+    let caller_signature = if matches!(
+        context.tcx.def_kind(instance.def_id()),
+        DefKind::Fn | DefKind::AssocFn
+    ) {
+        Some(function_signature_identity(
+            &mut context,
+            instance.def_id(),
+            instance.args,
+            "caller signature",
+        )?)
+    } else {
+        None
+    };
     let function = function_identity(&mut context, instance)?;
     let source = span_identity(&mut context, body.span, 0)?;
     let source_scopes = std::mem::take(&mut context.source_scopes);
     let mut captured = CapturedBodyV2 {
         schema_version: NORMALIZED_MIR_SCHEMA_V2,
-        authority: CaptureAuthorityV2::CompilerObservationOnly,
         function,
+        caller_signature,
         source,
         arg_count: body.arg_count,
         capture_work_items: 0,
@@ -534,15 +633,53 @@ fn capture_place<'tcx>(
         place.projection.len(),
         context.limits.max_projection_depth,
     )?;
+    let local_ty = context
+        .body
+        .local_decls
+        .get(place.local)
+        .ok_or_else(|| CaptureErrorV2::new("place local is outside the MIR local table"))?
+        .ty;
+    let mut derived = PlaceTy::from_ty(local_ty);
     let mut projection = Vec::with_capacity(place.projection.len());
+    let mut projection_type_hashes = Vec::with_capacity(place.projection.len());
     for element in place.projection {
-        projection.push(capture_projection(context, element)?);
+        derived = derived.projection_ty(context.tcx, element);
+        let projected_hash = normalized_type_hash(context, derived.ty, "place projection type")?;
+        let captured = capture_projection(context, element)?;
+        if matches!(
+            &captured,
+            ProjectionV2::Field { ty, .. }
+                | ProjectionV2::OpaqueCast { ty }
+                | ProjectionV2::UnwrapUnsafeBinder { ty }
+                if ty.stable_hash != projected_hash
+        ) {
+            return Err(CaptureErrorV2::new(
+                "captured projection type disagrees with rustc PlaceTy derivation",
+            ));
+        }
+        projection.push(captured);
+        projection_type_hashes.push(projected_hash);
     }
-    let ty = place.ty(&context.body.local_decls, context.tcx).ty;
+    let place_ty = place.ty(&context.body.local_decls, context.tcx);
+    if place_ty.ty != derived.ty || place_ty.variant_index != derived.variant_index {
+        return Err(CaptureErrorV2::new(
+            "rustc place type disagrees with incremental projection derivation",
+        ));
+    }
+    let type_hash = normalized_type_hash(context, place_ty.ty, "place type")?;
+    if projection_type_hashes
+        .last()
+        .is_some_and(|final_hash| *final_hash != type_hash)
+    {
+        return Err(CaptureErrorV2::new(
+            "final projection type disagrees with rustc place type",
+        ));
+    }
     Ok(PlaceV2 {
         local: place.local.as_usize(),
         projection,
-        type_hash: normalized_type_hash(context, ty, "place type")?,
+        projection_type_hashes,
+        type_hash,
     })
 }
 
