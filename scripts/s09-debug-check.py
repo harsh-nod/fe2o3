@@ -15,6 +15,7 @@ import string
 import sys
 
 MAX_INPUT_BYTES = 8 * 1024 * 1024
+MAX_HARDWARE_SECTION_LINES = 128
 PRODUCTION_POLICY_PATH = pathlib.Path("/etc/fe2o3/s09-trust-v1.tsv")
 FS_IOC_GETFLAGS = 0x80086601
 FS_IMMUTABLE_FL = 0x00000010
@@ -518,6 +519,7 @@ def check_rocgdb(text: str, hsaco_sha256: str, hardware_sha256: str, build_id: s
         "FE2O3_S09_LOCAL",
         "FE2O3_S09_RESUME",
         "FE2O3_S09_HARDWARE_PASS",
+        "FE2O3_S09_ROCGDB_EXIT_STATUS = 0",
         "FE2O3_S09_END",
     )
     positions = []
@@ -535,6 +537,10 @@ def check_rocgdb(text: str, hsaco_sha256: str, hardware_sha256: str, build_id: s
         "optimization = O0",
     ):
         require_once(text, token, "ROCgdb binding")
+    run_nonces = re.findall(r"(?m)^run_nonce = ([0-9a-f]{64})$", text)
+    if len(run_nonces) != 1:
+        raise CheckError("ROCgdb binding requires one lowercase 64-hex run nonce")
+    run_nonce = run_nonces[0]
 
     marker_position = dict(zip(markers, positions, strict=True))
     kernel_section = text[marker_position["FE2O3_S09_KERNEL_LOAD"] : marker_position["FE2O3_S09_GPU_CONTEXT"]]
@@ -613,13 +619,32 @@ def check_rocgdb(text: str, hsaco_sha256: str, hardware_sha256: str, build_id: s
         if observations[0] != EXPECTED_OBSERVATIONS[name]:
             raise CheckError(f"ROCgdb observed unexpected {name!r} value: {observations[0]!r}")
 
-    hardware_section = text[marker_position["FE2O3_S09_RESUME"] : marker_position["FE2O3_S09_HARDWARE_PASS"]]
-    if f"test {HARDWARE_TEST} ... ok" not in hardware_section:
-        raise CheckError("ROCgdb transcript does not contain the exact hardware test pass")
-    if "test result: ok. 1 passed; 0 failed;" not in hardware_section:
-        raise CheckError("ROCgdb transcript does not contain a successful hardware result")
-    if "exited normally" not in hardware_section:
-        raise CheckError("ROCgdb inferior did not exit normally after hardware execution")
+    hardware_section = text[
+        marker_position["FE2O3_S09_RESUME"]
+        : marker_position["FE2O3_S09_HARDWARE_PASS"]
+    ]
+    if len(hardware_section.splitlines()) > MAX_HARDWARE_SECTION_LINES:
+        raise CheckError("ROCgdb hardware result section exceeds its fixed line bound")
+    result_marker = (
+        "FE2O3_S09_HARNESS_RESULT_V1 "
+        f"hsaco_sha256={hsaco_sha256} run_nonce={run_nonce} result=passed"
+    )
+    result_lines = [
+        line
+        for line in hardware_section.splitlines()
+        if line.startswith("FE2O3_S09_HARNESS_RESULT_V1")
+    ]
+    if result_lines != [result_marker]:
+        raise CheckError("ROCgdb transcript lacks the exact bound harness result marker")
+    normal_exits = [
+        match.start()
+        for match in re.finditer(
+            r"(?m)^\[Inferior [1-9][0-9]* \(process <PID>\) exited normally\]$",
+            hardware_section,
+        )
+    ]
+    if len(normal_exits) != 1 or hardware_section.index(result_marker) >= normal_exits[0]:
+        raise CheckError("ROCgdb inferior did not exit normally after the harness result")
 
     for rejected in ("No symbol", "Cannot access memory", "The program is not being run"):
         if rejected.lower() in text.lower():

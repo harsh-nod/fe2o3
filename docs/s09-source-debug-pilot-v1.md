@@ -61,10 +61,14 @@ The normalized transcript is segmented around every debugger continuation.
 The checker requires an exact BP2 line-69 hit followed by an AMDGPU-wave frame
 and all physical argument observations before BP3 is armed. It then requires
 an exact BP3 line-70 hit, another AMDGPU-wave frame, and local `i` before the
-final continuation. Hardware success and normal inferior exit must occur after
-that continuation and before the final success marker. Removing or reordering
-either hit fails closed. A substitute host `alpha`, digest/build-ID mismatch,
-missing hardware pass, or unavailable observation also fails.
+final continuation. After all hardware checks and unload complete, the bound
+Rust harness emits one exact `FE2O3_S09_HARNESS_RESULT_V1` marker carrying the
+HSACO digest, a runner-generated 256-bit nonce, and `result=passed`. The checker
+does not depend on Cargo status-line adjacency: it accepts bounded debugger
+thread-exit interleaving, then requires the harness marker, normal inferior
+exit, debugger hardware-pass marker, and zero ROCgdb exit status in that order.
+Removing or forging the harness marker fails closed, as do reordered stops, a
+substitute host `alpha`, digest/build-ID mismatch, or unavailable observation.
 
 Normalized DWARF, transcript, and facts files use ordered field schemas and
 strict value grammars. They reject file URIs, URIs carrying paths,

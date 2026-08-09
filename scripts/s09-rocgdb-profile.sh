@@ -77,6 +77,9 @@ HSACO_SHA256="$(sha256sum -- "${HSACO}" | awk '{print $1}')"
 readonly HSACO_SHA256
 HARDWARE_SHA256="$(sha256sum -- "${HARDWARE_TEST}" | awk '{print $1}')"
 readonly HARDWARE_SHA256
+RUN_NONCE="$(/usr/bin/od -An -N32 -tx1 /dev/urandom | /usr/bin/tr -d ' \n')"
+readonly RUN_NONCE
+[[ "${RUN_NONCE}" =~ ^[0-9a-f]{64}$ ]] || fail "could not generate a bounded run nonce"
 
 umask 077
 mkdir -- "${ARCHIVE}"
@@ -155,6 +158,7 @@ if ((dwarf_verify_status == 0 && dwarf_dump_status == 0 && dwarf_normalize_statu
       FE2O3_RUN_GFX942_TWO_KERNEL=1 \
       FE2O3_GFX942_ALPHA_ZETA_HSACO="${HSACO}" \
       FE2O3_GFX942_ALPHA_ZETA_SHA256="${HSACO_SHA256}" \
+      FE2O3_S09_RUN_NONCE="${RUN_NONCE}" \
       "${ROCGDB}" --batch --nx --nh \
       -ex 'set confirm off' \
       -ex 'set pagination off' \
@@ -169,6 +173,7 @@ if ((dwarf_verify_status == 0 && dwarf_dump_status == 0 && dwarf_normalize_statu
       -ex "echo hsaco_sha256 = ${HSACO_SHA256}\\n" \
       -ex "echo hardware_sha256 = ${HARDWARE_SHA256}\\n" \
       -ex "echo hardware_build_id = ${hardware_build_id}\\n" \
+      -ex "echo run_nonce = ${RUN_NONCE}\\n" \
       -ex "echo target = ${artifact_target}\\n" \
       -ex "echo optimization = ${artifact_optimization}\\n" \
       -ex 'echo FE2O3_S09_KERNEL_LOAD\n' \
@@ -207,16 +212,17 @@ if ((dwarf_verify_status == 0 && dwarf_dump_status == 0 && dwarf_normalize_statu
       -ex 'echo FE2O3_S09_RESUME\n' \
       -ex 'continue' \
       -ex 'echo FE2O3_S09_HARDWARE_PASS\n' \
-      -ex 'echo FE2O3_S09_END\n' \
       --args "${HARDWARE_TEST}" \
         gfx942_cov6_alpha_then_zeta_generated_safe_spi_with_fake_authenticator \
         --ignored --exact --nocapture >"${ROCGDB_RAW}" 2>&1
   rocgdb_status=$?
   set -e
 else
-  printf 'FE2O3_S09_BEGIN\nDWARF or identity prerequisite failed; ROCgdb was not run\nFE2O3_S09_END\n' >"${ROCGDB_RAW}"
+  printf 'FE2O3_S09_BEGIN\nDWARF or identity prerequisite failed; ROCgdb was not run\n' >"${ROCGDB_RAW}"
   rocgdb_status=125
 fi
+printf 'FE2O3_S09_ROCGDB_EXIT_STATUS = %d\nFE2O3_S09_END\n' \
+  "${rocgdb_status}" >>"${ROCGDB_RAW}"
 set +e
 "${CHECKER}" normalize-rocgdb --input "${ROCGDB_RAW}" --output "${ROCGDB_NORMALIZED}"
 rocgdb_normalize_status=$?
@@ -266,6 +272,7 @@ done
   printf 'hsaco_sha256=%s\n' "${HSACO_SHA256}"
   printf 'hardware_test_sha256=%s\n' "${HARDWARE_SHA256}"
   printf 'hardware_test_build_id=%s\n' "${hardware_build_id}"
+  printf 'run_nonce=%s\n' "${RUN_NONCE}"
   printf 'checker_sha256=%s\n' "$(hash_or_missing "${CHECKER}")"
   printf 'artifact_facts_sha256=%s\n' "$(hash_or_missing "${ARTIFACT_FACTS}")"
   printf 'hardware_facts_sha256=%s\n' "$(hash_or_missing "${HARDWARE_FACTS}")"

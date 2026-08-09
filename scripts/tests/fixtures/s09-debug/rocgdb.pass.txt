@@ -8,6 +8,7 @@ FE2O3_S09_BINDING
 hsaco_sha256 = aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 hardware_sha256 = bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 hardware_build_id = cccccccccccccccccccccccccccccccccccccccc
+run_nonce = dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
 target = gfx942:xnack-
 optimization = O0
 FE2O3_S09_KERNEL_LOAD
@@ -43,9 +44,13 @@ FE2O3_S09_LOCAL
 Line 70 of "crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src/main.rs" starts at address 0x21b8
 i = 0
 FE2O3_S09_RESUME
+[Thread 0x7ffff6c006c0 (LWP 12346) exited]
+FE2O3_S09_HARNESS_RESULT_V1 hsaco_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa run_nonce=dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd result=passed
+[Thread 0x7ffff64006c0 (LWP 12347) exited]
 test gfx942_cov6_alpha_then_zeta_generated_safe_spi_with_fake_authenticator ... ok
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.12s
 [Inferior 1 (process 12345) exited normally]
 FE2O3_S09_HARDWARE_PASS
+FE2O3_S09_ROCGDB_EXIT_STATUS = 0
 FE2O3_S09_END
 fixed-profile teardown noise

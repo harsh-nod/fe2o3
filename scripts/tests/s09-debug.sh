@@ -10,6 +10,7 @@ readonly FIXTURES="${ROOT}/scripts/tests/fixtures/s09-debug"
 readonly HSACO_SHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 readonly HARDWARE_SHA256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 readonly HARDWARE_BUILD_ID=cccccccccccccccccccccccccccccccccccccccc
+readonly RUN_NONCE=dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
 readonly HARDWARE_TEST=gfx942_cov6_alpha_then_zeta_generated_safe_spi_with_fake_authenticator
 readonly SOURCE_SHA256=a02f62a73198b493258224701c4f29e25b3eca02a738bf02c03989d45b77099e
 TMP="$(mktemp -d)"
@@ -61,6 +62,7 @@ rg -q "AMDGPU Wave <WAVE>.*alpha.*crates/.+main\.rs:68" "${TMP}/rocgdb.one"
 rg -q 'memory://<PID>#offset=0x<ADDR>&size=<SIZE>' "${TMP}/rocgdb.one"
 rg -q '0x<ADDR>' "${TMP}/rocgdb.one"
 rg -q '^HOST_THREAD_FRAME$' "${TMP}/rocgdb.one"
+rg -q "^run_nonce = ${RUN_NONCE}$" "${TMP}/rocgdb.one"
 expect_fail rg -q 'sysdeps|\.\./' "${TMP}/rocgdb.one"
 
 readonly MANIFEST="${TMP}/protected-manifest.tsv"
@@ -212,9 +214,24 @@ expect_fail check_rocgdb "${TMP}/rocgdb-host-alpha"
 sed '/Breakpoint 1 (alpha) pending[.]/d' \
   "${FIXTURES}/rocgdb.pass.txt" >"${TMP}/rocgdb-no-kernel-load"
 expect_fail check_rocgdb "${TMP}/rocgdb-no-kernel-load"
-sed "/test ${HARDWARE_TEST} ... ok/d" \
+sed '/FE2O3_S09_HARNESS_RESULT_V1/d' \
   "${FIXTURES}/rocgdb.pass.txt" >"${TMP}/rocgdb-no-hardware-pass"
 expect_fail check_rocgdb "${TMP}/rocgdb-no-hardware-pass"
+sed '/^test .* \.\.\. ok$/d; /^test result: /d' \
+  "${FIXTURES}/rocgdb.pass.txt" >"${TMP}/rocgdb-no-cargo-status"
+check_rocgdb "${TMP}/rocgdb-no-cargo-status"
+sed '/FE2O3_S09_HARNESS_RESULT_V1/s/result=passed/result=failed/' \
+  "${FIXTURES}/rocgdb.pass.txt" >"${TMP}/rocgdb-forged-result"
+expect_fail check_rocgdb "${TMP}/rocgdb-forged-result"
+sed '/FE2O3_S09_HARNESS_RESULT_V1/s/run_nonce=[0-9a-f]*/run_nonce=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee/' \
+  "${FIXTURES}/rocgdb.pass.txt" >"${TMP}/rocgdb-forged-nonce"
+expect_fail check_rocgdb "${TMP}/rocgdb-forged-nonce"
+sed '/FE2O3_S09_HARNESS_RESULT_V1/s/hsaco_sha256=[0-9a-f]*/hsaco_sha256=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee/' \
+  "${FIXTURES}/rocgdb.pass.txt" >"${TMP}/rocgdb-forged-result-hsaco"
+expect_fail check_rocgdb "${TMP}/rocgdb-forged-result-hsaco"
+sed '/FE2O3_S09_ROCGDB_EXIT_STATUS = 0/d' \
+  "${FIXTURES}/rocgdb.pass.txt" >"${TMP}/rocgdb-no-exit-status"
+expect_fail check_rocgdb "${TMP}/rocgdb-no-exit-status"
 sed "s/${HSACO_SHA256}/dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd/" \
   "${FIXTURES}/rocgdb.pass.txt" >"${TMP}/rocgdb-substitute-hsaco"
 expect_fail check_rocgdb "${TMP}/rocgdb-substitute-hsaco"
@@ -265,6 +282,10 @@ rg -q 'FS_IMMUTABLE_FL' "${CHECKER}"
 rg -q 'O_NOFOLLOW' "${CHECKER}"
 rg -q -- '--batch --nx --nh' "${RUNNER}"
 rg -q 'FE2O3_S09_HARDWARE_PASS' "${RUNNER}"
+rg -q 'FE2O3_S09_HARNESS_RESULT_V1' \
+  "${ROOT}/crates/fe2o3-hsa-runtime/tests/gfx942_two_kernel_hardware.rs"
+rg -q 'FE2O3_S09_RUN_NONCE' "${RUNNER}"
+rg -q 'FE2O3_S09_ROCGDB_EXIT_STATUS' "${RUNNER}"
 rg -q 'FE2O3_S09_BP2_ARMED' "${RUNNER}"
 rg -q 'FE2O3_S09_BP3_STOP' "${RUNNER}"
 rg -Fq "info sharedlibrary memory://" "${RUNNER}"
