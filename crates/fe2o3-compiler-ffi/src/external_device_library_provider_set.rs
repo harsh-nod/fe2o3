@@ -19,10 +19,17 @@ const ELF_TYPE_RELOCATABLE: u16 = 1;
 const ELF_MACHINE_AMDGPU: u16 = 224;
 const ELF_VERSION_CURRENT: u32 = 1;
 
+/// Maximum exact bytes in one external device-library provider blob.
+pub const MAX_EXTERNAL_DEVICE_LIBRARY_PROVIDER_CONTENT_BYTES_V1: usize = 64 * 1024 * 1024;
+/// Maximum aggregate bytes in all provider blobs supplied for one closure validation.
+pub const MAX_EXTERNAL_DEVICE_LIBRARY_PROVIDER_CLOSURE_BYTES_V1: usize = 64 * 1024 * 1024;
+
 /// One actual provider manifest paired with the exact bytes it describes.
 ///
-/// Construction validates only content identity and the representation header. It does not
-/// authenticate the producer, prove the symbol declarations, or grant link authority.
+/// Construction checks byte bounds, declared length, and the representation header without
+/// hashing content. Exact digest validation is deferred until the complete provider set has passed
+/// its aggregate byte preflight. This does not authenticate the producer, prove the symbol
+/// declarations, or grant link authority.
 #[derive(Clone, Copy)]
 pub struct ExternalDeviceLibraryProviderV1<'a> {
     manifest: &'a ExternalDeviceLibraryManifestV1,
@@ -48,7 +55,8 @@ impl<'a> ExternalDeviceLibraryProviderV1<'a> {
             manifest,
             content_bytes,
         };
-        value.validate_content()?;
+        value.preflight_content_size()?;
+        validate_representation(value.manifest.content().kind(), value.content_bytes)?;
         Ok(value)
     }
 
@@ -68,11 +76,18 @@ impl<'a> ExternalDeviceLibraryProviderV1<'a> {
         false
     }
 
-    fn validate_content(&self) -> Result<(), ExternalDeviceLibraryProviderSetErrorV1> {
+    fn preflight_content_size(&self) -> Result<usize, ExternalDeviceLibraryProviderSetErrorV1> {
+        preflight_provider_content_size(
+            self.manifest.content().blob().byte_len(),
+            self.content_bytes.len(),
+        )
+    }
+
+    fn validate_content_digest(&self) -> Result<(), ExternalDeviceLibraryProviderSetErrorV1> {
         if !self.manifest.content().matches(self.content_bytes) {
             return Err(ExternalDeviceLibraryProviderSetErrorV1::ProviderContentDigestMismatch);
         }
-        validate_representation(self.manifest.content().kind(), self.content_bytes)
+        Ok(())
     }
 }
 
@@ -137,14 +152,12 @@ impl ExternalDeviceLibraryManifestV1 {
         providers: &[ExternalDeviceLibraryProviderV1<'_>],
     ) -> Result<ExternalDeviceLibraryProviderSetValidationV1, ExternalDeviceLibraryProviderSetErrorV1>
     {
-        if providers.len() > MAX_EXTERNAL_DEVICE_LIBRARY_DEPENDENCIES_V1 {
-            return Err(ExternalDeviceLibraryProviderSetErrorV1::TooManyProviders);
-        }
+        preflight_provider_set_sizes(providers)?;
 
         let mut providers_by_identity = BTreeMap::new();
         let mut closure_blobs = BTreeSet::from([self.content().blob()]);
         for provider in providers {
-            provider.validate_content()?;
+            provider.validate_content_digest()?;
             if provider.manifest.identity() == self.identity() {
                 return Err(ExternalDeviceLibraryProviderSetErrorV1::RootRepeatedAsProvider);
             }
@@ -198,6 +211,8 @@ impl ExternalDeviceLibraryManifestV1 {
 #[non_exhaustive]
 pub enum ExternalDeviceLibraryProviderSetErrorV1 {
     TooManyProviders,
+    ProviderContentByteLimitExceeded,
+    ProviderClosureByteLimitExceeded,
     ProviderContentDigestMismatch,
     ProviderContentRepresentationMismatch,
     RootRepeatedAsProvider,
@@ -220,6 +235,11 @@ impl fmt::Display for ExternalDeviceLibraryProviderSetErrorV1 {
             Self::TooManyProviders => {
                 formatter.write_str("too many actual device-library providers")
             }
+            Self::ProviderContentByteLimitExceeded => {
+                formatter.write_str("device-library provider content exceeds its byte limit")
+            }
+            Self::ProviderClosureByteLimitExceeded => formatter
+                .write_str("device-library provider closure exceeds its aggregate byte limit"),
             Self::ProviderContentDigestMismatch => {
                 formatter.write_str("provider content does not match its exact digest and length")
             }
@@ -261,6 +281,47 @@ impl fmt::Display for ExternalDeviceLibraryProviderSetErrorV1 {
 }
 
 impl Error for ExternalDeviceLibraryProviderSetErrorV1 {}
+
+fn preflight_provider_set_sizes(
+    providers: &[ExternalDeviceLibraryProviderV1<'_>],
+) -> Result<(), ExternalDeviceLibraryProviderSetErrorV1> {
+    if providers.len() > MAX_EXTERNAL_DEVICE_LIBRARY_DEPENDENCIES_V1 {
+        return Err(ExternalDeviceLibraryProviderSetErrorV1::TooManyProviders);
+    }
+    let mut aggregate_byte_len = 0;
+    for provider in providers {
+        aggregate_byte_len = add_provider_content_to_closure(
+            aggregate_byte_len,
+            provider.preflight_content_size()?,
+        )?;
+    }
+    Ok(())
+}
+
+fn preflight_provider_content_size(
+    declared_byte_len: u64,
+    actual_byte_len: usize,
+) -> Result<usize, ExternalDeviceLibraryProviderSetErrorV1> {
+    if declared_byte_len > MAX_EXTERNAL_DEVICE_LIBRARY_PROVIDER_CONTENT_BYTES_V1 as u64
+        || actual_byte_len > MAX_EXTERNAL_DEVICE_LIBRARY_PROVIDER_CONTENT_BYTES_V1
+    {
+        return Err(ExternalDeviceLibraryProviderSetErrorV1::ProviderContentByteLimitExceeded);
+    }
+    if u64::try_from(actual_byte_len).ok() != Some(declared_byte_len) {
+        return Err(ExternalDeviceLibraryProviderSetErrorV1::ProviderContentDigestMismatch);
+    }
+    Ok(actual_byte_len)
+}
+
+fn add_provider_content_to_closure(
+    aggregate_byte_len: usize,
+    provider_byte_len: usize,
+) -> Result<usize, ExternalDeviceLibraryProviderSetErrorV1> {
+    aggregate_byte_len
+        .checked_add(provider_byte_len)
+        .filter(|total| *total <= MAX_EXTERNAL_DEVICE_LIBRARY_PROVIDER_CLOSURE_BYTES_V1)
+        .ok_or(ExternalDeviceLibraryProviderSetErrorV1::ProviderClosureByteLimitExceeded)
+}
 
 fn validate_representation(
     kind: ExternalDeviceLibraryContentKindV1,
@@ -381,4 +442,49 @@ fn contracts_match(import: &ExternalDeviceSymbolV1, export: &ExternalDeviceSymbo
         && import.convergence() == export.convergence()
         && import.semantic_identity() == export.semantic_identity()
         && import.required_capabilities() == export.required_capabilities()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ExternalDeviceLibraryProviderSetErrorV1,
+        MAX_EXTERNAL_DEVICE_LIBRARY_PROVIDER_CLOSURE_BYTES_V1,
+        MAX_EXTERNAL_DEVICE_LIBRARY_PROVIDER_CONTENT_BYTES_V1, add_provider_content_to_closure,
+        preflight_provider_content_size,
+    };
+
+    #[test]
+    fn provider_content_size_preflight_has_exact_boundaries() {
+        let maximum = MAX_EXTERNAL_DEVICE_LIBRARY_PROVIDER_CONTENT_BYTES_V1;
+        assert_eq!(
+            preflight_provider_content_size(maximum as u64, maximum),
+            Ok(maximum)
+        );
+        assert_eq!(
+            preflight_provider_content_size(maximum as u64 + 1, 1),
+            Err(ExternalDeviceLibraryProviderSetErrorV1::ProviderContentByteLimitExceeded)
+        );
+        assert_eq!(
+            preflight_provider_content_size(1, maximum + 1),
+            Err(ExternalDeviceLibraryProviderSetErrorV1::ProviderContentByteLimitExceeded)
+        );
+        assert_eq!(
+            preflight_provider_content_size(2, 1),
+            Err(ExternalDeviceLibraryProviderSetErrorV1::ProviderContentDigestMismatch)
+        );
+    }
+
+    #[test]
+    fn provider_closure_size_preflight_rejects_limit_and_arithmetic_overflow() {
+        let maximum = MAX_EXTERNAL_DEVICE_LIBRARY_PROVIDER_CLOSURE_BYTES_V1;
+        assert_eq!(add_provider_content_to_closure(maximum - 1, 1), Ok(maximum));
+        assert_eq!(
+            add_provider_content_to_closure(maximum, 1),
+            Err(ExternalDeviceLibraryProviderSetErrorV1::ProviderClosureByteLimitExceeded)
+        );
+        assert_eq!(
+            add_provider_content_to_closure(usize::MAX, 1),
+            Err(ExternalDeviceLibraryProviderSetErrorV1::ProviderClosureByteLimitExceeded)
+        );
+    }
 }

@@ -311,15 +311,22 @@ fn transitive_provider_imports_are_checked_against_the_same_actual_closure() {
 }
 
 #[test]
-fn provider_bytes_require_exact_digest_and_reviewed_representation() {
-    let (_, providers) = direct_fixture();
+fn provider_set_checks_exact_digest_after_construction_preflight() {
+    let (root, providers) = direct_fixture();
     let mut mutated = providers[0].bytes.clone();
     *mutated.last_mut().unwrap() ^= 1;
-    assert!(matches!(
-        ExternalDeviceLibraryProviderV1::new(&providers[0].manifest, &mutated),
+    let mutated_provider =
+        ExternalDeviceLibraryProviderV1::new(&providers[0].manifest, &mutated).unwrap();
+    let valid_provider =
+        ExternalDeviceLibraryProviderV1::new(&providers[1].manifest, &providers[1].bytes).unwrap();
+    assert_eq!(
+        root.validate_provider_set(&[mutated_provider, valid_provider]),
         Err(ExternalDeviceLibraryProviderSetErrorV1::ProviderContentDigestMismatch)
-    ));
+    );
+}
 
+#[test]
+fn provider_bytes_require_a_reviewed_representation() {
     let invalid = b"not llvm bitcode".to_vec();
     let invalid_manifest = manifest_for(
         ExternalDeviceLibraryContentKindV1::LlvmBitcode,

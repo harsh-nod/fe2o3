@@ -41,7 +41,8 @@ pub use external_device_library_manifest::{
 };
 pub use external_device_library_provider_set::{
     ExternalDeviceLibraryProviderSetErrorV1, ExternalDeviceLibraryProviderSetValidationV1,
-    ExternalDeviceLibraryProviderV1,
+    ExternalDeviceLibraryProviderV1, MAX_EXTERNAL_DEVICE_LIBRARY_PROVIDER_CLOSURE_BYTES_V1,
+    MAX_EXTERNAL_DEVICE_LIBRARY_PROVIDER_CONTENT_BYTES_V1,
 };
 pub use module_handoff::{
     CompilerModuleHandoffErrorV1, CompilerModuleHandoffPartsV1, CompilerModuleHandoffV1,
