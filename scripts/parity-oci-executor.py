@@ -12,6 +12,7 @@ import argparse
 import configparser
 import fcntl
 import hashlib
+import hmac
 import json
 import math
 import os
@@ -42,6 +43,7 @@ MAX_STAGING_ROOT_ENTRIES = 64
 MAX_SOURCE_DIRECTORIES = 16384
 MAX_GIT_ROOT_ENTRIES = 258
 MAX_GIT_CONFIG_BYTES = 1024 * 1024
+MAX_SOURCE_MANIFEST_BYTES = 16 * 1024 * 1024
 MAX_CLEANUP_ENTRIES = 40000
 PROCESS_REAP_GRACE_SECONDS = 5.0
 PROCESS_PIPE_JOIN_SECONDS = 5.0
@@ -260,8 +262,10 @@ def valid_absolute(value: str) -> bool:
     )
 
 
-def parse_rows(raw: bytes, label: str) -> list[list[str]]:
-    if not raw or len(raw) > MAX_FILE_BYTES:
+def parse_rows(
+    raw: bytes, label: str, *, maximum_bytes: int = MAX_FILE_BYTES
+) -> list[list[str]]:
+    if not raw or len(raw) > maximum_bytes:
         fail(f"invalid {label} size")
     if b"\r" in raw or not raw.endswith(b"\n"):
         fail(f"non-canonical {label} line endings")
@@ -340,6 +344,9 @@ class OperatorConfig:
     inbox_owner_gid: int
     request_owner_uid: int
     request_owner_gid: int
+    queue_authorization_root: str
+    queue_authorization_owner_uid: int
+    queue_authorization_owner_gid: int
     queue_trust_digest: str
     config_digest: str
 
@@ -614,8 +621,8 @@ def load_operator_config(
     finally:
         close_descriptor(directory_fd, "operator configuration directory")
     cursor = Cursor(parse_rows(raw, "operator configuration"), "operator configuration")
-    if cursor.scalar("oci_operator_config_schema_version") != "1":
-        fail("operator configuration schema must be 1")
+    if cursor.scalar("oci_operator_config_schema_version") != "2":
+        fail("operator configuration schema must be 2")
     config_id = cursor.scalar("config_id")
     trusted_root = cursor.scalar("trusted_root")
     policy_path = cursor.scalar("policy_path")
@@ -630,6 +637,9 @@ def load_operator_config(
     inbox_gid = cursor.scalar("inbox_owner_gid")
     request_uid = cursor.scalar("request_owner_uid")
     request_gid = cursor.scalar("request_owner_gid")
+    queue_root = cursor.scalar("queue_authorization_root")
+    queue_uid = cursor.scalar("queue_authorization_owner_uid")
+    queue_gid = cursor.scalar("queue_authorization_owner_gid")
     queue_digest = cursor.scalar("queue_trust_sha256")
     cursor.done()
     numeric = (
@@ -640,6 +650,8 @@ def load_operator_config(
         inbox_gid,
         request_uid,
         request_gid,
+        queue_uid,
+        queue_gid,
     )
     if (
         not ID_RE.fullmatch(config_id)
@@ -655,6 +667,9 @@ def load_operator_config(
         or not valid_absolute(inbox_root)
         or inbox_uid != "0"
         or inbox_gid != "0"
+        or not valid_absolute(queue_root)
+        or queue_uid != "0"
+        or queue_gid != "0"
         or not SHA256_RE.fullmatch(queue_digest)
     ):
         fail("operator configuration contains an invalid production binding")
@@ -673,6 +688,9 @@ def load_operator_config(
         int(inbox_gid),
         int(request_uid),
         int(request_gid),
+        queue_root,
+        int(queue_uid),
+        int(queue_gid),
         queue_digest,
         config_digest,
     )
@@ -1669,12 +1687,30 @@ class Request:
 
 
 @dataclass(frozen=True)
+class SourceManifestEntry:
+    path: str
+    mode: str
+    size: int
+    digest: str
+
+
+@dataclass(frozen=True)
+class SourceAuthorization:
+    manifest_size: int
+    manifest_digest: str
+    source_root_digest: str
+    manifest_raw: bytes
+    entries: tuple[SourceManifestEntry, ...]
+
+
+@dataclass(frozen=True)
 class AuthorizedRequest:
     """Inputs authorized by protected policy, before any runtime contact."""
 
     policy: Policy
     profile: Profile
     request: Request
+    source_authorization: SourceAuthorization
     seccomp_path: Path
     authorization_digest: str
 
@@ -1792,6 +1828,241 @@ def read_operator_request(config: OperatorConfig, request_id: str) -> Request:
     if request.request_id != request_id:
         fail("operator request file identity differs from selected request")
     return request
+
+
+def canonical_source_manifest_body(
+    source_commit: str,
+    source_tree: str,
+    entries: tuple[SourceManifestEntry, ...],
+) -> bytes:
+    lines = [
+        "source_authorization_manifest_schema_version\t1",
+        f"source_commit\t{source_commit}",
+        f"source_tree\t{source_tree}",
+        f"file_count\t{len(entries)}",
+    ]
+    for index, entry in enumerate(entries):
+        lines.append(
+            f"file\t{index:04d}\t{entry.path}\t{entry.mode}\t"
+            f"{entry.size}\t{entry.digest}"
+        )
+    lines.append(f"source_bytes\t{sum(entry.size for entry in entries)}")
+    return ("\n".join(lines) + "\n").encode("ascii")
+
+
+def canonical_source_manifest(
+    source_commit: str,
+    source_tree: str,
+    entries: tuple[SourceManifestEntry, ...],
+) -> tuple[bytes, str]:
+    body = canonical_source_manifest_body(source_commit, source_tree, entries)
+    root_digest = sha256_bytes(b"fe2o3-source-root-v1\0" + body)
+    return body + f"source_root_sha256\t{root_digest}\n".encode("ascii"), root_digest
+
+
+def parse_source_manifest(
+    raw: bytes,
+    profile: Profile,
+    request: Request,
+    expected_manifest_digest: str,
+    expected_root_digest: str,
+) -> SourceAuthorization:
+    rows = parse_rows(
+        raw, "source authorization manifest", maximum_bytes=MAX_SOURCE_MANIFEST_BYTES
+    )
+    cursor = Cursor(rows, "source authorization manifest")
+    if cursor.scalar("source_authorization_manifest_schema_version") != "1":
+        fail("source authorization manifest schema must be 1")
+    source_commit = cursor.scalar("source_commit")
+    source_tree = cursor.scalar("source_tree")
+    count_text = cursor.scalar("file_count")
+    if (
+        source_commit != request.source_commit
+        or source_tree != request.source_tree
+        or not re.fullmatch(r"[1-9][0-9]*", count_text)
+        or not 1 <= int(count_text) <= profile.source_file_limit
+    ):
+        fail("source authorization manifest metadata is malformed or mismatched")
+    entries: list[SourceManifestEntry] = []
+    previous_path = ""
+    total = 0
+    for index in range(int(count_text)):
+        row = cursor.record("file", 6, index)
+        path, mode, size_text, digest = row[2:]
+        if (
+            not valid_relative(path)
+            or any(component == ".git" for component in path.split("/"))
+            or path <= previous_path
+            or mode not in ("100644", "100755")
+            or not re.fullmatch(r"0|[1-9][0-9]*", size_text)
+            or int(size_text) > profile.source_byte_limit
+            or not SHA256_RE.fullmatch(digest)
+        ):
+            fail("source authorization manifest contains an invalid file entry")
+        size = int(size_text)
+        total += size
+        if total > profile.source_byte_limit:
+            fail("source authorization manifest exceeds protected source byte limit")
+        entries.append(SourceManifestEntry(path, mode, size, digest))
+        previous_path = path
+    source_bytes = cursor.scalar("source_bytes")
+    source_root_digest = cursor.scalar("source_root_sha256")
+    cursor.done()
+    if (
+        not re.fullmatch(r"0|[1-9][0-9]*", source_bytes)
+        or int(source_bytes) != total
+        or not SHA256_RE.fullmatch(source_root_digest)
+    ):
+        fail("source authorization manifest totals or root are malformed")
+    canonical, computed_root = canonical_source_manifest(
+        source_commit, source_tree, tuple(entries)
+    )
+    manifest_digest = sha256_bytes(raw)
+    if (
+        not hmac.compare_digest(raw, canonical)
+        or not hmac.compare_digest(manifest_digest, expected_manifest_digest)
+        or not hmac.compare_digest(source_root_digest, expected_root_digest)
+        or not hmac.compare_digest(computed_root, expected_root_digest)
+    ):
+        fail("source authorization manifest or root digest mismatch")
+    return SourceAuthorization(
+        len(raw), manifest_digest, computed_root, raw, tuple(entries)
+    )
+
+
+def open_test_queue_authorization_root(
+    path: Path, expected_uid: int, expected_gid: int
+) -> int:
+    root_fd = -1
+    try:
+        if not path.is_absolute() or not valid_absolute(str(path)):
+            fail("test queue authorization root path is not canonical absolute")
+        root_fd = os.open(
+            path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+        )
+        info = os.fstat(root_fd)
+        if (
+            not stat.S_ISDIR(info.st_mode)
+            or (info.st_uid, info.st_gid) != (expected_uid, expected_gid)
+            or info.st_mode & 0o022
+        ):
+            fail("test queue authorization root ownership or mode is unsafe")
+        return root_fd
+    except ExecutorError:
+        close_descriptor(root_fd, "invalid test queue authorization root")
+        raise
+    except OSError as error:
+        close_descriptor(root_fd, "unavailable test queue authorization root")
+        fail(f"cannot open test queue authorization root: {error}")
+
+
+def load_source_authorization(
+    args: argparse.Namespace,
+    profile: Profile,
+    request: Request,
+    queue_trust_digest: str,
+) -> SourceAuthorization:
+    if args.invocation_mode == "production-operator":
+        config = args.operator_config
+        root_fd = open_owned_directory_tree(
+            Path(config.queue_authorization_root),
+            config.queue_authorization_owner_uid,
+            config.queue_authorization_owner_gid,
+            "queue authorization",
+        )
+        owner_uid = config.queue_authorization_owner_uid
+        owner_gid = config.queue_authorization_owner_gid
+        require_immutable = True
+    elif args.invocation_mode == "test":
+        owner_uid = args.queue_authorization_owner_uid
+        owner_gid = args.queue_authorization_owner_gid
+        root_fd = open_test_queue_authorization_root(
+            Path(args.queue_authorization_root), owner_uid, owner_gid
+        )
+        require_immutable = False
+    else:
+        fail("unknown source authorization invocation mode")
+    try:
+        raw = read_owned_descriptor_file(
+            root_fd,
+            f"{request.request_id}.authorization.tsv",
+            "queue source authorization",
+            maximum_bytes=MAX_FILE_BYTES,
+            expected_uid=owner_uid,
+            expected_gid=owner_gid,
+            require_immutable=require_immutable,
+        )
+        cursor = Cursor(
+            parse_rows(raw, "queue source authorization"),
+            "queue source authorization",
+        )
+        if cursor.scalar("oci_queue_source_authorization_schema_version") != "1":
+            fail("queue source authorization schema must be 1")
+        bound_queue_digest = cursor.scalar("queue_trust_sha256")
+        request_id = cursor.scalar("request_id")
+        request_digest = cursor.scalar("request_sha256")
+        source_commit = cursor.scalar("source_commit")
+        source_tree = cursor.scalar("source_tree")
+        manifest_size_text = cursor.scalar("source_manifest_size")
+        manifest_digest = cursor.scalar("source_manifest_sha256")
+        source_root_digest = cursor.scalar("source_root_sha256")
+        cursor.done()
+        if (
+            not hmac.compare_digest(bound_queue_digest, queue_trust_digest)
+            or request_id != request.request_id
+            or not hmac.compare_digest(request_digest, request.digest)
+            or source_commit != request.source_commit
+            or source_tree != request.source_tree
+            or not re.fullmatch(r"[1-9][0-9]*", manifest_size_text)
+            or not 1 <= int(manifest_size_text) <= MAX_SOURCE_MANIFEST_BYTES
+            or not SHA256_RE.fullmatch(manifest_digest)
+            or not SHA256_RE.fullmatch(source_root_digest)
+        ):
+            fail("queue source authorization is malformed or mismatched")
+        manifest_raw = read_owned_descriptor_file(
+            root_fd,
+            f"{request.request_id}.source.tsv",
+            "authorized source manifest",
+            maximum_bytes=MAX_SOURCE_MANIFEST_BYTES,
+            expected_uid=owner_uid,
+            expected_gid=owner_gid,
+            require_immutable=require_immutable,
+        )
+        if len(manifest_raw) != int(manifest_size_text) or not hmac.compare_digest(
+            sha256_bytes(manifest_raw), manifest_digest
+        ):
+            fail("authorized source manifest differs from queue authorization")
+        return parse_source_manifest(
+            manifest_raw,
+            profile,
+            request,
+            manifest_digest,
+            source_root_digest,
+        )
+    finally:
+        close_descriptor(root_fd, "queue authorization root")
+
+
+def verify_exported_source(
+    request: Request,
+    authorization: SourceAuthorization,
+    entries: list[tuple[str, str, str, bytes]],
+) -> None:
+    actual_entries = tuple(
+        SourceManifestEntry(path, mode, len(content), sha256_bytes(content))
+        for path, mode, _, content in entries
+    )
+    actual_raw, actual_root = canonical_source_manifest(
+        request.source_commit, request.source_tree, actual_entries
+    )
+    if (
+        not hmac.compare_digest(actual_raw, authorization.manifest_raw)
+        or not hmac.compare_digest(
+            sha256_bytes(actual_raw), authorization.manifest_digest
+        )
+        or not hmac.compare_digest(actual_root, authorization.source_root_digest)
+    ):
+        fail("exported source differs from authorized SHA-256 manifest or root")
 
 
 def staging_lease_name(authorization_digest: str) -> str:
@@ -2746,7 +3017,12 @@ def stage_output(profile: Profile, lease_name: str) -> OutputStage:
         raise failure
 
 
-def stage_source(profile: Profile, request: Request, lease_name: str) -> SourceSnapshot:
+def stage_source(
+    profile: Profile,
+    request: Request,
+    source_authorization: SourceAuthorization,
+    lease_name: str,
+) -> SourceSnapshot:
     staging_root = Path(profile.source_staging_root)
     if staging_root.is_symlink() or not staging_root.is_dir():
         fail("source staging root is unsafe")
@@ -2758,6 +3034,7 @@ def stage_source(profile: Profile, request: Request, lease_name: str) -> SourceS
         entries = store.export_tree(request.source_tree)
     finally:
         store.close()
+    verify_exported_source(request, source_authorization, entries)
     source_total = sum(len(content) for _, _, _, content in entries)
     if source_total > profile.source_byte_limit:
         fail("Git source bytes exceed protected limit")
@@ -2788,17 +3065,10 @@ def stage_source(profile: Profile, request: Request, lease_name: str) -> SourceS
             os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
             dir_fd=root_fd,
         )
-        manifest_lines = [
-            "source_snapshot_manifest_schema_version\t1",
-            f"request_id\t{request.request_id}",
-            f"source_commit\t{request.source_commit}",
-            f"source_tree\t{request.source_tree}",
-            f"file_count\t{len(entries)}",
-        ]
         total = 0
         job_found = False
         directories: set[str] = set()
-        for index, (path, mode, object_id, content) in enumerate(entries):
+        for path, mode, _object_id, content in entries:
             file_size, digest = write_snapshot_file(snapshot_fd, path, mode, content)
             total += file_size
             parent = Path(path).parent
@@ -2811,13 +3081,9 @@ def stage_source(profile: Profile, request: Request, lease_name: str) -> SourceS
                 if digest != request.job_digest:
                     fail("source job digest differs from immutable source tree")
                 job_found = True
-            manifest_lines.append(
-                f"file\t{index:04d}\t{mode}\t{object_id}\t{path}\t{file_size}\t{digest}"
-            )
         if not job_found:
             fail("source job is absent from immutable source tree")
-        manifest_lines.append(f"source_bytes\t{total}")
-        manifest_raw = ("\n".join(manifest_lines) + "\n").encode("ascii")
+        manifest_raw = source_authorization.manifest_raw
         manifest_fd = os.open(
             manifest_name,
             os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
@@ -2862,7 +3128,7 @@ def stage_source(profile: Profile, request: Request, lease_name: str) -> SourceS
             request_identity.st_ino,
             len(entries),
             total,
-            sha256_bytes(manifest_raw),
+            source_authorization.manifest_digest,
             lease_name,
             lease_identity.st_dev,
             lease_identity.st_ino,
@@ -2989,6 +3255,9 @@ def authorize(args: argparse.Namespace) -> AuthorizedRequest:
     )
     if not SHA256_RE.fullmatch(queue_trust_digest):
         fail("queue authorization trust digest is malformed")
+    source_authorization = load_source_authorization(
+        args, profile, request, queue_trust_digest
+    )
     authorization_digest = sha256_bytes(
         b"fe2o3-oci-authorization-v1\0"
         + anchor.identity.encode("ascii")
@@ -3005,11 +3274,14 @@ def authorize(args: argparse.Namespace) -> AuthorizedRequest:
         + bytes.fromhex(profile.profile_digest)
         + bytes.fromhex(request.digest)
         + bytes.fromhex(queue_trust_digest)
+        + bytes.fromhex(source_authorization.manifest_digest)
+        + bytes.fromhex(source_authorization.source_root_digest)
     )
     return AuthorizedRequest(
         policy,
         profile,
         request,
+        source_authorization,
         resolve_path(seccomp, "protected seccomp profile"),
         authorization_digest,
     )
@@ -3266,7 +3538,9 @@ def command_plan(args: argparse.Namespace) -> None:
     profile = authorized.profile
     request = authorized.request
     lease_name = staging_lease_name(authorized.authorization_digest)
-    snapshot = stage_source(profile, request, lease_name)
+    snapshot = stage_source(
+        profile, request, authorized.source_authorization, lease_name
+    )
     output: OutputStage | None = None
     plan_lines: list[str] | None = None
     try:
@@ -3297,6 +3571,8 @@ def command_plan(args: argparse.Namespace) -> None:
             f"source_commit\t{request.source_commit}",
             f"source_tree\t{request.source_tree}",
             f"source_manifest_sha256\t{snapshot.manifest_digest}",
+            "source_root_sha256\t"
+            f"{authorized.source_authorization.source_root_digest}",
             f"source_file_count\t{snapshot.file_count}",
             f"source_bytes\t{snapshot.byte_count}",
             f"artifact_stream_protocol\t{profile.artifact_stream_protocol}",
@@ -3356,6 +3632,14 @@ def command_verify(args: argparse.Namespace) -> None:
     print(f"request_id\t{request.request_id}")
     print(f"source_tree\t{request.source_tree}")
     print(
+        "source_manifest_sha256\t"
+        f"{authorized.source_authorization.manifest_digest}"
+    )
+    print(
+        "source_root_sha256\t"
+        f"{authorized.source_authorization.source_root_digest}"
+    )
+    print(
         "authorization_state\t"
         + (
             "operator-policy-matched"
@@ -3377,6 +3661,23 @@ def add_test_authorization_arguments(parser: argparse.ArgumentParser) -> None:
         "--test-queue-trust-sha256",
         dest="queue_authorization_sha256",
         required=True,
+    )
+    parser.add_argument(
+        "--test-queue-authorization-root",
+        dest="queue_authorization_root",
+        required=True,
+    )
+    parser.add_argument(
+        "--test-queue-authorization-owner-uid",
+        dest="queue_authorization_owner_uid",
+        required=True,
+        type=int,
+    )
+    parser.add_argument(
+        "--test-queue-authorization-owner-gid",
+        dest="queue_authorization_owner_gid",
+        required=True,
+        type=int,
     )
     parser.add_argument("--test-trusted-root", dest="trusted_root", required=True)
     parser.add_argument(
