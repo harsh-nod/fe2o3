@@ -89,6 +89,7 @@ jobs:
           test -f "${archive}/manifests/promotion-v2.tsv"
           git archive "${BASE_SHA}" | tar -x -C "${trusted}"
           transaction="${RUNNER_TEMP}/signed-promotion-transaction.tsv"
+          archive_closure="${RUNNER_TEMP}/signed-promotion-archive-closure.tsv"
           python3 "${trusted}/scripts/parity-signed-evidence.py" gate \
             --repo "${GITHUB_WORKSPACE}" \
             --archive-root "${archive}" \
@@ -99,9 +100,11 @@ jobs:
             --candidate-policy docs/parity-row-evidence-policy-v2.tsv \
             --baseline-status "${baseline}" \
             --candidate-status docs/cuda-oxide-parity-status.tsv \
-            --projection-output "${transaction}"
+            --projection-output "${transaction}" \
+            --archive-closure-output "${archive_closure}"
           bash "${trusted}/scripts/parity-promotion-projections.sh" \
-            "${trusted}" "${GITHUB_WORKSPACE}" "${transaction}"
+            "${trusted}" "${GITHUB_WORKSPACE}" "${transaction}" \
+            "${archive_closure}"
 
       - name: Install pinned Rust toolchain
         run: rustup show active-toolchain

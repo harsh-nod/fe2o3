@@ -13,7 +13,16 @@ trap 'rm -rf -- "${TEST_ROOT}"' EXIT
 readonly PROTECTED="${TEST_ROOT}/protected"
 readonly CANDIDATE="${TEST_ROOT}/candidate"
 readonly TRANSACTION="${TEST_ROOT}/transaction.tsv"
+readonly ARCHIVE_CLOSURE="${TEST_ROOT}/archive-closure.tsv"
 readonly CHECKER="${PROTECTED}/scripts/parity-promotion-projections.sh"
+
+file_size() {
+  stat -c %s -- "$1"
+}
+
+file_sha() {
+  sha256sum -- "$1" | awk '{ print $1 }'
+}
 
 expect_failure() {
   local name="$1"
@@ -45,9 +54,12 @@ cp -a "${PROTECTED}" "${CANDIDATE}"
 
 SOURCE="$(git -C "${CANDIDATE}" rev-parse HEAD)"
 readonly SOURCE
-mkdir -p "${CANDIDATE}/docs/parity-evidence/archive/results"
+mkdir -p "${CANDIDATE}/docs/parity-evidence/archive/results" \
+  "${CANDIDATE}/docs/parity-evidence/archive/manifests"
 printf 'unit evidence\n' >"${CANDIDATE}/docs/parity-evidence/archive/results/04-unit.tsv"
 printf 'ui evidence\n' >"${CANDIDATE}/docs/parity-evidence/archive/results/04-ui.tsv"
+printf 'signed manifest fixture\n' \
+  >"${CANDIDATE}/docs/parity-evidence/archive/manifests/promotion.tsv"
 awk -F '\t' -v OFS='\t' -v source="${SOURCE}" '
   $1 == "fe2o3_commit" { $2 = source }
   $1 == "normative" && $2 == "04" { $3 = "Partial" }
@@ -58,6 +70,21 @@ signed_promotion_projection_schema_version	1
 row_count	1
 row	0000	04	Missing	Partial	${SOURCE}	gfx942	mi300x-gfx942-release	unit,ui	bash	results/04-unit.tsv,results/04-ui.tsv	aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 EOF
+{
+  printf 'promotion_archive_closure_schema_version\t1\n'
+  printf 'evidence_set_sha256\t%s\n' 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+  printf 'manifest_path\tmanifests/promotion.tsv\n'
+  printf 'manifest_sha256\t%s\n' \
+    "$(file_sha "${CANDIDATE}/docs/parity-evidence/archive/manifests/promotion.tsv")"
+  printf 'file_count\t3\n'
+  index=0
+  for path in manifests/promotion.tsv results/04-ui.tsv results/04-unit.tsv; do
+    printf 'file\t%04d\t%s\t%s\t%s\n' "${index}" "${path}" \
+      "$(file_size "${CANDIDATE}/docs/parity-evidence/archive/${path}")" \
+      "$(file_sha "${CANDIDATE}/docs/parity-evidence/archive/${path}")"
+    ((index += 1))
+  done
+} >"${ARCHIVE_CLOSURE}"
 
 rm "${CANDIDATE}/docs/generated/cuda-oxide-parity-signed-promotions.tsv"
 python3 "${PROTECTED}/scripts/parity-signed-evidence.py" merge-projections \
@@ -83,6 +110,12 @@ cp "${CANDIDATE}/docs/generated/cuda-oxide-parity-dashboard.md" "${TEST_ROOT}/go
 cp "${CANDIDATE}/docs/generated/cuda-oxide-parity-dashboard.tsv" "${TEST_ROOT}/good/dashboard.tsv"
 cp "${CANDIDATE}/docs/generated/cuda-oxide-parity-signed-promotions.tsv" "${TEST_ROOT}/good/ledger.tsv"
 cp "${CANDIDATE}/docs/parity-evidence/archive/history/prior.tsv" "${TEST_ROOT}/good/prior.tsv"
+cp "${CANDIDATE}/docs/parity-evidence/archive/manifests/promotion.tsv" \
+  "${TEST_ROOT}/good/promotion.tsv"
+cp "${CANDIDATE}/docs/parity-evidence/archive/results/04-unit.tsv" \
+  "${TEST_ROOT}/good/04-unit.tsv"
+cp "${CANDIDATE}/docs/parity-evidence/archive/results/04-ui.tsv" \
+  "${TEST_ROOT}/good/04-ui.tsv"
 
 reset_candidate() {
   cp "${TEST_ROOT}/good/matrix.md" "${CANDIDATE}/docs/cuda-oxide-parity-matrix.md"
@@ -92,9 +125,18 @@ reset_candidate() {
   cp "${TEST_ROOT}/good/ledger.tsv" "${CANDIDATE}/docs/generated/cuda-oxide-parity-signed-promotions.tsv"
   rm -f "${CANDIDATE}/docs/parity-evidence/archive/history/prior.tsv"
   cp "${TEST_ROOT}/good/prior.tsv" "${CANDIDATE}/docs/parity-evidence/archive/history/prior.tsv"
+  cp "${TEST_ROOT}/good/promotion.tsv" \
+    "${CANDIDATE}/docs/parity-evidence/archive/manifests/promotion.tsv"
+  cp "${TEST_ROOT}/good/04-unit.tsv" \
+    "${CANDIDATE}/docs/parity-evidence/archive/results/04-unit.tsv"
+  cp "${TEST_ROOT}/good/04-ui.tsv" \
+    "${CANDIDATE}/docs/parity-evidence/archive/results/04-ui.tsv"
+  rm -f "${CANDIDATE}/docs/parity-evidence/archive/results/unreferenced.tsv"
+  rm -rf "${CANDIDATE}/docs/parity-evidence/archive/results/reserved"
 }
 
-bash "${CHECKER}" "${PROTECTED}" "${CANDIDATE}" "${TRANSACTION}"
+bash "${CHECKER}" "${PROTECTED}" "${CANDIDATE}" "${TRANSACTION}" \
+  "${ARCHIVE_CLOSURE}"
 grep -F '| 04 | Pointer Distance (' "${CANDIDATE}/docs/cuda-oxide-parity-matrix.md" |
   grep -F '| Partial |' >/dev/null
 grep -F $'normative\t04\tPointer Distance (' \
@@ -103,42 +145,157 @@ grep -F $'normative\t04\tPointer Distance (' \
 
 printf '\nCandidate-authored prose.\n' >>"${CANDIDATE}/docs/cuda-oxide-parity-matrix.md"
 expect_failure matrix_prose 'candidate parity matrix is not the protected deterministic projection' \
-  bash "${CHECKER}" "${PROTECTED}" "${CANDIDATE}" "${TRANSACTION}"
+  bash "${CHECKER}" "${PROTECTED}" "${CANDIDATE}" "${TRANSACTION}" "${ARCHIVE_CLOSURE}"
 reset_candidate
 
 printf '\nforged dashboard prose\n' >>"${CANDIDATE}/docs/generated/cuda-oxide-parity-dashboard.md"
 expect_failure markdown_dashboard 'candidate Markdown dashboard is not the protected deterministic projection' \
-  bash "${CHECKER}" "${PROTECTED}" "${CANDIDATE}" "${TRANSACTION}"
+  bash "${CHECKER}" "${PROTECTED}" "${CANDIDATE}" "${TRANSACTION}" "${ARCHIVE_CLOSURE}"
 reset_candidate
 
 printf 'forged\n' >>"${CANDIDATE}/docs/generated/cuda-oxide-parity-dashboard.tsv"
 expect_failure tsv_dashboard 'candidate TSV dashboard is not the protected deterministic projection' \
-  bash "${CHECKER}" "${PROTECTED}" "${CANDIDATE}" "${TRANSACTION}"
+  bash "${CHECKER}" "${PROTECTED}" "${CANDIDATE}" "${TRANSACTION}" "${ARCHIVE_CLOSURE}"
 reset_candidate
 
 sed -i 's/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/' \
   "${CANDIDATE}/docs/generated/cuda-oxide-parity-signed-promotions.tsv"
 expect_failure ledger_substitution 'candidate signed-promotion ledger is not the canonical transaction merge' \
-  bash "${CHECKER}" "${PROTECTED}" "${CANDIDATE}" "${TRANSACTION}"
+  bash "${CHECKER}" "${PROTECTED}" "${CANDIDATE}" "${TRANSACTION}" "${ARCHIVE_CLOSURE}"
 reset_candidate
 
 printf 'mutated evidence\n' >"${CANDIDATE}/docs/parity-evidence/archive/history/prior.tsv"
 expect_failure archive_mutation 'candidate mutated protected evidence file: history/prior.tsv' \
-  bash "${CHECKER}" "${PROTECTED}" "${CANDIDATE}" "${TRANSACTION}"
+  bash "${CHECKER}" "${PROTECTED}" "${CANDIDATE}" "${TRANSACTION}" "${ARCHIVE_CLOSURE}"
 reset_candidate
 
 rm "${CANDIDATE}/docs/parity-evidence/archive/history/prior.tsv"
 ln -s ../../results/04-unit.tsv "${CANDIDATE}/docs/parity-evidence/archive/history/prior.tsv"
 expect_failure archive_symlink 'candidate removed or replaced protected evidence file: history/prior.tsv' \
-  bash "${CHECKER}" "${PROTECTED}" "${CANDIDATE}" "${TRANSACTION}"
+  bash "${CHECKER}" "${PROTECTED}" "${CANDIDATE}" "${TRANSACTION}" "${ARCHIVE_CLOSURE}"
 reset_candidate
 
 rm "${CANDIDATE}/docs/generated/cuda-oxide-parity-signed-promotions.tsv"
 ln -s ../cuda-oxide-parity-dashboard.tsv \
   "${CANDIDATE}/docs/generated/cuda-oxide-parity-signed-promotions.tsv"
 expect_failure ledger_symlink 'required projection input is not a regular file' \
-  bash "${CHECKER}" "${PROTECTED}" "${CANDIDATE}" "${TRANSACTION}"
+  bash "${CHECKER}" "${PROTECTED}" "${CANDIDATE}" "${TRANSACTION}" "${ARCHIVE_CLOSURE}"
 reset_candidate
+
+printf 'unreferenced evidence\n' \
+  >"${CANDIDATE}/docs/parity-evidence/archive/results/unreferenced.tsv"
+expect_failure archive_extra_file \
+  'candidate evidence archive has unreferenced file: results/unreferenced.tsv' \
+  bash "${CHECKER}" "${PROTECTED}" "${CANDIDATE}" "${TRANSACTION}" "${ARCHIVE_CLOSURE}"
+reset_candidate
+
+mkdir "${CANDIDATE}/docs/parity-evidence/archive/results/reserved"
+expect_failure archive_namespace \
+  'candidate evidence archive has unreferenced namespace: results/reserved' \
+  bash "${CHECKER}" "${PROTECTED}" "${CANDIDATE}" "${TRANSACTION}" "${ARCHIVE_CLOSURE}"
+reset_candidate
+
+printf 'substituted evidence\n' \
+  >"${CANDIDATE}/docs/parity-evidence/archive/results/04-unit.tsv"
+expect_failure archive_digest \
+  'candidate evidence file violates signed closure: results/04-unit.tsv' \
+  bash "${CHECKER}" "${PROTECTED}" "${CANDIDATE}" "${TRANSACTION}" "${ARCHIVE_CLOSURE}"
+reset_candidate
+
+{
+  head -n 4 "${ARCHIVE_CLOSURE}"
+  printf 'file_count\t2\n'
+  awk -F '\t' -v OFS='\t' '
+    $1 == "file" && $3 == "manifests/promotion.tsv" { $2 = "0000"; print }
+    $1 == "file" && $3 == "results/04-unit.tsv" { $2 = "0001"; print }
+  ' "${ARCHIVE_CLOSURE}"
+} >"${TEST_ROOT}/incomplete-archive-closure.tsv"
+expect_failure archive_incomplete \
+  'promotion archive closure omits transaction result: results/04-ui.tsv' \
+  bash "${CHECKER}" "${PROTECTED}" "${CANDIDATE}" "${TRANSACTION}" \
+    "${TEST_ROOT}/incomplete-archive-closure.tsv"
+
+awk -F '\t' -v OFS='\t' '
+  $1 == "evidence_set_sha256" { $2 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }
+  { print }
+' "${ARCHIVE_CLOSURE}" >"${TEST_ROOT}/rebound-archive-closure.tsv"
+expect_failure archive_rebound \
+  'promotion archive closure does not bind the transaction evidence set' \
+  bash "${CHECKER}" "${PROTECTED}" "${CANDIDATE}" "${TRANSACTION}" \
+    "${TEST_ROOT}/rebound-archive-closure.tsv"
+
+# Exercise the real legacy-claim shape through every protected projection.
+LEGACY_CANDIDATE="${TEST_ROOT}/legacy-candidate"
+LEGACY_TRANSACTION="${TEST_ROOT}/legacy-transaction.tsv"
+LEGACY_CLOSURE="${TEST_ROOT}/legacy-closure.tsv"
+cp -a "${PROTECTED}" "${LEGACY_CANDIDATE}"
+mkdir -p "${LEGACY_CANDIDATE}/docs/parity-evidence/archive/manifests" \
+  "${LEGACY_CANDIDATE}/docs/parity-evidence/archive/results"
+printf 'legacy completion manifest\n' \
+  >"${LEGACY_CANDIDATE}/docs/parity-evidence/archive/manifests/61.tsv"
+for class in unit ui ir compile verus hardware; do
+  printf '%s completion evidence\n' "${class}" \
+    >"${LEGACY_CANDIDATE}/docs/parity-evidence/archive/results/61-${class}.tsv"
+done
+awk -F '\t' -v OFS='\t' -v source="${SOURCE}" '
+  $1 == "fe2o3_commit" { $2 = source }
+  $1 == "normative" && $2 == "61" { $3 = "Complete" }
+  { print }
+' "${PROTECTED}/docs/cuda-oxide-parity-status.tsv" \
+  >"${LEGACY_CANDIDATE}/docs/cuda-oxide-parity-status.tsv"
+{
+  printf 'signed_promotion_projection_schema_version\t1\n'
+  printf 'row_count\t1\n'
+  printf 'row\t0000\t61\tPartial\tComplete\t%s\tgfx942\tmi300x-gfx942-release\t' "${SOURCE}"
+  printf 'unit,ui,ir,compile,verus,hardware\tbash\t'
+  printf 'results/61-unit.tsv,results/61-ui.tsv,results/61-ir.tsv,results/61-compile.tsv,results/61-verus.tsv,results/61-hardware.tsv\t%s\n' \
+    'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
+} >"${LEGACY_TRANSACTION}"
+{
+  printf 'promotion_archive_closure_schema_version\t1\n'
+  printf 'evidence_set_sha256\t%s\n' 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
+  printf 'manifest_path\tmanifests/61.tsv\n'
+  printf 'manifest_sha256\t%s\n' \
+    "$(file_sha "${LEGACY_CANDIDATE}/docs/parity-evidence/archive/manifests/61.tsv")"
+  printf 'file_count\t7\n'
+  index=0
+  for path in \
+    manifests/61.tsv \
+    results/61-compile.tsv \
+    results/61-hardware.tsv \
+    results/61-ir.tsv \
+    results/61-ui.tsv \
+    results/61-unit.tsv \
+    results/61-verus.tsv; do
+    printf 'file\t%04d\t%s\t%s\t%s\n' "${index}" "${path}" \
+      "$(file_size "${LEGACY_CANDIDATE}/docs/parity-evidence/archive/${path}")" \
+      "$(file_sha "${LEGACY_CANDIDATE}/docs/parity-evidence/archive/${path}")"
+    ((index += 1))
+  done
+} >"${LEGACY_CLOSURE}"
+rm "${LEGACY_CANDIDATE}/docs/generated/cuda-oxide-parity-signed-promotions.tsv"
+python3 "${PROTECTED}/scripts/parity-signed-evidence.py" merge-projections \
+  --baseline "${PROTECTED}/docs/generated/cuda-oxide-parity-signed-promotions.tsv" \
+  --transaction "${LEGACY_TRANSACTION}" \
+  --output "${LEGACY_CANDIDATE}/docs/generated/cuda-oxide-parity-signed-promotions.tsv"
+cp "${PROTECTED}/docs/cuda-oxide-parity-matrix.md" \
+  "${LEGACY_CANDIDATE}/docs/cuda-oxide-parity-matrix.md"
+bash "${PROTECTED}/scripts/parity-matrix.sh" generate \
+  "${LEGACY_CANDIDATE}/docs/cuda-oxide-parity-status.tsv" \
+  "${LEGACY_CANDIDATE}/docs/cuda-oxide-parity-matrix.md" >/dev/null
+bash "${PROTECTED}/scripts/parity-dashboard.sh" update \
+  --status "${LEGACY_CANDIDATE}/docs/cuda-oxide-parity-status.tsv" \
+  --matrix "${LEGACY_CANDIDATE}/docs/cuda-oxide-parity-matrix.md" \
+  --repo "${LEGACY_CANDIDATE}" \
+  --signed-promotions "${LEGACY_CANDIDATE}/docs/generated/cuda-oxide-parity-signed-promotions.tsv" \
+  --markdown "${LEGACY_CANDIDATE}/docs/generated/cuda-oxide-parity-dashboard.md" \
+  --tsv "${LEGACY_CANDIDATE}/docs/generated/cuda-oxide-parity-dashboard.tsv" >/dev/null
+bash "${CHECKER}" "${PROTECTED}" "${LEGACY_CANDIDATE}" \
+  "${LEGACY_TRANSACTION}" "${LEGACY_CLOSURE}"
+awk -F '\t' '
+  $1 == "normative" && $2 == "61" && $6 == "Complete" { found++ }
+  END { exit found == 1 ? 0 : 1 }
+' "${LEGACY_CANDIDATE}/docs/generated/cuda-oxide-parity-dashboard.tsv"
 
 bash -n "${BASH_SOURCE[0]}" "${CHECKER}"
 shellcheck "${BASH_SOURCE[0]}" "${CHECKER}"

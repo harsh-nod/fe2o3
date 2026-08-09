@@ -8,8 +8,8 @@ die() {
   exit 2
 }
 
-[[ "$#" == 3 ]] ||
-  die 'usage: PROTECTED_ROOT CANDIDATE_ROOT TRANSACTION_PROJECTION'
+[[ "$#" == 4 ]] ||
+  die 'usage: PROTECTED_ROOT CANDIDATE_ROOT TRANSACTION_PROJECTION ARCHIVE_CLOSURE'
 
 PROTECTED_ROOT="$(realpath -e -- "$1")" ||
   die 'protected root does not resolve'
@@ -20,12 +20,17 @@ readonly CANDIDATE_ROOT
 TRANSACTION="$(realpath -e -- "$3")" ||
   die 'transaction projection does not resolve'
 readonly TRANSACTION
+ARCHIVE_CLOSURE="$(realpath -e -- "$4")" ||
+  die 'archive closure does not resolve'
+readonly ARCHIVE_CLOSURE
 [[ -d "${PROTECTED_ROOT}" && ! -L "$1" ]] ||
   die 'protected root must be a real directory'
 [[ -d "${CANDIDATE_ROOT}" && ! -L "$2" ]] ||
   die 'candidate root must be a real directory'
 [[ -f "${TRANSACTION}" && ! -L "$3" ]] ||
   die 'transaction projection must be a regular file'
+[[ -f "${ARCHIVE_CLOSURE}" && ! -L "$4" ]] ||
+  die 'archive closure must be a regular file'
 
 readonly STATUS=docs/cuda-oxide-parity-status.tsv
 readonly MATRIX=docs/cuda-oxide-parity-matrix.md
@@ -84,6 +89,8 @@ candidate_archive="${CANDIDATE_ROOT}/${ARCHIVE}"
 if [[ -e "${protected_archive}" || -L "${protected_archive}" ]]; then
   [[ -d "${protected_archive}" && ! -L "${protected_archive}" ]] ||
     die 'protected evidence archive is not a real directory'
+  [[ "$(realpath -e -- "${protected_archive}")" == "${protected_archive}" ]] ||
+    die 'protected evidence archive has a symlinked ancestor'
   [[ -d "${candidate_archive}" && ! -L "${candidate_archive}" ]] ||
     die 'candidate removed or replaced the protected evidence archive'
   while IFS= read -r -d '' path; do
@@ -93,11 +100,19 @@ fi
 if [[ -e "${candidate_archive}" || -L "${candidate_archive}" ]]; then
   [[ -d "${candidate_archive}" && ! -L "${candidate_archive}" ]] ||
     die 'candidate evidence archive is not a real directory'
+  [[ "$(realpath -e -- "${candidate_archive}")" == "${candidate_archive}" ]] ||
+    die 'candidate evidence archive has a symlinked ancestor'
   while IFS= read -r -d '' path; do
     [[ (-d "${path}" || -f "${path}") && ! -L "${path}" ]] ||
       die 'candidate evidence archive contains a non-regular entry'
   done < <(find -P "${candidate_archive}" -mindepth 1 -print0)
 fi
+
+python3 "${VERIFIER}" verify-promotion-archive \
+  --protected-archive "${protected_archive}" \
+  --candidate-archive "${candidate_archive}" \
+  --transaction "${TRANSACTION}" \
+  --closure "${ARCHIVE_CLOSURE}"
 
 expected_ledger="${TEMP_ROOT}/signed-promotions.tsv"
 python3 "${VERIFIER}" merge-projections --baseline "${PROTECTED_ROOT}/${LEDGER}" --transaction "${TRANSACTION}" --output "${expected_ledger}"

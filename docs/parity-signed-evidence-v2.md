@@ -324,20 +324,31 @@ Hosted CI executes the verifier extracted from the protected base:
       --candidate-policy docs/parity-row-evidence-policy-v2.tsv \
       --baseline-status /tmp/status-before.tsv \
       --candidate-status docs/cuda-oxide-parity-status.tsv \
-      --projection-output /tmp/promotion-transaction.tsv
+      --projection-output /tmp/promotion-transaction.tsv \
+      --archive-closure-output /tmp/promotion-archive-closure.tsv
 
 It then invokes the protected projection transaction:
 
     bash /protected/base/scripts/parity-promotion-projections.sh \
-      /protected/base . /tmp/promotion-transaction.tsv
+      /protected/base . /tmp/promotion-transaction.tsv \
+      /tmp/promotion-archive-closure.tsv
 
 The gate accepts only Missing-to-Partial, Missing-to-Complete, or
 Partial-to-Complete, requires exact policy classes, rejects test-domain
 evidence, verifies source trees, and permits only protected-policy metadata
-changes after attestation. The projection transaction preserves prior ledger
-rows, replaces a row only for a valid subsequent upgrade, rejects archive
-mutation or deletion, and derives every visible status/count change from the
-candidate status using protected generators.
+changes after attestation. The protected gate also emits a canonical archive
+closure bound to the transaction evidence-set digest. That closure starts at
+the promotion manifest and contains every transitively referenced signed
+result, Complete authorization, hardware queue, log, artifact, and toolchain
+closure with its exact byte length and SHA-256 digest.
+
+The projection transaction preserves prior ledger rows and replaces a row only
+for a valid subsequent upgrade. The protected checker requires the candidate's
+new archive files to equal the gate-produced closure and permits new directories
+only when they are required parents of those files. Historical mutation,
+unreferenced files, empty namespace reservations, and candidate-authored matrix
+or dashboard prose therefore fail closed. Every visible status/count change is
+derived from the candidate status using protected generators.
 
 ## Tests
 
