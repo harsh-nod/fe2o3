@@ -1,0 +1,20 @@
+fixed-profile setup noise
+FE2O3_S09_BEGIN
+Breakpoint 1, alpha () at /checkout/crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src/main.rs:68
+FE2O3_S09_FUNCTION
+#0 alpha () at /checkout/crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src/main.rs:68
+Line 68 of "crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src/main.rs" starts at address 0x2100
+Breakpoint 2, alpha () at /checkout/crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src/main.rs:69
+FE2O3_S09_ARGUMENTS
+scale = 1.5
+input_data = (*mut f32) 0x7ffff000
+input_len = 1
+output_data = (*mut f32) 0x7fffe000
+output_len = 1
+Breakpoint 3, alpha () at /checkout/crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src/main.rs:70
+FE2O3_S09_LOCAL
+#0 alpha () at /checkout/crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src/main.rs:70
+Line 70 of "crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src/main.rs" starts at address 0x21b8
+i = 0
+FE2O3_S09_END
+fixed-profile teardown noise

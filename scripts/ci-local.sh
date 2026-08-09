@@ -142,6 +142,7 @@ run_tests() {
     cargo check --locked -p fe2o3-core --test device_copy_derive_compile
   run_step device-copy-derive-ui \
     cargo test --locked -p fe2o3-core --test device_copy_derive_ui
+  run_step s09-debug-checker bash scripts/tests/s09-debug.sh
 }
 
 run_rustc_codegen_tests() {
