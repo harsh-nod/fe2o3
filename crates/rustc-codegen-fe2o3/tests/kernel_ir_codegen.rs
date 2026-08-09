@@ -1143,6 +1143,24 @@ fn worker_v2_s09_alpha_o0_preserves_source_dwarf_in_hsaco() {
             "missing {expected:?} in DWARF:\n{dump}"
         );
     }
+    assert_eq!(
+        dump.matches("DW_AT_location\t").count(),
+        6,
+        "S09 requires locations for five physical arguments and local `i`"
+    );
+    for source_line in [68, 69, 70] {
+        assert!(
+            dump.lines().any(|line| {
+                let mut columns = line.split_whitespace();
+                columns
+                    .next()
+                    .is_some_and(|address| address.starts_with("0x"))
+                    && columns.next().and_then(|line| line.parse::<usize>().ok())
+                        == Some(source_line)
+            }),
+            "S09 line table is missing source line {source_line}:\n{dump}"
+        );
+    }
 }
 
 #[test]

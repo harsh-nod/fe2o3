@@ -14,6 +14,7 @@ const S09_ALPHA_PROFILE: &str = "s09-alpha-gfx942-o0-v1";
 const S09_SOURCE_SUFFIX: &str =
     "crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src/main.rs";
 const S09_FUNCTION_LINE: usize = 68;
+const S09_INDEX_LINE: usize = 69;
 const S09_LOCAL_LINE: usize = 70;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -21,6 +22,7 @@ pub(crate) struct AlphaSourceDebugV1 {
     source_file: String,
     source_directory: String,
     function_line: usize,
+    index_line: usize,
     local_line: usize,
 }
 
@@ -94,6 +96,11 @@ pub(crate) fn collect_requested_profile<'tcx>(
         .iter()
         .find(|variable| variable.name.as_str() == "i" && variable.argument_index.is_none())
         .ok_or_else(|| SourceDebugError::new("S09 alpha has no source local named `i`"))?;
+    let index = body
+        .var_debug_info
+        .iter()
+        .find(|variable| variable.name.as_str() == "index" && variable.argument_index.is_none())
+        .ok_or_else(|| SourceDebugError::new("S09 alpha has no source local named `index`"))?;
     let VarDebugInfoContents::Place(place) = local.value else {
         return Err(SourceDebugError::new(
             "S09 alpha local `i` is not represented by a MIR place",
@@ -110,14 +117,17 @@ pub(crate) fn collect_requested_profile<'tcx>(
         ));
     }
     let local_location = source_location(tcx, local.source_info.span)?;
+    let index_location = source_location(tcx, index.source_info.span)?;
     if function.file != local_location.file
+        || function.file != index_location.file
         || !function.file.ends_with(S09_SOURCE_SUFFIX)
         || function.line != S09_FUNCTION_LINE
+        || index_location.line != S09_INDEX_LINE
         || local_location.line != S09_LOCAL_LINE
     {
         return Err(SourceDebugError::new(format!(
-            "S09 alpha source identity changed: expected {S09_SOURCE_SUFFIX}:{S09_FUNCTION_LINE} with local `i` at line {S09_LOCAL_LINE}; found {}:{} and local line {}",
-            function.file, function.line, local_location.line
+            "S09 alpha source identity changed: expected {S09_SOURCE_SUFFIX}:{S09_FUNCTION_LINE} with `index` at line {S09_INDEX_LINE} and `i` at line {S09_LOCAL_LINE}; found {}:{}, index line {}, and local line {}",
+            function.file, function.line, index_location.line, local_location.line
         )));
     }
     let (source_directory, source_file) = match function.file.rsplit_once('/') {
@@ -130,6 +140,7 @@ pub(crate) fn collect_requested_profile<'tcx>(
         source_file,
         source_directory,
         function_line: function.line,
+        index_line: index_location.line,
         local_line: local_location.line,
     }))
 }
@@ -229,6 +240,11 @@ pub(crate) fn inject_alpha_dwarf_v1(
             )));
         }
     }
+    if llvm.contains(" asm ") {
+        return Err(SourceDebugError::new(
+            "S09 alpha refuses pre-existing inline assembly",
+        ));
+    }
     let signature = "define amdgpu_kernel void @alpha(float %arg0, ptr addrspace(1) %arg1.data, i64 %arg1.len, ptr addrspace(1) %arg2.data, i64 %arg2.len)";
     if llvm.matches(signature).count() != 1 {
         return Err(SourceDebugError::new(
@@ -255,25 +271,13 @@ pub(crate) fn inject_alpha_dwarf_v1(
         &format!(" !dbg !{} !reqd_work_group_size ", ids.subprogram),
         1,
     );
-    let argument_records = format!(
-        "bb0:\n  call void @llvm.dbg.value(metadata float %arg0, metadata !{}, metadata !DIExpression()), !dbg !{}\n  call void @llvm.dbg.value(metadata ptr addrspace(1) %arg1.data, metadata !{}, metadata !DIExpression()), !dbg !{}\n  call void @llvm.dbg.value(metadata i64 %arg1.len, metadata !{}, metadata !DIExpression()), !dbg !{}\n  call void @llvm.dbg.value(metadata ptr addrspace(1) %arg2.data, metadata !{}, metadata !DIExpression()), !dbg !{}\n  call void @llvm.dbg.value(metadata i64 %arg2.len, metadata !{}, metadata !DIExpression()), !dbg !{}\n",
-        ids.scale,
-        ids.function_location,
-        ids.input_data,
-        ids.function_location,
-        ids.input_len,
-        ids.function_location,
-        ids.output_data,
-        ids.function_location,
-        ids.output_len,
-        ids.function_location,
-    );
+    let argument_records = format!("bb0:\n{}", argument_debug_records(ids));
     rewritten_function = rewritten_function.replacen("bb0:\n", &argument_records, 1);
     let local_definition =
         format!("  {local_value} = add i64 {local_value}.base, {local_value}.local");
     let local_record = format!(
-        "{local_definition}, !dbg !{}\n  call void @llvm.dbg.value(metadata i64 {local_value}, metadata !{}, metadata !DIExpression()), !dbg !{}",
-        ids.local_location, ids.local, ids.local_location,
+        "{local_definition}\n  call void @llvm.dbg.value(metadata i64 {local_value}, metadata !{}, metadata !DIExpression()), !dbg !{}\n  call void asm sideeffect \"s_nop 0\", \"v,~{{memory}}\"(i64 {local_value}), !dbg !{}",
+        ids.local, ids.local_location, ids.local_location,
     );
     if rewritten_function.matches(&local_definition).count() != 1 {
         return Err(SourceDebugError::new(
@@ -294,6 +298,24 @@ pub(crate) fn inject_alpha_dwarf_v1(
     output.push_str(&llvm[function_end..]);
     write_debug_metadata(&mut output, profile, ids)?;
     Ok(output)
+}
+
+fn argument_debug_records(ids: DebugIds) -> String {
+    format!(
+        "  call void @llvm.dbg.value(metadata float %arg0, metadata !{}, metadata !DIExpression()), !dbg !{}\n  call void @llvm.dbg.value(metadata ptr addrspace(1) %arg1.data, metadata !{}, metadata !DIExpression()), !dbg !{}\n  call void @llvm.dbg.value(metadata i64 %arg1.len, metadata !{}, metadata !DIExpression()), !dbg !{}\n  call void @llvm.dbg.value(metadata ptr addrspace(1) %arg2.data, metadata !{}, metadata !DIExpression()), !dbg !{}\n  call void @llvm.dbg.value(metadata i64 %arg2.len, metadata !{}, metadata !DIExpression()), !dbg !{}\n  call void asm sideeffect \"s_nop 0\", \"v,v,v,v,v,~{{memory}}\"(float %arg0, ptr addrspace(1) %arg1.data, i64 %arg1.len, ptr addrspace(1) %arg2.data, i64 %arg2.len), !dbg !{}\n  call void asm sideeffect \"s_nop 0\", \"v,v,v,v,v,~{{memory}}\"(float %arg0, ptr addrspace(1) %arg1.data, i64 %arg1.len, ptr addrspace(1) %arg2.data, i64 %arg2.len), !dbg !{}\n",
+        ids.scale,
+        ids.function_location,
+        ids.input_data,
+        ids.function_location,
+        ids.input_len,
+        ids.function_location,
+        ids.output_data,
+        ids.function_location,
+        ids.output_len,
+        ids.function_location,
+        ids.function_location,
+        ids.index_location,
+    )
 }
 
 fn find_global_index_value(function: &str) -> Result<&str, SourceDebugError> {
@@ -365,6 +387,7 @@ struct DebugIds {
     output_len: usize,
     local: usize,
     function_location: usize,
+    index_location: usize,
     local_location: usize,
 }
 
@@ -395,7 +418,8 @@ impl DebugIds {
             output_len: id(16)?,
             local: id(17)?,
             function_location: id(18)?,
-            local_location: id(19)?,
+            index_location: id(19)?,
+            local_location: id(20)?,
         })
     }
 }
@@ -506,6 +530,12 @@ fn write_debug_metadata(
     writeln!(
         output,
         "!{} = !DILocation(line: {}, column: 13, scope: !{})",
+        ids.index_location, profile.index_line, ids.subprogram
+    )
+    .unwrap();
+    writeln!(
+        output,
+        "!{} = !DILocation(line: {}, column: 13, scope: !{})",
         ids.local_location, profile.local_line, ids.subprogram
     )
     .unwrap();
@@ -522,6 +552,7 @@ mod tests {
             source_directory: "crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src"
                 .to_owned(),
             function_line: S09_FUNCTION_LINE,
+            index_line: S09_INDEX_LINE,
             local_line: S09_LOCAL_LINE,
         }
     }
@@ -561,10 +592,20 @@ attributes #0 = { nounwind }
             "!DILocalVariable(name: \"output_len\", arg: 5",
             "!DILocalVariable(name: \"i\", scope:",
             "metadata i64 %v3",
+            "line: 69",
             "line: 70",
         ] {
             assert!(first.contains(expected), "missing {expected:?}\n{first}");
         }
+        assert_eq!(first.matches("@llvm.dbg.value(").count(), 7);
+        assert!(first.contains("asm sideeffect \"s_nop 0\", \"v,v,v,v,v,~{memory}\""));
+        assert_eq!(
+            first
+                .matches("asm sideeffect \"s_nop 0\", \"v,v,v,v,v,~{memory}\"")
+                .count(),
+            2
+        );
+        assert!(first.contains("asm sideeffect \"s_nop 0\", \"v,~{memory}\""));
     }
 
     #[test]
@@ -591,6 +632,18 @@ attributes #0 = { nounwind }
                 .unwrap_err()
                 .to_string()
                 .contains("pre-existing")
+        );
+        assert!(
+            inject_alpha_dwarf_v1(
+                &module().replace(
+                    "ret void",
+                    "call void asm sideeffect \"\", \"\"()\n  ret void"
+                ),
+                &profile(),
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("inline assembly")
         );
     }
 }
