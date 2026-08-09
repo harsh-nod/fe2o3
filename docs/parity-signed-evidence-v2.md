@@ -364,6 +364,70 @@ unreferenced files, empty namespace reservations, and candidate-authored matrix
 or dashboard prose therefore fail closed. Every visible status/count change is
 derived from the candidate status using protected generators.
 
+### Protected GitHub Verdict
+
+`.github/workflows/parity-promotion.yml` runs protected default-branch code for
+`pull_request_target` and review events. Its direct `merge_group` job is an
+unprivileged bootstrap only. The privileged merge-queue verdict is triggered by
+the completed merge-group `CI` run through `workflow_run`, whose workflow code
+GitHub loads from the default branch. The controller requires the source run to
+be the exact `.github/workflows/ci.yml` merge-group run and binds its `head_sha`
+and queue ref. Protected code comes from the controller's exact
+`github.workflow_sha`, which must still be the current default-branch tip.
+
+Base and head refs are fetched into a runner-owned bare repository. The fetched
+refs must still resolve to the declared exact 40-character commit IDs, both
+objects must be commits, and a merge-group head must descend from the protected
+default base. Detached worktrees are then created from those objects. The
+protected classifier verifies those worktrees and derives the authoritative
+changed-path count and NUL-delimited paths with an immutable two-tree
+`git diff --no-renames`. The live pull-request files API and the event's
+`changed_files` count are not authorization inputs.
+
+The workflow publishes `fe2o3/protected-parity-promotion` through the GitHub
+Checks API on the exact pull-request head or merge-group head SHA. It first
+creates an `in_progress` check, runs only protected-base verifier code against
+the candidate worktree as data, and updates the same check ID to `success` or
+`failure`. A verifier crash or rejection therefore fails the candidate-bound
+check; cancellation leaves it pending and blocks admission. Immediately before
+success, a pull-request run queries the current PR and requires its number,
+state, draft state, base/head repositories, refs, and SHAs to equal the event
+snapshot. A merge-group run refetches the protected default ref and queue head
+ref and requires both SHAs to remain exact.
+
+The pull-request trigger is intentionally not path-filtered: every candidate
+SHA receives the required check, and changes outside the parity trust surface
+complete through the protected classifier's `no-op` result. Runs are not
+concurrency-cancelled, so a newer event cannot strand an older check on the same
+SHA in `in_progress`.
+
+Configure the verdict identity as follows:
+
+1. Create a dedicated GitHub App installed only on this repository. Grant its
+   installation token `Checks: write` and no other write permission.
+2. Create a `parity-verdict` Actions environment. Set
+   `PARITY_VERDICT_APP_ID` as an environment variable and
+   `PARITY_VERDICT_APP_PRIVATE_KEY` as an environment secret. Restrict
+   deployment branches to the protected default branch only. Ordinary branches,
+   `refs/pull/*`, and `gh-readonly-queue/*` refs must not receive this
+   environment. The direct merge-group bootstrap never receives App secrets;
+   only the default-branch `workflow_run` controller does.
+3. In the default-branch ruleset, require the exact check name
+   `fe2o3/protected-parity-promotion` and select the dedicated App as the
+   expected source. Pin its immutable numeric App ID, not merely its display
+   name. Do not select the general GitHub Actions App as the source.
+4. Enable the required check for both pull requests and merge queue. Keep
+   `.github/workflows/parity-promotion.yml`, the environment policy, and the
+   ruleset under administrator/CODEOWNER control.
+
+The workflow verifies every create/update response against the configured App
+ID and App slug, check name, check ID, candidate SHA, status, and conclusion. A
+candidate workflow can emit the same visible name, but its GitHub App source is
+different and cannot satisfy the source-pinned ruleset. The App private key is
+never stored in this repository. Trust-change PR checks still require protected
+review approvals bound to the exact PR head; merge-group checks repeat the
+immutable-path and monotonic trust-update validation after candidate admission.
+
 ## Tests
 
     scripts/ci-local.sh parity-evidence
