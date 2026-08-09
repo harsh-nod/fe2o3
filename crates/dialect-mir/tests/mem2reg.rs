@@ -1,9 +1,10 @@
 use dialect_mir::{
-    MirBasicBlock, MirBinaryOp, MirBlockId, MirBody, MirBodyForm, MirCall, MirCallee, MirConstant,
-    MirConstantValue, MirEdge, MirExecutableModule, MirExecutableVersion, MirFunction, MirLayout,
-    MirLocalDecl, MirLocalId, MirLocalKind, MirOperand, MirPlace, MirRvalue, MirScalarType,
-    MirSemanticType, MirStatement, MirStatementKind, MirTerminator, MirTerminatorKind, MirTypeId,
-    MirTypeKind, MirUnwindAction, MirValueId, promote_module_to_ssa,
+    MirAddressSpace, MirBasicBlock, MirBinaryOp, MirBlockId, MirBody, MirBodyForm, MirCall,
+    MirCallAuthority, MirCallReturn, MirCallSignature, MirCallable, MirCallee, MirConstant,
+    MirConstantValue, MirEdge, MirExecutableModule, MirExecutableTarget, MirExecutableVersion,
+    MirFunction, MirLayout, MirLocalDecl, MirLocalId, MirLocalKind, MirOperand, MirPlace,
+    MirRvalue, MirScalarType, MirSemanticType, MirStatement, MirStatementKind, MirTerminator,
+    MirTerminatorKind, MirTypeId, MirTypeKind, MirUnwindAction, MirValueId, promote_module_to_ssa,
 };
 
 #[derive(Clone, Copy)]
@@ -38,6 +39,7 @@ fn local(ty: MirTypeId, kind: MirLocalKind, mutable: bool) -> MirLocalDecl {
         ty,
         kind,
         mutable,
+        storage_address_space: MirAddressSpace::DEFAULT,
         name: None,
         span: None,
     }
@@ -76,7 +78,12 @@ fn loop_module() -> MirExecutableModule {
     let (types, ids) = types();
     MirExecutableModule {
         version: MirExecutableVersion::V1,
+        target: MirExecutableTarget {
+            pointer_width_bits: 32,
+            thread_index_width_bits: 32,
+        },
         types,
+        callables: vec![],
         functions: vec![MirFunction {
             identity: "mem2reg::sum::<u32>".into(),
             span: None,
@@ -242,6 +249,10 @@ fn leaves_storage_marked_and_not_entry_initialized_locals_as_slots() {
     late_initialized.functions[0].body.blocks[0]
         .statements
         .remove(0);
+    let late_u32 = late_initialized.functions[0].body.locals[2].ty;
+    late_initialized.functions[0].body.blocks[1]
+        .statements
+        .insert(0, assign(2, late_u32, MirRvalue::Use(integer(0, late_u32))));
     let (output, report) = promote_module_to_ssa(&late_initialized).unwrap();
     assert_eq!(
         report.functions[0].promoted_locals,
@@ -285,6 +296,17 @@ fn leaves_call_defined_locals_as_slots() {
         target: Some(MirEdge::new(MirBlockId(1))),
         unwind: MirUnwindAction::Unreachable,
     }));
+    input.callables.push(MirCallable {
+        identity: "fixture::next".into(),
+        authority: MirCallAuthority::DeviceImport {
+            contract: "fixture::next::contract".into(),
+        },
+        signature: MirCallSignature {
+            inputs: vec![],
+            output: MirCallReturn::Value(ids.u32_ty),
+            can_unwind: false,
+        },
+    });
     input.validate().unwrap();
 
     let (output, report) = promote_module_to_ssa(&input).unwrap();
