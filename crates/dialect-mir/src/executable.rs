@@ -323,6 +323,8 @@ pub enum MirProjection {
     },
     ConstantIndex {
         offset: u64,
+        /// Canonical rustc metadata. Verification requires equality with the
+        /// statically derived base-array length and never trusts it as a bound.
         min_length: u64,
         from_end: bool,
     },
@@ -330,7 +332,8 @@ pub enum MirProjection {
         from: u64,
         to: u64,
         from_end: bool,
-        /// Importer-provided lower bound for dynamically sized slices.
+        /// Canonical rustc metadata, not authority. V1 supports only static
+        /// arrays and requires this to equal the base-array length.
         min_length: u64,
     },
     Downcast {
@@ -1898,54 +1901,52 @@ impl<'a> Verifier<'a> {
                     })
                     .ok_or_else(|| error(path, "field projection index is out of bounds"))
             }
-            MirProjection::Index { local } => {
-                self.require_local(&format!("{path}.local"), *local)?;
-                if self.promoted.contains(local) {
-                    return Err(error(path, "projection index cannot name a promoted local"));
-                }
-                let index_ty = &self.type_at(self.local(*local).ty).kind;
-                if !matches!(
-                    index_ty,
-                    MirTypeKind::Scalar(MirScalarType::Int {
-                        signed: false,
-                        bits,
-                    }) if *bits == self.module.target.pointer_width_bits
-                ) {
-                    return Err(error(path, "index local must have the target usize type"));
-                }
-                self.sequence_element(path, current)
-            }
+            MirProjection::Index { .. } => Err(error(
+                path,
+                "dynamic index projections require an external range witness and are unsupported",
+            )),
             MirProjection::ConstantIndex {
                 offset,
                 min_length,
                 from_end,
             } => {
                 self.require_target_usize(&format!("{path}.offset"), *offset)?;
-                self.require_target_usize(&format!("{path}.min_length"), *min_length)?;
                 let ProjectionType::Type(ty) = current.ty else {
-                    return Err(error(path, "constant index requires an array or slice"));
+                    return Err(error(path, "constant index requires a static array"));
                 };
-                match &ty.kind {
-                    MirTypeKind::Array { length, .. } => {
-                        if *from_end {
-                            return Err(error(path, "arrays cannot be constant-indexed from end"));
-                        }
-                        if *length < *min_length {
-                            return Err(error(path, "constant-index minimum exceeds array length"));
-                        }
-                    }
-                    MirTypeKind::Slice { .. } => {}
-                    _ => return Err(error(path, "constant index requires an array or slice")),
+                let MirTypeKind::Array { element, length } = &ty.kind else {
+                    return Err(error(
+                        path,
+                        match &ty.kind {
+                            MirTypeKind::Slice { .. } => {
+                                "slice constant-index projections require an external bound witness"
+                            }
+                            _ => "constant index requires a static array",
+                        },
+                    ));
+                };
+                if min_length != length {
+                    return Err(error(
+                        format!("{path}.min_length"),
+                        "constant-index metadata must equal the static array length",
+                    ));
                 }
                 let in_bounds = if *from_end {
-                    *offset > 0 && *offset <= *min_length
+                    *offset > 0 && *offset <= *length
                 } else {
-                    *offset < *min_length
+                    *offset < *length
                 };
                 if !in_bounds {
-                    return Err(error(path, "constant index is outside its minimum length"));
+                    return Err(error(
+                        path,
+                        "constant index is outside the static array bounds",
+                    ));
                 }
-                self.sequence_element(path, current)
+                Ok(ProjectionState {
+                    ty: ProjectionType::Type(element),
+                    writable: current.writable,
+                    address_space: current.address_space,
+                })
             }
             MirProjection::Subslice {
                 from,
@@ -1955,52 +1956,48 @@ impl<'a> Verifier<'a> {
             } => {
                 self.require_target_usize(&format!("{path}.from"), *from)?;
                 self.require_target_usize(&format!("{path}.to"), *to)?;
-                self.require_target_usize(&format!("{path}.min_length"), *min_length)?;
                 let ProjectionType::Type(ty) = current.ty else {
-                    return Err(error(path, "subslice requires an array or slice"));
+                    return Err(error(path, "subslice requires a static array"));
                 };
-                match &ty.kind {
-                    MirTypeKind::Array { element, length } => {
-                        if *from_end {
-                            return Err(error(path, "arrays cannot be subsliced from end"));
-                        }
-                        if *min_length != *length {
-                            return Err(error(
-                                path,
-                                "array subslice minimum must equal the array length",
-                            ));
-                        }
-                        if *from > *to || *to > *length {
-                            return Err(error(path, "subslice bounds exceed array length"));
-                        }
-                        self.find_array_semantic_type(path, element, *to - *from)
-                            .map(|ty| ProjectionState {
-                                ty: ProjectionType::Type(ty),
-                                writable: current.writable,
-                                address_space: current.address_space,
-                            })
-                    }
-                    MirTypeKind::Slice { .. } => {
-                        if !from_end {
-                            return Err(error(path, "slices must be subsliced from end"));
-                        }
-                        if from
-                            .checked_add(*to)
-                            .is_none_or(|extent| extent > *min_length)
-                        {
-                            return Err(error(
-                                path,
-                                "subslice bounds exceed the imported minimum length",
-                            ));
-                        }
-                        Ok(ProjectionState {
-                            ty: ProjectionType::Type(ty),
-                            writable: current.writable,
-                            address_space: current.address_space,
-                        })
-                    }
-                    _ => Err(error(path, "subslice requires an array or slice")),
+                let MirTypeKind::Array { element, length } = &ty.kind else {
+                    return Err(error(
+                        path,
+                        match &ty.kind {
+                            MirTypeKind::Slice { .. } => {
+                                "slice subslice projections require an external bound witness"
+                            }
+                            _ => "subslice requires a static array",
+                        },
+                    ));
+                };
+                if min_length != length {
+                    return Err(error(
+                        format!("{path}.min_length"),
+                        "subslice metadata must equal the static array length",
+                    ));
                 }
+                let result_length = if *from_end {
+                    let removed = from.checked_add(*to).ok_or_else(|| {
+                        error(path, "subslice bounds overflow the static array length")
+                    })?;
+                    length.checked_sub(removed).ok_or_else(|| {
+                        error(path, "subslice bounds exceed the static array length")
+                    })?
+                } else {
+                    if *from > *to || *to > *length {
+                        return Err(error(
+                            path,
+                            "subslice bounds exceed the static array length",
+                        ));
+                    }
+                    *to - *from
+                };
+                self.find_array_semantic_type(path, element, result_length)
+                    .map(|ty| ProjectionState {
+                        ty: ProjectionType::Type(ty),
+                        writable: current.writable,
+                        address_space: current.address_space,
+                    })
             }
             MirProjection::Downcast { variant } => {
                 let ProjectionType::Type(ty) = current.ty else {
@@ -2022,26 +2019,6 @@ impl<'a> Verifier<'a> {
                     address_space: current.address_space,
                 })
             }
-        }
-    }
-
-    fn sequence_element<'b>(
-        &'b self,
-        path: &str,
-        current: ProjectionState<'b>,
-    ) -> Result<ProjectionState<'b>, MirExecutableValidationError> {
-        let ProjectionType::Type(ty) = current.ty else {
-            return Err(error(path, "index projection requires an array or slice"));
-        };
-        match &ty.kind {
-            MirTypeKind::Array { element, .. } | MirTypeKind::Slice { element } => {
-                Ok(ProjectionState {
-                    ty: ProjectionType::Type(element),
-                    writable: current.writable,
-                    address_space: current.address_space,
-                })
-            }
-            _ => Err(error(path, "index projection requires an array or slice")),
         }
     }
 
