@@ -3,9 +3,9 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use dialect_mir::{
     MAX_EXECUTABLE_TYPE_DEPTH, MAX_EXECUTABLE_WIRE_BYTES, MirAddressSpace, MirBasicBlock,
     MirBlockId, MirBody, MirBodyForm, MirExecutableDecodeError, MirExecutableModule,
-    MirExecutableVersion, MirFunction, MirLayout, MirLocalDecl, MirLocalId, MirLocalKind,
-    MirMutability, MirOperand, MirPlace, MirRvalue, MirScalarType, MirSemanticType, MirStatement,
-    MirStatementKind, MirTerminator, MirTerminatorKind, MirTypeId, MirTypeKind,
+    MirExecutableTarget, MirExecutableVersion, MirFunction, MirLayout, MirLocalDecl, MirLocalId,
+    MirLocalKind, MirMutability, MirOperand, MirPlace, MirRvalue, MirScalarType, MirSemanticType,
+    MirStatement, MirStatementKind, MirTerminator, MirTerminatorKind, MirTypeId, MirTypeKind,
 };
 
 fn scalar_u32() -> MirSemanticType {
@@ -21,7 +21,12 @@ fn scalar_u32() -> MirSemanticType {
 fn module() -> MirExecutableModule {
     MirExecutableModule {
         version: MirExecutableVersion::V1,
+        target: MirExecutableTarget {
+            pointer_width_bits: 32,
+            thread_index_width_bits: 32,
+        },
         types: vec![scalar_u32()],
+        callables: vec![],
         functions: vec![MirFunction {
             identity: "wire::identity::<u32>".into(),
             span: None,
@@ -32,6 +37,7 @@ fn module() -> MirExecutableModule {
                         ty: MirTypeId(0),
                         kind: MirLocalKind::Return,
                         mutable: true,
+                        storage_address_space: MirAddressSpace::DEFAULT,
                         name: Some("return".into()),
                         span: None,
                     },
@@ -39,6 +45,7 @@ fn module() -> MirExecutableModule {
                         ty: MirTypeId(0),
                         kind: MirLocalKind::Argument,
                         mutable: false,
+                        storage_address_space: MirAddressSpace::DEFAULT,
                         name: Some("input".into()),
                         span: None,
                     },

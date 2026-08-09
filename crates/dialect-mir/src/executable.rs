@@ -3,7 +3,10 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{MirMutability, MirScalarType, MirSemanticType, MirTypeKind, MirTypeValidationError};
+use crate::{
+    MirAddressSpace, MirMutability, MirScalarType, MirSemanticType, MirTypeKind,
+    MirTypeValidationError,
+};
 
 pub const EXECUTABLE_MIR_VERSION: u16 = 1;
 pub const MAX_EXECUTABLE_TYPES: usize = 1_024;
@@ -16,6 +19,7 @@ pub const MAX_EXECUTABLE_STATEMENTS: usize = 65_536;
 pub const MAX_EXECUTABLE_PROJECTIONS: usize = 32;
 pub const MAX_EXECUTABLE_EDGE_ARGUMENTS: usize = 4_096;
 pub const MAX_EXECUTABLE_CALL_ARGUMENTS: usize = 256;
+pub const MAX_EXECUTABLE_CALLABLES: usize = 1_024;
 pub const MAX_EXECUTABLE_SWITCH_TARGETS: usize = 1_024;
 pub const MAX_EXECUTABLE_IDENTITY_BYTES: usize = 4_096;
 pub const MAX_EXECUTABLE_SOURCE_FILE_BYTES: usize = 4_096;
@@ -59,12 +63,72 @@ pub struct MirSourceSpan {
     pub column: u32,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct MirExecutableTarget {
+    /// Width of Rust `usize` and MIR index locals for this target.
+    pub pointer_width_bits: u16,
+    /// Width returned by target thread-index operations.
+    pub thread_index_width_bits: u16,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum MirIntrinsic {
+    CopyNonOverlapping,
+    PointerDistance,
+    VolatileLoad,
+    VolatileStore,
+}
+
+impl MirIntrinsic {
+    fn identity(&self) -> &'static str {
+        match self {
+            Self::CopyNonOverlapping => "fe2o3.copy_nonoverlapping",
+            Self::PointerDistance => "fe2o3.pointer_distance",
+            Self::VolatileLoad => "fe2o3.volatile_load",
+            Self::VolatileStore => "fe2o3.volatile_store",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum MirCallAuthority {
+    /// A function body present in this module.
+    DefinedFunction,
+    /// A separately verified device ABI contract.
+    DeviceImport { contract: String },
+    /// A closed, compiler-owned intrinsic operation.
+    Intrinsic(MirIntrinsic),
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum MirCallReturn {
+    Diverging,
+    Value(MirTypeId),
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct MirCallSignature {
+    pub inputs: Vec<MirTypeId>,
+    pub output: MirCallReturn,
+    pub can_unwind: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct MirCallable {
+    pub identity: String,
+    pub authority: MirCallAuthority,
+    pub signature: MirCallSignature,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct MirExecutableModule {
     pub version: MirExecutableVersion,
+    pub target: MirExecutableTarget,
     /// Types are sorted by their canonical semantic representation. All type
     /// references in the module are stable indexes into this table.
     pub types: Vec<MirSemanticType>,
+    /// Callable declarations are strictly sorted by identity.
+    pub callables: Vec<MirCallable>,
     /// Functions are sorted by monomorphized identity.
     pub functions: Vec<MirFunction>,
 }
@@ -107,6 +171,8 @@ pub struct MirLocalDecl {
     pub ty: MirTypeId,
     pub kind: MirLocalKind,
     pub mutable: bool,
+    /// Address space occupied by this local's storage slot.
+    pub storage_address_space: MirAddressSpace,
     pub name: Option<String>,
     pub span: Option<MirSourceSpan>,
 }
@@ -164,6 +230,8 @@ pub enum MirProjection {
         from: u64,
         to: u64,
         from_end: bool,
+        /// Importer-provided lower bound for dynamically sized slices.
+        min_length: u64,
     },
     Downcast {
         variant: u32,
@@ -273,10 +341,12 @@ pub enum MirRvalue {
     Ref {
         mutability: MirMutability,
         place: MirPlace,
+        ty: MirTypeId,
     },
     AddressOf {
         mutability: MirMutability,
         place: MirPlace,
+        ty: MirTypeId,
     },
     Len(MirPlace),
     Discriminant(MirPlace),
@@ -435,6 +505,18 @@ impl MirExecutableModule {
             ));
         }
         bounded_len("module.types", self.types.len(), 1, MAX_EXECUTABLE_TYPES)?;
+        if !matches!(self.target.pointer_width_bits, 32 | 64) {
+            return Err(error(
+                "module.target.pointer_width_bits",
+                "pointer width must be 32 or 64 bits",
+            ));
+        }
+        if !matches!(self.target.thread_index_width_bits, 32 | 64) {
+            return Err(error(
+                "module.target.thread_index_width_bits",
+                "thread-index width must be 32 or 64 bits",
+            ));
+        }
         bounded_len(
             "module.functions",
             self.functions.len(),
@@ -463,6 +545,8 @@ impl MirExecutableModule {
             previous_type = Some(canonical);
         }
 
+        self.validate_callables()?;
+
         let mut previous_identity: Option<&str> = None;
         for (index, function) in self.functions.iter().enumerate() {
             let path = format!("module.functions[{index}]");
@@ -476,6 +560,94 @@ impl MirExecutableModule {
             previous_identity = Some(&function.identity);
             validate_span_opt(&format!("{path}.span"), function.span.as_ref())?;
             Verifier::new(self, function, path).verify()?;
+        }
+        Ok(())
+    }
+
+    fn validate_callables(&self) -> Result<(), MirExecutableValidationError> {
+        bounded_len(
+            "module.callables",
+            self.callables.len(),
+            0,
+            MAX_EXECUTABLE_CALLABLES,
+        )?;
+        let mut previous: Option<&str> = None;
+        for (index, callable) in self.callables.iter().enumerate() {
+            let path = format!("module.callables[{index}]");
+            validate_identity(&format!("{path}.identity"), &callable.identity)?;
+            if previous.is_some_and(|value| value >= callable.identity.as_str()) {
+                return Err(error(
+                    format!("{path}.identity"),
+                    "callables must be strictly sorted by identity",
+                ));
+            }
+            previous = Some(&callable.identity);
+            bounded_len(
+                &format!("{path}.signature.inputs"),
+                callable.signature.inputs.len(),
+                0,
+                MAX_EXECUTABLE_CALL_ARGUMENTS,
+            )?;
+            for (input_index, ty) in callable.signature.inputs.iter().copied().enumerate() {
+                if self.type_at(ty).is_none() {
+                    return Err(error(
+                        format!("{path}.signature.inputs[{input_index}]"),
+                        format!("type {} does not exist", ty.0),
+                    ));
+                }
+            }
+            if let MirCallReturn::Value(ty) = callable.signature.output {
+                if self.type_at(ty).is_none() {
+                    return Err(error(
+                        format!("{path}.signature.output"),
+                        format!("type {} does not exist", ty.0),
+                    ));
+                }
+            }
+            match &callable.authority {
+                MirCallAuthority::DefinedFunction => {
+                    let Some(function) = self
+                        .functions
+                        .iter()
+                        .find(|function| function.identity == callable.identity)
+                    else {
+                        return Err(error(path, "defined callable has no function body"));
+                    };
+                    let inputs = function
+                        .body
+                        .locals
+                        .iter()
+                        .skip(1)
+                        .take_while(|local| local.kind == MirLocalKind::Argument)
+                        .map(|local| local.ty)
+                        .collect::<Vec<_>>();
+                    let return_ty = function
+                        .body
+                        .locals
+                        .first()
+                        .map(|local| local.ty)
+                        .ok_or_else(|| error(&path, "defined callable body has no return local"))?;
+                    if inputs != callable.signature.inputs
+                        || callable.signature.output != MirCallReturn::Value(return_ty)
+                    {
+                        return Err(error(
+                            path,
+                            "defined callable signature does not match its body",
+                        ));
+                    }
+                }
+                MirCallAuthority::DeviceImport { contract } => {
+                    validate_identity(&format!("{path}.authority.contract"), contract)?;
+                }
+                MirCallAuthority::Intrinsic(intrinsic) => {
+                    if callable.identity != intrinsic.identity() {
+                        return Err(error(
+                            format!("{path}.identity"),
+                            "intrinsic identity does not match its closed authority",
+                        ));
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -544,7 +716,8 @@ impl<'a> Verifier<'a> {
                 ),
             ));
         }
-        self.verify_reachability()
+        self.verify_reachability()?;
+        self.verify_initialization()
     }
 
     fn verify_locals(&self) -> Result<(), MirExecutableValidationError> {
@@ -617,6 +790,12 @@ impl<'a> Verifier<'a> {
             for (parameter_index, parameter) in block.parameters.iter().enumerate() {
                 let path = format!("{block_path}.parameters[{parameter_index}]");
                 self.collect_value(&path, parameter.value, parameter.ty)?;
+                if block_index == 0 && parameter.origin.is_none() {
+                    return Err(error(
+                        format!("{path}.origin"),
+                        "entry parameters require an argument-local origin",
+                    ));
+                }
                 if let Some(origin) = parameter.origin {
                     self.require_local(&format!("{path}.origin"), origin)?;
                     if !self.promoted.contains(&origin) {
@@ -715,9 +894,9 @@ impl<'a> Verifier<'a> {
             validate_span_opt(&format!("{path}.span"), statement.span.as_ref())?;
             match &statement.kind {
                 MirStatementKind::Assign { place, value } => {
-                    let (destination, writable) =
+                    let (destination, writable, _) =
                         self.verify_place_access(&format!("{path}.place"), place)?;
-                    if !writable {
+                    if !writable && !self.is_one_time_initialization_place(place) {
                         return Err(error(
                             format!("{path}.place"),
                             "assignment destination is not writable",
@@ -733,7 +912,7 @@ impl<'a> Verifier<'a> {
                     available.insert(*value);
                 }
                 MirStatementKind::SetDiscriminant { place, variant } => {
-                    let (ty, writable) =
+                    let (ty, writable, _) =
                         self.verify_place_access(&format!("{path}.place"), place)?;
                     if !writable {
                         return Err(error(
@@ -755,7 +934,7 @@ impl<'a> Verifier<'a> {
                     }
                 }
                 MirStatementKind::Deinit(place) => {
-                    let (_, writable) =
+                    let (_, writable, _) =
                         self.verify_place_access(&format!("{path}.place"), place)?;
                     if !writable {
                         return Err(error(
@@ -801,6 +980,12 @@ impl<'a> Verifier<'a> {
                 )?;
                 let mut previous = None;
                 for (index, (value, edge)) in targets.iter().enumerate() {
+                    if !switch_value_fits(&self.type_at(discr_ty).kind, *value) {
+                        return Err(error(
+                            format!("{path}.targets[{index}].0"),
+                            "switch value does not fit the discriminant type",
+                        ));
+                    }
                     if previous.is_some_and(|previous| previous >= *value) {
                         return Err(error(
                             format!("{path}.targets[{index}]"),
@@ -814,10 +999,34 @@ impl<'a> Verifier<'a> {
             }
             MirTerminatorKind::Return | MirTerminatorKind::Unreachable => Ok(()),
             MirTerminatorKind::Call(call) => {
-                match &call.callee {
-                    MirCallee::Direct(identity) | MirCallee::Intrinsic(identity) => {
-                        validate_identity(&format!("{path}.callee"), identity)?;
-                    }
+                let identity = match &call.callee {
+                    MirCallee::Direct(identity) | MirCallee::Intrinsic(identity) => identity,
+                };
+                validate_identity(&format!("{path}.callee"), identity)?;
+                let callable = self
+                    .module
+                    .callables
+                    .binary_search_by(|item| item.identity.as_str().cmp(identity))
+                    .ok()
+                    .map(|index| &self.module.callables[index])
+                    .ok_or_else(|| {
+                        error(
+                            format!("{path}.callee"),
+                            "callable is absent from the authority registry",
+                        )
+                    })?;
+                let authority_matches = matches!(
+                    (&call.callee, &callable.authority),
+                    (
+                        MirCallee::Direct(_),
+                        MirCallAuthority::DefinedFunction | MirCallAuthority::DeviceImport { .. }
+                    ) | (MirCallee::Intrinsic(_), MirCallAuthority::Intrinsic(_))
+                );
+                if !authority_matches {
+                    return Err(error(
+                        format!("{path}.callee"),
+                        "callee kind does not match its registered authority",
+                    ));
                 }
                 bounded_len(
                     &format!("{path}.arguments"),
@@ -825,13 +1034,37 @@ impl<'a> Verifier<'a> {
                     0,
                     MAX_EXECUTABLE_CALL_ARGUMENTS,
                 )?;
-                for (index, operand) in call.arguments.iter().enumerate() {
-                    self.verify_operand(&format!("{path}.arguments[{index}]"), operand, available)?;
+                if call.arguments.len() != callable.signature.inputs.len() {
+                    return Err(error(
+                        format!("{path}.arguments"),
+                        "call argument count does not match registered signature",
+                    ));
+                }
+                for (index, (operand, expected)) in call
+                    .arguments
+                    .iter()
+                    .zip(&callable.signature.inputs)
+                    .enumerate()
+                {
+                    let actual = self.verify_operand(
+                        &format!("{path}.arguments[{index}]"),
+                        operand,
+                        available,
+                    )?;
+                    self.require_same_type(
+                        &format!("{path}.arguments[{index}]"),
+                        *expected,
+                        actual,
+                    )?;
                 }
                 if let Some(destination) = &call.destination {
-                    let (_, writable) =
+                    let (_, writable, _) =
                         self.verify_place_access(&format!("{path}.destination"), destination)?;
-                    if !writable {
+                    let MirCallReturn::Value(output) = callable.signature.output else {
+                        return Err(error(path, "diverging callable cannot have a destination"));
+                    };
+                    self.require_same_type(&format!("{path}.destination"), output, destination.ty)?;
+                    if !writable && !self.is_one_time_initialization_place(destination) {
                         return Err(error(
                             format!("{path}.destination"),
                             "call destination is not writable",
@@ -842,6 +1075,32 @@ impl<'a> Verifier<'a> {
                     return Err(error(
                         path,
                         "call destination and normal target must either both exist or both be absent",
+                    ));
+                }
+                match callable.signature.output {
+                    MirCallReturn::Diverging if call.target.is_some() => {
+                        return Err(error(
+                            path,
+                            "diverging callable cannot have a normal target",
+                        ));
+                    }
+                    MirCallReturn::Value(_) if call.target.is_none() => {
+                        return Err(error(
+                            path,
+                            "returning callable requires a destination and normal target",
+                        ));
+                    }
+                    _ => {}
+                }
+                if !callable.signature.can_unwind
+                    && !matches!(
+                        call.unwind,
+                        MirUnwindAction::Unreachable | MirUnwindAction::Terminate
+                    )
+                {
+                    return Err(error(
+                        format!("{path}.unwind"),
+                        "callable signature does not authorize unwinding",
                     ));
                 }
                 if let Some(target) = &call.target {
@@ -1005,13 +1264,33 @@ impl<'a> Verifier<'a> {
                 }
                 Ok(*ty)
             }
-            MirRvalue::Ref { mutability, place } => {
-                let place_ty = self.verify_place(&format!("{path}.place"), place)?;
-                self.find_reference_type(path, place_ty, *mutability, false)
+            MirRvalue::Ref {
+                mutability,
+                place,
+                ty,
+            } => {
+                self.require_type(&format!("{path}.ty"), *ty)?;
+                let (_, writable, address_space) =
+                    self.verify_place_access(&format!("{path}.place"), place)?;
+                if *mutability == MirMutability::Mutable && !writable {
+                    return Err(error(path, "mutable reference requires a writable place"));
+                }
+                self.verify_reference_type(path, *ty, place.ty, *mutability, address_space, false)?;
+                Ok(*ty)
             }
-            MirRvalue::AddressOf { mutability, place } => {
-                let place_ty = self.verify_place(&format!("{path}.place"), place)?;
-                self.find_reference_type(path, place_ty, *mutability, true)
+            MirRvalue::AddressOf {
+                mutability,
+                place,
+                ty,
+            } => {
+                self.require_type(&format!("{path}.ty"), *ty)?;
+                let (_, writable, address_space) =
+                    self.verify_place_access(&format!("{path}.place"), place)?;
+                if *mutability == MirMutability::Mutable && !writable {
+                    return Err(error(path, "mutable raw address requires a writable place"));
+                }
+                self.verify_reference_type(path, *ty, place.ty, *mutability, address_space, true)?;
+                Ok(*ty)
             }
             MirRvalue::Len(place) => {
                 let ty = self.verify_place(&format!("{path}.place"), place)?;
@@ -1058,7 +1337,9 @@ impl<'a> Verifier<'a> {
                     self.verify_operand(&format!("{path}.operand"), operand, available)?;
                 self.find_array_type(path, element, *count)
             }
-            MirRvalue::ThreadIndex1d => self.usize_type(path),
+            MirRvalue::ThreadIndex1d => {
+                self.unsigned_type(path, self.module.target.thread_index_width_bits)
+            }
         }
     }
 
@@ -1128,14 +1409,14 @@ impl<'a> Verifier<'a> {
         path: &str,
         place: &MirPlace,
     ) -> Result<MirTypeId, MirExecutableValidationError> {
-        self.verify_place_access(path, place).map(|(ty, _)| ty)
+        self.verify_place_access(path, place).map(|(ty, _, _)| ty)
     }
 
     fn verify_place_access(
         &self,
         path: &str,
         place: &MirPlace,
-    ) -> Result<(MirTypeId, bool), MirExecutableValidationError> {
+    ) -> Result<(MirTypeId, bool, MirAddressSpace), MirExecutableValidationError> {
         self.require_local(&format!("{path}.local"), place.local)?;
         self.require_type(&format!("{path}.ty"), place.ty)?;
         if self.promoted.contains(&place.local) {
@@ -1154,6 +1435,7 @@ impl<'a> Verifier<'a> {
         let mut current = ProjectionState {
             ty: ProjectionType::Type(self.type_at(self.local(place.local).ty)),
             writable: self.local(place.local).mutable,
+            address_space: self.local(place.local).storage_address_space,
         };
         for (index, projection) in place.projection.iter().enumerate() {
             current = self.project(&format!("{path}.projection[{index}]"), current, projection)?;
@@ -1170,7 +1452,7 @@ impl<'a> Verifier<'a> {
                 "recorded place type does not match its projection",
             ));
         }
-        Ok((place.ty, current.writable))
+        Ok((place.ty, current.writable, current.address_space))
     }
 
     fn project<'b>(
@@ -1188,18 +1470,20 @@ impl<'a> Verifier<'a> {
                     MirTypeKind::RawPointer {
                         pointee,
                         mutability,
-                        ..
+                        address_space,
                     } => Ok(ProjectionState {
                         ty: ProjectionType::Type(pointee),
                         writable: *mutability == MirMutability::Mutable,
+                        address_space: *address_space,
                     }),
                     MirTypeKind::Reference {
                         referent,
                         mutability,
-                        ..
+                        address_space,
                     } => Ok(ProjectionState {
                         ty: ProjectionType::Type(referent),
                         writable: *mutability == MirMutability::Mutable,
+                        address_space: *address_space,
                     }),
                     _ => Err(error(
                         path,
@@ -1221,6 +1505,7 @@ impl<'a> Verifier<'a> {
                     .map(|field| ProjectionState {
                         ty: ProjectionType::Type(&field.ty),
                         writable: current.writable,
+                        address_space: current.address_space,
                     })
                     .ok_or_else(|| error(path, "field projection index is out of bounds"))
             }
@@ -1230,8 +1515,14 @@ impl<'a> Verifier<'a> {
                     return Err(error(path, "projection index cannot name a promoted local"));
                 }
                 let index_ty = &self.type_at(self.local(*local).ty).kind;
-                if !is_unsigned_integer(index_ty) {
-                    return Err(error(path, "index local must be an unsigned integer"));
+                if !matches!(
+                    index_ty,
+                    MirTypeKind::Scalar(MirScalarType::Int {
+                        signed: false,
+                        bits,
+                    }) if *bits == self.module.target.pointer_width_bits
+                ) {
+                    return Err(error(path, "index local must have the target usize type"));
                 }
                 self.sequence_element(path, current)
             }
@@ -1240,45 +1531,85 @@ impl<'a> Verifier<'a> {
                 min_length,
                 from_end,
             } => {
-                if *min_length == 0 || *offset >= *min_length {
-                    return Err(error(
-                        path,
-                        "constant index must be within its minimum length",
-                    ));
+                self.require_target_usize(&format!("{path}.offset"), *offset)?;
+                self.require_target_usize(&format!("{path}.min_length"), *min_length)?;
+                let ProjectionType::Type(ty) = current.ty else {
+                    return Err(error(path, "constant index requires an array or slice"));
+                };
+                match &ty.kind {
+                    MirTypeKind::Array { length, .. } => {
+                        if *from_end {
+                            return Err(error(path, "arrays cannot be constant-indexed from end"));
+                        }
+                        if *length < *min_length {
+                            return Err(error(path, "constant-index minimum exceeds array length"));
+                        }
+                    }
+                    MirTypeKind::Slice { .. } => {}
+                    _ => return Err(error(path, "constant index requires an array or slice")),
                 }
-                if *from_end && offset.checked_add(1).is_none() {
-                    return Err(error(path, "constant from-end index overflows"));
+                let in_bounds = if *from_end {
+                    *offset > 0 && *offset <= *min_length
+                } else {
+                    *offset < *min_length
+                };
+                if !in_bounds {
+                    return Err(error(path, "constant index is outside its minimum length"));
                 }
                 self.sequence_element(path, current)
             }
-            MirProjection::Subslice { from, to, from_end } => {
-                if !from_end && from > to {
-                    return Err(error(path, "subslice start exceeds end"));
-                }
+            MirProjection::Subslice {
+                from,
+                to,
+                from_end,
+                min_length,
+            } => {
+                self.require_target_usize(&format!("{path}.from"), *from)?;
+                self.require_target_usize(&format!("{path}.to"), *to)?;
+                self.require_target_usize(&format!("{path}.min_length"), *min_length)?;
                 let ProjectionType::Type(ty) = current.ty else {
                     return Err(error(path, "subslice requires an array or slice"));
                 };
                 match &ty.kind {
                     MirTypeKind::Array { element, length } => {
-                        let in_bounds = if *from_end {
-                            from.checked_add(*to)
-                                .is_some_and(|extent| extent <= *length)
-                        } else {
-                            *from <= *length && *to <= *length
-                        };
-                        if !in_bounds {
+                        if *from_end {
+                            return Err(error(path, "arrays cannot be subsliced from end"));
+                        }
+                        if *min_length != *length {
+                            return Err(error(
+                                path,
+                                "array subslice minimum must equal the array length",
+                            ));
+                        }
+                        if *from > *to || *to > *length {
                             return Err(error(path, "subslice bounds exceed array length"));
                         }
-                        self.find_slice_semantic_type(path, element)
+                        self.find_array_semantic_type(path, element, *to - *from)
                             .map(|ty| ProjectionState {
                                 ty: ProjectionType::Type(ty),
                                 writable: current.writable,
+                                address_space: current.address_space,
                             })
                     }
-                    MirTypeKind::Slice { .. } => Ok(ProjectionState {
-                        ty: ProjectionType::Type(ty),
-                        writable: current.writable,
-                    }),
+                    MirTypeKind::Slice { .. } => {
+                        if !from_end {
+                            return Err(error(path, "slices must be subsliced from end"));
+                        }
+                        if from
+                            .checked_add(*to)
+                            .is_none_or(|extent| extent > *min_length)
+                        {
+                            return Err(error(
+                                path,
+                                "subslice bounds exceed the imported minimum length",
+                            ));
+                        }
+                        Ok(ProjectionState {
+                            ty: ProjectionType::Type(ty),
+                            writable: current.writable,
+                            address_space: current.address_space,
+                        })
+                    }
                     _ => Err(error(path, "subslice requires an array or slice")),
                 }
             }
@@ -1299,6 +1630,7 @@ impl<'a> Verifier<'a> {
                         fields: &variant.aggregate.fields,
                     },
                     writable: current.writable,
+                    address_space: current.address_space,
                 })
             }
         }
@@ -1317,6 +1649,7 @@ impl<'a> Verifier<'a> {
                 Ok(ProjectionState {
                     ty: ProjectionType::Type(element),
                     writable: current.writable,
+                    address_space: current.address_space,
                 })
             }
             _ => Err(error(path, "index projection requires an array or slice")),
@@ -1349,41 +1682,438 @@ impl<'a> Verifier<'a> {
         Ok(())
     }
 
-    fn find_reference_type(
+    fn verify_initialization(&self) -> Result<(), MirExecutableValidationError> {
+        let body = &self.function.body;
+        let mut entry_state = vec![LocalInitialization::Uninitialized; body.locals.len()];
+        for (index, local) in body.locals.iter().enumerate() {
+            if local.kind == MirLocalKind::Argument {
+                entry_state[index] = LocalInitialization::Initialized;
+            }
+        }
+
+        let mut inputs = vec![None; body.blocks.len()];
+        inputs[body.entry.0 as usize] = Some(entry_state);
+        let mut queue = VecDeque::from([body.entry]);
+        while let Some(block_id) = queue.pop_front() {
+            let input = inputs[block_id.0 as usize]
+                .as_ref()
+                .expect("queued blocks have an input state")
+                .clone();
+            for (target, state) in self.transfer_initialization(block_id, input, false)? {
+                let slot = &mut inputs[target.0 as usize];
+                let changed = match slot {
+                    Some(current) => merge_initialization(current, &state),
+                    None => {
+                        *slot = Some(state);
+                        true
+                    }
+                };
+                if changed {
+                    queue.push_back(target);
+                }
+            }
+        }
+
+        for (index, input) in inputs.into_iter().enumerate() {
+            let input = input.ok_or_else(|| {
+                error(
+                    format!("{}.body.blocks[{index}]", self.path),
+                    "initialization analysis did not reach block",
+                )
+            })?;
+            self.transfer_initialization(MirBlockId(index as u32), input, true)?;
+        }
+        Ok(())
+    }
+
+    fn transfer_initialization(
+        &self,
+        block_id: MirBlockId,
+        mut state: Vec<LocalInitialization>,
+        strict: bool,
+    ) -> Result<Vec<(MirBlockId, Vec<LocalInitialization>)>, MirExecutableValidationError> {
+        let block = &self.function.body.blocks[block_id.0 as usize];
+        let block_path = format!("{}.body.blocks[{}]", self.path, block_id.0);
+        for (index, statement) in block.statements.iter().enumerate() {
+            let path = format!("{block_path}.statements[{index}]");
+            match &statement.kind {
+                MirStatementKind::Assign { place, value } => {
+                    self.flow_rvalue(&format!("{path}.value"), value, &mut state, strict)?;
+                    self.flow_write_place(&format!("{path}.place"), place, &mut state, strict)?;
+                }
+                MirStatementKind::Define { rvalue, .. } => {
+                    self.flow_rvalue(&format!("{path}.rvalue"), rvalue, &mut state, strict)?;
+                }
+                MirStatementKind::SetDiscriminant { place, .. } => {
+                    self.flow_read_place(&format!("{path}.place"), place, &state, strict)?;
+                }
+                MirStatementKind::StorageLive(local) => {
+                    if strict && state[local.0 as usize] == LocalInitialization::Initialized {
+                        return Err(error(path, "storage-live resets an initialized local"));
+                    }
+                    state[local.0 as usize] = LocalInitialization::Uninitialized;
+                }
+                MirStatementKind::StorageDead(local) => {
+                    state[local.0 as usize] = LocalInitialization::Uninitialized;
+                }
+                MirStatementKind::Deinit(place) => {
+                    self.flow_read_place(&format!("{path}.place"), place, &state, strict)?;
+                    if place.projection.is_empty() {
+                        state[place.local.0 as usize] = LocalInitialization::Uninitialized;
+                    } else if strict {
+                        return Err(error(
+                            format!("{path}.place"),
+                            "projected deinitialization requires partial-move tracking",
+                        ));
+                    }
+                }
+                MirStatementKind::Nop => {}
+            }
+        }
+
+        let path = format!("{block_path}.terminator");
+        let mut output = Vec::new();
+        match &block.terminator.kind {
+            MirTerminatorKind::Goto(edge) => {
+                let edge_state = self.flow_edge(&path, edge, &state, strict)?;
+                output.push((edge.target, edge_state));
+            }
+            MirTerminatorKind::SwitchInt {
+                discr,
+                targets,
+                otherwise,
+            } => {
+                self.flow_operand(&format!("{path}.discr"), discr, &mut state, strict)?;
+                for (index, (_, edge)) in targets.iter().enumerate() {
+                    let edge_state =
+                        self.flow_edge(&format!("{path}.targets[{index}]"), edge, &state, strict)?;
+                    output.push((edge.target, edge_state));
+                }
+                let edge_state =
+                    self.flow_edge(&format!("{path}.otherwise"), otherwise, &state, strict)?;
+                output.push((otherwise.target, edge_state));
+            }
+            MirTerminatorKind::Return => {
+                self.require_initialized(&path, MirLocalId(0), &state, strict)?;
+            }
+            MirTerminatorKind::Unreachable => {}
+            MirTerminatorKind::Call(call) => {
+                for (index, argument) in call.arguments.iter().enumerate() {
+                    self.flow_operand(
+                        &format!("{path}.arguments[{index}]"),
+                        argument,
+                        &mut state,
+                        strict,
+                    )?;
+                }
+                if let Some(edge) = &call.target {
+                    let mut normal = state.clone();
+                    if let Some(destination) = &call.destination {
+                        self.flow_write_place(
+                            &format!("{path}.destination"),
+                            destination,
+                            &mut normal,
+                            strict,
+                        )?;
+                    }
+                    let edge_state =
+                        self.flow_edge(&format!("{path}.target"), edge, &normal, strict)?;
+                    output.push((edge.target, edge_state));
+                }
+                self.flow_unwind(
+                    &format!("{path}.unwind"),
+                    &call.unwind,
+                    &state,
+                    strict,
+                    &mut output,
+                )?;
+            }
+            MirTerminatorKind::Drop {
+                place,
+                target,
+                unwind,
+            } => {
+                self.flow_read_place(&format!("{path}.place"), place, &state, strict)?;
+                if place.projection.is_empty() {
+                    state[place.local.0 as usize] = LocalInitialization::Moved;
+                } else if strict {
+                    return Err(error(
+                        format!("{path}.place"),
+                        "projected drop requires partial-move tracking",
+                    ));
+                }
+                let edge_state =
+                    self.flow_edge(&format!("{path}.target"), target, &state, strict)?;
+                output.push((target.target, edge_state));
+                self.flow_unwind(
+                    &format!("{path}.unwind"),
+                    unwind,
+                    &state,
+                    strict,
+                    &mut output,
+                )?;
+            }
+            MirTerminatorKind::Assert {
+                condition,
+                target,
+                unwind,
+                ..
+            } => {
+                self.flow_operand(&format!("{path}.condition"), condition, &mut state, strict)?;
+                let edge_state =
+                    self.flow_edge(&format!("{path}.target"), target, &state, strict)?;
+                output.push((target.target, edge_state));
+                self.flow_unwind(
+                    &format!("{path}.unwind"),
+                    unwind,
+                    &state,
+                    strict,
+                    &mut output,
+                )?;
+            }
+        }
+        Ok(output)
+    }
+
+    fn flow_unwind(
         &self,
         path: &str,
+        unwind: &MirUnwindAction,
+        state: &[LocalInitialization],
+        strict: bool,
+        output: &mut Vec<(MirBlockId, Vec<LocalInitialization>)>,
+    ) -> Result<(), MirExecutableValidationError> {
+        if let MirUnwindAction::Cleanup(edge) = unwind {
+            let edge_state = self.flow_edge(path, edge, state, strict)?;
+            output.push((edge.target, edge_state));
+        }
+        Ok(())
+    }
+
+    fn flow_edge(
+        &self,
+        path: &str,
+        edge: &MirEdge,
+        state: &[LocalInitialization],
+        strict: bool,
+    ) -> Result<Vec<LocalInitialization>, MirExecutableValidationError> {
+        let mut edge_state = state.to_vec();
+        for (index, argument) in edge.arguments.iter().enumerate() {
+            self.flow_operand(
+                &format!("{path}.arguments[{index}]"),
+                argument,
+                &mut edge_state,
+                strict,
+            )?;
+        }
+        Ok(edge_state)
+    }
+
+    fn flow_rvalue(
+        &self,
+        path: &str,
+        rvalue: &MirRvalue,
+        state: &mut [LocalInitialization],
+        strict: bool,
+    ) -> Result<(), MirExecutableValidationError> {
+        match rvalue {
+            MirRvalue::Use(operand)
+            | MirRvalue::UnaryOp { operand, .. }
+            | MirRvalue::Cast { operand, .. }
+            | MirRvalue::Repeat { operand, .. } => {
+                self.flow_operand(path, operand, state, strict)?;
+            }
+            MirRvalue::BinaryOp { lhs, rhs, .. } | MirRvalue::CheckedBinaryOp { lhs, rhs, .. } => {
+                self.flow_operand(&format!("{path}.lhs"), lhs, state, strict)?;
+                self.flow_operand(&format!("{path}.rhs"), rhs, state, strict)?;
+            }
+            MirRvalue::Ref { place, .. }
+            | MirRvalue::Len(place)
+            | MirRvalue::Discriminant(place) => {
+                self.flow_read_place(&format!("{path}.place"), place, state, strict)?;
+            }
+            MirRvalue::AddressOf { place, .. } => {
+                self.flow_address_place(&format!("{path}.place"), place, state, strict)?;
+            }
+            MirRvalue::Aggregate { operands, .. } => {
+                for (index, operand) in operands.iter().enumerate() {
+                    self.flow_operand(
+                        &format!("{path}.operands[{index}]"),
+                        operand,
+                        state,
+                        strict,
+                    )?;
+                }
+            }
+            MirRvalue::ThreadIndex1d => {}
+        }
+        Ok(())
+    }
+
+    fn flow_operand(
+        &self,
+        path: &str,
+        operand: &MirOperand,
+        state: &mut [LocalInitialization],
+        strict: bool,
+    ) -> Result<(), MirExecutableValidationError> {
+        match operand {
+            MirOperand::Copy(place) => {
+                self.flow_read_place(path, place, state, strict)?;
+                if strict && !is_copy_type(&self.type_at(place.ty).kind) {
+                    return Err(error(
+                        path,
+                        "Copy operand names a type without Copy authority",
+                    ));
+                }
+            }
+            MirOperand::Move(place) => {
+                self.flow_read_place(path, place, state, strict)?;
+                if !is_copy_type(&self.type_at(place.ty).kind) {
+                    if strict && !place.projection.is_empty() {
+                        return Err(error(path, "projected move requires partial-move tracking"));
+                    }
+                    state[place.local.0 as usize] = LocalInitialization::Moved;
+                }
+            }
+            MirOperand::Constant(_) | MirOperand::Value(_) => {}
+        }
+        Ok(())
+    }
+
+    fn flow_read_place(
+        &self,
+        path: &str,
+        place: &MirPlace,
+        state: &[LocalInitialization],
+        strict: bool,
+    ) -> Result<(), MirExecutableValidationError> {
+        self.require_initialized(path, place.local, state, strict)?;
+        for (index, projection) in place.projection.iter().enumerate() {
+            if let MirProjection::Index { local } = projection {
+                self.require_initialized(
+                    &format!("{path}.projection[{index}].local"),
+                    *local,
+                    state,
+                    strict,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    fn flow_address_place(
+        &self,
+        path: &str,
+        place: &MirPlace,
+        state: &[LocalInitialization],
+        strict: bool,
+    ) -> Result<(), MirExecutableValidationError> {
+        for (index, projection) in place.projection.iter().enumerate() {
+            match projection {
+                MirProjection::Index { local } => self.require_initialized(
+                    &format!("{path}.projection[{index}].local"),
+                    *local,
+                    state,
+                    strict,
+                )?,
+                MirProjection::Deref | MirProjection::Downcast { .. } => {
+                    self.require_initialized(path, place.local, state, strict)?;
+                }
+                MirProjection::Field { .. }
+                | MirProjection::ConstantIndex { .. }
+                | MirProjection::Subslice { .. } => {}
+            }
+        }
+        Ok(())
+    }
+
+    fn flow_write_place(
+        &self,
+        path: &str,
+        place: &MirPlace,
+        state: &mut [LocalInitialization],
+        strict: bool,
+    ) -> Result<(), MirExecutableValidationError> {
+        if !place.projection.is_empty() {
+            return self.flow_read_place(path, place, state, strict);
+        }
+        let slot = &mut state[place.local.0 as usize];
+        if !self.local(place.local).mutable && *slot != LocalInitialization::Uninitialized && strict
+        {
+            return Err(error(
+                path,
+                "immutable local may be initialized exactly once",
+            ));
+        }
+        *slot = LocalInitialization::Initialized;
+        Ok(())
+    }
+
+    fn require_initialized(
+        &self,
+        path: &str,
+        local: MirLocalId,
+        state: &[LocalInitialization],
+        strict: bool,
+    ) -> Result<(), MirExecutableValidationError> {
+        let actual = state[local.0 as usize];
+        if strict && actual != LocalInitialization::Initialized {
+            let reason = match actual {
+                LocalInitialization::Uninitialized => "local is not definitely initialized",
+                LocalInitialization::Moved => "local was moved and not reinitialized",
+                LocalInitialization::MaybeInvalid => {
+                    "local is initialized on only some incoming paths"
+                }
+                LocalInitialization::Initialized => unreachable!(),
+            };
+            return Err(error(path, reason));
+        }
+        Ok(())
+    }
+
+    fn is_one_time_initialization_place(&self, place: &MirPlace) -> bool {
+        place.projection.is_empty() && self.local(place.local).kind != MirLocalKind::Argument
+    }
+
+    fn verify_reference_type(
+        &self,
+        path: &str,
+        result: MirTypeId,
         referent: MirTypeId,
         mutability: MirMutability,
+        address_space: MirAddressSpace,
         raw: bool,
-    ) -> Result<MirTypeId, MirExecutableValidationError> {
-        self.module
-            .types
-            .iter()
-            .position(|candidate| match &candidate.kind {
-                MirTypeKind::RawPointer {
-                    pointee,
-                    mutability: candidate_mutability,
-                    ..
-                } if raw => {
-                    **pointee == *self.type_at(referent) && *candidate_mutability == mutability
-                }
-                MirTypeKind::Reference {
-                    referent: candidate_referent,
-                    mutability: candidate_mutability,
-                    ..
-                } if !raw => {
-                    **candidate_referent == *self.type_at(referent)
-                        && *candidate_mutability == mutability
-                }
-                _ => false,
-            })
-            .map(|index| MirTypeId(index as u32))
-            .ok_or_else(|| {
-                error(
-                    path,
-                    "result pointer/reference type is absent from the type table",
-                )
-            })
+    ) -> Result<(), MirExecutableValidationError> {
+        let valid = match &self.type_at(result).kind {
+            MirTypeKind::RawPointer {
+                pointee,
+                mutability: candidate_mutability,
+                address_space: candidate_address_space,
+            } if raw => {
+                **pointee == *self.type_at(referent)
+                    && *candidate_mutability == mutability
+                    && *candidate_address_space == address_space
+            }
+            MirTypeKind::Reference {
+                referent: candidate_referent,
+                mutability: candidate_mutability,
+                address_space: candidate_address_space,
+            } if !raw => {
+                **candidate_referent == *self.type_at(referent)
+                    && *candidate_mutability == mutability
+                    && *candidate_address_space == address_space
+            }
+            _ => false,
+        };
+        if valid {
+            Ok(())
+        } else {
+            Err(error(
+                path,
+                "result pointer/reference type does not match referent, mutability, and address space",
+            ))
+        }
     }
 
     fn find_scalar_type(
@@ -1402,7 +2132,23 @@ impl<'a> Verifier<'a> {
     }
 
     fn usize_type(&self, path: &str) -> Result<MirTypeId, MirExecutableValidationError> {
-        self.find_type(path, is_unsigned_integer)
+        self.unsigned_type(path, self.module.target.pointer_width_bits)
+    }
+
+    fn unsigned_type(
+        &self,
+        path: &str,
+        width: u16,
+    ) -> Result<MirTypeId, MirExecutableValidationError> {
+        self.find_type(path, |kind| {
+            matches!(
+                kind,
+                MirTypeKind::Scalar(MirScalarType::Int {
+                    signed: false,
+                    bits,
+                }) if *bits == width
+            )
+        })
     }
 
     fn find_array_type(
@@ -1459,18 +2205,25 @@ impl<'a> Verifier<'a> {
         })
     }
 
-    fn find_slice_semantic_type<'b>(
+    fn find_array_semantic_type<'b>(
         &'b self,
         path: &str,
         element: &MirSemanticType,
+        length: u64,
     ) -> Result<&'b MirSemanticType, MirExecutableValidationError> {
         self.module
             .types
             .iter()
             .find(|candidate| {
-                matches!(&candidate.kind, MirTypeKind::Slice { element: candidate } if candidate.as_ref() == element)
+                matches!(
+                    &candidate.kind,
+                    MirTypeKind::Array {
+                        element: candidate,
+                        length: candidate_length,
+                    } if candidate.as_ref() == element && *candidate_length == length
+                )
             })
-            .ok_or_else(|| error(path, "projected slice type is absent from the type table"))
+            .ok_or_else(|| error(path, "projected array type is absent from the type table"))
     }
 
     fn find_type(
@@ -1504,6 +2257,17 @@ impl<'a> Verifier<'a> {
     fn require_type(&self, path: &str, ty: MirTypeId) -> Result<(), MirExecutableValidationError> {
         if ty.0 as usize >= self.module.types.len() {
             return Err(error(path, format!("type {} does not exist", ty.0)));
+        }
+        Ok(())
+    }
+
+    fn require_target_usize(
+        &self,
+        path: &str,
+        value: u64,
+    ) -> Result<(), MirExecutableValidationError> {
+        if self.module.target.pointer_width_bits == 32 && value > u64::from(u32::MAX) {
+            return Err(error(path, "value does not fit the target usize width"));
         }
         Ok(())
     }
@@ -1544,9 +2308,37 @@ enum ProjectionType<'a> {
     Variant { fields: &'a [crate::MirField] },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LocalInitialization {
+    Uninitialized,
+    Initialized,
+    Moved,
+    MaybeInvalid,
+}
+
+fn merge_initialization(
+    current: &mut [LocalInitialization],
+    incoming: &[LocalInitialization],
+) -> bool {
+    let mut changed = false;
+    for (current, incoming) in current.iter_mut().zip(incoming) {
+        let merged = if *current == *incoming {
+            *current
+        } else {
+            LocalInitialization::MaybeInvalid
+        };
+        if *current != merged {
+            *current = merged;
+            changed = true;
+        }
+    }
+    changed
+}
+
 struct ProjectionState<'a> {
     ty: ProjectionType<'a>,
     writable: bool,
+    address_space: MirAddressSpace,
 }
 
 pub(crate) fn terminator_edges(terminator: &MirTerminatorKind) -> Vec<&MirEdge> {
@@ -1625,11 +2417,17 @@ fn is_integer_or_bool(kind: &MirTypeKind) -> bool {
     matches!(kind, MirTypeKind::Scalar(MirScalarType::Bool)) || is_integer(kind)
 }
 
-fn is_unsigned_integer(kind: &MirTypeKind) -> bool {
-    matches!(
-        kind,
-        MirTypeKind::Scalar(MirScalarType::Int { signed: false, .. })
-    )
+fn switch_value_fits(kind: &MirTypeKind, value: u128) -> bool {
+    match kind {
+        MirTypeKind::Scalar(MirScalarType::Bool) => value <= 1,
+        MirTypeKind::Scalar(MirScalarType::Char) => {
+            value <= u128::from(char::MAX as u32) && !(0xd800..=0xdfff).contains(&value)
+        }
+        MirTypeKind::Scalar(MirScalarType::Int { bits, .. }) => {
+            *bits == 128 || value < (1_u128 << *bits)
+        }
+        _ => false,
+    }
 }
 
 fn is_signed_integer_or_float(kind: &MirTypeKind) -> bool {
@@ -1655,6 +2453,19 @@ fn is_pointer(kind: &MirTypeKind) -> bool {
     matches!(
         kind,
         MirTypeKind::RawPointer { .. } | MirTypeKind::Reference { .. }
+    )
+}
+
+fn is_copy_type(kind: &MirTypeKind) -> bool {
+    matches!(
+        kind,
+        MirTypeKind::Unit | MirTypeKind::Scalar(_) | MirTypeKind::RawPointer { .. }
+    ) || matches!(
+        kind,
+        MirTypeKind::Reference {
+            mutability: MirMutability::Immutable,
+            ..
+        }
     )
 }
 
