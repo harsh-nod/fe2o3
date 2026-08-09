@@ -2,11 +2,13 @@
 
 set -Eeuo pipefail
 
-readonly ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+readonly ROOT
 readonly CHECKER="${ROOT}/scripts/s09-debug-check.py"
 readonly RUNNER="${ROOT}/scripts/s09-rocgdb-profile.sh"
 readonly FIXTURES="${ROOT}/scripts/tests/fixtures/s09-debug"
-readonly TMP="$(mktemp -d)"
+TMP="$(mktemp -d)"
+readonly TMP
 trap 'rm -rf -- "${TMP}"' EXIT
 
 expect_fail() {

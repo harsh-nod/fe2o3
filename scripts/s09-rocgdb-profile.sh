@@ -4,7 +4,8 @@ set -Eeuo pipefail
 
 readonly ROCGDB=/opt/rocm/bin/rocgdb-py_3.12
 readonly DWARFDUMP=/opt/rocm/llvm/bin/llvm-dwarfdump
-readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+readonly SCRIPT_DIR
 readonly CHECKER="${SCRIPT_DIR}/s09-debug-check.py"
 readonly PROFILE=s09-alpha-gfx942-o0-v1
 
@@ -58,7 +59,8 @@ canonical_file hardware-test "${HARDWARE_TEST}"
   fail "hardware-test basename is outside the fixed S09 profile"
 [[ "${ARCHIVE}" == /* ]] || fail "archive must be an absolute path"
 [[ ! -e "${ARCHIVE}" && ! -L "${ARCHIVE}" ]] || fail "archive must not already exist"
-readonly ARCHIVE_PARENT="$(dirname -- "${ARCHIVE}")"
+ARCHIVE_PARENT="$(dirname -- "${ARCHIVE}")"
+readonly ARCHIVE_PARENT
 [[ -d "${ARCHIVE_PARENT}" && ! -L "${ARCHIVE_PARENT}" ]] ||
   fail "archive parent must be a real directory"
 [[ "$(realpath --canonicalize-existing -- "${ARCHIVE_PARENT}")" == "${ARCHIVE_PARENT}" ]] ||
@@ -77,7 +79,8 @@ readonly DWARF_NORMALIZED="${ARCHIVE}/dwarf.normalized.txt"
 readonly ROCGDB_RAW="${ARCHIVE}/rocgdb.raw.txt"
 readonly ROCGDB_NORMALIZED="${ARCHIVE}/rocgdb.normalized.txt"
 readonly MANIFEST="${ARCHIVE}/manifest.txt"
-readonly HSACO_SHA256="$(sha256sum -- "${HSACO}" | awk '{print $1}')"
+HSACO_SHA256="$(sha256sum -- "${HSACO}" | awk '{print $1}')"
+readonly HSACO_SHA256
 
 set +e
 "${DWARFDUMP}" --verify "${HSACO}" >"${DWARF_VERIFY_RAW}" 2>&1
@@ -96,6 +99,8 @@ set -e
 
 if ((dwarf_verify_status == 0 && dwarf_dump_status == 0 && dwarf_normalize_status == 0 && dwarf_check_status == 0)); then
   set +e
+  # ROCgdb, rather than Bash, evaluates the literal $pc expressions below.
+  # shellcheck disable=SC2016
   /usr/bin/timeout --signal=TERM --kill-after=10s 180s \
     /usr/bin/env -i \
       HOME="${ARCHIVE}/tmp" \
