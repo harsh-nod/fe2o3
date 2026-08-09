@@ -636,10 +636,12 @@ The detailed dependencies and exit criteria are in
 
 Rows 68 and 69 have a fail-closed source contract documented in
 [Typed groups foundation V1](typed-groups-foundation-v1.md). It establishes
-unforgeable handle shapes, checked ranks, gfx942 const-width admission, and an
-unsafe convergence-bearing workgroup synchronization boundary. It does not yet
-have source compiler lowering, Verus, artifact, or hardware evidence, so both
-rows remain `Missing`.
+private non-`Send`/non-`Sync`/non-`Clone` arithmetic snapshot types, checked
+ranks, wave64 const-width restrictions, and an unsafe workgroup barrier with
+global plus workgroup visibility. The snapshots do not authenticate a launch,
+target, epoch, or EXEC state, and no movable token grants convergence authority.
+There is no source compiler lowering, Verus, artifact, or hardware evidence, so
+both rows remain `Missing`.
 
 ### Runtime Library: Debug
 
