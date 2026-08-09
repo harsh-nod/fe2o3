@@ -2,8 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use crate::{
-    AccessMode, AddressSpace, Axis, BarrierSemantics, LaunchDomain, MemoryOrdering, ScalarType,
-    SemanticOperation, SynchronizationScope, TargetCapability, Type, WaveWidth, WorkgroupSize,
+    AccessMode, AddressSpace, Axis, BarrierSemantics, LaunchDomain, MemoryIntrinsicOperation,
+    MemoryOrdering, ScalarType, SemanticOperation, SynchronizationScope, TargetCapability, Type,
+    WaveWidth, WorkgroupSize,
 };
 
 macro_rules! string_id {
@@ -491,6 +492,7 @@ fn add_synchronized_memory_capabilities(
 pub enum OperationKind {
     Constant(Constant),
     Intrinsic(IntrinsicOperation),
+    MemoryIntrinsic(MemoryIntrinsicOperation),
     Unary {
         op: UnaryOp,
         operand: ValueId,
@@ -563,6 +565,7 @@ impl OperationKind {
     pub fn semantic_operation(&self) -> Option<&dyn SemanticOperation> {
         match self {
             Self::Intrinsic(intrinsic) => Some(intrinsic),
+            Self::MemoryIntrinsic(intrinsic) => Some(intrinsic),
             _ => None,
         }
     }
@@ -579,6 +582,7 @@ impl OperationKind {
                 kind: WaveOperationKind::LaneId,
                 ..
             }) => Vec::new(),
+            Self::MemoryIntrinsic(intrinsic) => intrinsic.operands(),
             Self::Unary { operand, .. } => vec![*operand],
             Self::Binary { lhs, rhs, .. } | Self::Compare { lhs, rhs, .. } => vec![*lhs, *rhs],
             Self::Cast { value, .. } => vec![*value],
@@ -1590,6 +1594,8 @@ pub enum MemoryEffect {
     Allocate(AddressSpace),
     Read(AddressSpace),
     Write(AddressSpace),
+    VolatileRead(AddressSpace),
+    VolatileWrite(AddressSpace),
     Atomic {
         address_space: AddressSpace,
         scope: SynchronizationScope,
@@ -1632,10 +1638,26 @@ impl MemoryEffectSummary {
 
     pub fn reads(&self, address_space: AddressSpace) -> bool {
         self.effects.contains(&MemoryEffect::Read(address_space))
+            || self
+                .effects
+                .contains(&MemoryEffect::VolatileRead(address_space))
     }
 
     pub fn writes(&self, address_space: AddressSpace) -> bool {
         self.effects.contains(&MemoryEffect::Write(address_space))
+            || self
+                .effects
+                .contains(&MemoryEffect::VolatileWrite(address_space))
+    }
+
+    pub fn volatile_reads(&self, address_space: AddressSpace) -> bool {
+        self.effects
+            .contains(&MemoryEffect::VolatileRead(address_space))
+    }
+
+    pub fn volatile_writes(&self, address_space: AddressSpace) -> bool {
+        self.effects
+            .contains(&MemoryEffect::VolatileWrite(address_space))
     }
 
     pub fn effects(&self) -> &BTreeSet<MemoryEffect> {

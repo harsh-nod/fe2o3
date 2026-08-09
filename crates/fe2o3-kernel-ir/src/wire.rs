@@ -598,6 +598,12 @@ fn encode_operation_kind(
             writer.u8(2)?;
             encode_intrinsic(writer, intrinsic)?;
         }
+        OperationKind::MemoryIntrinsic(_) => {
+            return Err(KernelIrEncodeError::UnsupportedInVersion {
+                version: writer.version,
+                feature: "semantic memory intrinsic",
+            });
+        }
         OperationKind::Unary { op, operand } => {
             writer.u8(3)?;
             writer.u8(unary_op_tag(*op))?;

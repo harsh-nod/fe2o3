@@ -310,6 +310,10 @@ impl<'a> Analyzer<'a> {
             OperationKind::Call { .. } | OperationKind::Load { .. } | OperationKind::Atomic(_) => {
                 Variation::Varying
             }
+            OperationKind::MemoryIntrinsic(
+                fe2o3_kernel_ir::MemoryIntrinsicOperation::PointerDistance { .. },
+            ) => join_values(operation.kind.operands(), &self.report.values),
+            OperationKind::MemoryIntrinsic(_) => Variation::Varying,
             OperationKind::InlineAssembly(_) => Variation::Varying,
             OperationKind::Alloca {
                 count,

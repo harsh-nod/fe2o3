@@ -153,6 +153,114 @@ and `Generic=5`. Access-mode tags are `ReadOnly=1` and `ReadWrite=2`.
 
 `MemoryAccess` is `u8 address_space || u32 alignment || u8 volatile_boolean`.
 
+### Semantic Memory Instance Identities
+
+Memory intrinsics are not representable in the frozen kernel module wire
+versions V1 through V3. Those encoders reject them. They do have an independent
+V1 semantic-instance identity used to bind a closed target-neutral obligation
+payload before a future module wire version can admit them.
+
+The semantic-instance header is:
+
+```text
+byte[8] magic = "FE2O3SI\0"
+u16     version = 1
+u8      family = 1 (MemoryIntrinsic)
+u8      flags = 0
+u16     opcode
+u16     payload_length
+u32     reserved = 0
+```
+
+All obligation fields are one-byte closed tags. Layout is
+`u64(size_bytes) || u32(alignment_bytes)`. A memory instance is canonical only
+when that layout exactly equals the closed element tag's expected layout;
+decoding rejects mismatched size or alignment before returning an identity.
+The memory payloads are:
+
+```text
+PointerDistance (opcode 1, 21 bytes) =
+    kind || unit || element || address_space ||
+    equal_addresses_or_same_allocation ||
+    both_in_bounds_or_one_past_when_addresses_differ ||
+    exact_multiple_of_declared_unit || difference_fits_isize ||
+    ordering || layout
+
+VolatileLoad/Store (opcodes 2/3, 19 bytes) =
+    element || address_space || origin || range ||
+    aligned_for_element || trap_or_zst_no_access ||
+    external_side_effect_isolation || layout
+
+CopyNonOverlapping (opcode 4, 22 bytes) =
+    element || source_address_space || destination_address_space ||
+    aligned_for_element || source_readable_when_bytes_positive ||
+    destination_writable_when_bytes_positive ||
+    nonoverlapping_when_bytes_positive ||
+    count_times_element_size_fits_usize ||
+    signed_offsets_fit_isize_and_stay_in_allocations_when_bytes_positive ||
+    alignment_required_ranges_and_overlap_conditional_on_positive_bytes ||
+    layout
+```
+
+Pointer-distance kind tags are `Signed=1`, `Unsigned=2`; unit tags are
+`Elements=1`, `Bytes=2`. Its four singleton obligation tags are `1`; ordering
+is `SignedMayBeNegative=1` or `UnsignedPointerAtOrAfterOrigin=2` and must agree
+with kind. Equal pointer addresses satisfy the first pointer-distance branch;
+when addresses differ, same-allocation provenance and the in-bounds-or-one-past
+range are both required.
+
+Positive-sized volatile origin is `RustAllocation=1` or
+`ExternalMmioNotRustAllocation=2`; range is
+`ReadableInitializedElement=1` or `WritableElement=2` and must agree with the
+operation. Alignment is `AlignedForElement=1` and positive-sized access trap is
+`NonTrapping=1`. External-effect tags are `NotExternal=1` and
+`SideEffectsDoNotModifyRustAllocatedMemory=2`. Every external load and store
+must carry tag `2` independently of its non-Rust-allocation origin tag. External
+MMIO is admitted only with the explicit `Global` address space; `Generic`,
+local, and constant address spaces fail closed.
+
+For the currently representable ZST, `Unit` (size 0, alignment 1), origin and
+range are `ZeroSizedNoAccess=3`, trap is `ZeroSizedNoAccess=2`, and external
+effect is `NotExternal=1`. This profile still requires
+`AlignedForElement=1`, emits no volatile memory effect, and does not claim
+Rust-allocation or external-MMIO provenance. Positive-sized accesses reject the
+ZST profile, and the `Unit` ZST rejects positive-sized profiles. Other ZST
+layouts remain unrepresentable and fail closed.
+Unknown tags and inconsistent cross-field combinations are rejected.
+
+The copy contract requires alignment even when `count * size_of::<T>()` is
+zero, including ZST copies. Readable/writable ranges, allocation bounds, and
+non-overlap are conditional on a positive byte count. The multiplication must
+fit `usize`; positive-byte pointer ranges must also satisfy Rust's signed
+pointer-offset and allocation bounds.
+
+Frozen independent vectors, shown as hexadecimal bytes, are:
+
+```text
+signed element u32 global pointer distance:
+46 45 32 4f 33 53 49 00 01 00 01 00 01 00 15 00 00 00 00 00
+01 01 08 03 01 01 01 01 01 04 00 00 00 00 00 00 00 04 00 00 00
+
+external-MMIO u32 global volatile load:
+46 45 32 4f 33 53 49 00 01 00 01 00 02 00 13 00 00 00 00 00
+08 03 02 01 01 01 02 04 00 00 00 00 00 00 00 04 00 00 00
+
+external-MMIO u32 global volatile store:
+46 45 32 4f 33 53 49 00 01 00 01 00 03 00 13 00 00 00 00 00
+08 03 02 02 01 01 02 04 00 00 00 00 00 00 00 04 00 00 00
+
+aligned ZST global volatile no-access load:
+46 45 32 4f 33 53 49 00 01 00 01 00 02 00 13 00 00 00 00 00
+00 03 03 03 01 02 01 00 00 00 00 00 00 00 00 01 00 00 00
+
+u32 constant-to-global copy_nonoverlapping:
+46 45 32 4f 33 53 49 00 01 00 01 00 04 00 16 00 00 00 00 00
+08 04 03 01 01 01 01 01 01 01 04 00 00 00 00 00 00 00 04 00 00 00
+```
+
+These identities record obligations only. Decoding does not prove them, grant
+compiler-import authority, or authorize an executable artifact.
+
 Intrinsic tag `1` is `InvocationIndex` followed by `u8 IndexKind`, `u8 Axis`,
 and the explicit result `Type`. Intrinsic tag `2` is `LaunchExtent` followed by
 `u8 Axis` and the explicit result `Type`. Index-kind tags are `Global=1`,

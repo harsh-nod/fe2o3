@@ -172,6 +172,280 @@ fn instance_codec_has_canonical_payload_bytes() {
 }
 
 #[test]
+fn memory_instance_byte_vectors_are_frozen_independently() {
+    let u32_element = MemoryElementType::Scalar(ScalarType::U32);
+    let cases = [
+        (
+            SemanticOperationInstanceId::pointer_distance(
+                PointerDistanceKind::Signed,
+                PointerDistanceUnit::Elements,
+                u32_element,
+                AddressSpace::Global,
+                MemoryLayout::new(4, 4),
+                PointerDistanceContract::supported_rust(PointerDistanceKind::Signed),
+            ),
+            vec![
+                b'F', b'E', b'2', b'O', b'3', b'S', b'I', 0, 1, 0, 1, 0, 1, 0, 21, 0, 0, 0, 0, 0,
+                1, 1, 8, 3, 1, 1, 1, 1, 1, 4, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0,
+            ],
+        ),
+        (
+            SemanticOperationInstanceId::volatile_load(
+                u32_element,
+                AddressSpace::Global,
+                MemoryLayout::new(4, 4),
+                VolatileAccessContract::external_mmio_load(),
+            ),
+            vec![
+                b'F', b'E', b'2', b'O', b'3', b'S', b'I', 0, 1, 0, 1, 0, 2, 0, 19, 0, 0, 0, 0, 0,
+                8, 3, 2, 1, 1, 1, 2, 4, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0,
+            ],
+        ),
+        (
+            SemanticOperationInstanceId::volatile_store(
+                u32_element,
+                AddressSpace::Global,
+                MemoryLayout::new(4, 4),
+                VolatileAccessContract::external_mmio_store(),
+            ),
+            vec![
+                b'F', b'E', b'2', b'O', b'3', b'S', b'I', 0, 1, 0, 1, 0, 3, 0, 19, 0, 0, 0, 0, 0,
+                8, 3, 2, 2, 1, 1, 2, 4, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0,
+            ],
+        ),
+        (
+            SemanticOperationInstanceId::volatile_load(
+                MemoryElementType::Unit,
+                AddressSpace::Global,
+                MemoryLayout::new(0, 1),
+                VolatileAccessContract::zero_sized_aligned_no_access(),
+            ),
+            vec![
+                b'F', b'E', b'2', b'O', b'3', b'S', b'I', 0, 1, 0, 1, 0, 2, 0, 19, 0, 0, 0, 0, 0,
+                0, 3, 3, 3, 1, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0,
+            ],
+        ),
+        (
+            SemanticOperationInstanceId::copy_nonoverlapping(
+                u32_element,
+                AddressSpace::Constant,
+                AddressSpace::Global,
+                MemoryLayout::new(4, 4),
+                CopyNonOverlappingContract::supported_rust(),
+            ),
+            vec![
+                b'F', b'E', b'2', b'O', b'3', b'S', b'I', 0, 1, 0, 1, 0, 4, 0, 22, 0, 0, 0, 0, 0,
+                8, 4, 3, 1, 1, 1, 1, 1, 1, 1, 4, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0,
+            ],
+        ),
+    ];
+
+    for (id, expected) in cases {
+        assert_eq!(encode_semantic_operation_instance_id(id), expected);
+        assert_eq!(decode_semantic_operation_instance_id(&expected), Ok(id));
+    }
+}
+
+#[test]
+fn memory_instance_decoder_rejects_obligation_mutations() {
+    let pointer = SemanticOperationInstanceId::pointer_distance(
+        PointerDistanceKind::Signed,
+        PointerDistanceUnit::Elements,
+        MemoryElementType::Scalar(ScalarType::U32),
+        AddressSpace::Global,
+        MemoryLayout::new(4, 4),
+        PointerDistanceContract::supported_rust(PointerDistanceKind::Signed),
+    );
+    let pointer_bytes = encode_semantic_operation_instance_id(pointer);
+    for offset in 24..=28 {
+        let mut mutated = pointer_bytes.clone();
+        mutated[offset] = if offset == 28 { 2 } else { 0xff };
+        assert!(decode_semantic_operation_instance_id(&mutated).is_err());
+    }
+
+    let load = SemanticOperationInstanceId::volatile_load(
+        MemoryElementType::Scalar(ScalarType::U32),
+        AddressSpace::Global,
+        MemoryLayout::new(4, 4),
+        VolatileAccessContract::rust_allocation_load(),
+    );
+    let load_bytes = encode_semantic_operation_instance_id(load);
+    for offset in 22..=26 {
+        let mut mutated = load_bytes.clone();
+        mutated[offset] = match offset {
+            22 | 23 | 25 | 26 => 2,
+            _ => 0xff,
+        };
+        assert!(decode_semantic_operation_instance_id(&mutated).is_err());
+    }
+
+    let zst_load = SemanticOperationInstanceId::volatile_load(
+        MemoryElementType::Unit,
+        AddressSpace::Workgroup,
+        MemoryLayout::new(0, 1),
+        VolatileAccessContract::zero_sized_aligned_no_access(),
+    );
+    let mut positive_access_contract = encode_semantic_operation_instance_id(zst_load);
+    positive_access_contract[22] = 1;
+    assert!(decode_semantic_operation_instance_id(&positive_access_contract).is_err());
+
+    let copy = SemanticOperationInstanceId::copy_nonoverlapping(
+        MemoryElementType::Unit,
+        AddressSpace::Global,
+        AddressSpace::Global,
+        MemoryLayout::new(0, 1),
+        CopyNonOverlappingContract::supported_rust(),
+    );
+    let copy_bytes = encode_semantic_operation_instance_id(copy);
+    for offset in 23..=29 {
+        let mut mutated = copy_bytes.clone();
+        mutated[offset] = 0xff;
+        assert!(decode_semantic_operation_instance_id(&mutated).is_err());
+    }
+}
+
+#[test]
+fn memory_instance_decoder_rejects_noncanonical_element_layout_pairs() {
+    const INSTANCE_HEADER_BYTES: usize = 20;
+
+    fn mutate_layout(
+        id: SemanticOperationInstanceId,
+        payload_layout_offset: usize,
+        layout: MemoryLayout,
+    ) -> Vec<u8> {
+        let mut bytes = encode_semantic_operation_instance_id(id);
+        let offset = INSTANCE_HEADER_BYTES + payload_layout_offset;
+        bytes[offset..offset + 8].copy_from_slice(&layout.size_bytes.to_le_bytes());
+        bytes[offset + 8..offset + 12].copy_from_slice(&layout.alignment_bytes.to_le_bytes());
+        bytes
+    }
+
+    let u32_element = MemoryElementType::Scalar(ScalarType::U32);
+    let cases = [
+        (
+            SemanticOperationInstanceId::pointer_distance(
+                PointerDistanceKind::Signed,
+                PointerDistanceUnit::Elements,
+                u32_element,
+                AddressSpace::Global,
+                u32_element.expected_layout(),
+                PointerDistanceContract::supported_rust(PointerDistanceKind::Signed),
+            ),
+            9,
+            SemanticOperationKind::PointerDistance,
+            u32_element,
+            MemoryLayout::new(8, 4),
+        ),
+        (
+            SemanticOperationInstanceId::pointer_distance(
+                PointerDistanceKind::Unsigned,
+                PointerDistanceUnit::Bytes,
+                u32_element,
+                AddressSpace::Global,
+                u32_element.expected_layout(),
+                PointerDistanceContract::supported_rust(PointerDistanceKind::Unsigned),
+            ),
+            9,
+            SemanticOperationKind::PointerDistance,
+            u32_element,
+            MemoryLayout::new(4, 8),
+        ),
+        (
+            SemanticOperationInstanceId::volatile_load(
+                u32_element,
+                AddressSpace::Global,
+                u32_element.expected_layout(),
+                VolatileAccessContract::external_mmio_load(),
+            ),
+            7,
+            SemanticOperationKind::VolatileLoad,
+            u32_element,
+            MemoryLayout::new(0, 1),
+        ),
+        (
+            SemanticOperationInstanceId::volatile_store(
+                u32_element,
+                AddressSpace::Global,
+                u32_element.expected_layout(),
+                VolatileAccessContract::external_mmio_store(),
+            ),
+            7,
+            SemanticOperationKind::VolatileStore,
+            u32_element,
+            MemoryLayout::new(8, 8),
+        ),
+        (
+            SemanticOperationInstanceId::volatile_load(
+                MemoryElementType::Unit,
+                AddressSpace::Global,
+                MemoryElementType::Unit.expected_layout(),
+                VolatileAccessContract::zero_sized_aligned_no_access(),
+            ),
+            7,
+            SemanticOperationKind::VolatileLoad,
+            MemoryElementType::Unit,
+            MemoryLayout::new(4, 4),
+        ),
+        (
+            SemanticOperationInstanceId::volatile_store(
+                MemoryElementType::Unit,
+                AddressSpace::Workgroup,
+                MemoryElementType::Unit.expected_layout(),
+                VolatileAccessContract::zero_sized_aligned_no_access(),
+            ),
+            7,
+            SemanticOperationKind::VolatileStore,
+            MemoryElementType::Unit,
+            MemoryLayout::new(0, 4),
+        ),
+        (
+            SemanticOperationInstanceId::copy_nonoverlapping(
+                u32_element,
+                AddressSpace::Constant,
+                AddressSpace::Global,
+                u32_element.expected_layout(),
+                CopyNonOverlappingContract::supported_rust(),
+            ),
+            10,
+            SemanticOperationKind::CopyNonOverlapping,
+            u32_element,
+            MemoryLayout::new(4, 2),
+        ),
+        (
+            SemanticOperationInstanceId::copy_nonoverlapping(
+                MemoryElementType::Unit,
+                AddressSpace::Global,
+                AddressSpace::Global,
+                MemoryElementType::Unit.expected_layout(),
+                CopyNonOverlappingContract::supported_rust(),
+            ),
+            10,
+            SemanticOperationKind::CopyNonOverlapping,
+            MemoryElementType::Unit,
+            MemoryLayout::new(1, 1),
+        ),
+    ];
+
+    for (id, payload_layout_offset, kind, element, actual) in cases {
+        assert_eq!(
+            decode_semantic_operation_instance_id(&mutate_layout(
+                id,
+                payload_layout_offset,
+                actual,
+            )),
+            Err(
+                SemanticOperationInstanceDecodeError::NonCanonicalMemoryLayout {
+                    kind,
+                    element,
+                    actual,
+                    expected: element.expected_layout(),
+                }
+            )
+        );
+    }
+}
+
+#[test]
 fn instance_decoder_rejects_unknown_and_malformed_payloads() {
     let extent = SemanticOperationInstanceId::launch_extent(Axis::X);
     let encoded = encode_semantic_operation_instance_id(extent);
@@ -372,6 +646,508 @@ fn canonical_result_constraints_ignore_malformed_declared_types() {
     });
     assert_eq!(issues.len(), 1);
     assert_eq!(issues[0].kind, SemanticOperationIssueKind::TypeMismatch);
+}
+
+fn pointer(element: MemoryElementType, address_space: AddressSpace, access: AccessMode) -> Type {
+    Type::pointer(element.ir_type(), address_space, access)
+}
+
+#[test]
+fn memory_instance_identity_binds_layout_address_space_and_preconditions() {
+    let instances = [
+        SemanticOperationInstanceId::pointer_distance(
+            PointerDistanceKind::Signed,
+            PointerDistanceUnit::Elements,
+            MemoryElementType::Scalar(ScalarType::U32),
+            AddressSpace::Global,
+            MemoryLayout::new(4, 4),
+            PointerDistanceContract::supported_rust(PointerDistanceKind::Signed),
+        ),
+        SemanticOperationInstanceId::volatile_load(
+            MemoryElementType::Scalar(ScalarType::U32),
+            AddressSpace::Constant,
+            MemoryLayout::new(4, 4),
+            VolatileAccessContract::rust_allocation_load(),
+        ),
+        SemanticOperationInstanceId::volatile_store(
+            MemoryElementType::Scalar(ScalarType::U32),
+            AddressSpace::Global,
+            MemoryLayout::new(4, 4),
+            VolatileAccessContract::external_mmio_store(),
+        ),
+        SemanticOperationInstanceId::copy_nonoverlapping(
+            MemoryElementType::Scalar(ScalarType::U32),
+            AddressSpace::Constant,
+            AddressSpace::Global,
+            MemoryLayout::new(4, 4),
+            CopyNonOverlappingContract::supported_rust(),
+        ),
+    ];
+
+    let mut encodings = BTreeSet::new();
+    for instance in instances {
+        let encoded = encode_semantic_operation_instance_id(instance);
+        assert!(encodings.insert(encoded.clone()));
+        assert_eq!(
+            decode_semantic_operation_instance_id(&encoded),
+            Ok(instance)
+        );
+    }
+
+    let changed_layout = SemanticOperationInstanceId::volatile_load(
+        MemoryElementType::Scalar(ScalarType::U32),
+        AddressSpace::Constant,
+        MemoryLayout::new(8, 8),
+        VolatileAccessContract::rust_allocation_load(),
+    );
+    assert!(!encodings.contains(&encode_semantic_operation_instance_id(changed_layout)));
+}
+
+#[test]
+fn pointer_distance_verifier_checks_layout_zst_contract_and_address_space() {
+    let operation = MemoryIntrinsicOperation::PointerDistance {
+        pointer: ValueId(0),
+        origin: ValueId(1),
+        kind: PointerDistanceKind::Signed,
+        unit: PointerDistanceUnit::Elements,
+        element: MemoryElementType::Scalar(ScalarType::U32),
+        address_space: AddressSpace::Global,
+        layout: MemoryLayout::new(4, 4),
+        contract: PointerDistanceContract::supported_rust(PointerDistanceKind::Signed),
+    };
+    let operands = operation.operands();
+    let results = [ValueDef::new(ValueId(2), Type::Scalar(ScalarType::I64))];
+    let valid_types = [
+        Some(pointer(
+            MemoryElementType::Scalar(ScalarType::U32),
+            AddressSpace::Global,
+            AccessMode::ReadOnly,
+        )),
+        Some(pointer(
+            MemoryElementType::Scalar(ScalarType::U32),
+            AddressSpace::Global,
+            AccessMode::ReadWrite,
+        )),
+    ];
+    assert!(
+        operation
+            .verify(SemanticOperationVerificationContext {
+                operands: &operands,
+                results: &results,
+                operand_types: &valid_types,
+            })
+            .is_empty()
+    );
+
+    let mismatched_types = [
+        valid_types[0].clone(),
+        Some(pointer(
+            MemoryElementType::Scalar(ScalarType::U32),
+            AddressSpace::Workgroup,
+            AccessMode::ReadOnly,
+        )),
+    ];
+    let issues = operation.verify(SemanticOperationVerificationContext {
+        operands: &operands,
+        results: &results,
+        operand_types: &mismatched_types,
+    });
+    assert!(
+        issues
+            .iter()
+            .any(|issue| issue.kind == SemanticOperationIssueKind::InvalidOperandType)
+    );
+
+    let zst = MemoryIntrinsicOperation::PointerDistance {
+        pointer: ValueId(0),
+        origin: ValueId(1),
+        kind: PointerDistanceKind::Signed,
+        unit: PointerDistanceUnit::Elements,
+        element: MemoryElementType::Unit,
+        address_space: AddressSpace::Global,
+        layout: MemoryLayout::new(0, 1),
+        contract: PointerDistanceContract::supported_rust(PointerDistanceKind::Signed),
+    };
+    let issues = zst.verify(SemanticOperationVerificationContext {
+        operands: &zst.operands(),
+        results: &results,
+        operand_types: &[
+            Some(pointer(
+                MemoryElementType::Unit,
+                AddressSpace::Global,
+                AccessMode::ReadOnly,
+            )),
+            Some(pointer(
+                MemoryElementType::Unit,
+                AddressSpace::Global,
+                AccessMode::ReadOnly,
+            )),
+        ],
+    });
+    assert!(
+        issues
+            .iter()
+            .any(|issue| issue.message.contains("zero-sized"))
+    );
+
+    let wrong_contract = MemoryIntrinsicOperation::PointerDistance {
+        pointer: ValueId(0),
+        origin: ValueId(1),
+        kind: PointerDistanceKind::Signed,
+        unit: PointerDistanceUnit::Elements,
+        element: MemoryElementType::Scalar(ScalarType::U32),
+        address_space: AddressSpace::Global,
+        layout: MemoryLayout::new(4, 4),
+        contract: PointerDistanceContract::supported_rust(PointerDistanceKind::Unsigned),
+    };
+    let issues = wrong_contract.verify(SemanticOperationVerificationContext {
+        operands: &operands,
+        results: &results,
+        operand_types: &valid_types,
+    });
+    assert!(
+        issues
+            .iter()
+            .any(|issue| issue.message.contains("kind-specific ordering"))
+    );
+}
+
+#[test]
+fn pointer_distance_identity_binds_the_equal_address_disjunction() {
+    let contract = PointerDistanceContract::supported_rust(PointerDistanceKind::Signed);
+    assert_eq!(
+        contract.provenance,
+        PointerDistanceProvenanceContract::EqualAddressesOrSameAllocation
+    );
+    assert_eq!(
+        contract.range,
+        PointerDistanceRangeContract::BothPointersInBoundsOrOnePastWhenAddressesDiffer
+    );
+
+    let identity = SemanticOperationInstanceId::pointer_distance(
+        PointerDistanceKind::Signed,
+        PointerDistanceUnit::Elements,
+        MemoryElementType::Scalar(ScalarType::U32),
+        AddressSpace::Global,
+        MemoryLayout::new(4, 4),
+        contract,
+    );
+    assert_eq!(
+        decode_semantic_operation_instance_id(&encode_semantic_operation_instance_id(identity)),
+        Ok(identity)
+    );
+
+    let element = MemoryElementType::Scalar(ScalarType::U32);
+    let operation = MemoryIntrinsicOperation::PointerDistance {
+        pointer: ValueId(0),
+        origin: ValueId(0),
+        kind: PointerDistanceKind::Signed,
+        unit: PointerDistanceUnit::Elements,
+        element,
+        address_space: AddressSpace::Global,
+        layout: element.expected_layout(),
+        contract,
+    };
+    let pointer_type = Some(pointer(element, AddressSpace::Global, AccessMode::ReadOnly));
+    assert!(
+        operation
+            .verify(SemanticOperationVerificationContext {
+                operands: &operation.operands(),
+                results: &[ValueDef::new(ValueId(1), Type::Scalar(ScalarType::I64))],
+                operand_types: &[pointer_type.clone(), pointer_type],
+            })
+            .is_empty()
+    );
+}
+
+#[test]
+fn volatile_and_copy_contracts_retain_effects_and_overlap_obligation() {
+    let load = MemoryIntrinsicOperation::VolatileLoad {
+        pointer: ValueId(0),
+        element: MemoryElementType::Scalar(ScalarType::U32),
+        address_space: AddressSpace::Global,
+        layout: MemoryLayout::new(4, 4),
+        contract: VolatileAccessContract::external_mmio_load(),
+    };
+    assert_eq!(
+        load.contract().memory_effects,
+        vec![MemoryEffect::VolatileRead(AddressSpace::Global)]
+    );
+    let summary = MemoryEffectSummary::new(load.contract().memory_effects);
+    assert!(summary.reads(AddressSpace::Global));
+    assert!(summary.volatile_reads(AddressSpace::Global));
+    assert!(
+        !summary
+            .effects()
+            .contains(&MemoryEffect::Read(AddressSpace::Global))
+    );
+
+    let copy = MemoryIntrinsicOperation::CopyNonOverlapping {
+        source: ValueId(0),
+        destination: ValueId(1),
+        count: ValueId(2),
+        element: MemoryElementType::Scalar(ScalarType::U32),
+        source_address_space: AddressSpace::Constant,
+        destination_address_space: AddressSpace::Global,
+        layout: MemoryLayout::new(4, 4),
+        contract: CopyNonOverlappingContract::supported_rust(),
+    };
+    assert_eq!(
+        copy.contract().memory_effects,
+        vec![
+            MemoryEffect::Read(AddressSpace::Constant),
+            MemoryEffect::Write(AddressSpace::Global),
+        ]
+    );
+    assert!(matches!(
+        copy.contract().instance_id().payload(),
+        SemanticOperationInstancePayloadV1::CopyNonOverlapping {
+            contract: CopyNonOverlappingContract {
+                overlap: CopyOverlapContract::NonOverlappingWhenBytesPositive,
+                zero_bytes: CopyZeroByteContract::AlignmentRequiredRangesAndOverlapConditionalOnPositiveBytes,
+                ..
+            },
+            ..
+        }
+    ));
+}
+
+#[test]
+fn volatile_origins_are_distinct_and_access_obligations_fail_closed() {
+    let rust = SemanticOperationInstanceId::volatile_load(
+        MemoryElementType::Scalar(ScalarType::U32),
+        AddressSpace::Global,
+        MemoryLayout::new(4, 4),
+        VolatileAccessContract::rust_allocation_load(),
+    );
+    let external = SemanticOperationInstanceId::volatile_load(
+        MemoryElementType::Scalar(ScalarType::U32),
+        AddressSpace::Global,
+        MemoryLayout::new(4, 4),
+        VolatileAccessContract::external_mmio_load(),
+    );
+    assert_ne!(rust, external);
+    assert_ne!(
+        encode_semantic_operation_instance_id(rust),
+        encode_semantic_operation_instance_id(external)
+    );
+    for identity in [
+        external,
+        SemanticOperationInstanceId::volatile_store(
+            MemoryElementType::Scalar(ScalarType::U32),
+            AddressSpace::Global,
+            MemoryLayout::new(4, 4),
+            VolatileAccessContract::external_mmio_store(),
+        ),
+    ] {
+        let (SemanticOperationInstancePayloadV1::VolatileLoad { contract, .. }
+        | SemanticOperationInstancePayloadV1::VolatileStore { contract, .. }) = identity.payload()
+        else {
+            unreachable!()
+        };
+        assert_eq!(
+            contract.external_effect,
+            VolatileExternalEffectContract::SideEffectsDoNotModifyRustAllocatedMemory
+        );
+        assert_eq!(encode_semantic_operation_instance_id(identity)[26], 2);
+    }
+    let mut wrong_external_space = encode_semantic_operation_instance_id(external);
+    wrong_external_space[21] = 2;
+    assert!(matches!(
+        decode_semantic_operation_instance_id(&wrong_external_space),
+        Err(SemanticOperationInstanceDecodeError::InvalidContract {
+            kind: SemanticOperationKind::VolatileLoad,
+        })
+    ));
+    let mut missing_external_isolation = encode_semantic_operation_instance_id(external);
+    missing_external_isolation[26] = 1;
+    assert!(matches!(
+        decode_semantic_operation_instance_id(&missing_external_isolation),
+        Err(SemanticOperationInstanceDecodeError::InvalidContract {
+            kind: SemanticOperationKind::VolatileLoad,
+        })
+    ));
+
+    let malformed = MemoryIntrinsicOperation::VolatileLoad {
+        pointer: ValueId(0),
+        element: MemoryElementType::Scalar(ScalarType::U32),
+        address_space: AddressSpace::Global,
+        layout: MemoryLayout::new(4, 4),
+        contract: VolatileAccessContract::rust_allocation_store(),
+    };
+    let issues = malformed.verify(SemanticOperationVerificationContext {
+        operands: &malformed.operands(),
+        results: &[ValueDef::new(ValueId(1), Type::Scalar(ScalarType::U32))],
+        operand_types: &[Some(pointer(
+            MemoryElementType::Scalar(ScalarType::U32),
+            AddressSpace::Global,
+            AccessMode::ReadOnly,
+        ))],
+    });
+    assert!(
+        issues
+            .iter()
+            .any(|issue| issue.message.contains("readable initialized-element"))
+    );
+
+    let external_workgroup = MemoryIntrinsicOperation::VolatileLoad {
+        pointer: ValueId(0),
+        element: MemoryElementType::Scalar(ScalarType::U32),
+        address_space: AddressSpace::Workgroup,
+        layout: MemoryLayout::new(4, 4),
+        contract: VolatileAccessContract::external_mmio_load(),
+    };
+    let issues = external_workgroup.verify(SemanticOperationVerificationContext {
+        operands: &external_workgroup.operands(),
+        results: &[ValueDef::new(ValueId(1), Type::Scalar(ScalarType::U32))],
+        operand_types: &[Some(pointer(
+            MemoryElementType::Scalar(ScalarType::U32),
+            AddressSpace::Workgroup,
+            AccessMode::ReadOnly,
+        ))],
+    });
+    assert!(
+        issues
+            .iter()
+            .any(|issue| issue.message.contains("external side-effect isolation"))
+    );
+}
+
+#[test]
+fn volatile_zst_is_an_aligned_no_access_profile() {
+    let zst = MemoryElementType::Unit;
+    let operation = MemoryIntrinsicOperation::VolatileLoad {
+        pointer: ValueId(0),
+        element: zst,
+        address_space: AddressSpace::Workgroup,
+        layout: zst.expected_layout(),
+        contract: VolatileAccessContract::zero_sized_aligned_no_access(),
+    };
+    let operand_types = [Some(pointer(
+        zst,
+        AddressSpace::Workgroup,
+        AccessMode::ReadOnly,
+    ))];
+    assert!(
+        operation
+            .verify(SemanticOperationVerificationContext {
+                operands: &operation.operands(),
+                results: &[],
+                operand_types: &operand_types,
+            })
+            .is_empty()
+    );
+    assert!(operation.contract().memory_effects.is_empty());
+
+    let store = MemoryIntrinsicOperation::VolatileStore {
+        pointer: ValueId(0),
+        value: ValueId(1),
+        element: zst,
+        address_space: AddressSpace::Workgroup,
+        layout: zst.expected_layout(),
+        contract: VolatileAccessContract::zero_sized_aligned_no_access(),
+    };
+    assert!(
+        store
+            .verify(SemanticOperationVerificationContext {
+                operands: &store.operands(),
+                results: &[],
+                operand_types: &[
+                    Some(pointer(zst, AddressSpace::Workgroup, AccessMode::ReadWrite)),
+                    Some(Type::Unit),
+                ],
+            })
+            .is_empty()
+    );
+    assert!(store.contract().memory_effects.is_empty());
+    let store_identity = store.contract().instance_id();
+    assert_eq!(
+        decode_semantic_operation_instance_id(&encode_semantic_operation_instance_id(
+            store_identity
+        )),
+        Ok(store_identity)
+    );
+
+    let mut positive_access_claim = operation;
+    let MemoryIntrinsicOperation::VolatileLoad { contract, .. } = &mut positive_access_claim else {
+        unreachable!()
+    };
+    *contract = VolatileAccessContract::rust_allocation_load();
+    assert!(
+        positive_access_claim
+            .verify(SemanticOperationVerificationContext {
+                operands: &positive_access_claim.operands(),
+                results: &[],
+                operand_types: &operand_types,
+            })
+            .iter()
+            .any(|issue| issue.message.contains("aligned ZST no-access"))
+    );
+}
+
+#[test]
+fn zst_copy_keeps_alignment_and_conditional_range_contracts() {
+    let zst = MemoryElementType::Unit;
+    let operation = MemoryIntrinsicOperation::CopyNonOverlapping {
+        source: ValueId(0),
+        destination: ValueId(1),
+        count: ValueId(2),
+        element: zst,
+        source_address_space: AddressSpace::Global,
+        destination_address_space: AddressSpace::Global,
+        layout: zst.expected_layout(),
+        contract: CopyNonOverlappingContract::supported_rust(),
+    };
+    let operand_types = [
+        Some(pointer(zst, AddressSpace::Global, AccessMode::ReadOnly)),
+        Some(pointer(zst, AddressSpace::Global, AccessMode::ReadWrite)),
+        Some(Type::INDEX),
+    ];
+    assert!(
+        operation
+            .verify(SemanticOperationVerificationContext {
+                operands: &operation.operands(),
+                results: &[],
+                operand_types: &operand_types,
+            })
+            .is_empty()
+    );
+    assert_eq!(
+        CopyNonOverlappingContract::supported_rust().zero_bytes,
+        CopyZeroByteContract::AlignmentRequiredRangesAndOverlapConditionalOnPositiveBytes
+    );
+
+    let misaligned_contract = MemoryIntrinsicOperation::CopyNonOverlapping {
+        source: ValueId(0),
+        destination: ValueId(1),
+        count: ValueId(2),
+        element: zst,
+        source_address_space: AddressSpace::Global,
+        destination_address_space: AddressSpace::Global,
+        layout: MemoryLayout::new(0, 2),
+        contract: CopyNonOverlappingContract::supported_rust(),
+    };
+    let issues = misaligned_contract.verify(SemanticOperationVerificationContext {
+        operands: &misaligned_contract.operands(),
+        results: &[],
+        operand_types: &operand_types,
+    });
+    assert!(issues.iter().any(|issue| issue.message.contains("layout")));
+}
+
+#[test]
+fn byte_scaling_is_checked_and_zst_copy_is_zero_bytes() {
+    for count in [0, 1, 7, u32::MAX as u64] {
+        assert_eq!(
+            MemoryLayout::new(4, 4).checked_byte_count(count),
+            count.checked_mul(4)
+        );
+    }
+    assert_eq!(
+        MemoryLayout::new(0, 1).checked_byte_count(u64::MAX),
+        Some(0)
+    );
+    assert_eq!(MemoryLayout::new(8, 8).checked_byte_count(u64::MAX), None);
 }
 
 #[test]

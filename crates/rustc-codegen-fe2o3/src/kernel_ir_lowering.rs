@@ -775,6 +775,13 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
             | MirStatementKind::Retag
             | MirStatementKind::Coverage
             | MirStatementKind::Nop => return Ok(()),
+            MirStatementKind::CopyNonOverlapping => {
+                return Err(diagnostic(
+                    TranslationDiagnosticCode::UnsupportedStatement,
+                    location,
+                    "rustc copy_nonoverlapping MIR is recognized but compiler import remains disabled until a real source path supplies exact pointee layout, address space, and unsafe obligations",
+                ));
+            }
             MirStatementKind::Assign => {}
             _ => {
                 return Err(diagnostic(
@@ -3476,6 +3483,59 @@ mod tests {
         let errors = translate_and_verify(&fixture).expect_err("missing terminator");
         assert!(errors.contains(TranslationDiagnosticCode::MalformedMir));
         assert_eq!(errors.diagnostics()[0].location.block, Some(1));
+    }
+
+    #[test]
+    fn typed_copy_statement_is_inert_and_rejected() {
+        let mut fixture = scalar_fixture();
+        fixture.functions[0].blocks[0].statements = vec![MirStatement {
+            index: 0,
+            kind: MirStatementKind::CopyNonOverlapping,
+            destination: None,
+            operands: vec![operand(1), operand(2), operand(1)],
+            rvalue: None,
+            operation: None,
+            source: None,
+        }];
+
+        let errors = translate_and_verify(&fixture)
+            .expect_err("typed copy MIR must not create semantic authority");
+        assert!(errors.contains(TranslationDiagnosticCode::UnsupportedStatement));
+        assert!(errors.diagnostics().iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("compiler import remains disabled")
+        }));
+    }
+
+    #[test]
+    fn raw_pointer_parameter_is_not_reinterpreted_as_global() {
+        let mut fixture = scalar_fixture();
+        let function = &mut fixture.functions[0];
+        function.arg_count = 1;
+        function.local_count = 2;
+        function.locals = vec![
+            local(0, MirLocalRole::Return, MirTypeShape::Unit),
+            local(
+                1,
+                MirLocalRole::Arg,
+                MirTypeShape::RawPointer {
+                    pointee: Box::new(MirTypeShape::F32),
+                    mutable: true,
+                },
+            ),
+        ];
+        function.blocks.truncate(1);
+        function.blocks[0].statements.clear();
+        function.blocks[0].terminator = Some(terminator(MirTerminatorKind::Return));
+
+        let errors = translate_and_verify(&fixture)
+            .expect_err("unknown raw-pointer address space must fail closed");
+        assert!(errors.contains(TranslationDiagnosticCode::UnsupportedType));
+        assert!(errors.diagnostics().iter().any(|diagnostic| {
+            diagnostic.message.contains("argument local1")
+                && diagnostic.message.contains("unsupported type")
+        }));
     }
 
     #[test]

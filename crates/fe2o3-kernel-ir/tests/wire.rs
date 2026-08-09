@@ -439,6 +439,33 @@ fn exhaustive_module_matches_golden_and_round_trips() {
 }
 
 #[test]
+fn frozen_wire_versions_reject_semantic_memory_intrinsics() {
+    let mut module = full_module();
+    module.functions[0].body.as_mut().unwrap().blocks[0].operations[0].kind =
+        OperationKind::MemoryIntrinsic(MemoryIntrinsicOperation::VolatileLoad {
+            pointer: ValueId(0),
+            element: MemoryElementType::Scalar(ScalarType::U32),
+            address_space: AddressSpace::Global,
+            layout: MemoryLayout::new(4, 4),
+            contract: VolatileAccessContract::rust_allocation_load(),
+        });
+
+    for (version, result) in [
+        (KERNEL_IR_VERSION_V1, encode_module_v1(&module)),
+        (KERNEL_IR_VERSION_V2, encode_module_v2(&module)),
+        (KERNEL_IR_VERSION_V3, encode_module_v3(&module)),
+    ] {
+        assert_eq!(
+            result,
+            Err(KernelIrEncodeError::UnsupportedInVersion {
+                version,
+                feature: "semantic memory intrinsic",
+            })
+        );
+    }
+}
+
+#[test]
 fn set_insertion_order_does_not_change_bytes() {
     let capabilities = [
         TargetCapability::Float64,

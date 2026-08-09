@@ -806,7 +806,7 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
             OperationKind::Constant(constant) => {
                 self.expect_results(operation, &[constant.ty()], location);
             }
-            OperationKind::Intrinsic(_) => {
+            OperationKind::Intrinsic(_) | OperationKind::MemoryIntrinsic(_) => {
                 unreachable!("semantic operations return before legacy operation verification")
             }
             OperationKind::Unary { op, operand } => {

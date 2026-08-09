@@ -11,10 +11,11 @@ use fe2o3_kernel_ir::{
     DiagnosticCode as VerificationDiagnosticCode, F32MathFunction, F32MathImplementation,
     FloatConversionKind, FloatOperation, Function, FunctionId, FunctionRole, IndexKind,
     InlineAssembly, InlineAssemblyTarget, IntrinsicKind, Kernel, KernelId, LaunchDomain,
-    LaunchExtent, MemoryOrdering, Module, ModuleId, NarrowFloatFormat, Operation, OperationKind,
-    ScalarType, Signature, SynchronizationScope, TargetCapability, Terminator, Type, ValueId,
-    VerificationErrors, WaveOperation, WaveOperationKind, WaveWidth, WidenedFloatBinaryOp,
-    WorkgroupMemoryExtent, WorkgroupSize, verify_module,
+    LaunchExtent, MemoryElementType, MemoryIntrinsicOperation, MemoryOrdering, Module, ModuleId,
+    NarrowFloatFormat, Operation, OperationKind, PointerDistanceContract, PointerDistanceKind,
+    PointerDistanceUnit, ScalarType, Signature, SynchronizationScope, TargetCapability, Terminator,
+    Type, ValueId, VerificationErrors, WaveOperation, WaveOperationKind, WaveWidth,
+    WidenedFloatBinaryOp, WorkgroupMemoryExtent, WorkgroupSize, verify_module,
 };
 
 use crate::{AMDGPU_TRIPLE, AmdgcnIntrinsic, Dim};
@@ -708,7 +709,7 @@ fn validate_device_abi_type(
     match ty {
         Type::Scalar(scalar) if supported_scalar(*scalar, target) => Ok(()),
         Type::Pointer(_) => {
-            validate_pointer(ty, location, target).map_err(|error| error.to_string())
+            validate_device_pointer(ty, location, target).map_err(|error| error.to_string())
         }
         _ => Err(format!("{ty:?}")),
     }
@@ -1761,6 +1762,7 @@ fn emit_compiler_module(
     target: LoweringTarget,
 ) -> Result<String, LoweringErrors> {
     let intrinsics = collect_intrinsic_declarations(kernels.iter().chain(helpers));
+    let memcpy_address_spaces = collect_memcpy_declarations(kernels.iter().chain(helpers));
     let float_requirements = FloatRequirements::collect(kernels.iter().chain(helpers));
     let has_readnone = intrinsics
         .values()
@@ -1794,6 +1796,15 @@ fn emit_compiler_module(
         )
         .unwrap();
     }
+    for (destination, source) in &memcpy_address_spaces {
+        let destination = llvm_address_space(*destination);
+        let source = llvm_address_space(*source);
+        writeln!(
+            output,
+            "declare void @llvm.memcpy.p{destination}.p{source}.i64(ptr addrspace({destination}) noalias nocapture writeonly, ptr addrspace({source}) noalias nocapture readonly, i64, i1 immarg)"
+        )
+        .unwrap();
+    }
     emit_float_support_declarations(&mut output, &float_requirements);
     for function in declarations {
         writeln!(
@@ -1805,7 +1816,11 @@ fn emit_compiler_module(
         )
         .unwrap();
     }
-    if !intrinsics.is_empty() || !declarations.is_empty() || !float_requirements.is_empty() {
+    if !intrinsics.is_empty()
+        || !memcpy_address_spaces.is_empty()
+        || !declarations.is_empty()
+        || !float_requirements.is_empty()
+    {
         writeln!(output).unwrap();
     }
 
@@ -1892,6 +1907,36 @@ impl fmt::Write for CapacityLimitedText {
         self.output.push_str(text);
         Ok(())
     }
+}
+
+fn collect_memcpy_declarations<'a>(
+    lowerers: impl Iterator<Item = &'a FunctionLowerer<'a>>,
+) -> BTreeSet<(KernelAddressSpace, KernelAddressSpace)> {
+    lowerers
+        .flat_map(|lowerer| {
+            lowerer
+                .function
+                .body
+                .as_ref()
+                .expect("definition required")
+                .blocks
+                .iter()
+                .flat_map(|block| &block.operations)
+        })
+        .filter_map(|operation| {
+            let OperationKind::MemoryIntrinsic(MemoryIntrinsicOperation::CopyNonOverlapping {
+                element,
+                source_address_space,
+                destination_address_space,
+                ..
+            }) = operation.kind
+            else {
+                return None;
+            };
+            (element != MemoryElementType::Unit)
+                .then_some((destination_address_space, source_address_space))
+        })
+        .collect()
 }
 
 fn collect_intrinsic_declarations<'a>(
@@ -2373,7 +2418,7 @@ impl<'a> FunctionLowerer<'a> {
                     );
                 }
                 Type::Pointer(_) if self.kernel.is_none() => {
-                    validate_pointer(ty, &location, self.target)?;
+                    validate_device_pointer(ty, &location, self.target)?;
                     self.bindings.insert(
                         value,
                         ValueBinding::Value {
@@ -2432,7 +2477,7 @@ impl<'a> FunctionLowerer<'a> {
                         );
                     }
                     Type::Pointer(_) => {
-                        validate_pointer(&parameter.ty, &location, self.target)?;
+                        validate_device_pointer(&parameter.ty, &location, self.target)?;
                         self.bindings.insert(
                             parameter.id,
                             ValueBinding::Value {
@@ -2620,6 +2665,9 @@ impl<'a> FunctionLowerer<'a> {
                             kind: IndexKind::Global,
                             axis: Axis::X,
                         }) => {}
+            OperationKind::MemoryIntrinsic(intrinsic) => {
+                validate_memory_intrinsic(intrinsic, &location, self.target)?;
+            }
             OperationKind::Binary { op, lhs, .. } => {
                 let ty = self.value_type(*lhs);
                 if !supported_binary(*op, ty) {
@@ -3194,8 +3242,8 @@ impl<'a> FunctionLowerer<'a> {
         for block in &body.blocks {
             writeln!(output, "{}:", block_label(block.id)).unwrap();
             self.emit_block_parameters(output, block);
-            for operation in &block.operations {
-                self.emit_operation(output, operation)?;
+            for (operation_index, operation) in block.operations.iter().enumerate() {
+                self.emit_operation(output, block.id, operation_index, operation)?;
             }
             self.emit_terminator(
                 output,
@@ -3362,6 +3410,8 @@ impl<'a> FunctionLowerer<'a> {
     fn emit_operation(
         &self,
         output: &mut dyn fmt::Write,
+        block: BlockId,
+        operation_index: usize,
         operation: &Operation,
     ) -> Result<(), LoweringErrors> {
         let result_name = operation
@@ -3431,6 +3481,13 @@ impl<'a> FunctionLowerer<'a> {
                 .unwrap();
                 writeln!(output, "  {result} = add i64 {result}.base, {result}.local").unwrap();
             }
+            OperationKind::MemoryIntrinsic(intrinsic) => self.emit_memory_intrinsic(
+                output,
+                block,
+                operation_index,
+                result_name.as_deref(),
+                intrinsic,
+            ),
             OperationKind::Binary { op, lhs, rhs } => {
                 let (lhs_name, lhs_ty) = self.value(*lhs);
                 let (rhs_name, _) = self.value(*rhs);
@@ -3652,6 +3709,154 @@ impl<'a> FunctionLowerer<'a> {
             _ => unreachable!("preflight rejected unsupported operation"),
         }
         Ok(())
+    }
+
+    fn emit_memory_intrinsic(
+        &self,
+        output: &mut dyn fmt::Write,
+        block: BlockId,
+        operation_index: usize,
+        result_name: Option<&str>,
+        intrinsic: &MemoryIntrinsicOperation,
+    ) {
+        let temporary = format!("memory.{}.{}", block.0, operation_index);
+        match *intrinsic {
+            MemoryIntrinsicOperation::PointerDistance {
+                pointer,
+                origin,
+                kind,
+                unit,
+                layout,
+                address_space,
+                contract,
+                ..
+            } => {
+                debug_assert_eq!(contract, PointerDistanceContract::supported_rust(kind));
+                let result = result_name.expect("verified pointer-distance result");
+                let (pointer_name, _) = self.value(pointer);
+                let (origin_name, _) = self.value(origin);
+                let address_space = llvm_address_space(address_space);
+                writeln!(
+                    output,
+                    "  %{temporary}.pointer = ptrtoint ptr addrspace({address_space}) {pointer_name} to i64"
+                )
+                .unwrap();
+                writeln!(
+                    output,
+                    "  %{temporary}.origin = ptrtoint ptr addrspace({address_space}) {origin_name} to i64"
+                )
+                .unwrap();
+                let subtraction = match kind {
+                    PointerDistanceKind::Signed => "sub",
+                    PointerDistanceKind::Unsigned => "sub nuw",
+                };
+                writeln!(
+                    output,
+                    "  %{temporary}.bytes = {subtraction} i64 %{temporary}.pointer, %{temporary}.origin"
+                )
+                .unwrap();
+                let divisor = match unit {
+                    PointerDistanceUnit::Elements => layout.size_bytes,
+                    PointerDistanceUnit::Bytes => 1,
+                };
+                let division = match kind {
+                    PointerDistanceKind::Signed => "sdiv exact",
+                    PointerDistanceKind::Unsigned => "udiv exact",
+                };
+                writeln!(
+                    output,
+                    "  {result} = {division} i64 %{temporary}.bytes, {divisor}"
+                )
+                .unwrap();
+            }
+            MemoryIntrinsicOperation::VolatileLoad {
+                pointer,
+                element,
+                address_space,
+                layout,
+                contract,
+            } => {
+                debug_assert!(contract.matches_supported_load(element, address_space));
+                if element == MemoryElementType::Unit {
+                    return;
+                }
+                let (pointer_name, _) = self.value(pointer);
+                let element_type = element.ir_type();
+                writeln!(
+                    output,
+                    "  {} = load volatile {}, ptr addrspace({}) {}, align {}",
+                    result_name.expect("verified volatile-load result"),
+                    llvm_type(&element_type),
+                    llvm_address_space(address_space),
+                    pointer_name,
+                    layout.alignment_bytes
+                )
+                .unwrap();
+            }
+            MemoryIntrinsicOperation::VolatileStore {
+                pointer,
+                value,
+                element,
+                address_space,
+                layout,
+                contract,
+            } => {
+                debug_assert!(contract.matches_supported_store(element, address_space));
+                if element == MemoryElementType::Unit {
+                    return;
+                }
+                let (pointer_name, _) = self.value(pointer);
+                let (value_name, _) = self.value(value);
+                let element_type = element.ir_type();
+                writeln!(
+                    output,
+                    "  store volatile {} {}, ptr addrspace({}) {}, align {}",
+                    llvm_type(&element_type),
+                    value_name,
+                    llvm_address_space(address_space),
+                    pointer_name,
+                    layout.alignment_bytes
+                )
+                .unwrap();
+            }
+            MemoryIntrinsicOperation::CopyNonOverlapping {
+                source,
+                destination,
+                count,
+                element,
+                source_address_space,
+                destination_address_space,
+                layout,
+                contract,
+                ..
+            } => {
+                debug_assert_eq!(
+                    contract,
+                    fe2o3_kernel_ir::CopyNonOverlappingContract::supported_rust()
+                );
+                if element == MemoryElementType::Unit {
+                    return;
+                }
+                let (source_name, _) = self.value(source);
+                let (destination_name, _) = self.value(destination);
+                let (count_name, _) = self.value(count);
+                let source_address_space = llvm_address_space(source_address_space);
+                let destination_address_space = llvm_address_space(destination_address_space);
+                writeln!(
+                    output,
+                    "  %{temporary}.bytes = mul nuw i64 {count_name}, {}",
+                    layout.size_bytes
+                )
+                .unwrap();
+                writeln!(
+                    output,
+                    "  call void @llvm.memcpy.p{destination_address_space}.p{source_address_space}.i64(ptr addrspace({destination_address_space}) align {} {destination_name}, ptr addrspace({source_address_space}) align {} {source_name}, i64 %{temporary}.bytes, i1 false)",
+                    layout.alignment_bytes,
+                    layout.alignment_bytes,
+                )
+                .unwrap();
+            }
+        }
     }
 
     fn emit_inline_assembly(
@@ -4224,6 +4429,98 @@ fn validate_pointer(
             location.clone(),
             LoweringDiagnosticCode::UnsupportedType,
             format!("unsupported memory pointee type {:?}", pointer.pointee),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_device_pointer(
+    ty: &Type,
+    location: &LoweringLocation,
+    target: LoweringTarget,
+) -> Result<(), LoweringErrors> {
+    let Type::Pointer(pointer) = ty else {
+        unreachable!("device pointer validation requires a pointer")
+    };
+    if !matches!(
+        pointer.address_space,
+        KernelAddressSpace::Global | KernelAddressSpace::Workgroup
+    ) {
+        return Err(LoweringErrors::one(
+            location.clone(),
+            LoweringDiagnosticCode::UnsupportedAddressSpace,
+            format!(
+                "G1 supports only global or workgroup pointers, found {:?}",
+                pointer.address_space
+            ),
+        ));
+    }
+    if pointer.pointee.as_ref() != &Type::Unit && !supported_memory_type(&pointer.pointee, target) {
+        return Err(LoweringErrors::one(
+            location.clone(),
+            LoweringDiagnosticCode::UnsupportedType,
+            format!("unsupported memory pointee type {:?}", pointer.pointee),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_memory_intrinsic(
+    intrinsic: &MemoryIntrinsicOperation,
+    location: &LoweringLocation,
+    target: LoweringTarget,
+) -> Result<(), LoweringErrors> {
+    let (element, address_spaces) = match intrinsic {
+        MemoryIntrinsicOperation::PointerDistance {
+            element,
+            address_space,
+            ..
+        }
+        | MemoryIntrinsicOperation::VolatileLoad {
+            element,
+            address_space,
+            ..
+        }
+        | MemoryIntrinsicOperation::VolatileStore {
+            element,
+            address_space,
+            ..
+        } => (*element, [Some(*address_space), None]),
+        MemoryIntrinsicOperation::CopyNonOverlapping {
+            element,
+            source_address_space,
+            destination_address_space,
+            ..
+        } => (
+            *element,
+            [
+                Some(*source_address_space),
+                Some(*destination_address_space),
+            ],
+        ),
+    };
+    for address_space in address_spaces.into_iter().flatten() {
+        if !matches!(
+            address_space,
+            KernelAddressSpace::Global | KernelAddressSpace::Workgroup
+        ) {
+            return Err(LoweringErrors::one(
+                location.clone(),
+                LoweringDiagnosticCode::UnsupportedAddressSpace,
+                format!(
+                    "gfx942 memory intrinsics support only global or workgroup pointers, found {address_space:?}"
+                ),
+            ));
+        }
+    }
+    if element != MemoryElementType::Unit && !supported_memory_type(&element.ir_type(), target) {
+        return Err(LoweringErrors::one(
+            location.clone(),
+            LoweringDiagnosticCode::UnsupportedType,
+            format!(
+                "gfx942 memory intrinsic does not support element type {:?}",
+                element.ir_type()
+            ),
         ));
     }
     Ok(())

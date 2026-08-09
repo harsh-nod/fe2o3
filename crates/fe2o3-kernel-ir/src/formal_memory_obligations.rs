@@ -521,6 +521,7 @@ pub fn derive_kernel_memory_obligations(
                 }
                 OperationKind::Constant(_)
                 | OperationKind::Intrinsic(_)
+                | OperationKind::MemoryIntrinsic(_)
                 | OperationKind::Wave(_)
                 | OperationKind::Unary { .. }
                 | OperationKind::Binary { .. }

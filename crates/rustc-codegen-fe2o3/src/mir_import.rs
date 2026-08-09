@@ -12,8 +12,8 @@ use reserved_fe2o3_symbols::{
 };
 use rustc_hir::def_id::LOCAL_CRATE;
 use rustc_middle::mir::{
-    BasicBlock, BinOp, Body, ConstOperand, Local, Operand, Place, ProjectionElem, Rvalue,
-    SourceInfo, StatementKind, TerminatorKind, UnOp,
+    BasicBlock, BinOp, Body, ConstOperand, Local, NonDivergingIntrinsic, Operand, Place,
+    ProjectionElem, Rvalue, SourceInfo, StatementKind, TerminatorKind, UnOp,
 };
 use rustc_middle::ty::{
     FloatTy, Instance, IntTy, Mutability, Ty, TyCtxt, TyKind, TypingEnv, UintTy,
@@ -147,6 +147,7 @@ pub enum MirStatementKind {
     StorageDead,
     SetDiscriminant,
     Intrinsic,
+    CopyNonOverlapping,
     Retag,
     Coverage,
     Nop,
@@ -1108,6 +1109,7 @@ impl MirStatement {
             | MirStatementKind::StorageDead
             | MirStatementKind::SetDiscriminant
             | MirStatementKind::Intrinsic
+            | MirStatementKind::CopyNonOverlapping
             | MirStatementKind::Retag
             | MirStatementKind::Coverage
             | MirStatementKind::Nop
@@ -1164,6 +1166,7 @@ impl MirStatementKind {
             Self::StorageDead => "storage_dead",
             Self::SetDiscriminant => "set_discriminant",
             Self::Intrinsic => "intrinsic",
+            Self::CopyNonOverlapping => "copy_nonoverlapping",
             Self::Retag => "retag",
             Self::Coverage => "coverage",
             Self::Nop => "nop",
@@ -1574,7 +1577,10 @@ fn statement_kind(kind: &StatementKind<'_>) -> MirStatementKind {
         StatementKind::StorageLive(_) => MirStatementKind::StorageLive,
         StatementKind::StorageDead(_) => MirStatementKind::StorageDead,
         StatementKind::SetDiscriminant { .. } => MirStatementKind::SetDiscriminant,
-        StatementKind::Intrinsic(_) => MirStatementKind::Intrinsic,
+        StatementKind::Intrinsic(intrinsic) => match intrinsic.as_ref() {
+            NonDivergingIntrinsic::CopyNonOverlapping(_) => MirStatementKind::CopyNonOverlapping,
+            _ => MirStatementKind::Intrinsic,
+        },
         StatementKind::Retag(_, _) => MirStatementKind::Retag,
         StatementKind::Coverage(_) => MirStatementKind::Coverage,
         StatementKind::Nop => MirStatementKind::Nop,
@@ -1597,11 +1603,21 @@ fn statement_destination(kind: &StatementKind<'_>) -> Option<MirPlaceRef> {
 }
 
 fn statement_operands<'tcx>(tcx: TyCtxt<'tcx>, kind: &StatementKind<'tcx>) -> Vec<MirOperandRef> {
-    let StatementKind::Assign(assign) = kind else {
-        return Vec::new();
-    };
-    let (_, rvalue) = &**assign;
-    rvalue_operands(tcx, rvalue)
+    match kind {
+        StatementKind::Assign(assign) => {
+            let (_, rvalue) = &**assign;
+            rvalue_operands(tcx, rvalue)
+        }
+        StatementKind::Intrinsic(intrinsic) => match intrinsic.as_ref() {
+            NonDivergingIntrinsic::CopyNonOverlapping(copy) => vec![
+                import_operand(tcx, &copy.src),
+                import_operand(tcx, &copy.dst),
+                import_operand(tcx, &copy.count),
+            ],
+            _ => Vec::new(),
+        },
+        _ => Vec::new(),
+    }
 }
 
 fn statement_operation(kind: &StatementKind<'_>) -> Option<String> {
