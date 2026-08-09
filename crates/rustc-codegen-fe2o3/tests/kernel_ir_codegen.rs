@@ -7,11 +7,13 @@ use fe2o3_artifacts::DigestAlgorithm;
 
 const PIPELINE_ENV: &str = "FE2O3_CODEGEN_PIPELINE";
 const LLVM_AS_ENV: &str = "FE2O3_LLVM_AS";
+const LLVM_DWARFDUMP_ENV: &str = "FE2O3_LLVM_DWARFDUMP";
 const PROVIDER_SYMBOL: &str = "external_device_add_v1";
 const PROVIDER_KERNEL: &str = "worker_v2_provider_kernel";
 const MULTI_KERNEL_ALPHA: &str = "worker_v2_alpha";
 const MULTI_KERNEL_ZETA: &str = "worker_v2_zeta";
 const ALPHA_ZETA_OUTPUT_ENV: &str = "FE2O3_GFX942_ALPHA_ZETA_OUTPUT";
+const S09_DEBUG_HSACO_OUTPUT_ENV: &str = "FE2O3_S09_DEBUG_HSACO_OUTPUT";
 
 fn backend_test_lock() -> MutexGuard<'static, ()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -142,6 +144,28 @@ impl WorkerV2TestConfig {
             bytes.len(),
         );
         std::fs::write(&path, json).expect("write native Worker V2 source config");
+        Self(path)
+    }
+
+    fn native_s09_alpha_debug(
+        directory: &Path,
+        workspace: &Path,
+        source: &Path,
+        worker: &Path,
+        worker_build_identity: &str,
+        llvm_build_identity: &str,
+    ) -> Self {
+        let bytes = std::fs::read(worker).expect("read configured Worker V2 executable");
+        let hex = sha256_hex(&bytes);
+        let path = directory.join("worker-v2-s09-alpha-debug.json");
+        let worker = worker.to_str().expect("UTF-8 worker path");
+        let workspace = workspace.to_str().expect("UTF-8 workspace path");
+        let source = source.to_str().expect("UTF-8 source path");
+        let json = format!(
+            "{{\"candidate_output_max_bytes\":4194304,\"format\":\"fe2o3-worker-v2-config-v2\",\"limits\":{{\"stderr_bytes\":65536,\"stdout_bytes\":8388608,\"timeout_ms\":30000}},\"link_options\":[{{\"name\":\"code-object-version\",\"value\":\"6\"}},{{\"name\":\"opt-level\",\"value\":\"0\"}},{{\"name\":\"strip-debug\",\"value\":\"false\"}},{{\"name\":\"verify-each\",\"value\":\"true\"}}],\"providers\":[],\"source_debug_profile\":\"s09-alpha-gfx942-o0-v1\",\"units\":[{{\"crate_name\":\"fe2o3_typed_alias_spoof\",\"source\":{source:?},\"working_directory\":{workspace:?}}}],\"worker\":{{\"byte_len\":{},\"llvm_build_identity\":{llvm_build_identity:?},\"path\":{worker:?},\"sha256\":\"{hex}\",\"worker_build_identity\":{worker_build_identity:?}}}}}",
+            bytes.len(),
+        );
+        std::fs::write(&path, json).expect("write S09 Worker V2 debug config");
         Self(path)
     }
 
@@ -518,6 +542,30 @@ fn export_alpha_zeta_evidence(bytes: &[u8]) {
         output.display(),
         sha256_hex(bytes),
     );
+}
+
+fn export_s09_debug_hsaco(bytes: &[u8]) -> Option<PathBuf> {
+    let output = PathBuf::from(std::env::var_os(S09_DEBUG_HSACO_OUTPUT_ENV)?);
+    assert!(
+        output.is_absolute(),
+        "{S09_DEBUG_HSACO_OUTPUT_ENV} must be absolute"
+    );
+    let parent = output.parent().expect("S09 output parent");
+    assert_eq!(
+        parent.canonicalize().expect("canonical S09 output parent"),
+        parent,
+        "{S09_DEBUG_HSACO_OUTPUT_ENV} parent must already be canonical",
+    );
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&output)
+        .unwrap_or_else(|error| panic!("create {}: {error}", output.display()));
+    file.write_all(bytes)
+        .unwrap_or_else(|error| panic!("write {}: {error}", output.display()));
+    file.sync_all()
+        .unwrap_or_else(|error| panic!("sync {}: {error}", output.display()));
+    Some(output)
 }
 
 fn preseed(paths: &[PathBuf]) {
@@ -998,6 +1046,132 @@ fn worker_v2_general_v3_alpha_zeta_build_links_and_validate_backend_witnesses() 
     );
     let bytes = assert_published_worker_v2_cov6_kernels(&target.join("fe2o3"), &["alpha", "zeta"]);
     export_alpha_zeta_evidence(&bytes);
+}
+
+#[test]
+#[ignore = "requires the configured native LLVM/LLD Worker V2 and llvm-dwarfdump"]
+fn worker_v2_s09_alpha_o0_preserves_source_dwarf_in_hsaco() {
+    let _lock = backend_test_lock();
+    let workspace = workspace();
+    let directory = WorkerV2SourceDirectory::new(&workspace);
+    let source =
+        Path::new("crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src/main.rs");
+    let worker = PathBuf::from(std::env::var_os("FE2O3_LLVM_LINK_WORKER").expect("Worker V2 path"));
+    let worker_build_identity =
+        std::env::var("FE2O3_LLVM_LINK_WORKER_BUILD_ID").expect("worker build identity");
+    let llvm_build_identity = std::env::var("FE2O3_LLVM_BUILD_ID").expect("LLVM build identity");
+    let config = WorkerV2TestConfig::native_s09_alpha_debug(
+        &directory.0,
+        &workspace,
+        source,
+        &worker,
+        &worker_build_identity,
+        &llvm_build_identity,
+    );
+    let remap = format!("--remap-path-prefix={}/=", workspace.display());
+    let backend = build_codegen_backend(&workspace);
+    let target = directory.0.join("cargo-target");
+    let output = Command::new(env!("CARGO"))
+        .current_dir(&workspace)
+        .args([
+            "run",
+            "--locked",
+            "-p",
+            "cargo-fe2o3",
+            "--",
+            "build",
+            "-p",
+            "fe2o3-typed-alias-spoof",
+            "--features",
+            "general-genuine",
+            "--target-dir",
+        ])
+        .arg(&target)
+        .env("FE2O3_BACKEND", &backend)
+        .env("FE2O3_CODEGEN_PIPELINE", "kernel-ir-worker-v2")
+        .env("FE2O3_TARGET", "gfx942:xnack-")
+        .env("FE2O3_WORKER_V2_CONFIG_V2", &config.0)
+        .env("RUSTFLAGS", remap)
+        .output()
+        .expect("build S09 alpha debug fixture");
+    assert!(
+        output.status.success(),
+        "S09 alpha Worker V2 build failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let bytes = assert_published_worker_v2_cov6_kernels(&target.join("fe2o3"), &["alpha", "zeta"]);
+    let hsaco = export_s09_debug_hsaco(&bytes)
+        .unwrap_or_else(|| panic!("{S09_DEBUG_HSACO_OUTPUT_ENV} is required"));
+    let dwarfdump =
+        PathBuf::from(std::env::var_os(LLVM_DWARFDUMP_ENV).expect("pinned llvm-dwarfdump path"));
+    assert!(
+        dwarfdump.is_absolute(),
+        "{LLVM_DWARFDUMP_ENV} must be absolute"
+    );
+    let verify = Command::new(&dwarfdump)
+        .args(["--verify"])
+        .arg(&hsaco)
+        .output()
+        .unwrap_or_else(|error| panic!("run {}: {error}", dwarfdump.display()));
+    assert!(
+        verify.status.success(),
+        "S09 DWARF verification failed:\n{}",
+        String::from_utf8_lossy(&verify.stderr)
+    );
+    let dump = Command::new(&dwarfdump)
+        .args(["--debug-info", "--debug-line"])
+        .arg(&hsaco)
+        .output()
+        .unwrap_or_else(|error| panic!("run {}: {error}", dwarfdump.display()));
+    assert!(dump.status.success(), "S09 DWARF dump failed");
+    let dump = String::from_utf8(dump.stdout).expect("UTF-8 DWARF dump");
+    assert!(
+        !dump.contains(workspace.to_str().expect("UTF-8 workspace")),
+        "S09 DWARF leaked the checkout root:\n{dump}"
+    );
+    assert!(
+        !dump.contains("/../") && !dump.contains("/./"),
+        "S09 DWARF contains a non-canonical source path:\n{dump}"
+    );
+    for expected in [
+        "DW_TAG_compile_unit",
+        "DW_LANG_Rust",
+        "DW_TAG_subprogram",
+        "DW_AT_name\t(\"alpha\")",
+        "DW_AT_decl_line\t(68)",
+        "DW_AT_name\t(\"scale\")",
+        "DW_AT_name\t(\"input_data\")",
+        "DW_AT_name\t(\"input_len\")",
+        "DW_AT_name\t(\"output_data\")",
+        "DW_AT_name\t(\"output_len\")",
+        "DW_AT_name\t(\"i\")",
+        "DW_AT_decl_line\t(70)",
+        "DW_AT_comp_dir\t(\"crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src\")",
+        "main.rs",
+    ] {
+        assert!(
+            dump.contains(expected),
+            "missing {expected:?} in DWARF:\n{dump}"
+        );
+    }
+    assert_eq!(
+        dump.matches("DW_AT_location\t").count(),
+        6,
+        "S09 requires locations for five physical arguments and local `i`"
+    );
+    for source_line in [68, 69, 70] {
+        assert!(
+            dump.lines().any(|line| {
+                let mut columns = line.split_whitespace();
+                columns
+                    .next()
+                    .is_some_and(|address| address.starts_with("0x"))
+                    && columns.next().and_then(|line| line.parse::<usize>().ok())
+                        == Some(source_line)
+            }),
+            "S09 line table is missing source line {source_line}:\n{dump}"
+        );
+    }
 }
 
 #[test]

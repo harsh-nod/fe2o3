@@ -26,7 +26,8 @@ use crate::capability_broker;
 use crate::pinned_codegen_backend::{PinCodegenBackendError, PinnedCodegenBackend};
 use crate::project::PinnedDirectory;
 use crate::worker_v2::{
-    PreparedWorkerV2Config, WORKER_V2_EXPECTED_ID_ENV, WorkerV2ConfigError, WorkerV2ConfigIdentity,
+    PreparedWorkerV2Config, WORKER_V2_EXPECTED_ID_ENV, WORKER_V2_SOURCE_DEBUG_PROFILE_ENV,
+    WorkerV2ConfigError, WorkerV2ConfigIdentity, WorkerV2SourceDebugProfileV1,
 };
 use crate::worker_v2_artifact_container::assemble_recovered_worker_v2_load_envelope_v1;
 #[cfg(feature = "worker-v2-fault-injection-test-only")]
@@ -329,6 +330,17 @@ pub(crate) fn run(argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperError
     } else {
         command.env_remove(BUILD_ATTEMPT_ENV);
     }
+    match managed_attempt
+        .as_ref()
+        .and_then(ManagedAttempt::source_debug_profile)
+    {
+        Some(profile) => {
+            command.env(WORKER_V2_SOURCE_DEBUG_PROFILE_ENV, profile.env_value());
+        }
+        None => {
+            command.env_remove(WORKER_V2_SOURCE_DEBUG_PROFILE_ENV);
+        }
+    }
     let status = match command.status() {
         Ok(status) => status,
         Err(error) => {
@@ -578,6 +590,13 @@ enum CompletionFailure {
 impl ManagedAttempt {
     fn is_worker_v2_recovery(&self) -> bool {
         matches!(self.worker_v2, Some(ManagedWorkerV2::Recovery { .. }))
+    }
+
+    fn source_debug_profile(&self) -> Option<WorkerV2SourceDebugProfileV1> {
+        match &self.worker_v2 {
+            Some(ManagedWorkerV2::Fresh { config, .. }) => config.source_debug_profile(),
+            Some(ManagedWorkerV2::Recovery { .. }) | None => None,
+        }
     }
 }
 
