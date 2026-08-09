@@ -748,6 +748,7 @@ pub(crate) enum ProjectionV2 {
     },
     Downcast {
         variant: usize,
+        #[serde(skip_serializing)]
         name: Option<String>,
     },
     OpaqueCast {

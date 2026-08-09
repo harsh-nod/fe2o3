@@ -120,6 +120,8 @@ struct DriverResults {
     unsupported_error: String,
     recapture_errors: Vec<String>,
     diagnostic_recapture_succeeded: bool,
+    downcast_name_recapture_succeeded: bool,
+    downcast_variant_recapture_error: String,
 }
 
 #[derive(Default)]
@@ -193,6 +195,26 @@ impl Callbacks for CaptureCallbacks {
             rustc_authentic_capture_data_v2(&diagnostic_recapture),
             &diagnostic_only
         );
+        let mut downcast_name_only = observed.clone();
+        let (_, downcast_name) = fixture_downcast_mut(&mut downcast_name_only);
+        *downcast_name = Some("DIAGNOSTIC_DOWNCAST_NAME_SENTINEL".to_owned());
+        refresh_capture_accounting(&mut downcast_name_only);
+        let downcast_name_recapture_succeeded =
+            recapture_against_rustc_v2(tcx, observed_instance, limits, &downcast_name_only).is_ok();
+
+        let mut downcast_variant = observed.clone();
+        let (variant, _) = fixture_downcast_mut(&mut downcast_variant);
+        *variant = (*variant)
+            .checked_add(1)
+            .expect("fixture downcast variant must be incrementable");
+        refresh_capture_accounting(&mut downcast_variant);
+        downcast_variant
+            .validate_untrusted_shape(limits)
+            .expect("mutated downcast variant remains structurally well-formed raw data");
+        let downcast_variant_recapture_error =
+            recapture_against_rustc_v2(tcx, observed_instance, limits, &downcast_variant)
+                .expect_err("downcast variant substitution must fail exact rustc recapture")
+                .to_string();
         let recapture_errors =
             adversarial_recapture_errors(tcx, observed_instance, limits, &observed);
 
@@ -251,6 +273,8 @@ impl Callbacks for CaptureCallbacks {
                 .to_string(),
             recapture_errors,
             diagnostic_recapture_succeeded: true,
+            downcast_name_recapture_succeeded,
+            downcast_variant_recapture_error,
         });
         Compilation::Stop
     }
@@ -583,6 +607,32 @@ fn mutate_diagnostic_observation(body: &mut CapturedBodyV2) {
     }) {
         call_source.diagnostic = "DIAGNOSTIC_COMPILER_VALUE_SENTINEL".to_owned();
     }
+
+    let (_, downcast_name) = fixture_downcast_mut(body);
+    *downcast_name = Some("DIAGNOSTIC_DOWNCAST_NAME_SENTINEL".to_owned());
+}
+
+fn fixture_downcast_mut(body: &mut CapturedBodyV2) -> (&mut usize, &mut Option<String>) {
+    for block in &mut body.blocks {
+        for statement in &mut block.statements {
+            let StatementKindV2::Assign { value, .. } = &mut statement.kind else {
+                continue;
+            };
+            let RvalueV2::Use(operand) = value.as_mut() else {
+                continue;
+            };
+            let place = match operand {
+                OperandV2::Copy(place) | OperandV2::Move(place) => place,
+                OperandV2::Constant { .. } | OperandV2::RuntimeChecks { .. } => continue,
+            };
+            for projection in &mut place.projection {
+                if let ProjectionV2::Downcast { variant, name } = projection {
+                    return (variant, name);
+                }
+            }
+        }
+    }
+    panic!("observed fixture must contain a downcast place projection")
 }
 
 fn refresh_call_bindings(kind: &mut TerminatorKindV2) {
@@ -920,6 +970,17 @@ fn exact_rustc_recapture_rejects_refreshed_structural_forgeries() {
             .recapture_errors
             .iter()
             .all(|error| error.contains("differs from bounded canonical rustc recapture"))
+    );
+}
+
+#[test]
+fn downcast_display_name_is_diagnostic_but_variant_is_structural() {
+    let results = compiler_results();
+    assert!(results.downcast_name_recapture_succeeded);
+    assert!(
+        results
+            .downcast_variant_recapture_error
+            .contains("differs from bounded canonical rustc recapture")
     );
 }
 
