@@ -29,8 +29,12 @@ pub const MAX_EXECUTABLE_TYPE_NODES: usize = 65_536;
 pub const MAX_EXECUTABLE_TYPE_ITEMS: usize = 65_536;
 pub const MAX_EXECUTABLE_FIELDS: usize = 4_096;
 pub const MAX_EXECUTABLE_VARIANTS: usize = 1_024;
-/// Closed AMDGPU address-space range supported by executable MIR V1.
-pub const MAX_EXECUTABLE_ADDRESS_SPACE: u32 = 5;
+/// Closed AMDGPU address-space range supported by the gfx942 executable MIR V1 profile.
+pub const MAX_EXECUTABLE_ADDRESS_SPACE: u32 = 6;
+pub const GFX942_TARGET_TRIPLE: &str = "amdgcn-amd-amdhsa";
+pub const GFX942_TARGET_CPU: &str = "gfx942";
+pub const GFX942_TARGET_FEATURES: &str = "-wavefrontsize32,+wavefrontsize64";
+pub const GFX942_TARGET_DATA_LAYOUT: &str = "e-p:64:64-p1:64:64-p2:32:32-p3:32:32-p4:64:64-p5:32:32-p6:32:32-p7:160:256:256:32-p8:128:128:128:48-p9:192:256:256:32-i64:64-v16:16-v24:32-v32:32-v48:64-v96:128-v192:256-v256:256-v512:512-v1024:1024-v2048:2048-n32:64-S32-A5-G1-ni:7:8:9";
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum MirExecutableVersion {
@@ -67,11 +71,91 @@ pub struct MirSourceSpan {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum MirExecutableTargetProfile {
+    Gfx942,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct MirPointerAbi {
+    pub address_space: MirAddressSpace,
+    pub width_bits: u16,
+    pub abi_alignment_bits: u16,
+}
+
+pub const GFX942_POINTER_ABIS: [MirPointerAbi; 7] = [
+    MirPointerAbi {
+        address_space: MirAddressSpace(0),
+        width_bits: 64,
+        abi_alignment_bits: 64,
+    },
+    MirPointerAbi {
+        address_space: MirAddressSpace(1),
+        width_bits: 64,
+        abi_alignment_bits: 64,
+    },
+    MirPointerAbi {
+        address_space: MirAddressSpace(2),
+        width_bits: 32,
+        abi_alignment_bits: 32,
+    },
+    MirPointerAbi {
+        address_space: MirAddressSpace(3),
+        width_bits: 32,
+        abi_alignment_bits: 32,
+    },
+    MirPointerAbi {
+        address_space: MirAddressSpace(4),
+        width_bits: 64,
+        abi_alignment_bits: 64,
+    },
+    MirPointerAbi {
+        address_space: MirAddressSpace(5),
+        width_bits: 32,
+        abi_alignment_bits: 32,
+    },
+    MirPointerAbi {
+        address_space: MirAddressSpace(6),
+        width_bits: 32,
+        abi_alignment_bits: 32,
+    },
+];
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct MirExecutableTarget {
+    pub profile: MirExecutableTargetProfile,
+    pub triple: String,
+    pub cpu: String,
+    pub features: String,
+    pub data_layout: String,
     /// Width of Rust `usize` and MIR index locals for this target.
     pub pointer_width_bits: u16,
     /// Width returned by target thread-index operations.
     pub thread_index_width_bits: u16,
+    /// Canonical, strictly sorted pointer ABI entries for every supported
+    /// executable address space.
+    pub pointer_abis: Vec<MirPointerAbi>,
+}
+
+impl MirExecutableTarget {
+    pub fn gfx942() -> Self {
+        Self {
+            profile: MirExecutableTargetProfile::Gfx942,
+            triple: GFX942_TARGET_TRIPLE.to_owned(),
+            cpu: GFX942_TARGET_CPU.to_owned(),
+            features: GFX942_TARGET_FEATURES.to_owned(),
+            data_layout: GFX942_TARGET_DATA_LAYOUT.to_owned(),
+            pointer_width_bits: 64,
+            thread_index_width_bits: 32,
+            pointer_abis: GFX942_POINTER_ABIS.to_vec(),
+        }
+    }
+
+    fn pointer_abi(&self, address_space: MirAddressSpace) -> Option<MirPointerAbi> {
+        self.pointer_abis
+            .binary_search_by_key(&address_space, |entry| entry.address_space)
+            .ok()
+            .map(|index| self.pointer_abis[index])
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -675,18 +759,7 @@ impl MirExecutableModule {
             ));
         }
         bounded_len("module.types", self.types.len(), 1, MAX_EXECUTABLE_TYPES)?;
-        if !matches!(self.target.pointer_width_bits, 32 | 64) {
-            return Err(error(
-                "module.target.pointer_width_bits",
-                "pointer width must be 32 or 64 bits",
-            ));
-        }
-        if !matches!(self.target.thread_index_width_bits, 32 | 64) {
-            return Err(error(
-                "module.target.thread_index_width_bits",
-                "thread-index width must be 32 or 64 bits",
-            ));
-        }
+        validate_executable_target(&self.target)?;
         bounded_len(
             "module.functions",
             self.functions.len(),
@@ -700,7 +773,7 @@ impl MirExecutableModule {
             let path = format!("module.types[{index}]");
             ty.validate()
                 .map_err(|source| map_type_error(&path, source))?;
-            validate_target_type_abi(&path, ty, self.target)?;
+            validate_target_type_abi(&path, ty, &self.target)?;
             let canonical = ty
                 .canonical_text()
                 .map_err(|source| map_type_error(&path, source))?;
@@ -760,6 +833,31 @@ impl MirExecutableModule {
                 ));
             }
             previous_callable = Some(&callable.identity);
+            match &callable.authority {
+                MirCallAuthority::DefinedFunction => {
+                    if is_intrinsic_identity(&callable.identity) {
+                        return Err(error(
+                            path,
+                            "defined callable collides with the compiler intrinsic namespace",
+                        ));
+                    }
+                    if registry.find(&callable.identity).is_some() {
+                        return Err(error(
+                            path,
+                            "defined callable collides with the trusted import namespace",
+                        ));
+                    }
+                }
+                MirCallAuthority::DeviceImport { .. }
+                    if is_intrinsic_identity(&callable.identity) =>
+                {
+                    return Err(error(
+                        path,
+                        "device import collides with the compiler intrinsic namespace",
+                    ));
+                }
+                MirCallAuthority::DeviceImport { .. } | MirCallAuthority::Intrinsic(_) => {}
+            }
         }
 
         let mut previous_function: Option<&str> = None;
@@ -992,10 +1090,10 @@ impl MirExecutableModule {
                     callable.signature.inputs[1],
                     MirMutability::Mutable,
                 )?;
-                if source != destination {
+                if source.0 != destination.0 || source.1 != destination.1 {
                     return Err(error(
                         format!("{path}.signature.inputs"),
-                        "copy_nonoverlapping pointers must have the same pointee type",
+                        "copy_nonoverlapping pointers must have the same pointee and pointer ABI",
                     ));
                 }
                 self.require_intrinsic_integer(
@@ -1036,7 +1134,7 @@ impl MirExecutableModule {
                     &format!("{path}.signature.output"),
                     output,
                     true,
-                    self.target.pointer_width_bits,
+                    left.1.width_bits,
                 )
             }
             MirIntrinsic::VolatileLoad => {
@@ -1052,7 +1150,7 @@ impl MirExecutableModule {
                         "volatile_load must return its pointee type",
                     ));
                 };
-                if self.type_at(output) != Some(pointee) {
+                if self.type_at(output) != Some(pointee.0) {
                     return Err(error(
                         format!("{path}.signature.output"),
                         "volatile_load output must exactly match its pointee type",
@@ -1068,7 +1166,7 @@ impl MirExecutableModule {
                     callable.signature.inputs[0],
                     MirMutability::Mutable,
                 )?;
-                if self.type_at(callable.signature.inputs[1]) != Some(pointee) {
+                if self.type_at(callable.signature.inputs[1]) != Some(pointee.0) {
                     return Err(error(
                         format!("{path}.signature.inputs[1]"),
                         "volatile_store value must exactly match its pointee type",
@@ -1122,14 +1220,14 @@ impl MirExecutableModule {
         path: &str,
         id: MirTypeId,
         expected_mutability: MirMutability,
-    ) -> Result<&MirSemanticType, MirExecutableValidationError> {
+    ) -> Result<(&MirSemanticType, MirPointerAbi), MirExecutableValidationError> {
         let ty = self
             .type_at(id)
             .expect("callable type references were checked before intrinsic authority");
         let MirTypeKind::RawPointer {
             pointee,
             mutability,
-            ..
+            address_space,
         } = &ty.kind
         else {
             return Err(error(path, "intrinsic input must be a raw pointer"));
@@ -1140,13 +1238,21 @@ impl MirExecutableModule {
                 "intrinsic pointer input has the wrong mutability",
             ));
         }
-        if ty.layout.size != Some(u64::from(self.target.pointer_width_bits / 8)) {
+        let abi = self.target.pointer_abi(*address_space).ok_or_else(|| {
+            error(
+                path,
+                "intrinsic pointer address space is absent from the target ABI",
+            )
+        })?;
+        if ty.layout.size != Some(u64::from(abi.width_bits / 8))
+            || ty.layout.align != u64::from(abi.abi_alignment_bits / 8)
+        {
             return Err(error(
                 path,
-                "intrinsic pointer input does not match the target pointer width",
+                "intrinsic pointer input does not match its address-space pointer ABI",
             ));
         }
-        Ok(pointee)
+        Ok((pointee, abi))
     }
 
     fn require_intrinsic_integer(
@@ -1235,7 +1341,8 @@ impl<'a> Verifier<'a> {
             ));
         }
         self.verify_reachability()?;
-        self.verify_initialization()
+        self.verify_initialization()?;
+        self.verify_variant_state()
     }
 
     fn verify_locals(&self) -> Result<(), MirExecutableValidationError> {
@@ -1252,6 +1359,13 @@ impl<'a> Verifier<'a> {
             validate_executable_address_space(
                 &format!("{path}.storage_address_space"),
                 local.storage_address_space,
+                &self.module.target,
+            )?;
+            validate_target_offset_ranges(
+                &format!("{path}.ty"),
+                self.type_at(local.ty),
+                local.storage_address_space,
+                &self.module.target,
             )?;
             validate_name_opt(&format!("{path}.name"), local.name.as_deref())?;
             validate_span_opt(&format!("{path}.span"), local.span.as_ref())?;
@@ -1792,7 +1906,7 @@ impl<'a> Verifier<'a> {
             MirRvalue::Cast { kind, operand, ty } => {
                 self.require_type(&format!("{path}.ty"), *ty)?;
                 let source = self.verify_operand(&format!("{path}.operand"), operand, available)?;
-                if !valid_cast(*kind, &self.type_at(source).kind, &self.type_at(*ty).kind) {
+                if !valid_cast(*kind, self.type_at(source), self.type_at(*ty)) {
                     return Err(error(
                         path,
                         "cast kind does not match source and destination types",
@@ -1811,6 +1925,7 @@ impl<'a> Verifier<'a> {
                 if *mutability == MirMutability::Mutable && !writable {
                     return Err(error(path, "mutable reference requires a writable place"));
                 }
+                self.verify_reference_origin(&format!("{path}.place"), place)?;
                 self.verify_reference_type(path, *ty, place.ty, *mutability, address_space, false)?;
                 Ok(*ty)
             }
@@ -2236,6 +2351,488 @@ impl<'a> Verifier<'a> {
         Ok(())
     }
 
+    fn verify_variant_state(&self) -> Result<(), MirExecutableValidationError> {
+        let body = &self.function.body;
+        let entry_state = VariantFlowState {
+            variants: body
+                .locals
+                .iter()
+                .map(|local| match self.type_at(local.ty).kind {
+                    MirTypeKind::Enum(_) => EnumVariantState::Unknown,
+                    _ => EnumVariantState::NotEnum,
+                })
+                .collect(),
+            discriminant_sources: vec![None; body.locals.len()],
+        };
+        let mut inputs = vec![None; body.blocks.len()];
+        inputs[body.entry.0 as usize] = Some(entry_state);
+        let mut queue = VecDeque::from([body.entry]);
+        while let Some(block_id) = queue.pop_front() {
+            let input = inputs[block_id.0 as usize]
+                .as_ref()
+                .expect("queued blocks have a variant input state")
+                .clone();
+            for (target, state) in self.transfer_variant_state(block_id, input, false)? {
+                let slot = &mut inputs[target.0 as usize];
+                let changed = match slot {
+                    Some(current) => merge_variant_state(current, &state),
+                    None => {
+                        *slot = Some(state);
+                        true
+                    }
+                };
+                if changed {
+                    queue.push_back(target);
+                }
+            }
+        }
+
+        for (index, input) in inputs.into_iter().enumerate() {
+            let input = input.ok_or_else(|| {
+                error(
+                    format!("{}.body.blocks[{index}]", self.path),
+                    "variant analysis did not reach block",
+                )
+            })?;
+            self.transfer_variant_state(MirBlockId(index as u32), input, true)?;
+        }
+        Ok(())
+    }
+
+    fn transfer_variant_state(
+        &self,
+        block_id: MirBlockId,
+        mut state: VariantFlowState,
+        strict: bool,
+    ) -> Result<Vec<(MirBlockId, VariantFlowState)>, MirExecutableValidationError> {
+        let block = &self.function.body.blocks[block_id.0 as usize];
+        let block_path = format!("{}.body.blocks[{}]", self.path, block_id.0);
+        for (index, statement) in block.statements.iter().enumerate() {
+            let path = format!("{block_path}.statements[{index}]");
+            match &statement.kind {
+                MirStatementKind::Assign { place, value } => {
+                    self.check_variant_place(&format!("{path}.place"), place, &state, strict)?;
+                    self.check_variant_rvalue(&format!("{path}.value"), value, &state, strict)?;
+                    let next_variant = self.variant_state_from_rvalue(place.ty, value, &state);
+                    let next_discriminant = self.discriminant_source_from_rvalue(value);
+                    if let Some(borrowed) = self.mutably_borrowed_enum_local(value) {
+                        invalidate_discriminant_observations(&mut state, borrowed);
+                        state.variants[borrowed.0 as usize] = EnumVariantState::Unknown;
+                    }
+                    if place.projection.is_empty() {
+                        let local = place.local.0 as usize;
+                        invalidate_discriminant_observations(&mut state, place.local);
+                        state.variants[local] = next_variant;
+                        state.discriminant_sources[local] = next_discriminant;
+                    }
+                }
+                MirStatementKind::Define { rvalue, .. } => {
+                    self.check_variant_rvalue(&format!("{path}.rvalue"), rvalue, &state, strict)?;
+                }
+                MirStatementKind::SetDiscriminant { place, variant } => {
+                    self.check_variant_place(&format!("{path}.place"), place, &state, strict)?;
+                    if !place.projection.is_empty() {
+                        return Err(error(
+                            format!("{path}.place"),
+                            "set-discriminant requires a direct local until field-sensitive variant state is modeled",
+                        ));
+                    }
+                    invalidate_discriminant_observations(&mut state, place.local);
+                    state.variants[place.local.0 as usize] = EnumVariantState::Active {
+                        variant: *variant,
+                        payload_initialized: true,
+                    };
+                }
+                MirStatementKind::StorageLive(local) | MirStatementKind::StorageDead(local) => {
+                    let index = local.0 as usize;
+                    invalidate_discriminant_observations(&mut state, *local);
+                    state.variants[index] = match self.type_at(self.local(*local).ty).kind {
+                        MirTypeKind::Enum(_) => EnumVariantState::Unknown,
+                        _ => EnumVariantState::NotEnum,
+                    };
+                    state.discriminant_sources[index] = None;
+                }
+                MirStatementKind::Deinit(place) => {
+                    self.check_variant_place(&format!("{path}.place"), place, &state, strict)?;
+                    if place.projection.is_empty() {
+                        let local = place.local.0 as usize;
+                        invalidate_discriminant_observations(&mut state, place.local);
+                        if matches!(self.type_at(place.ty).kind, MirTypeKind::Enum(_)) {
+                            state.variants[local] = EnumVariantState::Unknown;
+                        }
+                        state.discriminant_sources[local] = None;
+                    }
+                }
+                MirStatementKind::Nop => {}
+            }
+        }
+
+        let path = format!("{block_path}.terminator");
+        let mut output = Vec::new();
+        match &block.terminator.kind {
+            MirTerminatorKind::Goto(edge) => {
+                self.check_variant_edge(&path, edge, &state, strict)?;
+                output.push((edge.target, state));
+            }
+            MirTerminatorKind::SwitchInt {
+                discr,
+                targets,
+                otherwise,
+            } => {
+                self.check_variant_operand(&format!("{path}.discr"), discr, &state, strict)?;
+                let source = self.discriminant_source_from_operand(discr, &state);
+                for (index, (value, edge)) in targets.iter().enumerate() {
+                    let mut edge_state = state.clone();
+                    self.refine_variant_for_discriminant(source, *value, &mut edge_state);
+                    self.check_variant_edge(
+                        &format!("{path}.targets[{index}]"),
+                        edge,
+                        &edge_state,
+                        strict,
+                    )?;
+                    output.push((edge.target, edge_state));
+                }
+                let mut edge_state = state;
+                self.refine_variant_for_otherwise(source, targets, &mut edge_state);
+                self.check_variant_edge(
+                    &format!("{path}.otherwise"),
+                    otherwise,
+                    &edge_state,
+                    strict,
+                )?;
+                output.push((otherwise.target, edge_state));
+            }
+            MirTerminatorKind::Return | MirTerminatorKind::Unreachable => {}
+            MirTerminatorKind::Call(call) => {
+                for (index, argument) in call.arguments.iter().enumerate() {
+                    self.check_variant_operand(
+                        &format!("{path}.arguments[{index}]"),
+                        argument,
+                        &state,
+                        strict,
+                    )?;
+                }
+                if let Some(destination) = &call.destination {
+                    self.check_variant_place(
+                        &format!("{path}.destination"),
+                        destination,
+                        &state,
+                        strict,
+                    )?;
+                }
+                invalidate_all_enum_authority(&mut state);
+                if let Some(edge) = &call.target {
+                    let mut normal = state.clone();
+                    if let Some(destination) = &call.destination
+                        && destination.projection.is_empty()
+                    {
+                        let local = destination.local.0 as usize;
+                        invalidate_discriminant_observations(&mut normal, destination.local);
+                        normal.variants[local] = match self.type_at(destination.ty).kind {
+                            MirTypeKind::Enum(_) => EnumVariantState::Unknown,
+                            _ => EnumVariantState::NotEnum,
+                        };
+                        normal.discriminant_sources[local] = None;
+                    }
+                    self.check_variant_edge(&format!("{path}.target"), edge, &normal, strict)?;
+                    output.push((edge.target, normal));
+                }
+                self.push_variant_unwind(&path, &call.unwind, &state, strict, &mut output)?;
+            }
+            MirTerminatorKind::Drop {
+                place,
+                target,
+                unwind,
+            } => {
+                self.check_variant_place(&format!("{path}.place"), place, &state, strict)?;
+                let mut after_drop = state;
+                if place.projection.is_empty() {
+                    invalidate_discriminant_observations(&mut after_drop, place.local);
+                    if matches!(self.type_at(place.ty).kind, MirTypeKind::Enum(_)) {
+                        after_drop.variants[place.local.0 as usize] = EnumVariantState::Unknown;
+                    }
+                }
+                self.check_variant_edge(&format!("{path}.target"), target, &after_drop, strict)?;
+                output.push((target.target, after_drop.clone()));
+                self.push_variant_unwind(&path, unwind, &after_drop, strict, &mut output)?;
+            }
+            MirTerminatorKind::Assert {
+                condition,
+                target,
+                unwind,
+                ..
+            } => {
+                self.check_variant_operand(
+                    &format!("{path}.condition"),
+                    condition,
+                    &state,
+                    strict,
+                )?;
+                self.check_variant_edge(&format!("{path}.target"), target, &state, strict)?;
+                output.push((target.target, state.clone()));
+                self.push_variant_unwind(&path, unwind, &state, strict, &mut output)?;
+            }
+        }
+        Ok(output)
+    }
+
+    fn push_variant_unwind(
+        &self,
+        path: &str,
+        unwind: &MirUnwindAction,
+        state: &VariantFlowState,
+        strict: bool,
+        output: &mut Vec<(MirBlockId, VariantFlowState)>,
+    ) -> Result<(), MirExecutableValidationError> {
+        if let MirUnwindAction::Cleanup(edge) = unwind {
+            self.check_variant_edge(path, edge, state, strict)?;
+            output.push((edge.target, state.clone()));
+        }
+        Ok(())
+    }
+
+    fn check_variant_edge(
+        &self,
+        path: &str,
+        edge: &MirEdge,
+        state: &VariantFlowState,
+        strict: bool,
+    ) -> Result<(), MirExecutableValidationError> {
+        for (index, argument) in edge.arguments.iter().enumerate() {
+            self.check_variant_operand(
+                &format!("{path}.arguments[{index}]"),
+                argument,
+                state,
+                strict,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn check_variant_rvalue(
+        &self,
+        path: &str,
+        rvalue: &MirRvalue,
+        state: &VariantFlowState,
+        strict: bool,
+    ) -> Result<(), MirExecutableValidationError> {
+        match rvalue {
+            MirRvalue::Use(operand)
+            | MirRvalue::UnaryOp { operand, .. }
+            | MirRvalue::Cast { operand, .. }
+            | MirRvalue::Repeat { operand, .. } => {
+                self.check_variant_operand(path, operand, state, strict)
+            }
+            MirRvalue::BinaryOp { lhs, rhs, .. } | MirRvalue::CheckedBinaryOp { lhs, rhs, .. } => {
+                self.check_variant_operand(&format!("{path}.lhs"), lhs, state, strict)?;
+                self.check_variant_operand(&format!("{path}.rhs"), rhs, state, strict)
+            }
+            MirRvalue::Ref { place, .. }
+            | MirRvalue::AddressOf { place, .. }
+            | MirRvalue::Len(place)
+            | MirRvalue::Discriminant(place) => {
+                self.check_variant_place(&format!("{path}.place"), place, state, strict)
+            }
+            MirRvalue::Aggregate { operands, .. } => {
+                for (index, operand) in operands.iter().enumerate() {
+                    self.check_variant_operand(
+                        &format!("{path}.operands[{index}]"),
+                        operand,
+                        state,
+                        strict,
+                    )?;
+                }
+                Ok(())
+            }
+            MirRvalue::ThreadIndex1d => Ok(()),
+        }
+    }
+
+    fn check_variant_operand(
+        &self,
+        path: &str,
+        operand: &MirOperand,
+        state: &VariantFlowState,
+        strict: bool,
+    ) -> Result<(), MirExecutableValidationError> {
+        match operand {
+            MirOperand::Copy(place) | MirOperand::Move(place) => {
+                self.check_variant_place(path, place, state, strict)
+            }
+            MirOperand::Constant(_) | MirOperand::Value(_) => Ok(()),
+        }
+    }
+
+    fn check_variant_place(
+        &self,
+        path: &str,
+        place: &MirPlace,
+        state: &VariantFlowState,
+        strict: bool,
+    ) -> Result<(), MirExecutableValidationError> {
+        let local = self.local(place.local);
+        let mut current = ProjectionState {
+            ty: ProjectionType::Type(self.type_at(local.ty)),
+            writable: local.mutable,
+            address_space: local.storage_address_space,
+        };
+        for (index, projection) in place.projection.iter().enumerate() {
+            let projection_path = format!("{path}.projection[{index}]");
+            if let MirProjection::Downcast { variant } = projection {
+                let ProjectionType::Type(ty) = &current.ty else {
+                    return Err(error(&projection_path, "nested downcast is invalid"));
+                };
+                let MirTypeKind::Enum(enum_ty) = &ty.kind else {
+                    return Err(error(&projection_path, "downcast requires an enum"));
+                };
+                let selected = enum_ty
+                    .variants
+                    .iter()
+                    .find(|candidate| candidate.index == *variant)
+                    .expect("structural verification checked the variant index");
+                if !selected.aggregate.fields.is_empty() {
+                    if index != 0 {
+                        return Err(error(
+                            projection_path,
+                            "nested payload downcast requires field-sensitive variant authority",
+                        ));
+                    }
+                    if strict
+                        && state.variants[place.local.0 as usize]
+                            != (EnumVariantState::Active {
+                                variant: *variant,
+                                payload_initialized: true,
+                            })
+                    {
+                        return Err(error(
+                            projection_path,
+                            "payload downcast requires an exact active variant with initialized payload",
+                        ));
+                    }
+                }
+            }
+            current = self.project(&projection_path, current, projection)?;
+        }
+        Ok(())
+    }
+
+    fn variant_state_from_rvalue(
+        &self,
+        destination: MirTypeId,
+        rvalue: &MirRvalue,
+        state: &VariantFlowState,
+    ) -> EnumVariantState {
+        let MirTypeKind::Enum(destination_enum) = &self.type_at(destination).kind else {
+            return EnumVariantState::NotEnum;
+        };
+        match rvalue {
+            MirRvalue::Aggregate {
+                kind: MirAggregateKind::Adt { identity, variant },
+                ..
+            } if *identity == destination_enum.identity => EnumVariantState::Active {
+                variant: *variant,
+                payload_initialized: true,
+            },
+            MirRvalue::Use(MirOperand::Copy(place) | MirOperand::Move(place))
+                if place.projection.is_empty() =>
+            {
+                state.variants[place.local.0 as usize]
+            }
+            _ => EnumVariantState::Unknown,
+        }
+    }
+
+    fn discriminant_source_from_rvalue(&self, rvalue: &MirRvalue) -> Option<MirLocalId> {
+        match rvalue {
+            MirRvalue::Discriminant(place) if place.projection.is_empty() => Some(place.local),
+            _ => None,
+        }
+    }
+
+    fn mutably_borrowed_enum_local(&self, rvalue: &MirRvalue) -> Option<MirLocalId> {
+        let place = match rvalue {
+            MirRvalue::Ref {
+                mutability: MirMutability::Mutable,
+                place,
+                ..
+            }
+            | MirRvalue::AddressOf {
+                mutability: MirMutability::Mutable,
+                place,
+                ..
+            } if place.projection.is_empty() => place,
+            _ => return None,
+        };
+        matches!(self.type_at(place.ty).kind, MirTypeKind::Enum(_)).then_some(place.local)
+    }
+
+    fn discriminant_source_from_operand(
+        &self,
+        operand: &MirOperand,
+        state: &VariantFlowState,
+    ) -> Option<MirLocalId> {
+        match operand {
+            MirOperand::Copy(place) | MirOperand::Move(place) if place.projection.is_empty() => {
+                state.discriminant_sources[place.local.0 as usize]
+            }
+            MirOperand::Constant(_)
+            | MirOperand::Value(_)
+            | MirOperand::Copy(_)
+            | MirOperand::Move(_) => None,
+        }
+    }
+
+    fn refine_variant_for_discriminant(
+        &self,
+        source: Option<MirLocalId>,
+        discriminant: u128,
+        state: &mut VariantFlowState,
+    ) {
+        let Some(source) = source else {
+            return;
+        };
+        let MirTypeKind::Enum(enum_ty) = &self.type_at(self.local(source).ty).kind else {
+            return;
+        };
+        if let Some(variant) = enum_ty
+            .variants
+            .iter()
+            .find(|variant| variant.discriminant == discriminant)
+        {
+            state.variants[source.0 as usize] = EnumVariantState::Active {
+                variant: variant.index,
+                payload_initialized: true,
+            };
+        }
+    }
+
+    fn refine_variant_for_otherwise(
+        &self,
+        source: Option<MirLocalId>,
+        targets: &[(u128, MirEdge)],
+        state: &mut VariantFlowState,
+    ) {
+        let Some(source) = source else {
+            return;
+        };
+        let MirTypeKind::Enum(enum_ty) = &self.type_at(self.local(source).ty).kind else {
+            return;
+        };
+        let mut remaining = enum_ty.variants.iter().filter(|variant| {
+            !targets
+                .iter()
+                .any(|(value, _)| *value == variant.discriminant)
+        });
+        if let Some(variant) = remaining.next()
+            && remaining.next().is_none()
+        {
+            state.variants[source.0 as usize] = EnumVariantState::Active {
+                variant: variant.index,
+                payload_initialized: true,
+            };
+        }
+    }
+
     fn transfer_initialization(
         &self,
         block_id: MirBlockId,
@@ -2626,6 +3223,38 @@ impl<'a> Verifier<'a> {
         }
     }
 
+    fn verify_reference_origin(
+        &self,
+        path: &str,
+        place: &MirPlace,
+    ) -> Result<(), MirExecutableValidationError> {
+        let local = self.local(place.local);
+        let mut current = ProjectionState {
+            ty: ProjectionType::Type(self.type_at(local.ty)),
+            writable: local.mutable,
+            address_space: local.storage_address_space,
+        };
+        for (index, projection) in place.projection.iter().enumerate() {
+            let projection_path = format!("{path}.projection[{index}]");
+            if matches!(projection, MirProjection::Deref)
+                && matches!(
+                    &current.ty,
+                    ProjectionType::Type(MirSemanticType {
+                        kind: MirTypeKind::RawPointer { .. },
+                        ..
+                    })
+                )
+            {
+                return Err(error(
+                    projection_path,
+                    "reference creation through a raw pointer requires external provenance authority",
+                ));
+            }
+            current = self.project(&projection_path, current, projection)?;
+        }
+        Ok(())
+    }
+
     fn find_scalar_type(
         &self,
         path: &str,
@@ -2826,6 +3455,22 @@ enum LocalInitialization {
     MaybeInvalid,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum EnumVariantState {
+    NotEnum,
+    Unknown,
+    Active {
+        variant: u32,
+        payload_initialized: bool,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct VariantFlowState {
+    variants: Vec<EnumVariantState>,
+    discriminant_sources: Vec<Option<MirLocalId>>,
+}
+
 fn merge_initialization(
     current: &mut [LocalInitialization],
     incoming: &[LocalInitialization],
@@ -2843,6 +3488,54 @@ fn merge_initialization(
         }
     }
     changed
+}
+
+fn merge_variant_state(current: &mut VariantFlowState, incoming: &VariantFlowState) -> bool {
+    let mut changed = false;
+    for (current, incoming) in current.variants.iter_mut().zip(&incoming.variants) {
+        let merged = if *current == *incoming {
+            *current
+        } else {
+            EnumVariantState::Unknown
+        };
+        if *current != merged {
+            *current = merged;
+            changed = true;
+        }
+    }
+    for (current, incoming) in current
+        .discriminant_sources
+        .iter_mut()
+        .zip(&incoming.discriminant_sources)
+    {
+        let merged = if *current == *incoming {
+            *current
+        } else {
+            None
+        };
+        if *current != merged {
+            *current = merged;
+            changed = true;
+        }
+    }
+    changed
+}
+
+fn invalidate_discriminant_observations(state: &mut VariantFlowState, source: MirLocalId) {
+    for observed_source in &mut state.discriminant_sources {
+        if *observed_source == Some(source) {
+            *observed_source = None;
+        }
+    }
+}
+
+fn invalidate_all_enum_authority(state: &mut VariantFlowState) {
+    for variant in &mut state.variants {
+        if !matches!(variant, EnumVariantState::NotEnum) {
+            *variant = EnumVariantState::Unknown;
+        }
+    }
+    state.discriminant_sources.fill(None);
 }
 
 struct ProjectionState<'a> {
@@ -2900,16 +3593,48 @@ fn push_unwind<'a>(edges: &mut Vec<&'a MirEdge>, unwind: &'a MirUnwindAction) {
     }
 }
 
-fn valid_cast(kind: MirCastKind, source: &MirTypeKind, destination: &MirTypeKind) -> bool {
-    match kind {
-        MirCastKind::IntToInt => is_integer(source) && is_integer(destination),
-        MirCastKind::IntToFloat => is_integer(source) && is_float(destination),
-        MirCastKind::FloatToInt => is_float(source) && is_integer(destination),
-        MirCastKind::FloatToFloat => is_float(source) && is_float(destination),
-        MirCastKind::PointerToPointer => is_pointer(source) && is_pointer(destination),
-        MirCastKind::PointerToInt => is_pointer(source) && is_integer(destination),
-        MirCastKind::IntToPointer => is_integer(source) && is_pointer(destination),
+fn valid_cast(kind: MirCastKind, source: &MirSemanticType, destination: &MirSemanticType) -> bool {
+    if matches!(destination.kind, MirTypeKind::Scalar(MirScalarType::Char)) {
+        return false;
     }
+    if matches!(source.kind, MirTypeKind::Scalar(MirScalarType::Char)) {
+        return kind == MirCastKind::IntToInt && is_machine_integer(&destination.kind);
+    }
+    match kind {
+        MirCastKind::IntToInt => is_integer(&source.kind) && is_integer(&destination.kind),
+        MirCastKind::IntToFloat => is_integer(&source.kind) && is_float(&destination.kind),
+        MirCastKind::FloatToInt => is_float(&source.kind) && is_integer(&destination.kind),
+        MirCastKind::FloatToFloat => is_float(&source.kind) && is_float(&destination.kind),
+        MirCastKind::PointerToPointer => raw_pointer_cast_is_valid(source, destination),
+        MirCastKind::PointerToInt => is_pointer(&source.kind) && is_integer(&destination.kind),
+        MirCastKind::IntToPointer => {
+            is_integer(&source.kind) && matches!(destination.kind, MirTypeKind::RawPointer { .. })
+        }
+    }
+}
+
+fn raw_pointer_cast_is_valid(source: &MirSemanticType, destination: &MirSemanticType) -> bool {
+    let (
+        MirTypeKind::RawPointer {
+            mutability: source_mutability,
+            address_space: source_address_space,
+            ..
+        },
+        MirTypeKind::RawPointer {
+            mutability: destination_mutability,
+            address_space: destination_address_space,
+            ..
+        },
+    ) = (&source.kind, &destination.kind)
+    else {
+        return false;
+    };
+    source.layout == destination.layout
+        && source_address_space == destination_address_space
+        && !matches!(
+            (source_mutability, destination_mutability),
+            (MirMutability::Immutable, MirMutability::Mutable)
+        )
 }
 
 fn valid_binary_op(operation: MirBinaryOp, kind: &MirTypeKind) -> bool {
@@ -3085,12 +3810,13 @@ fn map_type_error(path: &str, source: MirTypeValidationError) -> MirExecutableVa
 fn validate_executable_address_space(
     path: &str,
     address_space: MirAddressSpace,
+    target: &MirExecutableTarget,
 ) -> Result<(), MirExecutableValidationError> {
-    if address_space.0 > MAX_EXECUTABLE_ADDRESS_SPACE {
+    if target.pointer_abi(address_space).is_none() {
         return Err(error(
             path,
             format!(
-                "address space {} is outside the executable MIR V1 policy 0..={MAX_EXECUTABLE_ADDRESS_SPACE}",
+                "address space {} is absent from the exact gfx942 executable pointer ABI",
                 address_space.0
             ),
         ));
@@ -3098,80 +3824,208 @@ fn validate_executable_address_space(
     Ok(())
 }
 
+fn validate_executable_target(
+    target: &MirExecutableTarget,
+) -> Result<(), MirExecutableValidationError> {
+    if target.profile != MirExecutableTargetProfile::Gfx942 {
+        return Err(error(
+            "module.target.profile",
+            "executable MIR V1 supports only the reviewed gfx942 target profile",
+        ));
+    }
+    for (path, actual, expected) in [
+        ("triple", target.triple.as_str(), GFX942_TARGET_TRIPLE),
+        ("cpu", target.cpu.as_str(), GFX942_TARGET_CPU),
+        ("features", target.features.as_str(), GFX942_TARGET_FEATURES),
+        (
+            "data_layout",
+            target.data_layout.as_str(),
+            GFX942_TARGET_DATA_LAYOUT,
+        ),
+    ] {
+        if actual != expected {
+            return Err(error(
+                format!("module.target.{path}"),
+                "target identity does not exactly match the reviewed gfx942 profile",
+            ));
+        }
+    }
+    if target.pointer_width_bits != 64 {
+        return Err(error(
+            "module.target.pointer_width_bits",
+            "gfx942 Rust usize and default pointers must be 64 bits",
+        ));
+    }
+    if target.thread_index_width_bits != 32 {
+        return Err(error(
+            "module.target.thread_index_width_bits",
+            "gfx942 thread indices must be 32 bits",
+        ));
+    }
+    if target.pointer_abis.len() != GFX942_POINTER_ABIS.len() {
+        return Err(error(
+            "module.target.pointer_abis",
+            "gfx942 pointer ABI map has missing or extra address spaces",
+        ));
+    }
+    let mut previous = None;
+    for (index, actual) in target.pointer_abis.iter().enumerate() {
+        let path = format!("module.target.pointer_abis[{index}]");
+        if previous.is_some_and(|address_space| address_space >= actual.address_space) {
+            return Err(error(
+                format!("{path}.address_space"),
+                "pointer ABI address spaces must be unique and strictly sorted",
+            ));
+        }
+        previous = Some(actual.address_space);
+        if actual != &GFX942_POINTER_ABIS[index] {
+            return Err(error(
+                path,
+                "pointer width or alignment does not match the exact gfx942 address-space ABI",
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn validate_target_type_abi(
     root: &str,
     ty: &MirSemanticType,
-    target: MirExecutableTarget,
+    target: &MirExecutableTarget,
 ) -> Result<(), MirExecutableValidationError> {
-    let pointer_bytes = u64::from(target.pointer_width_bits / 8);
-    let mut stack = vec![(root.to_owned(), ty)];
-    while let Some((path, ty)) = stack.pop() {
+    let mut stack = vec![(root.to_owned(), ty, MirAddressSpace::DEFAULT)];
+    while let Some((path, ty, containing_address_space)) = stack.pop() {
+        validate_layout_offset_range(&path, ty.layout, containing_address_space, target)?;
         match &ty.kind {
             MirTypeKind::RawPointer {
                 pointee,
                 address_space,
                 ..
             } => {
-                if ty.layout.size != Some(pointer_bytes) || ty.layout.align != pointer_bytes {
-                    return Err(error(
-                        &path,
-                        "raw-pointer size and alignment must exactly match the target pointer ABI",
-                    ));
-                }
                 validate_executable_address_space(
                     &format!("{path}.address_space"),
                     *address_space,
+                    target,
                 )?;
+                let abi = target
+                    .pointer_abi(*address_space)
+                    .expect("validated address spaces have a pointer ABI");
+                let pointer_bytes = u64::from(abi.width_bits / 8);
+                let pointer_alignment = u64::from(abi.abi_alignment_bits / 8);
+                if ty.layout.size != Some(pointer_bytes) || ty.layout.align != pointer_alignment {
+                    return Err(error(
+                        &path,
+                        "raw-pointer size and alignment must exactly match its address-space pointer ABI",
+                    ));
+                }
                 if pointee.layout.size.is_none() {
                     return Err(error(
                         format!("{path}.pointee"),
                         "thin raw pointers require a Sized pointee",
                     ));
                 }
-                stack.push((format!("{path}.pointee"), pointee));
+                stack.push((format!("{path}.pointee"), pointee, *address_space));
             }
             MirTypeKind::Reference {
                 referent,
                 address_space,
                 ..
             } => {
-                if ty.layout.size != Some(pointer_bytes) || ty.layout.align != pointer_bytes {
-                    return Err(error(
-                        &path,
-                        "reference size and alignment must exactly match the target pointer ABI",
-                    ));
-                }
                 validate_executable_address_space(
                     &format!("{path}.address_space"),
                     *address_space,
+                    target,
                 )?;
+                let abi = target
+                    .pointer_abi(*address_space)
+                    .expect("validated address spaces have a pointer ABI");
+                let pointer_bytes = u64::from(abi.width_bits / 8);
+                let pointer_alignment = u64::from(abi.abi_alignment_bits / 8);
+                if ty.layout.size != Some(pointer_bytes) || ty.layout.align != pointer_alignment {
+                    return Err(error(
+                        &path,
+                        "reference size and alignment must exactly match its address-space pointer ABI",
+                    ));
+                }
                 if referent.layout.size.is_none() {
                     return Err(error(
                         format!("{path}.referent"),
                         "thin references require a Sized referent",
                     ));
                 }
-                stack.push((format!("{path}.referent"), referent));
+                stack.push((format!("{path}.referent"), referent, *address_space));
             }
-            MirTypeKind::Slice { element } | MirTypeKind::Array { element, .. } => {
-                stack.push((format!("{path}.element"), element));
+            MirTypeKind::Slice { element } => {
+                stack.push((format!("{path}.element"), element, containing_address_space));
+            }
+            MirTypeKind::Array { element, length } => {
+                if target.pointer_width_bits == 32 && *length > u64::from(u32::MAX) {
+                    return Err(error(
+                        &path,
+                        "array length does not fit the target usize width",
+                    ));
+                }
+                let element_size = element
+                    .layout
+                    .size
+                    .expect("semantic validation requires sized array elements");
+                let total = element_size.checked_mul(*length).ok_or_else(|| {
+                    error(
+                        &path,
+                        "array element size times length overflows the executable layout width",
+                    )
+                })?;
+                if ty.layout.size != Some(total) || ty.layout.align != element.layout.align {
+                    return Err(error(
+                        &path,
+                        "array total layout is incoherent with its element size, length, or alignment",
+                    ));
+                }
+                stack.push((format!("{path}.element"), element, containing_address_space));
             }
             MirTypeKind::Tuple(aggregate) => {
                 for (index, field) in aggregate.fields.iter().enumerate() {
-                    stack.push((format!("{path}.fields[{index}].type"), &field.ty));
+                    validate_field_offset_range(
+                        &format!("{path}.fields[{index}]"),
+                        field,
+                        containing_address_space,
+                        target,
+                    )?;
+                    stack.push((
+                        format!("{path}.fields[{index}].type"),
+                        &field.ty,
+                        containing_address_space,
+                    ));
                 }
             }
             MirTypeKind::Struct(structure) => {
                 for (index, field) in structure.aggregate.fields.iter().enumerate() {
-                    stack.push((format!("{path}.fields[{index}].type"), &field.ty));
+                    validate_field_offset_range(
+                        &format!("{path}.fields[{index}]"),
+                        field,
+                        containing_address_space,
+                        target,
+                    )?;
+                    stack.push((
+                        format!("{path}.fields[{index}].type"),
+                        &field.ty,
+                        containing_address_space,
+                    ));
                 }
             }
             MirTypeKind::Enum(enum_ty) => {
                 for (variant_index, variant) in enum_ty.variants.iter().enumerate() {
                     for (field_index, field) in variant.aggregate.fields.iter().enumerate() {
+                        validate_field_offset_range(
+                            &format!("{path}.variants[{variant_index}].fields[{field_index}]"),
+                            field,
+                            containing_address_space,
+                            target,
+                        )?;
                         stack.push((
                             format!("{path}.variants[{variant_index}].fields[{field_index}].type"),
                             &field.ty,
+                            containing_address_space,
                         ));
                     }
                 }
@@ -3180,6 +4034,160 @@ fn validate_target_type_abi(
         }
     }
     Ok(())
+}
+
+fn validate_target_offset_ranges(
+    root: &str,
+    ty: &MirSemanticType,
+    containing_address_space: MirAddressSpace,
+    target: &MirExecutableTarget,
+) -> Result<(), MirExecutableValidationError> {
+    let mut stack = vec![(root.to_owned(), ty, containing_address_space)];
+    while let Some((path, ty, address_space)) = stack.pop() {
+        validate_layout_offset_range(&path, ty.layout, address_space, target)?;
+        match &ty.kind {
+            MirTypeKind::RawPointer {
+                pointee,
+                address_space: pointee_address_space,
+                ..
+            } => stack.push((format!("{path}.pointee"), pointee, *pointee_address_space)),
+            MirTypeKind::Reference {
+                referent,
+                address_space: referent_address_space,
+                ..
+            } => stack.push((
+                format!("{path}.referent"),
+                referent,
+                *referent_address_space,
+            )),
+            MirTypeKind::Slice { element } | MirTypeKind::Array { element, .. } => {
+                stack.push((format!("{path}.element"), element, address_space));
+            }
+            MirTypeKind::Tuple(aggregate) => {
+                push_offset_range_fields(
+                    &path,
+                    &aggregate.fields,
+                    address_space,
+                    target,
+                    &mut stack,
+                )?;
+            }
+            MirTypeKind::Struct(structure) => {
+                push_offset_range_fields(
+                    &path,
+                    &structure.aggregate.fields,
+                    address_space,
+                    target,
+                    &mut stack,
+                )?;
+            }
+            MirTypeKind::Enum(enum_ty) => {
+                for (variant_index, variant) in enum_ty.variants.iter().enumerate() {
+                    push_offset_range_fields(
+                        &format!("{path}.variants[{variant_index}]"),
+                        &variant.aggregate.fields,
+                        address_space,
+                        target,
+                        &mut stack,
+                    )?;
+                }
+            }
+            MirTypeKind::Unit | MirTypeKind::Scalar(_) => {}
+        }
+    }
+    Ok(())
+}
+
+fn push_offset_range_fields<'a>(
+    path: &str,
+    fields: &'a [crate::MirField],
+    address_space: MirAddressSpace,
+    target: &MirExecutableTarget,
+    stack: &mut Vec<(String, &'a MirSemanticType, MirAddressSpace)>,
+) -> Result<(), MirExecutableValidationError> {
+    for (index, field) in fields.iter().enumerate() {
+        let field_path = format!("{path}.fields[{index}]");
+        validate_field_offset_range(&field_path, field, address_space, target)?;
+        stack.push((format!("{field_path}.type"), &field.ty, address_space));
+    }
+    Ok(())
+}
+
+fn validate_field_offset_range(
+    path: &str,
+    field: &crate::MirField,
+    address_space: MirAddressSpace,
+    target: &MirExecutableTarget,
+) -> Result<(), MirExecutableValidationError> {
+    let maximum = signed_pointer_offset_max(address_space, target)?;
+    let field_size = field.ty.layout.size.unwrap_or(0);
+    let end = field.offset.checked_add(field_size).ok_or_else(|| {
+        error(
+            path,
+            "field offset plus layout size overflows the executable layout width",
+        )
+    })?;
+    if field.offset > maximum || end > maximum {
+        return Err(error(
+            path,
+            format!(
+                "field offset exceeds the signed pointer-offset range for address space {}",
+                address_space.0
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_layout_offset_range(
+    path: &str,
+    layout: crate::MirLayout,
+    address_space: MirAddressSpace,
+    target: &MirExecutableTarget,
+) -> Result<(), MirExecutableValidationError> {
+    let maximum = signed_pointer_offset_max(address_space, target)?;
+    if layout.align > maximum {
+        return Err(error(
+            format!("{path}.align"),
+            format!(
+                "layout alignment exceeds the signed pointer-offset range for address space {}",
+                address_space.0
+            ),
+        ));
+    }
+    if layout.size.is_some_and(|size| size > maximum) {
+        return Err(error(
+            format!("{path}.size"),
+            format!(
+                "layout size exceeds the signed pointer-offset range for address space {}",
+                address_space.0
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn signed_pointer_offset_max(
+    address_space: MirAddressSpace,
+    target: &MirExecutableTarget,
+) -> Result<u64, MirExecutableValidationError> {
+    let abi = target.pointer_abi(address_space).ok_or_else(|| {
+        error(
+            "module.target.pointer_abis",
+            format!(
+                "address space {} has no signed pointer-offset profile",
+                address_space.0
+            ),
+        )
+    })?;
+    match abi.width_bits {
+        32 => Ok(i32::MAX as u64),
+        64 => Ok(i64::MAX as u64),
+        _ => Err(error(
+            "module.target.pointer_abis",
+            "signed pointer-offset range requires a 32-bit or 64-bit pointer ABI",
+        )),
+    }
 }
 
 fn validate_type_budget(types: &[MirSemanticType]) -> Result<(), MirExecutableValidationError> {

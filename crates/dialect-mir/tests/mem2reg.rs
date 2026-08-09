@@ -80,10 +80,7 @@ fn loop_module() -> MirExecutableModule {
     let (types, ids) = types();
     MirExecutableModule {
         version: MirExecutableVersion::V1,
-        target: MirExecutableTarget {
-            pointer_width_bits: 32,
-            thread_index_width_bits: 32,
-        },
+        target: MirExecutableTarget::gfx942(),
         types,
         callables: vec![],
         functions: vec![MirFunction {
@@ -380,10 +377,7 @@ fn rejects_global_block_argument_amplification_before_transforming() {
         .collect();
     let input = MirExecutableModule {
         version: MirExecutableVersion::V1,
-        target: MirExecutableTarget {
-            pointer_width_bits: 32,
-            thread_index_width_bits: 32,
-        },
+        target: MirExecutableTarget::gfx942(),
         types,
         callables: vec![],
         functions: vec![MirFunction {

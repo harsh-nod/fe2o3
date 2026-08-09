@@ -1,14 +1,16 @@
 use dialect_mir::{
-    MirAddressSpace, MirAggregateLayout, MirAuthorizedDeviceImport, MirBasicBlock, MirBinaryOp,
-    MirBlockId, MirBlockParameter, MirBody, MirBodyForm, MirCall, MirCallAuthority, MirCallReturn,
-    MirCallSignature, MirCallable, MirCallee, MirConstant, MirConstantValue, MirEdge,
-    MirEnumEncoding, MirEnumType, MirExecutableModule, MirExecutableTarget, MirExecutableVersion,
-    MirExternalCallRegistry, MirExternalCallReturn, MirExternalCallSignature, MirField,
-    MirFunction, MirIntrinsic, MirLayout, MirLocalDecl, MirLocalId, MirLocalKind, MirMutability,
-    MirOperand, MirPadding, MirPlace, MirProjection, MirRvalue, MirScalarType, MirSemanticType,
-    MirSourceSpan, MirStatement, MirStatementKind, MirStructType, MirTerminator, MirTerminatorKind,
-    MirTypeId, MirTypeKind, MirUnwindAction, MirValueId, MirVariant,
+    GFX942_TARGET_DATA_LAYOUT, MirAddressSpace, MirAggregateKind, MirAggregateLayout,
+    MirAuthorizedDeviceImport, MirBasicBlock, MirBinaryOp, MirBlockId, MirBlockParameter, MirBody,
+    MirBodyForm, MirCall, MirCallAuthority, MirCallReturn, MirCallSignature, MirCallable,
+    MirCallee, MirCastKind, MirConstant, MirConstantValue, MirEdge, MirEnumEncoding, MirEnumType,
+    MirExecutableModule, MirExecutableTarget, MirExecutableVersion, MirExternalCallRegistry,
+    MirExternalCallReturn, MirExternalCallSignature, MirField, MirFunction, MirIntrinsic,
+    MirLayout, MirLocalDecl, MirLocalId, MirLocalKind, MirMutability, MirOperand, MirPadding,
+    MirPlace, MirProjection, MirRvalue, MirScalarType, MirSemanticType, MirSourceSpan,
+    MirStatement, MirStatementKind, MirStructType, MirTerminator, MirTerminatorKind, MirTypeId,
+    MirTypeKind, MirUnwindAction, MirValueId, MirVariant,
 };
+use fe2o3_compiler_ffi::EXTERNAL_DEVICE_LIBRARY_GFX942_DATA_LAYOUT_V1;
 
 fn external_registry(
     identity: &str,
@@ -72,10 +74,7 @@ fn place_module() -> MirExecutableModule {
     let (types, _, u32_id) = fixture_types();
     MirExecutableModule {
         version: MirExecutableVersion::V1,
-        target: MirExecutableTarget {
-            pointer_width_bits: 32,
-            thread_index_width_bits: 32,
-        },
+        target: MirExecutableTarget::gfx942(),
         types,
         callables: vec![],
         functions: vec![MirFunction {
@@ -117,10 +116,7 @@ fn ssa_module() -> MirExecutableModule {
     let (types, _, u32_id) = fixture_types();
     MirExecutableModule {
         version: MirExecutableVersion::V1,
-        target: MirExecutableTarget {
-            pointer_width_bits: 32,
-            thread_index_width_bits: 32,
-        },
+        target: MirExecutableTarget::gfx942(),
         types,
         callables: vec![],
         functions: vec![MirFunction {
@@ -397,10 +393,7 @@ fn rejects_double_move_of_a_conservatively_non_copy_value() {
     let tuple_id = MirTypeId(types.iter().position(|item| item == &tuple_ty).unwrap() as u32);
     let mut module = MirExecutableModule {
         version: MirExecutableVersion::V1,
-        target: MirExecutableTarget {
-            pointer_width_bits: 32,
-            thread_index_width_bits: 32,
-        },
+        target: MirExecutableTarget::gfx942(),
         types,
         callables: vec![],
         functions: vec![MirFunction {
@@ -582,6 +575,14 @@ fn sequence_module(slice: bool) -> MirExecutableModule {
         4,
         4,
     );
+    let u64_ty = ty(
+        MirTypeKind::Scalar(MirScalarType::Int {
+            signed: false,
+            bits: 64,
+        }),
+        8,
+        8,
+    );
     let array2_ty = ty(
         MirTypeKind::Array {
             element: Box::new(u32_ty.clone()),
@@ -606,6 +607,7 @@ fn sequence_module(slice: bool) -> MirExecutableModule {
     };
     let mut types = vec![
         u32_ty.clone(),
+        u64_ty.clone(),
         array2_ty.clone(),
         array4_ty.clone(),
         slice_ty.clone(),
@@ -615,6 +617,7 @@ fn sequence_module(slice: bool) -> MirExecutableModule {
         MirTypeId(types.iter().position(|item| item == needle).unwrap() as u32)
     };
     let u32_id = id(&u32_ty);
+    let u64_id = id(&u64_ty);
     let array2_id = id(&array2_ty);
     let sequence_id = if slice { id(&slice_ty) } else { id(&array4_ty) };
     let projection = if slice {
@@ -635,10 +638,7 @@ fn sequence_module(slice: bool) -> MirExecutableModule {
     let projected_ty = if slice { sequence_id } else { array2_id };
     MirExecutableModule {
         version: MirExecutableVersion::V1,
-        target: MirExecutableTarget {
-            pointer_width_bits: 32,
-            thread_index_width_bits: 32,
-        },
+        target: MirExecutableTarget::gfx942(),
         types,
         callables: vec![],
         functions: vec![MirFunction {
@@ -647,7 +647,7 @@ fn sequence_module(slice: bool) -> MirExecutableModule {
             body: MirBody {
                 form: MirBodyForm::Places,
                 locals: vec![
-                    local(u32_id, MirLocalKind::Return, true),
+                    local(u64_id, MirLocalKind::Return, true),
                     local(sequence_id, MirLocalKind::Argument, false),
                     local(u32_id, MirLocalKind::Argument, false),
                 ],
@@ -655,7 +655,7 @@ fn sequence_module(slice: bool) -> MirExecutableModule {
                     parameters: vec![],
                     statements: vec![MirStatement {
                         kind: MirStatementKind::Assign {
-                            place: MirPlace::local(MirLocalId(0), u32_id),
+                            place: MirPlace::local(MirLocalId(0), u64_id),
                             value: MirRvalue::Len(MirPlace {
                                 local: MirLocalId(1),
                                 projection: vec![projection],
@@ -718,12 +718,16 @@ fn enforces_rustc_constant_index_and_subslice_semantics() {
     );
 
     let mut constant = module;
-    let u32_id = constant.functions[0].body.locals[0].ty;
-    let MirStatementKind::Assign { value, .. } =
-        &mut constant.functions[0].body.blocks[0].statements[0].kind
+    let u32_id = constant.functions[0].body.locals[2].ty;
+    constant.functions[0].body.locals[0].ty = u32_id;
+    let MirStatementKind::Assign {
+        place: destination,
+        value,
+    } = &mut constant.functions[0].body.blocks[0].statements[0].kind
     else {
         unreachable!();
     };
+    destination.ty = u32_id;
     *value = MirRvalue::Use(MirOperand::Copy(MirPlace {
         local: MirLocalId(1),
         projection: vec![MirProjection::ConstantIndex {
@@ -801,28 +805,14 @@ fn enforces_rustc_constant_index_and_subslice_semantics() {
             .contains("must equal the static array length")
     );
 
-    let mut too_wide = sequence_module(false);
-    let u32_id = too_wide.functions[0].body.locals[0].ty;
-    let MirStatementKind::Assign { value, .. } =
-        &mut too_wide.functions[0].body.blocks[0].statements[0].kind
-    else {
-        unreachable!();
-    };
-    *value = MirRvalue::Use(MirOperand::Copy(MirPlace {
-        local: MirLocalId(1),
-        projection: vec![MirProjection::ConstantIndex {
-            offset: u64::from(u32::MAX) + 1,
-            min_length: u64::from(u32::MAX) + 2,
-            from_end: false,
-        }],
-        ty: u32_id,
-    }));
+    let mut forged_width = sequence_module(false);
+    forged_width.target.pointer_width_bits = 32;
     assert!(
-        too_wide
+        forged_width
             .validate()
             .unwrap_err()
             .reason()
-            .contains("target usize width")
+            .contains("default pointers must be 64 bits")
     );
 
     let slice = sequence_module(true);
@@ -851,25 +841,29 @@ fn target_controls_usize_index_and_thread_index_widths() {
             .validate()
             .unwrap_err()
             .reason()
-            .contains("required result type")
+            .contains("thread indices must be 32 bits")
     );
 
     let mut len = sequence_module(false);
-    len.target.pointer_width_bits = 64;
+    len.target.pointer_width_bits = 32;
     assert!(
         len.validate()
             .unwrap_err()
             .reason()
-            .contains("required result type")
+            .contains("default pointers must be 64 bits")
     );
 
     let mut index = sequence_module(false);
-    let u32_id = index.functions[0].body.locals[0].ty;
-    let MirStatementKind::Assign { value, .. } =
-        &mut index.functions[0].body.blocks[0].statements[0].kind
+    let u32_id = index.functions[0].body.locals[2].ty;
+    index.functions[0].body.locals[0].ty = u32_id;
+    let MirStatementKind::Assign {
+        place: destination,
+        value,
+    } = &mut index.functions[0].body.blocks[0].statements[0].kind
     else {
         unreachable!();
     };
+    destination.ty = u32_id;
     *value = MirRvalue::Use(MirOperand::Copy(MirPlace {
         local: MirLocalId(1),
         projection: vec![MirProjection::Index {
@@ -889,10 +883,7 @@ fn target_controls_usize_index_and_thread_index_widths() {
 fn zero_sized_constant_module(semantic_ty: MirSemanticType) -> MirExecutableModule {
     MirExecutableModule {
         version: MirExecutableVersion::V1,
-        target: MirExecutableTarget {
-            pointer_width_bits: 32,
-            thread_index_width_bits: 32,
-        },
+        target: MirExecutableTarget::gfx942(),
         types: vec![semantic_ty],
         callables: vec![],
         functions: vec![MirFunction {
@@ -1034,10 +1025,7 @@ fn set_discriminant_cannot_expose_uninitialized_payload_fields() {
     let enum_id = MirTypeId(0);
     let mut module = MirExecutableModule {
         version: MirExecutableVersion::V1,
-        target: MirExecutableTarget {
-            pointer_width_bits: 32,
-            thread_index_width_bits: 32,
-        },
+        target: MirExecutableTarget::gfx942(),
         types: vec![enum_ty],
         callables: vec![],
         functions: vec![MirFunction {
@@ -1088,6 +1076,438 @@ fn set_discriminant_cannot_expose_uninitialized_payload_fields() {
     assert!(error.reason().contains("payload fields"));
 }
 
+fn payload_enum_types() -> (Vec<MirSemanticType>, MirTypeId, MirTypeId) {
+    let enum_ty = payload_enum_type();
+    let u32_ty = ty(
+        MirTypeKind::Scalar(MirScalarType::Int {
+            signed: false,
+            bits: 32,
+        }),
+        4,
+        4,
+    );
+    let mut types = vec![enum_ty.clone(), u32_ty.clone()];
+    types.sort_by_key(|item| item.canonical_text().unwrap());
+    let enum_id = MirTypeId(types.iter().position(|item| item == &enum_ty).unwrap() as u32);
+    let u32_id = MirTypeId(types.iter().position(|item| item == &u32_ty).unwrap() as u32);
+    (types, enum_id, u32_id)
+}
+
+fn payload_field_place(u32_id: MirTypeId) -> MirPlace {
+    MirPlace {
+        local: MirLocalId(1),
+        projection: vec![
+            MirProjection::Downcast { variant: 1 },
+            MirProjection::Field { index: 0 },
+        ],
+        ty: u32_id,
+    }
+}
+
+fn discriminant_downcast_module(join_before_downcast: bool) -> MirExecutableModule {
+    let (types, enum_id, u32_id) = payload_enum_types();
+    let downcast = MirStatement {
+        kind: MirStatementKind::Assign {
+            place: MirPlace::local(MirLocalId(0), u32_id),
+            value: MirRvalue::Use(MirOperand::Copy(payload_field_place(u32_id))),
+        },
+        span: None,
+    };
+    let fallback = MirStatement {
+        kind: MirStatementKind::Assign {
+            place: MirPlace::local(MirLocalId(0), u32_id),
+            value: MirRvalue::Use(MirOperand::Constant(MirConstant {
+                ty: u32_id,
+                value: MirConstantValue::Integer(0),
+            })),
+        },
+        span: None,
+    };
+    let mut blocks = vec![MirBasicBlock {
+        parameters: vec![],
+        statements: vec![MirStatement {
+            kind: MirStatementKind::Assign {
+                place: MirPlace::local(MirLocalId(2), u32_id),
+                value: MirRvalue::Discriminant(MirPlace::local(MirLocalId(1), enum_id)),
+            },
+            span: None,
+        }],
+        terminator: terminator(MirTerminatorKind::SwitchInt {
+            discr: MirOperand::Copy(MirPlace::local(MirLocalId(2), u32_id)),
+            targets: vec![(1, MirEdge::new(MirBlockId(1)))],
+            otherwise: MirEdge::new(MirBlockId(2)),
+        }),
+    }];
+    if join_before_downcast {
+        blocks.extend([
+            MirBasicBlock {
+                parameters: vec![],
+                statements: vec![],
+                terminator: terminator(MirTerminatorKind::Goto(MirEdge::new(MirBlockId(3)))),
+            },
+            MirBasicBlock {
+                parameters: vec![],
+                statements: vec![],
+                terminator: terminator(MirTerminatorKind::Goto(MirEdge::new(MirBlockId(3)))),
+            },
+            MirBasicBlock {
+                parameters: vec![],
+                statements: vec![downcast],
+                terminator: terminator(MirTerminatorKind::Return),
+            },
+        ]);
+    } else {
+        blocks.extend([
+            MirBasicBlock {
+                parameters: vec![],
+                statements: vec![downcast],
+                terminator: terminator(MirTerminatorKind::Return),
+            },
+            MirBasicBlock {
+                parameters: vec![],
+                statements: vec![fallback],
+                terminator: terminator(MirTerminatorKind::Return),
+            },
+        ]);
+    }
+
+    MirExecutableModule {
+        version: MirExecutableVersion::V1,
+        target: MirExecutableTarget::gfx942(),
+        types,
+        callables: vec![],
+        functions: vec![MirFunction {
+            identity: "fixture::variant_refinement".into(),
+            span: None,
+            body: MirBody {
+                form: MirBodyForm::Places,
+                locals: vec![
+                    local(u32_id, MirLocalKind::Return, true),
+                    local(enum_id, MirLocalKind::Argument, false),
+                    local(u32_id, MirLocalKind::Temporary, true),
+                ],
+                blocks,
+                entry: MirBlockId(0),
+            },
+        }],
+    }
+}
+
+#[test]
+fn payload_downcasts_require_path_exact_active_variants() {
+    let (types, enum_id, u32_id) = payload_enum_types();
+    let unknown_argument = MirExecutableModule {
+        version: MirExecutableVersion::V1,
+        target: MirExecutableTarget::gfx942(),
+        types,
+        callables: vec![],
+        functions: vec![MirFunction {
+            identity: "fixture::unknown_downcast".into(),
+            span: None,
+            body: MirBody {
+                form: MirBodyForm::Places,
+                locals: vec![
+                    local(u32_id, MirLocalKind::Return, true),
+                    local(enum_id, MirLocalKind::Argument, false),
+                ],
+                blocks: vec![MirBasicBlock {
+                    parameters: vec![],
+                    statements: vec![MirStatement {
+                        kind: MirStatementKind::Assign {
+                            place: MirPlace::local(MirLocalId(0), u32_id),
+                            value: MirRvalue::Use(MirOperand::Copy(payload_field_place(u32_id))),
+                        },
+                        span: None,
+                    }],
+                    terminator: terminator(MirTerminatorKind::Return),
+                }],
+                entry: MirBlockId(0),
+            },
+        }],
+    };
+    assert!(
+        unknown_argument
+            .validate()
+            .unwrap_err()
+            .reason()
+            .contains("exact active variant")
+    );
+
+    discriminant_downcast_module(false).validate().unwrap();
+    let mut stale_discriminant = discriminant_downcast_module(false);
+    stale_discriminant.functions[0].body.locals[1].mutable = true;
+    stale_discriminant.functions[0].body.blocks[0]
+        .statements
+        .push(MirStatement {
+            kind: MirStatementKind::SetDiscriminant {
+                place: MirPlace::local(MirLocalId(1), enum_id),
+                variant: 0,
+            },
+            span: None,
+        });
+    assert!(
+        stale_discriminant
+            .validate()
+            .unwrap_err()
+            .reason()
+            .contains("exact active variant")
+    );
+    assert!(
+        discriminant_downcast_module(true)
+            .validate()
+            .unwrap_err()
+            .reason()
+            .contains("exact active variant")
+    );
+}
+
+#[test]
+fn aggregate_construction_initializes_variant_payload_authority() {
+    let (types, enum_id, u32_id) = payload_enum_types();
+    let module = MirExecutableModule {
+        version: MirExecutableVersion::V1,
+        target: MirExecutableTarget::gfx942(),
+        types,
+        callables: vec![],
+        functions: vec![MirFunction {
+            identity: "fixture::constructed_downcast".into(),
+            span: None,
+            body: MirBody {
+                form: MirBodyForm::Places,
+                locals: vec![
+                    local(u32_id, MirLocalKind::Return, true),
+                    local(enum_id, MirLocalKind::Temporary, true),
+                ],
+                blocks: vec![MirBasicBlock {
+                    parameters: vec![],
+                    statements: vec![
+                        MirStatement {
+                            kind: MirStatementKind::Assign {
+                                place: MirPlace::local(MirLocalId(1), enum_id),
+                                value: MirRvalue::Aggregate {
+                                    kind: MirAggregateKind::Adt {
+                                        identity: "fixture::Payload".into(),
+                                        variant: 1,
+                                    },
+                                    operands: vec![MirOperand::Constant(MirConstant {
+                                        ty: u32_id,
+                                        value: MirConstantValue::Integer(7),
+                                    })],
+                                },
+                            },
+                            span: None,
+                        },
+                        MirStatement {
+                            kind: MirStatementKind::Assign {
+                                place: MirPlace::local(MirLocalId(0), u32_id),
+                                value: MirRvalue::Use(MirOperand::Copy(payload_field_place(
+                                    u32_id,
+                                ))),
+                            },
+                            span: None,
+                        },
+                    ],
+                    terminator: terminator(MirTerminatorKind::Return),
+                }],
+                entry: MirBlockId(0),
+            },
+        }],
+    };
+    module.validate().unwrap();
+}
+
+#[test]
+fn calls_invalidate_enum_authority_through_mutable_raw_aliases_and_joins() {
+    let enum_ty = payload_enum_type();
+    let unit_ty = ty(MirTypeKind::Unit, 0, 1);
+    let bool_ty = ty(MirTypeKind::Scalar(MirScalarType::Bool), 1, 1);
+    let u32_ty = ty(
+        MirTypeKind::Scalar(MirScalarType::Int {
+            signed: false,
+            bits: 32,
+        }),
+        4,
+        4,
+    );
+    let mut_enum_ptr_ty = ty(
+        MirTypeKind::RawPointer {
+            pointee: Box::new(enum_ty.clone()),
+            mutability: MirMutability::Mutable,
+            address_space: MirAddressSpace(1),
+        },
+        8,
+        8,
+    );
+    let mut types = vec![
+        enum_ty.clone(),
+        unit_ty.clone(),
+        bool_ty.clone(),
+        u32_ty.clone(),
+        mut_enum_ptr_ty.clone(),
+    ];
+    types.sort_by_key(|item| item.canonical_text().unwrap());
+    let id = |needle: &MirSemanticType| {
+        MirTypeId(types.iter().position(|item| item == needle).unwrap() as u32)
+    };
+    let enum_id = id(&enum_ty);
+    let unit_id = id(&unit_ty);
+    let bool_id = id(&bool_ty);
+    let u32_id = id(&u32_ty);
+    let mut_enum_ptr_id = id(&mut_enum_ptr_ty);
+    let payload_place = MirPlace {
+        local: MirLocalId(1),
+        projection: vec![
+            MirProjection::Downcast { variant: 1 },
+            MirProjection::Field { index: 0 },
+        ],
+        ty: u32_id,
+    };
+    let call = MirTerminatorKind::Call(MirCall {
+        callee: MirCallee::Direct("fixture::mutate_enum".into()),
+        arguments: vec![MirOperand::Copy(MirPlace::local(
+            MirLocalId(2),
+            mut_enum_ptr_id,
+        ))],
+        destination: Some(MirPlace::local(MirLocalId(5), unit_id)),
+        target: Some(MirEdge::new(MirBlockId(4))),
+        unwind: MirUnwindAction::Unreachable,
+    });
+    let mut module = MirExecutableModule {
+        version: MirExecutableVersion::V1,
+        target: MirExecutableTarget::gfx942(),
+        types,
+        callables: vec![MirCallable {
+            identity: "fixture::mutate_enum".into(),
+            authority: MirCallAuthority::DeviceImport {
+                contract: "fixture::mutate_enum::v1".into(),
+            },
+            signature: MirCallSignature {
+                inputs: vec![mut_enum_ptr_id],
+                output: MirCallReturn::Value(unit_id),
+                can_unwind: false,
+            },
+        }],
+        functions: vec![MirFunction {
+            identity: "fixture::call_alias_join".into(),
+            span: None,
+            body: MirBody {
+                form: MirBodyForm::Places,
+                locals: vec![
+                    local(u32_id, MirLocalKind::Return, true),
+                    local(enum_id, MirLocalKind::Argument, false),
+                    local(mut_enum_ptr_id, MirLocalKind::Argument, false),
+                    local(bool_id, MirLocalKind::Argument, false),
+                    local(u32_id, MirLocalKind::Temporary, true),
+                    local(unit_id, MirLocalKind::Temporary, true),
+                ],
+                blocks: vec![
+                    MirBasicBlock {
+                        parameters: vec![],
+                        statements: vec![MirStatement {
+                            kind: MirStatementKind::Assign {
+                                place: MirPlace::local(MirLocalId(4), u32_id),
+                                value: MirRvalue::Discriminant(MirPlace::local(
+                                    MirLocalId(1),
+                                    enum_id,
+                                )),
+                            },
+                            span: None,
+                        }],
+                        terminator: terminator(MirTerminatorKind::SwitchInt {
+                            discr: MirOperand::Copy(MirPlace::local(MirLocalId(4), u32_id)),
+                            targets: vec![(1, MirEdge::new(MirBlockId(1)))],
+                            otherwise: MirEdge::new(MirBlockId(5)),
+                        }),
+                    },
+                    MirBasicBlock {
+                        parameters: vec![],
+                        statements: vec![],
+                        terminator: terminator(MirTerminatorKind::SwitchInt {
+                            discr: MirOperand::Copy(MirPlace::local(MirLocalId(3), bool_id)),
+                            targets: vec![(1, MirEdge::new(MirBlockId(2)))],
+                            otherwise: MirEdge::new(MirBlockId(3)),
+                        }),
+                    },
+                    MirBasicBlock {
+                        parameters: vec![],
+                        statements: vec![],
+                        terminator: terminator(call),
+                    },
+                    MirBasicBlock {
+                        parameters: vec![],
+                        statements: vec![],
+                        terminator: terminator(MirTerminatorKind::Goto(MirEdge::new(MirBlockId(
+                            4,
+                        )))),
+                    },
+                    MirBasicBlock {
+                        parameters: vec![],
+                        statements: vec![MirStatement {
+                            kind: MirStatementKind::Assign {
+                                place: MirPlace::local(MirLocalId(0), u32_id),
+                                value: MirRvalue::Use(MirOperand::Copy(payload_place)),
+                            },
+                            span: None,
+                        }],
+                        terminator: terminator(MirTerminatorKind::Return),
+                    },
+                    MirBasicBlock {
+                        parameters: vec![],
+                        statements: vec![MirStatement {
+                            kind: MirStatementKind::Assign {
+                                place: MirPlace::local(MirLocalId(0), u32_id),
+                                value: MirRvalue::Use(MirOperand::Constant(MirConstant {
+                                    ty: u32_id,
+                                    value: MirConstantValue::Integer(0),
+                                })),
+                            },
+                            span: None,
+                        }],
+                        terminator: terminator(MirTerminatorKind::Return),
+                    },
+                ],
+                entry: MirBlockId(0),
+            },
+        }],
+    };
+    let registry = external_registry(
+        "fixture::mutate_enum",
+        "fixture::mutate_enum::v1",
+        vec![mut_enum_ptr_ty],
+        MirExternalCallReturn::Value(unit_ty),
+        false,
+    );
+
+    let mut no_call = module.clone();
+    no_call.functions[0].body.blocks[2].terminator =
+        terminator(MirTerminatorKind::Goto(MirEdge::new(MirBlockId(4))));
+    no_call.validate_with_registry(&registry).unwrap();
+
+    let error = module.validate_with_registry(&registry).unwrap_err();
+    assert!(error.reason().contains("exact active variant"));
+
+    let MirTerminatorKind::Call(call) = &mut module.functions[0].body.blocks[2].terminator.kind
+    else {
+        unreachable!();
+    };
+    call.unwind = MirUnwindAction::Cleanup(MirEdge::new(MirBlockId(4)));
+    module.callables[0].signature.can_unwind = true;
+    let unwind_registry = external_registry(
+        "fixture::mutate_enum",
+        "fixture::mutate_enum::v1",
+        vec![module.type_at(mut_enum_ptr_id).unwrap().clone()],
+        MirExternalCallReturn::Value(module.type_at(unit_id).unwrap().clone()),
+        true,
+    );
+    assert!(
+        module
+            .validate_with_registry(&unwind_registry)
+            .unwrap_err()
+            .reason()
+            .contains("exact active variant")
+    );
+}
+
 #[derive(Clone, Copy)]
 struct PointerTypes {
     u32_ty: MirTypeId,
@@ -1109,6 +1529,11 @@ fn pointer_module(raw: bool) -> (MirExecutableModule, PointerTypes) {
         4,
     );
     let pointer = |raw: bool, mutability, address_space| {
+        let pointer_bytes = match address_space {
+            MirAddressSpace(0 | 1 | 4) => 8,
+            MirAddressSpace(2 | 3 | 5 | 6) => 4,
+            _ => unreachable!(),
+        };
         ty(
             if raw {
                 MirTypeKind::RawPointer {
@@ -1123,8 +1548,8 @@ fn pointer_module(raw: bool) -> (MirExecutableModule, PointerTypes) {
                     address_space,
                 }
             },
-            4,
-            4,
+            pointer_bytes,
+            pointer_bytes,
         )
     };
     let shared_ref_as0 = pointer(false, MirMutability::Immutable, MirAddressSpace(0));
@@ -1178,10 +1603,7 @@ fn pointer_module(raw: bool) -> (MirExecutableModule, PointerTypes) {
     (
         MirExecutableModule {
             version: MirExecutableVersion::V1,
-            target: MirExecutableTarget {
-                pointer_width_bits: 32,
-                thread_index_width_bits: 32,
-            },
+            target: MirExecutableTarget::gfx942(),
             types,
             callables: vec![],
             functions: vec![MirFunction {
@@ -1295,26 +1717,289 @@ fn references_and_raw_addresses_require_exact_mutability_and_address_space() {
     );
 }
 
+fn set_cast(module: &mut MirExecutableModule, source: MirTypeId, destination: MirTypeId) {
+    module.functions[0].body.locals[0].ty = destination;
+    module.functions[0].body.locals[1].ty = source;
+    let MirStatementKind::Assign { place, value } =
+        &mut module.functions[0].body.blocks[0].statements[0].kind
+    else {
+        unreachable!();
+    };
+    place.ty = destination;
+    *value = MirRvalue::Cast {
+        kind: MirCastKind::PointerToPointer,
+        operand: MirOperand::Copy(MirPlace::local(MirLocalId(1), source)),
+        ty: destination,
+    };
+}
+
+#[test]
+fn pointer_casts_cannot_forge_references_provenance_spaces_or_mutability() {
+    let (mut integer_to_reference, ids) = pointer_module(false);
+    let MirStatementKind::Assign { value, .. } =
+        &mut integer_to_reference.functions[0].body.blocks[0].statements[0].kind
+    else {
+        unreachable!();
+    };
+    *value = MirRvalue::Cast {
+        kind: MirCastKind::IntToPointer,
+        operand: MirOperand::Copy(MirPlace::local(MirLocalId(1), ids.u32_ty)),
+        ty: ids.shared_ref_as1,
+    };
+    assert!(
+        integer_to_reference
+            .validate()
+            .unwrap_err()
+            .reason()
+            .contains("cast kind")
+    );
+
+    let (mut integer_to_raw, ids) = pointer_module(true);
+    let MirStatementKind::Assign { value, .. } =
+        &mut integer_to_raw.functions[0].body.blocks[0].statements[0].kind
+    else {
+        unreachable!();
+    };
+    *value = MirRvalue::Cast {
+        kind: MirCastKind::IntToPointer,
+        operand: MirOperand::Copy(MirPlace::local(MirLocalId(1), ids.u32_ty)),
+        ty: ids.const_ptr_as1,
+    };
+    integer_to_raw.validate().unwrap();
+
+    let (mut raw_to_reference, ids) = pointer_module(true);
+    set_cast(&mut raw_to_reference, ids.const_ptr_as1, ids.shared_ref_as1);
+    assert!(raw_to_reference.validate().is_err());
+
+    let (mut changes_space, ids) = pointer_module(true);
+    set_cast(&mut changes_space, ids.const_ptr_as0, ids.const_ptr_as1);
+    assert!(changes_space.validate().is_err());
+
+    let (mut strengthens_mutability, ids) = pointer_module(true);
+    set_cast(
+        &mut strengthens_mutability,
+        ids.const_ptr_as1,
+        ids.mut_ptr_as1,
+    );
+    assert!(strengthens_mutability.validate().is_err());
+
+    let (mut weakens_mutability, ids) = pointer_module(true);
+    set_cast(&mut weakens_mutability, ids.mut_ptr_as1, ids.const_ptr_as1);
+    weakens_mutability.validate().unwrap();
+}
+
+fn scalar_cast_module(
+    source_ty: MirSemanticType,
+    destination_ty: MirSemanticType,
+    kind: MirCastKind,
+) -> MirExecutableModule {
+    let mut types = vec![source_ty.clone(), destination_ty.clone()];
+    types.sort_by_key(|item| item.canonical_text().unwrap());
+    types.dedup();
+    let id = |needle: &MirSemanticType| {
+        MirTypeId(types.iter().position(|item| item == needle).unwrap() as u32)
+    };
+    let source_id = id(&source_ty);
+    let destination_id = id(&destination_ty);
+    MirExecutableModule {
+        version: MirExecutableVersion::V1,
+        target: MirExecutableTarget::gfx942(),
+        types,
+        callables: vec![],
+        functions: vec![MirFunction {
+            identity: "fixture::scalar_cast".into(),
+            span: None,
+            body: MirBody {
+                form: MirBodyForm::Places,
+                locals: vec![
+                    local(destination_id, MirLocalKind::Return, true),
+                    local(source_id, MirLocalKind::Argument, false),
+                ],
+                blocks: vec![MirBasicBlock {
+                    parameters: vec![],
+                    statements: vec![MirStatement {
+                        kind: MirStatementKind::Assign {
+                            place: MirPlace::local(MirLocalId(0), destination_id),
+                            value: MirRvalue::Cast {
+                                kind,
+                                operand: MirOperand::Copy(MirPlace::local(
+                                    MirLocalId(1),
+                                    source_id,
+                                )),
+                                ty: destination_id,
+                            },
+                        },
+                        span: None,
+                    }],
+                    terminator: terminator(MirTerminatorKind::Return),
+                }],
+                entry: MirBlockId(0),
+            },
+        }],
+    }
+}
+
+#[test]
+fn casts_cannot_create_unchecked_char_values() {
+    let char_ty = ty(MirTypeKind::Scalar(MirScalarType::Char), 4, 4);
+    let u32_ty = ty(
+        MirTypeKind::Scalar(MirScalarType::Int {
+            signed: false,
+            bits: 32,
+        }),
+        4,
+        4,
+    );
+    let f32_ty = ty(MirTypeKind::Scalar(MirScalarType::Float { bits: 32 }), 4, 4);
+    let pointer_ty = ty(
+        MirTypeKind::RawPointer {
+            pointee: Box::new(u32_ty.clone()),
+            mutability: MirMutability::Immutable,
+            address_space: MirAddressSpace(1),
+        },
+        8,
+        8,
+    );
+
+    for module in [
+        scalar_cast_module(u32_ty.clone(), char_ty.clone(), MirCastKind::IntToInt),
+        scalar_cast_module(f32_ty, char_ty.clone(), MirCastKind::FloatToInt),
+        scalar_cast_module(pointer_ty, char_ty.clone(), MirCastKind::PointerToInt),
+    ] {
+        assert!(
+            module
+                .validate()
+                .unwrap_err()
+                .reason()
+                .contains("cast kind")
+        );
+    }
+}
+
+#[test]
+fn rustc_char_to_u32_cast_is_accepted() {
+    let char_ty = ty(MirTypeKind::Scalar(MirScalarType::Char), 4, 4);
+    let u32_ty = ty(
+        MirTypeKind::Scalar(MirScalarType::Int {
+            signed: false,
+            bits: 32,
+        }),
+        4,
+        4,
+    );
+
+    scalar_cast_module(char_ty, u32_ty, MirCastKind::IntToInt)
+        .validate()
+        .unwrap();
+}
+
+#[test]
+fn rustc_char_to_f32_cast_matches_e0606_rejection() {
+    let char_ty = ty(MirTypeKind::Scalar(MirScalarType::Char), 4, 4);
+    let f32_ty = ty(MirTypeKind::Scalar(MirScalarType::Float { bits: 32 }), 4, 4);
+
+    let error = scalar_cast_module(char_ty, f32_ty, MirCastKind::IntToFloat)
+        .validate()
+        .unwrap_err();
+    assert_eq!(
+        error.reason(),
+        "cast kind does not match source and destination types"
+    );
+}
+
+#[test]
+fn rustc_char_to_const_u8_pointer_cast_matches_e0606_rejection() {
+    let char_ty = ty(MirTypeKind::Scalar(MirScalarType::Char), 4, 4);
+    let u8_ty = ty(
+        MirTypeKind::Scalar(MirScalarType::Int {
+            signed: false,
+            bits: 8,
+        }),
+        1,
+        1,
+    );
+    let pointer_ty = ty(
+        MirTypeKind::RawPointer {
+            pointee: Box::new(u8_ty),
+            mutability: MirMutability::Immutable,
+            address_space: MirAddressSpace(1),
+        },
+        8,
+        8,
+    );
+
+    let error = scalar_cast_module(char_ty, pointer_ty, MirCastKind::IntToPointer)
+        .validate()
+        .unwrap_err();
+    assert_eq!(
+        error.reason(),
+        "cast kind does not match source and destination types"
+    );
+}
+
+#[test]
+fn references_require_storage_or_reference_provenance() {
+    let (mut raw_origin, ids) = pointer_module(false);
+    raw_origin.functions[0].body.locals[1].ty = ids.const_ptr_as1;
+    let MirStatementKind::Assign { value, .. } =
+        &mut raw_origin.functions[0].body.blocks[0].statements[0].kind
+    else {
+        unreachable!();
+    };
+    let MirRvalue::Ref { place, .. } = value else {
+        unreachable!();
+    };
+    *place = MirPlace {
+        local: MirLocalId(1),
+        projection: vec![MirProjection::Deref],
+        ty: ids.u32_ty,
+    };
+    assert!(
+        raw_origin
+            .validate()
+            .unwrap_err()
+            .reason()
+            .contains("external provenance authority")
+    );
+
+    let (mut reborrow, ids) = pointer_module(false);
+    reborrow.functions[0].body.locals[1].ty = ids.shared_ref_as1;
+    let MirStatementKind::Assign { value, .. } =
+        &mut reborrow.functions[0].body.blocks[0].statements[0].kind
+    else {
+        unreachable!();
+    };
+    let MirRvalue::Ref { place, .. } = value else {
+        unreachable!();
+    };
+    *place = MirPlace {
+        local: MirLocalId(1),
+        projection: vec![MirProjection::Deref],
+        ty: ids.u32_ty,
+    };
+    reborrow.validate().unwrap();
+}
+
 #[test]
 fn recursively_enforces_target_pointer_abi_and_address_spaces() {
     let (mut wrong_width, ids) = pointer_module(true);
-    wrong_width.types[ids.const_ptr_as1.0 as usize].layout = MirLayout::sized(8, 8);
+    wrong_width.types[ids.const_ptr_as1.0 as usize].layout = MirLayout::sized(4, 4);
     assert!(
         wrong_width
             .validate()
             .unwrap_err()
             .reason()
-            .contains("target pointer ABI")
+            .contains("address-space pointer ABI")
     );
 
     let (mut wrong_alignment, ids) = pointer_module(true);
-    wrong_alignment.types[ids.const_ptr_as1.0 as usize].layout = MirLayout::sized(4, 2);
+    wrong_alignment.types[ids.const_ptr_as1.0 as usize].layout = MirLayout::sized(8, 4);
     assert!(
         wrong_alignment
             .validate()
             .unwrap_err()
             .reason()
-            .contains("target pointer ABI")
+            .contains("address-space pointer ABI")
     );
 
     let (mut wrong_space, ids) = pointer_module(true);
@@ -1372,8 +2057,8 @@ fn recursively_enforces_target_pointer_abi_and_address_spaces() {
             mutability: MirMutability::Immutable,
             address_space: MirAddressSpace(1),
         },
-        8,
-        8,
+        4,
+        4,
     );
     let nested = ty(
         MirTypeKind::Struct(MirStructType {
@@ -1384,28 +2069,265 @@ fn recursively_enforces_target_pointer_abi_and_address_spaces() {
                     offset: 0,
                     ty: nested_bad_pointer,
                 }],
-                padding: vec![],
+                padding: vec![MirPadding { offset: 4, size: 4 }],
             },
         }),
         8,
-        8,
+        4,
     );
     assert!(
         zero_sized_constant_module(nested)
             .validate()
             .unwrap_err()
             .reason()
-            .contains("target pointer ABI")
+            .contains("address-space pointer ABI")
     );
+
+    let oversized_zst_array = ty(
+        MirTypeKind::Array {
+            element: Box::new(ty(MirTypeKind::Unit, 0, 1)),
+            length: u64::from(u32::MAX) + 1,
+        },
+        0,
+        1,
+    );
+    zero_sized_constant_module(oversized_zst_array)
+        .validate()
+        .unwrap();
 
     let mut local_space = place_module();
     local_space.functions[0].body.locals[0].storage_address_space = MirAddressSpace(6);
+    local_space.validate().unwrap();
+    local_space.functions[0].body.locals[0].storage_address_space = MirAddressSpace(7);
     assert!(
         local_space
             .validate()
             .unwrap_err()
             .reason()
-            .contains("address space 6")
+            .contains("address space 7")
+    );
+}
+
+#[test]
+fn gfx942_target_identity_and_pointer_map_are_exact() {
+    place_module().validate().unwrap();
+    assert_eq!(
+        MirExecutableTarget::gfx942().data_layout,
+        GFX942_TARGET_DATA_LAYOUT
+    );
+    assert_eq!(
+        GFX942_TARGET_DATA_LAYOUT,
+        EXTERNAL_DEVICE_LIBRARY_GFX942_DATA_LAYOUT_V1
+    );
+    assert!(GFX942_TARGET_DATA_LAYOUT.contains("p8:128:128:128:48"));
+
+    let mut wrong_triple = place_module();
+    wrong_triple.target.triple = "amdgcn-unknown-amdhsa".into();
+    assert!(
+        wrong_triple
+            .validate()
+            .unwrap_err()
+            .path()
+            .contains("triple")
+    );
+
+    let mut wrong_cpu = place_module();
+    wrong_cpu.target.cpu = "gfx950".into();
+    assert!(wrong_cpu.validate().unwrap_err().path().contains("cpu"));
+
+    let mut wrong_features = place_module();
+    wrong_features.target.features = "+wavefrontsize32".into();
+    assert!(
+        wrong_features
+            .validate()
+            .unwrap_err()
+            .path()
+            .contains("features")
+    );
+
+    let mut wrong_layout = place_module();
+    wrong_layout.target.data_layout = "e-p:64:64-p3:64:64".into();
+    assert!(
+        wrong_layout
+            .validate()
+            .unwrap_err()
+            .path()
+            .contains("data_layout")
+    );
+
+    let mut shortened_layout = place_module();
+    shortened_layout.target.data_layout =
+        GFX942_TARGET_DATA_LAYOUT.replace("p8:128:128:128:48", "p8:128:128");
+    assert!(
+        shortened_layout
+            .validate()
+            .unwrap_err()
+            .path()
+            .contains("data_layout")
+    );
+
+    let mut missing = place_module();
+    missing.target.pointer_abis.pop();
+    assert!(missing.validate().unwrap_err().reason().contains("missing"));
+
+    let mut extra = place_module();
+    extra.target.pointer_abis.push(extra.target.pointer_abis[6]);
+    assert!(extra.validate().unwrap_err().reason().contains("extra"));
+
+    let mut duplicate = place_module();
+    duplicate.target.pointer_abis[4].address_space = MirAddressSpace(3);
+    assert!(
+        duplicate
+            .validate()
+            .unwrap_err()
+            .reason()
+            .contains("unique")
+    );
+
+    let mut forged_local_pointer = place_module();
+    forged_local_pointer.target.pointer_abis[3].width_bits = 64;
+    forged_local_pointer.target.pointer_abis[3].abi_alignment_bits = 64;
+    assert!(
+        forged_local_pointer
+            .validate()
+            .unwrap_err()
+            .reason()
+            .contains("exact gfx942")
+    );
+}
+
+fn array_storage_module(length: u64, address_space: MirAddressSpace) -> MirExecutableModule {
+    let u8_ty = ty(
+        MirTypeKind::Scalar(MirScalarType::Int {
+            signed: false,
+            bits: 8,
+        }),
+        1,
+        1,
+    );
+    let array_ty = ty(
+        MirTypeKind::Array {
+            element: Box::new(u8_ty.clone()),
+            length,
+        },
+        length,
+        1,
+    );
+    let mut types = vec![u8_ty, array_ty.clone()];
+    types.sort_by_key(|item| item.canonical_text().unwrap());
+    let array_id = MirTypeId(types.iter().position(|item| item == &array_ty).unwrap() as u32);
+    let mut return_local = local(array_id, MirLocalKind::Return, true);
+    return_local.storage_address_space = address_space;
+    let mut argument = local(array_id, MirLocalKind::Argument, false);
+    argument.storage_address_space = address_space;
+    MirExecutableModule {
+        version: MirExecutableVersion::V1,
+        target: MirExecutableTarget::gfx942(),
+        types,
+        callables: vec![],
+        functions: vec![MirFunction {
+            identity: "fixture::array_offset_range".into(),
+            span: None,
+            body: MirBody {
+                form: MirBodyForm::Places,
+                locals: vec![return_local, argument],
+                blocks: vec![MirBasicBlock {
+                    parameters: vec![],
+                    statements: vec![MirStatement {
+                        kind: MirStatementKind::Assign {
+                            place: MirPlace::local(MirLocalId(0), array_id),
+                            value: MirRvalue::Use(MirOperand::Move(MirPlace::local(
+                                MirLocalId(1),
+                                array_id,
+                            ))),
+                        },
+                        span: None,
+                    }],
+                    terminator: terminator(MirTerminatorKind::Return),
+                }],
+                entry: MirBlockId(0),
+            },
+        }],
+    }
+}
+
+#[test]
+fn aggregate_layouts_fit_the_relevant_signed_pointer_offset_range() {
+    let local_limit_plus_one = i32::MAX as u64 + 1;
+    array_storage_module(local_limit_plus_one, MirAddressSpace(0))
+        .validate()
+        .unwrap();
+    assert!(
+        array_storage_module(local_limit_plus_one, MirAddressSpace(3))
+            .validate()
+            .unwrap_err()
+            .reason()
+            .contains("signed pointer-offset range for address space 3")
+    );
+
+    let pointee = ty(
+        MirTypeKind::Array {
+            element: Box::new(ty(
+                MirTypeKind::Scalar(MirScalarType::Int {
+                    signed: false,
+                    bits: 8,
+                }),
+                1,
+                1,
+            )),
+            length: local_limit_plus_one,
+        },
+        local_limit_plus_one,
+        1,
+    );
+    let local_pointer = ty(
+        MirTypeKind::RawPointer {
+            pointee: Box::new(pointee),
+            mutability: MirMutability::Immutable,
+            address_space: MirAddressSpace(3),
+        },
+        4,
+        4,
+    );
+    assert!(
+        zero_sized_constant_module(local_pointer)
+            .validate()
+            .unwrap_err()
+            .reason()
+            .contains("signed pointer-offset range for address space 3")
+    );
+
+    let default_limit_plus_one = i64::MAX as u64 + 1;
+    assert!(
+        array_storage_module(default_limit_plus_one, MirAddressSpace(0))
+            .validate()
+            .unwrap_err()
+            .reason()
+            .contains("signed pointer-offset range for address space 0")
+    );
+
+    let u64_ty = ty(
+        MirTypeKind::Scalar(MirScalarType::Int {
+            signed: false,
+            bits: 64,
+        }),
+        8,
+        8,
+    );
+    let overflowing_array = ty(
+        MirTypeKind::Array {
+            element: Box::new(u64_ty),
+            length: u64::MAX,
+        },
+        0,
+        8,
+    );
+    assert!(
+        zero_sized_constant_module(overflowing_array)
+            .validate()
+            .unwrap_err()
+            .reason()
+            .contains("overflows u64")
     );
 }
 
@@ -1435,12 +2357,20 @@ fn intrinsic_module() -> (MirExecutableModule, IntrinsicTypes) {
         4,
         4,
     );
+    let u64_ty = ty(
+        MirTypeKind::Scalar(MirScalarType::Int {
+            signed: false,
+            bits: 64,
+        }),
+        8,
+        8,
+    );
     let pointer = |mutability| {
         ty(
             MirTypeKind::RawPointer {
                 pointee: Box::new(u32_ty.clone()),
                 mutability,
-                address_space: MirAddressSpace(1),
+                address_space: MirAddressSpace(3),
             },
             4,
             4,
@@ -1452,6 +2382,7 @@ fn intrinsic_module() -> (MirExecutableModule, IntrinsicTypes) {
         unit.clone(),
         u32_ty.clone(),
         i32_ty.clone(),
+        u64_ty.clone(),
         const_ptr.clone(),
         mut_ptr.clone(),
     ];
@@ -1466,12 +2397,13 @@ fn intrinsic_module() -> (MirExecutableModule, IntrinsicTypes) {
         mut_ptr: id(&mut_ptr),
     };
     let i32_id = id(&i32_ty);
+    let u64_id = id(&u64_ty);
     let callables = vec![
         MirCallable {
             identity: "fe2o3.copy_nonoverlapping".into(),
             authority: MirCallAuthority::Intrinsic(MirIntrinsic::CopyNonOverlapping),
             signature: MirCallSignature {
-                inputs: vec![ids.const_ptr, ids.mut_ptr, ids.u32_ty],
+                inputs: vec![ids.const_ptr, ids.mut_ptr, u64_id],
                 output: MirCallReturn::Value(ids.unit),
                 can_unwind: false,
             },
@@ -1507,10 +2439,7 @@ fn intrinsic_module() -> (MirExecutableModule, IntrinsicTypes) {
     (
         MirExecutableModule {
             version: MirExecutableVersion::V1,
-            target: MirExecutableTarget {
-                pointer_width_bits: 32,
-                thread_index_width_bits: 32,
-            },
+            target: MirExecutableTarget::gfx942(),
             types,
             callables,
             functions: vec![MirFunction {
@@ -1776,6 +2705,28 @@ fn callable_namespaces_are_globally_disjoint() {
         false,
     );
     let error = import_shadow.validate_with_registry(&registry).unwrap_err();
+    assert!(error.reason().contains("trusted import namespace"));
+
+    let mut bodyless_collision = place_module();
+    bodyless_collision.callables.push(MirCallable {
+        identity: "fixture::reserved".into(),
+        authority: MirCallAuthority::DefinedFunction,
+        signature: MirCallSignature {
+            inputs: vec![],
+            output: MirCallReturn::Diverging,
+            can_unwind: false,
+        },
+    });
+    let registry = external_registry(
+        "fixture::reserved",
+        "fixture::reserved::v1",
+        vec![],
+        MirExternalCallReturn::Diverging,
+        false,
+    );
+    let error = bodyless_collision
+        .validate_with_registry(&registry)
+        .unwrap_err();
     assert!(error.reason().contains("trusted import namespace"));
 
     let (mut intrinsic_shadow, _) = intrinsic_module();
