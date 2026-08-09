@@ -171,6 +171,14 @@ pub(crate) struct DefinitionIdentityV2 {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct IntrinsicIdentityV2 {
+    pub definition: DefinitionIdentityV2,
+    pub name: String,
+    pub must_be_overridden: bool,
+    pub const_stable: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct InstanceIdentityV2 {
     pub kind: InstanceKindV2,
     pub generic_args: String,
@@ -335,6 +343,9 @@ pub(crate) enum OperandV2 {
         literal: String,
         source: SourceSpanV2,
     },
+    RuntimeChecks {
+        kind: String,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -382,6 +393,10 @@ pub(crate) enum RvalueV2 {
     ThreadLocalRef {
         definition: DefinitionIdentityV2,
     },
+    WrapUnsafeBinder {
+        operand: OperandV2,
+        target: TypeIdentityV2,
+    },
     CompilerOpaque {
         rustc_kind: String,
     },
@@ -423,28 +438,33 @@ pub(crate) enum TerminatorKindV2 {
     },
     SwitchInt {
         discriminant: OperandV2,
-        values: Vec<u128>,
+        targets: Vec<SwitchTargetV2>,
+        otherwise: usize,
     },
     Call {
         function: OperandV2,
         declared: Option<DefinitionIdentityV2>,
         resolved: Option<FunctionIdentityV2>,
+        intrinsic: Option<IntrinsicIdentityV2>,
         arguments: Vec<OperandV2>,
         destination: PlaceV2,
         target: Option<usize>,
-        unwind: String,
+        unwind: UnwindActionV2,
     },
     Drop {
         place: PlaceV2,
         target: usize,
-        unwind: String,
+        unwind: UnwindActionV2,
+        replace: bool,
+        async_drop: Option<usize>,
+        async_future_local: Option<usize>,
     },
     Assert {
         condition: OperandV2,
         expected: bool,
         target: usize,
         message: String,
-        unwind: String,
+        unwind: UnwindActionV2,
     },
     InlineAsm {
         rustc_kind: String,
@@ -452,6 +472,20 @@ pub(crate) enum TerminatorKindV2 {
     CompilerOpaque {
         rustc_kind: String,
     },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct SwitchTargetV2 {
+    pub value: u128,
+    pub target: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum UnwindActionV2 {
+    Continue,
+    Unreachable,
+    Terminate { reason: String },
+    Cleanup { target: usize },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -679,6 +713,10 @@ fn validate_rvalue(
         RvalueV2::ThreadLocalRef { definition } => {
             validate_definition(&format!("{path}.definition"), definition, limits)
         }
+        RvalueV2::WrapUnsafeBinder { operand, target } => {
+            validate_operand(&format!("{path}.operand"), operand, local_count, limits)?;
+            validate_type(&format!("{path}.target"), target, limits)
+        }
         RvalueV2::CompilerOpaque { rustc_kind } => {
             validate_text(&format!("{path}.rustc_kind"), rustc_kind, limits)
         }
@@ -702,15 +740,21 @@ fn validate_terminator(
         }
     }
     match &terminator.kind {
-        TerminatorKindV2::Return | TerminatorKindV2::Unreachable => Ok(()),
-        TerminatorKindV2::Goto { target } => validate_block(path, *target, block_count),
+        TerminatorKindV2::Return | TerminatorKindV2::Unreachable => {
+            validate_exact_successors(path, &terminator.successors, &[])
+        }
+        TerminatorKindV2::Goto { target } => {
+            validate_block(path, *target, block_count)?;
+            validate_exact_successors(path, &terminator.successors, &[*target])
+        }
         TerminatorKindV2::SwitchInt {
             discriminant,
-            values,
+            targets,
+            otherwise,
         } => {
             bounded(
-                &format!("{path}.values"),
-                values.len(),
+                &format!("{path}.targets"),
+                targets.len(),
                 limits.max_successors,
             )?;
             validate_operand(
@@ -718,12 +762,25 @@ fn validate_terminator(
                 discriminant,
                 local_count,
                 limits,
-            )
+            )?;
+            let mut expected = Vec::with_capacity(targets.len() + 1);
+            for (index, target) in targets.iter().enumerate() {
+                validate_block(
+                    &format!("{path}.targets[{index}]"),
+                    target.target,
+                    block_count,
+                )?;
+                expected.push(target.target);
+            }
+            validate_block(&format!("{path}.otherwise"), *otherwise, block_count)?;
+            expected.push(*otherwise);
+            validate_exact_successors(path, &terminator.successors, &expected)
         }
         TerminatorKindV2::Call {
             function,
             declared,
             resolved,
+            intrinsic,
             arguments,
             destination,
             target,
@@ -735,6 +792,14 @@ fn validate_terminator(
             }
             if let Some(resolved) = resolved {
                 validate_function_identity(resolved, limits)?;
+            }
+            if let Some(intrinsic) = intrinsic {
+                validate_definition(
+                    &format!("{path}.intrinsic.definition"),
+                    &intrinsic.definition,
+                    limits,
+                )?;
+                validate_text(&format!("{path}.intrinsic.name"), &intrinsic.name, limits)?;
             }
             bounded(
                 &format!("{path}.arguments"),
@@ -758,16 +823,30 @@ fn validate_terminator(
             if let Some(target) = target {
                 validate_block(&format!("{path}.target"), *target, block_count)?;
             }
-            validate_text(&format!("{path}.unwind"), unwind, limits)
+            validate_unwind(&format!("{path}.unwind"), unwind, block_count, limits)?;
+            let expected = normal_and_unwind_successors(*target, unwind);
+            validate_exact_successors(path, &terminator.successors, &expected)
         }
         TerminatorKindV2::Drop {
             place,
             target,
             unwind,
+            async_drop,
+            async_future_local,
+            ..
         } => {
             validate_place(&format!("{path}.place"), place, local_count, limits)?;
             validate_block(&format!("{path}.target"), *target, block_count)?;
-            validate_text(&format!("{path}.unwind"), unwind, limits)
+            validate_unwind(&format!("{path}.unwind"), unwind, block_count, limits)?;
+            if let Some(async_drop) = async_drop {
+                validate_block(&format!("{path}.async_drop"), *async_drop, block_count)?;
+            }
+            if let Some(local) = async_future_local {
+                validate_local(&format!("{path}.async_future_local"), *local, local_count)?;
+            }
+            let mut expected = normal_and_unwind_successors(Some(*target), unwind);
+            expected.extend(async_drop);
+            validate_exact_successors(path, &terminator.successors, &expected)
         }
         TerminatorKindV2::Assert {
             condition,
@@ -779,13 +858,54 @@ fn validate_terminator(
             validate_operand(&format!("{path}.condition"), condition, local_count, limits)?;
             validate_block(&format!("{path}.target"), *target, block_count)?;
             validate_text(&format!("{path}.message"), message, limits)?;
-            validate_text(&format!("{path}.unwind"), unwind, limits)
+            validate_unwind(&format!("{path}.unwind"), unwind, block_count, limits)?;
+            let expected = normal_and_unwind_successors(Some(*target), unwind);
+            validate_exact_successors(path, &terminator.successors, &expected)
         }
         TerminatorKindV2::InlineAsm { rustc_kind }
         | TerminatorKindV2::CompilerOpaque { rustc_kind } => {
             validate_text(&format!("{path}.rustc_kind"), rustc_kind, limits)
         }
     }
+}
+
+fn validate_unwind(
+    path: &str,
+    unwind: &UnwindActionV2,
+    block_count: usize,
+    limits: CaptureLimitsV2,
+) -> Result<(), ValidationErrorV2> {
+    match unwind {
+        UnwindActionV2::Continue | UnwindActionV2::Unreachable => Ok(()),
+        UnwindActionV2::Terminate { reason } => validate_text(path, reason, limits),
+        UnwindActionV2::Cleanup { target } => validate_block(path, *target, block_count),
+    }
+}
+
+fn normal_and_unwind_successors(normal: Option<usize>, unwind: &UnwindActionV2) -> Vec<usize> {
+    normal
+        .into_iter()
+        .chain(match unwind {
+            UnwindActionV2::Cleanup { target } => Some(*target),
+            UnwindActionV2::Continue
+            | UnwindActionV2::Unreachable
+            | UnwindActionV2::Terminate { .. } => None,
+        })
+        .collect()
+}
+
+fn validate_exact_successors(
+    path: &str,
+    actual: &[usize],
+    expected: &[usize],
+) -> Result<(), ValidationErrorV2> {
+    if actual != expected {
+        return Err(ValidationErrorV2::new(
+            format!("{path}.successors"),
+            format!("successor list {actual:?} disagrees with terminator targets {expected:?}"),
+        ));
+    }
+    Ok(())
 }
 
 fn validate_operand(
@@ -806,6 +926,9 @@ fn validate_operand(
             validate_type(&format!("{path}.type"), ty, limits)?;
             validate_text(&format!("{path}.literal"), literal, limits)?;
             validate_span(&format!("{path}.source"), source, limits)
+        }
+        OperandV2::RuntimeChecks { kind } => {
+            validate_text(&format!("{path}.runtime_checks"), kind, limits)
         }
     }
 }
