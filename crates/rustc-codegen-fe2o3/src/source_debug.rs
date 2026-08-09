@@ -163,8 +163,8 @@ pub(crate) fn collect_requested_profile<'tcx>(
     let (source_directory, source_file) = S09_SOURCE_PATH
         .rsplit_once('/')
         .expect("S09 source path has a directory");
-    validate_metadata_string(&source_directory, "source directory")?;
-    validate_metadata_string(&source_file, "source file")?;
+    validate_metadata_string(source_directory, "source directory")?;
+    validate_metadata_string(source_file, "source file")?;
     Ok(Some(AlphaSourceDebugV1 {
         source_file: source_file.to_owned(),
         source_directory: source_directory.to_owned(),
@@ -174,45 +174,80 @@ pub(crate) fn collect_requested_profile<'tcx>(
     }))
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct AlphaMirShape {
-    blocks: usize,
-    locals: usize,
-    arguments: usize,
-    calls: usize,
-    thread_index_calls: usize,
-    output_guard_calls: usize,
-    index_get_calls: usize,
-    switches: usize,
-    asserts: usize,
-    returns: usize,
-    unreachables: usize,
-    multiplies: usize,
-    less_than: usize,
+fn exact_place(
+    place: &crate::mir_import::MirPlaceRef,
+    local: usize,
+    projection: &[crate::mir_import::MirProjectionElem],
+) -> bool {
+    place.local == local && place.projection == projection
 }
 
-const S09_ALPHA_MIR_SHAPE: AlphaMirShape = AlphaMirShape {
-    blocks: 8,
-    locals: 14,
-    arguments: 3,
-    calls: 3,
-    thread_index_calls: 1,
-    output_guard_calls: 1,
-    index_get_calls: 1,
-    switches: 1,
-    asserts: 1,
-    returns: 1,
-    unreachables: 1,
-    multiplies: 1,
-    less_than: 1,
-};
+fn exact_operand(
+    operand: &crate::mir_import::MirOperandRef,
+    local: usize,
+    projection: &[crate::mir_import::MirProjectionElem],
+) -> bool {
+    matches!(operand, crate::mir_import::MirOperandRef::Place(place) if exact_place(place, local, projection))
+}
 
-fn validate_alpha_mir_body(
+fn exact_assign(
+    statement: &crate::mir_import::MirStatement,
+    index: usize,
+    destination: (usize, &[crate::mir_import::MirProjectionElem]),
+    operands: &[(usize, &[crate::mir_import::MirProjectionElem])],
+    rvalue: crate::mir_import::MirRvalueKind,
+) -> bool {
+    statement.index == index
+        && statement.kind == crate::mir_import::MirStatementKind::Assign
+        && statement
+            .destination
+            .as_ref()
+            .is_some_and(|place| exact_place(place, destination.0, destination.1))
+        && statement.operands.len() == operands.len()
+        && statement
+            .operands
+            .iter()
+            .zip(operands)
+            .all(|(operand, (local, projection))| exact_operand(operand, *local, projection))
+        && statement.rvalue == Some(rvalue)
+}
+
+fn exact_call(
+    terminator: &Option<crate::mir_import::MirTerminator>,
+    item: crate::trusted_device_items::TrustedDeviceItem,
+    target: usize,
+    destination: usize,
+    operands: &[(usize, &[crate::mir_import::MirProjectionElem])],
+) -> bool {
+    let Some(crate::mir_import::MirTerminator {
+        kind:
+            crate::mir_import::MirTerminatorKind::Call {
+                callee: Some(callee),
+                target: Some(actual_target),
+                destination: Some(actual_destination),
+                operands: actual_operands,
+            },
+        ..
+    }) = terminator
+    else {
+        return false;
+    };
+    callee.trusted_item() == Some(item)
+        && *actual_target == target
+        && exact_place(actual_destination, destination, &[])
+        && actual_operands.len() == operands.len()
+        && actual_operands
+            .iter()
+            .zip(operands)
+            .all(|(operand, (local, projection))| exact_operand(operand, *local, projection))
+}
+
+pub(crate) fn validate_alpha_mir_body(
     function: &crate::mir_import::MirFunction,
 ) -> Result<(), SourceDebugError> {
     use crate::mir_import::{
-        MirBinaryOp, MirFunctionKind, MirKernelProfile, MirOperandRef, MirProjectionElem,
-        MirRvalueKind, MirTerminatorKind,
+        MirBinaryOp, MirFunctionKind, MirKernelProfile, MirLocalRole, MirProjectionElem,
+        MirRvalueKind, MirSwitchTarget, MirTerminatorKind, MirTypeShape, MirUnaryOp,
     };
     use crate::trusted_device_items::TrustedDeviceItem;
 
@@ -226,127 +261,189 @@ fn validate_alpha_mir_body(
         ));
     }
 
-    let mut shape = AlphaMirShape {
-        blocks: function.blocks.len(),
-        locals: function.local_count,
-        arguments: function.arg_count,
-        calls: 0,
-        thread_index_calls: 0,
-        output_guard_calls: 0,
-        index_get_calls: 0,
-        switches: 0,
-        asserts: 0,
-        returns: 0,
-        unreachables: 0,
-        multiplies: 0,
-        less_than: 0,
-    };
-    let mut scalar_index = None;
-
-    for block in &function.blocks {
-        for statement in &block.statements {
-            match statement.rvalue {
-                Some(MirRvalueKind::Binary(MirBinaryOp::Mul)) => shape.multiplies += 1,
-                Some(MirRvalueKind::Binary(MirBinaryOp::Lt)) => shape.less_than += 1,
-                _ => {}
-            }
-        }
-        let Some(terminator) = &block.terminator else {
-            return Err(SourceDebugError::new(
-                "S09 alpha imported MIR contains a block without a terminator",
-            ));
-        };
-        match &terminator.kind {
-            MirTerminatorKind::Call {
-                callee: Some(callee),
-                destination: Some(destination),
-                operands,
-                ..
-            } => {
-                shape.calls += 1;
-                match callee.trusted_item() {
-                    Some(TrustedDeviceItem::ThreadIndex1d) if operands.is_empty() => {
-                        shape.thread_index_calls += 1;
-                    }
-                    Some(TrustedDeviceItem::DisjointSliceGetMut) => {
-                        shape.output_guard_calls += 1;
-                    }
-                    Some(TrustedDeviceItem::ThreadIndexGet) => {
-                        shape.index_get_calls += 1;
-                        scalar_index = Some(destination.local);
-                    }
-                    _ => {}
-                }
-            }
-            MirTerminatorKind::Call { .. } => shape.calls += 1,
-            MirTerminatorKind::SwitchInt { .. } => shape.switches += 1,
-            MirTerminatorKind::Assert { .. } => shape.asserts += 1,
-            MirTerminatorKind::Return => shape.returns += 1,
-            MirTerminatorKind::Unreachable => shape.unreachables += 1,
-            _ => {}
-        }
-    }
-    validate_alpha_mir_shape(shape)?;
-
-    let scalar_index = scalar_index.ok_or_else(|| {
-        SourceDebugError::new("S09 alpha MIR has no authenticated scalar index destination")
-    })?;
-    let exact_place = |operand: &MirOperandRef, local: usize| matches!(operand, MirOperandRef::Place(place) if place.local == local && place.projection.is_empty());
-
-    let statements = function
-        .blocks
-        .iter()
-        .flat_map(|block| &block.statements)
-        .collect::<Vec<_>>();
-    let loads = statements
-        .iter()
-        .filter_map(|statement| {
-            let destination = statement.destination.as_ref()?;
-            let [MirOperandRef::Place(input)] = statement.operands.as_slice() else {
-                return None;
-            };
-            matches!(
-                input.projection.as_slice(),
-                [MirProjectionElem::Deref, MirProjectionElem::Index { local }]
-                    if input.local == 2 && *local == scalar_index
-            )
-            .then_some(destination.local)
-        })
-        .collect::<Vec<_>>();
-    let [loaded_value] = loads.as_slice() else {
-        return Err(SourceDebugError::new(format!(
-            "S09 alpha MIR requires one exact guarded input load; found {}",
-            loads.len()
-        )));
-    };
-    let products = statements
-        .iter()
-        .filter_map(|statement| {
-            if statement.rvalue != Some(MirRvalueKind::Binary(MirBinaryOp::Mul)) {
-                return None;
-            }
-            let destination = statement.destination.as_ref()?;
-            (destination.projection.as_slice() == [MirProjectionElem::Deref]
-                && matches!(
-                    statement.operands.as_slice(),
-                    [lhs, rhs] if exact_place(lhs, *loaded_value) && exact_place(rhs, 1)
-                ))
-            .then_some(())
-        })
-        .collect::<Vec<_>>();
-    if products.len() != 1 {
+    let [bb0, bb1, bb2, bb3, bb4, bb5, bb6, bb7] = function.blocks.as_slice() else {
         return Err(SourceDebugError::new(
-            "S09 alpha MIR store is not the exact guarded input[i] times scale dataflow",
+            "S09 alpha MIR must contain the exact eight-block CFG",
+        ));
+    };
+    let expected_locals = [
+        (MirLocalRole::Return, MirTypeShape::Unit),
+        (MirLocalRole::Arg, MirTypeShape::F32),
+        (
+            MirLocalRole::Arg,
+            MirTypeShape::Slice {
+                element: Box::new(MirTypeShape::F32),
+                mutable: false,
+            },
+        ),
+        (
+            MirLocalRole::Arg,
+            MirTypeShape::DisjointSlice {
+                element: Box::new(MirTypeShape::F32),
+            },
+        ),
+        (
+            MirLocalRole::Temp,
+            MirTypeShape::Adt {
+                identity: TrustedDeviceItem::ThreadIndex.canonical_path().to_owned(),
+            },
+        ),
+        (MirLocalRole::Temp, MirTypeShape::USize),
+        (
+            MirLocalRole::Temp,
+            MirTypeShape::Reference {
+                pointee: Box::new(MirTypeShape::Adt {
+                    identity: TrustedDeviceItem::ThreadIndex.canonical_path().to_owned(),
+                }),
+                mutable: false,
+            },
+        ),
+        (
+            MirLocalRole::Temp,
+            MirTypeShape::Adt {
+                identity: "std::option::Option".to_owned(),
+            },
+        ),
+        (
+            MirLocalRole::Temp,
+            MirTypeShape::Reference {
+                pointee: Box::new(MirTypeShape::DisjointSlice {
+                    element: Box::new(MirTypeShape::F32),
+                }),
+                mutable: true,
+            },
+        ),
+        (MirLocalRole::Temp, MirTypeShape::ISize),
+        (
+            MirLocalRole::Temp,
+            MirTypeShape::Reference {
+                pointee: Box::new(MirTypeShape::F32),
+                mutable: true,
+            },
+        ),
+        (MirLocalRole::Temp, MirTypeShape::F32),
+        (MirLocalRole::Temp, MirTypeShape::USize),
+        (MirLocalRole::Temp, MirTypeShape::Bool),
+    ];
+    if function.local_count != expected_locals.len()
+        || function.locals.len() != expected_locals.len()
+        || function.arg_count != 3
+        || function
+            .locals
+            .iter()
+            .zip(&expected_locals)
+            .enumerate()
+            .any(|(index, (local, (role, shape)))| {
+                local.index != index || local.role != *role || local.ty.shape != *shape
+            })
+        || function
+            .blocks
+            .iter()
+            .enumerate()
+            .any(|(index, block)| block.index != index)
+    {
+        return Err(SourceDebugError::new(
+            "S09 alpha MIR local, argument, or block identities changed",
         ));
     }
-    Ok(())
-}
 
-fn validate_alpha_mir_shape(shape: AlphaMirShape) -> Result<(), SourceDebugError> {
-    if shape != S09_ALPHA_MIR_SHAPE {
-        return Err(SourceDebugError::new(format!(
-            "S09 alpha imported MIR shape changed: {shape:?}"
-        )));
+    let exact = bb0.statements.is_empty()
+        && exact_call(&bb0.terminator, TrustedDeviceItem::ThreadIndex1d, 1, 4, &[])
+        && matches!(bb1.statements.as_slice(), [statement] if exact_assign(statement, 0, (6, &[]), &[(4, &[])], MirRvalueKind::Ref))
+        && exact_call(
+            &bb1.terminator,
+            TrustedDeviceItem::ThreadIndexGet,
+            2,
+            5,
+            &[(6, &[])],
+        )
+        && matches!(bb2.statements.as_slice(), [statement] if exact_assign(statement, 0, (8, &[]), &[(3, &[])], MirRvalueKind::Ref))
+        && exact_call(
+            &bb2.terminator,
+            TrustedDeviceItem::DisjointSliceGetMut,
+            3,
+            7,
+            &[(8, &[]), (4, &[])],
+        )
+        && matches!(bb3.statements.as_slice(), [statement] if exact_assign(statement, 0, (9, &[]), &[(7, &[])], MirRvalueKind::Discriminant))
+        && matches!(
+            bb3.terminator.as_ref().map(|terminator| &terminator.kind),
+            Some(MirTerminatorKind::SwitchInt {
+                discriminant,
+                targets,
+                otherwise: 7,
+            }) if exact_operand(discriminant, 9, &[])
+                && targets == &[
+                    MirSwitchTarget { value: 1, target: 4 },
+                    MirSwitchTarget { value: 0, target: 6 },
+                ]
+        )
+        && matches!(
+            bb4.statements.as_slice(),
+            [payload, length, guard]
+                if exact_assign(
+                    payload,
+                    0,
+                    (10, &[]),
+                    &[(7, &[MirProjectionElem::Downcast { variant: 1 }, MirProjectionElem::Field(0)])],
+                    MirRvalueKind::Use,
+                ) && exact_assign(
+                    length,
+                    1,
+                    (12, &[]),
+                    &[(2, &[])],
+                    MirRvalueKind::Unary(MirUnaryOp::PtrMetadata),
+                ) && exact_assign(
+                    guard,
+                    2,
+                    (13, &[]),
+                    &[(5, &[]), (12, &[])],
+                    MirRvalueKind::Binary(MirBinaryOp::Lt),
+                )
+        )
+        && matches!(
+            bb4.terminator.as_ref().map(|terminator| &terminator.kind),
+            Some(MirTerminatorKind::Assert {
+                condition,
+                expected: true,
+                target: 5,
+            }) if exact_operand(condition, 13, &[])
+        )
+        && matches!(
+            bb5.statements.as_slice(),
+            [load, store]
+                if exact_assign(
+                    load,
+                    0,
+                    (11, &[]),
+                    &[(2, &[MirProjectionElem::Deref, MirProjectionElem::Index { local: 5 }])],
+                    MirRvalueKind::Use,
+                ) && exact_assign(
+                    store,
+                    1,
+                    (10, &[MirProjectionElem::Deref]),
+                    &[(11, &[]), (1, &[])],
+                    MirRvalueKind::Binary(MirBinaryOp::Mul),
+                )
+        )
+        && matches!(
+            bb5.terminator.as_ref().map(|terminator| &terminator.kind),
+            Some(MirTerminatorKind::Goto { target: 6 })
+        )
+        && bb6.statements.is_empty()
+        && matches!(
+            bb6.terminator.as_ref().map(|terminator| &terminator.kind),
+            Some(MirTerminatorKind::Return)
+        )
+        && bb7.statements.is_empty()
+        && matches!(
+            bb7.terminator.as_ref().map(|terminator| &terminator.kind),
+            Some(MirTerminatorKind::Unreachable)
+        );
+    if !exact {
+        return Err(SourceDebugError::new(
+            "S09 alpha MIR is not the exact guarded alpha CFG and dataflow",
+        ));
     }
     Ok(())
 }
@@ -929,23 +1026,5 @@ attributes #0 = { nounwind }
                 "spoofed source identity was admitted"
             );
         }
-    }
-
-    #[test]
-    fn exact_mir_shape_rejects_semantic_body_mutations() {
-        validate_alpha_mir_shape(S09_ALPHA_MIR_SHAPE).unwrap();
-
-        let mut changed = S09_ALPHA_MIR_SHAPE;
-        changed.multiplies = 0;
-        assert!(validate_alpha_mir_shape(changed).is_err());
-        let mut changed = S09_ALPHA_MIR_SHAPE;
-        changed.output_guard_calls = 0;
-        assert!(validate_alpha_mir_shape(changed).is_err());
-        let mut changed = S09_ALPHA_MIR_SHAPE;
-        changed.asserts = 0;
-        assert!(validate_alpha_mir_shape(changed).is_err());
-        let mut changed = S09_ALPHA_MIR_SHAPE;
-        changed.returns = 2;
-        assert!(validate_alpha_mir_shape(changed).is_err());
     }
 }
