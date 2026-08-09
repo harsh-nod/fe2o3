@@ -773,6 +773,7 @@ impl MirExecutableModule {
                             "intrinsic identity does not match its closed authority",
                         ));
                     }
+                    self.validate_intrinsic_signature(&path, callable, intrinsic)?;
                 }
             }
         }
@@ -802,6 +803,215 @@ impl MirExecutableModule {
                 }
                 _ => false,
             }
+    }
+
+    fn validate_intrinsic_signature(
+        &self,
+        path: &str,
+        callable: &MirCallable,
+        intrinsic: &MirIntrinsic,
+    ) -> Result<(), MirExecutableValidationError> {
+        if callable.signature.can_unwind {
+            return Err(error(
+                format!("{path}.signature.can_unwind"),
+                "intrinsics cannot unwind",
+            ));
+        }
+
+        match intrinsic {
+            MirIntrinsic::CopyNonOverlapping => {
+                self.require_intrinsic_arity(path, callable, 3)?;
+                self.require_intrinsic_unit_output(path, callable)?;
+                let source = self.require_intrinsic_raw_pointer(
+                    &format!("{path}.signature.inputs[0]"),
+                    callable.signature.inputs[0],
+                    MirMutability::Immutable,
+                )?;
+                let destination = self.require_intrinsic_raw_pointer(
+                    &format!("{path}.signature.inputs[1]"),
+                    callable.signature.inputs[1],
+                    MirMutability::Mutable,
+                )?;
+                if source != destination {
+                    return Err(error(
+                        format!("{path}.signature.inputs"),
+                        "copy_nonoverlapping pointers must have the same pointee type",
+                    ));
+                }
+                self.require_intrinsic_integer(
+                    &format!("{path}.signature.inputs[2]"),
+                    callable.signature.inputs[2],
+                    false,
+                    self.target.pointer_width_bits,
+                )
+            }
+            MirIntrinsic::PointerDistance => {
+                self.require_intrinsic_arity(path, callable, 2)?;
+                let left = self.require_intrinsic_raw_pointer(
+                    &format!("{path}.signature.inputs[0]"),
+                    callable.signature.inputs[0],
+                    MirMutability::Immutable,
+                )?;
+                let right = self.require_intrinsic_raw_pointer(
+                    &format!("{path}.signature.inputs[1]"),
+                    callable.signature.inputs[1],
+                    MirMutability::Immutable,
+                )?;
+                if left != right
+                    || self.type_at(callable.signature.inputs[0])
+                        != self.type_at(callable.signature.inputs[1])
+                {
+                    return Err(error(
+                        format!("{path}.signature.inputs"),
+                        "pointer_distance requires identical pointer input types",
+                    ));
+                }
+                let MirCallReturn::Value(output) = callable.signature.output else {
+                    return Err(error(
+                        format!("{path}.signature.output"),
+                        "pointer_distance must return target isize",
+                    ));
+                };
+                self.require_intrinsic_integer(
+                    &format!("{path}.signature.output"),
+                    output,
+                    true,
+                    self.target.pointer_width_bits,
+                )
+            }
+            MirIntrinsic::VolatileLoad => {
+                self.require_intrinsic_arity(path, callable, 1)?;
+                let pointee = self.require_intrinsic_raw_pointer(
+                    &format!("{path}.signature.inputs[0]"),
+                    callable.signature.inputs[0],
+                    MirMutability::Immutable,
+                )?;
+                let MirCallReturn::Value(output) = callable.signature.output else {
+                    return Err(error(
+                        format!("{path}.signature.output"),
+                        "volatile_load must return its pointee type",
+                    ));
+                };
+                if self.type_at(output) != Some(pointee) {
+                    return Err(error(
+                        format!("{path}.signature.output"),
+                        "volatile_load output must exactly match its pointee type",
+                    ));
+                }
+                Ok(())
+            }
+            MirIntrinsic::VolatileStore => {
+                self.require_intrinsic_arity(path, callable, 2)?;
+                self.require_intrinsic_unit_output(path, callable)?;
+                let pointee = self.require_intrinsic_raw_pointer(
+                    &format!("{path}.signature.inputs[0]"),
+                    callable.signature.inputs[0],
+                    MirMutability::Mutable,
+                )?;
+                if self.type_at(callable.signature.inputs[1]) != Some(pointee) {
+                    return Err(error(
+                        format!("{path}.signature.inputs[1]"),
+                        "volatile_store value must exactly match its pointee type",
+                    ));
+                }
+                Ok(())
+            }
+        }
+    }
+
+    fn require_intrinsic_arity(
+        &self,
+        path: &str,
+        callable: &MirCallable,
+        expected: usize,
+    ) -> Result<(), MirExecutableValidationError> {
+        if callable.signature.inputs.len() != expected {
+            return Err(error(
+                format!("{path}.signature.inputs"),
+                format!("{} requires exactly {expected} inputs", callable.identity),
+            ));
+        }
+        Ok(())
+    }
+
+    fn require_intrinsic_unit_output(
+        &self,
+        path: &str,
+        callable: &MirCallable,
+    ) -> Result<(), MirExecutableValidationError> {
+        let MirCallReturn::Value(output) = callable.signature.output else {
+            return Err(error(
+                format!("{path}.signature.output"),
+                "intrinsic must return unit",
+            ));
+        };
+        if !matches!(
+            self.type_at(output).map(|ty| &ty.kind),
+            Some(MirTypeKind::Unit)
+        ) {
+            return Err(error(
+                format!("{path}.signature.output"),
+                "intrinsic must return unit",
+            ));
+        }
+        Ok(())
+    }
+
+    fn require_intrinsic_raw_pointer(
+        &self,
+        path: &str,
+        id: MirTypeId,
+        expected_mutability: MirMutability,
+    ) -> Result<&MirSemanticType, MirExecutableValidationError> {
+        let ty = self
+            .type_at(id)
+            .expect("callable type references were checked before intrinsic authority");
+        let MirTypeKind::RawPointer {
+            pointee,
+            mutability,
+            ..
+        } = &ty.kind
+        else {
+            return Err(error(path, "intrinsic input must be a raw pointer"));
+        };
+        if *mutability != expected_mutability {
+            return Err(error(
+                path,
+                "intrinsic pointer input has the wrong mutability",
+            ));
+        }
+        if ty.layout.size != Some(u64::from(self.target.pointer_width_bits / 8)) {
+            return Err(error(
+                path,
+                "intrinsic pointer input does not match the target pointer width",
+            ));
+        }
+        Ok(pointee)
+    }
+
+    fn require_intrinsic_integer(
+        &self,
+        path: &str,
+        id: MirTypeId,
+        signed: bool,
+        bits: u16,
+    ) -> Result<(), MirExecutableValidationError> {
+        if !matches!(
+            self.type_at(id).map(|ty| &ty.kind),
+            Some(MirTypeKind::Scalar(MirScalarType::Int {
+                signed: actual_signed,
+                bits: actual_bits,
+            })) if *actual_signed == signed && *actual_bits == bits
+        ) {
+            return Err(error(
+                path,
+                format!(
+                    "intrinsic requires target {}{bits}",
+                    if signed { 'i' } else { 'u' }
+                ),
+            ));
+        }
+        Ok(())
     }
 }
 
