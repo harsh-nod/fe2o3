@@ -1068,6 +1068,7 @@ fn worker_v2_s09_alpha_o0_preserves_source_dwarf_in_hsaco() {
         &worker_build_identity,
         &llvm_build_identity,
     );
+    let remap = format!("--remap-path-prefix={}/=", workspace.display());
     let backend = build_codegen_backend(&workspace);
     let target = directory.0.join("cargo-target");
     let output = Command::new(env!("CARGO"))
@@ -1090,6 +1091,7 @@ fn worker_v2_s09_alpha_o0_preserves_source_dwarf_in_hsaco() {
         .env("FE2O3_CODEGEN_PIPELINE", "kernel-ir-worker-v2")
         .env("FE2O3_TARGET", "gfx942:xnack-")
         .env("FE2O3_WORKER_V2_CONFIG_V2", &config.0)
+        .env("RUSTFLAGS", remap)
         .output()
         .expect("build S09 alpha debug fixture");
     assert!(
@@ -1123,6 +1125,14 @@ fn worker_v2_s09_alpha_o0_preserves_source_dwarf_in_hsaco() {
         .unwrap_or_else(|error| panic!("run {}: {error}", dwarfdump.display()));
     assert!(dump.status.success(), "S09 DWARF dump failed");
     let dump = String::from_utf8(dump.stdout).expect("UTF-8 DWARF dump");
+    assert!(
+        !dump.contains(workspace.to_str().expect("UTF-8 workspace")),
+        "S09 DWARF leaked the checkout root:\n{dump}"
+    );
+    assert!(
+        !dump.contains("/../") && !dump.contains("/./"),
+        "S09 DWARF contains a non-canonical source path:\n{dump}"
+    );
     for expected in [
         "DW_TAG_compile_unit",
         "DW_LANG_Rust",
@@ -1136,6 +1146,7 @@ fn worker_v2_s09_alpha_o0_preserves_source_dwarf_in_hsaco() {
         "DW_AT_name\t(\"output_len\")",
         "DW_AT_name\t(\"i\")",
         "DW_AT_decl_line\t(70)",
+        "DW_AT_comp_dir\t(\"crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src\")",
         "main.rs",
     ] {
         assert!(

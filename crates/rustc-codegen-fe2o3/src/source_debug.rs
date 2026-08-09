@@ -5,14 +5,21 @@ use crate::collector::{CollectionResult, TypedKernelProfile};
 use rustc_middle::mir::{Body, VarDebugInfoContents};
 use rustc_middle::ty::{FloatTy, TyCtxt, TyKind, UintTy};
 use rustc_span::Span;
+use sha2::{Digest, Sha256};
 use std::env;
 use std::error::Error;
 use std::fmt::{self, Write};
 
 pub(crate) const SOURCE_DEBUG_PROFILE_ENV: &str = "FE2O3_WORKER_V2_SOURCE_DEBUG_PROFILE_V1";
 const S09_ALPHA_PROFILE: &str = "s09-alpha-gfx942-o0-v1";
-const S09_SOURCE_SUFFIX: &str =
+const S09_CRATE_NAME: &str = "fe2o3_typed_alias_spoof";
+const S09_DEF_PATH: &str = "general_genuine::__fe2o3_host_kernel_v1_2d2a566a37ac0eca1d21361c2da8616f124a89c9c4b5b02365e24633c914de06";
+const S09_SOURCE_PATH: &str =
     "crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src/main.rs";
+const S09_SOURCE_SHA256: [u8; 32] = [
+    0xa0, 0x2f, 0x62, 0xa7, 0x31, 0x98, 0xb4, 0x93, 0x25, 0x82, 0x24, 0x70, 0x1c, 0x4f, 0x29, 0xe2,
+    0x5b, 0x3e, 0xca, 0x02, 0xa7, 0x38, 0xbf, 0x02, 0xc0, 0x39, 0x89, 0xd4, 0x5b, 0x77, 0x09, 0x9e,
+];
 const S09_FUNCTION_LINE: usize = 68;
 const S09_INDEX_LINE: usize = 69;
 const S09_LOCAL_LINE: usize = 70;
@@ -86,11 +93,20 @@ pub(crate) fn collect_requested_profile<'tcx>(
             matches.len()
         )));
     };
+    let def_id = alpha.instance.def_id();
+    let crate_name = tcx.crate_name(def_id.krate);
+    let def_path = tcx.def_path_str(def_id);
     let body = tcx.instance_mir(alpha.instance.def);
     validate_alpha_arguments(body)?;
     validate_debug_names(body)?;
 
     let function = source_location(tcx, body.span)?;
+    validate_source_identity(
+        crate_name.as_str(),
+        &def_path,
+        &function.file,
+        function.source_sha256,
+    )?;
     let local = body
         .var_debug_info
         .iter()
@@ -120,25 +136,25 @@ pub(crate) fn collect_requested_profile<'tcx>(
     let index_location = source_location(tcx, index.source_info.span)?;
     if function.file != local_location.file
         || function.file != index_location.file
-        || !function.file.ends_with(S09_SOURCE_SUFFIX)
+        || function.source_sha256 != local_location.source_sha256
+        || function.source_sha256 != index_location.source_sha256
         || function.line != S09_FUNCTION_LINE
         || index_location.line != S09_INDEX_LINE
         || local_location.line != S09_LOCAL_LINE
     {
         return Err(SourceDebugError::new(format!(
-            "S09 alpha source identity changed: expected {S09_SOURCE_SUFFIX}:{S09_FUNCTION_LINE} with `index` at line {S09_INDEX_LINE} and `i` at line {S09_LOCAL_LINE}; found {}:{}, index line {}, and local line {}",
-            function.file, function.line, index_location.line, local_location.line
+            "S09 alpha source spans changed: expected canonical line {S09_FUNCTION_LINE} with `index` at line {S09_INDEX_LINE} and `i` at line {S09_LOCAL_LINE}; found function line {}, index line {}, and local line {}",
+            function.line, index_location.line, local_location.line
         )));
     }
-    let (source_directory, source_file) = match function.file.rsplit_once('/') {
-        Some((directory, file)) => (directory.to_owned(), file.to_owned()),
-        None => (".".to_owned(), function.file.clone()),
-    };
+    let (source_directory, source_file) = S09_SOURCE_PATH
+        .rsplit_once('/')
+        .expect("S09 source path has a directory");
     validate_metadata_string(&source_directory, "source directory")?;
     validate_metadata_string(&source_file, "source file")?;
     Ok(Some(AlphaSourceDebugV1 {
-        source_file,
-        source_directory,
+        source_file: source_file.to_owned(),
+        source_directory: source_directory.to_owned(),
         function_line: function.line,
         index_line: index_location.line,
         local_line: local_location.line,
@@ -188,6 +204,7 @@ fn validate_debug_names(body: &Body<'_>) -> Result<(), SourceDebugError> {
 struct SourceLocation {
     file: String,
     line: usize,
+    source_sha256: [u8; 32],
 }
 
 fn source_location(tcx: TyCtxt<'_>, span: Span) -> Result<SourceLocation, SourceDebugError> {
@@ -203,10 +220,43 @@ fn source_location(tcx: TyCtxt<'_>, span: Span) -> Result<SourceLocation, Source
             "S09 alpha source span has no file or line",
         ));
     }
+    let source = location.file.src.as_ref().ok_or_else(|| {
+        SourceDebugError::new("S09 alpha source text is unavailable for identity binding")
+    })?;
     Ok(SourceLocation {
         file,
         line: location.line,
+        source_sha256: Sha256::digest(source.as_bytes()).into(),
     })
+}
+
+fn validate_source_identity(
+    crate_name: &str,
+    def_path: &str,
+    source_path: &str,
+    source_sha256: [u8; 32],
+) -> Result<(), SourceDebugError> {
+    let canonical_path = !source_path.starts_with('/')
+        && !source_path.contains('\\')
+        && source_path
+            .split('/')
+            .all(|component| !component.is_empty() && component != "." && component != "..");
+    if !canonical_path || source_path != S09_SOURCE_PATH {
+        return Err(SourceDebugError::new(
+            "S09 alpha source path is not the exact canonical remapped path",
+        ));
+    }
+    if crate_name != S09_CRATE_NAME || def_path != S09_DEF_PATH {
+        return Err(SourceDebugError::new(
+            "S09 alpha crate or DefPath identity changed",
+        ));
+    }
+    if source_sha256 != S09_SOURCE_SHA256 {
+        return Err(SourceDebugError::new(
+            "S09 alpha whole-source SHA-256 identity changed",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_metadata_string(value: &str, field: &str) -> Result<(), SourceDebugError> {
@@ -645,5 +695,49 @@ attributes #0 = { nounwind }
             .to_string()
             .contains("inline assembly")
         );
+    }
+
+    #[test]
+    fn source_identity_rejects_spoofs_and_checkout_paths() {
+        validate_source_identity(
+            S09_CRATE_NAME,
+            S09_DEF_PATH,
+            S09_SOURCE_PATH,
+            S09_SOURCE_SHA256,
+        )
+        .unwrap();
+
+        for (crate_name, def_path, source_path, digest) in [
+            (
+                "substitute",
+                S09_DEF_PATH,
+                S09_SOURCE_PATH,
+                S09_SOURCE_SHA256,
+            ),
+            (
+                S09_CRATE_NAME,
+                "general_genuine::__fe2o3_host_kernel_v1_substitute",
+                S09_SOURCE_PATH,
+                S09_SOURCE_SHA256,
+            ),
+            (
+                S09_CRATE_NAME,
+                S09_DEF_PATH,
+                "/checkout/crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src/main.rs",
+                S09_SOURCE_SHA256,
+            ),
+            (
+                S09_CRATE_NAME,
+                S09_DEF_PATH,
+                "crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src/../src/main.rs",
+                S09_SOURCE_SHA256,
+            ),
+            (S09_CRATE_NAME, S09_DEF_PATH, S09_SOURCE_PATH, [0; 32]),
+        ] {
+            assert!(
+                validate_source_identity(crate_name, def_path, source_path, digest).is_err(),
+                "spoofed source identity was admitted"
+            );
+        }
     }
 }
