@@ -1385,8 +1385,16 @@ impl<'a> Verifier<'a> {
                     let MirTypeKind::Enum(enum_type) = &self.type_at(ty).kind else {
                         return Err(error(path, "set-discriminant place is not an enum"));
                     };
-                    if !enum_type.variants.iter().any(|item| item.index == *variant) {
-                        return Err(error(path, "set-discriminant variant does not exist"));
+                    let variant = enum_type
+                        .variants
+                        .iter()
+                        .find(|item| item.index == *variant)
+                        .ok_or_else(|| error(&path, "set-discriminant variant does not exist"))?;
+                    if !variant.aggregate.fields.is_empty() {
+                        return Err(error(
+                            path,
+                            "set-discriminant cannot select a variant with payload fields",
+                        ));
                     }
                 }
                 MirStatementKind::StorageLive(local) | MirStatementKind::StorageDead(local) => {
@@ -1854,7 +1862,7 @@ impl<'a> Verifier<'a> {
                 MirConstantValue::FloatBits(bits),
                 MirTypeKind::Scalar(MirScalarType::Float { bits: width }),
             ) => *width == 128 || *bits < (1_u128 << *width),
-            (MirConstantValue::ZeroSized, _) => ty.layout.size == Some(0),
+            (MirConstantValue::ZeroSized, _) => ty.has_single_zero_sized_value().unwrap_or(false),
             _ => false,
         };
         if !valid {
