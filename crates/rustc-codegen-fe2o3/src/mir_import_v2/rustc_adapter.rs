@@ -929,7 +929,7 @@ fn capture_callee_identity<'tcx>(
                     binding_hash: [0; 32],
                 };
                 captured.binding_hash = intrinsic_binding_hash_v2(&captured)?;
-                Some(captured)
+                Some(Box::new(captured))
             }
             _ => None,
         };
@@ -942,7 +942,7 @@ fn capture_callee_identity<'tcx>(
             &declared_signature,
             &resolved_identity,
             &resolved_signature,
-            intrinsic.as_ref(),
+            intrinsic.as_deref(),
         )?;
         return Ok(CalleeIdentityV2::Direct {
             declared,
