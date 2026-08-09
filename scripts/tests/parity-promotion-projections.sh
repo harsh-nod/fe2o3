@@ -233,6 +233,119 @@ expect_failure archive_rebound \
   bash "${CHECKER}" "${PROTECTED}" "${CANDIDATE}" "${TRANSACTION}" \
     "${TEST_ROOT}/rebound-archive-closure.tsv"
 
+# A later protected base retains the first manifest and deterministically
+# selects one newly appended manifest for a Partial-to-Complete transaction.
+SECOND_PROTECTED="${TEST_ROOT}/second-protected"
+SECOND_CANDIDATE="${TEST_ROOT}/second-candidate"
+SECOND_TRANSACTION="${TEST_ROOT}/second-transaction.tsv"
+SECOND_CLOSURE="${TEST_ROOT}/second-closure.tsv"
+cp -a "${CANDIDATE}" "${SECOND_PROTECTED}"
+cp -a "${SECOND_PROTECTED}" "${SECOND_CANDIDATE}"
+first_manifest_before="$(file_sha \
+  "${SECOND_PROTECTED}/docs/parity-evidence/archive/${MANIFEST_RELATIVE}")"
+printf 'second signed manifest fixture\n' \
+  >"${SECOND_CANDIDATE}/docs/parity-evidence/archive/manifests/new.tsv"
+second_manifest_digest="$(file_sha \
+  "${SECOND_CANDIDATE}/docs/parity-evidence/archive/manifests/new.tsv")"
+SECOND_MANIFEST_RELATIVE="manifests/promotion-${second_manifest_digest}.tsv"
+readonly SECOND_MANIFEST_RELATIVE
+mv "${SECOND_CANDIDATE}/docs/parity-evidence/archive/manifests/new.tsv" \
+  "${SECOND_CANDIDATE}/docs/parity-evidence/archive/${SECOND_MANIFEST_RELATIVE}"
+for class in unit ui ir compile; do
+  printf '%s complete evidence\n' "${class}" \
+    >"${SECOND_CANDIDATE}/docs/parity-evidence/archive/results/04-complete-${class}.tsv"
+done
+[[ "$(python3 "${SECOND_PROTECTED}/scripts/parity-signed-evidence.py" \
+  derive-promotion-manifest \
+  --protected-archive "${SECOND_PROTECTED}/docs/parity-evidence/archive" \
+  --candidate-archive "${SECOND_CANDIDATE}/docs/parity-evidence/archive")" == \
+  "${SECOND_MANIFEST_RELATIVE}" ]]
+[[ "$(file_sha \
+  "${SECOND_CANDIDATE}/docs/parity-evidence/archive/${MANIFEST_RELATIVE}")" == \
+  "${first_manifest_before}" ]]
+awk -F '\t' -v OFS='\t' -v source="${SOURCE}" '
+  $1 == "fe2o3_commit" { $2 = source }
+  $1 == "normative" && $2 == "04" { $3 = "Complete" }
+  { print }
+' "${SECOND_PROTECTED}/docs/cuda-oxide-parity-status.tsv" \
+  >"${SECOND_CANDIDATE}/docs/cuda-oxide-parity-status.tsv"
+{
+  printf 'signed_promotion_projection_schema_version\t1\n'
+  printf 'row_count\t1\n'
+  printf 'row\t0000\t04\tPartial\tComplete\t%s\tgfx942\tmi300x-gfx942-release\t' "${SOURCE}"
+  printf 'unit,ui,ir,compile\tbash\t'
+  printf 'results/04-complete-unit.tsv,results/04-complete-ui.tsv,results/04-complete-ir.tsv,results/04-complete-compile.tsv\t%s\n' \
+    'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd'
+} >"${SECOND_TRANSACTION}"
+{
+  printf 'promotion_archive_closure_schema_version\t1\n'
+  printf 'evidence_set_sha256\t%s\n' 'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd'
+  printf 'manifest_path\t%s\n' "${SECOND_MANIFEST_RELATIVE}"
+  printf 'manifest_sha256\t%s\n' "${second_manifest_digest}"
+  printf 'file_count\t5\n'
+  index=0
+  for path in \
+    "${SECOND_MANIFEST_RELATIVE}" \
+    results/04-complete-compile.tsv \
+    results/04-complete-ir.tsv \
+    results/04-complete-ui.tsv \
+    results/04-complete-unit.tsv; do
+    printf 'file\t%04d\t%s\t%s\t%s\n' "${index}" "${path}" \
+      "$(file_size "${SECOND_CANDIDATE}/docs/parity-evidence/archive/${path}")" \
+      "$(file_sha "${SECOND_CANDIDATE}/docs/parity-evidence/archive/${path}")"
+    ((index += 1))
+  done
+} >"${SECOND_CLOSURE}"
+rm "${SECOND_CANDIDATE}/docs/generated/cuda-oxide-parity-signed-promotions.tsv"
+python3 "${SECOND_PROTECTED}/scripts/parity-signed-evidence.py" merge-projections \
+  --baseline "${SECOND_PROTECTED}/docs/generated/cuda-oxide-parity-signed-promotions.tsv" \
+  --transaction "${SECOND_TRANSACTION}" \
+  --output "${SECOND_CANDIDATE}/docs/generated/cuda-oxide-parity-signed-promotions.tsv"
+cp "${SECOND_PROTECTED}/docs/cuda-oxide-parity-matrix.md" \
+  "${SECOND_CANDIDATE}/docs/cuda-oxide-parity-matrix.md"
+bash "${SECOND_PROTECTED}/scripts/parity-matrix.sh" generate \
+  "${SECOND_CANDIDATE}/docs/cuda-oxide-parity-status.tsv" \
+  "${SECOND_CANDIDATE}/docs/cuda-oxide-parity-matrix.md" >/dev/null
+bash "${SECOND_PROTECTED}/scripts/parity-dashboard.sh" update \
+  --status "${SECOND_CANDIDATE}/docs/cuda-oxide-parity-status.tsv" \
+  --matrix "${SECOND_CANDIDATE}/docs/cuda-oxide-parity-matrix.md" \
+  --repo "${SECOND_CANDIDATE}" \
+  --signed-promotions "${SECOND_CANDIDATE}/docs/generated/cuda-oxide-parity-signed-promotions.tsv" \
+  --markdown "${SECOND_CANDIDATE}/docs/generated/cuda-oxide-parity-dashboard.md" \
+  --tsv "${SECOND_CANDIDATE}/docs/generated/cuda-oxide-parity-dashboard.tsv" >/dev/null
+bash "${SECOND_PROTECTED}/scripts/parity-promotion-projections.sh" \
+  "${SECOND_PROTECTED}" "${SECOND_CANDIDATE}" \
+  "${SECOND_TRANSACTION}" "${SECOND_CLOSURE}"
+awk -F '\t' '
+  $1 == "normative" && $2 == "04" && $6 == "Complete" { found++ }
+  END { exit found == 1 ? 0 : 1 }
+' "${SECOND_CANDIDATE}/docs/generated/cuda-oxide-parity-dashboard.tsv"
+
+{
+  printf 'promotion_archive_closure_schema_version\t1\n'
+  printf 'evidence_set_sha256\t%s\n' 'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd'
+  printf 'manifest_path\t%s\n' "${MANIFEST_RELATIVE}"
+  printf 'manifest_sha256\t%s\n' "${first_manifest_before}"
+  printf 'file_count\t5\n'
+  index=0
+  for path in \
+    "${MANIFEST_RELATIVE}" \
+    results/04-complete-compile.tsv \
+    results/04-complete-ir.tsv \
+    results/04-complete-ui.tsv \
+    results/04-complete-unit.tsv; do
+    printf 'file\t%04d\t%s\t%s\t%s\n' "${index}" "${path}" \
+      "$(file_size "${SECOND_CANDIDATE}/docs/parity-evidence/archive/${path}")" \
+      "$(file_sha "${SECOND_CANDIDATE}/docs/parity-evidence/archive/${path}")"
+    ((index += 1))
+  done
+} >"${TEST_ROOT}/replayed-manifest-closure.tsv"
+expect_failure manifest_replay_projection \
+  'promotion archive closure replays a protected manifest' \
+  bash "${SECOND_PROTECTED}/scripts/parity-promotion-projections.sh" \
+    "${SECOND_PROTECTED}" "${SECOND_CANDIDATE}" \
+    "${SECOND_TRANSACTION}" "${TEST_ROOT}/replayed-manifest-closure.tsv"
+
 # Exercise the real legacy-claim shape through every protected projection.
 LEGACY_CANDIDATE="${TEST_ROOT}/legacy-candidate"
 LEGACY_TRANSACTION="${TEST_ROOT}/legacy-transaction.tsv"
