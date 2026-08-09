@@ -9,17 +9,20 @@ state or substitute image, runtime, device, or isolation settings.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
+import secrets
 import shutil
 import signal
 import stat
+import struct
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 from dataclasses import dataclass
@@ -34,6 +37,14 @@ MAX_JSON_STRING_BYTES = 1024 * 1024
 MAX_OCI_METADATA_BYTES = 4 * 1024 * 1024
 MAX_OCI_LAYER_BYTES = 64 * 1024**3
 MAX_OCI_IMAGE_BYTES = 256 * 1024**3
+MAX_STAGING_ROOT_ENTRIES = 64
+MAX_SOURCE_DIRECTORIES = 16384
+MAX_CLEANUP_ENTRIES = 40000
+PROCESS_REAP_GRACE_SECONDS = 5.0
+PROCESS_PIPE_JOIN_SECONDS = 5.0
+PROCESS_FINAL_JOIN_SECONDS = 1.0
+FS_IOC_GETFLAGS = 0x80086601
+FS_IMMUTABLE_FL = 0x00000010
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 ID_RE = re.compile(r"^[a-z][a-z0-9._-]{0,63}$")
@@ -77,6 +88,24 @@ class ProcessOutput:
     stdout: bytes
     stderr: bytes
     returncode: int
+
+
+def poll_process_exit(process: subprocess.Popen[bytes], timeout_seconds: float) -> bool:
+    deadline = time.monotonic() + timeout_seconds
+    while process.poll() is None:
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.01)
+    return True
+
+
+def join_threads_bound(threads: list[threading.Thread], timeout_seconds: float) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    for thread in threads:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        thread.join(timeout=remaining)
 
 
 def run_bounded(
@@ -143,7 +172,7 @@ def run_bounded(
 
         def write_input() -> None:
             try:
-                process.stdin.write(input_data)
+                write_all(process.stdin.fileno(), input_data)
                 process.stdin.close()
             except (BrokenPipeError, OSError):
                 pass
@@ -162,29 +191,36 @@ def run_bounded(
                 pass
             break
         time.sleep(0.01)
-    try:
-        process.wait(timeout=5)
-    except subprocess.TimeoutExpired:
+    reaped = process.returncode is not None
+    if not reaped:
+        reaped = poll_process_exit(process, PROCESS_REAP_GRACE_SECONDS)
+    if not reaped:
         try:
             os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
-        process.wait()
-    for reader in readers:
-        reader.join(timeout=5)
-    if writer is not None:
-        writer.join(timeout=5)
-    if any(reader.is_alive() for reader in readers) or (writer and writer.is_alive()):
+        reaped = poll_process_exit(process, PROCESS_REAP_GRACE_SECONDS)
+    threads = [*readers, *([writer] if writer is not None else [])]
+    join_threads_bound(threads, PROCESS_PIPE_JOIN_SECONDS)
+    if any(thread.is_alive() for thread in threads):
         try:
             os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
-        for reader in readers:
-            reader.join(timeout=1)
-        if writer is not None:
-            writer.join(timeout=1)
+        if not reaped:
+            reaped = poll_process_exit(process, PROCESS_FINAL_JOIN_SECONDS)
+        join_threads_bound(threads, PROCESS_FINAL_JOIN_SECONDS)
         fail(f"bounded subprocess pipe did not close for {label}")
+    if not reaped or process.returncode is None:
+        fail(
+            f"{label} did not become waitable after bounded SIGKILL grace; "
+            "reap is deferred"
+        )
     if overflow:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
         fail(f"{label} {overflow[0]} exceeds protected limit")
     if timed_out:
         fail(f"{label} exceeded protected timeout")
@@ -208,11 +244,7 @@ def valid_absolute(value: str) -> bool:
     )
 
 
-def read_rows(path: Path, label: str) -> tuple[bytes, list[list[str]]]:
-    try:
-        raw = path.read_bytes()
-    except OSError as error:
-        fail(f"cannot read {label}: {error}")
+def parse_rows(raw: bytes, label: str) -> list[list[str]]:
     if not raw or len(raw) > MAX_FILE_BYTES:
         fail(f"invalid {label} size")
     if b"\r" in raw or not raw.endswith(b"\n"):
@@ -225,7 +257,7 @@ def read_rows(path: Path, label: str) -> tuple[bytes, list[list[str]]]:
             rows.append(raw_line.decode("ascii").split("\t"))
         except UnicodeDecodeError:
             fail(f"non-ASCII {label} line {number}")
-    return raw, rows
+    return rows
 
 
 class Cursor:
@@ -264,6 +296,178 @@ def parse_count(value: str, label: str, *, allow_zero: bool = False) -> int:
     if result > MAX_ITEMS or (result == 0 and not allow_zero):
         fail(f"invalid {label} count")
     return result
+
+
+@dataclass(frozen=True)
+class TrustAnchor:
+    identity: str
+    policy_size: int
+    policy_digest: str
+    owner_uid: int
+    owner_gid: int
+    file_contract: str
+
+
+@dataclass
+class TrustedRoot:
+    path: Path
+    fd: int
+    owner_uid: int
+    owner_gid: int
+
+    def close(self) -> None:
+        os.close(self.fd)
+
+
+def stable_file_identity(info: os.stat_result) -> tuple[int, ...]:
+    return (
+        info.st_dev,
+        info.st_ino,
+        info.st_mode,
+        info.st_nlink,
+        info.st_uid,
+        info.st_gid,
+        info.st_size,
+        info.st_mtime_ns,
+        info.st_ctime_ns,
+    )
+
+
+def verify_trusted_metadata(
+    info: os.stat_result,
+    anchor: TrustAnchor,
+    label: str,
+    *,
+    directory: bool,
+) -> None:
+    expected_kind = (
+        stat.S_ISDIR(info.st_mode) if directory else stat.S_ISREG(info.st_mode)
+    )
+    if (
+        not expected_kind
+        or (info.st_uid, info.st_gid) != (anchor.owner_uid, anchor.owner_gid)
+        or info.st_mode & 0o022
+        or not directory
+        and info.st_nlink != 1
+    ):
+        fail(
+            f"{label} ownership, mode, type, or link contract is unsafe "
+            f"(uid={info.st_uid}, gid={info.st_gid}, "
+            f"mode={stat.S_IMODE(info.st_mode):04o}, links={info.st_nlink}, "
+            f"expected={anchor.owner_uid}:{anchor.owner_gid})"
+        )
+
+
+def verify_immutable_flag(file_fd: int, anchor: TrustAnchor, label: str) -> None:
+    if anchor.file_contract == "descriptor-stable":
+        return
+    if anchor.file_contract != "linux-immutable":
+        fail("invalid external trust-anchor file contract")
+    try:
+        packed = fcntl.ioctl(file_fd, FS_IOC_GETFLAGS, struct.pack("=I", 0))
+        flags = struct.unpack("=I", packed)[0]
+    except (OSError, struct.error) as error:
+        fail(f"cannot establish immutable flag for {label}: {error}")
+    if not flags & FS_IMMUTABLE_FL:
+        fail(f"{label} does not satisfy the external immutable-file contract")
+
+
+def open_trusted_root(path: Path, anchor: TrustAnchor) -> TrustedRoot:
+    if not path.is_absolute() or not valid_absolute(str(path)):
+        fail("protected root path must be canonical absolute")
+    try:
+        root_fd = os.open(
+            path,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+        )
+        info = os.fstat(root_fd)
+        verify_trusted_metadata(info, anchor, "protected root", directory=True)
+    except ExecutorError:
+        if "root_fd" in locals():
+            os.close(root_fd)
+        raise
+    except OSError as error:
+        if "root_fd" in locals():
+            os.close(root_fd)
+        fail(f"cannot open protected root without following links: {error}")
+    return TrustedRoot(path, root_fd, anchor.owner_uid, anchor.owner_gid)
+
+
+def read_descriptor_bound(file_fd: int, maximum: int, label: str) -> bytes:
+    output = bytearray()
+    try:
+        while len(output) <= maximum:
+            chunk = os.read(file_fd, min(65536, maximum + 1 - len(output)))
+            if not chunk:
+                break
+            output.extend(chunk)
+    except OSError as error:
+        fail(f"cannot read {label}: {error}")
+    if not output or len(output) > maximum:
+        fail(f"invalid {label} size")
+    return bytes(output)
+
+
+def read_trusted_file(
+    root: TrustedRoot,
+    relative: str,
+    anchor: TrustAnchor,
+    *,
+    expected_size: int,
+    expected_digest: str,
+    label: str,
+) -> bytes:
+    if (
+        not valid_relative(relative)
+        or not 1 <= expected_size <= MAX_FILE_BYTES
+        or not SHA256_RE.fullmatch(expected_digest)
+    ):
+        fail(f"malformed {label} external binding")
+    try:
+        current_fd = os.dup(root.fd)
+    except OSError as error:
+        fail(f"cannot retain protected root for {label}: {error}")
+    file_fd = -1
+    try:
+        components = relative.split("/")
+        for component in components[:-1]:
+            next_fd = os.open(
+                component,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                dir_fd=current_fd,
+            )
+            os.close(current_fd)
+            current_fd = next_fd
+            verify_trusted_metadata(
+                os.fstat(current_fd), anchor, f"{label} parent", directory=True
+            )
+        file_fd = os.open(
+            components[-1],
+            os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=current_fd,
+        )
+        before = os.fstat(file_fd)
+        verify_trusted_metadata(before, anchor, label, directory=False)
+        verify_immutable_flag(file_fd, anchor, label)
+        if before.st_size != expected_size:
+            fail(f"{label} size differs from its external binding")
+        raw = read_descriptor_bound(file_fd, MAX_FILE_BYTES, label)
+        after = os.fstat(file_fd)
+        if (
+            stable_file_identity(before) != stable_file_identity(after)
+            or len(raw) != expected_size
+            or sha256_bytes(raw) != expected_digest
+        ):
+            fail(f"{label} changed or differs from its external binding")
+        return raw
+    except ExecutorError:
+        raise
+    except OSError as error:
+        fail(f"cannot open protected {label} without following links: {error}")
+    finally:
+        if file_fd >= 0:
+            os.close(file_fd)
+        os.close(current_fd)
 
 
 def protected_path(root: Path, relative: str, label: str) -> Path:
@@ -335,7 +539,10 @@ def verify_operator_owned(
     if profile.mode == "production":
         current = path.parent
         while current != current.parent:
-            parent_info = current.lstat()
+            try:
+                parent_info = current.lstat()
+            except OSError:
+                fail(f"operator {label} parent is unavailable")
             if (
                 current.is_symlink()
                 or not stat.S_ISDIR(parent_info.st_mode)
@@ -359,17 +566,27 @@ class PolicyEntry:
 class Policy:
     domain: str
     profiles: dict[str, PolicyEntry]
+    digest: str
 
 
-def parse_policy(root: Path, relative: str) -> Policy:
-    path = protected_path(root, relative, "OCI executor policy")
-    _, rows = read_rows(path, "OCI executor policy")
+def parse_policy(root: TrustedRoot, relative: str, anchor: TrustAnchor) -> Policy:
+    raw = read_trusted_file(
+        root,
+        relative,
+        anchor,
+        expected_size=anchor.policy_size,
+        expected_digest=anchor.policy_digest,
+        label="OCI executor policy",
+    )
+    rows = parse_rows(raw, "OCI executor policy")
     cursor = Cursor(rows, "OCI executor policy")
     if cursor.scalar("oci_executor_policy_schema_version") != "1":
         fail("OCI executor policy schema must be 1")
     domain = cursor.scalar("trust_domain")
     if domain not in ("production", "test"):
         fail("invalid OCI executor policy trust domain")
+    if domain == "production" and anchor.file_contract != "linux-immutable":
+        fail("production policy requires an external Linux immutable-file contract")
     count = parse_count(cursor.scalar("profile_count"), "profile")
     profiles: dict[str, PolicyEntry] = {}
     previous = ""
@@ -390,7 +607,7 @@ def parse_policy(root: Path, relative: str) -> Policy:
         profiles[profile_id] = PolicyEntry(profile_id, profile_path, int(size), digest)
         previous = profile_id
     cursor.done()
-    return Policy(domain, profiles)
+    return Policy(domain, profiles, anchor.policy_digest)
 
 
 @dataclass(frozen=True)
@@ -448,6 +665,7 @@ class Profile:
     tmp_mount: str
     output_limit: int
     tmp_limit: int
+    shm_limit: int
     log_limit: int
     memory_limit: int
     pids_limit: int
@@ -522,17 +740,21 @@ def parse_positive(cursor: Cursor, key: str, minimum: int, maximum: int) -> int:
     return int(value)
 
 
-def load_profile(root: Path, policy: Policy, profile_id: str) -> Profile:
+def load_profile(
+    root: TrustedRoot, policy: Policy, profile_id: str, anchor: TrustAnchor
+) -> Profile:
     entry = policy.profiles.get(profile_id)
     if entry is None:
         fail("executor profile is not authorized by protected policy")
-    path = protected_path(root, entry.relative_path, "OCI executor profile")
-    verify_regular(
-        path, str(entry.size), entry.digest, "protected OCI executor profile"
+    raw = read_trusted_file(
+        root,
+        entry.relative_path,
+        anchor,
+        expected_size=entry.size,
+        expected_digest=entry.digest,
+        label="OCI executor profile",
     )
-    raw, rows = read_rows(path, "OCI executor profile")
-    if sha256_bytes(raw) != entry.digest:
-        fail("protected OCI executor profile digest mismatch")
+    rows = parse_rows(raw, "OCI executor profile")
     cursor = Cursor(rows, "OCI executor profile")
     if cursor.scalar("oci_executor_profile_schema_version") != "1":
         fail("OCI executor profile schema must be 1")
@@ -664,6 +886,7 @@ def load_profile(root: Path, policy: Policy, profile_id: str) -> Profile:
         fail("invalid or duplicate executor mount")
     output_limit = parse_positive(cursor, "output_limit_bytes", 1, 16 * 1024**3)
     tmp_limit = parse_positive(cursor, "tmp_limit_bytes", 1, 16 * 1024**3)
+    shm_limit = parse_positive(cursor, "shm_limit_bytes", 1024**2, 16 * 1024**3)
     log_limit = parse_positive(cursor, "log_limit_bytes", 1, 1024**3)
     memory_limit = parse_positive(cursor, "memory_limit_bytes", 64 * 1024**2, 1024**4)
     pids_limit = parse_positive(cursor, "pids_limit", 1, 65536)
@@ -778,6 +1001,7 @@ def load_profile(root: Path, policy: Policy, profile_id: str) -> Profile:
         tmp_mount,
         output_limit,
         tmp_limit,
+        shm_limit,
         log_limit,
         memory_limit,
         pids_limit,
@@ -829,12 +1053,38 @@ def read_json_bound(path: Path, binding: Layer, label: str) -> dict[str, object]
         path, str(binding.size), binding.digest.removeprefix("sha256:"), label
     )
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        raw = path.read_bytes()
+    except OSError:
+        fail(f"cannot read {label}")
+    return strict_json_object(raw, label)
+
+
+def strict_json_object(raw: bytes, label: str) -> dict[str, object]:
+    def object_pairs(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for key, value in pairs:
+            if key in result:
+                fail(f"{label} JSON contains a duplicate key")
+            result[key] = value
+        return result
+
+    def reject_constant(value: str) -> object:
+        raise ValueError(value)
+
+    try:
+        value = json.loads(
+            raw,
+            object_pairs_hook=object_pairs,
+            parse_constant=reject_constant,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError, ValueError):
         fail(f"invalid {label} JSON")
     if not isinstance(value, dict):
         fail(f"invalid {label} JSON object")
-    validate_json_shape(value, label)
+    try:
+        validate_json_shape(value, label)
+    except RecursionError:
+        fail(f"{label} JSON exceeds structural limits")
     return value
 
 
@@ -863,14 +1113,7 @@ def read_json_file(
         and sha256_bytes(raw) != expected_digest
     ):
         fail(f"{label} binding or size is invalid")
-    try:
-        value = json.loads(raw)
-    except (UnicodeDecodeError, json.JSONDecodeError):
-        fail(f"invalid {label} JSON")
-    if not isinstance(value, dict):
-        fail(f"invalid {label} JSON object")
-    validate_json_shape(value, label)
-    return value
+    return strict_json_object(raw, label)
 
 
 def validate_json_shape(value: object, label: str) -> None:
@@ -897,7 +1140,10 @@ def validate_json_shape(value: object, label: str) -> None:
                     fail(f"{label} JSON has a non-string key")
                 visit(key, depth + 1)
                 visit(child, depth + 1)
-        elif item is not None and not isinstance(item, (bool, int, float)):
+        elif isinstance(item, float):
+            if not math.isfinite(item):
+                fail(f"{label} JSON contains a non-finite number")
+        elif item is not None and not isinstance(item, (bool, int)):
             fail(f"{label} JSON contains an unsupported value")
 
     visit(value, 0)
@@ -911,12 +1157,48 @@ def descriptor(value: object, label: str) -> Layer:
     if (
         not isinstance(digest, str)
         or OCI_DIGEST_RE.fullmatch(digest) is None
-        or not isinstance(size, int)
+        or type(size) is not int
         or size < 0
         or size > MAX_OCI_LAYER_BYTES
     ):
         fail(f"invalid OCI {label} descriptor")
     return Layer(digest, size)
+
+
+def validate_image_config(value: object, label: str) -> dict[str, object]:
+    if type(value) is not dict or value.get("Env") not in (None, []):
+        fail(f"{label} must not supply inherited environment")
+    if "Volumes" in value:
+        fail(f"{label} must not declare volumes")
+    if "Healthcheck" in value:
+        fail(f"{label} must not declare a healthcheck")
+    return value
+
+
+def validate_oci_rootfs(value: object, layer_count: int) -> tuple[str, ...]:
+    if type(value) is not dict:
+        fail("OCI config lacks a layer rootfs")
+    diff_ids = value.get("diff_ids")
+    if value.get("type") != "layers" or type(diff_ids) is not list:
+        fail("OCI config lacks a layer rootfs")
+    if any(
+        type(item) is not str or OCI_DIGEST_RE.fullmatch(item) is None
+        for item in diff_ids
+    ):
+        fail("OCI config has malformed rootfs diff IDs")
+    if len(diff_ids) != layer_count:
+        fail("OCI config/layer count mismatch")
+    return tuple(diff_ids)
+
+
+def validate_runtime_rootfs(value: object, expected: tuple[str, ...]) -> None:
+    if type(value) is not dict or value.get("Type") != "layers":
+        fail("runtime image has malformed RootFS")
+    layers = value.get("Layers")
+    if type(layers) is not list or any(type(item) is not str for item in layers):
+        fail("runtime image has malformed RootFS.Layers")
+    if tuple(layers) != expected:
+        fail("runtime image layers differ from protected OCI image")
 
 
 def verify_oci_image(profile: Profile) -> tuple[str, ...]:
@@ -975,26 +1257,10 @@ def verify_oci_image(profile: Profile) -> tuple[str, ...]:
     )
     verify_operator_owned(config_path, profile, "OCI config", directory=False)
     config = read_json_bound(config_path, profile.config, "OCI config")
-    rootfs = config.get("rootfs")
-    diff_ids = rootfs.get("diff_ids") if isinstance(rootfs, dict) else None
-    if (
-        rootfs is None
-        or rootfs.get("type") != "layers"
-        or not isinstance(diff_ids, list)
-    ):
-        fail("OCI config lacks a layer rootfs")
-    if any(
-        not isinstance(item, str) or OCI_DIGEST_RE.fullmatch(item) is None
-        for item in diff_ids
-    ):
-        fail("OCI config has malformed rootfs diff IDs")
-    if len(diff_ids) != len(profile.layers):
-        fail("OCI config/layer count mismatch")
+    diff_ids = validate_oci_rootfs(config.get("rootfs"), len(profile.layers))
     if config.get("architecture") != "amd64" or config.get("os") != "linux":
         fail("OCI image platform must be linux/amd64")
-    image_config = config.get("config")
-    if not isinstance(image_config, dict) or image_config.get("Env") not in (None, []):
-        fail("OCI image must not supply inherited environment")
+    validate_image_config(config.get("config"), "OCI image config")
     for layer in profile.layers:
         layer_path = require_safe_oci_entry(
             layout,
@@ -1008,7 +1274,7 @@ def verify_oci_image(profile: Profile) -> tuple[str, ...]:
             layer.digest.removeprefix("sha256:"),
             "OCI layer",
         )
-    return tuple(diff_ids)
+    return diff_ids
 
 
 @dataclass(frozen=True)
@@ -1032,6 +1298,7 @@ class AuthorizedRequest:
     profile: Profile
     request: Request
     seccomp_path: Path
+    authorization_digest: str
 
 
 @dataclass(frozen=True)
@@ -1042,8 +1309,8 @@ class ObservedRuntimeRequest:
     image_diff_ids: tuple[str, ...]
 
 
-def parse_request(path: Path) -> Request:
-    raw, rows = read_rows(path, "OCI execution request")
+def parse_request(raw: bytes) -> Request:
+    rows = parse_rows(raw, "OCI execution request")
     cursor = Cursor(rows, "OCI execution request")
     if cursor.scalar("oci_execution_request_schema_version") != "1":
         fail("OCI execution request schema must be 1")
@@ -1079,11 +1346,165 @@ def parse_request(path: Path) -> Request:
     )
 
 
+def read_request_file(path: Path, expected_uid: int, expected_gid: int) -> Request:
+    if (
+        not path.is_absolute()
+        or not valid_absolute(str(path))
+        or not 0 <= expected_uid <= 2**31 - 1
+        or not 0 <= expected_gid <= 2**31 - 1
+    ):
+        fail("OCI execution request path or external owner binding is invalid")
+    request_fd = -1
+    try:
+        request_fd = os.open(
+            path,
+            os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC,
+        )
+        before = os.fstat(request_fd)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_nlink != 1
+            or (before.st_uid, before.st_gid) != (expected_uid, expected_gid)
+            or before.st_mode & 0o022
+            or not 1 <= before.st_size <= MAX_FILE_BYTES
+        ):
+            fail(
+                "OCI execution request violates its external "
+                "owner/mode/type/link/size contract"
+            )
+        raw = read_descriptor_bound(request_fd, MAX_FILE_BYTES, "OCI execution request")
+        after = os.fstat(request_fd)
+        if (
+            stable_file_identity(before) != stable_file_identity(after)
+            or len(raw) != before.st_size
+        ):
+            fail("OCI execution request changed while being read")
+        return parse_request(raw)
+    except ExecutorError:
+        raise
+    except OSError as error:
+        fail(f"cannot open OCI execution request without following links: {error}")
+    finally:
+        if request_fd >= 0:
+            os.close(request_fd)
+
+
+def safe_close(file_fd: int) -> None:
+    if file_fd < 0:
+        return
+    try:
+        os.close(file_fd)
+    except OSError:
+        pass
+
+
+def staging_lease_name(authorization_digest: str) -> str:
+    if not SHA256_RE.fullmatch(authorization_digest):
+        fail("invalid staging authorization identity")
+    return f"plan-{authorization_digest}-{secrets.token_hex(32)}"
+
+
+def open_staging_root(profile: Profile, path: Path, label: str) -> int:
+    root_fd = -1
+    try:
+        root_fd = os.open(
+            path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+        )
+        info = os.fstat(root_fd)
+        if (
+            not stat.S_ISDIR(info.st_mode)
+            or (info.st_uid, info.st_gid)
+            != (profile.operator_uid, profile.operator_gid)
+            or info.st_mode & 0o022
+        ):
+            fail(f"{label} ownership or mode changed before staging")
+        fcntl.flock(root_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        count = 0
+        with os.scandir(root_fd) as entries:
+            for _ in entries:
+                count += 1
+                if count > MAX_STAGING_ROOT_ENTRIES:
+                    fail(f"{label} exceeds the protected stale-entry quota")
+        return root_fd
+    except BlockingIOError:
+        safe_close(root_fd)
+        fail(f"{label} is busy with another staging lease")
+    except ExecutorError:
+        safe_close(root_fd)
+        raise
+    except OSError as error:
+        safe_close(root_fd)
+        fail(f"cannot open or lock {label}: {error}")
+
+
+def remove_directory_contents(directory_fd: int, budget: list[int], label: str) -> None:
+    try:
+        os.fchmod(directory_fd, 0o700)
+        with os.scandir(directory_fd) as iterator:
+            names = []
+            for entry in iterator:
+                budget[0] += 1
+                if budget[0] > MAX_CLEANUP_ENTRIES:
+                    fail(f"{label} cleanup exceeds the protected entry quota")
+                names.append(entry.name)
+        for name in sorted(names):
+            info = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+            if stat.S_ISDIR(info.st_mode):
+                child_fd = os.open(
+                    name,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                    dir_fd=directory_fd,
+                )
+                try:
+                    remove_directory_contents(child_fd, budget, label)
+                finally:
+                    safe_close(child_fd)
+                os.rmdir(name, dir_fd=directory_fd)
+            else:
+                os.unlink(name, dir_fd=directory_fd)
+            os.fsync(directory_fd)
+    except ExecutorError:
+        raise
+    except OSError as error:
+        fail(f"cannot durably clean {label}: {error}")
+
+
+def cleanup_staging_lease(
+    root_fd: int,
+    name: str,
+    expected_device: int,
+    expected_inode: int,
+    label: str,
+) -> None:
+    lease_fd = -1
+    try:
+        lease_fd = os.open(
+            name,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=root_fd,
+        )
+        info = os.fstat(lease_fd)
+        if (info.st_dev, info.st_ino) != (expected_device, expected_inode):
+            fail(f"{label} lease identity changed before cleanup")
+        remove_directory_contents(lease_fd, [0], label)
+        safe_close(lease_fd)
+        lease_fd = -1
+        os.rmdir(name, dir_fd=root_fd)
+        os.fsync(root_fd)
+    except ExecutorError:
+        raise
+    except OSError as error:
+        fail(f"cannot durably remove {label}: {error}")
+    finally:
+        safe_close(lease_fd)
+
+
 @dataclass
 class SourceSnapshot:
     path: Path
     manifest_path: Path
     request_path: Path
+    staging_root_fd: int
     root_fd: int
     directory_fd: int
     request_fd: int
@@ -1094,11 +1515,33 @@ class SourceSnapshot:
     file_count: int
     byte_count: int
     manifest_digest: str
+    lease_name: str
+    lease_device: int
+    lease_inode: int
 
     def close(self) -> None:
-        os.close(self.request_fd)
-        os.close(self.directory_fd)
-        os.close(self.root_fd)
+        for field in ("request_fd", "directory_fd", "root_fd", "staging_root_fd"):
+            safe_close(getattr(self, field))
+            setattr(self, field, -1)
+
+    def cleanup(self) -> None:
+        safe_close(self.request_fd)
+        safe_close(self.directory_fd)
+        safe_close(self.root_fd)
+        self.request_fd = -1
+        self.directory_fd = -1
+        self.root_fd = -1
+        try:
+            cleanup_staging_lease(
+                self.staging_root_fd,
+                self.lease_name,
+                self.lease_device,
+                self.lease_inode,
+                "source staging",
+            )
+        finally:
+            safe_close(self.staging_root_fd)
+            self.staging_root_fd = -1
 
 
 @dataclass
@@ -1112,12 +1555,46 @@ class OutputStage:
     log_fd: int
     device: int
     inode: int
+    lease_name: str
 
     def close(self) -> None:
-        os.close(self.log_fd)
-        os.close(self.artifact_fd)
-        os.close(self.directory_fd)
-        os.close(self.root_fd)
+        for field in ("log_fd", "artifact_fd", "directory_fd", "root_fd"):
+            safe_close(getattr(self, field))
+            setattr(self, field, -1)
+
+    def cleanup(self) -> None:
+        safe_close(self.log_fd)
+        safe_close(self.artifact_fd)
+        safe_close(self.directory_fd)
+        self.log_fd = -1
+        self.artifact_fd = -1
+        self.directory_fd = -1
+        try:
+            cleanup_staging_lease(
+                self.root_fd,
+                self.lease_name,
+                self.device,
+                self.inode,
+                "output staging",
+            )
+        finally:
+            safe_close(self.root_fd)
+            self.root_fd = -1
+
+
+def initialize_git_control(control: Path) -> None:
+    try:
+        (control / "objects" / "info").mkdir(mode=0o700, parents=True)
+        (control / "objects" / "pack").mkdir(mode=0o700)
+        (control / "refs" / "heads").mkdir(mode=0o700, parents=True)
+        (control / "refs" / "tags").mkdir(mode=0o700)
+        (control / "HEAD").write_text("ref: refs/heads/invalid\n", encoding="ascii")
+        (control / "config").write_text(
+            "[core]\n\trepositoryformatversion = 0\n\tbare = true\n",
+            encoding="ascii",
+        )
+    except OSError as error:
+        fail(f"cannot initialize transient Git control directory: {error}")
 
 
 def git_environment(profile: Profile, control: Path) -> dict[str, str]:
@@ -1243,6 +1720,8 @@ def open_child_directory(parent_fd: int, component: str) -> int:
         os.mkdir(component, 0o700, dir_fd=parent_fd)
     except FileExistsError:
         pass
+    except OSError as error:
+        fail(f"cannot create source staging directory: {error}")
     try:
         return os.open(
             component,
@@ -1255,11 +1734,68 @@ def open_child_directory(parent_fd: int, component: str) -> int:
 
 def write_all(file_fd: int, content: bytes) -> None:
     view = memoryview(content)
-    while view:
-        written = os.write(file_fd, view)
-        if written <= 0:
-            fail("staging write made no progress")
-        view = view[written:]
+    try:
+        while view:
+            written = os.write(file_fd, view)
+            if written <= 0:
+                fail("staging write made no progress")
+            view = view[written:]
+    except ExecutorError:
+        raise
+    except OSError as error:
+        fail(f"cannot write bounded staging content: {error}")
+
+
+def finalize_source_file(file_fd: int, mode: int, label: str) -> None:
+    try:
+        os.fchmod(file_fd, mode)
+        os.fsync(file_fd)
+    except OSError as error:
+        fail(f"cannot durably finalize {label}: {error}")
+
+
+def open_snapshot_directory(snapshot_fd: int, relative: str) -> int:
+    try:
+        current_fd = os.dup(snapshot_fd)
+    except OSError as error:
+        fail(f"cannot retain source staging directory: {error}")
+    try:
+        for component in relative.split("/"):
+            next_fd = os.open(
+                component,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                dir_fd=current_fd,
+            )
+            os.close(current_fd)
+            current_fd = next_fd
+        return current_fd
+    except OSError as error:
+        os.close(current_fd)
+        fail(f"source staging directory changed during finalization: {error}")
+
+
+def finalize_source_directories(
+    snapshot_fd: int, directories: set[str], root_fd: int
+) -> None:
+    ordered = sorted(
+        directories,
+        key=lambda relative: (-len(relative.split("/")), relative),
+    )
+    for relative in ordered:
+        directory_fd = open_snapshot_directory(snapshot_fd, relative)
+        try:
+            os.fchmod(directory_fd, 0o555)
+            os.fsync(directory_fd)
+        except OSError as error:
+            fail(f"cannot durably finalize source directory {relative}: {error}")
+        finally:
+            os.close(directory_fd)
+    try:
+        os.fchmod(snapshot_fd, 0o555)
+        os.fsync(snapshot_fd)
+        os.fsync(root_fd)
+    except OSError as error:
+        fail(f"cannot durably finalize source staging parents: {error}")
 
 
 def write_snapshot_file(
@@ -1283,8 +1819,11 @@ def write_snapshot_file(
             fail("source staging file changed during export")
         try:
             write_all(file_fd, content)
-            os.fsync(file_fd)
-            os.fchmod(file_fd, 0o555 if mode == "100755" else 0o444)
+            finalize_source_file(
+                file_fd,
+                0o555 if mode == "100755" else 0o444,
+                f"source file {path}",
+            )
         finally:
             os.close(file_fd)
     finally:
@@ -1356,23 +1895,36 @@ def verify_retained_output(stage: OutputStage) -> None:
         fail("retained output staging path was replaced")
 
 
-def stage_output(profile: Profile, request: Request) -> OutputStage:
-    root = Path(profile.output_staging_root)
-    root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
-    name = f"execution-{request.request_id}"
+def fsync_output_stage(
+    artifact_fd: int, log_fd: int, directory_fd: int, root_fd: int
+) -> None:
     try:
-        os.mkdir(name, 0o700, dir_fd=root_fd)
-    except FileExistsError:
-        os.close(root_fd)
-        fail("output staging identity already exists")
-    directory_fd = os.open(
-        name,
-        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
-        dir_fd=root_fd,
-    )
+        for file_fd in (artifact_fd, log_fd):
+            os.fsync(file_fd)
+        os.fsync(directory_fd)
+        os.fsync(root_fd)
+    except OSError as error:
+        fail(f"cannot durably initialize output staging: {error}")
+
+
+def stage_output(profile: Profile, lease_name: str) -> OutputStage:
+    root = Path(profile.output_staging_root)
+    root_fd = open_staging_root(profile, root, "output staging root")
+    directory_fd = -1
     artifact_fd = -1
     log_fd = -1
+    created = False
+    identity: os.stat_result | None = None
     try:
+        os.mkdir(lease_name, 0o700, dir_fd=root_fd)
+        created = True
+        os.fsync(root_fd)
+        directory_fd = os.open(
+            lease_name,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=root_fd,
+        )
+        identity = os.fstat(directory_fd)
         artifact_fd = os.open(
             "artifacts.stream",
             os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
@@ -1385,32 +1937,50 @@ def stage_output(profile: Profile, request: Request) -> OutputStage:
             0o600,
             dir_fd=directory_fd,
         )
-        os.fsync(directory_fd)
-        identity = os.fstat(directory_fd)
+        fsync_output_stage(artifact_fd, log_fd, directory_fd, root_fd)
         stage = OutputStage(
-            root / name,
-            root / name / "artifacts.stream",
-            root / name / "stderr.log",
+            root / lease_name,
+            root / lease_name / "artifacts.stream",
+            root / lease_name / "stderr.log",
             root_fd,
             directory_fd,
             artifact_fd,
             log_fd,
             identity.st_dev,
             identity.st_ino,
+            lease_name,
         )
         verify_retained_output(stage)
         return stage
-    except Exception:
-        if log_fd >= 0:
-            os.close(log_fd)
-        if artifact_fd >= 0:
-            os.close(artifact_fd)
-        os.close(directory_fd)
-        os.close(root_fd)
-        raise
+    except (ExecutorError, OSError) as error:
+        safe_close(log_fd)
+        safe_close(artifact_fd)
+        safe_close(directory_fd)
+        cleanup_error: ExecutorError | None = None
+        if created:
+            try:
+                if identity is None:
+                    identity = os.stat(
+                        lease_name, dir_fd=root_fd, follow_symlinks=False
+                    )
+                cleanup_staging_lease(
+                    root_fd,
+                    lease_name,
+                    identity.st_dev,
+                    identity.st_ino,
+                    "partial output staging",
+                )
+            except (ExecutorError, OSError) as failure:
+                cleanup_error = ExecutorError(str(failure))
+        safe_close(root_fd)
+        if cleanup_error is not None:
+            fail(f"output staging failed and cleanup failed: {cleanup_error}")
+        if isinstance(error, ExecutorError):
+            raise error
+        fail(f"cannot initialize output staging: {error}")
 
 
-def stage_source(profile: Profile, request: Request) -> SourceSnapshot:
+def stage_source(profile: Profile, request: Request, lease_name: str) -> SourceSnapshot:
     verify_regular(
         Path(profile.git_path),
         str(profile.git_size),
@@ -1440,35 +2010,35 @@ def stage_source(profile: Profile, request: Request) -> SourceSnapshot:
         or not staging_root.is_dir()
     ):
         fail("immutable source object or staging root is unsafe")
-    root_fd = os.open(
-        staging_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
-    )
-    snapshot_name = f"source-{request.request_id}"
-    manifest_name = f"source-{request.request_id}.manifest.tsv"
-    request_name = f"request-{request.request_id}.tsv"
-    try:
-        os.mkdir(snapshot_name, 0o700, dir_fd=root_fd)
-    except FileExistsError:
-        os.close(root_fd)
-        fail("source snapshot identity already exists")
-    snapshot_fd = os.open(
-        snapshot_name,
-        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
-        dir_fd=root_fd,
-    )
+    staging_root_fd = open_staging_root(profile, staging_root, "source staging root")
+    root_fd = -1
+    snapshot_fd = -1
     request_fd = -1
-    snapshot_path = staging_root / snapshot_name
-    control = Path(tempfile.mkdtemp(prefix="git-control-", dir=staging_root))
+    lease_created = False
+    lease_identity: os.stat_result | None = None
+    snapshot_name = "source"
+    manifest_name = "source.manifest.tsv"
+    request_name = "request.tsv"
+    lease_path = staging_root / lease_name
+    snapshot_path = lease_path / snapshot_name
+    control = lease_path / "git-control"
     try:
-        (control / "objects" / "info").mkdir(mode=0o700, parents=True)
-        (control / "objects" / "pack").mkdir(mode=0o700)
-        (control / "refs" / "heads").mkdir(mode=0o700, parents=True)
-        (control / "refs" / "tags").mkdir(mode=0o700)
-        (control / "HEAD").write_text("ref: refs/heads/invalid\n", encoding="ascii")
-        (control / "config").write_text(
-            "[core]\n\trepositoryformatversion = 0\n\tbare = true\n",
-            encoding="ascii",
+        os.mkdir(lease_name, 0o700, dir_fd=staging_root_fd)
+        lease_created = True
+        os.fsync(staging_root_fd)
+        root_fd = os.open(
+            lease_name,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=staging_root_fd,
         )
+        lease_identity = os.fstat(root_fd)
+        os.mkdir(snapshot_name, 0o700, dir_fd=root_fd)
+        snapshot_fd = os.open(
+            snapshot_name,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=root_fd,
+        )
+        initialize_git_control(control)
         commit = git_object_command(
             profile,
             control,
@@ -1517,6 +2087,8 @@ def stage_source(profile: Profile, request: Request) -> SourceSnapshot:
             parent = Path(path).parent
             while str(parent) != ".":
                 directories.add(str(parent))
+                if len(directories) > MAX_SOURCE_DIRECTORIES:
+                    fail("Git source directory count exceeds protected limit")
                 parent = parent.parent
             if path == request.job_path:
                 if digest != request.job_digest:
@@ -1537,8 +2109,7 @@ def stage_source(profile: Profile, request: Request) -> SourceSnapshot:
         )
         try:
             write_all(manifest_fd, manifest_raw)
-            os.fsync(manifest_fd)
-            os.fchmod(manifest_fd, 0o444)
+            finalize_source_file(manifest_fd, 0o444, "source manifest")
         finally:
             os.close(manifest_fd)
         request_write_fd = os.open(
@@ -1549,8 +2120,7 @@ def stage_source(profile: Profile, request: Request) -> SourceSnapshot:
         )
         try:
             write_all(request_write_fd, request.raw)
-            os.fsync(request_write_fd)
-            os.fchmod(request_write_fd, 0o444)
+            finalize_source_file(request_write_fd, 0o444, "request snapshot")
         finally:
             os.close(request_write_fd)
         request_fd = os.open(
@@ -1558,19 +2128,18 @@ def stage_source(profile: Profile, request: Request) -> SourceSnapshot:
             os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
             dir_fd=root_fd,
         )
-        for directory in sorted(
-            directories, key=lambda item: item.count("/"), reverse=True
-        ):
-            os.chmod(directory, 0o555, dir_fd=snapshot_fd, follow_symlinks=False)
-        os.fchmod(snapshot_fd, 0o555)
-        os.fsync(snapshot_fd)
-        os.fsync(root_fd)
+        try:
+            shutil.rmtree(control)
+        except OSError as error:
+            fail(f"cannot remove transient Git control directory: {error}")
+        finalize_source_directories(snapshot_fd, directories, root_fd)
         identity = os.fstat(snapshot_fd)
         request_identity = os.fstat(request_fd)
         snapshot = SourceSnapshot(
             snapshot_path,
-            staging_root / manifest_name,
-            staging_root / request_name,
+            lease_path / manifest_name,
+            lease_path / request_name,
+            staging_root_fd,
             root_fd,
             snapshot_fd,
             request_fd,
@@ -1581,39 +2150,72 @@ def stage_source(profile: Profile, request: Request) -> SourceSnapshot:
             len(entries),
             total,
             sha256_bytes(manifest_raw),
+            lease_name,
+            lease_identity.st_dev,
+            lease_identity.st_ino,
         )
         verify_retained_snapshot(snapshot)
         return snapshot
-    except Exception:
-        if request_fd >= 0:
-            os.close(request_fd)
-        os.close(snapshot_fd)
-        os.close(root_fd)
-        raise
-    finally:
-        shutil.rmtree(control, ignore_errors=True)
+    except (ExecutorError, OSError) as error:
+        safe_close(request_fd)
+        safe_close(snapshot_fd)
+        safe_close(root_fd)
+        cleanup_error: ExecutorError | None = None
+        if lease_created:
+            try:
+                if lease_identity is None:
+                    lease_identity = os.stat(
+                        lease_name,
+                        dir_fd=staging_root_fd,
+                        follow_symlinks=False,
+                    )
+                cleanup_staging_lease(
+                    staging_root_fd,
+                    lease_name,
+                    lease_identity.st_dev,
+                    lease_identity.st_ino,
+                    "partial source staging",
+                )
+            except (ExecutorError, OSError) as failure:
+                cleanup_error = ExecutorError(str(failure))
+        safe_close(staging_root_fd)
+        if cleanup_error is not None:
+            fail(f"source staging failed and cleanup failed: {cleanup_error}")
+        if isinstance(error, ExecutorError):
+            raise error
+        fail(f"cannot initialize source staging: {error}")
+
+
+def external_trust_anchor(args: argparse.Namespace) -> TrustAnchor:
+    if (
+        not ID_RE.fullmatch(args.policy_identity)
+        or not 1 <= args.policy_size <= MAX_FILE_BYTES
+        or not SHA256_RE.fullmatch(args.policy_sha256)
+        or not 0 <= args.trusted_owner_uid <= 2**31 - 1
+        or not 0 <= args.trusted_owner_gid <= 2**31 - 1
+    ):
+        fail("external policy trust anchor is malformed")
+    return TrustAnchor(
+        args.policy_identity,
+        args.policy_size,
+        args.policy_sha256,
+        args.trusted_owner_uid,
+        args.trusted_owner_gid,
+        args.trust_file_contract,
+    )
 
 
 def authorize(args: argparse.Namespace) -> AuthorizedRequest:
-    root = Path(args.trusted_root)
-    policy = parse_policy(root, args.policy)
-    request_path = Path(args.request)
-    if not request_path.is_absolute() or not valid_absolute(str(request_path)):
-        fail("OCI execution request path must be canonical absolute")
+    anchor = external_trust_anchor(args)
+    root = open_trusted_root(Path(args.trusted_root), anchor)
     try:
-        request_info = request_path.lstat()
-    except OSError:
-        fail("OCI execution request is missing")
-    if (
-        not stat.S_ISREG(request_info.st_mode)
-        or request_path.is_symlink()
-        or request_info.st_nlink != 1
-    ):
-        fail("OCI execution request is not a single-link regular file")
-    request = parse_request(request_path)
-    profile = load_profile(root, policy, request.profile_id)
-    root = root.resolve(strict=True)
-    verify_operator_owned(root, profile, "protected root", directory=True)
+        policy = parse_policy(root, args.policy, anchor)
+        request = read_request_file(
+            Path(args.request), args.request_owner_uid, args.request_owner_gid
+        )
+        profile = load_profile(root, policy, request.profile_id, anchor)
+    finally:
+        root.close()
     verify_operator_owned(
         Path(profile.runtime_path),
         profile,
@@ -1649,7 +2251,7 @@ def authorize(args: argparse.Namespace) -> AuthorizedRequest:
         profile.runtime_digest,
         "OCI runtime",
     )
-    seccomp = protected_path(root, profile.seccomp_path, "seccomp profile")
+    seccomp = protected_path(root.path, profile.seccomp_path, "seccomp profile")
     verify_regular(
         seccomp,
         str(profile.seccomp_size),
@@ -1658,11 +2260,31 @@ def authorize(args: argparse.Namespace) -> AuthorizedRequest:
     )
     verify_operator_owned(seccomp, profile, "seccomp profile", directory=False)
     verify_oci_image(profile)
+    if not SHA256_RE.fullmatch(args.queue_authorization_sha256):
+        fail("external queue authorization digest is malformed")
+    authorization_digest = sha256_bytes(
+        b"fe2o3-oci-authorization-v1\0"
+        + anchor.identity.encode("ascii")
+        + b"\0"
+        + args.policy.encode("ascii")
+        + b"\0"
+        + str(anchor.owner_uid).encode("ascii")
+        + b":"
+        + str(anchor.owner_gid).encode("ascii")
+        + b"\0"
+        + anchor.file_contract.encode("ascii")
+        + b"\0"
+        + bytes.fromhex(policy.digest)
+        + bytes.fromhex(profile.profile_digest)
+        + bytes.fromhex(request.digest)
+        + bytes.fromhex(args.queue_authorization_sha256)
+    )
     return AuthorizedRequest(
         policy,
         profile,
         request,
         seccomp.resolve(strict=True),
+        authorization_digest,
     )
 
 
@@ -1766,26 +2388,21 @@ def verify_runtime_image(profile: Profile) -> tuple[str, ...]:
         ["image", "inspect", "--format", "{{json .}}", profile.image_reference],
         "image",
     )
-    try:
-        inspected = json.loads(raw)
-    except (UnicodeDecodeError, json.JSONDecodeError):
-        fail("OCI runtime returned invalid image identity")
-    if not isinstance(inspected, dict):
-        fail("OCI runtime returned invalid image object")
-    validate_json_shape(inspected, "OCI runtime image")
+    inspected = strict_json_object(raw, "OCI runtime image")
     rootfs = inspected.get("RootFS")
     config = inspected.get("Config")
+    repo_digests = inspected.get("RepoDigests")
     if (
         inspected.get("Id") != profile.config.digest
-        or profile.image_reference not in inspected.get("RepoDigests", [])
+        or type(repo_digests) is not list
+        or any(type(value) is not str for value in repo_digests)
+        or profile.image_reference not in repo_digests
         or inspected.get("Os") != "linux"
         or inspected.get("Architecture") != "amd64"
-        or not isinstance(rootfs, dict)
-        or tuple(rootfs.get("Layers", [])) != diff_ids
-        or not isinstance(config, dict)
-        or config.get("Env") not in (None, [])
     ):
         fail("runtime image differs from protected OCI image")
+    validate_runtime_rootfs(rootfs, diff_ids)
+    validate_image_config(config, "runtime image config")
     return diff_ids
 
 
@@ -1800,6 +2417,7 @@ def docker_create_arguments(
     arguments = [
         profile.runtime_path,
         "create",
+        "--pull=never",
         "--name",
         name,
         "--hostname",
@@ -1812,6 +2430,8 @@ def docker_create_arguments(
         f"org.fe2o3.evidence.source-tree={request.source_tree}",
         "--network",
         "none",
+        "--no-healthcheck",
+        "--cgroupns=private",
         "--read-only",
         "--cap-drop",
         "ALL",
@@ -1831,6 +2451,8 @@ def docker_create_arguments(
         str(profile.pids_limit),
         "--memory",
         str(profile.memory_limit),
+        "--shm-size",
+        str(profile.shm_limit),
         "--cpus",
         f"{profile.cpu_limit_milli / 1000:.3f}",
         "--user",
@@ -1865,44 +2487,56 @@ def command_plan(args: argparse.Namespace) -> None:
     authorized = authorize(args)
     profile = authorized.profile
     request = authorized.request
-    snapshot = stage_source(profile, request)
+    lease_name = staging_lease_name(authorized.authorization_digest)
+    snapshot = stage_source(profile, request, lease_name)
+    output: OutputStage | None = None
     try:
-        output = stage_output(profile, request)
-        try:
-            arguments = docker_create_arguments(
-                profile,
-                request,
-                snapshot.path,
-                snapshot.request_path,
-                authorized.seccomp_path,
-            )
-            verify_retained_snapshot(snapshot)
-            verify_retained_output(output)
-            print("oci_execution_plan_schema_version\t1")
-            print("authorization_source\tprotected-policy")
-            print(f"profile_id\t{profile.profile_id}")
-            print(f"profile_sha256\t{profile.profile_digest}")
-            print(f"request_id\t{request.request_id}")
-            print(f"container_name\tfe2o3-evidence-{request.request_id}")
-            print(f"source_snapshot\t{snapshot.path}")
-            print(f"source_manifest\t{snapshot.manifest_path}")
-            print(f"source_manifest_sha256\t{snapshot.manifest_digest}")
-            print(f"request_snapshot\t{snapshot.request_path}")
-            print(f"request_sha256\t{request.digest}")
-            print(f"source_file_count\t{snapshot.file_count}")
-            print(f"source_bytes\t{snapshot.byte_count}")
-            print(f"artifact_stream_protocol\t{profile.artifact_stream_protocol}")
-            print(f"artifact_stream_path\t{output.artifact_path}")
-            print(f"artifact_stream_limit\t{profile.output_limit}")
-            print(f"stderr_stream_path\t{output.log_path}")
-            print(f"stderr_stream_limit\t{profile.log_limit}")
-            print(f"argument_count\t{len(arguments)}")
-            for index, argument in enumerate(arguments):
-                print(f"argument\t{index:04d}\t{argument.encode('ascii').hex()}")
-        finally:
-            output.close()
+        output = stage_output(profile, lease_name)
+        arguments = docker_create_arguments(
+            profile,
+            request,
+            snapshot.path,
+            snapshot.request_path,
+            authorized.seccomp_path,
+        )
+        verify_retained_snapshot(snapshot)
+        verify_retained_output(output)
+        print("oci_execution_plan_schema_version\t1")
+        print("authorization_source\tprotected-policy")
+        print(f"policy_identity\t{args.policy_identity}")
+        print(f"authorization_sha256\t{authorized.authorization_digest}")
+        print(f"profile_id\t{profile.profile_id}")
+        print(f"profile_sha256\t{profile.profile_digest}")
+        print(f"request_id\t{request.request_id}")
+        print(f"container_name\tfe2o3-evidence-{request.request_id}")
+        print(f"source_snapshot\t{snapshot.path}")
+        print(f"source_manifest\t{snapshot.manifest_path}")
+        print(f"source_manifest_sha256\t{snapshot.manifest_digest}")
+        print(f"request_snapshot\t{snapshot.request_path}")
+        print(f"request_sha256\t{request.digest}")
+        print(f"source_file_count\t{snapshot.file_count}")
+        print(f"source_bytes\t{snapshot.byte_count}")
+        print(f"artifact_stream_protocol\t{profile.artifact_stream_protocol}")
+        print(f"artifact_stream_path\t{output.artifact_path}")
+        print(f"artifact_stream_limit\t{profile.output_limit}")
+        print(f"stderr_stream_path\t{output.log_path}")
+        print(f"stderr_stream_limit\t{profile.log_limit}")
+        print(f"argument_count\t{len(arguments)}")
+        for index, argument in enumerate(arguments):
+            print(f"argument\t{index:04d}\t{argument.encode('ascii').hex()}")
     finally:
-        snapshot.close()
+        cleanup_failures: list[str] = []
+        if output is not None:
+            try:
+                output.cleanup()
+            except ExecutorError as error:
+                cleanup_failures.append(str(error))
+        try:
+            snapshot.cleanup()
+        except ExecutorError as error:
+            cleanup_failures.append(str(error))
+        if cleanup_failures:
+            fail("plan staging cleanup failed: " + "; ".join(cleanup_failures))
 
 
 def command_preflight(args: argparse.Namespace) -> None:
@@ -1927,33 +2561,44 @@ def command_verify(args: argparse.Namespace) -> None:
     print("authorization_source\tprotected-policy")
 
 
+def add_authorization_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--request", required=True)
+    parser.add_argument("--request-owner-uid", required=True, type=int)
+    parser.add_argument("--request-owner-gid", required=True, type=int)
+    parser.add_argument("--queue-authorization-sha256", required=True)
+    parser.add_argument("--trusted-root", required=True)
+    parser.add_argument(
+        "--policy", required=True, help="externally pinned relative path"
+    )
+    parser.add_argument("--policy-identity", required=True)
+    parser.add_argument("--policy-size", required=True, type=int)
+    parser.add_argument("--policy-sha256", required=True)
+    parser.add_argument("--trusted-owner-uid", required=True, type=int)
+    parser.add_argument("--trusted-owner-gid", required=True, type=int)
+    parser.add_argument(
+        "--trust-file-contract",
+        required=True,
+        choices=("descriptor-stable", "linux-immutable"),
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
     verify = subparsers.add_parser(
         "verify", help="verify protected authorization and immutable inputs"
     )
-    verify.add_argument("--request", required=True)
-    verify.add_argument("--trusted-root", required=True)
-    verify.add_argument(
-        "--policy", required=True, help="path relative to protected root"
-    )
+    add_authorization_arguments(verify)
     verify.set_defaults(func=command_verify)
     plan = subparsers.add_parser(
         "plan", help="render the fixed protected OCI invocation"
     )
-    plan.add_argument("--request", required=True)
-    plan.add_argument("--trusted-root", required=True)
-    plan.add_argument("--policy", required=True, help="path relative to protected root")
+    add_authorization_arguments(plan)
     plan.set_defaults(func=command_plan)
     preflight = subparsers.add_parser(
         "preflight", help="validate host, runtime daemon, and loaded image identity"
     )
-    preflight.add_argument("--request", required=True)
-    preflight.add_argument("--trusted-root", required=True)
-    preflight.add_argument(
-        "--policy", required=True, help="path relative to protected root"
-    )
+    add_authorization_arguments(preflight)
     preflight.set_defaults(func=command_preflight)
     return parser
 
