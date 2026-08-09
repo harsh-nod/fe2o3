@@ -41,13 +41,31 @@ write_digest() {
   sha256sum -- "${CONFIG}" | cut -d' ' -f1 >"${CONFIG_DIGEST}"
 }
 
+assert_static_pie() {
+  local executable="$1"
+  local elf_type
+  elf_type="$(
+    /usr/bin/readelf --file-header --wide -- "${executable}" |
+      awk '$1 == "Type:" { print $2 }'
+  )"
+  [[ "${elf_type}" == DYN ]]
+  if /usr/bin/readelf --program-headers --wide -- "${executable}" |
+    grep -Eq '^[[:space:]]*INTERP[[:space:]]'; then
+    return 1
+  fi
+  if /usr/bin/readelf --dynamic --wide -- "${executable}" |
+    grep -F '(NEEDED)' >/dev/null; then
+    return 1
+  fi
+}
+
 compile_test_launcher() {
   local output="$1"
   local interpreter="$2"
   local executor="$3"
   local timeout_seconds="${4:-30}"
   /usr/bin/cc \
-    -std=c11 -O2 -fPIE -pie -static \
+    -std=c11 -O2 -fPIE -static-pie \
     -Wall -Wextra -Werror -Wconversion -Wformat=2 -Wshadow \
     -Wstack-protector -fstack-protector-strong -D_FORTIFY_SOURCE=3 \
     "-DFE2O3_LAUNCHER_PATH=\"${output}\"" \
@@ -59,6 +77,7 @@ compile_test_launcher() {
     "-DFE2O3_CHILD_TIMEOUT_SECONDS=${timeout_seconds}" \
     "${LAUNCHER_SOURCE}" -o "${output}"
   chmod 0555 "${output}"
+  assert_static_pie "${output}"
 }
 
 mkdir -m 755 "${CONFIG_ROOT}"
@@ -159,7 +178,7 @@ PY
 
 readonly DEFAULT_LAUNCHER="${TEST_ROOT}/default-operator"
 "${BUILD_LAUNCHER}" "${DEFAULT_LAUNCHER}" >"${TEST_ROOT}/default.sha256"
-/usr/bin/file --brief -- "${DEFAULT_LAUNCHER}" | grep -F 'statically linked' >/dev/null
+assert_static_pie "${DEFAULT_LAUNCHER}"
 expect_failure uninstalled_default_launcher 'fixed executable path' \
   "${DEFAULT_LAUNCHER}" verify --request-id "${REQUEST_ID}"
 

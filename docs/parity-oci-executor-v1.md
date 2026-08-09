@@ -16,7 +16,9 @@ test operations:
   daemon/runtime closure.
 
 Production operation exists only behind a separately installed, root-owned,
-Linux-immutable static ELF `/usr/libexec/fe2o3-oci-operator`. That launcher has
+Linux-immutable static PIE `/usr/libexec/fe2o3-oci-operator`. The artifact must
+be ELF `ET_DYN` with no `PT_INTERP` segment and no `DT_NEEDED` dependency. That
+launcher has
 `verify`, `plan`, and `preflight` commands, but accepts only a request ID. It
 clears inherited process state before starting a fixed isolated Python
 distribution and loads all trust inputs from fixed operator configuration. The
@@ -46,7 +48,8 @@ candidate Request selected by fixed-inbox request ID
     | protected policy selects exact profile path, size, and digest
     v
 AuthorizedRequest
-    +-- authenticated loose Git closure --> ephemeral SourceSnapshot
+    +-- protected queue authorization + canonical SHA-256 source manifest
+    |       +-- authenticated loose Git closure --> ephemeral SourceSnapshot
     +-- protected staging ----> ephemeral OutputStage
     +-- bounded observations -> ObservedRuntimeRequest
     |
@@ -89,7 +92,7 @@ field is used.
 The operator configuration schema is:
 
 ```text
-oci_operator_config_schema_version  1
+oci_operator_config_schema_version  2
 config_id                           mi300x-gfx942-production-v1
 trusted_root                        /etc/fe2o3/oci-executor/trust
 policy_path                         policy.tsv
@@ -104,6 +107,9 @@ inbox_owner_uid                     0
 inbox_owner_gid                     0
 request_owner_uid                   DEDICATED_UID
 request_owner_gid                   DEDICATED_GID
+queue_authorization_root            /var/lib/fe2o3/oci-authorizations
+queue_authorization_owner_uid       0
+queue_authorization_owner_gid       0
 queue_trust_sha256                  SHA256
 ```
 
@@ -111,8 +117,9 @@ The production launcher accepts only `COMMAND --request-id 64_HEX`, then opens
 `REQUEST_ID.tsv` within that fixed inbox by descriptor. The configuration pins
 the external policy identity, relative path, exact byte size, SHA-256 digest,
 expected UID/GID, immutable-file contract, request UID/GID, and queue trust
-digest. Test CLI trust flags are visibly prefixed `--test-`, require test-domain
-data, and can only produce `test-non-authoritative` state.
+digest. It also pins the fixed queue-authorization root and its owner. Test CLI
+trust flags are visibly prefixed `--test-`, require test-domain data, and can
+only produce `test-non-authoritative` state.
 
 The trusted root is opened once with `O_DIRECTORY|O_NOFOLLOW`, checked against
 the externally configured owner and non-group/world-writable mode, and retained
@@ -171,8 +178,9 @@ final blocking wait. An uninterruptible kernel task can still outlive launcher
 return and is left for OS reparenting/reaping; this is not a hard real-time
 termination claim.
 
-`scripts/build-parity-oci-operator.sh /absolute/staging/path` performs the
-reviewable static build and rejects a dynamically linked result. Production
+`scripts/build-parity-oci-operator.sh /absolute/staging/path` requires compiler
+support for `-static-pie`, then rejects the result unless `readelf` reports ELF
+`ET_DYN`, no `PT_INTERP`, and no `DT_NEEDED`. Production
 installation must separately:
 
 1. Provision a dedicated self-contained CPython tree at
@@ -200,8 +208,8 @@ The protected profile binds all of the following:
 - absolute Docker client path, size, digest, canonical client/server version
   observation digest, and canonical daemon-info observation digest;
 - protected loose Git object directory, object format, object count/byte/tree
-  depth limits, immutable source staging root, and source
-  file/byte/index limits;
+  depth limits, commit ancestry count/depth limits, immutable source staging
+  root, and source file/byte/index limits;
 - operator UID/GID, protected source/output roots, and non-writable ownership
   policy; these profile values do not authorize the policy/profile root;
 - absolute OCI layout path and exact bounded `index.json` size/digest;
@@ -257,9 +265,27 @@ must identify a bounded regular single-link file with the externally expected
 UID/GID and a non-group/world-writable mode. The parser reads at most
 `MAX_FILE_BYTES + 1` through that descriptor and rejects metadata changes
 during the read, FIFOs, devices, links, oversized files, and replacement
-races. The request digest is combined with the external queue-authorization
-digest, policy anchor identity, policy digest, and profile digest to derive the
-staging authorization identity.
+races. The request cannot name its source manifest. Production resolves exactly
+`REQUEST_ID.authorization.tsv` and `REQUEST_ID.source.tsv` beneath the fixed
+operator-owned queue-authorization root. Both are opened by retained
+`O_NOFOLLOW|O_NONBLOCK` descriptors and must satisfy the configured owner,
+mode, link, immutability, bounded-size, and stable-identity contracts. The
+authorization record binds the protected queue trust digest, request ID and
+SHA-256, source commit/tree, manifest size and SHA-256, and source-root SHA-256.
+Missing production authorization or manifest data fails closed.
+
+The canonical source manifest contains the commit and tree, exact file count,
+and one sorted record for every exported regular file: canonical ASCII relative
+path, exact Git mode, byte length, and SHA-256. It also binds the total source
+bytes. The source-root digest is SHA-256 over a domain separator and the
+canonical manifest body. Before any staging write, the executor independently
+reconstructs the complete manifest from parsed blob bytes and uses constant-time
+full-digest comparisons against the protected authorization. Git SHA-1 object
+identity alone cannot authorize changed source bytes.
+
+The request digest, source manifest/root digests, external queue trust digest,
+policy anchor identity, policy digest, and profile digest are combined to derive
+the staging authorization identity.
 
 The candidate checkout is never queried or mounted, and no Git executable is
 invoked. The profile names one exact operator-owned `objects` directory. The
@@ -269,8 +295,13 @@ partial-clone configuration, and every pack/index/commit-graph entry, and
 supports only canonical SHA-1 loose objects. Environment-based object,
 alternate, replace, and graft indirection is also rejected.
 
-The requested commit, its exact tree, every reachable subtree, and every
-reachable blob are parsed structurally. Each loose object must be a regular
+The requested commit, every declared parent commit, its exact tree, every
+reachable subtree, and every reachable blob are parsed structurally. Commit
+headers require one first lowercase tree ID, contiguous unique lowercase parent
+IDs, ordered and structurally valid author/committer identities, bounded
+optional headers and continuations, and canonical header termination. Every
+parent object must be present and be a valid commit within the protected
+ancestry count and depth limits. Each loose object must be a regular
 single-link file with the protected owner and mode. Its bounded zlib stream,
 canonical kind/size header, payload length, and recomputed object ID must all
 agree with the name referenced by its parent. Commit/tree linkage, Git tree
@@ -278,9 +309,10 @@ ordering, duplicate names, cycles, depth, object count, compressed and expanded
 bytes, tree index bytes, source files, directories, and source bytes are all
 bounded. Packed stores are deliberately unsupported rather than trusted.
 
-Only ASCII regular executable/non-executable Git blobs are admitted. Symlinks,
-submodules, `.git`, unsupported modes, malformed paths, excess files, and
-excess bytes fail closed. The resulting source tree and canonical request copy
+Only canonical ASCII relative paths are admitted; regular blob contents are
+arbitrary bounded bytes. Symlinks, submodules, `.git`, unsupported modes,
+malformed paths, excess files, and excess bytes fail closed. The resulting
+source tree, protected source manifest, and canonical request copy
 are created inside a private staging lease named from the full authorization
 digest plus 256 bits of operator randomness. The tree is made read-only and
 contains no Git metadata. Open directory/file descriptors and device/inode
@@ -439,9 +471,10 @@ are unavailable, so rootless `runc`/Docker and bubblewrap network isolation
 cannot provide an alternative under this account.
 
 The host also has no immutable root-owned `operator-v1.tsv`, external
-`operator-v1.sha256` provision, static installed launcher, self-contained fixed
-Python closure, installed executor, production policy/profile, or fixed inbox
-authorization. Production CLI trust arguments do not exist. Therefore the
+`operator-v1.sha256` provision, static-PIE installed launcher, self-contained
+fixed Python closure, installed executor, production policy/profile, fixed
+inbox, or fixed queue source authorization. Production CLI trust arguments do
+not exist. Therefore the
 repository source and current account cannot authorize a production request
 even before Docker access is considered.
 
