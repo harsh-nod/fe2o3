@@ -3594,6 +3594,9 @@ fn push_unwind<'a>(edges: &mut Vec<&'a MirEdge>, unwind: &'a MirUnwindAction) {
 }
 
 fn valid_cast(kind: MirCastKind, source: &MirSemanticType, destination: &MirSemanticType) -> bool {
+    if matches!(destination.kind, MirTypeKind::Scalar(MirScalarType::Char)) {
+        return false;
+    }
     match kind {
         MirCastKind::IntToInt => is_integer(&source.kind) && is_integer(&destination.kind),
         MirCastKind::IntToFloat => is_integer(&source.kind) && is_float(&destination.kind),
