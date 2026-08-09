@@ -463,6 +463,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                         let source_debug = source_debug::collect_requested_profile(
                             tcx,
                             &collection,
+                            &mir_module,
                             &self.config.target,
                         )
                         .map_err(|error| format!("source-debug profile rejected: {error}"))?;

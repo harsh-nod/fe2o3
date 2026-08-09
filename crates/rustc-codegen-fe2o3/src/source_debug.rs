@@ -53,6 +53,7 @@ impl Error for SourceDebugError {}
 pub(crate) fn collect_requested_profile<'tcx>(
     tcx: TyCtxt<'tcx>,
     collection: &CollectionResult<'tcx>,
+    mir_module: &crate::mir_import::MirModule,
     target: &AmdGpuTarget,
 ) -> Result<Option<AlphaSourceDebugV1>, SourceDebugError> {
     let requested = match env::var(SOURCE_DEBUG_PROFILE_ENV) {
@@ -96,6 +97,18 @@ pub(crate) fn collect_requested_profile<'tcx>(
     let def_id = alpha.instance.def_id();
     let crate_name = tcx.crate_name(def_id.krate);
     let def_path = tcx.def_path_str(def_id);
+    let mir_matches = mir_module
+        .functions
+        .iter()
+        .filter(|function| function.export_name == "alpha")
+        .collect::<Vec<_>>();
+    let [mir_alpha] = mir_matches.as_slice() else {
+        return Err(SourceDebugError::new(format!(
+            "S09 alpha requires one imported MIR body; found {}",
+            mir_matches.len()
+        )));
+    };
+    validate_alpha_mir_body(mir_alpha)?;
     let body = tcx.instance_mir(alpha.instance.def);
     validate_alpha_arguments(body)?;
     validate_debug_names(body)?;
@@ -159,6 +172,183 @@ pub(crate) fn collect_requested_profile<'tcx>(
         index_line: index_location.line,
         local_line: local_location.line,
     }))
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct AlphaMirShape {
+    blocks: usize,
+    locals: usize,
+    arguments: usize,
+    calls: usize,
+    thread_index_calls: usize,
+    output_guard_calls: usize,
+    index_get_calls: usize,
+    switches: usize,
+    asserts: usize,
+    returns: usize,
+    unreachables: usize,
+    multiplies: usize,
+    less_than: usize,
+}
+
+const S09_ALPHA_MIR_SHAPE: AlphaMirShape = AlphaMirShape {
+    blocks: 8,
+    locals: 14,
+    arguments: 3,
+    calls: 3,
+    thread_index_calls: 1,
+    output_guard_calls: 1,
+    index_get_calls: 1,
+    switches: 1,
+    asserts: 1,
+    returns: 1,
+    unreachables: 1,
+    multiplies: 1,
+    less_than: 1,
+};
+
+fn validate_alpha_mir_body(
+    function: &crate::mir_import::MirFunction,
+) -> Result<(), SourceDebugError> {
+    use crate::mir_import::{
+        MirBinaryOp, MirFunctionKind, MirKernelProfile, MirOperandRef, MirProjectionElem,
+        MirRvalueKind, MirTerminatorKind,
+    };
+    use crate::trusted_device_items::TrustedDeviceItem;
+
+    let expected_path = format!("{S09_CRATE_NAME}::{S09_DEF_PATH}");
+    if function.rust_path != expected_path
+        || function.kind != MirFunctionKind::KernelEntry
+        || function.typed_profile != Some(MirKernelProfile::GeneralScalarSliceRustcLayoutV3)
+    {
+        return Err(SourceDebugError::new(
+            "S09 alpha imported MIR owner or profile identity changed",
+        ));
+    }
+
+    let mut shape = AlphaMirShape {
+        blocks: function.blocks.len(),
+        locals: function.local_count,
+        arguments: function.arg_count,
+        calls: 0,
+        thread_index_calls: 0,
+        output_guard_calls: 0,
+        index_get_calls: 0,
+        switches: 0,
+        asserts: 0,
+        returns: 0,
+        unreachables: 0,
+        multiplies: 0,
+        less_than: 0,
+    };
+    let mut scalar_index = None;
+
+    for block in &function.blocks {
+        for statement in &block.statements {
+            match statement.rvalue {
+                Some(MirRvalueKind::Binary(MirBinaryOp::Mul)) => shape.multiplies += 1,
+                Some(MirRvalueKind::Binary(MirBinaryOp::Lt)) => shape.less_than += 1,
+                _ => {}
+            }
+        }
+        let Some(terminator) = &block.terminator else {
+            return Err(SourceDebugError::new(
+                "S09 alpha imported MIR contains a block without a terminator",
+            ));
+        };
+        match &terminator.kind {
+            MirTerminatorKind::Call {
+                callee: Some(callee),
+                destination: Some(destination),
+                operands,
+                ..
+            } => {
+                shape.calls += 1;
+                match callee.trusted_item() {
+                    Some(TrustedDeviceItem::ThreadIndex1d) if operands.is_empty() => {
+                        shape.thread_index_calls += 1;
+                    }
+                    Some(TrustedDeviceItem::DisjointSliceGetMut) => {
+                        shape.output_guard_calls += 1;
+                    }
+                    Some(TrustedDeviceItem::ThreadIndexGet) => {
+                        shape.index_get_calls += 1;
+                        scalar_index = Some(destination.local);
+                    }
+                    _ => {}
+                }
+            }
+            MirTerminatorKind::Call { .. } => shape.calls += 1,
+            MirTerminatorKind::SwitchInt { .. } => shape.switches += 1,
+            MirTerminatorKind::Assert { .. } => shape.asserts += 1,
+            MirTerminatorKind::Return => shape.returns += 1,
+            MirTerminatorKind::Unreachable => shape.unreachables += 1,
+            _ => {}
+        }
+    }
+    validate_alpha_mir_shape(shape)?;
+
+    let scalar_index = scalar_index.ok_or_else(|| {
+        SourceDebugError::new("S09 alpha MIR has no authenticated scalar index destination")
+    })?;
+    let exact_place = |operand: &MirOperandRef, local: usize| matches!(operand, MirOperandRef::Place(place) if place.local == local && place.projection.is_empty());
+
+    let statements = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.statements)
+        .collect::<Vec<_>>();
+    let loads = statements
+        .iter()
+        .filter_map(|statement| {
+            let destination = statement.destination.as_ref()?;
+            let [MirOperandRef::Place(input)] = statement.operands.as_slice() else {
+                return None;
+            };
+            matches!(
+                input.projection.as_slice(),
+                [MirProjectionElem::Deref, MirProjectionElem::Index { local }]
+                    if input.local == 2 && *local == scalar_index
+            )
+            .then_some(destination.local)
+        })
+        .collect::<Vec<_>>();
+    let [loaded_value] = loads.as_slice() else {
+        return Err(SourceDebugError::new(format!(
+            "S09 alpha MIR requires one exact guarded input load; found {}",
+            loads.len()
+        )));
+    };
+    let products = statements
+        .iter()
+        .filter_map(|statement| {
+            if statement.rvalue != Some(MirRvalueKind::Binary(MirBinaryOp::Mul)) {
+                return None;
+            }
+            let destination = statement.destination.as_ref()?;
+            (destination.projection.as_slice() == [MirProjectionElem::Deref]
+                && matches!(
+                    statement.operands.as_slice(),
+                    [lhs, rhs] if exact_place(lhs, *loaded_value) && exact_place(rhs, 1)
+                ))
+            .then_some(())
+        })
+        .collect::<Vec<_>>();
+    if products.len() != 1 {
+        return Err(SourceDebugError::new(
+            "S09 alpha MIR store is not the exact guarded input[i] times scale dataflow",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_alpha_mir_shape(shape: AlphaMirShape) -> Result<(), SourceDebugError> {
+    if shape != S09_ALPHA_MIR_SHAPE {
+        return Err(SourceDebugError::new(format!(
+            "S09 alpha imported MIR shape changed: {shape:?}"
+        )));
+    }
+    Ok(())
 }
 
 fn validate_alpha_arguments(body: &Body<'_>) -> Result<(), SourceDebugError> {
@@ -739,5 +929,23 @@ attributes #0 = { nounwind }
                 "spoofed source identity was admitted"
             );
         }
+    }
+
+    #[test]
+    fn exact_mir_shape_rejects_semantic_body_mutations() {
+        validate_alpha_mir_shape(S09_ALPHA_MIR_SHAPE).unwrap();
+
+        let mut changed = S09_ALPHA_MIR_SHAPE;
+        changed.multiplies = 0;
+        assert!(validate_alpha_mir_shape(changed).is_err());
+        let mut changed = S09_ALPHA_MIR_SHAPE;
+        changed.output_guard_calls = 0;
+        assert!(validate_alpha_mir_shape(changed).is_err());
+        let mut changed = S09_ALPHA_MIR_SHAPE;
+        changed.asserts = 0;
+        assert!(validate_alpha_mir_shape(changed).is_err());
+        let mut changed = S09_ALPHA_MIR_SHAPE;
+        changed.returns = 2;
+        assert!(validate_alpha_mir_shape(changed).is_err());
     }
 }
