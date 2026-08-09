@@ -1,7 +1,7 @@
 use dialect_mir::{
     MirAddressSpace, MirAggregateLayout, MirAuthorizedDeviceImport, MirBasicBlock, MirBinaryOp,
     MirBlockId, MirBlockParameter, MirBody, MirBodyForm, MirCall, MirCallAuthority, MirCallReturn,
-    MirCallSignature, MirCallable, MirCallee, MirConstant, MirConstantValue, MirEdge,
+    MirCallSignature, MirCallable, MirCallee, MirCastKind, MirConstant, MirConstantValue, MirEdge,
     MirEnumEncoding, MirEnumType, MirExecutableModule, MirExecutableTarget, MirExecutableVersion,
     MirExternalCallRegistry, MirExternalCallReturn, MirExternalCallSignature, MirField,
     MirFunction, MirIntrinsic, MirLayout, MirLocalDecl, MirLocalId, MirLocalKind, MirMutability,
@@ -1293,6 +1293,120 @@ fn references_and_raw_addresses_require_exact_mutability_and_address_space() {
             .reason()
             .contains("requires a writable place")
     );
+}
+
+fn set_cast(module: &mut MirExecutableModule, source: MirTypeId, destination: MirTypeId) {
+    module.functions[0].body.locals[0].ty = destination;
+    module.functions[0].body.locals[1].ty = source;
+    let MirStatementKind::Assign { place, value } =
+        &mut module.functions[0].body.blocks[0].statements[0].kind
+    else {
+        unreachable!();
+    };
+    place.ty = destination;
+    *value = MirRvalue::Cast {
+        kind: MirCastKind::PointerToPointer,
+        operand: MirOperand::Copy(MirPlace::local(MirLocalId(1), source)),
+        ty: destination,
+    };
+}
+
+#[test]
+fn pointer_casts_cannot_forge_references_provenance_spaces_or_mutability() {
+    let (mut integer_to_reference, ids) = pointer_module(false);
+    let MirStatementKind::Assign { value, .. } =
+        &mut integer_to_reference.functions[0].body.blocks[0].statements[0].kind
+    else {
+        unreachable!();
+    };
+    *value = MirRvalue::Cast {
+        kind: MirCastKind::IntToPointer,
+        operand: MirOperand::Copy(MirPlace::local(MirLocalId(1), ids.u32_ty)),
+        ty: ids.shared_ref_as1,
+    };
+    assert!(
+        integer_to_reference
+            .validate()
+            .unwrap_err()
+            .reason()
+            .contains("cast kind")
+    );
+
+    let (mut integer_to_raw, ids) = pointer_module(true);
+    let MirStatementKind::Assign { value, .. } =
+        &mut integer_to_raw.functions[0].body.blocks[0].statements[0].kind
+    else {
+        unreachable!();
+    };
+    *value = MirRvalue::Cast {
+        kind: MirCastKind::IntToPointer,
+        operand: MirOperand::Copy(MirPlace::local(MirLocalId(1), ids.u32_ty)),
+        ty: ids.const_ptr_as1,
+    };
+    integer_to_raw.validate().unwrap();
+
+    let (mut raw_to_reference, ids) = pointer_module(true);
+    set_cast(&mut raw_to_reference, ids.const_ptr_as1, ids.shared_ref_as1);
+    assert!(raw_to_reference.validate().is_err());
+
+    let (mut changes_space, ids) = pointer_module(true);
+    set_cast(&mut changes_space, ids.const_ptr_as0, ids.const_ptr_as1);
+    assert!(changes_space.validate().is_err());
+
+    let (mut strengthens_mutability, ids) = pointer_module(true);
+    set_cast(
+        &mut strengthens_mutability,
+        ids.const_ptr_as1,
+        ids.mut_ptr_as1,
+    );
+    assert!(strengthens_mutability.validate().is_err());
+
+    let (mut weakens_mutability, ids) = pointer_module(true);
+    set_cast(&mut weakens_mutability, ids.mut_ptr_as1, ids.const_ptr_as1);
+    weakens_mutability.validate().unwrap();
+}
+
+#[test]
+fn references_require_storage_or_reference_provenance() {
+    let (mut raw_origin, ids) = pointer_module(false);
+    raw_origin.functions[0].body.locals[1].ty = ids.const_ptr_as1;
+    let MirStatementKind::Assign { value, .. } =
+        &mut raw_origin.functions[0].body.blocks[0].statements[0].kind
+    else {
+        unreachable!();
+    };
+    let MirRvalue::Ref { place, .. } = value else {
+        unreachable!();
+    };
+    *place = MirPlace {
+        local: MirLocalId(1),
+        projection: vec![MirProjection::Deref],
+        ty: ids.u32_ty,
+    };
+    assert!(
+        raw_origin
+            .validate()
+            .unwrap_err()
+            .reason()
+            .contains("external provenance authority")
+    );
+
+    let (mut reborrow, ids) = pointer_module(false);
+    reborrow.functions[0].body.locals[1].ty = ids.shared_ref_as1;
+    let MirStatementKind::Assign { value, .. } =
+        &mut reborrow.functions[0].body.blocks[0].statements[0].kind
+    else {
+        unreachable!();
+    };
+    let MirRvalue::Ref { place, .. } = value else {
+        unreachable!();
+    };
+    *place = MirPlace {
+        local: MirLocalId(1),
+        projection: vec![MirProjection::Deref],
+        ty: ids.u32_ty,
+    };
+    reborrow.validate().unwrap();
 }
 
 #[test]
