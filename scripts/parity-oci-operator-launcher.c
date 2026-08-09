@@ -67,8 +67,8 @@
 #define FE2O3_TEST_ONLY_ALLOW_UNCONTAINED_EXECUTION 0
 #endif
 
-#ifndef FE2O3_TEST_ONLY_ALLOW_UNBOUND_RUNTIME
-#define FE2O3_TEST_ONLY_ALLOW_UNBOUND_RUNTIME 0
+#ifndef FE2O3_TEST_ONLY_CGROUP_MECHANISM
+#define FE2O3_TEST_ONLY_CGROUP_MECHANISM 0
 #endif
 
 #if FE2O3_TEST_ONLY_ALLOW_UNCONTAINED_EXECUTION != 0 &&                      \
@@ -76,14 +76,14 @@
 #error "FE2O3_TEST_ONLY_ALLOW_UNCONTAINED_EXECUTION must be zero or one"
 #endif
 
-#if FE2O3_TEST_ONLY_ALLOW_UNBOUND_RUNTIME != 0 &&                          \
-    FE2O3_TEST_ONLY_ALLOW_UNBOUND_RUNTIME != 1
-#error "FE2O3_TEST_ONLY_ALLOW_UNBOUND_RUNTIME must be zero or one"
+#if FE2O3_TEST_ONLY_CGROUP_MECHANISM != 0 &&                               \
+    FE2O3_TEST_ONLY_CGROUP_MECHANISM != 1
+#error "FE2O3_TEST_ONLY_CGROUP_MECHANISM must be zero or one"
 #endif
 
 #if FE2O3_TEST_ONLY_ALLOW_UNCONTAINED_EXECUTION &&                         \
-    FE2O3_TEST_ONLY_ALLOW_UNBOUND_RUNTIME
-#error "test execution cannot be both uncontained and cgroup-contained"
+    FE2O3_TEST_ONLY_CGROUP_MECHANISM
+#error "test execution cannot be both uncontained and mechanism-only"
 #endif
 
 #define FE2O3_SUPERVISION_POLL_MILLISECONDS 50U
@@ -146,7 +146,7 @@ static bool trusted_file(const struct stat *info) {
          (info->st_mode & 0111) != 0;
 }
 
-#if !FE2O3_TEST_ONLY_ALLOW_UNCONTAINED_EXECUTION
+#if FE2O3_TEST_ONLY_CGROUP_MECHANISM
 static bool trusted_cgroup_control(const struct stat *info) {
   const bool expected_owner = (info->st_uid == 0 && info->st_gid == 0) ||
                               (info->st_uid == FE2O3_EXPECTED_UID &&
@@ -415,7 +415,7 @@ static int wait_until_readable(int file_fd, uint64_t timeout_milliseconds) {
   }
 }
 
-#if !FE2O3_TEST_ONLY_ALLOW_UNCONTAINED_EXECUTION
+#if FE2O3_TEST_ONLY_CGROUP_MECHANISM
 static void initialize_containment(struct cgroup_containment *containment) {
   containment->root_fd = -1;
   containment->events_fd = -1;
@@ -825,14 +825,14 @@ static int terminate_and_reap_tree(struct supervisor *supervisor) {
 static int cleanup_supervised_execution(
     struct supervisor *supervisor,
     struct cgroup_containment *containment) {
-#if !FE2O3_TEST_ONLY_ALLOW_UNCONTAINED_EXECUTION
+#if FE2O3_TEST_ONLY_CGROUP_MECHANISM
   const int cgroup_result = kill_containment_and_wait_empty(containment);
 #else
   (void)containment;
   const int cgroup_result = 1;
 #endif
   const int process_result = terminate_and_reap_tree(supervisor);
-#if !FE2O3_TEST_ONLY_ALLOW_UNCONTAINED_EXECUTION
+#if FE2O3_TEST_ONLY_CGROUP_MECHANISM
   const int removal_result = remove_containment_leaf(containment);
 #else
   const int removal_result = 0;
@@ -916,6 +916,13 @@ int main(int argc, char **argv) {
   }
   umask(0077);
 
+#if !FE2O3_TEST_ONLY_ALLOW_UNCONTAINED_EXECUTION &&                        \
+    !FE2O3_TEST_ONLY_CGROUP_MECHANISM
+  return fail("production execution disabled: privilege-separated cgroup "
+              "supervisor, Docker binding, and daemon cleanup are not "
+              "implemented");
+#endif
+
   struct cgroup_containment containment = {
       .root_fd = -1,
       .events_fd = -1,
@@ -924,19 +931,10 @@ int main(int argc, char **argv) {
       .leaf_name = "",
       .child_migrated = false,
   };
-#if !FE2O3_TEST_ONLY_ALLOW_UNCONTAINED_EXECUTION
+#if FE2O3_TEST_ONLY_CGROUP_MECHANISM
   if (prepare_containment(&containment) != 0) {
-    return fail("production execution disabled: predelegated cgroup v2 root "
-                "is unavailable");
+    return fail("test-only cgroup mechanism is unavailable");
   }
-#if !FE2O3_TEST_ONLY_ALLOW_UNBOUND_RUNTIME
-  if (remove_containment_leaf(&containment) != 0) {
-    return fail("production execution disabled: cgroup preflight cleanup "
-                "failed");
-  }
-  return fail("production execution disabled: OCI runtime cgroup-parent "
-              "binding and membership verification are not implemented");
-#endif
 #endif
 
   int children_fd = open_self_children();
@@ -947,7 +945,7 @@ int main(int argc, char **argv) {
     if (children_fd >= 0) {
       close(children_fd);
     }
-#if !FE2O3_TEST_ONLY_ALLOW_UNCONTAINED_EXECUTION
+#if FE2O3_TEST_ONLY_CGROUP_MECHANISM
     (void)remove_containment_leaf(&containment);
 #endif
     return fail("cannot establish bounded descendant supervision");
@@ -957,7 +955,7 @@ int main(int argc, char **argv) {
   if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0,
                  supervision_fds) != 0) {
     close(children_fd);
-#if !FE2O3_TEST_ONLY_ALLOW_UNCONTAINED_EXECUTION
+#if FE2O3_TEST_ONLY_CGROUP_MECHANISM
     (void)remove_containment_leaf(&containment);
 #endif
     return fail("cannot establish bounded descendant supervision");
@@ -969,7 +967,7 @@ int main(int argc, char **argv) {
     close(supervision_fds[0]);
     close(supervision_fds[1]);
     close(children_fd);
-#if !FE2O3_TEST_ONLY_ALLOW_UNCONTAINED_EXECUTION
+#if FE2O3_TEST_ONLY_CGROUP_MECHANISM
     (void)remove_containment_leaf(&containment);
 #endif
     return fail("cannot create isolated executor process");
@@ -995,7 +993,7 @@ int main(int argc, char **argv) {
           (ssize_t)sizeof(ready) &&
       ready == 'R' && getpgid(child) == child;
   bool child_contained = child_ready;
-#if !FE2O3_TEST_ONLY_ALLOW_UNCONTAINED_EXECUTION
+#if FE2O3_TEST_ONLY_CGROUP_MECHANISM
   child_contained =
       child_ready && migrate_child_to_containment(&containment, child) == 0;
 #endif
@@ -1037,6 +1035,12 @@ int main(int argc, char **argv) {
     return fail("cannot prove executor cgroup is empty after executor exit");
   }
   if (WIFEXITED(supervisor.leader_status)) {
+#if FE2O3_TEST_ONLY_CGROUP_MECHANISM
+    if (WEXITSTATUS(supervisor.leader_status) == 0) {
+      return fail("test-only cgroup mechanism completed; no production "
+                  "verdict");
+    }
+#endif
     return WEXITSTATUS(supervisor.leader_status);
   }
   if (WIFSIGNALED(supervisor.leader_status)) {

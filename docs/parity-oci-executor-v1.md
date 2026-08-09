@@ -154,14 +154,12 @@ non-group/world-writable. The launcher, interpreter, and executor must be
 root-owned, executable, single-link, non-group/world-writable, and
 Linux-immutable.
 
-Production execution is currently disabled after fixed-binary validation. The
-launcher requires a fixed writable cgroup v2 delegation at
-`/sys/fs/cgroup/fe2o3-oci-operator`, including trusted `cgroup.events`,
-`cgroup.kill`, and `cgroup.procs` controls. It still refuses execution when that
-root exists because Docker cgroup-parent binding and membership verification
-are not implemented. This second refusal is required: migrating the Python
-client does not migrate container processes created by the external Docker
-daemon.
+Production execution is unconditionally disabled after fixed-binary
+validation. A production build does not open a writable cgroup delegation or
+execute the Python client. Supplying `/sys/fs/cgroup/fe2o3-oci-operator` cannot
+enable it. The same identity cannot safely own the delegation and run the
+executor: that executor could write its PID into an ancestor or sibling
+`cgroup.procs`, escape the request leaf, and make that leaf appear empty.
 
 Test builds may explicitly define
 `FE2O3_TEST_ONLY_ALLOW_UNCONTAINED_EXECUTION=1`. That build calls `clearenv`,
@@ -182,14 +180,16 @@ reforking, uninterruptible tasks, launcher death, and processes created by an
 external daemon can escape or exceed their bounded cleanup windows. No result
 from this test hook is production-authoritative.
 
-A separate delegated test mode defines
-`FE2O3_TEST_ONLY_ALLOW_UNBOUND_RUNTIME=1` without enabling the uncontained
-escape. It still requires a real writable cgroup v2 root. The launcher creates
-a per-launch leaf, holds the child behind a socket gate, writes and verifies
-the child PID in `cgroup.procs`, requires `populated 1` before acknowledging
-execution, and uses `cgroup.kill` plus bounded `populated 0` observation before
-reaping and removing the leaf. This validates local process containment only;
-it does not authorize Docker use or claim daemon-created process membership.
+A separate mechanism-only test build defines
+`FE2O3_TEST_ONLY_CGROUP_MECHANISM=1`. It requires a real writable cgroup v2
+root, creates a per-launch leaf, holds the child behind a socket gate, writes
+and verifies the child PID in `cgroup.procs`, and exercises `cgroup.kill` plus
+bounded `populated 0` observation. It never returns a zero production verdict.
+This mode tests kernel and launcher mechanics only; it is not a containment
+authority. The launcher and child intentionally have the same UID, and the
+focused suite demonstrates that the child can self-migrate to the writable
+parent cgroup. It does not authorize Docker use or claim daemon-created process
+membership.
 
 The Python executor independently requires the exact parent inode,
 interpreter, script, cwd, environment, isolated/no-site/ignore-environment
@@ -507,28 +507,41 @@ processes, and migrating only the Docker client would be insufficient.
 Production remains disabled until one reviewed change implements and tests all
 of the following as one boundary:
 
-1. Predelegate the fixed cgroup v2 root to the immutable operator identity.
+1. Run a privilege-separated supervisor that exclusively owns the delegated
+   cgroup subtree. The executor and container identities must differ from the
+   supervisor and must be unable to write ancestor or sibling `cgroup.procs`,
+   create cgroups, change controller state, or migrate themselves out of the
+   request leaf.
 2. Create one collision-resistant leaf per request before any executor code
-   runs; hold the child behind a synchronization gate, migrate it through
-   `cgroup.procs`, and verify membership before `execve`.
-3. Pass that immutable leaf as Docker's protected cgroup parent, then inspect
-   the created container PID and verify its cgroup membership before start.
-4. On every timeout, error, signal, or normal return, write `1` to the leaf's
-   `cgroup.kill`, require bounded `cgroup.events` observation of `populated 0`,
-   reap direct/adopted children as supplemental cleanup, and remove the empty
-   leaf. Any failed write, observation, or removal is a hard failure.
-5. Run adversarial `setsid`, double-fork, rapid-refork, launcher-death, and
-   Docker-daemon-created process tests inside a real delegated cgroup. A fake
+   runs; hold the child behind a synchronization gate, have only the supervisor
+   migrate it through `cgroup.procs`, and verify membership before `execve`.
+3. Run the supervisor as a protected systemd service with
+   `KillMode=control-group`. Abrupt supervisor death must trigger whole-service
+   cleanup, and reconciliation must withhold evidence until every request leaf
+   is verified empty and removed.
+4. Pass the request leaf as Docker's protected cgroup parent, retain the exact
+   container ID, and verify the daemon-reported container PID is in that leaf
+   before workload start. Killing only the Docker client is insufficient.
+5. On every timeout, error, signal, normal return, client disconnect, or daemon
+   restart, issue daemon-side kill and removal for the exact labeled container,
+   write `1` to the leaf's `cgroup.kill`, require bounded `cgroup.events`
+   observation of `populated 0`, and remove the empty leaf. Any failed action or
+   observation is a hard failure and cannot produce evidence.
+6. Run adversarial self-migration, `setsid`, double-fork, rapid-refork,
+   launcher-death, Docker-client-death, and Docker-daemon-restart tests against
+   the provisioned privilege boundary. A same-UID `Delegate=yes` scope or fake
    filesystem fixture cannot establish this claim.
 
 Ordinary SSH sessions can test the real refusal path. An ephemeral
 `systemd-run --user --scope -p Delegate=yes` scope provides a real writable
-test cgroup, so the focused suite also validates pre-exec membership, direct
-children, `setsid`, double-fork, bounded fork pressure, continuous rapid
-reforking, `cgroup.kill`, `populated 0`, and leaf removal there. This delegated
-user scope still has no Docker socket authority and cannot bind processes
-created under `/system.slice/docker.service`; it is not a production fixture.
-Production builds enable neither test escape hatch.
+test cgroup, so the focused suite exercises pre-exec migration, direct children,
+`setsid`, double-fork, bounded fork pressure, continuous rapid reforking,
+`cgroup.kill`, `populated 0`, and leaf removal there. The suite also proves the
+limitation: a same-UID child can write itself into the parent cgroup. This is a
+mechanism-only fixture, not a containment or production fixture. It has no
+Docker socket authority and cannot bind processes created under
+`/system.slice/docker.service`. Production builds enable neither test hook and
+remain unconditionally disabled even when pointed at that writable scope.
 
 Do not add `harsh` to the general Docker group merely to unblock evidence:
 Docker daemon access is effectively root authority. Provision a dedicated

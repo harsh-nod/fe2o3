@@ -123,15 +123,15 @@ compile_test_launcher() {
   local executor="$3"
   local timeout_seconds="${4:-30}"
   local allow_uncontained="${5:-1}"
-  local allow_unbound_runtime="${6:-0}"
+  local cgroup_mechanism="${6:-0}"
   local cgroup_root="${7:-/sys/fs/cgroup/fe2o3-oci-operator}"
   if [[ "${allow_uncontained}" != 0 && "${allow_uncontained}" != 1 ]]; then
     printf 'invalid test-only containment escape value\n' >&2
     exit 1
   fi
-  if [[ "${allow_unbound_runtime}" != 0 && \
-    "${allow_unbound_runtime}" != 1 ]]; then
-    printf 'invalid test-only runtime binding escape value\n' >&2
+  if [[ "${cgroup_mechanism}" != 0 && \
+    "${cgroup_mechanism}" != 1 ]]; then
+    printf 'invalid mechanism-only cgroup value\n' >&2
     exit 1
   fi
   /usr/bin/cc \
@@ -149,13 +149,13 @@ compile_test_launcher() {
     -DFE2O3_KILL_GRACE_MILLISECONDS=4000 \
     "-DFE2O3_CGROUP_ROOT=\"${cgroup_root}\"" \
     "-DFE2O3_TEST_ONLY_ALLOW_UNCONTAINED_EXECUTION=${allow_uncontained}" \
-    "-DFE2O3_TEST_ONLY_ALLOW_UNBOUND_RUNTIME=${allow_unbound_runtime}" \
+    "-DFE2O3_TEST_ONLY_CGROUP_MECHANISM=${cgroup_mechanism}" \
     "${LAUNCHER_SOURCE}" -o "${output}"
   chmod 0555 "${output}"
   assert_static_pie "${output}"
 }
 
-compile_contained_launcher() {
+compile_cgroup_mechanism_launcher() {
   local output="$1"
   local interpreter="$2"
   local executor="$3"
@@ -407,8 +407,8 @@ fi
 compile_test_launcher \
   "${PRODUCTION_GATE_LAUNCHER}" "${TEST_INTERPRETER}" "${PROBE}" 30 0 0 \
   "${PRODUCTION_GATE_ROOT}"
-expect_failure undelegated_production_cgroup \
-  'production execution disabled: predelegated cgroup v2 root is unavailable' \
+expect_failure unconditional_production_gate \
+  'production execution disabled: privilege-separated cgroup supervisor, Docker binding, and daemon cleanup are not implemented' \
   "${PRODUCTION_GATE_LAUNCHER}" verify --request-id "${REQUEST_ID}"
 if [[ -z "${DELEGATED_TEST_CGROUP_ROOT}" ]]; then
   CURRENT_CGROUP_ROOT="/sys/fs/cgroup$(cut -d: -f3 /proc/self/cgroup)"
@@ -423,8 +423,8 @@ if [[ -z "${DELEGATED_TEST_CGROUP_ROOT}" ]]; then
   compile_test_launcher \
     "${CURRENT_CGROUP_GATE_LAUNCHER}" "${TEST_INTERPRETER}" "${PROBE}" \
     30 0 0 "${CURRENT_CGROUP_ROOT}"
-  expect_failure unwritable_session_cgroup \
-    'production execution disabled: predelegated cgroup v2 root is unavailable' \
+  expect_failure unwritable_session_production_gate \
+    'production execution disabled: privilege-separated cgroup supervisor, Docker binding, and daemon cleanup are not implemented' \
     "${CURRENT_CGROUP_GATE_LAUNCHER}" verify --request-id "${REQUEST_ID}"
 fi
 mkdir -m 755 "${TEST_ROOT}/malicious" "${TEST_ROOT}/fake-bin"
@@ -540,18 +540,20 @@ if [[ -n "${DELEGATED_TEST_CGROUP_ROOT}" ]]; then
     exit 1
   fi
 
-readonly CONTAINED_SUCCESS_LAUNCHER="${TEST_ROOT}/contained-success-operator"
+readonly CGROUP_MECHANISM_LAUNCHER="${TEST_ROOT}/cgroup-mechanism-operator"
 readonly DELEGATED_PRODUCTION_GATE_LAUNCHER=\
 "${TEST_ROOT}/delegated-production-gate-operator"
 compile_test_launcher \
   "${DELEGATED_PRODUCTION_GATE_LAUNCHER}" "${TEST_INTERPRETER}" "${PROBE}" \
   5 0 0 "${DELEGATED_TEST_CGROUP_ROOT}"
-expect_failure delegated_runtime_membership_gate \
-  'production execution disabled: OCI runtime cgroup-parent binding and membership verification are not implemented' \
+expect_failure delegated_production_gate \
+  'production execution disabled: privilege-separated cgroup supervisor, Docker binding, and daemon cleanup are not implemented' \
   "${DELEGATED_PRODUCTION_GATE_LAUNCHER}" verify --request-id "${REQUEST_ID}"
-compile_contained_launcher \
-  "${CONTAINED_SUCCESS_LAUNCHER}" "${TEST_INTERPRETER}" "${PROBE}" 5
-"${CONTAINED_SUCCESS_LAUNCHER}" verify --request-id "${REQUEST_ID}"
+compile_cgroup_mechanism_launcher \
+  "${CGROUP_MECHANISM_LAUNCHER}" "${TEST_INTERPRETER}" "${PROBE}" 5
+expect_failure cgroup_mechanism_non_authoritative \
+  'test-only cgroup mechanism completed; no production verdict' \
+  "${CGROUP_MECHANISM_LAUNCHER}" verify --request-id "${REQUEST_ID}"
 if ! PYTHONDONTWRITEBYTECODE=1 python3 - "${PROBE_OUTPUT}" <<'PY'
 import ast
 from pathlib import Path
@@ -563,6 +565,64 @@ if not re.fullmatch(r"0::.*/launcher-[1-9][0-9]*\n", state["cgroup"]):
     raise SystemExit("executor did not observe its verified launcher cgroup")
 PY
 then
+  exit 1
+fi
+
+readonly SAME_UID_ESCAPE_PROBE="${TEST_ROOT}/same-uid-cgroup-escape.py"
+readonly SAME_UID_ESCAPE_RESULT="${TEST_ROOT}/same-uid-cgroup-escape.result"
+cat >"${SAME_UID_ESCAPE_PROBE}" <<EOF
+#!/usr/bin/python3
+import os
+from pathlib import Path
+
+cgroup_root = Path("${DELEGATED_TEST_CGROUP_ROOT}")
+before = Path("/proc/self/cgroup").read_text(encoding="ascii")
+with (cgroup_root / "cgroup.procs").open("w", encoding="ascii") as stream:
+    stream.write(f"{os.getpid()}\n")
+after = Path("/proc/self/cgroup").read_text(encoding="ascii")
+Path("${SAME_UID_ESCAPE_RESULT}").write_text(
+    repr({"before": before, "after": after}), encoding="ascii"
+)
+EOF
+chmod 0555 "${SAME_UID_ESCAPE_PROBE}"
+
+readonly SAME_UID_ESCAPE_LAUNCHER="${TEST_ROOT}/same-uid-cgroup-escape-operator"
+compile_cgroup_mechanism_launcher \
+  "${SAME_UID_ESCAPE_LAUNCHER}" "${TEST_INTERPRETER}" \
+  "${SAME_UID_ESCAPE_PROBE}" 5
+expect_failure same_uid_cgroup_escape_is_not_authority \
+  'test-only cgroup mechanism completed; no production verdict' \
+  "${SAME_UID_ESCAPE_LAUNCHER}" verify --request-id "${REQUEST_ID}"
+if ! PYTHONDONTWRITEBYTECODE=1 python3 - \
+  "${SAME_UID_ESCAPE_RESULT}" "${DELEGATED_TEST_CGROUP_ROOT}" <<'PY'
+import ast
+from pathlib import Path
+import re
+import sys
+
+state = ast.literal_eval(Path(sys.argv[1]).read_text(encoding="ascii"))
+cgroup_root = Path(sys.argv[2]).resolve()
+expected_after = f"0::{str(cgroup_root).removeprefix('/sys/fs/cgroup')}\n"
+if not re.fullmatch(r"0::.*/launcher-[1-9][0-9]*\n", state["before"]):
+    raise SystemExit("mechanism test did not begin in its launcher leaf")
+if state["after"] != expected_after or state["after"] == state["before"]:
+    raise SystemExit("same-UID child did not self-migrate to the parent cgroup")
+PY
+then
+  exit 1
+fi
+
+rm -- "${SAME_UID_ESCAPE_RESULT}"
+readonly SAME_UID_PRODUCTION_GATE_LAUNCHER=\
+"${TEST_ROOT}/same-uid-production-gate-operator"
+compile_test_launcher \
+  "${SAME_UID_PRODUCTION_GATE_LAUNCHER}" "${TEST_INTERPRETER}" \
+  "${SAME_UID_ESCAPE_PROBE}" 5 0 0 "${DELEGATED_TEST_CGROUP_ROOT}"
+expect_failure same_uid_escape_never_reaches_production \
+  'production execution disabled: privilege-separated cgroup supervisor, Docker binding, and daemon cleanup are not implemented' \
+  "${SAME_UID_PRODUCTION_GATE_LAUNCHER}" verify --request-id "${REQUEST_ID}"
+if [[ -e "${SAME_UID_ESCAPE_RESULT}" ]]; then
+  printf 'production gate executed the same-UID escape probe\n' >&2
   exit 1
 fi
 
@@ -582,7 +642,7 @@ while True:
 EOF
 chmod 0555 "${HANG_PROBE}"
 readonly HANG_LAUNCHER="${TEST_ROOT}/hang-operator"
-compile_contained_launcher \
+compile_cgroup_mechanism_launcher \
   "${HANG_LAUNCHER}" "${TEST_INTERPRETER}" "${HANG_PROBE}" 1
 expect_failure bounded_launcher_wait 'exceeded bounded launcher lifetime' \
   "${HANG_LAUNCHER}" verify --request-id "${REQUEST_ID}"
@@ -614,7 +674,7 @@ while True:
 EOF
 chmod 0555 "${SETSID_PROBE}"
 readonly SETSID_LAUNCHER="${TEST_ROOT}/setsid-operator"
-compile_contained_launcher \
+compile_cgroup_mechanism_launcher \
   "${SETSID_LAUNCHER}" "${TEST_INTERPRETER}" "${SETSID_PROBE}" 1
 expect_failure setsid_descendant_timeout 'exceeded bounded launcher lifetime' \
   "${SETSID_LAUNCHER}" verify --request-id "${REQUEST_ID}"
@@ -656,7 +716,7 @@ os._exit(17)
 EOF
 chmod 0555 "${ERROR_EXIT_PROBE}"
 readonly ERROR_EXIT_LAUNCHER="${TEST_ROOT}/error-exit-operator"
-compile_contained_launcher \
+compile_cgroup_mechanism_launcher \
   "${ERROR_EXIT_LAUNCHER}" "${TEST_INTERPRETER}" "${ERROR_EXIT_PROBE}" 5
 expect_status descendant_after_executor_error 17 \
   "${ERROR_EXIT_LAUNCHER}" verify --request-id "${REQUEST_ID}"
@@ -705,7 +765,7 @@ while True:
 EOF
 chmod 0555 "${DOUBLE_FORK_PROBE}"
 readonly DOUBLE_FORK_LAUNCHER="${TEST_ROOT}/double-fork-operator"
-compile_contained_launcher \
+compile_cgroup_mechanism_launcher \
   "${DOUBLE_FORK_LAUNCHER}" "${TEST_INTERPRETER}" \
   "${DOUBLE_FORK_PROBE}" 1
 expect_failure double_fork_timeout 'exceeded bounded launcher lifetime' \
@@ -753,7 +813,7 @@ while True:
 EOF
 chmod 0555 "${FORK_PRESSURE_PROBE}"
 readonly FORK_PRESSURE_LAUNCHER="${TEST_ROOT}/fork-pressure-operator"
-compile_contained_launcher \
+compile_cgroup_mechanism_launcher \
   "${FORK_PRESSURE_LAUNCHER}" "${TEST_INTERPRETER}" \
   "${FORK_PRESSURE_PROBE}" 2
 fork_pressure_start="$(date +%s%3N)"
@@ -794,7 +854,7 @@ while True:
 EOF
 chmod 0555 "${REFORK_PROBE}"
 readonly REFORK_LAUNCHER="${TEST_ROOT}/rapid-refork-operator"
-compile_contained_launcher \
+compile_cgroup_mechanism_launcher \
   "${REFORK_LAUNCHER}" "${TEST_INTERPRETER}" "${REFORK_PROBE}" 2
 refork_start="$(date +%s%3N)"
 expect_failure rapid_refork_timeout 'exceeded bounded launcher lifetime' \
