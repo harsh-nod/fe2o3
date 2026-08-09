@@ -17,7 +17,9 @@ use fe2o3_rustc_invocation::{
     RustcArgsErrorV2, RustcCompileInvocationV2, RustcInvocationV2, classify_rustc_invocation_v2,
 };
 use fe2o3_worker_v2_bundle::WorkerV2EnvelopeInputsV1;
-use reserved_fe2o3_symbols::{CRATE_BINDING_ID_ENV_V1, derive_crate_binding_id_v1};
+use reserved_fe2o3_symbols::{
+    CRATE_BINDING_ID_ENV_V1, CrateBindingIdV1, derive_crate_binding_id_v1,
+};
 use sha2::{Digest, Sha256};
 
 use crate::capability_broker;
@@ -40,8 +42,55 @@ const HSACO_DIR_ENV: &str = "FE2O3_HSACO_DIR";
 const TARGET_ENV: &str = "FE2O3_TARGET";
 const BUILD_SESSION_ENV: &str = "FE2O3_BUILD_SESSION_V1";
 const BUILD_ATTEMPT_ENV: &str = "FE2O3_BUILD_ATTEMPT_V1";
+const CARGO_METADATA_BUILD_OBSERVATION_ENV_V2: &str = "FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2";
 const BUILD_INVOCATION_DOMAIN: &[u8] = b"FE2O3/BUILD-INVOCATION/V1\0";
+const CARGO_METADATA_BUILD_OBSERVATION_DOMAIN_V2: &[u8] =
+    b"FE2O3/CARGO-METADATA-BUILD-OBSERVATION/V2\0";
 const WORKER_V2_CONFIG_ID_DOMAIN: &[u8] = b"FE2O3/WORKER-V2-CONFIG-ID/V1\0";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct CompileBuildObservationV2 {
+    crate_binding: CrateBindingIdV1,
+    cargo_metadata_digest: [u8; 32],
+}
+
+impl CompileBuildObservationV2 {
+    fn from_ordered_metadata(
+        crate_name: &str,
+        metadata: &[String],
+    ) -> Result<Self, BindingWrapperError> {
+        if metadata.is_empty() {
+            return Err(BindingWrapperError::MissingMetadata {
+                crate_name: crate_name.to_owned(),
+            });
+        }
+
+        let crate_binding =
+            derive_crate_binding_id_v1(crate_name, metadata.iter().map(String::as_str));
+        let mut digest = Sha256::new();
+        digest.update(CARGO_METADATA_BUILD_OBSERVATION_DOMAIN_V2);
+        digest.update((metadata.len() as u64).to_le_bytes());
+        for value in metadata {
+            digest.update((value.len() as u64).to_le_bytes());
+            digest.update(value.as_bytes());
+        }
+
+        Ok(Self {
+            crate_binding,
+            cargo_metadata_digest: digest.finalize().into(),
+        })
+    }
+
+    fn cargo_metadata_digest_hex(self) -> String {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        let mut encoded = String::with_capacity(self.cargo_metadata_digest.len() * 2);
+        for byte in self.cargo_metadata_digest {
+            encoded.push(HEX[usize::from(byte >> 4)] as char);
+            encoded.push(HEX[usize::from(byte & 0x0f)] as char);
+        }
+        encoded
+    }
+}
 
 #[derive(Debug)]
 pub(crate) enum BindingWrapperError {
@@ -215,26 +264,21 @@ pub(crate) fn run(argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperError
         Err(_) if is_cargo_stdin_probe(&argv) => {
             let mut command = Command::new(&argv[0]);
             command.args(&argv[1..]);
-            command.env_remove(CRATE_BINDING_ID_ENV_V1);
+            configure_build_observation_environment(&mut command, None);
             return command.status().map_err(BindingWrapperError::Spawn);
         }
         Err(error) => return Err(error.into()),
     };
-    let (crate_binding, managed_attempt, managed_rustc_args, compiler_capabilities) =
+    let (build_observation, managed_attempt, managed_rustc_args, compiler_capabilities) =
         match invocation {
             RustcInvocationV2::Compile(compile) => {
                 let managed_rustc_args = managed_rustc_args_from_environment()?;
                 let compiler_capabilities = CompilerCapabilities::from_environment()?;
                 let metadata = ordered_metadata_values(compile.argv())?;
-                if metadata.is_empty() {
-                    return Err(BindingWrapperError::MissingMetadata {
-                        crate_name: compile.crate_name().to_owned(),
-                    });
-                }
-                let binding = derive_crate_binding_id_v1(
+                let build_observation = CompileBuildObservationV2::from_ordered_metadata(
                     compile.crate_name(),
-                    metadata.iter().map(String::as_str),
-                );
+                    &metadata,
+                )?;
                 let worker_v2 = PreparedWorkerV2Config::from_environment()
                     .map_err(BindingWrapperError::WorkerV2Configuration)?;
                 validate_expected_worker_v2_identity(worker_v2.as_ref())?;
@@ -253,7 +297,7 @@ pub(crate) fn run(argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperError
                     )?)
                 };
                 (
-                    Some(binding),
+                    Some(build_observation),
                     managed,
                     managed_rustc_args,
                     Some(compiler_capabilities),
@@ -279,11 +323,7 @@ pub(crate) fn run(argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperError
     if let Some(capabilities) = &compiler_capabilities {
         capabilities.prepare_command(&mut command)?;
     }
-    if let Some(crate_binding) = crate_binding {
-        command.env(CRATE_BINDING_ID_ENV_V1, crate_binding.to_hex());
-    } else {
-        command.env_remove(CRATE_BINDING_ID_ENV_V1);
-    }
+    configure_build_observation_environment(&mut command, build_observation);
     if let Some(managed) = &managed_attempt {
         command.env(BUILD_ATTEMPT_ENV, managed.attempt.to_env_value());
     } else {
@@ -312,6 +352,23 @@ pub(crate) fn run(argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperError
         }
     }
     Ok(status)
+}
+
+fn configure_build_observation_environment(
+    command: &mut Command,
+    observation: Option<CompileBuildObservationV2>,
+) {
+    if let Some(observation) = observation {
+        command.env(CRATE_BINDING_ID_ENV_V1, observation.crate_binding.to_hex());
+        // This digest is an exact build observation, not a semantic admission identity.
+        command.env(
+            CARGO_METADATA_BUILD_OBSERVATION_ENV_V2,
+            observation.cargo_metadata_digest_hex(),
+        );
+    } else {
+        command.env_remove(CRATE_BINDING_ID_ENV_V1);
+        command.env_remove(CARGO_METADATA_BUILD_OBSERVATION_ENV_V2);
+    }
 }
 
 fn managed_rustc_args_from_environment() -> Result<Vec<OsString>, BindingWrapperError> {
@@ -1085,7 +1142,8 @@ pub(crate) fn exit_code(status: ExitStatus) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::{
-        BindingWrapperError, decode_managed_rustc_args,
+        BindingWrapperError, CARGO_METADATA_BUILD_OBSERVATION_ENV_V2, CompileBuildObservationV2,
+        configure_build_observation_environment, decode_managed_rustc_args,
         derive_build_invocation_with_config_identity, is_cargo_stdin_probe,
         ordered_metadata_values, reject_uninspectable_rustc_args,
     };
@@ -1103,11 +1161,12 @@ mod tests {
         persist_worker_v2_publication_intent_v1, publish_exact_hsaco_evidence_for_attempt_v1,
         recover_worker_v2_publication_intent_v1,
     };
-    use reserved_fe2o3_symbols::derive_crate_binding_id_v1;
+    use reserved_fe2o3_symbols::{CRATE_BINDING_ID_ENV_V1, derive_crate_binding_id_v1};
     use sha2::Digest;
     use std::ffi::OsString;
     use std::fs;
     use std::path::Path;
+    use std::process::Command;
 
     fn args(values: &[&str]) -> Vec<OsString> {
         values.iter().map(OsString::from).collect()
@@ -1145,6 +1204,103 @@ mod tests {
     }
 
     #[test]
+    fn metadata_build_observation_preserves_order_and_duplicates() {
+        let ordered = ["first", "second", "first"].map(String::from);
+        let reordered = ["first", "first", "second"].map(String::from);
+        let deduplicated = ["first", "second"].map(String::from);
+
+        let other_crate =
+            CompileBuildObservationV2::from_ordered_metadata("other", &ordered).unwrap();
+        let ordered = CompileBuildObservationV2::from_ordered_metadata("unit", &ordered).unwrap();
+        let reordered =
+            CompileBuildObservationV2::from_ordered_metadata("unit", &reordered).unwrap();
+        let deduplicated =
+            CompileBuildObservationV2::from_ordered_metadata("unit", &deduplicated).unwrap();
+
+        assert_ne!(
+            ordered.cargo_metadata_digest,
+            reordered.cargo_metadata_digest
+        );
+        assert_ne!(
+            ordered.cargo_metadata_digest,
+            deduplicated.cargo_metadata_digest
+        );
+        assert_ne!(ordered.crate_binding, reordered.crate_binding);
+        assert_ne!(ordered.crate_binding, deduplicated.crate_binding);
+        assert_eq!(
+            ordered.cargo_metadata_digest_hex(),
+            other_crate.cargo_metadata_digest_hex()
+        );
+        assert_ne!(ordered.crate_binding, other_crate.crate_binding);
+        assert_eq!(
+            ordered.cargo_metadata_digest_hex(),
+            "02bb68e8c8b5aa67c836f32263beaa4738b50f4689f0622d75130fbf9f7008a9"
+        );
+    }
+
+    #[test]
+    fn metadata_build_observation_rejects_missing_metadata() {
+        let error = CompileBuildObservationV2::from_ordered_metadata("unit", &[]).unwrap_err();
+        assert!(matches!(
+            error,
+            BindingWrapperError::MissingMetadata { ref crate_name } if crate_name == "unit"
+        ));
+    }
+
+    #[test]
+    fn build_observation_handoff_is_digest_only_and_cleared_when_absent() {
+        let private_metadata = [
+            "private-checkout-fingerprint".to_owned(),
+            "private-checkout-fingerprint".to_owned(),
+        ];
+        let observation =
+            CompileBuildObservationV2::from_ordered_metadata("unit", &private_metadata).unwrap();
+        let mut compile = Command::new("rustc");
+        configure_build_observation_environment(&mut compile, Some(observation));
+
+        let compile_environment = compile
+            .get_envs()
+            .map(|(name, value)| {
+                (
+                    name.to_string_lossy().into_owned(),
+                    value.map(|value| value.to_string_lossy().into_owned()),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            compile_environment,
+            [
+                (
+                    CARGO_METADATA_BUILD_OBSERVATION_ENV_V2.to_owned(),
+                    Some(observation.cargo_metadata_digest_hex()),
+                ),
+                (
+                    CRATE_BINDING_ID_ENV_V1.to_owned(),
+                    Some(observation.crate_binding.to_hex()),
+                ),
+            ]
+        );
+        let rendered = format!("{observation:?} {compile_environment:?}");
+        assert!(!rendered.contains("private-checkout-fingerprint"));
+
+        let mut non_compile = Command::new("rustc");
+        configure_build_observation_environment(&mut non_compile, None);
+        assert_eq!(
+            non_compile
+                .get_envs()
+                .map(|(name, value)| (name.to_owned(), value.map(OsString::from)))
+                .collect::<Vec<_>>(),
+            [
+                (
+                    OsString::from(CARGO_METADATA_BUILD_OBSERVATION_ENV_V2),
+                    None
+                ),
+                (OsString::from(CRATE_BINDING_ID_ENV_V1), None),
+            ]
+        );
+    }
+
+    #[test]
     fn rejects_empty_metadata() {
         let error = ordered_metadata_values(&args(&[
             "rustc",
@@ -1158,6 +1314,29 @@ mod tests {
             error,
             BindingWrapperError::EmptyMetadata { argument_index: 4 }
         ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_non_utf8_metadata_without_rendering_its_bytes() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let invalid = OsString::from_vec(b"metadata=private-\xff-value".to_vec());
+        let argv = vec![
+            OsString::from("rustc"),
+            OsString::from("unit.rs"),
+            OsString::from("-C"),
+            invalid,
+        ];
+        let error = ordered_metadata_values(&argv).unwrap_err();
+        assert!(matches!(
+            error,
+            BindingWrapperError::InvalidCodegenOption { argument_index: 3 }
+        ));
+        assert_eq!(
+            error.to_string(),
+            "rustc codegen option at argv[3] is not valid UTF-8"
+        );
     }
 
     #[test]
