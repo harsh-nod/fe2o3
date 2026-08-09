@@ -1,8 +1,16 @@
 use std::collections::HashSet;
 
 use fe2o3_device::{Fp8E4M3Fnuz, Fp8E4M3Fnuzx4, Fp8E5M2Fnuz, Fp8E5M2Fnuzx4};
+use sha2::{Digest, Sha256};
 
 const GOLDEN: &str = include_str!("fixtures/fp8_gfx942_rocm.golden");
+const ORACLE_SOURCE: &[u8] = include_bytes!("oracle/fp8_gfx942_oracle.hip");
+const GENERATOR_SOURCE: &[u8] = include_bytes!("../../../scripts/fp8-gfx942-oracle.sh");
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
 
 fn parse_u8(value: &str) -> u8 {
     u8::from_str_radix(value, 16).unwrap_or_else(|error| panic!("invalid u8 {value}: {error}"))
@@ -50,6 +58,12 @@ fn golden_identifies_the_exact_gfx942_toolchain_contract() {
         assert_eq!(digest.len(), 64);
         assert!(digest.bytes().all(|byte| byte.is_ascii_hexdigit()));
     }
+}
+
+#[test]
+fn golden_digests_match_the_embedded_oracle_and_generator() {
+    assert_eq!(metadata("oracle-sha256"), sha256_hex(ORACLE_SOURCE));
+    assert_eq!(metadata("generator-sha256"), sha256_hex(GENERATOR_SOURCE));
 }
 
 #[test]
