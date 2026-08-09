@@ -16,6 +16,7 @@ use core::marker::PhantomData;
 
 pub mod ffi;
 pub mod fp8;
+pub mod group;
 pub mod half;
 pub mod lds;
 pub mod math;
@@ -30,6 +31,11 @@ pub use ffi::{
     DevicePrivateConstPtr, DevicePrivateMutPtr, DeviceWorkgroupConstPtr, DeviceWorkgroupMutPtr,
 };
 pub use fp8::{Fp8E4M3Fnuz, Fp8E4M3Fnuzx4, Fp8E5M2Fnuz, Fp8E5M2Fnuzx4};
+pub use group::{
+    ActiveLaneGroup, Gfx942SubgroupWidth, Grid, Group, GroupMemoryOrdering, GroupMemorySpace,
+    GroupScope, SubgroupTile, SynchronizationContract, UnsupportedSynchronization,
+    ValidGfx942SubgroupWidth, Workgroup, WorkgroupConvergence, WorkgroupSynchronization,
+};
 pub use half::{Bf16, Bf16x2, F16};
 pub use lds::{
     DynamicLds, DynamicLdsError, LdsElement, LdsInitialized, LdsUninitialized,
