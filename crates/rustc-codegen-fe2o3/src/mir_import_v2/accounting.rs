@@ -122,9 +122,15 @@ impl AccountingV2 {
 
     fn signature(
         &mut self,
-        _signature: &FunctionSignatureIdentityV2,
+        signature: &FunctionSignatureIdentityV2,
     ) -> Result<(), ValidationErrorV2> {
-        self.work(1)
+        self.work(1)?;
+        self.work(signature.inputs.len())?;
+        for input in &signature.inputs {
+            self.ty(input)?;
+        }
+        self.ty(&signature.output)?;
+        self.text(&signature.abi.canonical_name)
     }
 
     fn instance(&mut self, instance: &InstanceIdentityV2) -> Result<(), ValidationErrorV2> {
@@ -516,6 +522,7 @@ impl AccountingV2 {
                 callee,
                 arguments,
                 function_span,
+                ..
             } => {
                 self.operand(function)?;
                 self.callee(callee)?;
@@ -599,7 +606,14 @@ impl AccountingV2 {
                 }
                 Ok(())
             }
-            CalleeIdentityV2::Indirect { callable_type } => self.ty(callable_type),
+            CalleeIdentityV2::Indirect {
+                callable_type,
+                signature,
+                ..
+            } => {
+                self.ty(callable_type)?;
+                self.signature(signature)
+            }
         }
     }
 

@@ -1,5 +1,6 @@
 use super::accounting::recompute_capture_accounting_v2;
 use super::normalized::*;
+use super::preflight::preflight_body_v2;
 use super::rustc_adapter::{capture_instance_body_v2, capture_instance_observation_v2};
 use rustc_driver::{Callbacks, Compilation};
 use rustc_hir::def::DefKind;
@@ -57,6 +58,16 @@ fn observed_function_pointer(function: fn(u32) -> u32, value: u32) -> u32 {
 }
 
 #[inline(never)]
+extern "C" fn c_identity(value: u32) -> u32 {
+    value
+}
+
+#[inline(never)]
+fn observed_c_call(value: u32) -> u32 {
+    c_identity(value)
+}
+
+#[inline(never)]
 fn observed_inline_assembly() {
     unsafe { core::arch::asm!("", options(nomem, nostack)) }
 }
@@ -69,8 +80,10 @@ struct DriverResults {
     closure_once_shim: CapturedBodyV2,
     intrinsic: CapturedBodyV2,
     function_pointer: CapturedBodyV2,
+    c_call: CapturedBodyV2,
     bounded_error: String,
     work_bound_error: String,
+    scope_work_bound_error: String,
     text_bound_error: String,
     switch_bound_error: String,
     unsupported_error: String,
@@ -88,6 +101,7 @@ impl Callbacks for CaptureCallbacks {
         let intrinsic_instance = Instance::mono(tcx, local_function(tcx, "observed_intrinsic"));
         let function_pointer_instance =
             Instance::mono(tcx, local_function(tcx, "observed_function_pointer"));
+        let c_call_instance = Instance::mono(tcx, local_function(tcx, "observed_c_call"));
         let inline_assembly_instance =
             Instance::mono(tcx, local_function(tcx, "observed_inline_assembly"));
         let invoke_instance = resolved_direct_calls(tcx, observed_instance)
@@ -103,6 +117,22 @@ impl Callbacks for CaptureCallbacks {
                 )
             })
             .expect("invoke_once must resolve a closure-once shim");
+        let observed_body = tcx.instance_mir(observed_instance.def);
+        let scope_entry_limit = 1usize
+            .checked_add(observed_body.local_decls.len())
+            .and_then(|value| value.checked_add(observed_body.basic_blocks.len()))
+            .and_then(|value| value.checked_add(observed_body.source_scopes.len()))
+            .and_then(|value| value.checked_sub(1))
+            .expect("fixture preflight scope limit");
+        let scope_work_bound_error = preflight_body_v2(
+            observed_body,
+            CaptureLimitsV2 {
+                max_total_work_items: scope_entry_limit,
+                ..limits
+            },
+        )
+        .expect_err("tight aggregate work must reject source scopes during preflight")
+        .to_string();
 
         self.results = Some(DriverResults {
             observed: capture_instance_body_v2(tcx, observed_instance, limits)
@@ -115,6 +145,8 @@ impl Callbacks for CaptureCallbacks {
                 .expect("capture intrinsic caller MIR"),
             function_pointer: capture_instance_body_v2(tcx, function_pointer_instance, limits)
                 .expect("capture indirect function-pointer caller MIR"),
+            c_call: capture_instance_body_v2(tcx, c_call_instance, limits)
+                .expect("capture non-unwinding C ABI caller MIR"),
             bounded_error: capture_instance_body_v2(
                 tcx,
                 observed_instance,
@@ -135,6 +167,7 @@ impl Callbacks for CaptureCallbacks {
             )
             .expect_err("a one-item work bound must reject before capture")
             .to_string(),
+            scope_work_bound_error,
             text_bound_error: capture_instance_body_v2(
                 tcx,
                 observed_instance,
@@ -729,7 +762,7 @@ fn compiler_capture_preserves_generated_callable_and_intrinsic_def_ids() {
 
     let indirect = calls(&results.function_pointer).find_map(|kind| match kind {
         TerminatorKindV2::Call {
-            callee: CalleeIdentityV2::Indirect { callable_type },
+            callee: CalleeIdentityV2::Indirect { callable_type, .. },
             ..
         } => Some(callable_type),
         _ => None,
@@ -750,6 +783,13 @@ fn compiler_capture_enforces_bounds_before_normalized_validation() {
         results.work_bound_error.contains("total capture work"),
         "{}",
         results.work_bound_error
+    );
+    assert!(
+        results
+            .scope_work_bound_error
+            .contains("total capture work"),
+        "{}",
+        results.scope_work_bound_error
     );
     assert!(
         results.text_bound_error.contains("text"),
@@ -981,9 +1021,230 @@ fn normalized_validation_rejects_direct_call_substitution_and_signature_mutation
         .unwrap_err()
         .to_string();
     assert!(
-        signature_error.contains("resolution_binding_hash"),
+        signature_error.contains("signature structural binding"),
         "{signature_error}"
     );
+}
+
+#[test]
+fn normalized_validation_binds_ordered_call_arguments_destination_and_control_flow() {
+    let original = compiler_results().observed;
+    let signature = calls(&original)
+        .find_map(|kind| match kind {
+            TerminatorKindV2::Call {
+                callee:
+                    CalleeIdentityV2::Direct {
+                        declared_signature, ..
+                    },
+                arguments,
+                ..
+            } if arguments.len() >= 2 => Some(declared_signature),
+            _ => None,
+        })
+        .expect("fixture must contain a multi-argument direct call");
+    assert_eq!(signature.inputs.len(), 2);
+    assert_ne!(signature.output.stable_hash, [0; 16]);
+    assert_ne!(signature.abi.stable_hash, [0; 16]);
+    assert_ne!(signature.binding_hash, [0; 32]);
+
+    let mut removed = original.clone();
+    let arguments = removed
+        .blocks
+        .iter_mut()
+        .find_map(|block| match &mut block.terminator.kind {
+            TerminatorKindV2::Call { arguments, .. } if arguments.len() >= 2 => Some(arguments),
+            _ => None,
+        })
+        .unwrap();
+    arguments.pop();
+    refresh_capture_accounting(&mut removed);
+    let error = removed
+        .validate(CaptureLimitsV2::default())
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("argument count"), "{error}");
+
+    let mut added = original.clone();
+    let arguments = added
+        .blocks
+        .iter_mut()
+        .find_map(|block| match &mut block.terminator.kind {
+            TerminatorKindV2::Call { arguments, .. } if arguments.len() >= 2 => Some(arguments),
+            _ => None,
+        })
+        .unwrap();
+    arguments.push(arguments[0].clone());
+    refresh_capture_accounting(&mut added);
+    let error = added
+        .validate(CaptureLimitsV2::default())
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("argument count"), "{error}");
+
+    let mut reordered = original.clone();
+    let arguments = reordered
+        .blocks
+        .iter_mut()
+        .find_map(|block| match &mut block.terminator.kind {
+            TerminatorKindV2::Call { arguments, .. } if arguments.len() >= 2 => Some(arguments),
+            _ => None,
+        })
+        .unwrap();
+    arguments.swap(0, 1);
+    refresh_capture_accounting(&mut reordered);
+    let error = reordered
+        .validate(CaptureLimitsV2::default())
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("ordered signature input") || error.contains("contract_hash"),
+        "{error}"
+    );
+
+    let mut changed_destination = original.clone();
+    let destination = changed_destination
+        .blocks
+        .iter_mut()
+        .find_map(|block| match &mut block.terminator.kind {
+            TerminatorKindV2::Call {
+                arguments,
+                destination,
+                ..
+            } if arguments.len() >= 2 => Some(destination),
+            _ => None,
+        })
+        .unwrap();
+    destination.local = 0;
+    refresh_capture_accounting(&mut changed_destination);
+    let error = changed_destination
+        .validate(CaptureLimitsV2::default())
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("contract_hash"), "{error}");
+
+    let mut bad_destination_type = original.clone();
+    let destination = bad_destination_type
+        .blocks
+        .iter_mut()
+        .find_map(|block| match &mut block.terminator.kind {
+            TerminatorKindV2::Call {
+                arguments,
+                destination,
+                ..
+            } if arguments.len() >= 2 => Some(destination),
+            _ => None,
+        })
+        .unwrap();
+    destination.type_hash[0] ^= 1;
+    refresh_capture_accounting(&mut bad_destination_type);
+    let error = bad_destination_type
+        .validate(CaptureLimitsV2::default())
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("destination place type"), "{error}");
+
+    let mut bad_target = original;
+    let target = bad_target
+        .blocks
+        .iter_mut()
+        .find_map(|block| match &mut block.terminator.kind {
+            TerminatorKindV2::Call {
+                arguments, target, ..
+            } if arguments.len() >= 2 => Some(target),
+            _ => None,
+        })
+        .unwrap();
+    *target = None;
+    refresh_capture_accounting(&mut bad_target);
+    let error = bad_target
+        .validate(CaptureLimitsV2::default())
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("target presence"), "{error}");
+}
+
+#[test]
+fn normalized_validation_binds_indirect_callable_type_and_abi_unwind() {
+    let mut indirect = compiler_results().function_pointer;
+    let replacement = indirect
+        .locals
+        .iter()
+        .find(|local| {
+            local.role == LocalRoleV2::Argument
+                && !matches!(local.ty.class, TypeClassV2::FunctionPointer)
+        })
+        .map(|local| (local.index, local.ty.stable_hash))
+        .expect("fixture must contain a non-callable argument");
+    let function = indirect
+        .blocks
+        .iter_mut()
+        .find_map(|block| match &mut block.terminator.kind {
+            TerminatorKindV2::Call {
+                function: OperandV2::Copy(place) | OperandV2::Move(place),
+                callee: CalleeIdentityV2::Indirect { signature, .. },
+                ..
+            } => {
+                assert_eq!(signature.inputs.len(), 1);
+                Some(place)
+            }
+            _ => None,
+        })
+        .expect("fixture must contain an indirect call through a place");
+    function.local = replacement.0;
+    function.type_hash = replacement.1;
+    refresh_capture_accounting(&mut indirect);
+    let error = indirect
+        .validate(CaptureLimitsV2::default())
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("indirect callable operand type"), "{error}");
+
+    let mut non_unwinding = compiler_results().c_call;
+    let call = non_unwinding
+        .blocks
+        .iter_mut()
+        .find_map(|block| match &mut block.terminator.kind {
+            kind @ TerminatorKindV2::Call { .. } => Some(kind),
+            _ => None,
+        })
+        .expect("fixture must contain a C ABI call");
+    let TerminatorKindV2::Call {
+        function,
+        callee,
+        arguments,
+        destination,
+        target,
+        unwind,
+        contract_hash,
+        ..
+    } = call
+    else {
+        unreachable!()
+    };
+    let signature = match callee {
+        CalleeIdentityV2::Direct {
+            declared_signature, ..
+        } => declared_signature,
+        CalleeIdentityV2::Indirect { .. } => unreachable!(),
+    };
+    assert_eq!(signature.abi.canonical_name, "C");
+    assert!(!signature.abi.unwind_allowed);
+    *unwind = UnwindActionV2::Continue;
+    *contract_hash = call_contract_hash_v2(
+        function,
+        callee,
+        arguments,
+        Some(destination),
+        *target,
+        Some(unwind),
+    )
+    .unwrap();
+    refresh_capture_accounting(&mut non_unwinding);
+    let error = non_unwinding
+        .validate(CaptureLimitsV2::default())
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("non-unwinding ABI"), "{error}");
 }
 
 #[test]
