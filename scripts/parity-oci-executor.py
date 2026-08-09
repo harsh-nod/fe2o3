@@ -43,6 +43,9 @@ MAX_STAGING_ROOT_ENTRIES = 64
 MAX_SOURCE_DIRECTORIES = 16384
 MAX_GIT_ROOT_ENTRIES = 258
 MAX_GIT_CONFIG_BYTES = 1024 * 1024
+MAX_GIT_COMMIT_HEADERS = 128
+MAX_GIT_COMMIT_HEADER_BYTES = 256 * 1024
+MAX_GIT_COMMIT_LINE_BYTES = 4096
 MAX_SOURCE_MANIFEST_BYTES = 16 * 1024 * 1024
 MAX_CLEANUP_ENTRIES = 40000
 PROCESS_REAP_GRACE_SECONDS = 5.0
@@ -964,6 +967,8 @@ class Profile:
     git_object_limit: int
     git_object_bytes_limit: int
     git_tree_depth_limit: int
+    git_ancestry_limit: int
+    git_commit_depth_limit: int
     source_staging_root: str
     output_staging_root: str
     artifact_stream_protocol: str
@@ -1079,8 +1084,8 @@ def load_profile(
     )
     rows = parse_rows(raw, "OCI executor profile")
     cursor = Cursor(rows, "OCI executor profile")
-    if cursor.scalar("oci_executor_profile_schema_version") != "2":
-        fail("OCI executor profile schema must be 2")
+    if cursor.scalar("oci_executor_profile_schema_version") != "3":
+        fail("OCI executor profile schema must be 3")
     actual_id = cursor.scalar("profile_id")
     mode = cursor.scalar("execution_mode")
     target = cursor.scalar("target")
@@ -1095,6 +1100,8 @@ def load_profile(
     git_object_limit = cursor.scalar("git_object_limit")
     git_object_bytes_limit = cursor.scalar("git_object_bytes_limit")
     git_tree_depth_limit = cursor.scalar("git_tree_depth_limit")
+    git_ancestry_limit = cursor.scalar("git_ancestry_limit")
+    git_commit_depth_limit = cursor.scalar("git_commit_depth_limit")
     source_staging_root = cursor.scalar("source_staging_root")
     output_staging_root = cursor.scalar("output_staging_root")
     artifact_stream_protocol = cursor.scalar("artifact_stream_protocol")
@@ -1136,6 +1143,10 @@ def load_profile(
         or not 1 <= int(git_object_bytes_limit) <= 1024**3
         or not git_tree_depth_limit.isdigit()
         or not 1 <= int(git_tree_depth_limit) <= 128
+        or not git_ancestry_limit.isdigit()
+        or not 1 <= int(git_ancestry_limit) <= 65536
+        or not git_commit_depth_limit.isdigit()
+        or not 1 <= int(git_commit_depth_limit) <= 128
         or not valid_absolute(source_staging_root)
         or not valid_absolute(output_staging_root)
         or artifact_stream_protocol != "fe2o3-artifact-stream-v1"
@@ -1298,6 +1309,8 @@ def load_profile(
         int(git_object_limit),
         int(git_object_bytes_limit),
         int(git_tree_depth_limit),
+        int(git_ancestry_limit),
+        int(git_commit_depth_limit),
         source_staging_root,
         output_staging_root,
         artifact_stream_protocol,
@@ -2382,6 +2395,12 @@ class GitTreeEntry:
     directory: bool
 
 
+@dataclass(frozen=True)
+class GitCommitHeaders:
+    tree_id: str
+    parents: tuple[str, ...]
+
+
 @dataclass
 class GitLooseObjectStore:
     profile: Profile
@@ -2643,20 +2662,132 @@ class GitLooseObjectStore:
         self.cache[object_id] = (kind, payload)
         return payload
 
-    def commit_tree(self, commit_id: str) -> str:
-        payload = self.read_object(commit_id, "commit")
-        header_block = payload.split(b"\n\n", 1)[0]
-        lines = header_block.split(b"\n")
-        trees = [line[5:] for line in lines if line.startswith(b"tree ")]
-        if len(trees) != 1 or not lines or lines[0] != b"tree " + trees[0]:
-            fail("Git commit has malformed or ambiguous tree binding")
+    @staticmethod
+    def parse_commit_identity(value: bytes, label: str) -> None:
         try:
-            tree_id = trees[0].decode("ascii")
+            identity, timestamp, timezone = value.rsplit(b" ", 2)
+        except ValueError:
+            fail(f"Git commit {label} identity is malformed")
+        separator = identity.rfind(b" <")
+        if (
+            separator < 1
+            or not identity.endswith(b">")
+            or separator + 2 == len(identity) - 1
+        ):
+            fail(f"Git commit {label} identity is malformed")
+        name = identity[:separator]
+        email = identity[separator + 2 : -1]
+        if (
+            any(character in name for character in (b"\0", b"\r", b"\n", b"<", b">"))
+            or any(
+                character in email
+                for character in (b"\0", b"\r", b"\n", b" ", b"<", b">")
+            )
+            or re.fullmatch(rb"-?(?:0|[1-9][0-9]{0,19})", timestamp) is None
+            or timestamp == b"-0"
+            or re.fullmatch(rb"[+-][0-9]{4}", timezone) is None
+            or int(timezone[1:3]) > 23
+            or int(timezone[3:]) > 59
+        ):
+            fail(f"Git commit {label} identity is malformed")
+
+    def parse_commit_headers(self, commit_id: str) -> GitCommitHeaders:
+        payload = self.read_object(commit_id, "commit")
+        separator = payload.find(b"\n\n")
+        if separator < 0 or separator > MAX_GIT_COMMIT_HEADER_BYTES:
+            fail("Git commit lacks a bounded canonical header termination")
+        header_block = payload[:separator]
+        lines = header_block.split(b"\n")
+        if (
+            not header_block
+            or len(lines) > MAX_GIT_COMMIT_HEADERS
+            or any(
+                not line
+                or len(line) > MAX_GIT_COMMIT_LINE_BYTES
+                or b"\0" in line
+                or b"\r" in line
+                for line in lines
+            )
+        ):
+            fail("Git commit headers violate the protected structural limits")
+        if not lines[0].startswith(b"tree "):
+            fail("Git commit tree header must be first and unique")
+        tree_raw = lines[0][5:]
+        if re.fullmatch(rb"[0-9a-f]{40}", tree_raw) is None:
+            fail("Git commit tree ID is malformed")
+
+        parents: list[str] = []
+        parent_ids: set[bytes] = set()
+        position = 1
+        while position < len(lines) and lines[position].startswith(b"parent "):
+            parent = lines[position][7:]
+            if re.fullmatch(rb"[0-9a-f]{40}", parent) is None:
+                fail("Git commit parent ID is malformed")
+            if parent in parent_ids:
+                fail("Git commit contains a duplicate parent")
+            parent_ids.add(parent)
+            parents.append(parent.decode("ascii"))
+            position += 1
+
+        for key in (b"author", b"committer"):
+            if position >= len(lines) or not lines[position].startswith(key + b" "):
+                fail(
+                    f"Git commit {key.decode('ascii')} header is missing or out of order"
+                )
+            self.parse_commit_identity(lines[position][len(key) + 1 :], key.decode())
+            position += 1
+
+        optional_header = False
+        while position < len(lines):
+            line = lines[position]
+            if line.startswith(b" "):
+                if not optional_header or len(line) == 1:
+                    fail("Git commit contains a malformed header continuation")
+            else:
+                optional_header = False
+                try:
+                    key, value = line.split(b" ", 1)
+                except ValueError:
+                    fail("Git commit contains a malformed optional header")
+                if (
+                    re.fullmatch(rb"[a-z][a-z0-9-]{0,63}", key) is None
+                    or key in (b"tree", b"parent", b"author", b"committer")
+                    or not value
+                ):
+                    fail("Git commit contains a malformed optional header")
+                optional_header = True
+            position += 1
+        try:
+            tree_id = tree_raw.decode("ascii")
         except UnicodeDecodeError:
             fail("Git commit tree ID is not ASCII")
-        if COMMIT_RE.fullmatch(tree_id) is None:
-            fail("Git commit tree ID is malformed")
-        return tree_id
+        return GitCommitHeaders(tree_id, tuple(parents))
+
+    def commit_tree(self, commit_id: str) -> str:
+        active: set[str] = set()
+        visited: dict[str, GitCommitHeaders] = {}
+
+        def visit(object_id: str, depth: int) -> GitCommitHeaders:
+            if depth > self.profile.git_commit_depth_limit:
+                fail("Git commit ancestry depth exceeds protected limit")
+            if object_id in active:
+                fail("Git commit ancestry contains a cycle")
+            accepted = visited.get(object_id)
+            if accepted is not None:
+                return accepted
+            if len(visited) >= self.profile.git_ancestry_limit:
+                fail("Git commit ancestry count exceeds protected limit")
+            active.add(object_id)
+            try:
+                headers = self.parse_commit_headers(object_id)
+                visited[object_id] = headers
+                for parent in headers.parents:
+                    visit(parent, depth + 1)
+                return headers
+            finally:
+                active.remove(object_id)
+
+        return visit(commit_id, 0).tree_id
 
     def parse_tree(self, tree_id: str) -> list[GitTreeEntry]:
         payload = self.read_object(tree_id, "tree")
@@ -3571,8 +3702,7 @@ def command_plan(args: argparse.Namespace) -> None:
             f"source_commit\t{request.source_commit}",
             f"source_tree\t{request.source_tree}",
             f"source_manifest_sha256\t{snapshot.manifest_digest}",
-            "source_root_sha256\t"
-            f"{authorized.source_authorization.source_root_digest}",
+            f"source_root_sha256\t{authorized.source_authorization.source_root_digest}",
             f"source_file_count\t{snapshot.file_count}",
             f"source_bytes\t{snapshot.byte_count}",
             f"artifact_stream_protocol\t{profile.artifact_stream_protocol}",
@@ -3631,14 +3761,8 @@ def command_verify(args: argparse.Namespace) -> None:
     print(f"profile_sha256\t{profile.profile_digest}")
     print(f"request_id\t{request.request_id}")
     print(f"source_tree\t{request.source_tree}")
-    print(
-        "source_manifest_sha256\t"
-        f"{authorized.source_authorization.manifest_digest}"
-    )
-    print(
-        "source_root_sha256\t"
-        f"{authorized.source_authorization.source_root_digest}"
-    )
+    print(f"source_manifest_sha256\t{authorized.source_authorization.manifest_digest}")
+    print(f"source_root_sha256\t{authorized.source_authorization.source_root_digest}")
     print(
         "authorization_state\t"
         + (
