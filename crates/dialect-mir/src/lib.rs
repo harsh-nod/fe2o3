@@ -11,13 +11,13 @@ pub use executable::{
     MAX_EXECUTABLE_FUNCTIONS, MAX_EXECUTABLE_IDENTITY_BYTES, MAX_EXECUTABLE_LOCALS,
     MAX_EXECUTABLE_PROJECTIONS, MAX_EXECUTABLE_SOURCE_FILE_BYTES, MAX_EXECUTABLE_STATEMENTS,
     MAX_EXECUTABLE_STATEMENTS_PER_BLOCK, MAX_EXECUTABLE_SWITCH_TARGETS, MAX_EXECUTABLE_TYPE_DEPTH,
-    MAX_EXECUTABLE_TYPE_NODES, MAX_EXECUTABLE_TYPES, MAX_EXECUTABLE_VARIANTS, MirAggregateKind,
-    MirAssertMessage, MirBasicBlock, MirBinaryOp, MirBlockId, MirBlockParameter, MirBody,
-    MirBodyForm, MirCall, MirCallee, MirCastKind, MirConstant, MirConstantValue, MirEdge,
-    MirExecutableModule, MirExecutableValidationError, MirExecutableVersion, MirFunction,
-    MirLocalDecl, MirLocalId, MirLocalKind, MirOperand, MirPlace, MirProjection, MirRvalue,
-    MirSourceSpan, MirStatement, MirStatementKind, MirTerminator, MirTerminatorKind, MirTypeId,
-    MirUnaryOp, MirUnwindAction, MirValueId,
+    MAX_EXECUTABLE_TYPE_ITEMS, MAX_EXECUTABLE_TYPE_NODES, MAX_EXECUTABLE_TYPES,
+    MAX_EXECUTABLE_VARIANTS, MirAggregateKind, MirAssertMessage, MirBasicBlock, MirBinaryOp,
+    MirBlockId, MirBlockParameter, MirBody, MirBodyForm, MirCall, MirCallee, MirCastKind,
+    MirConstant, MirConstantValue, MirEdge, MirExecutableModule, MirExecutableValidationError,
+    MirExecutableVersion, MirFunction, MirLocalDecl, MirLocalId, MirLocalKind, MirOperand,
+    MirPlace, MirProjection, MirRvalue, MirSourceSpan, MirStatement, MirStatementKind,
+    MirTerminator, MirTerminatorKind, MirTypeId, MirUnaryOp, MirUnwindAction, MirValueId,
 };
 pub use executable_wire::{MAX_EXECUTABLE_WIRE_BYTES, MirExecutableDecodeError};
 pub use mem2reg::{

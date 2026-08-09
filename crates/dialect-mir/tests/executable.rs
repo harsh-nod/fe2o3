@@ -265,3 +265,59 @@ fn rejects_unreachable_blocks_and_invalid_spans() {
             .contains("start exceeds")
     );
 }
+
+#[test]
+fn rejects_invalid_binary_and_checked_operation_profiles() {
+    let mut module = ssa_module();
+    let (types, bool_ty, _) = fixture_types();
+    module.types = types;
+    let MirStatementKind::Define { rvalue, .. } =
+        &mut module.functions[0].body.blocks[0].statements[0].kind
+    else {
+        unreachable!();
+    };
+    *rvalue = MirRvalue::BinaryOp {
+        op: MirBinaryOp::Add,
+        lhs: MirOperand::Constant(MirConstant {
+            ty: bool_ty,
+            value: MirConstantValue::Bool(false),
+        }),
+        rhs: MirOperand::Constant(MirConstant {
+            ty: bool_ty,
+            value: MirConstantValue::Bool(true),
+        }),
+    };
+    assert!(
+        module
+            .validate()
+            .unwrap_err()
+            .reason()
+            .contains("invalid for its operand type")
+    );
+
+    let mut module = ssa_module();
+    let MirStatementKind::Define { rvalue, .. } =
+        &mut module.functions[0].body.blocks[0].statements[0].kind
+    else {
+        unreachable!();
+    };
+    let (_, _, u32_ty) = fixture_types();
+    *rvalue = MirRvalue::CheckedBinaryOp {
+        op: MirBinaryOp::Div,
+        lhs: MirOperand::Constant(MirConstant {
+            ty: u32_ty,
+            value: MirConstantValue::Integer(4),
+        }),
+        rhs: MirOperand::Constant(MirConstant {
+            ty: u32_ty,
+            value: MirConstantValue::Integer(2),
+        }),
+    };
+    assert!(
+        module
+            .validate()
+            .unwrap_err()
+            .reason()
+            .contains("limited to integer add")
+    );
+}
