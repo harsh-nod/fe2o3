@@ -14,14 +14,23 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
+import signal
 import stat
 import subprocess
 import sys
+import tempfile
+import threading
+import time
 from dataclasses import dataclass
+from typing import BinaryIO
 
 
-MAX_FILE_BYTES = 16 * 1024 * 1024
+MAX_FILE_BYTES = 1024 * 1024
 MAX_ITEMS = 256
+MAX_JSON_DEPTH = 32
+MAX_JSON_NODES = 65536
+MAX_JSON_STRING_BYTES = 1024 * 1024
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 ID_RE = re.compile(r"^[a-z][a-z0-9._-]{0,63}$")
@@ -58,6 +67,119 @@ def sha256_file(path: Path) -> str:
     except OSError as error:
         fail(f"cannot hash {path}: {error}")
     return digest.hexdigest()
+
+
+@dataclass(frozen=True)
+class ProcessOutput:
+    stdout: bytes
+    stderr: bytes
+    returncode: int
+
+
+def run_bounded(
+    arguments: list[str],
+    *,
+    label: str,
+    environment: dict[str, str],
+    timeout_seconds: int,
+    stdout_limit: int,
+    stderr_limit: int,
+    input_data: bytes | None = None,
+) -> ProcessOutput:
+    if not arguments or timeout_seconds < 1 or stdout_limit < 0 or stderr_limit < 0:
+        fail(f"invalid bounded subprocess contract for {label}")
+    if input_data is not None and len(input_data) > MAX_FILE_BYTES:
+        fail(f"bounded subprocess input exceeds limit for {label}")
+    try:
+        process = subprocess.Popen(
+            arguments,
+            stdin=subprocess.PIPE if input_data is not None else subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=environment,
+            close_fds=True,
+            start_new_session=True,
+        )
+    except OSError as error:
+        fail(f"cannot start {label}: {error}")
+    assert process.stdout is not None
+    assert process.stderr is not None
+    buffers = {"stdout": bytearray(), "stderr": bytearray()}
+    overflow: list[str] = []
+    lock = threading.Lock()
+
+    def read_stream(name: str, stream: BinaryIO, limit: int) -> None:
+        while True:
+            chunk = stream.read(65536)
+            if not chunk:
+                return
+            with lock:
+                if len(buffers[name]) + len(chunk) > limit:
+                    overflow.append(name)
+                    return
+                buffers[name].extend(chunk)
+
+    readers = [
+        threading.Thread(
+            target=read_stream,
+            args=("stdout", process.stdout, stdout_limit),
+            daemon=True,
+        ),
+        threading.Thread(
+            target=read_stream,
+            args=("stderr", process.stderr, stderr_limit),
+            daemon=True,
+        ),
+    ]
+    for reader in readers:
+        reader.start()
+
+    writer: threading.Thread | None = None
+    if input_data is not None:
+        assert process.stdin is not None
+
+        def write_input() -> None:
+            try:
+                process.stdin.write(input_data)
+                process.stdin.close()
+            except (BrokenPipeError, OSError):
+                pass
+
+        writer = threading.Thread(target=write_input, daemon=True)
+        writer.start()
+
+    deadline = time.monotonic() + timeout_seconds
+    timed_out = False
+    while process.poll() is None:
+        if overflow or time.monotonic() >= deadline:
+            timed_out = not overflow
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            break
+        time.sleep(0.01)
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait()
+    for reader in readers:
+        reader.join(timeout=5)
+    if writer is not None:
+        writer.join(timeout=5)
+    if any(reader.is_alive() for reader in readers) or (writer and writer.is_alive()):
+        fail(f"bounded subprocess pipe did not close for {label}")
+    if overflow:
+        fail(f"{label} {overflow[0]} exceeds protected limit")
+    if timed_out:
+        fail(f"{label} exceeded protected timeout")
+    return ProcessOutput(
+        bytes(buffers["stdout"]), bytes(buffers["stderr"]), process.returncode
+    )
 
 
 def valid_relative(value: str) -> bool:
@@ -242,6 +364,16 @@ class Profile:
     runtime_digest: str
     runtime_version_digest: str
     runtime_info_digest: str
+    git_path: str
+    git_size: int
+    git_digest: str
+    git_version_digest: str
+    git_objects_path: str
+    source_staging_root: str
+    source_file_limit: int
+    source_byte_limit: int
+    source_index_limit: int
+    source_export_timeout: int
     layout_path: str
     index_digest: str
     image_reference: str
@@ -347,6 +479,16 @@ def load_profile(root: Path, policy: Policy, profile_id: str) -> Profile:
     runtime_digest = cursor.scalar("runtime_sha256")
     runtime_version_digest = cursor.scalar("runtime_version_sha256")
     runtime_info_digest = cursor.scalar("runtime_info_sha256")
+    git_path = cursor.scalar("git_path")
+    git_size = cursor.scalar("git_size")
+    git_digest = cursor.scalar("git_sha256")
+    git_version_digest = cursor.scalar("git_version_sha256")
+    git_objects_path = cursor.scalar("git_objects_path")
+    source_staging_root = cursor.scalar("source_staging_root")
+    source_file_limit = cursor.scalar("source_file_limit")
+    source_byte_limit = cursor.scalar("source_byte_limit")
+    source_index_limit = cursor.scalar("source_index_limit")
+    source_export_timeout = cursor.scalar("source_export_timeout_seconds")
     layout_path = cursor.scalar("oci_layout_path")
     index_digest = cursor.scalar("oci_index_sha256")
     image_reference = cursor.scalar("image_reference")
@@ -369,6 +511,24 @@ def load_profile(root: Path, policy: Policy, profile_id: str) -> Profile:
         or not SHA256_RE.fullmatch(runtime_info_digest)
     ):
         fail("malformed runtime binding")
+    if (
+        not valid_absolute(git_path)
+        or not git_size.isdigit()
+        or not 1 <= int(git_size) <= 1024**3
+        or not SHA256_RE.fullmatch(git_digest)
+        or not SHA256_RE.fullmatch(git_version_digest)
+        or not valid_absolute(git_objects_path)
+        or not valid_absolute(source_staging_root)
+        or not source_file_limit.isdigit()
+        or not 1 <= int(source_file_limit) <= 16384
+        or not source_byte_limit.isdigit()
+        or not 1 <= int(source_byte_limit) <= 512 * 1024**2
+        or not source_index_limit.isdigit()
+        or not 1 <= int(source_index_limit) <= 64 * 1024**2
+        or not source_export_timeout.isdigit()
+        or not 1 <= int(source_export_timeout) <= 900
+    ):
+        fail("malformed immutable source export contract")
     if not SHA256_RE.fullmatch(index_digest):
         fail("malformed OCI index binding")
     manifest_match = OCI_DIGEST_RE.fullmatch(manifest_digest)
@@ -485,6 +645,16 @@ def load_profile(root: Path, policy: Policy, profile_id: str) -> Profile:
         runtime_digest,
         runtime_version_digest,
         runtime_info_digest,
+        git_path,
+        int(git_size),
+        git_digest,
+        git_version_digest,
+        git_objects_path,
+        source_staging_root,
+        int(source_file_limit),
+        int(source_byte_limit),
+        int(source_index_limit),
+        int(source_export_timeout),
         layout_path,
         index_digest,
         image_reference,
@@ -556,7 +726,38 @@ def read_json_bound(path: Path, binding: Layer, label: str) -> dict[str, object]
         fail(f"invalid {label} JSON")
     if not isinstance(value, dict):
         fail(f"invalid {label} JSON object")
+    validate_json_shape(value, label)
     return value
+
+
+def validate_json_shape(value: object, label: str) -> None:
+    nodes = 0
+
+    def visit(item: object, depth: int) -> None:
+        nonlocal nodes
+        nodes += 1
+        if nodes > MAX_JSON_NODES or depth > MAX_JSON_DEPTH:
+            fail(f"{label} JSON exceeds structural limits")
+        if isinstance(item, str):
+            if len(item.encode("utf-8")) > MAX_JSON_STRING_BYTES:
+                fail(f"{label} JSON string exceeds limit")
+        elif isinstance(item, list):
+            if len(item) > MAX_JSON_NODES:
+                fail(f"{label} JSON array exceeds limit")
+            for child in item:
+                visit(child, depth + 1)
+        elif isinstance(item, dict):
+            if len(item) > MAX_JSON_NODES:
+                fail(f"{label} JSON object exceeds limit")
+            for key, child in item.items():
+                if not isinstance(key, str):
+                    fail(f"{label} JSON has a non-string key")
+                visit(key, depth + 1)
+                visit(child, depth + 1)
+        elif item is not None and not isinstance(item, (bool, int, float)):
+            fail(f"{label} JSON contains an unsupported value")
+
+    visit(value, 0)
 
 
 def descriptor(value: object, label: str) -> Layer:
@@ -680,7 +881,6 @@ class AuthorizedRequest:
     policy: Policy
     profile: Profile
     request: Request
-    repo: Path
     request_path: Path
     seccomp_path: Path
 
@@ -722,68 +922,364 @@ def parse_request(path: Path) -> Request:
     )
 
 
-def run_git(repo: Path, *arguments: str) -> str:
-    process = subprocess.run(
-        ["git", "-C", str(repo), *arguments],
-        check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
+@dataclass
+class SourceSnapshot:
+    path: Path
+    manifest_path: Path
+    root_fd: int
+    directory_fd: int
+    device: int
+    inode: int
+    file_count: int
+    byte_count: int
+    manifest_digest: str
+
+    def close(self) -> None:
+        os.close(self.directory_fd)
+        os.close(self.root_fd)
+
+
+def git_environment(profile: Profile, control: Path) -> dict[str, str]:
+    return {
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_SYSTEM": "/dev/null",
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "GIT_NO_REPLACE_OBJECTS": "1",
+        "GIT_OPTIONAL_LOCKS": "0",
+        "GIT_OBJECT_DIRECTORY": profile.git_objects_path,
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES": "",
+        "GIT_DIR": str(control),
+        "GIT_WORK_TREE": "/nonexistent",
+        "HOME": "/nonexistent",
+        "LC_ALL": "C",
+        "PATH": "/nonexistent",
+        "XDG_CONFIG_HOME": "/nonexistent",
+    }
+
+
+def git_object_command(
+    profile: Profile,
+    control: Path,
+    arguments: list[str],
+    *,
+    label: str,
+    stdout_limit: int,
+    input_data: bytes | None = None,
+) -> bytes:
+    result = run_bounded(
+        [
+            profile.git_path,
+            "-c",
+            "core.fsmonitor=false",
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "protocol.allow=never",
+            *arguments,
+        ],
+        label=label,
+        environment=git_environment(profile, control),
+        timeout_seconds=profile.source_export_timeout,
+        stdout_limit=stdout_limit,
+        stderr_limit=64 * 1024,
+        input_data=input_data,
     )
-    if process.returncode != 0:
-        fail(f"git {' '.join(arguments)} failed")
-    return process.stdout.strip()
+    if result.returncode or result.stderr:
+        fail(f"{label} failed")
+    return result.stdout
 
 
-def verify_source(repo: Path, request: Request, *, require_detached: bool) -> None:
-    try:
-        repo = repo.resolve(strict=True)
-    except OSError as error:
-        fail(f"cannot resolve source checkout: {error}")
-    if run_git(repo, "rev-parse", "HEAD") != request.source_commit:
-        fail("source checkout commit differs from request")
-    if run_git(repo, "rev-parse", "HEAD^{tree}") != request.source_tree:
-        fail("source checkout tree differs from request")
-    if run_git(repo, "status", "--porcelain", "--untracked-files=all"):
-        fail("source checkout is not clean")
-    if require_detached:
-        symbolic_ref = subprocess.run(
-            ["git", "-C", str(repo), "symbolic-ref", "-q", "HEAD"],
-            check=False,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        if symbolic_ref.returncode == 0:
-            fail("source checkout must be detached")
-        if symbolic_ref.returncode != 1:
-            fail("cannot establish detached source checkout")
-    current = repo
-    for index, component in enumerate(request.job_path.split("/")):
-        current /= component
+def parse_tree_index(profile: Profile, raw: bytes) -> list[tuple[str, str, str]]:
+    records = raw.split(b"\0")
+    if records[-1] != b"":
+        fail("Git tree index is not NUL terminated")
+    records.pop()
+    if not 1 <= len(records) <= profile.source_file_limit:
+        fail("Git tree file count exceeds protected limit")
+    output: list[tuple[str, str, str]] = []
+    previous = ""
+    for record in records:
         try:
-            info = current.lstat()
+            identity, raw_path = record.split(b"\t", 1)
+            mode, object_type, object_id = identity.decode("ascii").split(" ")
+            path = raw_path.decode("ascii")
+        except (ValueError, UnicodeDecodeError):
+            fail("Git tree index contains a malformed entry")
+        if (
+            mode not in ("100644", "100755")
+            or object_type != "blob"
+            or not COMMIT_RE.fullmatch(object_id)
+            or not valid_relative(path)
+            or any(component == ".git" for component in path.split("/"))
+            or path <= previous
+        ):
+            fail("Git tree contains an unsupported or unsorted entry")
+        output.append((path, mode, object_id))
+        previous = path
+    return output
+
+
+def parse_blob_batch(
+    profile: Profile, entries: list[tuple[str, str, str]], raw: bytes
+) -> list[bytes]:
+    position = 0
+    total = 0
+    output: list[bytes] = []
+    for _, _, expected_object in entries:
+        end = raw.find(b"\n", position, min(len(raw), position + 256))
+        if end < 0:
+            fail("Git blob batch has a malformed header")
+        try:
+            object_id, object_type, size_text = (
+                raw[position:end].decode("ascii").split(" ")
+            )
+        except (ValueError, UnicodeDecodeError):
+            fail("Git blob batch has a malformed header")
+        if (
+            object_id != expected_object
+            or object_type != "blob"
+            or not size_text.isdigit()
+            or int(size_text) > profile.source_byte_limit
+        ):
+            fail("Git blob batch identity differs from tree index")
+        size = int(size_text)
+        position = end + 1
+        blob_end = position + size
+        if blob_end >= len(raw) or raw[blob_end : blob_end + 1] != b"\n":
+            fail("Git blob batch content is truncated")
+        output.append(raw[position:blob_end])
+        total += size
+        if total > profile.source_byte_limit:
+            fail("Git source bytes exceed protected limit")
+        position = blob_end + 1
+    if position != len(raw):
+        fail("Git blob batch has trailing output")
+    return output
+
+
+def open_child_directory(parent_fd: int, component: str) -> int:
+    try:
+        os.mkdir(component, 0o700, dir_fd=parent_fd)
+    except FileExistsError:
+        pass
+    try:
+        return os.open(
+            component,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=parent_fd,
+        )
+    except OSError:
+        fail("source staging path changed during export")
+
+
+def write_snapshot_file(
+    snapshot_fd: int, path: str, mode: str, content: bytes
+) -> tuple[int, str]:
+    components = path.split("/")
+    parent_fd = os.dup(snapshot_fd)
+    try:
+        for component in components[:-1]:
+            next_fd = open_child_directory(parent_fd, component)
+            os.close(parent_fd)
+            parent_fd = next_fd
+        try:
+            file_fd = os.open(
+                components[-1],
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                0o600,
+                dir_fd=parent_fd,
+            )
         except OSError:
-            fail("source job is missing")
-        if stat.S_ISLNK(info.st_mode):
-            fail("source job path contains a symlink")
-        if index + 1 < len(request.job_path.split("/")):
-            if not stat.S_ISDIR(info.st_mode):
-                fail("source job parent is not a directory")
-        elif not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
-            fail("source job is not a single-link regular file")
-    job = current
-    blob = subprocess.run(
-        ["git", "-C", str(repo), "show", f"{request.source_commit}:{request.job_path}"],
-        check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
+            fail("source staging file changed during export")
+        try:
+            view = memoryview(content)
+            while view:
+                written = os.write(file_fd, view)
+                view = view[written:]
+            os.fsync(file_fd)
+            os.fchmod(file_fd, 0o555 if mode == "100755" else 0o444)
+        finally:
+            os.close(file_fd)
+    finally:
+        os.close(parent_fd)
+    return len(content), sha256_bytes(content)
+
+
+def verify_retained_snapshot(snapshot: SourceSnapshot) -> None:
+    try:
+        by_fd = os.fstat(snapshot.directory_fd)
+        by_name = os.stat(
+            snapshot.path.name, dir_fd=snapshot.root_fd, follow_symlinks=False
+        )
+        path_info = snapshot.path.lstat()
+    except OSError:
+        fail("retained source snapshot path is unavailable")
+    identities = {(item.st_dev, item.st_ino) for item in (by_fd, by_name, path_info)}
+    if (
+        len(identities) != 1
+        or identities.pop() != (snapshot.device, snapshot.inode)
+        or not stat.S_ISDIR(by_name.st_mode)
+        or stat.S_ISLNK(path_info.st_mode)
+    ):
+        fail("retained source snapshot path was replaced")
+
+
+def stage_source(profile: Profile, request: Request) -> SourceSnapshot:
+    verify_regular(
+        Path(profile.git_path),
+        str(profile.git_size),
+        profile.git_digest,
+        "Git executable",
+    )
+    version = run_bounded(
+        [profile.git_path, "--version"],
+        label="Git version",
+        environment={"HOME": "/nonexistent", "LC_ALL": "C", "PATH": "/nonexistent"},
+        timeout_seconds=15,
+        stdout_limit=4096,
+        stderr_limit=4096,
     )
     if (
-        blob.returncode
-        or sha256_bytes(blob.stdout) != request.job_digest
-        or sha256_file(job) != request.job_digest
+        version.returncode
+        or version.stderr
+        or sha256_bytes(version.stdout) != profile.git_version_digest
     ):
-        fail("source job differs from attested source tree")
+        fail("Git executable version differs from protected profile")
+    objects = Path(profile.git_objects_path)
+    staging_root = Path(profile.source_staging_root)
+    if (
+        objects.is_symlink()
+        or not objects.is_dir()
+        or staging_root.is_symlink()
+        or not staging_root.is_dir()
+    ):
+        fail("immutable source object or staging root is unsafe")
+    root_fd = os.open(
+        staging_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    )
+    snapshot_name = f"source-{request.request_id}"
+    manifest_name = f"source-{request.request_id}.manifest.tsv"
+    try:
+        os.mkdir(snapshot_name, 0o700, dir_fd=root_fd)
+    except FileExistsError:
+        os.close(root_fd)
+        fail("source snapshot identity already exists")
+    snapshot_fd = os.open(
+        snapshot_name,
+        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+        dir_fd=root_fd,
+    )
+    snapshot_path = staging_root / snapshot_name
+    control = Path(tempfile.mkdtemp(prefix="git-control-", dir=staging_root))
+    try:
+        (control / "objects" / "info").mkdir(mode=0o700, parents=True)
+        (control / "objects" / "pack").mkdir(mode=0o700)
+        (control / "refs" / "heads").mkdir(mode=0o700, parents=True)
+        (control / "refs" / "tags").mkdir(mode=0o700)
+        (control / "HEAD").write_text("ref: refs/heads/invalid\n", encoding="ascii")
+        (control / "config").write_text(
+            "[core]\n\trepositoryformatversion = 0\n\tbare = true\n",
+            encoding="ascii",
+        )
+        commit = git_object_command(
+            profile,
+            control,
+            ["cat-file", "commit", request.source_commit],
+            label="Git commit read",
+            stdout_limit=MAX_FILE_BYTES,
+        )
+        first_line = commit.split(b"\n", 1)[0]
+        if first_line != f"tree {request.source_tree}".encode("ascii"):
+            fail("source commit/tree binding differs from immutable object store")
+        raw_index = git_object_command(
+            profile,
+            control,
+            ["ls-tree", "-rz", "--full-tree", "-r", request.source_tree],
+            label="Git tree index",
+            stdout_limit=profile.source_index_limit,
+        )
+        entries = parse_tree_index(profile, raw_index)
+        batch_input = b"".join(
+            f"{object_id}\n".encode("ascii") for _, _, object_id in entries
+        )
+        raw_blobs = git_object_command(
+            profile,
+            control,
+            ["cat-file", "--batch"],
+            label="Git blob batch",
+            stdout_limit=profile.source_byte_limit + len(entries) * 128,
+            input_data=batch_input,
+        )
+        blobs = parse_blob_batch(profile, entries, raw_blobs)
+        manifest_lines = [
+            "source_snapshot_manifest_schema_version\t1",
+            f"request_id\t{request.request_id}",
+            f"source_commit\t{request.source_commit}",
+            f"source_tree\t{request.source_tree}",
+            f"file_count\t{len(entries)}",
+        ]
+        total = 0
+        job_found = False
+        directories: set[str] = set()
+        for index, ((path, mode, object_id), content) in enumerate(
+            zip(entries, blobs, strict=True)
+        ):
+            file_size, digest = write_snapshot_file(snapshot_fd, path, mode, content)
+            total += file_size
+            parent = Path(path).parent
+            while str(parent) != ".":
+                directories.add(str(parent))
+                parent = parent.parent
+            if path == request.job_path:
+                if digest != request.job_digest:
+                    fail("source job digest differs from immutable source tree")
+                job_found = True
+            manifest_lines.append(
+                f"file\t{index:04d}\t{mode}\t{object_id}\t{path}\t{file_size}\t{digest}"
+            )
+        if not job_found:
+            fail("source job is absent from immutable source tree")
+        manifest_lines.append(f"source_bytes\t{total}")
+        manifest_raw = ("\n".join(manifest_lines) + "\n").encode("ascii")
+        manifest_fd = os.open(
+            manifest_name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+            0o600,
+            dir_fd=root_fd,
+        )
+        try:
+            os.write(manifest_fd, manifest_raw)
+            os.fsync(manifest_fd)
+            os.fchmod(manifest_fd, 0o444)
+        finally:
+            os.close(manifest_fd)
+        for directory in sorted(
+            directories, key=lambda item: item.count("/"), reverse=True
+        ):
+            os.chmod(directory, 0o555, dir_fd=snapshot_fd, follow_symlinks=False)
+        os.fchmod(snapshot_fd, 0o555)
+        os.fsync(snapshot_fd)
+        os.fsync(root_fd)
+        identity = os.fstat(snapshot_fd)
+        snapshot = SourceSnapshot(
+            snapshot_path,
+            staging_root / manifest_name,
+            root_fd,
+            snapshot_fd,
+            identity.st_dev,
+            identity.st_ino,
+            len(entries),
+            total,
+            sha256_bytes(manifest_raw),
+        )
+        verify_retained_snapshot(snapshot)
+        return snapshot
+    except Exception:
+        os.close(snapshot_fd)
+        os.close(root_fd)
+        raise
+    finally:
+        shutil.rmtree(control, ignore_errors=True)
 
 
 def authorize(args: argparse.Namespace) -> AuthorizedRequest:
@@ -818,18 +1314,10 @@ def authorize(args: argparse.Namespace) -> AuthorizedRequest:
         "protected seccomp profile",
     )
     verify_oci_image(profile)
-    repo_input = Path(args.repo)
-    if not repo_input.is_absolute() or not valid_absolute(str(repo_input)):
-        fail("source checkout path must be canonical absolute")
-    repo = repo_input.resolve(strict=True)
-    if repo != repo_input:
-        fail("source checkout path contains a symlink")
-    verify_source(repo, request, require_detached=args.require_detached)
     return AuthorizedRequest(
         policy,
         profile,
         request,
-        repo,
         request_path.resolve(strict=True),
         seccomp.resolve(strict=True),
     )
@@ -849,12 +1337,13 @@ RUNTIME_INFO_FORMAT = (
 
 
 def runtime_output(profile: Profile, arguments: list[str], label: str) -> bytes:
-    process = subprocess.run(
+    process = run_bounded(
         [profile.runtime_path, *arguments],
-        check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        env={"HOME": "/nonexistent", "LC_ALL": "C", "PATH": "/nonexistent"},
+        label=f"OCI runtime {label}",
+        environment={"HOME": "/nonexistent", "LC_ALL": "C", "PATH": "/nonexistent"},
+        timeout_seconds=15,
+        stdout_limit=64 * 1024,
+        stderr_limit=64 * 1024,
     )
     if process.returncode != 0:
         detail = process.stderr.decode("ascii", errors="replace").strip()
@@ -959,7 +1448,7 @@ def verify_runtime_image(profile: Profile) -> tuple[str, ...]:
 def docker_create_arguments(
     profile: Profile,
     request: Request,
-    repo: Path,
+    source_snapshot: Path,
     request_path: Path,
     seccomp_path: Path,
 ) -> list[str]:
@@ -1006,7 +1495,7 @@ def docker_create_arguments(
     arguments.extend(
         (
             "--mount",
-            f"type=bind,src={repo},dst={profile.source_mount},readonly,bind-recursive=readonly",
+            f"type=bind,src={source_snapshot},dst={profile.source_mount},readonly,bind-recursive=readonly",
             "--mount",
             f"type=bind,src={request_path},dst={profile.request_mount},readonly",
             "--tmpfs",
@@ -1026,21 +1515,31 @@ def command_plan(args: argparse.Namespace) -> None:
     authorized = authorize(args)
     profile = authorized.profile
     request = authorized.request
-    arguments = docker_create_arguments(
-        profile,
-        request,
-        authorized.repo,
-        authorized.request_path,
-        authorized.seccomp_path,
-    )
-    print("oci_execution_plan_schema_version\t1")
-    print("authorization_source\tprotected-policy")
-    print(f"profile_id\t{profile.profile_id}")
-    print(f"profile_sha256\t{profile.profile_digest}")
-    print(f"request_id\t{request.request_id}")
-    print(f"argument_count\t{len(arguments)}")
-    for index, argument in enumerate(arguments):
-        print(f"argument\t{index:04d}\t{argument.encode('ascii').hex()}")
+    snapshot = stage_source(profile, request)
+    try:
+        arguments = docker_create_arguments(
+            profile,
+            request,
+            snapshot.path,
+            authorized.request_path,
+            authorized.seccomp_path,
+        )
+        verify_retained_snapshot(snapshot)
+        print("oci_execution_plan_schema_version\t1")
+        print("authorization_source\tprotected-policy")
+        print(f"profile_id\t{profile.profile_id}")
+        print(f"profile_sha256\t{profile.profile_digest}")
+        print(f"request_id\t{request.request_id}")
+        print(f"source_snapshot\t{snapshot.path}")
+        print(f"source_manifest\t{snapshot.manifest_path}")
+        print(f"source_manifest_sha256\t{snapshot.manifest_digest}")
+        print(f"source_file_count\t{snapshot.file_count}")
+        print(f"source_bytes\t{snapshot.byte_count}")
+        print(f"argument_count\t{len(arguments)}")
+        for index, argument in enumerate(arguments):
+            print(f"argument\t{index:04d}\t{argument.encode('ascii').hex()}")
+    finally:
+        snapshot.close()
 
 
 def command_preflight(args: argparse.Namespace) -> None:
@@ -1071,33 +1570,27 @@ def build_parser() -> argparse.ArgumentParser:
     verify = subparsers.add_parser(
         "verify", help="verify protected authorization and immutable inputs"
     )
-    verify.add_argument("--repo", required=True)
     verify.add_argument("--request", required=True)
     verify.add_argument("--trusted-root", required=True)
     verify.add_argument(
         "--policy", required=True, help="path relative to protected root"
     )
-    verify.add_argument("--require-detached", action="store_true")
     verify.set_defaults(func=command_verify)
     plan = subparsers.add_parser(
         "plan", help="render the fixed protected OCI invocation"
     )
-    plan.add_argument("--repo", required=True)
     plan.add_argument("--request", required=True)
     plan.add_argument("--trusted-root", required=True)
     plan.add_argument("--policy", required=True, help="path relative to protected root")
-    plan.add_argument("--require-detached", action="store_true")
     plan.set_defaults(func=command_plan)
     preflight = subparsers.add_parser(
         "preflight", help="validate host, runtime daemon, and loaded image identity"
     )
-    preflight.add_argument("--repo", required=True)
     preflight.add_argument("--request", required=True)
     preflight.add_argument("--trusted-root", required=True)
     preflight.add_argument(
         "--policy", required=True, help="path relative to protected root"
     )
-    preflight.add_argument("--require-detached", action="store_true")
     preflight.set_defaults(func=command_preflight)
     return parser
 

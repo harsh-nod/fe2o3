@@ -15,8 +15,12 @@ readonly PROFILE="${TRUSTED_ROOT}/profiles/test-v1.tsv"
 readonly POLICY="${TRUSTED_ROOT}/policy.tsv"
 readonly SECCOMP="${TRUSTED_ROOT}/seccomp/default.json"
 readonly RUNTIME="${TEST_ROOT}/runtime"
+GIT="$(command -v git)"
+readonly GIT
+readonly SOURCE_STAGING="${TEST_ROOT}/staging/source"
 
 cleanup() {
+  chmod -R u+w -- "${TEST_ROOT}" 2>/dev/null || true
   rm -rf -- "${TEST_ROOT}"
 }
 trap cleanup EXIT
@@ -74,6 +78,16 @@ runtime_size	$(size "${RUNTIME}")
 runtime_sha256	$(sha256 "${RUNTIME}")
 runtime_version_sha256	3333333333333333333333333333333333333333333333333333333333333333
 runtime_info_sha256	4444444444444444444444444444444444444444444444444444444444444444
+git_path	${GIT}
+git_size	$(size "${GIT}")
+git_sha256	$(sha256 "${GIT}")
+git_version_sha256	$(env -i HOME=/nonexistent LC_ALL=C PATH=/nonexistent "${GIT}" --version | sha256sum | cut -d' ' -f1)
+git_objects_path	${SOURCE_REPO}/.git/objects
+source_staging_root	${SOURCE_STAGING}
+source_file_limit	1024
+source_byte_limit	16777216
+source_index_limit	1048576
+source_export_timeout_seconds	30
 oci_layout_path	${OCI_LAYOUT}
 oci_index_sha256	$(sha256 "${OCI_LAYOUT}/index.json")
 image_reference	example.invalid/fe2o3-evidence@sha256:${manifest_digest}
@@ -131,33 +145,28 @@ EOF
 
 verify() {
   "${EXECUTOR}" verify \
-    --repo "${SOURCE_REPO}" \
     --request "${REQUEST}" \
     --trusted-root "${TRUSTED_ROOT}" \
-    --policy policy.tsv \
-    --require-detached
+    --policy policy.tsv
 }
 
 plan() {
   "${EXECUTOR}" plan \
-    --repo "${SOURCE_REPO}" \
     --request "${REQUEST}" \
     --trusted-root "${TRUSTED_ROOT}" \
-    --policy policy.tsv \
-    --require-detached
+    --policy policy.tsv
 }
 
 preflight() {
   "${EXECUTOR}" preflight \
-    --repo "${SOURCE_REPO}" \
     --request "${REQUEST}" \
     --trusted-root "${TRUSTED_ROOT}" \
-    --policy policy.tsv \
-    --require-detached
+    --policy policy.tsv
 }
 
 mkdir -p "${TRUSTED_ROOT}/profiles" "${TRUSTED_ROOT}/seccomp" \
-  "${OCI_LAYOUT}/blobs/sha256" "${SOURCE_REPO}/scripts/evidence/jobs"
+  "${OCI_LAYOUT}/blobs/sha256" "${SOURCE_REPO}/scripts/evidence/jobs" \
+  "${SOURCE_STAGING}"
 printf '%s\n' '#!/usr/bin/env bash' 'set -Eeuo pipefail' 'printf ok > /evidence/result.txt' \
   >"${SOURCE_REPO}/scripts/evidence/jobs/row-04.sh"
 chmod 755 "${SOURCE_REPO}/scripts/evidence/jobs/row-04.sh"
@@ -166,7 +175,10 @@ git -C "${SOURCE_REPO}" config user.name test
 git -C "${SOURCE_REPO}" config user.email test@example.invalid
 git -C "${SOURCE_REPO}" add scripts/evidence/jobs/row-04.sh
 git -C "${SOURCE_REPO}" commit -qm fixture
-git -C "${SOURCE_REPO}" checkout -q --detach HEAD
+printf '#!/usr/bin/env bash\nprintf executed > %q\n' "${TEST_ROOT}/fsmonitor-executed" \
+  >"${TEST_ROOT}/candidate-fsmonitor"
+chmod 755 "${TEST_ROOT}/candidate-fsmonitor"
+git -C "${SOURCE_REPO}" config core.fsmonitor "${TEST_ROOT}/candidate-fsmonitor"
 
 printf '#!/usr/bin/env bash\nprintf "fixture runtime access denied\\n" >&2\nexit 1\n' \
   >"${RUNTIME}"
@@ -212,7 +224,24 @@ output="$(verify)"
 grep -F $'authorized_profile\tmi300x-test-v1' <<<"${output}" >/dev/null
 grep -F $'authorization_source\tprotected-policy' <<<"${output}" >/dev/null
 
+printf '# candidate worktree mutation\n' >>"${SOURCE_REPO}/scripts/evidence/jobs/row-04.sh"
 plan_output="$(plan)"
+if [[ -e "${TEST_ROOT}/fsmonitor-executed" ]]; then
+  printf 'candidate Git fsmonitor executed during immutable export\n' >&2
+  exit 1
+fi
+source_snapshot="$(awk -F $'\t' '$1 == "source_snapshot" { print $2 }' <<<"${plan_output}")"
+if [[ -z "${source_snapshot}" || -e "${source_snapshot}/.git" ]]; then
+  printf 'immutable source snapshot is missing or contains .git\n' >&2
+  exit 1
+fi
+if grep -F 'candidate worktree mutation' \
+  "${source_snapshot}/scripts/evidence/jobs/row-04.sh" >/dev/null; then
+  printf 'source snapshot consumed candidate worktree bytes\n' >&2
+  exit 1
+fi
+git -C "${SOURCE_REPO}" -c core.fsmonitor=false checkout -q -- \
+  scripts/evidence/jobs/row-04.sh
 plan_arguments="$({
   while IFS=$'\t' read -r key _ encoded; do
     if [[ "${key}" == argument ]]; then
@@ -285,10 +314,6 @@ expect_failure oci_parent_symlink 'path contains a symlink' verify
 rm "${OCI_LAYOUT}/blobs/sha256"
 mv "${TEST_ROOT}/sha256.real" "${OCI_LAYOUT}/blobs/sha256"
 
-printf '# mutation\n' >>"${SOURCE_REPO}/scripts/evidence/jobs/row-04.sh"
-expect_failure dirty_source 'source checkout is not clean' verify
-git -C "${SOURCE_REPO}" checkout -q -- scripts/evidence/jobs/row-04.sh
-
 cp "${POLICY}" "${TEST_ROOT}/policy.good"
 printf '0' >>"${PROFILE}"
 expect_failure profile_mutation 'profile binding mismatch' verify
@@ -304,11 +329,9 @@ mv "${TEST_ROOT}/profile.real" "${PROFILE}"
 ln -s "${REQUEST}" "${TEST_ROOT}/request.link"
 expect_failure request_symlink 'not a single-link regular file' \
   "${EXECUTOR}" verify \
-    --repo "${SOURCE_REPO}" \
     --request "${TEST_ROOT}/request.link" \
     --trusted-root "${TRUSTED_ROOT}" \
-    --policy policy.tsv \
-    --require-detached
+    --policy policy.tsv
 
 # Runtime unavailability cannot cross the RuntimeReadyRequest boundary. This
 # command fails before host/image claims and cannot issue an execution receipt.
