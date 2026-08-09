@@ -1438,6 +1438,72 @@ fn device_imports_require_an_exact_external_authority() {
 }
 
 #[test]
+fn callable_namespaces_are_globally_disjoint() {
+    let mut import_shadow = place_module();
+    let identity = import_shadow.functions[0].identity.clone();
+    import_shadow.callables.push(MirCallable {
+        identity: identity.clone(),
+        authority: MirCallAuthority::DeviceImport {
+            contract: "fixture::shadow::v1".into(),
+        },
+        signature: MirCallSignature {
+            inputs: vec![],
+            output: MirCallReturn::Diverging,
+            can_unwind: false,
+        },
+    });
+    let registry = external_registry(
+        &identity,
+        "fixture::shadow::v1",
+        vec![],
+        MirExternalCallReturn::Diverging,
+        false,
+    );
+    let error = import_shadow.validate_with_registry(&registry).unwrap_err();
+    assert!(error.reason().contains("trusted import namespace"));
+
+    let (mut intrinsic_shadow, _) = intrinsic_module();
+    intrinsic_shadow.functions[0].identity = "fe2o3.volatile_load".into();
+    let error = intrinsic_shadow.validate().unwrap_err();
+    assert!(error.reason().contains("intrinsic namespace"));
+
+    let mut duplicate_callable = place_module();
+    let duplicate = MirCallable {
+        identity: "fixture::duplicate".into(),
+        authority: MirCallAuthority::DeviceImport {
+            contract: "fixture::duplicate::v1".into(),
+        },
+        signature: MirCallSignature {
+            inputs: vec![],
+            output: MirCallReturn::Diverging,
+            can_unwind: false,
+        },
+    };
+    duplicate_callable.callables = vec![duplicate.clone(), duplicate];
+    let error = duplicate_callable.validate().unwrap_err();
+    assert!(error.reason().contains("globally unique"));
+
+    let mut duplicate_function = place_module();
+    duplicate_function
+        .functions
+        .push(duplicate_function.functions[0].clone());
+    let error = duplicate_function.validate().unwrap_err();
+    assert!(error.reason().contains("globally unique"));
+
+    let error = MirExternalCallRegistry::try_new(vec![MirAuthorizedDeviceImport {
+        identity: "fe2o3.volatile_load".into(),
+        contract: "fixture::forged_intrinsic::v1".into(),
+        signature: MirExternalCallSignature {
+            inputs: vec![],
+            output: MirExternalCallReturn::Diverging,
+            can_unwind: false,
+        },
+    }])
+    .unwrap_err();
+    assert!(error.reason().contains("intrinsic namespace"));
+}
+
+#[test]
 fn defined_function_unwind_declarations_cover_body_effects() {
     let mut module = place_module();
     let identity = module.functions[0].identity.clone();
