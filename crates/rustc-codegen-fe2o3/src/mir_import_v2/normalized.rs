@@ -106,6 +106,11 @@ impl CapturedBodyV2 {
             }
             validate_type(&format!("locals[{expected}].type"), &local.ty, limits)?;
             validate_span(&format!("locals[{expected}].source"), &local.source, limits)?;
+            validate_text(
+                &format!("locals[{expected}].rustc_debug"),
+                &local.rustc_debug,
+                limits,
+            )?;
         }
 
         let mut total_statements = 0usize;
@@ -215,6 +220,7 @@ pub(crate) struct LocalDeclV2 {
     pub ty: TypeIdentityV2,
     pub mutable: bool,
     pub source: SourceSpanV2,
+    pub rustc_debug: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -236,6 +242,7 @@ pub(crate) struct BasicBlockV2 {
 pub(crate) struct StatementV2 {
     pub index: usize,
     pub source: SourceSpanV2,
+    pub rustc_debug: String,
     pub kind: StatementKindV2,
 }
 
@@ -425,6 +432,7 @@ pub(crate) enum AggregateClassV2 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TerminatorV2 {
     pub source: SourceSpanV2,
+    pub rustc_debug: String,
     pub kind: TerminatorKindV2,
     pub successors: Vec<usize>,
 }
@@ -446,10 +454,20 @@ pub(crate) enum TerminatorKindV2 {
         declared: Option<DefinitionIdentityV2>,
         resolved: Option<FunctionIdentityV2>,
         intrinsic: Option<IntrinsicIdentityV2>,
-        arguments: Vec<OperandV2>,
+        arguments: Vec<CallArgumentV2>,
         destination: PlaceV2,
         target: Option<usize>,
         unwind: UnwindActionV2,
+        call_source: String,
+        function_span: SourceSpanV2,
+    },
+    TailCall {
+        function: OperandV2,
+        declared: Option<DefinitionIdentityV2>,
+        resolved: Option<FunctionIdentityV2>,
+        intrinsic: Option<IntrinsicIdentityV2>,
+        arguments: Vec<CallArgumentV2>,
+        function_span: SourceSpanV2,
     },
     Drop {
         place: PlaceV2,
@@ -472,6 +490,12 @@ pub(crate) enum TerminatorKindV2 {
     CompilerOpaque {
         rustc_kind: String,
     },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CallArgumentV2 {
+    pub operand: OperandV2,
+    pub source: SourceSpanV2,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -586,6 +610,11 @@ fn validate_statement(
     limits: CaptureLimitsV2,
 ) -> Result<(), ValidationErrorV2> {
     validate_span(&format!("{path}.source"), &statement.source, limits)?;
+    validate_text(
+        &format!("{path}.rustc_debug"),
+        &statement.rustc_debug,
+        limits,
+    )?;
     match &statement.kind {
         StatementKindV2::Assign { destination, value } => {
             validate_place(
@@ -731,6 +760,11 @@ fn validate_terminator(
     limits: CaptureLimitsV2,
 ) -> Result<(), ValidationErrorV2> {
     validate_span(&format!("{path}.source"), &terminator.source, limits)?;
+    validate_text(
+        &format!("{path}.rustc_debug"),
+        &terminator.rustc_debug,
+        limits,
+    )?;
     for (index, successor) in terminator.successors.iter().copied().enumerate() {
         if successor >= block_count {
             return Err(ValidationErrorV2::new(
@@ -785,6 +819,8 @@ fn validate_terminator(
             destination,
             target,
             unwind,
+            call_source,
+            function_span,
         } => {
             validate_operand(&format!("{path}.function"), function, local_count, limits)?;
             if let Some(declared) = declared {
@@ -809,8 +845,13 @@ fn validate_terminator(
             for (index, argument) in arguments.iter().enumerate() {
                 validate_operand(
                     &format!("{path}.arguments[{index}]"),
-                    argument,
+                    &argument.operand,
                     local_count,
+                    limits,
+                )?;
+                validate_span(
+                    &format!("{path}.arguments[{index}].source"),
+                    &argument.source,
                     limits,
                 )?;
             }
@@ -824,8 +865,54 @@ fn validate_terminator(
                 validate_block(&format!("{path}.target"), *target, block_count)?;
             }
             validate_unwind(&format!("{path}.unwind"), unwind, block_count, limits)?;
+            validate_text(&format!("{path}.call_source"), call_source, limits)?;
+            validate_span(&format!("{path}.function_span"), function_span, limits)?;
             let expected = normal_and_unwind_successors(*target, unwind);
             validate_exact_successors(path, &terminator.successors, &expected)
+        }
+        TerminatorKindV2::TailCall {
+            function,
+            declared,
+            resolved,
+            intrinsic,
+            arguments,
+            function_span,
+        } => {
+            validate_operand(&format!("{path}.function"), function, local_count, limits)?;
+            if let Some(declared) = declared {
+                validate_definition(&format!("{path}.declared"), declared, limits)?;
+            }
+            if let Some(resolved) = resolved {
+                validate_function_identity(resolved, limits)?;
+            }
+            if let Some(intrinsic) = intrinsic {
+                validate_definition(
+                    &format!("{path}.intrinsic.definition"),
+                    &intrinsic.definition,
+                    limits,
+                )?;
+                validate_text(&format!("{path}.intrinsic.name"), &intrinsic.name, limits)?;
+            }
+            bounded(
+                &format!("{path}.arguments"),
+                arguments.len(),
+                limits.max_operands,
+            )?;
+            for (index, argument) in arguments.iter().enumerate() {
+                validate_operand(
+                    &format!("{path}.arguments[{index}]"),
+                    &argument.operand,
+                    local_count,
+                    limits,
+                )?;
+                validate_span(
+                    &format!("{path}.arguments[{index}].source"),
+                    &argument.source,
+                    limits,
+                )?;
+            }
+            validate_span(&format!("{path}.function_span"), function_span, limits)?;
+            validate_exact_successors(path, &terminator.successors, &[])
         }
         TerminatorKindV2::Drop {
             place,

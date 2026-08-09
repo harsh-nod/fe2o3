@@ -4,7 +4,7 @@ use rustc_middle::mir::{
     AggregateKind, Body, NonDivergingIntrinsic, Operand, Place, ProjectionElem, Rvalue, SourceInfo,
     StatementKind, TerminatorKind, UnwindAction,
 };
-use rustc_middle::ty::{Instance, InstanceKind, Ty, TyCtxt, TyKind, TypingEnv};
+use rustc_middle::ty::{EarlyBinder, Instance, InstanceKind, Ty, TyCtxt, TyKind, TypingEnv};
 use rustc_span::Span;
 use std::error::Error;
 use std::fmt;
@@ -37,20 +37,23 @@ fn capture_body_v2<'tcx>(
     let locals = body
         .local_decls
         .iter_enumerated()
-        .map(|(local, declaration)| LocalDeclV2 {
-            index: local.as_usize(),
-            role: if local.as_usize() == 0 {
-                LocalRoleV2::Return
-            } else if local.as_usize() <= body.arg_count {
-                LocalRoleV2::Argument
-            } else {
-                LocalRoleV2::Temporary
-            },
-            ty: type_identity(declaration.ty),
-            mutable: matches!(declaration.mutability, rustc_ast::Mutability::Mut),
-            source: source_span(tcx, declaration.source_info),
+        .map(|(local, declaration)| {
+            Ok(LocalDeclV2 {
+                index: local.as_usize(),
+                role: if local.as_usize() == 0 {
+                    LocalRoleV2::Return
+                } else if local.as_usize() <= body.arg_count {
+                    LocalRoleV2::Argument
+                } else {
+                    LocalRoleV2::Temporary
+                },
+                ty: type_identity(tcx, instance, declaration.ty),
+                mutable: matches!(declaration.mutability, rustc_ast::Mutability::Mut),
+                source: source_span(tcx, declaration.source_info),
+                rustc_debug: bounded_debug("local declaration", declaration, limits)?,
+            })
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, CaptureErrorV2>>()?;
 
     let mut total_statements = 0usize;
     let mut blocks = Vec::with_capacity(body.basic_blocks.len());
@@ -73,7 +76,14 @@ fn capture_body_v2<'tcx>(
                 Ok(StatementV2 {
                     index,
                     source: source_span(tcx, statement.source_info),
-                    kind: capture_statement(tcx, &statement.kind, statement.source_info, limits)?,
+                    rustc_debug: bounded_debug("statement", &statement.kind, limits)?,
+                    kind: capture_statement(
+                        tcx,
+                        instance,
+                        &statement.kind,
+                        statement.source_info,
+                        limits,
+                    )?,
                 })
             })
             .collect::<Result<Vec<_>, CaptureErrorV2>>()?;
@@ -95,7 +105,14 @@ fn capture_body_v2<'tcx>(
             statements,
             terminator: TerminatorV2 {
                 source: source_span(tcx, terminator.source_info),
-                kind: capture_terminator(tcx, &terminator.kind, terminator.source_info, limits)?,
+                rustc_debug: bounded_debug("terminator", &terminator.kind, limits)?,
+                kind: capture_terminator(
+                    tcx,
+                    instance,
+                    &terminator.kind,
+                    terminator.source_info,
+                    limits,
+                )?,
                 successors,
             },
         });
@@ -116,6 +133,7 @@ fn capture_body_v2<'tcx>(
 
 fn capture_statement<'tcx>(
     tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
     kind: &StatementKind<'tcx>,
     source_info: SourceInfo,
     limits: CaptureLimitsV2,
@@ -124,8 +142,8 @@ fn capture_statement<'tcx>(
         StatementKind::Assign(assignment) => {
             let (destination, value) = &**assignment;
             StatementKindV2::Assign {
-                destination: capture_place(*destination, limits)?,
-                value: capture_rvalue(tcx, value, source_info, limits)?,
+                destination: capture_place(tcx, instance, *destination, limits)?,
+                value: capture_rvalue(tcx, instance, value, source_info, limits)?,
             }
         }
         StatementKind::StorageLive(local) => StatementKindV2::StorageLive {
@@ -138,29 +156,35 @@ fn capture_statement<'tcx>(
             place,
             variant_index,
         } => StatementKindV2::SetDiscriminant {
-            place: capture_place(**place, limits)?,
+            place: capture_place(tcx, instance, **place, limits)?,
             variant: variant_index.index(),
         },
         StatementKind::Intrinsic(intrinsic) => {
             StatementKindV2::Intrinsic(match intrinsic.as_ref() {
                 NonDivergingIntrinsic::CopyNonOverlapping(copy) => {
                     IntrinsicStatementV2::CopyNonOverlapping {
-                        source: capture_operand(tcx, &copy.src, source_info, limits)?,
-                        destination: capture_operand(tcx, &copy.dst, source_info, limits)?,
-                        count: capture_operand(tcx, &copy.count, source_info, limits)?,
+                        source: capture_operand(tcx, instance, &copy.src, source_info, limits)?,
+                        destination: capture_operand(
+                            tcx,
+                            instance,
+                            &copy.dst,
+                            source_info,
+                            limits,
+                        )?,
+                        count: capture_operand(tcx, instance, &copy.count, source_info, limits)?,
                     }
                 }
                 NonDivergingIntrinsic::Assume(condition) => IntrinsicStatementV2::Assume {
-                    condition: capture_operand(tcx, condition, source_info, limits)?,
+                    condition: capture_operand(tcx, instance, condition, source_info, limits)?,
                 },
             })
         }
         StatementKind::Retag(kind, place) => StatementKindV2::Retag {
-            place: capture_place(**place, limits)?,
+            place: capture_place(tcx, instance, **place, limits)?,
             rustc_kind: bounded_debug("retag kind", kind, limits)?,
         },
         StatementKind::PlaceMention(place) => StatementKindV2::PlaceMention {
-            place: capture_place(**place, limits)?,
+            place: capture_place(tcx, instance, **place, limits)?,
         },
         StatementKind::Coverage(coverage) => StatementKindV2::Coverage {
             rustc_kind: bounded_debug("coverage", coverage, limits)?,
@@ -175,58 +199,75 @@ fn capture_statement<'tcx>(
 
 fn capture_rvalue<'tcx>(
     tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
     value: &Rvalue<'tcx>,
     source_info: SourceInfo,
     limits: CaptureLimitsV2,
 ) -> Result<RvalueV2, CaptureErrorV2> {
     let captured = match value {
-        Rvalue::Use(operand) => RvalueV2::Use(capture_operand(tcx, operand, source_info, limits)?),
+        Rvalue::Use(operand) => RvalueV2::Use(capture_operand(
+            tcx,
+            instance,
+            operand,
+            source_info,
+            limits,
+        )?),
         Rvalue::Repeat(operand, count) => RvalueV2::Repeat {
-            operand: capture_operand(tcx, operand, source_info, limits)?,
-            count: bounded_debug("repeat count", count, limits)?,
+            operand: capture_operand(tcx, instance, operand, source_info, limits)?,
+            count: bounded_debug(
+                "repeat count",
+                &tcx.instantiate_and_normalize_erasing_regions(
+                    instance.args,
+                    TypingEnv::fully_monomorphized(),
+                    EarlyBinder::bind(*count),
+                ),
+                limits,
+            )?,
         },
         Rvalue::Ref(_, borrow_kind, place) => RvalueV2::Reference {
             borrow_kind: bounded_debug("borrow kind", borrow_kind, limits)?,
-            place: capture_place(*place, limits)?,
+            place: capture_place(tcx, instance, *place, limits)?,
         },
         Rvalue::RawPtr(mutability, place) => RvalueV2::RawPointer {
             mutability: bounded_debug("raw pointer mutability", mutability, limits)?,
-            place: capture_place(*place, limits)?,
+            place: capture_place(tcx, instance, *place, limits)?,
         },
         Rvalue::Cast(kind, operand, target) => RvalueV2::Cast {
             kind: bounded_debug("cast kind", kind, limits)?,
-            operand: capture_operand(tcx, operand, source_info, limits)?,
-            target: type_identity(*target),
+            operand: capture_operand(tcx, instance, operand, source_info, limits)?,
+            target: type_identity(tcx, instance, *target),
         },
         Rvalue::BinaryOp(operation, operands) => RvalueV2::Binary {
             operation: bounded_debug("binary operation", operation, limits)?,
-            lhs: capture_operand(tcx, &operands.0, source_info, limits)?,
-            rhs: capture_operand(tcx, &operands.1, source_info, limits)?,
+            lhs: capture_operand(tcx, instance, &operands.0, source_info, limits)?,
+            rhs: capture_operand(tcx, instance, &operands.1, source_info, limits)?,
         },
         Rvalue::UnaryOp(operation, operand) => RvalueV2::Unary {
             operation: bounded_debug("unary operation", operation, limits)?,
-            operand: capture_operand(tcx, operand, source_info, limits)?,
+            operand: capture_operand(tcx, instance, operand, source_info, limits)?,
         },
         Rvalue::Discriminant(place) => RvalueV2::Discriminant {
-            place: capture_place(*place, limits)?,
+            place: capture_place(tcx, instance, *place, limits)?,
         },
         Rvalue::Aggregate(kind, operands) => {
             ensure_bound("aggregate operands", operands.len(), limits.max_operands)?;
             RvalueV2::Aggregate {
-                kind: capture_aggregate_kind(tcx, kind, limits)?,
+                kind: capture_aggregate_kind(tcx, instance, kind, limits)?,
                 operands: operands
                     .iter()
-                    .map(|operand| capture_operand(tcx, operand, source_info, limits))
+                    .map(|operand| capture_operand(tcx, instance, operand, source_info, limits))
                     .collect::<Result<Vec<_>, _>>()?,
             }
         }
-        Rvalue::CopyForDeref(place) => RvalueV2::CopyForDeref(capture_place(*place, limits)?),
+        Rvalue::CopyForDeref(place) => {
+            RvalueV2::CopyForDeref(capture_place(tcx, instance, *place, limits)?)
+        }
         Rvalue::ThreadLocalRef(def_id) => RvalueV2::ThreadLocalRef {
             definition: definition_identity(tcx, *def_id),
         },
         Rvalue::WrapUnsafeBinder(operand, target) => RvalueV2::WrapUnsafeBinder {
-            operand: capture_operand(tcx, operand, source_info, limits)?,
-            target: type_identity(*target),
+            operand: capture_operand(tcx, instance, operand, source_info, limits)?,
+            target: type_identity(tcx, instance, *target),
         },
     };
     Ok(captured)
@@ -234,10 +275,16 @@ fn capture_rvalue<'tcx>(
 
 fn capture_aggregate_kind<'tcx>(
     tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
     kind: &rustc_middle::mir::AggregateKind<'tcx>,
     limits: CaptureLimitsV2,
 ) -> Result<AggregateKindV2, CaptureErrorV2> {
-    let rustc_kind = bounded_debug("aggregate kind", kind, limits)?;
+    let normalized_kind = tcx.instantiate_and_normalize_erasing_regions(
+        instance.args,
+        TypingEnv::fully_monomorphized(),
+        EarlyBinder::bind(kind.clone()),
+    );
+    let rustc_kind = bounded_debug("aggregate kind", &normalized_kind, limits)?;
     let (class, definition, variant) = match kind {
         AggregateKind::Array(_) => (AggregateClassV2::Array, None, None),
         AggregateKind::Tuple => (AggregateClassV2::Tuple, None, None),
@@ -273,16 +320,29 @@ fn capture_aggregate_kind<'tcx>(
 
 fn capture_operand<'tcx>(
     tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
     operand: &Operand<'tcx>,
     source_info: SourceInfo,
     limits: CaptureLimitsV2,
 ) -> Result<OperandV2, CaptureErrorV2> {
     match operand {
-        Operand::Copy(place) => Ok(OperandV2::Copy(capture_place(*place, limits)?)),
-        Operand::Move(place) => Ok(OperandV2::Move(capture_place(*place, limits)?)),
+        Operand::Copy(place) => Ok(OperandV2::Copy(capture_place(
+            tcx, instance, *place, limits,
+        )?)),
+        Operand::Move(place) => Ok(OperandV2::Move(capture_place(
+            tcx, instance, *place, limits,
+        )?)),
         Operand::Constant(constant) => Ok(OperandV2::Constant {
-            ty: type_identity(constant.const_.ty()),
-            literal: bounded_debug("constant", &constant.const_, limits)?,
+            ty: type_identity(tcx, instance, constant.const_.ty()),
+            literal: bounded_debug(
+                "constant",
+                &tcx.instantiate_and_normalize_erasing_regions(
+                    instance.args,
+                    TypingEnv::fully_monomorphized(),
+                    EarlyBinder::bind(constant.const_),
+                ),
+                limits,
+            )?,
             source: span_identity(tcx, constant.span, source_info.scope.as_usize()),
         }),
         Operand::RuntimeChecks(kind) => Ok(OperandV2::RuntimeChecks {
@@ -291,7 +351,12 @@ fn capture_operand<'tcx>(
     }
 }
 
-fn capture_place(place: Place<'_>, limits: CaptureLimitsV2) -> Result<PlaceV2, CaptureErrorV2> {
+fn capture_place<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+    place: Place<'tcx>,
+    limits: CaptureLimitsV2,
+) -> Result<PlaceV2, CaptureErrorV2> {
     ensure_bound(
         "place projection",
         place.projection.len(),
@@ -300,7 +365,7 @@ fn capture_place(place: Place<'_>, limits: CaptureLimitsV2) -> Result<PlaceV2, C
     let projection = place
         .projection
         .iter()
-        .map(|element| capture_projection(element, limits))
+        .map(|element| capture_projection(tcx, instance, element, limits))
         .collect::<Result<Vec<_>, _>>()?;
     Ok(PlaceV2 {
         local: place.local.as_usize(),
@@ -308,15 +373,17 @@ fn capture_place(place: Place<'_>, limits: CaptureLimitsV2) -> Result<PlaceV2, C
     })
 }
 
-fn capture_projection(
-    element: ProjectionElem<rustc_middle::mir::Local, Ty<'_>>,
+fn capture_projection<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+    element: ProjectionElem<rustc_middle::mir::Local, Ty<'tcx>>,
     _limits: CaptureLimitsV2,
 ) -> Result<ProjectionV2, CaptureErrorV2> {
     let captured = match element {
         ProjectionElem::Deref => ProjectionV2::Deref,
         ProjectionElem::Field(field, ty) => ProjectionV2::Field {
             index: field.index(),
-            ty: type_identity(ty),
+            ty: type_identity(tcx, instance, ty),
         },
         ProjectionElem::Index(local) => ProjectionV2::Index {
             local: local.as_usize(),
@@ -338,10 +405,10 @@ fn capture_projection(
             name: name.map(|name| name.to_string()),
         },
         ProjectionElem::OpaqueCast(ty) => ProjectionV2::OpaqueCast {
-            ty: type_identity(ty),
+            ty: type_identity(tcx, instance, ty),
         },
         ProjectionElem::UnwrapUnsafeBinder(ty) => ProjectionV2::UnwrapUnsafeBinder {
-            ty: type_identity(ty),
+            ty: type_identity(tcx, instance, ty),
         },
     };
     Ok(captured)
@@ -349,6 +416,7 @@ fn capture_projection(
 
 fn capture_terminator<'tcx>(
     tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
     kind: &TerminatorKind<'tcx>,
     source_info: SourceInfo,
     limits: CaptureLimitsV2,
@@ -360,7 +428,7 @@ fn capture_terminator<'tcx>(
             target: target.as_usize(),
         },
         TerminatorKind::SwitchInt { discr, targets } => TerminatorKindV2::SwitchInt {
-            discriminant: capture_operand(tcx, discr, source_info, limits)?,
+            discriminant: capture_operand(tcx, instance, discr, source_info, limits)?,
             targets: targets
                 .iter()
                 .map(|(value, target)| SwitchTargetV2 {
@@ -376,22 +444,66 @@ fn capture_terminator<'tcx>(
             destination,
             target,
             unwind,
-            ..
+            call_source,
+            fn_span,
         } => {
             ensure_bound("call arguments", args.len(), limits.max_operands)?;
-            let (declared, resolved, intrinsic) = capture_callee_identity(tcx, func);
+            let (declared, resolved, intrinsic) = capture_callee_identity(tcx, instance, func);
             TerminatorKindV2::Call {
-                function: capture_operand(tcx, func, source_info, limits)?,
+                function: capture_operand(tcx, instance, func, source_info, limits)?,
                 declared,
                 resolved,
                 intrinsic,
                 arguments: args
                     .iter()
-                    .map(|argument| capture_operand(tcx, &argument.node, source_info, limits))
-                    .collect::<Result<Vec<_>, _>>()?,
-                destination: capture_place(*destination, limits)?,
+                    .map(|argument| {
+                        Ok(CallArgumentV2 {
+                            operand: capture_operand(
+                                tcx,
+                                instance,
+                                &argument.node,
+                                source_info,
+                                limits,
+                            )?,
+                            source: span_identity(tcx, argument.span, source_info.scope.as_usize()),
+                        })
+                    })
+                    .collect::<Result<Vec<_>, CaptureErrorV2>>()?,
+                destination: capture_place(tcx, instance, *destination, limits)?,
                 target: target.map(|target| target.as_usize()),
                 unwind: capture_unwind(unwind, limits)?,
+                call_source: bounded_debug("call source", call_source, limits)?,
+                function_span: span_identity(tcx, *fn_span, source_info.scope.as_usize()),
+            }
+        }
+        TerminatorKind::TailCall {
+            func,
+            args,
+            fn_span,
+        } => {
+            ensure_bound("tail-call arguments", args.len(), limits.max_operands)?;
+            let (declared, resolved, intrinsic) = capture_callee_identity(tcx, instance, func);
+            TerminatorKindV2::TailCall {
+                function: capture_operand(tcx, instance, func, source_info, limits)?,
+                declared,
+                resolved,
+                intrinsic,
+                arguments: args
+                    .iter()
+                    .map(|argument| {
+                        Ok(CallArgumentV2 {
+                            operand: capture_operand(
+                                tcx,
+                                instance,
+                                &argument.node,
+                                source_info,
+                                limits,
+                            )?,
+                            source: span_identity(tcx, argument.span, source_info.scope.as_usize()),
+                        })
+                    })
+                    .collect::<Result<Vec<_>, CaptureErrorV2>>()?,
+                function_span: span_identity(tcx, *fn_span, source_info.scope.as_usize()),
             }
         }
         TerminatorKind::Drop {
@@ -402,7 +514,7 @@ fn capture_terminator<'tcx>(
             drop,
             async_fut,
         } => TerminatorKindV2::Drop {
-            place: capture_place(*place, limits)?,
+            place: capture_place(tcx, instance, *place, limits)?,
             target: target.as_usize(),
             unwind: capture_unwind(unwind, limits)?,
             replace: *replace,
@@ -416,7 +528,7 @@ fn capture_terminator<'tcx>(
             target,
             unwind,
         } => TerminatorKindV2::Assert {
-            condition: capture_operand(tcx, cond, source_info, limits)?,
+            condition: capture_operand(tcx, instance, cond, source_info, limits)?,
             expected: *expected,
             target: target.as_usize(),
             message: bounded_debug("assert message", msg, limits)?,
@@ -450,6 +562,7 @@ fn capture_unwind(
 
 fn capture_callee_identity<'tcx>(
     tcx: TyCtxt<'tcx>,
+    caller: Instance<'tcx>,
     operand: &Operand<'tcx>,
 ) -> (
     Option<DefinitionIdentityV2>,
@@ -463,10 +576,20 @@ fn capture_callee_identity<'tcx>(
         return (None, None, None);
     };
     let declared = Some(definition_identity(tcx, *def_id));
-    let resolved = Instance::try_resolve(tcx, TypingEnv::fully_monomorphized(), *def_id, args)
-        .ok()
-        .flatten()
-        .map(|instance| function_identity(tcx, instance));
+    let normalized_args = tcx.instantiate_and_normalize_erasing_regions(
+        caller.args,
+        TypingEnv::fully_monomorphized(),
+        EarlyBinder::bind(*args),
+    );
+    let resolved = Instance::try_resolve(
+        tcx,
+        TypingEnv::fully_monomorphized(),
+        *def_id,
+        normalized_args,
+    )
+    .ok()
+    .flatten()
+    .map(|instance| function_identity(tcx, instance));
     let intrinsic = tcx.intrinsic(*def_id).map(|intrinsic| IntrinsicIdentityV2 {
         definition: definition_identity(tcx, *def_id),
         name: intrinsic.name.to_string(),
@@ -502,7 +625,16 @@ fn definition_identity(tcx: TyCtxt<'_>, def_id: DefId) -> DefinitionIdentityV2 {
     }
 }
 
-fn type_identity(ty: Ty<'_>) -> TypeIdentityV2 {
+fn type_identity<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+    ty: Ty<'tcx>,
+) -> TypeIdentityV2 {
+    let ty = tcx.instantiate_and_normalize_erasing_regions(
+        instance.args,
+        TypingEnv::fully_monomorphized(),
+        EarlyBinder::bind(ty),
+    );
     TypeIdentityV2 {
         rust: ty.to_string(),
         rustc_kind: format!("{:?}", ty.kind()),
