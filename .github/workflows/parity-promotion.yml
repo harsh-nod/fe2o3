@@ -46,79 +46,78 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - name: Require protected default-branch base
+      - name: Fetch exact protected and candidate revisions
         env:
           GH_TOKEN: ${{ github.token }}
           BASE_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -Eeuo pipefail
           [[ "${BASE_REPOSITORY}" == "${GITHUB_REPOSITORY}" ]]
           [[ "${BASE_REF}" == "${DEFAULT_BRANCH}" ]]
           [[ "${BASE_SHA}" =~ ^[0-9a-f]{40}$ && ! "${BASE_SHA}" =~ ^0{40}$ ]]
-          git check-ref-format "refs/heads/${DEFAULT_BRANCH}" >/dev/null
+          [[ "${HEAD_SHA}" =~ ^[0-9a-f]{40}$ && ! "${HEAD_SHA}" =~ ^0{40}$ ]]
+          git check-ref-format "refs/heads/${BASE_REF}" >/dev/null
+          git check-ref-format "refs/heads/${HEAD_REF}" >/dev/null
 
-          DEFAULT_TIP_ROOT="${RUNNER_TEMP}/parity-default-tip.git"
-          DEFAULT_REMOTE_REF="refs/remotes/origin/${DEFAULT_BRANCH}"
-          git init --bare "${DEFAULT_TIP_ROOT}"
-          git -C "${DEFAULT_TIP_ROOT}" remote add origin \
-            "https://github.com/${GITHUB_REPOSITORY}.git"
+          REVISION_REPOSITORY="${RUNNER_TEMP}/parity-revisions.git"
+          git init --bare "${REVISION_REPOSITORY}"
           auth_header="$(
             printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n'
           )"
-          git -C "${DEFAULT_TIP_ROOT}" \
+          git -C "${REVISION_REPOSITORY}" \
             -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
-            fetch --no-tags --depth=1 --force origin \
-            "+refs/heads/${DEFAULT_BRANCH}:${DEFAULT_REMOTE_REF}"
+            fetch --no-tags --force \
+            "https://github.com/${BASE_REPOSITORY}.git" \
+            "+refs/heads/${BASE_REF}:refs/parity/base"
+          git -C "${REVISION_REPOSITORY}" \
+            -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
+            fetch --no-tags --force \
+            "https://github.com/${HEAD_REPOSITORY}.git" \
+            "+refs/heads/${HEAD_REF}:refs/parity/head"
           unset auth_header
-          CURRENT_DEFAULT_SHA="$(
-            git -C "${DEFAULT_TIP_ROOT}" rev-parse --verify \
-              "${DEFAULT_REMOTE_REF}^{commit}"
-          )"
-          if [[ "${CURRENT_DEFAULT_SHA}" != "${BASE_SHA}" ]]; then
+          FETCHED_BASE_SHA="$(git -C "${REVISION_REPOSITORY}" \
+            rev-parse --verify 'refs/parity/base^{commit}')"
+          FETCHED_HEAD_SHA="$(git -C "${REVISION_REPOSITORY}" \
+            rev-parse --verify 'refs/parity/head^{commit}')"
+          if [[ "${FETCHED_BASE_SHA}" != "${BASE_SHA}" ]]; then
             printf 'pull request base SHA is not current default tip\n' >&2
             exit 2
           fi
-
-      - name: Check out protected base
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-        with:
-          ref: ${{ github.event.pull_request.base.sha }}
-          fetch-depth: 0
-          persist-credentials: false
-          path: protected
-
-      - name: Check out candidate as data only
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-        with:
-          repository: ${{ github.event.pull_request.head.repo.full_name }}
-          ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 0
-          persist-credentials: false
-          path: candidate
+          if [[ "${FETCHED_HEAD_SHA}" != "${HEAD_SHA}" ]]; then
+            printf 'pull request head changed after event delivery\n' >&2
+            exit 2
+          fi
+          [[ "$(git -C "${REVISION_REPOSITORY}" cat-file -t "${BASE_SHA}")" == commit ]]
+          [[ "$(git -C "${REVISION_REPOSITORY}" cat-file -t "${HEAD_SHA}")" == commit ]]
+          git -C "${REVISION_REPOSITORY}" worktree add --detach \
+            "${GITHUB_WORKSPACE}/protected" "${BASE_SHA}"
+          git -C "${REVISION_REPOSITORY}" worktree add --detach \
+            "${GITHUB_WORKSPACE}/candidate" "${HEAD_SHA}"
+          printf 'REVISION_REPOSITORY=%s\n' "${REVISION_REPOSITORY}" >>"${GITHUB_ENV}"
 
       - name: Classify protected changes and verify signed promotion
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          CHANGED_FILE_COUNT: ${{ github.event.pull_request.changed_files }}
         run: |
           set -Eeuo pipefail
           reviews="${RUNNER_TEMP}/parity-pr-reviews.json"
-          changed_files="${RUNNER_TEMP}/parity-pr-files.json"
           gh api --paginate \
             "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100" |
             jq -s 'add' >"${reviews}"
-          gh api --paginate \
-            "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/files?per_page=100" |
-            jq -s 'add' >"${changed_files}"
           mode="$(bash protected/scripts/parity-protected-change-policy.sh \
             protected candidate docs/cuda-oxide-parity-status.tsv \
             "${reviews}" protected/.github/parity-trust-reviewers.txt \
-            "${changed_files}" "${CHANGED_FILE_COUNT}" "${HEAD_SHA}")"
+            "${REVISION_REPOSITORY}" "${BASE_SHA}" "${HEAD_SHA}" \
+            pull-request)"
 
           case "${mode}" in
             no-op)

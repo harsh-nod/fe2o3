@@ -88,9 +88,13 @@ require_text() {
 }
 
 require_text "${PROTECTED_WORKFLOW}" 'pull_request_target:'
-require_text "${PROTECTED_WORKFLOW}" 'path: protected'
-require_text "${PROTECTED_WORKFLOW}" 'path: candidate'
-require_text "${PROTECTED_WORKFLOW}" 'persist-credentials: false'
+require_text "${PROTECTED_WORKFLOW}" 'REVISION_REPOSITORY="${RUNNER_TEMP}/parity-revisions.git"'
+require_text "${PROTECTED_WORKFLOW}" 'git init --bare "${REVISION_REPOSITORY}"'
+require_text "${PROTECTED_WORKFLOW}" '"+refs/heads/${BASE_REF}:refs/parity/base"'
+require_text "${PROTECTED_WORKFLOW}" '"+refs/heads/${HEAD_REF}:refs/parity/head"'
+require_text "${PROTECTED_WORKFLOW}" 'worktree add --detach'
+require_text "${PROTECTED_WORKFLOW}" '"${REVISION_REPOSITORY}" "${BASE_SHA}" "${HEAD_SHA}"'
+require_text "${PROTECTED_WORKFLOW}" 'pull-request)"'
 require_text "${PROTECTED_WORKFLOW}" 'python3 protected/scripts/parity-signed-evidence.py gate'
 require_text "${PROTECTED_WORKFLOW}" 'derive-promotion-manifest'
 require_text "${PROTECTED_WORKFLOW}" '--protected-archive protected/docs/parity-evidence/archive'
@@ -106,7 +110,6 @@ require_text "${PROTECTED_WORKFLOW}" 'pull-requests: read'
 require_text "${PROTECTED_WORKFLOW}" 'protected/scripts/parity-protected-change-policy.sh'
 require_text "${PROTECTED_WORKFLOW}" 'gh api --paginate'
 require_text "${PROTECTED_WORKFLOW}" 'trust-change-approved'
-require_text "${PROTECTED_WORKFLOW}" '/files?per_page=100'
 require_text "${PROTECTED_WORKFLOW}" 'python3 protected/scripts/parity-signed-evidence.py check-trust-update'
 require_text "${PROTECTED_WORKFLOW}" '--protected-row-policy protected/docs/parity-row-evidence-policy-v2.tsv'
 require_text "${PROTECTED_WORKFLOW}" '--candidate-row-policy candidate/docs/parity-row-evidence-policy-v2.tsv'
@@ -115,14 +118,16 @@ require_text "${PROTECTED_WORKFLOW}" 'types: [submitted, edited, dismissed]'
 require_text "${PROTECTED_WORKFLOW}" 'BASE_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}'
 require_text "${PROTECTED_WORKFLOW}" '[[ "${BASE_REPOSITORY}" == "${GITHUB_REPOSITORY}" ]]'
 require_text "${PROTECTED_WORKFLOW}" '[[ "${BASE_REF}" == "${DEFAULT_BRANCH}" ]]'
-require_text "${PROTECTED_WORKFLOW}" 'git init --bare "${DEFAULT_TIP_ROOT}"'
-require_text "${PROTECTED_WORKFLOW}" 'fetch --no-tags --depth=1 --force origin'
-require_text "${PROTECTED_WORKFLOW}" '"+refs/heads/${DEFAULT_BRANCH}:${DEFAULT_REMOTE_REF}"'
-require_text "${PROTECTED_WORKFLOW}" 'if [[ "${CURRENT_DEFAULT_SHA}" != "${BASE_SHA}" ]]; then'
+require_text "${PROTECTED_WORKFLOW}" 'FETCHED_BASE_SHA="$(git -C "${REVISION_REPOSITORY}"'
+require_text "${PROTECTED_WORKFLOW}" 'FETCHED_HEAD_SHA="$(git -C "${REVISION_REPOSITORY}"'
+require_text "${PROTECTED_WORKFLOW}" 'if [[ "${FETCHED_BASE_SHA}" != "${BASE_SHA}" ]]; then'
+require_text "${PROTECTED_WORKFLOW}" 'if [[ "${FETCHED_HEAD_SHA}" != "${HEAD_SHA}" ]]; then'
 require_text "${PROTECTED_WORKFLOW}" 'pull request base SHA is not current default tip'
 require_text "${PROTECTED_WORKFLOW}" 'HEAD_SHA: ${{ github.event.pull_request.head.sha }}'
-require_text "${PROTECTED_WORKFLOW}" 'CHANGED_FILE_COUNT: ${{ github.event.pull_request.changed_files }}'
-require_text "${PROTECTED_WORKFLOW}" 'actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683'
+require_text "${CHANGE_POLICY}" 'git -C "${REVISION_REPOSITORY}" diff --no-ext-diff --no-renames'
+require_text "${CHANGE_POLICY}" '--name-only -z "${BASE_SHA}" "${CANDIDATE_HEAD}"'
+require_text "${CHANGE_POLICY}" 'revision worktree does not match declared commit'
+require_text "${CHANGE_POLICY}" 'merge-group head does not descend from its base'
 
 for path in \
   docs/cuda-oxide-parity-matrix.md \
@@ -209,6 +214,11 @@ if rg -n 'BASE_SHA="\$\(git merge-base' "${GENERIC_WORKFLOW}"; then
   printf 'generic parity CI trusts a historical merge base\n' >&2
   exit 1
 fi
+if rg -n '/pulls/.*/files|/files\?per_page|CHANGED_FILE_COUNT|changed_files' \
+  "${PROTECTED_WORKFLOW}"; then
+  printf 'protected parity CI trusts a live pull-request file list\n' >&2
+  exit 1
+fi
 if rg -n 'actions/checkout@(v[0-9]+|main|master)' \
   "${GENERIC_WORKFLOW}" "${PROTECTED_WORKFLOW}" "${HARDWARE_WORKFLOW}" "${ROCM_WORKFLOW}"; then
   printf 'hosted CI uses a mutable checkout action reference\n' >&2
@@ -266,157 +276,208 @@ RESOLVED_TIP="$(resolve_non_default_base "${RUNNER}" main "${UPDATED_HEAD}")"
 [[ "${RESOLVED_TIP}" == "${DEFAULT_TIP}" ]]
 [[ "$(git -C "${RUNNER}" show "${RESOLVED_TIP}:docs/parity-row-evidence-policy-v2.tsv")" == strong ]]
 
-# Exercise the protected classifier without executing candidate content.
+# Exercise the protected classifier against exact commits in a runner-owned
+# bare repository. API-reported file lists are deliberately not an input.
+SEED_REPOSITORY="${TEST_ROOT}/revision-seed"
+REVISION_REPOSITORY="${TEST_ROOT}/revisions.git"
 PROTECTED="${TEST_ROOT}/protected"
 CANDIDATE="${TEST_ROOT}/candidate"
 REVIEWS="${TEST_ROOT}/reviews.json"
-FILES="${TEST_ROOT}/files.json"
-HEAD_SHA=1111111111111111111111111111111111111111
-readonly FILES HEAD_SHA
+FAKE_API_FILES="${TEST_ROOT}/untrusted-api-files.json"
+git init -q "${SEED_REPOSITORY}"
+git -C "${SEED_REPOSITORY}" config user.name 'Evidence Test'
+git -C "${SEED_REPOSITORY}" config user.email evidence@example.invalid
 mkdir -p \
-  "${PROTECTED}/docs/generated" "${PROTECTED}/scripts" "${PROTECTED}/.github" \
-  "${CANDIDATE}/docs/generated" "${CANDIDATE}/scripts" "${CANDIDATE}/.github"
-printf 'status\tMissing\n' >"${PROTECTED}/docs/cuda-oxide-parity-status.tsv"
-cp "${PROTECTED}/docs/cuda-oxide-parity-status.tsv" \
-  "${CANDIDATE}/docs/cuda-oxide-parity-status.tsv"
-printf 'protected matrix prose\n' >"${PROTECTED}/docs/cuda-oxide-parity-matrix.md"
-cp "${PROTECTED}/docs/cuda-oxide-parity-matrix.md" \
-  "${CANDIDATE}/docs/cuda-oxide-parity-matrix.md"
-printf 'dashboard\n' >"${PROTECTED}/docs/generated/cuda-oxide-parity-dashboard.md"
-cp "${PROTECTED}/docs/generated/cuda-oxide-parity-dashboard.md" \
-  "${CANDIDATE}/docs/generated/cuda-oxide-parity-dashboard.md"
-printf 'dashboard-tsv\n' >"${PROTECTED}/docs/generated/cuda-oxide-parity-dashboard.tsv"
-cp "${PROTECTED}/docs/generated/cuda-oxide-parity-dashboard.tsv" \
-  "${CANDIDATE}/docs/generated/cuda-oxide-parity-dashboard.tsv"
+  "${SEED_REPOSITORY}/docs/generated" \
+  "${SEED_REPOSITORY}/docs/parity-evidence/archive/history" \
+  "${SEED_REPOSITORY}/docs/parity-evidence/trusted-keys" \
+  "${SEED_REPOSITORY}/scripts" "${SEED_REPOSITORY}/.github"
+printf 'status\tMissing\n' >"${SEED_REPOSITORY}/docs/cuda-oxide-parity-status.tsv"
+printf 'protected matrix prose\n' >"${SEED_REPOSITORY}/docs/cuda-oxide-parity-matrix.md"
+printf 'dashboard\n' >"${SEED_REPOSITORY}/docs/generated/cuda-oxide-parity-dashboard.md"
+printf 'dashboard-tsv\n' >"${SEED_REPOSITORY}/docs/generated/cuda-oxide-parity-dashboard.tsv"
 printf 'signed_promotion_projection_schema_version\t1\nrow_count\t0\n' \
-  >"${PROTECTED}/docs/generated/cuda-oxide-parity-signed-promotions.tsv"
-cp "${PROTECTED}/docs/generated/cuda-oxide-parity-signed-promotions.tsv" \
-  "${CANDIDATE}/docs/generated/cuda-oxide-parity-signed-promotions.tsv"
-printf 'protected verifier\n' >"${PROTECTED}/scripts/parity-signed-evidence.py"
-cp "${PROTECTED}/scripts/parity-signed-evidence.py" \
-  "${CANDIDATE}/scripts/parity-signed-evidence.py"
-printf 'powderluv\n' >"${PROTECTED}/.github/parity-trust-reviewers.txt"
-cp "${PROTECTED}/.github/parity-trust-reviewers.txt" \
-  "${CANDIDATE}/.github/parity-trust-reviewers.txt"
-jq -n --arg head "${HEAD_SHA}" '[{"id":1,"submitted_at":"2026-01-01T00:00:00Z","state":"APPROVED","commit_id":$head,"user":{"login":"powderluv"}}]' >"${REVIEWS}"
-printf '%s\n' '[{"filename":"scripts/parity-signed-evidence.py"}]' >"${FILES}"
+  >"${SEED_REPOSITORY}/docs/generated/cuda-oxide-parity-signed-promotions.tsv"
+printf 'protected verifier\n' >"${SEED_REPOSITORY}/scripts/parity-signed-evidence.py"
+printf 'powderluv\n' >"${SEED_REPOSITORY}/.github/parity-trust-reviewers.txt"
+printf 'protected evidence\n' \
+  >"${SEED_REPOSITORY}/docs/parity-evidence/archive/history/prior.tsv"
+printf 'key one\n' \
+  >"${SEED_REPOSITORY}/docs/parity-evidence/trusted-keys/runner.pem"
+git -C "${SEED_REPOSITORY}" add .
+git -C "${SEED_REPOSITORY}" commit -qm 'protected baseline'
+BASE_SHA="$(git -C "${SEED_REPOSITORY}" rev-parse HEAD)"
+git clone -q --bare "${SEED_REPOSITORY}" "${REVISION_REPOSITORY}"
+git -C "${REVISION_REPOSITORY}" worktree add -q --detach "${PROTECTED}" "${BASE_SHA}"
+git -C "${REVISION_REPOSITORY}" worktree add -q -b candidate "${CANDIDATE}" "${BASE_SHA}"
+git -C "${CANDIDATE}" config user.name 'Evidence Test'
+git -C "${CANDIDATE}" config user.email evidence@example.invalid
+HEAD_SHA="${BASE_SHA}"
 
-policy_args=(
-  "${PROTECTED}"
-  "${CANDIDATE}"
-  docs/cuda-oxide-parity-status.tsv
-  "${REVIEWS}"
-  "${PROTECTED}/.github/parity-trust-reviewers.txt"
-  "${FILES}"
-  1
-  "${HEAD_SHA}"
-)
+write_approval() {
+  jq -n --arg head "${HEAD_SHA}" \
+    '[{"id":1,"submitted_at":"2026-01-01T00:00:00Z","state":"APPROVED","commit_id":$head,"user":{"login":"powderluv"}}]' \
+    >"${REVIEWS}"
+}
+
+refresh_policy_args() {
+  policy_args=(
+    "${PROTECTED}"
+    "${CANDIDATE}"
+    docs/cuda-oxide-parity-status.tsv
+    "${REVIEWS}"
+    "${PROTECTED}/.github/parity-trust-reviewers.txt"
+    "${REVISION_REPOSITORY}"
+    "${BASE_SHA}"
+    "${HEAD_SHA}"
+    pull-request
+  )
+}
+
+commit_candidate() {
+  local message="$1"
+  git -C "${CANDIDATE}" add -A
+  git -C "${CANDIDATE}" commit -qm "${message}"
+  HEAD_SHA="$(git -C "${CANDIDATE}" rev-parse HEAD)"
+  write_approval
+  refresh_policy_args
+}
+
+reset_candidate() {
+  git -C "${CANDIDATE}" reset -q --hard "${BASE_SHA}"
+  git -C "${CANDIDATE}" clean -qfdx
+  HEAD_SHA="${BASE_SHA}"
+  write_approval
+  refresh_policy_args
+}
+
+write_approval
+refresh_policy_args
 [[ "$(bash "${CHANGE_POLICY}" "${policy_args[@]}")" == no-op ]]
 
 printf 'status\tPartial\n' >"${CANDIDATE}/docs/cuda-oxide-parity-status.tsv"
+commit_candidate 'status promotion'
 [[ "$(bash "${CHANGE_POLICY}" "${policy_args[@]}")" == promotion ]]
-cp "${PROTECTED}/docs/cuda-oxide-parity-status.tsv" \
-  "${CANDIDATE}/docs/cuda-oxide-parity-status.tsv"
+reset_candidate
 
 printf 'candidate prose\n' >>"${CANDIDATE}/docs/cuda-oxide-parity-matrix.md"
-printf '%s\n' '[{"filename":"docs/cuda-oxide-parity-matrix.md"}]' >"${FILES}"
+commit_candidate 'projection without status'
 expect_failure projection_without_status \
   'parity projections may change only with a signed status promotion' \
   bash "${CHANGE_POLICY}" "${policy_args[@]}"
-cp "${PROTECTED}/docs/cuda-oxide-parity-matrix.md" \
-  "${CANDIDATE}/docs/cuda-oxide-parity-matrix.md"
-printf '%s\n' '[{"filename":"scripts/parity-signed-evidence.py"}]' >"${FILES}"
+reset_candidate
 
-mkdir -p "${PROTECTED}/docs/parity-evidence/archive/history" \
-  "${CANDIDATE}/docs/parity-evidence/archive/history"
-printf 'protected evidence\n' \
-  >"${PROTECTED}/docs/parity-evidence/archive/history/prior.tsv"
-cp "${PROTECTED}/docs/parity-evidence/archive/history/prior.tsv" \
-  "${CANDIDATE}/docs/parity-evidence/archive/history/prior.tsv"
 printf 'unbound evidence\n' \
   >"${CANDIDATE}/docs/parity-evidence/archive/unbound.tsv"
-printf '%s\n' '[{"filename":"docs/parity-evidence/archive/unbound.tsv"}]' >"${FILES}"
+commit_candidate 'archive-only add'
 expect_failure archive_only_add \
   'parity evidence archive may change only with a signed status promotion' \
   bash "${CHANGE_POLICY}" "${policy_args[@]}"
-rm "${CANDIDATE}/docs/parity-evidence/archive/unbound.tsv"
+reset_candidate
 
 printf 'mutated evidence\n' \
   >"${CANDIDATE}/docs/parity-evidence/archive/history/prior.tsv"
-printf '%s\n' '[{"filename":"docs/parity-evidence/archive/history/prior.tsv"}]' >"${FILES}"
+commit_candidate 'archive-only modify'
 expect_failure archive_only_modify \
   'parity evidence archive may change only with a signed status promotion' \
   bash "${CHANGE_POLICY}" "${policy_args[@]}"
-cp "${PROTECTED}/docs/parity-evidence/archive/history/prior.tsv" \
-  "${CANDIDATE}/docs/parity-evidence/archive/history/prior.tsv"
+reset_candidate
 
 rm "${CANDIDATE}/docs/parity-evidence/archive/history/prior.tsv"
+commit_candidate 'archive-only delete'
 expect_failure archive_only_delete \
   'parity evidence archive may change only with a signed status promotion' \
   bash "${CHANGE_POLICY}" "${policy_args[@]}"
-cp "${PROTECTED}/docs/parity-evidence/archive/history/prior.tsv" \
-  "${CANDIDATE}/docs/parity-evidence/archive/history/prior.tsv"
-printf '%s\n' '[{"filename":"scripts/parity-signed-evidence.py"}]' >"${FILES}"
+reset_candidate
 
 printf 'candidate verifier\n' >"${CANDIDATE}/scripts/parity-signed-evidence.py"
+commit_candidate 'approved trust change'
 printf '[]\n' >"${REVIEWS}"
 expect_failure missing_designated_review 'designated reviewer has no review' \
   bash "${CHANGE_POLICY}" "${policy_args[@]}"
-jq -n --arg head "${HEAD_SHA}" '[{"id":1,"submitted_at":"2026-01-01T00:00:00Z","state":"APPROVED","commit_id":$head,"user":{"login":"powderluv"}}]' >"${REVIEWS}"
+write_approval
 [[ "$(bash "${CHANGE_POLICY}" "${policy_args[@]}")" == trust-change-approved ]]
+[[ "$(bash "${CHANGE_POLICY}" "${policy_args[@]:0:8}" merge-group)" == \
+  trust-change-merge-group ]]
 
-jq -n '[{"id":1,"submitted_at":"2026-01-01T00:00:00Z","state":"APPROVED","commit_id":"2222222222222222222222222222222222222222","user":{"login":"powderluv"}}]' >"${REVIEWS}"
-expect_failure stale_head_approval 'approval does not bind candidate head' \
+APPROVED_HEAD="${HEAD_SHA}"
+printf 'force-pushed verifier\n' >"${CANDIDATE}/scripts/parity-signed-evidence.py"
+commit_candidate 'force-pushed trust revision'
+jq -n --arg head "${APPROVED_HEAD}" \
+  '[{"id":1,"submitted_at":"2026-01-01T00:00:00Z","state":"APPROVED","commit_id":$head,"user":{"login":"powderluv"}}]' \
+  >"${REVIEWS}"
+expect_failure force_push_stale_approval 'approval does not bind candidate head' \
   bash "${CHANGE_POLICY}" "${policy_args[@]}"
-jq -n --arg head "${HEAD_SHA}" '[{"id":1,"submitted_at":"2026-01-01T00:00:00Z","state":"APPROVED","commit_id":$head,"user":{"login":"powderluv"}}]' >"${REVIEWS}"
+write_approval
 
-printf '%s\n' '[{"filename":"scripts/parity-signed-evidence.py"},{"filename":"README.md"}]' >"${FILES}"
-policy_args[6]=2
-expect_failure arbitrary_mixed_path 'trust changes must be isolated from arbitrary paths: README.md' \
+DECLARED_HEAD="${HEAD_SHA}"
+printf 'dirty replacement\n' >"${CANDIDATE}/scripts/parity-signed-evidence.py"
+expect_failure dirty_revision 'revision worktree is dirty' \
   bash "${CHANGE_POLICY}" "${policy_args[@]}"
-printf '%s\n' '[{"filename":"scripts/parity-signed-evidence.py"}]' >"${FILES}"
-policy_args[6]=2
-expect_failure changed_file_count 'changed-file count does not match pull request' \
+git -C "${CANDIDATE}" reset -q --hard "${DECLARED_HEAD}"
+policy_args[7]="${APPROVED_HEAD}"
+expect_failure mismatched_revision 'revision worktree does not match declared commit' \
   bash "${CHANGE_POLICY}" "${policy_args[@]}"
-policy_args[6]=1
-printf '[]\n' >"${FILES}"
-expect_failure empty_changed_paths 'changed-file data is malformed or empty' \
-  bash "${CHANGE_POLICY}" "${policy_args[@]}"
-printf '%s\n' '[{"filename":"scripts/parity-signed-evidence.py"}]' >"${FILES}"
+policy_args[7]="${HEAD_SHA}"
 
-jq -n --arg head "${HEAD_SHA}" '[{"id":1,"submitted_at":"2026-01-01T00:00:00Z","state":"APPROVED","commit_id":$head,"user":{"login":"powderluv"}},{"id":2,"submitted_at":"2026-01-02T00:00:00Z","state":"CHANGES_REQUESTED","commit_id":$head,"user":{"login":"powderluv"}}]' >"${REVIEWS}"
+# A forged live API list cannot hide the README delta: it is not consumed, and
+# the immutable two-tree diff still rejects the arbitrary path.
+printf '%s\n' '[{"filename":"scripts/parity-signed-evidence.py"}]' >"${FAKE_API_FILES}"
+printf 'unrelated\n' >"${CANDIDATE}/README.md"
+commit_candidate 'mixed trust and arbitrary path'
+expect_failure mismatched_api_list \
+  'trust changes must be isolated from arbitrary paths: README.md' \
+  bash "${CHANGE_POLICY}" "${policy_args[@]}"
+reset_candidate
+
+printf 'candidate verifier\n' >"${CANDIDATE}/scripts/parity-signed-evidence.py"
+commit_candidate 'review state fixture'
+jq -n --arg head "${HEAD_SHA}" \
+  '[{"id":1,"submitted_at":"2026-01-01T00:00:00Z","state":"APPROVED","commit_id":$head,"user":{"login":"powderluv"}},{"id":2,"submitted_at":"2026-01-02T00:00:00Z","state":"CHANGES_REQUESTED","commit_id":$head,"user":{"login":"powderluv"}}]' \
+  >"${REVIEWS}"
 expect_failure latest_review_state 'latest state is not APPROVED' \
   bash "${CHANGE_POLICY}" "${policy_args[@]}"
-jq -n --arg head "${HEAD_SHA}" '[{"id":3,"submitted_at":"2026-01-03T00:00:00Z","state":"APPROVED","commit_id":$head,"user":{"login":"powderluv"}}]' >"${REVIEWS}"
+write_approval
 printf 'status\tPartial\n' >"${CANDIDATE}/docs/cuda-oxide-parity-status.tsv"
+commit_candidate 'mixed trust and status'
 expect_failure mixed_trust_status 'trust changes must not include parity status changes' \
   bash "${CHANGE_POLICY}" "${policy_args[@]}"
-cp "${PROTECTED}/docs/cuda-oxide-parity-status.tsv" \
-  "${CANDIDATE}/docs/cuda-oxide-parity-status.tsv"
+reset_candidate
 
-cp "${PROTECTED}/scripts/parity-signed-evidence.py" \
-  "${CANDIDATE}/scripts/parity-signed-evidence.py"
-mkdir -p \
-  "${PROTECTED}/docs/parity-evidence/trusted-keys" \
-  "${CANDIDATE}/docs/parity-evidence/trusted-keys"
-printf 'key one\n' >"${PROTECTED}/docs/parity-evidence/trusted-keys/runner.pem"
 printf 'key two\n' >"${CANDIDATE}/docs/parity-evidence/trusted-keys/runner.pem"
+commit_candidate 'trusted key update'
 [[ "$(bash "${CHANGE_POLICY}" "${policy_args[@]}")" == trust-change-approved ]]
+reset_candidate
 
-cp "${PROTECTED}/docs/parity-evidence/trusted-keys/runner.pem" \
-  "${CANDIDATE}/docs/parity-evidence/trusted-keys/runner.pem"
 rm "${CANDIDATE}/scripts/parity-signed-evidence.py"
 ln -s ../docs/cuda-oxide-parity-status.tsv \
   "${CANDIDATE}/scripts/parity-signed-evidence.py"
+commit_candidate 'trust symlink'
 expect_failure candidate_trust_symlink 'candidate trust path is not a regular file' \
   bash "${CHANGE_POLICY}" "${policy_args[@]}"
-rm "${CANDIDATE}/scripts/parity-signed-evidence.py"
-printf 'candidate verifier\n' >"${CANDIDATE}/scripts/parity-signed-evidence.py"
-printf 'powderluv\nPOWDERLUV\n' >"${PROTECTED}/.github/parity-trust-reviewers.txt"
-cp "${PROTECTED}/.github/parity-trust-reviewers.txt" \
-  "${CANDIDATE}/.github/parity-trust-reviewers.txt"
-expect_failure duplicate_designated_reviewer 'duplicate protected reviewer identity' \
+reset_candidate
+
+TREE_OBJECT="$(git -C "${REVISION_REPOSITORY}" rev-parse "${BASE_SHA}^{tree}")"
+policy_args[7]="${TREE_OBJECT}"
+expect_failure non_commit_revision 'revision does not resolve to a commit' \
   bash "${CHANGE_POLICY}" "${policy_args[@]}"
+policy_args[7]="${HEAD_SHA}"
+
+printf 'orphan verifier\n' >"${CANDIDATE}/scripts/parity-signed-evidence.py"
+git -C "${CANDIDATE}" add -A
+ORPHAN_TREE="$(git -C "${CANDIDATE}" write-tree)"
+ORPHAN_SHA="$(printf 'orphan\n' | git -C "${REVISION_REPOSITORY}" \
+  -c user.name='Evidence Test' -c user.email=evidence@example.invalid \
+  commit-tree "${ORPHAN_TREE}")"
+git -C "${CANDIDATE}" reset -q --hard "${ORPHAN_SHA}"
+HEAD_SHA="${ORPHAN_SHA}"
+write_approval
+refresh_policy_args
+policy_args[8]=merge-group
+expect_failure merge_group_ancestry \
+  'merge-group head does not descend from its base' \
+  bash "${CHANGE_POLICY}" "${policy_args[@]}"
+reset_candidate
 
 bash "${ROOT}/scripts/tests/parity-promotion-projections.sh"
 
