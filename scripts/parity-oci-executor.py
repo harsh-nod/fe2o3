@@ -38,7 +38,8 @@ MAX_OCI_METADATA_BYTES = 4 * 1024 * 1024
 MAX_OCI_LAYER_BYTES = 64 * 1024**3
 MAX_OCI_IMAGE_BYTES = 256 * 1024**3
 MAX_STAGING_ROOT_ENTRIES = 64
-MAX_CLEANUP_ENTRIES = 20000
+MAX_SOURCE_DIRECTORIES = 16384
+MAX_CLEANUP_ENTRIES = 40000
 PROCESS_REAP_GRACE_SECONDS = 5.0
 PROCESS_PIPE_JOIN_SECONDS = 5.0
 PROCESS_FINAL_JOIN_SECONDS = 1.0
@@ -299,6 +300,7 @@ def parse_count(value: str, label: str, *, allow_zero: bool = False) -> int:
 
 @dataclass(frozen=True)
 class TrustAnchor:
+    identity: str
     policy_size: int
     policy_digest: str
     owner_uid: int
@@ -2085,6 +2087,8 @@ def stage_source(profile: Profile, request: Request, lease_name: str) -> SourceS
             parent = Path(path).parent
             while str(parent) != ".":
                 directories.add(str(parent))
+                if len(directories) > MAX_SOURCE_DIRECTORIES:
+                    fail("Git source directory count exceeds protected limit")
                 parent = parent.parent
             if path == request.job_path:
                 if digest != request.job_digest:
@@ -2184,13 +2188,15 @@ def stage_source(profile: Profile, request: Request, lease_name: str) -> SourceS
 
 def external_trust_anchor(args: argparse.Namespace) -> TrustAnchor:
     if (
-        not 1 <= args.policy_size <= MAX_FILE_BYTES
+        not ID_RE.fullmatch(args.policy_identity)
+        or not 1 <= args.policy_size <= MAX_FILE_BYTES
         or not SHA256_RE.fullmatch(args.policy_sha256)
         or not 0 <= args.trusted_owner_uid <= 2**31 - 1
         or not 0 <= args.trusted_owner_gid <= 2**31 - 1
     ):
         fail("external policy trust anchor is malformed")
     return TrustAnchor(
+        args.policy_identity,
         args.policy_size,
         args.policy_sha256,
         args.trusted_owner_uid,
@@ -2258,6 +2264,16 @@ def authorize(args: argparse.Namespace) -> AuthorizedRequest:
         fail("external queue authorization digest is malformed")
     authorization_digest = sha256_bytes(
         b"fe2o3-oci-authorization-v1\0"
+        + anchor.identity.encode("ascii")
+        + b"\0"
+        + args.policy.encode("ascii")
+        + b"\0"
+        + str(anchor.owner_uid).encode("ascii")
+        + b":"
+        + str(anchor.owner_gid).encode("ascii")
+        + b"\0"
+        + anchor.file_contract.encode("ascii")
+        + b"\0"
         + bytes.fromhex(policy.digest)
         + bytes.fromhex(profile.profile_digest)
         + bytes.fromhex(request.digest)
@@ -2487,6 +2503,7 @@ def command_plan(args: argparse.Namespace) -> None:
         verify_retained_output(output)
         print("oci_execution_plan_schema_version\t1")
         print("authorization_source\tprotected-policy")
+        print(f"policy_identity\t{args.policy_identity}")
         print(f"authorization_sha256\t{authorized.authorization_digest}")
         print(f"profile_id\t{profile.profile_id}")
         print(f"profile_sha256\t{profile.profile_digest}")
@@ -2553,6 +2570,7 @@ def add_authorization_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--policy", required=True, help="externally pinned relative path"
     )
+    parser.add_argument("--policy-identity", required=True)
     parser.add_argument("--policy-size", required=True, type=int)
     parser.add_argument("--policy-sha256", required=True)
     parser.add_argument("--trusted-owner-uid", required=True, type=int)

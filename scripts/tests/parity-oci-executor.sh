@@ -21,6 +21,7 @@ readonly GIT
 readonly SOURCE_STAGING="${TEST_ROOT}/staging/source"
 readonly OUTPUT_STAGING="${TEST_ROOT}/staging/output"
 readonly QUEUE_AUTH_SHA256="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+readonly POLICY_IDENTITY="mi300x-test-policy-v1"
 
 cleanup() {
   chmod -R u+w -- "${TEST_ROOT}" 2>/dev/null || true
@@ -179,6 +180,7 @@ verify() {
     --queue-authorization-sha256 "${QUEUE_AUTH_SHA256}" \
     --trusted-root "${TRUSTED_ROOT}" \
     --policy policy.tsv \
+    --policy-identity "${POLICY_IDENTITY}" \
     --policy-size "$(size "${POLICY}")" \
     --policy-sha256 "$(sha256 "${POLICY}")" \
     --trusted-owner-uid "$(id -u)" \
@@ -194,6 +196,7 @@ plan() {
     --queue-authorization-sha256 "${QUEUE_AUTH_SHA256}" \
     --trusted-root "${TRUSTED_ROOT}" \
     --policy policy.tsv \
+    --policy-identity "${POLICY_IDENTITY}" \
     --policy-size "$(size "${POLICY}")" \
     --policy-sha256 "$(sha256 "${POLICY}")" \
     --trusted-owner-uid "$(id -u)" \
@@ -209,6 +212,7 @@ preflight() {
     --queue-authorization-sha256 "${QUEUE_AUTH_SHA256}" \
     --trusted-root "${TRUSTED_ROOT}" \
     --policy policy.tsv \
+    --policy-identity "${POLICY_IDENTITY}" \
     --policy-size "$(size "${POLICY}")" \
     --policy-sha256 "$(sha256 "${POLICY}")" \
     --trusted-owner-uid "$(id -u)" \
@@ -227,6 +231,7 @@ verify_request_path() {
     --queue-authorization-sha256 "${QUEUE_AUTH_SHA256}" \
     --trusted-root "${TRUSTED_ROOT}" \
     --policy policy.tsv \
+    --policy-identity "${POLICY_IDENTITY}" \
     --policy-size "$(size "${POLICY}")" \
     --policy-sha256 "$(sha256 "${POLICY}")" \
     --trusted-owner-uid "$(id -u)" \
@@ -1084,6 +1089,7 @@ expect_failure stale_external_policy_pin 'differs from its external binding' \
     --queue-authorization-sha256 "${QUEUE_AUTH_SHA256}" \
     --trusted-root "${TRUSTED_ROOT}" \
     --policy policy.tsv \
+    --policy-identity "${POLICY_IDENTITY}" \
     --policy-size "${pinned_policy_size}" \
     --policy-sha256 "${pinned_policy_digest}" \
     --trusted-owner-uid "$(id -u)" \
@@ -1173,6 +1179,7 @@ finally:
 trusted = Path(trusted_text)
 policy = trusted / "policy.tsv"
 anchor = module.TrustAnchor(
+    "mi300x-test-policy-v1",
     policy.stat().st_size,
     module.sha256_file(policy),
     os.getuid(),

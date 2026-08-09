@@ -9,7 +9,8 @@ promotion.
 
 - `verify` authenticates a candidate request against a profile selected by a
   protected policy.
-- `plan` emits the exact, argument-by-argument OCI container creation plan.
+- `plan` stages, validates, emits, and then destroys an audit-only exact OCI
+  container creation plan. Its printed staging paths cannot be executed later.
 - `preflight` compares bounded host, Docker daemon, and loaded-image
   observations with the protected profile. These observations are not a full
   daemon/runtime closure.
@@ -29,11 +30,12 @@ The implementation has separate immutable states:
 ```text
 candidate Request
     |
+    | external operator anchor pins policy identity/path/size/digest/owner
     | protected policy selects exact profile path, size, and digest
     v
 AuthorizedRequest
-    +-- protected Git objects --> immutable SourceSnapshot
-    +-- protected staging ----> retained OutputStage
+    +-- protected Git objects --> ephemeral SourceSnapshot
+    +-- protected staging ----> ephemeral OutputStage
     +-- bounded observations -> ObservedRuntimeRequest
     |
     | NOT IMPLEMENTED: execute fixed plan and stream bounded output
@@ -62,11 +64,29 @@ profile_count                       1
 profile  0000  mi300x-gfx942-v1  profiles/mi300x-gfx942-v1.tsv  SIZE  SHA256
 ```
 
-Tabs separate fields. The policy and profile are read through a trusted-root
-path walk that rejects symlinks, escapes, non-regular files, multiple hard
-links, size changes, and digest changes. Production CI must extract both from
-the protected base commit. A candidate may name a profile ID but cannot supply
-the policy, profile bytes, profile digest, or trust domain.
+Tabs separate fields. Policy contents are not their own trust anchor. Every
+operation requires an external policy identity, relative path, exact byte size,
+SHA-256 digest, expected UID/GID, file contract, request UID/GID, and signed
+queue-authorization digest. These values must come from the protected operator
+invocation, not the candidate request or the policy being opened.
+
+The trusted root is opened once with `O_DIRECTORY|O_NOFOLLOW`, checked against
+the externally configured owner and non-group/world-writable mode, and retained
+while policy and profile descriptors are opened. Each relative parent is
+walked by directory descriptor. Policy and profile files are opened once with
+`O_NOFOLLOW`, must be regular single-link files with the expected owner and
+safe mode, and are read through the same descriptor with a one-MiB ceiling.
+Size, digest, and complete `dev/ino/mode/link/owner/size/mtime/ctime` metadata
+must match before and after the read.
+
+The test-only `descriptor-stable` contract provides descriptor pinning and
+race detection; it does not establish filesystem immutability. A production
+policy additionally requires the externally selected `linux-immutable`
+contract, and both policy and profile descriptors must report
+`FS_IMMUTABLE_FL`. This code does not claim that ancestors above the opened
+trusted root are protected. Production deployment must separately establish
+the operator launcher's path and mount trust. A candidate may name a profile
+ID but cannot supply the protected operator anchor.
 
 The repository contains no production policy or profile.
 
@@ -78,7 +98,7 @@ The protected profile binds all of the following:
 - exact Git executable and version, protected Git object directory, immutable
   source staging root, source file/byte/index limits, and export timeout;
 - operator UID/GID, protected source/output roots, and non-writable ownership
-  policy; production roots and their parents must be root-owned;
+  policy; these profile values do not authorize the policy/profile root;
 - absolute OCI layout path and exact bounded `index.json` size/digest;
 - exact image reference by manifest digest;
 - exact OCI manifest, config, and every ordered layer digest and size;
@@ -122,6 +142,15 @@ job_path                              scripts/evidence/jobs/row-04.sh
 job_sha256                            SHA256
 ```
 
+The request path is opened once with `O_NOFOLLOW|O_NONBLOCK`. The descriptor
+must identify a bounded regular single-link file with the externally expected
+UID/GID and a non-group/world-writable mode. The parser reads at most
+`MAX_FILE_BYTES + 1` through that descriptor and rejects metadata changes
+during the read, FIFOs, devices, links, oversized files, and replacement
+races. The request digest is combined with the external queue-authorization
+digest, policy anchor identity, policy digest, and profile digest to derive the
+staging authorization identity.
+
 The candidate checkout is never queried or mounted. In particular, the
 executor never runs `git status`, so candidate repository configuration,
 hooks, and fsmonitor commands are outside the execution path. It creates a
@@ -133,23 +162,28 @@ object directory.
 Only ASCII regular executable/non-executable Git blobs are admitted. Symlinks,
 submodules, `.git`, unsupported modes, malformed paths, excess files, and
 excess bytes fail closed. The resulting source tree and canonical request copy
-are created beneath an operator-owned staging root, made read-only, and mounted
-without Git metadata. Open directory/file descriptors and device/inode
+are created inside a private staging lease named from the full authorization
+digest plus 256 bits of operator randomness. The tree is made read-only and
+contains no Git metadata. Open directory/file descriptors and device/inode
 identities are retained and rechecked immediately before plan emission. Every
 regular file is fsynced after its final read-only mode is applied. Populated
-directories are then chmodded and fsynced bottom-up, followed by the snapshot
-directory and staging root. The transient Git control directory is removed
-before the final staging-root fsync. Any metadata or sync failure rejects the
-snapshot with a controlled executor error.
+directories are then chmodded and fsynced bottom-up. The transient Git control
+directory is removed before the final lease fsync. Any metadata or sync failure
+rejects the snapshot with a controlled executor error.
 
 Unknown or trailing request fields are rejected, including any closure, image,
 runtime, environment, device, command, or isolation setting.
 
 Every current subprocess starts in a new process group with closed inherited
 descriptors, a fixed environment, a protected timeout, and independent stdout
-and stderr ceilings. Overflow and timeout kill the process group. Git object
-enumeration and blob payloads have additional file-count, index, per-file, and
-aggregate byte limits.
+and stderr ceilings. Overflow and timeout kill the process group. Reap polling
+and pipe-thread joins have bounded grace windows; there is no final unbounded
+`wait()`. If a process remains uninterruptible, the command returns a
+controlled failure and leaves eventual reaping to the OS/Python subprocess
+reaper. This is not a hard real-time guarantee: a kernel call or D-state task
+can still outlive the command. Git object enumeration and blob payloads have
+additional file-count, directory-count, index, per-file, and aggregate byte
+limits.
 
 ## Fixed OCI Plan
 
@@ -187,19 +221,30 @@ The emitted plan is an audit artifact, not authority for another process to
 execute later. The future `run` operation must authorize, stage, preflight,
 create, stream, and clean up in one process while retaining all safe
 descriptors and the queue lock. Reopening printed paths in a later process is
-not an accepted integration path.
+not an accepted integration path. Accordingly, `plan` removes its source and
+output leases before returning; every printed host staging path is deliberately
+nonexistent by the time a caller receives it.
+
+Source and output staging roots are independently locked while a lease exists.
+Each dedicated root has a protected entry quota, and source bytes, files, and
+directories are bounded. Reuse, a pre-existing random-name collision, lock
+contention, or quota exhaustion fails closed and never grants cleanup authority
+over the pre-existing entry. Cleanup walks by descriptor without following
+links, restores private directory modes, removes entries within a traversal
+budget, and fsyncs each changed directory and the staging root. A crash may
+leave a random authorization-bound partial lease; it cannot be reused, counts
+against the bounded stale-entry quota, and requires operator cleanup.
 
 The in-container output tmpfs is bounded working storage. It is not copied
 after container exit. The protected entrypoint reserves stdout for
-`fe2o3-artifact-stream-v1` and stderr for logs. Before any future execution,
-the planner creates single-link `0600` artifact and stderr stream files beneath
-an operator-owned durable output directory named by the full request ID, opens
-them with `O_EXCL|O_NOFOLLOW`, retains their descriptors, and rechecks their
-inodes. Before emitting a plan, it fsyncs the artifact stream, stderr stream,
-execution directory, and protected staging root in that order; any failure
-rejects the plan. A future runner must stream into those descriptors while the
-container runs, fsync finalized content and metadata, and terminate the process
-group at the protected byte or time limit.
+`fe2o3-artifact-stream-v1` and stderr for logs. For audit validation, the
+planner creates single-link `0600` artifact and stderr stream files inside its
+ephemeral output lease, opens them with `O_EXCL|O_NOFOLLOW`, retains their
+descriptors, rechecks their inodes, and fsyncs files and parent directories.
+It then removes them without producing evidence. A future runner must retain
+its own live lease and stream into those descriptors while the container runs,
+fsync finalized content and metadata, and terminate the process group at the
+protected byte or time limit.
 
 ## Required Execution And Receipt Work
 
@@ -263,6 +308,12 @@ account cannot connect to `/var/run/docker.sock`; Docker reports permission
 denied. `sudo` requires an interactive password. Unprivileged user namespaces
 are unavailable, so rootless `runc`/Docker and bubblewrap network isolation
 cannot provide an alternative under this account.
+
+The host also has no production policy identity/digest/owner anchor provisioned
+by a protected launcher and no reviewed immutable production policy/profile
+files. The CLI intentionally has no defaults for these values. Therefore the
+current account cannot authorize a production request even before Docker
+access is considered.
 
 Do not add `harsh` to the general Docker group merely to unblock evidence:
 Docker daemon access is effectively root authority. Provision a dedicated
