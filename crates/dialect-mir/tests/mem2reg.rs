@@ -1,11 +1,12 @@
 use dialect_mir::{
-    MAX_MEM2REG_OUTPUT_ITEMS, MirAddressSpace, MirBasicBlock, MirBinaryOp, MirBlockId, MirBody,
-    MirBodyForm, MirCall, MirCallAuthority, MirCallReturn, MirCallSignature, MirCallable,
-    MirCallee, MirConstant, MirConstantValue, MirEdge, MirExecutableModule, MirExecutableTarget,
-    MirExecutableVersion, MirFunction, MirLayout, MirLocalDecl, MirLocalId, MirLocalKind,
-    MirOperand, MirPlace, MirRvalue, MirScalarType, MirSemanticType, MirStatement,
-    MirStatementKind, MirTerminator, MirTerminatorKind, MirTypeId, MirTypeKind, MirUnwindAction,
-    MirValueId, promote_module_to_ssa,
+    MAX_MEM2REG_OUTPUT_ITEMS, MirAddressSpace, MirAuthorizedDeviceImport, MirBasicBlock,
+    MirBinaryOp, MirBlockId, MirBody, MirBodyForm, MirCall, MirCallAuthority, MirCallReturn,
+    MirCallSignature, MirCallable, MirCallee, MirConstant, MirConstantValue, MirEdge,
+    MirExecutableModule, MirExecutableTarget, MirExecutableVersion, MirExternalCallRegistry,
+    MirExternalCallReturn, MirExternalCallSignature, MirFunction, MirLayout, MirLocalDecl,
+    MirLocalId, MirLocalKind, MirOperand, MirPlace, MirRvalue, MirScalarType, MirSemanticType,
+    MirStatement, MirStatementKind, MirTerminator, MirTerminatorKind, MirTypeId, MirTypeKind,
+    MirUnwindAction, MirValueId, promote_module_to_ssa, promote_module_to_ssa_with_registry,
 };
 
 #[derive(Clone, Copy)]
@@ -290,6 +291,7 @@ fn leaves_call_defined_locals_as_slots() {
         bool_ty: input.functions[0].body.locals[4].ty,
         u32_ty: input.functions[0].body.locals[2].ty,
     };
+    let semantic_u32 = input.type_at(ids.u32_ty).unwrap().clone();
     input.functions[0].body.blocks[0].terminator = terminator(MirTerminatorKind::Call(MirCall {
         callee: MirCallee::Direct("fixture::next".into()),
         arguments: vec![],
@@ -308,9 +310,19 @@ fn leaves_call_defined_locals_as_slots() {
             can_unwind: false,
         },
     });
-    input.validate().unwrap();
+    let registry = MirExternalCallRegistry::try_new(vec![MirAuthorizedDeviceImport {
+        identity: "fixture::next".into(),
+        contract: "fixture::next::contract".into(),
+        signature: MirExternalCallSignature {
+            inputs: vec![],
+            output: MirExternalCallReturn::Value(semantic_u32),
+            can_unwind: false,
+        },
+    }])
+    .unwrap();
+    input.validate_with_registry(&registry).unwrap();
 
-    let (output, report) = promote_module_to_ssa(&input).unwrap();
+    let (output, report) = promote_module_to_ssa_with_registry(&input, &registry).unwrap();
     assert_eq!(
         report.functions[0].promoted_locals,
         vec![MirLocalId(1), MirLocalId(3)]

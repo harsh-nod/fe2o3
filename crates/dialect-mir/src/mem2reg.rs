@@ -4,9 +4,9 @@ use std::fmt;
 use crate::executable::terminator_edges;
 use crate::{
     MirBasicBlock, MirBlockId, MirBlockParameter, MirBody, MirBodyForm, MirCall, MirEdge,
-    MirExecutableModule, MirLocalId, MirLocalKind, MirMutability, MirOperand, MirPlace,
-    MirProjection, MirRvalue, MirStatement, MirStatementKind, MirTerminatorKind, MirTypeKind,
-    MirUnwindAction, MirValueId,
+    MirExecutableModule, MirExternalCallRegistry, MirLocalId, MirLocalKind, MirMutability,
+    MirOperand, MirPlace, MirProjection, MirRvalue, MirStatement, MirStatementKind,
+    MirTerminatorKind, MirTypeKind, MirUnwindAction, MirValueId,
 };
 
 pub const MAX_MEM2REG_OUTPUT_ITEMS: usize = 65_536;
@@ -88,8 +88,16 @@ impl std::error::Error for MirMem2RegError {}
 pub fn promote_module_to_ssa(
     module: &MirExecutableModule,
 ) -> Result<(MirExecutableModule, MirMem2RegReport), MirMem2RegError> {
+    promote_module_to_ssa_with_registry(module, &MirExternalCallRegistry::default())
+}
+
+/// Promotes after resolving device imports through an external trust root.
+pub fn promote_module_to_ssa_with_registry(
+    module: &MirExecutableModule,
+    registry: &MirExternalCallRegistry,
+) -> Result<(MirExecutableModule, MirMem2RegReport), MirMem2RegError> {
     module
-        .validate()
+        .validate_with_registry(registry)
         .map_err(|error| MirMem2RegError::new(error.path(), error.reason()))?;
     let mut output = module.clone();
     let mut reports = Vec::with_capacity(output.functions.len());
@@ -127,7 +135,7 @@ pub fn promote_module_to_ssa(
         });
     }
 
-    output.validate().map_err(|error| {
+    output.validate_with_registry(registry).map_err(|error| {
         MirMem2RegError::new(
             error.path(),
             format!(
