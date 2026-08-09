@@ -59,6 +59,19 @@ assert_static_pie() {
   fi
 }
 
+assert_no_build_temporaries() {
+  local directory="$1"
+  local output_name="$2"
+  local leftover
+  leftover="$(
+    find "${directory}" -maxdepth 1 -name ".${output_name}.tmp.*" -print -quit
+  )"
+  if [[ -n "${leftover}" ]]; then
+    printf 'operator build left temporary output: %s\n' "${leftover}" >&2
+    exit 1
+  fi
+}
+
 compile_test_launcher() {
   local output="$1"
   local interpreter="$2"
@@ -176,9 +189,86 @@ else:
     raise AssertionError("repository script was accepted as installed operator")
 PY
 
-readonly DEFAULT_LAUNCHER="${TEST_ROOT}/default-operator"
-"${BUILD_LAUNCHER}" "${DEFAULT_LAUNCHER}" >"${TEST_ROOT}/default.sha256"
+readonly BUILD_ROOT="${TEST_ROOT}/build"
+mkdir -m 700 "${BUILD_ROOT}"
+readonly DEFAULT_LAUNCHER="${BUILD_ROOT}/default-operator"
+readonly SYMLINK_VICTIM="${BUILD_ROOT}/predictable-symlink-victim"
+readonly LEGACY_LINK_RECORD="${BUILD_ROOT}/legacy-link-path"
+printf 'must remain unchanged\n' >"${SYMLINK_VICTIM}"
+/usr/bin/bash -c '
+  legacy_link="${2}.tmp.$$"
+  printf "%s\n" "${legacy_link}" >"${4}"
+  ln -s -- "${1}" "${legacy_link}"
+  exec "${3}" "${2}"
+' build-with-predictable-symlink \
+  "${SYMLINK_VICTIM}" "${DEFAULT_LAUNCHER}" "${BUILD_LAUNCHER}" \
+  "${LEGACY_LINK_RECORD}" >"${TEST_ROOT}/default.sha256"
+legacy_link="$(<"${LEGACY_LINK_RECORD}")"
+readonly LEGACY_LINK="${legacy_link}"
+if [[ ! -L "${LEGACY_LINK}" ]] ||
+  [[ "$(<"${SYMLINK_VICTIM}")" != 'must remain unchanged' ]]; then
+  printf 'predictable temporary symlink affected build output\n' >&2
+  exit 1
+fi
+rm -- "${LEGACY_LINK}"
+assert_no_build_temporaries "${BUILD_ROOT}" "${DEFAULT_LAUNCHER##*/}"
 assert_static_pie "${DEFAULT_LAUNCHER}"
+if [[ "$(stat -c '%a' -- "${DEFAULT_LAUNCHER}")" != 555 ]]; then
+  printf 'operator build did not install mode 0555\n' >&2
+  exit 1
+fi
+
+original_launcher_inode="$(stat -c '%i' -- "${DEFAULT_LAUNCHER}")"
+readonly ORIGINAL_LAUNCHER_INODE="${original_launcher_inode}"
+chmod 0644 "${DEFAULT_LAUNCHER}"
+printf 'stale launcher\n' >"${DEFAULT_LAUNCHER}"
+"${BUILD_LAUNCHER}" "${DEFAULT_LAUNCHER}" >"${TEST_ROOT}/replacement.sha256"
+if [[ "$(stat -c '%i' -- "${DEFAULT_LAUNCHER}")" == \
+  "${ORIGINAL_LAUNCHER_INODE}" ]] ||
+  [[ "$(stat -c '%a' -- "${DEFAULT_LAUNCHER}")" != 555 ]]; then
+  printf 'operator build did not atomically replace the regular output\n' >&2
+  exit 1
+fi
+assert_no_build_temporaries "${BUILD_ROOT}" "${DEFAULT_LAUNCHER##*/}"
+assert_static_pie "${DEFAULT_LAUNCHER}"
+
+readonly OUTPUT_LINK="${BUILD_ROOT}/output-link"
+ln -s -- "${SYMLINK_VICTIM}" "${OUTPUT_LINK}"
+expect_failure output_symlink 'output path must not be a symlink' \
+  "${BUILD_LAUNCHER}" "${OUTPUT_LINK}"
+if [[ "$(<"${SYMLINK_VICTIM}")" != 'must remain unchanged' ]]; then
+  printf 'output symlink collision modified its target\n' >&2
+  exit 1
+fi
+
+readonly FAILURE_ROOT="${TEST_ROOT}/compiler-failure"
+readonly FAILURE_OUTPUT="${FAILURE_ROOT}/failed-operator"
+readonly FAILURE_BUILD="${FAILURE_ROOT}/build-with-missing-source.sh"
+mkdir -m 700 "${FAILURE_ROOT}"
+cp -- "${BUILD_LAUNCHER}" "${FAILURE_BUILD}"
+chmod 0555 "${FAILURE_BUILD}"
+if "${FAILURE_BUILD}" "${FAILURE_OUTPUT}" \
+  >"${TEST_ROOT}/compiler-failure.log" 2>&1; then
+  printf 'expected missing compiler input to fail\n' >&2
+  exit 1
+fi
+if [[ -e "${FAILURE_OUTPUT}" || -L "${FAILURE_OUTPUT}" ]]; then
+  printf 'failed compiler installed an output\n' >&2
+  exit 1
+fi
+assert_no_build_temporaries "${FAILURE_ROOT}" "${FAILURE_OUTPUT##*/}"
+
+readonly UNSAFE_ROOT="${TEST_ROOT}/unsafe-build"
+mkdir -m 777 "${UNSAFE_ROOT}"
+expect_failure writable_destination 'must not be group/world-writable' \
+  "${BUILD_LAUNCHER}" "${UNSAFE_ROOT}/operator"
+readonly REAL_BUILD_ROOT="${TEST_ROOT}/real-build-root"
+readonly LINKED_BUILD_ROOT="${TEST_ROOT}/linked-build-root"
+mkdir -m 700 "${REAL_BUILD_ROOT}"
+ln -s -- "${REAL_BUILD_ROOT}" "${LINKED_BUILD_ROOT}"
+expect_failure symlink_destination 'existing non-symlink directory' \
+  "${BUILD_LAUNCHER}" "${LINKED_BUILD_ROOT}/operator"
+
 expect_failure uninstalled_default_launcher 'fixed executable path' \
   "${DEFAULT_LAUNCHER}" verify --request-id "${REQUEST_ID}"
 

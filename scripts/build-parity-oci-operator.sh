@@ -7,14 +7,77 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
 readonly SOURCE="${SCRIPT_DIR}/parity-oci-operator-launcher.c"
 
+fail() {
+  printf '%s\n' "$1" >&2
+  exit 1
+}
+
 if (($# != 1)) || [[ "$1" != /* ]]; then
   printf 'usage: %s /absolute/output/path\n' "$0" >&2
   exit 2
 fi
 
 readonly OUTPUT="$1"
-readonly TEMPORARY="${OUTPUT}.tmp.$$"
-trap 'rm -f -- "${TEMPORARY}"' EXIT
+destination_directory="${OUTPUT%/*}"
+[[ -n "${destination_directory}" ]] || destination_directory=/
+readonly DESTINATION_DIRECTORY="${destination_directory}"
+readonly OUTPUT_NAME="${OUTPUT##*/}"
+
+if [[ -z "${OUTPUT_NAME}" || "${OUTPUT_NAME}" == . || "${OUTPUT_NAME}" == .. ]]; then
+  fail 'output path must name a file'
+fi
+if [[ ! -d "${DESTINATION_DIRECTORY}" || -L "${DESTINATION_DIRECTORY}" ]]; then
+  fail 'destination directory must be an existing non-symlink directory'
+fi
+if ! canonical_destination="$(
+  /usr/bin/readlink --canonicalize-existing -- "${DESTINATION_DIRECTORY}" 2>/dev/null
+)"; then
+  fail 'cannot resolve destination directory'
+fi
+readonly CANONICAL_DESTINATION="${canonical_destination}"
+if [[ "${CANONICAL_DESTINATION}" != "${DESTINATION_DIRECTORY}" ]]; then
+  fail 'destination directory path must be canonical and contain no symlinks'
+fi
+
+effective_uid="$(/usr/bin/id -u)"
+destination_uid="$(/usr/bin/stat --format='%u' -- "${DESTINATION_DIRECTORY}")"
+destination_mode="$(/usr/bin/stat --format='%a' -- "${DESTINATION_DIRECTORY}")"
+destination_identity="$(
+  /usr/bin/stat --format='%d:%i' -- "${DESTINATION_DIRECTORY}"
+)"
+readonly EFFECTIVE_UID="${effective_uid}"
+readonly DESTINATION_UID="${destination_uid}"
+readonly DESTINATION_MODE="${destination_mode}"
+readonly DESTINATION_IDENTITY="${destination_identity}"
+if [[ "${DESTINATION_UID}" != "${EFFECTIVE_UID}" ]]; then
+  fail 'destination directory must be owned by the effective user'
+fi
+if (( (8#${DESTINATION_MODE} & 0022) != 0 )); then
+  fail 'destination directory must not be group/world-writable'
+fi
+
+validate_output() {
+  if [[ -L "${OUTPUT}" ]]; then
+    fail 'output path must not be a symlink'
+  fi
+  if [[ -e "${OUTPUT}" && ! -f "${OUTPUT}" ]]; then
+    fail 'existing output path must be a regular file'
+  fi
+}
+
+validate_output
+temporary="$(
+  /usr/bin/mktemp \
+    --tmpdir="${DESTINATION_DIRECTORY}" ".${OUTPUT_NAME}.tmp.XXXXXXXXXX"
+)" || fail 'cannot create exclusive temporary output'
+readonly TEMPORARY="${temporary}"
+cleanup() {
+  /usr/bin/rm -f -- "${TEMPORARY}"
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 /usr/bin/cc \
   -std=c11 -O2 -fPIE -static-pie \
@@ -22,24 +85,29 @@ trap 'rm -f -- "${TEMPORARY}"' EXIT
   -Wstack-protector -fstack-protector-strong -D_FORTIFY_SOURCE=3 \
   "${SOURCE}" -o "${TEMPORARY}"
 /usr/bin/strip --strip-all "${TEMPORARY}"
-chmod 0555 "${TEMPORARY}"
+/usr/bin/chmod 0555 "${TEMPORARY}"
 elf_type="$(
   /usr/bin/readelf --file-header --wide -- "${TEMPORARY}" |
-    awk '$1 == "Type:" { print $2 }'
+    /usr/bin/awk '$1 == "Type:" { print $2 }'
 )"
 if [[ "${elf_type}" != DYN ]]; then
   printf 'operator launcher is not an ELF ET_DYN static PIE\n' >&2
   exit 1
 fi
 if /usr/bin/readelf --program-headers --wide -- "${TEMPORARY}" |
-  grep -Eq '^[[:space:]]*INTERP[[:space:]]'; then
+  /usr/bin/grep -Eq '^[[:space:]]*INTERP[[:space:]]'; then
   printf 'operator launcher unexpectedly has a PT_INTERP segment\n' >&2
   exit 1
 fi
 if /usr/bin/readelf --dynamic --wide -- "${TEMPORARY}" |
-  grep -F '(NEEDED)' >/dev/null; then
+  /usr/bin/grep -F '(NEEDED)' >/dev/null; then
   printf 'operator launcher unexpectedly has a DT_NEEDED dependency\n' >&2
   exit 1
 fi
-mv -f -- "${TEMPORARY}" "${OUTPUT}"
+if [[ "$(/usr/bin/stat --format='%d:%i' -- "${DESTINATION_DIRECTORY}")" != \
+  "${DESTINATION_IDENTITY}" ]]; then
+  fail 'destination directory changed during build'
+fi
+validate_output
+/usr/bin/mv -fT -- "${TEMPORARY}" "${OUTPUT}"
 /usr/bin/sha256sum -- "${OUTPUT}"
