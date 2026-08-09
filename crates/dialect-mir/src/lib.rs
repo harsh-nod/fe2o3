@@ -1,6 +1,31 @@
+mod executable;
+mod executable_wire;
+mod mem2reg;
 mod semantic_constant;
 mod semantic_memory;
 mod semantic_type;
+
+pub use executable::{
+    EXECUTABLE_MIR_VERSION, MAX_EXECUTABLE_BLOCK_PARAMETERS, MAX_EXECUTABLE_BLOCKS,
+    MAX_EXECUTABLE_CALL_ARGUMENTS, MAX_EXECUTABLE_CALLABLES, MAX_EXECUTABLE_EDGE_ARGUMENTS,
+    MAX_EXECUTABLE_FIELDS, MAX_EXECUTABLE_FUNCTIONS, MAX_EXECUTABLE_IDENTITY_BYTES,
+    MAX_EXECUTABLE_LOCALS, MAX_EXECUTABLE_PROJECTIONS, MAX_EXECUTABLE_SOURCE_FILE_BYTES,
+    MAX_EXECUTABLE_STATEMENTS, MAX_EXECUTABLE_STATEMENTS_PER_BLOCK, MAX_EXECUTABLE_SWITCH_TARGETS,
+    MAX_EXECUTABLE_TYPE_DEPTH, MAX_EXECUTABLE_TYPE_ITEMS, MAX_EXECUTABLE_TYPE_NODES,
+    MAX_EXECUTABLE_TYPES, MAX_EXECUTABLE_VARIANTS, MirAggregateKind, MirAssertMessage,
+    MirBasicBlock, MirBinaryOp, MirBlockId, MirBlockParameter, MirBody, MirBodyForm, MirCall,
+    MirCallAuthority, MirCallReturn, MirCallSignature, MirCallable, MirCallee, MirCastKind,
+    MirConstant, MirConstantValue, MirEdge, MirExecutableModule, MirExecutableTarget,
+    MirExecutableValidationError, MirExecutableVersion, MirFunction, MirIntrinsic, MirLocalDecl,
+    MirLocalId, MirLocalKind, MirOperand, MirPlace, MirProjection, MirRvalue, MirSourceSpan,
+    MirStatement, MirStatementKind, MirTerminator, MirTerminatorKind, MirTypeId, MirUnaryOp,
+    MirUnwindAction, MirValueId,
+};
+pub use executable_wire::{MAX_EXECUTABLE_WIRE_BYTES, MirExecutableDecodeError};
+pub use mem2reg::{
+    MAX_MEM2REG_OUTPUT_ITEMS, MirMem2RegError, MirMem2RegFunctionReport, MirMem2RegReport,
+    promote_module_to_ssa,
+};
 
 pub use semantic_constant::{
     MAX_CONSTANT_ALLOCATION_BYTES, MAX_CONSTANT_ALLOCATIONS, MAX_CONSTANT_GRAPH_DEPTH,
