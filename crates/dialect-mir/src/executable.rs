@@ -2520,6 +2520,7 @@ impl<'a> Verifier<'a> {
                         strict,
                     )?;
                 }
+                invalidate_all_enum_authority(&mut state);
                 if let Some(edge) = &call.target {
                     let mut normal = state.clone();
                     if let Some(destination) = &call.destination
@@ -3526,6 +3527,15 @@ fn invalidate_discriminant_observations(state: &mut VariantFlowState, source: Mi
             *observed_source = None;
         }
     }
+}
+
+fn invalidate_all_enum_authority(state: &mut VariantFlowState) {
+    for variant in &mut state.variants {
+        if !matches!(variant, EnumVariantState::NotEnum) {
+            *variant = EnumVariantState::Unknown;
+        }
+    }
+    state.discriminant_sources.fill(None);
 }
 
 struct ProjectionState<'a> {
