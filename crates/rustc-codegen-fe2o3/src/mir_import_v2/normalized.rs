@@ -790,7 +790,7 @@ pub(crate) enum CalleeIdentityV2 {
         declared_signature: FunctionSignatureIdentityV2,
         resolved: Box<FunctionIdentityV2>,
         resolved_signature: FunctionSignatureIdentityV2,
-        intrinsic: Option<IntrinsicIdentityV2>,
+        intrinsic: Option<Box<IntrinsicIdentityV2>>,
         resolution_binding_hash: [u8; 32],
     },
     Indirect {
@@ -2209,7 +2209,7 @@ fn validate_callee(
                 declared_signature,
                 resolved,
                 resolved_signature,
-                intrinsic.as_ref(),
+                intrinsic.as_deref(),
             )?;
             if *resolution_binding_hash != expected_binding {
                 return Err(ValidationErrorV2::new(
