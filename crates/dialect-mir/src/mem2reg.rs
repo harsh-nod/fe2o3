@@ -1,12 +1,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+use crate::executable::terminator_edges;
 use crate::{
     MirBasicBlock, MirBlockId, MirBlockParameter, MirBody, MirBodyForm, MirCall, MirEdge,
     MirExecutableModule, MirLocalId, MirLocalKind, MirMutability, MirOperand, MirPlace,
     MirProjection, MirRvalue, MirStatement, MirStatementKind, MirTerminatorKind, MirTypeKind,
     MirUnwindAction, MirValueId,
 };
+
+pub const MAX_MEM2REG_OUTPUT_ITEMS: usize = 65_536;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MirMem2RegFunctionReport {
@@ -90,6 +93,7 @@ pub fn promote_module_to_ssa(
         .map_err(|error| MirMem2RegError::new(error.path(), error.reason()))?;
     let mut output = module.clone();
     let mut reports = Vec::with_capacity(output.functions.len());
+    let mut output_items = 0_usize;
 
     for (function_index, function) in output.functions.iter_mut().enumerate() {
         if !matches!(function.body.form, MirBodyForm::Places) {
@@ -100,6 +104,18 @@ pub fn promote_module_to_ssa(
         }
         let original = function.body.clone();
         let promoted = eligible_locals(module, function_index, &original);
+        let function_items = projected_output_items(function_index, &original, &promoted)?;
+        output_items = output_items
+            .checked_add(function_items)
+            .ok_or_else(|| MirMem2RegError::new("module", "mem2reg output item budget overflow"))?;
+        if output_items > MAX_MEM2REG_OUTPUT_ITEMS {
+            return Err(MirMem2RegError::new(
+                format!("module.functions[{function_index}].body"),
+                format!(
+                    "mem2reg output requires {output_items} generated items, exceeding {MAX_MEM2REG_OUTPUT_ITEMS}"
+                ),
+            ));
+        }
         let (body, inserted_parameters, inserted_definitions) =
             transform_body(function_index, &original, &promoted)?;
         function.body = body;
@@ -121,6 +137,50 @@ pub fn promote_module_to_ssa(
         )
     })?;
     Ok((output, MirMem2RegReport { functions: reports }))
+}
+
+fn projected_output_items(
+    function_index: usize,
+    body: &MirBody,
+    promoted: &[MirLocalId],
+) -> Result<usize, MirMem2RegError> {
+    let path = format!("module.functions[{function_index}].body");
+    let entry_arguments = promoted
+        .iter()
+        .filter(|local| body.locals[local.0 as usize].kind == MirLocalKind::Argument)
+        .count();
+    let non_entry_parameters = body
+        .blocks
+        .len()
+        .saturating_sub(1)
+        .checked_mul(promoted.len())
+        .ok_or_else(|| MirMem2RegError::new(&path, "mem2reg parameter budget overflow"))?;
+    let definitions = body
+        .blocks
+        .iter()
+        .flat_map(|block| &block.statements)
+        .filter(|statement| {
+            matches!(
+                &statement.kind,
+                MirStatementKind::Assign { place, .. }
+                    if place.projection.is_empty() && promoted.contains(&place.local)
+            )
+        })
+        .count();
+    let edges = body
+        .blocks
+        .iter()
+        .map(|block| terminator_edges(&block.terminator.kind).len())
+        .try_fold(0_usize, |total, count| total.checked_add(count))
+        .ok_or_else(|| MirMem2RegError::new(&path, "mem2reg edge budget overflow"))?;
+    let edge_arguments = edges
+        .checked_mul(promoted.len())
+        .ok_or_else(|| MirMem2RegError::new(&path, "mem2reg edge-argument budget overflow"))?;
+    entry_arguments
+        .checked_add(non_entry_parameters)
+        .and_then(|total| total.checked_add(definitions))
+        .and_then(|total| total.checked_add(edge_arguments))
+        .ok_or_else(|| MirMem2RegError::new(path, "mem2reg output item budget overflow"))
 }
 
 fn eligible_locals(

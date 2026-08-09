@@ -1,10 +1,11 @@
 use dialect_mir::{
-    MirAddressSpace, MirBasicBlock, MirBinaryOp, MirBlockId, MirBody, MirBodyForm, MirCall,
-    MirCallAuthority, MirCallReturn, MirCallSignature, MirCallable, MirCallee, MirConstant,
-    MirConstantValue, MirEdge, MirExecutableModule, MirExecutableTarget, MirExecutableVersion,
-    MirFunction, MirLayout, MirLocalDecl, MirLocalId, MirLocalKind, MirOperand, MirPlace,
-    MirRvalue, MirScalarType, MirSemanticType, MirStatement, MirStatementKind, MirTerminator,
-    MirTerminatorKind, MirTypeId, MirTypeKind, MirUnwindAction, MirValueId, promote_module_to_ssa,
+    MAX_MEM2REG_OUTPUT_ITEMS, MirAddressSpace, MirBasicBlock, MirBinaryOp, MirBlockId, MirBody,
+    MirBodyForm, MirCall, MirCallAuthority, MirCallReturn, MirCallSignature, MirCallable,
+    MirCallee, MirConstant, MirConstantValue, MirEdge, MirExecutableModule, MirExecutableTarget,
+    MirExecutableVersion, MirFunction, MirLayout, MirLocalDecl, MirLocalId, MirLocalKind,
+    MirOperand, MirPlace, MirRvalue, MirScalarType, MirSemanticType, MirStatement,
+    MirStatementKind, MirTerminator, MirTerminatorKind, MirTypeId, MirTypeKind, MirUnwindAction,
+    MirValueId, promote_module_to_ssa,
 };
 
 #[derive(Clone, Copy)]
@@ -319,4 +320,59 @@ fn leaves_call_defined_locals_as_slots() {
     };
     assert_eq!(call.destination.as_ref().unwrap().local, MirLocalId(2));
     assert_eq!(call.target.as_ref().unwrap().arguments.len(), 2);
+}
+
+#[test]
+fn rejects_global_block_argument_amplification_before_transforming() {
+    let (types, ids) = types();
+    let argument_count = 256_u32;
+    let block_count = 257_u32;
+    let mut locals = vec![local(ids.u32_ty, MirLocalKind::Return, true)];
+    locals.extend((0..argument_count).map(|_| local(ids.u32_ty, MirLocalKind::Argument, false)));
+    let statements = (1..=argument_count)
+        .map(|argument| assign(0, ids.u32_ty, MirRvalue::Use(copy(argument, ids.u32_ty))))
+        .collect::<Vec<_>>();
+    let blocks = (0..block_count)
+        .map(|block| MirBasicBlock {
+            parameters: vec![],
+            statements: if block == 0 {
+                statements.clone()
+            } else {
+                vec![]
+            },
+            terminator: if block + 1 == block_count {
+                terminator(MirTerminatorKind::Return)
+            } else {
+                terminator(MirTerminatorKind::Goto(MirEdge::new(MirBlockId(block + 1))))
+            },
+        })
+        .collect();
+    let input = MirExecutableModule {
+        version: MirExecutableVersion::V1,
+        target: MirExecutableTarget {
+            pointer_width_bits: 32,
+            thread_index_width_bits: 32,
+        },
+        types,
+        callables: vec![],
+        functions: vec![MirFunction {
+            identity: "mem2reg::amplification".into(),
+            span: None,
+            body: MirBody {
+                form: MirBodyForm::Places,
+                locals,
+                blocks,
+                entry: MirBlockId(0),
+            },
+        }],
+    };
+
+    input.validate().unwrap();
+    let error = promote_module_to_ssa(&input).unwrap_err();
+    assert!(error.reason().contains("generated items"));
+    assert!(
+        error
+            .reason()
+            .contains(&MAX_MEM2REG_OUTPUT_ITEMS.to_string())
+    );
 }
