@@ -17,6 +17,7 @@ mod persistent_freshness;
 mod plan;
 mod proof_capsule;
 mod result;
+mod static_view_proof;
 
 pub use artifact_record::{
     ArtifactProofEvidenceV1, ArtifactRecordConversionError, ReviewedInvocationIdentityV1,
@@ -101,4 +102,11 @@ pub use proof_capsule::{
 };
 pub use result::{
     MAX_RESULT_BYTES, ProofResultV1, RecorderTermination, ResultError, parse_recorder_result,
+};
+pub use static_view_proof::{
+    STATIC_VIEW_PROOF_EVIDENCE_DOMAIN_V1, STATIC_VIEW_PROOF_OBLIGATION_DOMAIN_V1,
+    STATIC_VIEW_PROOF_REQUIRED_PROPERTIES_V1, STATIC_VIEW_PROOF_VERSION_V1,
+    StaticViewLifetimeEpochClaimV1, StaticViewProofErrorV1, StaticViewProofEvidenceV1,
+    StaticViewProofObligationV1, bind_static_view_proof_evidence_v1,
+    derive_static_view_functional_specification_digest_v1,
 };

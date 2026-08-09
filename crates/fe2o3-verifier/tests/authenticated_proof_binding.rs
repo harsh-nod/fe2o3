@@ -10,6 +10,10 @@ use fe2o3_artifacts::{
     SourceContractIdentity, TargetIdentity, ToolIdentity, V1_REQUIRED_PROPERTIES,
     VerificationModelIdentity as ArtifactModel,
 };
+use fe2o3_contracts::{
+    AddressSpaceIdV1, AllocationProvenanceIdV1, AllocationSpecV1, ByteRegionV1,
+    StaticViewAccessDescriptionV1, StaticViewDescriptionV1,
+};
 use fe2o3_rustc_front::{
     ControlFlowContractV1, ControlFlowNodeIdV1, ControlFlowNodeKindV1, ControlFlowNodeV1,
     FrontendIntegerSwitchCaseV1, FrontendIntegerSwitchTypeV1, FrontendSourceSpanV1,
@@ -39,13 +43,15 @@ use fe2o3_verifier::{
     PersistentlyFreshMultiKernelProofAdmissionV1, ProcessLocalProofCapsuleDuplicateDetectorV1,
     ProofCapsuleBuildErrorV1, ProofCapsuleContextErrorV1, ProofCapsuleExpectationV1,
     ProofCapsuleFreshnessExpectationV1, ProofCapsuleFreshnessIdentityV1,
-    ProofCapsuleIdentityFieldV1, ProofCapsuleTargetV1, ProofCapsuleV1, ProofProperty,
-    ProofRequestV1, ProofTargetIdentity, VerificationModelIdentity, VerifierPolicy,
-    bind_authenticated_control_flow_executable_v1,
+    ProofCapsuleIdentityFieldV1, ProofCapsuleTargetV1, ProofCapsuleV1, ProofOutcome, ProofProperty,
+    ProofRequestV1, ProofTargetIdentity, STATIC_VIEW_PROOF_REQUIRED_PROPERTIES_V1,
+    StaticViewLifetimeEpochClaimV1, StaticViewProofObligationV1, VerificationModelIdentity,
+    VerifierPolicy, bind_authenticated_control_flow_executable_v1,
     bind_authenticated_proof_executable_persistent_v1, bind_authenticated_proof_executable_v1,
     bind_control_flow_proof_request_v1,
     bind_persistently_fresh_authenticated_control_flow_executable_v1,
-    derive_control_flow_functional_specification_digest_v1, execute_authenticated_verus,
+    bind_static_view_proof_evidence_v1, derive_control_flow_functional_specification_digest_v1,
+    derive_static_view_functional_specification_digest_v1, execute_authenticated_verus,
     reconcile_control_flow_source_v1,
 };
 
@@ -1873,6 +1879,103 @@ fn independent_measured_runs_cannot_be_substituted_for_each_other() {
         first.validate_against(&second),
         Err(AuthenticatedProofExecutableBindingError::IdentityMismatch { field: "challenge" })
     );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn caller_selected_recorder_and_alternate_ledgers_remain_non_authoritative() {
+    let source_input = control_flow_source();
+    let source =
+        reconcile_control_flow_source_v1(&source_input.0, &source_input.1, source_input.2.clone())
+            .unwrap();
+    let allocation = AllocationSpecV1::new(
+        AllocationProvenanceIdV1::new(7).unwrap(),
+        AddressSpaceIdV1::new(3).unwrap(),
+        0x1_0000,
+        64,
+        0x2_0000,
+    )
+    .unwrap();
+    let parent = ByteRegionV1::for_allocation(allocation, 0, 64).unwrap();
+    let description = StaticViewDescriptionV1::describe(
+        allocation,
+        parent,
+        16,
+        3,
+        4,
+        4,
+        4,
+        StaticViewAccessDescriptionV1::ExclusiveWrite,
+    )
+    .unwrap();
+    let lifetime = StaticViewLifetimeEpochClaimV1::new(digest(0xa0), 4, 8, 7).unwrap();
+    let obligation = StaticViewProofObligationV1::new(
+        description,
+        &source,
+        digest(0x22),
+        digest(0x50),
+        digest(0x52),
+        digest(0x53),
+        digest(0xa1),
+        lifetime,
+        Some(digest(0xa2)),
+    )
+    .unwrap();
+    let base_functional_specification =
+        derive_static_view_functional_specification_digest_v1(&obligation);
+    let blueprint = persistent_control_flow_blueprint(
+        manifest(),
+        0x11,
+        0x22,
+        0x33,
+        source_input,
+        base_functional_specification,
+        payload(0x44),
+        compiler(),
+        producer(),
+        execution_tools(),
+    );
+    assert_eq!(
+        blueprint.evidence.invocation_plan().request().properties(),
+        STATIC_VIEW_PROOF_REQUIRED_PROPERTIES_V1
+    );
+    assert_eq!(blueprint.evidence.result().outcome(), ProofOutcome::Proved);
+    let static_evidence = bind_static_view_proof_evidence_v1(
+        blueprint.evidence.invocation_plan().request(),
+        blueprint.request_binding.clone(),
+        obligation,
+    )
+    .unwrap();
+    assert!(!static_evidence.grants_proof_authority());
+    assert!(!static_evidence.grants_runtime_authority());
+    assert!(!static_evidence.authenticates_verifier_execution());
+    assert!(!static_evidence.authenticates_global_ledger_namespace());
+    assert!(!static_evidence.authenticates_live_allocation());
+    assert!(!static_evidence.authenticates_exclusive_lease());
+
+    let alternate = blueprint.clone();
+    let first_directory = PersistentLedgerDirectory::new();
+    let second_directory = PersistentLedgerDirectory::new();
+    let (mut first_ledger, _) =
+        PersistentProofFreshnessLedgerV1::create_new(&first_directory.path).unwrap();
+    let (mut second_ledger, _) =
+        PersistentProofFreshnessLedgerV1::create_new(&second_directory.path).unwrap();
+    let first = bind_persistent_control_flow_blueprint(blueprint, &mut first_ledger);
+    let second = bind_persistent_control_flow_blueprint(alternate, &mut second_ledger);
+    assert_ne!(
+        first
+            .proof_executable_binding()
+            .identity()
+            .ledger_namespace(),
+        second
+            .proof_executable_binding()
+            .identity()
+            .ledger_namespace()
+    );
+    assert!(!first.grants_load_authority());
+    assert!(!first.grants_launch_authority());
+    assert!(!second.grants_load_authority());
+    assert!(!second.grants_launch_authority());
 }
 
 #[test]
