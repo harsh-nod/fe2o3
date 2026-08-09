@@ -3597,6 +3597,9 @@ fn valid_cast(kind: MirCastKind, source: &MirSemanticType, destination: &MirSema
     if matches!(destination.kind, MirTypeKind::Scalar(MirScalarType::Char)) {
         return false;
     }
+    if matches!(source.kind, MirTypeKind::Scalar(MirScalarType::Char)) {
+        return kind == MirCastKind::IntToInt && is_machine_integer(&destination.kind);
+    }
     match kind {
         MirCastKind::IntToInt => is_integer(&source.kind) && is_integer(&destination.kind),
         MirCastKind::IntToFloat => is_integer(&source.kind) && is_float(&destination.kind),
