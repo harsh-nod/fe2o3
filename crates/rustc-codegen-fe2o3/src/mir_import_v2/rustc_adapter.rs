@@ -8,10 +8,11 @@ use super::type_preflight::{
 };
 use rustc_data_structures::fingerprint::Fingerprint;
 use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
+use rustc_hir::def::DefKind;
 use rustc_hir::def_id::DefId;
 use rustc_middle::mir::{
-    AggregateKind, Body, NonDivergingIntrinsic, Operand, Place, ProjectionElem, Rvalue, SourceInfo,
-    SourceScope, StatementKind, TerminatorKind, UnwindAction,
+    AggregateKind, Body, Local, NonDivergingIntrinsic, Operand, Place, ProjectionElem, Rvalue,
+    SourceInfo, SourceScope, StatementKind, TerminatorKind, UnwindAction,
 };
 use rustc_middle::ty::{
     EarlyBinder, FloatTy, GenericArgsRef, Instance, InstanceKind, IntTy, ReifyReason, Ty, TyCtxt,
@@ -771,27 +772,54 @@ fn capture_callee_identity<'tcx>(
             args,
         ))?;
         let declared = definition_identity(context, *def_id)?;
-        let intrinsic = if let Some(intrinsic) = context.tcx.intrinsic(*def_id) {
-            Some(IntrinsicIdentityV2 {
-                definition: declared.clone(),
-                name: context
-                    .budget
-                    .bounded_str("intrinsic name", intrinsic.name.as_str())?,
-                must_be_overridden: intrinsic.must_be_overridden,
-                const_stable: intrinsic.const_stable,
-            })
-        } else {
-            None
+        let declared_generic_args_hash =
+            generic_args_hash(context, "declared callee arguments", args)?;
+        let declared_generic_arg_count = args.len();
+        let declared_signature =
+            function_signature_identity(context, *def_id, args, "declared callee signature")?;
+        let resolved_signature = resolved_signature_identity(context, resolved)?;
+        let resolved_identity = function_identity(context, resolved)?;
+        let intrinsic = match resolved.def {
+            InstanceKind::Intrinsic(def_id) => {
+                let metadata = context.tcx.intrinsic(def_id).ok_or_else(|| {
+                    CaptureErrorV2::new(
+                        "resolved intrinsic instance has no compiler intrinsic metadata",
+                    )
+                })?;
+                let mut captured = IntrinsicIdentityV2 {
+                    definition: definition_identity(context, def_id)?,
+                    name: context
+                        .budget
+                        .bounded_str("intrinsic name", metadata.name.as_str())?,
+                    must_be_overridden: metadata.must_be_overridden,
+                    const_stable: metadata.const_stable,
+                    binding_hash: [0; 32],
+                };
+                captured.binding_hash = intrinsic_binding_hash_v2(&captured)?;
+                Some(captured)
+            }
+            _ => None,
         };
+        let callable_type = type_identity_normalized(context, callable_ty)?;
+        let resolution_binding_hash = resolution_binding_hash_v2(
+            &callable_type,
+            &declared,
+            &declared_generic_args_hash,
+            declared_generic_arg_count,
+            &declared_signature,
+            &resolved_identity,
+            &resolved_signature,
+            intrinsic.as_ref(),
+        )?;
         return Ok(CalleeIdentityV2::Direct {
             declared,
-            declared_generic_args_hash: generic_args_hash(
-                context,
-                "declared callee arguments",
-                args,
-            )?,
-            resolved: Box::new(function_identity(context, resolved)?),
+            declared_generic_args_hash,
+            declared_generic_arg_count,
+            declared_signature,
+            resolved: Box::new(resolved_identity),
+            resolved_signature,
             intrinsic,
+            resolution_binding_hash,
         });
     }
     if !matches!(callable_ty.kind(), TyKind::FnPtr(..)) {
@@ -802,6 +830,123 @@ fn capture_callee_identity<'tcx>(
     Ok(CalleeIdentityV2::Indirect {
         callable_type: type_identity_normalized(context, callable_ty)?,
     })
+}
+
+fn function_signature_identity<'tcx>(
+    context: &mut CaptureContextV2<'_, 'tcx>,
+    def_id: DefId,
+    args: GenericArgsRef<'tcx>,
+    label: &str,
+) -> Result<FunctionSignatureIdentityV2, CaptureErrorV2> {
+    preflight_generic_args_v2(label, args, context.limits, &mut context.budget)?;
+    if !matches!(context.tcx.def_kind(def_id), DefKind::Fn | DefKind::AssocFn) {
+        return Err(CaptureErrorV2::new(format!(
+            "{label} does not refer to a function-signature DefId"
+        )));
+    }
+    let raw = context.tcx.fn_sig(def_id);
+    preflight_signature_types(
+        context,
+        raw.skip_binder().inputs_and_output().skip_binder(),
+        label,
+    )?;
+    let normalized = context
+        .tcx
+        .try_instantiate_and_normalize_erasing_regions(args, TypingEnv::fully_monomorphized(), raw)
+        .map_err(|_| CaptureErrorV2::normalization(label))?;
+    let signature = context
+        .tcx
+        .instantiate_bound_regions_with_erased(normalized);
+    preflight_signature_types(context, signature.inputs_and_output, label)?;
+    let signature_types = signature.inputs_and_output.iter().collect::<Vec<_>>();
+    Ok(FunctionSignatureIdentityV2 {
+        stable_hash: stable_hash!(context.tcx, signature),
+        shape_hash: stable_hash!(context.tcx, signature_types),
+        input_count: signature.inputs().len(),
+    })
+}
+
+fn resolved_signature_identity<'tcx>(
+    context: &mut CaptureContextV2<'_, 'tcx>,
+    instance: Instance<'tcx>,
+) -> Result<FunctionSignatureIdentityV2, CaptureErrorV2> {
+    if matches!(
+        context.tcx.def_kind(instance.def_id()),
+        DefKind::Fn | DefKind::AssocFn
+    ) {
+        return function_signature_identity(
+            context,
+            instance.def_id(),
+            instance.args,
+            "resolved callee signature",
+        );
+    }
+    preflight_instance_v2(
+        "generated resolved signature",
+        instance,
+        context.limits,
+        &mut context.budget,
+    )?;
+    let body = context.tcx.instance_mir(instance.def);
+    let interface_count = body
+        .arg_count
+        .checked_add(1)
+        .ok_or_else(|| CaptureErrorV2::new("generated signature arity overflowed"))?;
+    ensure_bound(
+        "generated signature type arity",
+        interface_count,
+        context.limits.max_type_arity,
+    )?;
+    if interface_count > body.local_decls.len() {
+        return Err(CaptureErrorV2::new(
+            "generated signature does not fit in its MIR local table",
+        ));
+    }
+    let mut types = Vec::with_capacity(interface_count);
+    for index in (1..=body.arg_count).chain(std::iter::once(0)) {
+        let raw = body.local_decls[Local::from_usize(index)].ty;
+        preflight_ty_v2(
+            "generated signature type",
+            raw,
+            context.limits,
+            &mut context.budget,
+        )?;
+        let normalized = instance
+            .try_instantiate_mir_and_normalize_erasing_regions(
+                context.tcx,
+                TypingEnv::fully_monomorphized(),
+                EarlyBinder::bind(raw),
+            )
+            .map_err(|_| CaptureErrorV2::normalization("generated signature type"))?;
+        preflight_ty_v2(
+            "normalized generated signature type",
+            normalized,
+            context.limits,
+            &mut context.budget,
+        )?;
+        types.push(normalized);
+    }
+    Ok(FunctionSignatureIdentityV2 {
+        stable_hash: stable_hash!(context.tcx, instance),
+        shape_hash: stable_hash!(context.tcx, types),
+        input_count: body.arg_count,
+    })
+}
+
+fn preflight_signature_types<'tcx>(
+    context: &mut CaptureContextV2<'_, 'tcx>,
+    types: &[Ty<'tcx>],
+    label: &str,
+) -> Result<(), CaptureErrorV2> {
+    ensure_bound(
+        "signature type arity",
+        types.len(),
+        context.limits.max_type_arity,
+    )?;
+    for ty in types {
+        preflight_ty_v2(label, *ty, context.limits, &mut context.budget)?;
+    }
+    Ok(())
 }
 
 fn require_direct_resolution<T, E>(result: Result<Option<T>, E>) -> Result<T, CaptureErrorV2> {
@@ -970,6 +1115,7 @@ fn type_identity_normalized<'tcx>(
         TyKind::FnDef(def_id, args) => TypeClassV2::FunctionDefinition {
             definition: definition_identity(context, *def_id)?,
             generic_args_hash: generic_args_hash(context, "function type arguments", args)?,
+            generic_arg_count: args.len(),
         },
         TyKind::FnPtr(..) => TypeClassV2::FunctionPointer,
         TyKind::UnsafeBinder(_) => TypeClassV2::UnsafeBinder,
