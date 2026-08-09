@@ -22,6 +22,7 @@ from typing import Iterable
 
 MAX_BYTES = 4 * 1024 * 1024
 MAX_ITEMS = 256
+MAX_ARCHIVE_ENTRIES = 16384
 CLASSES = ("unit", "ui", "ir", "compile", "verus", "hardware", "debug")
 CLASS_RANK = {value: index for index, value in enumerate(CLASSES)}
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -31,6 +32,9 @@ RESULT_ID_RE = re.compile(r"^[0-9a-f]{64}$")
 TARGET_RE = re.compile(r"^(generic|gfx[0-9a-f]+(?::[A-Za-z0-9_+-]+)*)$")
 LANE_RE = re.compile(r"^(-|[a-z0-9][a-z0-9._-]{0,63})$")
 PATH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/+:-]{0,511}$")
+PROMOTION_MANIFEST_RE = re.compile(
+    r"^manifests/promotion-([0-9a-f]{64})\.tsv$"
+)
 HEX_RE = re.compile(r"^(?:[0-9a-f]{2})+$")
 DEFAULT_LOCK = Path("/run/lock/fe2o3/mi300x-gfx942-evidence.lock")
 
@@ -332,7 +336,11 @@ def check_trust_update(args: argparse.Namespace) -> None:
     candidate_present = args.candidate_policy.exists() or args.candidate_policy.is_symlink()
     check_row_policy_update(args.protected_row_policy, args.candidate_row_policy)
     required_metadata = [
+        ("exact", "docs/cuda-oxide-parity-matrix.md"),
         ("exact", "docs/cuda-oxide-parity-status.tsv"),
+        ("exact", "docs/generated/cuda-oxide-parity-dashboard.md"),
+        ("exact", "docs/generated/cuda-oxide-parity-dashboard.tsv"),
+        ("exact", "docs/generated/cuda-oxide-parity-signed-promotions.tsv"),
         ("prefix", "docs/parity-evidence/archive/"),
     ]
 
@@ -963,9 +971,9 @@ def parse_result(
         execution_closure,
         executors,
         environment,
-        queue_id,
         queue_path,
         queue_digest,
+        queue_id,
         int(timeout_text),
         toolchains,
         commands,
@@ -989,6 +997,7 @@ class Authorization:
     evidence_set: str
     mode: str
     digest: str
+    relative_path: str
 
 
 def parse_authorization(
@@ -1042,6 +1051,7 @@ def parse_authorization(
         evidence_set,
         mode,
         digest,
+        relative,
     )
 
 
@@ -1055,6 +1065,8 @@ class PromotionManifest:
     evidence_set: str
     results: list[ResultRecord]
     authorizations: list[Authorization]
+    digest: str
+    relative_path: str
 
 
 def parse_manifest(
@@ -1064,7 +1076,7 @@ def parse_manifest(
     trust: TrustPolicy,
 ) -> PromotionManifest:
     path = archive_path(root, relative)
-    _, raw_lines, rows = read_raw(path)
+    raw, raw_lines, rows = read_raw(path)
     cursor = Cursor(rows, "promotion manifest")
     if cursor.scalar("promotion_manifest_schema_version") != "2":
         fail("promotion manifest schema must be 2")
@@ -1166,6 +1178,8 @@ def parse_manifest(
         evidence_set,
         results,
         authorizations,
+        sha256_bytes(raw),
+        relative,
     )
 
 
@@ -1244,6 +1258,417 @@ def require_reviewer_roles(policy: dict[str, RowPolicy]) -> None:
     for row, value in policy.items():
         if value.reviewer_role != "reviewer":
             fail(f"row policy reviewer role must be reviewer for row {row}")
+
+
+@dataclass(frozen=True)
+class PromotionProjectionRow:
+    row: str
+    from_status: str
+    to_status: str
+    source: str
+    target: str
+    lane: str
+    classes: tuple[str, ...]
+    toolchains: tuple[str, ...]
+    results: tuple[str, ...]
+    evidence_set: str
+
+
+def parse_promotion_projection(path: Path, label: str) -> list[PromotionProjectionRow]:
+    _, _, rows = read_raw(path)
+    cursor = Cursor(rows, label)
+    if cursor.scalar("signed_promotion_projection_schema_version") != "1":
+        fail(f"{label} schema must be 1")
+    count = parse_count(cursor.scalar("row_count"), f"{label} rows")
+    output: list[PromotionProjectionRow] = []
+    previous = 0
+    for index in range(count):
+        item = cursor.record("row", 12, index)
+        (
+            row,
+            from_status,
+            to_status,
+            source,
+            target,
+            lane,
+            class_text,
+            toolchain_text,
+            result_text,
+            evidence_set,
+        ) = item[2:]
+        classes = parse_classes(class_text, f"{label} row {row}")
+        toolchains = tuple(toolchain_text.split(","))
+        results = tuple(result_text.split(","))
+        rank = row_rank(row) if valid_row(row) else 0
+        if (
+            rank <= previous
+            or not valid_transition(from_status, to_status)
+            or not COMMIT_RE.fullmatch(source)
+            or not TARGET_RE.fullmatch(target)
+            or not LANE_RE.fullmatch(lane)
+            or not toolchains
+            or any(not ID_RE.fullmatch(value) for value in toolchains)
+            or list(toolchains) != sorted(set(toolchains))
+            or len(results) != len(classes)
+            or any(not valid_relative(value) for value in results)
+            or len(results) != len(set(results))
+            or not SHA256_RE.fullmatch(evidence_set)
+        ):
+            fail(f"malformed {label} row {index:04d}")
+        output.append(
+            PromotionProjectionRow(
+                row,
+                from_status,
+                to_status,
+                source,
+                target,
+                lane,
+                classes,
+                toolchains,
+                results,
+                evidence_set,
+            )
+        )
+        previous = rank
+    cursor.done()
+    return output
+
+
+def promotion_projection_bytes(rows: Iterable[PromotionProjectionRow]) -> bytes:
+    ordered = sorted(rows, key=lambda value: row_rank(value.row))
+    lines = [
+        "signed_promotion_projection_schema_version\t1",
+        f"row_count\t{len(ordered)}",
+    ]
+    for index, value in enumerate(ordered):
+        lines.append(
+            "\t".join(
+                (
+                    "row",
+                    f"{index:04d}",
+                    value.row,
+                    value.from_status,
+                    value.to_status,
+                    value.source,
+                    value.target,
+                    value.lane,
+                    ",".join(value.classes),
+                    ",".join(value.toolchains),
+                    ",".join(value.results),
+                    value.evidence_set,
+                )
+            )
+        )
+    return ("\n".join(lines) + "\n").encode("ascii")
+
+
+@dataclass(frozen=True)
+class ArchiveClosureFile:
+    path: str
+    size: int
+    digest: str
+
+
+@dataclass(frozen=True)
+class PromotionArchiveClosure:
+    evidence_set: str
+    manifest_path: str
+    manifest_digest: str
+    files: tuple[ArchiveClosureFile, ...]
+
+
+def build_promotion_archive_closure(
+    root: Path, manifest: PromotionManifest
+) -> PromotionArchiveClosure:
+    files: dict[str, ArchiveClosureFile] = {}
+
+    def add(relative: str, size: int, digest: str) -> None:
+        if not valid_relative(relative) or size < 0 or not SHA256_RE.fullmatch(digest):
+            fail(f"invalid promotion archive binding: {relative}")
+        path = archive_path(root, relative)
+        if path.stat().st_size != size or sha256_file(path) != digest:
+            fail(f"promotion archive binding mismatch: {relative}")
+        binding = ArchiveClosureFile(relative, size, digest)
+        previous = files.get(relative)
+        if previous is not None and previous != binding:
+            fail(f"conflicting promotion archive binding: {relative}")
+        files[relative] = binding
+
+    manifest_path = archive_path(root, manifest.relative_path)
+    add(manifest.relative_path, manifest_path.stat().st_size, manifest.digest)
+    for result in manifest.results:
+        result_path = archive_path(root, result.relative_path)
+        add(result.relative_path, result_path.stat().st_size, result.digest)
+        for _, relative, size, digest in result.toolchains:
+            add(relative, size, digest)
+        log_path, log_size, log_digest = result.log
+        add(log_path, log_size, log_digest)
+        for _, relative, size, digest in result.artifacts:
+            add(relative, size, digest)
+        if result.queue_path != "-":
+            queue_path = archive_path(root, result.queue_path)
+            add(result.queue_path, queue_path.stat().st_size, result.queue_digest)
+    for authorization in manifest.authorizations:
+        authorization_path = archive_path(root, authorization.relative_path)
+        add(
+            authorization.relative_path,
+            authorization_path.stat().st_size,
+            authorization.digest,
+        )
+    if len(files) > MAX_ARCHIVE_ENTRIES:
+        fail("promotion archive closure has too many files")
+    return PromotionArchiveClosure(
+        manifest.evidence_set,
+        manifest.relative_path,
+        manifest.digest,
+        tuple(sorted(files.values(), key=lambda value: value.path)),
+    )
+
+
+def promotion_archive_closure_bytes(closure: PromotionArchiveClosure) -> bytes:
+    lines = [
+        "promotion_archive_closure_schema_version\t1",
+        f"evidence_set_sha256\t{closure.evidence_set}",
+        f"manifest_path\t{closure.manifest_path}",
+        f"manifest_sha256\t{closure.manifest_digest}",
+        f"file_count\t{len(closure.files)}",
+    ]
+    for index, binding in enumerate(closure.files):
+        lines.append(
+            f"file\t{index:04d}\t{binding.path}\t{binding.size}\t{binding.digest}"
+        )
+    return ("\n".join(lines) + "\n").encode("ascii")
+
+
+def parse_promotion_archive_closure(path: Path) -> PromotionArchiveClosure:
+    _, _, rows = read_raw(path)
+    cursor = Cursor(rows, "promotion archive closure")
+    if cursor.scalar("promotion_archive_closure_schema_version") != "1":
+        fail("promotion archive closure schema must be 1")
+    evidence_set = cursor.scalar("evidence_set_sha256")
+    manifest_path = cursor.scalar("manifest_path")
+    manifest_digest = cursor.scalar("manifest_sha256")
+    count_text = cursor.scalar("file_count")
+    if (
+        not SHA256_RE.fullmatch(evidence_set)
+        or not valid_relative(manifest_path)
+        or not SHA256_RE.fullmatch(manifest_digest)
+        or not re.fullmatch(r"[1-9][0-9]*", count_text)
+        or int(count_text) > MAX_ARCHIVE_ENTRIES
+    ):
+        fail("promotion archive closure identity is malformed")
+    files: list[ArchiveClosureFile] = []
+    previous = ""
+    for index in range(int(count_text)):
+        item = cursor.record("file", 5, index)
+        relative, size_text, digest = item[2:]
+        if (
+            not valid_relative(relative)
+            or relative <= previous
+            or not re.fullmatch(r"0|[1-9][0-9]*", size_text)
+            or not SHA256_RE.fullmatch(digest)
+        ):
+            fail(f"malformed promotion archive closure file {index:04d}")
+        files.append(ArchiveClosureFile(relative, int(size_text), digest))
+        previous = relative
+    cursor.done()
+    by_path = {value.path: value for value in files}
+    manifest = by_path.get(manifest_path)
+    if manifest is None or manifest.digest != manifest_digest:
+        fail("promotion archive closure does not bind its manifest")
+    return PromotionArchiveClosure(
+        evidence_set, manifest_path, manifest_digest, tuple(files)
+    )
+
+
+@dataclass
+class ArchiveTree:
+    directories: set[str]
+    files: dict[str, ArchiveClosureFile]
+
+
+def scan_archive_tree(root: Path, label: str, *, required: bool) -> ArchiveTree:
+    if not root.exists() and not root.is_symlink():
+        if required:
+            fail(f"{label} is missing")
+        return ArchiveTree(set(), {})
+    try:
+        info = root.lstat()
+    except OSError as error:
+        fail(f"cannot inspect {label}: {error}")
+    if not stat.S_ISDIR(info.st_mode) or root.is_symlink():
+        fail(f"{label} must be a real directory")
+    resolved_root = root.resolve(strict=True)
+    directories: set[str] = set()
+    files: dict[str, ArchiveClosureFile] = {}
+    for current, dirnames, filenames in os.walk(resolved_root, followlinks=False):
+        dirnames.sort()
+        filenames.sort()
+        current_path = Path(current)
+        for name in dirnames:
+            path = current_path.joinpath(name)
+            relative = path.relative_to(resolved_root).as_posix()
+            entry = path.lstat()
+            if (
+                not valid_relative(relative)
+                or not stat.S_ISDIR(entry.st_mode)
+                or path.is_symlink()
+            ):
+                fail(f"{label} contains a non-directory namespace: {relative}")
+            directories.add(relative)
+        for name in filenames:
+            path = current_path.joinpath(name)
+            relative = path.relative_to(resolved_root).as_posix()
+            entry = path.lstat()
+            if (
+                not valid_relative(relative)
+                or not stat.S_ISREG(entry.st_mode)
+                or path.is_symlink()
+            ):
+                fail(f"{label} contains a non-regular file: {relative}")
+            files[relative] = ArchiveClosureFile(
+                relative, entry.st_size, sha256_file(path)
+            )
+        if len(directories) + len(files) > MAX_ARCHIVE_ENTRIES:
+            fail(f"{label} has too many entries")
+    return ArchiveTree(directories, files)
+
+
+def require_immutable_archive_history(
+    protected: ArchiveTree, candidate: ArchiveTree
+) -> None:
+    for relative in protected.directories:
+        if relative not in candidate.directories:
+            fail(f"candidate removed protected evidence namespace: {relative}")
+    for relative, binding in protected.files.items():
+        if candidate.files.get(relative) != binding:
+            fail(f"candidate mutated protected evidence file: {relative}")
+
+
+def derive_promotion_manifest(args: argparse.Namespace) -> None:
+    protected = scan_archive_tree(
+        args.protected_archive, "protected evidence archive", required=False
+    )
+    candidate = scan_archive_tree(
+        args.candidate_archive, "candidate evidence archive", required=True
+    )
+    require_immutable_archive_history(protected, candidate)
+    new_manifests = sorted(
+        relative
+        for relative in set(candidate.files) - set(protected.files)
+        if relative.startswith("manifests/")
+    )
+    if len(new_manifests) != 1:
+        fail(
+            "promotion requires exactly one newly appended manifest: "
+            f"found {len(new_manifests)}"
+        )
+    relative = new_manifests[0]
+    match = PROMOTION_MANIFEST_RE.fullmatch(relative)
+    if match is None:
+        fail(f"new promotion manifest path is not content-addressed: {relative}")
+    if candidate.files[relative].digest != match.group(1):
+        fail(f"new promotion manifest digest does not match its path: {relative}")
+    print(relative)
+
+
+def verify_promotion_archive(args: argparse.Namespace) -> None:
+    transaction = parse_promotion_projection(
+        args.transaction, "promotion transaction projection"
+    )
+    if not transaction:
+        fail("promotion transaction projection is empty")
+    closure = parse_promotion_archive_closure(args.closure)
+    evidence_sets = {value.evidence_set for value in transaction}
+    if evidence_sets != {closure.evidence_set}:
+        fail("promotion archive closure does not bind the transaction evidence set")
+    closure_by_path = {value.path: value for value in closure.files}
+    for row in transaction:
+        for result in row.results:
+            if result not in closure_by_path:
+                fail(f"promotion archive closure omits transaction result: {result}")
+
+    protected = scan_archive_tree(
+        args.protected_archive, "protected evidence archive", required=False
+    )
+    candidate = scan_archive_tree(
+        args.candidate_archive, "candidate evidence archive", required=True
+    )
+    require_immutable_archive_history(protected, candidate)
+    manifest_match = PROMOTION_MANIFEST_RE.fullmatch(closure.manifest_path)
+    if (
+        manifest_match is None
+        or manifest_match.group(1) != closure.manifest_digest
+    ):
+        fail("promotion archive closure manifest is not content-addressed")
+    if closure.manifest_path in protected.files:
+        fail("promotion archive closure replays a protected manifest")
+
+    for relative, binding in closure_by_path.items():
+        if candidate.files.get(relative) != binding:
+            fail(f"candidate evidence file violates signed closure: {relative}")
+    protected_files = set(protected.files)
+    expected_new_files = set(closure_by_path) - protected_files
+    actual_new_files = set(candidate.files) - protected_files
+    extra_files = actual_new_files - expected_new_files
+    if extra_files:
+        fail(f"candidate evidence archive has unreferenced file: {min(extra_files)}")
+    missing_files = expected_new_files - actual_new_files
+    if missing_files:
+        fail(f"candidate evidence archive is missing signed file: {min(missing_files)}")
+
+    required_new_directories: set[str] = set()
+    for relative in expected_new_files:
+        parent = Path(relative).parent
+        while parent != Path("."):
+            value = parent.as_posix()
+            if value not in protected.directories:
+                required_new_directories.add(value)
+            parent = parent.parent
+    actual_new_directories = candidate.directories - protected.directories
+    extra_directories = actual_new_directories - required_new_directories
+    if extra_directories:
+        fail(
+            "candidate evidence archive has unreferenced namespace: "
+            f"{min(extra_directories)}"
+        )
+    missing_directories = required_new_directories - actual_new_directories
+    if missing_directories:
+        fail(f"candidate evidence archive is missing namespace: {min(missing_directories)}")
+    print(
+        "promotion archive closure is exact: "
+        f"{len(expected_new_files)} new file(s)"
+    )
+
+
+def write_new_file(path: Path, payload: bytes, label: str) -> None:
+    if path.exists() or path.is_symlink():
+        fail(f"{label} output already exists")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "wb") as stream:
+        stream.write(payload)
+
+
+def merge_promotion_projections(args: argparse.Namespace) -> None:
+    baseline = parse_promotion_projection(args.baseline, "baseline promotion projection")
+    transaction = parse_promotion_projection(
+        args.transaction, "promotion transaction projection"
+    )
+    if not transaction:
+        fail("promotion transaction projection is empty")
+    merged = {value.row: value for value in baseline}
+    for value in transaction:
+        previous = merged.get(value.row)
+        if previous is not None and previous.to_status != value.from_status:
+            fail(f"promotion projection history mismatch for row {value.row}")
+        merged[value.row] = value
+    write_new_file(
+        args.output,
+        promotion_projection_bytes(merged.values()),
+        "merged promotion projection",
+    )
+    print(f"merged signed promotion projection: {len(merged)} row(s)")
 
 
 def parse_status(path: Path, label: str) -> tuple[str, dict[str, str]]:
@@ -1381,6 +1806,53 @@ def gate(args: argparse.Namespace) -> None:
         fail("manifest contains evidence unused by a promotion")
     if set(authorization_by_row) != complete_rows:
         fail("manifest review authorization set is not exact")
+    if args.projection_output is None and args.archive_closure_output is not None:
+        fail("promotion archive closure output requires a projection output")
+    if args.projection_output is not None:
+        projected_rows: list[PromotionProjectionRow] = []
+        for row in sorted(changed_rows, key=row_rank):
+            records = by_row[row]
+            projected_rows.append(
+                PromotionProjectionRow(
+                    row,
+                    baseline_status[row],
+                    candidate_status[row],
+                    manifest.source,
+                    manifest.target,
+                    manifest.lane,
+                    tuple(record.evidence_class for record in records),
+                    tuple(
+                        sorted(
+                            {
+                                toolchain[0]
+                                for record in records
+                                for toolchain in record.toolchains
+                            }
+                        )
+                    ),
+                    tuple(record.relative_path for record in records),
+                    manifest.evidence_set,
+                )
+            )
+        if args.projection_output.exists() or args.projection_output.is_symlink():
+            fail("promotion transaction projection output already exists")
+        if args.archive_closure_output is not None and (
+            args.archive_closure_output.exists() or args.archive_closure_output.is_symlink()
+        ):
+            fail("promotion archive closure output already exists")
+        write_new_file(
+            args.projection_output,
+            promotion_projection_bytes(projected_rows),
+            "promotion transaction projection",
+        )
+        if args.archive_closure_output is not None:
+            write_new_file(
+                args.archive_closure_output,
+                promotion_archive_closure_bytes(
+                    build_promotion_archive_closure(root, manifest)
+                ),
+                "promotion archive closure",
+            )
     print(f"signed parity evidence gate passed: {promotions} promotion(s)")
 
 
@@ -1648,6 +2120,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     manifest = subparsers.add_parser("validate-manifest")
     common_trust(manifest)
+    manifest.add_argument("--archive-closure-output", type=Path)
     manifest.add_argument("manifest")
 
     shard = subparsers.add_parser("validate-shard")
@@ -1662,7 +2135,24 @@ def build_parser() -> argparse.ArgumentParser:
     gate_parser.add_argument("--candidate-policy", type=Path, required=True)
     gate_parser.add_argument("--baseline-status", type=Path, required=True)
     gate_parser.add_argument("--candidate-status", type=Path, required=True)
+    gate_parser.add_argument("--projection-output", type=Path)
+    gate_parser.add_argument("--archive-closure-output", type=Path)
     gate_parser.add_argument("--allow-test-fixtures", action="store_true")
+
+    projection_merge = subparsers.add_parser("merge-projections")
+    projection_merge.add_argument("--baseline", type=Path, required=True)
+    projection_merge.add_argument("--transaction", type=Path, required=True)
+    projection_merge.add_argument("--output", type=Path, required=True)
+
+    archive_verify = subparsers.add_parser("verify-promotion-archive")
+    archive_verify.add_argument("--protected-archive", type=Path, required=True)
+    archive_verify.add_argument("--candidate-archive", type=Path, required=True)
+    archive_verify.add_argument("--transaction", type=Path, required=True)
+    archive_verify.add_argument("--closure", type=Path, required=True)
+
+    manifest_derive = subparsers.add_parser("derive-promotion-manifest")
+    manifest_derive.add_argument("--protected-archive", type=Path, required=True)
+    manifest_derive.add_argument("--candidate-archive", type=Path, required=True)
 
     queue_run = subparsers.add_parser("queue-run")
     common_trust(queue_run)
@@ -1715,6 +2205,16 @@ def main() -> None:
             args.manifest,
             trust,
         )
+        if args.archive_closure_output is not None:
+            write_new_file(
+                args.archive_closure_output,
+                promotion_archive_closure_bytes(
+                    build_promotion_archive_closure(
+                        args.archive_root.resolve(strict=True), manifest
+                    )
+                ),
+                "promotion archive closure",
+            )
         print(f"signed promotion manifest is valid: {len(manifest.results)} result(s)")
     elif args.command == "validate-shard":
         trust = parse_trust_policy(args.trusted_root, args.trust_policy)
@@ -1735,6 +2235,12 @@ def main() -> None:
         print(f"signed evidence shard is valid: {len(actual)} row(s)")
     elif args.command == "gate":
         gate(args)
+    elif args.command == "merge-projections":
+        merge_promotion_projections(args)
+    elif args.command == "verify-promotion-archive":
+        verify_promotion_archive(args)
+    elif args.command == "derive-promotion-manifest":
+        derive_promotion_manifest(args)
     elif args.command == "queue-run":
         run_queue(args)
     else:
