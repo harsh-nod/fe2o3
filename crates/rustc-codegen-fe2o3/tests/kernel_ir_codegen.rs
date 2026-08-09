@@ -43,6 +43,10 @@ fn sha256_hex(bytes: &[u8]) -> String {
         .collect()
 }
 
+fn bytes_hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
 fn backend(workspace: &Path, command: &str, package: &str, pipeline: Option<&str>) -> Output {
     backend_with_worker_config(workspace, command, package, pipeline, None)
 }
@@ -1207,10 +1211,10 @@ fn worker_v2_s09_alpha_o0_preserves_source_dwarf_in_hsaco() {
         observation.cargo_fe2o3_executable_sha256(),
         observation.cargo_executable_sha256(),
     ] {
+        let digest = bytes_hex(digest);
         assert!(
-            stderr.contains(&sha256_hex(digest)),
-            "S09 build diagnostics omitted decoded identity {}:\n{stderr}",
-            sha256_hex(digest)
+            stderr.contains(&digest),
+            "S09 build diagnostics omitted decoded identity {digest}:\n{stderr}"
         );
     }
     let hsaco = export_s09_debug_hsaco(&bytes)
