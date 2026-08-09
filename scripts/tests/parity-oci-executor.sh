@@ -100,6 +100,42 @@ PY
     "${QUEUE_AUTH_ROOT}/${REQUEST_ID}.source.tsv"
 }
 
+install_commit_object() {
+  local payload="$1"
+  python3 - "${SOURCE_REPO}/.git/objects" "${payload}" <<'PY'
+import hashlib
+from pathlib import Path
+import sys
+import zlib
+
+objects = Path(sys.argv[1])
+payload = Path(sys.argv[2]).read_bytes()
+expanded = f"commit {len(payload)}\0".encode("ascii") + payload
+object_id = hashlib.sha1(expanded).hexdigest()
+fanout = objects / object_id[:2]
+fanout.mkdir(mode=0o755, exist_ok=True)
+path = fanout / object_id[2:]
+path.write_bytes(zlib.compress(expanded))
+path.chmod(0o444)
+print(object_id)
+PY
+}
+
+write_request_for_commit() {
+  local commit="$1"
+  cat >"${REQUEST}" <<EOF
+oci_execution_request_schema_version	1
+request_id	${REQUEST_ID}
+profile_id	mi300x-test-v1
+source_commit	${commit}
+source_tree	${source_tree}
+job_id	row-04-hardware
+job_path	scripts/evidence/jobs/row-04.sh
+job_sha256	${job_digest}
+EOF
+  write_source_authorization "${commit}" "${source_tree}"
+}
+
 expect_failure() {
   local name="$1"
   local expected="$2"
@@ -135,7 +171,7 @@ write_profile() {
   local layer_digest="$5"
   local layer_size="$6"
   cat >"${PROFILE}" <<EOF
-oci_executor_profile_schema_version	2
+oci_executor_profile_schema_version	3
 profile_id	mi300x-test-v1
 execution_mode	test
 target	gfx942
@@ -150,6 +186,8 @@ git_object_format	sha1-loose
 git_object_limit	4096
 git_object_bytes_limit	33554432
 git_tree_depth_limit	64
+git_ancestry_limit	4096
+git_commit_depth_limit	64
 source_staging_root	${SOURCE_STAGING}
 output_staging_root	${OUTPUT_STAGING}
 artifact_stream_protocol	fe2o3-artifact-stream-v1
@@ -394,6 +432,176 @@ if find "${SOURCE_STAGING}" "${OUTPUT_STAGING}" -mindepth 1 -print -quit | grep 
 fi
 git -C "${SOURCE_REPO}" -c core.fsmonitor=false checkout -q -- \
   scripts/evidence/jobs/row-04.sh
+
+mv "${QUEUE_AUTH_ROOT}/${REQUEST_ID}.source.tsv" \
+  "${TEST_ROOT}/source-manifest.missing"
+expect_failure missing_source_manifest 'cannot open fixed authorized source manifest' verify
+mv "${TEST_ROOT}/source-manifest.missing" \
+  "${QUEUE_AUTH_ROOT}/${REQUEST_ID}.source.tsv"
+
+cp "${QUEUE_AUTH_ROOT}/${REQUEST_ID}.source.tsv" \
+  "${TEST_ROOT}/source-manifest.good"
+printf '# candidate manifest mutation\n' \
+  >>"${QUEUE_AUTH_ROOT}/${REQUEST_ID}.source.tsv"
+expect_failure mutated_source_manifest \
+  'authorized source manifest differs from queue authorization' verify
+cp "${TEST_ROOT}/source-manifest.good" \
+  "${QUEUE_AUTH_ROOT}/${REQUEST_ID}.source.tsv"
+
+PYTHONDONTWRITEBYTECODE=1 python3 - \
+  "${EXECUTOR}" "${REQUEST}" "${TEST_ROOT}/expected-readme" \
+  "${TEST_ROOT}/expected-job" <<'PY'
+import hashlib
+import importlib.util
+from pathlib import Path
+import sys
+
+module_path, request_path, readme_path, job_path = sys.argv[1:]
+spec = importlib.util.spec_from_file_location("source_manifest_collision_test", module_path)
+assert spec is not None and spec.loader is not None
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+
+request = module.parse_request(Path(request_path).read_bytes())
+readme = Path(readme_path).read_bytes()
+job = Path(job_path).read_bytes()
+expected = (
+    module.SourceManifestEntry(
+        "README.fixture", "100644", len(readme), hashlib.sha256(readme).hexdigest()
+    ),
+    module.SourceManifestEntry(
+        "scripts/evidence/jobs/row-04.sh",
+        "100755",
+        len(job),
+        hashlib.sha256(job).hexdigest(),
+    ),
+)
+manifest, root = module.canonical_source_manifest(
+    request.source_commit, request.source_tree, expected
+)
+authorization = module.SourceAuthorization(
+    len(manifest), hashlib.sha256(manifest).hexdigest(), root, manifest, expected
+)
+same_expected_sha1 = "4" * 40
+accepted = [
+    ("README.fixture", "100644", same_expected_sha1, readme),
+    ("scripts/evidence/jobs/row-04.sh", "100755", "5" * 40, job),
+]
+module.verify_exported_source(request, authorization, accepted)
+accepted[0] = (
+    "README.fixture",
+    "100644",
+    same_expected_sha1,
+    b"changed bytes with the same simulated SHA-1 object path\n",
+)
+try:
+    module.verify_exported_source(request, authorization, accepted)
+except module.ExecutorError as error:
+    assert "authorized SHA-256 manifest or root" in str(error)
+else:
+    raise AssertionError("same-SHA1-path changed bytes bypassed source SHA-256 authorization")
+PY
+
+original_source_commit="${source_commit}"
+cat >"${TEST_ROOT}/missing-parent.commit" <<EOF
+tree ${source_tree}
+parent ffffffffffffffffffffffffffffffffffffffff
+author test <test@example.invalid> 1 +0000
+committer test <test@example.invalid> 1 +0000
+
+missing parent fixture
+EOF
+missing_parent_commit="$(install_commit_object "${TEST_ROOT}/missing-parent.commit")"
+write_request_for_commit "${missing_parent_commit}"
+expect_failure missing_parent_object 'cannot open Git object fanout ff' plan
+
+cat >"${TEST_ROOT}/malformed-parent.commit" <<EOF
+tree ${source_tree}
+parent FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF
+author test <test@example.invalid> 1 +0000
+committer test <test@example.invalid> 1 +0000
+
+malformed parent fixture
+EOF
+malformed_parent_commit="$(install_commit_object "${TEST_ROOT}/malformed-parent.commit")"
+write_request_for_commit "${malformed_parent_commit}"
+expect_failure malformed_parent_id 'Git commit parent ID is malformed' plan
+
+cat >"${TEST_ROOT}/duplicate-parent.commit" <<EOF
+tree ${source_tree}
+parent ${original_source_commit}
+parent ${original_source_commit}
+author test <test@example.invalid> 1 +0000
+committer test <test@example.invalid> 1 +0000
+
+duplicate parent fixture
+EOF
+duplicate_parent_commit="$(install_commit_object "${TEST_ROOT}/duplicate-parent.commit")"
+write_request_for_commit "${duplicate_parent_commit}"
+expect_failure duplicate_parent 'Git commit contains a duplicate parent' plan
+
+cat >"${TEST_ROOT}/malformed-continuation.commit" <<EOF
+tree ${source_tree}
+author test <test@example.invalid> 1 +0000
+committer test <test@example.invalid> 1 +0000
+ orphaned continuation
+
+malformed continuation fixture
+EOF
+malformed_continuation_commit="$(
+  install_commit_object "${TEST_ROOT}/malformed-continuation.commit"
+)"
+write_request_for_commit "${malformed_continuation_commit}"
+expect_failure malformed_commit_continuation \
+  'Git commit contains a malformed header continuation' plan
+
+cat >"${TEST_ROOT}/invalid-ancestor.commit" <<EOF
+tree ${source_tree}
+author test <test@example.invalid> 1 +0000
+
+missing committer fixture
+EOF
+invalid_ancestor_commit="$(install_commit_object "${TEST_ROOT}/invalid-ancestor.commit")"
+cat >"${TEST_ROOT}/child-of-invalid.commit" <<EOF
+tree ${source_tree}
+parent ${invalid_ancestor_commit}
+author test <test@example.invalid> 1 +0000
+committer test <test@example.invalid> 1 +0000
+
+child fixture
+EOF
+child_of_invalid_commit="$(install_commit_object "${TEST_ROOT}/child-of-invalid.commit")"
+write_request_for_commit "${child_of_invalid_commit}"
+expect_failure malformed_parent_commit \
+  'Git commit committer header is missing or out of order' plan
+
+cat >"${TEST_ROOT}/deep-ancestry.commit" <<EOF
+tree ${source_tree}
+parent ${original_source_commit}
+author test <test@example.invalid> 1 +0000
+committer test <test@example.invalid> 1 +0000
+
+deep ancestry fixture
+EOF
+deep_ancestry_commit="$(install_commit_object "${TEST_ROOT}/deep-ancestry.commit")"
+write_request_for_commit "${deep_ancestry_commit}"
+cp "${PROFILE}" "${TEST_ROOT}/profile.ancestry.good"
+sed -i 's/git_commit_depth_limit	64/git_commit_depth_limit	1/' "${PROFILE}"
+write_policy
+expect_failure git_commit_depth \
+  'Git commit ancestry depth exceeds protected limit' plan
+cp "${TEST_ROOT}/profile.ancestry.good" "${PROFILE}"
+write_policy
+
+sed -i 's/git_ancestry_limit	4096/git_ancestry_limit	1/' "${PROFILE}"
+write_policy
+expect_failure git_ancestry_count \
+  'Git commit ancestry count exceeds protected limit' plan
+cp "${TEST_ROOT}/profile.ancestry.good" "${PROFILE}"
+write_policy
+write_request_for_commit "${original_source_commit}"
+plan >/dev/null
 
 job_object_id="$(git -C "${SOURCE_REPO}" rev-parse \
   'HEAD:scripts/evidence/jobs/row-04.sh')"
