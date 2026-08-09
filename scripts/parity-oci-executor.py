@@ -14,14 +14,26 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
+import signal
 import stat
 import subprocess
 import sys
+import tempfile
+import threading
+import time
 from dataclasses import dataclass
+from typing import BinaryIO
 
 
-MAX_FILE_BYTES = 16 * 1024 * 1024
+MAX_FILE_BYTES = 1024 * 1024
 MAX_ITEMS = 256
+MAX_JSON_DEPTH = 32
+MAX_JSON_NODES = 65536
+MAX_JSON_STRING_BYTES = 1024 * 1024
+MAX_OCI_METADATA_BYTES = 4 * 1024 * 1024
+MAX_OCI_LAYER_BYTES = 64 * 1024**3
+MAX_OCI_IMAGE_BYTES = 256 * 1024**3
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 ID_RE = re.compile(r"^[a-z][a-z0-9._-]{0,63}$")
@@ -58,6 +70,127 @@ def sha256_file(path: Path) -> str:
     except OSError as error:
         fail(f"cannot hash {path}: {error}")
     return digest.hexdigest()
+
+
+@dataclass(frozen=True)
+class ProcessOutput:
+    stdout: bytes
+    stderr: bytes
+    returncode: int
+
+
+def run_bounded(
+    arguments: list[str],
+    *,
+    label: str,
+    environment: dict[str, str],
+    timeout_seconds: int,
+    stdout_limit: int,
+    stderr_limit: int,
+    input_data: bytes | None = None,
+) -> ProcessOutput:
+    if not arguments or timeout_seconds < 1 or stdout_limit < 0 or stderr_limit < 0:
+        fail(f"invalid bounded subprocess contract for {label}")
+    if input_data is not None and len(input_data) > MAX_FILE_BYTES:
+        fail(f"bounded subprocess input exceeds limit for {label}")
+    try:
+        process = subprocess.Popen(
+            arguments,
+            stdin=subprocess.PIPE if input_data is not None else subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=environment,
+            close_fds=True,
+            start_new_session=True,
+        )
+    except OSError as error:
+        fail(f"cannot start {label}: {error}")
+    assert process.stdout is not None
+    assert process.stderr is not None
+    buffers = {"stdout": bytearray(), "stderr": bytearray()}
+    overflow: list[str] = []
+    lock = threading.Lock()
+
+    def read_stream(name: str, stream: BinaryIO, limit: int) -> None:
+        while True:
+            chunk = stream.read(65536)
+            if not chunk:
+                return
+            with lock:
+                if len(buffers[name]) + len(chunk) > limit:
+                    overflow.append(name)
+                    return
+                buffers[name].extend(chunk)
+
+    readers = [
+        threading.Thread(
+            target=read_stream,
+            args=("stdout", process.stdout, stdout_limit),
+            daemon=True,
+        ),
+        threading.Thread(
+            target=read_stream,
+            args=("stderr", process.stderr, stderr_limit),
+            daemon=True,
+        ),
+    ]
+    for reader in readers:
+        reader.start()
+
+    writer: threading.Thread | None = None
+    if input_data is not None:
+        assert process.stdin is not None
+
+        def write_input() -> None:
+            try:
+                process.stdin.write(input_data)
+                process.stdin.close()
+            except (BrokenPipeError, OSError):
+                pass
+
+        writer = threading.Thread(target=write_input, daemon=True)
+        writer.start()
+
+    deadline = time.monotonic() + timeout_seconds
+    timed_out = False
+    while process.poll() is None:
+        if overflow or time.monotonic() >= deadline:
+            timed_out = not overflow
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            break
+        time.sleep(0.01)
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait()
+    for reader in readers:
+        reader.join(timeout=5)
+    if writer is not None:
+        writer.join(timeout=5)
+    if any(reader.is_alive() for reader in readers) or (writer and writer.is_alive()):
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        for reader in readers:
+            reader.join(timeout=1)
+        if writer is not None:
+            writer.join(timeout=1)
+        fail(f"bounded subprocess pipe did not close for {label}")
+    if overflow:
+        fail(f"{label} {overflow[0]} exceeds protected limit")
+    if timed_out:
+        fail(f"{label} exceeded protected timeout")
+    return ProcessOutput(
+        bytes(buffers["stdout"]), bytes(buffers["stderr"]), process.returncode
+    )
 
 
 def valid_relative(value: str) -> bool:
@@ -172,6 +305,48 @@ def verify_regular(path: Path, size: str, digest: str, label: str) -> None:
         fail(f"{label} binding mismatch")
 
 
+def verify_operator_owned(
+    path: Path,
+    profile: Profile,
+    label: str,
+    *,
+    directory: bool,
+    allow_root: bool = False,
+) -> None:
+    try:
+        info = path.lstat()
+    except OSError:
+        fail(f"operator {label} is missing")
+    expected_kind = (
+        stat.S_ISDIR(info.st_mode) if directory else stat.S_ISREG(info.st_mode)
+    )
+    if (
+        path.is_symlink()
+        or not expected_kind
+        or (info.st_uid, info.st_gid) != (profile.operator_uid, profile.operator_gid)
+        and not (allow_root and (info.st_uid, info.st_gid) == (0, 0))
+        or info.st_mode & 0o022
+    ):
+        fail(
+            f"operator {label} ownership or mode is unsafe "
+            f"(uid={info.st_uid}, gid={info.st_gid}, mode={stat.S_IMODE(info.st_mode):04o}, "
+            f"expected={profile.operator_uid}:{profile.operator_gid})"
+        )
+    if profile.mode == "production":
+        current = path.parent
+        while current != current.parent:
+            parent_info = current.lstat()
+            if (
+                current.is_symlink()
+                or not stat.S_ISDIR(parent_info.st_mode)
+                or parent_info.st_uid != 0
+                or parent_info.st_gid != 0
+                or parent_info.st_mode & 0o022
+            ):
+                fail(f"operator {label} has a writable or unowned parent")
+            current = current.parent
+
+
 @dataclass(frozen=True)
 class PolicyEntry:
     profile_id: str
@@ -206,6 +381,7 @@ def parse_policy(root: Path, relative: str) -> Policy:
             or profile_id <= previous
             or not valid_relative(profile_path)
             or not size.isdigit()
+            or not 1 <= int(size) <= MAX_FILE_BYTES
             or not SHA256_RE.fullmatch(digest)
         ):
             fail("invalid or unsorted protected executor profile")
@@ -242,8 +418,23 @@ class Profile:
     runtime_digest: str
     runtime_version_digest: str
     runtime_info_digest: str
+    git_path: str
+    git_size: int
+    git_digest: str
+    git_version_digest: str
+    git_objects_path: str
+    source_staging_root: str
+    output_staging_root: str
+    artifact_stream_protocol: str
+    source_file_limit: int
+    source_byte_limit: int
+    source_index_limit: int
+    source_export_timeout: int
+    operator_uid: int
+    operator_gid: int
     layout_path: str
     index_digest: str
+    index_size: int
     image_reference: str
     manifest: Layer
     config: Layer
@@ -311,7 +502,14 @@ def parse_environment(cursor: Cursor) -> tuple[tuple[str, str], ...]:
         result.append((name, value))
         previous = name
     values = dict(result)
-    required = {"HOME", "HOSTNAME", "LC_ALL", "PATH", "ROCR_VISIBLE_DEVICES"}
+    required = {
+        "HIP_VISIBLE_DEVICES",
+        "HOME",
+        "HOSTNAME",
+        "LC_ALL",
+        "PATH",
+        "ROCR_VISIBLE_DEVICES",
+    }
     if not required <= values.keys() or values["HOSTNAME"] != "fe2o3-evidence":
         fail("profile environment lacks the clean GPU baseline")
     return tuple(result)
@@ -347,8 +545,23 @@ def load_profile(root: Path, policy: Policy, profile_id: str) -> Profile:
     runtime_digest = cursor.scalar("runtime_sha256")
     runtime_version_digest = cursor.scalar("runtime_version_sha256")
     runtime_info_digest = cursor.scalar("runtime_info_sha256")
+    git_path = cursor.scalar("git_path")
+    git_size = cursor.scalar("git_size")
+    git_digest = cursor.scalar("git_sha256")
+    git_version_digest = cursor.scalar("git_version_sha256")
+    git_objects_path = cursor.scalar("git_objects_path")
+    source_staging_root = cursor.scalar("source_staging_root")
+    output_staging_root = cursor.scalar("output_staging_root")
+    artifact_stream_protocol = cursor.scalar("artifact_stream_protocol")
+    source_file_limit = cursor.scalar("source_file_limit")
+    source_byte_limit = cursor.scalar("source_byte_limit")
+    source_index_limit = cursor.scalar("source_index_limit")
+    source_export_timeout = cursor.scalar("source_export_timeout_seconds")
+    operator_uid = cursor.scalar("operator_uid")
+    operator_gid = cursor.scalar("operator_gid")
     layout_path = cursor.scalar("oci_layout_path")
     index_digest = cursor.scalar("oci_index_sha256")
+    index_size = cursor.scalar("oci_index_size")
     image_reference = cursor.scalar("image_reference")
     manifest_digest = cursor.scalar("image_manifest_digest")
     manifest_size = cursor.scalar("image_manifest_size")
@@ -364,12 +577,43 @@ def load_profile(root: Path, policy: Policy, profile_id: str) -> Profile:
         fail("executor profile host paths must be canonical absolute paths")
     if (
         not runtime_size.isdigit()
+        or not 1 <= int(runtime_size) <= 1024**3
         or not SHA256_RE.fullmatch(runtime_digest)
         or not SHA256_RE.fullmatch(runtime_version_digest)
         or not SHA256_RE.fullmatch(runtime_info_digest)
     ):
         fail("malformed runtime binding")
-    if not SHA256_RE.fullmatch(index_digest):
+    if (
+        not valid_absolute(git_path)
+        or not git_size.isdigit()
+        or not 1 <= int(git_size) <= 1024**3
+        or not SHA256_RE.fullmatch(git_digest)
+        or not SHA256_RE.fullmatch(git_version_digest)
+        or not valid_absolute(git_objects_path)
+        or not valid_absolute(source_staging_root)
+        or not valid_absolute(output_staging_root)
+        or artifact_stream_protocol != "fe2o3-artifact-stream-v1"
+        or not source_file_limit.isdigit()
+        or not 1 <= int(source_file_limit) <= 16384
+        or not source_byte_limit.isdigit()
+        or not 1 <= int(source_byte_limit) <= 512 * 1024**2
+        or not source_index_limit.isdigit()
+        or not 1 <= int(source_index_limit) <= 64 * 1024**2
+        or not source_export_timeout.isdigit()
+        or not 1 <= int(source_export_timeout) <= 900
+        or not operator_uid.isdigit()
+        or not operator_gid.isdigit()
+        or not 0 <= int(operator_uid) <= 2**31 - 1
+        or not 0 <= int(operator_gid) <= 2**31 - 1
+    ):
+        fail("malformed immutable source export contract")
+    if mode == "production" and (operator_uid != "0" or operator_gid != "0"):
+        fail("production OCI executor paths must be owned by root")
+    if (
+        not SHA256_RE.fullmatch(index_digest)
+        or not index_size.isdigit()
+        or not 1 <= int(index_size) <= MAX_OCI_METADATA_BYTES
+    ):
         fail("malformed OCI index binding")
     manifest_match = OCI_DIGEST_RE.fullmatch(manifest_digest)
     config_match = OCI_DIGEST_RE.fullmatch(config_digest)
@@ -378,17 +622,27 @@ def load_profile(root: Path, policy: Policy, profile_id: str) -> Profile:
         or config_match is None
         or not manifest_size.isdigit()
         or not config_size.isdigit()
+        or not 1 <= int(manifest_size) <= MAX_OCI_METADATA_BYTES
+        or not 1 <= int(config_size) <= MAX_OCI_METADATA_BYTES
         or IMAGE_REFERENCE_RE.fullmatch(image_reference) is None
         or not image_reference.endswith("@" + manifest_digest)
     ):
         fail("malformed OCI image identity")
     layer_count = parse_count(cursor.scalar("image_layer_count"), "image layer")
     layers: list[Layer] = []
+    layer_bytes = 0
     for index in range(layer_count):
         digest, size = cursor.record("image_layer", 4, index)[2:]
-        if OCI_DIGEST_RE.fullmatch(digest) is None or not size.isdigit():
+        if (
+            OCI_DIGEST_RE.fullmatch(digest) is None
+            or not size.isdigit()
+            or not 1 <= int(size) <= MAX_OCI_LAYER_BYTES
+        ):
             fail("malformed OCI layer binding")
         layers.append(Layer(digest, int(size)))
+        layer_bytes += int(size)
+        if layer_bytes > MAX_OCI_IMAGE_BYTES:
+            fail("OCI image layers exceed protected limit")
     entrypoint = parse_vector(cursor, "entrypoint")
     command = parse_vector(cursor, "command")
     if len(entrypoint) != 1 or not valid_absolute(entrypoint[0]):
@@ -431,6 +685,7 @@ def load_profile(root: Path, policy: Policy, profile_id: str) -> Profile:
     if (
         not valid_relative(seccomp_path)
         or not seccomp_size.isdigit()
+        or not 1 <= int(seccomp_size) <= MAX_FILE_BYTES
         or not SHA256_RE.fullmatch(seccomp_digest)
     ):
         fail("malformed seccomp profile binding")
@@ -445,6 +700,8 @@ def load_profile(root: Path, policy: Policy, profile_id: str) -> Profile:
             and RENDER_RE.fullmatch(device_path) is None
             or not major.isdigit()
             or not minor.isdigit()
+            or int(major) > 2**20
+            or int(minor) > 2**20
             or access != "rwm"
         ):
             fail("invalid or unsorted device policy")
@@ -474,6 +731,12 @@ def load_profile(root: Path, policy: Policy, profile_id: str) -> Profile:
         or not re.fullmatch(r"[0-9a-f]{16,64}", gpu_unique_id)
     ):
         fail("malformed protected host/GPU identity")
+    environment_values = dict(environment)
+    if (
+        environment_values["HIP_VISIBLE_DEVICES"] != gpu_unique_id
+        or environment_values["ROCR_VISIBLE_DEVICES"] != gpu_unique_id
+    ):
+        fail("GPU visibility does not match protected GPU identity")
     cursor.done()
     return Profile(
         actual_id,
@@ -485,8 +748,23 @@ def load_profile(root: Path, policy: Policy, profile_id: str) -> Profile:
         runtime_digest,
         runtime_version_digest,
         runtime_info_digest,
+        git_path,
+        int(git_size),
+        git_digest,
+        git_version_digest,
+        git_objects_path,
+        source_staging_root,
+        output_staging_root,
+        artifact_stream_protocol,
+        int(source_file_limit),
+        int(source_byte_limit),
+        int(source_index_limit),
+        int(source_export_timeout),
+        int(operator_uid),
+        int(operator_gid),
         layout_path,
         index_digest,
+        int(index_size),
         image_reference,
         Layer(manifest_digest, int(manifest_size)),
         Layer(config_digest, int(config_size)),
@@ -556,7 +834,73 @@ def read_json_bound(path: Path, binding: Layer, label: str) -> dict[str, object]
         fail(f"invalid {label} JSON")
     if not isinstance(value, dict):
         fail(f"invalid {label} JSON object")
+    validate_json_shape(value, label)
     return value
+
+
+def read_json_file(
+    path: Path,
+    label: str,
+    *,
+    maximum_bytes: int,
+    expected_size: int | None = None,
+    expected_digest: str | None = None,
+) -> dict[str, object]:
+    try:
+        info = path.lstat()
+        raw = path.read_bytes()
+    except OSError:
+        fail(f"cannot read {label}")
+    if (
+        path.is_symlink()
+        or not stat.S_ISREG(info.st_mode)
+        or info.st_nlink != 1
+        or not 1 <= info.st_size <= maximum_bytes
+        or len(raw) != info.st_size
+        or expected_size is not None
+        and info.st_size != expected_size
+        or expected_digest is not None
+        and sha256_bytes(raw) != expected_digest
+    ):
+        fail(f"{label} binding or size is invalid")
+    try:
+        value = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        fail(f"invalid {label} JSON")
+    if not isinstance(value, dict):
+        fail(f"invalid {label} JSON object")
+    validate_json_shape(value, label)
+    return value
+
+
+def validate_json_shape(value: object, label: str) -> None:
+    nodes = 0
+
+    def visit(item: object, depth: int) -> None:
+        nonlocal nodes
+        nodes += 1
+        if nodes > MAX_JSON_NODES or depth > MAX_JSON_DEPTH:
+            fail(f"{label} JSON exceeds structural limits")
+        if isinstance(item, str):
+            if len(item.encode("utf-8")) > MAX_JSON_STRING_BYTES:
+                fail(f"{label} JSON string exceeds limit")
+        elif isinstance(item, list):
+            if len(item) > MAX_JSON_NODES:
+                fail(f"{label} JSON array exceeds limit")
+            for child in item:
+                visit(child, depth + 1)
+        elif isinstance(item, dict):
+            if len(item) > MAX_JSON_NODES:
+                fail(f"{label} JSON object exceeds limit")
+            for key, child in item.items():
+                if not isinstance(key, str):
+                    fail(f"{label} JSON has a non-string key")
+                visit(key, depth + 1)
+                visit(child, depth + 1)
+        elif item is not None and not isinstance(item, (bool, int, float)):
+            fail(f"{label} JSON contains an unsupported value")
+
+    visit(value, 0)
 
 
 def descriptor(value: object, label: str) -> Layer:
@@ -569,6 +913,7 @@ def descriptor(value: object, label: str) -> Layer:
         or OCI_DIGEST_RE.fullmatch(digest) is None
         or not isinstance(size, int)
         or size < 0
+        or size > MAX_OCI_LAYER_BYTES
     ):
         fail(f"invalid OCI {label} descriptor")
     return Layer(digest, size)
@@ -583,24 +928,25 @@ def verify_oci_image(profile: Profile) -> tuple[str, ...]:
         or layout.resolve(strict=True) != layout
     ):
         fail("OCI layout is unavailable or unsafe")
+    verify_operator_owned(layout, profile, "OCI layout", directory=True)
     layout_marker = require_safe_oci_entry(layout, ("oci-layout",), "OCI layout marker")
     index_path = require_safe_oci_entry(layout, ("index.json",), "OCI index")
     require_safe_oci_entry(layout, ("blobs",), "OCI blob directory", directory=True)
     require_safe_oci_entry(
         layout, ("blobs", "sha256"), "OCI SHA-256 directory", directory=True
     )
-    try:
-        marker = json.loads(layout_marker.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        fail("invalid OCI layout marker")
+    verify_operator_owned(layout_marker, profile, "OCI layout marker", directory=False)
+    verify_operator_owned(index_path, profile, "OCI index", directory=False)
+    marker = read_json_file(layout_marker, "OCI layout marker", maximum_bytes=1024)
     if marker != {"imageLayoutVersion": "1.0.0"}:
         fail("unsupported OCI layout version")
-    if sha256_file(index_path) != profile.index_digest:
-        fail("OCI index binding mismatch")
-    try:
-        index = json.loads(index_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        fail("invalid OCI index JSON")
+    index = read_json_file(
+        index_path,
+        "OCI index",
+        maximum_bytes=MAX_OCI_METADATA_BYTES,
+        expected_size=profile.index_size,
+        expected_digest=profile.index_digest,
+    )
     manifests = index.get("manifests") if isinstance(index, dict) else None
     if not isinstance(manifests, list):
         fail("invalid OCI index manifests")
@@ -612,6 +958,7 @@ def verify_oci_image(profile: Profile) -> tuple[str, ...]:
         ("blobs", "sha256", profile.manifest.digest.removeprefix("sha256:")),
         "OCI manifest",
     )
+    verify_operator_owned(manifest_path, profile, "OCI manifest", directory=False)
     manifest = read_json_bound(manifest_path, profile.manifest, "OCI manifest")
     if descriptor(manifest.get("config"), "config") != profile.config:
         fail("OCI config differs from protected profile")
@@ -626,6 +973,7 @@ def verify_oci_image(profile: Profile) -> tuple[str, ...]:
         ("blobs", "sha256", profile.config.digest.removeprefix("sha256:")),
         "OCI config",
     )
+    verify_operator_owned(config_path, profile, "OCI config", directory=False)
     config = read_json_bound(config_path, profile.config, "OCI config")
     rootfs = config.get("rootfs")
     diff_ids = rootfs.get("diff_ids") if isinstance(rootfs, dict) else None
@@ -653,6 +1001,7 @@ def verify_oci_image(profile: Profile) -> tuple[str, ...]:
             ("blobs", "sha256", layer.digest.removeprefix("sha256:")),
             "OCI layer",
         )
+        verify_operator_owned(layer_path, profile, "OCI layer", directory=False)
         verify_regular(
             layer_path,
             str(layer.size),
@@ -671,6 +1020,8 @@ class Request:
     job_id: str
     job_path: str
     job_digest: str
+    raw: bytes
+    digest: str
 
 
 @dataclass(frozen=True)
@@ -680,21 +1031,19 @@ class AuthorizedRequest:
     policy: Policy
     profile: Profile
     request: Request
-    repo: Path
-    request_path: Path
     seccomp_path: Path
 
 
 @dataclass(frozen=True)
-class RuntimeReadyRequest:
-    """Authorized inputs whose exact host, daemon, and image passed preflight."""
+class ObservedRuntimeRequest:
+    """Authorized inputs whose bounded host/runtime observations matched policy."""
 
     authorized: AuthorizedRequest
     image_diff_ids: tuple[str, ...]
 
 
 def parse_request(path: Path) -> Request:
-    _, rows = read_rows(path, "OCI execution request")
+    raw, rows = read_rows(path, "OCI execution request")
     cursor = Cursor(rows, "OCI execution request")
     if cursor.scalar("oci_execution_request_schema_version") != "1":
         fail("OCI execution request schema must be 1")
@@ -718,72 +1067,531 @@ def parse_request(path: Path) -> Request:
     ):
         fail("malformed OCI execution request")
     return Request(
-        request_id, profile_id, source_commit, source_tree, job_id, job_path, job_digest
+        request_id,
+        profile_id,
+        source_commit,
+        source_tree,
+        job_id,
+        job_path,
+        job_digest,
+        raw,
+        sha256_bytes(raw),
     )
 
 
-def run_git(repo: Path, *arguments: str) -> str:
-    process = subprocess.run(
-        ["git", "-C", str(repo), *arguments],
-        check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
+@dataclass
+class SourceSnapshot:
+    path: Path
+    manifest_path: Path
+    request_path: Path
+    root_fd: int
+    directory_fd: int
+    request_fd: int
+    device: int
+    inode: int
+    request_device: int
+    request_inode: int
+    file_count: int
+    byte_count: int
+    manifest_digest: str
+
+    def close(self) -> None:
+        os.close(self.request_fd)
+        os.close(self.directory_fd)
+        os.close(self.root_fd)
+
+
+@dataclass
+class OutputStage:
+    path: Path
+    artifact_path: Path
+    log_path: Path
+    root_fd: int
+    directory_fd: int
+    artifact_fd: int
+    log_fd: int
+    device: int
+    inode: int
+
+    def close(self) -> None:
+        os.close(self.log_fd)
+        os.close(self.artifact_fd)
+        os.close(self.directory_fd)
+        os.close(self.root_fd)
+
+
+def git_environment(profile: Profile, control: Path) -> dict[str, str]:
+    return {
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_SYSTEM": "/dev/null",
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "GIT_NO_REPLACE_OBJECTS": "1",
+        "GIT_OPTIONAL_LOCKS": "0",
+        "GIT_OBJECT_DIRECTORY": profile.git_objects_path,
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES": "",
+        "GIT_DIR": str(control),
+        "GIT_WORK_TREE": "/nonexistent",
+        "HOME": "/nonexistent",
+        "LC_ALL": "C",
+        "PATH": "/nonexistent",
+        "XDG_CONFIG_HOME": "/nonexistent",
+    }
+
+
+def git_object_command(
+    profile: Profile,
+    control: Path,
+    arguments: list[str],
+    *,
+    label: str,
+    stdout_limit: int,
+    input_data: bytes | None = None,
+) -> bytes:
+    result = run_bounded(
+        [
+            profile.git_path,
+            "-c",
+            "core.fsmonitor=false",
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "protocol.allow=never",
+            *arguments,
+        ],
+        label=label,
+        environment=git_environment(profile, control),
+        timeout_seconds=profile.source_export_timeout,
+        stdout_limit=stdout_limit,
+        stderr_limit=64 * 1024,
+        input_data=input_data,
     )
-    if process.returncode != 0:
-        fail(f"git {' '.join(arguments)} failed")
-    return process.stdout.strip()
+    if result.returncode or result.stderr:
+        fail(f"{label} failed")
+    return result.stdout
 
 
-def verify_source(repo: Path, request: Request, *, require_detached: bool) -> None:
-    try:
-        repo = repo.resolve(strict=True)
-    except OSError as error:
-        fail(f"cannot resolve source checkout: {error}")
-    if run_git(repo, "rev-parse", "HEAD") != request.source_commit:
-        fail("source checkout commit differs from request")
-    if run_git(repo, "rev-parse", "HEAD^{tree}") != request.source_tree:
-        fail("source checkout tree differs from request")
-    if run_git(repo, "status", "--porcelain", "--untracked-files=all"):
-        fail("source checkout is not clean")
-    if require_detached:
-        symbolic_ref = subprocess.run(
-            ["git", "-C", str(repo), "symbolic-ref", "-q", "HEAD"],
-            check=False,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        if symbolic_ref.returncode == 0:
-            fail("source checkout must be detached")
-        if symbolic_ref.returncode != 1:
-            fail("cannot establish detached source checkout")
-    current = repo
-    for index, component in enumerate(request.job_path.split("/")):
-        current /= component
+def parse_tree_index(profile: Profile, raw: bytes) -> list[tuple[str, str, str]]:
+    records = raw.split(b"\0")
+    if records[-1] != b"":
+        fail("Git tree index is not NUL terminated")
+    records.pop()
+    if not 1 <= len(records) <= profile.source_file_limit:
+        fail("Git tree file count exceeds protected limit")
+    output: list[tuple[str, str, str]] = []
+    previous = ""
+    for record in records:
         try:
-            info = current.lstat()
+            identity, raw_path = record.split(b"\t", 1)
+            mode, object_type, object_id = identity.decode("ascii").split(" ")
+            path = raw_path.decode("ascii")
+        except (ValueError, UnicodeDecodeError):
+            fail("Git tree index contains a malformed entry")
+        if (
+            mode not in ("100644", "100755")
+            or object_type != "blob"
+            or not COMMIT_RE.fullmatch(object_id)
+            or not valid_relative(path)
+            or any(component == ".git" for component in path.split("/"))
+            or path <= previous
+        ):
+            fail("Git tree contains an unsupported or unsorted entry")
+        output.append((path, mode, object_id))
+        previous = path
+    return output
+
+
+def parse_blob_batch(
+    profile: Profile, entries: list[tuple[str, str, str]], raw: bytes
+) -> list[bytes]:
+    position = 0
+    total = 0
+    output: list[bytes] = []
+    for _, _, expected_object in entries:
+        end = raw.find(b"\n", position, min(len(raw), position + 256))
+        if end < 0:
+            fail("Git blob batch has a malformed header")
+        try:
+            object_id, object_type, size_text = (
+                raw[position:end].decode("ascii").split(" ")
+            )
+        except (ValueError, UnicodeDecodeError):
+            fail("Git blob batch has a malformed header")
+        if (
+            object_id != expected_object
+            or object_type != "blob"
+            or not size_text.isdigit()
+            or int(size_text) > profile.source_byte_limit
+        ):
+            fail("Git blob batch identity differs from tree index")
+        size = int(size_text)
+        position = end + 1
+        blob_end = position + size
+        if blob_end >= len(raw) or raw[blob_end : blob_end + 1] != b"\n":
+            fail("Git blob batch content is truncated")
+        output.append(raw[position:blob_end])
+        total += size
+        if total > profile.source_byte_limit:
+            fail("Git source bytes exceed protected limit")
+        position = blob_end + 1
+    if position != len(raw):
+        fail("Git blob batch has trailing output")
+    return output
+
+
+def open_child_directory(parent_fd: int, component: str) -> int:
+    try:
+        os.mkdir(component, 0o700, dir_fd=parent_fd)
+    except FileExistsError:
+        pass
+    try:
+        return os.open(
+            component,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=parent_fd,
+        )
+    except OSError:
+        fail("source staging path changed during export")
+
+
+def write_all(file_fd: int, content: bytes) -> None:
+    view = memoryview(content)
+    while view:
+        written = os.write(file_fd, view)
+        if written <= 0:
+            fail("staging write made no progress")
+        view = view[written:]
+
+
+def write_snapshot_file(
+    snapshot_fd: int, path: str, mode: str, content: bytes
+) -> tuple[int, str]:
+    components = path.split("/")
+    parent_fd = os.dup(snapshot_fd)
+    try:
+        for component in components[:-1]:
+            next_fd = open_child_directory(parent_fd, component)
+            os.close(parent_fd)
+            parent_fd = next_fd
+        try:
+            file_fd = os.open(
+                components[-1],
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                0o600,
+                dir_fd=parent_fd,
+            )
         except OSError:
-            fail("source job is missing")
-        if stat.S_ISLNK(info.st_mode):
-            fail("source job path contains a symlink")
-        if index + 1 < len(request.job_path.split("/")):
-            if not stat.S_ISDIR(info.st_mode):
-                fail("source job parent is not a directory")
-        elif not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
-            fail("source job is not a single-link regular file")
-    job = current
-    blob = subprocess.run(
-        ["git", "-C", str(repo), "show", f"{request.source_commit}:{request.job_path}"],
-        check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
+            fail("source staging file changed during export")
+        try:
+            write_all(file_fd, content)
+            os.fsync(file_fd)
+            os.fchmod(file_fd, 0o555 if mode == "100755" else 0o444)
+        finally:
+            os.close(file_fd)
+    finally:
+        os.close(parent_fd)
+    return len(content), sha256_bytes(content)
+
+
+def verify_retained_snapshot(snapshot: SourceSnapshot) -> None:
+    try:
+        by_fd = os.fstat(snapshot.directory_fd)
+        by_name = os.stat(
+            snapshot.path.name, dir_fd=snapshot.root_fd, follow_symlinks=False
+        )
+        path_info = snapshot.path.lstat()
+    except OSError:
+        fail("retained source snapshot path is unavailable")
+    identities = {(item.st_dev, item.st_ino) for item in (by_fd, by_name, path_info)}
+    if (
+        len(identities) != 1
+        or identities.pop() != (snapshot.device, snapshot.inode)
+        or not stat.S_ISDIR(by_name.st_mode)
+        or stat.S_ISLNK(path_info.st_mode)
+    ):
+        fail("retained source snapshot path was replaced")
+    try:
+        request_by_fd = os.fstat(snapshot.request_fd)
+        request_by_name = os.stat(
+            snapshot.request_path.name,
+            dir_fd=snapshot.root_fd,
+            follow_symlinks=False,
+        )
+        request_path_info = snapshot.request_path.lstat()
+    except OSError:
+        fail("retained request snapshot path is unavailable")
+    request_identities = {
+        (item.st_dev, item.st_ino)
+        for item in (request_by_fd, request_by_name, request_path_info)
+    }
+    if (
+        len(request_identities) != 1
+        or request_identities.pop() != (snapshot.request_device, snapshot.request_inode)
+        or not stat.S_ISREG(request_by_name.st_mode)
+        or stat.S_ISLNK(request_path_info.st_mode)
+    ):
+        fail("retained request snapshot path was replaced")
+
+
+def verify_retained_output(stage: OutputStage) -> None:
+    try:
+        by_fd = os.fstat(stage.directory_fd)
+        by_name = os.stat(stage.path.name, dir_fd=stage.root_fd, follow_symlinks=False)
+        by_path = stage.path.lstat()
+        artifact = stage.artifact_path.lstat()
+        log = stage.log_path.lstat()
+    except OSError:
+        fail("retained output staging path is unavailable")
+    if (
+        {(item.st_dev, item.st_ino) for item in (by_fd, by_name, by_path)}
+        != {(stage.device, stage.inode)}
+        or not stat.S_ISDIR(by_name.st_mode)
+        or stat.S_ISLNK(by_path.st_mode)
+        or not stat.S_ISREG(artifact.st_mode)
+        or not stat.S_ISREG(log.st_mode)
+        or (artifact.st_dev, artifact.st_ino)
+        != (os.fstat(stage.artifact_fd).st_dev, os.fstat(stage.artifact_fd).st_ino)
+        or (log.st_dev, log.st_ino)
+        != (os.fstat(stage.log_fd).st_dev, os.fstat(stage.log_fd).st_ino)
+    ):
+        fail("retained output staging path was replaced")
+
+
+def stage_output(profile: Profile, request: Request) -> OutputStage:
+    root = Path(profile.output_staging_root)
+    root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    name = f"execution-{request.request_id}"
+    try:
+        os.mkdir(name, 0o700, dir_fd=root_fd)
+    except FileExistsError:
+        os.close(root_fd)
+        fail("output staging identity already exists")
+    directory_fd = os.open(
+        name,
+        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+        dir_fd=root_fd,
+    )
+    artifact_fd = -1
+    log_fd = -1
+    try:
+        artifact_fd = os.open(
+            "artifacts.stream",
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+            0o600,
+            dir_fd=directory_fd,
+        )
+        log_fd = os.open(
+            "stderr.log",
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+            0o600,
+            dir_fd=directory_fd,
+        )
+        os.fsync(directory_fd)
+        identity = os.fstat(directory_fd)
+        stage = OutputStage(
+            root / name,
+            root / name / "artifacts.stream",
+            root / name / "stderr.log",
+            root_fd,
+            directory_fd,
+            artifact_fd,
+            log_fd,
+            identity.st_dev,
+            identity.st_ino,
+        )
+        verify_retained_output(stage)
+        return stage
+    except Exception:
+        if log_fd >= 0:
+            os.close(log_fd)
+        if artifact_fd >= 0:
+            os.close(artifact_fd)
+        os.close(directory_fd)
+        os.close(root_fd)
+        raise
+
+
+def stage_source(profile: Profile, request: Request) -> SourceSnapshot:
+    verify_regular(
+        Path(profile.git_path),
+        str(profile.git_size),
+        profile.git_digest,
+        "Git executable",
+    )
+    version = run_bounded(
+        [profile.git_path, "--version"],
+        label="Git version",
+        environment={"HOME": "/nonexistent", "LC_ALL": "C", "PATH": "/nonexistent"},
+        timeout_seconds=15,
+        stdout_limit=4096,
+        stderr_limit=4096,
     )
     if (
-        blob.returncode
-        or sha256_bytes(blob.stdout) != request.job_digest
-        or sha256_file(job) != request.job_digest
+        version.returncode
+        or version.stderr
+        or sha256_bytes(version.stdout) != profile.git_version_digest
     ):
-        fail("source job differs from attested source tree")
+        fail("Git executable version differs from protected profile")
+    objects = Path(profile.git_objects_path)
+    staging_root = Path(profile.source_staging_root)
+    if (
+        objects.is_symlink()
+        or not objects.is_dir()
+        or staging_root.is_symlink()
+        or not staging_root.is_dir()
+    ):
+        fail("immutable source object or staging root is unsafe")
+    root_fd = os.open(
+        staging_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    )
+    snapshot_name = f"source-{request.request_id}"
+    manifest_name = f"source-{request.request_id}.manifest.tsv"
+    request_name = f"request-{request.request_id}.tsv"
+    try:
+        os.mkdir(snapshot_name, 0o700, dir_fd=root_fd)
+    except FileExistsError:
+        os.close(root_fd)
+        fail("source snapshot identity already exists")
+    snapshot_fd = os.open(
+        snapshot_name,
+        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+        dir_fd=root_fd,
+    )
+    request_fd = -1
+    snapshot_path = staging_root / snapshot_name
+    control = Path(tempfile.mkdtemp(prefix="git-control-", dir=staging_root))
+    try:
+        (control / "objects" / "info").mkdir(mode=0o700, parents=True)
+        (control / "objects" / "pack").mkdir(mode=0o700)
+        (control / "refs" / "heads").mkdir(mode=0o700, parents=True)
+        (control / "refs" / "tags").mkdir(mode=0o700)
+        (control / "HEAD").write_text("ref: refs/heads/invalid\n", encoding="ascii")
+        (control / "config").write_text(
+            "[core]\n\trepositoryformatversion = 0\n\tbare = true\n",
+            encoding="ascii",
+        )
+        commit = git_object_command(
+            profile,
+            control,
+            ["cat-file", "commit", request.source_commit],
+            label="Git commit read",
+            stdout_limit=MAX_FILE_BYTES,
+        )
+        first_line = commit.split(b"\n", 1)[0]
+        if first_line != f"tree {request.source_tree}".encode("ascii"):
+            fail("source commit/tree binding differs from immutable object store")
+        raw_index = git_object_command(
+            profile,
+            control,
+            ["ls-tree", "-rz", "--full-tree", "-r", request.source_tree],
+            label="Git tree index",
+            stdout_limit=profile.source_index_limit,
+        )
+        entries = parse_tree_index(profile, raw_index)
+        batch_input = b"".join(
+            f"{object_id}\n".encode("ascii") for _, _, object_id in entries
+        )
+        raw_blobs = git_object_command(
+            profile,
+            control,
+            ["cat-file", "--batch"],
+            label="Git blob batch",
+            stdout_limit=profile.source_byte_limit + len(entries) * 128,
+            input_data=batch_input,
+        )
+        blobs = parse_blob_batch(profile, entries, raw_blobs)
+        manifest_lines = [
+            "source_snapshot_manifest_schema_version\t1",
+            f"request_id\t{request.request_id}",
+            f"source_commit\t{request.source_commit}",
+            f"source_tree\t{request.source_tree}",
+            f"file_count\t{len(entries)}",
+        ]
+        total = 0
+        job_found = False
+        directories: set[str] = set()
+        for index, ((path, mode, object_id), content) in enumerate(
+            zip(entries, blobs, strict=True)
+        ):
+            file_size, digest = write_snapshot_file(snapshot_fd, path, mode, content)
+            total += file_size
+            parent = Path(path).parent
+            while str(parent) != ".":
+                directories.add(str(parent))
+                parent = parent.parent
+            if path == request.job_path:
+                if digest != request.job_digest:
+                    fail("source job digest differs from immutable source tree")
+                job_found = True
+            manifest_lines.append(
+                f"file\t{index:04d}\t{mode}\t{object_id}\t{path}\t{file_size}\t{digest}"
+            )
+        if not job_found:
+            fail("source job is absent from immutable source tree")
+        manifest_lines.append(f"source_bytes\t{total}")
+        manifest_raw = ("\n".join(manifest_lines) + "\n").encode("ascii")
+        manifest_fd = os.open(
+            manifest_name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+            0o600,
+            dir_fd=root_fd,
+        )
+        try:
+            write_all(manifest_fd, manifest_raw)
+            os.fsync(manifest_fd)
+            os.fchmod(manifest_fd, 0o444)
+        finally:
+            os.close(manifest_fd)
+        request_write_fd = os.open(
+            request_name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+            0o600,
+            dir_fd=root_fd,
+        )
+        try:
+            write_all(request_write_fd, request.raw)
+            os.fsync(request_write_fd)
+            os.fchmod(request_write_fd, 0o444)
+        finally:
+            os.close(request_write_fd)
+        request_fd = os.open(
+            request_name,
+            os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=root_fd,
+        )
+        for directory in sorted(
+            directories, key=lambda item: item.count("/"), reverse=True
+        ):
+            os.chmod(directory, 0o555, dir_fd=snapshot_fd, follow_symlinks=False)
+        os.fchmod(snapshot_fd, 0o555)
+        os.fsync(snapshot_fd)
+        os.fsync(root_fd)
+        identity = os.fstat(snapshot_fd)
+        request_identity = os.fstat(request_fd)
+        snapshot = SourceSnapshot(
+            snapshot_path,
+            staging_root / manifest_name,
+            staging_root / request_name,
+            root_fd,
+            snapshot_fd,
+            request_fd,
+            identity.st_dev,
+            identity.st_ino,
+            request_identity.st_dev,
+            request_identity.st_ino,
+            len(entries),
+            total,
+            sha256_bytes(manifest_raw),
+        )
+        verify_retained_snapshot(snapshot)
+        return snapshot
+    except Exception:
+        if request_fd >= 0:
+            os.close(request_fd)
+        os.close(snapshot_fd)
+        os.close(root_fd)
+        raise
+    finally:
+        shutil.rmtree(control, ignore_errors=True)
 
 
 def authorize(args: argparse.Namespace) -> AuthorizedRequest:
@@ -804,6 +1612,37 @@ def authorize(args: argparse.Namespace) -> AuthorizedRequest:
         fail("OCI execution request is not a single-link regular file")
     request = parse_request(request_path)
     profile = load_profile(root, policy, request.profile_id)
+    root = root.resolve(strict=True)
+    verify_operator_owned(root, profile, "protected root", directory=True)
+    verify_operator_owned(
+        Path(profile.runtime_path),
+        profile,
+        "OCI runtime",
+        directory=False,
+        allow_root=True,
+    )
+    verify_operator_owned(
+        Path(profile.git_path),
+        profile,
+        "Git executable",
+        directory=False,
+        allow_root=True,
+    )
+    verify_operator_owned(
+        Path(profile.git_objects_path), profile, "Git objects", directory=True
+    )
+    verify_operator_owned(
+        Path(profile.source_staging_root),
+        profile,
+        "source staging root",
+        directory=True,
+    )
+    verify_operator_owned(
+        Path(profile.output_staging_root),
+        profile,
+        "output staging root",
+        directory=True,
+    )
     verify_regular(
         Path(profile.runtime_path),
         str(profile.runtime_size),
@@ -817,20 +1656,12 @@ def authorize(args: argparse.Namespace) -> AuthorizedRequest:
         profile.seccomp_digest,
         "protected seccomp profile",
     )
+    verify_operator_owned(seccomp, profile, "seccomp profile", directory=False)
     verify_oci_image(profile)
-    repo_input = Path(args.repo)
-    if not repo_input.is_absolute() or not valid_absolute(str(repo_input)):
-        fail("source checkout path must be canonical absolute")
-    repo = repo_input.resolve(strict=True)
-    if repo != repo_input:
-        fail("source checkout path contains a symlink")
-    verify_source(repo, request, require_detached=args.require_detached)
     return AuthorizedRequest(
         policy,
         profile,
         request,
-        repo,
-        request_path.resolve(strict=True),
         seccomp.resolve(strict=True),
     )
 
@@ -849,12 +1680,13 @@ RUNTIME_INFO_FORMAT = (
 
 
 def runtime_output(profile: Profile, arguments: list[str], label: str) -> bytes:
-    process = subprocess.run(
+    process = run_bounded(
         [profile.runtime_path, *arguments],
-        check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        env={"HOME": "/nonexistent", "LC_ALL": "C", "PATH": "/nonexistent"},
+        label=f"OCI runtime {label}",
+        environment={"HOME": "/nonexistent", "LC_ALL": "C", "PATH": "/nonexistent"},
+        timeout_seconds=15,
+        stdout_limit=64 * 1024,
+        stderr_limit=64 * 1024,
     )
     if process.returncode != 0:
         detail = process.stderr.decode("ascii", errors="replace").strip()
@@ -866,7 +1698,7 @@ def runtime_output(profile: Profile, arguments: list[str], label: str) -> bytes:
     return process.stdout
 
 
-def establish_runtime_ready(authorized: AuthorizedRequest) -> RuntimeReadyRequest:
+def observe_runtime(authorized: AuthorizedRequest) -> ObservedRuntimeRequest:
     profile = authorized.profile
     version = runtime_output(
         profile, ["version", "--format", RUNTIME_VERSION_FORMAT], "version"
@@ -924,7 +1756,7 @@ def establish_runtime_ready(authorized: AuthorizedRequest) -> RuntimeReadyReques
         or unique_id != profile.gpu_unique_id
     ):
         fail("GPU identity differs from protected profile")
-    return RuntimeReadyRequest(authorized, verify_runtime_image(profile))
+    return ObservedRuntimeRequest(authorized, verify_runtime_image(profile))
 
 
 def verify_runtime_image(profile: Profile) -> tuple[str, ...]:
@@ -940,6 +1772,7 @@ def verify_runtime_image(profile: Profile) -> tuple[str, ...]:
         fail("OCI runtime returned invalid image identity")
     if not isinstance(inspected, dict):
         fail("OCI runtime returned invalid image object")
+    validate_json_shape(inspected, "OCI runtime image")
     rootfs = inspected.get("RootFS")
     config = inspected.get("Config")
     if (
@@ -959,11 +1792,11 @@ def verify_runtime_image(profile: Profile) -> tuple[str, ...]:
 def docker_create_arguments(
     profile: Profile,
     request: Request,
-    repo: Path,
+    source_snapshot: Path,
     request_path: Path,
     seccomp_path: Path,
 ) -> list[str]:
-    name = f"fe2o3-evidence-{request.request_id[:24]}"
+    name = f"fe2o3-evidence-{request.request_id}"
     arguments = [
         profile.runtime_path,
         "create",
@@ -971,6 +1804,12 @@ def docker_create_arguments(
         name,
         "--hostname",
         "fe2o3-evidence",
+        "--label",
+        f"org.fe2o3.evidence.request-id={request.request_id}",
+        "--label",
+        f"org.fe2o3.evidence.profile-sha256={profile.profile_digest}",
+        "--label",
+        f"org.fe2o3.evidence.source-tree={request.source_tree}",
         "--network",
         "none",
         "--read-only",
@@ -1006,7 +1845,7 @@ def docker_create_arguments(
     arguments.extend(
         (
             "--mount",
-            f"type=bind,src={repo},dst={profile.source_mount},readonly,bind-recursive=readonly",
+            f"type=bind,src={source_snapshot},dst={profile.source_mount},readonly,bind-recursive=readonly",
             "--mount",
             f"type=bind,src={request_path},dst={profile.request_mount},readonly",
             "--tmpfs",
@@ -1026,31 +1865,54 @@ def command_plan(args: argparse.Namespace) -> None:
     authorized = authorize(args)
     profile = authorized.profile
     request = authorized.request
-    arguments = docker_create_arguments(
-        profile,
-        request,
-        authorized.repo,
-        authorized.request_path,
-        authorized.seccomp_path,
-    )
-    print("oci_execution_plan_schema_version\t1")
-    print("authorization_source\tprotected-policy")
-    print(f"profile_id\t{profile.profile_id}")
-    print(f"profile_sha256\t{profile.profile_digest}")
-    print(f"request_id\t{request.request_id}")
-    print(f"argument_count\t{len(arguments)}")
-    for index, argument in enumerate(arguments):
-        print(f"argument\t{index:04d}\t{argument.encode('ascii').hex()}")
+    snapshot = stage_source(profile, request)
+    try:
+        output = stage_output(profile, request)
+        try:
+            arguments = docker_create_arguments(
+                profile,
+                request,
+                snapshot.path,
+                snapshot.request_path,
+                authorized.seccomp_path,
+            )
+            verify_retained_snapshot(snapshot)
+            verify_retained_output(output)
+            print("oci_execution_plan_schema_version\t1")
+            print("authorization_source\tprotected-policy")
+            print(f"profile_id\t{profile.profile_id}")
+            print(f"profile_sha256\t{profile.profile_digest}")
+            print(f"request_id\t{request.request_id}")
+            print(f"container_name\tfe2o3-evidence-{request.request_id}")
+            print(f"source_snapshot\t{snapshot.path}")
+            print(f"source_manifest\t{snapshot.manifest_path}")
+            print(f"source_manifest_sha256\t{snapshot.manifest_digest}")
+            print(f"request_snapshot\t{snapshot.request_path}")
+            print(f"request_sha256\t{request.digest}")
+            print(f"source_file_count\t{snapshot.file_count}")
+            print(f"source_bytes\t{snapshot.byte_count}")
+            print(f"artifact_stream_protocol\t{profile.artifact_stream_protocol}")
+            print(f"artifact_stream_path\t{output.artifact_path}")
+            print(f"artifact_stream_limit\t{profile.output_limit}")
+            print(f"stderr_stream_path\t{output.log_path}")
+            print(f"stderr_stream_limit\t{profile.log_limit}")
+            print(f"argument_count\t{len(arguments)}")
+            for index, argument in enumerate(arguments):
+                print(f"argument\t{index:04d}\t{argument.encode('ascii').hex()}")
+        finally:
+            output.close()
+    finally:
+        snapshot.close()
 
 
 def command_preflight(args: argparse.Namespace) -> None:
-    ready = establish_runtime_ready(authorize(args))
-    profile = ready.authorized.profile
-    request = ready.authorized.request
+    observed = observe_runtime(authorize(args))
+    profile = observed.authorized.profile
+    request = observed.authorized.request
     print(f"authorized_profile\t{profile.profile_id}")
     print(f"profile_sha256\t{profile.profile_digest}")
     print(f"request_id\t{request.request_id}")
-    print("runtime_preflight\tpassed")
+    print("observational_preflight\tpassed")
     print("execution_receipt\tnot-issued")
 
 
@@ -1071,33 +1933,27 @@ def build_parser() -> argparse.ArgumentParser:
     verify = subparsers.add_parser(
         "verify", help="verify protected authorization and immutable inputs"
     )
-    verify.add_argument("--repo", required=True)
     verify.add_argument("--request", required=True)
     verify.add_argument("--trusted-root", required=True)
     verify.add_argument(
         "--policy", required=True, help="path relative to protected root"
     )
-    verify.add_argument("--require-detached", action="store_true")
     verify.set_defaults(func=command_verify)
     plan = subparsers.add_parser(
         "plan", help="render the fixed protected OCI invocation"
     )
-    plan.add_argument("--repo", required=True)
     plan.add_argument("--request", required=True)
     plan.add_argument("--trusted-root", required=True)
     plan.add_argument("--policy", required=True, help="path relative to protected root")
-    plan.add_argument("--require-detached", action="store_true")
     plan.set_defaults(func=command_plan)
     preflight = subparsers.add_parser(
         "preflight", help="validate host, runtime daemon, and loaded image identity"
     )
-    preflight.add_argument("--repo", required=True)
     preflight.add_argument("--request", required=True)
     preflight.add_argument("--trusted-root", required=True)
     preflight.add_argument(
         "--policy", required=True, help="path relative to protected root"
     )
-    preflight.add_argument("--require-detached", action="store_true")
     preflight.set_defaults(func=command_preflight)
     return parser
 

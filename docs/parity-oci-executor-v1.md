@@ -10,7 +10,9 @@ promotion.
 - `verify` authenticates a candidate request against a profile selected by a
   protected policy.
 - `plan` emits the exact, argument-by-argument OCI container creation plan.
-- `preflight` additionally verifies the host, Docker daemon, and loaded image.
+- `preflight` compares bounded host, Docker daemon, and loaded-image
+  observations with the protected profile. These observations are not a full
+  daemon/runtime closure.
 
 There is intentionally no `run` operation and no execution receipt. The V2
 promotion parser continues to accept only shell queue schema 3, whose closure
@@ -30,12 +32,11 @@ candidate Request
     | protected policy selects exact profile path, size, and digest
     v
 AuthorizedRequest
+    +-- protected Git objects --> immutable SourceSnapshot
+    +-- protected staging ----> retained OutputStage
+    +-- bounded observations -> ObservedRuntimeRequest
     |
-    | exact host + daemon + loaded OCI image preflight
-    v
-RuntimeReadyRequest
-    |
-    | NOT IMPLEMENTED: execute fixed plan and capture bounded output
+    | NOT IMPLEMENTED: execute fixed plan and stream bounded output
     v
 ExecutedRequest
     |
@@ -46,8 +47,9 @@ ReceiptedExecution
 
 Only a future protected promotion verifier may derive the parity value
 `verified`, and only from a valid `ReceiptedExecution` bound to an authorized
-profile in the protected base. `AuthorizedRequest` and `RuntimeReadyRequest`
-are not evidence classes and are not promotable results.
+profile in the protected base. `AuthorizedRequest`, `SourceSnapshot`,
+`OutputStage`, and `ObservedRuntimeRequest` are not evidence classes and are
+not promotable results.
 
 ## Protected Authorization
 
@@ -72,14 +74,19 @@ The protected profile binds all of the following:
 
 - trust domain, target `gfx942`, and MI300X lane;
 - absolute Docker client path, size, digest, canonical client/server version
-  digest, and canonical daemon-info digest;
-- absolute OCI layout path and exact `index.json` digest;
+  observation digest, and canonical daemon-info observation digest;
+- exact Git executable and version, protected Git object directory, immutable
+  source staging root, source file/byte/index limits, and export timeout;
+- operator UID/GID, protected source/output roots, and non-writable ownership
+  policy; production roots and their parents must be root-owned;
+- absolute OCI layout path and exact bounded `index.json` size/digest;
 - exact image reference by manifest digest;
 - exact OCI manifest, config, and every ordered layer digest and size;
 - ordered rootfs diff IDs and an image config with no inherited environment;
 - one fixed absolute entrypoint and fixed command vector;
 - a complete, ordered environment including deterministic `HOSTNAME`, `HOME`,
-  `LC_ALL`, `PATH`, and `ROCR_VISIBLE_DEVICES`;
+  `LC_ALL`, and `PATH`; `HIP_VISIBLE_DEVICES` and `ROCR_VISIBLE_DEVICES` must
+  both equal the protected GPU unique ID;
 - fixed source, request, output, and temporary mount points;
 - output, temporary-storage, log, memory, PID, and CPU ceilings;
 - container UID, GID, and one supplemental render-group GID;
@@ -92,9 +99,11 @@ The protected profile binds all of the following:
 
 The OCI validator follows `index -> manifest -> config/layers`, validates every
 referenced blob by size and SHA-256, validates the config rootfs diff IDs, and
-requires Linux/amd64. Preflight then requires the Docker daemon's loaded image
-to have the same config digest, repository manifest digest, platform, diff
-IDs, and empty inherited environment.
+requires Linux/amd64. JSON depth, node count, strings, descriptors, counts, and
+numeric sizes are bounded. Preflight observes whether the Docker daemon reports
+the same config digest, repository manifest digest, platform, diff IDs, and
+empty inherited environment. It does not claim to measure the complete daemon,
+containerd, `runc`, service configuration, or kernel execution closure.
 
 ## Candidate Request
 
@@ -111,11 +120,29 @@ job_path                              scripts/evidence/jobs/row-04.sh
 job_sha256                            SHA256
 ```
 
-The checkout must be clean and, for production, detached at the exact commit
-and tree. The job must be a single-link regular file whose checkout bytes and
-Git blob both match the request digest. Unknown or trailing request fields are
-rejected, including any closure, image, runtime, environment, device, command,
-or isolation setting.
+The candidate checkout is never queried or mounted. In particular, the
+executor never runs `git status`, so candidate repository configuration,
+hooks, and fsmonitor commands are outside the execution path. It creates a
+synthetic bare Git control directory with no candidate config, disables system
+and global config, hooks, fsmonitor, replacement objects, optional locks, and
+Git protocols, then reads the commit/tree/blob objects from the protected
+object directory.
+
+Only ASCII regular executable/non-executable Git blobs are admitted. Symlinks,
+submodules, `.git`, unsupported modes, malformed paths, excess files, and
+excess bytes fail closed. The resulting source tree and canonical request copy
+are created beneath an operator-owned staging root, made read-only, and mounted
+without Git metadata. Open directory/file descriptors and device/inode
+identities are retained and rechecked immediately before plan emission.
+
+Unknown or trailing request fields are rejected, including any closure, image,
+runtime, environment, device, command, or isolation setting.
+
+Every current subprocess starts in a new process group with closed inherited
+descriptors, a fixed environment, a protected timeout, and independent stdout
+and stderr ceilings. Overflow and timeout kill the process group. Git object
+enumeration and blob payloads have additional file-count, index, per-file, and
+aggregate byte limits.
 
 ## Fixed OCI Plan
 
@@ -138,13 +165,23 @@ uses:
 - exactly the protected KFD and render devices;
 - the protected entrypoint, command, and manifest-digest image reference.
 
+Container names contain the complete 256-bit request ID. Ownership labels bind
+the full request ID, profile digest, and source tree. A future executor must
+remove only the exact container ID it created after checking all labels; it
+must never remove a pre-existing name collision.
+
 The runtime control socket is never mounted. The plan never uses
 `--privileged`, host networking, host IPC/PID/UTS namespaces, ambient
 capabilities, a writable root, or a host output bind.
 
-The output tmpfs permits execution because compiled test binaries must run.
-It remains bounded, `nosuid`, and `nodev`. The temporary tmpfs is additionally
-`noexec`.
+The in-container output tmpfs is bounded working storage. It is not copied
+after container exit. The protected entrypoint reserves stdout for
+`fe2o3-artifact-stream-v1` and stderr for logs. Before any future execution,
+the planner creates single-link `0600` artifact and stderr stream files beneath
+an operator-owned durable output directory named by the full request ID, opens
+them with `O_EXCL|O_NOFOLLOW`, retains their descriptors, and rechecks their
+inodes. A future runner must stream into those descriptors while the container
+runs and terminate the process group at the protected byte or time limit.
 
 ## Required Execution And Receipt Work
 
@@ -156,16 +193,20 @@ fixed lifecycle:
 2. Re-run protected authorization and runtime preflight immediately before
    container creation.
 3. Create the container from the exact emitted plan.
-4. Start with attachment and a bounded host reader while Docker logging remains
-   disabled. Terminate and reject on log overflow or timeout.
+4. Start with attachment while Docker logging remains disabled. Decode the
+   framed artifact stdout and log stderr concurrently into the already-opened
+   durable staging descriptors. Terminate the complete process group on stream
+   overflow, malformed framing, or timeout.
 5. Require a normal exit and exact zero status.
-6. Copy the bounded output tmpfs into a newly created operator-owned staging
-   directory after the container stops.
-7. Reject unexpected paths, symlinks, hardlinks, devices, sockets, FIFOs,
-   ownership surprises, oversized files, excess total bytes, and a malformed
-   output manifest.
+6. Finalize the stream only after validating every frame, declared size,
+   digest, total byte count, and canonical output manifest. Never use a
+   post-stop tmpfs copy or candidate-selected host output path.
+7. Reject unexpected artifact names, duplicate paths, oversized frames, excess
+   total bytes, and a malformed or incomplete output manifest.
 8. Recompute every artifact and log size and digest outside the container.
-9. Remove the container and verify removal before signing anything.
+9. Inspect the exact created container ID and ownership labels, remove that ID,
+   and verify removal before signing anything. Name collisions are failures,
+   not cleanup authority.
 10. Produce a canonical receipt binding the protected profile digest, request
     digest, source commit/tree, full plan digest, OCI manifest/config/layers,
     runtime identities, host/GPU/driver identities, timeout, exit status, log,
@@ -223,9 +264,11 @@ profile identity or claim OCI-equivalent closure without that review.
 - `/dev/kfd` is a global control device. Exposing one render node narrows usable
   GPU access, but this must be validated against the installed ROCr/HIP stack
   and partition topology before production authorization.
-- A Docker daemon is a large trusted computing base. The daemon binary,
-  service configuration, container runtime, storage driver, and security
-  options need operator-level inventory beyond the client binary.
+- A Docker daemon is a large trusted computing base. Current preflight data is
+  observational. The daemon binary, service configuration, containerd, `runc`,
+  dynamic libraries, storage driver, seccomp/AppArmor state, and kernel inputs
+  still need a complete measured closure before promotion can derive
+  `verified`.
 - OCI layout validation and Docker image inspection are separate observations.
   The future executor must prevent image replacement between preflight and
   creation and record the created container's image identity.
