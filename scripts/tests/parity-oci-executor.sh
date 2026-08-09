@@ -173,70 +173,70 @@ install_image_config() {
 }
 
 verify() {
-  "${EXECUTOR}" verify \
-    --request "${REQUEST}" \
-    --request-owner-uid "$(id -u)" \
-    --request-owner-gid "$(id -g)" \
-    --queue-authorization-sha256 "${QUEUE_AUTH_SHA256}" \
-    --trusted-root "${TRUSTED_ROOT}" \
-    --policy policy.tsv \
-    --policy-identity "${POLICY_IDENTITY}" \
-    --policy-size "$(size "${POLICY}")" \
-    --policy-sha256 "$(sha256 "${POLICY}")" \
-    --trusted-owner-uid "$(id -u)" \
-    --trusted-owner-gid "$(id -g)" \
-    --trust-file-contract descriptor-stable
+  "${EXECUTOR}" test-verify \
+    --test-request "${REQUEST}" \
+    --test-request-owner-uid "$(id -u)" \
+    --test-request-owner-gid "$(id -g)" \
+    --test-queue-trust-sha256 "${QUEUE_AUTH_SHA256}" \
+    --test-trusted-root "${TRUSTED_ROOT}" \
+    --test-policy policy.tsv \
+    --test-policy-identity "${POLICY_IDENTITY}" \
+    --test-policy-size "$(size "${POLICY}")" \
+    --test-policy-sha256 "$(sha256 "${POLICY}")" \
+    --test-trusted-owner-uid "$(id -u)" \
+    --test-trusted-owner-gid "$(id -g)" \
+    --test-trust-file-contract descriptor-stable
 }
 
 plan() {
-  "${EXECUTOR}" plan \
-    --request "${REQUEST}" \
-    --request-owner-uid "$(id -u)" \
-    --request-owner-gid "$(id -g)" \
-    --queue-authorization-sha256 "${QUEUE_AUTH_SHA256}" \
-    --trusted-root "${TRUSTED_ROOT}" \
-    --policy policy.tsv \
-    --policy-identity "${POLICY_IDENTITY}" \
-    --policy-size "$(size "${POLICY}")" \
-    --policy-sha256 "$(sha256 "${POLICY}")" \
-    --trusted-owner-uid "$(id -u)" \
-    --trusted-owner-gid "$(id -g)" \
-    --trust-file-contract descriptor-stable
+  "${EXECUTOR}" test-plan \
+    --test-request "${REQUEST}" \
+    --test-request-owner-uid "$(id -u)" \
+    --test-request-owner-gid "$(id -g)" \
+    --test-queue-trust-sha256 "${QUEUE_AUTH_SHA256}" \
+    --test-trusted-root "${TRUSTED_ROOT}" \
+    --test-policy policy.tsv \
+    --test-policy-identity "${POLICY_IDENTITY}" \
+    --test-policy-size "$(size "${POLICY}")" \
+    --test-policy-sha256 "$(sha256 "${POLICY}")" \
+    --test-trusted-owner-uid "$(id -u)" \
+    --test-trusted-owner-gid "$(id -g)" \
+    --test-trust-file-contract descriptor-stable
 }
 
 preflight() {
-  "${EXECUTOR}" preflight \
-    --request "${REQUEST}" \
-    --request-owner-uid "$(id -u)" \
-    --request-owner-gid "$(id -g)" \
-    --queue-authorization-sha256 "${QUEUE_AUTH_SHA256}" \
-    --trusted-root "${TRUSTED_ROOT}" \
-    --policy policy.tsv \
-    --policy-identity "${POLICY_IDENTITY}" \
-    --policy-size "$(size "${POLICY}")" \
-    --policy-sha256 "$(sha256 "${POLICY}")" \
-    --trusted-owner-uid "$(id -u)" \
-    --trusted-owner-gid "$(id -g)" \
-    --trust-file-contract descriptor-stable
+  "${EXECUTOR}" test-preflight \
+    --test-request "${REQUEST}" \
+    --test-request-owner-uid "$(id -u)" \
+    --test-request-owner-gid "$(id -g)" \
+    --test-queue-trust-sha256 "${QUEUE_AUTH_SHA256}" \
+    --test-trusted-root "${TRUSTED_ROOT}" \
+    --test-policy policy.tsv \
+    --test-policy-identity "${POLICY_IDENTITY}" \
+    --test-policy-size "$(size "${POLICY}")" \
+    --test-policy-sha256 "$(sha256 "${POLICY}")" \
+    --test-trusted-owner-uid "$(id -u)" \
+    --test-trusted-owner-gid "$(id -g)" \
+    --test-trust-file-contract descriptor-stable
 }
 
 verify_request_path() {
   local path="$1"
   local owner_uid="${2:-$(id -u)}"
   local owner_gid="${3:-$(id -g)}"
-  "${EXECUTOR}" verify \
-    --request "${path}" \
-    --request-owner-uid "${owner_uid}" \
-    --request-owner-gid "${owner_gid}" \
-    --queue-authorization-sha256 "${QUEUE_AUTH_SHA256}" \
-    --trusted-root "${TRUSTED_ROOT}" \
-    --policy policy.tsv \
-    --policy-identity "${POLICY_IDENTITY}" \
-    --policy-size "$(size "${POLICY}")" \
-    --policy-sha256 "$(sha256 "${POLICY}")" \
-    --trusted-owner-uid "$(id -u)" \
-    --trusted-owner-gid "$(id -g)" \
-    --trust-file-contract descriptor-stable
+  "${EXECUTOR}" test-verify \
+    --test-request "${path}" \
+    --test-request-owner-uid "${owner_uid}" \
+    --test-request-owner-gid "${owner_gid}" \
+    --test-queue-trust-sha256 "${QUEUE_AUTH_SHA256}" \
+    --test-trusted-root "${TRUSTED_ROOT}" \
+    --test-policy policy.tsv \
+    --test-policy-identity "${POLICY_IDENTITY}" \
+    --test-policy-size "$(size "${POLICY}")" \
+    --test-policy-sha256 "$(sha256 "${POLICY}")" \
+    --test-trusted-owner-uid "$(id -u)" \
+    --test-trusted-owner-gid "$(id -g)" \
+    --test-trust-file-contract descriptor-stable
 }
 
 mkdir -p "${TRUSTED_ROOT}/profiles" "${TRUSTED_ROOT}/seccomp" \
@@ -283,8 +283,8 @@ job_sha256	${job_digest}
 EOF
 
 output="$(verify)"
-grep -F $'authorized_profile\tmi300x-test-v1' <<<"${output}" >/dev/null
-grep -F $'authorization_source\tprotected-policy' <<<"${output}" >/dev/null
+grep -F $'matched_profile\tmi300x-test-v1' <<<"${output}" >/dev/null
+grep -F $'authorization_state\ttest-non-authoritative' <<<"${output}" >/dev/null
 
 printf '# candidate worktree mutation\n' >>"${SOURCE_REPO}/scripts/evidence/jobs/row-04.sh"
 plan_output="$(plan)"
@@ -1082,19 +1082,19 @@ pinned_policy_size="$(size "${POLICY}")"
 pinned_policy_digest="$(sha256 "${POLICY}")"
 printf '# mutation\n' >>"${POLICY}"
 expect_failure stale_external_policy_pin 'differs from its external binding' \
-  "${EXECUTOR}" verify \
-    --request "${REQUEST}" \
-    --request-owner-uid "$(id -u)" \
-    --request-owner-gid "$(id -g)" \
-    --queue-authorization-sha256 "${QUEUE_AUTH_SHA256}" \
-    --trusted-root "${TRUSTED_ROOT}" \
-    --policy policy.tsv \
-    --policy-identity "${POLICY_IDENTITY}" \
-    --policy-size "${pinned_policy_size}" \
-    --policy-sha256 "${pinned_policy_digest}" \
-    --trusted-owner-uid "$(id -u)" \
-    --trusted-owner-gid "$(id -g)" \
-    --trust-file-contract descriptor-stable
+  "${EXECUTOR}" test-verify \
+    --test-request "${REQUEST}" \
+    --test-request-owner-uid "$(id -u)" \
+    --test-request-owner-gid "$(id -g)" \
+    --test-queue-trust-sha256 "${QUEUE_AUTH_SHA256}" \
+    --test-trusted-root "${TRUSTED_ROOT}" \
+    --test-policy policy.tsv \
+    --test-policy-identity "${POLICY_IDENTITY}" \
+    --test-policy-size "${pinned_policy_size}" \
+    --test-policy-sha256 "${pinned_policy_digest}" \
+    --test-trusted-owner-uid "$(id -u)" \
+    --test-trusted-owner-gid "$(id -g)" \
+    --test-trust-file-contract descriptor-stable
 mv "${TEST_ROOT}/policy.anchor.good" "${POLICY}"
 
 chmod 664 "${POLICY}"

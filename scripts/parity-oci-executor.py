@@ -45,6 +45,11 @@ PROCESS_PIPE_JOIN_SECONDS = 5.0
 PROCESS_FINAL_JOIN_SECONDS = 1.0
 FS_IOC_GETFLAGS = 0x80086601
 FS_IMMUTABLE_FL = 0x00000010
+OPERATOR_CONFIG_DIRECTORY = Path("/etc/fe2o3/oci-executor")
+OPERATOR_CONFIG_NAME = "operator-v1.tsv"
+OPERATOR_CONFIG_DIGEST_NAME = "operator-v1.sha256"
+OPERATOR_LAUNCHER_PATH = Path("/usr/libexec/fe2o3-oci-operator")
+OPERATOR_EXECUTOR_PATH = Path("/usr/libexec/fe2o3-oci-executor.py")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 ID_RE = re.compile(r"^[a-z][a-z0-9._-]{0,63}$")
@@ -308,6 +313,26 @@ class TrustAnchor:
     file_contract: str
 
 
+@dataclass(frozen=True)
+class OperatorConfig:
+    config_id: str
+    trusted_root: str
+    policy_path: str
+    policy_identity: str
+    policy_size: int
+    policy_digest: str
+    trusted_owner_uid: int
+    trusted_owner_gid: int
+    trust_file_contract: str
+    inbox_root: str
+    inbox_owner_uid: int
+    inbox_owner_gid: int
+    request_owner_uid: int
+    request_owner_gid: int
+    queue_trust_digest: str
+    config_digest: str
+
+
 @dataclass
 class TrustedRoot:
     path: Path
@@ -358,11 +383,9 @@ def verify_trusted_metadata(
         )
 
 
-def verify_immutable_flag(file_fd: int, anchor: TrustAnchor, label: str) -> None:
-    if anchor.file_contract == "descriptor-stable":
+def verify_descriptor_immutable(file_fd: int, label: str, required: bool) -> None:
+    if not required:
         return
-    if anchor.file_contract != "linux-immutable":
-        fail("invalid external trust-anchor file contract")
     try:
         packed = fcntl.ioctl(file_fd, FS_IOC_GETFLAGS, struct.pack("=I", 0))
         flags = struct.unpack("=I", packed)[0]
@@ -370,6 +393,221 @@ def verify_immutable_flag(file_fd: int, anchor: TrustAnchor, label: str) -> None
         fail(f"cannot establish immutable flag for {label}: {error}")
     if not flags & FS_IMMUTABLE_FL:
         fail(f"{label} does not satisfy the external immutable-file contract")
+
+
+def verify_immutable_flag(file_fd: int, anchor: TrustAnchor, label: str) -> None:
+    if anchor.file_contract not in ("descriptor-stable", "linux-immutable"):
+        fail("invalid external trust-anchor file contract")
+    verify_descriptor_immutable(
+        file_fd, label, anchor.file_contract == "linux-immutable"
+    )
+
+
+def open_owned_directory_tree(
+    path: Path, expected_uid: int, expected_gid: int, label: str
+) -> int:
+    if not path.is_absolute() or not valid_absolute(str(path)):
+        fail(f"{label} path must be canonical absolute")
+    current_fd = -1
+    try:
+        current_fd = os.open(
+            "/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+        )
+        for component in path.parts[1:]:
+            next_fd = os.open(
+                component,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                dir_fd=current_fd,
+            )
+            os.close(current_fd)
+            current_fd = next_fd
+            info = os.fstat(current_fd)
+            if (
+                not stat.S_ISDIR(info.st_mode)
+                or (info.st_uid, info.st_gid) != (expected_uid, expected_gid)
+                or info.st_mode & 0o022
+            ):
+                fail(f"{label} directory ownership or mode is unsafe")
+        return current_fd
+    except ExecutorError:
+        if current_fd >= 0:
+            os.close(current_fd)
+        raise
+    except OSError as error:
+        if current_fd >= 0:
+            os.close(current_fd)
+        fail(f"cannot open fixed {label} directory: {error}")
+
+
+def read_owned_descriptor_file(
+    directory_fd: int,
+    name: str,
+    label: str,
+    *,
+    maximum_bytes: int,
+    expected_uid: int,
+    expected_gid: int,
+    require_immutable: bool,
+    expected_digest: str | None = None,
+) -> bytes:
+    if "/" in name or not name or maximum_bytes < 1:
+        fail(f"invalid fixed {label} name or bound")
+    file_fd = -1
+    try:
+        file_fd = os.open(
+            name,
+            os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=directory_fd,
+        )
+        before = os.fstat(file_fd)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_nlink != 1
+            or (before.st_uid, before.st_gid) != (expected_uid, expected_gid)
+            or before.st_mode & 0o022
+            or not 1 <= before.st_size <= maximum_bytes
+        ):
+            fail(f"fixed {label} metadata contract is unsafe")
+        verify_descriptor_immutable(file_fd, f"fixed {label}", require_immutable)
+        raw = read_descriptor_bound(file_fd, maximum_bytes, f"fixed {label}")
+        after = os.fstat(file_fd)
+        if (
+            stable_file_identity(before) != stable_file_identity(after)
+            or len(raw) != before.st_size
+            or expected_digest is not None
+            and sha256_bytes(raw) != expected_digest
+        ):
+            fail(f"fixed {label} changed or differs from its provisioned digest")
+        return raw
+    except ExecutorError:
+        raise
+    except OSError as error:
+        fail(f"cannot open fixed {label}: {error}")
+    finally:
+        if file_fd >= 0:
+            os.close(file_fd)
+
+
+def load_operator_config(
+    directory: Path = OPERATOR_CONFIG_DIRECTORY,
+    *,
+    provision_uid: int = 0,
+    provision_gid: int = 0,
+    require_immutable: bool = True,
+) -> OperatorConfig:
+    if require_immutable:
+        directory_fd = open_owned_directory_tree(
+            directory, provision_uid, provision_gid, "operator configuration"
+        )
+    else:
+        try:
+            directory_fd = os.open(
+                directory,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+            )
+            info = os.fstat(directory_fd)
+        except OSError as error:
+            fail(f"cannot open test operator configuration directory: {error}")
+        if (
+            not stat.S_ISDIR(info.st_mode)
+            or (info.st_uid, info.st_gid) != (provision_uid, provision_gid)
+            or info.st_mode & 0o022
+        ):
+            os.close(directory_fd)
+            fail("test operator configuration directory ownership or mode is unsafe")
+    try:
+        digest_raw = read_owned_descriptor_file(
+            directory_fd,
+            OPERATOR_CONFIG_DIGEST_NAME,
+            "operator configuration digest provision",
+            maximum_bytes=65,
+            expected_uid=provision_uid,
+            expected_gid=provision_gid,
+            require_immutable=require_immutable,
+        )
+        if (
+            len(digest_raw) != 65
+            or not digest_raw.endswith(b"\n")
+            or SHA256_RE.fullmatch(digest_raw[:-1].decode("ascii", errors="ignore"))
+            is None
+        ):
+            fail("fixed operator configuration digest provision is malformed")
+        config_digest = digest_raw[:-1].decode("ascii")
+        raw = read_owned_descriptor_file(
+            directory_fd,
+            OPERATOR_CONFIG_NAME,
+            "operator configuration",
+            maximum_bytes=MAX_FILE_BYTES,
+            expected_uid=provision_uid,
+            expected_gid=provision_gid,
+            require_immutable=require_immutable,
+            expected_digest=config_digest,
+        )
+    finally:
+        os.close(directory_fd)
+    cursor = Cursor(parse_rows(raw, "operator configuration"), "operator configuration")
+    if cursor.scalar("oci_operator_config_schema_version") != "1":
+        fail("operator configuration schema must be 1")
+    config_id = cursor.scalar("config_id")
+    trusted_root = cursor.scalar("trusted_root")
+    policy_path = cursor.scalar("policy_path")
+    policy_identity = cursor.scalar("policy_identity")
+    policy_size = cursor.scalar("policy_size")
+    policy_digest = cursor.scalar("policy_sha256")
+    trusted_uid = cursor.scalar("trusted_owner_uid")
+    trusted_gid = cursor.scalar("trusted_owner_gid")
+    file_contract = cursor.scalar("trust_file_contract")
+    inbox_root = cursor.scalar("inbox_root")
+    inbox_uid = cursor.scalar("inbox_owner_uid")
+    inbox_gid = cursor.scalar("inbox_owner_gid")
+    request_uid = cursor.scalar("request_owner_uid")
+    request_gid = cursor.scalar("request_owner_gid")
+    queue_digest = cursor.scalar("queue_trust_sha256")
+    cursor.done()
+    numeric = (
+        policy_size,
+        trusted_uid,
+        trusted_gid,
+        inbox_uid,
+        inbox_gid,
+        request_uid,
+        request_gid,
+    )
+    if (
+        not ID_RE.fullmatch(config_id)
+        or not valid_absolute(trusted_root)
+        or not valid_relative(policy_path)
+        or not ID_RE.fullmatch(policy_identity)
+        or any(not value.isdigit() or int(value) > 2**31 - 1 for value in numeric)
+        or not 1 <= int(policy_size) <= MAX_FILE_BYTES
+        or not SHA256_RE.fullmatch(policy_digest)
+        or trusted_uid != "0"
+        or trusted_gid != "0"
+        or file_contract != "linux-immutable"
+        or not valid_absolute(inbox_root)
+        or inbox_uid != "0"
+        or inbox_gid != "0"
+        or not SHA256_RE.fullmatch(queue_digest)
+    ):
+        fail("operator configuration contains an invalid production binding")
+    return OperatorConfig(
+        config_id,
+        trusted_root,
+        policy_path,
+        policy_identity,
+        int(policy_size),
+        policy_digest,
+        int(trusted_uid),
+        int(trusted_gid),
+        file_contract,
+        inbox_root,
+        int(inbox_uid),
+        int(inbox_gid),
+        int(request_uid),
+        int(request_gid),
+        queue_digest,
+        config_digest,
+    )
 
 
 def open_trusted_root(path: Path, anchor: TrustAnchor) -> TrustedRoot:
@@ -1389,6 +1627,33 @@ def read_request_file(path: Path, expected_uid: int, expected_gid: int) -> Reque
             os.close(request_fd)
 
 
+def read_operator_request(config: OperatorConfig, request_id: str) -> Request:
+    if not RESULT_ID_RE.fullmatch(request_id):
+        fail("operator request identity is malformed")
+    inbox_fd = open_owned_directory_tree(
+        Path(config.inbox_root),
+        config.inbox_owner_uid,
+        config.inbox_owner_gid,
+        "operator request inbox",
+    )
+    try:
+        raw = read_owned_descriptor_file(
+            inbox_fd,
+            f"{request_id}.tsv",
+            "operator request",
+            maximum_bytes=MAX_FILE_BYTES,
+            expected_uid=config.request_owner_uid,
+            expected_gid=config.request_owner_gid,
+            require_immutable=False,
+        )
+    finally:
+        os.close(inbox_fd)
+    request = parse_request(raw)
+    if request.request_id != request_id:
+        fail("operator request file identity differs from selected request")
+    return request
+
+
 def safe_close(file_fd: int) -> None:
     if file_fd < 0:
         return
@@ -2210,12 +2475,22 @@ def authorize(args: argparse.Namespace) -> AuthorizedRequest:
     root = open_trusted_root(Path(args.trusted_root), anchor)
     try:
         policy = parse_policy(root, args.policy, anchor)
-        request = read_request_file(
-            Path(args.request), args.request_owner_uid, args.request_owner_gid
-        )
+        if args.invocation_mode == "production-operator":
+            request = read_operator_request(args.operator_config, args.request_id)
+        elif args.invocation_mode == "test":
+            request = read_request_file(
+                Path(args.request), args.request_owner_uid, args.request_owner_gid
+            )
+        else:
+            fail("unknown OCI executor invocation mode")
         profile = load_profile(root, policy, request.profile_id, anchor)
     finally:
         root.close()
+    expected_domain = (
+        "production" if args.invocation_mode == "production-operator" else "test"
+    )
+    if policy.domain != expected_domain or profile.mode != expected_domain:
+        fail(f"{args.invocation_mode} cannot authorize {policy.domain} policy data")
     verify_operator_owned(
         Path(profile.runtime_path),
         profile,
@@ -2260,8 +2535,13 @@ def authorize(args: argparse.Namespace) -> AuthorizedRequest:
     )
     verify_operator_owned(seccomp, profile, "seccomp profile", directory=False)
     verify_oci_image(profile)
-    if not SHA256_RE.fullmatch(args.queue_authorization_sha256):
-        fail("external queue authorization digest is malformed")
+    queue_trust_digest = (
+        args.operator_config.queue_trust_digest
+        if args.invocation_mode == "production-operator"
+        else args.queue_authorization_sha256
+    )
+    if not SHA256_RE.fullmatch(queue_trust_digest):
+        fail("queue authorization trust digest is malformed")
     authorization_digest = sha256_bytes(
         b"fe2o3-oci-authorization-v1\0"
         + anchor.identity.encode("ascii")
@@ -2277,7 +2557,7 @@ def authorize(args: argparse.Namespace) -> AuthorizedRequest:
         + bytes.fromhex(policy.digest)
         + bytes.fromhex(profile.profile_digest)
         + bytes.fromhex(request.digest)
-        + bytes.fromhex(args.queue_authorization_sha256)
+        + bytes.fromhex(queue_trust_digest)
     )
     return AuthorizedRequest(
         policy,
@@ -2502,7 +2782,14 @@ def command_plan(args: argparse.Namespace) -> None:
         verify_retained_snapshot(snapshot)
         verify_retained_output(output)
         print("oci_execution_plan_schema_version\t1")
-        print("authorization_source\tprotected-policy")
+        print(
+            "authorization_state\t"
+            + (
+                "operator-policy-matched"
+                if args.invocation_mode == "production-operator"
+                else "test-non-authoritative"
+            )
+        )
         print(f"policy_identity\t{args.policy_identity}")
         print(f"authorization_sha256\t{authorized.authorization_digest}")
         print(f"profile_id\t{profile.profile_id}")
@@ -2543,10 +2830,18 @@ def command_preflight(args: argparse.Namespace) -> None:
     observed = observe_runtime(authorize(args))
     profile = observed.authorized.profile
     request = observed.authorized.request
-    print(f"authorized_profile\t{profile.profile_id}")
+    print(f"matched_profile\t{profile.profile_id}")
     print(f"profile_sha256\t{profile.profile_digest}")
     print(f"request_id\t{request.request_id}")
     print("observational_preflight\tpassed")
+    print(
+        "authorization_state\t"
+        + (
+            "operator-policy-matched"
+            if args.invocation_mode == "production-operator"
+            else "test-non-authoritative"
+        )
+    )
     print("execution_receipt\tnot-issued")
 
 
@@ -2554,53 +2849,162 @@ def command_verify(args: argparse.Namespace) -> None:
     authorized = authorize(args)
     profile = authorized.profile
     request = authorized.request
-    print(f"authorized_profile\t{profile.profile_id}")
+    print(f"matched_profile\t{profile.profile_id}")
     print(f"profile_sha256\t{profile.profile_digest}")
     print(f"request_id\t{request.request_id}")
     print(f"source_tree\t{request.source_tree}")
-    print("authorization_source\tprotected-policy")
-
-
-def add_authorization_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--request", required=True)
-    parser.add_argument("--request-owner-uid", required=True, type=int)
-    parser.add_argument("--request-owner-gid", required=True, type=int)
-    parser.add_argument("--queue-authorization-sha256", required=True)
-    parser.add_argument("--trusted-root", required=True)
-    parser.add_argument(
-        "--policy", required=True, help="externally pinned relative path"
+    print(
+        "authorization_state\t"
+        + (
+            "operator-policy-matched"
+            if args.invocation_mode == "production-operator"
+            else "test-non-authoritative"
+        )
     )
-    parser.add_argument("--policy-identity", required=True)
-    parser.add_argument("--policy-size", required=True, type=int)
-    parser.add_argument("--policy-sha256", required=True)
-    parser.add_argument("--trusted-owner-uid", required=True, type=int)
-    parser.add_argument("--trusted-owner-gid", required=True, type=int)
+
+
+def add_test_authorization_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--test-request", dest="request", required=True)
     parser.add_argument(
-        "--trust-file-contract",
+        "--test-request-owner-uid", dest="request_owner_uid", required=True, type=int
+    )
+    parser.add_argument(
+        "--test-request-owner-gid", dest="request_owner_gid", required=True, type=int
+    )
+    parser.add_argument(
+        "--test-queue-trust-sha256",
+        dest="queue_authorization_sha256",
         required=True,
-        choices=("descriptor-stable", "linux-immutable"),
     )
+    parser.add_argument("--test-trusted-root", dest="trusted_root", required=True)
+    parser.add_argument(
+        "--test-policy",
+        dest="policy",
+        required=True,
+        help="test-only relative policy path",
+    )
+    parser.add_argument("--test-policy-identity", dest="policy_identity", required=True)
+    parser.add_argument(
+        "--test-policy-size", dest="policy_size", required=True, type=int
+    )
+    parser.add_argument("--test-policy-sha256", dest="policy_sha256", required=True)
+    parser.add_argument(
+        "--test-trusted-owner-uid",
+        dest="trusted_owner_uid",
+        required=True,
+        type=int,
+    )
+    parser.add_argument(
+        "--test-trusted-owner-gid",
+        dest="trusted_owner_gid",
+        required=True,
+        type=int,
+    )
+    parser.add_argument(
+        "--test-trust-file-contract",
+        dest="trust_file_contract",
+        required=True,
+        choices=("descriptor-stable",),
+    )
+    parser.set_defaults(invocation_mode="test")
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
     verify = subparsers.add_parser(
-        "verify", help="verify protected authorization and immutable inputs"
+        "test-verify", help="perform non-authoritative test input validation"
     )
-    add_authorization_arguments(verify)
+    add_test_authorization_arguments(verify)
     verify.set_defaults(func=command_verify)
     plan = subparsers.add_parser(
-        "plan", help="render the fixed protected OCI invocation"
+        "test-plan", help="render a non-authoritative ephemeral test plan"
     )
-    add_authorization_arguments(plan)
+    add_test_authorization_arguments(plan)
     plan.set_defaults(func=command_plan)
     preflight = subparsers.add_parser(
-        "preflight", help="validate host, runtime daemon, and loaded image identity"
+        "test-preflight", help="perform non-authoritative runtime observations"
     )
-    add_authorization_arguments(preflight)
+    add_test_authorization_arguments(preflight)
     preflight.set_defaults(func=command_preflight)
     return parser
+
+
+def verify_installed_operator_entrypoint() -> None:
+    if (
+        Path(os.path.abspath(sys.argv[0])) != OPERATOR_LAUNCHER_PATH
+        or Path(os.path.abspath(__file__)) != OPERATOR_EXECUTOR_PATH
+    ):
+        fail("production operator must run from fixed installed entrypoint paths")
+    for path, label in (
+        (OPERATOR_LAUNCHER_PATH, "operator launcher"),
+        (OPERATOR_EXECUTOR_PATH, "operator executor"),
+    ):
+        file_fd = -1
+        try:
+            file_fd = os.open(
+                path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC
+            )
+            info = os.fstat(file_fd)
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_nlink != 1
+                or (info.st_uid, info.st_gid) != (0, 0)
+                or info.st_mode & 0o022
+            ):
+                fail(f"fixed {label} ownership, mode, or link contract is unsafe")
+            verify_descriptor_immutable(file_fd, f"fixed {label}", True)
+        except ExecutorError:
+            raise
+        except OSError as error:
+            fail(f"cannot establish fixed {label}: {error}")
+        finally:
+            if file_fd >= 0:
+                os.close(file_fd)
+
+
+def operator_namespace(
+    config: OperatorConfig,
+    request_id: str,
+    func: object,
+) -> argparse.Namespace:
+    return argparse.Namespace(
+        invocation_mode="production-operator",
+        operator_config=config,
+        request_id=request_id,
+        trusted_root=config.trusted_root,
+        policy=config.policy_path,
+        policy_identity=config.policy_identity,
+        policy_size=config.policy_size,
+        policy_sha256=config.policy_digest,
+        trusted_owner_uid=config.trusted_owner_uid,
+        trusted_owner_gid=config.trusted_owner_gid,
+        trust_file_contract=config.trust_file_contract,
+        func=func,
+    )
+
+
+def operator_main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Fixed production OCI evidence operator entrypoint"
+    )
+    parser.add_argument("command", choices=("verify", "plan", "preflight"))
+    parser.add_argument("--request-id", required=True)
+    try:
+        selected = parser.parse_args(argv)
+        verify_installed_operator_entrypoint()
+        config = load_operator_config()
+        function = {
+            "verify": command_verify,
+            "plan": command_plan,
+            "preflight": command_preflight,
+        }[selected.command]
+        args = operator_namespace(config, selected.request_id, function)
+        function(args)
+        return 0
+    except ExecutorError as error:
+        print(f"fe2o3-oci-operator: {error}", file=sys.stderr)
+        return 2
 
 
 def main() -> int:
