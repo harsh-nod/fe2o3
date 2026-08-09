@@ -93,6 +93,8 @@ readonly -a TRUST_FILES=(
   scripts/parity-dashboard.sh
   scripts/parity-matrix.sh
   scripts/parity-promotion-projections.sh
+  scripts/parity-check-reconcile.sh
+  scripts/parity-protected-controller.sh
   scripts/parity-signed-evidence.py
   scripts/parity-protected-change-policy.sh
   scripts/tests/hosted-parity-ci.sh
@@ -113,6 +115,10 @@ readonly -a PROMOTION_PROJECTIONS=(
   docs/generated/cuda-oxide-parity-dashboard.md
   docs/generated/cuda-oxide-parity-dashboard.tsv
   "${PROMOTION_LEDGER}"
+)
+readonly -a ADMIN_MIGRATION_WORKFLOWS=(
+  .github/workflows/ci.yml
+  .github/workflows/parity-review-signal.yml
 )
 
 file_changed() {
@@ -181,7 +187,7 @@ validate_changed_paths() {
       die 'immutable revision path is malformed'
     trusted=false
     case "${path}" in
-      docs/parity-signed-evidence-v2.md|docs/parity-evidence/trust-policy-v2.example.tsv|docs/parity-row-evidence-policy-v2.tsv|docs/parity-evidence/trust-policy-v2.tsv|scripts/parity-dashboard.sh|scripts/parity-matrix.sh|scripts/parity-promotion-projections.sh|scripts/parity-signed-evidence.py|scripts/parity-protected-change-policy.sh|scripts/tests/hosted-parity-ci.sh|scripts/tests/parity-dashboard.sh|scripts/tests/parity-promotion-projections.sh|scripts/tests/parity-row-evidence.sh|.github/workflows/ci.yml|.github/workflows/parity-promotion.yml|.github/workflows/parity-review-signal.yml|.github/CODEOWNERS|.github/parity-trust-reviewers.txt)
+      docs/parity-signed-evidence-v2.md|docs/parity-evidence/trust-policy-v2.example.tsv|docs/parity-row-evidence-policy-v2.tsv|docs/parity-evidence/trust-policy-v2.tsv|scripts/parity-dashboard.sh|scripts/parity-matrix.sh|scripts/parity-promotion-projections.sh|scripts/parity-check-reconcile.sh|scripts/parity-protected-controller.sh|scripts/parity-signed-evidence.py|scripts/parity-protected-change-policy.sh|scripts/tests/hosted-parity-ci.sh|scripts/tests/parity-dashboard.sh|scripts/tests/parity-promotion-projections.sh|scripts/tests/parity-row-evidence.sh|.github/workflows/ci.yml|.github/workflows/parity-promotion.yml|.github/workflows/parity-review-signal.yml|.github/CODEOWNERS|.github/parity-trust-reviewers.txt)
         trusted=true
         ;;
       "${PROMOTION_LEDGER}")
@@ -251,6 +257,12 @@ archive_changed=false
 if directory_changed "${EVIDENCE_ARCHIVE}"; then
   archive_changed=true
 fi
+
+for relative in "${ADMIN_MIGRATION_WORKFLOWS[@]}"; do
+  if file_changed "${relative}"; then
+    die "notification workflow changes require an administrator migration: ${relative}"
+  fi
+done
 
 if [[ "${trust_changed}" == true ]]; then
   [[ "${status_changed}" == false ]] || die 'trust changes must not include parity status changes'

@@ -8,6 +8,9 @@ on:
   workflow_run:
     workflows: [CI, Parity review signal]
     types: [completed]
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
 
 permissions:
   actions: read
@@ -15,12 +18,12 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: parity-promotion-${{ github.event.pull_request.number || github.event.merge_group.head_sha || github.run_id }}
+  group: parity-promotion-controller
   cancel-in-progress: false
 
 jobs:
   merge-group-bootstrap:
-    name: Unprivileged merge-group bootstrap
+    name: Unprivileged merge-group notification
     if: github.event_name == 'merge_group'
     runs-on: ubuntu-24.04
     timeout-minutes: 2
@@ -35,7 +38,7 @@ jobs:
           [[ "${EVENT_SHA}" == "${HEAD_SHA}" ]]
           [[ "${BASE_SHA}" =~ ^[0-9a-f]{40}$ && ! "${BASE_SHA}" =~ ^0{40}$ ]]
           [[ "${HEAD_SHA}" =~ ^[0-9a-f]{40}$ && ! "${HEAD_SHA}" =~ ^0{40}$ ]]
-          printf 'privileged merge-group verification is delegated to the default-branch workflow_run controller\n'
+          printf 'protected verification is independently reconciled from the default branch\n'
 
   verify:
     name: Protected parity verdict controller
@@ -45,163 +48,16 @@ jobs:
        (github.event.workflow_run.event == 'merge_group' ||
         github.event.workflow_run.event == 'pull_request_review'))
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     environment: parity-verdict
-
     steps:
-      - name: Resolve protected event context
-        id: context
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          GH_TOKEN: ${{ github.token }}
-          WORKFLOW_SHA: ${{ github.workflow_sha }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          EXPECTED_CI_WORKFLOW_ID: ${{ vars.PARITY_GENERIC_CI_WORKFLOW_ID }}
-          EXPECTED_REVIEW_WORKFLOW_ID: ${{ vars.PARITY_REVIEW_SIGNAL_WORKFLOW_ID }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_BASE_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}
-          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          PR_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
-          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          RUN_ID: ${{ github.event.workflow_run.id }}
-          RUN_WORKFLOW_ID: ${{ github.event.workflow_run.workflow_id }}
-          RUN_EVENT: ${{ github.event.workflow_run.event }}
-          RUN_PATH: ${{ github.event.workflow_run.path }}
-          RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
-          RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
-          RUN_STATUS: ${{ github.event.workflow_run.status }}
-          RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
-        run: |
-          set -Eeuo pipefail
-          SOURCE_ACCEPTED=true
-          SOURCE_RUN_ID=0
-          SOURCE_WORKFLOW_ID=0
-          SOURCE_PATH=''
-          SOURCE_EVENT=''
-          SOURCE_HEAD_BRANCH=''
-          SOURCE_HEAD_SHA=''
-          case "${EVENT_NAME}" in
-            pull_request_target)
-              EVENT_KIND=pull-request
-              BASE_REPOSITORY="${PR_BASE_REPOSITORY}"
-              BASE_REF="refs/heads/${PR_BASE_REF}"
-              BASE_SHA="${PR_BASE_SHA}"
-              HEAD_REPOSITORY="${PR_HEAD_REPOSITORY}"
-              HEAD_REF="refs/heads/${PR_HEAD_REF}"
-              HEAD_SHA="${PR_HEAD_SHA}"
-              [[ "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]
-              [[ "${BASE_REPOSITORY}" == "${GITHUB_REPOSITORY}" ]]
-              [[ "${PR_BASE_REF}" == "${DEFAULT_BRANCH}" ]]
-              ;;
-            workflow_run)
-              [[ "${RUN_ID}" =~ ^[1-9][0-9]*$ ]]
-              [[ "${RUN_WORKFLOW_ID}" =~ ^[1-9][0-9]*$ ]]
-              [[ "${RUN_HEAD_SHA}" =~ ^[0-9a-f]{40}$ && ! "${RUN_HEAD_SHA}" =~ ^0{40}$ ]]
-              git check-ref-format "refs/heads/${RUN_HEAD_BRANCH}" >/dev/null
-              SOURCE_RUN_ID="${RUN_ID}"
-              SOURCE_WORKFLOW_ID="${RUN_WORKFLOW_ID}"
-              SOURCE_PATH="${RUN_PATH}"
-              SOURCE_EVENT="${RUN_EVENT}"
-              SOURCE_HEAD_BRANCH="${RUN_HEAD_BRANCH}"
-              SOURCE_HEAD_SHA="${RUN_HEAD_SHA}"
-              source_run="${RUNNER_TEMP}/source-workflow-run.json"
-              gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}" \
-                >"${source_run}"
-              case "${RUN_EVENT}" in
-                merge_group)
-                  [[ "${EXPECTED_CI_WORKFLOW_ID}" =~ ^[1-9][0-9]*$ ]]
-                  [[ "${RUN_WORKFLOW_ID}" == "${EXPECTED_CI_WORKFLOW_ID}" ]]
-                  [[ "${RUN_PATH}" == .github/workflows/ci.yml ]]
-                  EVENT_KIND=merge-group
-                  PR_NUMBER=0
-                  ;;
-                pull_request_review)
-                  [[ "${EXPECTED_REVIEW_WORKFLOW_ID}" =~ ^[1-9][0-9]*$ ]]
-                  [[ "${RUN_WORKFLOW_ID}" == "${EXPECTED_REVIEW_WORKFLOW_ID}" ]]
-                  [[ "${RUN_PATH}" == .github/workflows/parity-review-signal.yml ]]
-                  EVENT_KIND=pull-request
-                  PR_NUMBER="$(jq -er '
-                    .pull_requests | select(type == "array" and length == 1) |
-                    .[0].number | select(type == "number" and . > 0)
-                  ' "${source_run}")"
-                  current_pr="${RUNNER_TEMP}/review-signal-pr.json"
-                  gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" \
-                    >"${current_pr}"
-                  PR_BASE_REPOSITORY="$(jq -er '.base.repo.full_name' "${current_pr}")"
-                  PR_BASE_REF="$(jq -er '.base.ref' "${current_pr}")"
-                  PR_BASE_SHA="$(jq -er '.base.sha' "${current_pr}")"
-                  PR_HEAD_REPOSITORY="$(jq -er '.head.repo.full_name' "${current_pr}")"
-                  PR_HEAD_REF="$(jq -er '.head.ref' "${current_pr}")"
-                  PR_HEAD_SHA="$(jq -er '.head.sha' "${current_pr}")"
-                  [[ "${PR_BASE_REPOSITORY}" == "${GITHUB_REPOSITORY}" ]]
-                  [[ "${PR_BASE_REF}" == "${DEFAULT_BRANCH}" ]]
-                  ;;
-                *)
-                  printf 'unsupported protected source event: %s\n' "${RUN_EVENT}" >&2
-                  exit 2
-                  ;;
-              esac
-              jq -e \
-                --argjson id "${RUN_ID}" \
-                --argjson workflow_id "${RUN_WORKFLOW_ID}" \
-                --arg path "${RUN_PATH}" \
-                --arg event "${RUN_EVENT}" \
-                --arg head "${RUN_HEAD_SHA}" \
-                --arg branch "${RUN_HEAD_BRANCH}" \
-                --arg status "${RUN_STATUS}" \
-                --arg conclusion "${RUN_CONCLUSION}" \
-                '.id == $id and .workflow_id == $workflow_id and
-                  .path == $path and .event == $event and
-                  .head_sha == $head and .head_branch == $branch and
-                  .status == $status and (.conclusion // "") == $conclusion' \
-                "${source_run}" >/dev/null
-              if [[ "${RUN_STATUS}" != completed || "${RUN_CONCLUSION}" != success ]]; then
-                SOURCE_ACCEPTED=false
-              fi
-              BASE_REPOSITORY="${GITHUB_REPOSITORY}"
-              BASE_REF="refs/heads/${DEFAULT_BRANCH}"
-              BASE_SHA="${WORKFLOW_SHA}"
-              if [[ "${EVENT_KIND}" == merge-group ]]; then
-                HEAD_REPOSITORY="${GITHUB_REPOSITORY}"
-                HEAD_REF="refs/heads/${RUN_HEAD_BRANCH}"
-                HEAD_SHA="${RUN_HEAD_SHA}"
-              else
-                HEAD_REPOSITORY="${PR_HEAD_REPOSITORY}"
-                HEAD_REF="refs/heads/${PR_HEAD_REF}"
-                HEAD_SHA="${PR_HEAD_SHA}"
-              fi
-              [[ "${BASE_REF}" == "refs/heads/${DEFAULT_BRANCH}" ]]
-              ;;
-            *)
-              printf 'unsupported protected parity event: %s\n' "${EVENT_NAME}" >&2
-              exit 2
-              ;;
-          esac
-          [[ "${BASE_REPOSITORY}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
-          [[ "${HEAD_REPOSITORY}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
-          git check-ref-format "${BASE_REF}" >/dev/null
-          git check-ref-format "${HEAD_REF}" >/dev/null
-          [[ "${BASE_SHA}" =~ ^[0-9a-f]{40}$ && ! "${BASE_SHA}" =~ ^0{40}$ ]]
-          [[ "${HEAD_SHA}" =~ ^[0-9a-f]{40}$ && ! "${HEAD_SHA}" =~ ^0{40}$ ]]
-          {
-            printf 'event_kind=%s\n' "${EVENT_KIND}"
-            printf 'base_repository=%s\n' "${BASE_REPOSITORY}"
-            printf 'base_ref=%s\n' "${BASE_REF}"
-            printf 'base_sha=%s\n' "${BASE_SHA}"
-            printf 'head_repository=%s\n' "${HEAD_REPOSITORY}"
-            printf 'head_ref=%s\n' "${HEAD_REF}"
-            printf 'head_sha=%s\n' "${HEAD_SHA}"
-            printf 'pr_number=%s\n' "${PR_NUMBER}"
-            printf 'source_accepted=%s\n' "${SOURCE_ACCEPTED}"
-            printf 'source_run_id=%s\n' "${SOURCE_RUN_ID}"
-            printf 'source_workflow_id=%s\n' "${SOURCE_WORKFLOW_ID}"
-            printf 'source_path=%s\n' "${SOURCE_PATH}"
-            printf 'source_event=%s\n' "${SOURCE_EVENT}"
-            printf 'source_head_branch=%s\n' "${SOURCE_HEAD_BRANCH}"
-            printf 'source_head_sha=%s\n' "${SOURCE_HEAD_SHA}"
-          } >>"${GITHUB_OUTPUT}"
+      - name: Check out protected controller revision
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: protected-controller
+          fetch-depth: 1
+          persist-credentials: false
 
       - name: Mint minimal verdict token
         id: verdict-token
@@ -211,334 +67,55 @@ jobs:
           private-key: ${{ secrets.PARITY_VERDICT_APP_PRIVATE_KEY }}
           permission-checks: write
 
-      - name: Start candidate-bound verdict
-        id: verdict
+      - name: Reconcile exact event target
         env:
-          GH_TOKEN: ${{ steps.verdict-token.outputs.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          READ_TOKEN: ${{ github.token }}
+          CHECK_TOKEN: ${{ steps.verdict-token.outputs.token }}
+          PROTECTED_SHA: ${{ github.workflow_sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          EXPECTED_CI_WORKFLOW_ID: ${{ vars.PARITY_GENERIC_CI_WORKFLOW_ID }}
+          EXPECTED_REVIEW_WORKFLOW_ID: ${{ vars.PARITY_REVIEW_SIGNAL_WORKFLOW_ID }}
           EXPECTED_APP_ID: ${{ vars.PARITY_VERDICT_APP_ID }}
           EXPECTED_APP_SLUG: ${{ steps.verdict-token.outputs.app-slug }}
-          HEAD_SHA: ${{ steps.context.outputs.head_sha }}
-          CHECK_NAME: fe2o3/protected-parity-promotion
         run: |
           set -Eeuo pipefail
-          [[ "${EXPECTED_APP_ID}" =~ ^[1-9][0-9]*$ ]]
-          [[ "${EXPECTED_APP_SLUG}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*$ ]]
-          payload="${RUNNER_TEMP}/parity-check-create.json"
-          response="${RUNNER_TEMP}/parity-check-create-response.json"
-          jq -n \
-            --arg name "${CHECK_NAME}" \
-            --arg head_sha "${HEAD_SHA}" \
-            --arg external_id "${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}" \
-            '{name:$name,head_sha:$head_sha,status:"in_progress",external_id:$external_id,
-              output:{title:"Protected parity verification running",
-                summary:"Trusted protected-base verification is in progress."}}' \
-            >"${payload}"
-          gh api --method POST \
-            -H 'Accept: application/vnd.github+json' \
-            "repos/${GITHUB_REPOSITORY}/check-runs" \
-            --input "${payload}" >"${response}"
-          jq -e \
-            --arg name "${CHECK_NAME}" \
-            --arg head "${HEAD_SHA}" \
-            --arg app_id "${EXPECTED_APP_ID}" \
-            --arg app_slug "${EXPECTED_APP_SLUG}" \
-            '.id | type == "number"' "${response}" >/dev/null
-          jq -e \
-            --arg name "${CHECK_NAME}" \
-            --arg head "${HEAD_SHA}" \
-            --arg app_id "${EXPECTED_APP_ID}" \
-            --arg app_slug "${EXPECTED_APP_SLUG}" \
-            '.name == $name and .head_sha == $head and .status == "in_progress" and
-              (.app.id | tostring) == $app_id and .app.slug == $app_slug' \
-            "${response}" >/dev/null
-          printf 'check_id=%s\n' "$(jq -r '.id' "${response}")" >>"${GITHUB_OUTPUT}"
+          bash protected-controller/scripts/parity-protected-controller.sh \
+            event "${GITHUB_EVENT_PATH}"
 
-      - name: Verify immutable promotion transaction
-        id: transaction
-        continue-on-error: true
+  reconcile:
+    name: Reconcile active protected parity checks
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment: parity-verdict
+    steps:
+      - name: Check out protected controller revision
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: protected-controller
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Mint minimal verdict token
+        id: verdict-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        with:
+          app-id: ${{ vars.PARITY_VERDICT_APP_ID }}
+          private-key: ${{ secrets.PARITY_VERDICT_APP_PRIVATE_KEY }}
+          permission-checks: write
+
+      - name: Reconcile open PRs and active merge groups
         env:
-          GH_TOKEN: ${{ github.token }}
-          EVENT_KIND: ${{ steps.context.outputs.event_kind }}
-          BASE_REPOSITORY: ${{ steps.context.outputs.base_repository }}
-          BASE_REF: ${{ steps.context.outputs.base_ref }}
-          BASE_SHA: ${{ steps.context.outputs.base_sha }}
-          HEAD_REPOSITORY: ${{ steps.context.outputs.head_repository }}
-          HEAD_REF: ${{ steps.context.outputs.head_ref }}
-          HEAD_SHA: ${{ steps.context.outputs.head_sha }}
-          PR_NUMBER: ${{ steps.context.outputs.pr_number }}
-          SOURCE_ACCEPTED: ${{ steps.context.outputs.source_accepted }}
-          SOURCE_RUN_ID: ${{ steps.context.outputs.source_run_id }}
-          SOURCE_WORKFLOW_ID: ${{ steps.context.outputs.source_workflow_id }}
-          SOURCE_PATH: ${{ steps.context.outputs.source_path }}
-          SOURCE_EVENT: ${{ steps.context.outputs.source_event }}
-          SOURCE_HEAD_BRANCH: ${{ steps.context.outputs.source_head_branch }}
-          SOURCE_HEAD_SHA: ${{ steps.context.outputs.source_head_sha }}
-        run: |
-          set -Eeuo pipefail
-          [[ "${SOURCE_ACCEPTED}" == true ]] || {
-            printf 'source workflow did not complete successfully\n' >&2
-            exit 2
-          }
-          REVISION_REPOSITORY="${RUNNER_TEMP}/parity-revisions.git"
-          git init --bare "${REVISION_REPOSITORY}"
-          auth_header="$(
-            printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n'
-          )"
-          git -C "${REVISION_REPOSITORY}" \
-            -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
-            fetch --no-tags --force \
-            "https://github.com/${BASE_REPOSITORY}.git" \
-            "+${BASE_REF}:refs/parity/base"
-          git -C "${REVISION_REPOSITORY}" \
-            -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
-            fetch --no-tags --force \
-            "https://github.com/${HEAD_REPOSITORY}.git" \
-            "+${HEAD_REF}:refs/parity/head"
-          unset auth_header
-          FETCHED_BASE_SHA="$(git -C "${REVISION_REPOSITORY}" \
-            rev-parse --verify 'refs/parity/base^{commit}')"
-          FETCHED_HEAD_SHA="$(git -C "${REVISION_REPOSITORY}" \
-            rev-parse --verify 'refs/parity/head^{commit}')"
-          [[ "${FETCHED_BASE_SHA}" == "${BASE_SHA}" ]] || {
-            printf 'protected base changed after event delivery\n' >&2
-            exit 2
-          }
-          [[ "${FETCHED_HEAD_SHA}" == "${HEAD_SHA}" ]] || {
-            printf 'candidate head changed after event delivery\n' >&2
-            exit 2
-          }
-          [[ "$(git -C "${REVISION_REPOSITORY}" cat-file -t "${BASE_SHA}")" == commit ]]
-          [[ "$(git -C "${REVISION_REPOSITORY}" cat-file -t "${HEAD_SHA}")" == commit ]]
-          if [[ "${EVENT_KIND}" == merge-group ]]; then
-            git -C "${REVISION_REPOSITORY}" merge-base --is-ancestor \
-              "${BASE_SHA}" "${HEAD_SHA}" || {
-              printf 'merge-group head does not descend from its base\n' >&2
-              exit 2
-            }
-          fi
-          git -C "${REVISION_REPOSITORY}" worktree add --detach \
-            "${GITHUB_WORKSPACE}/protected" "${BASE_SHA}"
-          git -C "${REVISION_REPOSITORY}" worktree add --detach \
-            "${GITHUB_WORKSPACE}/candidate" "${HEAD_SHA}"
-
-          fetch_reviews() {
-            local output="$1"
-            gh api --paginate \
-              "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100" |
-              jq -s 'add' >"${output}"
-          }
-
-          verify_current_pr() {
-            local snapshot="$1"
-            jq -e \
-              --argjson number "${PR_NUMBER}" \
-              --arg base_sha "${BASE_SHA}" \
-              --arg head_sha "${HEAD_SHA}" \
-              --arg base_repo "${BASE_REPOSITORY}" \
-              --arg head_repo "${HEAD_REPOSITORY}" \
-              --arg base_ref "${BASE_REF#refs/heads/}" \
-              --arg head_ref "${HEAD_REF#refs/heads/}" \
-              '.number == $number and .state == "open" and .draft == false and
-                .base.sha == $base_sha and .head.sha == $head_sha and
-                .base.repo.full_name == $base_repo and
-                .head.repo.full_name == $head_repo and
-                .base.ref == $base_ref and .head.ref == $head_ref' \
-              "${snapshot}" >/dev/null
-          }
-
-          canonicalize_reviews() {
-            local input="$1"
-            local output="$2"
-            jq -cS '
-              map({id,submitted_at,state,commit_id,
-                user_login:(.user.login // null)}) | sort_by(.id)
-            ' "${input}" >"${output}"
-          }
-
-          reviews="${RUNNER_TEMP}/parity-pr-reviews.json"
-          if [[ "${EVENT_KIND}" == pull-request ]]; then
-            fetch_reviews "${reviews}"
-          else
-            printf '[]\n' >"${reviews}"
-          fi
-          mode="$(bash protected/scripts/parity-protected-change-policy.sh \
-            protected candidate docs/cuda-oxide-parity-status.tsv \
-            "${reviews}" protected/.github/parity-trust-reviewers.txt \
-            "${REVISION_REPOSITORY}" "${BASE_SHA}" "${HEAD_SHA}" \
-            "${EVENT_KIND}")"
-
-          case "${mode}" in
-            no-op)
-              printf 'no parity promotion or trust change\n'
-              ;;
-            trust-change-approved|trust-change-merge-group)
-              python3 protected/scripts/parity-signed-evidence.py check-trust-update \
-                --protected-root protected \
-                --protected-policy protected/docs/parity-evidence/trust-policy-v2.tsv \
-                --candidate-root candidate \
-                --candidate-policy candidate/docs/parity-evidence/trust-policy-v2.tsv \
-                --protected-row-policy protected/docs/parity-row-evidence-policy-v2.tsv \
-                --candidate-row-policy candidate/docs/parity-row-evidence-policy-v2.tsv
-              ;;
-            promotion)
-              test -f protected/docs/parity-evidence/trust-policy-v2.tsv
-              test -d protected/docs/parity-evidence/trusted-keys
-              manifest="$(python3 protected/scripts/parity-signed-evidence.py \
-                derive-promotion-manifest \
-                --protected-archive protected/docs/parity-evidence/archive \
-                --candidate-archive candidate/docs/parity-evidence/archive)"
-              transaction="${RUNNER_TEMP}/signed-promotion-transaction.tsv"
-              archive_closure="${RUNNER_TEMP}/signed-promotion-archive-closure.tsv"
-              python3 protected/scripts/parity-signed-evidence.py gate \
-                --repo candidate \
-                --archive-root candidate/docs/parity-evidence/archive \
-                --trusted-root protected \
-                --trust-policy protected/docs/parity-evidence/trust-policy-v2.tsv \
-                --manifest "${manifest}" \
-                --trusted-policy protected/docs/parity-row-evidence-policy-v2.tsv \
-                --candidate-policy candidate/docs/parity-row-evidence-policy-v2.tsv \
-                --baseline-status protected/docs/cuda-oxide-parity-status.tsv \
-                --candidate-status candidate/docs/cuda-oxide-parity-status.tsv \
-                --projection-output "${transaction}" \
-                --archive-closure-output "${archive_closure}"
-              bash protected/scripts/parity-promotion-projections.sh \
-                protected candidate "${transaction}" "${archive_closure}"
-              ;;
-            *)
-              printf 'unknown protected change mode: %s\n' "${mode}" >&2
-              exit 2
-              ;;
-          esac
-
-          # Revalidate the source workflow first. A completed source with any
-          # conclusion other than success cannot authorize an App verdict.
-          if ((SOURCE_RUN_ID > 0)); then
-            source_run="${RUNNER_TEMP}/final-source-workflow-run.json"
-            gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}" \
-              >"${source_run}"
-            jq -e \
-              --argjson id "${SOURCE_RUN_ID}" \
-              --argjson workflow_id "${SOURCE_WORKFLOW_ID}" \
-              --arg path "${SOURCE_PATH}" \
-              --arg event "${SOURCE_EVENT}" \
-              --arg head "${SOURCE_HEAD_SHA}" \
-              --arg branch "${SOURCE_HEAD_BRANCH}" \
-              '.id == $id and .workflow_id == $workflow_id and
-                .path == $path and .event == $event and
-                .head_sha == $head and .head_branch == $branch and
-                .status == "completed" and .conclusion == "success"' \
-              "${source_run}" >/dev/null || {
-              printf 'source workflow no longer authorizes protected verification\n' >&2
-              exit 2
-            }
-          fi
-
-          # Lock the current PR and approval set immediately before permitting
-          # success. The protected classifier is rerun with freshly fetched
-          # reviews, then the approval IDs/timestamps and PR revision are read
-          # once more to detect dismissal or force-push during validation.
-          if [[ "${EVENT_KIND}" == pull-request ]]; then
-            current_pr_a="${RUNNER_TEMP}/current-pr-a.json"
-            current_pr_b="${RUNNER_TEMP}/current-pr-b.json"
-            current_reviews_a="${RUNNER_TEMP}/current-reviews-a.json"
-            current_reviews_b="${RUNNER_TEMP}/current-reviews-b.json"
-            review_snapshot_a="${RUNNER_TEMP}/review-snapshot-a.json"
-            review_snapshot_b="${RUNNER_TEMP}/review-snapshot-b.json"
-            gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" \
-              >"${current_pr_a}"
-            verify_current_pr "${current_pr_a}" || {
-              printf 'pull request revision changed during protected verification\n' >&2
-              exit 2
-            }
-            fetch_reviews "${current_reviews_a}"
-            current_mode="$(bash protected/scripts/parity-protected-change-policy.sh \
-              protected candidate docs/cuda-oxide-parity-status.tsv \
-              "${current_reviews_a}" protected/.github/parity-trust-reviewers.txt \
-              "${REVISION_REPOSITORY}" "${BASE_SHA}" "${HEAD_SHA}" \
-              "${EVENT_KIND}")"
-            [[ "${current_mode}" == "${mode}" ]] || {
-              printf 'protected change mode changed during approval revalidation\n' >&2
-              exit 2
-            }
-            canonicalize_reviews "${current_reviews_a}" "${review_snapshot_a}"
-            fetch_reviews "${current_reviews_b}"
-            canonicalize_reviews "${current_reviews_b}" "${review_snapshot_b}"
-            cmp -s -- "${review_snapshot_a}" "${review_snapshot_b}" || {
-              printf 'pull request reviews changed during approval revalidation\n' >&2
-              exit 2
-            }
-            gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" \
-              >"${current_pr_b}"
-            verify_current_pr "${current_pr_b}" || {
-              printf 'pull request revision changed during approval revalidation\n' >&2
-              exit 2
-            }
-          else
-            auth_header="$(
-              printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n'
-            )"
-            git -C "${REVISION_REPOSITORY}" \
-              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
-              fetch --no-tags --force \
-              "https://github.com/${GITHUB_REPOSITORY}.git" \
-              "+${BASE_REF}:refs/parity/final-base" \
-              "+${HEAD_REF}:refs/parity/final-head"
-            unset auth_header
-            [[ "$(git -C "${REVISION_REPOSITORY}" rev-parse \
-              'refs/parity/final-base^{commit}')" == "${BASE_SHA}" ]]
-            [[ "$(git -C "${REVISION_REPOSITORY}" rev-parse \
-              'refs/parity/final-head^{commit}')" == "${HEAD_SHA}" ]]
-          fi
-
-          # No candidate executable or workflow content is invoked above.
-
-      - name: Complete candidate-bound verdict
-        if: always() && steps.verdict.outputs.check_id != ''
-        env:
-          GH_TOKEN: ${{ steps.verdict-token.outputs.token }}
+          READ_TOKEN: ${{ github.token }}
+          CHECK_TOKEN: ${{ steps.verdict-token.outputs.token }}
+          PROTECTED_SHA: ${{ github.workflow_sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          EXPECTED_CI_WORKFLOW_ID: ${{ vars.PARITY_GENERIC_CI_WORKFLOW_ID }}
+          EXPECTED_REVIEW_WORKFLOW_ID: ${{ vars.PARITY_REVIEW_SIGNAL_WORKFLOW_ID }}
           EXPECTED_APP_ID: ${{ vars.PARITY_VERDICT_APP_ID }}
           EXPECTED_APP_SLUG: ${{ steps.verdict-token.outputs.app-slug }}
-          CHECK_ID: ${{ steps.verdict.outputs.check_id }}
-          CHECK_NAME: fe2o3/protected-parity-promotion
-          HEAD_SHA: ${{ steps.context.outputs.head_sha }}
-          TRANSACTION_OUTCOME: ${{ steps.transaction.outcome }}
         run: |
           set -Eeuo pipefail
-          conclusion=failure
-          title='Protected parity verification failed'
-          summary='The protected-base verifier rejected this exact revision.'
-          if [[ "${TRANSACTION_OUTCOME}" == success ]]; then
-            conclusion=success
-            title='Protected parity verification passed'
-            summary='The protected-base verifier accepted this exact revision.'
-          fi
-          payload="${RUNNER_TEMP}/parity-check-complete.json"
-          response="${RUNNER_TEMP}/parity-check-complete-response.json"
-          jq -n \
-            --arg conclusion "${conclusion}" \
-            --arg title "${title}" \
-            --arg summary "${summary}" \
-            '{status:"completed",conclusion:$conclusion,
-              output:{title:$title,summary:$summary}}' >"${payload}"
-          gh api --method PATCH \
-            -H 'Accept: application/vnd.github+json' \
-            "repos/${GITHUB_REPOSITORY}/check-runs/${CHECK_ID}" \
-            --input "${payload}" >"${response}"
-          jq -e \
-            --argjson check_id "${CHECK_ID}" \
-            --arg name "${CHECK_NAME}" \
-            --arg head "${HEAD_SHA}" \
-            --arg app_id "${EXPECTED_APP_ID}" \
-            --arg app_slug "${EXPECTED_APP_SLUG}" \
-            --arg conclusion "${conclusion}" \
-            '.id == $check_id and .name == $name and .head_sha == $head and
-              .status == "completed" and .conclusion == $conclusion and
-              (.app.id | tostring) == $app_id and .app.slug == $app_slug' \
-            "${response}" >/dev/null
-          [[ "${conclusion}" == success ]]
-
-      - name: Require published trusted verdict
-        if: always() && steps.verdict.outputs.check_id == ''
-        run: |
-          printf 'trusted candidate-bound parity verdict was not published\n' >&2
-          exit 2
+          bash protected-controller/scripts/parity-protected-controller.sh reconcile
