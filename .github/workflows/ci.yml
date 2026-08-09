@@ -87,12 +87,8 @@ jobs:
           git show "${BASE_SHA}:docs/cuda-oxide-parity-status.tsv" >"${baseline}"
           test -d "${archive}"
           test -f "${archive}/manifests/promotion-v2.tsv"
-          git archive "${BASE_SHA}" \
-            scripts/parity-signed-evidence.py \
-            docs/parity-row-evidence-policy-v2.tsv \
-            docs/parity-evidence/trust-policy-v2.tsv \
-            docs/parity-evidence/trusted-keys |
-            tar -x -C "${trusted}"
+          git archive "${BASE_SHA}" | tar -x -C "${trusted}"
+          transaction="${RUNNER_TEMP}/signed-promotion-transaction.tsv"
           python3 "${trusted}/scripts/parity-signed-evidence.py" gate \
             --repo "${GITHUB_WORKSPACE}" \
             --archive-root "${archive}" \
@@ -102,7 +98,10 @@ jobs:
             --trusted-policy "${trusted}/docs/parity-row-evidence-policy-v2.tsv" \
             --candidate-policy docs/parity-row-evidence-policy-v2.tsv \
             --baseline-status "${baseline}" \
-            --candidate-status docs/cuda-oxide-parity-status.tsv
+            --candidate-status docs/cuda-oxide-parity-status.tsv \
+            --projection-output "${transaction}"
+          bash "${trusted}/scripts/parity-promotion-projections.sh" \
+            "${trusted}" "${GITHUB_WORKSPACE}" "${transaction}"
 
       - name: Install pinned Rust toolchain
         run: rustup show active-toolchain

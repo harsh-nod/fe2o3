@@ -11,6 +11,7 @@ readonly DEFAULT_STATUS="${DEFAULT_REPO_ROOT}/docs/cuda-oxide-parity-status.tsv"
 readonly DEFAULT_MATRIX="${DEFAULT_REPO_ROOT}/docs/cuda-oxide-parity-matrix.md"
 readonly DEFAULT_MARKDOWN="${DEFAULT_REPO_ROOT}/docs/generated/cuda-oxide-parity-dashboard.md"
 readonly DEFAULT_TSV="${DEFAULT_REPO_ROOT}/docs/generated/cuda-oxide-parity-dashboard.tsv"
+readonly DEFAULT_SIGNED_PROMOTIONS="${DEFAULT_REPO_ROOT}/docs/generated/cuda-oxide-parity-signed-promotions.tsv"
 readonly MAX_INPUT_BYTES=1048576
 readonly MAX_FIELD_LENGTH=4096
 
@@ -28,6 +29,7 @@ declare -A EVIDENCE_TOOLCHAINS=()
 declare -A EVIDENCE_STRENGTHS=()
 declare -A EVIDENCE_LIMITATIONS=()
 declare -A EVIDENCE_USED=()
+declare -A EVIDENCE_SIGNED=()
 declare -A CLAIM_STATUS=()
 declare -A CLAIM_EVIDENCE=()
 
@@ -55,6 +57,8 @@ Options:
   --repo PATH         Repository root used for stale-path checks
   --markdown FILE     Generated Markdown dashboard
   --tsv FILE          Generated machine-readable dashboard
+  --signed-promotions FILE
+                      Protected deterministic signed-promotion ledger
 
   --promotion-baseline FILE
                       Previous canonical status snapshot
@@ -98,6 +102,14 @@ row_id_at() {
   fi
 }
 
+row_rank() {
+  if [[ "$1" == S* ]]; then
+    printf '%d' "$((94 + 10#${1#S}))"
+  else
+    printf '%d' "$((10#$1))"
+  fi
+}
+
 valid_hash() {
   [[ "$1" =~ ^[0-9a-f]{40}$ ]]
 }
@@ -105,8 +117,8 @@ valid_hash() {
 valid_landed_evidence_commit() {
   local commit="$1"
   git -C "${REPO_ROOT}" cat-file -e "${commit}^{commit}" 2>/dev/null &&
-    git -C "${REPO_ROOT}" merge-base --is-ancestor "${STATUS_COMMIT}" "${commit}" &&
-    git -C "${REPO_ROOT}" merge-base --is-ancestor "${commit}" HEAD
+    git -C "${REPO_ROOT}" merge-base --is-ancestor "${commit}" "${STATUS_COMMIT}" &&
+    git -C "${REPO_ROOT}" merge-base --is-ancestor "${STATUS_COMMIT}" HEAD
 }
 
 valid_status() {
@@ -263,9 +275,9 @@ parse_matrix() {
 }
 
 emit_default_claims() {
+  printf 'schema_version\t1\n'
+  printf 'fe2o3_commit\t%s\n' "${STATUS_COMMIT}"
   cat <<'EOF'
-schema_version	1
-fe2o3_commit	2fee8b63b77df73b92f4de79caaabc5b623ab867
 evidence	abi-pack	crates/fe2o3-core/src/memory.rs,crates/fe2o3-core/tests/device_buffer_view_ui.rs,crates/fe2o3-host/src/generated_argument_plan.rs,crates/fe2o3-host/src/argument_alias.rs,crates/fe2o3-host/src/artifact_binding.rs,crates/fe2o3-host/src/generated_alpha_zeta_cov6.rs,crates/fe2o3-host/src/hsa_executable_lifecycle.rs,crates/fe2o3-host/tests/generated_spi_ui.rs,crates/fe2o3-host/tests/ui/generated_spi,crates/fe2o3-macros/src/lib.rs,crates/fe2o3-macros/tests/typed_kernel_fixtures.rs,crates/rustc-codegen-fe2o3/src/rust_type_layout_v3.rs,crates/rustc-codegen-fe2o3/src/compiler_descriptor.rs,crates/rustc-codegen-fe2o3/src/semantic_witness.rs,crates/fe2o3-hsa-runtime/tests/gfx942_two_kernel_hardware.rs	cargo test -p fe2o3-core --all-targets --locked@@cargo test -p fe2o3-host --locked@@cargo test -p fe2o3-host --test generated_spi_ui --locked@@cargo test -p fe2o3-macros --locked@@cargo test -p rustc-codegen-fe2o3 --lib --locked@@cargo test -p fe2o3-hsa-runtime --features hardware-test-hooks --test gfx942_two_kernel_hardware --locked	2fee8b63b77df73b92f4de79caaabc5b623ab867	generic,gfx942	rust-nightly-2026-04-03,rocm-7.2	source-unit,negative-adversarial	General V3 source/unit evidence covers named semantic layouts, exact alpha/zeta COV6 descriptors, checked allocation views and mutable splits, retained packing, alias admission, backend witnesses, and generated preparation/dispatch. The observed generated-safe MI300X run uses test witnesses and a fake authenticator. Aggregate ABI coverage, a mechanical Verus split proof, and machine-code refinement remain incomplete.
 evidence	artifacts	crates/fe2o3-artifacts/src/container.rs,crates/fe2o3-artifacts/src/bundle.rs,crates/fe2o3-artifacts/src/gfx942_bundle.rs,crates/fe2o3-artifacts/tests/gfx942_bundle.rs	cargo test -p fe2o3-artifacts --locked	2fee8b63b77df73b92f4de79caaabc5b623ab867	generic,gfx942	rust-nightly-2026-04-03	source-unit,negative-adversarial	The canonical profile admits exactly two kernels bound to one shared gfx942 native payload and per-kernel proof records, with substitution and duplicate rejection. It is a bounded profile rather than general compiler-produced bundles, and this evidence does not load or execute either kernel.
 evidence	atomics	crates/fe2o3-kernel-ir/src/ir.rs,crates/dialect-amdgcn/src/lowering.rs	cargo test -p fe2o3-kernel-ir --locked@@cargo test -p dialect-amdgcn --locked@@FE2O3_TARGET=gfx1151 scripts/ci-local.sh rocm-compile@@FE2O3_TARGET=gfx942 scripts/ci-local.sh rocm-compile@@FE2O3_TARGET=gfx950 scripts/ci-local.sh rocm-compile	2fee8b63b77df73b92f4de79caaabc5b623ab867	generic,gfx1151,gfx942,gfx950	rust-nightly-2026-04-03,rocm-7.2	source-unit,negative-adversarial,compile-code-object	Integer atomic lowering covers bounded operations and scopes; float atomics, standard-library integration, coherent-allocation admission, and hardware memory-order execution remain incomplete.
@@ -587,18 +599,9 @@ parse_claims() {
           die "malformed status transition for ${id}: claim ${status}, source ${ROW_STATUS[${id}]}"
         [[ -v "EVIDENCE_PATHS[${evidence_id}]" ]] ||
           die "claim ${id} references unknown evidence: ${evidence_id}"
-        expected=""
-        claim_position=0
-        for ((row_index = last_claim_position + 1; row_index <= 109; row_index++)); do
-          expected="$(row_id_at "${row_index}")"
-          if [[ "${ROW_STATUS[${expected}]}" == Partial || "${ROW_STATUS[${expected}]}" == Complete ]]; then
-            claim_position="${row_index}"
-            break
-          fi
-        done
-        ((claim_position > 0)) || die "claim contains an unexpected trailing row: ${id}"
-        [[ "${id}" == "${expected}" ]] ||
-          die "claim rows are missing or out of order: expected ${expected}, found ${id}"
+        claim_position="$(row_rank "${id}")"
+        ((claim_position > last_claim_position)) ||
+          die "claim rows are duplicate or out of order: ${id}"
         last_claim_position="${claim_position}"
         CLAIM_STATUS["${id}"]="${status}"
         CLAIM_EVIDENCE["${id}"]="${evidence_id}"
@@ -609,13 +612,164 @@ parse_claims() {
   done <"${path}"
 
   [[ -n "${CLAIMS_COMMIT}" ]] || die 'claim file is missing fe2o3_commit'
+}
+
+parse_signed_promotions() {
+  local path="$1"
+  local line=""
+  local line_number=0
+  local expected_count=""
+  local actual_count=0
+  local expected_index=""
+  local record=""
+  local index=""
+  local id=""
+  local from_status=""
+  local to_status=""
+  local source=""
+  local target=""
+  local lane=""
+  local classes=""
+  local toolchains=""
+  local results=""
+  local evidence_set=""
+  local extra=""
+  local evidence_id=""
+  local result=""
+  local class=""
+  local strengths=""
+  local signed_paths=""
+  local previous_rank=0
+  local current_rank=0
+  local previous_class_rank=-1
+  local class_rank=0
+  local toolchain=""
+  local previous_toolchain=""
+  local segment=""
+  local -a class_values=()
+  local -a result_values=()
+  local -a toolchain_values=()
+  local -a path_segments=()
+
+  require_readable_bounded "${path}" 'signed-promotion ledger'
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    ((line_number += 1))
+    [[ -n "${line}" && "${line}" != *$'\r'* ]] ||
+      die "blank or carriage-return signed-promotion line at ${line_number}"
+    case "${line_number}" in
+      1)
+        [[ "${line}" == $'signed_promotion_projection_schema_version\t1' ]] ||
+          die 'signed-promotion ledger schema must be exactly 1'
+        ;;
+      2)
+        IFS=$'\t' read -r record expected_count extra <<<"${line}"
+        [[ "${record}" == row_count && "${expected_count}" =~ ^(0|[1-9][0-9]*)$ && -z "${extra}" ]] ||
+          die 'signed-promotion ledger row count is malformed'
+        ;;
+      *)
+        IFS=$'\t' read -r record index id from_status to_status source target lane classes toolchains results evidence_set extra <<<"${line}"
+        expected_index="$(printf '%04d' "${actual_count}")"
+        [[ "${record}" == row && "${index}" == "${expected_index}" && -z "${extra}" ]] ||
+          die "signed-promotion ledger row ${actual_count} is malformed"
+        [[ "${id}" =~ ^([0-9]{2}|S[0-9]{2})$ && -v "ROW_STATUS[${id}]" ]] ||
+          die "signed-promotion ledger has an invalid row: ${id}"
+        current_rank="$(row_rank "${id}")"
+        ((current_rank > previous_rank)) ||
+          die "signed-promotion ledger rows are duplicate or out of order: ${id}"
+        [[ ("${from_status}" == Missing && ("${to_status}" == Partial || "${to_status}" == Complete)) ||
+          ("${from_status}" == Partial && "${to_status}" == Complete) ]] ||
+          die "signed-promotion ledger transition is invalid for ${id}"
+        [[ "${ROW_STATUS[${id}]}" == "${to_status}" ]] ||
+          die "signed-promotion ledger/status mismatch for ${id}"
+        if ! valid_hash "${source}" || ! valid_landed_evidence_commit "${source}"; then
+          die "signed-promotion ledger source is invalid for ${id}"
+        fi
+        [[ "${target}" =~ ^(generic|gfx[0-9a-f]+(:[A-Za-z0-9_+-]+)*)$ &&
+          "${lane}" =~ ^[a-z0-9][a-z0-9._-]{0,63}$ &&
+          "${toolchains}" =~ ^[a-z][a-z0-9._-]{0,63}(,[a-z][a-z0-9._-]{0,63})*$ &&
+          "${evidence_set}" =~ ^[0-9a-f]{64}$ ]] ||
+          die "signed-promotion ledger identity is malformed for ${id}"
+        [[ ! -v "CLAIM_STATUS[${id}]" ]] ||
+          die "signed-promotion ledger overlaps built-in claim for ${id}"
+
+        IFS=, read -r -a class_values <<<"${classes}"
+        IFS=, read -r -a result_values <<<"${results}"
+        IFS=, read -r -a toolchain_values <<<"${toolchains}"
+        (("${#class_values[@]}" > 0 && "${#class_values[@]}" == "${#result_values[@]}")) ||
+          die "signed-promotion ledger class/result count mismatch for ${id}"
+        previous_class_rank=-1
+        previous_toolchain=""
+        strengths=""
+        signed_paths=""
+        for toolchain in "${toolchain_values[@]}"; do
+          [[ "${toolchain}" > "${previous_toolchain}" ]] ||
+            die "signed-promotion ledger toolchains are duplicate or out of order for ${id}"
+          previous_toolchain="${toolchain}"
+        done
+        for class in "${class_values[@]}"; do
+          case "${class}" in
+            unit) class_rank=0; list_contains "${strengths}" source-unit || strengths="${strengths:+${strengths},}source-unit" ;;
+            ui) class_rank=1; list_contains "${strengths}" negative-adversarial || strengths="${strengths:+${strengths},}negative-adversarial" ;;
+            ir) class_rank=2; list_contains "${strengths}" compile-code-object || strengths="${strengths:+${strengths},}compile-code-object" ;;
+            compile) class_rank=3; list_contains "${strengths}" compile-code-object || strengths="${strengths:+${strengths},}compile-code-object" ;;
+            verus) class_rank=4; strengths="${strengths:+${strengths},}verus-proof" ;;
+            hardware) class_rank=5; strengths="${strengths:+${strengths},}remote-hardware" ;;
+            debug) class_rank=6; strengths="${strengths:+${strengths},}debug-evidence" ;;
+            *) die "signed-promotion ledger has an invalid class for ${id}: ${class}" ;;
+          esac
+          ((class_rank > previous_class_rank)) ||
+            die "signed-promotion ledger classes are duplicate or out of order for ${id}"
+          previous_class_rank="${class_rank}"
+        done
+        for result in "${result_values[@]}"; do
+          [[ "${result}" =~ ^[A-Za-z0-9][A-Za-z0-9._/+:-]{0,511}$ &&
+            "${result}" != /* ]] ||
+            die "signed-promotion ledger result path is malformed for ${id}"
+          IFS=/ read -r -a path_segments <<<"${result}"
+          for segment in "${path_segments[@]}"; do
+            [[ -n "${segment}" && "${segment}" != . && "${segment}" != .. ]] ||
+              die "signed-promotion ledger result path traverses for ${id}"
+          done
+          result="docs/parity-evidence/archive/${result}"
+          [[ -f "${REPO_ROOT}/${result}" && ! -L "${REPO_ROOT}/${result}" ]] ||
+            die "signed-promotion ledger result is missing for ${id}: ${result}"
+          signed_paths="${signed_paths:+${signed_paths},}${result}"
+        done
+
+        evidence_id="signed-${id,,}"
+        EVIDENCE_PATHS["${evidence_id}"]="${signed_paths}"
+        EVIDENCE_TESTS["${evidence_id}"]="scripts/parity-row-evidence.sh gate"
+        EVIDENCE_COMMIT["${evidence_id}"]="${source}"
+        EVIDENCE_LANES["${evidence_id}"]="${target}"
+        EVIDENCE_TOOLCHAINS["${evidence_id}"]="${toolchains}"
+        EVIDENCE_STRENGTHS["${evidence_id}"]="${strengths}"
+        EVIDENCE_LIMITATIONS["${evidence_id}"]='Signed records satisfy the protected row policy; paths identify archived evidence, while semantic limitations remain in the matrix acceptance target.'
+        EVIDENCE_SIGNED["${evidence_id}"]=1
+        EVIDENCE_USED["${evidence_id}"]=1
+        CLAIM_STATUS["${id}"]="${to_status}"
+        CLAIM_EVIDENCE["${id}"]="${evidence_id}"
+        previous_rank="${current_rank}"
+        ((actual_count += 1))
+        ;;
+    esac
+  done <"${path}"
+  ((line_number >= 2 && actual_count == expected_count)) ||
+    die 'signed-promotion ledger count does not match its rows'
+}
+
+validate_claim_coverage() {
+  local row_index
+  local id
+  local status
+  local evidence_id
+  local strengths
   for ((row_index = 1; row_index <= 109; row_index++)); do
     id="$(row_id_at "${row_index}")"
     status="${ROW_STATUS[${id}]}"
     if [[ "${status}" == Partial || "${status}" == Complete ]]; then
       [[ -v "CLAIM_STATUS[${id}]" ]] || die "missing evidence claim for ${status} row ${id}"
       evidence_id="${CLAIM_EVIDENCE[${id}]}"
-      if [[ "${status}" == Complete ]]; then
+      if [[ "${status}" == Complete && ! -v "EVIDENCE_SIGNED[${evidence_id}]" ]]; then
         for strengths in source-unit negative-adversarial compile-code-object local-hardware remote-hardware; do
           list_contains "${EVIDENCE_STRENGTHS[${evidence_id}]}" "${strengths}" ||
             die "unsupported Complete upgrade for ${id}: missing ${strengths} evidence"
@@ -803,6 +957,7 @@ main() {
   local claims_file=""
   local markdown_file="${DEFAULT_MARKDOWN}"
   local tsv_file="${DEFAULT_TSV}"
+  local signed_promotions_file="${DEFAULT_SIGNED_PROMOTIONS}"
   local promotion_baseline=""
   local row_evidence_archive=""
   local row_evidence_manifest=""
@@ -820,6 +975,7 @@ main() {
   shift
   if [[ "${command}" == claims ]]; then
     (($# == 0)) || die 'claims accepts no options'
+    parse_status "${DEFAULT_STATUS}"
     emit_default_claims
     return 0
   fi
@@ -844,6 +1000,7 @@ main() {
       --repo) REPO_ROOT="$2" ;;
       --markdown) markdown_file="$2" ;;
       --tsv) tsv_file="$2" ;;
+      --signed-promotions) signed_promotions_file="$2" ;;
       --promotion-baseline) promotion_baseline="$2" ;;
       --row-evidence-archive) row_evidence_archive="$2" ;;
       --row-evidence-manifest) row_evidence_manifest="$2" ;;
@@ -858,13 +1015,15 @@ main() {
   [[ -d "${REPO_ROOT}" ]] || die "repository root does not exist: ${REPO_ROOT}"
 
   TEMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/fe2o3-parity-dashboard.XXXXXX")"
+  parse_status "${status_file}"
   if [[ -z "${claims_file}" ]]; then
     claims_file="${TEMP_ROOT}/claims.tsv"
     emit_default_claims >"${claims_file}"
   fi
-  parse_status "${status_file}"
   parse_matrix "${matrix_file}"
   parse_claims "${claims_file}"
+  parse_signed_promotions "${signed_promotions_file}"
+  validate_claim_coverage
 
   if [[ -n "${promotion_baseline}${row_evidence_archive}${row_evidence_manifest}${row_evidence_trusted_root}${row_evidence_trust_policy}${row_evidence_trusted_policy}${row_evidence_candidate_policy}" ]]; then
     [[ -n "${promotion_baseline}" && -n "${row_evidence_archive}" &&

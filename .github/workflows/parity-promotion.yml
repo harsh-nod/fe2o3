@@ -147,6 +147,7 @@ jobs:
           test -f protected/docs/parity-evidence/trust-policy-v2.tsv
           test -d protected/docs/parity-evidence/trusted-keys
           test -f candidate/docs/parity-evidence/archive/manifests/promotion-v2.tsv
+          transaction="${RUNNER_TEMP}/signed-promotion-transaction.tsv"
           python3 protected/scripts/parity-signed-evidence.py gate \
             --repo candidate \
             --archive-root candidate/docs/parity-evidence/archive \
@@ -156,6 +157,9 @@ jobs:
             --trusted-policy protected/docs/parity-row-evidence-policy-v2.tsv \
             --candidate-policy candidate/docs/parity-row-evidence-policy-v2.tsv \
             --baseline-status protected/docs/cuda-oxide-parity-status.tsv \
-            --candidate-status candidate/docs/cuda-oxide-parity-status.tsv
+            --candidate-status candidate/docs/cuda-oxide-parity-status.tsv \
+            --projection-output "${transaction}"
+          bash protected/scripts/parity-promotion-projections.sh \
+            protected candidate "${transaction}"
 
           # No candidate executable or workflow content is invoked above.

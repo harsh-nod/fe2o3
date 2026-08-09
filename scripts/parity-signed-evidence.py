@@ -332,7 +332,11 @@ def check_trust_update(args: argparse.Namespace) -> None:
     candidate_present = args.candidate_policy.exists() or args.candidate_policy.is_symlink()
     check_row_policy_update(args.protected_row_policy, args.candidate_row_policy)
     required_metadata = [
+        ("exact", "docs/cuda-oxide-parity-matrix.md"),
         ("exact", "docs/cuda-oxide-parity-status.tsv"),
+        ("exact", "docs/generated/cuda-oxide-parity-dashboard.md"),
+        ("exact", "docs/generated/cuda-oxide-parity-dashboard.tsv"),
+        ("exact", "docs/generated/cuda-oxide-parity-signed-promotions.tsv"),
         ("prefix", "docs/parity-evidence/archive/"),
     ]
 
@@ -1246,6 +1250,138 @@ def require_reviewer_roles(policy: dict[str, RowPolicy]) -> None:
             fail(f"row policy reviewer role must be reviewer for row {row}")
 
 
+@dataclass(frozen=True)
+class PromotionProjectionRow:
+    row: str
+    from_status: str
+    to_status: str
+    source: str
+    target: str
+    lane: str
+    classes: tuple[str, ...]
+    toolchains: tuple[str, ...]
+    results: tuple[str, ...]
+    evidence_set: str
+
+
+def parse_promotion_projection(path: Path, label: str) -> list[PromotionProjectionRow]:
+    _, _, rows = read_raw(path)
+    cursor = Cursor(rows, label)
+    if cursor.scalar("signed_promotion_projection_schema_version") != "1":
+        fail(f"{label} schema must be 1")
+    count = parse_count(cursor.scalar("row_count"), f"{label} rows")
+    output: list[PromotionProjectionRow] = []
+    previous = 0
+    for index in range(count):
+        item = cursor.record("row", 12, index)
+        (
+            row,
+            from_status,
+            to_status,
+            source,
+            target,
+            lane,
+            class_text,
+            toolchain_text,
+            result_text,
+            evidence_set,
+        ) = item[2:]
+        classes = parse_classes(class_text, f"{label} row {row}")
+        toolchains = tuple(toolchain_text.split(","))
+        results = tuple(result_text.split(","))
+        rank = row_rank(row) if valid_row(row) else 0
+        if (
+            rank <= previous
+            or not valid_transition(from_status, to_status)
+            or not COMMIT_RE.fullmatch(source)
+            or not TARGET_RE.fullmatch(target)
+            or not LANE_RE.fullmatch(lane)
+            or not toolchains
+            or any(not ID_RE.fullmatch(value) for value in toolchains)
+            or list(toolchains) != sorted(set(toolchains))
+            or len(results) != len(classes)
+            or any(not valid_relative(value) for value in results)
+            or len(results) != len(set(results))
+            or not SHA256_RE.fullmatch(evidence_set)
+        ):
+            fail(f"malformed {label} row {index:04d}")
+        output.append(
+            PromotionProjectionRow(
+                row,
+                from_status,
+                to_status,
+                source,
+                target,
+                lane,
+                classes,
+                toolchains,
+                results,
+                evidence_set,
+            )
+        )
+        previous = rank
+    cursor.done()
+    return output
+
+
+def promotion_projection_bytes(rows: Iterable[PromotionProjectionRow]) -> bytes:
+    ordered = sorted(rows, key=lambda value: row_rank(value.row))
+    lines = [
+        "signed_promotion_projection_schema_version\t1",
+        f"row_count\t{len(ordered)}",
+    ]
+    for index, value in enumerate(ordered):
+        lines.append(
+            "\t".join(
+                (
+                    "row",
+                    f"{index:04d}",
+                    value.row,
+                    value.from_status,
+                    value.to_status,
+                    value.source,
+                    value.target,
+                    value.lane,
+                    ",".join(value.classes),
+                    ",".join(value.toolchains),
+                    ",".join(value.results),
+                    value.evidence_set,
+                )
+            )
+        )
+    return ("\n".join(lines) + "\n").encode("ascii")
+
+
+def write_new_file(path: Path, payload: bytes, label: str) -> None:
+    if path.exists() or path.is_symlink():
+        fail(f"{label} output already exists")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "wb") as stream:
+        stream.write(payload)
+
+
+def merge_promotion_projections(args: argparse.Namespace) -> None:
+    baseline = parse_promotion_projection(args.baseline, "baseline promotion projection")
+    transaction = parse_promotion_projection(
+        args.transaction, "promotion transaction projection"
+    )
+    if not transaction:
+        fail("promotion transaction projection is empty")
+    merged = {value.row: value for value in baseline}
+    for value in transaction:
+        previous = merged.get(value.row)
+        if previous is not None and previous.to_status != value.from_status:
+            fail(f"promotion projection history mismatch for row {value.row}")
+        merged[value.row] = value
+    write_new_file(
+        args.output,
+        promotion_projection_bytes(merged.values()),
+        "merged promotion projection",
+    )
+    print(f"merged signed promotion projection: {len(merged)} row(s)")
+
+
 def parse_status(path: Path, label: str) -> tuple[str, dict[str, str]]:
     _, _, rows = read_raw(path)
     commit = ""
@@ -1381,6 +1517,37 @@ def gate(args: argparse.Namespace) -> None:
         fail("manifest contains evidence unused by a promotion")
     if set(authorization_by_row) != complete_rows:
         fail("manifest review authorization set is not exact")
+    if args.projection_output is not None:
+        projected_rows: list[PromotionProjectionRow] = []
+        for row in sorted(changed_rows, key=row_rank):
+            records = by_row[row]
+            projected_rows.append(
+                PromotionProjectionRow(
+                    row,
+                    baseline_status[row],
+                    candidate_status[row],
+                    manifest.source,
+                    manifest.target,
+                    manifest.lane,
+                    tuple(record.evidence_class for record in records),
+                    tuple(
+                        sorted(
+                            {
+                                toolchain[0]
+                                for record in records
+                                for toolchain in record.toolchains
+                            }
+                        )
+                    ),
+                    tuple(record.relative_path for record in records),
+                    manifest.evidence_set,
+                )
+            )
+        write_new_file(
+            args.projection_output,
+            promotion_projection_bytes(projected_rows),
+            "promotion transaction projection",
+        )
     print(f"signed parity evidence gate passed: {promotions} promotion(s)")
 
 
@@ -1662,7 +1829,13 @@ def build_parser() -> argparse.ArgumentParser:
     gate_parser.add_argument("--candidate-policy", type=Path, required=True)
     gate_parser.add_argument("--baseline-status", type=Path, required=True)
     gate_parser.add_argument("--candidate-status", type=Path, required=True)
+    gate_parser.add_argument("--projection-output", type=Path)
     gate_parser.add_argument("--allow-test-fixtures", action="store_true")
+
+    projection_merge = subparsers.add_parser("merge-projections")
+    projection_merge.add_argument("--baseline", type=Path, required=True)
+    projection_merge.add_argument("--transaction", type=Path, required=True)
+    projection_merge.add_argument("--output", type=Path, required=True)
 
     queue_run = subparsers.add_parser("queue-run")
     common_trust(queue_run)
@@ -1735,6 +1908,8 @@ def main() -> None:
         print(f"signed evidence shard is valid: {len(actual)} row(s)")
     elif args.command == "gate":
         gate(args)
+    elif args.command == "merge-projections":
+        merge_promotion_projections(args)
     elif args.command == "queue-run":
         run_queue(args)
     else:

@@ -39,9 +39,13 @@ The active trust policy is canonical TSV:
 
     parity_trust_policy_schema_version  2
     trust_domain                        production
-    metadata_path_count                 2
-    metadata_path  0000  exact   docs/cuda-oxide-parity-status.tsv
-    metadata_path  0001  prefix  docs/parity-evidence/archive/
+    metadata_path_count                 6
+    metadata_path  0000  exact   docs/cuda-oxide-parity-matrix.md
+    metadata_path  0001  exact   docs/cuda-oxide-parity-status.tsv
+    metadata_path  0002  exact   docs/generated/cuda-oxide-parity-dashboard.md
+    metadata_path  0003  exact   docs/generated/cuda-oxide-parity-dashboard.tsv
+    metadata_path  0004  exact   docs/generated/cuda-oxide-parity-signed-promotions.tsv
+    metadata_path  0005  prefix  docs/parity-evidence/archive/
     key_count                           2
     key  0000  attestor  runner-v1    PUBLIC_KEY_PATH  SHA256  ed25519
     key  0001  reviewer  reviewer-v1  PUBLIC_KEY_PATH  SHA256  ed25519
@@ -59,6 +63,13 @@ a strict superset of Partial. No break-glass path is implemented.
 Tabs, not spaces, separate fields. Metadata paths are the only files allowed
 to differ between the attested source commit and candidate HEAD. No-renames
 diff semantics ensure moving or deleting implementation source still fails.
+The projection paths do not grant candidate authorship: after the signed gate
+succeeds, the protected verifier emits a canonical transaction record and
+protected-base generators rebuild the matrix, signed-promotion ledger, and
+both dashboards. Hosted CI byte-compares those outputs with the candidate.
+The matrix starts from the protected-base template, so prose, feature names,
+acceptance targets, classes, and gate assignments cannot change in a promotion.
+Existing evidence archive entries are append-only and byte-identical.
 
 ## Persistent Row Policy
 
@@ -312,12 +323,21 @@ Hosted CI executes the verifier extracted from the protected base:
       --trusted-policy /protected/base/docs/parity-row-evidence-policy-v2.tsv \
       --candidate-policy docs/parity-row-evidence-policy-v2.tsv \
       --baseline-status /tmp/status-before.tsv \
-      --candidate-status docs/cuda-oxide-parity-status.tsv
+      --candidate-status docs/cuda-oxide-parity-status.tsv \
+      --projection-output /tmp/promotion-transaction.tsv
+
+It then invokes the protected projection transaction:
+
+    bash /protected/base/scripts/parity-promotion-projections.sh \
+      /protected/base . /tmp/promotion-transaction.tsv
 
 The gate accepts only Missing-to-Partial, Missing-to-Complete, or
 Partial-to-Complete, requires exact policy classes, rejects test-domain
 evidence, verifies source trees, and permits only protected-policy metadata
-changes after attestation.
+changes after attestation. The projection transaction preserves prior ledger
+rows, replaces a row only for a valid subsequent upgrade, rejects archive
+mutation or deletion, and derives every visible status/count change from the
+candidate status using protected generators.
 
 ## Tests
 
