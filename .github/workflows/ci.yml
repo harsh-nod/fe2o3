@@ -23,6 +23,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Install generic test prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes ripgrep
+
       - name: Gate parity status promotions
         env:
           EVENT_NAME: ${{ github.event_name }}
