@@ -1032,7 +1032,7 @@ mod tests {
             identity_offsets.push(bytes.len());
             bytes.extend_from_slice(identity);
         }
-        while bytes.len() % 8 != 0 {
+        while !bytes.len().is_multiple_of(8) {
             bytes.push(0);
         }
         let section_offset = bytes.len();
