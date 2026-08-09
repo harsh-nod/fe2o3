@@ -78,6 +78,7 @@ jobs:
           EXPECTED_REVIEW_WORKFLOW_ID: ${{ vars.PARITY_REVIEW_SIGNAL_WORKFLOW_ID }}
           EXPECTED_APP_ID: ${{ vars.PARITY_VERDICT_APP_ID }}
           EXPECTED_APP_SLUG: ${{ steps.verdict-token.outputs.app-slug }}
+          EXPECTED_APP_OWNER: ${{ vars.PARITY_VERDICT_APP_OWNER }}
         run: |
           set -Eeuo pipefail
           bash protected-controller/scripts/parity-protected-controller.sh \
@@ -116,6 +117,7 @@ jobs:
           EXPECTED_REVIEW_WORKFLOW_ID: ${{ vars.PARITY_REVIEW_SIGNAL_WORKFLOW_ID }}
           EXPECTED_APP_ID: ${{ vars.PARITY_VERDICT_APP_ID }}
           EXPECTED_APP_SLUG: ${{ steps.verdict-token.outputs.app-slug }}
+          EXPECTED_APP_OWNER: ${{ vars.PARITY_VERDICT_APP_OWNER }}
         run: |
           set -Eeuo pipefail
           bash protected-controller/scripts/parity-protected-controller.sh reconcile

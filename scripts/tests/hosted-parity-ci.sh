@@ -16,6 +16,7 @@ readonly CHANGE_POLICY="${ROOT}/scripts/parity-protected-change-policy.sh"
 readonly PROTECTED_CONTROLLER="${ROOT}/scripts/parity-protected-controller.sh"
 readonly CHECK_RECONCILE="${ROOT}/scripts/parity-check-reconcile.sh"
 readonly CODEOWNERS="${ROOT}/.github/CODEOWNERS"
+readonly PARITY_DOC="${ROOT}/docs/parity-signed-evidence-v2.md"
 TEST_ROOT="$(mktemp -d)"
 readonly TEST_ROOT
 trap 'rm -rf "${TEST_ROOT}"' EXIT
@@ -122,8 +123,21 @@ require_text "${PROTECTED_WORKFLOW}" 'actions/create-github-app-token@fee1f7d63c
 require_text "${PROTECTED_WORKFLOW}" 'permission-checks: write'
 require_text "${PROTECTED_WORKFLOW}" 'app-id: ${{ vars.PARITY_VERDICT_APP_ID }}'
 require_text "${PROTECTED_WORKFLOW}" 'private-key: ${{ secrets.PARITY_VERDICT_APP_PRIVATE_KEY }}'
+require_text "${PROTECTED_WORKFLOW}" 'EXPECTED_APP_OWNER: ${{ vars.PARITY_VERDICT_APP_OWNER }}'
+if rg -n 'permission-statuses:|statuses: write' "${PROTECTED_WORKFLOW}"; then
+  printf 'parity verdict App unnecessarily receives status-write authority\n' >&2
+  exit 1
+fi
+require_text "${PARITY_DOC}" 'organization-level required-workflow rule is therefore'
+require_text "${PARITY_DOC}" 'Commit statuses: write'
+require_text "${PARITY_DOC}" 'not required and must remain disabled'
+require_text "${PARITY_DOC}" 'requires zero same-App, same-name legacy checks'
+require_text "${PARITY_DOC}" 'Before activation, a live App canary is a hard blocker'
+require_text "${PARITY_DOC}" 'Neither deployment is active'
 
 require_text "${PROTECTED_CONTROLLER}" 'workflow_blob_oid'
+require_text "${PROTECTED_CONTROLLER}" 'ls-tree -z --full-tree'
+require_text "${PROTECTED_CONTROLLER}" 'workflow tree entry is not exact 100644 blob'
 require_text "${PROTECTED_CONTROLLER}" 'require_workflow_blob_match'
 require_text "${PROTECTED_CONTROLLER}" 'workflow blob differs from protected revision'
 require_text "${PROTECTED_CONTROLLER}" '.github/workflows/ci.yml'
@@ -146,14 +160,27 @@ require_text "${PROTECTED_CONTROLLER}" 'pulls?state=open&per_page=100'
 require_text "${PROTECTED_CONTROLLER}" 'upsert_pending_check'
 require_text "${PROTECTED_CONTROLLER}" 'fe2o3-parity-v1:${head_sha}'
 require_text "${PROTECTED_CONTROLLER}" 'status:"in_progress"'
+require_text "${PROTECTED_CONTROLLER}" '.status == "in_progress"'
+require_text "${PROTECTED_CONTROLLER}" 'pending check response identity mismatch'
 require_text "${PROTECTED_CONTROLLER}" "jq 'del(.head_sha)'"
 require_text "${PROTECTED_CONTROLLER}" 'process-target "${event_kind}"'
 require_text "${PROTECTED_CONTROLLER}" 'process_target pull-request'
 require_text "${PROTECTED_CONTROLLER}" 'process_target merge-group'
 require_text "${PROTECTED_CONTROLLER}" 'complete_check "${check_id}" "${target_head_sha}" failure'
-require_text "${CHECK_RECONCILE}" 'duplicate deterministic App checks'
-require_text "${CHECK_RECONCILE}" 'ambiguous legacy App checks'
-require_text "${CHECK_RECONCILE}" 'fe2o3-parity-v1:${HEAD_SHA}'
+require_text "${PROTECTED_CONTROLLER}" 'commits/${head_sha}/check-suites'
+require_text "${PROTECTED_CONTROLLER}" 'check-suites/${suite_id}/check-runs'
+require_text "${PROTECTED_CONTROLLER}" 'suite-ids "${suite_pages}"'
+require_text "${CHECK_RECONCILE}" 'legacy App check blocks deterministic-check activation'
+require_text "${CHECK_RECONCILE}" 'multiple deterministic App checks block reconciliation'
+require_text "${CHECK_RECONCILE}" 'check-suite inventory reached the GitHub server cap'
+require_text "${CHECK_RECONCILE}" 'check-run inventory reached the GitHub server cap'
+require_text "${CHECK_RECONCILE}" 'invalid page boundaries'
+require_text "${CHECK_RECONCILE}" 'MAX_SUITE_BYTES=4194304'
+require_text "${CHECK_RECONCILE}" 'MAX_RUN_BYTES=67108864'
+if rg -n 'commits/\$\{head_sha\}/check-runs' "${PROTECTED_CONTROLLER}"; then
+  printf 'check reconciliation still trusts commit check-run aggregation\n' >&2
+  exit 1
+fi
 if rg -n 'max_by\(\.id\)|sort_by\(\.id\).*last' \
   "${PROTECTED_CONTROLLER}" "${CHECK_RECONCILE}"; then
   printf 'check reconciliation assumes check ID ordering\n' >&2
@@ -170,6 +197,8 @@ verify_line="$(rg -n 'bash "\$\{BASH_SOURCE\[0\]\}" verify-target' \
 }
 require_text "${CHANGE_POLICY}" 'git -C "${REVISION_REPOSITORY}" diff --no-ext-diff --no-renames'
 require_text "${CHANGE_POLICY}" '--name-only -z "${BASE_SHA}" "${CANDIDATE_HEAD}"'
+require_text "${CHANGE_POLICY}" 'immutable_path_changed'
+require_text "${CHANGE_POLICY}" 'diff --quiet --no-ext-diff --no-renames'
 require_text "${CHANGE_POLICY}" 'revision worktree does not match declared commit'
 require_text "${CHANGE_POLICY}" 'merge-group head does not descend from its base'
 require_text "${CHANGE_POLICY}" 'designated reviewer is not CODEOWNER for changed trust path'
@@ -311,62 +340,165 @@ if rg -n 'python3 candidate/|candidate/scripts/|scripts/parity-row-evidence.sh g
   exit 1
 fi
 
-# A deterministic external ID selects one App-owned check without check ID
-# ordering. Candidate-owned lookalikes are ignored, while stale success and an
-# interrupted run resolve to the same dedicated check.
+# A deterministic external ID selects exactly one App-owned check without check
+# ID ordering. Any legacy same-App check blocks activation, including when the
+# deterministic check already exists.
 CHECK_NAME=fe2o3/protected-parity-promotion
 CHECK_HEAD=1111111111111111111111111111111111111111
 CHECK_APP_ID=424242
 CHECK_APP_SLUG=fe2o3-parity-verdict
+CHECK_APP_OWNER=powderluv
 CHECK_EXTERNAL_ID="fe2o3-parity-v1:${CHECK_HEAD}"
+SUITE_PAGES="${TEST_ROOT}/suite-pages.json"
+RUN_GROUPS="${TEST_ROOT}/run-groups.json"
 CHECKS_JSON="${TEST_ROOT}/checks.json"
 
 select_check() {
-  bash "${CHECK_RECONCILE}" "$1" "${CHECK_APP_ID}" "${CHECK_APP_SLUG}" \
-    "${CHECK_NAME}" "${CHECK_HEAD}" "${CHECK_EXTERNAL_ID}" select
+  bash "${CHECK_RECONCILE}" select "$1" "${CHECK_APP_ID}" \
+    "${CHECK_APP_SLUG}" "${CHECK_APP_OWNER}" "${CHECK_NAME}" \
+    "${CHECK_HEAD}" "${CHECK_EXTERNAL_ID}"
 }
 
-printf '{"total_count":0,"check_runs":[]}\n' >"${CHECKS_JSON}"
-[[ "$(select_check "${CHECKS_JSON}")" == create ]]
-jq -n --arg name "${CHECK_NAME}" --arg head "${CHECK_HEAD}" \
-  '{total_count:1,check_runs:[{id:900,name:$name,head_sha:$head,
-    external_id:"candidate-spoof",app:{id:15368,slug:"github-actions"}}]}' \
-  >"${CHECKS_JSON}"
-[[ "$(select_check "${CHECKS_JSON}")" == create ]]
+jq -n '[{total_count:2,check_suites:[{id:11},{id:12}]}]' \
+  >"${SUITE_PAGES}"
 jq -n --arg name "${CHECK_NAME}" --arg head "${CHECK_HEAD}" \
   --arg external "${CHECK_EXTERNAL_ID}" --arg slug "${CHECK_APP_SLUG}" \
-  --argjson app_id "${CHECK_APP_ID}" \
-  '{total_count:2,check_runs:[
-    {id:9,name:$name,head_sha:$head,external_id:"candidate-spoof",
-      app:{id:15368,slug:"github-actions"}},
-    {id:4,name:$name,head_sha:$head,external_id:$external,
-      status:"completed",conclusion:"success",app:{id:$app_id,slug:$slug}}]}' \
+  --arg owner "${CHECK_APP_OWNER}" --argjson app_id "${CHECK_APP_ID}" '
+  [
+    {suite_id:11,pages:[{total_count:1,check_runs:[
+      {id:4,name:$name,head_sha:$head,external_id:$external,
+       status:"completed",conclusion:"success",check_suite:{id:11},
+       app:{id:$app_id,slug:$slug,owner:{login:$owner}}}
+    ]}]},
+    {suite_id:12,pages:[{total_count:1,check_runs:[
+      {id:9,name:$name,head_sha:$head,external_id:"candidate-spoof",
+       check_suite:{id:12},app:{id:15368,slug:"github-actions",
+       owner:{login:"github"}}}
+    ]}]}
+  ]' >"${RUN_GROUPS}"
+[[ "$(bash "${CHECK_RECONCILE}" suite-ids "${SUITE_PAGES}")" == \
+  $'11\n12' ]]
+bash "${CHECK_RECONCILE}" inventory "${SUITE_PAGES}" "${RUN_GROUPS}" \
   >"${CHECKS_JSON}"
 [[ "$(select_check "${CHECKS_JSON}")" == $'update\t4' ]]
-jq '.check_runs[1].status = "in_progress" | .check_runs[1].conclusion = null' \
+jq '.check_runs[0].status = "in_progress" | .check_runs[0].conclusion = null' \
   "${CHECKS_JSON}" >"${TEST_ROOT}/interrupted-check.json"
 [[ "$(select_check "${TEST_ROOT}/interrupted-check.json")" == $'update\t4' ]]
-jq '.check_runs[1].conclusion = "failure"' "${CHECKS_JSON}" \
+jq '.check_runs[0].conclusion = "failure"' "${CHECKS_JSON}" \
   >"${TEST_ROOT}/dismissed-check.json"
 [[ "$(select_check "${TEST_ROOT}/dismissed-check.json")" == $'update\t4' ]]
+
 jq '
   .total_count = 1 |
-  .check_runs = [.check_runs[1] | .id = 3 | .external_id = "legacy-run-id"]
+  .check_runs = [.check_runs[0] | .id = 3 | .external_id = "legacy-run-id"]
 ' "${CHECKS_JSON}" >"${TEST_ROOT}/legacy-check.json"
-[[ "$(select_check "${TEST_ROOT}/legacy-check.json")" == $'update\t3' ]]
+expect_failure legacy_check 'legacy App check blocks deterministic-check activation' \
+  select_check "${TEST_ROOT}/legacy-check.json"
 jq '.total_count = 2 | .check_runs += [.check_runs[0] |
-  .id = 5 | .external_id = "other-legacy-run-id"] |
-  .check_runs[0].external_id = "legacy-run-id"' \
-  "${TEST_ROOT}/legacy-check.json" >"${TEST_ROOT}/ambiguous-legacy.json"
-expect_failure ambiguous_legacy_checks 'App check selection is ambiguous' \
-  select_check "${TEST_ROOT}/ambiguous-legacy.json"
-jq '.total_count = 3 | .check_runs += [.check_runs[1] | .id = 5]' \
+  .id = 6 | .external_id = "second-legacy-run-id"]' \
+  "${TEST_ROOT}/legacy-check.json" >"${TEST_ROOT}/multiple-legacy.json"
+expect_failure multiple_legacy_checks \
+  'legacy App check blocks deterministic-check activation' \
+  select_check "${TEST_ROOT}/multiple-legacy.json"
+jq '.total_count = 3 | .check_runs += [.check_runs[0] |
+  .id = 5 | .external_id = "legacy-run-id"]' \
+  "${CHECKS_JSON}" >"${TEST_ROOT}/dedicated-and-legacy.json"
+expect_failure dedicated_and_legacy \
+  'legacy App check blocks deterministic-check activation' \
+  select_check "${TEST_ROOT}/dedicated-and-legacy.json"
+jq '.total_count = 3 | .check_runs += [.check_runs[0] | .id = 5]' \
   "${CHECKS_JSON}" >"${TEST_ROOT}/duplicate-dedicated.json"
-expect_failure duplicate_dedicated_check 'App check selection is ambiguous' \
+expect_failure duplicate_dedicated_check \
+  'multiple deterministic App checks block reconciliation' \
   select_check "${TEST_ROOT}/duplicate-dedicated.json"
 jq '.total_count = 1' "${CHECKS_JSON}" >"${TEST_ROOT}/truncated-checks.json"
-expect_failure truncated_check_inventory 'malformed, truncated, or ambiguous' \
+expect_failure truncated_check_inventory 'check-run inventory is malformed' \
   select_check "${TEST_ROOT}/truncated-checks.json"
+jq '.check_runs[0].app.owner.login = "other-owner"' "${CHECKS_JSON}" \
+  >"${TEST_ROOT}/wrong-owner.json"
+expect_failure wrong_app_owner 'App owner does not match configured owner' \
+  select_check "${TEST_ROOT}/wrong-owner.json"
+
+printf '[{"total_count":0,"check_suites":[]}]\n' \
+  >"${TEST_ROOT}/empty-suite-pages.json"
+printf '[]\n' >"${TEST_ROOT}/empty-run-groups.json"
+bash "${CHECK_RECONCILE}" inventory "${TEST_ROOT}/empty-suite-pages.json" \
+  "${TEST_ROOT}/empty-run-groups.json" >"${TEST_ROOT}/empty-checks.json"
+[[ "$(select_check "${TEST_ROOT}/empty-checks.json")" == create ]]
+
+jq -n '[
+  {total_count:101,check_suites:[range(1;101) | {id:.}]},
+  {total_count:101,check_suites:[{id:101}]}
+]' >"${TEST_ROOT}/paged-suites.json"
+bash "${CHECK_RECONCILE}" suite-ids "${TEST_ROOT}/paged-suites.json" \
+  >"${TEST_ROOT}/paged-suite-ids.txt"
+[[ "$(wc -l <"${TEST_ROOT}/paged-suite-ids.txt")" == 101 ]]
+jq -n '[
+  {suite_id:11,pages:[
+    {total_count:101,check_runs:[
+      range(1;101) | {id:(1000 + .),check_suite:{id:11}}
+    ]},
+    {total_count:101,check_runs:[{id:1101,check_suite:{id:11}}]}
+  ]},
+  {suite_id:12,pages:[
+    {total_count:1,check_runs:[{id:1201,check_suite:{id:12}}]}
+  ]}
+]' >"${TEST_ROOT}/paged-runs.json"
+bash "${CHECK_RECONCILE}" inventory "${SUITE_PAGES}" \
+  "${TEST_ROOT}/paged-runs.json" >"${TEST_ROOT}/paged-checks.json"
+jq -e '.total_count == 102 and (.check_runs | length) == 102' \
+  "${TEST_ROOT}/paged-checks.json" >/dev/null
+
+jq '.[0].total_count = 3' "${SUITE_PAGES}" \
+  >"${TEST_ROOT}/hidden-suite.json"
+expect_failure hidden_suite 'check-suite pagination is truncated' \
+  bash "${CHECK_RECONCILE}" suite-ids "${TEST_ROOT}/hidden-suite.json"
+jq '.[].total_count = 1000' "${SUITE_PAGES}" \
+  >"${TEST_ROOT}/capped-suite.json"
+expect_failure capped_suite 'check-suite inventory reached the GitHub server cap' \
+  bash "${CHECK_RECONCILE}" suite-ids "${TEST_ROOT}/capped-suite.json"
+jq '.[0].check_suites[1].id = 11' "${SUITE_PAGES}" \
+  >"${TEST_ROOT}/duplicate-suite.json"
+expect_failure duplicate_suite 'duplicate IDs' \
+  bash "${CHECK_RECONCILE}" suite-ids "${TEST_ROOT}/duplicate-suite.json"
+jq '.[0].check_suites[1].id = 11.5' "${SUITE_PAGES}" \
+  >"${TEST_ROOT}/fractional-suite.json"
+expect_failure fractional_suite 'duplicate IDs' \
+  bash "${CHECK_RECONCILE}" suite-ids "${TEST_ROOT}/fractional-suite.json"
+jq -n '[range(0;11) | {total_count:0,check_suites:[]}]' \
+  >"${TEST_ROOT}/too-many-suite-pages.json"
+expect_failure too_many_suite_pages 'check-suite pagination shape/count is malformed' \
+  bash "${CHECK_RECONCILE}" suite-ids \
+  "${TEST_ROOT}/too-many-suite-pages.json"
+jq '.[0].pages[0].total_count = 2' "${RUN_GROUPS}" \
+  >"${TEST_ROOT}/hidden-run.json"
+expect_failure hidden_run 'check-run inventory is truncated' \
+  bash "${CHECK_RECONCILE}" inventory "${SUITE_PAGES}" \
+  "${TEST_ROOT}/hidden-run.json"
+jq '.[0].pages[0].total_count = 1000' "${RUN_GROUPS}" \
+  >"${TEST_ROOT}/capped-run.json"
+expect_failure capped_run 'check-run inventory reached the GitHub server cap' \
+  bash "${CHECK_RECONCILE}" inventory "${SUITE_PAGES}" \
+  "${TEST_ROOT}/capped-run.json"
+jq '.[0].pages = [range(0;11) | {total_count:0,check_runs:[]}]' \
+  "${RUN_GROUPS}" >"${TEST_ROOT}/too-many-run-pages.json"
+expect_failure too_many_run_pages 'check-run pagination shape/count is malformed' \
+  bash "${CHECK_RECONCILE}" inventory "${SUITE_PAGES}" \
+  "${TEST_ROOT}/too-many-run-pages.json"
+jq '.[1].pages[0].check_runs[0].id = 4' "${RUN_GROUPS}" \
+  >"${TEST_ROOT}/duplicate-run.json"
+expect_failure duplicate_run 'check-run IDs are duplicated across check suites' \
+  bash "${CHECK_RECONCILE}" inventory "${SUITE_PAGES}" \
+  "${TEST_ROOT}/duplicate-run.json"
+jq '.[1].pages[0].check_runs[0].id = 4.5' "${RUN_GROUPS}" \
+  >"${TEST_ROOT}/fractional-run.json"
+expect_failure fractional_run 'check-run inventory is truncated, duplicated' \
+  bash "${CHECK_RECONCILE}" inventory "${SUITE_PAGES}" \
+  "${TEST_ROOT}/fractional-run.json"
+truncate -s 67108865 "${TEST_ROOT}/oversized-runs.json"
+expect_failure oversized_run_inventory 'check-run pages exceeds its size bound' \
+  bash "${CHECK_RECONCILE}" inventory "${SUITE_PAGES}" \
+  "${TEST_ROOT}/oversized-runs.json"
 
 verify_pr_snapshot() {
   local snapshot="$1"
@@ -468,6 +600,48 @@ git -C "${BLOB_REPOSITORY}" commit -qm 'unchanged notification workflows'
 BLOB_UNCHANGED="$(git -C "${BLOB_REPOSITORY}" rev-parse HEAD)"
 bash "${PROTECTED_CONTROLLER}" test-workflow-blob "${BLOB_REPOSITORY}" \
   "${BLOB_BASE}" "${BLOB_UNCHANGED}" .github/workflows/ci.yml
+git -C "${BLOB_REPOSITORY}" reset -q --hard "${BLOB_BASE}"
+chmod 755 "${BLOB_REPOSITORY}/.github/workflows/ci.yml"
+git -C "${BLOB_REPOSITORY}" commit -qam 'executable CI workflow'
+BLOB_EXECUTABLE="$(git -C "${BLOB_REPOSITORY}" rev-parse HEAD)"
+expect_failure executable_workflow 'workflow tree entry is not exact 100644 blob' \
+  bash "${PROTECTED_CONTROLLER}" test-workflow-blob "${BLOB_REPOSITORY}" \
+  "${BLOB_BASE}" "${BLOB_EXECUTABLE}" .github/workflows/ci.yml
+git -C "${BLOB_REPOSITORY}" reset -q --hard "${BLOB_BASE}"
+rm "${BLOB_REPOSITORY}/.github/workflows/parity-review-signal.yml"
+ln -s ci.yml \
+  "${BLOB_REPOSITORY}/.github/workflows/parity-review-signal.yml"
+git -C "${BLOB_REPOSITORY}" add .github/workflows/parity-review-signal.yml
+git -C "${BLOB_REPOSITORY}" commit -qm 'symlink review workflow'
+BLOB_SYMLINK="$(git -C "${BLOB_REPOSITORY}" rev-parse HEAD)"
+expect_failure symlink_workflow 'workflow tree entry is not exact 100644 blob' \
+  bash "${PROTECTED_CONTROLLER}" test-workflow-blob "${BLOB_REPOSITORY}" \
+  "${BLOB_BASE}" "${BLOB_SYMLINK}" .github/workflows/parity-review-signal.yml
+git -C "${BLOB_REPOSITORY}" reset -q --hard "${BLOB_BASE}"
+git -C "${BLOB_REPOSITORY}" rm -q .github/workflows/parity-review-signal.yml
+git -C "${BLOB_REPOSITORY}" commit -qm 'missing review workflow'
+BLOB_MISSING="$(git -C "${BLOB_REPOSITORY}" rev-parse HEAD)"
+expect_failure missing_workflow 'workflow tree entry is missing or ambiguous' \
+  bash "${PROTECTED_CONTROLLER}" test-workflow-blob "${BLOB_REPOSITORY}" \
+  "${BLOB_BASE}" "${BLOB_MISSING}" .github/workflows/parity-review-signal.yml
+git -C "${BLOB_REPOSITORY}" reset -q --hard "${BLOB_BASE}"
+git -C "${BLOB_REPOSITORY}" mv .github/workflows/parity-review-signal.yml \
+  .github/workflows/Parity-review-signal.yml
+git -C "${BLOB_REPOSITORY}" commit -qm 'case-mismatched review workflow'
+BLOB_CASE_MISMATCH="$(git -C "${BLOB_REPOSITORY}" rev-parse HEAD)"
+expect_failure case_mismatch_workflow 'workflow tree entry is missing or ambiguous' \
+  bash "${PROTECTED_CONTROLLER}" test-workflow-blob "${BLOB_REPOSITORY}" \
+  "${BLOB_BASE}" "${BLOB_CASE_MISMATCH}" \
+  .github/workflows/parity-review-signal.yml
+git -C "${BLOB_REPOSITORY}" reset -q --hard "${BLOB_BASE}"
+git -C "${BLOB_REPOSITORY}" update-index --add --cacheinfo \
+  "160000,${BLOB_BASE},.github/workflows/ci.yml"
+git -C "${BLOB_REPOSITORY}" commit -qm 'gitlink CI workflow'
+BLOB_GITLINK="$(git -C "${BLOB_REPOSITORY}" rev-parse HEAD)"
+expect_failure gitlink_workflow 'workflow tree entry is not exact 100644 blob' \
+  bash "${PROTECTED_CONTROLLER}" test-workflow-blob "${BLOB_REPOSITORY}" \
+  "${BLOB_BASE}" "${BLOB_GITLINK}" .github/workflows/ci.yml
+git -C "${BLOB_REPOSITORY}" reset -q --hard "${BLOB_BASE}"
 printf '\n  workflow_dispatch:\n' >>"${BLOB_REPOSITORY}/.github/workflows/ci.yml"
 git -C "${BLOB_REPOSITORY}" commit -qam 'changed CI trigger'
 BLOB_CHANGED_TRIGGER="$(git -C "${BLOB_REPOSITORY}" rev-parse HEAD)"
@@ -646,6 +820,11 @@ write_approval
 refresh_policy_args
 [[ "$(bash "${CHANGE_POLICY}" "${policy_args[@]}")" == no-op ]]
 
+chmod 755 "${CANDIDATE}/scripts/parity-signed-evidence.py"
+commit_candidate 'mode-only verifier change'
+[[ "$(bash "${CHANGE_POLICY}" "${policy_args[@]}")" == trust-change-approved ]]
+reset_candidate
+
 printf 'status\tPartial\n' >"${CANDIDATE}/docs/cuda-oxide-parity-status.tsv"
 commit_candidate 'status promotion'
 [[ "$(bash "${CHANGE_POLICY}" "${policy_args[@]}")" == promotion ]]
@@ -692,6 +871,13 @@ reset_candidate
 printf 'candidate CI trigger\n' >"${CANDIDATE}/.github/workflows/ci.yml"
 commit_candidate 'candidate CI workflow'
 expect_failure ci_admin_migration \
+  'notification workflow changes require an administrator migration' \
+  bash "${CHANGE_POLICY}" "${policy_args[@]}"
+reset_candidate
+
+chmod 755 "${CANDIDATE}/.github/workflows/ci.yml"
+commit_candidate 'mode-only CI workflow'
+expect_failure mode_only_ci_admin_migration \
   'notification workflow changes require an administrator migration' \
   bash "${CHANGE_POLICY}" "${policy_args[@]}"
 reset_candidate

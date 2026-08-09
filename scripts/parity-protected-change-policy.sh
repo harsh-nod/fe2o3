@@ -121,39 +121,25 @@ readonly -a ADMIN_MIGRATION_WORKFLOWS=(
   .github/workflows/parity-review-signal.yml
 )
 
-file_changed() {
+immutable_path_changed() {
   local relative="$1"
-  local protected="${PROTECTED_ROOT}/${relative}"
-  local candidate="${CANDIDATE_ROOT}/${relative}"
-  if [[ -L "${protected}" || -L "${candidate}" ]]; then
-    return 0
+  local status
+  if git -C "${REVISION_REPOSITORY}" diff --quiet --no-ext-diff --no-renames \
+    "${BASE_SHA}" "${CANDIDATE_HEAD}" -- "${relative}"; then
+    return 1
+  else
+    status=$?
   fi
-  if [[ -f "${protected}" && -f "${candidate}" ]]; then
-    if cmp -s -- "${protected}" "${candidate}"; then
-      return 1
-    fi
-    return 0
-  fi
-  [[ -e "${protected}" || -e "${candidate}" ]]
+  ((status == 1)) || die "cannot classify immutable path change: ${relative}"
+  return 0
+}
+
+file_changed() {
+  immutable_path_changed "$1"
 }
 
 directory_changed() {
-  local relative="$1"
-  local protected="${PROTECTED_ROOT}/${relative}"
-  local candidate="${CANDIDATE_ROOT}/${relative}"
-  if [[ -L "${protected}" || -L "${candidate}" ]]; then
-    return 0
-  fi
-  if [[ ! -e "${protected}" && ! -e "${candidate}" ]]; then
-    return 1
-  fi
-  if [[ ! -d "${protected}" || ! -d "${candidate}" ]]; then
-    return 0
-  fi
-  if diff --no-dereference -qr -- "${protected}" "${candidate}" >/dev/null; then
-    return 1
-  fi
-  return 0
+  immutable_path_changed "$1"
 }
 
 validate_candidate_trust_types() {

@@ -13,6 +13,8 @@ readonly SCRIPT_DIR
 PROTECTED_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 readonly PROTECTED_ROOT
 readonly CHECK_NAME=fe2o3/protected-parity-promotion
+EXPECTED_APP_OWNER="${EXPECTED_APP_OWNER:-}"
+readonly EXPECTED_APP_OWNER
 
 valid_sha() {
   [[ "$1" =~ ^[0-9a-f]{40}$ && ! "$1" =~ ^0{40}$ ]]
@@ -22,12 +24,31 @@ workflow_blob_oid() {
   local repository="$1"
   local revision="$2"
   local path="$3"
+  local entries=()
+  local entry
+  local metadata
+  local mode
+  local type
   local oid
+  local extra
+  local name
   valid_sha "${revision}" || die 'workflow blob revision is malformed'
   [[ "${path}" == .github/workflows/*.yml && "${path}" != *$'\n'* ]] ||
     die 'workflow blob path is malformed'
-  oid="$(git -C "${repository}" rev-parse --verify "${revision}:${path}" 2>/dev/null)" ||
-    die "workflow blob is missing: ${path}"
+  mapfile -d '' -t entries < <(
+    git -C "${repository}" ls-tree -z --full-tree "${revision}" -- "${path}"
+  )
+  [[ "${#entries[@]}" == 1 ]] ||
+    die "workflow tree entry is missing or ambiguous: ${path}"
+  entry="${entries[0]}"
+  [[ "${entry}" == *$'\t'* ]] || die "workflow tree entry is malformed: ${path}"
+  metadata="${entry%%$'\t'*}"
+  name="${entry#*$'\t'}"
+  read -r mode type oid extra <<<"${metadata}"
+  [[ "${mode}" == 100644 && "${type}" == blob && -z "${extra}" &&
+    "${name}" == "${path}" ]] ||
+    die "workflow tree entry is not exact 100644 blob: ${path}"
+  [[ "${oid}" =~ ^[0-9a-f]{40,64}$ ]] || die "workflow blob OID is malformed: ${path}"
   [[ "$(git -C "${repository}" cat-file -t "${oid}" 2>/dev/null)" == blob ]] ||
     die "workflow path is not a blob: ${path}"
   printf '%s\n' "${oid}"
@@ -152,6 +173,9 @@ require_runtime() {
   [[ "${EXPECTED_APP_ID}" =~ ^[1-9][0-9]*$ ]] || die 'App ID is malformed'
   [[ "${EXPECTED_APP_SLUG}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*$ ]] ||
     die 'App slug is malformed'
+  [[ -z "${EXPECTED_APP_OWNER}" ||
+    "${EXPECTED_APP_OWNER}" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,37}[A-Za-z0-9])?$ ]] ||
+    die 'App owner is malformed'
   [[ "$(git -C "${PROTECTED_ROOT}" rev-parse --verify 'HEAD^{commit}')" == \
     "${PROTECTED_SHA}" ]] || die 'controller checkout is not the protected workflow revision'
 }
@@ -189,25 +213,45 @@ fetch_ref() {
 
 load_named_checks() {
   local head_sha="$1"
-  local pages="$2"
+  local scratch="$2"
   local combined="$3"
+  local suite_raw="${scratch}/suite-pages.raw"
+  local suite_pages="${scratch}/suite-pages.json"
+  local run_groups="${scratch}/run-groups.json"
+  local run_raw
+  local run_pages
+  local run_groups_next
+  local suite_id
   check_api --paginate --method GET \
     -H 'Accept: application/vnd.github+json' \
-    "repos/${GITHUB_REPOSITORY}/commits/${head_sha}/check-runs" \
-    -f check_name="${CHECK_NAME}" -f filter=all -f per_page=100 >"${pages}"
-  jq -s '
-    {
-      total_count: ([.[].total_count] | max // 0),
-      check_runs: ([.[].check_runs[]?])
-    }
-  ' "${pages}" >"${combined}"
+    "repos/${GITHUB_REPOSITORY}/commits/${head_sha}/check-suites" \
+    -f per_page=100 >"${suite_raw}"
+  jq -s '.' "${suite_raw}" >"${suite_pages}"
+  printf '[]\n' >"${run_groups}"
+  while IFS= read -r suite_id; do
+    [[ "${suite_id}" =~ ^[1-9][0-9]*$ ]] || die 'suite inventory emitted a bad ID'
+    run_raw="${scratch}/suite-${suite_id}-runs.raw"
+    run_pages="${scratch}/suite-${suite_id}-runs.json"
+    run_groups_next="${scratch}/run-groups.next.json"
+    check_api --paginate --method GET \
+      -H 'Accept: application/vnd.github+json' \
+      "repos/${GITHUB_REPOSITORY}/check-suites/${suite_id}/check-runs" \
+      -f filter=all -f per_page=100 >"${run_raw}"
+    jq -s '.' "${run_raw}" >"${run_pages}"
+    jq --argjson suite_id "${suite_id}" --slurpfile pages "${run_pages}" \
+      '. + [{suite_id:$suite_id,pages:$pages[0]}]' "${run_groups}" \
+      >"${run_groups_next}"
+    mv -- "${run_groups_next}" "${run_groups}"
+  done < <(bash "${PROTECTED_ROOT}/scripts/parity-check-reconcile.sh" \
+    suite-ids "${suite_pages}")
+  bash "${PROTECTED_ROOT}/scripts/parity-check-reconcile.sh" inventory \
+    "${suite_pages}" "${run_groups}" >"${combined}"
 }
 
 upsert_pending_check() {
   local head_sha="$1"
   local external_id="fe2o3-parity-v1:${head_sha}"
   local scratch
-  local pages
   local combined
   local decision
   local operation
@@ -216,15 +260,14 @@ upsert_pending_check() {
   local request_payload
   local response
   scratch="$(mktemp -d "${RUNNER_TEMP}/parity-check.XXXXXX")"
-  pages="${scratch}/pages.json"
   combined="${scratch}/checks.json"
   payload="${scratch}/pending.json"
   request_payload="${scratch}/pending-request.json"
   response="${scratch}/response.json"
-  load_named_checks "${head_sha}" "${pages}" "${combined}"
-  decision="$(bash "${PROTECTED_ROOT}/scripts/parity-check-reconcile.sh" \
+  load_named_checks "${head_sha}" "${scratch}" "${combined}"
+  decision="$(bash "${PROTECTED_ROOT}/scripts/parity-check-reconcile.sh" select \
     "${combined}" "${EXPECTED_APP_ID}" "${EXPECTED_APP_SLUG}" \
-    "${CHECK_NAME}" "${head_sha}" "${external_id}" select)"
+    "${EXPECTED_APP_OWNER}" "${CHECK_NAME}" "${head_sha}" "${external_id}")"
   IFS=$'\t' read -r operation check_id <<<"${decision}"
   jq -n \
     --arg name "${CHECK_NAME}" \
@@ -267,11 +310,14 @@ upsert_pending_check() {
     --arg head "${head_sha}" \
     --arg external_id "${external_id}" \
     --arg app_id "${EXPECTED_APP_ID}" \
-    --arg app_slug "${EXPECTED_APP_SLUG}" '
+    --arg app_slug "${EXPECTED_APP_SLUG}" \
+    --arg app_owner "${EXPECTED_APP_OWNER}" '
       (.id | type) == "number" and .id > 0 and
       .name == $name and .head_sha == $head and
       .external_id == $external_id and .status == "in_progress" and
-      ((.app.id | tostring) == $app_id) and .app.slug == $app_slug
+      ((.app.id | tostring) == $app_id) and .app.slug == $app_slug and
+      ($app_owner == "" or
+        ((.app.owner.login // "" | ascii_downcase) == ($app_owner | ascii_downcase)))
     ' "${response}" >/dev/null || die 'pending check response identity mismatch'
   jq -r '.id' "${response}"
   rm -rf -- "${scratch}"
@@ -327,11 +373,14 @@ complete_check() {
     --arg external_id "fe2o3-parity-v1:${head_sha}" \
     --arg conclusion "${conclusion}" \
     --arg app_id "${EXPECTED_APP_ID}" \
-    --arg app_slug "${EXPECTED_APP_SLUG}" '
+    --arg app_slug "${EXPECTED_APP_SLUG}" \
+    --arg app_owner "${EXPECTED_APP_OWNER}" '
       .id == $id and .name == $name and .head_sha == $head and
       .external_id == $external_id and .status == "completed" and
       .conclusion == $conclusion and
-      ((.app.id | tostring) == $app_id) and .app.slug == $app_slug
+      ((.app.id | tostring) == $app_id) and .app.slug == $app_slug and
+      ($app_owner == "" or
+        ((.app.owner.login // "" | ascii_downcase) == ($app_owner | ascii_downcase)))
     ' "${response}" >/dev/null || die 'completed check response identity mismatch'
   rm -f -- "${payload}" "${response}"
 }
